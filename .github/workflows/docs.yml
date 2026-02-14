@@ -30,8 +30,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install sphinx pydata-sphinx-theme numpydoc nbsphinx sphinx-copybutton sphinx-design
-          pip install anywidget numpy traitlets torch --index-url https://download.pytorch.org/whl/cpu
-          pip install quantem
+          pip install anywidget numpy traitlets quantem
+          pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
           pip install -e . --no-build-isolation
 
       - name: Build docs
