@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling", "hatch-jupyter-builder>=0.5.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "quantem-widget"
+version = "0.0.1"
+description = "Interactive custom Python widgets for electron microscopy"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+keywords = ["jupyter", "widget", "anywidget", "electron-microscopy", "4dstem"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Jupyter",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "quantem",
+    "anywidget>=0.9.0",
+    "numpy>=2.0.0",
+    "traitlets>=5.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["watchfiles", "jupyterlab", "pytest"]
+
+[tool.hatch.build]
+only-packages = true
+artifacts = ["src/quantem/widget/static/*"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/quantem"]
+
+[tool.hatch.build.hooks.jupyter-builder]
+build-function = "hatch_jupyter_builder.npm_builder"
+ensured-targets = ["src/quantem/widget/static/show2d.js"]
+skip-if-exists = ["src/quantem/widget/static/show2d.js"]
+dependencies = ["hatch-jupyter-builder>=0.5.0"]
+
+[tool.hatch.build.hooks.jupyter-builder.build-kwargs]
+npm = "npm"
+build_cmd = "build"
