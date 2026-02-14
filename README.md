@@ -67,6 +67,16 @@ git push origin v0.0.1
 
 GitHub Actions automatically compiles the React/TypeScript, builds the Python wheel, and uploads to TestPyPI.
 
+### TestPyPI Trusted Publisher Setup
+
+1. Go to https://test.pypi.org/manage/account/publishing/
+2. Add a new "pending publisher" with:
+   - **PyPI project name**: `quantem-widget`
+   - **Owner**: `bobleesj`
+   - **Repository**: `quantem.widget`
+   - **Workflow name**: `publish.yml`
+   - **Environment**: leave blank
+
 ## Development
 
 ```bash
