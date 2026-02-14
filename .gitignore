@@ -25,5 +25,8 @@ CLAUDE.md
 # Screenshots
 *.png
 
+# Sphinx build output
+docs/_build
+
 # Pre-commit
 .pre-commit-config.yaml

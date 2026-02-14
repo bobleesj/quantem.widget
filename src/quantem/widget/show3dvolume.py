@@ -14,6 +14,7 @@ from quantem.widget.array_utils import to_numpy
 class Show3DVolume(anywidget.AnyWidget):
     """
     3D volume viewer with three orthogonal slice planes.
+
     Parameters
     ----------
     data : array_like

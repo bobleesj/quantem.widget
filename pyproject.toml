@@ -27,6 +27,15 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["watchfiles", "jupyterlab", "pytest"]
+docs = [
+    "sphinx>=7.0",
+    "pydata-sphinx-theme>=0.15",
+    "numpydoc>=1.7",
+    "nbsphinx>=0.9",
+    "sphinx-copybutton>=0.5",
+    "sphinx-design>=0.6",
+    "pandoc",
+]
 
 [tool.hatch.build]
 only-packages = true
