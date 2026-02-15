@@ -32,6 +32,10 @@ import FastForwardIcon from "@mui/icons-material/FastForward";
 import StopIcon from "@mui/icons-material/Stop";
 import "./styles.css";
 import { useTheme } from "../theme";
+import { drawScaleBarHiDPI } from "../scalebar";
+import { extractFloat32, formatNumber, downloadBlob, downloadDataView } from "../format";
+import { computeHistogramFromBytes } from "../histogram";
+import { findDataRange, applyLogScale, applyLogScaleInPlace, percentileClip, sliderRange, computeStats } from "../stats";
 
 // ============================================================================
 // UI Styles - component styling helpers (matching Show4DSTEM)
@@ -100,23 +104,17 @@ const compactButton = {
   },
 };
 
-import { COLORMAPS, COLORMAP_NAMES } from "../colormaps";
-
-// Formatting
-function formatNumber(val: number, decimals: number = 2): string {
-  if (val === 0) return "0";
-  if (Math.abs(val) >= 1000 || Math.abs(val) < 0.01) {
-    return val.toExponential(decimals);
-  }
-  return val.toFixed(decimals);
-}
+import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, renderToOffscreenReuse } from "../colormaps";
 
 // Info tooltip component (matching Show4DSTEM)
-function InfoTooltip({ text, theme = "dark" }: { text: string; theme?: "light" | "dark" }) {
+function InfoTooltip({ text, theme = "dark" }: { text: React.ReactNode; theme?: "light" | "dark" }) {
   const isDark = theme === "dark";
+  const content = typeof text === "string"
+    ? <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>{text}</Typography>
+    : text;
   return (
     <Tooltip
-      title={<Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>{text}</Typography>}
+      title={content}
       arrow
       placement="bottom"
       componentsProps={{
@@ -153,90 +151,19 @@ function InfoTooltip({ text, theme = "dark" }: { text: string; theme?: "light" |
   );
 }
 
-// Extract bytes from DataView
-function extractBytes(dataView: DataView | ArrayBuffer | Uint8Array): Uint8Array {
-  if (dataView instanceof Uint8Array) return dataView;
-  if (dataView instanceof ArrayBuffer) return new Uint8Array(dataView);
-  if (dataView && "buffer" in dataView) {
-    return new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength);
-  }
-  return new Uint8Array(0);
-}
-
-// Scale bar
-function roundToNiceValue(value: number): number {
-  if (value <= 0) return 1;
-  const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
-  const normalized = value / magnitude;
-  if (normalized < 1.5) return magnitude;
-  if (normalized < 3.5) return 2 * magnitude;
-  if (normalized < 7.5) return 5 * magnitude;
-  return 10 * magnitude;
-}
-
-function formatScaleLabel(value: number, unit: "Å" | "px"): string {
-  const nice = roundToNiceValue(value);
-  if (unit === "Å") {
-    if (nice >= 10) return `${Math.round(nice / 10)} nm`;
-    return nice >= 1 ? `${Math.round(nice)} Å` : `${nice.toFixed(2)} Å`;
-  }
-  return nice >= 1 ? `${Math.round(nice)} px` : `${nice.toFixed(1)} px`;
+function KeyboardShortcuts({ items }: { items: [string, string][] }) {
+  return (
+    <Box component="table" sx={{ borderCollapse: "collapse", "& td": { py: 0.25, fontSize: 11, lineHeight: 1.3, verticalAlign: "top" }, "& td:first-of-type": { pr: 1.5, opacity: 0.7, fontFamily: "monospace", fontSize: 10, whiteSpace: "nowrap" } }}>
+      <tbody>
+        {items.map(([key, desc], i) => (
+          <tr key={i}><td>{key}</td><td>{desc}</td></tr>
+        ))}
+      </tbody>
+    </Box>
+  );
 }
 
 const DPR = window.devicePixelRatio || 1;
-
-function drawScaleBarHiDPI(
-  canvas: HTMLCanvasElement,
-  dpr: number,
-  zoom: number,
-  pixelSize: number,
-  unit: "Å" | "px",
-  imageWidth: number,
-) {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.save();
-  ctx.scale(dpr, dpr);
-
-  const cssWidth = canvas.width / dpr;
-  const cssHeight = canvas.height / dpr;
-  const scaleX = cssWidth / imageWidth;
-  const effectiveZoom = zoom * scaleX;
-
-  const targetBarPx = 60;
-  const barThickness = 5;
-  const fontSize = 16;
-  const margin = 12;
-
-  const targetPhysical = (targetBarPx / effectiveZoom) * pixelSize;
-  const nicePhysical = roundToNiceValue(targetPhysical);
-  const barPx = (nicePhysical / pixelSize) * effectiveZoom;
-
-  const barY = cssHeight - margin;
-  const barX = cssWidth - barPx - margin;
-
-  ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
-  ctx.shadowBlur = 2;
-  ctx.shadowOffsetX = 1;
-  ctx.shadowOffsetY = 1;
-
-  ctx.fillStyle = "white";
-  ctx.fillRect(barX, barY, barPx, barThickness);
-
-  const label = formatScaleLabel(nicePhysical, unit);
-  ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
-  ctx.fillStyle = "white";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "bottom";
-  ctx.fillText(label, barX + barPx / 2, barY - 4);
-
-  ctx.textAlign = "left";
-  ctx.textBaseline = "bottom";
-  ctx.fillText(`${zoom.toFixed(1)}×`, margin, cssHeight - margin + barThickness);
-
-  ctx.restore();
-}
 
 // ROI drawing
 function drawROI(
@@ -276,49 +203,6 @@ function drawROI(
 // ============================================================================
 // Histogram Component
 // ============================================================================
-
-/**
- * Compute histogram from float data.
- * Returns bins normalized to 0-1 range.
- */
-function computeHistogramFromBytes(data: Float32Array | null, numBins = 256): number[] {
-  if (!data || data.length === 0) {
-    return new Array(numBins).fill(0);
-  }
-
-  const bins = new Array(numBins).fill(0);
-
-  // Find min/max and bin accordingly
-  let min = Infinity, max = -Infinity;
-  for (let i = 0; i < data.length; i++) {
-    const v = data[i];
-    if (isFinite(v)) {
-      if (v < min) min = v;
-      if (v > max) max = v;
-    }
-  }
-  if (!isFinite(min) || !isFinite(max) || min === max) {
-    return bins;
-  }
-  const range = max - min;
-  for (let i = 0; i < data.length; i++) {
-    const v = data[i];
-    if (isFinite(v)) {
-      const binIdx = Math.min(numBins - 1, Math.floor(((v - min) / range) * numBins));
-      bins[binIdx]++;
-    }
-  }
-
-  // Normalize bins to 0-1
-  const maxCount = Math.max(...bins);
-  if (maxCount > 0) {
-    for (let i = 0; i < numBins; i++) {
-      bins[i] /= maxCount;
-    }
-  }
-
-  return bins;
-}
 
 interface HistogramProps {
   data: Float32Array | null;
@@ -446,7 +330,7 @@ function Histogram({
   );
 }
 
-import { WebGPUFFT, getWebGPUFFT, fft2d, fftshift } from "../webgpu-fft";
+import { WebGPUFFT, getWebGPUFFT, fft2d, fftshift, computeMagnitude, autoEnhanceFFT } from "../webgpu-fft";
 
 // ============================================================================
 // Constants
@@ -457,6 +341,62 @@ const MAX_ZOOM = 10;
 
 const ROI_SHAPES = ["none", "circle", "square", "rectangle"] as const;
 type RoiShape = typeof ROI_SHAPES[number];
+
+/** Extract a single frame from the playback buffer (zero-copy subarray). */
+function getFrameFromBuffer(
+  buffer: Float32Array | null,
+  bufStart: number,
+  bufCount: number,
+  nSlices: number,
+  frameIdx: number,
+  frameSize: number,
+): Float32Array | null {
+  if (!buffer || bufCount === 0) return null;
+  let offset = frameIdx - bufStart;
+  if (offset < 0) offset += nSlices;
+  if (offset < 0 || offset >= bufCount) return null;
+  const start = offset * frameSize;
+  const end = start + frameSize;
+  if (end > buffer.length) return null;
+  return buffer.subarray(start, end);
+}
+
+/** Fused single-pass render: optional log scale + normalize + colormap → RGBA.
+ *  Eliminates multiple data passes during playback for maximum frame rate. */
+function renderFramePlayback(
+  data: Float32Array,
+  rgba: Uint8ClampedArray,
+  lut: Uint8Array,
+  vmin: number,
+  vmax: number,
+  logScale: boolean,
+): void {
+  const range = vmax - vmin;
+  const invRange = range > 0 ? 255 / range : 0;
+  if (logScale) {
+    for (let i = 0; i < data.length; i++) {
+      const v = Math.log1p(Math.max(0, data[i]));
+      const idx = v <= vmin ? 0 : v >= vmax ? 255 : ((v - vmin) * invRange) | 0;
+      const j = i << 2;
+      const k = idx * 3;
+      rgba[j] = lut[k];
+      rgba[j + 1] = lut[k + 1];
+      rgba[j + 2] = lut[k + 2];
+      rgba[j + 3] = 255;
+    }
+  } else {
+    for (let i = 0; i < data.length; i++) {
+      const v = data[i];
+      const idx = v <= vmin ? 0 : v >= vmax ? 255 : ((v - vmin) * invRange) | 0;
+      const j = i << 2;
+      const k = idx * 3;
+      rgba[j] = lut[k];
+      rgba[j + 1] = lut[k + 1];
+      rgba[j + 2] = lut[k + 2];
+      rgba[j + 3] = 255;
+    }
+  }
+}
 
 // ============================================================================
 // Main Component
@@ -478,6 +418,11 @@ function Show3D() {
     "& .MuiSelect-select": { py: 0.5 },
     "& .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.border },
     "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.accent },
+  };
+
+  const themedMenuProps = {
+    ...upwardMenuProps,
+    PaperProps: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` } },
   };
 
   // Model state (synced with Python)
@@ -512,6 +457,11 @@ function Show3D() {
 
   // Display options
   const [logScale, setLogScale] = useModelState<boolean>("log_scale");
+  const [autoContrast, setAutoContrast] = useModelState<boolean>("auto_contrast");
+  const [percentileLow] = useModelState<number>("percentile_low");
+  const [percentileHigh] = useModelState<number>("percentile_high");
+  const [dataMin] = useModelState<number>("data_min");
+  const [dataMax] = useModelState<number>("data_max");
   // Scale bar
   const [pixelSize] = useModelState<number>("pixel_size");
   const [scaleBarVisible] = useModelState<boolean>("scale_bar_visible");
@@ -520,11 +470,14 @@ function Show3D() {
   const [imageWidthPxTrait] = useModelState<number>("image_width_px");
 
   // Timestamps
+  const [timestamps] = useModelState<number[]>("timestamps");
+  const [timestampUnit] = useModelState<string>("timestamp_unit");
+  const [currentTimestamp] = useModelState<number>("current_timestamp");
   // ROI
   const [roiActive, setRoiActive] = useModelState<boolean>("roi_active");
   const [roiShape, setRoiShape] = useModelState<RoiShape>("roi_shape");
-  const [roiX, setRoiX] = useModelState<number>("roi_x");
-  const [roiY, setRoiY] = useModelState<number>("roi_y");
+  const [roiRow, setRoiRow] = useModelState<number>("roi_row");
+  const [roiCol, setRoiCol] = useModelState<number>("roi_col");
   const [roiRadius, setRoiRadius] = useModelState<number>("roi_radius");
   const [roiWidth, setRoiWidth] = useModelState<number>("roi_width");
   const [roiHeight, setRoiHeight] = useModelState<number>("roi_height");
@@ -541,6 +494,12 @@ function Show3D() {
   const [exporting, setExporting] = React.useState(false);
   const [exportAnchor, setExportAnchor] = React.useState<HTMLElement | null>(null);
 
+  // Playback buffer (sliding prefetch)
+  const [bufferBytes] = useModelState<DataView>("_buffer_bytes");
+  const [bufferStart] = useModelState<number>("_buffer_start");
+  const [bufferCount] = useModelState<number>("_buffer_count");
+  const [, setPrefetchRequest] = useModelState<number>("_prefetch_request");
+
   // Canvas refs
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const overlayRef = React.useRef<HTMLCanvasElement>(null);
@@ -550,7 +509,6 @@ function Show3D() {
 
   // Local state
   const [isDraggingROI, setIsDraggingROI] = React.useState(false);
-  const playIntervalRef = React.useRef<number | null>(null);
   const [zoom, setZoom] = React.useState(1);
   const [panX, setPanX] = React.useState(0);
   const [panY, setPanY] = React.useState(0);
@@ -562,6 +520,26 @@ function Show3D() {
   const rawFrameDataRef = React.useRef<Float32Array | null>(null);
   const initialCanvasSizeRef = React.useRef<number>(imageWidthPxTrait > 0 ? imageWidthPxTrait : CANVAS_TARGET_SIZE);
 
+  // Cursor readout state
+  const [cursorInfo, setCursorInfo] = React.useState<{ row: number; col: number; value: number } | null>(null);
+
+  // Reusable rendering buffers (avoid per-frame allocation)
+  const mainOffscreenRef = React.useRef<HTMLCanvasElement | null>(null);
+  const mainImgDataRef = React.useRef<ImageData | null>(null);
+  const logBufferRef = React.useRef<Float32Array | null>(null);
+
+  // Playback buffer refs (double-buffer: current + next to avoid overwrite stalls)
+  const bufferRef = React.useRef<Float32Array | null>(null);
+  const bufferStartRef = React.useRef(0);
+  const bufferCountRef = React.useRef(0);
+  const nextBufferRef = React.useRef<Float32Array | null>(null);
+  const nextBufferStartRef = React.useRef(0);
+  const nextBufferCountRef = React.useRef(0);
+  const prefetchPendingRef = React.useRef(false);
+  const playbackIdxRef = React.useRef(0);
+  const [displaySliceIdx, setDisplaySliceIdx] = React.useState(sliceIdx);
+  const [localStats, setLocalStats] = React.useState<{ mean: number; min: number; max: number; std: number } | null>(null);
+
   // WebGPU FFT state
   const gpuFFTRef = React.useRef<WebGPUFFT | null>(null);
   const [gpuReady, setGpuReady] = React.useState(false);
@@ -572,6 +550,30 @@ function Show3D() {
       if (fft) { gpuFFTRef.current = fft; setGpuReady(true); }
     });
   }, []);
+
+  // Parse incoming playback buffer (double-buffer to avoid overwrite stalls)
+  React.useEffect(() => {
+    if (!bufferBytes || bufferBytes.byteLength === 0) return;
+    const parsed = extractFloat32(bufferBytes);
+    if (!parsed) return;
+    if (!bufferRef.current || bufferCountRef.current === 0) {
+      // No active buffer — use as current (initial load)
+      bufferRef.current = parsed;
+      bufferStartRef.current = bufferStart;
+      bufferCountRef.current = bufferCount;
+    } else {
+      // Active buffer exists — store as next (prefetch)
+      nextBufferRef.current = parsed;
+      nextBufferStartRef.current = bufferStart;
+      nextBufferCountRef.current = bufferCount;
+    }
+    prefetchPendingRef.current = false;
+  }, [bufferBytes, bufferStart, bufferCount]);
+
+  // Sync displaySliceIdx with model when not playing
+  React.useEffect(() => {
+    if (!playing) setDisplaySliceIdx(sliceIdx);
+  }, [sliceIdx, playing]);
 
   // Histogram state for main image
   const [imageVminPct, setImageVminPct] = React.useState(0);
@@ -612,6 +614,17 @@ function Show3D() {
   const canvasH = Math.round(height * displayScale);
   const effectiveLoopEnd = loopEnd < 0 ? nSlices - 1 : loopEnd;
 
+  // Initialize reusable offscreen canvas + ImageData (resized when dimensions change)
+  React.useEffect(() => {
+    if (width <= 0 || height <= 0) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    mainOffscreenRef.current = canvas;
+    mainImgDataRef.current = canvas.getContext("2d")!.createImageData(width, height);
+    logBufferRef.current = new Float32Array(width * height);
+  }, [width, height]);
+
   // Prevent page scroll on canvas containers (but don't stop propagation so React handlers work)
   React.useEffect(() => {
     const preventDefault = (e: WheelEvent) => e.preventDefault();
@@ -630,106 +643,240 @@ function Show3D() {
     bounceDirRef.current = reverse ? -1 : 1;
   }, [reverse]);
 
-  // Playback logic
+  // All playback params as a single ref (avoids stale closures in rAF loop)
+  const playRef = React.useRef({
+    fps, reverse, boomerang, loop, loopStart, loopEnd: effectiveLoopEnd,
+    nSlices, width, height, displayScale, canvasW, canvasH,
+    logScale, autoContrast, percentileLow, percentileHigh,
+    dataMin, dataMax, cmap, imageVminPct, imageVmaxPct,
+    zoom, panX, panY,
+  });
   React.useEffect(() => {
-    if (playing) {
-      const intervalMs = 1000 / fps;
-      playIntervalRef.current = window.setInterval(() => {
-        setSliceIdx((prev: number) => {
-          const start = loop ? Math.max(0, Math.min(loopStart, nSlices - 1)) : 0;
-          const end = loop ? Math.max(start, Math.min(effectiveLoopEnd, nSlices - 1)) : nSlices - 1;
-          if (boomerang && loop) {
-            const next = prev + bounceDirRef.current;
-            if (next > end) { bounceDirRef.current = -1; return prev - 1 >= start ? prev - 1 : prev; }
-            if (next < start) { bounceDirRef.current = 1; return prev + 1 <= end ? prev + 1 : prev; }
-            return next;
-          }
-          const next = prev + (reverse ? -1 : 1);
-          if (reverse) {
-            if (next < start) {
-              if (loop) return end;
-              setTimeout(() => { setPlaying(false); setSliceIdx(start); }, 0);
-              return start;
-            }
-          } else {
-            if (next > end) {
-              if (loop) return start;
-              setTimeout(() => { setPlaying(false); setSliceIdx(start); }, 0);
-              return end;
-            }
-          }
-          return next;
-        });
-      }, intervalMs);
-    }
-    return () => {
-      if (playIntervalRef.current) {
-        clearInterval(playIntervalRef.current);
-        playIntervalRef.current = null;
-      }
+    playRef.current = {
+      fps, reverse, boomerang, loop, loopStart, loopEnd: effectiveLoopEnd,
+      nSlices, width, height, displayScale, canvasW, canvasH,
+      logScale, autoContrast, percentileLow, percentileHigh,
+      dataMin, dataMax, cmap, imageVminPct, imageVmaxPct,
+      zoom, panX, panY,
     };
-  }, [playing, fps, reverse, boomerang, loop, loopStart, effectiveLoopEnd, nSlices, setSliceIdx, setPlaying]);
+  }, [fps, reverse, boomerang, loop, loopStart, effectiveLoopEnd,
+    nSlices, width, height, displayScale, canvasW, canvasH,
+    logScale, autoContrast, percentileLow, percentileHigh,
+    dataMin, dataMax, cmap, imageVminPct, imageVmaxPct,
+    zoom, panX, panY]);
 
-  // Parse frame data and update histogram
+  // Playback logic — rAF-driven, zero React re-renders in hot path
   React.useEffect(() => {
-    if (!frameBytes) return;
-    const bytes = extractBytes(frameBytes);
-    if (bytes.length === 0) return;
-    const floatData = new Float32Array(bytes.length);
-    let min = Infinity, max = -Infinity;
-    for (let i = 0; i < bytes.length; i++) {
-      floatData[i] = bytes[i];
-      if (floatData[i] < min) min = floatData[i];
-      if (floatData[i] > max) max = floatData[i];
+    if (!playing) {
+      // Playback stopped — sync final position to Python
+      if (playbackIdxRef.current !== sliceIdx && bufferRef.current) {
+        setSliceIdx(playbackIdxRef.current);
+      }
+      setLocalStats(null);
+      bufferRef.current = null;
+      bufferCountRef.current = 0;
+      nextBufferRef.current = null;
+      nextBufferCountRef.current = 0;
+      prefetchPendingRef.current = false;
+      return;
     }
-    rawFrameDataRef.current = floatData;
-    setImageHistogramData(floatData);
-    setImageDataRange({ min, max });
-  }, [frameBytes]);
 
-  // Render main canvas
+    // === PLAYBACK START ===
+    playbackIdxRef.current = sliceIdx;
+    bounceDirRef.current = playRef.current.reverse ? -1 : 1;
+    let lastFrameTime = 0;
+    let lastUIUpdate = 0;
+    let animId: number;
+
+    const tick = (now: number) => {
+      const c = playRef.current;
+      const intervalMs = 1000 / c.fps;
+
+      // First tick — just record time
+      if (lastFrameTime === 0) {
+        lastFrameTime = now;
+        lastUIUpdate = now;
+        animId = requestAnimationFrame(tick);
+        return;
+      }
+
+      const elapsed = now - lastFrameTime;
+      if (elapsed < intervalMs) {
+        animId = requestAnimationFrame(tick);
+        return;
+      }
+      lastFrameTime = now - (elapsed % intervalMs);
+
+      // Advance frame
+      const rangeStart = c.loop ? Math.max(0, Math.min(c.loopStart, c.nSlices - 1)) : 0;
+      const rangeEnd = c.loop ? Math.max(rangeStart, Math.min(c.loopEnd, c.nSlices - 1)) : c.nSlices - 1;
+      const prev = playbackIdxRef.current;
+
+      let next: number;
+      if (c.boomerang) {
+        next = prev + bounceDirRef.current;
+        if (next > rangeEnd) { bounceDirRef.current = -1; next = prev - 1 >= rangeStart ? prev - 1 : prev; }
+        else if (next < rangeStart) { bounceDirRef.current = 1; next = prev + 1 <= rangeEnd ? prev + 1 : prev; }
+      } else {
+        next = prev + (c.reverse ? -1 : 1);
+        if (c.reverse) {
+          if (next < rangeStart) { if (!c.loop) { setPlaying(false); return; } next = rangeEnd; }
+        } else {
+          if (next > rangeEnd) { if (!c.loop) { setPlaying(false); return; } next = rangeStart; }
+        }
+      }
+
+      // Try buffer path (zero round-trip) with double-buffer swap
+      const frameSize = c.width * c.height;
+      let frame = getFrameFromBuffer(bufferRef.current, bufferStartRef.current, bufferCountRef.current, c.nSlices, next, frameSize);
+      if (!frame && nextBufferRef.current) {
+        // Current buffer doesn't have this frame — swap to next buffer
+        bufferRef.current = nextBufferRef.current;
+        bufferStartRef.current = nextBufferStartRef.current;
+        bufferCountRef.current = nextBufferCountRef.current;
+        nextBufferRef.current = null;
+        nextBufferCountRef.current = 0;
+        frame = getFrameFromBuffer(bufferRef.current, bufferStartRef.current, bufferCountRef.current, c.nSlices, next, frameSize);
+      }
+      if (!frame) {
+        // Buffer not ready yet — keep requesting frames
+        animId = requestAnimationFrame(tick);
+        return;
+      }
+
+      playbackIdxRef.current = next;
+      rawFrameDataRef.current = frame;
+
+      // Render frame — fused single-pass when possible
+      const lut = COLORMAPS[c.cmap] || COLORMAPS.inferno;
+      if (mainOffscreenRef.current && mainImgDataRef.current) {
+        let vmin: number, vmax: number;
+        if (c.autoContrast) {
+          // Auto-contrast needs per-frame percentile (2 passes), but no stats
+          if (c.logScale && logBufferRef.current) {
+            applyLogScaleInPlace(frame, logBufferRef.current);
+            ({ vmin, vmax } = percentileClip(logBufferRef.current, c.percentileLow, c.percentileHigh));
+            renderToOffscreenReuse(logBufferRef.current, lut, vmin, vmax, mainOffscreenRef.current, mainImgDataRef.current);
+          } else {
+            ({ vmin, vmax } = percentileClip(frame, c.percentileLow, c.percentileHigh));
+            renderToOffscreenReuse(frame, lut, vmin, vmax, mainOffscreenRef.current, mainImgDataRef.current);
+          }
+        } else {
+          // Global range + slider — fused single-pass render (fastest path)
+          if (c.logScale) {
+            const logMin = Math.log1p(Math.max(0, c.dataMin));
+            const logMax = Math.log1p(Math.max(0, c.dataMax));
+            ({ vmin, vmax } = sliderRange(logMin, logMax, c.imageVminPct, c.imageVmaxPct));
+          } else {
+            ({ vmin, vmax } = sliderRange(c.dataMin, c.dataMax, c.imageVminPct, c.imageVmaxPct));
+          }
+          renderFramePlayback(frame, mainImgDataRef.current.data, lut, vmin, vmax, c.logScale);
+          mainOffscreenRef.current.getContext("2d")!.putImageData(mainImgDataRef.current, 0, 0);
+        }
+
+        // Draw to display canvas
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.imageSmoothingEnabled = false;
+            ctx.clearRect(0, 0, c.canvasW, c.canvasH);
+            ctx.save();
+            ctx.translate(c.panX, c.panY);
+            ctx.scale(c.zoom, c.zoom);
+            ctx.drawImage(mainOffscreenRef.current, 0, 0, c.width * c.displayScale, c.height * c.displayScale);
+            ctx.restore();
+          }
+        }
+      }
+
+      // Throttled UI updates — 10 FPS for slider/stats (avoids costly MUI re-renders)
+      if (now - lastUIUpdate > 100) {
+        lastUIUpdate = now;
+        setDisplaySliceIdx(next);
+        setLocalStats(computeStats(frame));
+      }
+
+      // Prefetch at 25% buffer consumed — only if no next buffer is already queued
+      if (!prefetchPendingRef.current && !nextBufferRef.current && bufferCountRef.current > 0) {
+        let idxInBuffer = next - bufferStartRef.current;
+        if (idxInBuffer < 0) idxInBuffer += c.nSlices;
+        if (idxInBuffer >= Math.floor(bufferCountRef.current / 4)) {
+          const prefetchStart = (bufferStartRef.current + bufferCountRef.current) % c.nSlices;
+          prefetchPendingRef.current = true;
+          setPrefetchRequest(prefetchStart);
+        }
+      }
+
+      animId = requestAnimationFrame(tick);
+    };
+
+    animId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing]);
+
+  // Update frame ref and histogram when frame changes (debounce histogram during playback)
   React.useEffect(() => {
-    if (!canvasRef.current || !rawFrameDataRef.current) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const data = rawFrameDataRef.current;
-    if (data.length === 0) return;
+    const parsed = extractFloat32(frameBytes);
+    if (!parsed || parsed.length === 0) return;
+    rawFrameDataRef.current = parsed;
+    if (!playing) {
+      setImageHistogramData(parsed);
+      setImageDataRange(findDataRange(parsed));
+    }
+  }, [frameBytes, playing]);
 
-    // Apply histogram clipping based on slider values
-    const dataRange = imageDataRange.max - imageDataRange.min;
-    const vmin = imageDataRange.min + (imageVminPct / 100) * dataRange;
-    const vmax = imageDataRange.min + (imageVmaxPct / 100) * dataRange;
-    const range = vmax > vmin ? vmax - vmin : 1;
+  // Data effect: normalize + colormap → reusable offscreen canvas, then draw
+  React.useEffect(() => {
+    const frameData = rawFrameDataRef.current;
+    if (!frameData || frameData.length === 0) return;
+    if (!mainOffscreenRef.current || !mainImgDataRef.current) return;
+
+    // Apply log scale using reusable buffer
+    const processed = logScale && logBufferRef.current
+      ? applyLogScaleInPlace(frameData, logBufferRef.current)
+      : frameData;
+
+    // Compute vmin/vmax
+    let vmin: number, vmax: number;
+    if (autoContrast) {
+      ({ vmin, vmax } = percentileClip(processed, percentileLow, percentileHigh));
+    } else {
+      const { min: pMin, max: pMax } = findDataRange(processed);
+      ({ vmin, vmax } = sliderRange(pMin, pMax, imageVminPct, imageVmaxPct));
+    }
 
     const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
-    const offscreen = document.createElement("canvas");
-    offscreen.width = width;
-    offscreen.height = height;
-    const offCtx = offscreen.getContext("2d");
-    if (!offCtx) return;
-    const imgData = offCtx.createImageData(width, height);
-    const rgba = imgData.data;
-    for (let i = 0; i < data.length; i++) {
-      // Clip value to vmin/vmax range and normalize to 0-255
-      const clipped = Math.max(vmin, Math.min(vmax, data[i]));
-      const v = Math.floor(((clipped - vmin) / range) * 255);
-      const j = i * 4;
-      const lutIdx = v * 3;
-      rgba[j] = lut[lutIdx];
-      rgba[j + 1] = lut[lutIdx + 1];
-      rgba[j + 2] = lut[lutIdx + 2];
-      rgba[j + 3] = 255;
-    }
-    offCtx.putImageData(imgData, 0, 0);
+    renderToOffscreenReuse(processed, lut, vmin, vmax, mainOffscreenRef.current, mainImgDataRef.current);
+
+    // Draw to main canvas
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
     ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.clearRect(0, 0, canvasW, canvasH);
     ctx.save();
     ctx.translate(panX, panY);
     ctx.scale(zoom, zoom);
-    ctx.drawImage(offscreen, 0, 0, width * displayScale, height * displayScale);
+    ctx.drawImage(mainOffscreenRef.current, 0, 0, width * displayScale, height * displayScale);
     ctx.restore();
-  }, [frameBytes, width, height, cmap, zoom, panX, panY, displayScale, imageVminPct, imageVmaxPct, imageDataRange]);
+  }, [frameBytes, width, height, cmap, displayScale, canvasW, canvasH, imageVminPct, imageVmaxPct, logScale, autoContrast, percentileLow, percentileHigh]);
+
+  // Draw effect: only zoom/pan changes — cheap, just drawImage from cached offscreen
+  React.useEffect(() => {
+    if (!mainOffscreenRef.current || !canvasRef.current) return;
+    const ctx = canvasRef.current.getContext("2d");
+    if (!ctx) return;
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvasW, canvasH);
+    ctx.save();
+    ctx.translate(panX, panY);
+    ctx.scale(zoom, zoom);
+    ctx.drawImage(mainOffscreenRef.current, 0, 0, width * displayScale, height * displayScale);
+    ctx.restore();
+  }, [zoom, panX, panY]);
 
   // Render overlay (ROI only)
   React.useEffect(() => {
@@ -738,14 +885,14 @@ function Show3D() {
     if (!ctx) return;
     ctx.clearRect(0, 0, canvasW, canvasH);
     if (roiActive) {
-      const screenX = roiX * displayScale * zoom + panX;
-      const screenY = roiY * displayScale * zoom + panY;
+      const screenX = roiCol * displayScale * zoom + panX;
+      const screenY = roiRow * displayScale * zoom + panY;
       const screenRadius = roiRadius * displayScale * zoom;
       const screenWidth = roiWidth * displayScale * zoom;
       const screenHeight = roiHeight * displayScale * zoom;
       drawROI(ctx, screenX, screenY, roiShape || "circle", screenRadius, screenWidth, screenHeight, themeColors.accentYellow, themeColors.accentGreen, isDraggingROI);
     }
-  }, [roiActive, roiShape, roiX, roiY, roiRadius, roiWidth, roiHeight, isDraggingROI, canvasW, canvasH, displayScale, zoom, panX, panY, themeColors]);
+  }, [roiActive, roiShape, roiRow, roiCol, roiRadius, roiWidth, roiHeight, isDraggingROI, canvasW, canvasH, displayScale, zoom, panX, panY, themeColors]);
 
   // Render HiDPI scale bar + zoom indicator
   React.useEffect(() => {
@@ -761,9 +908,9 @@ function Show3D() {
     }
   }, [pixelSize, scaleBarVisible, width, canvasW, canvasH, displayScale, zoom]);
 
-  // Compute FFT and cache the rendered offscreen canvas (expensive — only on data/settings change)
+  // Compute FFT and cache the rendered offscreen canvas (skip during playback)
   React.useEffect(() => {
-    if (!showFft || !rawFrameDataRef.current) return;
+    if (!showFft || !rawFrameDataRef.current || playing) return;
 
     const data = rawFrameDataRef.current;
 
@@ -785,81 +932,33 @@ function Show3D() {
       fftshift(real, width, height);
       fftshift(imag, width, height);
 
-      const mag = new Float32Array(width * height);
-      for (let i = 0; i < mag.length; i++) {
-        mag[i] = Math.sqrt(real[i] ** 2 + imag[i] ** 2);
-      }
+      const mag = computeMagnitude(real, imag);
 
-      // Auto mode: mask DC component + 99.9% percentile clipping
       let displayMin: number, displayMax: number;
       if (fftAuto) {
-        const centerIdx = Math.floor(height / 2) * width + Math.floor(width / 2);
-        const neighbors = [
-          mag[centerIdx - 1],
-          mag[centerIdx + 1],
-          mag[centerIdx - width],
-          mag[centerIdx + width],
-        ];
-        mag[centerIdx] = neighbors.reduce((a, b) => a + b, 0) / 4;
-
-        const sorted = mag.slice().sort((a, b) => a - b);
-        displayMin = sorted[0];
-        displayMax = sorted[Math.floor(sorted.length * 0.999)];
+        ({ min: displayMin, max: displayMax } = autoEnhanceFFT(mag, width, height));
       } else {
-        displayMin = Math.min(...mag);
-        displayMax = Math.max(...mag);
+        ({ min: displayMin, max: displayMax } = findDataRange(mag));
       }
 
-      // Apply log scale if enabled
-      const displayData = new Float32Array(mag.length);
-      for (let i = 0; i < mag.length; i++) {
-        displayData[i] = fftLogScale ? Math.log(1 + mag[i]) : mag[i];
-      }
+      const displayData = fftLogScale ? applyLogScale(mag) : mag;
       if (fftLogScale) {
-        displayMin = Math.log(1 + displayMin);
-        displayMax = Math.log(1 + displayMax);
+        displayMin = Math.log1p(displayMin);
+        displayMax = Math.log1p(displayMax);
       }
 
-      // Compute FFT stats
-      let sum = 0, min = Infinity, max = -Infinity;
-      for (let i = 0; i < displayData.length; i++) {
-        sum += displayData[i];
-        if (displayData[i] < min) min = displayData[i];
-        if (displayData[i] > max) max = displayData[i];
-      }
-      const mean = sum / displayData.length;
-      let variance = 0;
-      for (let i = 0; i < displayData.length; i++) variance += (displayData[i] - mean) ** 2;
-      const std = Math.sqrt(variance / displayData.length);
+      const fftStatsResult = computeStats(displayData);
 
       setFftHistogramData(displayData);
       setFftDataRange({ min: displayMin, max: displayMax });
-      setFftStats({ mean, min, max, std });
+      setFftStats(fftStatsResult);
 
       // Apply histogram slider range on top of percentile clipping
-      const dataRange = displayMax - displayMin;
-      const vmin = displayMin + (fftVminPct / 100) * dataRange;
-      const vmax = displayMin + (fftVmaxPct / 100) * dataRange;
-      const range = vmax > vmin ? vmax - vmin : 1;
+      const { vmin, vmax } = sliderRange(displayMin, displayMax, fftVminPct, fftVmaxPct);
 
       const lut = COLORMAPS[fftColormap] || COLORMAPS.inferno;
-      const offscreen = document.createElement("canvas");
-      offscreen.width = width;
-      offscreen.height = height;
-      const offCtx = offscreen.getContext("2d");
-      if (!offCtx) return;
-
-      const imgData = offCtx.createImageData(width, height);
-      for (let i = 0; i < displayData.length; i++) {
-        const clipped = Math.max(vmin, Math.min(vmax, displayData[i]));
-        const v = Math.floor(((clipped - vmin) / range) * 255);
-        const j = i * 4;
-        imgData.data[j] = lut[v * 3];
-        imgData.data[j + 1] = lut[v * 3 + 1];
-        imgData.data[j + 2] = lut[v * 3 + 2];
-        imgData.data[j + 3] = 255;
-      }
-      offCtx.putImageData(imgData, 0, 0);
+      const offscreen = renderToOffscreen(displayData, width, height, lut, vmin, vmax);
+      if (!offscreen) return;
 
       // Cache the rendered FFT image
       fftOffscreenRef.current = offscreen;
@@ -880,7 +979,7 @@ function Show3D() {
     };
 
     computeFFT();
-  }, [showFft, frameBytes, width, height, canvasW, canvasH, fftVminPct, fftVmaxPct, fftColormap, fftLogScale, fftAuto, gpuReady]);
+  }, [showFft, frameBytes, playing, width, height, canvasW, canvasH, fftVminPct, fftVmaxPct, fftColormap, fftLogScale, fftAuto, gpuReady]);
 
   // Redraw cached FFT with zoom/pan (cheap — no recomputation)
   React.useEffect(() => {
@@ -924,12 +1023,8 @@ function Show3D() {
     if (!canvasRef.current) return;
     const blob = await new Promise<Blob>((resolve) =>
       canvasRef.current!.toBlob((b) => resolve(b!), "image/png"));
-    const link = document.createElement("a");
     const label = labels?.[sliceIdx] || String(sliceIdx);
-    link.download = "show3d_frame_" + label + ".png";
-    link.href = URL.createObjectURL(blob);
-    link.click();
-    URL.revokeObjectURL(link.href);
+    downloadBlob(blob, "show3d_frame_" + label + ".png");
   };
 
   const handleExportPngAll = () => {
@@ -947,26 +1042,14 @@ function Show3D() {
   // Download GIF when data arrives from Python
   React.useEffect(() => {
     if (!gifData || gifData.byteLength === 0) return;
-    const buf = new Uint8Array(gifData.buffer as ArrayBuffer, gifData.byteOffset, gifData.byteLength);
-    const blob = new Blob([buf as BlobPart], { type: "image/gif" });
-    const link = document.createElement("a");
-    link.download = "show3d_animation.gif";
-    link.href = URL.createObjectURL(blob);
-    link.click();
-    URL.revokeObjectURL(link.href);
+    downloadDataView(gifData, "show3d_animation.gif", "image/gif");
     setExporting(false);
   }, [gifData]);
 
   // Download ZIP when data arrives from Python
   React.useEffect(() => {
     if (!zipData || zipData.byteLength === 0) return;
-    const buf = new Uint8Array(zipData.buffer as ArrayBuffer, zipData.byteOffset, zipData.byteLength);
-    const blob = new Blob([buf as BlobPart], { type: "application/zip" });
-    const link = document.createElement("a");
-    link.download = "show3d_frames.zip";
-    link.href = URL.createObjectURL(blob);
-    link.click();
-    URL.revokeObjectURL(link.href);
+    downloadDataView(zipData, "show3d_frames.zip", "application/zip");
     setExporting(false);
   }, [zipData]);
 
@@ -981,10 +1064,27 @@ function Show3D() {
   };
 
   const handleCanvasMouseMove = (e: React.MouseEvent) => {
+    // Cursor readout: convert screen position to image pixel coordinates
+    const canvas = overlayRef.current;
+    if (canvas && rawFrameDataRef.current) {
+      const rect = canvas.getBoundingClientRect();
+      const mouseCanvasX = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const mouseCanvasY = (e.clientY - rect.top) * (canvas.height / rect.height);
+      const imageCanvasX = (mouseCanvasX - panX) / zoom;
+      const imageCanvasY = (mouseCanvasY - panY) / zoom;
+      const imgX = Math.floor(imageCanvasX / displayScale);
+      const imgY = Math.floor(imageCanvasY / displayScale);
+      if (imgX >= 0 && imgX < width && imgY >= 0 && imgY < height) {
+        const rawData = rawFrameDataRef.current;
+        setCursorInfo({ row: imgY, col: imgX, value: rawData[imgY * width + imgX] });
+      } else {
+        setCursorInfo(null);
+      }
+    }
+
     if (isDraggingROI) {
       updateROI(e);
     } else if (isDraggingPan && panStart) {
-      const canvas = overlayRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const scaleX = canvas.width / rect.width;
@@ -997,6 +1097,13 @@ function Show3D() {
   };
 
   const handleCanvasMouseUp = () => {
+    setIsDraggingROI(false);
+    setIsDraggingPan(false);
+    setPanStart(null);
+  };
+
+  const handleCanvasMouseLeave = () => {
+    setCursorInfo(null);
     setIsDraggingROI(false);
     setIsDraggingPan(false);
     setPanStart(null);
@@ -1063,8 +1170,8 @@ function Show3D() {
     const screenY = (e.clientY - rect.top) * scaleY;
     const x = Math.floor((screenX - panX) / (displayScale * zoom));
     const y = Math.floor((screenY - panY) / (displayScale * zoom));
-    setRoiX(Math.max(0, Math.min(width - 1, x)));
-    setRoiY(Math.max(0, Math.min(height - 1, y)));
+    setRoiCol(Math.max(0, Math.min(width - 1, x)));
+    setRoiRow(Math.max(0, Math.min(height - 1, y)));
   };
 
   // Resize handlers
@@ -1102,15 +1209,13 @@ function Show3D() {
         e.preventDefault();
         setPlaying(!playing);
         break;
-      case "ArrowLeft":
-      case "ArrowDown": {
+      case "ArrowLeft": {
         e.preventDefault();
         const lo = loop ? Math.max(0, loopStart) : 0;
         setSliceIdx(Math.max(lo, sliceIdx - 1));
         break;
       }
-      case "ArrowRight":
-      case "ArrowUp": {
+      case "ArrowRight": {
         e.preventDefault();
         const hi = loop ? Math.min(effectiveLoopEnd, nSlices - 1) : nSlices - 1;
         setSliceIdx(Math.min(hi, sliceIdx + 1));
@@ -1159,7 +1264,7 @@ function Show3D() {
             onMouseDown={handleCanvasMouseDown}
             onMouseMove={handleCanvasMouseMove}
             onMouseUp={handleCanvasMouseUp}
-            onMouseLeave={handleCanvasMouseUp}
+            onMouseLeave={handleCanvasMouseLeave}
             onWheel={handleWheel}
             onDoubleClick={handleDoubleClick}
           >
@@ -1170,13 +1275,21 @@ function Show3D() {
           </Box>
           {/* Statistics bar - right below the image */}
           {showStats && (
-            <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, maxWidth: canvasW, boxSizing: "border-box" }}>
-              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMean)}</Box></Typography>
-              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMin)}</Box></Typography>
-              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMax)}</Box></Typography>
-              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsStd)}</Box></Typography>
-              {roiActive && (
+            <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", maxWidth: canvasW, boxSizing: "border-box" }}>
+              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.mean : statsMean)}</Box></Typography>
+              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.min : statsMin)}</Box></Typography>
+              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.max : statsMax)}</Box></Typography>
+              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.std : statsStd)}</Box></Typography>
+              {roiActive && !localStats && (
                 <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>ROI <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(roiMean)}</Box></Typography>
+              )}
+              {cursorInfo && (
+                <>
+                  <Box sx={{ borderLeft: `1px solid ${themeColors.border}`, height: 14 }} />
+                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted, fontFamily: "monospace" }}>
+                    ({cursorInfo.row}, {cursorInfo.col}) <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(cursorInfo.value)}</Box>
+                  </Typography>
+                </>
               )}
             </Box>
           )}
@@ -1184,21 +1297,23 @@ function Show3D() {
           <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: canvasW, boxSizing: "border-box" }}>
             {/* Left: two rows of controls */}
             <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
-              {/* Row 1: Scale + Color */}
+              {/* Row 1: Scale + Auto + Color */}
               <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Scale:</Typography>
-                <Select value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={upwardMenuProps}>
+                <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Scale:<InfoTooltip text="Linear or logarithmic intensity mapping. Log emphasizes low-intensity features." theme={themeInfo.theme} /></Typography>
+                <Select value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
                   <MenuItem value="linear">Lin</MenuItem>
                   <MenuItem value="log">Log</MenuItem>
                 </Select>
+                <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Auto:<InfoTooltip text="Auto-contrast using percentile-based clipping. Ignores extreme outliers for better contrast." theme={themeInfo.theme} /></Typography>
+                <Switch checked={autoContrast} onChange={(e) => setAutoContrast(e.target.checked)} size="small" sx={switchStyles.small} />
                 <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Color:</Typography>
-                <Select size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={upwardMenuProps} sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}>
+                <Select size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}>
                   {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
                 </Select>
               </Box>
               {/* Row 2: ROI dropdown + size controls + zoom indicator */}
               <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>ROI:</Typography>
+                <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>ROI:<InfoTooltip text="Region of Interest. Click on the image to place and drag. Tracks mean intensity across frames." theme={themeInfo.theme} /></Typography>
                 <Select
                   size="small"
                   value={roiActive ? (roiShape || "circle") : "none"}
@@ -1209,10 +1324,10 @@ function Show3D() {
                     } else {
                       setRoiActive(true);
                       setRoiShape(val);
-                      if (!roiActive) { setRoiX(Math.floor(width / 2)); setRoiY(Math.floor(height / 2)); }
+                      if (!roiActive) { setRoiCol(Math.floor(width / 2)); setRoiRow(Math.floor(height / 2)); }
                     }
                   }}
-                  MenuProps={upwardMenuProps}
+                  MenuProps={themedMenuProps}
                   sx={{ ...themedSelect, minWidth: 70 }}
                 >
                   {ROI_SHAPES.map((shape) => (<MenuItem key={shape} value={shape}>{shape.charAt(0).toUpperCase() + shape.slice(1)}</MenuItem>))}
@@ -1292,7 +1407,7 @@ function Show3D() {
                 {/* Row 1: Scale + Auto */}
                 <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                   <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Scale:</Typography>
-                  <Select value={fftLogScale ? "log" : "linear"} onChange={(e) => setFftLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={upwardMenuProps}>
+                  <Select value={fftLogScale ? "log" : "linear"} onChange={(e) => setFftLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
                     <MenuItem value="linear">Lin</MenuItem>
                     <MenuItem value="log">Log</MenuItem>
                   </Select>
@@ -1302,7 +1417,7 @@ function Show3D() {
                 {/* Row 2: Color */}
                 <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                   <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Color:</Typography>
-                  <Select value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={upwardMenuProps}>
+                  <Select value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={themedMenuProps}>
                     {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
                   </Select>
                 </Box>
@@ -1328,33 +1443,29 @@ function Show3D() {
 
       {/* Playback controls - two rows, constrained to image width */}
       {/* Row 1: Transport controls + position slider (with loop range handles when Loop is ON) */}
+      {(() => { const activeIdx = playing ? displaySliceIdx : sliceIdx; return (<>
       <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, width: canvasW, maxWidth: canvasW, boxSizing: "border-box" }}>
-        {loop ? (
-          <IconButton size="small" onClick={() => setPlaying(!playing)} sx={{ color: themeColors.accent, p: 0.25, mr: 0.5, flexShrink: 0 }}>
+        <Stack direction="row" spacing={0} sx={{ flexShrink: 0, mr: 0.5 }}>
+          <IconButton size="small" onClick={() => { setReverse(true); setPlaying(true); }} sx={{ color: reverse && playing ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
+            <FastRewindIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+          <IconButton size="small" onClick={() => setPlaying(!playing)} sx={{ color: themeColors.accent, p: 0.25 }}>
             {playing ? <PauseIcon sx={{ fontSize: 18 }} /> : <PlayArrowIcon sx={{ fontSize: 18 }} />}
           </IconButton>
-        ) : (
-          <Stack direction="row" spacing={0} sx={{ flexShrink: 0, mr: 0.5 }}>
-            <IconButton size="small" onClick={() => { setReverse(true); setPlaying(true); }} sx={{ color: reverse && playing ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
-              <FastRewindIcon sx={{ fontSize: 18 }} />
-            </IconButton>
-            <IconButton size="small" onClick={() => setPlaying(!playing)} sx={{ color: themeColors.accent, p: 0.25 }}>
-              {playing ? <PauseIcon sx={{ fontSize: 18 }} /> : <PlayArrowIcon sx={{ fontSize: 18 }} />}
-            </IconButton>
-            <IconButton size="small" onClick={() => { setReverse(false); setPlaying(true); }} sx={{ color: !reverse && playing ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
-              <FastForwardIcon sx={{ fontSize: 18 }} />
-            </IconButton>
-            <IconButton size="small" onClick={() => { setPlaying(false); setSliceIdx(0); }} sx={{ color: themeColors.textMuted, p: 0.25 }}>
-              <StopIcon sx={{ fontSize: 16 }} />
-            </IconButton>
-          </Stack>
-        )}
+          <IconButton size="small" onClick={() => { setReverse(false); setPlaying(true); }} sx={{ color: !reverse && playing ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
+            <FastForwardIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+          <IconButton size="small" onClick={() => { setPlaying(false); setSliceIdx(loop ? Math.max(0, loopStart) : 0); }} sx={{ color: themeColors.textMuted, p: 0.25 }}>
+            <StopIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Stack>
         {loop ? (
           <Slider
-            value={[loopStart, sliceIdx, effectiveLoopEnd]}
+            value={[loopStart, activeIdx, effectiveLoopEnd]}
             onChange={(_, v) => {
               const vals = v as number[];
               setLoopStart(vals[0]);
+              if (playing) setPlaying(false);
               setSliceIdx(vals[1]);
               setLoopEnd(vals[2]);
             }}
@@ -1377,37 +1488,36 @@ function Show3D() {
             }}
           />
         ) : (
-          <Slider value={sliceIdx} min={0} max={nSlices - 1} onChange={(_, v) => setSliceIdx(v as number)} size="small" marks={bookmarkedFrames.map(f => ({ value: f }))} sx={{ ...sliderStyles.small, flex: 1, minWidth: 40, "& .MuiSlider-mark": { bgcolor: themeColors.accent, width: 4, height: 4, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" } }} />
+          <Slider value={activeIdx} min={0} max={nSlices - 1} onChange={(_, v) => { if (playing) setPlaying(false); setSliceIdx(v as number); }} size="small" marks={bookmarkedFrames.map(f => ({ value: f }))} sx={{ ...sliderStyles.small, flex: 1, minWidth: 40, "& .MuiSlider-mark": { bgcolor: themeColors.accent, width: 4, height: 4, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" } }} />
         )}
-        <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 28, textAlign: "right", flexShrink: 0 }}>{sliceIdx + 1}/{nSlices}</Typography>
+        <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 28, textAlign: "right", flexShrink: 0 }}>{activeIdx + 1}/{nSlices}{timestamps && timestamps.length > 0 && activeIdx < timestamps.length && ` (${formatNumber(timestamps[activeIdx])} ${timestampUnit})`}</Typography>
       </Box>
       {/* Row 2: FPS, Loop, Bounce, Bookmark */}
       <Box sx={{ ...controlRow, mt: `${SPACING.XS}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, width: canvasW, maxWidth: canvasW, boxSizing: "border-box" }}>
-        <InfoTooltip text="Keyboard shortcuts: Space = Play/Pause, ←/→ = Prev/Next frame, Home/End = First/Last frame, R = Reset zoom, Scroll = Zoom, Double-click = Reset view" theme={themeInfo.theme} />
+        <InfoTooltip text={<KeyboardShortcuts items={[["Space", "Play / Pause"], ["← / →", "Prev / Next frame"], ["Home / End", "First / Last frame"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />} theme={themeInfo.theme} />
         <Typography sx={{ ...typography.label, color: themeColors.textMuted, flexShrink: 0 }}>fps</Typography>
-        <Slider value={fps} min={1} max={30} step={1} onChange={(_, v) => setFps(v as number)} size="small" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
+        <Slider value={fps} min={1} max={60} step={1} onChange={(_, v) => setFps(v as number)} size="small" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
         <Typography sx={{ ...typography.label, color: themeColors.textMuted, minWidth: 14, flexShrink: 0 }}>{Math.round(fps)}</Typography>
-        <Typography sx={{ ...typography.label, color: themeColors.textMuted, flexShrink: 0 }}>Loop</Typography>
-        <Switch size="small" checked={loop} onChange={() => { if (loop) { setBoomerang(false); } setLoop(!loop); }} sx={{ ...switchStyles.small, flexShrink: 0 }} />
-        {loop && (
-          <>
-            <Typography sx={{ ...typography.label, color: themeColors.textMuted, flexShrink: 0 }}>Bounce</Typography>
-            <Switch size="small" checked={boomerang} onChange={() => setBoomerang(!boomerang)} sx={{ ...switchStyles.small, flexShrink: 0 }} />
-          </>
-        )}
-        <IconButton size="small" onClick={() => {
-          const set = new Set(bookmarkedFrames);
-          if (set.has(sliceIdx)) { set.delete(sliceIdx); } else { set.add(sliceIdx); }
-          setBookmarkedFrames(Array.from(set).sort((a, b) => a - b));
-        }} sx={{ color: bookmarkedFrames.includes(sliceIdx) ? themeColors.accent : themeColors.textMuted, p: 0.25, flexShrink: 0 }}>
-          <Typography sx={{ fontSize: 14, lineHeight: 1 }}>{bookmarkedFrames.includes(sliceIdx) ? "\u2605" : "\u2606"}</Typography>
-        </IconButton>
+        <Typography sx={{ ...typography.label, color: themeColors.textMuted, flexShrink: 0 }}>Loop<InfoTooltip text="Loop playback. Drag the small end markers on the slider to set loop range." theme={themeInfo.theme} /></Typography>
+        <Switch size="small" checked={loop} onChange={() => setLoop(!loop)} sx={{ ...switchStyles.small, flexShrink: 0 }} />
+        <Typography sx={{ ...typography.label, color: themeColors.textMuted, flexShrink: 0 }}>Bounce<InfoTooltip text="Ping-pong playback. Alternates forward and reverse at loop boundaries." theme={themeInfo.theme} /></Typography>
+        <Switch size="small" checked={boomerang} onChange={() => setBoomerang(!boomerang)} sx={{ ...switchStyles.small, flexShrink: 0 }} />
+        <Tooltip title="Bookmark current frame" arrow>
+          <IconButton size="small" onClick={() => {
+            const set = new Set(bookmarkedFrames);
+            if (set.has(activeIdx)) { set.delete(activeIdx); } else { set.add(activeIdx); }
+            setBookmarkedFrames(Array.from(set).sort((a, b) => a - b));
+          }} sx={{ color: bookmarkedFrames.includes(activeIdx) ? themeColors.accent : themeColors.textMuted, p: 0.25, flexShrink: 0 }}>
+            <Typography sx={{ fontSize: 14, lineHeight: 1 }}>{bookmarkedFrames.includes(activeIdx) ? "\u2605" : "\u2606"}</Typography>
+          </IconButton>
+        </Tooltip>
         {loop && (loopStart > 0 || (loopEnd >= 0 && loopEnd < nSlices - 1)) && (
           <IconButton size="small" onClick={() => { setLoopStart(0); setLoopEnd(-1); }} sx={{ color: themeColors.textMuted, p: 0.25, flexShrink: 0 }} title="Reset loop range">
             <Typography sx={{ fontSize: 10, lineHeight: 1 }}>Reset</Typography>
           </IconButton>
         )}
       </Box>
+      </>); })()}
 
 
     </Box>

@@ -38,9 +38,9 @@ class Show4DSTEM(anywidget.AnyWidget):
     ----------
     data : Dataset4dstem or array_like
         Dataset4dstem object (calibration auto-extracted) or 4D array
-        of shape (scan_x, scan_y, det_x, det_y).
+        of shape (scan_rows, scan_cols, det_rows, det_cols).
     scan_shape : tuple, optional
-        If data is flattened (N, det_x, det_y), provide scan dimensions.
+        If data is flattened (N, det_rows, det_cols), provide scan dimensions.
     pixel_size : float, optional
         Pixel size in Å (real-space). Used for scale bar.
         Auto-extracted from Dataset4dstem if not provided.
@@ -48,7 +48,7 @@ class Show4DSTEM(anywidget.AnyWidget):
         Detector pixel size in mrad (k-space). Used for scale bar.
         Auto-extracted from Dataset4dstem if not provided.
     center : tuple[float, float], optional
-        (center_x, center_y) of the diffraction pattern in pixels.
+        (center_row, center_col) of the diffraction pattern in pixels.
         If not provided, defaults to detector center.
     bf_radius : float, optional
         Bright field disk radius in pixels. If not provided, estimated as 1/8 of detector size.
@@ -78,16 +78,16 @@ class Show4DSTEM(anywidget.AnyWidget):
     _css = pathlib.Path(__file__).parent / "static" / "show4dstem.css"
 
     # Position in scan space
-    pos_x = traitlets.Int(0).tag(sync=True)
-    pos_y = traitlets.Int(0).tag(sync=True)
+    pos_row = traitlets.Int(0).tag(sync=True)
+    pos_col = traitlets.Int(0).tag(sync=True)
 
     # Shape of scan space (for slider bounds)
-    shape_x = traitlets.Int(1).tag(sync=True)
-    shape_y = traitlets.Int(1).tag(sync=True)
+    shape_rows = traitlets.Int(1).tag(sync=True)
+    shape_cols = traitlets.Int(1).tag(sync=True)
 
     # Detector shape for frontend
-    det_x = traitlets.Int(1).tag(sync=True)
-    det_y = traitlets.Int(1).tag(sync=True)
+    det_rows = traitlets.Int(1).tag(sync=True)
+    det_cols = traitlets.Int(1).tag(sync=True)
 
     # Raw float32 frame as bytes (JS handles scale/colormap for real-time interactivity)
     frame_bytes = traitlets.Bytes(b"").tag(sync=True)
@@ -99,8 +99,8 @@ class Show4DSTEM(anywidget.AnyWidget):
     # =========================================================================
     # Detector Calibration (for presets and scale bar)
     # =========================================================================
-    center_x = traitlets.Float(0.0).tag(sync=True)  # Detector center X
-    center_y = traitlets.Float(0.0).tag(sync=True)  # Detector center Y
+    center_col = traitlets.Float(0.0).tag(sync=True)  # Detector center col
+    center_row = traitlets.Float(0.0).tag(sync=True)  # Detector center row
     bf_radius = traitlets.Float(0.0).tag(sync=True)  # BF disk radius (pixels)
 
     # =========================================================================
@@ -113,9 +113,9 @@ class Show4DSTEM(anywidget.AnyWidget):
     # =========================================================================
     roi_active = traitlets.Bool(False).tag(sync=True)
     roi_mode = traitlets.Unicode("point").tag(sync=True)
-    roi_center_x = traitlets.Float(0.0).tag(sync=True)
-    roi_center_y = traitlets.Float(0.0).tag(sync=True)
-    # Compound trait for batched X+Y updates (JS sends both at once, 1 observer fires)
+    roi_center_col = traitlets.Float(0.0).tag(sync=True)
+    roi_center_row = traitlets.Float(0.0).tag(sync=True)
+    # Compound trait for batched row+col updates (JS sends both at once, 1 observer fires)
     roi_center = traitlets.List(traitlets.Float(), default_value=[0.0, 0.0]).tag(sync=True)
     roi_radius = traitlets.Float(10.0).tag(sync=True)
     roi_radius_inner = traitlets.Float(5.0).tag(sync=True)
@@ -133,8 +133,8 @@ class Show4DSTEM(anywidget.AnyWidget):
     # VI ROI (real-space region selection for summed DP)
     # =========================================================================
     vi_roi_mode = traitlets.Unicode("off").tag(sync=True)  # "off", "circle", "rect"
-    vi_roi_center_x = traitlets.Float(0.0).tag(sync=True)
-    vi_roi_center_y = traitlets.Float(0.0).tag(sync=True)
+    vi_roi_center_row = traitlets.Float(0.0).tag(sync=True)
+    vi_roi_center_col = traitlets.Float(0.0).tag(sync=True)
     vi_roi_radius = traitlets.Float(5.0).tag(sync=True)
     vi_roi_width = traitlets.Float(10.0).tag(sync=True)
     vi_roi_height = traitlets.Float(10.0).tag(sync=True)
@@ -189,7 +189,7 @@ class Show4DSTEM(anywidget.AnyWidget):
         k_calibrated = False
         if hasattr(data, "sampling") and hasattr(data, "array"):
             # Dataset4dstem: extract calibration and array
-            # sampling = [scan_x, scan_y, det_x, det_y]
+            # sampling = [scan_rows, scan_cols, det_rows, det_cols]
             units = getattr(data, "units", ["pixels"] * 4)
             if pixel_size is None and units[0] in ("Å", "angstrom", "A", "nm"):
                 pixel_size = float(data.sampling[0])
@@ -236,45 +236,45 @@ class Show4DSTEM(anywidget.AnyWidget):
         else:
             raise ValueError(f"Expected 3D or 4D array, got {data.ndim}D")
 
-        self.shape_x = self._scan_shape[0]
-        self.shape_y = self._scan_shape[1]
-        self.det_x = self._det_shape[0]
-        self.det_y = self._det_shape[1]
+        self.shape_rows = self._scan_shape[0]
+        self.shape_cols = self._scan_shape[1]
+        self.det_rows = self._det_shape[0]
+        self.det_cols = self._det_shape[1]
         # Initial position at center
-        self.pos_x = self.shape_x // 2
-        self.pos_y = self.shape_y // 2
+        self.pos_row = self.shape_rows // 2
+        self.pos_col = self.shape_cols // 2
         # Precompute global range for consistent scaling (hot pixels already removed)
         self.dp_global_min = max(float(self._data.min()), MIN_LOG_VALUE)
         self.dp_global_max = float(self._data.max())
         # Cache coordinate tensors for mask creation (avoid repeated torch.arange)
-        self._det_row_coords = torch.arange(self.det_x, device=self._device, dtype=torch.float32)[:, None]
-        self._det_col_coords = torch.arange(self.det_y, device=self._device, dtype=torch.float32)[None, :]
-        self._scan_row_coords = torch.arange(self.shape_x, device=self._device, dtype=torch.float32)[:, None]
-        self._scan_col_coords = torch.arange(self.shape_y, device=self._device, dtype=torch.float32)[None, :]
+        self._det_row_coords = torch.arange(self.det_rows, device=self._device, dtype=torch.float32)[:, None]
+        self._det_col_coords = torch.arange(self.det_cols, device=self._device, dtype=torch.float32)[None, :]
+        self._scan_row_coords = torch.arange(self.shape_rows, device=self._device, dtype=torch.float32)[:, None]
+        self._scan_col_coords = torch.arange(self.shape_cols, device=self._device, dtype=torch.float32)[None, :]
         # Setup center and BF radius
         # If user provides explicit values, use them
         # Otherwise, auto-detect from the data for accurate presets
-        det_size = min(self.det_x, self.det_y)
+        det_size = min(self.det_rows, self.det_cols)
         if center is not None and bf_radius is not None:
             # User provided both - use explicit values
-            self.center_x = float(center[0])
-            self.center_y = float(center[1])
+            self.center_row = float(center[0])
+            self.center_col = float(center[1])
             self.bf_radius = float(bf_radius)
         elif center is not None:
             # User provided center only - use it with default bf_radius
-            self.center_x = float(center[0])
-            self.center_y = float(center[1])
+            self.center_row = float(center[0])
+            self.center_col = float(center[1])
             self.bf_radius = det_size * DEFAULT_BF_RATIO
         elif bf_radius is not None:
             # User provided bf_radius only - use detector center
-            self.center_x = float(self.det_y / 2)
-            self.center_y = float(self.det_x / 2)
+            self.center_col = float(self.det_cols / 2)
+            self.center_row = float(self.det_rows / 2)
             self.bf_radius = float(bf_radius)
         else:
             # Neither provided - auto-detect from data
             # Set defaults first (will be overwritten by auto-detect)
-            self.center_x = float(self.det_y / 2)
-            self.center_y = float(self.det_x / 2)
+            self.center_col = float(self.det_cols / 2)
+            self.center_row = float(self.det_rows / 2)
             self.bf_radius = det_size * DEFAULT_BF_RATIO
             # Auto-detect center and bf_radius from the data
             self.auto_detect_center(update_roi=False)
@@ -288,19 +288,19 @@ class Show4DSTEM(anywidget.AnyWidget):
             self._precompute_common_virtual_images()
 
         # Update frame when position changes (scale/colormap handled in JS)
-        self.observe(self._update_frame, names=["pos_x", "pos_y"])
+        self.observe(self._update_frame, names=["pos_row", "pos_col"])
         # Observe individual ROI params (for backward compatibility)
         self.observe(self._on_roi_change, names=[
-            "roi_center_x", "roi_center_y", "roi_radius", "roi_radius_inner",
+            "roi_center_col", "roi_center_row", "roi_radius", "roi_radius_inner",
             "roi_active", "roi_mode", "roi_width", "roi_height"
         ])
         # Observe compound roi_center for batched updates from JS
         self.observe(self._on_roi_center_change, names=["roi_center"])
 
         # Initialize default ROI at BF center
-        self.roi_center_x = self.center_x
-        self.roi_center_y = self.center_y
-        self.roi_center = [self.center_x, self.center_y]
+        self.roi_center_col = self.center_col
+        self.roi_center_row = self.center_row
+        self.roi_center = [self.center_row, self.center_col]
         self.roi_radius = self.bf_radius * 0.5  # Start with half BF radius
         self.roi_active = True
         
@@ -316,24 +316,24 @@ class Show4DSTEM(anywidget.AnyWidget):
 
         # VI ROI: observe changes for summed DP computation
         # Initialize VI ROI center to scan center with reasonable default sizes
-        self.vi_roi_center_x = float(self.shape_x / 2)
-        self.vi_roi_center_y = float(self.shape_y / 2)
+        self.vi_roi_center_row = float(self.shape_rows / 2)
+        self.vi_roi_center_col = float(self.shape_cols / 2)
         # Set initial ROI size based on scan dimension
-        default_roi_size = max(3, min(self.shape_x, self.shape_y) * DEFAULT_VI_ROI_RATIO)
+        default_roi_size = max(3, min(self.shape_rows, self.shape_cols) * DEFAULT_VI_ROI_RATIO)
         self.vi_roi_radius = float(default_roi_size)
         self.vi_roi_width = float(default_roi_size * 2)
         self.vi_roi_height = float(default_roi_size)
         self.observe(self._on_vi_roi_change, names=[
-            "vi_roi_mode", "vi_roi_center_x", "vi_roi_center_y",
+            "vi_roi_mode", "vi_roi_center_row", "vi_roi_center_col",
             "vi_roi_radius", "vi_roi_width", "vi_roi_height"
         ])
 
     def __repr__(self) -> str:
         k_unit = "mrad" if self.k_calibrated else "px"
         return (
-            f"Show4DSTEM(shape=({self.shape_x}, {self.shape_y}, {self.det_x}, {self.det_y}), "
+            f"Show4DSTEM(shape=({self.shape_rows}, {self.shape_cols}, {self.det_rows}, {self.det_cols}), "
             f"sampling=({self.pixel_size} Å, {self.k_pixel_size} {k_unit}), "
-            f"pos=({self.pos_x}, {self.pos_y}))"
+            f"pos=({self.pos_row}, {self.pos_col}))"
         )
 
     # =========================================================================
@@ -342,23 +342,23 @@ class Show4DSTEM(anywidget.AnyWidget):
 
     @property
     def position(self) -> tuple[int, int]:
-        """Current scan position as (x, y) tuple."""
-        return (self.pos_x, self.pos_y)
+        """Current scan position as (row, col) tuple."""
+        return (self.pos_row, self.pos_col)
 
     @position.setter
     def position(self, value: tuple[int, int]) -> None:
-        """Set scan position from (x, y) tuple."""
-        self.pos_x, self.pos_y = value
+        """Set scan position from (row, col) tuple."""
+        self.pos_row, self.pos_col = value
 
     @property
     def scan_shape(self) -> tuple[int, int]:
-        """Scan dimensions as (shape_x, shape_y) tuple."""
-        return (self.shape_x, self.shape_y)
+        """Scan dimensions as (rows, cols) tuple."""
+        return (self.shape_rows, self.shape_cols)
 
     @property
     def detector_shape(self) -> tuple[int, int]:
-        """Detector dimensions as (det_x, det_y) tuple."""
-        return (self.det_x, self.det_y)
+        """Detector dimensions as (rows, cols) tuple."""
+        return (self.det_rows, self.det_cols)
 
     # =========================================================================
     # Path Animation Methods
@@ -377,7 +377,7 @@ class Show4DSTEM(anywidget.AnyWidget):
         Parameters
         ----------
         points : list[tuple[int, int]]
-            List of (x, y) scan positions to visit.
+            List of (row, col) scan positions to visit.
         interval_ms : int, default 100
             Time between frames in milliseconds.
         loop : bool, default True
@@ -431,10 +431,10 @@ class Show4DSTEM(anywidget.AnyWidget):
         """Called when path_index changes (from frontend timer)."""
         idx = change["new"]
         if 0 <= idx < len(self._path_points):
-            x, y = self._path_points[idx]
+            row, col = self._path_points[idx]
             # Clamp to valid range
-            self.pos_x = max(0, min(self.shape_x - 1, x))
-            self.pos_y = max(0, min(self.shape_y - 1, y))
+            self.pos_row = max(0, min(self.shape_rows - 1, row))
+            self.pos_col = max(0, min(self.shape_cols - 1, col))
 
     def _on_auto_detect_trigger(self, change):
         """Called when auto_detect_trigger is set to True from frontend."""
@@ -477,12 +477,12 @@ class Show4DSTEM(anywidget.AnyWidget):
             Self for method chaining.
         """
         points = []
-        for x in range(0, self.shape_x, step):
-            row = list(range(0, self.shape_y, step))
-            if bidirectional and (x // step % 2 == 1):
-                row = row[::-1]  # Alternate direction for snake pattern
-            for y in row:
-                points.append((x, y))
+        for r in range(0, self.shape_rows, step):
+            cols = list(range(0, self.shape_cols, step))
+            if bidirectional and (r // step % 2 == 1):
+                cols = cols[::-1]  # Alternate direction for snake pattern
+            for c in cols:
+                points.append((r, c))
         return self.set_path(points=points, interval_ms=interval_ms, loop=loop)
     
     # =========================================================================
@@ -627,7 +627,7 @@ class Show4DSTEM(anywidget.AnyWidget):
 
         This method analyzes the summed diffraction pattern to find the
         bright field disk center and estimate its radius. The detected
-        values are applied to the widget's calibration (center_x, center_y,
+        values are applied to the widget's calibration (center_row, center_col,
         bf_radius).
 
         Parameters
@@ -669,44 +669,44 @@ class Show4DSTEM(anywidget.AnyWidget):
         radius = float(torch.sqrt(total / torch.pi))
 
         # Apply detected values
-        self.center_x = cx
-        self.center_y = cy
+        self.center_col = cx
+        self.center_row = cy
         self.bf_radius = radius
 
         if update_roi:
             # Also update ROI to center
-            self.roi_center_x = cx
-            self.roi_center_y = cy
+            self.roi_center_col = cx
+            self.roi_center_row = cy
             # Recompute cached virtual images with new calibration
             self._precompute_common_virtual_images()
 
         return self
 
-    def _get_frame(self, x: int, y: int) -> np.ndarray:
-        """Get single diffraction frame at position (x, y) as numpy array."""
+    def _get_frame(self, row: int, col: int) -> np.ndarray:
+        """Get single diffraction frame at position (row, col) as numpy array."""
         if self._data.ndim == 3:
-            idx = x * self.shape_y + y
+            idx = row * self.shape_cols + col
             return self._data[idx].cpu().numpy()
         else:
-            return self._data[x, y].cpu().numpy()
+            return self._data[row, col].cpu().numpy()
 
     def _update_frame(self, change=None):
         """Send raw float32 frame to frontend (JS handles scale/colormap)."""
         # Get frame as tensor (stays on device)
         if self._data.ndim == 3:
-            idx = self.pos_x * self.shape_y + self.pos_y
+            idx = self.pos_row * self.shape_cols + self.pos_col
             frame = self._data[idx]
         else:
-            frame = self._data[self.pos_x, self.pos_y]
+            frame = self._data[self.pos_row, self.pos_col]
 
         # Apply log scale if enabled
         if self.log_scale:
             frame = torch.log1p(frame)
 
         # Compute stats from frame (optionally mask DC component)
-        if self.mask_dc and self.det_x > 3 and self.det_y > 3:
+        if self.mask_dc and self.det_rows > 3 and self.det_cols > 3:
             # Mask center 3x3 region for stats (only for detectors > 3x3)
-            cx, cy = self.det_x // 2, self.det_y // 2
+            cx, cy = self.det_rows // 2, self.det_cols // 2
             mask = torch.ones_like(frame, dtype=torch.bool)
             mask[max(0, cx-1):cx+2, max(0, cy-1):cy+2] = False
             masked_vals = frame[mask]
@@ -738,20 +738,20 @@ class Show4DSTEM(anywidget.AnyWidget):
         self._compute_virtual_image_from_roi()
 
     def _on_roi_center_change(self, change=None):
-        """Handle batched roi_center updates from JS (single observer for X+Y).
+        """Handle batched roi_center updates from JS (single observer for row+col).
 
-        This is the fast path for drag operations. JS sends [x, y] as a single
+        This is the fast path for drag operations. JS sends [row, col] as a single
         compound trait, so only one observer fires per mouse move.
         """
         if not self.roi_active:
             return
         if change and "new" in change:
-            x, y = change["new"]
+            row, col = change["new"]
             # Sync to individual traits (without triggering _on_roi_change observers)
-            self.unobserve(self._on_roi_change, names=["roi_center_x", "roi_center_y"])
-            self.roi_center_x = x
-            self.roi_center_y = y
-            self.observe(self._on_roi_change, names=["roi_center_x", "roi_center_y"])
+            self.unobserve(self._on_roi_change, names=["roi_center_col", "roi_center_row"])
+            self.roi_center_row = row
+            self.roi_center_col = col
+            self.observe(self._on_roi_change, names=["roi_center_col", "roi_center_row"])
         self._compute_virtual_image_from_roi()
 
     def _on_vi_roi_change(self, change=None):
@@ -766,14 +766,14 @@ class Show4DSTEM(anywidget.AnyWidget):
         """Sum diffraction patterns from positions inside VI ROI (PyTorch)."""
         # Create mask in scan space using cached coordinates
         if self.vi_roi_mode == "circle":
-            mask = (self._scan_row_coords - self.vi_roi_center_x) ** 2 + (self._scan_col_coords - self.vi_roi_center_y) ** 2 <= self.vi_roi_radius ** 2
+            mask = (self._scan_row_coords - self.vi_roi_center_row) ** 2 + (self._scan_col_coords - self.vi_roi_center_col) ** 2 <= self.vi_roi_radius ** 2
         elif self.vi_roi_mode == "square":
             half_size = self.vi_roi_radius
-            mask = (torch.abs(self._scan_row_coords - self.vi_roi_center_x) <= half_size) & (torch.abs(self._scan_col_coords - self.vi_roi_center_y) <= half_size)
+            mask = (torch.abs(self._scan_row_coords - self.vi_roi_center_row) <= half_size) & (torch.abs(self._scan_col_coords - self.vi_roi_center_col) <= half_size)
         elif self.vi_roi_mode == "rect":
             half_w = self.vi_roi_width / 2
             half_h = self.vi_roi_height / 2
-            mask = (torch.abs(self._scan_row_coords - self.vi_roi_center_x) <= half_h) & (torch.abs(self._scan_col_coords - self.vi_roi_center_y) <= half_w)
+            mask = (torch.abs(self._scan_row_coords - self.vi_roi_center_row) <= half_h) & (torch.abs(self._scan_col_coords - self.vi_roi_center_col) <= half_w)
         else:
             return
 
@@ -788,10 +788,10 @@ class Show4DSTEM(anywidget.AnyWidget):
 
         # Compute average DP using masked sum (vectorized)
         if self._data.ndim == 4:
-            # (scan_x, scan_y, det_x, det_y) - sum over masked scan positions
+            # (scan_rows, scan_cols, det_rows, det_cols) - sum over masked scan positions
             avg_dp = self._data[mask].mean(dim=0)
         else:
-            # Flattened: (N, det_x, det_y) - need to convert mask indices
+            # Flattened: (N, det_rows, det_cols) - need to convert mask indices
             flat_indices = torch.nonzero(mask.flatten(), as_tuple=True)[0]
             avg_dp = self._data[flat_indices].mean(dim=0)
 
@@ -801,7 +801,7 @@ class Show4DSTEM(anywidget.AnyWidget):
             normalized = torch.clamp((avg_dp - vmin) / (vmax - vmin) * 255, 0, 255)
             normalized = normalized.cpu().numpy().astype(np.uint8)
         else:
-            normalized = np.zeros((self.det_x, self.det_y), dtype=np.uint8)
+            normalized = np.zeros((self.det_rows, self.det_cols), dtype=np.uint8)
 
         self.summed_dp_bytes = normalized.tobytes()
 
@@ -830,7 +830,7 @@ class Show4DSTEM(anywidget.AnyWidget):
 
     def _precompute_common_virtual_images(self):
         """Pre-compute BF/ABF/ADF virtual images for instant preset switching."""
-        cx, cy, bf = self.center_x, self.center_y, self.bf_radius
+        cx, cy, bf = self.center_col, self.center_row, self.bf_radius
         # Cache (bytes, stats, min, max) for each preset
         bf_arr = self._fast_masked_sum(self._create_circular_mask(cx, cy, bf))
         abf_arr = self._fast_masked_sum(self._create_annular_mask(cx, cy, bf * 0.5, bf))
@@ -855,7 +855,7 @@ class Show4DSTEM(anywidget.AnyWidget):
     def _get_cached_preset(self) -> tuple[bytes, list[float], float, float] | None:
         """Check if current ROI matches a cached preset and return (bytes, stats, min, max) tuple."""
         # Must be centered on detector center
-        if abs(self.roi_center_x - self.center_x) >= 1 or abs(self.roi_center_y - self.center_y) >= 1:
+        if abs(self.roi_center_col - self.center_col) >= 1 or abs(self.roi_center_row - self.center_row) >= 1:
             return None
 
         bf = self.bf_radius
@@ -931,7 +931,7 @@ class Show4DSTEM(anywidget.AnyWidget):
             self.vi_data_max = vi_max
             return
 
-        cx, cy = self.roi_center_x, self.roi_center_y
+        cx, cy = self.roi_center_col, self.roi_center_row
 
         if self.roi_mode == "circle" and self.roi_radius > 0:
             mask = self._create_circular_mask(cx, cy, self.roi_radius)

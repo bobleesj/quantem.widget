@@ -56,6 +56,44 @@ data = np.random.rand(64, 64, 128, 128)
 Show4DSTEM(data, pixel_size=2.39, k_pixel_size=0.46)
 ```
 
+### Clicker - Interactive Point Picker
+
+```python
+import numpy as np
+from quantem.widget import Clicker
+
+image = np.random.rand(256, 256)
+w = Clicker(image, max_points=5)
+w
+
+# After clicking, retrieve selected points
+w.selected_points  # [{'x': 120.5, 'y': 83.2}, ...]
+```
+
+## Array Compatibility
+
+All widgets accept NumPy arrays, PyTorch tensors, CuPy arrays, and quantem Dataset objects via duck typing. No manual conversion needed.
+
+| Widget | NumPy | PyTorch | CuPy | quantem Dataset |
+|--------|-------|---------|------|-----------------|
+| Show2D | yes | yes | yes | `Dataset2d` |
+| Show3D | yes | yes | yes | `Dataset3d` |
+| Show3DVolume | yes | yes | yes | `Dataset3d` |
+| Show4DSTEM | yes | yes | yes | `Dataset4dstem` |
+| Clicker | yes | yes | yes | `Dataset2d` |
+| Align2D | yes | yes | yes | `Dataset2d` |
+
+When a quantem Dataset is passed, metadata (title, pixel size, units) is extracted automatically. Explicit parameters always override auto-extracted values.
+
+```python
+import torch
+Show2D(torch.randn(256, 256))  # PyTorch tensor
+
+from quantem.core.datastructures import Dataset3d
+dataset = Dataset3d.from_array(stack, name="Focal Series", sampling=(1.0, 0.25, 0.25), units=("nm", "Å", "Å"))
+Show3D(dataset)  # title and pixel_size extracted from dataset
+```
+
 ## Publishing
 
 Push a tag to publish to TestPyPI via GitHub Actions:
@@ -66,6 +104,20 @@ git push origin v0.0.1
 ```
 
 GitHub Actions automatically compiles the React/TypeScript, builds the Python wheel, and uploads to TestPyPI.
+
+### Verify TestPyPI Release
+
+After CI finishes, verify the published package in a clean environment:
+
+```bash
+./scripts/verify_testpypi.sh 0.0.3
+```
+
+This creates a fresh conda env, installs from TestPyPI, verifies all widget imports and JS bundles, then opens JupyterLab with a test notebook for visual inspection. When done, press Ctrl+C and clean up:
+
+```bash
+conda env remove -n test-widget-env -y
+```
 
 ### TestPyPI Trusted Publisher Setup
 

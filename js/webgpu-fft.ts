@@ -166,6 +166,35 @@ export class WebGPUFFT {
 }
 
 // ============================================================================
+// FFT post-processing helpers
+// ============================================================================
+
+/** Compute magnitude from complex FFT output: sqrt(real² + imag²). */
+export function computeMagnitude(real: Float32Array, imag: Float32Array): Float32Array {
+  const mag = new Float32Array(real.length);
+  for (let i = 0; i < mag.length; i++) {
+    mag[i] = Math.sqrt(real[i] * real[i] + imag[i] * imag[i]);
+  }
+  return mag;
+}
+
+/** Mask DC component (center pixel) and return 99.9% percentile-clipped range. Mutates `mag`. */
+export function autoEnhanceFFT(
+  mag: Float32Array, width: number, height: number,
+): { min: number; max: number } {
+  const centerIdx = Math.floor(height / 2) * width + Math.floor(width / 2);
+  const neighbors = [
+    mag[Math.max(0, centerIdx - 1)],
+    mag[Math.min(mag.length - 1, centerIdx + 1)],
+    mag[Math.max(0, centerIdx - width)],
+    mag[Math.min(mag.length - 1, centerIdx + width)],
+  ];
+  mag[centerIdx] = neighbors.reduce((a, b) => a + b, 0) / 4;
+  const sorted = mag.slice().sort((a, b) => a - b);
+  return { min: sorted[0], max: sorted[Math.floor(sorted.length * 0.999)] };
+}
+
+// ============================================================================
 // Singleton
 // ============================================================================
 

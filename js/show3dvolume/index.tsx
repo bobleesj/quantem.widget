@@ -18,6 +18,8 @@ import MenuItem from "@mui/material/MenuItem";
 import Switch from "@mui/material/Switch";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
+import Menu from "@mui/material/Menu";
+import Tooltip from "@mui/material/Tooltip";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import PauseIcon from "@mui/icons-material/Pause";
 import FastForwardIcon from "@mui/icons-material/FastForward";
@@ -26,6 +28,10 @@ import StopIcon from "@mui/icons-material/Stop";
 import "./show3dvolume.css";
 import { useTheme } from "../theme";
 import { VolumeRenderer, CameraState, DEFAULT_CAMERA } from "../webgl-volume";
+import { drawScaleBarHiDPI } from "../scalebar";
+import { extractBytes, extractFloat32, formatNumber, downloadBlob, downloadDataView } from "../format";
+import { computeHistogramFromBytes } from "../histogram";
+import { findDataRange, applyLogScale, percentileClip, sliderRange } from "../stats";
 
 // ============================================================================
 // UI Styles (matching Show3D exactly)
@@ -83,24 +89,9 @@ const compactButton = {
   "&.Mui-disabled": { color: "#666", borderColor: "#444" },
 };
 
-import { COLORMAPS, COLORMAP_NAMES } from "../colormaps";
+import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen } from "../colormaps";
 
-// Formatting (matching Show3D)
-function formatNumber(val: number, decimals: number = 2): string {
-  if (val === 0) return "0";
-  if (Math.abs(val) >= 1000 || Math.abs(val) < 0.01) return val.toExponential(decimals);
-  return val.toFixed(decimals);
-}
-
-import { WebGPUFFT, getWebGPUFFT, fft2d, fftshift, nextPow2 } from "../webgpu-fft";
-
-// Extract bytes from DataView (matching Show3D)
-function extractBytes(dataView: DataView | ArrayBuffer | Uint8Array): Uint8Array {
-  if (dataView instanceof Uint8Array) return dataView;
-  if (dataView instanceof ArrayBuffer) return new Uint8Array(dataView);
-  if (dataView && "buffer" in dataView) return new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength);
-  return new Uint8Array(0);
-}
+import { WebGPUFFT, getWebGPUFFT, fft2d, fftshift, nextPow2, computeMagnitude, autoEnhanceFFT } from "../webgpu-fft";
 
 // ============================================================================
 // Zoom constants (matching Show3D)
@@ -140,6 +131,106 @@ type ZoomState = { zoom: number; panX: number; panY: number };
 const DEFAULT_ZOOM: ZoomState = { zoom: 1, panX: 0, panY: 0 };
 const CANVAS_TARGET = 400;
 const AXES = ["xy", "xz", "yz"] as const;
+const DPR = window.devicePixelRatio || 1;
+
+// ============================================================================
+// InfoTooltip
+// ============================================================================
+function InfoTooltip({ text, theme = "dark" }: { text: React.ReactNode; theme?: "light" | "dark" }) {
+  const isDark = theme === "dark";
+  const content = typeof text === "string"
+    ? <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>{text}</Typography>
+    : text;
+  return (
+    <Tooltip
+      title={content}
+      arrow placement="bottom"
+      componentsProps={{
+        tooltip: { sx: { bgcolor: isDark ? "#333" : "#fff", color: isDark ? "#ddd" : "#333", border: `1px solid ${isDark ? "#555" : "#ccc"}`, maxWidth: 280, p: 1 } },
+        arrow: { sx: { color: isDark ? "#333" : "#fff", "&::before": { border: `1px solid ${isDark ? "#555" : "#ccc"}` } } },
+      }}
+    >
+      <Typography component="span" sx={{ fontSize: 12, color: isDark ? "#888" : "#666", cursor: "help", ml: 0.5, "&:hover": { color: isDark ? "#aaa" : "#444" } }}>ⓘ</Typography>
+    </Tooltip>
+  );
+}
+
+function KeyboardShortcuts({ items }: { items: [string, string][] }) {
+  return (
+    <Box component="table" sx={{ borderCollapse: "collapse", "& td": { py: 0.25, fontSize: 11, lineHeight: 1.3, verticalAlign: "top" }, "& td:first-of-type": { pr: 1.5, opacity: 0.7, fontFamily: "monospace", fontSize: 10, whiteSpace: "nowrap" } }}>
+      <tbody>
+        {items.map(([key, desc], i) => (
+          <tr key={i}><td>{key}</td><td>{desc}</td></tr>
+        ))}
+      </tbody>
+    </Box>
+  );
+}
+
+// ============================================================================
+// Histogram Component
+// ============================================================================
+
+interface HistogramProps {
+  data: Float32Array | null;
+  vminPct: number;
+  vmaxPct: number;
+  onRangeChange: (min: number, max: number) => void;
+  width?: number;
+  height?: number;
+  theme?: "light" | "dark";
+  dataMin?: number;
+  dataMax?: number;
+}
+
+function Histogram({ data, vminPct, vmaxPct, onRangeChange, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1 }: HistogramProps) {
+  const canvasRef = React.useRef<HTMLCanvasElement>(null);
+  const bins = React.useMemo(() => computeHistogramFromBytes(data), [data]);
+  const colors = theme === "dark" ? { bg: "#1a1a1a", barActive: "#888", barInactive: "#444", border: "#333" } : { bg: "#f0f0f0", barActive: "#666", barInactive: "#bbb", border: "#ccc" };
+
+  React.useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.fillStyle = colors.bg;
+    ctx.fillRect(0, 0, width, height);
+    const displayBins = 64;
+    const binRatio = Math.floor(bins.length / displayBins);
+    const reducedBins: number[] = [];
+    for (let i = 0; i < displayBins; i++) {
+      let sum = 0;
+      for (let j = 0; j < binRatio; j++) sum += bins[i * binRatio + j] || 0;
+      reducedBins.push(sum / binRatio);
+    }
+    const maxVal = Math.max(...reducedBins, 0.001);
+    const barWidth = width / displayBins;
+    const vminBin = Math.floor((vminPct / 100) * displayBins);
+    const vmaxBin = Math.floor((vmaxPct / 100) * displayBins);
+    for (let i = 0; i < displayBins; i++) {
+      const barHeight = (reducedBins[i] / maxVal) * (height - 2);
+      ctx.fillStyle = (i >= vminBin && i <= vmaxBin) ? colors.barActive : colors.barInactive;
+      ctx.fillRect(i * barWidth + 0.5, height - barHeight, Math.max(1, barWidth - 1), barHeight);
+    }
+  }, [bins, vminPct, vmaxPct, width, height, colors]);
+
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.25 }}>
+      <canvas ref={canvasRef} style={{ width, height, border: `1px solid ${colors.border}` }} />
+      <Slider
+        value={[vminPct, vmaxPct]}
+        onChange={(_, v) => { const [newMin, newMax] = v as number[]; onRangeChange(Math.min(newMin, newMax - 1), Math.max(newMax, newMin + 1)); }}
+        min={0} max={100} size="small" valueLabelDisplay="auto"
+        valueLabelFormat={(pct) => { const val = dataMin + (pct / 100) * (dataMax - dataMin); return val >= 1000 ? val.toExponential(1) : val.toFixed(1); }}
+        sx={{ width, py: 0, "& .MuiSlider-thumb": { width: 8, height: 8 }, "& .MuiSlider-rail": { height: 2 }, "& .MuiSlider-track": { height: 2 }, "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px" } }}
+      />
+    </Box>
+  );
+}
 
 // ============================================================================
 // Main Component
@@ -169,6 +260,11 @@ function Show3DVolume() {
     "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: tc.accent },
   };
 
+  const themedMenuProps = {
+    ...upwardMenuProps,
+    PaperProps: { sx: { bgcolor: tc.controlBg, color: tc.text, border: `1px solid ${tc.border}` } },
+  };
+
   // Model state
   const [nx] = useModelState<number>("nx");
   const [ny] = useModelState<number>("ny");
@@ -190,10 +286,13 @@ function Show3DVolume() {
   const [statsMin] = useModelState<number[]>("stats_min");
   const [statsMax] = useModelState<number[]>("stats_max");
   const [statsStd] = useModelState<number[]>("stats_std");
+  const [pixelSizeAngstrom] = useModelState<number>("pixel_size_angstrom");
+  const [scaleBarVisible] = useModelState<boolean>("scale_bar_visible");
 
   // Canvas refs
   const canvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([null, null, null]);
   const overlayRefs = React.useRef<(HTMLCanvasElement | null)[]>([null, null, null]);
+  const uiRefs = React.useRef<(HTMLCanvasElement | null)[]>([null, null, null]);
 
   // FFT state
   const [fftColormap, setFftColormap] = React.useState("inferno");
@@ -217,14 +316,14 @@ function Show3DVolume() {
   const [isResizing, setIsResizing] = React.useState(false);
   const [resizeStart, setResizeStart] = React.useState<{ x: number; y: number; size: number } | null>(null);
 
-  // Playback state
-  const [playing, setPlaying] = React.useState(false);
-  const [playAxis, setPlayAxis] = React.useState<number>(0); // 0=Z(XY), 1=Y(XZ), 2=X(YZ), 3=All
-  const [reverse, setReverse] = React.useState(false);
-  const [fps, setFps] = React.useState(5);
-  const [loop, setLoop] = React.useState(true);
+  // Playback state (synced with Python)
+  const [playing, setPlaying] = useModelState<boolean>("playing");
+  const [playAxis, setPlayAxis] = useModelState<number>("play_axis");
+  const [reverse, setReverse] = useModelState<boolean>("reverse");
+  const [fps, setFps] = useModelState<number>("fps");
+  const [loop, setLoop] = useModelState<boolean>("loop");
   const playIntervalRef = React.useRef<number | null>(null);
-  const [boomerang, setBoomerang] = React.useState(false);
+  const [boomerang, setBoomerang] = useModelState<boolean>("boomerang");
   const bounceDirRef = React.useRef<1 | -1>(1);
   const [loopStarts, setLoopStarts] = React.useState([0, 0, 0]);
   const [loopEnds, setLoopEnds] = React.useState([-1, -1, -1]);
@@ -244,12 +343,26 @@ function Show3DVolume() {
   const volumeResizeStartRef = React.useRef<{ x: number; y: number; size: number } | null>(null);
   const [showSlicePlanes, setShowSlicePlanes] = React.useState(false);
 
+  // Histogram state
+  const [imageVminPct, setImageVminPct] = React.useState(0);
+  const [imageVmaxPct, setImageVmaxPct] = React.useState(100);
+  const [imageHistogramData, setImageHistogramData] = React.useState<Float32Array | null>(null);
+  const [imageDataRange, setImageDataRange] = React.useState<{ min: number; max: number }>({ min: 0, max: 1 });
+
+  // Cursor readout state
+  const [cursorInfo, setCursorInfo] = React.useState<{ row: number; col: number; value: number; view: string } | null>(null);
+
+  // Export state
+  const [, setExportAxis] = useModelState<number>("_export_axis");
+  const [, setGifExportRequested] = useModelState<boolean>("_gif_export_requested");
+  const [gifData] = useModelState<DataView>("_gif_data");
+  const [, setZipExportRequested] = useModelState<boolean>("_zip_export_requested");
+  const [zipData] = useModelState<DataView>("_zip_data");
+  const [exporting, setExporting] = React.useState(false);
+  const [exportAnchor, setExportAnchor] = React.useState<HTMLElement | null>(null);
+
   // Parse volume data
-  const allFloats = React.useMemo(() => {
-    const bytes = extractBytes(volumeBytes);
-    if (!bytes || bytes.length === 0) return null;
-    return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
-  }, [volumeBytes]);
+  const allFloats = React.useMemo(() => extractFloat32(volumeBytes), [volumeBytes]);
 
   // Slice dimensions: [xy: ny x nx], [xz: nz x nx], [yz: nz x ny]
   const sliceDims: [number, number][] = React.useMemo(() => [[ny, nx], [nz, nx], [nz, ny]], [nx, ny, nz]);
@@ -272,6 +385,29 @@ function Show3DVolume() {
       fftCanvasRefs.current.forEach(c => c?.removeEventListener("wheel", preventDefault));
     };
   }, [allFloats, showFft]);
+
+  // Compute histogram from XY slice (primary view)
+  React.useEffect(() => {
+    if (!allFloats || allFloats.length === 0) return;
+    const xySlice = extractXY(allFloats, nx, ny, nz, sliceZ);
+    const processed = logScale ? applyLogScale(xySlice) : xySlice;
+    setImageHistogramData(processed);
+    setImageDataRange(findDataRange(processed));
+  }, [allFloats, sliceZ, nx, ny, nz, logScale]);
+
+  // Download GIF when data arrives from Python
+  React.useEffect(() => {
+    if (!gifData || gifData.byteLength === 0) return;
+    downloadDataView(gifData, "show3dvolume_animation.gif", "image/gif");
+    setExporting(false);
+  }, [gifData]);
+
+  // Download ZIP when data arrives from Python
+  React.useEffect(() => {
+    if (!zipData || zipData.byteLength === 0) return;
+    downloadDataView(zipData, "show3dvolume_slices.zip", "application/zip");
+    setExporting(false);
+  }, [zipData]);
 
   // Sync boomerang direction ref with reverse state
   React.useEffect(() => {
@@ -419,39 +555,20 @@ function Show3DVolume() {
       if (!ctx) continue;
       const [sliceH, sliceW] = sliceDims[a];
       const { w: cw, h: ch } = canvasSizes[a];
-      let processed = sliceData[a];
-      if (logScale) {
-        const tmp = new Float32Array(processed.length);
-        for (let i = 0; i < processed.length; i++) tmp[i] = Math.log1p(Math.max(0, processed[i]));
-        processed = tmp;
-      }
-      let vmin = processed[0], vmax = processed[0];
+      const processed = logScale ? applyLogScale(sliceData[a]) : sliceData[a];
+      let vmin: number, vmax: number;
       if (autoContrast) {
-        const sorted = Float32Array.from(processed).sort((a, b) => a - b);
-        vmin = sorted[Math.floor(sorted.length * 0.02)];
-        vmax = sorted[Math.floor(sorted.length * 0.98)];
+        ({ vmin, vmax } = percentileClip(processed, 2, 98));
+      } else if (imageVminPct > 0 || imageVmaxPct < 100) {
+        const { min: dMin, max: dMax } = findDataRange(processed);
+        ({ vmin, vmax } = sliderRange(dMin, dMax, imageVminPct, imageVmaxPct));
       } else {
-        for (let i = 1; i < processed.length; i++) {
-          if (processed[i] < vmin) vmin = processed[i];
-          if (processed[i] > vmax) vmax = processed[i];
-        }
+        const r = findDataRange(processed);
+        vmin = r.min;
+        vmax = r.max;
       }
-      const range = vmax - vmin || 1;
-      const offscreen = document.createElement("canvas");
-      offscreen.width = sliceW;
-      offscreen.height = sliceH;
-      const offCtx = offscreen.getContext("2d")!;
-      const imgData = offCtx.createImageData(sliceW, sliceH);
-      const rgba = imgData.data;
-      for (let i = 0; i < processed.length; i++) {
-        const v = Math.max(0, Math.min(255, Math.round(((processed[i] - vmin) / range) * 255)));
-        const k = i * 4;
-        rgba[k] = lut[v * 3];
-        rgba[k + 1] = lut[v * 3 + 1];
-        rgba[k + 2] = lut[v * 3 + 2];
-        rgba[k + 3] = 255;
-      }
-      offCtx.putImageData(imgData, 0, 0);
+      const offscreen = renderToOffscreen(processed, sliceW, sliceH, lut, vmin, vmax);
+      if (!offscreen) continue;
       ctx.imageSmoothingEnabled = false;
       ctx.clearRect(0, 0, cw, ch);
       const zs = zooms[a];
@@ -467,7 +584,7 @@ function Show3DVolume() {
         ctx.drawImage(offscreen, 0, 0, sliceW, sliceH, 0, 0, cw, ch);
       }
     }
-  }, [allFloats, sliceX, sliceY, sliceZ, nx, ny, nz, cmap, logScale, autoContrast, zooms, sliceDims, canvasSizes]);
+  }, [allFloats, sliceX, sliceY, sliceZ, nx, ny, nz, cmap, logScale, autoContrast, zooms, sliceDims, canvasSizes, imageVminPct, imageVmaxPct]);
 
   // -------------------------------------------------------------------------
   // Render overlays (crosshair lines)
@@ -505,6 +622,29 @@ function Show3DVolume() {
       }
     }
   }, [allFloats, sliceX, sliceY, sliceZ, zooms, showCrosshair, tc, sliceDims, canvasSizes]);
+
+  // -------------------------------------------------------------------------
+  // Scale bar (HiDPI UI overlay)
+  // -------------------------------------------------------------------------
+  React.useEffect(() => {
+    for (let a = 0; a < 3; a++) {
+      const uiCanvas = uiRefs.current[a];
+      if (!uiCanvas) continue;
+      const { w: cw, h: ch } = canvasSizes[a];
+      uiCanvas.width = Math.round(cw * DPR);
+      uiCanvas.height = Math.round(ch * DPR);
+      if (!scaleBarVisible) {
+        const ctx = uiCanvas.getContext("2d");
+        if (ctx) ctx.clearRect(0, 0, uiCanvas.width, uiCanvas.height);
+        continue;
+      }
+      const pxSize = pixelSizeAngstrom || 0;
+      const sliceW = sliceDims[a][1];
+      const unit = pxSize > 0 ? "Å" : "px";
+      const size = pxSize > 0 ? pxSize : 1;
+      drawScaleBarHiDPI(uiCanvas, DPR, zooms[a].zoom, size, unit, sliceW);
+    }
+  }, [pixelSizeAngstrom, scaleBarVisible, zooms, canvasSizes, sliceDims]);
 
   // -------------------------------------------------------------------------
   // FFT computation and caching
@@ -547,44 +687,20 @@ function Show3DVolume() {
         fftshift(real, pw, ph);
         fftshift(imag, pw, ph);
 
-        const mag = new Float32Array(paddedSize);
-        for (let i = 0; i < paddedSize; i++) mag[i] = Math.sqrt(real[i] ** 2 + imag[i] ** 2);
+        const mag = computeMagnitude(real, imag);
 
         let displayMin: number, displayMax: number;
         if (fftAuto) {
-          const centerIdx = Math.floor(ph / 2) * pw + Math.floor(pw / 2);
-          const neighbors = [
-            mag[Math.max(0, centerIdx - 1)], mag[Math.min(mag.length - 1, centerIdx + 1)],
-            mag[Math.max(0, centerIdx - pw)], mag[Math.min(mag.length - 1, centerIdx + pw)],
-          ];
-          mag[centerIdx] = neighbors.reduce((s, v) => s + v, 0) / 4;
-          const sorted = mag.slice().sort((x, y) => x - y);
-          displayMin = sorted[0];
-          displayMax = sorted[Math.floor(sorted.length * 0.999)];
+          ({ min: displayMin, max: displayMax } = autoEnhanceFFT(mag, pw, ph));
         } else {
-          displayMin = mag[0]; displayMax = mag[0];
-          for (let i = 1; i < mag.length; i++) { if (mag[i] < displayMin) displayMin = mag[i]; if (mag[i] > displayMax) displayMax = mag[i]; }
+          ({ min: displayMin, max: displayMax } = findDataRange(mag));
         }
 
-        const displayData = new Float32Array(paddedSize);
-        for (let i = 0; i < paddedSize; i++) displayData[i] = fftLogScale ? Math.log(1 + mag[i]) : mag[i];
-        if (fftLogScale) { displayMin = Math.log(1 + displayMin); displayMax = Math.log(1 + displayMax); }
+        const displayData = fftLogScale ? applyLogScale(mag) : mag;
+        if (fftLogScale) { displayMin = Math.log1p(displayMin); displayMax = Math.log1p(displayMax); }
 
-        const range = displayMax > displayMin ? displayMax - displayMin : 1;
-        const offscreen = document.createElement("canvas");
-        offscreen.width = pw; offscreen.height = ph;
-        const offCtx = offscreen.getContext("2d");
-        if (!offCtx) continue;
-
-        const imgData = offCtx.createImageData(pw, ph);
-        const rgba = imgData.data;
-        for (let i = 0; i < paddedSize; i++) {
-          const clipped = Math.max(displayMin, Math.min(displayMax, displayData[i]));
-          const v = Math.floor(((clipped - displayMin) / range) * 255);
-          const k = i * 4;
-          rgba[k] = lut[v * 3]; rgba[k + 1] = lut[v * 3 + 1]; rgba[k + 2] = lut[v * 3 + 2]; rgba[k + 3] = 255;
-        }
-        offCtx.putImageData(imgData, 0, 0);
+        const offscreen = renderToOffscreen(displayData, pw, ph, lut, displayMin, displayMax);
+        if (!offscreen) continue;
         fftOffscreenRefs.current[a] = offscreen;
 
         const canvas = fftCanvasRefs.current[a];
@@ -742,6 +858,46 @@ function Show3DVolume() {
   };
 
   const handleMouseMove = (e: React.MouseEvent, axis: number) => {
+    // Cursor readout: compute pixel position and intensity before drag check
+    const cursorCanvas = canvasRefs.current[axis];
+    if (cursorCanvas && allFloats && allFloats.length > 0) {
+      const rect = cursorCanvas.getBoundingClientRect();
+      const canvasX = (e.clientX - rect.left) * (cursorCanvas.width / rect.width);
+      const canvasY = (e.clientY - rect.top) * (cursorCanvas.height / rect.height);
+      const { w: cw, h: ch, scale } = canvasSizes[axis];
+      const zs = zooms[axis];
+      const cx = cw / 2, cy = ch / 2;
+      // Reverse zoom/pan transform to get image pixel coordinates
+      let imgX: number, imgY: number;
+      if (zs.zoom !== 1 || zs.panX !== 0 || zs.panY !== 0) {
+        imgX = ((canvasX - cx - zs.panX) / zs.zoom + cx) / scale;
+        imgY = ((canvasY - cy - zs.panY) / zs.zoom + cy) / scale;
+      } else {
+        imgX = canvasX / scale;
+        imgY = canvasY / scale;
+      }
+      const px = Math.floor(imgX);
+      const py = Math.floor(imgY);
+      const [sliceH, sliceW] = sliceDims[axis];
+      if (px >= 0 && px < sliceW && py >= 0 && py < sliceH) {
+        // Look up voxel value from volume data at the appropriate 3D coordinate
+        let value: number;
+        if (axis === 0) {
+          // XY view: x maps to x, y maps to y, slice along Z
+          value = allFloats[sliceZ * ny * nx + py * nx + px];
+        } else if (axis === 1) {
+          // XZ view: x maps to x, y maps to z, slice along Y
+          value = allFloats[py * ny * nx + sliceY * nx + px];
+        } else {
+          // YZ view: x maps to y, y maps to z, slice along X
+          value = allFloats[py * ny * nx + px * nx + sliceX];
+        }
+        setCursorInfo({ row: py, col: px, value, view: ["XY", "XZ", "YZ"][axis] });
+      } else {
+        setCursorInfo(null);
+      }
+    }
+
     if (dragAxis !== axis || !dragStart) return;
     const canvas = canvasRefs.current[axis];
     if (!canvas) return;
@@ -753,6 +909,8 @@ function Show3DVolume() {
 
   const handleMouseUp = () => { setDragAxis(null); setDragStart(null); };
 
+  const handleMouseLeave = () => { setDragAxis(null); setDragStart(null); setCursorInfo(null); };
+
   const handleResetAll = () => {
     setZooms([DEFAULT_ZOOM, DEFAULT_ZOOM, DEFAULT_ZOOM]);
     setFftZooms([DEFAULT_ZOOM, DEFAULT_ZOOM, DEFAULT_ZOOM]);
@@ -761,6 +919,74 @@ function Show3DVolume() {
     setVolumeBrightness(1.0);
     setLoopStarts([0, 0, 0]);
     setLoopEnds([-1, -1, -1]);
+    setImageVminPct(0);
+    setImageVmaxPct(100);
+  };
+
+  // -------------------------------------------------------------------------
+  // Keyboard shortcuts
+  // -------------------------------------------------------------------------
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    const axisSetters = [setSliceZ, setSliceY, setSliceX];
+    const axisValues = [sliceZ, sliceY, sliceX];
+    const axisMaxes = [nz - 1, ny - 1, nx - 1];
+    const activeAxis = playAxis < 3 ? playAxis : 0;
+    switch (e.key) {
+      case " ":
+        e.preventDefault();
+        setPlaying(!playing);
+        break;
+      case "ArrowLeft":
+        e.preventDefault();
+        axisSetters[activeAxis](Math.max(0, axisValues[activeAxis] - 1));
+        break;
+      case "ArrowRight":
+        e.preventDefault();
+        axisSetters[activeAxis](Math.min(axisMaxes[activeAxis], axisValues[activeAxis] + 1));
+        break;
+      case "Home":
+        e.preventDefault();
+        axisSetters[activeAxis](0);
+        break;
+      case "End":
+        e.preventDefault();
+        axisSetters[activeAxis](axisMaxes[activeAxis]);
+        break;
+      case "r":
+      case "R":
+        handleResetAll();
+        break;
+    }
+  };
+
+  // -------------------------------------------------------------------------
+  // Export handlers
+  // -------------------------------------------------------------------------
+  const handleExportPng = () => {
+    setExportAnchor(null);
+    // Export all 3 slice canvases as individual PNGs
+    for (let a = 0; a < 3; a++) {
+      const canvas = canvasRefs.current[a];
+      if (!canvas) continue;
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        downloadBlob(blob, `show3dvolume_${AXES[a]}.png`);
+      }, "image/png");
+    }
+  };
+
+  const handleExportGif = () => {
+    setExportAnchor(null);
+    setExporting(true);
+    setExportAxis(playAxis < 3 ? playAxis : 0);
+    setGifExportRequested(true);
+  };
+
+  const handleExportZip = () => {
+    setExportAnchor(null);
+    setExporting(true);
+    setExportAxis(playAxis < 3 ? playAxis : 0);
+    setZipExportRequested(true);
   };
 
   // -------------------------------------------------------------------------
@@ -824,7 +1050,7 @@ function Show3DVolume() {
     const handleMouseMove = (e: MouseEvent) => {
       if (!resizeStart) return;
       const delta = Math.max(e.clientX - resizeStart.x, e.clientY - resizeStart.y);
-      const newSize = Math.max(300, Math.min(600, resizeStart.size + delta));
+      const newSize = Math.max(300, Math.min(800, resizeStart.size + delta));
       setCanvasTarget(newSize);
     };
     const handleMouseUp = () => {
@@ -862,7 +1088,7 @@ function Show3DVolume() {
   // Render
   // -------------------------------------------------------------------------
   return (
-    <Box className="show3dvolume-root" sx={{ ...container.root, bgcolor: tc.bg, color: tc.text }}>
+    <Box className="show3dvolume-root" tabIndex={0} onKeyDown={handleKeyDown} sx={{ ...container.root, bgcolor: tc.bg, color: tc.text }}>
       {/* 3D Volume Renderer */}
       <Box sx={{ mb: `${SPACING.LG}px` }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
@@ -872,6 +1098,12 @@ function Show3DVolume() {
           <Stack direction="row" alignItems="center" spacing={0.5}>
             <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>FFT:</Typography>
             <Switch checked={showFft} onChange={(e) => setShowFft(e.target.checked)} size="small" sx={switchStyles.small} />
+            <Button size="small" sx={{ ...compactButton, color: tc.accent }} onClick={(e) => setExportAnchor(e.currentTarget)} disabled={exporting}>{exporting ? "Exporting..." : "Export"}</Button>
+            <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
+              <MenuItem onClick={handleExportPng} sx={{ fontSize: 12 }}>PNG (current slices)</MenuItem>
+              <MenuItem onClick={handleExportGif} sx={{ fontSize: 12 }}>GIF (animation)</MenuItem>
+              <MenuItem onClick={handleExportZip} sx={{ fontSize: 12 }}>ZIP (all slices)</MenuItem>
+            </Menu>
             <Button size="small" sx={compactButton} disabled={!cameraChanged} onClick={handleVolumeDoubleClick}>Reset View</Button>
           </Stack>
         </Stack>
@@ -959,7 +1191,7 @@ function Show3DVolume() {
                 onMouseDown={(e) => handleMouseDown(e, a)}
                 onMouseMove={(e) => handleMouseMove(e, a)}
                 onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseUp}
+                onMouseLeave={handleMouseLeave}
                 onWheel={(e) => handleWheel(e, a)}
                 onDoubleClick={() => handleDoubleClick(a)}
               >
@@ -975,6 +1207,12 @@ function Show3DVolume() {
                   height={ch}
                   style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
                 />
+                <canvas
+                  ref={(el) => { uiRefs.current[a] = el; }}
+                  width={Math.round(cw * DPR)}
+                  height={Math.round(ch * DPR)}
+                  style={{ position: "absolute", top: 0, left: 0, width: cw, height: ch, pointerEvents: "none" }}
+                />
                 {/* Resize handle */}
                 <Box
                   onMouseDown={handleResizeStart}
@@ -988,7 +1226,7 @@ function Show3DVolume() {
               </Box>
               {/* Stats bar */}
               {showStats && (
-                <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: tc.bgAlt, display: "flex", gap: 2 }}>
+                <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: tc.bgAlt, display: "flex", gap: 2, alignItems: "center" }}>
                   {[
                     { label: "Mean", value: statsMean?.[a] },
                     { label: "Min", value: statsMin?.[a] },
@@ -999,6 +1237,14 @@ function Show3DVolume() {
                       {label} <Box component="span" sx={{ color: tc.accent }}>{value !== undefined ? formatNumber(value) : "-"}</Box>
                     </Typography>
                   ))}
+                  {cursorInfo && cursorInfo.view === ["XY", "XZ", "YZ"][a] && (
+                    <>
+                      <Box sx={{ borderLeft: `1px solid ${tc.border}`, height: 14 }} />
+                      <Typography sx={{ fontSize: 11, color: tc.textMuted, fontFamily: "monospace" }}>
+                        {cursorInfo.view} ({cursorInfo.row}, {cursorInfo.col}) <Box component="span" sx={{ color: tc.accent }}>{formatNumber(cursorInfo.value)}</Box>
+                      </Typography>
+                    </>
+                  )}
                 </Box>
               )}
               {/* FFT canvas (inline, below stats) */}
@@ -1088,44 +1334,64 @@ function Show3DVolume() {
       {showFft && (
         <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
           <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>FFT Scale:</Typography>
-          <Select value={fftLogScale ? "log" : "linear"} onChange={(e) => setFftLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={upwardMenuProps}>
+          <Select value={fftLogScale ? "log" : "linear"} onChange={(e) => setFftLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
             <MenuItem value="linear">Lin</MenuItem>
             <MenuItem value="log">Log</MenuItem>
           </Select>
           <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Color:</Typography>
-          <Select value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={upwardMenuProps}>
+          <Select value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={themedMenuProps}>
             {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
           </Select>
-          <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Auto:</Typography>
+          <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Auto:<InfoTooltip text="Auto-enhance FFT display. When ON: (1) Masks DC component at center - replaced with average of 4 neighbors. (2) Clips display to 99.9 percentile to exclude outliers. When OFF: shows raw FFT with full dynamic range." theme={themeInfo.theme} /></Typography>
           <Switch checked={fftAuto} onChange={(e) => setFftAuto(e.target.checked)} size="small" sx={switchStyles.small} />
         </Box>
       )}
-      {/* Controls row */}
+      {/* Controls row with histogram on right */}
       {showControls && (
-        <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
-          <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Scale:</Typography>
-          <Select value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={upwardMenuProps}>
-            <MenuItem value="linear">Lin</MenuItem>
-            <MenuItem value="log">Log</MenuItem>
-          </Select>
-          <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Color:</Typography>
-          <Select size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={upwardMenuProps} sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}>
-            {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
-          </Select>
-          <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Auto:</Typography>
-          <Switch checked={autoContrast} onChange={(e) => setAutoContrast(e.target.checked)} size="small" sx={switchStyles.small} />
-          <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Cross:</Typography>
-          <Switch checked={showCrosshair} onChange={(e) => setShowCrosshair(e.target.checked)} size="small" sx={switchStyles.small} />
+        <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px` }}>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
+            <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
+              <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Scale:</Typography>
+              <Select value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
+                <MenuItem value="linear">Lin</MenuItem>
+                <MenuItem value="log">Log</MenuItem>
+              </Select>
+              <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Color:</Typography>
+              <Select size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}>
+                {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
+              </Select>
+            </Box>
+            <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
+              <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Auto:<InfoTooltip text="Auto-contrast: clips display to 2nd–98th percentile to improve visibility of subtle features. When OFF, uses full data range." theme={themeInfo.theme} /></Typography>
+              <Switch checked={autoContrast} onChange={(e) => setAutoContrast(e.target.checked)} size="small" sx={switchStyles.small} />
+              <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Cross:<InfoTooltip text="Show crosshair lines on each slice plane, indicating the position of the other two orthogonal slices." theme={themeInfo.theme} /></Typography>
+              <Switch checked={showCrosshair} onChange={(e) => setShowCrosshair(e.target.checked)} size="small" sx={switchStyles.small} />
+            </Box>
+          </Box>
+          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center" }}>
+            <Histogram
+              data={imageHistogramData}
+              vminPct={imageVminPct}
+              vmaxPct={imageVmaxPct}
+              onRangeChange={(min, max) => { setImageVminPct(min); setImageVmaxPct(max); }}
+              width={110}
+              height={58}
+              theme={themeInfo.theme}
+              dataMin={imageDataRange.min}
+              dataMax={imageDataRange.max}
+            />
+          </Box>
         </Box>
       )}
       {/* Playback: transport + axis selector + fps + loop + bounce */}
       <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
+        <InfoTooltip text={<KeyboardShortcuts items={[["Space", "Play / Pause"], ["← / →", "Prev / Next slice"], ["Home / End", "First / Last slice"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />} theme={themeInfo.theme} />
         <Select
           value={playAxis}
           onChange={(e) => { setPlaying(false); setPlayAxis(e.target.value as number); }}
           size="small"
           sx={{ ...themedSelect, minWidth: 40, fontSize: 10 }}
-          MenuProps={upwardMenuProps}
+          MenuProps={themedMenuProps}
         >
           <MenuItem value={0}>{dl[0]}</MenuItem>
           <MenuItem value={1}>{dl[1]}</MenuItem>

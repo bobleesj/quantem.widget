@@ -43,3 +43,57 @@ function createColormapLUT(points: number[][]): Uint8Array {
 export const COLORMAPS: Record<string, Uint8Array> = Object.fromEntries(
   Object.entries(COLORMAP_POINTS).map(([name, points]) => [name, createColormapLUT(points)])
 );
+
+/** Apply colormap LUT to float data, writing into an RGBA Uint8ClampedArray. */
+export function applyColormap(
+  data: Float32Array,
+  rgba: Uint8ClampedArray,
+  lut: Uint8Array,
+  vmin: number,
+  vmax: number,
+): void {
+  const range = vmax > vmin ? vmax - vmin : 1;
+  for (let i = 0; i < data.length; i++) {
+    const clipped = Math.max(vmin, Math.min(vmax, data[i]));
+    const v = Math.floor(((clipped - vmin) / range) * 255);
+    const j = i * 4;
+    const lutIdx = v * 3;
+    rgba[j] = lut[lutIdx];
+    rgba[j + 1] = lut[lutIdx + 1];
+    rgba[j + 2] = lut[lutIdx + 2];
+    rgba[j + 3] = 255;
+  }
+}
+
+/** Create an offscreen canvas with colormapped data. Returns null if context unavailable. */
+export function renderToOffscreen(
+  data: Float32Array,
+  width: number,
+  height: number,
+  lut: Uint8Array,
+  vmin: number,
+  vmax: number,
+): HTMLCanvasElement | null {
+  const offscreen = document.createElement("canvas");
+  offscreen.width = width;
+  offscreen.height = height;
+  const ctx = offscreen.getContext("2d");
+  if (!ctx) return null;
+  const imgData = ctx.createImageData(width, height);
+  applyColormap(data, imgData.data, lut, vmin, vmax);
+  ctx.putImageData(imgData, 0, 0);
+  return offscreen;
+}
+
+/** Render colormapped data to a reusable offscreen canvas + ImageData (avoids per-frame allocation). */
+export function renderToOffscreenReuse(
+  data: Float32Array,
+  lut: Uint8Array,
+  vmin: number,
+  vmax: number,
+  offscreen: HTMLCanvasElement,
+  imgData: ImageData,
+): void {
+  applyColormap(data, imgData.data, lut, vmin, vmax);
+  offscreen.getContext("2d")!.putImageData(imgData, 0, 0);
+}

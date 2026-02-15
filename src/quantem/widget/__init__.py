@@ -13,6 +13,8 @@ from quantem.widget.clicker import Clicker
 from quantem.widget.show2d import Show2D
 from quantem.widget.show3d import Show3D
 from quantem.widget.show3dvolume import Show3DVolume
+from quantem.widget.show4d import Show4D
 from quantem.widget.show4dstem import Show4DSTEM
+from quantem.widget.align2d import Align2D
 
-__all__ = ["Clicker", "Show2D", "Show3D", "Show3DVolume", "Show4DSTEM"]
+__all__ = ["Align2D", "Clicker", "Show2D", "Show3D", "Show3DVolume", "Show4D", "Show4DSTEM"]

@@ -24,7 +24,7 @@ SCREENSHOT_DIR = Path(__file__).parent / "screenshots" / "clicker"
 NOTEBOOK_PATH = Path(__file__).parent / "_test_clicker_features.ipynb"
 
 # Feature names for captured widgets
-FEATURE_NAMES = ["default", "large_dots", "high_contrast"]
+FEATURE_NAMES = ["default", "preloaded_points", "viridis_log", "gallery", "diffraction_snap"]
 
 
 def create_test_notebook():
@@ -68,7 +68,14 @@ def create_test_notebook():
                 "execution_count": None,
                 "metadata": {},
                 "outputs": [],
-                "source": ["# 2. Large Dots\n", "Clicker(image, scale=2.0, dot_size=20, max_points=10)"]
+                "source": [
+                    "# 2. Pre-loaded points with ROI and pixel calibration\n",
+                    "pts = [(30, 30), (42, 30), (54, 30), (36, 41), (48, 41), (60, 41)]\n",
+                    "w = Clicker(image, scale=2.0, points=pts, pixel_size_angstrom=1.5)\n",
+                    "w.add_roi(64, 64, mode='circle', radius=20, color='#00ff00')\n",
+                    "w.add_roi(40, 80, mode='square', radius=15, color='#ff9800')\n",
+                    "w"
+                ]
             },
             {
                 "cell_type": "code",
@@ -76,9 +83,47 @@ def create_test_notebook():
                 "metadata": {},
                 "outputs": [],
                 "source": [
-                    "# 3. High Contrast (log-like transform)\n",
-                    "enhanced = np.log1p(np.maximum(image, 0)) * 5\n",
-                    "Clicker(enhanced, scale=2.0, max_points=5)"
+                    "# 3. Viridis colormap + log scale\n",
+                    "Clicker(image, scale=2.0, colormap='viridis', log_scale=True,\n",
+                    "        marker_border=0, marker_opacity=0.7, label_color='yellow')"
+                ]
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "# 4. Gallery mode\n",
+                    "imgs = [image, np.log1p(np.maximum(image, 0)) * 5,\n",
+                    "        np.flipud(image)]\n",
+                    "Clicker(imgs, scale=1.5, ncols=3, labels=['Original', 'Enhanced', 'Flipped'])"
+                ]
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "# 5. Diffraction pattern with snap-to-peak\n",
+                    "diff = np.random.normal(0.02, 0.005, (128, 128))\n",
+                    "y, x = np.mgrid[:128, :128]\n",
+                    "a = 20\n",
+                    "g1 = np.array([a, 0.0])\n",
+                    "g2 = np.array([a * 0.5, a * np.sqrt(3) / 2])\n",
+                    "for i in range(-5, 6):\n",
+                    "    for j in range(-5, 6):\n",
+                    "        sx = 64 + i * g1[0] + j * g2[0]\n",
+                    "        sy = 64 + i * g1[1] + j * g2[1]\n",
+                    "        if 0 <= sx < 128 and 0 <= sy < 128:\n",
+                    "            dist = np.sqrt((sx - 64)**2 + (sy - 64)**2)\n",
+                    "            intensity = np.exp(-dist**2 / (2 * (3*a)**2))\n",
+                    "            if i == 0 and j == 0: intensity = 1.0\n",
+                    "            diff += intensity * np.exp(-((x-sx)**2 + (y-sy)**2) / (2*0.8**2))\n",
+                    "diff = np.clip(diff, 0, None).astype(np.float32)\n",
+                    "Clicker(diff, scale=2.0, snap_enabled=True, snap_radius=8,\n",
+                    "        colormap='viridis', log_scale=True, dot_size=8, max_points=10)"
                 ]
             },
         ],

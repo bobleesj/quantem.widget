@@ -13,47 +13,260 @@ import anywidget
 import numpy as np
 import traitlets
 
-from quantem.widget.array_utils import to_numpy
-from quantem.widget.show2d import _resize_image
+from quantem.widget.array_utils import to_numpy, _resize_image
+
+
+_MARKER_SHAPES = ["circle", "triangle", "square", "diamond", "star"]
+_MARKER_COLORS = [
+    "#f44336", "#4caf50", "#2196f3", "#ff9800", "#9c27b0",
+    "#00bcd4", "#ffeb3b", "#e91e63", "#8bc34a", "#ff5722",
+]
+_COLOR_NAMES = {
+    "#f44336": "red", "#4caf50": "green", "#2196f3": "blue",
+    "#ff9800": "orange", "#9c27b0": "purple", "#00bcd4": "cyan",
+    "#ffeb3b": "yellow", "#e91e63": "pink", "#8bc34a": "lime",
+    "#ff5722": "deep orange",
+    # ROI colors
+    "#0f0": "green", "#ff0": "yellow", "#0af": "cyan",
+    "#f0f": "magenta", "#f80": "orange", "#f44": "red",
+    # Common CSS names
+    "white": "white", "black": "black", "red": "red",
+    "#ff0": "yellow", "#0ff": "cyan", "#f00": "red",
+}
+
+
+def _color_name(hex_code: str) -> str:
+    return _COLOR_NAMES.get(hex_code.lower(), hex_code)
 
 
 class Clicker(anywidget.AnyWidget):
     """
     Interactive point picker for 2D images.
 
-    Click on an image to select points. Useful for picking atom positions,
-    selecting features, or defining lattice vectors.
+    Click on an image to select points (atom positions, features, lattice
+    vectors). Supports gallery mode for comparing multiple images, pre-loaded
+    points from detection algorithms, multiple ROI overlays with pixel
+    statistics, snap-to-peak for precise atom column picking, and calibrated
+    distance measurements between points.
 
     Parameters
     ----------
     data : array_like
-        2D array (H, W), 3D array (N, H, W), or list of 2D arrays.
+        Image data. Accepts:
+
+        - 2D array ``(H, W)`` — single image
+        - 3D array ``(N, H, W)`` — gallery of N images
+        - List of 2D arrays — gallery (resized to common dimensions)
+        - ``Dataset2d`` object — array and sampling auto-extracted
+
     scale : float, default 1.0
-        Display scale factor.
+        Display scale factor. Values > 1 enlarge the canvas.
     dot_size : int, default 12
-        Size of point markers in pixels.
-    max_points : int, default 3
-        Maximum number of selected points per image.
+        Diameter of point markers in CSS pixels.
+    max_points : int, default 10
+        Maximum number of points per image. Oldest points are removed
+        when the limit is exceeded.
+
     ncols : int, default 3
-        Number of columns in gallery grid.
+        Number of columns in the gallery grid (ignored for single images).
     labels : list of str, optional
-        Per-image labels for gallery mode.
+        Per-image labels shown below each gallery tile and in the header.
+        Defaults to ``"Image 1"``, ``"Image 2"``, etc.
+
+    marker_border : int, default 2
+        Border width of point markers in pixels (0–6). The border grows
+        inward from the marker edge, so the overall marker size stays
+        constant. Set to 0 for borderless markers.
+    marker_opacity : float, default 1.0
+        Opacity of point markers (0.1–1.0).
+    label_size : int, default 0
+        Font size in pixels for the numbered label above each marker.
+        ``0`` means auto-scale relative to ``dot_size``.
+    label_color : str, default ""
+        CSS color for numbered labels (e.g. ``"white"``, ``"#ff0"``).
+        Empty string uses the automatic theme color.
+
+    pixel_size_angstrom : float, default 0.0
+        Pixel size in angstroms. When set, the widget displays a calibrated
+        scale bar and shows point-to-point distances in physical units
+        (angstroms or nanometers). ``0`` means uncalibrated.
+
+    points : list or ndarray, optional
+        Pre-populate the widget with initial points. Useful for reviewing
+        or refining positions from an atom-finding algorithm. Accepts:
+
+        - List of ``(row, col)`` tuples: ``[(10, 20), (30, 40)]``
+        - List of dicts with optional shape/color:
+          ``[{"row": 10, "col": 20, "shape": "star", "color": "#f00"}]``
+        - NumPy array of shape ``(N, 2)`` with columns ``[row, col]``
+        - For gallery: list of the above, one per image
+
+        When ``shape`` or ``color`` are omitted, they cycle through the
+        built-in palettes (5 shapes, 10 colors).
+
+    marker_shape : str, default "circle"
+        Active marker shape for new points. One of ``"circle"``,
+        ``"triangle"``, ``"square"``, ``"diamond"``, ``"star"``.
+        Synced bidirectionally — changes in the UI are reflected in Python.
+    marker_color : str, default "#f44336"
+        Active marker color for new points (CSS color string).
+        Synced bidirectionally — changes in the UI are reflected in Python.
+    snap_enabled : bool, default False
+        Whether snap-to-peak is active. When ``True``, clicked positions
+        are snapped to the local intensity maximum within ``snap_radius``.
+    snap_radius : int, default 5
+        Search radius in pixels for snap-to-peak.
+    title : str, default ""
+        Title displayed in the widget header. Empty string shows ``"Clicker"``.
+    show_stats : bool, default True
+        Show statistics bar (mean, min, max, std) below the canvas.
+    colormap : str, default "gray"
+        Colormap for image rendering. Options: ``"gray"``, ``"inferno"``,
+        ``"viridis"``, ``"plasma"``, ``"magma"``, ``"hot"``.
+    auto_contrast : bool, default True
+        Enable automatic contrast via 2–98% percentile clipping.
+        When ``False``, contrast is controlled by the histogram slider.
+    log_scale : bool, default False
+        Apply log(1+x) transform before rendering. Useful for images
+        with large dynamic range (e.g. diffraction patterns).
+    show_fft : bool, default False
+        Show FFT power spectrum alongside the image.
+
+    Attributes
+    ----------
+    selected_points : list
+        Currently placed points, synced bidirectionally with the widget.
+
+        - **Single image**: flat list of point dicts
+          ``[{"row": 10, "col": 20, "shape": "circle", "color": "#f44336"}, ...]``
+        - **Gallery mode**: list of lists, one per image
+          ``[[point, ...], [point, ...], ...]``
+
+        Each point dict has keys: ``row`` (int), ``col`` (int), ``shape`` (str),
+        ``color`` (str). You can set this attribute from Python to update
+        the widget in real time.
+
+    roi_list : list
+        Currently defined ROI overlays, synced with the widget. Each ROI
+        is a dict with keys:
+
+        - ``id`` (int) — unique identifier
+        - ``mode`` (str) — ``"circle"``, ``"square"``, or ``"rectangle"``
+        - ``row``, ``col`` (int) — center position in image pixels
+        - ``radius`` (int) — radius for circle/square modes
+        - ``rectW``, ``rectH`` (int) — width/height for rectangle mode
+        - ``color`` (str) — CSS stroke color
+        - ``opacity`` (float) — opacity (0.1–1.0)
+
+        Set from Python to programmatically define ROIs, or read after
+        interactive use to retrieve user-defined regions.
+
+    Notes
+    -----
+    **Marker shapes**: circle, triangle, square, diamond, star (5 shapes
+    that cycle automatically).
+
+    **Marker colors**: 10 colors that cycle: red, green, blue, orange,
+    purple, cyan, yellow, pink, lime, deep orange.
+
+    **Snap-to-peak**: When enabled in the UI, clicking snaps the point to
+    the local intensity maximum within a configurable search radius. Useful
+    for precise atom column picking on HAADF-STEM images.
+
+    **Distance measurements**: Distances between consecutive points are
+    displayed in the point list. With ``pixel_size_angstrom`` set, distances
+    are shown in angstroms (< 10 Å) or nanometers (>= 10 Å).
+
+    **ROI statistics**: When an ROI is active, the widget computes and
+    displays mean, standard deviation, min, max, and pixel count for the
+    region.
+
+    **Keyboard shortcuts** (widget must be focused):
+
+    - ``Delete`` / ``Backspace`` — remove last point (undo)
+    - ``Ctrl+Z`` / ``Cmd+Z`` — undo
+    - ``Ctrl+Shift+Z`` / ``Cmd+Shift+Z`` — redo
+    - ``1``–``6`` — select ROI #1–6
+    - Arrow keys — nudge active ROI by 1 pixel
+    - Arrow keys (no ROI, gallery) — navigate between images
+    - ``Escape`` — deselect ROI
 
     Examples
     --------
+    Basic point picking:
+
     >>> import numpy as np
     >>> from quantem.widget import Clicker
-    >>>
-    >>> # Single image
     >>> img = np.random.rand(256, 256).astype(np.float32)
     >>> w = Clicker(img, scale=1.5, max_points=5)
-    >>> w  # display in notebook
-    >>> points = w.selected_points  # [{"x": 100, "y": 200}, ...]
-    >>>
-    >>> # Gallery mode
-    >>> imgs = [np.random.rand(64, 64) for _ in range(3)]
-    >>> w = Clicker(imgs, ncols=3, labels=["A", "B", "C"])
-    >>> w.selected_points  # [[{...}, ...], [{...}, ...], [{...}, ...]]
+    >>> w  # display in notebook; click to place points
+    >>> w.selected_points  # read back placed points
+
+    Pre-loaded points from a detection algorithm:
+
+    >>> peaks = find_atom_columns(img)  # returns (N, 2) array
+    >>> w = Clicker(img, points=peaks, pixel_size_angstrom=0.82)
+    >>> # Points appear immediately; user can add/remove/adjust
+
+    Pre-loaded points with custom appearance:
+
+    >>> pts = [
+    ...     {"row": 200, "col": 100, "shape": "star", "color": "#ff0"},
+    ...     {"row": 250, "col": 150, "shape": "diamond", "color": "#0ff"},
+    ... ]
+    >>> w = Clicker(img, points=pts, marker_border=0, marker_opacity=0.8)
+
+    Gallery mode for comparing multiple images:
+
+    >>> imgs = [original, filtered, denoised]
+    >>> w = Clicker(imgs, ncols=3, labels=["Raw", "Filtered", "Denoised"])
+    >>> # Points are tracked independently per image
+
+    Gallery with per-image pre-loaded points:
+
+    >>> per_image_pts = [[(10, 20)], [(30, 40), (50, 60)], []]
+    >>> w = Clicker(imgs, points=per_image_pts)
+
+    Programmatic ROI management:
+
+    >>> w = Clicker(img)
+    >>> w.add_roi(row=128, col=128, mode="circle", radius=30, color="#0f0")
+    >>> w.add_roi(row=200, col=200, mode="rectangle", rect_w=80, rect_h=40)
+    >>> w.roi_list  # inspect ROI parameters
+    >>> w.roi_list = []  # clear all ROIs
+
+    Snap-to-peak for precise atom picking:
+
+    >>> w = Clicker(haadf_image, snap_enabled=True, snap_radius=8,
+    ...             pixel_size_angstrom=0.82)
+    >>> # Clicks auto-snap to the nearest intensity maximum
+
+    Custom marker defaults:
+
+    >>> w = Clicker(img, marker_shape="star", marker_color="#ff9800")
+    >>> # All new points will be orange stars until changed in the UI
+
+    Save and restore full widget state (state portability):
+
+    >>> # User A: create widget, place points and ROIs interactively
+    >>> w = Clicker(img, pixel_size_angstrom=1.5)
+    >>> # ... user clicks to place points, adds ROIs, enables snap ...
+    >>> state = {
+    ...     "points": w.selected_points,
+    ...     "rois": w.roi_list,
+    ...     "marker_shape": w.marker_shape,
+    ...     "marker_color": w.marker_color,
+    ...     "snap_enabled": w.snap_enabled,
+    ...     "snap_radius": w.snap_radius,
+    ... }
+    >>> # User B: restore exact same state on another machine
+    >>> w2 = Clicker(img, pixel_size_angstrom=1.5,
+    ...              points=state["points"],
+    ...              marker_shape=state["marker_shape"],
+    ...              marker_color=state["marker_color"],
+    ...              snap_enabled=state["snap_enabled"],
+    ...              snap_radius=state["snap_radius"])
+    >>> w2.roi_list = state["rois"]
     """
 
     _esm = pathlib.Path(__file__).parent / "static" / "clicker.js"
@@ -77,6 +290,36 @@ class Clicker(anywidget.AnyWidget):
     dot_size = traitlets.Int(12).tag(sync=True)
     max_points = traitlets.Int(10).tag(sync=True)
 
+    # Marker styling (advanced)
+    marker_border = traitlets.Int(2).tag(sync=True)
+    marker_opacity = traitlets.Float(1.0).tag(sync=True)
+    label_size = traitlets.Int(0).tag(sync=True)
+    label_color = traitlets.Unicode("").tag(sync=True)
+
+    # Scale bar
+    pixel_size_angstrom = traitlets.Float(0.0).tag(sync=True)
+
+    # Active marker selection (synced for state portability)
+    marker_shape = traitlets.Unicode("circle").tag(sync=True)
+    marker_color = traitlets.Unicode("#f44336").tag(sync=True)
+
+    # Snap-to-peak (synced for state portability)
+    snap_enabled = traitlets.Bool(False).tag(sync=True)
+    snap_radius = traitlets.Int(5).tag(sync=True)
+
+    # ROI overlays (synced to JS)
+    roi_list = traitlets.List().tag(sync=True)
+
+    # Display options
+    title = traitlets.Unicode("").tag(sync=True)
+    show_stats = traitlets.Bool(True).tag(sync=True)
+
+    # Colormap and contrast (synced for state portability)
+    colormap = traitlets.Unicode("gray").tag(sync=True)
+    auto_contrast = traitlets.Bool(True).tag(sync=True)
+    log_scale = traitlets.Bool(False).tag(sync=True)
+    show_fft = traitlets.Bool(False).tag(sync=True)
+
     def __init__(
         self,
         data,
@@ -85,16 +328,53 @@ class Clicker(anywidget.AnyWidget):
         max_points: int = 10,
         ncols: int = 3,
         labels: Optional[List[str]] = None,
+        marker_border: int = 2,
+        marker_opacity: float = 1.0,
+        label_size: int = 0,
+        label_color: str = "",
+        pixel_size_angstrom: float = 0.0,
+        points=None,
+        marker_shape: str = "circle",
+        marker_color: str = "#f44336",
+        snap_enabled: bool = False,
+        snap_radius: int = 5,
+        title: str = "",
+        show_stats: bool = True,
+        colormap: str = "gray",
+        auto_contrast: bool = True,
+        log_scale: bool = False,
+        show_fft: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.title = title
+        self.show_stats = show_stats
         self.scale = scale
         self.dot_size = dot_size
         self.max_points = max_points
         self.ncols = ncols
+        self.marker_border = marker_border
+        self.marker_opacity = marker_opacity
+        self.label_size = label_size
+        self.label_color = label_color
+        self.pixel_size_angstrom = pixel_size_angstrom
+        self.marker_shape = marker_shape
+        self.marker_color = marker_color
+        self.snap_enabled = snap_enabled
+        self.snap_radius = snap_radius
+        self.colormap = colormap
+        self.auto_contrast = auto_contrast
+        self.log_scale = log_scale
+        self.show_fft = show_fft
         self._set_data(data, labels)
+        if points is not None:
+            self.selected_points = self._normalize_points(points)
 
     def _set_data(self, data, labels=None):
+        # Check if data is a Dataset2d and extract array
+        if hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling"):
+            data = data.array
+
         if isinstance(data, list):
             images = [to_numpy(d) for d in data]
             for img in images:
@@ -146,15 +426,301 @@ class Clicker(anywidget.AnyWidget):
 
         self.selected_idx = 0
 
+    def _normalize_point(self, p, idx):
+        if isinstance(p, dict):
+            return {
+                "row": int(p["row"]),
+                "col": int(p["col"]),
+                "shape": p.get("shape", _MARKER_SHAPES[idx % len(_MARKER_SHAPES)]),
+                "color": p.get("color", _MARKER_COLORS[idx % len(_MARKER_COLORS)]),
+            }
+        if isinstance(p, (list, tuple)) and len(p) == 2:
+            return {
+                "row": int(p[0]),
+                "col": int(p[1]),
+                "shape": _MARKER_SHAPES[idx % len(_MARKER_SHAPES)],
+                "color": _MARKER_COLORS[idx % len(_MARKER_COLORS)],
+            }
+        raise ValueError(f"Invalid point format: {p}")
+
+    def _normalize_point_list(self, pts):
+        if isinstance(pts, np.ndarray):
+            if pts.ndim == 2 and pts.shape[1] == 2:
+                return [self._normalize_point((int(pts[i, 0]), int(pts[i, 1])), i)
+                        for i in range(pts.shape[0])]
+            raise ValueError(f"Expected (N, 2) array, got shape {pts.shape}")
+        return [self._normalize_point(p, i) for i, p in enumerate(pts)]
+
+    def _normalize_points(self, raw_points):
+        if self.n_images == 1:
+            return self._normalize_point_list(raw_points)
+        # Gallery: expect list of point lists, one per image
+        if not isinstance(raw_points, (list, tuple)):
+            raise ValueError("Gallery mode requires list of point lists")
+        if len(raw_points) != self.n_images:
+            raise ValueError(
+                f"Expected {self.n_images} point lists, got {len(raw_points)}"
+            )
+        return [self._normalize_point_list(pts) for pts in raw_points]
+
     def set_image(self, data, labels=None):
         """
-        Replace image(s). Accepts 2D, 3D, or list of 2D arrays.
+        Replace the displayed image(s) and reset all points.
+
+        Can switch between single-image and gallery modes. All existing
+        points are cleared; ROIs are preserved.
 
         Parameters
         ----------
         data : array_like
-            2D array (H, W), 3D array (N, H, W), or list of 2D arrays.
+            2D array ``(H, W)``, 3D array ``(N, H, W)``, or list of 2D
+            arrays. Same formats as the constructor.
         labels : list of str, optional
-            Per-image labels for gallery mode.
+            Per-image labels for gallery mode. If ``None``, defaults to
+            ``"Image 1"``, ``"Image 2"``, etc.
+
+        Examples
+        --------
+        >>> w = Clicker(img1)
+        >>> w.set_image(img2)  # switch to a different image
+        >>> w.set_image([img1, img2, img3], labels=["A", "B", "C"])
         """
         self._set_data(data, labels)
+
+    def add_roi(self, row, col, mode="circle", radius=30, rect_w=60, rect_h=40,
+                color="#0f0", opacity=0.8):
+        """
+        Add an ROI overlay to the widget.
+
+        Multiple ROIs can be added. Each gets a unique ID. In the widget,
+        the user can click ROI centers to select them, drag to reposition,
+        and adjust size/color/opacity interactively. The widget also displays
+        pixel statistics (mean, std, min, max) for the active ROI.
+
+        Parameters
+        ----------
+        row, col : int
+            Center position in image pixel coordinates (row, col).
+        mode : str, default "circle"
+            ROI shape. One of ``"circle"``, ``"square"``, or ``"rectangle"``.
+        radius : int, default 30
+            Radius in pixels for circle and square modes.
+        rect_w : int, default 60
+            Width in pixels for rectangle mode.
+        rect_h : int, default 40
+            Height in pixels for rectangle mode.
+        color : str, default "#0f0"
+            Stroke color as a CSS color string (e.g. ``"#ff0"``, ``"red"``).
+        opacity : float, default 0.8
+            Stroke opacity (0.1–1.0).
+
+        Examples
+        --------
+        >>> w = Clicker(img)
+        >>> w.add_roi(128, 128)  # green circle at center
+        >>> w.add_roi(50, 50, mode="square", radius=20, color="#ff0")
+        >>> w.add_roi(200, 100, mode="rectangle", rect_w=80, rect_h=30)
+        >>> len(w.roi_list)  # 3
+        """
+        roi_id = max((r["id"] for r in self.roi_list), default=-1) + 1
+        roi = {
+            "id": roi_id,
+            "mode": mode,
+            "row": int(row), "col": int(col),
+            "radius": int(radius),
+            "rectW": int(rect_w), "rectH": int(rect_h),
+            "color": color, "opacity": float(opacity),
+        }
+        self.roi_list = [*self.roi_list, roi]
+
+    def clear_rois(self):
+        """
+        Remove all ROI overlays.
+
+        Examples
+        --------
+        >>> w.add_roi(100, 100)
+        >>> w.add_roi(200, 200)
+        >>> w.clear_rois()
+        >>> w.roi_list  # []
+        """
+        self.roi_list = []
+
+    def __repr__(self) -> str:
+        is_gallery = self.n_images > 1
+        # Points count
+        if is_gallery:
+            per_img = [len(pts) if isinstance(pts, list) else 0
+                       for pts in self.selected_points]
+            pts_str = "+".join(str(n) for n in per_img)
+            total = sum(per_img)
+        else:
+            total = len(self.selected_points)
+            pts_str = str(total)
+
+        # Shape string
+        if is_gallery:
+            shape = f"{self.n_images}×{self.height}×{self.width}"
+        else:
+            shape = f"{self.height}×{self.width}"
+
+        name = self.title if self.title else "Clicker"
+        parts = [f"{name}({shape}"]
+
+        # Pixel size
+        if self.pixel_size_angstrom > 0:
+            ps = self.pixel_size_angstrom
+            if ps >= 10:
+                parts.append(f"px={ps / 10:.2f} nm")
+            else:
+                parts.append(f"px={ps:.2f} Å")
+
+        # Points
+        if total > 0:
+            parts.append(f"pts={pts_str}")
+        else:
+            parts.append("pts=0")
+
+        # ROIs
+        n_rois = len(self.roi_list)
+        if n_rois > 0:
+            parts.append(f"rois={n_rois}")
+
+        # Non-default imaging settings
+        if self.colormap != "gray":
+            parts.append(f"cmap={self.colormap}")
+        if self.log_scale:
+            parts.append("log")
+        if not self.auto_contrast:
+            parts.append("manual contrast")
+        if self.show_fft:
+            parts.append("fft")
+        if self.snap_enabled:
+            parts.append(f"snap r={self.snap_radius}")
+
+        return ", ".join(parts) + ")"
+
+    def summary(self):
+        """
+        Print a detailed summary of the widget state.
+
+        Shows image info, display settings, points with coordinates,
+        ROI details, and marker configuration.
+
+        Examples
+        --------
+        >>> w = Clicker(img, points=[(10, 20), (30, 40)],
+        ...             pixel_size_angstrom=0.82, colormap='viridis')
+        >>> w.summary()
+        Clicker
+        ═══════════════════════════════
+        Image:    128×128 (0.82 Å/px)
+        Display:  viridis | auto contrast | linear
+        ...
+        """
+        is_gallery = self.n_images > 1
+        name = self.title if self.title else "Clicker"
+        lines = [name, "═" * 32]
+
+        # Image info
+        if is_gallery:
+            shape = f"{self.n_images}×{self.height}×{self.width}"
+            lines.append(f"Image:    {shape} ({self.ncols} cols)")
+        else:
+            shape = f"{self.height}×{self.width}"
+            lines.append(f"Image:    {shape}")
+        if self.pixel_size_angstrom > 0:
+            ps = self.pixel_size_angstrom
+            if ps >= 10:
+                lines[-1] += f" ({ps / 10:.2f} nm/px)"
+            else:
+                lines[-1] += f" ({ps:.2f} Å/px)"
+        if self.scale != 1.0:
+            lines[-1] += f"  scale={self.scale}x"
+
+        # Data range
+        if hasattr(self, "_data") and self._data is not None:
+            arr = self._data
+            lines.append(f"Data:     min={float(arr.min()):.4g}  max={float(arr.max()):.4g}  mean={float(arr.mean()):.4g}  dtype={arr.dtype}")
+
+        # Display settings
+        cmap = self.colormap
+        scale = "log" if self.log_scale else "linear"
+        contrast = "auto contrast" if self.auto_contrast else "manual contrast"
+        display = f"{cmap} | {contrast} | {scale}"
+        if self.show_fft:
+            display += " | FFT"
+        lines.append(f"Display:  {display}")
+
+        # Point formatting helper
+        def _fmt_point(j, p, prev=None):
+            color = _color_name(p.get("color", ""))
+            coord = f"  {j + 1}. ({p['row']}, {p['col']})  {p.get('shape', 'circle')} {color}"
+            if prev is not None:
+                dr, dc = p["row"] - prev["row"], p["col"] - prev["col"]
+                dist = (dr * dr + dc * dc) ** 0.5
+                if self.pixel_size_angstrom > 0:
+                    phys = dist * self.pixel_size_angstrom
+                    if phys >= 10:
+                        coord += f"  ↔ {phys / 10:.2f} nm"
+                    else:
+                        coord += f"  ↔ {phys:.2f} Å"
+                else:
+                    coord += f"  ↔ {dist:.1f} px"
+            return coord
+
+        # Points
+        if is_gallery:
+            for i in range(self.n_images):
+                pts = self.selected_points[i] if i < len(self.selected_points) else []
+                label = self.labels[i] if i < len(self.labels) else f"Image {i + 1}"
+                lines.append(f"Points [{label}]: {len(pts)}/{self.max_points}")
+                for j, p in enumerate(pts):
+                    lines.append(_fmt_point(j, p, pts[j - 1] if j > 0 else None))
+        else:
+            pts = self.selected_points
+            lines.append(f"Points:   {len(pts)}/{self.max_points}")
+            for j, p in enumerate(pts):
+                lines.append(_fmt_point(j, p, pts[j - 1] if j > 0 else None))
+
+        # ROIs
+        if self.roi_list:
+            lines.append(f"ROIs:     {len(self.roi_list)}")
+            for roi in self.roi_list:
+                mode = roi["mode"]
+                pos = f"({roi['row']}, {roi['col']})"
+                if mode == "rectangle":
+                    size = f"{roi['rectW']}×{roi['rectH']}"
+                else:
+                    size = f"r={roi['radius']}"
+                color = _color_name(roi["color"])
+                lines.append(f"  {roi['id']+1}. {mode} at {pos}  {size}  {color}")
+
+        # Marker settings
+        color = _color_name(self.marker_color)
+        marker = f"{self.marker_shape} {color}  size={self.dot_size}px"
+        if self.marker_border != 2:
+            marker += f"  border={self.marker_border}"
+        if self.marker_opacity != 1.0:
+            marker += f"  opacity={self.marker_opacity:.0%}"
+        lines.append(f"Marker:   {marker}")
+
+        # Snap
+        if self.snap_enabled:
+            lines.append(f"Snap:     ON (radius={self.snap_radius} px)")
+
+        print("\n".join(lines))
+
+    def clear_points(self):
+        """
+        Remove all placed points from all images.
+
+        Examples
+        --------
+        >>> w.clear_points()
+        >>> w.selected_points  # [] or [[], [], ...]
+        """
+        if self.n_images == 1:
+            self.selected_points = []
+        else:
+            self.selected_points = [[] for _ in range(self.n_images)]

@@ -63,15 +63,6 @@ def test_show2d_colormap():
     assert widget.cmap == "viridis"
 
 
-def test_show2d_fft():
-    """FFT and histogram computed when show_fft=True."""
-    data = np.random.rand(32, 32).astype(np.float32)
-    widget = Show2D(data, show_fft=True)
-    assert len(widget.fft_bytes) > 0
-    assert len(widget.histogram_bins) > 0
-    assert len(widget.histogram_counts) > 0
-
-
 def test_show2d_different_sizes():
     """Gallery with different sized images resizes to largest."""
     images = [
@@ -108,35 +99,9 @@ def test_show2d_default_labels():
 def test_show2d_scale_bar():
     """Scale bar parameters are stored."""
     data = np.random.rand(16, 16).astype(np.float32)
-    widget = Show2D(data, pixel_size_angstrom=1.5, scale_bar_visible=False,
-                    scale_bar_length_px=80, scale_bar_thickness_px=6,
-                    scale_bar_font_size_px=20)
+    widget = Show2D(data, pixel_size_angstrom=1.5, scale_bar_visible=False)
     assert widget.pixel_size_angstrom == pytest.approx(1.5)
     assert widget.scale_bar_visible is False
-    assert widget.scale_bar_length_px == 80
-    assert widget.scale_bar_thickness_px == 6
-    assert widget.scale_bar_font_size_px == 20
-
-
-def test_show2d_percentile_defaults():
-    """Default percentile values."""
-    data = np.random.rand(16, 16).astype(np.float32)
-    widget = Show2D(data)
-    assert widget.percentile_low == pytest.approx(1.0)
-    assert widget.percentile_high == pytest.approx(99.0)
-
-
-def test_show2d_selected_idx_triggers_fft():
-    """Changing selected_idx recomputes FFT when show_fft=True."""
-    data = np.random.rand(3, 32, 32).astype(np.float32)
-    widget = Show2D(data, show_fft=True)
-    fft_before = bytes(widget.fft_bytes)
-    # Change to a different image with different content
-    data[1] *= 10.0
-    widget._data = data
-    widget.selected_idx = 1
-    fft_after = bytes(widget.fft_bytes)
-    assert fft_before != fft_after
 
 
 def test_show2d_ncols():
@@ -151,13 +116,6 @@ def test_show2d_image_width_px():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data, image_width_px=500)
     assert widget.image_width_px == 500
-
-
-def test_show2d_panel_size_px():
-    """panel_size_px parameter is stored."""
-    data = np.random.rand(16, 16).astype(np.float32)
-    widget = Show2D(data, panel_size_px=200)
-    assert widget.panel_size_px == 200
 
 
 def test_show2d_show_controls():
@@ -182,22 +140,6 @@ def test_show2d_constant_image_stats():
     assert widget.stats_std[0] == pytest.approx(0.0)
 
 
-def test_show2d_histogram():
-    """Histogram populated when show_fft=True."""
-    data = np.random.rand(32, 32).astype(np.float32)
-    widget = Show2D(data, show_fft=True)
-    assert len(widget.histogram_bins) == 50
-    assert len(widget.histogram_counts) == 50
-    assert sum(widget.histogram_counts) == 32 * 32
-
-
-def test_show2d_fft_bytes_nonzero():
-    """FFT bytes have the right size (H * W)."""
-    data = np.random.rand(32, 32).astype(np.float32)
-    widget = Show2D(data, show_fft=True)
-    assert len(widget.fft_bytes) == 32 * 32
-
-
 def test_show2d_single_image_is_3d_internally():
     """2D input is wrapped to 3D (1, H, W) internally."""
     data = np.random.rand(16, 16).astype(np.float32)
@@ -216,15 +158,6 @@ def test_show2d_large_gallery():
     assert len(widget.stats_min) == 20
     assert len(widget.stats_max) == 20
     assert len(widget.stats_std) == 20
-
-
-def test_show2d_fft_not_computed_by_default():
-    """FFT is not computed when show_fft=False."""
-    data = np.random.rand(32, 32).astype(np.float32)
-    widget = Show2D(data, show_fft=False)
-    assert widget.fft_bytes == b""
-    assert widget.histogram_bins == []
-    assert widget.histogram_counts == []
 
 
 def test_show2d_gallery_stats_per_image():

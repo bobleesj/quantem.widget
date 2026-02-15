@@ -24,8 +24,8 @@ def test_show4dstem_flattened_scan_shape_mapping():
     for idx in range(data.shape[0]):
         data[idx] = idx
     widget = Show4DSTEM(data, scan_shape=(2, 3))
-    assert (widget.shape_x, widget.shape_y) == (2, 3)
-    assert (widget.det_x, widget.det_y) == (2, 2)
+    assert (widget.shape_rows, widget.shape_cols) == (2, 3)
+    assert (widget.det_rows, widget.det_cols) == (2, 2)
     frame = widget._get_frame(1, 2)
     assert np.array_equal(frame, np.full((2, 2), 5, dtype=np.float32))
 
@@ -51,8 +51,8 @@ def test_show4dstem_auto_detect_center():
                 data[:, :, i, j] = 100.0
     widget = Show4DSTEM(data, precompute_virtual_images=False)
     widget.auto_detect_center()
-    assert abs(widget.center_x - 3.0) < 0.5
-    assert abs(widget.center_y - 3.0) < 0.5
+    assert abs(widget.center_col - 3.0) < 0.5
+    assert abs(widget.center_row - 3.0) < 0.5
     assert widget.bf_radius > 0
 
 
@@ -62,8 +62,8 @@ def test_show4dstem_adf_preset_cache():
     widget = Show4DSTEM(data, center=(8, 8), bf_radius=2, precompute_virtual_images=True)
     assert widget._cached_adf_virtual is not None
     widget.roi_mode = "annular"
-    widget.roi_center_x = 8
-    widget.roi_center_y = 8
+    widget.roi_center_col = 8
+    widget.roi_center_row = 8
     widget.roi_radius_inner = 2
     widget.roi_radius = 8
     cached = widget._get_cached_preset()
@@ -74,10 +74,10 @@ def test_show4dstem_rectangular_scan_shape():
     """Test that rectangular (non-square) scans work correctly."""
     data = np.random.rand(4, 8, 16, 16).astype(np.float32)
     widget = Show4DSTEM(data)
-    assert widget.shape_x == 4
-    assert widget.shape_y == 8
-    assert widget.det_x == 16
-    assert widget.det_y == 16
+    assert widget.shape_rows == 4
+    assert widget.shape_cols == 8
+    assert widget.det_rows == 16
+    assert widget.det_cols == 16
     frame_00 = widget._get_frame(0, 0)
     frame_37 = widget._get_frame(3, 7)
     assert frame_00.shape == (16, 16)
@@ -134,8 +134,8 @@ def test_show4dstem_virtual_image_excludes_hot_pixels():
     data[:, :, 4, 4] = 65535
     widget = Show4DSTEM(data, center=(4, 4), bf_radius=2)
     widget.roi_mode = "circle"
-    widget.roi_center_x = 4
-    widget.roi_center_y = 4
+    widget.roi_center_col = 4
+    widget.roi_center_row = 4
     widget.roi_radius = 3
     assert widget.vi_stats[2] < 1000
 
@@ -145,10 +145,10 @@ def test_show4dstem_torch_input():
     import torch
     data = torch.rand(4, 4, 8, 8)
     widget = Show4DSTEM(data)
-    assert widget.shape_x == 4
-    assert widget.shape_y == 4
-    assert widget.det_x == 8
-    assert widget.det_y == 8
+    assert widget.shape_rows == 4
+    assert widget.shape_cols == 4
+    assert widget.det_rows == 8
+    assert widget.det_cols == 8
 
 
 def test_show4dstem_position_property():
@@ -157,8 +157,8 @@ def test_show4dstem_position_property():
     widget = Show4DSTEM(data)
     widget.position = (2, 3)
     assert widget.position == (2, 3)
-    assert widget.pos_x == 2
-    assert widget.pos_y == 3
+    assert widget.pos_row == 2
+    assert widget.pos_col == 3
 
 
 def test_show4dstem_scan_shape_property():
@@ -179,8 +179,8 @@ def test_show4dstem_initial_position():
     """Initial position is at scan center."""
     data = np.random.rand(8, 10, 16, 16).astype(np.float32)
     widget = Show4DSTEM(data)
-    assert widget.pos_x == 4
-    assert widget.pos_y == 5
+    assert widget.pos_row == 4
+    assert widget.pos_col == 5
 
 
 def test_show4dstem_frame_bytes_nonzero():
@@ -353,6 +353,6 @@ def test_show4dstem_center_explicit():
     """Explicit center and bf_radius are used."""
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     widget = Show4DSTEM(data, center=(5.0, 6.0), bf_radius=3.0)
-    assert widget.center_x == 5.0
-    assert widget.center_y == 6.0
+    assert widget.center_row == 5.0
+    assert widget.center_col == 6.0
     assert widget.bf_radius == 3.0

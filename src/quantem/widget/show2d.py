@@ -13,39 +13,7 @@ import anywidget
 import numpy as np
 import traitlets
 
-from quantem.widget.array_utils import to_numpy
-
-
-def _resize_image(img: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
-    """Resize image using bilinear interpolation (pure numpy, no scipy)."""
-    h, w = img.shape
-
-    # If same size, return as-is
-    if h == target_h and w == target_w:
-        return img
-
-    # Create coordinate grids for target size
-    y_new = np.linspace(0, h - 1, target_h)
-    x_new = np.linspace(0, w - 1, target_w)
-    x_grid, y_grid = np.meshgrid(x_new, y_new)
-
-    # Get integer and fractional parts for bilinear interpolation
-    y0 = np.floor(y_grid).astype(int)
-    x0 = np.floor(x_grid).astype(int)
-    y1 = np.minimum(y0 + 1, h - 1)
-    x1 = np.minimum(x0 + 1, w - 1)
-
-    fy = y_grid - y0
-    fx = x_grid - x0
-
-    # Vectorized bilinear interpolation
-    result = (
-        img[y0, x0] * (1 - fy) * (1 - fx) +
-        img[y0, x1] * (1 - fy) * fx +
-        img[y1, x0] * fy * (1 - fx) +
-        img[y1, x1] * fy * fx
-    )
-    return result.astype(img.dtype)
+from quantem.widget.array_utils import to_numpy, _resize_image
 
 
 class Colormap(StrEnum):
@@ -120,22 +88,12 @@ class Show2D(anywidget.AnyWidget):
     # =========================================================================
     log_scale = traitlets.Bool(False).tag(sync=True)
     auto_contrast = traitlets.Bool(False).tag(sync=True)
-    percentile_low = traitlets.Float(1.0).tag(sync=True)
-    percentile_high = traitlets.Float(99.0).tag(sync=True)
 
     # =========================================================================
     # Scale Bar
     # =========================================================================
     pixel_size_angstrom = traitlets.Float(0.0).tag(sync=True)
     scale_bar_visible = traitlets.Bool(True).tag(sync=True)
-    scale_bar_length_px = traitlets.Int(50).tag(sync=True)
-    scale_bar_thickness_px = traitlets.Int(4).tag(sync=True)
-    scale_bar_font_size_px = traitlets.Int(16).tag(sync=True)
-
-    # =========================================================================
-    # Sizing & Customization
-    # =========================================================================
-    panel_size_px = traitlets.Int(150).tag(sync=True)
     image_width_px = traitlets.Int(0).tag(sync=True)
 
     # =========================================================================
@@ -152,14 +110,16 @@ class Show2D(anywidget.AnyWidget):
     # Analysis Panels (FFT + Histogram shown together)
     # =========================================================================
     show_fft = traitlets.Bool(False).tag(sync=True)
-    fft_bytes = traitlets.Bytes(b"").tag(sync=True)
-    histogram_bins = traitlets.List(traitlets.Float()).tag(sync=True)
-    histogram_counts = traitlets.List(traitlets.Int()).tag(sync=True)
 
     # =========================================================================
     # Selected Image (for single-image analysis display)
     # =========================================================================
     selected_idx = traitlets.Int(0).tag(sync=True)
+
+    # =========================================================================
+    # Line Profile
+    # =========================================================================
+    profile_line = traitlets.List(traitlets.Dict()).tag(sync=True)
 
     def __init__(
         self,
@@ -175,14 +135,23 @@ class Show2D(anywidget.AnyWidget):
         log_scale: bool = False,
         auto_contrast: bool = False,
         ncols: int = 3,
-        scale_bar_length_px: int = 50,
-        scale_bar_thickness_px: int = 4,
-        scale_bar_font_size_px: int = 16,
-        panel_size_px: int = 150,
         image_width_px: int = 0,
         **kwargs,
     ):
         super().__init__(**kwargs)
+
+        # Check if data is a Dataset2d and extract metadata
+        if hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling"):
+            if not title and data.name:
+                title = data.name
+            if pixel_size_angstrom == 0.0 and hasattr(data, "units"):
+                units = list(data.units)
+                sampling_val = float(data.sampling[-1])
+                if units[-1] in ("nm",):
+                    pixel_size_angstrom = sampling_val * 10  # nm → Å
+                elif units[-1] in ("Å", "angstrom", "A"):
+                    pixel_size_angstrom = sampling_val
+            data = data.array
 
         # Convert input to NumPy (handles NumPy, CuPy, PyTorch)
         if isinstance(data, list):
@@ -220,10 +189,6 @@ class Show2D(anywidget.AnyWidget):
         self.cmap = cmap
         self.pixel_size_angstrom = pixel_size_angstrom
         self.scale_bar_visible = scale_bar_visible
-        self.scale_bar_length_px = scale_bar_length_px
-        self.scale_bar_thickness_px = scale_bar_thickness_px
-        self.scale_bar_font_size_px = scale_bar_font_size_px
-        self.panel_size_px = panel_size_px
         self.image_width_px = image_width_px
         self.show_fft = show_fft
         self.show_controls = show_controls
@@ -238,14 +203,7 @@ class Show2D(anywidget.AnyWidget):
         # Send raw float32 data to JS (normalization happens in JS for speed)
         self._update_all_frames()
 
-        # Initial FFT/histogram for selected image
-        if show_fft:
-            self._compute_fft()
-            self._compute_histogram()
-
-        # Observe changes
-        self.observe(self._on_selected_change, names=["selected_idx"])
-        self.observe(self._on_fft_change, names=["show_fft"])
+        self.selected_idx = 0
 
     def _compute_all_stats(self):
         """Compute statistics for all images."""
@@ -265,41 +223,92 @@ class Show2D(anywidget.AnyWidget):
         """Send raw float32 data to JS (normalization happens in JS for speed)."""
         self.frame_bytes = self._data.astype(np.float32).tobytes()
 
-    def _compute_fft(self):
-        """Compute FFT of selected image."""
+    def _sample_profile(self, row0, col0, row1, col1):
+        """Sample intensity values along a line using bilinear interpolation."""
         img = self._data[self.selected_idx]
-        fft = np.fft.fft2(img)
-        fft_shift = np.fft.fftshift(fft)
-        magnitude = np.abs(fft_shift)
-        log_magnitude = np.log1p(magnitude)
+        h, w = img.shape
+        dc, dr = col1 - col0, row1 - row0
+        length = (dc**2 + dr**2) ** 0.5
+        n = max(2, int(np.ceil(length)))
+        t = np.linspace(0, 1, n)
+        cs = col0 + t * dc
+        rs = row0 + t * dr
+        ci = np.floor(cs).astype(int)
+        ri = np.floor(rs).astype(int)
+        cf = cs - ci
+        rf = rs - ri
+        c0c = np.clip(ci, 0, w - 1)
+        c1c = np.clip(ci + 1, 0, w - 1)
+        r0c = np.clip(ri, 0, h - 1)
+        r1c = np.clip(ri + 1, 0, h - 1)
+        vals = (img[r0c, c0c] * (1 - cf) * (1 - rf) +
+                img[r0c, c1c] * cf * (1 - rf) +
+                img[r1c, c0c] * (1 - cf) * rf +
+                img[r1c, c1c] * cf * rf)
+        return vals.astype(np.float32)
 
-        vmin = np.min(log_magnitude)
-        vmax = np.max(log_magnitude)
-        if vmax - vmin > 1e-10:
-            normalized = (log_magnitude - vmin) / (vmax - vmin)
-        else:
-            normalized = np.zeros_like(log_magnitude)
+    def set_profile(self, row0: float, col0: float, row1: float, col1: float):
+        """Set a line profile between two points (image pixel coordinates).
 
-        fft_uint8 = (normalized * 255).astype(np.uint8)
-        self.fft_bytes = fft_uint8.tobytes()
+        Parameters
+        ----------
+        row0, col0 : float
+            Start point in pixel coordinates.
+        row1, col1 : float
+            End point in pixel coordinates.
+        """
+        self.profile_line = [
+            {"row": float(row0), "col": float(col0)},
+            {"row": float(row1), "col": float(col1)},
+        ]
 
-    def _compute_histogram(self):
-        """Compute histogram of selected image."""
-        img = self._data[self.selected_idx]
-        counts, bins = np.histogram(img.ravel(), bins=50)
-        self.histogram_bins = [float(b) for b in bins[:-1]]
-        self.histogram_counts = [int(c) for c in counts]
+    def clear_profile(self):
+        """Clear the current line profile."""
+        self.profile_line = []
 
-    def _on_selected_change(self, change):
-        """Update FFT/histogram when selection changes."""
-        if self.show_fft:
-            self._compute_fft()
-            self._compute_histogram()
+    @property
+    def profile(self):
+        """Get profile line endpoints as [(row0, col0), (row1, col1)] or [].
 
-    def _on_fft_change(self, change):
-        """Compute FFT and histogram when show_fft enabled."""
-        if change["new"]:
-            self._compute_fft()
-            self._compute_histogram()
+        Returns
+        -------
+        list of tuple
+            Line endpoints in pixel coordinates, or empty list if no profile.
+        """
+        return [(p["row"], p["col"]) for p in self.profile_line]
+
+    @property
+    def profile_values(self):
+        """Get intensity values along the profile line as a numpy array.
+
+        Returns
+        -------
+        np.ndarray or None
+            Float32 array of sampled intensities, or None if no profile.
+        """
+        if len(self.profile_line) < 2:
+            return None
+        p0, p1 = self.profile_line
+        return self._sample_profile(p0["row"], p0["col"], p1["row"], p1["col"])
+
+    @property
+    def profile_distance(self):
+        """Get total distance of the profile line in calibrated units.
+
+        Returns
+        -------
+        float or None
+            Distance in angstroms (if pixel_size_angstrom > 0) or pixels.
+            None if no profile line is set.
+        """
+        if len(self.profile_line) < 2:
+            return None
+        p0, p1 = self.profile_line
+        dc = p1["col"] - p0["col"]
+        dr = p1["row"] - p0["row"]
+        dist_px = (dc**2 + dr**2) ** 0.5
+        if self.pixel_size_angstrom > 0:
+            return dist_px * self.pixel_size_angstrom
+        return dist_px
 
 

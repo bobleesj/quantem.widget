@@ -107,3 +107,31 @@ def to_numpy(data: Any, dtype: np.dtype | None = None) -> np.ndarray:
         result = np.asarray(result, dtype=dtype)
 
     return result
+
+
+def _resize_image(img: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
+    """Resize image using bilinear interpolation (pure numpy, no scipy)."""
+    h, w = img.shape
+
+    if h == target_h and w == target_w:
+        return img
+
+    y_new = np.linspace(0, h - 1, target_h)
+    x_new = np.linspace(0, w - 1, target_w)
+    x_grid, y_grid = np.meshgrid(x_new, y_new)
+
+    y0 = np.floor(y_grid).astype(int)
+    x0 = np.floor(x_grid).astype(int)
+    y1 = np.minimum(y0 + 1, h - 1)
+    x1 = np.minimum(x0 + 1, w - 1)
+
+    fy = y_grid - y0
+    fx = x_grid - x0
+
+    result = (
+        img[y0, x0] * (1 - fy) * (1 - fx) +
+        img[y0, x1] * (1 - fy) * fx +
+        img[y1, x0] * fy * (1 - fx) +
+        img[y1, x1] * fy * fx
+    )
+    return result.astype(img.dtype)

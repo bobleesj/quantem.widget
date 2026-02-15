@@ -130,15 +130,14 @@ class Show3D(anywidget.AnyWidget):
     auto_contrast = traitlets.Bool(False).tag(sync=True)
     percentile_low = traitlets.Float(1.0).tag(sync=True)
     percentile_high = traitlets.Float(99.0).tag(sync=True)
+    data_min = traitlets.Float(0.0).tag(sync=True)
+    data_max = traitlets.Float(0.0).tag(sync=True)
 
     # =========================================================================
     # Scale Bar
     # =========================================================================
     pixel_size = traitlets.Float(0.0).tag(sync=True)  # nm/pixel, 0 = no scale bar
     scale_bar_visible = traitlets.Bool(True).tag(sync=True)
-    scale_bar_length_px = traitlets.Int(50).tag(sync=True)
-    scale_bar_thickness_px = traitlets.Int(4).tag(sync=True)
-    scale_bar_font_size_px = traitlets.Int(16).tag(sync=True)
 
     # =========================================================================
     # Timestamps / Dose
@@ -152,39 +151,22 @@ class Show3D(anywidget.AnyWidget):
     # =========================================================================
     roi_active = traitlets.Bool(False).tag(sync=True)
     roi_shape = traitlets.Unicode("circle").tag(sync=True)  # circle, square, rectangle
-    roi_x = traitlets.Int(0).tag(sync=True)
-    roi_y = traitlets.Int(0).tag(sync=True)
+    roi_row = traitlets.Int(0).tag(sync=True)
+    roi_col = traitlets.Int(0).tag(sync=True)
     roi_radius = traitlets.Int(10).tag(sync=True)  # For circle/square: radius or half-size
     roi_width = traitlets.Int(20).tag(sync=True)  # For rectangle
     roi_height = traitlets.Int(20).tag(sync=True)  # For rectangle
     roi_mean = traitlets.Float(0.0).tag(sync=True)
 
     # =========================================================================
-    # Sizing & Customization
+    # Sizing
     # =========================================================================
-    panel_size_px = traitlets.Int(150).tag(sync=True)  # Size for FFT and Histogram panels
     image_width_px = traitlets.Int(0).tag(sync=True)  # If 0, use frontend defaults
 
     # =========================================================================
     # Analysis Panels (FFT + Histogram shown together)
     # =========================================================================
-    show_fft = traitlets.Bool(False).tag(sync=True)  # Show both FFT and histogram
-    histogram_bins = traitlets.List(traitlets.Float()).tag(sync=True)
-    histogram_counts = traitlets.List(traitlets.Int()).tag(sync=True)
-
-    # =========================================================================
-    # Comparison Mode
-    # =========================================================================
-    compare_mode = traitlets.Bool(False).tag(sync=True)
-    compare_idx = traitlets.Int(0).tag(sync=True)
-    compare_frame_bytes = traitlets.Bytes(b"").tag(sync=True)
-
-    # =========================================================================
-    # Drift Indicator
-    # =========================================================================
-    show_drift = traitlets.Bool(False).tag(sync=True)
-    drift_x = traitlets.Float(0.0).tag(sync=True)  # pixels from first frame
-    drift_y = traitlets.Float(0.0).tag(sync=True)
+    show_fft = traitlets.Bool(False).tag(sync=True)
 
     # =========================================================================
     # Export (GIF / ZIP of PNGs)
@@ -193,6 +175,14 @@ class Show3D(anywidget.AnyWidget):
     _gif_data = traitlets.Bytes(b"").tag(sync=True)
     _zip_export_requested = traitlets.Bool(False).tag(sync=True)
     _zip_data = traitlets.Bytes(b"").tag(sync=True)
+
+    # =========================================================================
+    # Playback Buffer (sliding prefetch)
+    # =========================================================================
+    _buffer_bytes = traitlets.Bytes(b"").tag(sync=True)
+    _buffer_start = traitlets.Int(0).tag(sync=True)
+    _buffer_count = traitlets.Int(0).tag(sync=True)
+    _prefetch_request = traitlets.Int(-1).tag(sync=True)
 
     def __init__(
         self,
@@ -203,10 +193,6 @@ class Show3D(anywidget.AnyWidget):
         vmin: float | None = None,
         vmax: float | None = None,
         pixel_size: float = 0.0,
-        scale_bar_visible: bool = True,
-        scale_bar_length_px: int = 50,
-        scale_bar_thickness_px: int = 4,
-        scale_bar_font_size_px: int = 16,
         log_scale: bool = False,
         auto_contrast: bool = False,
         percentile_low: float = 1.0,
@@ -216,8 +202,8 @@ class Show3D(anywidget.AnyWidget):
         timestamp_unit: str = "s",
         show_fft: bool = False,
         show_stats: bool = True,
-        panel_size_px: int = 150,
         image_width_px: int = 0,
+        buffer_size: int = 64,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -226,14 +212,16 @@ class Show3D(anywidget.AnyWidget):
         _extracted_title = None
         _extracted_pixel_size = None
         if hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling"):
-            # This is a Dataset3d - extract metadata
             _extracted_title = data.name if data.name else None
             # sampling is (z_sampling, y_sampling, x_sampling) - use y/x for pixel size
-            # sampling is in the dataset's units, assume nm for pixel_size
             if hasattr(data, "sampling") and len(data.sampling) >= 3:
-                # Use y-axis sampling (index 1) as pixel size in nm
-                _extracted_pixel_size = float(data.sampling[1])
-            # Extract the array
+                sampling_val = float(data.sampling[1])
+                # pixel_size is in nm — convert if units are Å
+                if hasattr(data, "units"):
+                    units = list(data.units)
+                    if units[1] in ("Å", "angstrom", "A"):
+                        sampling_val = sampling_val / 10  # Å → nm
+                _extracted_pixel_size = sampling_val
             data = data.array
 
         # Convert input to NumPy (handles NumPy, CuPy, PyTorch)
@@ -251,11 +239,13 @@ class Show3D(anywidget.AnyWidget):
         self.height = int(self._data.shape[1])
         self.width = int(self._data.shape[2])
 
-        # Color range
+        # Color range (global across all frames)
         self._vmin_user = vmin
         self._vmax_user = vmax
         self._vmin = vmin if vmin is not None else float(self._data.min())
         self._vmax = vmax if vmax is not None else float(self._data.max())
+        self.data_min = float(self._data.min())
+        self.data_max = float(self._data.max())
 
         # Labels
         if labels is not None:
@@ -273,10 +263,6 @@ class Show3D(anywidget.AnyWidget):
 
         # Display options
         self.pixel_size = pixel_size
-        self.scale_bar_visible = scale_bar_visible
-        self.scale_bar_length_px = scale_bar_length_px
-        self.scale_bar_thickness_px = scale_bar_thickness_px
-        self.scale_bar_font_size_px = scale_bar_font_size_px
         self.log_scale = log_scale
         self.auto_contrast = auto_contrast
         self.percentile_low = percentile_low
@@ -291,11 +277,12 @@ class Show3D(anywidget.AnyWidget):
         self.timestamp_unit = timestamp_unit
         self.show_fft = show_fft
         self.show_stats = show_stats
-        self.panel_size_px = panel_size_px
         self.image_width_px = image_width_px
-
-        # Compute reference for drift (first frame CoM)
-        self._ref_com = self._compute_com(self._data[0])
+        frame_bytes = self.height * self.width * 4  # float32
+        max_buffer_bytes = 64 * 1024 * 1024  # 64 MB cap per transfer
+        min_buffer_frames = 8  # guarantee at least 8 frames for large images
+        max_frames = max(min_buffer_frames, max_buffer_bytes // frame_bytes)
+        self._buffer_size = min(buffer_size, self.n_slices, max_frames)
 
         # Initial position at middle
         self.slice_idx = int(self.n_slices // 2)
@@ -303,15 +290,10 @@ class Show3D(anywidget.AnyWidget):
         # Observers
         self.observe(self._on_slice_change, names=["slice_idx"])
         self.observe(
-            self._on_display_change,
-            names=["log_scale", "auto_contrast", "percentile_low", "percentile_high"],
-        )
-        self.observe(self._on_compare_change, names=["compare_idx", "compare_mode"])
-        self.observe(
             self._on_roi_change,
             names=[
-                "roi_x",
-                "roi_y",
+                "roi_row",
+                "roi_col",
                 "roi_radius",
                 "roi_active",
                 "roi_shape",
@@ -319,22 +301,13 @@ class Show3D(anywidget.AnyWidget):
                 "roi_height",
             ],
         )
-        self.observe(self._on_fft_change, names=["show_fft"])
         self.observe(self._on_gif_export, names=["_gif_export_requested"])
         self.observe(self._on_zip_export, names=["_zip_export_requested"])
+        self.observe(self._on_playing_change, names=["playing"])
+        self.observe(self._on_prefetch, names=["_prefetch_request"])
 
         # Initial update
         self._update_all()
-
-    def _compute_com(self, frame: np.ndarray) -> tuple[float, float]:
-        """Compute center of mass of a frame."""
-        total = frame.sum()
-        if total == 0:
-            return self.width / 2, self.height / 2
-        y_coords, x_coords = np.mgrid[0 : self.height, 0 : self.width]
-        com_x = (x_coords * frame).sum() / total
-        com_y = (y_coords * frame).sum() / total
-        return float(com_x), float(com_y)
 
     def _get_color_range(self, frame: np.ndarray) -> tuple[float, float]:
         """Get vmin/vmax based on current settings."""
@@ -360,92 +333,73 @@ class Show3D(anywidget.AnyWidget):
         return np.zeros(frame.shape, dtype=np.uint8)
 
     def _update_all(self):
-        """Update frame, stats, and all derived data."""
+        """Update frame, stats, and all derived data. Uses hold_sync for batched transfer."""
         frame = self._data[self.slice_idx]
-
-        # Stats
-        self.stats_mean = float(frame.mean())
-        self.stats_min = float(frame.min())
-        self.stats_max = float(frame.max())
-        self.stats_std = float(frame.std())
-
-        # Timestamp
-        if self.timestamps and self.slice_idx < len(self.timestamps):
-            self.current_timestamp = self.timestamps[self.slice_idx]
-
-        # Drift from first frame
-        if self.show_drift:
-            com_x, com_y = self._compute_com(frame)
-            self.drift_x = com_x - self._ref_com[0]
-            self.drift_y = com_y - self._ref_com[1]
-
-        # ROI mean
-        if self.roi_active:
-            self._update_roi_mean(frame)
-
-        # Frame bytes
-        normalized = self._normalize_frame(frame)
-        self.frame_bytes = normalized.tobytes()
-
-        # Histogram if visible
-        if self.show_fft:
-            self._update_histogram(frame)
+        with self.hold_sync():
+            self.stats_mean = float(frame.mean())
+            self.stats_min = float(frame.min())
+            self.stats_max = float(frame.max())
+            self.stats_std = float(frame.std())
+            if self.timestamps and self.slice_idx < len(self.timestamps):
+                self.current_timestamp = self.timestamps[self.slice_idx]
+            if self.roi_active:
+                self._update_roi_mean(frame)
+            self.frame_bytes = frame.tobytes()
 
     def _update_roi_mean(self, frame: np.ndarray):
         """Compute mean value within ROI based on shape."""
-        y, x = np.ogrid[0 : self.height, 0 : self.width]
+        r, c = np.ogrid[0 : self.height, 0 : self.width]
 
         if self.roi_shape == "circle":
-            mask = (x - self.roi_x) ** 2 + (y - self.roi_y) ** 2 <= self.roi_radius**2
+            mask = (c - self.roi_col) ** 2 + (r - self.roi_row) ** 2 <= self.roi_radius**2
         elif self.roi_shape == "square":
             half = self.roi_radius
-            mask = (np.abs(x - self.roi_x) <= half) & (np.abs(y - self.roi_y) <= half)
+            mask = (np.abs(c - self.roi_col) <= half) & (np.abs(r - self.roi_row) <= half)
         elif self.roi_shape == "rectangle":
             half_w = self.roi_width // 2
             half_h = self.roi_height // 2
-            mask = (np.abs(x - self.roi_x) <= half_w) & (
-                np.abs(y - self.roi_y) <= half_h
+            mask = (np.abs(c - self.roi_col) <= half_w) & (
+                np.abs(r - self.roi_row) <= half_h
             )
         else:
             # Default to circle
-            mask = (x - self.roi_x) ** 2 + (y - self.roi_y) ** 2 <= self.roi_radius**2
+            mask = (c - self.roi_col) ** 2 + (r - self.roi_row) ** 2 <= self.roi_radius**2
 
         if mask.sum() > 0:
             self.roi_mean = float(frame[mask].mean())
         else:
             self.roi_mean = 0.0
 
-    def _update_histogram(self, frame: np.ndarray):
-        """Compute histogram of current frame."""
-        counts, bins = np.histogram(frame.ravel(), bins=64)
-        self.histogram_bins = [float(b) for b in bins[:-1]]
-        self.histogram_counts = [int(c) for c in counts]
+    def _send_buffer(self, start_idx: int):
+        end_idx = start_idx + self._buffer_size
+        if end_idx <= self.n_slices:
+            chunk = self._data[start_idx:end_idx]
+        else:
+            chunk = np.concatenate(
+                [self._data[start_idx:], self._data[: end_idx - self.n_slices]]
+            )
+        with self.hold_sync():
+            self._buffer_start = int(start_idx)
+            self._buffer_count = int(chunk.shape[0])
+            self._buffer_bytes = chunk.tobytes()
+
+    def _on_playing_change(self, change=None):
+        if self.playing:
+            self._send_buffer(self.slice_idx)
+
+    def _on_prefetch(self, change=None):
+        if self._prefetch_request >= 0 and self.playing:
+            self._send_buffer(self._prefetch_request % self.n_slices)
 
     def _on_slice_change(self, change=None):
-        """Handle slice index change."""
+        if self.playing:
+            return
         self._update_all()
-
-    def _on_display_change(self, change=None):
-        """Handle display settings change."""
-        self._update_all()
-
-    def _on_compare_change(self, change=None):
-        """Handle comparison mode change."""
-        if self.compare_mode:
-            frame = self._data[self.compare_idx]
-            normalized = self._normalize_frame(frame)
-            self.compare_frame_bytes = normalized.tobytes()
 
     def _on_roi_change(self, change=None):
         """Handle ROI change."""
         if self.roi_active:
             self._update_roi_mean(self._data[self.slice_idx])
-
-    def _on_fft_change(self, change=None):
-        """Handle FFT visibility change (shows both FFT and histogram)."""
-        if self.show_fft:
-            frame = self._data[self.slice_idx]
-            self._update_histogram(frame)
 
     # =========================================================================
     # Public Methods
@@ -464,17 +418,12 @@ class Show3D(anywidget.AnyWidget):
         self.playing = False
         self.slice_idx = 0
 
-    def set_roi(self, x: int, y: int, radius: int = 10):
+    def set_roi(self, row: int, col: int, radius: int = 10):
         """Set ROI position and size."""
-        self.roi_x = int(x)
-        self.roi_y = int(y)
+        self.roi_row = int(row)
+        self.roi_col = int(col)
         self.roi_radius = int(radius)
         self.roi_active = True
-
-    def compare_with(self, idx: int):
-        """Enable comparison with another slice."""
-        self.compare_idx = int(idx)
-        self.compare_mode = True
 
     def _on_gif_export(self, change=None):
         if not self._gif_export_requested:

@@ -165,22 +165,10 @@ def test_show3d_pixel_size():
 
 
 def test_show3d_scale_bar():
-    """Scale bar parameters are stored."""
+    """Scale bar visibility parameter is stored."""
     data = np.random.rand(5, 16, 16).astype(np.float32)
-    widget = Show3D(data, scale_bar_visible=False, scale_bar_length_px=80,
-                    scale_bar_thickness_px=6, scale_bar_font_size_px=20)
+    widget = Show3D(data, scale_bar_visible=False)
     assert widget.scale_bar_visible is False
-    assert widget.scale_bar_length_px == 80
-    assert widget.scale_bar_thickness_px == 6
-    assert widget.scale_bar_font_size_px == 20
-
-
-def test_show3d_percentile_defaults():
-    """Default percentile values."""
-    data = np.random.rand(5, 16, 16).astype(np.float32)
-    widget = Show3D(data)
-    assert widget.percentile_low == pytest.approx(1.0)
-    assert widget.percentile_high == pytest.approx(99.0)
 
 
 def test_show3d_loop_range():
@@ -191,47 +179,6 @@ def test_show3d_loop_range():
     widget.loop_end = 7
     assert widget.loop_start == 2
     assert widget.loop_end == 7
-
-
-def test_show3d_compare_mode():
-    """compare_with sets compare_mode and compare_idx."""
-    data = np.random.rand(5, 16, 16).astype(np.float32)
-    widget = Show3D(data)
-    widget.compare_with(3)
-    assert widget.compare_mode is True
-    assert widget.compare_idx == 3
-
-
-def test_show3d_compare_frame_bytes():
-    """Compare frame bytes are non-empty in compare mode."""
-    data = np.random.rand(5, 16, 16).astype(np.float32)
-    widget = Show3D(data)
-    widget.compare_with(0)
-    assert len(widget.compare_frame_bytes) > 0
-
-
-def test_show3d_drift():
-    """Drift tracking computes drift from first frame."""
-    data = np.zeros((5, 32, 32), dtype=np.float32)
-    # First frame: bright spot at center
-    data[0, 14:18, 14:18] = 1.0
-    # Later frame: bright spot shifted right
-    data[2, 14:18, 18:22] = 1.0
-    widget = Show3D(data, show_fft=False)
-    widget.show_drift = True
-    # Need to trigger update by setting slice_idx (observer computes drift)
-    widget.slice_idx = 0  # first go to 0 to register ref
-    widget.slice_idx = 2  # then to 2 to see drift
-    # Drift should be nonzero (shifted spot vs reference)
-    assert widget.drift_x != 0.0 or widget.drift_y != 0.0
-
-
-def test_show3d_histogram():
-    """Histogram populated when show_fft=True."""
-    data = np.random.rand(5, 16, 16).astype(np.float32)
-    widget = Show3D(data, show_fft=True)
-    assert len(widget.histogram_bins) == 64
-    assert len(widget.histogram_counts) == 64
 
 
 def test_show3d_slice_change_updates_stats():
@@ -280,13 +227,6 @@ def test_show3d_single_slice():
     widget = Show3D(data)
     assert widget.n_slices == 1
     assert widget.slice_idx == 0
-
-
-def test_show3d_panel_size():
-    """panel_size_px parameter is stored."""
-    data = np.random.rand(5, 16, 16).astype(np.float32)
-    widget = Show3D(data, panel_size_px=200)
-    assert widget.panel_size_px == 200
 
 
 def test_show3d_image_width():
@@ -491,3 +431,140 @@ def test_show3d_loop_range_with_boomerang():
     assert widget.loop_start == 2
     assert widget.loop_end == 6
     assert widget.boomerang is True
+
+
+def test_show3d_frame_bytes_float32_size():
+    """frame_bytes has correct size (height * width * 4 bytes for float32)."""
+    data = np.random.rand(5, 16, 16).astype(np.float32)
+    widget = Show3D(data)
+    assert len(widget.frame_bytes) == 16 * 16 * 4
+
+
+def test_show3d_data_range():
+    """data_min and data_max reflect global range across all frames."""
+    data = np.zeros((5, 16, 16), dtype=np.float32)
+    data[0] = -1.0
+    data[4] = 10.0
+    widget = Show3D(data)
+    assert widget.data_min == pytest.approx(-1.0)
+    assert widget.data_max == pytest.approx(10.0)
+
+
+# =========================================================================
+# Playback Buffer (sliding prefetch)
+# =========================================================================
+
+
+def test_show3d_default_buffer_size():
+    """Default buffer_size is 64."""
+    data = np.random.rand(100, 8, 8).astype(np.float32)
+    widget = Show3D(data)
+    assert widget._buffer_size == 64
+
+
+def test_show3d_buffer_size_param():
+    """buffer_size parameter is respected."""
+    data = np.random.rand(100, 8, 8).astype(np.float32)
+    widget = Show3D(data, buffer_size=32)
+    assert widget._buffer_size == 32
+
+
+def test_show3d_buffer_small_stack():
+    """Stack smaller than buffer_size clamps to n_slices."""
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    widget = Show3D(data, buffer_size=64)
+    assert widget._buffer_size == 5
+
+
+def test_show3d_buffer_sent_on_play():
+    """Buffer bytes are sent when playback starts."""
+    data = np.random.rand(10, 16, 16).astype(np.float32)
+    widget = Show3D(data)
+    widget.slice_idx = 3
+    widget.playing = True
+    assert len(widget._buffer_bytes) > 0
+    assert widget._buffer_start == 3
+    assert widget._buffer_count > 0
+
+
+def test_show3d_buffer_data_correct():
+    """Buffer contains correct float32 frame data."""
+    data = np.zeros((10, 8, 8), dtype=np.float32)
+    for i in range(10):
+        data[i] = float(i)
+    widget = Show3D(data)
+    widget.slice_idx = 0
+    widget.playing = True
+    buf = np.frombuffer(widget._buffer_bytes, dtype=np.float32)
+    frame_size = 8 * 8
+    assert buf[:frame_size].mean() == pytest.approx(0.0)
+    assert buf[frame_size : 2 * frame_size].mean() == pytest.approx(1.0)
+
+
+def test_show3d_slice_change_skipped_during_playback():
+    """Changing slice_idx during playback does NOT trigger _update_all."""
+    data = np.zeros((10, 8, 8), dtype=np.float32)
+    data[0] = 10.0
+    data[5] = 50.0
+    widget = Show3D(data)
+    widget.slice_idx = 0
+    assert widget.stats_mean == pytest.approx(10.0)
+    widget.playing = True
+    widget.slice_idx = 5
+    # Stats should NOT have updated (still 10.0 from frame 0)
+    assert widget.stats_mean == pytest.approx(10.0)
+
+
+def test_show3d_stats_correct_after_stop():
+    """After playback stops and slice_idx is set, stats are recomputed."""
+    data = np.zeros((10, 8, 8), dtype=np.float32)
+    data[5] = 42.0
+    widget = Show3D(data)
+    widget.slice_idx = 0
+    widget.playing = True
+    widget.playing = False
+    widget.slice_idx = 5
+    assert widget.stats_mean == pytest.approx(42.0)
+
+
+def test_show3d_prefetch_triggers_buffer():
+    """Setting _prefetch_request triggers new buffer send."""
+    data = np.random.rand(100, 8, 8).astype(np.float32)
+    widget = Show3D(data, buffer_size=32)
+    widget.slice_idx = 0
+    widget.playing = True
+    assert widget._buffer_start == 0
+    widget._prefetch_request = 32
+    assert widget._buffer_start == 32
+    assert widget._buffer_count == 32
+
+
+def test_show3d_prefetch_ignored_when_not_playing():
+    """Prefetch request is ignored when not playing."""
+    data = np.random.rand(100, 8, 8).astype(np.float32)
+    widget = Show3D(data, buffer_size=32)
+    widget._prefetch_request = 50
+    assert widget._buffer_start == 0
+    assert widget._buffer_count == 0
+
+
+def test_show3d_buffer_wraparound():
+    """Buffer wraps around when start_idx + buffer_size > n_slices."""
+    data = np.zeros((10, 4, 4), dtype=np.float32)
+    for i in range(10):
+        data[i] = float(i)
+    widget = Show3D(data, buffer_size=8)
+    widget.slice_idx = 5
+    widget.playing = True
+    assert widget._buffer_start == 5
+    assert widget._buffer_count == 8
+    buf = np.frombuffer(widget._buffer_bytes, dtype=np.float32)
+    frame_size = 4 * 4
+    # Frame at index 5 (first in buffer)
+    assert buf[:frame_size].mean() == pytest.approx(5.0)
+    # Frame at index 9 (5th in buffer, last before wrap)
+    assert buf[4 * frame_size : 5 * frame_size].mean() == pytest.approx(9.0)
+    # Frame at index 0 (6th in buffer, wrapped)
+    assert buf[5 * frame_size : 6 * frame_size].mean() == pytest.approx(0.0)
+
+

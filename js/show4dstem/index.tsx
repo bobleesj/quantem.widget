@@ -13,8 +13,11 @@ import Tooltip from "@mui/material/Tooltip";
 import JSZip from "jszip";
 import "./styles.css";
 import { useTheme } from "../theme";
-import { COLORMAPS } from "../colormaps";
-import { WebGPUFFT, getWebGPUFFT, fft2d, fftshift } from "../webgpu-fft";
+import { COLORMAPS, applyColormap } from "../colormaps";
+import { WebGPUFFT, getWebGPUFFT, fft2d, fftshift, autoEnhanceFFT } from "../webgpu-fft";
+import { drawScaleBarHiDPI } from "../scalebar";
+import { findDataRange, sliderRange, computeStats } from "../stats";
+import { downloadBlob, formatNumber } from "../format";
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 10;
@@ -88,31 +91,6 @@ const controlRow = {
   width: "fit-content",
 };
 
-/** Round to a nice value (1, 2, 5, 10, 20, 50, etc.) */
-function roundToNiceValue(value: number): number {
-  if (value <= 0) return 1;
-  const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
-  const normalized = value / magnitude;
-  if (normalized < 1.5) return magnitude;
-  if (normalized < 3.5) return 2 * magnitude;
-  if (normalized < 7.5) return 5 * magnitude;
-  return 10 * magnitude;
-}
-
-/** Format scale bar label with appropriate unit */
-function formatScaleLabel(value: number, unit: "Å" | "mrad" | "px"): string {
-  const nice = roundToNiceValue(value);
-  if (unit === "Å") {
-    if (nice >= 10) return `${Math.round(nice / 10)} nm`;
-    return nice >= 1 ? `${Math.round(nice)} Å` : `${nice.toFixed(2)} Å`;
-  }
-  if (unit === "px") {
-    return nice >= 1 ? `${Math.round(nice)} px` : `${nice.toFixed(1)} px`;
-  }
-  if (nice >= 1000) return `${Math.round(nice / 1000)} rad`;
-  return nice >= 1 ? `${Math.round(nice)} mrad` : `${nice.toFixed(2)} mrad`;
-}
-
 /** Format stat value for display (compact scientific notation for small values) */
 function formatStat(value: number): string {
   if (value === 0) return "0";
@@ -125,80 +103,6 @@ function formatStat(value: number): string {
   return value.toFixed(2);
 }
 
-/**
- * Draw scale bar and zoom indicator on a high-DPI UI canvas.
- * This renders crisp text/lines independent of the image resolution.
- */
-function drawScaleBarHiDPI(
-  canvas: HTMLCanvasElement,
-  dpr: number,
-  zoom: number,
-  pixelSize: number,
-  unit: "Å" | "mrad" | "px",
-  imageWidth: number,
-  _imageHeight: number
-) {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-
-  // Clear canvas
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // Scale context for device pixel ratio
-  ctx.save();
-  ctx.scale(dpr, dpr);
-
-  // CSS pixel dimensions
-  const cssWidth = canvas.width / dpr;
-  const cssHeight = canvas.height / dpr;
-
-  // Calculate separate X/Y scale factors (canvas stretches to fill, not aspect-preserving)
-  const scaleX = cssWidth / imageWidth;
-  // Use X scale for horizontal measurements (scale bar is horizontal)
-  const effectiveZoom = zoom * scaleX;
-  
-  // Fixed UI sizes in CSS pixels (always crisp)
-  const targetBarPx = 60;  // Target bar length in CSS pixels
-  const barThickness = 5;
-  const fontSize = 16;
-  const margin = 12;
-  
-  // Calculate what physical size the target bar represents
-  const targetPhysical = (targetBarPx / effectiveZoom) * pixelSize;
-  
-  // Round to a nice value
-  const nicePhysical = roundToNiceValue(targetPhysical);
-  
-  // Calculate actual bar length for the nice value (in CSS pixels)
-  const barPx = (nicePhysical / pixelSize) * effectiveZoom;
-
-  const barY = cssHeight - margin;
-  const barX = cssWidth - barPx - margin;
-
-  // Draw bar with shadow for visibility
-  ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
-  ctx.shadowBlur = 2;
-  ctx.shadowOffsetX = 1;
-  ctx.shadowOffsetY = 1;
-  
-  ctx.fillStyle = "white";
-  ctx.fillRect(barX, barY, barPx, barThickness);
-
-  // Draw label (centered above bar)
-  const label = formatScaleLabel(nicePhysical, unit);
-  ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
-  ctx.fillStyle = "white";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "bottom";
-  ctx.fillText(label, barX + barPx / 2, barY - 4);
-
-  // Draw zoom indicator (bottom left)
-  ctx.textAlign = "left";
-  ctx.textBaseline = "bottom";
-  ctx.fillText(`${zoom.toFixed(1)}×`, margin, cssHeight - margin + barThickness);
-  
-  ctx.restore();
-}
 
 /**
  * Draw VI crosshair on high-DPI canvas (crisp regardless of image resolution)
@@ -207,8 +111,8 @@ function drawScaleBarHiDPI(
 function drawViPositionMarker(
   canvas: HTMLCanvasElement,
   dpr: number,
-  posX: number,  // Position in image coordinates
-  posY: number,
+  posRow: number,  // Position in image coordinates
+  posCol: number,
   zoom: number,
   panX: number,
   panY: number,
@@ -228,8 +132,8 @@ function drawViPositionMarker(
   const scaleY = cssHeight / imageHeight;
 
   // Convert image coordinates to CSS pixel coordinates
-  const screenX = posY * zoom * scaleX + panX * scaleX;
-  const screenY = posX * zoom * scaleY + panY * scaleY;
+  const screenX = posCol * zoom * scaleX + panX * scaleX;
+  const screenY = posRow * zoom * scaleY + panY * scaleY;
 
   // Simple crosshair (no circle)
   const crosshairSize = 12;
@@ -262,8 +166,8 @@ function drawViRoiOverlayHiDPI(
   canvas: HTMLCanvasElement,
   dpr: number,
   roiMode: string,
-  centerX: number,
-  centerY: number,
+  centerRow: number,
+  centerCol: number,
   radius: number,
   roiWidth: number,
   roiHeight: number,
@@ -289,9 +193,9 @@ function drawViRoiOverlayHiDPI(
   const scaleX = cssWidth / imageWidth;
   const scaleY = cssHeight / imageHeight;
 
-  // Convert image coordinates to screen coordinates (note: Y is row, X is col in image)
-  const screenX = centerY * zoom * scaleX + panX * scaleX;
-  const screenY = centerX * zoom * scaleY + panY * scaleY;
+  // Convert image coordinates to screen coordinates (row→screenY, col→screenX)
+  const screenX = centerCol * zoom * scaleX + panX * scaleX;
+  const screenY = centerRow * zoom * scaleY + panY * scaleY;
 
   const lineWidth = 2.5;
   const crosshairSize = 10;
@@ -410,8 +314,8 @@ function drawViRoiOverlayHiDPI(
 function drawDpCrosshairHiDPI(
   canvas: HTMLCanvasElement,
   dpr: number,
-  kx: number,  // Position in detector coordinates
-  ky: number,
+  kCol: number,  // Column position in detector coordinates
+  kRow: number,  // Row position in detector coordinates
   zoom: number,
   panX: number,
   panY: number,
@@ -431,9 +335,9 @@ function drawDpCrosshairHiDPI(
   const scaleX = cssWidth / detWidth;
   const scaleY = cssHeight / detHeight;
 
-  // Convert detector coordinates to CSS pixel coordinates (no swap - kx is X, ky is Y)
-  const screenX = kx * zoom * scaleX + panX * scaleX;
-  const screenY = ky * zoom * scaleY + panY * scaleY;
+  // Convert detector coordinates to CSS pixel coordinates
+  const screenX = kCol * zoom * scaleX + panX * scaleX;
+  const screenY = kRow * zoom * scaleY + panY * scaleY;
   
   // Fixed UI sizes in CSS pixels (consistent with VI crosshair)
   const crosshairSize = 18;
@@ -472,8 +376,8 @@ function drawRoiOverlayHiDPI(
   canvas: HTMLCanvasElement,
   dpr: number,
   roiMode: string,
-  centerX: number,
-  centerY: number,
+  centerCol: number,
+  centerRow: number,
   radius: number,
   radiusInner: number,
   roiWidth: number,
@@ -502,8 +406,8 @@ function drawRoiOverlayHiDPI(
   const scaleY = cssHeight / detHeight;
 
   // Convert detector coordinates to CSS pixel coordinates
-  const screenX = centerX * zoom * scaleX + panX * scaleX;
-  const screenY = centerY * zoom * scaleY + panY * scaleY;
+  const screenX = centerCol * zoom * scaleX + panX * scaleX;
+  const screenY = centerRow * zoom * scaleY + panY * scaleY;
   
   // Fixed UI sizes in CSS pixels
   const lineWidth = 2.5;
@@ -727,11 +631,14 @@ interface HistogramProps {
 /**
  * Info tooltip component - small ⓘ icon with hover tooltip
  */
-function InfoTooltip({ text, theme = "dark" }: { text: string; theme?: "light" | "dark" }) {
+function InfoTooltip({ text, theme = "dark" }: { text: React.ReactNode; theme?: "light" | "dark" }) {
   const isDark = theme === "dark";
+  const content = typeof text === "string"
+    ? <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>{text}</Typography>
+    : text;
   return (
     <Tooltip
-      title={<Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>{text}</Typography>}
+      title={content}
       arrow
       placement="bottom"
       componentsProps={{
@@ -893,15 +800,15 @@ function Show4DSTEM() {
   // ─────────────────────────────────────────────────────────────────────────
   // Model State (synced with Python)
   // ─────────────────────────────────────────────────────────────────────────
-  const [shapeX] = useModelState<number>("shape_x");
-  const [shapeY] = useModelState<number>("shape_y");
-  const [detX] = useModelState<number>("det_x");
-  const [detY] = useModelState<number>("det_y");
+  const [shapeRows] = useModelState<number>("shape_rows");
+  const [shapeCols] = useModelState<number>("shape_cols");
+  const [detRows] = useModelState<number>("det_rows");
+  const [detCols] = useModelState<number>("det_cols");
 
-  const [posX, setPosX] = useModelState<number>("pos_x");
-  const [posY, setPosY] = useModelState<number>("pos_y");
-  const [roiCenterX, setRoiCenterX] = useModelState<number>("roi_center_x");
-  const [roiCenterY, setRoiCenterY] = useModelState<number>("roi_center_y");
+  const [posRow, setPosRow] = useModelState<number>("pos_row");
+  const [posCol, setPosCol] = useModelState<number>("pos_col");
+  const [roiCenterCol, setRoiCenterCol] = useModelState<number>("roi_center_col");
+  const [roiCenterRow, setRoiCenterRow] = useModelState<number>("roi_center_row");
   const [pixelSize] = useModelState<number>("pixel_size");
   const [kPixelSize] = useModelState<number>("k_pixel_size");
   const [kCalibrated] = useModelState<boolean>("k_calibrated");
@@ -926,8 +833,8 @@ function Show4DSTEM() {
 
   // Detector calibration (for presets)
   const [bfRadius] = useModelState<number>("bf_radius");
-  const [centerX] = useModelState<number>("center_x");
-  const [centerY] = useModelState<number>("center_y");
+  const [centerCol] = useModelState<number>("center_col");
+  const [centerRow] = useModelState<number>("center_row");
 
   // Path animation state
   const [pathPlaying, setPathPlaying] = useModelState<boolean>("path_playing");
@@ -940,10 +847,10 @@ function Show4DSTEM() {
   // ─────────────────────────────────────────────────────────────────────────
   // Local State (UI-only, not synced to Python)
   // ─────────────────────────────────────────────────────────────────────────
-  const [localKx, setLocalKx] = React.useState(roiCenterX);
-  const [localKy, setLocalKy] = React.useState(roiCenterY);
-  const [localPosX, setLocalPosX] = React.useState(posX);
-  const [localPosY, setLocalPosY] = React.useState(posY);
+  const [localKCol, setLocalKCol] = React.useState(roiCenterCol);
+  const [localKRow, setLocalKRow] = React.useState(roiCenterRow);
+  const [localPosRow, setLocalPosRow] = React.useState(posRow);
+  const [localPosCol, setLocalPosCol] = React.useState(posCol);
   const [isDraggingDP, setIsDraggingDP] = React.useState(false);
   const [isDraggingVI, setIsDraggingVI] = React.useState(false);
   const [isDraggingFFT, setIsDraggingFFT] = React.useState(false);
@@ -972,27 +879,30 @@ function Show4DSTEM() {
 
   // VI ROI state (real-space region selection for summed DP) - synced with Python
   const [viRoiMode, setViRoiMode] = useModelState<string>("vi_roi_mode");
-  const [viRoiCenterX, setViRoiCenterX] = useModelState<number>("vi_roi_center_x");
-  const [viRoiCenterY, setViRoiCenterY] = useModelState<number>("vi_roi_center_y");
+  const [viRoiCenterRow, setViRoiCenterRow] = useModelState<number>("vi_roi_center_row");
+  const [viRoiCenterCol, setViRoiCenterCol] = useModelState<number>("vi_roi_center_col");
   const [viRoiRadius, setViRoiRadius] = useModelState<number>("vi_roi_radius");
   const [viRoiWidth, setViRoiWidth] = useModelState<number>("vi_roi_width");
   const [viRoiHeight, setViRoiHeight] = useModelState<number>("vi_roi_height");
   // Local VI ROI center for smooth dragging
-  const [localViRoiCenterX, setLocalViRoiCenterX] = React.useState(viRoiCenterX || 0);
-  const [localViRoiCenterY, setLocalViRoiCenterY] = React.useState(viRoiCenterY || 0);
+  const [localViRoiCenterRow, setLocalViRoiCenterRow] = React.useState(viRoiCenterRow || 0);
+  const [localViRoiCenterCol, setLocalViRoiCenterCol] = React.useState(viRoiCenterCol || 0);
   const [summedDpBytes] = useModelState<DataView>("summed_dp_bytes");
   const [summedDpCount] = useModelState<number>("summed_dp_count");
   const [dpStats] = useModelState<number[]>("dp_stats");  // [mean, min, max, std]
   const [viStats] = useModelState<number[]>("vi_stats");  // [mean, min, max, std]
   const [showFft, setShowFft] = React.useState(false);  // Hidden by default per feedback
 
+  // Cursor readout state
+  const [cursorInfo, setCursorInfo] = React.useState<{ row: number; col: number; value: number; panel: string } | null>(null);
+
   // Theme detection
   const { themeInfo, colors: themeColors } = useTheme();
 
   // Compute VI canvas dimensions to respect aspect ratio of rectangular scans
   // The longer dimension gets CANVAS_SIZE, the shorter scales proportionally
-  const viCanvasWidth = shapeX > shapeY ? Math.round(CANVAS_SIZE * (shapeY / shapeX)) : CANVAS_SIZE;
-  const viCanvasHeight = shapeY > shapeX ? Math.round(CANVAS_SIZE * (shapeX / shapeY)) : CANVAS_SIZE;
+  const viCanvasWidth = shapeRows > shapeCols ? Math.round(CANVAS_SIZE * (shapeCols / shapeRows)) : CANVAS_SIZE;
+  const viCanvasHeight = shapeCols > shapeRows ? Math.round(CANVAS_SIZE * (shapeRows / shapeCols)) : CANVAS_SIZE;
 
   // Histogram data - use state to ensure re-renders (both are Float32Array now)
   const [dpHistogramData, setDpHistogramData] = React.useState<Float32Array | null>(null);
@@ -1054,21 +964,13 @@ function Show4DSTEM() {
       const step = e.shiftKey ? 10 : 1;
 
       switch (e.key) {
-        case 'ArrowUp':
-          e.preventDefault();
-          setPosX(Math.max(0, posX - step));
-          break;
-        case 'ArrowDown':
-          e.preventDefault();
-          setPosX(Math.min(shapeX - 1, posX + step));
-          break;
         case 'ArrowLeft':
           e.preventDefault();
-          setPosY(Math.max(0, posY - step));
+          setPosCol(Math.max(0, posCol - step));
           break;
         case 'ArrowRight':
           e.preventDefault();
-          setPosY(Math.min(shapeY - 1, posY + step));
+          setPosCol(Math.min(shapeCols - 1, posCol + step));
           break;
         case ' ':  // Space bar
           e.preventDefault();
@@ -1087,7 +989,7 @@ function Show4DSTEM() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [posX, posY, shapeX, shapeY, pathPlaying, pathLength, setPosX, setPosY, setPathPlaying]);
+  }, [posRow, posCol, shapeRows, shapeCols, pathPlaying, pathLength, setPosRow, setPosCol, setPathPlaying]);
 
   // Initialize WebGPU FFT on mount
   React.useEffect(() => {
@@ -1124,20 +1026,20 @@ function Show4DSTEM() {
 
   // Sync local state
   React.useEffect(() => {
-    if (!isDraggingDP && !isDraggingResize) { setLocalKx(roiCenterX); setLocalKy(roiCenterY); }
-  }, [roiCenterX, roiCenterY, isDraggingDP, isDraggingResize]);
+    if (!isDraggingDP && !isDraggingResize) { setLocalKCol(roiCenterCol); setLocalKRow(roiCenterRow); }
+  }, [roiCenterCol, roiCenterRow, isDraggingDP, isDraggingResize]);
 
   React.useEffect(() => {
-    if (!isDraggingVI) { setLocalPosX(posX); setLocalPosY(posY); }
-  }, [posX, posY, isDraggingVI]);
+    if (!isDraggingVI) { setLocalPosRow(posRow); setLocalPosCol(posCol); }
+  }, [posRow, posCol, isDraggingVI]);
 
   // Sync VI ROI local state
   React.useEffect(() => {
     if (!isDraggingViRoi && !isDraggingViRoiResize) {
-      setLocalViRoiCenterX(viRoiCenterX || shapeX / 2);
-      setLocalViRoiCenterY(viRoiCenterY || shapeY / 2);
+      setLocalViRoiCenterRow(viRoiCenterRow || shapeRows / 2);
+      setLocalViRoiCenterCol(viRoiCenterCol || shapeCols / 2);
     }
-  }, [viRoiCenterX, viRoiCenterY, isDraggingViRoi, isDraggingViRoiResize, shapeX, shapeY]);
+  }, [viRoiCenterRow, viRoiCenterCol, isDraggingViRoi, isDraggingViRoiResize, shapeRows, shapeCols]);
 
   // Canvas refs
   const dpCanvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -1251,27 +1153,20 @@ function Show4DSTEM() {
     }
 
     // Compute actual min/max of scaled data for normalization
-    let dataMin = Infinity, dataMax = -Infinity;
-    for (let i = 0; i < scaled.length; i++) {
-      if (scaled[i] < dataMin) dataMin = scaled[i];
-      if (scaled[i] > dataMax) dataMax = scaled[i];
-    }
+    const { min: dataMin, max: dataMax } = findDataRange(scaled);
 
     // Apply vmin/vmax percentile clipping
-    const dataRange = dataMax - dataMin;
-    const vmin = dataMin + dataRange * dpVminPct / 100;
-    const vmax = dataMin + dataRange * dpVmaxPct / 100;
-    const range = vmax > vmin ? vmax - vmin : 1;
+    const { vmin, vmax } = sliderRange(dataMin, dataMax, dpVminPct, dpVmaxPct);
 
     let offscreen = dpOffscreenRef.current;
     if (!offscreen) {
       offscreen = document.createElement("canvas");
       dpOffscreenRef.current = offscreen;
     }
-    const sizeChanged = offscreen.width !== detY || offscreen.height !== detX;
+    const sizeChanged = offscreen.width !== detCols || offscreen.height !== detRows;
     if (sizeChanged) {
-      offscreen.width = detY;
-      offscreen.height = detX;
+      offscreen.width = detCols;
+      offscreen.height = detRows;
       dpImageDataRef.current = null;
     }
     const offCtx = offscreen.getContext("2d");
@@ -1279,22 +1174,10 @@ function Show4DSTEM() {
 
     let imgData = dpImageDataRef.current;
     if (!imgData) {
-      imgData = offCtx.createImageData(detY, detX);
+      imgData = offCtx.createImageData(detCols, detRows);
       dpImageDataRef.current = imgData;
     }
-    const rgba = imgData.data;
-
-    for (let i = 0; i < scaled.length; i++) {
-      // Clamp to vmin/vmax and rescale to 0-255 for colormap lookup
-      const clamped = Math.max(vmin, Math.min(vmax, scaled[i]));
-      const v = Math.floor(((clamped - vmin) / range) * 255);
-      const j = i * 4;
-      const lutIdx = Math.max(0, Math.min(255, v)) * 3;
-      rgba[j] = lut[lutIdx];
-      rgba[j + 1] = lut[lutIdx + 1];
-      rgba[j + 2] = lut[lutIdx + 2];
-      rgba[j + 3] = 255;
-    }
+    applyColormap(scaled, imgData.data, lut, vmin, vmax);
     offCtx.putImageData(imgData, 0, 0);
 
     ctx.imageSmoothingEnabled = false;
@@ -1304,7 +1187,7 @@ function Show4DSTEM() {
     ctx.scale(dpZoom, dpZoom);
     ctx.drawImage(offscreen, 0, 0);
     ctx.restore();
-  }, [frameBytes, summedDpBytes, viRoiMode, detX, detY, dpColormap, dpVminPct, dpVmaxPct, dpScaleMode, dpPowerExp, dpZoom, dpPanX, dpPanY]);
+  }, [frameBytes, summedDpBytes, viRoiMode, detRows, detCols, dpColormap, dpVminPct, dpVmaxPct, dpScaleMode, dpPowerExp, dpZoom, dpPanX, dpPanY]);
 
   // Render DP overlay - just clear (ROI shapes now drawn on high-DPI UI canvas)
   React.useEffect(() => {
@@ -1314,7 +1197,7 @@ function Show4DSTEM() {
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     // All visual overlays (crosshair, ROI shapes, scale bar) are now on dpUiRef for crisp rendering
-  }, [localKx, localKy, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner, dpZoom, dpPanX, dpPanY, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, detX, detY]);
+  }, [localKCol, localKRow, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner, dpZoom, dpPanX, dpPanY, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, detRows, detCols]);
 
   // Render filtered virtual image
   React.useEffect(() => {
@@ -1323,8 +1206,8 @@ function Show4DSTEM() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const width = shapeY;
-    const height = shapeX;
+    const width = shapeCols;
+    const height = shapeRows;
 
     const renderData = (filtered: Float32Array) => {
       // Normalize and render
@@ -1359,18 +1242,13 @@ function Show4DSTEM() {
         }
       } else {
         // Fallback: compute from scaled data
-        dataMin = Infinity; dataMax = -Infinity;
-        for (let i = 0; i < scaled.length; i++) {
-          if (scaled[i] < dataMin) dataMin = scaled[i];
-          if (scaled[i] > dataMax) dataMax = scaled[i];
-        }
+        const r = findDataRange(scaled);
+        dataMin = r.min;
+        dataMax = r.max;
       }
 
       // Apply vmin/vmax percentile clipping
-      const dataRange = dataMax - dataMin;
-      const vmin = dataMin + dataRange * viVminPct / 100;
-      const vmax = dataMin + dataRange * viVmaxPct / 100;
-      const range = vmax > vmin ? vmax - vmin : 1;
+      const { vmin, vmax } = sliderRange(dataMin, dataMax, viVminPct, viVmaxPct);
 
       const lut = COLORMAPS[viColormap] || COLORMAPS.inferno;
       let offscreen = viOffscreenRef.current;
@@ -1392,15 +1270,7 @@ function Show4DSTEM() {
         imageData = offCtx.createImageData(width, height);
         viImageDataRef.current = imageData;
       }
-      for (let i = 0; i < scaled.length; i++) {
-        // Clamp to vmin/vmax and rescale to 0-255
-        const clamped = Math.max(vmin, Math.min(vmax, scaled[i]));
-        const val = Math.floor(((clamped - vmin) / range) * 255);
-        imageData.data[i * 4] = lut[val * 3];
-        imageData.data[i * 4 + 1] = lut[val * 3 + 1];
-        imageData.data[i * 4 + 2] = lut[val * 3 + 2];
-        imageData.data[i * 4 + 3] = 255;
-      }
+      applyColormap(scaled, imageData.data, lut, vmin, vmax);
       offCtx.putImageData(imageData, 0, 0);
 
       ctx.imageSmoothingEnabled = false;
@@ -1416,7 +1286,7 @@ function Show4DSTEM() {
     renderData(rawVirtualImageRef.current);
     // Note: viDataMin/viDataMax intentionally not in deps - they arrive with virtualImageBytes
     // and we have a fallback if they're stale
-  }, [virtualImageBytes, shapeX, shapeY, viColormap, viVminPct, viVmaxPct, viScaleMode, viPowerExp, viZoom, viPanX, viPanY]);
+  }, [virtualImageBytes, shapeRows, shapeCols, viColormap, viVminPct, viVmaxPct, viScaleMode, viPowerExp, viZoom, viPanX, viPanY]);
 
   // Render virtual image overlay (just clear - crosshair drawn on high-DPI UI canvas)
   React.useEffect(() => {
@@ -1426,7 +1296,7 @@ function Show4DSTEM() {
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     // Crosshair and scale bar now drawn on high-DPI UI canvas (viUiRef)
-  }, [localPosX, localPosY, isDraggingVI, viZoom, viPanX, viPanY, pixelSize, shapeX, shapeY]);
+  }, [localPosRow, localPosCol, isDraggingVI, viZoom, viPanX, viPanY, pixelSize, shapeRows, shapeCols]);
 
   // Render FFT (WebGPU when available, CPU fallback)
   React.useEffect(() => {
@@ -1439,8 +1309,8 @@ function Show4DSTEM() {
       return;
     }
 
-    const width = shapeY;
-    const height = shapeX;
+    const width = shapeCols;
+    const height = shapeRows;
     const sourceData = rawVirtualImageRef.current;
     const lut = COLORMAPS[fftColormap] || COLORMAPS.inferno;
 
@@ -1463,50 +1333,17 @@ function Show4DSTEM() {
         }
       }
 
-      // Auto mode: mask DC component + 99.9% percentile clipping
       let displayMin: number, displayMax: number;
       if (fftAuto) {
-        // Mask DC (center pixel) by replacing with neighbor average
-        const centerIdx = Math.floor(height / 2) * width + Math.floor(width / 2);
-        const neighbors = [
-          magnitude[centerIdx - 1],
-          magnitude[centerIdx + 1],
-          magnitude[centerIdx - width],
-          magnitude[centerIdx + width]
-        ];
-        magnitude[centerIdx] = neighbors.reduce((a, b) => a + b, 0) / 4;
-
-        // Apply 99.9% percentile clipping for display range
-        const sorted = magnitude.slice().sort((a, b) => a - b);
-        displayMin = sorted[0];
-        displayMax = sorted[Math.floor(sorted.length * 0.999)];
+        ({ min: displayMin, max: displayMax } = autoEnhanceFFT(magnitude, width, height));
       } else {
-        // No auto: use actual min/max
-        displayMin = Infinity;
-        displayMax = -Infinity;
-        for (let i = 0; i < magnitude.length; i++) {
-          if (magnitude[i] < displayMin) displayMin = magnitude[i];
-          if (magnitude[i] > displayMax) displayMax = magnitude[i];
-        }
+        ({ min: displayMin, max: displayMax } = findDataRange(magnitude));
       }
       setFftDataMin(displayMin);
       setFftDataMax(displayMax);
 
-      // Stats use same values
-      const actualMin = displayMin;
-      const actualMax = displayMax;
-      let sum = 0;
-      for (let i = 0; i < magnitude.length; i++) {
-        sum += magnitude[i];
-      }
-      const mean = sum / magnitude.length;
-      let sumSq = 0;
-      for (let i = 0; i < magnitude.length; i++) {
-        const diff = magnitude[i] - mean;
-        sumSq += diff * diff;
-      }
-      const std = Math.sqrt(sumSq / magnitude.length);
-      setFftStats([mean, actualMin, actualMax, std]);
+      const { mean, std } = computeStats(magnitude);
+      setFftStats([mean, displayMin, displayMax, std]);
 
       // Store histogram data (copy of magnitude for histogram component)
       setFftHistogramData(magnitude.slice());
@@ -1533,20 +1370,9 @@ function Show4DSTEM() {
       const rgba = imgData.data;
 
       // Apply histogram slider range on top of percentile clipping
-      const dataRange = displayMax - displayMin;
-      const vmin = displayMin + (fftVminPct / 100) * dataRange;
-      const vmax = displayMin + (fftVmaxPct / 100) * dataRange;
-      const range = vmax > vmin ? vmax - vmin : 1;
+      const { vmin, vmax } = sliderRange(displayMin, displayMax, fftVminPct, fftVmaxPct);
 
-      for (let i = 0; i < magnitude.length; i++) {
-        const v = Math.round(((magnitude[i] - vmin) / range) * 255);
-        const j = i * 4;
-        const lutIdx = Math.max(0, Math.min(255, v)) * 3;
-        rgba[j] = lut[lutIdx];
-        rgba[j + 1] = lut[lutIdx + 1];
-        rgba[j + 2] = lut[lutIdx + 2];
-        rgba[j + 3] = 255;
-      }
+      applyColormap(magnitude, rgba, lut, vmin, vmax);
       offCtx.putImageData(imgData, 0, 0);
 
       ctx.imageSmoothingEnabled = false;
@@ -1598,7 +1424,7 @@ function Show4DSTEM() {
       fftshift(imag, width, height);
       renderMagnitude(real, imag);
     }
-  }, [virtualImageBytes, shapeX, shapeY, fftColormap, fftZoom, fftPanX, fftPanY, gpuReady, showFft, fftScaleMode, fftAuto, fftVminPct, fftVmaxPct]);
+  }, [virtualImageBytes, shapeRows, shapeCols, fftColormap, fftZoom, fftPanX, fftPanY, gpuReady, showFft, fftScaleMode, fftAuto, fftVminPct, fftVmaxPct]);
 
   // Render FFT overlay with high-pass filter circle
   React.useEffect(() => {
@@ -1618,39 +1444,39 @@ function Show4DSTEM() {
     if (!dpUiRef.current) return;
     // Draw scale bar first (clears canvas)
     const kUnit = kCalibrated ? "mrad" : "px";
-    drawScaleBarHiDPI(dpUiRef.current, DPR, dpZoom, kPixelSize || 1, kUnit, detY, detX);
+    drawScaleBarHiDPI(dpUiRef.current, DPR, dpZoom, kPixelSize || 1, kUnit, detCols);
     // Draw ROI overlay (circle, square, rect, annular) or point crosshair
     if (roiMode === "point") {
-      drawDpCrosshairHiDPI(dpUiRef.current, DPR, localKx, localKy, dpZoom, dpPanX, dpPanY, detY, detX, isDraggingDP);
+      drawDpCrosshairHiDPI(dpUiRef.current, DPR, localKCol, localKRow, dpZoom, dpPanX, dpPanY, detCols, detRows, isDraggingDP);
     } else {
       drawRoiOverlayHiDPI(
         dpUiRef.current, DPR, roiMode,
-        localKx, localKy, roiRadius, roiRadiusInner, roiWidth, roiHeight,
-        dpZoom, dpPanX, dpPanY, detY, detX,
+        localKCol, localKRow, roiRadius, roiRadiusInner, roiWidth, roiHeight,
+        dpZoom, dpPanX, dpPanY, detCols, detRows,
         isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner
       );
     }
-  }, [dpZoom, dpPanX, dpPanY, kPixelSize, kCalibrated, detX, detY, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, localKx, localKy, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner]);
+  }, [dpZoom, dpPanX, dpPanY, kPixelSize, kCalibrated, detRows, detCols, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, localKCol, localKRow, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner]);
   
   // VI scale bar + crosshair + ROI (high-DPI)
   React.useEffect(() => {
     if (!viUiRef.current) return;
     // Draw scale bar first (clears canvas)
-    drawScaleBarHiDPI(viUiRef.current, DPR, viZoom, pixelSize || 1, "Å", shapeY, shapeX);
+    drawScaleBarHiDPI(viUiRef.current, DPR, viZoom, pixelSize || 1, "Å", shapeCols);
     // Draw crosshair only when ROI is off (ROI replaces the crosshair)
     if (!viRoiMode || viRoiMode === "off") {
-      drawViPositionMarker(viUiRef.current, DPR, localPosX, localPosY, viZoom, viPanX, viPanY, shapeY, shapeX, isDraggingVI);
+      drawViPositionMarker(viUiRef.current, DPR, localPosRow, localPosCol, viZoom, viPanX, viPanY, shapeCols, shapeRows, isDraggingVI);
     } else {
       // Draw VI ROI instead of crosshair
       drawViRoiOverlayHiDPI(
         viUiRef.current, DPR, viRoiMode,
-        localViRoiCenterX, localViRoiCenterY, viRoiRadius || 5, viRoiWidth || 10, viRoiHeight || 10,
-        viZoom, viPanX, viPanY, shapeY, shapeX,
+        localViRoiCenterRow, localViRoiCenterCol, viRoiRadius || 5, viRoiWidth || 10, viRoiHeight || 10,
+        viZoom, viPanX, viPanY, shapeCols, shapeRows,
         isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize
       );
     }
-  }, [viZoom, viPanX, viPanY, pixelSize, shapeX, shapeY, localPosX, localPosY, isDraggingVI,
-      viRoiMode, localViRoiCenterX, localViRoiCenterY, viRoiRadius, viRoiWidth, viRoiHeight,
+  }, [viZoom, viPanX, viPanY, pixelSize, shapeRows, shapeCols, localPosRow, localPosCol, isDraggingVI,
+      viRoiMode, localViRoiCenterRow, localViRoiCenterCol, viRoiRadius, viRoiWidth, viRoiHeight,
       isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize]);
   
   // Generic zoom handler
@@ -1683,15 +1509,15 @@ function Show4DSTEM() {
   const isNearResizeHandle = (imgX: number, imgY: number): boolean => {
     if (roiMode === "rect") {
       // For rectangle, check near bottom-right corner
-      const handleX = roiCenterX + roiWidth / 2;
-      const handleY = roiCenterY + roiHeight / 2;
+      const handleX = roiCenterCol + roiWidth / 2;
+      const handleY = roiCenterRow + roiHeight / 2;
       const dist = Math.sqrt((imgX - handleX) ** 2 + (imgY - handleY) ** 2);
       return dist < RESIZE_HIT_AREA_PX / dpZoom;
     }
     if ((roiMode !== "circle" && roiMode !== "square" && roiMode !== "annular") || !roiRadius) return false;
     const offset = roiMode === "square" ? roiRadius : roiRadius * CIRCLE_HANDLE_ANGLE;
-    const handleX = roiCenterX + offset;
-    const handleY = roiCenterY + offset;
+    const handleX = roiCenterCol + offset;
+    const handleY = roiCenterRow + offset;
     const dist = Math.sqrt((imgX - handleX) ** 2 + (imgY - handleY) ** 2);
     return dist < RESIZE_HIT_AREA_PX / dpZoom;
   };
@@ -1700,8 +1526,8 @@ function Show4DSTEM() {
   const isNearResizeHandleInner = (imgX: number, imgY: number): boolean => {
     if (roiMode !== "annular" || !roiRadiusInner) return false;
     const offset = roiRadiusInner * CIRCLE_HANDLE_ANGLE;
-    const handleX = roiCenterX + offset;
-    const handleY = roiCenterY + offset;
+    const handleX = roiCenterCol + offset;
+    const handleY = roiCenterRow + offset;
     const dist = Math.sqrt((imgX - handleX) ** 2 + (imgY - handleY) ** 2);
     return dist < RESIZE_HIT_AREA_PX / dpZoom;
   };
@@ -1713,8 +1539,8 @@ function Show4DSTEM() {
     if (viRoiMode === "rect") {
       const halfH = (viRoiHeight || 10) / 2;
       const halfW = (viRoiWidth || 10) / 2;
-      const handleX = localViRoiCenterX + halfH;
-      const handleY = localViRoiCenterY + halfW;
+      const handleX = localViRoiCenterRow + halfH;
+      const handleY = localViRoiCenterCol + halfW;
       const dist = Math.sqrt((imgX - handleX) ** 2 + (imgY - handleY) ** 2);
       const cornerDist = Math.sqrt(halfW ** 2 + halfH ** 2);
       const hitArea = Math.min(RESIZE_HIT_AREA_PX / viZoom, cornerDist * 0.5);
@@ -1723,8 +1549,8 @@ function Show4DSTEM() {
     if (viRoiMode === "circle" || viRoiMode === "square") {
       const radius = viRoiRadius || 5;
       const offset = viRoiMode === "square" ? radius : radius * CIRCLE_HANDLE_ANGLE;
-      const handleX = localViRoiCenterX + offset;
-      const handleY = localViRoiCenterY + offset;
+      const handleX = localViRoiCenterRow + offset;
+      const handleY = localViRoiCenterCol + offset;
       const dist = Math.sqrt((imgX - handleX) ** 2 + (imgY - handleY) ** 2);
       // Cap hit area to 50% of radius so center remains draggable
       const hitArea = Math.min(RESIZE_HIT_AREA_PX / viZoom, radius * 0.5);
@@ -1754,12 +1580,12 @@ function Show4DSTEM() {
     }
 
     setIsDraggingDP(true);
-    setLocalKx(imgX); setLocalKy(imgY);
-    // Use compound roi_center trait - single observer fires in Python
-    const newX = Math.round(Math.max(0, Math.min(detY - 1, imgX)));
-    const newY = Math.round(Math.max(0, Math.min(detX - 1, imgY)));
+    setLocalKCol(imgX); setLocalKRow(imgY);
+    // Use compound roi_center trait [row, col] - single observer fires in Python
+    const newCol = Math.round(Math.max(0, Math.min(detCols - 1, imgX)));
+    const newRow = Math.round(Math.max(0, Math.min(detRows - 1, imgY)));
     model.set("roi_active", true);
-    model.set("roi_center", [newX, newY]);
+    model.set("roi_center", [newRow, newCol]);
     model.save_changes();
   };
 
@@ -1772,10 +1598,27 @@ function Show4DSTEM() {
     const imgX = (screenX - dpPanX) / dpZoom;
     const imgY = (screenY - dpPanY) / dpZoom;
 
+    // Cursor readout: look up raw DP value at pixel position
+    const pxCol = Math.floor(imgX);
+    const pxRow = Math.floor(imgY);
+    if (pxCol >= 0 && pxCol < detCols && pxRow >= 0 && pxRow < detRows && frameBytes) {
+      const usesSummedDp = viRoiMode && viRoiMode !== "off" && summedDpBytes && summedDpBytes.byteLength > 0;
+      const sourceBytes = usesSummedDp ? summedDpBytes : frameBytes;
+      if (usesSummedDp) {
+        const bytes = new Uint8Array(sourceBytes.buffer, sourceBytes.byteOffset, sourceBytes.byteLength);
+        setCursorInfo({ row: pxRow, col: pxCol, value: bytes[pxRow * detCols + pxCol], panel: "DP" });
+      } else {
+        const raw = new Float32Array(sourceBytes.buffer, sourceBytes.byteOffset, sourceBytes.byteLength / 4);
+        setCursorInfo({ row: pxRow, col: pxCol, value: raw[pxRow * detCols + pxCol], panel: "DP" });
+      }
+    } else {
+      setCursorInfo(null);
+    }
+
     // Handle inner resize dragging (annular mode)
     if (isDraggingResizeInner) {
-      const dx = Math.abs(imgX - roiCenterX);
-      const dy = Math.abs(imgY - roiCenterY);
+      const dx = Math.abs(imgX - roiCenterCol);
+      const dy = Math.abs(imgY - roiCenterRow);
       const newRadius = Math.sqrt(dx ** 2 + dy ** 2);
       // Inner radius must be less than outer radius
       setRoiRadiusInner(Math.max(1, Math.min(roiRadius - 1, Math.round(newRadius))));
@@ -1784,8 +1627,8 @@ function Show4DSTEM() {
 
     // Handle outer resize dragging - use model state center, not local values
     if (isDraggingResize) {
-      const dx = Math.abs(imgX - roiCenterX);
-      const dy = Math.abs(imgY - roiCenterY);
+      const dx = Math.abs(imgX - roiCenterCol);
+      const dy = Math.abs(imgY - roiCenterRow);
       if (roiMode === "rect") {
         // For rectangle, update width and height independently
         setRoiWidth(Math.max(2, Math.round(dx * 2)));
@@ -1806,11 +1649,11 @@ function Show4DSTEM() {
       return;
     }
 
-    setLocalKx(imgX); setLocalKy(imgY);
-    // Use compound roi_center trait - single observer fires in Python
-    const newX = Math.round(Math.max(0, Math.min(detY - 1, imgX)));
-    const newY = Math.round(Math.max(0, Math.min(detX - 1, imgY)));
-    model.set("roi_center", [newX, newY]);
+    setLocalKCol(imgX); setLocalKRow(imgY);
+    // Use compound roi_center trait [row, col] - single observer fires in Python
+    const newCol = Math.round(Math.max(0, Math.min(detCols - 1, imgX)));
+    const newRow = Math.round(Math.max(0, Math.min(detRows - 1, imgY)));
+    model.set("roi_center", [newRow, newCol]);
     model.save_changes();
   };
 
@@ -1820,6 +1663,7 @@ function Show4DSTEM() {
   const handleDpMouseLeave = () => {
     setIsDraggingDP(false); setIsDraggingResize(false); setIsDraggingResizeInner(false);
     setIsHoveringResize(false); setIsHoveringResizeInner(false);
+    setCursorInfo(prev => prev?.panel === "DP" ? null : prev);
   };
   const handleDpDoubleClick = () => { setDpZoom(1); setDpPanX(0); setDpPanY(0); };
 
@@ -1842,21 +1686,21 @@ function Show4DSTEM() {
 
       // Otherwise, move ROI center to click position (same as DP)
       setIsDraggingViRoi(true);
-      setLocalViRoiCenterX(imgX);
-      setLocalViRoiCenterY(imgY);
-      setViRoiCenterX(Math.round(Math.max(0, Math.min(shapeX - 1, imgX))));
-      setViRoiCenterY(Math.round(Math.max(0, Math.min(shapeY - 1, imgY))));
+      setLocalViRoiCenterRow(imgX);
+      setLocalViRoiCenterCol(imgY);
+      setViRoiCenterRow(Math.round(Math.max(0, Math.min(shapeRows - 1, imgX))));
+      setViRoiCenterCol(Math.round(Math.max(0, Math.min(shapeCols - 1, imgY))));
       return;
     }
 
     // Regular position selection (when ROI is off)
     setIsDraggingVI(true);
-    setLocalPosX(imgX); setLocalPosY(imgY);
+    setLocalPosRow(imgX); setLocalPosCol(imgY);
     // Batch X and Y updates into a single sync
-    const newX = Math.round(Math.max(0, Math.min(shapeX - 1, imgX)));
-    const newY = Math.round(Math.max(0, Math.min(shapeY - 1, imgY)));
-    model.set("pos_x", newX);
-    model.set("pos_y", newY);
+    const newX = Math.round(Math.max(0, Math.min(shapeRows - 1, imgX)));
+    const newY = Math.round(Math.max(0, Math.min(shapeCols - 1, imgY)));
+    model.set("pos_row", newX);
+    model.set("pos_col", newY);
     model.save_changes();
   };
 
@@ -1869,10 +1713,21 @@ function Show4DSTEM() {
     const imgX = (screenY - viPanY) / viZoom;
     const imgY = (screenX - viPanX) / viZoom;
 
+    // Cursor readout: look up raw VI value at pixel position
+    // imgX = row, imgY = col (swapped coordinate convention)
+    const pxRow = Math.floor(imgX);
+    const pxCol = Math.floor(imgY);
+    if (pxRow >= 0 && pxRow < shapeRows && pxCol >= 0 && pxCol < shapeCols && rawVirtualImageRef.current) {
+      const raw = rawVirtualImageRef.current;
+      setCursorInfo({ row: pxRow, col: pxCol, value: raw[pxRow * shapeCols + pxCol], panel: "VI" });
+    } else {
+      setCursorInfo(prev => prev?.panel === "VI" ? null : prev);
+    }
+
     // Handle VI ROI resize dragging (same pattern as DP)
     if (isDraggingViRoiResize) {
-      const dx = Math.abs(imgX - localViRoiCenterX);
-      const dy = Math.abs(imgY - localViRoiCenterY);
+      const dx = Math.abs(imgX - localViRoiCenterRow);
+      const dy = Math.abs(imgY - localViRoiCenterCol);
       if (viRoiMode === "rect") {
         setViRoiWidth(Math.max(2, Math.round(dy * 2)));
         setViRoiHeight(Math.max(2, Math.round(dx * 2)));
@@ -1895,25 +1750,25 @@ function Show4DSTEM() {
 
     // Handle VI ROI center dragging (same as DP)
     if (isDraggingViRoi) {
-      setLocalViRoiCenterX(imgX);
-      setLocalViRoiCenterY(imgY);
+      setLocalViRoiCenterRow(imgX);
+      setLocalViRoiCenterCol(imgY);
       // Batch VI ROI center updates
-      const newViX = Math.round(Math.max(0, Math.min(shapeX - 1, imgX)));
-      const newViY = Math.round(Math.max(0, Math.min(shapeY - 1, imgY)));
-      model.set("vi_roi_center_x", newViX);
-      model.set("vi_roi_center_y", newViY);
+      const newViX = Math.round(Math.max(0, Math.min(shapeRows - 1, imgX)));
+      const newViY = Math.round(Math.max(0, Math.min(shapeCols - 1, imgY)));
+      model.set("vi_roi_center_row", newViX);
+      model.set("vi_roi_center_col", newViY);
       model.save_changes();
       return;
     }
 
     // Handle regular position dragging (when ROI is off)
     if (!isDraggingVI) return;
-    setLocalPosX(imgX); setLocalPosY(imgY);
+    setLocalPosRow(imgX); setLocalPosCol(imgY);
     // Batch position updates into a single sync
-    const newX = Math.round(Math.max(0, Math.min(shapeX - 1, imgX)));
-    const newY = Math.round(Math.max(0, Math.min(shapeY - 1, imgY)));
-    model.set("pos_x", newX);
-    model.set("pos_y", newY);
+    const newX = Math.round(Math.max(0, Math.min(shapeRows - 1, imgX)));
+    const newY = Math.round(Math.max(0, Math.min(shapeCols - 1, imgY)));
+    model.set("pos_row", newX);
+    model.set("pos_col", newY);
     model.save_changes();
   };
 
@@ -1927,6 +1782,7 @@ function Show4DSTEM() {
     setIsDraggingViRoi(false);
     setIsDraggingViRoiResize(false);
     setIsHoveringViRoiResize(false);
+    setCursorInfo(prev => prev?.panel === "VI" ? null : prev);
   };
   const handleViDoubleClick = () => { setViZoom(1); setViPanX(0); setViPanY(0); };
   const handleFftDoubleClick = () => { setFftZoom(1); setFftPanX(0); setFftPanY(0); };
@@ -1964,22 +1820,18 @@ function Show4DSTEM() {
     const metadata = {
       exported_at: new Date().toISOString(),
       type: "diffraction_pattern",
-      scan_position: { x: posX, y: posY },
-      scan_shape: { x: shapeX, y: shapeY },
-      detector_shape: { x: detX, y: detY },
-      roi: { mode: roiMode, center_x: roiCenterX, center_y: roiCenterY, radius_outer: roiRadius, radius_inner: roiRadiusInner },
+      scan_position: { row: posRow, col: posCol },
+      scan_shape: { rows: shapeRows, cols: shapeCols },
+      detector_shape: { rows: detRows, cols: detCols },
+      roi: { mode: roiMode, center_col: roiCenterCol, center_row: roiCenterRow, radius_outer: roiRadius, radius_inner: roiRadiusInner },
       display: { colormap: dpColormap, vmin_pct: dpVminPct, vmax_pct: dpVmaxPct, scale_mode: dpScaleMode },
-      calibration: { bf_radius: bfRadius, center_x: centerX, center_y: centerY, k_pixel_size: kPixelSize, k_calibrated: kCalibrated },
+      calibration: { bf_radius: bfRadius, center_col: centerCol, center_row: centerRow, k_pixel_size: kPixelSize, k_calibrated: kCalibrated },
     };
     zip.file("metadata.json", JSON.stringify(metadata, null, 2));
     const canvasToBlob = (canvas: HTMLCanvasElement): Promise<Blob> => new Promise((resolve) => canvas.toBlob((blob) => resolve(blob!), 'image/png'));
     if (dpCanvasRef.current) zip.file("diffraction_pattern.png", await canvasToBlob(dpCanvasRef.current));
     const zipBlob = await zip.generateAsync({ type: "blob" });
-    const link = document.createElement('a');
-    link.download = `dp_export_${timestamp}.zip`;
-    link.href = URL.createObjectURL(zipBlob);
-    link.click();
-    URL.revokeObjectURL(link.href);
+    downloadBlob(zipBlob, `dp_export_${timestamp}.zip`);
   };
 
   // Export VI handler
@@ -1988,12 +1840,12 @@ function Show4DSTEM() {
     const zip = new JSZip();
     const metadata = {
       exported_at: new Date().toISOString(),
-      scan_position: { x: posX, y: posY },
-      scan_shape: { x: shapeX, y: shapeY },
-      detector_shape: { x: detX, y: detY },
-      roi: { mode: roiMode, center_x: roiCenterX, center_y: roiCenterY, radius_outer: roiRadius, radius_inner: roiRadiusInner },
+      scan_position: { row: posRow, col: posCol },
+      scan_shape: { rows: shapeRows, cols: shapeCols },
+      detector_shape: { rows: detRows, cols: detCols },
+      roi: { mode: roiMode, center_col: roiCenterCol, center_row: roiCenterRow, radius_outer: roiRadius, radius_inner: roiRadiusInner },
       display: { dp_colormap: dpColormap, vi_colormap: viColormap, dp_scale_mode: dpScaleMode, vi_scale_mode: viScaleMode },
-      calibration: { bf_radius: bfRadius, center_x: centerX, center_y: centerY, pixel_size: pixelSize, k_pixel_size: kPixelSize },
+      calibration: { bf_radius: bfRadius, center_col: centerCol, center_row: centerRow, pixel_size: pixelSize, k_pixel_size: kPixelSize },
     };
     zip.file("metadata.json", JSON.stringify(metadata, null, 2));
     const canvasToBlob = (canvas: HTMLCanvasElement): Promise<Blob> => new Promise((resolve) => canvas.toBlob((blob) => resolve(blob!), 'image/png'));
@@ -2001,11 +1853,7 @@ function Show4DSTEM() {
     if (dpCanvasRef.current) zip.file("diffraction_pattern.png", await canvasToBlob(dpCanvasRef.current));
     if (fftCanvasRef.current) zip.file("fft.png", await canvasToBlob(fftCanvasRef.current));
     const zipBlob = await zip.generateAsync({ type: "blob" });
-    const link = document.createElement('a');
-    link.download = `4dstem_export_${timestamp}.zip`;
-    link.href = URL.createObjectURL(zipBlob);
-    link.click();
-    URL.revokeObjectURL(link.href);
+    downloadBlob(zipBlob, `4dstem_export_${timestamp}.zip`);
   };
 
 
@@ -2017,6 +1865,11 @@ function Show4DSTEM() {
     "& .MuiSelect-select": { py: 0.5 },
     "& .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.border },
     "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.accent },
+  };
+
+  const themedMenuProps = {
+    ...upwardMenuProps,
+    PaperProps: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` } },
   };
 
   return (
@@ -2033,21 +1886,21 @@ function Show4DSTEM() {
           {/* DP Header */}
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
             <Typography variant="caption" sx={{ ...typography.label }}>
-              DP at ({Math.round(localPosX)}, {Math.round(localPosY)})
-              <span style={{ color: "#0f0", marginLeft: SPACING.SM }}>k: ({Math.round(localKx)}, {Math.round(localKy)})</span>
-              <InfoTooltip text="Diffraction Pattern: 2D detector image I(kx,ky) at scan position (x,y). The ROI mask M(kx,ky) defines which pixels are integrated for the virtual image. Drag to move ROI center, scroll to zoom, double-click to reset." theme={themeInfo.theme} />
+              DP at ({Math.round(localPosRow)}, {Math.round(localPosCol)})
+              <span style={{ color: "#0f0", marginLeft: SPACING.SM }}>k: ({Math.round(localKRow)}, {Math.round(localKCol)})</span>
+              <InfoTooltip text="Diffraction Pattern: 2D detector image I(kx,ky) at scan position (row,col). The ROI mask M(kx,ky) defines which pixels are integrated for the virtual image. Drag to move ROI center, scroll to zoom, double-click to reset." theme={themeInfo.theme} />
             </Typography>
             <Stack direction="row" spacing={`${SPACING.SM}px`}>
-              <Button size="small" sx={compactButton} disabled={dpZoom === 1 && dpPanX === 0 && dpPanY === 0 && roiCenterX === centerX && roiCenterY === centerY} onClick={() => { setDpZoom(1); setDpPanX(0); setDpPanY(0); setRoiCenterX(centerX); setRoiCenterY(centerY); }}>Reset</Button>
+              <Button size="small" sx={compactButton} disabled={dpZoom === 1 && dpPanX === 0 && dpPanY === 0 && roiCenterCol === centerCol && roiCenterRow === centerRow} onClick={() => { setDpZoom(1); setDpPanX(0); setDpPanY(0); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }}>Reset</Button>
               <Button size="small" sx={compactButton} onClick={handleExportDP}>Export</Button>
             </Stack>
           </Stack>
 
           {/* DP Canvas */}
           <Box sx={{ ...container.imageBox, width: CANVAS_SIZE, height: CANVAS_SIZE }}>
-            <canvas ref={dpCanvasRef} width={detY} height={detX} style={{ position: "absolute", width: "100%", height: "100%", imageRendering: "pixelated" }} />
+            <canvas ref={dpCanvasRef} width={detCols} height={detRows} style={{ position: "absolute", width: "100%", height: "100%", imageRendering: "pixelated" }} />
             <canvas
-              ref={dpOverlayRef} width={detY} height={detX}
+              ref={dpOverlayRef} width={detCols} height={detRows}
               onMouseDown={handleDpMouseDown} onMouseMove={handleDpMouseMove}
               onMouseUp={handleDpMouseUp} onMouseLeave={handleDpMouseLeave}
               onWheel={createZoomHandler(setDpZoom, setDpPanX, setDpPanY, dpZoom, dpPanX, dpPanY, dpOverlayRef)}
@@ -2064,6 +1917,14 @@ function Show4DSTEM() {
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(dpStats[1])}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(dpStats[2])}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(dpStats[3])}</Box></Typography>
+              {cursorInfo && cursorInfo.panel === "DP" && (
+                <>
+                  <Box sx={{ borderLeft: `1px solid ${themeColors.border}`, height: 14 }} />
+                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted, fontFamily: "monospace" }}>
+                    ({cursorInfo.row}, {cursorInfo.col}) <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(cursorInfo.value)}</Box>
+                  </Typography>
+                </>
+              )}
             </Box>
           )}
 
@@ -2074,7 +1935,7 @@ function Show4DSTEM() {
               {/* Row 1: Detector + slider */}
               <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                 <Typography sx={{ ...typography.label, fontSize: 10 }}>Detector:</Typography>
-                <Select value={roiMode || "point"} onChange={(e) => setRoiMode(e.target.value)} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={upwardMenuProps}>
+                <Select value={roiMode || "point"} onChange={(e) => setRoiMode(e.target.value)} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
                   <MenuItem value="point">Point</MenuItem>
                   <MenuItem value="circle">Circle</MenuItem>
                   <MenuItem value="square">Square</MenuItem>
@@ -2095,7 +1956,7 @@ function Show4DSTEM() {
                         }
                       }}
                       min={1}
-                      max={Math.min(detX, detY) / 2}
+                      max={Math.min(detRows, detCols) / 2}
                       size="small"
                       sx={{
                         width: roiMode === "annular" ? 100 : 70,
@@ -2111,11 +1972,11 @@ function Show4DSTEM() {
               </Box>
               {/* Row 2: Presets + Color + Scale */}
               <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                <Typography component="span" onClick={() => { setRoiMode("circle"); setRoiRadius(bfRadius || 10); setRoiCenterX(centerX); setRoiCenterY(centerY); }} sx={{ color: "#4f4", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>BF</Typography>
-                <Typography component="span" onClick={() => { setRoiMode("annular"); setRoiRadiusInner((bfRadius || 10) * 0.5); setRoiRadius(bfRadius || 10); setRoiCenterX(centerX); setRoiCenterY(centerY); }} sx={{ color: "#4af", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>ABF</Typography>
-                <Typography component="span" onClick={() => { setRoiMode("annular"); setRoiRadiusInner(bfRadius || 10); setRoiRadius(Math.min((bfRadius || 10) * 3, Math.min(detX, detY) / 2 - 2)); setRoiCenterX(centerX); setRoiCenterY(centerY); }} sx={{ color: "#fa4", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>ADF</Typography>
+                <Typography component="span" onClick={() => { setRoiMode("circle"); setRoiRadius(bfRadius || 10); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }} sx={{ color: "#4f4", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>BF</Typography>
+                <Typography component="span" onClick={() => { setRoiMode("annular"); setRoiRadiusInner((bfRadius || 10) * 0.5); setRoiRadius(bfRadius || 10); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }} sx={{ color: "#4af", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>ABF</Typography>
+                <Typography component="span" onClick={() => { setRoiMode("annular"); setRoiRadiusInner(bfRadius || 10); setRoiRadius(Math.min((bfRadius || 10) * 3, Math.min(detRows, detCols) / 2 - 2)); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }} sx={{ color: "#fa4", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>ADF</Typography>
                 <Typography sx={{ ...typography.label, fontSize: 10 }}>Color:</Typography>
-                <Select value={dpColormap} onChange={(e) => setDpColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={upwardMenuProps}>
+                <Select value={dpColormap} onChange={(e) => setDpColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
                   <MenuItem value="inferno">Inferno</MenuItem>
                   <MenuItem value="viridis">Viridis</MenuItem>
                   <MenuItem value="plasma">Plasma</MenuItem>
@@ -2124,7 +1985,7 @@ function Show4DSTEM() {
                   <MenuItem value="gray">Gray</MenuItem>
                 </Select>
                 <Typography sx={{ ...typography.label, fontSize: 10 }}>Scale:</Typography>
-                <Select value={dpScaleMode} onChange={(e) => setDpScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={upwardMenuProps}>
+                <Select value={dpScaleMode} onChange={(e) => setDpScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
                   <MenuItem value="linear">Lin</MenuItem>
                   <MenuItem value="log">Log</MenuItem>
                   <MenuItem value="power">Pow</MenuItem>
@@ -2142,10 +2003,10 @@ function Show4DSTEM() {
         <Box sx={{ width: viCanvasWidth }}>
           {/* VI Header */}
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
-            <Typography variant="caption" sx={{ ...typography.label }}>Image<InfoTooltip text="Virtual image: Integrated intensity within detector ROI at each scan position. Computed as Σ(DP × mask) for each (x,y). Double-click to select position." theme={themeInfo.theme} /></Typography>
+            <Typography variant="caption" sx={{ ...typography.label }}>Image<InfoTooltip text="Virtual image: Integrated intensity within detector ROI at each scan position. Computed as Σ(DP × mask) for each (row,col). Double-click to select position." theme={themeInfo.theme} /></Typography>
             <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="center">
               <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: 10 }}>
-                {shapeX}×{shapeY} | {detX}×{detY}
+                {shapeRows}×{shapeCols} | {detRows}×{detCols}
               </Typography>
               <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT:</Typography>
               <Switch checked={showFft} onChange={(e) => setShowFft(e.target.checked)} size="small" sx={switchStyles.small} />
@@ -2156,9 +2017,9 @@ function Show4DSTEM() {
 
           {/* VI Canvas */}
           <Box sx={{ ...container.imageBox, width: viCanvasWidth, height: viCanvasHeight }}>
-            <canvas ref={virtualCanvasRef} width={shapeY} height={shapeX} style={{ position: "absolute", width: "100%", height: "100%", imageRendering: "pixelated" }} />
+            <canvas ref={virtualCanvasRef} width={shapeCols} height={shapeRows} style={{ position: "absolute", width: "100%", height: "100%", imageRendering: "pixelated" }} />
             <canvas
-              ref={virtualOverlayRef} width={shapeY} height={shapeX}
+              ref={virtualOverlayRef} width={shapeCols} height={shapeRows}
               onMouseDown={handleViMouseDown} onMouseMove={handleViMouseMove}
               onMouseUp={handleViMouseUp} onMouseLeave={handleViMouseLeave}
               onWheel={createZoomHandler(setViZoom, setViPanX, setViPanY, viZoom, viPanX, viPanY, virtualOverlayRef)}
@@ -2170,11 +2031,19 @@ function Show4DSTEM() {
 
           {/* VI Stats Bar */}
           {viStats && viStats.length === 4 && (
-            <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2 }}>
+            <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center" }}>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(viStats[0])}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(viStats[1])}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(viStats[2])}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(viStats[3])}</Box></Typography>
+              {cursorInfo && cursorInfo.panel === "VI" && (
+                <>
+                  <Box sx={{ borderLeft: `1px solid ${themeColors.border}`, height: 14 }} />
+                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted, fontFamily: "monospace" }}>
+                    ({cursorInfo.row}, {cursorInfo.col}) <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(cursorInfo.value)}</Box>
+                  </Typography>
+                </>
+              )}
             </Box>
           )}
 
@@ -2185,7 +2054,7 @@ function Show4DSTEM() {
               {/* Row 1: ROI selector */}
               <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                 <Typography sx={{ ...typography.label, fontSize: 10 }}>ROI:</Typography>
-                <Select value={viRoiMode || "off"} onChange={(e) => setViRoiMode(e.target.value)} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={upwardMenuProps}>
+                <Select value={viRoiMode || "off"} onChange={(e) => setViRoiMode(e.target.value)} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={themedMenuProps}>
                   <MenuItem value="off">Off</MenuItem>
                   <MenuItem value="circle">Circle</MenuItem>
                   <MenuItem value="square">Square</MenuItem>
@@ -2199,7 +2068,7 @@ function Show4DSTEM() {
                           value={viRoiRadius || 5}
                           onChange={(_, v) => setViRoiRadius(v as number)}
                           min={1}
-                          max={Math.min(shapeX, shapeY) / 2}
+                          max={Math.min(shapeRows, shapeCols) / 2}
                           size="small"
                           sx={{ width: 80, mx: 1 }}
                         />
@@ -2219,7 +2088,7 @@ function Show4DSTEM() {
               {/* Row 2: Color + Scale */}
               <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                 <Typography sx={{ ...typography.label, fontSize: 10 }}>Color:</Typography>
-                <Select value={viColormap} onChange={(e) => setViColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={upwardMenuProps}>
+                <Select value={viColormap} onChange={(e) => setViColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
                   <MenuItem value="inferno">Inferno</MenuItem>
                   <MenuItem value="viridis">Viridis</MenuItem>
                   <MenuItem value="plasma">Plasma</MenuItem>
@@ -2228,7 +2097,7 @@ function Show4DSTEM() {
                   <MenuItem value="gray">Gray</MenuItem>
                 </Select>
                 <Typography sx={{ ...typography.label, fontSize: 10 }}>Scale:</Typography>
-                <Select value={viScaleMode} onChange={(e) => setViScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={upwardMenuProps}>
+                <Select value={viScaleMode} onChange={(e) => setViScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
                   <MenuItem value="linear">Lin</MenuItem>
                   <MenuItem value="log">Log</MenuItem>
                   <MenuItem value="power">Pow</MenuItem>
@@ -2255,9 +2124,9 @@ function Show4DSTEM() {
 
             {/* FFT Canvas */}
             <Box sx={{ ...container.imageBox, width: viCanvasWidth, height: viCanvasHeight }}>
-              <canvas ref={fftCanvasRef} width={shapeY} height={shapeX} style={{ position: "absolute", width: "100%", height: "100%", imageRendering: "pixelated" }} />
+              <canvas ref={fftCanvasRef} width={shapeCols} height={shapeRows} style={{ position: "absolute", width: "100%", height: "100%", imageRendering: "pixelated" }} />
               <canvas
-                ref={fftOverlayRef} width={shapeY} height={shapeX}
+                ref={fftOverlayRef} width={shapeCols} height={shapeRows}
                 onMouseDown={handleFftMouseDown} onMouseMove={handleFftMouseMove}
                 onMouseUp={handleFftMouseUp} onMouseLeave={handleFftMouseLeave}
                 onWheel={createZoomHandler(setFftZoom, setFftPanX, setFftPanY, fftZoom, fftPanX, fftPanY, fftOverlayRef)}
@@ -2283,7 +2152,7 @@ function Show4DSTEM() {
                 {/* Row 1: Scale + Clip */}
                 <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                   <Typography sx={{ ...typography.label, fontSize: 10 }}>Scale:</Typography>
-                  <Select value={fftScaleMode} onChange={(e) => setFftScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={upwardMenuProps}>
+                  <Select value={fftScaleMode} onChange={(e) => setFftScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
                     <MenuItem value="linear">Lin</MenuItem>
                     <MenuItem value="log">Log</MenuItem>
                     <MenuItem value="power">Pow</MenuItem>
@@ -2294,7 +2163,7 @@ function Show4DSTEM() {
                 {/* Row 2: Color */}
                 <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                   <Typography sx={{ ...typography.label, fontSize: 10 }}>Color:</Typography>
-                  <Select value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={upwardMenuProps}>
+                  <Select value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
                     <MenuItem value="inferno">Inferno</MenuItem>
                     <MenuItem value="viridis">Viridis</MenuItem>
                     <MenuItem value="plasma">Plasma</MenuItem>

@@ -191,3 +191,46 @@ def test_show3dvolume_asymmetric():
     assert widget.slice_z == 2
     assert widget.slice_y == 50
     assert widget.slice_x == 5
+
+
+def test_show3dvolume_playback_defaults():
+    """Playback defaults match Show3D."""
+    data = np.random.rand(8, 8, 8).astype(np.float32)
+    widget = Show3DVolume(data)
+    assert widget.playing is False
+    assert widget.reverse is False
+    assert widget.boomerang is False
+    assert widget.fps == pytest.approx(5.0)
+    assert widget.loop is True
+    assert widget.play_axis == 0
+
+
+def test_show3dvolume_play_pause_stop():
+    """play/pause/stop methods work."""
+    data = np.random.rand(8, 8, 8).astype(np.float32)
+    widget = Show3DVolume(data)
+    widget.play()
+    assert widget.playing is True
+    widget.pause()
+    assert widget.playing is False
+    widget.slice_z = 5
+    widget.stop()
+    assert widget.playing is False
+    assert widget.slice_z == 0
+
+
+def test_show3dvolume_fps_parameter():
+    """fps constructor parameter is applied."""
+    data = np.random.rand(8, 8, 8).astype(np.float32)
+    widget = Show3DVolume(data, fps=15.0)
+    assert widget.fps == pytest.approx(15.0)
+
+
+def test_show3dvolume_play_axis():
+    """play_axis can be set."""
+    data = np.random.rand(8, 8, 8).astype(np.float32)
+    widget = Show3DVolume(data)
+    widget.play_axis = 2
+    assert widget.play_axis == 2
+    widget.play_axis = 3  # "All"
+    assert widget.play_axis == 3

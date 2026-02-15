@@ -70,6 +70,19 @@ class Show3DVolume(anywidget.AnyWidget):
     stats_min = traitlets.List(traitlets.Float()).tag(sync=True)
     stats_max = traitlets.List(traitlets.Float()).tag(sync=True)
     stats_std = traitlets.List(traitlets.Float()).tag(sync=True)
+    # Playback
+    playing = traitlets.Bool(False).tag(sync=True)
+    reverse = traitlets.Bool(False).tag(sync=True)
+    boomerang = traitlets.Bool(False).tag(sync=True)
+    fps = traitlets.Float(5.0).tag(sync=True)
+    loop = traitlets.Bool(True).tag(sync=True)
+    play_axis = traitlets.Int(0).tag(sync=True)  # 0=Z, 1=Y, 2=X, 3=All
+    # Export
+    _export_axis = traitlets.Int(0).tag(sync=True)  # 0=Z, 1=Y, 2=X
+    _gif_export_requested = traitlets.Bool(False).tag(sync=True)
+    _gif_data = traitlets.Bytes(b"").tag(sync=True)
+    _zip_export_requested = traitlets.Bool(False).tag(sync=True)
+    _zip_data = traitlets.Bytes(b"").tag(sync=True)
 
     def __init__(
         self,
@@ -84,12 +97,28 @@ class Show3DVolume(anywidget.AnyWidget):
         show_fft: bool = False,
         log_scale: bool = False,
         auto_contrast: bool = False,
+        fps: float = 5.0,
         dim_labels: Optional[list] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.fps = fps
         if dim_labels is not None:
             self.dim_labels = dim_labels
+
+        # Check if data is a Dataset3d and extract metadata
+        if hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling"):
+            if not title and data.name:
+                title = data.name
+            if pixel_size_angstrom == 0.0 and hasattr(data, "units"):
+                units = list(data.units)
+                sampling_val = float(data.sampling[-1])
+                if units[-1] in ("nm",):
+                    pixel_size_angstrom = sampling_val * 10  # nm → Å
+                elif units[-1] in ("Å", "angstrom", "A"):
+                    pixel_size_angstrom = sampling_val
+            data = data.array
+
         data = to_numpy(data)
         if data.ndim != 3:
             raise ValueError(f"Show3DVolume requires 3D data, got {data.ndim}D")
@@ -112,6 +141,8 @@ class Show3DVolume(anywidget.AnyWidget):
         self._compute_stats()
         self.volume_bytes = self._data.tobytes()
         self.observe(self._on_slice_change, names=["slice_x", "slice_y", "slice_z"])
+        self.observe(self._on_gif_export, names=["_gif_export_requested"])
+        self.observe(self._on_zip_export, names=["_zip_export_requested"])
 
     def _compute_stats(self):
         """Compute statistics for the 3 current slices."""
@@ -127,3 +158,89 @@ class Show3DVolume(anywidget.AnyWidget):
 
     def _on_slice_change(self, change):
         self._compute_stats()
+
+    def play(self):
+        self.playing = True
+
+    def pause(self):
+        self.playing = False
+
+    def stop(self):
+        self.playing = False
+        self.slice_z = 0
+        self.slice_y = 0
+        self.slice_x = 0
+
+    def _on_gif_export(self, change=None):
+        if not self._gif_export_requested:
+            return
+        self._gif_export_requested = False
+        self._generate_gif()
+
+    def _on_zip_export(self, change=None):
+        if not self._zip_export_requested:
+            return
+        self._zip_export_requested = False
+        self._generate_zip()
+
+    def _get_export_slices(self):
+        axis = self._export_axis
+        if axis == 0:
+            return [self._data[z, :, :] for z in range(self.nz)]
+        elif axis == 1:
+            return [self._data[:, y, :] for y in range(self.ny)]
+        else:
+            return [self._data[:, :, x] for x in range(self.nx)]
+
+    def _normalize_slice(self, slc: np.ndarray) -> np.ndarray:
+        if self.log_scale:
+            slc = np.log1p(np.maximum(slc, 0))
+        if self.auto_contrast:
+            vmin = float(np.percentile(slc, 2))
+            vmax = float(np.percentile(slc, 98))
+        else:
+            vmin = float(slc.min())
+            vmax = float(slc.max())
+        if vmax > vmin:
+            return np.clip((slc - vmin) / (vmax - vmin) * 255, 0, 255).astype(np.uint8)
+        return np.zeros(slc.shape, dtype=np.uint8)
+
+    def _generate_gif(self):
+        import io
+        from matplotlib import colormaps
+        from PIL import Image
+
+        slices = self._get_export_slices()
+        cmap_fn = colormaps.get_cmap(self.cmap)
+        pil_frames = []
+        for slc in slices:
+            normalized = self._normalize_slice(slc)
+            rgba = cmap_fn(normalized / 255.0)
+            rgb = (rgba[:, :, :3] * 255).astype(np.uint8)
+            pil_frames.append(Image.fromarray(rgb))
+        if not pil_frames:
+            return
+        buf = io.BytesIO()
+        duration_ms = int(1000 / max(0.1, self.fps))
+        pil_frames[0].save(buf, format="GIF", save_all=True, append_images=pil_frames[1:], duration=duration_ms, loop=0)
+        self._gif_data = buf.getvalue()
+
+    def _generate_zip(self):
+        import io
+        import zipfile
+        from matplotlib import colormaps
+        from PIL import Image
+
+        slices = self._get_export_slices()
+        cmap_fn = colormaps.get_cmap(self.cmap)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for i, slc in enumerate(slices):
+                normalized = self._normalize_slice(slc)
+                rgba = cmap_fn(normalized / 255.0)
+                rgb = (rgba[:, :, :3] * 255).astype(np.uint8)
+                img = Image.fromarray(rgb)
+                img_buf = io.BytesIO()
+                img.save(img_buf, format="PNG")
+                zf.writestr(f"slice_{i:04d}.png", img_buf.getvalue())
+        self._zip_data = buf.getvalue()
