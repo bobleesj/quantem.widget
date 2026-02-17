@@ -94,6 +94,37 @@ dataset = Dataset3d.from_array(stack, name="Focal Series", sampling=(1.0, 0.25, 
 Show3D(dataset)  # title and pixel_size extracted from dataset
 ```
 
+## Documentation with Interactive Widgets
+
+The Sphinx documentation renders anywidget-based widgets interactively in the browser — users can zoom, pan, change colormaps, toggle FFT, etc. directly on the docs page without a running kernel.
+
+### How it works
+
+1. Notebooks are executed locally in JupyterLab, which saves **widget state** (JS bundle + binary image data) into the notebook metadata
+2. nbsphinx renders the pre-saved widget state as interactive HTML using `@jupyter-widgets/html-manager`
+3. GitHub Actions deploys to GitHub Pages on every push to `main`
+
+### Adding or updating docs notebooks
+
+```bash
+# 1. Run the notebook in JupyterLab (widget state is saved on File > Save)
+jupyter lab docs/examples/show2d/show2d_simple.ipynb
+
+# 2. Verify widget state is embedded
+python -c "import json; nb=json.load(open('docs/examples/show2d/show2d_simple.ipynb')); print('Widget state:', bool(nb.get('metadata',{}).get('widgets',{})))"
+
+# 3. Commit the notebook (with widget state)
+git add docs/examples/show2d/show2d_simple.ipynb
+```
+
+Docs example notebooks in `docs/examples/` can be either real files with saved widget state, or symlinks to `notebooks/` (which must also have widget state saved).
+
+### Limitations
+
+- **JS-only interactivity works**: zoom, pan, colormap, log scale, FFT, auto-contrast, histogram
+- **Python features don't work**: frame navigation (Show3D), export (GIF/ZIP), `set_image()`, trait observers
+- Each widget embeds its full JS bundle (~600 KB) + image data, so pages can be several MB
+
 ## Publishing
 
 Push a tag to publish to TestPyPI via GitHub Actions:

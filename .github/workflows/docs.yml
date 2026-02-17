@@ -24,14 +24,21 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Install pandoc
         run: sudo apt-get install -y pandoc
 
+      - name: Build JS
+        run: npm install && npm run build
+
       - name: Install dependencies
         run: |
+          pip install hatchling hatch-jupyter-builder
           pip install sphinx pydata-sphinx-theme numpydoc nbsphinx sphinx-copybutton sphinx-design myst-parser
-          pip install anywidget numpy traitlets quantem
-          pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install anywidget numpy traitlets
           pip install -e . --no-build-isolation
 
       - name: Build docs

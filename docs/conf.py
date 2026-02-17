@@ -57,7 +57,7 @@ napoleon_use_rtype = True
 numpydoc_show_class_members = False
 numpydoc_class_members_toctree = False
 
-nbsphinx_execute = "auto"
+nbsphinx_execute = "never"
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
