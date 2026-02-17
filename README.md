@@ -125,23 +125,39 @@ Docs example notebooks in `docs/examples/` can be either real files with saved w
 - **Python features don't work**: frame navigation (Show3D), export (GIF/ZIP), `set_image()`, trait observers
 - Each widget embeds its full JS bundle (~600 KB) + image data, so pages can be several MB
 
-## Publishing
+## CI/CD
 
-Push a tag to publish to TestPyPI via GitHub Actions:
+Two GitHub Actions workflows automate publishing and documentation:
+
+### Docs deployment (`.github/workflows/docs.yml`)
+
+Deploys Sphinx documentation to GitHub Pages on every push to `main`.
+
+- **Trigger**: push to `main` branch (or manual `workflow_dispatch`)
+- **What it does**: installs Node.js + Python deps, runs `npm install && pip install .` (hatch-jupyter-builder builds JS automatically), then `sphinx-build`
+- **Prerequisite**: enable GitHub Pages in repo Settings → Pages → Source: **GitHub Actions**
+- **URL**: https://bobleesj.github.io/quantem.widget/
+- Notebooks are rendered with `nbsphinx_execute = "never"` — pre-saved outputs (including widget state) are used as-is, no execution on CI
+
+### TestPyPI publishing (`.github/workflows/publish.yml`)
+
+Publishes to TestPyPI when a version tag is pushed.
 
 ```bash
-git tag v0.0.1
-git push origin v0.0.1
+# 1. Bump version in pyproject.toml
+# 2. Commit, tag, and push
+git tag v0.0.5
+git push origin main && git push origin v0.0.5
 ```
 
-GitHub Actions automatically compiles the React/TypeScript, builds the Python wheel, and uploads to TestPyPI.
+GitHub Actions compiles React/TypeScript, builds the Python wheel, and uploads to TestPyPI. Note: TestPyPI does not allow re-uploading the same version — always bump the version before tagging.
 
 ### Verify TestPyPI Release
 
 After CI finishes, verify the published package in a clean environment:
 
 ```bash
-./scripts/verify_testpypi.sh 0.0.3
+./scripts/verify_testpypi.sh 0.0.5
 ```
 
 This creates a fresh conda env, installs from TestPyPI, verifies all widget imports and JS bundles, then opens JupyterLab with a test notebook for visual inspection. When done, press Ctrl+C and clean up:
