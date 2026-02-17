@@ -31,15 +31,11 @@ jobs:
       - name: Install pandoc
         run: sudo apt-get install -y pandoc
 
-      - name: Build JS
-        run: npm install && npm run build
-
       - name: Install dependencies
         run: |
-          pip install hatchling hatch-jupyter-builder
           pip install sphinx pydata-sphinx-theme numpydoc nbsphinx sphinx-copybutton sphinx-design myst-parser
           pip install anywidget numpy traitlets
-          pip install -e . --no-build-isolation
+          npm install && pip install .
 
       - name: Build docs
         run: sphinx-build -b html docs docs/_build/html
