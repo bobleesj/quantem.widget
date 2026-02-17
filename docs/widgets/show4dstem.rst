@@ -49,6 +49,20 @@ Methods
    w.pause()
    w.stop()
 
+State Persistence
+-----------------
+
+.. code-block:: python
+
+   w = Show4DSTEM(data, log_scale=True, center=(32, 32), bf_radius=9)
+
+   w.summary()          # Print human-readable state
+   w.state_dict()       # Get all settings as a dict
+   w.save("state.json") # Save to JSON file
+
+   # Restore from file or dict
+   w2 = Show4DSTEM(data, state="state.json")
+
 Examples
 --------
 

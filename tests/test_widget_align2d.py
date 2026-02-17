@@ -314,3 +314,101 @@ def test_align2d_reset_includes_rotation():
     assert widget.dx == pytest.approx(0.0)
     assert widget.dy == pytest.approx(0.0)
     assert widget.rotation == pytest.approx(0.0)
+
+
+# === Histogram source ===
+
+def test_align2d_hist_source_default():
+    a = np.random.rand(16, 16).astype(np.float32)
+    b = np.random.rand(16, 16).astype(np.float32)
+    widget = Align2D(a, b, auto_align=False)
+    assert widget.hist_source == "a"
+
+
+def test_align2d_hist_source_constructor():
+    a = np.random.rand(16, 16).astype(np.float32)
+    b = np.random.rand(16, 16).astype(np.float32)
+    widget = Align2D(a, b, hist_source="b", auto_align=False)
+    assert widget.hist_source == "b"
+
+
+def test_align2d_hist_source_mutable():
+    a = np.random.rand(16, 16).astype(np.float32)
+    b = np.random.rand(16, 16).astype(np.float32)
+    widget = Align2D(a, b, auto_align=False)
+    widget.hist_source = "b"
+    assert widget.hist_source == "b"
+
+
+# ── State Protocol ────────────────────────────────────────────────────────
+
+
+def test_align2d_state_dict_roundtrip():
+    a = np.random.rand(32, 32).astype(np.float32)
+    b = np.random.rand(32, 32).astype(np.float32)
+    w = Align2D(a, b, cmap="viridis", title="Aligned", opacity=0.7,
+                rotation=5.0, pixel_size=0.5, auto_align=False)
+    w.dx = 3.5
+    w.dy = -2.1
+    sd = w.state_dict()
+    w2 = Align2D(a, b, auto_align=False, state=sd)
+    assert w2.cmap == "viridis"
+    assert w2.title == "Aligned"
+    assert w2.opacity == pytest.approx(0.7)
+    assert w2.rotation == pytest.approx(5.0)
+    assert w2.dx == pytest.approx(3.5)
+    assert w2.dy == pytest.approx(-2.1)
+    assert w2.pixel_size == pytest.approx(0.5)
+
+
+def test_align2d_save_load_file(tmp_path):
+    import json
+    a = np.random.rand(16, 16).astype(np.float32)
+    b = np.random.rand(16, 16).astype(np.float32)
+    w = Align2D(a, b, cmap="plasma", title="Saved Align", auto_align=False)
+    path = tmp_path / "align_state.json"
+    w.save(str(path))
+    assert path.exists()
+    saved = json.loads(path.read_text())
+    assert saved["cmap"] == "plasma"
+    w2 = Align2D(a, b, auto_align=False, state=str(path))
+    assert w2.cmap == "plasma"
+    assert w2.title == "Saved Align"
+
+
+def test_align2d_summary(capsys):
+    a = np.random.rand(32, 32).astype(np.float32)
+    b = np.random.rand(32, 32).astype(np.float32)
+    w = Align2D(a, b, title="My Alignment", auto_align=False)
+    w.summary()
+    out = capsys.readouterr().out
+    assert "My Alignment" in out
+    assert "32×32" in out
+    assert "dx=" in out
+    assert "dy=" in out
+
+
+def test_align2d_repr():
+    a = np.random.rand(32, 32).astype(np.float32)
+    b = np.random.rand(32, 32).astype(np.float32)
+    w = Align2D(a, b, auto_align=False)
+    r = repr(w)
+    assert "Align2D" in r
+    assert "32×32" in r
+    assert "dx=" in r
+    assert "dy=" in r
+
+
+def test_align2d_set_images():
+    a = np.random.rand(32, 32).astype(np.float32)
+    b = np.random.rand(32, 32).astype(np.float32)
+    widget = Align2D(a, b, cmap="viridis", auto_align=False)
+    assert widget.height == 32
+
+    new_a = np.random.rand(64, 48).astype(np.float32)
+    new_b = np.random.rand(64, 48).astype(np.float32)
+    widget.set_images(new_a, new_b, auto_align=False)
+    assert widget.height == 64
+    assert widget.width == 48
+    assert widget.cmap == "viridis"
+    assert len(widget.image_a_bytes) == 64 * 48 * 4

@@ -356,3 +356,180 @@ def test_show4dstem_center_explicit():
     assert widget.center_row == 5.0
     assert widget.center_col == 6.0
     assert widget.bf_radius == 3.0
+
+
+# ── State Protocol ────────────────────────────────────────────────────────
+
+
+def test_show4dstem_state_dict_roundtrip():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data, log_scale=True, center=(5.0, 6.0), bf_radius=3.0)
+    sd = w.state_dict()
+    assert sd["log_scale"] is True
+    assert sd["center_row"] == 5.0
+    assert sd["center_col"] == 6.0
+    assert sd["bf_radius"] == 3.0
+    w2 = Show4DSTEM(data, state=sd)
+    assert w2.log_scale is True
+    assert w2.bf_radius == 3.0
+
+
+def test_show4dstem_save_load_file(tmp_path):
+    import json
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data, log_scale=True)
+    path = tmp_path / "stem_state.json"
+    w.save(str(path))
+    assert path.exists()
+    saved = json.loads(path.read_text())
+    assert saved["log_scale"] is True
+    w2 = Show4DSTEM(data, state=str(path))
+    assert w2.log_scale is True
+
+
+def test_show4dstem_summary(capsys):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data, pixel_size=2.39, k_pixel_size=0.46)
+    w.summary()
+    out = capsys.readouterr().out
+    assert "Show4DSTEM" in out
+    assert "4×4" in out
+    assert "16×16" in out
+    assert "2.39" in out
+
+
+def test_show4dstem_set_image():
+    data = np.random.rand(4, 4, 32, 32).astype(np.float32)
+    widget = Show4DSTEM(data)
+    assert widget.shape_rows == 4
+
+    new_data = np.random.rand(8, 8, 64, 64).astype(np.float32)
+    widget.set_image(new_data)
+    assert widget.shape_rows == 8
+    assert widget.shape_cols == 8
+    assert widget.det_rows == 64
+    assert widget.det_cols == 64
+
+
+# ── Line Profile ─────────────────────────────────────────────────────────
+
+
+def test_show4dstem_profile_defaults():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    assert w.profile_line == []
+    assert w.profile_width == 1
+    assert w.profile == []
+    assert w.profile_values is None
+    assert w.profile_distance == 0.0
+
+
+def test_show4dstem_set_profile():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    result = w.set_profile(0, 0, 15, 15)
+    assert result is w
+    assert len(w.profile_line) == 2
+    assert w.profile_line[0] == {"row": 0.0, "col": 0.0}
+    assert w.profile_line[1] == {"row": 15.0, "col": 15.0}
+
+
+def test_show4dstem_clear_profile():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    w.set_profile(0, 0, 15, 15)
+    assert len(w.profile_line) == 2
+    result = w.clear_profile()
+    assert result is w
+    assert w.profile_line == []
+
+
+def test_show4dstem_profile_property():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    w.set_profile(2.0, 3.0, 12.0, 8.0)
+    pts = w.profile
+    assert len(pts) == 2
+    assert pts[0] == (2.0, 3.0)
+    assert pts[1] == (12.0, 8.0)
+
+
+def test_show4dstem_profile_values():
+    data = np.ones((4, 4, 16, 16), dtype=np.float32) * 3.0
+    w = Show4DSTEM(data)
+    w.set_profile(0, 0, 15, 0)
+    vals = w.profile_values
+    assert vals is not None
+    assert len(vals) >= 2
+    assert np.allclose(vals, 3.0, atol=0.01)
+
+
+def test_show4dstem_profile_distance_calibrated():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data, k_pixel_size=0.5)
+    w.set_profile(0, 0, 3, 4)
+    # pixel distance = 5, k-calibrated = 5 * 0.5 = 2.5
+    assert abs(w.profile_distance - 2.5) < 0.01
+
+
+def test_show4dstem_profile_distance_uncalibrated():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    w.set_profile(0, 0, 3, 4)
+    # No k_pixel_size calibration → pixel distance = 5
+    assert abs(w.profile_distance - 5.0) < 0.01
+
+
+def test_show4dstem_profile_in_state_dict():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    w.set_profile(1, 2, 10, 12)
+    w.profile_width = 5
+    sd = w.state_dict()
+    assert "profile_line" in sd
+    assert "profile_width" in sd
+    assert sd["profile_width"] == 5
+    assert len(sd["profile_line"]) == 2
+
+
+def test_show4dstem_profile_in_summary(capsys):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    w.set_profile(0, 0, 15, 15)
+    w.summary()
+    out = capsys.readouterr().out
+    assert "Profile:" in out
+
+
+# ── GIF Export ──────────────────────────────────────────────────────────────
+
+def test_show4dstem_gif_export_defaults():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    assert w._gif_export_requested is False
+    assert w._gif_data == b""
+
+
+def test_show4dstem_gif_generation_with_path():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    w.set_path([(0, 0), (1, 1), (2, 2)], autoplay=False)
+    w._generate_gif()
+    assert len(w._gif_data) > 0
+    assert w._gif_data[:3] == b"GIF"
+
+
+def test_show4dstem_gif_generation_no_path():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    w._generate_gif()
+    assert w._gif_data == b""
+
+
+def test_show4dstem_normalize_frame():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    frame = np.array([[0.0, 0.5], [1.0, 0.25]], dtype=np.float32)
+    result = w._normalize_frame(frame)
+    assert result.dtype == np.uint8
+    assert result.shape == (2, 2)

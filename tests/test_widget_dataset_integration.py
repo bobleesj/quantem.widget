@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from quantem.core.datastructures import Dataset2d, Dataset3d, Dataset4d, Dataset4dstem
-from quantem.widget import Align2D, Clicker, Show2D, Show3D, Show3DVolume, Show4D, Show4DSTEM
+from quantem.widget import Align2D, Edit2D, Mark2D, Show2D, Show3D, Show3DVolume, Show4D, Show4DSTEM, ShowComplex2D
 
 
 # =========================================================================
@@ -282,18 +282,18 @@ def test_show4d_dataset4d_explicit_overrides():
 
 
 # =========================================================================
-# Clicker + Dataset2d
+# Mark2D + Dataset2d
 # =========================================================================
 
 
-def test_clicker_dataset2d_accepts():
+def test_mark2d_dataset2d_accepts():
     ds = Dataset2d.from_array(
         array=np.random.rand(32, 32).astype(np.float32),
         name="test",
         sampling=(0.5, 0.5),
         units=("Å", "Å"),
     )
-    w = Clicker(ds)
+    w = Mark2D(ds)
     assert w.n_images == 1
     assert w.height == 32
     assert w.width == 32
@@ -370,3 +370,85 @@ def test_align2d_dataset2d_explicit_overrides():
     )
     w = Align2D(ds_a, ds_b, pixel_size=5.0, auto_align=False)
     assert w.pixel_size == pytest.approx(5.0)
+
+
+# ── Edit2D + Dataset2d ──────────────────────────────────────────────────────
+
+
+class MockDataset2dForEdit2D:
+    """Duck-typed Dataset2d for Edit2D tests."""
+    def __init__(self, array, name="", sampling=(1.0, 1.0), units=("Å", "Å")):
+        self.array = array
+        self.name = name
+        self.sampling = sampling
+        self.units = units
+
+
+def test_edit2d_dataset_title():
+    arr = np.random.rand(32, 32).astype(np.float32)
+    ds = MockDataset2dForEdit2D(arr, name="HAADF Crop")
+    widget = Edit2D(ds)
+    assert widget.title == "HAADF Crop"
+
+
+def test_edit2d_dataset_pixel_size():
+    arr = np.random.rand(32, 32).astype(np.float32)
+    ds = MockDataset2dForEdit2D(arr, name="Test", sampling=(2.5, 2.5), units=("Å", "Å"))
+    widget = Edit2D(ds)
+    assert widget.pixel_size_angstrom == pytest.approx(2.5)
+
+
+def test_edit2d_dataset_nm_conversion():
+    arr = np.random.rand(32, 32).astype(np.float32)
+    ds = MockDataset2dForEdit2D(arr, name="Test", sampling=(0.25, 0.25), units=("nm", "nm"))
+    widget = Edit2D(ds)
+    assert widget.pixel_size_angstrom == pytest.approx(2.5)  # 0.25 nm = 2.5 Å
+
+
+def test_edit2d_dataset_explicit_override():
+    arr = np.random.rand(32, 32).astype(np.float32)
+    ds = MockDataset2dForEdit2D(arr, name="Auto Title", sampling=(2.0, 2.0), units=("Å", "Å"))
+    widget = Edit2D(ds, title="My Title", pixel_size_angstrom=5.0)
+    assert widget.title == "My Title"
+    assert widget.pixel_size_angstrom == pytest.approx(5.0)
+
+
+# ── ShowComplex2D + Dataset2d ───────────────────────────────────────────────
+
+
+class MockDataset2dForShowComplex2D:
+    """Duck-typed Dataset2d for ShowComplex2D tests (complex data)."""
+    def __init__(self, array, name="", sampling=(1.0, 1.0), units=("Å", "Å")):
+        self.array = array
+        self.name = name
+        self.sampling = sampling
+        self.units = units
+
+
+def test_showcomplex2d_dataset_title():
+    arr = (np.random.rand(32, 32) + 1j * np.random.rand(32, 32)).astype(np.complex64)
+    ds = MockDataset2dForShowComplex2D(arr, name="Exit Wave")
+    widget = ShowComplex2D(ds)
+    assert widget.title == "Exit Wave"
+
+
+def test_showcomplex2d_dataset_pixel_size():
+    arr = (np.random.rand(32, 32) + 1j * np.random.rand(32, 32)).astype(np.complex64)
+    ds = MockDataset2dForShowComplex2D(arr, name="Test", sampling=(1.5, 1.5), units=("Å", "Å"))
+    widget = ShowComplex2D(ds)
+    assert widget.pixel_size_angstrom == pytest.approx(1.5)
+
+
+def test_showcomplex2d_dataset_nm_conversion():
+    arr = (np.random.rand(32, 32) + 1j * np.random.rand(32, 32)).astype(np.complex64)
+    ds = MockDataset2dForShowComplex2D(arr, name="Test", sampling=(0.15, 0.15), units=("nm", "nm"))
+    widget = ShowComplex2D(ds)
+    assert widget.pixel_size_angstrom == pytest.approx(1.5)  # 0.15 nm = 1.5 Å
+
+
+def test_showcomplex2d_dataset_explicit_override():
+    arr = (np.random.rand(32, 32) + 1j * np.random.rand(32, 32)).astype(np.complex64)
+    ds = MockDataset2dForShowComplex2D(arr, name="Auto Title", sampling=(2.0, 2.0), units=("Å", "Å"))
+    widget = ShowComplex2D(ds, title="My Title", pixel_size_angstrom=3.0)
+    assert widget.title == "My Title"
+    assert widget.pixel_size_angstrom == pytest.approx(3.0)

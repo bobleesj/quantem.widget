@@ -1,11 +1,14 @@
-/** Find min/max range of a Float32Array. */
+/** Find min/max range of a Float32Array, filtering out NaN and Infinity. */
 export function findDataRange(data: Float32Array): { min: number; max: number } {
   let min = Infinity, max = -Infinity;
   for (let i = 0; i < data.length; i++) {
     const v = data[i];
+    if (!isFinite(v)) continue;
     if (v < min) min = v;
     if (v > max) max = v;
   }
+  // If no finite values found, return zeros
+  if (min === Infinity) return { min: 0, max: 0 };
   return { min, max };
 }
 
@@ -70,6 +73,7 @@ export function percentileClip(
 
 /** Compute mean, min, max, and standard deviation of a Float32Array. */
 export function computeStats(data: Float32Array): { mean: number; min: number; max: number; std: number } {
+  if (data.length === 0) return { mean: 0, min: 0, max: 0, std: 0 };
   let sum = 0, min = Infinity, max = -Infinity;
   for (let i = 0; i < data.length; i++) {
     const v = data[i];

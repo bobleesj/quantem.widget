@@ -19,9 +19,11 @@ export function extractFloat32(dataView: DataView | ArrayBuffer | Uint8Array): F
 export function downloadBlob(blob: Blob, filename: string): void {
   const link = document.createElement("a");
   link.download = filename;
-  link.href = URL.createObjectURL(blob);
+  const url = URL.createObjectURL(blob);
+  link.href = url;
   link.click();
-  URL.revokeObjectURL(link.href);
+  // Defer revocation to ensure browser has time to start the download
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 /** Download a DataView as a file (e.g. GIF/ZIP from Python). */

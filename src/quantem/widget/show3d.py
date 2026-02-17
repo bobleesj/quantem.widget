@@ -5,6 +5,7 @@ For viewing a stack of 2D images (e.g., defocus sweep, time series, z-stack, mov
 Includes playback controls, statistics, ROI selection, FFT, and more.
 """
 
+import json
 import pathlib
 from enum import Enum
 
@@ -101,6 +102,7 @@ class Show3D(anywidget.AnyWidget):
     labels = traitlets.List(traitlets.Unicode()).tag(sync=True)
     title = traitlets.Unicode("").tag(sync=True)
     cmap = traitlets.Unicode("magma").tag(sync=True)
+    dim_label = traitlets.Unicode("Frame").tag(sync=True)
 
     # =========================================================================
     # Playback Controls
@@ -113,6 +115,7 @@ class Show3D(anywidget.AnyWidget):
     loop_start = traitlets.Int(0).tag(sync=True)  # Start frame for loop range
     loop_end = traitlets.Int(-1).tag(sync=True)  # End frame for loop (-1 = last)
     bookmarked_frames = traitlets.List(traitlets.Int()).tag(sync=True)
+    playback_path = traitlets.List(traitlets.Int()).tag(sync=True)
 
     # =========================================================================
     # Statistics Panel
@@ -150,13 +153,18 @@ class Show3D(anywidget.AnyWidget):
     # ROI Selection
     # =========================================================================
     roi_active = traitlets.Bool(False).tag(sync=True)
-    roi_shape = traitlets.Unicode("circle").tag(sync=True)  # circle, square, rectangle
+    roi_shape = traitlets.Unicode("circle").tag(sync=True)  # circle, square, rectangle, annular
     roi_row = traitlets.Int(0).tag(sync=True)
     roi_col = traitlets.Int(0).tag(sync=True)
     roi_radius = traitlets.Int(10).tag(sync=True)  # For circle/square: radius or half-size
+    roi_radius_inner = traitlets.Int(5).tag(sync=True)  # For annular: inner radius
     roi_width = traitlets.Int(20).tag(sync=True)  # For rectangle
     roi_height = traitlets.Int(20).tag(sync=True)  # For rectangle
     roi_mean = traitlets.Float(0.0).tag(sync=True)
+    roi_min = traitlets.Float(0.0).tag(sync=True)
+    roi_max = traitlets.Float(0.0).tag(sync=True)
+    roi_std = traitlets.Float(0.0).tag(sync=True)
+    roi_plot_data = traitlets.Bytes(b"").tag(sync=True)
 
     # =========================================================================
     # Sizing
@@ -167,6 +175,13 @@ class Show3D(anywidget.AnyWidget):
     # Analysis Panels (FFT + Histogram shown together)
     # =========================================================================
     show_fft = traitlets.Bool(False).tag(sync=True)
+    show_playback = traitlets.Bool(False).tag(sync=True)
+
+    # =========================================================================
+    # Line Profile
+    # =========================================================================
+    profile_line = traitlets.List(traitlets.Dict()).tag(sync=True)
+    profile_width = traitlets.Int(1).tag(sync=True)
 
     # =========================================================================
     # Export (GIF / ZIP of PNGs)
@@ -201,9 +216,12 @@ class Show3D(anywidget.AnyWidget):
         timestamps: list[float] | None = None,
         timestamp_unit: str = "s",
         show_fft: bool = False,
+        show_playback: bool = False,
         show_stats: bool = True,
         image_width_px: int = 0,
         buffer_size: int = 64,
+        dim_label: str = "Frame",
+        state=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -275,7 +293,9 @@ class Show3D(anywidget.AnyWidget):
         else:
             self.timestamps = []
         self.timestamp_unit = timestamp_unit
+        self.dim_label = dim_label
         self.show_fft = show_fft
+        self.show_playback = show_playback
         self.show_stats = show_stats
         self.image_width_px = image_width_px
         frame_bytes = self.height * self.width * 4  # float32
@@ -295,6 +315,7 @@ class Show3D(anywidget.AnyWidget):
                 "roi_row",
                 "roi_col",
                 "roi_radius",
+                "roi_radius_inner",
                 "roi_active",
                 "roi_shape",
                 "roi_width",
@@ -308,6 +329,110 @@ class Show3D(anywidget.AnyWidget):
 
         # Initial update
         self._update_all()
+
+        if state is not None:
+            if isinstance(state, (str, pathlib.Path)):
+                state = json.loads(pathlib.Path(state).read_text())
+            self.load_state_dict(state)
+
+    def set_image(self, data, labels=None):
+        """Replace the stack data. Preserves all display settings."""
+        if hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling"):
+            data = data.array
+        data = to_numpy(data)
+        if data.ndim != 3:
+            raise ValueError(f"Expected 3D array, got {data.ndim}D")
+        self._data = data.astype(np.float32)
+        self.n_slices = int(data.shape[0])
+        self.height = int(data.shape[1])
+        self.width = int(data.shape[2])
+        self.data_min = float(self._data.min())
+        self.data_max = float(self._data.max())
+        self._vmin = self._vmin_user if self._vmin_user is not None else self.data_min
+        self._vmax = self._vmax_user if self._vmax_user is not None else self.data_max
+        if labels is not None:
+            self.labels = list(labels)
+        else:
+            self.labels = [str(i) for i in range(self.n_slices)]
+        self.slice_idx = min(self.slice_idx, self.n_slices - 1)
+        self._buffer_size = min(self._buffer_size, self.n_slices)
+        self._update_all()
+
+    def __repr__(self) -> str:
+        return f"Show3D({self.n_slices}×{self.height}×{self.width}, frame={self.slice_idx}, cmap={self.cmap})"
+
+    def state_dict(self):
+        return {
+            "title": self.title,
+            "cmap": self.cmap,
+            "log_scale": self.log_scale,
+            "auto_contrast": self.auto_contrast,
+            "percentile_low": self.percentile_low,
+            "percentile_high": self.percentile_high,
+            "show_stats": self.show_stats,
+            "show_fft": self.show_fft,
+            "show_playback": self.show_playback,
+            "pixel_size": self.pixel_size,
+            "scale_bar_visible": self.scale_bar_visible,
+            "image_width_px": self.image_width_px,
+            "fps": self.fps,
+            "loop": self.loop,
+            "reverse": self.reverse,
+            "boomerang": self.boomerang,
+            "loop_start": self.loop_start,
+            "loop_end": self.loop_end,
+            "bookmarked_frames": self.bookmarked_frames,
+            "playback_path": self.playback_path,
+            "roi_active": self.roi_active,
+            "roi_shape": self.roi_shape,
+            "roi_row": self.roi_row,
+            "roi_col": self.roi_col,
+            "roi_radius": self.roi_radius,
+            "roi_radius_inner": self.roi_radius_inner,
+            "roi_width": self.roi_width,
+            "roi_height": self.roi_height,
+            "profile_line": self.profile_line,
+            "profile_width": self.profile_width,
+            "dim_label": self.dim_label,
+            "timestamp_unit": self.timestamp_unit,
+        }
+
+    def save(self, path: str):
+        pathlib.Path(path).write_text(json.dumps(self.state_dict(), indent=2))
+
+    def load_state_dict(self, state):
+        for key, val in state.items():
+            if hasattr(self, key):
+                setattr(self, key, val)
+
+    def summary(self):
+        lines = [self.title or "Show3D", "═" * 32]
+        lines.append(f"Stack:    {self.n_slices}×{self.height}×{self.width}")
+        if self.pixel_size > 0:
+            lines[-1] += f" ({self.pixel_size:.2f} nm/px)"
+        lines.append(f"Frame:    {self.slice_idx}/{self.n_slices - 1}")
+        if self.labels and self.slice_idx < len(self.labels):
+            lines[-1] += f" [{self.labels[self.slice_idx]}]"
+        if hasattr(self, "_data") and self._data is not None:
+            arr = self._data
+            lines.append(f"Data:     min={float(arr.min()):.4g}  max={float(arr.max()):.4g}  mean={float(arr.mean()):.4g}")
+        cmap = self.cmap
+        scale = "log" if self.log_scale else "linear"
+        contrast = "auto contrast" if self.auto_contrast else "manual contrast"
+        display = f"{cmap} | {contrast} | {scale}"
+        if self.show_fft:
+            display += " | FFT"
+        lines.append(f"Display:  {display}")
+        lines.append(f"Playback: {self.fps} fps | loop={'on' if self.loop else 'off'} | reverse={'on' if self.reverse else 'off'} | boomerang={'on' if self.boomerang else 'off'}")
+        if self.loop_start > 0 or self.loop_end >= 0:
+            end = self.loop_end if self.loop_end >= 0 else self.n_slices - 1
+            lines.append(f"Range:    {self.loop_start}–{end}")
+        if self.roi_active:
+            lines.append(f"ROI:      {self.roi_shape} at ({self.roi_row}, {self.roi_col}) r={self.roi_radius}")
+        if self.profile_line:
+            p0, p1 = self.profile_line[0], self.profile_line[1]
+            lines.append(f"Profile:  ({p0['row']:.0f}, {p0['col']:.0f}) → ({p1['row']:.0f}, {p1['col']:.0f}) width={self.profile_width}")
+        print("\n".join(lines))
 
     def _get_color_range(self, frame: np.ndarray) -> tuple[float, float]:
         """Get vmin/vmax based on current settings."""
@@ -347,7 +472,6 @@ class Show3D(anywidget.AnyWidget):
             self.frame_bytes = frame.tobytes()
 
     def _update_roi_mean(self, frame: np.ndarray):
-        """Compute mean value within ROI based on shape."""
         r, c = np.ogrid[0 : self.height, 0 : self.width]
 
         if self.roi_shape == "circle":
@@ -361,14 +485,23 @@ class Show3D(anywidget.AnyWidget):
             mask = (np.abs(c - self.roi_col) <= half_w) & (
                 np.abs(r - self.roi_row) <= half_h
             )
+        elif self.roi_shape == "annular":
+            dist2 = (c - self.roi_col) ** 2 + (r - self.roi_row) ** 2
+            mask = (dist2 >= self.roi_radius_inner**2) & (dist2 <= self.roi_radius**2)
         else:
-            # Default to circle
             mask = (c - self.roi_col) ** 2 + (r - self.roi_row) ** 2 <= self.roi_radius**2
 
         if mask.sum() > 0:
-            self.roi_mean = float(frame[mask].mean())
+            region = frame[mask]
+            self.roi_mean = float(region.mean())
+            self.roi_min = float(region.min())
+            self.roi_max = float(region.max())
+            self.roi_std = float(region.std())
         else:
             self.roi_mean = 0.0
+            self.roi_min = 0.0
+            self.roi_max = 0.0
+            self.roi_std = 0.0
 
     def _send_buffer(self, start_idx: int):
         end_idx = start_idx + self._buffer_size
@@ -386,6 +519,9 @@ class Show3D(anywidget.AnyWidget):
     def _on_playing_change(self, change=None):
         if self.playing:
             self._send_buffer(self.slice_idx)
+        else:
+            # Playback stopped — refresh stats for the current frame
+            self._update_all()
 
     def _on_prefetch(self, change=None):
         if self._prefetch_request >= 0 and self.playing:
@@ -400,30 +536,200 @@ class Show3D(anywidget.AnyWidget):
         """Handle ROI change."""
         if self.roi_active:
             self._update_roi_mean(self._data[self.slice_idx])
+            self._compute_roi_plot()
+        else:
+            self.roi_plot_data = b""
+
+    def _compute_roi_plot(self):
+        """Compute ROI mean for all frames."""
+        r, c = np.ogrid[0 : self.height, 0 : self.width]
+        if self.roi_shape == "circle":
+            mask = (c - self.roi_col) ** 2 + (r - self.roi_row) ** 2 <= self.roi_radius**2
+        elif self.roi_shape == "square":
+            half = self.roi_radius
+            mask = (np.abs(c - self.roi_col) <= half) & (np.abs(r - self.roi_row) <= half)
+        elif self.roi_shape == "rectangle":
+            half_w = self.roi_width // 2
+            half_h = self.roi_height // 2
+            mask = (np.abs(c - self.roi_col) <= half_w) & (np.abs(r - self.roi_row) <= half_h)
+        elif self.roi_shape == "annular":
+            dist2 = (c - self.roi_col) ** 2 + (r - self.roi_row) ** 2
+            mask = (dist2 >= self.roi_radius_inner**2) & (dist2 <= self.roi_radius**2)
+        else:
+            mask = (c - self.roi_col) ** 2 + (r - self.roi_row) ** 2 <= self.roi_radius**2
+        if mask.sum() == 0:
+            self.roi_plot_data = b""
+            return
+        means = np.array([float(self._data[i][mask].mean()) for i in range(self.n_slices)], dtype=np.float32)
+        self.roi_plot_data = means.tobytes()
 
     # =========================================================================
     # Public Methods
     # =========================================================================
 
-    def play(self):
+    def play(self) -> "Show3D":
         """Start playback."""
         self.playing = True
+        return self
 
-    def pause(self):
+    def pause(self) -> "Show3D":
         """Pause playback."""
         self.playing = False
+        return self
 
-    def stop(self):
+    def stop(self) -> "Show3D":
         """Stop playback and reset to beginning."""
         self.playing = False
         self.slice_idx = 0
+        return self
 
-    def set_roi(self, row: int, col: int, radius: int = 10):
+    def goto(self, index: int) -> "Show3D":
+        """Jump to a specific frame index."""
+        self.slice_idx = int(index) % self.n_slices
+        return self
+
+    def set_playback_path(self, path) -> "Show3D":
+        """Set custom playback order (list of frame indices)."""
+        self.playback_path = [int(i) % self.n_slices for i in path]
+        return self
+
+    def clear_playback_path(self) -> "Show3D":
+        """Clear custom playback path (revert to sequential)."""
+        self.playback_path = []
+        return self
+
+    def set_roi(self, row: int, col: int, radius: int = 10) -> "Show3D":
         """Set ROI position and size."""
-        self.roi_row = int(row)
-        self.roi_col = int(col)
-        self.roi_radius = int(radius)
-        self.roi_active = True
+        with self.hold_sync():
+            self.roi_row = int(row)
+            self.roi_col = int(col)
+            self.roi_radius = int(radius)
+            self.roi_active = True
+        return self
+
+    def roi_circle(self, radius: int = 10) -> "Show3D":
+        """Set ROI shape to circle with given radius."""
+        with self.hold_sync():
+            self.roi_shape = "circle"
+            self.roi_radius = int(radius)
+            self.roi_active = True
+        return self
+
+    def roi_square(self, half_size: int = 10) -> "Show3D":
+        """Set ROI shape to square with given half-size."""
+        with self.hold_sync():
+            self.roi_shape = "square"
+            self.roi_radius = int(half_size)
+            self.roi_active = True
+        return self
+
+    def roi_rectangle(self, width: int = 20, height: int = 10) -> "Show3D":
+        """Set ROI shape to rectangle with given half-width and half-height."""
+        with self.hold_sync():
+            self.roi_shape = "rectangle"
+            self.roi_width = int(width)
+            self.roi_height = int(height)
+            self.roi_active = True
+        return self
+
+    def roi_annular(self, inner: int = 5, outer: int = 10) -> "Show3D":
+        """Set ROI shape to annular (donut) with given inner and outer radii."""
+        with self.hold_sync():
+            self.roi_shape = "annular"
+            self.roi_radius_inner = int(inner)
+            self.roi_radius = int(outer)
+            self.roi_active = True
+        return self
+
+    def _sample_line(self, img, row0, col0, row1, col1):
+        h, w = img.shape
+        dc, dr = col1 - col0, row1 - row0
+        length = (dc**2 + dr**2) ** 0.5
+        n = max(2, int(np.ceil(length)))
+        t = np.linspace(0, 1, n)
+        cs = col0 + t * dc
+        rs = row0 + t * dr
+        ci = np.floor(cs).astype(int)
+        ri = np.floor(rs).astype(int)
+        cf = cs - ci
+        rf = rs - ri
+        c0c = np.clip(ci, 0, w - 1)
+        c1c = np.clip(ci + 1, 0, w - 1)
+        r0c = np.clip(ri, 0, h - 1)
+        r1c = np.clip(ri + 1, 0, h - 1)
+        return (img[r0c, c0c] * (1 - cf) * (1 - rf) +
+                img[r0c, c1c] * cf * (1 - rf) +
+                img[r1c, c0c] * (1 - cf) * rf +
+                img[r1c, c1c] * cf * rf)
+
+    def _sample_profile(self, row0, col0, row1, col1):
+        img = self._data[self.slice_idx]
+        pw = self.profile_width
+        if pw <= 1:
+            return self._sample_line(img, row0, col0, row1, col1).astype(np.float32)
+        dc, dr = col1 - col0, row1 - row0
+        length = (dc**2 + dr**2) ** 0.5
+        if length < 1e-8:
+            return self._sample_line(img, row0, col0, row1, col1).astype(np.float32)
+        perp_r, perp_c = -dc / length, dr / length
+        half = (pw - 1) / 2.0
+        offsets = np.linspace(-half, half, pw)
+        accumulated = None
+        for off in offsets:
+            vals = self._sample_line(img, row0 + off * perp_r, col0 + off * perp_c,
+                                     row1 + off * perp_r, col1 + off * perp_c)
+            if accumulated is None:
+                accumulated = vals.copy()
+            else:
+                accumulated += vals
+        return (accumulated / pw).astype(np.float32)
+
+    def set_profile(self, row0: float, col0: float, row1: float, col1: float) -> "Show3D":
+        """Set a line profile between two points (image pixel coordinates).
+
+        Parameters
+        ----------
+        row0, col0 : float
+            Start point in pixel coordinates.
+        row1, col1 : float
+            End point in pixel coordinates.
+        """
+        self.profile_line = [
+            {"row": float(row0), "col": float(col0)},
+            {"row": float(row1), "col": float(col1)},
+        ]
+        return self
+
+    def clear_profile(self) -> "Show3D":
+        """Clear the current line profile."""
+        self.profile_line = []
+        return self
+
+    @property
+    def profile(self):
+        """Get profile line endpoints as [(row0, col0), (row1, col1)] or []."""
+        return [(p["row"], p["col"]) for p in self.profile_line]
+
+    @property
+    def profile_values(self):
+        """Get intensity values along the profile line for the current frame."""
+        if len(self.profile_line) < 2:
+            return None
+        p0, p1 = self.profile_line
+        return self._sample_profile(p0["row"], p0["col"], p1["row"], p1["col"])
+
+    @property
+    def profile_distance(self):
+        """Get total distance of the profile line in calibrated units (nm or px)."""
+        if len(self.profile_line) < 2:
+            return None
+        p0, p1 = self.profile_line
+        dc = p1["col"] - p0["col"]
+        dr = p1["row"] - p0["row"]
+        dist_px = (dc**2 + dr**2) ** 0.5
+        if self.pixel_size > 0:
+            return dist_px * self.pixel_size
+        return dist_px
 
     def _on_gif_export(self, change=None):
         if not self._gif_export_requested:

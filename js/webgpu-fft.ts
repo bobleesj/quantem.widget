@@ -190,8 +190,32 @@ export function autoEnhanceFFT(
     mag[Math.min(mag.length - 1, centerIdx + width)],
   ];
   mag[centerIdx] = neighbors.reduce((a, b) => a + b, 0) / 4;
-  const sorted = mag.slice().sort((a, b) => a - b);
-  return { min: sorted[0], max: sorted[Math.floor(sorted.length * 0.999)] };
+  // Use O(n) histogram approach instead of O(n log n) sort
+  const len = mag.length;
+  if (len === 0) return { min: 0, max: 0 };
+  let dMin = Infinity, dMax = -Infinity;
+  for (let i = 0; i < len; i++) {
+    const v = mag[i];
+    if (v < dMin) dMin = v;
+    if (v > dMax) dMax = v;
+  }
+  if (dMin === dMax) return { min: dMin, max: dMax };
+  const NUM_BINS = 1024;
+  const bins = new Uint32Array(NUM_BINS);
+  const range = dMax - dMin;
+  const scale = (NUM_BINS - 1) / range;
+  for (let i = 0; i < len; i++) bins[Math.floor((mag[i] - dMin) * scale)]++;
+  // Find 99.9th percentile
+  const target = Math.ceil(len * 0.999);
+  let cumSum = 0;
+  let pMax = dMax;
+  for (let i = 0; i < NUM_BINS; i++) {
+    cumSum += bins[i];
+    if (cumSum >= target) { pMax = dMin + (i / (NUM_BINS - 1)) * range; break; }
+  }
+  // If percentile collapsed to min (sparse spectra), fall back to actual max
+  if (pMax <= dMin) pMax = dMax;
+  return { min: dMin, max: pMax };
 }
 
 // ============================================================================

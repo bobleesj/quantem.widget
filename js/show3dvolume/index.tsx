@@ -28,7 +28,7 @@ import StopIcon from "@mui/icons-material/Stop";
 import "./show3dvolume.css";
 import { useTheme } from "../theme";
 import { VolumeRenderer, CameraState, DEFAULT_CAMERA } from "../webgl-volume";
-import { drawScaleBarHiDPI } from "../scalebar";
+import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawColorbar, exportFigure } from "../scalebar";
 import { extractBytes, extractFloat32, formatNumber, downloadBlob, downloadDataView } from "../format";
 import { computeHistogramFromBytes } from "../histogram";
 import { findDataRange, applyLogScale, percentileClip, sliderRange } from "../stats";
@@ -173,6 +173,7 @@ function KeyboardShortcuts({ items }: { items: [string, string][] }) {
 
 interface HistogramProps {
   data: Float32Array | null;
+  colormap: string;
   vminPct: number;
   vmaxPct: number;
   onRangeChange: (min: number, max: number) => void;
@@ -183,7 +184,7 @@ interface HistogramProps {
   dataMax?: number;
 }
 
-function Histogram({ data, vminPct, vmaxPct, onRangeChange, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1 }: HistogramProps) {
+function Histogram({ data, colormap: _colormap, vminPct, vmaxPct, onRangeChange, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1 }: HistogramProps) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const bins = React.useMemo(() => computeHistogramFromBytes(data), [data]);
   const colors = theme === "dark" ? { bg: "#1a1a1a", barActive: "#888", barInactive: "#444", border: "#333" } : { bg: "#f0f0f0", barActive: "#666", barInactive: "#bbb", border: "#ccc" };
@@ -240,8 +241,8 @@ function Show3DVolume() {
   const { themeInfo, colors: baseColors } = useTheme();
   const tc = {
     ...baseColors,
-    accentGreen: themeInfo.theme === "dark" ? "#0f0" : "#0a0",
-    accentYellow: themeInfo.theme === "dark" ? "#ff0" : "#cc0",
+    accentGreen: themeInfo.theme === "dark" ? "#0f0" : "#1a7a1a",
+    accentYellow: themeInfo.theme === "dark" ? "#ff0" : "#b08800",
   };
 
   // Initialize WebGPU FFT
@@ -302,6 +303,7 @@ function Show3DVolume() {
   const [fftDragAxis, setFftDragAxis] = React.useState<number | null>(null);
   const [fftDragStart, setFftDragStart] = React.useState<{ x: number; y: number; pX: number; pY: number } | null>(null);
   const fftCanvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([null, null, null]);
+  const fftOverlayRefs = React.useRef<(HTMLCanvasElement | null)[]>([null, null, null]);
   const fftOffscreenRefs = React.useRef<(HTMLCanvasElement | null)[]>([null, null, null]);
   const gpuFFTRef = React.useRef<WebGPUFFT | null>(null);
   const [gpuReady, setGpuReady] = React.useState(false);
@@ -348,6 +350,9 @@ function Show3DVolume() {
   const [imageVmaxPct, setImageVmaxPct] = React.useState(100);
   const [imageHistogramData, setImageHistogramData] = React.useState<Float32Array | null>(null);
   const [imageDataRange, setImageDataRange] = React.useState<{ min: number; max: number }>({ min: 0, max: 1 });
+
+  // Colorbar state
+  const [showColorbar, setShowColorbar] = React.useState(false);
 
   // Cursor readout state
   const [cursorInfo, setCursorInfo] = React.useState<{ row: number; col: number; value: number; view: string } | null>(null);
@@ -633,18 +638,28 @@ function Show3DVolume() {
       const { w: cw, h: ch } = canvasSizes[a];
       uiCanvas.width = Math.round(cw * DPR);
       uiCanvas.height = Math.round(ch * DPR);
-      if (!scaleBarVisible) {
-        const ctx = uiCanvas.getContext("2d");
-        if (ctx) ctx.clearRect(0, 0, uiCanvas.width, uiCanvas.height);
-        continue;
+      const uiCtx = uiCanvas.getContext("2d");
+      if (!uiCtx) continue;
+      uiCtx.clearRect(0, 0, uiCanvas.width, uiCanvas.height);
+      if (scaleBarVisible) {
+        const pxSize = pixelSizeAngstrom || 0;
+        const sliceW = sliceDims[a][1];
+        const unit = pxSize > 0 ? "Å" : "px";
+        const size = pxSize > 0 ? pxSize : 1;
+        drawScaleBarHiDPI(uiCanvas, DPR, zooms[a].zoom, size, unit, sliceW);
       }
-      const pxSize = pixelSizeAngstrom || 0;
-      const sliceW = sliceDims[a][1];
-      const unit = pxSize > 0 ? "Å" : "px";
-      const size = pxSize > 0 ? pxSize : 1;
-      drawScaleBarHiDPI(uiCanvas, DPR, zooms[a].zoom, size, unit, sliceW);
+      if (showColorbar) {
+        const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
+        const { vmin, vmax } = sliderRange(imageDataRange.min, imageDataRange.max, imageVminPct, imageVmaxPct);
+        const cssW = uiCanvas.width / DPR;
+        const cssH = uiCanvas.height / DPR;
+        uiCtx.save();
+        uiCtx.scale(DPR, DPR);
+        drawColorbar(uiCtx, cssW, cssH, lut, vmin, vmax, logScale);
+        uiCtx.restore();
+      }
     }
-  }, [pixelSizeAngstrom, scaleBarVisible, zooms, canvasSizes, sliceDims]);
+  }, [pixelSizeAngstrom, scaleBarVisible, zooms, canvasSizes, sliceDims, showColorbar, cmap, imageDataRange, imageVminPct, imageVmaxPct, logScale]);
 
   // -------------------------------------------------------------------------
   // FFT computation and caching
@@ -753,6 +768,26 @@ function Show3DVolume() {
       }
     }
   }, [showFft, fftZooms, canvasSizes]);
+
+  // Render FFT overlays (reciprocal-space scale bars per axis)
+  React.useEffect(() => {
+    if (!showFft || pixelSizeAngstrom <= 0) return;
+    const dims: [number, number][] = [[ny, nx], [nz, nx], [nz, ny]];
+    for (let a = 0; a < 3; a++) {
+      const overlay = fftOverlayRefs.current[a];
+      if (!overlay) continue;
+      const { w: cw, h: ch } = canvasSizes[a];
+      overlay.width = Math.round(cw * DPR);
+      overlay.height = Math.round(ch * DPR);
+      const ctx = overlay.getContext("2d");
+      if (!ctx) continue;
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+      const [, sliceW] = dims[a];
+      const pw = nextPow2(sliceW);
+      const fftPixelSize = 1 / (pw * pixelSizeAngstrom);
+      drawFFTScaleBarHiDPI(overlay, DPR, fftZooms[a].zoom, fftPixelSize, pw);
+    }
+  }, [showFft, fftZooms, canvasSizes, pixelSizeAngstrom, nx, ny, nz]);
 
   // -------------------------------------------------------------------------
   // Playback logic (matching Show3D pattern)
@@ -989,6 +1024,50 @@ function Show3DVolume() {
     setZipExportRequested(true);
   };
 
+  const handleExportFigure = (withColorbar: boolean) => {
+    setExportAnchor(null);
+    if (!allFloats || allFloats.length === 0) return;
+    const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
+    const sliceData = [
+      extractXY(allFloats, nx, ny, nz, sliceZ),
+      extractXZ(allFloats, nx, ny, nz, sliceY),
+      extractYZ(allFloats, nx, ny, nz, sliceX),
+    ];
+    for (let a = 0; a < 3; a++) {
+      const [sliceH, sliceW] = sliceDims[a];
+      const processed = logScale ? applyLogScale(sliceData[a]) : sliceData[a];
+      let vmin: number, vmax: number;
+      if (autoContrast) {
+        ({ vmin, vmax } = percentileClip(processed, 2, 98));
+      } else if (imageVminPct > 0 || imageVmaxPct < 100) {
+        const { min: dMin, max: dMax } = findDataRange(processed);
+        ({ vmin, vmax } = sliderRange(dMin, dMax, imageVminPct, imageVmaxPct));
+      } else {
+        const r = findDataRange(processed);
+        vmin = r.min;
+        vmax = r.max;
+      }
+      const offscreen = renderToOffscreen(processed, sliceW, sliceH, lut, vmin, vmax);
+      if (!offscreen) continue;
+      const axisLabel = AXES[a].toUpperCase();
+      const sliceIndices = [sliceZ, sliceY, sliceX];
+      const figCanvas = exportFigure({
+        imageCanvas: offscreen,
+        title: `${title || "Volume"} — ${axisLabel} slice ${sliceIndices[a]}`,
+        lut,
+        vmin,
+        vmax,
+        logScale,
+        pixelSize: pixelSizeAngstrom > 0 ? pixelSizeAngstrom : undefined,
+        showColorbar: withColorbar,
+        showScaleBar: pixelSizeAngstrom > 0,
+      });
+      figCanvas.toBlob((blob) => {
+        if (blob) downloadBlob(blob, `show3dvolume_figure_${AXES[a]}.png`);
+      }, "image/png");
+    }
+  };
+
   // -------------------------------------------------------------------------
   // FFT Zoom/Pan handlers
   // -------------------------------------------------------------------------
@@ -1093,13 +1172,37 @@ function Show3DVolume() {
       <Box sx={{ mb: `${SPACING.LG}px` }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
           <Typography variant="caption" sx={{ ...typography.label }}>
-            {title || "Volume 3D"}
+            {title || "Volume 3D"}<InfoTooltip text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
+              <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>FFT: Show power spectrum (Fourier transform) below each slice.</Typography>
+              <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Auto: Percentile-based contrast (2nd-98th percentile). FFT Auto masks DC + clips to 99.9th.</Typography>
+              <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Cross: Show crosshair lines indicating orthogonal slice positions.</Typography>
+              <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Colorbar: Display colorbar overlay on each slice canvas.</Typography>
+              <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Loop: Loop playback. Drag end markers on slider for loop range.</Typography>
+              <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Bounce: Ping-pong playback — alternates forward and reverse.</Typography>
+              <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Opacity/Bright/Planes: 3D volume renderer controls.</Typography>
+              <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
+              <KeyboardShortcuts items={[["Space", "Play / Pause"], ["← / →", "Prev / Next slice"], ["Home / End", "First / Last slice"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
+            </Box>} theme={themeInfo.theme} />
           </Typography>
           <Stack direction="row" alignItems="center" spacing={0.5}>
             <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>FFT:</Typography>
             <Switch checked={showFft} onChange={(e) => setShowFft(e.target.checked)} size="small" sx={switchStyles.small} />
+            <Button size="small" sx={{ ...compactButton, color: tc.accent }} onClick={async () => {
+              const canvas = canvasRefs.current[0];
+              if (!canvas) return;
+              try {
+                const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
+                if (!blob) return;
+                await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+              } catch {
+                canvas.toBlob((b) => { if (b) downloadBlob(b, "show3dvolume_xy.png"); }, "image/png");
+              }
+            }}>Copy</Button>
             <Button size="small" sx={{ ...compactButton, color: tc.accent }} onClick={(e) => setExportAnchor(e.currentTarget)} disabled={exporting}>{exporting ? "Exporting..." : "Export"}</Button>
             <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
+              <MenuItem onClick={() => handleExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
+              <MenuItem onClick={() => handleExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
               <MenuItem onClick={handleExportPng} sx={{ fontSize: 12 }}>PNG (current slices)</MenuItem>
               <MenuItem onClick={handleExportGif} sx={{ fontSize: 12 }}>GIF (animation)</MenuItem>
               <MenuItem onClick={handleExportZip} sx={{ fontSize: 12 }}>ZIP (all slices)</MenuItem>
@@ -1177,7 +1280,7 @@ function Show3DVolume() {
         {AXES.map((_, a) => {
           const { w: cw, h: ch } = canvasSizes[a];
           return (
-            <Box key={a}>
+            <Box key={a} sx={{ minWidth: cw }}>
               {/* Header row matching Show3D */}
               <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
                 <Typography variant="caption" sx={{ ...typography.label }}>{a === 0 && title ? title : axisLabels[a]}</Typography>
@@ -1213,6 +1316,14 @@ function Show3DVolume() {
                   height={Math.round(ch * DPR)}
                   style={{ position: "absolute", top: 0, left: 0, width: cw, height: ch, pointerEvents: "none" }}
                 />
+                {/* Cursor readout overlay */}
+                {cursorInfo && cursorInfo.view === ["XY", "XZ", "YZ"][a] && (
+                  <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
+                    <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
+                      ({cursorInfo.row}, {cursorInfo.col}) {formatNumber(cursorInfo.value)}
+                    </Typography>
+                  </Box>
+                )}
                 {/* Resize handle */}
                 <Box
                   onMouseDown={handleResizeStart}
@@ -1226,25 +1337,17 @@ function Show3DVolume() {
               </Box>
               {/* Stats bar */}
               {showStats && (
-                <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: tc.bgAlt, display: "flex", gap: 2, alignItems: "center" }}>
+                <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: tc.bgAlt, display: "flex", gap: 2, alignItems: "center", overflow: "hidden", whiteSpace: "nowrap", width: cw, boxSizing: "border-box" }}>
                   {[
                     { label: "Mean", value: statsMean?.[a] },
                     { label: "Min", value: statsMin?.[a] },
                     { label: "Max", value: statsMax?.[a] },
                     { label: "Std", value: statsStd?.[a] },
                   ].map(({ label, value }) => (
-                    <Typography key={label} sx={{ fontSize: 11, color: tc.textMuted }}>
-                      {label} <Box component="span" sx={{ color: tc.accent }}>{value !== undefined ? formatNumber(value) : "-"}</Box>
+                    <Typography key={label} sx={{ fontSize: 11, color: tc.textMuted, whiteSpace: "nowrap" }}>
+                      {label} <Box component="span" sx={{ color: tc.accent, fontFamily: "monospace", fontSize: 10 }}>{value !== undefined ? formatNumber(value) : "-"}</Box>
                     </Typography>
                   ))}
-                  {cursorInfo && cursorInfo.view === ["XY", "XZ", "YZ"][a] && (
-                    <>
-                      <Box sx={{ borderLeft: `1px solid ${tc.border}`, height: 14 }} />
-                      <Typography sx={{ fontSize: 11, color: tc.textMuted, fontFamily: "monospace" }}>
-                        {cursorInfo.view} ({cursorInfo.row}, {cursorInfo.col}) <Box component="span" sx={{ color: tc.accent }}>{formatNumber(cursorInfo.value)}</Box>
-                      </Typography>
-                    </>
-                  )}
                 </Box>
               )}
               {/* FFT canvas (inline, below stats) */}
@@ -1272,6 +1375,12 @@ function Show3DVolume() {
                       width={cw}
                       height={ch}
                       style={{ width: cw, height: ch, imageRendering: "pixelated" }}
+                    />
+                    <canvas
+                      ref={(el) => { fftOverlayRefs.current[a] = el; }}
+                      width={Math.round(cw * DPR)}
+                      height={Math.round(ch * DPR)}
+                      style={{ position: "absolute", top: 0, left: 0, width: cw, height: ch, pointerEvents: "none" }}
                     />
                   </Box>
                   {fftZooms[a].zoom !== 1 && (
@@ -1342,14 +1451,14 @@ function Show3DVolume() {
           <Select value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={themedMenuProps}>
             {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
           </Select>
-          <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Auto:<InfoTooltip text="Auto-enhance FFT display. When ON: (1) Masks DC component at center - replaced with average of 4 neighbors. (2) Clips display to 99.9 percentile to exclude outliers. When OFF: shows raw FFT with full dynamic range." theme={themeInfo.theme} /></Typography>
+          <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Auto:</Typography>
           <Switch checked={fftAuto} onChange={(e) => setFftAuto(e.target.checked)} size="small" sx={switchStyles.small} />
         </Box>
       )}
       {/* Controls row with histogram on right */}
       {showControls && (
-        <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px` }}>
-          <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
+        <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: "fit-content" }}>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, justifyContent: "center" }}>
             <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
               <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Scale:</Typography>
               <Select value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
@@ -1362,15 +1471,18 @@ function Show3DVolume() {
               </Select>
             </Box>
             <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
-              <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Auto:<InfoTooltip text="Auto-contrast: clips display to 2nd–98th percentile to improve visibility of subtle features. When OFF, uses full data range." theme={themeInfo.theme} /></Typography>
+              <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Auto:</Typography>
               <Switch checked={autoContrast} onChange={(e) => setAutoContrast(e.target.checked)} size="small" sx={switchStyles.small} />
-              <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Cross:<InfoTooltip text="Show crosshair lines on each slice plane, indicating the position of the other two orthogonal slices." theme={themeInfo.theme} /></Typography>
+              <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Cross:</Typography>
               <Switch checked={showCrosshair} onChange={(e) => setShowCrosshair(e.target.checked)} size="small" sx={switchStyles.small} />
+              <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Colorbar:</Typography>
+              <Switch checked={showColorbar} onChange={(e) => setShowColorbar(e.target.checked)} size="small" sx={switchStyles.small} />
             </Box>
           </Box>
-          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center" }}>
+          <Box sx={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
             <Histogram
               data={imageHistogramData}
+              colormap={cmap}
               vminPct={imageVminPct}
               vmaxPct={imageVmaxPct}
               onRangeChange={(min, max) => { setImageVminPct(min); setImageVmaxPct(max); }}
@@ -1385,7 +1497,6 @@ function Show3DVolume() {
       )}
       {/* Playback: transport + axis selector + fps + loop + bounce */}
       <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
-        <InfoTooltip text={<KeyboardShortcuts items={[["Space", "Play / Pause"], ["← / →", "Prev / Next slice"], ["Home / End", "First / Last slice"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />} theme={themeInfo.theme} />
         <Select
           value={playAxis}
           onChange={(e) => { setPlaying(false); setPlayAxis(e.target.value as number); }}

@@ -24,6 +24,21 @@ Features
 - **Per-axis playback** — Animate through slices along any axis
 - **FFT** — Toggle Fourier transform for each slice plane
 
+State Persistence
+-----------------
+
+.. code-block:: python
+
+   w = Show3DVolume(volume, cmap="viridis", log_scale=True)
+   w.slice_z = 48
+
+   w.summary()          # Print human-readable state
+   w.state_dict()       # Get all settings as a dict
+   w.save("state.json") # Save to JSON file
+
+   # Restore from file or dict
+   w2 = Show3DVolume(volume, state="state.json")
+
 Examples
 --------
 

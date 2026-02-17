@@ -15,10 +15,11 @@ extensions = [
     "nbsphinx",
     "sphinx_copybutton",
     "sphinx_design",
+    "myst_parser",
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "widgets"]
 
 html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
@@ -26,6 +27,8 @@ html_theme_options = {
     "github_url": "https://github.com/bobleesj/quantem.widget",
     "show_toc_level": 2,
     "navigation_with_keys": False,
+    "show_nav_level": 2,
+    "navbar_align": "left",
     "icon_links": [
         {
             "name": "PyPI",
@@ -33,6 +36,9 @@ html_theme_options = {
             "icon": "fa-solid fa-box",
         },
     ],
+}
+html_sidebars = {
+    "examples/**": [],  # no sidebars on example pages — full width for widgets
 }
 
 autodoc_member_order = "bysource"
@@ -51,7 +57,7 @@ napoleon_use_rtype = True
 numpydoc_show_class_members = False
 numpydoc_class_members_toctree = False
 
-nbsphinx_execute = "never"
+nbsphinx_execute = "auto"
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),

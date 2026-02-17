@@ -13,6 +13,7 @@ import Stack from "@mui/material/Stack";
 import Slider from "@mui/material/Slider";
 import Select from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
+import Menu from "@mui/material/Menu";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
 import Switch from "@mui/material/Switch";
@@ -22,9 +23,9 @@ import PauseIcon from "@mui/icons-material/Pause";
 import "./align2d.css";
 import { useTheme } from "../theme";
 import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen } from "../colormaps";
-import { drawScaleBarHiDPI } from "../scalebar";
-import { extractFloat32 } from "../format";
-import { applyLogScale, sliderRange } from "../stats";
+import { drawScaleBarHiDPI, exportFigure } from "../scalebar";
+import { extractFloat32, downloadBlob } from "../format";
+import { findDataRange, applyLogScale, sliderRange } from "../stats";
 import { computeHistogramFromBytes } from "../histogram";
 import { fft2d, fftshift, computeMagnitude, autoEnhanceFFT } from "../webgpu-fft";
 
@@ -339,6 +340,7 @@ function computeDifferenceImage(
 
 interface HistogramProps {
   data: Float32Array | null;
+  colormap: string;
   vminPct: number;
   vmaxPct: number;
   onRangeChange: (min: number, max: number) => void;
@@ -349,7 +351,7 @@ interface HistogramProps {
   dataMax?: number;
 }
 
-function Histogram({ data, vminPct, vmaxPct, onRangeChange, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1 }: HistogramProps) {
+function Histogram({ data, colormap: _colormap, vminPct, vmaxPct, onRangeChange, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1 }: HistogramProps) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const bins = React.useMemo(() => computeHistogramFromBytes(data), [data]);
   const colors = theme === "dark" ? {
@@ -579,8 +581,8 @@ function Align2D() {
   const { themeInfo, colors: baseColors } = useTheme();
   const themeColors = {
     ...baseColors,
-    accentGreen: themeInfo.theme === "dark" ? "#0f0" : "#0a0",
-    accentYellow: themeInfo.theme === "dark" ? "#ff0" : "#cc0",
+    accentGreen: themeInfo.theme === "dark" ? "#0f0" : "#1a7a1a",
+    accentYellow: themeInfo.theme === "dark" ? "#ff0" : "#b08800",
   };
 
   const themedSelect = {
@@ -620,6 +622,7 @@ function Align2D() {
   const [pixelSize] = useModelState<number>("pixel_size");
   const [canvasSize] = useModelState<number>("canvas_size");
   const [maxShift] = useModelState<number>("max_shift");
+  const [histSource, setHistSource] = useModelState<string>("hist_source");
 
   // Compute padding in pixels from fractional padding
   const padY = Math.round(imgH * padding);
@@ -732,10 +735,12 @@ function Align2D() {
   const [vmaxPct, setVmaxPct] = React.useState(100);
   const [histogramData, setHistogramData] = React.useState<Float32Array | null>(null);
   const [dataRange, setDataRange] = React.useState<{ min: number; max: number }>({ min: 0, max: 1 });
-  const [histSource, setHistSource] = React.useState<"a" | "b">("a");
 
   // Live NCC
   const [nccCurrent, setNccCurrent] = React.useState(0);
+
+  // Export menu
+  const [exportAnchor, setExportAnchor] = React.useState<HTMLElement | null>(null);
 
   // Drag state for merged view
   const dragRef = React.useRef<{
@@ -1203,6 +1208,37 @@ function Align2D() {
     }
   };
 
+  const handleExportFigure = (withColorbar: boolean) => {
+    setExportAnchor(null);
+    const dataA = rawARef.current;
+    if (!dataA) return;
+    const lut = COLORMAPS[cmap] || COLORMAPS.gray;
+    const { min: gMin, max: gMax } = findDataRange(dataA);
+    const { vmin, vmax } = sliderRange(gMin, gMax, vminPct, vmaxPct);
+    const offscreen = renderToOffscreen(dataA, imgW, imgH, lut, vmin, vmax);
+    if (!offscreen) return;
+    const pixelSizeAngstrom = pixelSize > 0 ? pixelSize * 10 : 0;
+    const figCanvas = exportFigure({
+      imageCanvas: offscreen,
+      title: title || undefined,
+      lut,
+      vmin,
+      vmax,
+      pixelSize: pixelSizeAngstrom > 0 ? pixelSizeAngstrom : undefined,
+      showColorbar: withColorbar,
+      showScaleBar: pixelSizeAngstrom > 0,
+    });
+    figCanvas.toBlob((blob) => {
+      if (blob) downloadBlob(blob, "align2d_figure.png");
+    }, "image/png");
+  };
+
+  const handleExport = () => {
+    setExportAnchor(null);
+    if (!mergedCanvasRef.current) return;
+    mergedCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "align2d_merged.png"); }, "image/png");
+  };
+
   const needsReset = zoom !== 1 || panX !== 0 || panY !== 0;
   const hasOffset = dx !== 0 || dy !== 0 || rotation !== 0;
   const hasAutoAlign = autoDx !== 0 || autoDy !== 0;
@@ -1211,7 +1247,27 @@ function Align2D() {
   return (
     <Box className="align2d-root" tabIndex={0} onKeyDown={handleKeyDown} sx={{ ...container.root, bgcolor: themeColors.bg, color: themeColors.text }}>
       {/* Header */}
-      <Typography variant="caption" sx={{ ...typography.label, mb: `${SPACING.XS}px`, display: "block" }}>{title || "Alignment"}</Typography>
+      <Typography variant="caption" sx={{ ...typography.label, mb: `${SPACING.XS}px`, display: "block" }}>{title || "Alignment"}<InfoTooltip theme={themeInfo.theme} text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+        <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
+        <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Blend: Alpha-blend A and B (opacity slider controls mix).</Typography>
+        <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Diff: |A - B| — bright where images differ, dark where they match.</Typography>
+        <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Flicker: Rapidly blink between A and B (~3 Hz).</Typography>
+        <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Auto: FFT-based auto-alignment. Zero: Reset offset to (0,0).</Typography>
+        <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Fine: Restrict pad range for sub-pixel precision.</Typography>
+        <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Panels: Show side-by-side A/B comparison above merged view.</Typography>
+        <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
+        <KeyboardShortcuts items={[
+          ["Drag", "Align image B"],
+          ["Alt + drag", "Pan view"],
+          ["Scroll", "Zoom"],
+          ["Shift + scroll", "Rotate image B"],
+          ["\u2190 \u2192 / A D", "Nudge dx (Shift: 0.1px)"],
+          ["W / S", "Nudge dy (Shift: 0.1px)"],
+          ["Space", "Play / pause rotation"],
+          ["R", "Reset zoom / pan"],
+          ["Dbl-click pad", "Reset offset"],
+        ]} />
+      </Box>} /></Typography>
 
       {/* Panel labels + toggles (always visible — toggles at right edge of Image B) */}
       <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="flex-end" sx={{ mb: `${SPACING.XS}px` }}>
@@ -1253,15 +1309,26 @@ function Align2D() {
               <MenuItem value="difference">Diff</MenuItem>
               <MenuItem value="flicker">Flicker</MenuItem>
             </Select>
-            <InfoTooltip theme={themeInfo.theme} text={<KeyboardShortcuts items={[
-              ["Blend", "Alpha-blend A and B (opacity slider controls mix)"],
-              ["Diff", "|A \u2212 B| — bright where images differ, dark where they match"],
-              ["Flicker", "Rapidly blink between A and B (~3 Hz). If aligned, image looks still; if misaligned, you see jumping"],
-            ]} />} />
           </Stack>
           <Stack direction="row" spacing={`${SPACING.XS}px`} alignItems="center">
             <Button size="small" sx={{ ...compactButton, color: themeColors.accentGreen }} disabled={!hasAutoAlign || isAtAuto} onClick={() => { setDx(autoDx); setDy(autoDy); setRotation(0); }}>AUTO</Button>
             <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} disabled={!hasOffset} onClick={() => { setDx(0); setDy(0); setRotation(0); }}>ZERO</Button>
+            <Button size="small" sx={compactButton} onClick={async () => {
+              if (!mergedCanvasRef.current) return;
+              try {
+                const blob = await new Promise<Blob | null>(resolve => mergedCanvasRef.current!.toBlob(resolve, "image/png"));
+                if (!blob) return;
+                await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+              } catch {
+                mergedCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "align2d_merged.png"); }, "image/png");
+              }
+            }}>COPY</Button>
+            <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={(e) => setExportAnchor(e.currentTarget)}>Export</Button>
+            <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
+              <MenuItem onClick={() => handleExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
+              <MenuItem onClick={() => handleExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
+              <MenuItem onClick={handleExport} sx={{ fontSize: 12 }}>PNG</MenuItem>
+            </Menu>
             <Button size="small" sx={compactButton} disabled={!needsReset} onClick={handleDoubleClick}>RESET VIEW</Button>
           </Stack>
         </Stack>
@@ -1310,6 +1377,7 @@ function Align2D() {
               </Stack>
               <Histogram
                 data={histogramData}
+                colormap={cmap}
                 vminPct={vminPct}
                 vmaxPct={vmaxPct}
                 onRangeChange={(min, max) => { setVminPct(min); setVmaxPct(max); }}
@@ -1338,17 +1406,6 @@ function Align2D() {
           <Select size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}>
             {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
           </Select>
-          <InfoTooltip theme={themeInfo.theme} text={<KeyboardShortcuts items={[
-            ["Drag", "Align image B"],
-            ["Alt + drag", "Pan view"],
-            ["Scroll", "Zoom"],
-            ["Shift + scroll", "Rotate image B"],
-            ["← → / A D", "Nudge dx (Shift: 0.1px)"],
-            ["W / S", "Nudge dy (Shift: 0.1px)"],
-            ["Space", "Play / pause rotation"],
-            ["R", "Reset zoom / pan"],
-            ["Dbl-click pad", "Reset offset"],
-          ]} />} />
           <Typography sx={{ fontSize: 10, color: themeColors.textMuted, ml: 0.5 }}>
             NCC: <Box component="span" sx={{ color: themeColors.textMuted }}>{xcorrZero.toFixed(3)}</Box>
             {" → "}

@@ -250,8 +250,8 @@ void main() {
       vec3 sliceTex = worldToTex(slicePos, bmin, bmax);
       float sliceVal = texture(u_volume, sliceTex).r;
       vec3 sliceCol = texture(u_colormap, vec2(clamp(sliceVal * u_brightness, 0.0, 1.0), 0.5)).rgb;
-      sliceCol = mix(sliceCol, vec3(0.3, 0.5, 1.0), 0.4);
-      float sliceAlpha = 0.6 * (1.0 - accum.a);
+      sliceCol = mix(sliceCol, vec3(0.3, 0.5, 1.0), 0.25);
+      float sliceAlpha = 0.35 * (1.0 - accum.a);
       accum.rgb += sliceCol * sliceAlpha;
       accum.a += sliceAlpha;
       tSliceXY = -1.0;
@@ -262,8 +262,8 @@ void main() {
       vec3 sliceTex = worldToTex(slicePos, bmin, bmax);
       float sliceVal = texture(u_volume, sliceTex).r;
       vec3 sliceCol = texture(u_colormap, vec2(clamp(sliceVal * u_brightness, 0.0, 1.0), 0.5)).rgb;
-      sliceCol = mix(sliceCol, vec3(0.3, 1.0, 0.4), 0.4);
-      float sliceAlpha = 0.6 * (1.0 - accum.a);
+      sliceCol = mix(sliceCol, vec3(0.3, 1.0, 0.4), 0.25);
+      float sliceAlpha = 0.35 * (1.0 - accum.a);
       accum.rgb += sliceCol * sliceAlpha;
       accum.a += sliceAlpha;
       tSliceXZ = -1.0;
@@ -274,8 +274,8 @@ void main() {
       vec3 sliceTex = worldToTex(slicePos, bmin, bmax);
       float sliceVal = texture(u_volume, sliceTex).r;
       vec3 sliceCol = texture(u_colormap, vec2(clamp(sliceVal * u_brightness, 0.0, 1.0), 0.5)).rgb;
-      sliceCol = mix(sliceCol, vec3(1.0, 0.3, 0.3), 0.4);
-      float sliceAlpha = 0.6 * (1.0 - accum.a);
+      sliceCol = mix(sliceCol, vec3(1.0, 0.3, 0.3), 0.25);
+      float sliceAlpha = 0.35 * (1.0 - accum.a);
       accum.rgb += sliceCol * sliceAlpha;
       accum.a += sliceAlpha;
       tSliceYZ = -1.0;

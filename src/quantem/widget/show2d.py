@@ -5,13 +5,18 @@ For displaying a single image or a static gallery of multiple images.
 Unlike Show3D (interactive), Show2D focuses on static visualization.
 """
 
+import json
 import pathlib
+import io
+import base64
+import math
 from enum import StrEnum
 from typing import Optional, Union, List
 
 import anywidget
 import numpy as np
 import traitlets
+import matplotlib.pyplot as plt
 
 from quantem.widget.array_utils import to_numpy, _resize_image
 
@@ -117,6 +122,14 @@ class Show2D(anywidget.AnyWidget):
     selected_idx = traitlets.Int(0).tag(sync=True)
 
     # =========================================================================
+    # ROI Selection
+    # =========================================================================
+    roi_active = traitlets.Bool(False).tag(sync=True)
+    roi_list = traitlets.List([]).tag(sync=True)
+    roi_selected_idx = traitlets.Int(-1).tag(sync=True)
+    roi_stats = traitlets.Dict({}).tag(sync=True)
+
+    # =========================================================================
     # Line Profile
     # =========================================================================
     profile_line = traitlets.List(traitlets.Dict()).tag(sync=True)
@@ -136,6 +149,7 @@ class Show2D(anywidget.AnyWidget):
         auto_contrast: bool = False,
         ncols: int = 3,
         image_width_px: int = 0,
+        state=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -205,6 +219,137 @@ class Show2D(anywidget.AnyWidget):
 
         self.selected_idx = 0
 
+        if state is not None:
+            if isinstance(state, (str, pathlib.Path)):
+                state = json.loads(pathlib.Path(state).read_text())
+            self.load_state_dict(state)
+
+    def set_image(self, data, labels=None):
+        """Replace the displayed image(s). Preserves all display settings."""
+        if hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling"):
+            data = data.array
+        if isinstance(data, list):
+            images = [to_numpy(d) for d in data]
+            shapes = [img.shape for img in images]
+            if len(set(shapes)) > 1:
+                max_h = max(s[0] for s in shapes)
+                max_w = max(s[1] for s in shapes)
+                images = [_resize_image(img, max_h, max_w) for img in images]
+            data = np.stack(images)
+        else:
+            data = to_numpy(data)
+        if data.ndim == 2:
+            data = data[np.newaxis, ...]
+        self._data = data.astype(np.float32)
+        self.n_images = int(data.shape[0])
+        self.height = int(data.shape[1])
+        self.width = int(data.shape[2])
+        if labels is not None:
+            self.labels = list(labels)
+        else:
+            self.labels = [f"Image {i+1}" for i in range(self.n_images)]
+        self.selected_idx = 0
+        self._compute_all_stats()
+        self._update_all_frames()
+
+    def __repr__(self) -> str:
+        if self.n_images > 1:
+            shape = f"{self.n_images}×{self.height}×{self.width}"
+            return f"Show2D({shape}, idx={self.selected_idx}, cmap={self.cmap})"
+        return f"Show2D({self.height}×{self.width}, cmap={self.cmap})"
+
+    def _repr_mimebundle_(self, **kwargs):
+        """Return widget view + static PNG fallback.
+
+        Live Jupyter renders the interactive widget. Static contexts
+        (nbsphinx, GitHub, nbviewer) fall back to the embedded PNG.
+        """
+        bundle = super()._repr_mimebundle_(**kwargs)
+        data_dict = bundle[0] if isinstance(bundle, tuple) else bundle
+        n = self.n_images
+        ncols = min(self.ncols, n)
+        nrows = math.ceil(n / ncols)
+        cell = 4
+        fig, axes = plt.subplots(
+            nrows, ncols,
+            figsize=(cell * ncols, cell * nrows),
+            squeeze=False,
+        )
+        for i in range(nrows * ncols):
+            r, c = divmod(i, ncols)
+            ax = axes[r][c]
+            if i < n:
+                ax.imshow(self._data[i], cmap=self.cmap, origin="upper")
+                ax.set_title(self.labels[i], fontsize=10)
+            ax.axis("off")
+        if self.title:
+            fig.suptitle(self.title, fontsize=12)
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+        plt.close(fig)
+        data_dict["image/png"] = base64.b64encode(buf.getvalue()).decode("ascii")
+        if isinstance(bundle, tuple):
+            return (data_dict, bundle[1])
+        return data_dict
+
+    def state_dict(self):
+        return {
+            "title": self.title,
+            "cmap": self.cmap,
+            "log_scale": self.log_scale,
+            "auto_contrast": self.auto_contrast,
+            "show_stats": self.show_stats,
+            "show_fft": self.show_fft,
+            "show_controls": self.show_controls,
+            "pixel_size_angstrom": self.pixel_size_angstrom,
+            "scale_bar_visible": self.scale_bar_visible,
+            "image_width_px": self.image_width_px,
+            "ncols": self.ncols,
+            "selected_idx": self.selected_idx,
+            "roi_active": self.roi_active,
+            "roi_list": self.roi_list,
+            "roi_selected_idx": self.roi_selected_idx,
+            "profile_line": self.profile_line,
+        }
+
+    def save(self, path: str):
+        pathlib.Path(path).write_text(json.dumps(self.state_dict(), indent=2))
+
+    def load_state_dict(self, state):
+        for key, val in state.items():
+            if hasattr(self, key):
+                setattr(self, key, val)
+
+    def summary(self):
+        lines = [self.title or "Show2D", "═" * 32]
+        if self.n_images > 1:
+            lines.append(f"Image:    {self.n_images}×{self.height}×{self.width} ({self.ncols} cols)")
+        else:
+            lines.append(f"Image:    {self.height}×{self.width}")
+        if self.pixel_size_angstrom > 0:
+            ps = self.pixel_size_angstrom
+            if ps >= 10:
+                lines[-1] += f" ({ps / 10:.2f} nm/px)"
+            else:
+                lines[-1] += f" ({ps:.2f} Å/px)"
+        if hasattr(self, "_data") and self._data is not None:
+            arr = self._data
+            lines.append(f"Data:     min={float(arr.min()):.4g}  max={float(arr.max()):.4g}  mean={float(arr.mean()):.4g}")
+        cmap = self.cmap
+        scale = "log" if self.log_scale else "linear"
+        contrast = "auto contrast" if self.auto_contrast else "manual contrast"
+        display = f"{cmap} | {contrast} | {scale}"
+        if self.show_fft:
+            display += " | FFT"
+        lines.append(f"Display:  {display}")
+        if self.roi_active and self.roi_list:
+            lines.append(f"ROI:      {len(self.roi_list)} region(s)")
+        if self.profile_line:
+            p0, p1 = self.profile_line[0], self.profile_line[1]
+            lines.append(f"Profile:  ({p0['row']:.0f}, {p0['col']:.0f}) → ({p1['row']:.0f}, {p1['col']:.0f})")
+        print("\n".join(lines))
+
     def _compute_all_stats(self):
         """Compute statistics for all images."""
         means, mins, maxs, stds = [], [], [], []
@@ -221,10 +366,9 @@ class Show2D(anywidget.AnyWidget):
 
     def _update_all_frames(self):
         """Send raw float32 data to JS (normalization happens in JS for speed)."""
-        self.frame_bytes = self._data.astype(np.float32).tobytes()
+        self.frame_bytes = self._data.tobytes()
 
     def _sample_profile(self, row0, col0, row1, col1):
-        """Sample intensity values along a line using bilinear interpolation."""
         img = self._data[self.selected_idx]
         h, w = img.shape
         dc, dr = col1 - col0, row1 - row0
@@ -241,11 +385,10 @@ class Show2D(anywidget.AnyWidget):
         c1c = np.clip(ci + 1, 0, w - 1)
         r0c = np.clip(ri, 0, h - 1)
         r1c = np.clip(ri + 1, 0, h - 1)
-        vals = (img[r0c, c0c] * (1 - cf) * (1 - rf) +
+        return (img[r0c, c0c] * (1 - cf) * (1 - rf) +
                 img[r0c, c1c] * cf * (1 - rf) +
                 img[r1c, c0c] * (1 - cf) * rf +
-                img[r1c, c1c] * cf * rf)
-        return vals.astype(np.float32)
+                img[r1c, c1c] * cf * rf).astype(np.float32)
 
     def set_profile(self, row0: float, col0: float, row1: float, col1: float):
         """Set a line profile between two points (image pixel coordinates).
@@ -311,4 +454,46 @@ class Show2D(anywidget.AnyWidget):
             return dist_px * self.pixel_size_angstrom
         return dist_px
 
+    @traitlets.observe("roi_active", "roi_list", "roi_selected_idx", "selected_idx")
+    def _on_roi_change(self, change=None):
+        if self.roi_active:
+            self._update_roi_stats()
+        else:
+            self.roi_stats = {}
 
+    def _update_roi_stats(self):
+        idx = self.roi_selected_idx
+        if idx < 0 or idx >= len(self.roi_list):
+            self.roi_stats = {}
+            return
+        roi = self.roi_list[idx]
+        img = self._data[self.selected_idx]
+        h, w = img.shape
+        r, c = np.ogrid[:h, :w]
+        shape = roi.get("shape", "circle")
+        row, col = roi.get("row", 0), roi.get("col", 0)
+        radius = roi.get("radius", 10)
+        if shape == "circle":
+            mask = (c - col) ** 2 + (r - row) ** 2 <= radius**2
+        elif shape == "square":
+            mask = (np.abs(c - col) <= radius) & (np.abs(r - row) <= radius)
+        elif shape == "rectangle":
+            half_w = roi.get("width", 20) // 2
+            half_h = roi.get("height", 20) // 2
+            mask = (np.abs(c - col) <= half_w) & (np.abs(r - row) <= half_h)
+        elif shape == "annular":
+            dist2 = (c - col) ** 2 + (r - row) ** 2
+            inner = roi.get("radius_inner", 5)
+            mask = (dist2 >= inner**2) & (dist2 <= radius**2)
+        else:
+            mask = (c - col) ** 2 + (r - row) ** 2 <= radius**2
+        region = img[mask]
+        if region.size > 0:
+            self.roi_stats = {
+                "mean": float(region.mean()),
+                "min": float(region.min()),
+                "max": float(region.max()),
+                "std": float(region.std()),
+            }
+        else:
+            self.roi_stats = {}

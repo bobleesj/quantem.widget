@@ -3,6 +3,7 @@ Align2D: Interactive image alignment widget.
 Overlay two 2D images with alpha blending and drag/pad to align.
 Auto-alignment via FFT cross-correlation with live NCC display.
 """
+import json
 import pathlib
 from typing import Union
 
@@ -148,6 +149,10 @@ class Align2D(anywidget.AnyWidget):
         Automatically compute initial alignment via cross-correlation.
     max_shift : float, default 0.0
         Maximum allowed shift in pixels (0 = unlimited, constrained by padding).
+    rotation : float, default 0.0
+        Initial rotation angle of image B in degrees.
+    hist_source : str, default "a"
+        Which image to show in the histogram ("a" or "b").
 
     Examples
     --------
@@ -208,6 +213,7 @@ class Align2D(anywidget.AnyWidget):
 
     # UI
     canvas_size = traitlets.Int(300).tag(sync=True)
+    hist_source = traitlets.Unicode("a").tag(sync=True)
 
     def __init__(
         self,
@@ -224,6 +230,8 @@ class Align2D(anywidget.AnyWidget):
         auto_align: bool = True,
         max_shift: float = 0.0,
         rotation: float = 0.0,
+        hist_source: str = "a",
+        state=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -231,6 +239,8 @@ class Align2D(anywidget.AnyWidget):
         # Check if inputs are Dataset2d and extract metadata
         for img_data in (image_a, image_b):
             if hasattr(img_data, "array") and hasattr(img_data, "name") and hasattr(img_data, "sampling"):
+                if not title and img_data.name:
+                    title = img_data.name
                 if pixel_size == 0.0 and hasattr(img_data, "units"):
                     units = list(img_data.units)
                     sampling_val = float(img_data.sampling[-1])
@@ -277,6 +287,7 @@ class Align2D(anywidget.AnyWidget):
         self.canvas_size = canvas_size
         self.max_shift = max_shift
         self.rotation = rotation
+        self.hist_source = hist_source
 
         # Cross-correlation at (0,0) — baseline
         self.xcorr_zero = _compute_ncc(a, b, 0.0, 0.0)
@@ -294,12 +305,99 @@ class Align2D(anywidget.AnyWidget):
                 self.auto_dy = self.dy
                 # Compute NCC at aligned position
                 self.ncc_aligned = _compute_ncc(a, b, self.dx, self.dy)
-            except Exception:
-                pass  # Fall back to (0, 0)
+            except Exception as e:
+                import warnings
+                warnings.warn(f"Auto-alignment failed: {e}", stacklevel=2)
 
         # Send unpadded bytes
         self.image_a_bytes = a.tobytes()
         self.image_b_bytes = b.tobytes()
+
+        if state is not None:
+            if isinstance(state, (str, pathlib.Path)):
+                state = json.loads(pathlib.Path(state).read_text())
+            self.load_state_dict(state)
+
+    def set_images(self, image_a, image_b, auto_align=True):
+        """Replace both images. Preserves display settings, recomputes alignment."""
+        if hasattr(image_a, "array"):
+            image_a = image_a.array
+        if hasattr(image_b, "array"):
+            image_b = image_b.array
+        a = to_numpy(image_a).astype(np.float32)
+        b = to_numpy(image_b).astype(np.float32)
+        if a.ndim != 2:
+            raise ValueError(f"Align2D requires 2D images, image_a is {a.ndim}D")
+        if b.ndim != 2:
+            raise ValueError(f"Align2D requires 2D images, image_b is {b.ndim}D")
+        target_h = max(a.shape[0], b.shape[0])
+        target_w = max(a.shape[1], b.shape[1])
+        if a.shape != (target_h, target_w):
+            a = _resize_image(a, target_h, target_w)
+        if b.shape != (target_h, target_w):
+            b = _resize_image(b, target_h, target_w)
+        self.height = target_h
+        self.width = target_w
+        self.median_a = float(np.median(a))
+        self.median_b = float(np.median(b))
+        self.xcorr_zero = _compute_ncc(a, b, 0.0, 0.0)
+        self.dx = 0.0
+        self.dy = 0.0
+        self.rotation = 0.0
+        if auto_align:
+            try:
+                limit_x = int(self.max_shift if self.max_shift > 0 else target_w * self.padding)
+                limit_y = int(self.max_shift if self.max_shift > 0 else target_h * self.padding)
+                best_dx, best_dy = _cross_correlate_fft(a, b, limit_x, limit_y)
+                self.dx = max(-limit_x, min(limit_x, best_dx))
+                self.dy = max(-limit_y, min(limit_y, best_dy))
+                self.auto_dx = self.dx
+                self.auto_dy = self.dy
+                self.ncc_aligned = _compute_ncc(a, b, self.dx, self.dy)
+            except Exception:
+                pass
+        self.image_a_bytes = a.tobytes()
+        self.image_b_bytes = b.tobytes()
+
+    def __repr__(self) -> str:
+        return f"Align2D({self.height}×{self.width}, dx={self.dx:.1f}, dy={self.dy:.1f}, rot={self.rotation:.1f}°)"
+
+    def state_dict(self):
+        return {
+            "title": self.title,
+            "label_a": self.label_a,
+            "label_b": self.label_b,
+            "cmap": self.cmap,
+            "opacity": self.opacity,
+            "padding": self.padding,
+            "dx": self.dx,
+            "dy": self.dy,
+            "rotation": self.rotation,
+            "pixel_size": self.pixel_size,
+            "max_shift": self.max_shift,
+            "canvas_size": self.canvas_size,
+            "hist_source": self.hist_source,
+        }
+
+    def save(self, path: str):
+        pathlib.Path(path).write_text(json.dumps(self.state_dict(), indent=2))
+
+    def load_state_dict(self, state):
+        for key, val in state.items():
+            if hasattr(self, key):
+                setattr(self, key, val)
+
+    def summary(self):
+        lines = [self.title or "Align2D", "═" * 32]
+        lines.append(f"Image:    {self.height}×{self.width}")
+        if self.pixel_size > 0:
+            lines[-1] += f" ({self.pixel_size:.2f} nm/px)"
+        lines.append(f"Labels:   A={self.label_a!r}  B={self.label_b!r}")
+        lines.append(f"Offset:   dx={self.dx:.2f}  dy={self.dy:.2f}  rotation={self.rotation:.2f}°")
+        lines.append(f"Display:  {self.cmap} | opacity={self.opacity:.0%} | padding={self.padding:.0%}")
+        if self.ncc_aligned != 0:
+            lines.append(f"NCC:      aligned={self.ncc_aligned:.4f}  zero={self.xcorr_zero:.4f}")
+        print("\n".join(lines))
 
     def reset_alignment(self):
         self.dx = 0.0

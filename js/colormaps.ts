@@ -21,6 +21,10 @@ const COLORMAP_POINTS: Record<string, number[][]> = {
     [255, 87, 0], [255, 173, 0], [255, 255, 0], [255, 255, 128], [255, 255, 255],
   ],
   gray: [[0, 0, 0], [255, 255, 255]],
+  hsv: [
+    [255, 0, 0], [255, 255, 0], [0, 255, 0], [0, 255, 255],
+    [0, 0, 255], [255, 0, 255], [255, 0, 0],
+  ],
 };
 
 export const COLORMAP_NAMES = Object.keys(COLORMAP_POINTS);
@@ -53,9 +57,10 @@ export function applyColormap(
   vmax: number,
 ): void {
   const range = vmax > vmin ? vmax - vmin : 1;
+  const uniformData = !(vmax > vmin);
   for (let i = 0; i < data.length; i++) {
     const clipped = Math.max(vmin, Math.min(vmax, data[i]));
-    const v = Math.floor(((clipped - vmin) / range) * 255);
+    const v = uniformData ? 128 : Math.min(255, Math.floor(((clipped - vmin) / range) * 255));
     const j = i * 4;
     const lutIdx = v * 3;
     rgba[j] = lut[lutIdx];

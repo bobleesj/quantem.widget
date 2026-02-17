@@ -216,7 +216,7 @@ def test_show3dvolume_play_pause_stop():
     widget.slice_z = 5
     widget.stop()
     assert widget.playing is False
-    assert widget.slice_z == 0
+    assert widget.slice_z == 4  # stop() resets to center slice
 
 
 def test_show3dvolume_fps_parameter():
@@ -234,3 +234,73 @@ def test_show3dvolume_play_axis():
     assert widget.play_axis == 2
     widget.play_axis = 3  # "All"
     assert widget.play_axis == 3
+
+
+# ── State Protocol ────────────────────────────────────────────────────────
+
+
+def test_show3dvolume_state_dict_roundtrip():
+    data = np.random.rand(16, 16, 16).astype(np.float32)
+    w = Show3DVolume(data, cmap="viridis", log_scale=True, title="Volume",
+                     pixel_size_angstrom=2.0, show_fft=True, fps=10.0)
+    w.slice_z = 5
+    w.slice_y = 8
+    w.slice_x = 12
+    sd = w.state_dict()
+    w2 = Show3DVolume(data, state=sd)
+    assert w2.cmap == "viridis"
+    assert w2.log_scale is True
+    assert w2.title == "Volume"
+    assert w2.pixel_size_angstrom == pytest.approx(2.0)
+    assert w2.show_fft is True
+    assert w2.fps == pytest.approx(10.0)
+    assert w2.slice_z == 5
+    assert w2.slice_y == 8
+    assert w2.slice_x == 12
+
+
+def test_show3dvolume_save_load_file(tmp_path):
+    import json
+    data = np.random.rand(8, 8, 8).astype(np.float32)
+    w = Show3DVolume(data, cmap="plasma", title="Saved Vol")
+    path = tmp_path / "vol_state.json"
+    w.save(str(path))
+    assert path.exists()
+    saved = json.loads(path.read_text())
+    assert saved["cmap"] == "plasma"
+    w2 = Show3DVolume(data, state=str(path))
+    assert w2.cmap == "plasma"
+    assert w2.title == "Saved Vol"
+
+
+def test_show3dvolume_summary(capsys):
+    data = np.random.rand(16, 16, 16).astype(np.float32)
+    w = Show3DVolume(data, title="Nanoparticle", cmap="inferno")
+    w.summary()
+    out = capsys.readouterr().out
+    assert "Nanoparticle" in out
+    assert "16×16×16" in out
+    assert "inferno" in out
+
+
+def test_show3dvolume_repr():
+    data = np.random.rand(16, 16, 16).astype(np.float32)
+    w = Show3DVolume(data, cmap="inferno")
+    r = repr(w)
+    assert "Show3DVolume" in r
+    assert "16×16×16" in r
+    assert "inferno" in r
+
+
+def test_show3dvolume_set_image():
+    data = np.random.rand(16, 16, 16).astype(np.float32)
+    widget = Show3DVolume(data, cmap="viridis")
+    assert widget.nz == 16
+
+    new_data = np.random.rand(32, 24, 20).astype(np.float32)
+    widget.set_image(new_data)
+    assert widget.nz == 32
+    assert widget.ny == 24
+    assert widget.nx == 20
+    assert widget.cmap == "viridis"
+    assert len(widget.volume_bytes) == 32 * 24 * 20 * 4

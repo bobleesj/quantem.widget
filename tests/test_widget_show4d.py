@@ -17,17 +17,17 @@ def test_show4d_loads():
 def test_show4d_shape_traits():
     data = np.random.rand(4, 8, 12, 16).astype(np.float32)
     widget = Show4D(data)
-    assert widget.nav_x == 4
-    assert widget.nav_y == 8
-    assert widget.sig_x == 12
-    assert widget.sig_y == 16
+    assert widget.nav_rows == 4
+    assert widget.nav_cols == 8
+    assert widget.sig_rows == 12
+    assert widget.sig_cols == 16
 
 
 def test_show4d_initial_position():
     data = np.random.rand(8, 10, 16, 16).astype(np.float32)
     widget = Show4D(data)
-    assert widget.pos_x == 4
-    assert widget.pos_y == 5
+    assert widget.pos_row == 4
+    assert widget.pos_col == 5
 
 
 def test_show4d_frame_bytes_nonzero():
@@ -62,11 +62,11 @@ def test_show4d_position_change_updates_frame():
     data[0, 0] = 1.0
     data[1, 1] = 2.0
     widget = Show4D(data)
-    widget.pos_x = 0
-    widget.pos_y = 0
+    widget.pos_row = 0
+    widget.pos_col = 0
     frame0 = bytes(widget.frame_bytes)
-    widget.pos_x = 1
-    widget.pos_y = 1
+    widget.pos_row = 1
+    widget.pos_col = 1
     frame1 = bytes(widget.frame_bytes)
     assert frame0 != frame1
 
@@ -76,16 +76,16 @@ def test_show4d_position_property():
     widget = Show4D(data)
     widget.position = (2, 3)
     assert widget.position == (2, 3)
-    assert widget.pos_x == 2
-    assert widget.pos_y == 3
+    assert widget.pos_row == 2
+    assert widget.pos_col == 3
 
 
 def test_show4d_roi_circle():
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
     widget = Show4D(data)
     widget.roi_mode = "circle"
-    widget.roi_center_x = 4
-    widget.roi_center_y = 4
+    widget.roi_center_row = 4
+    widget.roi_center_col = 4
     widget.roi_radius = 3
     assert len(widget.frame_bytes) == 16 * 16 * 4
     assert len(widget.sig_stats) == 4
@@ -95,8 +95,8 @@ def test_show4d_roi_square():
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
     widget = Show4D(data)
     widget.roi_mode = "square"
-    widget.roi_center_x = 4
-    widget.roi_center_y = 4
+    widget.roi_center_row = 4
+    widget.roi_center_col = 4
     widget.roi_radius = 2
     assert len(widget.frame_bytes) > 0
 
@@ -105,8 +105,8 @@ def test_show4d_roi_rect():
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
     widget = Show4D(data)
     widget.roi_mode = "rect"
-    widget.roi_center_x = 4
-    widget.roi_center_y = 4
+    widget.roi_center_row = 4
+    widget.roi_center_col = 4
     widget.roi_width = 4
     widget.roi_height = 6
     assert len(widget.frame_bytes) > 0
@@ -147,8 +147,8 @@ def test_show4d_torch_input():
     import torch
     data = torch.rand(4, 4, 8, 8)
     widget = Show4D(data)
-    assert widget.nav_x == 4
-    assert widget.sig_x == 8
+    assert widget.nav_rows == 4
+    assert widget.sig_rows == 8
 
 
 def test_show4d_rejects_2d():
@@ -205,8 +205,8 @@ def test_show4d_roi_empty_mask_falls_back():
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
     widget = Show4D(data)
     widget.roi_mode = "circle"
-    widget.roi_center_x = -100
-    widget.roi_center_y = -100
+    widget.roi_center_row = -100
+    widget.roi_center_col = -100
     widget.roi_radius = 1
     # Should fall back to single position frame
     assert len(widget.frame_bytes) == 16 * 16 * 4
@@ -224,8 +224,8 @@ def test_show4d_roi_reduce_mean():
     data[0, 1] = 4.0
     widget = Show4D(data)
     widget.roi_mode = "square"
-    widget.roi_center_x = 0
-    widget.roi_center_y = 0
+    widget.roi_center_row = 0
+    widget.roi_center_col = 0
     widget.roi_radius = 1
     widget.roi_reduce = "mean"
     frame = np.frombuffer(widget.frame_bytes, dtype=np.float32)
@@ -239,8 +239,8 @@ def test_show4d_roi_reduce_max():
     data[2, 2] = 5.0
     widget = Show4D(data)
     widget.roi_mode = "circle"
-    widget.roi_center_x = 1.5
-    widget.roi_center_y = 1.5
+    widget.roi_center_row = 1.5
+    widget.roi_center_col = 1.5
     widget.roi_radius = 2
     widget.roi_reduce = "max"
     frame = np.frombuffer(widget.frame_bytes, dtype=np.float32)
@@ -252,8 +252,8 @@ def test_show4d_roi_reduce_min():
     data[1, 1] = 1.0
     widget = Show4D(data)
     widget.roi_mode = "square"
-    widget.roi_center_x = 1
-    widget.roi_center_y = 1
+    widget.roi_center_row = 1
+    widget.roi_center_col = 1
     widget.roi_radius = 1
     widget.roi_reduce = "min"
     frame = np.frombuffer(widget.frame_bytes, dtype=np.float32)
@@ -264,8 +264,8 @@ def test_show4d_roi_reduce_sum():
     data = np.ones((4, 4, 8, 8), dtype=np.float32)
     widget = Show4D(data)
     widget.roi_mode = "square"
-    widget.roi_center_x = 1
-    widget.roi_center_y = 1
+    widget.roi_center_row = 1
+    widget.roi_center_col = 1
     widget.roi_radius = 1
     widget.roi_reduce = "sum"
     frame = np.frombuffer(widget.frame_bytes, dtype=np.float32)
@@ -277,11 +277,215 @@ def test_show4d_roi_reduce_change_updates_frame():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     widget = Show4D(data)
     widget.roi_mode = "circle"
-    widget.roi_center_x = 2
-    widget.roi_center_y = 2
+    widget.roi_center_row = 2
+    widget.roi_center_col = 2
     widget.roi_radius = 2
     widget.roi_reduce = "mean"
     frame_mean = bytes(widget.frame_bytes)
     widget.roi_reduce = "max"
     frame_max = bytes(widget.frame_bytes)
     assert frame_mean != frame_max
+
+
+def test_show4d_snap_defaults():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    widget = Show4D(data)
+    assert widget.snap_enabled is False
+    assert widget.snap_radius == 5
+
+
+def test_show4d_snap_enabled():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    widget = Show4D(data, snap_enabled=True, snap_radius=10)
+    assert widget.snap_enabled is True
+    assert widget.snap_radius == 10
+
+
+def test_show4d_snap_toggle():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    widget = Show4D(data)
+    widget.snap_enabled = True
+    assert widget.snap_enabled is True
+    widget.snap_radius = 3
+    assert widget.snap_radius == 3
+
+
+# ── State Protocol ────────────────────────────────────────────────────────
+
+
+def test_show4d_state_dict_roundtrip():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data, cmap="viridis", log_scale=True, title="4D Data",
+               snap_enabled=True, snap_radius=8)
+    sd = w.state_dict()
+    w2 = Show4D(data, state=sd)
+    assert w2.cmap == "viridis"
+    assert w2.log_scale is True
+    assert w2.title == "4D Data"
+    assert w2.snap_enabled is True
+    assert w2.snap_radius == 8
+
+
+def test_show4d_save_load_file(tmp_path):
+    import json
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data, cmap="plasma", title="Saved 4D")
+    path = tmp_path / "show4d_state.json"
+    w.save(str(path))
+    assert path.exists()
+    saved = json.loads(path.read_text())
+    assert saved["cmap"] == "plasma"
+    w2 = Show4D(data, state=str(path))
+    assert w2.cmap == "plasma"
+    assert w2.title == "Saved 4D"
+
+
+def test_show4d_summary(capsys):
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data, title="My 4D", cmap="inferno")
+    w.summary()
+    out = capsys.readouterr().out
+    assert "My 4D" in out
+    assert "4×4" in out
+    assert "inferno" in out
+
+
+def test_show4d_repr():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data)
+    r = repr(w)
+    assert "Show4D" in r
+    assert "4, 4, 8, 8" in r
+
+
+def test_show4d_set_image():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    widget = Show4D(data, cmap="viridis")
+    assert widget.nav_rows == 4
+
+    new_data = np.random.rand(6, 6, 16, 16).astype(np.float32)
+    widget.set_image(new_data)
+    assert widget.nav_rows == 6
+    assert widget.nav_cols == 6
+    assert widget.sig_rows == 16
+    assert widget.sig_cols == 16
+    assert widget.cmap == "viridis"
+
+
+# ── Line Profile ─────────────────────────────────────────────────────────
+
+
+def test_show4d_profile_defaults():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data)
+    assert w.profile_line == []
+    assert w.profile_width == 1
+    assert w.profile == []
+    assert w.profile_values is None
+    assert w.profile_distance == 0.0
+
+
+def test_show4d_set_profile():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data)
+    result = w.set_profile(0, 0, 7, 7)
+    assert result is w  # method chaining
+    assert len(w.profile_line) == 2
+    assert w.profile_line[0] == {"row": 0.0, "col": 0.0}
+    assert w.profile_line[1] == {"row": 7.0, "col": 7.0}
+
+
+def test_show4d_clear_profile():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data)
+    w.set_profile(0, 0, 7, 7)
+    assert len(w.profile_line) == 2
+    result = w.clear_profile()
+    assert result is w
+    assert w.profile_line == []
+
+
+def test_show4d_profile_property():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data)
+    w.set_profile(1.5, 2.5, 6.5, 3.5)
+    pts = w.profile
+    assert len(pts) == 2
+    assert pts[0] == (1.5, 2.5)
+    assert pts[1] == (6.5, 3.5)
+
+
+def test_show4d_profile_values():
+    data = np.ones((4, 4, 8, 8), dtype=np.float32) * 5.0
+    w = Show4D(data)
+    w.set_profile(0, 0, 7, 0)
+    vals = w.profile_values
+    assert vals is not None
+    assert len(vals) >= 2
+    assert np.allclose(vals, 5.0, atol=0.01)
+
+
+def test_show4d_profile_distance():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data, sig_pixel_size=2.0, sig_pixel_unit="Å")
+    w.set_profile(0, 0, 3, 4)
+    # pixel distance = sqrt(3^2 + 4^2) = 5, physical = 5 * 2.0 = 10.0
+    assert abs(w.profile_distance - 10.0) < 0.01
+
+
+def test_show4d_profile_in_state_dict():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data)
+    w.set_profile(1, 2, 5, 6)
+    w.profile_width = 3
+    sd = w.state_dict()
+    assert "profile_line" in sd
+    assert "profile_width" in sd
+    assert sd["profile_width"] == 3
+    assert len(sd["profile_line"]) == 2
+
+
+def test_show4d_profile_in_summary(capsys):
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data, title="Profile Test")
+    w.set_profile(0, 0, 7, 7)
+    w.summary()
+    out = capsys.readouterr().out
+    assert "Profile:" in out
+
+
+# ── GIF Export ──────────────────────────────────────────────────────────────
+
+def test_show4d_gif_export_defaults():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data)
+    assert w._gif_export_requested is False
+    assert w._gif_data == b""
+
+
+def test_show4d_gif_generation_with_path():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data, cmap="viridis")
+    w.set_path([(0, 0), (1, 1), (2, 2)], autoplay=False)
+    w._generate_gif()
+    assert len(w._gif_data) > 0
+    # GIF magic bytes
+    assert w._gif_data[:3] == b"GIF"
+
+
+def test_show4d_gif_generation_no_path():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data)
+    w._generate_gif()
+    assert w._gif_data == b""
+
+
+def test_show4d_normalize_frame():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data)
+    frame = np.array([[0.0, 0.5], [1.0, 0.25]], dtype=np.float32)
+    result = w._normalize_frame(frame)
+    assert result.dtype == np.uint8
+    assert result.shape == (2, 2)
+    assert result.max() <= 255
+    assert result.min() >= 0

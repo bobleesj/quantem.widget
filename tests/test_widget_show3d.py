@@ -568,3 +568,265 @@ def test_show3d_buffer_wraparound():
     assert buf[5 * frame_size : 6 * frame_size].mean() == pytest.approx(0.0)
 
 
+def test_show3d_profile_set_and_clear():
+    data = np.random.rand(5, 32, 32).astype(np.float32)
+    widget = Show3D(data)
+    widget.set_profile(0, 0, 31, 31)
+    assert len(widget.profile_line) == 2
+    assert widget.profile == [(0.0, 0.0), (31.0, 31.0)]
+    widget.clear_profile()
+    assert widget.profile_line == []
+    assert widget.profile == []
+
+
+def test_show3d_profile_values():
+    data = np.ones((3, 16, 16), dtype=np.float32) * 5.0
+    widget = Show3D(data)
+    widget.set_profile(0, 0, 0, 15)
+    vals = widget.profile_values
+    assert vals is not None
+    assert len(vals) >= 2
+    assert vals.mean() == pytest.approx(5.0, abs=0.01)
+
+
+def test_show3d_profile_distance_pixels():
+    data = np.ones((2, 10, 10), dtype=np.float32)
+    widget = Show3D(data)
+    widget.set_profile(0, 0, 3, 4)
+    assert widget.profile_distance == pytest.approx(5.0)
+
+
+def test_show3d_profile_distance_calibrated():
+    data = np.ones((2, 10, 10), dtype=np.float32)
+    widget = Show3D(data, pixel_size=0.5)  # 0.5 nm/px
+    widget.set_profile(0, 0, 3, 4)
+    assert widget.profile_distance == pytest.approx(2.5)  # 5px * 0.5 nm/px
+
+
+def test_show3d_profile_no_line():
+    data = np.ones((2, 10, 10), dtype=np.float32)
+    widget = Show3D(data)
+    assert widget.profile_values is None
+    assert widget.profile_distance is None
+
+
+def test_show3d_profile_width_trait():
+    data = np.ones((2, 16, 16), dtype=np.float32)
+    widget = Show3D(data)
+    assert widget.profile_width == 1
+    widget.profile_width = 5
+    assert widget.profile_width == 5
+
+
+# =========================================================================
+# Dimension Label
+# =========================================================================
+
+
+def test_show3d_dim_label_default():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    widget = Show3D(data)
+    assert widget.dim_label == "Frame"
+
+
+def test_show3d_dim_label_custom():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    widget = Show3D(data, dim_label="Defocus")
+    assert widget.dim_label == "Defocus"
+
+
+# =========================================================================
+# Method Chaining
+# =========================================================================
+
+
+def test_show3d_method_chaining():
+    data = np.random.rand(10, 16, 16).astype(np.float32)
+    w = Show3D(data)
+    result = w.goto(3).play().pause().stop()
+    assert result is w
+    result = w.set_roi(5, 5, 10).roi_circle(8).roi_square(6).roi_rectangle(10, 5)
+    assert result is w
+    result = w.set_profile(0, 0, 10, 10).clear_profile()
+    assert result is w
+
+
+def test_show3d_goto():
+    data = np.random.rand(10, 8, 8).astype(np.float32)
+    widget = Show3D(data)
+    widget.goto(7)
+    assert widget.slice_idx == 7
+    widget.goto(12)  # wraps around
+    assert widget.slice_idx == 2
+
+
+# =========================================================================
+# Annular ROI
+# =========================================================================
+
+
+def test_show3d_roi_annular():
+    data = np.ones((5, 32, 32), dtype=np.float32) * 3.0
+    widget = Show3D(data)
+    widget.roi_annular(inner=5, outer=10)
+    assert widget.roi_shape == "annular"
+    assert widget.roi_radius_inner == 5
+    assert widget.roi_radius == 10
+    assert widget.roi_active is True
+
+
+def test_show3d_roi_annular_mean():
+    data = np.ones((3, 32, 32), dtype=np.float32) * 7.0
+    widget = Show3D(data)
+    widget.set_roi(16, 16, 10)
+    widget.roi_annular(inner=3, outer=8)
+    assert widget.roi_mean == pytest.approx(7.0)
+
+
+def test_show3d_roi_shapes():
+    data = np.random.rand(3, 16, 16).astype(np.float32)
+    widget = Show3D(data)
+    widget.roi_circle(5)
+    assert widget.roi_shape == "circle"
+    widget.roi_square(5)
+    assert widget.roi_shape == "square"
+    widget.roi_rectangle(10, 5)
+    assert widget.roi_shape == "rectangle"
+    widget.roi_annular(3, 8)
+    assert widget.roi_shape == "annular"
+
+
+# =========================================================================
+# ROI Plot Data
+# =========================================================================
+
+
+def test_show3d_roi_plot_data():
+    data = np.zeros((5, 8, 8), dtype=np.float32)
+    for i in range(5):
+        data[i] = float(i)
+    widget = Show3D(data)
+    widget.set_roi(4, 4, 3)
+    assert len(widget.roi_plot_data) > 0
+    plot = np.frombuffer(widget.roi_plot_data, dtype=np.float32)
+    assert len(plot) == 5
+    for i in range(5):
+        assert plot[i] == pytest.approx(float(i))
+
+
+def test_show3d_roi_plot_data_cleared():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    widget = Show3D(data)
+    widget.set_roi(4, 4, 3)
+    assert len(widget.roi_plot_data) > 0
+    widget.roi_active = False
+    assert widget.roi_plot_data == b""
+
+
+# =========================================================================
+# Playback Path
+# =========================================================================
+
+
+def test_show3d_playback_path():
+    data = np.random.rand(10, 8, 8).astype(np.float32)
+    widget = Show3D(data)
+    widget.set_playback_path([0, 5, 3, 7])
+    assert widget.playback_path == [0, 5, 3, 7]
+
+
+def test_show3d_playback_path_clear():
+    data = np.random.rand(10, 8, 8).astype(np.float32)
+    widget = Show3D(data)
+    widget.set_playback_path([0, 5, 3])
+    widget.clear_playback_path()
+    assert widget.playback_path == []
+
+
+def test_show3d_playback_path_wraps():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    widget = Show3D(data)
+    widget.set_playback_path([0, 7, 12])
+    assert widget.playback_path == [0, 2, 2]  # 7%5=2, 12%5=2
+
+
+def test_show3d_playback_path_chaining():
+    data = np.random.rand(10, 8, 8).astype(np.float32)
+    widget = Show3D(data)
+    result = widget.set_playback_path([0, 1, 2]).clear_playback_path()
+    assert result is widget
+
+
+# ── State Protocol ────────────────────────────────────────────────────────
+
+
+def test_show3d_state_dict_roundtrip():
+    data = np.random.rand(10, 32, 32).astype(np.float32)
+    w = Show3D(data, cmap="viridis", log_scale=True, auto_contrast=True,
+               title="Stack", pixel_size=0.5, fps=15.0, show_fft=True)
+    w.roi_active = True
+    w.roi_shape = "circle"
+    w.roi_row = 10
+    w.roi_col = 15
+    sd = w.state_dict()
+    w2 = Show3D(data, state=sd)
+    assert w2.cmap == "viridis"
+    assert w2.log_scale is True
+    assert w2.title == "Stack"
+    assert w2.pixel_size == pytest.approx(0.5)
+    assert w2.fps == pytest.approx(15.0)
+    assert w2.show_fft is True
+    assert w2.roi_active is True
+    assert w2.roi_row == 10
+
+
+def test_show3d_save_load_file(tmp_path):
+    import json
+    data = np.random.rand(5, 16, 16).astype(np.float32)
+    w = Show3D(data, cmap="plasma", title="Saved")
+    path = tmp_path / "show3d_state.json"
+    w.save(str(path))
+    assert path.exists()
+    saved = json.loads(path.read_text())
+    assert saved["cmap"] == "plasma"
+    w2 = Show3D(data, state=str(path))
+    assert w2.cmap == "plasma"
+    assert w2.title == "Saved"
+
+
+def test_show3d_summary(capsys):
+    data = np.random.rand(10, 32, 32).astype(np.float32)
+    w = Show3D(data, title="Focal Series", cmap="magma", pixel_size=0.25)
+    w.summary()
+    out = capsys.readouterr().out
+    assert "Focal Series" in out
+    assert "10×32×32" in out
+    assert "magma" in out
+    assert "0.25" in out
+
+
+def test_show3d_repr():
+    data = np.random.rand(10, 32, 32).astype(np.float32)
+    w = Show3D(data, cmap="magma")
+    r = repr(w)
+    assert "Show3D" in r
+    assert "10×32×32" in r
+    assert "magma" in r
+
+
+def test_show3d_set_image():
+    data = np.random.rand(10, 16, 16).astype(np.float32)
+    widget = Show3D(data, cmap="gray", fps=12)
+    assert widget.n_slices == 10
+
+    new_data = np.random.rand(20, 32, 24).astype(np.float32)
+    widget.set_image(new_data)
+    assert widget.n_slices == 20
+    assert widget.height == 32
+    assert widget.width == 24
+    assert widget.cmap == "gray"
+    assert widget.fps == 12
+    assert widget.data_min == pytest.approx(float(new_data.min()))
+    assert widget.data_max == pytest.approx(float(new_data.max()))
+
+

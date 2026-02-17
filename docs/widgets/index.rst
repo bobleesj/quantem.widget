@@ -1,7 +1,7 @@
 Widgets
 =======
 
-quantem.widget provides five interactive widgets for electron microscopy visualization.
+quantem.widget provides nine interactive widgets for electron microscopy visualization.
 
 All widgets support:
 
@@ -9,6 +9,7 @@ All widgets support:
 - Automatic **light/dark theme** detection
 - **Zoom and pan** with mouse scroll and drag
 - **Colormaps**: inferno, viridis, plasma, magma, hot, gray
+- **State persistence** — ``summary()``, ``state_dict()``, ``save(path)``, ``state=`` constructor param
 
 .. toctree::
    :maxdepth: 1
@@ -17,4 +18,8 @@ All widgets support:
    show3d
    show3dvolume
    show4dstem
-   clicker
+   show4d
+   align2d
+   mark2d
+   edit2d
+   showcomplex

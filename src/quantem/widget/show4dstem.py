@@ -1,12 +1,30 @@
 """
-show4d: Fast interactive 4D-STEM viewer widget with advanced features.
+show4dstem: Fast interactive 4D-STEM viewer widget.
 
-Features:
-- Binary transfer (no base64 overhead)
-- ROI drawing tools
-- Path animation (raster scan, custom paths)
+Apple MPS GPU limit: PyTorch's MPS backend (Apple Silicon) has a hard limit
+of ~2.1 billion elements (INT_MAX = 2^31 - 1) per tensor. Datasets exceeding
+this automatically fall back to CPU, which is still fast on Apple Silicon
+thanks to unified memory (CPU and GPU share the same RAM).
+
+CUDA GPUs do not have this limit.
+
+Common 4D-STEM sizes (float32):
+
+    Scan     Detector   Elements     Size    MPS?
+    128×128  128×128       268M    1.0 GB    yes
+    128×128  256×256     1,074M    4.0 GB    yes
+    256×256  128×128     1,074M    4.0 GB    yes
+    256×256  192×192     2,416M    9.0 GB    no (auto CPU, still fast)
+    256×256  256×256     4,295M   16.0 GB    no (auto CPU, still fast)
+    512×512  256×256    17,180M   64.0 GB    no (auto CPU)
+
+To reduce data size, bin k-space at the dataset level before viewing:
+
+    dataset = dataset.bin(2, axes=(2, 3))  # 2x2 k-space binning
+    widget = Show4DSTEM(dataset)
 """
 
+import json
 import pathlib
 
 import anywidget
@@ -168,6 +186,15 @@ class Show4DSTEM(anywidget.AnyWidget):
     dp_stats = traitlets.List(traitlets.Float(), default_value=[0.0, 0.0, 0.0, 0.0]).tag(sync=True)
     vi_stats = traitlets.List(traitlets.Float(), default_value=[0.0, 0.0, 0.0, 0.0]).tag(sync=True)
     mask_dc = traitlets.Bool(True).tag(sync=True)  # Mask center pixel for DP stats
+    log_scale = traitlets.Bool(False).tag(sync=True)  # Log scale for DP display
+
+    # Export (GIF)
+    _gif_export_requested = traitlets.Bool(False).tag(sync=True)
+    _gif_data = traitlets.Bytes(b"").tag(sync=True)
+
+    # Line Profile (for DP panel)
+    profile_line = traitlets.List(traitlets.Dict()).tag(sync=True)
+    profile_width = traitlets.Int(1).tag(sync=True)
 
     def __init__(
         self,
@@ -179,11 +206,12 @@ class Show4DSTEM(anywidget.AnyWidget):
         bf_radius: float | None = None,
         precompute_virtual_images: bool = False,
         log_scale: bool = False,
+        state=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
 
-        self.log_scale = log_scale
+        self.log_scale = log_scale  # Set trait value from constructor
 
         # Extract calibration from Dataset4dstem if provided
         k_calibrated = False
@@ -209,19 +237,24 @@ class Show4DSTEM(anywidget.AnyWidget):
         # Convert to NumPy then PyTorch tensor using quantem device config
         data_np = to_numpy(data)
         device_str, _ = validate_device(None)  # Get device from quantem config
+        # MPS backend can't handle tensors >INT_MAX elements; fall back to CPU
+        # (still fast on Apple Silicon thanks to unified memory)
+        if data_np.size > 2**31 - 1 and device_str == "mps":
+            device_str = "cpu"
         self._device = torch.device(device_str)
         self._data = torch.from_numpy(data_np.astype(np.float32)).to(self._device)
         # Remove saturated hot pixels (65535 for uint16, 255 for uint8)
+        # Use torch.where instead of boolean indexing to avoid nonzero() INT_MAX limit
         saturated_value = 65535.0 if data_np.dtype == np.uint16 else 255.0 if data_np.dtype == np.uint8 else None
         if saturated_value is not None:
-            self._data[self._data >= saturated_value] = 0
-        # Handle flattened data
-        if data.ndim == 3:
+            self._data = torch.where(self._data >= saturated_value, torch.zeros(1, device=self._device), self._data)
+        # Handle flattened data — use self._data.shape (accounts for binning)
+        ndim = self._data.ndim
+        if ndim == 3:
             if scan_shape is not None:
                 self._scan_shape = scan_shape
             else:
-                # Infer square scan shape from N
-                n = data.shape[0]
+                n = self._data.shape[0]
                 side = int(n ** 0.5)
                 if side * side != n:
                     raise ValueError(
@@ -229,12 +262,12 @@ class Show4DSTEM(anywidget.AnyWidget):
                         f"Provide scan_shape explicitly."
                     )
                 self._scan_shape = (side, side)
-            self._det_shape = (data.shape[1], data.shape[2])
-        elif data.ndim == 4:
-            self._scan_shape = (data.shape[0], data.shape[1])
-            self._det_shape = (data.shape[2], data.shape[3])
+            self._det_shape = (self._data.shape[1], self._data.shape[2])
+        elif ndim == 4:
+            self._scan_shape = (self._data.shape[0], self._data.shape[1])
+            self._det_shape = (self._data.shape[2], self._data.shape[3])
         else:
-            raise ValueError(f"Expected 3D or 4D array, got {data.ndim}D")
+            raise ValueError(f"Expected 3D or 4D array, got {ndim}D")
 
         self.shape_rows = self._scan_shape[0]
         self.shape_cols = self._scan_shape[1]
@@ -252,21 +285,16 @@ class Show4DSTEM(anywidget.AnyWidget):
         self._scan_row_coords = torch.arange(self.shape_rows, device=self._device, dtype=torch.float32)[:, None]
         self._scan_col_coords = torch.arange(self.shape_cols, device=self._device, dtype=torch.float32)[None, :]
         # Setup center and BF radius
-        # If user provides explicit values, use them
-        # Otherwise, auto-detect from the data for accurate presets
         det_size = min(self.det_rows, self.det_cols)
         if center is not None and bf_radius is not None:
-            # User provided both - use explicit values
             self.center_row = float(center[0])
             self.center_col = float(center[1])
             self.bf_radius = float(bf_radius)
         elif center is not None:
-            # User provided center only - use it with default bf_radius
             self.center_row = float(center[0])
             self.center_col = float(center[1])
             self.bf_radius = det_size * DEFAULT_BF_RATIO
         elif bf_radius is not None:
-            # User provided bf_radius only - use detector center
             self.center_col = float(self.det_cols / 2)
             self.center_row = float(self.det_rows / 2)
             self.bf_radius = float(bf_radius)
@@ -310,6 +338,7 @@ class Show4DSTEM(anywidget.AnyWidget):
         
         # Path animation: observe index changes from frontend
         self.observe(self._on_path_index_change, names=["path_index"])
+        self.observe(self._on_gif_export, names=["_gif_export_requested"])
 
         # Auto-detect trigger: observe changes from frontend
         self.observe(self._on_auto_detect_trigger, names=["auto_detect_trigger"])
@@ -328,6 +357,53 @@ class Show4DSTEM(anywidget.AnyWidget):
             "vi_roi_radius", "vi_roi_width", "vi_roi_height"
         ])
 
+        if state is not None:
+            if isinstance(state, (str, pathlib.Path)):
+                state = json.loads(pathlib.Path(state).read_text())
+            self.load_state_dict(state)
+
+    def set_image(self, data, scan_shape=None):
+        """Replace the 4D-STEM data. Preserves all display and ROI settings."""
+        if hasattr(data, "sampling") and hasattr(data, "array"):
+            data = data.array
+        data_np = to_numpy(data)
+        self._data = torch.from_numpy(data_np.astype(np.float32)).to(self._device)
+        saturated_value = 65535.0 if data_np.dtype == np.uint16 else 255.0 if data_np.dtype == np.uint8 else None
+        if saturated_value is not None:
+            self._data[self._data >= saturated_value] = 0
+        if data_np.ndim == 3:
+            if scan_shape is not None:
+                self._scan_shape = scan_shape
+            else:
+                n = data_np.shape[0]
+                side = int(n ** 0.5)
+                if side * side != n:
+                    raise ValueError(f"Cannot infer square scan_shape from N={n}. Provide scan_shape explicitly.")
+                self._scan_shape = (side, side)
+            self._det_shape = (data_np.shape[1], data_np.shape[2])
+        elif data_np.ndim == 4:
+            self._scan_shape = (data_np.shape[0], data_np.shape[1])
+            self._det_shape = (data_np.shape[2], data_np.shape[3])
+        else:
+            raise ValueError(f"Expected 3D or 4D array, got {data_np.ndim}D")
+        self.shape_rows = self._scan_shape[0]
+        self.shape_cols = self._scan_shape[1]
+        self.det_rows = self._det_shape[0]
+        self.det_cols = self._det_shape[1]
+        self.dp_global_min = max(float(self._data.min()), MIN_LOG_VALUE)
+        self.dp_global_max = float(self._data.max())
+        self._det_row_coords = torch.arange(self.det_rows, device=self._device, dtype=torch.float32)[:, None]
+        self._det_col_coords = torch.arange(self.det_cols, device=self._device, dtype=torch.float32)[None, :]
+        self._scan_row_coords = torch.arange(self.shape_rows, device=self._device, dtype=torch.float32)[:, None]
+        self._scan_col_coords = torch.arange(self.shape_cols, device=self._device, dtype=torch.float32)[None, :]
+        self._cached_bf_virtual = None
+        self._cached_abf_virtual = None
+        self._cached_adf_virtual = None
+        self.pos_row = min(self.pos_row, self.shape_rows - 1)
+        self.pos_col = min(self.pos_col, self.shape_cols - 1)
+        self._compute_virtual_image_from_roi()
+        self._update_frame()
+
     def __repr__(self) -> str:
         k_unit = "mrad" if self.k_calibrated else "px"
         return (
@@ -335,6 +411,66 @@ class Show4DSTEM(anywidget.AnyWidget):
             f"sampling=({self.pixel_size} Å, {self.k_pixel_size} {k_unit}), "
             f"pos=({self.pos_row}, {self.pos_col}))"
         )
+
+    def state_dict(self):
+        return {
+            "pixel_size": self.pixel_size,
+            "k_pixel_size": self.k_pixel_size,
+            "k_calibrated": self.k_calibrated,
+            "center_row": self.center_row,
+            "center_col": self.center_col,
+            "bf_radius": self.bf_radius,
+            "roi_active": self.roi_active,
+            "roi_mode": self.roi_mode,
+            "roi_center_row": self.roi_center_row,
+            "roi_center_col": self.roi_center_col,
+            "roi_radius": self.roi_radius,
+            "roi_radius_inner": self.roi_radius_inner,
+            "roi_width": self.roi_width,
+            "roi_height": self.roi_height,
+            "vi_roi_mode": self.vi_roi_mode,
+            "vi_roi_center_row": self.vi_roi_center_row,
+            "vi_roi_center_col": self.vi_roi_center_col,
+            "vi_roi_radius": self.vi_roi_radius,
+            "vi_roi_width": self.vi_roi_width,
+            "vi_roi_height": self.vi_roi_height,
+            "mask_dc": self.mask_dc,
+            "log_scale": self.log_scale,
+            "path_interval_ms": self.path_interval_ms,
+            "path_loop": self.path_loop,
+            "profile_line": self.profile_line,
+            "profile_width": self.profile_width,
+        }
+
+    def save(self, path: str):
+        pathlib.Path(path).write_text(json.dumps(self.state_dict(), indent=2))
+
+    def load_state_dict(self, state):
+        for key, val in state.items():
+            if hasattr(self, key):
+                setattr(self, key, val)
+
+    def summary(self):
+        lines = ["Show4DSTEM", "═" * 32]
+        lines.append(f"Scan:     {self.shape_rows}×{self.shape_cols} ({self.pixel_size:.2f} Å/px)")
+        k_unit = "mrad" if self.k_calibrated else "px"
+        lines.append(f"Detector: {self.det_rows}×{self.det_cols} ({self.k_pixel_size:.4f} {k_unit}/px)")
+        lines.append(f"Position: ({self.pos_row}, {self.pos_col})")
+        lines.append(f"Center:   ({self.center_row:.1f}, {self.center_col:.1f})  BF r={self.bf_radius:.1f} px")
+        display_parts = []
+        if self.log_scale:
+            display_parts.append("log scale")
+        if self.mask_dc:
+            display_parts.append("DC masked")
+        lines.append(f"Display:  {', '.join(display_parts) if display_parts else 'default'}")
+        if self.roi_active:
+            lines.append(f"ROI:      {self.roi_mode} at ({self.roi_center_row:.1f}, {self.roi_center_col:.1f}) r={self.roi_radius:.1f}")
+        if self.vi_roi_mode != "off":
+            lines.append(f"VI ROI:   {self.vi_roi_mode} at ({self.vi_roi_center_row:.1f}, {self.vi_roi_center_col:.1f}) r={self.vi_roi_radius:.1f}")
+        if self.profile_line and len(self.profile_line) == 2:
+            p0, p1 = self.profile_line[0], self.profile_line[1]
+            lines.append(f"Profile:  ({p0['row']:.0f}, {p0['col']:.0f}) -> ({p1['row']:.0f}, {p1['col']:.0f}) width={self.profile_width}")
+        print("\n".join(lines))
 
     # =========================================================================
     # Convenience Properties
@@ -359,6 +495,71 @@ class Show4DSTEM(anywidget.AnyWidget):
     def detector_shape(self) -> tuple[int, int]:
         """Detector dimensions as (rows, cols) tuple."""
         return (self.det_rows, self.det_cols)
+
+    # =========================================================================
+    # Line Profile
+    # =========================================================================
+
+    def set_profile(self, row0: float, col0: float, row1: float, col1: float) -> "Show4DSTEM":
+        self.profile_line = [
+            {"row": float(row0), "col": float(col0)},
+            {"row": float(row1), "col": float(col1)},
+        ]
+        return self
+
+    def clear_profile(self) -> "Show4DSTEM":
+        self.profile_line = []
+        return self
+
+    @property
+    def profile(self) -> list[tuple[float, float]]:
+        if len(self.profile_line) == 2:
+            p0, p1 = self.profile_line[0], self.profile_line[1]
+            return [(p0["row"], p0["col"]), (p1["row"], p1["col"])]
+        return []
+
+    @property
+    def profile_values(self):
+        if len(self.profile_line) != 2:
+            return None
+        p0, p1 = self.profile_line[0], self.profile_line[1]
+        frame = self._get_frame(self.pos_row, self.pos_col)
+        return self._sample_line(frame, p0["row"], p0["col"], p1["row"], p1["col"])
+
+    @property
+    def profile_distance(self) -> float:
+        if len(self.profile_line) != 2:
+            return 0.0
+        p0, p1 = self.profile_line[0], self.profile_line[1]
+        dist_px = np.sqrt((p1["row"] - p0["row"]) ** 2 + (p1["col"] - p0["col"]) ** 2)
+        if self.k_calibrated:
+            return float(dist_px * self.k_pixel_size)
+        return float(dist_px)
+
+    def _sample_line(self, frame, row0, col0, row1, col1):
+        h, w = frame.shape[:2]
+        dc = col1 - col0
+        dr = row1 - row0
+        length = np.sqrt(dc * dc + dr * dr)
+        n = max(2, int(np.ceil(length)))
+        out = np.empty(n, dtype=np.float32)
+        for i in range(n):
+            t = i / (n - 1)
+            c = col0 + t * dc
+            r = row0 + t * dr
+            ci, ri = int(np.floor(c)), int(np.floor(r))
+            cf, rf = c - ci, r - ri
+            c0c = max(0, min(w - 1, ci))
+            c1c = max(0, min(w - 1, ci + 1))
+            r0c = max(0, min(h - 1, ri))
+            r1c = max(0, min(h - 1, ri + 1))
+            out[i] = (
+                frame[r0c, c0c] * (1 - cf) * (1 - rf)
+                + frame[r0c, c1c] * cf * (1 - rf)
+                + frame[r1c, c0c] * (1 - cf) * rf
+                + frame[r1c, c1c] * cf * rf
+            )
+        return out
 
     # =========================================================================
     # Path Animation Methods
@@ -690,6 +891,56 @@ class Show4DSTEM(anywidget.AnyWidget):
         else:
             return self._data[row, col].cpu().numpy()
 
+    def _normalize_frame(self, frame: np.ndarray) -> np.ndarray:
+        if self.log_scale:
+            frame = np.log1p(np.maximum(frame, 0))
+        fmin, fmax = float(frame.min()), float(frame.max())
+        if fmax > fmin:
+            return np.clip((frame - fmin) / (fmax - fmin) * 255, 0, 255).astype(np.uint8)
+        return np.zeros(frame.shape, dtype=np.uint8)
+
+    def _on_gif_export(self, change=None):
+        if not self._gif_export_requested:
+            return
+        self._gif_export_requested = False
+        self._generate_gif()
+
+    def _generate_gif(self):
+        import io
+
+        from matplotlib import colormaps
+        from PIL import Image
+
+        if not self._path_points:
+            return
+
+        cmap_fn = colormaps.get_cmap("inferno")
+        duration_ms = max(10, self.path_interval_ms)
+
+        pil_frames = []
+        for row, col in self._path_points:
+            row = max(0, min(self.shape_rows - 1, row))
+            col = max(0, min(self.shape_cols - 1, col))
+            frame = self._get_frame(row, col).astype(np.float32)
+            normalized = self._normalize_frame(frame)
+            rgba = cmap_fn(normalized / 255.0)
+            rgb = (rgba[:, :, :3] * 255).astype(np.uint8)
+            pil_frames.append(Image.fromarray(rgb))
+
+        if not pil_frames:
+            return
+
+        buf = io.BytesIO()
+        pil_frames[0].save(
+            buf,
+            format="GIF",
+            save_all=True,
+            append_images=pil_frames[1:],
+            duration=duration_ms,
+            loop=0,
+        )
+        self._gif_data = buf.getvalue()
+
     def _update_frame(self, change=None):
         """Send raw float32 frame to frontend (JS handles scale/colormap)."""
         # Get frame as tensor (stays on device)
@@ -705,10 +956,13 @@ class Show4DSTEM(anywidget.AnyWidget):
 
         # Compute stats from frame (optionally mask DC component)
         if self.mask_dc and self.det_rows > 3 and self.det_cols > 3:
-            # Mask center 3x3 region for stats (only for detectors > 3x3)
-            cx, cy = self.det_rows // 2, self.det_cols // 2
+            # Mask center 3x3 region for stats using detected center (not geometric center)
+            cr = int(round(self.center_row))
+            cc = int(round(self.center_col))
+            cr = max(1, min(self.det_rows - 2, cr))
+            cc = max(1, min(self.det_cols - 2, cc))
             mask = torch.ones_like(frame, dtype=torch.bool)
-            mask[max(0, cx-1):cx+2, max(0, cy-1):cy+2] = False
+            mask[cr-1:cr+2, cc-1:cc+2] = False
             masked_vals = frame[mask]
             self.dp_stats = [
                 float(masked_vals.mean()),
@@ -795,15 +1049,8 @@ class Show4DSTEM(anywidget.AnyWidget):
             flat_indices = torch.nonzero(mask.flatten(), as_tuple=True)[0]
             avg_dp = self._data[flat_indices].mean(dim=0)
 
-        # Normalize to 0-255 for display
-        vmin, vmax = float(avg_dp.min()), float(avg_dp.max())
-        if vmax > vmin:
-            normalized = torch.clamp((avg_dp - vmin) / (vmax - vmin) * 255, 0, 255)
-            normalized = normalized.cpu().numpy().astype(np.uint8)
-        else:
-            normalized = np.zeros((self.det_rows, self.det_cols), dtype=np.uint8)
-
-        self.summed_dp_bytes = normalized.tobytes()
+        # Send raw float32 (consistent with other data paths — JS handles normalization)
+        self.summed_dp_bytes = avg_dp.cpu().numpy().astype(np.float32).tobytes()
 
     def _create_circular_mask(self, cx: float, cy: float, radius: float):
         """Create circular mask (boolean tensor on device)."""
@@ -901,7 +1148,12 @@ class Show4DSTEM(anywidget.AnyWidget):
             result = data_flat[:, indices].sum(dim=1).reshape(self._scan_shape)
         else:
             # Tensordot: faster for large masks
-            result = torch.tensordot(self._data, mask_float, dims=([2, 3], [0, 1]))
+            # Reshape to 4D if needed (3D flattened data)
+            if self._data.ndim == 3:
+                data_4d = self._data.reshape(self._scan_shape[0], self._scan_shape[1], *self._det_shape)
+            else:
+                data_4d = self._data
+            result = torch.tensordot(data_4d, mask_float, dims=([2, 3], [0, 1]))
 
         return result
 
@@ -910,11 +1162,11 @@ class Show4DSTEM(anywidget.AnyWidget):
         # Compute min/max (fast on GPU)
         vmin = float(arr.min())
         vmax = float(arr.max())
-        self.vi_data_min = vmin
-        self.vi_data_max = vmax
 
-        # Compute full stats if requested
+        # Only update traits when requested (avoids side effects during precomputation)
         if update_vi_stats:
+            self.vi_data_min = vmin
+            self.vi_data_max = vmax
             self.vi_stats = [float(arr.mean()), vmin, vmax, float(arr.std())]
 
         return arr.cpu().numpy().astype(np.float32).tobytes()

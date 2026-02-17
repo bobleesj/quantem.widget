@@ -6,18 +6,24 @@ import Typography from "@mui/material/Typography";
 import Stack from "@mui/material/Stack";
 import Select from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
+import Menu from "@mui/material/Menu";
 import Slider from "@mui/material/Slider";
 import Button from "@mui/material/Button";
 import Switch from "@mui/material/Switch";
 import Tooltip from "@mui/material/Tooltip";
+import IconButton from "@mui/material/IconButton";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import PauseIcon from "@mui/icons-material/Pause";
+import StopIcon from "@mui/icons-material/Stop";
 import JSZip from "jszip";
 import "./styles.css";
 import { useTheme } from "../theme";
-import { COLORMAPS, applyColormap } from "../colormaps";
+import { COLORMAPS, applyColormap, renderToOffscreen } from "../colormaps";
 import { WebGPUFFT, getWebGPUFFT, fft2d, fftshift, autoEnhanceFFT } from "../webgpu-fft";
-import { drawScaleBarHiDPI } from "../scalebar";
-import { findDataRange, sliderRange, computeStats } from "../stats";
-import { downloadBlob, formatNumber } from "../format";
+import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue, formatScaleLabel, exportFigure } from "../scalebar";
+import { findDataRange, sliderRange, computeStats, applyLogScale } from "../stats";
+import { downloadBlob, formatNumber, downloadDataView } from "../format";
+import { computeHistogramFromBytes } from "../histogram";
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 10;
@@ -26,16 +32,14 @@ const MAX_ZOOM = 10;
 // UI Styles - component styling helpers
 // ============================================================================
 const typography = {
-  label: { color: "#aaa", fontSize: 11 },
-  labelSmall: { color: "#888", fontSize: 10 },
-  value: { color: "#888", fontSize: 10, fontFamily: "monospace" },
-  title: { color: "#0af", fontWeight: "bold" as const },
+  label: { fontSize: 11 },
+  labelSmall: { fontSize: 10 },
+  value: { fontSize: 10, fontFamily: "monospace" },
+  title: { fontWeight: "bold" as const },
 };
 
 const controlPanel = {
-  group: { bgcolor: "#222", px: 1.5, py: 0.5, borderRadius: 1, border: "1px solid #444", height: 32 },
-  button: { color: "#888", fontSize: 10, cursor: "pointer", "&:hover": { color: "#fff" }, bgcolor: "#222", px: 1, py: 0.25, borderRadius: 0.5, border: "1px solid #444" },
-  select: { minWidth: 90, bgcolor: "#333", color: "#fff", fontSize: 11, "& .MuiSelect-select": { py: 0.5 } },
+  select: { minWidth: 90, fontSize: 11, "& .MuiSelect-select": { py: 0.5 } },
 };
 
 const container = {
@@ -564,59 +568,8 @@ function drawRoiOverlayHiDPI(
 // Histogram Component
 // ============================================================================
 
-/**
- * Compute histogram from byte data (0-255).
- * Returns 256 bins normalized to 0-1 range.
- */
-function computeHistogramFromBytes(data: Uint8Array | Float32Array | null, numBins = 256): number[] {
-  if (!data || data.length === 0) {
-    return new Array(numBins).fill(0);
-  }
-
-  const bins = new Array(numBins).fill(0);
-
-  // For Float32Array, find min/max and bin accordingly
-  if (data instanceof Float32Array) {
-    let min = Infinity, max = -Infinity;
-    for (let i = 0; i < data.length; i++) {
-      const v = data[i];
-      if (isFinite(v)) {
-        if (v < min) min = v;
-        if (v > max) max = v;
-      }
-    }
-    if (!isFinite(min) || !isFinite(max) || min === max) {
-      return bins;
-    }
-    const range = max - min;
-    for (let i = 0; i < data.length; i++) {
-      const v = data[i];
-      if (isFinite(v)) {
-        const binIdx = Math.min(numBins - 1, Math.floor(((v - min) / range) * numBins));
-        bins[binIdx]++;
-      }
-    }
-  } else {
-    // Uint8Array - values are already 0-255
-    for (let i = 0; i < data.length; i++) {
-      const binIdx = Math.min(numBins - 1, data[i]);
-      bins[binIdx]++;
-    }
-  }
-
-  // Normalize bins to 0-1
-  const maxCount = Math.max(...bins);
-  if (maxCount > 0) {
-    for (let i = 0; i < numBins; i++) {
-      bins[i] /= maxCount;
-    }
-  }
-
-  return bins;
-}
-
 interface HistogramProps {
-  data: Uint8Array | Float32Array | null;
+  data: Float32Array | null;
   colormap: string;
   vminPct: number;
   vmaxPct: number;
@@ -672,6 +625,18 @@ function InfoTooltip({ text, theme = "dark" }: { text: React.ReactNode; theme?: 
         ⓘ
       </Typography>
     </Tooltip>
+  );
+}
+
+function KeyboardShortcuts({ items }: { items: [string, string][] }) {
+  return (
+    <Box component="table" sx={{ borderCollapse: "collapse", "& td": { py: 0.25, fontSize: 11, lineHeight: 1.3, verticalAlign: "top" }, "& td:first-of-type": { pr: 1.5, opacity: 0.7, fontFamily: "monospace", fontSize: 10, whiteSpace: "nowrap" } }}>
+      <tbody>
+        {items.map(([key, desc], i) => (
+          <tr key={i}><td>{key}</td><td>{desc}</td></tr>
+        ))}
+      </tbody>
+    </Box>
   );
 }
 
@@ -791,6 +756,57 @@ function Histogram({
 }
 
 // ============================================================================
+// Line Profile Sampling
+// ============================================================================
+
+function sampleSingleLine(data: Float32Array, w: number, h: number, row0: number, col0: number, row1: number, col1: number): Float32Array {
+  const dc = col1 - col0;
+  const dr = row1 - row0;
+  const len = Math.sqrt(dc * dc + dr * dr);
+  const n = Math.max(2, Math.ceil(len));
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    const c = col0 + t * dc;
+    const r = row0 + t * dr;
+    const ci = Math.floor(c), ri = Math.floor(r);
+    const cf = c - ci, rf = r - ri;
+    const c0c = Math.max(0, Math.min(w - 1, ci));
+    const c1c = Math.max(0, Math.min(w - 1, ci + 1));
+    const r0c = Math.max(0, Math.min(h - 1, ri));
+    const r1c = Math.max(0, Math.min(h - 1, ri + 1));
+    out[i] = data[r0c * w + c0c] * (1 - cf) * (1 - rf) +
+             data[r0c * w + c1c] * cf * (1 - rf) +
+             data[r1c * w + c0c] * (1 - cf) * rf +
+             data[r1c * w + c1c] * cf * rf;
+  }
+  return out;
+}
+
+function sampleLineProfile(data: Float32Array, w: number, h: number, row0: number, col0: number, row1: number, col1: number, profileWidth: number = 1): Float32Array {
+  if (profileWidth <= 1) return sampleSingleLine(data, w, h, row0, col0, row1, col1);
+  const dc = col1 - col0;
+  const dr = row1 - row0;
+  const len = Math.sqrt(dc * dc + dr * dr);
+  if (len < 1e-8) return sampleSingleLine(data, w, h, row0, col0, row1, col1);
+  const perpR = -dc / len;
+  const perpC = dr / len;
+  const half = (profileWidth - 1) / 2;
+  let accumulated: Float32Array | null = null;
+  for (let k = 0; k < profileWidth; k++) {
+    const off = -half + k;
+    const vals = sampleSingleLine(data, w, h, row0 + off * perpR, col0 + off * perpC, row1 + off * perpR, col1 + off * perpC);
+    if (!accumulated) {
+      accumulated = vals;
+    } else {
+      for (let i = 0; i < vals.length; i++) accumulated[i] += vals[i];
+    }
+  }
+  if (accumulated) for (let i = 0; i < accumulated.length; i++) accumulated[i] /= profileWidth;
+  return accumulated || new Float32Array(0);
+}
+
+// ============================================================================
 // Main Component
 // ============================================================================
 function Show4DSTEM() {
@@ -843,6 +859,10 @@ function Show4DSTEM() {
   const [pathIntervalMs] = useModelState<number>("path_interval_ms");
   const [pathLoop] = useModelState<boolean>("path_loop");
 
+  // Profile line state (synced with Python)
+  const [profileLine, setProfileLine] = useModelState<{row: number; col: number}[]>("profile_line");
+  const [profileWidth, setProfileWidth] = useModelState<number>("profile_width");
+
   // Auto-detection trigger
   // ─────────────────────────────────────────────────────────────────────────
   // Local State (UI-only, not synced to Python)
@@ -864,6 +884,7 @@ function Show4DSTEM() {
   const [isDraggingViRoiResize, setIsDraggingViRoiResize] = React.useState(false);
   const [isHoveringViRoiResize, setIsHoveringViRoiResize] = React.useState(false);
   // Independent colormaps for DP and VI panels
+  const [showDpColorbar, setShowDpColorbar] = React.useState(false);
   const [dpColormap, setDpColormap] = React.useState("inferno");
   const [viColormap, setViColormap] = React.useState("inferno");
   // vmin/vmax percentile clipping (0-100)
@@ -893,16 +914,61 @@ function Show4DSTEM() {
   const [viStats] = useModelState<number[]>("vi_stats");  // [mean, min, max, std]
   const [showFft, setShowFft] = React.useState(false);  // Hidden by default per feedback
 
+  // Canvas resize state
+  const [canvasSize, setCanvasSize] = React.useState(CANVAS_SIZE);
+  const [isResizingCanvas, setIsResizingCanvas] = React.useState(false);
+  const [resizeCanvasStart, setResizeCanvasStart] = React.useState<{ x: number; y: number; size: number } | null>(null);
+
+  // Export
+  const [, setGifExportRequested] = useModelState<boolean>("_gif_export_requested");
+  const [gifData] = useModelState<DataView>("_gif_data");
+  const [exporting, setExporting] = React.useState(false);
+  const [dpExportAnchor, setDpExportAnchor] = React.useState<HTMLElement | null>(null);
+  const [viExportAnchor, setViExportAnchor] = React.useState<HTMLElement | null>(null);
+
   // Cursor readout state
   const [cursorInfo, setCursorInfo] = React.useState<{ row: number; col: number; value: number; panel: string } | null>(null);
+
+  // DP Line profile state
+  const [profileActive, setProfileActive] = React.useState(false);
+  const [profileData, setProfileData] = React.useState<Float32Array | null>(null);
+  const [profileHeight, setProfileHeight] = React.useState(76);
+  const [isResizingProfile, setIsResizingProfile] = React.useState(false);
+  const profileResizeStart = React.useRef<{ startY: number; startHeight: number } | null>(null);
+  const profileCanvasRef = React.useRef<HTMLCanvasElement>(null);
+  const profileBaseImageRef = React.useRef<ImageData | null>(null);
+  const profileLayoutRef = React.useRef<{ padLeft: number; plotW: number; padTop: number; plotH: number; gMin: number; gMax: number; totalDist: number; xUnit: string } | null>(null);
+  const profilePoints = profileLine || [];
+  const rawDpDataRef = React.useRef<Float32Array | null>(null);
+  const dpClickStartRef = React.useRef<{ x: number; y: number } | null>(null);
+
+  // VI Line profile state
+  const [viProfileActive, setViProfileActive] = React.useState(false);
+  const [viProfileData, setViProfileData] = React.useState<Float32Array | null>(null);
+  const [viProfilePoints, setViProfilePoints] = React.useState<Array<{ row: number; col: number }>>([]);
+  const [viProfileHeight, setViProfileHeight] = React.useState(76);
+  const [isResizingViProfile, setIsResizingViProfile] = React.useState(false);
+  const viProfileResizeStart = React.useRef<{ startY: number; startHeight: number } | null>(null);
+  const viProfileCanvasRef = React.useRef<HTMLCanvasElement>(null);
+  const viProfileBaseImageRef = React.useRef<ImageData | null>(null);
+  const viProfileLayoutRef = React.useRef<{ padLeft: number; plotW: number; padTop: number; plotH: number; gMin: number; gMax: number; totalDist: number; xUnit: string } | null>(null);
+  const rawViDataRef = React.useRef<Float32Array | null>(null);
+  const viClickStartRef = React.useRef<{ x: number; y: number } | null>(null);
 
   // Theme detection
   const { themeInfo, colors: themeColors } = useTheme();
 
+  // Themed typography — applies theme colors to module-level font sizes
+  const typo = React.useMemo(() => ({
+    label: { ...typography.label, color: themeColors.textMuted },
+    labelSmall: { ...typography.labelSmall, color: themeColors.textMuted },
+    value: { ...typography.value, color: themeColors.textMuted },
+    title: { ...typography.title, color: themeColors.accent },
+  }), [themeColors]);
+
   // Compute VI canvas dimensions to respect aspect ratio of rectangular scans
-  // The longer dimension gets CANVAS_SIZE, the shorter scales proportionally
-  const viCanvasWidth = shapeRows > shapeCols ? Math.round(CANVAS_SIZE * (shapeCols / shapeRows)) : CANVAS_SIZE;
-  const viCanvasHeight = shapeCols > shapeRows ? Math.round(CANVAS_SIZE * (shapeRows / shapeCols)) : CANVAS_SIZE;
+  const viCanvasWidth = shapeRows > shapeCols ? Math.round(canvasSize * (shapeCols / shapeRows)) : canvasSize;
+  const viCanvasHeight = shapeCols > shapeRows ? Math.round(canvasSize * (shapeRows / shapeCols)) : canvasSize;
 
   // Histogram data - use state to ensure re-renders (both are Float32Array now)
   const [dpHistogramData, setDpHistogramData] = React.useState<Float32Array | null>(null);
@@ -913,6 +979,11 @@ function Show4DSTEM() {
     if (!frameBytes) return;
     // Parse as Float32Array since Python now sends raw float32
     const rawData = new Float32Array(frameBytes.buffer, frameBytes.byteOffset, frameBytes.byteLength / 4);
+    // Store raw data for profile sampling
+    if (!rawDpDataRef.current || rawDpDataRef.current.length !== rawData.length) {
+      rawDpDataRef.current = new Float32Array(rawData.length);
+    }
+    rawDpDataRef.current.set(rawData);
     // Apply scale transformation for histogram display
     const scaledData = new Float32Array(rawData.length);
     if (dpScaleMode === "log") {
@@ -1093,6 +1164,12 @@ function Show4DSTEM() {
       rawVirtualImageRef.current = storedData;
     }
     storedData.set(rawData);
+
+    // Also store for VI profile sampling
+    if (!rawViDataRef.current || rawViDataRef.current.length !== numFloats) {
+      rawViDataRef.current = new Float32Array(numFloats);
+    }
+    rawViDataRef.current.set(rawData);
 
     // Apply scale transformation for histogram display
     const scaledData = new Float32Array(numFloats);
@@ -1298,133 +1375,109 @@ function Show4DSTEM() {
     // Crosshair and scale bar now drawn on high-DPI UI canvas (viUiRef)
   }, [localPosRow, localPosCol, isDraggingVI, viZoom, viPanX, viPanY, pixelSize, shapeRows, shapeCols]);
 
-  // Render FFT (WebGPU when available, CPU fallback)
-  React.useEffect(() => {
-    if (!rawVirtualImageRef.current || !fftCanvasRef.current) return;
-    const canvas = fftCanvasRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    if (!showFft) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      return;
-    }
+  // Compute FFT (expensive, async — only re-run on data/GPU changes)
+  const fftRealRef = React.useRef<Float32Array | null>(null);
+  const fftImagRef = React.useRef<Float32Array | null>(null);
+  const [fftVersion, setFftVersion] = React.useState(0);
 
+  React.useEffect(() => {
+    if (!rawVirtualImageRef.current || !showFft) return;
+    let cancelled = false;
     const width = shapeCols;
     const height = shapeRows;
     const sourceData = rawVirtualImageRef.current;
-    const lut = COLORMAPS[fftColormap] || COLORMAPS.inferno;
 
-    // Helper to render magnitude to canvas
-    const renderMagnitude = (real: Float32Array, imag: Float32Array) => {
-      // Compute magnitude (log or linear)
-      let magnitude = fftMagnitudeRef.current;
-      if (!magnitude || magnitude.length !== real.length) {
-        magnitude = new Float32Array(real.length);
-        fftMagnitudeRef.current = magnitude;
-      }
-      for (let i = 0; i < real.length; i++) {
-        const mag = Math.sqrt(real[i] * real[i] + imag[i] * imag[i]);
-        if (fftScaleMode === "log") {
-          magnitude[i] = Math.log1p(mag);
-        } else if (fftScaleMode === "power") {
-          magnitude[i] = Math.pow(mag, 0.5);  // gamma = 0.5
-        } else {
-          magnitude[i] = mag;
-        }
-      }
-
-      let displayMin: number, displayMax: number;
-      if (fftAuto) {
-        ({ min: displayMin, max: displayMax } = autoEnhanceFFT(magnitude, width, height));
-      } else {
-        ({ min: displayMin, max: displayMax } = findDataRange(magnitude));
-      }
-      setFftDataMin(displayMin);
-      setFftDataMax(displayMax);
-
-      const { mean, std } = computeStats(magnitude);
-      setFftStats([mean, displayMin, displayMax, std]);
-
-      // Store histogram data (copy of magnitude for histogram component)
-      setFftHistogramData(magnitude.slice());
-
-      let offscreen = fftOffscreenRef.current;
-      if (!offscreen) {
-        offscreen = document.createElement("canvas");
-        fftOffscreenRef.current = offscreen;
-      }
-      const sizeChanged = offscreen.width !== width || offscreen.height !== height;
-      if (sizeChanged) {
-        offscreen.width = width;
-        offscreen.height = height;
-        fftImageDataRef.current = null;
-      }
-      const offCtx = offscreen.getContext("2d");
-      if (!offCtx) return;
-
-      let imgData = fftImageDataRef.current;
-      if (!imgData) {
-        imgData = offCtx.createImageData(width, height);
-        fftImageDataRef.current = imgData;
-      }
-      const rgba = imgData.data;
-
-      // Apply histogram slider range on top of percentile clipping
-      const { vmin, vmax } = sliderRange(displayMin, displayMax, fftVminPct, fftVmaxPct);
-
-      applyColormap(magnitude, rgba, lut, vmin, vmax);
-      offCtx.putImageData(imgData, 0, 0);
-
-      ctx.imageSmoothingEnabled = false;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.save();
-      ctx.translate(fftPanX, fftPanY);
-      ctx.scale(fftZoom, fftZoom);
-      ctx.drawImage(offscreen, 0, 0);
-      ctx.restore();
-    };
-
-    // Try WebGPU first, fall back to CPU
     if (gpuFFTRef.current && gpuReady) {
-      // WebGPU path (async)
-      let isCancelled = false;
       const runGpuFFT = async () => {
         const real = sourceData.slice();
         const imag = new Float32Array(real.length);
-        
         const { real: fReal, imag: fImag } = await gpuFFTRef.current!.fft2D(real, imag, width, height, false);
-        if (isCancelled) return;
-        
-        // Shift in CPU (TODO: move to GPU shader)
+        if (cancelled) return;
         fftshift(fReal, width, height);
         fftshift(fImag, width, height);
-        
-        renderMagnitude(fReal, fImag);
+        fftRealRef.current = fReal;
+        fftImagRef.current = fImag;
+        setFftVersion(v => v + 1);
       };
       runGpuFFT();
-      return () => { isCancelled = true; };
+      return () => { cancelled = true; };
     } else {
-      // CPU fallback (sync)
       const len = sourceData.length;
       let real = fftWorkRealRef.current;
-      if (!real || real.length !== len) {
-        real = new Float32Array(len);
-        fftWorkRealRef.current = real;
-      }
+      if (!real || real.length !== len) { real = new Float32Array(len); fftWorkRealRef.current = real; }
       real.set(sourceData);
       let imag = fftWorkImagRef.current;
-      if (!imag || imag.length !== len) {
-        imag = new Float32Array(len);
-        fftWorkImagRef.current = imag;
-      } else {
-        imag.fill(0);
-      }
+      if (!imag || imag.length !== len) { imag = new Float32Array(len); fftWorkImagRef.current = imag; } else { imag.fill(0); }
       fft2d(real, imag, width, height, false);
       fftshift(real, width, height);
       fftshift(imag, width, height);
-      renderMagnitude(real, imag);
+      fftRealRef.current = real;
+      fftImagRef.current = imag;
+      setFftVersion(v => v + 1);
     }
-  }, [virtualImageBytes, shapeRows, shapeCols, fftColormap, fftZoom, fftPanX, fftPanY, gpuReady, showFft, fftScaleMode, fftAuto, fftVminPct, fftVmaxPct]);
+  }, [virtualImageBytes, shapeRows, shapeCols, gpuReady, showFft]);
+
+  // Process FFT → magnitude + histogram + colormap rendering (cheap, sync)
+  React.useEffect(() => {
+    if (!fftRealRef.current || !fftImagRef.current || !fftCanvasRef.current) return;
+    const canvas = fftCanvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    if (!showFft) { ctx.clearRect(0, 0, canvas.width, canvas.height); return; }
+
+    const width = shapeCols;
+    const height = shapeRows;
+    const real = fftRealRef.current;
+    const imag = fftImagRef.current;
+    const lut = COLORMAPS[fftColormap] || COLORMAPS.inferno;
+
+    // Compute magnitude with scale mode
+    let magnitude = fftMagnitudeRef.current;
+    if (!magnitude || magnitude.length !== real.length) {
+      magnitude = new Float32Array(real.length);
+      fftMagnitudeRef.current = magnitude;
+    }
+    for (let i = 0; i < real.length; i++) {
+      const mag = Math.sqrt(real[i] * real[i] + imag[i] * imag[i]);
+      if (fftScaleMode === "log") { magnitude[i] = Math.log1p(mag); }
+      else if (fftScaleMode === "power") { magnitude[i] = Math.pow(mag, 0.5); }
+      else { magnitude[i] = mag; }
+    }
+
+    let displayMin: number, displayMax: number;
+    if (fftAuto) {
+      ({ min: displayMin, max: displayMax } = autoEnhanceFFT(magnitude, width, height));
+    } else {
+      ({ min: displayMin, max: displayMax } = findDataRange(magnitude));
+    }
+    setFftDataMin(displayMin);
+    setFftDataMax(displayMax);
+    setFftStats([computeStats(magnitude).mean, displayMin, displayMax, computeStats(magnitude).std]);
+    setFftHistogramData(magnitude.slice());
+
+    // Render to offscreen canvas
+    let offscreen = fftOffscreenRef.current;
+    if (!offscreen) { offscreen = document.createElement("canvas"); fftOffscreenRef.current = offscreen; }
+    if (offscreen.width !== width || offscreen.height !== height) {
+      offscreen.width = width; offscreen.height = height; fftImageDataRef.current = null;
+    }
+    const offCtx = offscreen.getContext("2d");
+    if (!offCtx) return;
+    let imgData = fftImageDataRef.current;
+    if (!imgData) { imgData = offCtx.createImageData(width, height); fftImageDataRef.current = imgData; }
+
+    const { vmin, vmax } = sliderRange(displayMin, displayMax, fftVminPct, fftVmaxPct);
+    applyColormap(magnitude, imgData.data, lut, vmin, vmax);
+    offCtx.putImageData(imgData, 0, 0);
+
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(fftPanX, fftPanY);
+    ctx.scale(fftZoom, fftZoom);
+    ctx.drawImage(offscreen, 0, 0);
+    ctx.restore();
+  }, [showFft, fftVersion, fftScaleMode, fftAuto, fftVminPct, fftVmaxPct, fftColormap, shapeRows, shapeCols, fftZoom, fftPanX, fftPanY]);
 
   // Render FFT overlay with high-pass filter circle
   React.useEffect(() => {
@@ -1439,7 +1492,7 @@ function Show4DSTEM() {
   // High-DPI Scale Bar UI Overlays
   // ─────────────────────────────────────────────────────────────────────────
   
-  // DP scale bar + crosshair + ROI overlay (high-DPI)
+  // DP scale bar + crosshair + ROI overlay + profile line (high-DPI)
   React.useEffect(() => {
     if (!dpUiRef.current) return;
     // Draw scale bar first (clears canvas)
@@ -1456,9 +1509,97 @@ function Show4DSTEM() {
         isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner
       );
     }
-  }, [dpZoom, dpPanX, dpPanY, kPixelSize, kCalibrated, detRows, detCols, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, localKCol, localKRow, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner]);
+
+    // Profile line overlay
+    if (profileActive && profilePoints.length > 0) {
+      const canvas = dpUiRef.current;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.save();
+        ctx.scale(DPR, DPR);
+        const cssW = canvas.width / DPR;
+        const cssH = canvas.height / DPR;
+        const scaleX = cssW / detCols;
+        const scaleY = cssH / detRows;
+        const toScreenX = (col: number) => col * dpZoom * scaleX + dpPanX * scaleX;
+        const toScreenY = (row: number) => row * dpZoom * scaleY + dpPanY * scaleY;
+
+        // Draw point A
+        const ax = toScreenX(profilePoints[0].col);
+        const ay = toScreenY(profilePoints[0].row);
+        ctx.fillStyle = themeColors.accent;
+        ctx.beginPath();
+        ctx.arc(ax, ay, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (profilePoints.length === 2) {
+          const bx = toScreenX(profilePoints[1].col);
+          const by = toScreenY(profilePoints[1].row);
+
+          // Draw band when profile width > 1
+          if (profileWidth > 1) {
+            const dc = profilePoints[1].col - profilePoints[0].col;
+            const dr = profilePoints[1].row - profilePoints[0].row;
+            const lineLen = Math.sqrt(dc * dc + dr * dr);
+            if (lineLen > 0) {
+              const halfW = (profileWidth - 1) / 2;
+              const perpR = -dc / lineLen * halfW;
+              const perpC = dr / lineLen * halfW;
+              ctx.fillStyle = themeColors.accent + "20";
+              ctx.strokeStyle = themeColors.accent;
+              ctx.lineWidth = 1;
+              ctx.setLineDash([3, 3]);
+              ctx.beginPath();
+              ctx.moveTo(toScreenX(profilePoints[0].col + perpC), toScreenY(profilePoints[0].row + perpR));
+              ctx.lineTo(toScreenX(profilePoints[1].col + perpC), toScreenY(profilePoints[1].row + perpR));
+              ctx.lineTo(toScreenX(profilePoints[1].col - perpC), toScreenY(profilePoints[1].row - perpR));
+              ctx.lineTo(toScreenX(profilePoints[0].col - perpC), toScreenY(profilePoints[0].row - perpR));
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+              ctx.setLineDash([]);
+            }
+          }
+
+          // Draw line A->B
+          ctx.strokeStyle = themeColors.accent;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(bx, by);
+          ctx.stroke();
+
+          // Draw point B
+          ctx.fillStyle = themeColors.accent;
+          ctx.beginPath();
+          ctx.arc(bx, by, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+    }
+
+    // Colorbar overlay
+    if (showDpColorbar && rawDpDataRef.current) {
+      const canvas = dpUiRef.current;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.save();
+        ctx.scale(DPR, DPR);
+        const cssW = canvas.width / DPR;
+        const cssH = canvas.height / DPR;
+        const lut = COLORMAPS[dpColormap] || COLORMAPS.inferno;
+        const processed = dpScaleMode === "log" ? applyLogScale(rawDpDataRef.current) : rawDpDataRef.current;
+        const { min: dMin, max: dMax } = findDataRange(processed);
+        const { vmin, vmax } = sliderRange(dMin, dMax, dpVminPct, dpVmaxPct);
+        drawColorbar(ctx, cssW, cssH, lut, vmin, vmax, dpScaleMode === "log");
+        ctx.restore();
+      }
+    }
+  }, [dpZoom, dpPanX, dpPanY, kPixelSize, kCalibrated, detRows, detCols, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, localKCol, localKRow, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner,
+      profileActive, profilePoints, profileWidth, themeColors, showDpColorbar, dpColormap, dpScaleMode, dpVminPct, dpVmaxPct, canvasSize]);
   
-  // VI scale bar + crosshair + ROI (high-DPI)
+  // VI scale bar + crosshair + ROI + profile lines (high-DPI)
   React.useEffect(() => {
     if (!viUiRef.current) return;
     // Draw scale bar first (clears canvas)
@@ -1475,10 +1616,488 @@ function Show4DSTEM() {
         isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize
       );
     }
+    // Draw VI profile lines
+    if (viProfileActive && viProfilePoints.length > 0) {
+      const canvas = viUiRef.current;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        const cssW = canvas.width / DPR;
+        const cssH = canvas.height / DPR;
+        const scaleX = cssW / shapeCols;
+        const scaleY = cssH / shapeRows;
+        ctx.save();
+        ctx.scale(DPR, DPR);
+        ctx.strokeStyle = "#a0f";
+        ctx.lineWidth = 2;
+        ctx.shadowColor = "rgba(0,0,0,0.5)";
+        ctx.shadowBlur = 2;
+        if (viProfilePoints.length >= 1) {
+          const p0 = viProfilePoints[0];
+          const x0 = p0.col * viZoom * scaleX + viPanX * scaleX;
+          const y0 = p0.row * viZoom * scaleY + viPanY * scaleY;
+          ctx.beginPath();
+          ctx.arc(x0, y0, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#fff";
+          ctx.fillText("1", x0 + 6, y0 - 6);
+        }
+        if (viProfilePoints.length === 2) {
+          const p0 = viProfilePoints[0], p1 = viProfilePoints[1];
+          const x0 = p0.col * viZoom * scaleX + viPanX * scaleX;
+          const y0 = p0.row * viZoom * scaleY + viPanY * scaleY;
+          const x1 = p1.col * viZoom * scaleX + viPanX * scaleX;
+          const y1 = p1.row * viZoom * scaleY + viPanY * scaleY;
+          ctx.beginPath();
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(x1, y1, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#fff";
+          ctx.fillText("2", x1 + 6, y1 - 6);
+        }
+        ctx.restore();
+      }
+    }
   }, [viZoom, viPanX, viPanY, pixelSize, shapeRows, shapeCols, localPosRow, localPosCol, isDraggingVI,
       viRoiMode, localViRoiCenterRow, localViRoiCenterCol, viRoiRadius, viRoiWidth, viRoiHeight,
-      isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize]);
-  
+      isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize, canvasSize, viProfileActive, viProfilePoints]);
+
+  // ── DP Profile computation ──
+  React.useEffect(() => {
+    if (profilePoints.length === 2 && rawDpDataRef.current) {
+      const p0 = profilePoints[0], p1 = profilePoints[1];
+      setProfileData(sampleLineProfile(rawDpDataRef.current, detCols, detRows, p0.row, p0.col, p1.row, p1.col, profileWidth));
+      if (!profileActive) setProfileActive(true);
+    } else {
+      setProfileData(null);
+    }
+  }, [profilePoints, profileWidth, frameBytes]);
+
+  // ── VI Profile computation ──
+  React.useEffect(() => {
+    if (viProfilePoints.length === 2 && rawViDataRef.current && shapeCols > 0 && shapeRows > 0) {
+      const p0 = viProfilePoints[0], p1 = viProfilePoints[1];
+      setViProfileData(sampleLineProfile(rawViDataRef.current, shapeCols, shapeRows, p0.row, p0.col, p1.row, p1.col, 1));
+    } else {
+      setViProfileData(null);
+    }
+  }, [viProfilePoints, virtualImageBytes, shapeCols, shapeRows]);
+
+  // ── Profile sparkline rendering ──
+  React.useEffect(() => {
+    const canvas = profileCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvasSize;
+    const cssH = profileHeight;
+    canvas.width = cssW * dpr;
+    canvas.height = cssH * dpr;
+    ctx.scale(dpr, dpr);
+
+    const isDark = themeInfo.theme === "dark";
+    ctx.fillStyle = isDark ? "#1a1a1a" : "#f0f0f0";
+    ctx.fillRect(0, 0, cssW, cssH);
+
+    if (!profileData || profileData.length < 2) {
+      ctx.font = "10px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.fillStyle = isDark ? "#555" : "#999";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("Click two points on the DP to draw a profile", cssW / 2, cssH / 2);
+      profileBaseImageRef.current = null;
+      profileLayoutRef.current = null;
+      return;
+    }
+
+    const padLeft = 40;
+    const padRight = 8;
+    const padTop = 6;
+    const padBottom = 18;
+    const plotW = cssW - padLeft - padRight;
+    const plotH = cssH - padTop - padBottom;
+
+    let gMin = Infinity, gMax = -Infinity;
+    for (let i = 0; i < profileData.length; i++) {
+      if (profileData[i] < gMin) gMin = profileData[i];
+      if (profileData[i] > gMax) gMax = profileData[i];
+    }
+    const range = gMax - gMin || 1;
+
+    // X-axis: calibrated distance
+    let totalDist = profileData.length - 1;
+    let xUnit = "px";
+    if (profilePoints.length === 2) {
+      const dx = profilePoints[1].col - profilePoints[0].col;
+      const dy = profilePoints[1].row - profilePoints[0].row;
+      const distPx = Math.sqrt(dx * dx + dy * dy);
+      if (kCalibrated && kPixelSize > 0) {
+        totalDist = distPx * kPixelSize;
+        xUnit = "mrad";
+      } else {
+        totalDist = distPx;
+      }
+    }
+
+    // Draw axes
+    ctx.strokeStyle = isDark ? "#555" : "#bbb";
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(padLeft, padTop);
+    ctx.lineTo(padLeft, padTop + plotH);
+    ctx.lineTo(padLeft + plotW, padTop + plotH);
+    ctx.stroke();
+
+    // Draw profile curve
+    ctx.strokeStyle = themeColors.accent;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < profileData.length; i++) {
+      const x = padLeft + (i / (profileData.length - 1)) * plotW;
+      const y = padTop + plotH - ((profileData[i] - gMin) / range) * plotH;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Draw x-axis ticks
+    const tickY = padTop + plotH;
+    ctx.strokeStyle = isDark ? "#555" : "#bbb";
+    ctx.lineWidth = 0.5;
+    const idealTicks = Math.max(2, Math.floor(plotW / 70));
+    const tickStep = roundToNiceValue(totalDist / idealTicks);
+    ctx.font = "9px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.fillStyle = isDark ? "#888" : "#666";
+    ctx.textBaseline = "top";
+    const ticks: number[] = [];
+    for (let v = 0; v <= totalDist + tickStep * 0.01; v += tickStep) {
+      if (v > totalDist * 1.001) break;
+      ticks.push(v);
+    }
+    for (let i = 0; i < ticks.length; i++) {
+      const v = ticks[i];
+      const frac = totalDist > 0 ? v / totalDist : 0;
+      const x = padLeft + frac * plotW;
+      ctx.beginPath(); ctx.moveTo(x, tickY); ctx.lineTo(x, tickY + 3); ctx.stroke();
+      ctx.textAlign = frac < 0.05 ? "left" : frac > 0.95 ? "right" : "center";
+      const label = kCalibrated ? formatScaleLabel(v, xUnit) : (v % 1 === 0 ? v.toFixed(0) : v.toFixed(1));
+      ctx.fillText(i === ticks.length - 1 ? `${label} ${xUnit}` : label, x, tickY + 4);
+    }
+
+    // Y-axis min/max labels (left margin)
+    ctx.font = "9px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.fillStyle = isDark ? "#888" : "#666";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(formatNumber(gMax), 2, padTop);
+    ctx.textBaseline = "bottom";
+    ctx.fillText(formatNumber(gMin), 2, padTop + plotH);
+
+    // Save base image and layout for hover
+    profileBaseImageRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    profileLayoutRef.current = { padLeft, plotW, padTop, plotH, gMin, gMax, totalDist, xUnit };
+  }, [profileData, profilePoints, kPixelSize, kCalibrated, themeInfo.theme, themeColors.accent, canvasSize, profileHeight]);
+
+  // DP Profile hover handlers
+  const handleProfileMouseMove = React.useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = profileCanvasRef.current;
+    const base = profileBaseImageRef.current;
+    const layout = profileLayoutRef.current;
+    if (!canvas || !base || !layout || !profileData) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const cssX = e.clientX - rect.left;
+    const { padLeft, plotW, padTop, plotH, gMin, gMax, totalDist, xUnit } = layout;
+    const range = gMax - gMin || 1;
+
+    // Restore base image
+    ctx.putImageData(base, 0, 0);
+
+    if (cssX < padLeft || cssX > padLeft + plotW) return;
+    const frac = (cssX - padLeft) / plotW;
+
+    const dpr = window.devicePixelRatio || 1;
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Vertical crosshair
+    const isDark = themeInfo.theme === "dark";
+    ctx.strokeStyle = isDark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.3)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 2]);
+    ctx.beginPath();
+    ctx.moveTo(cssX, padTop);
+    ctx.lineTo(cssX, padTop + plotH);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Dot on curve + value
+    const dataIdx = Math.min(profileData.length - 1, Math.max(0, Math.round(frac * (profileData.length - 1))));
+    const val = profileData[dataIdx];
+    const y = padTop + plotH - ((val - gMin) / range) * plotH;
+    ctx.fillStyle = themeColors.accent;
+    ctx.beginPath();
+    ctx.arc(cssX, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Value readout label
+    const dist = frac * totalDist;
+    const label = `${formatNumber(val)}  @  ${dist.toFixed(1)} ${xUnit}`;
+    ctx.font = "bold 9px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    const textW = ctx.measureText(label).width;
+    const labelX = Math.min(cssX + 6, padLeft + plotW - textW - 2);
+    const labelY = padTop + 2;
+    ctx.fillStyle = isDark ? "rgba(0,0,0,0.7)" : "rgba(255,255,255,0.8)";
+    ctx.fillRect(labelX - 2, labelY - 1, textW + 4, 11);
+    ctx.fillStyle = isDark ? "#fff" : "#000";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(label, labelX, labelY);
+
+    ctx.restore();
+  }, [profileData, themeInfo.theme, themeColors.accent]);
+
+  const handleProfileMouseLeave = React.useCallback(() => {
+    const canvas = profileCanvasRef.current;
+    const base = profileBaseImageRef.current;
+    if (!canvas || !base) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.putImageData(base, 0, 0);
+  }, []);
+
+  // DP Profile resize handlers
+  React.useEffect(() => {
+    if (!isResizingProfile) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!profileResizeStart.current) return;
+      const deltaY = e.clientY - profileResizeStart.current.startY;
+      const newHeight = Math.max(40, Math.min(300, profileResizeStart.current.startHeight + deltaY));
+      setProfileHeight(newHeight);
+    };
+    const handleMouseUp = () => {
+      setIsResizingProfile(false);
+      profileResizeStart.current = null;
+    };
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizingProfile]);
+
+  // ── VI Profile sparkline rendering ──
+  React.useEffect(() => {
+    const canvas = viProfileCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = viCanvasWidth;
+    const cssH = viProfileHeight;
+    canvas.width = cssW * dpr;
+    canvas.height = cssH * dpr;
+    ctx.scale(dpr, dpr);
+
+    const isDark = themeInfo.theme === "dark";
+    ctx.fillStyle = isDark ? "#1a1a1a" : "#f0f0f0";
+    ctx.fillRect(0, 0, cssW, cssH);
+
+    if (!viProfileData || viProfileData.length < 2) {
+      ctx.font = "10px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.fillStyle = isDark ? "#555" : "#999";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("Click two points on the VI to draw a profile", cssW / 2, cssH / 2);
+      viProfileBaseImageRef.current = null;
+      viProfileLayoutRef.current = null;
+      return;
+    }
+
+    const padLeft = 40;
+    const padRight = 8;
+    const padTop = 6;
+    const padBottom = 18;
+    const plotW = cssW - padLeft - padRight;
+    const plotH = cssH - padTop - padBottom;
+
+    let gMin = Infinity, gMax = -Infinity;
+    for (let i = 0; i < viProfileData.length; i++) {
+      if (viProfileData[i] < gMin) gMin = viProfileData[i];
+      if (viProfileData[i] > gMax) gMax = viProfileData[i];
+    }
+    const range = gMax - gMin || 1;
+
+    // X-axis: calibrated distance
+    let totalDist = viProfileData.length - 1;
+    let xUnit = "px";
+    if (viProfilePoints.length === 2 && pixelSize > 0) {
+      const dx = viProfilePoints[1].col - viProfilePoints[0].col;
+      const dy = viProfilePoints[1].row - viProfilePoints[0].row;
+      const distPx = Math.sqrt(dx * dx + dy * dy);
+      totalDist = distPx * pixelSize;
+      xUnit = pixelSize >= 10 ? "nm" : "Å";
+      if (xUnit === "nm") totalDist /= 10;
+    }
+
+    // Draw axes
+    ctx.strokeStyle = isDark ? "#555" : "#bbb";
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(padLeft, padTop);
+    ctx.lineTo(padLeft, padTop + plotH);
+    ctx.lineTo(padLeft + plotW, padTop + plotH);
+    ctx.stroke();
+
+    // Draw profile curve
+    ctx.strokeStyle = themeColors.accent;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < viProfileData.length; i++) {
+      const x = padLeft + (i / (viProfileData.length - 1)) * plotW;
+      const y = padTop + plotH - ((viProfileData[i] - gMin) / range) * plotH;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Draw x-axis ticks
+    const tickY = padTop + plotH;
+    ctx.strokeStyle = isDark ? "#555" : "#bbb";
+    ctx.lineWidth = 0.5;
+    const idealTicks = Math.max(2, Math.floor(plotW / 70));
+    const tickStep = roundToNiceValue(totalDist / idealTicks);
+    ctx.font = "9px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.fillStyle = isDark ? "#888" : "#666";
+    ctx.textBaseline = "top";
+    const ticks: number[] = [];
+    for (let v = 0; v <= totalDist + tickStep * 0.01; v += tickStep) {
+      if (v > totalDist * 1.001) break;
+      ticks.push(v);
+    }
+    for (let i = 0; i < ticks.length; i++) {
+      const v = ticks[i];
+      const frac = totalDist > 0 ? v / totalDist : 0;
+      const x = padLeft + frac * plotW;
+      ctx.beginPath(); ctx.moveTo(x, tickY); ctx.lineTo(x, tickY + 3); ctx.stroke();
+      ctx.textAlign = frac < 0.05 ? "left" : frac > 0.95 ? "right" : "center";
+      const label = pixelSize > 0 ? formatScaleLabel(v, xUnit) : (v % 1 === 0 ? v.toFixed(0) : v.toFixed(1));
+      ctx.fillText(i === ticks.length - 1 ? `${label} ${xUnit}` : label, x, tickY + 4);
+    }
+
+    // Y-axis min/max labels (left margin)
+    ctx.font = "9px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.fillStyle = isDark ? "#888" : "#666";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(formatNumber(gMax), 2, padTop);
+    ctx.textBaseline = "bottom";
+    ctx.fillText(formatNumber(gMin), 2, padTop + plotH);
+
+    // Save base image and layout for hover
+    viProfileBaseImageRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    viProfileLayoutRef.current = { padLeft, plotW, padTop, plotH, gMin, gMax, totalDist, xUnit };
+  }, [viProfileData, viProfilePoints, pixelSize, themeInfo.theme, themeColors.accent, viCanvasWidth, viProfileHeight]);
+
+  // VI Profile hover handlers
+  const handleViProfileMouseMove = React.useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = viProfileCanvasRef.current;
+    const base = viProfileBaseImageRef.current;
+    const layout = viProfileLayoutRef.current;
+    if (!canvas || !base || !layout || !viProfileData) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const cssX = e.clientX - rect.left;
+    const { padLeft, plotW, padTop, plotH, gMin, gMax, totalDist, xUnit } = layout;
+    const range = gMax - gMin || 1;
+
+    // Restore base image
+    ctx.putImageData(base, 0, 0);
+
+    if (cssX < padLeft || cssX > padLeft + plotW) return;
+    const frac = (cssX - padLeft) / plotW;
+
+    const dpr = window.devicePixelRatio || 1;
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Vertical crosshair
+    const isDark = themeInfo.theme === "dark";
+    ctx.strokeStyle = isDark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.3)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 2]);
+    ctx.beginPath();
+    ctx.moveTo(cssX, padTop);
+    ctx.lineTo(cssX, padTop + plotH);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Dot on curve + value
+    const dataIdx = Math.min(viProfileData.length - 1, Math.max(0, Math.round(frac * (viProfileData.length - 1))));
+    const val = viProfileData[dataIdx];
+    const y = padTop + plotH - ((val - gMin) / range) * plotH;
+    ctx.fillStyle = themeColors.accent;
+    ctx.beginPath();
+    ctx.arc(cssX, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Value readout label
+    const dist = frac * totalDist;
+    const label = `${formatNumber(val)}  @  ${dist.toFixed(1)} ${xUnit}`;
+    ctx.font = "bold 9px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    const textW = ctx.measureText(label).width;
+    const labelX = Math.min(cssX + 6, padLeft + plotW - textW - 2);
+    const labelY = padTop + 2;
+    ctx.fillStyle = isDark ? "rgba(0,0,0,0.7)" : "rgba(255,255,255,0.8)";
+    ctx.fillRect(labelX - 2, labelY - 1, textW + 4, 11);
+    ctx.fillStyle = isDark ? "#fff" : "#000";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(label, labelX, labelY);
+
+    ctx.restore();
+  }, [viProfileData, themeInfo.theme, themeColors.accent]);
+
+  const handleViProfileMouseLeave = React.useCallback(() => {
+    const canvas = viProfileCanvasRef.current;
+    const base = viProfileBaseImageRef.current;
+    if (!canvas || !base) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.putImageData(base, 0, 0);
+  }, []);
+
+  // VI Profile resize handlers
+  React.useEffect(() => {
+    if (!isResizingViProfile) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!viProfileResizeStart.current) return;
+      const deltaY = e.clientY - viProfileResizeStart.current.startY;
+      const newHeight = Math.max(40, Math.min(300, viProfileResizeStart.current.startHeight + deltaY));
+      setViProfileHeight(newHeight);
+    };
+    const handleMouseUp = () => {
+      setIsResizingViProfile(false);
+      viProfileResizeStart.current = null;
+    };
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizingViProfile]);
+
   // Generic zoom handler
   const createZoomHandler = (
     setZoom: React.Dispatch<React.SetStateAction<number>>,
@@ -1561,6 +2180,7 @@ function Show4DSTEM() {
 
   // Mouse handlers
   const handleDpMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    dpClickStartRef.current = { x: e.clientX, y: e.clientY };
     const canvas = dpOverlayRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -1568,6 +2188,12 @@ function Show4DSTEM() {
     const screenY = (e.clientY - rect.top) * (canvas.height / rect.height);
     const imgX = (screenX - dpPanX) / dpZoom;
     const imgY = (screenY - dpPanY) / dpZoom;
+
+    // When profile mode is active, don't start ROI dragging — let mouseUp handle clicks
+    if (profileActive) {
+      setIsDraggingDP(false);
+      return;
+    }
 
     // Check if clicking on resize handle (inner first, then outer)
     if (isNearResizeHandleInner(imgX, imgY)) {
@@ -1657,10 +2283,38 @@ function Show4DSTEM() {
     model.save_changes();
   };
 
-  const handleDpMouseUp = () => {
+  const handleDpMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // Profile click capture
+    if (profileActive && dpClickStartRef.current) {
+      const dx = e.clientX - dpClickStartRef.current.x;
+      const dy = e.clientY - dpClickStartRef.current.y;
+      if (Math.sqrt(dx * dx + dy * dy) < 3) {
+        const canvas = dpOverlayRef.current;
+        if (canvas && rawDpDataRef.current) {
+          const rect = canvas.getBoundingClientRect();
+          const screenX = (e.clientX - rect.left) * (canvas.width / rect.width);
+          const screenY = (e.clientY - rect.top) * (canvas.height / rect.height);
+          const imgCol = (screenX - dpPanX) / dpZoom;
+          const imgRow = (screenY - dpPanY) / dpZoom;
+          if (imgCol >= 0 && imgCol < detCols && imgRow >= 0 && imgRow < detRows) {
+            const pt = { row: imgRow, col: imgCol };
+            if (profilePoints.length === 0 || profilePoints.length === 2) {
+              setProfileLine([pt]);
+              setProfileData(null);
+            } else {
+              const p0 = profilePoints[0];
+              setProfileLine([p0, pt]);
+              setProfileData(sampleLineProfile(rawDpDataRef.current, detCols, detRows, p0.row, p0.col, pt.row, pt.col, profileWidth));
+            }
+          }
+        }
+      }
+    }
+    dpClickStartRef.current = null;
     setIsDraggingDP(false); setIsDraggingResize(false); setIsDraggingResizeInner(false);
   };
   const handleDpMouseLeave = () => {
+    dpClickStartRef.current = null;
     setIsDraggingDP(false); setIsDraggingResize(false); setIsDraggingResizeInner(false);
     setIsHoveringResize(false); setIsHoveringResizeInner(false);
     setCursorInfo(prev => prev?.panel === "DP" ? null : prev);
@@ -1675,6 +2329,12 @@ function Show4DSTEM() {
     const screenY = (e.clientY - rect.top) * (canvas.height / rect.height);
     const imgX = (screenY - viPanY) / viZoom;
     const imgY = (screenX - viPanX) / viZoom;
+
+    // VI Profile mode - click to set points
+    if (viProfileActive) {
+      viClickStartRef.current = { x: screenX, y: screenY };
+      return;
+    }
 
     // Check if VI ROI mode is active - same logic as DP
     if (viRoiMode && viRoiMode !== "off") {
@@ -1772,7 +2432,33 @@ function Show4DSTEM() {
     model.save_changes();
   };
 
-  const handleViMouseUp = () => {
+  const handleViMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // VI Profile mode - complete point selection
+    if (viProfileActive && viClickStartRef.current) {
+      const canvas = virtualOverlayRef.current;
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const endX = (e.clientX - rect.left) * (canvas.width / rect.width);
+        const endY = (e.clientY - rect.top) * (canvas.height / rect.height);
+        const dx = endX - viClickStartRef.current.x;
+        const dy = endY - viClickStartRef.current.y;
+        const wasDrag = Math.sqrt(dx * dx + dy * dy) > 3;
+
+        if (!wasDrag) {
+          // Click to add point
+          const imgX = (endY - viPanY) / viZoom;
+          const imgY = (endX - viPanX) / viZoom;
+          const pt = { row: Math.round(Math.max(0, Math.min(shapeRows - 1, imgX))), col: Math.round(Math.max(0, Math.min(shapeCols - 1, imgY))) };
+          if (viProfilePoints.length < 2) {
+            setViProfilePoints([...viProfilePoints, pt]);
+          } else {
+            setViProfilePoints([pt]);
+          }
+        }
+      }
+      viClickStartRef.current = null;
+    }
+
     setIsDraggingVI(false);
     setIsDraggingViRoi(false);
     setIsDraggingViRoiResize(false);
@@ -1808,6 +2494,33 @@ function Show4DSTEM() {
 
   const handleFftMouseUp = () => { setIsDraggingFFT(false); setFftDragStart(null); };
   const handleFftMouseLeave = () => { setIsDraggingFFT(false); setFftDragStart(null); };
+
+  // ── Canvas resize handlers ──
+  const handleCanvasResizeStart = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setIsResizingCanvas(true);
+    setResizeCanvasStart({ x: e.clientX, y: e.clientY, size: canvasSize });
+  };
+
+  React.useEffect(() => {
+    if (!isResizingCanvas) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!resizeCanvasStart) return;
+      const delta = Math.max(e.clientX - resizeCanvasStart.x, e.clientY - resizeCanvasStart.y);
+      setCanvasSize(Math.max(CANVAS_SIZE, Math.min(800, resizeCanvasStart.size + delta)));
+    };
+    const handleMouseUp = () => {
+      setIsResizingCanvas(false);
+      setResizeCanvasStart(null);
+    };
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizingCanvas, resizeCanvasStart]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Render
@@ -1856,6 +2569,73 @@ function Show4DSTEM() {
     downloadBlob(zipBlob, `4dstem_export_${timestamp}.zip`);
   };
 
+  // ── DP Figure Export ──
+  const handleDpExportFigure = (withColorbar: boolean) => {
+    setDpExportAnchor(null);
+    const frameData = rawDpDataRef.current;
+    if (!frameData) return;
+    const processed = dpScaleMode === "log" ? applyLogScale(frameData) : frameData;
+    const lut = COLORMAPS[dpColormap] || COLORMAPS.inferno;
+    const { min: dMin, max: dMax } = findDataRange(processed);
+    const { vmin, vmax } = sliderRange(dMin, dMax, dpVminPct, dpVmaxPct);
+    const offscreen = renderToOffscreen(processed, detCols, detRows, lut, vmin, vmax);
+    if (!offscreen) return;
+    const kPxAngstrom = kPixelSize > 0 && kCalibrated ? kPixelSize : 0;
+    const figCanvas = exportFigure({
+      imageCanvas: offscreen,
+      title: `DP at (${posRow}, ${posCol})`,
+      lut,
+      vmin,
+      vmax,
+      logScale: dpScaleMode === "log",
+      pixelSize: kPxAngstrom > 0 ? kPxAngstrom : undefined,
+      showColorbar: withColorbar,
+      showScaleBar: kPxAngstrom > 0,
+    });
+    figCanvas.toBlob((blob) => { if (blob) downloadBlob(blob, "show4dstem_dp_figure.png"); }, "image/png");
+  };
+
+  const handleDpExportPng = () => {
+    setDpExportAnchor(null);
+    if (!dpCanvasRef.current) return;
+    dpCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "show4dstem_dp.png"); }, "image/png");
+  };
+
+  const handleDpExportGif = () => {
+    setDpExportAnchor(null);
+    setExporting(true);
+    setGifExportRequested(true);
+  };
+
+  // ── VI Figure Export ──
+  const handleViExportFigure = (withColorbar: boolean) => {
+    setViExportAnchor(null);
+    if (!virtualCanvasRef.current) return;
+    const viCanvas = virtualCanvasRef.current;
+    const pixelSizeAngstrom = pixelSize > 0 ? pixelSize : 0;
+    const figCanvas = exportFigure({
+      imageCanvas: viCanvas,
+      title: "Virtual Image",
+      showColorbar: withColorbar,
+      showScaleBar: pixelSizeAngstrom > 0,
+      pixelSize: pixelSizeAngstrom > 0 ? pixelSizeAngstrom : undefined,
+    });
+    figCanvas.toBlob((blob) => { if (blob) downloadBlob(blob, "show4dstem_vi_figure.png"); }, "image/png");
+  };
+
+  const handleViExportPng = () => {
+    setViExportAnchor(null);
+    if (!virtualCanvasRef.current) return;
+    virtualCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "show4dstem_vi.png"); }, "image/png");
+  };
+
+  // Download GIF when data arrives from Python
+  React.useEffect(() => {
+    if (!gifData || gifData.byteLength === 0) return;
+    downloadDataView(gifData, "show4dstem_dp_animation.gif", "image/gif");
+    setExporting(false);
+  }, [gifData]);
+
 
   // Theme-aware select style
   const themedSelect = {
@@ -1875,29 +2655,62 @@ function Show4DSTEM() {
   return (
     <Box ref={rootRef} className="show4dstem-root" sx={{ p: `${SPACING.LG}px`, bgcolor: themeColors.bg, color: themeColors.text }}>
       {/* HEADER */}
-      <Typography variant="h6" sx={{ ...typography.title, mb: `${SPACING.SM}px` }}>
+      <Typography variant="h6" sx={{ ...typo.title, mb: `${SPACING.SM}px` }}>
         4D-STEM Explorer
+        <InfoTooltip text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+          <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>DP: Diffraction pattern I(kx,ky) at scan position. Drag to move ROI center.</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Detector: ROI mask shape — defines which DP pixels are integrated for the virtual image.</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>BF/ABF/ADF: Preset detector configurations (bright-field, annular bright-field, annular dark-field).</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Image: Virtual image — integrated intensity within detector ROI at each scan position.</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>FFT: Spatial frequency content of the virtual image. Auto masks DC + clips to 99.9th percentile.</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Profile: Click two points on DP to draw a line intensity profile.</Typography>
+          <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
+          <KeyboardShortcuts items={[["← / →", "Move scan position"], ["Shift+←/→", "Move ×10"], ["Space", "Play / pause path"], ["R", "Reset all zoom/pan"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
+        </Box>} theme={themeInfo.theme} />
       </Typography>
 
       {/* MAIN CONTENT: DP | VI | FFT (three columns when FFT shown) */}
       <Stack direction="row" spacing={`${SPACING.LG}px`}>
         {/* LEFT COLUMN: DP Panel */}
-        <Box sx={{ width: CANVAS_SIZE }}>
+        <Box sx={{ width: canvasSize }}>
           {/* DP Header */}
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
-            <Typography variant="caption" sx={{ ...typography.label }}>
+            <Typography variant="caption" sx={{ ...typo.label }}>
               DP at ({Math.round(localPosRow)}, {Math.round(localPosCol)})
               <span style={{ color: "#0f0", marginLeft: SPACING.SM }}>k: ({Math.round(localKRow)}, {Math.round(localKCol)})</span>
-              <InfoTooltip text="Diffraction Pattern: 2D detector image I(kx,ky) at scan position (row,col). The ROI mask M(kx,ky) defines which pixels are integrated for the virtual image. Drag to move ROI center, scroll to zoom, double-click to reset." theme={themeInfo.theme} />
             </Typography>
-            <Stack direction="row" spacing={`${SPACING.SM}px`}>
+            <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="center">
+              <Typography sx={{ ...typo.label, fontSize: 10 }}>Profile:</Typography>
+              <Switch checked={profileActive} onChange={(e) => {
+                const on = e.target.checked;
+                setProfileActive(on);
+                if (!on) { setProfileLine([]); setProfileData(null); }
+              }} size="small" sx={switchStyles.small} />
               <Button size="small" sx={compactButton} disabled={dpZoom === 1 && dpPanX === 0 && dpPanY === 0 && roiCenterCol === centerCol && roiCenterRow === centerRow} onClick={() => { setDpZoom(1); setDpPanX(0); setDpPanY(0); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }}>Reset</Button>
-              <Button size="small" sx={compactButton} onClick={handleExportDP}>Export</Button>
+              <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={async () => {
+                if (!dpCanvasRef.current) return;
+                try {
+                  const blob = await new Promise<Blob | null>(resolve => dpCanvasRef.current!.toBlob(resolve, "image/png"));
+                  if (!blob) return;
+                  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+                } catch {
+                  dpCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "show4dstem_dp.png"); }, "image/png");
+                }
+              }}>COPY</Button>
+              <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={(e) => setDpExportAnchor(e.currentTarget)} disabled={exporting}>{exporting ? "..." : "Export"}</Button>
+              <Menu anchorEl={dpExportAnchor} open={Boolean(dpExportAnchor)} onClose={() => setDpExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
+                <MenuItem onClick={() => handleDpExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
+                <MenuItem onClick={() => handleDpExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
+                <MenuItem onClick={handleDpExportPng} sx={{ fontSize: 12 }}>PNG</MenuItem>
+                <MenuItem onClick={() => { setDpExportAnchor(null); handleExportDP(); }} sx={{ fontSize: 12 }}>ZIP (PNG + metadata)</MenuItem>
+                {pathLength > 0 && <MenuItem onClick={handleDpExportGif} sx={{ fontSize: 12 }}>GIF (path animation)</MenuItem>}
+              </Menu>
             </Stack>
           </Stack>
 
           {/* DP Canvas */}
-          <Box sx={{ ...container.imageBox, width: CANVAS_SIZE, height: CANVAS_SIZE }}>
+          <Box sx={{ ...container.imageBox, width: canvasSize, height: canvasSize }}>
             <canvas ref={dpCanvasRef} width={detCols} height={detRows} style={{ position: "absolute", width: "100%", height: "100%", imageRendering: "pixelated" }} />
             <canvas
               ref={dpOverlayRef} width={detCols} height={detRows}
@@ -1907,7 +2720,15 @@ function Show4DSTEM() {
               onDoubleClick={handleDpDoubleClick}
               style={{ position: "absolute", width: "100%", height: "100%", cursor: isHoveringResize || isDraggingResize ? "nwse-resize" : "crosshair" }}
             />
-            <canvas ref={dpUiRef} width={CANVAS_SIZE * DPR} height={CANVAS_SIZE * DPR} style={{ position: "absolute", width: "100%", height: "100%", pointerEvents: "none" }} />
+            <canvas ref={dpUiRef} width={canvasSize * DPR} height={canvasSize * DPR} style={{ position: "absolute", width: "100%", height: "100%", pointerEvents: "none" }} />
+            {cursorInfo && cursorInfo.panel === "DP" && (
+              <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
+                <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
+                  ({cursorInfo.row}, {cursorInfo.col}) {formatNumber(cursorInfo.value)}
+                </Typography>
+              </Box>
+            )}
+            <Box onMouseDown={handleCanvasResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: 1 } }} />
           </Box>
 
           {/* DP Stats Bar */}
@@ -1917,14 +2738,29 @@ function Show4DSTEM() {
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(dpStats[1])}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(dpStats[2])}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(dpStats[3])}</Box></Typography>
-              {cursorInfo && cursorInfo.panel === "DP" && (
-                <>
-                  <Box sx={{ borderLeft: `1px solid ${themeColors.border}`, height: 14 }} />
-                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted, fontFamily: "monospace" }}>
-                    ({cursorInfo.row}, {cursorInfo.col}) <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(cursorInfo.value)}</Box>
-                  </Typography>
-                </>
-              )}
+              <Box sx={{ flex: 1 }} />
+              <Typography component="span" onClick={() => { setRoiMode("circle"); setRoiRadius(bfRadius || 10); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }} sx={{ color: "#4f4", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>BF</Typography>
+              <Typography component="span" onClick={() => { setRoiMode("annular"); setRoiRadiusInner((bfRadius || 10) * 0.5); setRoiRadius(bfRadius || 10); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }} sx={{ color: "#4af", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>ABF</Typography>
+              <Typography component="span" onClick={() => { setRoiMode("annular"); setRoiRadiusInner(bfRadius || 10); setRoiRadius(Math.min((bfRadius || 10) * 3, Math.min(detRows, detCols) / 2 - 2)); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }} sx={{ color: "#fa4", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>ADF</Typography>
+            </Box>
+          )}
+
+          {/* Profile sparkline */}
+          {profileActive && (
+            <Box sx={{ mt: `${SPACING.XS}px`, maxWidth: canvasSize, boxSizing: "border-box" }}>
+              <canvas
+                ref={profileCanvasRef}
+                onMouseMove={handleProfileMouseMove}
+                onMouseLeave={handleProfileMouseLeave}
+                style={{ width: canvasSize, height: profileHeight, display: "block", border: `1px solid ${themeColors.border}`, borderBottom: "none", cursor: "crosshair" }}
+              />
+              <Box
+                onMouseDown={(e) => {
+                  setIsResizingProfile(true);
+                  profileResizeStart.current = { startY: e.clientY, startHeight: profileHeight };
+                }}
+                sx={{ width: canvasSize, height: 4, cursor: "ns-resize", borderTop: `1px solid ${themeColors.border}`, borderLeft: `1px solid ${themeColors.border}`, borderRight: `1px solid ${themeColors.border}`, borderBottom: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, "&:hover": { bgcolor: themeColors.accent } }}
+              />
             </Box>
           )}
 
@@ -1934,7 +2770,7 @@ function Show4DSTEM() {
             <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
               {/* Row 1: Detector + slider */}
               <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                <Typography sx={{ ...typography.label, fontSize: 10 }}>Detector:</Typography>
+                <Typography sx={{ ...typo.label, fontSize: 10 }}>Detector:</Typography>
                 <Select value={roiMode || "point"} onChange={(e) => setRoiMode(e.target.value)} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
                   <MenuItem value="point">Point</MenuItem>
                   <MenuItem value="circle">Circle</MenuItem>
@@ -1964,18 +2800,15 @@ function Show4DSTEM() {
                         "& .MuiSlider-thumb": { width: 14, height: 14 }
                       }}
                     />
-                    <Typography sx={{ ...typography.label, fontSize: 10 }}>
+                    <Typography sx={{ ...typo.label, fontSize: 10 }}>
                       {roiMode === "annular" ? `${Math.round(roiRadiusInner)}-${Math.round(roiRadius)}px` : `${Math.round(roiRadius)}px`}
                     </Typography>
                   </>
                 )}
               </Box>
-              {/* Row 2: Presets + Color + Scale */}
+              {/* Row 2: Color + Scale + Colorbar */}
               <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                <Typography component="span" onClick={() => { setRoiMode("circle"); setRoiRadius(bfRadius || 10); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }} sx={{ color: "#4f4", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>BF</Typography>
-                <Typography component="span" onClick={() => { setRoiMode("annular"); setRoiRadiusInner((bfRadius || 10) * 0.5); setRoiRadius(bfRadius || 10); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }} sx={{ color: "#4af", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>ABF</Typography>
-                <Typography component="span" onClick={() => { setRoiMode("annular"); setRoiRadiusInner(bfRadius || 10); setRoiRadius(Math.min((bfRadius || 10) * 3, Math.min(detRows, detCols) / 2 - 2)); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }} sx={{ color: "#fa4", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>ADF</Typography>
-                <Typography sx={{ ...typography.label, fontSize: 10 }}>Color:</Typography>
+                <Typography sx={{ ...typo.label, fontSize: 10 }}>Color:</Typography>
                 <Select value={dpColormap} onChange={(e) => setDpColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
                   <MenuItem value="inferno">Inferno</MenuItem>
                   <MenuItem value="viridis">Viridis</MenuItem>
@@ -1984,12 +2817,14 @@ function Show4DSTEM() {
                   <MenuItem value="hot">Hot</MenuItem>
                   <MenuItem value="gray">Gray</MenuItem>
                 </Select>
-                <Typography sx={{ ...typography.label, fontSize: 10 }}>Scale:</Typography>
+                <Typography sx={{ ...typo.label, fontSize: 10 }}>Scale:</Typography>
                 <Select value={dpScaleMode} onChange={(e) => setDpScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
                   <MenuItem value="linear">Lin</MenuItem>
                   <MenuItem value="log">Log</MenuItem>
                   <MenuItem value="power">Pow</MenuItem>
                 </Select>
+                <Typography sx={{ ...typo.label, fontSize: 10 }}>Colorbar:</Typography>
+                <Switch checked={showDpColorbar} onChange={(e) => setShowDpColorbar(e.target.checked)} size="small" sx={switchStyles.small} />
               </Box>
             </Box>
             {/* Right: Histogram spanning both rows */}
@@ -2003,15 +2838,33 @@ function Show4DSTEM() {
         <Box sx={{ width: viCanvasWidth }}>
           {/* VI Header */}
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
-            <Typography variant="caption" sx={{ ...typography.label }}>Image<InfoTooltip text="Virtual image: Integrated intensity within detector ROI at each scan position. Computed as Σ(DP × mask) for each (row,col). Double-click to select position." theme={themeInfo.theme} /></Typography>
+            <Typography variant="caption" sx={{ ...typo.label }}>Image</Typography>
             <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="center">
-              <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: 10 }}>
+              <Typography sx={{ ...typo.label, color: themeColors.textMuted, fontSize: 10 }}>
                 {shapeRows}×{shapeCols} | {detRows}×{detCols}
               </Typography>
-              <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT:</Typography>
+              <Typography sx={{ ...typo.label, fontSize: 10 }}>FFT:</Typography>
               <Switch checked={showFft} onChange={(e) => setShowFft(e.target.checked)} size="small" sx={switchStyles.small} />
+              <Typography sx={{ ...typo.label, fontSize: 10 }}>Profile:</Typography>
+              <Switch checked={viProfileActive} onChange={(e) => { setViProfileActive(e.target.checked); if (!e.target.checked) setViProfilePoints([]); }} size="small" sx={switchStyles.small} />
               <Button size="small" sx={compactButton} disabled={viZoom === 1 && viPanX === 0 && viPanY === 0} onClick={() => { setViZoom(1); setViPanX(0); setViPanY(0); }}>Reset</Button>
-              <Button size="small" sx={compactButton} onClick={handleExportVI}>Export</Button>
+              <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={async () => {
+                if (!virtualCanvasRef.current) return;
+                try {
+                  const blob = await new Promise<Blob | null>(resolve => virtualCanvasRef.current!.toBlob(resolve, "image/png"));
+                  if (!blob) return;
+                  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+                } catch {
+                  virtualCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "show4dstem_vi.png"); }, "image/png");
+                }
+              }}>COPY</Button>
+              <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={(e) => setViExportAnchor(e.currentTarget)}>Export</Button>
+              <Menu anchorEl={viExportAnchor} open={Boolean(viExportAnchor)} onClose={() => setViExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
+                <MenuItem onClick={() => handleViExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
+                <MenuItem onClick={() => handleViExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
+                <MenuItem onClick={handleViExportPng} sx={{ fontSize: 12 }}>PNG</MenuItem>
+                <MenuItem onClick={() => { setViExportAnchor(null); handleExportVI(); }} sx={{ fontSize: 12 }}>ZIP (all panels + metadata)</MenuItem>
+              </Menu>
             </Stack>
           </Stack>
 
@@ -2027,6 +2880,14 @@ function Show4DSTEM() {
               style={{ position: "absolute", width: "100%", height: "100%", cursor: "crosshair" }}
             />
             <canvas ref={viUiRef} width={viCanvasWidth * DPR} height={viCanvasHeight * DPR} style={{ position: "absolute", width: "100%", height: "100%", pointerEvents: "none" }} />
+            {cursorInfo && cursorInfo.panel === "VI" && (
+              <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
+                <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
+                  ({cursorInfo.row}, {cursorInfo.col}) {formatNumber(cursorInfo.value)}
+                </Typography>
+              </Box>
+            )}
+            <Box onMouseDown={handleCanvasResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: 1 } }} />
           </Box>
 
           {/* VI Stats Bar */}
@@ -2036,14 +2897,25 @@ function Show4DSTEM() {
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(viStats[1])}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(viStats[2])}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(viStats[3])}</Box></Typography>
-              {cursorInfo && cursorInfo.panel === "VI" && (
-                <>
-                  <Box sx={{ borderLeft: `1px solid ${themeColors.border}`, height: 14 }} />
-                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted, fontFamily: "monospace" }}>
-                    ({cursorInfo.row}, {cursorInfo.col}) <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(cursorInfo.value)}</Box>
-                  </Typography>
-                </>
-              )}
+            </Box>
+          )}
+
+          {/* VI Profile sparkline */}
+          {viProfileActive && (
+            <Box sx={{ mt: `${SPACING.XS}px`, maxWidth: viCanvasWidth, boxSizing: "border-box" }}>
+              <canvas
+                ref={viProfileCanvasRef}
+                onMouseMove={handleViProfileMouseMove}
+                onMouseLeave={handleViProfileMouseLeave}
+                style={{ width: viCanvasWidth, height: viProfileHeight, display: "block", border: `1px solid ${themeColors.border}`, borderBottom: "none", cursor: "crosshair" }}
+              />
+              <Box
+                onMouseDown={(e) => {
+                  setIsResizingViProfile(true);
+                  viProfileResizeStart.current = { startY: e.clientY, startHeight: viProfileHeight };
+                }}
+                sx={{ width: viCanvasWidth, height: 4, cursor: "ns-resize", borderTop: `1px solid ${themeColors.border}`, borderLeft: `1px solid ${themeColors.border}`, borderRight: `1px solid ${themeColors.border}`, borderBottom: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, "&:hover": { bgcolor: themeColors.accent } }}
+              />
             </Box>
           )}
 
@@ -2053,7 +2925,7 @@ function Show4DSTEM() {
             <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
               {/* Row 1: ROI selector */}
               <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                <Typography sx={{ ...typography.label, fontSize: 10 }}>ROI:</Typography>
+                <Typography sx={{ ...typo.label, fontSize: 10 }}>ROI:</Typography>
                 <Select value={viRoiMode || "off"} onChange={(e) => setViRoiMode(e.target.value)} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={themedMenuProps}>
                   <MenuItem value="off">Off</MenuItem>
                   <MenuItem value="circle">Circle</MenuItem>
@@ -2072,13 +2944,13 @@ function Show4DSTEM() {
                           size="small"
                           sx={{ width: 80, mx: 1 }}
                         />
-                        <Typography sx={{ ...typography.value, fontSize: 10, minWidth: 30 }}>
+                        <Typography sx={{ ...typo.value, fontSize: 10, minWidth: 30 }}>
                           {Math.round(viRoiRadius || 5)}px
                         </Typography>
                       </>
                     )}
                     {summedDpCount > 0 && (
-                      <Typography sx={{ ...typography.label, fontSize: 9, color: "#a6f" }}>
+                      <Typography sx={{ ...typo.label, fontSize: 9, color: "#a6f" }}>
                         {summedDpCount} pos
                       </Typography>
                     )}
@@ -2087,7 +2959,7 @@ function Show4DSTEM() {
               </Box>
               {/* Row 2: Color + Scale */}
               <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                <Typography sx={{ ...typography.label, fontSize: 10 }}>Color:</Typography>
+                <Typography sx={{ ...typo.label, fontSize: 10 }}>Color:</Typography>
                 <Select value={viColormap} onChange={(e) => setViColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
                   <MenuItem value="inferno">Inferno</MenuItem>
                   <MenuItem value="viridis">Viridis</MenuItem>
@@ -2096,7 +2968,7 @@ function Show4DSTEM() {
                   <MenuItem value="hot">Hot</MenuItem>
                   <MenuItem value="gray">Gray</MenuItem>
                 </Select>
-                <Typography sx={{ ...typography.label, fontSize: 10 }}>Scale:</Typography>
+                <Typography sx={{ ...typo.label, fontSize: 10 }}>Scale:</Typography>
                 <Select value={viScaleMode} onChange={(e) => setViScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
                   <MenuItem value="linear">Lin</MenuItem>
                   <MenuItem value="log">Log</MenuItem>
@@ -2116,7 +2988,7 @@ function Show4DSTEM() {
           <Box sx={{ width: viCanvasWidth }}>
             {/* FFT Header */}
             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
-              <Typography variant="caption" sx={{ ...typography.label }}>FFT<InfoTooltip text="Fast Fourier Transform: Shows spatial frequency content of the virtual image. Center = low frequencies (large features), edges = high frequencies (fine detail). Useful for detecting periodic structures and scan artifacts." theme={themeInfo.theme} /></Typography>
+              <Typography variant="caption" sx={{ ...typo.label }}>FFT</Typography>
               <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="center">
                 <Button size="small" sx={compactButton} disabled={fftZoom === 1 && fftPanX === 0 && fftPanY === 0} onClick={() => { setFftZoom(1); setFftPanX(0); setFftPanY(0); }}>Reset</Button>
               </Stack>
@@ -2133,6 +3005,7 @@ function Show4DSTEM() {
                 onDoubleClick={handleFftDoubleClick}
                 style={{ position: "absolute", width: "100%", height: "100%", cursor: isDraggingFFT ? "grabbing" : "grab" }}
               />
+              <Box onMouseDown={handleCanvasResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: 1 } }} />
             </Box>
 
             {/* FFT Stats Bar */}
@@ -2151,18 +3024,18 @@ function Show4DSTEM() {
               <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
                 {/* Row 1: Scale + Clip */}
                 <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                  <Typography sx={{ ...typography.label, fontSize: 10 }}>Scale:</Typography>
+                  <Typography sx={{ ...typo.label, fontSize: 10 }}>Scale:</Typography>
                   <Select value={fftScaleMode} onChange={(e) => setFftScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
                     <MenuItem value="linear">Lin</MenuItem>
                     <MenuItem value="log">Log</MenuItem>
                     <MenuItem value="power">Pow</MenuItem>
                   </Select>
-                  <Typography sx={{ ...typography.label, fontSize: 10 }}>Auto:<InfoTooltip text="Auto-enhance FFT display. When ON: (1) Masks DC component at center - DC = F(0,0) = Σ(image), replaced with average of 4 neighbors. (2) Clips display to 99.9 percentile to exclude outliers. When OFF: shows raw FFT with full dynamic range." theme={themeInfo.theme} /></Typography>
+                  <Typography sx={{ ...typo.label, fontSize: 10 }}>Auto:</Typography>
                   <Switch checked={fftAuto} onChange={(e) => setFftAuto(e.target.checked)} size="small" sx={switchStyles.small} />
                 </Box>
                 {/* Row 2: Color */}
                 <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                  <Typography sx={{ ...typography.label, fontSize: 10 }}>Color:</Typography>
+                  <Typography sx={{ ...typo.label, fontSize: 10 }}>Color:</Typography>
                   <Select value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
                     <MenuItem value="inferno">Inferno</MenuItem>
                     <MenuItem value="viridis">Viridis</MenuItem>
@@ -2186,15 +3059,20 @@ function Show4DSTEM() {
 
       {/* BOTTOM CONTROLS - Path only (FFT toggle moved to VI panel) */}
       {pathLength > 0 && (
-        <Stack direction="row" spacing={`${SPACING.MD}px`} sx={{ mt: `${SPACING.LG}px` }}>
-          <Box className="show4dstem-control-group" sx={{ display: "flex", alignItems: "center", gap: `${SPACING.SM}px` }}>
-            <Typography sx={{ ...typography.label }}>Path:</Typography>
-            <Typography component="span" onClick={() => { setPathPlaying(false); setPathIndex(0); }} sx={{ color: themeColors.textMuted, fontSize: 14, cursor: "pointer", "&:hover": { color: "#fff" }, px: 0.5 }} title="Stop">⏹</Typography>
-            <Typography component="span" onClick={() => setPathPlaying(!pathPlaying)} sx={{ color: pathPlaying ? "#0f0" : "#888", fontSize: 14, cursor: "pointer", "&:hover": { color: "#fff" }, px: 0.5 }} title={pathPlaying ? "Pause" : "Play"}>{pathPlaying ? "⏸" : "▶"}</Typography>
-            <Typography sx={{ ...typography.value, minWidth: 60 }}>{pathIndex + 1}/{pathLength}</Typography>
-            <Slider value={pathIndex} onChange={(_, v) => { setPathPlaying(false); setPathIndex(v as number); }} min={0} max={Math.max(0, pathLength - 1)} size="small" sx={{ width: 100 }} />
-          </Box>
-        </Stack>
+        <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+          <Stack direction="row" spacing={0} sx={{ flexShrink: 0 }}>
+            <IconButton size="small" onClick={() => setPathPlaying(!pathPlaying)} sx={{ color: themeColors.accent, p: 0.25 }}>
+              {pathPlaying ? <PauseIcon sx={{ fontSize: 18 }} /> : <PlayArrowIcon sx={{ fontSize: 18 }} />}
+            </IconButton>
+            <IconButton size="small" onClick={() => { setPathPlaying(false); setPathIndex(0); }} sx={{ color: themeColors.textMuted, p: 0.25 }}>
+              <StopIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Stack>
+          <Slider value={pathIndex} onChange={(_, v) => { setPathPlaying(false); setPathIndex(v as number); }} min={0} max={Math.max(0, pathLength - 1)} size="small" sx={{ flex: 1, minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
+          <Typography sx={{ ...typo.value, minWidth: 50, textAlign: "right", flexShrink: 0 }}>{pathIndex + 1}/{pathLength}</Typography>
+          <Typography sx={{ ...typo.label, fontSize: 10 }}>Loop:</Typography>
+          <Switch checked={pathLoop} onChange={(_, v) => { model.set("path_loop", v); model.save_changes(); }} size="small" sx={switchStyles.small} />
+        </Box>
       )}
     </Box>
   );

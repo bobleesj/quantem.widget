@@ -29,6 +29,20 @@ Features
 - **Log scale** — Logarithmic intensity scaling with ``log_scale=True``
 - **Auto contrast** — Percentile-based contrast with ``auto_contrast=True``
 
+State Persistence
+-----------------
+
+.. code-block:: python
+
+   w = Show2D(image, cmap="viridis", log_scale=True)
+
+   w.summary()          # Print human-readable state
+   w.state_dict()       # Get all settings as a dict
+   w.save("state.json") # Save to JSON file
+
+   # Restore from file or dict
+   w2 = Show2D(image, state="state.json")
+
 Examples
 --------
 

@@ -56,18 +56,18 @@ data = np.random.rand(64, 64, 128, 128)
 Show4DSTEM(data, pixel_size=2.39, k_pixel_size=0.46)
 ```
 
-### Clicker - Interactive Point Picker
+### Mark2D - Interactive Image Annotation
 
 ```python
 import numpy as np
-from quantem.widget import Clicker
+from quantem.widget import Mark2D
 
 image = np.random.rand(256, 256)
-w = Clicker(image, max_points=5)
+w = Mark2D(image, max_points=5)
 w
 
 # After clicking, retrieve selected points
-w.selected_points  # [{'x': 120.5, 'y': 83.2}, ...]
+w.selected_points  # [{'row': 83, 'col': 120}, ...]
 ```
 
 ## Array Compatibility
@@ -80,7 +80,7 @@ All widgets accept NumPy arrays, PyTorch tensors, CuPy arrays, and quantem Datas
 | Show3D | yes | yes | yes | `Dataset3d` |
 | Show3DVolume | yes | yes | yes | `Dataset3d` |
 | Show4DSTEM | yes | yes | yes | `Dataset4dstem` |
-| Clicker | yes | yes | yes | `Dataset2d` |
+| Mark2D | yes | yes | yes | `Dataset2d` |
 | Align2D | yes | yes | yes | `Dataset2d` |
 
 When a quantem Dataset is passed, metadata (title, pixel size, units) is extracted automatically. Explicit parameters always override auto-extracted values.

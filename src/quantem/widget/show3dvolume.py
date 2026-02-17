@@ -3,6 +3,7 @@ Show3DVolume: Orthogonal slice viewer for 3D volumetric data.
 Displays XY, XZ, YZ planes with interactive sliders.
 All slicing happens in JavaScript for instant response.
 """
+import json
 import pathlib
 from typing import Optional, Union
 import anywidget
@@ -99,6 +100,7 @@ class Show3DVolume(anywidget.AnyWidget):
         auto_contrast: bool = False,
         fps: float = 5.0,
         dim_labels: Optional[list] = None,
+        state=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -144,6 +146,83 @@ class Show3DVolume(anywidget.AnyWidget):
         self.observe(self._on_gif_export, names=["_gif_export_requested"])
         self.observe(self._on_zip_export, names=["_zip_export_requested"])
 
+        if state is not None:
+            if isinstance(state, (str, pathlib.Path)):
+                state = json.loads(pathlib.Path(state).read_text())
+            self.load_state_dict(state)
+
+    def set_image(self, data):
+        """Replace the volume data. Preserves all display settings."""
+        if hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling"):
+            data = data.array
+        data = to_numpy(data)
+        if data.ndim != 3:
+            raise ValueError(f"Show3DVolume requires 3D data, got {data.ndim}D")
+        self._data = data.astype(np.float32)
+        self.nz, self.ny, self.nx = self._data.shape
+        self.slice_z = min(self.slice_z, self.nz - 1)
+        self.slice_y = min(self.slice_y, self.ny - 1)
+        self.slice_x = min(self.slice_x, self.nx - 1)
+        self._compute_stats()
+        self.volume_bytes = self._data.tobytes()
+
+    def __repr__(self) -> str:
+        return f"Show3DVolume({self.nz}×{self.ny}×{self.nx}, slices=({self.slice_z},{self.slice_y},{self.slice_x}), cmap={self.cmap})"
+
+    def state_dict(self):
+        return {
+            "title": self.title,
+            "cmap": self.cmap,
+            "log_scale": self.log_scale,
+            "auto_contrast": self.auto_contrast,
+            "show_stats": self.show_stats,
+            "show_controls": self.show_controls,
+            "show_crosshair": self.show_crosshair,
+            "show_fft": self.show_fft,
+            "pixel_size_angstrom": self.pixel_size_angstrom,
+            "scale_bar_visible": self.scale_bar_visible,
+            "slice_x": self.slice_x,
+            "slice_y": self.slice_y,
+            "slice_z": self.slice_z,
+            "fps": self.fps,
+            "loop": self.loop,
+            "reverse": self.reverse,
+            "boomerang": self.boomerang,
+            "play_axis": self.play_axis,
+            "dim_labels": self.dim_labels,
+        }
+
+    def save(self, path: str):
+        pathlib.Path(path).write_text(json.dumps(self.state_dict(), indent=2))
+
+    def load_state_dict(self, state):
+        for key, val in state.items():
+            if hasattr(self, key):
+                setattr(self, key, val)
+
+    def summary(self):
+        lines = [self.title or "Show3DVolume", "═" * 32]
+        lines.append(f"Volume:   {self.nz}×{self.ny}×{self.nx}")
+        if self.pixel_size_angstrom > 0:
+            ps = self.pixel_size_angstrom
+            if ps >= 10:
+                lines[-1] += f" ({ps / 10:.2f} nm/px)"
+            else:
+                lines[-1] += f" ({ps:.2f} Å/px)"
+        labels = self.dim_labels
+        lines.append(f"Slices:   {labels[0]}={self.slice_z}  {labels[1]}={self.slice_y}  {labels[2]}={self.slice_x}")
+        if hasattr(self, "_data") and self._data is not None:
+            arr = self._data
+            lines.append(f"Data:     min={float(arr.min()):.4g}  max={float(arr.max()):.4g}  mean={float(arr.mean()):.4g}")
+        cmap = self.cmap
+        scale = "log" if self.log_scale else "linear"
+        contrast = "auto contrast" if self.auto_contrast else "manual contrast"
+        display = f"{cmap} | {contrast} | {scale}"
+        if self.show_fft:
+            display += " | FFT"
+        lines.append(f"Display:  {display}")
+        print("\n".join(lines))
+
     def _compute_stats(self):
         """Compute statistics for the 3 current slices."""
         slices = [
@@ -151,10 +230,11 @@ class Show3DVolume(anywidget.AnyWidget):
             self._data[:, self.slice_y, :],
             self._data[:, :, self.slice_x],
         ]
-        self.stats_mean = [float(np.mean(s)) for s in slices]
-        self.stats_min = [float(np.min(s)) for s in slices]
-        self.stats_max = [float(np.max(s)) for s in slices]
-        self.stats_std = [float(np.std(s)) for s in slices]
+        with self.hold_sync():
+            self.stats_mean = [float(np.mean(s)) for s in slices]
+            self.stats_min = [float(np.min(s)) for s in slices]
+            self.stats_max = [float(np.max(s)) for s in slices]
+            self.stats_std = [float(np.std(s)) for s in slices]
 
     def _on_slice_change(self, change):
         self._compute_stats()
@@ -167,9 +247,9 @@ class Show3DVolume(anywidget.AnyWidget):
 
     def stop(self):
         self.playing = False
-        self.slice_z = 0
-        self.slice_y = 0
-        self.slice_x = 0
+        self.slice_z = self.nz // 2
+        self.slice_y = self.ny // 2
+        self.slice_x = self.nx // 2
 
     def _on_gif_export(self, change=None):
         if not self._gif_export_requested:

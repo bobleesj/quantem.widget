@@ -32,8 +32,6 @@ Features
 - **FFT** — Toggle Fourier transform display
 - **Histogram** — Live intensity histogram
 - **Scale bar** — Calibrated scale bar when ``pixel_size`` is set
-- **Comparison mode** — Side-by-side comparison of two slices
-- **Drift indicator** — Track sample drift across frames
 - **Export** — Save current frame as PNG or full stack as GIF
 
 Methods
@@ -43,11 +41,38 @@ Methods
 
    w = Show3D(stack)
 
+   # Playback
    w.play()
    w.pause()
    w.stop()
-   w.set_roi(x=128, y=128, radius=20)
-   w.compare_with(idx=25)
+   w.goto(25)  # Jump to frame 25
+   w.set_playback_path([0, 10, 20, 10, 0])  # Custom frame order
+
+   # ROI analysis
+   w.set_roi(row=128, col=128, radius=20)
+   w.roi_circle(radius=15)
+   w.roi_square(half_size=10)
+   w.roi_rectangle(width=20, height=10)
+   w.roi_annular(inner=5, outer=15)
+
+   # Line profile
+   w.set_profile(row0=10, col0=10, row1=200, col1=200)
+   w.clear_profile()
+
+State Persistence
+-----------------
+
+.. code-block:: python
+
+   w = Show3D(stack, cmap="gray", fps=12, boomerang=True)
+   w.bookmarked_frames = [0, 15, 29]
+
+   w.summary()          # Print human-readable state
+   w.state_dict()       # Get all settings as a dict
+   w.save("state.json") # Save to JSON file
+
+   # Restore from file or dict
+   w2 = Show3D(stack, state="state.json")
 
 Examples
 --------
