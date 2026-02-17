@@ -119,11 +119,17 @@ git add docs/examples/show2d/show2d_simple.ipynb
 
 Docs example notebooks in `docs/examples/` can be either real files with saved widget state, or symlinks to `notebooks/` (which must also have widget state saved).
 
-### Limitations
+### Limitations of static docs
 
-- **JS-only interactivity works**: zoom, pan, colormap, log scale, FFT, auto-contrast, histogram
-- **Python features don't work**: frame navigation (Show3D), export (GIF/ZIP), `set_image()`, trait observers
-- Each widget embeds its full JS bundle (~600 KB) + image data, so pages can be several MB
+The docs pages embed widget state without a Python kernel, so only **JS-side features** work:
+- **Works**: zoom, pan, colormap, log scale, FFT, auto-contrast, histogram, theme toggle
+- **Doesn't work**: frame navigation (Show3D/Show4D), export (GIF/ZIP), `set_image()`, trait observers
+
+For full interactivity (all features including Python backend), use **Google Colab**. Each notebook has a Colab badge at the top. You'll need to install from TestPyPI first:
+
+```python
+!pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ quantem-widget
+```
 
 ## CI/CD
 
