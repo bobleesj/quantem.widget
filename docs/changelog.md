@@ -6,6 +6,8 @@
 - `set_profile` signature changed to `set_profile((row0, col0), (row1, col1))` — takes two `(row, col)` tuples instead of four separate floats
 
 ### Show4DSTEM
+- 5D time-series/tilt-series support: accepts `(n_frames, scan_rows, scan_cols, det_rows, det_cols)` arrays with frame slider, play/pause controls, and `frame_dim_label` parameter (e.g. `"Tilt"`, `"Time"`, `"Focus"`)
+- keyboard shortcuts `[` / `]` for prev/next frame navigation
 - grab-and-drag ROI: clicking inside the detector ROI now drags it with an offset instead of teleporting the center, making it much easier to reposition
 - theme-aware ROI colors: green overlays use darker shades in light theme for better visibility
 - fixed resize handle hit area: handle was ~70px due to image-pixel vs screen-pixel mismatch, now correctly sized to match the visual handle dot

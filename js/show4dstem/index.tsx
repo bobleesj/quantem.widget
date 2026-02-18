@@ -896,6 +896,14 @@ function Show4DSTEM() {
   const [pathIntervalMs] = useModelState<number>("path_interval_ms");
   const [pathLoop] = useModelState<boolean>("path_loop");
 
+  // Frame animation state (5D time/tilt series)
+  const [frameIdx, setFrameIdx] = useModelState<number>("frame_idx");
+  const [nFrames] = useModelState<number>("n_frames");
+  const [frameDimLabel] = useModelState<string>("frame_dim_label");
+  const [framePlaying, setFramePlaying] = useModelState<boolean>("frame_playing");
+  const [frameLoop] = useModelState<boolean>("frame_loop");
+  const [frameIntervalMs] = useModelState<number>("frame_interval_ms");
+
   // Profile line state (synced with Python)
   const [profileLine, setProfileLine] = useModelState<{row: number; col: number}[]>("profile_line");
   const [profileWidth, setProfileWidth] = useModelState<number>("profile_width");
@@ -1066,6 +1074,28 @@ function Show4DSTEM() {
     return () => clearInterval(timer);
   }, [pathPlaying, pathLength, pathIntervalMs, pathLoop, setPathIndex, setPathPlaying]);
 
+  // Frame animation timer (5D time/tilt series)
+  React.useEffect(() => {
+    if (!framePlaying || nFrames <= 1) return;
+
+    const timer = setInterval(() => {
+      setFrameIdx((prev: number) => {
+        const next = prev + 1;
+        if (next >= nFrames) {
+          if (frameLoop) {
+            return 0;
+          } else {
+            setFramePlaying(false);
+            return prev;
+          }
+        }
+        return next;
+      });
+    }, frameIntervalMs);
+
+    return () => clearInterval(timer);
+  }, [framePlaying, nFrames, frameIntervalMs, frameLoop, setFrameIdx, setFramePlaying]);
+
   // Keyboard shortcuts
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1095,12 +1125,24 @@ function Show4DSTEM() {
           setViZoom(1); setViPanX(0); setViPanY(0);
           setFftZoom(1); setFftPanX(0); setFftPanY(0);
           break;
+        case '[':  // Previous frame (5D)
+          if (nFrames > 1) {
+            e.preventDefault();
+            setFrameIdx(Math.max(0, frameIdx - 1));
+          }
+          break;
+        case ']':  // Next frame (5D)
+          if (nFrames > 1) {
+            e.preventDefault();
+            setFrameIdx(Math.min(nFrames - 1, frameIdx + 1));
+          }
+          break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [posRow, posCol, shapeRows, shapeCols, pathPlaying, pathLength, setPosRow, setPosCol, setPathPlaying]);
+  }, [posRow, posCol, shapeRows, shapeCols, pathPlaying, pathLength, setPosRow, setPosCol, setPathPlaying, frameIdx, nFrames, setFrameIdx]);
 
   // Initialize WebGPU FFT on mount
   React.useEffect(() => {
@@ -2742,6 +2784,7 @@ function Show4DSTEM() {
       {/* HEADER */}
       <Typography variant="h6" sx={{ ...typo.title, mb: `${SPACING.SM}px` }}>
         4D-STEM Explorer
+        {nFrames > 1 && <span style={{ fontWeight: "normal", fontSize: 13, marginLeft: 8, opacity: 0.7 }}>({frameDimLabel} {frameIdx + 1}/{nFrames})</span>}
         <InfoTooltip text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
           <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>DP: Diffraction pattern I(kx,ky) at scan position. Drag to move ROI center.</Typography>
@@ -2751,7 +2794,7 @@ function Show4DSTEM() {
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>FFT: Spatial frequency content of the virtual image. Auto masks DC + clips to 99.9th percentile.</Typography>
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Profile: Click two points on DP to draw a line intensity profile.</Typography>
           <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
-          <KeyboardShortcuts items={[["← / →", "Move scan position"], ["Shift+←/→", "Move ×10"], ["Space", "Play / pause path"], ["R", "Reset all zoom/pan"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
+          <KeyboardShortcuts items={[["← / →", "Move scan position"], ["Shift+←/→", "Move ×10"], ["[ / ]", "Prev / next frame (5D)"], ["Space", "Play / pause path"], ["R", "Reset all zoom/pan"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
         </Box>} theme={themeInfo.theme} />
       </Typography>
 
@@ -3142,7 +3185,28 @@ function Show4DSTEM() {
         )}
       </Stack>
 
-      {/* BOTTOM CONTROLS - Path only (FFT toggle moved to VI panel) */}
+      {/* BOTTOM CONTROLS */}
+
+      {/* Frame slider (5D time/tilt series) */}
+      {nFrames > 1 && (
+        <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+          <Typography sx={{ ...typo.label, fontSize: 10, flexShrink: 0 }}>{frameDimLabel}:</Typography>
+          <Stack direction="row" spacing={0} sx={{ flexShrink: 0 }}>
+            <IconButton size="small" onClick={() => setFramePlaying(!framePlaying)} sx={{ color: themeColors.accent, p: 0.25 }}>
+              {framePlaying ? <PauseIcon sx={{ fontSize: 18 }} /> : <PlayArrowIcon sx={{ fontSize: 18 }} />}
+            </IconButton>
+            <IconButton size="small" onClick={() => { setFramePlaying(false); setFrameIdx(0); }} sx={{ color: themeColors.textMuted, p: 0.25 }}>
+              <StopIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Stack>
+          <Slider value={frameIdx} onChange={(_, v) => { setFramePlaying(false); setFrameIdx(v as number); }} min={0} max={Math.max(0, nFrames - 1)} size="small" sx={{ flex: 1, minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
+          <Typography sx={{ ...typo.value, minWidth: 50, textAlign: "right", flexShrink: 0 }}>{frameIdx + 1}/{nFrames}</Typography>
+          <Typography sx={{ ...typo.label, fontSize: 10 }}>Loop:</Typography>
+          <Switch checked={frameLoop} onChange={(_, v) => { model.set("frame_loop", v); model.save_changes(); }} size="small" sx={switchStyles.small} />
+        </Box>
+      )}
+
+      {/* Path animation slider */}
       {pathLength > 0 && (
         <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
           <Stack direction="row" spacing={0} sx={{ flexShrink: 0 }}>
