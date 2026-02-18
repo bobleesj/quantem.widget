@@ -684,22 +684,18 @@ class Show3D(anywidget.AnyWidget):
                 accumulated += vals
         return (accumulated / pw).astype(np.float32)
 
-    def set_profile(self, *args) -> "Show3D":
+    def set_profile(self, start: tuple, end: tuple) -> "Show3D":
         """Set a line profile between two points (image pixel coordinates).
 
         Parameters
         ----------
-        start, end : tuple of (row, col)
-            ``set_profile((row0, col0), (row1, col1))``
-        row0, col0, row1, col1 : float
-            ``set_profile(row0, col0, row1, col1)`` (legacy)
+        start : tuple of (row, col)
+            Start point in pixel coordinates.
+        end : tuple of (row, col)
+            End point in pixel coordinates.
         """
-        if len(args) == 2:
-            (row0, col0), (row1, col1) = args
-        elif len(args) == 4:
-            row0, col0, row1, col1 = args
-        else:
-            raise TypeError(f"set_profile takes 2 tuples or 4 floats, got {len(args)} args")
+        row0, col0 = start
+        row1, col1 = end
         self.profile_line = [
             {"row": float(row0), "col": float(col0)},
             {"row": float(row1), "col": float(col1)},

@@ -579,20 +579,6 @@ def test_show3d_profile_set_and_clear():
     assert widget.profile == []
 
 
-def test_show3d_profile_set_legacy_args():
-    data = np.random.rand(5, 32, 32).astype(np.float32)
-    widget = Show3D(data)
-    widget.set_profile(0, 0, 31, 31)
-    assert widget.profile == [(0.0, 0.0), (31.0, 31.0)]
-
-
-def test_show3d_profile_set_bad_args():
-    data = np.random.rand(5, 32, 32).astype(np.float32)
-    widget = Show3D(data)
-    with pytest.raises(TypeError):
-        widget.set_profile(0, 0, 31)
-
-
 def test_show3d_profile_values():
     data = np.ones((3, 16, 16), dtype=np.float32) * 5.0
     widget = Show3D(data)

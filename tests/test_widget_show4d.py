@@ -395,20 +395,6 @@ def test_show4d_set_profile():
     assert w.profile_line[1] == {"row": 7.0, "col": 7.0}
 
 
-def test_show4d_set_profile_legacy_args():
-    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
-    w = Show4D(data)
-    w.set_profile(0, 0, 7, 7)
-    assert w.profile == [(0.0, 0.0), (7.0, 7.0)]
-
-
-def test_show4d_set_profile_bad_args():
-    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
-    w = Show4D(data)
-    with pytest.raises(TypeError):
-        w.set_profile(0, 0, 7)
-
-
 def test_show4d_clear_profile():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data)

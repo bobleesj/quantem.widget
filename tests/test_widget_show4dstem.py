@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 import quantem.widget
 from quantem.widget import Show4DSTEM
 
@@ -433,20 +432,6 @@ def test_show4dstem_set_profile():
     assert len(w.profile_line) == 2
     assert w.profile_line[0] == {"row": 0.0, "col": 0.0}
     assert w.profile_line[1] == {"row": 15.0, "col": 15.0}
-
-
-def test_show4dstem_set_profile_legacy_args():
-    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
-    w = Show4DSTEM(data)
-    w.set_profile(0, 0, 15, 15)
-    assert w.profile == [(0.0, 0.0), (15.0, 15.0)]
-
-
-def test_show4dstem_set_profile_bad_args():
-    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
-    w = Show4DSTEM(data)
-    with pytest.raises(TypeError):
-        w.set_profile(0, 0, 15)
 
 
 def test_show4dstem_clear_profile():

@@ -446,13 +446,9 @@ class Show4D(anywidget.AnyWidget):
 
     # ── Line Profile ────────────────────────────────────────────────────────
 
-    def set_profile(self, *args) -> "Show4D":
-        if len(args) == 2:
-            (row0, col0), (row1, col1) = args
-        elif len(args) == 4:
-            row0, col0, row1, col1 = args
-        else:
-            raise TypeError(f"set_profile takes 2 tuples or 4 floats, got {len(args)} args")
+    def set_profile(self, start: tuple, end: tuple) -> "Show4D":
+        row0, col0 = start
+        row1, col1 = end
         self.profile_line = [
             {"row": float(row0), "col": float(col0)},
             {"row": float(row1), "col": float(col1)},

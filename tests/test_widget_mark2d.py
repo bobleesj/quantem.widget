@@ -663,22 +663,6 @@ def test_mark2d_set_profile():
     assert w.profile_line[1] == {"row": 50.0, "col": 60.0}
 
 
-def test_mark2d_set_profile_legacy_args():
-    """set_profile backward compat with 4 separate args."""
-    data = np.random.rand(64, 64).astype(np.float32)
-    w = Mark2D(data)
-    w.set_profile(10, 20, 50, 60)
-    assert w.profile == [(10.0, 20.0), (50.0, 60.0)]
-
-
-def test_mark2d_set_profile_bad_args():
-    """set_profile raises TypeError for wrong number of args."""
-    data = np.random.rand(64, 64).astype(np.float32)
-    w = Mark2D(data)
-    with pytest.raises(TypeError):
-        w.set_profile(10, 20, 50)
-
-
 def test_mark2d_clear_profile():
     """clear_profile empties profile_line."""
     data = np.random.rand(64, 64).astype(np.float32)

@@ -56,7 +56,7 @@ Methods
    w.roi_annular(inner=5, outer=15)
 
    # Line profile
-   w.set_profile(row0=10, col0=10, row1=200, col1=200)
+   w.set_profile((10, 10), (200, 200))
    w.clear_profile()
 
 State Persistence
