@@ -8,6 +8,7 @@ Includes playback controls, statistics, ROI selection, FFT, and more.
 import json
 import pathlib
 from enum import Enum
+from typing import Self
 
 import anywidget
 import numpy as np
@@ -567,38 +568,38 @@ class Show3D(anywidget.AnyWidget):
     # Public Methods
     # =========================================================================
 
-    def play(self) -> "Show3D":
+    def play(self) -> Self:
         """Start playback."""
         self.playing = True
         return self
 
-    def pause(self) -> "Show3D":
+    def pause(self) -> Self:
         """Pause playback."""
         self.playing = False
         return self
 
-    def stop(self) -> "Show3D":
+    def stop(self) -> Self:
         """Stop playback and reset to beginning."""
         self.playing = False
         self.slice_idx = 0
         return self
 
-    def goto(self, index: int) -> "Show3D":
+    def goto(self, index: int) -> Self:
         """Jump to a specific frame index."""
         self.slice_idx = int(index) % self.n_slices
         return self
 
-    def set_playback_path(self, path) -> "Show3D":
+    def set_playback_path(self, path) -> Self:
         """Set custom playback order (list of frame indices)."""
         self.playback_path = [int(i) % self.n_slices for i in path]
         return self
 
-    def clear_playback_path(self) -> "Show3D":
+    def clear_playback_path(self) -> Self:
         """Clear custom playback path (revert to sequential)."""
         self.playback_path = []
         return self
 
-    def set_roi(self, row: int, col: int, radius: int = 10) -> "Show3D":
+    def set_roi(self, row: int, col: int, radius: int = 10) -> Self:
         """Set ROI position and size."""
         with self.hold_sync():
             self.roi_row = int(row)
@@ -607,7 +608,7 @@ class Show3D(anywidget.AnyWidget):
             self.roi_active = True
         return self
 
-    def roi_circle(self, radius: int = 10) -> "Show3D":
+    def roi_circle(self, radius: int = 10) -> Self:
         """Set ROI shape to circle with given radius."""
         with self.hold_sync():
             self.roi_shape = "circle"
@@ -615,7 +616,7 @@ class Show3D(anywidget.AnyWidget):
             self.roi_active = True
         return self
 
-    def roi_square(self, half_size: int = 10) -> "Show3D":
+    def roi_square(self, half_size: int = 10) -> Self:
         """Set ROI shape to square with given half-size."""
         with self.hold_sync():
             self.roi_shape = "square"
@@ -623,7 +624,7 @@ class Show3D(anywidget.AnyWidget):
             self.roi_active = True
         return self
 
-    def roi_rectangle(self, width: int = 20, height: int = 10) -> "Show3D":
+    def roi_rectangle(self, width: int = 20, height: int = 10) -> Self:
         """Set ROI shape to rectangle with given half-width and half-height."""
         with self.hold_sync():
             self.roi_shape = "rectangle"
@@ -632,7 +633,7 @@ class Show3D(anywidget.AnyWidget):
             self.roi_active = True
         return self
 
-    def roi_annular(self, inner: int = 5, outer: int = 10) -> "Show3D":
+    def roi_annular(self, inner: int = 5, outer: int = 10) -> Self:
         """Set ROI shape to annular (donut) with given inner and outer radii."""
         with self.hold_sync():
             self.roi_shape = "annular"
@@ -684,23 +685,25 @@ class Show3D(anywidget.AnyWidget):
                 accumulated += vals
         return (accumulated / pw).astype(np.float32)
 
-    def set_profile(self, row0: float, col0: float, row1: float, col1: float) -> "Show3D":
+    def set_profile(self, start: tuple, end: tuple) -> Self:
         """Set a line profile between two points (image pixel coordinates).
 
         Parameters
         ----------
-        row0, col0 : float
+        start : tuple of (row, col)
             Start point in pixel coordinates.
-        row1, col1 : float
+        end : tuple of (row, col)
             End point in pixel coordinates.
         """
+        row0, col0 = start
+        row1, col1 = end
         self.profile_line = [
             {"row": float(row0), "col": float(col0)},
             {"row": float(row1), "col": float(col1)},
         ]
         return self
 
-    def clear_profile(self) -> "Show3D":
+    def clear_profile(self) -> Self:
         """Clear the current line profile."""
         self.profile_line = []
         return self

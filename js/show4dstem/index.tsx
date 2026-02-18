@@ -15,6 +15,8 @@ import IconButton from "@mui/material/IconButton";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import PauseIcon from "@mui/icons-material/Pause";
 import StopIcon from "@mui/icons-material/Stop";
+import FastRewindIcon from "@mui/icons-material/FastRewind";
+import FastForwardIcon from "@mui/icons-material/FastForward";
 import JSZip from "jszip";
 import "./styles.css";
 import { useTheme } from "../theme";
@@ -58,6 +60,14 @@ const switchStyles = {
   medium: { '& .MuiSwitch-thumb': { width: 14, height: 14 }, '& .MuiSwitch-switchBase': { padding: '4px' } },
 };
 
+const sliderStyles = {
+  small: {
+    "& .MuiSlider-thumb": { width: 12, height: 12 },
+    "& .MuiSlider-rail": { height: 3 },
+    "& .MuiSlider-track": { height: 3 },
+  },
+};
+
 // ============================================================================
 // Layout Constants - consistent spacing throughout
 // ============================================================================
@@ -69,6 +79,41 @@ const SPACING = {
 };
 
 const CANVAS_SIZE = 450;  // Both DP and VI canvases
+
+// Theme-aware ROI colors for DP detector overlay
+interface RoiColors {
+  stroke: string;
+  strokeDragging: string;
+  fill: string;
+  fillDragging: string;
+  handleFill: string;
+  innerStroke: string;
+  innerStrokeDragging: string;
+  innerHandleFill: string;
+  textColor: string;
+}
+const DARK_ROI_COLORS: RoiColors = {
+  stroke: "rgba(0, 255, 0, 0.9)",
+  strokeDragging: "rgba(255, 255, 0, 0.9)",
+  fill: "rgba(0, 255, 0, 0.12)",
+  fillDragging: "rgba(255, 255, 0, 0.12)",
+  handleFill: "rgba(0, 255, 0, 0.8)",
+  innerStroke: "rgba(0, 220, 255, 0.9)",
+  innerStrokeDragging: "rgba(255, 200, 0, 0.9)",
+  innerHandleFill: "rgba(0, 220, 255, 0.8)",
+  textColor: "#0f0",
+};
+const LIGHT_ROI_COLORS: RoiColors = {
+  stroke: "rgba(0, 140, 0, 0.9)",
+  strokeDragging: "rgba(200, 160, 0, 0.9)",
+  fill: "rgba(0, 140, 0, 0.15)",
+  fillDragging: "rgba(200, 160, 0, 0.15)",
+  handleFill: "rgba(0, 140, 0, 0.85)",
+  innerStroke: "rgba(0, 160, 200, 0.9)",
+  innerStrokeDragging: "rgba(200, 160, 0, 0.9)",
+  innerHandleFill: "rgba(0, 160, 200, 0.85)",
+  textColor: "#0a0",
+};
 
 // Interaction constants
 const RESIZE_HIT_AREA_PX = 10;
@@ -325,7 +370,8 @@ function drawDpCrosshairHiDPI(
   panY: number,
   detWidth: number,
   detHeight: number,
-  isDragging: boolean
+  isDragging: boolean,
+  roiColors: RoiColors = DARK_ROI_COLORS
 ) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -353,7 +399,7 @@ function drawDpCrosshairHiDPI(
   ctx.shadowOffsetX = 1;
   ctx.shadowOffsetY = 1;
   
-  ctx.strokeStyle = isDragging ? "rgba(255, 255, 0, 0.9)" : "rgba(0, 255, 0, 0.9)";
+  ctx.strokeStyle = isDragging ? roiColors.strokeDragging : roiColors.stroke;
   ctx.lineWidth = lineWidth;
   
   // Draw crosshair
@@ -395,7 +441,8 @@ function drawRoiOverlayHiDPI(
   isDraggingResize: boolean,
   isDraggingResizeInner: boolean,
   isHoveringResize: boolean,
-  isHoveringResizeInner: boolean
+  isHoveringResizeInner: boolean,
+  roiColors: RoiColors = DARK_ROI_COLORS
 ) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -437,7 +484,7 @@ function drawRoiOverlayHiDPI(
       handleFill = "rgba(255, 100, 100, 1)";
       handleStroke = "rgba(255, 255, 255, 1)";
     } else {
-      handleFill = isInner ? "rgba(0, 220, 255, 0.8)" : "rgba(0, 255, 0, 0.8)";
+      handleFill = isInner ? roiColors.innerHandleFill : roiColors.handleFill;
       handleStroke = "rgba(255, 255, 255, 0.8)";
     }
     ctx.beginPath();
@@ -451,7 +498,7 @@ function drawRoiOverlayHiDPI(
   
   // Helper to draw center crosshair
   const drawCenterCrosshair = () => {
-    ctx.strokeStyle = isDragging ? "rgba(255, 255, 0, 0.9)" : "rgba(0, 255, 0, 0.9)";
+    ctx.strokeStyle = isDragging ? roiColors.strokeDragging : roiColors.stroke;
     ctx.lineWidth = lineWidth;
     ctx.beginPath();
     ctx.moveTo(screenX - crosshairSizeSmall, screenY);
@@ -467,14 +514,14 @@ function drawRoiOverlayHiDPI(
     const screenRadiusY = radius * zoom * scaleY;
 
     // Draw ellipse (becomes circle if scaleX === scaleY)
-    ctx.strokeStyle = isDragging ? "rgba(255, 255, 0, 0.9)" : "rgba(0, 255, 0, 0.9)";
+    ctx.strokeStyle = isDragging ? roiColors.strokeDragging : roiColors.stroke;
     ctx.lineWidth = lineWidth;
     ctx.beginPath();
     ctx.ellipse(screenX, screenY, screenRadiusX, screenRadiusY, 0, 0, 2 * Math.PI);
     ctx.stroke();
 
     // Semi-transparent fill
-    ctx.fillStyle = isDragging ? "rgba(255, 255, 0, 0.12)" : "rgba(0, 255, 0, 0.12)";
+    ctx.fillStyle = isDragging ? roiColors.fillDragging : roiColors.fill;
     ctx.fill();
 
     drawCenterCrosshair();
@@ -491,13 +538,13 @@ function drawRoiOverlayHiDPI(
     const left = screenX - screenHalfW;
     const top = screenY - screenHalfH;
 
-    ctx.strokeStyle = isDragging ? "rgba(255, 255, 0, 0.9)" : "rgba(0, 255, 0, 0.9)";
+    ctx.strokeStyle = isDragging ? roiColors.strokeDragging : roiColors.stroke;
     ctx.lineWidth = lineWidth;
     ctx.beginPath();
     ctx.rect(left, top, screenHalfW * 2, screenHalfH * 2);
     ctx.stroke();
 
-    ctx.fillStyle = isDragging ? "rgba(255, 255, 0, 0.12)" : "rgba(0, 255, 0, 0.12)";
+    ctx.fillStyle = isDragging ? roiColors.fillDragging : roiColors.fill;
     ctx.fill();
 
     drawCenterCrosshair();
@@ -509,13 +556,13 @@ function drawRoiOverlayHiDPI(
     const left = screenX - screenHalfW;
     const top = screenY - screenHalfH;
 
-    ctx.strokeStyle = isDragging ? "rgba(255, 255, 0, 0.9)" : "rgba(0, 255, 0, 0.9)";
+    ctx.strokeStyle = isDragging ? roiColors.strokeDragging : roiColors.stroke;
     ctx.lineWidth = lineWidth;
     ctx.beginPath();
     ctx.rect(left, top, screenHalfW * 2, screenHalfH * 2);
     ctx.stroke();
 
-    ctx.fillStyle = isDragging ? "rgba(255, 255, 0, 0.12)" : "rgba(0, 255, 0, 0.12)";
+    ctx.fillStyle = isDragging ? roiColors.fillDragging : roiColors.fill;
     ctx.fill();
 
     drawCenterCrosshair();
@@ -528,21 +575,21 @@ function drawRoiOverlayHiDPI(
     const screenRadiusInnerX = (radiusInner || 0) * zoom * scaleX;
     const screenRadiusInnerY = (radiusInner || 0) * zoom * scaleY;
 
-    // Outer ellipse (green)
-    ctx.strokeStyle = isDragging ? "rgba(255, 255, 0, 0.9)" : "rgba(0, 255, 0, 0.9)";
+    // Outer ellipse
+    ctx.strokeStyle = isDragging ? roiColors.strokeDragging : roiColors.stroke;
     ctx.lineWidth = lineWidth;
     ctx.beginPath();
     ctx.ellipse(screenX, screenY, screenRadiusOuterX, screenRadiusOuterY, 0, 0, 2 * Math.PI);
     ctx.stroke();
 
-    // Inner ellipse (cyan)
-    ctx.strokeStyle = isDragging ? "rgba(255, 200, 0, 0.9)" : "rgba(0, 220, 255, 0.9)";
+    // Inner ellipse
+    ctx.strokeStyle = isDragging ? roiColors.innerStrokeDragging : roiColors.innerStroke;
     ctx.beginPath();
     ctx.ellipse(screenX, screenY, screenRadiusInnerX, screenRadiusInnerY, 0, 0, 2 * Math.PI);
     ctx.stroke();
 
     // Fill annular region
-    ctx.fillStyle = isDragging ? "rgba(255, 255, 0, 0.12)" : "rgba(0, 255, 0, 0.12)";
+    ctx.fillStyle = isDragging ? roiColors.fillDragging : roiColors.fill;
     ctx.beginPath();
     ctx.ellipse(screenX, screenY, screenRadiusOuterX, screenRadiusOuterY, 0, 0, 2 * Math.PI);
     ctx.ellipse(screenX, screenY, screenRadiusInnerX, screenRadiusInnerY, 0, 0, 2 * Math.PI, true);
@@ -859,6 +906,16 @@ function Show4DSTEM() {
   const [pathIntervalMs] = useModelState<number>("path_interval_ms");
   const [pathLoop] = useModelState<boolean>("path_loop");
 
+  // Frame animation state (5D time/tilt series)
+  const [frameIdx, setFrameIdx] = useModelState<number>("frame_idx");
+  const [nFrames] = useModelState<number>("n_frames");
+  const [frameDimLabel] = useModelState<string>("frame_dim_label");
+  const [framePlaying, setFramePlaying] = useModelState<boolean>("frame_playing");
+  const [frameLoop, setFrameLoop] = useModelState<boolean>("frame_loop");
+  const [frameFps, setFrameFps] = useModelState<number>("frame_fps");
+  const [frameReverse, setFrameReverse] = useModelState<boolean>("frame_reverse");
+  const [frameBoomerang, setFrameBoomerang] = useModelState<boolean>("frame_boomerang");
+
   // Profile line state (synced with Python)
   const [profileLine, setProfileLine] = useModelState<{row: number; col: number}[]>("profile_line");
   const [profileWidth, setProfileWidth] = useModelState<number>("profile_width");
@@ -941,6 +998,7 @@ function Show4DSTEM() {
   const profilePoints = profileLine || [];
   const rawDpDataRef = React.useRef<Float32Array | null>(null);
   const dpClickStartRef = React.useRef<{ x: number; y: number } | null>(null);
+  const dpDragOffsetRef = React.useRef<{ dRow: number; dCol: number }>({ dRow: 0, dCol: 0 });
 
   // VI Line profile state
   const [viProfileActive, setViProfileActive] = React.useState(false);
@@ -954,9 +1012,11 @@ function Show4DSTEM() {
   const viProfileLayoutRef = React.useRef<{ padLeft: number; plotW: number; padTop: number; plotH: number; gMin: number; gMax: number; totalDist: number; xUnit: string } | null>(null);
   const rawViDataRef = React.useRef<Float32Array | null>(null);
   const viClickStartRef = React.useRef<{ x: number; y: number } | null>(null);
+  const viRoiDragOffsetRef = React.useRef<{ dRow: number; dCol: number }>({ dRow: 0, dCol: 0 });
 
   // Theme detection
   const { themeInfo, colors: themeColors } = useTheme();
+  const roiColors = themeInfo.theme === "dark" ? DARK_ROI_COLORS : LIGHT_ROI_COLORS;
 
   // Themed typography — applies theme colors to module-level font sizes
   const typo = React.useMemo(() => ({
@@ -1026,6 +1086,44 @@ function Show4DSTEM() {
     return () => clearInterval(timer);
   }, [pathPlaying, pathLength, pathIntervalMs, pathLoop, setPathIndex, setPathPlaying]);
 
+  // Frame animation timer (5D time/tilt series)
+  const frameBounceDir = React.useRef(1);
+  React.useEffect(() => {
+    frameBounceDir.current = frameReverse ? -1 : 1;
+  }, [frameReverse]);
+
+  React.useEffect(() => {
+    if (!framePlaying || nFrames <= 1) return;
+
+    const intervalMs = 1000 / Math.max(0.1, frameFps);
+    const timer = setInterval(() => {
+      setFrameIdx((prev: number) => {
+        let next: number;
+        if (frameBoomerang) {
+          next = prev + frameBounceDir.current;
+          if (next >= nFrames) { frameBounceDir.current = -1; next = nFrames - 2; }
+          if (next < 0) { frameBounceDir.current = 1; next = 1; }
+          next = Math.max(0, Math.min(nFrames - 1, next));
+        } else {
+          next = prev + (frameReverse ? -1 : 1);
+          if (next >= nFrames) {
+            if (frameLoop) return 0;
+            setFramePlaying(false);
+            return prev;
+          }
+          if (next < 0) {
+            if (frameLoop) return nFrames - 1;
+            setFramePlaying(false);
+            return prev;
+          }
+        }
+        return next;
+      });
+    }, intervalMs);
+
+    return () => clearInterval(timer);
+  }, [framePlaying, nFrames, frameFps, frameLoop, frameReverse, frameBoomerang, setFrameIdx, setFramePlaying]);
+
   // Keyboard shortcuts
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1055,12 +1153,24 @@ function Show4DSTEM() {
           setViZoom(1); setViPanX(0); setViPanY(0);
           setFftZoom(1); setFftPanX(0); setFftPanY(0);
           break;
+        case '[':  // Previous frame (5D)
+          if (nFrames > 1) {
+            e.preventDefault();
+            setFrameIdx(Math.max(0, frameIdx - 1));
+          }
+          break;
+        case ']':  // Next frame (5D)
+          if (nFrames > 1) {
+            e.preventDefault();
+            setFrameIdx(Math.min(nFrames - 1, frameIdx + 1));
+          }
+          break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [posRow, posCol, shapeRows, shapeCols, pathPlaying, pathLength, setPosRow, setPosCol, setPathPlaying]);
+  }, [posRow, posCol, shapeRows, shapeCols, pathPlaying, pathLength, setPosRow, setPosCol, setPathPlaying, frameIdx, nFrames, setFrameIdx]);
 
   // Initialize WebGPU FFT on mount
   React.useEffect(() => {
@@ -1500,13 +1610,14 @@ function Show4DSTEM() {
     drawScaleBarHiDPI(dpUiRef.current, DPR, dpZoom, kPixelSize || 1, kUnit, detCols);
     // Draw ROI overlay (circle, square, rect, annular) or point crosshair
     if (roiMode === "point") {
-      drawDpCrosshairHiDPI(dpUiRef.current, DPR, localKCol, localKRow, dpZoom, dpPanX, dpPanY, detCols, detRows, isDraggingDP);
+      drawDpCrosshairHiDPI(dpUiRef.current, DPR, localKCol, localKRow, dpZoom, dpPanX, dpPanY, detCols, detRows, isDraggingDP, roiColors);
     } else {
       drawRoiOverlayHiDPI(
         dpUiRef.current, DPR, roiMode,
         localKCol, localKRow, roiRadius, roiRadiusInner, roiWidth, roiHeight,
         dpZoom, dpPanX, dpPanY, detCols, detRows,
-        isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner
+        isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner,
+        roiColors
       );
     }
 
@@ -1597,7 +1708,7 @@ function Show4DSTEM() {
       }
     }
   }, [dpZoom, dpPanX, dpPanY, kPixelSize, kCalibrated, detRows, detCols, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, localKCol, localKRow, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner,
-      profileActive, profilePoints, profileWidth, themeColors, showDpColorbar, dpColormap, dpScaleMode, dpVminPct, dpVmaxPct, canvasSize]);
+      profileActive, profilePoints, profileWidth, themeColors, showDpColorbar, dpColormap, dpScaleMode, dpVminPct, dpVmaxPct, canvasSize, roiColors]);
   
   // VI scale bar + crosshair + ROI + profile lines (high-DPI)
   React.useEffect(() => {
@@ -2124,6 +2235,10 @@ function Show4DSTEM() {
   // Mouse Handlers
   // ─────────────────────────────────────────────────────────────────────────
 
+  // Helper: convert screen-pixel hit radius to image-pixel radius
+  // handleRadius=6 CSS px drawn, hit area ~10 CSS px → convert to image coords
+  const dpHitRadius = RESIZE_HIT_AREA_PX * Math.max(detCols, detRows) / canvasSize / dpZoom;
+
   // Helper: check if point is near the outer resize handle
   const isNearResizeHandle = (imgX: number, imgY: number): boolean => {
     if (roiMode === "rect") {
@@ -2131,14 +2246,14 @@ function Show4DSTEM() {
       const handleX = roiCenterCol + roiWidth / 2;
       const handleY = roiCenterRow + roiHeight / 2;
       const dist = Math.sqrt((imgX - handleX) ** 2 + (imgY - handleY) ** 2);
-      return dist < RESIZE_HIT_AREA_PX / dpZoom;
+      return dist < dpHitRadius;
     }
     if ((roiMode !== "circle" && roiMode !== "square" && roiMode !== "annular") || !roiRadius) return false;
     const offset = roiMode === "square" ? roiRadius : roiRadius * CIRCLE_HANDLE_ANGLE;
     const handleX = roiCenterCol + offset;
     const handleY = roiCenterRow + offset;
     const dist = Math.sqrt((imgX - handleX) ** 2 + (imgY - handleY) ** 2);
-    return dist < RESIZE_HIT_AREA_PX / dpZoom;
+    return dist < dpHitRadius;
   };
 
   // Helper: check if point is near the inner resize handle (annular mode only)
@@ -2148,11 +2263,12 @@ function Show4DSTEM() {
     const handleX = roiCenterCol + offset;
     const handleY = roiCenterRow + offset;
     const dist = Math.sqrt((imgX - handleX) ** 2 + (imgY - handleY) ** 2);
-    return dist < RESIZE_HIT_AREA_PX / dpZoom;
+    return dist < dpHitRadius;
   };
 
   // Helper: check if point is near VI ROI resize handle (same logic as DP)
   // Hit area is capped to avoid overlap with center for small ROIs
+  const viHitRadius = RESIZE_HIT_AREA_PX * Math.max(shapeRows, shapeCols) / canvasSize / viZoom;
   const isNearViRoiResizeHandle = (imgX: number, imgY: number): boolean => {
     if (!viRoiMode || viRoiMode === "off") return false;
     if (viRoiMode === "rect") {
@@ -2162,7 +2278,7 @@ function Show4DSTEM() {
       const handleY = localViRoiCenterCol + halfW;
       const dist = Math.sqrt((imgX - handleX) ** 2 + (imgY - handleY) ** 2);
       const cornerDist = Math.sqrt(halfW ** 2 + halfH ** 2);
-      const hitArea = Math.min(RESIZE_HIT_AREA_PX / viZoom, cornerDist * 0.5);
+      const hitArea = Math.min(viHitRadius, cornerDist * 0.5);
       return dist < hitArea;
     }
     if (viRoiMode === "circle" || viRoiMode === "square") {
@@ -2172,9 +2288,32 @@ function Show4DSTEM() {
       const handleY = localViRoiCenterCol + offset;
       const dist = Math.sqrt((imgX - handleX) ** 2 + (imgY - handleY) ** 2);
       // Cap hit area to 50% of radius so center remains draggable
-      const hitArea = Math.min(RESIZE_HIT_AREA_PX / viZoom, radius * 0.5);
+      const hitArea = Math.min(viHitRadius, radius * 0.5);
       return dist < hitArea;
     }
+    return false;
+  };
+
+  // Helper: check if point is inside the DP ROI area
+  const isInsideDpRoi = (imgX: number, imgY: number): boolean => {
+    if (roiMode === "point") return false;
+    const dx = imgX - roiCenterCol;
+    const dy = imgY - roiCenterRow;
+    if (roiMode === "circle") return Math.sqrt(dx * dx + dy * dy) <= (roiRadius || 5);
+    if (roiMode === "square") return Math.abs(dx) <= (roiRadius || 5) && Math.abs(dy) <= (roiRadius || 5);
+    if (roiMode === "annular") { const d = Math.sqrt(dx * dx + dy * dy); return d <= (roiRadius || 20) && d >= (roiRadiusInner || 5); }
+    if (roiMode === "rect") return Math.abs(dx) <= (roiWidth || 10) / 2 && Math.abs(dy) <= (roiHeight || 10) / 2;
+    return false;
+  };
+
+  // Helper: check if point is inside the VI ROI area
+  const isInsideViRoi = (imgX: number, imgY: number): boolean => {
+    if (!viRoiMode || viRoiMode === "off") return false;
+    const dx = imgY - localViRoiCenterCol;
+    const dy = imgX - localViRoiCenterRow;
+    if (viRoiMode === "circle") return Math.sqrt(dx * dx + dy * dy) <= (viRoiRadius || 5);
+    if (viRoiMode === "square") return Math.abs(dx) <= (viRoiRadius || 5) && Math.abs(dy) <= (viRoiRadius || 5);
+    if (viRoiMode === "rect") return Math.abs(dx) <= (viRoiWidth || 10) / 2 && Math.abs(dy) <= (viRoiHeight || 10) / 2;
     return false;
   };
 
@@ -2206,6 +2345,13 @@ function Show4DSTEM() {
     }
 
     setIsDraggingDP(true);
+    // If clicking inside the ROI, drag with offset (grab-and-drag)
+    if (roiMode !== "off" && roiMode !== "point" && isInsideDpRoi(imgX, imgY)) {
+      dpDragOffsetRef.current = { dRow: imgY - roiCenterRow, dCol: imgX - roiCenterCol };
+      return;
+    }
+    // Clicking outside ROI — teleport center to click position
+    dpDragOffsetRef.current = { dRow: 0, dCol: 0 };
     setLocalKCol(imgX); setLocalKRow(imgY);
     // Use compound roi_center trait [row, col] - single observer fires in Python
     const newCol = Math.round(Math.max(0, Math.min(detCols - 1, imgX)));
@@ -2275,10 +2421,12 @@ function Show4DSTEM() {
       return;
     }
 
-    setLocalKCol(imgX); setLocalKRow(imgY);
+    const centerCol = imgX - dpDragOffsetRef.current.dCol;
+    const centerRow = imgY - dpDragOffsetRef.current.dRow;
+    setLocalKCol(centerCol); setLocalKRow(centerRow);
     // Use compound roi_center trait [row, col] - single observer fires in Python
-    const newCol = Math.round(Math.max(0, Math.min(detCols - 1, imgX)));
-    const newRow = Math.round(Math.max(0, Math.min(detRows - 1, imgY)));
+    const newCol = Math.round(Math.max(0, Math.min(detCols - 1, centerCol)));
+    const newRow = Math.round(Math.max(0, Math.min(detRows - 1, centerRow)));
     model.set("roi_center", [newRow, newCol]);
     model.save_changes();
   };
@@ -2344,12 +2492,17 @@ function Show4DSTEM() {
         return;
       }
 
-      // Otherwise, move ROI center to click position (same as DP)
+      // Grab-and-drag if clicking inside VI ROI, otherwise teleport
       setIsDraggingViRoi(true);
-      setLocalViRoiCenterRow(imgX);
-      setLocalViRoiCenterCol(imgY);
-      setViRoiCenterRow(Math.round(Math.max(0, Math.min(shapeRows - 1, imgX))));
-      setViRoiCenterCol(Math.round(Math.max(0, Math.min(shapeCols - 1, imgY))));
+      if (isInsideViRoi(imgX, imgY)) {
+        viRoiDragOffsetRef.current = { dRow: imgX - localViRoiCenterRow, dCol: imgY - localViRoiCenterCol };
+      } else {
+        viRoiDragOffsetRef.current = { dRow: 0, dCol: 0 };
+        setLocalViRoiCenterRow(imgX);
+        setLocalViRoiCenterCol(imgY);
+        setViRoiCenterRow(Math.round(Math.max(0, Math.min(shapeRows - 1, imgX))));
+        setViRoiCenterCol(Math.round(Math.max(0, Math.min(shapeCols - 1, imgY))));
+      }
       return;
     }
 
@@ -2408,13 +2561,15 @@ function Show4DSTEM() {
       if (viRoiMode && viRoiMode !== "off") return;  // Don't update position when ROI active
     }
 
-    // Handle VI ROI center dragging (same as DP)
+    // Handle VI ROI center dragging (same as DP — with offset)
     if (isDraggingViRoi) {
-      setLocalViRoiCenterRow(imgX);
-      setLocalViRoiCenterCol(imgY);
+      const centerRow = imgX - viRoiDragOffsetRef.current.dRow;
+      const centerCol = imgY - viRoiDragOffsetRef.current.dCol;
+      setLocalViRoiCenterRow(centerRow);
+      setLocalViRoiCenterCol(centerCol);
       // Batch VI ROI center updates
-      const newViX = Math.round(Math.max(0, Math.min(shapeRows - 1, imgX)));
-      const newViY = Math.round(Math.max(0, Math.min(shapeCols - 1, imgY)));
+      const newViX = Math.round(Math.max(0, Math.min(shapeRows - 1, centerRow)));
+      const newViY = Math.round(Math.max(0, Math.min(shapeCols - 1, centerCol)));
       model.set("vi_roi_center_row", newViX);
       model.set("vi_roi_center_col", newViY);
       model.save_changes();
@@ -2657,6 +2812,7 @@ function Show4DSTEM() {
       {/* HEADER */}
       <Typography variant="h6" sx={{ ...typo.title, mb: `${SPACING.SM}px` }}>
         4D-STEM Explorer
+        {nFrames > 1 && <span style={{ fontWeight: "normal", fontSize: 13, marginLeft: 8, opacity: 0.7 }}>({frameDimLabel} {frameIdx + 1}/{nFrames})</span>}
         <InfoTooltip text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
           <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>DP: Diffraction pattern I(kx,ky) at scan position. Drag to move ROI center.</Typography>
@@ -2665,8 +2821,13 @@ function Show4DSTEM() {
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Image: Virtual image — integrated intensity within detector ROI at each scan position.</Typography>
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>FFT: Spatial frequency content of the virtual image. Auto masks DC + clips to 99.9th percentile.</Typography>
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Profile: Click two points on DP to draw a line intensity profile.</Typography>
+          {nFrames > 1 && <>
+            <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Frame Playback ({frameDimLabel})</Typography>
+            <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Loop: Loop playback. Bounce: Ping-pong — alternates forward and reverse.</Typography>
+            <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>FPS: Adjust playback speed (1–30 frames per second).</Typography>
+          </>}
           <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
-          <KeyboardShortcuts items={[["← / →", "Move scan position"], ["Shift+←/→", "Move ×10"], ["Space", "Play / pause path"], ["R", "Reset all zoom/pan"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
+          <KeyboardShortcuts items={[["← / →", "Move scan position"], ["Shift+←/→", "Move ×10"], ...(nFrames > 1 ? [["[ / ]" as string, `Prev / next ${frameDimLabel.toLowerCase()}`]] : []), ["Space", "Play / pause"], ["R", "Reset all zoom/pan"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
         </Box>} theme={themeInfo.theme} />
       </Typography>
 
@@ -2678,7 +2839,7 @@ function Show4DSTEM() {
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
             <Typography variant="caption" sx={{ ...typo.label }}>
               DP at ({Math.round(localPosRow)}, {Math.round(localPosCol)})
-              <span style={{ color: "#0f0", marginLeft: SPACING.SM }}>k: ({Math.round(localKRow)}, {Math.round(localKCol)})</span>
+              <span style={{ color: roiColors.textColor, marginLeft: SPACING.SM }}>k: ({Math.round(localKRow)}, {Math.round(localKCol)})</span>
             </Typography>
             <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="center">
               <Typography sx={{ ...typo.label, fontSize: 10 }}>Profile:</Typography>
@@ -2739,7 +2900,7 @@ function Show4DSTEM() {
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(dpStats[2])}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(dpStats[3])}</Box></Typography>
               <Box sx={{ flex: 1 }} />
-              <Typography component="span" onClick={() => { setRoiMode("circle"); setRoiRadius(bfRadius || 10); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }} sx={{ color: "#4f4", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>BF</Typography>
+              <Typography component="span" onClick={() => { setRoiMode("circle"); setRoiRadius(bfRadius || 10); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }} sx={{ color: roiColors.textColor, fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>BF</Typography>
               <Typography component="span" onClick={() => { setRoiMode("annular"); setRoiRadiusInner((bfRadius || 10) * 0.5); setRoiRadius(bfRadius || 10); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }} sx={{ color: "#4af", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>ABF</Typography>
               <Typography component="span" onClick={() => { setRoiMode("annular"); setRoiRadiusInner(bfRadius || 10); setRoiRadius(Math.min((bfRadius || 10) * 3, Math.min(detRows, detCols) / 2 - 2)); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }} sx={{ color: "#fa4", fontSize: 11, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>ADF</Typography>
             </Box>
@@ -3057,7 +3218,41 @@ function Show4DSTEM() {
         )}
       </Stack>
 
-      {/* BOTTOM CONTROLS - Path only (FFT toggle moved to VI panel) */}
+      {/* BOTTOM CONTROLS */}
+
+      {/* Frame controls (5D time/tilt series) — matches Show3D playback */}
+      {nFrames > 1 && (<>
+        <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+          <Typography sx={{ ...typo.label, fontSize: 10, flexShrink: 0 }}>{frameDimLabel}:</Typography>
+          <Stack direction="row" spacing={0} sx={{ flexShrink: 0 }}>
+            <IconButton size="small" onClick={() => { setFrameReverse(true); setFramePlaying(true); }} sx={{ color: frameReverse && framePlaying ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
+              <FastRewindIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+            <IconButton size="small" onClick={() => setFramePlaying(!framePlaying)} sx={{ color: themeColors.accent, p: 0.25 }}>
+              {framePlaying ? <PauseIcon sx={{ fontSize: 18 }} /> : <PlayArrowIcon sx={{ fontSize: 18 }} />}
+            </IconButton>
+            <IconButton size="small" onClick={() => { setFrameReverse(false); setFramePlaying(true); }} sx={{ color: !frameReverse && framePlaying ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
+              <FastForwardIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+            <IconButton size="small" onClick={() => { setFramePlaying(false); setFrameIdx(0); }} sx={{ color: themeColors.textMuted, p: 0.25 }}>
+              <StopIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Stack>
+          <Slider value={frameIdx} onChange={(_, v) => { setFramePlaying(false); setFrameIdx(v as number); }} min={0} max={Math.max(0, nFrames - 1)} size="small" sx={{ flex: 1, minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
+          <Typography sx={{ ...typo.value, minWidth: 50, textAlign: "right", flexShrink: 0 }}>{frameIdx + 1}/{nFrames}</Typography>
+        </Box>
+        <Box sx={{ ...controlRow, mt: `${SPACING.XS}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+          <Typography sx={{ ...typo.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>fps</Typography>
+          <Slider value={frameFps} min={1} max={30} step={1} onChange={(_, v) => setFrameFps(v as number)} size="small" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
+          <Typography sx={{ ...typo.label, fontSize: 10, color: themeColors.textMuted, minWidth: 14, flexShrink: 0 }}>{Math.round(frameFps)}</Typography>
+          <Typography sx={{ ...typo.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>Loop</Typography>
+          <Switch size="small" checked={frameLoop} onChange={() => setFrameLoop(!frameLoop)} sx={{ ...switchStyles.small, flexShrink: 0 }} />
+          <Typography sx={{ ...typo.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>Bounce</Typography>
+          <Switch size="small" checked={frameBoomerang} onChange={() => setFrameBoomerang(!frameBoomerang)} sx={{ ...switchStyles.small, flexShrink: 0 }} />
+        </Box>
+      </>)}
+
+      {/* Path animation slider */}
       {pathLength > 0 && (
         <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
           <Stack direction="row" spacing={0} sx={{ flexShrink: 0 }}>

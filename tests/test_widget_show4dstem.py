@@ -311,9 +311,9 @@ def test_show4dstem_rejects_2d():
         pass
 
 
-def test_show4dstem_rejects_5d():
-    """5D input raises ValueError."""
-    data = np.random.rand(2, 2, 2, 8, 8).astype(np.float32)
+def test_show4dstem_rejects_6d():
+    """6D input raises ValueError."""
+    data = np.random.rand(2, 2, 2, 2, 8, 8).astype(np.float32)
     try:
         Show4DSTEM(data)
         assert False, "Should have raised ValueError"
@@ -427,7 +427,7 @@ def test_show4dstem_profile_defaults():
 def test_show4dstem_set_profile():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
-    result = w.set_profile(0, 0, 15, 15)
+    result = w.set_profile((0, 0), (15, 15))
     assert result is w
     assert len(w.profile_line) == 2
     assert w.profile_line[0] == {"row": 0.0, "col": 0.0}
@@ -437,7 +437,7 @@ def test_show4dstem_set_profile():
 def test_show4dstem_clear_profile():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
-    w.set_profile(0, 0, 15, 15)
+    w.set_profile((0, 0), (15, 15))
     assert len(w.profile_line) == 2
     result = w.clear_profile()
     assert result is w
@@ -447,7 +447,7 @@ def test_show4dstem_clear_profile():
 def test_show4dstem_profile_property():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
-    w.set_profile(2.0, 3.0, 12.0, 8.0)
+    w.set_profile((2.0, 3.0), (12.0, 8.0))
     pts = w.profile
     assert len(pts) == 2
     assert pts[0] == (2.0, 3.0)
@@ -457,7 +457,7 @@ def test_show4dstem_profile_property():
 def test_show4dstem_profile_values():
     data = np.ones((4, 4, 16, 16), dtype=np.float32) * 3.0
     w = Show4DSTEM(data)
-    w.set_profile(0, 0, 15, 0)
+    w.set_profile((0, 0), (15, 0))
     vals = w.profile_values
     assert vals is not None
     assert len(vals) >= 2
@@ -467,7 +467,7 @@ def test_show4dstem_profile_values():
 def test_show4dstem_profile_distance_calibrated():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data, k_pixel_size=0.5)
-    w.set_profile(0, 0, 3, 4)
+    w.set_profile((0, 0), (3, 4))
     # pixel distance = 5, k-calibrated = 5 * 0.5 = 2.5
     assert abs(w.profile_distance - 2.5) < 0.01
 
@@ -475,7 +475,7 @@ def test_show4dstem_profile_distance_calibrated():
 def test_show4dstem_profile_distance_uncalibrated():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
-    w.set_profile(0, 0, 3, 4)
+    w.set_profile((0, 0), (3, 4))
     # No k_pixel_size calibration → pixel distance = 5
     assert abs(w.profile_distance - 5.0) < 0.01
 
@@ -483,7 +483,7 @@ def test_show4dstem_profile_distance_uncalibrated():
 def test_show4dstem_profile_in_state_dict():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
-    w.set_profile(1, 2, 10, 12)
+    w.set_profile((1, 2), (10, 12))
     w.profile_width = 5
     sd = w.state_dict()
     assert "profile_line" in sd
@@ -495,7 +495,7 @@ def test_show4dstem_profile_in_state_dict():
 def test_show4dstem_profile_in_summary(capsys):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
-    w.set_profile(0, 0, 15, 15)
+    w.set_profile((0, 0), (15, 15))
     w.summary()
     out = capsys.readouterr().out
     assert "Profile:" in out
@@ -533,3 +533,153 @@ def test_show4dstem_normalize_frame():
     result = w._normalize_frame(frame)
     assert result.dtype == np.uint8
     assert result.shape == (2, 2)
+
+
+# ── 5D Time/Tilt Series ────────────────────────────────────────────────────
+
+
+def test_show4dstem_5d_basic():
+    """5D array creates widget with n_frames > 1."""
+    data = np.random.rand(5, 4, 4, 8, 8).astype(np.float32)
+    w = Show4DSTEM(data)
+    assert w.n_frames == 5
+    assert w.shape_rows == 4
+    assert w.shape_cols == 4
+    assert w.det_rows == 8
+    assert w.det_cols == 8
+    assert w.frame_idx == 0
+
+
+def test_show4dstem_5d_frame_navigation():
+    """Changing frame_idx updates the displayed frame."""
+    data = np.zeros((3, 2, 2, 4, 4), dtype=np.float32)
+    data[0] = 1.0
+    data[1] = 2.0
+    data[2] = 3.0
+    w = Show4DSTEM(data)
+    frame0 = w._get_frame(0, 0)
+    assert np.allclose(frame0, 1.0)
+    w.frame_idx = 1
+    frame1 = w._get_frame(0, 0)
+    assert np.allclose(frame1, 2.0)
+    w.frame_idx = 2
+    frame2 = w._get_frame(0, 0)
+    assert np.allclose(frame2, 3.0)
+
+
+def test_show4dstem_5d_frame_dim_label():
+    """frame_dim_label is set from constructor param."""
+    data = np.random.rand(3, 2, 2, 4, 4).astype(np.float32)
+    w = Show4DSTEM(data, frame_dim_label="Tilt")
+    assert w.frame_dim_label == "Tilt"
+    w2 = Show4DSTEM(data)
+    assert w2.frame_dim_label == "Frame"
+
+
+def test_show4dstem_5d_virtual_image_per_frame():
+    """Virtual image changes when frame_idx changes."""
+    data = np.zeros((2, 4, 4, 8, 8), dtype=np.float32)
+    data[0, :, :, 3:5, 3:5] = 10.0
+    data[1, :, :, 3:5, 3:5] = 50.0
+    w = Show4DSTEM(data, center=(4, 4), bf_radius=3)
+    w.roi_mode = "circle"
+    w.roi_center_row = 4.0
+    w.roi_center_col = 4.0
+    w.roi_radius = 3.0
+    vi_bytes_0 = bytes(w.virtual_image_bytes)
+    w.frame_idx = 1
+    vi_bytes_1 = bytes(w.virtual_image_bytes)
+    assert vi_bytes_0 != vi_bytes_1
+
+
+def test_show4dstem_5d_global_range():
+    """dp_global_min/max spans all frames."""
+    data = np.zeros((3, 2, 2, 4, 4), dtype=np.float32)
+    data[0] = 1.0
+    data[1] = 5.0
+    data[2] = 10.0
+    w = Show4DSTEM(data)
+    assert w.dp_global_min <= 1.0
+    assert w.dp_global_max >= 10.0
+
+
+def test_show4dstem_5d_set_image():
+    """set_image works with 5D data."""
+    data_4d = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4DSTEM(data_4d)
+    assert w.n_frames == 1
+    data_5d = np.random.rand(3, 4, 4, 8, 8).astype(np.float32)
+    w.set_image(data_5d)
+    assert w.n_frames == 3
+    assert w.frame_idx == 0
+
+
+def test_show4dstem_5d_state_dict():
+    """state_dict includes frame traits."""
+    data = np.random.rand(3, 2, 2, 4, 4).astype(np.float32)
+    w = Show4DSTEM(data, frame_dim_label="Time")
+    w.frame_idx = 1
+    sd = w.state_dict()
+    assert sd["frame_idx"] == 1
+    assert sd["frame_dim_label"] == "Time"
+    assert "frame_loop" in sd
+    assert "frame_fps" in sd
+    assert "frame_reverse" in sd
+    assert "frame_boomerang" in sd
+
+
+def test_show4dstem_5d_state_roundtrip():
+    """State can be saved and restored for 5D widget."""
+    data = np.random.rand(3, 2, 2, 4, 4).astype(np.float32)
+    w = Show4DSTEM(data, frame_dim_label="Tilt")
+    w.frame_idx = 2
+    w.frame_fps = 10.0
+    w.frame_reverse = True
+    w.frame_boomerang = True
+    sd = w.state_dict()
+    w2 = Show4DSTEM(data, state=sd)
+    assert w2.frame_idx == 2
+    assert w2.frame_dim_label == "Tilt"
+    assert w2.frame_fps == 10.0
+    assert w2.frame_reverse is True
+    assert w2.frame_boomerang is True
+
+
+def test_show4dstem_5d_summary(capsys):
+    """summary() shows frame info for 5D data."""
+    data = np.random.rand(5, 2, 2, 4, 4).astype(np.float32)
+    w = Show4DSTEM(data, frame_dim_label="Tilt")
+    w.frame_idx = 2
+    w.summary()
+    out = capsys.readouterr().out
+    assert "Frames:" in out
+    assert "Tilt" in out
+
+
+def test_show4dstem_5d_repr():
+    """__repr__ includes frame info for 5D data."""
+    data = np.random.rand(3, 2, 2, 4, 4).astype(np.float32)
+    w = Show4DSTEM(data, frame_dim_label="Focus")
+    r = repr(w)
+    assert "3," in r  # n_frames in shape
+    assert "focus=" in r  # frame_dim_label.lower()
+
+
+def test_show4dstem_4d_no_frame_traits():
+    """4D data keeps n_frames=1, no frame info in repr."""
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4DSTEM(data)
+    assert w.n_frames == 1
+    assert w.frame_idx == 0
+    r = repr(w)
+    assert "frame" not in r.lower() or "frame" not in r
+
+
+def test_show4dstem_5d_torch_input():
+    """5D PyTorch tensor input works."""
+    import torch
+    data = torch.rand(3, 4, 4, 8, 8)
+    w = Show4DSTEM(data)
+    assert w.n_frames == 3
+    assert w.shape_rows == 4
+    assert w.det_rows == 8

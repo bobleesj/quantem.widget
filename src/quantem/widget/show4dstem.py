@@ -26,6 +26,7 @@ To reduce data size, bin k-space at the dataset level before viewing:
 
 import json
 import pathlib
+from typing import Self
 
 import anywidget
 import numpy as np
@@ -55,8 +56,10 @@ class Show4DSTEM(anywidget.AnyWidget):
     Parameters
     ----------
     data : Dataset4dstem or array_like
-        Dataset4dstem object (calibration auto-extracted) or 4D array
-        of shape (scan_rows, scan_cols, det_rows, det_cols).
+        Dataset4dstem object (calibration auto-extracted), 4D array
+        of shape (scan_rows, scan_cols, det_rows, det_cols), or 5D array
+        of shape (n_frames, scan_rows, scan_cols, det_rows, det_cols)
+        for time-series or tilt-series data.
     scan_shape : tuple, optional
         If data is flattened (N, det_rows, det_cols), provide scan dimensions.
     pixel_size : float, optional
@@ -74,6 +77,9 @@ class Show4DSTEM(anywidget.AnyWidget):
         Precompute BF/ABF/LAADF/HAADF virtual images for preset switching.
     log_scale : bool, default False
         Use log scale for better dynamic range visualization.
+    frame_dim_label : str, optional
+        Label for the frame dimension when 5D data is provided.
+        Defaults to "Frame". Common values: "Tilt", "Time", "Focus".
 
     Examples
     --------
@@ -90,6 +96,10 @@ class Show4DSTEM(anywidget.AnyWidget):
     >>> # With raster animation
     >>> widget = Show4DSTEM(dataset)
     >>> widget.raster(step=2, interval_ms=50)
+
+    >>> # 5D time-series or tilt-series data
+    >>> data_5d = np.random.rand(20, 64, 64, 128, 128)  # 20 frames
+    >>> Show4DSTEM(data_5d, frame_dim_label="Tilt")
     """
 
     _esm = pathlib.Path(__file__).parent / "static" / "show4dstem.js"
@@ -188,6 +198,18 @@ class Show4DSTEM(anywidget.AnyWidget):
     mask_dc = traitlets.Bool(True).tag(sync=True)  # Mask center pixel for DP stats
     log_scale = traitlets.Bool(False).tag(sync=True)  # Log scale for DP display
 
+    # =========================================================================
+    # Frame Animation (5D time/tilt series)
+    # =========================================================================
+    frame_idx = traitlets.Int(0).tag(sync=True)
+    n_frames = traitlets.Int(1).tag(sync=True)
+    frame_dim_label = traitlets.Unicode("Frame").tag(sync=True)
+    frame_playing = traitlets.Bool(False).tag(sync=True)
+    frame_loop = traitlets.Bool(True).tag(sync=True)
+    frame_fps = traitlets.Float(5.0).tag(sync=True)
+    frame_reverse = traitlets.Bool(False).tag(sync=True)
+    frame_boomerang = traitlets.Bool(False).tag(sync=True)
+
     # Export (GIF)
     _gif_export_requested = traitlets.Bool(False).tag(sync=True)
     _gif_data = traitlets.Bytes(b"").tag(sync=True)
@@ -206,6 +228,7 @@ class Show4DSTEM(anywidget.AnyWidget):
         bf_radius: float | None = None,
         precompute_virtual_images: bool = False,
         log_scale: bool = False,
+        frame_dim_label: str | None = None,
         state=None,
         **kwargs,
     ):
@@ -250,7 +273,12 @@ class Show4DSTEM(anywidget.AnyWidget):
             self._data = torch.where(self._data >= saturated_value, torch.zeros(1, device=self._device), self._data)
         # Handle flattened data — use self._data.shape (accounts for binning)
         ndim = self._data.ndim
-        if ndim == 3:
+        if ndim == 5:
+            self.n_frames = self._data.shape[0]
+            self._scan_shape = (self._data.shape[1], self._data.shape[2])
+            self._det_shape = (self._data.shape[3], self._data.shape[4])
+        elif ndim == 3:
+            self.n_frames = 1
             if scan_shape is not None:
                 self._scan_shape = scan_shape
             else:
@@ -264,10 +292,11 @@ class Show4DSTEM(anywidget.AnyWidget):
                 self._scan_shape = (side, side)
             self._det_shape = (self._data.shape[1], self._data.shape[2])
         elif ndim == 4:
+            self.n_frames = 1
             self._scan_shape = (self._data.shape[0], self._data.shape[1])
             self._det_shape = (self._data.shape[2], self._data.shape[3])
         else:
-            raise ValueError(f"Expected 3D or 4D array, got {ndim}D")
+            raise ValueError(f"Expected 3D, 4D, or 5D array, got {ndim}D")
 
         self.shape_rows = self._scan_shape[0]
         self.shape_cols = self._scan_shape[1]
@@ -276,6 +305,8 @@ class Show4DSTEM(anywidget.AnyWidget):
         # Initial position at center
         self.pos_row = self.shape_rows // 2
         self.pos_col = self.shape_cols // 2
+        # Frame dimension label (for 5D time/tilt series UI)
+        self.frame_dim_label = frame_dim_label if frame_dim_label is not None else "Frame"
         # Precompute global range for consistent scaling (hot pixels already removed)
         self.dp_global_min = max(float(self._data.min()), MIN_LOG_VALUE)
         self.dp_global_max = float(self._data.max())
@@ -312,7 +343,7 @@ class Show4DSTEM(anywidget.AnyWidget):
         self._cached_bf_virtual = None
         self._cached_abf_virtual = None
         self._cached_adf_virtual = None
-        if precompute_virtual_images:
+        if precompute_virtual_images and self.n_frames == 1:
             self._precompute_common_virtual_images()
 
         # Update frame when position changes (scale/colormap handled in JS)
@@ -339,6 +370,9 @@ class Show4DSTEM(anywidget.AnyWidget):
         # Path animation: observe index changes from frontend
         self.observe(self._on_path_index_change, names=["path_index"])
         self.observe(self._on_gif_export, names=["_gif_export_requested"])
+
+        # Frame animation (5D): observe frame_idx changes from frontend
+        self.observe(self._on_frame_idx_change, names=["frame_idx"])
 
         # Auto-detect trigger: observe changes from frontend
         self.observe(self._on_auto_detect_trigger, names=["auto_detect_trigger"])
@@ -371,7 +405,12 @@ class Show4DSTEM(anywidget.AnyWidget):
         saturated_value = 65535.0 if data_np.dtype == np.uint16 else 255.0 if data_np.dtype == np.uint8 else None
         if saturated_value is not None:
             self._data[self._data >= saturated_value] = 0
-        if data_np.ndim == 3:
+        if data_np.ndim == 5:
+            self.n_frames = data_np.shape[0]
+            self._scan_shape = (data_np.shape[1], data_np.shape[2])
+            self._det_shape = (data_np.shape[3], data_np.shape[4])
+        elif data_np.ndim == 3:
+            self.n_frames = 1
             if scan_shape is not None:
                 self._scan_shape = scan_shape
             else:
@@ -382,10 +421,12 @@ class Show4DSTEM(anywidget.AnyWidget):
                 self._scan_shape = (side, side)
             self._det_shape = (data_np.shape[1], data_np.shape[2])
         elif data_np.ndim == 4:
+            self.n_frames = 1
             self._scan_shape = (data_np.shape[0], data_np.shape[1])
             self._det_shape = (data_np.shape[2], data_np.shape[3])
         else:
-            raise ValueError(f"Expected 3D or 4D array, got {data_np.ndim}D")
+            raise ValueError(f"Expected 3D, 4D, or 5D array, got {data_np.ndim}D")
+        self.frame_idx = 0
         self.shape_rows = self._scan_shape[0]
         self.shape_cols = self._scan_shape[1]
         self.det_rows = self._det_shape[0]
@@ -406,10 +447,16 @@ class Show4DSTEM(anywidget.AnyWidget):
 
     def __repr__(self) -> str:
         k_unit = "mrad" if self.k_calibrated else "px"
+        shape = (
+            f"({self.n_frames}, {self.shape_rows}, {self.shape_cols}, {self.det_rows}, {self.det_cols})"
+            if self.n_frames > 1
+            else f"({self.shape_rows}, {self.shape_cols}, {self.det_rows}, {self.det_cols})"
+        )
+        frame_info = f", {self.frame_dim_label.lower()}={self.frame_idx}" if self.n_frames > 1 else ""
         return (
-            f"Show4DSTEM(shape=({self.shape_rows}, {self.shape_cols}, {self.det_rows}, {self.det_cols}), "
+            f"Show4DSTEM(shape={shape}, "
             f"sampling=({self.pixel_size} Å, {self.k_pixel_size} {k_unit}), "
-            f"pos=({self.pos_row}, {self.pos_col}))"
+            f"pos=({self.pos_row}, {self.pos_col}){frame_info})"
         )
 
     def state_dict(self):
@@ -440,6 +487,12 @@ class Show4DSTEM(anywidget.AnyWidget):
             "path_loop": self.path_loop,
             "profile_line": self.profile_line,
             "profile_width": self.profile_width,
+            "frame_idx": self.frame_idx,
+            "frame_dim_label": self.frame_dim_label,
+            "frame_loop": self.frame_loop,
+            "frame_fps": self.frame_fps,
+            "frame_reverse": self.frame_reverse,
+            "frame_boomerang": self.frame_boomerang,
         }
 
     def save(self, path: str):
@@ -452,6 +505,16 @@ class Show4DSTEM(anywidget.AnyWidget):
 
     def summary(self):
         lines = ["Show4DSTEM", "═" * 32]
+        if self.n_frames > 1:
+            parts = [f"{self.n_frames} ({self.frame_dim_label}), current: {self.frame_idx}"]
+            parts.append(f"{self.frame_fps} fps")
+            if self.frame_loop:
+                parts.append("loop")
+            if self.frame_reverse:
+                parts.append("reverse")
+            if self.frame_boomerang:
+                parts.append("bounce")
+            lines.append(f"Frames:   {' | '.join(parts)}")
         lines.append(f"Scan:     {self.shape_rows}×{self.shape_cols} ({self.pixel_size:.2f} Å/px)")
         k_unit = "mrad" if self.k_calibrated else "px"
         lines.append(f"Detector: {self.det_rows}×{self.det_cols} ({self.k_pixel_size:.4f} {k_unit}/px)")
@@ -496,18 +559,27 @@ class Show4DSTEM(anywidget.AnyWidget):
         """Detector dimensions as (rows, cols) tuple."""
         return (self.det_rows, self.det_cols)
 
+    @property
+    def _frame_data(self) -> torch.Tensor:
+        """Per-frame data (4D or 3D flattened), accounting for 5D time/tilt series."""
+        if self.n_frames > 1:
+            return self._data[self.frame_idx]
+        return self._data
+
     # =========================================================================
     # Line Profile
     # =========================================================================
 
-    def set_profile(self, row0: float, col0: float, row1: float, col1: float) -> "Show4DSTEM":
+    def set_profile(self, start: tuple, end: tuple) -> Self:
+        row0, col0 = start
+        row1, col1 = end
         self.profile_line = [
             {"row": float(row0), "col": float(col0)},
             {"row": float(row1), "col": float(col1)},
         ]
         return self
 
-    def clear_profile(self) -> "Show4DSTEM":
+    def clear_profile(self) -> Self:
         self.profile_line = []
         return self
 
@@ -571,7 +643,7 @@ class Show4DSTEM(anywidget.AnyWidget):
         interval_ms: int = 100,
         loop: bool = True,
         autoplay: bool = True,
-    ) -> "Show4DSTEM":
+    ) -> Self:
         """
         Set a custom path of scan positions to animate through.
 
@@ -605,24 +677,24 @@ class Show4DSTEM(anywidget.AnyWidget):
             self.path_playing = True
         return self
     
-    def play(self) -> "Show4DSTEM":
+    def play(self) -> Self:
         """Start playing the path animation."""
         if self.path_length > 0:
             self.path_playing = True
         return self
     
-    def pause(self) -> "Show4DSTEM":
+    def pause(self) -> Self:
         """Pause the path animation."""
         self.path_playing = False
         return self
     
-    def stop(self) -> "Show4DSTEM":
+    def stop(self) -> Self:
         """Stop and reset path animation to beginning."""
         self.path_playing = False
         self.path_index = 0
         return self
     
-    def goto(self, index: int) -> "Show4DSTEM":
+    def goto(self, index: int) -> Self:
         """Jump to a specific index in the path."""
         if 0 <= index < self.path_length:
             self.path_index = index
@@ -644,6 +716,25 @@ class Show4DSTEM(anywidget.AnyWidget):
             # Reset trigger to allow re-triggering
             self.auto_detect_trigger = False
 
+    def _on_frame_idx_change(self, change=None):
+        """Called when frame_idx changes (5D time/tilt series).
+
+        Recomputes virtual image and diffraction pattern for the new frame.
+        Invalidates precomputed caches since they are per-frame.
+        """
+        if self.n_frames <= 1:
+            return
+        # Invalidate precomputed caches (they were for a different frame)
+        self._cached_bf_virtual = None
+        self._cached_abf_virtual = None
+        self._cached_adf_virtual = None
+        # Recompute virtual image and displayed frame
+        self._compute_virtual_image_from_roi()
+        self._update_frame()
+        # Recompute summed DP if VI ROI is active
+        if self.vi_roi_mode != "off":
+            self._compute_summed_dp_from_vi_roi()
+
     # =========================================================================
     # Path Animation Patterns
     # =========================================================================
@@ -654,7 +745,7 @@ class Show4DSTEM(anywidget.AnyWidget):
         bidirectional: bool = False,
         interval_ms: int = 100,
         loop: bool = True,
-    ) -> "Show4DSTEM":
+    ) -> Self:
         """
         Play a raster scan path (row by row, left to right).
 
@@ -690,7 +781,7 @@ class Show4DSTEM(anywidget.AnyWidget):
     # ROI Mode Methods
     # =========================================================================
     
-    def roi_circle(self, radius: float | None = None) -> "Show4DSTEM":
+    def roi_circle(self, radius: float | None = None) -> Self:
         """
         Switch to circle ROI mode for virtual imaging.
         
@@ -718,7 +809,7 @@ class Show4DSTEM(anywidget.AnyWidget):
             self.roi_radius = float(radius)
         return self
     
-    def roi_point(self) -> "Show4DSTEM":
+    def roi_point(self) -> Self:
         """
         Switch to point ROI mode (single-pixel indexing).
         
@@ -733,7 +824,7 @@ class Show4DSTEM(anywidget.AnyWidget):
         self.roi_mode = "point"
         return self
 
-    def roi_square(self, half_size: float | None = None) -> "Show4DSTEM":
+    def roi_square(self, half_size: float | None = None) -> Self:
         """
         Switch to square ROI mode for virtual imaging.
 
@@ -764,7 +855,7 @@ class Show4DSTEM(anywidget.AnyWidget):
 
     def roi_annular(
         self, inner_radius: float | None = None, outer_radius: float | None = None
-    ) -> "Show4DSTEM":
+    ) -> Self:
         """
         Set ROI mode to annular (donut-shaped) for ADF/HAADF imaging.
         
@@ -794,7 +885,7 @@ class Show4DSTEM(anywidget.AnyWidget):
 
     def roi_rect(
         self, width: float | None = None, height: float | None = None
-    ) -> "Show4DSTEM":
+    ) -> Self:
         """
         Set ROI mode to rectangular.
         
@@ -822,7 +913,7 @@ class Show4DSTEM(anywidget.AnyWidget):
             self.roi_height = float(height)
         return self
 
-    def auto_detect_center(self, update_roi: bool = True) -> "Show4DSTEM":
+    def auto_detect_center(self, update_roi: bool = True) -> Self:
         """
         Automatically detect BF disk center and radius using centroid.
 
@@ -848,7 +939,9 @@ class Show4DSTEM(anywidget.AnyWidget):
         >>> widget.auto_detect_center()  # Auto-detect and apply
         """
         # Sum all diffraction patterns to get average (PyTorch)
-        if self._data.ndim == 4:
+        if self._data.ndim == 5:
+            summed_dp = self._data.sum(dim=(0, 1, 2))
+        elif self._data.ndim == 4:
             summed_dp = self._data.sum(dim=(0, 1))
         else:
             summed_dp = self._data.sum(dim=0)
@@ -885,11 +978,12 @@ class Show4DSTEM(anywidget.AnyWidget):
 
     def _get_frame(self, row: int, col: int) -> np.ndarray:
         """Get single diffraction frame at position (row, col) as numpy array."""
-        if self._data.ndim == 3:
+        data = self._frame_data
+        if data.ndim == 3:
             idx = row * self.shape_cols + col
-            return self._data[idx].cpu().numpy()
+            return data[idx].cpu().numpy()
         else:
-            return self._data[row, col].cpu().numpy()
+            return data[row, col].cpu().numpy()
 
     def _normalize_frame(self, frame: np.ndarray) -> np.ndarray:
         if self.log_scale:
@@ -944,11 +1038,12 @@ class Show4DSTEM(anywidget.AnyWidget):
     def _update_frame(self, change=None):
         """Send raw float32 frame to frontend (JS handles scale/colormap)."""
         # Get frame as tensor (stays on device)
-        if self._data.ndim == 3:
+        data = self._frame_data
+        if data.ndim == 3:
             idx = self.pos_row * self.shape_cols + self.pos_col
-            frame = self._data[idx]
+            frame = data[idx]
         else:
-            frame = self._data[self.pos_row, self.pos_col]
+            frame = data[self.pos_row, self.pos_col]
 
         # Apply log scale if enabled
         if self.log_scale:
@@ -1041,13 +1136,14 @@ class Show4DSTEM(anywidget.AnyWidget):
         self.summed_dp_count = n_positions
 
         # Compute average DP using masked sum (vectorized)
-        if self._data.ndim == 4:
+        data = self._frame_data
+        if data.ndim == 4:
             # (scan_rows, scan_cols, det_rows, det_cols) - sum over masked scan positions
-            avg_dp = self._data[mask].mean(dim=0)
+            avg_dp = data[mask].mean(dim=0)
         else:
             # Flattened: (N, det_rows, det_cols) - need to convert mask indices
             flat_indices = torch.nonzero(mask.flatten(), as_tuple=True)[0]
-            avg_dp = self._data[flat_indices].mean(dim=0)
+            avg_dp = data[flat_indices].mean(dim=0)
 
         # Send raw float32 (consistent with other data paths — JS handles normalization)
         self.summed_dp_bytes = avg_dp.cpu().numpy().astype(np.float32).tobytes()
@@ -1135,6 +1231,7 @@ class Show4DSTEM(anywidget.AnyWidget):
 
         For large masks (≥20%), uses full tensordot which has constant ~13ms.
         """
+        data = self._frame_data
         mask_float = mask.float()
         n_det = self._det_shape[0] * self._det_shape[1]
         n_nonzero = int(mask.sum())
@@ -1144,15 +1241,15 @@ class Show4DSTEM(anywidget.AnyWidget):
             # Sparse: faster for small masks
             indices = torch.nonzero(mask_float.flatten(), as_tuple=True)[0]
             n_scan = self._scan_shape[0] * self._scan_shape[1]
-            data_flat = self._data.reshape(n_scan, n_det)
+            data_flat = data.reshape(n_scan, n_det)
             result = data_flat[:, indices].sum(dim=1).reshape(self._scan_shape)
         else:
             # Tensordot: faster for large masks
             # Reshape to 4D if needed (3D flattened data)
-            if self._data.ndim == 3:
-                data_4d = self._data.reshape(self._scan_shape[0], self._scan_shape[1], *self._det_shape)
+            if data.ndim == 3:
+                data_4d = data.reshape(self._scan_shape[0], self._scan_shape[1], *self._det_shape)
             else:
-                data_4d = self._data
+                data_4d = data
             result = torch.tensordot(data_4d, mask_float, dims=([2, 3], [0, 1]))
 
         return result
@@ -1197,10 +1294,11 @@ class Show4DSTEM(anywidget.AnyWidget):
             # Point mode: single-pixel indexing
             row = int(max(0, min(round(cy), self._det_shape[0] - 1)))
             col = int(max(0, min(round(cx), self._det_shape[1] - 1)))
-            if self._data.ndim == 4:
-                virtual_image = self._data[:, :, row, col]
+            data = self._frame_data
+            if data.ndim == 4:
+                virtual_image = data[:, :, row, col]
             else:
-                virtual_image = self._data[:, row, col].reshape(self._scan_shape)
+                virtual_image = data[:, row, col].reshape(self._scan_shape)
             self.virtual_image_bytes = self._to_float32_bytes(virtual_image)
             return
 

@@ -280,7 +280,7 @@ class Mark2D(anywidget.AnyWidget):
     Line profile (programmatic):
 
     >>> w = Mark2D(img, pixel_size_angstrom=0.82)
-    >>> w.set_profile(10, 20, 100, 200)
+    >>> w.set_profile((10, 20), (100, 200))
     >>> w.profile_values  # sampled intensities along the line
     >>> w.profile_distance  # total distance in angstroms
 
@@ -644,7 +644,7 @@ class Mark2D(anywidget.AnyWidget):
                 img[r1c, c1c] * cf * rf)
         return vals.astype(np.float32)
 
-    def set_profile(self, row0: float, col0: float, row1: float, col1: float):
+    def set_profile(self, start: tuple, end: tuple):
         """
         Set a line profile between two points.
 
@@ -654,17 +654,19 @@ class Mark2D(anywidget.AnyWidget):
 
         Parameters
         ----------
-        row0, col0 : float
+        start : tuple of (row, col)
             Start point in image pixel coordinates.
-        row1, col1 : float
+        end : tuple of (row, col)
             End point in image pixel coordinates.
 
         Examples
         --------
         >>> w = Mark2D(img, pixel_size_angstrom=0.82)
-        >>> w.set_profile(10, 20, 100, 200)
+        >>> w.set_profile((10, 20), (100, 200))
         >>> w.profile_values  # sampled intensities along the line
         """
+        row0, col0 = start
+        row1, col1 = end
         self.profile_line = [
             {"row": float(row0), "col": float(col0)},
             {"row": float(row1), "col": float(col1)},

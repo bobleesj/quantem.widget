@@ -390,16 +390,18 @@ class Show2D(anywidget.AnyWidget):
                 img[r1c, c0c] * (1 - cf) * rf +
                 img[r1c, c1c] * cf * rf).astype(np.float32)
 
-    def set_profile(self, row0: float, col0: float, row1: float, col1: float):
+    def set_profile(self, start: tuple, end: tuple):
         """Set a line profile between two points (image pixel coordinates).
 
         Parameters
         ----------
-        row0, col0 : float
+        start : tuple of (row, col)
             Start point in pixel coordinates.
-        row1, col1 : float
+        end : tuple of (row, col)
             End point in pixel coordinates.
         """
+        row0, col0 = start
+        row1, col1 = end
         self.profile_line = [
             {"row": float(row0), "col": float(col0)},
             {"row": float(row1), "col": float(col1)},
