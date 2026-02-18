@@ -2,6 +2,9 @@
 
 ## v0.0.5 (2026-02-18)
 
+### All profile widgets (Show2D, Show3D, Show4D, Show4DSTEM, Mark2D)
+- `set_profile` now accepts two tuples: `set_profile((row0, col0), (row1, col1))`, with backward compat for `set_profile(row0, col0, row1, col1)`
+
 ### Show4DSTEM
 - grab-and-drag ROI: clicking inside the detector ROI now drags it with an offset instead of teleporting the center, making it much easier to reposition
 - theme-aware ROI colors: green overlays use darker shades in light theme for better visibility

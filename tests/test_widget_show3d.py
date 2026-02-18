@@ -571,7 +571,7 @@ def test_show3d_buffer_wraparound():
 def test_show3d_profile_set_and_clear():
     data = np.random.rand(5, 32, 32).astype(np.float32)
     widget = Show3D(data)
-    widget.set_profile(0, 0, 31, 31)
+    widget.set_profile((0, 0), (31, 31))
     assert len(widget.profile_line) == 2
     assert widget.profile == [(0.0, 0.0), (31.0, 31.0)]
     widget.clear_profile()
@@ -579,10 +579,24 @@ def test_show3d_profile_set_and_clear():
     assert widget.profile == []
 
 
+def test_show3d_profile_set_legacy_args():
+    data = np.random.rand(5, 32, 32).astype(np.float32)
+    widget = Show3D(data)
+    widget.set_profile(0, 0, 31, 31)
+    assert widget.profile == [(0.0, 0.0), (31.0, 31.0)]
+
+
+def test_show3d_profile_set_bad_args():
+    data = np.random.rand(5, 32, 32).astype(np.float32)
+    widget = Show3D(data)
+    with pytest.raises(TypeError):
+        widget.set_profile(0, 0, 31)
+
+
 def test_show3d_profile_values():
     data = np.ones((3, 16, 16), dtype=np.float32) * 5.0
     widget = Show3D(data)
-    widget.set_profile(0, 0, 0, 15)
+    widget.set_profile((0, 0), (0, 15))
     vals = widget.profile_values
     assert vals is not None
     assert len(vals) >= 2
@@ -592,14 +606,14 @@ def test_show3d_profile_values():
 def test_show3d_profile_distance_pixels():
     data = np.ones((2, 10, 10), dtype=np.float32)
     widget = Show3D(data)
-    widget.set_profile(0, 0, 3, 4)
+    widget.set_profile((0, 0), (3, 4))
     assert widget.profile_distance == pytest.approx(5.0)
 
 
 def test_show3d_profile_distance_calibrated():
     data = np.ones((2, 10, 10), dtype=np.float32)
     widget = Show3D(data, pixel_size=0.5)  # 0.5 nm/px
-    widget.set_profile(0, 0, 3, 4)
+    widget.set_profile((0, 0), (3, 4))
     assert widget.profile_distance == pytest.approx(2.5)  # 5px * 0.5 nm/px
 
 
@@ -647,7 +661,7 @@ def test_show3d_method_chaining():
     assert result is w
     result = w.set_roi(5, 5, 10).roi_circle(8).roi_square(6).roi_rectangle(10, 5)
     assert result is w
-    result = w.set_profile(0, 0, 10, 10).clear_profile()
+    result = w.set_profile((0, 0), (10, 10)).clear_profile()
     assert result is w
 
 

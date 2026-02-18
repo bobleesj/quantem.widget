@@ -644,7 +644,7 @@ class Mark2D(anywidget.AnyWidget):
                 img[r1c, c1c] * cf * rf)
         return vals.astype(np.float32)
 
-    def set_profile(self, row0: float, col0: float, row1: float, col1: float):
+    def set_profile(self, *args):
         """
         Set a line profile between two points.
 
@@ -654,17 +654,23 @@ class Mark2D(anywidget.AnyWidget):
 
         Parameters
         ----------
-        row0, col0 : float
-            Start point in image pixel coordinates.
-        row1, col1 : float
-            End point in image pixel coordinates.
+        start, end : tuple of (row, col)
+            ``set_profile((row0, col0), (row1, col1))``
+        row0, col0, row1, col1 : float
+            ``set_profile(row0, col0, row1, col1)`` (legacy)
 
         Examples
         --------
         >>> w = Mark2D(img, pixel_size_angstrom=0.82)
-        >>> w.set_profile(10, 20, 100, 200)
+        >>> w.set_profile((10, 20), (100, 200))
         >>> w.profile_values  # sampled intensities along the line
         """
+        if len(args) == 2:
+            (row0, col0), (row1, col1) = args
+        elif len(args) == 4:
+            row0, col0, row1, col1 = args
+        else:
+            raise TypeError(f"set_profile takes 2 tuples or 4 floats, got {len(args)} args")
         self.profile_line = [
             {"row": float(row0), "col": float(col0)},
             {"row": float(row1), "col": float(col1)},

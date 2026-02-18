@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import quantem.widget
 from quantem.widget import Show4DSTEM
 
@@ -427,17 +428,31 @@ def test_show4dstem_profile_defaults():
 def test_show4dstem_set_profile():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
-    result = w.set_profile(0, 0, 15, 15)
+    result = w.set_profile((0, 0), (15, 15))
     assert result is w
     assert len(w.profile_line) == 2
     assert w.profile_line[0] == {"row": 0.0, "col": 0.0}
     assert w.profile_line[1] == {"row": 15.0, "col": 15.0}
 
 
-def test_show4dstem_clear_profile():
+def test_show4dstem_set_profile_legacy_args():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
     w.set_profile(0, 0, 15, 15)
+    assert w.profile == [(0.0, 0.0), (15.0, 15.0)]
+
+
+def test_show4dstem_set_profile_bad_args():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    with pytest.raises(TypeError):
+        w.set_profile(0, 0, 15)
+
+
+def test_show4dstem_clear_profile():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    w.set_profile((0, 0), (15, 15))
     assert len(w.profile_line) == 2
     result = w.clear_profile()
     assert result is w
@@ -447,7 +462,7 @@ def test_show4dstem_clear_profile():
 def test_show4dstem_profile_property():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
-    w.set_profile(2.0, 3.0, 12.0, 8.0)
+    w.set_profile((2.0, 3.0), (12.0, 8.0))
     pts = w.profile
     assert len(pts) == 2
     assert pts[0] == (2.0, 3.0)
@@ -457,7 +472,7 @@ def test_show4dstem_profile_property():
 def test_show4dstem_profile_values():
     data = np.ones((4, 4, 16, 16), dtype=np.float32) * 3.0
     w = Show4DSTEM(data)
-    w.set_profile(0, 0, 15, 0)
+    w.set_profile((0, 0), (15, 0))
     vals = w.profile_values
     assert vals is not None
     assert len(vals) >= 2
@@ -467,7 +482,7 @@ def test_show4dstem_profile_values():
 def test_show4dstem_profile_distance_calibrated():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data, k_pixel_size=0.5)
-    w.set_profile(0, 0, 3, 4)
+    w.set_profile((0, 0), (3, 4))
     # pixel distance = 5, k-calibrated = 5 * 0.5 = 2.5
     assert abs(w.profile_distance - 2.5) < 0.01
 
@@ -475,7 +490,7 @@ def test_show4dstem_profile_distance_calibrated():
 def test_show4dstem_profile_distance_uncalibrated():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
-    w.set_profile(0, 0, 3, 4)
+    w.set_profile((0, 0), (3, 4))
     # No k_pixel_size calibration → pixel distance = 5
     assert abs(w.profile_distance - 5.0) < 0.01
 
@@ -483,7 +498,7 @@ def test_show4dstem_profile_distance_uncalibrated():
 def test_show4dstem_profile_in_state_dict():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
-    w.set_profile(1, 2, 10, 12)
+    w.set_profile((1, 2), (10, 12))
     w.profile_width = 5
     sd = w.state_dict()
     assert "profile_line" in sd
@@ -495,7 +510,7 @@ def test_show4dstem_profile_in_state_dict():
 def test_show4dstem_profile_in_summary(capsys):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
-    w.set_profile(0, 0, 15, 15)
+    w.set_profile((0, 0), (15, 15))
     w.summary()
     out = capsys.readouterr().out
     assert "Profile:" in out

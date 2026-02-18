@@ -388,17 +388,31 @@ def test_show4d_profile_defaults():
 def test_show4d_set_profile():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data)
-    result = w.set_profile(0, 0, 7, 7)
+    result = w.set_profile((0, 0), (7, 7))
     assert result is w  # method chaining
     assert len(w.profile_line) == 2
     assert w.profile_line[0] == {"row": 0.0, "col": 0.0}
     assert w.profile_line[1] == {"row": 7.0, "col": 7.0}
 
 
-def test_show4d_clear_profile():
+def test_show4d_set_profile_legacy_args():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data)
     w.set_profile(0, 0, 7, 7)
+    assert w.profile == [(0.0, 0.0), (7.0, 7.0)]
+
+
+def test_show4d_set_profile_bad_args():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data)
+    with pytest.raises(TypeError):
+        w.set_profile(0, 0, 7)
+
+
+def test_show4d_clear_profile():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data)
+    w.set_profile((0, 0), (7, 7))
     assert len(w.profile_line) == 2
     result = w.clear_profile()
     assert result is w
@@ -408,7 +422,7 @@ def test_show4d_clear_profile():
 def test_show4d_profile_property():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data)
-    w.set_profile(1.5, 2.5, 6.5, 3.5)
+    w.set_profile((1.5, 2.5), (6.5, 3.5))
     pts = w.profile
     assert len(pts) == 2
     assert pts[0] == (1.5, 2.5)
@@ -418,7 +432,7 @@ def test_show4d_profile_property():
 def test_show4d_profile_values():
     data = np.ones((4, 4, 8, 8), dtype=np.float32) * 5.0
     w = Show4D(data)
-    w.set_profile(0, 0, 7, 0)
+    w.set_profile((0, 0), (7, 0))
     vals = w.profile_values
     assert vals is not None
     assert len(vals) >= 2
@@ -428,7 +442,7 @@ def test_show4d_profile_values():
 def test_show4d_profile_distance():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data, sig_pixel_size=2.0, sig_pixel_unit="Å")
-    w.set_profile(0, 0, 3, 4)
+    w.set_profile((0, 0), (3, 4))
     # pixel distance = sqrt(3^2 + 4^2) = 5, physical = 5 * 2.0 = 10.0
     assert abs(w.profile_distance - 10.0) < 0.01
 
@@ -436,7 +450,7 @@ def test_show4d_profile_distance():
 def test_show4d_profile_in_state_dict():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data)
-    w.set_profile(1, 2, 5, 6)
+    w.set_profile((1, 2), (5, 6))
     w.profile_width = 3
     sd = w.state_dict()
     assert "profile_line" in sd
@@ -448,7 +462,7 @@ def test_show4d_profile_in_state_dict():
 def test_show4d_profile_in_summary(capsys):
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data, title="Profile Test")
-    w.set_profile(0, 0, 7, 7)
+    w.set_profile((0, 0), (7, 7))
     w.summary()
     out = capsys.readouterr().out
     assert "Profile:" in out

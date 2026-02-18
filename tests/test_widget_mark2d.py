@@ -657,17 +657,33 @@ def test_mark2d_set_profile():
     """set_profile sets profile_line trait."""
     data = np.random.rand(64, 64).astype(np.float32)
     w = Mark2D(data)
-    w.set_profile(10, 20, 50, 60)
+    w.set_profile((10, 20), (50, 60))
     assert len(w.profile_line) == 2
     assert w.profile_line[0] == {"row": 10.0, "col": 20.0}
     assert w.profile_line[1] == {"row": 50.0, "col": 60.0}
+
+
+def test_mark2d_set_profile_legacy_args():
+    """set_profile backward compat with 4 separate args."""
+    data = np.random.rand(64, 64).astype(np.float32)
+    w = Mark2D(data)
+    w.set_profile(10, 20, 50, 60)
+    assert w.profile == [(10.0, 20.0), (50.0, 60.0)]
+
+
+def test_mark2d_set_profile_bad_args():
+    """set_profile raises TypeError for wrong number of args."""
+    data = np.random.rand(64, 64).astype(np.float32)
+    w = Mark2D(data)
+    with pytest.raises(TypeError):
+        w.set_profile(10, 20, 50)
 
 
 def test_mark2d_clear_profile():
     """clear_profile empties profile_line."""
     data = np.random.rand(64, 64).astype(np.float32)
     w = Mark2D(data)
-    w.set_profile(10, 20, 50, 60)
+    w.set_profile((10, 20), (50, 60))
     w.clear_profile()
     assert w.profile_line == []
 
@@ -677,7 +693,7 @@ def test_mark2d_profile_property():
     data = np.random.rand(64, 64).astype(np.float32)
     w = Mark2D(data)
     assert w.profile == []
-    w.set_profile(10, 20, 50, 60)
+    w.set_profile((10, 20), (50, 60))
     assert w.profile == [(10.0, 20.0), (50.0, 60.0)]
 
 
@@ -685,7 +701,7 @@ def test_mark2d_profile_values():
     """profile_values samples along the line."""
     data = np.ones((64, 64), dtype=np.float32) * 5.0
     w = Mark2D(data)
-    w.set_profile(0, 0, 63, 63)
+    w.set_profile((0, 0), (63, 63))
     vals = w.profile_values
     assert vals is not None
     assert len(vals) > 2
@@ -704,7 +720,7 @@ def test_mark2d_profile_distance():
     data = np.random.rand(64, 64).astype(np.float32)
     w = Mark2D(data)
     assert w.profile_distance is None
-    w.set_profile(0, 0, 30, 40)
+    w.set_profile((0, 0), (30, 40))
     assert w.profile_distance == pytest.approx(50.0)
 
 
@@ -712,7 +728,7 @@ def test_mark2d_profile_distance_calibrated():
     """profile_distance uses pixel_size_angstrom when set."""
     data = np.random.rand(64, 64).astype(np.float32)
     w = Mark2D(data, pixel_size_angstrom=2.0)
-    w.set_profile(0, 0, 30, 40)
+    w.set_profile((0, 0), (30, 40))
     assert w.profile_distance == pytest.approx(100.0)
 
 
@@ -892,7 +908,7 @@ def test_mark2d_state_dict_roundtrip():
                 snap_radius=12, title="Test", pixel_size_angstrom=2.5,
                 percentile_low=5.0, percentile_high=90.0, show_controls=False)
     w.add_roi(16, 16, mode="circle", radius=8)
-    w.set_profile(0, 0, 31, 31)
+    w.set_profile((0, 0), (31, 31))
 
     sd = w.state_dict()
 
@@ -994,7 +1010,7 @@ def test_mark2d_save_load_roundtrip_points(tmp_path):
     """Points survive save/load roundtrip via JSON file."""
     data = np.random.rand(32, 32).astype(np.float32)
     w = Mark2D(data, points=[(1, 2), (10, 20), (30, 5)])
-    w.set_profile(0, 0, 31, 31)
+    w.set_profile((0, 0), (31, 31))
 
     path = str(tmp_path / "pts.json")
     w.save(path)
