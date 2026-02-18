@@ -206,7 +206,9 @@ class Show4DSTEM(anywidget.AnyWidget):
     frame_dim_label = traitlets.Unicode("Frame").tag(sync=True)
     frame_playing = traitlets.Bool(False).tag(sync=True)
     frame_loop = traitlets.Bool(True).tag(sync=True)
-    frame_interval_ms = traitlets.Int(200).tag(sync=True)
+    frame_fps = traitlets.Float(5.0).tag(sync=True)
+    frame_reverse = traitlets.Bool(False).tag(sync=True)
+    frame_boomerang = traitlets.Bool(False).tag(sync=True)
 
     # Export (GIF)
     _gif_export_requested = traitlets.Bool(False).tag(sync=True)
@@ -488,7 +490,9 @@ class Show4DSTEM(anywidget.AnyWidget):
             "frame_idx": self.frame_idx,
             "frame_dim_label": self.frame_dim_label,
             "frame_loop": self.frame_loop,
-            "frame_interval_ms": self.frame_interval_ms,
+            "frame_fps": self.frame_fps,
+            "frame_reverse": self.frame_reverse,
+            "frame_boomerang": self.frame_boomerang,
         }
 
     def save(self, path: str):
@@ -502,7 +506,15 @@ class Show4DSTEM(anywidget.AnyWidget):
     def summary(self):
         lines = ["Show4DSTEM", "═" * 32]
         if self.n_frames > 1:
-            lines.append(f"Frames:   {self.n_frames} ({self.frame_dim_label}), current: {self.frame_idx}")
+            parts = [f"{self.n_frames} ({self.frame_dim_label}), current: {self.frame_idx}"]
+            parts.append(f"{self.frame_fps} fps")
+            if self.frame_loop:
+                parts.append("loop")
+            if self.frame_reverse:
+                parts.append("reverse")
+            if self.frame_boomerang:
+                parts.append("bounce")
+            lines.append(f"Frames:   {' | '.join(parts)}")
         lines.append(f"Scan:     {self.shape_rows}×{self.shape_cols} ({self.pixel_size:.2f} Å/px)")
         k_unit = "mrad" if self.k_calibrated else "px"
         lines.append(f"Detector: {self.det_rows}×{self.det_cols} ({self.k_pixel_size:.4f} {k_unit}/px)")

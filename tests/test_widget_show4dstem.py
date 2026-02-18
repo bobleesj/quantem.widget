@@ -623,7 +623,9 @@ def test_show4dstem_5d_state_dict():
     assert sd["frame_idx"] == 1
     assert sd["frame_dim_label"] == "Time"
     assert "frame_loop" in sd
-    assert "frame_interval_ms" in sd
+    assert "frame_fps" in sd
+    assert "frame_reverse" in sd
+    assert "frame_boomerang" in sd
 
 
 def test_show4dstem_5d_state_roundtrip():
@@ -631,12 +633,16 @@ def test_show4dstem_5d_state_roundtrip():
     data = np.random.rand(3, 2, 2, 4, 4).astype(np.float32)
     w = Show4DSTEM(data, frame_dim_label="Tilt")
     w.frame_idx = 2
-    w.frame_interval_ms = 100
+    w.frame_fps = 10.0
+    w.frame_reverse = True
+    w.frame_boomerang = True
     sd = w.state_dict()
     w2 = Show4DSTEM(data, state=sd)
     assert w2.frame_idx == 2
     assert w2.frame_dim_label == "Tilt"
-    assert w2.frame_interval_ms == 100
+    assert w2.frame_fps == 10.0
+    assert w2.frame_reverse is True
+    assert w2.frame_boomerang is True
 
 
 def test_show4dstem_5d_summary(capsys):

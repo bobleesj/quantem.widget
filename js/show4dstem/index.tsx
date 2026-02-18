@@ -15,6 +15,8 @@ import IconButton from "@mui/material/IconButton";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import PauseIcon from "@mui/icons-material/Pause";
 import StopIcon from "@mui/icons-material/Stop";
+import FastRewindIcon from "@mui/icons-material/FastRewind";
+import FastForwardIcon from "@mui/icons-material/FastForward";
 import JSZip from "jszip";
 import "./styles.css";
 import { useTheme } from "../theme";
@@ -56,6 +58,14 @@ const upwardMenuProps = {
 const switchStyles = {
   small: { '& .MuiSwitch-thumb': { width: 12, height: 12 }, '& .MuiSwitch-switchBase': { padding: '4px' } },
   medium: { '& .MuiSwitch-thumb': { width: 14, height: 14 }, '& .MuiSwitch-switchBase': { padding: '4px' } },
+};
+
+const sliderStyles = {
+  small: {
+    "& .MuiSlider-thumb": { width: 12, height: 12 },
+    "& .MuiSlider-rail": { height: 3 },
+    "& .MuiSlider-track": { height: 3 },
+  },
 };
 
 // ============================================================================
@@ -901,8 +911,10 @@ function Show4DSTEM() {
   const [nFrames] = useModelState<number>("n_frames");
   const [frameDimLabel] = useModelState<string>("frame_dim_label");
   const [framePlaying, setFramePlaying] = useModelState<boolean>("frame_playing");
-  const [frameLoop] = useModelState<boolean>("frame_loop");
-  const [frameIntervalMs] = useModelState<number>("frame_interval_ms");
+  const [frameLoop, setFrameLoop] = useModelState<boolean>("frame_loop");
+  const [frameFps, setFrameFps] = useModelState<number>("frame_fps");
+  const [frameReverse, setFrameReverse] = useModelState<boolean>("frame_reverse");
+  const [frameBoomerang, setFrameBoomerang] = useModelState<boolean>("frame_boomerang");
 
   // Profile line state (synced with Python)
   const [profileLine, setProfileLine] = useModelState<{row: number; col: number}[]>("profile_line");
@@ -1075,26 +1087,42 @@ function Show4DSTEM() {
   }, [pathPlaying, pathLength, pathIntervalMs, pathLoop, setPathIndex, setPathPlaying]);
 
   // Frame animation timer (5D time/tilt series)
+  const frameBounceDir = React.useRef(1);
+  React.useEffect(() => {
+    frameBounceDir.current = frameReverse ? -1 : 1;
+  }, [frameReverse]);
+
   React.useEffect(() => {
     if (!framePlaying || nFrames <= 1) return;
 
+    const intervalMs = 1000 / Math.max(0.1, frameFps);
     const timer = setInterval(() => {
       setFrameIdx((prev: number) => {
-        const next = prev + 1;
-        if (next >= nFrames) {
-          if (frameLoop) {
-            return 0;
-          } else {
+        let next: number;
+        if (frameBoomerang) {
+          next = prev + frameBounceDir.current;
+          if (next >= nFrames) { frameBounceDir.current = -1; next = nFrames - 2; }
+          if (next < 0) { frameBounceDir.current = 1; next = 1; }
+          next = Math.max(0, Math.min(nFrames - 1, next));
+        } else {
+          next = prev + (frameReverse ? -1 : 1);
+          if (next >= nFrames) {
+            if (frameLoop) return 0;
+            setFramePlaying(false);
+            return prev;
+          }
+          if (next < 0) {
+            if (frameLoop) return nFrames - 1;
             setFramePlaying(false);
             return prev;
           }
         }
         return next;
       });
-    }, frameIntervalMs);
+    }, intervalMs);
 
     return () => clearInterval(timer);
-  }, [framePlaying, nFrames, frameIntervalMs, frameLoop, setFrameIdx, setFramePlaying]);
+  }, [framePlaying, nFrames, frameFps, frameLoop, frameReverse, frameBoomerang, setFrameIdx, setFramePlaying]);
 
   // Keyboard shortcuts
   React.useEffect(() => {
@@ -2793,8 +2821,13 @@ function Show4DSTEM() {
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Image: Virtual image — integrated intensity within detector ROI at each scan position.</Typography>
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>FFT: Spatial frequency content of the virtual image. Auto masks DC + clips to 99.9th percentile.</Typography>
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Profile: Click two points on DP to draw a line intensity profile.</Typography>
+          {nFrames > 1 && <>
+            <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Frame Playback ({frameDimLabel})</Typography>
+            <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Loop: Loop playback. Bounce: Ping-pong — alternates forward and reverse.</Typography>
+            <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>FPS: Adjust playback speed (1–30 frames per second).</Typography>
+          </>}
           <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
-          <KeyboardShortcuts items={[["← / →", "Move scan position"], ["Shift+←/→", "Move ×10"], ["[ / ]", "Prev / next frame (5D)"], ["Space", "Play / pause path"], ["R", "Reset all zoom/pan"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
+          <KeyboardShortcuts items={[["← / →", "Move scan position"], ["Shift+←/→", "Move ×10"], ...(nFrames > 1 ? [["[ / ]" as string, `Prev / next ${frameDimLabel.toLowerCase()}`]] : []), ["Space", "Play / pause"], ["R", "Reset all zoom/pan"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
         </Box>} theme={themeInfo.theme} />
       </Typography>
 
@@ -3187,13 +3220,19 @@ function Show4DSTEM() {
 
       {/* BOTTOM CONTROLS */}
 
-      {/* Frame slider (5D time/tilt series) */}
-      {nFrames > 1 && (
+      {/* Frame controls (5D time/tilt series) — matches Show3D playback */}
+      {nFrames > 1 && (<>
         <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
           <Typography sx={{ ...typo.label, fontSize: 10, flexShrink: 0 }}>{frameDimLabel}:</Typography>
           <Stack direction="row" spacing={0} sx={{ flexShrink: 0 }}>
+            <IconButton size="small" onClick={() => { setFrameReverse(true); setFramePlaying(true); }} sx={{ color: frameReverse && framePlaying ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
+              <FastRewindIcon sx={{ fontSize: 18 }} />
+            </IconButton>
             <IconButton size="small" onClick={() => setFramePlaying(!framePlaying)} sx={{ color: themeColors.accent, p: 0.25 }}>
               {framePlaying ? <PauseIcon sx={{ fontSize: 18 }} /> : <PlayArrowIcon sx={{ fontSize: 18 }} />}
+            </IconButton>
+            <IconButton size="small" onClick={() => { setFrameReverse(false); setFramePlaying(true); }} sx={{ color: !frameReverse && framePlaying ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
+              <FastForwardIcon sx={{ fontSize: 18 }} />
             </IconButton>
             <IconButton size="small" onClick={() => { setFramePlaying(false); setFrameIdx(0); }} sx={{ color: themeColors.textMuted, p: 0.25 }}>
               <StopIcon sx={{ fontSize: 16 }} />
@@ -3201,10 +3240,17 @@ function Show4DSTEM() {
           </Stack>
           <Slider value={frameIdx} onChange={(_, v) => { setFramePlaying(false); setFrameIdx(v as number); }} min={0} max={Math.max(0, nFrames - 1)} size="small" sx={{ flex: 1, minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
           <Typography sx={{ ...typo.value, minWidth: 50, textAlign: "right", flexShrink: 0 }}>{frameIdx + 1}/{nFrames}</Typography>
-          <Typography sx={{ ...typo.label, fontSize: 10 }}>Loop:</Typography>
-          <Switch checked={frameLoop} onChange={(_, v) => { model.set("frame_loop", v); model.save_changes(); }} size="small" sx={switchStyles.small} />
         </Box>
-      )}
+        <Box sx={{ ...controlRow, mt: `${SPACING.XS}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+          <Typography sx={{ ...typo.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>fps</Typography>
+          <Slider value={frameFps} min={1} max={30} step={1} onChange={(_, v) => setFrameFps(v as number)} size="small" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
+          <Typography sx={{ ...typo.label, fontSize: 10, color: themeColors.textMuted, minWidth: 14, flexShrink: 0 }}>{Math.round(frameFps)}</Typography>
+          <Typography sx={{ ...typo.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>Loop</Typography>
+          <Switch size="small" checked={frameLoop} onChange={() => setFrameLoop(!frameLoop)} sx={{ ...switchStyles.small, flexShrink: 0 }} />
+          <Typography sx={{ ...typo.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>Bounce</Typography>
+          <Switch size="small" checked={frameBoomerang} onChange={() => setFrameBoomerang(!frameBoomerang)} sx={{ ...switchStyles.small, flexShrink: 0 }} />
+        </Box>
+      </>)}
 
       {/* Path animation slider */}
       {pathLength > 0 && (
