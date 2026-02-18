@@ -280,7 +280,7 @@ class Mark2D(anywidget.AnyWidget):
     Line profile (programmatic):
 
     >>> w = Mark2D(img, pixel_size_angstrom=0.82)
-    >>> w.set_profile(10, 20, 100, 200)
+    >>> w.set_profile((10, 20), (100, 200))
     >>> w.profile_values  # sampled intensities along the line
     >>> w.profile_distance  # total distance in angstroms
 
