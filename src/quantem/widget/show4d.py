@@ -9,6 +9,7 @@ average signals from a region, path animation, and GPU acceleration.
 
 import json
 import pathlib
+from typing import Self
 
 import numpy as np
 import anywidget
@@ -446,7 +447,7 @@ class Show4D(anywidget.AnyWidget):
 
     # ── Line Profile ────────────────────────────────────────────────────────
 
-    def set_profile(self, start: tuple, end: tuple) -> "Show4D":
+    def set_profile(self, start: tuple, end: tuple) -> Self:
         row0, col0 = start
         row1, col1 = end
         self.profile_line = [
@@ -455,7 +456,7 @@ class Show4D(anywidget.AnyWidget):
         ]
         return self
 
-    def clear_profile(self) -> "Show4D":
+    def clear_profile(self) -> Self:
         self.profile_line = []
         return self
 
@@ -520,7 +521,7 @@ class Show4D(anywidget.AnyWidget):
         interval_ms: int = 100,
         loop: bool = True,
         autoplay: bool = True,
-    ) -> "Show4D":
+    ) -> Self:
         self._path_points = list(points)
         self.path_length = len(self._path_points)
         self.path_index = 0
@@ -530,21 +531,21 @@ class Show4D(anywidget.AnyWidget):
             self.path_playing = True
         return self
 
-    def play(self) -> "Show4D":
+    def play(self) -> Self:
         if self.path_length > 0:
             self.path_playing = True
         return self
 
-    def pause(self) -> "Show4D":
+    def pause(self) -> Self:
         self.path_playing = False
         return self
 
-    def stop(self) -> "Show4D":
+    def stop(self) -> Self:
         self.path_playing = False
         self.path_index = 0
         return self
 
-    def goto(self, index: int) -> "Show4D":
+    def goto(self, index: int) -> Self:
         if 0 <= index < self.path_length:
             self.path_index = index
         return self
@@ -555,7 +556,7 @@ class Show4D(anywidget.AnyWidget):
         bidirectional: bool = False,
         interval_ms: int = 100,
         loop: bool = True,
-    ) -> "Show4D":
+    ) -> Self:
         points = []
         for r in range(0, self.nav_rows, step):
             cols = list(range(0, self.nav_cols, step))

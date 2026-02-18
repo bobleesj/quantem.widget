@@ -26,6 +26,7 @@ To reduce data size, bin k-space at the dataset level before viewing:
 
 import json
 import pathlib
+from typing import Self
 
 import anywidget
 import numpy as np
@@ -500,7 +501,7 @@ class Show4DSTEM(anywidget.AnyWidget):
     # Line Profile
     # =========================================================================
 
-    def set_profile(self, start: tuple, end: tuple) -> "Show4DSTEM":
+    def set_profile(self, start: tuple, end: tuple) -> Self:
         row0, col0 = start
         row1, col1 = end
         self.profile_line = [
@@ -509,7 +510,7 @@ class Show4DSTEM(anywidget.AnyWidget):
         ]
         return self
 
-    def clear_profile(self) -> "Show4DSTEM":
+    def clear_profile(self) -> Self:
         self.profile_line = []
         return self
 
@@ -573,7 +574,7 @@ class Show4DSTEM(anywidget.AnyWidget):
         interval_ms: int = 100,
         loop: bool = True,
         autoplay: bool = True,
-    ) -> "Show4DSTEM":
+    ) -> Self:
         """
         Set a custom path of scan positions to animate through.
 
@@ -607,24 +608,24 @@ class Show4DSTEM(anywidget.AnyWidget):
             self.path_playing = True
         return self
     
-    def play(self) -> "Show4DSTEM":
+    def play(self) -> Self:
         """Start playing the path animation."""
         if self.path_length > 0:
             self.path_playing = True
         return self
     
-    def pause(self) -> "Show4DSTEM":
+    def pause(self) -> Self:
         """Pause the path animation."""
         self.path_playing = False
         return self
     
-    def stop(self) -> "Show4DSTEM":
+    def stop(self) -> Self:
         """Stop and reset path animation to beginning."""
         self.path_playing = False
         self.path_index = 0
         return self
     
-    def goto(self, index: int) -> "Show4DSTEM":
+    def goto(self, index: int) -> Self:
         """Jump to a specific index in the path."""
         if 0 <= index < self.path_length:
             self.path_index = index
@@ -656,7 +657,7 @@ class Show4DSTEM(anywidget.AnyWidget):
         bidirectional: bool = False,
         interval_ms: int = 100,
         loop: bool = True,
-    ) -> "Show4DSTEM":
+    ) -> Self:
         """
         Play a raster scan path (row by row, left to right).
 
@@ -692,7 +693,7 @@ class Show4DSTEM(anywidget.AnyWidget):
     # ROI Mode Methods
     # =========================================================================
     
-    def roi_circle(self, radius: float | None = None) -> "Show4DSTEM":
+    def roi_circle(self, radius: float | None = None) -> Self:
         """
         Switch to circle ROI mode for virtual imaging.
         
@@ -720,7 +721,7 @@ class Show4DSTEM(anywidget.AnyWidget):
             self.roi_radius = float(radius)
         return self
     
-    def roi_point(self) -> "Show4DSTEM":
+    def roi_point(self) -> Self:
         """
         Switch to point ROI mode (single-pixel indexing).
         
@@ -735,7 +736,7 @@ class Show4DSTEM(anywidget.AnyWidget):
         self.roi_mode = "point"
         return self
 
-    def roi_square(self, half_size: float | None = None) -> "Show4DSTEM":
+    def roi_square(self, half_size: float | None = None) -> Self:
         """
         Switch to square ROI mode for virtual imaging.
 
@@ -766,7 +767,7 @@ class Show4DSTEM(anywidget.AnyWidget):
 
     def roi_annular(
         self, inner_radius: float | None = None, outer_radius: float | None = None
-    ) -> "Show4DSTEM":
+    ) -> Self:
         """
         Set ROI mode to annular (donut-shaped) for ADF/HAADF imaging.
         
@@ -796,7 +797,7 @@ class Show4DSTEM(anywidget.AnyWidget):
 
     def roi_rect(
         self, width: float | None = None, height: float | None = None
-    ) -> "Show4DSTEM":
+    ) -> Self:
         """
         Set ROI mode to rectangular.
         
@@ -824,7 +825,7 @@ class Show4DSTEM(anywidget.AnyWidget):
             self.roi_height = float(height)
         return self
 
-    def auto_detect_center(self, update_roi: bool = True) -> "Show4DSTEM":
+    def auto_detect_center(self, update_roi: bool = True) -> Self:
         """
         Automatically detect BF disk center and radius using centroid.
 
