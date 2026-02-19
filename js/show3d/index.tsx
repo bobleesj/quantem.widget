@@ -1177,7 +1177,7 @@ function Show3D() {
       const lctx = lensCanvas.getContext("2d");
       if (lctx) lctx.clearRect(0, 0, lensCanvas.width, lensCanvas.height);
     }
-    if (!showLens || !lensPos || !rawFrameDataRef.current || playing) return;
+    if (!showLens || !lensPos || !rawFrameDataRef.current) return;
     if (!lensCanvas) return;
     const ctx = lensCanvas.getContext("2d");
     if (!ctx) return;
@@ -1247,7 +1247,7 @@ function Show3D() {
     ctx.font = "10px monospace";
     ctx.fillText(`${lensMag}×`, lx + 4, ly + lensSize - 4);
     ctx.restore();
-  }, [showLens, lensPos, cmap, logScale, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, width, height, canvasH, themeColors, lensMag, lensDisplaySize, lensAnchor, playing, percentileLow, percentileHigh]);
+  }, [showLens, lensPos, cmap, logScale, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, width, height, canvasH, themeColors, lensMag, lensDisplaySize, lensAnchor, percentileLow, percentileHigh, frameBytes, sliceIdx, displaySliceIdx]);
 
   // ROI sparkline plot
   React.useEffect(() => {
@@ -1888,7 +1888,7 @@ function Show3D() {
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     clickStartRef.current = { x: e.clientX, y: e.clientY };
     // Check if clicking on lens inset for drag or resize
-    if (showLens && !playing) {
+    if (showLens) {
       const rect = canvasContainerRef.current?.getBoundingClientRect();
       if (rect) {
         const cssX = e.clientX - rect.left;
@@ -1943,7 +1943,7 @@ function Show3D() {
       if (imgX >= 0 && imgX < width && imgY >= 0 && imgY < height) {
         const rawData = rawFrameDataRef.current;
         setCursorInfo({ row: imgY, col: imgX, value: rawData[imgY * width + imgX] });
-        if (showLens && !playing) setLensPos({ row: imgY, col: imgX });
+        if (showLens) setLensPos({ row: imgY, col: imgX });
       } else {
         setCursorInfo(null);
         if (showLens) setLensPos(null);
@@ -1951,7 +1951,7 @@ function Show3D() {
     }
 
     // Lens edge hover detection
-    if (showLens && !playing) {
+    if (showLens) {
       const rect2 = canvasContainerRef.current?.getBoundingClientRect();
       if (rect2) {
         const cssX2 = e.clientX - rect2.left;
