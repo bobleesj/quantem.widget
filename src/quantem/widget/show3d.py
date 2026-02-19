@@ -154,17 +154,9 @@ class Show3D(anywidget.AnyWidget):
     # ROI Selection
     # =========================================================================
     roi_active = traitlets.Bool(False).tag(sync=True)
-    roi_shape = traitlets.Unicode("circle").tag(sync=True)  # circle, square, rectangle, annular
-    roi_row = traitlets.Int(0).tag(sync=True)
-    roi_col = traitlets.Int(0).tag(sync=True)
-    roi_radius = traitlets.Int(10).tag(sync=True)  # For circle/square: radius or half-size
-    roi_radius_inner = traitlets.Int(5).tag(sync=True)  # For annular: inner radius
-    roi_width = traitlets.Int(20).tag(sync=True)  # For rectangle
-    roi_height = traitlets.Int(20).tag(sync=True)  # For rectangle
-    roi_mean = traitlets.Float(0.0).tag(sync=True)
-    roi_min = traitlets.Float(0.0).tag(sync=True)
-    roi_max = traitlets.Float(0.0).tag(sync=True)
-    roi_std = traitlets.Float(0.0).tag(sync=True)
+    roi_list = traitlets.List([]).tag(sync=True)
+    roi_selected_idx = traitlets.Int(-1).tag(sync=True)
+    roi_stats = traitlets.Dict({}).tag(sync=True)
     roi_plot_data = traitlets.Bytes(b"").tag(sync=True)
 
     # =========================================================================
@@ -312,16 +304,7 @@ class Show3D(anywidget.AnyWidget):
         self.observe(self._on_slice_change, names=["slice_idx"])
         self.observe(
             self._on_roi_change,
-            names=[
-                "roi_row",
-                "roi_col",
-                "roi_radius",
-                "roi_radius_inner",
-                "roi_active",
-                "roi_shape",
-                "roi_width",
-                "roi_height",
-            ],
+            names=["roi_active", "roi_list", "roi_selected_idx"],
         )
         self.observe(self._on_gif_export, names=["_gif_export_requested"])
         self.observe(self._on_zip_export, names=["_zip_export_requested"])
@@ -385,13 +368,8 @@ class Show3D(anywidget.AnyWidget):
             "bookmarked_frames": self.bookmarked_frames,
             "playback_path": self.playback_path,
             "roi_active": self.roi_active,
-            "roi_shape": self.roi_shape,
-            "roi_row": self.roi_row,
-            "roi_col": self.roi_col,
-            "roi_radius": self.roi_radius,
-            "roi_radius_inner": self.roi_radius_inner,
-            "roi_width": self.roi_width,
-            "roi_height": self.roi_height,
+            "roi_list": self.roi_list,
+            "roi_selected_idx": self.roi_selected_idx,
             "profile_line": self.profile_line,
             "profile_width": self.profile_width,
             "dim_label": self.dim_label,
@@ -428,9 +406,9 @@ class Show3D(anywidget.AnyWidget):
         if self.loop_start > 0 or self.loop_end >= 0:
             end = self.loop_end if self.loop_end >= 0 else self.n_slices - 1
             lines.append(f"Range:    {self.loop_start}–{end}")
-        if self.roi_active:
-            lines.append(f"ROI:      {self.roi_shape} at ({self.roi_row}, {self.roi_col}) r={self.roi_radius}")
-        if self.profile_line:
+        if self.roi_active and self.roi_list:
+            lines.append(f"ROI:      {len(self.roi_list)} region(s)")
+        if len(self.profile_line) >= 2:
             p0, p1 = self.profile_line[0], self.profile_line[1]
             lines.append(f"Profile:  ({p0['row']:.0f}, {p0['col']:.0f}) → ({p1['row']:.0f}, {p1['col']:.0f}) width={self.profile_width}")
         print("\n".join(lines))
@@ -469,40 +447,48 @@ class Show3D(anywidget.AnyWidget):
             if self.timestamps and self.slice_idx < len(self.timestamps):
                 self.current_timestamp = self.timestamps[self.slice_idx]
             if self.roi_active:
-                self._update_roi_mean(frame)
+                self._update_roi_stats(frame)
+            else:
+                self.roi_stats = {}
             self.frame_bytes = frame.tobytes()
 
-    def _update_roi_mean(self, frame: np.ndarray):
+    def _roi_mask(self, roi: dict):
         r, c = np.ogrid[0 : self.height, 0 : self.width]
+        shape = roi.get("shape", "circle")
+        row = float(roi.get("row", 0))
+        col = float(roi.get("col", 0))
+        radius = max(1.0, float(roi.get("radius", 10)))
+        if shape == "circle":
+            return (c - col) ** 2 + (r - row) ** 2 <= radius**2
+        if shape == "square":
+            return (np.abs(c - col) <= radius) & (np.abs(r - row) <= radius)
+        if shape == "rectangle":
+            half_w = max(1.0, float(roi.get("width", 20)) / 2.0)
+            half_h = max(1.0, float(roi.get("height", 20)) / 2.0)
+            return (np.abs(c - col) <= half_w) & (np.abs(r - row) <= half_h)
+        if shape == "annular":
+            inner = max(0.0, float(roi.get("radius_inner", 5)))
+            dist2 = (c - col) ** 2 + (r - row) ** 2
+            return (dist2 >= inner**2) & (dist2 <= radius**2)
+        return (c - col) ** 2 + (r - row) ** 2 <= radius**2
 
-        if self.roi_shape == "circle":
-            mask = (c - self.roi_col) ** 2 + (r - self.roi_row) ** 2 <= self.roi_radius**2
-        elif self.roi_shape == "square":
-            half = self.roi_radius
-            mask = (np.abs(c - self.roi_col) <= half) & (np.abs(r - self.roi_row) <= half)
-        elif self.roi_shape == "rectangle":
-            half_w = self.roi_width // 2
-            half_h = self.roi_height // 2
-            mask = (np.abs(c - self.roi_col) <= half_w) & (
-                np.abs(r - self.roi_row) <= half_h
-            )
-        elif self.roi_shape == "annular":
-            dist2 = (c - self.roi_col) ** 2 + (r - self.roi_row) ** 2
-            mask = (dist2 >= self.roi_radius_inner**2) & (dist2 <= self.roi_radius**2)
+    def _update_roi_stats(self, frame: np.ndarray):
+        idx = self.roi_selected_idx
+        if idx < 0 or idx >= len(self.roi_list):
+            self.roi_stats = {}
+            return
+        roi = self.roi_list[idx]
+        mask = self._roi_mask(roi)
+        region = frame[mask]
+        if region.size > 0:
+            self.roi_stats = {
+                "mean": float(region.mean()),
+                "min": float(region.min()),
+                "max": float(region.max()),
+                "std": float(region.std()),
+            }
         else:
-            mask = (c - self.roi_col) ** 2 + (r - self.roi_row) ** 2 <= self.roi_radius**2
-
-        if mask.sum() > 0:
-            region = frame[mask]
-            self.roi_mean = float(region.mean())
-            self.roi_min = float(region.min())
-            self.roi_max = float(region.max())
-            self.roi_std = float(region.std())
-        else:
-            self.roi_mean = 0.0
-            self.roi_min = 0.0
-            self.roi_max = 0.0
-            self.roi_std = 0.0
+            self.roi_stats = {}
 
     def _send_buffer(self, start_idx: int):
         end_idx = start_idx + self._buffer_size
@@ -536,28 +522,19 @@ class Show3D(anywidget.AnyWidget):
     def _on_roi_change(self, change=None):
         """Handle ROI change."""
         if self.roi_active:
-            self._update_roi_mean(self._data[self.slice_idx])
+            self._update_roi_stats(self._data[self.slice_idx])
             self._compute_roi_plot()
         else:
+            self.roi_stats = {}
             self.roi_plot_data = b""
 
     def _compute_roi_plot(self):
-        """Compute ROI mean for all frames."""
-        r, c = np.ogrid[0 : self.height, 0 : self.width]
-        if self.roi_shape == "circle":
-            mask = (c - self.roi_col) ** 2 + (r - self.roi_row) ** 2 <= self.roi_radius**2
-        elif self.roi_shape == "square":
-            half = self.roi_radius
-            mask = (np.abs(c - self.roi_col) <= half) & (np.abs(r - self.roi_row) <= half)
-        elif self.roi_shape == "rectangle":
-            half_w = self.roi_width // 2
-            half_h = self.roi_height // 2
-            mask = (np.abs(c - self.roi_col) <= half_w) & (np.abs(r - self.roi_row) <= half_h)
-        elif self.roi_shape == "annular":
-            dist2 = (c - self.roi_col) ** 2 + (r - self.roi_row) ** 2
-            mask = (dist2 >= self.roi_radius_inner**2) & (dist2 <= self.roi_radius**2)
-        else:
-            mask = (c - self.roi_col) ** 2 + (r - self.roi_row) ** 2 <= self.roi_radius**2
+        """Compute selected ROI mean for all frames."""
+        idx = self.roi_selected_idx
+        if idx < 0 or idx >= len(self.roi_list):
+            self.roi_plot_data = b""
+            return
+        mask = self._roi_mask(self.roi_list[idx])
         if mask.sum() == 0:
             self.roi_plot_data = b""
             return
@@ -599,47 +576,73 @@ class Show3D(anywidget.AnyWidget):
         self.playback_path = []
         return self
 
-    def set_roi(self, row: int, col: int, radius: int = 10) -> Self:
-        """Set ROI position and size."""
+    def _upsert_selected_roi(self, updates: dict):
+        rois = list(self.roi_list)
+        if self.roi_selected_idx >= 0 and self.roi_selected_idx < len(rois):
+            rois[self.roi_selected_idx] = {**rois[self.roi_selected_idx], **updates}
+        else:
+            color_cycle = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"]
+            defaults = {
+                "shape": "circle",
+                "row": int(self.height // 2),
+                "col": int(self.width // 2),
+                "radius": 10,
+                "radius_inner": 5,
+                "width": 20,
+                "height": 20,
+                "color": color_cycle[len(rois) % len(color_cycle)],
+                "line_width": 2,
+                "highlight": False,
+            }
+            rois.append({**defaults, **updates})
+            self.roi_selected_idx = len(rois) - 1
+        self.roi_list = rois
+        self.roi_active = True
+
+    def add_roi(self, row: int | None = None, col: int | None = None, shape: str = "circle") -> Self:
         with self.hold_sync():
-            self.roi_row = int(row)
-            self.roi_col = int(col)
-            self.roi_radius = int(radius)
-            self.roi_active = True
+            self._upsert_selected_roi({
+                "shape": shape,
+                "row": int(self.height // 2 if row is None else row),
+                "col": int(self.width // 2 if col is None else col),
+            })
+        return self
+
+    def clear_rois(self) -> Self:
+        with self.hold_sync():
+            self.roi_list = []
+            self.roi_selected_idx = -1
+            self.roi_active = False
+        return self
+
+    def set_roi(self, row: int, col: int, radius: int = 10) -> Self:
+        """Set selected ROI position and size (creates one if needed)."""
+        with self.hold_sync():
+            self._upsert_selected_roi({"shape": "circle", "row": int(row), "col": int(col), "radius": int(radius)})
         return self
 
     def roi_circle(self, radius: int = 10) -> Self:
-        """Set ROI shape to circle with given radius."""
+        """Set selected ROI shape to circle."""
         with self.hold_sync():
-            self.roi_shape = "circle"
-            self.roi_radius = int(radius)
-            self.roi_active = True
+            self._upsert_selected_roi({"shape": "circle", "radius": int(radius)})
         return self
 
     def roi_square(self, half_size: int = 10) -> Self:
-        """Set ROI shape to square with given half-size."""
+        """Set selected ROI shape to square."""
         with self.hold_sync():
-            self.roi_shape = "square"
-            self.roi_radius = int(half_size)
-            self.roi_active = True
+            self._upsert_selected_roi({"shape": "square", "radius": int(half_size)})
         return self
 
     def roi_rectangle(self, width: int = 20, height: int = 10) -> Self:
-        """Set ROI shape to rectangle with given half-width and half-height."""
+        """Set selected ROI shape to rectangle."""
         with self.hold_sync():
-            self.roi_shape = "rectangle"
-            self.roi_width = int(width)
-            self.roi_height = int(height)
-            self.roi_active = True
+            self._upsert_selected_roi({"shape": "rectangle", "width": int(width), "height": int(height)})
         return self
 
     def roi_annular(self, inner: int = 5, outer: int = 10) -> Self:
-        """Set ROI shape to annular (donut) with given inner and outer radii."""
+        """Set selected ROI shape to annular (donut)."""
         with self.hold_sync():
-            self.roi_shape = "annular"
-            self.roi_radius_inner = int(inner)
-            self.roi_radius = int(outer)
-            self.roi_active = True
+            self._upsert_selected_roi({"shape": "annular", "radius_inner": int(inner), "radius": int(outer)})
         return self
 
     def _sample_line(self, img, row0, col0, row1, col1):

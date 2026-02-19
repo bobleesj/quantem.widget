@@ -165,7 +165,6 @@ function KeyboardShortcuts({ items }: { items: [string, string][] }) {
 
 const DPR = window.devicePixelRatio || 1;
 const RESIZE_HIT_AREA_PX = 10;
-const CIRCLE_HANDLE_ANGLE = 0.707; // cos(45°)
 
 // ROI drawing
 function drawROI(
@@ -218,32 +217,6 @@ function drawROI(
     ctx.lineTo(x, y + 5);
     ctx.stroke();
   }
-}
-
-function drawResizeHandle(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  isDragging: boolean,
-  isHovering: boolean,
-  isInner: boolean = false
-): void {
-  const handleRadius = 5;
-  let fill: string;
-  if (isDragging) {
-    fill = "rgba(0, 200, 255, 1)";
-  } else if (isHovering) {
-    fill = "rgba(255, 100, 100, 1)";
-  } else {
-    fill = isInner ? "rgba(0, 220, 255, 0.8)" : "rgba(0, 255, 0, 0.8)";
-  }
-  ctx.beginPath();
-  ctx.arc(x, y, handleRadius, 0, Math.PI * 2);
-  ctx.fillStyle = fill;
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
 }
 
 // ============================================================================
@@ -453,6 +426,18 @@ function sampleLineProfile(data: Float32Array, w: number, h: number, row0: numbe
   return accumulated || new Float32Array(0);
 }
 
+function pointToSegmentDistance(col: number, row: number, col0: number, row0: number, col1: number, row1: number): number {
+  const dc = col1 - col0;
+  const dr = row1 - row0;
+  const lenSq = dc * dc + dr * dr;
+  if (lenSq <= 1e-12) return Math.sqrt((col - col0) ** 2 + (row - row0) ** 2);
+  const tRaw = ((col - col0) * dc + (row - row0) * dr) / lenSq;
+  const t = Math.max(0, Math.min(1, tRaw));
+  const projCol = col0 + t * dc;
+  const projRow = row0 + t * dr;
+  return Math.sqrt((col - projCol) ** 2 + (row - projRow) ** 2);
+}
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -460,8 +445,19 @@ const CANVAS_TARGET_SIZE = 400;
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 10;
 
-const ROI_SHAPES = ["none", "circle", "square", "rectangle", "annular"] as const;
-type RoiShape = typeof ROI_SHAPES[number];
+type ROIItem = {
+  row: number;
+  col: number;
+  shape: string;
+  radius: number;
+  radius_inner: number;
+  width: number;
+  height: number;
+  color: string;
+  line_width: number;
+  highlight: boolean;
+};
+const ROI_COLORS = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"];
 
 /** Extract a single frame from the playback buffer (zero-copy subarray). */
 function getFrameFromBuffer(
@@ -598,18 +594,11 @@ function Show3D() {
   const [currentTimestamp] = useModelState<number>("current_timestamp");
   // ROI
   const [roiActive, setRoiActive] = useModelState<boolean>("roi_active");
-  const [roiShape, setRoiShape] = useModelState<RoiShape>("roi_shape");
-  const [roiRow, setRoiRow] = useModelState<number>("roi_row");
-  const [roiCol, setRoiCol] = useModelState<number>("roi_col");
-  const [roiRadius, setRoiRadius] = useModelState<number>("roi_radius");
-  const [roiRadiusInner, setRoiRadiusInner] = useModelState<number>("roi_radius_inner");
-  const [roiWidth, setRoiWidth] = useModelState<number>("roi_width");
-  const [roiHeight, setRoiHeight] = useModelState<number>("roi_height");
-  const [roiMean] = useModelState<number>("roi_mean");
-  const [roiMin] = useModelState<number>("roi_min");
-  const [roiMax] = useModelState<number>("roi_max");
-  const [roiStd] = useModelState<number>("roi_std");
+  const [roiList, setRoiList] = useModelState<ROIItem[]>("roi_list");
+  const [roiSelectedIdx, setRoiSelectedIdx] = useModelState<number>("roi_selected_idx");
+  const [roiStats] = useModelState<Record<string, number>>("roi_stats");
   const [roiPlotData] = useModelState<DataView>("roi_plot_data");
+  const [newRoiShape, setNewRoiShape] = React.useState<"circle" | "square" | "rectangle" | "annular">("circle");
 
   // FFT
   const [showFft, setShowFft] = useModelState<boolean>("show_fft");
@@ -643,6 +632,13 @@ function Show3D() {
   const [isDraggingResizeInner, setIsDraggingResizeInner] = React.useState(false);
   const [isHoveringResize, setIsHoveringResize] = React.useState(false);
   const [isHoveringResizeInner, setIsHoveringResizeInner] = React.useState(false);
+  const selectedRoi = roiSelectedIdx >= 0 && roiSelectedIdx < (roiList?.length ?? 0) ? roiList[roiSelectedIdx] : null;
+  const updateSelectedRoi = React.useCallback((updates: Partial<ROIItem>) => {
+    if (roiSelectedIdx < 0 || !roiList) return;
+    const newList = [...roiList];
+    newList[roiSelectedIdx] = { ...newList[roiSelectedIdx], ...updates };
+    setRoiList(newList);
+  }, [roiList, roiSelectedIdx, setRoiList]);
   const [zoom, setZoom] = React.useState(1);
   const [panX, setPanX] = React.useState(0);
   const [panY, setPanY] = React.useState(0);
@@ -861,7 +857,8 @@ function Show3D() {
 
     // === PLAYBACK START ===
     playbackIdxRef.current = sliceIdx;
-    pathIdxRef.current = 0;
+    const pathLen = playRef.current.playbackPath?.length ?? 0;
+    pathIdxRef.current = pathLen > 0 ? (playRef.current.reverse ? pathLen : -1) : 0;
     bounceDirRef.current = playRef.current.reverse ? -1 : 1;
     let lastFrameTime = 0;
     let lastUIUpdate = 0;
@@ -1087,28 +1084,65 @@ function Show3D() {
     if (!ctx) return;
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.clearRect(0, 0, canvasW, canvasH);
-    if (roiActive) {
-      const screenX = roiCol * displayScale * zoom + panX;
-      const screenY = roiRow * displayScale * zoom + panY;
-      const screenRadius = roiRadius * displayScale * zoom;
-      const screenWidth = roiWidth * displayScale * zoom;
-      const screenHeight = roiHeight * displayScale * zoom;
-      const screenRadiusInner = roiRadiusInner * displayScale * zoom;
-      drawROI(ctx, screenX, screenY, roiShape || "circle", screenRadius, screenWidth, screenHeight, themeColors.accentYellow, themeColors.accentGreen, isDraggingROI, screenRadiusInner);
-      // Draw resize handle(s)
-      const shape = roiShape || "circle";
-      if (shape === "rectangle") {
-        drawResizeHandle(ctx, screenX + screenWidth / 2, screenY + screenHeight / 2, isDraggingResize, isHoveringResize);
-      } else if (shape === "annular") {
-        const outerOffset = screenRadius * CIRCLE_HANDLE_ANGLE;
-        drawResizeHandle(ctx, screenX + outerOffset, screenY + outerOffset, isDraggingResize, isHoveringResize);
-        const innerOffset = screenRadiusInner * CIRCLE_HANDLE_ANGLE;
-        drawResizeHandle(ctx, screenX + innerOffset, screenY + innerOffset, isDraggingResizeInner, isHoveringResizeInner, true);
-      } else if (shape === "circle") {
-        const offset = screenRadius * CIRCLE_HANDLE_ANGLE;
-        drawResizeHandle(ctx, screenX + offset, screenY + offset, isDraggingResize, isHoveringResize);
-      } else if (shape === "square") {
-        drawResizeHandle(ctx, screenX + screenRadius, screenY + screenRadius, isDraggingResize, isHoveringResize);
+    if (roiActive && roiList && roiList.length > 0) {
+      const highlightedRois = roiList.filter(r => r.highlight);
+      if (highlightedRois.length > 0) {
+        ctx.save();
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(0, 0, canvasW, canvasH);
+        ctx.globalCompositeOperation = "destination-out";
+        for (const roi of highlightedRois) {
+          const sx = roi.col * displayScale * zoom + panX;
+          const sy = roi.row * displayScale * zoom + panY;
+          const sr = roi.radius * displayScale * zoom;
+          const shape = roi.shape || "circle";
+          ctx.fillStyle = "rgba(0,0,0,1)";
+          if (shape === "circle") {
+            ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI * 2); ctx.fill();
+          } else if (shape === "square") {
+            ctx.fillRect(sx - sr, sy - sr, sr * 2, sr * 2);
+          } else if (shape === "rectangle") {
+            const sw = roi.width * displayScale * zoom;
+            const sh = roi.height * displayScale * zoom;
+            ctx.fillRect(sx - sw / 2, sy - sh / 2, sw, sh);
+          } else if (shape === "annular") {
+            ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI * 2); ctx.fill();
+            ctx.globalCompositeOperation = "source-over";
+            ctx.fillStyle = "rgba(0,0,0,0.6)";
+            const sir = roi.radius_inner * displayScale * zoom;
+            ctx.beginPath(); ctx.arc(sx, sy, sir, 0, Math.PI * 2); ctx.fill();
+            ctx.globalCompositeOperation = "destination-out";
+          }
+        }
+        ctx.restore();
+      }
+
+      for (let ri = 0; ri < roiList.length; ri++) {
+        const roi = roiList[ri];
+        const isSelected = ri === roiSelectedIdx;
+        const screenX = roi.col * displayScale * zoom + panX;
+        const screenY = roi.row * displayScale * zoom + panY;
+        const screenRadius = roi.radius * displayScale * zoom;
+        const screenWidth = roi.width * displayScale * zoom;
+        const screenHeight = roi.height * displayScale * zoom;
+        const screenRadiusInner = roi.radius_inner * displayScale * zoom;
+        const shape = (roi.shape || "circle") as "circle" | "square" | "rectangle" | "annular";
+        ctx.lineWidth = roi.line_width || 2;
+        const color = roi.color || ROI_COLORS[ri % ROI_COLORS.length];
+        drawROI(ctx, screenX, screenY, shape, screenRadius, screenWidth, screenHeight, color, color, isSelected && isDraggingROI, screenRadiusInner);
+        if (isSelected) {
+          ctx.setLineDash([4, 3]);
+          ctx.strokeStyle = "#fff";
+          ctx.lineWidth = 1;
+          if (shape === "circle" || shape === "annular") {
+            ctx.beginPath(); ctx.arc(screenX, screenY, screenRadius + 3, 0, Math.PI * 2); ctx.stroke();
+          } else if (shape === "square") {
+            ctx.strokeRect(screenX - screenRadius - 3, screenY - screenRadius - 3, (screenRadius + 3) * 2, (screenRadius + 3) * 2);
+          } else if (shape === "rectangle") {
+            ctx.strokeRect(screenX - screenWidth / 2 - 3, screenY - screenHeight / 2 - 3, screenWidth + 6, screenHeight + 6);
+          }
+          ctx.setLineDash([]);
+        }
       }
     }
 
@@ -1168,7 +1202,7 @@ function Show3D() {
         ctx.fill();
       }
     }
-  }, [roiActive, roiShape, roiRow, roiCol, roiRadius, roiRadiusInner, roiWidth, roiHeight, isDraggingROI, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner, canvasW, canvasH, displayScale, zoom, panX, panY, themeColors, profileActive, profilePoints, profileWidth]);
+  }, [roiActive, roiList, roiSelectedIdx, isDraggingROI, canvasW, canvasH, displayScale, zoom, panX, panY, themeColors, profileActive, profilePoints, profileWidth]);
 
   // Lens inset rendering
   React.useEffect(() => {
@@ -1266,7 +1300,7 @@ function Show3D() {
 
     if (!roiPlotData || roiPlotData.byteLength < 4) return;
     const values = extractFloat32(roiPlotData);
-    if (values.length === 0) return;
+    if (!values || values.length === 0) return;
     let min = values[0], max = values[0];
     for (let i = 1; i < values.length; i++) {
       if (values[i] < min) min = values[i];
@@ -1280,8 +1314,9 @@ function Show3D() {
     ctx.strokeStyle = themeColors.accent;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
+    const denom = Math.max(1, values.length - 1);
     for (let i = 0; i < values.length; i++) {
-      const x = (i / (values.length - 1)) * plotW;
+      const x = (i / denom) * plotW;
       const y = padY + drawH - ((values[i] - min) / range) * drawH;
       if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
@@ -1289,7 +1324,8 @@ function Show3D() {
 
     // Draw current frame marker
     const activeIdx = playing ? displaySliceIdx : sliceIdx;
-    const mx = (activeIdx / (values.length - 1)) * plotW;
+    const markerIdx = Math.max(0, Math.min(values.length - 1, activeIdx));
+    const mx = (markerIdx / denom) * plotW;
     ctx.strokeStyle = themeColors.textMuted;
     ctx.lineWidth = 1;
     ctx.setLineDash([3, 3]);
@@ -1300,8 +1336,8 @@ function Show3D() {
     ctx.setLineDash([]);
 
     // Current value dot
-    if (activeIdx >= 0 && activeIdx < values.length) {
-      const cy = padY + drawH - ((values[activeIdx] - min) / range) * drawH;
+    if (values.length > 0) {
+      const cy = padY + drawH - ((values[markerIdx] - min) / range) * drawH;
       ctx.fillStyle = themeColors.accent;
       ctx.beginPath();
       ctx.arc(mx, cy, 3, 0, Math.PI * 2);
@@ -1809,9 +1845,13 @@ function Show3D() {
       showColorbar: withColorbar,
       showScaleBar: pixelSizeAngstrom > 0,
       drawAnnotations: (ctx) => {
-        if (roiActive) {
-          const shape = roiShape as "circle" | "square" | "rectangle" | "annular";
-          drawROI(ctx, roiCol, roiRow, shape, roiRadius, roiWidth, roiHeight, "#ff4444", "#ff4444", false, roiRadiusInner);
+        if (roiActive && roiList && roiList.length > 0) {
+          for (let i = 0; i < roiList.length; i++) {
+            const roi = roiList[i];
+            const shape = (roi.shape || "circle") as "circle" | "square" | "rectangle" | "annular";
+            const color = roi.color || ROI_COLORS[i % ROI_COLORS.length];
+            drawROI(ctx, roi.col, roi.row, shape, roi.radius, roi.width, roi.height, color, color, false, roi.radius_inner);
+          }
         }
       },
     });
@@ -1839,6 +1879,9 @@ function Show3D() {
   }, [zipData]);
 
   const clickStartRef = React.useRef<{ x: number; y: number } | null>(null);
+  const [draggingProfileEndpoint, setDraggingProfileEndpoint] = React.useState<0 | 1 | null>(null);
+  const [isDraggingProfileLine, setIsDraggingProfileLine] = React.useState(false);
+  const profileDragStartRef = React.useRef<{ row: number; col: number; p0: { row: number; col: number }; p1: { row: number; col: number } } | null>(null);
 
   const screenToImg = (e: React.MouseEvent): { imgCol: number; imgRow: number } => {
     const canvas = canvasRef.current;
@@ -1854,35 +1897,70 @@ function Show3D() {
     };
   };
 
-  const isNearResizeHandle = (imgCol: number, imgRow: number): boolean => {
-    if (!roiActive) return false;
-    const hitArea = RESIZE_HIT_AREA_PX / (displayScale * zoom);
-    if (roiShape === "rectangle") {
-      const hx = roiCol + roiWidth / 2;
-      const hy = roiRow + roiHeight / 2;
-      return Math.sqrt((imgCol - hx) ** 2 + (imgRow - hy) ** 2) < hitArea;
+  const hitTestROI = React.useCallback((imgCol: number, imgRow: number): number => {
+    if (!roiActive || !roiList) return -1;
+    for (let ri = roiList.length - 1; ri >= 0; ri--) {
+      const roi = roiList[ri];
+      const shape = roi.shape || "circle";
+      if (shape === "circle" || shape === "annular") {
+        if (Math.sqrt((imgCol - roi.col) ** 2 + (imgRow - roi.row) ** 2) <= roi.radius) return ri;
+      } else if (shape === "square") {
+        if (Math.abs(imgCol - roi.col) <= roi.radius && Math.abs(imgRow - roi.row) <= roi.radius) return ri;
+      } else if (shape === "rectangle") {
+        if (Math.abs(imgCol - roi.col) <= roi.width / 2 && Math.abs(imgRow - roi.row) <= roi.height / 2) return ri;
+      }
     }
-    if (roiShape === "circle" || roiShape === "annular") {
-      const offset = roiRadius * CIRCLE_HANDLE_ANGLE;
-      const hx = roiCol + offset;
-      const hy = roiRow + offset;
-      return Math.sqrt((imgCol - hx) ** 2 + (imgRow - hy) ** 2) < hitArea;
+    return -1;
+  }, [roiActive, roiList]);
+
+  const getHitArea = React.useCallback(() => RESIZE_HIT_AREA_PX / (displayScale * zoom), [displayScale, zoom]);
+
+  const isNearEdge = React.useCallback((imgCol: number, imgRow: number, roi: ROIItem): boolean => {
+    const hitArea = getHitArea();
+    const shape = roi.shape || "circle";
+    if (shape === "circle" || shape === "annular") {
+      const dist = Math.sqrt((imgCol - roi.col) ** 2 + (imgRow - roi.row) ** 2);
+      return Math.abs(dist - roi.radius) < hitArea;
     }
-    if (roiShape === "square") {
-      const hx = roiCol + roiRadius;
-      const hy = roiRow + roiRadius;
-      return Math.sqrt((imgCol - hx) ** 2 + (imgRow - hy) ** 2) < hitArea;
+    if (shape === "square") {
+      const dx = Math.abs(imgCol - roi.col);
+      const dy = Math.abs(imgRow - roi.row);
+      const r = roi.radius;
+      return (dx <= r + hitArea && dy <= r + hitArea) && (Math.abs(dx - r) < hitArea || Math.abs(dy - r) < hitArea);
+    }
+    if (shape === "rectangle") {
+      const dx = Math.abs(imgCol - roi.col);
+      const dy = Math.abs(imgRow - roi.row);
+      const hw = roi.width / 2;
+      const hh = roi.height / 2;
+      return (dx <= hw + hitArea && dy <= hh + hitArea) && (Math.abs(dx - hw) < hitArea || Math.abs(dy - hh) < hitArea);
     }
     return false;
-  };
+  }, [getHitArea]);
 
-  const isNearResizeHandleInner = (imgCol: number, imgRow: number): boolean => {
-    if (!roiActive || roiShape !== "annular") return false;
-    const offset = roiRadiusInner * CIRCLE_HANDLE_ANGLE;
-    const hx = roiCol + offset;
-    const hy = roiRow + offset;
-    const hitArea = RESIZE_HIT_AREA_PX / (displayScale * zoom);
-    return Math.sqrt((imgCol - hx) ** 2 + (imgRow - hy) ** 2) < hitArea;
+  const isNearResizeHandle = React.useCallback((imgCol: number, imgRow: number): boolean => {
+    if (!roiActive || !selectedRoi) return false;
+    return isNearEdge(imgCol, imgRow, selectedRoi);
+  }, [roiActive, selectedRoi, isNearEdge]);
+
+  const isNearAnyEdge = React.useCallback((imgCol: number, imgRow: number): boolean => {
+    if (!roiActive || !roiList) return false;
+    return roiList.some(roi => isNearEdge(imgCol, imgRow, roi));
+  }, [roiActive, roiList, isNearEdge]);
+
+  const isNearResizeHandleInner = React.useCallback((imgCol: number, imgRow: number): boolean => {
+    if (!roiActive || !selectedRoi || selectedRoi.shape !== "annular") return false;
+    const hitArea = getHitArea();
+    const dist = Math.sqrt((imgCol - selectedRoi.col) ** 2 + (imgRow - selectedRoi.row) ** 2);
+    return Math.abs(dist - selectedRoi.radius_inner) < hitArea;
+  }, [roiActive, selectedRoi, getHitArea]);
+
+  const updateROI = (e: React.MouseEvent) => {
+    const { imgCol, imgRow } = screenToImg(e);
+    updateSelectedRoi({
+      col: Math.max(0, Math.min(width - 1, Math.floor(imgCol))),
+      row: Math.max(0, Math.min(height - 1, Math.floor(imgRow))),
+    });
   };
 
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
@@ -1911,6 +1989,37 @@ function Show3D() {
         }
       }
     }
+    if (profileActive) {
+      const { imgCol, imgRow } = screenToImg(e);
+      if (profilePoints.length === 2) {
+        const p0 = profilePoints[0];
+        const p1 = profilePoints[1];
+        const hitRadius = 10 / (displayScale * zoom);
+        const d0 = Math.sqrt((imgCol - p0.col) ** 2 + (imgRow - p0.row) ** 2);
+        const d1 = Math.sqrt((imgCol - p1.col) ** 2 + (imgRow - p1.row) ** 2);
+        if (d0 <= hitRadius || d1 <= hitRadius) {
+          setDraggingProfileEndpoint(d0 <= d1 ? 0 : 1);
+          setIsDraggingPan(false);
+          setPanStart(null);
+          return;
+        }
+        if (pointToSegmentDistance(imgCol, imgRow, p0.col, p0.row, p1.col, p1.row) <= hitRadius) {
+          setIsDraggingProfileLine(true);
+          profileDragStartRef.current = {
+            row: imgRow,
+            col: imgCol,
+            p0: { row: p0.row, col: p0.col },
+            p1: { row: p1.row, col: p1.col },
+          };
+          setIsDraggingPan(false);
+          setPanStart(null);
+          return;
+        }
+      }
+      setIsDraggingPan(true);
+      setPanStart({ x: e.clientX, y: e.clientY, pX: panX, pY: panY });
+      return;
+    }
     if (roiActive) {
       const { imgCol, imgRow } = screenToImg(e);
       if (isNearResizeHandleInner(imgCol, imgRow)) {
@@ -1921,12 +2030,25 @@ function Show3D() {
         setIsDraggingResize(true);
         return;
       }
-      setIsDraggingROI(true);
-      updateROI(e);
-    } else {
-      setIsDraggingPan(true);
-      setPanStart({ x: e.clientX, y: e.clientY, pX: panX, pY: panY });
+      if (roiList) {
+        for (let ri = 0; ri < roiList.length; ri++) {
+          if (isNearEdge(imgCol, imgRow, roiList[ri])) {
+            setRoiSelectedIdx(ri);
+            setIsDraggingResize(true);
+            return;
+          }
+        }
+      }
+      const hitIdx = hitTestROI(imgCol, imgRow);
+      if (hitIdx >= 0) {
+        setRoiSelectedIdx(hitIdx);
+        setIsDraggingROI(true);
+        return;
+      }
+      setRoiSelectedIdx(-1);
     }
+    setIsDraggingPan(true);
+    setPanStart({ x: e.clientX, y: e.clientY, pX: panX, pY: panY });
   };
 
   const handleCanvasMouseMove = (e: React.MouseEvent) => {
@@ -1984,22 +2106,62 @@ function Show3D() {
       return;
     }
 
+    if (profileActive && profilePoints.length === 2 && rawFrameDataRef.current) {
+      const { imgCol, imgRow } = screenToImg(e);
+      if (draggingProfileEndpoint !== null) {
+        const clampedRow = Math.max(0, Math.min(height - 1, imgRow));
+        const clampedCol = Math.max(0, Math.min(width - 1, imgCol));
+        const next = [
+          draggingProfileEndpoint === 0 ? { row: clampedRow, col: clampedCol } : profilePoints[0],
+          draggingProfileEndpoint === 1 ? { row: clampedRow, col: clampedCol } : profilePoints[1],
+        ];
+        setProfileLine(next);
+        setProfileData(sampleLineProfile(rawFrameDataRef.current, width, height, next[0].row, next[0].col, next[1].row, next[1].col, profileWidth));
+        return;
+      }
+      if (isDraggingProfileLine && profileDragStartRef.current) {
+        const drag = profileDragStartRef.current;
+        let deltaRow = imgRow - drag.row;
+        let deltaCol = imgCol - drag.col;
+        const minRow = Math.min(drag.p0.row, drag.p1.row);
+        const maxRow = Math.max(drag.p0.row, drag.p1.row);
+        const minCol = Math.min(drag.p0.col, drag.p1.col);
+        const maxCol = Math.max(drag.p0.col, drag.p1.col);
+        deltaRow = Math.max(deltaRow, -minRow);
+        deltaRow = Math.min(deltaRow, (height - 1) - maxRow);
+        deltaCol = Math.max(deltaCol, -minCol);
+        deltaCol = Math.min(deltaCol, (width - 1) - maxCol);
+        const next = [
+          { row: drag.p0.row + deltaRow, col: drag.p0.col + deltaCol },
+          { row: drag.p1.row + deltaRow, col: drag.p1.col + deltaCol },
+        ];
+        setProfileLine(next);
+        setProfileData(sampleLineProfile(rawFrameDataRef.current, width, height, next[0].row, next[0].col, next[1].row, next[1].col, profileWidth));
+        return;
+      }
+    }
+
     // Resize handle dragging
-    if (isDraggingResizeInner) {
+    if (isDraggingResizeInner && selectedRoi) {
       const { imgCol: ic, imgRow: ir } = screenToImg(e);
-      const newR = Math.sqrt((ic - roiCol) ** 2 + (ir - roiRow) ** 2);
-      setRoiRadiusInner(Math.max(1, Math.min(roiRadius - 1, Math.round(newR))));
+      const newR = Math.sqrt((ic - selectedRoi.col) ** 2 + (ir - selectedRoi.row) ** 2);
+      updateSelectedRoi({ radius_inner: Math.max(1, Math.min(selectedRoi.radius - 1, Math.round(newR))) });
       return;
     }
-    if (isDraggingResize) {
+    if (isDraggingResize && selectedRoi) {
       const { imgCol: ic, imgRow: ir } = screenToImg(e);
-      if (roiShape === "rectangle") {
-        setRoiWidth(Math.max(2, Math.round(Math.abs(ic - roiCol) * 2)));
-        setRoiHeight(Math.max(2, Math.round(Math.abs(ir - roiRow) * 2)));
+      const shape = selectedRoi.shape || "circle";
+      if (shape === "rectangle") {
+        updateSelectedRoi({
+          width: Math.max(2, Math.round(Math.abs(ic - selectedRoi.col) * 2)),
+          height: Math.max(2, Math.round(Math.abs(ir - selectedRoi.row) * 2)),
+        });
       } else {
-        const newR = roiShape === "square" ? Math.max(Math.abs(ic - roiCol), Math.abs(ir - roiRow)) : Math.sqrt((ic - roiCol) ** 2 + (ir - roiRow) ** 2);
-        const minR = roiShape === "annular" ? roiRadiusInner + 1 : 1;
-        setRoiRadius(Math.max(minR, Math.round(newR)));
+        const newR = shape === "square"
+          ? Math.max(Math.abs(ic - selectedRoi.col), Math.abs(ir - selectedRoi.row))
+          : Math.sqrt((ic - selectedRoi.col) ** 2 + (ir - selectedRoi.row) ** 2);
+        const minR = shape === "annular" ? selectedRoi.radius_inner + 1 : 1;
+        updateSelectedRoi({ radius: Math.max(minR, Math.round(newR)) });
       }
       return;
     }
@@ -2008,7 +2170,7 @@ function Show3D() {
     if (roiActive && !isDraggingROI && !isDraggingPan) {
       const { imgCol: ic, imgRow: ir } = screenToImg(e);
       setIsHoveringResizeInner(isNearResizeHandleInner(ic, ir));
-      setIsHoveringResize(isNearResizeHandle(ic, ir));
+      setIsHoveringResize(isNearAnyEdge(ic, ir));
     }
 
     if (isDraggingROI) {
@@ -2026,6 +2188,23 @@ function Show3D() {
   };
 
   const handleCanvasMouseUp = (e: React.MouseEvent) => {
+    if (draggingProfileEndpoint !== null || isDraggingProfileLine) {
+      setDraggingProfileEndpoint(null);
+      setIsDraggingProfileLine(false);
+      profileDragStartRef.current = null;
+      clickStartRef.current = null;
+      setIsDraggingROI(false);
+      setIsDraggingResize(false);
+      setIsDraggingResizeInner(false);
+      setIsDraggingLens(false);
+      lensDragStartRef.current = null;
+      setIsResizingLens(false);
+      lensResizeStartRef.current = null;
+      setIsDraggingPan(false);
+      setPanStart(null);
+      return;
+    }
+
     // Profile click capture
     if (profileActive && clickStartRef.current) {
       const dx = e.clientX - clickStartRef.current.x;
@@ -2062,6 +2241,9 @@ function Show3D() {
     lensResizeStartRef.current = null;
     setIsDraggingPan(false);
     setPanStart(null);
+    setDraggingProfileEndpoint(null);
+    setIsDraggingProfileLine(false);
+    profileDragStartRef.current = null;
   };
 
   const handleCanvasMouseLeave = () => {
@@ -2079,6 +2261,9 @@ function Show3D() {
     setIsHoveringResizeInner(false);
     setIsDraggingPan(false);
     setPanStart(null);
+    setDraggingProfileEndpoint(null);
+    setIsDraggingProfileLine(false);
+    profileDragStartRef.current = null;
   };
 
   // FFT mouse handlers
@@ -2191,20 +2376,6 @@ function Show3D() {
 
   const fftNeedsReset = fftZoom !== 1 || fftPanX !== 0 || fftPanY !== 0;
 
-  const updateROI = (e: React.MouseEvent) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const screenX = (e.clientX - rect.left) * scaleX;
-    const screenY = (e.clientY - rect.top) * scaleY;
-    const x = Math.floor((screenX - panX) / (displayScale * zoom));
-    const y = Math.floor((screenY - panY) / (displayScale * zoom));
-    setRoiCol(Math.max(0, Math.min(width - 1, x)));
-    setRoiRow(Math.max(0, Math.min(height - 1, y)));
-  };
-
   // Resize handlers
   const handleMainResizeStart = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -2290,7 +2461,7 @@ function Show3D() {
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Lens: Magnifier inset that follows the cursor.</Typography>
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Scale: Linear or logarithmic intensity mapping.</Typography>
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Auto: Percentile-based contrast (clips outliers). FFT Auto masks DC + clips to 99.9th.</Typography>
-              <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>ROI: Region of Interest — click to place, drag to move. Tracks mean intensity across frames.</Typography>
+              <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>ROI: Add multiple colored regions, click to select, drag to move, hover ROI edge to resize. Focus dims outside highlighted ROIs.</Typography>
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Loop: Loop playback. Drag end markers on slider for loop range.</Typography>
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Bounce: Ping-pong playback — alternates forward and reverse.</Typography>
               <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
@@ -2302,11 +2473,11 @@ function Show3D() {
             <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT:</Typography>
             <Switch checked={showFft} onChange={(e) => setShowFft(e.target.checked)} size="small" sx={switchStyles.small} />
             <Typography sx={{ ...typography.label, fontSize: 10, ml: "2px" }}>Profile:</Typography>
-            <Switch checked={profileActive} onChange={(e) => { const on = e.target.checked; setProfileActive(on); if (on) { setRoiActive(false); setRoiShape("none"); } else { setProfileLine([]); setProfileData(null); } }} size="small" sx={switchStyles.small} />
+            <Switch checked={profileActive} onChange={(e) => { const on = e.target.checked; setProfileActive(on); if (on) { setRoiActive(false); setRoiSelectedIdx(-1); } else { setProfileLine([]); setProfileData(null); } }} size="small" sx={switchStyles.small} />
             <Typography sx={{ ...typography.label, fontSize: 10, ml: "2px" }}>Lens:</Typography>
             <Switch checked={showLens} onChange={() => { if (!showLens) { setShowLens(true); setLensPos({ row: Math.floor(height / 2), col: Math.floor(width / 2) }); } else { setShowLens(false); setLensPos(null); } }} size="small" sx={switchStyles.small} />
             <Typography sx={{ ...typography.label, fontSize: 10, ml: "2px" }}>ROI:</Typography>
-            <Switch checked={roiActive} onChange={(e) => { const on = e.target.checked; if (on) { setRoiActive(true); if (!roiShape || roiShape === "none") setRoiShape("circle"); setProfileActive(false); setProfileLine([]); setProfileData(null); setRoiCol(Math.floor(width / 2)); setRoiRow(Math.floor(height / 2)); } else { setRoiActive(false); setRoiShape("none"); } }} size="small" sx={switchStyles.small} />
+            <Switch checked={roiActive} onChange={(e) => { const on = e.target.checked; if (on) { setRoiActive(true); setProfileActive(false); setProfileLine([]); setProfileData(null); } else { setRoiActive(false); setRoiSelectedIdx(-1); } }} size="small" sx={switchStyles.small} />
             <Box sx={{ flex: 1 }} />
             <Box sx={{ display: "flex", alignItems: "center", gap: "6px" }}>
               <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={(e) => setExportAnchor(e.currentTarget)} disabled={exporting}>{exporting ? "..." : "Export"}</Button>
@@ -2323,7 +2494,7 @@ function Show3D() {
           </Box>
           <Box
             ref={canvasContainerRef}
-            sx={{ ...container.imageBox, width: canvasW, height: canvasH, cursor: isHoveringLensEdge ? "nwse-resize" : (isHoveringResize || isDraggingResize || isHoveringResizeInner || isDraggingResizeInner) ? "nwse-resize" : (roiActive || profileActive) ? "crosshair" : "grab" }}
+            sx={{ ...container.imageBox, width: canvasW, height: canvasH, cursor: isHoveringLensEdge ? "nwse-resize" : (isHoveringResize || isDraggingResize || isHoveringResizeInner || isDraggingResizeInner) ? "nwse-resize" : (draggingProfileEndpoint !== null || isDraggingProfileLine) ? "grabbing" : (roiActive || profileActive) ? "crosshair" : "grab" }}
             onMouseDown={handleCanvasMouseDown}
             onMouseMove={handleCanvasMouseMove}
             onMouseUp={handleCanvasMouseUp}
@@ -2352,13 +2523,13 @@ function Show3D() {
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.min : statsMin)}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.max : statsMax)}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.std : statsStd)}</Box></Typography>
-              {roiActive && !localStats && (
+              {roiActive && !localStats && roiStats && roiStats.mean !== undefined && (
                 <>
                   <Box sx={{ borderLeft: `1px solid ${themeColors.border}`, height: 14 }} />
-                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>ROI <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(roiMean)}</Box></Typography>
-                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(roiMin)}</Box></Typography>
-                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(roiMax)}</Box></Typography>
-                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(roiStd)}</Box></Typography>
+                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>ROI <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(roiStats.mean)}</Box></Typography>
+                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(roiStats.min)}</Box></Typography>
+                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(roiStats.max)}</Box></Typography>
+                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(roiStats.std)}</Box></Typography>
                 </>
               )}
             </Box>
@@ -2444,41 +2615,131 @@ function Show3D() {
           {/* ROI settings row (when ROI is active) */}
           {roiActive && (
             <Box sx={{ mt: `${SPACING.XS}px`, display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, width: "fit-content" }}>
-              <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>ROI:</Typography>
-                <Select
-                  size="small"
-                  value={roiShape || "circle"}
-                  onChange={(e) => { setRoiShape(e.target.value as RoiShape); }}
-                  MenuProps={themedMenuProps}
-                  sx={{ ...themedSelect, minWidth: 70 }}
-                >
-                  {(["circle", "square", "rectangle", "annular"] as const).map((shape) => (<MenuItem key={shape} value={shape}>{shape.charAt(0).toUpperCase() + shape.slice(1)}</MenuItem>))}
-                </Select>
-                {roiShape === "rectangle" && (
-                  <>
-                    <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>W</Typography>
-                    <Slider value={roiWidth} min={5} max={width} onChange={(_, v) => setRoiWidth(v as number)} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
-                    <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>H</Typography>
-                    <Slider value={roiHeight} min={5} max={height} onChange={(_, v) => setRoiHeight(v as number)} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
-                  </>
+              <Box sx={{ border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, px: 1, py: 0.5, display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, width: "fit-content" }}>
+                {/* ROI: shape + ADD + CLEAR + Plot */}
+                <Box sx={{ display: "flex", alignItems: "center", gap: `${SPACING.SM}px` }}>
+                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>ROI:</Typography>
+                  <Select
+                    size="small"
+                    value={newRoiShape}
+                    onChange={(e) => setNewRoiShape(e.target.value as "circle" | "square" | "rectangle" | "annular")}
+                    MenuProps={themedMenuProps}
+                    sx={{ ...themedSelect, minWidth: 70, fontSize: 10 }}
+                  >
+                    {(["circle", "square", "rectangle", "annular"] as const).map((shape) => (<MenuItem key={shape} value={shape}>{shape.charAt(0).toUpperCase() + shape.slice(1)}</MenuItem>))}
+                  </Select>
+                  <Button size="small" sx={compactButton} onClick={() => {
+                    const newRoi: ROIItem = {
+                      row: Math.floor(height / 2),
+                      col: Math.floor(width / 2),
+                      shape: newRoiShape,
+                      radius: 10,
+                      radius_inner: 5,
+                      width: 20,
+                      height: 20,
+                      color: ROI_COLORS[(roiList?.length ?? 0) % ROI_COLORS.length],
+                      line_width: 2,
+                      highlight: false,
+                    };
+                    const newList = [...(roiList || []), newRoi];
+                    setRoiList(newList);
+                    setRoiSelectedIdx(newList.length - 1);
+                  }}>ADD</Button>
+                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Plot:</Typography>
+                  <Switch checked={showRoiPlot} onChange={(e) => setShowRoiPlot(e.target.checked)} size="small" sx={switchStyles.small} />
+                  <Box sx={{ flex: 1 }} />
+                  <Button size="small" sx={{ ...compactButton, fontSize: 9, minWidth: 24, color: "#ef5350" }} disabled={!roiList?.length} onClick={() => { setRoiList([]); setRoiSelectedIdx(-1); }}>CLEAR</Button>
+                </Box>
+
+                {/* Selected ROI details */}
+                {selectedRoi && (
+                  <Box sx={{ display: "flex", alignItems: "center", gap: `${SPACING.SM}px`, borderTop: `1px solid ${themeColors.border}`, pt: `${SPACING.XS}px` }}>
+                    <Typography sx={{ ...typography.label, fontSize: 10, color: selectedRoi.color }}>#{roiSelectedIdx + 1}/{roiList?.length ?? 0}</Typography>
+                    <Select
+                      size="small"
+                      value={selectedRoi.shape || "circle"}
+                      onChange={(e) => updateSelectedRoi({ shape: String(e.target.value) })}
+                      MenuProps={themedMenuProps}
+                      sx={{ ...themedSelect, minWidth: 70, fontSize: 10 }}
+                    >
+                      {(["circle", "square", "rectangle", "annular"] as const).map((shape) => (<MenuItem key={shape} value={shape}>{shape.charAt(0).toUpperCase() + shape.slice(1)}</MenuItem>))}
+                    </Select>
+                    {selectedRoi.shape === "rectangle" && (
+                      <>
+                        <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>W</Typography>
+                        <Slider value={selectedRoi.width} min={5} max={width} onChange={(_, v) => updateSelectedRoi({ width: v as number })} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
+                        <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>H</Typography>
+                        <Slider value={selectedRoi.height} min={5} max={height} onChange={(_, v) => updateSelectedRoi({ height: v as number })} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
+                      </>
+                    )}
+                    {selectedRoi.shape === "annular" && (
+                      <>
+                        <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Inner</Typography>
+                        <Slider value={selectedRoi.radius_inner} min={1} max={Math.max(2, selectedRoi.radius - 1)} onChange={(_, v) => updateSelectedRoi({ radius_inner: v as number })} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
+                        <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Outer</Typography>
+                        <Slider value={selectedRoi.radius} min={selectedRoi.radius_inner + 1} max={Math.max(width, height)} onChange={(_, v) => updateSelectedRoi({ radius: v as number })} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
+                      </>
+                    )}
+                    {selectedRoi.shape !== "rectangle" && selectedRoi.shape !== "annular" && (
+                      <>
+                        <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Size</Typography>
+                        <Slider value={selectedRoi.radius} min={5} max={Math.max(width, height)} onChange={(_, v) => updateSelectedRoi({ radius: v as number })} size="small" sx={{ ...sliderStyles.small, width: 50 }} />
+                      </>
+                    )}
+                    <Box sx={{ display: "flex", gap: "2px" }}>
+                      {ROI_COLORS.map(c => (
+                        <Box key={c} onClick={() => updateSelectedRoi({ color: c })} sx={{ width: 12, height: 12, bgcolor: c, cursor: "pointer", border: c === selectedRoi.color ? `2px solid ${themeColors.text}` : "1px solid transparent", "&:hover": { opacity: 0.8 } }} />
+                      ))}
+                    </Box>
+                    <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Border</Typography>
+                    <Slider value={selectedRoi.line_width} min={1} max={6} step={1} onChange={(_, v) => updateSelectedRoi({ line_width: v as number })} size="small" sx={{ ...sliderStyles.small, width: 30 }} />
+                    <Box
+                      onClick={() => updateSelectedRoi({ highlight: !selectedRoi.highlight })}
+                      sx={{ cursor: "pointer", fontSize: 10, color: selectedRoi.highlight ? "#ffd54f" : themeColors.textMuted, "&:hover": { opacity: 0.8 } }}
+                      title="Focus (dim outside)"
+                    >{selectedRoi.highlight ? "\u25C9 Focus" : "\u25CB Focus"}</Box>
+                    <Button size="small" sx={{ ...compactButton, fontSize: 9, minWidth: 20, color: "#ef5350" }} onClick={() => {
+                      if (!roiList) return;
+                      const newList = roiList.filter((_, j) => j !== roiSelectedIdx);
+                      setRoiList(newList);
+                      setRoiSelectedIdx(newList.length > 0 ? Math.min(roiSelectedIdx, newList.length - 1) : -1);
+                    }}>&times;</Button>
+                  </Box>
                 )}
-                {roiShape === "annular" && (
-                  <>
-                    <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Inner</Typography>
-                    <Slider value={roiRadiusInner} min={1} max={roiRadius - 1} onChange={(_, v) => setRoiRadiusInner(v as number)} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
-                    <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Outer</Typography>
-                    <Slider value={roiRadius} min={roiRadiusInner + 1} max={Math.max(width, height)} onChange={(_, v) => setRoiRadius(v as number)} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
-                  </>
+
+                {/* ROI list */}
+                {roiList && roiList.length > 0 && (
+                  <Box sx={{ display: "flex", flexDirection: "column", borderTop: `1px solid ${themeColors.border}`, pt: `${SPACING.XS}px` }}>
+                    {roiList.map((roi, i) => {
+                      const c = roi.color || ROI_COLORS[i % ROI_COLORS.length];
+                      const isSelected = i === roiSelectedIdx;
+                      const shapeLabel = roi.shape === "rectangle"
+                        ? `${roi.width}×${roi.height}`
+                        : roi.shape === "annular"
+                          ? `r${roi.radius_inner}-${roi.radius}`
+                          : `r${roi.radius}`;
+                      return (
+                        <Box key={i} onClick={() => setRoiSelectedIdx(i)} sx={{ display: "flex", alignItems: "center", gap: "3px", lineHeight: 1.6, cursor: "pointer", "&:hover .roi-delete": { opacity: 1 } }}>
+                          <Box sx={{ width: 8, height: 8, borderRadius: roi.shape === "square" || roi.shape === "rectangle" ? 0 : "50%", bgcolor: c, border: isSelected ? "2px solid #fff" : "1px solid transparent", flexShrink: 0 }} />
+                          <Typography component="span" sx={{ fontSize: 10, fontFamily: "monospace", color: isSelected ? themeColors.text : themeColors.textMuted, fontWeight: isSelected ? "bold" : "normal" }}>
+                            <Box component="span" sx={{ color: c }}>{i + 1}</Box>{" "}
+                            {roi.shape} ({Math.round(roi.row)}, {Math.round(roi.col)}) {shapeLabel}
+                          </Typography>
+                          <Box
+                            onClick={(e) => { e.stopPropagation(); const newList = [...roiList]; newList[i] = { ...newList[i], highlight: !newList[i].highlight }; setRoiList(newList); }}
+                            sx={{ cursor: "pointer", fontSize: 10, color: roi.highlight ? "#ffd54f" : themeColors.textMuted, lineHeight: 1, opacity: roi.highlight ? 1 : 0.5, "&:hover": { opacity: 1 } }}
+                            title="Focus (dim outside)"
+                          >{roi.highlight ? "\u25C9" : "\u25CB"}</Box>
+                          <Box
+                            className="roi-delete"
+                            onClick={(e) => { e.stopPropagation(); const newList = roiList.filter((_, j) => j !== i); setRoiList(newList); setRoiSelectedIdx(newList.length > 0 ? Math.min(roiSelectedIdx, newList.length - 1) : -1); }}
+                            sx={{ opacity: 0, cursor: "pointer", fontSize: 10, color: themeColors.textMuted, ml: 0.5, lineHeight: 1, "&:hover": { color: "#f44336" } }}
+                          >&times;</Box>
+                        </Box>
+                      );
+                    })}
+                  </Box>
                 )}
-                {roiShape !== "rectangle" && roiShape !== "annular" && (
-                  <>
-                    <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Size</Typography>
-                    <Slider value={roiRadius} min={5} max={Math.max(width, height)} onChange={(_, v) => setRoiRadius(v as number)} size="small" sx={{ ...sliderStyles.small, width: 50 }} />
-                  </>
-                )}
-                <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Plot:</Typography>
-                <Switch checked={showRoiPlot} onChange={(e) => setShowRoiPlot(e.target.checked)} size="small" sx={switchStyles.small} />
               </Box>
             </Box>
           )}

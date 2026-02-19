@@ -75,17 +75,17 @@ def test_show3d_roi():
     widget = Show3D(data)
     widget.set_roi(16, 16, radius=5)
     assert widget.roi_active is True
-    assert widget.roi_mean == pytest.approx(10.0)
+    assert widget.roi_stats["mean"] == pytest.approx(10.0)
 
 
-def test_show3d_roi_shapes():
+def test_show3d_roi_shapes_constant_mean():
     """Different ROI shapes work."""
     data = np.ones((5, 32, 32), dtype=np.float32) * 10.0
     widget = Show3D(data)
-    for shape in ["circle", "square", "rectangle"]:
-        widget.roi_shape = shape
+    for shape_fn in [widget.roi_circle, widget.roi_square, lambda r: widget.roi_rectangle(r * 2, r)]:
         widget.set_roi(16, 16, radius=5)
-        assert widget.roi_mean == pytest.approx(10.0)
+        shape_fn(5)
+        assert widget.roi_stats["mean"] == pytest.approx(10.0)
 
 
 def test_show3d_colormap():
@@ -197,11 +197,9 @@ def test_show3d_roi_rectangle():
     """Rectangle ROI with roi_width/height computes mean."""
     data = np.ones((5, 32, 32), dtype=np.float32) * 7.0
     widget = Show3D(data)
-    widget.roi_shape = "rectangle"
-    widget.roi_width = 10
-    widget.roi_height = 6
     widget.set_roi(16, 16, radius=5)
-    assert widget.roi_mean == pytest.approx(7.0)
+    widget.roi_rectangle(10, 6)
+    assert widget.roi_stats["mean"] == pytest.approx(7.0)
 
 
 def test_show3d_roi_at_edge():
@@ -209,8 +207,8 @@ def test_show3d_roi_at_edge():
     data = np.ones((5, 32, 32), dtype=np.float32) * 5.0
     widget = Show3D(data)
     widget.set_roi(0, 0, radius=3)
-    # Should not crash, and roi_mean should be finite
-    assert np.isfinite(widget.roi_mean)
+    # Should not crash, and roi mean should be finite
+    assert np.isfinite(widget.roi_stats["mean"])
 
 
 def test_show3d_constant_data():
@@ -669,9 +667,10 @@ def test_show3d_roi_annular():
     data = np.ones((5, 32, 32), dtype=np.float32) * 3.0
     widget = Show3D(data)
     widget.roi_annular(inner=5, outer=10)
-    assert widget.roi_shape == "annular"
-    assert widget.roi_radius_inner == 5
-    assert widget.roi_radius == 10
+    roi = widget.roi_list[widget.roi_selected_idx]
+    assert roi["shape"] == "annular"
+    assert roi["radius_inner"] == 5
+    assert roi["radius"] == 10
     assert widget.roi_active is True
 
 
@@ -680,20 +679,20 @@ def test_show3d_roi_annular_mean():
     widget = Show3D(data)
     widget.set_roi(16, 16, 10)
     widget.roi_annular(inner=3, outer=8)
-    assert widget.roi_mean == pytest.approx(7.0)
+    assert widget.roi_stats["mean"] == pytest.approx(7.0)
 
 
 def test_show3d_roi_shapes():
     data = np.random.rand(3, 16, 16).astype(np.float32)
     widget = Show3D(data)
     widget.roi_circle(5)
-    assert widget.roi_shape == "circle"
+    assert widget.roi_list[widget.roi_selected_idx]["shape"] == "circle"
     widget.roi_square(5)
-    assert widget.roi_shape == "square"
+    assert widget.roi_list[widget.roi_selected_idx]["shape"] == "square"
     widget.roi_rectangle(10, 5)
-    assert widget.roi_shape == "rectangle"
+    assert widget.roi_list[widget.roi_selected_idx]["shape"] == "rectangle"
     widget.roi_annular(3, 8)
-    assert widget.roi_shape == "annular"
+    assert widget.roi_list[widget.roi_selected_idx]["shape"] == "annular"
 
 
 # =========================================================================
@@ -765,9 +764,8 @@ def test_show3d_state_dict_roundtrip():
     w = Show3D(data, cmap="viridis", log_scale=True, auto_contrast=True,
                title="Stack", pixel_size=0.5, fps=15.0, show_fft=True)
     w.roi_active = True
-    w.roi_shape = "circle"
-    w.roi_row = 10
-    w.roi_col = 15
+    w.roi_list = [{"row": 10, "col": 15, "shape": "circle", "radius": 10, "radius_inner": 5, "width": 20, "height": 20, "color": "#4fc3f7", "line_width": 2, "highlight": False}]
+    w.roi_selected_idx = 0
     sd = w.state_dict()
     w2 = Show3D(data, state=sd)
     assert w2.cmap == "viridis"
@@ -777,7 +775,7 @@ def test_show3d_state_dict_roundtrip():
     assert w2.fps == pytest.approx(15.0)
     assert w2.show_fft is True
     assert w2.roi_active is True
-    assert w2.roi_row == 10
+    assert w2.roi_list[0]["row"] == 10
 
 
 def test_show3d_save_load_file(tmp_path):
@@ -805,6 +803,15 @@ def test_show3d_summary(capsys):
     assert "0.25" in out
 
 
+def test_show3d_summary_with_single_profile_point(capsys):
+    data = np.random.rand(10, 32, 32).astype(np.float32)
+    w = Show3D(data)
+    w.profile_line = [{"row": 4.0, "col": 7.0}]
+    w.summary()
+    out = capsys.readouterr().out
+    assert "Show3D" in out
+
+
 def test_show3d_repr():
     data = np.random.rand(10, 32, 32).astype(np.float32)
     w = Show3D(data, cmap="magma")
@@ -828,5 +835,3 @@ def test_show3d_set_image():
     assert widget.fps == 12
     assert widget.data_min == pytest.approx(float(new_data.min()))
     assert widget.data_max == pytest.approx(float(new_data.max()))
-
-
