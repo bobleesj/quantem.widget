@@ -28,7 +28,7 @@ Features
 - **Colorbar** -- Vertical colorbar with data range labels
 - **Log scale** -- Logarithmic intensity mapping for amplitude mode
 - **Auto contrast** -- Percentile-based contrast stretching
-- **Scale bar** -- Calibrated when ``pixel_size_angstrom`` is set
+- **Scale bar** -- Calibrated when ``pixel_size`` is set
 - **Figure export** -- Publication-quality PNG with title, scale bar, and colorbar
 
 Display Modes
@@ -60,10 +60,16 @@ State Persistence
 
    w.summary()          # Print human-readable state
    w.state_dict()       # Get all settings as a dict
-   w.save("state.json") # Save to JSON file
+   w.save("state.json") # Save versioned envelope JSON file
 
    # Restore from file or dict
    w2 = ShowComplex2D(data, state="state.json")
+
+Examples
+--------
+
+- :doc:`Simple demo </examples/showcomplex2d/showcomplex2d_simple>`
+- :doc:`All features </examples/showcomplex2d/showcomplex2d_all_features>`
 
 API Reference
 -------------

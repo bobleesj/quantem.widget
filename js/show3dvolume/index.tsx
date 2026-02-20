@@ -29,9 +29,11 @@ import "./show3dvolume.css";
 import { useTheme } from "../theme";
 import { VolumeRenderer, CameraState, DEFAULT_CAMERA } from "../webgl-volume";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawColorbar, exportFigure } from "../scalebar";
-import { extractBytes, extractFloat32, formatNumber, downloadBlob, downloadDataView } from "../format";
+import { extractFloat32, formatNumber, downloadBlob, downloadDataView } from "../format";
 import { computeHistogramFromBytes } from "../histogram";
 import { findDataRange, applyLogScale, percentileClip, sliderRange } from "../stats";
+import { ControlCustomizer } from "../control-customizer";
+import { computeToolVisibility } from "../tool-parity";
 
 // ============================================================================
 // UI Styles (matching Show3D exactly)
@@ -89,7 +91,7 @@ const compactButton = {
   "&.Mui-disabled": { color: "#666", borderColor: "#444" },
 };
 
-import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen } from "../colormaps";
+import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen } from "../colormaps";
 
 import { WebGPUFFT, getWebGPUFFT, fft2d, fftshift, nextPow2, computeMagnitude, autoEnhanceFFT } from "../webgpu-fft";
 
@@ -282,13 +284,36 @@ function Show3DVolume() {
   const [showStats] = useModelState<boolean>("show_stats");
   const [showCrosshair, setShowCrosshair] = useModelState<boolean>("show_crosshair");
   const [showFft, setShowFft] = useModelState<boolean>("show_fft");
+  const [disabledTools, setDisabledTools] = useModelState<string[]>("disabled_tools");
+  const [hiddenTools, setHiddenTools] = useModelState<string[]>("hidden_tools");
   const [dimLabels] = useModelState<string[]>("dim_labels");
   const [statsMean] = useModelState<number[]>("stats_mean");
   const [statsMin] = useModelState<number[]>("stats_min");
   const [statsMax] = useModelState<number[]>("stats_max");
   const [statsStd] = useModelState<number[]>("stats_std");
-  const [pixelSizeAngstrom] = useModelState<number>("pixel_size_angstrom");
+  const [pixelSize] = useModelState<number>("pixel_size");
   const [scaleBarVisible] = useModelState<boolean>("scale_bar_visible");
+
+  const toolVisibility = React.useMemo(
+    () => computeToolVisibility("Show3DVolume", disabledTools, hiddenTools),
+    [disabledTools, hiddenTools],
+  );
+  const hideDisplay = toolVisibility.isHidden("display");
+  const hideHistogram = toolVisibility.isHidden("histogram");
+  const hideStats = toolVisibility.isHidden("stats");
+  const hidePlayback = toolVisibility.isHidden("playback") || toolVisibility.isHidden("navigation");
+  const hideView = toolVisibility.isHidden("view");
+  const hideExport = toolVisibility.isHidden("export");
+  const hideVolume = toolVisibility.isHidden("volume");
+
+  const lockDisplay = toolVisibility.isLocked("display");
+  const lockHistogram = toolVisibility.isLocked("histogram");
+  const lockStats = toolVisibility.isLocked("stats");
+  const lockPlayback = toolVisibility.isLocked("playback") || toolVisibility.isLocked("navigation");
+  const lockView = toolVisibility.isLocked("view");
+  const lockExport = toolVisibility.isLocked("export");
+  const lockVolume = toolVisibility.isLocked("volume");
+  const effectiveShowFft = showFft && !hideDisplay;
 
   // Canvas refs
   const canvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([null, null, null]);
@@ -361,6 +386,7 @@ function Show3DVolume() {
   const [, setExportAxis] = useModelState<number>("_export_axis");
   const [, setGifExportRequested] = useModelState<boolean>("_gif_export_requested");
   const [gifData] = useModelState<DataView>("_gif_data");
+  const [gifMetadataJson] = useModelState<string>("_gif_metadata_json");
   const [, setZipExportRequested] = useModelState<boolean>("_zip_export_requested");
   const [zipData] = useModelState<DataView>("_zip_data");
   const [exporting, setExporting] = React.useState(false);
@@ -380,6 +406,18 @@ function Show3DVolume() {
     });
   }, [sliceDims, canvasTarget]);
 
+  React.useEffect(() => {
+    if (hideDisplay && showFft) {
+      setShowFft(false);
+    }
+  }, [hideDisplay, showFft, setShowFft]);
+
+  React.useEffect(() => {
+    if (lockPlayback && playing) {
+      setPlaying(false);
+    }
+  }, [lockPlayback, playing, setPlaying]);
+
   // Prevent page scroll on canvases
   React.useEffect(() => {
     const preventDefault = (e: WheelEvent) => e.preventDefault();
@@ -389,7 +427,7 @@ function Show3DVolume() {
       canvasRefs.current.forEach(c => c?.removeEventListener("wheel", preventDefault));
       fftCanvasRefs.current.forEach(c => c?.removeEventListener("wheel", preventDefault));
     };
-  }, [allFloats, showFft]);
+  }, [allFloats, effectiveShowFft]);
 
   // Compute histogram from XY slice (primary view)
   React.useEffect(() => {
@@ -404,8 +442,12 @@ function Show3DVolume() {
   React.useEffect(() => {
     if (!gifData || gifData.byteLength === 0) return;
     downloadDataView(gifData, "show3dvolume_animation.gif", "image/gif");
+    const metaText = (gifMetadataJson || "").trim();
+    if (metaText) {
+      downloadBlob(new Blob([metaText], { type: "application/json" }), "show3dvolume_animation.json");
+    }
     setExporting(false);
-  }, [gifData]);
+  }, [gifData, gifMetadataJson]);
 
   // Download ZIP when data arrives from Python
   React.useEffect(() => {
@@ -642,7 +684,7 @@ function Show3DVolume() {
       if (!uiCtx) continue;
       uiCtx.clearRect(0, 0, uiCanvas.width, uiCanvas.height);
       if (scaleBarVisible) {
-        const pxSize = pixelSizeAngstrom || 0;
+        const pxSize = pixelSize || 0;
         const sliceW = sliceDims[a][1];
         const unit = pxSize > 0 ? "Å" : "px";
         const size = pxSize > 0 ? pxSize : 1;
@@ -659,13 +701,13 @@ function Show3DVolume() {
         uiCtx.restore();
       }
     }
-  }, [pixelSizeAngstrom, scaleBarVisible, zooms, canvasSizes, sliceDims, showColorbar, cmap, imageDataRange, imageVminPct, imageVmaxPct, logScale]);
+  }, [pixelSize, scaleBarVisible, zooms, canvasSizes, sliceDims, showColorbar, cmap, imageDataRange, imageVminPct, imageVmaxPct, logScale]);
 
   // -------------------------------------------------------------------------
   // FFT computation and caching
   // -------------------------------------------------------------------------
   React.useEffect(() => {
-    if (!showFft || !allFloats || allFloats.length === 0) return;
+    if (!effectiveShowFft || !allFloats || allFloats.length === 0) return;
 
     const lut = COLORMAPS[fftColormap] || COLORMAPS.inferno;
 
@@ -741,11 +783,11 @@ function Show3DVolume() {
     };
 
     computeAllFFTs();
-  }, [showFft, allFloats, sliceX, sliceY, sliceZ, nx, ny, nz, fftColormap, fftLogScale, fftAuto, gpuReady, canvasSizes, fftZooms]);
+  }, [effectiveShowFft, allFloats, sliceX, sliceY, sliceZ, nx, ny, nz, fftColormap, fftLogScale, fftAuto, gpuReady, canvasSizes, fftZooms]);
 
   // Redraw cached FFT with zoom/pan (cheap -- no recomputation)
   React.useEffect(() => {
-    if (!showFft) return;
+    if (!effectiveShowFft) return;
     for (let a = 0; a < 3; a++) {
       const canvas = fftCanvasRefs.current[a];
       const offscreen = fftOffscreenRefs.current[a];
@@ -767,11 +809,11 @@ function Show3DVolume() {
         ctx.drawImage(offscreen, 0, 0, ow, oh, 0, 0, cw, ch);
       }
     }
-  }, [showFft, fftZooms, canvasSizes]);
+  }, [effectiveShowFft, fftZooms, canvasSizes]);
 
   // Render FFT overlays (reciprocal-space scale bars per axis)
   React.useEffect(() => {
-    if (!showFft || pixelSizeAngstrom <= 0) return;
+    if (!effectiveShowFft || pixelSize <= 0) return;
     const dims: [number, number][] = [[ny, nx], [nz, nx], [nz, ny]];
     for (let a = 0; a < 3; a++) {
       const overlay = fftOverlayRefs.current[a];
@@ -784,10 +826,10 @@ function Show3DVolume() {
       ctx.clearRect(0, 0, overlay.width, overlay.height);
       const [, sliceW] = dims[a];
       const pw = nextPow2(sliceW);
-      const fftPixelSize = 1 / (pw * pixelSizeAngstrom);
+      const fftPixelSize = 1 / (pw * pixelSize);
       drawFFTScaleBarHiDPI(overlay, DPR, fftZooms[a].zoom, fftPixelSize, pw);
     }
-  }, [showFft, fftZooms, canvasSizes, pixelSizeAngstrom, nx, ny, nz]);
+  }, [effectiveShowFft, fftZooms, canvasSizes, pixelSize, nx, ny, nz]);
 
   // -------------------------------------------------------------------------
   // Playback logic (matching Show3D pattern)
@@ -837,21 +879,33 @@ function Show3DVolume() {
       const end = effectiveLoopEnds[axis];
       const setter = sliceSettersRef.current[axis];
       playIntervalRef.current = window.setInterval(() => {
-        setter((prev: number) => {
-          if (boomerang) {
-            const next = prev + bounceDirRef.current;
-            if (next > end) { bounceDirRef.current = -1; return prev - 1 >= start ? prev - 1 : prev; }
-            if (next < start) { bounceDirRef.current = 1; return prev + 1 <= end ? prev + 1 : prev; }
-            return next;
-          }
-          let next = prev + (reverse ? -1 : 1);
-          if (reverse) {
-            if (next < start) { if (!loop) setPlaying(false); return loop ? end : start; }
+        const prev = sliceValuesRef.current[axis];
+        let next = prev;
+        if (boomerang) {
+          const candidate = prev + bounceDirRef.current;
+          if (candidate > end) {
+            bounceDirRef.current = -1;
+            next = prev - 1 >= start ? prev - 1 : prev;
+          } else if (candidate < start) {
+            bounceDirRef.current = 1;
+            next = prev + 1 <= end ? prev + 1 : prev;
           } else {
-            if (next > end) { if (!loop) setPlaying(false); return loop ? start : end; }
+            next = candidate;
           }
-          return next;
-        });
+        } else {
+          next = prev + (reverse ? -1 : 1);
+          if (reverse) {
+            if (next < start) {
+              if (!loop) setPlaying(false);
+              next = loop ? end : start;
+            }
+          } else if (next > end) {
+            if (!loop) setPlaying(false);
+            next = loop ? start : end;
+          }
+        }
+        setter(next);
+        sliceValuesRef.current[axis] = next;
       }, intervalMs);
     }
     return () => {
@@ -947,15 +1001,23 @@ function Show3DVolume() {
   const handleMouseLeave = () => { setDragAxis(null); setDragStart(null); setCursorInfo(null); };
 
   const handleResetAll = () => {
-    setZooms([DEFAULT_ZOOM, DEFAULT_ZOOM, DEFAULT_ZOOM]);
-    setFftZooms([DEFAULT_ZOOM, DEFAULT_ZOOM, DEFAULT_ZOOM]);
-    setCamera(DEFAULT_CAMERA);
-    setVolumeOpacity(0.5);
-    setVolumeBrightness(1.0);
-    setLoopStarts([0, 0, 0]);
-    setLoopEnds([-1, -1, -1]);
-    setImageVminPct(0);
-    setImageVmaxPct(100);
+    if (!lockView) {
+      setZooms([DEFAULT_ZOOM, DEFAULT_ZOOM, DEFAULT_ZOOM]);
+      setFftZooms([DEFAULT_ZOOM, DEFAULT_ZOOM, DEFAULT_ZOOM]);
+    }
+    if (!lockVolume) {
+      setCamera(DEFAULT_CAMERA);
+      setVolumeOpacity(0.5);
+      setVolumeBrightness(1.0);
+    }
+    if (!lockPlayback) {
+      setLoopStarts([0, 0, 0]);
+      setLoopEnds([-1, -1, -1]);
+    }
+    if (!lockDisplay) {
+      setImageVminPct(0);
+      setImageVmaxPct(100);
+    }
   };
 
   // -------------------------------------------------------------------------
@@ -968,24 +1030,34 @@ function Show3DVolume() {
     const activeAxis = playAxis < 3 ? playAxis : 0;
     switch (e.key) {
       case " ":
-        e.preventDefault();
-        setPlaying(!playing);
+        if (!lockPlayback) {
+          e.preventDefault();
+          setPlaying(!playing);
+        }
         break;
       case "ArrowLeft":
-        e.preventDefault();
-        axisSetters[activeAxis](Math.max(0, axisValues[activeAxis] - 1));
+        if (!lockPlayback) {
+          e.preventDefault();
+          axisSetters[activeAxis](Math.max(0, axisValues[activeAxis] - 1));
+        }
         break;
       case "ArrowRight":
-        e.preventDefault();
-        axisSetters[activeAxis](Math.min(axisMaxes[activeAxis], axisValues[activeAxis] + 1));
+        if (!lockPlayback) {
+          e.preventDefault();
+          axisSetters[activeAxis](Math.min(axisMaxes[activeAxis], axisValues[activeAxis] + 1));
+        }
         break;
       case "Home":
-        e.preventDefault();
-        axisSetters[activeAxis](0);
+        if (!lockPlayback) {
+          e.preventDefault();
+          axisSetters[activeAxis](0);
+        }
         break;
       case "End":
-        e.preventDefault();
-        axisSetters[activeAxis](axisMaxes[activeAxis]);
+        if (!lockPlayback) {
+          e.preventDefault();
+          axisSetters[activeAxis](axisMaxes[activeAxis]);
+        }
         break;
       case "r":
       case "R":
@@ -998,6 +1070,7 @@ function Show3DVolume() {
   // Export handlers
   // -------------------------------------------------------------------------
   const handleExportPng = () => {
+    if (lockExport) return;
     setExportAnchor(null);
     // Export all 3 slice canvases as individual PNGs
     for (let a = 0; a < 3; a++) {
@@ -1011,6 +1084,7 @@ function Show3DVolume() {
   };
 
   const handleExportGif = () => {
+    if (lockExport) return;
     setExportAnchor(null);
     setExporting(true);
     setExportAxis(playAxis < 3 ? playAxis : 0);
@@ -1018,6 +1092,7 @@ function Show3DVolume() {
   };
 
   const handleExportZip = () => {
+    if (lockExport) return;
     setExportAnchor(null);
     setExporting(true);
     setExportAxis(playAxis < 3 ? playAxis : 0);
@@ -1025,6 +1100,7 @@ function Show3DVolume() {
   };
 
   const handleExportFigure = (withColorbar: boolean) => {
+    if (lockExport) return;
     setExportAnchor(null);
     if (!allFloats || allFloats.length === 0) return;
     const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
@@ -1058,9 +1134,9 @@ function Show3DVolume() {
         vmin,
         vmax,
         logScale,
-        pixelSize: pixelSizeAngstrom > 0 ? pixelSizeAngstrom : undefined,
+        pixelSize: pixelSize > 0 ? pixelSize : undefined,
         showColorbar: withColorbar,
-        showScaleBar: pixelSizeAngstrom > 0,
+        showScaleBar: pixelSize > 0,
       });
       figCanvas.toBlob((blob) => {
         if (blob) downloadBlob(blob, `show3dvolume_figure_${AXES[a]}.png`);
@@ -1169,6 +1245,7 @@ function Show3DVolume() {
   return (
     <Box className="show3dvolume-root" tabIndex={0} onKeyDown={handleKeyDown} sx={{ ...container.root, bgcolor: tc.bg, color: tc.text }}>
       {/* 3D Volume Renderer */}
+      {!hideVolume && (
       <Box sx={{ mb: `${SPACING.LG}px` }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
           <Typography variant="caption" sx={{ ...typography.label }}>
@@ -1184,11 +1261,30 @@ function Show3DVolume() {
               <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
               <KeyboardShortcuts items={[["Space", "Play / Pause"], ["← / →", "Prev / Next slice"], ["Home / End", "First / Last slice"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
             </Box>} theme={themeInfo.theme} />
+            <ControlCustomizer
+              widgetName="Show3DVolume"
+              hiddenTools={hiddenTools}
+              setHiddenTools={setHiddenTools}
+              disabledTools={disabledTools}
+              setDisabledTools={setDisabledTools}
+              themeColors={tc}
+            />
           </Typography>
           <Stack direction="row" alignItems="center" spacing={0.5}>
-            <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>FFT:</Typography>
-            <Switch checked={showFft} onChange={(e) => setShowFft(e.target.checked)} size="small" sx={switchStyles.small} />
-            <Button size="small" sx={{ ...compactButton, color: tc.accent }} onClick={async () => {
+            {!hideDisplay && (
+              <>
+                <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>FFT:</Typography>
+                <Switch
+                  checked={showFft}
+                  onChange={(e) => { if (!lockDisplay) setShowFft(e.target.checked); }}
+                  disabled={lockDisplay}
+                  size="small"
+                  sx={switchStyles.small}
+                />
+              </>
+            )}
+            {!hideExport && (
+              <Button size="small" sx={{ ...compactButton, color: tc.accent }} disabled={lockExport} onClick={async () => {
               const canvas = canvasRefs.current[0];
               if (!canvas) return;
               try {
@@ -1198,16 +1294,23 @@ function Show3DVolume() {
               } catch {
                 canvas.toBlob((b) => { if (b) downloadBlob(b, "show3dvolume_xy.png"); }, "image/png");
               }
-            }}>Copy</Button>
-            <Button size="small" sx={{ ...compactButton, color: tc.accent }} onClick={(e) => setExportAnchor(e.currentTarget)} disabled={exporting}>{exporting ? "Exporting..." : "Export"}</Button>
-            <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
-              <MenuItem onClick={() => handleExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
-              <MenuItem onClick={() => handleExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
-              <MenuItem onClick={handleExportPng} sx={{ fontSize: 12 }}>PNG (current slices)</MenuItem>
-              <MenuItem onClick={handleExportGif} sx={{ fontSize: 12 }}>GIF (animation)</MenuItem>
-              <MenuItem onClick={handleExportZip} sx={{ fontSize: 12 }}>ZIP (all slices)</MenuItem>
-            </Menu>
-            <Button size="small" sx={compactButton} disabled={!cameraChanged} onClick={handleVolumeDoubleClick}>Reset View</Button>
+              }}>Copy</Button>
+            )}
+            {!hideExport && (
+              <>
+                <Button size="small" sx={{ ...compactButton, color: tc.accent }} onClick={(e) => { if (!lockExport) setExportAnchor(e.currentTarget); }} disabled={lockExport || exporting}>{exporting ? "Exporting..." : "Export"}</Button>
+                <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
+                  <MenuItem disabled={lockExport} onClick={() => handleExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
+                  <MenuItem disabled={lockExport} onClick={() => handleExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
+                  <MenuItem disabled={lockExport} onClick={handleExportPng} sx={{ fontSize: 12 }}>PNG (current slices)</MenuItem>
+                  <MenuItem disabled={lockExport} onClick={handleExportGif} sx={{ fontSize: 12 }}>GIF (animation)</MenuItem>
+                  <MenuItem disabled={lockExport} onClick={handleExportZip} sx={{ fontSize: 12 }}>ZIP (all slices)</MenuItem>
+                </Menu>
+              </>
+            )}
+            {!hideView && (
+              <Button size="small" sx={compactButton} disabled={lockView || lockVolume || !cameraChanged} onClick={() => { if (!lockView && !lockVolume) handleVolumeDoubleClick(); }}>Reset View</Button>
+            )}
           </Stack>
         </Stack>
         {webglSupported ? (
@@ -1216,14 +1319,14 @@ function Show3DVolume() {
               ...container.imageBox,
               width: volumeCanvasSize,
               height: volumeCanvasSize,
-              cursor: volumeDrag ? "grabbing" : "grab",
+              cursor: lockVolume ? "default" : (volumeDrag ? "grabbing" : "grab"),
             }}
-            onMouseDown={handleVolumeMouseDown}
-            onMouseMove={handleVolumeMouseMove}
-            onMouseUp={handleVolumeMouseUp}
-            onMouseLeave={handleVolumeMouseUp}
-            onWheel={handleVolumeWheel}
-            onDoubleClick={handleVolumeDoubleClick}
+            onMouseDown={(e) => { if (!lockVolume) handleVolumeMouseDown(e); }}
+            onMouseMove={(e) => { if (!lockVolume) handleVolumeMouseMove(e); }}
+            onMouseUp={() => { if (!lockVolume) handleVolumeMouseUp(); }}
+            onMouseLeave={() => { if (!lockVolume) handleVolumeMouseUp(); }}
+            onWheel={(e) => { if (!lockVolume) handleVolumeWheel(e); }}
+            onDoubleClick={() => { if (!lockVolume && !lockView) handleVolumeDoubleClick(); }}
             onContextMenu={(e) => e.preventDefault()}
           >
             <canvas
@@ -1234,10 +1337,10 @@ function Show3DVolume() {
             />
             {/* Resize handle */}
             <Box
-              onMouseDown={handleVolumeResizeStart}
+              onMouseDown={(e) => { if (!lockVolume) handleVolumeResizeStart(e); }}
               sx={{
                 position: "absolute", bottom: 2, right: 2, width: 12, height: 12,
-                cursor: "nwse-resize", opacity: 0.4,
+                cursor: lockVolume ? "default" : "nwse-resize", opacity: lockVolume ? 0.2 : 0.4,
                 background: `linear-gradient(135deg, transparent 50%, ${tc.textMuted} 50%)`,
                 "&:hover": { opacity: 1 },
               }}
@@ -1260,6 +1363,7 @@ function Show3DVolume() {
             <Slider
               value={volumeOpacity} min={0} max={1} step={0.01}
               onChange={(_, v) => setVolumeOpacity(v as number)}
+              disabled={lockVolume}
               size="small" sx={{ ...sliderStyles.small, width: 60 }}
             />
             <Typography sx={{ ...typography.value, color: tc.textMuted, minWidth: 24 }}>{volumeOpacity.toFixed(2)}</Typography>
@@ -1267,14 +1371,16 @@ function Show3DVolume() {
             <Slider
               value={volumeBrightness} min={0.1} max={3} step={0.1}
               onChange={(_, v) => setVolumeBrightness(v as number)}
+              disabled={lockVolume}
               size="small" sx={{ ...sliderStyles.small, width: 60 }}
             />
             <Typography sx={{ ...typography.value, color: tc.textMuted, minWidth: 24 }}>{volumeBrightness.toFixed(1)}</Typography>
             <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Planes:</Typography>
-            <Switch checked={showSlicePlanes} onChange={(e) => setShowSlicePlanes(e.target.checked)} size="small" sx={switchStyles.small} />
+            <Switch checked={showSlicePlanes} onChange={(e) => setShowSlicePlanes(e.target.checked)} disabled={lockVolume} size="small" sx={switchStyles.small} />
           </Box>
         )}
       </Box>
+      )}
       {/* Slice canvases row */}
       <Stack direction="row" spacing={`${SPACING.LG}px`}>
         {AXES.map((_, a) => {
@@ -1285,18 +1391,18 @@ function Show3DVolume() {
               <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
                 <Typography variant="caption" sx={{ ...typography.label }}>{a === 0 && title ? title : axisLabels[a]}</Typography>
                 {a === 0 && (
-                  <Button size="small" sx={compactButton} disabled={!needsReset} onClick={handleResetAll}>Reset</Button>
+                  <Button size="small" sx={compactButton} disabled={lockView || !needsReset} onClick={() => { if (!lockView) handleResetAll(); }}>Reset</Button>
                 )}
               </Stack>
               {/* Canvas with plane-colored border */}
               <Box
                 sx={{ ...container.imageBox, width: cw, height: ch, cursor: "grab", borderColor: ["#4d80ff", "#4dff66", "#ff4d4d"][a] }}
-                onMouseDown={(e) => handleMouseDown(e, a)}
+                onMouseDown={(e) => { if (!lockView) handleMouseDown(e, a); }}
                 onMouseMove={(e) => handleMouseMove(e, a)}
                 onMouseUp={handleMouseUp}
                 onMouseLeave={handleMouseLeave}
-                onWheel={(e) => handleWheel(e, a)}
-                onDoubleClick={() => handleDoubleClick(a)}
+                onWheel={(e) => { if (!lockView) handleWheel(e, a); }}
+                onDoubleClick={() => { if (!lockView) handleDoubleClick(a); }}
               >
                 <canvas
                   ref={(el) => { canvasRefs.current[a] = el; }}
@@ -1326,18 +1432,18 @@ function Show3DVolume() {
                 )}
                 {/* Resize handle */}
                 <Box
-                  onMouseDown={handleResizeStart}
+                  onMouseDown={(e) => { if (!lockView) handleResizeStart(e); }}
                   sx={{
                     position: "absolute", bottom: 2, right: 2, width: 12, height: 12,
-                    cursor: "nwse-resize", opacity: 0.4,
+                    cursor: lockView ? "default" : "nwse-resize", opacity: lockView ? 0.2 : 0.4,
                     background: `linear-gradient(135deg, transparent 50%, ${tc.textMuted} 50%)`,
                     "&:hover": { opacity: 1 },
                   }}
                 />
               </Box>
               {/* Stats bar */}
-              {showStats && (
-                <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: tc.bgAlt, display: "flex", gap: 2, alignItems: "center", overflow: "hidden", whiteSpace: "nowrap", width: cw, boxSizing: "border-box" }}>
+              {showStats && !hideStats && (
+                <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: tc.bgAlt, display: "flex", gap: 2, alignItems: "center", overflow: "hidden", whiteSpace: "nowrap", width: cw, boxSizing: "border-box", opacity: lockStats ? 0.6 : 1 }}>
                   {[
                     { label: "Mean", value: statsMean?.[a] },
                     { label: "Min", value: statsMin?.[a] },
@@ -1351,24 +1457,24 @@ function Show3DVolume() {
                 </Box>
               )}
               {/* FFT canvas (inline, below stats) */}
-              {showFft && (
+              {effectiveShowFft && (
                 <Box sx={{ mt: `${SPACING.SM}px` }}>
                   <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 20 }}>
                     <Typography variant="caption" sx={{ ...typography.label, fontSize: 10 }}>
                       FFT {["XY", "XZ", "YZ"][a]} {gpuReady ? "(GPU)" : "(CPU)"}
                     </Typography>
                     {a === 0 && fftNeedsReset && (
-                      <Button size="small" sx={compactButton} onClick={handleFftResetAll}>Reset</Button>
+                      <Button size="small" sx={compactButton} disabled={lockView} onClick={() => { if (!lockView) handleFftResetAll(); }}>Reset</Button>
                     )}
                   </Stack>
                   <Box
                     sx={{ ...container.imageBox, width: cw, height: ch, cursor: "grab", borderColor: ["#4d80ff", "#4dff66", "#ff4d4d"][a] }}
-                    onMouseDown={(e) => handleFftMouseDown(e, a)}
-                    onMouseMove={(e) => handleFftMouseMove(e, a)}
-                    onMouseUp={handleFftMouseUp}
-                    onMouseLeave={handleFftMouseUp}
-                    onWheel={(e) => handleFftWheel(e, a)}
-                    onDoubleClick={() => handleFftDoubleClick(a)}
+                    onMouseDown={(e) => { if (!lockView) handleFftMouseDown(e, a); }}
+                    onMouseMove={(e) => { if (!lockView) handleFftMouseMove(e, a); }}
+                    onMouseUp={() => { if (!lockView) handleFftMouseUp(); }}
+                    onMouseLeave={() => { if (!lockView) handleFftMouseUp(); }}
+                    onWheel={(e) => { if (!lockView) handleFftWheel(e, a); }}
+                    onDoubleClick={() => { if (!lockView) handleFftDoubleClick(a); }}
                   >
                     <canvas
                       ref={(el) => { fftCanvasRefs.current[a] = el; }}
@@ -1391,6 +1497,7 @@ function Show3DVolume() {
                 </Box>
               )}
               {/* Slider row (always at bottom) — 3-thumb when loop on, single when off */}
+              {!hidePlayback && (
               <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, width: cw, maxWidth: cw, boxSizing: "border-box" }}>
                 <Typography sx={{ ...typography.labelSmall, color: tc.textMuted, flexShrink: 0 }}>{dl[a]}</Typography>
                 {loop ? (
@@ -1405,6 +1512,7 @@ function Show3DVolume() {
                     disableSwap
                     min={0}
                     max={sliceMaxes[a]}
+                    disabled={lockPlayback}
                     size="small"
                     valueLabelDisplay="auto"
                     valueLabelFormat={(v) => `${v}`}
@@ -1424,6 +1532,7 @@ function Show3DVolume() {
                     min={0}
                     max={sliceMaxes[a]}
                     onChange={sliceSetters[a]}
+                    disabled={lockPlayback}
                     size="small"
                     sx={{ ...sliderStyles.small, flex: 1, minWidth: 40 }}
                   />
@@ -1435,71 +1544,83 @@ function Show3DVolume() {
                   <Typography sx={{ ...typography.label, fontSize: 10, color: tc.accent, fontWeight: "bold" }}>{zooms[a].zoom.toFixed(1)}x</Typography>
                 )}
               </Box>
+              )}
             </Box>
           );
         })}
       </Stack>
       {/* FFT controls row */}
-      {showFft && (
+      {effectiveShowFft && (
         <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
           <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>FFT Scale:</Typography>
-          <Select value={fftLogScale ? "log" : "linear"} onChange={(e) => setFftLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
+          <Select disabled={lockDisplay} value={fftLogScale ? "log" : "linear"} onChange={(e) => setFftLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
             <MenuItem value="linear">Lin</MenuItem>
             <MenuItem value="log">Log</MenuItem>
           </Select>
           <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Color:</Typography>
-          <Select value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={themedMenuProps}>
+          <Select disabled={lockDisplay} value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={themedMenuProps}>
             {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
           </Select>
           <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Auto:</Typography>
-          <Switch checked={fftAuto} onChange={(e) => setFftAuto(e.target.checked)} size="small" sx={switchStyles.small} />
+          <Switch checked={fftAuto} onChange={(e) => setFftAuto(e.target.checked)} disabled={lockDisplay} size="small" sx={switchStyles.small} />
         </Box>
       )}
       {/* Controls row with histogram on right */}
-      {showControls && (
+      {showControls && (!hideDisplay || !hideHistogram) && (
         <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: "fit-content" }}>
-          <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, justifyContent: "center" }}>
-            <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
-              <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Scale:</Typography>
-              <Select value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
-                <MenuItem value="linear">Lin</MenuItem>
-                <MenuItem value="log">Log</MenuItem>
-              </Select>
-              <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Color:</Typography>
-              <Select size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}>
-                {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
-              </Select>
+          {!hideDisplay && (
+            <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, justifyContent: "center" }}>
+              <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
+                <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Scale:</Typography>
+                <Select disabled={lockDisplay} value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
+                  <MenuItem value="linear">Lin</MenuItem>
+                  <MenuItem value="log">Log</MenuItem>
+                </Select>
+                <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Color:</Typography>
+                <Select disabled={lockDisplay} size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}>
+                  {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
+                </Select>
+              </Box>
+              <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
+                <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Auto:</Typography>
+                <Switch checked={autoContrast} onChange={(e) => { if (!lockDisplay) setAutoContrast(e.target.checked); }} disabled={lockDisplay} size="small" sx={switchStyles.small} />
+                <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Cross:</Typography>
+                <Switch checked={showCrosshair} onChange={(e) => { if (!lockDisplay) setShowCrosshair(e.target.checked); }} disabled={lockDisplay} size="small" sx={switchStyles.small} />
+                <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Colorbar:</Typography>
+                <Switch checked={showColorbar} onChange={(e) => { if (!lockDisplay) setShowColorbar(e.target.checked); }} disabled={lockDisplay} size="small" sx={switchStyles.small} />
+              </Box>
             </Box>
-            <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
-              <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Auto:</Typography>
-              <Switch checked={autoContrast} onChange={(e) => setAutoContrast(e.target.checked)} size="small" sx={switchStyles.small} />
-              <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Cross:</Typography>
-              <Switch checked={showCrosshair} onChange={(e) => setShowCrosshair(e.target.checked)} size="small" sx={switchStyles.small} />
-              <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>Colorbar:</Typography>
-              <Switch checked={showColorbar} onChange={(e) => setShowColorbar(e.target.checked)} size="small" sx={switchStyles.small} />
+          )}
+          {!hideHistogram && (
+            <Box sx={{ display: "flex", flexDirection: "column", justifyContent: "center", opacity: lockHistogram ? 0.6 : 1 }}>
+              <Histogram
+                data={imageHistogramData}
+                colormap={cmap}
+                vminPct={imageVminPct}
+                vmaxPct={imageVmaxPct}
+                onRangeChange={(min, max) => {
+                  if (!lockHistogram) {
+                    setImageVminPct(min);
+                    setImageVmaxPct(max);
+                  }
+                }}
+                width={110}
+                height={58}
+                theme={themeInfo.theme}
+                dataMin={imageDataRange.min}
+                dataMax={imageDataRange.max}
+              />
             </Box>
-          </Box>
-          <Box sx={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
-            <Histogram
-              data={imageHistogramData}
-              colormap={cmap}
-              vminPct={imageVminPct}
-              vmaxPct={imageVmaxPct}
-              onRangeChange={(min, max) => { setImageVminPct(min); setImageVmaxPct(max); }}
-              width={110}
-              height={58}
-              theme={themeInfo.theme}
-              dataMin={imageDataRange.min}
-              dataMax={imageDataRange.max}
-            />
-          </Box>
+          )}
         </Box>
       )}
       {/* Playback: transport + axis selector + fps + loop + bounce */}
+      {!hidePlayback && (
       <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
         <Select
           value={playAxis}
-          onChange={(e) => { setPlaying(false); setPlayAxis(e.target.value as number); }}
+          onChange={(e) => { if (!lockPlayback) { setPlaying(false); setPlayAxis(e.target.value as number); } }}
+          disabled={lockPlayback}
           size="small"
           sx={{ ...themedSelect, minWidth: 40, fontSize: 10 }}
           MenuProps={themedMenuProps}
@@ -1510,34 +1631,37 @@ function Show3DVolume() {
           <MenuItem value={3}>All</MenuItem>
         </Select>
         <Stack direction="row" spacing={0} sx={{ flexShrink: 0 }}>
-          <IconButton size="small" onClick={() => { setReverse(true); setPlaying(true); }} sx={{ color: reverse && playing ? tc.accent : tc.textMuted, p: 0.25 }}>
+          <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) { setReverse(true); setPlaying(true); } }} sx={{ color: reverse && playing ? tc.accent : tc.textMuted, p: 0.25 }}>
             <FastRewindIcon sx={{ fontSize: 18 }} />
           </IconButton>
-          <IconButton size="small" onClick={() => setPlaying(!playing)} sx={{ color: tc.accent, p: 0.25 }}>
+          <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) setPlaying(!playing); }} sx={{ color: tc.accent, p: 0.25 }}>
             {playing ? <PauseIcon sx={{ fontSize: 18 }} /> : <PlayArrowIcon sx={{ fontSize: 18 }} />}
           </IconButton>
-          <IconButton size="small" onClick={() => { setReverse(false); setPlaying(true); }} sx={{ color: !reverse && playing ? tc.accent : tc.textMuted, p: 0.25 }}>
+          <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) { setReverse(false); setPlaying(true); } }} sx={{ color: !reverse && playing ? tc.accent : tc.textMuted, p: 0.25 }}>
             <FastForwardIcon sx={{ fontSize: 18 }} />
           </IconButton>
-          <IconButton size="small" onClick={() => {
-            setPlaying(false);
-            if (playAxis === 3) {
-              for (let a = 0; a < 3; a++) sliceSettersRef.current[a](loopStarts[a]);
-            } else {
-              sliceSettersRef.current[playAxis](loopStarts[playAxis]);
+          <IconButton size="small" disabled={lockPlayback} onClick={() => {
+            if (!lockPlayback) {
+              setPlaying(false);
+              if (playAxis === 3) {
+                for (let a = 0; a < 3; a++) sliceSettersRef.current[a](loopStarts[a]);
+              } else {
+                sliceSettersRef.current[playAxis](loopStarts[playAxis]);
+              }
             }
           }} sx={{ color: tc.textMuted, p: 0.25 }}>
             <StopIcon sx={{ fontSize: 16 }} />
           </IconButton>
         </Stack>
         <Typography sx={{ ...typography.label, color: tc.textMuted, flexShrink: 0 }}>fps</Typography>
-        <Slider value={fps} min={1} max={30} step={1} onChange={(_, v) => setFps(v as number)} size="small" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
+        <Slider disabled={lockPlayback} value={fps} min={1} max={30} step={1} onChange={(_, v) => setFps(v as number)} size="small" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
         <Typography sx={{ ...typography.label, color: tc.textMuted, minWidth: 14, flexShrink: 0 }}>{Math.round(fps)}</Typography>
         <Typography sx={{ ...typography.label, color: tc.textMuted, flexShrink: 0 }}>Loop</Typography>
-        <Switch size="small" checked={loop} onChange={() => setLoop(!loop)} sx={{ ...switchStyles.small, flexShrink: 0 }} />
+        <Switch size="small" checked={loop} onChange={() => { if (!lockPlayback) setLoop(!loop); }} disabled={lockPlayback} sx={{ ...switchStyles.small, flexShrink: 0 }} />
         <Typography sx={{ ...typography.label, color: tc.textMuted, flexShrink: 0 }}>Bounce</Typography>
-        <Switch size="small" checked={boomerang} onChange={() => setBoomerang(!boomerang)} sx={{ ...switchStyles.small, flexShrink: 0 }} />
+        <Switch size="small" checked={boomerang} onChange={() => { if (!lockPlayback) setBoomerang(!boomerang); }} disabled={lockPlayback} sx={{ ...switchStyles.small, flexShrink: 0 }} />
       </Box>
+      )}
     </Box>
   );
 }

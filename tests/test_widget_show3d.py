@@ -1,8 +1,17 @@
+import json
 import numpy as np
 import pytest
 import torch
 
 from quantem.widget import Show3D
+
+try:
+    import h5py  # type: ignore
+
+    _HAS_H5PY = True
+except Exception:
+    h5py = None
+    _HAS_H5PY = False
 
 
 def test_show3d_numpy():
@@ -76,6 +85,15 @@ def test_show3d_roi():
     widget.set_roi(16, 16, radius=5)
     assert widget.roi_active is True
     assert widget.roi_stats["mean"] == pytest.approx(10.0)
+
+
+def test_show3d_roi_defaults_include_visibility_and_lock():
+    data = np.ones((3, 16, 16), dtype=np.float32)
+    widget = Show3D(data)
+    widget.add_roi(shape="circle")
+    roi = widget.roi_list[widget.roi_selected_idx]
+    assert roi["visible"] is True
+    assert roi["locked"] is False
 
 
 def test_show3d_roi_shapes_constant_mean():
@@ -160,8 +178,8 @@ def test_show3d_fps():
 def test_show3d_pixel_size():
     """Pixel size parameter is stored."""
     data = np.random.rand(5, 16, 16).astype(np.float32)
-    widget = Show3D(data, pixel_size=0.5)
-    assert widget.pixel_size == pytest.approx(0.5)
+    widget = Show3D(data, pixel_size=5.0)
+    assert widget.pixel_size == pytest.approx(5.0)
 
 
 def test_show3d_scale_bar():
@@ -596,9 +614,9 @@ def test_show3d_profile_distance_pixels():
 
 def test_show3d_profile_distance_calibrated():
     data = np.ones((2, 10, 10), dtype=np.float32)
-    widget = Show3D(data, pixel_size=0.5)  # 0.5 nm/px
+    widget = Show3D(data, pixel_size=5.0)  # 5.0 Å/px
     widget.set_profile((0, 0), (3, 4))
-    assert widget.profile_distance == pytest.approx(2.5)  # 5px * 0.5 nm/px
+    assert widget.profile_distance == pytest.approx(25.0)  # 5px * 5.0 Å/px
 
 
 def test_show3d_profile_no_line():
@@ -631,6 +649,86 @@ def test_show3d_dim_label_custom():
     data = np.random.rand(5, 8, 8).astype(np.float32)
     widget = Show3D(data, dim_label="Defocus")
     assert widget.dim_label == "Defocus"
+
+
+# =========================================================================
+# Tool Lock/Hide Controls
+# =========================================================================
+
+
+def test_show3d_disabled_tools_default():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    widget = Show3D(data)
+    assert widget.disabled_tools == []
+
+
+def test_show3d_disabled_tools_custom_and_alias():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    widget = Show3D(data, disabled_tools=["display", "navigation", "display"])
+    assert widget.disabled_tools == ["display", "playback"]
+
+
+def test_show3d_disabled_tools_flags():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    widget = Show3D(
+        data,
+        disable_histogram=True,
+        disable_playback=True,
+        disable_roi=True,
+    )
+    assert widget.disabled_tools == ["histogram", "playback", "roi"]
+
+
+def test_show3d_disabled_tools_navigation_flag_alias():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    widget = Show3D(data, disable_navigation=True)
+    assert widget.disabled_tools == ["playback"]
+
+
+def test_show3d_disabled_tools_disable_all():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    widget = Show3D(data, disabled_tools=["display"], disable_all=True)
+    assert widget.disabled_tools == ["all"]
+
+
+def test_show3d_disabled_tools_invalid():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    with pytest.raises(ValueError, match="Unknown tool group"):
+        Show3D(data, disabled_tools=["unknown"])
+
+
+def test_show3d_hidden_tools_default():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    widget = Show3D(data)
+    assert widget.hidden_tools == []
+
+
+def test_show3d_hidden_tools_custom_and_alias():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    widget = Show3D(data, hidden_tools=["stats", "navigation", "stats"])
+    assert widget.hidden_tools == ["stats", "playback"]
+
+
+def test_show3d_hidden_tools_flags():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    widget = Show3D(
+        data,
+        hide_display=True,
+        hide_profile=True,
+    )
+    assert widget.hidden_tools == ["display", "profile"]
+
+
+def test_show3d_hidden_tools_hide_all():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    widget = Show3D(data, hidden_tools=["display"], hide_all=True)
+    assert widget.hidden_tools == ["all"]
+
+
+def test_show3d_hidden_tools_invalid():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    with pytest.raises(ValueError, match="Unknown tool group"):
+        Show3D(data, hidden_tools=["bad_group"])
 
 
 # =========================================================================
@@ -695,6 +793,23 @@ def test_show3d_roi_shapes():
     assert widget.roi_list[widget.roi_selected_idx]["shape"] == "annular"
 
 
+def test_show3d_duplicate_and_delete_selected_roi():
+    data = np.ones((4, 24, 24), dtype=np.float32)
+    widget = Show3D(data)
+    widget.add_roi(row=8, col=9, shape="rectangle")
+    assert len(widget.roi_list) == 1
+    widget.duplicate_selected_roi(row_offset=2, col_offset=3)
+    assert len(widget.roi_list) == 2
+    assert widget.roi_selected_idx == 1
+    assert widget.roi_list[1]["row"] == 10
+    assert widget.roi_list[1]["col"] == 12
+    assert widget.roi_list[1]["visible"] is True
+    assert widget.roi_list[1]["locked"] is False
+    widget.delete_selected_roi()
+    assert len(widget.roi_list) == 1
+    assert widget.roi_selected_idx == 0
+
+
 # =========================================================================
 # ROI Plot Data
 # =========================================================================
@@ -756,26 +871,89 @@ def test_show3d_playback_path_chaining():
     assert result is widget
 
 
+def test_show3d_gif_generation_sets_metadata():
+    import json
+
+    data = np.random.rand(6, 12, 12).astype(np.float32)
+    widget = Show3D(data, cmap="viridis")
+    widget.loop_start = 1
+    widget.loop_end = 3
+    widget.fps = 4.0
+
+    widget._generate_gif()
+    assert widget._gif_data[:3] == b"GIF"
+    metadata = json.loads(widget._gif_metadata_json)
+    assert metadata["widget_name"] == "Show3D"
+    assert metadata["format"] == "gif"
+    assert metadata["export_kind"] == "animated_frames"
+    assert metadata["frame_range"] == {"start": 1, "end": 3}
+
+
+def test_show3d_gif_generation_no_frames_clears_metadata():
+    data = np.random.rand(4, 8, 8).astype(np.float32)
+    widget = Show3D(data)
+    widget.loop_start = 3
+    widget.loop_end = 1
+    widget._generate_gif()
+    assert widget._gif_data == b""
+    assert widget._gif_metadata_json == ""
+
+
+def test_show3d_bundle_generation_contains_expected_files():
+    import io
+    import json
+    import zipfile
+
+    data = np.random.rand(5, 12, 12).astype(np.float32)
+    widget = Show3D(data, cmap="viridis")
+    widget.add_roi(row=6, col=6, shape="circle")
+    widget._generate_bundle()
+
+    assert len(widget._bundle_data) > 0
+    with zipfile.ZipFile(io.BytesIO(widget._bundle_data), "r") as zf:
+        names = set(zf.namelist())
+        assert "roi_timeseries.csv" in names
+        assert "state.json" in names
+        assert any(name.startswith("frame_") and name.endswith(".png") for name in names)
+        state_payload = json.loads(zf.read("state.json").decode("utf-8"))
+        assert state_payload["widget_name"] == "Show3D"
+        csv_text = zf.read("roi_timeseries.csv").decode("utf-8")
+        assert "roi_1_mean" in csv_text
+
+
 # ── State Protocol ────────────────────────────────────────────────────────
 
 
 def test_show3d_state_dict_roundtrip():
     data = np.random.rand(10, 32, 32).astype(np.float32)
     w = Show3D(data, cmap="viridis", log_scale=True, auto_contrast=True,
-               title="Stack", pixel_size=0.5, fps=15.0, show_fft=True)
+               title="Stack", pixel_size=5.0, fps=15.0, show_fft=True,
+               disabled_tools=["display", "navigation"], hidden_tools=["stats"])
+    w.roi_focus_dim = 0.35
     w.roi_active = True
-    w.roi_list = [{"row": 10, "col": 15, "shape": "circle", "radius": 10, "radius_inner": 5, "width": 20, "height": 20, "color": "#4fc3f7", "line_width": 2, "highlight": False}]
+    w.roi_list = [{"row": 10, "col": 15, "shape": "circle", "radius": 10, "radius_inner": 5, "width": 20, "height": 20, "color": "#4fc3f7", "line_width": 2, "highlight": False, "visible": True, "locked": False}]
     w.roi_selected_idx = 0
     sd = w.state_dict()
     w2 = Show3D(data, state=sd)
     assert w2.cmap == "viridis"
     assert w2.log_scale is True
     assert w2.title == "Stack"
-    assert w2.pixel_size == pytest.approx(0.5)
+    assert w2.pixel_size == pytest.approx(5.0)
     assert w2.fps == pytest.approx(15.0)
     assert w2.show_fft is True
     assert w2.roi_active is True
     assert w2.roi_list[0]["row"] == 10
+    assert w2.roi_focus_dim == pytest.approx(0.35)
+    assert w2.disabled_tools == ["display", "playback"]
+    assert w2.hidden_tools == ["stats"]
+
+
+def test_show3d_state_dict_includes_tool_customization():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    w = Show3D(data, disabled_tools=["display"], hidden_tools=["playback"])
+    sd = w.state_dict()
+    assert sd["disabled_tools"] == ["display"]
+    assert sd["hidden_tools"] == ["playback"]
 
 
 def test_show3d_save_load_file(tmp_path):
@@ -786,7 +964,10 @@ def test_show3d_save_load_file(tmp_path):
     w.save(str(path))
     assert path.exists()
     saved = json.loads(path.read_text())
-    assert saved["cmap"] == "plasma"
+    assert saved["metadata_version"] == "1.0"
+    assert saved["widget_name"] == "Show3D"
+    assert isinstance(saved["widget_version"], str)
+    assert saved["state"]["cmap"] == "plasma"
     w2 = Show3D(data, state=str(path))
     assert w2.cmap == "plasma"
     assert w2.title == "Saved"
@@ -794,13 +975,13 @@ def test_show3d_save_load_file(tmp_path):
 
 def test_show3d_summary(capsys):
     data = np.random.rand(10, 32, 32).astype(np.float32)
-    w = Show3D(data, title="Focal Series", cmap="magma", pixel_size=0.25)
+    w = Show3D(data, title="Focal Series", cmap="magma", pixel_size=2.5)
     w.summary()
     out = capsys.readouterr().out
     assert "Focal Series" in out
     assert "10×32×32" in out
     assert "magma" in out
-    assert "0.25" in out
+    assert "2.5" in out
 
 
 def test_show3d_summary_with_single_profile_point(capsys):
@@ -835,3 +1016,224 @@ def test_show3d_set_image():
     assert widget.fps == 12
     assert widget.data_min == pytest.approx(float(new_data.min()))
     assert widget.data_max == pytest.approx(float(new_data.max()))
+
+
+def test_show3d_from_png_folder_explicit(tmp_path):
+    from PIL import Image
+
+    folder = tmp_path / "png_stack"
+    folder.mkdir()
+    for i in range(3):
+        arr = (np.ones((8, 6), dtype=np.float32) * (i + 1) * 25).astype(np.uint8)
+        Image.fromarray(arr).save(folder / f"slice_{i:02d}.png")
+
+    widget = Show3D.from_png_folder(folder)
+    assert widget.n_slices == 3
+    assert widget.height == 8
+    assert widget.width == 6
+    assert widget.labels[0] == "slice_00.png"
+
+    widget2 = Show3D.from_folder(folder, file_type="png")
+    assert widget2.n_slices == 3
+
+
+def test_show3d_from_path_folder_requires_explicit_file_type(tmp_path):
+    from PIL import Image
+
+    folder = tmp_path / "png_stack"
+    folder.mkdir()
+    Image.fromarray(np.zeros((5, 5), dtype=np.uint8)).save(folder / "a.png")
+
+    with pytest.raises(ValueError, match="file_type is required"):
+        Show3D.from_path(folder)
+
+
+def test_show3d_from_tiff_multipage(tmp_path):
+    from PIL import Image
+
+    tiff_path = tmp_path / "stack.tiff"
+    frames = []
+    for i in range(4):
+        arr = (np.ones((7, 5), dtype=np.float32) * (i + 1) * 10).astype(np.uint8)
+        frames.append(Image.fromarray(arr))
+    frames[0].save(tiff_path, save_all=True, append_images=frames[1:])
+
+    widget = Show3D.from_tiff(tiff_path)
+    assert widget.n_slices == 4
+    assert widget.height == 7
+    assert widget.width == 5
+    assert widget.labels[0].startswith("stack[0]")
+
+
+def test_show3d_from_tiff_folder_explicit(tmp_path):
+    from PIL import Image
+
+    folder = tmp_path / "tiff_stack"
+    folder.mkdir()
+    frames = [
+        Image.fromarray((np.ones((6, 4), dtype=np.uint8) * 21)),
+        Image.fromarray((np.ones((6, 4), dtype=np.uint8) * 22)),
+    ]
+    frames[0].save(folder / "b.tiff", save_all=True, append_images=frames[1:])
+
+    widget = Show3D.from_tiff_folder(folder)
+    assert widget.n_slices == 2
+    assert widget.height == 6
+    assert widget.width == 4
+    assert widget.labels[0].startswith("b[0]")
+
+
+@pytest.mark.skipif(not _HAS_H5PY or h5py is None, reason="h5py not available")
+def test_show3d_from_path_emd_stack(tmp_path):
+    emd_path = tmp_path / "stack.emd"
+    with h5py.File(emd_path, "w") as h5f:  # type: ignore[arg-type]
+        h5f.create_dataset("data/stack", data=np.ones((3, 7, 5), dtype=np.float32) * 13.0)
+
+    widget = Show3D.from_emd(emd_path)
+    assert widget.n_slices == 3
+    assert widget.height == 7
+    assert widget.width == 5
+    assert widget.labels[0].startswith("stack[0]")
+    assert widget.data_min == pytest.approx(13.0)
+    assert widget.data_max == pytest.approx(13.0)
+
+
+@pytest.mark.skipif(not _HAS_H5PY or h5py is None, reason="h5py not available")
+def test_show3d_from_emd_dataset_path_override(tmp_path):
+    emd_path = tmp_path / "stack_multi.emd"
+    with h5py.File(emd_path, "w") as h5f:  # type: ignore[arg-type]
+        h5f.create_dataset("preview/thumb", data=np.ones((5, 5), dtype=np.float32) * 2.0)
+        h5f.create_dataset("data/signal", data=np.ones((3, 5, 5), dtype=np.float32) * 17.0)
+
+    widget = Show3D.from_emd(emd_path, dataset_path="/data/signal")
+    assert widget.n_slices == 3
+    assert widget.labels[0].startswith("stack_multi[0]")
+    assert widget.data_min == pytest.approx(17.0)
+    assert widget.data_max == pytest.approx(17.0)
+
+
+@pytest.mark.skipif(not _HAS_H5PY or h5py is None, reason="h5py not available")
+def test_show3d_from_emd_dataset_path_missing(tmp_path):
+    emd_path = tmp_path / "stack_missing.emd"
+    with h5py.File(emd_path, "w") as h5f:  # type: ignore[arg-type]
+        h5f.create_dataset("data/signal", data=np.ones((3, 5, 5), dtype=np.float32))
+
+    with pytest.raises(ValueError, match="dataset_path"):
+        Show3D.from_emd(emd_path, dataset_path="/no/such/path")
+
+
+def test_show3d_from_path_mixed_folder_explicit_png(tmp_path):
+    from PIL import Image
+
+    folder = tmp_path / "mixed_stack"
+    folder.mkdir()
+    Image.fromarray((np.ones((5, 5), dtype=np.uint8) * 11)).save(folder / "a.png")
+    tiff_img = Image.fromarray((np.ones((5, 5), dtype=np.uint8) * 99))
+    tiff_img.save(folder / "b.tiff")
+
+    widget = Show3D.from_folder(folder, file_type="png")
+    assert widget.n_slices == 1
+    assert widget.labels == ["a.png"]
+    assert widget.data_min == pytest.approx(11.0)
+    assert widget.data_max == pytest.approx(11.0)
+
+
+def test_show3d_from_path_mixed_folder_explicit_tiff(tmp_path):
+    from PIL import Image
+
+    folder = tmp_path / "mixed_stack_tiff"
+    folder.mkdir()
+    Image.fromarray((np.ones((6, 4), dtype=np.uint8) * 7)).save(folder / "a.png")
+    frames = [
+        Image.fromarray((np.ones((6, 4), dtype=np.uint8) * 21)),
+        Image.fromarray((np.ones((6, 4), dtype=np.uint8) * 22)),
+    ]
+    frames[0].save(folder / "b.tiff", save_all=True, append_images=frames[1:])
+
+    widget = Show3D.from_folder(folder, file_type="tiff")
+    assert widget.n_slices == 2
+    assert widget.labels[0].startswith("b[0]")
+    assert widget.data_min == pytest.approx(21.0)
+    assert widget.data_max == pytest.approx(22.0)
+
+
+@pytest.mark.skipif(not _HAS_H5PY or h5py is None, reason="h5py not available")
+def test_show3d_from_path_mixed_folder_explicit_emd(tmp_path):
+    from PIL import Image
+
+    folder = tmp_path / "mixed_stack_emd"
+    folder.mkdir()
+    Image.fromarray((np.ones((5, 5), dtype=np.uint8) * 11)).save(folder / "a.png")
+    with h5py.File(folder / "b.emd", "w") as h5f:  # type: ignore[arg-type]
+        h5f.create_dataset("data/signal", data=np.ones((2, 5, 5), dtype=np.float32) * 17.0)
+
+    widget = Show3D.from_folder(folder, file_type="emd", dataset_path="/data/signal")
+    assert widget.n_slices == 2
+    assert widget.labels[0].startswith("b[0]")
+    assert widget.data_min == pytest.approx(17.0)
+    assert widget.data_max == pytest.approx(17.0)
+
+
+def test_show3d_from_path_folder_invalid_file_type(tmp_path):
+    from PIL import Image
+
+    folder = tmp_path / "png_only_stack"
+    folder.mkdir()
+    Image.fromarray(np.zeros((5, 5), dtype=np.uint8)).save(folder / "a.png")
+
+    with pytest.raises(ValueError, match="file_type"):
+        Show3D.from_path(folder, file_type="jpg")
+
+
+# ── save_image ───────────────────────────────────────────────────────────
+
+
+def test_show3d_save_image_png(tmp_path):
+    stack = np.random.rand(10, 32, 32).astype(np.float32)
+    w = Show3D(stack, cmap="viridis")
+    out = w.save_image(tmp_path / "frame.png")
+    assert out.exists()
+    assert out.stat().st_size > 0
+    from PIL import Image
+    img = Image.open(out)
+    assert img.size == (32, 32)
+
+
+def test_show3d_save_image_pdf(tmp_path):
+    stack = np.random.rand(10, 32, 32).astype(np.float32)
+    w = Show3D(stack)
+    out = w.save_image(tmp_path / "frame.pdf")
+    assert out.exists()
+
+
+def test_show3d_save_image_frame_idx(tmp_path):
+    stack = np.random.rand(10, 32, 32).astype(np.float32)
+    w = Show3D(stack)
+    out = w.save_image(tmp_path / "f5.png", frame_idx=5)
+    assert out.exists()
+
+
+def test_show3d_save_image_bad_idx(tmp_path):
+    stack = np.random.rand(10, 32, 32).astype(np.float32)
+    w = Show3D(stack)
+    with pytest.raises(IndexError):
+        w.save_image(tmp_path / "out.png", frame_idx=20)
+
+
+def test_show3d_save_image_bad_format(tmp_path):
+    stack = np.random.rand(5, 16, 16).astype(np.float32)
+    w = Show3D(stack)
+    with pytest.raises(ValueError, match="Unsupported format"):
+        w.save_image(tmp_path / "out.gif")
+
+
+def test_show3d_widget_version_is_set():
+    stack = np.random.rand(5, 16, 16).astype(np.float32)
+    w = Show3D(stack)
+    assert w.widget_version != "unknown"
+
+
+def test_show3d_show_controls_default():
+    stack = np.random.rand(5, 16, 16).astype(np.float32)
+    w = Show3D(stack)
+    assert w.show_controls is True

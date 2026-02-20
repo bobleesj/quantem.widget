@@ -107,12 +107,12 @@ type RoiShape = typeof ROI_SHAPES[number];
 
 type ROI = {
   id: number;
-  mode: RoiShape;
+  shape: RoiShape;
   row: number;
   col: number;
   radius: number;
-  rectW: number;
-  rectH: number;
+  width: number;
+  height: number;
   color: string;
   opacity: number;
 };
@@ -125,11 +125,11 @@ function computeRoiStats(roi: ROI, data: Float32Array, width: number, height: nu
   if (!data || data.length === 0) return null;
   let sum = 0, sumSq = 0, min = Infinity, max = -Infinity, count = 0;
   let x0: number, y0: number, x1: number, y1: number;
-  if (roi.mode === "rectangle") {
-    x0 = Math.max(0, Math.floor(roi.col - roi.rectW / 2));
-    y0 = Math.max(0, Math.floor(roi.row - roi.rectH / 2));
-    x1 = Math.min(width - 1, Math.ceil(roi.col + roi.rectW / 2));
-    y1 = Math.min(height - 1, Math.ceil(roi.row + roi.rectH / 2));
+  if (roi.shape === "rectangle") {
+    x0 = Math.max(0, Math.floor(roi.col - roi.width / 2));
+    y0 = Math.max(0, Math.floor(roi.row - roi.height / 2));
+    x1 = Math.min(width - 1, Math.ceil(roi.col + roi.width / 2));
+    y1 = Math.min(height - 1, Math.ceil(roi.row + roi.height / 2));
   } else {
     x0 = Math.max(0, Math.floor(roi.col - roi.radius));
     y0 = Math.max(0, Math.floor(roi.row - roi.radius));
@@ -139,7 +139,7 @@ function computeRoiStats(roi: ROI, data: Float32Array, width: number, height: nu
   const r2 = roi.radius * roi.radius;
   for (let py = y0; py <= y1; py++) {
     for (let px = x0; px <= x1; px++) {
-      if (roi.mode === "circle") {
+      if (roi.shape === "circle") {
         const dx = px - roi.col, dy = py - roi.row;
         if (dx * dx + dy * dy > r2) continue;
       }
@@ -203,6 +203,18 @@ function sampleLineProfile(data: Float32Array, w: number, h: number, row0: numbe
   return out;
 }
 
+function pointToSegmentDistance(col: number, row: number, col0: number, row0: number, col1: number, row1: number): number {
+  const dc = col1 - col0;
+  const dr = row1 - row0;
+  const lenSq = dc * dc + dr * dr;
+  if (lenSq <= 1e-12) return Math.sqrt((col - col0) ** 2 + (row - row0) ** 2);
+  const tRaw = ((col - col0) * dc + (row - row0) * dr) / lenSq;
+  const t = Math.max(0, Math.min(1, tRaw));
+  const projCol = col0 + t * dc;
+  const projRow = row0 + t * dr;
+  return Math.sqrt((col - projCol) ** 2 + (row - projRow) ** 2);
+}
+
 function brightenColor(hex: string, amount: number): string {
   const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
   if (!m) return hex;
@@ -223,6 +235,8 @@ function drawROI(
 ): void {
   ctx.save();
   const highlighted = isActive || isHovered;
+  const halfW = shape === "rectangle" ? w / 2 : radius;
+  const halfH = shape === "rectangle" ? h / 2 : radius;
   ctx.globalAlpha = highlighted ? Math.min(1, opacity + 0.2) : opacity;
   ctx.strokeStyle = highlighted ? brightenColor(color, 80) : color;
   ctx.lineWidth = isActive ? 3 : isHovered ? 2.5 : 2;
@@ -241,12 +255,19 @@ function drawROI(
   }
   if (isActive) {
     ctx.shadowBlur = 0;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
     ctx.beginPath();
-    ctx.moveTo(x - 5, y);
-    ctx.lineTo(x + 5, y);
-    ctx.moveTo(x, y - 5);
-    ctx.lineTo(x, y + 5);
+    ctx.moveTo(x - halfW, y);
+    ctx.lineTo(x + halfW, y);
+    ctx.moveTo(x, y - halfH);
+    ctx.lineTo(x, y + halfH);
     ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = highlighted ? brightenColor(color, 80) : color;
+    ctx.fill();
   }
   ctx.restore();
 }
@@ -370,7 +391,7 @@ function InfoTooltip({ text, theme = "dark" }: { text: React.ReactNode; theme?: 
 
 function HistogramWidget({
   data,
-  colormap: _colormap,
+  cmap: _colormap,
   vminPct,
   vmaxPct,
   onRangeChange,
@@ -381,7 +402,7 @@ function HistogramWidget({
   dataMax = 1,
 }: {
   data: Float32Array | null;
-  colormap: string;
+  cmap: string;
   vminPct: number;
   vmaxPct: number;
   onRangeChange: (min: number, max: number) => void;
@@ -488,13 +509,65 @@ const render = createRender(() => {
   const [selectedPoints, setSelectedPoints] = useModelState<Point[] | Point[][]>("selected_points");
   const [dotSize, setDotSize] = useModelState<number>("dot_size");
   const [maxPoints, setMaxPoints] = useModelState<number>("max_points");
-  const [pixelSizeAngstrom] = useModelState<number>("pixel_size_angstrom");
+  const [pixelSize] = useModelState<number>("pixel_size");
   const [title] = useModelState<string>("title");
+  const [widgetVersion] = useModelState<string>("widget_version");
   const [showStats] = useModelState<boolean>("show_stats");
   const [imageWidthPx] = useModelState<number>("image_width_px");
   const [showControls] = useModelState<boolean>("show_controls");
+  const [disabledTools] = useModelState<string[]>("disabled_tools");
+  const [hiddenTools] = useModelState<string[]>("hidden_tools");
   const [percentileLow] = useModelState<number>("percentile_low");
   const [percentileHigh] = useModelState<number>("percentile_high");
+
+  const disabledToolSet = React.useMemo(
+    () =>
+      new Set(
+        (disabledTools || [])
+          .map((name) => String(name).trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    [disabledTools],
+  );
+  const hiddenToolSet = React.useMemo(
+    () =>
+      new Set(
+        (hiddenTools || [])
+          .map((name) => String(name).trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    [hiddenTools],
+  );
+  const hideAll = hiddenToolSet.has("all");
+  const hidePoints = hideAll || hiddenToolSet.has("points");
+  const hideRoi = hideAll || hiddenToolSet.has("roi");
+  const hideProfile = hideAll || hiddenToolSet.has("profile");
+  const hideDisplay = hideAll || hiddenToolSet.has("display");
+  const hideMarkers = hideAll || hiddenToolSet.has("marker_style");
+  const hideSnap = hideAll || hiddenToolSet.has("snap");
+  const hideNavigation = hideAll || hiddenToolSet.has("navigation");
+  const hideView = hideAll || hiddenToolSet.has("view");
+  const hideExport = hideAll || hiddenToolSet.has("export");
+
+  const lockAll = disabledToolSet.has("all") || hideAll;
+  const lockPoints = lockAll || hidePoints || disabledToolSet.has("points");
+  const lockRoi = lockAll || hideRoi || disabledToolSet.has("roi");
+  const lockProfile = lockAll || hideProfile || disabledToolSet.has("profile");
+  const lockDisplay = lockAll || hideDisplay || disabledToolSet.has("display");
+  const lockMarkers =
+    lockAll ||
+    hideMarkers ||
+    disabledToolSet.has("marker_style");
+  const lockSnap = lockAll || hideSnap || disabledToolSet.has("snap");
+  const lockNavigation = lockAll || hideNavigation || disabledToolSet.has("navigation");
+  const lockView = lockAll || hideView || disabledToolSet.has("view");
+  const lockExport = lockAll || hideExport || disabledToolSet.has("export");
+  const lockMarkerSettings = lockMarkers || lockPoints;
+  const showMarkerStyleControls = !hidePoints && !hideMarkers;
+  const showSnapControls = !hideSnap;
+  const showProfileControls = !hideProfile;
+  const showPrimaryControlRow =
+    showMarkerStyleControls || showSnapControls || showProfileControls;
 
   const isGallery = nImages > 1;
 
@@ -515,7 +588,6 @@ const render = createRender(() => {
   const [isDraggingROI, setIsDraggingROI] = React.useState(false);
   const [newRoiShape, setNewRoiShape] = React.useState<RoiShape>("circle");
   const safeRois = rois || [];
-  const roiActive = safeRois.length > 0;
   const activeRoi = activeRoiIdx >= 0 && activeRoiIdx < safeRois.length ? safeRois[activeRoiIdx] : null;
 
   const pushRoiHistory = React.useCallback(() => {
@@ -547,12 +619,14 @@ const render = createRender(() => {
   // Snap-to-peak (synced to Python for state portability)
   const [snapEnabled, setSnapEnabled] = useModelState<boolean>("snap_enabled");
   const [snapRadius, setSnapRadius] = useModelState<number>("snap_radius");
+  const snapActive = snapEnabled && !hideSnap;
 
   // Colormap, contrast, FFT (synced to Python)
-  const [colormap, setColormap] = useModelState<string>("colormap");
+  const [cmap, setCmap] = useModelState<string>("cmap");
   const [autoContrast, setAutoContrast] = useModelState<boolean>("auto_contrast");
   const [logScale, setLogScale] = useModelState<boolean>("log_scale");
   const [showFft, setShowFft] = useModelState<boolean>("show_fft");
+  const effectiveShowFft = showFft && !hideDisplay;
 
   // Histogram slider state (local)
   const [vminPct, setVminPct] = React.useState(0);
@@ -574,6 +648,17 @@ const render = createRender(() => {
   const [profileData, setProfileData] = React.useState<Float32Array | null>(null);
   const profileCanvasRef = React.useRef<HTMLCanvasElement>(null);
   const profilePoints = profileLine || [];
+  const [hoveredProfileEndpoint, setHoveredProfileEndpoint] = React.useState<0 | 1 | null>(null);
+  const [isHoveringProfileLine, setIsHoveringProfileLine] = React.useState(false);
+  const profileDragRef = React.useRef<{
+    imageIdx: number;
+    mode: "endpoint" | "line";
+    endpointIdx?: 0 | 1;
+    startRow: number;
+    startCol: number;
+    p0: { row: number; col: number };
+    p1: { row: number; col: number };
+  } | null>(null);
 
   // FFT refs
   const gpuFFTRef = React.useRef<WebGPUFFT | null>(null);
@@ -641,7 +726,7 @@ const render = createRender(() => {
   const canvasH = height > 0 ? Math.round(height * displayScale) : targetSize;
   const contentW = isGallery
     ? ncols * canvasW + (ncols - 1) * 8
-    : showFft ? canvasW * 2 + SPACING.LG : canvasW;
+    : effectiveShowFft ? canvasW * 2 + SPACING.LG : canvasW;
 
   // Parse frame_bytes into per-image Float32Arrays
   const floatsPerImage = width * height;
@@ -659,17 +744,17 @@ const render = createRender(() => {
 
   // ROI pixel statistics
   const roiStats = React.useMemo(() => {
-    if (!activeRoi || perImageData.length === 0) return null;
+    if (hideRoi || !activeRoi || perImageData.length === 0) return null;
     const imgIdx = isGallery ? selectedIdx : 0;
     const data = perImageData[imgIdx];
     if (!data) return null;
     return computeRoiStats(activeRoi, data, width, height);
-  }, [activeRoi, perImageData, isGallery, selectedIdx, width, height]);
+  }, [activeRoi, perImageData, isGallery, selectedIdx, width, height, hideRoi]);
 
-  // Build offscreen canvases from float32 data (colormap + contrast)
+  // Build offscreen canvases from float32 data (cmap + contrast)
   React.useEffect(() => {
     if (perImageData.length === 0 || !width || !height) return;
-    const lut = COLORMAPS[colormap || "gray"] || COLORMAPS.gray;
+    const lut = COLORMAPS[cmap || "gray"] || COLORMAPS.gray;
     for (let i = 0; i < nImages; i++) {
       const f32 = perImageData[i];
       if (!f32) continue;
@@ -685,7 +770,7 @@ const render = createRender(() => {
       offscreenRefs.current[i] = result;
     }
     offscreenRefs.current.length = nImages;
-  }, [perImageData, nImages, width, height, colormap, autoContrast, logScale, vminPct, vmaxPct, percentileLow, percentileHigh]);
+  }, [perImageData, nImages, width, height, cmap, autoContrast, logScale, vminPct, vmaxPct, percentileLow, percentileHigh]);
 
   // Histogram data for current image
   const histogramData = React.useMemo(() => {
@@ -759,22 +844,24 @@ const render = createRender(() => {
       ctx.drawImage(offscreen, 0, 0, canvasW, canvasH);
 
       // Draw points for this image
-      const pts = getPointsForImage(i);
-      const dotRadius = (size / 2) * displayScale;
-      for (let j = 0; j < pts.length; j++) {
-        const p = pts[j];
-        const px = (p.col / width) * canvasW;
-        const py = (p.row / height) * canvasH;
-        const color = p.color || MARKER_COLORS[j % MARKER_COLORS.length];
-        const shape = p.shape || MARKER_SHAPES[j % MARKER_SHAPES.length];
+      if (!hidePoints) {
+        const pts = getPointsForImage(i);
+        const dotRadius = (size / 2) * displayScale;
+        for (let j = 0; j < pts.length; j++) {
+          const p = pts[j];
+          const px = (p.col / width) * canvasW;
+          const py = (p.row / height) * canvasH;
+          const color = p.color || MARKER_COLORS[j % MARKER_COLORS.length];
+          const shape = p.shape || MARKER_SHAPES[j % MARKER_SHAPES.length];
 
-        drawMarker(ctx, px, py, dotRadius, shape, color, tc.bg, markerOpacity, borderWidth);
+          drawMarker(ctx, px, py, dotRadius, shape, color, tc.bg, markerOpacity, borderWidth);
+        }
       }
 
       ctx.restore();
 
     }
-  }, [perImageData, width, height, canvasW, canvasH, displayScale, zoomStates, selectedPoints, size, tc.accent, tc.bg, tc.text, nImages, isGallery, selectedIdx, getZoom, getPointsForImage, markerOpacity, borderWidth, colormap, autoContrast, logScale, vminPct, vmaxPct, percentileLow, percentileHigh]);
+  }, [perImageData, width, height, canvasW, canvasH, displayScale, zoomStates, selectedPoints, size, tc.accent, tc.bg, tc.text, nImages, isGallery, selectedIdx, getZoom, getPointsForImage, markerOpacity, borderWidth, cmap, autoContrast, logScale, vminPct, vmaxPct, percentileLow, percentileHigh, hidePoints]);
 
   // Render ROI overlays + edge tick marks
   React.useEffect(() => {
@@ -788,7 +875,7 @@ const render = createRender(() => {
       overlay.width = canvasW;
       overlay.height = canvasH;
       ctx.clearRect(0, 0, canvasW, canvasH);
-      if (safeRois.length > 0 && i === idx) {
+      if (!hideRoi && safeRois.length > 0 && i === idx) {
         const { zoom, panX, panY } = getZoom(i);
         const cx = canvasW / 2;
         const cy = canvasH / 2;
@@ -797,15 +884,15 @@ const render = createRender(() => {
           const screenX = ((roi.col / width) * canvasW - cx) * zoom + cx + panX;
           const screenY = ((roi.row / height) * canvasH - cy) * zoom + cy + panY;
           const screenRadius = roi.radius * displayScale * zoom;
-          const screenW = roi.rectW * displayScale * zoom;
-          const screenH = roi.rectH * displayScale * zoom;
+          const screenW = roi.width * displayScale * zoom;
+          const screenH = roi.height * displayScale * zoom;
           const isActive = ri === activeRoiIdx;
           const isHovered = ri === hoveredRoiIdx && !isActive;
-          drawROI(ctx, screenX, screenY, roi.mode, screenRadius, screenW, screenH, roi.color, roi.opacity, isActive, isHovered);
+          drawROI(ctx, screenX, screenY, roi.shape, screenRadius, screenW, screenH, roi.color, roi.opacity, isActive, isHovered);
         }
       }
       // Line profile overlay
-      if (profileActive && profilePoints.length > 0 && i === idx) {
+      if (!hideProfile && profileActive && profilePoints.length > 0 && i === idx) {
         const { zoom, panX, panY } = getZoom(i);
         const cx = canvasW / 2;
         const cy = canvasH / 2;
@@ -868,7 +955,7 @@ const render = createRender(() => {
         ctx.lineTo(canvasW - tickLen, screenY);
         ctx.stroke();
         // Snap radius indicator
-        if (snapEnabled && snapRadius > 0) {
+        if (snapActive && snapRadius > 0) {
           const radiusPx = snapRadius * displayScale * zoom;
           ctx.setLineDash([4, 3]);
           ctx.strokeStyle = "rgba(0, 200, 255, 0.7)";
@@ -882,7 +969,7 @@ const render = createRender(() => {
         ctx.restore();
       }
     }
-  }, [safeRois, activeRoiIdx, hoveredRoiIdx, isDraggingROI, canvasW, canvasH, displayScale, width, height, nImages, isGallery, selectedIdx, getZoom, hover, profileActive, profilePoints, tc.accent, snapEnabled, snapRadius]);
+  }, [safeRois, activeRoiIdx, hoveredRoiIdx, isDraggingROI, canvasW, canvasH, displayScale, width, height, nImages, isGallery, selectedIdx, getZoom, hover, profileActive, profilePoints, tc.accent, snapActive, snapRadius, hideRoi, hideProfile]);
 
   // Auto-compute profile when profile_line is set (e.g. from Python)
   React.useEffect(() => {
@@ -892,10 +979,20 @@ const render = createRender(() => {
       if (raw) {
         const p0 = profilePoints[0], p1 = profilePoints[1];
         setProfileData(sampleLineProfile(raw, width, height, p0.row, p0.col, p1.row, p1.col));
-        if (!profileActive) setProfileActive(true);
+        if (!hideProfile && !profileActive) setProfileActive(true);
       }
     }
-  }, [profilePoints, perImageData, isGallery, selectedIdx, width, height]);
+  }, [profilePoints, perImageData, isGallery, selectedIdx, width, height, hideProfile, profileActive]);
+
+  // Hidden profile controls should never trap clicks in profile mode.
+  React.useEffect(() => {
+    if (!hideProfile || !profileActive) return;
+    setProfileActive(false);
+    setProfileLine([]);
+    setProfileData(null);
+    setHoveredProfileEndpoint(null);
+    setIsHoveringProfileLine(false);
+  }, [hideProfile, profileActive, setProfileLine]);
 
   // Render sparkline for line profile
   React.useEffect(() => {
@@ -953,7 +1050,7 @@ const render = createRender(() => {
       const dx = profilePoints[1].col - profilePoints[0].col;
       const dy = profilePoints[1].row - profilePoints[0].row;
       const distPx = Math.sqrt(dx * dx + dy * dy);
-      const ps = pixelSizeAngstrom || 0;
+      const ps = pixelSize || 0;
       if (ps > 0) {
         const distA = distPx * ps;
         if (distA >= 10) { totalDist = distA / 10; xUnit = "nm"; }
@@ -995,12 +1092,12 @@ const render = createRender(() => {
     ctx.fillText(formatNumber(gMax), 2, 1);
     ctx.textBaseline = "bottom";
     ctx.fillText(formatNumber(gMin), 2, padTop + plotH - 1);
-  }, [profileData, canvasW, themeInfo.theme, tc.accent, profilePoints, pixelSizeAngstrom]);
+  }, [profileData, canvasW, themeInfo.theme, tc.accent, profilePoints, pixelSize]);
 
   // Scale bar + colorbar + marker labels (HiDPI UI overlay)
   React.useEffect(() => {
     if (!width || !height) return;
-    const pxSize = pixelSizeAngstrom || 0;
+    const pxSize = pixelSize || 0;
     const unit = pxSize > 0 ? "Å" as const : "px" as const;
     const pxSizeVal = pxSize > 0 ? pxSize : 1;
     const dotRadius = (size / 2) * displayScale;
@@ -1014,7 +1111,7 @@ const render = createRender(() => {
 
       // Colorbar overlay
       if (showColorbar && perImageData[i]) {
-        const lut = COLORMAPS[colormap || "gray"] || COLORMAPS.gray;
+        const lut = COLORMAPS[cmap || "gray"] || COLORMAPS.gray;
         const f32 = perImageData[i];
         const data = logScale ? applyLogScale(f32) : f32;
         let vmin: number, vmax: number;
@@ -1037,6 +1134,7 @@ const render = createRender(() => {
 
       // Draw marker labels on HiDPI UI canvas (pixel-independent)
       const pts = getPointsForImage(i);
+      if (hidePoints) continue;
       if (pts.length === 0) continue;
       const ctx = uiCanvas.getContext("2d");
       if (!ctx) continue;
@@ -1059,7 +1157,7 @@ const render = createRender(() => {
         ctx.fillText(`${j + 1}`, screenX, screenY - screenDotR - 2 * DPR);
       }
     }
-  }, [pixelSizeAngstrom, canvasW, canvasH, width, height, nImages, zoomStates, getZoom, selectedPoints, getPointsForImage, size, displayScale, labelSize, labelColor, tc.text, showColorbar, colormap, logScale, autoContrast, perImageData, vminPct, vmaxPct, percentileLow, percentileHigh]);
+  }, [pixelSize, canvasW, canvasH, width, height, nImages, zoomStates, getZoom, selectedPoints, getPointsForImage, size, displayScale, labelSize, labelColor, tc.text, showColorbar, cmap, logScale, autoContrast, perImageData, vminPct, vmaxPct, percentileLow, percentileHigh, hidePoints]);
 
   // Map screen coordinates to image pixel coordinates
   const clientToImage = React.useCallback(
@@ -1092,11 +1190,11 @@ const render = createRender(() => {
 
   // Compute FFT when toggled
   React.useEffect(() => {
-    if (!showFft || !width || !height) { fftOffscreenRef.current = null; return; }
+    if (!effectiveShowFft || !width || !height) { fftOffscreenRef.current = null; return; }
     const idx = isGallery ? selectedIdx : 0;
     const f32 = perImageData[idx];
     if (!f32) return;
-    const lut = COLORMAPS[colormap || "gray"] || COLORMAPS.gray;
+    const lut = COLORMAPS[cmap || "gray"] || COLORMAPS.gray;
     const compute = async () => {
       let real: Float32Array, imag: Float32Array;
       if (gpuFFTRef.current) {
@@ -1126,12 +1224,12 @@ const render = createRender(() => {
       }
     };
     compute();
-  }, [showFft, perImageData, isGallery, selectedIdx, width, height, colormap, canvasW, canvasH]);
+  }, [effectiveShowFft, perImageData, isGallery, selectedIdx, width, height, cmap, canvasW, canvasH]);
 
   // Render FFT overlay (reciprocal-space scale bar + colorbar)
   React.useEffect(() => {
     const overlay = fftOverlayRef.current;
-    if (!overlay || !showFft) return;
+    if (!overlay || !effectiveShowFft) return;
     const ctx = overlay.getContext("2d");
     if (!ctx) return;
     overlay.width = Math.round(canvasW * DPR);
@@ -1139,12 +1237,12 @@ const render = createRender(() => {
     ctx.clearRect(0, 0, overlay.width, overlay.height);
 
     // Reciprocal-space scale bar
-    if (pixelSizeAngstrom && pixelSizeAngstrom > 0) {
-      const fftPixelSize = 1 / (width * pixelSizeAngstrom);
+    if (pixelSize && pixelSize > 0) {
+      const fftPixelSize = 1 / (width * pixelSize);
       drawFFTScaleBarHiDPI(overlay, DPR, 1, fftPixelSize, width);
     }
 
-  }, [showFft, canvasW, canvasH, pixelSizeAngstrom, width]);
+  }, [effectiveShowFft, canvasW, canvasH, pixelSize, width]);
 
   // Prevent page scroll on canvas containers
   React.useEffect(() => {
@@ -1159,6 +1257,7 @@ const render = createRender(() => {
   // Scroll to zoom
   const handleWheel = React.useCallback(
     (e: React.WheelEvent, idx: number) => {
+      if (lockView) return;
       e.preventDefault();
       if (isGallery && idx !== selectedIdx) return;
       const canvas = canvasRefs.current[idx];
@@ -1179,7 +1278,7 @@ const render = createRender(() => {
       const newPanY = mouseY - cy - (wy - cy) * newZoom;
       setZoom(idx, { zoom: newZoom, panX: newPanX, panY: newPanY });
     },
-    [width, height, canvasW, canvasH, isGallery, selectedIdx, getZoom, setZoom],
+    [width, height, canvasW, canvasH, isGallery, selectedIdx, getZoom, setZoom, lockView],
   );
 
   // Track when we just switched focus (don't place a point on the same click)
@@ -1191,12 +1290,47 @@ const render = createRender(() => {
       if (e.button !== 0) return;
       justSwitchedRef.current = false;
       if (isGallery && idx !== selectedIdx) {
+        if (lockNavigation) return;
         setSelectedIdx(idx);
         justSwitchedRef.current = true;
         return;
       }
+      if (!hideProfile && profileActive && !lockProfile) {
+        const coords = clientToImage(e.clientX, e.clientY, idx);
+        if (coords && profilePoints.length === 2) {
+          const { zoom } = getZoom(idx);
+          const hitDist = 10 / (displayScale * zoom);
+          const p0 = profilePoints[0];
+          const p1 = profilePoints[1];
+          const d0 = Math.sqrt((coords.col - p0.col) ** 2 + (coords.row - p0.row) ** 2);
+          const d1 = Math.sqrt((coords.col - p1.col) ** 2 + (coords.row - p1.row) ** 2);
+          if (d0 <= hitDist || d1 <= hitDist) {
+            profileDragRef.current = {
+              imageIdx: idx,
+              mode: "endpoint",
+              endpointIdx: d0 <= d1 ? 0 : 1,
+              startRow: coords.row,
+              startCol: coords.col,
+              p0: { row: p0.row, col: p0.col },
+              p1: { row: p1.row, col: p1.col },
+            };
+            return;
+          }
+          if (pointToSegmentDistance(coords.col, coords.row, p0.col, p0.row, p1.col, p1.row) <= hitDist) {
+            profileDragRef.current = {
+              imageIdx: idx,
+              mode: "line",
+              startRow: coords.row,
+              startCol: coords.col,
+              p0: { row: p0.row, col: p0.col },
+              p1: { row: p1.row, col: p1.col },
+            };
+            return;
+          }
+        }
+      }
       // Check if click is near any ROI center to drag it
-      if (safeRois.length > 0) {
+      if (!lockRoi && safeRois.length > 0) {
         const coords = clientToImage(e.clientX, e.clientY, idx);
         if (coords) {
           const { zoom } = getZoom(idx);
@@ -1221,7 +1355,7 @@ const render = createRender(() => {
         }
       }
       // Check if click is near any existing point to drag it
-      {
+      if (!lockPoints) {
         const coords = clientToImage(e.clientX, e.clientY, idx);
         if (coords) {
           const pts = getPointsForImage(idx);
@@ -1244,6 +1378,10 @@ const render = createRender(() => {
           }
         }
       }
+      if (lockView) {
+        dragRef.current = null;
+        return;
+      }
       const zs = getZoom(idx);
       dragRef.current = {
         startX: e.clientX,
@@ -1255,14 +1393,93 @@ const render = createRender(() => {
         imageIdx: idx,
       };
     },
-    [isGallery, selectedIdx, setSelectedIdx, getZoom, safeRois, clientToImage, displayScale, getPointsForImage, pushRoiHistory],
+    [
+      isGallery,
+      selectedIdx,
+      setSelectedIdx,
+      getZoom,
+      safeRois,
+      clientToImage,
+      displayScale,
+      getPointsForImage,
+      pushRoiHistory,
+      lockNavigation,
+      hideProfile,
+      profileActive,
+      profilePoints,
+      lockProfile,
+      lockRoi,
+      lockPoints,
+      lockView,
+    ],
   );
 
   // Mouse move
   const handleMouseMove = React.useCallback(
     (e: React.MouseEvent, idx: number) => {
+      if (!hideProfile && profileActive && !lockProfile && profileDragRef.current?.imageIdx === idx && profilePoints.length === 2) {
+        const coords = clientToImage(e.clientX, e.clientY, idx);
+        if (coords) {
+          const drag = profileDragRef.current;
+          if (drag.mode === "endpoint" && drag.endpointIdx !== undefined) {
+            const clampedRow = Math.max(0, Math.min(height - 1, coords.row));
+            const clampedCol = Math.max(0, Math.min(width - 1, coords.col));
+            const next = [
+              drag.endpointIdx === 0 ? { row: clampedRow, col: clampedCol } : profilePoints[0],
+              drag.endpointIdx === 1 ? { row: clampedRow, col: clampedCol } : profilePoints[1],
+            ];
+            setProfileLine(next);
+            const imgIdx = isGallery ? selectedIdx : idx;
+            const raw = perImageData[imgIdx];
+            if (raw) {
+              setProfileData(sampleLineProfile(raw, width, height, next[0].row, next[0].col, next[1].row, next[1].col));
+            }
+          } else if (drag.mode === "line") {
+            let deltaRow = coords.row - drag.startRow;
+            let deltaCol = coords.col - drag.startCol;
+            const minRow = Math.min(drag.p0.row, drag.p1.row);
+            const maxRow = Math.max(drag.p0.row, drag.p1.row);
+            const minCol = Math.min(drag.p0.col, drag.p1.col);
+            const maxCol = Math.max(drag.p0.col, drag.p1.col);
+            deltaRow = Math.max(deltaRow, -minRow);
+            deltaRow = Math.min(deltaRow, (height - 1) - maxRow);
+            deltaCol = Math.max(deltaCol, -minCol);
+            deltaCol = Math.min(deltaCol, (width - 1) - maxCol);
+            const next = [
+              { row: drag.p0.row + deltaRow, col: drag.p0.col + deltaCol },
+              { row: drag.p1.row + deltaRow, col: drag.p1.col + deltaCol },
+            ];
+            setProfileLine(next);
+            const imgIdx = isGallery ? selectedIdx : idx;
+            const raw = perImageData[imgIdx];
+            if (raw) {
+              setProfileData(sampleLineProfile(raw, width, height, next[0].row, next[0].col, next[1].row, next[1].col));
+            }
+          }
+        }
+        return;
+      }
+      if (!hideProfile && profileActive && profilePoints.length === 2) {
+        const coords = clientToImage(e.clientX, e.clientY, idx);
+        if (coords) {
+          const { zoom } = getZoom(idx);
+          const hitDist = 10 / (displayScale * zoom);
+          const p0 = profilePoints[0];
+          const p1 = profilePoints[1];
+          const d0 = Math.sqrt((coords.col - p0.col) ** 2 + (coords.row - p0.row) ** 2);
+          const d1 = Math.sqrt((coords.col - p1.col) ** 2 + (coords.row - p1.row) ** 2);
+          const nextHoveredEndpoint: 0 | 1 | null = d0 <= hitDist ? 0 : d1 <= hitDist ? 1 : null;
+          const nextHoverLine = nextHoveredEndpoint === null && pointToSegmentDistance(coords.col, coords.row, p0.col, p0.row, p1.col, p1.row) <= hitDist;
+          setHoveredProfileEndpoint(nextHoveredEndpoint);
+          setIsHoveringProfileLine(nextHoverLine);
+        }
+      } else {
+        if (hoveredProfileEndpoint !== null) setHoveredProfileEndpoint(null);
+        if (isHoveringProfileLine) setIsHoveringProfileLine(false);
+      }
+
       // Point dragging
-      if (draggingPointRef.current && draggingPointRef.current.imageIdx === idx) {
+      if (!lockPoints && draggingPointRef.current && draggingPointRef.current.imageIdx === idx) {
         const coords = clientToImage(e.clientX, e.clientY, idx);
         if (coords) {
           const pts = getPointsForImage(idx);
@@ -1274,7 +1491,7 @@ const render = createRender(() => {
         }
         return;
       }
-      if (isDraggingROI && activeRoiIdx >= 0) {
+      if (!lockRoi && isDraggingROI && activeRoiIdx >= 0) {
         const coords = clientToImage(e.clientX, e.clientY, idx);
         if (coords) {
           setRois(safeRois.map((r, i) => i === activeRoiIdx ? { ...r, row: coords.row, col: coords.col } : r));
@@ -1289,6 +1506,7 @@ const render = createRender(() => {
           drag.dragging = true;
         }
         if (drag.dragging) {
+          if (lockView) return;
           drag.wasDrag = true;
           const canvas = canvasRefs.current[idx];
           if (!canvas) return;
@@ -1361,12 +1579,50 @@ const render = createRender(() => {
         setHoveredPointIdx(-1);
       }
     },
-    [clientToImage, width, canvasW, canvasH, perImageData, imgMin, imgMax, isGallery, selectedIdx, getZoom, setZoom, isDraggingROI, activeRoiIdx, safeRois, setRois, displayScale, getPointsForImage, setPointsForImage],
+    [
+      clientToImage,
+      width,
+      canvasW,
+      canvasH,
+      perImageData,
+      imgMin,
+      imgMax,
+      isGallery,
+      selectedIdx,
+      getZoom,
+      setZoom,
+      isDraggingROI,
+      activeRoiIdx,
+      safeRois,
+      setRois,
+      hideProfile,
+      profileActive,
+      lockProfile,
+      profilePoints,
+      setProfileLine,
+      setProfileData,
+      hoveredProfileEndpoint,
+      isHoveringProfileLine,
+      displayScale,
+      getPointsForImage,
+      setPointsForImage,
+      lockPoints,
+      lockRoi,
+      lockView,
+      isGallery,
+      selectedIdx,
+    ],
   );
 
   // Mouse up — place point
   const handleMouseUp = React.useCallback(
     (e: React.MouseEvent, idx: number) => {
+      if (profileDragRef.current) {
+        profileDragRef.current = null;
+        setHoveredProfileEndpoint(null);
+        setIsHoveringProfileLine(false);
+        return;
+      }
       if (draggingPointRef.current) {
         draggingPointRef.current = null;
         return;
@@ -1385,7 +1641,8 @@ const render = createRender(() => {
       if (!coords) return;
 
       // Profile mode: place profile endpoints instead of markers
-      if (profileActive) {
+      if (!hideProfile && profileActive) {
+        if (lockProfile) return;
         const pt = { row: coords.row, col: coords.col };
         if (profilePoints.length === 0 || profilePoints.length === 2) {
           setProfileLine([pt]);
@@ -1402,9 +1659,11 @@ const render = createRender(() => {
         return;
       }
 
+      if (lockPoints) return;
+
       // Snap to local intensity peak if enabled
       let snappedCoords = coords;
-      if (snapEnabled && perImageData[idx]) {
+      if (snapActive && perImageData[idx]) {
         const snapped = findLocalMax(perImageData[idx], width, height, coords.col, coords.row, snapRadius);
         snappedCoords = { row: snapped.row, col: snapped.col };
       }
@@ -1415,16 +1674,42 @@ const render = createRender(() => {
       const next = [...currentPts, p];
       setPointsForImage(idx, next.length <= limit ? next : next.slice(next.length - limit));
     },
-    [clientToImage, maxPoints, isGallery, selectedIdx, getPointsForImage, setPointsForImage, isDraggingROI, currentShape, currentColor, snapEnabled, snapRadius, perImageData, width, height, profileActive, profilePoints, setProfileLine, setProfileData],
+    [
+      clientToImage,
+      maxPoints,
+      isGallery,
+      selectedIdx,
+      getPointsForImage,
+      setPointsForImage,
+      isDraggingROI,
+      currentShape,
+      currentColor,
+      snapActive,
+      snapRadius,
+      perImageData,
+      width,
+      height,
+      profileActive,
+      hideProfile,
+      profilePoints,
+      setProfileLine,
+      setProfileData,
+      lockProfile,
+      lockPoints,
+      setHoveredProfileEndpoint,
+      setIsHoveringProfileLine,
+    ],
   );
 
   // Double-click — reset zoom
   const handleDoubleClick = React.useCallback((idx: number) => {
+    if (lockView) return;
     if (isGallery && idx !== selectedIdx) return;
     setZoom(idx, DEFAULT_ZOOM);
-  }, [isGallery, selectedIdx, setZoom]);
+  }, [isGallery, selectedIdx, setZoom, lockView]);
 
   const handleExport = React.useCallback(async () => {
+    if (lockExport) return;
     setExportAnchor(null);
     const idx = isGallery ? selectedIdx : 0;
     const label = isGallery && labels?.[idx] ? labels[idx] : "mark2d";
@@ -1437,7 +1722,7 @@ const render = createRender(() => {
     const overlay = overlayRefs.current[idx];
     const ui = uiRefs.current[idx];
 
-    if (!showFft) {
+    if (!effectiveShowFft) {
       // Single annotated PNG (no FFT)
       if (mainCanvas) {
         const comp = document.createElement("canvas");
@@ -1454,6 +1739,18 @@ const render = createRender(() => {
     } else {
       // ZIP with raw + annotated + FFT
       const zip = new JSZip();
+      const metadata = {
+        metadata_version: "1.0",
+        widget_name: "Mark2D",
+        widget_version: widgetVersion || "unknown",
+        exported_at: new Date().toISOString(),
+        format: "zip",
+        export_kind: "raw_annotated_fft_bundle",
+        selected_idx: idx,
+        image_shape: { rows: height, cols: width },
+        display: { cmap, log_scale: logScale, auto_contrast: autoContrast },
+      };
+      zip.file("metadata.json", JSON.stringify(metadata, null, 2));
 
       const offscreen = offscreenRefs.current[idx];
       if (offscreen) {
@@ -1488,16 +1785,17 @@ const render = createRender(() => {
       const blob = await zip.generateAsync({ type: "blob" });
       downloadBlob(blob, `${prefix}.zip`);
     }
-  }, [isGallery, selectedIdx, labels, width, height, canvasW, canvasH, showFft]);
+  }, [isGallery, selectedIdx, labels, width, height, canvasW, canvasH, effectiveShowFft, lockExport, widgetVersion, cmap, logScale, autoContrast]);
 
   const handleExportFigure = React.useCallback((withColorbar: boolean) => {
+    if (lockExport) return;
     setExportAnchor(null);
     const idx = isGallery ? selectedIdx : 0;
     const rawData = perImageData[idx];
     if (!rawData || !width || !height) return;
 
     const processed = logScale ? applyLogScale(rawData) : rawData;
-    const lut = COLORMAPS[colormap || "gray"] || COLORMAPS.gray;
+    const lut = COLORMAPS[cmap || "gray"] || COLORMAPS.gray;
 
     let vmin: number, vmax: number;
     if (autoContrast) {
@@ -1521,10 +1819,11 @@ const render = createRender(() => {
       vmin,
       vmax,
       logScale,
-      pixelSize: pixelSizeAngstrom > 0 ? pixelSizeAngstrom : undefined,
+      pixelSize: pixelSize > 0 ? pixelSize : undefined,
       showColorbar: withColorbar,
-      showScaleBar: pixelSizeAngstrom > 0,
+      showScaleBar: pixelSize > 0,
       drawAnnotations: (ctx) => {
+        if (hidePoints) return;
         // Draw markers at native image resolution
         for (let j = 0; j < pts.length; j++) {
           const p = pts[j];
@@ -1538,9 +1837,9 @@ const render = createRender(() => {
     figCanvas.toBlob((blob) => {
       if (blob) downloadBlob(blob, `${label}_figure.png`);
     }, "image/png");
-  }, [isGallery, selectedIdx, perImageData, width, height, colormap, logScale, autoContrast,
+  }, [isGallery, selectedIdx, perImageData, width, height, cmap, logScale, autoContrast,
       percentileLow, percentileHigh, vminPct, vmaxPct, getPointsForImage, size,
-      title, pixelSizeAngstrom, markerOpacity, borderWidth, labels]);
+      title, pixelSize, markerOpacity, borderWidth, labels, lockExport, hidePoints]);
 
   const activeIdx = isGallery ? selectedIdx : 0;
 
@@ -1548,6 +1847,7 @@ const render = createRender(() => {
   const redoStackRef = React.useRef<Map<number, Point[]>>(new Map());
 
   const resetPoints = React.useCallback(() => {
+    if (lockPoints) return;
     if (!isGallery) {
       setSelectedPoints([]);
     } else {
@@ -1557,18 +1857,20 @@ const render = createRender(() => {
     setDotSize(12);
     setMaxPoints(10);
     redoStackRef.current = new Map();
-  }, [isGallery, nImages, setSelectedPoints, setDotSize, setMaxPoints]);
+  }, [isGallery, nImages, setSelectedPoints, setDotSize, setMaxPoints, lockPoints]);
 
   const undoPoint = React.useCallback(() => {
+    if (lockPoints) return;
     const pts = getPointsForImage(activeIdx);
     if (pts.length === 0) return;
     const removed = pts[pts.length - 1];
     const stack = redoStackRef.current.get(activeIdx) || [];
     redoStackRef.current.set(activeIdx, [...stack, removed]);
     setPointsForImage(activeIdx, pts.slice(0, -1));
-  }, [activeIdx, getPointsForImage, setPointsForImage]);
+  }, [activeIdx, getPointsForImage, setPointsForImage, lockPoints]);
 
   const redoPoint = React.useCallback(() => {
+    if (lockPoints) return;
     const stack = redoStackRef.current.get(activeIdx) || [];
     if (stack.length === 0) return;
     const point = stack[stack.length - 1];
@@ -1578,7 +1880,7 @@ const render = createRender(() => {
     if (pts.length < limit) {
       setPointsForImage(activeIdx, [...pts, point]);
     }
-  }, [activeIdx, getPointsForImage, setPointsForImage, maxPoints]);
+  }, [activeIdx, getPointsForImage, setPointsForImage, maxPoints, lockPoints]);
 
   const canRedo = (redoStackRef.current.get(activeIdx) || []).length > 0;
 
@@ -1588,33 +1890,56 @@ const render = createRender(() => {
     switch (e.key) {
       case "Delete":
       case "Backspace":
-        e.preventDefault();
-        if (activeRoi) {
+        if (activeRoi && !lockRoi) {
+          e.preventDefault();
           pushRoiHistory();
           const next = safeRois.filter((_, i) => i !== activeRoiIdx);
           setActiveRoiIdx(next.length === 0 ? -1 : Math.min(activeRoiIdx, next.length - 1));
           setRois(next);
-        } else {
+        } else if (!lockPoints) {
+          e.preventDefault();
           undoPoint();
         }
         break;
       case "z":
       case "Z":
-        if (isMeta && e.shiftKey) { e.preventDefault(); if (!redoRoi()) redoPoint(); }
-        else if (isMeta) { e.preventDefault(); undoPoint(); if (getPointsForImage(isGallery ? selectedIdx : 0).length === 0) undoRoi(); }
+        if (isMeta && e.shiftKey) {
+          e.preventDefault();
+          if (!lockRoi && redoRoi()) break;
+          if (!lockPoints) redoPoint();
+        } else if (isMeta) {
+          e.preventDefault();
+          if (!lockPoints) undoPoint();
+          if (!lockRoi && getPointsForImage(isGallery ? selectedIdx : 0).length === 0) {
+            undoRoi();
+          }
+        }
         break;
       case "1": case "2": case "3": case "4": case "5": case "6": {
+        if (lockRoi) break;
         const roiIdx = parseInt(e.key) - 1;
         if (roiIdx < safeRois.length) { e.preventDefault(); setActiveRoiIdx(roiIdx); }
         break;
       }
       case "ArrowLeft":
-        if (activeRoi) { e.preventDefault(); const step = e.shiftKey ? 10 : 1; updateActiveRoi({ col: Math.max(0, activeRoi.col - step) }); }
-        else if (isGallery) { e.preventDefault(); setSelectedIdx(Math.max(0, selectedIdx - 1)); }
+        if (activeRoi && !lockRoi) {
+          e.preventDefault();
+          const step = e.shiftKey ? 10 : 1;
+          updateActiveRoi({ col: Math.max(0, activeRoi.col - step) });
+        } else if (isGallery && !lockNavigation) {
+          e.preventDefault();
+          setSelectedIdx(Math.max(0, selectedIdx - 1));
+        }
         break;
       case "ArrowRight":
-        if (activeRoi) { e.preventDefault(); const step = e.shiftKey ? 10 : 1; updateActiveRoi({ col: Math.min(width - 1, activeRoi.col + step) }); }
-        else if (isGallery) { e.preventDefault(); setSelectedIdx(Math.min(nImages - 1, selectedIdx + 1)); }
+        if (activeRoi && !lockRoi) {
+          e.preventDefault();
+          const step = e.shiftKey ? 10 : 1;
+          updateActiveRoi({ col: Math.min(width - 1, activeRoi.col + step) });
+        } else if (isGallery && !lockNavigation) {
+          e.preventDefault();
+          setSelectedIdx(Math.min(nImages - 1, selectedIdx + 1));
+        }
         break;
       case "Escape":
         e.preventDefault();
@@ -1622,13 +1947,40 @@ const render = createRender(() => {
         break;
       case "r":
       case "R":
+        if (lockView) break;
         handleDoubleClick(activeIdx);
         break;
     }
-  }, [undoPoint, redoPoint, undoRoi, redoRoi, safeRois, activeRoi, activeRoiIdx, updateActiveRoi, pushRoiHistory, setActiveRoiIdx, setRois, width, height, isGallery, selectedIdx, nImages, setSelectedIdx, getPointsForImage, handleDoubleClick, activeIdx]);
+  }, [
+    undoPoint,
+    redoPoint,
+    undoRoi,
+    redoRoi,
+    safeRois,
+    activeRoi,
+    activeRoiIdx,
+    updateActiveRoi,
+    pushRoiHistory,
+    setActiveRoiIdx,
+    setRois,
+    width,
+    height,
+    isGallery,
+    selectedIdx,
+    nImages,
+    setSelectedIdx,
+    getPointsForImage,
+    handleDoubleClick,
+    activeIdx,
+    lockRoi,
+    lockPoints,
+    lockNavigation,
+    lockView,
+  ]);
 
   // Resize handlers
   const handleResizeStart = (e: React.MouseEvent) => {
+    if (lockView) return;
     e.stopPropagation();
     e.preventDefault();
     setIsResizing(true);
@@ -1678,12 +2030,13 @@ const render = createRender(() => {
         width: canvasW,
         height: canvasH,
         cursor: isGallery && idx !== selectedIdx
-          ? "pointer"
-          : isDraggingROI || draggingPointRef.current ? "grabbing"
+          ? (lockNavigation ? "default" : "pointer")
+          : isDraggingROI || draggingPointRef.current || profileDragRef.current ? "grabbing"
           : hoveredPointIdx >= 0 ? "move"
+          : profileActive && (hoveredProfileEndpoint !== null || isHoveringProfileLine) ? "grab"
           : hoveredRoiIdx >= 0 ? "grab"
-          : snapEnabled ? "cell"
-          : "crosshair",
+          : snapActive && !lockSnap ? "cell"
+          : lockPoints && lockRoi ? "default" : "crosshair",
         border: isGallery && idx === selectedIdx
           ? `3px solid ${tc.accent}`
           : containerStyles.imageBox.border,
@@ -1692,7 +2045,7 @@ const render = createRender(() => {
       onMouseDown={(e) => handleMouseDown(e, idx)}
       onMouseMove={(e) => handleMouseMove(e, idx)}
       onMouseUp={(e) => handleMouseUp(e, idx)}
-      onMouseLeave={() => { dragRef.current = null; draggingPointRef.current = null; setHover(null); setIsDraggingROI(false); setHoveredRoiIdx(-1); setHoveredPointIdx(-1); }}
+      onMouseLeave={() => { dragRef.current = null; draggingPointRef.current = null; profileDragRef.current = null; setHover(null); setIsDraggingROI(false); setHoveredRoiIdx(-1); setHoveredPointIdx(-1); setHoveredProfileEndpoint(null); setIsHoveringProfileLine(false); }}
       onWheel={(e) => handleWheel(e, idx)}
       onDoubleClick={() => handleDoubleClick(idx)}
     >
@@ -1754,37 +2107,52 @@ const render = createRender(() => {
               {labels[activeIdx]}
             </Box>
           )}
-          {activePts.length > 0 && (
+          {!hidePoints && activePts.length > 0 && (
             <Box component="span" sx={{ color: tc.textMuted, ml: 1 }}>
               {activePts.length}/{maxPtsVal} pts
             </Box>
           )}
         </Typography>
         <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="center">
-          <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>FFT:</Typography>
-          <Switch checked={showFft} onChange={(e) => setShowFft(e.target.checked)} size="small" sx={switchStyles.small} />
-          <Button size="small" sx={{ ...compactButton, color: tc.accent }} onClick={async () => {
-            const idx = isGallery ? selectedIdx : 0;
-            const canvas = canvasRefs.current[idx];
-            if (!canvas) return;
-            try {
-              const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
-              if (!blob) return;
-              await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-            } catch {
-              canvas.toBlob((b) => { if (b) downloadBlob(b, `mark2d_${labels?.[idx] || "image"}.png`); }, "image/png");
-            }
-          }}>COPY</Button>
-          <Button size="small" sx={{ ...compactButton, color: tc.accent }} onClick={(e) => setExportAnchor(e.currentTarget)}>Export</Button>
-          <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
-            <MenuItem onClick={() => handleExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
-            <MenuItem onClick={() => handleExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
-            <MenuItem onClick={handleExport} sx={{ fontSize: 12 }}>PNG</MenuItem>
-          </Menu>
-          <Button size="small" sx={compactButton} onClick={undoPoint} disabled={!activePts.length}>UNDO</Button>
-          <Button size="small" sx={compactButton} onClick={redoPoint} disabled={!canRedo}>REDO</Button>
-          <Button size="small" sx={compactButton} disabled={!needsReset} onClick={() => handleDoubleClick(activeIdx)}>RESET VIEW</Button>
-          <Button size="small" sx={compactButton} onClick={resetPoints} disabled={!hasAnyPoints}>RESET ALL</Button>
+          {!hideDisplay && (
+            <>
+              <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>FFT:</Typography>
+              <Switch checked={showFft} onChange={(e) => setShowFft(e.target.checked)} disabled={lockDisplay} size="small" sx={switchStyles.small} />
+            </>
+          )}
+          {!hideExport && (
+            <>
+              <Button size="small" disabled={lockExport} sx={{ ...compactButton, color: tc.accent }} onClick={async () => {
+                if (lockExport) return;
+                const idx = isGallery ? selectedIdx : 0;
+                const canvas = canvasRefs.current[idx];
+                if (!canvas) return;
+                try {
+                  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
+                  if (!blob) return;
+                  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+                } catch {
+                  canvas.toBlob((b) => { if (b) downloadBlob(b, `mark2d_${labels?.[idx] || "image"}.png`); }, "image/png");
+                }
+              }}>COPY</Button>
+              <Button size="small" disabled={lockExport} sx={{ ...compactButton, color: tc.accent }} onClick={(e) => { if (!lockExport) setExportAnchor(e.currentTarget); }}>Export</Button>
+              <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
+                <MenuItem disabled={lockExport} onClick={() => handleExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
+                <MenuItem disabled={lockExport} onClick={() => handleExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
+                <MenuItem disabled={lockExport} onClick={handleExport} sx={{ fontSize: 12 }}>PNG</MenuItem>
+              </Menu>
+            </>
+          )}
+          {!hidePoints && (
+            <>
+              <Button size="small" sx={compactButton} onClick={undoPoint} disabled={lockPoints || !activePts.length}>UNDO</Button>
+              <Button size="small" sx={compactButton} onClick={redoPoint} disabled={lockPoints || !canRedo}>REDO</Button>
+              <Button size="small" sx={compactButton} onClick={resetPoints} disabled={lockPoints || !hasAnyPoints}>RESET ALL</Button>
+            </>
+          )}
+          {!hideView && (
+            <Button size="small" sx={compactButton} disabled={lockView || !needsReset} onClick={() => handleDoubleClick(activeIdx)}>RESET VIEW</Button>
+          )}
         </Stack>
       </Stack>
 
@@ -1803,7 +2171,7 @@ const render = createRender(() => {
       ) : (
         <Stack direction="row" spacing={`${SPACING.LG}px`}>
           {renderCanvasBox(0, true)}
-          {showFft && (
+          {effectiveShowFft && (
             <Box sx={{ ...containerStyles.imageBox, width: canvasW, height: canvasH }}>
               <canvas
                 ref={fftCanvasRef}
@@ -1862,47 +2230,56 @@ const render = createRender(() => {
 
       {/* Image controls + ROI basics + Histogram (Show3D layout) */}
       {showControls && (<>
-      <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, maxWidth: canvasW, boxSizing: "border-box" }}>
-        {/* Left: image controls */}
-        <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
-          <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Scale:</Typography>
-          <Select value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" variant="outlined" MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 50 }}>
-            <MenuItem value="linear" sx={{ fontSize: 11 }}>Lin</MenuItem>
-            <MenuItem value="log" sx={{ fontSize: 11 }}>Log</MenuItem>
-          </Select>
-          <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Auto:</Typography>
-          <Switch checked={autoContrast} onChange={(e) => setAutoContrast(e.target.checked)} size="small" sx={switchStyles.small} />
-          <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Color:</Typography>
-          <Select size="small" value={colormap || "gray"} onChange={(e) => setColormap(e.target.value)} variant="outlined" MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 65 }}>
-            {COLORMAP_NAMES.map((name) => (
-              <MenuItem key={name} value={name} sx={{ fontSize: 11 }}>
-                {name.charAt(0).toUpperCase() + name.slice(1)}
-              </MenuItem>
-            ))}
-          </Select>
-          <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Colorbar:</Typography>
-          <Switch checked={showColorbar} onChange={(e) => setShowColorbar(e.target.checked)} size="small" sx={switchStyles.small} />
+      {!hideDisplay && (
+        <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, maxWidth: canvasW, boxSizing: "border-box" }}>
+          {/* Left: image controls */}
+          <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
+            <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Scale:</Typography>
+            <Select disabled={lockDisplay} value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" variant="outlined" MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 50 }}>
+              <MenuItem value="linear" sx={{ fontSize: 11 }}>Lin</MenuItem>
+              <MenuItem value="log" sx={{ fontSize: 11 }}>Log</MenuItem>
+            </Select>
+            <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Auto:</Typography>
+            <Switch checked={autoContrast} onChange={(e) => setAutoContrast(e.target.checked)} disabled={lockDisplay} size="small" sx={switchStyles.small} />
+            <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Color:</Typography>
+            <Select disabled={lockDisplay} size="small" value={cmap || "gray"} onChange={(e) => setCmap(e.target.value)} variant="outlined" MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 65 }}>
+              {COLORMAP_NAMES.map((name) => (
+                <MenuItem key={name} value={name} sx={{ fontSize: 11 }}>
+                  {name.charAt(0).toUpperCase() + name.slice(1)}
+                </MenuItem>
+              ))}
+            </Select>
+            <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Colorbar:</Typography>
+            <Switch checked={showColorbar} onChange={(e) => setShowColorbar(e.target.checked)} disabled={lockDisplay} size="small" sx={switchStyles.small} />
+          </Box>
+          {/* Right: Histogram */}
+          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: lockDisplay ? 0.5 : 1, pointerEvents: lockDisplay ? "none" : "auto" }}>
+            {histogramData && (
+              <HistogramWidget
+                data={histogramData}
+                cmap={cmap || "gray"}
+                vminPct={vminPct}
+                vmaxPct={vmaxPct}
+                onRangeChange={(min, max) => {
+                  if (lockDisplay) return;
+                  // Moving the histogram range implies manual contrast mode.
+                  if (autoContrast) setAutoContrast(false);
+                  setVminPct(min);
+                  setVmaxPct(max);
+                }}
+                width={110}
+                height={40}
+                theme={themeInfo.theme}
+                dataMin={dataRange.min}
+                dataMax={dataRange.max}
+              />
+            )}
+          </Box>
         </Box>
-        {/* Right: Histogram */}
-        <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center" }}>
-          {histogramData && (
-            <HistogramWidget
-              data={histogramData}
-              colormap={colormap || "gray"}
-              vminPct={vminPct}
-              vmaxPct={vmaxPct}
-              onRangeChange={(min, max) => { setVminPct(min); setVmaxPct(max); }}
-              width={110}
-              height={40}
-              theme={themeInfo.theme}
-              dataMin={dataRange.min}
-              dataMax={dataRange.max}
-            />
-          )}
-        </Box>
-      </Box>
+      )}
 
       {/* Shape + Color picker row */}
+      {showMarkerStyleControls && (
       <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, mt: 0.5, maxWidth: canvasW, width: "fit-content", boxSizing: "border-box" }}>
         <Box sx={{ display: "flex", gap: "3px", flexShrink: 0 }}>
           {MARKER_SHAPES.map(s => {
@@ -1930,12 +2307,13 @@ const render = createRender(() => {
             return (
               <Box
                 key={s}
-                onClick={() => setCurrentShape(s)}
+                onClick={() => { if (!lockMarkerSettings) setCurrentShape(s); }}
                 sx={{
-                  width: sz, height: sz, cursor: "pointer", borderRadius: "2px",
+                  width: sz, height: sz, cursor: lockMarkerSettings ? "default" : "pointer", borderRadius: "2px",
                   border: selected ? `2px solid ${tc.text}` : "2px solid transparent",
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  "&:hover": { opacity: 0.8 },
+                  opacity: lockMarkerSettings ? 0.5 : 1,
+                  "&:hover": { opacity: lockMarkerSettings ? 0.5 : 0.8 },
                 }}
               >
                 <svg width={sz} height={sz} style={{ display: "block" }}>
@@ -1949,96 +2327,123 @@ const render = createRender(() => {
           {MARKER_COLORS.map(c => (
             <Box
               key={c}
-              onClick={() => setCurrentColor(c)}
+              onClick={() => { if (!lockMarkerSettings) setCurrentColor(c); }}
               sx={{
-                width: 16, height: 16, bgcolor: c, borderRadius: "2px", cursor: "pointer",
+                width: 16, height: 16, bgcolor: c, borderRadius: "2px", cursor: lockMarkerSettings ? "default" : "pointer",
                 border: c === currentColor ? `2px solid ${tc.text}` : "2px solid transparent",
-                "&:hover": { opacity: 0.8 },
+                opacity: lockMarkerSettings ? 0.5 : 1,
+                "&:hover": { opacity: lockMarkerSettings ? 0.5 : 0.8 },
               }}
             />
           ))}
         </Box>
       </Box>
+      )}
 
       {/* Controls row: Marker size + Max + Advanced toggle */}
+      {showPrimaryControlRow && (
       <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, mt: 0.5, maxWidth: canvasW, width: "fit-content", boxSizing: "border-box" }}>
-        <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Marker:</Typography>
-        <Slider
-          value={size}
-          min={4}
-          max={40}
-          step={1}
-          onChange={(_, v) => { if (typeof v === "number") setDotSize(v); }}
-          size="small"
-          sx={{ ...sliderStyles.small, width: 60 }}
-        />
-        <Typography sx={{ ...typography.value, color: tc.textMuted, minWidth: 20 }}>{size}px</Typography>
-        <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Max:</Typography>
-        <Select
-          value={maxPtsVal}
-          onChange={(e: SelectChangeEvent<number>) => {
-            const v = Number(e.target.value);
-            setMaxPoints(v);
-            if (!isGallery) {
-              setSelectedPoints((prev) => {
-                const flat = (prev as Point[]) || [];
-                return flat.length <= v ? flat : flat.slice(flat.length - v);
-              });
-            } else {
-              setSelectedPoints((prev) => {
-                const nested = ((prev as Point[][]) || []).map(pts =>
-                  pts.length <= v ? pts : pts.slice(pts.length - v)
-                );
-                return nested;
-              });
-            }
-          }}
-          size="small"
-          variant="outlined"
-          MenuProps={themedMenuProps}
-          sx={themedSelect}
-        >
-          {Array.from({ length: 20 }, (_, i) => i + 1).map(n => (
-            <MenuItem key={n} value={n} sx={{ fontSize: 11 }}>{n}</MenuItem>
-          ))}
-        </Select>
-        <Typography
-          onClick={() => setSnapEnabled(!snapEnabled)}
-          sx={{ ...typography.labelSmall, color: snapEnabled ? accentGreen : tc.textMuted, cursor: "pointer", userSelect: "none", fontWeight: snapEnabled ? "bold" : "normal", "&:hover": { textDecoration: "underline" } }}
-        >
-          {snapEnabled ? "\u25C9" : "\u25CB"} Snap
-        </Typography>
-        {snapEnabled && (
+        {showMarkerStyleControls && (
           <>
-            <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>R:</Typography>
-            <Slider value={snapRadius} min={1} max={20} step={1} onChange={(_, v) => { if (typeof v === "number") setSnapRadius(v); }} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
-            <Typography sx={{ ...typography.value, color: tc.textMuted }}>{snapRadius}px</Typography>
+            <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Marker:</Typography>
+            <Slider
+              value={size}
+              min={4}
+              max={40}
+              step={1}
+              disabled={lockMarkerSettings}
+              onChange={(_, v) => { if (typeof v === "number") setDotSize(v); }}
+              size="small"
+              sx={{ ...sliderStyles.small, width: 60 }}
+            />
+            <Typography sx={{ ...typography.value, color: tc.textMuted, minWidth: 20 }}>{size}px</Typography>
+            <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Max:</Typography>
+            <Select
+              disabled={lockMarkerSettings}
+              value={maxPtsVal}
+              onChange={(e: SelectChangeEvent<number>) => {
+                const v = Number(e.target.value);
+                setMaxPoints(v);
+                if (!isGallery) {
+                  setSelectedPoints((prev) => {
+                    const flat = (prev as Point[]) || [];
+                    return flat.length <= v ? flat : flat.slice(flat.length - v);
+                  });
+                } else {
+                  setSelectedPoints((prev) => {
+                    const nested = ((prev as Point[][]) || []).map(pts =>
+                      pts.length <= v ? pts : pts.slice(pts.length - v)
+                    );
+                    return nested;
+                  });
+                }
+              }}
+              size="small"
+              variant="outlined"
+              MenuProps={themedMenuProps}
+              sx={themedSelect}
+            >
+              {Array.from({ length: 20 }, (_, i) => i + 1).map(n => (
+                <MenuItem key={n} value={n} sx={{ fontSize: 11 }}>{n}</MenuItem>
+              ))}
+            </Select>
           </>
         )}
-        <Typography
-          onClick={() => { setProfileActive(!profileActive); if (profileActive) { setProfileLine([]); setProfileData(null); } }}
-          sx={{ ...typography.labelSmall, color: profileActive ? tc.accent : tc.textMuted, cursor: "pointer", userSelect: "none", fontWeight: profileActive ? "bold" : "normal", "&:hover": { textDecoration: "underline" } }}
-        >
-          {profileActive ? "\u25C9" : "\u25CB"} Profile
-        </Typography>
-        <Typography
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          sx={{ ...typography.labelSmall, color: tc.accent, cursor: "pointer", userSelect: "none", "&:hover": { textDecoration: "underline" } }}
-        >
-          {showAdvanced ? "\u25BE Advanced" : "\u25B8 Advanced"}
-        </Typography>
+        {showSnapControls && (
+          <>
+            <Typography
+              onClick={() => { if (!lockSnap) setSnapEnabled(!snapEnabled); }}
+              sx={{ ...typography.labelSmall, color: snapEnabled ? accentGreen : tc.textMuted, cursor: lockSnap ? "default" : "pointer", userSelect: "none", fontWeight: snapEnabled ? "bold" : "normal", opacity: lockSnap ? 0.5 : 1, "&:hover": { textDecoration: lockSnap ? "none" : "underline" } }}
+            >
+              {snapEnabled ? "\u25C9" : "\u25CB"} Snap
+            </Typography>
+            {snapEnabled && (
+              <>
+                <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>R:</Typography>
+                <Slider disabled={lockSnap} value={snapRadius} min={1} max={20} step={1} onChange={(_, v) => { if (typeof v === "number") setSnapRadius(v); }} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
+                <Typography sx={{ ...typography.value, color: tc.textMuted }}>{snapRadius}px</Typography>
+              </>
+            )}
+          </>
+        )}
+        {showProfileControls && (
+          <Typography
+            onClick={() => {
+              if (lockProfile) return;
+              profileDragRef.current = null;
+              setHoveredProfileEndpoint(null);
+              setIsHoveringProfileLine(false);
+              setProfileActive(!profileActive);
+              if (profileActive) { setProfileLine([]); setProfileData(null); }
+            }}
+            sx={{ ...typography.labelSmall, color: profileActive ? tc.accent : tc.textMuted, cursor: lockProfile ? "default" : "pointer", userSelect: "none", fontWeight: profileActive ? "bold" : "normal", opacity: lockProfile ? 0.5 : 1, "&:hover": { textDecoration: lockProfile ? "none" : "underline" } }}
+          >
+            {profileActive ? "\u25C9" : "\u25CB"} Profile
+          </Typography>
+        )}
+        {showMarkerStyleControls && (
+          <Typography
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            sx={{ ...typography.labelSmall, color: tc.accent, cursor: "pointer", userSelect: "none", "&:hover": { textDecoration: "underline" } }}
+          >
+            {showAdvanced ? "\u25BE Advanced" : "\u25B8 Advanced"}
+          </Typography>
+        )}
       </Box>
+      )}
 
       {/* ROI basics */}
+      {!hideRoi && (
       <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, mt: 0.5, maxWidth: canvasW, width: "fit-content", boxSizing: "border-box" }}>
         <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>ROI:</Typography>
         <Select
+          disabled={lockRoi}
           size="small"
-          value={activeRoi ? activeRoi.mode : newRoiShape}
+          value={activeRoi ? activeRoi.shape : newRoiShape}
           onChange={(e) => {
             const val = e.target.value as RoiShape;
             setNewRoiShape(val);
-            if (activeRoi) updateActiveRoi({ mode: val });
+            if (activeRoi) updateActiveRoi({ shape: val });
           }}
           variant="outlined"
           MenuProps={themedMenuProps}
@@ -2051,14 +2456,16 @@ const render = createRender(() => {
         <Button
           size="small"
           variant="outlined"
+          disabled={lockRoi}
           onClick={() => {
+            if (lockRoi) return;
             pushRoiHistory();
             const id = Math.max(0, ...safeRois.map(r => r.id)) + 1;
             const color = ROI_COLORS[safeRois.length % ROI_COLORS.length];
             const roi: ROI = {
-              id, mode: newRoiShape,
+              id, shape: newRoiShape,
               row: Math.floor(height / 2), col: Math.floor(width / 2),
-              radius: 30, rectW: 60, rectH: 40,
+              radius: 30, width: 60, height: 40,
               color, opacity: 0.8,
             };
             setActiveRoiIdx(safeRois.length);
@@ -2069,9 +2476,10 @@ const render = createRender(() => {
           ADD
         </Button>
       </Box>
+      )}
 
       {/* Advanced options row (collapsible) */}
-      {showAdvanced && (
+      {showAdvanced && showMarkerStyleControls && (
         <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, maxWidth: canvasW, width: "fit-content", boxSizing: "border-box" }}>
           <Typography sx={{ ...typography.label, color: tc.textMuted }}>Border</Typography>
           <Slider
@@ -2079,6 +2487,7 @@ const render = createRender(() => {
             min={0}
             max={6}
             step={1}
+            disabled={lockMarkerSettings}
             onChange={(_, v) => { if (typeof v === "number") setBorderWidth(v); }}
             size="small"
             sx={{ ...sliderStyles.small, width: 50 }}
@@ -2090,6 +2499,7 @@ const render = createRender(() => {
             min={0.1}
             max={1.0}
             step={0.1}
+            disabled={lockMarkerSettings}
             onChange={(_, v) => { if (typeof v === "number") setMarkerOpacity(v); }}
             size="small"
             sx={{ ...sliderStyles.small, width: 50 }}
@@ -2101,13 +2511,14 @@ const render = createRender(() => {
             min={0}
             max={36}
             step={1}
+            disabled={lockMarkerSettings}
             onChange={(_, v) => { if (typeof v === "number") setLabelSize(v); }}
             size="small"
             sx={{ ...sliderStyles.small, width: 50 }}
           />
           <Typography sx={{ ...typography.value, color: tc.textMuted, minWidth: 28 }}>{labelSize === 0 ? "Auto" : `${labelSize}px`}</Typography>
           <Typography sx={{ ...typography.label, color: tc.textMuted }}>Color</Typography>
-          <Select value={labelColor} onChange={(e) => setLabelColor(e.target.value)} size="small" variant="outlined" displayEmpty MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60 }}>
+          <Select disabled={lockMarkerSettings} value={labelColor} onChange={(e) => setLabelColor(e.target.value)} size="small" variant="outlined" displayEmpty MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60 }}>
             <MenuItem value="" sx={{ fontSize: 11 }}>Auto</MenuItem>
             <MenuItem value="white" sx={{ fontSize: 11 }}>White</MenuItem>
             <MenuItem value="black" sx={{ fontSize: 11 }}>Black</MenuItem>
@@ -2120,7 +2531,7 @@ const render = createRender(() => {
       )}
 
       {/* Active ROI details (only when a ROI is selected) */}
-      {activeRoi && (
+      {!hideRoi && activeRoi && (
         <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, mt: 0.5, maxWidth: canvasW, width: "fit-content", boxSizing: "border-box" }}>
           <Typography sx={{ ...typography.value, color: tc.textMuted, minWidth: 24 }}>
             ROI #{activeRoiIdx + 1}/{safeRois.length}
@@ -2128,37 +2539,38 @@ const render = createRender(() => {
           {safeRois.length > 1 && (
             <>
               <Typography
-                onClick={() => setActiveRoiIdx((activeRoiIdx - 1 + safeRois.length) % safeRois.length)}
-                sx={{ ...typography.labelSmall, color: tc.accent, cursor: "pointer", userSelect: "none" }}
+                onClick={() => { if (!lockRoi) setActiveRoiIdx((activeRoiIdx - 1 + safeRois.length) % safeRois.length); }}
+                sx={{ ...typography.labelSmall, color: tc.accent, cursor: lockRoi ? "default" : "pointer", userSelect: "none", opacity: lockRoi ? 0.5 : 1 }}
               >&larr;</Typography>
               <Typography
-                onClick={() => setActiveRoiIdx((activeRoiIdx + 1) % safeRois.length)}
-                sx={{ ...typography.labelSmall, color: tc.accent, cursor: "pointer", userSelect: "none" }}
+                onClick={() => { if (!lockRoi) setActiveRoiIdx((activeRoiIdx + 1) % safeRois.length); }}
+                sx={{ ...typography.labelSmall, color: tc.accent, cursor: lockRoi ? "default" : "pointer", userSelect: "none", opacity: lockRoi ? 0.5 : 1 }}
               >&rarr;</Typography>
             </>
           )}
-          {activeRoi.mode === "rectangle" ? (
+          {activeRoi.shape === "rectangle" ? (
             <>
               <Typography sx={{ ...typography.label, color: tc.textMuted }}>W</Typography>
-              <Slider value={activeRoi.rectW} min={5} max={Math.max(width, 10)} onChange={(_, v) => { if (typeof v === "number") updateActiveRoi({ rectW: v }); }} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
+              <Slider disabled={lockRoi} value={activeRoi.width} min={5} max={Math.max(width, 10)} onChange={(_, v) => { if (typeof v === "number") updateActiveRoi({ width: v }); }} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
               <Typography sx={{ ...typography.label, color: tc.textMuted }}>H</Typography>
-              <Slider value={activeRoi.rectH} min={5} max={Math.max(height, 10)} onChange={(_, v) => { if (typeof v === "number") updateActiveRoi({ rectH: v }); }} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
+              <Slider disabled={lockRoi} value={activeRoi.height} min={5} max={Math.max(height, 10)} onChange={(_, v) => { if (typeof v === "number") updateActiveRoi({ height: v }); }} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
             </>
           ) : (
             <>
               <Typography sx={{ ...typography.label, color: tc.textMuted }}>Size</Typography>
-              <Slider value={activeRoi.radius} min={5} max={Math.max(width, height, 10)} onChange={(_, v) => { if (typeof v === "number") updateActiveRoi({ radius: v }); }} size="small" sx={{ ...sliderStyles.small, width: 50 }} />
+              <Slider disabled={lockRoi} value={activeRoi.radius} min={5} max={Math.max(width, height, 10)} onChange={(_, v) => { if (typeof v === "number") updateActiveRoi({ radius: v }); }} size="small" sx={{ ...sliderStyles.small, width: 50 }} />
             </>
           )}
           <Box sx={{ display: "flex", gap: "2px" }}>
             {ROI_COLORS.map(c => (
               <Box
                 key={c}
-                onClick={() => updateActiveRoi({ color: c })}
+                onClick={() => { if (!lockRoi) updateActiveRoi({ color: c }); }}
                 sx={{
-                  width: 12, height: 12, bgcolor: c, cursor: "pointer",
+                  width: 12, height: 12, bgcolor: c, cursor: lockRoi ? "default" : "pointer",
                   border: c === activeRoi.color ? `2px solid ${tc.text}` : "1px solid transparent",
-                  "&:hover": { opacity: 0.8 },
+                  opacity: lockRoi ? 0.5 : 1,
+                  "&:hover": { opacity: lockRoi ? 0.5 : 0.8 },
                 }}
               />
             ))}
@@ -2169,6 +2581,7 @@ const render = createRender(() => {
             min={0.1}
             max={1.0}
             step={0.1}
+            disabled={lockRoi}
             onChange={(_, v) => { if (typeof v === "number") updateActiveRoi({ opacity: v }); }}
             size="small"
             sx={{ ...sliderStyles.small, width: 40 }}
@@ -2176,7 +2589,9 @@ const render = createRender(() => {
           <Button
             size="small"
             variant="outlined"
+            disabled={lockRoi}
             onClick={() => {
+              if (lockRoi) return;
               pushRoiHistory();
               const next = safeRois.filter((_, i) => i !== activeRoiIdx);
               setActiveRoiIdx(next.length === 0 ? -1 : Math.min(activeRoiIdx, next.length - 1));
@@ -2190,7 +2605,7 @@ const render = createRender(() => {
       )}
 
       {/* ROI pixel statistics */}
-      {roiStats && (
+      {!hideRoi && roiStats && (
         <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, maxWidth: canvasW, width: "fit-content", boxSizing: "border-box" }}>
           <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>ROI Stats:</Typography>
           <Typography sx={{ ...typography.value, color: tc.textMuted }}>
@@ -2212,7 +2627,7 @@ const render = createRender(() => {
       )}
 
       {/* Line profile sparkline */}
-      {profileActive && (
+      {!hideProfile && profileActive && (
         <Box sx={{ mt: 0.5, maxWidth: canvasW, boxSizing: "border-box" }}>
           <canvas
             ref={profileCanvasRef}
@@ -2223,7 +2638,7 @@ const render = createRender(() => {
       </>)}
 
       {/* Selected points list */}
-      {isGallery ? (
+      {!hidePoints && (isGallery ? (
         hasAnyPoints && (
           <Box sx={{ mt: 0.5 }}>
             {Array.from({ length: nImages }).map((_, imgIdx) => {
@@ -2244,17 +2659,18 @@ const render = createRender(() => {
                             <Box component="span" sx={{ color: c }}>{i + 1}</Box> ({p.row}, {p.col})
                             {i > 0 && (
                               <Box component="span" sx={{ color: tc.textMuted, ml: 0.5, fontSize: 9 }}>
-                                {"\u2194"} {formatDistance(pts[i - 1], p, pixelSizeAngstrom || 0)}
+                                {"\u2194"} {formatDistance(pts[i - 1], p, pixelSize || 0)}
                               </Box>
                             )}
                           </Typography>
                           <Box
                             className="pt-delete"
                             onClick={() => {
+                              if (lockPoints) return;
                               const updated = pts.filter((_, j) => j !== i);
                               setPointsForImage(imgIdx, updated);
                             }}
-                            sx={{ opacity: 0, cursor: "pointer", fontSize: 10, color: tc.textMuted, ml: 0.5, lineHeight: 1, "&:hover": { color: "#f44336" } }}
+                            sx={{ opacity: lockPoints ? 0.25 : 0, cursor: lockPoints ? "default" : "pointer", fontSize: 10, color: tc.textMuted, ml: 0.5, lineHeight: 1, "&:hover": { color: lockPoints ? tc.textMuted : "#f44336" } }}
                           >&times;</Box>
                         </Box>
                       );
@@ -2277,28 +2693,29 @@ const render = createRender(() => {
                     <Box component="span" sx={{ color: c }}>{i + 1}</Box> ({p.row}, {p.col})
                     {i > 0 && (
                       <Box component="span" sx={{ color: tc.textMuted, ml: 0.5, fontSize: 9 }}>
-                        {"\u2194"} {formatDistance(activePts[i - 1], p, pixelSizeAngstrom || 0)}
+                        {"\u2194"} {formatDistance(activePts[i - 1], p, pixelSize || 0)}
                       </Box>
                     )}
                   </Typography>
                   <Box
                     className="pt-delete"
                     onClick={() => {
+                      if (lockPoints) return;
                       const idx = isGallery ? selectedIdx : 0;
                       const updated = activePts.filter((_, j) => j !== i);
                       setPointsForImage(idx, updated);
                     }}
-                    sx={{ opacity: 0, cursor: "pointer", fontSize: 10, color: tc.textMuted, ml: 0.5, lineHeight: 1, "&:hover": { color: "#f44336" } }}
+                    sx={{ opacity: lockPoints ? 0.25 : 0, cursor: lockPoints ? "default" : "pointer", fontSize: 10, color: tc.textMuted, ml: 0.5, lineHeight: 1, "&:hover": { color: lockPoints ? tc.textMuted : "#f44336" } }}
                   >&times;</Box>
                 </Box>
               );
             })}
           </Box>
         )
-      )}
+      ))}
 
       {/* Pairwise distances */}
-      {activePts.length >= 2 && (
+      {!hidePoints && activePts.length >= 2 && (
         <Box sx={{ mt: 0.5, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, px: 1, py: 0.5, width: "fit-content" }}>
           <Typography sx={{ ...typography.labelSmall, color: tc.textMuted, mb: 0.25 }}>Pairwise Distances</Typography>
           <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, auto)", gap: `0 ${SPACING.MD}px`, width: "fit-content" }}>
@@ -2308,7 +2725,7 @@ const render = createRender(() => {
                   <Box component="span" sx={{ color: p1.color }}>{i + 1}</Box>
                   {"\u2194"}
                   <Box component="span" sx={{ color: p2.color }}>{i + 1 + j + 1}</Box>
-                  {" "}{formatDistance(p1, p2, pixelSizeAngstrom || 0)}
+                  {" "}{formatDistance(p1, p2, pixelSize || 0)}
                 </Typography>
               ))
             )}
@@ -2317,7 +2734,7 @@ const render = createRender(() => {
       )}
 
       {/* Multi-ROI stats table */}
-      {safeRois.length >= 2 && perImageData.length > 0 && (
+      {!hideRoi && safeRois.length >= 2 && perImageData.length > 0 && (
         <Box sx={{ mt: 0.5, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, px: 1, py: 0.5, width: "fit-content" }}>
           <Typography sx={{ ...typography.labelSmall, color: tc.textMuted, mb: 0.25 }}>All ROI Stats</Typography>
           <Box component="table" sx={{ borderCollapse: "collapse", ...typography.value, color: tc.textMuted }}>
@@ -2341,7 +2758,7 @@ const render = createRender(() => {
                     sx={{ cursor: "pointer", bgcolor: ri === activeRoiIdx ? `${tc.accent}22` : "transparent", "&:hover": { bgcolor: `${tc.accent}11` } }}
                   >
                     <Box component="td" sx={{ px: 0.5, py: 0.25, color: roi.color, fontWeight: "bold" }}>{ri + 1}</Box>
-                    <Box component="td" sx={{ px: 0.5, py: 0.25 }}>{roi.mode}</Box>
+                    <Box component="td" sx={{ px: 0.5, py: 0.25 }}>{roi.shape}</Box>
                     <Box component="td" sx={{ px: 0.5, py: 0.25, textAlign: "right", color: tc.accent }}>{stats ? stats.mean.toFixed(4) : "—"}</Box>
                     <Box component="td" sx={{ px: 0.5, py: 0.25, textAlign: "right", color: tc.accent }}>{stats ? stats.std.toFixed(4) : "—"}</Box>
                     <Box component="td" sx={{ px: 0.5, py: 0.25, textAlign: "right", color: tc.accent }}>{stats ? stats.min.toFixed(4) : "—"}</Box>

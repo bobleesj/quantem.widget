@@ -1,6 +1,7 @@
 """Shared fixtures for Playwright smoke tests."""
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -8,54 +9,120 @@ import time
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import sync_playwright
 
 JUPYTER_PORT = 8898
 TESTS_DIR = Path(__file__).parent
 PROJECT_DIR = TESTS_DIR.parent
+SRC_DIR = PROJECT_DIR / "src"
+
+# Ensure tests import this checkout (src layout), not an installed package.
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+# Keep matplotlib cache on a writable path to avoid expensive first-import churn.
+os.environ.setdefault("MPLCONFIGDIR", str(Path("/tmp") / "quantem-widget-mplconfig"))
 
 
 @pytest.fixture(scope="session")
 def jupyter_server():
     """Start a JupyterLab server for the entire test session."""
-    proc = subprocess.Popen(
-        [
-            sys.executable, "-m", "jupyter", "lab",
-            f"--port={JUPYTER_PORT}", "--no-browser",
-            "--NotebookApp.token=''", "--NotebookApp.password=''",
-            "--ServerApp.disable_check_xsrf=True",
-        ],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        cwd=PROJECT_DIR,
-    )
-    # Wait for server
-    for _ in range(30):
-        time.sleep(1)
+    def _port_open(port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.2)
+            return sock.connect_ex(("localhost", port)) == 0
+
+    def _pick_port(start_port: int) -> int:
+        for offset in range(16):
+            candidate = start_port + offset
+            if not _port_open(candidate):
+                return candidate
+        return start_port
+
+    def _wait_for_server(proc: subprocess.Popen, port: int, timeout_s: int = 90) -> None:
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                raise RuntimeError(f"JupyterLab exited early with code {proc.returncode}")
+            if _port_open(port):
+                return
+            time.sleep(1.0)
+        raise RuntimeError(f"JupyterLab failed to start within {timeout_s} seconds")
+
+    def _tail_log(path: Path, max_lines: int = 80) -> str:
+        if not path.exists():
+            return ""
+        lines = path.read_text(errors="ignore").splitlines()
+        if len(lines) <= max_lines:
+            return "\n".join(lines)
+        return "\n".join(lines[-max_lines:])
+
+    def _stop(proc: subprocess.Popen | None) -> None:
+        if proc is None:
+            return
+        proc.terminate()
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            result = sock.connect_ex(("localhost", JUPYTER_PORT))
-            sock.close()
-            if result == 0:
-                time.sleep(2)
-                break
-        except OSError:
-            pass
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+    global JUPYTER_PORT
+    base_port = int(os.environ.get("QUANTEM_TEST_JUPYTER_PORT", JUPYTER_PORT))
+    JUPYTER_PORT = _pick_port(base_port)
+
+    proc = None
+    log_path = Path("/tmp") / f"quantem-widget-jupyter-{int(time.time())}.log"
+    log_handle = None
+    startup_errors: list[str] = []
+
+    for attempt in (1, 2):
+        if log_handle is not None and not log_handle.closed:
+            log_handle.close()
+        log_handle = log_path.open("w", encoding="utf-8")
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "jupyter",
+                "lab",
+                f"--port={JUPYTER_PORT}",
+                "--ServerApp.port_retries=0",
+                "--no-browser",
+                "--NotebookApp.token=''",
+                "--NotebookApp.password=''",
+                "--ServerApp.disable_check_xsrf=True",
+            ],
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            cwd=PROJECT_DIR,
+        )
+        try:
+            _wait_for_server(proc, JUPYTER_PORT, timeout_s=90)
+            time.sleep(2)
+            break
+        except RuntimeError as exc:
+            log_handle.flush()
+            startup_errors.append(f"attempt {attempt} on port {JUPYTER_PORT}: {exc}\n{_tail_log(log_path)}")
+            _stop(proc)
+            proc = None
+            JUPYTER_PORT = _pick_port(JUPYTER_PORT + 1)
     else:
-        proc.kill()
-        raise RuntimeError("JupyterLab failed to start within 30 seconds")
+        if log_handle is not None and not log_handle.closed:
+            log_handle.close()
+        details = "\n\n".join(startup_errors)
+        raise RuntimeError(f"JupyterLab failed to start after 2 attempts.\n{details}")
 
     yield proc
 
-    proc.terminate()
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+    _stop(proc)
+    if log_handle is not None and not log_handle.closed:
+        log_handle.close()
 
 
 @pytest.fixture(scope="session")
 def browser_context(jupyter_server):
     """Provide a Playwright browser context for the session."""
+    from playwright.sync_api import sync_playwright
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(viewport={"width": 1400, "height": 900})

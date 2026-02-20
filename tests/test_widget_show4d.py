@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import pytest
 import quantem.widget
@@ -316,14 +317,19 @@ def test_show4d_snap_toggle():
 def test_show4d_state_dict_roundtrip():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data, cmap="viridis", log_scale=True, title="4D Data",
-               snap_enabled=True, snap_radius=8)
+               snap_enabled=True, snap_radius=8,
+               disabled_tools=["display"], hidden_tools=["roi"])
     sd = w.state_dict()
+    assert "disabled_tools" in sd
+    assert "hidden_tools" in sd
     w2 = Show4D(data, state=sd)
     assert w2.cmap == "viridis"
     assert w2.log_scale is True
     assert w2.title == "4D Data"
     assert w2.snap_enabled is True
     assert w2.snap_radius == 8
+    assert w2.disabled_tools == ["display"]
+    assert w2.hidden_tools == ["roi"]
 
 
 def test_show4d_save_load_file(tmp_path):
@@ -334,7 +340,10 @@ def test_show4d_save_load_file(tmp_path):
     w.save(str(path))
     assert path.exists()
     saved = json.loads(path.read_text())
-    assert saved["cmap"] == "plasma"
+    assert saved["metadata_version"] == "1.0"
+    assert saved["widget_name"] == "Show4D"
+    assert isinstance(saved["widget_version"], str)
+    assert saved["state"]["cmap"] == "plasma"
     w2 = Show4D(data, state=str(path))
     assert w2.cmap == "plasma"
     assert w2.title == "Saved 4D"
@@ -461,9 +470,12 @@ def test_show4d_gif_export_defaults():
     w = Show4D(data)
     assert w._gif_export_requested is False
     assert w._gif_data == b""
+    assert w._gif_metadata_json == ""
 
 
 def test_show4d_gif_generation_with_path():
+    import json
+
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data, cmap="viridis")
     w.set_path([(0, 0), (1, 1), (2, 2)], autoplay=False)
@@ -471,6 +483,11 @@ def test_show4d_gif_generation_with_path():
     assert len(w._gif_data) > 0
     # GIF magic bytes
     assert w._gif_data[:3] == b"GIF"
+    metadata = json.loads(w._gif_metadata_json)
+    assert metadata["widget_name"] == "Show4D"
+    assert metadata["format"] == "gif"
+    assert metadata["export_kind"] == "path_animation"
+    assert metadata["n_frames"] == 3
 
 
 def test_show4d_gif_generation_no_path():
@@ -478,6 +495,7 @@ def test_show4d_gif_generation_no_path():
     w = Show4D(data)
     w._generate_gif()
     assert w._gif_data == b""
+    assert w._gif_metadata_json == ""
 
 
 def test_show4d_normalize_frame():
@@ -489,3 +507,98 @@ def test_show4d_normalize_frame():
     assert result.shape == (2, 2)
     assert result.max() <= 255
     assert result.min() >= 0
+
+
+# ── Tool Visibility / Locking ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
+def test_show4d_tool_lists_default_empty(trait_name):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4D(data)
+    assert getattr(w, trait_name) == []
+
+
+@pytest.mark.parametrize(
+    ("trait_name", "ctor_kwargs", "expected"),
+    [
+        ("disabled_tools", {"disabled_tools": ["display", "ROI", "playback", "FFT"]}, ["display", "roi", "playback", "fft"]),
+        ("hidden_tools", {"hidden_tools": ["display", "ROI", "playback", "FFT"]}, ["display", "roi", "playback", "fft"]),
+        ("disabled_tools", {"disable_display": True, "disable_roi": True, "disable_playback": True, "disable_fft": True}, ["display", "roi", "playback", "fft"]),
+        ("hidden_tools", {"hide_display": True, "hide_roi": True, "hide_playback": True, "hide_fft": True}, ["display", "roi", "playback", "fft"]),
+        ("disabled_tools", {"disable_all": True}, ["all"]),
+        ("hidden_tools", {"hide_all": True}, ["all"]),
+    ],
+)
+def test_show4d_tool_lists_constructor_behavior(trait_name, ctor_kwargs, expected):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4D(data, **ctor_kwargs)
+    assert getattr(w, trait_name) == expected
+
+
+@pytest.mark.parametrize("kwargs", [{"disabled_tools": ["not_real"]}, {"hidden_tools": ["not_real"]}])
+def test_show4d_tool_lists_unknown_raises(kwargs):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    with pytest.raises(ValueError, match="Unknown tool group"):
+        Show4D(data, **kwargs)
+
+
+@pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
+def test_show4d_tool_lists_normalizes(trait_name):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4D(data)
+    setattr(w, trait_name, ["DISPLAY", "display", "roi"])
+    assert getattr(w, trait_name) == ["display", "roi"]
+
+
+# ── save_image ───────────────────────────────────────────────────────────
+
+
+def test_show4d_save_image_signal(tmp_path):
+    data = np.random.rand(4, 4, 32, 32).astype(np.float32)
+    w = Show4D(data)
+    out = w.save_image(tmp_path / "signal.png")
+    assert out.exists()
+    from PIL import Image
+    img = Image.open(out)
+    assert img.size == (32, 32)
+
+
+def test_show4d_save_image_nav(tmp_path):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4D(data)
+    out = w.save_image(tmp_path / "nav.png", view="nav")
+    assert out.exists()
+
+
+def test_show4d_save_image_position(tmp_path):
+    data = np.random.rand(8, 8, 16, 16).astype(np.float32)
+    w = Show4D(data)
+    out = w.save_image(tmp_path / "pos.png", position=(3, 5))
+    assert out.exists()
+
+
+def test_show4d_save_image_pdf(tmp_path):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4D(data)
+    out = w.save_image(tmp_path / "out.pdf")
+    assert out.exists()
+
+
+def test_show4d_save_image_bad_format(tmp_path):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4D(data)
+    with pytest.raises(ValueError, match="Unsupported format"):
+        w.save_image(tmp_path / "out.bmp")
+
+
+def test_show4d_widget_version_is_set():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data)
+    assert w.widget_version != "unknown"
+
+
+def test_show4d_show_controls_default():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Show4D(data)
+    assert w.show_controls is True

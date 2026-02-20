@@ -1,7 +1,7 @@
 Show3D
 ======
 
-Interactive 3D stack viewer with playback, ROI analysis, FFT, and export.
+Interactive 3D stack viewer with playback, multi-ROI analysis, FFT, and export.
 
 Usage
 -----
@@ -19,7 +19,7 @@ Usage
    Show3D(
        stack,
        labels=[f"C10={d:.0f} nm" for d in defocus],
-       pixel_size=0.25,
+       pixel_size=2.5,
        timestamps=defocus.tolist(),
        timestamp_unit="nm",
    )
@@ -28,11 +28,17 @@ Features
 --------
 
 - **Playback** — Play/pause/stop with configurable FPS, loop, boomerang modes
-- **ROI analysis** — Circle, square, and rectangle ROI with live stats
+- **ROI analysis** — Multiple ROIs (circle, square, rectangle, annular) with live stats
+- **ROI interaction** — Click empty image to add ROI at cursor, Delete selected, duplicate selected, hover edge to resize
+- **ROI legend** — Per-ROI visibility, lock state, focus toggle, and live stats for quick comparison
+- **Focus mode** — Adjustable dim strength outside focused ROIs
 - **FFT** — Toggle Fourier transform display
 - **Histogram** — Live intensity histogram
 - **Scale bar** — Calibrated scale bar when ``pixel_size`` is set
-- **Export** — Save current frame as PNG or full stack as GIF
+- **Export** — Figure/frame PNG, GIF, PNG ZIP, and one-click bundle export (PNG + ROI CSV + state JSON)
+- **File/folder loading** — Build stacks from EMD/PNG/TIFF files with explicit loader functions
+- **Tool customization** — Disable or hide control groups (including playback)
+- **Quick view presets** — 3 save/load slots (UI buttons or keyboard ``1/2/3``, ``Shift+1/2/3``)
 
 Methods
 -------
@@ -41,6 +47,19 @@ Methods
 
    w = Show3D(stack)
 
+   # Build from explicit loaders (recommended)
+   w = Show3D.from_emd("data/scan.emd", dataset_path="/data/signal")
+   w = Show3D.from_tiff("data/focal_series.tiff")
+   w = Show3D.from_png("data/frame_0000.png")
+   w = Show3D.from_png_folder("data/png_stack")
+   w = Show3D.from_tiff_folder("data/tiff_stack")
+   w = Show3D.from_emd_folder("data/emd_stack", dataset_path="/data/signal")
+
+   # Explicit folder dispatch (no implicit auto type selection)
+   w = Show3D.from_folder("data/mixed_stack", file_type="png")
+   w = Show3D.from_folder("data/mixed_stack", file_type="tiff")
+   w = Show3D.from_folder("data/mixed_stack", file_type="emd", dataset_path="/data/signal")
+
    # Playback
    w.play()
    w.pause()
@@ -48,16 +67,48 @@ Methods
    w.goto(25)  # Jump to frame 25
    w.set_playback_path([0, 10, 20, 10, 0])  # Custom frame order
 
-   # ROI analysis
-   w.set_roi(row=128, col=128, radius=20)
+   # ROI analysis (multi-ROI)
+   w.add_roi(shape="circle")                 # add at center
+   w.add_roi(row=96, col=128, shape="annular")
+   w.roi_selected_idx = 0                    # edit selected ROI
+   w.set_roi(row=128, col=128, radius=20)    # helper for selected ROI
    w.roi_circle(radius=15)
    w.roi_square(half_size=10)
    w.roi_rectangle(width=20, height=10)
    w.roi_annular(inner=5, outer=15)
+   w.duplicate_selected_roi()
+   w.delete_selected_roi()
+   w.roi_focus_dim = 0.35
+   w.clear_rois()
+   w.roi_list
+   w.roi_stats
 
    # Line profile
    w.set_profile((10, 10), (200, 200))
    w.clear_profile()
+
+   # Export from toolbar: Figure/PNG/GIF/ZIP/Bundle
+
+Control Groups
+--------------
+
+.. code-block:: python
+
+   # Lock groups (visible but non-interactive)
+   w = Show3D(
+       stack,
+       disable_display=True,
+       disable_playback=True,   # disable_navigation also works
+       disable_roi=True,
+   )
+
+   # Hide groups entirely
+   w = Show3D(
+       stack,
+       hide_histogram=True,
+       hide_stats=True,
+       hidden_tools=["profile"],
+   )
 
 State Persistence
 -----------------
@@ -66,19 +117,41 @@ State Persistence
 
    w = Show3D(stack, cmap="gray", fps=12, boomerang=True)
    w.bookmarked_frames = [0, 15, 29]
+   w.set_view_preset(1, {
+       "cmap": "viridis",
+       "logScale": False,
+       "autoContrast": True,
+       "imageVminPct": 5,
+       "imageVmaxPct": 95,
+       "showFft": False,
+       "roiActive": True,
+       "profileActive": False,
+   })
 
    w.summary()          # Print human-readable state
-   w.state_dict()       # Get all settings as a dict
-   w.save("state.json") # Save to JSON file
+   state = w.state_dict()  # Snapshot full state
+   w.save("state.json") # Save versioned envelope JSON file
 
-   # Restore from file or dict
-   w2 = Show3D(stack, state="state.json")
+   # Preset helpers
+   w.list_view_preset_slots()  # ('1',)
+   w.get_view_preset(1)
+   w.clear_view_preset(1)
+   w.reset_view_presets()
+
+   # Restore in three ways
+   w.load_state_dict(state)               # 1) apply dict in-place
+   w2 = Show3D(stack, state="state.json") # 2) from saved file
+   w3 = Show3D(stack, state=state)        # 3) from dict at init
 
 Examples
 --------
 
 - :doc:`Simple demo </examples/show3d/show3d_simple>`
 - :doc:`All features </examples/show3d/show3d_all_features>`
+- :doc:`Loading hub </examples/show3d/show3d_load_hub>`
+- :doc:`Load PNG folder </examples/show3d/show3d_load_png_folder>`
+- :doc:`Load TIFF </examples/show3d/show3d_load_tiff>`
+- :doc:`Load EMD </examples/show3d/show3d_load_emd>`
 
 API Reference
 -------------

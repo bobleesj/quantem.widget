@@ -19,7 +19,7 @@ extensions = [
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "widgets"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
@@ -57,7 +57,9 @@ napoleon_use_rtype = True
 numpydoc_show_class_members = False
 numpydoc_class_members_toctree = False
 
-nbsphinx_execute = "never"
+nbsphinx_execute = "auto"
+nbsphinx_timeout = 120
+nbsphinx_kernel_name = "python3"
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),

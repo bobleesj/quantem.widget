@@ -24,7 +24,7 @@ SCREENSHOT_DIR = Path(__file__).parent / "screenshots" / "show4dstem"
 NOTEBOOK_PATH = Path(__file__).parent / "_test_show4dstem_features.ipynb"
 
 # Feature names for captured widgets
-FEATURE_NAMES = ["default", "circle_roi", "annular_roi", "log_scale"]
+FEATURE_NAMES = ["default", "circle_roi", "annular_roi", "log_mode"]
 
 
 def create_test_notebook():
@@ -86,7 +86,12 @@ def create_test_notebook():
                 "execution_count": None,
                 "metadata": {},
                 "outputs": [],
-                "source": ["# 4. Log Scale\n", "Show4DSTEM(data, log_scale=True)"]
+                "source": [
+                    "# 4. Log Scale\n",
+                    "w = Show4DSTEM(data)\n",
+                    "w.dp_scale_mode = 'log'\n",
+                    "w",
+                ]
             },
         ],
         "metadata": {

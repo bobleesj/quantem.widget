@@ -840,6 +840,68 @@ class Show2D(anywidget.AnyWidget):
             return (data_dict, bundle[1])
         return data_dict
 
+    def _normalize_frame(self, frame: np.ndarray) -> np.ndarray:
+        if self.log_scale:
+            frame = np.log1p(np.maximum(frame, 0))
+        if self.auto_contrast:
+            vmin = float(np.percentile(frame, 2))
+            vmax = float(np.percentile(frame, 98))
+        else:
+            vmin = float(frame.min())
+            vmax = float(frame.max())
+        if vmax > vmin:
+            normalized = np.clip((frame - vmin) / (vmax - vmin) * 255, 0, 255)
+            return normalized.astype(np.uint8)
+        return np.zeros(frame.shape, dtype=np.uint8)
+
+    def save_image(
+        self,
+        path: str | pathlib.Path,
+        *,
+        idx: int | None = None,
+        format: str | None = None,
+        dpi: int = 150,
+    ) -> pathlib.Path:
+        """Save current image as PNG or PDF.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Output file path.
+        idx : int, optional
+            Image index in gallery mode. Defaults to current selected_idx.
+        format : str, optional
+            'png' or 'pdf'. If omitted, inferred from file extension.
+        dpi : int, default 150
+            Output DPI metadata.
+
+        Returns
+        -------
+        pathlib.Path
+            The written file path.
+        """
+        from matplotlib import colormaps
+        from PIL import Image
+
+        path = pathlib.Path(path)
+        fmt = (format or path.suffix.lstrip(".").lower() or "png").lower()
+        if fmt not in ("png", "pdf", "tiff", "tif"):
+            raise ValueError(f"Unsupported format: {fmt!r}. Use 'png', 'pdf', or 'tiff'.")
+
+        i = idx if idx is not None else self.selected_idx
+        if i < 0 or i >= self.n_images:
+            raise IndexError(f"Image index {i} out of range [0, {self.n_images})")
+
+        frame = self._data[i]
+        normalized = self._normalize_frame(frame)
+        cmap_fn = colormaps.get_cmap(self.cmap)
+        rgba = (cmap_fn(normalized / 255.0) * 255).astype(np.uint8)
+
+        img = Image.fromarray(rgba)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(str(path), dpi=(dpi, dpi))
+        return path
+
     def state_dict(self):
         return {
             "title": self.title,

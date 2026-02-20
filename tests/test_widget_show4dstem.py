@@ -1,4 +1,8 @@
+import json
+import pathlib
+
 import numpy as np
+import pytest
 import quantem.widget
 from quantem.widget import Show4DSTEM
 
@@ -30,15 +34,13 @@ def test_show4dstem_flattened_scan_shape_mapping():
     assert np.array_equal(frame, np.full((2, 2), 5, dtype=np.float32))
 
 
-def test_show4dstem_log_scale():
-    """Test that log scale changes frame bytes."""
+def test_show4dstem_dp_scale_mode():
+    """DP scale mode is configurable through the canonical trait."""
     data = np.random.rand(2, 2, 8, 8).astype(np.float32) * 100 + 1
-    widget = Show4DSTEM(data, log_scale=True)
-    log_bytes = bytes(widget.frame_bytes)
-    widget.log_scale = False
-    widget._update_frame()
-    linear_bytes = bytes(widget.frame_bytes)
-    assert log_bytes != linear_bytes
+    widget = Show4DSTEM(data)
+    assert widget.dp_scale_mode == "linear"
+    widget.dp_scale_mode = "log"
+    assert widget.dp_scale_mode == "log"
 
 
 def test_show4dstem_auto_detect_center():
@@ -358,33 +360,79 @@ def test_show4dstem_center_explicit():
     assert widget.bf_radius == 3.0
 
 
+# ── Title ─────────────────────────────────────────────────────────────────
+
+
+def test_show4dstem_title_default():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    assert w.title == ""
+
+
+def test_show4dstem_title_set():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data, title="My Scan")
+    assert w.title == "My Scan"
+
+
+def test_show4dstem_title_in_state_dict():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data, title="Test Title")
+    sd = w.state_dict()
+    assert sd["title"] == "Test Title"
+    w2 = Show4DSTEM(data, state=sd)
+    assert w2.title == "Test Title"
+
+
+def test_show4dstem_title_in_summary(capsys):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data, title="Custom Name")
+    w.summary()
+    out = capsys.readouterr().out
+    assert "Custom Name" in out
+
+
+def test_show4dstem_title_in_repr():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data, title="My Title")
+    r = repr(w)
+    assert "My Title" in r
+
+
 # ── State Protocol ────────────────────────────────────────────────────────
 
 
 def test_show4dstem_state_dict_roundtrip():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
-    w = Show4DSTEM(data, log_scale=True, center=(5.0, 6.0), bf_radius=3.0)
+    w = Show4DSTEM(data, center=(5.0, 6.0), bf_radius=3.0)
+    w.dp_scale_mode = "log"
     sd = w.state_dict()
-    assert sd["log_scale"] is True
+    assert sd["dp_scale_mode"] == "log"
     assert sd["center_row"] == 5.0
     assert sd["center_col"] == 6.0
     assert sd["bf_radius"] == 3.0
+    assert "disabled_tools" in sd
+    assert "hidden_tools" in sd
     w2 = Show4DSTEM(data, state=sd)
-    assert w2.log_scale is True
+    assert w2.dp_scale_mode == "log"
     assert w2.bf_radius == 3.0
 
 
 def test_show4dstem_save_load_file(tmp_path):
     import json
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
-    w = Show4DSTEM(data, log_scale=True)
+    w = Show4DSTEM(data)
+    w.dp_scale_mode = "log"
     path = tmp_path / "stem_state.json"
     w.save(str(path))
     assert path.exists()
     saved = json.loads(path.read_text())
-    assert saved["log_scale"] is True
+    assert saved["metadata_version"] == "1.0"
+    assert saved["widget_name"] == "Show4DSTEM"
+    assert isinstance(saved["widget_version"], str)
+    assert saved["state"]["dp_scale_mode"] == "log"
     w2 = Show4DSTEM(data, state=str(path))
-    assert w2.log_scale is True
+    assert w2.dp_scale_mode == "log"
 
 
 def test_show4dstem_summary(capsys):
@@ -508,15 +556,23 @@ def test_show4dstem_gif_export_defaults():
     w = Show4DSTEM(data)
     assert w._gif_export_requested is False
     assert w._gif_data == b""
+    assert w._gif_metadata_json == ""
 
 
 def test_show4dstem_gif_generation_with_path():
+    import json
+
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
     w.set_path([(0, 0), (1, 1), (2, 2)], autoplay=False)
     w._generate_gif()
     assert len(w._gif_data) > 0
     assert w._gif_data[:3] == b"GIF"
+    metadata = json.loads(w._gif_metadata_json)
+    assert metadata["widget_name"] == "Show4DSTEM"
+    assert metadata["format"] == "gif"
+    assert metadata["export_kind"] == "path_animation"
+    assert metadata["n_frames"] == 3
 
 
 def test_show4dstem_gif_generation_no_path():
@@ -524,6 +580,7 @@ def test_show4dstem_gif_generation_no_path():
     w = Show4DSTEM(data)
     w._generate_gif()
     assert w._gif_data == b""
+    assert w._gif_metadata_json == ""
 
 
 def test_show4dstem_normalize_frame():
@@ -533,6 +590,376 @@ def test_show4dstem_normalize_frame():
     result = w._normalize_frame(frame)
     assert result.dtype == np.uint8
     assert result.shape == (2, 2)
+
+
+# ── Programmatic Image Export ───────────────────────────────────────────────
+
+def test_show4dstem_save_image_png_with_metadata(tmp_path):
+    import json
+
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    w.dp_colormap = "viridis"
+    w.dp_scale_mode = "log"
+    w.dp_vmin_pct = 5.0
+    w.dp_vmax_pct = 95.0
+
+    out = tmp_path / "dp_view.png"
+    written = w.save_image(out, view="diffraction", include_metadata=True)
+    assert written == out
+    assert out.exists()
+    assert out.stat().st_size > 0
+
+    meta = out.with_suffix(".json")
+    assert meta.exists()
+    saved = json.loads(meta.read_text())
+    assert saved["metadata_version"] == "1.0"
+    assert saved["widget_name"] == "Show4DSTEM"
+    assert isinstance(saved["widget_version"], str)
+    assert saved["view"] == "diffraction"
+    assert saved["display"]["diffraction"]["colormap"] == "viridis"
+    assert saved["display"]["diffraction"]["scale_mode"] == "log"
+    assert saved["calibration"]["pixel_size_unit"] == "Å/px"
+
+
+def test_show4dstem_save_image_pdf_virtual(tmp_path):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+
+    out = tmp_path / "virtual.pdf"
+    w.save_image(out, view="virtual", format="pdf", include_metadata=False)
+    assert out.exists()
+    assert out.stat().st_size > 0
+
+
+def test_show4dstem_save_image_restore_state(tmp_path):
+    data = np.random.rand(3, 4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    w.position = (1, 1)
+    w.frame_idx = 0
+
+    out = tmp_path / "frame_override.png"
+    w.save_image(out, view="diffraction", position=(3, 2), frame_idx=2, include_metadata=False, restore_state=True)
+    assert w.position == (1, 1)
+    assert w.frame_idx == 0
+
+
+def test_show4dstem_save_image_all_includes_fft_metadata(tmp_path):
+    import json
+
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    w.show_fft = True
+    out = tmp_path / "all_panels.png"
+    w.save_image(out, view="all")
+    saved = json.loads(out.with_suffix(".json").read_text())
+    assert "diffraction" in saved["display"]
+    assert "virtual" in saved["display"]
+    assert "fft" in saved["display"]
+
+
+def test_show4dstem_save_image_rejects_unknown_format(tmp_path):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    try:
+        w.save_image(tmp_path / "bad.tiff", view="diffraction")
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
+
+
+def test_show4dstem_save_image_rejects_view_aliases(tmp_path):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+
+    for alias in ("dp", "reconstruction", "vi", "virtual_image", "composite"):
+        try:
+            w.save_image(tmp_path / f"{alias}.png", view=alias, include_metadata=False)
+            assert False, f"Should reject alias view '{alias}'"
+        except ValueError:
+            pass
+
+
+def test_show4dstem_export_view_and_format_lists():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    assert w.list_export_views() == ("diffraction", "virtual", "fft", "all")
+    assert w.list_export_formats() == ("png", "pdf")
+
+
+def test_show4dstem_save_image_overlay_scalebar_flags_in_metadata(tmp_path):
+    import json
+
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    out = tmp_path / "flags.png"
+    w.save_image(
+        out,
+        view="diffraction",
+        include_metadata=True,
+        include_overlays=False,
+        include_scalebar=False,
+    )
+    metadata = json.loads(out.with_suffix(".json").read_text())
+    assert metadata["include_overlays"] is False
+    assert metadata["include_scalebar"] is False
+
+
+def test_show4dstem_save_sequence_frames_manifest(tmp_path):
+    import json
+
+    data = np.random.rand(3, 4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    manifest = w.save_sequence(
+        tmp_path / "seq",
+        mode="frames",
+        view="virtual",
+        format="png",
+        frame_indices=[0, 2],
+        position=(1, 2),
+    )
+    assert manifest.exists()
+    payload = json.loads(manifest.read_text())
+    assert payload["export_kind"] == "sequence_batch"
+    assert payload["mode"] == "frames"
+    assert payload["n_exports"] == 2
+    assert len(payload["exports"]) == 2
+    for row in payload["exports"]:
+        path = tmp_path / "seq" / pathlib.Path(row["path"]).name
+        assert path.exists()
+        assert "sha256" in row
+
+
+def test_show4dstem_save_sequence_rejects_bad_mode(tmp_path):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    try:
+        w.save_sequence(tmp_path / "bad", mode="diagonal")
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
+
+
+def test_show4dstem_preset_api_roundtrip(tmp_path):
+    import json
+
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data, center=(8.0, 8.0), bf_radius=3.0)
+
+    w.apply_preset("adf")
+    assert w.roi_mode == "annular"
+    assert w.roi_radius > w.roi_radius_inner
+
+    w.dp_colormap = "viridis"
+    w.export_default_view = "all"
+    w.save_preset("workflow_a")
+    w.dp_colormap = "inferno"
+    w.load_preset("workflow_a")
+    assert w.dp_colormap == "viridis"
+    assert w.export_default_view == "all"
+
+    preset_path = tmp_path / "workflow_a.json"
+    w.save_preset("workflow_a", path=preset_path)
+    assert preset_path.exists()
+    payload = json.loads(preset_path.read_text())
+    assert payload["export_kind"] == "widget_preset"
+    assert payload["preset_name"] == "workflow_a"
+
+
+def test_show4dstem_save_figure_template(tmp_path):
+    import json
+
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    out = tmp_path / "figure.png"
+    w.save_figure(
+        out,
+        template="publication_dp_vi_fft",
+        include_metadata=True,
+        annotations={"diffraction": "BF region"},
+    )
+    assert out.exists()
+    meta = json.loads(out.with_suffix(".json").read_text())
+    assert meta["export_kind"] == "figure_template"
+    assert meta["template"] == "publication_dp_vi_fft"
+    assert meta["publication_style"] is True
+
+
+def test_show4dstem_save_reproducibility_report(tmp_path):
+    import json
+
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    w.save_image(tmp_path / "one.png", view="diffraction")
+    w.save_figure(tmp_path / "two.png", template="dp_vi")
+    report_path = w.save_reproducibility_report(tmp_path / "report.json")
+    payload = json.loads(report_path.read_text())
+    assert payload["export_kind"] == "reproducibility_report"
+    assert payload["n_exports"] >= 2
+    assert len(payload["exports"]) >= 2
+    assert all("session_id" in row for row in payload["exports"])
+
+
+def test_show4dstem_suggest_adaptive_path_basic():
+    data = np.random.rand(8, 8, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    result = w.suggest_adaptive_path(
+        coarse_step=4,
+        target_fraction=0.4,
+        min_spacing=1,
+        update_widget_path=True,
+        autoplay=False,
+    )
+    assert result["coarse_count"] > 0
+    assert result["path_count"] >= result["coarse_count"]
+    assert len(result["path_points"]) == result["path_count"]
+    assert len(set(result["path_points"])) == result["path_count"]
+    assert w.path_length == result["path_count"]
+
+
+def test_show4dstem_suggest_adaptive_path_rejects_small_target():
+    data = np.random.rand(8, 8, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    try:
+        w.suggest_adaptive_path(coarse_step=2, target_fraction=0.05)
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
+
+
+def test_show4dstem_suggest_adaptive_path_respects_roi_mask():
+    data = np.random.rand(10, 10, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data)
+    mask = np.zeros((10, 10), dtype=bool)
+    mask[0:5, 0:5] = True
+    result = w.suggest_adaptive_path(
+        coarse_step=5,
+        target_fraction=0.1,
+        include_coarse=False,
+        roi_mask=mask,
+        update_widget_path=False,
+    )
+    assert result["dense_count"] > 0
+    for row, col in result["dense_points"]:
+        assert mask[row, col]
+
+
+def test_show4dstem_suggest_adaptive_path_return_maps():
+    data = np.random.rand(6, 6, 8, 8).astype(np.float32)
+    w = Show4DSTEM(data)
+    result = w.suggest_adaptive_path(
+        coarse_step=3,
+        target_fraction=0.3,
+        update_widget_path=False,
+        return_maps=True,
+    )
+    assert "utility_map" in result
+    assert result["utility_map"].shape == (6, 6)
+    assert "utility_components" in result
+
+
+# ── Sparse Ingest / Adaptive Loop APIs ─────────────────────────────────────
+
+
+def test_show4dstem_ingest_scan_point_and_get_sparse_state():
+    data = np.zeros((6, 6, 8, 8), dtype=np.float32)
+    w = Show4DSTEM(data)
+    dp = np.ones((8, 8), dtype=np.float32) * 7.0
+    w.ingest_scan_point(2, 3, dp, dose=2.5)
+
+    state = w.get_sparse_state()
+    assert state["n_sampled"] == 1
+    assert state["mask"].shape == (6, 6)
+    assert state["mask"][2, 3]
+    assert state["sampled_data"].shape == (1, 8, 8)
+    assert np.allclose(state["sampled_data"][0], 7.0)
+    assert state["total_dose"] == pytest.approx(2.5)
+    assert np.allclose(w._get_frame(2, 3), 7.0)
+
+
+def test_show4dstem_ingest_scan_block_and_set_sparse_state_roundtrip():
+    data = np.zeros((5, 5, 8, 8), dtype=np.float32)
+    w = Show4DSTEM(data)
+
+    rows = [0, 2, 4]
+    cols = [1, 2, 3]
+    block = np.stack(
+        [
+            np.full((8, 8), 1.0, dtype=np.float32),
+            np.full((8, 8), 2.0, dtype=np.float32),
+            np.full((8, 8), 3.0, dtype=np.float32),
+        ],
+        axis=0,
+    )
+    w.ingest_scan_block(rows, cols, block)
+
+    state = w.get_sparse_state()
+    assert state["n_sampled"] == 3
+    assert state["mask"].sum() == 3
+
+    w2 = Show4DSTEM(np.zeros_like(data))
+    w2.set_sparse_state(state["mask"], state["sampled_data"])
+    state2 = w2.get_sparse_state()
+    assert state2["n_sampled"] == 3
+    assert np.array_equal(state2["mask"], state["mask"])
+    assert np.allclose(w2._get_frame(0, 1), 1.0)
+    assert np.allclose(w2._get_frame(2, 2), 2.0)
+    assert np.allclose(w2._get_frame(4, 3), 3.0)
+
+
+def test_show4dstem_propose_next_points_respects_budget_and_existing():
+    data = np.random.rand(6, 6, 8, 8).astype(np.float32)
+    w = Show4DSTEM(data)
+    w.ingest_scan_point(0, 0, w._get_frame(0, 0))
+
+    proposed = w.propose_next_points(
+        5,
+        strategy="adaptive",
+        budget={"max_total_points": 3, "min_spacing": 1},
+    )
+    assert len(proposed) == 2  # Existing=1 and max_total_points=3
+    assert (0, 0) not in proposed
+
+    roi_mask = np.zeros((6, 6), dtype=bool)
+    roi_mask[4:, 4:] = True
+    proposed_random = w.propose_next_points(
+        4,
+        strategy="random",
+        budget={"roi_mask": roi_mask, "seed": 42},
+    )
+    assert all(roi_mask[r, c] for r, c in proposed_random)
+
+
+def test_show4dstem_evaluate_against_reference_outputs_metrics():
+    data = np.random.rand(6, 6, 8, 8).astype(np.float32)
+    w = Show4DSTEM(data)
+    for row, col in [(0, 0), (0, 3), (2, 1), (3, 4), (5, 5), (4, 2), (1, 5), (5, 1)]:
+        w.ingest_scan_point(row, col, w._get_frame(row, col))
+
+    report = w.evaluate_against_reference(reference="full_raster")
+    assert report["reference_kind"] == "full_raster"
+    assert report["n_sampled"] == 8
+    assert report["sampled_fraction"] > 0
+    for key in ("rmse", "nrmse", "mae", "psnr"):
+        assert key in report["metrics"]
+        assert np.isfinite(report["metrics"][key])
+
+
+def test_show4dstem_export_session_bundle(tmp_path):
+    import json
+
+    data = np.random.rand(5, 5, 8, 8).astype(np.float32)
+    w = Show4DSTEM(data)
+    w.ingest_scan_point(1, 1, w._get_frame(1, 1), dose=1.5)
+    w.ingest_scan_point(3, 2, w._get_frame(3, 2), dose=0.5)
+
+    manifest_path = w.export_session_bundle(tmp_path / "bundle")
+    assert manifest_path.exists()
+    payload = json.loads(manifest_path.read_text())
+    assert payload["export_kind"] == "session_bundle"
+    assert payload["sparse_summary"]["n_sampled"] == 2
+    for path in payload["files"].values():
+        assert pathlib.Path(path).exists()
 
 
 # ── 5D Time/Tilt Series ────────────────────────────────────────────────────
@@ -683,3 +1110,57 @@ def test_show4dstem_5d_torch_input():
     assert w.n_frames == 3
     assert w.shape_rows == 4
     assert w.det_rows == 8
+
+
+# ── Tool visibility / locking ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
+def test_show4dstem_tool_lists_default_empty(trait_name):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data, scan_shape=(4, 4))
+    assert getattr(w, trait_name) == []
+
+
+@pytest.mark.parametrize(
+    ("trait_name", "ctor_kwargs", "expected"),
+    [
+        ("disabled_tools", {"disabled_tools": ["display", "ROI", "histogram", "playback"]}, ["display", "roi", "histogram", "playback"]),
+        ("hidden_tools", {"hidden_tools": ["display", "ROI", "histogram", "playback"]}, ["display", "roi", "histogram", "playback"]),
+        ("disabled_tools", {"disable_display": True, "disable_fft": True, "disable_histogram": True, "disable_playback": True}, ["display", "histogram", "playback", "fft"]),
+        ("hidden_tools", {"hide_display": True, "hide_fft": True, "hide_histogram": True, "hide_playback": True}, ["display", "histogram", "playback", "fft"]),
+        ("disabled_tools", {"disable_all": True}, ["all"]),
+        ("hidden_tools", {"hide_all": True}, ["all"]),
+    ],
+)
+def test_show4dstem_tool_lists_constructor_behavior(trait_name, ctor_kwargs, expected):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data, scan_shape=(4, 4), **ctor_kwargs)
+    assert getattr(w, trait_name) == expected
+
+
+@pytest.mark.parametrize("kwargs", [{"disabled_tools": ["not_real"]}, {"hidden_tools": ["not_real"]}])
+def test_show4dstem_tool_lists_unknown_raises(kwargs):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    with pytest.raises(ValueError, match="Unknown tool group"):
+        Show4DSTEM(data, scan_shape=(4, 4), **kwargs)
+
+
+@pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
+def test_show4dstem_tool_lists_normalizes(trait_name):
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data, scan_shape=(4, 4))
+    setattr(w, trait_name, ["DISPLAY", "display", "roi"])
+    assert getattr(w, trait_name) == ["display", "roi"]
+
+
+def test_show4dstem_widget_version_is_set():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data, scan_shape=(4, 4))
+    assert w.widget_version != "unknown"
+
+
+def test_show4dstem_show_controls_default():
+    data = np.random.rand(4, 4, 16, 16).astype(np.float32)
+    w = Show4DSTEM(data, scan_shape=(4, 4))
+    assert w.show_controls is True

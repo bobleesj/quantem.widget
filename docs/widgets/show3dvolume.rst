@@ -23,6 +23,29 @@ Features
 - **3D volume rendering** — WebGL ray-casting for 3D visualization
 - **Per-axis playback** — Animate through slices along any axis
 - **FFT** — Toggle Fourier transform for each slice plane
+- **Tool customization** — Disable or hide control groups (including playback and 3D volume controls)
+
+Control Groups
+--------------
+
+.. code-block:: python
+
+   # Lock groups (visible but non-interactive)
+   w = Show3DVolume(
+       volume,
+       disable_display=True,
+       disable_playback=True,
+       disable_volume=True,
+   )
+
+   # Hide groups entirely
+   w = Show3DVolume(
+       volume,
+       hide_histogram=True,
+       hide_stats=True,
+       hide_volume=True,
+       hidden_tools=["export"],
+   )
 
 State Persistence
 -----------------
@@ -34,7 +57,7 @@ State Persistence
 
    w.summary()          # Print human-readable state
    w.state_dict()       # Get all settings as a dict
-   w.save("state.json") # Save to JSON file
+   w.save("state.json") # Save versioned envelope JSON file
 
    # Restore from file or dict
    w2 = Show3DVolume(volume, state="state.json")

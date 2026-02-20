@@ -25,9 +25,11 @@ import { useTheme } from "../theme";
 import { drawScaleBarHiDPI, drawColorbar, exportFigure } from "../scalebar";
 import { extractFloat32, formatNumber, downloadBlob } from "../format";
 import { computeHistogramFromBytes } from "../histogram";
-import { findDataRange, applyLogScale, percentileClip, sliderRange, computeStats } from "../stats";
+import { findDataRange, applyLogScale, percentileClip, sliderRange } from "../stats";
 import { getWebGPUFFT, WebGPUFFT, fft2d, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2 } from "../webgpu-fft";
 import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen } from "../colormaps";
+import { ControlCustomizer } from "../control-customizer";
+import { computeToolVisibility } from "../tool-parity";
 import "./showcomplex.css";
 
 // ============================================================================
@@ -88,9 +90,6 @@ const controlRow = {
 };
 const switchStyles = {
   small: { "& .MuiSwitch-thumb": { width: 12, height: 12 }, "& .MuiSwitch-switchBase": { padding: "4px" } },
-};
-const sliderStyles = {
-  small: { py: 0, "& .MuiSlider-thumb": { width: 10, height: 10 }, "& .MuiSlider-rail": { height: 2 }, "& .MuiSlider-track": { height: 2 } },
 };
 const compactButton = {
   fontSize: 10,
@@ -302,13 +301,6 @@ function ShowComplex2D() {
     PaperProps: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` } },
   };
 
-  const typo = React.useMemo(() => ({
-    label: { ...typography.label, color: themeColors.textMuted },
-    labelSmall: { ...typography.labelSmall, color: themeColors.textMuted },
-    value: { ...typography.value, color: themeColors.textMuted },
-    title: { fontWeight: "bold" as const, color: themeColors.accent },
-  }), [themeColors]);
-
   // Model state
   const [width] = useModelState<number>("width");
   const [height] = useModelState<number>("height");
@@ -325,7 +317,7 @@ function ShowComplex2D() {
   const [percentileHigh] = useModelState<number>("percentile_high");
 
   // Scale bar
-  const [pixelSizeAngstrom] = useModelState<number>("pixel_size_angstrom");
+  const [pixelSize] = useModelState<number>("pixel_size");
   const [scaleBarVisible] = useModelState<boolean>("scale_bar_visible");
 
   // UI
@@ -339,6 +331,31 @@ function ShowComplex2D() {
   const [statsMin] = useModelState<number>("stats_min");
   const [statsMax] = useModelState<number>("stats_max");
   const [statsStd] = useModelState<number>("stats_std");
+
+  // Tool visibility
+  const [disabledTools, setDisabledTools] = useModelState<string[]>("disabled_tools");
+  const [hiddenTools, setHiddenTools] = useModelState<string[]>("hidden_tools");
+
+  const toolVisibility = React.useMemo(
+    () => computeToolVisibility("ShowComplex2D", disabledTools, hiddenTools),
+    [disabledTools, hiddenTools],
+  );
+
+  const hideDisplay = toolVisibility.isHidden("display");
+  const hideHistogram = toolVisibility.isHidden("histogram");
+  const hideFft = toolVisibility.isHidden("fft");
+  const hideStats = toolVisibility.isHidden("stats");
+  const hideExport = toolVisibility.isHidden("export");
+  const hideView = toolVisibility.isHidden("view");
+
+  const lockDisplay = toolVisibility.isLocked("display");
+  const lockHistogram = toolVisibility.isLocked("histogram");
+  const lockFft = toolVisibility.isLocked("fft");
+  const lockStats = toolVisibility.isLocked("stats");
+  const lockExport = toolVisibility.isLocked("export");
+  const lockView = toolVisibility.isLocked("view");
+
+  const effectiveShowFft = showFft && !hideFft;
 
   // Canvas refs
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -384,7 +401,7 @@ function ShowComplex2D() {
   const [fftVmaxPct, setFftVmaxPct] = React.useState(100);
   const [fftLogScale, setFftLogScale] = React.useState(true);
   const [fftAuto, setFftAuto] = React.useState(true);
-  const [fftColormap, setFftColormap] = React.useState("inferno");
+  const [fftColormap] = React.useState("inferno");
 
   // Hover cursor
   const [cursorInfo, setCursorInfo] = React.useState<{ row: number; col: number; value: string } | null>(null);
@@ -497,8 +514,8 @@ function ShowComplex2D() {
       let vmin: number, vmax: number;
       if (autoContrast && mode !== "phase") {
         const pc = percentileClip(dispData, percentileLow, percentileHigh);
-        vmin = pc.min;
-        vmax = pc.max;
+        vmin = pc.vmin;
+        vmax = pc.vmax;
       } else if (mode === "phase") {
         vmin = -Math.PI;
         vmax = Math.PI;
@@ -546,12 +563,12 @@ function ShowComplex2D() {
     const mode = displayMode as DisplayMode;
 
     // Scale bar
-    if (scaleBarVisible && pixelSizeAngstrom > 0) {
-      drawScaleBarHiDPI(canvas, DPR, zoom, pixelSizeAngstrom, "Å", width);
+    if (scaleBarVisible && pixelSize > 0) {
+      drawScaleBarHiDPI(canvas, DPR, zoom, pixelSize, "Å", width);
     }
 
     // Zoom indicator (when no scale bar)
-    if (!scaleBarVisible || pixelSizeAngstrom <= 0) {
+    if (!scaleBarVisible || pixelSize <= 0) {
       ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
       ctx.shadowBlur = 2;
       ctx.fillStyle = "white";
@@ -577,8 +594,8 @@ function ShowComplex2D() {
       let vmin: number, vmax: number;
       if (autoContrast && mode !== "phase") {
         const pc = percentileClip(dispData, percentileLow, percentileHigh);
-        vmin = pc.min;
-        vmax = pc.max;
+        vmin = pc.vmin;
+        vmax = pc.vmax;
       } else if (mode === "phase") {
         vmin = -Math.PI;
         vmax = Math.PI;
@@ -589,14 +606,14 @@ function ShowComplex2D() {
     }
 
     ctx.restore();
-  }, [displayMode, cmap, zoom, canvasW, canvasH, width, height, pixelSizeAngstrom, scaleBarVisible,
+  }, [displayMode, cmap, zoom, canvasW, canvasH, width, height, pixelSize, scaleBarVisible,
       logScale, autoContrast, vminPct, vmaxPct, histRange, percentileLow, percentileHigh]);
 
   // ============================================================================
   // FFT computation (async)
   // ============================================================================
   React.useEffect(() => {
-    if (!showFft || !displayDataRef.current || !width || !height) return;
+    if (!effectiveShowFft || !displayDataRef.current || !width || !height) return;
     let cancelled = false;
     const data = displayDataRef.current;
     const pw = nextPow2(width);
@@ -632,12 +649,12 @@ function ShowComplex2D() {
     };
     computeFFT();
     return () => { cancelled = true; };
-  }, [showFft, realBytes, imagBytes, displayMode, logScale, width, height, gpuReady]);
+  }, [effectiveShowFft, realBytes, imagBytes, displayMode, logScale, width, height, gpuReady]);
 
   // FFT rendering (cheap, sync)
   React.useEffect(() => {
     const mag = fftMagRef.current;
-    if (!showFft || !mag) return;
+    if (!effectiveShowFft || !mag) return;
     const pw = nextPow2(width);
     const ph = nextPow2(height);
 
@@ -679,16 +696,17 @@ function ShowComplex2D() {
     ctx.translate(-pw / 2, -ph / 2);
     ctx.drawImage(offscreen, 0, 0);
     ctx.restore();
-  }, [showFft, fftMagVersion, fftLogScale, fftAuto, fftVminPct, fftVmaxPct, fftColormap,
+  }, [effectiveShowFft, fftMagVersion, fftLogScale, fftAuto, fftVminPct, fftVmaxPct, fftColormap,
       fftZoom, fftPanX, fftPanY, width, height, canvasW, canvasH]);
 
   // ============================================================================
   // Mouse handlers
   // ============================================================================
   const handleMouseDown = React.useCallback((e: React.MouseEvent) => {
+    if (lockView) return;
     dragRef.current = { startX: e.clientX, startY: e.clientY, startPanX: panX, startPanY: panY, wasDrag: false };
     setIsDragging(true);
-  }, [panX, panY]);
+  }, [panX, panY, lockView]);
 
   const handleMouseMove = React.useCallback((e: React.MouseEvent) => {
     // Cursor info — same coordinate conversion as Show2D
@@ -740,6 +758,7 @@ function ShowComplex2D() {
 
   const handleWheel = React.useCallback((e: WheelEvent) => {
     e.preventDefault();
+    if (lockView) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -766,13 +785,14 @@ function ShowComplex2D() {
     setZoom(newZoom);
     setPanX(newPanX);
     setPanY(newPanY);
-  }, [zoom, panX, panY, canvasW, canvasH]);
+  }, [zoom, panX, panY, canvasW, canvasH, lockView]);
 
   const handleDoubleClick = React.useCallback(() => {
+    if (lockView) return;
     setZoom(1);
     setPanX(0);
     setPanY(0);
-  }, []);
+  }, [lockView]);
 
   // Prevent scroll on canvas
   React.useEffect(() => {
@@ -787,21 +807,23 @@ function ShowComplex2D() {
   // ============================================================================
   const handleKeyDown = React.useCallback((e: React.KeyboardEvent) => {
     if (e.key === "r" || e.key === "R") {
-      setZoom(1);
-      setPanX(0);
-      setPanY(0);
+      if (!lockView) { setZoom(1); setPanX(0); setPanY(0); }
     }
-  }, []);
+    if (e.key === "f" || e.key === "F") {
+      if (!lockFft) setShowFft(!showFft);
+    }
+  }, [lockView, lockFft, showFft]);
 
   // ============================================================================
   // Resize handle
   // ============================================================================
   const handleResizeMouseDown = React.useCallback((e: React.MouseEvent) => {
+    if (lockView) return;
     e.stopPropagation();
     e.preventDefault();
     resizeRef.current = { startX: e.clientX, startY: e.clientY, startW: canvasW, startH: canvasH };
     setIsResizing(true);
-  }, [canvasW, canvasH]);
+  }, [canvasW, canvasH, lockView]);
 
   React.useEffect(() => {
     if (!isResizing) return;
@@ -825,6 +847,7 @@ function ShowComplex2D() {
   // ============================================================================
   const handleExportFigure = React.useCallback((withColorbar: boolean) => {
     setExportAnchor(null);
+    if (lockExport) return;
     const r = realDataRef.current;
     const im = imagDataRef.current;
     const dispData = displayDataRef.current;
@@ -854,8 +877,8 @@ function ShowComplex2D() {
       lut = COLORMAPS[mode === "phase" ? "hsv" : cmap] || COLORMAPS.inferno;
       if (autoContrast && mode !== "phase") {
         const pc = percentileClip(dispData, percentileLow, percentileHigh);
-        vmin = pc.min;
-        vmax = pc.max;
+        vmin = pc.vmin;
+        vmax = pc.vmax;
       } else if (mode === "phase") {
         vmin = -Math.PI;
         vmax = Math.PI;
@@ -874,27 +897,29 @@ function ShowComplex2D() {
       vmin,
       vmax,
       logScale: logScale && mode !== "phase",
-      pixelSize: pixelSizeAngstrom > 0 ? pixelSizeAngstrom : undefined,
+      pixelSize: pixelSize > 0 ? pixelSize : undefined,
       showColorbar: withColorbar && mode !== "hsv",
-      showScaleBar: pixelSizeAngstrom > 0,
+      showScaleBar: pixelSize > 0,
     });
 
     figCanvas.toBlob((blob) => {
       if (blob) downloadBlob(blob, `showcomplex_${mode}.png`);
     }, "image/png");
   }, [displayMode, cmap, logScale, autoContrast, percentileLow, percentileHigh,
-      vminPct, vmaxPct, histRange, width, height, title, pixelSizeAngstrom]);
+      vminPct, vmaxPct, histRange, width, height, title, pixelSize, lockExport]);
 
   const handleExport = React.useCallback(() => {
     setExportAnchor(null);
+    if (lockExport) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     canvas.toBlob((blob) => {
       if (blob) downloadBlob(blob, `showcomplex2d_${(displayMode as string)}.png`);
     }, "image/png");
-  }, [displayMode]);
+  }, [displayMode, lockExport]);
 
   const handleCopy = React.useCallback(async () => {
+    if (lockExport) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     try {
@@ -904,7 +929,7 @@ function ShowComplex2D() {
     } catch {
       canvas.toBlob((b) => { if (b) downloadBlob(b, `showcomplex2d_${(displayMode as string)}.png`); }, "image/png");
     }
-  }, [displayMode]);
+  }, [displayMode, lockExport]);
 
   const needsReset = zoom !== 1 || panX !== 0 || panY !== 0;
 
@@ -936,21 +961,39 @@ function ShowComplex2D() {
               ["R", "Reset zoom & pan"],
             ]} />
           </Box>} />
+          <ControlCustomizer
+            widgetName="ShowComplex2D"
+            hiddenTools={hiddenTools}
+            setHiddenTools={setHiddenTools}
+            disabledTools={disabledTools}
+            setDisabledTools={setDisabledTools}
+            themeColors={themeColors}
+          />
         </Typography>
 
         {/* Controls row */}
         <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} sx={{ mb: `${SPACING.XS}px`, height: 28, maxWidth: canvasW }}>
-          <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT:</Typography>
-          <Switch checked={showFft} onChange={(e) => setShowFft(e.target.checked)} size="small" sx={switchStyles.small} />
+          {!hideFft && (
+            <>
+              <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT:</Typography>
+              <Switch checked={showFft} onChange={(e) => { if (!lockFft) setShowFft(e.target.checked); }} disabled={lockFft} size="small" sx={switchStyles.small} />
+            </>
+          )}
           <Box sx={{ flex: 1 }} />
-          <Button size="small" sx={compactButton} disabled={!needsReset} onClick={handleDoubleClick}>Reset</Button>
-          <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={(e) => setExportAnchor(e.currentTarget)}>Export</Button>
-          <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
-            <MenuItem onClick={() => handleExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
-            <MenuItem onClick={() => handleExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
-            <MenuItem onClick={handleExport} sx={{ fontSize: 12 }}>PNG</MenuItem>
-          </Menu>
-          <Button size="small" sx={compactButton} onClick={handleCopy}>Copy</Button>
+          {!hideView && (
+            <Button size="small" sx={compactButton} disabled={lockView || !needsReset} onClick={handleDoubleClick}>Reset</Button>
+          )}
+          {!hideExport && (
+            <>
+              <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} disabled={lockExport} onClick={(e) => { if (!lockExport) setExportAnchor(e.currentTarget); }}>Export</Button>
+              <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
+                <MenuItem disabled={lockExport} onClick={() => handleExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
+                <MenuItem disabled={lockExport} onClick={() => handleExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
+                <MenuItem disabled={lockExport} onClick={handleExport} sx={{ fontSize: 12 }}>PNG</MenuItem>
+              </Menu>
+              <Button size="small" sx={compactButton} disabled={lockExport} onClick={handleCopy}>Copy</Button>
+            </>
+          )}
         </Stack>
 
         {/* Canvas */}
@@ -971,12 +1014,14 @@ function ShowComplex2D() {
               </Typography>
             </Box>
           )}
-          <Box onMouseDown={handleResizeMouseDown} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, borderRadius: "0 0 4px 0", "&:hover": { opacity: 1 } }} />
+          {!hideView && (
+            <Box onMouseDown={handleResizeMouseDown} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: lockView ? "default" : "nwse-resize", opacity: lockView ? 0.3 : 0.6, pointerEvents: lockView ? "none" : "auto", background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, borderRadius: "0 0 4px 0", "&:hover": { opacity: lockView ? 0.3 : 1 } }} />
+          )}
         </Box>
 
         {/* Stats bar */}
-        {showStats && (
-          <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", maxWidth: canvasW, boxSizing: "border-box", overflow: "hidden", whiteSpace: "nowrap" }}>
+        {!hideStats && showStats && (
+          <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", maxWidth: canvasW, boxSizing: "border-box", overflow: "hidden", whiteSpace: "nowrap", opacity: lockStats ? 0.5 : 1 }}>
             <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMean)}</Box></Typography>
             <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMin)}</Box></Typography>
             <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMax)}</Box></Typography>
@@ -990,83 +1035,97 @@ function ShowComplex2D() {
             <Box sx={{ display: "flex", gap: `${SPACING.SM}px` }}>
               <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
                 {/* Row 1: Scale + Color + Mode */}
-                <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                  <Typography sx={{ ...typography.label, fontSize: 10 }}>Scale:</Typography>
-                  <Select value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45 }} MenuProps={themedMenuProps} disabled={mode === "phase"}>
-                    <MenuItem value="linear">Lin</MenuItem>
-                    <MenuItem value="log">Log</MenuItem>
-                  </Select>
-                  <Typography sx={{ ...typography.label, fontSize: 10 }}>Color:</Typography>
-                  <Select size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60, opacity: isColormapEnabled ? 1 : 0.4 }} disabled={!isColormapEnabled}>
-                    {COLORMAP_NAMES.filter(n => n !== "hsv").map((name) => (
-                      <MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>
-                    ))}
-                  </Select>
-                  <Typography sx={{ ...typography.label, fontSize: 10 }}>Mode:</Typography>
-                  <Select size="small" value={displayMode} onChange={(e) => setDisplayMode(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 90 }}>
-                    <MenuItem value="amplitude">Amplitude</MenuItem>
-                    <MenuItem value="phase">Phase</MenuItem>
-                    <MenuItem value="hsv">HSV</MenuItem>
-                    <MenuItem value="real">Real</MenuItem>
-                    <MenuItem value="imag">Imaginary</MenuItem>
-                  </Select>
-                </Box>
+                {!hideDisplay && (
+                  <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockDisplay ? 0.5 : 1, pointerEvents: lockDisplay ? "none" : "auto" }}>
+                    <Typography sx={{ ...typography.label, fontSize: 10 }}>Scale:</Typography>
+                    <Select disabled={lockDisplay} value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45 }} MenuProps={themedMenuProps}>
+                      <MenuItem value="linear">Lin</MenuItem>
+                      <MenuItem value="log">Log</MenuItem>
+                    </Select>
+                    <Typography sx={{ ...typography.label, fontSize: 10 }}>Color:</Typography>
+                    <Select disabled={lockDisplay || !isColormapEnabled} size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60, opacity: isColormapEnabled ? 1 : 0.4 }}>
+                      {COLORMAP_NAMES.filter(n => n !== "hsv").map((name) => (
+                        <MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>
+                      ))}
+                    </Select>
+                    <Typography sx={{ ...typography.label, fontSize: 10 }}>Mode:</Typography>
+                    <Select disabled={lockDisplay} size="small" value={displayMode} onChange={(e) => setDisplayMode(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 90 }}>
+                      <MenuItem value="amplitude">Amplitude</MenuItem>
+                      <MenuItem value="phase">Phase</MenuItem>
+                      <MenuItem value="hsv">HSV</MenuItem>
+                      <MenuItem value="real">Real</MenuItem>
+                      <MenuItem value="imag">Imaginary</MenuItem>
+                    </Select>
+                  </Box>
+                )}
                 {/* Row 2: Auto + zoom indicator */}
-                <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                  <Typography sx={{ ...typography.label, fontSize: 10 }}>Auto:</Typography>
-                  <Switch checked={autoContrast} onChange={() => setAutoContrast(!autoContrast)} size="small" sx={switchStyles.small} disabled={mode === "phase" || mode === "hsv"} />
-                  {zoom !== 1 && (
-                    <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.accent, fontWeight: "bold" }}>{zoom.toFixed(1)}x</Typography>
-                  )}
-                </Box>
+                {!hideDisplay && (
+                  <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockDisplay ? 0.5 : 1, pointerEvents: lockDisplay ? "none" : "auto" }}>
+                    <Typography sx={{ ...typography.label, fontSize: 10 }}>Auto:</Typography>
+                    <Switch checked={autoContrast} onChange={() => { if (!lockDisplay) setAutoContrast(!autoContrast); }} disabled={lockDisplay || mode === "phase" || mode === "hsv"} size="small" sx={switchStyles.small} />
+                    {zoom !== 1 && (
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.accent, fontWeight: "bold" }}>{zoom.toFixed(1)}x</Typography>
+                    )}
+                  </Box>
+                )}
               </Box>
-              <Histogram
-                data={histData} colormap={mode === "phase" ? "hsv" : cmap}
-                vminPct={vminPct} vmaxPct={vmaxPct}
-                onRangeChange={(lo, hi) => { setVminPct(lo); setVmaxPct(hi); }}
-                width={110} height={58}
-                theme={themeInfo.theme}
-                dataMin={histRange.min} dataMax={histRange.max}
-              />
+              {!hideHistogram && (
+                <Box sx={{ opacity: lockHistogram ? 0.5 : 1, pointerEvents: lockHistogram ? "none" : "auto" }}>
+                  <Histogram
+                    data={histData} colormap={mode === "phase" ? "hsv" : cmap}
+                    vminPct={vminPct} vmaxPct={vmaxPct}
+                    onRangeChange={(lo, hi) => { if (!lockHistogram) { setVminPct(lo); setVmaxPct(hi); } }}
+                    width={110} height={58}
+                    theme={themeInfo.theme}
+                    dataMin={histRange.min} dataMax={histRange.max}
+                  />
+                </Box>
+              )}
             </Box>
           </Box>
         )}
         </Box>
 
         {/* FFT Panel — side panel (same layout as Show2D) */}
-        {showFft && (
+        {effectiveShowFft && (
           <Box sx={{ width: canvasW }}>
             {/* Spacer — matches main panel title row height */}
             <Box sx={{ mb: `${SPACING.XS}px`, height: 16 }} />
             {/* Controls row — matches main panel controls row height */}
             <Stack direction="row" justifyContent="flex-end" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
-              <Button size="small" sx={compactButton} disabled={fftZoom === 3 && fftPanX === 0 && fftPanY === 0} onClick={() => { setFftZoom(3); setFftPanX(0); setFftPanY(0); }}>Reset</Button>
+              {!hideView && (
+                <Button size="small" sx={compactButton} disabled={lockView || (fftZoom === 3 && fftPanX === 0 && fftPanY === 0)} onClick={() => { setFftZoom(3); setFftPanX(0); setFftPanY(0); }}>Reset</Button>
+              )}
             </Stack>
-            <Box ref={fftContainerRef} sx={{ position: "relative", border: `1px solid ${borderColor}`, bgcolor: "#000", cursor: "grab", width: canvasW, height: canvasH }}>
+            <Box ref={fftContainerRef} sx={{ position: "relative", border: `1px solid ${borderColor}`, bgcolor: "#000", cursor: lockView ? "default" : "grab", width: canvasW, height: canvasH }}>
               <canvas ref={fftCanvasRef} width={canvasW} height={canvasH} style={{ width: canvasW, height: canvasH, imageRendering: "pixelated" }} />
             </Box>
             {/* FFT controls + histogram */}
             <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", flexDirection: "column", gap: `${SPACING.XS}px` }}>
               <Box sx={{ display: "flex", gap: `${SPACING.SM}px` }}>
                 <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
-                  <Box sx={{ ...controlRow, border: `1px solid ${borderColor}`, bgcolor: themeColors.controlBg }}>
+                  <Box sx={{ ...controlRow, border: `1px solid ${borderColor}`, bgcolor: themeColors.controlBg, opacity: lockDisplay ? 0.5 : 1, pointerEvents: lockDisplay ? "none" : "auto" }}>
                     <Typography sx={{ ...typography.label, fontSize: 10 }}>Scale:</Typography>
-                    <Select value={fftLogScale ? "log" : "linear"} onChange={(e) => setFftLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45 }} MenuProps={themedMenuProps}>
+                    <Select disabled={lockDisplay} value={fftLogScale ? "log" : "linear"} onChange={(e) => setFftLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45 }} MenuProps={themedMenuProps}>
                       <MenuItem value="linear">Lin</MenuItem>
                       <MenuItem value="log">Log</MenuItem>
                     </Select>
                     <Typography sx={{ ...typography.label, fontSize: 10 }}>Auto:</Typography>
-                    <Switch checked={fftAuto} onChange={(e) => setFftAuto(e.target.checked)} size="small" sx={switchStyles.small} />
+                    <Switch checked={fftAuto} onChange={(e) => { if (!lockDisplay) setFftAuto(e.target.checked); }} disabled={lockDisplay} size="small" sx={switchStyles.small} />
                   </Box>
                 </Box>
-                <Histogram
-                  data={fftHistData} colormap={fftColormap}
-                  vminPct={fftVminPct} vmaxPct={fftVmaxPct}
-                  onRangeChange={(lo, hi) => { setFftVminPct(lo); setFftVmaxPct(hi); setFftAuto(false); }}
-                  width={110} height={40}
-                  theme={themeInfo.theme}
-                  dataMin={fftHistRange.min} dataMax={fftHistRange.max}
-                />
+                {!hideHistogram && (
+                  <Box sx={{ opacity: lockHistogram ? 0.5 : 1, pointerEvents: lockHistogram ? "none" : "auto" }}>
+                    <Histogram
+                      data={fftHistData} colormap={fftColormap}
+                      vminPct={fftVminPct} vmaxPct={fftVmaxPct}
+                      onRangeChange={(lo, hi) => { if (!lockHistogram) { setFftVminPct(lo); setFftVmaxPct(hi); setFftAuto(false); } }}
+                      width={110} height={40}
+                      theme={themeInfo.theme}
+                      dataMin={fftHistRange.min} dataMax={fftHistRange.max}
+                    />
+                  </Box>
+                )}
               </Box>
             </Box>
           </Box>

@@ -233,8 +233,8 @@ def test_mark2d_gallery_different_sizes():
     assert widget.width == 24
 
 
-def test_mark2d_single_backward_compat():
-    """Single image still returns flat point list."""
+def test_mark2d_single_points_shape():
+    """Single image mode returns a flat point list."""
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Mark2D(data)
     assert widget.n_images == 1
@@ -367,10 +367,10 @@ def test_mark2d_add_roi():
     """add_roi convenience method."""
     data = np.random.rand(64, 64).astype(np.float32)
     w = Mark2D(data)
-    w.add_roi(32, 32, mode="circle", radius=15)
+    w.add_roi(32, 32, shape="circle", radius=15)
     assert len(w.roi_list) == 1
     assert w.roi_list[0]["row"] == 32
-    assert w.roi_list[0]["mode"] == "circle"
+    assert w.roi_list[0]["shape"] == "circle"
     assert w.roi_list[0]["radius"] == 15
 
 
@@ -379,8 +379,8 @@ def test_mark2d_add_multiple_rois():
     data = np.random.rand(64, 64).astype(np.float32)
     w = Mark2D(data)
     w.add_roi(10, 10)
-    w.add_roi(20, 20, mode="square")
-    w.add_roi(30, 30, mode="rectangle", rect_w=40, rect_h=20)
+    w.add_roi(20, 20, shape="square")
+    w.add_roi(30, 30, shape="rectangle", width=40, height=20)
     assert len(w.roi_list) == 3
     ids = [r["id"] for r in w.roi_list]
     assert len(set(ids)) == 3  # unique IDs
@@ -395,6 +395,52 @@ def test_mark2d_clear_rois():
     assert len(w.roi_list) == 2
     w.clear_rois()
     assert w.roi_list == []
+
+
+def test_mark2d_roi_center_defaults_to_last():
+    """roi_center() defaults to the most recently added ROI."""
+    data = np.random.rand(64, 64).astype(np.float32)
+    w = Mark2D(data)
+    w.add_roi(10, 20, shape="circle", radius=6)
+    w.add_roi(30, 40, shape="rectangle", width=18, height=12)
+    assert w.roi_center() == (30, 40)
+
+
+def test_mark2d_roi_center_by_index_and_id():
+    """roi_center supports index and roi_id selection."""
+    data = np.random.rand(64, 64).astype(np.float32)
+    w = Mark2D(data)
+    w.add_roi(11, 12, shape="circle", radius=5)
+    w.add_roi(21, 22, shape="square", radius=8)
+    second_id = w.roi_list[1]["id"]
+    assert w.roi_center(index=0) == (11, 12)
+    assert w.roi_center(roi_id=second_id) == (21, 22)
+
+
+def test_mark2d_roi_radius_shape_behavior():
+    """roi_radius returns radius for circle/square and None for rectangle."""
+    data = np.random.rand(64, 64).astype(np.float32)
+    w = Mark2D(data)
+    w.add_roi(10, 10, shape="circle", radius=7)
+    w.add_roi(20, 20, shape="square", radius=9)
+    w.add_roi(30, 30, shape="rectangle", width=20, height=12)
+    assert w.roi_radius(index=0) == 7
+    assert w.roi_radius(index=1) == 9
+    assert w.roi_radius(index=2) is None
+
+
+def test_mark2d_roi_center_errors():
+    """roi_center fails fast for empty ROIs and invalid selectors."""
+    data = np.random.rand(64, 64).astype(np.float32)
+    w = Mark2D(data)
+    with pytest.raises(ValueError, match="No ROIs"):
+        w.roi_center()
+
+    w.add_roi(5, 5)
+    with pytest.raises(ValueError, match="either index or roi_id"):
+        w.roi_center(index=0, roi_id=w.roi_list[0]["id"])
+    with pytest.raises(ValueError, match="not found"):
+        w.roi_center(roi_id=9999)
 
 
 def test_mark2d_clear_points():
@@ -475,7 +521,7 @@ def test_mark2d_state_portability_all():
         snap_enabled=True,
         snap_radius=8,
     )
-    w.add_roi(16, 16, mode="circle", radius=10)
+    w.add_roi(16, 16, shape="circle", radius=10)
     # Verify all state is accessible
     assert len(w.selected_points) == 2
     assert w.marker_shape == "diamond"
@@ -485,20 +531,20 @@ def test_mark2d_state_portability_all():
     assert len(w.roi_list) == 1
 
 
-def test_mark2d_colormap_default():
+def test_mark2d_cmap_default():
     """Colormap defaults to gray."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
-    assert w.colormap == "gray"
+    assert w.cmap == "gray"
 
 
-def test_mark2d_colormap_custom():
+def test_mark2d_cmap_custom():
     """Colormap can be set via constructor."""
     data = np.random.rand(16, 16).astype(np.float32)
-    w = Mark2D(data, colormap="viridis")
-    assert w.colormap == "viridis"
-    w.colormap = "plasma"
-    assert w.colormap == "plasma"
+    w = Mark2D(data, cmap="viridis")
+    assert w.cmap == "viridis"
+    w.cmap = "plasma"
+    assert w.cmap == "plasma"
 
 
 def test_mark2d_auto_contrast_default():
@@ -544,10 +590,10 @@ def test_mark2d_show_fft_custom():
 
 
 def test_mark2d_imaging_traits_portability():
-    """All imaging traits (colormap, contrast, fft) round-trip correctly."""
+    """All imaging traits (cmap, contrast, fft) round-trip correctly."""
     data = np.random.rand(16, 16).astype(np.float32)
-    w = Mark2D(data, colormap="inferno", auto_contrast=False, log_scale=True, show_fft=True)
-    assert w.colormap == "inferno"
+    w = Mark2D(data, cmap="inferno", auto_contrast=False, log_scale=True, show_fft=True)
+    assert w.cmap == "inferno"
     assert w.auto_contrast is False
     assert w.log_scale is True
     assert w.show_fft is True
@@ -709,9 +755,9 @@ def test_mark2d_profile_distance():
 
 
 def test_mark2d_profile_distance_calibrated():
-    """profile_distance uses pixel_size_angstrom when set."""
+    """profile_distance uses pixel_size when set."""
     data = np.random.rand(64, 64).astype(np.float32)
-    w = Mark2D(data, pixel_size_angstrom=2.0)
+    w = Mark2D(data, pixel_size=2.0)
     w.set_profile((0, 0), (30, 40))
     assert w.profile_distance == pytest.approx(100.0)
 
@@ -747,6 +793,69 @@ def test_mark2d_show_controls_custom():
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data, show_controls=False)
     assert w.show_controls is False
+
+
+@pytest.mark.parametrize(
+    "trait_name",
+    ["disabled_tools", "hidden_tools"],
+)
+def test_mark2d_tool_lists_default_empty(trait_name):
+    """Tool-list traits default to empty list."""
+    data = np.random.rand(16, 16).astype(np.float32)
+    w = Mark2D(data)
+    assert getattr(w, trait_name) == []
+
+
+@pytest.mark.parametrize(
+    ("trait_name", "ctor_kwargs", "expected"),
+    [
+        ("disabled_tools", {"disabled_tools": ["points", "roi", "Display"]}, ["points", "roi", "display"]),
+        ("hidden_tools", {"hidden_tools": ["points", "roi", "Display"]}, ["points", "roi", "display"]),
+        ("disabled_tools", {"disable_points": True, "disable_roi": True, "disable_display": True}, ["points", "roi", "display"]),
+        ("hidden_tools", {"hide_points": True, "hide_roi": True, "hide_display": True}, ["points", "roi", "display"]),
+        ("disabled_tools", {"disable_all": True, "disable_points": True}, ["all"]),
+        ("hidden_tools", {"hide_all": True, "hide_points": True}, ["all"]),
+        ("disabled_tools", {"disabled_tools": ["profile"], "disable_points": True, "disable_roi": True}, ["profile", "points", "roi"]),
+        ("hidden_tools", {"hidden_tools": ["profile"], "hide_points": True, "hide_roi": True}, ["profile", "points", "roi"]),
+    ],
+)
+def test_mark2d_tool_lists_constructor_behavior(trait_name, ctor_kwargs, expected):
+    """Tool-list constructor inputs are normalized and merged correctly."""
+    data = np.random.rand(16, 16).astype(np.float32)
+    w = Mark2D(data, **ctor_kwargs)
+    assert getattr(w, trait_name) == expected
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"disabled_tools": ["not_a_real_tool"]},
+        {"hidden_tools": ["not_a_real_tool"]},
+    ],
+)
+def test_mark2d_tool_lists_unknown_value_raises(kwargs):
+    """Unknown tool keys fail fast with a clear error."""
+    data = np.random.rand(16, 16).astype(np.float32)
+    with pytest.raises(ValueError, match="Unknown tool group"):
+        Mark2D(data, **kwargs)
+
+
+@pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
+def test_mark2d_tool_lists_trait_assignment_normalizes(trait_name):
+    """Trait assignment normalizes casing and removes duplicates."""
+    data = np.random.rand(16, 16).astype(np.float32)
+    w = Mark2D(data)
+    setattr(w, trait_name, ["ROI", "display", "roi"])
+    assert getattr(w, trait_name) == ["roi", "display"]
+
+
+@pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
+def test_mark2d_tool_lists_alias_rejected(trait_name):
+    """Alias-style keys are rejected; only canonical keys are allowed."""
+    data = np.random.rand(16, 16).astype(np.float32)
+    w = Mark2D(data)
+    with pytest.raises(ValueError, match="Unknown tool group"):
+        setattr(w, trait_name, ["rois"])
 
 
 def test_mark2d_percentile_defaults():
@@ -813,13 +922,13 @@ def test_mark2d_dataset_reextraction_on_set_image():
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
     assert w.title == ""
-    assert w.pixel_size_angstrom == 0.0
+    assert w.pixel_size == 0.0
 
     ds = FakeDataset(np.random.rand(16, 16).astype(np.float32),
                      "HAADF", [0.5, 0.5], ["Å", "Å"])
     w.set_image(ds)
     assert w.title == "HAADF"
-    assert w.pixel_size_angstrom == pytest.approx(0.5)
+    assert w.pixel_size == pytest.approx(0.5)
 
 
 def test_mark2d_explicit_overrides_dataset():
@@ -833,9 +942,9 @@ def test_mark2d_explicit_overrides_dataset():
 
     ds = FakeDataset(np.random.rand(16, 16).astype(np.float32),
                      "HAADF", [0.5, 0.5], ["Å", "Å"])
-    w = Mark2D(ds, title="Custom", pixel_size_angstrom=1.0)
+    w = Mark2D(ds, title="Custom", pixel_size=1.0)
     assert w.title == "Custom"
-    assert w.pixel_size_angstrom == pytest.approx(1.0)
+    assert w.pixel_size == pytest.approx(1.0)
 
 
 def test_mark2d_repr_gallery_idx():
@@ -851,8 +960,8 @@ def test_mark2d_summary_roi_area():
     import io
     import sys
     data = np.random.rand(64, 64).astype(np.float32)
-    w = Mark2D(data, pixel_size_angstrom=1.0)
-    w.add_roi(32, 32, mode="circle", radius=10)
+    w = Mark2D(data, pixel_size=1.0)
+    w.add_roi(32, 32, shape="circle", radius=10)
     # Capture summary output
     captured = io.StringIO()
     sys.stdout = captured
@@ -876,10 +985,12 @@ def test_mark2d_state_dict_keys():
         "selected_points", "roi_list", "profile_line", "selected_idx",
         "marker_shape", "marker_color", "dot_size", "max_points",
         "marker_border", "marker_opacity", "label_size", "label_color",
-        "snap_enabled", "snap_radius", "colormap", "auto_contrast",
+        "snap_enabled", "snap_radius", "cmap", "auto_contrast",
         "log_scale", "show_fft", "show_stats", "show_controls",
+        "disabled_tools",
+        "hidden_tools",
         "percentile_low", "percentile_high", "title",
-        "pixel_size_angstrom", "scale", "image_width_px",
+        "pixel_size", "scale", "image_width_px",
     }
     assert set(sd.keys()) == expected
 
@@ -887,17 +998,18 @@ def test_mark2d_state_dict_keys():
 def test_mark2d_state_dict_roundtrip():
     """state_dict captures current state and restores via state param."""
     data = np.random.rand(32, 32).astype(np.float32)
-    w = Mark2D(data, colormap="viridis", auto_contrast=False, log_scale=True,
+    w = Mark2D(data, cmap="viridis", auto_contrast=False, log_scale=True,
                 marker_shape="star", marker_color="#00ff00", snap_enabled=True,
-                snap_radius=12, title="Test", pixel_size_angstrom=2.5,
-                percentile_low=5.0, percentile_high=90.0, show_controls=False)
-    w.add_roi(16, 16, mode="circle", radius=8)
+                snap_radius=12, title="Test", pixel_size=2.5,
+                percentile_low=5.0, percentile_high=90.0, show_controls=False,
+                disabled_tools=["points", "roi"], hidden_tools=["display"])
+    w.add_roi(16, 16, shape="circle", radius=8)
     w.set_profile((0, 0), (31, 31))
 
     sd = w.state_dict()
 
     w2 = Mark2D(data, state=sd)
-    assert w2.colormap == "viridis"
+    assert w2.cmap == "viridis"
     assert w2.auto_contrast is False
     assert w2.log_scale is True
     assert w2.marker_shape == "star"
@@ -905,10 +1017,12 @@ def test_mark2d_state_dict_roundtrip():
     assert w2.snap_enabled is True
     assert w2.snap_radius == 12
     assert w2.title == "Test"
-    assert w2.pixel_size_angstrom == pytest.approx(2.5)
+    assert w2.pixel_size == pytest.approx(2.5)
     assert w2.percentile_low == pytest.approx(5.0)
     assert w2.percentile_high == pytest.approx(90.0)
     assert w2.show_controls is False
+    assert w2.disabled_tools == ["points", "roi"]
+    assert w2.hidden_tools == ["display"]
     assert len(w2.roi_list) == 1
     assert len(w2.profile_line) == 2
 
@@ -928,14 +1042,14 @@ def test_mark2d_state_dict_with_points():
 def test_mark2d_load_state_dict():
     """load_state_dict restores state on existing widget."""
     data = np.random.rand(16, 16).astype(np.float32)
-    w1 = Mark2D(data, colormap="plasma", dot_size=20)
+    w1 = Mark2D(data, cmap="plasma", dot_size=20)
     sd = w1.state_dict()
 
     w2 = Mark2D(data)
-    assert w2.colormap == "gray"
+    assert w2.cmap == "gray"
     assert w2.dot_size == 12
     w2.load_state_dict(sd)
-    assert w2.colormap == "plasma"
+    assert w2.cmap == "plasma"
     assert w2.dot_size == 20
 
 
@@ -943,17 +1057,42 @@ def test_mark2d_load_state_dict_ignores_unknown():
     """load_state_dict silently skips unknown keys."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
-    w.load_state_dict({"colormap": "inferno", "nonexistent_key": 42})
-    assert w.colormap == "inferno"
+    w.load_state_dict({"cmap": "inferno", "nonexistent_key": 42})
+    assert w.cmap == "inferno"
+
+
+def test_mark2d_load_state_dict_compat_colormap():
+    """load_state_dict maps legacy 'colormap' key to 'cmap'."""
+    data = np.random.rand(16, 16).astype(np.float32)
+    w = Mark2D(data)
+    w.load_state_dict({"colormap": "viridis"})
+    assert w.cmap == "viridis"
+
+
+def test_mark2d_load_state_dict_compat_roi_keys():
+    """load_state_dict migrates legacy ROI dict keys (mode/rectW/rectH)."""
+    data = np.random.rand(64, 64).astype(np.float32)
+    w = Mark2D(data)
+    old_roi = [{"id": 0, "mode": "rectangle", "row": 32, "col": 32,
+                "radius": 30, "rectW": 50, "rectH": 25,
+                "color": "#0f0", "opacity": 0.8}]
+    w.load_state_dict({"roi_list": old_roi})
+    assert len(w.roi_list) == 1
+    assert w.roi_list[0]["shape"] == "rectangle"
+    assert w.roi_list[0]["width"] == 50
+    assert w.roi_list[0]["height"] == 25
+    assert "mode" not in w.roi_list[0]
+    assert "rectW" not in w.roi_list[0]
+    assert "rectH" not in w.roi_list[0]
 
 
 def test_mark2d_state_param_overrides_defaults():
     """state param overrides default trait values but explicit params win."""
     data = np.random.rand(16, 16).astype(np.float32)
-    sd = {"colormap": "viridis", "title": "From State", "dot_size": 15}
+    sd = {"cmap": "viridis", "title": "From State", "dot_size": 15}
     # state is applied last, so it overrides defaults and explicit params
     w = Mark2D(data, state=sd)
-    assert w.colormap == "viridis"
+    assert w.cmap == "viridis"
     assert w.title == "From State"
     assert w.dot_size == 15
 
@@ -961,18 +1100,18 @@ def test_mark2d_state_param_overrides_defaults():
 def test_mark2d_save_and_load_file(tmp_path):
     """save() writes JSON, state param loads from file path."""
     data = np.random.rand(32, 32).astype(np.float32)
-    w = Mark2D(data, colormap="viridis", marker_shape="star",
-                title="Saved", pixel_size_angstrom=1.5)
-    w.add_roi(16, 16, mode="circle", radius=8)
+    w = Mark2D(data, cmap="viridis", marker_shape="star",
+                title="Saved", pixel_size=1.5)
+    w.add_roi(16, 16, shape="circle", radius=8)
 
     path = str(tmp_path / "state.json")
     w.save(path)
 
     w2 = Mark2D(data, state=path)
-    assert w2.colormap == "viridis"
+    assert w2.cmap == "viridis"
     assert w2.marker_shape == "star"
     assert w2.title == "Saved"
-    assert w2.pixel_size_angstrom == pytest.approx(1.5)
+    assert w2.pixel_size == pytest.approx(1.5)
     assert len(w2.roi_list) == 1
 
 
@@ -980,14 +1119,17 @@ def test_mark2d_save_json_readable(tmp_path):
     """Saved file is valid, human-readable JSON."""
     import json
     data = np.random.rand(16, 16).astype(np.float32)
-    w = Mark2D(data, points=[(5, 10)], colormap="plasma")
+    w = Mark2D(data, points=[(5, 10)], cmap="plasma")
     path = tmp_path / "state.json"
     w.save(str(path))
 
     content = json.loads(path.read_text())
-    assert content["colormap"] == "plasma"
-    assert len(content["selected_points"]) == 1
-    assert content["selected_points"][0]["row"] == 5
+    assert content["metadata_version"] == "1.0"
+    assert content["widget_name"] == "Mark2D"
+    assert isinstance(content["widget_version"], str)
+    assert content["state"]["cmap"] == "plasma"
+    assert len(content["state"]["selected_points"]) == 1
+    assert content["state"]["selected_points"][0]["row"] == 5
 
 
 def test_mark2d_save_load_roundtrip_points(tmp_path):
@@ -1010,9 +1152,61 @@ def test_mark2d_save_load_roundtrip_points(tmp_path):
 def test_mark2d_state_pathlib_path(tmp_path):
     """state param accepts pathlib.Path as well as str."""
     data = np.random.rand(16, 16).astype(np.float32)
-    w = Mark2D(data, colormap="inferno")
+    w = Mark2D(data, cmap="inferno")
     path = tmp_path / "state.json"
     w.save(str(path))
 
     w2 = Mark2D(data, state=path)  # pathlib.Path, not str
-    assert w2.colormap == "inferno"
+    assert w2.cmap == "inferno"
+
+
+# ── save_image ───────────────────────────────────────────────────────────
+
+
+def test_mark2d_save_image_png(tmp_path):
+    data = np.random.rand(32, 32).astype(np.float32)
+    w = Mark2D(data, cmap="viridis")
+    out = w.save_image(tmp_path / "out.png")
+    assert out.exists()
+    assert out.stat().st_size > 0
+    from PIL import Image
+    img = Image.open(out)
+    assert img.size == (32, 32)
+
+
+def test_mark2d_save_image_with_markers(tmp_path):
+    data = np.random.rand(32, 32).astype(np.float32)
+    w = Mark2D(data)
+    w.selected_points = [{"row": 10, "col": 15}, {"row": 20, "col": 25}]
+    out = w.save_image(tmp_path / "marked.png", include_markers=True)
+    assert out.exists()
+
+
+def test_mark2d_save_image_no_markers(tmp_path):
+    data = np.random.rand(32, 32).astype(np.float32)
+    w = Mark2D(data)
+    w.selected_points = [{"row": 10, "col": 15}]
+    out_with = w.save_image(tmp_path / "with.png", include_markers=True)
+    out_without = w.save_image(tmp_path / "without.png", include_markers=False)
+    # With markers should be different from without
+    assert out_with.stat().st_size != out_without.stat().st_size
+
+
+def test_mark2d_save_image_pdf(tmp_path):
+    data = np.random.rand(16, 16).astype(np.float32)
+    w = Mark2D(data)
+    out = w.save_image(tmp_path / "out.pdf")
+    assert out.exists()
+
+
+def test_mark2d_save_image_bad_format(tmp_path):
+    data = np.random.rand(16, 16).astype(np.float32)
+    w = Mark2D(data)
+    with pytest.raises(ValueError, match="Unsupported format"):
+        w.save_image(tmp_path / "out.bmp")
+
+
+def test_mark2d_widget_version_is_set():
+    data = np.random.rand(16, 16).astype(np.float32)
+    w = Mark2D(data)
+    assert w.widget_version != "unknown"

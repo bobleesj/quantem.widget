@@ -28,6 +28,7 @@ import { extractFloat32, downloadBlob } from "../format";
 import { findDataRange, applyLogScale, sliderRange } from "../stats";
 import { computeHistogramFromBytes } from "../histogram";
 import { fft2d, fftshift, computeMagnitude, autoEnhanceFFT } from "../webgpu-fft";
+import { computeToolVisibility } from "../tool-parity";
 
 // ============================================================================
 // UI Styles (matching Show3D / Show4DSTEM)
@@ -623,6 +624,28 @@ function Align2D() {
   const [canvasSize] = useModelState<number>("canvas_size");
   const [maxShift] = useModelState<number>("max_shift");
   const [histSource, setHistSource] = useModelState<string>("hist_source");
+  const [disabledTools] = useModelState<string[]>("disabled_tools");
+  const [hiddenTools] = useModelState<string[]>("hidden_tools");
+
+  // Tool visibility — normalized sets and per-group booleans
+  const toolVisibility = React.useMemo(
+    () => computeToolVisibility("Align2D", disabledTools, hiddenTools),
+    [disabledTools, hiddenTools],
+  );
+  const hideAlignment = toolVisibility.isHidden("alignment");
+  const hideOverlay = toolVisibility.isHidden("overlay");
+  const hideDisplay = toolVisibility.isHidden("display");
+  const hideHistogram = toolVisibility.isHidden("histogram");
+  const hideStats = toolVisibility.isHidden("stats");
+  const hideExport = toolVisibility.isHidden("export");
+  const hideView = toolVisibility.isHidden("view");
+
+  const lockAlignment = toolVisibility.isLocked("alignment");
+  const lockOverlay = toolVisibility.isLocked("overlay");
+  const lockDisplay = toolVisibility.isLocked("display");
+  const lockHistogram = toolVisibility.isLocked("histogram");
+  const lockExport = toolVisibility.isLocked("export");
+  const lockView = toolVisibility.isLocked("view");
 
   // Compute padding in pixels from fractional padding
   const padY = Math.round(imgH * padding);
@@ -891,6 +914,7 @@ function Align2D() {
 
   // Resize handler (on merged view)
   const handleMainResizeStart = (e: React.MouseEvent) => {
+    if (lockView) return;
     e.stopPropagation();
     e.preventDefault();
     setIsResizingMain(true);
@@ -1099,8 +1123,7 @@ function Align2D() {
   React.useEffect(() => {
     if (!uiCanvasRef.current) return;
     if (pixelSize > 0) {
-      const pixelSizeAngstrom = pixelSize * 10;
-      drawScaleBarHiDPI(uiCanvasRef.current, DPR, zoom, pixelSizeAngstrom, "Å", paddedW);
+      drawScaleBarHiDPI(uiCanvasRef.current, DPR, zoom, pixelSize, "Å", paddedW);
     } else {
       const ctx = uiCanvasRef.current.getContext("2d");
       if (ctx) ctx.clearRect(0, 0, uiCanvasRef.current.width, uiCanvasRef.current.height);
@@ -1109,6 +1132,7 @@ function Align2D() {
 
   // Side panel wheel handler (center-based zoom, shared state with merged view)
   const handlePanelWheel = (e: React.WheelEvent) => {
+    if (lockView) return;
     const el = e.currentTarget as HTMLElement;
     const rect = el.getBoundingClientRect();
     const mouseX = (e.clientX - rect.left) / rect.width * canvasW;
@@ -1124,12 +1148,14 @@ function Align2D() {
   // Merged view mouse handlers — drag to align, Alt+drag to pan
   const handleWheel = (e: React.WheelEvent) => {
     if (e.shiftKey) {
+      if (lockAlignment) return;
       // Shift+scroll = rotate image B
       const step = fineMode ? 0.1 : 0.5;
       const delta = e.deltaY > 0 ? -step : step;
       setRotation(Math.max(-180, Math.min(180, rotation + delta)));
       return;
     }
+    if (lockView) return;
     const canvas = mergedCanvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -1143,11 +1169,13 @@ function Align2D() {
     setPanY(mouseY - (mouseY - panY) * zoomRatio);
   };
 
-  const handleDoubleClick = () => { setZoom(1); setPanX(0); setPanY(0); };
+  const handleDoubleClick = () => { if (lockView) return; setZoom(1); setPanX(0); setPanY(0); };
 
   const handleMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     const isAltOrMiddle = e.altKey || e.button === 1;
+    if (isAltOrMiddle && lockView) return;
+    if (!isAltOrMiddle && lockAlignment) return;
     dragRef.current = {
       startX: e.clientX, startY: e.clientY,
       startDx: isAltOrMiddle ? panX : dx,
@@ -1199,17 +1227,18 @@ function Align2D() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     const step = e.shiftKey ? 0.1 : 1;
     switch (e.key) {
-      case "ArrowLeft": case "a": case "A": e.preventDefault(); clampDx(dx - step); break;
-      case "ArrowRight": case "d": case "D": e.preventDefault(); clampDx(dx + step); break;
-      case "w": case "W": e.preventDefault(); clampDy(dy - step); break;
-      case "s": case "S": e.preventDefault(); clampDy(dy + step); break;
-      case "r": case "R": handleDoubleClick(); break;
-      case " ": e.preventDefault(); setRotPlaying((p) => !p); break;
+      case "ArrowLeft": case "a": case "A": if (lockAlignment) return; e.preventDefault(); clampDx(dx - step); break;
+      case "ArrowRight": case "d": case "D": if (lockAlignment) return; e.preventDefault(); clampDx(dx + step); break;
+      case "w": case "W": if (lockAlignment) return; e.preventDefault(); clampDy(dy - step); break;
+      case "s": case "S": if (lockAlignment) return; e.preventDefault(); clampDy(dy + step); break;
+      case "r": case "R": if (lockView) return; handleDoubleClick(); break;
+      case " ": if (lockAlignment) return; e.preventDefault(); setRotPlaying((p) => !p); break;
     }
   };
 
   const handleExportFigure = (withColorbar: boolean) => {
     setExportAnchor(null);
+    if (lockExport) return;
     const dataA = rawARef.current;
     if (!dataA) return;
     const lut = COLORMAPS[cmap] || COLORMAPS.gray;
@@ -1217,16 +1246,15 @@ function Align2D() {
     const { vmin, vmax } = sliderRange(gMin, gMax, vminPct, vmaxPct);
     const offscreen = renderToOffscreen(dataA, imgW, imgH, lut, vmin, vmax);
     if (!offscreen) return;
-    const pixelSizeAngstrom = pixelSize > 0 ? pixelSize * 10 : 0;
     const figCanvas = exportFigure({
       imageCanvas: offscreen,
       title: title || undefined,
       lut,
       vmin,
       vmax,
-      pixelSize: pixelSizeAngstrom > 0 ? pixelSizeAngstrom : undefined,
+      pixelSize: pixelSize > 0 ? pixelSize : undefined,
       showColorbar: withColorbar,
-      showScaleBar: pixelSizeAngstrom > 0,
+      showScaleBar: pixelSize > 0,
     });
     figCanvas.toBlob((blob) => {
       if (blob) downloadBlob(blob, "align2d_figure.png");
@@ -1235,6 +1263,7 @@ function Align2D() {
 
   const handleExport = () => {
     setExportAnchor(null);
+    if (lockExport) return;
     if (!mergedCanvasRef.current) return;
     mergedCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "align2d_merged.png"); }, "image/png");
   };
@@ -1278,12 +1307,14 @@ function Align2D() {
         )}
         <Stack direction="row" justifyContent={showPanels ? "space-between" : "flex-end"} alignItems="center" sx={{ width: canvasW }}>
           {showPanels && <Typography sx={{ ...typography.labelSmall, color: themeColors.accentYellow }}>{labelB} (aligned)</Typography>}
-          <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="center">
-            <Typography sx={{ ...typography.label, fontSize: 10 }}>Panels:</Typography>
-            <Switch checked={showPanels} onChange={() => setShowPanels(!showPanels)} size="small" sx={switchStyles.small} />
-            <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT:</Typography>
-            <Switch checked={showFft} onChange={() => setShowFft(!showFft)} size="small" sx={switchStyles.small} />
-          </Stack>
+          {!hideView && (
+            <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="center">
+              <Typography sx={{ ...typography.label, fontSize: 10 }}>Panels:</Typography>
+              <Switch checked={showPanels} onChange={() => { if (!lockView) setShowPanels(!showPanels); }} disabled={lockView} size="small" sx={switchStyles.small} />
+              <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT:</Typography>
+              <Switch checked={showFft} onChange={() => { if (!lockView) setShowFft(!showFft); }} disabled={lockView} size="small" sx={switchStyles.small} />
+            </Stack>
+          )}
         </Stack>
       </Stack>
 
@@ -1291,11 +1322,15 @@ function Align2D() {
       {showPanels && <Stack direction="row" spacing={`${SPACING.SM}px`} sx={{ mb: `${SPACING.SM}px` }}>
         <Box ref={panelAContainerRef} onWheel={handlePanelWheel} onDoubleClick={handleDoubleClick} sx={{ ...container.imageBox, width: canvasW, height: canvasH, border: `1px solid ${themeColors.border}` }}>
           <canvas ref={canvasARef} width={canvasW} height={canvasH} style={{ width: canvasW, height: canvasH, imageRendering: "pixelated" }} />
-          <Box onMouseDown={handleMainResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: 1 } }} />
+          {!hideView && (
+            <Box onMouseDown={handleMainResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: lockView ? "default" : "nwse-resize", opacity: lockView ? 0.3 : 0.6, pointerEvents: lockView ? "none" : "auto", background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: lockView ? 0.3 : 1 } }} />
+          )}
         </Box>
         <Box ref={panelBContainerRef} onWheel={handlePanelWheel} onDoubleClick={handleDoubleClick} sx={{ ...container.imageBox, width: canvasW, height: canvasH, border: `1px solid ${themeColors.border}` }}>
           <canvas ref={canvasBCorrectedRef} width={canvasW} height={canvasH} style={{ width: canvasW, height: canvasH }} />
-          <Box onMouseDown={handleMainResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: 1 } }} />
+          {!hideView && (
+            <Box onMouseDown={handleMainResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: lockView ? "default" : "nwse-resize", opacity: lockView ? 0.3 : 0.6, pointerEvents: lockView ? "none" : "auto", background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: lockView ? 0.3 : 1 } }} />
+          )}
         </Box>
       </Stack>}
 
@@ -1304,32 +1339,47 @@ function Align2D() {
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.25, width: canvasW }}>
           <Stack direction="row" spacing={0.5} alignItems="center">
             <Typography sx={{ ...typography.labelSmall, color: themeColors.textMuted }}>Merged</Typography>
-            <Select size="small" value={blendMode} onChange={(e) => setBlendMode(e.target.value as "blend" | "difference" | "flicker")} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }}>
-              <MenuItem value="blend">Blend</MenuItem>
-              <MenuItem value="difference">Diff</MenuItem>
-              <MenuItem value="flicker">Flicker</MenuItem>
-            </Select>
+            {!hideOverlay && (
+              <Select size="small" value={blendMode} onChange={(e) => { if (!lockOverlay) setBlendMode(e.target.value as "blend" | "difference" | "flicker"); }} disabled={lockOverlay} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }}>
+                <MenuItem value="blend">Blend</MenuItem>
+                <MenuItem value="difference">Diff</MenuItem>
+                <MenuItem value="flicker">Flicker</MenuItem>
+              </Select>
+            )}
           </Stack>
           <Stack direction="row" spacing={`${SPACING.XS}px`} alignItems="center">
-            <Button size="small" sx={{ ...compactButton, color: themeColors.accentGreen }} disabled={!hasAutoAlign || isAtAuto} onClick={() => { setDx(autoDx); setDy(autoDy); setRotation(0); }}>AUTO</Button>
-            <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} disabled={!hasOffset} onClick={() => { setDx(0); setDy(0); setRotation(0); }}>ZERO</Button>
-            <Button size="small" sx={compactButton} onClick={async () => {
-              if (!mergedCanvasRef.current) return;
-              try {
-                const blob = await new Promise<Blob | null>(resolve => mergedCanvasRef.current!.toBlob(resolve, "image/png"));
-                if (!blob) return;
-                await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-              } catch {
-                mergedCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "align2d_merged.png"); }, "image/png");
-              }
-            }}>COPY</Button>
-            <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={(e) => setExportAnchor(e.currentTarget)}>Export</Button>
-            <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
-              <MenuItem onClick={() => handleExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
-              <MenuItem onClick={() => handleExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
-              <MenuItem onClick={handleExport} sx={{ fontSize: 12 }}>PNG</MenuItem>
-            </Menu>
-            <Button size="small" sx={compactButton} disabled={!needsReset} onClick={handleDoubleClick}>RESET VIEW</Button>
+            {!hideAlignment && (
+              <Button size="small" sx={{ ...compactButton, color: themeColors.accentGreen }} disabled={lockAlignment || !hasAutoAlign || isAtAuto} onClick={() => { if (!lockAlignment) { setDx(autoDx); setDy(autoDy); setRotation(0); } }}>AUTO</Button>
+            )}
+            {!hideAlignment && (
+              <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} disabled={lockAlignment || !hasOffset} onClick={() => { if (!lockAlignment) { setDx(0); setDy(0); setRotation(0); } }}>ZERO</Button>
+            )}
+            {!hideExport && (
+              <Button size="small" sx={compactButton} disabled={lockExport} onClick={async () => {
+                if (lockExport) return;
+                if (!mergedCanvasRef.current) return;
+                try {
+                  const blob = await new Promise<Blob | null>(resolve => mergedCanvasRef.current!.toBlob(resolve, "image/png"));
+                  if (!blob) return;
+                  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+                } catch {
+                  mergedCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "align2d_merged.png"); }, "image/png");
+                }
+              }}>COPY</Button>
+            )}
+            {!hideExport && (
+              <>
+                <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} disabled={lockExport} onClick={(e) => { if (!lockExport) setExportAnchor(e.currentTarget); }}>Export</Button>
+                <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
+                  <MenuItem disabled={lockExport} onClick={() => handleExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
+                  <MenuItem disabled={lockExport} onClick={() => handleExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
+                  <MenuItem disabled={lockExport} onClick={handleExport} sx={{ fontSize: 12 }}>PNG</MenuItem>
+                </Menu>
+              </>
+            )}
+            {!hideView && (
+              <Button size="small" sx={compactButton} disabled={lockView || !needsReset} onClick={handleDoubleClick}>RESET VIEW</Button>
+            )}
           </Stack>
         </Stack>
         <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="flex-start">
@@ -1342,52 +1392,58 @@ function Align2D() {
           >
             <canvas ref={mergedCanvasRef} width={canvasW} height={canvasH} style={{ width: canvasW, height: canvasH }} />
             <canvas ref={uiCanvasRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: canvasH, pointerEvents: "none" }} />
-            <Box onMouseDown={handleMainResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: 1 } }} />
+            {!hideView && (
+              <Box onMouseDown={handleMainResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: lockView ? "default" : "nwse-resize", opacity: lockView ? 0.3 : 0.6, pointerEvents: lockView ? "none" : "auto", background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: lockView ? 0.3 : 1 } }} />
+            )}
           </Box>
           <Stack direction="row" spacing={`${SPACING.MD}px`} sx={{ pt: 0.5 }}>
-            <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.25, width: 90, flexShrink: 0 }}>
-              <AlignPad
-                dx={dx} dy={dy}
-                maxDx={fineMode ? Math.min(5, effectiveMaxDx) : effectiveMaxDx}
-                maxDy={fineMode ? Math.min(5, effectiveMaxDy) : effectiveMaxDy}
-                onMove={(newDx, newDy) => { clampDx(newDx); clampDy(newDy); }}
-                size={80}
-                theme={themeInfo.theme}
-                accentColor={themeColors.accent}
-              />
-              <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: themeColors.textMuted, whiteSpace: "nowrap" }}>
-                <Box component="span" sx={{ color: themeColors.accent }}>{dx >= 0 ? "+" : ""}{dx.toFixed(1)}</Box>
-                {", "}
-                <Box component="span" sx={{ color: themeColors.accent }}>{dy >= 0 ? "+" : ""}{dy.toFixed(1)}</Box>
-                {" px"}
-              </Typography>
-              <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: themeColors.accent }}>{rotation.toFixed(1)}&deg;</Typography>
-              <Stack direction="row" alignItems="center" spacing={0.5}>
-                <Typography sx={{ fontSize: 10, color: themeColors.textMuted }}>Fine:</Typography>
-                <Switch checked={fineMode} onChange={() => setFineMode(!fineMode)} size="small" sx={switchStyles.small} />
-              </Stack>
-            </Box>
-            <Box sx={{ display: "flex", flexDirection: "column", gap: 0.25 }}>
-              <Stack direction="row" spacing={0.5} alignItems="center">
-                <Typography sx={{ fontSize: 10, color: themeColors.textMuted }}>Histogram:</Typography>
-                <Select size="small" value={histSource} onChange={(e) => setHistSource(e.target.value as "a" | "b")} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 32, fontSize: 10 }}>
-                  <MenuItem value="a">A</MenuItem>
-                  <MenuItem value="b">B</MenuItem>
-                </Select>
-              </Stack>
-              <Histogram
-                data={histogramData}
-                colormap={cmap}
-                vminPct={vminPct}
-                vmaxPct={vmaxPct}
-                onRangeChange={(min, max) => { setVminPct(min); setVmaxPct(max); }}
-                width={110}
-                height={58}
-                theme={themeInfo.theme}
-                dataMin={dataRange.min}
-                dataMax={dataRange.max}
-              />
-            </Box>
+            {!hideAlignment && (
+              <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.25, width: 90, flexShrink: 0, opacity: lockAlignment ? 0.5 : 1, pointerEvents: lockAlignment ? "none" : "auto" }}>
+                <AlignPad
+                  dx={dx} dy={dy}
+                  maxDx={fineMode ? Math.min(5, effectiveMaxDx) : effectiveMaxDx}
+                  maxDy={fineMode ? Math.min(5, effectiveMaxDy) : effectiveMaxDy}
+                  onMove={(newDx, newDy) => { if (!lockAlignment) { clampDx(newDx); clampDy(newDy); } }}
+                  size={80}
+                  theme={themeInfo.theme}
+                  accentColor={themeColors.accent}
+                />
+                <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: themeColors.textMuted, whiteSpace: "nowrap" }}>
+                  <Box component="span" sx={{ color: themeColors.accent }}>{dx >= 0 ? "+" : ""}{dx.toFixed(1)}</Box>
+                  {", "}
+                  <Box component="span" sx={{ color: themeColors.accent }}>{dy >= 0 ? "+" : ""}{dy.toFixed(1)}</Box>
+                  {" px"}
+                </Typography>
+                <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: themeColors.accent }}>{rotation.toFixed(1)}&deg;</Typography>
+                <Stack direction="row" alignItems="center" spacing={0.5}>
+                  <Typography sx={{ fontSize: 10, color: themeColors.textMuted }}>Fine:</Typography>
+                  <Switch checked={fineMode} onChange={() => { if (!lockAlignment) setFineMode(!fineMode); }} disabled={lockAlignment} size="small" sx={switchStyles.small} />
+                </Stack>
+              </Box>
+            )}
+            {!hideHistogram && (
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 0.25, opacity: lockHistogram ? 0.5 : 1, pointerEvents: lockHistogram ? "none" : "auto" }}>
+                <Stack direction="row" spacing={0.5} alignItems="center">
+                  <Typography sx={{ fontSize: 10, color: themeColors.textMuted }}>Histogram:</Typography>
+                  <Select size="small" value={histSource} onChange={(e) => { if (!lockHistogram) setHistSource(e.target.value as "a" | "b"); }} disabled={lockHistogram} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 32, fontSize: 10 }}>
+                    <MenuItem value="a">A</MenuItem>
+                    <MenuItem value="b">B</MenuItem>
+                  </Select>
+                </Stack>
+                <Histogram
+                  data={histogramData}
+                  colormap={cmap}
+                  vminPct={vminPct}
+                  vmaxPct={vmaxPct}
+                  onRangeChange={(min, max) => { if (!lockHistogram) { setVminPct(min); setVmaxPct(max); } }}
+                  width={110}
+                  height={58}
+                  theme={themeInfo.theme}
+                  dataMin={dataRange.min}
+                  dataMax={dataRange.max}
+                />
+              </Box>
+            )}
           </Stack>
         </Stack>
       </Box>
@@ -1396,42 +1452,54 @@ function Align2D() {
       <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, mt: `${SPACING.SM}px` }}>
         {/* Sliders */}
         <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-          <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Opacity:</Typography>
-          <Slider value={opacity} min={0} max={1} step={0.05} onChange={(_, v) => setOpacity(v as number)} size="small" sx={{ ...sliderStyles.small, width: 60 }} />
-          <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 20 }}>{Math.round(opacity * 100)}%</Typography>
-          <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted, ml: 0.5 }}>Pad:</Typography>
-          <Slider value={padding} min={0} max={0.5} step={0.05} onChange={(_, v) => setPadding(v as number)} size="small" sx={{ ...sliderStyles.small, width: 50 }} />
-          <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 20 }}>{Math.round(padding * 100)}%</Typography>
-          <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted, ml: 0.5 }}>Color:</Typography>
-          <Select size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}>
-            {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
-          </Select>
-          <Typography sx={{ fontSize: 10, color: themeColors.textMuted, ml: 0.5 }}>
-            NCC: <Box component="span" sx={{ color: themeColors.textMuted }}>{xcorrZero.toFixed(3)}</Box>
-            {" → "}
-            <Box component="span" sx={{ color: (nccAligned > 0 ? nccAligned : nccCurrent) > xcorrZero ? themeColors.accentGreen : themeColors.accent, fontWeight: "bold" }}>{(nccAligned > 0 ? nccAligned : nccCurrent).toFixed(3)}</Box>
-          </Typography>
-          {zoom !== 1 && (
+          {!hideOverlay && (
+            <>
+              <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Opacity:</Typography>
+              <Slider value={opacity} min={0} max={1} step={0.05} onChange={(_, v) => { if (!lockOverlay) setOpacity(v as number); }} disabled={lockOverlay} size="small" sx={{ ...sliderStyles.small, width: 60 }} />
+              <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 20 }}>{Math.round(opacity * 100)}%</Typography>
+              <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted, ml: 0.5 }}>Pad:</Typography>
+              <Slider value={padding} min={0} max={0.5} step={0.05} onChange={(_, v) => { if (!lockOverlay) setPadding(v as number); }} disabled={lockOverlay} size="small" sx={{ ...sliderStyles.small, width: 50 }} />
+              <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 20 }}>{Math.round(padding * 100)}%</Typography>
+            </>
+          )}
+          {!hideDisplay && (
+            <>
+              <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted, ml: 0.5 }}>Color:</Typography>
+              <Select size="small" value={cmap} onChange={(e) => { if (!lockDisplay) setCmap(e.target.value); }} disabled={lockDisplay} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}>
+                {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
+              </Select>
+            </>
+          )}
+          {!hideStats && (
+            <Typography sx={{ fontSize: 10, color: themeColors.textMuted, ml: 0.5 }}>
+              NCC: <Box component="span" sx={{ color: themeColors.textMuted }}>{xcorrZero.toFixed(3)}</Box>
+              {" → "}
+              <Box component="span" sx={{ color: (nccAligned > 0 ? nccAligned : nccCurrent) > xcorrZero ? themeColors.accentGreen : themeColors.accent, fontWeight: "bold" }}>{(nccAligned > 0 ? nccAligned : nccCurrent).toFixed(3)}</Box>
+            </Typography>
+          )}
+          {!hideView && zoom !== 1 && (
             <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.accent, fontWeight: "bold", ml: 0.5 }}>{zoom.toFixed(1)}x</Typography>
           )}
         </Box>
 
         {/* Rotation controls */}
-        <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-          <IconButton size="small" onClick={() => setRotPlaying(!rotPlaying)} sx={{ color: rotPlaying ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
-            {rotPlaying ? <PauseIcon sx={{ fontSize: 16 }} /> : <PlayArrowIcon sx={{ fontSize: 16 }} />}
-          </IconButton>
-          <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Rot:</Typography>
-          <Slider value={rotation} min={-180} max={180} step={fineMode ? 0.1 : 0.5} onChange={(_, v) => { if (rotPlaying) setRotPlaying(false); setRotation(v as number); }} size="small" sx={{ ...sliderStyles.small, width: 80 }} />
-          <Typography sx={{ ...typography.value, color: themeColors.accent, minWidth: 40 }}>{rotation.toFixed(1)}&deg;</Typography>
-          <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>±</Typography>
-          <Slider value={rotRange} min={1} max={90} step={1} onChange={(_, v) => setRotRange(v as number)} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
-          <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 18 }}>{rotRange}&deg;</Typography>
-          <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>fps:</Typography>
-          <Slider value={rotFps} min={0} max={120} step={1} onChange={(_, v) => setRotFps(v as number)} size="small" sx={{ ...sliderStyles.small, width: 35 }} />
-          <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 16 }}>{rotFps}</Typography>
-          <Button size="small" sx={compactButton} disabled={rotation === 0} onClick={() => { setRotPlaying(false); setRotation(0); }}>RESET</Button>
-        </Box>
+        {!hideAlignment && (
+          <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockAlignment ? 0.5 : 1, pointerEvents: lockAlignment ? "none" : "auto" }}>
+            <IconButton size="small" onClick={() => { if (!lockAlignment) setRotPlaying(!rotPlaying); }} disabled={lockAlignment} sx={{ color: rotPlaying ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
+              {rotPlaying ? <PauseIcon sx={{ fontSize: 16 }} /> : <PlayArrowIcon sx={{ fontSize: 16 }} />}
+            </IconButton>
+            <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Rot:</Typography>
+            <Slider value={rotation} min={-180} max={180} step={fineMode ? 0.1 : 0.5} onChange={(_, v) => { if (!lockAlignment) { if (rotPlaying) setRotPlaying(false); setRotation(v as number); } }} disabled={lockAlignment} size="small" sx={{ ...sliderStyles.small, width: 80 }} />
+            <Typography sx={{ ...typography.value, color: themeColors.accent, minWidth: 40 }}>{rotation.toFixed(1)}&deg;</Typography>
+            <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>±</Typography>
+            <Slider value={rotRange} min={1} max={90} step={1} onChange={(_, v) => { if (!lockAlignment) setRotRange(v as number); }} disabled={lockAlignment} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
+            <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 18 }}>{rotRange}&deg;</Typography>
+            <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>fps:</Typography>
+            <Slider value={rotFps} min={0} max={120} step={1} onChange={(_, v) => { if (!lockAlignment) setRotFps(v as number); }} disabled={lockAlignment} size="small" sx={{ ...sliderStyles.small, width: 35 }} />
+            <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 16 }}>{rotFps}</Typography>
+            <Button size="small" sx={compactButton} disabled={lockAlignment || rotation === 0} onClick={() => { if (!lockAlignment) { setRotPlaying(false); setRotation(0); } }}>RESET</Button>
+          </Box>
+        )}
 
       </Box>
     </Box>

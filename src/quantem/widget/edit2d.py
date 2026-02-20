@@ -15,6 +15,12 @@ import numpy as np
 import traitlets
 
 from quantem.widget.array_utils import to_numpy, _resize_image
+from quantem.widget.json_state import resolve_widget_version, save_state_file, unwrap_state_payload
+from quantem.widget.tool_parity import (
+    bind_tool_runtime_api,
+    build_tool_groups,
+    normalize_tool_groups,
+)
 
 
 class Edit2D(anywidget.AnyWidget):
@@ -42,16 +48,42 @@ class Edit2D(anywidget.AnyWidget):
         Title displayed in the widget header.
     cmap : str, default "gray"
         Colormap name.
-    pixel_size_angstrom : float, default 0.0
+    pixel_size : float, default 0.0
         Pixel size in angstroms for scale bar display.
     show_stats : bool, default True
         Show statistics bar.
     show_controls : bool, default True
         Show control row.
+    show_display_controls : bool, default True
+        Show display control group.
+    show_edit_controls : bool, default True
+        Show edit control group.
+    show_histogram : bool, default True
+        Show histogram control group.
     log_scale : bool, default False
         Log intensity mapping.
     auto_contrast : bool, default True
         Percentile-based contrast.
+    disabled_tools : list of str, optional
+        Tool groups to disable in the frontend UI/interaction layer.
+        Supported values: ``"mode"``, ``"edit"``, ``"display"``,
+        ``"histogram"``, ``"stats"``, ``"navigation"``, ``"export"``,
+        ``"view"``, ``"all"``.
+    disable_* : bool, optional
+        Convenience flags (``disable_mode``, ``disable_edit``,
+        ``disable_display``, ``disable_histogram``, ``disable_stats``,
+        ``disable_navigation``, ``disable_export``, ``disable_view``,
+        ``disable_all``) equivalent to including those tool names in
+        ``disabled_tools``.
+    hidden_tools : list of str, optional
+        Tool groups to hide from the frontend UI. Hidden tools are also
+        interaction-locked (equivalent to disabled for behavior).
+    hide_* : bool, optional
+        Convenience flags (``hide_mode``, ``hide_edit``,
+        ``hide_display``, ``hide_histogram``, ``hide_stats``,
+        ``hide_navigation``, ``hide_export``, ``hide_view``,
+        ``hide_all``) equivalent to including those tool names in
+        ``hidden_tools``.
 
     Examples
     --------
@@ -96,13 +128,18 @@ class Edit2D(anywidget.AnyWidget):
     # =========================================================================
     # Scale Bar
     # =========================================================================
-    pixel_size_angstrom = traitlets.Float(0.0).tag(sync=True)
+    pixel_size = traitlets.Float(0.0).tag(sync=True)
 
     # =========================================================================
     # UI Visibility
     # =========================================================================
     show_controls = traitlets.Bool(True).tag(sync=True)
     show_stats = traitlets.Bool(True).tag(sync=True)
+    show_display_controls = traitlets.Bool(True).tag(sync=True)
+    show_edit_controls = traitlets.Bool(True).tag(sync=True)
+    show_histogram = traitlets.Bool(True).tag(sync=True)
+    disabled_tools = traitlets.List(traitlets.Unicode()).tag(sync=True)
+    hidden_tools = traitlets.List(traitlets.Unicode()).tag(sync=True)
     stats_mean = traitlets.Float(0.0).tag(sync=True)
     stats_min = traitlets.Float(0.0).tag(sync=True)
     stats_max = traitlets.Float(0.0).tag(sync=True)
@@ -126,6 +163,81 @@ class Edit2D(anywidget.AnyWidget):
     # =========================================================================
     selected_idx = traitlets.Int(0).tag(sync=True)
 
+    @classmethod
+    def _normalize_tool_groups(cls, tool_groups) -> List[str]:
+        """Validate and normalize tool group values with stable ordering."""
+        return normalize_tool_groups("Edit2D", tool_groups)
+
+    @classmethod
+    def _build_disabled_tools(
+        cls,
+        disabled_tools=None,
+        disable_mode: bool = False,
+        disable_edit: bool = False,
+        disable_display: bool = False,
+        disable_histogram: bool = False,
+        disable_stats: bool = False,
+        disable_navigation: bool = False,
+        disable_export: bool = False,
+        disable_view: bool = False,
+        disable_all: bool = False,
+    ) -> List[str]:
+        """Build disabled_tools from explicit list and ergonomic boolean flags."""
+        return build_tool_groups(
+            "Edit2D",
+            tool_groups=disabled_tools,
+            all_flag=disable_all,
+            flag_map={
+                "mode": disable_mode,
+                "edit": disable_edit,
+                "display": disable_display,
+                "histogram": disable_histogram,
+                "stats": disable_stats,
+                "navigation": disable_navigation,
+                "export": disable_export,
+                "view": disable_view,
+            },
+        )
+
+    @classmethod
+    def _build_hidden_tools(
+        cls,
+        hidden_tools=None,
+        hide_mode: bool = False,
+        hide_edit: bool = False,
+        hide_display: bool = False,
+        hide_histogram: bool = False,
+        hide_stats: bool = False,
+        hide_navigation: bool = False,
+        hide_export: bool = False,
+        hide_view: bool = False,
+        hide_all: bool = False,
+    ) -> List[str]:
+        """Build hidden_tools from explicit list and ergonomic boolean flags."""
+        return build_tool_groups(
+            "Edit2D",
+            tool_groups=hidden_tools,
+            all_flag=hide_all,
+            flag_map={
+                "mode": hide_mode,
+                "edit": hide_edit,
+                "display": hide_display,
+                "histogram": hide_histogram,
+                "stats": hide_stats,
+                "navigation": hide_navigation,
+                "export": hide_export,
+                "view": hide_view,
+            },
+        )
+
+    @traitlets.validate("disabled_tools")
+    def _validate_disabled_tools(self, proposal):
+        return self._normalize_tool_groups(proposal["value"])
+
+    @traitlets.validate("hidden_tools")
+    def _validate_hidden_tools(self, proposal):
+        return self._normalize_tool_groups(proposal["value"])
+
     def __init__(
         self,
         data: Union[np.ndarray, List[np.ndarray]],
@@ -135,28 +247,52 @@ class Edit2D(anywidget.AnyWidget):
         labels: Optional[List[str]] = None,
         title: str = "",
         cmap: str = "gray",
-        pixel_size_angstrom: float = 0.0,
+        pixel_size: float = 0.0,
         show_controls: bool = True,
         show_stats: bool = True,
+        show_display_controls: bool = True,
+        show_edit_controls: bool = True,
+        show_histogram: bool = True,
         log_scale: bool = False,
         auto_contrast: bool = True,
+        disabled_tools: Optional[List[str]] = None,
+        disable_mode: bool = False,
+        disable_edit: bool = False,
+        disable_display: bool = False,
+        disable_histogram: bool = False,
+        disable_stats: bool = False,
+        disable_navigation: bool = False,
+        disable_export: bool = False,
+        disable_view: bool = False,
+        disable_all: bool = False,
+        hidden_tools: Optional[List[str]] = None,
+        hide_mode: bool = False,
+        hide_edit: bool = False,
+        hide_display: bool = False,
+        hide_histogram: bool = False,
+        hide_stats: bool = False,
+        hide_navigation: bool = False,
+        hide_export: bool = False,
+        hide_view: bool = False,
+        hide_all: bool = False,
         state=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.widget_version = resolve_widget_version()
         self.mode = mode
 
         # Check if data is a Dataset2d and extract metadata
         if hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling"):
             if not title and data.name:
                 title = data.name
-            if pixel_size_angstrom == 0.0 and hasattr(data, "units"):
+            if pixel_size == 0.0 and hasattr(data, "units"):
                 units = list(data.units)
                 sampling_val = float(data.sampling[-1])
                 if units[-1] in ("nm",):
-                    pixel_size_angstrom = sampling_val * 10  # nm -> angstrom
+                    pixel_size = sampling_val * 10  # nm -> angstrom
                 elif units[-1] in ("\u00c5", "angstrom", "A"):
-                    pixel_size_angstrom = sampling_val
+                    pixel_size = sampling_val
             data = data.array
 
         # Convert input to NumPy (handles NumPy, CuPy, PyTorch)
@@ -191,11 +327,38 @@ class Edit2D(anywidget.AnyWidget):
         # Options
         self.title = title
         self.cmap = cmap
-        self.pixel_size_angstrom = pixel_size_angstrom
+        self.pixel_size = pixel_size
         self.show_controls = show_controls
         self.show_stats = show_stats
+        self.show_display_controls = show_display_controls
+        self.show_edit_controls = show_edit_controls
+        self.show_histogram = show_histogram
         self.log_scale = log_scale
         self.auto_contrast = auto_contrast
+        self.disabled_tools = self._build_disabled_tools(
+            disabled_tools=disabled_tools,
+            disable_mode=disable_mode,
+            disable_edit=disable_edit,
+            disable_display=disable_display,
+            disable_histogram=disable_histogram,
+            disable_stats=disable_stats,
+            disable_navigation=disable_navigation,
+            disable_export=disable_export,
+            disable_view=disable_view,
+            disable_all=disable_all,
+        )
+        self.hidden_tools = self._build_hidden_tools(
+            hidden_tools=hidden_tools,
+            hide_mode=hide_mode,
+            hide_edit=hide_edit,
+            hide_display=hide_display,
+            hide_histogram=hide_histogram,
+            hide_stats=hide_stats,
+            hide_navigation=hide_navigation,
+            hide_export=hide_export,
+            hide_view=hide_view,
+            hide_all=hide_all,
+        )
         self.fill_value = fill_value
 
         # Crop bounds
@@ -218,7 +381,12 @@ class Edit2D(anywidget.AnyWidget):
         # State restoration (must be last)
         if state is not None:
             if isinstance(state, (str, pathlib.Path)):
-                state = json.loads(pathlib.Path(state).read_text())
+                state = unwrap_state_payload(
+                    json.loads(pathlib.Path(state).read_text()),
+                    require_envelope=True,
+                )
+            else:
+                state = unwrap_state_payload(state)
             self.load_state_dict(state)
 
     def _compute_stats(self):
@@ -335,6 +503,71 @@ class Edit2D(anywidget.AnyWidget):
         self.frame_bytes = self._data.tobytes()
 
     # =========================================================================
+    # Export
+    # =========================================================================
+
+    def _normalize_frame(self, frame: np.ndarray) -> np.ndarray:
+        if self.log_scale:
+            frame = np.log1p(np.maximum(frame, 0))
+        if self.auto_contrast:
+            vmin = float(np.percentile(frame, 2))
+            vmax = float(np.percentile(frame, 98))
+        else:
+            vmin = float(frame.min())
+            vmax = float(frame.max())
+        if vmax > vmin:
+            normalized = np.clip((frame - vmin) / (vmax - vmin) * 255, 0, 255)
+            return normalized.astype(np.uint8)
+        return np.zeros(frame.shape, dtype=np.uint8)
+
+    def save_image(
+        self,
+        path: str | pathlib.Path,
+        *,
+        format: str | None = None,
+        dpi: int = 150,
+    ) -> pathlib.Path:
+        """Save current image as PNG, PDF, or TIFF.
+
+        In crop mode, saves the cropped/padded result.
+        In mask mode, saves the masked result.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Output file path.
+        format : str, optional
+            'png', 'pdf', or 'tiff'. If omitted, inferred from file extension.
+        dpi : int, default 150
+            Output DPI metadata.
+
+        Returns
+        -------
+        pathlib.Path
+            The written file path.
+        """
+        from matplotlib import colormaps
+        from PIL import Image
+
+        path = pathlib.Path(path)
+        fmt = (format or path.suffix.lstrip(".").lower() or "png").lower()
+        if fmt not in ("png", "pdf", "tiff", "tif"):
+            raise ValueError(f"Unsupported format: {fmt!r}. Use 'png', 'pdf', or 'tiff'.")
+
+        result = self.result
+        if isinstance(result, list):
+            result = result[self.selected_idx]
+
+        normalized = self._normalize_frame(result)
+        cmap_fn = colormaps.get_cmap(self.cmap)
+        rgba = (cmap_fn(normalized / 255.0) * 255).astype(np.uint8)
+
+        img = Image.fromarray(rgba)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(str(path), dpi=(dpi, dpi))
+        return path
+
+    # =========================================================================
     # State Protocol
     # =========================================================================
 
@@ -347,7 +580,12 @@ class Edit2D(anywidget.AnyWidget):
             "auto_contrast": self.auto_contrast,
             "show_controls": self.show_controls,
             "show_stats": self.show_stats,
-            "pixel_size_angstrom": self.pixel_size_angstrom,
+            "show_display_controls": self.show_display_controls,
+            "show_edit_controls": self.show_edit_controls,
+            "show_histogram": self.show_histogram,
+            "disabled_tools": self.disabled_tools,
+            "hidden_tools": self.hidden_tools,
+            "pixel_size": self.pixel_size,
             "fill_value": self.fill_value,
             "crop_top": self.crop_top,
             "crop_left": self.crop_left,
@@ -357,10 +595,12 @@ class Edit2D(anywidget.AnyWidget):
         }
 
     def save(self, path: str):
-        pathlib.Path(path).write_text(json.dumps(self.state_dict(), indent=2))
+        save_state_file(path, "Edit2D", self.state_dict())
 
     def load_state_dict(self, state):
         for key, val in state.items():
+            if key == "pixel_size_angstrom":
+                key = "pixel_size"
             if hasattr(self, key):
                 setattr(self, key, val)
 
@@ -370,8 +610,8 @@ class Edit2D(anywidget.AnyWidget):
         lines.append(f"Image:    {self.height}×{self.width}")
         if self.n_images > 1:
             lines[-1] += f" ({self.n_images} images)"
-        if self.pixel_size_angstrom > 0:
-            ps = self.pixel_size_angstrom
+        if self.pixel_size > 0:
+            ps = self.pixel_size
             if ps >= 10:
                 lines[-1] += f" ({ps / 10:.2f} nm/px)"
             else:
@@ -394,6 +634,10 @@ class Edit2D(anywidget.AnyWidget):
         scale = "log" if self.log_scale else "linear"
         contrast = "auto" if self.auto_contrast else "manual"
         lines.append(f"Display:  {self.cmap} | {contrast} | {scale}")
+        if self.disabled_tools:
+            lines.append(f"Locked:   {', '.join(self.disabled_tools)}")
+        if self.hidden_tools:
+            lines.append(f"Hidden:   {', '.join(self.hidden_tools)}")
         print("\n".join(lines))
 
     def __repr__(self):
@@ -408,3 +652,6 @@ class Edit2D(anywidget.AnyWidget):
             f"crop={crop_h}x{crop_w} at ({self.crop_top},{self.crop_left}), "
             f"fill={self.fill_value})"
         )
+
+
+bind_tool_runtime_api(Edit2D, "Edit2D")

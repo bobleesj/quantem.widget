@@ -179,8 +179,8 @@ def test_align2d_labels():
 def test_align2d_pixel_size():
     a = np.random.rand(16, 16).astype(np.float32)
     b = np.random.rand(16, 16).astype(np.float32)
-    widget = Align2D(a, b, pixel_size=0.5, auto_align=False)
-    assert widget.pixel_size == pytest.approx(0.5)
+    widget = Align2D(a, b, pixel_size=5.0, auto_align=False)
+    assert widget.pixel_size == pytest.approx(5.0)
 
 
 def test_align2d_canvas_size():
@@ -347,7 +347,9 @@ def test_align2d_state_dict_roundtrip():
     a = np.random.rand(32, 32).astype(np.float32)
     b = np.random.rand(32, 32).astype(np.float32)
     w = Align2D(a, b, cmap="viridis", title="Aligned", opacity=0.7,
-                rotation=5.0, pixel_size=0.5, auto_align=False)
+                rotation=5.0, pixel_size=5.0, auto_align=False,
+                disabled_tools=["alignment", "display"],
+                hidden_tools=["histogram"])
     w.dx = 3.5
     w.dy = -2.1
     sd = w.state_dict()
@@ -358,7 +360,9 @@ def test_align2d_state_dict_roundtrip():
     assert w2.rotation == pytest.approx(5.0)
     assert w2.dx == pytest.approx(3.5)
     assert w2.dy == pytest.approx(-2.1)
-    assert w2.pixel_size == pytest.approx(0.5)
+    assert w2.pixel_size == pytest.approx(5.0)
+    assert w2.disabled_tools == ["alignment", "display"]
+    assert w2.hidden_tools == ["histogram"]
 
 
 def test_align2d_save_load_file(tmp_path):
@@ -370,7 +374,10 @@ def test_align2d_save_load_file(tmp_path):
     w.save(str(path))
     assert path.exists()
     saved = json.loads(path.read_text())
-    assert saved["cmap"] == "plasma"
+    assert saved["metadata_version"] == "1.0"
+    assert saved["widget_name"] == "Align2D"
+    assert isinstance(saved["widget_version"], str)
+    assert saved["state"]["cmap"] == "plasma"
     w2 = Align2D(a, b, auto_align=False, state=str(path))
     assert w2.cmap == "plasma"
     assert w2.title == "Saved Align"
@@ -412,3 +419,56 @@ def test_align2d_set_images():
     assert widget.width == 48
     assert widget.cmap == "viridis"
     assert len(widget.image_a_bytes) == 64 * 48 * 4
+
+
+# ── Tool visibility / locking ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
+def test_align2d_tool_lists_default_empty(trait_name):
+    a = np.random.rand(16, 16).astype(np.float32)
+    b = np.random.rand(16, 16).astype(np.float32)
+    w = Align2D(a, b, auto_align=False)
+    assert getattr(w, trait_name) == []
+
+
+@pytest.mark.parametrize(
+    ("trait_name", "ctor_kwargs", "expected"),
+    [
+        ("disabled_tools", {"disabled_tools": ["alignment", "Display"]}, ["alignment", "display"]),
+        ("hidden_tools", {"hidden_tools": ["alignment", "Display"]}, ["alignment", "display"]),
+        ("disabled_tools", {"disable_alignment": True, "disable_overlay": True}, ["alignment", "overlay"]),
+        ("hidden_tools", {"hide_alignment": True, "hide_overlay": True}, ["alignment", "overlay"]),
+        ("disabled_tools", {"disable_all": True}, ["all"]),
+        ("hidden_tools", {"hide_all": True}, ["all"]),
+    ],
+)
+def test_align2d_tool_lists_constructor_behavior(trait_name, ctor_kwargs, expected):
+    a = np.random.rand(16, 16).astype(np.float32)
+    b = np.random.rand(16, 16).astype(np.float32)
+    w = Align2D(a, b, auto_align=False, **ctor_kwargs)
+    assert getattr(w, trait_name) == expected
+
+
+@pytest.mark.parametrize("kwargs", [{"disabled_tools": ["not_real"]}, {"hidden_tools": ["not_real"]}])
+def test_align2d_tool_lists_unknown_raises(kwargs):
+    a = np.random.rand(16, 16).astype(np.float32)
+    b = np.random.rand(16, 16).astype(np.float32)
+    with pytest.raises(ValueError, match="Unknown tool group"):
+        Align2D(a, b, auto_align=False, **kwargs)
+
+
+@pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
+def test_align2d_tool_lists_normalizes(trait_name):
+    a = np.random.rand(16, 16).astype(np.float32)
+    b = np.random.rand(16, 16).astype(np.float32)
+    w = Align2D(a, b, auto_align=False)
+    setattr(w, trait_name, ["ALIGNMENT", "alignment", "display"])
+    assert getattr(w, trait_name) == ["alignment", "display"]
+
+
+def test_align2d_widget_version_is_set():
+    a = np.random.rand(16, 16).astype(np.float32)
+    b = np.random.rand(16, 16).astype(np.float32)
+    w = Align2D(a, b, auto_align=False)
+    assert w.widget_version != "unknown"

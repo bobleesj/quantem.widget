@@ -24,6 +24,7 @@ import IconButton from "@mui/material/IconButton";
 import Slider from "@mui/material/Slider";
 import NavigateBeforeIcon from "@mui/icons-material/NavigateBefore";
 import NavigateNextIcon from "@mui/icons-material/NavigateNext";
+import TuneIcon from "@mui/icons-material/Tune";
 import "./edit2d.css";
 import { useTheme } from "../theme";
 import { drawScaleBarHiDPI, exportFigure } from "../scalebar";
@@ -479,9 +480,14 @@ function Edit2D() {
 
   const [logScale, setLogScale] = useModelState<boolean>("log_scale");
   const [autoContrast, setAutoContrast] = useModelState<boolean>("auto_contrast");
-  const [showStats] = useModelState<boolean>("show_stats");
+  const [showStats, setShowStats] = useModelState<boolean>("show_stats");
   const [showControls] = useModelState<boolean>("show_controls");
-  const [pixelSizeAngstrom] = useModelState<number>("pixel_size_angstrom");
+  const [showDisplayControlsGroup, setShowDisplayControlsGroup] = useModelState<boolean>("show_display_controls");
+  const [showEditControlsGroup, setShowEditControlsGroup] = useModelState<boolean>("show_edit_controls");
+  const [showHistogramGroup, setShowHistogramGroup] = useModelState<boolean>("show_histogram");
+  const [disabledTools] = useModelState<string[]>("disabled_tools");
+  const [hiddenTools] = useModelState<string[]>("hidden_tools");
+  const [pixelSize] = useModelState<number>("pixel_size");
   const [statsMean] = useModelState<number>("stats_mean");
   const [statsMin] = useModelState<number>("stats_min");
   const [statsMax] = useModelState<number>("stats_max");
@@ -508,6 +514,8 @@ function Edit2D() {
   const [maskVersion, setMaskVersion] = React.useState(0);
   const [shapePreview, setShapePreview] = React.useState<{ r0: number; c0: number; r1: number; c1: number } | null>(null);
   const [exportAnchor, setExportAnchor] = React.useState<HTMLElement | null>(null);
+  const [controlsAnchor, setControlsAnchor] = React.useState<HTMLElement | null>(null);
+  const [isRootHovered, setIsRootHovered] = React.useState(false);
 
   // ── Refs ─────────────────────────────────────────────────────────────
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -532,6 +540,51 @@ function Edit2D() {
   const cropH = cropBottom - cropTop;
   const cropW = cropRight - cropLeft;
   const hasPadding = cropTop < 0 || cropLeft < 0 || cropBottom > height || cropRight > width;
+
+  const disabledToolSet = React.useMemo(
+    () =>
+      new Set(
+        (disabledTools || [])
+          .map((name) => String(name).trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    [disabledTools],
+  );
+  const hiddenToolSet = React.useMemo(
+    () =>
+      new Set(
+        (hiddenTools || [])
+          .map((name) => String(name).trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    [hiddenTools],
+  );
+
+  const hideAll = hiddenToolSet.has("all");
+  const hideMode = hideAll || hiddenToolSet.has("mode");
+  const hideEdit = hideAll || hiddenToolSet.has("edit");
+  const hideDisplay = hideAll || hiddenToolSet.has("display");
+  const hideHistogram = hideAll || hiddenToolSet.has("histogram");
+  const hideStats = hideAll || hiddenToolSet.has("stats");
+  const hideNavigation = hideAll || hiddenToolSet.has("navigation");
+  const hideExport = hideAll || hiddenToolSet.has("export");
+  const hideView = hideAll || hiddenToolSet.has("view");
+
+  const lockAll = disabledToolSet.has("all") || hideAll;
+  const lockMode = lockAll || hideMode || disabledToolSet.has("mode");
+  const lockEdit = lockAll || hideEdit || disabledToolSet.has("edit");
+  const lockDisplay = lockAll || hideDisplay || disabledToolSet.has("display");
+  const lockHistogram = lockAll || hideHistogram || disabledToolSet.has("histogram");
+  const lockStats = lockAll || hideStats || disabledToolSet.has("stats");
+  const lockNavigation = lockAll || hideNavigation || disabledToolSet.has("navigation");
+  const lockExport = lockAll || hideExport || disabledToolSet.has("export");
+  const lockView = lockAll || hideView || disabledToolSet.has("view");
+
+  const wantDisplayControlsGroup = showDisplayControlsGroup && !hideDisplay;
+  const wantEditControlsGroup = showEditControlsGroup && !hideEdit;
+  const wantHistogramGroup = showHistogramGroup && !hideHistogram;
+  const showLeftControlGroups = wantDisplayControlsGroup || wantEditControlsGroup;
+  const showAnyControlGroups = showLeftControlGroups || wantHistogramGroup;
 
   // ── Mask coverage ───────────────────────────────────────────────────
   const maskCoverage = React.useMemo(() => {
@@ -600,6 +653,7 @@ function Edit2D() {
 
   // ── Threshold mask (when threshold tool active) ─────────────────────
   React.useEffect(() => {
+    if (lockEdit) return;
     if (mode !== "mask" || maskTool !== "threshold" || !rawDataRef.current || !maskRef.current) return;
     const data = rawDataRef.current;
     const processed = logScale ? applyLogScale(data) : data;
@@ -611,7 +665,7 @@ function Edit2D() {
     }
     setMaskVersion((v) => v + 1);
     syncMaskToPython();
-  }, [mode, maskTool, imageVminPct, imageVmaxPct, imageDataRange, logScale, syncMaskToPython]);
+  }, [lockEdit, mode, maskTool, imageVminPct, imageVmaxPct, imageDataRange, logScale, syncMaskToPython]);
 
   // ── Prevent page scroll on wheel ────────────────────────────────────
   React.useEffect(() => {
@@ -626,6 +680,7 @@ function Edit2D() {
   const resizeRef = React.useRef<{ startX: number; startSize: number } | null>(null);
 
   const handleResizeStart = React.useCallback((e: React.MouseEvent) => {
+    if (lockView) return;
     e.stopPropagation();
     e.preventDefault();
     resizeRef.current = { startX: e.clientX, startSize: canvasSize };
@@ -642,7 +697,7 @@ function Edit2D() {
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-  }, [canvasSize]);
+  }, [canvasSize, lockView]);
 
   // ── Screen <-> Image coordinate transforms ──────────────────────────
   const toScreenX = React.useCallback((imgCol: number) => {
@@ -861,8 +916,8 @@ function Edit2D() {
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.clearRect(0, 0, canvasW, canvasH);
 
-    if (pixelSizeAngstrom > 0) {
-      drawScaleBarHiDPI(uiRef.current, DPR, zoom, pixelSizeAngstrom, "\u00c5", width);
+    if (pixelSize > 0) {
+      drawScaleBarHiDPI(uiRef.current, DPR, zoom, pixelSize, "\u00c5", width);
     }
 
     if (zoom !== 1) {
@@ -875,10 +930,11 @@ function Edit2D() {
       ctx.fillText(`${zoom.toFixed(1)}\u00d7`, 12, canvasH - 12);
       ctx.shadowBlur = 0;
     }
-  }, [canvasW, canvasH, zoom, pixelSizeAngstrom, width]);
+  }, [canvasW, canvasH, zoom, pixelSize, width]);
 
   // ── Mask operations ─────────────────────────────────────────────────
   const handleInvertMask = React.useCallback(() => {
+    if (lockEdit) return;
     if (!maskRef.current) return;
     const mask = maskRef.current;
     for (let i = 0; i < mask.length; i++) {
@@ -886,14 +942,15 @@ function Edit2D() {
     }
     setMaskVersion((v) => v + 1);
     syncMaskToPython();
-  }, [syncMaskToPython]);
+  }, [lockEdit, syncMaskToPython]);
 
   const handleClearMask = React.useCallback(() => {
+    if (lockEdit) return;
     if (!maskRef.current) return;
     maskRef.current.fill(0);
     setMaskVersion((v) => v + 1);
     syncMaskToPython();
-  }, [syncMaskToPython]);
+  }, [lockEdit, syncMaskToPython]);
 
   // ── Mouse handlers ───────────────────────────────────────────────────
   const getCanvasCoords = React.useCallback((e: React.MouseEvent) => {
@@ -912,7 +969,7 @@ function Edit2D() {
     const imgRow = toImageRow(y);
 
     // Mask mode mouse handling
-    if (mode === "mask") {
+    if (mode === "mask" && !lockEdit) {
       if (maskTool === "brush" && maskRef.current) {
         isPaintingRef.current = true;
         const value = maskAction === "add" ? 255 : 0;
@@ -931,7 +988,7 @@ function Edit2D() {
     }
 
     // Crop mode mouse handling
-    if (mode === "crop") {
+    if (mode === "crop" && !lockEdit) {
       const sLeft = toScreenX(cropLeft);
       const sRight = toScreenX(cropRight);
       const sTop = toScreenY(cropTop);
@@ -952,6 +1009,7 @@ function Edit2D() {
     }
 
     // Pan (mask mode fallthrough for threshold / outside image)
+    if (lockView) return;
     setDragMode("pan");
     dragStartRef.current = {
       mouseX: e.clientX,
@@ -959,7 +1017,7 @@ function Edit2D() {
       cropTop, cropLeft, cropBottom, cropRight,
       panX, panY,
     };
-  }, [getCanvasCoords, mode, maskTool, maskAction, brushSize, width, height, cropTop, cropLeft, cropBottom, cropRight, toScreenX, toScreenY, toImageCol, toImageRow, panX, panY]);
+  }, [getCanvasCoords, mode, lockEdit, lockView, maskTool, maskAction, brushSize, width, height, cropTop, cropLeft, cropBottom, cropRight, toScreenX, toScreenY, toImageCol, toImageRow, panX, panY]);
 
   const handleMouseMove = React.useCallback((e: React.MouseEvent) => {
     const { x, y } = getCanvasCoords(e);
@@ -976,7 +1034,7 @@ function Edit2D() {
     }
 
     // Mask mode: brush painting
-    if (mode === "mask" && maskTool === "brush" && isPaintingRef.current && maskRef.current) {
+    if (!lockEdit && mode === "mask" && maskTool === "brush" && isPaintingRef.current && maskRef.current) {
       const value = maskAction === "add" ? 255 : 0;
       if (lastPaintPosRef.current) {
         paintBrushLine(maskRef.current, width, height,
@@ -991,7 +1049,7 @@ function Edit2D() {
     }
 
     // Mask mode: shape drag
-    if (mode === "mask" && isDraggingShapeRef.current && shapeStartRef.current) {
+    if (!lockEdit && mode === "mask" && isDraggingShapeRef.current && shapeStartRef.current) {
       setShapePreview({
         r0: shapeStartRef.current.row,
         c0: shapeStartRef.current.col,
@@ -1001,8 +1059,12 @@ function Edit2D() {
       return;
     }
 
+    if (mode === "crop" && lockEdit && dragMode === "none") {
+      setCursorStyle(lockView ? "default" : "grab");
+    }
+
     // Crop mode: handle dragging
-    if (mode === "crop") {
+    if (!lockEdit && mode === "crop") {
       if (dragMode === "none" || !dragStartRef.current) {
         const sLeft = toScreenX(cropLeft);
         const sRight = toScreenX(cropRight);
@@ -1073,14 +1135,14 @@ function Edit2D() {
     }
 
     // Pan (mask mode threshold / fallback)
-    if (dragMode === "pan" && dragStartRef.current) {
+    if (!lockView && dragMode === "pan" && dragStartRef.current) {
       const ds = dragStartRef.current;
       const dx = e.clientX - ds.mouseX;
       const dy = e.clientY - ds.mouseY;
       setPanX(ds.panX + dx);
       setPanY(ds.panY + dy);
     }
-  }, [mode, maskTool, maskAction, brushSize, dragMode, getCanvasCoords, cropTop, cropLeft, cropBottom, cropRight, displayScale, zoom, toImageCol, toImageRow, toScreenX, toScreenY, width, height, setCropTop, setCropLeft, setCropBottom, setCropRight, setPanX, setPanY]);
+  }, [mode, lockEdit, lockView, maskTool, maskAction, brushSize, dragMode, getCanvasCoords, cropTop, cropLeft, cropBottom, cropRight, displayScale, zoom, toImageCol, toImageRow, toScreenX, toScreenY, width, height, setCropTop, setCropLeft, setCropBottom, setCropRight, setPanX, setPanY]);
 
   const handleMouseUp = React.useCallback(() => {
     // Brush: stop painting, sync
@@ -1130,6 +1192,7 @@ function Edit2D() {
 
   // ── Wheel zoom ───────────────────────────────────────────────────────
   const handleWheel = React.useCallback((e: React.WheelEvent) => {
+    if (lockView) return;
     const { x, y } = getCanvasCoords(e);
     const factor = e.deltaY > 0 ? 0.9 : 1.1;
     const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor));
@@ -1144,16 +1207,18 @@ function Edit2D() {
     setZoom(newZoom);
     setPanX(newPanX);
     setPanY(newPanY);
-  }, [getCanvasCoords, zoom, panX, panY, canvasW, canvasH]);
+  }, [lockView, getCanvasCoords, zoom, panX, panY, canvasW, canvasH]);
 
   const handleReset = React.useCallback(() => {
+    if (lockView) return;
     setZoom(1);
     setPanX(0);
     setPanY(0);
-  }, []);
+  }, [lockView]);
 
   // ── Copy / Export / Figure ──────────────────────────────────────────
   const handleCopy = React.useCallback(async () => {
+    if (lockExport) return;
     if (!canvasRef.current) return;
     try {
       const blob = await new Promise<Blob | null>(resolve => canvasRef.current!.toBlob(resolve, "image/png"));
@@ -1164,18 +1229,20 @@ function Edit2D() {
         if (b) downloadBlob(b, `edit2d_${labels?.[selectedIdx] || "image"}.png`);
       }, "image/png");
     }
-  }, [labels, selectedIdx]);
+  }, [labels, selectedIdx, lockExport]);
 
   const handleExport = React.useCallback(() => {
+    if (lockExport) return;
     setExportAnchor(null);
     if (!canvasRef.current) return;
     canvasRef.current.toBlob((blob) => {
       if (!blob) return;
       downloadBlob(blob, `edit2d_${labels?.[selectedIdx] || "image"}.png`);
     }, "image/png");
-  }, [labels, selectedIdx]);
+  }, [labels, selectedIdx, lockExport]);
 
   const handleExportFigure = React.useCallback((withColorbar: boolean) => {
+    if (lockExport) return;
     setExportAnchor(null);
     const raw = rawDataRef.current;
     if (!raw) return;
@@ -1200,19 +1267,20 @@ function Edit2D() {
       vmin,
       vmax,
       logScale,
-      pixelSize: pixelSizeAngstrom > 0 ? pixelSizeAngstrom : undefined,
+      pixelSize: pixelSize > 0 ? pixelSize : undefined,
       showColorbar: withColorbar,
-      showScaleBar: pixelSizeAngstrom > 0,
+      showScaleBar: pixelSize > 0,
     });
 
     figCanvas.toBlob((blob) => {
       if (blob) downloadBlob(blob, `edit2d_${labels?.[selectedIdx] || "image"}_figure.png`);
     }, "image/png");
-  }, [logScale, cmap, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, width, height, title, pixelSizeAngstrom, labels, selectedIdx]);
+  }, [logScale, cmap, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, width, height, title, pixelSize, labels, selectedIdx, lockExport]);
 
   // ── Keyboard ─────────────────────────────────────────────────────────
   const handleKeyDown = React.useCallback((e: React.KeyboardEvent) => {
     if (e.key === "r" || e.key === "R") {
+      if (lockView) return;
       handleReset();
       e.preventDefault();
       return;
@@ -1220,6 +1288,7 @@ function Edit2D() {
 
     // Mask mode shortcuts
     if (mode === "mask") {
+      if (lockEdit) return;
       if (e.key === "b" || e.key === "B") { setMaskTool("brush"); e.preventDefault(); }
       else if (e.key === "t" || e.key === "T") { setMaskTool("rectangle"); e.preventDefault(); }
       else if (e.key === "e" || e.key === "E") { setMaskTool("ellipse"); e.preventDefault(); }
@@ -1234,6 +1303,7 @@ function Edit2D() {
 
     // Crop mode shortcuts
     if (e.key === "Escape") {
+      if (lockEdit) return;
       setCropTop(0);
       setCropLeft(0);
       setCropBottom(height);
@@ -1241,22 +1311,26 @@ function Edit2D() {
       e.preventDefault();
     } else if (e.key === "ArrowLeft") {
       if (e.shiftKey && nImages > 1) {
+        if (lockNavigation) return;
         setSelectedIdx(Math.max(0, selectedIdx - 1));
       } else {
+        if (lockEdit) return;
         setCropLeft(cropLeft - 1);
         setCropRight(cropRight - 1);
       }
       e.preventDefault();
     } else if (e.key === "ArrowRight") {
       if (e.shiftKey && nImages > 1) {
+        if (lockNavigation) return;
         setSelectedIdx(Math.min(nImages - 1, selectedIdx + 1));
       } else {
+        if (lockEdit) return;
         setCropLeft(cropLeft + 1);
         setCropRight(cropRight + 1);
       }
       e.preventDefault();
     }
-  }, [mode, handleReset, handleInvertMask, handleClearMask, maskAction, height, width, cropLeft, cropRight, nImages, selectedIdx, setCropTop, setCropLeft, setCropBottom, setCropRight, setSelectedIdx, setMaskTool, setMaskAction]);
+  }, [mode, lockView, lockEdit, lockNavigation, handleReset, handleInvertMask, handleClearMask, maskAction, height, width, cropLeft, cropRight, nImages, selectedIdx, setCropTop, setCropLeft, setCropBottom, setCropRight, setSelectedIdx, setMaskTool, setMaskAction]);
 
   // ── Cursor style ────────────────────────────────────────────────────
   const canvasCursor = React.useMemo(() => {
@@ -1265,12 +1339,14 @@ function Edit2D() {
     }
     if (isPaintingRef.current) return "crosshair";
     if (mode === "mask") {
+      if (lockEdit) return lockView ? "default" : "grab";
       if (maskTool === "brush") return "crosshair";
       if (maskTool === "rectangle" || maskTool === "ellipse") return "crosshair";
       return "default";
     }
+    if (mode === "crop" && lockEdit) return lockView ? "default" : "grab";
     return cursorStyle;
-  }, [dragMode, mode, maskTool, cursorStyle]);
+  }, [dragMode, mode, lockEdit, lockView, maskTool, cursorStyle]);
 
   // ── Keyboard shortcuts for info tooltip ─────────────────────────────
   const shortcutItems: [string, string][] = mode === "mask" ? [
@@ -1296,16 +1372,24 @@ function Edit2D() {
 
   // ── Display controls (shared between modes) ─────────────────────────
   const displayControlsRow = (
-    <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+    <Box
+      sx={{
+        ...controlRow,
+        border: `1px solid ${themeColors.border}`,
+        bgcolor: themeColors.controlBg,
+        opacity: lockDisplay ? 0.5 : 1,
+        pointerEvents: lockDisplay ? "none" : "auto",
+      }}
+    >
       <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Scale:</Typography>
-      <Select value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
+      <Select disabled={lockDisplay} value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
         <MenuItem value="linear">Lin</MenuItem>
         <MenuItem value="log">Log</MenuItem>
       </Select>
       <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Auto:</Typography>
-      <Switch checked={autoContrast} onChange={(e) => setAutoContrast(e.target.checked)} size="small" sx={switchStyles.small} />
+      <Switch checked={autoContrast} onChange={(e) => setAutoContrast(e.target.checked)} disabled={lockDisplay} size="small" sx={switchStyles.small} />
       <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Color:</Typography>
-      <Select size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}>
+      <Select disabled={lockDisplay} size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}>
         {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
       </Select>
     </Box>
@@ -1317,31 +1401,36 @@ function Edit2D() {
       className="edit2d-root"
       tabIndex={0}
       onKeyDown={handleKeyDown}
+      onMouseEnter={() => setIsRootHovered(true)}
+      onMouseLeave={() => setIsRootHovered(false)}
       sx={{ ...container.root, outline: "none", "&:focus": { outline: "none" } }}
     >
       {/* Header */}
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
+      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28, maxWidth: canvasW }}>
         <Stack direction="row" alignItems="center" spacing={0.5}>
           <Typography variant="caption" sx={{ ...typography.label, ...typography.title }}>{title || "Edit2D"}</Typography>
-          {/* Mode toggle */}
-          <Stack direction="row" spacing={0} sx={{ ml: 1 }}>
-            <Button
-              size="small"
-              variant={mode === "crop" ? "contained" : "outlined"}
-              onClick={() => setMode("crop")}
-              sx={{ ...compactButton, borderTopRightRadius: 0, borderBottomRightRadius: 0, minWidth: 40 }}
-            >
-              CROP
-            </Button>
-            <Button
-              size="small"
-              variant={mode === "mask" ? "contained" : "outlined"}
-              onClick={() => setMode("mask")}
-              sx={{ ...compactButton, borderTopLeftRadius: 0, borderBottomLeftRadius: 0, minWidth: 40 }}
-            >
-              MASK
-            </Button>
-          </Stack>
+          {!hideMode && (
+            <Stack direction="row" spacing={0} sx={{ ml: 1 }}>
+              <Button
+                size="small"
+                disabled={lockMode}
+                variant={mode === "crop" ? "contained" : "outlined"}
+                onClick={() => { if (!lockMode) setMode("crop"); }}
+                sx={{ ...compactButton, borderTopRightRadius: 0, borderBottomRightRadius: 0, minWidth: 40 }}
+              >
+                CROP
+              </Button>
+              <Button
+                size="small"
+                disabled={lockMode}
+                variant={mode === "mask" ? "contained" : "outlined"}
+                onClick={() => { if (!lockMode) setMode("mask"); }}
+                sx={{ ...compactButton, borderTopLeftRadius: 0, borderBottomLeftRadius: 0, minWidth: 40 }}
+              >
+                MASK
+              </Button>
+            </Stack>
+          )}
           <InfoTooltip theme={themeInfo.theme} text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
             <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
             <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Crop: Drag handles to resize, drag inside to move crop region.</Typography>
@@ -1353,27 +1442,159 @@ function Edit2D() {
           </Box>} />
         </Stack>
         <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="center">
-          {nImages > 1 && (
+          <Tooltip title="Customize visible controls" arrow placement="top">
+            <IconButton
+              size="small"
+              onClick={(e) => setControlsAnchor(e.currentTarget)}
+              sx={{
+                p: 0.25,
+                opacity: isRootHovered || Boolean(controlsAnchor) ? 1 : 0,
+                pointerEvents: isRootHovered || Boolean(controlsAnchor) ? "auto" : "none",
+                transition: "opacity 150ms ease",
+                color: themeColors.textMuted,
+              }}
+            >
+              <TuneIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Tooltip>
+          <Menu
+            anchorEl={controlsAnchor}
+            open={Boolean(controlsAnchor)}
+            onClose={() => setControlsAnchor(null)}
+            anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+            transformOrigin={{ vertical: "top", horizontal: "left" }}
+            sx={{ zIndex: 9999 }}
+          >
+            <MenuItem
+              disabled={hideDisplay}
+              onClick={() => { if (!hideDisplay) setShowDisplayControlsGroup((prev) => !prev); }}
+              sx={{ display: "flex", justifyContent: "space-between", gap: 1.5, minWidth: 210 }}
+            >
+              <Typography sx={{ fontSize: 11 }}>Display controls</Typography>
+              <Switch
+                size="small"
+                checked={showDisplayControlsGroup}
+                disabled={hideDisplay}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => setShowDisplayControlsGroup(e.target.checked)}
+              />
+            </MenuItem>
+            <MenuItem
+              disabled={hideEdit}
+              onClick={() => { if (!hideEdit) setShowEditControlsGroup((prev) => !prev); }}
+              sx={{ display: "flex", justifyContent: "space-between", gap: 1.5, minWidth: 210 }}
+            >
+              <Typography sx={{ fontSize: 11 }}>Edit controls</Typography>
+              <Switch
+                size="small"
+                checked={showEditControlsGroup}
+                disabled={hideEdit}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => setShowEditControlsGroup(e.target.checked)}
+              />
+            </MenuItem>
+            <MenuItem
+              disabled={hideHistogram}
+              onClick={() => { if (!hideHistogram) setShowHistogramGroup((prev) => !prev); }}
+              sx={{ display: "flex", justifyContent: "space-between", gap: 1.5, minWidth: 210 }}
+            >
+              <Typography sx={{ fontSize: 11 }}>Histogram</Typography>
+              <Switch
+                size="small"
+                checked={showHistogramGroup}
+                disabled={hideHistogram}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => setShowHistogramGroup(e.target.checked)}
+              />
+            </MenuItem>
+            <MenuItem
+              disabled={hideStats || lockStats}
+              onClick={() => { if (!(hideStats || lockStats)) setShowStats((prev) => !prev); }}
+              sx={{ display: "flex", justifyContent: "space-between", gap: 1.5, minWidth: 210 }}
+            >
+              <Typography sx={{ fontSize: 11 }}>Stats bar</Typography>
+              <Switch
+                size="small"
+                checked={showStats}
+                disabled={hideStats || lockStats}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => setShowStats(e.target.checked)}
+              />
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                if (!hideDisplay) setShowDisplayControlsGroup(true);
+                if (!hideEdit) setShowEditControlsGroup(true);
+                if (!hideHistogram) setShowHistogramGroup(true);
+                if (!(hideStats || lockStats)) setShowStats(true);
+              }}
+              sx={{ fontSize: 11, color: themeColors.accent }}
+            >
+              All
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                if (!hideDisplay) setShowDisplayControlsGroup(false);
+                if (!hideEdit) setShowEditControlsGroup(true);
+                if (!hideHistogram) setShowHistogramGroup(false);
+                if (!(hideStats || lockStats)) setShowStats(false);
+              }}
+              sx={{ fontSize: 11 }}
+            >
+              Compact
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                if (!hideDisplay) setShowDisplayControlsGroup(false);
+                if (!hideEdit) setShowEditControlsGroup(true);
+                if (!hideHistogram) setShowHistogramGroup(true);
+                if (!(hideStats || lockStats)) setShowStats(true);
+                if (!lockMode) setMode("mask");
+              }}
+              sx={{ fontSize: 11 }}
+            >
+              Mask Focus
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                if (!hideDisplay) setShowDisplayControlsGroup(true);
+                if (!hideEdit) setShowEditControlsGroup(true);
+                if (!hideHistogram) setShowHistogramGroup(false);
+                if (!(hideStats || lockStats)) setShowStats(true);
+                if (!lockMode) setMode("crop");
+              }}
+              sx={{ fontSize: 11 }}
+            >
+              Crop Focus
+            </MenuItem>
+          </Menu>
+          {!hideNavigation && nImages > 1 && (
             <Stack direction="row" alignItems="center" spacing={0}>
-              <IconButton size="small" onClick={() => setSelectedIdx(Math.max(0, selectedIdx - 1))} disabled={selectedIdx === 0} sx={{ p: 0.25, color: themeColors.textMuted }}>
+              <IconButton size="small" onClick={() => setSelectedIdx(Math.max(0, selectedIdx - 1))} disabled={lockNavigation || selectedIdx === 0} sx={{ p: 0.25, color: themeColors.textMuted }}>
                 <NavigateBeforeIcon sx={{ fontSize: 18 }} />
               </IconButton>
               <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 60, textAlign: "center" }}>
                 {labels[selectedIdx] || `${selectedIdx + 1}/${nImages}`}
               </Typography>
-              <IconButton size="small" onClick={() => setSelectedIdx(Math.min(nImages - 1, selectedIdx + 1))} disabled={selectedIdx === nImages - 1} sx={{ p: 0.25, color: themeColors.textMuted }}>
+              <IconButton size="small" onClick={() => setSelectedIdx(Math.min(nImages - 1, selectedIdx + 1))} disabled={lockNavigation || selectedIdx === nImages - 1} sx={{ p: 0.25, color: themeColors.textMuted }}>
                 <NavigateNextIcon sx={{ fontSize: 18 }} />
               </IconButton>
             </Stack>
           )}
-          <Button size="small" sx={compactButton} onClick={handleCopy}>COPY</Button>
-          <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={(e) => setExportAnchor(e.currentTarget)}>Export</Button>
-          <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
-            <MenuItem onClick={() => handleExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
-            <MenuItem onClick={() => handleExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
-            <MenuItem onClick={handleExport} sx={{ fontSize: 12 }}>PNG</MenuItem>
-          </Menu>
-          <Button size="small" sx={compactButton} disabled={!needsReset} onClick={handleReset}>RESET</Button>
+          {!hideExport && (
+            <>
+              <Button size="small" sx={compactButton} disabled={lockExport} onClick={handleCopy}>COPY</Button>
+              <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} disabled={lockExport} onClick={(e) => { if (!lockExport) setExportAnchor(e.currentTarget); }}>Export</Button>
+              <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
+                <MenuItem disabled={lockExport} onClick={() => handleExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
+                <MenuItem disabled={lockExport} onClick={() => handleExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
+                <MenuItem disabled={lockExport} onClick={handleExport} sx={{ fontSize: 12 }}>PNG</MenuItem>
+              </Menu>
+            </>
+          )}
+          {!hideView && (
+            <Button size="small" sx={compactButton} disabled={lockView || !needsReset} onClick={handleReset}>RESET</Button>
+          )}
         </Stack>
       </Stack>
 
@@ -1398,11 +1619,27 @@ function Edit2D() {
             </Typography>
           </Box>
         )}
-        <Box onMouseDown={handleResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: 1 } }} />
+        {!hideView && (
+          <Box
+            onMouseDown={handleResizeStart}
+            sx={{
+              position: "absolute",
+              bottom: 0,
+              right: 0,
+              width: 16,
+              height: 16,
+              cursor: lockView ? "default" : "nwse-resize",
+              opacity: lockView ? 0.3 : 0.6,
+              pointerEvents: lockView ? "none" : "auto",
+              background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`,
+              "&:hover": { opacity: lockView ? 0.3 : 1 },
+            }}
+          />
+        )}
       </Box>
 
       {/* Stats bar */}
-      {showStats && (
+      {!hideStats && showStats && (
         <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", maxWidth: canvasW, boxSizing: "border-box", flexWrap: "wrap" }}>
           <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMean)}</Box></Typography>
           <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMin)}</Box></Typography>
@@ -1423,104 +1660,123 @@ function Edit2D() {
       )}
 
       {/* Controls */}
-      {showControls && (
+      {showControls && showAnyControlGroups && (
         <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: canvasW, boxSizing: "border-box" }}>
-          <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
-            {mode === "crop" ? (
-              <>
-                {/* Crop Row 1: Scale + Auto + Color */}
-                {displayControlsRow}
-                {/* Crop Row 2: Fill + Zoom */}
-                <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Fill:</Typography>
-                  <Typography sx={{ ...typography.value, color: themeColors.accent }}>{fillValue}</Typography>
-                  {zoom !== 1 && (
-                    <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.accent, fontWeight: "bold" }}>{zoom.toFixed(1)}{"\u00d7"}</Typography>
+          {showLeftControlGroups && (
+            <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
+              {mode === "crop" ? (
+                <>
+                  {wantDisplayControlsGroup && displayControlsRow}
+                  {wantEditControlsGroup && (
+                    <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Fill:</Typography>
+                      <Typography sx={{ ...typography.value, color: themeColors.accent }}>{fillValue}</Typography>
+                      {zoom !== 1 && (
+                        <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.accent, fontWeight: "bold" }}>{zoom.toFixed(1)}{"\u00d7"}</Typography>
+                      )}
+                    </Box>
                   )}
-                </Box>
-              </>
-            ) : (
-              <>
-                {/* Mask Row 1: Tool + Brush size + Add/Sub */}
-                <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                  {(["brush", "rectangle", "ellipse", "threshold"] as const).map((tool) => (
-                    <Button
-                      key={tool}
-                      size="small"
-                      variant={maskTool === tool ? "contained" : "outlined"}
-                      onClick={() => setMaskTool(tool)}
-                      sx={{ ...compactButton, minWidth: 32 }}
-                    >
-                      {tool === "rectangle" ? "RECT" : tool === "threshold" ? "THRESH" : tool.toUpperCase()}
-                    </Button>
-                  ))}
-                  {maskTool === "brush" && (
-                    <>
+                </>
+              ) : (
+                <>
+                  {wantEditControlsGroup && (
+                    <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockEdit ? 0.5 : 1, pointerEvents: lockEdit ? "none" : "auto" }}>
+                      {(["brush", "rectangle", "ellipse", "threshold"] as const).map((tool) => (
+                        <Button
+                          key={tool}
+                          size="small"
+                          disabled={lockEdit}
+                          variant={maskTool === tool ? "contained" : "outlined"}
+                          onClick={() => { if (!lockEdit) setMaskTool(tool); }}
+                          sx={{ ...compactButton, minWidth: 32 }}
+                        >
+                          {tool === "rectangle" ? "RECT" : tool === "threshold" ? "THRESH" : tool.toUpperCase()}
+                        </Button>
+                      ))}
+                      {maskTool === "brush" && (
+                        <>
+                          <Box sx={{ borderLeft: `1px solid ${themeColors.border}`, height: 16, mx: 0 }} />
+                          <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Size:</Typography>
+                          <Slider
+                            value={brushSize}
+                            disabled={lockEdit}
+                            onChange={(_, v) => { if (!lockEdit) setBrushSize(v as number); }}
+                            min={1}
+                            max={100}
+                            size="small"
+                            sx={{ ...sliderStyles.small, width: 60 }}
+                          />
+                          <Typography sx={{ ...typography.value }}>{brushSize}</Typography>
+                        </>
+                      )}
                       <Box sx={{ borderLeft: `1px solid ${themeColors.border}`, height: 16, mx: 0 }} />
-                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Size:</Typography>
-                      <Slider
-                        value={brushSize}
-                        onChange={(_, v) => setBrushSize(v as number)}
-                        min={1}
-                        max={100}
+                      <Button
                         size="small"
-                        sx={{ ...sliderStyles.small, width: 60 }}
-                      />
-                      <Typography sx={{ ...typography.value }}>{brushSize}</Typography>
-                    </>
+                        disabled={lockEdit}
+                        variant={maskAction === "add" ? "contained" : "outlined"}
+                        onClick={() => { if (!lockEdit) setMaskAction("add"); }}
+                        sx={{ ...compactButton, borderTopRightRadius: 0, borderBottomRightRadius: 0, minWidth: 32 }}
+                      >
+                        ADD
+                      </Button>
+                      <Button
+                        size="small"
+                        disabled={lockEdit}
+                        variant={maskAction === "subtract" ? "contained" : "outlined"}
+                        onClick={() => { if (!lockEdit) setMaskAction("subtract"); }}
+                        sx={{ ...compactButton, borderTopLeftRadius: 0, borderBottomLeftRadius: 0, minWidth: 32 }}
+                      >
+                        SUB
+                      </Button>
+                    </Box>
                   )}
-                  <Box sx={{ borderLeft: `1px solid ${themeColors.border}`, height: 16, mx: 0 }} />
-                  <Button
-                    size="small"
-                    variant={maskAction === "add" ? "contained" : "outlined"}
-                    onClick={() => setMaskAction("add")}
-                    sx={{ ...compactButton, borderTopRightRadius: 0, borderBottomRightRadius: 0, minWidth: 32 }}
-                  >
-                    ADD
-                  </Button>
-                  <Button
-                    size="small"
-                    variant={maskAction === "subtract" ? "contained" : "outlined"}
-                    onClick={() => setMaskAction("subtract")}
-                    sx={{ ...compactButton, borderTopLeftRadius: 0, borderBottomLeftRadius: 0, minWidth: 32 }}
-                  >
-                    SUB
-                  </Button>
-                </Box>
-                {/* Mask Row 2: Invert/Clear + Display */}
-                <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                  <Button size="small" sx={compactButton} onClick={handleInvertMask}>INVERT</Button>
-                  <Button size="small" sx={compactButton} onClick={handleClearMask}>CLEAR</Button>
-                  <Typography sx={{ ...typography.value, color: themeColors.accent }}>{maskCoverage.pct.toFixed(1)}%</Typography>
-                  <Box sx={{ borderLeft: `1px solid ${themeColors.border}`, height: 16, mx: 0 }} />
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Scale:</Typography>
-                  <Select value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
-                    <MenuItem value="linear">Lin</MenuItem>
-                    <MenuItem value="log">Log</MenuItem>
-                  </Select>
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Color:</Typography>
-                  <Select size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}>
-                    {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
-                  </Select>
-                </Box>
-              </>
-            )}
-          </Box>
-          {/* Right: Histogram */}
-          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center" }}>
-            <Histogram
-              data={imageHistogramData}
-              colormap={cmap}
-              vminPct={imageVminPct}
-              vmaxPct={imageVmaxPct}
-              onRangeChange={(min, max) => { setImageVminPct(min); setImageVmaxPct(max); }}
-              width={110}
-              height={58}
-              theme={themeInfo.theme}
-              dataMin={imageDataRange.min}
-              dataMax={imageDataRange.max}
-            />
-          </Box>
+                  {wantEditControlsGroup && (
+                    <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockEdit ? 0.5 : 1, pointerEvents: lockEdit ? "none" : "auto" }}>
+                      <Button size="small" sx={compactButton} disabled={lockEdit} onClick={handleInvertMask}>INVERT</Button>
+                      <Button size="small" sx={compactButton} disabled={lockEdit} onClick={handleClearMask}>CLEAR</Button>
+                      <Typography sx={{ ...typography.value, color: themeColors.accent }}>{maskCoverage.pct.toFixed(1)}%</Typography>
+                    </Box>
+                  )}
+                  {wantDisplayControlsGroup && (
+                    <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockDisplay ? 0.5 : 1, pointerEvents: lockDisplay ? "none" : "auto" }}>
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Scale:</Typography>
+                      <Select disabled={lockDisplay} value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
+                        <MenuItem value="linear">Lin</MenuItem>
+                        <MenuItem value="log">Log</MenuItem>
+                      </Select>
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Auto:</Typography>
+                      <Switch checked={autoContrast} onChange={(e) => setAutoContrast(e.target.checked)} disabled={lockDisplay} size="small" sx={switchStyles.small} />
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Color:</Typography>
+                      <Select disabled={lockDisplay} size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}>
+                        {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
+                      </Select>
+                    </Box>
+                  )}
+                </>
+              )}
+            </Box>
+          )}
+          {wantHistogramGroup && (
+            <Box sx={{ display: "flex", flexDirection: "column", alignItems: showLeftControlGroups ? "flex-end" : "flex-start", justifyContent: "center", opacity: lockHistogram ? 0.5 : 1, pointerEvents: lockHistogram ? "none" : "auto" }}>
+              <Histogram
+                data={imageHistogramData}
+                colormap={cmap}
+                vminPct={imageVminPct}
+                vmaxPct={imageVmaxPct}
+                onRangeChange={(min, max) => {
+                  if (lockHistogram) return;
+                  if (autoContrast) setAutoContrast(false);
+                  setImageVminPct(min);
+                  setImageVmaxPct(max);
+                }}
+                width={110}
+                height={58}
+                theme={themeInfo.theme}
+                dataMin={imageDataRange.min}
+                dataMax={imageDataRange.max}
+              />
+            </Box>
+          )}
         </Box>
       )}
     </Box>

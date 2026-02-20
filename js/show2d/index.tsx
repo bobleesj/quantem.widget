@@ -24,9 +24,11 @@ import Tooltip from "@mui/material/Tooltip";
 import { useTheme } from "../theme";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawColorbar, roundToNiceValue, exportFigure, canvasToPDF } from "../scalebar";
 import JSZip from "jszip";
-import { extractBytes, extractFloat32, formatNumber, downloadBlob } from "../format";
+import { extractFloat32, formatNumber, downloadBlob } from "../format";
 import { computeHistogramFromBytes } from "../histogram";
 import { findDataRange, applyLogScale, percentileClip, sliderRange, computeStats } from "../stats";
+import { ControlCustomizer } from "../control-customizer";
+import { computeToolVisibility } from "../tool-parity";
 
 function InfoTooltip({ text, theme = "dark" }: { text: React.ReactNode; theme?: "light" | "dark" }) {
   const isDark = theme === "dark";
@@ -65,7 +67,7 @@ const upwardMenuProps = {
   sx: { zIndex: 9999 },
 };
 import { getWebGPUFFT, WebGPUFFT, fft2d, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2 } from "../webgpu-fft";
-import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen } from "../colormaps";
+import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen } from "../colormaps";
 import "./show2d.css";
 
 const MIN_ZOOM = 0.5;
@@ -163,6 +165,18 @@ function sampleLineProfile(data: Float32Array, w: number, h: number, row0: numbe
   return out;
 }
 
+function pointToSegmentDistance(col: number, row: number, col0: number, row0: number, col1: number, row1: number): number {
+  const dc = col1 - col0;
+  const dr = row1 - row0;
+  const lenSq = dc * dc + dr * dr;
+  if (lenSq <= 1e-12) return Math.sqrt((col - col0) ** 2 + (row - row0) ** 2);
+  const tRaw = ((col - col0) * dc + (row - row0) * dr) / lenSq;
+  const t = Math.max(0, Math.min(1, tRaw));
+  const projCol = col0 + t * dc;
+  const projRow = row0 + t * dr;
+  return Math.sqrt((col - projCol) ** 2 + (row - projRow) ** 2);
+}
+
 // ============================================================================
 // FFT peak finder (snap to Bragg spot with sub-pixel centroid refinement)
 // ============================================================================
@@ -208,12 +222,9 @@ const GALLERY_IMAGE_TARGET = 300;
 const DEFAULT_FFT_ZOOM = 3;
 const DEFAULT_ZOOM_STATE: ZoomState = { zoom: 1, panX: 0, panY: 0 };
 const PROFILE_COLORS = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"];
-const ROI_SHAPES = ["none", "circle", "square", "rectangle", "annular"] as const;
-type RoiShape = typeof ROI_SHAPES[number];
 type ROIItem = { row: number; col: number; shape: string; radius: number; radius_inner: number; width: number; height: number; color: string; line_width: number; highlight: boolean };
 const ROI_COLORS = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"];
 const RESIZE_HIT_AREA_PX = 10;
-const CIRCLE_HANDLE_ANGLE = 0.707;
 
 function drawROI(
   ctx: CanvasRenderingContext2D,
@@ -308,6 +319,7 @@ function Show2D() {
   const [frameBytes] = useModelState<DataView>("frame_bytes");
   const [labels] = useModelState<string[]>("labels");
   const [title] = useModelState<string>("title");
+  const [widgetVersion] = useModelState<string>("widget_version");
   const [cmap, setCmap] = useModelState<string>("cmap");
   const [ncols] = useModelState<number>("ncols");
 
@@ -319,12 +331,14 @@ function Show2D() {
   const [imageWidthPx] = useModelState<number>("image_width_px");
 
   // Scale bar
-  const [pixelSizeAngstrom] = useModelState<number>("pixel_size_angstrom");
+  const [pixelSize] = useModelState<number>("pixel_size");
   const [scaleBarVisible] = useModelState<boolean>("scale_bar_visible");
 
   // UI visibility
   const [showControls] = useModelState<boolean>("show_controls");
   const [showStats] = useModelState<boolean>("show_stats");
+  const [disabledTools, setDisabledTools] = useModelState<string[]>("disabled_tools");
+  const [hiddenTools, setHiddenTools] = useModelState<string[]>("hidden_tools");
   const [statsMean] = useModelState<number[]>("stats_mean");
   const [statsMin] = useModelState<number[]>("stats_min");
   const [statsMax] = useModelState<number[]>("stats_max");
@@ -350,12 +364,42 @@ function Show2D() {
   const [exportAnchor, setExportAnchor] = React.useState<HTMLElement | null>(null);
   const selectedRoi = roiSelectedIdx >= 0 && roiSelectedIdx < (roiList?.length ?? 0) ? roiList[roiSelectedIdx] : null;
 
+  const toolVisibility = React.useMemo(
+    () => computeToolVisibility("Show2D", disabledTools, hiddenTools),
+    [disabledTools, hiddenTools],
+  );
+  const hideDisplay = toolVisibility.isHidden("display");
+  const hideHistogram = toolVisibility.isHidden("histogram");
+  const hideStats = toolVisibility.isHidden("stats");
+  const hideView = toolVisibility.isHidden("view");
+  const hideExport = toolVisibility.isHidden("export");
+  const hideRoi = toolVisibility.isHidden("roi");
+  const hideProfile = toolVisibility.isHidden("profile");
+
+  const lockDisplay = toolVisibility.isLocked("display");
+  const lockHistogram = toolVisibility.isLocked("histogram");
+  const lockStats = toolVisibility.isLocked("stats");
+  const lockNavigation = toolVisibility.isLocked("navigation");
+  const lockView = toolVisibility.isLocked("view");
+  const lockExport = toolVisibility.isLocked("export");
+  const lockRoi = toolVisibility.isLocked("roi");
+  const lockProfile = toolVisibility.isLocked("profile");
+  const effectiveShowFft = showFft && !hideDisplay;
+
   const updateSelectedRoi = (updates: Partial<ROIItem>) => {
+    if (lockRoi) return;
     if (roiSelectedIdx < 0 || !roiList) return;
     const newList = [...roiList];
     newList[roiSelectedIdx] = { ...newList[roiSelectedIdx], ...updates };
     setRoiList(newList);
   };
+
+  React.useEffect(() => {
+    if (hideRoi && roiActive) {
+      setRoiActive(false);
+      setRoiSelectedIdx(-1);
+    }
+  }, [hideRoi, roiActive, setRoiActive, setRoiSelectedIdx]);
 
   // Canvas refs
   const canvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
@@ -414,8 +458,6 @@ function Show2D() {
   const activeContrastIdx = nImages > 1 ? selectedIdx : 0;
   const imageVminPct = getContrastState(activeContrastIdx).vminPct;
   const imageVmaxPct = getContrastState(activeContrastIdx).vmaxPct;
-  const setImageVminPct = (v: number) => setContrastState(activeContrastIdx, { ...getContrastState(activeContrastIdx), vminPct: v });
-  const setImageVmaxPct = (v: number) => setContrastState(activeContrastIdx, { ...getContrastState(activeContrastIdx), vmaxPct: v });
 
   const [imageHistogramData, setImageHistogramData] = React.useState<Float32Array | null>(null);
   const [imageDataRange, setImageDataRange] = React.useState<{ min: number; max: number }>({ min: 0, max: 1 });
@@ -462,6 +504,11 @@ function Show2D() {
   const [profileActive, setProfileActive] = React.useState(false);
   const [profileLine, setProfileLine] = useModelState<{ row: number; col: number }[]>("profile_line");
   const [profileDataAll, setProfileDataAll] = React.useState<(Float32Array | null)[]>([]);
+  React.useEffect(() => {
+    if (hideProfile && profileActive) {
+      setProfileActive(false);
+    }
+  }, [hideProfile, profileActive]);
   const profileCanvasRef = React.useRef<HTMLCanvasElement>(null);
   const profileBaseImageRef = React.useRef<ImageData | null>(null);
   const profileLayoutRef = React.useRef<{ padLeft: number; plotW: number; padTop: number; plotH: number; gMin: number; gMax: number; totalDist: number; xUnit: string } | null>(null);
@@ -579,12 +626,21 @@ function Show2D() {
     const preventDefault = (e: WheelEvent) => e.preventDefault();
     const elements: (HTMLElement | null)[] = isGallery
       ? (linkedZoom
-          ? [...imageContainerRefs.current, ...fftContainerRefs.current]
-          : [imageContainerRefs.current[selectedIdx], fftContainerRefs.current[selectedIdx]])
-      : [imageContainerRefs.current[0], singleFftContainerRef.current];
+          ? [
+              ...imageContainerRefs.current,
+              ...(effectiveShowFft ? fftContainerRefs.current : []),
+            ]
+          : [
+              imageContainerRefs.current[selectedIdx],
+              ...(effectiveShowFft ? [fftContainerRefs.current[selectedIdx]] : []),
+            ])
+      : [
+          imageContainerRefs.current[0],
+          ...(effectiveShowFft ? [singleFftContainerRef.current] : []),
+        ];
     elements.forEach(el => el?.addEventListener("wheel", preventDefault, { passive: false }));
     return () => elements.forEach(el => el?.removeEventListener("wheel", preventDefault));
-  }, [canvasReady, showFft, nImages, isGallery, selectedIdx, linkedZoom]);
+  }, [canvasReady, effectiveShowFft, isGallery, selectedIdx, linkedZoom]);
 
   // -------------------------------------------------------------------------
   // Render Images (JS-side normalization for instant Log/Auto toggle)
@@ -661,15 +717,15 @@ function Show2D() {
 
       if (scaleBarVisible) {
         const zs = linkedZoom ? linkedZoomState : (zoomStates.get(i) || DEFAULT_ZOOM_STATE);
-        const unit = pixelSizeAngstrom > 0 ? "Å" as const : "px" as const;
-        const pxSize = pixelSizeAngstrom > 0 ? pixelSizeAngstrom : 1;
+        const unit = pixelSize > 0 ? "Å" as const : "px" as const;
+        const pxSize = pixelSize > 0 ? pixelSize : 1;
         drawScaleBarHiDPI(overlay, DPR, zs.zoom, pxSize, unit, width);
       } else {
         ctx.clearRect(0, 0, overlay.width, overlay.height);
       }
 
       // Colorbar (single image mode only)
-      if (showColorbar && !isGallery && rawDataRef.current?.[0]) {
+      if (!hideDisplay && showColorbar && !isGallery && rawDataRef.current?.[0]) {
         const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
         const cssW = overlay.width / DPR;
         const cssH = overlay.height / DPR;
@@ -694,7 +750,7 @@ function Show2D() {
       }
 
       // ROI overlay — draw all ROIs
-      if (roiActive && roiList && roiList.length > 0) {
+      if (!hideRoi && roiActive && roiList && roiList.length > 0) {
         const zs = linkedZoom ? linkedZoomState : (zoomStates.get(i) || DEFAULT_ZOOM_STATE);
         const { zoom, panX, panY } = zs;
         const cx = canvasW / 2;
@@ -767,7 +823,7 @@ function Show2D() {
       }
 
       // Line profile overlay
-      if (profileActive && profilePoints.length > 0) {
+      if (!hideProfile && profileActive && profilePoints.length > 0) {
         const zs = linkedZoom ? linkedZoomState : (zoomStates.get(i) || DEFAULT_ZOOM_STATE);
         const { zoom, panX, panY } = zs;
         ctx.save();
@@ -809,7 +865,7 @@ function Show2D() {
         ctx.restore();
       }
     }
-  }, [nImages, pixelSizeAngstrom, scaleBarVisible, selectedIdx, isGallery, canvasW, canvasH, width, displayScale, linkedZoom, linkedZoomState, zoomStates, dataReady, showColorbar, cmap, imageDataRange, imageVminPct, imageVmaxPct, autoContrast, logScale, profileActive, profilePoints, roiActive, roiList, roiSelectedIdx, isDraggingROI, themeColors]);
+  }, [nImages, pixelSize, scaleBarVisible, selectedIdx, isGallery, canvasW, canvasH, width, displayScale, linkedZoom, linkedZoomState, zoomStates, dataReady, showColorbar, cmap, imageDataRange, imageVminPct, imageVmaxPct, autoContrast, logScale, profileActive, profilePoints, roiActive, roiList, roiSelectedIdx, isDraggingROI, themeColors, hideDisplay, hideRoi, hideProfile]);
 
   // -------------------------------------------------------------------------
   // Inset magnifier (lens) — renders magnified region at cursor in bottom-left
@@ -820,7 +876,7 @@ function Show2D() {
       const lctx = lensCanvas.getContext("2d");
       if (lctx) lctx.clearRect(0, 0, lensCanvas.width, lensCanvas.height);
     }
-    if (!showLens || isGallery || !lensPos || !rawDataRef.current?.[0]) return;
+    if (!showLens || lockDisplay || isGallery || !lensPos || !rawDataRef.current?.[0]) return;
     if (!lensCanvas) return;
     const ctx = lensCanvas.getContext("2d");
     if (!ctx) return;
@@ -895,12 +951,13 @@ function Show2D() {
     ctx.font = "10px monospace";
     ctx.fillText(`${lensMag}×`, lx + 4, ly + lensSize - 4);
     ctx.restore();
-  }, [showLens, lensPos, isGallery, cmap, logScale, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, width, height, canvasH, themeColors, lensMag, lensDisplaySize, lensAnchor]);
+  }, [showLens, lockDisplay, lensPos, isGallery, cmap, logScale, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, width, height, canvasH, themeColors, lensMag, lensDisplaySize, lensAnchor]);
 
   // -------------------------------------------------------------------------
   // Auto-compute profile when profile_line is set (e.g. from Python)
   // -------------------------------------------------------------------------
   React.useEffect(() => {
+    if (hideProfile) return;
     if (profilePoints.length === 2 && rawDataRef.current) {
       const p0 = profilePoints[0], p1 = profilePoints[1];
       const allProfiles: (Float32Array | null)[] = [];
@@ -911,7 +968,7 @@ function Show2D() {
       setProfileDataAll(allProfiles);
       if (!profileActive) setProfileActive(true);
     }
-  }, [profilePoints, dataReady]);
+  }, [profilePoints, dataReady, hideProfile, profileActive]);
 
   // -------------------------------------------------------------------------
   // Render sparkline for line profile
@@ -988,8 +1045,8 @@ function Show2D() {
       const dx = profilePoints[1].col - profilePoints[0].col;
       const dy = profilePoints[1].row - profilePoints[0].row;
       const distPx = Math.sqrt(dx * dx + dy * dy);
-      if (pixelSizeAngstrom > 0) {
-        const distA = distPx * pixelSizeAngstrom;
+      if (pixelSize > 0) {
+        const distA = distPx * pixelSize;
         if (distA >= 10) { totalDist = distA / 10; xUnit = "nm"; }
         else { totalDist = distA; xUnit = "Å"; }
       } else {
@@ -1063,7 +1120,7 @@ function Show2D() {
     // Save base rendering + layout for hover overlay
     profileBaseImageRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
     profileLayoutRef.current = { padLeft, plotW, padTop, plotH, gMin, gMax, totalDist, xUnit };
-  }, [profileDataAll, themeInfo.theme, themeColors.accent, profilePoints, pixelSizeAngstrom, selectedIdx, labels, profileCanvasWidth, profileHeight]);
+  }, [profileDataAll, themeInfo.theme, themeColors.accent, profilePoints, pixelSize, selectedIdx, labels, profileCanvasWidth, profileHeight]);
 
   // Profile hover handler — draws crosshair + value readout
   const handleProfileMouseMove = React.useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1151,7 +1208,7 @@ function Show2D() {
   // Compute FFT magnitude (cached — only recomputes when data changes)
   // -------------------------------------------------------------------------
   React.useEffect(() => {
-    if (!showFft || isGallery || !rawDataRef.current) return;
+    if (!effectiveShowFft || isGallery || !rawDataRef.current) return;
     if (!rawDataRef.current[selectedIdx]) return;
 
     const computeFFT = async () => {
@@ -1178,16 +1235,16 @@ function Show2D() {
     };
 
     computeFFT();
-  }, [showFft, isGallery, selectedIdx, width, height, gpuReady, dataReady]);
+  }, [effectiveShowFft, isGallery, selectedIdx, width, height, gpuReady, dataReady]);
 
   // Clear FFT measurement when image or FFT state changes
-  React.useEffect(() => { setFftClickInfo(null); }, [selectedIdx, showFft]);
+  React.useEffect(() => { setFftClickInfo(null); }, [selectedIdx, effectiveShowFft]);
 
   // -------------------------------------------------------------------------
   // Render FFT display from cached magnitude (zoom/pan/colormap changes)
   // -------------------------------------------------------------------------
   React.useEffect(() => {
-    if (!showFft || isGallery || !fftCanvasRef.current || !fftMagCacheRef.current) return;
+    if (!effectiveShowFft || isGallery || !fftCanvasRef.current || !fftMagCacheRef.current) return;
 
     const canvas = fftCanvasRef.current;
     const ctx = canvas.getContext("2d");
@@ -1238,21 +1295,21 @@ function Show2D() {
     ctx.scale(fftZoom, fftZoom);
     ctx.drawImage(offscreen, 0, 0, width, height, 0, 0, canvasW, canvasH);
     ctx.restore();
-  }, [showFft, isGallery, fftMagVersion, canvasW, canvasH, fftZoom, fftPanX, fftPanY, fftVminPct, fftVmaxPct, fftColormap, fftScaleMode, fftAuto, width, height]);
+  }, [effectiveShowFft, isGallery, fftMagVersion, canvasW, canvasH, fftZoom, fftPanX, fftPanY, fftVminPct, fftVmaxPct, fftColormap, fftScaleMode, fftAuto, width, height]);
 
   // -------------------------------------------------------------------------
   // Render FFT overlay (scale bar + colorbar + d-spacing marker)
   // -------------------------------------------------------------------------
   React.useEffect(() => {
     const overlay = fftOverlayRef.current;
-    if (!overlay || !showFft || isGallery) return;
+    if (!overlay || !effectiveShowFft || isGallery) return;
     const ctx = overlay.getContext("2d");
     if (!ctx) return;
     ctx.clearRect(0, 0, overlay.width, overlay.height);
 
     // Reciprocal-space scale bar
-    if (pixelSizeAngstrom > 0) {
-      const fftPixelSize = 1 / (width * pixelSizeAngstrom);
+    if (pixelSize > 0) {
+      const fftPixelSize = 1 / (width * pixelSize);
       drawFFTScaleBarHiDPI(overlay, DPR, fftZoom, fftPixelSize, width);
     }
 
@@ -1301,13 +1358,13 @@ function Show2D() {
       }
       ctx.restore();
     }
-  }, [showFft, isGallery, fftClickInfo, canvasW, canvasH, fftZoom, fftPanX, fftPanY, width, height, pixelSizeAngstrom, fftDataRange, fftVminPct, fftVmaxPct, fftColormap, fftScaleMode, fftShowColorbar]);
+  }, [effectiveShowFft, isGallery, fftClickInfo, canvasW, canvasH, fftZoom, fftPanX, fftPanY, width, height, pixelSize, fftDataRange, fftVminPct, fftVmaxPct, fftColormap, fftScaleMode, fftShowColorbar]);
 
   // -------------------------------------------------------------------------
   // Compute FFT magnitudes for gallery mode (cache raw magnitudes)
   // -------------------------------------------------------------------------
   React.useEffect(() => {
-    if (!showFft || !isGallery || !rawDataRef.current) return;
+    if (!effectiveShowFft || !isGallery || !rawDataRef.current) return;
     if (rawDataRef.current.length === 0) return;
 
     let cancelled = false;
@@ -1349,11 +1406,11 @@ function Show2D() {
     computeAllFFTs();
 
     return () => { cancelled = true; };
-  }, [showFft, isGallery, nImages, width, height, gpuReady, dataReady]);
+  }, [effectiveShowFft, isGallery, nImages, width, height, gpuReady, dataReady]);
 
   // Render gallery FFTs from cached magnitudes (applies colormap/scale/contrast settings)
   React.useEffect(() => {
-    if (!showFft || !isGallery) return;
+    if (!effectiveShowFft || !isGallery) return;
     const lut = COLORMAPS[fftColormap] || COLORMAPS.inferno;
 
     for (let idx = 0; idx < nImages; idx++) {
@@ -1410,12 +1467,13 @@ function Show2D() {
       setFftHistogramData(histData);
       setFftDataRange(findDataRange(histData));
     }
-  }, [showFft, isGallery, nImages, canvasW, canvasH, width, height, galleryFftStates, linkedZoom, linkedFftZoomState, galleryFftMagVersion, fftColormap, fftScaleMode, fftAuto, fftVminPct, fftVmaxPct, selectedIdx]);
+  }, [effectiveShowFft, isGallery, nImages, canvasW, canvasH, width, height, galleryFftStates, linkedZoom, linkedFftZoomState, galleryFftMagVersion, fftColormap, fftScaleMode, fftAuto, fftVminPct, fftVmaxPct, selectedIdx]);
 
   // -------------------------------------------------------------------------
   // Mouse Handlers for Zoom/Pan
   // -------------------------------------------------------------------------
   const handleWheel = (e: React.WheelEvent, idx: number) => {
+    if (lockView) return;
     // In gallery mode, only allow zoom on the selected image (unless linked)
     if (isGallery && idx !== selectedIdx && !linkedZoom) return;
     e.preventDefault(); // Prevent page scroll when zooming
@@ -1456,11 +1514,13 @@ function Show2D() {
   };
 
   const handleDoubleClick = (idx: number) => {
+    if (lockView) return;
     setZoomState(idx, DEFAULT_ZOOM_STATE);
   };
 
   // Reset view (zoom/pan only — preserves profile, FFT state, etc.)
   const handleResetAll = () => {
+    if (lockView) return;
     setZoomStates(new Map());
     setLinkedZoomState(DEFAULT_ZOOM_STATE);
     setGalleryFftStates(new Map());
@@ -1472,12 +1532,14 @@ function Show2D() {
 
   // FFT zoom/pan handlers
   const handleFftWheel = (e: React.WheelEvent) => {
+    if (lockView) return;
     e.preventDefault(); // Prevent page scroll when zooming FFT
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
     setFftZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fftZoom * zoomFactor)));
   };
 
   const handleFftDoubleClick = () => {
+    if (lockView) return;
     setFftZoom(DEFAULT_FFT_ZOOM);
     setFftPanX(0);
     setFftPanY(0);
@@ -1502,6 +1564,7 @@ function Show2D() {
   };
 
   const handleFftMouseDown = (e: React.MouseEvent) => {
+    if (lockView) return;
     fftClickStartRef.current = { x: e.clientX, y: e.clientY };
     setIsDraggingFftPan(true);
     setFftPanStart({ x: e.clientX, y: e.clientY, pX: fftPanX, pY: fftPanY });
@@ -1541,13 +1604,13 @@ function Show2D() {
           } else {
             let spatialFreq: number | null = null;
             let dSpacing: number | null = null;
-            if (pixelSizeAngstrom > 0) {
+            if (pixelSize > 0) {
               const paddedW = nextPow2(width);
               const paddedH = nextPow2(height);
               const binC = ((Math.round(imgCol) - halfW) % width + width) % width;
               const binR = ((Math.round(imgRow) - halfH) % height + height) % height;
-              const freqC = binC <= paddedW / 2 ? binC / (paddedW * pixelSizeAngstrom) : (binC - paddedW) / (paddedW * pixelSizeAngstrom);
-              const freqR = binR <= paddedH / 2 ? binR / (paddedH * pixelSizeAngstrom) : (binR - paddedH) / (paddedH * pixelSizeAngstrom);
+              const freqC = binC <= paddedW / 2 ? binC / (paddedW * pixelSize) : (binC - paddedW) / (paddedW * pixelSize);
+              const freqR = binR <= paddedH / 2 ? binR / (paddedH * pixelSize) : (binR - paddedH) / (paddedH * pixelSize);
               spatialFreq = Math.sqrt(freqC * freqC + freqR * freqR);
               dSpacing = spatialFreq > 0 ? 1 / spatialFreq : null;
             }
@@ -1569,6 +1632,7 @@ function Show2D() {
 
   // Gallery FFT zoom/pan handlers (only selected image's FFT responds)
   const handleGalleryFftWheel = (e: React.WheelEvent, idx: number) => {
+    if (lockView) return;
     if (isGallery && idx !== selectedIdx && !linkedZoom) return;
     e.preventDefault(); // Prevent page scroll when zooming FFT
     const zs = getGalleryFftState(idx);
@@ -1578,9 +1642,11 @@ function Show2D() {
 
   const handleGalleryFftMouseDown = (e: React.MouseEvent, idx: number) => {
     if (isGallery && idx !== selectedIdx) {
+      if (lockNavigation) return;
       setSelectedIdx(idx);
       return; // Select first, don't start panning
     }
+    if (lockView) return;
     const zs = getGalleryFftState(idx);
     setFftPanningIdx(idx);
     setIsDraggingFftPan(true);
@@ -1604,6 +1670,11 @@ function Show2D() {
   // Track which image is being panned
   const [panningIdx, setPanningIdx] = React.useState<number | null>(null);
   const clickStartRef = React.useRef<{ x: number; y: number } | null>(null);
+  const [draggingProfileEndpoint, setDraggingProfileEndpoint] = React.useState<0 | 1 | null>(null);
+  const [isDraggingProfileLine, setIsDraggingProfileLine] = React.useState(false);
+  const [hoveredProfileEndpoint, setHoveredProfileEndpoint] = React.useState<0 | 1 | null>(null);
+  const [isHoveringProfileLine, setIsHoveringProfileLine] = React.useState(false);
+  const profileDragStartRef = React.useRef<{ row: number; col: number; p0: { row: number; col: number }; p1: { row: number; col: number } } | null>(null);
 
   const screenToImg = (e: React.MouseEvent, idx: number): { imgCol: number; imgRow: number } => {
     const canvas = canvasRefs.current[idx];
@@ -1618,6 +1689,16 @@ function Show2D() {
       imgCol: ((mouseCanvasX - cx - zs.panX) / zs.zoom + cx) / displayScale,
       imgRow: ((mouseCanvasY - cy - zs.panY) / zs.zoom + cy) / displayScale,
     };
+  };
+
+  const updateAllProfileData = (p0: { row: number; col: number }, p1: { row: number; col: number }) => {
+    if (!rawDataRef.current) return;
+    const allProfiles: (Float32Array | null)[] = [];
+    for (let j = 0; j < rawDataRef.current.length; j++) {
+      const raw = rawDataRef.current[j];
+      allProfiles.push(raw ? sampleLineProfile(raw, width, height, p0.row, p0.col, p1.row, p1.col) : null);
+    }
+    setProfileDataAll(allProfiles);
   };
 
   const updateROI = (e: React.MouseEvent, idx: number) => {
@@ -1689,11 +1770,12 @@ function Show2D() {
   const handleMouseDown = (e: React.MouseEvent, idx: number) => {
     const zs = getZoomState(idx);
     if (isGallery && idx !== selectedIdx) {
+      if (lockNavigation) return;
       setSelectedIdx(idx);
       return;
     }
     // Check if click is on the lens inset — edge = resize, interior = drag
-    if (showLens && !isGallery && idx === 0) {
+    if (!lockDisplay && showLens && !isGallery && idx === 0) {
       const canvas = canvasRefs.current[0];
       if (canvas) {
         const rect = canvas.getBoundingClientRect();
@@ -1718,7 +1800,51 @@ function Show2D() {
       }
     }
     clickStartRef.current = { x: e.clientX, y: e.clientY };
+    if (profileActive && !lockProfile) {
+      const { imgCol, imgRow } = screenToImg(e, idx);
+      if (profilePoints.length === 2) {
+        const p0 = profilePoints[0];
+        const p1 = profilePoints[1];
+        const hitRadius = 10 / (displayScale * zs.zoom);
+        const d0 = Math.sqrt((imgCol - p0.col) ** 2 + (imgRow - p0.row) ** 2);
+        const d1 = Math.sqrt((imgCol - p1.col) ** 2 + (imgRow - p1.row) ** 2);
+        if (d0 <= hitRadius || d1 <= hitRadius) {
+          setDraggingProfileEndpoint(d0 <= d1 ? 0 : 1);
+          setIsDraggingPan(false);
+          setPanStart(null);
+          setPanningIdx(null);
+          return;
+        }
+        if (pointToSegmentDistance(imgCol, imgRow, p0.col, p0.row, p1.col, p1.row) <= hitRadius) {
+          setIsDraggingProfileLine(true);
+          profileDragStartRef.current = {
+            row: imgRow,
+            col: imgCol,
+            p0: { row: p0.row, col: p0.col },
+            p1: { row: p1.row, col: p1.col },
+          };
+          setIsDraggingPan(false);
+          setPanStart(null);
+          setPanningIdx(null);
+          return;
+        }
+      }
+      if (!lockView) {
+        setIsDraggingPan(true);
+        setPanningIdx(idx);
+        setPanStart({ x: e.clientX, y: e.clientY, pX: zs.panX, pY: zs.panY });
+      }
+      return;
+    }
     if (roiActive) {
+      if (lockRoi) {
+        if (!lockView) {
+          setIsDraggingPan(true);
+          setPanningIdx(idx);
+          setPanStart({ x: e.clientX, y: e.clientY, pX: zs.panX, pY: zs.panY });
+        }
+        return;
+      }
       const { imgCol, imgRow } = screenToImg(e, idx);
       // Check resize handles on selected ROI first
       if (isNearResizeHandleInner(imgCol, imgRow)) {
@@ -1751,6 +1877,7 @@ function Show2D() {
     }
     // Start panning (works in both ROI-active and normal modes)
     {
+      if (lockView) return;
       setIsDraggingPan(true);
       setPanningIdx(idx);
       setPanStart({ x: e.clientX, y: e.clientY, pX: zs.panX, pY: zs.panY });
@@ -1774,7 +1901,7 @@ function Show2D() {
       if (imgX >= 0 && imgX < width && imgY >= 0 && imgY < height) {
         const rawData = rawDataRef.current[idx];
         if (rawData) setCursorInfo({ row: imgY, col: imgX, value: rawData[imgY * width + imgX] });
-        if (showLens && !isGallery) setLensPos({ row: imgY, col: imgX });
+        if (!lockDisplay && showLens && !isGallery) setLensPos({ row: imgY, col: imgX });
       } else {
         setCursorInfo(null);
         // Don't clear lensPos — lens stays at last position when toggle is on
@@ -1782,28 +1909,76 @@ function Show2D() {
     }
 
     // Lens drag
-    if (isDraggingLens && lensDragStartRef.current) {
+    if (!lockDisplay && isDraggingLens && lensDragStartRef.current) {
       const dx = e.clientX - lensDragStartRef.current.mx;
       const dy = e.clientY - lensDragStartRef.current.my;
       setLensAnchor({ x: lensDragStartRef.current.ax + dx, y: lensDragStartRef.current.ay + dy });
       return;
     }
     // Lens resize drag
-    if (isResizingLens && lensResizeStartRef.current) {
+    if (!lockDisplay && isResizingLens && lensResizeStartRef.current) {
       const dy = e.clientY - lensResizeStartRef.current.my;
       setLensDisplaySize(Math.max(64, Math.min(256, lensResizeStartRef.current.startSize + dy)));
       return;
     }
 
+    if (profileActive && !lockProfile && profilePoints.length === 2) {
+      const { imgCol, imgRow } = screenToImg(e, idx);
+      const p0 = profilePoints[0];
+      const p1 = profilePoints[1];
+      const activeZoom = linkedZoom ? linkedZoomState.zoom : (zoomStates.get(idx) || DEFAULT_ZOOM_STATE).zoom;
+      const hitRadius = 10 / (displayScale * activeZoom);
+      const d0 = Math.sqrt((imgCol - p0.col) ** 2 + (imgRow - p0.row) ** 2);
+      const d1 = Math.sqrt((imgCol - p1.col) ** 2 + (imgRow - p1.row) ** 2);
+      if (draggingProfileEndpoint !== null) {
+        const clampedRow = Math.max(0, Math.min(height - 1, imgRow));
+        const clampedCol = Math.max(0, Math.min(width - 1, imgCol));
+        const next = [
+          draggingProfileEndpoint === 0 ? { row: clampedRow, col: clampedCol } : profilePoints[0],
+          draggingProfileEndpoint === 1 ? { row: clampedRow, col: clampedCol } : profilePoints[1],
+        ];
+        setProfilePoints(next);
+        updateAllProfileData(next[0], next[1]);
+        return;
+      }
+      if (isDraggingProfileLine && profileDragStartRef.current) {
+        const drag = profileDragStartRef.current;
+        let deltaRow = imgRow - drag.row;
+        let deltaCol = imgCol - drag.col;
+        const minRow = Math.min(drag.p0.row, drag.p1.row);
+        const maxRow = Math.max(drag.p0.row, drag.p1.row);
+        const minCol = Math.min(drag.p0.col, drag.p1.col);
+        const maxCol = Math.max(drag.p0.col, drag.p1.col);
+        deltaRow = Math.max(deltaRow, -minRow);
+        deltaRow = Math.min(deltaRow, (height - 1) - maxRow);
+        deltaCol = Math.max(deltaCol, -minCol);
+        deltaCol = Math.min(deltaCol, (width - 1) - maxCol);
+        const next = [
+          { row: drag.p0.row + deltaRow, col: drag.p0.col + deltaCol },
+          { row: drag.p1.row + deltaRow, col: drag.p1.col + deltaCol },
+        ];
+        setProfilePoints(next);
+        updateAllProfileData(next[0], next[1]);
+        return;
+      }
+      const nextHoveredEndpoint: 0 | 1 | null = d0 <= hitRadius ? 0 : d1 <= hitRadius ? 1 : null;
+      const nextHoverLine = nextHoveredEndpoint === null && pointToSegmentDistance(imgCol, imgRow, p0.col, p0.row, p1.col, p1.row) <= hitRadius;
+      setHoveredProfileEndpoint(nextHoveredEndpoint);
+      setIsHoveringProfileLine(nextHoverLine);
+    } else {
+      if (hoveredProfileEndpoint !== null) setHoveredProfileEndpoint(null);
+      if (isHoveringProfileLine) setIsHoveringProfileLine(false);
+    }
+
     // ROI resize drag (inner annular ring)
-    if (isDraggingResizeInner && selectedRoi) {
+    if (!lockRoi && isDraggingResizeInner && selectedRoi) {
       const { imgCol: ic, imgRow: ir } = screenToImg(e, idx);
       const newR = Math.sqrt((ic - selectedRoi.col) ** 2 + (ir - selectedRoi.row) ** 2);
       updateSelectedRoi({ radius_inner: Math.max(1, Math.min(selectedRoi.radius - 1, Math.round(newR))) });
       return;
     }
     // ROI resize drag (outer)
-    if (isDraggingResize && selectedRoi) {
+    if (!lockRoi && isDraggingResize && selectedRoi) {
       const { imgCol: ic, imgRow: ir } = screenToImg(e, idx);
       const shape = selectedRoi.shape || "circle";
       if (shape === "rectangle") {
@@ -1816,12 +1991,12 @@ function Show2D() {
       return;
     }
     // ROI drag (move center)
-    if (isDraggingROI) {
+    if (!lockRoi && isDraggingROI) {
       updateROI(e, idx);
       return;
     }
     // Lens edge hover detection
-    if (showLens && !isGallery && canvas) {
+    if (!lockDisplay && showLens && !isGallery && canvas) {
       const rect = canvas.getBoundingClientRect();
       const cssX = e.clientX - rect.left;
       const cssY = e.clientY - rect.top;
@@ -1836,13 +2011,14 @@ function Show2D() {
       setIsHoveringLensEdge(false);
     }
     // Hover detection for resize handles (show cursor on any ROI edge)
-    if (roiActive && !isDraggingPan) {
+    if (roiActive && !lockRoi && !isDraggingPan) {
       const { imgCol: ic, imgRow: ir } = screenToImg(e, idx);
       setIsHoveringResizeInner(isNearResizeHandleInner(ic, ir));
       setIsHoveringResize(isNearAnyEdge(ic, ir));
     }
 
     // Panning
+    if (lockView) return;
     if (!isDraggingPan || !panStart || panningIdx === null) return;
     if (idx !== panningIdx) return;
     if (!canvas) return;
@@ -1867,8 +2043,23 @@ function Show2D() {
       lensResizeStartRef.current = null;
       return;
     }
+    if (draggingProfileEndpoint !== null || isDraggingProfileLine) {
+      setDraggingProfileEndpoint(null);
+      setIsDraggingProfileLine(false);
+      profileDragStartRef.current = null;
+      clickStartRef.current = null;
+      setIsDraggingROI(false);
+      setIsDraggingResize(false);
+      setIsDraggingResizeInner(false);
+      setIsDraggingPan(false);
+      setPanStart(null);
+      setPanningIdx(null);
+      setHoveredProfileEndpoint(null);
+      setIsHoveringProfileLine(false);
+      return;
+    }
     // Detect click (vs drag) for profile mode
-    if (profileActive && clickStartRef.current) {
+    if (profileActive && !lockProfile && clickStartRef.current) {
       const dx = e.clientX - clickStartRef.current.x;
       const dy = e.clientY - clickStartRef.current.y;
       if (Math.sqrt(dx * dx + dy * dy) < 3) {
@@ -1893,24 +2084,24 @@ function Show2D() {
               // Complete the line
               const p0 = profilePoints[0];
               setProfilePoints([p0, pt]);
-              const allProfiles: (Float32Array | null)[] = [];
-              for (let j = 0; j < (rawDataRef.current?.length ?? 0); j++) {
-                const raw = rawDataRef.current![j];
-                allProfiles.push(raw ? sampleLineProfile(raw, width, height, p0.row, p0.col, pt.row, pt.col) : null);
-              }
-              setProfileDataAll(allProfiles);
+              updateAllProfileData(p0, pt);
             }
           }
         }
       }
     }
     clickStartRef.current = null;
+    setDraggingProfileEndpoint(null);
+    setIsDraggingProfileLine(false);
+    profileDragStartRef.current = null;
     setIsDraggingROI(false);
     setIsDraggingResize(false);
     setIsDraggingResizeInner(false);
     setIsDraggingPan(false);
     setPanStart(null);
     setPanningIdx(null);
+    setHoveredProfileEndpoint(null);
+    setIsHoveringProfileLine(false);
   };
 
   const handleMouseLeave = (idx: number) => {
@@ -1924,6 +2115,11 @@ function Show2D() {
     setIsDraggingROI(false);
     setIsDraggingResize(false);
     setIsDraggingResizeInner(false);
+    setDraggingProfileEndpoint(null);
+    setIsDraggingProfileLine(false);
+    setHoveredProfileEndpoint(null);
+    setIsHoveringProfileLine(false);
+    profileDragStartRef.current = null;
     setIsHoveringResize(false);
     setIsHoveringResizeInner(false);
     if (panningIdx === idx) {
@@ -1934,19 +2130,9 @@ function Show2D() {
   };
 
   // -------------------------------------------------------------------------
-  // Export handler
-  const handleExport = React.useCallback(() => {
-    setExportAnchor(null);
-    const canvas = canvasRefs.current[isGallery ? selectedIdx : 0];
-    if (!canvas) return;
-    canvas.toBlob((blob) => {
-      if (!blob) return;
-      downloadBlob(blob, `show2d_${labels?.[selectedIdx] || "image"}.png`);
-    }, "image/png");
-  }, [isGallery, selectedIdx, labels]);
-
   // Copy to clipboard handler
   const handleCopy = React.useCallback(async () => {
+    if (lockExport) return;
     const canvas = canvasRefs.current[isGallery ? selectedIdx : 0];
     if (!canvas) return;
     try {
@@ -1957,10 +2143,11 @@ function Show2D() {
       // Fallback: download if clipboard API unavailable
       canvas.toBlob((b) => { if (b) downloadBlob(b, `show2d_${labels?.[selectedIdx] || "image"}.png`); }, "image/png");
     }
-  }, [isGallery, selectedIdx, labels]);
+  }, [isGallery, selectedIdx, labels, lockExport]);
 
   // Export publication-quality figure with scale bar, colorbar, annotations
   const handleExportFigure = React.useCallback((withScaleBar: boolean, withColorbar: boolean) => {
+    if (lockExport) return;
     setExportAnchor(null);
     const idx = isGallery ? selectedIdx : 0;
     const rawData = rawDataRef.current?.[idx];
@@ -1990,9 +2177,9 @@ function Show2D() {
       vmin,
       vmax,
       logScale,
-      pixelSize: pixelSizeAngstrom > 0 ? pixelSizeAngstrom : undefined,
+      pixelSize: pixelSize > 0 ? pixelSize : undefined,
       showColorbar: withColorbar,
-      showScaleBar: withScaleBar && pixelSizeAngstrom > 0,
+      showScaleBar: withScaleBar && pixelSize > 0,
       drawAnnotations: (ctx) => {
         // ROI highlight mask
         if (roiActive && roiList) {
@@ -2049,10 +2236,11 @@ function Show2D() {
     figCanvas.toBlob((blob) => {
       if (blob) downloadBlob(blob, `show2d_figure_${labels?.[selectedIdx] || "image"}.png`);
     }, "image/png");
-  }, [isGallery, selectedIdx, labels, width, height, cmap, logScale, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, pixelSizeAngstrom, title, roiActive, roiList, profileActive, profilePoints]);
+  }, [isGallery, selectedIdx, labels, width, height, cmap, logScale, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, pixelSize, title, roiActive, roiList, profileActive, profilePoints, lockExport]);
 
   // Export all variants (PNG + PDF) as zip
   const handleExportAll = React.useCallback(async () => {
+    if (lockExport) return;
     setExportAnchor(null);
     const idx = isGallery ? selectedIdx : 0;
     const rawData = rawDataRef.current?.[idx];
@@ -2120,7 +2308,7 @@ function Show2D() {
       }
     };
 
-    const hasScale = pixelSizeAngstrom > 0;
+    const hasScale = pixelSize > 0;
     const baseOpts = {
       imageCanvas: offscreen,
       title: title || undefined,
@@ -2128,7 +2316,7 @@ function Show2D() {
       vmin,
       vmax,
       logScale,
-      pixelSize: hasScale ? pixelSizeAngstrom : undefined,
+      pixelSize: hasScale ? pixelSize : undefined,
       drawAnnotations,
     };
 
@@ -2140,6 +2328,25 @@ function Show2D() {
 
     const zip = new JSZip();
     const prefix = `show2d_${labels?.[selectedIdx] || "image"}`;
+    const metadata = {
+      metadata_version: "1.0",
+      widget_name: "Show2D",
+      widget_version: widgetVersion || "unknown",
+      exported_at: new Date().toISOString(),
+      format: "zip",
+      export_kind: "figure_variants",
+      selected_idx: idx,
+      image_shape: { rows: height, cols: width },
+      display: {
+        cmap,
+        log_scale: logScale,
+        auto_contrast: autoContrast,
+        vmin_pct: imageVminPct,
+        vmax_pct: imageVmaxPct,
+      },
+      variants,
+    };
+    zip.file("metadata.json", JSON.stringify(metadata, null, 2));
 
     for (const v of variants) {
       const figCanvas = exportFigure({ ...baseOpts, showScaleBar: v.showScaleBar && hasScale, showColorbar: v.showColorbar });
@@ -2151,11 +2358,12 @@ function Show2D() {
 
     const blob = await zip.generateAsync({ type: "blob" });
     downloadBlob(blob, `${prefix}_all.zip`);
-  }, [isGallery, selectedIdx, labels, width, height, cmap, logScale, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, pixelSizeAngstrom, title, roiActive, roiList, profileActive, profilePoints]);
+  }, [isGallery, selectedIdx, labels, width, height, cmap, logScale, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, pixelSize, title, roiActive, roiList, profileActive, profilePoints, widgetVersion, lockExport]);
 
   // Resize Handlers
   // -------------------------------------------------------------------------
   const handleCanvasResizeStart = (e: React.MouseEvent) => {
+    if (lockView) return;
     e.stopPropagation();
     e.preventDefault();
     setIsResizingCanvas(true);
@@ -2210,25 +2418,25 @@ function Show2D() {
   // -------------------------------------------------------------------------
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Number keys 1-9 select gallery images (avoids arrow key conflicts with Jupyter)
-    if (isGallery && e.key >= "1" && e.key <= "9") {
+    if (!lockNavigation && isGallery && e.key >= "1" && e.key <= "9") {
       const idx = parseInt(e.key) - 1;
       if (idx < nImages) { e.preventDefault(); setSelectedIdx(idx); }
       return;
     }
     switch (e.key) {
       case "ArrowLeft":
-        if (isGallery) { e.preventDefault(); setSelectedIdx(Math.max(0, selectedIdx - 1)); }
+        if (!lockNavigation && isGallery) { e.preventDefault(); setSelectedIdx(Math.max(0, selectedIdx - 1)); }
         break;
       case "ArrowRight":
-        if (isGallery) { e.preventDefault(); setSelectedIdx(Math.min(nImages - 1, selectedIdx + 1)); }
+        if (!lockNavigation && isGallery) { e.preventDefault(); setSelectedIdx(Math.min(nImages - 1, selectedIdx + 1)); }
         break;
       case "r":
       case "R":
-        handleResetAll();
+        if (!lockView) handleResetAll();
         break;
       case "Delete":
       case "Backspace":
-        if (roiActive && roiSelectedIdx >= 0 && roiList && roiSelectedIdx < roiList.length) {
+        if (!lockRoi && roiActive && roiSelectedIdx >= 0 && roiList && roiSelectedIdx < roiList.length) {
           e.preventDefault();
           const newList = roiList.filter((_, i) => i !== roiSelectedIdx);
           setRoiList(newList);
@@ -2245,8 +2453,8 @@ function Show2D() {
   const statsIdx = isGallery ? selectedIdx : 0;
 
   // Calibrated cursor position
-  const calibratedUnit = pixelSizeAngstrom > 0 ? (Math.max(height, width) * pixelSizeAngstrom >= 10 ? "nm" : "Å") : "";
-  const calibratedFactor = calibratedUnit === "nm" ? pixelSizeAngstrom / 10 : pixelSizeAngstrom;
+  const calibratedUnit = pixelSize > 0 ? (Math.max(height, width) * pixelSize >= 10 ? "nm" : "Å") : "";
+  const calibratedFactor = calibratedUnit === "nm" ? pixelSize / 10 : pixelSize;
 
   return (
     <Box className="show2d-root" tabIndex={0} onKeyDown={handleKeyDown} sx={{ p: 2, bgcolor: themeColors.bg, color: themeColors.text, overflow: "visible" }}>
@@ -2267,38 +2475,122 @@ function Show2D() {
               <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
               <KeyboardShortcuts items={isGallery ? [["← / →", "Prev / Next image"], ["1 – 9", "Select image"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]] : [["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
             </Box>} theme={themeInfo.theme} />
+            <ControlCustomizer
+              widgetName="Show2D"
+              hiddenTools={hiddenTools}
+              setHiddenTools={setHiddenTools}
+              disabledTools={disabledTools}
+              setDisabledTools={setDisabledTools}
+              themeColors={themeColors}
+            />
           </Typography>
           {/* Controls row: FFT, Lens, Profile, ROI, Export, Reset, Copy */}
           <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} sx={{ mb: `${SPACING.XS}px`, height: 28, maxWidth: galleryGridWidth }}>
-            <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT:</Typography>
-            <Switch checked={showFft} onChange={(e) => setShowFft(e.target.checked)} size="small" sx={switchStyles.small} />
-            {!isGallery && (
+            {!hideDisplay && (
               <>
-                <Typography sx={{ ...typography.label, fontSize: 10 }}>Lens:</Typography>
-                <Switch checked={showLens} onChange={() => { if (!showLens) { setShowLens(true); setLensPos({ row: Math.floor(height / 2), col: Math.floor(width / 2) }); } else { setShowLens(false); setLensPos(null); } }} size="small" sx={switchStyles.small} />
+                <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT:</Typography>
+                <Switch
+                  checked={showFft}
+                  onChange={(e) => { if (!lockDisplay) setShowFft(e.target.checked); }}
+                  disabled={lockDisplay}
+                  size="small"
+                  sx={switchStyles.small}
+                />
+                {!isGallery && (
+                  <>
+                    <Typography sx={{ ...typography.label, fontSize: 10 }}>Lens:</Typography>
+                    <Switch
+                      checked={showLens}
+                      onChange={() => {
+                        if (lockDisplay) return;
+                        if (!showLens) {
+                          setShowLens(true);
+                          setLensPos({ row: Math.floor(height / 2), col: Math.floor(width / 2) });
+                        } else {
+                          setShowLens(false);
+                          setLensPos(null);
+                        }
+                      }}
+                      disabled={lockDisplay}
+                      size="small"
+                      sx={switchStyles.small}
+                    />
+                  </>
+                )}
               </>
             )}
-            <Typography sx={{ ...typography.label, fontSize: 10 }}>Profile:</Typography>
-            <Switch checked={profileActive} onChange={(e) => { const on = e.target.checked; setProfileActive(on); if (on) { setRoiActive(false); } else { setProfilePoints([]); setProfileDataAll([]); } }} size="small" sx={switchStyles.small} />
-            <Typography sx={{ ...typography.label, fontSize: 10 }}>ROI:</Typography>
-            <Switch checked={roiActive} onChange={(e) => { const on = e.target.checked; setRoiActive(on); if (on) { setProfileActive(false); setProfilePoints([]); setProfileDataAll([]); } else { setRoiSelectedIdx(-1); } }} size="small" sx={switchStyles.small} />
+            {!hideProfile && (
+              <>
+                <Typography sx={{ ...typography.label, fontSize: 10 }}>Profile:</Typography>
+                <Switch
+                  checked={profileActive}
+                  disabled={lockProfile}
+                  onChange={(e) => {
+                    if (lockProfile) return;
+                    const on = e.target.checked;
+                    setProfileActive(on);
+                    if (on) {
+                      if (!lockRoi) setRoiActive(false);
+                    } else {
+                      setProfilePoints([]);
+                      setProfileDataAll([]);
+                      setHoveredProfileEndpoint(null);
+                      setIsHoveringProfileLine(false);
+                    }
+                  }}
+                  size="small"
+                  sx={switchStyles.small}
+                />
+              </>
+            )}
+            {!hideRoi && (
+              <>
+                <Typography sx={{ ...typography.label, fontSize: 10 }}>ROI:</Typography>
+                <Switch
+                  checked={roiActive}
+                  disabled={lockRoi}
+                  onChange={(e) => {
+                    if (lockRoi) return;
+                    const on = e.target.checked;
+                    setRoiActive(on);
+                    if (on) {
+                      if (!lockProfile) setProfileActive(false);
+                      setProfilePoints([]);
+                      setProfileDataAll([]);
+                      setHoveredProfileEndpoint(null);
+                      setIsHoveringProfileLine(false);
+                    } else {
+                      setRoiSelectedIdx(-1);
+                    }
+                  }}
+                  size="small"
+                  sx={switchStyles.small}
+                />
+              </>
+            )}
             <Box sx={{ flex: 1 }} />
-            <Button size="small" sx={compactButton} disabled={!needsReset} onClick={handleResetAll}>Reset</Button>
-            <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={(e) => setExportAnchor(e.currentTarget)}>Export</Button>
-            <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
-              <MenuItem onClick={() => handleExportFigure(true, true)} sx={{ fontSize: 12 }}>Figure + scalebar + colorbar</MenuItem>
-              <MenuItem onClick={() => handleExportFigure(true, false)} sx={{ fontSize: 12 }}>Figure + scalebar</MenuItem>
-              <MenuItem onClick={() => handleExportFigure(false, false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
-              <MenuItem onClick={handleExportAll} sx={{ fontSize: 12 }}>All (PNG + PDF)</MenuItem>
-            </Menu>
-            <Button size="small" sx={compactButton} onClick={handleCopy}>Copy</Button>
+            {!hideView && (
+              <Button size="small" sx={compactButton} disabled={lockView || !needsReset} onClick={handleResetAll}>Reset</Button>
+            )}
+            {!hideExport && (
+              <>
+                <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} disabled={lockExport} onClick={(e) => { if (!lockExport) setExportAnchor(e.currentTarget); }}>Export</Button>
+                <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
+                  <MenuItem disabled={lockExport} onClick={() => handleExportFigure(true, true)} sx={{ fontSize: 12 }}>Figure + scalebar + colorbar</MenuItem>
+                  <MenuItem disabled={lockExport} onClick={() => handleExportFigure(true, false)} sx={{ fontSize: 12 }}>Figure + scalebar</MenuItem>
+                  <MenuItem disabled={lockExport} onClick={() => handleExportFigure(false, false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
+                  <MenuItem disabled={lockExport} onClick={handleExportAll} sx={{ fontSize: 12 }}>All (PNG + PDF)</MenuItem>
+                </Menu>
+                <Button size="small" sx={compactButton} disabled={lockExport} onClick={handleCopy}>Copy</Button>
+              </>
+            )}
           </Stack>
 
           {isGallery ? (
             /* Gallery mode */
             <Box sx={{ display: "grid", gridTemplateColumns: `repeat(${ncols}, auto)`, gap: 1 }}>
               {Array.from({ length: nImages }).map((_, i) => (
-                <Box key={i} sx={{ cursor: i === selectedIdx ? ((isDraggingResize || isDraggingResizeInner || isHoveringResize || isHoveringResizeInner) ? "nwse-resize" : isDraggingROI ? "move" : (profileActive || roiActive) ? "crosshair" : "grab") : "pointer" }}>
+                <Box key={i} sx={{ cursor: i === selectedIdx ? ((isDraggingResize || isDraggingResizeInner || isHoveringResize || isHoveringResizeInner) ? "nwse-resize" : isDraggingROI ? "move" : (draggingProfileEndpoint !== null || isDraggingProfileLine) ? "grabbing" : (profileActive && (hoveredProfileEndpoint !== null || isHoveringProfileLine)) ? "grab" : (profileActive || roiActive) ? "crosshair" : "grab") : (lockNavigation ? "default" : "pointer") }}>
                   <Box
                     ref={(el: HTMLDivElement | null) => { imageContainerRefs.current[i] = el; }}
                     sx={{ position: "relative", bgcolor: "#000", border: `2px solid ${i === selectedIdx ? themeColors.accent : themeColors.border}`, borderRadius: 0 }}
@@ -2319,15 +2611,17 @@ function Show2D() {
                       width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)}
                       style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: canvasH, pointerEvents: "none" }}
                     />
-                    <Box onMouseDown={handleCanvasResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, borderRadius: "0 0 4px 0", "&:hover": { opacity: 1 } }} />
+                    {!hideView && (
+                      <Box onMouseDown={handleCanvasResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: lockView ? "default" : "nwse-resize", opacity: lockView ? 0.3 : 0.6, pointerEvents: lockView ? "none" : "auto", background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, borderRadius: "0 0 4px 0", "&:hover": { opacity: lockView ? 0.3 : 1 } }} />
+                    )}
                   </Box>
                   <Typography sx={{ fontSize: 10, color: themeColors.textMuted, textAlign: "center", mt: 0.25 }}>
                     {labels?.[i] || `Image ${i + 1}`}
                   </Typography>
-                  {showFft && (
+                  {effectiveShowFft && (
                     <Box
                       ref={(el: HTMLDivElement | null) => { fftContainerRefs.current[i] = el; }}
-                      sx={{ mt: 0.5, border: `2px solid ${i === selectedIdx ? themeColors.accent : themeColors.border}`, borderRadius: 0, bgcolor: "#000", cursor: "grab" }}
+                      sx={{ mt: 0.5, border: `2px solid ${i === selectedIdx ? themeColors.accent : themeColors.border}`, borderRadius: 0, bgcolor: "#000", cursor: lockView ? "default" : "grab" }}
                       onWheel={(i === selectedIdx || linkedZoom) ? (e) => handleGalleryFftWheel(e, i) : undefined}
                       onDoubleClick={() => setGalleryFftState(i, { zoom: DEFAULT_FFT_ZOOM, panX: 0, panY: 0 })}
                       onMouseDown={(e) => handleGalleryFftMouseDown(e, i)}
@@ -2349,7 +2643,7 @@ function Show2D() {
             /* Single image mode */
             <Box
               ref={(el: HTMLDivElement | null) => { imageContainerRefs.current[0] = el; }}
-              sx={{ position: "relative", bgcolor: "#000", border: `1px solid ${themeColors.border}`, cursor: isHoveringLensEdge ? "nwse-resize" : isDraggingROI ? "move" : (isDraggingResize || isDraggingResizeInner || isHoveringResize || isHoveringResizeInner) ? "nwse-resize" : (profileActive || roiActive) ? "crosshair" : "grab" }}
+              sx={{ position: "relative", bgcolor: "#000", border: `1px solid ${themeColors.border}`, cursor: isHoveringLensEdge ? "nwse-resize" : isDraggingROI ? "move" : (isDraggingResize || isDraggingResizeInner || isHoveringResize || isHoveringResizeInner) ? "nwse-resize" : (draggingProfileEndpoint !== null || isDraggingProfileLine) ? "grabbing" : (profileActive && (hoveredProfileEndpoint !== null || isHoveringProfileLine)) ? "grab" : (profileActive || roiActive) ? "crosshair" : "grab" }}
               onMouseDown={(e) => handleMouseDown(e, 0)}
               onMouseMove={(e) => handleMouseMove(e, 0)}
               onMouseUp={(e) => handleMouseUp(e, 0)}
@@ -2375,17 +2669,19 @@ function Show2D() {
               {cursorInfo && (
                 <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
                   <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
-                    ({cursorInfo.row}, {cursorInfo.col}){pixelSizeAngstrom > 0 ? ` = (${(cursorInfo.row * calibratedFactor).toFixed(1)}, ${(cursorInfo.col * calibratedFactor).toFixed(1)} ${calibratedUnit})` : ""} {formatNumber(cursorInfo.value)}
+                    ({cursorInfo.row}, {cursorInfo.col}){pixelSize > 0 ? ` = (${(cursorInfo.row * calibratedFactor).toFixed(1)}, ${(cursorInfo.col * calibratedFactor).toFixed(1)} ${calibratedUnit})` : ""} {formatNumber(cursorInfo.value)}
                   </Typography>
                 </Box>
               )}
-              <Box onMouseDown={handleCanvasResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, borderRadius: "0 0 4px 0", "&:hover": { opacity: 1 } }} />
+              {!hideView && (
+                <Box onMouseDown={handleCanvasResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: lockView ? "default" : "nwse-resize", opacity: lockView ? 0.3 : 0.6, pointerEvents: lockView ? "none" : "auto", background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, borderRadius: "0 0 4px 0", "&:hover": { opacity: lockView ? 0.3 : 1 } }} />
+              )}
             </Box>
           )}
 
           {/* Stats bar - right below canvas (Show3D style) */}
-          {showStats && (
-            <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", maxWidth: galleryGridWidth, boxSizing: "border-box", overflow: "hidden", whiteSpace: "nowrap" }}>
+          {!hideStats && showStats && (
+            <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", maxWidth: galleryGridWidth, boxSizing: "border-box", overflow: "hidden", whiteSpace: "nowrap", opacity: lockStats ? 0.7 : 1 }}>
               {isGallery && (
                 <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>{labels?.[statsIdx] || `#${statsIdx + 1}`}</Typography>
               )}
@@ -2406,34 +2702,36 @@ function Show2D() {
           )}
 
           {/* Gallery FFT Controls - below gallery grid */}
-          {showFft && isGallery && (
+          {effectiveShowFft && isGallery && (
             <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, maxWidth: galleryGridWidth, boxSizing: "border-box" }}>
               <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
-                <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+                <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockDisplay ? 0.5 : 1, pointerEvents: lockDisplay ? "none" : "auto" }}>
                   <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT Scale:</Typography>
-                  <Select value={fftScaleMode} onChange={(e) => setFftScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
+                  <Select disabled={lockDisplay} value={fftScaleMode} onChange={(e) => setFftScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
                     <MenuItem value="linear">Lin</MenuItem>
                     <MenuItem value="log">Log</MenuItem>
                     <MenuItem value="power">Pow</MenuItem>
                   </Select>
                   <Typography sx={{ ...typography.label, fontSize: 10 }}>Auto:</Typography>
-                  <Switch checked={fftAuto} onChange={(e) => setFftAuto(e.target.checked)} size="small" sx={switchStyles.small} />
+                  <Switch checked={fftAuto} onChange={(e) => { if (!lockDisplay) setFftAuto(e.target.checked); }} disabled={lockDisplay} size="small" sx={switchStyles.small} />
                   <Typography sx={{ ...typography.label, fontSize: 10 }}>Color:</Typography>
-                  <Select value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
+                  <Select disabled={lockDisplay} value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
                     {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
                   </Select>
                 </Box>
               </Box>
-              <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center" }}>
-                {fftHistogramData && (
-                  <Histogram data={fftHistogramData} colormap={fftColormap} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { setFftVminPct(min); setFftVmaxPct(max); }} width={110} height={58} theme={themeInfo.theme === "dark" ? "dark" : "light"} dataMin={fftDataRange.min} dataMax={fftDataRange.max} />
-                )}
-              </Box>
+              {!hideHistogram && (
+                <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: lockHistogram ? 0.5 : 1, pointerEvents: lockHistogram ? "none" : "auto" }}>
+                  {fftHistogramData && (
+                    <Histogram data={fftHistogramData} colormap={fftColormap} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setFftVminPct(min); setFftVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme === "dark" ? "dark" : "light"} dataMin={fftDataRange.min} dataMax={fftDataRange.max} />
+                  )}
+                </Box>
+              )}
             </Box>
           )}
 
           {/* Line profile sparkline — always reserve space when profile is active */}
-          {profileActive && (
+          {!hideProfile && profileActive && (
             <Box sx={{ mt: `${SPACING.XS}px`, maxWidth: profileCanvasWidth, boxSizing: "border-box" }}>
               <canvas
                 ref={profileCanvasRef}
@@ -2442,8 +2740,13 @@ function Show2D() {
                 style={{ width: profileCanvasWidth, height: profileHeight, display: "block", border: `1px solid ${themeColors.border}`, borderBottom: "none", cursor: "crosshair" }}
               />
               <div
-                onMouseDown={(e) => { e.preventDefault(); setIsResizingProfile(true); setProfileResizeStart({ y: e.clientY, height: profileHeight }); }}
-                style={{ width: profileCanvasWidth, height: 4, cursor: "ns-resize", borderLeft: `1px solid ${themeColors.border}`, borderRight: `1px solid ${themeColors.border}`, borderBottom: `1px solid ${themeColors.border}`, background: `linear-gradient(to bottom, ${themeColors.border}, transparent)` }}
+                onMouseDown={(e) => {
+                  if (lockProfile) return;
+                  e.preventDefault();
+                  setIsResizingProfile(true);
+                  setProfileResizeStart({ y: e.clientY, height: profileHeight });
+                }}
+                style={{ width: profileCanvasWidth, height: 4, cursor: lockProfile ? "default" : "ns-resize", borderLeft: `1px solid ${themeColors.border}`, borderRight: `1px solid ${themeColors.border}`, borderBottom: `1px solid ${themeColors.border}`, background: `linear-gradient(to bottom, ${themeColors.border}, transparent)`, opacity: lockProfile ? 0.5 : 1, pointerEvents: lockProfile ? "none" : "auto" }}
               />
             </Box>
           )}
@@ -2455,58 +2758,62 @@ function Show2D() {
               <Box sx={{ display: "flex", gap: `${SPACING.SM}px` }}>
                 <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
                   {/* Row 1: Scale + Color */}
-                  <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                    <Typography sx={{ ...typography.label, fontSize: 10 }}>Scale:</Typography>
-                    <Select value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45 }} MenuProps={themedMenuProps}>
-                      <MenuItem value="linear">Lin</MenuItem>
-                      <MenuItem value="log">Log</MenuItem>
-                    </Select>
-                    <Typography sx={{ ...typography.label, fontSize: 10 }}>Color:</Typography>
-                    <Select size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60 }}>
-                      {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
-                    </Select>
-                    {!isGallery && (
-                      <>
-                        <Typography sx={{ ...typography.label, fontSize: 10 }}>Colorbar:</Typography>
-                        <Switch checked={showColorbar} onChange={() => setShowColorbar(!showColorbar)} size="small" sx={switchStyles.small} />
-                      </>
-                    )}
-                  </Box>
+                  {!hideDisplay && (
+                    <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockDisplay ? 0.5 : 1, pointerEvents: lockDisplay ? "none" : "auto" }}>
+                      <Typography sx={{ ...typography.label, fontSize: 10 }}>Scale:</Typography>
+                      <Select disabled={lockDisplay} value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45 }} MenuProps={themedMenuProps}>
+                        <MenuItem value="linear">Lin</MenuItem>
+                        <MenuItem value="log">Log</MenuItem>
+                      </Select>
+                      <Typography sx={{ ...typography.label, fontSize: 10 }}>Color:</Typography>
+                      <Select disabled={lockDisplay} size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60 }}>
+                        {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
+                      </Select>
+                      {!isGallery && (
+                        <>
+                          <Typography sx={{ ...typography.label, fontSize: 10 }}>Colorbar:</Typography>
+                          <Switch checked={showColorbar} onChange={() => { if (!lockDisplay) setShowColorbar(!showColorbar); }} disabled={lockDisplay} size="small" sx={switchStyles.small} />
+                        </>
+                      )}
+                    </Box>
+                  )}
                   {/* Row 2: Auto + Lens settings + Link Zoom (gallery) + zoom indicator */}
-                  <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                    <Typography sx={{ ...typography.label, fontSize: 10 }}>Auto:</Typography>
-                    <Switch checked={autoContrast} onChange={() => setAutoContrast(!autoContrast)} size="small" sx={switchStyles.small} />
-                    {!isGallery && showLens && (
-                      <>
-                        <Typography sx={{ ...typography.label, fontSize: 10 }}>Lens {lensMag}×</Typography>
-                        <Slider value={lensMag} min={2} max={8} step={1} onChange={(_, v) => setLensMag(v as number)} size="small" sx={{ ...sliderStyles.small, width: 35 }} />
-                        <Typography sx={{ ...typography.label, fontSize: 10 }}>{lensDisplaySize}px</Typography>
-                        <Slider value={lensDisplaySize} min={64} max={256} step={16} onChange={(_, v) => setLensDisplaySize(v as number)} size="small" sx={{ ...sliderStyles.small, width: 35 }} />
-                      </>
-                    )}
-                    {isGallery && (
-                      <>
-                        <Typography sx={{ ...typography.label, fontSize: 10 }}>Link Zoom</Typography>
-                        <Switch checked={linkedZoom} onChange={() => setLinkedZoom(!linkedZoom)} size="small" sx={switchStyles.small} />
-                        <Typography sx={{ ...typography.label, fontSize: 10 }}>Link Contrast</Typography>
-                        <Switch checked={linkedContrast} onChange={() => setLinkedContrast(!linkedContrast)} size="small" sx={switchStyles.small} />
-                      </>
-                    )}
-                    {getZoomState(isGallery ? selectedIdx : 0).zoom !== 1 && (
-                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.accent, fontWeight: "bold" }}>{getZoomState(isGallery ? selectedIdx : 0).zoom.toFixed(1)}x</Typography>
-                    )}
-                  </Box>
+                  {!hideDisplay && (
+                    <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockDisplay ? 0.5 : 1, pointerEvents: lockDisplay ? "none" : "auto" }}>
+                      <Typography sx={{ ...typography.label, fontSize: 10 }}>Auto:</Typography>
+                      <Switch checked={autoContrast} onChange={() => { if (!lockDisplay) setAutoContrast(!autoContrast); }} disabled={lockDisplay} size="small" sx={switchStyles.small} />
+                      {!isGallery && showLens && (
+                        <>
+                          <Typography sx={{ ...typography.label, fontSize: 10 }}>Lens {lensMag}×</Typography>
+                          <Slider disabled={lockDisplay} value={lensMag} min={2} max={8} step={1} onChange={(_, v) => setLensMag(v as number)} size="small" sx={{ ...sliderStyles.small, width: 35 }} />
+                          <Typography sx={{ ...typography.label, fontSize: 10 }}>{lensDisplaySize}px</Typography>
+                          <Slider disabled={lockDisplay} value={lensDisplaySize} min={64} max={256} step={16} onChange={(_, v) => setLensDisplaySize(v as number)} size="small" sx={{ ...sliderStyles.small, width: 35 }} />
+                        </>
+                      )}
+                      {isGallery && (
+                        <>
+                          <Typography sx={{ ...typography.label, fontSize: 10 }}>Link Zoom</Typography>
+                          <Switch checked={linkedZoom} onChange={() => { if (!lockDisplay) setLinkedZoom(!linkedZoom); }} disabled={lockDisplay} size="small" sx={switchStyles.small} />
+                          <Typography sx={{ ...typography.label, fontSize: 10 }}>Link Contrast</Typography>
+                          <Switch checked={linkedContrast} onChange={() => { if (!lockDisplay) setLinkedContrast(!linkedContrast); }} disabled={lockDisplay} size="small" sx={switchStyles.small} />
+                        </>
+                      )}
+                      {getZoomState(isGallery ? selectedIdx : 0).zoom !== 1 && (
+                        <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.accent, fontWeight: "bold" }}>{getZoomState(isGallery ? selectedIdx : 0).zoom.toFixed(1)}x</Typography>
+                      )}
+                    </Box>
+                  )}
                 </Box>
                 {/* Right: Histogram aligned to the two rows */}
-                {imageHistogramData && (
-                  <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center" }}>
-                    <Histogram data={imageHistogramData} colormap={cmap} vminPct={imageVminPct} vmaxPct={imageVmaxPct} onRangeChange={(min, max) => { setContrastState(activeContrastIdx, { vminPct: min, vmaxPct: max }); }} width={110} height={58} theme={themeInfo.theme === "dark" ? "dark" : "light"} dataMin={imageDataRange.min} dataMax={imageDataRange.max} />
+                {!hideHistogram && imageHistogramData && (
+                  <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: lockHistogram ? 0.5 : 1, pointerEvents: lockHistogram ? "none" : "auto" }}>
+                    <Histogram data={imageHistogramData} colormap={cmap} vminPct={imageVminPct} vmaxPct={imageVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) setContrastState(activeContrastIdx, { vminPct: min, vmaxPct: max }); }} width={110} height={58} theme={themeInfo.theme === "dark" ? "dark" : "light"} dataMin={imageDataRange.min} dataMax={imageDataRange.max} />
                   </Box>
                 )}
               </Box>
               {/* ROI Section (own box, below control rows) */}
-              {roiActive && (
-                <Box sx={{ border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, px: 1, py: 0.5, display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, width: "fit-content" }}>
+              {!hideRoi && roiActive && (
+                <Box sx={{ border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, px: 1, py: 0.5, display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, width: "fit-content", opacity: lockRoi ? 0.5 : 1, pointerEvents: lockRoi ? "none" : "auto" }}>
                   {/* ROI: shape + ADD + CLEAR */}
                   <Box sx={{ display: "flex", alignItems: "center", gap: `${SPACING.SM}px` }}>
                     <Typography sx={{ ...typography.label, fontSize: 10 }}>ROI:</Typography>
@@ -2616,30 +2923,34 @@ function Show2D() {
         </Box>
 
         {/* FFT Panel - canvas + stats (single mode only) */}
-        {showFft && !isGallery && (
+        {effectiveShowFft && !isGallery && (
           <Box sx={{ width: canvasW }}>
             {/* Spacer — matches main panel title row height for canvas alignment */}
             <Box sx={{ mb: `${SPACING.XS}px`, height: 16 }} />
             {/* Controls row — matches main panel controls row height */}
             <Stack direction="row" justifyContent="flex-end" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
-              <Button size="small" sx={compactButton} disabled={fftZoom === DEFAULT_FFT_ZOOM && fftPanX === 0 && fftPanY === 0} onClick={handleFftDoubleClick}>Reset</Button>
+              {!hideView && (
+                <Button size="small" sx={compactButton} disabled={lockView || (fftZoom === DEFAULT_FFT_ZOOM && fftPanX === 0 && fftPanY === 0)} onClick={handleFftDoubleClick}>Reset</Button>
+              )}
             </Stack>
             <Box
               ref={singleFftContainerRef}
-              sx={{ position: "relative", bgcolor: "#000", border: `1px solid ${themeColors.border}`, cursor: "crosshair", width: canvasW, height: canvasH }}
-              onWheel={handleFftWheel}
-              onDoubleClick={handleFftDoubleClick}
-              onMouseDown={handleFftMouseDown}
-              onMouseMove={handleFftMouseMove}
-              onMouseUp={handleFftMouseUp}
+              sx={{ position: "relative", bgcolor: "#000", border: `1px solid ${themeColors.border}`, cursor: lockView ? "default" : "crosshair", width: canvasW, height: canvasH }}
+              onWheel={lockView ? undefined : handleFftWheel}
+              onDoubleClick={lockView ? undefined : handleFftDoubleClick}
+              onMouseDown={lockView ? undefined : handleFftMouseDown}
+              onMouseMove={lockView ? undefined : handleFftMouseMove}
+              onMouseUp={lockView ? undefined : handleFftMouseUp}
               onMouseLeave={handleFftMouseLeave}
             >
               <canvas ref={fftCanvasRef} width={canvasW} height={canvasH} style={{ width: canvasW, height: canvasH, imageRendering: "pixelated" }} />
               <canvas ref={fftOverlayRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: canvasH, pointerEvents: "none" }} />
-              <Box onMouseDown={handleCanvasResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, borderRadius: "0 0 4px 0", "&:hover": { opacity: 1 } }} />
+              {!hideView && (
+                <Box onMouseDown={handleCanvasResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: lockView ? "default" : "nwse-resize", opacity: lockView ? 0.3 : 0.6, pointerEvents: lockView ? "none" : "auto", background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, borderRadius: "0 0 4px 0", "&:hover": { opacity: lockView ? 0.3 : 1 } }} />
+              )}
             </Box>
             {/* FFT Stats Bar */}
-            {fftStats && fftStats.length === 4 && (
+            {!hideStats && fftStats && fftStats.length === 4 && (
               <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2 }}>
                 <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(fftStats[0])}</Box></Typography>
                 <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(fftStats[1])}</Box></Typography>
@@ -2664,35 +2975,37 @@ function Show2D() {
               <Box sx={{ display: "flex", gap: `${SPACING.SM}px` }}>
                 <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
                   {/* Row 1: Scale + Color + Colorbar */}
-                  <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+                  <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockDisplay ? 0.5 : 1, pointerEvents: lockDisplay ? "none" : "auto" }}>
                     <Typography sx={{ ...typography.label, fontSize: 10 }}>Scale:</Typography>
-                    <Select value={fftScaleMode} onChange={(e) => setFftScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
+                    <Select disabled={lockDisplay} value={fftScaleMode} onChange={(e) => setFftScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
                       <MenuItem value="linear">Lin</MenuItem>
                       <MenuItem value="log">Log</MenuItem>
                       <MenuItem value="power">Pow</MenuItem>
                     </Select>
                     <Typography sx={{ ...typography.label, fontSize: 10 }}>Color:</Typography>
-                    <Select value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
+                    <Select disabled={lockDisplay} value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
                       {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
                     </Select>
                     <Typography sx={{ ...typography.label, fontSize: 10 }}>Colorbar:</Typography>
-                    <Switch checked={fftShowColorbar} onChange={(e) => setFftShowColorbar(e.target.checked)} size="small" sx={switchStyles.small} />
+                    <Switch checked={fftShowColorbar} onChange={(e) => { if (!lockDisplay) setFftShowColorbar(e.target.checked); }} disabled={lockDisplay} size="small" sx={switchStyles.small} />
                   </Box>
                   {/* Row 2: Auto + zoom indicator */}
-                  <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+                  <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockDisplay ? 0.5 : 1, pointerEvents: lockDisplay ? "none" : "auto" }}>
                     <Typography sx={{ ...typography.label, fontSize: 10 }}>Auto:</Typography>
-                    <Switch checked={fftAuto} onChange={(e) => setFftAuto(e.target.checked)} size="small" sx={switchStyles.small} />
+                    <Switch checked={fftAuto} onChange={(e) => { if (!lockDisplay) setFftAuto(e.target.checked); }} disabled={lockDisplay} size="small" sx={switchStyles.small} />
                     {fftZoom !== DEFAULT_FFT_ZOOM && (
                       <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.accent, fontWeight: "bold" }}>{fftZoom.toFixed(1)}x</Typography>
                     )}
                   </Box>
                 </Box>
                 {/* Right: FFT Histogram */}
-                <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center" }}>
-                  {fftHistogramData && (
-                    <Histogram data={fftHistogramData} colormap={fftColormap} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { setFftVminPct(min); setFftVmaxPct(max); }} width={110} height={58} theme={themeInfo.theme === "dark" ? "dark" : "light"} dataMin={fftDataRange.min} dataMax={fftDataRange.max} />
-                  )}
-                </Box>
+                {!hideHistogram && (
+                  <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: lockHistogram ? 0.5 : 1, pointerEvents: lockHistogram ? "none" : "auto" }}>
+                    {fftHistogramData && (
+                      <Histogram data={fftHistogramData} colormap={fftColormap} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setFftVminPct(min); setFftVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme === "dark" ? "dark" : "light"} dataMin={fftDataRange.min} dataMax={fftDataRange.max} />
+                    )}
+                  </Box>
+                )}
               </Box>
             </Box>
           </Box>

@@ -11,6 +11,7 @@ Requires: playwright, jupyterlab
 """
 
 import time
+import re
 
 import pytest
 
@@ -26,8 +27,11 @@ def smoke_page(browser_context):
     _write_notebook(NOTEBOOK_PATH, [
         {"source": [
             "import numpy as np\n",
-            "from quantem.widget import Mark2D, Show2D, Show3D, Show3DVolume, Show4DSTEM\n",
+            "from quantem.widget import Bin, Mark2D, Show1D, Show2D, Show3D, Show3DVolume, Show4DSTEM\n",
             "from quantem.widget import Show4D, Edit2D, Align2D, ShowComplex2D\n",
+        ]},
+        {"source": [
+            "Show1D(np.random.rand(256).astype(np.float32), title='Show1D Smoke')\n",
         ]},
         {"source": [
             "Mark2D(np.random.rand(64, 64).astype(np.float32))\n",
@@ -43,6 +47,9 @@ def smoke_page(browser_context):
         ]},
         {"source": [
             "Show4DSTEM(np.random.rand(8, 8, 32, 32).astype(np.float32))\n",
+        ]},
+        {"source": [
+            "Bin(np.random.rand(8, 8, 32, 32).astype(np.float32), pixel_size=2.4, k_pixel_size=0.48, device='cpu')\n",
         ]},
         {"source": [
             "Show4D(np.random.rand(8, 8, 32, 32).astype(np.float32))\n",
@@ -65,14 +72,25 @@ def smoke_page(browser_context):
 
 
 ALL_WIDGETS = [
+    "show1d-root",
     "mark2d-root",
     "show2d-root",
     "show3d-root",
     "show3dvolume-root",
     "show4dstem-root",
+    "bin-root",
     "show4d-root",
     "edit2d-root",
     "align2d-root",
+    "showcomplex-root",
+]
+
+VIEWER_WIDGETS_WITH_CUSTOMIZER = [
+    "show2d-root",
+    "show3d-root",
+    "show3dvolume-root",
+    "show4d-root",
+    "show4dstem-root",
     "showcomplex-root",
 ]
 
@@ -133,6 +151,13 @@ def _set_light_theme(page):
     time.sleep(2)
 
 
+def _extract_show4d_nav_pos(widget) -> tuple[int, int]:
+    """Parse the current Show4D navigation cursor (row, col) from widget text."""
+    match = re.search(r"at \((\d+),\s*(\d+)\)", widget.inner_text())
+    assert match is not None, "Could not find Show4D nav position text 'at (row, col)'"
+    return int(match.group(1)), int(match.group(2))
+
+
 # ---------------------------------------------------------------------------
 # Basic rendering tests
 # ---------------------------------------------------------------------------
@@ -158,6 +183,54 @@ def test_widget_screenshot(smoke_page, css_class):
     root = smoke_page.locator(f".{css_class}").first
     name = css_class.replace("-root", "")
     _screenshot(root, name)
+
+
+@pytest.mark.parametrize("css_class", VIEWER_WIDGETS_WITH_CUSTOMIZER)
+def test_viewer_controls_dropdown_exists(smoke_page, css_class):
+    """Viewer widgets expose the shared controls customizer button."""
+    widget = smoke_page.locator(f".{css_class}").first
+    widget.scroll_into_view_if_needed()
+    assert widget.locator('button[aria-label="Customize controls"]').count() >= 1
+
+
+# ---------------------------------------------------------------------------
+# Show1D interaction tests
+# ---------------------------------------------------------------------------
+
+def test_show1d_toggle_log_scale(smoke_page):
+    """Toggle log scale on Show1D via switch."""
+    widget = smoke_page.locator(".show1d-root").first
+    widget.scroll_into_view_if_needed()
+    # Switches: Log(0), Grid(1), Legend(2)
+    widget.locator(".MuiSwitch-root").nth(0).click()
+    time.sleep(1)
+    _screenshot(widget, "show1d_log")
+    widget.locator(".MuiSwitch-root").nth(0).click()
+    time.sleep(0.5)
+
+
+def test_show1d_toggle_grid(smoke_page):
+    """Toggle grid on Show1D."""
+    widget = smoke_page.locator(".show1d-root").first
+    widget.scroll_into_view_if_needed()
+    # Grid is on by default, toggle off
+    widget.locator(".MuiSwitch-root").nth(1).click()
+    time.sleep(1)
+    _screenshot(widget, "show1d_no_grid")
+    widget.locator(".MuiSwitch-root").nth(1).click()
+    time.sleep(0.5)
+
+
+def test_show1d_toggle_legend(smoke_page):
+    """Toggle legend on Show1D."""
+    widget = smoke_page.locator(".show1d-root").first
+    widget.scroll_into_view_if_needed()
+    # Legend is on by default, toggle off
+    widget.locator(".MuiSwitch-root").nth(2).click()
+    time.sleep(1)
+    _screenshot(widget, "show1d_no_legend")
+    widget.locator(".MuiSwitch-root").nth(2).click()
+    time.sleep(0.5)
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +385,7 @@ def test_show3d_toggle_auto_contrast(smoke_page):
     time.sleep(0.5)
 
 
+
 # ---------------------------------------------------------------------------
 # Mark2D interaction tests
 # ---------------------------------------------------------------------------
@@ -454,6 +528,44 @@ def test_show4dstem_toggle_fft(smoke_page):
     time.sleep(1)
 
 
+
+# ---------------------------------------------------------------------------
+# Bin interaction tests
+# ---------------------------------------------------------------------------
+
+
+def test_bin_change_binning_controls(smoke_page):
+    """Change Bin factors and verify binned shape text updates."""
+    widget = smoke_page.locator(".bin-root").first
+    widget.scroll_into_view_if_needed()
+
+    # Dropdown order in Bin: scan row, scan col, det row, det col, reduce, edges, colormap, display
+    _change_dropdown(widget, smoke_page, 0, "2")
+    _change_dropdown(widget, smoke_page, 1, "2")
+    _change_dropdown(widget, smoke_page, 2, "2")
+    _change_dropdown(widget, smoke_page, 3, "2")
+    _change_dropdown(widget, smoke_page, 4, "sum")
+    _change_dropdown(widget, smoke_page, 5, "pad")
+
+    shape_line = widget.locator('text=shape: (8, 8, 32, 32) → (4, 4, 16, 16)')
+    assert shape_line.count() >= 1, "Bin shape summary did not update after changing factors"
+    _screenshot(widget, "bin_factors_sum_pad")
+
+
+def test_bin_change_display_controls(smoke_page):
+    """Change Bin colormap/display controls and capture screenshot."""
+    widget = smoke_page.locator(".bin-root").first
+    widget.scroll_into_view_if_needed()
+
+    _change_dropdown(widget, smoke_page, 6, "magma")
+    _change_dropdown(widget, smoke_page, 7, "log")
+    _screenshot(widget, "bin_magma_log")
+
+    # Reset to default-like settings for downstream screenshots
+    _change_dropdown(widget, smoke_page, 6, "inferno")
+    _change_dropdown(widget, smoke_page, 7, "linear")
+
+
 # ---------------------------------------------------------------------------
 # Show4D interaction tests
 # ---------------------------------------------------------------------------
@@ -490,6 +602,93 @@ def test_show4d_change_colormap(smoke_page):
     _change_dropdown(widget, smoke_page, 1, "Gray")
     _screenshot(widget, "show4d_gray")
     _change_dropdown(widget, smoke_page, 1, "Inferno")
+
+
+
+def test_show4d_controls_customizer_presets(smoke_page):
+    """Apply Compact/All presets from controls customizer."""
+    widget = smoke_page.locator(".show4d-root").first
+    widget.scroll_into_view_if_needed()
+
+    widget.locator('button[aria-label="Customize controls"]').first.click()
+    time.sleep(0.5)
+    smoke_page.locator('[data-testid="preset-compact"]').first.click()
+    time.sleep(0.5)
+    smoke_page.keyboard.press("Escape")
+    time.sleep(0.3)
+
+    assert widget.locator("text=Profile:").count() == 0, "Compact preset should hide Profile controls"
+    _screenshot(widget, "show4d_controls_compact")
+
+    widget.locator('button[aria-label="Customize controls"]').first.click()
+    time.sleep(0.5)
+    smoke_page.locator('[data-testid="preset-all"]').first.click()
+    time.sleep(0.5)
+    smoke_page.keyboard.press("Escape")
+    time.sleep(0.3)
+
+    assert widget.locator("text=Profile:").count() >= 1, "All preset should restore Profile controls"
+
+
+def test_show4d_controls_customizer_lock_export(smoke_page):
+    """Lock/unlock Export controls from customizer and verify button disabled state."""
+    widget = smoke_page.locator(".show4d-root").first
+    widget.scroll_into_view_if_needed()
+
+    widget.locator('button[aria-label="Customize controls"]').first.click()
+    time.sleep(0.5)
+    smoke_page.locator('input[aria-label="lock-export"]').first.click()
+    time.sleep(0.3)
+    smoke_page.keyboard.press("Escape")
+    time.sleep(0.3)
+
+    assert widget.locator('button:has-text("Export")').first.is_disabled(), "Export button should be disabled when export group is locked"
+    _screenshot(widget, "show4d_controls_lock_export")
+
+    widget.locator('button[aria-label="Customize controls"]').first.click()
+    time.sleep(0.5)
+    smoke_page.locator('input[aria-label="lock-export"]').first.click()
+    time.sleep(0.3)
+    smoke_page.keyboard.press("Escape")
+    time.sleep(0.3)
+
+
+def test_show4d_controls_customizer_lock_navigation_blocks_keyboard_and_mouse(smoke_page):
+    """Lock navigation and verify keyboard/mouse navigation handlers are blocked."""
+    widget = smoke_page.locator(".show4d-root").first
+    widget.scroll_into_view_if_needed()
+
+    # Ensure ROI is off so "(row, col)" text is present.
+    _change_dropdown(widget, smoke_page, 0, "Off", wait=0.3)
+    start_pos = _extract_show4d_nav_pos(widget)
+
+    # Lock navigation through the shared customizer.
+    widget.locator('button[aria-label="Customize controls"]').first.click()
+    time.sleep(0.3)
+    smoke_page.locator('input[aria-label="lock-navigation"]').first.click()
+    time.sleep(0.2)
+    smoke_page.keyboard.press("Escape")
+    time.sleep(0.3)
+
+    # Keyboard arrows should not move nav position.
+    widget.locator("canvas").first.click()
+    smoke_page.keyboard.press("ArrowRight")
+    smoke_page.keyboard.press("ArrowDown")
+    time.sleep(0.2)
+    assert _extract_show4d_nav_pos(widget) == start_pos
+
+    # Mouse click on nav canvas should also be ignored while locked.
+    widget.locator("canvas").first.click(position={"x": 8, "y": 8})
+    time.sleep(0.2)
+    assert _extract_show4d_nav_pos(widget) == start_pos
+
+    # Unlock to avoid affecting downstream tests.
+    widget.locator('button[aria-label="Customize controls"]').first.click()
+    time.sleep(0.3)
+    smoke_page.locator('input[aria-label="lock-navigation"]').first.click()
+    time.sleep(0.2)
+    smoke_page.keyboard.press("Escape")
+    time.sleep(0.2)
 
 
 # ---------------------------------------------------------------------------

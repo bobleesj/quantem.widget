@@ -15,7 +15,28 @@ import numpy as np
 import traitlets
 
 from quantem.widget.array_utils import to_numpy
+from quantem.widget.json_state import build_json_header, resolve_widget_version, save_state_file, unwrap_state_payload
+from quantem.widget.tool_parity import (
+    bind_tool_runtime_api,
+    build_tool_groups,
+    normalize_tool_groups,
+)
 
+try:
+    import h5py  # type: ignore
+
+    _HAS_H5PY = True
+except Exception:
+    h5py = None  # type: ignore[assignment]
+    _HAS_H5PY = False
+
+try:
+    import torch
+
+    _HAS_TORCH = True
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    _HAS_TORCH = False
 
 class Colormap(str, Enum):
     """Available colormaps for image display."""
@@ -56,7 +77,7 @@ class Show3D(anywidget.AnyWidget):
     vmax : float, optional
         Maximum value for colormap. If None, uses data max.
     pixel_size : float, optional
-        Pixel size in nm for scale bar display.
+        Pixel size in Å for scale bar display.
     log_scale : bool, default False
         Use log scale for intensity mapping.
     auto_contrast : bool, default False
@@ -71,6 +92,19 @@ class Show3D(anywidget.AnyWidget):
         Timestamps for each frame (e.g., seconds or dose values).
     timestamp_unit : str, default "s"
         Unit for timestamps (e.g., "s", "ms", "e/A2").
+    disabled_tools : list of str, optional
+        Tool groups to lock while still showing controls. Supported:
+        ``"display"``, ``"histogram"``, ``"stats"``, ``"playback"``,
+        ``"view"``, ``"export"``, ``"roi"``, ``"profile"``, ``"all"``.
+        ``"navigation"`` is accepted as an alias of ``"playback"``.
+    disable_* : bool, optional
+        Convenience flags mirroring ``disabled_tools``. Includes
+        ``disable_navigation`` as an alias of ``disable_playback``.
+    hidden_tools : list of str, optional
+        Tool groups to hide from the UI. Uses the same keys as
+        ``disabled_tools``.
+    hide_* : bool, optional
+        Convenience flags mirroring ``disable_*`` for ``hidden_tools``.
 
     Examples
     --------
@@ -121,6 +155,7 @@ class Show3D(anywidget.AnyWidget):
     # =========================================================================
     # Statistics Panel
     # =========================================================================
+    show_controls = traitlets.Bool(True).tag(sync=True)
     show_stats = traitlets.Bool(True).tag(sync=True)
     stats_mean = traitlets.Float(0.0).tag(sync=True)
     stats_min = traitlets.Float(0.0).tag(sync=True)
@@ -140,7 +175,7 @@ class Show3D(anywidget.AnyWidget):
     # =========================================================================
     # Scale Bar
     # =========================================================================
-    pixel_size = traitlets.Float(0.0).tag(sync=True)  # nm/pixel, 0 = no scale bar
+    pixel_size = traitlets.Float(0.0).tag(sync=True)  # Å/pixel, 0 = no scale bar
     scale_bar_visible = traitlets.Bool(True).tag(sync=True)
 
     # =========================================================================
@@ -158,6 +193,7 @@ class Show3D(anywidget.AnyWidget):
     roi_selected_idx = traitlets.Int(-1).tag(sync=True)
     roi_stats = traitlets.Dict({}).tag(sync=True)
     roi_plot_data = traitlets.Bytes(b"").tag(sync=True)
+    roi_focus_dim = traitlets.Float(0.6).tag(sync=True)
 
     # =========================================================================
     # Sizing
@@ -169,7 +205,8 @@ class Show3D(anywidget.AnyWidget):
     # =========================================================================
     show_fft = traitlets.Bool(False).tag(sync=True)
     show_playback = traitlets.Bool(False).tag(sync=True)
-
+    disabled_tools = traitlets.List(traitlets.Unicode()).tag(sync=True)
+    hidden_tools = traitlets.List(traitlets.Unicode()).tag(sync=True)
     # =========================================================================
     # Line Profile
     # =========================================================================
@@ -181,8 +218,11 @@ class Show3D(anywidget.AnyWidget):
     # =========================================================================
     _gif_export_requested = traitlets.Bool(False).tag(sync=True)
     _gif_data = traitlets.Bytes(b"").tag(sync=True)
+    _gif_metadata_json = traitlets.Unicode("").tag(sync=True)
     _zip_export_requested = traitlets.Bool(False).tag(sync=True)
     _zip_data = traitlets.Bytes(b"").tag(sync=True)
+    _bundle_export_requested = traitlets.Bool(False).tag(sync=True)
+    _bundle_data = traitlets.Bytes(b"").tag(sync=True)
 
     # =========================================================================
     # Playback Buffer (sliding prefetch)
@@ -191,6 +231,411 @@ class Show3D(anywidget.AnyWidget):
     _buffer_start = traitlets.Int(0).tag(sync=True)
     _buffer_count = traitlets.Int(0).tag(sync=True)
     _prefetch_request = traitlets.Int(-1).tag(sync=True)
+
+    @classmethod
+    def _normalize_tool_groups(cls, tool_groups):
+        return normalize_tool_groups("Show3D", tool_groups)
+
+    @classmethod
+    def _build_disabled_tools(
+        cls,
+        disabled_tools=None,
+        disable_display: bool = False,
+        disable_histogram: bool = False,
+        disable_stats: bool = False,
+        disable_playback: bool = False,
+        disable_navigation: bool = False,
+        disable_view: bool = False,
+        disable_export: bool = False,
+        disable_roi: bool = False,
+        disable_profile: bool = False,
+        disable_all: bool = False,
+    ):
+        return build_tool_groups(
+            "Show3D",
+            tool_groups=disabled_tools,
+            all_flag=disable_all,
+            flag_map={
+                "display": disable_display,
+                "histogram": disable_histogram,
+                "stats": disable_stats,
+                "playback": disable_playback or disable_navigation,
+                "view": disable_view,
+                "export": disable_export,
+                "roi": disable_roi,
+                "profile": disable_profile,
+            },
+        )
+
+    @classmethod
+    def _build_hidden_tools(
+        cls,
+        hidden_tools=None,
+        hide_display: bool = False,
+        hide_histogram: bool = False,
+        hide_stats: bool = False,
+        hide_playback: bool = False,
+        hide_navigation: bool = False,
+        hide_view: bool = False,
+        hide_export: bool = False,
+        hide_roi: bool = False,
+        hide_profile: bool = False,
+        hide_all: bool = False,
+    ):
+        return build_tool_groups(
+            "Show3D",
+            tool_groups=hidden_tools,
+            all_flag=hide_all,
+            flag_map={
+                "display": hide_display,
+                "histogram": hide_histogram,
+                "stats": hide_stats,
+                "playback": hide_playback or hide_navigation,
+                "view": hide_view,
+                "export": hide_export,
+                "roi": hide_roi,
+                "profile": hide_profile,
+            },
+        )
+
+    @traitlets.validate("disabled_tools")
+    def _validate_disabled_tools(self, proposal):
+        return self._normalize_tool_groups(proposal["value"])
+
+    @traitlets.validate("hidden_tools")
+    def _validate_hidden_tools(self, proposal):
+        return self._normalize_tool_groups(proposal["value"])
+
+    @classmethod
+    def _load_image_2d(cls, path: pathlib.Path) -> np.ndarray:
+        from PIL import Image
+
+        with Image.open(path) as img:
+            arr = np.asarray(img.convert("F"), dtype=np.float32)
+        return arr
+
+    @classmethod
+    def _load_tiff_stack(cls, path: pathlib.Path) -> tuple[np.ndarray, list[str]]:
+        from PIL import Image, ImageSequence
+
+        frames: list[np.ndarray] = []
+        labels: list[str] = []
+        with Image.open(path) as img:
+            for i, page in enumerate(ImageSequence.Iterator(img)):
+                frame = np.asarray(page.convert("F"), dtype=np.float32)
+                frames.append(frame)
+                labels.append(f"{path.stem}[{i}]")
+
+        if not frames:
+            raise ValueError(f"No readable frames found in TIFF file: {path}")
+
+        shape0 = frames[0].shape
+        for i, frame in enumerate(frames[1:], start=1):
+            if frame.shape != shape0:
+                raise ValueError(
+                    f"Inconsistent TIFF frame shapes in {path}: frame 0={shape0}, frame {i}={frame.shape}"
+                )
+        return np.stack(frames, axis=0), labels
+
+    @classmethod
+    def _find_best_h5_dataset(cls, h5f):
+        candidates: list[tuple[int, str, object]] = []
+
+        def _walk(group, prefix: str = ""):
+            for key, item in group.items():
+                item_path = f"{prefix}/{key}" if prefix else key
+                if hasattr(item, "shape") and hasattr(item, "dtype"):
+                    try:
+                        ndim = int(item.ndim)
+                        size = int(item.size)
+                        dtype_kind = str(item.dtype.kind)
+                    except Exception:
+                        continue
+
+                    if size <= 0 or ndim < 2 or dtype_kind not in {"i", "u", "f", "c"}:
+                        continue
+
+                    score = size
+                    if ndim == 3:
+                        score += 10**15
+                    elif ndim == 2:
+                        score += 9 * 10**14
+                    elif ndim == 4:
+                        score += 8 * 10**14
+                    elif ndim == 5:
+                        score += 7 * 10**14
+
+                    lower_path = item_path.lower()
+                    for token in ["image", "stack", "series", "frame", "signal", "data"]:
+                        if token in lower_path:
+                            score += 10**12
+                    for token in ["preview", "thumb", "mask", "meta", "label", "calib"]:
+                        if token in lower_path:
+                            score -= 10**12
+
+                    candidates.append((score, item_path, item))
+                elif hasattr(item, "items"):
+                    _walk(item, item_path)
+
+        _walk(h5f)
+        if not candidates:
+            return "", None
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        _, ds_path, ds = candidates[0]
+        return ds_path, ds
+
+    @classmethod
+    def _coerce_to_float32_stack(cls, arr: np.ndarray) -> np.ndarray:
+        if np.iscomplexobj(arr):
+            arr = np.abs(arr)
+        if arr.ndim < 2:
+            raise ValueError(f"Expected at least 2D image data, got {arr.ndim}D")
+        while arr.ndim > 3:
+            arr = arr[arr.shape[0] // 2]
+        if arr.ndim == 2:
+            arr = arr[None, ...]
+        return np.asarray(arr, dtype=np.float32)
+
+    @classmethod
+    def _load_emd_stack(
+        cls,
+        path: pathlib.Path,
+        *,
+        dataset_path: str | None = None,
+    ) -> tuple[np.ndarray, list[str]]:
+        if not _HAS_H5PY:
+            raise RuntimeError("h5py is required to read .emd files. Install h5py to enable EMD loading.")
+
+        with h5py.File(path, "r") as h5f:  # type: ignore[name-defined]
+            if dataset_path is not None:
+                ds_path = str(dataset_path).strip()
+                if not ds_path:
+                    raise ValueError("dataset_path must be a non-empty string when provided.")
+                if ds_path not in h5f and ds_path.startswith("/") and ds_path[1:] in h5f:
+                    ds_path = ds_path[1:]
+                if ds_path not in h5f:
+                    raise ValueError(f"dataset_path '{dataset_path}' not found in EMD file: {path}")
+                ds = h5f[ds_path]
+            else:
+                ds_path, ds = cls._find_best_h5_dataset(h5f)
+            if ds is None:
+                raise ValueError(f"No array-like dataset found in EMD file: {path}")
+            if not hasattr(ds, "shape") or not hasattr(ds, "dtype"):
+                raise ValueError(f"dataset_path '{ds_path}' is not an array dataset in EMD file: {path}")
+            arr = np.asarray(ds)
+
+        stack = cls._coerce_to_float32_stack(arr)
+        labels = [f"{path.stem}[{i}]" for i in range(stack.shape[0])]
+        if not labels:
+            raise ValueError(f"No readable frames found in EMD file: {path} (dataset: {ds_path})")
+        return stack, labels
+
+    @classmethod
+    def _normalize_folder_file_type(cls, file_type: str | None) -> str:
+        if file_type is None:
+            raise ValueError("file_type is required for folder loading. Use 'emd', 'png', or 'tiff'.")
+        value = str(file_type).strip().lower()
+        aliases = {"tif": "tiff"}
+        value = aliases.get(value, value)
+        if value not in {"emd", "png", "tiff"}:
+            raise ValueError("folder file_type must be one of: 'emd', 'png', 'tiff'")
+        return value
+
+    @classmethod
+    def _load_folder_stack(
+        cls,
+        folder: pathlib.Path,
+        *,
+        file_type: str,
+        dataset_path: str | None = None,
+    ) -> tuple[np.ndarray, list[str]]:
+        allowed_exts = {".emd", ".png", ".tif", ".tiff"}
+        files = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in allowed_exts)
+        if not files:
+            raise ValueError(
+                f"No supported files found in {folder}. Expected .emd, .png, or .tif/.tiff"
+            )
+
+        selected = cls._normalize_folder_file_type(file_type)
+        emd_files = [p for p in files if p.suffix.lower() == ".emd"]
+        png_files = [p for p in files if p.suffix.lower() == ".png"]
+        tiff_files = [p for p in files if p.suffix.lower() in {".tif", ".tiff"}]
+
+        kind = selected
+
+        if kind == "emd":
+            files = emd_files
+            if not files:
+                raise ValueError(
+                    f"No EMD files found in {folder}. Use file_type='png' or file_type='tiff'."
+                )
+        elif kind == "png":
+            files = png_files
+            if not files:
+                raise ValueError(
+                    f"No PNG files found in {folder}. Use file_type='emd' or file_type='tiff'."
+                )
+        else:
+            files = tiff_files
+            if not files:
+                raise ValueError(
+                    f"No TIFF files found in {folder}. Use file_type='emd' or file_type='png'."
+                )
+
+        if kind == "emd":
+            frames = []
+            labels = []
+            for p in files:
+                stack, _ = cls._load_emd_stack(p, dataset_path=dataset_path)
+                if stack.shape[0] == 1:
+                    frames.append(stack[0])
+                    labels.append(p.name)
+                else:
+                    for i in range(stack.shape[0]):
+                        frames.append(stack[i])
+                        labels.append(f"{p.stem}[{i}]")
+        elif kind == "png":
+            frames = [cls._load_image_2d(p) for p in files]
+            labels = [p.name for p in files]
+        else:
+            frames = []
+            labels = []
+            for p in files:
+                stack, _ = cls._load_tiff_stack(p)
+                if stack.shape[0] == 1:
+                    frames.append(stack[0])
+                    labels.append(p.name)
+                else:
+                    for i in range(stack.shape[0]):
+                        frames.append(stack[i])
+                        labels.append(f"{p.stem}[{i}]")
+
+        shape0 = frames[0].shape
+        for i, frame in enumerate(frames[1:], start=1):
+            if frame.shape != shape0:
+                raise ValueError(
+                    f"Inconsistent image shapes in folder {folder}: frame 0={shape0}, frame {i}={frame.shape}"
+                )
+        return np.stack(frames, axis=0).astype(np.float32), labels
+
+    @classmethod
+    def from_path(
+        cls,
+        source: str | pathlib.Path,
+        *,
+        file_type: str | None = None,
+        dataset_path: str | None = None,
+        **kwargs,
+    ) -> Self:
+        """Create Show3D from an EMD/PNG/TIFF file or image folder.
+
+        Parameters
+        ----------
+        source : str or pathlib.Path
+            File path (.emd/.png/.tif/.tiff) or folder path.
+        file_type : {"emd", "png", "tiff"}, optional
+            Required for folders. Explicitly selects which files to load.
+        dataset_path : str, optional
+            Explicit HDF dataset path for `.emd` sources.
+        """
+        path = pathlib.Path(source)
+        if path.is_dir():
+            data, labels = cls._load_folder_stack(path, file_type=file_type, dataset_path=dataset_path)
+            kwargs.setdefault("title", path.name)
+            kwargs.setdefault("labels", labels)
+            return cls(data, **kwargs)
+        if not path.is_file():
+            raise ValueError(f"Path does not exist: {path}")
+
+        ext = path.suffix.lower()
+        if ext == ".emd":
+            data, labels = cls._load_emd_stack(path, dataset_path=dataset_path)
+            kwargs.setdefault("labels", labels)
+            kwargs.setdefault("title", path.stem)
+            return cls(data, **kwargs)
+        if ext == ".png":
+            if dataset_path is not None:
+                raise ValueError("dataset_path is only supported for .emd inputs.")
+            frame = cls._load_image_2d(path)
+            data = frame[None, ...]
+            kwargs.setdefault("labels", [path.name])
+            kwargs.setdefault("title", path.stem)
+            return cls(data, **kwargs)
+        if ext in {".tif", ".tiff"}:
+            if dataset_path is not None:
+                raise ValueError("dataset_path is only supported for .emd inputs.")
+            data, labels = cls._load_tiff_stack(path)
+            kwargs.setdefault("labels", labels)
+            kwargs.setdefault("title", path.stem)
+            return cls(data, **kwargs)
+
+        raise ValueError(
+            f"Unsupported file type: {path.suffix}. Use .emd, .png, .tif, .tiff, or a folder containing one of those types."
+        )
+
+    @classmethod
+    def from_folder(
+        cls,
+        folder: str | pathlib.Path,
+        *,
+        file_type: str,
+        dataset_path: str | None = None,
+        **kwargs,
+    ) -> Self:
+        """Create Show3D from folder containing EMD, PNG, and/or TIFF files.
+
+        Parameters
+        ----------
+        folder : str or pathlib.Path
+            Folder containing supported files.
+        file_type : {"emd", "png", "tiff"}
+            Explicitly selects which files to load from the folder.
+        dataset_path : str, optional
+            Explicit HDF dataset path used when ``file_type='emd'``.
+        """
+        return cls.from_path(folder, file_type=file_type, dataset_path=dataset_path, **kwargs)
+
+    @classmethod
+    def from_emd(
+        cls,
+        source: str | pathlib.Path,
+        *,
+        dataset_path: str | None = None,
+        **kwargs,
+    ) -> Self:
+        """Create Show3D from an EMD file."""
+        return cls.from_path(source, dataset_path=dataset_path, **kwargs)
+
+    @classmethod
+    def from_tiff(cls, source: str | pathlib.Path, **kwargs) -> Self:
+        """Create Show3D from a TIFF file."""
+        return cls.from_path(source, **kwargs)
+
+    @classmethod
+    def from_png(cls, source: str | pathlib.Path, **kwargs) -> Self:
+        """Create Show3D from a single PNG file."""
+        return cls.from_path(source, **kwargs)
+
+    @classmethod
+    def from_emd_folder(
+        cls,
+        folder: str | pathlib.Path,
+        *,
+        dataset_path: str | None = None,
+        **kwargs,
+    ) -> Self:
+        """Create Show3D from a folder of EMD files."""
+        return cls.from_folder(folder, file_type="emd", dataset_path=dataset_path, **kwargs)
+
+    @classmethod
+    def from_tiff_folder(cls, folder: str | pathlib.Path, **kwargs) -> Self:
+        """Create Show3D from a folder of TIFF files."""
+        return cls.from_folder(folder, file_type="tiff", **kwargs)
+
+    @classmethod
+    def from_png_folder(cls, folder: str | pathlib.Path, **kwargs) -> Self:
+        """Create Show3D from a folder of PNG files."""
+        return cls.from_folder(folder, file_type="png", **kwargs)
 
     def __init__(
         self,
@@ -211,13 +656,57 @@ class Show3D(anywidget.AnyWidget):
         show_fft: bool = False,
         show_playback: bool = False,
         show_stats: bool = True,
+        show_controls: bool = True,
         image_width_px: int = 0,
+        disabled_tools: list[str] | None = None,
+        disable_display: bool = False,
+        disable_histogram: bool = False,
+        disable_stats: bool = False,
+        disable_playback: bool = False,
+        disable_navigation: bool = False,
+        disable_view: bool = False,
+        disable_export: bool = False,
+        disable_roi: bool = False,
+        disable_profile: bool = False,
+        disable_all: bool = False,
+        hidden_tools: list[str] | None = None,
+        hide_display: bool = False,
+        hide_histogram: bool = False,
+        hide_stats: bool = False,
+        hide_playback: bool = False,
+        hide_navigation: bool = False,
+        hide_view: bool = False,
+        hide_export: bool = False,
+        hide_roi: bool = False,
+        hide_profile: bool = False,
+        hide_all: bool = False,
         buffer_size: int = 64,
         dim_label: str = "Frame",
+        use_torch: bool = False,
+        device: str | None = None,
         state=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.widget_version = resolve_widget_version()
+
+        # Optional torch GPU acceleration
+        self._use_torch = False
+        self._device = None
+        self._data_torch = None
+        if use_torch:
+            if not _HAS_TORCH:
+                raise ImportError(
+                    "use_torch=True requires PyTorch. Install it with: pip install torch"
+                )
+            self._use_torch = True
+            self._device = torch.device(
+                device or (
+                    "mps" if torch.backends.mps.is_available()
+                    else "cuda" if torch.cuda.is_available()
+                    else "cpu"
+                )
+            )
 
         # Check if data is a Dataset3d and extract metadata
         _extracted_title = None
@@ -227,11 +716,11 @@ class Show3D(anywidget.AnyWidget):
             # sampling is (z_sampling, y_sampling, x_sampling) - use y/x for pixel size
             if hasattr(data, "sampling") and len(data.sampling) >= 3:
                 sampling_val = float(data.sampling[1])
-                # pixel_size is in nm — convert if units are Å
+                # pixel_size is in Å — convert if units are nm
                 if hasattr(data, "units"):
                     units = list(data.units)
-                    if units[1] in ("Å", "angstrom", "A"):
-                        sampling_val = sampling_val / 10  # Å → nm
+                    if units[1] in ("nm", "nanometer"):
+                        sampling_val = sampling_val * 10  # nm → Å
                 _extracted_pixel_size = sampling_val
             data = data.array
 
@@ -245,6 +734,10 @@ class Show3D(anywidget.AnyWidget):
         # Store data as float32 numpy array
         self._data = data.astype(np.float32)
 
+        # Create GPU copy if torch acceleration enabled
+        if self._use_torch:
+            self._data_torch = torch.from_numpy(self._data).to(self._device)
+
         # Dimensions
         self.n_slices = int(self._data.shape[0])
         self.height = int(self._data.shape[1])
@@ -253,10 +746,16 @@ class Show3D(anywidget.AnyWidget):
         # Color range (global across all frames)
         self._vmin_user = vmin
         self._vmax_user = vmax
-        self._vmin = vmin if vmin is not None else float(self._data.min())
-        self._vmax = vmax if vmax is not None else float(self._data.max())
-        self.data_min = float(self._data.min())
-        self.data_max = float(self._data.max())
+        if self._use_torch:
+            self._vmin = vmin if vmin is not None else float(self._data_torch.min().item())
+            self._vmax = vmax if vmax is not None else float(self._data_torch.max().item())
+            self.data_min = float(self._data_torch.min().item())
+            self.data_max = float(self._data_torch.max().item())
+        else:
+            self._vmin = vmin if vmin is not None else float(self._data.min())
+            self._vmax = vmax if vmax is not None else float(self._data.max())
+            self.data_min = float(self._data.min())
+            self.data_max = float(self._data.max())
 
         # Labels
         if labels is not None:
@@ -290,7 +789,34 @@ class Show3D(anywidget.AnyWidget):
         self.show_fft = show_fft
         self.show_playback = show_playback
         self.show_stats = show_stats
+        self.show_controls = show_controls
         self.image_width_px = image_width_px
+        self.disabled_tools = self._build_disabled_tools(
+            disabled_tools=disabled_tools,
+            disable_display=disable_display,
+            disable_histogram=disable_histogram,
+            disable_stats=disable_stats,
+            disable_playback=disable_playback,
+            disable_navigation=disable_navigation,
+            disable_view=disable_view,
+            disable_export=disable_export,
+            disable_roi=disable_roi,
+            disable_profile=disable_profile,
+            disable_all=disable_all,
+        )
+        self.hidden_tools = self._build_hidden_tools(
+            hidden_tools=hidden_tools,
+            hide_display=hide_display,
+            hide_histogram=hide_histogram,
+            hide_stats=hide_stats,
+            hide_playback=hide_playback,
+            hide_navigation=hide_navigation,
+            hide_view=hide_view,
+            hide_export=hide_export,
+            hide_roi=hide_roi,
+            hide_profile=hide_profile,
+            hide_all=hide_all,
+        )
         frame_bytes = self.height * self.width * 4  # float32
         max_buffer_bytes = 64 * 1024 * 1024  # 64 MB cap per transfer
         min_buffer_frames = 8  # guarantee at least 8 frames for large images
@@ -308,6 +834,7 @@ class Show3D(anywidget.AnyWidget):
         )
         self.observe(self._on_gif_export, names=["_gif_export_requested"])
         self.observe(self._on_zip_export, names=["_zip_export_requested"])
+        self.observe(self._on_bundle_export, names=["_bundle_export_requested"])
         self.observe(self._on_playing_change, names=["playing"])
         self.observe(self._on_prefetch, names=["_prefetch_request"])
 
@@ -316,7 +843,12 @@ class Show3D(anywidget.AnyWidget):
 
         if state is not None:
             if isinstance(state, (str, pathlib.Path)):
-                state = json.loads(pathlib.Path(state).read_text())
+                state = unwrap_state_payload(
+                    json.loads(pathlib.Path(state).read_text()),
+                    require_envelope=True,
+                )
+            else:
+                state = unwrap_state_payload(state)
             self.load_state_dict(state)
 
     def set_image(self, data, labels=None):
@@ -327,11 +859,17 @@ class Show3D(anywidget.AnyWidget):
         if data.ndim != 3:
             raise ValueError(f"Expected 3D array, got {data.ndim}D")
         self._data = data.astype(np.float32)
+        if self._use_torch:
+            self._data_torch = torch.from_numpy(self._data).to(self._device)
         self.n_slices = int(data.shape[0])
         self.height = int(data.shape[1])
         self.width = int(data.shape[2])
-        self.data_min = float(self._data.min())
-        self.data_max = float(self._data.max())
+        if self._use_torch:
+            self.data_min = float(self._data_torch.min().item())
+            self.data_max = float(self._data_torch.max().item())
+        else:
+            self.data_min = float(self._data.min())
+            self.data_max = float(self._data.max())
         self._vmin = self._vmin_user if self._vmin_user is not None else self.data_min
         self._vmax = self._vmax_user if self._vmax_user is not None else self.data_max
         if labels is not None:
@@ -354,8 +892,11 @@ class Show3D(anywidget.AnyWidget):
             "percentile_low": self.percentile_low,
             "percentile_high": self.percentile_high,
             "show_stats": self.show_stats,
+            "show_controls": self.show_controls,
             "show_fft": self.show_fft,
             "show_playback": self.show_playback,
+            "disabled_tools": self.disabled_tools,
+            "hidden_tools": self.hidden_tools,
             "pixel_size": self.pixel_size,
             "scale_bar_visible": self.scale_bar_visible,
             "image_width_px": self.image_width_px,
@@ -370,17 +911,23 @@ class Show3D(anywidget.AnyWidget):
             "roi_active": self.roi_active,
             "roi_list": self.roi_list,
             "roi_selected_idx": self.roi_selected_idx,
+            "roi_focus_dim": self.roi_focus_dim,
             "profile_line": self.profile_line,
             "profile_width": self.profile_width,
             "dim_label": self.dim_label,
             "timestamp_unit": self.timestamp_unit,
+            "use_torch": self._use_torch,
+            "device": str(self._device) if self._device is not None else None,
         }
 
     def save(self, path: str):
-        pathlib.Path(path).write_text(json.dumps(self.state_dict(), indent=2))
+        save_state_file(path, "Show3D", self.state_dict())
 
     def load_state_dict(self, state):
+        _skip = {"use_torch", "device"}
         for key, val in state.items():
+            if key in _skip:
+                continue
             if hasattr(self, key):
                 setattr(self, key, val)
 
@@ -388,7 +935,11 @@ class Show3D(anywidget.AnyWidget):
         lines = [self.title or "Show3D", "═" * 32]
         lines.append(f"Stack:    {self.n_slices}×{self.height}×{self.width}")
         if self.pixel_size > 0:
-            lines[-1] += f" ({self.pixel_size:.2f} nm/px)"
+            ps = self.pixel_size
+            if ps >= 10:
+                lines[-1] += f" ({ps / 10:.2f} nm/px)"
+            else:
+                lines[-1] += f" ({ps:.2f} Å/px)"
         lines.append(f"Frame:    {self.slice_idx}/{self.n_slices - 1}")
         if self.labels and self.slice_idx < len(self.labels):
             lines[-1] += f" [{self.labels[self.slice_idx]}]"
@@ -402,6 +953,10 @@ class Show3D(anywidget.AnyWidget):
         if self.show_fft:
             display += " | FFT"
         lines.append(f"Display:  {display}")
+        if self.disabled_tools:
+            lines.append(f"Locked:   {', '.join(self.disabled_tools)}")
+        if self.hidden_tools:
+            lines.append(f"Hidden:   {', '.join(self.hidden_tools)}")
         lines.append(f"Playback: {self.fps} fps | loop={'on' if self.loop else 'off'} | reverse={'on' if self.reverse else 'off'} | boomerang={'on' if self.boomerang else 'off'}")
         if self.loop_start > 0 or self.loop_end >= 0:
             end = self.loop_end if self.loop_end >= 0 else self.n_slices - 1
@@ -440,10 +995,17 @@ class Show3D(anywidget.AnyWidget):
         """Update frame, stats, and all derived data. Uses hold_sync for batched transfer."""
         frame = self._data[self.slice_idx]
         with self.hold_sync():
-            self.stats_mean = float(frame.mean())
-            self.stats_min = float(frame.min())
-            self.stats_max = float(frame.max())
-            self.stats_std = float(frame.std())
+            if self._use_torch:
+                t = self._data_torch[self.slice_idx]
+                self.stats_mean = float(t.mean().item())
+                self.stats_min = float(t.min().item())
+                self.stats_max = float(t.max().item())
+                self.stats_std = float(t.std().item())
+            else:
+                self.stats_mean = float(frame.mean())
+                self.stats_min = float(frame.min())
+                self.stats_max = float(frame.max())
+                self.stats_std = float(frame.std())
             if self.timestamps and self.slice_idx < len(self.timestamps):
                 self.current_timestamp = self.timestamps[self.slice_idx]
             if self.roi_active:
@@ -479,16 +1041,30 @@ class Show3D(anywidget.AnyWidget):
             return
         roi = self.roi_list[idx]
         mask = self._roi_mask(roi)
-        region = frame[mask]
-        if region.size > 0:
-            self.roi_stats = {
-                "mean": float(region.mean()),
-                "min": float(region.min()),
-                "max": float(region.max()),
-                "std": float(region.std()),
-            }
+        if self._use_torch:
+            mask_t = torch.from_numpy(mask).to(self._device)
+            t = self._data_torch[self.slice_idx]
+            region = t[mask_t]
+            if region.numel() > 0:
+                self.roi_stats = {
+                    "mean": float(region.mean().item()),
+                    "min": float(region.min().item()),
+                    "max": float(region.max().item()),
+                    "std": float(region.std().item()),
+                }
+            else:
+                self.roi_stats = {}
         else:
-            self.roi_stats = {}
+            region = frame[mask]
+            if region.size > 0:
+                self.roi_stats = {
+                    "mean": float(region.mean()),
+                    "min": float(region.min()),
+                    "max": float(region.max()),
+                    "std": float(region.std()),
+                }
+            else:
+                self.roi_stats = {}
 
     def _send_buffer(self, start_idx: int):
         end_idx = start_idx + self._buffer_size
@@ -538,7 +1114,13 @@ class Show3D(anywidget.AnyWidget):
         if mask.sum() == 0:
             self.roi_plot_data = b""
             return
-        means = np.array([float(self._data[i][mask].mean()) for i in range(self.n_slices)], dtype=np.float32)
+        if self._use_torch:
+            mask_t = torch.from_numpy(mask).to(self._device)
+            # Vectorized: (n_slices, n_masked_pixels) -> mean per frame
+            masked = self._data_torch[:, mask_t]
+            means = masked.mean(dim=1).cpu().numpy().astype(np.float32)
+        else:
+            means = np.array([float(self._data[i][mask].mean()) for i in range(self.n_slices)], dtype=np.float32)
         self.roi_plot_data = means.tobytes()
 
     # =========================================================================
@@ -578,23 +1160,27 @@ class Show3D(anywidget.AnyWidget):
 
     def _upsert_selected_roi(self, updates: dict):
         rois = list(self.roi_list)
+        color_cycle = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"]
+        defaults = {
+            "shape": "circle",
+            "row": int(self.height // 2),
+            "col": int(self.width // 2),
+            "radius": 10,
+            "radius_inner": 5,
+            "width": 20,
+            "height": 20,
+            "line_width": 2,
+            "highlight": False,
+            "visible": True,
+            "locked": False,
+        }
         if self.roi_selected_idx >= 0 and self.roi_selected_idx < len(rois):
-            rois[self.roi_selected_idx] = {**rois[self.roi_selected_idx], **updates}
+            current = {**defaults, **rois[self.roi_selected_idx]}
+            if not current.get("color"):
+                current["color"] = color_cycle[self.roi_selected_idx % len(color_cycle)]
+            rois[self.roi_selected_idx] = {**current, **updates}
         else:
-            color_cycle = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"]
-            defaults = {
-                "shape": "circle",
-                "row": int(self.height // 2),
-                "col": int(self.width // 2),
-                "radius": 10,
-                "radius_inner": 5,
-                "width": 20,
-                "height": 20,
-                "color": color_cycle[len(rois) % len(color_cycle)],
-                "line_width": 2,
-                "highlight": False,
-            }
-            rois.append({**defaults, **updates})
+            rois.append({**defaults, "color": color_cycle[len(rois) % len(color_cycle)], **updates})
             self.roi_selected_idx = len(rois) - 1
         self.roi_list = rois
         self.roi_active = True
@@ -613,6 +1199,40 @@ class Show3D(anywidget.AnyWidget):
             self.roi_list = []
             self.roi_selected_idx = -1
             self.roi_active = False
+        return self
+
+    def delete_selected_roi(self) -> Self:
+        """Delete the currently selected ROI."""
+        idx = int(self.roi_selected_idx)
+        if idx < 0 or idx >= len(self.roi_list):
+            return self
+        with self.hold_sync():
+            rois = [roi for i, roi in enumerate(self.roi_list) if i != idx]
+            self.roi_list = rois
+            self.roi_selected_idx = min(idx, len(rois) - 1) if rois else -1
+            if not rois:
+                self.roi_active = False
+        return self
+
+    def duplicate_selected_roi(self, row_offset: int = 3, col_offset: int = 3) -> Self:
+        """Duplicate selected ROI with a small offset and auto-assigned color."""
+        idx = int(self.roi_selected_idx)
+        if idx < 0 or idx >= len(self.roi_list):
+            return self
+        color_cycle = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"]
+        src = dict(self.roi_list[idx])
+        with self.hold_sync():
+            rois = list(self.roi_list)
+            src["row"] = int(np.clip(float(src.get("row", self.height // 2)) + row_offset, 0, self.height - 1))
+            src["col"] = int(np.clip(float(src.get("col", self.width // 2)) + col_offset, 0, self.width - 1))
+            src["color"] = color_cycle[len(rois) % len(color_cycle)]
+            src["highlight"] = False
+            src["visible"] = True
+            src["locked"] = False
+            rois.append(src)
+            self.roi_list = rois
+            self.roi_selected_idx = len(rois) - 1
+            self.roi_active = True
         return self
 
     def set_roi(self, row: int, col: int, radius: int = 10) -> Self:
@@ -726,7 +1346,7 @@ class Show3D(anywidget.AnyWidget):
 
     @property
     def profile_distance(self):
-        """Get total distance of the profile line in calibrated units (nm or px)."""
+        """Get total distance of the profile line in calibrated units (Å or px)."""
         if len(self.profile_line) < 2:
             return None
         p0, p1 = self.profile_line
@@ -743,6 +1363,27 @@ class Show3D(anywidget.AnyWidget):
         self._gif_export_requested = False
         self._generate_gif()
 
+    def _normalize_frames_torch(self, start: int, end: int) -> np.ndarray:
+        """Batch-normalize frames [start, end] on GPU. Returns (N, H, W) uint8 numpy."""
+        frames = self._data_torch[start : end + 1].clone()
+        if self.log_scale:
+            frames = torch.log1p(torch.clamp(frames, min=0))
+        if self.auto_contrast:
+            flat = frames.reshape(-1).float()
+            vmin = float(torch.quantile(flat, self.percentile_low / 100.0).item())
+            vmax = float(torch.quantile(flat, self.percentile_high / 100.0).item())
+        else:
+            vmin = self._vmin
+            vmax = self._vmax
+            if self.log_scale:
+                vmin = float(np.log1p(max(vmin, 0)))
+                vmax = float(np.log1p(max(vmax, 0)))
+        if vmax > vmin:
+            normalized = torch.clamp((frames - vmin) / (vmax - vmin) * 255.0, 0, 255).to(torch.uint8)
+        else:
+            normalized = torch.zeros_like(frames, dtype=torch.uint8)
+        return normalized.cpu().numpy()
+
     def _generate_gif(self):
         import io
 
@@ -757,14 +1398,24 @@ class Show3D(anywidget.AnyWidget):
         duration_ms = int(1000 / max(0.1, self.fps))
 
         pil_frames = []
-        for i in range(start, end + 1):
-            frame = self._data[i]
-            normalized = self._normalize_frame(frame)
-            rgba = cmap_fn(normalized / 255.0)
-            rgb = (rgba[:, :, :3] * 255).astype(np.uint8)
-            pil_frames.append(Image.fromarray(rgb))
+        if self._use_torch:
+            normalized_all = self._normalize_frames_torch(start, end)
+            for i in range(normalized_all.shape[0]):
+                rgba = cmap_fn(normalized_all[i] / 255.0)
+                rgb = (rgba[:, :, :3] * 255).astype(np.uint8)
+                pil_frames.append(Image.fromarray(rgb))
+        else:
+            for i in range(start, end + 1):
+                frame = self._data[i]
+                normalized = self._normalize_frame(frame)
+                rgba = cmap_fn(normalized / 255.0)
+                rgb = (rgba[:, :, :3] * 255).astype(np.uint8)
+                pil_frames.append(Image.fromarray(rgb))
 
         if not pil_frames:
+            with self.hold_sync():
+                self._gif_data = b""
+                self._gif_metadata_json = ""
             return
 
         buf = io.BytesIO()
@@ -776,7 +1427,24 @@ class Show3D(anywidget.AnyWidget):
             duration=duration_ms,
             loop=0,
         )
-        self._gif_data = buf.getvalue()
+        metadata = {
+            **build_json_header("Show3D"),
+            "format": "gif",
+            "export_kind": "animated_frames",
+            "frame_range": {"start": int(start), "end": int(end)},
+            "n_frames": int(len(pil_frames)),
+            "duration_ms": int(duration_ms),
+            "display": {
+                "cmap": self.cmap,
+                "log_scale": bool(self.log_scale),
+                "auto_contrast": bool(self.auto_contrast),
+                "percentile_low": float(self.percentile_low),
+                "percentile_high": float(self.percentile_high),
+            },
+        }
+        with self.hold_sync():
+            self._gif_metadata_json = json.dumps(metadata, indent=2)
+            self._gif_data = buf.getvalue()
 
     def _on_zip_export(self, change=None):
         if not self._zip_export_requested:
@@ -799,14 +1467,160 @@ class Show3D(anywidget.AnyWidget):
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for i in range(start, end + 1):
-                frame = self._data[i]
-                normalized = self._normalize_frame(frame)
-                rgba = cmap_fn(normalized / 255.0)
-                rgb = (rgba[:, :, :3] * 255).astype(np.uint8)
-                img = Image.fromarray(rgb)
-                img_buf = io.BytesIO()
-                img.save(img_buf, format="PNG")
-                label = self.labels[i] if self.labels else str(i).zfill(4)
-                zf.writestr(f"frame_{label}.png", img_buf.getvalue())
+            metadata = {
+                **build_json_header("Show3D"),
+                "format": "zip",
+                "export_kind": "png_frames",
+                "frame_range": {"start": int(start), "end": int(end)},
+                "n_frames": int(end - start + 1),
+                "display": {"cmap": self.cmap, "log_scale": bool(self.log_scale)},
+            }
+            zf.writestr("metadata.json", json.dumps(metadata, indent=2))
+            if self._use_torch:
+                normalized_all = self._normalize_frames_torch(start, end)
+                for j in range(normalized_all.shape[0]):
+                    i = start + j
+                    rgba = cmap_fn(normalized_all[j] / 255.0)
+                    rgb = (rgba[:, :, :3] * 255).astype(np.uint8)
+                    img = Image.fromarray(rgb)
+                    img_buf = io.BytesIO()
+                    img.save(img_buf, format="PNG")
+                    label = self.labels[i] if self.labels else str(i).zfill(4)
+                    zf.writestr(f"frame_{label}.png", img_buf.getvalue())
+            else:
+                for i in range(start, end + 1):
+                    frame = self._data[i]
+                    normalized = self._normalize_frame(frame)
+                    rgba = cmap_fn(normalized / 255.0)
+                    rgb = (rgba[:, :, :3] * 255).astype(np.uint8)
+                    img = Image.fromarray(rgb)
+                    img_buf = io.BytesIO()
+                    img.save(img_buf, format="PNG")
+                    label = self.labels[i] if self.labels else str(i).zfill(4)
+                    zf.writestr(f"frame_{label}.png", img_buf.getvalue())
         self._zip_data = buf.getvalue()
+
+    def _on_bundle_export(self, change=None):
+        if not self._bundle_export_requested:
+            return
+        self._bundle_export_requested = False
+        self._generate_bundle()
+
+    def _roi_timeseries_csv(self) -> str:
+        import csv
+        import io
+
+        rois = list(self.roi_list)
+        masks = [self._roi_mask(roi) for roi in rois]
+        out = io.StringIO()
+        writer = csv.writer(out)
+        header = ["frame_index", "label"]
+        if self.timestamps and len(self.timestamps) >= self.n_slices:
+            header.append(f"timestamp_{self.timestamp_unit or 'value'}")
+        header.extend([f"roi_{i + 1}_mean" for i in range(len(rois))])
+        writer.writerow(header)
+
+        if self._use_torch:
+            # Vectorized per-ROI means across all frames
+            masks_t = [torch.from_numpy(m).to(self._device) for m in masks]
+            roi_means = []
+            for mask_t in masks_t:
+                masked = self._data_torch[:, mask_t]  # (n_slices, n_pixels)
+                if masked.shape[1] > 0:
+                    roi_means.append(masked.mean(dim=1).cpu().numpy())
+                else:
+                    roi_means.append(np.full(self.n_slices, np.nan))
+            for i in range(self.n_slices):
+                row = [i, self.labels[i] if i < len(self.labels) else str(i)]
+                if self.timestamps and len(self.timestamps) >= self.n_slices:
+                    row.append(float(self.timestamps[i]))
+                for rm in roi_means:
+                    val = rm[i]
+                    row.append(float(val) if not np.isnan(val) else "")
+                writer.writerow(row)
+        else:
+            for i in range(self.n_slices):
+                row = [i, self.labels[i] if i < len(self.labels) else str(i)]
+                if self.timestamps and len(self.timestamps) >= self.n_slices:
+                    row.append(float(self.timestamps[i]))
+                frame = self._data[i]
+                for mask in masks:
+                    region = frame[mask]
+                    row.append(float(region.mean()) if region.size > 0 else "")
+                writer.writerow(row)
+        return out.getvalue()
+
+    def _generate_bundle(self):
+        import io
+        import zipfile
+
+        from matplotlib import colormaps
+        from PIL import Image
+
+        idx = int(np.clip(self.slice_idx, 0, self.n_slices - 1))
+        cmap_fn = colormaps.get_cmap(self.cmap)
+        frame = self._data[idx]
+        normalized = self._normalize_frame(frame)
+        rgba = cmap_fn(normalized / 255.0)
+        rgb = (rgba[:, :, :3] * 255).astype(np.uint8)
+        img = Image.fromarray(rgb)
+        img_buf = io.BytesIO()
+        img.save(img_buf, format="PNG")
+
+        state_payload = {**build_json_header("Show3D"), "state": self.state_dict()}
+        csv_text = self._roi_timeseries_csv()
+        label = self.labels[idx] if idx < len(self.labels) else str(idx)
+        safe_label = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(label)).strip("_") or str(idx)
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(f"frame_{safe_label}.png", img_buf.getvalue())
+            zf.writestr("roi_timeseries.csv", csv_text)
+            zf.writestr("state.json", json.dumps(state_payload, indent=2))
+        self._bundle_data = buf.getvalue()
+
+
+    def save_image(self, path: str | pathlib.Path, *, frame_idx: int | None = None,
+                   format: str | None = None, dpi: int = 150) -> pathlib.Path:
+        """Save a single frame as PNG, PDF, or TIFF.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Output file path.
+        frame_idx : int, optional
+            Frame index to export. Defaults to current slice_idx.
+        format : str, optional
+            'png', 'pdf', or 'tiff'. If omitted, inferred from file extension.
+        dpi : int, default 150
+            Output DPI metadata.
+
+        Returns
+        -------
+        pathlib.Path
+            The written file path.
+        """
+        from matplotlib import colormaps
+        from PIL import Image
+
+        path = pathlib.Path(path)
+        fmt = (format or path.suffix.lstrip(".").lower() or "png").lower()
+        if fmt not in ("png", "pdf", "tiff", "tif"):
+            raise ValueError(f"Unsupported format: {fmt!r}. Use 'png', 'pdf', or 'tiff'.")
+
+        idx = frame_idx if frame_idx is not None else self.slice_idx
+        if idx < 0 or idx >= self.n_slices:
+            raise IndexError(f"Frame index {idx} out of range [0, {self.n_slices})")
+
+        frame = self._data[idx]
+        normalized = self._normalize_frame(frame)
+        cmap_fn = colormaps.get_cmap(self.cmap)
+        rgba = (cmap_fn(normalized / 255.0) * 255).astype(np.uint8)
+
+        img = Image.fromarray(rgba)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(str(path), dpi=(dpi, dpi))
+        return path
+
+
+bind_tool_runtime_api(Show3D, "Show3D")

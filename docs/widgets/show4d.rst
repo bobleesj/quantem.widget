@@ -27,6 +27,29 @@ Features
 - **Scale bars** -- Calibrated for both navigation and signal panels
 - **Snap-to-peak** -- Click near a feature and snap to the local maximum
 - **Custom nav image** -- Override the default mean image
+- **Quick view presets** -- 3 save/load slots (UI buttons or keyboard ``1/2/3``, ``Shift+1/2/3``)
+
+Control Groups
+--------------
+
+.. code-block:: python
+
+   # Lock groups (visible but non-interactive)
+   w = Show4D(
+       data,
+       disable_roi=True,
+       disable_navigation=True,
+       disable_playback=True,
+       disable_fft=True,
+   )
+
+   # Hide groups entirely
+   w = Show4D(
+       data,
+       hide_histogram=True,
+       hide_profile=True,
+       hidden_tools=["export"],
+   )
 
 Methods
 -------
@@ -50,13 +73,33 @@ State Persistence
 .. code-block:: python
 
    w = Show4D(data, cmap="viridis", log_scale=True)
+   w.set_view_preset("1", {
+       "navColormap": "viridis",
+       "sigColormap": "plasma",
+       "navScaleMode": "linear",
+       "sigScaleMode": "log",
+       "navVminPct": 5,
+       "navVmaxPct": 95,
+       "sigVminPct": 10,
+       "sigVmaxPct": 90,
+       "roiMode": "circle",
+       "profileActive": True,
+   })
 
    w.summary()          # Print human-readable state
-   w.state_dict()       # Get all settings as a dict
-   w.save("state.json") # Save to JSON file
+   state = w.state_dict()  # Snapshot full state
+   w.save("state.json") # Save versioned envelope JSON file
 
-   # Restore from file or dict
-   w2 = Show4D(data, state="state.json")
+   # Preset helpers
+   w.list_view_preset_slots()  # ('1',)
+   w.get_view_preset("1")
+   w.clear_view_preset("1")
+   w.reset_view_presets()
+
+   # Restore in three ways
+   w.load_state_dict(state)              # 1) apply dict in-place
+   w2 = Show4D(data, state="state.json") # 2) from saved file
+   w3 = Show4D(data, state=state)        # 3) from dict at init
 
 Examples
 --------

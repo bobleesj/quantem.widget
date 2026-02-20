@@ -339,13 +339,13 @@ def test_showcomplex_options():
         cmap="viridis",
         log_scale=True,
         auto_contrast=True,
-        pixel_size_angstrom=1.5,
+        pixel_size=1.5,
     )
     assert widget.title == "Exit Wave"
     assert widget.cmap == "viridis"
     assert widget.log_scale is True
     assert widget.auto_contrast is True
-    assert widget.pixel_size_angstrom == pytest.approx(1.5)
+    assert widget.pixel_size == pytest.approx(1.5)
 
 
 def test_showcomplex_default_options():
@@ -356,7 +356,7 @@ def test_showcomplex_default_options():
     assert widget.cmap == "inferno"
     assert widget.log_scale is False
     assert widget.auto_contrast is False
-    assert widget.pixel_size_angstrom == 0.0
+    assert widget.pixel_size == 0.0
     assert widget.show_stats is True
     assert widget.show_controls is True
     assert widget.show_fft is False
@@ -579,9 +579,9 @@ def test_showcomplex_state_dict_completeness():
     state = widget.state_dict()
     expected_keys = {
         "display_mode", "title", "cmap", "log_scale", "auto_contrast",
-        "percentile_low", "percentile_high", "pixel_size_angstrom",
+        "percentile_low", "percentile_high", "pixel_size",
         "scale_bar_visible", "show_fft", "show_stats", "show_controls",
-        "image_width_px",
+        "image_width_px", "disabled_tools", "hidden_tools",
     }
     assert set(state.keys()) == expected_keys
 
@@ -598,7 +598,7 @@ def test_showcomplex_state_dict_all_options():
         auto_contrast=True,
         percentile_low=5.0,
         percentile_high=95.0,
-        pixel_size_angstrom=2.5,
+        pixel_size=2.5,
         scale_bar_visible=False,
         show_fft=True,
         show_stats=False,
@@ -614,7 +614,7 @@ def test_showcomplex_state_dict_all_options():
     assert w2.auto_contrast is True
     assert w2.percentile_low == pytest.approx(5.0)
     assert w2.percentile_high == pytest.approx(95.0)
-    assert w2.pixel_size_angstrom == pytest.approx(2.5)
+    assert w2.pixel_size == pytest.approx(2.5)
     assert w2.scale_bar_visible is False
     assert w2.show_fft is True
     assert w2.show_stats is False
@@ -641,8 +641,11 @@ def test_showcomplex_save_file_is_valid_json(tmp_path):
     w.save(path)
     with open(path) as f:
         state = json.load(f)
-    assert state["display_mode"] == "phase"
-    assert state["cmap"] == "viridis"
+    assert state["metadata_version"] == "1.0"
+    assert state["widget_name"] == "ShowComplex2D"
+    assert isinstance(state["widget_version"], str)
+    assert state["state"]["display_mode"] == "phase"
+    assert state["state"]["cmap"] == "viridis"
 
 
 def test_showcomplex_load_state_partial():
@@ -683,7 +686,7 @@ def test_showcomplex_summary(capsys):
 def test_showcomplex_summary_with_pixel_size(capsys):
     """Summary shows pixel size."""
     data = (np.random.rand(16, 16) + 1j * np.random.rand(16, 16)).astype(np.complex64)
-    widget = ShowComplex2D(data, pixel_size_angstrom=1.5)
+    widget = ShowComplex2D(data, pixel_size=1.5)
     widget.summary()
     captured = capsys.readouterr()
     assert "1.50" in captured.out
@@ -692,7 +695,7 @@ def test_showcomplex_summary_with_pixel_size(capsys):
 def test_showcomplex_summary_nm_conversion(capsys):
     """Summary converts large pixel sizes to nm."""
     data = (np.random.rand(16, 16) + 1j * np.random.rand(16, 16)).astype(np.complex64)
-    widget = ShowComplex2D(data, pixel_size_angstrom=15.0)
+    widget = ShowComplex2D(data, pixel_size=15.0)
     widget.summary()
     captured = capsys.readouterr()
     assert "nm" in captured.out
@@ -730,7 +733,7 @@ def test_showcomplex_repr():
 def test_showcomplex_repr_with_pixel_size():
     """Repr shows pixel size."""
     data = (np.random.rand(8, 8) + 1j * np.random.rand(8, 8)).astype(np.complex64)
-    w = ShowComplex2D(data, pixel_size_angstrom=2.0)
+    w = ShowComplex2D(data, pixel_size=2.0)
     r = repr(w)
     assert "2.00" in r
 
@@ -812,9 +815,9 @@ def test_showcomplex_modify_pixel_size():
     """pixel_size can be changed after construction."""
     data = (np.random.rand(8, 8) + 1j * np.random.rand(8, 8)).astype(np.complex64)
     w = ShowComplex2D(data)
-    assert w.pixel_size_angstrom == 0.0
-    w.pixel_size_angstrom = 2.5
-    assert w.pixel_size_angstrom == pytest.approx(2.5)
+    assert w.pixel_size == 0.0
+    w.pixel_size = 2.5
+    assert w.pixel_size == pytest.approx(2.5)
 
 
 # =========================================================================
@@ -839,12 +842,12 @@ def test_showcomplex_dataset_extracts_title():
     assert w.title == "Ptycho Object"
 
 
-def test_showcomplex_dataset_extracts_pixel_size_angstrom():
+def test_showcomplex_dataset_extracts_pixel_size():
     """Dataset pixel size in Å is auto-extracted."""
     arr = (np.random.rand(16, 16) + 1j * np.random.rand(16, 16)).astype(np.complex64)
     ds = MockDataset2d(arr, name="Test", sampling=(1.5, 1.5), units=("Å", "Å"))
     w = ShowComplex2D(ds)
-    assert w.pixel_size_angstrom == pytest.approx(1.5)
+    assert w.pixel_size == pytest.approx(1.5)
 
 
 def test_showcomplex_dataset_nm_conversion():
@@ -852,16 +855,16 @@ def test_showcomplex_dataset_nm_conversion():
     arr = (np.random.rand(16, 16) + 1j * np.random.rand(16, 16)).astype(np.complex64)
     ds = MockDataset2d(arr, name="Test", sampling=(0.2, 0.2), units=("nm", "nm"))
     w = ShowComplex2D(ds)
-    assert w.pixel_size_angstrom == pytest.approx(2.0)  # 0.2 nm = 2.0 Å
+    assert w.pixel_size == pytest.approx(2.0)  # 0.2 nm = 2.0 Å
 
 
 def test_showcomplex_dataset_explicit_override():
     """Explicit parameters override dataset metadata."""
     arr = (np.random.rand(16, 16) + 1j * np.random.rand(16, 16)).astype(np.complex64)
     ds = MockDataset2d(arr, name="Auto Title", sampling=(2.0, 2.0), units=("Å", "Å"))
-    w = ShowComplex2D(ds, title="My Title", pixel_size_angstrom=3.0)
+    w = ShowComplex2D(ds, title="My Title", pixel_size=3.0)
     assert w.title == "My Title"
-    assert w.pixel_size_angstrom == pytest.approx(3.0)
+    assert w.pixel_size == pytest.approx(3.0)
 
 
 def test_showcomplex_set_image_dataset():
@@ -873,3 +876,94 @@ def test_showcomplex_set_image_dataset():
     w.set_image(ds)
     assert w.height == 32
     assert w.width == 32
+
+
+# =========================================================================
+# Tool visibility / locking — disabled_tools and hidden_tools
+# =========================================================================
+
+
+@pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
+def test_showcomplex_tool_lists_default_empty(trait_name):
+    data = np.random.rand(16, 16) + 1j * np.random.rand(16, 16)
+    w = ShowComplex2D(data.astype(np.complex64))
+    assert getattr(w, trait_name) == []
+
+
+@pytest.mark.parametrize(
+    ("trait_name", "ctor_kwargs", "expected"),
+    [
+        ("disabled_tools", {"disabled_tools": ["display", "Histogram"]}, ["display", "histogram"]),
+        ("hidden_tools", {"hidden_tools": ["display", "Histogram"]}, ["display", "histogram"]),
+        ("disabled_tools", {"disable_display": True, "disable_fft": True}, ["display", "fft"]),
+        ("hidden_tools", {"hide_display": True, "hide_fft": True}, ["display", "fft"]),
+        ("disabled_tools", {"disable_all": True}, ["all"]),
+        ("hidden_tools", {"hide_all": True}, ["all"]),
+    ],
+)
+def test_showcomplex_tool_lists_constructor_behavior(trait_name, ctor_kwargs, expected):
+    data = np.random.rand(16, 16) + 1j * np.random.rand(16, 16)
+    w = ShowComplex2D(data.astype(np.complex64), **ctor_kwargs)
+    assert getattr(w, trait_name) == expected
+
+
+@pytest.mark.parametrize("kwargs", [{"disabled_tools": ["not_real"]}, {"hidden_tools": ["not_real"]}])
+def test_showcomplex_tool_lists_unknown_raises(kwargs):
+    data = np.random.rand(16, 16) + 1j * np.random.rand(16, 16)
+    with pytest.raises(ValueError, match="Unknown tool group"):
+        ShowComplex2D(data.astype(np.complex64), **kwargs)
+
+
+@pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
+def test_showcomplex_tool_lists_normalizes(trait_name):
+    data = np.random.rand(16, 16) + 1j * np.random.rand(16, 16)
+    w = ShowComplex2D(data.astype(np.complex64))
+    setattr(w, trait_name, ["DISPLAY", "display", "fft"])
+    assert getattr(w, trait_name) == ["display", "fft"]
+
+
+# ── save_image ───────────────────────────────────────────────────────────
+
+
+def test_showcomplex_save_image_amplitude(tmp_path):
+    data = (np.random.rand(32, 32) + 1j * np.random.rand(32, 32)).astype(np.complex64)
+    w = ShowComplex2D(data, display_mode="amplitude")
+    out = w.save_image(tmp_path / "amp.png")
+    assert out.exists()
+    from PIL import Image
+    img = Image.open(out)
+    assert img.size == (32, 32)
+
+
+def test_showcomplex_save_image_phase(tmp_path):
+    data = (np.random.rand(32, 32) + 1j * np.random.rand(32, 32)).astype(np.complex64)
+    w = ShowComplex2D(data)
+    out = w.save_image(tmp_path / "phase.png", display_mode="phase")
+    assert out.exists()
+
+
+def test_showcomplex_save_image_hsv(tmp_path):
+    data = (np.random.rand(32, 32) + 1j * np.random.rand(32, 32)).astype(np.complex64)
+    w = ShowComplex2D(data)
+    out = w.save_image(tmp_path / "hsv.png", display_mode="hsv")
+    assert out.exists()
+
+
+def test_showcomplex_save_image_pdf(tmp_path):
+    data = (np.random.rand(16, 16) + 1j * np.random.rand(16, 16)).astype(np.complex64)
+    w = ShowComplex2D(data)
+    out = w.save_image(tmp_path / "out.pdf")
+    assert out.exists()
+
+
+def test_showcomplex_save_image_bad_format(tmp_path):
+    data = (np.random.rand(16, 16) + 1j * np.random.rand(16, 16)).astype(np.complex64)
+    w = ShowComplex2D(data)
+    with pytest.raises(ValueError, match="Unsupported format"):
+        w.save_image(tmp_path / "out.bmp")
+
+
+def test_showcomplex_widget_version_is_set():
+    data = (np.random.rand(8, 8) + 1j * np.random.rand(8, 8)).astype(np.complex64)
+    w = ShowComplex2D(data)
+    assert w.widget_version != "unknown"

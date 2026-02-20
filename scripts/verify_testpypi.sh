@@ -63,22 +63,32 @@ pip install -q jupyterlab
 
 echo "==> Verifying imports and JS bundles..."
 python -c "
-from quantem.widget import Show2D, Show3D, Show3DVolume, Show4DSTEM, Clicker
+from quantem.widget import (
+    Show1D, Show2D, Show3D, Show3DVolume, Show4D, Show4DSTEM,
+    ShowComplex2D, Mark2D, Edit2D, Align2D, Bin, Folder, Merge4DSTEM,
+)
 import numpy as np
 
 img = np.random.rand(64, 64).astype(np.float32)
 stack = np.random.rand(5, 64, 64).astype(np.float32)
 vol = np.random.rand(16, 16, 16).astype(np.float32)
 stem = np.random.rand(4, 4, 16, 16).astype(np.float32)
+cplx = np.random.rand(64, 64).astype(np.float32) + 1j * np.random.rand(64, 64).astype(np.float32)
+line = np.random.rand(100).astype(np.float32)
 
 for cls, data, name in [
+    (Show1D, line, 'Show1D'),
     (Show2D, img, 'Show2D'),
     (Show3D, stack, 'Show3D'),
     (Show3DVolume, vol, 'Show3DVolume'),
+    (Show4D, stem, 'Show4D'),
     (Show4DSTEM, stem, 'Show4DSTEM'),
-    (Clicker, img, 'Clicker'),
+    (ShowComplex2D, cplx, 'ShowComplex2D'),
+    (Mark2D, img, 'Mark2D'),
+    (Edit2D, img, 'Edit2D'),
+    (Align2D, (img, img), 'Align2D'),
 ]:
-    w = cls(data)
+    w = cls(data) if not isinstance(data, tuple) else cls(*data)
     assert len(w._esm) > 1000, f'{name} JS bundle missing'
     print(f'  {name}: OK ({len(w._esm):,} chars)')
 print()

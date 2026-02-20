@@ -17,17 +17,27 @@ import StopIcon from "@mui/icons-material/Stop";
 import "./styles.css";
 import { useTheme } from "../theme";
 import { COLORMAPS, applyColormap, renderToOffscreen } from "../colormaps";
-import { drawScaleBarHiDPI, roundToNiceValue, formatScaleLabel, exportFigure } from "../scalebar";
-import { findDataRange, sliderRange, computeStats, applyLogScale, percentileClip } from "../stats";
+import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, roundToNiceValue, exportFigure } from "../scalebar";
+import { findDataRange, sliderRange, computeStats, applyLogScale } from "../stats";
 import { formatNumber, downloadBlob, downloadDataView } from "../format";
 import { computeHistogramFromBytes } from "../histogram";
 import { getWebGPUFFT, WebGPUFFT, fft2d, fftshift, computeMagnitude, autoEnhanceFFT } from "../webgpu-fft";
+import { ControlCustomizer } from "../control-customizer";
+import { computeToolVisibility } from "../tool-parity";
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 10;
 const CANVAS_SIZE = 450;
 const RESIZE_HIT_AREA_PX = 10;
 const CIRCLE_HANDLE_ANGLE = 0.707;
+
+function resolveScaleBarParams(pixelSize: number, unit: string): { pixelSize: number; unit: "Å" | "mrad" | "px" } {
+  if (!(pixelSize > 0)) return { pixelSize: 1, unit: "px" };
+  if (unit === "Å") return { pixelSize, unit: "Å" };
+  if (unit === "nm") return { pixelSize: pixelSize * 10, unit: "Å" };
+  if (unit === "mrad") return { pixelSize, unit: "mrad" };
+  return { pixelSize, unit: "px" };
+}
 
 // ============================================================================
 // UI Styles
@@ -522,6 +532,18 @@ function sampleLineProfile(data: Float32Array, w: number, h: number, row0: numbe
   return accumulated || new Float32Array(0);
 }
 
+function pointToSegmentDistance(col: number, row: number, col0: number, row0: number, col1: number, row1: number): number {
+  const dc = col1 - col0;
+  const dr = row1 - row0;
+  const lenSq = dc * dc + dr * dr;
+  if (lenSq <= 1e-12) return Math.sqrt((col - col0) ** 2 + (row - row0) ** 2);
+  const tRaw = ((col - col0) * dc + (row - row0) * dr) / lenSq;
+  const t = Math.max(0, Math.min(1, tRaw));
+  const projCol = col0 + t * dc;
+  const projRow = row0 + t * dr;
+  return Math.sqrt((col - projCol) ** 2 + (row - projRow) ** 2);
+}
+
 // ============================================================================
 // Snap-to-peak: find local intensity maximum
 // ============================================================================
@@ -584,7 +606,39 @@ function Show4D() {
   const [snapRadius, setSnapRadius] = useModelState<number>("snap_radius");
   const [profileLine, setProfileLine] = useModelState<{row: number; col: number}[]>("profile_line");
   const [profileWidth, setProfileWidth] = useModelState<number>("profile_width");
+  const [showStats] = useModelState<boolean>("show_stats");
+  const [showControls] = useModelState<boolean>("show_controls");
   const [showFft, setShowFft] = useModelState<boolean>("show_fft");
+  const [disabledTools, setDisabledTools] = useModelState<string[]>("disabled_tools");
+  const [hiddenTools, setHiddenTools] = useModelState<string[]>("hidden_tools");
+
+  const toolVisibility = React.useMemo(
+    () => computeToolVisibility("Show4D", disabledTools, hiddenTools),
+    [disabledTools, hiddenTools],
+  );
+
+  const hideDisplay = toolVisibility.isHidden("display");
+  const hideHistogram = toolVisibility.isHidden("histogram");
+  const hideStats = toolVisibility.isHidden("stats");
+  const hideNavigation = toolVisibility.isHidden("navigation");
+  const hidePlayback = toolVisibility.isHidden("playback");
+  const hideView = toolVisibility.isHidden("view");
+  const hideExport = toolVisibility.isHidden("export");
+  const hideRoi = toolVisibility.isHidden("roi");
+  const hideProfile = toolVisibility.isHidden("profile");
+  const hideFft = toolVisibility.isHidden("fft");
+
+  const lockDisplay = toolVisibility.isLocked("display");
+  const lockHistogram = toolVisibility.isLocked("histogram");
+  const lockStats = toolVisibility.isLocked("stats");
+  const lockNavigation = toolVisibility.isLocked("navigation");
+  const lockPlayback = toolVisibility.isLocked("playback");
+  const lockView = toolVisibility.isLocked("view");
+  const lockExport = toolVisibility.isLocked("export");
+  const lockRoi = toolVisibility.isLocked("roi");
+  const lockProfile = toolVisibility.isLocked("profile");
+  const lockFft = toolVisibility.isLocked("fft");
+  const effectiveShowFft = showFft && !hideFft;
 
   // Path animation
   const [pathPlaying, setPathPlaying] = useModelState<boolean>("path_playing");
@@ -596,6 +650,7 @@ function Show4D() {
   // Export
   const [, setGifExportRequested] = useModelState<boolean>("_gif_export_requested");
   const [gifData] = useModelState<DataView>("_gif_data");
+  const [gifMetadataJson] = useModelState<string>("_gif_metadata_json");
   const [exporting, setExporting] = React.useState(false);
   const [navExportAnchor, setNavExportAnchor] = React.useState<HTMLElement | null>(null);
   const [sigExportAnchor, setSigExportAnchor] = React.useState<HTMLElement | null>(null);
@@ -650,6 +705,11 @@ function Show4D() {
   const profilePoints = profileLine || [];
   const rawSigDataRef = React.useRef<Float32Array | null>(null);
   const sigClickStartRef = React.useRef<{ x: number; y: number } | null>(null);
+  const [draggingProfileEndpoint, setDraggingProfileEndpoint] = React.useState<0 | 1 | null>(null);
+  const [isDraggingProfileLine, setIsDraggingProfileLine] = React.useState(false);
+  const [hoveredProfileEndpoint, setHoveredProfileEndpoint] = React.useState<0 | 1 | null>(null);
+  const [isHoveringProfileLine, setIsHoveringProfileLine] = React.useState(false);
+  const sigProfileDragStartRef = React.useRef<{ row: number; col: number; p0: { row: number; col: number }; p1: { row: number; col: number } } | null>(null);
 
   // FFT state
   const gpuFFTRef = React.useRef<WebGPUFFT | null>(null);
@@ -699,6 +759,46 @@ function Show4D() {
   const sigUiRef = React.useRef<HTMLCanvasElement>(null);
   const sigOffscreenRef = React.useRef<HTMLCanvasElement | null>(null);
   const sigImageDataRef = React.useRef<ImageData | null>(null);
+  const rootRef = React.useRef<HTMLDivElement>(null);
+
+  const isTypingTarget = React.useCallback((target: EventTarget | null): boolean => {
+    if (!(target instanceof HTMLElement)) return false;
+    if (target.isContentEditable) return true;
+    return target.closest("input, textarea, select, [role='textbox'], [contenteditable='true']") !== null;
+  }, []);
+
+  const handleRootMouseDownCapture = React.useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("canvas")) rootRef.current?.focus();
+  }, []);
+
+  React.useEffect(() => {
+    if (hideFft && showFft) {
+      setShowFft(false);
+    }
+  }, [hideFft, showFft, setShowFft]);
+
+  React.useEffect(() => {
+    if (lockPlayback && pathPlaying) {
+      setPathPlaying(false);
+    }
+  }, [lockPlayback, pathPlaying, setPathPlaying]);
+
+  React.useEffect(() => {
+    if (hideRoi && roiMode !== "off") {
+      setRoiMode("off");
+    }
+  }, [hideRoi, roiMode, setRoiMode]);
+
+  React.useEffect(() => {
+    if (hideProfile && profileActive) {
+      setProfileActive(false);
+      setProfileLine([]);
+      setProfileData(null);
+      setHoveredProfileEndpoint(null);
+      setIsHoveringProfileLine(false);
+    }
+  }, [hideProfile, profileActive, setProfileLine]);
 
   // ── Sync local state ──
   React.useEffect(() => {
@@ -904,7 +1004,7 @@ function Show4D() {
 
   // ── Compute FFT from signal frame ──
   React.useEffect(() => {
-    if (!showFft || !rawSigDataRef.current) return;
+    if (!effectiveShowFft || !rawSigDataRef.current) return;
     let cancelled = false;
     const data = rawSigDataRef.current;
     const w = sigCols, h = sigRows;
@@ -928,12 +1028,12 @@ function Show4D() {
     };
     computeFFT();
     return () => { cancelled = true; };
-  }, [showFft, frameBytes, sigRows, sigCols, gpuReady]);
+  }, [effectiveShowFft, frameBytes, sigRows, sigCols, gpuReady]);
 
   // ── Render FFT image ──
   React.useEffect(() => {
     const mag = fftMagRef.current;
-    if (!showFft || !mag) return;
+    if (!effectiveShowFft || !mag) return;
 
     const w = sigCols, h = sigRows;
     let displayMin: number, displayMax: number;
@@ -971,11 +1071,11 @@ function Show4D() {
         ctx.restore();
       }
     }
-  }, [showFft, fftMagVersion, fftLogScale, fftAuto, fftVminPct, fftVmaxPct, fftColormap, sigRows, sigCols]);
+  }, [effectiveShowFft, fftMagVersion, fftLogScale, fftAuto, fftVminPct, fftVmaxPct, fftColormap, sigRows, sigCols]);
 
   // ── FFT zoom/pan redraw ──
   React.useEffect(() => {
-    if (!showFft || !fftCanvasRef.current || !fftOffscreenRef.current) return;
+    if (!effectiveShowFft || !fftCanvasRef.current || !fftOffscreenRef.current) return;
     const canvas = fftCanvasRef.current;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -986,28 +1086,27 @@ function Show4D() {
     ctx.scale(fftZoom, fftZoom);
     ctx.drawImage(fftOffscreenRef.current, 0, 0);
     ctx.restore();
-  }, [showFft, fftZoom, fftPanX, fftPanY, sigCols, sigRows]);
+  }, [effectiveShowFft, fftZoom, fftPanX, fftPanY, sigCols, sigRows]);
 
   // ── FFT UI overlay ──
   React.useEffect(() => {
-    if (!fftUiRef.current || !showFft) return;
+    if (!fftUiRef.current || !effectiveShowFft) return;
     const canvas = fftUiRef.current;
     canvas.width = sigCanvasWidth * DPR;
     canvas.height = sigCanvasHeight * DPR;
     if (sigPixelSize > 0) {
       const recipPxSize = 1.0 / (sigPixelSize * sigCols);
-      drawScaleBarHiDPI(canvas, DPR, fftZoom, recipPxSize, "1/" + sigPixelUnit, sigCols);
+      drawFFTScaleBarHiDPI(canvas, DPR, fftZoom, recipPxSize, sigCols);
     } else {
       drawScaleBarHiDPI(canvas, DPR, fftZoom, 1, "px", sigCols);
     }
-  }, [showFft, fftZoom, fftPanX, fftPanY, sigPixelSize, sigPixelUnit, sigCols, sigCanvasWidth, sigCanvasHeight]);
+  }, [effectiveShowFft, fftZoom, fftPanX, fftPanY, sigPixelSize, sigPixelUnit, sigCols, sigCanvasWidth, sigCanvasHeight]);
 
   // ── Nav HiDPI UI overlay ──
   React.useEffect(() => {
     if (!navUiRef.current) return;
-    const navUnit = navPixelSize > 0 ? navPixelUnit : "px";
-    const navPxSize = navPixelSize > 0 ? navPixelSize : 1;
-    drawScaleBarHiDPI(navUiRef.current, DPR, navZoom, navPxSize, navUnit, navCols);
+    const navScale = resolveScaleBarParams(navPixelSize, navPixelUnit);
+    drawScaleBarHiDPI(navUiRef.current, DPR, navZoom, navScale.pixelSize, navScale.unit, navCols);
 
     if (roiMode === "off") {
       drawPositionMarker(navUiRef.current, DPR, localPosRow, localPosCol, navZoom, navPanX, navPanY, navCols, navRows, isDraggingNav, snapEnabled, snapRadius);
@@ -1032,9 +1131,8 @@ function Show4D() {
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const sigUnit = sigPixelSize > 0 ? sigPixelUnit : "px";
-    const sigPxSize = sigPixelSize > 0 ? sigPixelSize : 1;
-    drawScaleBarHiDPI(canvas, DPR, sigZoom, sigPxSize, sigUnit, sigCols);
+    const sigScale = resolveScaleBarParams(sigPixelSize, sigPixelUnit);
+    drawScaleBarHiDPI(canvas, DPR, sigZoom, sigScale.pixelSize, sigScale.unit, sigCols);
 
     // Profile line overlay
     if (profileActive && profilePoints.length > 0) {
@@ -1219,8 +1317,10 @@ function Show4D() {
     setPanXFn: React.Dispatch<React.SetStateAction<number>>,
     setPanYFn: React.Dispatch<React.SetStateAction<number>>,
     zoom: number, panX: number, panY: number,
-    canvasRef: React.RefObject<HTMLCanvasElement | null>
+    canvasRef: React.RefObject<HTMLCanvasElement | null>,
+    locked: boolean = false,
   ) => (e: React.WheelEvent<HTMLCanvasElement>) => {
+    if (locked) return;
     e.preventDefault();
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1271,6 +1371,7 @@ function Show4D() {
     const imgY = (screenX - navPanX) / navZoom;
 
     if (roiMode !== "off") {
+      if (lockRoi) return;
       if (isNearRoiResizeHandle(imgX, imgY)) {
         setIsDraggingRoiResize(true);
         return;
@@ -1285,6 +1386,7 @@ function Show4D() {
       return;
     }
 
+    if (lockNavigation) return;
     setIsDraggingNav(true);
     let newX = Math.round(Math.max(0, Math.min(navRows - 1, imgX)));
     let newY = Math.round(Math.max(0, Math.min(navCols - 1, imgY)));
@@ -1320,6 +1422,7 @@ function Show4D() {
 
     // ROI resize dragging
     if (isDraggingRoiResize) {
+      if (lockRoi) return;
       const dx = Math.abs(imgX - localRoiCenterRow);
       const dy = Math.abs(imgY - localRoiCenterCol);
       if (roiMode === "rect") {
@@ -1335,12 +1438,17 @@ function Show4D() {
 
     // Hover check for resize handles
     if (!isDraggingRoi && !isDraggingNav) {
-      setIsHoveringRoiResize(isNearRoiResizeHandle(imgX, imgY));
-      if (roiMode !== "off") return;
+      if (!lockRoi) {
+        setIsHoveringRoiResize(isNearRoiResizeHandle(imgX, imgY));
+        if (roiMode !== "off") return;
+      } else {
+        setIsHoveringRoiResize(false);
+      }
     }
 
     // ROI center dragging
     if (isDraggingRoi) {
+      if (lockRoi) return;
       setLocalRoiCenterRow(imgX);
       setLocalRoiCenterCol(imgY);
       const newX = Math.round(Math.max(0, Math.min(navRows - 1, imgX)));
@@ -1352,6 +1460,7 @@ function Show4D() {
 
     // Position dragging
     if (!isDraggingNav) return;
+    if (lockNavigation) return;
     let newX = Math.round(Math.max(0, Math.min(navRows - 1, imgX)));
     let newY = Math.round(Math.max(0, Math.min(navCols - 1, imgY)));
     if (snapEnabled && rawNavImageRef.current) {
@@ -1378,15 +1487,22 @@ function Show4D() {
     setIsHoveringRoiResize(false);
     setCursorInfo(prev => prev?.panel === "nav" ? null : prev);
   };
-  const handleNavDoubleClick = () => { setNavZoom(1); setNavPanX(0); setNavPanY(0); };
+  const handleNavDoubleClick = () => {
+    if (lockView) return;
+    setNavZoom(1);
+    setNavPanX(0);
+    setNavPanY(0);
+  };
 
   // ── FFT mouse handlers ──
   const handleFftMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (lockView || lockFft) return;
     setIsDraggingFft(true);
     setFftDragStart({ x: e.clientX, y: e.clientY, panX: fftPanX, panY: fftPanY });
   };
 
   const handleFftMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (lockView || lockFft) return;
     if (!isDraggingFft || !fftDragStart) return;
     const canvas = fftOverlayRef.current;
     if (!canvas) return;
@@ -1399,37 +1515,128 @@ function Show4D() {
 
   const handleFftMouseUp = () => { setIsDraggingFft(false); setFftDragStart(null); };
   const handleFftMouseLeave = () => { setIsDraggingFft(false); setFftDragStart(null); };
-  const handleFftDoubleClick = () => { setFftZoom(1); setFftPanX(0); setFftPanY(0); };
+  const handleFftDoubleClick = () => {
+    if (lockView || lockFft) return;
+    setFftZoom(1);
+    setFftPanX(0);
+    setFftPanY(0);
+  };
 
   // ── Signal mouse handlers (drag-to-pan + profile click) ──
   const handleSigMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (profileActive && lockProfile) return;
+    if (!profileActive && lockView) return;
     sigClickStartRef.current = { x: e.clientX, y: e.clientY };
+    const canvas = sigOverlayRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const screenX = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const screenY = (e.clientY - rect.top) * (canvas.height / rect.height);
+    const imgCol = (screenX - sigPanX) / sigZoom;
+    const imgRow = (screenY - sigPanY) / sigZoom;
+
+    if (profileActive) {
+      if (profilePoints.length === 2) {
+        const p0 = profilePoints[0];
+        const p1 = profilePoints[1];
+        const hitRadius = 10 / sigZoom;
+        const d0 = Math.sqrt((imgCol - p0.col) ** 2 + (imgRow - p0.row) ** 2);
+        const d1 = Math.sqrt((imgCol - p1.col) ** 2 + (imgRow - p1.row) ** 2);
+        if (d0 <= hitRadius || d1 <= hitRadius) {
+          setDraggingProfileEndpoint(d0 <= d1 ? 0 : 1);
+          setIsDraggingSig(false);
+          setSigDragStart(null);
+          return;
+        }
+        if (pointToSegmentDistance(imgCol, imgRow, p0.col, p0.row, p1.col, p1.row) <= hitRadius) {
+          setIsDraggingProfileLine(true);
+          sigProfileDragStartRef.current = {
+            row: imgRow,
+            col: imgCol,
+            p0: { row: p0.row, col: p0.col },
+            p1: { row: p1.row, col: p1.col },
+          };
+          setIsDraggingSig(false);
+          setSigDragStart(null);
+          return;
+        }
+      }
+      setIsDraggingSig(true);
+      setSigDragStart({ x: e.clientX, y: e.clientY, panX: sigPanX, panY: sigPanY });
+      return;
+    }
+
     setIsDraggingSig(true);
     setSigDragStart({ x: e.clientX, y: e.clientY, panX: sigPanX, panY: sigPanY });
   };
 
   const handleSigMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    // Cursor readout
     const canvas = sigOverlayRef.current;
-    if (canvas) {
-      const rect = canvas.getBoundingClientRect();
-      const screenX = (e.clientX - rect.left) * (canvas.width / rect.width);
-      const screenY = (e.clientY - rect.top) * (canvas.height / rect.height);
-      const imgX = (screenY - sigPanY) / sigZoom;
-      const imgY = (screenX - sigPanX) / sigZoom;
-      const pxRow = Math.floor(imgX);
-      const pxCol = Math.floor(imgY);
-      if (pxRow >= 0 && pxRow < sigRows && pxCol >= 0 && pxCol < sigCols && frameBytes) {
-        const raw = new Float32Array(frameBytes.buffer, frameBytes.byteOffset, frameBytes.byteLength / 4);
-        setCursorInfo({ row: pxRow, col: pxCol, value: raw[pxRow * sigCols + pxCol], panel: "sig" });
-      } else {
-        setCursorInfo(prev => prev?.panel === "sig" ? null : prev);
-      }
-    }
-
-    if (!isDraggingSig || !sigDragStart) return;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
+    const screenX = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const screenY = (e.clientY - rect.top) * (canvas.height / rect.height);
+    const imgCol = (screenX - sigPanX) / sigZoom;
+    const imgRow = (screenY - sigPanY) / sigZoom;
+    const pxRow = Math.floor(imgRow);
+    const pxCol = Math.floor(imgCol);
+
+    // Cursor readout
+    if (pxRow >= 0 && pxRow < sigRows && pxCol >= 0 && pxCol < sigCols && frameBytes) {
+      const raw = new Float32Array(frameBytes.buffer, frameBytes.byteOffset, frameBytes.byteLength / 4);
+      setCursorInfo({ row: pxRow, col: pxCol, value: raw[pxRow * sigCols + pxCol], panel: "sig" });
+    } else {
+      setCursorInfo(prev => prev?.panel === "sig" ? null : prev);
+    }
+
+    if (profileActive && !lockProfile && rawSigDataRef.current && profilePoints.length === 2) {
+      const p0 = profilePoints[0];
+      const p1 = profilePoints[1];
+      const hitRadius = 10 / sigZoom;
+      const d0 = Math.sqrt((imgCol - p0.col) ** 2 + (imgRow - p0.row) ** 2);
+      const d1 = Math.sqrt((imgCol - p1.col) ** 2 + (imgRow - p1.row) ** 2);
+      if (draggingProfileEndpoint !== null) {
+        const clampedRow = Math.max(0, Math.min(sigRows - 1, imgRow));
+        const clampedCol = Math.max(0, Math.min(sigCols - 1, imgCol));
+        const next = [
+          draggingProfileEndpoint === 0 ? { row: clampedRow, col: clampedCol } : profilePoints[0],
+          draggingProfileEndpoint === 1 ? { row: clampedRow, col: clampedCol } : profilePoints[1],
+        ];
+        setProfileLine(next);
+        setProfileData(sampleLineProfile(rawSigDataRef.current, sigCols, sigRows, next[0].row, next[0].col, next[1].row, next[1].col, profileWidth));
+        return;
+      }
+      if (isDraggingProfileLine && sigProfileDragStartRef.current) {
+        const drag = sigProfileDragStartRef.current;
+        let deltaRow = imgRow - drag.row;
+        let deltaCol = imgCol - drag.col;
+        const minRow = Math.min(drag.p0.row, drag.p1.row);
+        const maxRow = Math.max(drag.p0.row, drag.p1.row);
+        const minCol = Math.min(drag.p0.col, drag.p1.col);
+        const maxCol = Math.max(drag.p0.col, drag.p1.col);
+        deltaRow = Math.max(deltaRow, -minRow);
+        deltaRow = Math.min(deltaRow, (sigRows - 1) - maxRow);
+        deltaCol = Math.max(deltaCol, -minCol);
+        deltaCol = Math.min(deltaCol, (sigCols - 1) - maxCol);
+        const next = [
+          { row: drag.p0.row + deltaRow, col: drag.p0.col + deltaCol },
+          { row: drag.p1.row + deltaRow, col: drag.p1.col + deltaCol },
+        ];
+        setProfileLine(next);
+        setProfileData(sampleLineProfile(rawSigDataRef.current, sigCols, sigRows, next[0].row, next[0].col, next[1].row, next[1].col, profileWidth));
+        return;
+      }
+      const nextHoveredEndpoint: 0 | 1 | null = d0 <= hitRadius ? 0 : d1 <= hitRadius ? 1 : null;
+      const nextHoverLine = nextHoveredEndpoint === null && pointToSegmentDistance(imgCol, imgRow, p0.col, p0.row, p1.col, p1.row) <= hitRadius;
+      setHoveredProfileEndpoint(nextHoveredEndpoint);
+      setIsHoveringProfileLine(nextHoverLine);
+    } else {
+      if (hoveredProfileEndpoint !== null) setHoveredProfileEndpoint(null);
+      if (isHoveringProfileLine) setIsHoveringProfileLine(false);
+    }
+
+    if (lockView) return;
+    if (!isDraggingSig || !sigDragStart) return;
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
     const dx = (e.clientX - sigDragStart.x) * scaleX;
@@ -1439,8 +1646,20 @@ function Show4D() {
   };
 
   const handleSigMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (draggingProfileEndpoint !== null || isDraggingProfileLine) {
+      setDraggingProfileEndpoint(null);
+      setIsDraggingProfileLine(false);
+      sigProfileDragStartRef.current = null;
+      sigClickStartRef.current = null;
+      setIsDraggingSig(false);
+      setSigDragStart(null);
+      setHoveredProfileEndpoint(null);
+      setIsHoveringProfileLine(false);
+      return;
+    }
+
     // Profile click capture
-    if (profileActive && sigClickStartRef.current) {
+    if (profileActive && !lockProfile && sigClickStartRef.current) {
       const dx = e.clientX - sigClickStartRef.current.x;
       const dy = e.clientY - sigClickStartRef.current.y;
       if (Math.sqrt(dx * dx + dy * dy) < 3) {
@@ -1468,16 +1687,29 @@ function Show4D() {
     sigClickStartRef.current = null;
     setIsDraggingSig(false);
     setSigDragStart(null);
+    setHoveredProfileEndpoint(null);
+    setIsHoveringProfileLine(false);
   };
   const handleSigMouseLeave = () => {
     setIsDraggingSig(false);
     setSigDragStart(null);
+    setDraggingProfileEndpoint(null);
+    setIsDraggingProfileLine(false);
+    setHoveredProfileEndpoint(null);
+    setIsHoveringProfileLine(false);
+    sigProfileDragStartRef.current = null;
     setCursorInfo(prev => prev?.panel === "sig" ? null : prev);
   };
-  const handleSigDoubleClick = () => { setSigZoom(1); setSigPanX(0); setSigPanY(0); };
+  const handleSigDoubleClick = () => {
+    if (lockView) return;
+    setSigZoom(1);
+    setSigPanX(0);
+    setSigPanY(0);
+  };
 
   // ── Canvas resize handlers ──
   const handleResizeStart = (e: React.MouseEvent) => {
+    if (lockView) return;
     e.stopPropagation();
     e.preventDefault();
     setIsResizing(true);
@@ -1505,6 +1737,7 @@ function Show4D() {
 
   // ── Nav Export Handlers ──
   const handleNavExportFigure = (withColorbar: boolean) => {
+    if (lockExport) return;
     setNavExportAnchor(null);
     if (!navCanvasRef.current) return;
     const navData = new Float32Array(navImageBytes.buffer, navImageBytes.byteOffset, navImageBytes.byteLength / 4);
@@ -1527,6 +1760,7 @@ function Show4D() {
   };
 
   const handleNavExportPng = () => {
+    if (lockExport) return;
     setNavExportAnchor(null);
     if (!navCanvasRef.current) return;
     navCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "show4d_nav.png"); }, "image/png");
@@ -1534,6 +1768,7 @@ function Show4D() {
 
   // ── Signal Export Handlers ──
   const handleSigExportFigure = (withColorbar: boolean) => {
+    if (lockExport) return;
     setSigExportAnchor(null);
     const frameData = rawSigDataRef.current;
     if (!frameData) return;
@@ -1567,12 +1802,14 @@ function Show4D() {
   };
 
   const handleSigExportPng = () => {
+    if (lockExport) return;
     setSigExportAnchor(null);
     if (!sigCanvasRef.current) return;
     sigCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "show4d_signal.png"); }, "image/png");
   };
 
   const handleSigExportGif = () => {
+    if (lockExport) return;
     setSigExportAnchor(null);
     setExporting(true);
     setGifExportRequested(true);
@@ -1582,49 +1819,97 @@ function Show4D() {
   React.useEffect(() => {
     if (!gifData || gifData.byteLength === 0) return;
     downloadDataView(gifData, "show4d_animation.gif", "image/gif");
+    const metaText = (gifMetadataJson || "").trim();
+    if (metaText) {
+      downloadBlob(new Blob([metaText], { type: "application/json" }), "show4d_animation.json");
+    }
     setExporting(false);
-  }, [gifData]);
+  }, [gifData, gifMetadataJson]);
 
-  // ── Keyboard shortcuts ──
-  React.useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      const step = e.shiftKey ? 10 : 1;
-      switch (e.key) {
+  // ── Keyboard shortcuts (focus-scoped to widget root) ──
+  const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (isTypingTarget(e.target)) return;
+
+    const step = e.shiftKey ? 10 : 1;
+    let handled = false;
+
+    switch (e.key) {
+        case "ArrowUp":
+          if (!lockNavigation) {
+            setPosRow(Math.max(0, posRow - step));
+            handled = true;
+          }
+          break;
+        case "ArrowDown":
+          if (!lockNavigation) {
+            setPosRow(Math.min(navRows - 1, posRow + step));
+            handled = true;
+          }
+          break;
         case "ArrowLeft":
-          e.preventDefault();
-          setPosCol(Math.max(0, posCol - step));
+          if (!lockNavigation) {
+            setPosCol(Math.max(0, posCol - step));
+            handled = true;
+          }
           break;
         case "ArrowRight":
-          e.preventDefault();
-          setPosCol(Math.min(navCols - 1, posCol + step));
+          if (!lockNavigation) {
+            setPosCol(Math.min(navCols - 1, posCol + step));
+            handled = true;
+          }
           break;
         case "r":
         case "R":
-          setNavZoom(1); setNavPanX(0); setNavPanY(0);
-          setSigZoom(1); setSigPanX(0); setSigPanY(0);
-          setFftZoom(1); setFftPanX(0); setFftPanY(0);
+          if (!lockView) {
+            setNavZoom(1); setNavPanX(0); setNavPanY(0);
+            setSigZoom(1); setSigPanX(0); setSigPanY(0);
+            setFftZoom(1); setFftPanX(0); setFftPanY(0);
+            handled = true;
+          }
           break;
         case "t":
         case "T":
-          if (roiMode === "off") {
-            setRoiMode(lastRoiModeRef.current);
-          } else {
-            lastRoiModeRef.current = roiMode;
-            setRoiMode("off");
+          if (!lockRoi) {
+            if (roiMode === "off") {
+              setRoiMode(lastRoiModeRef.current);
+            } else {
+              lastRoiModeRef.current = roiMode;
+              setRoiMode("off");
+            }
+            handled = true;
           }
           break;
         case " ":
-          if (pathLength > 0) {
-            e.preventDefault();
+          if (!lockPlayback && pathLength > 0) {
             setPathPlaying(!pathPlaying);
+            handled = true;
           }
           break;
+        case "Escape":
+          rootRef.current?.blur();
+          handled = true;
+          break;
       }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [posRow, posCol, navRows, navCols, setPosRow, setPosCol, roiMode, setRoiMode, pathLength, pathPlaying, setPathPlaying]);
+
+    if (handled) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, [
+    isTypingTarget,
+    lockNavigation,
+    lockPlayback,
+    lockRoi,
+    lockView,
+    navCols,
+    navRows,
+    pathLength,
+    pathPlaying,
+    posCol,
+    posRow,
+    roiMode,
+    setPathPlaying, setPosCol, setPosRow, setRoiMode,
+  ]);
 
   // ── Theme-aware select style ──
   const themedSelect = {
@@ -1644,7 +1929,14 @@ function Show4D() {
 
   // ── Render ──
   return (
-    <Box className="show4d-root" sx={{ p: `${SPACING.LG}px`, bgcolor: themeColors.bg, color: themeColors.text }}>
+    <Box
+      ref={rootRef}
+      className="show4d-root"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      onMouseDownCapture={handleRootMouseDownCapture}
+      sx={{ p: `${SPACING.LG}px`, bgcolor: themeColors.bg, color: themeColors.text, outline: "none" }}
+    >
       {/* Title */}
       <Typography variant="h6" sx={{ ...typo.title, mb: `${SPACING.SM}px` }}>
         {title || "4D Explorer"}
@@ -1655,8 +1947,16 @@ function Show4D() {
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>FFT: Show power spectrum of signal image.</Typography>
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Profile: Click two points to draw a line intensity profile.</Typography>
           <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
-          <KeyboardShortcuts items={[["← / →", "Move position"], ["Shift+←/→", "Move ×10"], ["T", "Toggle ROI on/off"], ["Space", "Play / pause path"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
+          <KeyboardShortcuts items={[["↑ / ↓", "Move row"], ["← / →", "Move col"], ["Shift+Arrows", "Move ×10"], ["T", "Toggle ROI on/off"], ["Space", "Play / pause path"], ["R", "Reset zoom"], ["Esc", "Release keyboard focus"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
         </Box>} theme={themeInfo.theme} />
+        <ControlCustomizer
+          widgetName="Show4D"
+          hiddenTools={hiddenTools}
+          setHiddenTools={setHiddenTools}
+          disabledTools={disabledTools}
+          setDisabledTools={setDisabledTools}
+          themeColors={themeColors}
+        />
       </Typography>
 
       <Stack direction="row" spacing={`${SPACING.LG}px`}>
@@ -1668,23 +1968,38 @@ function Show4D() {
               Navigation ({Math.round(localPosRow)}, {Math.round(localPosCol)})
             </Typography>
             <Stack direction="row" spacing={`${SPACING.SM}px`}>
-              <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={async () => {
-                if (!navCanvasRef.current) return;
-                try {
-                  const blob = await new Promise<Blob | null>(resolve => navCanvasRef.current!.toBlob(resolve, "image/png"));
-                  if (!blob) return;
-                  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-                } catch {
-                  navCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "show4d_nav.png"); }, "image/png");
-                }
-              }}>COPY</Button>
-              <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={(e) => setNavExportAnchor(e.currentTarget)} disabled={exporting}>{exporting ? "..." : "Export"}</Button>
-              <Menu anchorEl={navExportAnchor} open={Boolean(navExportAnchor)} onClose={() => setNavExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
-                <MenuItem onClick={() => handleNavExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
-                <MenuItem onClick={() => handleNavExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
-                <MenuItem onClick={handleNavExportPng} sx={{ fontSize: 12 }}>PNG</MenuItem>
-              </Menu>
-              <Button size="small" sx={compactButton} disabled={navZoom === 1 && navPanX === 0 && navPanY === 0} onClick={() => { setNavZoom(1); setNavPanX(0); setNavPanY(0); }}>Reset</Button>
+              {!hideExport && (
+                <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} disabled={lockExport} onClick={async () => {
+                  if (lockExport || !navCanvasRef.current) return;
+                  try {
+                    const blob = await new Promise<Blob | null>(resolve => navCanvasRef.current!.toBlob(resolve, "image/png"));
+                    if (!blob) return;
+                    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+                  } catch {
+                    navCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "show4d_nav.png"); }, "image/png");
+                  }
+                }}>COPY</Button>
+              )}
+              {!hideExport && (
+                <Button
+                  size="small"
+                  sx={{ ...compactButton, color: themeColors.accent }}
+                  onClick={(e) => { if (!lockExport) setNavExportAnchor(e.currentTarget); }}
+                  disabled={lockExport || exporting}
+                >
+                  {exporting ? "..." : "Export"}
+                </Button>
+              )}
+              {!hideExport && (
+                <Menu anchorEl={navExportAnchor} open={Boolean(navExportAnchor)} onClose={() => setNavExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
+                  <MenuItem disabled={lockExport} onClick={() => handleNavExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
+                  <MenuItem disabled={lockExport} onClick={() => handleNavExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
+                  <MenuItem disabled={lockExport} onClick={handleNavExportPng} sx={{ fontSize: 12 }}>PNG</MenuItem>
+                </Menu>
+              )}
+              {!hideView && (
+                <Button size="small" sx={compactButton} disabled={lockView || (navZoom === 1 && navPanX === 0 && navPanY === 0)} onClick={() => { if (!lockView) { setNavZoom(1); setNavPanX(0); setNavPanY(0); } }}>Reset</Button>
+              )}
             </Stack>
           </Stack>
 
@@ -1695,9 +2010,20 @@ function Show4D() {
               ref={navOverlayRef} width={navCols} height={navRows}
               onMouseDown={handleNavMouseDown} onMouseMove={handleNavMouseMove}
               onMouseUp={handleNavMouseUp} onMouseLeave={handleNavMouseLeave}
-              onWheel={createZoomHandler(setNavZoom, setNavPanX, setNavPanY, navZoom, navPanX, navPanY, navOverlayRef)}
+              onWheel={createZoomHandler(setNavZoom, setNavPanX, setNavPanY, navZoom, navPanX, navPanY, navOverlayRef, lockView)}
               onDoubleClick={handleNavDoubleClick}
-              style={{ position: "absolute", width: "100%", height: "100%", cursor: isHoveringRoiResize || isDraggingRoiResize ? "nwse-resize" : snapEnabled ? "cell" : "crosshair" }}
+              style={{
+                position: "absolute",
+                width: "100%",
+                height: "100%",
+                cursor: lockView
+                  ? "default"
+                  : isHoveringRoiResize || isDraggingRoiResize
+                    ? "nwse-resize"
+                    : snapEnabled && !lockNavigation
+                      ? "cell"
+                      : "crosshair",
+              }}
             />
             <canvas ref={navUiRef} width={navCanvasWidth * DPR} height={navCanvasHeight * DPR} style={{ position: "absolute", width: "100%", height: "100%", pointerEvents: "none" }} />
             {cursorInfo && cursorInfo.panel === "nav" && (
@@ -1707,12 +2033,14 @@ function Show4D() {
                 </Typography>
               </Box>
             )}
-            <Box onMouseDown={handleResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: 1 } }} />
+            {!hideView && (
+              <Box onMouseDown={handleResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: lockView ? "default" : "nwse-resize", opacity: lockView ? 0.2 : 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: lockView ? 0.2 : 1 } }} />
+            )}
           </Box>
 
           {/* Nav Stats Bar */}
-          {navStats && navStats.length === 4 && (
-            <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center" }}>
+          {showStats && !hideStats && navStats && navStats.length === 4 && (
+            <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", opacity: lockStats ? 0.6 : 1 }}>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(navStats[0])}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(navStats[1])}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(navStats[2])}</Box></Typography>
@@ -1721,76 +2049,101 @@ function Show4D() {
           )}
 
           {/* Nav Controls */}
-          <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: "100%", boxSizing: "border-box" }}>
-            <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
-              {/* Row 1: ROI */}
-              <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                <Typography sx={{ ...typo.label, fontSize: 10 }}>ROI:</Typography>
-                <Select value={roiMode || "off"} onChange={(e) => { const v = e.target.value; if (v !== "off") lastRoiModeRef.current = v; setRoiMode(v); }} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={themedMenuProps}>
-                  <MenuItem value="off">Off</MenuItem>
-                  <MenuItem value="circle">Circle</MenuItem>
-                  <MenuItem value="square">Square</MenuItem>
-                  <MenuItem value="rect">Rect</MenuItem>
-                </Select>
-                {roiMode !== "off" && (
-                  <Select value={roiReduce || "mean"} onChange={(e) => setRoiReduce(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 55, fontSize: 10 }} MenuProps={themedMenuProps}>
-                    <MenuItem value="mean">Mean</MenuItem>
-                    <MenuItem value="max">Max</MenuItem>
-                    <MenuItem value="min">Min</MenuItem>
-                    <MenuItem value="sum">Sum</MenuItem>
-                  </Select>
-                )}
-                {roiMode !== "off" && (roiMode === "circle" || roiMode === "square") && (
-                  <>
-                    <Slider
-                      value={roiRadius || 5}
-                      onChange={(_, v) => setRoiRadius(v as number)}
-                      min={1}
-                      max={Math.min(navRows, navCols) / 2}
-                      size="small"
-                      sx={{ width: 80, mx: 1, "& .MuiSlider-thumb": { width: 14, height: 14 } }}
-                    />
-                    <Typography sx={{ ...typo.value, fontSize: 10, minWidth: 30 }}>
-                      {Math.round(roiRadius || 5)}px
-                    </Typography>
-                  </>
-                )}
-                {roiMode === "off" && (
-                  <>
-                    <Typography sx={{ ...typo.label, fontSize: 10 }}>Snap:</Typography>
-                    <Switch checked={snapEnabled} onChange={(_, v) => setSnapEnabled(v)} size="small" sx={switchStyles.small} />
-                    {snapEnabled && (
+          {showControls && (!hideRoi || !hideNavigation || !hideDisplay || !hideHistogram) && (
+            <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: "100%", boxSizing: "border-box" }}>
+              <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
+                {/* Row 1: ROI + Snap */}
+                {(!hideRoi || !hideNavigation) && (
+                  <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockRoi && lockNavigation ? 0.6 : 1 }}>
+                    {!hideRoi && (
                       <>
-                        <Slider value={snapRadius} min={1} max={20} step={1} onChange={(_, v) => { if (typeof v === "number") setSnapRadius(v); }} size="small" sx={{ width: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
-                        <Typography sx={{ ...typo.value, fontSize: 10 }}>{snapRadius}px</Typography>
+                        <Typography sx={{ ...typo.label, fontSize: 10 }}>ROI:</Typography>
+                        <Select
+                          value={roiMode || "off"}
+                          onChange={(e) => {
+                            if (lockRoi) return;
+                            const v = e.target.value;
+                            if (v !== "off") lastRoiModeRef.current = v;
+                            setRoiMode(v);
+                          }}
+                          disabled={lockRoi}
+                          size="small"
+                          sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}
+                          MenuProps={themedMenuProps}
+                        >
+                          <MenuItem value="off">Off</MenuItem>
+                          <MenuItem value="circle">Circle</MenuItem>
+                          <MenuItem value="square">Square</MenuItem>
+                          <MenuItem value="rect">Rect</MenuItem>
+                        </Select>
                       </>
                     )}
-                  </>
+                    {!hideRoi && roiMode !== "off" && (
+                      <Select value={roiReduce || "mean"} onChange={(e) => { if (!lockRoi) setRoiReduce(String(e.target.value)); }} disabled={lockRoi} size="small" sx={{ ...themedSelect, minWidth: 55, fontSize: 10 }} MenuProps={themedMenuProps}>
+                        <MenuItem value="mean">Mean</MenuItem>
+                        <MenuItem value="max">Max</MenuItem>
+                        <MenuItem value="min">Min</MenuItem>
+                        <MenuItem value="sum">Sum</MenuItem>
+                      </Select>
+                    )}
+                    {!hideRoi && roiMode !== "off" && (roiMode === "circle" || roiMode === "square") && (
+                      <>
+                        <Slider
+                          value={roiRadius || 5}
+                          onChange={(_, v) => { if (!lockRoi) setRoiRadius(v as number); }}
+                          disabled={lockRoi}
+                          min={1}
+                          max={Math.min(navRows, navCols) / 2}
+                          size="small"
+                          sx={{ width: 80, mx: 1, "& .MuiSlider-thumb": { width: 14, height: 14 } }}
+                        />
+                        <Typography sx={{ ...typo.value, fontSize: 10, minWidth: 30 }}>
+                          {Math.round(roiRadius || 5)}px
+                        </Typography>
+                      </>
+                    )}
+                    {!hideNavigation && roiMode === "off" && (
+                      <>
+                        <Typography sx={{ ...typo.label, fontSize: 10 }}>Snap:</Typography>
+                        <Switch checked={snapEnabled} onChange={(_, v) => { if (!lockNavigation) setSnapEnabled(v); }} disabled={lockNavigation} size="small" sx={switchStyles.small} />
+                        {snapEnabled && (
+                          <>
+                            <Slider value={snapRadius} min={1} max={20} step={1} disabled={lockNavigation} onChange={(_, v) => { if (!lockNavigation && typeof v === "number") setSnapRadius(v); }} size="small" sx={{ width: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
+                            <Typography sx={{ ...typo.value, fontSize: 10 }}>{snapRadius}px</Typography>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </Box>
+                )}
+                {/* Row 2: Color + Scale */}
+                {!hideDisplay && (
+                  <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockDisplay ? 0.6 : 1 }}>
+                    <Typography sx={{ ...typo.label, fontSize: 10 }}>Color:</Typography>
+                    <Select disabled={lockDisplay} value={navColormap} onChange={(e) => { if (!lockDisplay) setNavColormap(String(e.target.value)); }} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
+                      <MenuItem value="inferno">Inferno</MenuItem>
+                      <MenuItem value="viridis">Viridis</MenuItem>
+                      <MenuItem value="plasma">Plasma</MenuItem>
+                      <MenuItem value="magma">Magma</MenuItem>
+                      <MenuItem value="hot">Hot</MenuItem>
+                      <MenuItem value="gray">Gray</MenuItem>
+                    </Select>
+                    <Typography sx={{ ...typo.label, fontSize: 10 }}>Scale:</Typography>
+                    <Select disabled={lockDisplay} value={navScaleMode} onChange={(e) => { if (!lockDisplay) setNavScaleMode(e.target.value as "linear" | "log" | "power"); }} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
+                      <MenuItem value="linear">Lin</MenuItem>
+                      <MenuItem value="log">Log</MenuItem>
+                      <MenuItem value="power">Pow</MenuItem>
+                    </Select>
+                  </Box>
                 )}
               </Box>
-              {/* Row 2: Color + Scale */}
-              <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                <Typography sx={{ ...typo.label, fontSize: 10 }}>Color:</Typography>
-                <Select value={navColormap} onChange={(e) => setNavColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
-                  <MenuItem value="inferno">Inferno</MenuItem>
-                  <MenuItem value="viridis">Viridis</MenuItem>
-                  <MenuItem value="plasma">Plasma</MenuItem>
-                  <MenuItem value="magma">Magma</MenuItem>
-                  <MenuItem value="hot">Hot</MenuItem>
-                  <MenuItem value="gray">Gray</MenuItem>
-                </Select>
-                <Typography sx={{ ...typo.label, fontSize: 10 }}>Scale:</Typography>
-                <Select value={navScaleMode} onChange={(e) => setNavScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
-                  <MenuItem value="linear">Lin</MenuItem>
-                  <MenuItem value="log">Log</MenuItem>
-                  <MenuItem value="power">Pow</MenuItem>
-                </Select>
-              </Box>
+              {!hideHistogram && (
+                <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: lockHistogram ? 0.6 : 1 }}>
+                  <Histogram data={navHistogramData} colormap={navColormap} vminPct={navVminPct} vmaxPct={navVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setNavVminPct(min); setNavVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={navDataMin} dataMax={navDataMax} />
+                </Box>
+              )}
             </Box>
-            <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center" }}>
-              <Histogram data={navHistogramData} colormap={navColormap} vminPct={navVminPct} vmaxPct={navVmaxPct} onRangeChange={(min, max) => { setNavVminPct(min); setNavVmaxPct(max); }} width={110} height={58} theme={themeInfo.theme} dataMin={navDataMin} dataMax={navDataMax} />
-            </Box>
-          </Box>
+          )}
         </Box>
 
         {/* ── RIGHT COLUMN: Signal Panel ── */}
@@ -1799,7 +2152,7 @@ function Show4D() {
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
             <Typography variant="caption" sx={{ ...typo.label }}>
               Signal
-              {roiMode !== "off"
+              {!hideRoi && roiMode !== "off"
                 ? <span style={{ color: themeColors.accent, marginLeft: SPACING.SM }}>(ROI {roiReduce || "mean"})</span>
                 : <span style={{ color: themeColors.textMuted, marginLeft: SPACING.SM }}>at ({posRow}, {posCol})</span>
               }
@@ -1808,26 +2161,38 @@ function Show4D() {
               <Typography sx={{ ...typo.label, color: themeColors.textMuted, fontSize: 10 }}>
                 {navRows}×{navCols} | {sigRows}×{sigCols}
               </Typography>
-              <Typography sx={{ ...typo.label, fontSize: 10 }}>FFT:</Typography>
-              <Switch checked={showFft} onChange={(e) => setShowFft(e.target.checked)} size="small" sx={switchStyles.small} />
-              <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={async () => {
-                if (!sigCanvasRef.current) return;
-                try {
-                  const blob = await new Promise<Blob | null>(resolve => sigCanvasRef.current!.toBlob(resolve, "image/png"));
-                  if (!blob) return;
-                  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-                } catch {
-                  sigCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "show4d_signal.png"); }, "image/png");
-                }
-              }}>COPY</Button>
-              <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={(e) => setSigExportAnchor(e.currentTarget)} disabled={exporting}>{exporting ? "Exporting..." : "Export"}</Button>
-              <Menu anchorEl={sigExportAnchor} open={Boolean(sigExportAnchor)} onClose={() => setSigExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
-                <MenuItem onClick={() => handleSigExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
-                <MenuItem onClick={() => handleSigExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
-                <MenuItem onClick={handleSigExportPng} sx={{ fontSize: 12 }}>PNG (current frame)</MenuItem>
-                {pathLength > 0 && <MenuItem onClick={handleSigExportGif} sx={{ fontSize: 12 }}>GIF (path animation)</MenuItem>}
-              </Menu>
-              <Button size="small" sx={compactButton} disabled={sigZoom === 1 && sigPanX === 0 && sigPanY === 0} onClick={() => { setSigZoom(1); setSigPanX(0); setSigPanY(0); }}>Reset</Button>
+              {!hideFft && (
+                <>
+                  <Typography sx={{ ...typo.label, fontSize: 10 }}>FFT:</Typography>
+                  <Switch checked={effectiveShowFft} onChange={(e) => { if (!lockFft) setShowFft(e.target.checked); }} disabled={lockFft} size="small" sx={switchStyles.small} />
+                </>
+              )}
+              {!hideExport && (
+                <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} disabled={lockExport} onClick={async () => {
+                  if (lockExport || !sigCanvasRef.current) return;
+                  try {
+                    const blob = await new Promise<Blob | null>(resolve => sigCanvasRef.current!.toBlob(resolve, "image/png"));
+                    if (!blob) return;
+                    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+                  } catch {
+                    sigCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "show4d_signal.png"); }, "image/png");
+                  }
+                }}>COPY</Button>
+              )}
+              {!hideExport && (
+                <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={(e) => { if (!lockExport) setSigExportAnchor(e.currentTarget); }} disabled={lockExport || exporting}>{exporting ? "Exporting..." : "Export"}</Button>
+              )}
+              {!hideExport && (
+                <Menu anchorEl={sigExportAnchor} open={Boolean(sigExportAnchor)} onClose={() => setSigExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} sx={{ zIndex: 9999 }}>
+                  <MenuItem disabled={lockExport} onClick={() => handleSigExportFigure(true)} sx={{ fontSize: 12 }}>Figure + colorbar</MenuItem>
+                  <MenuItem disabled={lockExport} onClick={() => handleSigExportFigure(false)} sx={{ fontSize: 12 }}>Figure</MenuItem>
+                  <MenuItem disabled={lockExport} onClick={handleSigExportPng} sx={{ fontSize: 12 }}>PNG (current frame)</MenuItem>
+                  {pathLength > 0 && <MenuItem disabled={lockExport} onClick={handleSigExportGif} sx={{ fontSize: 12 }}>GIF (path animation)</MenuItem>}
+                </Menu>
+              )}
+              {!hideView && (
+                <Button size="small" sx={compactButton} disabled={lockView || (sigZoom === 1 && sigPanX === 0 && sigPanY === 0)} onClick={() => { if (!lockView) { setSigZoom(1); setSigPanX(0); setSigPanY(0); } }}>Reset</Button>
+              )}
             </Stack>
           </Stack>
 
@@ -1838,9 +2203,24 @@ function Show4D() {
               ref={sigOverlayRef} width={sigCols} height={sigRows}
               onMouseDown={handleSigMouseDown} onMouseMove={handleSigMouseMove}
               onMouseUp={handleSigMouseUp} onMouseLeave={handleSigMouseLeave}
-              onWheel={createZoomHandler(setSigZoom, setSigPanX, setSigPanY, sigZoom, sigPanX, sigPanY, sigOverlayRef)}
+              onWheel={createZoomHandler(setSigZoom, setSigPanX, setSigPanY, sigZoom, sigPanX, sigPanY, sigOverlayRef, lockView)}
               onDoubleClick={handleSigDoubleClick}
-              style={{ position: "absolute", width: "100%", height: "100%", cursor: profileActive ? "crosshair" : isDraggingSig ? "grabbing" : "grab" }}
+              style={{
+                position: "absolute",
+                width: "100%",
+                height: "100%",
+                cursor: (profileActive && lockProfile) || (!profileActive && lockView)
+                  ? "default"
+                  : (draggingProfileEndpoint !== null || isDraggingProfileLine)
+                    ? "grabbing"
+                    : (profileActive && (hoveredProfileEndpoint !== null || isHoveringProfileLine))
+                      ? "grab"
+                      : profileActive
+                        ? "crosshair"
+                        : isDraggingSig
+                          ? "grabbing"
+                          : "grab",
+              }}
             />
             <canvas ref={sigUiRef} width={sigCanvasWidth * DPR} height={sigCanvasHeight * DPR} style={{ position: "absolute", width: "100%", height: "100%", pointerEvents: "none" }} />
             {cursorInfo && cursorInfo.panel === "sig" && (
@@ -1850,12 +2230,14 @@ function Show4D() {
                 </Typography>
               </Box>
             )}
-            <Box onMouseDown={handleResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: 1 } }} />
+            {!hideView && (
+              <Box onMouseDown={handleResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: lockView ? "default" : "nwse-resize", opacity: lockView ? 0.2 : 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: lockView ? 0.2 : 1 } }} />
+            )}
           </Box>
 
           {/* Signal Stats Bar */}
-          {sigStats && sigStats.length === 4 && (
-            <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center" }}>
+          {showStats && !hideStats && sigStats && sigStats.length === 4 && (
+            <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", opacity: lockStats ? 0.6 : 1 }}>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(sigStats[0])}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(sigStats[1])}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(sigStats[2])}</Box></Typography>
@@ -1864,7 +2246,7 @@ function Show4D() {
           )}
 
           {/* Profile sparkline */}
-          {profileActive && (
+          {profileActive && !hideProfile && (
             <Box sx={{ mt: `${SPACING.XS}px`, maxWidth: sigCanvasWidth, boxSizing: "border-box" }}>
               <canvas
                 ref={profileCanvasRef}
@@ -1874,50 +2256,64 @@ function Show4D() {
           )}
 
           {/* Signal Controls */}
-          <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: "100%", boxSizing: "border-box" }}>
-            <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
-              {/* Row 1: Profile */}
-              <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                <Typography sx={{ ...typo.label, fontSize: 10 }}>Profile:</Typography>
-                <Switch checked={profileActive} onChange={(e) => {
-                  const on = e.target.checked;
-                  setProfileActive(on);
-                  if (!on) { setProfileLine([]); setProfileData(null); }
-                }} size="small" sx={switchStyles.small} />
-                {profileActive && profileWidth > 1 && (
-                  <>
-                    <Typography sx={{ ...typo.value, fontSize: 10 }}>w={profileWidth}</Typography>
-                    <Slider value={profileWidth} min={1} max={20} step={1} onChange={(_, v) => { if (typeof v === "number") setProfileWidth(v); }} size="small" sx={{ width: 50, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
-                  </>
+          {showControls && (!hideProfile || !hideDisplay || !hideHistogram) && (
+            <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: "100%", boxSizing: "border-box" }}>
+              <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
+                {/* Row 1: Profile */}
+                {!hideProfile && (
+                  <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockProfile ? 0.6 : 1 }}>
+                    <Typography sx={{ ...typo.label, fontSize: 10 }}>Profile:</Typography>
+                    <Switch checked={profileActive} onChange={(e) => {
+                      if (lockProfile) return;
+                      const on = e.target.checked;
+                      setProfileActive(on);
+                      if (!on) {
+                        setProfileLine([]);
+                        setProfileData(null);
+                        setHoveredProfileEndpoint(null);
+                        setIsHoveringProfileLine(false);
+                      }
+                    }} disabled={lockProfile} size="small" sx={switchStyles.small} />
+                    {profileActive && profileWidth > 1 && (
+                      <>
+                        <Typography sx={{ ...typo.value, fontSize: 10 }}>w={profileWidth}</Typography>
+                        <Slider value={profileWidth} min={1} max={20} step={1} disabled={lockProfile} onChange={(_, v) => { if (!lockProfile && typeof v === "number") setProfileWidth(v); }} size="small" sx={{ width: 50, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
+                      </>
+                    )}
+                  </Box>
+                )}
+                {/* Row 2: Color + Scale */}
+                {!hideDisplay && (
+                  <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockDisplay ? 0.6 : 1 }}>
+                    <Typography sx={{ ...typo.label, fontSize: 10 }}>Color:</Typography>
+                    <Select disabled={lockDisplay} value={sigColormap} onChange={(e) => { if (!lockDisplay) setSigColormap(String(e.target.value)); }} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
+                      <MenuItem value="inferno">Inferno</MenuItem>
+                      <MenuItem value="viridis">Viridis</MenuItem>
+                      <MenuItem value="plasma">Plasma</MenuItem>
+                      <MenuItem value="magma">Magma</MenuItem>
+                      <MenuItem value="hot">Hot</MenuItem>
+                      <MenuItem value="gray">Gray</MenuItem>
+                    </Select>
+                    <Typography sx={{ ...typo.label, fontSize: 10 }}>Scale:</Typography>
+                    <Select disabled={lockDisplay} value={sigScaleMode} onChange={(e) => { if (!lockDisplay) setSigScaleMode(e.target.value as "linear" | "log" | "power"); }} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
+                      <MenuItem value="linear">Lin</MenuItem>
+                      <MenuItem value="log">Log</MenuItem>
+                      <MenuItem value="power">Pow</MenuItem>
+                    </Select>
+                  </Box>
                 )}
               </Box>
-              {/* Row 2: Color + Scale */}
-              <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                <Typography sx={{ ...typo.label, fontSize: 10 }}>Color:</Typography>
-                <Select value={sigColormap} onChange={(e) => setSigColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
-                  <MenuItem value="inferno">Inferno</MenuItem>
-                  <MenuItem value="viridis">Viridis</MenuItem>
-                  <MenuItem value="plasma">Plasma</MenuItem>
-                  <MenuItem value="magma">Magma</MenuItem>
-                  <MenuItem value="hot">Hot</MenuItem>
-                  <MenuItem value="gray">Gray</MenuItem>
-                </Select>
-                <Typography sx={{ ...typo.label, fontSize: 10 }}>Scale:</Typography>
-                <Select value={sigScaleMode} onChange={(e) => setSigScaleMode(e.target.value as "linear" | "log" | "power")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
-                  <MenuItem value="linear">Lin</MenuItem>
-                  <MenuItem value="log">Log</MenuItem>
-                  <MenuItem value="power">Pow</MenuItem>
-                </Select>
-              </Box>
+              {!hideHistogram && (
+                <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: lockHistogram ? 0.6 : 1 }}>
+                  <Histogram data={sigHistogramData} colormap={sigColormap} vminPct={sigVminPct} vmaxPct={sigVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setSigVminPct(min); setSigVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={sigDataMin} dataMax={sigDataMax} />
+                </Box>
+              )}
             </Box>
-            <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center" }}>
-              <Histogram data={sigHistogramData} colormap={sigColormap} vminPct={sigVminPct} vmaxPct={sigVmaxPct} onRangeChange={(min, max) => { setSigVminPct(min); setSigVmaxPct(max); }} width={110} height={58} theme={themeInfo.theme} dataMin={sigDataMin} dataMax={sigDataMax} />
-            </Box>
-          </Box>
+          )}
         </Box>
 
         {/* ── THIRD COLUMN: FFT Panel ── */}
-        {showFft && (
+        {effectiveShowFft && (
           <Box sx={{ width: sigCanvasWidth }}>
             {/* FFT Header */}
             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
@@ -1925,11 +2321,15 @@ function Show4D() {
                 FFT (Signal)
               </Typography>
               <Stack direction="row" spacing={`${SPACING.SM}px`}>
-                <Button size="small" sx={compactButton} onClick={() => {
-                  if (!fftCanvasRef.current) return;
-                  fftCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "show4d_fft.png"); }, "image/png");
-                }}>Export</Button>
-                <Button size="small" sx={compactButton} disabled={fftZoom === 1 && fftPanX === 0 && fftPanY === 0} onClick={() => { setFftZoom(1); setFftPanX(0); setFftPanY(0); }}>Reset</Button>
+                {!hideExport && (
+                  <Button size="small" sx={compactButton} disabled={lockExport || lockFft} onClick={() => {
+                    if (lockExport || lockFft || !fftCanvasRef.current) return;
+                    fftCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "show4d_fft.png"); }, "image/png");
+                  }}>Export</Button>
+                )}
+                {!hideView && (
+                  <Button size="small" sx={compactButton} disabled={lockView || lockFft || (fftZoom === 1 && fftPanX === 0 && fftPanY === 0)} onClick={() => { if (!lockView && !lockFft) { setFftZoom(1); setFftPanX(0); setFftPanY(0); } }}>Reset</Button>
+                )}
               </Stack>
             </Stack>
 
@@ -1940,67 +2340,77 @@ function Show4D() {
                 ref={fftOverlayRef} width={sigCols} height={sigRows}
                 onMouseDown={handleFftMouseDown} onMouseMove={handleFftMouseMove}
                 onMouseUp={handleFftMouseUp} onMouseLeave={handleFftMouseLeave}
-                onWheel={createZoomHandler(setFftZoom, setFftPanX, setFftPanY, fftZoom, fftPanX, fftPanY, fftOverlayRef)}
+                onWheel={createZoomHandler(setFftZoom, setFftPanX, setFftPanY, fftZoom, fftPanX, fftPanY, fftOverlayRef, lockView || lockFft)}
                 onDoubleClick={handleFftDoubleClick}
-                style={{ position: "absolute", width: "100%", height: "100%", cursor: isDraggingFft ? "grabbing" : "grab" }}
+                style={{ position: "absolute", width: "100%", height: "100%", cursor: lockView || lockFft ? "default" : (isDraggingFft ? "grabbing" : "grab") }}
               />
               <canvas ref={fftUiRef} width={sigCanvasWidth * DPR} height={sigCanvasHeight * DPR} style={{ position: "absolute", width: "100%", height: "100%", pointerEvents: "none" }} />
-              <Box onMouseDown={handleResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: 1 } }} />
+              {!hideView && (
+                <Box onMouseDown={handleResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: lockView ? "default" : "nwse-resize", opacity: lockView ? 0.2 : 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: lockView ? 0.2 : 1 } }} />
+              )}
             </Box>
 
             {/* FFT Stats Bar */}
-            <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center" }}>
-              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(fftStats.mean)}</Box></Typography>
-              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(fftStats.min)}</Box></Typography>
-              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(fftStats.max)}</Box></Typography>
-              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(fftStats.std)}</Box></Typography>
-            </Box>
+            {showStats && !hideStats && (
+              <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", opacity: lockStats ? 0.6 : 1 }}>
+                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(fftStats.mean)}</Box></Typography>
+                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(fftStats.min)}</Box></Typography>
+                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(fftStats.max)}</Box></Typography>
+                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatStat(fftStats.std)}</Box></Typography>
+              </Box>
+            )}
 
             {/* FFT Controls */}
-            <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: "100%", boxSizing: "border-box" }}>
-              <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
-                <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                  <Typography sx={{ ...typo.label, fontSize: 10 }}>Auto:</Typography>
-                  <Switch checked={fftAuto} onChange={(e) => setFftAuto(e.target.checked)} size="small" sx={switchStyles.small} />
-                  <Typography sx={{ ...typo.label, fontSize: 10 }}>Color:</Typography>
-                  <Select value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
-                    <MenuItem value="inferno">Inferno</MenuItem>
-                    <MenuItem value="viridis">Viridis</MenuItem>
-                    <MenuItem value="plasma">Plasma</MenuItem>
-                    <MenuItem value="magma">Magma</MenuItem>
-                    <MenuItem value="hot">Hot</MenuItem>
-                    <MenuItem value="gray">Gray</MenuItem>
-                  </Select>
-                  <Typography sx={{ ...typo.label, fontSize: 10 }}>Scale:</Typography>
-                  <Select value={fftLogScale ? "log" : "linear"} onChange={(e) => setFftLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
-                    <MenuItem value="linear">Lin</MenuItem>
-                    <MenuItem value="log">Log</MenuItem>
-                  </Select>
-                </Box>
+            {showControls && (!hideDisplay || !hideHistogram) && (
+              <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: "100%", boxSizing: "border-box" }}>
+                {!hideDisplay && (
+                  <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
+                    <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: (lockDisplay || lockFft) ? 0.6 : 1 }}>
+                      <Typography sx={{ ...typo.label, fontSize: 10 }}>Auto:</Typography>
+                      <Switch checked={fftAuto} onChange={(e) => { if (!lockDisplay && !lockFft) setFftAuto(e.target.checked); }} disabled={lockDisplay || lockFft} size="small" sx={switchStyles.small} />
+                      <Typography sx={{ ...typo.label, fontSize: 10 }}>Color:</Typography>
+                      <Select disabled={lockDisplay || lockFft} value={fftColormap} onChange={(e) => { if (!lockDisplay && !lockFft) setFftColormap(String(e.target.value)); }} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
+                        <MenuItem value="inferno">Inferno</MenuItem>
+                        <MenuItem value="viridis">Viridis</MenuItem>
+                        <MenuItem value="plasma">Plasma</MenuItem>
+                        <MenuItem value="magma">Magma</MenuItem>
+                        <MenuItem value="hot">Hot</MenuItem>
+                        <MenuItem value="gray">Gray</MenuItem>
+                      </Select>
+                      <Typography sx={{ ...typo.label, fontSize: 10 }}>Scale:</Typography>
+                      <Select disabled={lockDisplay || lockFft} value={fftLogScale ? "log" : "linear"} onChange={(e) => { if (!lockDisplay && !lockFft) setFftLogScale(e.target.value === "log"); }} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
+                        <MenuItem value="linear">Lin</MenuItem>
+                        <MenuItem value="log">Log</MenuItem>
+                      </Select>
+                    </Box>
+                  </Box>
+                )}
+                {!hideHistogram && (
+                  <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: (lockHistogram || lockFft) ? 0.6 : 1 }}>
+                    <Histogram data={fftHistogramData} colormap={fftColormap} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram && !lockFft) { setFftVminPct(min); setFftVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={fftDataRange.min} dataMax={fftDataRange.max} />
+                  </Box>
+                )}
               </Box>
-              <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center" }}>
-                <Histogram data={fftHistogramData} colormap={fftColormap} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { setFftVminPct(min); setFftVmaxPct(max); }} width={110} height={58} theme={themeInfo.theme} dataMin={fftDataRange.min} dataMax={fftDataRange.max} />
-              </Box>
-            </Box>
+            )}
           </Box>
         )}
       </Stack>
 
       {/* Playback bar (only when path is set) */}
-      {pathLength > 0 && (
+      {showControls && !hidePlayback && pathLength > 0 && (
         <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
           <Stack direction="row" spacing={0} sx={{ flexShrink: 0 }}>
-            <IconButton size="small" onClick={() => setPathPlaying(!pathPlaying)} sx={{ color: themeColors.accent, p: 0.25 }}>
+            <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) setPathPlaying(!pathPlaying); }} sx={{ color: themeColors.accent, p: 0.25 }}>
               {pathPlaying ? <PauseIcon sx={{ fontSize: 18 }} /> : <PlayArrowIcon sx={{ fontSize: 18 }} />}
             </IconButton>
-            <IconButton size="small" onClick={() => { setPathPlaying(false); setPathIndex(0); }} sx={{ color: themeColors.textMuted, p: 0.25 }}>
+            <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) { setPathPlaying(false); setPathIndex(0); } }} sx={{ color: themeColors.textMuted, p: 0.25 }}>
               <StopIcon sx={{ fontSize: 16 }} />
             </IconButton>
           </Stack>
-          <Slider value={pathIndex} onChange={(_, v) => { setPathPlaying(false); setPathIndex(v as number); }} min={0} max={Math.max(0, pathLength - 1)} size="small" sx={{ flex: 1, minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
+          <Slider disabled={lockPlayback} value={pathIndex} onChange={(_, v) => { if (!lockPlayback) { setPathPlaying(false); setPathIndex(v as number); } }} min={0} max={Math.max(0, pathLength - 1)} size="small" sx={{ flex: 1, minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
           <Typography sx={{ ...typo.value, minWidth: 50, textAlign: "right", flexShrink: 0 }}>{pathIndex + 1}/{pathLength}</Typography>
           <Typography sx={{ ...typo.label, fontSize: 10 }}>Loop:</Typography>
-          <Switch checked={pathLoop} onChange={() => { model.set("path_loop", !pathLoop); model.save_changes(); }} size="small" sx={switchStyles.small} />
+          <Switch checked={pathLoop} onChange={() => { if (!lockPlayback) { model.set("path_loop", !pathLoop); model.save_changes(); } }} disabled={lockPlayback} size="small" sx={switchStyles.small} />
         </Box>
       )}
     </Box>

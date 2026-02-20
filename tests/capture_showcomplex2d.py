@@ -56,7 +56,7 @@ def create_test_notebook():
                 "outputs": [],
                 "source": [
                     "# Default amplitude view\n",
-                    "ShowComplex2D(obj, title='Test Complex', pixel_size_angstrom=0.5)",
+                    "ShowComplex2D(obj, title='Test Complex', pixel_size=0.5)",
                 ],
             },
         ],

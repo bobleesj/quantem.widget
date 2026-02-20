@@ -16,7 +16,7 @@ Usage
    Align2D(img_a, img_b, title="Alignment")
 
    # With calibration
-   Align2D(img_a, img_b, pixel_size=0.24, cmap="viridis")
+   Align2D(img_a, img_b, pixel_size=2.4, cmap="viridis")
 
 Features
 --------
@@ -44,11 +44,11 @@ State Persistence
 
 .. code-block:: python
 
-   w = Align2D(img_a, img_b, cmap="viridis", pixel_size=0.24)
+   w = Align2D(img_a, img_b, cmap="viridis", pixel_size=2.4)
 
    w.summary()          # Print human-readable state
    w.state_dict()       # Get all settings as a dict
-   w.save("state.json") # Save to JSON file
+   w.save("state.json") # Save versioned envelope JSON file
 
    # Restore from file or dict
    w2 = Align2D(img_a, img_b, state="state.json")

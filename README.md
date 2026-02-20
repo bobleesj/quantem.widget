@@ -10,6 +10,26 @@ pip install quantem-widget
 
 ## Quick Start
 
+### Show1D - 1D Data Viewer
+
+```python
+import numpy as np
+from quantem.widget import Show1D
+
+# Single spectrum
+spectrum = np.random.rand(512)
+Show1D(spectrum, x_label="Energy Loss", x_unit="eV", y_label="Counts")
+
+# Multiple traces with calibrated X axis
+energy = np.linspace(0, 800, 512).astype(np.float32)
+Show1D(
+    [spec1, spec2, spec3],
+    x=energy,
+    labels=["Region A", "Region B", "Region C"],
+    title="EELS Comparison",
+)
+```
+
 ### Show2D - Static Image Viewer
 
 ```python
@@ -53,7 +73,80 @@ import numpy as np
 from quantem.widget import Show4DSTEM
 
 data = np.random.rand(64, 64, 128, 128)
-Show4DSTEM(data, pixel_size=2.39, k_pixel_size=0.46)
+w = Show4DSTEM(data, pixel_size=2.39, k_pixel_size=0.46)
+
+# Programmatic export from current interactive state
+w.save_image("dp.png", view="diffraction", position=(10, 12))
+w.save_image("virtual.pdf", view="virtual", frame_idx=3)
+w.save_image("all_panels.png", view="all")
+```
+
+### Bin - Interactive Binning + BF/ADF QC
+
+```python
+import numpy as np
+from quantem.widget import Bin
+
+data = np.random.rand(64, 64, 128, 128).astype(np.float32)
+w = Bin(data, pixel_size=2.39, k_pixel_size=0.46, use_torch=True, device="cpu")  # torch-only compute path
+w  # adjust scan/detector binning and inspect BF/ADF quality panels
+
+# export current binning preset
+w.save("bin_preset.json")
+
+# get binned array for downstream workflows
+binned = w.get_binned_data()
+```
+
+### Folder - 4D-STEM Intake Browser
+
+```python
+from quantem.widget import Folder
+
+w = Folder(
+    folder_path="/path/to/incoming",
+    watch_latest=True,
+    stable_required_polls=2,
+)
+w  # search/sort/filter + preview + one-click open to Show4DSTEM/Show3D/Show2D
+```
+
+### Merge4DSTEM - Out-of-Core Dataset Merge
+
+```python
+from quantem.widget import Merge4DSTEM
+
+m = Merge4DSTEM(folder_path="/path/to/data")
+m.selected_paths = ["/path/run01.h5", "/path/run02.h5"]
+m.merge_mode = "stack_time"  # create 5D (time, scan_r, scan_c, det_r, det_c)
+m.output_path = "/path/merged_5d.h5"
+m.output_dataset_path = "data/merged"
+m.merge_selected()
+
+# optional: rolling time smoothing + drift-aware average
+m.merge_mode = "rolling_mean_time"
+m.rolling_window_frames = 3
+m.drift_aware_average = True
+
+# reproducibility export/import
+m.save_pipeline_spec("merge_pipeline.json")
+m.load_pipeline_spec("merge_pipeline.json")
+```
+
+`Merge4DSTEM` is intentionally separate from `Folder` and `Bin`:
+- `Folder`: browse + triage incoming files
+- `Bin`: preprocess one dataset
+- `Merge4DSTEM`: construct merged 5D/time-reduced datasets with provenance
+
+Fast merge-only test lane:
+
+```bash
+./scripts/test_merge_quick.sh
+
+# equivalent explicit command:
+PYTHONPATH=src MPLCONFIGDIR=/tmp/quantem-widget-mplconfig \
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+python -m pytest tests/test_widget_merge4dstem.py -q -m "merge and quick and not slow"
 ```
 
 ### Mark2D - Interactive Image Annotation
@@ -70,18 +163,49 @@ w
 w.selected_points  # [{'row': 83, 'col': 120}, ...]
 ```
 
+## Batch Binning Over Folders (Preset-Driven)
+
+Use one-file-at-a-time batch processing for large time-series pipelines:
+
+```bash
+python -m quantem.widget.bin_batch \
+  --input-dir /path/to/raw \
+  --output-dir /path/to/binned \
+  --preset bin_preset.json \
+  --pattern '*.npy' \
+  --recursive \
+  --device cpu
+```
+
+Equivalent wrapper:
+
+```bash
+./scripts/bin_batch.py --input-dir /path/to/raw --output-dir /path/to/binned --preset bin_preset.json
+```
+
+Notes:
+- Processing is sequential (one file at a time) to keep memory bounded.
+- 5D `.npy` time series are streamed frame-by-frame when `time_axis=0` in the preset.
+- Outputs include a JSONL manifest at `output_dir/bin_batch_manifest.jsonl`.
+- Binning compute is torch-only; set `device` to `cpu`, `cuda`, or `mps`.
+
 ## Array Compatibility
 
 All widgets accept NumPy arrays, PyTorch tensors, CuPy arrays, and quantem Dataset objects via duck typing. No manual conversion needed.
 
 | Widget | NumPy | PyTorch | CuPy | quantem Dataset |
 |--------|-------|---------|------|-----------------|
+| Show1D | yes | yes | yes | duck typing |
 | Show2D | yes | yes | yes | `Dataset2d` |
 | Show3D | yes | yes | yes | `Dataset3d` |
 | Show3DVolume | yes | yes | yes | `Dataset3d` |
+| Show4D | yes | yes | yes | `Dataset4dstem` |
 | Show4DSTEM | yes | yes | yes | `Dataset4dstem` |
+| ShowComplex2D | yes | yes | yes | duck typing |
 | Mark2D | yes | yes | yes | `Dataset2d` |
+| Edit2D | yes | yes | yes | `Dataset2d` |
 | Align2D | yes | yes | yes | `Dataset2d` |
+| Bin | yes | yes | yes | `Dataset4dstem` |
 
 When a quantem Dataset is passed, metadata (title, pixel size, units) is extracted automatically. Explicit parameters always override auto-extracted values.
 
@@ -95,6 +219,19 @@ Show3D(dataset)  # title and pixel_size extracted from dataset
 ```
 
 ## Documentation with Interactive Widgets
+
+### Building docs locally
+
+```bash
+pip install -e ".[docs]"
+
+# One-shot build
+sphinx-build docs docs/_build/html
+open docs/_build/html/index.html
+
+# Live reload (rebuilds on file save, auto-refreshes browser)
+sphinx-autobuild docs docs/_build/html --open-browser
+```
 
 The Sphinx documentation renders anywidget-based widgets interactively in the browser — users can zoom, pan, change colormaps, toggle FFT, etc. directly on the docs page without a running kernel.
 
@@ -152,8 +289,8 @@ Publishes to TestPyPI when a version tag is pushed.
 ```bash
 # 1. Bump version in pyproject.toml
 # 2. Commit, tag, and push
-git tag v0.0.5
-git push origin main && git push origin v0.0.5
+git tag v0.0.7
+git push origin main && git push origin v0.0.7
 ```
 
 GitHub Actions compiles React/TypeScript, builds the Python wheel, and uploads to TestPyPI. Note: TestPyPI does not allow re-uploading the same version — always bump the version before tagging.
@@ -163,7 +300,7 @@ GitHub Actions compiles React/TypeScript, builds the Python wheel, and uploads t
 After CI finishes, verify the published package in a clean environment:
 
 ```bash
-./scripts/verify_testpypi.sh 0.0.5
+./scripts/verify_testpypi.sh 0.0.7
 ```
 
 This creates a fresh conda env, installs from TestPyPI, verifies all widget imports and JS bundles, then opens JupyterLab with a test notebook for visual inspection. When done, press Ctrl+C and clean up:

@@ -30,7 +30,7 @@ def test_show2d_dataset2d_extracts_title():
     assert w.width == 32
 
 
-def test_show2d_dataset2d_extracts_pixel_size_angstrom():
+def test_show2d_dataset2d_extracts_pixel_size():
     ds = Dataset2d.from_array(
         array=np.random.rand(32, 32).astype(np.float32),
         name="test",
@@ -38,7 +38,7 @@ def test_show2d_dataset2d_extracts_pixel_size_angstrom():
         units=("Å", "Å"),
     )
     w = Show2D(ds)
-    assert w.pixel_size_angstrom == pytest.approx(1.5)
+    assert w.pixel_size == pytest.approx(1.5)
 
 
 def test_show2d_dataset2d_converts_nm_to_angstrom():
@@ -49,7 +49,7 @@ def test_show2d_dataset2d_converts_nm_to_angstrom():
         units=("nm", "nm"),
     )
     w = Show2D(ds)
-    assert w.pixel_size_angstrom == pytest.approx(2.0)  # 0.2 nm = 2.0 Å
+    assert w.pixel_size == pytest.approx(2.0)  # 0.2 nm = 2.0 Å
 
 
 def test_show2d_dataset2d_explicit_overrides():
@@ -59,9 +59,9 @@ def test_show2d_dataset2d_explicit_overrides():
         sampling=(1.0, 1.0),
         units=("Å", "Å"),
     )
-    w = Show2D(ds, title="My Title", pixel_size_angstrom=5.0)
+    w = Show2D(ds, title="My Title", pixel_size=5.0)
     assert w.title == "My Title"
-    assert w.pixel_size_angstrom == pytest.approx(5.0)
+    assert w.pixel_size == pytest.approx(5.0)
 
 
 # =========================================================================
@@ -81,7 +81,7 @@ def test_show3d_dataset3d_extracts_title():
     assert w.n_slices == 5
 
 
-def test_show3d_dataset3d_extracts_pixel_size_angstrom_units():
+def test_show3d_dataset3d_extracts_pixel_size_units():
     ds = Dataset3d.from_array(
         array=np.random.rand(5, 32, 32).astype(np.float32),
         name="test",
@@ -89,8 +89,8 @@ def test_show3d_dataset3d_extracts_pixel_size_angstrom_units():
         units=("nm", "Å", "Å"),
     )
     w = Show3D(ds)
-    # pixel_size is in nm; 2.5 Å → 0.25 nm
-    assert w.pixel_size == pytest.approx(0.25)
+    # pixel_size is in Å; sampling in Å → passthrough
+    assert w.pixel_size == pytest.approx(2.5)
 
 
 def test_show3d_dataset3d_nm_units_passthrough():
@@ -101,8 +101,8 @@ def test_show3d_dataset3d_nm_units_passthrough():
         units=("nm", "nm", "nm"),
     )
     w = Show3D(ds)
-    # pixel_size in nm, sampling already in nm → passthrough
-    assert w.pixel_size == pytest.approx(0.5)
+    # pixel_size in Å, sampling in nm → convert: 0.5 nm * 10 = 5.0 Å
+    assert w.pixel_size == pytest.approx(5.0)
 
 
 def test_show3d_dataset3d_explicit_overrides():
@@ -112,9 +112,9 @@ def test_show3d_dataset3d_explicit_overrides():
         sampling=(1.0, 0.25, 0.25),
         units=("nm", "nm", "nm"),
     )
-    w = Show3D(ds, title="Override", pixel_size=1.0)
+    w = Show3D(ds, title="Override", pixel_size=10.0)
     assert w.title == "Override"
-    assert w.pixel_size == pytest.approx(1.0)
+    assert w.pixel_size == pytest.approx(10.0)
 
 
 # =========================================================================
@@ -142,7 +142,7 @@ def test_show3dvolume_dataset3d_extracts_pixel_size():
         units=("Å", "Å", "Å"),
     )
     w = Show3DVolume(ds)
-    assert w.pixel_size_angstrom == pytest.approx(1.5)
+    assert w.pixel_size == pytest.approx(1.5)
 
 
 def test_show3dvolume_dataset3d_converts_nm():
@@ -153,7 +153,7 @@ def test_show3dvolume_dataset3d_converts_nm():
         units=("nm", "nm", "nm"),
     )
     w = Show3DVolume(ds)
-    assert w.pixel_size_angstrom == pytest.approx(3.0)  # 0.3 nm = 3.0 Å
+    assert w.pixel_size == pytest.approx(3.0)  # 0.3 nm = 3.0 Å
 
 
 def test_show3dvolume_dataset3d_explicit_overrides():
@@ -163,9 +163,9 @@ def test_show3dvolume_dataset3d_explicit_overrides():
         sampling=(1.0, 1.0, 1.0),
         units=("Å", "Å", "Å"),
     )
-    w = Show3DVolume(ds, title="Override", pixel_size_angstrom=5.0)
+    w = Show3DVolume(ds, title="Override", pixel_size=5.0)
     assert w.title == "Override"
-    assert w.pixel_size_angstrom == pytest.approx(5.0)
+    assert w.pixel_size == pytest.approx(5.0)
 
 
 # =========================================================================
@@ -339,7 +339,7 @@ def test_align2d_dataset2d_extracts_pixel_size():
         units=("Å", "Å"),
     )
     w = Align2D(ds_a, ds_b, auto_align=False)
-    assert w.pixel_size == pytest.approx(0.25)  # 2.5 Å = 0.25 nm
+    assert w.pixel_size == pytest.approx(2.5)  # 2.5 Å passthrough
 
 
 def test_align2d_dataset2d_mixed_with_array():
@@ -352,7 +352,7 @@ def test_align2d_dataset2d_mixed_with_array():
     raw = np.random.rand(32, 32).astype(np.float32)
     w = Align2D(ds, raw, auto_align=False)
     assert w.height == 32
-    assert w.pixel_size == pytest.approx(0.1)  # 1.0 Å = 0.1 nm
+    assert w.pixel_size == pytest.approx(1.0)  # 1.0 Å passthrough
 
 
 def test_align2d_dataset2d_explicit_overrides():
@@ -395,22 +395,22 @@ def test_edit2d_dataset_pixel_size():
     arr = np.random.rand(32, 32).astype(np.float32)
     ds = MockDataset2dForEdit2D(arr, name="Test", sampling=(2.5, 2.5), units=("Å", "Å"))
     widget = Edit2D(ds)
-    assert widget.pixel_size_angstrom == pytest.approx(2.5)
+    assert widget.pixel_size == pytest.approx(2.5)
 
 
 def test_edit2d_dataset_nm_conversion():
     arr = np.random.rand(32, 32).astype(np.float32)
     ds = MockDataset2dForEdit2D(arr, name="Test", sampling=(0.25, 0.25), units=("nm", "nm"))
     widget = Edit2D(ds)
-    assert widget.pixel_size_angstrom == pytest.approx(2.5)  # 0.25 nm = 2.5 Å
+    assert widget.pixel_size == pytest.approx(2.5)  # 0.25 nm = 2.5 Å
 
 
 def test_edit2d_dataset_explicit_override():
     arr = np.random.rand(32, 32).astype(np.float32)
     ds = MockDataset2dForEdit2D(arr, name="Auto Title", sampling=(2.0, 2.0), units=("Å", "Å"))
-    widget = Edit2D(ds, title="My Title", pixel_size_angstrom=5.0)
+    widget = Edit2D(ds, title="My Title", pixel_size=5.0)
     assert widget.title == "My Title"
-    assert widget.pixel_size_angstrom == pytest.approx(5.0)
+    assert widget.pixel_size == pytest.approx(5.0)
 
 
 # ── ShowComplex2D + Dataset2d ───────────────────────────────────────────────
@@ -436,19 +436,19 @@ def test_showcomplex2d_dataset_pixel_size():
     arr = (np.random.rand(32, 32) + 1j * np.random.rand(32, 32)).astype(np.complex64)
     ds = MockDataset2dForShowComplex2D(arr, name="Test", sampling=(1.5, 1.5), units=("Å", "Å"))
     widget = ShowComplex2D(ds)
-    assert widget.pixel_size_angstrom == pytest.approx(1.5)
+    assert widget.pixel_size == pytest.approx(1.5)
 
 
 def test_showcomplex2d_dataset_nm_conversion():
     arr = (np.random.rand(32, 32) + 1j * np.random.rand(32, 32)).astype(np.complex64)
     ds = MockDataset2dForShowComplex2D(arr, name="Test", sampling=(0.15, 0.15), units=("nm", "nm"))
     widget = ShowComplex2D(ds)
-    assert widget.pixel_size_angstrom == pytest.approx(1.5)  # 0.15 nm = 1.5 Å
+    assert widget.pixel_size == pytest.approx(1.5)  # 0.15 nm = 1.5 Å
 
 
 def test_showcomplex2d_dataset_explicit_override():
     arr = (np.random.rand(32, 32) + 1j * np.random.rand(32, 32)).astype(np.complex64)
     ds = MockDataset2dForShowComplex2D(arr, name="Auto Title", sampling=(2.0, 2.0), units=("Å", "Å"))
-    widget = ShowComplex2D(ds, title="My Title", pixel_size_angstrom=3.0)
+    widget = ShowComplex2D(ds, title="My Title", pixel_size=3.0)
     assert widget.title == "My Title"
-    assert widget.pixel_size_angstrom == pytest.approx(3.0)
+    assert widget.pixel_size == pytest.approx(3.0)

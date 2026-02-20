@@ -71,9 +71,9 @@ def create_test_notebook():
                 "source": [
                     "# 2. Pre-loaded points with ROI and pixel calibration\n",
                     "pts = [(30, 30), (42, 30), (54, 30), (36, 41), (48, 41), (60, 41)]\n",
-                    "w = Mark2D(image, scale=2.0, points=pts, pixel_size_angstrom=1.5)\n",
-                    "w.add_roi(64, 64, mode='circle', radius=20, color='#00ff00')\n",
-                    "w.add_roi(40, 80, mode='square', radius=15, color='#ff9800')\n",
+                    "w = Mark2D(image, scale=2.0, points=pts, pixel_size=1.5)\n",
+                    "w.add_roi(64, 64, shape='circle', radius=20, color='#00ff00')\n",
+                    "w.add_roi(40, 80, shape='square', radius=15, color='#ff9800')\n",
                     "w"
                 ]
             },

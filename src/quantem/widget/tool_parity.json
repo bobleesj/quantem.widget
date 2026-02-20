@@ -1,0 +1,69 @@
+{
+  "widgets": {
+    "Show2D": {
+      "tool_groups": ["display", "histogram", "stats", "navigation", "view", "export", "roi", "profile", "all"],
+      "aliases": {}
+    },
+    "Show3D": {
+      "tool_groups": ["display", "histogram", "stats", "playback", "view", "export", "roi", "profile", "all"],
+      "aliases": {
+        "navigation": "playback"
+      }
+    },
+    "Show3DVolume": {
+      "tool_groups": ["display", "histogram", "playback", "fft", "navigation", "stats", "export", "view", "volume", "all"],
+      "aliases": {}
+    },
+    "Show4D": {
+      "tool_groups": ["display", "roi", "histogram", "profile", "navigation", "playback", "stats", "export", "view", "fft", "all"],
+      "aliases": {}
+    },
+    "Show4DSTEM": {
+      "tool_groups": ["display", "histogram", "stats", "navigation", "playback", "view", "export", "roi", "profile", "fft", "virtual", "frame", "all"],
+      "aliases": {}
+    },
+    "ShowComplex2D": {
+      "tool_groups": ["display", "histogram", "fft", "stats", "export", "view", "all"],
+      "aliases": {}
+    },
+    "Mark2D": {
+      "tool_groups": ["points", "roi", "profile", "display", "marker_style", "snap", "navigation", "view", "export", "all"],
+      "aliases": {}
+    },
+    "Edit2D": {
+      "tool_groups": ["mode", "edit", "display", "histogram", "stats", "navigation", "export", "view", "all"],
+      "aliases": {}
+    },
+    "Align2D": {
+      "tool_groups": ["alignment", "overlay", "display", "histogram", "stats", "export", "view", "all"],
+      "aliases": {}
+    },
+    "Bin": {
+      "tool_groups": ["display", "binning", "mask", "preview", "stats", "export", "all"],
+      "aliases": {}
+    },
+    "Merge4DSTEM": {
+      "tool_groups": ["display", "sources", "merge", "preview", "stats", "export", "all"],
+      "aliases": {}
+    }
+  },
+  "viewer_widgets": ["Show2D", "Show3D", "Show3DVolume", "Show4D", "Show4DSTEM", "ShowComplex2D"],
+  "control_presets": {
+    "all": {
+      "label": "All",
+      "show_groups": ["*"]
+    },
+    "compact": {
+      "label": "Compact",
+      "show_groups": ["display", "navigation", "playback", "view", "export", "fft"]
+    },
+    "mask_focus": {
+      "label": "Mask Focus",
+      "show_groups": ["display", "roi", "histogram", "stats", "navigation", "playback", "view", "export", "fft", "virtual", "frame"]
+    },
+    "crop_focus": {
+      "label": "Crop Focus",
+      "show_groups": ["mode", "edit", "display", "histogram", "stats", "navigation", "view", "export"]
+    }
+  }
+}

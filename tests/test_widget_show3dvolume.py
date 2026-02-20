@@ -144,11 +144,50 @@ def test_show3dvolume_show_fft():
     assert widget2.show_fft is True
 
 
+@pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
+def test_show3dvolume_tool_lists_default_empty(trait_name):
+    data = np.random.rand(8, 16, 16).astype(np.float32)
+    w = Show3DVolume(data)
+    assert getattr(w, trait_name) == []
+
+
+@pytest.mark.parametrize(
+    ("trait_name", "ctor_kwargs", "expected"),
+    [
+        ("disabled_tools", {"disabled_tools": ["display", "Histogram", "volume"]}, ["display", "histogram", "volume"]),
+        ("hidden_tools", {"hidden_tools": ["display", "Histogram", "volume"]}, ["display", "histogram", "volume"]),
+        ("disabled_tools", {"disable_display": True, "disable_fft": True, "disable_volume": True}, ["display", "fft", "volume"]),
+        ("hidden_tools", {"hide_display": True, "hide_fft": True, "hide_volume": True}, ["display", "fft", "volume"]),
+        ("disabled_tools", {"disable_all": True}, ["all"]),
+        ("hidden_tools", {"hide_all": True}, ["all"]),
+    ],
+)
+def test_show3dvolume_tool_lists_constructor_behavior(trait_name, ctor_kwargs, expected):
+    data = np.random.rand(8, 16, 16).astype(np.float32)
+    w = Show3DVolume(data, **ctor_kwargs)
+    assert getattr(w, trait_name) == expected
+
+
+@pytest.mark.parametrize("kwargs", [{"disabled_tools": ["not_real"]}, {"hidden_tools": ["not_real"]}])
+def test_show3dvolume_tool_lists_unknown_raises(kwargs):
+    data = np.random.rand(8, 16, 16).astype(np.float32)
+    with pytest.raises(ValueError, match="Unknown tool group"):
+        Show3DVolume(data, **kwargs)
+
+
+@pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
+def test_show3dvolume_tool_lists_normalizes(trait_name):
+    data = np.random.rand(8, 16, 16).astype(np.float32)
+    w = Show3DVolume(data)
+    setattr(w, trait_name, ["DISPLAY", "display", "fft"])
+    assert getattr(w, trait_name) == ["display", "fft"]
+
+
 def test_show3dvolume_scale_bar():
     """Scale bar parameters are stored."""
     data = np.random.rand(8, 8, 8).astype(np.float32)
-    widget = Show3DVolume(data, pixel_size_angstrom=2.5, scale_bar_visible=False)
-    assert widget.pixel_size_angstrom == pytest.approx(2.5)
+    widget = Show3DVolume(data, pixel_size=2.5, scale_bar_visible=False)
+    assert widget.pixel_size == pytest.approx(2.5)
     assert widget.scale_bar_visible is False
 
 
@@ -236,13 +275,31 @@ def test_show3dvolume_play_axis():
     assert widget.play_axis == 3
 
 
+def test_show3dvolume_gif_generation_sets_metadata():
+    import json
+
+    data = np.random.rand(8, 8, 8).astype(np.float32)
+    widget = Show3DVolume(data, cmap="viridis")
+    widget._export_axis = 2
+    widget.fps = 5.0
+    widget._generate_gif()
+    assert widget._gif_data[:3] == b"GIF"
+    metadata = json.loads(widget._gif_metadata_json)
+    assert metadata["widget_name"] == "Show3DVolume"
+    assert metadata["format"] == "gif"
+    assert metadata["export_kind"] == "animated_slices"
+    assert metadata["export_axis"] == 2
+
+
 # ── State Protocol ────────────────────────────────────────────────────────
 
 
 def test_show3dvolume_state_dict_roundtrip():
     data = np.random.rand(16, 16, 16).astype(np.float32)
     w = Show3DVolume(data, cmap="viridis", log_scale=True, title="Volume",
-                     pixel_size_angstrom=2.0, show_fft=True, fps=10.0)
+                     pixel_size=2.0, show_fft=True, fps=10.0,
+                     disabled_tools=["display", "fft"],
+                     hidden_tools=["stats"])
     w.slice_z = 5
     w.slice_y = 8
     w.slice_x = 12
@@ -251,12 +308,24 @@ def test_show3dvolume_state_dict_roundtrip():
     assert w2.cmap == "viridis"
     assert w2.log_scale is True
     assert w2.title == "Volume"
-    assert w2.pixel_size_angstrom == pytest.approx(2.0)
+    assert w2.pixel_size == pytest.approx(2.0)
     assert w2.show_fft is True
     assert w2.fps == pytest.approx(10.0)
     assert w2.slice_z == 5
     assert w2.slice_y == 8
     assert w2.slice_x == 12
+    assert w2.disabled_tools == ["display", "fft"]
+    assert w2.hidden_tools == ["stats"]
+
+
+def test_show3dvolume_state_dict_includes_tool_customization():
+    data = np.random.rand(8, 8, 8).astype(np.float32)
+    w = Show3DVolume(data, disabled_tools=["display"], hidden_tools=["navigation"])
+    sd = w.state_dict()
+    assert "disabled_tools" in sd
+    assert "hidden_tools" in sd
+    assert sd["disabled_tools"] == ["display"]
+    assert sd["hidden_tools"] == ["navigation"]
 
 
 def test_show3dvolume_save_load_file(tmp_path):
@@ -267,7 +336,10 @@ def test_show3dvolume_save_load_file(tmp_path):
     w.save(str(path))
     assert path.exists()
     saved = json.loads(path.read_text())
-    assert saved["cmap"] == "plasma"
+    assert saved["metadata_version"] == "1.0"
+    assert saved["widget_name"] == "Show3DVolume"
+    assert isinstance(saved["widget_version"], str)
+    assert saved["state"]["cmap"] == "plasma"
     w2 = Show3DVolume(data, state=str(path))
     assert w2.cmap == "plasma"
     assert w2.title == "Saved Vol"
@@ -304,3 +376,56 @@ def test_show3dvolume_set_image():
     assert widget.nx == 20
     assert widget.cmap == "viridis"
     assert len(widget.volume_bytes) == 32 * 24 * 20 * 4
+
+
+# ── save_image ───────────────────────────────────────────────────────────
+
+
+def test_show3dvolume_save_image_xy(tmp_path):
+    vol = np.random.rand(16, 16, 16).astype(np.float32)
+    w = Show3DVolume(vol, cmap="viridis")
+    out = w.save_image(tmp_path / "xy.png", plane="xy")
+    assert out.exists()
+    from PIL import Image
+    img = Image.open(out)
+    assert img.size == (16, 16)
+
+
+def test_show3dvolume_save_image_xz(tmp_path):
+    vol = np.random.rand(16, 20, 24).astype(np.float32)
+    w = Show3DVolume(vol)
+    out = w.save_image(tmp_path / "xz.png", plane="xz")
+    assert out.exists()
+    from PIL import Image
+    img = Image.open(out)
+    assert img.size == (24, 16)
+
+
+def test_show3dvolume_save_image_yz(tmp_path):
+    vol = np.random.rand(16, 20, 24).astype(np.float32)
+    w = Show3DVolume(vol)
+    out = w.save_image(tmp_path / "yz.png", plane="yz")
+    assert out.exists()
+    from PIL import Image
+    img = Image.open(out)
+    assert img.size == (20, 16)
+
+
+def test_show3dvolume_save_image_pdf(tmp_path):
+    vol = np.random.rand(8, 8, 8).astype(np.float32)
+    w = Show3DVolume(vol)
+    out = w.save_image(tmp_path / "slice.pdf")
+    assert out.exists()
+
+
+def test_show3dvolume_save_image_bad_plane(tmp_path):
+    vol = np.random.rand(8, 8, 8).astype(np.float32)
+    w = Show3DVolume(vol)
+    with pytest.raises(ValueError, match="Unknown plane"):
+        w.save_image(tmp_path / "out.png", plane="ab")
+
+
+def test_show3dvolume_widget_version_is_set():
+    vol = np.random.rand(8, 8, 8).astype(np.float32)
+    w = Show3DVolume(vol)
+    assert w.widget_version != "unknown"

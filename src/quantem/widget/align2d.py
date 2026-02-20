@@ -12,6 +12,12 @@ import numpy as np
 import traitlets
 
 from quantem.widget.array_utils import to_numpy, _resize_image
+from quantem.widget.json_state import resolve_widget_version, save_state_file, unwrap_state_payload
+from quantem.widget.tool_parity import (
+    bind_tool_runtime_api,
+    build_tool_groups,
+    normalize_tool_groups,
+)
 
 
 def _tukey_2d(h: int, w: int, alpha: float = 0.2) -> np.ndarray:
@@ -142,7 +148,7 @@ class Align2D(anywidget.AnyWidget):
     padding : float, default 0.2
         Fractional padding on each side. Adjustable from the frontend.
     pixel_size : float, default 0.0
-        Pixel size in nm for scale bar (0 = uncalibrated).
+        Pixel size in Å for scale bar (0 = uncalibrated).
     canvas_size : int, default 300
         Initial canvas size in CSS pixels for each column.
     auto_align : bool, default True
@@ -215,6 +221,78 @@ class Align2D(anywidget.AnyWidget):
     canvas_size = traitlets.Int(300).tag(sync=True)
     hist_source = traitlets.Unicode("a").tag(sync=True)
 
+    # Tool visibility / locking
+    disabled_tools = traitlets.List(traitlets.Unicode()).tag(sync=True)
+    hidden_tools = traitlets.List(traitlets.Unicode()).tag(sync=True)
+
+    @classmethod
+    def _normalize_tool_groups(cls, tool_groups) -> list[str]:
+        return normalize_tool_groups("Align2D", tool_groups)
+
+    @classmethod
+    def _build_disabled_tools(
+        cls,
+        disabled_tools=None,
+        disable_alignment: bool = False,
+        disable_overlay: bool = False,
+        disable_display: bool = False,
+        disable_histogram: bool = False,
+        disable_stats: bool = False,
+        disable_export: bool = False,
+        disable_view: bool = False,
+        disable_all: bool = False,
+    ) -> list[str]:
+        return build_tool_groups(
+            "Align2D",
+            tool_groups=disabled_tools,
+            all_flag=disable_all,
+            flag_map={
+                "alignment": disable_alignment,
+                "overlay": disable_overlay,
+                "display": disable_display,
+                "histogram": disable_histogram,
+                "stats": disable_stats,
+                "export": disable_export,
+                "view": disable_view,
+            },
+        )
+
+    @classmethod
+    def _build_hidden_tools(
+        cls,
+        hidden_tools=None,
+        hide_alignment: bool = False,
+        hide_overlay: bool = False,
+        hide_display: bool = False,
+        hide_histogram: bool = False,
+        hide_stats: bool = False,
+        hide_export: bool = False,
+        hide_view: bool = False,
+        hide_all: bool = False,
+    ) -> list[str]:
+        return build_tool_groups(
+            "Align2D",
+            tool_groups=hidden_tools,
+            all_flag=hide_all,
+            flag_map={
+                "alignment": hide_alignment,
+                "overlay": hide_overlay,
+                "display": hide_display,
+                "histogram": hide_histogram,
+                "stats": hide_stats,
+                "export": hide_export,
+                "view": hide_view,
+            },
+        )
+
+    @traitlets.validate("disabled_tools")
+    def _validate_disabled_tools(self, proposal):
+        return self._normalize_tool_groups(proposal["value"])
+
+    @traitlets.validate("hidden_tools")
+    def _validate_hidden_tools(self, proposal):
+        return self._normalize_tool_groups(proposal["value"])
+
     def __init__(
         self,
         image_a: Union[np.ndarray, "torch.Tensor"],
@@ -231,10 +309,29 @@ class Align2D(anywidget.AnyWidget):
         max_shift: float = 0.0,
         rotation: float = 0.0,
         hist_source: str = "a",
+        disabled_tools=None,
+        disable_alignment: bool = False,
+        disable_overlay: bool = False,
+        disable_display: bool = False,
+        disable_histogram: bool = False,
+        disable_stats: bool = False,
+        disable_export: bool = False,
+        disable_view: bool = False,
+        disable_all: bool = False,
+        hidden_tools=None,
+        hide_alignment: bool = False,
+        hide_overlay: bool = False,
+        hide_display: bool = False,
+        hide_histogram: bool = False,
+        hide_stats: bool = False,
+        hide_export: bool = False,
+        hide_view: bool = False,
+        hide_all: bool = False,
         state=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.widget_version = resolve_widget_version()
 
         # Check if inputs are Dataset2d and extract metadata
         for img_data in (image_a, image_b):
@@ -244,8 +341,9 @@ class Align2D(anywidget.AnyWidget):
                 if pixel_size == 0.0 and hasattr(img_data, "units"):
                     units = list(img_data.units)
                     sampling_val = float(img_data.sampling[-1])
-                    if units[-1] in ("Å", "angstrom", "A"):
-                        sampling_val = sampling_val / 10  # Å → nm
+                    # pixel_size is in Å — convert if units are nm
+                    if units[-1] in ("nm", "nanometer"):
+                        sampling_val = sampling_val * 10  # nm → Å
                     pixel_size = sampling_val
 
         # Extract arrays from Dataset objects
@@ -288,6 +386,28 @@ class Align2D(anywidget.AnyWidget):
         self.max_shift = max_shift
         self.rotation = rotation
         self.hist_source = hist_source
+        self.disabled_tools = self._build_disabled_tools(
+            disabled_tools=disabled_tools,
+            disable_alignment=disable_alignment,
+            disable_overlay=disable_overlay,
+            disable_display=disable_display,
+            disable_histogram=disable_histogram,
+            disable_stats=disable_stats,
+            disable_export=disable_export,
+            disable_view=disable_view,
+            disable_all=disable_all,
+        )
+        self.hidden_tools = self._build_hidden_tools(
+            hidden_tools=hidden_tools,
+            hide_alignment=hide_alignment,
+            hide_overlay=hide_overlay,
+            hide_display=hide_display,
+            hide_histogram=hide_histogram,
+            hide_stats=hide_stats,
+            hide_export=hide_export,
+            hide_view=hide_view,
+            hide_all=hide_all,
+        )
 
         # Cross-correlation at (0,0) — baseline
         self.xcorr_zero = _compute_ncc(a, b, 0.0, 0.0)
@@ -315,7 +435,12 @@ class Align2D(anywidget.AnyWidget):
 
         if state is not None:
             if isinstance(state, (str, pathlib.Path)):
-                state = json.loads(pathlib.Path(state).read_text())
+                state = unwrap_state_payload(
+                    json.loads(pathlib.Path(state).read_text()),
+                    require_envelope=True,
+                )
+            else:
+                state = unwrap_state_payload(state)
             self.load_state_dict(state)
 
     def set_images(self, image_a, image_b, auto_align=True):
@@ -377,10 +502,12 @@ class Align2D(anywidget.AnyWidget):
             "max_shift": self.max_shift,
             "canvas_size": self.canvas_size,
             "hist_source": self.hist_source,
+            "disabled_tools": self.disabled_tools,
+            "hidden_tools": self.hidden_tools,
         }
 
     def save(self, path: str):
-        pathlib.Path(path).write_text(json.dumps(self.state_dict(), indent=2))
+        save_state_file(path, "Align2D", self.state_dict())
 
     def load_state_dict(self, state):
         for key, val in state.items():
@@ -391,7 +518,11 @@ class Align2D(anywidget.AnyWidget):
         lines = [self.title or "Align2D", "═" * 32]
         lines.append(f"Image:    {self.height}×{self.width}")
         if self.pixel_size > 0:
-            lines[-1] += f" ({self.pixel_size:.2f} nm/px)"
+            ps = self.pixel_size
+            if ps >= 10:
+                lines[-1] += f" ({ps / 10:.2f} nm/px)"
+            else:
+                lines[-1] += f" ({ps:.2f} Å/px)"
         lines.append(f"Labels:   A={self.label_a!r}  B={self.label_b!r}")
         lines.append(f"Offset:   dx={self.dx:.2f}  dy={self.dy:.2f}  rotation={self.rotation:.2f}°")
         lines.append(f"Display:  {self.cmap} | opacity={self.opacity:.0%} | padding={self.padding:.0%}")
@@ -408,3 +539,6 @@ class Align2D(anywidget.AnyWidget):
     def offset(self) -> tuple[float, float]:
         """Return (dx, dy) alignment offset."""
         return (self.dx, self.dy)
+
+
+bind_tool_runtime_api(Align2D, "Align2D")

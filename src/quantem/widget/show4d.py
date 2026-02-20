@@ -16,6 +16,12 @@ import anywidget
 import traitlets
 
 from quantem.widget.array_utils import to_numpy
+from quantem.widget.json_state import build_json_header, resolve_widget_version, save_state_file, unwrap_state_payload
+from quantem.widget.tool_parity import (
+    bind_tool_runtime_api,
+    build_tool_groups,
+    normalize_tool_groups,
+)
 
 try:
     import torch
@@ -28,7 +34,6 @@ try:
     _HAS_VALIDATE_DEVICE = True
 except ImportError:
     _HAS_VALIDATE_DEVICE = False
-
 
 class Show4D(anywidget.AnyWidget):
     """
@@ -70,6 +75,19 @@ class Show4D(anywidget.AnyWidget):
         Low percentile for auto-contrast clipping.
     percentile_high : float, default 99.5
         High percentile for auto-contrast clipping.
+    disabled_tools : list of str, optional
+        Tool groups to lock while still showing controls. Supported:
+        ``"display"``, ``"roi"``, ``"histogram"``, ``"profile"``,
+        ``"navigation"``, ``"playback"``, ``"stats"``, ``"export"``,
+        ``"view"``, ``"fft"``, ``"all"``.
+    disable_* : bool, optional
+        Convenience flags mirroring ``disabled_tools`` for each tool group,
+        plus ``disable_all``.
+    hidden_tools : list of str, optional
+        Tool groups to hide from the UI. Uses the same keys as
+        ``disabled_tools``.
+    hide_* : bool, optional
+        Convenience flags mirroring ``disable_*`` for ``hidden_tools``.
     """
 
     _esm = pathlib.Path(__file__).parent / "static" / "show4d.js"
@@ -115,10 +133,12 @@ class Show4D(anywidget.AnyWidget):
     log_scale = traitlets.Bool(False).tag(sync=True)
     auto_contrast = traitlets.Bool(True).tag(sync=True)
     show_stats = traitlets.Bool(True).tag(sync=True)
+    show_controls = traitlets.Bool(True).tag(sync=True)
     show_fft = traitlets.Bool(False).tag(sync=True)
+    disabled_tools = traitlets.List(traitlets.Unicode()).tag(sync=True)
+    hidden_tools = traitlets.List(traitlets.Unicode()).tag(sync=True)
     percentile_low = traitlets.Float(0.5).tag(sync=True)
     percentile_high = traitlets.Float(99.5).tag(sync=True)
-
     # Scale bars
     nav_pixel_size = traitlets.Float(0.0).tag(sync=True)
     sig_pixel_size = traitlets.Float(0.0).tag(sync=True)
@@ -142,10 +162,91 @@ class Show4D(anywidget.AnyWidget):
     # Export (GIF)
     _gif_export_requested = traitlets.Bool(False).tag(sync=True)
     _gif_data = traitlets.Bytes(b"").tag(sync=True)
+    _gif_metadata_json = traitlets.Unicode("").tag(sync=True)
 
     # Line Profile
     profile_line = traitlets.List(traitlets.Dict()).tag(sync=True)
     profile_width = traitlets.Int(1).tag(sync=True)
+
+    @classmethod
+    def _normalize_tool_groups(cls, tool_groups):
+        return normalize_tool_groups("Show4D", tool_groups)
+
+    @classmethod
+    def _build_disabled_tools(
+        cls,
+        disabled_tools=None,
+        disable_display: bool = False,
+        disable_roi: bool = False,
+        disable_histogram: bool = False,
+        disable_profile: bool = False,
+        disable_navigation: bool = False,
+        disable_playback: bool = False,
+        disable_stats: bool = False,
+        disable_export: bool = False,
+        disable_view: bool = False,
+        disable_fft: bool = False,
+        disable_all: bool = False,
+    ):
+        return build_tool_groups(
+            "Show4D",
+            tool_groups=disabled_tools,
+            all_flag=disable_all,
+            flag_map={
+                "display": disable_display,
+                "roi": disable_roi,
+                "histogram": disable_histogram,
+                "profile": disable_profile,
+                "navigation": disable_navigation,
+                "playback": disable_playback,
+                "stats": disable_stats,
+                "export": disable_export,
+                "view": disable_view,
+                "fft": disable_fft,
+            },
+        )
+
+    @classmethod
+    def _build_hidden_tools(
+        cls,
+        hidden_tools=None,
+        hide_display: bool = False,
+        hide_roi: bool = False,
+        hide_histogram: bool = False,
+        hide_profile: bool = False,
+        hide_navigation: bool = False,
+        hide_playback: bool = False,
+        hide_stats: bool = False,
+        hide_export: bool = False,
+        hide_view: bool = False,
+        hide_fft: bool = False,
+        hide_all: bool = False,
+    ):
+        return build_tool_groups(
+            "Show4D",
+            tool_groups=hidden_tools,
+            all_flag=hide_all,
+            flag_map={
+                "display": hide_display,
+                "roi": hide_roi,
+                "histogram": hide_histogram,
+                "profile": hide_profile,
+                "navigation": hide_navigation,
+                "playback": hide_playback,
+                "stats": hide_stats,
+                "export": hide_export,
+                "view": hide_view,
+                "fft": hide_fft,
+            },
+        )
+
+    @traitlets.validate("disabled_tools")
+    def _validate_disabled_tools(self, proposal):
+        return self._normalize_tool_groups(proposal["value"])
+
+    @traitlets.validate("hidden_tools")
+    def _validate_hidden_tools(self, proposal):
+        return self._normalize_tool_groups(proposal["value"])
 
     def __init__(
         self,
@@ -156,6 +257,7 @@ class Show4D(anywidget.AnyWidget):
         log_scale=False,
         auto_contrast=True,
         show_stats=True,
+        show_controls=True,
         show_fft=False,
         nav_pixel_size=None,
         sig_pixel_size=None,
@@ -165,10 +267,35 @@ class Show4D(anywidget.AnyWidget):
         percentile_high=99.5,
         snap_enabled=False,
         snap_radius=5,
+        disabled_tools=None,
+        disable_display=False,
+        disable_roi=False,
+        disable_histogram=False,
+        disable_profile=False,
+        disable_navigation=False,
+        disable_playback=False,
+        disable_stats=False,
+        disable_export=False,
+        disable_view=False,
+        disable_fft=False,
+        disable_all=False,
+        hidden_tools=None,
+        hide_display=False,
+        hide_roi=False,
+        hide_histogram=False,
+        hide_profile=False,
+        hide_navigation=False,
+        hide_playback=False,
+        hide_stats=False,
+        hide_export=False,
+        hide_view=False,
+        hide_fft=False,
+        hide_all=False,
         state=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.widget_version = resolve_widget_version()
 
         # Dataset duck typing
         if hasattr(data, "array") and hasattr(data, "sampling"):
@@ -212,11 +339,40 @@ class Show4D(anywidget.AnyWidget):
         self.log_scale = log_scale
         self.auto_contrast = auto_contrast
         self.show_stats = show_stats
+        self.show_controls = show_controls
         self.show_fft = show_fft
         self.percentile_low = percentile_low
         self.percentile_high = percentile_high
         self.snap_enabled = snap_enabled
         self.snap_radius = snap_radius
+        self.disabled_tools = self._build_disabled_tools(
+            disabled_tools=disabled_tools,
+            disable_display=disable_display,
+            disable_roi=disable_roi,
+            disable_histogram=disable_histogram,
+            disable_profile=disable_profile,
+            disable_navigation=disable_navigation,
+            disable_playback=disable_playback,
+            disable_stats=disable_stats,
+            disable_export=disable_export,
+            disable_view=disable_view,
+            disable_fft=disable_fft,
+            disable_all=disable_all,
+        )
+        self.hidden_tools = self._build_hidden_tools(
+            hidden_tools=hidden_tools,
+            hide_display=hide_display,
+            hide_roi=hide_roi,
+            hide_histogram=hide_histogram,
+            hide_profile=hide_profile,
+            hide_navigation=hide_navigation,
+            hide_playback=hide_playback,
+            hide_stats=hide_stats,
+            hide_export=hide_export,
+            hide_view=hide_view,
+            hide_fft=hide_fft,
+            hide_all=hide_all,
+        )
 
         # Scale bar
         self.nav_pixel_size = nav_pixel_size if nav_pixel_size is not None else 0.0
@@ -313,7 +469,12 @@ class Show4D(anywidget.AnyWidget):
 
         if state is not None:
             if isinstance(state, (str, pathlib.Path)):
-                state = json.loads(pathlib.Path(state).read_text())
+                state = unwrap_state_payload(
+                    json.loads(pathlib.Path(state).read_text()),
+                    require_envelope=True,
+                )
+            else:
+                state = unwrap_state_payload(state)
             self.load_state_dict(state)
 
     def set_image(self, data, nav_image=None):
@@ -376,7 +537,10 @@ class Show4D(anywidget.AnyWidget):
             "log_scale": self.log_scale,
             "auto_contrast": self.auto_contrast,
             "show_stats": self.show_stats,
+            "show_controls": self.show_controls,
             "show_fft": self.show_fft,
+            "disabled_tools": self.disabled_tools,
+            "hidden_tools": self.hidden_tools,
             "percentile_low": self.percentile_low,
             "percentile_high": self.percentile_high,
             "nav_pixel_size": self.nav_pixel_size,
@@ -400,7 +564,7 @@ class Show4D(anywidget.AnyWidget):
         }
 
     def save(self, path: str):
-        pathlib.Path(path).write_text(json.dumps(self.state_dict(), indent=2))
+        save_state_file(path, "Show4D", self.state_dict())
 
     def load_state_dict(self, state):
         for key, val in state.items():
@@ -427,6 +591,10 @@ class Show4D(anywidget.AnyWidget):
         if self.profile_line and len(self.profile_line) == 2:
             p0, p1 = self.profile_line[0], self.profile_line[1]
             lines.append(f"Profile:  ({p0['row']:.0f}, {p0['col']:.0f}) -> ({p1['row']:.0f}, {p1['col']:.0f}) width={self.profile_width}")
+        if self.disabled_tools:
+            lines.append(f"Locked:   {', '.join(self.disabled_tools)}")
+        if self.hidden_tools:
+            lines.append(f"Hidden:   {', '.join(self.hidden_tools)}")
         print("\n".join(lines))
 
     @property
@@ -592,6 +760,9 @@ class Show4D(anywidget.AnyWidget):
         from PIL import Image
 
         if not self._path_points:
+            with self.hold_sync():
+                self._gif_data = b""
+                self._gif_metadata_json = ""
             return
 
         cmap_fn = colormaps.get_cmap(self.cmap)
@@ -622,7 +793,102 @@ class Show4D(anywidget.AnyWidget):
             duration=duration_ms,
             loop=0,
         )
-        self._gif_data = buf.getvalue()
+        metadata = {
+            **build_json_header("Show4D"),
+            "view": "signal",
+            "format": "gif",
+            "export_kind": "path_animation",
+            "n_frames": int(len(pil_frames)),
+            "duration_ms": int(duration_ms),
+            "path_loop": bool(self.path_loop),
+            "path_points": [{"row": int(row), "col": int(col)} for row, col in self._path_points],
+            "scan_shape": {"rows": int(self.nav_rows), "cols": int(self.nav_cols)},
+            "detector_shape": {"rows": int(self.sig_rows), "cols": int(self.sig_cols)},
+            "display": {
+                "cmap": self.cmap,
+                "log_scale": bool(self.log_scale),
+                "auto_contrast": bool(self.auto_contrast),
+                "percentile_low": float(self.percentile_low),
+                "percentile_high": float(self.percentile_high),
+            },
+        }
+        with self.hold_sync():
+            self._gif_metadata_json = json.dumps(metadata, indent=2)
+            self._gif_data = buf.getvalue()
+
+    # ── Save Image ────────────────────────────────────────────────────────────
+
+    def save_image(
+        self,
+        path: str | pathlib.Path,
+        *,
+        view: str | None = None,
+        position: tuple[int, int] | None = None,
+        format: str | None = None,
+        dpi: int = 150,
+    ) -> pathlib.Path:
+        """Save current signal or navigation image as PNG, PDF, or TIFF.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Output file path.
+        view : str, optional
+            'signal' or 'nav'. Defaults to 'signal'.
+        position : tuple[int, int], optional
+            Navigation position as (row, col) for the signal view.
+            Defaults to current position.
+        format : str, optional
+            'png', 'pdf', or 'tiff'. If omitted, inferred from file extension.
+        dpi : int, default 150
+            Output DPI metadata.
+
+        Returns
+        -------
+        pathlib.Path
+            The written file path.
+        """
+        from matplotlib import colormaps
+        from PIL import Image
+
+        path = pathlib.Path(path)
+        fmt = (format or path.suffix.lstrip(".").lower() or "png").lower()
+        if fmt not in ("png", "pdf", "tiff", "tif"):
+            raise ValueError(f"Unsupported format: {fmt!r}. Use 'png', 'pdf', or 'tiff'.")
+
+        view_key = (view or "signal").lower()
+        if view_key not in ("signal", "nav"):
+            raise ValueError(f"Unknown view: {view_key!r}. Use 'signal' or 'nav'.")
+
+        if view_key == "signal":
+            row, col = position if position is not None else (self.pos_row, self.pos_col)
+            if row < 0 or row >= self.nav_rows or col < 0 or col >= self.nav_cols:
+                raise IndexError(
+                    f"Position ({row}, {col}) out of range "
+                    f"[0, {self.nav_rows}) x [0, {self.nav_cols})"
+                )
+            if _HAS_TORCH and isinstance(self._data, torch.Tensor):
+                frame = self._data[row, col].cpu().numpy()
+            else:
+                frame = np.asarray(self._data[row, col], dtype=np.float32)
+            normalized = self._normalize_frame(frame)
+        else:
+            frame = self._nav_image
+            nav_min, nav_max = float(frame.min()), float(frame.max())
+            if nav_max > nav_min:
+                normalized = np.clip(
+                    (frame - nav_min) / (nav_max - nav_min) * 255, 0, 255
+                ).astype(np.uint8)
+            else:
+                normalized = np.zeros(frame.shape, dtype=np.uint8)
+
+        cmap_fn = colormaps.get_cmap(self.cmap)
+        rgba = (cmap_fn(normalized / 255.0) * 255).astype(np.uint8)
+
+        img = Image.fromarray(rgba)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(str(path), dpi=(dpi, dpi))
+        return path
 
     # ── Internal Observers ───────────────────────────────────────────────────
 
@@ -731,3 +997,6 @@ class Show4D(anywidget.AnyWidget):
                 float(result.max()), float(result.std()),
             ]
             self.frame_bytes = result.tobytes()
+
+
+bind_tool_runtime_api(Show4D, "Show4D")

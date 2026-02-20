@@ -554,3 +554,61 @@ def test_show2d_from_emd_highdim_default_and_reduction(tmp_path):
     assert reduced.n_images == 1
     assert reduced.height == 4
     assert reduced.width == 4
+
+
+# ── save_image ───────────────────────────────────────────────────────────
+
+
+def test_show2d_save_image_png(tmp_path):
+    data = np.random.rand(32, 32).astype(np.float32)
+    w = Show2D(data, cmap="viridis")
+    out = w.save_image(tmp_path / "out.png")
+    assert out.exists()
+    assert out.stat().st_size > 0
+    from PIL import Image
+    img = Image.open(out)
+    assert img.size == (32, 32)
+
+
+def test_show2d_save_image_pdf(tmp_path):
+    data = np.random.rand(32, 32).astype(np.float32)
+    w = Show2D(data, cmap="inferno")
+    out = w.save_image(tmp_path / "out.pdf")
+    assert out.exists()
+    assert out.stat().st_size > 0
+
+
+def test_show2d_save_image_gallery_idx(tmp_path):
+    imgs = [np.random.rand(16, 16).astype(np.float32) for _ in range(3)]
+    w = Show2D(imgs)
+    out0 = w.save_image(tmp_path / "img0.png", idx=0)
+    out2 = w.save_image(tmp_path / "img2.png", idx=2)
+    assert out0.exists()
+    assert out2.exists()
+
+
+def test_show2d_save_image_log_auto(tmp_path):
+    data = np.random.rand(32, 32).astype(np.float32)
+    w = Show2D(data, log_scale=True, auto_contrast=True)
+    out = w.save_image(tmp_path / "out.png")
+    assert out.exists()
+
+
+def test_show2d_save_image_bad_format(tmp_path):
+    data = np.random.rand(16, 16).astype(np.float32)
+    w = Show2D(data)
+    with pytest.raises(ValueError, match="Unsupported format"):
+        w.save_image(tmp_path / "out.bmp")
+
+
+def test_show2d_save_image_bad_idx(tmp_path):
+    data = np.random.rand(16, 16).astype(np.float32)
+    w = Show2D(data)
+    with pytest.raises(IndexError):
+        w.save_image(tmp_path / "out.png", idx=5)
+
+
+def test_show2d_widget_version_is_set():
+    data = np.random.rand(16, 16).astype(np.float32)
+    w = Show2D(data)
+    assert w.widget_version != "unknown"

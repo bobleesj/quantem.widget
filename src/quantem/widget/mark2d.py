@@ -14,6 +14,12 @@ import numpy as np
 import traitlets
 
 from quantem.widget.array_utils import to_numpy, _resize_image
+from quantem.widget.json_state import resolve_widget_version, save_state_file, unwrap_state_payload
+from quantem.widget.tool_parity import (
+    bind_tool_runtime_api,
+    build_tool_groups,
+    normalize_tool_groups,
+)
 
 
 _MARKER_SHAPES = ["circle", "triangle", "square", "diamond", "star"]
@@ -33,7 +39,6 @@ _COLOR_NAMES = {
     "white": "white", "black": "black", "red": "red",
     "#ff0": "yellow", "#0ff": "cyan", "#f00": "red",
 }
-
 
 def _color_name(hex_code: str) -> str:
     return _COLOR_NAMES.get(hex_code.lower(), hex_code)
@@ -86,7 +91,7 @@ class Mark2D(anywidget.AnyWidget):
         CSS color for numbered labels (e.g. ``"white"``, ``"#ff0"``).
         Empty string uses the automatic theme color.
 
-    pixel_size_angstrom : float, default 0.0
+    pixel_size : float, default 0.0
         Pixel size in angstroms. When set, the widget displays a calibrated
         scale bar and shows point-to-point distances in physical units
         (angstroms or nanometers). ``0`` means uncalibrated.
@@ -120,7 +125,7 @@ class Mark2D(anywidget.AnyWidget):
         Title displayed in the widget header. Empty string shows ``"Mark2D"``.
     show_stats : bool, default True
         Show statistics bar (mean, min, max, std) below the canvas.
-    colormap : str, default "gray"
+    cmap : str, default "gray"
         Colormap for image rendering. Options: ``"gray"``, ``"inferno"``,
         ``"viridis"``, ``"plasma"``, ``"magma"``, ``"hot"``.
     auto_contrast : bool, default True
@@ -131,6 +136,78 @@ class Mark2D(anywidget.AnyWidget):
         with large dynamic range (e.g. diffraction patterns).
     show_fft : bool, default False
         Show FFT power spectrum alongside the image.
+    disabled_tools : list of str, optional
+        Tool groups to disable in the frontend UI/interaction layer. This is
+        useful for shared notebooks where viewers should not be able to modify
+        selected controls or annotations. Supported values:
+        ``"points"``, ``"roi"``, ``"profile"``, ``"display"``,
+        ``"marker_style"``, ``"snap"``, ``"navigation"``, ``"view"``,
+        ``"export"``, ``"all"``.
+    disable_points : bool, default False
+        Convenience flag equivalent to including ``"points"`` in
+        ``disabled_tools``.
+    disable_roi : bool, default False
+        Convenience flag equivalent to including ``"roi"`` in
+        ``disabled_tools``.
+    disable_profile : bool, default False
+        Convenience flag equivalent to including ``"profile"`` in
+        ``disabled_tools``.
+    disable_display : bool, default False
+        Convenience flag equivalent to including ``"display"`` in
+        ``disabled_tools``.
+    disable_marker_style : bool, default False
+        Convenience flag equivalent to including ``"marker_style"`` in
+        ``disabled_tools``.
+    disable_snap : bool, default False
+        Convenience flag equivalent to including ``"snap"`` in
+        ``disabled_tools``.
+    disable_navigation : bool, default False
+        Convenience flag equivalent to including ``"navigation"`` in
+        ``disabled_tools``.
+    disable_view : bool, default False
+        Convenience flag equivalent to including ``"view"`` in
+        ``disabled_tools``.
+    disable_export : bool, default False
+        Convenience flag equivalent to including ``"export"`` in
+        ``disabled_tools``.
+    disable_all : bool, default False
+        Convenience flag equivalent to ``disabled_tools=["all"]``.
+    hidden_tools : list of str, optional
+        Tool groups to hide from the frontend UI. Hidden tools are also
+        interaction-locked (equivalent to disabled for behavior), but their
+        controls are not rendered. Supported values:
+        ``"points"``, ``"roi"``, ``"profile"``, ``"display"``,
+        ``"marker_style"``, ``"snap"``, ``"navigation"``, ``"view"``,
+        ``"export"``, ``"all"``.
+    hide_points : bool, default False
+        Convenience flag equivalent to including ``"points"`` in
+        ``hidden_tools``.
+    hide_roi : bool, default False
+        Convenience flag equivalent to including ``"roi"`` in
+        ``hidden_tools``.
+    hide_profile : bool, default False
+        Convenience flag equivalent to including ``"profile"`` in
+        ``hidden_tools``.
+    hide_display : bool, default False
+        Convenience flag equivalent to including ``"display"`` in
+        ``hidden_tools``.
+    hide_marker_style : bool, default False
+        Convenience flag equivalent to including ``"marker_style"`` in
+        ``hidden_tools``.
+    hide_snap : bool, default False
+        Convenience flag equivalent to including ``"snap"`` in
+        ``hidden_tools``.
+    hide_navigation : bool, default False
+        Convenience flag equivalent to including ``"navigation"`` in
+        ``hidden_tools``.
+    hide_view : bool, default False
+        Convenience flag equivalent to including ``"view"`` in
+        ``hidden_tools``.
+    hide_export : bool, default False
+        Convenience flag equivalent to including ``"export"`` in
+        ``hidden_tools``.
+    hide_all : bool, default False
+        Convenience flag equivalent to ``hidden_tools=["all"]``.
 
     Attributes
     ----------
@@ -174,12 +251,13 @@ class Mark2D(anywidget.AnyWidget):
     for precise atom column picking on HAADF-STEM images.
 
     **Distance measurements**: Distances between consecutive points are
-    displayed in the point list. With ``pixel_size_angstrom`` set, distances
+    displayed in the point list. With ``pixel_size`` set, distances
     are shown in angstroms (< 10 Å) or nanometers (>= 10 Å).
 
     **ROI statistics**: When an ROI is active, the widget computes and
     displays mean, standard deviation, min, max, and pixel count for the
     region. When multiple ROIs exist, a summary table shows all ROI stats.
+    Active ROIs also show dotted horizontal/vertical center guide lines.
 
     **Pairwise distances**: When 2+ points are placed, a table below the
     point list shows distances between all pairs of points.
@@ -214,7 +292,7 @@ class Mark2D(anywidget.AnyWidget):
     Pre-loaded points from a detection algorithm:
 
     >>> peaks = find_atom_columns(img)  # returns (N, 2) array
-    >>> w = Mark2D(img, points=peaks, pixel_size_angstrom=0.82)
+    >>> w = Mark2D(img, points=peaks, pixel_size=0.82)
     >>> # Points appear immediately; user can add/remove/adjust
 
     Pre-loaded points with custom appearance:
@@ -242,12 +320,15 @@ class Mark2D(anywidget.AnyWidget):
     >>> w.add_roi(row=128, col=128, mode="circle", radius=30, color="#0f0")
     >>> w.add_roi(row=200, col=200, mode="rectangle", rect_w=80, rect_h=40)
     >>> w.roi_list  # inspect ROI parameters
+    >>> w.roi_center()  # center of most recently added ROI -> (200, 200)
+    >>> w.roi_radius()  # radius for circle/square, None for rectangle
+    >>> w.roi_size()  # shape-aware size dict (e.g. width/height for rectangle)
     >>> w.roi_list = []  # clear all ROIs
 
     Snap-to-peak for precise atom picking:
 
     >>> w = Mark2D(haadf_image, snap_enabled=True, snap_radius=8,
-    ...             pixel_size_angstrom=0.82)
+    ...             pixel_size=0.82)
     >>> # Clicks auto-snap to the nearest intensity maximum
 
     Custom marker defaults:
@@ -255,10 +336,16 @@ class Mark2D(anywidget.AnyWidget):
     >>> w = Mark2D(img, marker_shape="star", marker_color="#ff9800")
     >>> # All new points will be orange stars until changed in the UI
 
+    Human-friendly tool locking:
+
+    >>> w = Mark2D(img, disable_points=True, disable_roi=True, disable_display=True)
+    >>> w_read_only = Mark2D(img, disable_all=True)
+    >>> w_clean = Mark2D(img, hide_display=True, hide_export=True)
+
     Save and restore full widget state (state portability):
 
     >>> # User A: create widget, place points and ROIs interactively
-    >>> w = Mark2D(img, pixel_size_angstrom=1.5)
+    >>> w = Mark2D(img, pixel_size=1.5)
     >>> # ... user clicks to place points, adds ROIs, enables snap ...
     >>> state = {
     ...     "points": w.selected_points,
@@ -269,7 +356,7 @@ class Mark2D(anywidget.AnyWidget):
     ...     "snap_radius": w.snap_radius,
     ... }
     >>> # User B: restore exact same state on another machine
-    >>> w2 = Mark2D(img, pixel_size_angstrom=1.5,
+    >>> w2 = Mark2D(img, pixel_size=1.5,
     ...              points=state["points"],
     ...              marker_shape=state["marker_shape"],
     ...              marker_color=state["marker_color"],
@@ -279,7 +366,7 @@ class Mark2D(anywidget.AnyWidget):
 
     Line profile (programmatic):
 
-    >>> w = Mark2D(img, pixel_size_angstrom=0.82)
+    >>> w = Mark2D(img, pixel_size=0.82)
     >>> w.set_profile((10, 20), (100, 200))
     >>> w.profile_values  # sampled intensities along the line
     >>> w.profile_distance  # total distance in angstroms
@@ -294,6 +381,7 @@ class Mark2D(anywidget.AnyWidget):
     _esm = pathlib.Path(__file__).parent / "static" / "mark2d.js"
 
     # Image data (gallery-capable, matching Show2D pattern)
+    widget_version = traitlets.Unicode("unknown").tag(sync=True)
     n_images = traitlets.Int(1).tag(sync=True)
     width = traitlets.Int(0).tag(sync=True)
     height = traitlets.Int(0).tag(sync=True)
@@ -319,7 +407,7 @@ class Mark2D(anywidget.AnyWidget):
     label_color = traitlets.Unicode("").tag(sync=True)
 
     # Scale bar
-    pixel_size_angstrom = traitlets.Float(0.0).tag(sync=True)
+    pixel_size = traitlets.Float(0.0).tag(sync=True)
 
     # Active marker selection (synced for state portability)
     marker_shape = traitlets.Unicode("circle").tag(sync=True)
@@ -340,7 +428,7 @@ class Mark2D(anywidget.AnyWidget):
     show_stats = traitlets.Bool(True).tag(sync=True)
 
     # Colormap and contrast (synced for state portability)
-    colormap = traitlets.Unicode("gray").tag(sync=True)
+    cmap = traitlets.Unicode("gray").tag(sync=True)
     auto_contrast = traitlets.Bool(True).tag(sync=True)
     log_scale = traitlets.Bool(False).tag(sync=True)
     show_fft = traitlets.Bool(False).tag(sync=True)
@@ -350,6 +438,89 @@ class Mark2D(anywidget.AnyWidget):
 
     # Control visibility
     show_controls = traitlets.Bool(True).tag(sync=True)
+
+    # Optional UI/tool lockout for shared notebooks
+    disabled_tools = traitlets.List(traitlets.Unicode()).tag(sync=True)
+    hidden_tools = traitlets.List(traitlets.Unicode()).tag(sync=True)
+
+    @classmethod
+    def _normalize_tool_groups(cls, tool_groups) -> List[str]:
+        """Validate and normalize tool group values with stable ordering."""
+        return normalize_tool_groups("Mark2D", tool_groups)
+
+    @classmethod
+    def _build_disabled_tools(
+        cls,
+        disabled_tools=None,
+        disable_points: bool = False,
+        disable_roi: bool = False,
+        disable_profile: bool = False,
+        disable_display: bool = False,
+        disable_marker_style: bool = False,
+        disable_snap: bool = False,
+        disable_navigation: bool = False,
+        disable_view: bool = False,
+        disable_export: bool = False,
+        disable_all: bool = False,
+    ) -> List[str]:
+        """Build disabled_tools from explicit list and ergonomic boolean flags."""
+        return build_tool_groups(
+            "Mark2D",
+            tool_groups=disabled_tools,
+            all_flag=disable_all,
+            flag_map={
+                "points": disable_points,
+                "roi": disable_roi,
+                "profile": disable_profile,
+                "display": disable_display,
+                "marker_style": disable_marker_style,
+                "snap": disable_snap,
+                "navigation": disable_navigation,
+                "view": disable_view,
+                "export": disable_export,
+            },
+        )
+
+    @classmethod
+    def _build_hidden_tools(
+        cls,
+        hidden_tools=None,
+        hide_points: bool = False,
+        hide_roi: bool = False,
+        hide_profile: bool = False,
+        hide_display: bool = False,
+        hide_marker_style: bool = False,
+        hide_snap: bool = False,
+        hide_navigation: bool = False,
+        hide_view: bool = False,
+        hide_export: bool = False,
+        hide_all: bool = False,
+    ) -> List[str]:
+        """Build hidden_tools from explicit list and ergonomic boolean flags."""
+        return build_tool_groups(
+            "Mark2D",
+            tool_groups=hidden_tools,
+            all_flag=hide_all,
+            flag_map={
+                "points": hide_points,
+                "roi": hide_roi,
+                "profile": hide_profile,
+                "display": hide_display,
+                "marker_style": hide_marker_style,
+                "snap": hide_snap,
+                "navigation": hide_navigation,
+                "view": hide_view,
+                "export": hide_export,
+            },
+        )
+
+    @traitlets.validate("disabled_tools")
+    def _validate_disabled_tools(self, proposal):
+        return self._normalize_tool_groups(proposal["value"])
+
+    @traitlets.validate("hidden_tools")
+    def _validate_hidden_tools(self, proposal):
+        return self._normalize_tool_groups(proposal["value"])
 
     # Percentile clipping
     percentile_low = traitlets.Float(2.0).tag(sync=True)
@@ -373,7 +544,7 @@ class Mark2D(anywidget.AnyWidget):
         marker_opacity: float = 1.0,
         label_size: int = 0,
         label_color: str = "",
-        pixel_size_angstrom: float = 0.0,
+        pixel_size: float = 0.0,
         points=None,
         marker_shape: str = "circle",
         marker_color: str = "#f44336",
@@ -381,18 +552,41 @@ class Mark2D(anywidget.AnyWidget):
         snap_radius: int = 5,
         title: str = "",
         show_stats: bool = True,
-        colormap: str = "gray",
+        cmap: str = "gray",
         auto_contrast: bool = True,
         log_scale: bool = False,
         show_fft: bool = False,
         image_width_px: int = 0,
         show_controls: bool = True,
+        disabled_tools: Optional[List[str]] = None,
+        disable_points: bool = False,
+        disable_roi: bool = False,
+        disable_profile: bool = False,
+        disable_display: bool = False,
+        disable_marker_style: bool = False,
+        disable_snap: bool = False,
+        disable_navigation: bool = False,
+        disable_view: bool = False,
+        disable_export: bool = False,
+        disable_all: bool = False,
+        hidden_tools: Optional[List[str]] = None,
+        hide_points: bool = False,
+        hide_roi: bool = False,
+        hide_profile: bool = False,
+        hide_display: bool = False,
+        hide_marker_style: bool = False,
+        hide_snap: bool = False,
+        hide_navigation: bool = False,
+        hide_view: bool = False,
+        hide_export: bool = False,
+        hide_all: bool = False,
         percentile_low: float = 2.0,
         percentile_high: float = 98.0,
         state=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.widget_version = resolve_widget_version()
         self.show_stats = show_stats
         self.scale = scale
         self.dot_size = dot_size
@@ -406,25 +600,56 @@ class Mark2D(anywidget.AnyWidget):
         self.marker_color = marker_color
         self.snap_enabled = snap_enabled
         self.snap_radius = snap_radius
-        self.colormap = colormap
+        self.cmap = cmap
         self.auto_contrast = auto_contrast
         self.log_scale = log_scale
         self.show_fft = show_fft
         self.image_width_px = image_width_px
         self.show_controls = show_controls
+        self.disabled_tools = self._build_disabled_tools(
+            disabled_tools=disabled_tools,
+            disable_points=disable_points,
+            disable_roi=disable_roi,
+            disable_profile=disable_profile,
+            disable_display=disable_display,
+            disable_marker_style=disable_marker_style,
+            disable_snap=disable_snap,
+            disable_navigation=disable_navigation,
+            disable_view=disable_view,
+            disable_export=disable_export,
+            disable_all=disable_all,
+        )
+        self.hidden_tools = self._build_hidden_tools(
+            hidden_tools=hidden_tools,
+            hide_points=hide_points,
+            hide_roi=hide_roi,
+            hide_profile=hide_profile,
+            hide_display=hide_display,
+            hide_marker_style=hide_marker_style,
+            hide_snap=hide_snap,
+            hide_navigation=hide_navigation,
+            hide_view=hide_view,
+            hide_export=hide_export,
+            hide_all=hide_all,
+        )
         self.percentile_low = percentile_low
         self.percentile_high = percentile_high
         self._set_data(data, labels)
         # Explicit overrides take priority over Dataset metadata
         if title:
             self.title = title
-        if pixel_size_angstrom != 0.0:
-            self.pixel_size_angstrom = pixel_size_angstrom
+        if pixel_size != 0.0:
+            self.pixel_size = pixel_size
         if points is not None:
             self.selected_points = self._normalize_points(points)
         if state is not None:
             if isinstance(state, (str, pathlib.Path)):
-                state = json.loads(pathlib.Path(state).read_text())
+                state = unwrap_state_payload(
+                    json.loads(pathlib.Path(state).read_text()),
+                    require_envelope=True,
+                )
+            else:
+                state = unwrap_state_payload(state)
             self.load_state_dict(state)
 
     def _set_data(self, data, labels=None):
@@ -436,9 +661,9 @@ class Mark2D(anywidget.AnyWidget):
                 units = list(data.units)
                 sampling_val = float(data.sampling[-1])
                 if units[-1] in ("nm",):
-                    self.pixel_size_angstrom = sampling_val * 10  # nm → Å
+                    self.pixel_size = sampling_val * 10  # nm → Å
                 elif units[-1] in ("Å", "angstrom", "A"):
-                    self.pixel_size_angstrom = sampling_val
+                    self.pixel_size = sampling_val
             data = data.array
 
         if isinstance(data, list):
@@ -560,7 +785,7 @@ class Mark2D(anywidget.AnyWidget):
         """
         self._set_data(data, labels)
 
-    def add_roi(self, row, col, mode="circle", radius=30, rect_w=60, rect_h=40,
+    def add_roi(self, row, col, shape="circle", radius=30, width=60, height=40,
                 color="#0f0", opacity=0.8):
         """
         Add an ROI overlay to the widget.
@@ -574,13 +799,13 @@ class Mark2D(anywidget.AnyWidget):
         ----------
         row, col : int
             Center position in image pixel coordinates (row, col).
-        mode : str, default "circle"
+        shape : str, default "circle"
             ROI shape. One of ``"circle"``, ``"square"``, or ``"rectangle"``.
         radius : int, default 30
             Radius in pixels for circle and square modes.
-        rect_w : int, default 60
+        width : int, default 60
             Width in pixels for rectangle mode.
-        rect_h : int, default 40
+        height : int, default 40
             Height in pixels for rectangle mode.
         color : str, default "#0f0"
             Stroke color as a CSS color string (e.g. ``"#ff0"``, ``"red"``).
@@ -591,17 +816,17 @@ class Mark2D(anywidget.AnyWidget):
         --------
         >>> w = Mark2D(img)
         >>> w.add_roi(128, 128)  # green circle at center
-        >>> w.add_roi(50, 50, mode="square", radius=20, color="#ff0")
-        >>> w.add_roi(200, 100, mode="rectangle", rect_w=80, rect_h=30)
+        >>> w.add_roi(50, 50, shape="square", radius=20, color="#ff0")
+        >>> w.add_roi(200, 100, shape="rectangle", width=80, height=30)
         >>> len(w.roi_list)  # 3
         """
         roi_id = max((r["id"] for r in self.roi_list), default=-1) + 1
         roi = {
             "id": roi_id,
-            "mode": mode,
+            "shape": shape,
             "row": int(row), "col": int(col),
             "radius": int(radius),
-            "rectW": int(rect_w), "rectH": int(rect_h),
+            "width": int(width), "height": int(height),
             "color": color, "opacity": float(opacity),
         }
         self.roi_list = [*self.roi_list, roi]
@@ -618,6 +843,108 @@ class Mark2D(anywidget.AnyWidget):
         >>> w.roi_list  # []
         """
         self.roi_list = []
+
+    def _resolve_roi(self, index: Optional[int] = None, roi_id: Optional[int] = None):
+        """Resolve one ROI by index or id (defaults to the most recently added ROI)."""
+        if index is not None and roi_id is not None:
+            raise ValueError("Pass either index or roi_id, not both.")
+        if not self.roi_list:
+            raise ValueError("No ROIs are defined.")
+
+        if roi_id is not None:
+            target_id = int(roi_id)
+            for roi in self.roi_list:
+                if int(roi.get("id", -1)) == target_id:
+                    return roi
+            raise ValueError(f"ROI id {roi_id} not found.")
+
+        idx = -1 if index is None else int(index)
+        try:
+            return self.roi_list[idx]
+        except IndexError as exc:
+            raise IndexError(
+                f"ROI index {idx} out of range for {len(self.roi_list)} ROIs."
+            ) from exc
+
+    def roi_center(self, index: Optional[int] = None, roi_id: Optional[int] = None):
+        """
+        Return ROI center coordinates as ``(row, col)``.
+
+        By default, returns the center of the most recently added ROI.
+
+        Parameters
+        ----------
+        index : int, optional
+            ROI list index to query. Supports negative indexing.
+        roi_id : int, optional
+            ROI ``id`` value to query. Mutually exclusive with ``index``.
+
+        Returns
+        -------
+        tuple of int
+            Center point ``(row, col)``.
+        """
+        roi = self._resolve_roi(index=index, roi_id=roi_id)
+        return int(roi["row"]), int(roi["col"])
+
+    def roi_radius(self, index: Optional[int] = None, roi_id: Optional[int] = None):
+        """
+        Return ROI radius for ``circle``/``square`` ROIs.
+
+        For ``rectangle`` ROIs, returns ``None`` (use ``roi_size()`` for
+        rectangle width/height).
+        By default, queries the most recently added ROI.
+
+        Parameters
+        ----------
+        index : int, optional
+            ROI list index to query. Supports negative indexing.
+        roi_id : int, optional
+            ROI ``id`` value to query. Mutually exclusive with ``index``.
+
+        Returns
+        -------
+        int or None
+            Radius in pixels for circle/square ROIs, otherwise ``None``.
+        """
+        roi = self._resolve_roi(index=index, roi_id=roi_id)
+        if roi.get("shape") == "rectangle":
+            return None
+        return int(roi["radius"])
+
+    def roi_size(self, index: Optional[int] = None, roi_id: Optional[int] = None):
+        """
+        Return shape-aware ROI size information.
+
+        - ``circle`` / ``square`` -> ``{"shape", "radius", "diameter"}``
+        - ``rectangle`` -> ``{"shape", "width", "height"}``
+
+        Parameters
+        ----------
+        index : int, optional
+            ROI list index to query. Supports negative indexing.
+        roi_id : int, optional
+            ROI ``id`` value to query. Mutually exclusive with ``index``.
+
+        Returns
+        -------
+        dict
+            Shape-aware size dictionary for the selected ROI.
+        """
+        roi = self._resolve_roi(index=index, roi_id=roi_id)
+        shape = str(roi.get("shape", "circle"))
+        if shape == "rectangle":
+            return {
+                "shape": shape,
+                "width": int(roi["width"]),
+                "height": int(roi["height"]),
+            }
+        radius = int(roi["radius"])
+        return {
+            "shape": shape,
+            "radius": radius,
+            "diameter": 2 * radius,
+        }
 
     def _sample_profile(self, row0, col0, row1, col1):
         """Sample intensity values along a line using bilinear interpolation."""
@@ -661,7 +988,7 @@ class Mark2D(anywidget.AnyWidget):
 
         Examples
         --------
-        >>> w = Mark2D(img, pixel_size_angstrom=0.82)
+        >>> w = Mark2D(img, pixel_size=0.82)
         >>> w.set_profile((10, 20), (100, 200))
         >>> w.profile_values  # sampled intensities along the line
         """
@@ -711,7 +1038,7 @@ class Mark2D(anywidget.AnyWidget):
         Returns
         -------
         float or None
-            Distance in angstroms (if ``pixel_size_angstrom > 0``) or pixels.
+            Distance in angstroms (if ``pixel_size > 0``) or pixels.
             ``None`` if no profile line is set.
         """
         if len(self.profile_line) < 2:
@@ -720,8 +1047,8 @@ class Mark2D(anywidget.AnyWidget):
         dc = p1["col"] - p0["col"]
         dr = p1["row"] - p0["row"]
         dist_px = (dc**2 + dr**2) ** 0.5
-        if self.pixel_size_angstrom > 0:
-            return dist_px * self.pixel_size_angstrom
+        if self.pixel_size > 0:
+            return dist_px * self.pixel_size
         return dist_px
 
     def __repr__(self) -> str:
@@ -749,8 +1076,8 @@ class Mark2D(anywidget.AnyWidget):
             parts.append(f"idx={self.selected_idx}")
 
         # Pixel size
-        if self.pixel_size_angstrom > 0:
-            ps = self.pixel_size_angstrom
+        if self.pixel_size > 0:
+            ps = self.pixel_size
             if ps >= 10:
                 parts.append(f"px={ps / 10:.2f} nm")
             else:
@@ -768,8 +1095,8 @@ class Mark2D(anywidget.AnyWidget):
             parts.append(f"rois={n_rois}")
 
         # Non-default imaging settings
-        if self.colormap != "gray":
-            parts.append(f"cmap={self.colormap}")
+        if self.cmap != "gray":
+            parts.append(f"cmap={self.cmap}")
         if self.log_scale:
             parts.append("log")
         if not self.auto_contrast:
@@ -791,7 +1118,7 @@ class Mark2D(anywidget.AnyWidget):
         Examples
         --------
         >>> w = Mark2D(img, points=[(10, 20), (30, 40)],
-        ...             pixel_size_angstrom=0.82, colormap='viridis')
+        ...             pixel_size=0.82, cmap='viridis')
         >>> w.summary()
         Mark2D
         ═══════════════════════════════
@@ -810,8 +1137,8 @@ class Mark2D(anywidget.AnyWidget):
         else:
             shape = f"{self.height}×{self.width}"
             lines.append(f"Image:    {shape}")
-        if self.pixel_size_angstrom > 0:
-            ps = self.pixel_size_angstrom
+        if self.pixel_size > 0:
+            ps = self.pixel_size
             if ps >= 10:
                 lines[-1] += f" ({ps / 10:.2f} nm/px)"
             else:
@@ -825,7 +1152,7 @@ class Mark2D(anywidget.AnyWidget):
             lines.append(f"Data:     min={float(arr.min()):.4g}  max={float(arr.max()):.4g}  mean={float(arr.mean()):.4g}  dtype={arr.dtype}")
 
         # Display settings
-        cmap = self.colormap
+        cmap = self.cmap
         scale = "log" if self.log_scale else "linear"
         contrast = "auto contrast" if self.auto_contrast else "manual contrast"
         display = f"{cmap} | {contrast} | {scale}"
@@ -840,8 +1167,8 @@ class Mark2D(anywidget.AnyWidget):
             if prev is not None:
                 dr, dc = p["row"] - prev["row"], p["col"] - prev["col"]
                 dist = (dr * dr + dc * dc) ** 0.5
-                if self.pixel_size_angstrom > 0:
-                    phys = dist * self.pixel_size_angstrom
+                if self.pixel_size > 0:
+                    phys = dist * self.pixel_size
                     if phys >= 10:
                         coord += f"  ↔ {phys / 10:.2f} nm"
                     else:
@@ -868,11 +1195,11 @@ class Mark2D(anywidget.AnyWidget):
         if self.roi_list:
             lines.append(f"ROIs:     {len(self.roi_list)}")
             for roi in self.roi_list:
-                mode = roi["mode"]
+                mode = roi["shape"]
                 pos = f"({roi['row']}, {roi['col']})"
                 if mode == "rectangle":
-                    size = f"{roi['rectW']}×{roi['rectH']}"
-                    area_px = roi["rectW"] * roi["rectH"]
+                    size = f"{roi['width']}×{roi['height']}"
+                    area_px = roi["width"] * roi["height"]
                 elif mode == "circle":
                     size = f"r={roi['radius']}"
                     area_px = 3.14159265 * roi["radius"] ** 2
@@ -880,8 +1207,8 @@ class Mark2D(anywidget.AnyWidget):
                     size = f"r={roi['radius']}"
                     area_px = (2 * roi["radius"]) ** 2
                 color = _color_name(roi["color"])
-                if self.pixel_size_angstrom > 0:
-                    ps = self.pixel_size_angstrom
+                if self.pixel_size > 0:
+                    ps = self.pixel_size
                     area_phys = area_px * ps * ps
                     if area_phys >= 100:
                         area_str = f"  area={area_phys / 100:.1f} nm²"
@@ -903,6 +1230,10 @@ class Mark2D(anywidget.AnyWidget):
         # Snap
         if self.snap_enabled:
             lines.append(f"Snap:     ON (radius={self.snap_radius} px)")
+        if self.disabled_tools:
+            lines.append(f"Locked:   {', '.join(self.disabled_tools)}")
+        if self.hidden_tools:
+            lines.append(f"Hidden:   {', '.join(self.hidden_tools)}")
 
         print("\n".join(lines))
 
@@ -965,6 +1296,121 @@ class Mark2D(anywidget.AnyWidget):
         else:
             self.selected_points = [[] for _ in range(self.n_images)]
 
+    @property
+    def points_enabled(self) -> bool:
+        """
+        Whether adding/editing points is enabled via ``disabled_tools``.
+
+        This convenience toggle controls the ``"points"`` lock in
+        ``disabled_tools``. It does not modify ``hidden_tools``.
+        """
+        disabled = {str(t).strip().lower() for t in self.disabled_tools}
+        return "all" not in disabled and "points" not in disabled
+
+    @points_enabled.setter
+    def points_enabled(self, enabled: bool):
+        enabled = bool(enabled)
+        disabled = [str(t).strip().lower() for t in self.disabled_tools]
+
+        if enabled:
+            if "all" in disabled:
+                raise ValueError(
+                    "Cannot enable points while disabled_tools contains 'all'. "
+                    "Remove 'all' first."
+                )
+            if "points" in disabled:
+                self.disabled_tools = [t for t in disabled if t != "points"]
+            return
+
+        if "all" in disabled or "points" in disabled:
+            return
+        self.disabled_tools = [*disabled, "points"]
+
+    def _normalize_frame(self, frame: np.ndarray) -> np.ndarray:
+        if self.log_scale:
+            frame = np.log1p(np.maximum(frame, 0))
+        if self.auto_contrast:
+            vmin = float(np.percentile(frame, self.percentile_low))
+            vmax = float(np.percentile(frame, self.percentile_high))
+        else:
+            vmin = float(frame.min())
+            vmax = float(frame.max())
+        if vmax > vmin:
+            normalized = np.clip((frame - vmin) / (vmax - vmin) * 255, 0, 255)
+            return normalized.astype(np.uint8)
+        return np.zeros(frame.shape, dtype=np.uint8)
+
+    def save_image(
+        self,
+        path: str | pathlib.Path,
+        *,
+        idx: int | None = None,
+        include_markers: bool = True,
+        format: str | None = None,
+        dpi: int = 150,
+    ) -> pathlib.Path:
+        """Save current image as PNG or PDF, optionally with marker overlays.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Output file path.
+        idx : int, optional
+            Image index in gallery mode. Defaults to current selected_idx.
+        include_markers : bool, default True
+            If True, render marker points on the exported image.
+        format : str, optional
+            'png' or 'pdf'. If omitted, inferred from file extension.
+        dpi : int, default 150
+            Output DPI metadata.
+
+        Returns
+        -------
+        pathlib.Path
+            The written file path.
+        """
+        from matplotlib import colormaps
+        from PIL import Image, ImageDraw
+
+        path = pathlib.Path(path)
+        fmt = (format or path.suffix.lstrip(".").lower() or "png").lower()
+        if fmt not in ("png", "pdf", "tiff", "tif"):
+            raise ValueError(f"Unsupported format: {fmt!r}. Use 'png', 'pdf', or 'tiff'.")
+
+        i = idx if idx is not None else self.selected_idx
+        if i < 0 or i >= self.n_images:
+            raise IndexError(f"Image index {i} out of range [0, {self.n_images})")
+
+        frame = self._data[i]
+        normalized = self._normalize_frame(frame)
+        cmap_fn = colormaps.get_cmap(self.cmap)
+        rgba = (cmap_fn(normalized / 255.0) * 255).astype(np.uint8)
+
+        img = Image.fromarray(rgba)
+
+        if include_markers:
+            # In gallery mode, points are nested per image; single-image is flat
+            if self.n_images > 1:
+                pts = self.selected_points[i] if i < len(self.selected_points) else []
+            else:
+                pts = self.selected_points
+
+            if pts:
+                draw = ImageDraw.Draw(img)
+                r = max(2, self.dot_size // 2)
+                for pt in pts:
+                    row, col = pt.get("row", 0), pt.get("col", 0)
+                    color = pt.get("color", "#f44336")
+                    draw.ellipse(
+                        [col - r, row - r, col + r, row + r],
+                        fill=color,
+                        outline="white",
+                    )
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(str(path), dpi=(dpi, dpi))
+        return path
+
     def state_dict(self):
         """
         Return a dict of all restorable widget state.
@@ -975,7 +1421,7 @@ class Mark2D(anywidget.AnyWidget):
 
         Examples
         --------
-        >>> w = Mark2D(img, pixel_size_angstrom=1.5)
+        >>> w = Mark2D(img, pixel_size=1.5)
         >>> # ... user places points, adds ROIs, changes settings ...
         >>> state = w.state_dict()
         >>> # Later (or after kernel restart):
@@ -996,16 +1442,18 @@ class Mark2D(anywidget.AnyWidget):
             "label_color": self.label_color,
             "snap_enabled": self.snap_enabled,
             "snap_radius": self.snap_radius,
-            "colormap": self.colormap,
+            "cmap": self.cmap,
             "auto_contrast": self.auto_contrast,
             "log_scale": self.log_scale,
             "show_fft": self.show_fft,
             "show_stats": self.show_stats,
             "show_controls": self.show_controls,
+            "disabled_tools": self.disabled_tools,
+            "hidden_tools": self.hidden_tools,
             "percentile_low": self.percentile_low,
             "percentile_high": self.percentile_high,
             "title": self.title,
-            "pixel_size_angstrom": self.pixel_size_angstrom,
+            "pixel_size": self.pixel_size,
             "scale": self.scale,
             "image_width_px": self.image_width_px,
         }
@@ -1027,7 +1475,7 @@ class Mark2D(anywidget.AnyWidget):
         >>> # After kernel restart:
         >>> w2 = Mark2D(img, state="my_analysis.json")
         """
-        pathlib.Path(path).write_text(json.dumps(self.state_dict(), indent=2))
+        save_state_file(path, "Mark2D", self.state_dict())
 
     def load_state_dict(self, state):
         """
@@ -1045,6 +1493,17 @@ class Mark2D(anywidget.AnyWidget):
         >>> new_widget = Mark2D(img)
         >>> new_widget.load_state_dict(state)
         """
+        COMPAT_MAP = {"colormap": "cmap", "pixel_size_angstrom": "pixel_size"}
+        ROI_KEY_MAP = {"mode": "shape", "rectW": "width", "rectH": "height"}
         for key, val in state.items():
+            key = COMPAT_MAP.get(key, key)
+            if key == "roi_list" and isinstance(val, list):
+                val = [
+                    {ROI_KEY_MAP.get(k, k): v for k, v in roi.items()}
+                    for roi in val
+                ]
             if hasattr(self, key):
                 setattr(self, key, val)
+
+
+bind_tool_runtime_api(Mark2D, "Mark2D")
