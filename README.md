@@ -282,6 +282,18 @@ Deploys Sphinx documentation to GitHub Pages on every push to `main`.
 - **URL**: https://bobleesj.github.io/quantem.widget/
 - Notebooks are rendered with `nbsphinx_execute = "never"` — pre-saved outputs (including widget state) are used as-is, no execution on CI
 
+### Versioning
+
+This project follows [PEP 440](https://packaging.python.org/en/latest/discussions/versioning/) semantic versioning (`major.minor.patch`):
+
+- **Major** (`1.0.0`) — breaking API changes
+- **Minor** (`0.4.0`) — new features, widgets, or protocols
+- **Patch** (`0.4.1`) — bug fixes, docs, notebook fixes
+
+Pre-release suffixes: `0.5.0a1` (alpha) → `0.5.0b1` (beta) → `0.5.0rc1` (release candidate) → `0.5.0` (final).
+
+Version is set in `pyproject.toml` — single source of truth.
+
 ### TestPyPI publishing (`.github/workflows/publish.yml`)
 
 Publishes to TestPyPI when a version tag is pushed.
@@ -289,8 +301,8 @@ Publishes to TestPyPI when a version tag is pushed.
 ```bash
 # 1. Bump version in pyproject.toml
 # 2. Commit, tag, and push
-git tag v0.0.7
-git push origin main && git push origin v0.0.7
+git tag v0.4.0
+git push origin main && git push origin v0.4.0
 ```
 
 GitHub Actions compiles React/TypeScript, builds the Python wheel, and uploads to TestPyPI. Note: TestPyPI does not allow re-uploading the same version — always bump the version before tagging.
@@ -300,7 +312,7 @@ GitHub Actions compiles React/TypeScript, builds the Python wheel, and uploads t
 After CI finishes, verify the published package in a clean environment:
 
 ```bash
-./scripts/verify_testpypi.sh 0.0.7
+./scripts/verify_testpypi.sh 0.4.0
 ```
 
 This creates a fresh conda env, installs from TestPyPI, verifies all widget imports and JS bundles, then opens JupyterLab with a test notebook for visual inspection. When done, press Ctrl+C and clean up:
