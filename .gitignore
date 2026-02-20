@@ -24,6 +24,8 @@ CLAUDE.md
 
 # Data files
 *.cif
+*.npy
+*.npz
 
 # Screenshots
 *.png
