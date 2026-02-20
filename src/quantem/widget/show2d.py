@@ -11,14 +11,30 @@ import io
 import base64
 import math
 from enum import StrEnum
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Self
 
 import anywidget
+import matplotlib.pyplot as plt
 import numpy as np
 import traitlets
-import matplotlib.pyplot as plt
 
 from quantem.widget.array_utils import to_numpy, _resize_image
+from quantem.widget.json_state import resolve_widget_version, save_state_file, unwrap_state_payload
+from quantem.widget.tool_parity import (
+    bind_tool_runtime_api,
+    build_tool_groups,
+    normalize_tool_groups,
+)
+
+_REDUCE_MODES = {"first", "index", "mean", "max", "sum"}
+
+try:
+    import h5py  # type: ignore
+
+    _HAS_H5PY = True
+except Exception:
+    h5py = None  # type: ignore[assignment]
+    _HAS_H5PY = False
 
 
 class Colormap(StrEnum):
@@ -47,7 +63,7 @@ class Show2D(anywidget.AnyWidget):
         Title to display above the image(s).
     cmap : str, default "inferno"
         Colormap name ("magma", "viridis", "gray", "inferno", "plasma").
-    pixel_size_angstrom : float, optional
+    pixel_size : float, optional
         Pixel size in angstroms for scale bar display.
     show_fft : bool, default False
         Show FFT and histogram panels.
@@ -59,6 +75,21 @@ class Show2D(anywidget.AnyWidget):
         Use percentile-based contrast.
     ncols : int, default 3
         Number of columns in gallery mode.
+    disabled_tools : list of str, optional
+        Tool groups to lock while still showing controls. Supported:
+        ``"display"``, ``"histogram"``, ``"stats"``, ``"navigation"``,
+        ``"view"``, ``"export"``, ``"roi"``, ``"profile"``, ``"all"``.
+    disable_* : bool, optional
+        Convenience flags (``disable_display``, ``disable_histogram``,
+        ``disable_stats``, ``disable_navigation``, ``disable_view``,
+        ``disable_export``, ``disable_roi``, ``disable_profile``,
+        ``disable_all``) equivalent to adding those keys to
+        ``disabled_tools``.
+    hidden_tools : list of str, optional
+        Tool groups to hide from the UI. Uses the same keys as
+        ``disabled_tools``.
+    hide_* : bool, optional
+        Convenience flags mirroring ``disable_*`` for ``hidden_tools``.
 
     Examples
     --------
@@ -66,7 +97,7 @@ class Show2D(anywidget.AnyWidget):
     >>> from quantem.widget import Show2D
     >>>
     >>> # Single image with FFT
-    >>> Show2D(image, title="HRTEM Image", show_fft=True, pixel_size_angstrom=1.0)
+    >>> Show2D(image, title="HRTEM Image", show_fft=True, pixel_size=1.0)
     >>>
     >>> # Gallery of multiple images
     >>> labels = ["Raw", "Filtered", "FFT"]
@@ -79,6 +110,7 @@ class Show2D(anywidget.AnyWidget):
     # =========================================================================
     # Core State
     # =========================================================================
+    widget_version = traitlets.Unicode("unknown").tag(sync=True)
     n_images = traitlets.Int(1).tag(sync=True)
     height = traitlets.Int(1).tag(sync=True)
     width = traitlets.Int(1).tag(sync=True)
@@ -97,7 +129,7 @@ class Show2D(anywidget.AnyWidget):
     # =========================================================================
     # Scale Bar
     # =========================================================================
-    pixel_size_angstrom = traitlets.Float(0.0).tag(sync=True)
+    pixel_size = traitlets.Float(0.0).tag(sync=True)
     scale_bar_visible = traitlets.Bool(True).tag(sync=True)
     image_width_px = traitlets.Int(0).tag(sync=True)
 
@@ -106,6 +138,8 @@ class Show2D(anywidget.AnyWidget):
     # =========================================================================
     show_controls = traitlets.Bool(True).tag(sync=True)
     show_stats = traitlets.Bool(True).tag(sync=True)
+    disabled_tools = traitlets.List(traitlets.Unicode()).tag(sync=True)
+    hidden_tools = traitlets.List(traitlets.Unicode()).tag(sync=True)
     stats_mean = traitlets.List(traitlets.Float()).tag(sync=True)
     stats_min = traitlets.List(traitlets.Float()).tag(sync=True)
     stats_max = traitlets.List(traitlets.Float()).tag(sync=True)
@@ -134,37 +168,521 @@ class Show2D(anywidget.AnyWidget):
     # =========================================================================
     profile_line = traitlets.List(traitlets.Dict()).tag(sync=True)
 
+    @classmethod
+    def _normalize_tool_groups(cls, tool_groups) -> List[str]:
+        return normalize_tool_groups("Show2D", tool_groups)
+
+    @classmethod
+    def _build_disabled_tools(
+        cls,
+        disabled_tools=None,
+        disable_display: bool = False,
+        disable_histogram: bool = False,
+        disable_stats: bool = False,
+        disable_navigation: bool = False,
+        disable_view: bool = False,
+        disable_export: bool = False,
+        disable_roi: bool = False,
+        disable_profile: bool = False,
+        disable_all: bool = False,
+    ) -> List[str]:
+        return build_tool_groups(
+            "Show2D",
+            tool_groups=disabled_tools,
+            all_flag=disable_all,
+            flag_map={
+                "display": disable_display,
+                "histogram": disable_histogram,
+                "stats": disable_stats,
+                "navigation": disable_navigation,
+                "view": disable_view,
+                "export": disable_export,
+                "roi": disable_roi,
+                "profile": disable_profile,
+            },
+        )
+
+    @classmethod
+    def _build_hidden_tools(
+        cls,
+        hidden_tools=None,
+        hide_display: bool = False,
+        hide_histogram: bool = False,
+        hide_stats: bool = False,
+        hide_navigation: bool = False,
+        hide_view: bool = False,
+        hide_export: bool = False,
+        hide_roi: bool = False,
+        hide_profile: bool = False,
+        hide_all: bool = False,
+    ) -> List[str]:
+        return build_tool_groups(
+            "Show2D",
+            tool_groups=hidden_tools,
+            all_flag=hide_all,
+            flag_map={
+                "display": hide_display,
+                "histogram": hide_histogram,
+                "stats": hide_stats,
+                "navigation": hide_navigation,
+                "view": hide_view,
+                "export": hide_export,
+                "roi": hide_roi,
+                "profile": hide_profile,
+            },
+        )
+
+    @traitlets.validate("disabled_tools")
+    def _validate_disabled_tools(self, proposal):
+        return self._normalize_tool_groups(proposal["value"])
+
+    @traitlets.validate("hidden_tools")
+    def _validate_hidden_tools(self, proposal):
+        return self._normalize_tool_groups(proposal["value"])
+
+    @classmethod
+    def _normalize_reduce_mode(cls, mode: str | None) -> str | None:
+        if mode is None:
+            return None
+        key = str(mode).strip().lower()
+        aliases = {"slice": "index"}
+        key = aliases.get(key, key)
+        if key not in _REDUCE_MODES:
+            supported = ", ".join(sorted(_REDUCE_MODES))
+            raise ValueError(f"Unknown reduce mode {mode!r}. Supported modes: {supported}.")
+        return key
+
+    @classmethod
+    def _normalize_folder_file_type(cls, file_type: str | None) -> str:
+        if file_type is None:
+            raise ValueError("file_type is required for folder loading. Use 'png', 'tiff', or 'emd'.")
+        value = str(file_type).strip().lower()
+        aliases = {"tif": "tiff"}
+        value = aliases.get(value, value)
+        if value not in {"png", "tiff", "emd"}:
+            raise ValueError("folder file_type must be one of: 'png', 'tiff', 'emd'.")
+        return value
+
+    @classmethod
+    def _load_image_2d(cls, path: pathlib.Path) -> np.ndarray:
+        from PIL import Image
+
+        with Image.open(path) as img:
+            return np.asarray(img.convert("F"), dtype=np.float32)
+
+    @classmethod
+    def _load_tiff_stack(cls, path: pathlib.Path) -> tuple[np.ndarray, list[str]]:
+        from PIL import Image, ImageSequence
+
+        frames: list[np.ndarray] = []
+        labels: list[str] = []
+        with Image.open(path) as img:
+            for i, page in enumerate(ImageSequence.Iterator(img)):
+                frame = np.asarray(page.convert("F"), dtype=np.float32)
+                frames.append(frame)
+                labels.append(f"{path.stem}[{i}]")
+
+        if not frames:
+            raise ValueError(f"No readable frames found in TIFF file: {path}")
+
+        shape0 = frames[0].shape
+        for i, frame in enumerate(frames[1:], start=1):
+            if frame.shape != shape0:
+                raise ValueError(
+                    f"Inconsistent TIFF frame shapes in {path}: frame 0={shape0}, frame {i}={frame.shape}"
+                )
+        return np.stack(frames, axis=0).astype(np.float32), labels
+
+    @classmethod
+    def _find_best_h5_dataset(cls, h5f):
+        candidates: list[tuple[int, str, object]] = []
+
+        def _walk(group, prefix: str = ""):
+            for key, item in group.items():
+                item_path = f"{prefix}/{key}" if prefix else key
+                if hasattr(item, "shape") and hasattr(item, "dtype"):
+                    try:
+                        ndim = int(item.ndim)
+                        size = int(item.size)
+                        dtype_kind = str(item.dtype.kind)
+                    except Exception:
+                        continue
+                    if size <= 0 or ndim < 2 or dtype_kind not in {"i", "u", "f", "c"}:
+                        continue
+
+                    score = size
+                    if ndim == 2:
+                        score += 10**15
+                    elif ndim == 3:
+                        score += 9 * 10**14
+                    elif ndim == 4:
+                        score += 8 * 10**14
+                    elif ndim == 5:
+                        score += 7 * 10**14
+
+                    lower_path = item_path.lower()
+                    for token in ["image", "stack", "series", "frame", "signal", "data"]:
+                        if token in lower_path:
+                            score += 10**12
+                    for token in ["preview", "thumb", "mask", "meta", "label", "calib"]:
+                        if token in lower_path:
+                            score -= 10**12
+
+                    candidates.append((score, item_path, item))
+                elif hasattr(item, "items"):
+                    _walk(item, item_path)
+
+        _walk(h5f)
+        if not candidates:
+            return "", None
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        _, ds_path, ds = candidates[0]
+        return ds_path, ds
+
+    @classmethod
+    def _load_emd_array(cls, path: pathlib.Path, *, dataset_path: str | None = None) -> np.ndarray:
+        if not _HAS_H5PY:
+            raise RuntimeError("h5py is required to read .emd files. Install h5py to enable EMD loading.")
+
+        with h5py.File(path, "r") as h5f:  # type: ignore[name-defined]
+            if dataset_path is not None:
+                ds_path = str(dataset_path).strip()
+                if not ds_path:
+                    raise ValueError("dataset_path must be a non-empty string when provided.")
+                if ds_path not in h5f and ds_path.startswith("/") and ds_path[1:] in h5f:
+                    ds_path = ds_path[1:]
+                if ds_path not in h5f:
+                    raise ValueError(f"dataset_path '{dataset_path}' not found in EMD file: {path}")
+                ds = h5f[ds_path]
+            else:
+                ds_path, ds = cls._find_best_h5_dataset(h5f)
+            if ds is None:
+                raise ValueError(f"No array-like dataset found in EMD file: {path}")
+            if not hasattr(ds, "shape") or not hasattr(ds, "dtype"):
+                raise ValueError(f"dataset_path '{ds_path}' is not an array dataset in EMD file: {path}")
+            arr = np.asarray(ds)
+        return arr
+
+    @classmethod
+    def _as_stack_3d(cls, arr: np.ndarray) -> np.ndarray:
+        if np.iscomplexobj(arr):
+            arr = np.abs(arr)
+        if arr.ndim < 2:
+            raise ValueError(f"Expected at least 2D image data, got {arr.ndim}D")
+        if arr.ndim == 2:
+            return np.asarray(arr[None, ...], dtype=np.float32)
+        if arr.ndim == 3:
+            return np.asarray(arr, dtype=np.float32)
+        stack = np.asarray(arr).reshape((-1, arr.shape[-2], arr.shape[-1]))
+        return np.asarray(stack, dtype=np.float32)
+
+    @classmethod
+    def _reduce_stack(cls, stack: np.ndarray, *, mode: str, index: int = 0) -> np.ndarray:
+        if stack.ndim != 3:
+            raise ValueError(f"Expected 3D stack for reduction, got {stack.ndim}D")
+        if mode == "first":
+            frame = stack[0]
+        elif mode == "index":
+            idx = int(index) % stack.shape[0]
+            frame = stack[idx]
+        elif mode == "mean":
+            frame = np.mean(stack, axis=0)
+        elif mode == "max":
+            frame = np.max(stack, axis=0)
+        elif mode == "sum":
+            frame = np.sum(stack, axis=0)
+        else:
+            raise ValueError(f"Unsupported reduce mode: {mode}")
+        return np.asarray(frame, dtype=np.float32)
+
+    @classmethod
+    def _load_folder_stack(
+        cls,
+        folder: pathlib.Path,
+        *,
+        file_type: str,
+        dataset_path: str | None = None,
+    ) -> tuple[np.ndarray, list[str]]:
+        allowed_exts = {".emd", ".png", ".tif", ".tiff"}
+        all_files = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in allowed_exts)
+        if not all_files:
+            raise ValueError(f"No supported files found in {folder}. Expected .png, .tif/.tiff, or .emd.")
+
+        selected_type = cls._normalize_folder_file_type(file_type)
+        if selected_type != "emd" and dataset_path is not None:
+            raise ValueError("dataset_path is only supported for EMD folder loading.")
+
+        if selected_type == "png":
+            files = [p for p in all_files if p.suffix.lower() == ".png"]
+        elif selected_type == "tiff":
+            files = [p for p in all_files if p.suffix.lower() in {".tif", ".tiff"}]
+        else:
+            files = [p for p in all_files if p.suffix.lower() == ".emd"]
+
+        if not files:
+            raise ValueError(f"No {selected_type.upper()} files found in {folder}.")
+
+        frames: list[np.ndarray] = []
+        labels: list[str] = []
+        if selected_type == "png":
+            for p in files:
+                frames.append(cls._load_image_2d(p))
+                labels.append(p.name)
+        elif selected_type == "tiff":
+            for p in files:
+                stack, _ = cls._load_tiff_stack(p)
+                if stack.shape[0] == 1:
+                    frames.append(stack[0])
+                    labels.append(p.name)
+                else:
+                    for i in range(stack.shape[0]):
+                        frames.append(stack[i])
+                        labels.append(f"{p.stem}[{i}]")
+        else:
+            for p in files:
+                arr = cls._load_emd_array(p, dataset_path=dataset_path)
+                stack = cls._as_stack_3d(np.asarray(arr))
+                if stack.shape[0] == 1:
+                    frames.append(stack[0])
+                    labels.append(p.name)
+                else:
+                    for i in range(stack.shape[0]):
+                        frames.append(stack[i])
+                        labels.append(f"{p.stem}[{i}]")
+
+        shape0 = frames[0].shape
+        for i, frame in enumerate(frames[1:], start=1):
+            if frame.shape != shape0:
+                raise ValueError(
+                    f"Inconsistent image shapes in folder {folder}: frame 0={shape0}, frame {i}={frame.shape}"
+                )
+        return np.stack(frames, axis=0).astype(np.float32), labels
+
+    @classmethod
+    def from_path(
+        cls,
+        source: str | pathlib.Path,
+        *,
+        file_type: str | None = None,
+        dataset_path: str | None = None,
+        mode: str | None = None,
+        index: int = 0,
+        **kwargs,
+    ) -> Self:
+        """Create Show2D from file/folder input.
+
+        Parameters
+        ----------
+        source : str or pathlib.Path
+            File path (.png/.tif/.tiff/.emd) or folder path.
+        file_type : {"png", "tiff", "emd"}, optional
+            Required for folder sources to select which files to load.
+        dataset_path : str, optional
+            Explicit HDF dataset path for `.emd` inputs.
+        mode : {"first", "index", "mean", "max", "sum"}, optional
+            Optional reduction mode to collapse loaded stack to a single 2D image.
+            If omitted, stacks are shown in Show2D gallery mode.
+        index : int, default 0
+            Stack index used by ``mode="index"``.
+        """
+        path = pathlib.Path(source)
+        reduce_mode = cls._normalize_reduce_mode(mode)
+
+        if path.is_dir():
+            stack, labels = cls._load_folder_stack(path, file_type=file_type, dataset_path=dataset_path)
+            kwargs.setdefault("title", path.name)
+            if reduce_mode is None:
+                kwargs.setdefault("labels", labels)
+                return cls(stack, **kwargs)
+            image = cls._reduce_stack(stack, mode=reduce_mode, index=index)
+            return cls(image, **kwargs)
+
+        if not path.is_file():
+            raise ValueError(f"Path does not exist: {path}")
+        if file_type is not None:
+            raise ValueError("file_type is only used for folder sources.")
+
+        ext = path.suffix.lower()
+        if ext == ".png":
+            if dataset_path is not None:
+                raise ValueError("dataset_path is only supported for .emd inputs.")
+            image = cls._load_image_2d(path)
+            kwargs.setdefault("title", path.stem)
+            return cls(image, **kwargs)
+
+        if ext in {".tif", ".tiff"}:
+            if dataset_path is not None:
+                raise ValueError("dataset_path is only supported for .emd inputs.")
+            stack, labels = cls._load_tiff_stack(path)
+            kwargs.setdefault("title", path.stem)
+            if reduce_mode is None:
+                kwargs.setdefault("labels", labels)
+                return cls(stack, **kwargs)
+            image = cls._reduce_stack(stack, mode=reduce_mode, index=index)
+            return cls(image, **kwargs)
+
+        if ext == ".emd":
+            arr = cls._load_emd_array(path, dataset_path=dataset_path)
+            stack = cls._as_stack_3d(np.asarray(arr))
+            kwargs.setdefault("title", path.stem)
+            if reduce_mode is None:
+                labels = [f"{path.stem}[{i}]" for i in range(stack.shape[0])]
+                kwargs.setdefault("labels", labels)
+                return cls(stack, **kwargs)
+            image = cls._reduce_stack(stack, mode=reduce_mode, index=index)
+            return cls(image, **kwargs)
+
+        raise ValueError(
+            f"Unsupported file type: {path.suffix}. Use .png, .tif, .tiff, .emd, or a folder of one explicit type."
+        )
+
+    @classmethod
+    def from_folder(
+        cls,
+        folder: str | pathlib.Path,
+        *,
+        file_type: str,
+        dataset_path: str | None = None,
+        mode: str | None = None,
+        index: int = 0,
+        **kwargs,
+    ) -> Self:
+        """Create Show2D from a folder with explicit file type selection."""
+        return cls.from_path(
+            folder,
+            file_type=file_type,
+            dataset_path=dataset_path,
+            mode=mode,
+            index=index,
+            **kwargs,
+        )
+
+    @classmethod
+    def from_png(cls, source: str | pathlib.Path, **kwargs) -> Self:
+        """Create Show2D from a single PNG file."""
+        return cls.from_path(source, **kwargs)
+
+    @classmethod
+    def from_tiff(
+        cls,
+        source: str | pathlib.Path,
+        *,
+        mode: str | None = None,
+        index: int = 0,
+        **kwargs,
+    ) -> Self:
+        """Create Show2D from a TIFF file."""
+        return cls.from_path(source, mode=mode, index=index, **kwargs)
+
+    @classmethod
+    def from_emd(
+        cls,
+        source: str | pathlib.Path,
+        *,
+        dataset_path: str | None = None,
+        mode: str | None = None,
+        index: int = 0,
+        **kwargs,
+    ) -> Self:
+        """Create Show2D from an EMD file."""
+        return cls.from_path(source, dataset_path=dataset_path, mode=mode, index=index, **kwargs)
+
+    @classmethod
+    def from_png_folder(
+        cls,
+        folder: str | pathlib.Path,
+        *,
+        mode: str | None = None,
+        index: int = 0,
+        **kwargs,
+    ) -> Self:
+        """Create Show2D from a folder of PNG files."""
+        return cls.from_folder(folder, file_type="png", mode=mode, index=index, **kwargs)
+
+    @classmethod
+    def from_tiff_folder(
+        cls,
+        folder: str | pathlib.Path,
+        *,
+        mode: str | None = None,
+        index: int = 0,
+        **kwargs,
+    ) -> Self:
+        """Create Show2D from a folder of TIFF files."""
+        return cls.from_folder(folder, file_type="tiff", mode=mode, index=index, **kwargs)
+
+    @classmethod
+    def from_emd_folder(
+        cls,
+        folder: str | pathlib.Path,
+        *,
+        dataset_path: str | None = None,
+        mode: str | None = None,
+        index: int = 0,
+        **kwargs,
+    ) -> Self:
+        """Create Show2D from a folder of EMD files."""
+        return cls.from_folder(
+            folder,
+            file_type="emd",
+            dataset_path=dataset_path,
+            mode=mode,
+            index=index,
+            **kwargs,
+        )
+
     def __init__(
         self,
         data: Union[np.ndarray, List[np.ndarray]],
         labels: Optional[List[str]] = None,
         title: str = "",
         cmap: Union[str, Colormap] = Colormap.INFERNO,
-        pixel_size_angstrom: float = 0.0,
+        pixel_size: float = 0.0,
         scale_bar_visible: bool = True,
         show_fft: bool = False,
         show_controls: bool = True,
         show_stats: bool = True,
         log_scale: bool = False,
         auto_contrast: bool = False,
+        disabled_tools: Optional[List[str]] = None,
+        disable_display: bool = False,
+        disable_histogram: bool = False,
+        disable_stats: bool = False,
+        disable_navigation: bool = False,
+        disable_view: bool = False,
+        disable_export: bool = False,
+        disable_roi: bool = False,
+        disable_profile: bool = False,
+        disable_all: bool = False,
+        hidden_tools: Optional[List[str]] = None,
+        hide_display: bool = False,
+        hide_histogram: bool = False,
+        hide_stats: bool = False,
+        hide_navigation: bool = False,
+        hide_view: bool = False,
+        hide_export: bool = False,
+        hide_roi: bool = False,
+        hide_profile: bool = False,
+        hide_all: bool = False,
         ncols: int = 3,
         image_width_px: int = 0,
         state=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.widget_version = resolve_widget_version()
 
         # Check if data is a Dataset2d and extract metadata
         if hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling"):
             if not title and data.name:
                 title = data.name
-            if pixel_size_angstrom == 0.0 and hasattr(data, "units"):
+            if pixel_size == 0.0 and hasattr(data, "units"):
                 units = list(data.units)
                 sampling_val = float(data.sampling[-1])
                 if units[-1] in ("nm",):
-                    pixel_size_angstrom = sampling_val * 10  # nm → Å
+                    pixel_size = sampling_val * 10  # nm → Å
                 elif units[-1] in ("Å", "angstrom", "A"):
-                    pixel_size_angstrom = sampling_val
+                    pixel_size = sampling_val
             data = data.array
 
         # Convert input to NumPy (handles NumPy, CuPy, PyTorch)
@@ -201,7 +719,7 @@ class Show2D(anywidget.AnyWidget):
         # Options
         self.title = title
         self.cmap = cmap
-        self.pixel_size_angstrom = pixel_size_angstrom
+        self.pixel_size = pixel_size
         self.scale_bar_visible = scale_bar_visible
         self.image_width_px = image_width_px
         self.show_fft = show_fft
@@ -209,6 +727,30 @@ class Show2D(anywidget.AnyWidget):
         self.show_stats = show_stats
         self.log_scale = log_scale
         self.auto_contrast = auto_contrast
+        self.disabled_tools = self._build_disabled_tools(
+            disabled_tools=disabled_tools,
+            disable_display=disable_display,
+            disable_histogram=disable_histogram,
+            disable_stats=disable_stats,
+            disable_navigation=disable_navigation,
+            disable_view=disable_view,
+            disable_export=disable_export,
+            disable_roi=disable_roi,
+            disable_profile=disable_profile,
+            disable_all=disable_all,
+        )
+        self.hidden_tools = self._build_hidden_tools(
+            hidden_tools=hidden_tools,
+            hide_display=hide_display,
+            hide_histogram=hide_histogram,
+            hide_stats=hide_stats,
+            hide_navigation=hide_navigation,
+            hide_view=hide_view,
+            hide_export=hide_export,
+            hide_roi=hide_roi,
+            hide_profile=hide_profile,
+            hide_all=hide_all,
+        )
         self.ncols = ncols
 
         # Compute initial stats
@@ -221,7 +763,12 @@ class Show2D(anywidget.AnyWidget):
 
         if state is not None:
             if isinstance(state, (str, pathlib.Path)):
-                state = json.loads(pathlib.Path(state).read_text())
+                state = unwrap_state_payload(
+                    json.loads(pathlib.Path(state).read_text()),
+                    require_envelope=True,
+                )
+            else:
+                state = unwrap_state_payload(state)
             self.load_state_dict(state)
 
     def set_image(self, data, labels=None):
@@ -302,7 +849,9 @@ class Show2D(anywidget.AnyWidget):
             "show_stats": self.show_stats,
             "show_fft": self.show_fft,
             "show_controls": self.show_controls,
-            "pixel_size_angstrom": self.pixel_size_angstrom,
+            "disabled_tools": self.disabled_tools,
+            "hidden_tools": self.hidden_tools,
+            "pixel_size": self.pixel_size,
             "scale_bar_visible": self.scale_bar_visible,
             "image_width_px": self.image_width_px,
             "ncols": self.ncols,
@@ -314,10 +863,12 @@ class Show2D(anywidget.AnyWidget):
         }
 
     def save(self, path: str):
-        pathlib.Path(path).write_text(json.dumps(self.state_dict(), indent=2))
+        save_state_file(path, "Show2D", self.state_dict())
 
     def load_state_dict(self, state):
         for key, val in state.items():
+            if key == "pixel_size_angstrom":
+                key = "pixel_size"
             if hasattr(self, key):
                 setattr(self, key, val)
 
@@ -327,8 +878,8 @@ class Show2D(anywidget.AnyWidget):
             lines.append(f"Image:    {self.n_images}×{self.height}×{self.width} ({self.ncols} cols)")
         else:
             lines.append(f"Image:    {self.height}×{self.width}")
-        if self.pixel_size_angstrom > 0:
-            ps = self.pixel_size_angstrom
+        if self.pixel_size > 0:
+            ps = self.pixel_size
             if ps >= 10:
                 lines[-1] += f" ({ps / 10:.2f} nm/px)"
             else:
@@ -343,6 +894,10 @@ class Show2D(anywidget.AnyWidget):
         if self.show_fft:
             display += " | FFT"
         lines.append(f"Display:  {display}")
+        if self.disabled_tools:
+            lines.append(f"Locked:   {', '.join(self.disabled_tools)}")
+        if self.hidden_tools:
+            lines.append(f"Hidden:   {', '.join(self.hidden_tools)}")
         if self.roi_active and self.roi_list:
             lines.append(f"ROI:      {len(self.roi_list)} region(s)")
         if self.profile_line:
@@ -443,7 +998,7 @@ class Show2D(anywidget.AnyWidget):
         Returns
         -------
         float or None
-            Distance in angstroms (if pixel_size_angstrom > 0) or pixels.
+            Distance in angstroms (if pixel_size > 0) or pixels.
             None if no profile line is set.
         """
         if len(self.profile_line) < 2:
@@ -452,8 +1007,8 @@ class Show2D(anywidget.AnyWidget):
         dc = p1["col"] - p0["col"]
         dr = p1["row"] - p0["row"]
         dist_px = (dc**2 + dr**2) ** 0.5
-        if self.pixel_size_angstrom > 0:
-            return dist_px * self.pixel_size_angstrom
+        if self.pixel_size > 0:
+            return dist_px * self.pixel_size
         return dist_px
 
     @traitlets.observe("roi_active", "roi_list", "roi_selected_idx", "selected_idx")
@@ -499,3 +1054,6 @@ class Show2D(anywidget.AnyWidget):
             }
         else:
             self.roi_stats = {}
+
+
+bind_tool_runtime_api(Show2D, "Show2D")

@@ -25,9 +25,57 @@ Features
 - **Gallery mode** — Display multiple images side-by-side with configurable columns
 - **FFT** — Toggle Fourier transform display with ``show_fft=True``
 - **Histogram** — Intensity histogram with adjustable contrast
-- **Scale bar** — Calibrated scale bar when ``pixel_size_angstrom`` is set
+- **Scale bar** — Calibrated scale bar when ``pixel_size`` is set
 - **Log scale** — Logarithmic intensity scaling with ``log_scale=True``
 - **Auto contrast** — Percentile-based contrast with ``auto_contrast=True``
+- **File/folder loading** — Explicit loaders for PNG/TIFF/EMD files and folders
+- **Tool lock/hide** — ``disable_*`` / ``hide_*`` API for shared read-only workflows
+
+Methods
+-------
+
+.. code-block:: python
+
+   # Explicit file loaders
+   w = Show2D.from_png("data/frame.png")
+   w = Show2D.from_tiff("data/stack.tiff")                       # gallery for multi-page TIFF
+   w = Show2D.from_emd("data/scan.emd", dataset_path="/data/signal")
+
+   # Explicit folder loaders
+   w = Show2D.from_png_folder("data/png_stack")
+   w = Show2D.from_tiff_folder("data/tiff_stack")
+   w = Show2D.from_emd_folder("data/emd_stack", dataset_path="/data/signal")
+
+   # Mixed folder: pick one explicit type
+   w = Show2D.from_folder("data/mixed_stack", file_type="png")
+   w = Show2D.from_folder("data/mixed_stack", file_type="tiff")
+   w = Show2D.from_folder("data/mixed_stack", file_type="emd", dataset_path="/data/signal")
+
+   # Optional stack reduction to single 2D image
+   w = Show2D.from_tiff("data/stack.tiff", mode="mean")
+   w = Show2D.from_emd("data/scan.emd", dataset_path="/data/signal", mode="index", index=3)
+
+Control Groups
+--------------
+
+.. code-block:: python
+
+   # Lock interactions but keep controls visible
+   w_locked = Show2D(
+       image,
+       disable_view=True,
+       disable_navigation=True,
+       disable_export=True,
+       disable_roi=True,
+   )
+
+   # Hide selected control groups completely
+   w_clean = Show2D(
+       image,
+       hide_histogram=True,
+       hide_stats=True,
+       hide_export=True,
+   )
 
 State Persistence
 -----------------
@@ -38,7 +86,7 @@ State Persistence
 
    w.summary()          # Print human-readable state
    w.state_dict()       # Get all settings as a dict
-   w.save("state.json") # Save to JSON file
+   w.save("state.json") # Save versioned envelope JSON file
 
    # Restore from file or dict
    w2 = Show2D(image, state="state.json")
@@ -48,6 +96,10 @@ Examples
 
 - :doc:`Simple demo </examples/show2d/show2d_simple>`
 - :doc:`All features </examples/show2d/show2d_all_features>`
+- :doc:`Loading hub </examples/show2d/show2d_load_hub>`
+- :doc:`Load PNG folder </examples/show2d/show2d_load_png_folder>`
+- :doc:`Load TIFF </examples/show2d/show2d_load_tiff>`
+- :doc:`Load EMD </examples/show2d/show2d_load_emd>`
 
 API Reference
 -------------

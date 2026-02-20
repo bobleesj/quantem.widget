@@ -4,6 +4,14 @@ import torch
 
 from quantem.widget import Show2D
 
+try:
+    import h5py  # type: ignore
+
+    _HAS_H5PY = True
+except Exception:
+    h5py = None
+    _HAS_H5PY = False
+
 
 def test_show2d_single_numpy():
     """Single image from numpy array."""
@@ -99,8 +107,8 @@ def test_show2d_default_labels():
 def test_show2d_scale_bar():
     """Scale bar parameters are stored."""
     data = np.random.rand(16, 16).astype(np.float32)
-    widget = Show2D(data, pixel_size_angstrom=1.5, scale_bar_visible=False)
-    assert widget.pixel_size_angstrom == pytest.approx(1.5)
+    widget = Show2D(data, pixel_size=1.5, scale_bar_visible=False)
+    assert widget.pixel_size == pytest.approx(1.5)
     assert widget.scale_bar_visible is False
 
 
@@ -130,6 +138,80 @@ def test_show2d_show_stats():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data, show_stats=False)
     assert widget.show_stats is False
+
+
+def test_show2d_disabled_tools_default():
+    data = np.random.rand(16, 16).astype(np.float32)
+    widget = Show2D(data)
+    assert widget.disabled_tools == []
+
+
+def test_show2d_disabled_tools_custom():
+    data = np.random.rand(16, 16).astype(np.float32)
+    widget = Show2D(data, disabled_tools=["display", "ROI", "profile"])
+    assert widget.disabled_tools == ["display", "roi", "profile"]
+
+
+def test_show2d_disabled_tools_flags():
+    data = np.random.rand(16, 16).astype(np.float32)
+    widget = Show2D(data, disable_display=True, disable_navigation=True, disable_view=True)
+    assert widget.disabled_tools == ["display", "navigation", "view"]
+
+
+def test_show2d_disabled_tools_disable_all():
+    data = np.random.rand(16, 16).astype(np.float32)
+    widget = Show2D(data, disable_all=True, disable_display=True)
+    assert widget.disabled_tools == ["all"]
+
+
+def test_show2d_disabled_tools_unknown_raises():
+    data = np.random.rand(16, 16).astype(np.float32)
+    with pytest.raises(ValueError, match="Unknown tool group"):
+        Show2D(data, disabled_tools=["not_real"])
+
+
+def test_show2d_disabled_tools_trait_assignment_normalizes():
+    data = np.random.rand(16, 16).astype(np.float32)
+    widget = Show2D(data)
+    widget.disabled_tools = ["DISPLAY", "display", "roi"]
+    assert widget.disabled_tools == ["display", "roi"]
+
+
+def test_show2d_hidden_tools_default():
+    data = np.random.rand(16, 16).astype(np.float32)
+    widget = Show2D(data)
+    assert widget.hidden_tools == []
+
+
+def test_show2d_hidden_tools_custom():
+    data = np.random.rand(16, 16).astype(np.float32)
+    widget = Show2D(data, hidden_tools=["display", "ROI", "profile"])
+    assert widget.hidden_tools == ["display", "roi", "profile"]
+
+
+def test_show2d_hidden_tools_flags():
+    data = np.random.rand(16, 16).astype(np.float32)
+    widget = Show2D(data, hide_display=True, hide_navigation=True, hide_view=True)
+    assert widget.hidden_tools == ["display", "navigation", "view"]
+
+
+def test_show2d_hidden_tools_hide_all():
+    data = np.random.rand(16, 16).astype(np.float32)
+    widget = Show2D(data, hide_all=True, hide_display=True)
+    assert widget.hidden_tools == ["all"]
+
+
+def test_show2d_hidden_tools_unknown_raises():
+    data = np.random.rand(16, 16).astype(np.float32)
+    with pytest.raises(ValueError, match="Unknown tool group"):
+        Show2D(data, hidden_tools=["not_real"])
+
+
+def test_show2d_hidden_tools_trait_assignment_normalizes():
+    data = np.random.rand(16, 16).astype(np.float32)
+    widget = Show2D(data)
+    widget.hidden_tools = ["DISPLAY", "display", "roi"]
+    assert widget.hidden_tools == ["display", "roi"]
 
 
 def test_show2d_constant_image_stats():
@@ -212,7 +294,8 @@ def test_show2d_roi_inactive():
 def test_show2d_state_dict_roundtrip():
     data = np.random.rand(32, 32).astype(np.float32)
     w = Show2D(data, cmap="viridis", log_scale=True, auto_contrast=True,
-               title="Test", pixel_size_angstrom=2.5, show_fft=True)
+               title="Test", pixel_size=2.5, show_fft=True,
+               disabled_tools=["display", "view"], hidden_tools=["stats"])
     w.roi_active = True
     w.roi_list = [{"shape": "circle", "row": 10, "col": 15, "radius": 5}]
     w.roi_selected_idx = 0
@@ -222,12 +305,24 @@ def test_show2d_state_dict_roundtrip():
     assert w2.log_scale is True
     assert w2.auto_contrast is True
     assert w2.title == "Test"
-    assert w2.pixel_size_angstrom == pytest.approx(2.5)
+    assert w2.pixel_size == pytest.approx(2.5)
     assert w2.show_fft is True
+    assert w2.disabled_tools == ["display", "view"]
+    assert w2.hidden_tools == ["stats"]
     assert w2.roi_active is True
     assert len(w2.roi_list) == 1
     assert w2.roi_list[0]["row"] == 10
     assert w2.roi_list[0]["col"] == 15
+
+
+def test_show2d_state_dict_keys():
+    data = np.random.rand(16, 16).astype(np.float32)
+    w = Show2D(data)
+    keys = set(w.state_dict().keys())
+    assert "disabled_tools" in keys
+    assert "hidden_tools" in keys
+    assert "show_stats" in keys
+    assert "show_fft" in keys
 
 
 def test_show2d_save_load_file(tmp_path):
@@ -238,11 +333,25 @@ def test_show2d_save_load_file(tmp_path):
     w.save(str(path))
     assert path.exists()
     saved = json.loads(path.read_text())
-    assert saved["cmap"] == "magma"
-    assert saved["title"] == "Saved"
+    assert saved["metadata_version"] == "1.0"
+    assert saved["widget_name"] == "Show2D"
+    assert isinstance(saved["widget_version"], str)
+    assert saved["state"]["cmap"] == "magma"
+    assert saved["state"]["title"] == "Saved"
     w2 = Show2D(data, state=str(path))
     assert w2.cmap == "magma"
     assert w2.title == "Saved"
+
+
+def test_show2d_rejects_legacy_flat_state_file(tmp_path):
+    import json
+
+    data = np.random.rand(16, 16).astype(np.float32)
+    path = tmp_path / "legacy_show2d_state.json"
+    path.write_text(json.dumps({"cmap": "magma", "title": "Legacy"}, indent=2))
+
+    with pytest.raises(ValueError, match="versioned envelope"):
+        Show2D(data, state=str(path))
 
 
 def test_show2d_summary(capsys):
@@ -298,3 +407,150 @@ def test_show2d_set_image_gallery():
     assert widget.width == 20
     assert widget.labels == ["A", "B", "C"]
     assert widget.selected_idx == 0
+
+
+def test_show2d_from_png_file(tmp_path):
+    from PIL import Image
+
+    path = tmp_path / "img.png"
+    Image.fromarray((np.ones((8, 6), dtype=np.uint8) * 33)).save(path)
+
+    widget = Show2D.from_png(path)
+    assert widget.n_images == 1
+    assert widget.height == 8
+    assert widget.width == 6
+    assert widget.title == "img"
+
+
+def test_show2d_from_png_folder_gallery(tmp_path):
+    from PIL import Image
+
+    folder = tmp_path / "png_stack"
+    folder.mkdir()
+    for i in range(3):
+        Image.fromarray((np.ones((8, 6), dtype=np.uint8) * (10 + i))).save(folder / f"slice_{i:02d}.png")
+
+    widget = Show2D.from_png_folder(folder)
+    assert widget.n_images == 3
+    assert widget.labels[0] == "slice_00.png"
+
+    widget2 = Show2D.from_folder(folder, file_type="png", mode="mean")
+    assert widget2.n_images == 1
+
+
+def test_show2d_from_path_folder_requires_file_type(tmp_path):
+    from PIL import Image
+
+    folder = tmp_path / "png_stack"
+    folder.mkdir()
+    Image.fromarray(np.zeros((5, 5), dtype=np.uint8)).save(folder / "a.png")
+
+    with pytest.raises(ValueError, match="file_type is required"):
+        Show2D.from_path(folder)
+
+
+def test_show2d_from_tiff_file_gallery_and_reduce(tmp_path):
+    from PIL import Image
+
+    tiff_path = tmp_path / "stack.tiff"
+    frames = [
+        Image.fromarray((np.ones((7, 5), dtype=np.uint8) * 20)),
+        Image.fromarray((np.ones((7, 5), dtype=np.uint8) * 22)),
+    ]
+    frames[0].save(tiff_path, save_all=True, append_images=frames[1:])
+
+    gallery = Show2D.from_tiff(tiff_path)
+    assert gallery.n_images == 2
+    assert gallery.labels[0].startswith("stack[0]")
+
+    reduced = Show2D.from_tiff(tiff_path, mode="mean")
+    assert reduced.n_images == 1
+    assert reduced.stats_mean[0] == pytest.approx(21.0)
+
+
+def test_show2d_from_mixed_folder_explicit_type(tmp_path):
+    from PIL import Image
+
+    folder = tmp_path / "mixed_stack"
+    folder.mkdir()
+    Image.fromarray((np.ones((6, 4), dtype=np.uint8) * 7)).save(folder / "a.png")
+    frames = [
+        Image.fromarray((np.ones((6, 4), dtype=np.uint8) * 21)),
+        Image.fromarray((np.ones((6, 4), dtype=np.uint8) * 22)),
+    ]
+    frames[0].save(folder / "b.tiff", save_all=True, append_images=frames[1:])
+
+    png_widget = Show2D.from_folder(folder, file_type="png")
+    assert png_widget.n_images == 1
+    assert png_widget.labels == ["a.png"]
+
+    tiff_widget = Show2D.from_folder(folder, file_type="tiff")
+    assert tiff_widget.n_images == 2
+    assert tiff_widget.labels[0].startswith("b[0]")
+
+
+def test_show2d_rejects_dataset_path_for_non_emd(tmp_path):
+    from PIL import Image
+
+    path = tmp_path / "img.png"
+    Image.fromarray((np.ones((8, 6), dtype=np.uint8) * 33)).save(path)
+
+    with pytest.raises(ValueError, match="dataset_path is only supported"):
+        Show2D.from_path(path, dataset_path="/data/signal")
+
+
+def test_show2d_from_path_rejects_file_type_for_file(tmp_path):
+    from PIL import Image
+
+    path = tmp_path / "img.png"
+    Image.fromarray((np.ones((8, 6), dtype=np.uint8) * 33)).save(path)
+
+    with pytest.raises(ValueError, match="file_type is only used for folder"):
+        Show2D.from_path(path, file_type="png")
+
+
+def test_show2d_invalid_reduce_mode(tmp_path):
+    from PIL import Image
+
+    folder = tmp_path / "png_stack"
+    folder.mkdir()
+    Image.fromarray(np.zeros((5, 5), dtype=np.uint8)).save(folder / "a.png")
+
+    with pytest.raises(ValueError, match="Unknown reduce mode"):
+        Show2D.from_folder(folder, file_type="png", mode="median")
+
+
+@pytest.mark.skipif(not _HAS_H5PY or h5py is None, reason="h5py not available")
+def test_show2d_from_emd_with_dataset_path_and_reduce(tmp_path):
+    emd_path = tmp_path / "stack.emd"
+    with h5py.File(emd_path, "w") as h5f:  # type: ignore[arg-type]
+        h5f.create_dataset("preview/thumb", data=np.ones((5, 5), dtype=np.float32) * 2.0)
+        h5f.create_dataset("data/signal", data=np.ones((3, 7, 5), dtype=np.float32) * 13.0)
+
+    gallery = Show2D.from_emd(emd_path, dataset_path="/data/signal")
+    assert gallery.n_images == 3
+    assert gallery.height == 7
+    assert gallery.width == 5
+    assert gallery.labels[0].startswith("stack[0]")
+
+    reduced = Show2D.from_emd(emd_path, dataset_path="/data/signal", mode="max")
+    assert reduced.n_images == 1
+    assert reduced.stats_mean[0] == pytest.approx(13.0)
+
+
+@pytest.mark.skipif(not _HAS_H5PY or h5py is None, reason="h5py not available")
+def test_show2d_from_emd_highdim_default_and_reduction(tmp_path):
+    emd_path = tmp_path / "highdim.emd"
+    arr = np.arange(2 * 3 * 4 * 4, dtype=np.float32).reshape(2, 3, 4, 4)
+    with h5py.File(emd_path, "w") as h5f:  # type: ignore[arg-type]
+        h5f.create_dataset("data/signal", data=arr)
+
+    gallery = Show2D.from_emd(emd_path, dataset_path="/data/signal")
+    assert gallery.n_images == 6
+    assert gallery.height == 4
+    assert gallery.width == 4
+
+    reduced = Show2D.from_emd(emd_path, dataset_path="/data/signal", mode="mean")
+    assert reduced.n_images == 1
+    assert reduced.height == 4
+    assert reduced.width == 4
