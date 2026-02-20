@@ -1,0 +1,35 @@
+name: Smoke Loaders
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  show2d-loader-smoke:
+    name: Show2D Loader Smoke
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src
+      MPLCONFIGDIR: /tmp/quantem-widget-mplconfig
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev] h5py pillow playwright
+          playwright install --with-deps chromium
+
+      - name: Run Show2D loader smoke test
+        run: python -m pytest tests/test_e2e_show2d_loader_smoke.py -q

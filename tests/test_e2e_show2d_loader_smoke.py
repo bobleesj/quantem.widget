@@ -1,5 +1,7 @@
 """Playwright smoke tests for explicit Show2D loader entrypoints."""
 
+import re
+
 import pytest
 
 from conftest import TESTS_DIR, _run_notebook_and_wait, _write_notebook
@@ -53,10 +55,11 @@ def show2d_loader_page(browser_context):
             },
             {
                 "source": [
-                    "Show2D.from_png_folder(png_dir)\n",
-                    "Show2D.from_tiff(tiff_file)\n",
+                    "print('HAS_H5PY:', has_h5py)\n",
+                    "Show2D.from_png_folder(png_dir, title='PNG Folder Loader')\n",
+                    "Show2D.from_tiff(tiff_file, title='TIFF Loader')\n",
                     "if has_h5py:\n",
-                    "    Show2D.from_emd(emd_file, dataset_path='/data/signal')\n",
+                    "    Show2D.from_emd(emd_file, dataset_path='/data/signal', title='EMD Loader')\n",
                 ]
             },
             {
@@ -88,18 +91,83 @@ def test_show2d_loader_widgets_render(show2d_loader_page):
     assert roots.count() >= 2, "Expected explicit Show2D loader widgets to render"
 
 
+def _widget_for_title(page, title: str):
+    widget = page.locator(f'.show2d-root:has-text("{title}")').first
+    assert widget.count() >= 1, f"Expected Show2D widget titled '{title}'"
+    return widget
+
+
 def test_show2d_loader_canvas_render(show2d_loader_page):
-    canvases = show2d_loader_page.locator(".show2d-root canvas")
-    assert canvases.count() >= 2, "Expected canvases from explicit loader widgets"
+    png_widget = _widget_for_title(show2d_loader_page, "PNG Folder Loader")
+    tiff_widget = _widget_for_title(show2d_loader_page, "TIFF Loader")
+
+    canvases = png_widget.locator("canvas")
+    assert canvases.count() >= 1, "Expected canvas for PNG folder loader widget"
     box = canvases.first.bounding_box()
     assert box is not None and box["width"] > 0 and box["height"] > 0
+
+    canvases = tiff_widget.locator("canvas")
+    assert canvases.count() >= 1, "Expected canvas for TIFF loader widget"
+    box = canvases.first.bounding_box()
+    assert box is not None and box["width"] > 0 and box["height"] > 0
+
+    emd_widget = show2d_loader_page.locator('.show2d-root:has-text("EMD Loader")').first
+    if emd_widget.count() > 0:
+        canvases = emd_widget.locator("canvas")
+        assert canvases.count() >= 1, "Expected canvas for EMD loader widget"
+        box = canvases.first.bounding_box()
+        assert box is not None and box["width"] > 0 and box["height"] > 0
+
+
+def test_show2d_loader_stats_are_deterministic(show2d_loader_page):
+    png_widget = _widget_for_title(show2d_loader_page, "PNG Folder Loader")
+    tiff_widget = _widget_for_title(show2d_loader_page, "TIFF Loader")
+
+    png_text = png_widget.inner_text()
+    tiff_text = tiff_widget.inner_text()
+    assert re.search(r"Mean\s+10(?:\.0+)?", png_text), "Unexpected PNG loader mean stats text"
+    assert re.search(r"Mean\s+20(?:\.0+)?", tiff_text), "Unexpected TIFF loader mean stats text"
+
+    emd_widget = show2d_loader_page.locator('.show2d-root:has-text("EMD Loader")').first
+    if emd_widget.count() > 0:
+        emd_text = emd_widget.inner_text()
+        assert re.search(r"Mean\s+55(?:\.0+)?", emd_text), "Unexpected EMD loader mean stats text"
+
+
+def test_show2d_loader_has_expected_count(show2d_loader_page):
+    has_h5py = show2d_loader_page.locator("text=HAS_H5PY: True").count() >= 1
+    expected = 3 if has_h5py else 2
+    roots = show2d_loader_page.locator(".show2d-root")
+    assert roots.count() == expected, f"Expected {expected} Show2D loader widgets, found {roots.count()}"
 
 
 def test_show2d_loader_explicit_error_message(show2d_loader_page):
     assert show2d_loader_page.locator("text=file_type is required").count() >= 1
 
 
-def test_show2d_loader_screenshot(show2d_loader_page):
+def test_show2d_loader_screenshot_png(show2d_loader_page):
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    widget = show2d_loader_page.locator(".show2d-root").first
-    widget.screenshot(path=str(SCREENSHOT_DIR / "show2d_loader_explicit.png"))
+    widget = _widget_for_title(show2d_loader_page, "PNG Folder Loader")
+    widget.screenshot(path=str(SCREENSHOT_DIR / "show2d_loader_png_folder.png"))
+
+
+def test_show2d_loader_screenshot_tiff(show2d_loader_page):
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    widget = _widget_for_title(show2d_loader_page, "TIFF Loader")
+    widget.screenshot(path=str(SCREENSHOT_DIR / "show2d_loader_tiff.png"))
+
+
+def test_show2d_loader_screenshot_emd(show2d_loader_page):
+    widget = show2d_loader_page.locator('.show2d-root:has-text("EMD Loader")').first
+    if widget.count() == 0:
+        pytest.skip("h5py not available; skipping EMD loader screenshot.")
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    widget.screenshot(path=str(SCREENSHOT_DIR / "show2d_loader_emd.png"))
+
+
+def test_show2d_loader_canvas_render_legacy_guard(show2d_loader_page):
+    """Backstop check that at least one loader canvas is visible."""
+    canvases = show2d_loader_page.locator(".show2d-root canvas")
+    assert canvases.count() >= 2, "Expected canvases from explicit loader widgets"
+    box = canvases.first.bounding_box()
+    assert box is not None and box["width"] > 0 and box["height"] > 0

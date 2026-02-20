@@ -120,6 +120,19 @@ State Persistence
    # Restore from file or dict
    w2 = Show2D(image, state="state.json")
 
+Loader Troubleshooting
+----------------------
+
+- **Error: ``file_type is required for folder loading``**
+  Use an explicit folder loader (`from_png_folder`, `from_tiff_folder`, `from_emd_folder`) or call
+  ``from_folder(path, file_type="png" | "tiff" | "emd")``.
+- **Error: ``h5py is required to read .emd files``**
+  Install `h5py` in your environment, then retry the same `from_emd(...)` call.
+- **Error: ``dataset_path ... not found in EMD file``**
+  Verify the exact HDF dataset path and pass it to ``dataset_path=...``; this is recommended for complex EMD files.
+- **Mixed folder with different formats**
+  Use ``from_folder(..., file_type="png")`` or ``file_type="tiff"`` to force one file family and avoid accidental mixing.
+
 Examples
 --------
 
