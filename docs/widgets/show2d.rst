@@ -55,6 +55,35 @@ Methods
    w = Show2D.from_tiff("data/stack.tiff", mode="mean")
    w = Show2D.from_emd("data/scan.emd", dataset_path="/data/signal", mode="index", index=3)
 
+Loader Decision Table
+---------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 32 46
+
+   * - If your input is...
+     - Use this API
+     - Why this is the safest choice
+   * - One PNG image
+     - ``Show2D.from_png("frame.png")``
+     - Fastest explicit path for a single 2D frame.
+   * - Folder of PNG slices
+     - ``Show2D.from_png_folder("png_stack/")``
+     - Keeps slice order explicit and avoids format ambiguity.
+   * - One TIFF / multi-page TIFF
+     - ``Show2D.from_tiff("stack.tiff")``
+     - Handles both single-page and stacked TIFF inputs directly.
+   * - EMD file where dataset location is known
+     - ``Show2D.from_emd("scan.emd", dataset_path="/data/signal")``
+     - Prevents loading the wrong dataset in complex EMD containers.
+   * - Mixed-type folder where you want one type only
+     - ``Show2D.from_folder("mixed_stack/", file_type="png")``
+     - Forces one file family and prevents accidental cross-format merges.
+   * - Stack source but you want one 2D view
+     - ``Show2D.from_tiff(..., mode="mean")`` or ``mode="index"``
+     - Creates a deterministic 2D reduction for quick QC snapshots.
+
 Control Groups
 --------------
 
