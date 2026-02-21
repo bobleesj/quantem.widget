@@ -98,19 +98,6 @@ w.save("bin_preset.json")
 binned = w.get_binned_data()
 ```
 
-### Folder - 4D-STEM Intake Browser
-
-```python
-from quantem.widget import Folder
-
-w = Folder(
-    folder_path="/path/to/incoming",
-    watch_latest=True,
-    stable_required_polls=2,
-)
-w  # search/sort/filter + preview + one-click open to Show4DSTEM/Show3D/Show2D
-```
-
 ### Merge4DSTEM - Out-of-Core Dataset Merge
 
 ```python
@@ -133,8 +120,7 @@ m.save_pipeline_spec("merge_pipeline.json")
 m.load_pipeline_spec("merge_pipeline.json")
 ```
 
-`Merge4DSTEM` is intentionally separate from `Folder` and `Bin`:
-- `Folder`: browse + triage incoming files
+`Merge4DSTEM` is intentionally separate from `Bin`:
 - `Bin`: preprocess one dataset
 - `Merge4DSTEM`: construct merged 5D/time-reduced datasets with provenance
 

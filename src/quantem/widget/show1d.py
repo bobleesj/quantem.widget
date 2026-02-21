@@ -120,6 +120,7 @@ class Show1D(anywidget.AnyWidget):
     show_grid = traitlets.Bool(True).tag(sync=True)
     show_controls = traitlets.Bool(True).tag(sync=True)
     line_width = traitlets.Float(1.5).tag(sync=True)
+    focused_trace = traitlets.Int(-1).tag(sync=True)
 
     # =========================================================================
     # Statistics (per-trace)
@@ -405,6 +406,7 @@ class Show1D(anywidget.AnyWidget):
             "show_grid": self.show_grid,
             "show_controls": self.show_controls,
             "line_width": self.line_width,
+            "focused_trace": self.focused_trace,
         }
 
     def save(self, path: str):

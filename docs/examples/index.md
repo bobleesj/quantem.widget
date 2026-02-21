@@ -40,5 +40,5 @@ bin/bin_simple
 bin/bin_all_features
 ```
 
-Workflow-focused widgets (`Folder`, `Merge4DSTEM`) are documented in
+Workflow-focused widgets (`Merge4DSTEM`) are documented in
 `docs/widgets/` and currently do not have notebook demos in this examples list.

@@ -66,7 +66,6 @@ quantem.widget/
 │   ├── align2d/index.tsx        # One folder per widget (each is self-contained)
 │   ├── bin/index.tsx
 │   ├── edit2d/index.tsx
-│   ├── folder/index.tsx
 │   ├── mark2d/index.tsx
 │   ├── merge4dstem/index.tsx
 │   ├── show1d/index.tsx
@@ -88,7 +87,6 @@ quantem.widget/
 │   ├── align2d.py               # One file per widget
 │   ├── bin.py
 │   ├── edit2d.py
-│   ├── folder.py
 │   ├── mark2d.py
 │   ├── merge4dstem.py
 │   ├── show1d.py
@@ -120,19 +118,19 @@ across **all** widgets. These exist because every widget needs them — they pas
 the bar of "used by 12+ widgets" before being extracted.
 
 **Python** (`src/quantem/widget/`):
-- `array_utils.py` — `to_numpy()` converts any input (NumPy, PyTorch, CuPy) to NumPy. Used by all 13 widgets.
-- `json_state.py` — `save_state_file()` and `unwrap_state_payload()` for the versioned JSON state envelope. Used by all 13 widgets.
-- `tool_parity.py` — validates `disabled_tools` / `hidden_tools` keys. Used by 12 widgets.
+- `array_utils.py` — `to_numpy()` converts any input (NumPy, PyTorch, CuPy) to NumPy. Used by all 12 widgets.
+- `json_state.py` — `save_state_file()` and `unwrap_state_payload()` for the versioned JSON state envelope. Used by all 12 widgets.
+- `tool_parity.py` — validates `disabled_tools` / `hidden_tools` keys. Used by 11 widgets.
 
 **JavaScript** (`js/`):
-- `theme.ts` — `useTheme()` hook for automatic light/dark mode. Used by all 13 widgets.
+- `theme.ts` — `useTheme()` hook for automatic light/dark mode. Used by all 12 widgets.
 - `colormaps.ts` — colormap LUTs and `applyColormap()`. Used by all image widgets.
 - `format.ts` — `extractFloat32()`, `formatNumber()`, `downloadBlob()`. Used by all widgets.
 - `stats.ts` — `computeStats()`, `percentileClip()`, `applyLogScale()`. Used by all image widgets.
 - `scalebar.ts` — `drawScaleBarHiDPI()`, `exportFigure()`. Used by all canvas widgets with calibration.
 - `histogram.ts` — `computeHistogramFromBytes()`. Used by all image widgets.
 - `webgpu-fft.ts` — GPU-accelerated 2D FFT with CPU fallback. Used by all FFT-capable widgets.
-- `tool-parity.ts` — tool lock/hide state management. Used by 12 widgets.
+- `tool-parity.ts` — tool lock/hide state management. Used by 11 widgets.
 
 Do not create new shared modules unless the logic is already duplicated across
 many widgets. When in doubt, keep it in the widget file and extract later.
@@ -224,5 +222,4 @@ rendering entirely in JavaScript.
 | `Edit2D` | Interactive crop/pad/mask editor with brush tool | No |
 | `Align2D` | Image alignment overlay with FFT-based auto-align | No |
 | `Bin` | Detector binning with live preview and batch export | Yes |
-| `Folder` | Folder browser for loading and viewing datasets | No |
 | `Merge4DSTEM` | 4D-STEM sector merging with alignment and stitching | Yes |

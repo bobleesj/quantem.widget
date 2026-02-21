@@ -358,6 +358,77 @@ def test_show3d_toggle_auto_contrast(smoke_page):
     widget.locator(".MuiSwitch-root").nth(3).click()
     time.sleep(0.5)
 
+def test_show3d_profile_draw_and_drag(smoke_page):
+    """Draw a profile line, drag an endpoint, drag the whole line."""
+    widget = smoke_page.locator(".show3d-root").first
+    widget.scroll_into_view_if_needed()
+    canvases_before = widget.locator("canvas").count()
+
+    # Enable Profile toggle — Switches: FFT(0), Profile(1), ROI(2), Auto(3)
+    widget.locator(".MuiSwitch-root").nth(1).click()
+    time.sleep(1)
+
+    # Click two points on the main canvas to create a profile line
+    canvas = widget.locator("canvas").first
+    box = canvas.bounding_box()
+    assert box is not None
+
+    # First point at 20%, 20%
+    p0_x = box["x"] + box["width"] * 0.2
+    p0_y = box["y"] + box["height"] * 0.2
+    smoke_page.mouse.click(p0_x, p0_y)
+    time.sleep(0.5)
+
+    # Second point at 80%, 80%
+    p1_x = box["x"] + box["width"] * 0.8
+    p1_y = box["y"] + box["height"] * 0.8
+    smoke_page.mouse.click(p1_x, p1_y)
+    time.sleep(1)
+
+    # Verify profile sparkline canvas appeared
+    canvases_after = widget.locator("canvas").count()
+    assert canvases_after > canvases_before, (
+        f"Profile canvas not added ({canvases_before} → {canvases_after})"
+    )
+    _screenshot(widget, "show3d_profile")
+
+    # Drag endpoint 0 from (20%,20%) to (40%,30%)
+    smoke_page.mouse.move(p0_x, p0_y)
+    time.sleep(0.2)
+    smoke_page.mouse.down()
+    smoke_page.mouse.move(
+        box["x"] + box["width"] * 0.4,
+        box["y"] + box["height"] * 0.3,
+        steps=5,
+    )
+    smoke_page.mouse.up()
+    time.sleep(1)
+    _screenshot(widget, "show3d_profile_drag_endpoint")
+
+    # Drag whole line from its midpoint (~60%,55%) by +10%,+10%
+    mid_x = box["x"] + box["width"] * 0.6
+    mid_y = box["y"] + box["height"] * 0.55
+    smoke_page.mouse.move(mid_x, mid_y)
+    time.sleep(0.2)
+    smoke_page.mouse.down()
+    smoke_page.mouse.move(
+        mid_x + box["width"] * 0.1,
+        mid_y + box["height"] * 0.1,
+        steps=5,
+    )
+    smoke_page.mouse.up()
+    time.sleep(1)
+    _screenshot(widget, "show3d_profile_drag_line")
+
+    # Verify profile canvas still present after drags
+    assert widget.locator("canvas").count() > canvases_before, (
+        "Profile canvas disappeared after drag"
+    )
+
+    # Clean up: disable Profile
+    widget.locator(".MuiSwitch-root").nth(1).click()
+    time.sleep(0.5)
+
 # ---------------------------------------------------------------------------
 # Mark2D interaction tests
 # ---------------------------------------------------------------------------

@@ -82,6 +82,12 @@ const container = {
 // ============================================================================
 const DPR = window.devicePixelRatio || 1;
 const RESIZE_HIT_AREA_PX = 10;
+const UNFOCUSED_ALPHA = 0.2;
+
+/** Snap a coordinate to the nearest pixel boundary for crisp 1px lines. */
+function snap(v: number): number {
+  return Math.round(v) + 0.5;
+}
 const DEFAULT_CANVAS_W = 500;
 const DEFAULT_CANVAS_H = 300;
 const MARGIN = { top: 12, right: 16, bottom: 48, left: 60 };
@@ -209,6 +215,7 @@ function Show1D() {
   const [statsMin] = useModelState<number[]>("stats_min");
   const [statsMax] = useModelState<number[]>("stats_max");
   const [statsStd] = useModelState<number[]>("stats_std");
+  const [focusedTrace, setFocusedTrace] = useModelState<number>("focused_trace");
 
   // Canvas refs
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -247,6 +254,7 @@ function Show1D() {
   // Drag state
   const dragRef = React.useRef<{
     active: boolean;
+    wasDrag: boolean;
     startX: number;
     startY: number;
     startXMin: number;
@@ -410,7 +418,7 @@ function Show1D() {
       // X grid
       const xTicks = computeTicks(xMin, xMax, Math.max(3, Math.floor(plotW / TICK_LABEL_WIDTH_PX)));
       for (const tv of xTicks) {
-        const cx = dataToCanvasX(tv);
+        const cx = snap(dataToCanvasX(tv));
         if (cx >= MARGIN.left && cx <= MARGIN.left + plotW) {
           ctx.beginPath();
           ctx.moveTo(cx, MARGIN.top);
@@ -422,7 +430,7 @@ function Show1D() {
       // Y grid
       const yTicks = logScale ? computeLogTicks(Math.max(yMin, 1e-30), yMax) : computeTicks(yMin, yMax);
       for (const tv of yTicks) {
-        const cy = dataToCanvasY(tv);
+        const cy = snap(dataToCanvasY(tv));
         if (cy >= MARGIN.top && cy <= MARGIN.top + plotH) {
           ctx.beginPath();
           ctx.moveTo(MARGIN.left, cy);
@@ -433,23 +441,25 @@ function Show1D() {
       ctx.setLineDash([]);
     }
 
-    // Axes
+    // Axes (pixel-snapped for crisp lines)
     ctx.strokeStyle = isDark ? "#666" : "#999";
     ctx.lineWidth = 1;
+    const axisLeft = snap(MARGIN.left);
+    const axisBottom = snap(MARGIN.top + plotH);
     ctx.beginPath();
-    ctx.moveTo(MARGIN.left, MARGIN.top);
-    ctx.lineTo(MARGIN.left, MARGIN.top + plotH);
-    ctx.lineTo(MARGIN.left + plotW, MARGIN.top + plotH);
+    ctx.moveTo(axisLeft, MARGIN.top);
+    ctx.lineTo(axisLeft, axisBottom);
+    ctx.lineTo(MARGIN.left + plotW, axisBottom);
     ctx.stroke();
 
     // X ticks + labels
     const xTicks = computeTicks(xMin, xMax, Math.max(3, Math.floor(plotW / TICK_LABEL_WIDTH_PX)));
     ctx.fillStyle = isDark ? "#aaa" : "#555";
-    ctx.font = `10px ${FONT}`;
+    ctx.font = `11px ${FONT}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
     for (const tv of xTicks) {
-      const cx = dataToCanvasX(tv);
+      const cx = snap(dataToCanvasX(tv));
       if (cx >= MARGIN.left && cx <= MARGIN.left + plotW) {
         ctx.beginPath();
         ctx.moveTo(cx, MARGIN.top + plotH);
@@ -464,7 +474,7 @@ function Show1D() {
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
     for (const tv of yTicks) {
-      const cy = dataToCanvasY(tv);
+      const cy = snap(dataToCanvasY(tv));
       if (cy >= MARGIN.top && cy <= MARGIN.top + plotH) {
         ctx.beginPath();
         ctx.moveTo(MARGIN.left - AXIS_TICK_PX, cy);
@@ -478,7 +488,7 @@ function Show1D() {
     if (xLabel || xUnit) {
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      ctx.font = `11px ${FONT}`;
+      ctx.font = `12px ${FONT}`;
       ctx.fillStyle = isDark ? "#999" : "#666";
       let lbl = xLabel || "";
       if (xUnit) lbl += lbl ? ` (${xUnit})` : xUnit;
@@ -492,7 +502,7 @@ function Show1D() {
       ctx.rotate(-Math.PI / 2);
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      ctx.font = `11px ${FONT}`;
+      ctx.font = `12px ${FONT}`;
       ctx.fillStyle = isDark ? "#999" : "#666";
       let lbl = yLabel || "";
       if (yUnit) lbl += lbl ? ` (${yUnit})` : yUnit;
@@ -506,12 +516,14 @@ function Show1D() {
     ctx.rect(MARGIN.left, MARGIN.top, plotW, plotH);
     ctx.clip();
 
-    // Draw traces
-    for (let t = 0; t < traces.length; t++) {
+    // Draw traces (unfocused first, then focused on top)
+    const hasFocus = focusedTrace >= 0 && focusedTrace < traces.length;
+    const drawTrace = (t: number, alpha: number, lw: number) => {
       const trace = traces[t];
       const color = (traceColors && traceColors[t]) || "#4fc3f7";
+      ctx.globalAlpha = alpha;
       ctx.strokeStyle = color;
-      ctx.lineWidth = lineWidth || 1.5;
+      ctx.lineWidth = lw;
       ctx.beginPath();
       let started = false;
       for (let i = 0; i < trace.length; i++) {
@@ -524,6 +536,22 @@ function Show1D() {
         else ctx.lineTo(cx, cy);
       }
       ctx.stroke();
+      ctx.globalAlpha = 1.0;
+    };
+
+    const baseLW = lineWidth || 1.5;
+    if (hasFocus) {
+      // Draw unfocused traces first (dimmed)
+      for (let t = 0; t < traces.length; t++) {
+        if (t !== focusedTrace) drawTrace(t, UNFOCUSED_ALPHA, baseLW);
+      }
+      // Draw focused trace on top (full opacity, thicker)
+      drawTrace(focusedTrace, 1.0, baseLW * 1.5);
+    } else {
+      // No focus — all traces at full opacity
+      for (let t = 0; t < traces.length; t++) {
+        drawTrace(t, 1.0, baseLW);
+      }
     }
 
     ctx.restore();
@@ -539,7 +567,7 @@ function Show1D() {
     ctx.closePath();
     ctx.fillStyle = isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.15)";
     ctx.fill();
-  }, [canvasW, canvasH, xMin, xMax, yMin, yMax, yData, xData, nTraces, nPoints, traceColors, lineWidth, logScale, showGrid, xLabel, yLabel, xUnit, yUnit, isDark, dataToCanvasX, dataToCanvasY, plotW, plotH]);
+  }, [canvasW, canvasH, xMin, xMax, yMin, yMax, yData, xData, nTraces, nPoints, traceColors, lineWidth, logScale, showGrid, xLabel, yLabel, xUnit, yUnit, isDark, dataToCanvasX, dataToCanvasY, plotW, plotH, focusedTrace]);
 
   // ========================================================================
   // UI overlay (crosshair, legend)
@@ -566,16 +594,18 @@ function Show1D() {
         ctx.lineWidth = 1;
         ctx.setLineDash([3, 3]);
 
-        // Vertical
+        // Vertical (pixel-snapped)
+        const snapCX = snap(canvasX);
         ctx.beginPath();
-        ctx.moveTo(canvasX, MARGIN.top);
-        ctx.lineTo(canvasX, MARGIN.top + plotH);
+        ctx.moveTo(snapCX, MARGIN.top);
+        ctx.lineTo(snapCX, MARGIN.top + plotH);
         ctx.stroke();
 
-        // Horizontal
+        // Horizontal (pixel-snapped)
+        const snapCY = snap(canvasY);
         ctx.beginPath();
-        ctx.moveTo(MARGIN.left, canvasY);
-        ctx.lineTo(MARGIN.left + plotW, canvasY);
+        ctx.moveTo(MARGIN.left, snapCY);
+        ctx.lineTo(MARGIN.left + plotW, snapCY);
         ctx.stroke();
 
         ctx.setLineDash([]);
@@ -614,9 +644,9 @@ function Show1D() {
       }
     }
 
-    // Legend
+    // Legend (with focus state)
+    const hasFocusLegend = focusedTrace >= 0 && focusedTrace < nTraces;
     if (showLegend && nTraces > 1 && traceLabels && traceLabels.length > 0) {
-      ctx.font = `10px ${FONT}`;
       const entryH = 14;
       const lineLen = 16;
       const gap = 4;
@@ -624,6 +654,7 @@ function Show1D() {
       let maxLabelW = 0;
       for (let t = 0; t < nTraces; t++) {
         const lbl = traceLabels[t] || `Trace ${t + 1}`;
+        ctx.font = hasFocusLegend && t === focusedTrace ? `bold 11px ${FONT}` : `11px ${FONT}`;
         const w = ctx.measureText(lbl).width;
         if (w > maxLabelW) maxLabelW = w;
       }
@@ -641,23 +672,28 @@ function Show1D() {
       for (let t = 0; t < nTraces; t++) {
         const ey = ly + legendPad + t * entryH + entryH / 2;
         const color = (traceColors && traceColors[t]) || "#4fc3f7";
+        const isFocused = hasFocusLegend && t === focusedTrace;
+        const dimmed = hasFocusLegend && !isFocused;
 
         // Color line
+        ctx.globalAlpha = dimmed ? UNFOCUSED_ALPHA : 1.0;
         ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
+        ctx.lineWidth = isFocused ? 3 : 2;
         ctx.beginPath();
         ctx.moveTo(lx + legendPad, ey);
         ctx.lineTo(lx + legendPad + lineLen, ey);
         ctx.stroke();
 
         // Label
+        ctx.font = isFocused ? `bold 11px ${FONT}` : `11px ${FONT}`;
         ctx.fillStyle = isDark ? "#ddd" : "#333";
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
         ctx.fillText(traceLabels[t] || `Trace ${t + 1}`, lx + legendPad + lineLen + gap, ey);
+        ctx.globalAlpha = 1.0;
       }
     }
-  }, [canvasW, canvasH, cursorInfo, showLegend, nTraces, traceLabels, traceColors, isDark, dataToCanvasY, plotW, plotH]);
+  }, [canvasW, canvasH, cursorInfo, showLegend, nTraces, traceLabels, traceColors, isDark, dataToCanvasY, plotW, plotH, focusedTrace]);
 
   // ========================================================================
   // Mouse handlers
@@ -720,6 +756,7 @@ function Show1D() {
           my >= MARGIN.top && my <= MARGIN.top + plotH) {
         dragRef.current = {
           active: true,
+          wasDrag: false,
           startX: e.clientX,
           startY: e.clientY,
           startXMin: xMin,
@@ -749,6 +786,7 @@ function Show1D() {
         const d = dragRef.current;
         const dxPx = e.clientX - d.startX;
         const dyPx = e.clientY - d.startY;
+        if (Math.abs(dxPx) > 3 || Math.abs(dyPx) > 3) d.wasDrag = true;
         const xRange = d.startXMax - d.startXMin;
         const yRange = d.startYMax - d.startYMin;
         const dxData = -(dxPx / plotW) * xRange;
@@ -827,9 +865,14 @@ function Show1D() {
   );
 
   const handleMouseUp = React.useCallback(() => {
+    // Click (not drag) → toggle focus on nearest trace
+    if (dragRef.current?.active && !dragRef.current.wasDrag && cursorInfo) {
+      const newFocus = cursorInfo.traceIdx;
+      setFocusedTrace(focusedTrace === newFocus ? -1 : newFocus);
+    }
     dragRef.current = null;
     resizeDragRef.current = null;
-  }, []);
+  }, [cursorInfo, focusedTrace, setFocusedTrace]);
 
   const handleMouseLeave = React.useCallback(() => {
     dragRef.current = null;
@@ -852,8 +895,12 @@ function Show1D() {
         e.preventDefault();
         resetView();
       }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setFocusedTrace(-1);
+      }
     },
-    [resetView],
+    [resetView, setFocusedTrace],
   );
 
   // ========================================================================
@@ -1077,31 +1124,85 @@ function Show1D() {
       onKeyDown={handleKeyDown}
       sx={{ ...container.root, bgcolor: colors.bg, color: colors.text }}
     >
-      {/* Title */}
-      {title && (
-        <Typography
-          sx={{
-            ...typography.label,
-            ...typography.title,
-            color: colors.text,
-            mb: 0.5,
-          }}
-        >
-          {title}
-          <InfoTooltip
-            theme={themeInfo.theme}
-            text={
-              <KeyboardShortcuts
-                items={[
-                  ["Scroll", "Zoom in/out"],
-                  ["Drag", "Pan"],
-                  ["R", "Reset view"],
-                  ["Dbl-click", "Reset view"],
-                ]}
-              />
-            }
+      {/* Header row (Show3D pattern) */}
+      <Typography
+        variant="caption"
+        sx={{
+          ...typography.label,
+          color: colors.accent,
+          mb: `${SPACING.XS}px`,
+          display: "block",
+        }}
+      >
+        {title || "Plot"}
+        <InfoTooltip
+          theme={themeInfo.theme}
+          text={
+            <KeyboardShortcuts
+              items={[
+                ["Scroll", "Zoom in/out"],
+                ["Drag", "Pan"],
+                ["Click", "Focus trace"],
+                ["Esc", "Unfocus all"],
+                ["R", "Reset view"],
+                ["Dbl-click", "Reset view"],
+              ]}
+            />
+          }
+        />
+      </Typography>
+
+      {/* Controls row (between title and canvas, Show3D pattern) */}
+      {showControls && (
+        <Box sx={{ display: "flex", alignItems: "center", gap: "4px", mb: `${SPACING.XS}px`, height: 28 }}>
+          <Typography sx={{ ...typography.labelSmall, color: colors.text }}>
+            Log:
+          </Typography>
+          <Switch
+            size="small"
+            checked={logScale}
+            onChange={(_, v) => setLogScale(v)}
+            sx={switchStyles.small}
           />
-        </Typography>
+
+          <Typography sx={{ ...typography.labelSmall, color: colors.text, ml: "2px" }}>
+            Grid:
+          </Typography>
+          <Switch
+            size="small"
+            checked={showGrid}
+            onChange={(_, v) => setShowGrid(v)}
+            sx={switchStyles.small}
+          />
+
+          <Typography sx={{ ...typography.labelSmall, color: colors.text, ml: "2px" }}>
+            Legend:
+          </Typography>
+          <Switch
+            size="small"
+            checked={showLegend}
+            onChange={(_, v) => setShowLegend(v)}
+            sx={switchStyles.small}
+          />
+
+          <Box sx={{ flex: 1 }} />
+
+          <Button size="small" sx={compactButton} onClick={resetView}>Reset</Button>
+          <Button size="small" sx={{ ...compactButton, color: colors.accent }} onClick={(e) => setExportAnchor(e.currentTarget)}>Export</Button>
+          <Menu
+            anchorEl={exportAnchor}
+            open={!!exportAnchor}
+            onClose={() => setExportAnchor(null)}
+            {...upwardMenuProps}
+          >
+            <MenuItem onClick={handleExportFigure} sx={{ fontSize: 12 }}>
+              Figure (publication PNG)
+            </MenuItem>
+            <MenuItem onClick={handleExportPNG} sx={{ fontSize: 12 }}>
+              PNG
+            </MenuItem>
+          </Menu>
+        </Box>
       )}
 
       {/* Canvas container */}
@@ -1144,92 +1245,45 @@ function Show1D() {
         />
       </Box>
 
-      {/* Stats bar */}
-      {showStats && statsMean && statsMean.length > 0 && (
-        <Box
-          sx={{
-            display: "flex",
-            gap: SPACING.MD + "px",
-            px: 1,
-            py: 0.25,
-            border: `1px solid ${colors.border}`,
-            borderTop: "none",
-            bgcolor: colors.bg,
-            width: "fit-content",
-            flexWrap: "wrap",
-          }}
-        >
-          {Array.from({ length: nTraces }).map((_, t) => {
-            const label = (traceLabels && traceLabels[t]) || `Trace ${t + 1}`;
-            const color = (traceColors && traceColors[t]) || "#4fc3f7";
-            return (
-              <Box key={t} sx={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                <Box sx={{ width: 8, height: 8, bgcolor: color, flexShrink: 0 }} />
-                <Typography sx={{ ...typography.value, color: colors.text }}>
-                  {label}:
-                  {" "}mean={formatNumber(statsMean[t] ?? 0)}
-                  {" "}min={formatNumber(statsMin[t] ?? 0)}
-                  {" "}max={formatNumber(statsMax[t] ?? 0)}
-                  {" "}std={formatNumber(statsStd[t] ?? 0)}
-                </Typography>
-              </Box>
-            );
-          })}
-        </Box>
-      )}
-
-      {/* Controls */}
-      {showControls && (
-        <Box sx={{ ...controlRow, border: `1px solid ${colors.border}`, borderTop: "none", bgcolor: colors.bg, maxWidth: canvasW, width: canvasW, boxSizing: "border-box" }}>
-          <Typography sx={{ ...typography.labelSmall, color: colors.text }}>
-            Log:
-          </Typography>
-          <Switch
-            size="small"
-            checked={logScale}
-            onChange={(_, v) => setLogScale(v)}
-            sx={switchStyles.small}
-          />
-
-          <Typography sx={{ ...typography.labelSmall, color: colors.text }}>
-            Grid:
-          </Typography>
-          <Switch
-            size="small"
-            checked={showGrid}
-            onChange={(_, v) => setShowGrid(v)}
-            sx={switchStyles.small}
-          />
-
-          <Typography sx={{ ...typography.labelSmall, color: colors.text }}>
-            Legend:
-          </Typography>
-          <Switch
-            size="small"
-            checked={showLegend}
-            onChange={(_, v) => setShowLegend(v)}
-            sx={switchStyles.small}
-          />
-
-          <Box sx={{ flex: 1 }} />
-
-          <Button size="small" sx={compactButton} onClick={resetView}>Reset</Button>
-          <Button size="small" sx={{ ...compactButton, color: colors.accent }} onClick={(e) => setExportAnchor(e.currentTarget)}>Export</Button>
-          <Menu
-            anchorEl={exportAnchor}
-            open={!!exportAnchor}
-            onClose={() => setExportAnchor(null)}
-            {...upwardMenuProps}
+      {/* Stats bar (Show3D format, focus-aware) */}
+      {showStats && statsMean && statsMean.length > 0 && (() => {
+        const showIndices = focusedTrace >= 0 && focusedTrace < nTraces
+          ? [focusedTrace]
+          : Array.from({ length: nTraces }, (_, i) => i);
+        return (
+          <Box
+            sx={{
+              display: "flex",
+              gap: SPACING.MD + "px",
+              px: 1,
+              py: 0.25,
+              border: `1px solid ${colors.border}`,
+              borderTop: "none",
+              bgcolor: colors.bg,
+              width: "fit-content",
+              flexWrap: "wrap",
+            }}
           >
-            <MenuItem onClick={handleExportFigure} sx={{ fontSize: 12 }}>
-              Figure (publication PNG)
-            </MenuItem>
-            <MenuItem onClick={handleExportPNG} sx={{ fontSize: 12 }}>
-              PNG
-            </MenuItem>
-          </Menu>
-        </Box>
-      )}
+            {showIndices.map((t) => {
+              const label = (traceLabels && traceLabels[t]) || `Trace ${t + 1}`;
+              const color = (traceColors && traceColors[t]) || "#4fc3f7";
+              return (
+                <Box key={t} sx={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                  <Box sx={{ width: 8, height: 8, bgcolor: color, flexShrink: 0 }} />
+                  <Typography sx={{ ...typography.value, color: colors.text }}>
+                    {nTraces > 1 ? `${label}: ` : ""}
+                    Mean <span style={{ color }}>{formatNumber(statsMean[t] ?? 0)}</span>
+                    {"  "}Min <span style={{ color }}>{formatNumber(statsMin[t] ?? 0)}</span>
+                    {"  "}Max <span style={{ color }}>{formatNumber(statsMax[t] ?? 0)}</span>
+                    {"  "}Std <span style={{ color }}>{formatNumber(statsStd[t] ?? 0)}</span>
+                  </Typography>
+                </Box>
+              );
+            })}
+          </Box>
+        );
+      })()}
+
     </Box>
   );
 }

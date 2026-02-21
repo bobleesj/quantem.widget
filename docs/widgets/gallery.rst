@@ -251,20 +251,6 @@ Bin
      - .. image:: /_static/catalog/bin_default_dark.png
           :alt: Bin Default (dark)
 
-Folder
-------
-
-**Folder Default**
-
-.. list-table::
-   :widths: 50 50
-   :header-rows: 0
-
-   * - .. image:: /_static/catalog/folder_default_light.png
-          :alt: Folder Default (light)
-     - .. image:: /_static/catalog/folder_default_dark.png
-          :alt: Folder Default (dark)
-
 Merge4DSTEM
 -----------
 
