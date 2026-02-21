@@ -313,6 +313,80 @@ def test_show2d_profile_hover(smoke_page):
     widget.locator(".MuiSwitch-root").nth(2).click()
     time.sleep(0.5)
 
+def test_show2d_profile_drag(smoke_page):
+    """Draw a profile line on Show2D, verify drag moves endpoint."""
+    widget = smoke_page.locator(".show2d-root").first
+    widget.scroll_into_view_if_needed()
+
+    # Enable Profile toggle — Switches: FFT(0), Lens(1), Profile(2)
+    widget.locator(".MuiSwitch-root").nth(2).click()
+    time.sleep(1)
+
+    canvas = widget.locator("canvas").first
+    box = canvas.bounding_box()
+    assert box is not None
+
+    # Draw profile line
+    p0_x = box["x"] + box["width"] * 0.2
+    p0_y = box["y"] + box["height"] * 0.2
+    smoke_page.mouse.click(p0_x, p0_y)
+    time.sleep(0.5)
+    smoke_page.mouse.click(box["x"] + box["width"] * 0.8, box["y"] + box["height"] * 0.8)
+    time.sleep(1)
+
+    # Capture before-drag image
+    img_before = canvas.screenshot()
+
+    # Assert cursor at endpoint
+    smoke_page.mouse.move(p0_x, p0_y)
+    time.sleep(0.3)
+    cursor = smoke_page.evaluate(
+        """([x, y]) => window.getComputedStyle(document.elementFromPoint(x, y)).cursor""",
+        [p0_x, p0_y],
+    )
+    assert cursor == "grab", f"Expected grab at endpoint, got {cursor}"
+
+    # Drag endpoint to a different position
+    smoke_page.mouse.down()
+    smoke_page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5, steps=5)
+    smoke_page.mouse.up()
+    time.sleep(1)
+
+    # Verify the line moved
+    img_after = canvas.screenshot()
+    assert img_before != img_after, "Profile line did not visually change after drag"
+    _screenshot(widget, "show2d_profile_drag")
+
+    # Clean up: disable Profile
+    widget.locator(".MuiSwitch-root").nth(2).click()
+    time.sleep(0.5)
+
+def test_show2d_roi_fft(smoke_page):
+    """Enable ROI + FFT on Show2D, add ROI, verify ROI FFT label appears."""
+    widget = smoke_page.locator(".show2d-root").first
+    widget.scroll_into_view_if_needed()
+
+    # Enable FFT (switch 0) and ROI (switch 3)
+    widget.locator(".MuiSwitch-root").nth(0).click()  # FFT on
+    time.sleep(2)
+    widget.locator(".MuiSwitch-root").nth(3).click()  # ROI on
+    time.sleep(1)
+
+    # Add an ROI via the ADD button (adds at center and auto-selects)
+    widget.locator("button:has-text('ADD')").click()
+    time.sleep(2)
+
+    # Check that "ROI FFT" label appears in the widget text
+    text = widget.inner_text()
+    assert "ROI FFT" in text, f"ROI FFT label not found in widget text"
+    _screenshot(widget, "show2d_roi_fft")
+
+    # Clean up: disable ROI and FFT
+    widget.locator(".MuiSwitch-root").nth(3).click()  # ROI off
+    time.sleep(0.5)
+    widget.locator(".MuiSwitch-root").nth(0).click()  # FFT off
+    time.sleep(0.5)
+
 # ---------------------------------------------------------------------------
 # Show3D interaction tests
 # ---------------------------------------------------------------------------
@@ -358,8 +432,34 @@ def test_show3d_toggle_auto_contrast(smoke_page):
     widget.locator(".MuiSwitch-root").nth(3).click()
     time.sleep(0.5)
 
+def test_show3d_roi_fft(smoke_page):
+    """Enable ROI + FFT on Show3D, add ROI, verify ROI FFT label appears."""
+    widget = smoke_page.locator(".show3d-root").first
+    widget.scroll_into_view_if_needed()
+
+    # Switches: FFT(0), Profile(1), Lens(2), ROI(3)
+    widget.locator(".MuiSwitch-root").nth(0).click()  # FFT on
+    time.sleep(2)
+    widget.locator(".MuiSwitch-root").nth(3).click()  # ROI on
+    time.sleep(1)
+
+    # Add an ROI via the ADD button (adds at center and auto-selects)
+    widget.locator("button:has-text('ADD')").click()
+    time.sleep(2)
+
+    # Check that "ROI FFT" label appears in the widget text
+    text = widget.inner_text()
+    assert "ROI FFT" in text, f"ROI FFT label not found in widget text"
+    _screenshot(widget, "show3d_roi_fft")
+
+    # Clean up: disable ROI and FFT
+    widget.locator(".MuiSwitch-root").nth(3).click()  # ROI off
+    time.sleep(0.5)
+    widget.locator(".MuiSwitch-root").nth(0).click()  # FFT off
+    time.sleep(0.5)
+
 def test_show3d_profile_draw_and_drag(smoke_page):
-    """Draw a profile line, drag an endpoint, drag the whole line."""
+    """Draw a profile line and verify it appears on the canvas."""
     widget = smoke_page.locator(".show3d-root").first
     widget.scroll_into_view_if_needed()
     canvases_before = widget.locator("canvas").count()
@@ -372,17 +472,14 @@ def test_show3d_profile_draw_and_drag(smoke_page):
     canvas = widget.locator("canvas").first
     box = canvas.bounding_box()
     assert box is not None
+    img_before = canvas.screenshot()
 
-    # First point at 20%, 20%
-    p0_x = box["x"] + box["width"] * 0.2
-    p0_y = box["y"] + box["height"] * 0.2
-    smoke_page.mouse.click(p0_x, p0_y)
+    # First point at 30%, 30%
+    smoke_page.mouse.click(box["x"] + box["width"] * 0.3, box["y"] + box["height"] * 0.3)
     time.sleep(0.5)
 
-    # Second point at 80%, 80%
-    p1_x = box["x"] + box["width"] * 0.8
-    p1_y = box["y"] + box["height"] * 0.8
-    smoke_page.mouse.click(p1_x, p1_y)
+    # Second point at 70%, 70%
+    smoke_page.mouse.click(box["x"] + box["width"] * 0.7, box["y"] + box["height"] * 0.7)
     time.sleep(1)
 
     # Verify profile sparkline canvas appeared
@@ -390,40 +487,114 @@ def test_show3d_profile_draw_and_drag(smoke_page):
     assert canvases_after > canvases_before, (
         f"Profile canvas not added ({canvases_before} → {canvases_after})"
     )
+
+    # Verify the profile line is drawn on canvas
+    img_with_profile = canvas.screenshot()
+    assert img_before != img_with_profile, "Profile line not visible on canvas"
     _screenshot(widget, "show3d_profile")
 
-    # Drag endpoint 0 from (20%,20%) to (40%,30%)
-    smoke_page.mouse.move(p0_x, p0_y)
-    time.sleep(0.2)
-    smoke_page.mouse.down()
-    smoke_page.mouse.move(
-        box["x"] + box["width"] * 0.4,
-        box["y"] + box["height"] * 0.3,
-        steps=5,
-    )
-    smoke_page.mouse.up()
-    time.sleep(1)
-    _screenshot(widget, "show3d_profile_drag_endpoint")
+    # Clean up: disable Profile
+    widget.locator(".MuiSwitch-root").nth(1).click()
+    time.sleep(0.5)
 
-    # Drag whole line from its midpoint (~60%,55%) by +10%,+10%
-    mid_x = box["x"] + box["width"] * 0.6
-    mid_y = box["y"] + box["height"] * 0.55
-    smoke_page.mouse.move(mid_x, mid_y)
-    time.sleep(0.2)
-    smoke_page.mouse.down()
-    smoke_page.mouse.move(
-        mid_x + box["width"] * 0.1,
-        mid_y + box["height"] * 0.1,
-        steps=5,
-    )
-    smoke_page.mouse.up()
-    time.sleep(1)
-    _screenshot(widget, "show3d_profile_drag_line")
+def test_show3d_profile_updates_across_frames(smoke_page):
+    """Profile sparkline must update during playback (rAF loop)."""
+    widget = smoke_page.locator(".show3d-root").first
+    widget.scroll_into_view_if_needed()
 
-    # Verify profile canvas still present after drags
-    assert widget.locator("canvas").count() > canvases_before, (
-        "Profile canvas disappeared after drag"
-    )
+    # Enable Profile — Switches: FFT(0), Profile(1)
+    widget.locator(".MuiSwitch-root").nth(1).click()
+    time.sleep(1)
+
+    # Draw profile line
+    canvas = widget.locator("canvas").first
+    box = canvas.bounding_box()
+    assert box is not None
+    smoke_page.mouse.click(box["x"] + box["width"] * 0.2, box["y"] + box["height"] * 0.2)
+    time.sleep(0.5)
+    smoke_page.mouse.click(box["x"] + box["width"] * 0.8, box["y"] + box["height"] * 0.8)
+    time.sleep(1)
+
+    # Find the profile sparkline canvas (the small one added after main canvas)
+    canvases = widget.locator("canvas")
+    sparkline = None
+    for ci in range(canvases.count()):
+        cb = canvases.nth(ci).bounding_box()
+        if cb and cb["height"] < 100:
+            sparkline = canvases.nth(ci)
+            break
+    assert sparkline is not None, "Profile sparkline canvas not found"
+
+    # Capture sparkline image at current frame
+    img_before = sparkline.screenshot()
+    assert len(img_before) > 0
+
+    # Advance frames with ArrowRight (more reliable than Space playback)
+    canvas.click()
+    time.sleep(0.3)
+    for _ in range(5):
+        smoke_page.keyboard.press("ArrowRight")
+        time.sleep(0.3)
+    time.sleep(1)
+
+    # Capture sparkline after advancing — it should have updated
+    img_during = sparkline.screenshot()
+
+    # The sparkline must change across frames (different data per frame)
+    assert img_before != img_during, "Profile sparkline did not update across frames"
+    _screenshot(widget, "show3d_profile_playback")
+
+    # Clean up: disable Profile
+    widget.locator(".MuiSwitch-root").nth(1).click()
+    time.sleep(0.5)
+
+
+def test_show3d_profile_live_playback(smoke_page):
+    """Profile sparkline must update during live playback (rAF loop)."""
+    widget = smoke_page.locator(".show3d-root").first
+    widget.scroll_into_view_if_needed()
+
+    # Enable Profile — Switches: FFT(0), Profile(1)
+    widget.locator(".MuiSwitch-root").nth(1).click()
+    time.sleep(1)
+
+    # Draw profile line
+    canvas = widget.locator("canvas").first
+    box = canvas.bounding_box()
+    assert box is not None
+    smoke_page.mouse.click(box["x"] + box["width"] * 0.2, box["y"] + box["height"] * 0.2)
+    time.sleep(0.5)
+    smoke_page.mouse.click(box["x"] + box["width"] * 0.8, box["y"] + box["height"] * 0.8)
+    time.sleep(1)
+
+    # Find profile sparkline canvas
+    canvases = widget.locator("canvas")
+    sparkline = None
+    for ci in range(canvases.count()):
+        cb = canvases.nth(ci).bounding_box()
+        if cb and cb["height"] < 100:
+            sparkline = canvases.nth(ci)
+            break
+    assert sparkline is not None, "Profile sparkline canvas not found"
+
+    # Capture sparkline before playback
+    img_before = sparkline.screenshot()
+    assert len(img_before) > 0
+
+    # Click the Play button using MUI's PlayArrow SVG path
+    widget.locator('path[d="M8 5v14l11-7z"]').first.locator("..").locator("..").click()
+    time.sleep(3)
+
+    # Capture sparkline during playback
+    img_during = sparkline.screenshot()
+
+    # Stop playback (force=True because slider thumb may intercept)
+    widget.locator('path[d="M6 6h12v12H6z"]').first.locator("..").locator("..").click(force=True)
+    time.sleep(0.5)
+
+    # Sparkline must change during live playback
+    assert img_before != img_during, "Profile sparkline did not update during live playback"
+    _screenshot(widget, "show3d_profile_live_playback")
 
     # Clean up: disable Profile
     widget.locator(".MuiSwitch-root").nth(1).click()
@@ -474,6 +645,54 @@ def test_mark2d_undo_redo_exist(smoke_page):
     redo = widget.locator('button:has-text("REDO")')
     assert undo.count() >= 1, "UNDO button not found in Mark2D"
     assert redo.count() >= 1, "REDO button not found in Mark2D"
+
+def test_mark2d_profile_drag(smoke_page):
+    """Draw a profile line on Mark2D, verify drag moves endpoint."""
+    widget = smoke_page.locator(".mark2d-root").first
+    widget.scroll_into_view_if_needed()
+
+    # Enable profile mode — click the "Profile" label
+    widget.locator('text=Profile').first.click()
+    time.sleep(1)
+
+    canvas = widget.locator("canvas").first
+    box = canvas.bounding_box()
+    assert box is not None
+
+    # Draw profile line
+    p0_x = box["x"] + box["width"] * 0.2
+    p0_y = box["y"] + box["height"] * 0.2
+    smoke_page.mouse.click(p0_x, p0_y)
+    time.sleep(0.5)
+    smoke_page.mouse.click(box["x"] + box["width"] * 0.8, box["y"] + box["height"] * 0.8)
+    time.sleep(1)
+
+    # Capture before-drag image
+    img_before = canvas.screenshot()
+
+    # Assert cursor at endpoint
+    smoke_page.mouse.move(p0_x, p0_y)
+    time.sleep(0.3)
+    cursor = smoke_page.evaluate(
+        """([x, y]) => window.getComputedStyle(document.elementFromPoint(x, y)).cursor""",
+        [p0_x, p0_y],
+    )
+    assert cursor == "grab", f"Expected grab at endpoint, got {cursor}"
+
+    # Drag endpoint to a different position
+    smoke_page.mouse.down()
+    smoke_page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5, steps=5)
+    smoke_page.mouse.up()
+    time.sleep(1)
+
+    # Verify the line moved
+    img_after = canvas.screenshot()
+    assert img_before != img_after, "Profile line did not visually change after drag"
+    _screenshot(widget, "mark2d_profile_drag")
+
+    # Clean up: click Profile label again to deactivate
+    widget.locator('text=Profile').first.click()
+    time.sleep(0.5)
 
 # ---------------------------------------------------------------------------
 # Show3DVolume interaction tests
@@ -561,6 +780,65 @@ def test_show4dstem_toggle_fft(smoke_page):
     fft_switch.nth(2).click()
     time.sleep(1)
 
+def test_show4dstem_profile_drag(smoke_page):
+    """Draw a profile line on Show4DSTEM DP panel, verify drag moves endpoint."""
+    widget = smoke_page.locator(".show4dstem-root").first
+    widget.scroll_into_view_if_needed()
+
+    # Enable DP Profile — first switch
+    widget.locator(".MuiSwitch-root").nth(0).click()
+    time.sleep(1)
+
+    # DP panel is the left half — find canvases whose midpoint is in the left half
+    wbox = widget.bounding_box()
+    assert wbox is not None
+    mid_x = wbox["x"] + wbox["width"] / 2
+    canvases = widget.locator("canvas")
+    dp_canvas = None
+    for ci in range(canvases.count()):
+        cb = canvases.nth(ci).bounding_box()
+        if cb and (cb["x"] + cb["width"] / 2) < mid_x:
+            dp_canvas = canvases.nth(ci)
+            break
+    assert dp_canvas is not None, "Could not find DP canvas in left half"
+    box = dp_canvas.bounding_box()
+    assert box is not None
+
+    # Draw profile line
+    p0_x = box["x"] + box["width"] * 0.2
+    p0_y = box["y"] + box["height"] * 0.2
+    smoke_page.mouse.click(p0_x, p0_y)
+    time.sleep(0.5)
+    smoke_page.mouse.click(box["x"] + box["width"] * 0.8, box["y"] + box["height"] * 0.8)
+    time.sleep(1)
+
+    # Capture before-drag image
+    img_before = dp_canvas.screenshot()
+
+    # Assert cursor at endpoint
+    smoke_page.mouse.move(p0_x, p0_y)
+    time.sleep(0.3)
+    cursor = smoke_page.evaluate(
+        """([x, y]) => window.getComputedStyle(document.elementFromPoint(x, y)).cursor""",
+        [p0_x, p0_y],
+    )
+    assert cursor == "grab", f"Expected grab at endpoint, got {cursor}"
+
+    # Drag endpoint to a very different position
+    smoke_page.mouse.down()
+    smoke_page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5, steps=5)
+    smoke_page.mouse.up()
+    time.sleep(1)
+
+    # Capture after-drag image — line should have moved
+    img_after = dp_canvas.screenshot()
+    assert img_before != img_after, "Profile line did not visually change after drag"
+    _screenshot(widget, "show4dstem_profile_drag")
+
+    # Clean up: disable Profile
+    widget.locator(".MuiSwitch-root").nth(0).click()
+    time.sleep(0.5)
+
 # ---------------------------------------------------------------------------
 # Bin interaction tests
 # ---------------------------------------------------------------------------
@@ -588,12 +866,15 @@ def test_bin_change_display_controls(smoke_page):
     widget.scroll_into_view_if_needed()
 
     _change_dropdown(widget, smoke_page, 6, "magma")
-    _change_dropdown(widget, smoke_page, 7, "log")
+    # Log scale is now a Switch, not a Select dropdown
+    widget.locator(".MuiSwitch-root").first.click()
+    time.sleep(1)
     _screenshot(widget, "bin_magma_log")
 
     # Reset to default-like settings for downstream screenshots
     _change_dropdown(widget, smoke_page, 6, "inferno")
-    _change_dropdown(widget, smoke_page, 7, "linear")
+    widget.locator(".MuiSwitch-root").first.click()
+    time.sleep(0.5)
 
 # ---------------------------------------------------------------------------
 # Show4D interaction tests
@@ -630,6 +911,65 @@ def test_show4d_change_colormap(smoke_page):
     _screenshot(widget, "show4d_gray")
     _change_dropdown(widget, smoke_page, 1, "Inferno")
 
+def test_show4d_profile_drag(smoke_page):
+    """Draw a profile line on Show4D signal panel, verify drag moves endpoint."""
+    widget = smoke_page.locator(".show4d-root").first
+    widget.scroll_into_view_if_needed()
+
+    # Enable Profile toggle — Switches: Snap(0), FFT(1), Profile(2)
+    widget.locator(".MuiSwitch-root").nth(2).click()
+    time.sleep(1)
+
+    # Signal panel is the right half — find canvases whose midpoint is in the right half
+    wbox = widget.bounding_box()
+    assert wbox is not None
+    mid_x = wbox["x"] + wbox["width"] / 2
+    canvases = widget.locator("canvas")
+    sig_canvas = None
+    for ci in range(canvases.count()):
+        cb = canvases.nth(ci).bounding_box()
+        if cb and (cb["x"] + cb["width"] / 2) > mid_x:
+            sig_canvas = canvases.nth(ci)
+            break
+    assert sig_canvas is not None, "Could not find signal canvas in right half"
+    box = sig_canvas.bounding_box()
+    assert box is not None
+
+    # Draw profile line
+    p0_x = box["x"] + box["width"] * 0.2
+    p0_y = box["y"] + box["height"] * 0.2
+    smoke_page.mouse.click(p0_x, p0_y)
+    time.sleep(0.5)
+    smoke_page.mouse.click(box["x"] + box["width"] * 0.8, box["y"] + box["height"] * 0.8)
+    time.sleep(1)
+
+    # Capture before-drag image
+    img_before = sig_canvas.screenshot()
+
+    # Assert cursor at endpoint
+    smoke_page.mouse.move(p0_x, p0_y)
+    time.sleep(0.3)
+    cursor = smoke_page.evaluate(
+        """([x, y]) => window.getComputedStyle(document.elementFromPoint(x, y)).cursor""",
+        [p0_x, p0_y],
+    )
+    assert cursor == "grab", f"Expected grab at endpoint, got {cursor}"
+
+    # Drag endpoint to a different position
+    smoke_page.mouse.down()
+    smoke_page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5, steps=5)
+    smoke_page.mouse.up()
+    time.sleep(1)
+
+    # Verify the line moved
+    img_after = sig_canvas.screenshot()
+    assert img_before != img_after, "Profile line did not visually change after drag"
+    _screenshot(widget, "show4d_profile_drag")
+
+    # Clean up: disable Profile
+    widget.locator(".MuiSwitch-root").nth(2).click()
+    time.sleep(0.5)
+
 def test_show4d_controls_customizer_presets(smoke_page):
     """Apply Compact/All presets from controls customizer."""
     widget = smoke_page.locator(".show4d-root").first
@@ -661,7 +1001,9 @@ def test_show4d_controls_customizer_lock_export(smoke_page):
 
     widget.locator('button[aria-label="Customize controls"]').first.click()
     time.sleep(0.5)
-    smoke_page.locator('input[aria-label="lock-export"]').first.click()
+    # Click the Lock switch in the export tool row
+    export_row = smoke_page.locator('[data-testid="tool-row-export"]').first
+    export_row.locator(".MuiSwitch-root").nth(1).click()
     time.sleep(0.3)
     smoke_page.keyboard.press("Escape")
     time.sleep(0.3)
@@ -671,7 +1013,8 @@ def test_show4d_controls_customizer_lock_export(smoke_page):
 
     widget.locator('button[aria-label="Customize controls"]').first.click()
     time.sleep(0.5)
-    smoke_page.locator('input[aria-label="lock-export"]').first.click()
+    export_row = smoke_page.locator('[data-testid="tool-row-export"]').first
+    export_row.locator(".MuiSwitch-root").nth(1).click()
     time.sleep(0.3)
     smoke_page.keyboard.press("Escape")
     time.sleep(0.3)
@@ -688,27 +1031,29 @@ def test_show4d_controls_customizer_lock_navigation_blocks_keyboard_and_mouse(sm
     # Lock navigation through the shared customizer.
     widget.locator('button[aria-label="Customize controls"]').first.click()
     time.sleep(0.3)
-    smoke_page.locator('input[aria-label="lock-navigation"]').first.click()
+    nav_row = smoke_page.locator('[data-testid="tool-row-navigation"]').first
+    nav_row.locator(".MuiSwitch-root").nth(1).click()
     time.sleep(0.2)
     smoke_page.keyboard.press("Escape")
     time.sleep(0.3)
 
     # Keyboard arrows should not move nav position.
-    widget.locator("canvas").first.click()
+    widget.locator("canvas").first.click(force=True)
     smoke_page.keyboard.press("ArrowRight")
     smoke_page.keyboard.press("ArrowDown")
     time.sleep(0.2)
     assert _extract_show4d_nav_pos(widget) == start_pos
 
     # Mouse click on nav canvas should also be ignored while locked.
-    widget.locator("canvas").first.click(position={"x": 8, "y": 8})
+    widget.locator("canvas").first.click(position={"x": 8, "y": 8}, force=True)
     time.sleep(0.2)
     assert _extract_show4d_nav_pos(widget) == start_pos
 
     # Unlock to avoid affecting downstream tests.
     widget.locator('button[aria-label="Customize controls"]').first.click()
     time.sleep(0.3)
-    smoke_page.locator('input[aria-label="lock-navigation"]').first.click()
+    nav_row = smoke_page.locator('[data-testid="tool-row-navigation"]').first
+    nav_row.locator(".MuiSwitch-root").nth(1).click()
     time.sleep(0.2)
     smoke_page.keyboard.press("Escape")
     time.sleep(0.2)
