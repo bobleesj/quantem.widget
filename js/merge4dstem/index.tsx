@@ -6,27 +6,70 @@ import Typography from "@mui/material/Typography";
 import Stack from "@mui/material/Stack";
 import Select from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
+import Slider from "@mui/material/Slider";
 import Switch from "@mui/material/Switch";
 import { useTheme } from "../theme";
 import { extractFloat32, formatNumber, downloadBlob } from "../format";
-import { applyLogScale, findDataRange } from "../stats";
+import { applyLogScale, findDataRange, computeStats } from "../stats";
 import { COLORMAPS, renderToOffscreen } from "../colormaps";
 import { computeToolVisibility } from "../tool-parity";
 import { ControlCustomizer } from "../control-customizer";
 import "./merge4dstem.css";
 
-const PREVIEW_MAX = 280;
+// ============================================================================
+// Layout Constants — matches Show4DSTEM spacing
+// ============================================================================
+const SPACING = {
+  XS: 4,
+  SM: 8,
+  MD: 12,
+  LG: 16,
+};
 
+const PREVIEW_SIZE = 280;
+
+// ============================================================================
+// UI Styles — matches Show4DSTEM typography + controls
+// ============================================================================
 const typography = {
   label: { fontSize: 11 },
-  value: { fontSize: 11, fontFamily: "monospace" },
-  section: { fontSize: 11, fontWeight: "bold" as const },
+  labelSmall: { fontSize: 10 },
+  value: { fontSize: 10, fontFamily: "monospace" },
+  title: { fontWeight: "bold" as const },
+};
+
+const compactButton = {
+  fontSize: 10,
+  py: 0.25,
+  px: 1,
+  minWidth: 0,
+  "&.Mui-disabled": {
+    color: "#666",
+    borderColor: "#444",
+  },
+};
+
+const controlRow = {
+  display: "flex",
+  alignItems: "center",
+  gap: `${SPACING.SM}px`,
+  px: 1,
+  py: 0.5,
+  width: "fit-content",
 };
 
 const switchStyles = {
   small: {
     "& .MuiSwitch-thumb": { width: 12, height: 12 },
     "& .MuiSwitch-switchBase": { padding: "4px" },
+  },
+};
+
+const sliderStyles = {
+  small: {
+    "& .MuiSlider-thumb": { width: 12, height: 12 },
+    "& .MuiSlider-rail": { height: 3 },
+    "& .MuiSlider-track": { height: 3 },
   },
 };
 
@@ -45,14 +88,13 @@ function isEditableElement(target: EventTarget | null): boolean {
   return tag === "input" || tag === "textarea" || tag === "select";
 }
 
-function sizeForPreview(rows: number, cols: number): { width: number; height: number } {
-  const h = Math.max(1, rows);
-  const w = Math.max(1, cols);
-  const scale = Math.min(PREVIEW_MAX / w, PREVIEW_MAX / h);
-  return {
-    width: Math.max(120, Math.round(w * scale)),
-    height: Math.max(120, Math.round(h * scale)),
-  };
+function formatStat(value: number): string {
+  if (value === 0) return "0";
+  const abs = Math.abs(value);
+  if (abs < 0.001 || abs >= 10000) return value.toExponential(2);
+  if (abs < 0.01) return value.toFixed(4);
+  if (abs < 1) return value.toFixed(3);
+  return value.toFixed(2);
 }
 
 function Merge4DSTEMWidget() {
@@ -76,10 +118,12 @@ function Merge4DSTEMWidget() {
   const [previewBytes] = useModelState<DataView>("preview_bytes");
   const [previewRows] = useModelState<number>("preview_rows");
   const [previewCols] = useModelState<number>("preview_cols");
+  const [previewIndex, setPreviewIndex] = useModelState<number>("preview_index");
 
   const [merged] = useModelState<boolean>("merged");
   const [outputShapeJson] = useModelState<string>("output_shape_json");
   const [frameDimLabel] = useModelState<string>("frame_dim_label");
+  const [binFactor, setBinFactor] = useModelState<number>("bin_factor");
 
   const [statusMessage] = useModelState<string>("status_message");
   const [statusLevel] = useModelState<string>("status_level");
@@ -127,13 +171,25 @@ function Merge4DSTEMWidget() {
   const lockMerge = toolVisibility.isLocked("merge");
   const lockExport = toolVisibility.isLocked("export");
 
-  const previewSize = React.useMemo(
-    () => sizeForPreview(previewRows, previewCols),
-    [previewRows, previewCols],
-  );
+  // Compute preview canvas size (aspect-preserving fit)
+  const previewSize = React.useMemo(() => {
+    const h = Math.max(1, previewRows);
+    const w = Math.max(1, previewCols);
+    const scale = Math.min(PREVIEW_SIZE / w, PREVIEW_SIZE / h);
+    return {
+      width: Math.max(120, Math.round(w * scale)),
+      height: Math.max(120, Math.round(h * scale)),
+    };
+  }, [previewRows, previewCols]);
+
+  // Preview stats
+  const parsed = React.useMemo(() => extractFloat32(previewBytes), [previewBytes]);
+  const previewStats = React.useMemo(() => {
+    if (!parsed || parsed.length === 0) return null;
+    return computeStats(parsed);
+  }, [parsed]);
 
   // Render preview canvas
-  const parsed = React.useMemo(() => extractFloat32(previewBytes), [previewBytes]);
   React.useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !parsed || parsed.length === 0) return;
@@ -186,6 +242,17 @@ function Merge4DSTEMWidget() {
 
   const colormapOptions = React.useMemo(() => ["inferno", "viridis", "gray", "magma"], []);
 
+  // Bin factor options (powers of 2 that divide both detector dims)
+  const binOptions = React.useMemo(() => {
+    const opts = [1];
+    for (const f of [2, 4, 8, 16]) {
+      if (detRows >= f && detCols >= f && detRows % f === 0 && detCols % f === 0) {
+        opts.push(f);
+      }
+    }
+    return opts;
+  }, [detRows, detCols]);
+
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       const key = String(event.key || "").toLowerCase();
@@ -206,15 +273,29 @@ function Merge4DSTEMWidget() {
       if (key === "m" && !lockMerge && !merged) {
         event.preventDefault();
         setMergeRequested(true);
+        return;
+      }
+      // Arrow keys: browse sources
+      if (key === "arrowleft" && nSources > 1) {
+        event.preventDefault();
+        setPreviewIndex(Math.max(0, previewIndex - 1));
+        return;
+      }
+      if (key === "arrowright" && nSources > 1) {
+        event.preventDefault();
+        setPreviewIndex(Math.min(nSources - 1, previewIndex + 1));
+        return;
       }
     },
-    [cmap, colormapOptions, lockDisplay, lockMerge, merged, setCmap, setLogScale, setMergeRequested],
+    [cmap, colormapOptions, lockDisplay, lockMerge, merged, nSources, previewIndex,
+     setCmap, setLogScale, setMergeRequested, setPreviewIndex],
   );
 
   const statusColor =
     statusLevel === "error" ? "#ff6b6b" : statusLevel === "warn" ? "#ffb84d" : colors.textMuted;
 
-  const controlSelect = {
+  // Themed select styling (inside render — depends on colors)
+  const themedSelect = {
     fontSize: 11,
     minWidth: 80,
     bgcolor: colors.controlBg,
@@ -233,125 +314,194 @@ function Merge4DSTEMWidget() {
     },
   };
 
+  // Calibration label
+  const calLabel = React.useMemo(() => {
+    const parts: string[] = [];
+    if (pixelCalibrated) parts.push(`${formatNumber(pixelSize, 4)} ${pixelUnit}`);
+    if (kCalibrated) parts.push(`${formatNumber(kPixelSize, 4)} ${kUnit}`);
+    return parts.length > 0 ? parts.join(" | ") : "uncalibrated";
+  }, [pixelCalibrated, pixelSize, pixelUnit, kCalibrated, kPixelSize, kUnit]);
+
   return (
     <Box
       className="merge4dstem-root"
       tabIndex={0}
       onKeyDown={handleKeyDown}
-      sx={{ p: 2, bgcolor: colors.bg, color: colors.text, outline: "none" }}
+      sx={{
+        p: `${SPACING.LG}px`,
+        bgcolor: colors.bg,
+        color: colors.text,
+        outline: "none",
+      }}
     >
-      {/* Header */}
-      <Stack
-        direction="row"
-        spacing={0.8}
-        alignItems="center"
-        justifyContent="space-between"
-        sx={{ mb: 1 }}
+      {/* ── Header ── */}
+      <Typography
+        variant="h6"
+        sx={{
+          ...typography.title,
+          color: colors.accent,
+          mb: `${SPACING.SM}px`,
+          fontSize: 14,
+        }}
       >
-        <Typography sx={{ fontSize: 12, fontWeight: "bold", color: colors.accent }}>
-          {title}
-          <ControlCustomizer
-            widgetName="Merge4DSTEM"
-            hiddenTools={hiddenTools}
-            setHiddenTools={setHiddenTools}
-            disabledTools={disabledTools}
-            setDisabledTools={setDisabledTools}
-            themeColors={colors}
-          />
-        </Typography>
-        {!hideExport && (
-          <>
-            <Button
-              size="small"
-              variant="outlined"
-              disabled={lockExport}
-              onClick={handleExportPng}
-              sx={{ fontSize: 10, minWidth: 60 }}
-            >
-              Export
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              disabled={lockExport}
-              onClick={handleCopy}
-              sx={{ fontSize: 10, minWidth: 50 }}
-            >
-              Copy
-            </Button>
-          </>
-        )}
-      </Stack>
+        {title}
+        <ControlCustomizer
+          widgetName="Merge4DSTEM"
+          hiddenTools={hiddenTools}
+          setHiddenTools={setHiddenTools}
+          disabledTools={disabledTools}
+          setDisabledTools={setDisabledTools}
+          themeColors={colors}
+        />
+      </Typography>
 
       {showControls && (
-        <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap", mb: 1.5 }}>
-          {/* Source table */}
-          {!hideSources && (
-            <Box
-              sx={{
-                border: `1px solid ${colors.border}`,
-                bgcolor: colors.controlBg,
-                p: 1,
-                minWidth: 320,
-              }}
-            >
-              <Typography sx={{ ...typography.section, color: colors.text, mb: 0.75 }}>
-                Sources ({nSources})
-              </Typography>
-              <Box
-                component="table"
-                sx={{
-                  width: "100%",
-                  borderCollapse: "collapse",
-                  "& td, & th": {
-                    fontSize: 10,
-                    fontFamily: "monospace",
-                    py: 0.25,
-                    px: 0.5,
-                    borderBottom: `1px solid ${colors.border}`,
-                    color: colors.text,
-                  },
-                  "& th": { fontWeight: "bold", textAlign: "left" },
-                }}
-              >
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Name</th>
-                    <th>Shape</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sources.map((src, i) => (
-                    <tr key={i}>
-                      <td>{i + 1}</td>
-                      <td>{src.name}</td>
-                      <td>
-                        ({src.shape[0]}, {src.shape[1]}, {src.shape[2]}, {src.shape[3]})
-                      </td>
-                      <td style={{ color: src.valid ? "#4caf50" : "#ff6b6b" }}>
-                        {src.valid ? "\u2713" : "\u2717"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Box>
-            </Box>
-          )}
-
-          {/* Preview */}
-          {!hidePreview && (
-            <Box sx={{ minWidth: previewSize.width }}>
-              <Typography sx={{ ...typography.section, color: colors.text, mb: 0.5 }}>
-                Preview (mean DP, source 1)
-              </Typography>
+        <Stack direction="row" spacing={`${SPACING.LG}px`} sx={{ mb: `${SPACING.MD}px` }}>
+          {/* ── Left column: Source table + info ── */}
+          <Stack spacing={`${SPACING.SM}px`} sx={{ minWidth: 300 }}>
+            {/* Source table */}
+            {!hideSources && (
               <Box
                 sx={{
                   border: `1px solid ${colors.border}`,
+                  bgcolor: colors.controlBg,
+                  px: 1,
+                  py: 0.5,
+                }}
+              >
+                <Box
+                  component="table"
+                  sx={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    "& td, & th": {
+                      fontSize: 10,
+                      fontFamily: "monospace",
+                      py: 0.25,
+                      px: 0.5,
+                      borderBottom: `1px solid ${colors.border}`,
+                      color: colors.text,
+                    },
+                    "& th": {
+                      fontWeight: "bold",
+                      textAlign: "left",
+                      color: colors.textMuted,
+                    },
+                  }}
+                >
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Name</th>
+                      <th>Shape</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sources.map((src, i) => (
+                      <tr
+                        key={i}
+                        style={{
+                          cursor: "pointer",
+                          backgroundColor:
+                            i === previewIndex
+                              ? `${colors.accent}22`
+                              : undefined,
+                        }}
+                        onClick={() => setPreviewIndex(i)}
+                      >
+                        <td>{i + 1}</td>
+                        <td>{src.name}</td>
+                        <td>
+                          ({src.shape[0]}, {src.shape[1]}, {src.shape[2]}, {src.shape[3]})
+                        </td>
+                        <td style={{ color: src.valid ? "#4caf50" : "#ff6b6b" }}>
+                          {src.valid ? "\u2713" : "\u2717"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Box>
+              </Box>
+            )}
+
+            {/* Info row */}
+            <Box
+              sx={{
+                ...controlRow,
+                border: `1px solid ${colors.border}`,
+                bgcolor: colors.bgAlt,
+                flexWrap: "wrap",
+                width: "100%",
+                gap: `${SPACING.MD}px`,
+              }}
+            >
+              <Typography sx={{ ...typography.value, color: colors.textMuted }}>
+                scan{" "}
+                <Box component="span" sx={{ color: colors.accent }}>
+                  ({scanRows}, {scanCols})
+                </Box>
+              </Typography>
+              <Typography sx={{ ...typography.value, color: colors.textMuted }}>
+                det{" "}
+                <Box component="span" sx={{ color: colors.accent }}>
+                  ({detRows}, {detCols})
+                </Box>
+              </Typography>
+              <Typography sx={{ ...typography.value, color: colors.textMuted }}>
+                {calLabel}
+              </Typography>
+              <Typography sx={{ ...typography.value, color: colors.textMuted }}>
+                {frameDimLabel}{" "}
+                <Box component="span" sx={{ color: colors.accent }}>
+                  {nSources}
+                </Box>
+              </Typography>
+              <Typography sx={{ ...typography.value, color: colors.textMuted }}>
+                {device}
+              </Typography>
+            </Box>
+          </Stack>
+
+          {/* ── Right column: Preview canvas ── */}
+          {!hidePreview && (
+            <Stack spacing={`${SPACING.XS}px`}>
+              {/* Source slider */}
+              {nSources > 1 && (
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Typography sx={{ ...typography.labelSmall, color: colors.textMuted }}>
+                    Source:
+                  </Typography>
+                  <Slider
+                    size="small"
+                    min={0}
+                    max={nSources - 1}
+                    step={1}
+                    value={previewIndex}
+                    onChange={(_, v) => setPreviewIndex(v as number)}
+                    valueLabelDisplay="auto"
+                    valueLabelFormat={(v) => `${v + 1}/${nSources}`}
+                    sx={{
+                      ...sliderStyles.small,
+                      width: Math.max(100, previewSize.width - 80),
+                      color: colors.accent,
+                    }}
+                  />
+                  <Typography sx={{ ...typography.value, color: colors.accent, minWidth: 36 }}>
+                    {previewIndex + 1}/{nSources}
+                  </Typography>
+                </Stack>
+              )}
+
+              {/* Canvas */}
+              <Box
+                sx={{
                   bgcolor: "#000",
+                  border: `1px solid ${colors.border}`,
                   width: previewSize.width,
                   height: previewSize.height,
+                  overflow: "hidden",
+                  position: "relative",
                 }}
               >
                 <canvas
@@ -363,151 +513,164 @@ function Merge4DSTEMWidget() {
                   }}
                 />
               </Box>
-              {showStats && !hideStatsGroup && (
-                <Typography
+
+              {/* Preview stats bar */}
+              {showStats && !hideStatsGroup && previewStats && (
+                <Box
                   sx={{
-                    ...typography.value,
-                    color: colors.textMuted,
-                    mt: 0.5,
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
+                    px: 1,
+                    py: 0.5,
+                    bgcolor: colors.bgAlt,
+                    display: "flex",
+                    gap: 2,
+                    width: previewSize.width,
                   }}
                 >
-                  {previewRows}x{previewCols} px
-                </Typography>
+                  {(["mean", "min", "max", "std"] as const).map((key) => (
+                    <Typography
+                      key={key}
+                      sx={{ ...typography.value, color: colors.textMuted }}
+                    >
+                      {key}{" "}
+                      <Box component="span" sx={{ color: colors.accent }}>
+                        {formatStat(previewStats[key])}
+                      </Box>
+                    </Typography>
+                  ))}
+                </Box>
               )}
-            </Box>
+            </Stack>
           )}
         </Stack>
       )}
 
+      {/* ── Controls row: Display + Bin + Merge + Export ── */}
       {showControls && (
-        <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap", mb: 1.5 }}>
-          {/* Info panel */}
-          <Box
-            sx={{
-              border: `1px solid ${colors.border}`,
-              bgcolor: colors.bgAlt,
-              p: 1,
-              minWidth: 320,
-            }}
-          >
-            <Typography sx={{ ...typography.section, color: colors.text, mb: 0.5 }}>
-              Shape + Calibration
-            </Typography>
-            <Typography sx={{ ...typography.value, color: colors.textMuted }}>
-              scan: ({scanRows}, {scanCols}) det: ({detRows}, {detCols})
-            </Typography>
-            {pixelCalibrated && (
-              <Typography sx={{ ...typography.value, color: colors.textMuted }}>
-                real: {formatNumber(pixelSize, 4)} {pixelUnit}/px
-              </Typography>
-            )}
-            {kCalibrated && (
-              <Typography sx={{ ...typography.value, color: colors.textMuted }}>
-                k-space: {formatNumber(kPixelSize, 4)} {kUnit}/px
-              </Typography>
-            )}
-            <Typography sx={{ ...typography.value, color: colors.textMuted }}>
-              {frameDimLabel} axis: {nSources} frames
-            </Typography>
-            <Typography sx={{ ...typography.value, color: colors.textMuted }}>
-              output: ({outputShape.join(", ")})
-            </Typography>
-            <Typography sx={{ ...typography.value, color: colors.textMuted }}>
-              device: {device}
-            </Typography>
-          </Box>
-
-          {/* Display controls */}
+        <Box
+          sx={{
+            ...controlRow,
+            border: `1px solid ${colors.border}`,
+            bgcolor: colors.controlBg,
+            mb: `${SPACING.SM}px`,
+            flexWrap: "wrap",
+            width: "100%",
+          }}
+        >
+          {/* Display controls (inline) */}
           {!hideDisplay && (
-            <Box
-              sx={{
-                border: `1px solid ${colors.border}`,
-                bgcolor: colors.controlBg,
-                p: 1,
-                minWidth: 200,
-                opacity: lockDisplay ? 0.6 : 1,
-              }}
-            >
-              <Typography sx={{ ...typography.section, color: colors.text, mb: 0.75 }}>
-                Display
+            <>
+              <Typography sx={{ ...typography.labelSmall, color: colors.textMuted }}>
+                Colormap:
               </Typography>
-              <Stack spacing={0.5}>
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  <Typography sx={typography.label}>Colormap:</Typography>
-                  <Select
-                    size="small"
-                    value={cmap}
-                    onChange={(e) => setCmap(String(e.target.value))}
-                    sx={controlSelect}
-                    MenuProps={themedMenuProps}
-                    disabled={lockDisplay}
-                  >
-                    {colormapOptions.map((c) => (
-                      <MenuItem key={c} value={c}>
-                        {c}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </Box>
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  <Typography sx={typography.label}>Log scale:</Typography>
-                  <Switch
-                    size="small"
-                    checked={logScale}
-                    onChange={(e) => setLogScale(e.target.checked)}
-                    sx={switchStyles.small}
-                    disabled={lockDisplay}
-                  />
-                </Box>
-              </Stack>
-            </Box>
+              <Select
+                size="small"
+                value={cmap}
+                onChange={(e) => setCmap(String(e.target.value))}
+                sx={{ ...themedSelect, minWidth: 80 }}
+                MenuProps={themedMenuProps}
+                disabled={lockDisplay}
+              >
+                {colormapOptions.map((c) => (
+                  <MenuItem key={c} value={c}>
+                    {c}
+                  </MenuItem>
+                ))}
+              </Select>
+
+              <Typography sx={{ ...typography.labelSmall, color: colors.textMuted }}>
+                Log:
+              </Typography>
+              <Switch
+                size="small"
+                checked={logScale}
+                onChange={(e) => setLogScale(e.target.checked)}
+                sx={switchStyles.small}
+                disabled={lockDisplay}
+              />
+
+              <Box sx={{ borderLeft: `1px solid ${colors.border}`, height: 20, mx: 0.5 }} />
+            </>
           )}
+
+          {/* Bin factor */}
+          <Typography sx={{ ...typography.labelSmall, color: colors.textMuted }}>
+            Bin:
+          </Typography>
+          <Select
+            size="small"
+            value={binFactor}
+            onChange={(e) => setBinFactor(Number(e.target.value))}
+            sx={{ ...themedSelect, minWidth: 50 }}
+            MenuProps={themedMenuProps}
+            disabled={lockMerge || merged}
+          >
+            {binOptions.map((f) => (
+              <MenuItem key={f} value={f}>
+                {f}x
+              </MenuItem>
+            ))}
+          </Select>
+
+          <Box sx={{ borderLeft: `1px solid ${colors.border}`, height: 20, mx: 0.5 }} />
+
+          {/* Output shape preview */}
+          <Typography sx={{ ...typography.value, color: colors.textMuted }}>
+            output{" "}
+            <Box component="span" sx={{ color: colors.accent }}>
+              ({outputShape.join(", ")})
+            </Box>
+          </Typography>
+
+          <Box sx={{ borderLeft: `1px solid ${colors.border}`, height: 20, mx: 0.5 }} />
 
           {/* Merge button */}
           {!hideMerge && (
-            <Box
-              sx={{
-                border: `1px solid ${colors.border}`,
-                bgcolor: colors.controlBg,
-                p: 1,
-                minWidth: 140,
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "center",
-                alignItems: "center",
-              }}
+            <Button
+              size="small"
+              variant={merged ? "outlined" : "contained"}
+              color={merged ? "success" : "primary"}
+              disabled={lockMerge || merged}
+              onClick={handleMerge}
+              sx={{ ...compactButton, fontSize: 11, px: 2, minWidth: 80 }}
             >
-              <Button
-                variant="contained"
-                color={merged ? "success" : "primary"}
-                disabled={lockMerge || merged}
-                onClick={handleMerge}
-                sx={{ fontSize: 12, minWidth: 120, mb: 0.5 }}
-              >
-                {merged ? "MERGED" : "MERGE"}
-              </Button>
-              {merged && (
-                <Typography
-                  sx={{ ...typography.value, color: "#4caf50", textAlign: "center" }}
-                >
-                  {outputShape.join(" x ")}
-                </Typography>
-              )}
-            </Box>
+              {merged ? "MERGED" : binFactor > 1 ? `MERGE ${binFactor}x` : "MERGE"}
+            </Button>
           )}
-        </Stack>
+
+          {/* Export + Copy */}
+          {!hideExport && (
+            <>
+              <Box sx={{ borderLeft: `1px solid ${colors.border}`, height: 20, mx: 0.5 }} />
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={lockExport}
+                onClick={handleExportPng}
+                sx={compactButton}
+              >
+                EXPORT
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={lockExport}
+                onClick={handleCopy}
+                sx={compactButton}
+              >
+                COPY
+              </Button>
+            </>
+          )}
+        </Box>
       )}
 
-      {/* Status bar */}
+      {/* ── Status bar ── */}
       <Box
         sx={{
-          border: `1px solid ${colors.border}`,
+          px: 1,
+          py: 0.5,
           bgcolor: colors.bgAlt,
-          p: 0.75,
-          mt: 0.5,
+          border: `1px solid ${colors.border}`,
         }}
       >
         <Typography sx={{ ...typography.value, color: statusColor }}>

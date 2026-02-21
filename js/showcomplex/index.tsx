@@ -217,7 +217,6 @@ function drawPhaseColorwheel(
 
 interface HistogramProps {
   data: Float32Array | null;
-  colormap: string;
   vminPct: number;
   vmaxPct: number;
   onRangeChange: (min: number, max: number) => void;
@@ -228,7 +227,7 @@ interface HistogramProps {
   dataMax?: number;
 }
 
-function Histogram({ data, colormap: _colormap, vminPct, vmaxPct, onRangeChange, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1 }: HistogramProps) {
+function Histogram({ data, vminPct, vmaxPct, onRangeChange, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1 }: HistogramProps) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const bins = React.useMemo(() => computeHistogramFromBytes(data), [data]);
   const isDark = theme === "dark";
@@ -1072,7 +1071,7 @@ function ShowComplex2D() {
               {!hideHistogram && (
                 <Box sx={{ opacity: lockHistogram ? 0.5 : 1, pointerEvents: lockHistogram ? "none" : "auto" }}>
                   <Histogram
-                    data={histData} colormap={mode === "phase" ? "hsv" : cmap}
+                    data={histData}
                     vminPct={vminPct} vmaxPct={vmaxPct}
                     onRangeChange={(lo, hi) => { if (!lockHistogram) { setVminPct(lo); setVmaxPct(hi); } }}
                     width={110} height={58}
@@ -1117,7 +1116,7 @@ function ShowComplex2D() {
                 {!hideHistogram && (
                   <Box sx={{ opacity: lockHistogram ? 0.5 : 1, pointerEvents: lockHistogram ? "none" : "auto" }}>
                     <Histogram
-                      data={fftHistData} colormap={fftColormap}
+                      data={fftHistData}
                       vminPct={fftVminPct} vmaxPct={fftVmaxPct}
                       onRangeChange={(lo, hi) => { if (!lockHistogram) { setFftVminPct(lo); setFftVmaxPct(hi); setFftAuto(false); } }}
                       width={110} height={40}

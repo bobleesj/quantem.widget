@@ -2,73 +2,23 @@
 
 ## Unreleased
 
-### Merge4DSTEM
-- added `Merge4DSTEM` widget for stacking multiple 4D-STEM datasets along a time axis
-- torch-backed merge via `torch.stack` on GPU (MPS/CUDA/CPU auto-detect)
-- accepts `Dataset4dstem`, file paths (Zarr zip), or raw arrays as input
-- strict shape validation (hard fail) with calibration mismatch warnings
-- `.merge()` produces 5D `(n_sources, scan_r, scan_c, det_r, det_c)` array
-- `.result` property returns `Dataset4dstem`, `.result_array` returns raw numpy
-- `.save_result(path)` saves merged data as Zarr zip archive
-- `.to_show4dstem()` opens merged result in `Show4DSTEM`
-- preview canvas shows mean diffraction pattern from first source
-- interactive React UI with source table, merge button, status bar
-- state persistence: `state_dict()`, `save()`, `load_state_dict()`, `summary()`
-- tool lock/hide support via `disabled_tools`/`hidden_tools`
-
-### Show1D
-- added `Show1D` widget for interactive 1D data viewing (spectra, profiles, time series)
-- single or multi-trace overlay with distinct colors and legend
-- calibrated X/Y axes with labels and units
-- log scale, grid lines, interactive zoom/pan, snap-to-nearest crosshair
-- publication-quality figure export
-- mutation methods: `set_data()`, `add_trace()`, `remove_trace()`, `clear()`
-- state persistence: `state_dict()`, `save()`, `load_state_dict()`, `summary()`
+### New widgets
+- **Merge4DSTEM** — stack multiple 4D-STEM datasets along a time axis with GPU-accelerated merge, detector binning, source preview, and Zarr export
+- **Show1D** — interactive 1D viewer for spectra, profiles, and time series with multi-trace overlay, calibrated axes, log scale, and figure export
 
 ### Show2D
-- added explicit file/folder loaders for beginner workflows: `from_png`, `from_tiff`, `from_emd`, `from_png_folder`, `from_tiff_folder`, `from_emd_folder`
-- added generic explicit dispatcher `from_path` / `from_folder(file_type=...)`
-- EMD loaders now support `dataset_path` override for deterministic dataset selection
-- added optional stack reduction modes (`first`, `index`, `mean`, `max`, `sum`) to collapse stacks into one 2D image when needed
+- file loaders: `from_png`, `from_tiff`, `from_emd`, `from_path`, `from_folder(file_type=...)`
+- stack reduction modes (`first`, `index`, `mean`, `max`, `sum`) for collapsing stacks to 2D
+- **breaking:** removed `from_png_folder`/`from_tiff_folder`/`from_emd_folder` — use `from_folder(path, file_type=...)` instead
 
 ### Show3D
-- ported ROI model to multi-ROI state (`roi_list`, `roi_selected_idx`, `roi_stats`)
-- added Show2D-style ROI UX: per-ROI color, focus highlight, selected ROI controls
-- ROI resize handles are now edge-hover/drag driven (no always-visible circular handles)
-- added ROI workflow polish: click empty canvas to add ROI at cursor, `Delete` to remove selected, duplicate selected ROI
-- added ROI legend actions: show/hide, lock/unlock, and live per-ROI stats
-- added adjustable ROI focus dim strength (`roi_focus_dim`)
-- added one-click export bundle (`show3d_bundle.zip`) with current-frame PNG + `roi_timeseries.csv` + `state.json`
-- added playback loop presets (`Full`, `Selection`, `Bookmarks`) and clearer scrub labeling
-- added first-use ROI resize hint that auto-hides
-- added explicit Show3D file loaders: `from_emd`, `from_tiff`, `from_png`, `from_emd_folder`, `from_tiff_folder`, `from_png_folder`; `from_folder(..., file_type=...)` now requires explicit type and EMD accepts `dataset_path`
-- added persistent quick-view presets with 3 slots (save/load from UI buttons or keyboard `1/2/3`, `Shift+1/2/3`)
-- presets now sync via `view_presets_json` and persist across `state_dict()`, `save()/load_state_dict()`, and `state=` init
-- added preset reset action in the UI and saved-slot indicator text (`Saved: ...`)
-- added Python quick-view preset helpers: `list_view_preset_slots()`, `get_view_preset()`, `set_view_preset()`, `clear_view_preset()`, `reset_view_presets()`
+- multi-ROI: place, resize, duplicate, and delete multiple ROIs with per-ROI color and stats
+- one-click export bundle (`.zip` with PNG + ROI timeseries CSV + state JSON)
+- file loaders: `from_emd`, `from_tiff`, `from_png`, `from_folder(file_type=...)`
+- **breaking:** removed `from_png_folder`/`from_tiff_folder`/`from_emd_folder` — use `from_folder(path, file_type=...)` instead
 
-### Show4D
-- added persistent quick-view presets with 3 slots (save/load from UI buttons or keyboard `1/2/3`, `Shift+1/2/3`)
-- presets now sync via `view_presets_json` and persist across `state_dict()`, `save()/load_state_dict()`, and `state=` init
-- added preset UX polish: `Clear 1/2/3` actions and transient saved/loaded status text
-- added preset reset action in the UI (`Reset`)
-- added Python quick-view preset helpers: `list_view_preset_slots()`, `get_view_preset()`, `set_view_preset()`, `clear_view_preset()`, `reset_view_presets()`
-
-### Show4DSTEM
-- added persistent quick-view presets with 3 slots (save/load from UI buttons or keyboard `1/2/3`, `Shift+1/2/3`)
-- presets now sync via `view_presets_json` and persist across `state_dict()`, `save()/load_state_dict()`, and `state=` init
-- added preset reset action in the UI and saved-slot indicator text (`Saved: ...`)
-- added Python quick-view preset helpers: `list_view_preset_slots()`, `get_view_preset()`, `set_view_preset()`, `clear_view_preset()`, `reset_view_presets()`
-
-### Docs
-- updated `docs/widgets/show3d.rst` to document multi-ROI workflow and versioned state envelope saves
-- added Show3D loading notebooks for PNG folders, TIFF, EMD, plus a format chooser hub (`show3d_load_hub`, `show3d_load_png_folder`, `show3d_load_tiff`, `show3d_load_emd`)
-- added Show2D loading notebooks for PNG folders, TIFF, EMD, plus a format chooser hub (`show2d_load_hub`, `show2d_load_png_folder`, `show2d_load_tiff`, `show2d_load_emd`)
-- updated state persistence docs with a quick-view preset example and all three restore paths (`load_state_dict`, `save/state file`, `state=` dict)
-
-### Tests
-- added focused smoke tests for Show3D/Show4D/Show4DSTEM quick-view preset save/load via keyboard shortcuts
-- hardened Jupyter smoke fixture with startup retries, dynamic open-port selection, longer startup timeout, and failure log tail output
+### Show3D, Show4D, Show4DSTEM
+- quick-view presets: save/recall 3 display configurations via UI buttons or keyboard (`1/2/3`, `Shift+1/2/3`)
 
 ## v0.0.8 (2026-02-20)
 

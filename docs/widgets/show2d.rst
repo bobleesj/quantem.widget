@@ -41,15 +41,10 @@ Methods
    w = Show2D.from_tiff("data/stack.tiff")                       # gallery for multi-page TIFF
    w = Show2D.from_emd("data/scan.emd", dataset_path="/data/signal")
 
-   # Explicit folder loaders
-   w = Show2D.from_png_folder("data/png_stack")
-   w = Show2D.from_tiff_folder("data/tiff_stack")
-   w = Show2D.from_emd_folder("data/emd_stack", dataset_path="/data/signal")
-
-   # Mixed folder: pick one explicit type
-   w = Show2D.from_folder("data/mixed_stack", file_type="png")
-   w = Show2D.from_folder("data/mixed_stack", file_type="tiff")
-   w = Show2D.from_folder("data/mixed_stack", file_type="emd", dataset_path="/data/signal")
+   # Folder loaders (explicit file_type required)
+   w = Show2D.from_folder("data/png_stack", file_type="png")
+   w = Show2D.from_folder("data/tiff_stack", file_type="tiff")
+   w = Show2D.from_folder("data/emd_stack", file_type="emd", dataset_path="/data/signal")
 
    # Optional stack reduction to single 2D image
    w = Show2D.from_tiff("data/stack.tiff", mode="mean")
@@ -69,7 +64,7 @@ Loader Decision Table
      - ``Show2D.from_png("frame.png")``
      - Fastest explicit path for a single 2D frame.
    * - Folder of PNG slices
-     - ``Show2D.from_png_folder("png_stack/")``
+     - ``Show2D.from_folder("png_stack/", file_type="png")``
      - Keeps slice order explicit and avoids format ambiguity.
    * - One TIFF / multi-page TIFF
      - ``Show2D.from_tiff("stack.tiff")``
@@ -124,8 +119,7 @@ Loader Troubleshooting
 ----------------------
 
 - **Error: ``file_type is required for folder loading``**
-  Use an explicit folder loader (`from_png_folder`, `from_tiff_folder`, `from_emd_folder`) or call
-  ``from_folder(path, file_type="png" | "tiff" | "emd")``.
+  Use ``from_folder(path, file_type="png" | "tiff" | "emd")``.
 - **Error: ``h5py is required to read .emd files``**
   Install `h5py` in your environment, then retry the same `from_emd(...)` call.
 - **Error: ``dataset_path ... not found in EMD file``**

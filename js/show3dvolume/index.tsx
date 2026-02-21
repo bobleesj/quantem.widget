@@ -175,7 +175,6 @@ function KeyboardShortcuts({ items }: { items: [string, string][] }) {
 
 interface HistogramProps {
   data: Float32Array | null;
-  colormap: string;
   vminPct: number;
   vmaxPct: number;
   onRangeChange: (min: number, max: number) => void;
@@ -186,7 +185,7 @@ interface HistogramProps {
   dataMax?: number;
 }
 
-function Histogram({ data, colormap: _colormap, vminPct, vmaxPct, onRangeChange, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1 }: HistogramProps) {
+function Histogram({ data, vminPct, vmaxPct, onRangeChange, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1 }: HistogramProps) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const bins = React.useMemo(() => computeHistogramFromBytes(data), [data]);
   const colors = theme === "dark" ? { bg: "#1a1a1a", barActive: "#888", barInactive: "#444", border: "#333" } : { bg: "#f0f0f0", barActive: "#666", barInactive: "#bbb", border: "#ccc" };
@@ -1595,7 +1594,6 @@ function Show3DVolume() {
             <Box sx={{ display: "flex", flexDirection: "column", justifyContent: "center", opacity: lockHistogram ? 0.6 : 1 }}>
               <Histogram
                 data={imageHistogramData}
-                colormap={cmap}
                 vminPct={imageVminPct}
                 vmaxPct={imageVmaxPct}
                 onRangeChange={(min, max) => {

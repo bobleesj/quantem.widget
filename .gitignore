@@ -30,6 +30,9 @@ CLAUDE.md
 # Screenshots
 *.png
 
+# Notebook export artifacts
+notebooks/**/paper_exports/
+
 # Sphinx build output
 docs/_build
 

@@ -372,7 +372,6 @@ function InfoTooltip({ text, theme = "dark" }: { text: React.ReactNode; theme?: 
 // ============================================================================
 interface HistogramProps {
   data: Float32Array | null;
-  colormap: string;
   vminPct: number;
   vmaxPct: number;
   onRangeChange: (min: number, max: number) => void;
@@ -385,7 +384,6 @@ interface HistogramProps {
 
 function Histogram({
   data,
-  colormap,
   vminPct,
   vmaxPct,
   onRangeChange,
@@ -447,7 +445,7 @@ function Histogram({
       ctx.fillStyle = inRange ? colors.barActive : colors.barInactive;
       ctx.fillRect(x + 0.5, height - barHeight, Math.max(1, barWidth - 1), barHeight);
     }
-  }, [bins, colormap, vminPct, vmaxPct, width, height, colors]);
+  }, [bins, vminPct, vmaxPct, width, height, colors]);
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 0.25 }}>
@@ -2139,7 +2137,7 @@ function Show4D() {
               </Box>
               {!hideHistogram && (
                 <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: lockHistogram ? 0.6 : 1 }}>
-                  <Histogram data={navHistogramData} colormap={navColormap} vminPct={navVminPct} vmaxPct={navVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setNavVminPct(min); setNavVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={navDataMin} dataMax={navDataMax} />
+                  <Histogram data={navHistogramData} vminPct={navVminPct} vmaxPct={navVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setNavVminPct(min); setNavVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={navDataMin} dataMax={navDataMax} />
                 </Box>
               )}
             </Box>
@@ -2305,7 +2303,7 @@ function Show4D() {
               </Box>
               {!hideHistogram && (
                 <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: lockHistogram ? 0.6 : 1 }}>
-                  <Histogram data={sigHistogramData} colormap={sigColormap} vminPct={sigVminPct} vmaxPct={sigVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setSigVminPct(min); setSigVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={sigDataMin} dataMax={sigDataMax} />
+                  <Histogram data={sigHistogramData} vminPct={sigVminPct} vmaxPct={sigVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setSigVminPct(min); setSigVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={sigDataMin} dataMax={sigDataMax} />
                 </Box>
               )}
             </Box>
@@ -2387,7 +2385,7 @@ function Show4D() {
                 )}
                 {!hideHistogram && (
                   <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: (lockHistogram || lockFft) ? 0.6 : 1 }}>
-                    <Histogram data={fftHistogramData} colormap={fftColormap} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram && !lockFft) { setFftVminPct(min); setFftVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={fftDataRange.min} dataMax={fftDataRange.max} />
+                    <Histogram data={fftHistogramData} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram && !lockFft) { setFftVminPct(min); setFftVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={fftDataRange.min} dataMax={fftDataRange.max} />
                   </Box>
                 )}
               </Box>

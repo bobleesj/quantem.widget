@@ -193,8 +193,6 @@ class Show3D(anywidget.AnyWidget):
     roi_selected_idx = traitlets.Int(-1).tag(sync=True)
     roi_stats = traitlets.Dict({}).tag(sync=True)
     roi_plot_data = traitlets.Bytes(b"").tag(sync=True)
-    roi_focus_dim = traitlets.Float(0.6).tag(sync=True)
-
     # =========================================================================
     # Sizing
     # =========================================================================
@@ -616,27 +614,6 @@ class Show3D(anywidget.AnyWidget):
         """Create Show3D from a single PNG file."""
         return cls.from_path(source, **kwargs)
 
-    @classmethod
-    def from_emd_folder(
-        cls,
-        folder: str | pathlib.Path,
-        *,
-        dataset_path: str | None = None,
-        **kwargs,
-    ) -> Self:
-        """Create Show3D from a folder of EMD files."""
-        return cls.from_folder(folder, file_type="emd", dataset_path=dataset_path, **kwargs)
-
-    @classmethod
-    def from_tiff_folder(cls, folder: str | pathlib.Path, **kwargs) -> Self:
-        """Create Show3D from a folder of TIFF files."""
-        return cls.from_folder(folder, file_type="tiff", **kwargs)
-
-    @classmethod
-    def from_png_folder(cls, folder: str | pathlib.Path, **kwargs) -> Self:
-        """Create Show3D from a folder of PNG files."""
-        return cls.from_folder(folder, file_type="png", **kwargs)
-
     def __init__(
         self,
         data,
@@ -911,7 +888,6 @@ class Show3D(anywidget.AnyWidget):
             "roi_active": self.roi_active,
             "roi_list": self.roi_list,
             "roi_selected_idx": self.roi_selected_idx,
-            "roi_focus_dim": self.roi_focus_dim,
             "profile_line": self.profile_line,
             "profile_width": self.profile_width,
             "dim_label": self.dim_label,

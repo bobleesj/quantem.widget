@@ -430,7 +430,7 @@ def test_show2d_from_png_folder_gallery(tmp_path):
     for i in range(3):
         Image.fromarray((np.ones((8, 6), dtype=np.uint8) * (10 + i))).save(folder / f"slice_{i:02d}.png")
 
-    widget = Show2D.from_png_folder(folder)
+    widget = Show2D.from_folder(folder, file_type="png")
     assert widget.n_images == 3
     assert widget.labels[0] == "slice_00.png"
 

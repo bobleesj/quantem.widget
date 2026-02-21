@@ -341,7 +341,6 @@ function computeDifferenceImage(
 
 interface HistogramProps {
   data: Float32Array | null;
-  colormap: string;
   vminPct: number;
   vmaxPct: number;
   onRangeChange: (min: number, max: number) => void;
@@ -352,7 +351,7 @@ interface HistogramProps {
   dataMax?: number;
 }
 
-function Histogram({ data, colormap: _colormap, vminPct, vmaxPct, onRangeChange, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1 }: HistogramProps) {
+function Histogram({ data, vminPct, vmaxPct, onRangeChange, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1 }: HistogramProps) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const bins = React.useMemo(() => computeHistogramFromBytes(data), [data]);
   const colors = theme === "dark" ? {
@@ -1432,7 +1431,6 @@ function Align2D() {
                 </Stack>
                 <Histogram
                   data={histogramData}
-                  colormap={cmap}
                   vminPct={vminPct}
                   vmaxPct={vmaxPct}
                   onRangeChange={(min, max) => { if (!lockHistogram) { setVminPct(min); setVmaxPct(max); } }}

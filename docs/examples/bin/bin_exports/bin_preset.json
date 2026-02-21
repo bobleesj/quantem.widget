@@ -3,6 +3,7 @@
   "widget_name": "Bin",
   "widget_version": "0.0.7",
   "state": {
+    "title": "",
     "scan_bin_row": 2,
     "scan_bin_col": 2,
     "det_bin_row": 2,

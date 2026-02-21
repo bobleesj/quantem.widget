@@ -1,4 +1,5 @@
 import json
+import struct
 
 import numpy as np
 import pytest
@@ -69,7 +70,7 @@ def test_merge4dstem_requires_torch():
 
 def test_merge4dstem_merge_produces_5d():
     sources = _make_sources(3, shape=(2, 2, 4, 4))
-    w = Merge4DSTEM(sources)
+    w = Merge4DSTEM(sources, bin_factor=1)
     assert w.merged is False
 
     result = w.merge()
@@ -90,7 +91,7 @@ def test_merge4dstem_result_is_none_before_merge():
 def test_merge4dstem_result_array_values_correct():
     a = np.ones((2, 2, 4, 4), dtype=np.float32) * 1.0
     b = np.ones((2, 2, 4, 4), dtype=np.float32) * 2.0
-    w = Merge4DSTEM([a, b])
+    w = Merge4DSTEM([a, b], bin_factor=1)
     w.merge()
 
     arr = w.result_array
@@ -101,11 +102,90 @@ def test_merge4dstem_result_array_values_correct():
 
 def test_merge4dstem_output_shape_json_updated():
     sources = _make_sources(3, shape=(2, 3, 4, 5))
-    w = Merge4DSTEM(sources)
+    w = Merge4DSTEM(sources, bin_factor=1)
     w.merge()
 
     shape = json.loads(w.output_shape_json)
     assert shape == [3, 2, 3, 4, 5]
+
+
+# --- Binning ---
+
+
+def test_merge4dstem_bin_factor_default():
+    sources = _make_sources(2, shape=(4, 4, 8, 8))
+    w = Merge4DSTEM(sources)
+    assert w.bin_factor == 2
+
+
+def test_merge4dstem_bin_factor_1_no_binning():
+    sources = _make_sources(2, shape=(2, 2, 8, 8))
+    w = Merge4DSTEM(sources, bin_factor=1)
+    w.merge()
+    arr = w.result_array
+    assert arr.shape == (2, 2, 2, 8, 8)
+
+
+def test_merge4dstem_bin_factor_2():
+    a = np.ones((2, 2, 8, 8), dtype=np.float32) * 4.0
+    b = np.ones((2, 2, 8, 8), dtype=np.float32) * 8.0
+    w = Merge4DSTEM([a, b], bin_factor=2)
+    w.merge()
+    arr = w.result_array
+    assert arr.shape == (2, 2, 2, 4, 4)
+    np.testing.assert_allclose(arr[0], 4.0)
+    np.testing.assert_allclose(arr[1], 8.0)
+
+
+def test_merge4dstem_bin_factor_4():
+    sources = _make_sources(2, shape=(2, 2, 16, 16))
+    w = Merge4DSTEM(sources, bin_factor=4)
+    w.merge()
+    arr = w.result_array
+    assert arr.shape == (2, 2, 2, 4, 4)
+
+
+def test_merge4dstem_output_shape_accounts_for_binning():
+    sources = _make_sources(3, shape=(4, 4, 8, 8))
+    w = Merge4DSTEM(sources, bin_factor=2)
+    shape = json.loads(w.output_shape_json)
+    assert shape == [3, 4, 4, 4, 4]
+
+
+def test_merge4dstem_bin_factor_in_state_dict():
+    sources = _make_sources(2, shape=(2, 2, 4, 4))
+    w = Merge4DSTEM(sources, bin_factor=4)
+    sd = w.state_dict()
+    assert sd["bin_factor"] == 4
+
+    w2 = Merge4DSTEM(_make_sources(2, shape=(2, 2, 4, 4)))
+    w2.load_state_dict(sd)
+    assert w2.bin_factor == 4
+
+
+# --- Preview index ---
+
+
+def test_merge4dstem_preview_index_default():
+    sources = _make_sources(3, shape=(4, 4, 8, 8))
+    w = Merge4DSTEM(sources)
+    assert w.preview_index == 0
+
+
+def test_merge4dstem_preview_index_changes_preview():
+    a = np.ones((2, 2, 4, 4), dtype=np.float32) * 1.0
+    b = np.ones((2, 2, 4, 4), dtype=np.float32) * 100.0
+    w = Merge4DSTEM([a, b])
+
+    # Preview of source 0 should be ~1.0
+    import struct
+    first_val = struct.unpack("f", w.preview_bytes[:4])[0]
+    assert first_val == pytest.approx(1.0, abs=0.01)
+
+    # Switch to source 1
+    w.preview_index = 1
+    first_val_2 = struct.unpack("f", w.preview_bytes[:4])[0]
+    assert first_val_2 == pytest.approx(100.0, abs=0.01)
 
 
 # --- Merge trigger via trait ---
@@ -357,6 +437,7 @@ def test_merge4dstem_repr():
     r = repr(w)
     assert "Merge4DSTEM" in r
     assert "sources=2" in r
+    assert "bin=2x" in r
     assert "merged=False" in r
 
 

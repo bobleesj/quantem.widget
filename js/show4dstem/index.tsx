@@ -622,7 +622,6 @@ function drawRoiOverlayHiDPI(
 
 interface HistogramProps {
   data: Float32Array | null;
-  colormap: string;
   vminPct: number;
   vmaxPct: number;
   onRangeChange: (min: number, max: number) => void;
@@ -694,11 +693,10 @@ function KeyboardShortcuts({ items }: { items: [string, string][] }) {
 
 /**
  * Histogram component with integrated vmin/vmax slider and statistics.
- * Shows data distribution with colormap gradient and adjustable clipping.
+ * Shows data distribution with adjustable clipping.
  */
 function Histogram({
   data,
-  colormap,
   vminPct,
   vmaxPct,
   onRangeChange,
@@ -772,7 +770,7 @@ function Histogram({
       ctx.fillRect(x + 0.5, height - barHeight, Math.max(1, barWidth - 1), barHeight);
     }
 
-  }, [bins, colormap, vminPct, vmaxPct, width, height, colors]);
+  }, [bins, vminPct, vmaxPct, width, height, colors]);
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 0.25 }}>
@@ -3544,7 +3542,7 @@ function Show4DSTEM() {
               {/* Right: Histogram spanning both rows */}
               {!hideHistogram && (
                 <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: lockHistogram ? 0.6 : 1 }}>
-                  <Histogram data={dpHistogramData} colormap={dpColormap} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setDpVminPct(min); setDpVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={dpGlobalMin} dataMax={dpGlobalMax} />
+                  <Histogram data={dpHistogramData} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setDpVminPct(min); setDpVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={dpGlobalMin} dataMax={dpGlobalMax} />
                 </Box>
               )}
             </Box>
@@ -3742,7 +3740,7 @@ function Show4DSTEM() {
               {/* Right: Histogram spanning both rows */}
               {!hideHistogram && (
                 <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: lockHistogram ? 0.6 : 1 }}>
-                  <Histogram data={viHistogramData} colormap={viColormap} vminPct={viVminPct} vmaxPct={viVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setViVminPct(min); setViVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={viDataMin} dataMax={viDataMax} />
+                  <Histogram data={viHistogramData} vminPct={viVminPct} vmaxPct={viVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setViVminPct(min); setViVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={viDataMin} dataMax={viDataMax} />
                 </Box>
               )}
             </Box>
@@ -3824,7 +3822,7 @@ function Show4DSTEM() {
                 {!hideHistogram && (
                   <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: (lockHistogram || lockFft) ? 0.6 : 1 }}>
                     {fftHistogramData && (
-                      <Histogram data={fftHistogramData} colormap={fftColormap} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram && !lockFft) { setFftVminPct(min); setFftVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={fftDataMin} dataMax={fftDataMax} />
+                      <Histogram data={fftHistogramData} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram && !lockFft) { setFftVminPct(min); setFftVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme} dataMin={fftDataMin} dataMax={fftDataMax} />
                     )}
                   </Box>
                 )}

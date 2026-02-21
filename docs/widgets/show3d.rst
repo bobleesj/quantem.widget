@@ -51,14 +51,9 @@ Methods
    w = Show3D.from_emd("data/scan.emd", dataset_path="/data/signal")
    w = Show3D.from_tiff("data/focal_series.tiff")
    w = Show3D.from_png("data/frame_0000.png")
-   w = Show3D.from_png_folder("data/png_stack")
-   w = Show3D.from_tiff_folder("data/tiff_stack")
-   w = Show3D.from_emd_folder("data/emd_stack", dataset_path="/data/signal")
-
-   # Explicit folder dispatch (no implicit auto type selection)
-   w = Show3D.from_folder("data/mixed_stack", file_type="png")
-   w = Show3D.from_folder("data/mixed_stack", file_type="tiff")
-   w = Show3D.from_folder("data/mixed_stack", file_type="emd", dataset_path="/data/signal")
+   w = Show3D.from_folder("data/png_stack", file_type="png")
+   w = Show3D.from_folder("data/tiff_stack", file_type="tiff")
+   w = Show3D.from_folder("data/emd_stack", file_type="emd", dataset_path="/data/signal")
 
    # Playback
    w.play()
@@ -78,7 +73,6 @@ Methods
    w.roi_annular(inner=5, outer=15)
    w.duplicate_selected_roi()
    w.delete_selected_roi()
-   w.roi_focus_dim = 0.35
    w.clear_rois()
    w.roi_list
    w.roi_stats

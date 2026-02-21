@@ -391,7 +391,6 @@ function InfoTooltip({ text, theme = "dark" }: { text: React.ReactNode; theme?: 
 
 function HistogramWidget({
   data,
-  cmap: _colormap,
   vminPct,
   vmaxPct,
   onRangeChange,
@@ -402,7 +401,6 @@ function HistogramWidget({
   dataMax = 1,
 }: {
   data: Float32Array | null;
-  cmap: string;
   vminPct: number;
   vmaxPct: number;
   onRangeChange: (min: number, max: number) => void;
@@ -2257,7 +2255,6 @@ const render = createRender(() => {
             {histogramData && (
               <HistogramWidget
                 data={histogramData}
-                cmap={cmap || "gray"}
                 vminPct={vminPct}
                 vmaxPct={vmaxPct}
                 onRangeChange={(min, max) => {

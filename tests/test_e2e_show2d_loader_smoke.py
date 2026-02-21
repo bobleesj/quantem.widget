@@ -56,7 +56,7 @@ def show2d_loader_page(browser_context):
             {
                 "source": [
                     "print('HAS_H5PY:', has_h5py)\n",
-                    "Show2D.from_png_folder(png_dir, title='PNG Folder Loader')\n",
+                    "Show2D.from_folder(png_dir, file_type='png', title='PNG Folder Loader')\n",
                     "Show2D.from_tiff(tiff_file, title='TIFF Loader')\n",
                     "if has_h5py:\n",
                     "    Show2D.from_emd(emd_file, dataset_path='/data/signal', title='EMD Loader')\n",

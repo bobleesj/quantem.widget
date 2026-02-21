@@ -77,7 +77,6 @@ const DPR = window.devicePixelRatio || 1;
 
 interface HistogramProps {
   data: Float32Array | null;
-  colormap: string;
   vminPct: number;
   vmaxPct: number;
   onRangeChange: (min: number, max: number) => void;
@@ -88,7 +87,7 @@ interface HistogramProps {
   dataMax?: number;
 }
 
-function Histogram({ data, colormap: _colormap, vminPct, vmaxPct, onRangeChange, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1 }: HistogramProps) {
+function Histogram({ data, vminPct, vmaxPct, onRangeChange, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1 }: HistogramProps) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const bins = React.useMemo(() => computeHistogramFromBytes(data), [data]);
   const isDark = theme === "dark";
@@ -2723,7 +2722,7 @@ function Show2D() {
               {!hideHistogram && (
                 <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: lockHistogram ? 0.5 : 1, pointerEvents: lockHistogram ? "none" : "auto" }}>
                   {fftHistogramData && (
-                    <Histogram data={fftHistogramData} colormap={fftColormap} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setFftVminPct(min); setFftVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme === "dark" ? "dark" : "light"} dataMin={fftDataRange.min} dataMax={fftDataRange.max} />
+                    <Histogram data={fftHistogramData} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setFftVminPct(min); setFftVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme === "dark" ? "dark" : "light"} dataMin={fftDataRange.min} dataMax={fftDataRange.max} />
                   )}
                 </Box>
               )}
@@ -2807,7 +2806,7 @@ function Show2D() {
                 {/* Right: Histogram aligned to the two rows */}
                 {!hideHistogram && imageHistogramData && (
                   <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: lockHistogram ? 0.5 : 1, pointerEvents: lockHistogram ? "none" : "auto" }}>
-                    <Histogram data={imageHistogramData} colormap={cmap} vminPct={imageVminPct} vmaxPct={imageVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) setContrastState(activeContrastIdx, { vminPct: min, vmaxPct: max }); }} width={110} height={58} theme={themeInfo.theme === "dark" ? "dark" : "light"} dataMin={imageDataRange.min} dataMax={imageDataRange.max} />
+                    <Histogram data={imageHistogramData} vminPct={imageVminPct} vmaxPct={imageVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) setContrastState(activeContrastIdx, { vminPct: min, vmaxPct: max }); }} width={110} height={58} theme={themeInfo.theme === "dark" ? "dark" : "light"} dataMin={imageDataRange.min} dataMax={imageDataRange.max} />
                   </Box>
                 )}
               </Box>
@@ -3002,7 +3001,7 @@ function Show2D() {
                 {!hideHistogram && (
                   <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", opacity: lockHistogram ? 0.5 : 1, pointerEvents: lockHistogram ? "none" : "auto" }}>
                     {fftHistogramData && (
-                      <Histogram data={fftHistogramData} colormap={fftColormap} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setFftVminPct(min); setFftVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme === "dark" ? "dark" : "light"} dataMin={fftDataRange.min} dataMax={fftDataRange.max} />
+                      <Histogram data={fftHistogramData} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { if (!lockHistogram) { setFftVminPct(min); setFftVmaxPct(max); } }} width={110} height={58} theme={themeInfo.theme === "dark" ? "dark" : "light"} dataMin={fftDataRange.min} dataMax={fftDataRange.max} />
                     )}
                   </Box>
                 )}

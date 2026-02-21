@@ -158,7 +158,6 @@ function KeyboardShortcuts({ items }: { items: [string, string][] }) {
 // ============================================================================
 interface HistogramProps {
   data: Float32Array | null;
-  colormap: string;
   vminPct: number;
   vmaxPct: number;
   onRangeChange: (min: number, max: number) => void;
@@ -171,7 +170,6 @@ interface HistogramProps {
 
 function Histogram({
   data,
-  colormap: _colormap,
   vminPct,
   vmaxPct,
   onRangeChange,
@@ -1760,7 +1758,6 @@ function Edit2D() {
             <Box sx={{ display: "flex", flexDirection: "column", alignItems: showLeftControlGroups ? "flex-end" : "flex-start", justifyContent: "center", opacity: lockHistogram ? 0.5 : 1, pointerEvents: lockHistogram ? "none" : "auto" }}>
               <Histogram
                 data={imageHistogramData}
-                colormap={cmap}
                 vminPct={imageVminPct}
                 vmaxPct={imageVmaxPct}
                 onRangeChange={(min, max) => {

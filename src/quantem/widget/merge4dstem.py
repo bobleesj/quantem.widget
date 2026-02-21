@@ -27,6 +27,7 @@ from quantem.widget.tool_parity import (
 
 try:
     import torch
+    import torch.nn.functional as F
 
     _HAS_TORCH = True
 except ImportError:
@@ -135,6 +136,8 @@ class Merge4DSTEM(anywidget.AnyWidget):
         Override k-space calibration (mrad/px).
     frame_dim_label : str, default "Time"
         Label for the stacked dimension.
+    bin_factor : int, default 2
+        Detector binning factor. 1 = no binning, 2 = 2x2 average pooling, etc.
     cmap : str, default "inferno"
         Colormap for preview rendering.
     log_scale : bool, default False
@@ -162,15 +165,19 @@ class Merge4DSTEM(anywidget.AnyWidget):
     # Source info (JSON string for JS)
     source_info_json = traitlets.Unicode("[]").tag(sync=True)
 
-    # Preview (mean DP of first source)
+    # Preview (mean DP of selected source)
     preview_bytes = traitlets.Bytes(b"").tag(sync=True)
     preview_rows = traitlets.Int(0).tag(sync=True)
     preview_cols = traitlets.Int(0).tag(sync=True)
+    preview_index = traitlets.Int(0).tag(sync=True)
 
     # Merge state
     merged = traitlets.Bool(False).tag(sync=True)
     output_shape_json = traitlets.Unicode("[]").tag(sync=True)
     frame_dim_label = traitlets.Unicode("Time").tag(sync=True)
+
+    # Binning
+    bin_factor = traitlets.Int(2).tag(sync=True)
 
     # Status
     status_message = traitlets.Unicode("").tag(sync=True)
@@ -262,6 +269,7 @@ class Merge4DSTEM(anywidget.AnyWidget):
         pixel_size: float | None = None,
         k_pixel_size: float | None = None,
         frame_dim_label: str = "Time",
+        bin_factor: int = 2,
         title: str = "Merge4DSTEM",
         cmap: str = "inferno",
         log_scale: bool = False,
@@ -399,12 +407,13 @@ class Merge4DSTEM(anywidget.AnyWidget):
         self.show_controls = show_controls
         self.show_stats = show_stats
         self.frame_dim_label = frame_dim_label
+        self.bin_factor = max(1, int(bin_factor))
 
         # Source table JSON
         self.source_info_json = json.dumps(source_table)
 
-        # Output shape
-        self.output_shape_json = json.dumps([self.n_sources, scan_r, scan_c, det_r, det_c])
+        # Output shape (accounts for binning)
+        self._update_output_shape()
 
         # Compute preview (mean DP of first source)
         self._compute_preview()
@@ -419,8 +428,10 @@ class Merge4DSTEM(anywidget.AnyWidget):
             self.status_level = "ok"
             self.status_message = f"Ready to merge ({self.n_sources} compatible sources)"
 
-        # Observe merge trigger
+        # Observe merge trigger and preview index changes
         self.observe(self._on_merge_requested, names=["_merge_requested"])
+        self.observe(self._on_preview_index_changed, names=["preview_index"])
+        self.observe(self._on_bin_factor_changed, names=["bin_factor"])
 
         # Tool visibility
         self.disabled_tools = self._build_disabled_tools(
@@ -459,14 +470,32 @@ class Merge4DSTEM(anywidget.AnyWidget):
     # ------------------------------------------------------------------
 
     def merge(self) -> Self:
-        """Stack all sources along dim=0 to produce a 5D array."""
-        self._merged_tensor = torch.stack(self._source_tensors, dim=0)
+        """Stack all sources along dim=0 to produce a 5D array.
+
+        If bin_factor > 1, detector dimensions are binned via average pooling
+        before stacking.
+        """
+        bf = max(1, self.bin_factor)
+        if bf > 1:
+            binned = []
+            for t in self._source_tensors:
+                # t: (scan_r, scan_c, det_r, det_c) -> reshape for avg_pool2d
+                sr, sc, dr, dc = t.shape
+                # Flatten scan dims, treat det as spatial: (sr*sc, 1, dr, dc)
+                flat = t.reshape(sr * sc, 1, dr, dc)
+                pooled = F.avg_pool2d(flat, kernel_size=bf, stride=bf)
+                binned.append(pooled.reshape(sr, sc, pooled.shape[2], pooled.shape[3]))
+            self._merged_tensor = torch.stack(binned, dim=0)
+        else:
+            self._merged_tensor = torch.stack(self._source_tensors, dim=0)
+
         self.merged = True
         self.status_level = "ok"
         shape_5d = list(self._merged_tensor.shape)
         self.output_shape_json = json.dumps(shape_5d)
+        bin_note = f" (bin {bf}x)" if bf > 1 else ""
         self.status_message = (
-            f"Merged {self.n_sources} sources -> {tuple(shape_5d)} on {self.device}"
+            f"Merged {self.n_sources} sources -> {tuple(shape_5d)}{bin_note} on {self.device}"
         )
         return self
 
@@ -553,6 +582,7 @@ class Merge4DSTEM(anywidget.AnyWidget):
             "show_controls": self.show_controls,
             "show_stats": self.show_stats,
             "frame_dim_label": self.frame_dim_label,
+            "bin_factor": self.bin_factor,
             "disabled_tools": list(self.disabled_tools),
             "hidden_tools": list(self.hidden_tools),
         }
@@ -576,6 +606,7 @@ class Merge4DSTEM(anywidget.AnyWidget):
             lines.append(f"Real cal:   {self.pixel_size:.4g} {self.pixel_unit}/px")
         if self.k_calibrated:
             lines.append(f"K cal:      {self.k_pixel_size:.4g} {self.k_unit}/px")
+        lines.append(f"Bin:        {self.bin_factor}x")
         lines.append(f"Merged:     {self.merged}")
         if self.merged:
             lines.append(f"Output:     {self.output_shape_json}")
@@ -594,18 +625,33 @@ class Merge4DSTEM(anywidget.AnyWidget):
     # ------------------------------------------------------------------
 
     def _compute_preview(self):
-        """Compute mean diffraction pattern from first source for preview."""
-        first = self._source_tensors[0]
-        mean_dp = first.mean(dim=(0, 1))
+        """Compute mean diffraction pattern from selected source for preview."""
+        idx = max(0, min(self.preview_index, len(self._source_tensors) - 1))
+        src = self._source_tensors[idx]
+        mean_dp = src.mean(dim=(0, 1))
         arr = mean_dp.detach().cpu().contiguous().float().numpy().astype(np.float32, copy=False)
         self.preview_bytes = arr.tobytes()
-        self.preview_rows = int(first.shape[2])
-        self.preview_cols = int(first.shape[3])
+        self.preview_rows = int(src.shape[2])
+        self.preview_cols = int(src.shape[3])
 
     def _on_merge_requested(self, change=None):
         if self._merge_requested:
             self.merge()
             self._merge_requested = False
+
+    def _on_preview_index_changed(self, change=None):
+        self._compute_preview()
+
+    def _on_bin_factor_changed(self, change=None):
+        self._update_output_shape()
+
+    def _update_output_shape(self):
+        bf = max(1, self.bin_factor)
+        out_det_r = self.det_rows // bf if bf > 1 else self.det_rows
+        out_det_c = self.det_cols // bf if bf > 1 else self.det_cols
+        self.output_shape_json = json.dumps(
+            [self.n_sources, self.scan_rows, self.scan_cols, out_det_r, out_det_c]
+        )
 
     def _resolve_torch_device(self, requested: str | None, numel: int) -> str | None:
         if not _HAS_TORCH:
@@ -639,6 +685,7 @@ class Merge4DSTEM(anywidget.AnyWidget):
             f"Merge4DSTEM(sources={self.n_sources}, "
             f"scan=({self.scan_rows}, {self.scan_cols}), "
             f"det=({self.det_rows}, {self.det_cols}), "
+            f"bin={self.bin_factor}x, "
             f"merged={self.merged}, device={self.device})"
         )
 

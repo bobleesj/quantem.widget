@@ -58,7 +58,7 @@ def show3d_loader_page(browser_context):
             },
             {
                 "source": [
-                    "Show3D.from_png_folder(png_dir)\n",
+                    "Show3D.from_folder(png_dir, file_type='png')\n",
                     "Show3D.from_tiff(tiff_file)\n",
                     "Show3D.from_folder(mixed_dir, file_type='png')\n",
                     "Show3D.from_folder(mixed_dir, file_type='tiff')\n",

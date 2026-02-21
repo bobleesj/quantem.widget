@@ -929,9 +929,8 @@ def test_show3d_state_dict_roundtrip():
     w = Show3D(data, cmap="viridis", log_scale=True, auto_contrast=True,
                title="Stack", pixel_size=5.0, fps=15.0, show_fft=True,
                disabled_tools=["display", "navigation"], hidden_tools=["stats"])
-    w.roi_focus_dim = 0.35
     w.roi_active = True
-    w.roi_list = [{"row": 10, "col": 15, "shape": "circle", "radius": 10, "radius_inner": 5, "width": 20, "height": 20, "color": "#4fc3f7", "line_width": 2, "highlight": False, "visible": True, "locked": False}]
+    w.roi_list = [{"row": 10, "col": 15, "shape": "circle", "radius": 10, "radius_inner": 5, "width": 20, "height": 20, "color": "#4fc3f7", "line_width": 2, "highlight": False}]
     w.roi_selected_idx = 0
     sd = w.state_dict()
     w2 = Show3D(data, state=sd)
@@ -943,7 +942,6 @@ def test_show3d_state_dict_roundtrip():
     assert w2.show_fft is True
     assert w2.roi_active is True
     assert w2.roi_list[0]["row"] == 10
-    assert w2.roi_focus_dim == pytest.approx(0.35)
     assert w2.disabled_tools == ["display", "playback"]
     assert w2.hidden_tools == ["stats"]
 
@@ -1027,14 +1025,11 @@ def test_show3d_from_png_folder_explicit(tmp_path):
         arr = (np.ones((8, 6), dtype=np.float32) * (i + 1) * 25).astype(np.uint8)
         Image.fromarray(arr).save(folder / f"slice_{i:02d}.png")
 
-    widget = Show3D.from_png_folder(folder)
+    widget = Show3D.from_folder(folder, file_type="png")
     assert widget.n_slices == 3
     assert widget.height == 8
     assert widget.width == 6
     assert widget.labels[0] == "slice_00.png"
-
-    widget2 = Show3D.from_folder(folder, file_type="png")
-    assert widget2.n_slices == 3
 
 
 def test_show3d_from_path_folder_requires_explicit_file_type(tmp_path):
@@ -1076,7 +1071,7 @@ def test_show3d_from_tiff_folder_explicit(tmp_path):
     ]
     frames[0].save(folder / "b.tiff", save_all=True, append_images=frames[1:])
 
-    widget = Show3D.from_tiff_folder(folder)
+    widget = Show3D.from_folder(folder, file_type="tiff")
     assert widget.n_slices == 2
     assert widget.height == 6
     assert widget.width == 4

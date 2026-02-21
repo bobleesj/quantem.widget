@@ -84,10 +84,11 @@ const DPR = window.devicePixelRatio || 1;
 const RESIZE_HIT_AREA_PX = 10;
 const DEFAULT_CANVAS_W = 500;
 const DEFAULT_CANVAS_H = 300;
-const MARGIN = { top: 12, right: 16, bottom: 40, left: 60 };
+const MARGIN = { top: 12, right: 16, bottom: 48, left: 60 };
 const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const AXIS_TICK_PX = 4;
-const MAX_TICKS = 8;
+const MAX_TICKS_Y = 8;
+const TICK_LABEL_WIDTH_PX = 55;
 const Y_PAD_FRAC = 0.05;
 
 // ============================================================================
@@ -152,7 +153,7 @@ function KeyboardShortcuts({ items }: { items: [string, string][] }) {
 // ============================================================================
 // Tick computation
 // ============================================================================
-function computeTicks(min: number, max: number, maxTicks: number = MAX_TICKS): number[] {
+function computeTicks(min: number, max: number, maxTicks: number = MAX_TICKS_Y): number[] {
   const range = max - min;
   if (range <= 0 || !isFinite(range)) return [min];
   const step = roundToNiceValue(range / maxTicks);
@@ -407,7 +408,7 @@ function Show1D() {
       ctx.setLineDash([2, 3]);
 
       // X grid
-      const xTicks = computeTicks(xMin, xMax);
+      const xTicks = computeTicks(xMin, xMax, Math.max(3, Math.floor(plotW / TICK_LABEL_WIDTH_PX)));
       for (const tv of xTicks) {
         const cx = dataToCanvasX(tv);
         if (cx >= MARGIN.left && cx <= MARGIN.left + plotW) {
@@ -442,7 +443,7 @@ function Show1D() {
     ctx.stroke();
 
     // X ticks + labels
-    const xTicks = computeTicks(xMin, xMax);
+    const xTicks = computeTicks(xMin, xMax, Math.max(3, Math.floor(plotW / TICK_LABEL_WIDTH_PX)));
     ctx.fillStyle = isDark ? "#aaa" : "#555";
     ctx.font = `10px ${FONT}`;
     ctx.textAlign = "center";
@@ -894,7 +895,7 @@ function Show1D() {
       ctx.strokeStyle = "rgba(0,0,0,0.08)";
       ctx.lineWidth = 1;
       ctx.setLineDash([2, 3]);
-      const xTicks = computeTicks(xMin, xMax);
+      const xTicks = computeTicks(xMin, xMax, Math.max(3, Math.floor(plotW / TICK_LABEL_WIDTH_PX)));
       for (const tv of xTicks) {
         const cx = dataToCanvasX(tv);
         if (cx >= MARGIN.left && cx <= MARGIN.left + plotW) {
@@ -927,7 +928,7 @@ function Show1D() {
     ctx.stroke();
 
     // X ticks + labels
-    const xTicks = computeTicks(xMin, xMax);
+    const xTicks = computeTicks(xMin, xMax, Math.max(3, Math.floor(plotW / TICK_LABEL_WIDTH_PX)));
     ctx.fillStyle = "#555";
     ctx.font = `10px ${FONT}`;
     ctx.textAlign = "center";
@@ -1074,7 +1075,7 @@ function Show1D() {
       className="show1d-root"
       tabIndex={0}
       onKeyDown={handleKeyDown}
-      sx={container.root}
+      sx={{ ...container.root, bgcolor: colors.bg, color: colors.text }}
     >
       {/* Title */}
       {title && (
@@ -1153,6 +1154,7 @@ function Show1D() {
             py: 0.25,
             border: `1px solid ${colors.border}`,
             borderTop: "none",
+            bgcolor: colors.bg,
             width: "fit-content",
             flexWrap: "wrap",
           }}
@@ -1178,7 +1180,7 @@ function Show1D() {
 
       {/* Controls */}
       {showControls && (
-        <Box sx={{ ...controlRow, border: `1px solid ${colors.border}`, borderTop: "none", maxWidth: canvasW, width: canvasW, boxSizing: "border-box" }}>
+        <Box sx={{ ...controlRow, border: `1px solid ${colors.border}`, borderTop: "none", bgcolor: colors.bg, maxWidth: canvasW, width: canvasW, boxSizing: "border-box" }}>
           <Typography sx={{ ...typography.labelSmall, color: colors.text }}>
             Log:
           </Typography>

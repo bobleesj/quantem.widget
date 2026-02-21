@@ -587,50 +587,6 @@ class Show2D(anywidget.AnyWidget):
         """Create Show2D from an EMD file."""
         return cls.from_path(source, dataset_path=dataset_path, mode=mode, index=index, **kwargs)
 
-    @classmethod
-    def from_png_folder(
-        cls,
-        folder: str | pathlib.Path,
-        *,
-        mode: str | None = None,
-        index: int = 0,
-        **kwargs,
-    ) -> Self:
-        """Create Show2D from a folder of PNG files."""
-        return cls.from_folder(folder, file_type="png", mode=mode, index=index, **kwargs)
-
-    @classmethod
-    def from_tiff_folder(
-        cls,
-        folder: str | pathlib.Path,
-        *,
-        mode: str | None = None,
-        index: int = 0,
-        **kwargs,
-    ) -> Self:
-        """Create Show2D from a folder of TIFF files."""
-        return cls.from_folder(folder, file_type="tiff", mode=mode, index=index, **kwargs)
-
-    @classmethod
-    def from_emd_folder(
-        cls,
-        folder: str | pathlib.Path,
-        *,
-        dataset_path: str | None = None,
-        mode: str | None = None,
-        index: int = 0,
-        **kwargs,
-    ) -> Self:
-        """Create Show2D from a folder of EMD files."""
-        return cls.from_folder(
-            folder,
-            file_type="emd",
-            dataset_path=dataset_path,
-            mode=mode,
-            index=index,
-            **kwargs,
-        )
-
     def __init__(
         self,
         data: Union[np.ndarray, List[np.ndarray]],
