@@ -20,7 +20,6 @@ JUPYTER_PORT = 8899
 SCREENSHOT_DIR = Path(__file__).parent / "screenshots" / "bin"
 NOTEBOOK_PATH = Path(__file__).parent / "_test_bin_features.ipynb"
 
-
 def create_test_notebook() -> None:
     notebook = {
         "cells": [
@@ -51,10 +50,8 @@ def create_test_notebook() -> None:
     }
     NOTEBOOK_PATH.write_text(json.dumps(notebook, indent=2))
 
-
 def cleanup_test_notebook() -> None:
     NOTEBOOK_PATH.unlink(missing_ok=True)
-
 
 def start_jupyter():
     proc = subprocess.Popen(
@@ -86,14 +83,12 @@ def start_jupyter():
             return proc
     raise RuntimeError("JupyterLab failed to start within 30 seconds")
 
-
 def stop_jupyter(proc) -> None:
     proc.terminate()
     try:
         proc.wait(timeout=10)
     except Exception:
         proc.kill()
-
 
 def set_theme(page, dark: bool) -> None:
     if dark:
@@ -116,12 +111,10 @@ def set_theme(page, dark: bool) -> None:
         )
     time.sleep(1.5)
 
-
 def click_menu_item(page, text: str) -> None:
     item = page.locator(f'.MuiMenuItem-root:has-text("{text}")').first
     item.wait_for(state="visible", timeout=4000)
     item.click()
-
 
 def change_dropdown(widget, page, nth: int, value: str, wait: float = 0.8) -> None:
     page.keyboard.press("Escape")
@@ -130,7 +123,6 @@ def change_dropdown(widget, page, nth: int, value: str, wait: float = 0.8) -> No
     time.sleep(0.4)
     click_menu_item(page, value)
     time.sleep(wait)
-
 
 def capture(page) -> None:
     light_dir = SCREENSHOT_DIR / "light"
@@ -158,7 +150,6 @@ def capture(page) -> None:
     set_theme(page, dark=True)
     widget.screenshot(path=str(dark_dir / "dark_mode.png"))
 
-
 def main() -> None:
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     jupyter_proc = None
@@ -181,7 +172,6 @@ def main() -> None:
         if jupyter_proc:
             stop_jupyter(jupyter_proc)
         cleanup_test_notebook()
-
 
 if __name__ == "__main__":
     main()

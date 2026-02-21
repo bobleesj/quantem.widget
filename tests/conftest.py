@@ -22,7 +22,6 @@ if str(SRC_DIR) not in sys.path:
 # Keep matplotlib cache on a writable path to avoid expensive first-import churn.
 os.environ.setdefault("MPLCONFIGDIR", str(Path("/tmp") / "quantem-widget-mplconfig"))
 
-
 @pytest.fixture(scope="session")
 def jupyter_server():
     """Start a JupyterLab server for the entire test session."""
@@ -117,7 +116,6 @@ def jupyter_server():
     if log_handle is not None and not log_handle.closed:
         log_handle.close()
 
-
 @pytest.fixture(scope="session")
 def browser_context(jupyter_server):
     """Provide a Playwright browser context for the session."""
@@ -128,7 +126,6 @@ def browser_context(jupyter_server):
         context = browser.new_context(viewport={"width": 1400, "height": 900})
         yield context
         browser.close()
-
 
 def _write_notebook(path: Path, cells: list[dict]) -> Path:
     """Write a Jupyter notebook with the given code cells."""
@@ -156,7 +153,6 @@ def _write_notebook(path: Path, cells: list[dict]) -> Path:
     with open(path, "w") as f:
         json.dump(notebook, f, indent=2)
     return path
-
 
 def _run_notebook_and_wait(page, notebook_path: Path, wait_seconds: int = 20):
     """Open a notebook in JupyterLab, run all cells, and wait for output."""

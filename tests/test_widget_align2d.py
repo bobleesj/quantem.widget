@@ -4,7 +4,6 @@ import torch
 
 from quantem.widget import Align2D
 
-
 # === Basic construction ===
 
 def test_align2d_numpy():
@@ -16,7 +15,6 @@ def test_align2d_numpy():
     assert len(widget.image_a_bytes) > 0
     assert len(widget.image_b_bytes) > 0
 
-
 def test_align2d_torch():
     a = torch.rand(32, 32)
     b = torch.rand(32, 32)
@@ -24,13 +22,11 @@ def test_align2d_torch():
     assert widget.height == 32
     assert widget.width == 32
 
-
 def test_align2d_mixed_numpy_torch():
     a = np.random.rand(32, 32).astype(np.float32)
     b = torch.rand(32, 32)
     widget = Align2D(a, b, auto_align=False)
     assert widget.height == 32
-
 
 # === Padding ===
 
@@ -42,13 +38,11 @@ def test_align2d_default_padding():
     assert widget.height == 100
     assert widget.width == 100
 
-
 def test_align2d_custom_padding():
     a = np.random.rand(100, 100).astype(np.float32)
     b = np.random.rand(100, 100).astype(np.float32)
     widget = Align2D(a, b, padding=0.5, auto_align=False)
     assert widget.padding == pytest.approx(0.5)
-
 
 def test_align2d_zero_padding():
     a = np.random.rand(32, 32).astype(np.float32)
@@ -57,7 +51,6 @@ def test_align2d_zero_padding():
     assert widget.padding == pytest.approx(0.0)
     assert widget.height == 32
     assert widget.width == 32
-
 
 def test_align2d_unpadded_bytes_size():
     """Images are sent unpadded — bytes = height * width * 4."""
@@ -68,14 +61,12 @@ def test_align2d_unpadded_bytes_size():
     assert len(widget.image_a_bytes) == expected_size
     assert len(widget.image_b_bytes) == expected_size
 
-
 def test_align2d_median_values():
     a = np.ones((10, 10), dtype=np.float32) * 5.0
     b = np.ones((10, 10), dtype=np.float32) * 15.0
     widget = Align2D(a, b, padding=0.5, auto_align=False)
     assert widget.median_a == pytest.approx(5.0)
     assert widget.median_b == pytest.approx(15.0)
-
 
 # === Alignment offset ===
 
@@ -86,7 +77,6 @@ def test_align2d_initial_offset_zero():
     assert widget.dx == pytest.approx(0.0)
     assert widget.dy == pytest.approx(0.0)
 
-
 def test_align2d_offset_property():
     a = np.random.rand(32, 32).astype(np.float32)
     b = np.random.rand(32, 32).astype(np.float32)
@@ -94,7 +84,6 @@ def test_align2d_offset_property():
     widget.dx = 5.5
     widget.dy = -3.2
     assert widget.offset == (pytest.approx(5.5), pytest.approx(-3.2))
-
 
 def test_align2d_reset_alignment():
     a = np.random.rand(32, 32).astype(np.float32)
@@ -105,7 +94,6 @@ def test_align2d_reset_alignment():
     widget.reset_alignment()
     assert widget.dx == pytest.approx(0.0)
     assert widget.dy == pytest.approx(0.0)
-
 
 # === Auto-alignment ===
 
@@ -119,13 +107,11 @@ def test_align2d_auto_align_shifted_image():
     assert widget.dx == pytest.approx(5.0, abs=1.5)
     assert widget.dy == pytest.approx(-3.0, abs=1.5)
 
-
 def test_align2d_auto_align_sets_xcorr_zero():
     a = np.random.rand(32, 32).astype(np.float32)
     b = np.random.rand(32, 32).astype(np.float32)
     widget = Align2D(a, b, auto_align=False)
     assert isinstance(widget.xcorr_zero, float)
-
 
 def test_align2d_auto_align_disabled():
     a = np.random.rand(32, 32).astype(np.float32)
@@ -133,7 +119,6 @@ def test_align2d_auto_align_disabled():
     widget = Align2D(a, b, auto_align=False)
     assert widget.dx == pytest.approx(0.0)
     assert widget.dy == pytest.approx(0.0)
-
 
 # === Different sizes ===
 
@@ -144,7 +129,6 @@ def test_align2d_different_sizes():
     assert widget.height == 64
     assert widget.width == 48
 
-
 # === Display options ===
 
 def test_align2d_colormap():
@@ -153,20 +137,17 @@ def test_align2d_colormap():
     widget = Align2D(a, b, cmap="viridis", auto_align=False)
     assert widget.cmap == "viridis"
 
-
 def test_align2d_opacity():
     a = np.random.rand(16, 16).astype(np.float32)
     b = np.random.rand(16, 16).astype(np.float32)
     widget = Align2D(a, b, opacity=0.7, auto_align=False)
     assert widget.opacity == pytest.approx(0.7)
 
-
 def test_align2d_title():
     a = np.random.rand(16, 16).astype(np.float32)
     b = np.random.rand(16, 16).astype(np.float32)
     widget = Align2D(a, b, title="Alignment Test", auto_align=False)
     assert widget.title == "Alignment Test"
-
 
 def test_align2d_labels():
     a = np.random.rand(16, 16).astype(np.float32)
@@ -175,20 +156,17 @@ def test_align2d_labels():
     assert widget.label_a == "0 deg"
     assert widget.label_b == "90 deg"
 
-
 def test_align2d_pixel_size():
     a = np.random.rand(16, 16).astype(np.float32)
     b = np.random.rand(16, 16).astype(np.float32)
     widget = Align2D(a, b, pixel_size=5.0, auto_align=False)
     assert widget.pixel_size == pytest.approx(5.0)
 
-
 def test_align2d_canvas_size():
     a = np.random.rand(16, 16).astype(np.float32)
     b = np.random.rand(16, 16).astype(np.float32)
     widget = Align2D(a, b, canvas_size=600, auto_align=False)
     assert widget.canvas_size == 600
-
 
 # === Edge cases ===
 
@@ -199,20 +177,17 @@ def test_align2d_non_square():
     assert widget.height == 32
     assert widget.width == 64
 
-
 def test_align2d_rejects_3d():
     a = np.random.rand(5, 16, 16).astype(np.float32)
     b = np.random.rand(16, 16).astype(np.float32)
     with pytest.raises(ValueError, match="2D"):
         Align2D(a, b)
 
-
 def test_align2d_rejects_3d_image_b():
     a = np.random.rand(16, 16).astype(np.float32)
     b = np.random.rand(5, 16, 16).astype(np.float32)
     with pytest.raises(ValueError, match="2D"):
         Align2D(a, b)
-
 
 # === Matrix DFT sub-pixel refinement ===
 
@@ -224,7 +199,6 @@ def test_dft_upsample_recovers_integer_peak():
     dx, dy = _cross_correlate_fft(a, b)
     assert abs(dx - 5.0) < 0.02
     assert abs(dy - (-3.0)) < 0.02
-
 
 def test_cross_correlate_fft_subpixel():
     """Matrix DFT should recover sub-pixel shifts with high accuracy."""
@@ -238,13 +212,11 @@ def test_cross_correlate_fft_subpixel():
     assert abs(dx - 1.7) < 0.15, f"dx={dx}, expected ~1.7"
     assert abs(dy - (-2.3)) < 0.15, f"dy={dy}, expected ~-2.3"
 
-
 def test_align2d_ncc_aligned_exists():
     a = np.random.rand(32, 32).astype(np.float32)
     b = np.random.rand(32, 32).astype(np.float32)
     widget = Align2D(a, b, auto_align=True)
     assert isinstance(widget.ncc_aligned, float)
-
 
 # === max_shift ===
 
@@ -253,7 +225,6 @@ def test_align2d_max_shift_default():
     b = np.random.rand(32, 32).astype(np.float32)
     widget = Align2D(a, b, auto_align=False)
     assert widget.max_shift == pytest.approx(0.0)
-
 
 def test_align2d_max_shift_clamps_auto_align():
     """Auto-aligned dx/dy should be clamped within max_shift."""
@@ -264,13 +235,11 @@ def test_align2d_max_shift_clamps_auto_align():
     assert abs(widget.dx) <= 2.0 + 0.01
     assert abs(widget.dy) <= 2.0 + 0.01
 
-
 def test_align2d_max_shift_traitlet():
     a = np.random.rand(16, 16).astype(np.float32)
     b = np.random.rand(16, 16).astype(np.float32)
     widget = Align2D(a, b, max_shift=10.0, auto_align=False)
     assert widget.max_shift == pytest.approx(10.0)
-
 
 # === Rotation ===
 
@@ -280,13 +249,11 @@ def test_align2d_rotation_default():
     widget = Align2D(a, b, auto_align=False)
     assert widget.rotation == pytest.approx(0.0)
 
-
 def test_align2d_rotation_constructor():
     a = np.random.rand(32, 32).astype(np.float32)
     b = np.random.rand(32, 32).astype(np.float32)
     widget = Align2D(a, b, rotation=45.0, auto_align=False)
     assert widget.rotation == pytest.approx(45.0)
-
 
 def test_align2d_rotation_negative():
     a = np.random.rand(32, 32).astype(np.float32)
@@ -294,14 +261,12 @@ def test_align2d_rotation_negative():
     widget = Align2D(a, b, rotation=-90.0, auto_align=False)
     assert widget.rotation == pytest.approx(-90.0)
 
-
 def test_align2d_rotation_mutable():
     a = np.random.rand(32, 32).astype(np.float32)
     b = np.random.rand(32, 32).astype(np.float32)
     widget = Align2D(a, b, auto_align=False)
     widget.rotation = 12.5
     assert widget.rotation == pytest.approx(12.5)
-
 
 def test_align2d_reset_includes_rotation():
     a = np.random.rand(32, 32).astype(np.float32)
@@ -315,7 +280,6 @@ def test_align2d_reset_includes_rotation():
     assert widget.dy == pytest.approx(0.0)
     assert widget.rotation == pytest.approx(0.0)
 
-
 # === Histogram source ===
 
 def test_align2d_hist_source_default():
@@ -324,13 +288,11 @@ def test_align2d_hist_source_default():
     widget = Align2D(a, b, auto_align=False)
     assert widget.hist_source == "a"
 
-
 def test_align2d_hist_source_constructor():
     a = np.random.rand(16, 16).astype(np.float32)
     b = np.random.rand(16, 16).astype(np.float32)
     widget = Align2D(a, b, hist_source="b", auto_align=False)
     assert widget.hist_source == "b"
-
 
 def test_align2d_hist_source_mutable():
     a = np.random.rand(16, 16).astype(np.float32)
@@ -339,9 +301,7 @@ def test_align2d_hist_source_mutable():
     widget.hist_source = "b"
     assert widget.hist_source == "b"
 
-
 # ── State Protocol ────────────────────────────────────────────────────────
-
 
 def test_align2d_state_dict_roundtrip():
     a = np.random.rand(32, 32).astype(np.float32)
@@ -364,7 +324,6 @@ def test_align2d_state_dict_roundtrip():
     assert w2.disabled_tools == ["alignment", "display"]
     assert w2.hidden_tools == ["histogram"]
 
-
 def test_align2d_save_load_file(tmp_path):
     import json
     a = np.random.rand(16, 16).astype(np.float32)
@@ -382,7 +341,6 @@ def test_align2d_save_load_file(tmp_path):
     assert w2.cmap == "plasma"
     assert w2.title == "Saved Align"
 
-
 def test_align2d_summary(capsys):
     a = np.random.rand(32, 32).astype(np.float32)
     b = np.random.rand(32, 32).astype(np.float32)
@@ -394,7 +352,6 @@ def test_align2d_summary(capsys):
     assert "dx=" in out
     assert "dy=" in out
 
-
 def test_align2d_repr():
     a = np.random.rand(32, 32).astype(np.float32)
     b = np.random.rand(32, 32).astype(np.float32)
@@ -404,7 +361,6 @@ def test_align2d_repr():
     assert "32×32" in r
     assert "dx=" in r
     assert "dy=" in r
-
 
 def test_align2d_set_images():
     a = np.random.rand(32, 32).astype(np.float32)
@@ -420,9 +376,7 @@ def test_align2d_set_images():
     assert widget.cmap == "viridis"
     assert len(widget.image_a_bytes) == 64 * 48 * 4
 
-
 # ── Tool visibility / locking ────────────────────────────────────────────
-
 
 @pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
 def test_align2d_tool_lists_default_empty(trait_name):
@@ -430,7 +384,6 @@ def test_align2d_tool_lists_default_empty(trait_name):
     b = np.random.rand(16, 16).astype(np.float32)
     w = Align2D(a, b, auto_align=False)
     assert getattr(w, trait_name) == []
-
 
 @pytest.mark.parametrize(
     ("trait_name", "ctor_kwargs", "expected"),
@@ -449,14 +402,12 @@ def test_align2d_tool_lists_constructor_behavior(trait_name, ctor_kwargs, expect
     w = Align2D(a, b, auto_align=False, **ctor_kwargs)
     assert getattr(w, trait_name) == expected
 
-
 @pytest.mark.parametrize("kwargs", [{"disabled_tools": ["not_real"]}, {"hidden_tools": ["not_real"]}])
 def test_align2d_tool_lists_unknown_raises(kwargs):
     a = np.random.rand(16, 16).astype(np.float32)
     b = np.random.rand(16, 16).astype(np.float32)
     with pytest.raises(ValueError, match="Unknown tool group"):
         Align2D(a, b, auto_align=False, **kwargs)
-
 
 @pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
 def test_align2d_tool_lists_normalizes(trait_name):
@@ -465,7 +416,6 @@ def test_align2d_tool_lists_normalizes(trait_name):
     w = Align2D(a, b, auto_align=False)
     setattr(w, trait_name, ["ALIGNMENT", "alignment", "display"])
     assert getattr(w, trait_name) == ["alignment", "display"]
-
 
 def test_align2d_widget_version_is_set():
     a = np.random.rand(16, 16).astype(np.float32)

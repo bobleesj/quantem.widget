@@ -5,7 +5,6 @@ import numpy as np
 
 from quantem.widget.show4dstem_batch import main
 
-
 def test_show4dstem_batch_cli_single(tmp_path):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     input_path = tmp_path / "sample.npy"
@@ -39,7 +38,6 @@ def test_show4dstem_batch_cli_single(tmp_path):
     assert rows[0]["status"] == "ok"
     assert pathlib.Path(rows[0]["report_path"]).exists()
 
-
 def test_show4dstem_batch_cli_frames_sequence(tmp_path):
     data = np.random.rand(3, 4, 4, 16, 16).astype(np.float32)
     input_path = tmp_path / "time.npy"
@@ -72,7 +70,6 @@ def test_show4dstem_batch_cli_frames_sequence(tmp_path):
     assert payload["n_exports"] == 3
     for row in payload["exports"]:
         assert pathlib.Path(row["path"]).exists()
-
 
 def test_show4dstem_batch_cli_adaptive(tmp_path):
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)

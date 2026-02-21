@@ -6,7 +6,6 @@ import pytest
 
 from quantem.widget import Bin
 
-
 def test_bin_widget_loads_from_4d_array():
     data = np.random.rand(8, 10, 16, 18).astype(np.float32)
     widget = Bin(data)
@@ -19,7 +18,6 @@ def test_bin_widget_loads_from_4d_array():
     assert widget.torch_enabled is True
     assert len(widget.original_bf_bytes) == 8 * 10 * 4
     assert len(widget.binned_adf_bytes) == 8 * 10 * 4
-
 
 def test_bin_widget_updates_shape_and_calibration():
     data = np.random.rand(12, 8, 20, 24).astype(np.float32)
@@ -38,7 +36,6 @@ def test_bin_widget_updates_shape_and_calibration():
     assert widget.binned_k_pixel_size_row == 4.0
     assert widget.binned_k_pixel_size_col == 6.0
 
-
 def test_bin_widget_crop_vs_pad_behavior():
     data = np.ones((9, 9, 9, 9), dtype=np.float32)
     widget = Bin(data, edge_mode="crop")
@@ -51,7 +48,6 @@ def test_bin_widget_crop_vs_pad_behavior():
 
     widget.edge_mode = "pad"
     assert (widget.binned_scan_rows, widget.binned_scan_cols, widget.binned_det_rows, widget.binned_det_cols) == (3, 3, 3, 3)
-
 
 def test_bin_widget_flattened_3d_input_with_scan_shape():
     data = np.zeros((6, 4, 4), dtype=np.float32)
@@ -66,7 +62,6 @@ def test_bin_widget_flattened_3d_input_with_scan_shape():
     out = widget.get_binned_data(copy=False)
     assert out.shape == (1, 1, 4, 4)
 
-
 def test_bin_widget_error_mode_reports_status():
     data = np.random.rand(7, 7, 7, 7).astype(np.float32)
     widget = Bin(data, edge_mode="crop")
@@ -79,12 +74,10 @@ def test_bin_widget_error_mode_reports_status():
     assert "not divisible" in widget.status_message
     assert widget.get_binned_data().shape == original_shape
 
-
 def test_bin_widget_rejects_use_torch_false():
     data = np.random.rand(4, 4, 4, 4).astype(np.float32)
     with pytest.raises(ValueError):
         Bin(data, use_torch=False)
-
 
 def test_bin_widget_rejects_non_torch_state_backend():
     data = np.random.rand(4, 4, 4, 4).astype(np.float32)
@@ -95,7 +88,6 @@ def test_bin_widget_rejects_non_torch_state_backend():
 
     with pytest.raises(ValueError):
         widget.load_state_dict({"torch_enabled": False})
-
 
 def test_bin_widget_exports_image_with_metadata(tmp_path):
     pytest.importorskip("PIL")
@@ -118,7 +110,6 @@ def test_bin_widget_exports_image_with_metadata(tmp_path):
     assert payload["format"] == "png"
     assert payload["export_kind"] == "single_view_image"
     assert payload["render"]["view"] == "grid"
-
 
 def test_bin_widget_exports_zip_bundle(tmp_path):
     pytest.importorskip("PIL")
@@ -157,7 +148,6 @@ def test_bin_widget_exports_zip_bundle(tmp_path):
     assert metadata["format"] == "zip"
     assert metadata["export_kind"] == "multi_panel_bundle"
 
-
 def test_bin_widget_exports_gif(tmp_path):
     pytest.importorskip("PIL")
     pytest.importorskip("matplotlib")
@@ -181,27 +171,22 @@ def test_bin_widget_exports_gif(tmp_path):
     assert payload["format"] == "gif"
     assert payload["export_kind"] == "before_after_animation"
 
-
 def test_bin_widget_version_is_set():
     data = np.random.rand(8, 10, 16, 18).astype(np.float32)
     w = Bin(data)
     assert w.widget_version != "unknown"
 
-
 # --- Title tests ---
-
 
 def test_bin_title_default():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Bin(data)
     assert w.title == ""
 
-
 def test_bin_title_set():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Bin(data, title="My Binning")
     assert w.title == "My Binning"
-
 
 def test_bin_title_in_state_dict():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -212,7 +197,6 @@ def test_bin_title_in_state_dict():
     w2.load_state_dict(sd)
     assert w2.title == "Test Title"
 
-
 def test_bin_title_in_summary(capsys):
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Bin(data, title="Custom Bin Name")
@@ -220,16 +204,13 @@ def test_bin_title_in_summary(capsys):
     out = capsys.readouterr().out
     assert "Custom Bin Name" in out
 
-
 def test_bin_title_in_repr():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Bin(data, title="My Title")
     r = repr(w)
     assert "My Title" in r
 
-
 # --- Display trait sync tests ---
-
 
 def test_bin_state_dict_includes_display_traits():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -246,7 +227,6 @@ def test_bin_state_dict_includes_display_traits():
     assert w2.log_scale is True
     assert w2.show_controls is False
 
-
 def test_bin_set_data_replaces_array():
     data1 = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Bin(data1, cmap="viridis", log_scale=True)
@@ -261,16 +241,13 @@ def test_bin_set_data_replaces_array():
     assert w.cmap == "viridis"
     assert w.log_scale is True
 
-
 # --- Tool lock/hide tests ---
-
 
 @pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
 def test_bin_tool_default_empty(trait_name):
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Bin(data)
     assert getattr(w, trait_name) == []
-
 
 @pytest.mark.parametrize(
     ("trait_name", "kwargs", "expected"),
@@ -288,13 +265,11 @@ def test_bin_tool_lock_hide(trait_name, kwargs, expected):
     w = Bin(data, **kwargs)
     assert getattr(w, trait_name) == expected
 
-
 @pytest.mark.parametrize("kwargs", [{"disabled_tools": ["not_real"]}, {"hidden_tools": ["not_real"]}])
 def test_bin_tool_invalid_key_raises(kwargs):
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     with pytest.raises(ValueError):
         Bin(data, **kwargs)
-
 
 @pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
 def test_bin_tool_trait_assignment_normalizes(trait_name):
@@ -302,7 +277,6 @@ def test_bin_tool_trait_assignment_normalizes(trait_name):
     w = Bin(data)
     setattr(w, trait_name, ["DISPLAY", "display", "binning"])
     assert getattr(w, trait_name) == ["display", "binning"]
-
 
 def test_bin_tool_runtime_api():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -318,7 +292,6 @@ def test_bin_tool_runtime_api():
     assert w.show_tool("binning") is w
     assert "binning" not in w.hidden_tools
 
-
 def test_bin_state_dict_roundtrip_with_tools():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Bin(data, disabled_tools=["display"], hidden_tools=["stats"])
@@ -332,7 +305,6 @@ def test_bin_state_dict_roundtrip_with_tools():
     assert w2.disabled_tools == ["display"]
     assert w2.hidden_tools == ["stats"]
 
-
 def test_bin_summary_includes_locked_hidden(capsys):
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Bin(data, disabled_tools=["display"], hidden_tools=["binning"])
@@ -343,16 +315,13 @@ def test_bin_summary_includes_locked_hidden(capsys):
     assert "Hidden" in output
     assert "binning" in output
 
-
 # --- Detector preview (mean DP) tests ---
-
 
 def test_bin_mean_dp_bytes_populated():
     data = np.random.rand(4, 6, 16, 20).astype(np.float32)
     w = Bin(data)
     assert len(w.original_mean_dp_bytes) == 16 * 20 * 4
     assert len(w.binned_mean_dp_bytes) == 16 * 20 * 4
-
 
 def test_bin_mean_dp_updates_after_binning():
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
@@ -365,7 +334,6 @@ def test_bin_mean_dp_updates_after_binning():
     assert len(w.binned_mean_dp_bytes) == 8 * 8 * 4
     # Original stays at original detector size
     assert len(w.original_mean_dp_bytes) == 16 * 16 * 4
-
 
 def test_bin_binned_center_traits():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)

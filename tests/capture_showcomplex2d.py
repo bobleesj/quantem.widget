@@ -25,7 +25,6 @@ JUPYTER_PORT = 8899
 SCREENSHOT_DIR = Path(__file__).parent / "screenshots" / "showcomplex2d"
 NOTEBOOK_PATH = Path(__file__).parent / "_test_showcomplex2d.ipynb"
 
-
 def create_test_notebook():
     notebook = {
         "cells": [
@@ -74,12 +73,10 @@ def create_test_notebook():
         json.dump(notebook, f, indent=2)
     print(f"Created test notebook: {NOTEBOOK_PATH}")
 
-
 def cleanup_test_notebook():
     if NOTEBOOK_PATH.exists():
         NOTEBOOK_PATH.unlink()
         print(f"Cleaned up: {NOTEBOOK_PATH}")
-
 
 def start_jupyter():
     print("Starting JupyterLab...")
@@ -111,7 +108,6 @@ def start_jupyter():
             pass
     raise RuntimeError("JupyterLab failed to start within 30 seconds")
 
-
 def stop_jupyter(proc):
     print("Stopping JupyterLab...")
     proc.terminate()
@@ -120,11 +116,9 @@ def stop_jupyter(proc):
     except Exception:
         proc.kill()
 
-
 def save(widget, name, out_dir):
     widget.screenshot(path=str(out_dir / f"{name}.png"))
     print(f"  Saved: {name}.png")
-
 
 def dismiss_dialog(page):
     """Dismiss JupyterLab server connection error dialog if present."""
@@ -135,7 +129,6 @@ def dismiss_dialog(page):
             time.sleep(0.3)
     except Exception:
         pass
-
 
 def run_tests(page):
     out_dir = SCREENSHOT_DIR
@@ -243,7 +236,6 @@ def run_tests(page):
 
     print(f"\n  All screenshots saved to: {out_dir}")
 
-
 def main():
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     jupyter_proc = None
@@ -320,7 +312,6 @@ def main():
         if jupyter_proc:
             stop_jupyter(jupyter_proc)
         cleanup_test_notebook()
-
 
 if __name__ == "__main__":
     main()

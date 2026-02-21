@@ -4,7 +4,6 @@ import torch
 
 from quantem.widget import Mark2D
 
-
 def test_mark2d_numpy():
     """Create widget from numpy array."""
     data = np.random.rand(64, 64).astype(np.float32)
@@ -13,7 +12,6 @@ def test_mark2d_numpy():
     assert widget.height == 64
     assert widget.n_images == 1
     assert len(widget.frame_bytes) == 1 * 64 * 64 * 4
-
 
 def test_mark2d_torch():
     """Create widget from PyTorch tensor."""
@@ -24,13 +22,11 @@ def test_mark2d_torch():
     assert widget.n_images == 1
     assert len(widget.frame_bytes) == 1 * 32 * 32 * 4
 
-
 def test_mark2d_scale():
     """Scale parameter is applied."""
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Mark2D(data, scale=2.0)
     assert widget.scale == 2.0
-
 
 def test_mark2d_dot_size():
     """Dot size parameter is applied."""
@@ -38,13 +34,11 @@ def test_mark2d_dot_size():
     widget = Mark2D(data, dot_size=20)
     assert widget.dot_size == 20
 
-
 def test_mark2d_max_points():
     """Max points parameter is applied."""
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Mark2D(data, max_points=5)
     assert widget.max_points == 5
-
 
 def test_mark2d_min_max():
     """Min/max values are computed correctly (per-image lists)."""
@@ -52,7 +46,6 @@ def test_mark2d_min_max():
     widget = Mark2D(data)
     assert widget.img_min[0] == pytest.approx(0.0)
     assert widget.img_max[0] == pytest.approx(15.0)
-
 
 def test_mark2d_constant_image():
     """Constant image doesn't cause division by zero."""
@@ -62,13 +55,11 @@ def test_mark2d_constant_image():
     assert widget.img_max[0] == pytest.approx(42.0)
     assert len(widget.frame_bytes) == 1 * 16 * 16 * 4
 
-
 def test_mark2d_selected_points_init():
     """Selected points start empty."""
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Mark2D(data)
     assert widget.selected_points == []
-
 
 def test_mark2d_set_image():
     """set_image replaces image and resets points."""
@@ -81,14 +72,12 @@ def test_mark2d_set_image():
     assert widget.height == 32
     assert widget.selected_points == []
 
-
 def test_mark2d_float32_bytes():
     """Raw float32 bytes are stored correctly in frame_bytes."""
     data = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
     widget = Mark2D(data)
     f32 = np.frombuffer(widget.frame_bytes, dtype=np.float32)
     np.testing.assert_array_almost_equal(f32, [1.0, 2.0, 3.0, 4.0])
-
 
 def test_mark2d_default_params():
     """Default constructor parameters."""
@@ -103,7 +92,6 @@ def test_mark2d_default_params():
     assert widget.label_size == 0
     assert widget.label_color == ""
 
-
 def test_mark2d_marker_styling():
     """Advanced marker styling parameters."""
     data = np.random.rand(16, 16).astype(np.float32)
@@ -114,7 +102,6 @@ def test_mark2d_marker_styling():
     assert widget.label_size == 14
     assert widget.label_color == "yellow"
 
-
 def test_mark2d_large_image():
     """512x512 image works."""
     data = np.random.rand(512, 512).astype(np.float32)
@@ -123,14 +110,12 @@ def test_mark2d_large_image():
     assert widget.height == 512
     assert len(widget.frame_bytes) == 1 * 512 * 512 * 4
 
-
 def test_mark2d_non_square():
     """Non-square image works."""
     data = np.random.rand(64, 128).astype(np.float32)
     widget = Mark2D(data)
     assert widget.height == 64
     assert widget.width == 128
-
 
 def test_mark2d_negative_values():
     """Image with negative values stores correct min/max."""
@@ -141,7 +126,6 @@ def test_mark2d_negative_values():
     f32 = np.frombuffer(widget.frame_bytes, dtype=np.float32)
     np.testing.assert_array_almost_equal(f32, [-10.0, 0.0, 5.0, 10.0])
 
-
 def test_mark2d_set_image_torch():
     """set_image with torch tensor works."""
     data1 = np.random.rand(16, 16).astype(np.float32)
@@ -151,18 +135,15 @@ def test_mark2d_set_image_torch():
     assert widget.width == 24
     assert widget.height == 24
 
-
 def test_mark2d_frame_bytes_size():
     """frame_bytes has exactly n_images * height * width * 4 bytes."""
     data = np.random.rand(30, 50).astype(np.float32)
     widget = Mark2D(data)
     assert len(widget.frame_bytes) == 1 * 30 * 50 * 4
 
-
 # ============================================================================
 # Gallery mode tests
 # ============================================================================
-
 
 def test_mark2d_gallery_numpy_list():
     """Gallery from list of numpy arrays."""
@@ -175,14 +156,12 @@ def test_mark2d_gallery_numpy_list():
     assert widget.selected_points == [[], [], []]
     assert len(widget.labels) == 3
 
-
 def test_mark2d_gallery_torch_list():
     """Gallery from list of torch tensors."""
     images = [torch.rand(16, 16) for _ in range(3)]
     widget = Mark2D(images)
     assert widget.n_images == 3
     assert widget.selected_points == [[], [], []]
-
 
 def test_mark2d_gallery_3d_array():
     """Gallery from 3D numpy array."""
@@ -191,13 +170,11 @@ def test_mark2d_gallery_3d_array():
     assert widget.n_images == 5
     assert widget.selected_points == [[], [], [], [], []]
 
-
 def test_mark2d_gallery_ncols():
     """ncols parameter is applied."""
     images = [np.random.rand(16, 16).astype(np.float32) for _ in range(6)]
     widget = Mark2D(images, ncols=2)
     assert widget.ncols == 2
-
 
 def test_mark2d_gallery_labels():
     """Custom labels are stored."""
@@ -205,13 +182,11 @@ def test_mark2d_gallery_labels():
     widget = Mark2D(images, labels=["A", "B", "C"])
     assert widget.labels == ["A", "B", "C"]
 
-
 def test_mark2d_gallery_default_labels():
     """Default labels are generated."""
     images = [np.random.rand(16, 16).astype(np.float32) for _ in range(3)]
     widget = Mark2D(images)
     assert widget.labels == ["Image 1", "Image 2", "Image 3"]
-
 
 def test_mark2d_gallery_per_image_minmax():
     """Per-image min/max are computed."""
@@ -223,7 +198,6 @@ def test_mark2d_gallery_per_image_minmax():
     assert widget.img_max[0] == pytest.approx(5.0)
     assert widget.img_max[1] == pytest.approx(10.0)
 
-
 def test_mark2d_gallery_different_sizes():
     """Different-sized images are resized to max dims."""
     img1 = np.random.rand(16, 16).astype(np.float32)
@@ -232,14 +206,12 @@ def test_mark2d_gallery_different_sizes():
     assert widget.height == 32
     assert widget.width == 24
 
-
 def test_mark2d_single_points_shape():
     """Single image mode returns a flat point list."""
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Mark2D(data)
     assert widget.n_images == 1
     assert widget.selected_points == []  # flat, not [[]]
-
 
 def test_mark2d_set_image_to_gallery():
     """set_image can switch from single to gallery."""
@@ -251,13 +223,11 @@ def test_mark2d_set_image_to_gallery():
     assert widget.n_images == 3
     assert widget.selected_points == [[], [], []]
 
-
 def test_mark2d_gallery_selected_idx():
     """selected_idx starts at 0."""
     images = [np.random.rand(16, 16).astype(np.float32) for _ in range(3)]
     widget = Mark2D(images)
     assert widget.selected_idx == 0
-
 
 def test_mark2d_rejects_4d():
     """4D input raises ValueError."""
@@ -265,13 +235,11 @@ def test_mark2d_rejects_4d():
     with pytest.raises(ValueError):
         Mark2D(data)
 
-
 def test_mark2d_gallery_frame_bytes_size():
     """frame_bytes size matches n_images * height * width * 4."""
     images = [np.random.rand(8, 12).astype(np.float32) for _ in range(4)]
     widget = Mark2D(images)
     assert len(widget.frame_bytes) == 4 * 8 * 12 * 4
-
 
 def test_mark2d_gallery_set_image_resets():
     """set_image resets selected_points in gallery mode."""
@@ -281,18 +249,15 @@ def test_mark2d_gallery_set_image_resets():
     widget.set_image(images)
     assert widget.selected_points == [[], [], []]
 
-
 def test_mark2d_repr():
     """repr includes class name."""
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Mark2D(data)
     assert "Mark2D" in repr(widget)
 
-
 # ============================================================================
 # Import/load points tests
 # ============================================================================
-
 
 def test_mark2d_points_tuples():
     """Initialize with list of tuples."""
@@ -304,7 +269,6 @@ def test_mark2d_points_tuples():
     assert "shape" in w.selected_points[0]
     assert "color" in w.selected_points[0]
 
-
 def test_mark2d_points_dicts():
     """Initialize with list of dicts."""
     data = np.random.rand(16, 16).astype(np.float32)
@@ -312,7 +276,6 @@ def test_mark2d_points_dicts():
     w = Mark2D(data, points=pts)
     assert w.selected_points[0]["shape"] == "star"
     assert w.selected_points[0]["color"] == "#ff0000"
-
 
 def test_mark2d_points_numpy():
     """Initialize with numpy array of shape (N, 2)."""
@@ -323,7 +286,6 @@ def test_mark2d_points_numpy():
     assert w.selected_points[0]["row"] == 3
     assert w.selected_points[0]["col"] == 4
 
-
 def test_mark2d_points_gallery():
     """Initialize gallery with per-image points."""
     imgs = [np.random.rand(16, 16).astype(np.float32) for _ in range(2)]
@@ -332,7 +294,6 @@ def test_mark2d_points_gallery():
     assert len(w.selected_points[0]) == 1
     assert len(w.selected_points[1]) == 2
     assert w.selected_points[1][0]["row"] == 3
-
 
 def test_mark2d_points_auto_shape_color():
     """Points without shape/color get auto-assigned cycling values."""
@@ -343,25 +304,21 @@ def test_mark2d_points_auto_shape_color():
     assert shapes[1] == "triangle"
     assert shapes[5] == "circle"  # wraps after 5 shapes
 
-
 def test_mark2d_points_none_default():
     """No points parameter gives empty list."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
     assert w.selected_points == []
 
-
 # ============================================================================
 # ROI API tests
 # ============================================================================
-
 
 def test_mark2d_roi_list_default():
     """roi_list starts empty."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
     assert w.roi_list == []
-
 
 def test_mark2d_add_roi():
     """add_roi convenience method."""
@@ -372,7 +329,6 @@ def test_mark2d_add_roi():
     assert w.roi_list[0]["row"] == 32
     assert w.roi_list[0]["shape"] == "circle"
     assert w.roi_list[0]["radius"] == 15
-
 
 def test_mark2d_add_multiple_rois():
     """Multiple ROIs get unique IDs."""
@@ -385,7 +341,6 @@ def test_mark2d_add_multiple_rois():
     ids = [r["id"] for r in w.roi_list]
     assert len(set(ids)) == 3  # unique IDs
 
-
 def test_mark2d_clear_rois():
     """clear_rois removes all ROI overlays."""
     data = np.random.rand(64, 64).astype(np.float32)
@@ -396,7 +351,6 @@ def test_mark2d_clear_rois():
     w.clear_rois()
     assert w.roi_list == []
 
-
 def test_mark2d_roi_center_defaults_to_last():
     """roi_center() defaults to the most recently added ROI."""
     data = np.random.rand(64, 64).astype(np.float32)
@@ -404,7 +358,6 @@ def test_mark2d_roi_center_defaults_to_last():
     w.add_roi(10, 20, shape="circle", radius=6)
     w.add_roi(30, 40, shape="rectangle", width=18, height=12)
     assert w.roi_center() == (30, 40)
-
 
 def test_mark2d_roi_center_by_index_and_id():
     """roi_center supports index and roi_id selection."""
@@ -416,7 +369,6 @@ def test_mark2d_roi_center_by_index_and_id():
     assert w.roi_center(index=0) == (11, 12)
     assert w.roi_center(roi_id=second_id) == (21, 22)
 
-
 def test_mark2d_roi_radius_shape_behavior():
     """roi_radius returns radius for circle/square and None for rectangle."""
     data = np.random.rand(64, 64).astype(np.float32)
@@ -427,7 +379,6 @@ def test_mark2d_roi_radius_shape_behavior():
     assert w.roi_radius(index=0) == 7
     assert w.roi_radius(index=1) == 9
     assert w.roi_radius(index=2) is None
-
 
 def test_mark2d_roi_center_errors():
     """roi_center fails fast for empty ROIs and invalid selectors."""
@@ -442,7 +393,6 @@ def test_mark2d_roi_center_errors():
     with pytest.raises(ValueError, match="not found"):
         w.roi_center(roi_id=9999)
 
-
 def test_mark2d_clear_points():
     """clear_points removes all placed points."""
     data = np.random.rand(16, 16).astype(np.float32)
@@ -450,7 +400,6 @@ def test_mark2d_clear_points():
     assert len(w.selected_points) == 2
     w.clear_points()
     assert w.selected_points == []
-
 
 def test_mark2d_clear_points_gallery():
     """clear_points in gallery mode resets per-image lists."""
@@ -460,11 +409,9 @@ def test_mark2d_clear_points_gallery():
     w.clear_points()
     assert w.selected_points == [[], [], []]
 
-
 # ============================================================================
 # State portability tests
 # ============================================================================
-
 
 def test_mark2d_marker_shape_default():
     """Default marker_shape is circle."""
@@ -472,13 +419,11 @@ def test_mark2d_marker_shape_default():
     w = Mark2D(data)
     assert w.marker_shape == "circle"
 
-
 def test_mark2d_marker_shape_custom():
     """marker_shape can be set via constructor."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data, marker_shape="star")
     assert w.marker_shape == "star"
-
 
 def test_mark2d_marker_color_default():
     """Default marker_color is red."""
@@ -486,13 +431,11 @@ def test_mark2d_marker_color_default():
     w = Mark2D(data)
     assert w.marker_color == "#f44336"
 
-
 def test_mark2d_marker_color_custom():
     """marker_color can be set via constructor."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data, marker_color="#00ff00")
     assert w.marker_color == "#00ff00"
-
 
 def test_mark2d_snap_defaults():
     """Snap is disabled by default with radius 5."""
@@ -501,14 +444,12 @@ def test_mark2d_snap_defaults():
     assert w.snap_enabled is False
     assert w.snap_radius == 5
 
-
 def test_mark2d_snap_custom():
     """Snap can be enabled and configured via constructor."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data, snap_enabled=True, snap_radius=10)
     assert w.snap_enabled is True
     assert w.snap_radius == 10
-
 
 def test_mark2d_state_portability_all():
     """All portable state can be set at construction for state sharing."""
@@ -530,13 +471,11 @@ def test_mark2d_state_portability_all():
     assert w.snap_radius == 8
     assert len(w.roi_list) == 1
 
-
 def test_mark2d_cmap_default():
     """Colormap defaults to gray."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
     assert w.cmap == "gray"
-
 
 def test_mark2d_cmap_custom():
     """Colormap can be set via constructor."""
@@ -546,13 +485,11 @@ def test_mark2d_cmap_custom():
     w.cmap = "plasma"
     assert w.cmap == "plasma"
 
-
 def test_mark2d_auto_contrast_default():
     """Auto-contrast defaults to True."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
     assert w.auto_contrast is True
-
 
 def test_mark2d_auto_contrast_custom():
     """Auto-contrast can be disabled."""
@@ -560,13 +497,11 @@ def test_mark2d_auto_contrast_custom():
     w = Mark2D(data, auto_contrast=False)
     assert w.auto_contrast is False
 
-
 def test_mark2d_log_scale_default():
     """Log scale defaults to False."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
     assert w.log_scale is False
-
 
 def test_mark2d_log_scale_custom():
     """Log scale can be enabled."""
@@ -574,20 +509,17 @@ def test_mark2d_log_scale_custom():
     w = Mark2D(data, log_scale=True)
     assert w.log_scale is True
 
-
 def test_mark2d_show_fft_default():
     """FFT display defaults to False."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
     assert w.show_fft is False
 
-
 def test_mark2d_show_fft_custom():
     """FFT display can be enabled."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data, show_fft=True)
     assert w.show_fft is True
-
 
 def test_mark2d_imaging_traits_portability():
     """All imaging traits (cmap, contrast, fft) round-trip correctly."""
@@ -598,11 +530,9 @@ def test_mark2d_imaging_traits_portability():
     assert w.log_scale is True
     assert w.show_fft is True
 
-
 # ============================================================================
 # Title and show_stats tests
 # ============================================================================
-
 
 def test_mark2d_title_default():
     """Default title is empty string."""
@@ -610,13 +540,11 @@ def test_mark2d_title_default():
     w = Mark2D(data)
     assert w.title == ""
 
-
 def test_mark2d_title_custom():
     """Title can be set via constructor."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data, title="HAADF-STEM")
     assert w.title == "HAADF-STEM"
-
 
 def test_mark2d_title_in_repr():
     """Custom title appears in repr."""
@@ -624,13 +552,11 @@ def test_mark2d_title_in_repr():
     w = Mark2D(data, title="My Image")
     assert "My Image" in repr(w)
 
-
 def test_mark2d_title_default_repr():
     """Default repr shows Mark2D when title is empty."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
     assert repr(w).startswith("Mark2D(")
-
 
 def test_mark2d_show_stats_default():
     """show_stats defaults to True."""
@@ -638,13 +564,11 @@ def test_mark2d_show_stats_default():
     w = Mark2D(data)
     assert w.show_stats is True
 
-
 def test_mark2d_show_stats_custom():
     """show_stats can be disabled."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data, show_stats=False)
     assert w.show_stats is False
-
 
 def test_mark2d_points_as_array():
     """points_as_array returns (N, 2) array of [row, col]."""
@@ -657,14 +581,12 @@ def test_mark2d_points_as_array():
     assert arr[1, 0] == 30
     assert arr[1, 1] == 40
 
-
 def test_mark2d_points_as_array_empty():
     """points_as_array returns empty (0, 2) array when no points."""
     data = np.random.rand(64, 64).astype(np.float32)
     w = Mark2D(data)
     arr = w.points_as_array()
     assert arr.shape == (0, 2)
-
 
 def test_mark2d_points_as_array_gallery():
     """points_as_array returns list of arrays in gallery mode."""
@@ -677,7 +599,6 @@ def test_mark2d_points_as_array_gallery():
     assert result[1].shape == (2, 2)
     assert result[2].shape == (0, 2)
 
-
 def test_mark2d_points_as_dict():
     """points_as_dict returns list of {row, col} dicts."""
     data = np.random.rand(64, 64).astype(np.float32)
@@ -686,7 +607,6 @@ def test_mark2d_points_as_dict():
     assert len(result) == 2
     assert result[0] == {"row": 10, "col": 20}
     assert result[1] == {"row": 30, "col": 40}
-
 
 def test_mark2d_points_as_dict_gallery():
     """points_as_dict returns list of lists in gallery mode."""
@@ -698,7 +618,6 @@ def test_mark2d_points_as_dict_gallery():
     assert result[0] == [{"row": 5, "col": 10}]
     assert result[1] == []
 
-
 def test_mark2d_set_profile():
     """set_profile sets profile_line trait."""
     data = np.random.rand(64, 64).astype(np.float32)
@@ -708,7 +627,6 @@ def test_mark2d_set_profile():
     assert w.profile_line[0] == {"row": 10.0, "col": 20.0}
     assert w.profile_line[1] == {"row": 50.0, "col": 60.0}
 
-
 def test_mark2d_clear_profile():
     """clear_profile empties profile_line."""
     data = np.random.rand(64, 64).astype(np.float32)
@@ -717,7 +635,6 @@ def test_mark2d_clear_profile():
     w.clear_profile()
     assert w.profile_line == []
 
-
 def test_mark2d_profile_property():
     """profile property returns list of (row, col) tuples."""
     data = np.random.rand(64, 64).astype(np.float32)
@@ -725,7 +642,6 @@ def test_mark2d_profile_property():
     assert w.profile == []
     w.set_profile((10, 20), (50, 60))
     assert w.profile == [(10.0, 20.0), (50.0, 60.0)]
-
 
 def test_mark2d_profile_values():
     """profile_values samples along the line."""
@@ -737,13 +653,11 @@ def test_mark2d_profile_values():
     assert len(vals) > 2
     assert np.allclose(vals, 5.0)
 
-
 def test_mark2d_profile_values_none():
     """profile_values returns None when no profile."""
     data = np.random.rand(64, 64).astype(np.float32)
     w = Mark2D(data)
     assert w.profile_values is None
-
 
 def test_mark2d_profile_distance():
     """profile_distance returns distance in pixels or calibrated units."""
@@ -753,7 +667,6 @@ def test_mark2d_profile_distance():
     w.set_profile((0, 0), (30, 40))
     assert w.profile_distance == pytest.approx(50.0)
 
-
 def test_mark2d_profile_distance_calibrated():
     """profile_distance uses pixel_size when set."""
     data = np.random.rand(64, 64).astype(np.float32)
@@ -761,11 +674,9 @@ def test_mark2d_profile_distance_calibrated():
     w.set_profile((0, 0), (30, 40))
     assert w.profile_distance == pytest.approx(100.0)
 
-
 # ============================================================================
 # New trait tests (image_width_px, show_controls, percentile, stats)
 # ============================================================================
-
 
 def test_mark2d_image_width_px_default():
     """image_width_px defaults to 0 (auto-size)."""
@@ -773,13 +684,11 @@ def test_mark2d_image_width_px_default():
     w = Mark2D(data)
     assert w.image_width_px == 0
 
-
 def test_mark2d_image_width_px_custom():
     """image_width_px can be set via constructor."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data, image_width_px=400)
     assert w.image_width_px == 400
-
 
 def test_mark2d_show_controls_default():
     """show_controls defaults to True."""
@@ -787,13 +696,11 @@ def test_mark2d_show_controls_default():
     w = Mark2D(data)
     assert w.show_controls is True
 
-
 def test_mark2d_show_controls_custom():
     """show_controls can be disabled."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data, show_controls=False)
     assert w.show_controls is False
-
 
 @pytest.mark.parametrize(
     "trait_name",
@@ -804,7 +711,6 @@ def test_mark2d_tool_lists_default_empty(trait_name):
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
     assert getattr(w, trait_name) == []
-
 
 @pytest.mark.parametrize(
     ("trait_name", "ctor_kwargs", "expected"),
@@ -825,7 +731,6 @@ def test_mark2d_tool_lists_constructor_behavior(trait_name, ctor_kwargs, expecte
     w = Mark2D(data, **ctor_kwargs)
     assert getattr(w, trait_name) == expected
 
-
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -839,7 +744,6 @@ def test_mark2d_tool_lists_unknown_value_raises(kwargs):
     with pytest.raises(ValueError, match="Unknown tool group"):
         Mark2D(data, **kwargs)
 
-
 @pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
 def test_mark2d_tool_lists_trait_assignment_normalizes(trait_name):
     """Trait assignment normalizes casing and removes duplicates."""
@@ -847,7 +751,6 @@ def test_mark2d_tool_lists_trait_assignment_normalizes(trait_name):
     w = Mark2D(data)
     setattr(w, trait_name, ["ROI", "display", "roi"])
     assert getattr(w, trait_name) == ["roi", "display"]
-
 
 @pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
 def test_mark2d_tool_lists_alias_rejected(trait_name):
@@ -857,7 +760,6 @@ def test_mark2d_tool_lists_alias_rejected(trait_name):
     with pytest.raises(ValueError, match="Unknown tool group"):
         setattr(w, trait_name, ["rois"])
 
-
 def test_mark2d_percentile_defaults():
     """Percentile defaults are 2.0 and 98.0."""
     data = np.random.rand(16, 16).astype(np.float32)
@@ -865,14 +767,12 @@ def test_mark2d_percentile_defaults():
     assert w.percentile_low == pytest.approx(2.0)
     assert w.percentile_high == pytest.approx(98.0)
 
-
 def test_mark2d_percentile_custom():
     """Percentile can be set via constructor."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data, percentile_low=5.0, percentile_high=95.0)
     assert w.percentile_low == pytest.approx(5.0)
     assert w.percentile_high == pytest.approx(95.0)
-
 
 def test_mark2d_stats_computed():
     """Per-image stats are computed in _set_data."""
@@ -887,7 +787,6 @@ def test_mark2d_stats_computed():
     assert w.stats_max[0] == pytest.approx(4.0)
     assert w.stats_std[0] == pytest.approx(np.array([1.0, 2.0, 3.0, 4.0]).std())
 
-
 def test_mark2d_stats_gallery():
     """Per-image stats for gallery mode."""
     img1 = np.ones((8, 8), dtype=np.float32) * 5.0
@@ -899,7 +798,6 @@ def test_mark2d_stats_gallery():
     assert w.stats_std[0] == pytest.approx(0.0)
     assert w.stats_std[1] == pytest.approx(0.0)
 
-
 def test_mark2d_stats_updated_on_set_image():
     """Stats are recomputed when set_image is called."""
     data1 = np.ones((8, 8), dtype=np.float32) * 5.0
@@ -908,7 +806,6 @@ def test_mark2d_stats_updated_on_set_image():
     data2 = np.ones((8, 8), dtype=np.float32) * 20.0
     w.set_image(data2)
     assert w.stats_mean[0] == pytest.approx(20.0)
-
 
 def test_mark2d_dataset_reextraction_on_set_image():
     """set_image with a Dataset re-extracts metadata."""
@@ -930,7 +827,6 @@ def test_mark2d_dataset_reextraction_on_set_image():
     assert w.title == "HAADF"
     assert w.pixel_size == pytest.approx(0.5)
 
-
 def test_mark2d_explicit_overrides_dataset():
     """Explicit title/pixel_size override Dataset metadata."""
     class FakeDataset:
@@ -946,14 +842,12 @@ def test_mark2d_explicit_overrides_dataset():
     assert w.title == "Custom"
     assert w.pixel_size == pytest.approx(1.0)
 
-
 def test_mark2d_repr_gallery_idx():
     """Gallery repr includes idx=N."""
     images = [np.random.rand(16, 16).astype(np.float32) for _ in range(3)]
     w = Mark2D(images)
     r = repr(w)
     assert "idx=0" in r
-
 
 def test_mark2d_summary_roi_area():
     """summary() includes calibrated ROI area."""
@@ -970,11 +864,9 @@ def test_mark2d_summary_roi_area():
     output = captured.getvalue()
     assert "area=" in output
 
-
 # ============================================================================
 # State persistence tests (state_dict / load_state_dict / state param)
 # ============================================================================
-
 
 def test_mark2d_state_dict_keys():
     """state_dict returns all expected keys."""
@@ -993,7 +885,6 @@ def test_mark2d_state_dict_keys():
         "pixel_size", "scale", "image_width_px",
     }
     assert set(sd.keys()) == expected
-
 
 def test_mark2d_state_dict_roundtrip():
     """state_dict captures current state and restores via state param."""
@@ -1026,7 +917,6 @@ def test_mark2d_state_dict_roundtrip():
     assert len(w2.roi_list) == 1
     assert len(w2.profile_line) == 2
 
-
 def test_mark2d_state_dict_with_points():
     """state_dict preserves selected_points."""
     data = np.random.rand(32, 32).astype(np.float32)
@@ -1037,7 +927,6 @@ def test_mark2d_state_dict_with_points():
     assert len(w2.selected_points) == 2
     assert w2.selected_points[0]["row"] == 5
     assert w2.selected_points[0]["col"] == 10
-
 
 def test_mark2d_load_state_dict():
     """load_state_dict restores state on existing widget."""
@@ -1052,7 +941,6 @@ def test_mark2d_load_state_dict():
     assert w2.cmap == "plasma"
     assert w2.dot_size == 20
 
-
 def test_mark2d_load_state_dict_ignores_unknown():
     """load_state_dict silently skips unknown keys."""
     data = np.random.rand(16, 16).astype(np.float32)
@@ -1060,14 +948,12 @@ def test_mark2d_load_state_dict_ignores_unknown():
     w.load_state_dict({"cmap": "inferno", "nonexistent_key": 42})
     assert w.cmap == "inferno"
 
-
 def test_mark2d_load_state_dict_compat_colormap():
     """load_state_dict maps legacy 'colormap' key to 'cmap'."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
     w.load_state_dict({"colormap": "viridis"})
     assert w.cmap == "viridis"
-
 
 def test_mark2d_load_state_dict_compat_roi_keys():
     """load_state_dict migrates legacy ROI dict keys (mode/rectW/rectH)."""
@@ -1085,7 +971,6 @@ def test_mark2d_load_state_dict_compat_roi_keys():
     assert "rectW" not in w.roi_list[0]
     assert "rectH" not in w.roi_list[0]
 
-
 def test_mark2d_state_param_overrides_defaults():
     """state param overrides default trait values but explicit params win."""
     data = np.random.rand(16, 16).astype(np.float32)
@@ -1095,7 +980,6 @@ def test_mark2d_state_param_overrides_defaults():
     assert w.cmap == "viridis"
     assert w.title == "From State"
     assert w.dot_size == 15
-
 
 def test_mark2d_save_and_load_file(tmp_path):
     """save() writes JSON, state param loads from file path."""
@@ -1114,7 +998,6 @@ def test_mark2d_save_and_load_file(tmp_path):
     assert w2.pixel_size == pytest.approx(1.5)
     assert len(w2.roi_list) == 1
 
-
 def test_mark2d_save_json_readable(tmp_path):
     """Saved file is valid, human-readable JSON."""
     import json
@@ -1130,7 +1013,6 @@ def test_mark2d_save_json_readable(tmp_path):
     assert content["state"]["cmap"] == "plasma"
     assert len(content["state"]["selected_points"]) == 1
     assert content["state"]["selected_points"][0]["row"] == 5
-
 
 def test_mark2d_save_load_roundtrip_points(tmp_path):
     """Points survive save/load roundtrip via JSON file."""
@@ -1148,7 +1030,6 @@ def test_mark2d_save_load_roundtrip_points(tmp_path):
     assert w2.selected_points[2]["row"] == 30
     assert len(w2.profile_line) == 2
 
-
 def test_mark2d_state_pathlib_path(tmp_path):
     """state param accepts pathlib.Path as well as str."""
     data = np.random.rand(16, 16).astype(np.float32)
@@ -1159,9 +1040,7 @@ def test_mark2d_state_pathlib_path(tmp_path):
     w2 = Mark2D(data, state=path)  # pathlib.Path, not str
     assert w2.cmap == "inferno"
 
-
 # ── save_image ───────────────────────────────────────────────────────────
-
 
 def test_mark2d_save_image_png(tmp_path):
     data = np.random.rand(32, 32).astype(np.float32)
@@ -1173,14 +1052,12 @@ def test_mark2d_save_image_png(tmp_path):
     img = Image.open(out)
     assert img.size == (32, 32)
 
-
 def test_mark2d_save_image_with_markers(tmp_path):
     data = np.random.rand(32, 32).astype(np.float32)
     w = Mark2D(data)
     w.selected_points = [{"row": 10, "col": 15}, {"row": 20, "col": 25}]
     out = w.save_image(tmp_path / "marked.png", include_markers=True)
     assert out.exists()
-
 
 def test_mark2d_save_image_no_markers(tmp_path):
     data = np.random.rand(32, 32).astype(np.float32)
@@ -1191,20 +1068,17 @@ def test_mark2d_save_image_no_markers(tmp_path):
     # With markers should be different from without
     assert out_with.stat().st_size != out_without.stat().st_size
 
-
 def test_mark2d_save_image_pdf(tmp_path):
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
     out = w.save_image(tmp_path / "out.pdf")
     assert out.exists()
 
-
 def test_mark2d_save_image_bad_format(tmp_path):
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
     with pytest.raises(ValueError, match="Unsupported format"):
         w.save_image(tmp_path / "out.bmp")
-
 
 def test_mark2d_widget_version_is_set():
     data = np.random.rand(16, 16).astype(np.float32)

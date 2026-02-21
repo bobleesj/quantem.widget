@@ -5,7 +5,6 @@ import pytest
 import quantem.widget.bin_batch as bin_batch
 from quantem.widget.bin_batch import BinPreset, apply_preset_to_array, load_preset, run_batch, save_preset
 
-
 def test_apply_preset_to_4d_array_shape_and_values():
     data = np.ones((4, 4, 8, 8), dtype=np.float32)
     preset = BinPreset(scan_bin_row=2, scan_bin_col=2, det_bin_row=4, det_bin_col=2, bin_mode="sum", edge_mode="crop")
@@ -16,7 +15,6 @@ def test_apply_preset_to_4d_array_shape_and_values():
     # Each block sums 2*2*4*2 = 32 ones
     assert np.allclose(out, 32.0)
 
-
 def test_apply_preset_to_5d_array_keeps_time_axis_first():
     data = np.ones((3, 4, 4, 8, 8), dtype=np.float32)
     preset = BinPreset(scan_bin_row=2, scan_bin_col=2, det_bin_row=2, det_bin_col=2, bin_mode="mean", edge_mode="crop", time_axis=0)
@@ -26,18 +24,15 @@ def test_apply_preset_to_5d_array_keeps_time_axis_first():
     assert out.shape == (3, 2, 2, 4, 4)
     assert np.allclose(out, 1.0)
 
-
 def test_preset_rejects_non_torch_backend():
     with pytest.raises(ValueError):
         BinPreset(backend="numpy").validate()
-
 
 def test_apply_preset_rejects_non_torch_backend_without_manual_validate():
     data = np.ones((4, 4, 4, 4), dtype=np.float32)
     preset = BinPreset(backend="numpy")
     with pytest.raises(ValueError):
         apply_preset_to_array(data, preset)
-
 
 def test_apply_preset_torch_backend_cpu():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -52,7 +47,6 @@ def test_apply_preset_torch_backend_cpu():
     out = apply_preset_to_array(data, preset)
     assert out.shape == (2, 2, 4, 4)
 
-
 def test_preset_save_and_load_roundtrip(tmp_path):
     preset = BinPreset(scan_bin_row=2, scan_bin_col=3, det_bin_row=4, det_bin_col=5, bin_mode="mean", edge_mode="pad", scan_shape=(8, 8), npz_key="arr")
 
@@ -61,7 +55,6 @@ def test_preset_save_and_load_roundtrip(tmp_path):
     loaded = load_preset(path)
 
     assert loaded == preset
-
 
 def test_load_preset_from_versioned_widget_envelope(tmp_path):
     preset = BinPreset(scan_bin_row=2, scan_bin_col=3, det_bin_row=4, det_bin_col=5, bin_mode="mean", edge_mode="pad")
@@ -76,7 +69,6 @@ def test_load_preset_from_versioned_widget_envelope(tmp_path):
 
     loaded = load_preset(path)
     assert loaded == preset
-
 
 def test_run_batch_over_folder_npy(tmp_path):
     input_dir = tmp_path / "in"
@@ -105,7 +97,6 @@ def test_run_batch_over_folder_npy(tmp_path):
     lines = [json.loads(line) for line in manifest.read_text().splitlines() if line.strip()]
     assert len(lines) == 2
 
-
 def test_run_batch_over_folder_npz(tmp_path):
     input_dir = tmp_path / "in_npz"
     output_dir = tmp_path / "out_npz"
@@ -123,7 +114,6 @@ def test_run_batch_over_folder_npz(tmp_path):
     out = np.load(output_dir / "sample_binned.npz")
     assert "data" in out.files
     assert out["data"].shape == (2, 2, 2, 2)
-
 
 def test_run_batch_retries_and_progress_fields(tmp_path, monkeypatch):
     input_dir = tmp_path / "in_retry"
@@ -169,7 +159,6 @@ def test_run_batch_retries_and_progress_fields(tmp_path, monkeypatch):
     assert first_row["retries_used"] == 1
     assert seen == [(1, "ok"), (2, "ok")]
 
-
 def test_run_batch_fail_fast_stops_queue(tmp_path, monkeypatch):
     input_dir = tmp_path / "in_failfast"
     output_dir = tmp_path / "out_failfast"
@@ -199,9 +188,7 @@ def test_run_batch_fail_fast_stops_queue(tmp_path, monkeypatch):
     assert results[0]["status"] == "error"
     assert results[0]["job_index"] == 1
 
-
 # --- HDF5/EMD support tests ---
-
 
 def test_process_file_h5_4d(tmp_path):
     h5py = pytest.importorskip("h5py")
@@ -219,7 +206,6 @@ def test_process_file_h5_4d(tmp_path):
     assert result["status"] == "ok"
     out = np.load(output_path)
     assert out.shape == (2, 3, 4, 5)
-
 
 def test_process_file_h5_explicit_dataset_path(tmp_path):
     h5py = pytest.importorskip("h5py")
@@ -242,7 +228,6 @@ def test_process_file_h5_explicit_dataset_path(tmp_path):
     assert out.shape == (2, 2, 4, 4)
     assert np.allclose(out, 1.0)
 
-
 def test_process_file_emd_extension(tmp_path):
     h5py = pytest.importorskip("h5py")
 
@@ -259,7 +244,6 @@ def test_process_file_emd_extension(tmp_path):
     assert result["status"] == "ok"
     out = np.load(output_path)
     assert out.shape == (2, 2, 4, 4)
-
 
 def test_run_batch_h5_folder(tmp_path):
     h5py = pytest.importorskip("h5py")
@@ -281,7 +265,6 @@ def test_run_batch_h5_folder(tmp_path):
     assert (output_dir / "a_binned.npy").exists()
     assert (output_dir / "b_binned.npy").exists()
 
-
 def test_preset_h5_dataset_path_roundtrip(tmp_path):
     preset = BinPreset(
         scan_bin_row=2, det_bin_row=4, h5_dataset_path="experiment/stem_data",
@@ -291,7 +274,6 @@ def test_preset_h5_dataset_path_roundtrip(tmp_path):
     loaded = load_preset(path)
     assert loaded.h5_dataset_path == "experiment/stem_data"
     assert loaded == preset
-
 
 def test_find_best_h5_dataset_prefers_4d(tmp_path):
     h5py = pytest.importorskip("h5py")

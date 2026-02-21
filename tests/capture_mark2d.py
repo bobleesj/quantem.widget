@@ -26,7 +26,6 @@ NOTEBOOK_PATH = Path(__file__).parent / "_test_mark2d_features.ipynb"
 # Feature names for captured widgets
 FEATURE_NAMES = ["default", "preloaded_points", "viridis_log", "gallery", "diffraction_snap"]
 
-
 def create_test_notebook():
     """Generate test notebook with specific feature configurations."""
     notebook = {
@@ -141,13 +140,11 @@ def create_test_notebook():
         json.dump(notebook, f, indent=2)
     print(f"Created test notebook: {NOTEBOOK_PATH}")
 
-
 def cleanup_test_notebook():
     """Remove generated test notebook."""
     if NOTEBOOK_PATH.exists():
         NOTEBOOK_PATH.unlink()
         print(f"Cleaned up: {NOTEBOOK_PATH}")
-
 
 def start_jupyter():
     """Start JupyterLab server in the background."""
@@ -178,7 +175,6 @@ def start_jupyter():
             pass
     raise RuntimeError("JupyterLab failed to start within 30 seconds")
 
-
 def stop_jupyter(proc):
     """Stop JupyterLab server."""
     print("Stopping JupyterLab...")
@@ -187,7 +183,6 @@ def stop_jupyter(proc):
         proc.wait(timeout=10)
     except:
         proc.kill()
-
 
 def set_theme(page, theme: str):
     """Set JupyterLab theme via JavaScript."""
@@ -207,7 +202,6 @@ def set_theme(page, theme: str):
             document.body.classList.add('jp-theme-light');
         }""")
     time.sleep(1)
-
 
 def capture_widgets(page, theme: str):
     """Capture screenshots of widgets."""
@@ -234,7 +228,6 @@ def capture_widgets(page, theme: str):
             print(f"  Saved: {filename}")
         except Exception as e:
             print(f"  Warning: Could not capture {FEATURE_NAMES[i]}: {e}")
-
 
 def main():
     """Main entry point."""
@@ -276,7 +269,6 @@ def main():
         if jupyter_proc:
             stop_jupyter(jupyter_proc)
         cleanup_test_notebook()
-
 
 if __name__ == "__main__":
     main()

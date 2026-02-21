@@ -29,7 +29,6 @@ NOTEBOOK_PATH = Path(__file__).parent / "_test_align2d_features.ipynb"
 
 FEATURE_NAMES = ["default", "viridis_cmap"]
 
-
 def create_test_notebook():
     notebook = {
         "cells": [
@@ -110,12 +109,10 @@ def create_test_notebook():
         json.dump(notebook, f, indent=2)
     print(f"Created test notebook: {NOTEBOOK_PATH}")
 
-
 def cleanup_test_notebook():
     if NOTEBOOK_PATH.exists():
         NOTEBOOK_PATH.unlink()
         print(f"Cleaned up: {NOTEBOOK_PATH}")
-
 
 def start_jupyter():
     print("Starting JupyterLab...")
@@ -151,7 +148,6 @@ def start_jupyter():
             pass
     raise RuntimeError("JupyterLab failed to start within 30 seconds")
 
-
 def stop_jupyter(proc):
     print("Stopping JupyterLab...")
     proc.terminate()
@@ -159,7 +155,6 @@ def stop_jupyter(proc):
         proc.wait(timeout=10)
     except:
         proc.kill()
-
 
 def set_theme(page, theme: str):
     print(f"  Setting {theme} theme...")
@@ -180,7 +175,6 @@ def set_theme(page, theme: str):
             localStorage.setItem('@jupyterlab/apputils-extension:themes', JSON.stringify({theme: 'JupyterLab Light'}));
         }""")
     time.sleep(1)
-
 
 def capture_widgets(page, theme: str):
     print(f"Capturing {theme} theme screenshots...")
@@ -206,7 +200,6 @@ def capture_widgets(page, theme: str):
             print(f"  Saved: {filename}")
         except Exception as e:
             print(f"  Warning: Could not capture {FEATURE_NAMES[i]}: {e}")
-
 
 def main():
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -258,7 +251,6 @@ def main():
         if jupyter_proc:
             stop_jupyter(jupyter_proc)
         cleanup_test_notebook()
-
 
 if __name__ == "__main__":
     main()

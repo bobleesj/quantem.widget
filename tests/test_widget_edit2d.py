@@ -4,7 +4,6 @@ import torch
 
 from quantem.widget import Edit2D
 
-
 def test_edit2d_single_numpy():
     data = np.random.rand(32, 32).astype(np.float32)
     widget = Edit2D(data)
@@ -13,14 +12,12 @@ def test_edit2d_single_numpy():
     assert widget.width == 32
     assert len(widget.frame_bytes) > 0
 
-
 def test_edit2d_single_torch():
     data = torch.rand(32, 32)
     widget = Edit2D(data)
     assert widget.n_images == 1
     assert widget.height == 32
     assert widget.width == 32
-
 
 def test_edit2d_default_bounds():
     data = np.random.rand(64, 48).astype(np.float32)
@@ -30,7 +27,6 @@ def test_edit2d_default_bounds():
     assert widget.crop_bottom == 64
     assert widget.crop_right == 48
 
-
 def test_edit2d_custom_bounds():
     data = np.random.rand(64, 48).astype(np.float32)
     widget = Edit2D(data, bounds=(10, 5, 50, 40))
@@ -39,7 +35,6 @@ def test_edit2d_custom_bounds():
     assert widget.crop_bottom == 50
     assert widget.crop_right == 40
 
-
 def test_edit2d_result_crop():
     data = np.arange(100, dtype=np.float32).reshape(10, 10)
     widget = Edit2D(data, bounds=(2, 3, 7, 8))
@@ -47,14 +42,12 @@ def test_edit2d_result_crop():
     assert result.shape == (5, 5)
     np.testing.assert_array_equal(result, data[2:7, 3:8])
 
-
 def test_edit2d_result_full_image():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data)
     result = widget.result
     assert result.shape == (16, 16)
     np.testing.assert_array_equal(result, data)
-
 
 def test_edit2d_result_pad():
     data = np.ones((10, 10), dtype=np.float32) * 5.0
@@ -69,7 +62,6 @@ def test_edit2d_result_pad():
     assert result[2, 3] == 5.0
     assert result[11, 12] == 5.0
 
-
 def test_edit2d_result_crop_and_pad():
     data = np.ones((10, 10), dtype=np.float32) * 3.0
     widget = Edit2D(data, bounds=(-2, 2, 8, 12), fill_value=-1.0)
@@ -82,14 +74,12 @@ def test_edit2d_result_crop_and_pad():
     # Right side padding (col >= 10 in image space)
     assert result[2, 8] == -1.0
 
-
 def test_edit2d_result_pure_pad():
     data = np.ones((10, 10), dtype=np.float32)
     widget = Edit2D(data, bounds=(-20, -20, -10, -10), fill_value=7.0)
     result = widget.result
     assert result.shape == (10, 10)
     assert np.all(result == 7.0)
-
 
 def test_edit2d_fill_value():
     data = np.zeros((10, 10), dtype=np.float32)
@@ -98,12 +88,10 @@ def test_edit2d_fill_value():
     assert result[0, 0] == 42.0
     assert result[1, 1] == 0.0
 
-
 def test_edit2d_crop_bounds_property():
     data = np.random.rand(32, 32).astype(np.float32)
     widget = Edit2D(data, bounds=(5, 10, 25, 30))
     assert widget.crop_bounds == (5, 10, 25, 30)
-
 
 def test_edit2d_crop_bounds_setter():
     data = np.random.rand(32, 32).astype(np.float32)
@@ -114,19 +102,16 @@ def test_edit2d_crop_bounds_setter():
     assert widget.crop_bottom == 3
     assert widget.crop_right == 4
 
-
 def test_edit2d_crop_size():
     data = np.random.rand(32, 32).astype(np.float32)
     widget = Edit2D(data, bounds=(5, 10, 25, 30))
     assert widget.crop_size == (20, 20)
-
 
 def test_edit2d_multi_image_numpy():
     images = [np.random.rand(16, 16).astype(np.float32) for _ in range(3)]
     widget = Edit2D(images, labels=["A", "B", "C"])
     assert widget.n_images == 3
     assert widget.labels == ["A", "B", "C"]
-
 
 def test_edit2d_multi_image_result():
     images = [np.arange(100, dtype=np.float32).reshape(10, 10) for _ in range(3)]
@@ -137,42 +122,35 @@ def test_edit2d_multi_image_result():
     for r in result:
         assert r.shape == (5, 5)
 
-
 def test_edit2d_multi_image_default_labels():
     images = [np.random.rand(8, 8).astype(np.float32) for _ in range(2)]
     widget = Edit2D(images)
     assert widget.labels == ["Image 1", "Image 2"]
-
 
 def test_edit2d_colormap():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data, cmap="viridis")
     assert widget.cmap == "viridis"
 
-
 def test_edit2d_log_scale():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data, log_scale=True)
     assert widget.log_scale is True
-
 
 def test_edit2d_auto_contrast_default():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data)
     assert widget.auto_contrast is True
 
-
 def test_edit2d_title():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data, title="My Crop")
     assert widget.title == "My Crop"
 
-
 def test_edit2d_show_stats():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data, show_stats=False)
     assert widget.show_stats is False
-
 
 def test_edit2d_control_group_visibility_defaults():
     data = np.random.rand(16, 16).astype(np.float32)
@@ -180,7 +158,6 @@ def test_edit2d_control_group_visibility_defaults():
     assert widget.show_display_controls is True
     assert widget.show_edit_controls is True
     assert widget.show_histogram is True
-
 
 def test_edit2d_control_group_visibility_custom():
     data = np.random.rand(16, 16).astype(np.float32)
@@ -194,36 +171,30 @@ def test_edit2d_control_group_visibility_custom():
     assert widget.show_edit_controls is False
     assert widget.show_histogram is False
 
-
 def test_edit2d_disabled_tools_default():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data)
     assert widget.disabled_tools == []
-
 
 def test_edit2d_disabled_tools_custom():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data, disabled_tools=["display", "Edit", "histogram"])
     assert widget.disabled_tools == ["display", "edit", "histogram"]
 
-
 def test_edit2d_disabled_tools_flags():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data, disable_edit=True, disable_display=True, disable_navigation=True)
     assert widget.disabled_tools == ["edit", "display", "navigation"]
-
 
 def test_edit2d_disabled_tools_disable_all_flag():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data, disable_all=True, disable_edit=True)
     assert widget.disabled_tools == ["all"]
 
-
 def test_edit2d_disabled_tools_unknown_value_raises():
     data = np.random.rand(16, 16).astype(np.float32)
     with pytest.raises(ValueError, match="Unknown tool group"):
         Edit2D(data, disabled_tools=["not_real"])
-
 
 def test_edit2d_disabled_tools_trait_assignment_normalizes():
     data = np.random.rand(16, 16).astype(np.float32)
@@ -231,36 +202,30 @@ def test_edit2d_disabled_tools_trait_assignment_normalizes():
     widget.disabled_tools = ["DISPLAY", "display", "edit"]
     assert widget.disabled_tools == ["display", "edit"]
 
-
 def test_edit2d_hidden_tools_default():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data)
     assert widget.hidden_tools == []
-
 
 def test_edit2d_hidden_tools_custom():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data, hidden_tools=["display", "Edit", "histogram"])
     assert widget.hidden_tools == ["display", "edit", "histogram"]
 
-
 def test_edit2d_hidden_tools_flags():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data, hide_edit=True, hide_display=True, hide_navigation=True)
     assert widget.hidden_tools == ["edit", "display", "navigation"]
-
 
 def test_edit2d_hidden_tools_hide_all_flag():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data, hide_all=True, hide_edit=True)
     assert widget.hidden_tools == ["all"]
 
-
 def test_edit2d_hidden_tools_unknown_value_raises():
     data = np.random.rand(16, 16).astype(np.float32)
     with pytest.raises(ValueError, match="Unknown tool group"):
         Edit2D(data, hidden_tools=["not_real"])
-
 
 def test_edit2d_hidden_tools_trait_assignment_normalizes():
     data = np.random.rand(16, 16).astype(np.float32)
@@ -268,12 +233,10 @@ def test_edit2d_hidden_tools_trait_assignment_normalizes():
     widget.hidden_tools = ["DISPLAY", "display", "edit"]
     assert widget.hidden_tools == ["display", "edit"]
 
-
 def test_edit2d_pixel_size():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data, pixel_size=1.5)
     assert widget.pixel_size == 1.5
-
 
 def test_edit2d_stats():
     data = np.ones((16, 16), dtype=np.float32) * 42.0
@@ -283,7 +246,6 @@ def test_edit2d_stats():
     assert widget.stats_max == pytest.approx(42.0)
     assert widget.stats_std == pytest.approx(0.0)
 
-
 def test_edit2d_negative_bounds():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data, bounds=(-5, -5, 10, 10))
@@ -291,25 +253,21 @@ def test_edit2d_negative_bounds():
     assert widget.crop_left == -5
     assert widget.crop_size == (15, 15)
 
-
 def test_edit2d_zero_size_crop():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Edit2D(data, bounds=(5, 5, 5, 5))
     result = widget.result
     assert result.shape == (0, 0)
 
-
 def test_edit2d_frame_bytes_size():
     data = np.random.rand(32, 24).astype(np.float32)
     widget = Edit2D(data)
     assert len(widget.frame_bytes) == 32 * 24 * 4  # float32 = 4 bytes
 
-
 def test_edit2d_3d_array():
     data = np.random.rand(3, 16, 16).astype(np.float32)
     widget = Edit2D(data)
     assert widget.n_images == 3
-
 
 def test_edit2d_repr():
     data = np.random.rand(32, 32).astype(np.float32)
@@ -318,7 +276,6 @@ def test_edit2d_repr():
     assert "Edit2D" in r
     assert "32x32" in r
     assert "20x20" in r
-
 
 def test_edit2d_set_image():
     data = np.random.rand(16, 16).astype(np.float32)
@@ -333,9 +290,7 @@ def test_edit2d_set_image():
     assert widget.crop_bottom == 32
     assert widget.crop_right == 24
 
-
 # ── State Protocol ────────────────────────────────────────────────────────
-
 
 def test_edit2d_state_dict_roundtrip():
     data = np.random.rand(32, 32).astype(np.float32)
@@ -360,7 +315,6 @@ def test_edit2d_state_dict_roundtrip():
     assert w2.disabled_tools == ["edit", "view"]
     assert w2.hidden_tools == ["stats"]
 
-
 def test_edit2d_state_dict_keys():
     data = np.random.rand(16, 16).astype(np.float32)
     w = Edit2D(data)
@@ -374,7 +328,6 @@ def test_edit2d_state_dict_keys():
         "crop_top", "crop_left", "crop_bottom", "crop_right", "brush_size",
     }
     assert set(sd.keys()) == expected
-
 
 def test_edit2d_save_load_file(tmp_path):
     import json
@@ -392,7 +345,6 @@ def test_edit2d_save_load_file(tmp_path):
     assert w2.cmap == "plasma"
     assert w2.title == "Saved Crop"
 
-
 def test_edit2d_summary(capsys):
     data = np.random.rand(32, 32).astype(np.float32)
     w = Edit2D(data, title="My Crop", cmap="inferno", bounds=(5, 10, 25, 30))
@@ -402,21 +354,17 @@ def test_edit2d_summary(capsys):
     assert "32×32" in out
     assert "20×20" in out  # crop size
 
-
 def test_edit2d_widget_version_is_set():
     data = np.random.rand(32, 32).astype(np.float32)
     w = Edit2D(data)
     assert w.widget_version != "unknown"
-
 
 def test_edit2d_show_controls_default():
     data = np.random.rand(32, 32).astype(np.float32)
     w = Edit2D(data)
     assert w.show_controls is True
 
-
 # ── save_image ───────────────────────────────────────────────────────────
-
 
 def test_edit2d_save_image_png(tmp_path):
     data = np.random.rand(32, 32).astype(np.float32)
@@ -428,14 +376,12 @@ def test_edit2d_save_image_png(tmp_path):
     img = Image.open(out)
     assert img.size == (32, 32)
 
-
 def test_edit2d_save_image_pdf(tmp_path):
     data = np.random.rand(32, 32).astype(np.float32)
     w = Edit2D(data, cmap="inferno")
     out = w.save_image(tmp_path / "out.pdf")
     assert out.exists()
     assert out.stat().st_size > 0
-
 
 def test_edit2d_save_image_crop_mode(tmp_path):
     data = np.arange(100, dtype=np.float32).reshape(10, 10)
@@ -445,7 +391,6 @@ def test_edit2d_save_image_crop_mode(tmp_path):
     from PIL import Image
     img = Image.open(out)
     assert img.size == (5, 5)
-
 
 def test_edit2d_save_image_bad_format(tmp_path):
     data = np.random.rand(16, 16).astype(np.float32)

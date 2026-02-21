@@ -12,7 +12,6 @@ except Exception:
     h5py = None
     _HAS_H5PY = False
 
-
 def test_show2d_single_numpy():
     """Single image from numpy array."""
     data = np.random.rand(32, 32).astype(np.float32)
@@ -22,7 +21,6 @@ def test_show2d_single_numpy():
     assert widget.width == 32
     assert len(widget.frame_bytes) > 0
 
-
 def test_show2d_single_torch():
     """Single image from PyTorch tensor."""
     data = torch.rand(32, 32)
@@ -31,7 +29,6 @@ def test_show2d_single_torch():
     assert widget.height == 32
     assert widget.width == 32
 
-
 def test_show2d_multiple_numpy():
     """Gallery mode from list of numpy arrays."""
     images = [np.random.rand(16, 16).astype(np.float32) for _ in range(3)]
@@ -39,20 +36,17 @@ def test_show2d_multiple_numpy():
     assert widget.n_images == 3
     assert widget.labels == ["A", "B", "C"]
 
-
 def test_show2d_multiple_torch():
     """Gallery mode from list of PyTorch tensors."""
     images = [torch.rand(16, 16) for _ in range(3)]
     widget = Show2D(images)
     assert widget.n_images == 3
 
-
 def test_show2d_3d_array():
     """3D array treated as multiple images."""
     data = np.random.rand(5, 16, 16).astype(np.float32)
     widget = Show2D(data)
     assert widget.n_images == 5
-
 
 def test_show2d_stats():
     """Statistics are computed correctly."""
@@ -63,13 +57,11 @@ def test_show2d_stats():
     assert widget.stats_max[0] == pytest.approx(42.0)
     assert widget.stats_std[0] == pytest.approx(0.0)
 
-
 def test_show2d_colormap():
     """Colormap option is applied."""
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data, cmap="viridis")
     assert widget.cmap == "viridis"
-
 
 def test_show2d_different_sizes():
     """Gallery with different sized images resizes to largest."""
@@ -81,7 +73,6 @@ def test_show2d_different_sizes():
     assert widget.height == 32
     assert widget.width == 32
 
-
 def test_show2d_display_options():
     """Log scale and auto contrast options are accepted."""
     data = np.random.rand(16, 16).astype(np.float32)
@@ -89,20 +80,17 @@ def test_show2d_display_options():
     assert widget.log_scale is True
     assert widget.auto_contrast is True
 
-
 def test_show2d_title():
     """Title parameter is stored."""
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data, title="Test Title")
     assert widget.title == "Test Title"
 
-
 def test_show2d_default_labels():
     """Labels default to 'Image 1', 'Image 2', etc."""
     data = np.random.rand(3, 16, 16).astype(np.float32)
     widget = Show2D(data)
     assert widget.labels == ["Image 1", "Image 2", "Image 3"]
-
 
 def test_show2d_scale_bar():
     """Scale bar parameters are stored."""
@@ -111,13 +99,11 @@ def test_show2d_scale_bar():
     assert widget.pixel_size == pytest.approx(1.5)
     assert widget.scale_bar_visible is False
 
-
 def test_show2d_ncols():
     """ncols parameter is stored."""
     data = np.random.rand(6, 16, 16).astype(np.float32)
     widget = Show2D(data, ncols=2)
     assert widget.ncols == 2
-
 
 def test_show2d_image_width_px():
     """image_width_px parameter is stored."""
@@ -125,13 +111,11 @@ def test_show2d_image_width_px():
     widget = Show2D(data, image_width_px=500)
     assert widget.image_width_px == 500
 
-
 def test_show2d_show_controls():
     """show_controls can be toggled."""
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data, show_controls=False)
     assert widget.show_controls is False
-
 
 def test_show2d_show_stats():
     """show_stats can be toggled."""
@@ -139,36 +123,30 @@ def test_show2d_show_stats():
     widget = Show2D(data, show_stats=False)
     assert widget.show_stats is False
 
-
 def test_show2d_disabled_tools_default():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data)
     assert widget.disabled_tools == []
-
 
 def test_show2d_disabled_tools_custom():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data, disabled_tools=["display", "ROI", "profile"])
     assert widget.disabled_tools == ["display", "roi", "profile"]
 
-
 def test_show2d_disabled_tools_flags():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data, disable_display=True, disable_navigation=True, disable_view=True)
     assert widget.disabled_tools == ["display", "navigation", "view"]
-
 
 def test_show2d_disabled_tools_disable_all():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data, disable_all=True, disable_display=True)
     assert widget.disabled_tools == ["all"]
 
-
 def test_show2d_disabled_tools_unknown_raises():
     data = np.random.rand(16, 16).astype(np.float32)
     with pytest.raises(ValueError, match="Unknown tool group"):
         Show2D(data, disabled_tools=["not_real"])
-
 
 def test_show2d_disabled_tools_trait_assignment_normalizes():
     data = np.random.rand(16, 16).astype(np.float32)
@@ -176,43 +154,36 @@ def test_show2d_disabled_tools_trait_assignment_normalizes():
     widget.disabled_tools = ["DISPLAY", "display", "roi"]
     assert widget.disabled_tools == ["display", "roi"]
 
-
 def test_show2d_hidden_tools_default():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data)
     assert widget.hidden_tools == []
-
 
 def test_show2d_hidden_tools_custom():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data, hidden_tools=["display", "ROI", "profile"])
     assert widget.hidden_tools == ["display", "roi", "profile"]
 
-
 def test_show2d_hidden_tools_flags():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data, hide_display=True, hide_navigation=True, hide_view=True)
     assert widget.hidden_tools == ["display", "navigation", "view"]
-
 
 def test_show2d_hidden_tools_hide_all():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data, hide_all=True, hide_display=True)
     assert widget.hidden_tools == ["all"]
 
-
 def test_show2d_hidden_tools_unknown_raises():
     data = np.random.rand(16, 16).astype(np.float32)
     with pytest.raises(ValueError, match="Unknown tool group"):
         Show2D(data, hidden_tools=["not_real"])
-
 
 def test_show2d_hidden_tools_trait_assignment_normalizes():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data)
     widget.hidden_tools = ["DISPLAY", "display", "roi"]
     assert widget.hidden_tools == ["display", "roi"]
-
 
 def test_show2d_constant_image_stats():
     """Constant image doesn't crash stats computation."""
@@ -221,7 +192,6 @@ def test_show2d_constant_image_stats():
     assert widget.stats_mean[0] == pytest.approx(0.0)
     assert widget.stats_std[0] == pytest.approx(0.0)
 
-
 def test_show2d_single_image_is_3d_internally():
     """2D input is wrapped to 3D (1, H, W) internally."""
     data = np.random.rand(16, 16).astype(np.float32)
@@ -229,7 +199,6 @@ def test_show2d_single_image_is_3d_internally():
     assert widget.n_images == 1
     # frame_bytes contains exactly 1 * 16 * 16 float32 values
     assert len(widget.frame_bytes) == 1 * 16 * 16 * 4
-
 
 def test_show2d_large_gallery():
     """Large gallery (20 images) works."""
@@ -241,7 +210,6 @@ def test_show2d_large_gallery():
     assert len(widget.stats_max) == 20
     assert len(widget.stats_std) == 20
 
-
 def test_show2d_gallery_stats_per_image():
     """Stats are computed per image in gallery."""
     img1 = np.ones((8, 8), dtype=np.float32) * 10.0
@@ -249,7 +217,6 @@ def test_show2d_gallery_stats_per_image():
     widget = Show2D([img1, img2])
     assert widget.stats_mean[0] == pytest.approx(10.0)
     assert widget.stats_mean[1] == pytest.approx(20.0)
-
 
 def test_show2d_roi_stats():
     """ROI computes mean/min/max/std for selected region."""
@@ -262,7 +229,6 @@ def test_show2d_roi_stats():
     assert widget.roi_stats["min"] == pytest.approx(5.0)
     assert widget.roi_stats["max"] == pytest.approx(5.0)
     assert widget.roi_stats["std"] == pytest.approx(0.0)
-
 
 def test_show2d_roi_shapes():
     """ROI supports circle, square, rectangle, annular shapes."""
@@ -280,16 +246,13 @@ def test_show2d_roi_shapes():
     widget.roi_list = [{"shape": "annular", "row": 16, "col": 16, "radius": 8, "radius_inner": 3}]
     assert widget.roi_stats["mean"] == pytest.approx(3.0)
 
-
 def test_show2d_roi_inactive():
     """ROI stats not computed when inactive."""
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data)
     assert widget.roi_stats == {}
 
-
 # ── State Protocol ────────────────────────────────────────────────────────
-
 
 def test_show2d_state_dict_roundtrip():
     data = np.random.rand(32, 32).astype(np.float32)
@@ -314,7 +277,6 @@ def test_show2d_state_dict_roundtrip():
     assert w2.roi_list[0]["row"] == 10
     assert w2.roi_list[0]["col"] == 15
 
-
 def test_show2d_state_dict_keys():
     data = np.random.rand(16, 16).astype(np.float32)
     w = Show2D(data)
@@ -323,7 +285,6 @@ def test_show2d_state_dict_keys():
     assert "hidden_tools" in keys
     assert "show_stats" in keys
     assert "show_fft" in keys
-
 
 def test_show2d_save_load_file(tmp_path):
     import json
@@ -342,7 +303,6 @@ def test_show2d_save_load_file(tmp_path):
     assert w2.cmap == "magma"
     assert w2.title == "Saved"
 
-
 def test_show2d_rejects_legacy_flat_state_file(tmp_path):
     import json
 
@@ -353,7 +313,6 @@ def test_show2d_rejects_legacy_flat_state_file(tmp_path):
     with pytest.raises(ValueError, match="versioned envelope"):
         Show2D(data, state=str(path))
 
-
 def test_show2d_summary(capsys):
     data = np.random.rand(32, 32).astype(np.float32)
     w = Show2D(data, title="My Image", cmap="viridis")
@@ -363,7 +322,6 @@ def test_show2d_summary(capsys):
     assert "32×32" in out
     assert "viridis" in out
 
-
 def test_show2d_repr():
     data = np.random.rand(32, 32).astype(np.float32)
     w = Show2D(data, cmap="inferno")
@@ -372,14 +330,12 @@ def test_show2d_repr():
     assert "32×32" in r
     assert "inferno" in r
 
-
 def test_show2d_repr_gallery():
     data = np.random.rand(3, 16, 16).astype(np.float32)
     w = Show2D(data)
     r = repr(w)
     assert "3×16×16" in r
     assert "idx=0" in r
-
 
 def test_show2d_set_image():
     data = np.random.rand(16, 16).astype(np.float32)
@@ -396,7 +352,6 @@ def test_show2d_set_image():
     assert widget.log_scale is True
     assert len(widget.frame_bytes) == 32 * 24 * 4
 
-
 def test_show2d_set_image_gallery():
     data = np.random.rand(16, 16).astype(np.float32)
     widget = Show2D(data)
@@ -407,7 +362,6 @@ def test_show2d_set_image_gallery():
     assert widget.width == 20
     assert widget.labels == ["A", "B", "C"]
     assert widget.selected_idx == 0
-
 
 def test_show2d_from_png_file(tmp_path):
     from PIL import Image
@@ -420,7 +374,6 @@ def test_show2d_from_png_file(tmp_path):
     assert widget.height == 8
     assert widget.width == 6
     assert widget.title == "img"
-
 
 def test_show2d_from_png_folder_gallery(tmp_path):
     from PIL import Image
@@ -437,7 +390,6 @@ def test_show2d_from_png_folder_gallery(tmp_path):
     widget2 = Show2D.from_folder(folder, file_type="png", mode="mean")
     assert widget2.n_images == 1
 
-
 def test_show2d_from_path_folder_requires_file_type(tmp_path):
     from PIL import Image
 
@@ -447,7 +399,6 @@ def test_show2d_from_path_folder_requires_file_type(tmp_path):
 
     with pytest.raises(ValueError, match="file_type is required"):
         Show2D.from_path(folder)
-
 
 def test_show2d_from_tiff_file_gallery_and_reduce(tmp_path):
     from PIL import Image
@@ -466,7 +417,6 @@ def test_show2d_from_tiff_file_gallery_and_reduce(tmp_path):
     reduced = Show2D.from_tiff(tiff_path, mode="mean")
     assert reduced.n_images == 1
     assert reduced.stats_mean[0] == pytest.approx(21.0)
-
 
 def test_show2d_from_mixed_folder_explicit_type(tmp_path):
     from PIL import Image
@@ -488,7 +438,6 @@ def test_show2d_from_mixed_folder_explicit_type(tmp_path):
     assert tiff_widget.n_images == 2
     assert tiff_widget.labels[0].startswith("b[0]")
 
-
 def test_show2d_rejects_dataset_path_for_non_emd(tmp_path):
     from PIL import Image
 
@@ -497,7 +446,6 @@ def test_show2d_rejects_dataset_path_for_non_emd(tmp_path):
 
     with pytest.raises(ValueError, match="dataset_path is only supported"):
         Show2D.from_path(path, dataset_path="/data/signal")
-
 
 def test_show2d_from_path_rejects_file_type_for_file(tmp_path):
     from PIL import Image
@@ -508,7 +456,6 @@ def test_show2d_from_path_rejects_file_type_for_file(tmp_path):
     with pytest.raises(ValueError, match="file_type is only used for folder"):
         Show2D.from_path(path, file_type="png")
 
-
 def test_show2d_invalid_reduce_mode(tmp_path):
     from PIL import Image
 
@@ -518,7 +465,6 @@ def test_show2d_invalid_reduce_mode(tmp_path):
 
     with pytest.raises(ValueError, match="Unknown reduce mode"):
         Show2D.from_folder(folder, file_type="png", mode="median")
-
 
 @pytest.mark.skipif(not _HAS_H5PY or h5py is None, reason="h5py not available")
 def test_show2d_from_emd_with_dataset_path_and_reduce(tmp_path):
@@ -537,7 +483,6 @@ def test_show2d_from_emd_with_dataset_path_and_reduce(tmp_path):
     assert reduced.n_images == 1
     assert reduced.stats_mean[0] == pytest.approx(13.0)
 
-
 @pytest.mark.skipif(not _HAS_H5PY or h5py is None, reason="h5py not available")
 def test_show2d_from_emd_highdim_default_and_reduction(tmp_path):
     emd_path = tmp_path / "highdim.emd"
@@ -555,9 +500,7 @@ def test_show2d_from_emd_highdim_default_and_reduction(tmp_path):
     assert reduced.height == 4
     assert reduced.width == 4
 
-
 # ── save_image ───────────────────────────────────────────────────────────
-
 
 def test_show2d_save_image_png(tmp_path):
     data = np.random.rand(32, 32).astype(np.float32)
@@ -569,14 +512,12 @@ def test_show2d_save_image_png(tmp_path):
     img = Image.open(out)
     assert img.size == (32, 32)
 
-
 def test_show2d_save_image_pdf(tmp_path):
     data = np.random.rand(32, 32).astype(np.float32)
     w = Show2D(data, cmap="inferno")
     out = w.save_image(tmp_path / "out.pdf")
     assert out.exists()
     assert out.stat().st_size > 0
-
 
 def test_show2d_save_image_gallery_idx(tmp_path):
     imgs = [np.random.rand(16, 16).astype(np.float32) for _ in range(3)]
@@ -586,13 +527,11 @@ def test_show2d_save_image_gallery_idx(tmp_path):
     assert out0.exists()
     assert out2.exists()
 
-
 def test_show2d_save_image_log_auto(tmp_path):
     data = np.random.rand(32, 32).astype(np.float32)
     w = Show2D(data, log_scale=True, auto_contrast=True)
     out = w.save_image(tmp_path / "out.png")
     assert out.exists()
-
 
 def test_show2d_save_image_bad_format(tmp_path):
     data = np.random.rand(16, 16).astype(np.float32)
@@ -600,13 +539,11 @@ def test_show2d_save_image_bad_format(tmp_path):
     with pytest.raises(ValueError, match="Unsupported format"):
         w.save_image(tmp_path / "out.bmp")
 
-
 def test_show2d_save_image_bad_idx(tmp_path):
     data = np.random.rand(16, 16).astype(np.float32)
     w = Show2D(data)
     with pytest.raises(IndexError):
         w.save_image(tmp_path / "out.png", idx=5)
-
 
 def test_show2d_widget_version_is_set():
     data = np.random.rand(16, 16).astype(np.float32)

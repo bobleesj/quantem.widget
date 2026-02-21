@@ -7,7 +7,6 @@ from conftest import TESTS_DIR, _run_notebook_and_wait, _write_notebook
 NOTEBOOK_PATH = TESTS_DIR / "_smoke_show3d_loaders.ipynb"
 SCREENSHOT_DIR = TESTS_DIR / "screenshots" / "smoke"
 
-
 @pytest.fixture(scope="module")
 def show3d_loader_page(browser_context):
     _write_notebook(
@@ -89,11 +88,9 @@ def show3d_loader_page(browser_context):
     page.close()
     NOTEBOOK_PATH.unlink(missing_ok=True)
 
-
 def test_show3d_loader_widgets_render(show3d_loader_page):
     roots = show3d_loader_page.locator(".show3d-root")
     assert roots.count() >= 4, "Expected explicit Show3D loader widgets to render"
-
 
 def test_show3d_loader_canvas_render(show3d_loader_page):
     canvases = show3d_loader_page.locator(".show3d-root canvas")
@@ -101,10 +98,8 @@ def test_show3d_loader_canvas_render(show3d_loader_page):
     box = canvases.first.bounding_box()
     assert box is not None and box["width"] > 0 and box["height"] > 0
 
-
 def test_show3d_loader_explicit_error_message(show3d_loader_page):
     assert show3d_loader_page.locator("text=file_type is required").count() >= 1
-
 
 def test_show3d_loader_screenshot(show3d_loader_page):
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)

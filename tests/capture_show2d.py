@@ -25,7 +25,6 @@ JUPYTER_PORT = 8899
 SCREENSHOT_DIR = Path(__file__).parent / "screenshots" / "show2d"
 NOTEBOOK_PATH = Path(__file__).parent / "_test_show2d_features.ipynb"
 
-
 def create_test_notebook():
     """Generate test notebook with a gallery widget for interaction testing."""
     notebook = {
@@ -73,12 +72,10 @@ def create_test_notebook():
         json.dump(notebook, f, indent=2)
     print(f"Created test notebook: {NOTEBOOK_PATH}")
 
-
 def cleanup_test_notebook():
     if NOTEBOOK_PATH.exists():
         NOTEBOOK_PATH.unlink()
         print(f"Cleaned up: {NOTEBOOK_PATH}")
-
 
 def start_jupyter():
     print("Starting JupyterLab...")
@@ -108,7 +105,6 @@ def start_jupyter():
             pass
     raise RuntimeError("JupyterLab failed to start within 30 seconds")
 
-
 def stop_jupyter(proc):
     print("Stopping JupyterLab...")
     proc.terminate()
@@ -117,11 +113,9 @@ def stop_jupyter(proc):
     except Exception:
         proc.kill()
 
-
 def save(widget, name, out_dir):
     widget.screenshot(path=str(out_dir / f"{name}.png"))
     print(f"  Saved: {name}.png")
-
 
 def get_border_info(page, widget):
     """Get border widths of all image and FFT containers via JS."""
@@ -157,7 +151,6 @@ def get_border_info(page, widget):
         return containerBorders;
     }""", widget.element_handle())
 
-
 def check_borders(page, widget, step_name, expected_selected, fft_on):
     """Print border state for debugging."""
     info = get_border_info(page, widget)
@@ -166,7 +159,6 @@ def check_borders(page, widget, step_name, expected_selected, fft_on):
         bw = item['borderWidth']
         thick = "THICK" if bw == '2px' else "thin"
         print(f"    [{i}] {thick} ({bw}) canvases={item['canvasCount']}")
-
 
 def run_interaction_tests(page):
     """Simulate user behavior: click, resize, toggle FFT, verify dark mode."""
@@ -253,7 +245,6 @@ def run_interaction_tests(page):
 
     print(f"\n  Interaction screenshots saved to: {out_dir}")
 
-
 def main():
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     jupyter_proc = None
@@ -293,7 +284,6 @@ def main():
         if jupyter_proc:
             stop_jupyter(jupyter_proc)
         cleanup_test_notebook()
-
 
 if __name__ == "__main__":
     main()

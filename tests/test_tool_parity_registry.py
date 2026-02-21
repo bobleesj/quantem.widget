@@ -19,7 +19,6 @@ from quantem.widget import (
     ShowComplex2D,
 )
 
-
 def test_tool_parity_ci_gate_has_no_errors():
     repo_root = pathlib.Path(__file__).resolve().parents[1]
     proc = subprocess.run(
@@ -30,7 +29,6 @@ def test_tool_parity_ci_gate_has_no_errors():
         check=False,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-
 
 @pytest.mark.parametrize(
     ("factory", "group"),

@@ -6,13 +6,10 @@ import pytest
 
 from quantem.widget import Merge4DSTEM
 
-
 def _make_sources(n=3, shape=(4, 4, 8, 8)):
     return [np.random.rand(*shape).astype(np.float32) for _ in range(n)]
 
-
 # --- Construction and validation ---
-
 
 def test_merge4dstem_constructs_from_arrays():
     sources = _make_sources(3)
@@ -23,16 +20,13 @@ def test_merge4dstem_constructs_from_arrays():
     assert w.merged is False
     assert w.device in ("cpu", "mps", "cuda")
 
-
 def test_merge4dstem_rejects_single_source():
     with pytest.raises(ValueError, match="at least 2"):
         Merge4DSTEM([np.random.rand(4, 4, 8, 8).astype(np.float32)])
 
-
 def test_merge4dstem_rejects_empty_sources():
     with pytest.raises(ValueError, match="at least 2"):
         Merge4DSTEM([])
-
 
 def test_merge4dstem_rejects_shape_mismatch():
     a = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -40,13 +34,11 @@ def test_merge4dstem_rejects_shape_mismatch():
     with pytest.raises(ValueError, match="shape"):
         Merge4DSTEM([a, b])
 
-
 def test_merge4dstem_rejects_non_4d():
     a = np.random.rand(4, 4, 8, 8).astype(np.float32)
     b = np.random.rand(4, 8, 8).astype(np.float32)
     with pytest.raises(ValueError, match="4D"):
         Merge4DSTEM([a, b])
-
 
 def test_merge4dstem_requires_torch():
     import unittest.mock as mock
@@ -64,9 +56,7 @@ def test_merge4dstem_requires_torch():
         finally:
             m._HAS_TORCH = orig
 
-
 # --- Merge ---
-
 
 def test_merge4dstem_merge_produces_5d():
     sources = _make_sources(3, shape=(2, 2, 4, 4))
@@ -81,12 +71,10 @@ def test_merge4dstem_merge_produces_5d():
     assert arr is not None
     assert arr.shape == (3, 2, 2, 4, 4)
 
-
 def test_merge4dstem_result_is_none_before_merge():
     sources = _make_sources(2, shape=(2, 2, 4, 4))
     w = Merge4DSTEM(sources)
     assert w.result_array is None
-
 
 def test_merge4dstem_result_array_values_correct():
     a = np.ones((2, 2, 4, 4), dtype=np.float32) * 1.0
@@ -99,7 +87,6 @@ def test_merge4dstem_result_array_values_correct():
     np.testing.assert_allclose(arr[0], 1.0)
     np.testing.assert_allclose(arr[1], 2.0)
 
-
 def test_merge4dstem_output_shape_json_updated():
     sources = _make_sources(3, shape=(2, 3, 4, 5))
     w = Merge4DSTEM(sources, bin_factor=1)
@@ -108,15 +95,12 @@ def test_merge4dstem_output_shape_json_updated():
     shape = json.loads(w.output_shape_json)
     assert shape == [3, 2, 3, 4, 5]
 
-
 # --- Binning ---
-
 
 def test_merge4dstem_bin_factor_default():
     sources = _make_sources(2, shape=(4, 4, 8, 8))
     w = Merge4DSTEM(sources)
     assert w.bin_factor == 2
-
 
 def test_merge4dstem_bin_factor_1_no_binning():
     sources = _make_sources(2, shape=(2, 2, 8, 8))
@@ -124,7 +108,6 @@ def test_merge4dstem_bin_factor_1_no_binning():
     w.merge()
     arr = w.result_array
     assert arr.shape == (2, 2, 2, 8, 8)
-
 
 def test_merge4dstem_bin_factor_2():
     a = np.ones((2, 2, 8, 8), dtype=np.float32) * 4.0
@@ -136,7 +119,6 @@ def test_merge4dstem_bin_factor_2():
     np.testing.assert_allclose(arr[0], 4.0)
     np.testing.assert_allclose(arr[1], 8.0)
 
-
 def test_merge4dstem_bin_factor_4():
     sources = _make_sources(2, shape=(2, 2, 16, 16))
     w = Merge4DSTEM(sources, bin_factor=4)
@@ -144,13 +126,11 @@ def test_merge4dstem_bin_factor_4():
     arr = w.result_array
     assert arr.shape == (2, 2, 2, 4, 4)
 
-
 def test_merge4dstem_output_shape_accounts_for_binning():
     sources = _make_sources(3, shape=(4, 4, 8, 8))
     w = Merge4DSTEM(sources, bin_factor=2)
     shape = json.loads(w.output_shape_json)
     assert shape == [3, 4, 4, 4, 4]
-
 
 def test_merge4dstem_bin_factor_in_state_dict():
     sources = _make_sources(2, shape=(2, 2, 4, 4))
@@ -162,15 +142,12 @@ def test_merge4dstem_bin_factor_in_state_dict():
     w2.load_state_dict(sd)
     assert w2.bin_factor == 4
 
-
 # --- Preview index ---
-
 
 def test_merge4dstem_preview_index_default():
     sources = _make_sources(3, shape=(4, 4, 8, 8))
     w = Merge4DSTEM(sources)
     assert w.preview_index == 0
-
 
 def test_merge4dstem_preview_index_changes_preview():
     a = np.ones((2, 2, 4, 4), dtype=np.float32) * 1.0
@@ -187,9 +164,7 @@ def test_merge4dstem_preview_index_changes_preview():
     first_val_2 = struct.unpack("f", w.preview_bytes[:4])[0]
     assert first_val_2 == pytest.approx(100.0, abs=0.01)
 
-
 # --- Merge trigger via trait ---
-
 
 def test_merge4dstem_merge_triggered_by_trait():
     sources = _make_sources(2, shape=(2, 2, 4, 4))
@@ -200,9 +175,7 @@ def test_merge4dstem_merge_triggered_by_trait():
     assert w.merged is True
     assert w._merge_requested is False
 
-
 # --- Preview ---
-
 
 def test_merge4dstem_preview_bytes_populated():
     sources = _make_sources(2, shape=(4, 4, 8, 8))
@@ -211,9 +184,7 @@ def test_merge4dstem_preview_bytes_populated():
     assert w.preview_rows == 8
     assert w.preview_cols == 8
 
-
 # --- Source info ---
-
 
 def test_merge4dstem_source_info_json():
     sources = _make_sources(3, shape=(4, 4, 8, 8))
@@ -226,9 +197,7 @@ def test_merge4dstem_source_info_json():
         assert entry["shape"] == [4, 4, 8, 8]
         assert entry["message"] == "OK"
 
-
 # --- Calibration ---
-
 
 def test_merge4dstem_explicit_calibration():
     sources = _make_sources(2, shape=(2, 2, 4, 4))
@@ -241,7 +210,6 @@ def test_merge4dstem_explicit_calibration():
     assert w.k_unit == "mrad"
     assert w.k_calibrated is True
 
-
 def test_merge4dstem_uncalibrated_defaults():
     sources = _make_sources(2, shape=(2, 2, 4, 4))
     w = Merge4DSTEM(sources)
@@ -253,9 +221,7 @@ def test_merge4dstem_uncalibrated_defaults():
     assert w.k_unit == "px"
     assert w.k_calibrated is False
 
-
 # --- Display traits ---
-
 
 def test_merge4dstem_display_traits():
     sources = _make_sources(2, shape=(2, 2, 4, 4))
@@ -264,15 +230,12 @@ def test_merge4dstem_display_traits():
     assert w.log_scale is True
     assert w.title == "Test"
 
-
 def test_merge4dstem_frame_dim_label():
     sources = _make_sources(2, shape=(2, 2, 4, 4))
     w = Merge4DSTEM(sources, frame_dim_label="Tilt")
     assert w.frame_dim_label == "Tilt"
 
-
 # --- State persistence ---
-
 
 def test_merge4dstem_state_dict_roundtrip():
     sources = _make_sources(2, shape=(2, 2, 4, 4))
@@ -288,7 +251,6 @@ def test_merge4dstem_state_dict_roundtrip():
     assert w2.cmap == "viridis"
     assert w2.log_scale is True
     assert w2.frame_dim_label == "Tilt"
-
 
 def test_merge4dstem_save_load_file(tmp_path):
     sources = _make_sources(2, shape=(2, 2, 4, 4))
@@ -308,7 +270,6 @@ def test_merge4dstem_save_load_file(tmp_path):
     assert w2.cmap == "magma"
     assert w2.log_scale is True
 
-
 def test_merge4dstem_summary(capsys):
     sources = _make_sources(3, shape=(4, 4, 8, 8))
     w = Merge4DSTEM(sources, pixel_size=2.0)
@@ -320,9 +281,7 @@ def test_merge4dstem_summary(capsys):
     assert "3" in output
     assert "scan" in output
 
-
 # --- save_result ---
-
 
 def test_merge4dstem_save_result_raises_before_merge(tmp_path):
     sources = _make_sources(2, shape=(2, 2, 4, 4))
@@ -330,7 +289,6 @@ def test_merge4dstem_save_result_raises_before_merge(tmp_path):
 
     with pytest.raises(RuntimeError, match="merge"):
         w.save_result(tmp_path / "out.npz")
-
 
 def test_merge4dstem_save_result_after_merge(tmp_path):
     sources = _make_sources(2, shape=(2, 2, 4, 4))
@@ -342,9 +300,7 @@ def test_merge4dstem_save_result_after_merge(tmp_path):
     assert result == path
     assert path.exists()
 
-
 # --- to_show4dstem ---
-
 
 def test_merge4dstem_to_show4dstem_raises_before_merge():
     sources = _make_sources(2, shape=(2, 2, 4, 4))
@@ -352,7 +308,6 @@ def test_merge4dstem_to_show4dstem_raises_before_merge():
 
     with pytest.raises(RuntimeError, match="merge"):
         w.to_show4dstem()
-
 
 def test_merge4dstem_to_show4dstem_after_merge():
     sources = _make_sources(2, shape=(2, 2, 4, 4))
@@ -364,16 +319,13 @@ def test_merge4dstem_to_show4dstem_after_merge():
     viewer = w.to_show4dstem()
     assert isinstance(viewer, Show4DSTEM)
 
-
 # --- Tool lock/hide ---
-
 
 @pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
 def test_merge4dstem_tool_default_empty(trait_name):
     sources = _make_sources(2, shape=(2, 2, 4, 4))
     w = Merge4DSTEM(sources)
     assert getattr(w, trait_name) == []
-
 
 @pytest.mark.parametrize(
     ("trait_name", "kwargs", "expected"),
@@ -391,13 +343,11 @@ def test_merge4dstem_tool_lock_hide(trait_name, kwargs, expected):
     w = Merge4DSTEM(sources, **kwargs)
     assert getattr(w, trait_name) == expected
 
-
 @pytest.mark.parametrize("kwargs", [{"disabled_tools": ["not_real"]}, {"hidden_tools": ["not_real"]}])
 def test_merge4dstem_tool_invalid_key_raises(kwargs):
     sources = _make_sources(2, shape=(2, 2, 4, 4))
     with pytest.raises(ValueError):
         Merge4DSTEM(sources, **kwargs)
-
 
 def test_merge4dstem_tool_runtime_api():
     sources = _make_sources(2, shape=(2, 2, 4, 4))
@@ -413,7 +363,6 @@ def test_merge4dstem_tool_runtime_api():
     assert w.show_tool("sources") is w
     assert "sources" not in w.hidden_tools
 
-
 def test_merge4dstem_state_dict_includes_tools():
     sources = _make_sources(2, shape=(2, 2, 4, 4))
     w = Merge4DSTEM(sources, disabled_tools=["display"], hidden_tools=["stats"])
@@ -427,9 +376,7 @@ def test_merge4dstem_state_dict_includes_tools():
     assert w2.disabled_tools == ["display"]
     assert w2.hidden_tools == ["stats"]
 
-
 # --- repr ---
-
 
 def test_merge4dstem_repr():
     sources = _make_sources(2, shape=(4, 4, 8, 8))
@@ -440,16 +387,13 @@ def test_merge4dstem_repr():
     assert "bin=2x" in r
     assert "merged=False" in r
 
-
 # --- Status ---
-
 
 def test_merge4dstem_status_ready():
     sources = _make_sources(3, shape=(2, 2, 4, 4))
     w = Merge4DSTEM(sources)
     assert w.status_level == "ok"
     assert "3 compatible" in w.status_message
-
 
 def test_merge4dstem_status_after_merge():
     sources = _make_sources(2, shape=(2, 2, 4, 4))

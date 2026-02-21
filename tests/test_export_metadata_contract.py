@@ -7,7 +7,6 @@ import pytest
 
 from quantem.widget import Bin, Show3D, Show3DVolume, Show4D, Show4DSTEM
 
-
 REQUIRED_EXPORT_KEYS = {
     "metadata_version",
     "widget_name",
@@ -16,11 +15,9 @@ REQUIRED_EXPORT_KEYS = {
     "export_kind",
 }
 
-
 def _require_image_deps() -> None:
     pytest.importorskip("PIL")
     pytest.importorskip("matplotlib")
-
 
 def _assert_export_contract(
     metadata: dict,
@@ -37,18 +34,15 @@ def _assert_export_contract(
     assert metadata["export_kind"] == export_kind
     assert "scan_position" not in metadata
 
-
 def _read_metadata_from_zip_bytes(payload: bytes) -> dict:
     with zipfile.ZipFile(io.BytesIO(payload), "r") as zf:
         assert "metadata.json" in zf.namelist()
         return json.loads(zf.read("metadata.json").decode("utf-8"))
 
-
 def _read_metadata_from_zip_path(path) -> dict:
     with zipfile.ZipFile(path, "r") as zf:
         assert "metadata.json" in zf.namelist()
         return json.loads(zf.read("metadata.json").decode("utf-8"))
-
 
 def test_show3d_gif_metadata_contract():
     _require_image_deps()
@@ -65,7 +59,6 @@ def test_show3d_gif_metadata_contract():
         export_kind="animated_frames",
     )
 
-
 def test_show3d_zip_metadata_contract():
     _require_image_deps()
     data = np.random.rand(6, 12, 12).astype(np.float32)
@@ -81,7 +74,6 @@ def test_show3d_zip_metadata_contract():
         export_kind="png_frames",
     )
 
-
 def test_show3dvolume_gif_metadata_contract():
     _require_image_deps()
     data = np.random.rand(8, 8, 8).astype(np.float32)
@@ -95,7 +87,6 @@ def test_show3dvolume_gif_metadata_contract():
         format_name="gif",
         export_kind="animated_slices",
     )
-
 
 def test_show3dvolume_zip_metadata_contract():
     _require_image_deps()
@@ -111,7 +102,6 @@ def test_show3dvolume_zip_metadata_contract():
         export_kind="png_slices",
     )
 
-
 def test_show4d_gif_metadata_contract():
     _require_image_deps()
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -126,7 +116,6 @@ def test_show4d_gif_metadata_contract():
         export_kind="path_animation",
     )
 
-
 def test_show4dstem_gif_metadata_contract():
     _require_image_deps()
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
@@ -140,7 +129,6 @@ def test_show4dstem_gif_metadata_contract():
         format_name="gif",
         export_kind="path_animation",
     )
-
 
 def test_show4dstem_save_image_sidecar_contract(tmp_path):
     _require_image_deps()
@@ -159,7 +147,6 @@ def test_show4dstem_save_image_sidecar_contract(tmp_path):
     assert set(metadata["position"].keys()) == {"row", "col"}
     assert "scan_position" not in metadata
 
-
 def test_bin_save_image_sidecar_contract(tmp_path):
     _require_image_deps()
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
@@ -173,7 +160,6 @@ def test_bin_save_image_sidecar_contract(tmp_path):
         format_name="png",
         export_kind="single_view_image",
     )
-
 
 def test_bin_save_zip_and_gif_contract(tmp_path):
     _require_image_deps()

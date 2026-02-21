@@ -4,7 +4,6 @@ import torch
 
 from quantem.widget import Show3DVolume
 
-
 def test_show3dvolume_numpy():
     """Create widget from numpy array."""
     data = np.random.rand(16, 16, 16).astype(np.float32)
@@ -14,7 +13,6 @@ def test_show3dvolume_numpy():
     assert widget.nx == 16
     assert len(widget.volume_bytes) > 0
 
-
 def test_show3dvolume_torch():
     """Create widget from PyTorch tensor."""
     data = torch.rand(16, 16, 16)
@@ -23,7 +21,6 @@ def test_show3dvolume_torch():
     assert widget.ny == 16
     assert widget.nx == 16
 
-
 def test_show3dvolume_initial_slices():
     """Initial slices are at middle."""
     data = np.random.rand(20, 30, 40).astype(np.float32)
@@ -31,7 +28,6 @@ def test_show3dvolume_initial_slices():
     assert widget.slice_z == 10
     assert widget.slice_y == 15
     assert widget.slice_x == 20
-
 
 def test_show3dvolume_stats():
     """Statistics are computed for 3 orthogonal slices."""
@@ -44,13 +40,11 @@ def test_show3dvolume_stats():
     for mean in widget.stats_mean:
         assert mean == pytest.approx(5.0)
 
-
 def test_show3dvolume_rejects_2d():
     """Raises error for 2D input."""
     data = np.random.rand(16, 16).astype(np.float32)
     with pytest.raises(ValueError, match="3D"):
         Show3DVolume(data)
-
 
 def test_show3dvolume_options():
     """Display options are applied."""
@@ -67,7 +61,6 @@ def test_show3dvolume_options():
     assert widget.log_scale is True
     assert widget.auto_contrast is True
 
-
 def test_show3dvolume_non_cubic():
     """Non-cubic volumes work correctly."""
     data = np.random.rand(10, 20, 30).astype(np.float32)
@@ -76,13 +69,11 @@ def test_show3dvolume_non_cubic():
     assert widget.ny == 20
     assert widget.nx == 30
 
-
 def test_show3dvolume_rejects_4d():
     """Raises error for 4D input."""
     data = np.random.rand(8, 8, 8, 8).astype(np.float32)
     with pytest.raises(ValueError, match="3D"):
         Show3DVolume(data)
-
 
 def test_show3dvolume_slice_change_updates_stats():
     """Changing slice positions recomputes stats."""
@@ -96,7 +87,6 @@ def test_show3dvolume_slice_change_updates_stats():
     # Move Z slice to last plane (all 50s)
     widget.slice_z = 15
     assert widget.stats_mean[0] == pytest.approx(50.0)
-
 
 def test_show3dvolume_stats_per_plane():
     """Stats are computed from correct orthogonal planes."""
@@ -116,7 +106,6 @@ def test_show3dvolume_stats_per_plane():
     # YZ plane mean should reflect data[:, :, 15]
     assert widget.stats_mean[0] != widget.stats_mean[1]  # Different planes have different stats
 
-
 def test_show3dvolume_crosshair():
     """show_crosshair default True, can be toggled."""
     data = np.random.rand(8, 8, 8).astype(np.float32)
@@ -124,7 +113,6 @@ def test_show3dvolume_crosshair():
     assert widget.show_crosshair is True
     widget2 = Show3DVolume(data, show_crosshair=False)
     assert widget2.show_crosshair is False
-
 
 def test_show3dvolume_show_controls():
     """show_controls default True."""
@@ -134,7 +122,6 @@ def test_show3dvolume_show_controls():
     widget2 = Show3DVolume(data, show_controls=False)
     assert widget2.show_controls is False
 
-
 def test_show3dvolume_show_fft():
     """show_fft default False."""
     data = np.random.rand(8, 8, 8).astype(np.float32)
@@ -143,13 +130,11 @@ def test_show3dvolume_show_fft():
     widget2 = Show3DVolume(data, show_fft=True)
     assert widget2.show_fft is True
 
-
 @pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
 def test_show3dvolume_tool_lists_default_empty(trait_name):
     data = np.random.rand(8, 16, 16).astype(np.float32)
     w = Show3DVolume(data)
     assert getattr(w, trait_name) == []
-
 
 @pytest.mark.parametrize(
     ("trait_name", "ctor_kwargs", "expected"),
@@ -167,13 +152,11 @@ def test_show3dvolume_tool_lists_constructor_behavior(trait_name, ctor_kwargs, e
     w = Show3DVolume(data, **ctor_kwargs)
     assert getattr(w, trait_name) == expected
 
-
 @pytest.mark.parametrize("kwargs", [{"disabled_tools": ["not_real"]}, {"hidden_tools": ["not_real"]}])
 def test_show3dvolume_tool_lists_unknown_raises(kwargs):
     data = np.random.rand(8, 16, 16).astype(np.float32)
     with pytest.raises(ValueError, match="Unknown tool group"):
         Show3DVolume(data, **kwargs)
-
 
 @pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
 def test_show3dvolume_tool_lists_normalizes(trait_name):
@@ -182,7 +165,6 @@ def test_show3dvolume_tool_lists_normalizes(trait_name):
     setattr(w, trait_name, ["DISPLAY", "display", "fft"])
     assert getattr(w, trait_name) == ["display", "fft"]
 
-
 def test_show3dvolume_scale_bar():
     """Scale bar parameters are stored."""
     data = np.random.rand(8, 8, 8).astype(np.float32)
@@ -190,13 +172,11 @@ def test_show3dvolume_scale_bar():
     assert widget.pixel_size == pytest.approx(2.5)
     assert widget.scale_bar_visible is False
 
-
 def test_show3dvolume_volume_bytes_size():
     """volume_bytes has correct size (nz * ny * nx * 4 bytes for float32)."""
     data = np.random.rand(8, 10, 12).astype(np.float32)
     widget = Show3DVolume(data)
     assert len(widget.volume_bytes) == 8 * 10 * 12 * 4
-
 
 def test_show3dvolume_constant_data():
     """Constant volume doesn't crash."""
@@ -206,7 +186,6 @@ def test_show3dvolume_constant_data():
         assert mean == pytest.approx(42.0)
     for std in widget.stats_std:
         assert std == pytest.approx(0.0)
-
 
 def test_show3dvolume_single_voxel():
     """(1, 1, 1) volume works."""
@@ -219,7 +198,6 @@ def test_show3dvolume_single_voxel():
     assert widget.slice_y == 0
     assert widget.slice_x == 0
 
-
 def test_show3dvolume_asymmetric():
     """Very asymmetric dimensions work."""
     data = np.random.rand(5, 100, 10).astype(np.float32)
@@ -231,7 +209,6 @@ def test_show3dvolume_asymmetric():
     assert widget.slice_y == 50
     assert widget.slice_x == 5
 
-
 def test_show3dvolume_playback_defaults():
     """Playback defaults match Show3D."""
     data = np.random.rand(8, 8, 8).astype(np.float32)
@@ -242,7 +219,6 @@ def test_show3dvolume_playback_defaults():
     assert widget.fps == pytest.approx(5.0)
     assert widget.loop is True
     assert widget.play_axis == 0
-
 
 def test_show3dvolume_play_pause_stop():
     """play/pause/stop methods work."""
@@ -257,13 +233,11 @@ def test_show3dvolume_play_pause_stop():
     assert widget.playing is False
     assert widget.slice_z == 4  # stop() resets to center slice
 
-
 def test_show3dvolume_fps_parameter():
     """fps constructor parameter is applied."""
     data = np.random.rand(8, 8, 8).astype(np.float32)
     widget = Show3DVolume(data, fps=15.0)
     assert widget.fps == pytest.approx(15.0)
-
 
 def test_show3dvolume_play_axis():
     """play_axis can be set."""
@@ -273,7 +247,6 @@ def test_show3dvolume_play_axis():
     assert widget.play_axis == 2
     widget.play_axis = 3  # "All"
     assert widget.play_axis == 3
-
 
 def test_show3dvolume_gif_generation_sets_metadata():
     import json
@@ -290,9 +263,7 @@ def test_show3dvolume_gif_generation_sets_metadata():
     assert metadata["export_kind"] == "animated_slices"
     assert metadata["export_axis"] == 2
 
-
 # ── State Protocol ────────────────────────────────────────────────────────
-
 
 def test_show3dvolume_state_dict_roundtrip():
     data = np.random.rand(16, 16, 16).astype(np.float32)
@@ -317,7 +288,6 @@ def test_show3dvolume_state_dict_roundtrip():
     assert w2.disabled_tools == ["display", "fft"]
     assert w2.hidden_tools == ["stats"]
 
-
 def test_show3dvolume_state_dict_includes_tool_customization():
     data = np.random.rand(8, 8, 8).astype(np.float32)
     w = Show3DVolume(data, disabled_tools=["display"], hidden_tools=["navigation"])
@@ -326,7 +296,6 @@ def test_show3dvolume_state_dict_includes_tool_customization():
     assert "hidden_tools" in sd
     assert sd["disabled_tools"] == ["display"]
     assert sd["hidden_tools"] == ["navigation"]
-
 
 def test_show3dvolume_save_load_file(tmp_path):
     import json
@@ -344,7 +313,6 @@ def test_show3dvolume_save_load_file(tmp_path):
     assert w2.cmap == "plasma"
     assert w2.title == "Saved Vol"
 
-
 def test_show3dvolume_summary(capsys):
     data = np.random.rand(16, 16, 16).astype(np.float32)
     w = Show3DVolume(data, title="Nanoparticle", cmap="inferno")
@@ -354,7 +322,6 @@ def test_show3dvolume_summary(capsys):
     assert "16×16×16" in out
     assert "inferno" in out
 
-
 def test_show3dvolume_repr():
     data = np.random.rand(16, 16, 16).astype(np.float32)
     w = Show3DVolume(data, cmap="inferno")
@@ -362,7 +329,6 @@ def test_show3dvolume_repr():
     assert "Show3DVolume" in r
     assert "16×16×16" in r
     assert "inferno" in r
-
 
 def test_show3dvolume_set_image():
     data = np.random.rand(16, 16, 16).astype(np.float32)
@@ -377,9 +343,7 @@ def test_show3dvolume_set_image():
     assert widget.cmap == "viridis"
     assert len(widget.volume_bytes) == 32 * 24 * 20 * 4
 
-
 # ── save_image ───────────────────────────────────────────────────────────
-
 
 def test_show3dvolume_save_image_xy(tmp_path):
     vol = np.random.rand(16, 16, 16).astype(np.float32)
@@ -390,7 +354,6 @@ def test_show3dvolume_save_image_xy(tmp_path):
     img = Image.open(out)
     assert img.size == (16, 16)
 
-
 def test_show3dvolume_save_image_xz(tmp_path):
     vol = np.random.rand(16, 20, 24).astype(np.float32)
     w = Show3DVolume(vol)
@@ -399,7 +362,6 @@ def test_show3dvolume_save_image_xz(tmp_path):
     from PIL import Image
     img = Image.open(out)
     assert img.size == (24, 16)
-
 
 def test_show3dvolume_save_image_yz(tmp_path):
     vol = np.random.rand(16, 20, 24).astype(np.float32)
@@ -410,20 +372,17 @@ def test_show3dvolume_save_image_yz(tmp_path):
     img = Image.open(out)
     assert img.size == (20, 16)
 
-
 def test_show3dvolume_save_image_pdf(tmp_path):
     vol = np.random.rand(8, 8, 8).astype(np.float32)
     w = Show3DVolume(vol)
     out = w.save_image(tmp_path / "slice.pdf")
     assert out.exists()
 
-
 def test_show3dvolume_save_image_bad_plane(tmp_path):
     vol = np.random.rand(8, 8, 8).astype(np.float32)
     w = Show3DVolume(vol)
     with pytest.raises(ValueError, match="Unknown plane"):
         w.save_image(tmp_path / "out.png", plane="ab")
-
 
 def test_show3dvolume_widget_version_is_set():
     vol = np.random.rand(8, 8, 8).astype(np.float32)

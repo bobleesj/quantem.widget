@@ -6,21 +6,17 @@ import pytest
 import quantem.widget
 from quantem.widget import Show4DSTEM
 
-
 def test_version_exists():
     assert hasattr(quantem.widget, "__version__")
 
-
 def test_version_is_string():
     assert isinstance(quantem.widget.__version__, str)
-
 
 def test_show4dstem_loads():
     """Widget can be created from mock 4D data."""
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
     widget = Show4DSTEM(data)
     assert widget is not None
-
 
 def test_show4dstem_flattened_scan_shape_mapping():
     """Test flattened 3D data with explicit scan shape."""
@@ -33,7 +29,6 @@ def test_show4dstem_flattened_scan_shape_mapping():
     frame = widget._get_frame(1, 2)
     assert np.array_equal(frame, np.full((2, 2), 5, dtype=np.float32))
 
-
 def test_show4dstem_dp_scale_mode():
     """DP scale mode is configurable through the canonical trait."""
     data = np.random.rand(2, 2, 8, 8).astype(np.float32) * 100 + 1
@@ -41,7 +36,6 @@ def test_show4dstem_dp_scale_mode():
     assert widget.dp_scale_mode == "linear"
     widget.dp_scale_mode = "log"
     assert widget.dp_scale_mode == "log"
-
 
 def test_show4dstem_auto_detect_center():
     """Test automatic center spot detection using centroid."""
@@ -57,7 +51,6 @@ def test_show4dstem_auto_detect_center():
     assert abs(widget.center_row - 3.0) < 0.5
     assert widget.bf_radius > 0
 
-
 def test_show4dstem_adf_preset_cache():
     """Test that ADF preset cache works when precompute is enabled."""
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
@@ -71,7 +64,6 @@ def test_show4dstem_adf_preset_cache():
     cached = widget._get_cached_preset()
     assert cached == widget._cached_adf_virtual
 
-
 def test_show4dstem_rectangular_scan_shape():
     """Test that rectangular (non-square) scans work correctly."""
     data = np.random.rand(4, 8, 16, 16).astype(np.float32)
@@ -84,7 +76,6 @@ def test_show4dstem_rectangular_scan_shape():
     frame_37 = widget._get_frame(3, 7)
     assert frame_00.shape == (16, 16)
     assert frame_37.shape == (16, 16)
-
 
 def test_show4dstem_hot_pixel_removal_uint16():
     """Test that saturated uint16 hot pixels are removed at init."""
@@ -100,7 +91,6 @@ def test_show4dstem_hot_pixel_removal_uint16():
     assert frame[1, 2] == 0
     assert frame[0, 0] == 100
 
-
 def test_show4dstem_hot_pixel_removal_uint8():
     """Test that saturated uint8 hot pixels are removed at init."""
     data = np.zeros((4, 4, 8, 8), dtype=np.uint8)
@@ -111,13 +101,11 @@ def test_show4dstem_hot_pixel_removal_uint8():
     frame = widget._get_frame(0, 0)
     assert frame[2, 3] == 0
 
-
 def test_show4dstem_no_hot_pixel_removal_float32():
     """Test that float32 data is not modified (no saturated value)."""
     data = np.ones((4, 4, 8, 8), dtype=np.float32) * 1000
     widget = Show4DSTEM(data)
     assert widget.dp_global_max == 1000.0
-
 
 def test_show4dstem_roi_modes():
     """Test all ROI modes compute virtual images correctly."""
@@ -128,7 +116,6 @@ def test_show4dstem_roi_modes():
         widget.roi_active = True
         assert len(widget.vi_stats) == 4
         assert widget.vi_stats[2] >= widget.vi_stats[1]
-
 
 def test_show4dstem_virtual_image_excludes_hot_pixels():
     """Test that virtual images don't include hot pixel contributions."""
@@ -141,7 +128,6 @@ def test_show4dstem_virtual_image_excludes_hot_pixels():
     widget.roi_radius = 3
     assert widget.vi_stats[2] < 1000
 
-
 def test_show4dstem_torch_input():
     """PyTorch tensor input works."""
     import torch
@@ -152,7 +138,6 @@ def test_show4dstem_torch_input():
     assert widget.det_rows == 8
     assert widget.det_cols == 8
 
-
 def test_show4dstem_position_property():
     """Position property get/set works."""
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
@@ -162,20 +147,17 @@ def test_show4dstem_position_property():
     assert widget.pos_row == 2
     assert widget.pos_col == 3
 
-
 def test_show4dstem_scan_shape_property():
     """scan_shape property returns correct tuple."""
     data = np.random.rand(4, 8, 16, 16).astype(np.float32)
     widget = Show4DSTEM(data)
     assert widget.scan_shape == (4, 8)
 
-
 def test_show4dstem_detector_shape_property():
     """detector_shape property returns correct tuple."""
     data = np.random.rand(4, 4, 12, 16).astype(np.float32)
     widget = Show4DSTEM(data)
     assert widget.detector_shape == (12, 16)
-
 
 def test_show4dstem_initial_position():
     """Initial position is at scan center."""
@@ -184,14 +166,12 @@ def test_show4dstem_initial_position():
     assert widget.pos_row == 4
     assert widget.pos_col == 5
 
-
 def test_show4dstem_frame_bytes_nonzero():
     """frame_bytes is non-empty after init."""
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     widget = Show4DSTEM(data)
     assert len(widget.frame_bytes) > 0
     assert len(widget.frame_bytes) == 8 * 8 * 4  # float32
-
 
 def test_show4dstem_roi_circle_method():
     """roi_circle() sets mode and optional radius."""
@@ -201,7 +181,6 @@ def test_show4dstem_roi_circle_method():
     assert widget.roi_mode == "circle"
     assert widget.roi_radius == 5.0
 
-
 def test_show4dstem_roi_square_method():
     """roi_square() sets mode and optional half_size."""
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
@@ -209,7 +188,6 @@ def test_show4dstem_roi_square_method():
     widget.roi_square(7.0)
     assert widget.roi_mode == "square"
     assert widget.roi_radius == 7.0
-
 
 def test_show4dstem_roi_annular_method():
     """roi_annular() sets mode and inner/outer radii."""
@@ -220,7 +198,6 @@ def test_show4dstem_roi_annular_method():
     assert widget.roi_radius_inner == 3.0
     assert widget.roi_radius == 10.0
 
-
 def test_show4dstem_roi_rect_method():
     """roi_rect() sets mode and width/height."""
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
@@ -230,14 +207,12 @@ def test_show4dstem_roi_rect_method():
     assert widget.roi_width == 20.0
     assert widget.roi_height == 15.0
 
-
 def test_show4dstem_roi_point_method():
     """roi_point() sets mode to point."""
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     widget = Show4DSTEM(data)
     widget.roi_point()
     assert widget.roi_mode == "point"
-
 
 def test_show4dstem_method_chaining():
     """All ROI and playback methods return self for chaining."""
@@ -251,7 +226,6 @@ def test_show4dstem_method_chaining():
     assert widget.auto_detect_center() is widget
     assert widget.pause() is widget
     assert widget.stop() is widget
-
 
 def test_show4dstem_path_animation():
     """set_path, play, pause, stop, goto work."""
@@ -270,7 +244,6 @@ def test_show4dstem_path_animation():
     widget.stop()
     assert widget.path_index == 0
 
-
 def test_show4dstem_raster():
     """raster() creates a path covering the scan."""
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -278,7 +251,6 @@ def test_show4dstem_raster():
     widget.raster(step=2, interval_ms=50, loop=False)
     assert widget.path_length > 0
     assert widget.path_playing is True  # autoplay by default
-
 
 def test_show4dstem_calibration():
     """Calibration parameters are stored."""
@@ -288,20 +260,17 @@ def test_show4dstem_calibration():
     assert widget.k_pixel_size == 0.46
     assert widget.k_calibrated is True
 
-
 def test_show4dstem_dp_stats():
     """dp_stats has 4 values (mean, min, max, std)."""
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     widget = Show4DSTEM(data)
     assert len(widget.dp_stats) == 4
 
-
 def test_show4dstem_vi_stats():
     """vi_stats has 4 values (mean, min, max, std)."""
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     widget = Show4DSTEM(data)
     assert len(widget.vi_stats) == 4
-
 
 def test_show4dstem_rejects_2d():
     """2D input raises ValueError."""
@@ -312,7 +281,6 @@ def test_show4dstem_rejects_2d():
     except ValueError:
         pass
 
-
 def test_show4dstem_rejects_6d():
     """6D input raises ValueError."""
     data = np.random.rand(2, 2, 2, 2, 8, 8).astype(np.float32)
@@ -321,7 +289,6 @@ def test_show4dstem_rejects_6d():
         assert False, "Should have raised ValueError"
     except ValueError:
         pass
-
 
 def test_show4dstem_non_square_flattened():
     """Non-perfect-square N without scan_shape raises ValueError."""
@@ -332,7 +299,6 @@ def test_show4dstem_non_square_flattened():
     except ValueError:
         pass
 
-
 def test_show4dstem_repr():
     """__repr__ returns useful string."""
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
@@ -342,14 +308,12 @@ def test_show4dstem_repr():
     assert "4" in r
     assert "16" in r
 
-
 def test_show4dstem_virtual_image_bytes_nonzero():
     """Virtual image bytes are populated after ROI setup."""
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     widget = Show4DSTEM(data)
     widget.roi_circle(5)
     assert len(widget.virtual_image_bytes) > 0
-
 
 def test_show4dstem_center_explicit():
     """Explicit center and bf_radius are used."""
@@ -359,21 +323,17 @@ def test_show4dstem_center_explicit():
     assert widget.center_col == 6.0
     assert widget.bf_radius == 3.0
 
-
 # ── Title ─────────────────────────────────────────────────────────────────
-
 
 def test_show4dstem_title_default():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
     assert w.title == ""
 
-
 def test_show4dstem_title_set():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data, title="My Scan")
     assert w.title == "My Scan"
-
 
 def test_show4dstem_title_in_state_dict():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
@@ -383,7 +343,6 @@ def test_show4dstem_title_in_state_dict():
     w2 = Show4DSTEM(data, state=sd)
     assert w2.title == "Test Title"
 
-
 def test_show4dstem_title_in_summary(capsys):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data, title="Custom Name")
@@ -391,16 +350,13 @@ def test_show4dstem_title_in_summary(capsys):
     out = capsys.readouterr().out
     assert "Custom Name" in out
 
-
 def test_show4dstem_title_in_repr():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data, title="My Title")
     r = repr(w)
     assert "My Title" in r
 
-
 # ── State Protocol ────────────────────────────────────────────────────────
-
 
 def test_show4dstem_state_dict_roundtrip():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
@@ -416,7 +372,6 @@ def test_show4dstem_state_dict_roundtrip():
     w2 = Show4DSTEM(data, state=sd)
     assert w2.dp_scale_mode == "log"
     assert w2.bf_radius == 3.0
-
 
 def test_show4dstem_save_load_file(tmp_path):
     import json
@@ -434,7 +389,6 @@ def test_show4dstem_save_load_file(tmp_path):
     w2 = Show4DSTEM(data, state=str(path))
     assert w2.dp_scale_mode == "log"
 
-
 def test_show4dstem_summary(capsys):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data, pixel_size=2.39, k_pixel_size=0.46)
@@ -444,7 +398,6 @@ def test_show4dstem_summary(capsys):
     assert "4×4" in out
     assert "16×16" in out
     assert "2.39" in out
-
 
 def test_show4dstem_set_image():
     data = np.random.rand(4, 4, 32, 32).astype(np.float32)
@@ -458,9 +411,7 @@ def test_show4dstem_set_image():
     assert widget.det_rows == 64
     assert widget.det_cols == 64
 
-
 # ── Line Profile ─────────────────────────────────────────────────────────
-
 
 def test_show4dstem_profile_defaults():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
@@ -471,7 +422,6 @@ def test_show4dstem_profile_defaults():
     assert w.profile_values is None
     assert w.profile_distance == 0.0
 
-
 def test_show4dstem_set_profile():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
@@ -480,7 +430,6 @@ def test_show4dstem_set_profile():
     assert len(w.profile_line) == 2
     assert w.profile_line[0] == {"row": 0.0, "col": 0.0}
     assert w.profile_line[1] == {"row": 15.0, "col": 15.0}
-
 
 def test_show4dstem_clear_profile():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
@@ -491,7 +440,6 @@ def test_show4dstem_clear_profile():
     assert result is w
     assert w.profile_line == []
 
-
 def test_show4dstem_profile_property():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
@@ -500,7 +448,6 @@ def test_show4dstem_profile_property():
     assert len(pts) == 2
     assert pts[0] == (2.0, 3.0)
     assert pts[1] == (12.0, 8.0)
-
 
 def test_show4dstem_profile_values():
     data = np.ones((4, 4, 16, 16), dtype=np.float32) * 3.0
@@ -511,7 +458,6 @@ def test_show4dstem_profile_values():
     assert len(vals) >= 2
     assert np.allclose(vals, 3.0, atol=0.01)
 
-
 def test_show4dstem_profile_distance_calibrated():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data, k_pixel_size=0.5)
@@ -519,14 +465,12 @@ def test_show4dstem_profile_distance_calibrated():
     # pixel distance = 5, k-calibrated = 5 * 0.5 = 2.5
     assert abs(w.profile_distance - 2.5) < 0.01
 
-
 def test_show4dstem_profile_distance_uncalibrated():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
     w.set_profile((0, 0), (3, 4))
     # No k_pixel_size calibration → pixel distance = 5
     assert abs(w.profile_distance - 5.0) < 0.01
-
 
 def test_show4dstem_profile_in_state_dict():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
@@ -539,7 +483,6 @@ def test_show4dstem_profile_in_state_dict():
     assert sd["profile_width"] == 5
     assert len(sd["profile_line"]) == 2
 
-
 def test_show4dstem_profile_in_summary(capsys):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
@@ -547,7 +490,6 @@ def test_show4dstem_profile_in_summary(capsys):
     w.summary()
     out = capsys.readouterr().out
     assert "Profile:" in out
-
 
 # ── GIF Export ──────────────────────────────────────────────────────────────
 
@@ -557,7 +499,6 @@ def test_show4dstem_gif_export_defaults():
     assert w._gif_export_requested is False
     assert w._gif_data == b""
     assert w._gif_metadata_json == ""
-
 
 def test_show4dstem_gif_generation_with_path():
     import json
@@ -574,14 +515,12 @@ def test_show4dstem_gif_generation_with_path():
     assert metadata["export_kind"] == "path_animation"
     assert metadata["n_frames"] == 3
 
-
 def test_show4dstem_gif_generation_no_path():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
     w._generate_gif()
     assert w._gif_data == b""
     assert w._gif_metadata_json == ""
-
 
 def test_show4dstem_normalize_frame():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
@@ -590,7 +529,6 @@ def test_show4dstem_normalize_frame():
     result = w._normalize_frame(frame)
     assert result.dtype == np.uint8
     assert result.shape == (2, 2)
-
 
 # ── Programmatic Image Export ───────────────────────────────────────────────
 
@@ -621,7 +559,6 @@ def test_show4dstem_save_image_png_with_metadata(tmp_path):
     assert saved["display"]["diffraction"]["scale_mode"] == "log"
     assert saved["calibration"]["pixel_size_unit"] == "Å/px"
 
-
 def test_show4dstem_save_image_pdf_virtual(tmp_path):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
@@ -630,7 +567,6 @@ def test_show4dstem_save_image_pdf_virtual(tmp_path):
     w.save_image(out, view="virtual", format="pdf", include_metadata=False)
     assert out.exists()
     assert out.stat().st_size > 0
-
 
 def test_show4dstem_save_image_restore_state(tmp_path):
     data = np.random.rand(3, 4, 4, 16, 16).astype(np.float32)
@@ -642,7 +578,6 @@ def test_show4dstem_save_image_restore_state(tmp_path):
     w.save_image(out, view="diffraction", position=(3, 2), frame_idx=2, include_metadata=False, restore_state=True)
     assert w.position == (1, 1)
     assert w.frame_idx == 0
-
 
 def test_show4dstem_save_image_all_includes_fft_metadata(tmp_path):
     import json
@@ -657,7 +592,6 @@ def test_show4dstem_save_image_all_includes_fft_metadata(tmp_path):
     assert "virtual" in saved["display"]
     assert "fft" in saved["display"]
 
-
 def test_show4dstem_save_image_rejects_unknown_format(tmp_path):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
@@ -666,7 +600,6 @@ def test_show4dstem_save_image_rejects_unknown_format(tmp_path):
         assert False, "Should have raised ValueError"
     except ValueError:
         pass
-
 
 def test_show4dstem_save_image_rejects_view_aliases(tmp_path):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
@@ -679,13 +612,11 @@ def test_show4dstem_save_image_rejects_view_aliases(tmp_path):
         except ValueError:
             pass
 
-
 def test_show4dstem_export_view_and_format_lists():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
     assert w.list_export_views() == ("diffraction", "virtual", "fft", "all")
     assert w.list_export_formats() == ("png", "pdf")
-
 
 def test_show4dstem_save_image_overlay_scalebar_flags_in_metadata(tmp_path):
     import json
@@ -703,7 +634,6 @@ def test_show4dstem_save_image_overlay_scalebar_flags_in_metadata(tmp_path):
     metadata = json.loads(out.with_suffix(".json").read_text())
     assert metadata["include_overlays"] is False
     assert metadata["include_scalebar"] is False
-
 
 def test_show4dstem_save_sequence_frames_manifest(tmp_path):
     import json
@@ -729,7 +659,6 @@ def test_show4dstem_save_sequence_frames_manifest(tmp_path):
         assert path.exists()
         assert "sha256" in row
 
-
 def test_show4dstem_save_sequence_rejects_bad_mode(tmp_path):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
@@ -738,7 +667,6 @@ def test_show4dstem_save_sequence_rejects_bad_mode(tmp_path):
         assert False, "Should have raised ValueError"
     except ValueError:
         pass
-
 
 def test_show4dstem_preset_api_roundtrip(tmp_path):
     import json
@@ -765,7 +693,6 @@ def test_show4dstem_preset_api_roundtrip(tmp_path):
     assert payload["export_kind"] == "widget_preset"
     assert payload["preset_name"] == "workflow_a"
 
-
 def test_show4dstem_save_figure_template(tmp_path):
     import json
 
@@ -784,7 +711,6 @@ def test_show4dstem_save_figure_template(tmp_path):
     assert meta["template"] == "publication_dp_vi_fft"
     assert meta["publication_style"] is True
 
-
 def test_show4dstem_save_reproducibility_report(tmp_path):
     import json
 
@@ -798,7 +724,6 @@ def test_show4dstem_save_reproducibility_report(tmp_path):
     assert payload["n_exports"] >= 2
     assert len(payload["exports"]) >= 2
     assert all("session_id" in row for row in payload["exports"])
-
 
 def test_show4dstem_suggest_adaptive_path_basic():
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
@@ -816,7 +741,6 @@ def test_show4dstem_suggest_adaptive_path_basic():
     assert len(set(result["path_points"])) == result["path_count"]
     assert w.path_length == result["path_count"]
 
-
 def test_show4dstem_suggest_adaptive_path_rejects_small_target():
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
     w = Show4DSTEM(data)
@@ -825,7 +749,6 @@ def test_show4dstem_suggest_adaptive_path_rejects_small_target():
         assert False, "Should have raised ValueError"
     except ValueError:
         pass
-
 
 def test_show4dstem_suggest_adaptive_path_respects_roi_mask():
     data = np.random.rand(10, 10, 16, 16).astype(np.float32)
@@ -843,7 +766,6 @@ def test_show4dstem_suggest_adaptive_path_respects_roi_mask():
     for row, col in result["dense_points"]:
         assert mask[row, col]
 
-
 def test_show4dstem_suggest_adaptive_path_return_maps():
     data = np.random.rand(6, 6, 8, 8).astype(np.float32)
     w = Show4DSTEM(data)
@@ -857,9 +779,7 @@ def test_show4dstem_suggest_adaptive_path_return_maps():
     assert result["utility_map"].shape == (6, 6)
     assert "utility_components" in result
 
-
 # ── Sparse Ingest / Adaptive Loop APIs ─────────────────────────────────────
-
 
 def test_show4dstem_ingest_scan_point_and_get_sparse_state():
     data = np.zeros((6, 6, 8, 8), dtype=np.float32)
@@ -875,7 +795,6 @@ def test_show4dstem_ingest_scan_point_and_get_sparse_state():
     assert np.allclose(state["sampled_data"][0], 7.0)
     assert state["total_dose"] == pytest.approx(2.5)
     assert np.allclose(w._get_frame(2, 3), 7.0)
-
 
 def test_show4dstem_ingest_scan_block_and_set_sparse_state_roundtrip():
     data = np.zeros((5, 5, 8, 8), dtype=np.float32)
@@ -906,7 +825,6 @@ def test_show4dstem_ingest_scan_block_and_set_sparse_state_roundtrip():
     assert np.allclose(w2._get_frame(2, 2), 2.0)
     assert np.allclose(w2._get_frame(4, 3), 3.0)
 
-
 def test_show4dstem_propose_next_points_respects_budget_and_existing():
     data = np.random.rand(6, 6, 8, 8).astype(np.float32)
     w = Show4DSTEM(data)
@@ -929,7 +847,6 @@ def test_show4dstem_propose_next_points_respects_budget_and_existing():
     )
     assert all(roi_mask[r, c] for r, c in proposed_random)
 
-
 def test_show4dstem_evaluate_against_reference_outputs_metrics():
     data = np.random.rand(6, 6, 8, 8).astype(np.float32)
     w = Show4DSTEM(data)
@@ -943,7 +860,6 @@ def test_show4dstem_evaluate_against_reference_outputs_metrics():
     for key in ("rmse", "nrmse", "mae", "psnr"):
         assert key in report["metrics"]
         assert np.isfinite(report["metrics"][key])
-
 
 def test_show4dstem_export_session_bundle(tmp_path):
     import json
@@ -961,9 +877,7 @@ def test_show4dstem_export_session_bundle(tmp_path):
     for path in payload["files"].values():
         assert pathlib.Path(path).exists()
 
-
 # ── 5D Time/Tilt Series ────────────────────────────────────────────────────
-
 
 def test_show4dstem_5d_basic():
     """5D array creates widget with n_frames > 1."""
@@ -975,7 +889,6 @@ def test_show4dstem_5d_basic():
     assert w.det_rows == 8
     assert w.det_cols == 8
     assert w.frame_idx == 0
-
 
 def test_show4dstem_5d_frame_navigation():
     """Changing frame_idx updates the displayed frame."""
@@ -993,7 +906,6 @@ def test_show4dstem_5d_frame_navigation():
     frame2 = w._get_frame(0, 0)
     assert np.allclose(frame2, 3.0)
 
-
 def test_show4dstem_5d_frame_dim_label():
     """frame_dim_label is set from constructor param."""
     data = np.random.rand(3, 2, 2, 4, 4).astype(np.float32)
@@ -1001,7 +913,6 @@ def test_show4dstem_5d_frame_dim_label():
     assert w.frame_dim_label == "Tilt"
     w2 = Show4DSTEM(data)
     assert w2.frame_dim_label == "Frame"
-
 
 def test_show4dstem_5d_virtual_image_per_frame():
     """Virtual image changes when frame_idx changes."""
@@ -1018,7 +929,6 @@ def test_show4dstem_5d_virtual_image_per_frame():
     vi_bytes_1 = bytes(w.virtual_image_bytes)
     assert vi_bytes_0 != vi_bytes_1
 
-
 def test_show4dstem_5d_global_range():
     """dp_global_min/max spans all frames."""
     data = np.zeros((3, 2, 2, 4, 4), dtype=np.float32)
@@ -1029,7 +939,6 @@ def test_show4dstem_5d_global_range():
     assert w.dp_global_min <= 1.0
     assert w.dp_global_max >= 10.0
 
-
 def test_show4dstem_5d_set_image():
     """set_image works with 5D data."""
     data_4d = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -1039,7 +948,6 @@ def test_show4dstem_5d_set_image():
     w.set_image(data_5d)
     assert w.n_frames == 3
     assert w.frame_idx == 0
-
 
 def test_show4dstem_5d_state_dict():
     """state_dict includes frame traits."""
@@ -1053,7 +961,6 @@ def test_show4dstem_5d_state_dict():
     assert "frame_fps" in sd
     assert "frame_reverse" in sd
     assert "frame_boomerang" in sd
-
 
 def test_show4dstem_5d_state_roundtrip():
     """State can be saved and restored for 5D widget."""
@@ -1071,7 +978,6 @@ def test_show4dstem_5d_state_roundtrip():
     assert w2.frame_reverse is True
     assert w2.frame_boomerang is True
 
-
 def test_show4dstem_5d_summary(capsys):
     """summary() shows frame info for 5D data."""
     data = np.random.rand(5, 2, 2, 4, 4).astype(np.float32)
@@ -1082,7 +988,6 @@ def test_show4dstem_5d_summary(capsys):
     assert "Frames:" in out
     assert "Tilt" in out
 
-
 def test_show4dstem_5d_repr():
     """__repr__ includes frame info for 5D data."""
     data = np.random.rand(3, 2, 2, 4, 4).astype(np.float32)
@@ -1090,7 +995,6 @@ def test_show4dstem_5d_repr():
     r = repr(w)
     assert "3," in r  # n_frames in shape
     assert "focus=" in r  # frame_dim_label.lower()
-
 
 def test_show4dstem_4d_no_frame_traits():
     """4D data keeps n_frames=1, no frame info in repr."""
@@ -1101,7 +1005,6 @@ def test_show4dstem_4d_no_frame_traits():
     r = repr(w)
     assert "frame" not in r.lower() or "frame" not in r
 
-
 def test_show4dstem_5d_torch_input():
     """5D PyTorch tensor input works."""
     import torch
@@ -1111,16 +1014,13 @@ def test_show4dstem_5d_torch_input():
     assert w.shape_rows == 4
     assert w.det_rows == 8
 
-
 # ── Tool visibility / locking ────────────────────────────────────────────
-
 
 @pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
 def test_show4dstem_tool_lists_default_empty(trait_name):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data, scan_shape=(4, 4))
     assert getattr(w, trait_name) == []
-
 
 @pytest.mark.parametrize(
     ("trait_name", "ctor_kwargs", "expected"),
@@ -1138,13 +1038,11 @@ def test_show4dstem_tool_lists_constructor_behavior(trait_name, ctor_kwargs, exp
     w = Show4DSTEM(data, scan_shape=(4, 4), **ctor_kwargs)
     assert getattr(w, trait_name) == expected
 
-
 @pytest.mark.parametrize("kwargs", [{"disabled_tools": ["not_real"]}, {"hidden_tools": ["not_real"]}])
 def test_show4dstem_tool_lists_unknown_raises(kwargs):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     with pytest.raises(ValueError, match="Unknown tool group"):
         Show4DSTEM(data, scan_shape=(4, 4), **kwargs)
-
 
 @pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
 def test_show4dstem_tool_lists_normalizes(trait_name):
@@ -1153,12 +1051,10 @@ def test_show4dstem_tool_lists_normalizes(trait_name):
     setattr(w, trait_name, ["DISPLAY", "display", "roi"])
     assert getattr(w, trait_name) == ["display", "roi"]
 
-
 def test_show4dstem_widget_version_is_set():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4DSTEM(data, scan_shape=(4, 4))
     assert w.widget_version != "unknown"
-
 
 def test_show4dstem_show_controls_default():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)

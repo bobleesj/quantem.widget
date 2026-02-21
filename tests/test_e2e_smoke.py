@@ -20,7 +20,6 @@ from conftest import TESTS_DIR, _run_notebook_and_wait, _write_notebook
 NOTEBOOK_PATH = TESTS_DIR / "_smoke_all_widgets.ipynb"
 SCREENSHOT_DIR = TESTS_DIR / "screenshots" / "smoke"
 
-
 @pytest.fixture(scope="module")
 def smoke_page(browser_context):
     """Single notebook with all widgets, opened once for the module."""
@@ -70,7 +69,6 @@ def smoke_page(browser_context):
     page.close()
     NOTEBOOK_PATH.unlink(missing_ok=True)
 
-
 ALL_WIDGETS = [
     "show1d-root",
     "mark2d-root",
@@ -94,7 +92,6 @@ VIEWER_WIDGETS_WITH_CUSTOMIZER = [
     "showcomplex-root",
 ]
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -105,12 +102,10 @@ def _click_menu_item(page, text, timeout=3000):
     item.wait_for(state="visible", timeout=timeout)
     item.click()
 
-
 def _screenshot(widget, name):
     """Save a widget screenshot to the smoke directory."""
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     widget.screenshot(path=str(SCREENSHOT_DIR / f"{name}.png"))
-
 
 def _dismiss_menus(page):
     """Press Escape to dismiss any open MUI dropdown menus."""
@@ -119,7 +114,6 @@ def _dismiss_menus(page):
         page.keyboard.press("Escape")
         time.sleep(0.5)
 
-
 def _change_dropdown(widget, page, nth, value, wait=1.0):
     """Change the nth MUI Select dropdown to the given value."""
     _dismiss_menus(page)
@@ -127,7 +121,6 @@ def _change_dropdown(widget, page, nth, value, wait=1.0):
     time.sleep(0.5)
     _click_menu_item(page, value)
     time.sleep(wait)
-
 
 def _set_dark_theme(page):
     """Switch JupyterLab to dark theme via DOM manipulation."""
@@ -139,7 +132,6 @@ def _set_dark_theme(page):
     }""")
     time.sleep(2)
 
-
 def _set_light_theme(page):
     """Switch JupyterLab back to light theme."""
     page.evaluate("""() => {
@@ -150,13 +142,11 @@ def _set_light_theme(page):
     }""")
     time.sleep(2)
 
-
 def _extract_show4d_nav_pos(widget) -> tuple[int, int]:
     """Parse the current Show4D navigation cursor (row, col) from widget text."""
     match = re.search(r"at \((\d+),\s*(\d+)\)", widget.inner_text())
     assert match is not None, "Could not find Show4D nav position text 'at (row, col)'"
     return int(match.group(1)), int(match.group(2))
-
 
 # ---------------------------------------------------------------------------
 # Basic rendering tests
@@ -167,7 +157,6 @@ def test_widget_root_exists(smoke_page, css_class):
     root = smoke_page.locator(f".{css_class}")
     assert root.count() >= 1, f"Widget .{css_class} not found on page"
 
-
 @pytest.mark.parametrize("css_class", ALL_WIDGETS)
 def test_canvas_rendered(smoke_page, css_class):
     canvas = smoke_page.locator(f".{css_class} canvas")
@@ -176,7 +165,6 @@ def test_canvas_rendered(smoke_page, css_class):
     assert box is not None, f"Canvas in .{css_class} has no bounding box"
     assert box["width"] > 0 and box["height"] > 0, f"Canvas in .{css_class} has zero dimensions"
 
-
 @pytest.mark.parametrize("css_class", ALL_WIDGETS)
 def test_widget_screenshot(smoke_page, css_class):
     """Capture a screenshot of each widget for visual verification."""
@@ -184,14 +172,12 @@ def test_widget_screenshot(smoke_page, css_class):
     name = css_class.replace("-root", "")
     _screenshot(root, name)
 
-
 @pytest.mark.parametrize("css_class", VIEWER_WIDGETS_WITH_CUSTOMIZER)
 def test_viewer_controls_dropdown_exists(smoke_page, css_class):
     """Viewer widgets expose the shared controls customizer button."""
     widget = smoke_page.locator(f".{css_class}").first
     widget.scroll_into_view_if_needed()
     assert widget.locator('button[aria-label="Customize controls"]').count() >= 1
-
 
 # ---------------------------------------------------------------------------
 # Show1D interaction tests
@@ -208,7 +194,6 @@ def test_show1d_toggle_log_scale(smoke_page):
     widget.locator(".MuiSwitch-root").nth(0).click()
     time.sleep(0.5)
 
-
 def test_show1d_toggle_grid(smoke_page):
     """Toggle grid on Show1D."""
     widget = smoke_page.locator(".show1d-root").first
@@ -220,7 +205,6 @@ def test_show1d_toggle_grid(smoke_page):
     widget.locator(".MuiSwitch-root").nth(1).click()
     time.sleep(0.5)
 
-
 def test_show1d_toggle_legend(smoke_page):
     """Toggle legend on Show1D."""
     widget = smoke_page.locator(".show1d-root").first
@@ -231,7 +215,6 @@ def test_show1d_toggle_legend(smoke_page):
     _screenshot(widget, "show1d_no_legend")
     widget.locator(".MuiSwitch-root").nth(2).click()
     time.sleep(0.5)
-
 
 # ---------------------------------------------------------------------------
 # Show2D interaction tests
@@ -250,7 +233,6 @@ def test_show2d_toggle_fft(smoke_page):
     widget.locator(".MuiSwitch-root").first.click()
     time.sleep(1)
 
-
 def test_show2d_change_colormap(smoke_page):
     """Change Show2D colormap to Viridis and back."""
     widget = smoke_page.locator(".show2d-root").first
@@ -260,7 +242,6 @@ def test_show2d_change_colormap(smoke_page):
     _screenshot(widget, "show2d_viridis")
     _change_dropdown(widget, smoke_page, 1, "Inferno")
 
-
 def test_show2d_change_scale(smoke_page):
     """Switch Show2D scale to Log and back."""
     widget = smoke_page.locator(".show2d-root").first
@@ -268,7 +249,6 @@ def test_show2d_change_scale(smoke_page):
     _change_dropdown(widget, smoke_page, 0, "Log")
     _screenshot(widget, "show2d_log")
     _change_dropdown(widget, smoke_page, 0, "Lin")
-
 
 def test_show2d_toggle_colorbar(smoke_page):
     """Toggle Colorbar switch on Show2D."""
@@ -281,7 +261,6 @@ def test_show2d_toggle_colorbar(smoke_page):
     widget.locator(".MuiSwitch-root").nth(4).click()
     time.sleep(0.5)
 
-
 def test_show2d_toggle_auto_contrast(smoke_page):
     """Toggle Auto contrast on Show2D."""
     widget = smoke_page.locator(".show2d-root").first
@@ -291,7 +270,6 @@ def test_show2d_toggle_auto_contrast(smoke_page):
     _screenshot(widget, "show2d_auto")
     widget.locator(".MuiSwitch-root").nth(5).click()
     time.sleep(0.5)
-
 
 def test_show2d_profile_hover(smoke_page):
     """Enable profile, draw line, hover over chart, verify crosshair position."""
@@ -335,7 +313,6 @@ def test_show2d_profile_hover(smoke_page):
     widget.locator(".MuiSwitch-root").nth(2).click()
     time.sleep(0.5)
 
-
 # ---------------------------------------------------------------------------
 # Show3D interaction tests
 # ---------------------------------------------------------------------------
@@ -353,7 +330,6 @@ def test_show3d_toggle_fft(smoke_page):
     widget.locator(".MuiSwitch-root").first.click()
     time.sleep(1)
 
-
 def test_show3d_change_colormap(smoke_page):
     """Change Show3D colormap to Gray and back."""
     widget = smoke_page.locator(".show3d-root").first
@@ -363,7 +339,6 @@ def test_show3d_change_colormap(smoke_page):
     _screenshot(widget, "show3d_gray")
     _change_dropdown(widget, smoke_page, 1, "Magma")
 
-
 def test_show3d_change_scale(smoke_page):
     """Switch Show3D scale to Log and back."""
     widget = smoke_page.locator(".show3d-root").first
@@ -371,7 +346,6 @@ def test_show3d_change_scale(smoke_page):
     _change_dropdown(widget, smoke_page, 0, "Log")
     _screenshot(widget, "show3d_log")
     _change_dropdown(widget, smoke_page, 0, "Lin")
-
 
 def test_show3d_toggle_auto_contrast(smoke_page):
     """Toggle Auto contrast on Show3D."""
@@ -383,8 +357,6 @@ def test_show3d_toggle_auto_contrast(smoke_page):
     _screenshot(widget, "show3d_auto")
     widget.locator(".MuiSwitch-root").nth(3).click()
     time.sleep(0.5)
-
-
 
 # ---------------------------------------------------------------------------
 # Mark2D interaction tests
@@ -403,7 +375,6 @@ def test_mark2d_toggle_fft(smoke_page):
     widget.locator(".MuiSwitch-root").first.click()
     time.sleep(1)
 
-
 def test_mark2d_change_colormap(smoke_page):
     """Change Mark2D colormap to Viridis and back."""
     widget = smoke_page.locator(".mark2d-root").first
@@ -412,7 +383,6 @@ def test_mark2d_change_colormap(smoke_page):
     _change_dropdown(widget, smoke_page, 1, "Viridis")
     _screenshot(widget, "mark2d_viridis")
     _change_dropdown(widget, smoke_page, 1, "Gray")
-
 
 def test_mark2d_toggle_colorbar(smoke_page):
     """Toggle Colorbar switch on Mark2D."""
@@ -425,7 +395,6 @@ def test_mark2d_toggle_colorbar(smoke_page):
     widget.locator(".MuiSwitch-root").nth(2).click()
     time.sleep(0.5)
 
-
 def test_mark2d_undo_redo_exist(smoke_page):
     """Verify UNDO and REDO buttons exist in Mark2D."""
     widget = smoke_page.locator(".mark2d-root").first
@@ -434,7 +403,6 @@ def test_mark2d_undo_redo_exist(smoke_page):
     redo = widget.locator('button:has-text("REDO")')
     assert undo.count() >= 1, "UNDO button not found in Mark2D"
     assert redo.count() >= 1, "REDO button not found in Mark2D"
-
 
 # ---------------------------------------------------------------------------
 # Show3DVolume interaction tests
@@ -450,7 +418,6 @@ def test_show3dvolume_toggle_fft(smoke_page):
     widget.locator(".MuiSwitch-root").first.click()
     time.sleep(1)
 
-
 def test_show3dvolume_change_colormap(smoke_page):
     """Change Show3DVolume colormap."""
     widget = smoke_page.locator(".show3dvolume-root").first
@@ -459,7 +426,6 @@ def test_show3dvolume_change_colormap(smoke_page):
     _change_dropdown(widget, smoke_page, 1, "Viridis")
     _screenshot(widget, "show3dvolume_viridis")
     _change_dropdown(widget, smoke_page, 1, "Inferno")
-
 
 def test_show3dvolume_toggle_crosshair(smoke_page):
     """Toggle Crosshair switch on Show3DVolume."""
@@ -473,7 +439,6 @@ def test_show3dvolume_toggle_crosshair(smoke_page):
     _screenshot(widget, "show3dvolume_crosshair")
     switches.nth(2).click()
     time.sleep(0.5)
-
 
 # ---------------------------------------------------------------------------
 # Show4DSTEM interaction tests
@@ -501,7 +466,6 @@ def test_show4dstem_presets(smoke_page):
     time.sleep(0.5)
     _screenshot(widget, "show4dstem_adf")
 
-
 def test_show4dstem_change_detector_mode(smoke_page):
     """Change Show4DSTEM detector mode from Circle to Annular."""
     widget = smoke_page.locator(".show4dstem-root").first
@@ -510,7 +474,6 @@ def test_show4dstem_change_detector_mode(smoke_page):
     _change_dropdown(widget, smoke_page, 0, "Annular")
     _screenshot(widget, "show4dstem_annular")
     _change_dropdown(widget, smoke_page, 0, "Circle")
-
 
 def test_show4dstem_toggle_fft(smoke_page):
     """Toggle FFT on Show4DSTEM VI panel."""
@@ -527,12 +490,9 @@ def test_show4dstem_toggle_fft(smoke_page):
     fft_switch.nth(2).click()
     time.sleep(1)
 
-
-
 # ---------------------------------------------------------------------------
 # Bin interaction tests
 # ---------------------------------------------------------------------------
-
 
 def test_bin_change_binning_controls(smoke_page):
     """Change Bin factors and verify binned shape text updates."""
@@ -551,7 +511,6 @@ def test_bin_change_binning_controls(smoke_page):
     assert shape_line.count() >= 1, "Bin shape summary did not update after changing factors"
     _screenshot(widget, "bin_factors_sum_pad")
 
-
 def test_bin_change_display_controls(smoke_page):
     """Change Bin colormap/display controls and capture screenshot."""
     widget = smoke_page.locator(".bin-root").first
@@ -564,7 +523,6 @@ def test_bin_change_display_controls(smoke_page):
     # Reset to default-like settings for downstream screenshots
     _change_dropdown(widget, smoke_page, 6, "inferno")
     _change_dropdown(widget, smoke_page, 7, "linear")
-
 
 # ---------------------------------------------------------------------------
 # Show4D interaction tests
@@ -582,7 +540,6 @@ def test_show4d_toggle_fft(smoke_page):
     switches.nth(1).click()
     time.sleep(1)
 
-
 def test_show4d_change_roi_mode(smoke_page):
     """Change Show4D ROI mode from Off to Rect."""
     widget = smoke_page.locator(".show4d-root").first
@@ -593,7 +550,6 @@ def test_show4d_change_roi_mode(smoke_page):
     _screenshot(widget, "show4d_roi_rect")
     _change_dropdown(widget, smoke_page, 0, "Off")
 
-
 def test_show4d_change_colormap(smoke_page):
     """Change Show4D navigation colormap."""
     widget = smoke_page.locator(".show4d-root").first
@@ -602,8 +558,6 @@ def test_show4d_change_colormap(smoke_page):
     _change_dropdown(widget, smoke_page, 1, "Gray")
     _screenshot(widget, "show4d_gray")
     _change_dropdown(widget, smoke_page, 1, "Inferno")
-
-
 
 def test_show4d_controls_customizer_presets(smoke_page):
     """Apply Compact/All presets from controls customizer."""
@@ -629,7 +583,6 @@ def test_show4d_controls_customizer_presets(smoke_page):
 
     assert widget.locator("text=Profile:").count() >= 1, "All preset should restore Profile controls"
 
-
 def test_show4d_controls_customizer_lock_export(smoke_page):
     """Lock/unlock Export controls from customizer and verify button disabled state."""
     widget = smoke_page.locator(".show4d-root").first
@@ -651,7 +604,6 @@ def test_show4d_controls_customizer_lock_export(smoke_page):
     time.sleep(0.3)
     smoke_page.keyboard.press("Escape")
     time.sleep(0.3)
-
 
 def test_show4d_controls_customizer_lock_navigation_blocks_keyboard_and_mouse(smoke_page):
     """Lock navigation and verify keyboard/mouse navigation handlers are blocked."""
@@ -690,7 +642,6 @@ def test_show4d_controls_customizer_lock_navigation_blocks_keyboard_and_mouse(sm
     smoke_page.keyboard.press("Escape")
     time.sleep(0.2)
 
-
 # ---------------------------------------------------------------------------
 # Edit2D interaction tests
 # ---------------------------------------------------------------------------
@@ -705,7 +656,6 @@ def test_edit2d_controls_exist(smoke_page):
     assert canvases.count() >= 1, "No canvas in Edit2D"
     _screenshot(widget, "edit2d_controls")
 
-
 def test_edit2d_change_colormap(smoke_page):
     """Change Edit2D colormap."""
     widget = smoke_page.locator(".edit2d-root").first
@@ -714,7 +664,6 @@ def test_edit2d_change_colormap(smoke_page):
     _change_dropdown(widget, smoke_page, 1, "Viridis")
     _screenshot(widget, "edit2d_viridis")
     _change_dropdown(widget, smoke_page, 1, "Inferno")
-
 
 def test_edit2d_toggle_auto_contrast(smoke_page):
     """Toggle Auto contrast on Edit2D."""
@@ -726,7 +675,6 @@ def test_edit2d_toggle_auto_contrast(smoke_page):
     _screenshot(widget, "edit2d_auto")
     widget.locator(".MuiSwitch-root").first.click()
     time.sleep(0.5)
-
 
 # ---------------------------------------------------------------------------
 # Align2D interaction tests
@@ -744,7 +692,6 @@ def test_align2d_controls_exist(smoke_page):
     assert canvases.count() >= 1, "No canvas in Align2D"
     _screenshot(widget, "align2d_controls")
 
-
 def test_align2d_change_blend_mode(smoke_page):
     """Change Align2D blend mode to Difference and back."""
     widget = smoke_page.locator(".align2d-root").first
@@ -753,7 +700,6 @@ def test_align2d_change_blend_mode(smoke_page):
     _change_dropdown(widget, smoke_page, 0, "Diff")
     _screenshot(widget, "align2d_diff")
     _change_dropdown(widget, smoke_page, 0, "Blend")
-
 
 def test_align2d_toggle_panels(smoke_page):
     """Toggle Show Panels switch on Align2D."""
@@ -766,7 +712,6 @@ def test_align2d_toggle_panels(smoke_page):
     _screenshot(widget, "align2d_panels")
     widget.locator(".MuiSwitch-root").first.click()
     time.sleep(1)
-
 
 # ---------------------------------------------------------------------------
 # ShowComplex2D interaction tests
@@ -781,7 +726,6 @@ def test_showcomplex_change_mode(smoke_page):
     _screenshot(widget, "showcomplex_phase")
     _change_dropdown(widget, smoke_page, 2, "Amplitude")
 
-
 def test_showcomplex_hsv_mode(smoke_page):
     """Switch ShowComplex2D to HSV mode and verify colorwheel."""
     widget = smoke_page.locator(".showcomplex-root").first
@@ -790,7 +734,6 @@ def test_showcomplex_hsv_mode(smoke_page):
     time.sleep(1)
     _screenshot(widget, "showcomplex_hsv")
     _change_dropdown(widget, smoke_page, 2, "Amplitude")
-
 
 def test_showcomplex_toggle_fft(smoke_page):
     """Toggle FFT on ShowComplex2D."""
@@ -805,7 +748,6 @@ def test_showcomplex_toggle_fft(smoke_page):
     widget.locator(".MuiSwitch-root").first.click()
     time.sleep(1)
 
-
 # ---------------------------------------------------------------------------
 # Dark theme tests — must run AFTER all light-mode tests
 # ---------------------------------------------------------------------------
@@ -816,7 +758,6 @@ def test_zz_dark_theme_switch(smoke_page):
     is_dark = smoke_page.evaluate("() => document.body.dataset.jpThemeLight")
     assert is_dark == "false", f"Expected dark theme, got jpThemeLight={is_dark}"
 
-
 @pytest.mark.parametrize("css_class", ALL_WIDGETS)
 def test_zz_dark_theme_screenshot(smoke_page, css_class):
     """Screenshot every widget in dark theme for visual verification."""
@@ -824,7 +765,6 @@ def test_zz_dark_theme_screenshot(smoke_page, css_class):
     widget.scroll_into_view_if_needed()
     name = css_class.replace("-root", "")
     _screenshot(widget, f"{name}_dark")
-
 
 def test_zz_dark_theme_restore(smoke_page):
     """Restore light theme after dark theme tests."""

@@ -4,16 +4,13 @@ import pytest
 import quantem.widget
 from quantem.widget import Show4D
 
-
 def test_version_exists():
     assert hasattr(quantem.widget, "__version__")
-
 
 def test_show4d_loads():
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
     widget = Show4D(data)
     assert widget is not None
-
 
 def test_show4d_shape_traits():
     data = np.random.rand(4, 8, 12, 16).astype(np.float32)
@@ -23,25 +20,21 @@ def test_show4d_shape_traits():
     assert widget.sig_rows == 12
     assert widget.sig_cols == 16
 
-
 def test_show4d_initial_position():
     data = np.random.rand(8, 10, 16, 16).astype(np.float32)
     widget = Show4D(data)
     assert widget.pos_row == 4
     assert widget.pos_col == 5
 
-
 def test_show4d_frame_bytes_nonzero():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     widget = Show4D(data)
     assert len(widget.frame_bytes) == 8 * 8 * 4  # float32
 
-
 def test_show4d_nav_image_bytes_nonzero():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     widget = Show4D(data)
     assert len(widget.nav_image_bytes) == 4 * 4 * 4  # float32
-
 
 def test_show4d_default_nav_image_is_mean():
     data = np.ones((4, 4, 8, 8), dtype=np.float32) * 42
@@ -49,14 +42,12 @@ def test_show4d_default_nav_image_is_mean():
     nav_arr = np.frombuffer(widget.nav_image_bytes, dtype=np.float32)
     assert np.allclose(nav_arr, 42.0)
 
-
 def test_show4d_nav_image_override():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     nav = np.ones((4, 4), dtype=np.float32) * 99
     widget = Show4D(data, nav_image=nav)
     nav_arr = np.frombuffer(widget.nav_image_bytes, dtype=np.float32)
     assert np.allclose(nav_arr, 99.0)
-
 
 def test_show4d_position_change_updates_frame():
     data = np.zeros((4, 4, 8, 8), dtype=np.float32)
@@ -71,7 +62,6 @@ def test_show4d_position_change_updates_frame():
     frame1 = bytes(widget.frame_bytes)
     assert frame0 != frame1
 
-
 def test_show4d_position_property():
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
     widget = Show4D(data)
@@ -79,7 +69,6 @@ def test_show4d_position_property():
     assert widget.position == (2, 3)
     assert widget.pos_row == 2
     assert widget.pos_col == 3
-
 
 def test_show4d_roi_circle():
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
@@ -91,7 +80,6 @@ def test_show4d_roi_circle():
     assert len(widget.frame_bytes) == 16 * 16 * 4
     assert len(widget.sig_stats) == 4
 
-
 def test_show4d_roi_square():
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
     widget = Show4D(data)
@@ -100,7 +88,6 @@ def test_show4d_roi_square():
     widget.roi_center_col = 4
     widget.roi_radius = 2
     assert len(widget.frame_bytes) > 0
-
 
 def test_show4d_roi_rect():
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
@@ -112,7 +99,6 @@ def test_show4d_roi_rect():
     widget.roi_height = 6
     assert len(widget.frame_bytes) > 0
 
-
 def test_show4d_roi_off_falls_back():
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
     widget = Show4D(data)
@@ -120,20 +106,17 @@ def test_show4d_roi_off_falls_back():
     widget.roi_mode = "off"
     assert len(widget.frame_bytes) == 16 * 16 * 4
 
-
 def test_show4d_nav_stats():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     widget = Show4D(data)
     assert len(widget.nav_stats) == 4
     assert widget.nav_stats[2] >= widget.nav_stats[1]  # max >= min
 
-
 def test_show4d_sig_stats():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     widget = Show4D(data)
     assert len(widget.sig_stats) == 4
     assert widget.sig_stats[2] >= widget.sig_stats[1]  # max >= min
-
 
 def test_show4d_pixel_size():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -143,7 +126,6 @@ def test_show4d_pixel_size():
     assert widget.nav_pixel_unit == "Å"
     assert widget.sig_pixel_unit == "mrad"
 
-
 def test_show4d_torch_input():
     import torch
     data = torch.rand(4, 4, 8, 8)
@@ -151,27 +133,22 @@ def test_show4d_torch_input():
     assert widget.nav_rows == 4
     assert widget.sig_rows == 8
 
-
 def test_show4d_rejects_2d():
     with pytest.raises(ValueError):
         Show4D(np.random.rand(16, 16).astype(np.float32))
-
 
 def test_show4d_rejects_3d():
     with pytest.raises(ValueError):
         Show4D(np.random.rand(4, 16, 16).astype(np.float32))
 
-
 def test_show4d_rejects_5d():
     with pytest.raises(ValueError):
         Show4D(np.random.rand(2, 2, 2, 8, 8).astype(np.float32))
-
 
 def test_show4d_title():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     widget = Show4D(data, title="Test 4D")
     assert widget.title == "Test 4D"
-
 
 def test_show4d_repr():
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
@@ -181,18 +158,15 @@ def test_show4d_repr():
     assert "4" in r
     assert "16" in r
 
-
 def test_show4d_nav_shape_property():
     data = np.random.rand(4, 8, 16, 16).astype(np.float32)
     widget = Show4D(data)
     assert widget.nav_shape == (4, 8)
 
-
 def test_show4d_sig_shape_property():
     data = np.random.rand(4, 4, 12, 16).astype(np.float32)
     widget = Show4D(data)
     assert widget.sig_shape == (12, 16)
-
 
 def test_show4d_data_ranges():
     data = np.ones((4, 4, 8, 8), dtype=np.float32) * 42
@@ -200,7 +174,6 @@ def test_show4d_data_ranges():
     assert widget.nav_data_min > 0
     assert widget.sig_data_min == 42.0
     assert widget.sig_data_max == 42.0
-
 
 def test_show4d_roi_empty_mask_falls_back():
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
@@ -212,12 +185,10 @@ def test_show4d_roi_empty_mask_falls_back():
     # Should fall back to single position frame
     assert len(widget.frame_bytes) == 16 * 16 * 4
 
-
 def test_show4d_roi_reduce_default():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     widget = Show4D(data)
     assert widget.roi_reduce == "mean"
-
 
 def test_show4d_roi_reduce_mean():
     data = np.zeros((4, 4, 8, 8), dtype=np.float32)
@@ -233,7 +204,6 @@ def test_show4d_roi_reduce_mean():
     # Mean of positions within radius 1 of (0,0) should be between 0 and 4
     assert frame.max() <= 4.0
 
-
 def test_show4d_roi_reduce_max():
     data = np.zeros((4, 4, 8, 8), dtype=np.float32)
     data[1, 1] = 10.0
@@ -247,7 +217,6 @@ def test_show4d_roi_reduce_max():
     frame = np.frombuffer(widget.frame_bytes, dtype=np.float32)
     assert frame.max() == 10.0
 
-
 def test_show4d_roi_reduce_min():
     data = np.ones((4, 4, 8, 8), dtype=np.float32) * 5.0
     data[1, 1] = 1.0
@@ -260,7 +229,6 @@ def test_show4d_roi_reduce_min():
     frame = np.frombuffer(widget.frame_bytes, dtype=np.float32)
     assert frame.min() == 1.0
 
-
 def test_show4d_roi_reduce_sum():
     data = np.ones((4, 4, 8, 8), dtype=np.float32)
     widget = Show4D(data)
@@ -272,7 +240,6 @@ def test_show4d_roi_reduce_sum():
     frame = np.frombuffer(widget.frame_bytes, dtype=np.float32)
     # Sum of N positions, each with value 1.0 → frame values should be > 1
     assert frame.max() > 1.0
-
 
 def test_show4d_roi_reduce_change_updates_frame():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -287,20 +254,17 @@ def test_show4d_roi_reduce_change_updates_frame():
     frame_max = bytes(widget.frame_bytes)
     assert frame_mean != frame_max
 
-
 def test_show4d_snap_defaults():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     widget = Show4D(data)
     assert widget.snap_enabled is False
     assert widget.snap_radius == 5
 
-
 def test_show4d_snap_enabled():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     widget = Show4D(data, snap_enabled=True, snap_radius=10)
     assert widget.snap_enabled is True
     assert widget.snap_radius == 10
-
 
 def test_show4d_snap_toggle():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -310,9 +274,7 @@ def test_show4d_snap_toggle():
     widget.snap_radius = 3
     assert widget.snap_radius == 3
 
-
 # ── State Protocol ────────────────────────────────────────────────────────
-
 
 def test_show4d_state_dict_roundtrip():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -331,7 +293,6 @@ def test_show4d_state_dict_roundtrip():
     assert w2.disabled_tools == ["display"]
     assert w2.hidden_tools == ["roi"]
 
-
 def test_show4d_save_load_file(tmp_path):
     import json
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -348,7 +309,6 @@ def test_show4d_save_load_file(tmp_path):
     assert w2.cmap == "plasma"
     assert w2.title == "Saved 4D"
 
-
 def test_show4d_summary(capsys):
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data, title="My 4D", cmap="inferno")
@@ -358,14 +318,12 @@ def test_show4d_summary(capsys):
     assert "4×4" in out
     assert "inferno" in out
 
-
 def test_show4d_repr():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data)
     r = repr(w)
     assert "Show4D" in r
     assert "4, 4, 8, 8" in r
-
 
 def test_show4d_set_image():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -380,9 +338,7 @@ def test_show4d_set_image():
     assert widget.sig_cols == 16
     assert widget.cmap == "viridis"
 
-
 # ── Line Profile ─────────────────────────────────────────────────────────
-
 
 def test_show4d_profile_defaults():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -393,7 +349,6 @@ def test_show4d_profile_defaults():
     assert w.profile_values is None
     assert w.profile_distance == 0.0
 
-
 def test_show4d_set_profile():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data)
@@ -402,7 +357,6 @@ def test_show4d_set_profile():
     assert len(w.profile_line) == 2
     assert w.profile_line[0] == {"row": 0.0, "col": 0.0}
     assert w.profile_line[1] == {"row": 7.0, "col": 7.0}
-
 
 def test_show4d_clear_profile():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -413,7 +367,6 @@ def test_show4d_clear_profile():
     assert result is w
     assert w.profile_line == []
 
-
 def test_show4d_profile_property():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data)
@@ -422,7 +375,6 @@ def test_show4d_profile_property():
     assert len(pts) == 2
     assert pts[0] == (1.5, 2.5)
     assert pts[1] == (6.5, 3.5)
-
 
 def test_show4d_profile_values():
     data = np.ones((4, 4, 8, 8), dtype=np.float32) * 5.0
@@ -433,14 +385,12 @@ def test_show4d_profile_values():
     assert len(vals) >= 2
     assert np.allclose(vals, 5.0, atol=0.01)
 
-
 def test_show4d_profile_distance():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data, sig_pixel_size=2.0, sig_pixel_unit="Å")
     w.set_profile((0, 0), (3, 4))
     # pixel distance = sqrt(3^2 + 4^2) = 5, physical = 5 * 2.0 = 10.0
     assert abs(w.profile_distance - 10.0) < 0.01
-
 
 def test_show4d_profile_in_state_dict():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -453,7 +403,6 @@ def test_show4d_profile_in_state_dict():
     assert sd["profile_width"] == 3
     assert len(sd["profile_line"]) == 2
 
-
 def test_show4d_profile_in_summary(capsys):
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data, title="Profile Test")
@@ -461,7 +410,6 @@ def test_show4d_profile_in_summary(capsys):
     w.summary()
     out = capsys.readouterr().out
     assert "Profile:" in out
-
 
 # ── GIF Export ──────────────────────────────────────────────────────────────
 
@@ -471,7 +419,6 @@ def test_show4d_gif_export_defaults():
     assert w._gif_export_requested is False
     assert w._gif_data == b""
     assert w._gif_metadata_json == ""
-
 
 def test_show4d_gif_generation_with_path():
     import json
@@ -489,14 +436,12 @@ def test_show4d_gif_generation_with_path():
     assert metadata["export_kind"] == "path_animation"
     assert metadata["n_frames"] == 3
 
-
 def test_show4d_gif_generation_no_path():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data)
     w._generate_gif()
     assert w._gif_data == b""
     assert w._gif_metadata_json == ""
-
 
 def test_show4d_normalize_frame():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
@@ -508,16 +453,13 @@ def test_show4d_normalize_frame():
     assert result.max() <= 255
     assert result.min() >= 0
 
-
 # ── Tool Visibility / Locking ────────────────────────────────────────────
-
 
 @pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
 def test_show4d_tool_lists_default_empty(trait_name):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4D(data)
     assert getattr(w, trait_name) == []
-
 
 @pytest.mark.parametrize(
     ("trait_name", "ctor_kwargs", "expected"),
@@ -535,13 +477,11 @@ def test_show4d_tool_lists_constructor_behavior(trait_name, ctor_kwargs, expecte
     w = Show4D(data, **ctor_kwargs)
     assert getattr(w, trait_name) == expected
 
-
 @pytest.mark.parametrize("kwargs", [{"disabled_tools": ["not_real"]}, {"hidden_tools": ["not_real"]}])
 def test_show4d_tool_lists_unknown_raises(kwargs):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     with pytest.raises(ValueError, match="Unknown tool group"):
         Show4D(data, **kwargs)
-
 
 @pytest.mark.parametrize("trait_name", ["disabled_tools", "hidden_tools"])
 def test_show4d_tool_lists_normalizes(trait_name):
@@ -550,9 +490,7 @@ def test_show4d_tool_lists_normalizes(trait_name):
     setattr(w, trait_name, ["DISPLAY", "display", "roi"])
     assert getattr(w, trait_name) == ["display", "roi"]
 
-
 # ── save_image ───────────────────────────────────────────────────────────
-
 
 def test_show4d_save_image_signal(tmp_path):
     data = np.random.rand(4, 4, 32, 32).astype(np.float32)
@@ -563,13 +501,11 @@ def test_show4d_save_image_signal(tmp_path):
     img = Image.open(out)
     assert img.size == (32, 32)
 
-
 def test_show4d_save_image_nav(tmp_path):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4D(data)
     out = w.save_image(tmp_path / "nav.png", view="nav")
     assert out.exists()
-
 
 def test_show4d_save_image_position(tmp_path):
     data = np.random.rand(8, 8, 16, 16).astype(np.float32)
@@ -577,13 +513,11 @@ def test_show4d_save_image_position(tmp_path):
     out = w.save_image(tmp_path / "pos.png", position=(3, 5))
     assert out.exists()
 
-
 def test_show4d_save_image_pdf(tmp_path):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
     w = Show4D(data)
     out = w.save_image(tmp_path / "out.pdf")
     assert out.exists()
-
 
 def test_show4d_save_image_bad_format(tmp_path):
     data = np.random.rand(4, 4, 16, 16).astype(np.float32)
@@ -591,12 +525,10 @@ def test_show4d_save_image_bad_format(tmp_path):
     with pytest.raises(ValueError, match="Unsupported format"):
         w.save_image(tmp_path / "out.bmp")
 
-
 def test_show4d_widget_version_is_set():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
     w = Show4D(data)
     assert w.widget_version != "unknown"
-
 
 def test_show4d_show_controls_default():
     data = np.random.rand(4, 4, 8, 8).astype(np.float32)
