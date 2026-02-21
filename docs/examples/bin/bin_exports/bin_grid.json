@@ -1,7 +1,7 @@
 {
   "metadata_version": "1.0",
   "widget_name": "Bin",
-  "widget_version": "0.0.7",
+  "widget_version": "0.4.0a2",
   "view": "grid",
   "format": "png",
   "export_kind": "single_view_image",

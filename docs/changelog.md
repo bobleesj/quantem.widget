@@ -6,6 +6,15 @@
 - **Merge4DSTEM** — stack multiple 4D-STEM datasets along a time axis with GPU-accelerated merge, detector binning, source preview, and Zarr export
 - **Show1D** — interactive 1D viewer for spectra, profiles, and time series with multi-trace overlay, calibrated axes, log scale, and figure export
 
+### Show1D
+- selectable peak markers: click to place peaks (snaps to nearest local max), click peaks to select, `selected_peaks` trait for downstream analysis in Python
+- grid density slider: adjustable grid line count (5–50) when grid is enabled
+- axis range lock: drag on X or Y axis area to lock a range, double-click axis to unlock; `x_range`/`y_range` traits for programmatic control
+- legend click: click legend entries to focus/unfocus individual traces
+- **breaking:** removed baseline subtraction, normalization, delta measurement, and mode selector (PAN/PEAK/RANGE/DELTA) — use Python for these transforms instead
+- **breaking:** removed `corrected_data` property, `baseline_mode`, `normalize_mode` traits
+- **breaking:** tool group `"analysis"` renamed to `"peaks"` (`disable_analysis` → `disable_peaks`, `hide_analysis` → `hide_peaks`)
+
 ### Show2D
 - file loaders: `from_png`, `from_tiff`, `from_emd`, `from_path`, `from_folder(file_type=...)`
 - stack reduction modes (`first`, `index`, `mean`, `max`, `sum`) for collapsing stacks to 2D
