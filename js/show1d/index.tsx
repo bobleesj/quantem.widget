@@ -10,6 +10,8 @@
  * - Log scale, grid lines, stats bar
  * - Publication-quality figure export
  * - Automatic theme detection (light/dark mode)
+ * - Peak markers with local max search and selectable peaks
+ * - Grid density slider
  */
 
 import * as React from "react";
@@ -20,12 +22,15 @@ import Switch from "@mui/material/Switch";
 import Button from "@mui/material/Button";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
+import Slider from "@mui/material/Slider";
 import Tooltip from "@mui/material/Tooltip";
 import "./styles.css";
 import { useTheme } from "../theme";
-import { roundToNiceValue } from "../scalebar";
+import { roundToNiceValue, canvasToPDF } from "../scalebar";
 import { extractFloat32, formatNumber, downloadBlob } from "../format";
 import { findDataRange } from "../stats";
+import { ControlCustomizer } from "../control-customizer";
+import { computeToolVisibility } from "../tool-parity";
 
 // ============================================================================
 // UI Styles (per-widget, matching Show3D/Show4DSTEM)
@@ -51,15 +56,6 @@ const switchStyles = {
   },
 };
 
-const controlRow = {
-  display: "flex",
-  alignItems: "center",
-  gap: "6px",
-  px: 1,
-  py: 0.5,
-  width: "fit-content",
-};
-
 const compactButton = {
   fontSize: 10,
   py: 0.25,
@@ -73,15 +69,33 @@ const upwardMenuProps = {
   sx: { zIndex: 9999 },
 };
 
+const sliderStyles = {
+  small: {
+    "& .MuiSlider-thumb": { width: 12, height: 12 },
+    "& .MuiSlider-rail": { height: 3 },
+    "& .MuiSlider-track": { height: 3 },
+  },
+};
+
 const container = {
   root: { p: 2, bgcolor: "transparent", color: "inherit", fontFamily: "monospace", overflow: "visible" },
 };
 
 // ============================================================================
+// Types
+// ============================================================================
+interface PeakMarker {
+  x: number;
+  y: number;
+  trace_idx: number;
+  label: string;
+  type?: "peak" | "valley";
+}
+
+// ============================================================================
 // Constants
 // ============================================================================
 const DPR = window.devicePixelRatio || 1;
-const RESIZE_HIT_AREA_PX = 10;
 const UNFOCUSED_ALPHA = 0.2;
 
 /** Snap a coordinate to the nearest pixel boundary for crisp 1px lines. */
@@ -90,12 +104,25 @@ function snap(v: number): number {
 }
 const DEFAULT_CANVAS_W = 500;
 const DEFAULT_CANVAS_H = 300;
-const MARGIN = { top: 12, right: 16, bottom: 48, left: 60 };
+const MARGIN_TOP = 12;
+const MARGIN_RIGHT = 16;
+const MARGIN_BOTTOM_BASE = 28; // tick marks + tick labels
+const MARGIN_BOTTOM_LABEL = 18; // extra when axis label present
+const MARGIN_LEFT_MIN = 48;
+const MARGIN_LEFT_LABEL = 26; // extra when Y-axis label present
 const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const AXIS_TICK_PX = 4;
 const MAX_TICKS_Y = 8;
 const TICK_LABEL_WIDTH_PX = 55;
 const Y_PAD_FRAC = 0.05;
+// Peak drag-to-search types
+interface PeakSearchRegion {
+  x0: number;       // data X start
+  x1: number;       // data X end
+  peakX: number;    // found peak data X
+  peakY: number;    // found peak data Y
+  traceIdx: number; // which trace
+}
 
 // ============================================================================
 // InfoTooltip (per-widget, matching Show3D)
@@ -138,7 +165,7 @@ function InfoTooltip({ text, theme = "dark" }: { text: React.ReactNode; theme?: 
           "&:hover": { color: isDark ? "#aaa" : "#444" },
         }}
       >
-        ⓘ
+        &#9432;
       </Typography>
     </Tooltip>
   );
@@ -173,11 +200,13 @@ function computeTicks(min: number, max: number, maxTicks: number = MAX_TICKS_Y):
   return ticks;
 }
 
-function computeLogTicks(min: number, max: number): number[] {
+function computeLogTicks(min: number, max: number, maxTicks: number = MAX_TICKS_Y): number[] {
   const logMin = Math.floor(Math.log10(Math.max(min, 1e-30)));
   const logMax = Math.ceil(Math.log10(Math.max(max, 1e-30)));
+  const totalDecades = logMax - logMin;
+  const step = totalDecades <= maxTicks ? 1 : Math.ceil(totalDecades / maxTicks);
   const ticks: number[] = [];
-  for (let e = logMin; e <= logMax; e++) {
+  for (let e = logMin; e <= logMax; e += step) {
     const val = Math.pow(10, e);
     if (val >= min && val <= max) ticks.push(val);
   }
@@ -216,6 +245,28 @@ function Show1D() {
   const [statsMax] = useModelState<number[]>("stats_max");
   const [statsStd] = useModelState<number[]>("stats_std");
   const [focusedTrace, setFocusedTrace] = useModelState<number>("focused_trace");
+  const [peakMarkers, setPeakMarkers] = useModelState<PeakMarker[]>("peak_markers");
+  const [peakActive, setPeakActive] = useModelState<boolean>("peak_active");
+  const [peakSearchRadius, setPeakSearchRadius] = useModelState<number>("peak_search_radius");
+  const [selectedPeaks, setSelectedPeaks] = useModelState<number[]>("selected_peaks");
+  const [gridDensity, setGridDensity] = useModelState<number>("grid_density");
+  const [modelXRange, setModelXRange] = useModelState<number[]>("x_range");
+  const [modelYRange, setModelYRange] = useModelState<number[]>("y_range");
+  const [disabledTools, setDisabledTools] = useModelState<string[]>("disabled_tools");
+  const [hiddenTools, setHiddenTools] = useModelState<string[]>("hidden_tools");
+
+  // Tool visibility
+  const toolVisibility = React.useMemo(
+    () => computeToolVisibility("Show1D", disabledTools, hiddenTools),
+    [disabledTools, hiddenTools],
+  );
+  const hideDisplay = toolVisibility.isHidden("display");
+  const hidePeaks = toolVisibility.isHidden("peaks");
+  const hideStats = toolVisibility.isHidden("stats");
+  const hideExport = toolVisibility.isHidden("export");
+  const lockDisplay = toolVisibility.isLocked("display");
+  const lockPeaks = toolVisibility.isLocked("peaks");
+  const lockExport = toolVisibility.isLocked("export");
 
   // Canvas refs
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -231,6 +282,19 @@ function Show1D() {
   const [xMax, setXMax] = React.useState(1);
   const [yMin, setYMin] = React.useState(0);
   const [yMax, setYMax] = React.useState(1);
+  const [xLocked, setXLocked] = React.useState(false);
+  const xLockedRef = React.useRef(false);
+  xLockedRef.current = xLocked;
+  const [yLocked, setYLocked] = React.useState(false);
+  const yLockedRef = React.useRef(false);
+  yLockedRef.current = yLocked;
+  // Axis drag selection state
+  const axisDragRef = React.useRef<{
+    axis: "x" | "y";
+    startPx: number;
+    startVal: number;
+  } | null>(null);
+  const [axisDragCurrent, setAxisDragCurrent] = React.useState<{ axis: "x" | "y"; startVal: number; currentVal: number } | null>(null);
 
   // Data ranges (for reset)
   const xDataRangeRef = React.useRef({ min: 0, max: 1 });
@@ -250,6 +314,20 @@ function Show1D() {
     label: string;
     color: string;
   } | null>(null);
+  const [hoverPeakIdx, setHoverPeakIdx] = React.useState<number | null>(null);
+
+  // Peak drag-to-search state
+  const peakDragRef = React.useRef<{
+    active: boolean;
+    startPx: number;        // canvas X pixel where drag started
+    startDataX: number;     // data X where drag started
+    traceIdx: number;       // which trace to search
+  } | null>(null);
+  const [peakSearchRegion, setPeakSearchRegion] = React.useState<PeakSearchRegion | null>(null);
+
+  // Legend geometry for hit detection
+  const legendGeoRef = React.useRef<{ lx: number; ly: number; w: number; h: number; entryH: number; pad: number; n: number } | null>(null);
+  const hoverLegendRef = React.useRef(false);
 
   // Drag state
   const dragRef = React.useRef<{
@@ -275,9 +353,38 @@ function Show1D() {
   // Export
   const [exportAnchor, setExportAnchor] = React.useState<HTMLElement | null>(null);
 
+  // Dynamic margins based on tick label widths and axis labels
+  const margin = React.useMemo(() => {
+    const hasYLabel = !!(yLabel || yUnit);
+    const hasXLabel = !!(xLabel || xUnit);
+
+    // Measure max Y tick label width using offscreen canvas
+    const yTicks = logScale
+      ? computeLogTicks(Math.max(yMin, 1e-30), yMax)
+      : computeTicks(yMin, yMax);
+    let maxTickW = 30; // minimum fallback
+    try {
+      const offCtx = document.createElement("canvas").getContext("2d");
+      if (offCtx) {
+        offCtx.font = `11px ${FONT}`;
+        for (const v of yTicks) {
+          const w = offCtx.measureText(formatNumber(v)).width;
+          if (w > maxTickW) maxTickW = w;
+        }
+      }
+    } catch { /* fallback */ }
+
+    return {
+      top: MARGIN_TOP,
+      right: MARGIN_RIGHT,
+      bottom: MARGIN_BOTTOM_BASE + (hasXLabel ? MARGIN_BOTTOM_LABEL : 0),
+      left: Math.max(MARGIN_LEFT_MIN, maxTickW + AXIS_TICK_PX + 6 + (hasYLabel ? MARGIN_LEFT_LABEL : 0)),
+    };
+  }, [yMin, yMax, logScale, yLabel, yUnit, xLabel, xUnit]);
+
   // Plot area dimensions
-  const plotW = canvasW - MARGIN.left - MARGIN.right;
-  const plotH = canvasH - MARGIN.top - MARGIN.bottom;
+  const plotW = canvasW - margin.left - margin.right;
+  const plotH = canvasH - margin.top - margin.bottom;
 
   // ========================================================================
   // Data extraction
@@ -345,8 +452,8 @@ function Show1D() {
   // Coordinate transforms
   // ========================================================================
   const dataToCanvasX = React.useCallback(
-    (dx: number) => MARGIN.left + ((dx - xMin) / (xMax - xMin)) * plotW,
-    [xMin, xMax, plotW],
+    (dx: number) => margin.left + ((dx - xMin) / (xMax - xMin)) * plotW,
+    [xMin, xMax, plotW, margin.left],
   );
   const dataToCanvasY = React.useCallback(
     (dy: number) => {
@@ -354,19 +461,19 @@ function Show1D() {
         const lMin = Math.log10(Math.max(yMin, 1e-30));
         const lMax = Math.log10(Math.max(yMax, 1e-30));
         const lVal = Math.log10(Math.max(dy, 1e-30));
-        return MARGIN.top + plotH - ((lVal - lMin) / (lMax - lMin || 1)) * plotH;
+        return margin.top + plotH - ((lVal - lMin) / (lMax - lMin || 1)) * plotH;
       }
-      return MARGIN.top + plotH - ((dy - yMin) / (yMax - yMin || 1)) * plotH;
+      return margin.top + plotH - ((dy - yMin) / (yMax - yMin || 1)) * plotH;
     },
-    [yMin, yMax, plotH, logScale],
+    [yMin, yMax, plotH, logScale, margin.top],
   );
   const canvasToDataX = React.useCallback(
-    (cx: number) => xMin + ((cx - MARGIN.left) / plotW) * (xMax - xMin),
-    [xMin, xMax, plotW],
+    (cx: number) => xMin + ((cx - margin.left) / plotW) * (xMax - xMin),
+    [xMin, xMax, plotW, margin.left],
   );
   const canvasToDataY = React.useCallback(
     (cy: number) => {
-      const frac = (MARGIN.top + plotH - cy) / plotH;
+      const frac = (margin.top + plotH - cy) / plotH;
       if (logScale) {
         const lMin = Math.log10(Math.max(yMin, 1e-30));
         const lMax = Math.log10(Math.max(yMax, 1e-30));
@@ -374,17 +481,21 @@ function Show1D() {
       }
       return yMin + frac * (yMax - yMin);
     },
-    [yMin, yMax, plotH, logScale],
+    [yMin, yMax, plotH, logScale, margin.top],
   );
 
   // ========================================================================
   // Reset view
   // ========================================================================
   const resetView = React.useCallback(() => {
-    setXMin(xDataRangeRef.current.min);
-    setXMax(xDataRangeRef.current.max);
-    setYMin(yDataRangeRef.current.min);
-    setYMax(yDataRangeRef.current.max);
+    if (!xLockedRef.current) {
+      setXMin(xDataRangeRef.current.min);
+      setXMax(xDataRangeRef.current.max);
+    }
+    if (!yLockedRef.current) {
+      setYMin(yDataRangeRef.current.min);
+      setYMax(yDataRangeRef.current.max);
+    }
   }, []);
 
   // ========================================================================
@@ -415,26 +526,28 @@ function Show1D() {
       ctx.lineWidth = 1;
       ctx.setLineDash([2, 3]);
 
-      // X grid
-      const xTicks = computeTicks(xMin, xMax, Math.max(3, Math.floor(plotW / TICK_LABEL_WIDTH_PX)));
+      // X grid — use gridDensity for tick count
+      const xGridCount = Math.max(3, gridDensity);
+      const xTicks = computeTicks(xMin, xMax, xGridCount);
       for (const tv of xTicks) {
         const cx = snap(dataToCanvasX(tv));
-        if (cx >= MARGIN.left && cx <= MARGIN.left + plotW) {
+        if (cx >= margin.left && cx <= margin.left + plotW) {
           ctx.beginPath();
-          ctx.moveTo(cx, MARGIN.top);
-          ctx.lineTo(cx, MARGIN.top + plotH);
+          ctx.moveTo(cx, margin.top);
+          ctx.lineTo(cx, margin.top + plotH);
           ctx.stroke();
         }
       }
 
-      // Y grid
-      const yTicks = logScale ? computeLogTicks(Math.max(yMin, 1e-30), yMax) : computeTicks(yMin, yMax);
+      // Y grid — use gridDensity for tick count
+      const yGridCount = Math.max(3, gridDensity);
+      const yTicks = logScale ? computeLogTicks(Math.max(yMin, 1e-30), yMax, yGridCount) : computeTicks(yMin, yMax, yGridCount);
       for (const tv of yTicks) {
         const cy = snap(dataToCanvasY(tv));
-        if (cy >= MARGIN.top && cy <= MARGIN.top + plotH) {
+        if (cy >= margin.top && cy <= margin.top + plotH) {
           ctx.beginPath();
-          ctx.moveTo(MARGIN.left, cy);
-          ctx.lineTo(MARGIN.left + plotW, cy);
+          ctx.moveTo(margin.left, cy);
+          ctx.lineTo(margin.left + plotW, cy);
           ctx.stroke();
         }
       }
@@ -444,12 +557,12 @@ function Show1D() {
     // Axes (pixel-snapped for crisp lines)
     ctx.strokeStyle = isDark ? "#666" : "#999";
     ctx.lineWidth = 1;
-    const axisLeft = snap(MARGIN.left);
-    const axisBottom = snap(MARGIN.top + plotH);
+    const axisLeft = snap(margin.left);
+    const axisBottom = snap(margin.top + plotH);
     ctx.beginPath();
-    ctx.moveTo(axisLeft, MARGIN.top);
+    ctx.moveTo(axisLeft, margin.top);
     ctx.lineTo(axisLeft, axisBottom);
-    ctx.lineTo(MARGIN.left + plotW, axisBottom);
+    ctx.lineTo(margin.left + plotW, axisBottom);
     ctx.stroke();
 
     // X ticks + labels
@@ -460,12 +573,12 @@ function Show1D() {
     ctx.textBaseline = "top";
     for (const tv of xTicks) {
       const cx = snap(dataToCanvasX(tv));
-      if (cx >= MARGIN.left && cx <= MARGIN.left + plotW) {
+      if (cx >= margin.left && cx <= margin.left + plotW) {
         ctx.beginPath();
-        ctx.moveTo(cx, MARGIN.top + plotH);
-        ctx.lineTo(cx, MARGIN.top + plotH + AXIS_TICK_PX);
+        ctx.moveTo(cx, margin.top + plotH);
+        ctx.lineTo(cx, margin.top + plotH + AXIS_TICK_PX);
         ctx.stroke();
-        ctx.fillText(formatNumber(tv), cx, MARGIN.top + plotH + AXIS_TICK_PX + 2);
+        ctx.fillText(formatNumber(tv), cx, margin.top + plotH + AXIS_TICK_PX + 2);
       }
     }
 
@@ -475,12 +588,12 @@ function Show1D() {
     ctx.textBaseline = "middle";
     for (const tv of yTicks) {
       const cy = snap(dataToCanvasY(tv));
-      if (cy >= MARGIN.top && cy <= MARGIN.top + plotH) {
+      if (cy >= margin.top && cy <= margin.top + plotH) {
         ctx.beginPath();
-        ctx.moveTo(MARGIN.left - AXIS_TICK_PX, cy);
-        ctx.lineTo(MARGIN.left, cy);
+        ctx.moveTo(margin.left - AXIS_TICK_PX, cy);
+        ctx.lineTo(margin.left, cy);
         ctx.stroke();
-        ctx.fillText(formatNumber(tv), MARGIN.left - AXIS_TICK_PX - 2, cy);
+        ctx.fillText(formatNumber(tv), margin.left - AXIS_TICK_PX - 2, cy);
       }
     }
 
@@ -492,13 +605,13 @@ function Show1D() {
       ctx.fillStyle = isDark ? "#999" : "#666";
       let lbl = xLabel || "";
       if (xUnit) lbl += lbl ? ` (${xUnit})` : xUnit;
-      ctx.fillText(lbl, MARGIN.left + plotW / 2, canvasH - 6);
+      ctx.fillText(lbl, margin.left + plotW / 2, margin.top + plotH + AXIS_TICK_PX + 18);
     }
 
     // Y axis label (rotated)
     if (yLabel || yUnit) {
       ctx.save();
-      ctx.translate(12, MARGIN.top + plotH / 2);
+      ctx.translate(12, margin.top + plotH / 2);
       ctx.rotate(-Math.PI / 2);
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
@@ -513,7 +626,7 @@ function Show1D() {
     // Clip to plot area for traces
     ctx.save();
     ctx.beginPath();
-    ctx.rect(MARGIN.left, MARGIN.top, plotW, plotH);
+    ctx.rect(margin.left, margin.top, plotW, plotH);
     ctx.clip();
 
     // Draw traces (unfocused first, then focused on top)
@@ -541,33 +654,78 @@ function Show1D() {
 
     const baseLW = lineWidth || 1.5;
     if (hasFocus) {
-      // Draw unfocused traces first (dimmed)
       for (let t = 0; t < traces.length; t++) {
         if (t !== focusedTrace) drawTrace(t, UNFOCUSED_ALPHA, baseLW);
       }
-      // Draw focused trace on top (full opacity, thicker)
       drawTrace(focusedTrace, 1.0, baseLW * 1.5);
     } else {
-      // No focus — all traces at full opacity
       for (let t = 0; t < traces.length; t++) {
         drawTrace(t, 1.0, baseLW);
       }
     }
 
-    ctx.restore();
+    // Peak markers
+    if (peakMarkers && peakMarkers.length > 0) {
+      const selSet = new Set(selectedPeaks || []);
+      for (let pi = 0; pi < peakMarkers.length; pi++) {
+        const pk = peakMarkers[pi];
+        const traceData = traces[pk.trace_idx];
+        if (!traceData) continue;
+        const color = (traceColors && traceColors[pk.trace_idx]) || "#4fc3f7";
+        const isSelected = selSet.has(pi);
 
-    // Resize handle triangle (bottom-right corner)
-    const rhSize = 10;
-    const rhX = canvasW;
-    const rhY = canvasH;
-    ctx.beginPath();
-    ctx.moveTo(rhX, rhY);
-    ctx.lineTo(rhX - rhSize, rhY);
-    ctx.lineTo(rhX, rhY - rhSize);
-    ctx.closePath();
-    ctx.fillStyle = isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.15)";
-    ctx.fill();
-  }, [canvasW, canvasH, xMin, xMax, yMin, yMax, yData, xData, nTraces, nPoints, traceColors, lineWidth, logScale, showGrid, xLabel, yLabel, xUnit, yUnit, isDark, dataToCanvasX, dataToCanvasY, plotW, plotH, focusedTrace]);
+        const cx = dataToCanvasX(pk.x);
+        const cy = dataToCanvasY(pk.y);
+
+        const isValley = pk.type === "valley";
+
+        // Vertical drop line (dashed)
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = isSelected ? 0.8 : 0.5;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx, isValley ? margin.top : margin.top + plotH);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1.0;
+
+        // Marker shape: triangle-up for peaks, triangle-down for valleys
+        const s = isSelected ? 7 : 5;
+        ctx.fillStyle = isSelected ? color : (isDark ? "#1a1a1a" : "#f8f8f8");
+        ctx.strokeStyle = color;
+        ctx.lineWidth = isSelected ? 2.5 : 1.5;
+        ctx.beginPath();
+        if (isValley) {
+          ctx.moveTo(cx - s, cy - s);
+          ctx.lineTo(cx + s, cy - s);
+          ctx.lineTo(cx, cy + s);
+        } else {
+          ctx.moveTo(cx, cy - s);
+          ctx.lineTo(cx + s, cy + s);
+          ctx.lineTo(cx - s, cy + s);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // Value label
+        ctx.font = `9px ${FONT}`;
+        ctx.fillStyle = isDark ? "#ddd" : "#333";
+        ctx.textAlign = "center";
+        if (isValley) {
+          ctx.textBaseline = "top";
+          ctx.fillText(pk.label || formatNumber(pk.x), cx, cy + s + 3);
+        } else {
+          ctx.textBaseline = "bottom";
+          ctx.fillText(pk.label || formatNumber(pk.x), cx, cy - s - 3);
+        }
+      }
+    }
+
+    ctx.restore();
+  }, [canvasW, canvasH, xMin, xMax, yMin, yMax, yData, xData, nTraces, nPoints, traceColors, lineWidth, logScale, showGrid, gridDensity, xLabel, yLabel, xUnit, yUnit, isDark, dataToCanvasX, dataToCanvasY, plotW, plotH, focusedTrace, margin, peakMarkers, selectedPeaks]);
 
   // ========================================================================
   // UI overlay (crosshair, legend)
@@ -588,24 +746,22 @@ function Show1D() {
     // Crosshair
     if (cursorInfo) {
       const { canvasX, canvasY } = cursorInfo;
-      if (canvasX >= MARGIN.left && canvasX <= MARGIN.left + plotW &&
-          canvasY >= MARGIN.top && canvasY <= MARGIN.top + plotH) {
+      if (canvasX >= margin.left && canvasX <= margin.left + plotW &&
+          canvasY >= margin.top && canvasY <= margin.top + plotH) {
         ctx.strokeStyle = isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.25)";
         ctx.lineWidth = 1;
         ctx.setLineDash([3, 3]);
 
-        // Vertical (pixel-snapped)
         const snapCX = snap(canvasX);
         ctx.beginPath();
-        ctx.moveTo(snapCX, MARGIN.top);
-        ctx.lineTo(snapCX, MARGIN.top + plotH);
+        ctx.moveTo(snapCX, margin.top);
+        ctx.lineTo(snapCX, margin.top + plotH);
         ctx.stroke();
 
-        // Horizontal (pixel-snapped)
         const snapCY = snap(canvasY);
         ctx.beginPath();
-        ctx.moveTo(MARGIN.left, snapCY);
-        ctx.lineTo(MARGIN.left + plotW, snapCY);
+        ctx.moveTo(margin.left, snapCY);
+        ctx.lineTo(margin.left + plotW, snapCY);
         ctx.stroke();
 
         ctx.setLineDash([]);
@@ -629,8 +785,8 @@ function Show1D() {
         const boxH = 16;
         let boxX = canvasX + 10;
         let boxY = canvasY - boxH - 6;
-        if (boxX + boxW > MARGIN.left + plotW) boxX = canvasX - boxW - 10;
-        if (boxY < MARGIN.top) boxY = canvasY + 10;
+        if (boxX + boxW > margin.left + plotW) boxX = canvasX - boxW - 10;
+        if (boxY < margin.top) boxY = canvasY + 10;
 
         ctx.fillStyle = isDark ? "rgba(30,30,30,0.9)" : "rgba(255,255,255,0.9)";
         ctx.fillRect(boxX, boxY, boxW, boxH);
@@ -646,7 +802,7 @@ function Show1D() {
 
     // Legend (with focus state)
     const hasFocusLegend = focusedTrace >= 0 && focusedTrace < nTraces;
-    if (showLegend && nTraces > 1 && traceLabels && traceLabels.length > 0) {
+    if (showLegend && nTraces >= 1 && traceLabels && traceLabels.length > 0) {
       const entryH = 14;
       const lineLen = 16;
       const gap = 4;
@@ -660,8 +816,11 @@ function Show1D() {
       }
       const legendW = legendPad * 2 + lineLen + gap + maxLabelW;
       const legendH = legendPad * 2 + nTraces * entryH;
-      const lx = MARGIN.left + plotW - legendW - 8;
-      const ly = MARGIN.top + 8;
+      const lx = margin.left + plotW - legendW - 8;
+      const ly = margin.top + 8;
+
+      // Store geometry for click/hover hit detection
+      legendGeoRef.current = { lx, ly, w: legendW, h: legendH, entryH, pad: legendPad, n: nTraces };
 
       ctx.fillStyle = isDark ? "rgba(30,30,30,0.85)" : "rgba(255,255,255,0.85)";
       ctx.fillRect(lx, ly, legendW, legendH);
@@ -675,7 +834,6 @@ function Show1D() {
         const isFocused = hasFocusLegend && t === focusedTrace;
         const dimmed = hasFocusLegend && !isFocused;
 
-        // Color line
         ctx.globalAlpha = dimmed ? UNFOCUSED_ALPHA : 1.0;
         ctx.strokeStyle = color;
         ctx.lineWidth = isFocused ? 3 : 2;
@@ -684,7 +842,6 @@ function Show1D() {
         ctx.lineTo(lx + legendPad + lineLen, ey);
         ctx.stroke();
 
-        // Label
         ctx.font = isFocused ? `bold 11px ${FONT}` : `11px ${FONT}`;
         ctx.fillStyle = isDark ? "#ddd" : "#333";
         ctx.textAlign = "left";
@@ -692,136 +849,158 @@ function Show1D() {
         ctx.fillText(traceLabels[t] || `Trace ${t + 1}`, lx + legendPad + lineLen + gap, ey);
         ctx.globalAlpha = 1.0;
       }
+    } else {
+      legendGeoRef.current = null;
     }
-  }, [canvasW, canvasH, cursorInfo, showLegend, nTraces, traceLabels, traceColors, isDark, dataToCanvasY, plotW, plotH, focusedTrace]);
 
-  // ========================================================================
-  // Mouse handlers
-  // ========================================================================
-  const handleWheel = React.useCallback(
-    (e: WheelEvent) => {
-      e.preventDefault();
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-
-      // Only zoom if inside plot area
-      if (mouseX < MARGIN.left || mouseX > MARGIN.left + plotW ||
-          mouseY < MARGIN.top || mouseY > MARGIN.top + plotH) return;
-
-      const factor = e.deltaY > 0 ? 1.1 : 1 / 1.1;
-      const dx = canvasToDataX(mouseX);
-      const dy = canvasToDataY(mouseY);
-
-      setXMin((prev) => dx - (dx - prev) * factor);
-      setXMax((prev) => dx + (prev - dx) * factor);
-      setYMin((prev) => dy - (dy - prev) * factor);
-      setYMax((prev) => dy + (prev - dy) * factor);
-    },
-    [plotW, plotH, canvasToDataX, canvasToDataY],
-  );
-
-  // Wheel prevention (passive: false)
-  React.useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.addEventListener("wheel", handleWheel, { passive: false });
-    return () => el.removeEventListener("wheel", handleWheel);
-  }, [handleWheel]);
-
-  const handleMouseDown = React.useCallback(
-    (e: React.MouseEvent) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-
-      // Resize handle check
-      if (mx >= canvasW - RESIZE_HIT_AREA_PX && my >= canvasH - RESIZE_HIT_AREA_PX) {
-        resizeDragRef.current = {
-          active: true,
-          startX: e.clientX,
-          startY: e.clientY,
-          startW: canvasW,
-          startH: canvasH,
-        };
-        return;
+    // Axis drag selection overlay
+    if (axisDragCurrent) {
+      const { axis, startVal, currentVal } = axisDragCurrent;
+      ctx.fillStyle = isDark ? "rgba(0,170,255,0.15)" : "rgba(0,120,255,0.12)";
+      ctx.strokeStyle = isDark ? "rgba(0,170,255,0.6)" : "rgba(0,120,255,0.5)";
+      ctx.lineWidth = 1;
+      if (axis === "x") {
+        const x1 = Math.max(margin.left, Math.min(margin.left + plotW, dataToCanvasX(startVal)));
+        const x2 = Math.max(margin.left, Math.min(margin.left + plotW, dataToCanvasX(currentVal)));
+        const left = Math.min(x1, x2);
+        const w = Math.abs(x2 - x1);
+        ctx.fillRect(left, margin.top, w, plotH);
+        ctx.strokeRect(left, margin.top, w, plotH);
+      } else {
+        const y1 = Math.max(margin.top, Math.min(margin.top + plotH, dataToCanvasY(startVal)));
+        const y2 = Math.max(margin.top, Math.min(margin.top + plotH, dataToCanvasY(currentVal)));
+        const top = Math.min(y1, y2);
+        const h = Math.abs(y2 - y1);
+        ctx.fillRect(margin.left, top, plotW, h);
+        ctx.strokeRect(margin.left, top, plotW, h);
       }
+    }
 
-      // Pan start
-      if (mx >= MARGIN.left && mx <= MARGIN.left + plotW &&
-          my >= MARGIN.top && my <= MARGIN.top + plotH) {
-        dragRef.current = {
-          active: true,
-          wasDrag: false,
-          startX: e.clientX,
-          startY: e.clientY,
-          startXMin: xMin,
-          startXMax: xMax,
-          startYMin: yMin,
-          startYMax: yMax,
-        };
-      }
-    },
-    [canvasW, canvasH, plotW, plotH, xMin, xMax, yMin, yMax],
-  );
-
-  const handleMouseMove = React.useCallback(
-    (e: React.MouseEvent) => {
-      // Resize drag
-      if (resizeDragRef.current?.active) {
-        const rd = resizeDragRef.current;
-        const newW = Math.max(200, rd.startW + (e.clientX - rd.startX));
-        const newH = Math.max(100, rd.startH + (e.clientY - rd.startY));
-        setCanvasW(newW);
-        setCanvasH(newH);
-        return;
-      }
-
-      // Pan drag
-      if (dragRef.current?.active) {
-        const d = dragRef.current;
-        const dxPx = e.clientX - d.startX;
-        const dyPx = e.clientY - d.startY;
-        if (Math.abs(dxPx) > 3 || Math.abs(dyPx) > 3) d.wasDrag = true;
-        const xRange = d.startXMax - d.startXMin;
-        const yRange = d.startYMax - d.startYMin;
-        const dxData = -(dxPx / plotW) * xRange;
-        const dyData = (dyPx / plotH) * yRange;
-        setXMin(d.startXMin + dxData);
-        setXMax(d.startXMax + dxData);
-        setYMin(d.startYMin + dyData);
-        setYMax(d.startYMax + dyData);
-        setCursorInfo(null);
-        return;
-      }
-
-      // Cursor tracking
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-
-      if (mx < MARGIN.left || mx > MARGIN.left + plotW ||
-          my < MARGIN.top || my > MARGIN.top + plotH) {
-        setCursorInfo(null);
-        return;
-      }
-
+    // Peak search region overlay (drag band or hover band)
+    // Determine which band to show: drag takes priority over hover
+    let bandInfo: PeakSearchRegion | null = peakSearchRegion; // drag band
+    if (!bandInfo && peakActive && !lockPeaks && cursorInfo) {
+      // Hover band: compute ±search radius from cursor position
       const traces = tracesRef.current;
       const xVals = xValuesRef.current;
-      if (traces.length === 0 || nPoints < 1) {
-        setCursorInfo(null);
-        return;
+      const traceIdx = focusedTrace >= 0 && focusedTrace < traces.length
+        ? focusedTrace : cursorInfo.traceIdx;
+      const trace = traces[traceIdx];
+      if (trace) {
+        let nearestIdx = 0;
+        if (xVals) {
+          let bestDist = Infinity;
+          for (let i = 0; i < xVals.length; i++) {
+            const dist = Math.abs(xVals[i] - cursorInfo.dataX);
+            if (dist < bestDist) { bestDist = dist; nearestIdx = i; }
+          }
+        } else {
+          nearestIdx = Math.round(cursorInfo.dataX);
+          nearestIdx = Math.max(0, Math.min(trace.length - 1, nearestIdx));
+        }
+        const radius = peakSearchRadius ?? 20;
+        const lo = Math.max(0, nearestIdx - radius);
+        const hi = Math.min(trace.length - 1, nearestIdx + radius);
+        const x0 = xVals ? xVals[lo] : lo;
+        const x1 = xVals ? xVals[hi] : hi;
+
+        // Find peak within hover band
+        let bestVal = -Infinity;
+        let bestIdx = lo;
+        for (let i = lo; i <= hi; i++) {
+          if (isFinite(trace[i]) && trace[i] > bestVal) {
+            bestVal = trace[i]; bestIdx = i;
+          }
+        }
+        if (bestVal > -Infinity) {
+          const peakX = xVals ? xVals[bestIdx] : bestIdx;
+          bandInfo = { x0, x1, peakX, peakY: bestVal, traceIdx };
+        }
       }
+    }
+
+    if (bandInfo) {
+      const sr = bandInfo;
+      const sx0 = Math.max(margin.left, dataToCanvasX(sr.x0));
+      const sx1 = Math.min(margin.left + plotW, dataToCanvasX(sr.x1));
+      const bandLeft = Math.min(sx0, sx1);
+      const bandW = Math.abs(sx1 - sx0);
+
+      // Blue translucent band (full plot height)
+      ctx.fillStyle = isDark ? "rgba(66,165,245,0.15)" : "rgba(33,150,243,0.12)";
+      ctx.fillRect(bandLeft, margin.top, bandW, plotH);
+      ctx.strokeStyle = isDark ? "rgba(66,165,245,0.5)" : "rgba(33,150,243,0.4)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bandLeft, margin.top, bandW, plotH);
+
+      // Preview peak marker
+      const peakCX = dataToCanvasX(sr.peakX);
+      const peakCY = dataToCanvasY(sr.peakY);
+      const traceColor = (traceColors && traceColors[sr.traceIdx]) || "#4fc3f7";
+
+      // Dashed vertical line from peak to bottom
+      ctx.strokeStyle = traceColor;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.6;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(peakCX, peakCY);
+      ctx.lineTo(peakCX, margin.top + plotH);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1.0;
+
+      // Preview triangle marker (dashed outline)
+      const s = 6;
+      ctx.fillStyle = isDark ? "rgba(66,165,245,0.3)" : "rgba(33,150,243,0.25)";
+      ctx.strokeStyle = traceColor;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([3, 2]);
+      ctx.beginPath();
+      ctx.moveTo(peakCX, peakCY - s);
+      ctx.lineTo(peakCX + s, peakCY + s);
+      ctx.lineTo(peakCX - s, peakCY + s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Value label above preview peak
+      ctx.font = `9px ${FONT}`;
+      ctx.fillStyle = isDark ? "#ddd" : "#333";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.fillText(formatNumber(sr.peakX), peakCX, peakCY - s - 3);
+    }
+
+    // Locked axis indicators
+    if (xLocked) {
+      ctx.fillStyle = isDark ? "rgba(0,170,255,0.5)" : "rgba(0,120,255,0.4)";
+      ctx.font = `bold 9px ${FONT}`;
+      ctx.textAlign = "right";
+      ctx.textBaseline = "top";
+      ctx.fillText("X LOCKED", margin.left + plotW, margin.top + plotH + 4);
+    }
+    if (yLocked) {
+      ctx.fillStyle = isDark ? "rgba(0,170,255,0.5)" : "rgba(0,120,255,0.4)";
+      ctx.font = `bold 9px ${FONT}`;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText("Y LOCKED", margin.left + 4, margin.top + 2);
+    }
+  }, [canvasW, canvasH, cursorInfo, showLegend, nTraces, traceLabels, traceColors, isDark, dataToCanvasX, dataToCanvasY, plotW, plotH, focusedTrace, margin, axisDragCurrent, xLocked, yLocked, peakSearchRegion, peakActive, lockPeaks, peakSearchRadius]);
+
+  // ========================================================================
+  // Helper: find nearest data point to cursor
+  // ========================================================================
+  const findNearestPoint = React.useCallback(
+    (mx: number, my: number) => {
+      const traces = tracesRef.current;
+      const xVals = xValuesRef.current;
+      if (traces.length === 0 || nPoints < 1) return null;
 
       const cursorDataX = canvasToDataX(mx);
 
-      // Find nearest index
       let nearestIdx = 0;
       if (xVals) {
         let bestDist = Infinity;
@@ -834,7 +1013,6 @@ function Show1D() {
         nearestIdx = Math.max(0, Math.min(nPoints - 1, nearestIdx));
       }
 
-      // Find nearest trace at this index
       const actualX = xVals ? xVals[nearestIdx] : nearestIdx;
       const snapCX = dataToCanvasX(actualX);
       let bestTraceIdx = 0;
@@ -851,38 +1029,498 @@ function Show1D() {
       }
 
       const snapVal = traces[bestTraceIdx][nearestIdx];
-      setCursorInfo({
+      return {
         canvasX: snapCX,
         canvasY: dataToCanvasY(snapVal),
         dataX: actualX,
         dataY: snapVal,
         traceIdx: bestTraceIdx,
+        nearestIdx,
         label: (traceLabels && traceLabels[bestTraceIdx]) || "",
         color: (traceColors && traceColors[bestTraceIdx]) || "#4fc3f7",
-      });
+      };
     },
-    [plotW, plotH, nPoints, canvasToDataX, dataToCanvasX, dataToCanvasY, traceLabels, traceColors],
+    [nPoints, canvasToDataX, dataToCanvasX, dataToCanvasY, traceLabels, traceColors],
   );
 
-  const handleMouseUp = React.useCallback(() => {
-    // Click (not drag) → toggle focus on nearest trace
-    if (dragRef.current?.active && !dragRef.current.wasDrag && cursorInfo) {
-      const newFocus = cursorInfo.traceIdx;
-      setFocusedTrace(focusedTrace === newFocus ? -1 : newFocus);
+  // ========================================================================
+  // Helper: hit-test legend entries — returns trace index or null
+  // ========================================================================
+  const hitTestLegend = React.useCallback(
+    (mx: number, my: number): number | null => {
+      const geo = legendGeoRef.current;
+      if (!geo) return null;
+      if (mx < geo.lx || mx > geo.lx + geo.w || my < geo.ly || my > geo.ly + geo.h) return null;
+      const idx = Math.floor((my - geo.ly - geo.pad) / geo.entryH);
+      if (idx < 0 || idx >= geo.n) return null;
+      return idx;
+    },
+    [],
+  );
+
+  // ========================================================================
+  // Helper: find if click is near an existing peak marker
+  // ========================================================================
+  const findNearestPeakMarker = React.useCallback(
+    (mx: number, my: number): number | null => {
+      if (!peakMarkers || peakMarkers.length === 0) return null;
+      const threshold = 12; // pixels
+      let bestIdx: number | null = null;
+      let bestDist = Infinity;
+      for (let i = 0; i < peakMarkers.length; i++) {
+        const pk = peakMarkers[i];
+        const cx = dataToCanvasX(pk.x);
+        const cy = dataToCanvasY(pk.y);
+        const dist = Math.sqrt((mx - cx) ** 2 + (my - cy) ** 2);
+        if (dist < threshold && dist < bestDist) {
+          bestDist = dist;
+          bestIdx = i;
+        }
+      }
+      return bestIdx;
+    },
+    [peakMarkers, dataToCanvasX, dataToCanvasY],
+  );
+
+  // ========================================================================
+  // Mouse handlers
+  // ========================================================================
+  const handleWheel = React.useCallback(
+    (e: WheelEvent) => {
+      e.preventDefault();
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      if (mouseX < margin.left || mouseX > margin.left + plotW ||
+          mouseY < margin.top || mouseY > margin.top + plotH) return;
+
+      const factor = e.deltaY > 0 ? 1.1 : 1 / 1.1;
+      const dx = canvasToDataX(mouseX);
+      const dy = canvasToDataY(mouseY);
+
+      if (!xLockedRef.current) {
+        setXMin((prev) => dx - (dx - prev) * factor);
+        setXMax((prev) => dx + (prev - dx) * factor);
+      }
+      if (!yLockedRef.current) {
+        setYMin((prev) => dy - (dy - prev) * factor);
+        setYMax((prev) => dy + (prev - dy) * factor);
+      }
+    },
+    [plotW, plotH, canvasToDataX, canvasToDataY, margin.left, margin.top],
+  );
+
+  // Wheel prevention (passive: false)
+  React.useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+  }, [handleWheel]);
+
+  // Sync Python x_range/y_range → JS view state
+  React.useEffect(() => {
+    if (modelXRange && modelXRange.length === 2) {
+      setXMin(modelXRange[0]);
+      setXMax(modelXRange[1]);
+      setXLocked(true);
+    } else if (modelXRange && modelXRange.length === 0 && xLocked) {
+      setXLocked(false);
+    }
+  }, [modelXRange]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  React.useEffect(() => {
+    if (modelYRange && modelYRange.length === 2) {
+      setYMin(modelYRange[0]);
+      setYMax(modelYRange[1]);
+      setYLocked(true);
+    } else if (modelYRange && modelYRange.length === 0 && yLocked) {
+      setYLocked(false);
+    }
+  }, [modelYRange]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Window-level resize drag handling
+  React.useEffect(() => {
+    const handleResizeMove = (e: MouseEvent) => {
+      if (!resizeDragRef.current?.active) return;
+      const rd = resizeDragRef.current;
+      const newW = Math.max(200, rd.startW + (e.clientX - rd.startX));
+      const newH = Math.max(100, rd.startH + (e.clientY - rd.startY));
+      setCanvasW(newW);
+      setCanvasH(newH);
+    };
+    const handleResizeUp = () => {
+      if (resizeDragRef.current?.active) resizeDragRef.current = null;
+    };
+    window.addEventListener("mousemove", handleResizeMove);
+    window.addEventListener("mouseup", handleResizeUp);
+    return () => {
+      window.removeEventListener("mousemove", handleResizeMove);
+      window.removeEventListener("mouseup", handleResizeUp);
+    };
+  }, []);
+
+  const handleMouseDown = React.useCallback(
+    (e: React.MouseEvent) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+
+      // X-axis area drag (below plot, within X extent)
+      if (my > margin.top + plotH && my < canvasH &&
+          mx >= margin.left && mx <= margin.left + plotW) {
+        axisDragRef.current = { axis: "x", startPx: mx, startVal: canvasToDataX(mx) };
+        setAxisDragCurrent({ axis: "x", startVal: canvasToDataX(mx), currentVal: canvasToDataX(mx) });
+        return;
+      }
+
+      // Y-axis area drag (left of plot, within Y extent)
+      if (mx < margin.left && mx >= 0 &&
+          my >= margin.top && my <= margin.top + plotH) {
+        axisDragRef.current = { axis: "y", startPx: my, startVal: canvasToDataY(my) };
+        setAxisDragCurrent({ axis: "y", startVal: canvasToDataY(my), currentVal: canvasToDataY(my) });
+        return;
+      }
+
+      if (mx < margin.left || mx > margin.left + plotW ||
+          my < margin.top || my > margin.top + plotH) return;
+
+      // Peak drag start — intercept before pan
+      if (peakActive && !lockPeaks) {
+        // Check if clicking an existing peak marker (let that fall through to mouseUp click handler)
+        const nearPeak = findNearestPeakMarker(mx, my);
+        if (nearPeak === null) {
+          // Determine which trace to search
+          const point = findNearestPoint(mx, my);
+          const traceIdx = focusedTrace >= 0 && focusedTrace < tracesRef.current.length
+            ? focusedTrace
+            : (point?.traceIdx ?? 0);
+          peakDragRef.current = {
+            active: true,
+            startPx: mx,
+            startDataX: canvasToDataX(mx),
+            traceIdx,
+          };
+          // Don't start pan drag — return early
+          // Still set dragRef for click detection (wasDrag threshold)
+          dragRef.current = {
+            active: true,
+            wasDrag: false,
+            startX: e.clientX,
+            startY: e.clientY,
+            startXMin: xMin,
+            startXMax: xMax,
+            startYMin: yMin,
+            startYMax: yMax,
+          };
+          return;
+        }
+      }
+
+      // Pan start
+      dragRef.current = {
+        active: true,
+        wasDrag: false,
+        startX: e.clientX,
+        startY: e.clientY,
+        startXMin: xMin,
+        startXMax: xMax,
+        startYMin: yMin,
+        startYMax: yMax,
+      };
+    },
+    [plotW, plotH, canvasH, xMin, xMax, yMin, yMax, margin.left, margin.top, canvasToDataX, canvasToDataY, peakActive, lockPeaks, focusedTrace, findNearestPeakMarker, findNearestPoint],
+  );
+
+  const handleMouseMove = React.useCallback(
+    (e: React.MouseEvent) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+
+      // Axis range drag
+      if (axisDragRef.current) {
+        const ad = axisDragRef.current;
+        if (ad.axis === "x") {
+          setAxisDragCurrent({ axis: "x", startVal: ad.startVal, currentVal: canvasToDataX(Math.max(margin.left, Math.min(margin.left + plotW, mx))) });
+        } else {
+          setAxisDragCurrent({ axis: "y", startVal: ad.startVal, currentVal: canvasToDataY(Math.max(margin.top, Math.min(margin.top + plotH, my))) });
+        }
+        return;
+      }
+
+      // Peak drag-to-search
+      if (peakDragRef.current?.active) {
+        const pd = peakDragRef.current;
+        // Mark as drag if moved enough
+        if (dragRef.current && (Math.abs(mx - pd.startPx) > 3)) {
+          dragRef.current.wasDrag = true;
+        }
+        const currentDataX = canvasToDataX(Math.max(margin.left, Math.min(margin.left + plotW, mx)));
+        const x0 = Math.min(pd.startDataX, currentDataX);
+        const x1 = Math.max(pd.startDataX, currentDataX);
+
+        // Find peak within search region
+        const traces = tracesRef.current;
+        const xVals = xValuesRef.current;
+        const trace = traces[pd.traceIdx];
+        if (trace) {
+          let bestVal = -Infinity;
+          let bestIdx = -1;
+          for (let i = 0; i < trace.length; i++) {
+            const xv = xVals ? xVals[i] : i;
+            if (xv >= x0 && xv <= x1 && isFinite(trace[i]) && trace[i] > bestVal) {
+              bestVal = trace[i];
+              bestIdx = i;
+            }
+          }
+          if (bestIdx >= 0) {
+            const peakX = xVals ? xVals[bestIdx] : bestIdx;
+            setPeakSearchRegion({ x0, x1, peakX, peakY: bestVal, traceIdx: pd.traceIdx });
+          } else {
+            setPeakSearchRegion(null);
+          }
+        }
+        setCursorInfo(null);
+        return;
+      }
+
+      // Pan drag
+      if (dragRef.current?.active) {
+        const d = dragRef.current;
+        const dxPx = e.clientX - d.startX;
+        const dyPx = e.clientY - d.startY;
+        if (Math.abs(dxPx) > 3 || Math.abs(dyPx) > 3) d.wasDrag = true;
+        const xRange = d.startXMax - d.startXMin;
+        const yRange = d.startYMax - d.startYMin;
+        const dxData = -(dxPx / plotW) * xRange;
+        const dyData = (dyPx / plotH) * yRange;
+        if (!xLockedRef.current) {
+          setXMin(d.startXMin + dxData);
+          setXMax(d.startXMax + dxData);
+        }
+        if (!yLockedRef.current) {
+          setYMin(d.startYMin + dyData);
+          setYMax(d.startYMax + dyData);
+        }
+        setCursorInfo(null);
+        return;
+      }
+
+      // Cursor tracking
+      if (mx < margin.left || mx > margin.left + plotW ||
+          my < margin.top || my > margin.top + plotH) {
+        setCursorInfo(null);
+        return;
+      }
+
+      // Check if hovering over legend or peak marker
+      const legendHit = hitTestLegend(mx, my);
+      hoverLegendRef.current = legendHit !== null;
+      setHoverPeakIdx(legendHit !== null ? null : findNearestPeakMarker(mx, my));
+
+      // Don't show crosshair/snap when hovering over legend
+      if (legendHit !== null) {
+        setCursorInfo(null);
+        return;
+      }
+
+      const point = findNearestPoint(mx, my);
+      if (point) {
+        setCursorInfo({
+          canvasX: point.canvasX,
+          canvasY: point.canvasY,
+          dataX: point.dataX,
+          dataY: point.dataY,
+          traceIdx: point.traceIdx,
+          label: point.label,
+          color: point.color,
+        });
+      }
+    },
+    [plotW, plotH, findNearestPoint, findNearestPeakMarker, hitTestLegend, margin.left, margin.top, canvasToDataX, canvasToDataY],
+  );
+
+  const handleMouseUp = React.useCallback((e: React.MouseEvent) => {
+    // Finalize axis range drag
+    if (axisDragRef.current && axisDragCurrent) {
+      const { startVal, currentVal, axis } = axisDragCurrent;
+      const lo = Math.min(startVal, currentVal);
+      const hi = Math.max(startVal, currentVal);
+      // Only lock if dragged a meaningful distance (>1% of current range)
+      const range = axis === "x" ? xMax - xMin : yMax - yMin;
+      if (hi - lo > range * 0.01) {
+        if (axis === "x") {
+          setXMin(lo); setXMax(hi); setXLocked(true); setModelXRange([lo, hi]);
+        } else {
+          setYMin(lo); setYMax(hi); setYLocked(true); setModelYRange([lo, hi]);
+        }
+      }
+      axisDragRef.current = null;
+      setAxisDragCurrent(null);
+      return;
+    }
+
+    // Peak drag finalization
+    if (peakDragRef.current?.active) {
+      const wasDrag = dragRef.current?.wasDrag ?? false;
+      if (wasDrag && peakSearchRegion) {
+        // Place peak from drag search
+        const marker: PeakMarker = {
+          x: peakSearchRegion.peakX,
+          y: peakSearchRegion.peakY,
+          trace_idx: peakSearchRegion.traceIdx,
+          label: formatNumber(peakSearchRegion.peakX),
+          type: "peak",
+        };
+        setPeakMarkers([...(peakMarkers || []), marker]);
+      }
+      peakDragRef.current = null;
+      setPeakSearchRegion(null);
+      dragRef.current = null;
+      return;
+    }
+
+    // Click handlers (not drag)
+    if (dragRef.current?.active && !dragRef.current.wasDrag) {
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+
+        // Check if clicking on a legend entry
+        const legendTraceIdx = hitTestLegend(mx, my);
+        if (legendTraceIdx !== null) {
+          setFocusedTrace(focusedTrace === legendTraceIdx ? -1 : legendTraceIdx);
+          dragRef.current = null;
+          return;
+        }
+
+        // Check if clicking near an existing peak marker (for selection)
+        const nearPeakIdx = findNearestPeakMarker(mx, my);
+        if (nearPeakIdx !== null) {
+          // Toggle peak selection
+          const current = selectedPeaks || [];
+          if (e.shiftKey) {
+            // Shift+click: multi-select toggle
+            if (current.includes(nearPeakIdx)) {
+              setSelectedPeaks(current.filter(i => i !== nearPeakIdx));
+            } else {
+              setSelectedPeaks([...current, nearPeakIdx]);
+            }
+          } else {
+            // Click: toggle single selection
+            if (current.length === 1 && current[0] === nearPeakIdx) {
+              setSelectedPeaks([]);
+            } else {
+              setSelectedPeaks([nearPeakIdx]);
+            }
+          }
+          dragRef.current = null;
+          return;
+        }
+
+        if (peakActive && !lockPeaks && cursorInfo) {
+          // Click-to-place: find peak within ±search radius
+          const traces = tracesRef.current;
+          const xVals = xValuesRef.current;
+          const traceIdx = focusedTrace >= 0 && focusedTrace < traces.length
+            ? focusedTrace : cursorInfo.traceIdx;
+          const trace = traces[traceIdx];
+          if (trace) {
+            let nearestIdx = 0;
+            if (xVals) {
+              let bestDist = Infinity;
+              for (let i = 0; i < xVals.length; i++) {
+                const dist = Math.abs(xVals[i] - cursorInfo.dataX);
+                if (dist < bestDist) { bestDist = dist; nearestIdx = i; }
+              }
+            } else {
+              nearestIdx = Math.round(cursorInfo.dataX);
+              nearestIdx = Math.max(0, Math.min(trace.length - 1, nearestIdx));
+            }
+
+            const radius = peakSearchRadius ?? 20;
+            const lo = Math.max(0, nearestIdx - radius);
+            const hi = Math.min(trace.length, nearestIdx + radius + 1);
+            let bestIdx = lo;
+            let bestVal = trace[lo];
+            for (let i = lo + 1; i < hi; i++) {
+              if (trace[i] > bestVal) {
+                bestVal = trace[i]; bestIdx = i;
+              }
+            }
+
+            const peakX = xVals ? xVals[bestIdx] : bestIdx;
+            const marker: PeakMarker = {
+              x: peakX,
+              y: bestVal,
+              trace_idx: traceIdx,
+              label: formatNumber(peakX),
+              type: "peak",
+            };
+            setPeakMarkers([...(peakMarkers || []), marker]);
+          }
+        } else if (!peakActive) {
+          // Deselect all peaks when clicking empty area
+          if (selectedPeaks && selectedPeaks.length > 0) {
+            setSelectedPeaks([]);
+          }
+          // Toggle focus
+          if (cursorInfo) {
+            const newFocus = cursorInfo.traceIdx;
+            setFocusedTrace(focusedTrace === newFocus ? -1 : newFocus);
+          }
+        }
+      }
     }
     dragRef.current = null;
-    resizeDragRef.current = null;
-  }, [cursorInfo, focusedTrace, setFocusedTrace]);
+  }, [cursorInfo, focusedTrace, setFocusedTrace, peakActive, peakMarkers, setPeakMarkers, selectedPeaks, setSelectedPeaks, findNearestPeakMarker, hitTestLegend, lockPeaks, axisDragCurrent, xMin, xMax, yMin, yMax, setModelXRange, setModelYRange, peakSearchRegion, peakSearchRadius]);
 
   const handleMouseLeave = React.useCallback(() => {
     dragRef.current = null;
-    resizeDragRef.current = null;
+    peakDragRef.current = null;
+    setPeakSearchRegion(null);
+    axisDragRef.current = null;
+    setAxisDragCurrent(null);
     setCursorInfo(null);
+    setHoverPeakIdx(null);
+    hoverLegendRef.current = false;
   }, []);
 
-  const handleDoubleClick = React.useCallback(() => {
+  const handleDoubleClick = React.useCallback((e: React.MouseEvent) => {
+    const canvas = canvasRef.current;
+    if (!canvas) { resetView(); return; }
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    // Double-click on X axis area → unlock X
+    if (my > margin.top + plotH && mx >= margin.left && mx <= margin.left + plotW && xLocked) {
+      setXLocked(false);
+      setModelXRange([]);
+      setXMin(xDataRangeRef.current.min);
+      setXMax(xDataRangeRef.current.max);
+      return;
+    }
+    // Double-click on Y axis area → unlock Y
+    if (mx < margin.left && my >= margin.top && my <= margin.top + plotH && yLocked) {
+      setYLocked(false);
+      setModelYRange([]);
+      setYMin(yDataRangeRef.current.min);
+      setYMax(yDataRangeRef.current.max);
+      return;
+    }
     resetView();
-  }, [resetView]);
+  }, [resetView, plotW, plotH, margin.left, margin.top, xLocked, yLocked, setModelXRange, setModelYRange]);
 
   // ========================================================================
   // Keyboard
@@ -891,16 +1529,54 @@ function Show1D() {
     (e: React.KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName?.toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
-      if (e.key === "r" || e.key === "R") {
-        e.preventDefault();
-        resetView();
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setFocusedTrace(-1);
+
+      switch (e.key) {
+        case "r":
+        case "R":
+          if (!lockDisplay) {
+            e.preventDefault();
+            resetView();
+          }
+          break;
+        case "Escape":
+          e.preventDefault();
+          setFocusedTrace(-1);
+          if (selectedPeaks && selectedPeaks.length > 0) {
+            setSelectedPeaks([]);
+          }
+          break;
+        case "p":
+        case "P":
+          if (!lockPeaks) {
+            e.preventDefault();
+            setPeakActive(!peakActive);
+          }
+          break;
+        case "c":
+        case "C":
+          if (!lockPeaks) {
+            e.preventDefault();
+            setPeakMarkers([]);
+            setSelectedPeaks([]);
+          }
+          break;
+        case "Delete":
+        case "Backspace":
+          if (!lockPeaks && peakMarkers && peakMarkers.length > 0) {
+            e.preventDefault();
+            const newMarkers = [...peakMarkers];
+            newMarkers.pop();
+            setPeakMarkers(newMarkers);
+            // Clean up selected_peaks
+            if (selectedPeaks && selectedPeaks.length > 0) {
+              const maxIdx = newMarkers.length - 1;
+              setSelectedPeaks(selectedPeaks.filter(i => i <= maxIdx));
+            }
+          }
+          break;
       }
     },
-    [resetView, setFocusedTrace],
+    [resetView, setFocusedTrace, peakMarkers, setPeakMarkers, peakActive, setPeakActive, selectedPeaks, setSelectedPeaks, lockDisplay, lockPeaks],
   );
 
   // ========================================================================
@@ -921,7 +1597,6 @@ function Show1D() {
     const xVals = xValuesRef.current;
     if (traces.length === 0) return;
 
-    // Render a publication-quality figure on a white background
     const scale = 4;
     const figW = canvasW * scale;
     const figH = canvasH * scale;
@@ -942,23 +1617,25 @@ function Show1D() {
       ctx.strokeStyle = "rgba(0,0,0,0.08)";
       ctx.lineWidth = 1;
       ctx.setLineDash([2, 3]);
-      const xTicks = computeTicks(xMin, xMax, Math.max(3, Math.floor(plotW / TICK_LABEL_WIDTH_PX)));
+      const xGridCount = Math.max(3, gridDensity);
+      const xTicks = computeTicks(xMin, xMax, xGridCount);
       for (const tv of xTicks) {
         const cx = dataToCanvasX(tv);
-        if (cx >= MARGIN.left && cx <= MARGIN.left + plotW) {
+        if (cx >= margin.left && cx <= margin.left + plotW) {
           ctx.beginPath();
-          ctx.moveTo(cx, MARGIN.top);
-          ctx.lineTo(cx, MARGIN.top + plotH);
+          ctx.moveTo(cx, margin.top);
+          ctx.lineTo(cx, margin.top + plotH);
           ctx.stroke();
         }
       }
-      const yTicks = logScale ? computeLogTicks(Math.max(yMin, 1e-30), yMax) : computeTicks(yMin, yMax);
+      const yGridCount = Math.max(3, gridDensity);
+      const yTicks = logScale ? computeLogTicks(Math.max(yMin, 1e-30), yMax, yGridCount) : computeTicks(yMin, yMax, yGridCount);
       for (const tv of yTicks) {
         const cy = dataToCanvasY(tv);
-        if (cy >= MARGIN.top && cy <= MARGIN.top + plotH) {
+        if (cy >= margin.top && cy <= margin.top + plotH) {
           ctx.beginPath();
-          ctx.moveTo(MARGIN.left, cy);
-          ctx.lineTo(MARGIN.left + plotW, cy);
+          ctx.moveTo(margin.left, cy);
+          ctx.lineTo(margin.left + plotW, cy);
           ctx.stroke();
         }
       }
@@ -969,40 +1646,40 @@ function Show1D() {
     ctx.strokeStyle = "#999";
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(MARGIN.left, MARGIN.top);
-    ctx.lineTo(MARGIN.left, MARGIN.top + plotH);
-    ctx.lineTo(MARGIN.left + plotW, MARGIN.top + plotH);
+    ctx.moveTo(margin.left, margin.top);
+    ctx.lineTo(margin.left, margin.top + plotH);
+    ctx.lineTo(margin.left + plotW, margin.top + plotH);
     ctx.stroke();
 
     // X ticks + labels
-    const xTicks = computeTicks(xMin, xMax, Math.max(3, Math.floor(plotW / TICK_LABEL_WIDTH_PX)));
+    const figXTicks = computeTicks(xMin, xMax, Math.max(3, Math.floor(plotW / TICK_LABEL_WIDTH_PX)));
     ctx.fillStyle = "#555";
     ctx.font = `10px ${FONT}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
-    for (const tv of xTicks) {
+    for (const tv of figXTicks) {
       const cx = dataToCanvasX(tv);
-      if (cx >= MARGIN.left && cx <= MARGIN.left + plotW) {
+      if (cx >= margin.left && cx <= margin.left + plotW) {
         ctx.beginPath();
-        ctx.moveTo(cx, MARGIN.top + plotH);
-        ctx.lineTo(cx, MARGIN.top + plotH + AXIS_TICK_PX);
+        ctx.moveTo(cx, margin.top + plotH);
+        ctx.lineTo(cx, margin.top + plotH + AXIS_TICK_PX);
         ctx.stroke();
-        ctx.fillText(formatNumber(tv), cx, MARGIN.top + plotH + AXIS_TICK_PX + 2);
+        ctx.fillText(formatNumber(tv), cx, margin.top + plotH + AXIS_TICK_PX + 2);
       }
     }
 
     // Y ticks + labels
-    const yTicks = logScale ? computeLogTicks(Math.max(yMin, 1e-30), yMax) : computeTicks(yMin, yMax);
+    const figYTicks = logScale ? computeLogTicks(Math.max(yMin, 1e-30), yMax) : computeTicks(yMin, yMax);
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
-    for (const tv of yTicks) {
+    for (const tv of figYTicks) {
       const cy = dataToCanvasY(tv);
-      if (cy >= MARGIN.top && cy <= MARGIN.top + plotH) {
+      if (cy >= margin.top && cy <= margin.top + plotH) {
         ctx.beginPath();
-        ctx.moveTo(MARGIN.left - AXIS_TICK_PX, cy);
-        ctx.lineTo(MARGIN.left, cy);
+        ctx.moveTo(margin.left - AXIS_TICK_PX, cy);
+        ctx.lineTo(margin.left, cy);
         ctx.stroke();
-        ctx.fillText(formatNumber(tv), MARGIN.left - AXIS_TICK_PX - 2, cy);
+        ctx.fillText(formatNumber(tv), margin.left - AXIS_TICK_PX - 2, cy);
       }
     }
 
@@ -1014,13 +1691,13 @@ function Show1D() {
       ctx.fillStyle = "#666";
       let lbl = xLabel || "";
       if (xUnit) lbl += lbl ? ` (${xUnit})` : xUnit;
-      ctx.fillText(lbl, MARGIN.left + plotW / 2, canvasH - 6);
+      ctx.fillText(lbl, margin.left + plotW / 2, margin.top + plotH + AXIS_TICK_PX + 18);
     }
 
     // Y axis label
     if (yLabel || yUnit) {
       ctx.save();
-      ctx.translate(12, MARGIN.top + plotH / 2);
+      ctx.translate(12, margin.top + plotH / 2);
       ctx.rotate(-Math.PI / 2);
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
@@ -1044,7 +1721,7 @@ function Show1D() {
     // Traces
     ctx.save();
     ctx.beginPath();
-    ctx.rect(MARGIN.left, MARGIN.top, plotW, plotH);
+    ctx.rect(margin.left, margin.top, plotW, plotH);
     ctx.clip();
 
     for (let t = 0; t < traces.length; t++) {
@@ -1066,10 +1743,49 @@ function Show1D() {
       ctx.stroke();
     }
 
+    // Peak markers on export
+    if (peakMarkers && peakMarkers.length > 0) {
+      for (const pk of peakMarkers) {
+        const color = (traceColors && traceColors[pk.trace_idx]) || "#4fc3f7";
+        const cx = dataToCanvasX(pk.x);
+        const cy = dataToCanvasY(pk.y);
+        const isValley = pk.type === "valley";
+
+        const s = 5;
+        ctx.fillStyle = color;
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        if (isValley) {
+          ctx.moveTo(cx - s, cy - s);
+          ctx.lineTo(cx + s, cy - s);
+          ctx.lineTo(cx, cy + s);
+        } else {
+          ctx.moveTo(cx, cy - s);
+          ctx.lineTo(cx + s, cy + s);
+          ctx.lineTo(cx - s, cy + s);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.font = `9px ${FONT}`;
+        ctx.fillStyle = "#333";
+        ctx.textAlign = "center";
+        if (isValley) {
+          ctx.textBaseline = "top";
+          ctx.fillText(pk.label || formatNumber(pk.x), cx, cy + s + 3);
+        } else {
+          ctx.textBaseline = "bottom";
+          ctx.fillText(pk.label || formatNumber(pk.x), cx, cy - s - 3);
+        }
+      }
+    }
+
     ctx.restore();
 
     // Legend on export figure
-    if (showLegend && traces.length > 1 && traceLabels && traceLabels.length > 0) {
+    if (showLegend && traces.length >= 1 && traceLabels && traceLabels.length > 0) {
       ctx.font = `10px ${FONT}`;
       const entryH = 14;
       const lineLen = 16;
@@ -1083,8 +1799,8 @@ function Show1D() {
       }
       const legendW = legendPad * 2 + lineLen + gap + maxLabelW;
       const legendH = legendPad * 2 + traces.length * entryH;
-      const lx = MARGIN.left + plotW - legendW - 8;
-      const ly = MARGIN.top + 8;
+      const lx = margin.left + plotW - legendW - 8;
+      const ly = margin.top + 8;
 
       ctx.fillStyle = "rgba(255,255,255,0.9)";
       ctx.fillRect(lx, ly, legendW, legendH);
@@ -1108,10 +1824,19 @@ function Show1D() {
       }
     }
 
-    offscreen.toBlob((blob) => {
-      if (blob) downloadBlob(blob, `${title || "show1d"}_figure.png`);
-    });
-  }, [canvasW, canvasH, xMin, xMax, yMin, yMax, traceColors, traceLabels, lineWidth, logScale, showGrid, showLegend, xLabel, yLabel, xUnit, yUnit, title, dataToCanvasX, dataToCanvasY, plotW, plotH]);
+    canvasToPDF(offscreen).then((blob) => downloadBlob(blob, `${title || "show1d"}_figure.pdf`));
+  }, [canvasW, canvasH, xMin, xMax, yMin, yMax, traceColors, traceLabels, lineWidth, logScale, showGrid, gridDensity, showLegend, xLabel, yLabel, xUnit, yUnit, title, dataToCanvasX, dataToCanvasY, plotW, plotH, peakMarkers]);
+
+  // Cursor style
+  const getCursor = () => {
+    if (axisDragRef.current) return axisDragRef.current.axis === "x" ? "ew-resize" : "ns-resize";
+    if (peakDragRef.current?.active) return "col-resize";
+    if (dragRef.current?.active) return "grabbing";
+    if (hoverPeakIdx !== null) return "pointer";
+    if (hoverLegendRef.current) return "pointer";
+    if (peakActive && !lockPeaks) return "col-resize";
+    return "crosshair";
+  };
 
   // ========================================================================
   // JSX
@@ -1141,67 +1866,135 @@ function Show1D() {
             <KeyboardShortcuts
               items={[
                 ["Scroll", "Zoom in/out"],
-                ["Drag", "Pan"],
-                ["Click", "Focus trace"],
-                ["Esc", "Unfocus all"],
+                ["Drag", "Pan (or search peak when Peak on)"],
+                ["Drag axis", "Lock X or Y range"],
+                ["Dbl-click axis", "Unlock range"],
+                ["Click", "Focus trace / select peak"],
+                ["Shift+Click", "Multi-select peaks"],
+                ["P", "Toggle peak mode"],
+                ["C", "Clear all peaks"],
+                ["Del", "Remove last peak"],
+                ["Esc", "Deselect all"],
                 ["R", "Reset view"],
                 ["Dbl-click", "Reset view"],
               ]}
             />
           }
         />
+        <ControlCustomizer
+          widgetName="Show1D"
+          hiddenTools={hiddenTools}
+          setHiddenTools={setHiddenTools}
+          disabledTools={disabledTools}
+          setDisabledTools={setDisabledTools}
+          themeColors={colors}
+        />
       </Typography>
 
-      {/* Controls row (between title and canvas, Show3D pattern) */}
-      {showControls && (
-        <Box sx={{ display: "flex", alignItems: "center", gap: "4px", mb: `${SPACING.XS}px`, height: 28 }}>
-          <Typography sx={{ ...typography.labelSmall, color: colors.text }}>
-            Log:
-          </Typography>
-          <Switch
-            size="small"
-            checked={logScale}
-            onChange={(_, v) => setLogScale(v)}
-            sx={switchStyles.small}
-          />
+      {/* Controls row */}
+      {showControls && !toolVisibility.hideAll && (
+        <Box sx={{ display: "flex", alignItems: "center", gap: "4px", mb: "2px", height: 28, maxWidth: canvasW }}>
+          {!hideDisplay && (<>
+            <Typography sx={{ ...typography.labelSmall, color: colors.text }}>
+              Log:
+            </Typography>
+            <Switch
+              size="small"
+              checked={logScale}
+              onChange={(_, v) => setLogScale(v)}
+              sx={switchStyles.small}
+              disabled={lockDisplay}
+            />
 
-          <Typography sx={{ ...typography.labelSmall, color: colors.text, ml: "2px" }}>
-            Grid:
-          </Typography>
-          <Switch
-            size="small"
-            checked={showGrid}
-            onChange={(_, v) => setShowGrid(v)}
-            sx={switchStyles.small}
-          />
+            <Typography sx={{ ...typography.labelSmall, color: colors.text, ml: "2px" }}>
+              Grid:
+            </Typography>
+            <Switch
+              size="small"
+              checked={showGrid}
+              onChange={(_, v) => setShowGrid(v)}
+              sx={switchStyles.small}
+              disabled={lockDisplay}
+            />
 
-          <Typography sx={{ ...typography.labelSmall, color: colors.text, ml: "2px" }}>
-            Legend:
-          </Typography>
-          <Switch
-            size="small"
-            checked={showLegend}
-            onChange={(_, v) => setShowLegend(v)}
-            sx={switchStyles.small}
-          />
+            {showGrid && (
+              <Slider
+                size="small"
+                min={5}
+                max={50}
+                step={1}
+                value={gridDensity}
+                onChange={(_, v) => setGridDensity(v as number)}
+                sx={{ width: 60, ml: "2px", ...sliderStyles.small }}
+                disabled={lockDisplay}
+              />
+            )}
+
+            <Typography sx={{ ...typography.labelSmall, color: colors.text, ml: "2px" }}>
+              Legend:
+            </Typography>
+            <Switch
+              size="small"
+              checked={showLegend}
+              onChange={(_, v) => setShowLegend(v)}
+              sx={switchStyles.small}
+              disabled={lockDisplay}
+            />
+          </>)}
+
+          {!hidePeaks && (
+            <>
+              <Typography sx={{ ...typography.labelSmall, color: colors.text, ml: "2px" }}>
+                Peak:
+              </Typography>
+              <Switch
+                size="small"
+                checked={peakActive}
+                onChange={(_, v) => setPeakActive(v)}
+                sx={switchStyles.small}
+                disabled={lockPeaks}
+              />
+              {peakActive && (
+                <>
+                  <Typography sx={{ ...typography.labelSmall, color: colors.textMuted || colors.text, ml: "2px" }}>
+                    ±{peakSearchRadius}
+                  </Typography>
+                  <Slider
+                    size="small"
+                    min={1}
+                    max={100}
+                    step={1}
+                    value={peakSearchRadius}
+                    onChange={(_, v) => setPeakSearchRadius(v as number)}
+                    sx={{ width: 50, ml: "2px", ...sliderStyles.small }}
+                    disabled={lockPeaks}
+                  />
+                </>
+              )}
+            </>
+          )}
 
           <Box sx={{ flex: 1 }} />
 
-          <Button size="small" sx={compactButton} onClick={resetView}>Reset</Button>
-          <Button size="small" sx={{ ...compactButton, color: colors.accent }} onClick={(e) => setExportAnchor(e.currentTarget)}>Export</Button>
-          <Menu
-            anchorEl={exportAnchor}
-            open={!!exportAnchor}
-            onClose={() => setExportAnchor(null)}
-            {...upwardMenuProps}
-          >
-            <MenuItem onClick={handleExportFigure} sx={{ fontSize: 12 }}>
-              Figure (publication PNG)
-            </MenuItem>
-            <MenuItem onClick={handleExportPNG} sx={{ fontSize: 12 }}>
-              PNG
-            </MenuItem>
-          </Menu>
+          {!hideDisplay && (
+            <Button size="small" sx={compactButton} onClick={resetView} disabled={lockDisplay}>Reset</Button>
+          )}
+          {!hideExport && (<>
+            <Button size="small" sx={{ ...compactButton, color: colors.accent }} onClick={(e) => setExportAnchor(e.currentTarget)} disabled={lockExport}>Export</Button>
+            <Menu
+              anchorEl={exportAnchor}
+              open={!!exportAnchor}
+              onClose={() => setExportAnchor(null)}
+              {...upwardMenuProps}
+            >
+              <MenuItem onClick={handleExportFigure} sx={{ fontSize: 12 }}>
+                Figure (publication PNG)
+              </MenuItem>
+              <MenuItem onClick={handleExportPNG} sx={{ fontSize: 12 }}>
+                PNG
+              </MenuItem>
+            </Menu>
+          </>)}
         </Box>
       )}
 
@@ -1213,7 +2006,7 @@ function Show1D() {
           width: canvasW,
           height: canvasH,
           border: `1px solid ${colors.border}`,
-          cursor: resizeDragRef.current?.active ? "nwse-resize" : dragRef.current?.active ? "grabbing" : "crosshair",
+          cursor: getCursor(),
           bgcolor: isDark ? "#1a1a1a" : "#f8f8f8",
         }}
         onMouseDown={handleMouseDown}
@@ -1243,46 +2036,66 @@ function Show1D() {
             pointerEvents: "none",
           }}
         />
+        {/* Resize handle (Show2D pattern) */}
+        <Box
+          onMouseDown={(e: React.MouseEvent) => {
+            resizeDragRef.current = {
+              active: true,
+              startX: e.clientX,
+              startY: e.clientY,
+              startW: canvasW,
+              startH: canvasH,
+            };
+            e.stopPropagation();
+          }}
+          sx={{
+            position: "absolute",
+            bottom: 0,
+            right: 0,
+            width: 16,
+            height: 16,
+            cursor: "nwse-resize",
+            opacity: 0.6,
+            background: `linear-gradient(135deg, transparent 50%, ${colors.accent} 50%)`,
+            "&:hover": { opacity: 1 },
+          }}
+        />
       </Box>
 
-      {/* Stats bar (Show3D format, focus-aware) */}
-      {showStats && statsMean && statsMean.length > 0 && (() => {
+      {/* Stats bar (Show4DSTEM pattern, one row per trace) */}
+      {showStats && !hideStats && statsMean && statsMean.length > 0 && (() => {
         const showIndices = focusedTrace >= 0 && focusedTrace < nTraces
           ? [focusedTrace]
           : Array.from({ length: nTraces }, (_, i) => i);
         return (
           <Box
             sx={{
-              display: "flex",
-              gap: SPACING.MD + "px",
-              px: 1,
-              py: 0.25,
               border: `1px solid ${colors.border}`,
               borderTop: "none",
-              bgcolor: colors.bg,
-              width: "fit-content",
-              flexWrap: "wrap",
+              bgcolor: isDark ? colors.bg : "#fafafa",
+              maxWidth: canvasW,
             }}
           >
             {showIndices.map((t) => {
               const label = (traceLabels && traceLabels[t]) || `Trace ${t + 1}`;
-              const color = (traceColors && traceColors[t]) || "#4fc3f7";
+              const traceColor = (traceColors && traceColors[t]) || "#4fc3f7";
               return (
-                <Box key={t} sx={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                  <Box sx={{ width: 8, height: 8, bgcolor: color, flexShrink: 0 }} />
-                  <Typography sx={{ ...typography.value, color: colors.text }}>
-                    {nTraces > 1 ? `${label}: ` : ""}
-                    Mean <span style={{ color }}>{formatNumber(statsMean[t] ?? 0)}</span>
-                    {"  "}Min <span style={{ color }}>{formatNumber(statsMin[t] ?? 0)}</span>
-                    {"  "}Max <span style={{ color }}>{formatNumber(statsMax[t] ?? 0)}</span>
-                    {"  "}Std <span style={{ color }}>{formatNumber(statsStd[t] ?? 0)}</span>
-                  </Typography>
+                <Box key={t} sx={{ display: "flex", gap: 2, alignItems: "center", px: 1, py: 0.25 }}>
+                  <Box sx={{ width: 8, height: 8, bgcolor: traceColor, flexShrink: 0 }} />
+                  {nTraces > 1 && (
+                    <Typography sx={{ fontSize: 11, color: colors.text, fontWeight: "bold", minWidth: 40 }}>{label}</Typography>
+                  )}
+                  <Typography sx={{ fontSize: 11, color: isDark ? "#888" : "#999" }}>Mean <Box component="span" sx={{ color: traceColor }}>{formatNumber(statsMean[t] ?? 0)}</Box></Typography>
+                  <Typography sx={{ fontSize: 11, color: isDark ? "#888" : "#999" }}>Min <Box component="span" sx={{ color: traceColor }}>{formatNumber(statsMin[t] ?? 0)}</Box></Typography>
+                  <Typography sx={{ fontSize: 11, color: isDark ? "#888" : "#999" }}>Max <Box component="span" sx={{ color: traceColor }}>{formatNumber(statsMax[t] ?? 0)}</Box></Typography>
+                  <Typography sx={{ fontSize: 11, color: isDark ? "#888" : "#999" }}>Std <Box component="span" sx={{ color: traceColor }}>{formatNumber(statsStd[t] ?? 0)}</Box></Typography>
                 </Box>
               );
             })}
           </Box>
         );
       })()}
+
 
     </Box>
   );

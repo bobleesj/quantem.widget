@@ -45,9 +45,13 @@
     "Merge4DSTEM": {
       "tool_groups": ["display", "sources", "merge", "preview", "stats", "export", "all"],
       "aliases": {}
+    },
+    "Show1D": {
+      "tool_groups": ["display", "peaks", "stats", "export", "all"],
+      "aliases": {}
     }
   },
-  "viewer_widgets": ["Show2D", "Show3D", "Show3DVolume", "Show4D", "Show4DSTEM", "ShowComplex2D"],
+  "viewer_widgets": ["Show1D", "Show2D", "Show3D", "Show3DVolume", "Show4D", "Show4DSTEM", "ShowComplex2D"],
   "control_presets": {
     "all": {
       "label": "All",
@@ -55,15 +59,19 @@
     },
     "compact": {
       "label": "Compact",
-      "show_groups": ["display", "navigation", "playback", "view", "export", "fft"]
+      "show_groups": ["mode", "edit", "display", "navigation", "playback", "view", "export", "fft"]
     },
     "mask_focus": {
       "label": "Mask Focus",
-      "show_groups": ["display", "roi", "histogram", "stats", "navigation", "playback", "view", "export", "fft", "virtual", "frame"]
+      "show_groups": ["edit", "display", "roi", "histogram", "stats", "navigation", "playback", "view", "export", "fft", "virtual", "frame"]
     },
     "crop_focus": {
       "label": "Crop Focus",
       "show_groups": ["mode", "edit", "display", "histogram", "stats", "navigation", "view", "export"]
+    },
+    "spectroscopy": {
+      "label": "Spectroscopy",
+      "show_groups": ["display", "peaks", "stats"]
     }
   }
 }
