@@ -17,7 +17,7 @@ import StopIcon from "@mui/icons-material/Stop";
 import "./styles.css";
 import { useTheme } from "../theme";
 import { COLORMAPS, applyColormap, renderToOffscreen } from "../colormaps";
-import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, roundToNiceValue, exportFigure } from "../scalebar";
+import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, roundToNiceValue, exportFigure, canvasToPDF } from "../scalebar";
 import { findDataRange, sliderRange, computeStats, applyLogScale } from "../stats";
 import { formatNumber, downloadBlob, downloadDataView } from "../format";
 import { computeHistogramFromBytes } from "../histogram";
@@ -1754,7 +1754,7 @@ function Show4D() {
       showColorbar: withColorbar,
       showScaleBar: pixelSizeAngstrom > 0,
     });
-    figCanvas.toBlob((blob) => { if (blob) downloadBlob(blob, "show4d_nav_figure.png"); }, "image/png");
+    canvasToPDF(figCanvas).then((blob) => downloadBlob(blob, "show4d_nav_figure.pdf"));
   };
 
   const handleNavExportPng = () => {
@@ -1796,7 +1796,7 @@ function Show4D() {
       showColorbar: withColorbar,
       showScaleBar: pixelSizeAngstrom > 0,
     });
-    figCanvas.toBlob((blob) => { if (blob) downloadBlob(blob, "show4d_signal_figure.png"); }, "image/png");
+    canvasToPDF(figCanvas).then((blob) => downloadBlob(blob, "show4d_signal_figure.pdf"));
   };
 
   const handleSigExportPng = () => {

@@ -23,7 +23,7 @@ import PauseIcon from "@mui/icons-material/Pause";
 import "./align2d.css";
 import { useTheme } from "../theme";
 import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen } from "../colormaps";
-import { drawScaleBarHiDPI, exportFigure } from "../scalebar";
+import { drawScaleBarHiDPI, exportFigure, canvasToPDF } from "../scalebar";
 import { extractFloat32, downloadBlob } from "../format";
 import { findDataRange, applyLogScale, sliderRange } from "../stats";
 import { computeHistogramFromBytes } from "../histogram";
@@ -1255,9 +1255,7 @@ function Align2D() {
       showColorbar: withColorbar,
       showScaleBar: pixelSize > 0,
     });
-    figCanvas.toBlob((blob) => {
-      if (blob) downloadBlob(blob, "align2d_figure.png");
-    }, "image/png");
+    canvasToPDF(figCanvas).then((blob) => downloadBlob(blob, "align2d_figure.pdf"));
   };
 
   const handleExport = () => {

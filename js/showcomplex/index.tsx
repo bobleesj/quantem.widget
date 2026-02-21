@@ -22,7 +22,7 @@ import Slider from "@mui/material/Slider";
 import Button from "@mui/material/Button";
 import Tooltip from "@mui/material/Tooltip";
 import { useTheme } from "../theme";
-import { drawScaleBarHiDPI, drawColorbar, exportFigure } from "../scalebar";
+import { drawScaleBarHiDPI, drawColorbar, exportFigure, canvasToPDF } from "../scalebar";
 import { extractFloat32, formatNumber, downloadBlob } from "../format";
 import { computeHistogramFromBytes } from "../histogram";
 import { findDataRange, applyLogScale, percentileClip, sliderRange } from "../stats";
@@ -901,9 +901,7 @@ function ShowComplex2D() {
       showScaleBar: pixelSize > 0,
     });
 
-    figCanvas.toBlob((blob) => {
-      if (blob) downloadBlob(blob, `showcomplex_${mode}.png`);
-    }, "image/png");
+    canvasToPDF(figCanvas).then((blob) => downloadBlob(blob, `showcomplex_${mode}.pdf`));
   }, [displayMode, cmap, logScale, autoContrast, percentileLow, percentileHigh,
       vminPct, vmaxPct, histRange, width, height, title, pixelSize, lockExport]);
 

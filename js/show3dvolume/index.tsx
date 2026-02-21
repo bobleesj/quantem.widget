@@ -28,7 +28,7 @@ import StopIcon from "@mui/icons-material/Stop";
 import "./show3dvolume.css";
 import { useTheme } from "../theme";
 import { VolumeRenderer, CameraState, DEFAULT_CAMERA } from "../webgl-volume";
-import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawColorbar, exportFigure } from "../scalebar";
+import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawColorbar, exportFigure, canvasToPDF } from "../scalebar";
 import { extractFloat32, formatNumber, downloadBlob, downloadDataView } from "../format";
 import { computeHistogramFromBytes } from "../histogram";
 import { findDataRange, applyLogScale, percentileClip, sliderRange } from "../stats";
@@ -1137,9 +1137,7 @@ function Show3DVolume() {
         showColorbar: withColorbar,
         showScaleBar: pixelSize > 0,
       });
-      figCanvas.toBlob((blob) => {
-        if (blob) downloadBlob(blob, `show3dvolume_figure_${AXES[a]}.png`);
-      }, "image/png");
+      canvasToPDF(figCanvas).then((blob) => downloadBlob(blob, `show3dvolume_figure_${AXES[a]}.pdf`));
     }
   };
 

@@ -22,7 +22,7 @@ import "./styles.css";
 import { useTheme } from "../theme";
 import { COLORMAPS, applyColormap, renderToOffscreen } from "../colormaps";
 import { WebGPUFFT, getWebGPUFFT, fft2d, fftshift, autoEnhanceFFT } from "../webgpu-fft";
-import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue, exportFigure } from "../scalebar";
+import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue, exportFigure, canvasToPDF } from "../scalebar";
 import { findDataRange, sliderRange, computeStats, applyLogScale } from "../stats";
 import { downloadBlob, formatNumber, downloadDataView } from "../format";
 import { computeHistogramFromBytes } from "../histogram";
@@ -3217,7 +3217,7 @@ function Show4DSTEM() {
       showColorbar: withColorbar,
       showScaleBar: kPxAngstrom > 0,
     });
-    figCanvas.toBlob((blob) => { if (blob) downloadBlob(blob, "show4dstem_dp_figure.png"); }, "image/png");
+    canvasToPDF(figCanvas).then((blob) => downloadBlob(blob, "show4dstem_dp_figure.pdf"));
   };
 
   const handleDpExportPng = () => {
@@ -3248,7 +3248,7 @@ function Show4DSTEM() {
       showScaleBar: pixelSizeAngstrom > 0,
       pixelSize: pixelSizeAngstrom > 0 ? pixelSizeAngstrom : undefined,
     });
-    figCanvas.toBlob((blob) => { if (blob) downloadBlob(blob, "show4dstem_vi_figure.png"); }, "image/png");
+    canvasToPDF(figCanvas).then((blob) => downloadBlob(blob, "show4dstem_vi_figure.pdf"));
   };
 
   const handleViExportPng = () => {
