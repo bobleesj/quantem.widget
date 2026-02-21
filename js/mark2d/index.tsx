@@ -12,7 +12,7 @@ import Switch from "@mui/material/Switch";
 import Tooltip from "@mui/material/Tooltip";
 import "./mark2d.css";
 import { useTheme } from "../theme";
-import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawColorbar, roundToNiceValue, exportFigure } from "../scalebar";
+import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawColorbar, roundToNiceValue, exportFigure, canvasToPDF } from "../scalebar";
 import { extractFloat32, formatNumber, downloadBlob } from "../format";
 import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen } from "../colormaps";
 import { computeHistogramFromBytes } from "../histogram";
@@ -102,7 +102,7 @@ const MARKER_COLORS = [
 
 const MARKER_SHAPES: MarkerShape[] = ["circle", "triangle", "square", "diamond", "star"];
 
-const ROI_SHAPES = ["circle", "square", "rectangle"] as const;
+const ROI_SHAPES = ["square", "rectangle", "circle"] as const;
 type RoiShape = typeof ROI_SHAPES[number];
 
 type ROI = {
@@ -584,7 +584,7 @@ const render = createRender(() => {
   const [activeRoiIdx, setActiveRoiIdx] = React.useState(-1);
   const [hoveredRoiIdx, setHoveredRoiIdx] = React.useState(-1);
   const [isDraggingROI, setIsDraggingROI] = React.useState(false);
-  const [newRoiShape, setNewRoiShape] = React.useState<RoiShape>("circle");
+  const [newRoiShape, setNewRoiShape] = React.useState<RoiShape>("square");
   const safeRois = rois || [];
   const activeRoi = activeRoiIdx >= 0 && activeRoiIdx < safeRois.length ? safeRois[activeRoiIdx] : null;
 
@@ -1832,9 +1832,7 @@ const render = createRender(() => {
       },
     });
 
-    figCanvas.toBlob((blob) => {
-      if (blob) downloadBlob(blob, `${label}_figure.png`);
-    }, "image/png");
+    canvasToPDF(figCanvas).then((blob) => downloadBlob(blob, `${label}_figure.pdf`));
   }, [isGallery, selectedIdx, perImageData, width, height, cmap, logScale, autoContrast,
       percentileLow, percentileHigh, vminPct, vmaxPct, getPointsForImage, size,
       title, pixelSize, markerOpacity, borderWidth, labels, lockExport, hidePoints]);
