@@ -24,14 +24,15 @@ import IconButton from "@mui/material/IconButton";
 import Slider from "@mui/material/Slider";
 import NavigateBeforeIcon from "@mui/icons-material/NavigateBefore";
 import NavigateNextIcon from "@mui/icons-material/NavigateNext";
-import TuneIcon from "@mui/icons-material/Tune";
 import "./edit2d.css";
 import { useTheme } from "../theme";
-import { drawScaleBarHiDPI, exportFigure } from "../scalebar";
+import { drawScaleBarHiDPI, exportFigure, canvasToPDF } from "../scalebar";
 import { extractFloat32, formatNumber, downloadBlob } from "../format";
 import { computeHistogramFromBytes } from "../histogram";
 import { findDataRange, applyLogScale, percentileClip, sliderRange } from "../stats";
 import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen } from "../colormaps";
+import { ControlCustomizer } from "../control-customizer";
+import { computeToolVisibility } from "../tool-parity";
 
 // ============================================================================
 // UI Styles (matching Show3D/Show4DSTEM)
@@ -41,6 +42,10 @@ const typography = {
   labelSmall: { fontSize: 10 },
   value: { fontSize: 10, fontFamily: "monospace" },
   title: { fontWeight: "bold" as const },
+};
+
+const controlPanel = {
+  select: { minWidth: 90, fontSize: 11, "& .MuiSelect-select": { py: 0.5 } },
 };
 
 const SPACING = {
@@ -135,7 +140,7 @@ function InfoTooltip({ text, theme = "dark" }: { text: React.ReactNode; theme?: 
           "&:hover": { color: isDark ? "#aaa" : "#444" },
         }}
       >
-        \u24d8
+        {"\u24d8"}
       </Typography>
     </Tooltip>
   );
@@ -173,7 +178,7 @@ function Histogram({
   vminPct,
   vmaxPct,
   onRangeChange,
-  width = 110,
+  width = 120,
   height = 40,
   theme = "dark",
   dataMin = 0,
@@ -433,6 +438,49 @@ function fillEllipseMask(
 }
 
 // ============================================================================
+// Preview computation
+// ============================================================================
+function computeCropPreview(
+  raw: Float32Array,
+  srcW: number,
+  srcH: number,
+  cTop: number,
+  cLeft: number,
+  cBottom: number,
+  cRight: number,
+  fill: number,
+): { data: Float32Array; width: number; height: number } {
+  const cw = Math.max(1, cRight - cLeft);
+  const ch = Math.max(1, cBottom - cTop);
+  const result = new Float32Array(cw * ch);
+  result.fill(fill);
+  const srcRowStart = Math.max(0, cTop);
+  const srcRowEnd = Math.min(srcH, cBottom);
+  const srcColStart = Math.max(0, cLeft);
+  const srcColEnd = Math.min(srcW, cRight);
+  for (let row = srcRowStart; row < srcRowEnd; row++) {
+    for (let col = srcColStart; col < srcColEnd; col++) {
+      result[(row - cTop) * cw + (col - cLeft)] = raw[row * srcW + col];
+    }
+  }
+  return { data: result, width: cw, height: ch };
+}
+
+function computeMaskPreview(
+  raw: Float32Array,
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  fill: number,
+): Float32Array {
+  const result = new Float32Array(raw.length);
+  for (let i = 0; i < w * h; i++) {
+    result[i] = mask[i] > 0 ? fill : raw[i];
+  }
+  return result;
+}
+
+// ============================================================================
 // Main Component
 // ============================================================================
 function Edit2D() {
@@ -440,10 +488,10 @@ function Edit2D() {
   const { themeInfo, colors: themeColors } = useTheme();
 
   const themedSelect = {
-    fontSize: 10,
-    "& .MuiSelect-select": { py: 0.5 },
+    ...controlPanel.select,
     bgcolor: themeColors.controlBg,
     color: themeColors.text,
+    "& .MuiSelect-select": { py: 0.5 },
     "& .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.border },
     "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.textMuted },
     "& .MuiSvgIcon-root": { color: themeColors.textMuted },
@@ -459,6 +507,14 @@ function Edit2D() {
       },
     },
   };
+
+  // Themed typography (matching Show4DSTEM pattern)
+  const typo = React.useMemo(() => ({
+    label: { ...typography.label, color: themeColors.textMuted },
+    labelSmall: { ...typography.labelSmall, color: themeColors.textMuted },
+    value: { ...typography.value, color: themeColors.textMuted },
+    title: { ...typography.title, color: themeColors.accent },
+  }), [themeColors]);
 
   // ── Model state ──────────────────────────────────────────────────────
   const [nImages] = useModelState<number>("n_images");
@@ -480,11 +536,11 @@ function Edit2D() {
   const [autoContrast, setAutoContrast] = useModelState<boolean>("auto_contrast");
   const [showStats, setShowStats] = useModelState<boolean>("show_stats");
   const [showControls] = useModelState<boolean>("show_controls");
-  const [showDisplayControlsGroup, setShowDisplayControlsGroup] = useModelState<boolean>("show_display_controls");
-  const [showEditControlsGroup, setShowEditControlsGroup] = useModelState<boolean>("show_edit_controls");
-  const [showHistogramGroup, setShowHistogramGroup] = useModelState<boolean>("show_histogram");
-  const [disabledTools] = useModelState<string[]>("disabled_tools");
-  const [hiddenTools] = useModelState<string[]>("hidden_tools");
+  const [showDisplayControlsGroup] = useModelState<boolean>("show_display_controls");
+  const [showEditControlsGroup] = useModelState<boolean>("show_edit_controls");
+  const [showHistogramGroup] = useModelState<boolean>("show_histogram");
+  const [disabledTools, setDisabledTools] = useModelState<string[]>("disabled_tools");
+  const [hiddenTools, setHiddenTools] = useModelState<string[]>("hidden_tools");
   const [pixelSize] = useModelState<number>("pixel_size");
   const [statsMean] = useModelState<number>("stats_mean");
   const [statsMin] = useModelState<number>("stats_min");
@@ -512,8 +568,6 @@ function Edit2D() {
   const [maskVersion, setMaskVersion] = React.useState(0);
   const [shapePreview, setShapePreview] = React.useState<{ r0: number; c0: number; r1: number; c1: number } | null>(null);
   const [exportAnchor, setExportAnchor] = React.useState<HTMLElement | null>(null);
-  const [controlsAnchor, setControlsAnchor] = React.useState<HTMLElement | null>(null);
-  const [isRootHovered, setIsRootHovered] = React.useState(false);
 
   // ── Refs ─────────────────────────────────────────────────────────────
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -528,6 +582,7 @@ function Edit2D() {
   const shapeStartRef = React.useRef<{ row: number; col: number } | null>(null);
   const isDraggingShapeRef = React.useRef(false);
   const maskCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const previewCanvasRef = React.useRef<HTMLCanvasElement>(null);
 
   // ── Derived values ───────────────────────────────────────────────────
   const displayScale = canvasSize / Math.max(width, height, 1);
@@ -539,44 +594,36 @@ function Edit2D() {
   const cropW = cropRight - cropLeft;
   const hasPadding = cropTop < 0 || cropLeft < 0 || cropBottom > height || cropRight > width;
 
-  const disabledToolSet = React.useMemo(
-    () =>
-      new Set(
-        (disabledTools || [])
-          .map((name) => String(name).trim().toLowerCase())
-          .filter(Boolean),
-      ),
-    [disabledTools],
-  );
-  const hiddenToolSet = React.useMemo(
-    () =>
-      new Set(
-        (hiddenTools || [])
-          .map((name) => String(name).trim().toLowerCase())
-          .filter(Boolean),
-      ),
-    [hiddenTools],
+  // Preview panel sizing
+  const previewDataW = mode === "crop" ? Math.max(1, cropW) : width;
+  const previewDataH = mode === "crop" ? Math.max(1, cropH) : height;
+  const previewDisplayScale = canvasSize / Math.max(previewDataW, previewDataH, 1);
+  const previewCanvasW = Math.round(previewDataW * previewDisplayScale);
+  const previewCanvasH = Math.round(previewDataH * previewDisplayScale);
+  const totalWidth = canvasW + SPACING.LG + previewCanvasW;
+
+  const toolVisibility = React.useMemo(
+    () => computeToolVisibility("Edit2D", disabledTools, hiddenTools),
+    [disabledTools, hiddenTools],
   );
 
-  const hideAll = hiddenToolSet.has("all");
-  const hideMode = hideAll || hiddenToolSet.has("mode");
-  const hideEdit = hideAll || hiddenToolSet.has("edit");
-  const hideDisplay = hideAll || hiddenToolSet.has("display");
-  const hideHistogram = hideAll || hiddenToolSet.has("histogram");
-  const hideStats = hideAll || hiddenToolSet.has("stats");
-  const hideNavigation = hideAll || hiddenToolSet.has("navigation");
-  const hideExport = hideAll || hiddenToolSet.has("export");
-  const hideView = hideAll || hiddenToolSet.has("view");
+  const hideMode = toolVisibility.isHidden("mode");
+  const hideEdit = toolVisibility.isHidden("edit");
+  const hideDisplay = toolVisibility.isHidden("display");
+  const hideHistogram = toolVisibility.isHidden("histogram");
+  const hideStats = toolVisibility.isHidden("stats");
+  const hideNavigation = toolVisibility.isHidden("navigation");
+  const hideExport = toolVisibility.isHidden("export");
+  const hideView = toolVisibility.isHidden("view");
 
-  const lockAll = disabledToolSet.has("all") || hideAll;
-  const lockMode = lockAll || hideMode || disabledToolSet.has("mode");
-  const lockEdit = lockAll || hideEdit || disabledToolSet.has("edit");
-  const lockDisplay = lockAll || hideDisplay || disabledToolSet.has("display");
-  const lockHistogram = lockAll || hideHistogram || disabledToolSet.has("histogram");
-  const lockStats = lockAll || hideStats || disabledToolSet.has("stats");
-  const lockNavigation = lockAll || hideNavigation || disabledToolSet.has("navigation");
-  const lockExport = lockAll || hideExport || disabledToolSet.has("export");
-  const lockView = lockAll || hideView || disabledToolSet.has("view");
+  const lockMode = toolVisibility.isLocked("mode");
+  const lockEdit = toolVisibility.isLocked("edit");
+  const lockDisplay = toolVisibility.isLocked("display");
+  const lockHistogram = toolVisibility.isLocked("histogram");
+  const lockStats = toolVisibility.isLocked("stats");
+  const lockNavigation = toolVisibility.isLocked("navigation");
+  const lockExport = toolVisibility.isLocked("export");
+  const lockView = toolVisibility.isLocked("view");
 
   const wantDisplayControlsGroup = showDisplayControlsGroup && !hideDisplay;
   const wantEditControlsGroup = showEditControlsGroup && !hideEdit;
@@ -930,6 +977,53 @@ function Edit2D() {
     }
   }, [canvasW, canvasH, zoom, pixelSize, width]);
 
+  // ── Render preview ──────────────────────────────────────────────────
+  React.useEffect(() => {
+    if (!dataReady || !previewCanvasRef.current || !rawDataRef.current) return;
+    const canvas = previewCanvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const raw = rawDataRef.current;
+    let previewRaw: Float32Array;
+    let pw: number, ph: number;
+
+    if (mode === "crop") {
+      const result = computeCropPreview(raw, width, height, cropTop, cropLeft, cropBottom, cropRight, fillValue);
+      previewRaw = result.data;
+      pw = result.width;
+      ph = result.height;
+    } else {
+      const mask = maskRef.current;
+      if (!mask || mask.length !== width * height) return;
+      previewRaw = computeMaskPreview(raw, mask, width, height, fillValue);
+      pw = width;
+      ph = height;
+    }
+
+    const processed = logScale ? applyLogScale(previewRaw) : previewRaw;
+
+    // Use source data's vmin/vmax for consistent coloring
+    let vmin: number, vmax: number;
+    if (autoContrast) {
+      const srcProcessed = logScale ? applyLogScale(raw) : raw;
+      ({ vmin, vmax } = percentileClip(srcProcessed, 2, 98));
+    } else {
+      ({ vmin, vmax } = sliderRange(imageDataRange.min, imageDataRange.max, imageVminPct, imageVmaxPct));
+    }
+
+    const lut = COLORMAPS[cmap] || COLORMAPS.gray;
+    const offscreen = renderToOffscreen(processed, pw, ph, lut, vmin, vmax);
+    if (!offscreen) return;
+
+    ctx.clearRect(0, 0, previewCanvasW, previewCanvasH);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(offscreen, 0, 0, pw, ph, 0, 0, previewCanvasW, previewCanvasH);
+  }, [dataReady, mode, cmap, logScale, autoContrast, imageVminPct, imageVmaxPct,
+    cropTop, cropLeft, cropBottom, cropRight, fillValue,
+    maskVersion, width, height, previewCanvasW, previewCanvasH, imageDataRange,
+    frameBytes, selectedIdx]);
+
   // ── Mask operations ─────────────────────────────────────────────────
   const handleInvertMask = React.useCallback(() => {
     if (lockEdit) return;
@@ -1270,9 +1364,7 @@ function Edit2D() {
       showScaleBar: pixelSize > 0,
     });
 
-    figCanvas.toBlob((blob) => {
-      if (blob) downloadBlob(blob, `edit2d_${labels?.[selectedIdx] || "image"}_figure.png`);
-    }, "image/png");
+    canvasToPDF(figCanvas).then((blob) => downloadBlob(blob, `edit2d_${labels?.[selectedIdx] || "image"}_figure.pdf`));
   }, [logScale, cmap, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, width, height, title, pixelSize, labels, selectedIdx, lockExport]);
 
   // ── Keyboard ─────────────────────────────────────────────────────────
@@ -1375,8 +1467,7 @@ function Edit2D() {
         ...controlRow,
         border: `1px solid ${themeColors.border}`,
         bgcolor: themeColors.controlBg,
-        opacity: lockDisplay ? 0.5 : 1,
-        pointerEvents: lockDisplay ? "none" : "auto",
+        opacity: lockDisplay ? 0.6 : 1,
       }}
     >
       <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Scale:</Typography>
@@ -1399,16 +1490,35 @@ function Edit2D() {
       className="edit2d-root"
       tabIndex={0}
       onKeyDown={handleKeyDown}
-      onMouseEnter={() => setIsRootHovered(true)}
-      onMouseLeave={() => setIsRootHovered(false)}
       sx={{ ...container.root, outline: "none", "&:focus": { outline: "none" } }}
     >
-      {/* Header */}
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28, maxWidth: canvasW }}>
-        <Stack direction="row" alignItems="center" spacing={0.5}>
-          <Typography variant="caption" sx={{ ...typography.label, ...typography.title }}>{title || "Edit2D"}</Typography>
+      {/* Title row */}
+      <Typography variant="caption" sx={{ ...typography.label, color: themeColors.accent, mb: `${SPACING.XS}px`, display: "block" }}>
+        {title || "Edit2D"}
+        <InfoTooltip theme={themeInfo.theme} text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+          <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Crop: Drag handles to resize, drag inside to move crop region.</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Mask: Paint binary mask with brush, rectangle, ellipse, or threshold tools.</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Fill: Value used for padded regions outside the original image bounds.</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Auto: Percentile-based contrast — clips outliers for better visibility.</Typography>
+          <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
+          <KeyboardShortcuts items={shortcutItems} />
+        </Box>} />
+        <ControlCustomizer
+          widgetName="Edit2D"
+          hiddenTools={hiddenTools}
+          setHiddenTools={setHiddenTools}
+          disabledTools={disabledTools}
+          setDisabledTools={setDisabledTools}
+          themeColors={themeColors}
+        />
+      </Typography>
+
+      {/* Controls row */}
+      {(!hideMode || !hideNavigation || !hideExport || !hideView) && (
+        <Box sx={{ display: "flex", alignItems: "center", gap: `${SPACING.XS}px`, mb: `${SPACING.XS}px`, height: 28, width: totalWidth }}>
           {!hideMode && (
-            <Stack direction="row" spacing={0} sx={{ ml: 1 }}>
+            <Stack direction="row" spacing={0}>
               <Button
                 size="small"
                 disabled={lockMode}
@@ -1429,143 +1539,6 @@ function Edit2D() {
               </Button>
             </Stack>
           )}
-          <InfoTooltip theme={themeInfo.theme} text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-            <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
-            <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Crop: Drag handles to resize, drag inside to move crop region.</Typography>
-            <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Mask: Paint binary mask with brush, rectangle, ellipse, or threshold tools.</Typography>
-            <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Fill: Value used for padded regions outside the original image bounds.</Typography>
-            <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Auto: Percentile-based contrast — clips outliers for better visibility.</Typography>
-            <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
-            <KeyboardShortcuts items={shortcutItems} />
-          </Box>} />
-        </Stack>
-        <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="center">
-          <Tooltip title="Customize visible controls" arrow placement="top">
-            <IconButton
-              size="small"
-              onClick={(e) => setControlsAnchor(e.currentTarget)}
-              sx={{
-                p: 0.25,
-                opacity: isRootHovered || Boolean(controlsAnchor) ? 1 : 0,
-                pointerEvents: isRootHovered || Boolean(controlsAnchor) ? "auto" : "none",
-                transition: "opacity 150ms ease",
-                color: themeColors.textMuted,
-              }}
-            >
-              <TuneIcon sx={{ fontSize: 16 }} />
-            </IconButton>
-          </Tooltip>
-          <Menu
-            anchorEl={controlsAnchor}
-            open={Boolean(controlsAnchor)}
-            onClose={() => setControlsAnchor(null)}
-            anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-            transformOrigin={{ vertical: "top", horizontal: "left" }}
-            sx={{ zIndex: 9999 }}
-          >
-            <MenuItem
-              disabled={hideDisplay}
-              onClick={() => { if (!hideDisplay) setShowDisplayControlsGroup((prev) => !prev); }}
-              sx={{ display: "flex", justifyContent: "space-between", gap: 1.5, minWidth: 210 }}
-            >
-              <Typography sx={{ fontSize: 11 }}>Display controls</Typography>
-              <Switch
-                size="small"
-                checked={showDisplayControlsGroup}
-                disabled={hideDisplay}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => setShowDisplayControlsGroup(e.target.checked)}
-              />
-            </MenuItem>
-            <MenuItem
-              disabled={hideEdit}
-              onClick={() => { if (!hideEdit) setShowEditControlsGroup((prev) => !prev); }}
-              sx={{ display: "flex", justifyContent: "space-between", gap: 1.5, minWidth: 210 }}
-            >
-              <Typography sx={{ fontSize: 11 }}>Edit controls</Typography>
-              <Switch
-                size="small"
-                checked={showEditControlsGroup}
-                disabled={hideEdit}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => setShowEditControlsGroup(e.target.checked)}
-              />
-            </MenuItem>
-            <MenuItem
-              disabled={hideHistogram}
-              onClick={() => { if (!hideHistogram) setShowHistogramGroup((prev) => !prev); }}
-              sx={{ display: "flex", justifyContent: "space-between", gap: 1.5, minWidth: 210 }}
-            >
-              <Typography sx={{ fontSize: 11 }}>Histogram</Typography>
-              <Switch
-                size="small"
-                checked={showHistogramGroup}
-                disabled={hideHistogram}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => setShowHistogramGroup(e.target.checked)}
-              />
-            </MenuItem>
-            <MenuItem
-              disabled={hideStats || lockStats}
-              onClick={() => { if (!(hideStats || lockStats)) setShowStats((prev) => !prev); }}
-              sx={{ display: "flex", justifyContent: "space-between", gap: 1.5, minWidth: 210 }}
-            >
-              <Typography sx={{ fontSize: 11 }}>Stats bar</Typography>
-              <Switch
-                size="small"
-                checked={showStats}
-                disabled={hideStats || lockStats}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => setShowStats(e.target.checked)}
-              />
-            </MenuItem>
-            <MenuItem
-              onClick={() => {
-                if (!hideDisplay) setShowDisplayControlsGroup(true);
-                if (!hideEdit) setShowEditControlsGroup(true);
-                if (!hideHistogram) setShowHistogramGroup(true);
-                if (!(hideStats || lockStats)) setShowStats(true);
-              }}
-              sx={{ fontSize: 11, color: themeColors.accent }}
-            >
-              All
-            </MenuItem>
-            <MenuItem
-              onClick={() => {
-                if (!hideDisplay) setShowDisplayControlsGroup(false);
-                if (!hideEdit) setShowEditControlsGroup(true);
-                if (!hideHistogram) setShowHistogramGroup(false);
-                if (!(hideStats || lockStats)) setShowStats(false);
-              }}
-              sx={{ fontSize: 11 }}
-            >
-              Compact
-            </MenuItem>
-            <MenuItem
-              onClick={() => {
-                if (!hideDisplay) setShowDisplayControlsGroup(false);
-                if (!hideEdit) setShowEditControlsGroup(true);
-                if (!hideHistogram) setShowHistogramGroup(true);
-                if (!(hideStats || lockStats)) setShowStats(true);
-                if (!lockMode) setMode("mask");
-              }}
-              sx={{ fontSize: 11 }}
-            >
-              Mask Focus
-            </MenuItem>
-            <MenuItem
-              onClick={() => {
-                if (!hideDisplay) setShowDisplayControlsGroup(true);
-                if (!hideEdit) setShowEditControlsGroup(true);
-                if (!hideHistogram) setShowHistogramGroup(false);
-                if (!(hideStats || lockStats)) setShowStats(true);
-                if (!lockMode) setMode("crop");
-              }}
-              sx={{ fontSize: 11 }}
-            >
-              Crop Focus
-            </MenuItem>
-          </Menu>
           {!hideNavigation && nImages > 1 && (
             <Stack direction="row" alignItems="center" spacing={0}>
               <IconButton size="small" onClick={() => setSelectedIdx(Math.max(0, selectedIdx - 1))} disabled={lockNavigation || selectedIdx === 0} sx={{ p: 0.25, color: themeColors.textMuted }}>
@@ -1579,6 +1552,7 @@ function Edit2D() {
               </IconButton>
             </Stack>
           )}
+          <Box sx={{ flex: 1 }} />
           {!hideExport && (
             <>
               <Button size="small" sx={compactButton} disabled={lockExport} onClick={handleCopy}>COPY</Button>
@@ -1593,73 +1567,103 @@ function Edit2D() {
           {!hideView && (
             <Button size="small" sx={compactButton} disabled={lockView || !needsReset} onClick={handleReset}>RESET</Button>
           )}
-        </Stack>
-      </Stack>
-
-      {/* Canvas */}
-      <Box
-        ref={canvasContainerRef}
-        sx={{ ...container.imageBox, width: canvasW, height: canvasH, cursor: canvasCursor }}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeave}
-        onWheel={handleWheel}
-        onDoubleClick={handleReset}
-      >
-        <canvas ref={canvasRef} width={canvasW} height={canvasH} style={{ width: canvasW, height: canvasH, imageRendering: "pixelated" }} />
-        <canvas ref={overlayRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: canvasH, pointerEvents: "none" }} />
-        <canvas ref={uiRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: canvasH, pointerEvents: "none" }} />
-        {cursorInfo && (
-          <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
-            <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
-              ({cursorInfo.row}, {cursorInfo.col}) {formatNumber(cursorInfo.value)}
-            </Typography>
-          </Box>
-        )}
-        {!hideView && (
-          <Box
-            onMouseDown={handleResizeStart}
-            sx={{
-              position: "absolute",
-              bottom: 0,
-              right: 0,
-              width: 16,
-              height: 16,
-              cursor: lockView ? "default" : "nwse-resize",
-              opacity: lockView ? 0.3 : 0.6,
-              pointerEvents: lockView ? "none" : "auto",
-              background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`,
-              "&:hover": { opacity: lockView ? 0.3 : 1 },
-            }}
-          />
-        )}
-      </Box>
-
-      {/* Stats bar */}
-      {!hideStats && showStats && (
-        <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", maxWidth: canvasW, boxSizing: "border-box", flexWrap: "wrap" }}>
-          <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMean)}</Box></Typography>
-          <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMin)}</Box></Typography>
-          <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMax)}</Box></Typography>
-          <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsStd)}</Box></Typography>
-          <Box sx={{ borderLeft: `1px solid ${themeColors.border}`, height: 14 }} />
-          {mode === "crop" ? (
-            <Typography sx={{ fontSize: 11, color: themeColors.textMuted, fontFamily: "monospace" }}>
-              Crop <Box component="span" sx={{ color: themeColors.accent }}>{cropW}{"\u00d7"}{cropH}</Box> at <Box component="span" sx={{ color: themeColors.accent }}>({cropTop}, {cropLeft})</Box>
-              {hasPadding && <Box component="span" sx={{ color: "#ffa726", ml: 0.5 }}>(pad)</Box>}
-            </Typography>
-          ) : (
-            <Typography sx={{ fontSize: 11, color: themeColors.textMuted, fontFamily: "monospace" }}>
-              Mask: <Box component="span" sx={{ color: themeColors.accent }}>{maskCoverage.count} px ({maskCoverage.pct.toFixed(1)}%)</Box>
-            </Typography>
-          )}
         </Box>
       )}
 
+      {/* Dual-panel layout */}
+      <Stack direction="row" spacing={`${SPACING.LG}px`}>
+        {/* LEFT: Editor panel */}
+        <Box>
+          <Box
+            ref={canvasContainerRef}
+            sx={{ ...container.imageBox, width: canvasW, height: canvasH, cursor: canvasCursor }}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseLeave}
+            onWheel={handleWheel}
+            onDoubleClick={handleReset}
+          >
+            <canvas ref={canvasRef} width={canvasW} height={canvasH} style={{ width: canvasW, height: canvasH, imageRendering: "pixelated" }} />
+            <canvas ref={overlayRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: canvasH, pointerEvents: "none" }} />
+            <canvas ref={uiRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: canvasH, pointerEvents: "none" }} />
+            {cursorInfo && (
+              <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
+                <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
+                  ({cursorInfo.row}, {cursorInfo.col}) {formatNumber(cursorInfo.value)}
+                </Typography>
+              </Box>
+            )}
+            {!hideView && (
+              <Box
+                onMouseDown={handleResizeStart}
+                sx={{
+                  position: "absolute",
+                  bottom: 0,
+                  right: 0,
+                  width: 16,
+                  height: 16,
+                  cursor: lockView ? "default" : "nwse-resize",
+                  opacity: lockView ? 0.3 : 0.6,
+                  pointerEvents: lockView ? "none" : "auto",
+                  background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`,
+                  "&:hover": { opacity: lockView ? 0.3 : 1 },
+                }}
+              />
+            )}
+          </Box>
+          {!hideStats && showStats && (
+            <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", maxWidth: canvasW, boxSizing: "border-box", flexWrap: "wrap" }}>
+              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMean)}</Box></Typography>
+              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMin)}</Box></Typography>
+              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMax)}</Box></Typography>
+              <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsStd)}</Box></Typography>
+            </Box>
+          )}
+        </Box>
+
+        {/* RIGHT: Preview panel */}
+        <Box>
+          <Box sx={{ ...container.imageBox, width: previewCanvasW, height: previewCanvasH }}>
+            <canvas ref={previewCanvasRef} width={previewCanvasW} height={previewCanvasH} style={{ width: previewCanvasW, height: previewCanvasH, imageRendering: "pixelated" }} />
+            {!hideView && (
+              <Box
+                onMouseDown={handleResizeStart}
+                sx={{
+                  position: "absolute",
+                  bottom: 0,
+                  right: 0,
+                  width: 16,
+                  height: 16,
+                  cursor: lockView ? "default" : "nwse-resize",
+                  opacity: lockView ? 0.3 : 0.6,
+                  pointerEvents: lockView ? "none" : "auto",
+                  background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`,
+                  "&:hover": { opacity: lockView ? 0.3 : 1 },
+                }}
+              />
+            )}
+          </Box>
+          {!hideStats && showStats && (
+            <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", maxWidth: previewCanvasW, boxSizing: "border-box" }}>
+              {mode === "crop" ? (
+                <Typography sx={{ fontSize: 11, color: themeColors.textMuted, fontFamily: "monospace" }}>
+                  Result <Box component="span" sx={{ color: themeColors.accent }}>{cropW}{"\u00d7"}{cropH}</Box>
+                  {hasPadding && <Box component="span" sx={{ color: "#ffa726", ml: 0.5 }}>(pad)</Box>}
+                </Typography>
+              ) : (
+                <Typography sx={{ fontSize: 11, color: themeColors.textMuted, fontFamily: "monospace" }}>
+                  Mask: <Box component="span" sx={{ color: themeColors.accent }}>{maskCoverage.count} px ({maskCoverage.pct.toFixed(1)}%)</Box>
+                </Typography>
+              )}
+            </Box>
+          )}
+        </Box>
+      </Stack>
+
       {/* Controls */}
       {showControls && showAnyControlGroups && (
-        <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: canvasW, boxSizing: "border-box" }}>
+        <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: totalWidth, boxSizing: "border-box" }}>
           {showLeftControlGroups && (
             <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
               {mode === "crop" ? (
@@ -1678,7 +1682,7 @@ function Edit2D() {
               ) : (
                 <>
                   {wantEditControlsGroup && (
-                    <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockEdit ? 0.5 : 1, pointerEvents: lockEdit ? "none" : "auto" }}>
+                    <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockEdit ? 0.6 : 1 }}>
                       {(["brush", "rectangle", "ellipse", "threshold"] as const).map((tool) => (
                         <Button
                           key={tool}
@@ -1729,14 +1733,14 @@ function Edit2D() {
                     </Box>
                   )}
                   {wantEditControlsGroup && (
-                    <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockEdit ? 0.5 : 1, pointerEvents: lockEdit ? "none" : "auto" }}>
+                    <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockEdit ? 0.6 : 1 }}>
                       <Button size="small" sx={compactButton} disabled={lockEdit} onClick={handleInvertMask}>INVERT</Button>
                       <Button size="small" sx={compactButton} disabled={lockEdit} onClick={handleClearMask}>CLEAR</Button>
                       <Typography sx={{ ...typography.value, color: themeColors.accent }}>{maskCoverage.pct.toFixed(1)}%</Typography>
                     </Box>
                   )}
                   {wantDisplayControlsGroup && (
-                    <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockDisplay ? 0.5 : 1, pointerEvents: lockDisplay ? "none" : "auto" }}>
+                    <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockDisplay ? 0.6 : 1 }}>
                       <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Scale:</Typography>
                       <Select disabled={lockDisplay} value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
                         <MenuItem value="linear">Lin</MenuItem>
@@ -1755,7 +1759,7 @@ function Edit2D() {
             </Box>
           )}
           {wantHistogramGroup && (
-            <Box sx={{ display: "flex", flexDirection: "column", alignItems: showLeftControlGroups ? "flex-end" : "flex-start", justifyContent: "center", opacity: lockHistogram ? 0.5 : 1, pointerEvents: lockHistogram ? "none" : "auto" }}>
+            <Box sx={{ display: "flex", flexDirection: "column", alignItems: showLeftControlGroups ? "flex-end" : "flex-start", justifyContent: "center", opacity: lockHistogram ? 0.6 : 1 }}>
               <Histogram
                 data={imageHistogramData}
                 vminPct={imageVminPct}
@@ -1766,7 +1770,7 @@ function Edit2D() {
                   setImageVminPct(min);
                   setImageVmaxPct(max);
                 }}
-                width={110}
+                width={120}
                 height={58}
                 theme={themeInfo.theme}
                 dataMin={imageDataRange.min}
