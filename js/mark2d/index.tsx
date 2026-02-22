@@ -17,7 +17,7 @@ import { extractFloat32, formatNumber, downloadBlob } from "../format";
 import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen } from "../colormaps";
 import { computeHistogramFromBytes } from "../histogram";
 import { findDataRange, computeStats, percentileClip, sliderRange, applyLogScale } from "../stats";
-import { fft2d, fftshift, computeMagnitude, autoEnhanceFFT, getWebGPUFFT, type WebGPUFFT } from "../webgpu-fft";
+import { fft2d, fftshift, computeMagnitude, autoEnhanceFFT, getWebGPUFFT, nextPow2, type WebGPUFFT } from "../webgpu-fft";
 import JSZip from "jszip";
 
 type MarkerShape = "circle" | "triangle" | "square" | "diamond" | "star";
@@ -154,6 +154,58 @@ function computeRoiStats(roi: ROI, data: Float32Array, width: number, height: nu
   const mean = sum / count;
   const std = Math.sqrt(Math.max(0, sumSq / count - mean * mean));
   return { mean, std, min, max, count };
+}
+
+// ============================================================================
+// Crop ROI region from raw float32 data for ROI-scoped FFT
+// ============================================================================
+function cropROIRegion(
+  data: Float32Array, imgW: number, imgH: number,
+  roi: ROI,
+): { cropped: Float32Array; cropW: number; cropH: number } | null {
+  const shape = roi.shape || "circle";
+  let x0: number, y0: number, x1: number, y1: number;
+
+  if (shape === "rectangle") {
+    const hw = roi.width / 2;
+    const hh = roi.height / 2;
+    x0 = Math.max(0, Math.floor(roi.col - hw));
+    y0 = Math.max(0, Math.floor(roi.row - hh));
+    x1 = Math.min(imgW, Math.ceil(roi.col + hw));
+    y1 = Math.min(imgH, Math.ceil(roi.row + hh));
+  } else {
+    const r = roi.radius;
+    x0 = Math.max(0, Math.floor(roi.col - r));
+    y0 = Math.max(0, Math.floor(roi.row - r));
+    x1 = Math.min(imgW, Math.ceil(roi.col + r));
+    y1 = Math.min(imgH, Math.ceil(roi.row + r));
+  }
+
+  const cropW = x1 - x0;
+  const cropH = y1 - y0;
+  if (cropW < 2 || cropH < 2) return null;
+
+  const cropped = new Float32Array(cropW * cropH);
+
+  if (shape === "circle") {
+    const r = roi.radius;
+    const rSq = r * r;
+    for (let dy = 0; dy < cropH; dy++) {
+      for (let dx = 0; dx < cropW; dx++) {
+        const imgX = x0 + dx;
+        const imgY = y0 + dy;
+        const distSq = (imgX - roi.col) * (imgX - roi.col) + (imgY - roi.row) * (imgY - roi.row);
+        cropped[dy * cropW + dx] = distSq <= rSq ? data[imgY * imgW + imgX] : 0;
+      }
+    }
+  } else {
+    for (let dy = 0; dy < cropH; dy++) {
+      const srcOffset = (y0 + dy) * imgW + x0;
+      cropped.set(data.subarray(srcOffset, srcOffset + cropW), dy * cropW);
+    }
+  }
+
+  return { cropped, cropW, cropH };
 }
 
 function findLocalMax(data: Float32Array, width: number, height: number, cc: number, cr: number, radius: number): { row: number; col: number } {
@@ -588,6 +640,9 @@ const render = createRender(() => {
   const safeRois = rois || [];
   const activeRoi = activeRoiIdx >= 0 && activeRoiIdx < safeRois.length ? safeRois[activeRoiIdx] : null;
 
+  // ROI FFT state
+  const [fftCropDims, setFftCropDims] = React.useState<{ cropWidth: number; cropHeight: number; fftWidth: number; fftHeight: number } | null>(null);
+
   const pushRoiHistory = React.useCallback(() => {
     roiHistoryRef.current = [...roiHistoryRef.current.slice(-49), safeRois.map(r => ({ ...r }))];
     roiRedoRef.current = [];
@@ -625,6 +680,7 @@ const render = createRender(() => {
   const [logScale, setLogScale] = useModelState<boolean>("log_scale");
   const [showFft, setShowFft] = useModelState<boolean>("show_fft");
   const effectiveShowFft = showFft && !hideDisplay;
+  const roiFftActive = effectiveShowFft && !isGallery && activeRoiIdx >= 0 && activeRoiIdx < safeRois.length;
 
   // Histogram slider state (local)
   const [vminPct, setVminPct] = React.useState(0);
@@ -1186,29 +1242,55 @@ const render = createRender(() => {
     getWebGPUFFT().then(fft => { if (fft) gpuFFTRef.current = fft; });
   }, []);
 
-  // Compute FFT when toggled
+  // Compute FFT when toggled (supports ROI-scoped FFT)
   React.useEffect(() => {
-    if (!effectiveShowFft || !width || !height) { fftOffscreenRef.current = null; return; }
+    if (!effectiveShowFft || !width || !height) { fftOffscreenRef.current = null; setFftCropDims(null); return; }
     const idx = isGallery ? selectedIdx : 0;
     const f32 = perImageData[idx];
     if (!f32) return;
     const lut = COLORMAPS[cmap || "gray"] || COLORMAPS.gray;
     const compute = async () => {
+      let inputData = f32;
+      let fftW = width, fftH = height;
+      let origCropW = 0, origCropH = 0;
+
+      // ROI FFT: crop to selected ROI region and pre-pad to power-of-2
+      if (roiFftActive && safeRois.length > 0 && activeRoiIdx >= 0 && activeRoiIdx < safeRois.length) {
+        const roi = safeRois[activeRoiIdx];
+        const crop = cropROIRegion(f32, width, height, roi);
+        if (crop) {
+          origCropW = crop.cropW;
+          origCropH = crop.cropH;
+          const padW = nextPow2(crop.cropW);
+          const padH = nextPow2(crop.cropH);
+          const padded = new Float32Array(padW * padH);
+          for (let y = 0; y < crop.cropH; y++) {
+            for (let x = 0; x < crop.cropW; x++) {
+              padded[y * padW + x] = crop.cropped[y * crop.cropW + x];
+            }
+          }
+          inputData = padded;
+          fftW = padW;
+          fftH = padH;
+        }
+      }
+
       let real: Float32Array, imag: Float32Array;
       if (gpuFFTRef.current) {
-        const result = await gpuFFTRef.current.fft2D(f32.slice(), new Float32Array(f32.length), width, height, false);
+        const result = await gpuFFTRef.current.fft2D(inputData.slice(), new Float32Array(inputData.length), fftW, fftH, false);
         real = result.real; imag = result.imag;
       } else {
-        real = f32.slice(); imag = new Float32Array(f32.length);
-        fft2d(real, imag, width, height, false);
+        real = inputData.slice(); imag = new Float32Array(inputData.length);
+        fft2d(real, imag, fftW, fftH, false);
       }
-      fftshift(real, width, height);
-      fftshift(imag, width, height);
+      fftshift(real, fftW, fftH);
+      fftshift(imag, fftW, fftH);
       const mag = computeMagnitude(real, imag);
-      autoEnhanceFFT(mag, width, height);
+      autoEnhanceFFT(mag, fftW, fftH);
       const logMag = applyLogScale(mag);
       const { min: logMin, max: logMax } = findDataRange(logMag);
-      fftOffscreenRef.current = renderToOffscreen(logMag, width, height, lut, logMin, logMax);
+      fftOffscreenRef.current = renderToOffscreen(logMag, fftW, fftH, lut, logMin, logMax);
+      setFftCropDims(origCropW > 0 ? { cropWidth: origCropW, cropHeight: origCropH, fftWidth: fftW, fftHeight: fftH } : null);
       // Trigger redraw
       if (fftCanvasRef.current && fftOffscreenRef.current) {
         const ctx = fftCanvasRef.current.getContext("2d");
@@ -1222,7 +1304,7 @@ const render = createRender(() => {
       }
     };
     compute();
-  }, [effectiveShowFft, perImageData, isGallery, selectedIdx, width, height, cmap, canvasW, canvasH]);
+  }, [effectiveShowFft, roiFftActive, perImageData, isGallery, selectedIdx, width, height, cmap, canvasW, canvasH, safeRois, activeRoiIdx]);
 
   // Render FFT overlay (reciprocal-space scale bar + colorbar)
   React.useEffect(() => {
@@ -1234,13 +1316,14 @@ const render = createRender(() => {
     overlay.height = Math.round(canvasH * DPR);
     ctx.clearRect(0, 0, overlay.width, overlay.height);
 
-    // Reciprocal-space scale bar
+    // Reciprocal-space scale bar (use crop dims when ROI FFT active)
     if (pixelSize && pixelSize > 0) {
-      const fftPixelSize = 1 / (width * pixelSize);
-      drawFFTScaleBarHiDPI(overlay, DPR, 1, fftPixelSize, width);
+      const fftW = fftCropDims?.fftWidth ?? width;
+      const fftPixelSize = 1 / (fftW * pixelSize);
+      drawFFTScaleBarHiDPI(overlay, DPR, 1, fftPixelSize, fftW);
     }
 
-  }, [effectiveShowFft, canvasW, canvasH, pixelSize, width]);
+  }, [effectiveShowFft, canvasW, canvasH, pixelSize, width, fftCropDims]);
 
   // Prevent page scroll on canvas containers
   React.useEffect(() => {
@@ -2176,8 +2259,8 @@ const render = createRender(() => {
                 style={{ width: canvasW, height: canvasH, imageRendering: "pixelated" }}
               />
               <canvas ref={fftOverlayRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: canvasH, pointerEvents: "none" }} />
-              <Typography sx={{ position: "absolute", top: 4, left: 8, fontSize: 10, color: "#fff", textShadow: "0 0 3px #000" }}>
-                FFT
+              <Typography sx={{ position: "absolute", top: 4, left: 8, fontSize: 10, color: fftCropDims ? accentGreen : "#fff", textShadow: "0 0 3px #000" }}>
+                {fftCropDims ? `ROI FFT (${fftCropDims.cropWidth}\u00D7${fftCropDims.cropHeight})` : "FFT"}
               </Typography>
             </Box>
           )}
