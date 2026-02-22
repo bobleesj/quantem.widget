@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Bin
+- **breaking:** removed `use_torch` parameter and `compute_backend`/`torch_enabled` traits — Bin is unconditionally torch-only, these were always-true values with no alternative path
+
+### Show3D
+- **breaking:** `state_dict()` no longer includes `use_torch` or `device` — these are runtime-dependent and non-portable across machines
+
 ### New widgets
 - **Merge4DSTEM** — stack multiple 4D-STEM datasets along a time axis with GPU-accelerated merge, detector binning, source preview, and Zarr export
 - **Show1D** — interactive 1D viewer for spectra, profiles, and time series with multi-trace overlay, calibrated axes, log scale, and figure export
@@ -26,11 +32,24 @@
 - diff mode: `diff_mode="previous"` shows frame-to-frame differences, `diff_mode="first"` shows cumulative change from the first frame — one-liner QC for drift and beam damage in time series
 - `profile_all_frames()`: extract the same line profile from every frame, returns `(n_slices, n_points)` array passable to Show1D for multi-frame comparison
 
-### Show2D, Show3D, Mark2D, Show4D, Show4DSTEM, ShowComplex2D
+### Show2D, Show3D, Mark2D, Show4D, Show4DSTEM, ShowComplex2D, Show3DVolume
 - ROI FFT: when both ROI and FFT are active, the FFT shows only the cropped ROI region with real-time updates during drag — useful for inspecting local crystal structure in diffraction data
+- d-spacing click: click on the FFT panel to measure d-spacing at any reflection; displays crosshair with spatial frequency and d-spacing in calibrated units (requires `pixel_size`)
 
 ### ShowComplex2D
 - single-mode ROI: circle, square, and rectangle ROI with drag-to-move and resize, enabling region-specific FFT analysis of complex-valued reconstructions
+
+### Show3DVolume
+- single-mode ROI on XY slice: circle, square, and rectangle ROI with drag-to-move and resize; XY FFT crops to ROI region, XZ/YZ FFTs unchanged
+
+### Show2D, Show3D, Show4D, Show4DSTEM
+- Shift+drag rectangle ROI corner: resize while locking the original width/height ratio
+
+### Mark2D
+- ArrowUp/ArrowDown keyboard nudge: move active ROI vertically by 1px (10px with Shift)
+
+### Align2D
+- ArrowUp/ArrowDown keyboard nudge: move alignment offset vertically by 1px (0.1px with Shift)
 
 ### Edit2D
 - per-image independent editing (`shared=False`): each image gets its own crop region and mask, toggle via Link switch in the navigation bar
