@@ -259,6 +259,7 @@ function Histogram({
           "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px" },
         }}
       />
+      <Box sx={{ display: "flex", justifyContent: "space-between", width }}><Typography sx={{ fontSize: 8, fontFamily: "monospace", opacity: 0.6, lineHeight: 1 }}>{(() => { const v = dataMin + (vminPct / 100) * (dataMax - dataMin); return v >= 1000 ? v.toExponential(1) : v.toFixed(1); })()}</Typography><Typography sx={{ fontSize: 8, fontFamily: "monospace", opacity: 0.6, lineHeight: 1 }}>{(() => { const v = dataMin + (vmaxPct / 100) * (dataMax - dataMin); return v >= 1000 ? v.toExponential(1) : v.toFixed(1); })()}</Typography></Box>
     </Box>
   );
 }
@@ -553,6 +554,9 @@ function Edit2D() {
   const [brushSize, setBrushSize] = useModelState<number>("brush_size");
   const [maskAction, setMaskAction] = useModelState<string>("mask_action");
 
+  // Shared / independent mode
+  const [shared, setShared] = useModelState<boolean>("shared");
+
   // ── Local state ──────────────────────────────────────────────────────
   const [zoom, setZoom] = React.useState(1);
   const [panX, setPanX] = React.useState(0);
@@ -568,6 +572,12 @@ function Edit2D() {
   const [maskVersion, setMaskVersion] = React.useState(0);
   const [shapePreview, setShapePreview] = React.useState<{ r0: number; c0: number; r1: number; c1: number } | null>(null);
   const [exportAnchor, setExportAnchor] = React.useState<HTMLElement | null>(null);
+
+  // Per-image independent crop/mask state
+  interface CropState { top: number; left: number; bottom: number; right: number }
+  const [cropStates, setCropStates] = React.useState<Map<number, CropState>>(new Map());
+  const perMasksRef = React.useRef<Map<number, Uint8Array>>(new Map());
+  const prevIdxRef = React.useRef(selectedIdx);
 
   // ── Refs ─────────────────────────────────────────────────────────────
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -590,9 +600,19 @@ function Edit2D() {
   const canvasH = Math.round(height * displayScale);
   const dataReady = frameBytes && frameBytes.byteLength > 0 && width > 0 && height > 0;
   const needsReset = zoom !== 1 || panX !== 0 || panY !== 0;
-  const cropH = cropBottom - cropTop;
-  const cropW = cropRight - cropLeft;
-  const hasPadding = cropTop < 0 || cropLeft < 0 || cropBottom > height || cropRight > width;
+
+  // Active crop: from Map in independent mode, from traits in shared mode
+  // Fallback uses shared traits (not full-image) so initial bounds= param works in independent mode
+  const activeCrop: CropState = React.useMemo(() => {
+    if (shared) {
+      return { top: cropTop, left: cropLeft, bottom: cropBottom, right: cropRight };
+    }
+    return cropStates.get(selectedIdx) || { top: cropTop, left: cropLeft, bottom: cropBottom, right: cropRight };
+  }, [shared, cropTop, cropLeft, cropBottom, cropRight, cropStates, selectedIdx]);
+
+  const cropH = activeCrop.bottom - activeCrop.top;
+  const cropW = activeCrop.right - activeCrop.left;
+  const hasPadding = activeCrop.top < 0 || activeCrop.left < 0 || activeCrop.bottom > height || activeCrop.right > width;
 
   // Preview panel sizing
   const previewDataW = mode === "crop" ? Math.max(1, cropW) : width;
@@ -673,6 +693,74 @@ function Edit2D() {
     model.save_changes();
   }, [model]);
 
+  // ── Sync per-image masks to Python ─────────────────────────────────
+  const syncPerImageMasksToPython = React.useCallback(() => {
+    if (shared || nImages <= 1) return;
+    const size = width * height;
+    const concat = new Uint8Array(nImages * size);
+    for (let i = 0; i < nImages; i++) {
+      const m = perMasksRef.current.get(i);
+      if (m && m.length === size) {
+        concat.set(m, i * size);
+      }
+    }
+    model.set("per_image_masks_bytes", new DataView(concat.buffer));
+    model.save_changes();
+  }, [shared, nImages, width, height, model]);
+
+  // ── Update crop (shared or independent) ────────────────────────────
+  const updateCrop = React.useCallback((top: number, left: number, bottom: number, right: number) => {
+    if (shared) {
+      setCropTop(top);
+      setCropLeft(left);
+      setCropBottom(bottom);
+      setCropRight(right);
+    } else {
+      setCropStates(prev => new Map(prev).set(selectedIdx, { top, left, bottom, right }));
+    }
+  }, [shared, selectedIdx, setCropTop, setCropLeft, setCropBottom, setCropRight]);
+
+  // ── Image switching: save/load per-image masks ─────────────────────
+  React.useEffect(() => {
+    if (shared) { prevIdxRef.current = selectedIdx; return; }
+    const prev = prevIdxRef.current;
+    if (prev === selectedIdx) return;
+
+    // Save current mask to Map
+    if (maskRef.current && mode === "mask") {
+      perMasksRef.current.set(prev, maskRef.current.slice());
+    }
+
+    // Load new image's mask
+    const stored = perMasksRef.current.get(selectedIdx);
+    maskRef.current = stored ? stored.slice() : new Uint8Array(width * height);
+    setMaskVersion(v => v + 1);
+
+    prevIdxRef.current = selectedIdx;
+  }, [selectedIdx, shared, width, height, mode]);
+
+  // ── Reset per-image state when dimensions change (set_image) ────────
+  const prevDimsRef = React.useRef(`${nImages}:${width}:${height}`);
+  React.useEffect(() => {
+    const key = `${nImages}:${width}:${height}`;
+    if (key !== prevDimsRef.current) {
+      prevDimsRef.current = key;
+      setCropStates(new Map());
+      perMasksRef.current = new Map();
+    }
+  }, [nImages, width, height]);
+
+  // ── Sync per-image crops to Python ─────────────────────────────────
+  React.useEffect(() => {
+    if (shared || nImages <= 1) return;
+    const crops: CropState[] = [];
+    for (let i = 0; i < nImages; i++) {
+      crops.push(cropStates.get(i) || { top: cropTop, left: cropLeft, bottom: cropBottom, right: cropRight });
+    }
+    model.set("per_image_crops_json", JSON.stringify(crops));
+    model.save_changes();
+  }, [shared, cropStates, nImages, height, width, model, cropTop, cropLeft, cropBottom, cropRight]);
+
   // ── Extract float32 data ─────────────────────────────────────────────
   React.useEffect(() => {
     if (!dataReady) return;
@@ -709,8 +797,13 @@ function Edit2D() {
       mask[i] = (v >= vmin && v <= vmax) ? 255 : 0;
     }
     setMaskVersion((v) => v + 1);
-    syncMaskToPython();
-  }, [lockEdit, mode, maskTool, imageVminPct, imageVmaxPct, imageDataRange, logScale, syncMaskToPython]);
+    if (!shared && nImages > 1) {
+      perMasksRef.current.set(selectedIdx, maskRef.current.slice());
+      syncPerImageMasksToPython();
+    } else {
+      syncMaskToPython();
+    }
+  }, [lockEdit, mode, maskTool, imageVminPct, imageVmaxPct, imageDataRange, logScale, shared, nImages, selectedIdx, syncMaskToPython, syncPerImageMasksToPython]);
 
   // ── Prevent page scroll on wheel ────────────────────────────────────
   React.useEffect(() => {
@@ -807,10 +900,10 @@ function Edit2D() {
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.clearRect(0, 0, canvasW, canvasH);
 
-    const sLeft = toScreenX(cropLeft);
-    const sRight = toScreenX(cropRight);
-    const sTop = toScreenY(cropTop);
-    const sBottom = toScreenY(cropBottom);
+    const sLeft = toScreenX(activeCrop.left);
+    const sRight = toScreenX(activeCrop.right);
+    const sTop = toScreenY(activeCrop.top);
+    const sBottom = toScreenY(activeCrop.bottom);
 
     // Dim overlay outside crop region
     ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
@@ -871,7 +964,7 @@ function Edit2D() {
     const labelY = Math.max(14, sTop - 4);
     ctx.fillText(dimLabel, (sLeft + sRight) / 2, labelY);
     ctx.shadowBlur = 0;
-  }, [mode, cropTop, cropLeft, cropBottom, cropRight, zoom, panX, panY, canvasW, canvasH, width, height, displayScale, hasPadding, toScreenX, toScreenY, cropW, cropH]);
+  }, [mode, activeCrop, zoom, panX, panY, canvasW, canvasH, width, height, displayScale, hasPadding, toScreenX, toScreenY, cropW, cropH]);
 
   // ── Render mask overlay (mask mode only) ────────────────────────────
   React.useEffect(() => {
@@ -989,7 +1082,7 @@ function Edit2D() {
     let pw: number, ph: number;
 
     if (mode === "crop") {
-      const result = computeCropPreview(raw, width, height, cropTop, cropLeft, cropBottom, cropRight, fillValue);
+      const result = computeCropPreview(raw, width, height, activeCrop.top, activeCrop.left, activeCrop.bottom, activeCrop.right, fillValue);
       previewRaw = result.data;
       pw = result.width;
       ph = result.height;
@@ -1020,7 +1113,7 @@ function Edit2D() {
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(offscreen, 0, 0, pw, ph, 0, 0, previewCanvasW, previewCanvasH);
   }, [dataReady, mode, cmap, logScale, autoContrast, imageVminPct, imageVmaxPct,
-    cropTop, cropLeft, cropBottom, cropRight, fillValue,
+    activeCrop, fillValue,
     maskVersion, width, height, previewCanvasW, previewCanvasH, imageDataRange,
     frameBytes, selectedIdx]);
 
@@ -1033,16 +1126,26 @@ function Edit2D() {
       mask[i] = mask[i] > 0 ? 0 : 255;
     }
     setMaskVersion((v) => v + 1);
-    syncMaskToPython();
-  }, [lockEdit, syncMaskToPython]);
+    if (!shared && nImages > 1) {
+      perMasksRef.current.set(selectedIdx, maskRef.current.slice());
+      syncPerImageMasksToPython();
+    } else {
+      syncMaskToPython();
+    }
+  }, [lockEdit, shared, nImages, selectedIdx, syncMaskToPython, syncPerImageMasksToPython]);
 
   const handleClearMask = React.useCallback(() => {
     if (lockEdit) return;
     if (!maskRef.current) return;
     maskRef.current.fill(0);
     setMaskVersion((v) => v + 1);
-    syncMaskToPython();
-  }, [lockEdit, syncMaskToPython]);
+    if (!shared && nImages > 1) {
+      perMasksRef.current.set(selectedIdx, maskRef.current.slice());
+      syncPerImageMasksToPython();
+    } else {
+      syncMaskToPython();
+    }
+  }, [lockEdit, shared, nImages, selectedIdx, syncMaskToPython, syncPerImageMasksToPython]);
 
   // ── Mouse handlers ───────────────────────────────────────────────────
   const getCanvasCoords = React.useCallback((e: React.MouseEvent) => {
@@ -1081,19 +1184,20 @@ function Edit2D() {
 
     // Crop mode mouse handling
     if (mode === "crop" && !lockEdit) {
-      const sLeft = toScreenX(cropLeft);
-      const sRight = toScreenX(cropRight);
-      const sTop = toScreenY(cropTop);
-      const sBottom = toScreenY(cropBottom);
+      e.preventDefault(); // Prevent Shift+click text selection in Jupyter
+      const sLeft = toScreenX(activeCrop.left);
+      const sRight = toScreenX(activeCrop.right);
+      const sTop = toScreenY(activeCrop.top);
+      const sBottom = toScreenY(activeCrop.bottom);
       const hitMode = hitTestCrop(x, y, sLeft, sRight, sTop, sBottom);
       setDragMode(hitMode);
       dragStartRef.current = {
         mouseX: e.clientX,
         mouseY: e.clientY,
-        cropTop,
-        cropLeft,
-        cropBottom,
-        cropRight,
+        cropTop: activeCrop.top,
+        cropLeft: activeCrop.left,
+        cropBottom: activeCrop.bottom,
+        cropRight: activeCrop.right,
         panX,
         panY,
       };
@@ -1106,10 +1210,10 @@ function Edit2D() {
     dragStartRef.current = {
       mouseX: e.clientX,
       mouseY: e.clientY,
-      cropTop, cropLeft, cropBottom, cropRight,
+      cropTop: activeCrop.top, cropLeft: activeCrop.left, cropBottom: activeCrop.bottom, cropRight: activeCrop.right,
       panX, panY,
     };
-  }, [getCanvasCoords, mode, lockEdit, lockView, maskTool, maskAction, brushSize, width, height, cropTop, cropLeft, cropBottom, cropRight, toScreenX, toScreenY, toImageCol, toImageRow, panX, panY]);
+  }, [getCanvasCoords, mode, lockEdit, lockView, maskTool, maskAction, brushSize, width, height, activeCrop, toScreenX, toScreenY, toImageCol, toImageRow, panX, panY]);
 
   const handleMouseMove = React.useCallback((e: React.MouseEvent) => {
     const { x, y } = getCanvasCoords(e);
@@ -1158,10 +1262,10 @@ function Edit2D() {
     // Crop mode: handle dragging
     if (!lockEdit && mode === "crop") {
       if (dragMode === "none" || !dragStartRef.current) {
-        const sLeft = toScreenX(cropLeft);
-        const sRight = toScreenX(cropRight);
-        const sTop = toScreenY(cropTop);
-        const sBottom = toScreenY(cropBottom);
+        const sLeft = toScreenX(activeCrop.left);
+        const sRight = toScreenX(activeCrop.right);
+        const sTop = toScreenY(activeCrop.top);
+        const sBottom = toScreenY(activeCrop.bottom);
         const hitMode = hitTestCrop(x, y, sLeft, sRight, sTop, sBottom);
         setCursorStyle(getCursorForMode(hitMode));
         return;
@@ -1184,10 +1288,7 @@ function Edit2D() {
         const newLeft = Math.round(ds.cropLeft + imgDeltaCol);
         const h = ds.cropBottom - ds.cropTop;
         const w = ds.cropRight - ds.cropLeft;
-        setCropTop(newTop);
-        setCropLeft(newLeft);
-        setCropBottom(newTop + h);
-        setCropRight(newLeft + w);
+        updateCrop(newTop, newLeft, newTop + h, newLeft + w);
         return;
       }
 
@@ -1210,6 +1311,29 @@ function Edit2D() {
         newRight = Math.round(ds.cropRight + imgDeltaCol);
       }
 
+      // Shift held on corner: lock aspect ratio
+      if (e.shiftKey && (dragMode === "resize-tl" || dragMode === "resize-tr" || dragMode === "resize-bl" || dragMode === "resize-br")) {
+        const origH = ds.cropBottom - ds.cropTop;
+        const origW = ds.cropRight - ds.cropLeft;
+        if (origH > 0 && origW > 0) {
+          const aspect = origW / origH;
+          let h = newBottom - newTop;
+          let w = newRight - newLeft;
+          if (Math.abs(w / h) > aspect) {
+            // Width is dominant — adjust height to match
+            h = Math.round(w / aspect);
+          } else {
+            // Height is dominant — adjust width to match
+            w = Math.round(h * aspect);
+          }
+          // Anchor the opposite corner from the one being dragged
+          if (dragMode === "resize-br") { newBottom = newTop + h; newRight = newLeft + w; }
+          else if (dragMode === "resize-bl") { newBottom = newTop + h; newLeft = newRight - w; }
+          else if (dragMode === "resize-tr") { newTop = newBottom - h; newRight = newLeft + w; }
+          else if (dragMode === "resize-tl") { newTop = newBottom - h; newLeft = newRight - w; }
+        }
+      }
+
       if (newBottom - newTop < 1) {
         if (dragMode.includes("t")) newTop = newBottom - 1;
         else newBottom = newTop + 1;
@@ -1219,10 +1343,7 @@ function Edit2D() {
         else newRight = newLeft + 1;
       }
 
-      setCropTop(newTop);
-      setCropLeft(newLeft);
-      setCropBottom(newBottom);
-      setCropRight(newRight);
+      updateCrop(newTop, newLeft, newBottom, newRight);
       return;
     }
 
@@ -1234,14 +1355,19 @@ function Edit2D() {
       setPanX(ds.panX + dx);
       setPanY(ds.panY + dy);
     }
-  }, [mode, lockEdit, lockView, maskTool, maskAction, brushSize, dragMode, getCanvasCoords, cropTop, cropLeft, cropBottom, cropRight, displayScale, zoom, toImageCol, toImageRow, toScreenX, toScreenY, width, height, setCropTop, setCropLeft, setCropBottom, setCropRight, setPanX, setPanY]);
+  }, [mode, lockEdit, lockView, maskTool, maskAction, brushSize, dragMode, getCanvasCoords, activeCrop, displayScale, zoom, toImageCol, toImageRow, toScreenX, toScreenY, width, height, updateCrop, setPanX, setPanY]);
 
   const handleMouseUp = React.useCallback(() => {
     // Brush: stop painting, sync
     if (isPaintingRef.current) {
       isPaintingRef.current = false;
       lastPaintPosRef.current = null;
-      syncMaskToPython();
+      if (!shared && nImages > 1) {
+        perMasksRef.current.set(selectedIdx, maskRef.current!.slice());
+        syncPerImageMasksToPython();
+      } else {
+        syncMaskToPython();
+      }
     }
 
     // Shape: apply and sync
@@ -1258,7 +1384,12 @@ function Edit2D() {
         fillEllipseMask(maskRef.current, width, height, centerRow, centerCol, radiusRow, radiusCol, value);
       }
       setMaskVersion((v) => v + 1);
-      syncMaskToPython();
+      if (!shared && nImages > 1) {
+        perMasksRef.current.set(selectedIdx, maskRef.current.slice());
+        syncPerImageMasksToPython();
+      } else {
+        syncMaskToPython();
+      }
     }
     isDraggingShapeRef.current = false;
     shapeStartRef.current = null;
@@ -1266,13 +1397,18 @@ function Edit2D() {
 
     setDragMode("none");
     dragStartRef.current = null;
-  }, [syncMaskToPython, maskAction, maskTool, width, height, shapePreview]);
+  }, [syncMaskToPython, syncPerImageMasksToPython, shared, nImages, selectedIdx, maskAction, maskTool, width, height, shapePreview]);
 
   const handleMouseLeave = React.useCallback(() => {
     if (isPaintingRef.current) {
       isPaintingRef.current = false;
       lastPaintPosRef.current = null;
-      syncMaskToPython();
+      if (!shared && nImages > 1) {
+        perMasksRef.current.set(selectedIdx, maskRef.current!.slice());
+        syncPerImageMasksToPython();
+      } else {
+        syncMaskToPython();
+      }
     }
     isDraggingShapeRef.current = false;
     shapeStartRef.current = null;
@@ -1280,7 +1416,7 @@ function Edit2D() {
     setDragMode("none");
     dragStartRef.current = null;
     setCursorInfo(null);
-  }, [syncMaskToPython]);
+  }, [syncMaskToPython, syncPerImageMasksToPython, shared, nImages, selectedIdx]);
 
   // ── Wheel zoom ───────────────────────────────────────────────────────
   const handleWheel = React.useCallback((e: React.WheelEvent) => {
@@ -1394,10 +1530,7 @@ function Edit2D() {
     // Crop mode shortcuts
     if (e.key === "Escape") {
       if (lockEdit) return;
-      setCropTop(0);
-      setCropLeft(0);
-      setCropBottom(height);
-      setCropRight(width);
+      updateCrop(0, 0, height, width);
       e.preventDefault();
     } else if (e.key === "ArrowLeft") {
       if (e.shiftKey && nImages > 1) {
@@ -1405,8 +1538,7 @@ function Edit2D() {
         setSelectedIdx(Math.max(0, selectedIdx - 1));
       } else {
         if (lockEdit) return;
-        setCropLeft(cropLeft - 1);
-        setCropRight(cropRight - 1);
+        updateCrop(activeCrop.top, activeCrop.left - 1, activeCrop.bottom, activeCrop.right - 1);
       }
       e.preventDefault();
     } else if (e.key === "ArrowRight") {
@@ -1415,12 +1547,19 @@ function Edit2D() {
         setSelectedIdx(Math.min(nImages - 1, selectedIdx + 1));
       } else {
         if (lockEdit) return;
-        setCropLeft(cropLeft + 1);
-        setCropRight(cropRight + 1);
+        updateCrop(activeCrop.top, activeCrop.left + 1, activeCrop.bottom, activeCrop.right + 1);
       }
       e.preventDefault();
+    } else if (e.key === "ArrowUp") {
+      if (lockEdit) return;
+      updateCrop(activeCrop.top - 1, activeCrop.left, activeCrop.bottom - 1, activeCrop.right);
+      e.preventDefault();
+    } else if (e.key === "ArrowDown") {
+      if (lockEdit) return;
+      updateCrop(activeCrop.top + 1, activeCrop.left, activeCrop.bottom + 1, activeCrop.right);
+      e.preventDefault();
     }
-  }, [mode, lockView, lockEdit, lockNavigation, handleReset, handleInvertMask, handleClearMask, maskAction, height, width, cropLeft, cropRight, nImages, selectedIdx, setCropTop, setCropLeft, setCropBottom, setCropRight, setSelectedIdx, setMaskTool, setMaskAction]);
+  }, [mode, lockView, lockEdit, lockNavigation, handleReset, handleInvertMask, handleClearMask, maskAction, height, width, activeCrop, nImages, selectedIdx, updateCrop, setSelectedIdx, setMaskTool, setMaskAction]);
 
   // ── Cursor style ────────────────────────────────────────────────────
   const canvasCursor = React.useMemo(() => {
@@ -1438,6 +1577,34 @@ function Edit2D() {
     return cursorStyle;
   }, [dragMode, mode, lockEdit, lockView, maskTool, cursorStyle]);
 
+  // ── Shared/independent toggle ───────────────────────────────────────
+  const handleToggleShared = React.useCallback(() => {
+    if (shared) {
+      // Shared → independent: copy current shared state to all images
+      const current: CropState = { top: cropTop, left: cropLeft, bottom: cropBottom, right: cropRight };
+      const newMap = new Map<number, CropState>();
+      for (let i = 0; i < nImages; i++) newMap.set(i, { ...current });
+      setCropStates(newMap);
+      // Copy shared mask to all images
+      if (maskRef.current) {
+        for (let i = 0; i < nImages; i++) perMasksRef.current.set(i, maskRef.current.slice());
+      }
+      setShared(false);
+    } else {
+      // Independent → shared: current image's state becomes shared
+      const c = cropStates.get(selectedIdx) || { top: 0, left: 0, bottom: height, right: width };
+      setCropTop(c.top);
+      setCropLeft(c.left);
+      setCropBottom(c.bottom);
+      setCropRight(c.right);
+      // Current image's mask becomes shared
+      const m = perMasksRef.current.get(selectedIdx);
+      maskRef.current = m ? m.slice() : new Uint8Array(width * height);
+      syncMaskToPython();
+      setShared(true);
+    }
+  }, [shared, cropTop, cropLeft, cropBottom, cropRight, nImages, cropStates, selectedIdx, height, width, setCropTop, setCropLeft, setCropBottom, setCropRight, setShared, syncMaskToPython]);
+
   // ── Keyboard shortcuts for info tooltip ─────────────────────────────
   const shortcutItems: [string, string][] = mode === "mask" ? [
     ["Scroll", "Zoom in/out"],
@@ -1454,9 +1621,10 @@ function Edit2D() {
     ["Dbl-click", "Reset view"],
     ["R", "Reset zoom"],
     ["Esc", "Reset crop to full image"],
-    ["\u2190 / \u2192", "Nudge crop region"],
+    ["\u2190 \u2192 \u2191 \u2193", "Nudge crop region"],
     ["\u21e7+\u2190/\u2192", "Prev/next image"],
     ["Drag handle", "Resize crop region"],
+    ["\u21e7+drag corner", "Resize (lock ratio)"],
     ["Drag inside", "Move crop region"],
   ];
 
@@ -1550,6 +1718,12 @@ function Edit2D() {
               <IconButton size="small" onClick={() => setSelectedIdx(Math.min(nImages - 1, selectedIdx + 1))} disabled={lockNavigation || selectedIdx === nImages - 1} sx={{ p: 0.25, color: themeColors.textMuted }}>
                 <NavigateNextIcon sx={{ fontSize: 18 }} />
               </IconButton>
+              {!hideEdit && (
+                <>
+                  <Typography sx={{ ...typography.labelSmall, color: themeColors.textMuted, ml: 1 }}>Link:</Typography>
+                  <Switch checked={shared} onChange={handleToggleShared} disabled={lockEdit} size="small" sx={switchStyles.small} />
+                </>
+              )}
             </Stack>
           )}
           <Box sx={{ flex: 1 }} />
@@ -1613,7 +1787,7 @@ function Edit2D() {
             )}
           </Box>
           {!hideStats && showStats && (
-            <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", maxWidth: canvasW, boxSizing: "border-box", flexWrap: "wrap" }}>
+            <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", boxSizing: "border-box", flexWrap: "wrap" }}>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMean)}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMin)}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMax)}</Box></Typography>

@@ -163,6 +163,13 @@ class Edit2D(anywidget.AnyWidget):
     # =========================================================================
     selected_idx = traitlets.Int(0).tag(sync=True)
 
+    # =========================================================================
+    # Shared / Independent editing
+    # =========================================================================
+    shared = traitlets.Bool(True).tag(sync=True)
+    per_image_crops_json = traitlets.Unicode("[]").tag(sync=True)
+    per_image_masks_bytes = traitlets.Bytes(b"").tag(sync=True)
+
     @classmethod
     def _normalize_tool_groups(cls, tool_groups) -> List[str]:
         """Validate and normalize tool group values with stable ordering."""
@@ -244,6 +251,7 @@ class Edit2D(anywidget.AnyWidget):
         bounds: Optional[Tuple[int, int, int, int]] = None,
         fill_value: float = 0.0,
         mode: str = "crop",
+        shared: bool = True,
         labels: Optional[List[str]] = None,
         title: str = "",
         cmap: str = "gray",
@@ -370,6 +378,12 @@ class Edit2D(anywidget.AnyWidget):
             self.crop_bottom = self.height
             self.crop_right = self.width
 
+        self.shared = shared
+        if not self.shared and self.n_images > 1:
+            crop = {"top": self.crop_top, "left": self.crop_left,
+                    "bottom": self.crop_bottom, "right": self.crop_right}
+            self.per_image_crops_json = json.dumps([crop] * self.n_images)
+
         # Compute stats for current image
         self._compute_stats()
 
@@ -396,42 +410,63 @@ class Edit2D(anywidget.AnyWidget):
         self.stats_max = float(np.max(img))
         self.stats_std = float(np.std(img))
 
-    def _crop_single(self, img: np.ndarray) -> np.ndarray:
+    def _crop_single_with_bounds(self, img, top, left, bottom, right):
         h, w = img.shape
-        out_h = self.crop_bottom - self.crop_top
-        out_w = self.crop_right - self.crop_left
-
+        out_h = bottom - top
+        out_w = right - left
         if out_h <= 0 or out_w <= 0:
             return np.empty((0, 0), dtype=img.dtype)
-
         result = np.full((out_h, out_w), self.fill_value, dtype=img.dtype)
-
-        # Compute overlap between crop region and image
-        src_top = max(0, self.crop_top)
-        src_left = max(0, self.crop_left)
-        src_bottom = min(h, self.crop_bottom)
-        src_right = min(w, self.crop_right)
-
+        src_top = max(0, top)
+        src_left = max(0, left)
+        src_bottom = min(h, bottom)
+        src_right = min(w, right)
         if src_top >= src_bottom or src_left >= src_right:
             return result
-
-        # Where to place in output
-        dst_top = src_top - self.crop_top
-        dst_left = src_left - self.crop_left
-        dst_bottom = dst_top + (src_bottom - src_top)
-        dst_right = dst_left + (src_right - src_left)
-
-        result[dst_top:dst_bottom, dst_left:dst_right] = img[src_top:src_bottom, src_left:src_right]
+        dst_top = src_top - top
+        dst_left = src_left - left
+        result[dst_top:dst_top + (src_bottom - src_top),
+               dst_left:dst_left + (src_right - src_left)] = \
+            img[src_top:src_bottom, src_left:src_right]
         return result
+
+    def _crop_single(self, img: np.ndarray) -> np.ndarray:
+        return self._crop_single_with_bounds(
+            img, self.crop_top, self.crop_left, self.crop_bottom, self.crop_right
+        )
 
     def _apply_mask(self, img: np.ndarray, m: np.ndarray) -> np.ndarray:
         out = img.copy()
         out[m] = self.fill_value
         return out
 
+    def _get_per_image_crops(self):
+        default = {"top": self.crop_top, "left": self.crop_left,
+                    "bottom": self.crop_bottom, "right": self.crop_right}
+        if not self.per_image_crops_json or self.per_image_crops_json == "[]":
+            return [{**default} for _ in range(self.n_images)]
+        crops = json.loads(self.per_image_crops_json)
+        while len(crops) < self.n_images:
+            crops.append({**default})
+        return crops[:self.n_images]
+
+    def _get_per_image_masks(self):
+        size = self.height * self.width
+        total = self.n_images * size
+        if not self.per_image_masks_bytes or len(self.per_image_masks_bytes) != total:
+            return [np.zeros((self.height, self.width), dtype=bool) for _ in range(self.n_images)]
+        all_masks = np.frombuffer(self.per_image_masks_bytes, dtype=np.uint8).reshape(
+            self.n_images, self.height, self.width
+        )
+        return [all_masks[i] > 0 for i in range(self.n_images)]
+
     @property
     def mask(self) -> np.ndarray:
         """Current mask as a boolean array (H, W). True = masked."""
+        if not self.shared and self.n_images > 1:
+            masks = self._get_per_image_masks()
+            idx = min(self.selected_idx, self.n_images - 1)
+            return masks[idx]
         if not self.mask_bytes:
             return np.zeros((self.height, self.width), dtype=bool)
         arr = np.frombuffer(self.mask_bytes, dtype=np.uint8).reshape(
@@ -445,29 +480,59 @@ class Edit2D(anywidget.AnyWidget):
 
         Crop mode: cropped/padded image(s).
         Mask mode: image(s) with masked pixels set to fill_value.
+        In independent mode (shared=False), each image gets its own crop/mask.
         """
-        if self.mode == "mask":
-            m = self.mask
+        if self.shared or self.n_images == 1:
+            if self.mode == "mask":
+                m = self.mask
+                if self.n_images == 1:
+                    return self._apply_mask(self._data[0], m)
+                return [self._apply_mask(self._data[i], m) for i in range(self.n_images)]
             if self.n_images == 1:
-                return self._apply_mask(self._data[0], m)
-            return [self._apply_mask(self._data[i], m) for i in range(self.n_images)]
-        if self.n_images == 1:
-            return self._crop_single(self._data[0])
-        return [self._crop_single(self._data[i]) for i in range(self.n_images)]
+                return self._crop_single(self._data[0])
+            return [self._crop_single(self._data[i]) for i in range(self.n_images)]
+
+        # Independent mode
+        if self.mode == "mask":
+            masks = self._get_per_image_masks()
+            return [self._apply_mask(self._data[i], masks[i]) for i in range(self.n_images)]
+        crops = self._get_per_image_crops()
+        return [
+            self._crop_single_with_bounds(
+                self._data[i], c["top"], c["left"], c["bottom"], c["right"]
+            )
+            for i, c in enumerate(crops)
+        ]
 
     @property
     def crop_bounds(self) -> Tuple[int, int, int, int]:
-        """Current crop bounds as (top, left, bottom, right)."""
+        """Current crop bounds as (top, left, bottom, right).
+
+        In independent mode, returns the current image's bounds.
+        """
+        if not self.shared and self.n_images > 1:
+            crops = self._get_per_image_crops()
+            idx = min(self.selected_idx, self.n_images - 1)
+            c = crops[idx]
+            return (c["top"], c["left"], c["bottom"], c["right"])
         return (self.crop_top, self.crop_left, self.crop_bottom, self.crop_right)
 
     @crop_bounds.setter
     def crop_bounds(self, bounds: Tuple[int, int, int, int]):
-        self.crop_top, self.crop_left, self.crop_bottom, self.crop_right = bounds
+        top, left, bottom, right = bounds
+        if not self.shared and self.n_images > 1:
+            crops = self._get_per_image_crops()
+            idx = min(self.selected_idx, self.n_images - 1)
+            crops[idx] = {"top": top, "left": left, "bottom": bottom, "right": right}
+            self.per_image_crops_json = json.dumps(crops)
+        else:
+            self.crop_top, self.crop_left, self.crop_bottom, self.crop_right = bounds
 
     @property
     def crop_size(self) -> Tuple[int, int]:
         """Output size as (height, width)."""
-        return (self.crop_bottom - self.crop_top, self.crop_right - self.crop_left)
+        top, left, bottom, right = self.crop_bounds
+        return (bottom - top, right - left)
 
     def set_image(self, data, **kwargs):
         """Replace the image data."""
@@ -499,6 +564,8 @@ class Edit2D(anywidget.AnyWidget):
         self.crop_bottom = self.height
         self.crop_right = self.width
         self.mask_bytes = b""
+        self.per_image_crops_json = "[]"
+        self.per_image_masks_bytes = b""
         self._compute_stats()
         self.frame_bytes = self._data.tobytes()
 
@@ -572,7 +639,7 @@ class Edit2D(anywidget.AnyWidget):
     # =========================================================================
 
     def state_dict(self):
-        return {
+        sd = {
             "title": self.title,
             "cmap": self.cmap,
             "mode": self.mode,
@@ -592,7 +659,11 @@ class Edit2D(anywidget.AnyWidget):
             "crop_bottom": self.crop_bottom,
             "crop_right": self.crop_right,
             "brush_size": self.brush_size,
+            "shared": self.shared,
         }
+        if not self.shared and self.n_images > 1:
+            sd["per_image_crops"] = self._get_per_image_crops()
+        return sd
 
     def save(self, path: str):
         save_state_file(path, "Edit2D", self.state_dict())
@@ -601,15 +672,23 @@ class Edit2D(anywidget.AnyWidget):
         for key, val in state.items():
             if key == "pixel_size_angstrom":
                 key = "pixel_size"
+            if key == "per_image_crops":
+                self.per_image_crops_json = json.dumps(val)
+                continue
             if hasattr(self, key):
                 setattr(self, key, val)
+        # Clear stale per-image state when restoring to shared mode
+        if state.get("shared", True) and "per_image_crops" not in state:
+            self.per_image_crops_json = "[]"
+            self.per_image_masks_bytes = b""
 
     def summary(self):
         name = self.title if self.title else "Edit2D"
         lines = [name, "═" * 32]
         lines.append(f"Image:    {self.height}×{self.width}")
         if self.n_images > 1:
-            lines[-1] += f" ({self.n_images} images)"
+            link = "shared" if self.shared else "independent"
+            lines[-1] += f" ({self.n_images} images, {link})"
         if self.pixel_size > 0:
             ps = self.pixel_size
             if ps >= 10:
@@ -619,14 +698,15 @@ class Edit2D(anywidget.AnyWidget):
         lines.append(f"Mode:     {self.mode}")
         if self.mode == "crop":
             crop_h, crop_w = self.crop_size
+            top, left, bottom, right = self.crop_bounds
             lines.append(
-                f"Crop:     ({self.crop_top}, {self.crop_left}) → "
-                f"({self.crop_bottom}, {self.crop_right})  "
+                f"Crop:     ({top}, {left}) → "
+                f"({bottom}, {right})  "
                 f"= {crop_h}×{crop_w}"
             )
             lines.append(f"Fill:     {self.fill_value}")
         else:
-            mask_px = int(np.sum(self.mask)) if self.mask_bytes else 0
+            mask_px = int(np.sum(self.mask)) if (self.mask_bytes or self.per_image_masks_bytes) else 0
             total = self.height * self.width
             pct = 100 * mask_px / total if total > 0 else 0
             lines.append(f"Mask:     {mask_px} px ({pct:.1f}%)")
@@ -641,16 +721,20 @@ class Edit2D(anywidget.AnyWidget):
         print("\n".join(lines))
 
     def __repr__(self):
+        independent = not self.shared and self.n_images > 1
+        suffix = ", independent" if independent else ""
+        imgs = f", {self.n_images} images" if self.n_images > 1 else ""
         if self.mode == "mask":
-            mask_px = int(np.sum(self.mask)) if self.mask_bytes else 0
+            mask_px = int(np.sum(self.mask)) if (self.mask_bytes or self.per_image_masks_bytes) else 0
             total = self.height * self.width
             pct = 100 * mask_px / total if total > 0 else 0
-            return f"Edit2D({self.height}x{self.width}, mask={mask_px}px ({pct:.1f}%))"
+            return f"Edit2D({self.height}x{self.width}{imgs}, mask={mask_px}px ({pct:.1f}%){suffix})"
         crop_h, crop_w = self.crop_size
+        top, left, _, _ = self.crop_bounds
         return (
-            f"Edit2D({self.height}x{self.width}, "
-            f"crop={crop_h}x{crop_w} at ({self.crop_top},{self.crop_left}), "
-            f"fill={self.fill_value})"
+            f"Edit2D({self.height}x{self.width}{imgs}, "
+            f"crop={crop_h}x{crop_w} at ({top},{left}), "
+            f"fill={self.fill_value}{suffix})"
         )
 
 

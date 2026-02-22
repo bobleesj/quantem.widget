@@ -7,7 +7,8 @@
 - **Show1D** — interactive 1D viewer for spectra, profiles, and time series with multi-trace overlay, calibrated axes, log scale, and figure export
 
 ### Show1D
-- selectable peak markers: click to place peaks (snaps to nearest local max), click peaks to select, `selected_peaks` trait for downstream analysis in Python
+- auto-contrast with percentile clipping: clips Y-axis to a configurable percentile range (default 2–98%), revealing weak features like core-loss edges in EELS spectra dominated by the zero-loss peak. Toggle via `auto_contrast=True` or the "Auto:" switch in controls
+- selectable peak markers: click to place peaks (snaps to nearest local max), click peaks to select, Delete/Backspace to remove selected peaks, `selected_peaks` trait for downstream analysis in Python
 - grid density slider: adjustable grid line count (5–50) when grid is enabled
 - axis range lock: drag on X or Y axis area to lock a range, double-click axis to unlock; `x_range`/`y_range` traits for programmatic control
 - Y-axis range handles: drag-to-lock Y range with input fields, mirrors the X range system
@@ -21,8 +22,21 @@
 - **breaking:** removed `corrected_data` property, `baseline_mode`, `normalize_mode` traits
 - **breaking:** tool group `"analysis"` renamed to `"peaks"` (`disable_analysis` → `disable_peaks`, `hide_analysis` → `hide_peaks`)
 
-### Show2D, Show3D, Mark2D, Show4D, Show4DSTEM
+### Show3D
+- diff mode: `diff_mode="previous"` shows frame-to-frame differences, `diff_mode="first"` shows cumulative change from the first frame — one-liner QC for drift and beam damage in time series
+- `profile_all_frames()`: extract the same line profile from every frame, returns `(n_slices, n_points)` array passable to Show1D for multi-frame comparison
+
+### Show2D, Show3D, Mark2D, Show4D, Show4DSTEM, ShowComplex2D
 - ROI FFT: when both ROI and FFT are active, the FFT shows only the cropped ROI region with real-time updates during drag — useful for inspecting local crystal structure in diffraction data
+
+### ShowComplex2D
+- single-mode ROI: circle, square, and rectangle ROI with drag-to-move and resize, enabling region-specific FFT analysis of complex-valued reconstructions
+
+### Edit2D
+- per-image independent editing (`shared=False`): each image gets its own crop region and mask, toggle via Link switch in the navigation bar
+- ArrowUp/ArrowDown keyboard nudge: move crop region vertically by 1px for pixel-precise alignment
+- Shift+drag corner: resize crop while locking the original aspect ratio
+- histogram range labels: vmin/vmax values shown below the contrast slider
 
 ### Show2D
 - file loaders: `from_png`, `from_tiff`, `from_emd`, `from_path`, `from_folder(file_type=...)`

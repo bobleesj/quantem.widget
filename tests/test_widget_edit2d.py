@@ -326,6 +326,7 @@ def test_edit2d_state_dict_keys():
         "disabled_tools", "hidden_tools",
         "pixel_size", "fill_value",
         "crop_top", "crop_left", "crop_bottom", "crop_right", "brush_size",
+        "shared",
     }
     assert set(sd.keys()) == expected
 
@@ -397,3 +398,211 @@ def test_edit2d_save_image_bad_format(tmp_path):
     w = Edit2D(data)
     with pytest.raises(ValueError, match="Unsupported format"):
         w.save_image(tmp_path / "out.bmp")
+
+
+# ── Independent mode (shared=False) ──────────────────────────────────
+
+def test_edit2d_shared_default():
+    data = np.random.rand(16, 16).astype(np.float32)
+    w = Edit2D(data)
+    assert w.shared is True
+
+
+def test_edit2d_independent_crop_result():
+    import json
+    images = [np.arange(100, dtype=np.float32).reshape(10, 10) for _ in range(3)]
+    w = Edit2D(images, shared=False)
+    # Set per-image crops via JSON
+    crops = [
+        {"top": 0, "left": 0, "bottom": 5, "right": 5},
+        {"top": 2, "left": 3, "bottom": 8, "right": 9},
+        {"top": 1, "left": 1, "bottom": 9, "right": 9},
+    ]
+    w.per_image_crops_json = json.dumps(crops)
+    result = w.result
+    assert isinstance(result, list)
+    assert len(result) == 3
+    assert result[0].shape == (5, 5)
+    assert result[1].shape == (6, 6)
+    assert result[2].shape == (8, 8)
+    # Verify content: first image crop [0:5, 0:5]
+    np.testing.assert_array_equal(result[0], images[0][:5, :5])
+
+
+def test_edit2d_independent_mask_result():
+    images = [np.ones((8, 8), dtype=np.float32) * (i + 1) for i in range(2)]
+    w = Edit2D(images, shared=False, mode="mask")
+    # Create per-image masks: mask top-left of image 0, bottom-right of image 1
+    mask0 = np.zeros((8, 8), dtype=np.uint8)
+    mask0[:4, :4] = 255
+    mask1 = np.zeros((8, 8), dtype=np.uint8)
+    mask1[4:, 4:] = 255
+    w.per_image_masks_bytes = (mask0.tobytes() + mask1.tobytes())
+    result = w.result
+    assert isinstance(result, list)
+    assert len(result) == 2
+    # Image 0: top-left masked (fill_value=0)
+    assert result[0][0, 0] == 0.0
+    assert result[0][4, 4] == 1.0
+    # Image 1: bottom-right masked
+    assert result[1][0, 0] == 2.0
+    assert result[1][7, 7] == 0.0
+
+
+def test_edit2d_independent_state_dict_roundtrip():
+    import json
+    images = [np.random.rand(16, 16).astype(np.float32) for _ in range(3)]
+    w = Edit2D(images, shared=False)
+    crops = [
+        {"top": 0, "left": 0, "bottom": 8, "right": 8},
+        {"top": 4, "left": 4, "bottom": 12, "right": 12},
+        {"top": 2, "left": 2, "bottom": 14, "right": 14},
+    ]
+    w.per_image_crops_json = json.dumps(crops)
+    sd = w.state_dict()
+    assert sd["shared"] is False
+    assert "per_image_crops" in sd
+    assert len(sd["per_image_crops"]) == 3
+    assert sd["per_image_crops"][0]["bottom"] == 8
+
+    # Restore via state param
+    w2 = Edit2D(images, state=sd)
+    assert w2.shared is False
+    restored = w2._get_per_image_crops()
+    assert restored[1]["top"] == 4
+    assert restored[1]["right"] == 12
+
+
+def test_edit2d_independent_save_load_file(tmp_path):
+    import json as json_mod
+    images = [np.random.rand(16, 16).astype(np.float32) for _ in range(2)]
+    w = Edit2D(images, shared=False, cmap="viridis")
+    crops = [
+        {"top": 0, "left": 0, "bottom": 10, "right": 10},
+        {"top": 3, "left": 3, "bottom": 13, "right": 13},
+    ]
+    w.per_image_crops_json = json_mod.dumps(crops)
+    path = tmp_path / "edit2d_indep.json"
+    w.save(str(path))
+    assert path.exists()
+    saved = json_mod.loads(path.read_text())
+    assert saved["state"]["shared"] is False
+    assert len(saved["state"]["per_image_crops"]) == 2
+
+    w2 = Edit2D(images, state=str(path))
+    assert w2.shared is False
+    assert w2.cmap == "viridis"
+
+
+def test_edit2d_independent_summary(capsys):
+    images = [np.random.rand(16, 16).astype(np.float32) for _ in range(3)]
+    w = Edit2D(images, shared=False)
+    w.summary()
+    out = capsys.readouterr().out
+    assert "independent" in out
+    assert "3 images" in out
+
+
+def test_edit2d_independent_repr():
+    images = [np.random.rand(16, 16).astype(np.float32) for _ in range(3)]
+    w = Edit2D(images, shared=False)
+    r = repr(w)
+    assert "independent" in r
+    assert "3 images" in r
+
+
+def test_edit2d_set_image_resets_independent_state():
+    import json
+    images = [np.random.rand(16, 16).astype(np.float32) for _ in range(2)]
+    w = Edit2D(images, shared=False)
+    crops = [
+        {"top": 2, "left": 2, "bottom": 10, "right": 10},
+        {"top": 4, "left": 4, "bottom": 12, "right": 12},
+    ]
+    w.per_image_crops_json = json.dumps(crops)
+    # set_image resets independent state
+    new_data = np.random.rand(24, 24).astype(np.float32)
+    w.set_image(new_data)
+    assert w.per_image_crops_json == "[]"
+    assert w.per_image_masks_bytes == b""
+
+
+def test_edit2d_load_state_dict_clears_stale_independent_state():
+    import json
+    images = [np.random.rand(16, 16).astype(np.float32) for _ in range(3)]
+    w = Edit2D(images, shared=False)
+    # Set per-image crops
+    crops = [
+        {"top": 2, "left": 2, "bottom": 10, "right": 10},
+        {"top": 4, "left": 4, "bottom": 12, "right": 12},
+        {"top": 0, "left": 0, "bottom": 16, "right": 16},
+    ]
+    w.per_image_crops_json = json.dumps(crops)
+    assert w.shared is False
+    assert w.per_image_crops_json != "[]"
+    # Restore shared-mode state — stale per-image data should be cleared
+    w.load_state_dict({"shared": True, "cmap": "viridis"})
+    assert w.shared is True
+    assert w.per_image_crops_json == "[]"
+    assert w.per_image_masks_bytes == b""
+
+
+def test_edit2d_independent_initial_bounds():
+    import json
+    images = [np.arange(100, dtype=np.float32).reshape(10, 10) for _ in range(3)]
+    w = Edit2D(images, shared=False, bounds=(2, 3, 8, 9))
+    # bounds should populate per_image_crops_json on init
+    crops = json.loads(w.per_image_crops_json)
+    assert len(crops) == 3
+    for c in crops:
+        assert c == {"top": 2, "left": 3, "bottom": 8, "right": 9}
+    # crop_bounds should return the initial bounds
+    assert w.crop_bounds == (2, 3, 8, 9)
+    # result should use these bounds
+    result = w.result
+    assert isinstance(result, list)
+    for r in result:
+        assert r.shape == (6, 6)
+
+
+def test_edit2d_independent_crop_bounds_setter():
+    images = [np.arange(100, dtype=np.float32).reshape(10, 10) for _ in range(3)]
+    w = Edit2D(images, shared=False)
+    # Set crop for image 0 via setter
+    w.crop_bounds = (1, 2, 8, 9)
+    assert w.crop_bounds == (1, 2, 8, 9)
+    # Result reflects the new bounds
+    r = w.result[0]
+    assert r.shape == (7, 7)
+    # Image 1 still has default full-image bounds
+    w.selected_idx = 1
+    assert w.crop_bounds == (0, 0, 10, 10)
+    # Set a different crop for image 1
+    w.crop_bounds = (3, 3, 7, 7)
+    assert w.crop_bounds == (3, 3, 7, 7)
+    # Verify both images have independent bounds
+    w.selected_idx = 0
+    assert w.crop_bounds == (1, 2, 8, 9)
+
+
+def test_edit2d_independent_crop_bounds_property():
+    import json
+    images = [np.random.rand(16, 16).astype(np.float32) for _ in range(3)]
+    w = Edit2D(images, shared=False)
+    crops = [
+        {"top": 0, "left": 0, "bottom": 8, "right": 8},
+        {"top": 4, "left": 4, "bottom": 12, "right": 12},
+        {"top": 2, "left": 2, "bottom": 14, "right": 14},
+    ]
+    w.per_image_crops_json = json.dumps(crops)
+    # Default selected_idx=0
+    assert w.crop_bounds == (0, 0, 8, 8)
+    assert w.crop_size == (8, 8)
+    # Switch to image 1
+    w.selected_idx = 1
+    assert w.crop_bounds == (4, 4, 12, 12)
+    assert w.crop_size == (8, 8)
+    # Switch to image 2
+    w.selected_idx = 2
+    assert w.crop_bounds == (2, 2, 14, 14)
+    assert w.crop_size == (12, 12)
