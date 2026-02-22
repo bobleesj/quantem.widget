@@ -13,9 +13,7 @@ def test_bin_widget_loads_from_4d_array():
     assert widget is not None
     assert (widget.scan_rows, widget.scan_cols, widget.det_rows, widget.det_cols) == (8, 10, 16, 18)
     assert (widget.binned_scan_rows, widget.binned_scan_cols, widget.binned_det_rows, widget.binned_det_cols) == (8, 10, 16, 18)
-    assert widget.compute_backend == "torch"
     assert isinstance(widget.device, str)
-    assert widget.torch_enabled is True
     assert len(widget.original_bf_bytes) == 8 * 10 * 4
     assert len(widget.binned_adf_bytes) == 8 * 10 * 4
 
@@ -74,20 +72,6 @@ def test_bin_widget_error_mode_reports_status():
     assert "not divisible" in widget.status_message
     assert widget.get_binned_data().shape == original_shape
 
-def test_bin_widget_rejects_use_torch_false():
-    data = np.random.rand(4, 4, 4, 4).astype(np.float32)
-    with pytest.raises(ValueError):
-        Bin(data, use_torch=False)
-
-def test_bin_widget_rejects_non_torch_state_backend():
-    data = np.random.rand(4, 4, 4, 4).astype(np.float32)
-    widget = Bin(data)
-
-    with pytest.raises(ValueError):
-        widget.load_state_dict({"compute_backend": "numpy"})
-
-    with pytest.raises(ValueError):
-        widget.load_state_dict({"torch_enabled": False})
 
 def test_bin_widget_exports_image_with_metadata(tmp_path):
     pytest.importorskip("PIL")
@@ -345,3 +329,32 @@ def test_bin_binned_center_traits():
     w.det_bin_col = 2
     assert w.binned_center_row == 4.0
     assert w.binned_center_col == 4.0
+
+def test_bin_position_dp_bytes():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Bin(data)
+    assert w._position_dp_bytes == b""
+    assert w._binned_position_dp_bytes == b""
+    w._scan_position = [2, 3]
+    assert len(w._position_dp_bytes) == 8 * 8 * 4
+    assert len(w._binned_position_dp_bytes) == 8 * 8 * 4
+    dp = np.frombuffer(w._position_dp_bytes, dtype=np.float32).reshape(8, 8)
+    np.testing.assert_allclose(dp, data[2, 3], atol=1e-6)
+
+def test_bin_position_dp_clears_on_negative():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Bin(data)
+    w._scan_position = [1, 1]
+    assert len(w._position_dp_bytes) > 0
+    w._scan_position = [-1, -1]
+    assert w._position_dp_bytes == b""
+    assert w._binned_position_dp_bytes == b""
+
+def test_bin_position_dp_updates_on_rebin():
+    data = np.random.rand(4, 4, 8, 8).astype(np.float32)
+    w = Bin(data)
+    w._scan_position = [0, 0]
+    dp_before = w._binned_position_dp_bytes
+    w.scan_bin_row = 2
+    dp_after = w._binned_position_dp_bytes
+    assert dp_after != dp_before or len(dp_after) != len(dp_before)

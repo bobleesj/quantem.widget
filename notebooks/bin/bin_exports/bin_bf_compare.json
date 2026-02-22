@@ -1,7 +1,7 @@
 {
   "metadata_version": "1.0",
   "widget_name": "Bin",
-  "widget_version": "0.4.0a1",
+  "widget_version": "0.4.0a2",
   "format": "gif",
   "export_kind": "before_after_animation",
   "path": "bin_exports/bin_bf_compare.gif",
@@ -12,8 +12,8 @@
     "left": {
       "view": "original_bf",
       "shape": [
-        48,
-        40
+        64,
+        64
       ],
       "colormap": "inferno",
       "scale_mode": "linear"
@@ -21,8 +21,8 @@
     "right": {
       "view": "binned_bf",
       "shape": [
-        24,
-        20
+        32,
+        32
       ],
       "colormap": "inferno",
       "scale_mode": "linear"
@@ -31,8 +31,8 @@
   "bin_factors": {
     "scan_row": 2,
     "scan_col": 2,
-    "det_row": 2,
-    "det_col": 2
+    "det_row": 8,
+    "det_col": 8
   },
   "bin_mode": "mean",
   "edge_mode": "crop"

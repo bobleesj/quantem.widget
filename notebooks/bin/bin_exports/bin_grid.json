@@ -1,7 +1,7 @@
 {
   "metadata_version": "1.0",
   "widget_name": "Bin",
-  "widget_version": "0.4.0a1",
+  "widget_version": "0.4.0a2",
   "view": "grid",
   "format": "png",
   "export_kind": "single_view_image",
@@ -9,25 +9,23 @@
   "bin_factors": {
     "scan_row": 2,
     "scan_col": 2,
-    "det_row": 2,
-    "det_col": 2
+    "det_row": 8,
+    "det_col": 8
   },
   "bin_mode": "mean",
   "edge_mode": "crop",
-  "backend": "torch",
-  "device": "cpu",
   "shape": {
     "input": [
-      48,
-      40,
-      128,
-      96
+      64,
+      64,
+      256,
+      256
     ],
     "output": [
-      24,
-      20,
-      64,
-      48
+      32,
+      32,
+      32,
+      32
     ]
   },
   "calibration": {
@@ -44,8 +42,8 @@
       0.46
     ],
     "k_pixel_size_binned": [
-      0.92,
-      0.92
+      3.68,
+      3.68
     ]
   },
   "render": {

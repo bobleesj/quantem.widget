@@ -141,9 +141,7 @@ class Bin(anywidget.AnyWidget):
     # Binning behavior
     bin_mode = traitlets.Unicode("mean").tag(sync=True)  # "mean" | "sum"
     edge_mode = traitlets.Unicode("crop").tag(sync=True)  # "crop" | "pad" | "error"
-    compute_backend = traitlets.Unicode("torch").tag(sync=True)  # always "torch"
     device = traitlets.Unicode("cpu").tag(sync=True)
-    torch_enabled = traitlets.Bool(True).tag(sync=True)
 
     # Binned shape
     binned_scan_rows = traitlets.Int(1).tag(sync=True)
@@ -177,6 +175,9 @@ class Bin(anywidget.AnyWidget):
     adf_inner_ratio = traitlets.Float(0.30).tag(sync=True)
     adf_outer_ratio = traitlets.Float(0.45).tag(sync=True)
 
+    # Scan position for DP exploration — compound [row, col], [-1, -1] = mean DP
+    _scan_position = traitlets.List(traitlets.Int(), default_value=[-1, -1]).tag(sync=True)
+
     # Preview data as float32 bytes
     original_bf_bytes = traitlets.Bytes(b"").tag(sync=True)
     original_adf_bytes = traitlets.Bytes(b"").tag(sync=True)
@@ -186,6 +187,10 @@ class Bin(anywidget.AnyWidget):
     # Mean diffraction pattern (detector-space preview)
     original_mean_dp_bytes = traitlets.Bytes(b"").tag(sync=True)
     binned_mean_dp_bytes = traitlets.Bytes(b"").tag(sync=True)
+
+    # Per-position diffraction pattern bytes (sent when _scan_position >= 0)
+    _position_dp_bytes = traitlets.Bytes(b"").tag(sync=True)
+    _binned_position_dp_bytes = traitlets.Bytes(b"").tag(sync=True)
 
     # Binned detector center (for JS overlay positioning)
     binned_center_row = traitlets.Float(0.0).tag(sync=True)
@@ -205,9 +210,15 @@ class Bin(anywidget.AnyWidget):
     title = traitlets.Unicode("").tag(sync=True)
     cmap = traitlets.Unicode("inferno").tag(sync=True)
     log_scale = traitlets.Bool(False).tag(sync=True)
+    auto_contrast = traitlets.Bool(False).tag(sync=True)
+    show_fft = traitlets.Bool(False).tag(sync=True)
     show_controls = traitlets.Bool(True).tag(sync=True)
     disabled_tools = traitlets.List(traitlets.Unicode()).tag(sync=True)
     hidden_tools = traitlets.List(traitlets.Unicode()).tag(sync=True)
+
+    # Export (trait-triggered .npy download)
+    _npy_export_requested = traitlets.Bool(False).tag(sync=True)
+    _npy_export_data = traitlets.Bytes(b"").tag(sync=True)
 
     @classmethod
     def _normalize_tool_groups(cls, tool_groups):
@@ -294,20 +305,6 @@ class Bin(anywidget.AnyWidget):
             raise traitlets.TraitError("edge_mode must be 'crop', 'pad', or 'error'")
         return value
 
-    @traitlets.validate("compute_backend")
-    def _validate_compute_backend(self, proposal):
-        value = str(proposal["value"]).strip().lower()
-        if value != "torch":
-            raise traitlets.TraitError("Bin is torch-only; compute_backend must be 'torch'")
-        return "torch"
-
-    @traitlets.validate("torch_enabled")
-    def _validate_torch_enabled(self, proposal):
-        value = bool(proposal["value"])
-        if not value:
-            raise traitlets.TraitError("Bin is torch-only; torch_enabled cannot be false")
-        return True
-
     @traitlets.validate("device")
     def _validate_device_name(self, proposal):
         value = str(proposal["value"]).strip().lower()
@@ -354,7 +351,6 @@ class Bin(anywidget.AnyWidget):
         hide_stats: bool = False,
         hide_export: bool = False,
         hide_all: bool = False,
-        use_torch: bool = True,
         device: str | None = None,
         state: dict | str | pathlib.Path | None = None,
         **kwargs,
@@ -459,9 +455,6 @@ class Bin(anywidget.AnyWidget):
         self.det_rows = det_r
         self.det_cols = det_c
 
-        # Torch-only compute backend
-        if not use_torch:
-            raise ValueError("Bin is torch-only; pass use_torch=True (default).")
         if not _HAS_TORCH:
             raise ImportError("Bin requires torch. Install PyTorch to use this widget.")
 
@@ -473,9 +466,7 @@ class Bin(anywidget.AnyWidget):
         self._device = torch.device(device_str)
         data4d_writable = np.array(data4d, dtype=np.float32, copy=True)
         self._data_torch = torch.from_numpy(data4d_writable).to(self._device)
-        self.compute_backend = "torch"
         self.device = device_str
-        self.torch_enabled = True
 
         # Slider maxima (UI hint only)
         self.max_scan_bin_row = max(1, scan_r)
@@ -512,6 +503,8 @@ class Bin(anywidget.AnyWidget):
                 "adf_outer_ratio",
             ],
         )
+        self.observe(self._on_position_changed, names=["_scan_position"])
+        self.observe(self._on_npy_export, names=["_npy_export_requested"])
 
         self._recompute_previews()
 
@@ -559,8 +552,6 @@ class Bin(anywidget.AnyWidget):
             "det_bin_col": self.det_bin_col,
             "bin_mode": self.bin_mode,
             "edge_mode": self.edge_mode,
-            "compute_backend": self.compute_backend,
-            "device": self.device,
             "center_row": self.center_row,
             "center_col": self.center_col,
             "bf_radius_ratio": self.bf_radius_ratio,
@@ -568,6 +559,8 @@ class Bin(anywidget.AnyWidget):
             "adf_outer_ratio": self.adf_outer_ratio,
             "cmap": self.cmap,
             "log_scale": self.log_scale,
+            "auto_contrast": self.auto_contrast,
+            "show_fft": self.show_fft,
             "show_controls": self.show_controls,
             "disabled_tools": list(self.disabled_tools),
             "hidden_tools": list(self.hidden_tools),
@@ -577,34 +570,7 @@ class Bin(anywidget.AnyWidget):
         save_state_file(path, "Bin", self.state_dict())
 
     def load_state_dict(self, state: dict) -> None:
-        payload = dict(state)
-        backend = str(payload.pop("compute_backend", "torch")).strip().lower()
-        if backend != "torch":
-            raise ValueError("Bin state requires compute_backend='torch'")
-
-        torch_enabled = bool(payload.pop("torch_enabled", True))
-        if not torch_enabled:
-            raise ValueError("Bin state requires torch_enabled=true")
-
-        requested_device = payload.pop("device", None)
-        if requested_device is not None:
-            device_str = self._resolve_torch_device(
-                requested=str(requested_device),
-                numel=int(self._data_torch.numel()),
-            )
-            if device_str is None:
-                raise ValueError(f"Unable to initialize torch device '{requested_device}'")
-            if device_str != self.device:
-                self._device = torch.device(device_str)
-                self._data_torch = self._data_torch.to(self._device)
-                self._binned_data_torch = self._binned_data_torch.to(self._device)
-                self.device = device_str
-
-        # Keep strict torch identity even for legacy presets.
-        self.compute_backend = "torch"
-        self.torch_enabled = True
-
-        for key, value in payload.items():
+        for key, value in state.items():
             if hasattr(self, key):
                 setattr(self, key, value)
 
@@ -816,8 +782,6 @@ class Bin(anywidget.AnyWidget):
                 },
                 "bin_mode": self.bin_mode,
                 "edge_mode": self.edge_mode,
-                "backend": self.compute_backend,
-                "device": self.device,
                 "shape": {
                     "input": [int(self.scan_rows), int(self.scan_cols), int(self.det_rows), int(self.det_cols)],
                     "output": [
@@ -864,8 +828,6 @@ class Bin(anywidget.AnyWidget):
             **build_json_header("Bin"),
             "format": "zip",
             "export_kind": "multi_panel_bundle",
-            "backend": self.compute_backend,
-            "device": self.device,
             "include_arrays": bool(include_arrays),
             "bin_factors": {
                 "scan_row": int(self.scan_bin_row),
@@ -964,7 +926,7 @@ class Bin(anywidget.AnyWidget):
         """Print compact binning + calibration summary."""
         name = self.title if self.title else "Bin"
         lines = [name, "═" * 32]
-        lines.append(f"Backend:  {self.compute_backend} ({self.device})")
+        lines.append(f"Device:   {self.device}")
         lines.append(
             f"Shape:    ({self.scan_rows}, {self.scan_cols}, {self.det_rows}, {self.det_cols})"
             f" -> ({self.binned_scan_rows}, {self.binned_scan_cols}, {self.binned_det_rows}, {self.binned_det_cols})"
@@ -997,6 +959,32 @@ class Bin(anywidget.AnyWidget):
 
     def _on_params_changed(self, change=None):
         self._recompute_previews()
+
+    def _on_position_changed(self, change=None):
+        pos = self._scan_position
+        if len(pos) != 2 or pos[0] < 0 or pos[1] < 0:
+            self._position_dp_bytes = b""
+            self._binned_position_dp_bytes = b""
+            return
+        r = min(max(0, pos[0]), self.scan_rows - 1)
+        c = min(max(0, pos[1]), self.scan_cols - 1)
+        dp = self._data_torch[r, c, :, :]
+        self._position_dp_bytes = dp.detach().cpu().contiguous().float().numpy().astype(np.float32, copy=False).tobytes()
+        br = min(r // max(1, self.scan_bin_row), self.binned_scan_rows - 1)
+        bc = min(c // max(1, self.scan_bin_col), self.binned_scan_cols - 1)
+        dp_binned = self._binned_data_torch[br, bc, :, :]
+        self._binned_position_dp_bytes = dp_binned.detach().cpu().contiguous().float().numpy().astype(np.float32, copy=False).tobytes()
+
+    def _on_npy_export(self, change=None):
+        import io
+
+        if not self._npy_export_requested:
+            return
+        self._npy_export_requested = False
+        arr = self._binned_data_torch.detach().cpu().numpy().astype(np.float32, copy=False)
+        buf = io.BytesIO()
+        np.save(buf, arr)
+        self._npy_export_data = buf.getvalue()
 
     def _resolve_torch_device(self, requested: str | None, numel: int) -> str | None:
         """Pick a valid torch device from user request or quantem config."""
@@ -1208,6 +1196,9 @@ class Bin(anywidget.AnyWidget):
             f" -> ({self.binned_scan_rows}×{self.binned_scan_cols}×{self.binned_det_rows}×{self.binned_det_cols})"
         )
 
+        # Refresh per-position DP if a position is selected
+        self._on_position_changed()
+
     def _virtual_images_torch(
         self,
         data4d,
@@ -1307,7 +1298,7 @@ class Bin(anywidget.AnyWidget):
             f"shape=({self.scan_rows}, {self.scan_cols}, {self.det_rows}, {self.det_cols}), "
             f"bin=({self.scan_bin_row}, {self.scan_bin_col}, {self.det_bin_row}, {self.det_bin_col}), "
             f"binned_shape=({self.binned_scan_rows}, {self.binned_scan_cols}, {self.binned_det_rows}, {self.binned_det_cols}), "
-            f"mode={self.bin_mode}, edge={self.edge_mode}, backend={self.compute_backend}, device={self.device}"
+            f"mode={self.bin_mode}, edge={self.edge_mode}, device={self.device}"
             f"{title_info})"
         )
 
