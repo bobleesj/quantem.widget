@@ -199,6 +199,11 @@ class Show3D(anywidget.AnyWidget):
     image_width_px = traitlets.Int(0).tag(sync=True)  # If 0, use frontend defaults
 
     # =========================================================================
+    # Diff Mode
+    # =========================================================================
+    diff_mode = traitlets.Unicode("off").tag(sync=True)
+
+    # =========================================================================
     # Analysis Panels (FFT + Histogram shown together)
     # =========================================================================
     show_fft = traitlets.Bool(False).tag(sync=True)
@@ -295,6 +300,17 @@ class Show3D(anywidget.AnyWidget):
                 "profile": hide_profile,
             },
         )
+
+    _VALID_DIFF_MODES = {"off", "previous", "first"}
+
+    @traitlets.validate("diff_mode")
+    def _validate_diff_mode(self, proposal):
+        val = proposal["value"]
+        if val not in self._VALID_DIFF_MODES:
+            raise traitlets.TraitError(
+                f"Invalid diff_mode '{val}'. Must be one of: {sorted(self._VALID_DIFF_MODES)}"
+            )
+        return val
 
     @traitlets.validate("disabled_tools")
     def _validate_disabled_tools(self, proposal):
@@ -657,6 +673,7 @@ class Show3D(anywidget.AnyWidget):
         hide_roi: bool = False,
         hide_profile: bool = False,
         hide_all: bool = False,
+        diff_mode: str = "off",
         buffer_size: int = 64,
         dim_label: str = "Frame",
         use_torch: bool = False,
@@ -763,6 +780,7 @@ class Show3D(anywidget.AnyWidget):
             self.timestamps = []
         self.timestamp_unit = timestamp_unit
         self.dim_label = dim_label
+        self.diff_mode = diff_mode
         self.show_fft = show_fft
         self.show_playback = show_playback
         self.show_stats = show_stats
@@ -814,6 +832,7 @@ class Show3D(anywidget.AnyWidget):
         self.observe(self._on_bundle_export, names=["_bundle_export_requested"])
         self.observe(self._on_playing_change, names=["playing"])
         self.observe(self._on_prefetch, names=["_prefetch_request"])
+        self.observe(self._on_diff_mode_change, names=["diff_mode"])
 
         # Initial update
         self._update_all()
@@ -858,7 +877,11 @@ class Show3D(anywidget.AnyWidget):
         self._update_all()
 
     def __repr__(self) -> str:
-        return f"Show3D({self.n_slices}×{self.height}×{self.width}, frame={self.slice_idx}, cmap={self.cmap})"
+        parts = f"Show3D({self.n_slices}×{self.height}×{self.width}, frame={self.slice_idx}, cmap={self.cmap}"
+        if self.diff_mode != "off":
+            parts += f", diff={self.diff_mode}"
+        parts += ")"
+        return parts
 
     def state_dict(self):
         return {
@@ -890,20 +913,16 @@ class Show3D(anywidget.AnyWidget):
             "roi_selected_idx": self.roi_selected_idx,
             "profile_line": self.profile_line,
             "profile_width": self.profile_width,
+            "diff_mode": self.diff_mode,
             "dim_label": self.dim_label,
             "timestamp_unit": self.timestamp_unit,
-            "use_torch": self._use_torch,
-            "device": str(self._device) if self._device is not None else None,
         }
 
     def save(self, path: str):
         save_state_file(path, "Show3D", self.state_dict())
 
     def load_state_dict(self, state):
-        _skip = {"use_torch", "device"}
         for key, val in state.items():
-            if key in _skip:
-                continue
             if hasattr(self, key):
                 setattr(self, key, val)
 
@@ -928,6 +947,8 @@ class Show3D(anywidget.AnyWidget):
         display = f"{cmap} | {contrast} | {scale}"
         if self.show_fft:
             display += " | FFT"
+        if self.diff_mode != "off":
+            display += f" | diff={self.diff_mode}"
         lines.append(f"Display:  {display}")
         if self.disabled_tools:
             lines.append(f"Locked:   {', '.join(self.disabled_tools)}")
@@ -967,9 +988,36 @@ class Show3D(anywidget.AnyWidget):
             return normalized.astype(np.uint8)
         return np.zeros(frame.shape, dtype=np.uint8)
 
+    def _get_display_frame(self, idx=None):
+        if idx is None:
+            idx = self.slice_idx
+        frame = self._data[idx]
+        if self.diff_mode == "previous":
+            if idx == 0:
+                return np.zeros_like(frame)
+            return frame - self._data[idx - 1]
+        if self.diff_mode == "first":
+            return frame - self._data[0]
+        return frame
+
+    def _on_diff_mode_change(self, change=None):
+        if self.diff_mode == "off":
+            self.data_min = float(self._data.min())
+            self.data_max = float(self._data.max())
+        else:
+            # Recompute global range for diff frames
+            mins, maxs = [], []
+            for i in range(self.n_slices):
+                f = self._get_display_frame(i)
+                mins.append(float(f.min()))
+                maxs.append(float(f.max()))
+            self.data_min = min(mins)
+            self.data_max = max(maxs)
+        self._update_all()
+
     def _update_all(self):
         """Update frame, stats, and all derived data. Uses hold_sync for batched transfer."""
-        frame = self._data[self.slice_idx]
+        frame = self._get_display_frame()
         with self.hold_sync():
             if self._use_torch:
                 t = self._data_torch[self.slice_idx]
@@ -1044,12 +1092,19 @@ class Show3D(anywidget.AnyWidget):
 
     def _send_buffer(self, start_idx: int):
         end_idx = start_idx + self._buffer_size
-        if end_idx <= self.n_slices:
-            chunk = self._data[start_idx:end_idx]
+        if self.diff_mode == "off":
+            if end_idx <= self.n_slices:
+                chunk = self._data[start_idx:end_idx]
+            else:
+                chunk = np.concatenate(
+                    [self._data[start_idx:], self._data[: end_idx - self.n_slices]]
+                )
         else:
-            chunk = np.concatenate(
-                [self._data[start_idx:], self._data[: end_idx - self.n_slices]]
-            )
+            frames = []
+            for j in range(self._buffer_size):
+                idx = (start_idx + j) % self.n_slices
+                frames.append(self._get_display_frame(idx))
+            chunk = np.stack(frames)
         with self.hold_sync():
             self._buffer_start = int(start_idx)
             self._buffer_count = int(chunk.shape[0])
@@ -1074,7 +1129,7 @@ class Show3D(anywidget.AnyWidget):
     def _on_roi_change(self, change=None):
         """Handle ROI change."""
         if self.roi_active:
-            self._update_roi_stats(self._data[self.slice_idx])
+            self._update_roi_stats(self._get_display_frame())
             self._compute_roi_plot()
         else:
             self.roi_stats = {}
@@ -1134,6 +1189,40 @@ class Show3D(anywidget.AnyWidget):
         self.playback_path = []
         return self
 
+    def profile_all_frames(self, start: tuple | None = None, end: tuple | None = None) -> np.ndarray:
+        """Extract the line profile from every frame, returning (n_slices, n_points).
+
+        Uses the current profile_line unless start/end are provided.
+        Always samples raw data (ignores diff_mode).
+
+        Parameters
+        ----------
+        start : tuple of (row, col), optional
+            Start point. Overrides current profile_line.
+        end : tuple of (row, col), optional
+            End point. Overrides current profile_line.
+
+        Returns
+        -------
+        np.ndarray
+            Shape (n_slices, n_points) float32 array.
+        """
+        if start is not None and end is not None:
+            row0, col0 = float(start[0]), float(start[1])
+            row1, col1 = float(end[0]), float(end[1])
+        elif len(self.profile_line) >= 2:
+            p0, p1 = self.profile_line[0], self.profile_line[1]
+            row0, col0 = p0["row"], p0["col"]
+            row1, col1 = p1["row"], p1["col"]
+        else:
+            raise ValueError(
+                "No profile line set. Call set_profile() first or pass start/end."
+            )
+        rows = []
+        for i in range(self.n_slices):
+            rows.append(self._sample_profile_on(self._data[i], row0, col0, row1, col1))
+        return np.stack(rows)
+
     def _upsert_selected_roi(self, updates: dict):
         rois = list(self.roi_list)
         color_cycle = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"]
@@ -1161,7 +1250,7 @@ class Show3D(anywidget.AnyWidget):
         self.roi_list = rois
         self.roi_active = True
 
-    def add_roi(self, row: int | None = None, col: int | None = None, shape: str = "circle") -> Self:
+    def add_roi(self, row: int | None = None, col: int | None = None, shape: str = "square") -> Self:
         with self.hold_sync():
             self._upsert_selected_roi({
                 "shape": shape,
@@ -1262,8 +1351,7 @@ class Show3D(anywidget.AnyWidget):
                 img[r1c, c0c] * (1 - cf) * rf +
                 img[r1c, c1c] * cf * rf)
 
-    def _sample_profile(self, row0, col0, row1, col1):
-        img = self._data[self.slice_idx]
+    def _sample_profile_on(self, img, row0, col0, row1, col1):
         pw = self.profile_width
         if pw <= 1:
             return self._sample_line(img, row0, col0, row1, col1).astype(np.float32)
@@ -1283,6 +1371,9 @@ class Show3D(anywidget.AnyWidget):
             else:
                 accumulated += vals
         return (accumulated / pw).astype(np.float32)
+
+    def _sample_profile(self, row0, col0, row1, col1):
+        return self._sample_profile_on(self._get_display_frame(), row0, col0, row1, col1)
 
     def set_profile(self, start: tuple, end: tuple) -> Self:
         """Set a line profile between two points (image pixel coordinates).
