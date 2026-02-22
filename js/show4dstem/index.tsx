@@ -158,6 +158,35 @@ function formatStat(value: number): string {
 }
 
 
+// ============================================================================
+// FFT peak finder (snap to Bragg spot with sub-pixel centroid refinement)
+// ============================================================================
+function findFFTPeak(mag: Float32Array, width: number, height: number, col: number, row: number, radius: number): { row: number; col: number } {
+  const c0 = Math.max(0, Math.floor(col) - radius);
+  const r0 = Math.max(0, Math.floor(row) - radius);
+  const c1 = Math.min(width - 1, Math.floor(col) + radius);
+  const r1 = Math.min(height - 1, Math.floor(row) + radius);
+  let bestCol = Math.round(col), bestRow = Math.round(row), bestVal = -Infinity;
+  for (let ir = r0; ir <= r1; ir++) {
+    for (let ic = c0; ic <= c1; ic++) {
+      const val = mag[ir * width + ic];
+      if (val > bestVal) { bestVal = val; bestCol = ic; bestRow = ir; }
+    }
+  }
+  const wc0 = Math.max(0, bestCol - 1), wc1 = Math.min(width - 1, bestCol + 1);
+  const wr0 = Math.max(0, bestRow - 1), wr1 = Math.min(height - 1, bestRow + 1);
+  let sumW = 0, sumWC = 0, sumWR = 0;
+  for (let ir = wr0; ir <= wr1; ir++) {
+    for (let ic = wc0; ic <= wc1; ic++) {
+      const w = mag[ir * width + ic];
+      sumW += w; sumWC += w * ic; sumWR += w * ir;
+    }
+  }
+  if (sumW > 0) return { row: sumWR / sumW, col: sumWC / sumW };
+  return { row: bestRow, col: bestCol };
+}
+const FFT_SNAP_RADIUS = 5;
+
 /**
  * Draw VI crosshair on high-DPI canvas (crisp regardless of image resolution)
  * Note: Does NOT clear canvas - should be called after drawScaleBarHiDPI
@@ -801,6 +830,7 @@ function Histogram({
           "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px" },
         }}
       />
+      <Box sx={{ display: "flex", justifyContent: "space-between", width }}><Typography sx={{ fontSize: 8, fontFamily: "monospace", opacity: 0.6, lineHeight: 1 }}>{(() => { const v = dataMin + (vminPct / 100) * (dataMax - dataMin); return v >= 1000 ? v.toExponential(1) : v.toFixed(1); })()}</Typography><Typography sx={{ fontSize: 8, fontFamily: "monospace", opacity: 0.6, lineHeight: 1 }}>{(() => { const v = dataMin + (vmaxPct / 100) * (dataMax - dataMin); return v >= 1000 ? v.toExponential(1) : v.toFixed(1); })()}</Typography></Box>
     </Box>
   );
 }
@@ -999,6 +1029,7 @@ function Show4DSTEM() {
   const [isDraggingResizeInner, setIsDraggingResizeInner] = React.useState(false); // For annular inner handle
   const [isHoveringResize, setIsHoveringResize] = React.useState(false);
   const [isHoveringResizeInner, setIsHoveringResizeInner] = React.useState(false);
+  const resizeAspectRef = React.useRef<number | null>(null);
   // VI ROI drag/resize states (same pattern as DP)
   const [isDraggingViRoi, setIsDraggingViRoi] = React.useState(false);
   const [isDraggingViRoiResize, setIsDraggingViRoiResize] = React.useState(false);
@@ -1270,6 +1301,11 @@ function Show4DSTEM() {
   const [fftHistogramData, setFftHistogramData] = React.useState<Float32Array | null>(null);
   const [fftDataMin, setFftDataMin] = React.useState(0);
   const [fftDataMax, setFftDataMax] = React.useState(1);
+  const [fftClickInfo, setFftClickInfo] = React.useState<{
+    row: number; col: number; distPx: number;
+    spatialFreq: number | null; dSpacing: number | null;
+  } | null>(null);
+  const fftClickStartRef = React.useRef<{ x: number; y: number } | null>(null);
 
   const isTypingTarget = React.useCallback((target: EventTarget | null): boolean => {
     if (!(target instanceof HTMLElement)) return false;
@@ -1431,6 +1467,15 @@ function Show4DSTEM() {
   const fftOffscreenRef = React.useRef<HTMLCanvasElement | null>(null);
   const fftImageDataRef = React.useRef<ImageData | null>(null);
 
+  // Offscreen version counters — bump when colormap/data changes, cheap draw effects depend on these
+  const [dpOffscreenVersion, setDpOffscreenVersion] = React.useState(0);
+  const [viOffscreenVersion, setViOffscreenVersion] = React.useState(0);
+  const [fftOffscreenVersion, setFftOffscreenVersion] = React.useState(0);
+
+  // Cached colorbar vmin/vmax — computed in expensive DP effect, reused in UI overlay without recomputing
+  const dpColorbarVminRef = React.useRef(0);
+  const dpColorbarVmaxRef = React.useRef(1);
+
   // Device pixel ratio for high-DPI UI overlays
   const DPR = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
 
@@ -1452,6 +1497,7 @@ function Show4DSTEM() {
   const fftWorkRealRef = React.useRef<Float32Array | null>(null);
   const fftWorkImagRef = React.useRef<Float32Array | null>(null);
   const fftMagnitudeRef = React.useRef<Float32Array | null>(null);
+  const fftMagCacheRef = React.useRef<Float32Array | null>(null);
 
   // Parse virtual image bytes into Float32Array and apply scale for histogram
   React.useEffect(() => {
@@ -1491,17 +1537,12 @@ function Show4DSTEM() {
   }, [virtualImageBytes, viScaleMode, viPowerExp]);
 
   // Render DP with zoom (use summed DP when VI ROI is active)
+  // Expensive: colormap + data processing → cached offscreen canvas
   React.useEffect(() => {
-    if (!dpCanvasRef.current) return;
-
     // Determine which bytes to display: summed DP (if VI ROI active) or single frame
     const usesSummedDp = viRoiMode && viRoiMode !== "off" && summedDpBytes && summedDpBytes.byteLength > 0;
     const sourceBytes = usesSummedDp ? summedDpBytes : frameBytes;
     if (!sourceBytes) return;
-
-    const canvas = dpCanvasRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
 
     const lut = COLORMAPS[dpColormap] || COLORMAPS.inferno;
 
@@ -1559,7 +1600,20 @@ function Show4DSTEM() {
     }
     applyColormap(scaled, imgData.data, lut, vmin, vmax);
     offCtx.putImageData(imgData, 0, 0);
+    // Cache colorbar range for the UI overlay (avoids recomputing findDataRange on every zoom/pan)
+    dpColorbarVminRef.current = vmin;
+    dpColorbarVmaxRef.current = vmax;
+    setDpOffscreenVersion(v => v + 1);
+  }, [frameBytes, summedDpBytes, viRoiMode, detRows, detCols, dpColormap, dpVminPct, dpVmaxPct, dpScaleMode, dpPowerExp]);
 
+  // Cheap: zoom/pan redraw — just drawImage from cached offscreen
+  // useLayoutEffect prevents black flash when canvas dimensions change (resize)
+  React.useLayoutEffect(() => {
+    const offscreen = dpOffscreenRef.current;
+    if (!offscreen || !dpCanvasRef.current) return;
+    const canvas = dpCanvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
@@ -1567,7 +1621,7 @@ function Show4DSTEM() {
     ctx.scale(dpZoom, dpZoom);
     ctx.drawImage(offscreen, 0, 0);
     ctx.restore();
-  }, [frameBytes, summedDpBytes, viRoiMode, detRows, detCols, dpColormap, dpVminPct, dpVmaxPct, dpScaleMode, dpPowerExp, dpZoom, dpPanX, dpPanY]);
+  }, [dpOffscreenVersion, dpZoom, dpPanX, dpPanY]);
 
   // Render DP overlay - just clear (ROI shapes now drawn on high-DPI UI canvas)
   React.useEffect(() => {
@@ -1579,94 +1633,95 @@ function Show4DSTEM() {
     // All visual overlays (crosshair, ROI shapes, scale bar) are now on dpUiRef for crisp rendering
   }, [localKCol, localKRow, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner, dpZoom, dpPanX, dpPanY, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, detRows, detCols]);
 
-  // Render filtered virtual image
+  // Expensive: VI colormap + data processing → cached offscreen canvas
   React.useEffect(() => {
-    if (!rawVirtualImageRef.current || !virtualCanvasRef.current) return;
-    const canvas = virtualCanvasRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!rawVirtualImageRef.current) return;
 
     const width = shapeCols;
     const height = shapeRows;
+    const filtered = rawVirtualImageRef.current;
 
-    const renderData = (filtered: Float32Array) => {
-      // Normalize and render
-      // Apply scale transformation first
-      let scaled = filtered;
+    // Apply scale transformation first
+    let scaled = filtered;
+    if (viScaleMode === "log") {
+      scaled = new Float32Array(filtered.length);
+      for (let i = 0; i < filtered.length; i++) {
+        scaled[i] = Math.log1p(Math.max(0, filtered[i]));
+      }
+    } else if (viScaleMode === "power") {
+      scaled = new Float32Array(filtered.length);
+      for (let i = 0; i < filtered.length; i++) {
+        scaled[i] = Math.pow(Math.max(0, filtered[i]), viPowerExp);
+      }
+    }
+
+    // Use Python's pre-computed min/max when valid, fallback to computing from data
+    let dataMin: number, dataMax: number;
+    const hasValidMinMax = viDataMin !== undefined && viDataMax !== undefined && viDataMax > viDataMin;
+    if (hasValidMinMax) {
+      // Apply scale transform to Python's values
       if (viScaleMode === "log") {
-        scaled = new Float32Array(filtered.length);
-        for (let i = 0; i < filtered.length; i++) {
-          scaled[i] = Math.log1p(Math.max(0, filtered[i]));
-        }
+        dataMin = Math.log1p(Math.max(0, viDataMin));
+        dataMax = Math.log1p(Math.max(0, viDataMax));
       } else if (viScaleMode === "power") {
-        scaled = new Float32Array(filtered.length);
-        for (let i = 0; i < filtered.length; i++) {
-          scaled[i] = Math.pow(Math.max(0, filtered[i]), viPowerExp);
-        }
-      }
-
-      // Use Python's pre-computed min/max when valid, fallback to computing from data
-      let dataMin: number, dataMax: number;
-      const hasValidMinMax = viDataMin !== undefined && viDataMax !== undefined && viDataMax > viDataMin;
-      if (hasValidMinMax) {
-        // Apply scale transform to Python's values
-        if (viScaleMode === "log") {
-          dataMin = Math.log1p(Math.max(0, viDataMin));
-          dataMax = Math.log1p(Math.max(0, viDataMax));
-        } else if (viScaleMode === "power") {
-          dataMin = Math.pow(Math.max(0, viDataMin), viPowerExp);
-          dataMax = Math.pow(Math.max(0, viDataMax), viPowerExp);
-        } else {
-          dataMin = viDataMin;
-          dataMax = viDataMax;
-        }
+        dataMin = Math.pow(Math.max(0, viDataMin), viPowerExp);
+        dataMax = Math.pow(Math.max(0, viDataMax), viPowerExp);
       } else {
-        // Fallback: compute from scaled data
-        const r = findDataRange(scaled);
-        dataMin = r.min;
-        dataMax = r.max;
+        dataMin = viDataMin;
+        dataMax = viDataMax;
       }
+    } else {
+      // Fallback: compute from scaled data
+      const r = findDataRange(scaled);
+      dataMin = r.min;
+      dataMax = r.max;
+    }
 
-      // Apply vmin/vmax percentile clipping
-      const { vmin, vmax } = sliderRange(dataMin, dataMax, viVminPct, viVmaxPct);
+    // Apply vmin/vmax percentile clipping
+    const { vmin, vmax } = sliderRange(dataMin, dataMax, viVminPct, viVmaxPct);
 
-      const lut = COLORMAPS[viColormap] || COLORMAPS.inferno;
-      let offscreen = viOffscreenRef.current;
-      if (!offscreen) {
-        offscreen = document.createElement("canvas");
-        viOffscreenRef.current = offscreen;
-      }
-      const sizeChanged = offscreen.width !== width || offscreen.height !== height;
-      if (sizeChanged) {
-        offscreen.width = width;
-        offscreen.height = height;
-        viImageDataRef.current = null;
-      }
-      const offCtx = offscreen.getContext("2d");
-      if (!offCtx) return;
+    const lut = COLORMAPS[viColormap] || COLORMAPS.inferno;
+    let offscreen = viOffscreenRef.current;
+    if (!offscreen) {
+      offscreen = document.createElement("canvas");
+      viOffscreenRef.current = offscreen;
+    }
+    const sizeChanged = offscreen.width !== width || offscreen.height !== height;
+    if (sizeChanged) {
+      offscreen.width = width;
+      offscreen.height = height;
+      viImageDataRef.current = null;
+    }
+    const offCtx = offscreen.getContext("2d");
+    if (!offCtx) return;
 
-      let imageData = viImageDataRef.current;
-      if (!imageData) {
-        imageData = offCtx.createImageData(width, height);
-        viImageDataRef.current = imageData;
-      }
-      applyColormap(scaled, imageData.data, lut, vmin, vmax);
-      offCtx.putImageData(imageData, 0, 0);
-
-      ctx.imageSmoothingEnabled = false;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.save();
-      ctx.translate(viPanX, viPanY);
-      ctx.scale(viZoom, viZoom);
-      ctx.drawImage(offscreen, 0, 0);
-      ctx.restore();
-    };
-
-    if (!rawVirtualImageRef.current) return;
-    renderData(rawVirtualImageRef.current);
+    let imageData = viImageDataRef.current;
+    if (!imageData) {
+      imageData = offCtx.createImageData(width, height);
+      viImageDataRef.current = imageData;
+    }
+    applyColormap(scaled, imageData.data, lut, vmin, vmax);
+    offCtx.putImageData(imageData, 0, 0);
+    setViOffscreenVersion(v => v + 1);
     // Note: viDataMin/viDataMax intentionally not in deps - they arrive with virtualImageBytes
     // and we have a fallback if they're stale
-  }, [virtualImageBytes, shapeRows, shapeCols, viColormap, viVminPct, viVmaxPct, viScaleMode, viPowerExp, viZoom, viPanX, viPanY]);
+  }, [virtualImageBytes, shapeRows, shapeCols, viColormap, viVminPct, viVmaxPct, viScaleMode, viPowerExp]);
+
+  // Cheap: VI zoom/pan redraw — just drawImage from cached offscreen
+  React.useLayoutEffect(() => {
+    const offscreen = viOffscreenRef.current;
+    if (!offscreen || !virtualCanvasRef.current) return;
+    const canvas = virtualCanvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(viPanX, viPanY);
+    ctx.scale(viZoom, viZoom);
+    ctx.drawImage(offscreen, 0, 0);
+    ctx.restore();
+  }, [viOffscreenVersion, viZoom, viPanX, viPanY]);
 
   // Render virtual image overlay (just clear - crosshair drawn on high-DPI UI canvas)
   React.useEffect(() => {
@@ -1744,13 +1799,10 @@ function Show4DSTEM() {
     }
   }, [virtualImageBytes, shapeRows, shapeCols, gpuReady, effectiveShowFft, roiFftActive, viRoiMode, viRoiCenterRow, viRoiCenterCol, viRoiRadius, viRoiWidth, viRoiHeight]);
 
-  // Process FFT → magnitude + histogram + colormap rendering (cheap, sync)
+  // Expensive: FFT magnitude + histogram + colormap → cached offscreen canvas
   React.useEffect(() => {
-    if (!fftRealRef.current || !fftImagRef.current || !fftCanvasRef.current) return;
-    const canvas = fftCanvasRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    if (!effectiveShowFft) { ctx.clearRect(0, 0, canvas.width, canvas.height); return; }
+    if (!fftRealRef.current || !fftImagRef.current) return;
+    if (!effectiveShowFft) return;
 
     const width = fftCropDims?.fftWidth ?? shapeCols;
     const height = fftCropDims?.fftHeight ?? shapeRows;
@@ -1764,8 +1816,15 @@ function Show4DSTEM() {
       magnitude = new Float32Array(real.length);
       fftMagnitudeRef.current = magnitude;
     }
+    // Cache raw magnitude for peak-snap before applying scale transform
+    let rawMag = fftMagCacheRef.current;
+    if (!rawMag || rawMag.length !== real.length) {
+      rawMag = new Float32Array(real.length);
+      fftMagCacheRef.current = rawMag;
+    }
     for (let i = 0; i < real.length; i++) {
       const mag = Math.sqrt(real[i] * real[i] + imag[i] * imag[i]);
+      rawMag[i] = mag;
       if (fftScaleMode === "log") { magnitude[i] = Math.log1p(mag); }
       else if (fftScaleMode === "power") { magnitude[i] = Math.pow(mag, fftPowerExp); }
       else { magnitude[i] = mag; }
@@ -1796,7 +1855,17 @@ function Show4DSTEM() {
     const { vmin, vmax } = sliderRange(displayMin, displayMax, fftVminPct, fftVmaxPct);
     applyColormap(magnitude, imgData.data, lut, vmin, vmax);
     offCtx.putImageData(imgData, 0, 0);
+    setFftOffscreenVersion(v => v + 1);
+  }, [effectiveShowFft, fftVersion, fftScaleMode, fftPowerExp, fftAuto, fftVminPct, fftVmaxPct, fftColormap, shapeRows, shapeCols, fftCropDims]);
 
+  // Cheap: FFT zoom/pan redraw — just drawImage from cached offscreen
+  React.useLayoutEffect(() => {
+    if (!fftCanvasRef.current) return;
+    const canvas = fftCanvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const offscreen = fftOffscreenRef.current;
+    if (!offscreen || !effectiveShowFft) { ctx.clearRect(0, 0, canvas.width, canvas.height); return; }
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
@@ -1804,7 +1873,7 @@ function Show4DSTEM() {
     ctx.scale(fftZoom, fftZoom);
     ctx.drawImage(offscreen, 0, 0);
     ctx.restore();
-  }, [effectiveShowFft, fftVersion, fftScaleMode, fftPowerExp, fftAuto, fftVminPct, fftVmaxPct, fftColormap, shapeRows, shapeCols, fftZoom, fftPanX, fftPanY, fftCropDims]);
+  }, [fftOffscreenVersion, fftZoom, fftPanX, fftPanY, effectiveShowFft]);
 
   // Render FFT overlay with high-pass filter circle
   React.useEffect(() => {
@@ -1907,8 +1976,8 @@ function Show4DSTEM() {
       }
     }
 
-    // Colorbar overlay
-    if (showDpColorbar && rawDpDataRef.current) {
+    // Colorbar overlay — uses cached vmin/vmax from the expensive DP offscreen effect
+    if (showDpColorbar) {
       const canvas = dpUiRef.current;
       const ctx = canvas.getContext("2d");
       if (ctx) {
@@ -1917,10 +1986,7 @@ function Show4DSTEM() {
         const cssW = canvas.width / DPR;
         const cssH = canvas.height / DPR;
         const lut = COLORMAPS[dpColormap] || COLORMAPS.inferno;
-        const processed = dpScaleMode === "log" ? applyLogScale(rawDpDataRef.current) : rawDpDataRef.current;
-        const { min: dMin, max: dMax } = findDataRange(processed);
-        const { vmin, vmax } = sliderRange(dMin, dMax, dpVminPct, dpVmaxPct);
-        drawColorbar(ctx, cssW, cssH, lut, vmin, vmax, dpScaleMode === "log");
+        drawColorbar(ctx, cssW, cssH, lut, dpColorbarVminRef.current, dpColorbarVmaxRef.current, dpScaleMode === "log");
         ctx.restore();
       }
     }
@@ -2584,6 +2650,8 @@ function Show4DSTEM() {
       return;
     }
     if (isNearResizeHandle(imgX, imgY)) {
+      e.preventDefault();
+      resizeAspectRef.current = roiMode === "rect" && roiWidth > 0 && roiHeight > 0 ? roiWidth / roiHeight : null;
       setIsDraggingResize(true);
       return;
     }
@@ -2614,21 +2682,27 @@ function Show4DSTEM() {
     const imgX = (screenX - dpPanX) / dpZoom;
     const imgY = (screenY - dpPanY) / dpZoom;
 
+    // Fast path: skip cursor readout during any active drag — avoids setCursorInfo re-renders
+    const anyDrag = isDraggingDP || isDraggingResize || isDraggingResizeInner
+      || draggingDpProfileEndpoint !== null || isDraggingDpProfileLine;
+
     // Cursor readout: look up raw DP value at pixel position
-    const pxCol = Math.floor(imgX);
-    const pxRow = Math.floor(imgY);
-    if (pxCol >= 0 && pxCol < detCols && pxRow >= 0 && pxRow < detRows && frameBytes) {
-      const usesSummedDp = viRoiMode && viRoiMode !== "off" && summedDpBytes && summedDpBytes.byteLength > 0;
-      const sourceBytes = usesSummedDp ? summedDpBytes : frameBytes;
-      if (usesSummedDp) {
-        const bytes = new Uint8Array(sourceBytes.buffer, sourceBytes.byteOffset, sourceBytes.byteLength);
-        setCursorInfo({ row: pxRow, col: pxCol, value: bytes[pxRow * detCols + pxCol], panel: "DP" });
+    if (!anyDrag) {
+      const pxCol = Math.floor(imgX);
+      const pxRow = Math.floor(imgY);
+      if (pxCol >= 0 && pxCol < detCols && pxRow >= 0 && pxRow < detRows && frameBytes) {
+        const usesSummedDp = viRoiMode && viRoiMode !== "off" && summedDpBytes && summedDpBytes.byteLength > 0;
+        const sourceBytes = usesSummedDp ? summedDpBytes : frameBytes;
+        if (usesSummedDp) {
+          const bytes = new Uint8Array(sourceBytes.buffer, sourceBytes.byteOffset, sourceBytes.byteLength);
+          setCursorInfo({ row: pxRow, col: pxCol, value: bytes[pxRow * detCols + pxCol], panel: "DP" });
+        } else {
+          const raw = new Float32Array(sourceBytes.buffer, sourceBytes.byteOffset, sourceBytes.byteLength / 4);
+          setCursorInfo({ row: pxRow, col: pxCol, value: raw[pxRow * detCols + pxCol], panel: "DP" });
+        }
       } else {
-        const raw = new Float32Array(sourceBytes.buffer, sourceBytes.byteOffset, sourceBytes.byteLength / 4);
-        setCursorInfo({ row: pxRow, col: pxCol, value: raw[pxRow * detCols + pxCol], panel: "DP" });
+        setCursorInfo(null);
       }
-    } else {
-      setCursorInfo(null);
     }
 
     if (profileActive && lockProfile) return;
@@ -2699,9 +2773,15 @@ function Show4DSTEM() {
       const dx = Math.abs(imgX - roiCenterCol);
       const dy = Math.abs(imgY - roiCenterRow);
       if (roiMode === "rect") {
-        // For rectangle, update width and height independently
-        setRoiWidth(Math.max(2, Math.round(dx * 2)));
-        setRoiHeight(Math.max(2, Math.round(dy * 2)));
+        let newW = Math.max(2, Math.round(dx * 2));
+        let newH = Math.max(2, Math.round(dy * 2));
+        if (e.shiftKey && resizeAspectRef.current != null) {
+          const aspect = resizeAspectRef.current;
+          if (newW / newH > aspect) newH = Math.max(2, Math.round(newW / aspect));
+          else newW = Math.max(2, Math.round(newH * aspect));
+        }
+        setRoiWidth(newW);
+        setRoiHeight(newH);
       } else {
         const newRadius = roiMode === "square" ? Math.max(dx, dy) : Math.sqrt(dx ** 2 + dy ** 2);
         // For annular mode, outer radius must be greater than inner radius
@@ -2883,15 +2963,21 @@ function Show4DSTEM() {
     const imgX = (screenY - viPanY) / viZoom;
     const imgY = (screenX - viPanX) / viZoom;
 
+    // Fast path: skip cursor readout during any active drag — avoids setCursorInfo re-renders
+    const anyViDrag = isDraggingVI || isDraggingViRoi || isDraggingViRoiResize
+      || draggingViProfileEndpoint !== null || isDraggingViProfileLine;
+
     // Cursor readout: look up raw VI value at pixel position
     // imgX = row, imgY = col (swapped coordinate convention)
-    const pxRow = Math.floor(imgX);
-    const pxCol = Math.floor(imgY);
-    if (pxRow >= 0 && pxRow < shapeRows && pxCol >= 0 && pxCol < shapeCols && rawVirtualImageRef.current) {
-      const raw = rawVirtualImageRef.current;
-      setCursorInfo({ row: pxRow, col: pxCol, value: raw[pxRow * shapeCols + pxCol], panel: "VI" });
-    } else {
-      setCursorInfo(prev => prev?.panel === "VI" ? null : prev);
+    if (!anyViDrag) {
+      const pxRow = Math.floor(imgX);
+      const pxCol = Math.floor(imgY);
+      if (pxRow >= 0 && pxRow < shapeRows && pxCol >= 0 && pxCol < shapeCols && rawVirtualImageRef.current) {
+        const raw = rawVirtualImageRef.current;
+        setCursorInfo({ row: pxRow, col: pxCol, value: raw[pxRow * shapeCols + pxCol], panel: "VI" });
+      } else {
+        setCursorInfo(prev => prev?.panel === "VI" ? null : prev);
+      }
     }
 
     if (viProfileActive && lockProfile) return;
@@ -3076,6 +3162,7 @@ function Show4DSTEM() {
   // FFT drag-to-pan handlers
   const handleFftMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (lockView || lockFft) return;
+    fftClickStartRef.current = { x: e.clientX, y: e.clientY };
     setIsDraggingFFT(true);
     setFftDragStart({ x: e.clientX, y: e.clientY, panX: fftPanX, panY: fftPanY });
   };
@@ -3094,8 +3181,65 @@ function Show4DSTEM() {
     setFftPanY(fftDragStart.panY + dy);
   };
 
-  const handleFftMouseUp = () => { setIsDraggingFFT(false); setFftDragStart(null); };
-  const handleFftMouseLeave = () => { setIsDraggingFFT(false); setFftDragStart(null); };
+  const handleFftMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // Click detection for d-spacing measurement
+    if (fftClickStartRef.current) {
+      const dx = e.clientX - fftClickStartRef.current.x;
+      const dy = e.clientY - fftClickStartRef.current.y;
+      if (Math.sqrt(dx * dx + dy * dy) < 3) {
+        // Convert screen coords to FFT image coords
+        const canvas = fftOverlayRef.current;
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect();
+          const scaleX = canvas.width / rect.width;
+          const scaleY = canvas.height / rect.height;
+          const canvasX = (e.clientX - rect.left) * scaleX;
+          const canvasY = (e.clientY - rect.top) * scaleY;
+          const fftW = fftCropDims?.fftWidth ?? shapeCols;
+          const fftH = fftCropDims?.fftHeight ?? shapeRows;
+          // Reverse the zoom/pan transform: canvas coords -> image coords
+          // The FFT render uses: ctx.translate(fftPanX, fftPanY); ctx.scale(fftZoom, fftZoom); ctx.drawImage(offscreen, 0, 0)
+          let imgCol = (canvasX - fftPanX) / fftZoom;
+          let imgRow = (canvasY - fftPanY) / fftZoom;
+          // Bounds check
+          if (imgCol >= 0 && imgCol < fftW && imgRow >= 0 && imgRow < fftH) {
+            // Snap to nearest peak in FFT magnitude
+            if (fftMagCacheRef.current) {
+              const snapped = findFFTPeak(fftMagCacheRef.current, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
+              imgCol = snapped.col;
+              imgRow = snapped.row;
+            }
+            const halfW = Math.floor(fftW / 2);
+            const halfH = Math.floor(fftH / 2);
+            const dcol = imgCol - halfW;
+            const drow = imgRow - halfH;
+            const distPx = Math.sqrt(dcol * dcol + drow * drow);
+            if (distPx < 1) {
+              setFftClickInfo(null); // Clicked on DC center
+            } else {
+              let spatialFreq: number | null = null;
+              let dSpacing: number | null = null;
+              if (pixelSize > 0) {
+                const paddedW = nextPow2(fftW);
+                const paddedH = nextPow2(fftH);
+                const binC = ((Math.round(imgCol) - halfW) % fftW + fftW) % fftW;
+                const binR = ((Math.round(imgRow) - halfH) % fftH + fftH) % fftH;
+                const freqC = binC <= paddedW / 2 ? binC / (paddedW * pixelSize) : (binC - paddedW) / (paddedW * pixelSize);
+                const freqR = binR <= paddedH / 2 ? binR / (paddedH * pixelSize) : (binR - paddedH) / (paddedH * pixelSize);
+                spatialFreq = Math.sqrt(freqC * freqC + freqR * freqR);
+                dSpacing = spatialFreq > 0 ? 1 / spatialFreq : null;
+              }
+              setFftClickInfo({ row: imgRow, col: imgCol, distPx, spatialFreq, dSpacing });
+            }
+          }
+        }
+      }
+      fftClickStartRef.current = null;
+    }
+    setIsDraggingFFT(false);
+    setFftDragStart(null);
+  };
+  const handleFftMouseLeave = () => { fftClickStartRef.current = null; setIsDraggingFFT(false); setFftDragStart(null); };
 
   // ── Canvas resize handlers ──
   const handleCanvasResizeStart = (e: React.MouseEvent) => {
@@ -3108,18 +3252,29 @@ function Show4DSTEM() {
 
   React.useEffect(() => {
     if (!isResizingCanvas) return;
+    let rafId = 0;
+    let latestSize = resizeCanvasStart ? resizeCanvasStart.size : canvasSize;
     const handleMouseMove = (e: MouseEvent) => {
       if (!resizeCanvasStart) return;
       const delta = Math.max(e.clientX - resizeCanvasStart.x, e.clientY - resizeCanvasStart.y);
-      setCanvasSize(Math.max(CANVAS_SIZE, Math.min(800, resizeCanvasStart.size + delta)));
+      latestSize = Math.max(CANVAS_SIZE, Math.min(800, resizeCanvasStart.size + delta));
+      if (!rafId) {
+        rafId = requestAnimationFrame(() => {
+          rafId = 0;
+          setCanvasSize(latestSize);
+        });
+      }
     };
     const handleMouseUp = () => {
+      cancelAnimationFrame(rafId);
+      setCanvasSize(latestSize);
       setIsResizingCanvas(false);
       setResizeCanvasStart(null);
     };
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
     return () => {
+      cancelAnimationFrame(rafId);
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
@@ -3629,11 +3784,10 @@ function Show4DSTEM() {
         <Box sx={{ width: viCanvasWidth }}>
           {/* VI Header */}
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
-            <Typography variant="caption" sx={{ ...typo.label }}>Image</Typography>
+            <Typography sx={{ ...typo.label, color: themeColors.textMuted, fontSize: 10 }}>
+              {shapeRows}×{shapeCols} | {detRows}×{detCols}
+            </Typography>
             <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="center">
-              <Typography sx={{ ...typo.label, color: themeColors.textMuted, fontSize: 10 }}>
-                {shapeRows}×{shapeCols} | {detRows}×{detCols}
-              </Typography>
               {!hideFft && (
                 <>
                   <Typography sx={{ ...typo.label, fontSize: 10 }}>FFT:</Typography>
