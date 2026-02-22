@@ -225,13 +225,13 @@ def test_show2d_toggle_fft(smoke_page):
     widget = smoke_page.locator(".show2d-root").first
     widget.scroll_into_view_if_needed()
     before = widget.locator("canvas").count()
-    # Switches: Profile(0), ROI(1), Lens(2), FFT(3), Colorbar(4), Auto(5)
-    widget.locator(".MuiSwitch-root").nth(3).click()
+    # Switches: Profile(0), ROI(1), Lens(2), Preview(3), FFT(4), Colorbar(5), Auto(6)
+    widget.locator(".MuiSwitch-root").nth(4).click()
     time.sleep(2)
     after = widget.locator("canvas").count()
     assert after > before, f"FFT toggle didn't add canvas ({before} → {after})"
     _screenshot(widget, "show2d_fft")
-    widget.locator(".MuiSwitch-root").nth(3).click()
+    widget.locator(".MuiSwitch-root").nth(4).click()
     time.sleep(1)
 
 def test_show2d_change_colormap(smoke_page):
@@ -255,21 +255,21 @@ def test_show2d_toggle_colorbar(smoke_page):
     """Toggle Colorbar switch on Show2D."""
     widget = smoke_page.locator(".show2d-root").first
     widget.scroll_into_view_if_needed()
-    # Switches: Profile(0), ROI(1), Lens(2), FFT(3), Colorbar(4), Auto(5)
-    widget.locator(".MuiSwitch-root").nth(4).click()
+    # Switches: Profile(0), ROI(1), Lens(2), Preview(3), FFT(4), Colorbar(5), Auto(6)
+    widget.locator(".MuiSwitch-root").nth(5).click()
     time.sleep(1)
     _screenshot(widget, "show2d_colorbar")
-    widget.locator(".MuiSwitch-root").nth(4).click()
+    widget.locator(".MuiSwitch-root").nth(5).click()
     time.sleep(0.5)
 
 def test_show2d_toggle_auto_contrast(smoke_page):
     """Toggle Auto contrast on Show2D."""
     widget = smoke_page.locator(".show2d-root").first
     widget.scroll_into_view_if_needed()
-    widget.locator(".MuiSwitch-root").nth(5).click()
+    widget.locator(".MuiSwitch-root").nth(6).click()
     time.sleep(1)
     _screenshot(widget, "show2d_auto")
-    widget.locator(".MuiSwitch-root").nth(5).click()
+    widget.locator(".MuiSwitch-root").nth(6).click()
     time.sleep(0.5)
 
 def test_show2d_profile_hover(smoke_page):
@@ -319,7 +319,7 @@ def test_show2d_profile_drag(smoke_page):
     widget = smoke_page.locator(".show2d-root").first
     widget.scroll_into_view_if_needed()
 
-    # Enable Profile toggle — Switches: Profile(0), ROI(1), Lens(2), FFT(3)
+    # Enable Profile toggle — Switches: Profile(0), ROI(1), Lens(2), Preview(3), FFT(4)
     widget.locator(".MuiSwitch-root").nth(0).click()
     time.sleep(1)
 
@@ -367,9 +367,9 @@ def test_show2d_roi_fft(smoke_page):
     widget = smoke_page.locator(".show2d-root").first
     widget.scroll_into_view_if_needed()
 
-    # Enable FFT (switch 3) and ROI (switch 1)
-    # Switches: Profile(0), ROI(1), Lens(2), FFT(3)
-    widget.locator(".MuiSwitch-root").nth(3).click()  # FFT on
+    # Enable FFT (switch 4) and ROI (switch 1)
+    # Switches: Profile(0), ROI(1), Lens(2), Preview(3), FFT(4)
+    widget.locator(".MuiSwitch-root").nth(4).click()  # FFT on
     time.sleep(2)
     widget.locator(".MuiSwitch-root").nth(1).click()  # ROI on
     time.sleep(1)
@@ -386,7 +386,7 @@ def test_show2d_roi_fft(smoke_page):
     # Clean up: disable ROI and FFT
     widget.locator(".MuiSwitch-root").nth(1).click()  # ROI off
     time.sleep(0.5)
-    widget.locator(".MuiSwitch-root").nth(3).click()  # FFT off
+    widget.locator(".MuiSwitch-root").nth(4).click()  # FFT off
     time.sleep(0.5)
 
 # ---------------------------------------------------------------------------
@@ -804,6 +804,30 @@ def test_show4dstem_toggle_fft(smoke_page):
     fft_switch.nth(2).click()
     time.sleep(1)
 
+def test_show4dstem_roi_fft(smoke_page):
+    """Enable VI ROI + FFT on Show4DSTEM, verify ROI FFT label appears."""
+    widget = smoke_page.locator(".show4dstem-root").first
+    widget.scroll_into_view_if_needed()
+
+    # Enable FFT (switch 2) then set VI ROI to Circle (dropdown 3)
+    # Switches: Profile(0), Colorbar(1), FFT(2)
+    # Dropdowns: Detector(0), DPColor(1), DPScale(2), VIRoi(3), VIColor(4), VIScale(5)
+    widget.locator(".MuiSwitch-root").nth(2).click()  # FFT on
+    time.sleep(2)
+    _change_dropdown(widget, smoke_page, 3, "Circle")
+    time.sleep(2)
+
+    # Check that "ROI FFT" label appears in the widget text
+    text = widget.inner_text()
+    assert "ROI FFT" in text, f"ROI FFT label not found in widget text"
+    _screenshot(widget, "show4dstem_roi_fft")
+
+    # Clean up: VI ROI off, FFT off
+    _change_dropdown(widget, smoke_page, 3, "Off")
+    time.sleep(0.5)
+    widget.locator(".MuiSwitch-root").nth(2).click()  # FFT off
+    time.sleep(0.5)
+
 def test_show4dstem_profile_drag(smoke_page):
     """Draw a profile line on Show4DSTEM DP panel, verify drag moves endpoint."""
     widget = smoke_page.locator(".show4dstem-root").first
@@ -925,6 +949,28 @@ def test_show4d_change_roi_mode(smoke_page):
     time.sleep(0.5)
     _screenshot(widget, "show4d_roi_rect")
     _change_dropdown(widget, smoke_page, 0, "Off")
+
+def test_show4d_roi_fft(smoke_page):
+    """Enable ROI + FFT on Show4D, verify ROI FFT label appears."""
+    widget = smoke_page.locator(".show4d-root").first
+    widget.scroll_into_view_if_needed()
+
+    # Enable FFT (switch 1) then set ROI to Circle (dropdown 0)
+    widget.locator(".MuiSwitch-root").nth(1).click()  # FFT on
+    time.sleep(2)
+    _change_dropdown(widget, smoke_page, 0, "Circle")
+    time.sleep(2)
+
+    # Check that "ROI FFT" label appears in the widget text
+    text = widget.inner_text()
+    assert "ROI FFT" in text, f"ROI FFT label not found in widget text"
+    _screenshot(widget, "show4d_roi_fft")
+
+    # Clean up: ROI off, FFT off
+    _change_dropdown(widget, smoke_page, 0, "Off")
+    time.sleep(0.5)
+    widget.locator(".MuiSwitch-root").nth(1).click()  # FFT off
+    time.sleep(0.5)
 
 def test_show4d_change_colormap(smoke_page):
     """Change Show4D navigation colormap."""
