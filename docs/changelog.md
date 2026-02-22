@@ -10,10 +10,19 @@
 - selectable peak markers: click to place peaks (snaps to nearest local max), click peaks to select, `selected_peaks` trait for downstream analysis in Python
 - grid density slider: adjustable grid line count (5–50) when grid is enabled
 - axis range lock: drag on X or Y axis area to lock a range, double-click axis to unlock; `x_range`/`y_range` traits for programmatic control
+- Y-axis range handles: drag-to-lock Y range with input fields, mirrors the X range system
+- range-scoped statistics: when X range is locked, shows per-trace mean/min/max/std and integral (`np.trapezoid`) within the selected region
+- peak FWHM measurement: select peaks to see Gaussian-fitted FWHM with double-arrow overlay; `measure_fwhm()` API and `peak_fwhm` trait
+- CSV export: copy range data to clipboard or download as CSV (range-only or full) from Export dropdown
+- figure export: PDF and PNG publication-quality figure export from Export dropdown
 - legend click: click legend entries to focus/unfocus individual traces
+- reset view (`R` / double-click / Reset button) now also unlocks any locked X/Y ranges
 - **breaking:** removed baseline subtraction, normalization, delta measurement, and mode selector (PAN/PEAK/RANGE/DELTA) — use Python for these transforms instead
 - **breaking:** removed `corrected_data` property, `baseline_mode`, `normalize_mode` traits
 - **breaking:** tool group `"analysis"` renamed to `"peaks"` (`disable_analysis` → `disable_peaks`, `hide_analysis` → `hide_peaks`)
+
+### Show2D, Show3D, Mark2D, Show4D, Show4DSTEM
+- ROI FFT: when both ROI and FFT are active, the FFT shows only the cropped ROI region with real-time updates during drag — useful for inspecting local crystal structure in diffraction data
 
 ### Show2D
 - file loaders: `from_png`, `from_tiff`, `from_emd`, `from_path`, `from_folder(file_type=...)`
