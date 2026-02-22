@@ -434,7 +434,7 @@ class Mark2D(anywidget.AnyWidget):
     show_fft = traitlets.Bool(False).tag(sync=True)
 
     # Canvas sizing
-    image_width_px = traitlets.Int(0).tag(sync=True)
+    canvas_size = traitlets.Int(0).tag(sync=True)
 
     # Control visibility
     show_controls = traitlets.Bool(True).tag(sync=True)
@@ -556,7 +556,7 @@ class Mark2D(anywidget.AnyWidget):
         auto_contrast: bool = True,
         log_scale: bool = False,
         show_fft: bool = False,
-        image_width_px: int = 0,
+        canvas_size: int = 0,
         show_controls: bool = True,
         disabled_tools: Optional[List[str]] = None,
         disable_points: bool = False,
@@ -604,7 +604,7 @@ class Mark2D(anywidget.AnyWidget):
         self.auto_contrast = auto_contrast
         self.log_scale = log_scale
         self.show_fft = show_fft
-        self.image_width_px = image_width_px
+        self.canvas_size = canvas_size
         self.show_controls = show_controls
         self.disabled_tools = self._build_disabled_tools(
             disabled_tools=disabled_tools,
@@ -785,7 +785,7 @@ class Mark2D(anywidget.AnyWidget):
         """
         self._set_data(data, labels)
 
-    def add_roi(self, row, col, shape="circle", radius=30, width=60, height=40,
+    def add_roi(self, row, col, shape="square", radius=30, width=60, height=40,
                 color="#0f0", opacity=0.8):
         """
         Add an ROI overlay to the widget.
@@ -1455,7 +1455,7 @@ class Mark2D(anywidget.AnyWidget):
             "title": self.title,
             "pixel_size": self.pixel_size,
             "scale": self.scale,
-            "image_width_px": self.image_width_px,
+            "canvas_size": self.canvas_size,
         }
 
     def save(self, path: str):

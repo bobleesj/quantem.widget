@@ -342,6 +342,7 @@ function Histogram({
           "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px" },
         }}
       />
+      <Box sx={{ display: "flex", justifyContent: "space-between", width }}><Typography sx={{ fontSize: 8, fontFamily: "monospace", opacity: 0.6, lineHeight: 1 }}>{(() => { const v = dataMin + (vminPct / 100) * (dataMax - dataMin); return v >= 1000 ? v.toExponential(1) : v.toFixed(1); })()}</Typography><Typography sx={{ fontSize: 8, fontFamily: "monospace", opacity: 0.6, lineHeight: 1 }}>{(() => { const v = dataMin + (vmaxPct / 100) * (dataMax - dataMin); return v >= 1000 ? v.toExponential(1) : v.toFixed(1); })()}</Typography></Box>
     </Box>
   );
 }
@@ -440,7 +441,7 @@ function pointToSegmentDistance(col: number, row: number, col0: number, row0: nu
 // ============================================================================
 // Constants
 // ============================================================================
-const CANVAS_TARGET_SIZE = 400;
+const CANVAS_TARGET_SIZE = 500;
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 10;
 
@@ -458,15 +459,16 @@ type ROIItem = {
 };
 const ROI_COLORS = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"];
 
-function createROI(row: number, col: number, shape: string, index: number): ROIItem {
+function createROI(row: number, col: number, shape: string, index: number, imgW: number = 0, imgH: number = 0): ROIItem {
+  const defR = imgW > 0 && imgH > 0 ? Math.max(10, Math.round(Math.min(imgW, imgH) * 0.05)) : 10;
   return {
     row,
     col,
     shape,
-    radius: 10,
-    radius_inner: 5,
-    width: 20,
-    height: 20,
+    radius: defR,
+    radius_inner: Math.max(5, Math.round(defR * 0.5)),
+    width: defR * 2,
+    height: defR * 2,
     color: ROI_COLORS[index % ROI_COLORS.length],
     line_width: 2,
     highlight: false,
@@ -596,6 +598,85 @@ function cropROIRegion(
 }
 
 // ============================================================================
+// Compute stats for pixels inside a single ROI (mean/min/max/std)
+// ============================================================================
+function computeROIPixelStats(
+  data: Float32Array, imgW: number, imgH: number,
+  roi: ROIItem,
+): { mean: number; min: number; max: number; std: number } | null {
+  const shape = roi.shape || "circle";
+  let x0: number, y0: number, x1: number, y1: number;
+
+  if (shape === "rectangle") {
+    const hw = roi.width / 2;
+    const hh = roi.height / 2;
+    x0 = Math.max(0, Math.floor(roi.col - hw));
+    y0 = Math.max(0, Math.floor(roi.row - hh));
+    x1 = Math.min(imgW, Math.ceil(roi.col + hw));
+    y1 = Math.min(imgH, Math.ceil(roi.row + hh));
+  } else {
+    const r = roi.radius;
+    x0 = Math.max(0, Math.floor(roi.col - r));
+    y0 = Math.max(0, Math.floor(roi.row - r));
+    x1 = Math.min(imgW, Math.ceil(roi.col + r));
+    y1 = Math.min(imgH, Math.ceil(roi.row + r));
+  }
+
+  const cropW = x1 - x0;
+  const cropH = y1 - y0;
+  if (cropW < 1 || cropH < 1) return null;
+
+  let sum = 0, sumSq = 0, mn = Infinity, mx = -Infinity, n = 0;
+
+  if (shape === "circle") {
+    const rSq = roi.radius * roi.radius;
+    for (let dy = 0; dy < cropH; dy++) {
+      for (let dx = 0; dx < cropW; dx++) {
+        const imgX = x0 + dx, imgY = y0 + dy;
+        const distSq = (imgX - roi.col) ** 2 + (imgY - roi.row) ** 2;
+        if (distSq > rSq) continue;
+        const v = data[imgY * imgW + imgX];
+        sum += v; sumSq += v * v;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+        n++;
+      }
+    }
+  } else if (shape === "annular") {
+    const rSq = roi.radius * roi.radius;
+    const riSq = (roi.radius_inner || 0) ** 2;
+    for (let dy = 0; dy < cropH; dy++) {
+      for (let dx = 0; dx < cropW; dx++) {
+        const imgX = x0 + dx, imgY = y0 + dy;
+        const distSq = (imgX - roi.col) ** 2 + (imgY - roi.row) ** 2;
+        if (distSq > rSq || distSq < riSq) continue;
+        const v = data[imgY * imgW + imgX];
+        sum += v; sumSq += v * v;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+        n++;
+      }
+    }
+  } else {
+    // square or rectangle — all pixels in bounding box
+    for (let dy = 0; dy < cropH; dy++) {
+      for (let dx = 0; dx < cropW; dx++) {
+        const v = data[(y0 + dy) * imgW + (x0 + dx)];
+        sum += v; sumSq += v * v;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+        n++;
+      }
+    }
+  }
+
+  if (n === 0) return null;
+  const mean = sum / n;
+  const std = Math.sqrt(Math.max(0, sumSq / n - mean * mean));
+  return { mean, min: mn, max: mx, std };
+}
+
+// ============================================================================
 // Main Component
 // ============================================================================
 function Show3D() {
@@ -667,7 +748,7 @@ function Show3D() {
   const [scaleBarVisible] = useModelState<boolean>("scale_bar_visible");
 
   // Customization
-  const [imageWidthPxTrait] = useModelState<number>("image_width_px");
+  const [canvasSizeTrait] = useModelState<number>("canvas_size");
 
   // Timestamps
   const [timestamps] = useModelState<number[]>("timestamps");
@@ -680,9 +761,11 @@ function Show3D() {
   const [roiPlotData] = useModelState<DataView>("roi_plot_data");
   const [newRoiShape, setNewRoiShape] = React.useState<"circle" | "square" | "rectangle" | "annular">("square");
 
+  // Diff mode
+  const [diffMode, setDiffMode] = useModelState<string>("diff_mode");
+
   // FFT
   const [showFft, setShowFft] = useModelState<boolean>("show_fft");
-  const [showPlayback] = useModelState<boolean>("show_playback");
   const [disabledTools, setDisabledTools] = useModelState<string[]>("disabled_tools");
   const [hiddenTools, setHiddenTools] = useModelState<string[]>("hidden_tools");
   const toolVisibility = React.useMemo(
@@ -740,10 +823,23 @@ function Show3D() {
   const [isDraggingResizeInner, setIsDraggingResizeInner] = React.useState(false);
   const [isHoveringResize, setIsHoveringResize] = React.useState(false);
   const [isHoveringResizeInner, setIsHoveringResizeInner] = React.useState(false);
+  const resizeAspectRef = React.useRef<number | null>(null);
   const roiItems = React.useMemo(() => (roiList || []).map((roi, i) => normalizeROI(roi, i)), [roiList]);
   const selectedRoi = roiSelectedIdx >= 0 && roiSelectedIdx < roiItems.length ? roiItems[roiSelectedIdx] : null;
   const [showRoiResizeHint, setShowRoiResizeHint] = React.useState(true);
   const pendingRoiAddRef = React.useRef<{ row: number; col: number } | null>(null);
+
+  // Preview panel state (JS-only, shows ROI crop at full resolution — auto-shows when ROI selected)
+  const [previewZoom, setPreviewZoom] = React.useState({ zoom: 1, panX: 0, panY: 0 });
+  const previewCanvasRef = React.useRef<HTMLCanvasElement>(null);
+  const previewOverlayRef = React.useRef<HTMLCanvasElement>(null);
+  const previewContainerRef = React.useRef<HTMLDivElement>(null);
+  const [isDraggingPreviewPan, setIsDraggingPreviewPan] = React.useState(false);
+  const [previewPanStart, setPreviewPanStart] = React.useState<{ x: number; y: number; pX: number; pY: number } | null>(null);
+  const [previewCropDims, setPreviewCropDims] = React.useState<{ w: number; h: number } | null>(null);
+  const previewOffscreenRef = React.useRef<HTMLCanvasElement | null>(null);
+  const [previewVersion, setPreviewVersion] = React.useState(0);
+
   const updateSelectedRoi = React.useCallback((updates: Partial<ROIItem>) => {
     if (roiSelectedIdx < 0 || !roiList) return;
     const newList = [...roiList];
@@ -759,7 +855,7 @@ function Show3D() {
   const [isResizingMain, setIsResizingMain] = React.useState(false);
   const [resizeStart, setResizeStart] = React.useState<{ x: number, y: number, size: number } | null>(null);
   const rawFrameDataRef = React.useRef<Float32Array | null>(null);
-  const initialCanvasSizeRef = React.useRef<number>(imageWidthPxTrait > 0 ? imageWidthPxTrait : CANVAS_TARGET_SIZE);
+  const initialCanvasSizeRef = React.useRef<number>(canvasSizeTrait > 0 ? canvasSizeTrait : CANVAS_TARGET_SIZE);
 
   // Cursor readout state
   const [cursorInfo, setCursorInfo] = React.useState<{ row: number; col: number; value: number } | null>(null);
@@ -914,14 +1010,14 @@ function Show3D() {
 
   // Sync sizes from Python and set initial minimum
   React.useEffect(() => {
-    if (imageWidthPxTrait > 0) {
-      setMainCanvasSize(imageWidthPxTrait);
+    if (canvasSizeTrait > 0) {
+      setMainCanvasSize(canvasSizeTrait);
       // Only set initial size on first load (when ref is still default)
       if (initialCanvasSizeRef.current === CANVAS_TARGET_SIZE) {
-        initialCanvasSizeRef.current = imageWidthPxTrait;
+        initialCanvasSizeRef.current = canvasSizeTrait;
       }
     }
-  }, [imageWidthPxTrait]);
+  }, [canvasSizeTrait]);
 
   // Calculate display scale
   const displayScale = mainCanvasSize / Math.max(width, height);
@@ -931,6 +1027,23 @@ function Show3D() {
 
   // ROI FFT active: both ROI and FFT on, with a selected ROI
   const roiFftActive = effectiveShowFft && roiActive && roiSelectedIdx >= 0 && roiSelectedIdx < (roiList?.length ?? 0);
+
+  // Preview panel visible: auto-shows when ROI active with a selected ROI
+  const previewVisible = roiActive && roiSelectedIdx >= 0 && roiSelectedIdx < (roiList?.length ?? 0);
+  const selectedRoiKey = React.useMemo(() => {
+    if (!roiList || roiSelectedIdx < 0 || roiSelectedIdx >= roiList.length) return "";
+    const r = roiList[roiSelectedIdx];
+    return `${r.row},${r.col},${r.radius},${r.radius_inner},${r.width},${r.height},${r.shape}`;
+  }, [roiList, roiSelectedIdx]);
+
+  // Compute stats for ALL ROIs (memoized, recomputes on frame/ROI geometry change)
+  const allRoiStats = React.useMemo(() => {
+    const raw = rawFrameDataRef.current;
+    if (!roiActive || !roiItems.length || !raw || !width || !height) return [];
+    return roiItems.map(roi => computeROIPixelStats(raw, width, height, roi));
+    // frameBytes triggers recompute on frame change; displaySliceIdx triggers recompute during playback
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roiActive, roiItems, width, height, frameBytes, displaySliceIdx]);
 
   // Initialize reusable offscreen canvas + ImageData (resized when dimensions change)
   React.useEffect(() => {
@@ -948,18 +1061,17 @@ function Show3D() {
     const preventDefault = (e: WheelEvent) => e.preventDefault();
     const el1 = canvasContainerRef.current;
     const el2 = fftContainerRef.current;
+    const el3 = previewContainerRef.current;
     el1?.addEventListener("wheel", preventDefault, { passive: false });
     el2?.addEventListener("wheel", preventDefault, { passive: false });
+    el3?.addEventListener("wheel", preventDefault, { passive: false });
     return () => {
       el1?.removeEventListener("wheel", preventDefault);
       el2?.removeEventListener("wheel", preventDefault);
+      el3?.removeEventListener("wheel", preventDefault);
     };
-  }, [effectiveShowFft]);
+  }, [effectiveShowFft, previewVisible]);
 
-  // Stop playback when FFT is toggled on (FFT doesn't update during playback)
-  React.useEffect(() => {
-    if (effectiveShowFft && playing) setPlaying(false);
-  }, [effectiveShowFft, playing, setPlaying]);
 
   // Sync boomerang direction ref with reverse state
   React.useEffect(() => {
@@ -1227,7 +1339,8 @@ function Show3D() {
   }, [frameBytes, width, height, cmap, displayScale, canvasW, canvasH, imageVminPct, imageVmaxPct, logScale, autoContrast, percentileLow, percentileHigh]);
 
   // Draw effect: only zoom/pan changes — cheap, just drawImage from cached offscreen
-  React.useEffect(() => {
+  // useLayoutEffect prevents black flash when canvas dimensions change (resize)
+  React.useLayoutEffect(() => {
     if (!mainOffscreenRef.current || !canvasRef.current) return;
     const ctx = canvasRef.current.getContext("2d");
     if (!ctx) return;
@@ -1763,7 +1876,7 @@ function Show3D() {
   const [fftMagVersion, setFftMagVersion] = React.useState(0);
 
   React.useEffect(() => {
-    if (!effectiveShowFft || !rawFrameDataRef.current || playing) return;
+    if (!effectiveShowFft || !rawFrameDataRef.current) return;
     let cancelled = false;
 
     const doCompute = async () => {
@@ -1820,7 +1933,7 @@ function Show3D() {
     doCompute();
 
     return () => { cancelled = true; };
-  }, [effectiveShowFft, frameBytes, playing, width, height, gpuReady, roiFftActive, roiList, roiSelectedIdx]);
+  }, [effectiveShowFft, frameBytes, displaySliceIdx, width, height, gpuReady, roiFftActive, roiList, roiSelectedIdx]);
 
   // Clear FFT measurement when ROI FFT state changes
   React.useEffect(() => { setFftClickInfo(null); }, [roiFftActive, roiSelectedIdx]);
@@ -1954,6 +2067,115 @@ function Show3D() {
     }
   }, [effectiveShowFft, fftZoom, fftPanX, fftPanY, canvasW, canvasH, pixelSize, width, height, fftDataRange, fftVminPct, fftVmaxPct, fftColormap, fftLogScale, fftShowColorbar, fftClickInfo, fftCropDims]);
 
+  // -------------------------------------------------------------------------
+  // Preview panel — cache colormapped offscreen (only recomputes when ROI
+  // geometry, data, or display settings change — NOT on zoom/pan)
+  // -------------------------------------------------------------------------
+  React.useEffect(() => {
+    if (!previewVisible || !rawFrameDataRef.current) {
+      previewOffscreenRef.current = null;
+      return;
+    }
+
+    const raw = rawFrameDataRef.current;
+    if (!roiList || roiSelectedIdx < 0 || roiSelectedIdx >= roiList.length) return;
+
+    const roi = roiList[roiSelectedIdx];
+    const crop = cropROIRegion(raw, width, height, roi);
+    if (!crop) {
+      previewOffscreenRef.current = null;
+      setPreviewCropDims(null);
+      setPreviewVersion(v => v + 1);
+      return;
+    }
+
+    setPreviewCropDims({ w: crop.cropW, h: crop.cropH });
+
+    const processed = logScale ? applyLogScale(crop.cropped) : crop.cropped;
+    const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
+
+    let vmin: number, vmax: number;
+    if (imageDataRange.min !== imageDataRange.max && (imageVminPct > 0 || imageVmaxPct < 100)) {
+      const mainProcessed = logScale ? applyLogScale(raw) : raw;
+      const mainRange = findDataRange(mainProcessed);
+      ({ vmin, vmax } = sliderRange(mainRange.min, mainRange.max, imageVminPct, imageVmaxPct));
+    } else if (autoContrast) {
+      ({ vmin, vmax } = percentileClip(processed, 2, 98));
+    } else {
+      const r = findDataRange(processed);
+      vmin = r.min;
+      vmax = r.max;
+    }
+
+    const offscreen = renderToOffscreen(processed, crop.cropW, crop.cropH, lut, vmin, vmax);
+    previewOffscreenRef.current = offscreen;
+    setPreviewVersion(v => v + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewVisible, selectedRoiKey, cmap, logScale, autoContrast, imageVminPct, imageVmaxPct, imageDataRange, width, height, frameBytes, displaySliceIdx]);
+
+  // -------------------------------------------------------------------------
+  // Preview panel — compute aspect-ratio-aware canvas dimensions
+  // -------------------------------------------------------------------------
+  const previewCanvasDims = React.useMemo(() => {
+    if (!previewCropDims) return { w: canvasW, h: canvasH };
+    const { w: cropW, h: cropH } = previewCropDims;
+    const aspect = cropW / cropH;
+    if (aspect >= 1) {
+      return { w: canvasW, h: Math.max(20, Math.round(canvasW / aspect)) };
+    } else {
+      return { w: Math.max(20, Math.round(canvasH * aspect)), h: canvasH };
+    }
+  }, [previewCropDims, canvasW, canvasH]);
+
+  // -------------------------------------------------------------------------
+  // Preview panel — draw cached offscreen with zoom/pan (fast, no recompute)
+  // -------------------------------------------------------------------------
+  React.useEffect(() => {
+    const canvas = previewCanvasRef.current;
+    if (!canvas || !previewVisible) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const pw = previewCanvasDims.w;
+    const ph = previewCanvasDims.h;
+    const offscreen = previewOffscreenRef.current;
+    if (!offscreen || !previewCropDims) {
+      ctx.clearRect(0, 0, pw, ph);
+      return;
+    }
+
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, pw, ph);
+
+    const { zoom: pz, panX: ppX, panY: ppY } = previewZoom;
+    if (pz !== 1 || ppX !== 0 || ppY !== 0) {
+      ctx.save();
+      const cx = pw / 2;
+      const cy = ph / 2;
+      ctx.translate(cx + ppX, cy + ppY);
+      ctx.scale(pz, pz);
+      ctx.translate(-cx, -cy);
+      ctx.drawImage(offscreen, 0, 0, previewCropDims.w, previewCropDims.h, 0, 0, pw, ph);
+      ctx.restore();
+    } else {
+      ctx.drawImage(offscreen, 0, 0, previewCropDims.w, previewCropDims.h, 0, 0, pw, ph);
+    }
+  }, [previewVisible, previewVersion, previewZoom, previewCanvasDims, previewCropDims]);
+
+  // Preview overlay — scale bar + zoom indicator
+  React.useEffect(() => {
+    const overlay = previewOverlayRef.current;
+    if (!overlay || !previewVisible) return;
+    const ctx = overlay.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+    if (previewCropDims && pixelSize > 0) {
+      const unit = "Å" as const;
+      drawScaleBarHiDPI(overlay, DPR, previewZoom.zoom, pixelSize, unit, previewCropDims.w);
+    }
+  }, [previewVisible, previewZoom, previewCropDims, previewCanvasDims, pixelSize]);
+
   // Mouse handlers
   const handleWheel = (e: React.WheelEvent) => {
     if (lockView) return;
@@ -1981,7 +2203,7 @@ function Show3D() {
     if (lockRoi) return;
     const clampedRow = Math.max(0, Math.min(height - 1, Math.round(row)));
     const clampedCol = Math.max(0, Math.min(width - 1, Math.round(col)));
-    const next = [...roiItems, createROI(clampedRow, clampedCol, shape, roiItems.length)];
+    const next = [...roiItems, createROI(clampedRow, clampedCol, shape, roiItems.length, width, height)];
     setRoiList(next);
     setRoiSelectedIdx(next.length - 1);
     setShowRoiResizeHint(true);
@@ -2305,6 +2527,8 @@ function Show3D() {
         return;
       }
       if (isNearResizeHandle(imgCol, imgRow)) {
+        e.preventDefault();
+        resizeAspectRef.current = selectedRoi && (selectedRoi.shape === "rectangle") && selectedRoi.width > 0 && selectedRoi.height > 0 ? selectedRoi.width / selectedRoi.height : null;
         setIsDraggingResize(true);
         return;
       }
@@ -2312,6 +2536,8 @@ function Show3D() {
         for (let ri = roiItems.length - 1; ri >= 0; ri--) {
           const roi = roiItems[ri];
           if (isNearEdge(imgCol, imgRow, roi)) {
+            e.preventDefault();
+            resizeAspectRef.current = roi && (roi.shape === "rectangle") && roi.width > 0 && roi.height > 0 ? roi.width / roi.height : null;
             setRoiSelectedIdx(ri);
             setIsDraggingResize(true);
             return;
@@ -2338,6 +2564,20 @@ function Show3D() {
   };
 
   const handleCanvasMouseMove = (e: React.MouseEvent) => {
+    // Fast path: during pan drag, skip all cursor/hover/lens work — just update pan
+    if (isDraggingPan && panStart && !lockView) {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const dx = (e.clientX - panStart.x) * scaleX;
+      const dy = (e.clientY - panStart.y) * scaleY;
+      setPanX(panStart.pX + dx);
+      setPanY(panStart.pY + dy);
+      return;
+    }
+
     // Cursor readout: convert screen position to image pixel coordinates
     const canvas = canvasRef.current;
     if (canvas && rawFrameDataRef.current) {
@@ -2453,10 +2693,14 @@ function Show3D() {
       const { imgCol: ic, imgRow: ir } = screenToImg(e);
       const shape = selectedRoi.shape || "circle";
       if (shape === "rectangle") {
-        updateSelectedRoi({
-          width: Math.max(2, Math.round(Math.abs(ic - selectedRoi.col) * 2)),
-          height: Math.max(2, Math.round(Math.abs(ir - selectedRoi.row) * 2)),
-        });
+        let newW = Math.max(2, Math.round(Math.abs(ic - selectedRoi.col) * 2));
+        let newH = Math.max(2, Math.round(Math.abs(ir - selectedRoi.row) * 2));
+        if (e.shiftKey && resizeAspectRef.current != null) {
+          const aspect = resizeAspectRef.current;
+          if (newW / newH > aspect) newH = Math.max(2, Math.round(newW / aspect));
+          else newW = Math.max(2, Math.round(newH * aspect));
+        }
+        updateSelectedRoi({ width: newW, height: newH });
       } else {
         const newR = shape === "square"
           ? Math.max(Math.abs(ic - selectedRoi.col), Math.abs(ir - selectedRoi.row))
@@ -2480,15 +2724,6 @@ function Show3D() {
 
     if (!lockRoi && isDraggingROI) {
       updateROI(e);
-    } else if (!lockView && isDraggingPan && panStart) {
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
-      const dx = (e.clientX - panStart.x) * scaleX;
-      const dy = (e.clientY - panStart.y) * scaleY;
-      setPanX(panStart.pX + dx);
-      setPanY(panStart.pY + dy);
     }
   };
 
@@ -2713,6 +2948,51 @@ function Show3D() {
 
   const fftNeedsReset = fftZoom !== 1 || fftPanX !== 0 || fftPanY !== 0;
 
+  // Preview panel zoom/pan handlers
+  const handlePreviewWheel = (e: React.WheelEvent) => {
+    if (lockView) return;
+    e.preventDefault();
+    const canvas = previewCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const pw = previewCanvasDims.w;
+    const ph = previewCanvasDims.h;
+    const mouseCanvasX = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const mouseCanvasY = (e.clientY - rect.top) * (canvas.height / rect.height);
+    const cx = pw / 2;
+    const cy = ph / 2;
+    const mouseImageX = (mouseCanvasX - cx - previewZoom.panX) / previewZoom.zoom + cx;
+    const mouseImageY = (mouseCanvasY - cy - previewZoom.panY) / previewZoom.zoom + cy;
+    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+    const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, previewZoom.zoom * zoomFactor));
+    const newPanX = mouseCanvasX - (mouseImageX - cx) * newZoom - cx;
+    const newPanY = mouseCanvasY - (mouseImageY - cy) * newZoom - cy;
+    setPreviewZoom({ zoom: newZoom, panX: newPanX, panY: newPanY });
+  };
+
+  const handlePreviewMouseDown = (e: React.MouseEvent) => {
+    if (lockView) return;
+    setIsDraggingPreviewPan(true);
+    setPreviewPanStart({ x: e.clientX, y: e.clientY, pX: previewZoom.panX, pY: previewZoom.panY });
+  };
+
+  const handlePreviewMouseMove = (e: React.MouseEvent) => {
+    if (!isDraggingPreviewPan || !previewPanStart) return;
+    const dx = e.clientX - previewPanStart.x;
+    const dy = e.clientY - previewPanStart.y;
+    setPreviewZoom(prev => ({ ...prev, panX: previewPanStart.pX + dx, panY: previewPanStart.pY + dy }));
+  };
+
+  const handlePreviewMouseUp = () => {
+    setIsDraggingPreviewPan(false);
+    setPreviewPanStart(null);
+  };
+
+  const handlePreviewDoubleClick = () => {
+    if (lockView) return;
+    setPreviewZoom({ zoom: 1, panX: 0, panY: 0 });
+  };
+
   // Resize handlers
   const handleMainResizeStart = (e: React.MouseEvent) => {
     if (lockView) return;
@@ -2724,19 +3004,30 @@ function Show3D() {
 
   React.useEffect(() => {
     if (!isResizingMain) return;
+    let rafId = 0;
+    let latestSize = resizeStart ? resizeStart.size : mainCanvasSize;
     const handleMouseMove = (e: MouseEvent) => {
       if (!resizeStart) return;
       const delta = Math.max(e.clientX - resizeStart.x, e.clientY - resizeStart.y);
       // Minimum is the initial size, maximum is 800px
-      setMainCanvasSize(Math.max(initialCanvasSizeRef.current, Math.min(800, resizeStart.size + delta)));
+      latestSize = Math.max(initialCanvasSizeRef.current, Math.min(800, resizeStart.size + delta));
+      if (!rafId) {
+        rafId = requestAnimationFrame(() => {
+          rafId = 0;
+          setMainCanvasSize(latestSize);
+        });
+      }
     };
     const handleMouseUp = () => {
+      cancelAnimationFrame(rafId);
+      setMainCanvasSize(latestSize);
       setIsResizingMain(false);
       setResizeStart(null);
     };
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
     return () => {
+      cancelAnimationFrame(rafId);
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
@@ -2750,7 +3041,7 @@ function Show3D() {
 
     switch (e.key) {
         case " ":
-          if (!lockPlayback && !effectiveShowFft) {
+          if (!lockPlayback) {
             setPlaying(!playing);
             handled = true;
           }
@@ -2853,11 +3144,16 @@ function Show3D() {
       onMouseDownCapture={handleRootMouseDownCapture}
       sx={{ ...container.root, bgcolor: themeColors.bg, color: themeColors.text, outline: "none" }}
     >
-      <Stack direction="row" spacing={`${SPACING.LG}px`}>
+      <Stack direction="row" spacing={`${SPACING.SM}px`}>
         <Box>
           {/* Title row */}
-          <Typography variant="caption" sx={{ ...typography.label, color: themeColors.accent, mb: `${SPACING.XS}px`, display: "block" }}>
+          <Typography variant="caption" sx={{ ...typography.label, color: themeColors.accent, mb: `${SPACING.XS}px`, display: "block", height: 16, lineHeight: "16px", overflow: "hidden" }}>
             {title || "Image"}
+            {diffMode !== "off" && (
+              <Typography component="span" sx={{ fontSize: 9, fontWeight: "bold", color: "#fff", bgcolor: "#e65100", px: 0.5, py: 0.125, ml: 0.5, verticalAlign: "middle" }}>
+                {diffMode === "previous" ? "\u0394-PREV" : "\u0394-FIRST"}
+              </Typography>
+            )}
             <InfoTooltip text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
               <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>FFT: Show power spectrum (Fourier transform) alongside image.</Typography>
@@ -2882,7 +3178,7 @@ function Show3D() {
           </Typography>
           {/* Controls row */}
           {(!hideDisplay || !hideProfile || !hideRoi || !hideExport || !hideView) && (
-            <Box sx={{ display: "flex", alignItems: "center", gap: "4px", mb: `${SPACING.XS}px`, height: 28, maxWidth: canvasW }}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: "4px", mb: `${SPACING.XS}px`, height: 28 }}>
               {!hideDisplay && (
                 <>
                   <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT:</Typography>
@@ -2897,15 +3193,9 @@ function Show3D() {
                     const on = e.target.checked;
                     setProfileActive(on);
                     if (on) {
-                      if (!lockRoi) {
-                        setRoiActive(false);
-                        setRoiSelectedIdx(-1);
-                      }
+                      if (!lockRoi) { setRoiActive(false); setRoiSelectedIdx(-1); }
                     } else {
-                      setProfileLine([]);
-                      setProfileData(null);
-                      setHoveredProfileEndpoint(null);
-                      setIsHoveringProfileLine(false);
+                      setProfileLine([]); setProfileData(null); setHoveredProfileEndpoint(null); setIsHoveringProfileLine(false);
                     }
                   }} disabled={lockProfile} size="small" sx={switchStyles.small} />
                 </>
@@ -2917,13 +3207,8 @@ function Show3D() {
                     checked={showLens}
                     onChange={() => {
                       if (lockDisplay) return;
-                      if (!showLens) {
-                        setShowLens(true);
-                        setLensPos({ row: Math.floor(height / 2), col: Math.floor(width / 2) });
-                      } else {
-                        setShowLens(false);
-                        setLensPos(null);
-                      }
+                      if (!showLens) { setShowLens(true); setLensPos({ row: Math.floor(height / 2), col: Math.floor(width / 2) }); }
+                      else { setShowLens(false); setLensPos(null); }
                     }}
                     disabled={lockDisplay}
                     size="small"
@@ -2938,19 +3223,10 @@ function Show3D() {
                     if (lockRoi) return;
                     const on = e.target.checked;
                     if (on) {
-                      setRoiActive(true);
-                      setShowRoiResizeHint(true);
-                      if (!lockProfile) {
-                        setProfileActive(false);
-                        setProfileLine([]);
-                        setProfileData(null);
-                        setHoveredProfileEndpoint(null);
-                        setIsHoveringProfileLine(false);
-                      }
+                      setRoiActive(true); setShowRoiResizeHint(true);
+                      if (!lockProfile) { setProfileActive(false); setProfileLine([]); setProfileData(null); setHoveredProfileEndpoint(null); setIsHoveringProfileLine(false); }
                     } else {
-                      setRoiActive(false);
-                      setRoiSelectedIdx(-1);
-                      pendingRoiAddRef.current = null;
+                      setRoiActive(false); setRoiSelectedIdx(-1); pendingRoiAddRef.current = null;
                     }
                   }} disabled={lockRoi} size="small" sx={switchStyles.small} />
                 </>
@@ -3042,25 +3318,16 @@ function Show3D() {
           </Box>
           {/* Statistics bar - right below the image */}
           {showStats && !hideStats && (
-            <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", maxWidth: canvasW, boxSizing: "border-box", opacity: lockStats ? 0.7 : 1 }}>
+            <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", boxSizing: "border-box", opacity: lockStats ? 0.7 : 1 }}>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.mean : statsMean)}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.min : statsMin)}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.max : statsMax)}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.std : statsStd)}</Box></Typography>
-              {!hideRoi && roiActive && !localStats && roiStats && roiStats.mean !== undefined && (
-                <>
-                  <Box sx={{ borderLeft: `1px solid ${themeColors.border}`, height: 14 }} />
-                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>ROI <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(roiStats.mean)}</Box></Typography>
-                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(roiStats.min)}</Box></Typography>
-                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(roiStats.max)}</Box></Typography>
-                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(roiStats.std)}</Box></Typography>
-                </>
-              )}
             </Box>
           )}
           {/* Line profile sparkline */}
           {!hideProfile && profileActive && (
-            <Box sx={{ mt: `${SPACING.XS}px`, maxWidth: canvasW, boxSizing: "border-box" }}>
+            <Box sx={{ mt: `${SPACING.XS}px`, boxSizing: "border-box" }}>
               <canvas
                 ref={profileCanvasRef}
                 onMouseMove={handleProfileMouseMove}
@@ -3075,7 +3342,7 @@ function Show3D() {
           )}
           {/* ROI sparkline plot */}
           {!hideRoi && roiActive && showRoiPlot && roiPlotData && roiPlotData.byteLength >= 4 && (
-            <Box sx={{ mt: `${SPACING.XS}px`, maxWidth: canvasW, boxSizing: "border-box" }}>
+            <Box sx={{ mt: `${SPACING.XS}px`, boxSizing: "border-box" }}>
               <canvas
                 ref={roiPlotCanvasRef}
                 style={{ width: canvasW, height: 76, display: "block", border: `1px solid ${themeColors.border}` }}
@@ -3099,11 +3366,17 @@ function Show3D() {
                     <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Colorbar:</Typography>
                     <Switch checked={showColorbar} onChange={(e) => { if (!lockDisplay) setShowColorbar(e.target.checked); }} disabled={lockDisplay} size="small" sx={switchStyles.small} />
                   </Box>
-                  {/* Row 2: Color + zoom indicator */}
+                  {/* Row 2: Color + Diff + zoom indicator */}
                   <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                     <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Color:</Typography>
                     <Select disabled={lockDisplay} size="small" value={cmap} onChange={(e) => setCmap(e.target.value)} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}>
                       {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
+                    </Select>
+                    <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Diff:</Typography>
+                    <Select disabled={lockDisplay} value={diffMode} onChange={(e) => setDiffMode(e.target.value)} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps}>
+                      <MenuItem value="off">Off</MenuItem>
+                      <MenuItem value="previous">Prev</MenuItem>
+                      <MenuItem value="first">First</MenuItem>
                     </Select>
                     {zoom !== 1 && (
                       <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.accent, fontWeight: "bold" }}>{zoom.toFixed(1)}x</Typography>
@@ -3140,6 +3413,101 @@ function Show3D() {
               </Box>
             </Box>
           )}
+          {/* Playback controls - two rows, constrained to image width */}
+          {/* Row 1: Transport controls + position slider (with loop range handles when Loop is ON) */}
+          {showControls && !hidePlayback && (() => { const activeIdx = playing ? displaySliceIdx : sliceIdx; return (<>
+          <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, width: canvasW, boxSizing: "border-box", opacity: lockPlayback ? 0.5 : 1, pointerEvents: lockPlayback ? "none" : "auto" }}>
+            <Stack direction="row" spacing={0} sx={{ flexShrink: 0, mr: 0.5 }}>
+              <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) { setReverse(true); setPlaying(true); } }} sx={{ color: reverse && playing ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
+                <FastRewindIcon sx={{ fontSize: 18 }} />
+              </IconButton>
+              <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) setPlaying(!playing); }} sx={{ color: themeColors.accent, p: 0.25 }}>
+                {playing ? <PauseIcon sx={{ fontSize: 18 }} /> : <PlayArrowIcon sx={{ fontSize: 18 }} />}
+              </IconButton>
+              <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) { setReverse(false); setPlaying(true); } }} sx={{ color: !reverse && playing ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
+                <FastForwardIcon sx={{ fontSize: 18 }} />
+              </IconButton>
+              <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) { setPlaying(false); setSliceIdx(loop ? Math.max(0, loopStart) : 0); } }} sx={{ color: themeColors.textMuted, p: 0.25 }}>
+                <StopIcon sx={{ fontSize: 16 }} />
+              </IconButton>
+            </Stack>
+            {loop ? (
+              <Slider
+                value={[loopStart, activeIdx, effectiveLoopEnd]}
+                onChange={(_, v) => {
+                  if (lockPlayback) return;
+                  const vals = v as number[];
+                  setLoopStart(vals[0]);
+                  if (playing) setPlaying(false);
+                  setSliceIdx(vals[1]);
+                  setLoopEnd(vals[2]);
+                }}
+                disabled={lockPlayback}
+                disableSwap
+                min={0}
+                max={nSlices - 1}
+                size="small"
+                valueLabelDisplay="auto"
+                valueLabelFormat={(v) => `${v + 1}`}
+                marks={bookmarkedFrames.map(f => ({ value: f }))}
+                sx={{
+                  ...sliderStyles.small,
+                  flex: 1,
+                  minWidth: 40,
+                  "& .MuiSlider-thumb[data-index='0']": { width: 8, height: 8, bgcolor: themeColors.textMuted },
+                  "& .MuiSlider-thumb[data-index='1']": { width: 12, height: 12 },
+                  "& .MuiSlider-thumb[data-index='2']": { width: 8, height: 8, bgcolor: themeColors.textMuted },
+                  "& .MuiSlider-mark": { bgcolor: themeColors.accent, width: 4, height: 4, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" },
+                  "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px" },
+                }}
+              />
+            ) : (
+              <Slider
+                value={activeIdx}
+                min={0}
+                max={nSlices - 1}
+                onChange={(_, v) => { if (!lockPlayback) { if (playing) setPlaying(false); setSliceIdx(v as number); } }}
+                disabled={lockPlayback}
+                size="small"
+                valueLabelDisplay="auto"
+                valueLabelFormat={(v) => `${v + 1}`}
+                marks={bookmarkedFrames.map(f => ({ value: f }))}
+                sx={{ ...sliderStyles.small, flex: 1, minWidth: 40, "& .MuiSlider-mark": { bgcolor: themeColors.accent, width: 4, height: 4, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" } }}
+              />
+            )}
+            <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: `${String(nSlices).length * 2 + 2}ch`, maxWidth: "50%", textAlign: "right", flexShrink: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {activeIdx + 1}/{nSlices}
+              {labels && labels.length > activeIdx && ` ${labels[activeIdx]}`}
+              {timestamps && timestamps.length > 0 && activeIdx < timestamps.length && ` (${formatNumber(timestamps[activeIdx])} ${timestampUnit})`}
+            </Typography>
+          </Box>
+          {/* Row 2: FPS, Loop, Bounce, Bookmark */}
+          <Box sx={{ ...controlRow, mt: `${SPACING.XS}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, width: canvasW, boxSizing: "border-box", opacity: lockPlayback ? 0.5 : 1, pointerEvents: lockPlayback ? "none" : "auto" }}>
+            <Typography sx={{ ...typography.label, color: themeColors.textMuted, flexShrink: 0 }}>fps</Typography>
+            <Slider disabled={lockPlayback} value={fps} min={1} max={60} step={1} onChange={(_, v) => { if (!lockPlayback) setFps(v as number); }} size="small" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
+            <Typography sx={{ ...typography.label, color: themeColors.textMuted, minWidth: 14, flexShrink: 0 }}>{Math.round(fps)}</Typography>
+            <Typography sx={{ ...typography.label, color: themeColors.textMuted, flexShrink: 0 }}>Loop</Typography>
+            <Switch size="small" checked={loop} onChange={() => { if (!lockPlayback) setLoop(!loop); }} disabled={lockPlayback} sx={{ ...switchStyles.small, flexShrink: 0 }} />
+            <Typography sx={{ ...typography.label, color: themeColors.textMuted, flexShrink: 0 }}>Bounce</Typography>
+            <Switch size="small" checked={boomerang} onChange={() => { if (!lockPlayback) setBoomerang(!boomerang); }} disabled={lockPlayback} sx={{ ...switchStyles.small, flexShrink: 0 }} />
+            <Tooltip title="Bookmark current frame" arrow>
+              <IconButton size="small" disabled={lockPlayback} onClick={() => {
+                if (lockPlayback) return;
+                const set = new Set(bookmarkedFrames);
+                if (set.has(activeIdx)) { set.delete(activeIdx); } else { set.add(activeIdx); }
+                setBookmarkedFrames(Array.from(set).sort((a, b) => a - b));
+              }} sx={{ color: bookmarkedFrames.includes(activeIdx) ? themeColors.accent : themeColors.textMuted, p: 0.25, flexShrink: 0 }}>
+                <Typography sx={{ fontSize: 14, lineHeight: 1 }}>{bookmarkedFrames.includes(activeIdx) ? "\u2605" : "\u2606"}</Typography>
+              </IconButton>
+            </Tooltip>
+            {loop && (loopStart > 0 || (loopEnd >= 0 && loopEnd < nSlices - 1)) && (
+              <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) { setLoopStart(0); setLoopEnd(-1); } }} sx={{ color: themeColors.textMuted, p: 0.25, flexShrink: 0 }} title="Reset loop range">
+                <Typography sx={{ fontSize: 10, lineHeight: 1 }}>Reset</Typography>
+              </IconButton>
+            )}
+            <Box sx={{ flex: 1 }} />
+          </Box>
+          </>); })()}
           {/* ROI settings row (when ROI is active) */}
           {!hideRoi && roiActive && (
             <Box sx={{ mt: `${SPACING.XS}px`, display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, width: "fit-content" }}>
@@ -3244,6 +3612,58 @@ function Show3D() {
           )}
         </Box>
 
+        {/* Preview Panel — ROI crop at full resolution with aspect ratio */}
+        {previewVisible && (
+          <Box sx={{ width: canvasW }}>
+            {/* Spacer — matches main panel title row height for canvas alignment */}
+            <Box sx={{ mb: `${SPACING.XS}px`, height: 16 }} />
+            {/* Header row — matches main panel controls row height */}
+            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
+              <Typography sx={{ ...typography.label, color: themeColors.accentGreen }}>
+                Preview{previewCropDims ? ` (${previewCropDims.w}\u00d7${previewCropDims.h})` : ""}
+              </Typography>
+              {!hideView && (
+                <Button size="small" sx={compactButton} disabled={lockView || (previewZoom.zoom === 1 && previewZoom.panX === 0 && previewZoom.panY === 0)} onClick={handlePreviewDoubleClick}>Reset</Button>
+              )}
+            </Stack>
+            <Box
+              ref={previewContainerRef}
+              sx={{ position: "relative", bgcolor: "#000", border: `1px solid ${themeColors.border}`, cursor: lockView ? "default" : "grab", width: previewCanvasDims.w, height: previewCanvasDims.h }}
+              onWheel={lockView ? undefined : handlePreviewWheel}
+              onDoubleClick={lockView ? undefined : handlePreviewDoubleClick}
+              onMouseDown={lockView ? undefined : handlePreviewMouseDown}
+              onMouseMove={lockView ? undefined : handlePreviewMouseMove}
+              onMouseUp={handlePreviewMouseUp}
+              onMouseLeave={handlePreviewMouseUp}
+            >
+              <canvas ref={previewCanvasRef} width={previewCanvasDims.w} height={previewCanvasDims.h} style={{ width: previewCanvasDims.w, height: previewCanvasDims.h, imageRendering: "pixelated" }} />
+              <canvas ref={previewOverlayRef} width={Math.round(previewCanvasDims.w * DPR)} height={Math.round(previewCanvasDims.h * DPR)} style={{ position: "absolute", top: 0, left: 0, width: previewCanvasDims.w, height: previewCanvasDims.h, pointerEvents: "none" }} />
+              {!hideView && (
+                <Box onMouseDown={handleMainResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: lockView ? "default" : "nwse-resize", opacity: lockView ? 0.3 : 0.6, pointerEvents: lockView ? "none" : "auto", background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, "&:hover": { opacity: lockView ? 0.3 : 1 } }} />
+              )}
+            </Box>
+            {/* All-ROI Stats — one row per ROI, same style as main stats bar */}
+            {!hideStats && showStats && allRoiStats.length > 0 && (
+              <Box sx={{ mt: `${SPACING.XS}px`, display: "flex", flexDirection: "column", gap: 0.5, width: previewCanvasDims.w }}>
+                {allRoiStats.map((stats, i) => {
+                  if (!stats) return null;
+                  const color = roiItems[i]?.color || ROI_COLORS[i % ROI_COLORS.length];
+                  const isSelected = i === roiSelectedIdx;
+                  return (
+                    <Box key={i} sx={{ px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", border: isSelected ? `1px solid ${color}` : `1px solid transparent` }}>
+                      <Box sx={{ width: 8, height: 8, bgcolor: color, borderRadius: "50%", flexShrink: 0 }} />
+                      <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color }}>{formatNumber(stats.mean)}</Box></Typography>
+                      <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color }}>{formatNumber(stats.min)}</Box></Typography>
+                      <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color }}>{formatNumber(stats.max)}</Box></Typography>
+                      <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color }}>{formatNumber(stats.std)}</Box></Typography>
+                    </Box>
+                  );
+                })}
+              </Box>
+            )}
+          </Box>
+        )}
+
         {/* FFT Panel - same size as main image, canvas-aligned with spacer */}
         {effectiveShowFft && (
           <Box sx={{ width: canvasW }}>
@@ -3252,7 +3672,7 @@ function Show3D() {
             {/* Controls row — matches main panel controls row height */}
             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
               {fftCropDims ? (
-                <Typography sx={{ fontSize: 10, fontFamily: "monospace", color: themeColors.accentGreen }}>
+                <Typography sx={{ ...typography.label, color: themeColors.accentGreen }}>
                   ROI FFT ({fftCropDims.cropWidth}&times;{fftCropDims.cropHeight})
                 </Typography>
               ) : <Box />}
@@ -3339,105 +3759,6 @@ function Show3D() {
           </Box>
         )}
       </Stack>
-
-      {/* Playback controls - two rows, constrained to image width */}
-      {/* Row 1: Transport controls + position slider (with loop range handles when Loop is ON) */}
-      {showControls && !hidePlayback && (() => { const activeIdx = playing ? displaySliceIdx : sliceIdx; return (<>
-      <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, width: canvasW, maxWidth: canvasW, boxSizing: "border-box", opacity: lockPlayback ? 0.5 : 1, pointerEvents: lockPlayback ? "none" : "auto" }}>
-        {!effectiveShowFft && (
-        <Stack direction="row" spacing={0} sx={{ flexShrink: 0, mr: 0.5 }}>
-          <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) { setReverse(true); setPlaying(true); } }} sx={{ color: reverse && playing ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
-            <FastRewindIcon sx={{ fontSize: 18 }} />
-          </IconButton>
-          <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) setPlaying(!playing); }} sx={{ color: themeColors.accent, p: 0.25 }}>
-            {playing ? <PauseIcon sx={{ fontSize: 18 }} /> : <PlayArrowIcon sx={{ fontSize: 18 }} />}
-          </IconButton>
-          <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) { setReverse(false); setPlaying(true); } }} sx={{ color: !reverse && playing ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
-            <FastForwardIcon sx={{ fontSize: 18 }} />
-          </IconButton>
-          <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) { setPlaying(false); setSliceIdx(loop ? Math.max(0, loopStart) : 0); } }} sx={{ color: themeColors.textMuted, p: 0.25 }}>
-            <StopIcon sx={{ fontSize: 16 }} />
-          </IconButton>
-        </Stack>
-        )}
-        {loop && !effectiveShowFft ? (
-          <Slider
-            value={[loopStart, activeIdx, effectiveLoopEnd]}
-            onChange={(_, v) => {
-              if (lockPlayback) return;
-              const vals = v as number[];
-              setLoopStart(vals[0]);
-              if (playing) setPlaying(false);
-              setSliceIdx(vals[1]);
-              setLoopEnd(vals[2]);
-            }}
-            disabled={lockPlayback}
-            disableSwap
-            min={0}
-            max={nSlices - 1}
-            size="small"
-            valueLabelDisplay="auto"
-            valueLabelFormat={(v) => `${v + 1}`}
-            marks={bookmarkedFrames.map(f => ({ value: f }))}
-            sx={{
-              ...sliderStyles.small,
-              flex: 1,
-              minWidth: 40,
-              "& .MuiSlider-thumb[data-index='0']": { width: 8, height: 8, bgcolor: themeColors.textMuted },
-              "& .MuiSlider-thumb[data-index='1']": { width: 12, height: 12 },
-              "& .MuiSlider-thumb[data-index='2']": { width: 8, height: 8, bgcolor: themeColors.textMuted },
-              "& .MuiSlider-mark": { bgcolor: themeColors.accent, width: 4, height: 4, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" },
-              "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px" },
-            }}
-          />
-        ) : (
-          <Slider
-            value={activeIdx}
-            min={0}
-            max={nSlices - 1}
-            onChange={(_, v) => { if (!lockPlayback) { if (playing) setPlaying(false); setSliceIdx(v as number); } }}
-            disabled={lockPlayback}
-            size="small"
-            valueLabelDisplay="auto"
-            valueLabelFormat={(v) => `${v + 1}`}
-            marks={bookmarkedFrames.map(f => ({ value: f }))}
-            sx={{ ...sliderStyles.small, flex: 1, minWidth: 40, "& .MuiSlider-mark": { bgcolor: themeColors.accent, width: 4, height: 4, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" } }}
-          />
-        )}
-        <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 28, textAlign: "right", flexShrink: 0 }}>
-          {activeIdx + 1}/{nSlices}
-          {labels && labels.length > activeIdx && ` ${labels[activeIdx]}`}
-          {timestamps && timestamps.length > 0 && activeIdx < timestamps.length && ` (${formatNumber(timestamps[activeIdx])} ${timestampUnit})`}
-        </Typography>
-      </Box>
-      {/* Row 2: FPS, Loop, Bounce, Bookmark (hidden when FFT is on unless show_playback) */}
-      {(!effectiveShowFft || showPlayback) && (<Box sx={{ ...controlRow, mt: `${SPACING.XS}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, width: canvasW, maxWidth: canvasW, boxSizing: "border-box", opacity: lockPlayback ? 0.5 : 1, pointerEvents: lockPlayback ? "none" : "auto" }}>
-        <Typography sx={{ ...typography.label, color: themeColors.textMuted, flexShrink: 0 }}>fps</Typography>
-        <Slider disabled={lockPlayback} value={fps} min={1} max={60} step={1} onChange={(_, v) => { if (!lockPlayback) setFps(v as number); }} size="small" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
-        <Typography sx={{ ...typography.label, color: themeColors.textMuted, minWidth: 14, flexShrink: 0 }}>{Math.round(fps)}</Typography>
-        <Typography sx={{ ...typography.label, color: themeColors.textMuted, flexShrink: 0 }}>Loop</Typography>
-        <Switch size="small" checked={loop} onChange={() => { if (!lockPlayback) setLoop(!loop); }} disabled={lockPlayback} sx={{ ...switchStyles.small, flexShrink: 0 }} />
-        <Typography sx={{ ...typography.label, color: themeColors.textMuted, flexShrink: 0 }}>Bounce</Typography>
-        <Switch size="small" checked={boomerang} onChange={() => { if (!lockPlayback) setBoomerang(!boomerang); }} disabled={lockPlayback} sx={{ ...switchStyles.small, flexShrink: 0 }} />
-        <Tooltip title="Bookmark current frame" arrow>
-          <IconButton size="small" disabled={lockPlayback} onClick={() => {
-            if (lockPlayback) return;
-            const set = new Set(bookmarkedFrames);
-            if (set.has(activeIdx)) { set.delete(activeIdx); } else { set.add(activeIdx); }
-            setBookmarkedFrames(Array.from(set).sort((a, b) => a - b));
-          }} sx={{ color: bookmarkedFrames.includes(activeIdx) ? themeColors.accent : themeColors.textMuted, p: 0.25, flexShrink: 0 }}>
-            <Typography sx={{ fontSize: 14, lineHeight: 1 }}>{bookmarkedFrames.includes(activeIdx) ? "\u2605" : "\u2606"}</Typography>
-          </IconButton>
-        </Tooltip>
-        {loop && (loopStart > 0 || (loopEnd >= 0 && loopEnd < nSlices - 1)) && (
-          <IconButton size="small" disabled={lockPlayback} onClick={() => { if (!lockPlayback) { setLoopStart(0); setLoopEnd(-1); } }} sx={{ color: themeColors.textMuted, p: 0.25, flexShrink: 0 }} title="Reset loop range">
-            <Typography sx={{ fontSize: 10, lineHeight: 1 }}>Reset</Typography>
-          </IconButton>
-        )}
-        <Box sx={{ flex: 1 }} />
-      </Box>)}
-      </>); })()}
-
 
     </Box>
   );

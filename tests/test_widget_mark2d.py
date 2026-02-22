@@ -675,20 +675,20 @@ def test_mark2d_profile_distance_calibrated():
     assert w.profile_distance == pytest.approx(100.0)
 
 # ============================================================================
-# New trait tests (image_width_px, show_controls, percentile, stats)
+# New trait tests (canvas_size, show_controls, percentile, stats)
 # ============================================================================
 
-def test_mark2d_image_width_px_default():
-    """image_width_px defaults to 0 (auto-size)."""
+def test_mark2d_canvas_size_default():
+    """canvas_size defaults to 0 (auto-size)."""
     data = np.random.rand(16, 16).astype(np.float32)
     w = Mark2D(data)
-    assert w.image_width_px == 0
+    assert w.canvas_size == 0
 
-def test_mark2d_image_width_px_custom():
-    """image_width_px can be set via constructor."""
+def test_mark2d_canvas_size_custom():
+    """canvas_size can be set via constructor."""
     data = np.random.rand(16, 16).astype(np.float32)
-    w = Mark2D(data, image_width_px=400)
-    assert w.image_width_px == 400
+    w = Mark2D(data, canvas_size=400)
+    assert w.canvas_size == 400
 
 def test_mark2d_show_controls_default():
     """show_controls defaults to True."""
@@ -882,7 +882,7 @@ def test_mark2d_state_dict_keys():
         "disabled_tools",
         "hidden_tools",
         "percentile_low", "percentile_high", "title",
-        "pixel_size", "scale", "image_width_px",
+        "pixel_size", "scale", "canvas_size",
     }
     assert set(sd.keys()) == expected
 

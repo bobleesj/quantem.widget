@@ -131,7 +131,7 @@ class Show2D(anywidget.AnyWidget):
     # =========================================================================
     pixel_size = traitlets.Float(0.0).tag(sync=True)
     scale_bar_visible = traitlets.Bool(True).tag(sync=True)
-    image_width_px = traitlets.Int(0).tag(sync=True)
+    canvas_size = traitlets.Int(0).tag(sync=True)
 
     # =========================================================================
     # UI Visibility
@@ -161,7 +161,6 @@ class Show2D(anywidget.AnyWidget):
     roi_active = traitlets.Bool(False).tag(sync=True)
     roi_list = traitlets.List([]).tag(sync=True)
     roi_selected_idx = traitlets.Int(-1).tag(sync=True)
-    roi_stats = traitlets.Dict({}).tag(sync=True)
 
     # =========================================================================
     # Line Profile
@@ -621,7 +620,7 @@ class Show2D(anywidget.AnyWidget):
         hide_profile: bool = False,
         hide_all: bool = False,
         ncols: int = 3,
-        image_width_px: int = 0,
+        canvas_size: int = 0,
         state=None,
         **kwargs,
     ):
@@ -677,7 +676,7 @@ class Show2D(anywidget.AnyWidget):
         self.cmap = cmap
         self.pixel_size = pixel_size
         self.scale_bar_visible = scale_bar_visible
-        self.image_width_px = image_width_px
+        self.canvas_size = canvas_size
         self.show_fft = show_fft
         self.show_controls = show_controls
         self.show_stats = show_stats
@@ -871,7 +870,7 @@ class Show2D(anywidget.AnyWidget):
             "hidden_tools": self.hidden_tools,
             "pixel_size": self.pixel_size,
             "scale_bar_visible": self.scale_bar_visible,
-            "image_width_px": self.image_width_px,
+            "canvas_size": self.canvas_size,
             "ncols": self.ncols,
             "selected_idx": self.selected_idx,
             "roi_active": self.roi_active,
@@ -984,6 +983,87 @@ class Show2D(anywidget.AnyWidget):
         """Clear the current line profile."""
         self.profile_line = []
 
+    def _upsert_selected_roi(self, updates: dict):
+        rois = list(self.roi_list)
+        color_cycle = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"]
+        defaults = {
+            "shape": "square",
+            "row": int(self.height // 2),
+            "col": int(self.width // 2),
+            "radius": 10,
+            "radius_inner": 5,
+            "width": 20,
+            "height": 20,
+            "line_width": 2,
+            "highlight": False,
+            "visible": True,
+            "locked": False,
+        }
+        if self.roi_selected_idx >= 0 and self.roi_selected_idx < len(rois):
+            current = {**defaults, **rois[self.roi_selected_idx]}
+            if not current.get("color"):
+                current["color"] = color_cycle[self.roi_selected_idx % len(color_cycle)]
+            rois[self.roi_selected_idx] = {**current, **updates}
+        else:
+            rois.append({**defaults, "color": color_cycle[len(rois) % len(color_cycle)], **updates})
+            self.roi_selected_idx = len(rois) - 1
+        self.roi_list = rois
+        self.roi_active = True
+
+    def add_roi(self, row: int | None = None, col: int | None = None, shape: str = "square") -> Self:
+        with self.hold_sync():
+            self.roi_selected_idx = -1
+            self._upsert_selected_roi({
+                "shape": shape,
+                "row": int(self.height // 2 if row is None else row),
+                "col": int(self.width // 2 if col is None else col),
+            })
+        return self
+
+    def clear_rois(self) -> Self:
+        with self.hold_sync():
+            self.roi_list = []
+            self.roi_selected_idx = -1
+            self.roi_active = False
+        return self
+
+    def delete_selected_roi(self) -> Self:
+        idx = int(self.roi_selected_idx)
+        if idx < 0 or idx >= len(self.roi_list):
+            return self
+        with self.hold_sync():
+            rois = [roi for i, roi in enumerate(self.roi_list) if i != idx]
+            self.roi_list = rois
+            self.roi_selected_idx = min(idx, len(rois) - 1) if rois else -1
+            if not rois:
+                self.roi_active = False
+        return self
+
+    def set_roi(self, row: int, col: int, radius: int = 10) -> Self:
+        with self.hold_sync():
+            self._upsert_selected_roi({"shape": "circle", "row": int(row), "col": int(col), "radius": int(radius)})
+        return self
+
+    def roi_circle(self, radius: int = 10) -> Self:
+        with self.hold_sync():
+            self._upsert_selected_roi({"shape": "circle", "radius": int(radius)})
+        return self
+
+    def roi_square(self, half_size: int = 10) -> Self:
+        with self.hold_sync():
+            self._upsert_selected_roi({"shape": "square", "radius": int(half_size)})
+        return self
+
+    def roi_rectangle(self, width: int = 20, height: int = 10) -> Self:
+        with self.hold_sync():
+            self._upsert_selected_roi({"shape": "rectangle", "width": int(width), "height": int(height)})
+        return self
+
+    def roi_annular(self, inner: int = 5, outer: int = 10) -> Self:
+        with self.hold_sync():
+            self._upsert_selected_roi({"shape": "annular", "radius_inner": int(inner), "radius": int(outer)})
+        return self
+
     @property
     def profile(self):
         """Get profile line endpoints as [(row0, col0), (row1, col1)] or [].
@@ -1028,50 +1108,6 @@ class Show2D(anywidget.AnyWidget):
         if self.pixel_size > 0:
             return dist_px * self.pixel_size
         return dist_px
-
-    @traitlets.observe("roi_active", "roi_list", "roi_selected_idx", "selected_idx")
-    def _on_roi_change(self, change=None):
-        if self.roi_active:
-            self._update_roi_stats()
-        else:
-            self.roi_stats = {}
-
-    def _update_roi_stats(self):
-        idx = self.roi_selected_idx
-        if idx < 0 or idx >= len(self.roi_list):
-            self.roi_stats = {}
-            return
-        roi = self.roi_list[idx]
-        img = self._data[self.selected_idx]
-        h, w = img.shape
-        r, c = np.ogrid[:h, :w]
-        shape = roi.get("shape", "circle")
-        row, col = roi.get("row", 0), roi.get("col", 0)
-        radius = roi.get("radius", 10)
-        if shape == "circle":
-            mask = (c - col) ** 2 + (r - row) ** 2 <= radius**2
-        elif shape == "square":
-            mask = (np.abs(c - col) <= radius) & (np.abs(r - row) <= radius)
-        elif shape == "rectangle":
-            half_w = roi.get("width", 20) // 2
-            half_h = roi.get("height", 20) // 2
-            mask = (np.abs(c - col) <= half_w) & (np.abs(r - row) <= half_h)
-        elif shape == "annular":
-            dist2 = (c - col) ** 2 + (r - row) ** 2
-            inner = roi.get("radius_inner", 5)
-            mask = (dist2 >= inner**2) & (dist2 <= radius**2)
-        else:
-            mask = (c - col) ** 2 + (r - row) ** 2 <= radius**2
-        region = img[mask]
-        if region.size > 0:
-            self.roi_stats = {
-                "mean": float(region.mean()),
-                "min": float(region.min()),
-                "max": float(region.max()),
-                "std": float(region.std()),
-            }
-        else:
-            self.roi_stats = {}
 
 
 bind_tool_runtime_api(Show2D, "Show2D")

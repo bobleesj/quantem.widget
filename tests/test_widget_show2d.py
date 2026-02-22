@@ -105,11 +105,11 @@ def test_show2d_ncols():
     widget = Show2D(data, ncols=2)
     assert widget.ncols == 2
 
-def test_show2d_image_width_px():
-    """image_width_px parameter is stored."""
+def test_show2d_canvas_size():
+    """canvas_size parameter is stored."""
     data = np.random.rand(16, 16).astype(np.float32)
-    widget = Show2D(data, image_width_px=500)
-    assert widget.image_width_px == 500
+    widget = Show2D(data, canvas_size=500)
+    assert widget.canvas_size == 500
 
 def test_show2d_show_controls():
     """show_controls can be toggled."""
@@ -218,39 +218,80 @@ def test_show2d_gallery_stats_per_image():
     assert widget.stats_mean[0] == pytest.approx(10.0)
     assert widget.stats_mean[1] == pytest.approx(20.0)
 
-def test_show2d_roi_stats():
-    """ROI computes mean/min/max/std for selected region."""
+
+def test_show2d_add_roi():
+    """add_roi() creates an ROI and activates ROI mode."""
     data = np.ones((32, 32), dtype=np.float32) * 5.0
-    widget = Show2D(data)
-    widget.roi_list = [{"shape": "rectangle", "row": 16, "col": 16, "width": 10, "height": 10}]
-    widget.roi_selected_idx = 0
-    widget.roi_active = True
-    assert widget.roi_stats["mean"] == pytest.approx(5.0)
-    assert widget.roi_stats["min"] == pytest.approx(5.0)
-    assert widget.roi_stats["max"] == pytest.approx(5.0)
-    assert widget.roi_stats["std"] == pytest.approx(0.0)
+    w = Show2D(data)
+    assert w.roi_active is False
+    assert len(w.roi_list) == 0
+    w.add_roi(row=16, col=16, shape="square")
+    assert w.roi_active is True
+    assert len(w.roi_list) == 1
+    assert w.roi_list[0]["shape"] == "square"
+    assert w.roi_list[0]["row"] == 16
+    assert w.roi_list[0]["col"] == 16
+    assert w.roi_selected_idx == 0
 
-def test_show2d_roi_shapes():
-    """ROI supports circle, square, rectangle, annular shapes."""
-    data = np.ones((32, 32), dtype=np.float32) * 3.0
-    widget = Show2D(data)
-    widget.roi_active = True
-    # Circle
-    widget.roi_list = [{"shape": "circle", "row": 16, "col": 16, "radius": 5}]
-    widget.roi_selected_idx = 0
-    assert widget.roi_stats["mean"] == pytest.approx(3.0)
-    # Square
-    widget.roi_list = [{"shape": "square", "row": 16, "col": 16, "radius": 5}]
-    assert widget.roi_stats["mean"] == pytest.approx(3.0)
-    # Annular
-    widget.roi_list = [{"shape": "annular", "row": 16, "col": 16, "radius": 8, "radius_inner": 3}]
-    assert widget.roi_stats["mean"] == pytest.approx(3.0)
+def test_show2d_add_roi_defaults():
+    """add_roi() defaults to center of image when no position given."""
+    data = np.ones((64, 128), dtype=np.float32)
+    w = Show2D(data)
+    w.add_roi()
+    assert w.roi_list[0]["row"] == 32
+    assert w.roi_list[0]["col"] == 64
+    assert w.roi_list[0]["shape"] == "square"
 
-def test_show2d_roi_inactive():
-    """ROI stats not computed when inactive."""
-    data = np.random.rand(16, 16).astype(np.float32)
-    widget = Show2D(data)
-    assert widget.roi_stats == {}
+def test_show2d_clear_rois():
+    """clear_rois() removes all ROIs and deactivates ROI mode."""
+    data = np.ones((32, 32), dtype=np.float32)
+    w = Show2D(data)
+    w.add_roi(row=10, col=10)
+    w.add_roi(row=20, col=20)
+    assert len(w.roi_list) == 2
+    w.clear_rois()
+    assert len(w.roi_list) == 0
+    assert w.roi_selected_idx == -1
+    assert w.roi_active is False
+
+def test_show2d_roi_shape_methods():
+    """roi_circle/square/rectangle/annular change ROI shape."""
+    data = np.ones((32, 32), dtype=np.float32)
+    w = Show2D(data)
+    w.add_roi(row=16, col=16)
+    w.roi_circle(radius=8)
+    assert w.roi_list[0]["shape"] == "circle"
+    assert w.roi_list[0]["radius"] == 8
+    w.roi_square(half_size=6)
+    assert w.roi_list[0]["shape"] == "square"
+    assert w.roi_list[0]["radius"] == 6
+    w.roi_rectangle(width=12, height=8)
+    assert w.roi_list[0]["shape"] == "rectangle"
+    assert w.roi_list[0]["width"] == 12
+    assert w.roi_list[0]["height"] == 8
+    w.roi_annular(inner=3, outer=7)
+    assert w.roi_list[0]["shape"] == "annular"
+    assert w.roi_list[0]["radius_inner"] == 3
+    assert w.roi_list[0]["radius"] == 7
+
+def test_show2d_delete_selected_roi():
+    """delete_selected_roi() removes the selected ROI."""
+    data = np.ones((32, 32), dtype=np.float32)
+    w = Show2D(data)
+    w.add_roi(row=10, col=10)
+    w.add_roi(row=20, col=20)
+    assert len(w.roi_list) == 2
+    assert w.roi_selected_idx == 1
+    w.delete_selected_roi()
+    assert len(w.roi_list) == 1
+    assert w.roi_list[0]["row"] == 10
+
+def test_show2d_add_roi_chaining():
+    """ROI methods return Self for chaining."""
+    data = np.ones((32, 32), dtype=np.float32)
+    w = Show2D(data)
+    result = w.add_roi(row=16, col=16).roi_square(half_size=5)
+    assert result is w
 
 # ── State Protocol ────────────────────────────────────────────────────────
 

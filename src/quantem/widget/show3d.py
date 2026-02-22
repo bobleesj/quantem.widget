@@ -196,7 +196,7 @@ class Show3D(anywidget.AnyWidget):
     # =========================================================================
     # Sizing
     # =========================================================================
-    image_width_px = traitlets.Int(0).tag(sync=True)  # If 0, use frontend defaults
+    canvas_size = traitlets.Int(0).tag(sync=True)  # If 0, use frontend defaults
 
     # =========================================================================
     # Diff Mode
@@ -650,7 +650,7 @@ class Show3D(anywidget.AnyWidget):
         show_playback: bool = False,
         show_stats: bool = True,
         show_controls: bool = True,
-        image_width_px: int = 0,
+        canvas_size: int = 0,
         disabled_tools: list[str] | None = None,
         disable_display: bool = False,
         disable_histogram: bool = False,
@@ -785,7 +785,7 @@ class Show3D(anywidget.AnyWidget):
         self.show_playback = show_playback
         self.show_stats = show_stats
         self.show_controls = show_controls
-        self.image_width_px = image_width_px
+        self.canvas_size = canvas_size
         self.disabled_tools = self._build_disabled_tools(
             disabled_tools=disabled_tools,
             disable_display=disable_display,
@@ -899,7 +899,7 @@ class Show3D(anywidget.AnyWidget):
             "hidden_tools": self.hidden_tools,
             "pixel_size": self.pixel_size,
             "scale_bar_visible": self.scale_bar_visible,
-            "image_width_px": self.image_width_px,
+            "canvas_size": self.canvas_size,
             "fps": self.fps,
             "loop": self.loop,
             "reverse": self.reverse,

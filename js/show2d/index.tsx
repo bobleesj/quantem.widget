@@ -26,7 +26,7 @@ import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawColorbar, roundToNiceValue
 import JSZip from "jszip";
 import { extractFloat32, formatNumber, downloadBlob } from "../format";
 import { computeHistogramFromBytes } from "../histogram";
-import { findDataRange, applyLogScale, percentileClip, sliderRange, computeStats } from "../stats";
+import { findDataRange, applyLogScale, applyLogScaleInPlace, percentileClip, sliderRange, computeStats } from "../stats";
 import { ControlCustomizer } from "../control-customizer";
 import { computeToolVisibility } from "../tool-parity";
 
@@ -67,7 +67,7 @@ const upwardMenuProps = {
   sx: { zIndex: 9999 },
 };
 import { getWebGPUFFT, WebGPUFFT, fft2d, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2 } from "../webgpu-fft";
-import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen } from "../colormaps";
+import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, renderToOffscreenReuse } from "../colormaps";
 import "./show2d.css";
 
 const MIN_ZOOM = 0.5;
@@ -133,6 +133,7 @@ function Histogram({ data, vminPct, vmaxPct, onRangeChange, width = 110, height 
         valueLabelFormat={(pct) => { const val = dataMin + (pct / 100) * (dataMax - dataMin); return val >= 1000 ? val.toExponential(1) : val.toFixed(1); }}
         sx={{ width, py: 0, "& .MuiSlider-thumb": { width: 8, height: 8 }, "& .MuiSlider-rail": { height: 2 }, "& .MuiSlider-track": { height: 2 }, "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px" } }}
       />
+      <Box sx={{ display: "flex", justifyContent: "space-between", width }}><Typography sx={{ fontSize: 8, fontFamily: "monospace", opacity: 0.6, lineHeight: 1 }}>{(() => { const v = dataMin + (vminPct / 100) * (dataMax - dataMin); return v >= 1000 ? v.toExponential(1) : v.toFixed(1); })()}</Typography><Typography sx={{ fontSize: 8, fontFamily: "monospace", opacity: 0.6, lineHeight: 1 }}>{(() => { const v = dataMin + (vmaxPct / 100) * (dataMax - dataMin); return v >= 1000 ? v.toExponential(1) : v.toFixed(1); })()}</Typography></Box>
     </Box>
   );
 }
@@ -382,7 +383,7 @@ function Show2D() {
   const [autoContrast, setAutoContrast] = useModelState<boolean>("auto_contrast");
 
   // Customization
-  const [imageWidthPx] = useModelState<number>("image_width_px");
+  const [canvasSizeTrait] = useModelState<number>("canvas_size");
 
   // Scale bar
   const [pixelSize] = useModelState<number>("pixel_size");
@@ -408,12 +409,12 @@ function Show2D() {
   const [roiActive, setRoiActive] = useModelState<boolean>("roi_active");
   const [roiList, setRoiList] = useModelState<ROIItem[]>("roi_list");
   const [roiSelectedIdx, setRoiSelectedIdx] = useModelState<number>("roi_selected_idx");
-  const [roiStats] = useModelState<Record<string, number>>("roi_stats");
   const [isDraggingROI, setIsDraggingROI] = React.useState(false);
   const [isDraggingResize, setIsDraggingResize] = React.useState(false);
   const [isDraggingResizeInner, setIsDraggingResizeInner] = React.useState(false);
   const [isHoveringResize, setIsHoveringResize] = React.useState(false);
   const [isHoveringResizeInner, setIsHoveringResizeInner] = React.useState(false);
+  const resizeAspectRef = React.useRef<number | null>(null);
   const [newRoiShape, setNewRoiShape] = React.useState<"circle" | "square" | "rectangle" | "annular">("square");
   const [exportAnchor, setExportAnchor] = React.useState<HTMLElement | null>(null);
   const selectedRoi = roiSelectedIdx >= 0 && roiSelectedIdx < (roiList?.length ?? 0) ? roiList[roiSelectedIdx] : null;
@@ -571,6 +572,10 @@ function Show2D() {
   const profilePoints = profileLine || [];
   const setProfilePoints = (pts: { row: number; col: number }[]) => setProfileLine(pts);
 
+  // Distance measurement state (JS-only, not persisted)
+  const [measureActive, setMeasureActive] = React.useState(false);
+  const [measurePoints, setMeasurePoints] = React.useState<{row: number; col: number}[]>([]);
+
   // FFT zoom/pan state (gallery mode — per-image or linked)
   const [galleryFftStates, setGalleryFftStates] = React.useState<Map<number, ZoomState>>(new Map());
   const [linkedFftZoomState, setLinkedFftZoomState] = React.useState<ZoomState>({ zoom: DEFAULT_FFT_ZOOM, panX: 0, panY: 0 });
@@ -592,8 +597,8 @@ function Show2D() {
 
   // Sync initial sizes from traits
   React.useEffect(() => {
-    if (imageWidthPx > 0) setCanvasSize(imageWidthPx);
-  }, [imageWidthPx]);
+    if (canvasSizeTrait > 0) setCanvasSize(canvasSizeTrait);
+  }, [canvasSizeTrait]);
 
   const [isResizingCanvas, setIsResizingCanvas] = React.useState(false);
   const [resizeStart, setResizeStart] = React.useState<{ x: number, y: number, size: number } | null>(null);
@@ -608,15 +613,28 @@ function Show2D() {
   const [gpuReady, setGpuReady] = React.useState(false);
   const rawDataRef = React.useRef<Float32Array[] | null>(null);
 
+  // Cached offscreen canvases for main image rendering (avoids per-zoom/pan recompute)
+  const mainOffscreensRef = React.useRef<HTMLCanvasElement[]>([]);
+  const mainImgDatasRef = React.useRef<ImageData[]>([]);
+  const logBufferRef = React.useRef<Float32Array | null>(null);
+  const colorbarVminRef = React.useRef(0);
+  const colorbarVmaxRef = React.useRef(1);
+  const [offscreenVersion, setOffscreenVersion] = React.useState(0);
+
   // Inline FFT refs for gallery mode
   const fftCanvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
   const fftOffscreensRef = React.useRef<(HTMLCanvasElement | null)[]>([]);
   const fftMagCacheGalleryRef = React.useRef<(Float32Array | null)[]>([]);
+  const galleryFftDimsRef = React.useRef<{ w: number; h: number } | null>(null);
   const [galleryFftMagVersion, setGalleryFftMagVersion] = React.useState(0);
 
   // Cached FFT magnitude for single image mode (avoids recomputing on zoom/pan)
   const fftMagCacheRef = React.useRef<Float32Array | null>(null);
   const [fftMagVersion, setFftMagVersion] = React.useState(0);
+
+  // Cached FFT offscreen canvas for single mode (avoids reprocessing on zoom/pan)
+  const fftOffscreenRef = React.useRef<HTMLCanvasElement | null>(null);
+  const [fftOffscreenVersion, setFftOffscreenVersion] = React.useState(0);
 
   // ROI FFT state: when ROI + FFT are both active, compute FFT of cropped ROI region
   const [fftCropDims, setFftCropDims] = React.useState<{ cropWidth: number; cropHeight: number; fftWidth: number; fftHeight: number } | null>(null);
@@ -630,8 +648,18 @@ function Show2D() {
   const galleryGridWidth = isGallery ? ncols * canvasW + (ncols - 1) * 8 : canvasW;
   const profileCanvasWidth = galleryGridWidth;
 
-  // ROI FFT active: both ROI and FFT on, single-image mode, with a selected ROI
-  const roiFftActive = effectiveShowFft && !isGallery && roiActive && roiSelectedIdx >= 0 && roiSelectedIdx < (roiList?.length ?? 0);
+  // ROI FFT active: both ROI and FFT on, with a selected ROI
+  const roiFftActive = effectiveShowFft && roiActive && roiSelectedIdx >= 0 && roiSelectedIdx < (roiList?.length ?? 0);
+
+  // Stable key for ROI geometry — only changes when the selected ROI's geometry changes,
+  // not when other ROIs move or roiList gets a new reference from unrelated edits.
+  // Shared by both ROI FFT and preview panel to avoid redundant recomputes.
+  const selectedRoiKey = React.useMemo(() => {
+    if (!roiList || roiSelectedIdx < 0 || roiSelectedIdx >= roiList.length) return "";
+    const r = roiList[roiSelectedIdx];
+    return `${r.row},${r.col},${r.radius},${r.radius_inner},${r.width},${r.height},${r.shape}`;
+  }, [roiList, roiSelectedIdx]);
+  const roiFftKey = roiFftActive ? selectedRoiKey : "";
 
   // Extract raw float32 bytes and parse into Float32Arrays
   const allFloats = React.useMemo(() => extractFloat32(frameBytes), [frameBytes]);
@@ -668,6 +696,23 @@ function Show2D() {
 
   }, [allFloats, nImages, floatsPerImage]);
 
+  // Initialize reusable offscreen canvases (one per image, resized when dimensions change)
+  React.useEffect(() => {
+    if (width <= 0 || height <= 0 || nImages <= 0) return;
+    const canvases: HTMLCanvasElement[] = [];
+    const imgDatas: ImageData[] = [];
+    for (let i = 0; i < nImages; i++) {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvases.push(canvas);
+      imgDatas.push(canvas.getContext("2d")!.createImageData(width, height));
+    }
+    mainOffscreensRef.current = canvases;
+    mainImgDatasRef.current = imgDatas;
+    logBufferRef.current = new Float32Array(width * height);
+  }, [width, height, nImages]);
+
   // Compute histogram data for the displayed image (reflects log scale)
   // In gallery mode, uses the selected image; in single mode, uses the only image
   React.useEffect(() => {
@@ -675,7 +720,9 @@ function Show2D() {
     const idx = nImages > 1 ? selectedIdx : 0;
     const raw = rawDataRef.current[idx];
     if (!raw) return;
-    const d = logScale ? applyLogScale(raw) : raw;
+    const d = logScale && logBufferRef.current
+      ? applyLogScaleInPlace(raw, logBufferRef.current)
+      : raw;
     setImageHistogramData(d);
     setImageDataRange(findDataRange(d));
   }, [allFloats, nImages, floatsPerImage, logScale, selectedIdx]);
@@ -703,30 +750,32 @@ function Show2D() {
   }, [canvasReady, effectiveShowFft, isGallery, selectedIdx, linkedZoom]);
 
   // -------------------------------------------------------------------------
-  // Render Images (JS-side normalization for instant Log/Auto toggle)
+  // Data effect: normalize + colormap → reusable offscreen canvases
+  // (does NOT depend on zoom/pan — avoids recomputing 16M pixels on every pan/zoom)
   // -------------------------------------------------------------------------
   React.useEffect(() => {
     if (!dataReady || !rawDataRef.current || rawDataRef.current.length === 0) return;
+    if (mainOffscreensRef.current.length === 0 || mainImgDatasRef.current.length === 0) return;
 
     const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
 
     for (let i = 0; i < nImages; i++) {
-      const canvas = canvasRefs.current[i];
-      if (!canvas) continue;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) continue;
+      const offscreen = mainOffscreensRef.current[i];
+      const imgData = mainImgDatasRef.current[i];
+      if (!offscreen || !imgData) continue;
 
       const rawData = rawDataRef.current[i];
       if (!rawData) continue;
 
-      // Apply log scale if enabled
-      const processed = logScale ? applyLogScale(rawData) : rawData;
+      // Apply log scale if enabled (reuse pre-allocated buffer to avoid per-image allocation)
+      const processed = logScale && logBufferRef.current
+        ? applyLogScaleInPlace(rawData, logBufferRef.current)
+        : rawData;
 
       // Compute min/max for normalization (per-image contrast when unlinked)
       let vmin: number, vmax: number;
       const cs = linkedContrast ? linkedContrastState : (contrastStates.get(i) || { vminPct: 0, vmaxPct: 100 });
-      const imgProcessed = logScale ? applyLogScale(rawData) : rawData;
-      const imgRange = findDataRange(imgProcessed);
+      const imgRange = findDataRange(processed);
       if (imgRange.min !== imgRange.max && (cs.vminPct > 0 || cs.vmaxPct < 100)) {
         ({ vmin, vmax } = sliderRange(imgRange.min, imgRange.max, cs.vminPct, cs.vmaxPct));
       } else if (autoContrast) {
@@ -736,22 +785,40 @@ function Show2D() {
         vmax = imgRange.max;
       }
 
-      // Create offscreen canvas at native resolution
-      const offscreen = renderToOffscreen(processed, width, height, lut, vmin, vmax);
-      if (!offscreen) continue;
+      // Cache vmin/vmax for colorbar and lens (avoids recomputing on zoom/pan/mousemove)
+      if (i === 0) {
+        colorbarVminRef.current = vmin;
+        colorbarVmaxRef.current = vmax;
+      }
 
-      // Draw to display canvas with proper scaling
+      // Render to cached offscreen canvas (no per-frame allocation)
+      renderToOffscreenReuse(processed, lut, vmin, vmax, offscreen, imgData);
+    }
+    setOffscreenVersion(v => v + 1);
+  }, [dataReady, nImages, width, height, cmap, logScale, autoContrast, linkedContrast, linkedContrastState, contrastStates]);
+
+  // -------------------------------------------------------------------------
+  // Draw effect: zoom/pan changes — cheap, just drawImage from cached offscreens
+  // useLayoutEffect prevents black flash when canvas dimensions change (resize)
+  // -------------------------------------------------------------------------
+  React.useLayoutEffect(() => {
+    if (mainOffscreensRef.current.length === 0) return;
+
+    for (let i = 0; i < nImages; i++) {
+      const canvas = canvasRefs.current[i];
+      const offscreen = mainOffscreensRef.current[i];
+      if (!canvas || !offscreen) continue;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) continue;
+
       ctx.imageSmoothingEnabled = false;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Get per-image zoom state (inline to avoid callback dependency issues)
       const zs = linkedZoom ? linkedZoomState : (zoomStates.get(i) || DEFAULT_ZOOM_STATE);
       const { zoom, panX, panY } = zs;
 
-      // Apply zoom/pan: zoom from center, then apply pan offset
       if (zoom !== 1 || panX !== 0 || panY !== 0) {
         ctx.save();
-        // Translate to center, scale, translate back, then apply pan
         const cx = canvasW / 2;
         const cy = canvasH / 2;
         ctx.translate(cx + panX, cy + panY);
@@ -763,7 +830,7 @@ function Show2D() {
         ctx.drawImage(offscreen, 0, 0, width, height, 0, 0, canvasW, canvasH);
       }
     }
-  }, [dataReady, nImages, width, height, cmap, displayScale, isGallery, canvasW, canvasH, canvasReady, linkedZoom, linkedZoomState, zoomStates, logScale, autoContrast, linkedContrast, linkedContrastState, contrastStates]);
+  }, [offscreenVersion, nImages, width, height, displayScale, canvasW, canvasH, canvasReady, linkedZoom, linkedZoomState, zoomStates]);
 
   // -------------------------------------------------------------------------
   // Render Overlays (scale bar, colorbar, zoom indicator)
@@ -784,24 +851,13 @@ function Show2D() {
         ctx.clearRect(0, 0, overlay.width, overlay.height);
       }
 
-      // Colorbar (single image mode only)
-      if (!hideDisplay && showColorbar && !isGallery && rawDataRef.current?.[0]) {
+      // Colorbar (single image mode only) — uses cached vmin/vmax from data effect
+      if (!hideDisplay && showColorbar && !isGallery) {
         const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
         const cssW = overlay.width / DPR;
         const cssH = overlay.height / DPR;
-
-        // Determine vmin/vmax matching the image rendering exactly
-        const processed = logScale ? applyLogScale(rawDataRef.current[0]) : rawDataRef.current[0];
-        let vmin: number, vmax: number;
-        if (imageDataRange.min !== imageDataRange.max) {
-          ({ vmin, vmax } = sliderRange(imageDataRange.min, imageDataRange.max, imageVminPct, imageVmaxPct));
-        } else if (autoContrast) {
-          ({ vmin, vmax } = percentileClip(processed, 2, 98));
-        } else {
-          const r = findDataRange(processed);
-          vmin = r.min;
-          vmax = r.max;
-        }
+        const vmin = colorbarVminRef.current;
+        const vmax = colorbarVmaxRef.current;
 
         ctx.save();
         ctx.scale(DPR, DPR);
@@ -924,8 +980,72 @@ function Show2D() {
 
         ctx.restore();
       }
+
+      // Distance measurement overlay
+      if (measureActive && measurePoints.length >= 1) {
+        const zs = linkedZoom ? linkedZoomState : (zoomStates.get(i) || DEFAULT_ZOOM_STATE);
+        const { zoom, panX, panY } = zs;
+        ctx.save();
+        ctx.scale(DPR, DPR);
+        const cx = canvasW / 2;
+        const cy = canvasH / 2;
+        const toSX = (ix: number) => (ix * displayScale - cx) * zoom + cx + panX;
+        const toSY = (iy: number) => (iy * displayScale - cy) * zoom + cy + panY;
+
+        ctx.shadowColor = "rgba(0,0,0,0.6)";
+        ctx.shadowBlur = 3;
+
+        // Endpoint A
+        const ax = toSX(measurePoints[0].col);
+        const ay = toSY(measurePoints[0].row);
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(ax, ay, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (measurePoints.length === 2) {
+          const bx = toSX(measurePoints[1].col);
+          const by = toSY(measurePoints[1].row);
+
+          // Solid white line (distinct from profile's dashed accent line)
+          ctx.strokeStyle = "#fff";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(bx, by);
+          ctx.stroke();
+
+          // Endpoint B
+          ctx.beginPath();
+          ctx.arc(bx, by, 4, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Distance label
+          const dc = measurePoints[1].col - measurePoints[0].col;
+          const dr = measurePoints[1].row - measurePoints[0].row;
+          const distPx = Math.sqrt(dc * dc + dr * dr);
+          let label: string;
+          if (pixelSize > 0) {
+            const distA = distPx * pixelSize;
+            label = distA >= 10 ? `${(distA / 10).toFixed(2)} nm` : `${distA.toFixed(2)} Å`;
+          } else {
+            label = `${distPx.toFixed(1)} px`;
+          }
+
+          const mx = (ax + bx) / 2;
+          const my = (ay + by) / 2;
+          ctx.font = "bold 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "bottom";
+          ctx.fillStyle = "#fff";
+          ctx.fillText(label, mx, my - 8);
+        }
+
+        ctx.shadowBlur = 0;
+        ctx.restore();
+      }
     }
-  }, [nImages, pixelSize, scaleBarVisible, selectedIdx, isGallery, canvasW, canvasH, width, displayScale, linkedZoom, linkedZoomState, zoomStates, dataReady, showColorbar, cmap, imageDataRange, imageVminPct, imageVmaxPct, autoContrast, logScale, profileActive, profilePoints, roiActive, roiList, roiSelectedIdx, isDraggingROI, themeColors, hideDisplay, hideRoi, hideProfile]);
+  }, [nImages, pixelSize, scaleBarVisible, selectedIdx, isGallery, canvasW, canvasH, width, displayScale, linkedZoom, linkedZoomState, zoomStates, dataReady, showColorbar, cmap, offscreenVersion, logScale, profileActive, profilePoints, roiActive, roiList, roiSelectedIdx, isDraggingROI, themeColors, hideDisplay, hideRoi, hideProfile, measureActive, measurePoints]);
 
   // -------------------------------------------------------------------------
   // Inset magnifier (lens) — renders magnified region at cursor in bottom-left
@@ -943,16 +1063,9 @@ function Show2D() {
 
     const raw = rawDataRef.current[0];
     const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
-    const processed = logScale ? applyLogScale(raw) : raw;
-    let vmin: number, vmax: number;
-    if (imageDataRange.min !== imageDataRange.max) {
-      ({ vmin, vmax } = sliderRange(imageDataRange.min, imageDataRange.max, imageVminPct, imageVmaxPct));
-    } else if (autoContrast) {
-      ({ vmin, vmax } = percentileClip(processed, 2, 98));
-    } else {
-      const r = findDataRange(processed);
-      vmin = r.min; vmax = r.max;
-    }
+    // Use cached vmin/vmax from data effect (avoids full-image applyLogScale + findDataRange)
+    const vmin = colorbarVminRef.current;
+    const vmax = colorbarVmaxRef.current;
 
     // Extract region around cursor — regionSize = displaySize / magnification
     const regionSize = Math.max(4, Math.round(lensDisplaySize / lensMag));
@@ -978,7 +1091,9 @@ function Show2D() {
         if (sr < 0 || sr >= height || sc < 0 || sc >= width) {
           imgData.data[idx] = 0; imgData.data[idx + 1] = 0; imgData.data[idx + 2] = 0; imgData.data[idx + 3] = 255;
         } else {
-          const val = processed[sr * width + sc];
+          // Apply log scale inline per-pixel (only for the small region, not full image)
+          const rawVal = raw[sr * width + sc];
+          const val = logScale ? Math.log1p(rawVal) : rawVal;
           const t = Math.max(0, Math.min(1, (val - vmin) / range));
           const li = Math.round(t * 255);
           imgData.data[idx] = lut[li * 3]; imgData.data[idx + 1] = lut[li * 3 + 1]; imgData.data[idx + 2] = lut[li * 3 + 2]; imgData.data[idx + 3] = 255;
@@ -1011,7 +1126,7 @@ function Show2D() {
     ctx.font = "10px monospace";
     ctx.fillText(`${lensMag}×`, lx + 4, ly + lensSize - 4);
     ctx.restore();
-  }, [showLens, lockDisplay, lensPos, isGallery, cmap, logScale, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, width, height, canvasH, themeColors, lensMag, lensDisplaySize, lensAnchor]);
+  }, [showLens, lockDisplay, lensPos, isGallery, cmap, logScale, offscreenVersion, width, height, canvasH, themeColors, lensMag, lensDisplaySize, lensAnchor]);
 
   // -------------------------------------------------------------------------
   // Auto-compute profile when profile_line is set (e.g. from Python)
@@ -1328,20 +1443,18 @@ function Show2D() {
 
     doCompute();
     return () => { cancelled = true; };
-  }, [effectiveShowFft, isGallery, selectedIdx, width, height, gpuReady, dataReady, roiFftActive, roiList, roiSelectedIdx]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveShowFft, isGallery, selectedIdx, width, height, gpuReady, dataReady, roiFftKey]);
 
   // Clear FFT measurement when image, FFT state, or ROI changes
   React.useEffect(() => { setFftClickInfo(null); }, [selectedIdx, effectiveShowFft, roiFftActive, roiSelectedIdx]);
 
   // -------------------------------------------------------------------------
-  // Render FFT display from cached magnitude (zoom/pan/colormap changes)
+  // FFT data effect: normalize + colormap → cached offscreen canvas
+  // (does NOT depend on fftZoom/fftPanX/fftPanY — avoids reprocessing on zoom/pan)
   // -------------------------------------------------------------------------
   React.useEffect(() => {
-    if (!effectiveShowFft || isGallery || !fftCanvasRef.current || !fftMagCacheRef.current) return;
-
-    const canvas = fftCanvasRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!effectiveShowFft || isGallery || !fftMagCacheRef.current) return;
 
     const fftMag = fftMagCacheRef.current;
     const lut = COLORMAPS[fftColormap] || COLORMAPS.inferno;
@@ -1376,10 +1489,27 @@ function Show2D() {
     setFftHistogramData(magnitude.slice());
     setFftDataRange({ min: displayMin, max: displayMax });
 
-    // Apply histogram slider clipping
+    // Apply histogram slider clipping and render to cached offscreen
     const { vmin, vmax } = sliderRange(displayMin, displayMax, fftVminPct, fftVmaxPct);
     const offscreen = renderToOffscreen(magnitude, fftW, fftH, lut, vmin, vmax);
     if (!offscreen) return;
+    fftOffscreenRef.current = offscreen;
+    setFftOffscreenVersion(v => v + 1);
+  }, [effectiveShowFft, isGallery, fftMagVersion, fftVminPct, fftVmaxPct, fftColormap, fftScaleMode, fftAuto, width, height, fftCropDims]);
+
+  // -------------------------------------------------------------------------
+  // FFT draw effect: cheap drawImage from cached offscreen (zoom/pan changes)
+  // -------------------------------------------------------------------------
+  React.useLayoutEffect(() => {
+    if (!effectiveShowFft || isGallery || !fftCanvasRef.current || !fftOffscreenRef.current) return;
+
+    const canvas = fftCanvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const offscreen = fftOffscreenRef.current;
+    const fftW = offscreen.width;
+    const fftH = offscreen.height;
 
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvasW, canvasH);
@@ -1393,7 +1523,7 @@ function Show2D() {
     // Stretch cropped FFT to fill the full canvas (no layout change during drag)
     ctx.drawImage(offscreen, 0, 0, fftW, fftH, 0, 0, canvasW, canvasH);
     ctx.restore();
-  }, [effectiveShowFft, isGallery, fftMagVersion, canvasW, canvasH, fftZoom, fftPanX, fftPanY, fftVminPct, fftVmaxPct, fftColormap, fftScaleMode, fftAuto, width, height, fftCropDims]);
+  }, [effectiveShowFft, isGallery, fftOffscreenVersion, canvasW, canvasH, fftZoom, fftPanX, fftPanY]);
 
   // -------------------------------------------------------------------------
   // Render FFT overlay (scale bar + colorbar + d-spacing marker)
@@ -1468,11 +1598,17 @@ function Show2D() {
   React.useEffect(() => {
     if (!effectiveShowFft || !isGallery || !rawDataRef.current) return;
     if (rawDataRef.current.length === 0) return;
-
     let cancelled = false;
 
     const computeAllFFTs = async () => {
       fftMagCacheGalleryRef.current = new Array(nImages).fill(null);
+
+      // When ROI is active, crop each image before computing FFT
+      const useRoiCrop = roiFftActive && roiList && roiSelectedIdx >= 0 && roiSelectedIdx < roiList.length;
+      const roi = useRoiCrop ? roiList[roiSelectedIdx] : null;
+
+      let fftW = width;
+      let fftH = height;
 
       for (let idx = 0; idx < nImages; idx++) {
         if (cancelled) return;
@@ -1480,47 +1616,73 @@ function Show2D() {
         const data = rawDataRef.current![idx];
         if (!data) continue;
 
-        const real = data.slice();
-        const imag = new Float32Array(data.length);
+        let inputData = data;
+        fftW = width;
+        fftH = height;
+
+        if (roi) {
+          const crop = cropROIRegion(data, width, height, roi);
+          if (crop) {
+            const padW = nextPow2(crop.cropW);
+            const padH = nextPow2(crop.cropH);
+            const padded = new Float32Array(padW * padH);
+            for (let y = 0; y < crop.cropH; y++) {
+              for (let x = 0; x < crop.cropW; x++) {
+                padded[y * padW + x] = crop.cropped[y * crop.cropW + x];
+              }
+            }
+            inputData = padded;
+            fftW = padW;
+            fftH = padH;
+          }
+        }
+
+        const real = inputData.slice();
+        const imag = new Float32Array(inputData.length);
         let fReal: Float32Array;
         let fImag: Float32Array;
 
         if (gpuFFTRef.current && gpuReady) {
-          const result = await gpuFFTRef.current.fft2D(real, imag, width, height, false);
+          const result = await gpuFFTRef.current.fft2D(real, imag, fftW, fftH, false);
           fReal = result.real;
           fImag = result.imag;
         } else {
-          fft2d(real, imag, width, height, false);
+          fft2d(real, imag, fftW, fftH, false);
           fReal = real;
           fImag = imag;
         }
 
         if (cancelled) return;
 
-        fftshift(fReal, width, height);
-        fftshift(fImag, width, height);
+        fftshift(fReal, fftW, fftH);
+        fftshift(fImag, fftW, fftH);
 
         fftMagCacheGalleryRef.current[idx] = computeMagnitude(fReal, fImag);
       }
-      if (!cancelled) setGalleryFftMagVersion(v => v + 1);
+      if (!cancelled) {
+        galleryFftDimsRef.current = { w: fftW, h: fftH };
+        setGalleryFftMagVersion(v => v + 1);
+      }
     };
 
     computeAllFFTs();
 
     return () => { cancelled = true; };
-  }, [effectiveShowFft, isGallery, nImages, width, height, gpuReady, dataReady]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveShowFft, isGallery, nImages, width, height, gpuReady, dataReady, roiFftKey]);
 
-  // Render gallery FFTs from cached magnitudes (applies colormap/scale/contrast settings)
+  // Gallery FFT data effect: normalize + colormap → cached offscreen canvases
+  // (does NOT depend on gallery zoom/pan states)
+  const [galleryFftOffscreenVersion, setGalleryFftOffscreenVersion] = React.useState(0);
   React.useEffect(() => {
     if (!effectiveShowFft || !isGallery) return;
     const lut = COLORMAPS[fftColormap] || COLORMAPS.inferno;
+    const fftW = galleryFftDimsRef.current?.w ?? width;
+    const fftH = galleryFftDimsRef.current?.h ?? height;
 
     for (let idx = 0; idx < nImages; idx++) {
       const magnitude = fftMagCacheGalleryRef.current[idx];
-      const canvas = fftCanvasRefs.current[idx];
-      if (!magnitude || !canvas) continue;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) continue;
+      if (!magnitude) continue;
 
       // Apply scale transform (same logic as single mode)
       let displayData: Float32Array;
@@ -1534,7 +1696,7 @@ function Show2D() {
         displayData = magnitude;
       }
       if (fftAuto) {
-        ({ min: displayMin, max: displayMax } = autoEnhanceFFT(magnitude, width, height));
+        ({ min: displayMin, max: displayMax } = autoEnhanceFFT(magnitude, fftW, fftH));
         if (fftScaleMode === "log") { displayMin = Math.log1p(displayMin); displayMax = Math.log1p(displayMax); }
         else if (fftScaleMode === "power") { displayMin = Math.sqrt(displayMin); displayMax = Math.sqrt(displayMax); }
       } else {
@@ -1542,21 +1704,9 @@ function Show2D() {
       }
       const { vmin, vmax } = sliderRange(displayMin, displayMax, fftVminPct, fftVmaxPct);
 
-      const offscreen = renderToOffscreen(displayData, width, height, lut, vmin, vmax);
+      const offscreen = renderToOffscreen(displayData, fftW, fftH, lut, vmin, vmax);
       if (!offscreen) continue;
       fftOffscreensRef.current[idx] = offscreen;
-
-      const { zoom, panX, panY } = getGalleryFftState(idx);
-      ctx.imageSmoothingEnabled = false;
-      ctx.clearRect(0, 0, canvasW, canvasH);
-      ctx.save();
-      const cx = canvasW / 2;
-      const cy = canvasH / 2;
-      ctx.translate(cx + panX, cy + panY);
-      ctx.scale(zoom, zoom);
-      ctx.translate(-cx, -cy);
-      ctx.drawImage(offscreen, 0, 0, width, height, 0, 0, canvasW, canvasH);
-      ctx.restore();
     }
 
     // Update FFT histogram from selected image
@@ -1569,7 +1719,35 @@ function Show2D() {
       setFftHistogramData(histData);
       setFftDataRange(findDataRange(histData));
     }
-  }, [effectiveShowFft, isGallery, nImages, canvasW, canvasH, width, height, galleryFftStates, linkedZoom, linkedFftZoomState, galleryFftMagVersion, fftColormap, fftScaleMode, fftAuto, fftVminPct, fftVmaxPct, selectedIdx]);
+    setGalleryFftOffscreenVersion(v => v + 1);
+  }, [effectiveShowFft, isGallery, nImages, width, height, galleryFftMagVersion, fftColormap, fftScaleMode, fftAuto, fftVminPct, fftVmaxPct, selectedIdx]);
+
+  // Gallery FFT draw effect: cheap drawImage from cached offscreens (zoom/pan changes)
+  React.useLayoutEffect(() => {
+    if (!effectiveShowFft || !isGallery) return;
+    const fftW = galleryFftDimsRef.current?.w ?? width;
+    const fftH = galleryFftDimsRef.current?.h ?? height;
+
+    for (let idx = 0; idx < nImages; idx++) {
+      const offscreen = fftOffscreensRef.current[idx];
+      const canvas = fftCanvasRefs.current[idx];
+      if (!offscreen || !canvas) continue;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) continue;
+
+      const { zoom, panX, panY } = getGalleryFftState(idx);
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, canvasW, canvasH);
+      ctx.save();
+      const cx = canvasW / 2;
+      const cy = canvasH / 2;
+      ctx.translate(cx + panX, cy + panY);
+      ctx.scale(zoom, zoom);
+      ctx.translate(-cx, -cy);
+      ctx.drawImage(offscreen, 0, 0, fftW, fftH, 0, 0, canvasW, canvasH);
+      ctx.restore();
+    }
+  }, [effectiveShowFft, isGallery, nImages, canvasW, canvasH, width, height, galleryFftOffscreenVersion, galleryFftStates, linkedZoom, linkedFftZoomState]);
 
   // -------------------------------------------------------------------------
   // Mouse Handlers for Zoom/Pan
@@ -1959,6 +2137,8 @@ function Show2D() {
         return;
       }
       if (isNearResizeHandle(imgCol, imgRow)) {
+        e.preventDefault();
+        resizeAspectRef.current = selectedRoi && (selectedRoi.shape === "rectangle") && selectedRoi.width > 0 && selectedRoi.height > 0 ? selectedRoi.width / selectedRoi.height : null;
         setIsDraggingResize(true);
         return;
       }
@@ -1966,6 +2146,9 @@ function Show2D() {
       if (roiList) {
         for (let ri = 0; ri < roiList.length; ri++) {
           if (isNearEdge(imgCol, imgRow, roiList[ri])) {
+            e.preventDefault();
+            const roi = roiList[ri];
+            resizeAspectRef.current = roi && (roi.shape === "rectangle") && roi.width > 0 && roi.height > 0 ? roi.width / roi.height : null;
             setRoiSelectedIdx(ri);
             setIsDraggingResize(true);
             return;
@@ -1992,6 +2175,20 @@ function Show2D() {
   };
 
   const handleMouseMove = (e: React.MouseEvent, idx: number) => {
+    // Fast path: during pan drag, skip all cursor/hover/lens work — just update pan
+    if (isDraggingPan && panStart && panningIdx !== null && !lockView) {
+      const canvas = canvasRefs.current[idx];
+      if (!canvas || idx !== panningIdx) return;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const dx = (e.clientX - panStart.x) * scaleX;
+      const dy = (e.clientY - panStart.y) * scaleY;
+      const zs = getZoomState(idx);
+      setZoomState(idx, { ...zs, panX: panStart.pX + dx, panY: panStart.pY + dy });
+      return;
+    }
+
     // Cursor readout: convert screen position to image pixel coordinates
     const canvas = canvasRefs.current[idx];
     if (canvas && rawDataRef.current) {
@@ -2089,7 +2286,14 @@ function Show2D() {
       const { imgCol: ic, imgRow: ir } = screenToImg(e, idx);
       const shape = selectedRoi.shape || "circle";
       if (shape === "rectangle") {
-        updateSelectedRoi({ width: Math.max(2, Math.round(Math.abs(ic - selectedRoi.col) * 2)), height: Math.max(2, Math.round(Math.abs(ir - selectedRoi.row) * 2)) });
+        let newW = Math.max(2, Math.round(Math.abs(ic - selectedRoi.col) * 2));
+        let newH = Math.max(2, Math.round(Math.abs(ir - selectedRoi.row) * 2));
+        if (e.shiftKey && resizeAspectRef.current != null) {
+          const aspect = resizeAspectRef.current;
+          if (newW / newH > aspect) newH = Math.max(2, Math.round(newW / aspect));
+          else newW = Math.max(2, Math.round(newH * aspect));
+        }
+        updateSelectedRoi({ width: newW, height: newH });
       } else {
         const newR = shape === "square" ? Math.max(Math.abs(ic - selectedRoi.col), Math.abs(ir - selectedRoi.row)) : Math.sqrt((ic - selectedRoi.col) ** 2 + (ir - selectedRoi.row) ** 2);
         const minR = shape === "annular" ? selectedRoi.radius_inner + 1 : 1;
@@ -2192,6 +2396,32 @@ function Show2D() {
               const p0 = profilePoints[0];
               setProfilePoints([p0, pt]);
               updateAllProfileData(p0, pt);
+            }
+          }
+        }
+      }
+    }
+    // Detect click for measurement mode (only when profile is not active)
+    if (measureActive && !profileActive && clickStartRef.current) {
+      const dx = e.clientX - clickStartRef.current.x;
+      const dy = e.clientY - clickStartRef.current.y;
+      if (Math.sqrt(dx * dx + dy * dy) < 3) {
+        const canvas = canvasRefs.current[idx];
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect();
+          const mouseCanvasX = (e.clientX - rect.left) * (canvas.width / rect.width);
+          const mouseCanvasY = (e.clientY - rect.top) * (canvas.height / rect.height);
+          const zs = linkedZoom ? linkedZoomState : (zoomStates.get(idx) || DEFAULT_ZOOM_STATE);
+          const cx = canvasW / 2;
+          const cy = canvasH / 2;
+          const imgX = ((mouseCanvasX - cx - zs.panX) / zs.zoom + cx) / displayScale;
+          const imgY = ((mouseCanvasY - cy - zs.panY) / zs.zoom + cy) / displayScale;
+          if (imgX >= 0 && imgX < width && imgY >= 0 && imgY < height) {
+            const pt = { row: imgY, col: imgX };
+            if (measurePoints.length < 2) {
+              setMeasurePoints([...measurePoints, pt]);
+            } else {
+              setMeasurePoints([pt]);
             }
           }
         }
@@ -2477,15 +2707,24 @@ function Show2D() {
 
   React.useEffect(() => {
     if (!isResizingCanvas) return;
+    let rafId = 0;
+    let latestSize = resizeStart ? resizeStart.size : canvasSize;
 
     const handleMouseMove = (e: MouseEvent) => {
       if (!resizeStart) return;
       const delta = Math.max(e.clientX - resizeStart.x, e.clientY - resizeStart.y);
-      const newSize = Math.max(100, Math.min(600, resizeStart.size + delta));
-      setCanvasSize(newSize);
+      latestSize = Math.max(200, Math.min(600, resizeStart.size + delta));
+      if (!rafId) {
+        rafId = requestAnimationFrame(() => {
+          rafId = 0;
+          setCanvasSize(latestSize);
+        });
+      }
     };
 
     const handleMouseUp = () => {
+      cancelAnimationFrame(rafId);
+      setCanvasSize(latestSize);
       setIsResizingCanvas(false);
       setResizeStart(null);
     };
@@ -2493,6 +2732,7 @@ function Show2D() {
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
     return () => {
+      cancelAnimationFrame(rafId);
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
@@ -2539,6 +2779,22 @@ function Show2D() {
       case "R":
         if (!lockView) handleResetAll();
         break;
+      case "m":
+      case "M":
+        if (measureActive) {
+          setMeasureActive(false);
+          setMeasurePoints([]);
+        } else {
+          setMeasureActive(true);
+          setMeasurePoints([]);
+        }
+        break;
+      case "Escape":
+        if (measureActive) {
+          setMeasureActive(false);
+          setMeasurePoints([]);
+        }
+        break;
       case "Delete":
       case "Backspace":
         if (!lockRoi && roiActive && roiSelectedIdx >= 0 && roiList && roiSelectedIdx < roiList.length) {
@@ -2565,7 +2821,7 @@ function Show2D() {
     <Box className="show2d-root" tabIndex={0} onKeyDown={handleKeyDown} sx={{ p: 2, bgcolor: themeColors.bg, color: themeColors.text, overflow: "visible" }}>
       <Stack direction="row" spacing={`${SPACING.LG}px`} alignItems="flex-start">
         {/* Main panel */}
-        <Box sx={{ width: "fit-content" }}>
+        <Box sx={{ width: galleryGridWidth }}>
           {/* Title row */}
           <Typography variant="caption" sx={{ ...typography.label, color: themeColors.accent, mb: `${SPACING.XS}px`, display: "block" }}>
             {title || (isGallery ? "Gallery" : "Image")}
@@ -2578,7 +2834,7 @@ function Show2D() {
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Auto: Percentile-based contrast (2nd–98th percentile). FFT Auto masks DC + clips to 99.9th.</Typography>
               {isGallery && <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Link Zoom / Contrast: Sync zoom or histogram range across all gallery images.</Typography>}
               <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
-              <KeyboardShortcuts items={isGallery ? [["← / →", "Prev / Next image"], ["1 – 9", "Select image"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]] : [["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
+              <KeyboardShortcuts items={isGallery ? [["← / →", "Prev / Next image"], ["1 – 9", "Select image"], ["Del / ⌫", "Delete selected ROI"], ["M", "Measure distance"], ["Esc", "Exit measure"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]] : [["Del / ⌫", "Delete selected ROI"], ["M", "Measure distance"], ["Esc", "Exit measure"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
             </Box>} theme={themeInfo.theme} />
             <ControlCustomizer
               widgetName="Show2D"
@@ -2589,41 +2845,8 @@ function Show2D() {
               themeColors={themeColors}
             />
           </Typography>
-          {/* Controls row: FFT, Lens, Profile, ROI, Export, Reset, Copy */}
-          <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} sx={{ mb: `${SPACING.XS}px`, height: 28, maxWidth: galleryGridWidth }}>
-            {!hideDisplay && (
-              <>
-                <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT:</Typography>
-                <Switch
-                  checked={showFft}
-                  onChange={(e) => { if (!lockDisplay) setShowFft(e.target.checked); }}
-                  disabled={lockDisplay}
-                  size="small"
-                  sx={switchStyles.small}
-                />
-                {!isGallery && (
-                  <>
-                    <Typography sx={{ ...typography.label, fontSize: 10 }}>Lens:</Typography>
-                    <Switch
-                      checked={showLens}
-                      onChange={() => {
-                        if (lockDisplay) return;
-                        if (!showLens) {
-                          setShowLens(true);
-                          setLensPos({ row: Math.floor(height / 2), col: Math.floor(width / 2) });
-                        } else {
-                          setShowLens(false);
-                          setLensPos(null);
-                        }
-                      }}
-                      disabled={lockDisplay}
-                      size="small"
-                      sx={switchStyles.small}
-                    />
-                  </>
-                )}
-              </>
-            )}
+          {/* Controls row: Profile, ROI, Lens, FFT, Export, Reset, Copy */}
+          <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
             {!hideProfile && (
               <>
                 <Typography sx={{ ...typography.label, fontSize: 10 }}>Profile:</Typography>
@@ -2673,6 +2896,39 @@ function Show2D() {
                 />
               </>
             )}
+            {!hideDisplay && (
+              <>
+                {!isGallery && (
+                  <>
+                    <Typography sx={{ ...typography.label, fontSize: 10 }}>Lens:</Typography>
+                    <Switch
+                      checked={showLens}
+                      onChange={() => {
+                        if (lockDisplay) return;
+                        if (!showLens) {
+                          setShowLens(true);
+                          setLensPos({ row: Math.floor(height / 2), col: Math.floor(width / 2) });
+                        } else {
+                          setShowLens(false);
+                          setLensPos(null);
+                        }
+                      }}
+                      disabled={lockDisplay}
+                      size="small"
+                      sx={switchStyles.small}
+                    />
+                  </>
+                )}
+                <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT:</Typography>
+                <Switch
+                  checked={showFft}
+                  onChange={(e) => { if (!lockDisplay) setShowFft(e.target.checked); }}
+                  disabled={lockDisplay}
+                  size="small"
+                  sx={switchStyles.small}
+                />
+              </>
+            )}
             <Box sx={{ flex: 1 }} />
             {!hideView && (
               <Button size="small" sx={compactButton} disabled={lockView || !needsReset} onClick={handleResetAll}>Reset</Button>
@@ -2695,7 +2951,7 @@ function Show2D() {
             /* Gallery mode */
             <Box sx={{ display: "grid", gridTemplateColumns: `repeat(${ncols}, auto)`, gap: 1 }}>
               {Array.from({ length: nImages }).map((_, i) => (
-                <Box key={i} sx={{ cursor: i === selectedIdx ? ((isDraggingResize || isDraggingResizeInner || isHoveringResize || isHoveringResizeInner) ? "nwse-resize" : isDraggingROI ? "move" : (draggingProfileEndpoint !== null || isDraggingProfileLine) ? "grabbing" : (profileActive && (hoveredProfileEndpoint !== null || isHoveringProfileLine)) ? "grab" : (profileActive || roiActive) ? "crosshair" : "grab") : (lockNavigation ? "default" : "pointer") }}>
+                <Box key={i} sx={{ cursor: i === selectedIdx ? ((isDraggingResize || isDraggingResizeInner || isHoveringResize || isHoveringResizeInner) ? "nwse-resize" : isDraggingROI ? "move" : (draggingProfileEndpoint !== null || isDraggingProfileLine) ? "grabbing" : (profileActive && (hoveredProfileEndpoint !== null || isHoveringProfileLine)) ? "grab" : (profileActive || roiActive || measureActive) ? "crosshair" : "grab") : (lockNavigation ? "default" : "pointer") }}>
                   <Box
                     ref={(el: HTMLDivElement | null) => { imageContainerRefs.current[i] = el; }}
                     sx={{ position: "relative", bgcolor: "#000", border: `2px solid ${i === selectedIdx ? themeColors.accent : themeColors.border}`, borderRadius: 0 }}
@@ -2748,7 +3004,7 @@ function Show2D() {
             /* Single image mode */
             <Box
               ref={(el: HTMLDivElement | null) => { imageContainerRefs.current[0] = el; }}
-              sx={{ position: "relative", bgcolor: "#000", border: `1px solid ${themeColors.border}`, cursor: isHoveringLensEdge ? "nwse-resize" : isDraggingROI ? "move" : (isDraggingResize || isDraggingResizeInner || isHoveringResize || isHoveringResizeInner) ? "nwse-resize" : (draggingProfileEndpoint !== null || isDraggingProfileLine) ? "grabbing" : (profileActive && (hoveredProfileEndpoint !== null || isHoveringProfileLine)) ? "grab" : (profileActive || roiActive) ? "crosshair" : "grab" }}
+              sx={{ position: "relative", bgcolor: "#000", border: `1px solid ${themeColors.border}`, width: canvasW, height: canvasH, cursor: isHoveringLensEdge ? "nwse-resize" : isDraggingROI ? "move" : (isDraggingResize || isDraggingResizeInner || isHoveringResize || isHoveringResizeInner) ? "nwse-resize" : (draggingProfileEndpoint !== null || isDraggingProfileLine) ? "grabbing" : (profileActive && (hoveredProfileEndpoint !== null || isHoveringProfileLine)) ? "grab" : (profileActive || roiActive || measureActive) ? "crosshair" : "grab" }}
               onMouseDown={(e) => handleMouseDown(e, 0)}
               onMouseMove={(e) => handleMouseMove(e, 0)}
               onMouseUp={(e) => handleMouseUp(e, 0)}
@@ -2786,7 +3042,7 @@ function Show2D() {
 
           {/* Stats bar - right below canvas (Show3D style) */}
           {!hideStats && showStats && (
-            <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", maxWidth: galleryGridWidth, boxSizing: "border-box", overflow: "hidden", whiteSpace: "nowrap", opacity: lockStats ? 0.7 : 1 }}>
+            <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", boxSizing: "border-box", overflow: "hidden", whiteSpace: "nowrap", opacity: lockStats ? 0.7 : 1 }}>
               {isGallery && (
                 <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>{labels?.[statsIdx] || `#${statsIdx + 1}`}</Typography>
               )}
@@ -2794,13 +3050,10 @@ function Show2D() {
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMin?.[statsIdx] ?? 0)}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsMax?.[statsIdx] ?? 0)}</Box></Typography>
               <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(statsStd?.[statsIdx] ?? 0)}</Box></Typography>
-              {roiActive && roiStats && roiStats.mean !== undefined && (
+              {measureActive && (
                 <>
                   <Box sx={{ borderLeft: `1px solid ${themeColors.border}`, height: 14 }} />
-                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>ROI <Box component="span" sx={{ color: "#4fc3f7" }}>{formatNumber(roiStats.mean)}</Box></Typography>
-                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: "#4fc3f7" }}>{formatNumber(roiStats.min)}</Box></Typography>
-                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: "#4fc3f7" }}>{formatNumber(roiStats.max)}</Box></Typography>
-                  <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: "#4fc3f7" }}>{formatNumber(roiStats.std)}</Box></Typography>
+                  <Typography sx={{ fontSize: 11, color: "#fff", fontWeight: "bold" }}>Measuring</Typography>
                 </>
               )}
             </Box>
@@ -2808,7 +3061,7 @@ function Show2D() {
 
           {/* Gallery FFT Controls - below gallery grid */}
           {effectiveShowFft && isGallery && (
-            <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, maxWidth: galleryGridWidth, boxSizing: "border-box" }}>
+            <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, boxSizing: "border-box" }}>
               <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
                 <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: lockDisplay ? 0.5 : 1, pointerEvents: lockDisplay ? "none" : "auto" }}>
                   <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT Scale:</Typography>
@@ -2858,7 +3111,7 @@ function Show2D() {
 
           {/* Controls: two rows left + histogram right, ROI below */}
           {showControls && (
-            <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, maxWidth: galleryGridWidth, boxSizing: "border-box" }}>
+            <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, boxSizing: "border-box" }}>
               {/* Top: control rows + histogram side by side */}
               <Box sx={{ display: "flex", gap: `${SPACING.SM}px` }}>
                 <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
@@ -2931,7 +3184,8 @@ function Show2D() {
                       {(["square", "rectangle", "circle", "annular"] as const).map((s) => (<MenuItem key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</MenuItem>))}
                     </Select>
                     <Button size="small" sx={compactButton} onClick={() => {
-                      const newRoi: ROIItem = { row: Math.floor(height / 2), col: Math.floor(width / 2), shape: newRoiShape, radius: 10, radius_inner: 5, width: 20, height: 20, color: ROI_COLORS[(roiList?.length ?? 0) % ROI_COLORS.length], line_width: 2, highlight: false };
+                      const defR = Math.max(10, Math.round(Math.min(width, height) * 0.05));
+                      const newRoi: ROIItem = { row: Math.floor(height / 2), col: Math.floor(width / 2), shape: newRoiShape, radius: defR, radius_inner: Math.max(5, Math.round(defR * 0.5)), width: defR * 2, height: defR * 2, color: ROI_COLORS[(roiList?.length ?? 0) % ROI_COLORS.length], line_width: 2, highlight: false };
                       const newList = [...(roiList || []), newRoi];
                       setRoiList(newList);
                       setRoiSelectedIdx(newList.length - 1);

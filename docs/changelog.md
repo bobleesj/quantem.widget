@@ -2,72 +2,56 @@
 
 ## Unreleased
 
-### Bin
-- **breaking:** removed `use_torch` parameter and `compute_backend`/`torch_enabled` traits — Bin is unconditionally torch-only, these were always-true values with no alternative path
-
-### Show3D
-- **breaking:** `state_dict()` no longer includes `use_torch` or `device` — these are runtime-dependent and non-portable across machines
-
 ### New widgets
 - **Merge4DSTEM** — stack multiple 4D-STEM datasets along a time axis with GPU-accelerated merge, detector binning, source preview, and Zarr export
 - **Show1D** — interactive 1D viewer for spectra, profiles, and time series with multi-trace overlay, calibrated axes, log scale, and figure export
 
+### Show2D, Show3D, Mark2D
+- **breaking:** `image_width_px` renamed to `canvas_size` — pass `canvas_size=800` to set the canvas display width in pixels (0 = auto)
+
 ### Show1D
-- auto-contrast with percentile clipping: clips Y-axis to a configurable percentile range (default 2–98%), revealing weak features like core-loss edges in EELS spectra dominated by the zero-loss peak. Toggle via `auto_contrast=True` or the "Auto:" switch in controls
-- selectable peak markers: click to place peaks (snaps to nearest local max), click peaks to select, Delete/Backspace to remove selected peaks, `selected_peaks` trait for downstream analysis in Python
-- grid density slider: adjustable grid line count (5–50) when grid is enabled
-- axis range lock: drag on X or Y axis area to lock a range, double-click axis to unlock; `x_range`/`y_range` traits for programmatic control
-- Y-axis range handles: drag-to-lock Y range with input fields, mirrors the X range system
-- range-scoped statistics: when X range is locked, shows per-trace mean/min/max/std and integral (`np.trapezoid`) within the selected region
-- peak FWHM measurement: select peaks to see Gaussian-fitted FWHM with double-arrow overlay; `measure_fwhm()` API and `peak_fwhm` trait
-- CSV export: copy range data to clipboard or download as CSV (range-only or full) from Export dropdown
-- figure export: PDF and PNG publication-quality figure export from Export dropdown
-- legend click: click legend entries to focus/unfocus individual traces
-- reset view (`R` / double-click / Reset button) now also unlocks any locked X/Y ranges
-- **breaking:** removed baseline subtraction, normalization, delta measurement, and mode selector (PAN/PEAK/RANGE/DELTA) — use Python for these transforms instead
-- **breaking:** removed `corrected_data` property, `baseline_mode`, `normalize_mode` traits
-- **breaking:** tool group `"analysis"` renamed to `"peaks"` (`disable_analysis` → `disable_peaks`, `hide_analysis` → `hide_peaks`)
-
-### Show3D
-- diff mode: `diff_mode="previous"` shows frame-to-frame differences, `diff_mode="first"` shows cumulative change from the first frame — one-liner QC for drift and beam damage in time series
-- `profile_all_frames()`: extract the same line profile from every frame, returns `(n_slices, n_points)` array passable to Show1D for multi-frame comparison
-
-### Show2D, Show3D, Mark2D, Show4D, Show4DSTEM, ShowComplex2D, Show3DVolume
-- ROI FFT: when both ROI and FFT are active, the FFT shows only the cropped ROI region with real-time updates during drag — useful for inspecting local crystal structure in diffraction data
-- d-spacing click: click on the FFT panel to measure d-spacing at any reflection; displays crosshair with spatial frequency and d-spacing in calibrated units (requires `pixel_size`)
-
-### ShowComplex2D
-- single-mode ROI: circle, square, and rectangle ROI with drag-to-move and resize, enabling region-specific FFT analysis of complex-valued reconstructions
-
-### Show3DVolume
-- single-mode ROI on XY slice: circle, square, and rectangle ROI with drag-to-move and resize; XY FFT crops to ROI region, XZ/YZ FFTs unchanged
-
-### Show2D, Show3D, Show4D, Show4DSTEM
-- Shift+drag rectangle ROI corner: resize while locking the original width/height ratio
-
-### Mark2D
-- ArrowUp/ArrowDown keyboard nudge: move active ROI vertically by 1px (10px with Shift)
-
-### Align2D
-- ArrowUp/ArrowDown keyboard nudge: move alignment offset vertically by 1px (0.1px with Shift)
-
-### Edit2D
-- per-image independent editing (`shared=False`): each image gets its own crop region and mask, toggle via Link switch in the navigation bar
-- ArrowUp/ArrowDown keyboard nudge: move crop region vertically by 1px for pixel-precise alignment
-- Shift+drag corner: resize crop while locking the original aspect ratio
-- histogram range labels: vmin/vmax values shown below the contrast slider
+- auto-contrast with percentile clipping (default 2–98%)
+- selectable peak markers with snap-to-local-max, Delete to remove
+- grid density slider (5–50 lines)
+- axis range lock: drag on X or Y axis to lock, double-click to unlock
+- range-scoped statistics: mean/min/max/std and integral within locked range
+- peak FWHM measurement with Gaussian fit overlay
+- CSV export (range-only or full) from Export dropdown
+- figure export (PDF + PNG) from Export dropdown
+- legend click to focus/unfocus traces
 
 ### Show2D
 - file loaders: `from_png`, `from_tiff`, `from_emd`, `from_path`, `from_folder(file_type=...)`
 - stack reduction modes (`first`, `index`, `mean`, `max`, `sum`) for collapsing stacks to 2D
+- real-time ROI FFT updates during drag (no longer deferred to mouseup)
+- layout: stats bar and controls now match canvas width
 
 ### Show3D
+- diff mode: `diff_mode="previous"` or `"first"` for frame-to-frame or cumulative change
+- `profile_all_frames()`: extract the same line profile from every frame
 - multi-ROI: place, resize, duplicate, and delete multiple ROIs with per-ROI color and stats
 - one-click export bundle (`.zip` with PNG + ROI timeseries CSV + state JSON)
 - file loaders: `from_emd`, `from_tiff`, `from_png`, `from_folder(file_type=...)`
 
+### Show2D, Show3D, Mark2D, Show4D, Show4DSTEM, ShowComplex2D, Show3DVolume
+- ROI FFT: FFT shows cropped ROI region with real-time updates during drag
+- d-spacing click: click FFT panel to measure d-spacing with sub-pixel Bragg spot snap
+
+### ShowComplex2D
+- single-mode ROI (circle, square, rectangle) with drag and resize
+
+### Show3DVolume
+- single-mode ROI on XY slice (circle, square, rectangle)
+
+### Show2D, Show3D, Show4D, Show4DSTEM, ShowComplex2D, Show3DVolume
+- Shift+drag rectangle ROI corner locks aspect ratio
+
+### Edit2D
+- per-image independent editing (`shared=False`) with Link toggle
+- ArrowUp/ArrowDown nudge, Shift+drag aspect lock, histogram range labels
+
 ### Show3D, Show4D, Show4DSTEM
-- quick-view presets: save/recall 3 display configurations via UI buttons or keyboard (`1/2/3`, `Shift+1/2/3`)
+- quick-view presets: save/recall 3 display configurations (`1/2/3`, `Shift+1/2/3`)
 
 ## v0.0.8 (2026-02-20)
 

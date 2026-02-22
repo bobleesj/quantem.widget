@@ -2,6 +2,7 @@ import json
 import numpy as np
 import pytest
 import torch
+import traitlets
 
 from quantem.widget import Show3D
 
@@ -218,10 +219,10 @@ def test_show3d_single_slice():
     assert widget.slice_idx == 0
 
 def test_show3d_image_width():
-    """image_width_px parameter is stored."""
+    """canvas_size parameter is stored."""
     data = np.random.rand(5, 16, 16).astype(np.float32)
-    widget = Show3D(data, image_width_px=400)
-    assert widget.image_width_px == 400
+    widget = Show3D(data, canvas_size=400)
+    assert widget.canvas_size == 400
 
 def test_show3d_current_timestamp():
     """Current timestamp updates with slice_idx."""
@@ -1103,3 +1104,137 @@ def test_show3d_show_controls_default():
     stack = np.random.rand(5, 16, 16).astype(np.float32)
     w = Show3D(stack)
     assert w.show_controls is True
+
+
+# =========================================================================
+# profile_all_frames
+# =========================================================================
+
+def test_show3d_profile_all_frames_shape():
+    data = np.random.rand(8, 16, 16).astype(np.float32)
+    w = Show3D(data)
+    w.set_profile((0, 0), (0, 15))
+    result = w.profile_all_frames()
+    assert result.shape[0] == 8
+    assert result.shape[1] >= 2
+    assert result.dtype == np.float32
+
+def test_show3d_profile_all_frames_values():
+    data = np.zeros((4, 10, 10), dtype=np.float32)
+    for i in range(4):
+        data[i] = float(i * 10)
+    w = Show3D(data)
+    w.set_profile((5, 0), (5, 9))
+    result = w.profile_all_frames()
+    for i in range(4):
+        assert result[i].mean() == pytest.approx(float(i * 10), abs=0.5)
+
+def test_show3d_profile_all_frames_explicit_endpoints():
+    data = np.ones((3, 16, 16), dtype=np.float32) * 7.0
+    w = Show3D(data)
+    result = w.profile_all_frames(start=(0, 0), end=(0, 15))
+    assert result.shape[0] == 3
+    assert result[0].mean() == pytest.approx(7.0, abs=0.1)
+
+def test_show3d_profile_all_frames_no_line_raises():
+    data = np.random.rand(3, 8, 8).astype(np.float32)
+    w = Show3D(data)
+    with pytest.raises(ValueError, match="No profile line"):
+        w.profile_all_frames()
+
+def test_show3d_profile_all_frames_respects_width():
+    data = np.ones((2, 20, 20), dtype=np.float32) * 3.0
+    w = Show3D(data)
+    w.profile_width = 5
+    w.set_profile((10, 0), (10, 19))
+    result = w.profile_all_frames()
+    assert result.shape[0] == 2
+    assert result[0].mean() == pytest.approx(3.0, abs=0.1)
+
+
+# =========================================================================
+# diff_mode
+# =========================================================================
+
+def test_show3d_diff_mode_default():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    w = Show3D(data)
+    assert w.diff_mode == "off"
+
+def test_show3d_diff_mode_previous():
+    data = np.zeros((4, 8, 8), dtype=np.float32)
+    for i in range(4):
+        data[i] = float(i * 10)
+    w = Show3D(data, diff_mode="previous")
+    w.slice_idx = 2
+    frame = w._get_display_frame(2)
+    assert frame.mean() == pytest.approx(10.0)  # 20 - 10
+
+def test_show3d_diff_mode_previous_frame_zero():
+    data = np.ones((3, 8, 8), dtype=np.float32) * 5.0
+    w = Show3D(data, diff_mode="previous")
+    frame = w._get_display_frame(0)
+    assert frame.mean() == pytest.approx(0.0)
+
+def test_show3d_diff_mode_first():
+    data = np.zeros((4, 8, 8), dtype=np.float32)
+    for i in range(4):
+        data[i] = float(i * 10)
+    w = Show3D(data, diff_mode="first")
+    frame = w._get_display_frame(3)
+    assert frame.mean() == pytest.approx(30.0)  # 30 - 0
+
+def test_show3d_diff_mode_off_normal():
+    data = np.zeros((3, 8, 8), dtype=np.float32)
+    data[1] = 42.0
+    w = Show3D(data)
+    frame = w._get_display_frame(1)
+    assert frame.mean() == pytest.approx(42.0)
+
+def test_show3d_diff_mode_invalid():
+    data = np.random.rand(3, 8, 8).astype(np.float32)
+    with pytest.raises(traitlets.TraitError):
+        Show3D(data, diff_mode="bad")
+
+def test_show3d_diff_mode_in_state_dict():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    w = Show3D(data, diff_mode="previous")
+    sd = w.state_dict()
+    assert sd["diff_mode"] == "previous"
+
+def test_show3d_diff_mode_state_roundtrip():
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    w = Show3D(data, diff_mode="first")
+    sd = w.state_dict()
+    w2 = Show3D(data, state=sd)
+    assert w2.diff_mode == "first"
+
+def test_show3d_diff_mode_summary(capsys):
+    data = np.random.rand(5, 8, 8).astype(np.float32)
+    w = Show3D(data, diff_mode="previous")
+    w.summary()
+    out = capsys.readouterr().out
+    assert "diff=previous" in out
+
+def test_show3d_diff_mode_data_range_negative():
+    data = np.zeros((3, 8, 8), dtype=np.float32)
+    data[0] = 10.0
+    data[1] = 5.0
+    data[2] = 20.0
+    w = Show3D(data)
+    w.diff_mode = "previous"
+    # frame 1 - frame 0 = -5, frame 2 - frame 1 = 15
+    assert w.data_min < 0
+
+def test_show3d_diff_mode_toggle_restores_range():
+    data = np.zeros((3, 8, 8), dtype=np.float32)
+    data[0] = 0.0
+    data[1] = 50.0
+    data[2] = 100.0
+    w = Show3D(data)
+    orig_min, orig_max = w.data_min, w.data_max
+    w.diff_mode = "previous"
+    assert w.data_min != orig_min or w.data_max != orig_max
+    w.diff_mode = "off"
+    assert w.data_min == pytest.approx(orig_min)
+    assert w.data_max == pytest.approx(orig_max)

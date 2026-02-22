@@ -14,7 +14,7 @@ import "./mark2d.css";
 import { useTheme } from "../theme";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawColorbar, roundToNiceValue, exportFigure, canvasToPDF } from "../scalebar";
 import { extractFloat32, formatNumber, downloadBlob } from "../format";
-import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen } from "../colormaps";
+import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, renderToOffscreenReuse } from "../colormaps";
 import { computeHistogramFromBytes } from "../histogram";
 import { findDataRange, computeStats, percentileClip, sliderRange, applyLogScale } from "../stats";
 import { fft2d, fftshift, computeMagnitude, autoEnhanceFFT, getWebGPUFFT, nextPow2, type WebGPUFFT } from "../webgpu-fft";
@@ -207,6 +207,35 @@ function cropROIRegion(
 
   return { cropped, cropW, cropH };
 }
+
+// ============================================================================
+// FFT peak finder (snap to Bragg spot with sub-pixel centroid refinement)
+// ============================================================================
+function findFFTPeak(mag: Float32Array, width: number, height: number, col: number, row: number, radius: number): { row: number; col: number } {
+  const c0 = Math.max(0, Math.floor(col) - radius);
+  const r0 = Math.max(0, Math.floor(row) - radius);
+  const c1 = Math.min(width - 1, Math.floor(col) + radius);
+  const r1 = Math.min(height - 1, Math.floor(row) + radius);
+  let bestCol = Math.round(col), bestRow = Math.round(row), bestVal = -Infinity;
+  for (let ir = r0; ir <= r1; ir++) {
+    for (let ic = c0; ic <= c1; ic++) {
+      const val = mag[ir * width + ic];
+      if (val > bestVal) { bestVal = val; bestCol = ic; bestRow = ir; }
+    }
+  }
+  const wc0 = Math.max(0, bestCol - 1), wc1 = Math.min(width - 1, bestCol + 1);
+  const wr0 = Math.max(0, bestRow - 1), wr1 = Math.min(height - 1, bestRow + 1);
+  let sumW = 0, sumWC = 0, sumWR = 0;
+  for (let ir = wr0; ir <= wr1; ir++) {
+    for (let ic = wc0; ic <= wc1; ic++) {
+      const w = mag[ir * width + ic];
+      sumW += w; sumWC += w * ic; sumWR += w * ir;
+    }
+  }
+  if (sumW > 0) return { row: sumWR / sumW, col: sumWC / sumW };
+  return { row: bestRow, col: bestCol };
+}
+const FFT_SNAP_RADIUS = 5;
 
 function findLocalMax(data: Float32Array, width: number, height: number, cc: number, cr: number, radius: number): { row: number; col: number } {
   let bestCol = cc, bestRow = cr, bestVal = -Infinity;
@@ -526,6 +555,7 @@ function HistogramWidget({
           "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px" },
         }}
       />
+      <Box sx={{ display: "flex", justifyContent: "space-between", width }}><Typography sx={{ fontSize: 8, fontFamily: "monospace", opacity: 0.6, lineHeight: 1 }}>{(() => { const v = dataMin + (vminPct / 100) * (dataMax - dataMin); return v >= 1000 ? v.toExponential(1) : v.toFixed(1); })()}</Typography><Typography sx={{ fontSize: 8, fontFamily: "monospace", opacity: 0.6, lineHeight: 1 }}>{(() => { const v = dataMin + (vmaxPct / 100) * (dataMax - dataMin); return v >= 1000 ? v.toExponential(1) : v.toFixed(1); })()}</Typography></Box>
     </Box>
   );
 }
@@ -563,7 +593,7 @@ const render = createRender(() => {
   const [title] = useModelState<string>("title");
   const [widgetVersion] = useModelState<string>("widget_version");
   const [showStats] = useModelState<boolean>("show_stats");
-  const [imageWidthPx] = useModelState<number>("image_width_px");
+  const [canvasSizeTrait] = useModelState<number>("canvas_size");
   const [showControls] = useModelState<boolean>("show_controls");
   const [disabledTools] = useModelState<string[]>("disabled_tools");
   const [hiddenTools] = useModelState<string[]>("hidden_tools");
@@ -714,11 +744,24 @@ const render = createRender(() => {
     p1: { row: number; col: number };
   } | null>(null);
 
+  // Colorbar vmin/vmax cache (updated by data effect, read by UI effect)
+  const colorbarVminRef = React.useRef(0);
+  const colorbarVmaxRef = React.useRef(1);
+
   // FFT refs
   const gpuFFTRef = React.useRef<WebGPUFFT | null>(null);
   const fftOffscreenRef = React.useRef<HTMLCanvasElement | null>(null);
   const fftCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const fftContainerRef = React.useRef<HTMLDivElement | null>(null);
   const fftOverlayRef = React.useRef<HTMLCanvasElement | null>(null);
+
+  // FFT d-spacing measurement
+  const fftMagCacheRef = React.useRef<Float32Array | null>(null);
+  const [fftClickInfo, setFftClickInfo] = React.useState<{
+    row: number; col: number; distPx: number;
+    spatialFreq: number | null; dSpacing: number | null;
+  } | null>(null);
+  const fftClickStartRef = React.useRef<{ x: number; y: number } | null>(null);
 
   // Collapsible advanced options
   const [showAdvanced, setShowAdvanced] = React.useState(false);
@@ -728,6 +771,8 @@ const render = createRender(() => {
   const overlayRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
   const uiRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
   const offscreenRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
+  const mainImgDatasRef = React.useRef<ImageData[]>([]);
+  const [offscreenVersion, setOffscreenVersion] = React.useState(0);
   const canvasContainerRefs = React.useRef<(HTMLDivElement | null)[]>([]);
 
   const [hover, setHover] = React.useState<{
@@ -765,13 +810,13 @@ const render = createRender(() => {
   // Sync initial size when image loads — never shrink below target
   React.useEffect(() => {
     if (width > 0 && height > 0) {
-      const sz = imageWidthPx > 0
-        ? imageWidthPx
+      const sz = canvasSizeTrait > 0
+        ? canvasSizeTrait
         : Math.max(CANVAS_TARGET_SIZE, Math.round(Math.max(width, height) * scale));
       if (!isGallery) setMainCanvasSize(sz);
-      initialCanvasSizeRef.current = imageWidthPx > 0 ? imageWidthPx : CANVAS_TARGET_SIZE;
+      initialCanvasSizeRef.current = canvasSizeTrait > 0 ? canvasSizeTrait : CANVAS_TARGET_SIZE;
     }
-  }, [width, height, scale, isGallery, imageWidthPx]);
+  }, [width, height, scale, isGallery, canvasSizeTrait]);
 
   // Compute display dimensions
   const targetSize = isGallery ? galleryCanvasSize : mainCanvasSize;
@@ -805,11 +850,34 @@ const render = createRender(() => {
     return computeRoiStats(activeRoi, data, width, height);
   }, [activeRoi, perImageData, isGallery, selectedIdx, width, height, hideRoi]);
 
-  // Build offscreen canvases from float32 data (cmap + contrast)
+  // Initialize reusable offscreen canvases (one per image, resized when dimensions change)
+  React.useEffect(() => {
+    if (width <= 0 || height <= 0 || nImages <= 0) return;
+    const canvases: (HTMLCanvasElement | null)[] = [];
+    const imgDatas: ImageData[] = [];
+    for (let i = 0; i < nImages; i++) {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvases.push(canvas);
+      imgDatas.push(canvas.getContext("2d")!.createImageData(width, height));
+    }
+    offscreenRefs.current = canvases;
+    mainImgDatasRef.current = imgDatas;
+  }, [width, height, nImages]);
+
+  // -------------------------------------------------------------------------
+  // Data effect: normalize + colormap → reusable offscreen canvases
+  // (does NOT depend on zoom/pan — avoids recomputing colormap on every pan/zoom)
+  // -------------------------------------------------------------------------
   React.useEffect(() => {
     if (perImageData.length === 0 || !width || !height) return;
+    if (offscreenRefs.current.length === 0 || mainImgDatasRef.current.length === 0) return;
     const lut = COLORMAPS[cmap || "gray"] || COLORMAPS.gray;
     for (let i = 0; i < nImages; i++) {
+      const offscreen = offscreenRefs.current[i];
+      const imgData = mainImgDatasRef.current[i];
+      if (!offscreen || !imgData) continue;
       const f32 = perImageData[i];
       if (!f32) continue;
       const data = logScale ? applyLogScale(f32) : f32;
@@ -820,11 +888,16 @@ const render = createRender(() => {
         const { min: dMin, max: dMax } = findDataRange(data);
         ({ vmin, vmax } = sliderRange(dMin, dMax, vminPct, vmaxPct));
       }
-      const result = renderToOffscreen(data, width, height, lut, vmin, vmax);
-      offscreenRefs.current[i] = result;
+      renderToOffscreenReuse(data, lut, vmin, vmax, offscreen, imgData);
+      // Cache vmin/vmax for the currently-displayed image (used by colorbar in UI effect)
+      const displayIdx = isGallery ? selectedIdx : 0;
+      if (i === displayIdx) {
+        colorbarVminRef.current = vmin;
+        colorbarVmaxRef.current = vmax;
+      }
     }
-    offscreenRefs.current.length = nImages;
-  }, [perImageData, nImages, width, height, cmap, autoContrast, logScale, vminPct, vmaxPct, percentileLow, percentileHigh]);
+    setOffscreenVersion(v => v + 1);
+  }, [perImageData, nImages, width, height, cmap, autoContrast, logScale, vminPct, vmaxPct, percentileLow, percentileHigh, isGallery, selectedIdx]);
 
   // Histogram data for current image
   const histogramData = React.useMemo(() => {
@@ -870,9 +943,13 @@ const render = createRender(() => {
   // Dot size
   const size = Number.isFinite(dotSize) && dotSize > 0 ? dotSize : 12;
 
-  // Render all canvases
-  React.useEffect(() => {
-    if (!width || !height || perImageData.length === 0) return;
+  // -------------------------------------------------------------------------
+  // Draw effect: zoom/pan changes — cheap, just drawImage from cached offscreens
+  // (does NOT recompute colormap pipeline — only composites cached images + markers)
+  // useLayoutEffect prevents black flash when canvas dimensions change (resize)
+  // -------------------------------------------------------------------------
+  React.useLayoutEffect(() => {
+    if (!width || !height || offscreenRefs.current.length === 0) return;
     for (let i = 0; i < nImages; i++) {
       const canvas = canvasRefs.current[i];
       const offscreen = offscreenRefs.current[i];
@@ -895,7 +972,7 @@ const render = createRender(() => {
       ctx.scale(zoom, zoom);
       ctx.translate(-cx, -cy);
 
-      ctx.drawImage(offscreen, 0, 0, canvasW, canvasH);
+      ctx.drawImage(offscreen, 0, 0, width, height, 0, 0, canvasW, canvasH);
 
       // Draw points for this image
       if (!hidePoints) {
@@ -915,7 +992,7 @@ const render = createRender(() => {
       ctx.restore();
 
     }
-  }, [perImageData, width, height, canvasW, canvasH, displayScale, zoomStates, selectedPoints, size, tc.accent, tc.bg, tc.text, nImages, isGallery, selectedIdx, getZoom, getPointsForImage, markerOpacity, borderWidth, cmap, autoContrast, logScale, vminPct, vmaxPct, percentileLow, percentileHigh, hidePoints]);
+  }, [offscreenVersion, width, height, canvasW, canvasH, displayScale, zoomStates, selectedPoints, size, tc.bg, nImages, getZoom, getPointsForImage, markerOpacity, borderWidth, hidePoints]);
 
   // Render ROI overlays + edge tick marks
   React.useEffect(() => {
@@ -1163,18 +1240,11 @@ const render = createRender(() => {
       const { zoom, panX, panY } = getZoom(i);
       drawScaleBarHiDPI(uiCanvas, DPR, zoom, pxSizeVal, unit, width);
 
-      // Colorbar overlay
-      if (showColorbar && perImageData[i]) {
+      // Colorbar overlay (reads cached vmin/vmax from data effect — no recomputation)
+      if (showColorbar) {
         const lut = COLORMAPS[cmap || "gray"] || COLORMAPS.gray;
-        const f32 = perImageData[i];
-        const data = logScale ? applyLogScale(f32) : f32;
-        let vmin: number, vmax: number;
-        if (autoContrast) {
-          ({ vmin, vmax } = percentileClip(data, percentileLow, percentileHigh));
-        } else {
-          const { min: dMin, max: dMax } = findDataRange(data);
-          ({ vmin, vmax } = sliderRange(dMin, dMax, vminPct, vmaxPct));
-        }
+        const vmin = colorbarVminRef.current;
+        const vmax = colorbarVmaxRef.current;
         const cssW = uiCanvas.width / DPR;
         const cssH = uiCanvas.height / DPR;
         const ctx = uiCanvas.getContext("2d");
@@ -1211,7 +1281,7 @@ const render = createRender(() => {
         ctx.fillText(`${j + 1}`, screenX, screenY - screenDotR - 2 * DPR);
       }
     }
-  }, [pixelSize, canvasW, canvasH, width, height, nImages, zoomStates, getZoom, selectedPoints, getPointsForImage, size, displayScale, labelSize, labelColor, tc.text, showColorbar, cmap, logScale, autoContrast, perImageData, vminPct, vmaxPct, percentileLow, percentileHigh, hidePoints]);
+  }, [pixelSize, canvasW, canvasH, width, height, nImages, zoomStates, getZoom, selectedPoints, getPointsForImage, size, displayScale, labelSize, labelColor, tc.text, showColorbar, cmap, logScale, offscreenVersion, hidePoints]);
 
   // Map screen coordinates to image pixel coordinates
   const clientToImage = React.useCallback(
@@ -1286,6 +1356,7 @@ const render = createRender(() => {
       fftshift(real, fftW, fftH);
       fftshift(imag, fftW, fftH);
       const mag = computeMagnitude(real, imag);
+      fftMagCacheRef.current = mag.slice();
       autoEnhanceFFT(mag, fftW, fftH);
       const logMag = applyLogScale(mag);
       const { min: logMin, max: logMax } = findDataRange(logMag);
@@ -1306,7 +1377,10 @@ const render = createRender(() => {
     compute();
   }, [effectiveShowFft, roiFftActive, perImageData, isGallery, selectedIdx, width, height, cmap, canvasW, canvasH, safeRois, activeRoiIdx]);
 
-  // Render FFT overlay (reciprocal-space scale bar + colorbar)
+  // Clear FFT measurement when image, FFT state, or ROI changes
+  React.useEffect(() => { setFftClickInfo(null); }, [selectedIdx, effectiveShowFft, roiFftActive, activeRoiIdx]);
+
+  // Render FFT overlay (reciprocal-space scale bar + colorbar + d-spacing marker)
   React.useEffect(() => {
     const overlay = fftOverlayRef.current;
     if (!overlay || !effectiveShowFft) return;
@@ -1323,17 +1397,122 @@ const render = createRender(() => {
       drawFFTScaleBarHiDPI(overlay, DPR, 1, fftPixelSize, fftW);
     }
 
-  }, [effectiveShowFft, canvasW, canvasH, pixelSize, width, fftCropDims]);
+    // D-spacing crosshair marker
+    const fftW = fftCropDims?.fftWidth ?? width;
+    const fftH = fftCropDims?.fftHeight ?? height;
+    if (fftClickInfo) {
+      ctx.save();
+      ctx.scale(DPR, DPR);
+      const screenX = fftClickInfo.col / fftW * canvasW;
+      const screenY = fftClickInfo.row / fftH * canvasH;
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+      ctx.shadowColor = "rgba(0, 0, 0, 0.6)";
+      ctx.shadowBlur = 2;
+      ctx.lineWidth = 1.5;
+      const r = 8;
+      ctx.beginPath();
+      ctx.moveTo(screenX - r, screenY); ctx.lineTo(screenX - 3, screenY);
+      ctx.moveTo(screenX + 3, screenY); ctx.lineTo(screenX + r, screenY);
+      ctx.moveTo(screenX, screenY - r); ctx.lineTo(screenX, screenY - 3);
+      ctx.moveTo(screenX, screenY + 3); ctx.lineTo(screenX, screenY + r);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(screenX, screenY, 4, 0, Math.PI * 2);
+      ctx.stroke();
+      if (fftClickInfo.dSpacing != null) {
+        const d = fftClickInfo.dSpacing;
+        const label = d >= 10 ? `d = ${(d / 10).toFixed(2)} nm` : `d = ${d.toFixed(2)} \u00C5`;
+        ctx.font = "bold 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+        ctx.fillStyle = "white";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "bottom";
+        ctx.fillText(label, screenX + 10, screenY - 4);
+      }
+      ctx.restore();
+    }
+
+  }, [effectiveShowFft, canvasW, canvasH, pixelSize, width, height, fftCropDims, fftClickInfo]);
+
+  // Convert FFT canvas mouse position to FFT image pixel coordinates
+  const fftScreenToImg = (e: React.MouseEvent): { col: number; row: number } | null => {
+    const canvas = fftCanvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    const fftW = fftCropDims?.fftWidth ?? width;
+    const fftH = fftCropDims?.fftHeight ?? height;
+    const imgCol = (mouseX / canvasW) * fftW;
+    const imgRow = (mouseY / canvasH) * fftH;
+    if (imgCol >= 0 && imgCol < fftW && imgRow >= 0 && imgRow < fftH) {
+      return { col: imgCol, row: imgRow };
+    }
+    return null;
+  };
+
+  const handleFftMouseDown = (e: React.MouseEvent) => {
+    fftClickStartRef.current = { x: e.clientX, y: e.clientY };
+  };
+
+  const handleFftMouseUp = (e: React.MouseEvent) => {
+    if (fftClickStartRef.current) {
+      const dx = e.clientX - fftClickStartRef.current.x;
+      const dy = e.clientY - fftClickStartRef.current.y;
+      if (Math.sqrt(dx * dx + dy * dy) < 3) {
+        const pos = fftScreenToImg(e);
+        if (pos) {
+          const fftW = fftCropDims?.fftWidth ?? width;
+          const fftH = fftCropDims?.fftHeight ?? height;
+          let imgCol = pos.col;
+          let imgRow = pos.row;
+          // Snap to nearest Bragg spot (local max in FFT magnitude)
+          if (fftMagCacheRef.current) {
+            const snapped = findFFTPeak(fftMagCacheRef.current, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
+            imgCol = snapped.col;
+            imgRow = snapped.row;
+          }
+          const halfW = Math.floor(fftW / 2);
+          const halfH = Math.floor(fftH / 2);
+          const dcol = imgCol - halfW;
+          const drow = imgRow - halfH;
+          const distPx = Math.sqrt(dcol * dcol + drow * drow);
+          if (distPx < 1) {
+            setFftClickInfo(null);
+          } else {
+            let spatialFreq: number | null = null;
+            let dSpacing: number | null = null;
+            if (pixelSize > 0) {
+              const paddedW = nextPow2(fftW);
+              const paddedH = nextPow2(fftH);
+              const binC = ((Math.round(imgCol) - halfW) % fftW + fftW) % fftW;
+              const binR = ((Math.round(imgRow) - halfH) % fftH + fftH) % fftH;
+              const freqC = binC <= paddedW / 2 ? binC / (paddedW * pixelSize) : (binC - paddedW) / (paddedW * pixelSize);
+              const freqR = binR <= paddedH / 2 ? binR / (paddedH * pixelSize) : (binR - paddedH) / (paddedH * pixelSize);
+              spatialFreq = Math.sqrt(freqC * freqC + freqR * freqR);
+              dSpacing = spatialFreq > 0 ? 1 / spatialFreq : null;
+            }
+            setFftClickInfo({ row: imgRow, col: imgCol, distPx, spatialFreq, dSpacing });
+          }
+        }
+      }
+      fftClickStartRef.current = null;
+    }
+  };
+
+  const handleFftMouseLeave = () => {
+    fftClickStartRef.current = null;
+  };
 
   // Prevent page scroll on canvas containers
   React.useEffect(() => {
     const preventDefault = (e: WheelEvent) => e.preventDefault();
-    const containers = canvasContainerRefs.current.filter(Boolean);
+    const containers = [...canvasContainerRefs.current.filter(Boolean)];
+    if (fftContainerRef.current) containers.push(fftContainerRef.current);
     containers.forEach(el => el?.addEventListener("wheel", preventDefault, { passive: false }));
     return () => {
       containers.forEach(el => el?.removeEventListener("wheel", preventDefault));
     };
-  }, [nImages]);
+  }, [nImages, effectiveShowFft]);
 
   // Scroll to zoom
   const handleWheel = React.useCallback(
@@ -2020,6 +2199,20 @@ const render = createRender(() => {
           setSelectedIdx(Math.min(nImages - 1, selectedIdx + 1));
         }
         break;
+      case "ArrowUp":
+        if (activeRoi && !lockRoi) {
+          e.preventDefault();
+          const step = e.shiftKey ? 10 : 1;
+          updateActiveRoi({ row: Math.max(0, activeRoi.row - step) });
+        }
+        break;
+      case "ArrowDown":
+        if (activeRoi && !lockRoi) {
+          e.preventDefault();
+          const step = e.shiftKey ? 10 : 1;
+          updateActiveRoi({ row: Math.min(height - 1, activeRoi.row + step) });
+        }
+        break;
       case "Escape":
         e.preventDefault();
         setActiveRoiIdx(-1);
@@ -2068,25 +2261,33 @@ const render = createRender(() => {
 
   React.useEffect(() => {
     if (!isResizing) return;
+    let rafId = 0;
+    let latestSize = resizeStart ? resizeStart.size : (isGallery ? galleryCanvasSize : mainCanvasSize);
+    const setSize = isGallery ? setGalleryCanvasSize : setMainCanvasSize;
+
     const handleMouseMove = (e: MouseEvent) => {
       if (!resizeStart) return;
       const delta = Math.max(e.clientX - resizeStart.x, e.clientY - resizeStart.y);
       const minSize = isGallery ? 100 : initialCanvasSizeRef.current;
       const maxSize = isGallery ? 600 : 800;
-      const newSize = Math.max(minSize, Math.min(maxSize, resizeStart.size + delta));
-      if (isGallery) {
-        setGalleryCanvasSize(newSize);
-      } else {
-        setMainCanvasSize(newSize);
+      latestSize = Math.max(minSize, Math.min(maxSize, resizeStart.size + delta));
+      if (!rafId) {
+        rafId = requestAnimationFrame(() => {
+          rafId = 0;
+          setSize(latestSize);
+        });
       }
     };
     const handleMouseUp = () => {
+      cancelAnimationFrame(rafId);
+      setSize(latestSize);
       setIsResizing(false);
       setResizeStart(null);
     };
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
     return () => {
+      cancelAnimationFrame(rafId);
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
@@ -2099,6 +2300,15 @@ const render = createRender(() => {
   const hasAnyPoints = isGallery
     ? (selectedPoints as Point[][])?.some((pts) => pts?.length > 0)
     : (selectedPoints as Point[])?.length > 0;
+
+  // Pre-compute stats for all ROIs (avoids recomputing in render on every mousemove)
+  const allRoiStats = React.useMemo(() => {
+    if (hideRoi || safeRois.length < 2 || perImageData.length === 0) return [];
+    const imgIdx = isGallery ? selectedIdx : 0;
+    const data = perImageData[imgIdx];
+    if (!data) return [];
+    return safeRois.map(roi => computeRoiStats(roi, data, width, height));
+  }, [safeRois, perImageData, isGallery, selectedIdx, width, height, hideRoi]);
 
   // Render a single canvas box (shared between single and gallery mode)
   const renderCanvasBox = (idx: number, showResizeHandle: boolean) => (
@@ -2251,12 +2461,15 @@ const render = createRender(() => {
         <Stack direction="row" spacing={`${SPACING.LG}px`}>
           {renderCanvasBox(0, true)}
           {effectiveShowFft && (
-            <Box sx={{ ...containerStyles.imageBox, width: canvasW, height: canvasH }}>
+            <Box ref={fftContainerRef} sx={{ ...containerStyles.imageBox, width: canvasW, height: canvasH }}>
               <canvas
                 ref={fftCanvasRef}
                 width={canvasW}
                 height={canvasH}
-                style={{ width: canvasW, height: canvasH, imageRendering: "pixelated" }}
+                style={{ width: canvasW, height: canvasH, imageRendering: "pixelated", cursor: "crosshair" }}
+                onMouseDown={handleFftMouseDown}
+                onMouseUp={handleFftMouseUp}
+                onMouseLeave={handleFftMouseLeave}
               />
               <canvas ref={fftOverlayRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: canvasH, pointerEvents: "none" }} />
               <Typography sx={{ position: "absolute", top: 4, left: 8, fontSize: 10, color: fftCropDims ? accentGreen : "#fff", textShadow: "0 0 3px #000" }}>
@@ -2268,7 +2481,7 @@ const render = createRender(() => {
       )}
 
       {/* Stats + Readout bar */}
-      <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: tc.bgAlt, display: "flex", gap: 2, alignItems: "center", minHeight: 20, maxWidth: canvasW, boxSizing: "border-box" }}>
+      <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: tc.bgAlt, display: "flex", gap: 2, alignItems: "center", minHeight: 20, boxSizing: "border-box" }}>
         {showStats && imageStats ? (
           <>
             <Typography sx={{ fontSize: 11, color: tc.textMuted }}>
@@ -2297,6 +2510,18 @@ const render = createRender(() => {
             </Typography>
           </>
         )}
+        {fftClickInfo && (
+          <>
+            <Box sx={{ borderLeft: `1px solid ${tc.border}`, height: 14 }} />
+            <Typography sx={{ fontSize: 11, color: tc.textMuted }}>
+              {fftClickInfo.dSpacing != null ? (
+                <>d = <Box component="span" sx={{ color: tc.accent, fontWeight: "bold" }}>{fftClickInfo.dSpacing >= 10 ? `${(fftClickInfo.dSpacing / 10).toFixed(2)} nm` : `${fftClickInfo.dSpacing.toFixed(2)} \u00C5`}</Box>{" | |g| = "}<Box component="span" sx={{ color: tc.accent }}>{fftClickInfo.spatialFreq!.toFixed(4)} \u00C5\u207B\u00B9</Box></>
+              ) : (
+                <>dist = <Box component="span" sx={{ color: tc.accent }}>{fftClickInfo.distPx.toFixed(1)} px</Box></>
+              )}
+            </Typography>
+          </>
+        )}
         <Typography sx={{ fontSize: 11, color: tc.textMuted, ml: "auto" }}>
           {width}×{height}
           {activeZoom.zoom !== 1 && (
@@ -2310,7 +2535,7 @@ const render = createRender(() => {
       {/* Image controls + ROI basics + Histogram (Show3D layout) */}
       {showControls && (<>
       {!hideDisplay && (
-        <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, maxWidth: canvasW, boxSizing: "border-box" }}>
+        <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, boxSizing: "border-box" }}>
           {/* Left: image controls */}
           <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg }}>
             <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Scale:</Typography>
@@ -2358,7 +2583,7 @@ const render = createRender(() => {
 
       {/* Shape + Color picker row */}
       {showMarkerStyleControls && (
-      <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, mt: 0.5, maxWidth: canvasW, width: "fit-content", boxSizing: "border-box" }}>
+      <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, mt: 0.5, width: "fit-content", boxSizing: "border-box" }}>
         <Box sx={{ display: "flex", gap: "3px", flexShrink: 0 }}>
           {MARKER_SHAPES.map(s => {
             const sz = 16;
@@ -2420,7 +2645,7 @@ const render = createRender(() => {
 
       {/* Controls row: Marker size + Max + Advanced toggle */}
       {showPrimaryControlRow && (
-      <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, mt: 0.5, maxWidth: canvasW, width: "fit-content", boxSizing: "border-box" }}>
+      <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, mt: 0.5, width: "fit-content", boxSizing: "border-box" }}>
         {showMarkerStyleControls && (
           <>
             <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Marker:</Typography>
@@ -2512,7 +2737,7 @@ const render = createRender(() => {
 
       {/* ROI basics */}
       {!hideRoi && (
-      <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, mt: 0.5, maxWidth: canvasW, width: "fit-content", boxSizing: "border-box" }}>
+      <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, mt: 0.5, width: "fit-content", boxSizing: "border-box" }}>
         <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>ROI:</Typography>
         <Select
           disabled={lockRoi}
@@ -2558,7 +2783,7 @@ const render = createRender(() => {
 
       {/* Advanced options row (collapsible) */}
       {showAdvanced && showMarkerStyleControls && (
-        <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, maxWidth: canvasW, width: "fit-content", boxSizing: "border-box" }}>
+        <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, width: "fit-content", boxSizing: "border-box" }}>
           <Typography sx={{ ...typography.label, color: tc.textMuted }}>Border</Typography>
           <Slider
             value={borderWidth}
@@ -2610,7 +2835,7 @@ const render = createRender(() => {
 
       {/* Active ROI details (only when a ROI is selected) */}
       {!hideRoi && activeRoi && (
-        <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, mt: 0.5, maxWidth: canvasW, width: "fit-content", boxSizing: "border-box" }}>
+        <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, mt: 0.5, width: "fit-content", boxSizing: "border-box" }}>
           <Typography sx={{ ...typography.value, color: tc.textMuted, minWidth: 24 }}>
             ROI #{activeRoiIdx + 1}/{safeRois.length}
           </Typography>
@@ -2684,7 +2909,7 @@ const render = createRender(() => {
 
       {/* ROI pixel statistics */}
       {!hideRoi && roiStats && (
-        <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, maxWidth: canvasW, width: "fit-content", boxSizing: "border-box" }}>
+        <Box sx={{ ...controlRow, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, width: "fit-content", boxSizing: "border-box" }}>
           <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>ROI Stats:</Typography>
           <Typography sx={{ ...typography.value, color: tc.textMuted }}>
             Mean <Box component="span" sx={{ color: tc.accent }}>{roiStats.mean.toFixed(4)}</Box>
@@ -2706,7 +2931,7 @@ const render = createRender(() => {
 
       {/* Line profile sparkline */}
       {!hideProfile && profileActive && (
-        <Box sx={{ mt: 0.5, maxWidth: canvasW, boxSizing: "border-box" }}>
+        <Box sx={{ mt: 0.5, boxSizing: "border-box" }}>
           <canvas
             ref={profileCanvasRef}
             style={{ width: canvasW, height: 76, display: "block", border: `1px solid ${tc.border}` }}
@@ -2825,9 +3050,7 @@ const render = createRender(() => {
             </thead>
             <tbody>
               {safeRois.map((roi, ri) => {
-                const imgIdx = isGallery ? selectedIdx : 0;
-                const data = perImageData[imgIdx];
-                const stats = data ? computeRoiStats(roi, data, width, height) : null;
+                const stats = allRoiStats[ri] ?? null;
                 return (
                   <Box
                     component="tr"
