@@ -21,7 +21,7 @@ import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, roundToNiceValue, exportFigure
 import { findDataRange, sliderRange, computeStats, applyLogScale } from "../stats";
 import { formatNumber, downloadBlob, downloadDataView } from "../format";
 import { computeHistogramFromBytes } from "../histogram";
-import { getWebGPUFFT, WebGPUFFT, fft2d, fftshift, computeMagnitude, autoEnhanceFFT } from "../webgpu-fft";
+import { getWebGPUFFT, WebGPUFFT, fft2d, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2 } from "../webgpu-fft";
 import { ControlCustomizer } from "../control-customizer";
 import { computeToolVisibility } from "../tool-parity";
 
@@ -559,6 +559,52 @@ function findLocalMax(data: Float32Array, width: number, height: number, cc: num
 }
 
 // ============================================================================
+// Crop single-mode ROI region from raw float32 data for ROI-scoped FFT
+// ============================================================================
+function cropSingleROI(
+  data: Float32Array, imgW: number, imgH: number,
+  mode: string, centerRow: number, centerCol: number,
+  radius: number, roiW: number, roiH: number,
+): { cropped: Float32Array; cropW: number; cropH: number } | null {
+  if (mode === "off" || mode === "point") return null;
+  let x0: number, y0: number, x1: number, y1: number;
+
+  if (mode === "rect") {
+    const hw = roiW / 2, hh = roiH / 2;
+    x0 = Math.max(0, Math.floor(centerCol - hw));
+    y0 = Math.max(0, Math.floor(centerRow - hh));
+    x1 = Math.min(imgW, Math.ceil(centerCol + hw));
+    y1 = Math.min(imgH, Math.ceil(centerRow + hh));
+  } else {
+    x0 = Math.max(0, Math.floor(centerCol - radius));
+    y0 = Math.max(0, Math.floor(centerRow - radius));
+    x1 = Math.min(imgW, Math.ceil(centerCol + radius));
+    y1 = Math.min(imgH, Math.ceil(centerRow + radius));
+  }
+
+  const cropW = x1 - x0, cropH = y1 - y0;
+  if (cropW < 2 || cropH < 2) return null;
+
+  const cropped = new Float32Array(cropW * cropH);
+  if (mode === "circle" || mode === "annular") {
+    const rSq = radius * radius;
+    for (let dy = 0; dy < cropH; dy++) {
+      for (let dx = 0; dx < cropW; dx++) {
+        const ix = x0 + dx, iy = y0 + dy;
+        const distSq = (ix - centerCol) * (ix - centerCol) + (iy - centerRow) * (iy - centerRow);
+        cropped[dy * cropW + dx] = distSq <= rSq ? data[iy * imgW + ix] : 0;
+      }
+    }
+  } else {
+    for (let dy = 0; dy < cropH; dy++) {
+      const srcOff = (y0 + dy) * imgW + x0;
+      cropped.set(data.subarray(srcOff, srcOff + cropW), dy * cropW);
+    }
+  }
+  return { cropped, cropW, cropH };
+}
+
+// ============================================================================
 // Main Component
 // ============================================================================
 function Show4D() {
@@ -637,6 +683,11 @@ function Show4D() {
   const lockProfile = toolVisibility.isLocked("profile");
   const lockFft = toolVisibility.isLocked("fft");
   const effectiveShowFft = showFft && !hideFft;
+  const accentGreen = themeInfo.theme === "dark" ? "#0f0" : "#1a7a1a";
+
+  // ROI FFT state
+  const [fftCropDims, setFftCropDims] = React.useState<{ cropWidth: number; cropHeight: number; fftWidth: number; fftHeight: number } | null>(null);
+  const roiFftActive = effectiveShowFft && roiMode !== "off" && roiMode !== "point";
 
   // Path animation
   const [pathPlaying, setPathPlaying] = useModelState<boolean>("path_playing");
@@ -1000,40 +1051,64 @@ function Show4D() {
     ctx.restore();
   }, [frameBytes, sigColormap, sigVminPct, sigVmaxPct, sigScaleMode, sigPowerExp, sigZoom, sigPanX, sigPanY, sigRows, sigCols]);
 
-  // ── Compute FFT from signal frame ──
+  // ── Compute FFT from signal frame (supports ROI-scoped FFT) ──
   React.useEffect(() => {
-    if (!effectiveShowFft || !rawSigDataRef.current) return;
+    if (!effectiveShowFft || !rawSigDataRef.current) { setFftCropDims(null); return; }
     let cancelled = false;
     const data = rawSigDataRef.current;
-    const w = sigCols, h = sigRows;
+    let w = sigCols, h = sigRows;
+    let inputData = data;
+    let origCropW = 0, origCropH = 0;
 
+    // ROI FFT: crop to ROI region and pre-pad to power-of-2
+    if (roiFftActive) {
+      const crop = cropSingleROI(data, sigCols, sigRows, roiMode, roiCenterRow, roiCenterCol, roiRadius, roiWidth, roiHeight);
+      if (crop) {
+        origCropW = crop.cropW;
+        origCropH = crop.cropH;
+        const padW = nextPow2(crop.cropW);
+        const padH = nextPow2(crop.cropH);
+        const padded = new Float32Array(padW * padH);
+        for (let y = 0; y < crop.cropH; y++) {
+          for (let x = 0; x < crop.cropW; x++) {
+            padded[y * padW + x] = crop.cropped[y * crop.cropW + x];
+          }
+        }
+        inputData = padded;
+        w = padW;
+        h = padH;
+      }
+    }
+
+    const fftW = w, fftH = h;
     const computeFFT = async () => {
       let real: Float32Array, imag: Float32Array;
       if (gpuReady && gpuFFTRef.current) {
-        const result = await gpuFFTRef.current.fft2D(data.slice(), new Float32Array(data.length), w, h, false);
+        const result = await gpuFFTRef.current.fft2D(inputData.slice(), new Float32Array(inputData.length), fftW, fftH, false);
         real = result.real;
         imag = result.imag;
       } else {
-        real = data.slice();
-        imag = new Float32Array(data.length);
-        fft2d(real, imag, w, h, false);
+        real = inputData.slice();
+        imag = new Float32Array(inputData.length);
+        fft2d(real, imag, fftW, fftH, false);
       }
       if (cancelled) return;
-      fftshift(real, w, h);
-      fftshift(imag, w, h);
+      fftshift(real, fftW, fftH);
+      fftshift(imag, fftW, fftH);
       fftMagRef.current = computeMagnitude(real, imag);
+      setFftCropDims(origCropW > 0 ? { cropWidth: origCropW, cropHeight: origCropH, fftWidth: fftW, fftHeight: fftH } : null);
       setFftMagVersion(v => v + 1);
     };
     computeFFT();
     return () => { cancelled = true; };
-  }, [effectiveShowFft, frameBytes, sigRows, sigCols, gpuReady]);
+  }, [effectiveShowFft, roiFftActive, frameBytes, sigRows, sigCols, gpuReady, roiMode, roiCenterRow, roiCenterCol, roiRadius, roiWidth, roiHeight]);
 
   // ── Render FFT image ──
   React.useEffect(() => {
     const mag = fftMagRef.current;
     if (!effectiveShowFft || !mag) return;
 
-    const w = sigCols, h = sigRows;
+    const w = fftCropDims?.fftWidth ?? sigCols, h = fftCropDims?.fftHeight ?? sigRows;
     let displayMin: number, displayMax: number;
     if (fftAuto) {
       ({ min: displayMin, max: displayMax } = autoEnhanceFFT(mag, w, h));
@@ -1069,7 +1144,7 @@ function Show4D() {
         ctx.restore();
       }
     }
-  }, [effectiveShowFft, fftMagVersion, fftLogScale, fftAuto, fftVminPct, fftVmaxPct, fftColormap, sigRows, sigCols]);
+  }, [effectiveShowFft, fftMagVersion, fftLogScale, fftAuto, fftVminPct, fftVmaxPct, fftColormap, sigRows, sigCols, fftCropDims]);
 
   // ── FFT zoom/pan redraw ──
   React.useEffect(() => {
@@ -1092,13 +1167,14 @@ function Show4D() {
     const canvas = fftUiRef.current;
     canvas.width = sigCanvasWidth * DPR;
     canvas.height = sigCanvasHeight * DPR;
+    const fftW = fftCropDims?.fftWidth ?? sigCols;
     if (sigPixelSize > 0) {
-      const recipPxSize = 1.0 / (sigPixelSize * sigCols);
-      drawFFTScaleBarHiDPI(canvas, DPR, fftZoom, recipPxSize, sigCols);
+      const recipPxSize = 1.0 / (sigPixelSize * fftW);
+      drawFFTScaleBarHiDPI(canvas, DPR, fftZoom, recipPxSize, fftW);
     } else {
-      drawScaleBarHiDPI(canvas, DPR, fftZoom, 1, "px", sigCols);
+      drawScaleBarHiDPI(canvas, DPR, fftZoom, 1, "px", fftW);
     }
-  }, [effectiveShowFft, fftZoom, fftPanX, fftPanY, sigPixelSize, sigPixelUnit, sigCols, sigCanvasWidth, sigCanvasHeight]);
+  }, [effectiveShowFft, fftZoom, fftPanX, fftPanY, sigPixelSize, sigPixelUnit, sigCols, sigCanvasWidth, sigCanvasHeight, fftCropDims]);
 
   // ── Nav HiDPI UI overlay ──
   React.useEffect(() => {
@@ -2315,8 +2391,8 @@ function Show4D() {
           <Box sx={{ width: sigCanvasWidth }}>
             {/* FFT Header */}
             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
-              <Typography variant="caption" sx={{ ...typo.label }}>
-                FFT (Signal)
+              <Typography variant="caption" sx={{ ...typo.label, color: fftCropDims ? accentGreen : themeColors.textMuted }}>
+                {fftCropDims ? `ROI FFT (${fftCropDims.cropWidth}\u00D7${fftCropDims.cropHeight})` : "FFT (Signal)"}
               </Typography>
               <Stack direction="row" spacing={`${SPACING.SM}px`}>
                 {!hideExport && (

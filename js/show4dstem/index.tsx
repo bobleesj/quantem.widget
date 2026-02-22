@@ -21,7 +21,7 @@ import JSZip from "jszip";
 import "./styles.css";
 import { useTheme } from "../theme";
 import { COLORMAPS, applyColormap, renderToOffscreen } from "../colormaps";
-import { WebGPUFFT, getWebGPUFFT, fft2d, fftshift, autoEnhanceFFT } from "../webgpu-fft";
+import { WebGPUFFT, getWebGPUFFT, fft2d, fftshift, autoEnhanceFFT, nextPow2 } from "../webgpu-fft";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue, exportFigure, canvasToPDF } from "../scalebar";
 import { findDataRange, sliderRange, computeStats, applyLogScale } from "../stats";
 import { downloadBlob, formatNumber, downloadDataView } from "../format";
@@ -869,6 +869,52 @@ function pointToSegmentDistance(col: number, row: number, col0: number, row0: nu
 }
 
 // ============================================================================
+// Crop single-mode ROI region from raw float32 data for ROI-scoped FFT
+// ============================================================================
+function cropSingleROI(
+  data: Float32Array, imgW: number, imgH: number,
+  mode: string, centerRow: number, centerCol: number,
+  radius: number, roiW: number, roiH: number,
+): { cropped: Float32Array; cropW: number; cropH: number } | null {
+  if (mode === "off") return null;
+  let x0: number, y0: number, x1: number, y1: number;
+
+  if (mode === "rect") {
+    const hw = roiW / 2, hh = roiH / 2;
+    x0 = Math.max(0, Math.floor(centerCol - hw));
+    y0 = Math.max(0, Math.floor(centerRow - hh));
+    x1 = Math.min(imgW, Math.ceil(centerCol + hw));
+    y1 = Math.min(imgH, Math.ceil(centerRow + hh));
+  } else {
+    x0 = Math.max(0, Math.floor(centerCol - radius));
+    y0 = Math.max(0, Math.floor(centerRow - radius));
+    x1 = Math.min(imgW, Math.ceil(centerCol + radius));
+    y1 = Math.min(imgH, Math.ceil(centerRow + radius));
+  }
+
+  const cropW = x1 - x0, cropH = y1 - y0;
+  if (cropW < 2 || cropH < 2) return null;
+
+  const cropped = new Float32Array(cropW * cropH);
+  if (mode === "circle") {
+    const rSq = radius * radius;
+    for (let dy = 0; dy < cropH; dy++) {
+      for (let dx = 0; dx < cropW; dx++) {
+        const ix = x0 + dx, iy = y0 + dy;
+        const distSq = (ix - centerCol) * (ix - centerCol) + (iy - centerRow) * (iy - centerRow);
+        cropped[dy * cropW + dx] = distSq <= rSq ? data[iy * imgW + ix] : 0;
+      }
+    }
+  } else {
+    for (let dy = 0; dy < cropH; dy++) {
+      const srcOff = (y0 + dy) * imgW + x0;
+      cropped.set(data.subarray(srcOff, srcOff + cropW), dy * cropW);
+    }
+  }
+  return { cropped, cropW, cropH };
+}
+
+// ============================================================================
 // Main Component
 // ============================================================================
 function Show4DSTEM() {
@@ -1022,6 +1068,10 @@ function Show4DSTEM() {
   const lockFft = toolVisibility.isLocked("fft") || lockVirtual;
   const effectiveShowFft = showFft && !hideFft;
 
+  // ROI FFT state (VI ROI crops virtual image for FFT)
+  const [fftCropDims, setFftCropDims] = React.useState<{ cropWidth: number; cropHeight: number; fftWidth: number; fftHeight: number } | null>(null);
+  const roiFftActive = effectiveShowFft && viRoiMode !== "off";
+
   // Canvas resize state
   const [canvasSize, setCanvasSize] = React.useState(CANVAS_SIZE);
   const [isResizingCanvas, setIsResizingCanvas] = React.useState(false);
@@ -1079,6 +1129,7 @@ function Show4DSTEM() {
   // Theme detection
   const { themeInfo, colors: themeColors } = useTheme();
   const roiColors = themeInfo.theme === "dark" ? DARK_ROI_COLORS : LIGHT_ROI_COLORS;
+  const accentGreen = themeInfo.theme === "dark" ? "#0f0" : "#1a7a1a";
 
   // Themed typography — applies theme colors to module-level font sizes
   const typo = React.useMemo(() => ({
@@ -1633,22 +1684,45 @@ function Show4DSTEM() {
   const [fftVersion, setFftVersion] = React.useState(0);
 
   React.useEffect(() => {
-    if (!rawVirtualImageRef.current || !effectiveShowFft) return;
+    if (!rawVirtualImageRef.current || !effectiveShowFft) { setFftCropDims(null); return; }
     let cancelled = false;
-    const width = shapeCols;
-    const height = shapeRows;
-    const sourceData = rawVirtualImageRef.current;
+    let width = shapeCols;
+    let height = shapeRows;
+    let sourceData = rawVirtualImageRef.current;
+    let origCropW = 0, origCropH = 0;
 
+    // ROI FFT: crop virtual image to VI ROI region and pre-pad to power-of-2
+    if (roiFftActive) {
+      const crop = cropSingleROI(sourceData, shapeCols, shapeRows, viRoiMode, viRoiCenterRow, viRoiCenterCol, viRoiRadius, viRoiWidth, viRoiHeight);
+      if (crop) {
+        origCropW = crop.cropW;
+        origCropH = crop.cropH;
+        const padW = nextPow2(crop.cropW);
+        const padH = nextPow2(crop.cropH);
+        const padded = new Float32Array(padW * padH);
+        for (let y = 0; y < crop.cropH; y++) {
+          for (let x = 0; x < crop.cropW; x++) {
+            padded[y * padW + x] = crop.cropped[y * crop.cropW + x];
+          }
+        }
+        sourceData = padded;
+        width = padW;
+        height = padH;
+      }
+    }
+
+    const fftW = width, fftH = height;
     if (gpuFFTRef.current && gpuReady) {
       const runGpuFFT = async () => {
         const real = sourceData.slice();
         const imag = new Float32Array(real.length);
-        const { real: fReal, imag: fImag } = await gpuFFTRef.current!.fft2D(real, imag, width, height, false);
+        const { real: fReal, imag: fImag } = await gpuFFTRef.current!.fft2D(real, imag, fftW, fftH, false);
         if (cancelled) return;
-        fftshift(fReal, width, height);
-        fftshift(fImag, width, height);
+        fftshift(fReal, fftW, fftH);
+        fftshift(fImag, fftW, fftH);
         fftRealRef.current = fReal;
         fftImagRef.current = fImag;
+        setFftCropDims(origCropW > 0 ? { cropWidth: origCropW, cropHeight: origCropH, fftWidth: fftW, fftHeight: fftH } : null);
         setFftVersion(v => v + 1);
       };
       runGpuFFT();
@@ -1660,14 +1734,15 @@ function Show4DSTEM() {
       real.set(sourceData);
       let imag = fftWorkImagRef.current;
       if (!imag || imag.length !== len) { imag = new Float32Array(len); fftWorkImagRef.current = imag; } else { imag.fill(0); }
-      fft2d(real, imag, width, height, false);
-      fftshift(real, width, height);
-      fftshift(imag, width, height);
+      fft2d(real, imag, fftW, fftH, false);
+      fftshift(real, fftW, fftH);
+      fftshift(imag, fftW, fftH);
       fftRealRef.current = real;
       fftImagRef.current = imag;
+      setFftCropDims(origCropW > 0 ? { cropWidth: origCropW, cropHeight: origCropH, fftWidth: fftW, fftHeight: fftH } : null);
       setFftVersion(v => v + 1);
     }
-  }, [virtualImageBytes, shapeRows, shapeCols, gpuReady, effectiveShowFft]);
+  }, [virtualImageBytes, shapeRows, shapeCols, gpuReady, effectiveShowFft, roiFftActive, viRoiMode, viRoiCenterRow, viRoiCenterCol, viRoiRadius, viRoiWidth, viRoiHeight]);
 
   // Process FFT → magnitude + histogram + colormap rendering (cheap, sync)
   React.useEffect(() => {
@@ -1677,8 +1752,8 @@ function Show4DSTEM() {
     if (!ctx) return;
     if (!effectiveShowFft) { ctx.clearRect(0, 0, canvas.width, canvas.height); return; }
 
-    const width = shapeCols;
-    const height = shapeRows;
+    const width = fftCropDims?.fftWidth ?? shapeCols;
+    const height = fftCropDims?.fftHeight ?? shapeRows;
     const real = fftRealRef.current;
     const imag = fftImagRef.current;
     const lut = COLORMAPS[fftColormap] || COLORMAPS.inferno;
@@ -1729,7 +1804,7 @@ function Show4DSTEM() {
     ctx.scale(fftZoom, fftZoom);
     ctx.drawImage(offscreen, 0, 0);
     ctx.restore();
-  }, [effectiveShowFft, fftVersion, fftScaleMode, fftPowerExp, fftAuto, fftVminPct, fftVmaxPct, fftColormap, shapeRows, shapeCols, fftZoom, fftPanX, fftPanY]);
+  }, [effectiveShowFft, fftVersion, fftScaleMode, fftPowerExp, fftAuto, fftVminPct, fftVmaxPct, fftColormap, shapeRows, shapeCols, fftZoom, fftPanX, fftPanY, fftCropDims]);
 
   // Render FFT overlay with high-pass filter circle
   React.useEffect(() => {
@@ -3753,7 +3828,7 @@ function Show4DSTEM() {
           <Box sx={{ width: viCanvasWidth }}>
             {/* FFT Header */}
             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 28 }}>
-              <Typography variant="caption" sx={{ ...typo.label }}>FFT</Typography>
+              <Typography variant="caption" sx={{ ...typo.label, color: fftCropDims ? accentGreen : themeColors.textMuted }}>{fftCropDims ? `ROI FFT (${fftCropDims.cropWidth}\u00D7${fftCropDims.cropHeight})` : "FFT"}</Typography>
               <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="center">
                 {!hideView && (
                   <Button size="small" sx={compactButton} disabled={lockView || lockFft || (fftZoom === 1 && fftPanX === 0 && fftPanY === 0)} onClick={() => { if (!lockView && !lockFft) { setFftZoom(1); setFftPanX(0); setFftPanY(0); } }}>Reset</Button>
