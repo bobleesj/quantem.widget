@@ -127,7 +127,7 @@ WIDGET_CELLS: list[tuple[str, list[str]]] = [
     # ── Bin ───────────────────────────────────────────────────────────────
     ("Bin Default", [
         "from quantem.widget import Bin\n",
-        "Bin(data_4d_small, pixel_size=2.39, k_pixel_size=0.46, use_torch=True, device='cpu')\n",
+        "Bin(data_4d_small, pixel_size=2.39, k_pixel_size=0.46, device='cpu')\n",
     ]),
     # ── Tool lock / hide demos ────────────────────────────────────────────
     ("Show2D Locked Display", [

@@ -10,8 +10,6 @@
     "det_bin_col": 2,
     "bin_mode": "mean",
     "edge_mode": "crop",
-    "compute_backend": "torch",
-    "device": "cpu",
     "center_row": 64.0,
     "center_col": 48.0,
     "bf_radius_ratio": 0.125,

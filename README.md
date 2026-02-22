@@ -88,7 +88,7 @@ import numpy as np
 from quantem.widget import Bin
 
 data = np.random.rand(64, 64, 128, 128).astype(np.float32)
-w = Bin(data, pixel_size=2.39, k_pixel_size=0.46, use_torch=True, device="cpu")  # torch-only compute path
+w = Bin(data, pixel_size=2.39, k_pixel_size=0.46, device="cpu")
 w  # adjust scan/detector binning and inspect BF/ADF quality panels
 
 # export current binning preset
