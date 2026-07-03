@@ -1,8 +1,8 @@
-"""Folder survey workflow for microscopy images and EDS spectrum images.
+"""ShowFolder internals for microscopy image folder browsing.
 
-The public entry point is :func:`survey`: point it at a folder of Velox EMD
-files and get a compact inventory, a Show2D HAADF/STEM thumbnail gallery, and
-one lazy ShowEDS explorer per EDS spectrum-image file.
+The public entry point is :class:`quantem.widget.ShowFolder`. This module keeps
+the thumbnail scanner, grouping logic, and selection JSON implementation behind
+that widget.
 """
 from __future__ import annotations
 
@@ -20,14 +20,13 @@ from typing import Any
 import numpy as np
 
 
-_DEFAULT_ELEMENTS = ("Si K", "O K", "In L", "As K", "Al K", "Au M", "C K", "Cu K")
 _MAG_RE = re.compile(r"HAADF\s*(.*?)\s*Nano", re.IGNORECASE)
 _FALLBACK_MAG_RE = re.compile(r"(\d+(?:\.\d+)?\s*[kmg]?x)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
 class SurveyItem:
-    """One file in a microscopy folder survey."""
+    """One file in a microscopy folder browser."""
 
     path: Path
     file_id: str
@@ -57,10 +56,10 @@ class SurveyItem:
         return " | ".join(parts)
 
 
-class FolderSurvey:
-    """Rendered folder survey.
+class ShowFolderBrowser:
+    """Rendered ShowFolder browser.
 
-    ``FolderSurvey`` behaves like a widget in Jupyter by delegating its rich
+    ``ShowFolderBrowser`` behaves like a widget in Jupyter by delegating its rich
     display to an ``ipywidgets.VBox``. The component widgets are also exposed for
     generated notebooks: ``inventory``, ``gallery``, and ``eds_widgets``.
     """
@@ -91,10 +90,6 @@ class FolderSurvey:
         self.fov_groups = fov_groups
         self.eds_widgets = eds_widgets
         self.eds_selection_controls = eds_selection_controls
-        self._eds_selected_ids: set[str] = {
-            file_id for file_id, control in eds_selection_controls.items()
-            if bool(getattr(control, "value", False))
-        }
         self.widget = widget
         self.thumb = thumb
         self.glob = glob
@@ -102,9 +97,6 @@ class FolderSurvey:
         self.cache_info = cache_info or {"enabled": False}
         self.cache_path = cache_path
         self.selection_panel = None
-
-        for file_id, control in eds_selection_controls.items():
-            control.observe(self._make_eds_selection_observer(file_id), names="value")
 
     @property
     def image_items(self) -> list[SurveyItem]:
@@ -116,8 +108,8 @@ class FolderSurvey:
 
     @property
     def selection_file(self) -> Path:
-        """Default JSON path for reversible survey curation state."""
-        return self.folder / ".quantem-survey.json"
+        """Default JSON path for reversible ShowFolder curation state."""
+        return self.folder / ".quantem-showfolder.json"
 
     @property
     def selection_path(self) -> Path:
@@ -164,30 +156,22 @@ class FolderSurvey:
                         selected[item.file_id] = item
         return [item for item in self.items if item.file_id in selected and not item.is_eds and item.error is None]
 
-    def selected_eds_items(self) -> list[SurveyItem]:
-        """Return EDS items checked for downstream use."""
-        selected = set(self._eds_selected_ids)
-        return [item for item in self.eds_items if item.file_id in selected]
-
     def selected(self, kind: str | None = None) -> list[SurveyItem]:
-        """Return selected items, optionally filtered by ``"image"`` or ``"eds"``."""
+        """Return selected image items, optionally filtered by ``"image"``."""
         if kind is None:
             selected_ids = {item.file_id for item in self.selected_image_items()}
-            selected_ids.update(item.file_id for item in self.selected_eds_items())
             return [item for item in self.items if item.file_id in selected_ids and item.error is None]
         elif kind.lower() == "image":
             return self.selected_image_items()
-        elif kind.lower() == "eds":
-            return self.selected_eds_items()
         else:
-            raise ValueError("kind must be None, 'image', or 'eds'")
+            raise ValueError("kind must be None or 'image'")
 
     def selected_items(self) -> list[SurveyItem]:
         """Compatibility alias for ``selected()``."""
         return self.selected()
 
     def paths(self, kind: str | None = None) -> list[Path]:
-        """Return selected file paths, optionally filtered by ``"image"`` or ``"eds"``."""
+        """Return selected image file paths, optionally filtered by ``"image"``."""
         items = self.selected(kind)
         return [item.path for item in items]
 
@@ -198,7 +182,6 @@ class FolderSurvey:
     def selection(self) -> dict[str, Any]:
         """Return a JSON-serializable selection snapshot for pipeline handoff."""
         selected_images = self.selected_image_items()
-        selected_eds = self.selected_eds_items()
         hidden_ids = []
         galleries = self.image_galleries or ([(self.gallery, self.image_items)] if self.gallery is not None else [])
         for gallery, image_items in galleries:
@@ -210,11 +193,10 @@ class FolderSurvey:
             "glob": self.glob,
             "thumb": self.thumb,
             "selected_image_ids": [item.file_id for item in selected_images],
-            "selected_eds_ids": [item.file_id for item in selected_eds],
             "hidden_image_ids": hidden_ids,
             "selected_files": [
-                {"id": item.file_id, "kind": "EDS" if item.is_eds else "image", "path": str(item.path.relative_to(self.folder))}
-                for item in self.selected()
+                {"id": item.file_id, "kind": "image", "path": str(item.path.relative_to(self.folder))}
+                for item in selected_images
             ],
         }
 
@@ -242,9 +224,6 @@ class FolderSurvey:
                     gallery.unstar_panel(0)
             else:
                 gallery.set_starred_panels(panels)
-        self._eds_selected_ids = set(data.get("selected_eds_ids", []))
-        for file_id, control in self.eds_selection_controls.items():
-            control.value = file_id in self._eds_selected_ids
         self._refresh_selection_panel()
         return data
 
@@ -309,7 +288,7 @@ class FolderSurvey:
             slug = "showfolder"
         return Path.cwd() / f"{slug}_showfolder.html"
 
-    def hide_unselected(self) -> "FolderSurvey":
+    def hide_unselected(self) -> "ShowFolderBrowser":
         """Collapse unstarred image panels in the current gallery."""
         if not self.image_galleries:
             return self
@@ -325,8 +304,8 @@ class FolderSurvey:
         self._refresh_selection_panel()
         return self
 
-    def show_all_images(self) -> "FolderSurvey":
-        """Restore every image panel in the survey gallery."""
+    def show_all_images(self) -> "ShowFolderBrowser":
+        """Restore every image panel in the ShowFolder gallery."""
         for gallery, _ in self.image_galleries:
             if hasattr(gallery, "show_all_panels"):
                 gallery.show_all_panels()
@@ -450,43 +429,29 @@ class FolderSurvey:
             if emit_sibling is not None and not getattr(gallery_widget, "_save_state", False):
                 emit_sibling()
 
-    def _make_eds_selection_observer(self, file_id: str):
-        def _observe(change):
-            if bool(change["new"]):
-                self._eds_selected_ids.add(file_id)
-            else:
-                self._eds_selected_ids.discard(file_id)
-            self._refresh_selection_panel()
-        return _observe
-
     def _refresh_selection_panel(self, summary=None, output=None) -> None:
         summary = summary or getattr(self, "_selection_summary", None)
         output = output or getattr(self, "_selection_output", None)
         if summary is None:
             return
         selected_images = self.selected_image_items()
-        selected_eds = self.selected_eds_items()
         summary.value = (
             f"<div style=\"color:#555;margin-bottom:6px\">"
-            f"{len(selected_images)} image · {len(selected_eds)} EDS selected · "
+            f"{len(selected_images)} image selected · "
             f"default file <code>{html.escape(str(self.selection_file))}</code></div>"
         )
         if output is not None:
             output.clear_output(wait=True)
             with output:
-                for item in self.selected():
-                    kind = "EDS" if item.is_eds else "image"
-                    print(f"{item.file_id}\t{kind}\t{item.path.name}")
+                for item in selected_images:
+                    print(f"{item.file_id}\timage\t{item.path.name}")
 
 
-def survey(
+def build_showfolder(
     folder: str | Path,
     *,
     glob: str = "*.emd",
     thumb: int = 512,
-    eds_backend: str = "stream",
-    load_eds: bool = False,
-    candidate_elements: list[str] | tuple[str, ...] | None = None,
     title: str | None = None,
     group_by: str | None = "session",
     group_view: str = "stack",
@@ -494,8 +459,8 @@ def survey(
     cache: bool | str = "auto",
     cache_dir: str | Path | None = None,
     rebuild_cache: bool = False,
-) -> FolderSurvey:
-    """Survey a folder of microscopy files.
+) -> ShowFolderBrowser:
+    """Build the internal rendered folder browser used by ``ShowFolder``.
 
     Parameters
     ----------
@@ -505,20 +470,8 @@ def survey(
         File glob within ``folder``. v1 is designed around ``*.emd``.
     thumb
         Common thumbnail size for the Show2D gallery.
-    eds_backend
-        Backend passed to ``ShowEDS.from_emd``. The default ``"stream"`` keeps
-        exploratory surveys responsive by moving sparse EDS interaction into the
-        browser worker instead of using the notebook kernel for every band/ROI
-        update. Use ``"kernel"`` for exact lazy Python queries or ``"sidecar"``
-        for an explicit data-folder cache.
-    load_eds
-        If True, instantiate all ShowEDS widgets immediately. The default keeps
-        the survey instant by rendering per-file launch buttons that create
-        ShowEDS only when clicked.
-    candidate_elements
-        Element list passed to ShowEDS.
     title
-        Optional survey title.
+        Optional ShowFolder title.
     group_by
         Layout grouping mode. Use ``"session"`` to place consecutive files with
         the same magnification into small chronological rows, ``"fov"`` to place
@@ -542,9 +495,9 @@ def survey(
     rebuild_cache
         If True, ignore any existing cache and regenerate thumbnails/index rows.
     """
-    from ipywidgets import Button, Checkbox, HBox, HTML, Output, VBox
+    from ipywidgets import HBox, HTML, Output, VBox
 
-    from quantem.widget import Show2D, Show3D, ShowEDS
+    from quantem.widget import Show2D, Show3D
     from quantem.widget.io import read_image
 
     root = Path(folder).expanduser().resolve()
@@ -697,7 +650,7 @@ def survey(
     else:
         fov_groups = []
 
-    heading = title or f"{root.name} survey"
+    heading = title or f"{root.name} ShowFolder"
     inventory = HTML(_inventory_html(items))
     children: list[Any] = [
         HTML(
@@ -705,56 +658,13 @@ def survey(
             f"<div style=\"color:#555;margin-bottom:8px\">"
             f"{html.escape(str(root))} · {len(items)} files matching {html.escape(glob)!r} · "
             f"{len([item for item in items if not item.is_eds and item.error is None])} image · "
-            f"{len([item for item in items if item.is_eds and item.error is None])} EDS · "
             f"thumbnail {thumb}px · scale bars use downsampled pixel size · "
             f"{_cache_status_text(cache_info)}</div>"
         )
     ]
     gallery = None
     eds_widgets = []
-    eds_widgets_by_id = {}
     eds_selection_controls = {}
-    elements = list(candidate_elements or _DEFAULT_ELEMENTS)
-    for item in items:
-        if not item.is_eds or item.error is not None:
-            continue
-        eds_title = f"{item.file_id}"
-        if item.magnification:
-            eds_title += f" {item.magnification}"
-        eds_title += " EDS"
-        if load_eds:
-            try:
-                eds = ShowEDS.from_emd(
-                    item.path,
-                    backend=eds_backend,
-                    candidate_elements=elements,
-                    title=eds_title,
-                )
-                eds_widgets.append(eds)
-                eds_widgets_by_id[item.file_id] = eds
-            except Exception as exc:
-                failed = HTML(
-                    f"<p><b>{html.escape(item.path.name)}</b>: ShowEDS load failed: "
-                    f"{html.escape(str(exc))}</p>"
-                )
-                eds_widgets.append(failed)
-                eds_widgets_by_id[item.file_id] = failed
-        else:
-            launcher, control = _eds_launcher(
-                item,
-                backend=eds_backend,
-                candidate_elements=elements,
-                title=eds_title,
-                ShowEDS=ShowEDS,
-                Button=Button,
-                Checkbox=Checkbox,
-                HTML=HTML,
-                Output=Output,
-                VBox=VBox,
-            )
-            eds_widgets.append(launcher)
-            eds_widgets_by_id[item.file_id] = launcher
-            eds_selection_controls[item.file_id] = control
 
     image_items = [item for item in items if not item.is_eds and item.error is None and item.file_id in image_thumbnails]
     image_galleries: list[tuple[Any, list[SurveyItem]]] = []
@@ -803,8 +713,7 @@ def survey(
         ))
         for group in fov_groups:
             group_images = [item for item in group if not item.is_eds and item.file_id in image_thumbnails]
-            group_eds = [item for item in group if item.is_eds and item.file_id in eds_widgets_by_id]
-            if not group_images and not group_eds:
+            if not group_images:
                 continue
             grouped_ids.update(item.file_id for item in group)
             group_children = [HTML(_fov_group_html(group))]
@@ -820,11 +729,6 @@ def survey(
                 gallery = gallery or row_gallery
                 image_galleries.append((row_gallery, group_images))
                 group_children.append(row_gallery)
-            if group_eds:
-                group_children.append(VBox(
-                    [eds_widgets_by_id[item.file_id] for item in group_eds],
-                    layout={"width": "100%"},
-                ))
             children.append(VBox(group_children, layout={"width": "100%"}))
 
     single_images = [item for item in image_items if item.file_id not in grouped_ids]
@@ -839,29 +743,15 @@ def survey(
 
     children.append(inventory)
 
-    ungrouped_eds_widgets = [
-        eds_widgets_by_id[item.file_id]
-        for item in items
-        if item.is_eds and item.error is None and item.file_id not in grouped_ids and item.file_id in eds_widgets_by_id
-    ]
-    if ungrouped_eds_widgets:
-        children.append(HTML(
-            f"<h3>EDS spectrum images ({len(ungrouped_eds_widgets)})</h3>"
-            "<p>Click a file to open the lazy ShowEDS explorer. This keeps the folder survey instant.</p>"
-        ))
-        children.extend(ungrouped_eds_widgets)
-    elif not eds_widgets:
-        children.append(HTML("<p><b>EDS spectrum images:</b> none found.</p>"))
-
     widget = VBox(children)
-    result = FolderSurvey(
+    result = ShowFolderBrowser(
         folder=root,
         items=items,
         inventory=inventory,
         gallery=gallery,
         image_galleries=image_galleries,
         fov_groups=fov_groups,
-        eds_widgets=eds_widgets,
+        eds_widgets=[],
         eds_selection_controls=eds_selection_controls,
         widget=widget,
         thumb=thumb,
@@ -872,69 +762,6 @@ def survey(
     )
     result.attach_selection_panel()
     return result
-
-
-def _eds_launcher(
-    item: SurveyItem,
-    *,
-    backend: str,
-    candidate_elements: list[str],
-    title: str,
-    ShowEDS,
-    Button,
-    Checkbox,
-    HTML,
-    Output,
-    VBox,
-):
-    button = Button(
-        description=f"Open EDS {item.file_id}",
-        tooltip=str(item.path),
-        button_style="",
-        layout={"width": "180px"},
-    )
-    select = Checkbox(
-        value=False,
-        description=f"Use EDS {item.file_id}",
-        indent=False,
-        layout={"width": "180px"},
-    )
-    details = HTML(
-        f"<span style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif\">"
-        f"<b>{html.escape(item.file_id)}</b> "
-        f"{html.escape(item.magnification or '')} "
-        f"{'' if item.scan_rotation_deg is None else f'{item.scan_rotation_deg:.1f} deg'} "
-        f"<span style=\"color:#666\">{html.escape(item.path.name)}</span></span>"
-    )
-    out = Output()
-    state = {"loaded": False}
-
-    def _open(_):
-        if state["loaded"]:
-            return
-        state["loaded"] = True
-        button.description = f"EDS {item.file_id} loaded"
-        button.disabled = True
-        with out:
-            from IPython.display import display
-
-            try:
-                display(
-                    ShowEDS.from_emd(
-                        item.path,
-                        backend=backend,
-                        candidate_elements=candidate_elements,
-                        title=title,
-                    )
-                )
-            except Exception as exc:
-                display(HTML(
-                    f"<p><b>{html.escape(item.path.name)}</b>: ShowEDS load failed: "
-                    f"{html.escape(str(exc))}</p>"
-                ))
-
-    button.on_click(_open)
-    return VBox([details, select, button, out]), select
 
 
 def _make_show2d_gallery(
@@ -1293,22 +1120,21 @@ def _metadata_number(meta: dict[str, Any], *path: str) -> float | None:
     return number
 
 
-def write_survey_notebook(
+def write_showfolder_notebook(
     folder: str | Path,
     out: str | Path,
     *,
     glob: str = "*.emd",
     thumb: int = 512,
-    eds_backend: str = "stream",
     title: str | None = None,
     group_by: str | None = "session",
     group_view: str = "stack",
 ) -> Path:
-    """Write a simple survey notebook for the public survey workflow."""
+    """Write a simple notebook for the public ShowFolder workflow."""
     out_path = Path(out).expanduser()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     root = Path(folder).expanduser().resolve()
-    heading = title or f"{root.name} survey"
+    heading = title or f"{root.name} ShowFolder"
     nb = {
         "cells": [
             {
@@ -1320,8 +1146,8 @@ def write_survey_notebook(
                     "\n",
                     f"Folder: `{root}`\n",
                     "\n",
-                    "Quick folder survey with **quantem.widget**: inventory table, "
-                    "HAADF/STEM thumbnail gallery, and lazy EDS explorers.\n",
+                    "Quick folder browser with **quantem.widget**: inventory table, "
+                    "HAADF/STEM thumbnail gallery, and image selection state.\n",
                 ],
             },
             {
@@ -1337,7 +1163,6 @@ def write_survey_notebook(
                     f"    {str(root)!r},\n",
                     f"    glob={glob!r},\n",
                     f"    thumb={int(thumb)!r},\n",
-                    f"    eds_backend={eds_backend!r},\n",
                     f"    title={heading!r},\n",
                     f"    group_by={group_by!r},\n",
                     f"    group_view={group_view!r},\n",
