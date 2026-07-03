@@ -4,8 +4,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from quantem.widget import survey
-from quantem.widget.survey import has_eds, scan_rotation_deg, write_survey_notebook
+from quantem.widget.showfolder_core import build_showfolder, has_eds, scan_rotation_deg, write_showfolder_notebook
 
 
 def _metadata(rotation: float, *, stage=None, fov=None):
@@ -52,16 +51,18 @@ def test_survey_detects_eds_and_scan_rotation(tmp_path):
     assert round(scan_rotation_deg(eds), 1) == 90.0
 
 
-def test_survey_builds_non_eds_gallery_and_inventory(tmp_path):
+def test_showfolder_builds_image_gallery_and_inventory(tmp_path):
     _image_emd(tmp_path / "0010 - HAADF 15Mx Nano.emd", shape=(16, 16), rotation=0.0)
     _image_emd(tmp_path / "0011 - HAADF 3.7Mx Nano.emd", shape=(20, 12), rotation=0.5)
     _eds_emd(tmp_path / "0020 - HAADF 10.5Mx Nano EDS.emd")
 
-    result = survey(tmp_path, thumb=8, group_by="fov")
+    result = build_showfolder(tmp_path, thumb=8, group_by="fov")
 
     assert len(result.items) == 3
     assert len(result.image_items) == 2
     assert len(result.eds_items) == 1
+    assert result.eds_widgets == []
+    assert result.eds_selection_controls == {}
     assert result.gallery is not None
     assert result.gallery._data.shape == (2, 8, 8)
     assert result.gallery.pixel_sizes == [2.0, 2.0]
@@ -78,8 +79,8 @@ def test_survey_builds_non_eds_gallery_and_inventory(tmp_path):
 def test_survey_save_state_is_opt_in_for_docs(tmp_path):
     _image_emd(tmp_path / "0010 - HAADF 15Mx Nano.emd", shape=(16, 16))
 
-    lightweight = survey(tmp_path, thumb=8)
-    embedded = survey(tmp_path, thumb=8, save_state=True)
+    lightweight = build_showfolder(tmp_path, thumb=8)
+    embedded = build_showfolder(tmp_path, thumb=8, save_state=True)
 
     assert lightweight.gallery._save_state is False
     assert embedded.gallery._save_state is True
@@ -90,14 +91,13 @@ def test_survey_selection_roundtrip_and_selected_gallery(tmp_path):
     _image_emd(tmp_path / "0011 - HAADF 3.7Mx Nano.emd", shape=(16, 16), rotation=0.5)
     _eds_emd(tmp_path / "0020 - HAADF 10.5Mx Nano EDS.emd")
 
-    result = survey(tmp_path, thumb=8, group_by="fov")
+    result = build_showfolder(tmp_path, thumb=8, group_by="fov")
     result.gallery.star_panel(1)
-    result.eds_selection_controls["0020"].value = True
 
     selected = result.selection()
     assert selected["selected_image_ids"] == ["0011"]
-    assert selected["selected_eds_ids"] == ["0020"]
-    assert result.selection_file.name == ".quantem-survey.json"
+    assert "selected_eds_ids" not in selected
+    assert result.selection_file.name == ".quantem-showfolder.json"
     assert [item.file_id for item in result.selected("image")] == ["0011"]
     assert [p.name for p in result.paths("image")] == ["0011 - HAADF 3.7Mx Nano.emd"]
 
@@ -109,12 +109,10 @@ def test_survey_selection_roundtrip_and_selected_gallery(tmp_path):
     saved = json.loads(path.read_text())
     assert saved["selected_files"][0]["id"] == "0011"
 
-    restored = survey(tmp_path, thumb=8)
+    restored = build_showfolder(tmp_path, thumb=8)
     restored.load(path)
     assert restored.gallery.starred_panels == [1]
-    assert restored.eds_selection_controls["0020"].value is True
-    assert restored.selection()["selected_eds_ids"] == ["0020"]
-    assert [p.name for p in restored.selected_paths("eds")] == ["0020 - HAADF 10.5Mx Nano EDS.emd"]
+    assert "selected_eds_ids" not in restored.selection()
 
 
 def test_survey_groups_same_field_of_view_rows(tmp_path):
@@ -134,7 +132,7 @@ def test_survey_groups_same_field_of_view_rows(tmp_path):
         fov=shared_fov,
     )
 
-    result = survey(tmp_path, thumb=8, group_by="fov")
+    result = build_showfolder(tmp_path, thumb=8, group_by="fov")
 
     assert len(result.fov_groups) == 1
     assert [item.file_id for item in result.fov_groups[0]] == ["0010", "0011", "0020"]
@@ -152,7 +150,7 @@ def test_survey_can_render_fov_groups_as_show2d_gallery(tmp_path):
     _image_emd(tmp_path / "0010 - HAADF 15Mx Nano.emd", stage=shared_stage, fov=shared_fov)
     _image_emd(tmp_path / "0011 - HAADF 15Mx Nano.emd", stage=shared_stage, fov=shared_fov)
 
-    result = survey(tmp_path, thumb=8, group_by="fov", group_view="gallery")
+    result = build_showfolder(tmp_path, thumb=8, group_by="fov", group_view="gallery")
 
     assert result.group_view == "gallery"
     assert result.image_galleries[0][0].ncols == 2
@@ -165,7 +163,7 @@ def test_survey_default_groups_by_session_order_and_magnification(tmp_path):
         _image_emd(tmp_path / f"{i:04d} - HAADF 15Mx Nano.emd")
     _image_emd(tmp_path / "0007 - HAADF 3.7Mx Nano.emd")
 
-    result = survey(tmp_path, thumb=8)
+    result = build_showfolder(tmp_path, thumb=8)
 
     assert len(result.fov_groups) == 2
     assert [item.file_id for item in result.fov_groups[0]] == ["0001", "0002", "0003", "0004"]
@@ -174,35 +172,36 @@ def test_survey_default_groups_by_session_order_and_magnification(tmp_path):
     assert result.inventory_rows[4]["fov_group"] == "Session 2"
 
 
-def test_write_survey_notebook_uses_public_api(tmp_path):
+def test_write_showfolder_notebook_uses_public_api(tmp_path):
     folder = tmp_path / "data"
     folder.mkdir()
     _image_emd(folder / "0010 - HAADF 15Mx Nano.emd")
     _eds_emd(folder / "0020 - HAADF 10.5Mx Nano EDS.emd")
-    out = tmp_path / "survey.ipynb"
+    out = tmp_path / "showfolder.ipynb"
 
-    written = write_survey_notebook(folder, out, thumb=8, eds_backend="auto")
+    written = write_showfolder_notebook(folder, out, thumb=8)
 
     nb = json.loads(written.read_text())
     source = "\n".join("".join(cell.get("source", [])) for cell in nb["cells"])
     assert "from quantem.widget import ShowFolder" in source
     assert "ShowFolder(" in source
     assert "group_view='stack'" in source
+    assert "eds_backend" not in source
     assert "result =" not in source
     assert "print(" not in source
     assert "ShowEDS.from_emd" not in source
     assert len(nb["cells"]) == 2
 
 
-def test_cli_survey_writes_notebook(tmp_path):
+def test_cli_showfolder_writes_notebook(tmp_path):
     from quantem.widget import cli
 
     folder = tmp_path / "data"
     folder.mkdir()
     _image_emd(folder / "0010 - HAADF 15Mx Nano.emd")
-    out = tmp_path / "cli_survey.ipynb"
+    out = tmp_path / "cli_showfolder.ipynb"
 
-    code = cli.main(["survey", str(folder), "--notebook", str(out), "--thumb", "8", "--no-open"])
+    code = cli.main(["showfolder", str(folder), "--notebook", str(out), "--thumb", "8", "--no-open"])
 
     assert code == 0
     assert out.exists()
