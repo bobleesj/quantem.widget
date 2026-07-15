@@ -112,6 +112,28 @@ _SCALE_BAR_STYLE_KEYS = {
 }
 
 
+def _nonnegative_int(value: object, *, name: str) -> int:
+    """Return a nonnegative integer for pixel-width options."""
+    try:
+        result = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a nonnegative integer, got {value!r}") from exc
+    if result < 0:
+        raise ValueError(f"{name} must be >= 0, got {result}")
+    return result
+
+
+def _nonnegative_float(value: object, *, name: str) -> float:
+    """Return a nonnegative float for stroke-width options."""
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a nonnegative number, got {value!r}") from exc
+    if not np.isfinite(result) or result < 0:
+        raise ValueError(f"{name} must be a finite value >= 0, got {value!r}")
+    return result
+
+
 def _normalize_panel_title_style(style: Mapping[str, object] | None) -> dict[str, object]:
     """Normalize JSON-safe panel-title chrome options."""
     if style is None:
@@ -1996,6 +2018,12 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
     show_panel_titles = traitlets.Bool(True).tag(sync=True)
     panel_title_font_size = traitlets.Int(11).tag(sync=True)
     panel_title_style = traitlets.Dict(default_value={}).tag(sync=True)
+    inter_panel_gap_px = traitlets.Int(0).tag(sync=True)
+    inter_panel_gap_color = traitlets.Unicode("").tag(sync=True)
+    gallery_outer_border_px = traitlets.Int(0).tag(sync=True)
+    gallery_outer_border_color = traitlets.Unicode("").tag(sync=True)
+    panel_inner_border_px = traitlets.Float(1.0).tag(sync=True)
+    panel_inner_border_color = traitlets.Unicode("#d0d0d0").tag(sync=True)
     gallery_gap_px = traitlets.Int(0).tag(sync=True)
     gallery_gap_color = traitlets.Unicode("").tag(sync=True)
     title = traitlets.Unicode("").tag(sync=True)
@@ -2359,7 +2387,13 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         show_panel_titles: bool | None = None,
         panel_title_font_size: int = 11,
         panel_title_style: Mapping[str, object] | None = None,
-        gallery_gap_px: int = 0,
+        inter_panel_gap_px: int | None = None,
+        inter_panel_gap_color: str | None = None,
+        gallery_outer_border_px: int | None = None,
+        gallery_outer_border_color: str | None = None,
+        panel_inner_border_px: float | int | None = None,
+        panel_inner_border_color: str | None = None,
+        gallery_gap_px: int | None = None,
         gallery_gap_color: str | None = None,
         state=None,
         save_state: bool = False,
@@ -2496,9 +2530,45 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         ncols = int(ncols)
         if ncols < 1:
             raise ValueError(f"ncols must be >= 1, got {ncols}")
-        gallery_gap_px = int(gallery_gap_px)
-        if gallery_gap_px < 0:
-            raise ValueError(f"gallery_gap_px must be >= 0, got {gallery_gap_px}")
+        legacy_gap_used = gallery_gap_px is not None or gallery_gap_color is not None
+        resolved_inter_panel_gap_px = _nonnegative_int(
+            0 if inter_panel_gap_px is None and gallery_gap_px is None
+            else gallery_gap_px if inter_panel_gap_px is None
+            else inter_panel_gap_px,
+            name="inter_panel_gap_px",
+        )
+        resolved_inter_panel_gap_color = (
+            "" if (gallery_gap_color if inter_panel_gap_color is None else inter_panel_gap_color) is None
+            else str(gallery_gap_color if inter_panel_gap_color is None else inter_panel_gap_color)
+        )
+        if gallery_outer_border_px is None:
+            resolved_gallery_outer_border_px = (
+                resolved_inter_panel_gap_px
+                if legacy_gap_used and resolved_inter_panel_gap_px > 0 and resolved_inter_panel_gap_color
+                else 0
+            )
+        else:
+            resolved_gallery_outer_border_px = _nonnegative_int(
+                gallery_outer_border_px,
+                name="gallery_outer_border_px",
+            )
+        resolved_gallery_outer_border_color = (
+            resolved_inter_panel_gap_color
+            if gallery_outer_border_color is None
+            else str(gallery_outer_border_color)
+        )
+        resolved_panel_inner_border_px = (
+            1.0
+            if panel_inner_border_px is None
+            else _nonnegative_float(panel_inner_border_px, name="panel_inner_border_px")
+        )
+        resolved_panel_inner_border_color = (
+            resolved_inter_panel_gap_color
+            if panel_inner_border_color is None and legacy_gap_used and resolved_inter_panel_gap_color
+            else "#d0d0d0" if panel_inner_border_color is None else str(panel_inner_border_color)
+        )
+        gallery_gap_px = resolved_inter_panel_gap_px
+        gallery_gap_color = resolved_inter_panel_gap_color
         if (
             scale_bar_visible is not None
             and show_scale_bar is not None
@@ -2633,6 +2703,12 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 panel_order=panel_order,
                 show_panel_titles=show_panel_titles, panel_title_font_size=panel_title_font_size,
                 panel_title_style=panel_title_style,
+                inter_panel_gap_px=resolved_inter_panel_gap_px,
+                inter_panel_gap_color=resolved_inter_panel_gap_color,
+                gallery_outer_border_px=resolved_gallery_outer_border_px,
+                gallery_outer_border_color=resolved_gallery_outer_border_color,
+                panel_inner_border_px=resolved_panel_inner_border_px,
+                panel_inner_border_color=resolved_panel_inner_border_color,
                 gallery_gap_px=gallery_gap_px,
                 gallery_gap_color=gallery_gap_color,
                 verbose=verbose, state=state, _t0=_t0,
@@ -2669,6 +2745,9 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                    pad_ratio, pad_fill_mode, pad_scope,
                    display_bin, hidden_panels, starred, panel_order, show_panel_titles,
                    panel_title_font_size, panel_title_style,
+                   inter_panel_gap_px, inter_panel_gap_color,
+                   gallery_outer_border_px, gallery_outer_border_color,
+                   panel_inner_border_px, panel_inner_border_color,
                    gallery_gap_px, gallery_gap_color, verbose, state, _t0,
                    denoise="none", denoise_sigma=4.0, denoise_bin=1,
                    denoise_scope="all", denoise_scope_explicit=False,
@@ -2955,6 +3034,14 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         self.show_panel_titles = bool(show_panel_titles)
         self.panel_title_font_size = int(panel_title_font_size)
         self.panel_title_style = dict(panel_title_style or {})
+        self.inter_panel_gap_px = int(inter_panel_gap_px)
+        self.inter_panel_gap_color = "" if inter_panel_gap_color is None else str(inter_panel_gap_color)
+        self.gallery_outer_border_px = int(gallery_outer_border_px)
+        self.gallery_outer_border_color = "" if gallery_outer_border_color is None else str(gallery_outer_border_color)
+        self.panel_inner_border_px = float(panel_inner_border_px)
+        self.panel_inner_border_color = (
+            "" if panel_inner_border_color is None else str(panel_inner_border_color)
+        )
         self.gallery_gap_px = int(gallery_gap_px)
         self.gallery_gap_color = "" if gallery_gap_color is None else str(gallery_gap_color)
         if starred is not None:
@@ -4328,6 +4415,23 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         plt.close(fig)
         return path
 
+    def _gallery_export_chrome(self) -> dict[str, int | float | str]:
+        """Return resolved publication chrome for gallery exports and previews."""
+        gap_px = max(0, int(getattr(self, "inter_panel_gap_px", self.gallery_gap_px)))
+        gap_color = str(getattr(self, "inter_panel_gap_color", self.gallery_gap_color) or "")
+        outer_px = max(0, int(getattr(self, "gallery_outer_border_px", 0)))
+        outer_color = str(getattr(self, "gallery_outer_border_color", "") or gap_color)
+        panel_border_px = max(0.0, float(getattr(self, "panel_inner_border_px", 1.0)))
+        panel_border_color = str(getattr(self, "panel_inner_border_color", "#d0d0d0") or "#d0d0d0")
+        return {
+            "inter_panel_gap_px": gap_px,
+            "inter_panel_gap_color": gap_color,
+            "gallery_outer_border_px": outer_px,
+            "gallery_outer_border_color": outer_color,
+            "panel_inner_border_px": panel_border_px,
+            "panel_inner_border_color": panel_border_color,
+        }
+
     def export_svg(
         self,
         path: str | pathlib.Path | None = None,
@@ -4370,6 +4474,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         """
         from PIL import Image
 
+        chrome = self._gallery_export_chrome()
         specs = self._static_panel_specs()
         if not specs:
             raise ValueError("Show2D has no visible panels to export")
@@ -4378,9 +4483,12 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         export_path.parent.mkdir(parents=True, exist_ok=True)
         export_scale = max(1.0, min(8.0, float(scale)))
         panel_w = int(round(self._static_canvas_css_px()))
-        gap = max(0, int(self.gallery_gap_px))
-        gap_color = str(getattr(self, "gallery_gap_color", "") or "")
-        frame = gap if gap > 0 and gap_color else 0
+        gap = int(chrome["inter_panel_gap_px"])
+        gap_color = str(chrome["inter_panel_gap_color"])
+        frame = int(chrome["gallery_outer_border_px"])
+        frame_color = str(chrome["gallery_outer_border_color"])
+        panel_border_px = float(chrome["panel_inner_border_px"])
+        panel_border_color = str(chrome["panel_inner_border_color"])
         ncols = max(1, min(int(self.ncols), len(specs)))
         title_text = self.title if title is None else str(title)
         title_h = 30 if title_text and self.show_title else 0
@@ -4831,9 +4939,15 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 'font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" '
                 f'font-size="14" font-weight="700" fill="#111">{esc_text(title_text)}</text>'
             )
-        if gap > 0 and gap_color:
+        if frame > 0 and frame_color:
             elements.append(
                 f'<rect x="0" y="{title_h:g}" width="{svg_w:g}" height="{max(0, svg_h - title_h):g}" '
+                f'fill="{esc_attr(svg_color(frame_color))}"/>'
+            )
+        if gap > 0 and gap_color:
+            elements.append(
+                f'<rect x="{frame:g}" y="{title_h + frame:g}" '
+                f'width="{max(0, svg_w - 2 * frame):g}" height="{max(0, svg_h - title_h - 2 * frame):g}" '
                 f'fill="{esc_attr(svg_color(gap_color))}"/>'
             )
 
@@ -4921,7 +5035,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                     if panel_index < len(self.marker_colors) and self.marker_colors[panel_index]
                     else _IDENTITY_PALETTE[panel_index % len(_IDENTITY_PALETTE)]
                 )
-                panel_stroke = svg_color(gap_color if gap > 0 and gap_color else "#d0d0d0")
+                panel_stroke = svg_color(panel_border_color, "#d0d0d0")
                 elements.extend([
                     f'<g id="show2d-panel-{panel_index}">',
                     f'<rect x="{x}" y="{y}" width="{panel_w}" height="{panel_h}" fill="#000"/>',
@@ -4929,8 +5043,12 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                         f'<image x="{x}" y="{y}" width="{panel_w}" height="{panel_h}" '
                         f'xlink:href="data:image/png;base64,{panel["png"]}" preserveAspectRatio="none"/>'
                     ),
-                    f'<rect x="{x}" y="{y}" width="{panel_w}" height="{panel_h}" fill="none" stroke="{esc_attr(panel_stroke)}" stroke-width="1"/>',
                 ])
+                if panel_border_px > 0:
+                    elements.append(
+                        f'<rect x="{x}" y="{y}" width="{panel_w}" height="{panel_h}" fill="none" '
+                        f'stroke="{esc_attr(panel_stroke)}" stroke-width="{panel_border_px:g}"/>'
+                    )
                 if str(self.marker_style or "left") == "around":
                     elements.append(
                         f'<rect x="{x + 1.5:g}" y="{y + 1.5:g}" width="{max(0, panel_w - 3):g}" '
@@ -5966,6 +6084,13 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         specs = self._static_panel_specs()
         if not specs:
             return None
+        chrome = self._gallery_export_chrome()
+        gap_px = int(chrome["inter_panel_gap_px"])
+        gap_color = str(chrome["inter_panel_gap_color"])
+        outer_px = int(chrome["gallery_outer_border_px"])
+        outer_color = str(chrome["gallery_outer_border_color"])
+        panel_border_px = float(chrome["panel_inner_border_px"])
+        panel_border_color = str(chrome["panel_inner_border_color"])
         base_roi_items = self._static_roi_items()
         if base_roi_items:
             specs = [{**spec, "roi_items": base_roi_items} for spec in specs]
@@ -5995,10 +6120,14 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         aspect = (rows0.stop - rows0.start) / (cols0.stop - cols0.start)
         # inter-panel gutter is the widget's own gallery gap (CSS px of the
         # live canvas), identical horizontally and vertically
-        gap_frac = max(0, int(self.gallery_gap_px)) / css_w
+        gap_frac = gap_px / css_w
+        outer_frac = outer_px / css_w
         cell_w_in = max_px / dpi  # cell width in inches so 1 panel = max_px device px
         cell_h_in = cell_w_in * aspect
         gap_in = gap_frac * cell_w_in
+        outer_in = outer_frac * cell_w_in
+        fig_w_in = ncols * cell_w_in + (ncols - 1) * gap_in + 2 * outer_in
+        fig_h_in = nrows * cell_h_in + (nrows - 1) * gap_in + 2 * outer_in
         # Build an unmanaged Figure rather than registering one through
         # pyplot. In a live Jupyter kernel this renderer runs from a
         # ``post_execute`` callback, alongside matplotlib-inline's own figure
@@ -6009,15 +6138,33 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         # Jupyter's global figure-manager lifecycle.
         fig = matplotlib.figure.Figure(
             figsize=(
-                ncols * cell_w_in + (ncols - 1) * gap_in,
-                nrows * cell_h_in + (nrows - 1) * gap_in,
+                fig_w_in,
+                fig_h_in,
             )
         )
+        bg_color = outer_color if outer_px > 0 and outer_color else gap_color if gap_px > 0 and gap_color else "white"
+        fig.patch.set_facecolor(bg_color)
+        left = outer_in / fig_w_in if fig_w_in > 0 else 0.0
+        right = 1.0 - left
+        bottom = outer_in / fig_h_in if fig_h_in > 0 else 0.0
+        top = 1.0 - bottom
+        if gap_px > 0 and gap_color:
+            fig.patches.append(
+                matplotlib.patches.Rectangle(
+                    (left, bottom),
+                    max(0.0, right - left),
+                    max(0.0, top - bottom),
+                    transform=fig.transFigure,
+                    facecolor=gap_color,
+                    edgecolor="none",
+                    zorder=-10,
+                )
+            )
         # wspace/hspace are fractions of cell width/height; both resolve to
         # the same gap_in inches so the white gutters match to the pixel
         grid = fig.add_gridspec(nrows, ncols, wspace=gap_frac,
                                 hspace=gap_frac / aspect,
-                                left=0, right=1, bottom=0, top=1)
+                                left=left, right=right, bottom=bottom, top=top)
         font_family = _static_overlay_font()
         # the live canvas is css_w CSS px wide but the PNG panel is max_px
         # device px wide, so every CSS-px size renders scaled by max_px/css_w
@@ -6041,6 +6188,16 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             ax.imshow(rgb, interpolation="nearest")
             bin_h, bin_w = rgb.shape[:2]
             ax.set(xlim=(-0.5, bin_w - 0.5), ylim=(bin_h - 0.5, -0.5))
+            if panel_border_px > 0:
+                ax.add_patch(matplotlib.patches.Rectangle(
+                    (-0.5, -0.5),
+                    bin_w,
+                    bin_h,
+                    facecolor="none",
+                    edgecolor=panel_border_color,
+                    linewidth=panel_border_px * point,
+                    joinstyle="miter",
+                ))
             for roi in spec.get("roi_items", []):
                 self._draw_static_roi(
                     ax,
@@ -6110,7 +6267,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                     line_color=line_color,
                 )
         buf = _io.BytesIO()
-        fig.savefig(buf, format="png", dpi=dpi, facecolor="white",
+        fig.savefig(buf, format="png", dpi=dpi, facecolor=fig.get_facecolor(),
                     bbox_inches="tight", pad_inches=0.05)
         return base64.b64encode(buf.getvalue()).decode("ascii")
 
@@ -6330,6 +6487,12 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             "panel_title_font_size": self.panel_title_font_size,
             "panel_title_spans": list(self.panel_title_spans),
             "panel_title_style": dict(self.panel_title_style),
+            "inter_panel_gap_px": int(self.inter_panel_gap_px),
+            "inter_panel_gap_color": str(self.inter_panel_gap_color),
+            "gallery_outer_border_px": int(self.gallery_outer_border_px),
+            "gallery_outer_border_color": str(self.gallery_outer_border_color),
+            "panel_inner_border_px": float(self.panel_inner_border_px),
+            "panel_inner_border_color": str(self.panel_inner_border_color),
             "gallery_gap_px": int(self.gallery_gap_px),
             "gallery_gap_color": str(self.gallery_gap_color),
             "show_stats": self.show_stats,
@@ -6677,6 +6840,14 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             show_panel_titles=self.show_panel_titles,
             panel_title_font_size=self.panel_title_font_size,
             panel_title_style=dict(self.panel_title_style),
+            inter_panel_gap_px=int(self.inter_panel_gap_px),
+            inter_panel_gap_color=str(self.inter_panel_gap_color),
+            gallery_outer_border_px=int(self.gallery_outer_border_px),
+            gallery_outer_border_color=str(self.gallery_outer_border_color),
+            panel_inner_border_px=float(self.panel_inner_border_px),
+            panel_inner_border_color=str(self.panel_inner_border_color),
+            gallery_gap_px=int(self.gallery_gap_px),
+            gallery_gap_color=str(self.gallery_gap_color),
             row_markers=dict(self.row_markers),
             col_markers=dict(self.col_markers),
             panel_annotations=list(self.panel_annotations),
@@ -6778,6 +6949,42 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 state.pop("gallery_gap_px")
         if "gallery_gap_color" in state and state["gallery_gap_color"] is not None:
             state["gallery_gap_color"] = str(state["gallery_gap_color"])
+        legacy_gap_color = str(state.get("gallery_gap_color") or "")
+        if "inter_panel_gap_px" not in state and "gallery_gap_px" in state:
+            state["inter_panel_gap_px"] = state["gallery_gap_px"]
+        if "inter_panel_gap_color" not in state and "gallery_gap_color" in state:
+            state["inter_panel_gap_color"] = state["gallery_gap_color"]
+        if "gallery_outer_border_px" not in state and legacy_gap_color and "gallery_gap_px" in state:
+            state["gallery_outer_border_px"] = state["gallery_gap_px"]
+        if "gallery_outer_border_color" not in state and legacy_gap_color:
+            state["gallery_outer_border_color"] = legacy_gap_color
+        if "panel_inner_border_color" not in state and legacy_gap_color:
+            state["panel_inner_border_color"] = legacy_gap_color
+        for key in ("inter_panel_gap_px", "gallery_outer_border_px"):
+            if key in state:
+                try:
+                    state[key] = _nonnegative_int(state[key], name=key)
+                except ValueError:
+                    state.pop(key)
+        if "panel_inner_border_px" in state:
+            try:
+                state["panel_inner_border_px"] = _nonnegative_float(
+                    state["panel_inner_border_px"],
+                    name="panel_inner_border_px",
+                )
+            except ValueError:
+                state.pop("panel_inner_border_px")
+        for key in (
+            "inter_panel_gap_color",
+            "gallery_outer_border_color",
+            "panel_inner_border_color",
+        ):
+            if key in state and state[key] is not None:
+                state[key] = str(state[key])
+        if "inter_panel_gap_px" in state:
+            state["gallery_gap_px"] = state["inter_panel_gap_px"]
+        if "inter_panel_gap_color" in state:
+            state["gallery_gap_color"] = state["inter_panel_gap_color"]
         if "scale_bar_style" in state:
             try:
                 state["scale_bar_style"] = _normalize_scale_bar_style(state["scale_bar_style"])
