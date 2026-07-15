@@ -117,12 +117,16 @@ const SHOW2D_STANDALONE_VIEW_STATE_KEYS = [
   "frequency_filter_widths",
   "gallery_gap_color",
   "gallery_gap_px",
+  "gallery_outer_border_color",
+  "gallery_outer_border_px",
   "hidden_page_slots",
   "hidden_panels",
   "image_flips_horizontal",
   "image_flips_vertical",
   "image_rotations",
   "initial_zoom",
+  "inter_panel_gap_color",
+  "inter_panel_gap_px",
   "inset_plots",
   "link_contrast",
   "link_pan",
@@ -140,6 +144,8 @@ const SHOW2D_STANDALONE_VIEW_STATE_KEYS = [
   "panel_annotations",
   "panel_cmaps",
   "panel_frame_indices",
+  "panel_inner_border_color",
+  "panel_inner_border_px",
   "panel_order",
   "panel_overlays",
   "panel_playback_fps",
@@ -2208,7 +2214,7 @@ function svgPanelAnnotationElement(spec: PanelAnnotationSpec, x: number, y: numb
   return chunks.join("");
 }
 
-function svgInsetPlotElement(spec: InsetPlotSpec | null | undefined, panel: number, x: number, y: number, panelW: number, panelH: number, fallbackColor: string, scaleBarVisible: boolean): string {
+function svgInsetPlotElement(spec: InsetPlotSpec | null | undefined, _panel: number, x: number, y: number, panelW: number, panelH: number, fallbackColor: string, scaleBarVisible: boolean): string {
   const geom = insetPlotGeometry(spec, panelW, panelH, scaleBarVisible);
   if (!geom || !spec) return "";
   const { finite, xlim, ylim, x0, y0, boxW, boxH, plotX0, plotY0, plotW, plotH } = geom;
@@ -2623,6 +2629,12 @@ function Show2D() {
   const [panelTitleStyle] = useModelState<PanelTitleStyle>("panel_title_style");
   const [galleryGapPxState] = useModelState<number>("gallery_gap_px");
   const [galleryGapColor] = useModelState<string>("gallery_gap_color");
+  const [interPanelGapPxState] = useModelState<number>("inter_panel_gap_px");
+  const [interPanelGapColorState] = useModelState<string>("inter_panel_gap_color");
+  const [galleryOuterBorderPxState] = useModelState<number>("gallery_outer_border_px");
+  const [galleryOuterBorderColorState] = useModelState<string>("gallery_outer_border_color");
+  const [panelInnerBorderPxState] = useModelState<number>("panel_inner_border_px");
+  const [panelInnerBorderColorState] = useModelState<string>("panel_inner_border_color");
   const [title] = useModelState<string>("title");
   const [showTitle] = useModelState<boolean>("show_title");
   const [displayBinFactor] = useModelState<number>("_display_bin_factor");
@@ -4172,11 +4184,15 @@ function Show2D() {
   const displayScale = canvasSize / Math.max(width, height);
   const canvasW = Math.round(width * displayScale);
   const canvasH = Math.round(height * displayScale);
-  const galleryGapPx = Math.max(0, Number.isFinite(galleryGapPxState) ? galleryGapPxState : 8);
-  const galleryFramePx = isGallery && galleryGapPx > 0 && galleryGapColor ? galleryGapPx : 0;
+  const galleryGapPx = Math.max(0, Number.isFinite(interPanelGapPxState) ? interPanelGapPxState : (Number.isFinite(galleryGapPxState) ? galleryGapPxState : 0));
+  const galleryGapColorResolved = String(interPanelGapColorState || galleryGapColor || "");
+  const galleryOuterBorderPx = isGallery ? Math.max(0, Number.isFinite(galleryOuterBorderPxState) ? galleryOuterBorderPxState : 0) : 0;
+  const galleryOuterBorderColor = String(galleryOuterBorderColorState || galleryGapColorResolved || "");
+  const panelInnerBorderPx = Math.max(0, Number.isFinite(panelInnerBorderPxState) ? panelInnerBorderPxState : 1);
+  const panelInnerBorderColor = String(panelInnerBorderColorState || themeColors.border);
   const histogramWidthPx = 110;
   const histogramGapPx = 15;
-  const galleryGridMaxWidth = isGallery ? effectiveNcols * canvasW + (effectiveNcols - 1) * galleryGapPx + 2 * galleryFramePx : canvasW;
+  const galleryGridMaxWidth = isGallery ? effectiveNcols * canvasW + (effectiveNcols - 1) * galleryGapPx + 2 * galleryOuterBorderPx : canvasW;
   // Wrap against the actual notebook/container width. maxWidth below still
   // enforces the requested column count, while auto-fit avoids viewport-only
   // breakpoints that overflow narrow sidebars in a wide browser window.
@@ -4356,15 +4372,15 @@ function Show2D() {
           key: `${axis}-${rawKey}`,
           axis,
           color: String(color),
-          left: galleryFramePx + col0 * (canvasW + gap),
-          top: galleryFramePx + row0 * (canvasH + gap),
+          left: galleryOuterBorderPx + col0 * (canvasW + gap),
+          top: galleryOuterBorderPx + row0 * (canvasH + gap),
           width: (col1 - col0 + 1) * canvasW + Math.max(0, col1 - col0) * gap,
           height: (row1 - row0 + 1) * canvasH + Math.max(0, row1 - row0) * gap,
         };
       })
       .filter(Boolean) as Array<{ key: string; axis: "row" | "col"; color: string; left: number; top: number; width: number; height: number }>;
     return [...build(rowMarkers, "row"), ...build(colMarkers, "col")];
-  }, [canvasH, canvasW, colMarkers, effectiveNcols, galleryFramePx, galleryGapPx, isGallery, rowMarkers, visibleImageIndices]);
+  }, [canvasH, canvasW, colMarkers, effectiveNcols, galleryOuterBorderPx, galleryGapPx, isGallery, rowMarkers, visibleImageIndices]);
 
   // ROI FFT active: both ROI and FFT on, with a selected ROI
   const roiFftActive = effectiveShowFft && roiActive && roiSelectedIdx >= 0 && roiSelectedIdx < (roiList?.length ?? 0);
@@ -8613,7 +8629,9 @@ function Show2D() {
     const cols = isGallery ? Math.max(1, Math.min(clampedNcols, panels.length)) : 1;
     const rows = Math.max(1, Math.ceil(panels.length / cols));
     const gap = isGallery ? galleryGapPx : 0;
-    const frame = gap > 0 && galleryGapColor ? gap : 0;
+    const frame = isGallery ? galleryOuterBorderPx : 0;
+    const frameColor = galleryOuterBorderColor;
+    const gapColor = galleryGapColorResolved;
     const titleHeight = showTitle !== false && title ? 30 : 0;
     const svgWidth = 2 * frame + cols * canvasW + (cols - 1) * gap;
     const svgHeight = titleHeight + 2 * frame + rows * canvasH + (rows - 1) * gap;
@@ -8622,8 +8640,11 @@ function Show2D() {
     {
       const defs: string[] = [];
       const body: string[] = [];
-      if (gap > 0 && galleryGapColor) {
-        body.push(`<rect x="0" y="${titleHeight}" width="${svgWidth}" height="${Math.max(0, svgHeight - titleHeight)}" fill="${escapeXmlAttr(svgColor(galleryGapColor))}"/>`);
+      if (frame > 0 && frameColor) {
+        body.push(`<rect x="0" y="${titleHeight}" width="${svgWidth}" height="${Math.max(0, svgHeight - titleHeight)}" fill="${escapeXmlAttr(svgColor(frameColor))}"/>`);
+      }
+      if (gap > 0 && gapColor) {
+        body.push(`<rect x="${frame}" y="${titleHeight + frame}" width="${Math.max(0, svgWidth - 2 * frame)}" height="${Math.max(0, svgHeight - titleHeight - 2 * frame)}" fill="${escapeXmlAttr(svgColor(gapColor))}"/>`);
       }
       if (titleHeight > 0) {
         body.push(
@@ -8685,13 +8706,15 @@ function Show2D() {
         const clipId = `show2d-svg-clip-${slot}`;
         defs.push(`<clipPath id="${clipId}"><rect x="${x}" y="${y}" width="${canvasW}" height="${canvasH}"/></clipPath>`);
         const dataUrl = scaledCanvasPngDataUrl(canvas, exportScale, smooth);
-        const panelStroke = svgColor(frame > 0 && galleryGapColor ? galleryGapColor : themeColors.border);
+        const panelStroke = svgColor(panelInnerBorderColor, themeColors.border);
         body.push(
           `<g id="show2d-panel-${panel}">`,
           `<rect x="${x}" y="${y}" width="${canvasW}" height="${canvasH}" fill="#000"/>`,
-          `<image x="${x}" y="${y}" width="${canvasW}" height="${canvasH}" xlink:href="${escapeXmlAttr(dataUrl)}" preserveAspectRatio="none"/>`,
-          `<rect x="${x}" y="${y}" width="${canvasW}" height="${canvasH}" fill="none" stroke="${escapeXmlAttr(panelStroke)}" stroke-width="1"/>`
+          `<image x="${x}" y="${y}" width="${canvasW}" height="${canvasH}" xlink:href="${escapeXmlAttr(dataUrl)}" preserveAspectRatio="none"/>`
         );
+        if (panelInnerBorderPx > 0) {
+          body.push(`<rect x="${x}" y="${y}" width="${canvasW}" height="${canvasH}" fill="none" stroke="${escapeXmlAttr(panelStroke)}" stroke-width="${panelInnerBorderPx}"/>`);
+        }
         const markerColor = panelMarkerColor(panel);
         if (markerAround) {
           body.push(
@@ -8826,8 +8849,10 @@ function Show2D() {
     canvasW,
     clampedNcols,
     cmap,
-    galleryGapColor,
     galleryGapPx,
+    galleryGapColorResolved,
+    galleryOuterBorderColor,
+    galleryOuterBorderPx,
     getZoomState,
     groupMarkerOverlays,
     height,
@@ -8837,6 +8862,8 @@ function Show2D() {
     markerAround,
     panelMarkerColor,
     panelHasScaleBar,
+    panelInnerBorderColor,
+    panelInnerBorderPx,
     panelAnnotations,
     panelOverlays,
     panelTitleFontSize,
@@ -10357,16 +10384,22 @@ function Show2D() {
             </Box>
           ) : isGallery ? (
             /* Gallery mode */
-            <Box sx={{ position: "relative", maxWidth: galleryGridWidth, width: "100%", boxSizing: "border-box" }}>
+            <Box sx={{
+              position: "relative",
+              maxWidth: galleryGridWidth,
+              width: "100%",
+              boxSizing: "border-box",
+              p: galleryOuterBorderPx > 0 ? `${galleryOuterBorderPx}px` : 0,
+              bgcolor: galleryOuterBorderPx > 0 ? galleryOuterBorderColor : "transparent",
+            }}>
             <Box sx={{
               display: "grid",
               gridTemplateColumns: galleryGridColumns,
               gap: `${galleryGapPx}px`,
-              p: galleryFramePx > 0 ? `${galleryFramePx}px` : 0,
               width: "100%",
               boxSizing: "border-box",
               justifyContent: "start",
-              bgcolor: galleryFramePx > 0 ? galleryGapColor : "transparent",
+              bgcolor: galleryGapPx > 0 ? galleryGapColorResolved : "transparent",
             }}>
               {visibleImageIndices.map((i) => (
                 <Box
@@ -10408,7 +10441,12 @@ function Show2D() {
 	                        boxShadow: `inset 0 0 0 ${selectedPanelSet.has(i) ? 3 : 2}px ${reorderMode && dragOverPanel === i ? themeColors.accent : panelChromeVisible && (i === selectedIdx || selectedPanelSet.has(i)) ? themeColors.accent : "transparent"}`,
 	                      },
                       "&::before": {
-                        display: "none",
+                        content: '""',
+                        position: "absolute",
+                        inset: 0,
+                        pointerEvents: "none",
+                        zIndex: 4,
+                        boxShadow: panelInnerBorderPx > 0 ? `inset 0 0 0 ${panelInnerBorderPx}px ${panelInnerBorderColor}` : "none",
                       },
                       "&:hover .show2d-panel-hide-button, &:focus-within .show2d-panel-hide-button": {
                         opacity: 1,

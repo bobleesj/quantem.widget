@@ -85,6 +85,35 @@ def test_show3d_animation_grid_uses_dark_background_by_default() -> None:
     assert frame.getpixel((4, 0)) == (12, 12, 12)
 
 
+def test_show3d_animation_grid_chrome_layers_are_independent() -> None:
+    widget = Show3D(
+        np.zeros((1, 4, 4), dtype=np.float32),
+        np.ones((1, 4, 4), dtype=np.float32),
+        max_cols=2,
+        inter_panel_gap_px=2,
+        inter_panel_gap_color="#112233",
+        gallery_outer_border_px=3,
+        gallery_outer_border_color="#000000",
+        panel_inner_border_px=1,
+        panel_inner_border_color="#ff00ff",
+        show_controls=False,
+        show_scale_bar=False,
+        show_panel_titles=False,
+    )
+
+    frame = widget._render_animation_frames(
+        quality="high",
+        playback="forward",
+        show_frame_labels=False,
+        background="white",
+    )[0].convert("RGB")
+
+    assert frame.size == (4 * 2 + 2 + 6, 4 + 6)
+    assert frame.getpixel((0, 0)) == (0, 0, 0)
+    assert frame.getpixel((3 + 4, 4)) == (17, 34, 51)
+    assert frame.getpixel((3, 3)) == (255, 0, 255)
+
+
 def test_show3d_save_gif_bounce_order_omits_duplicate_endpoints(tmp_path: pathlib.Path) -> None:
     widget = Show3D(
         _stack(),

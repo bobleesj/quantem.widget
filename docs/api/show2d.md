@@ -43,7 +43,7 @@ no console error, no NaN frame).
 | Rich panel title spans | `panel_title_spans` | Optional structured `text` / `math` / `color` spans for symbols such as `λ` and `χ²` in panel titles, panel menus, stats, saved state, and exported HTML |
 | Scale bar toggle | `show_scale_bar` (`scale_bar_visible` in saved state) | Calibrated bar shows/hides (needs `pixel_size > 0`) |
 | Scale bar style | `scale_bar_panels`, `scale_bar_length`, `scale_bar_label`, `scale_bar_style` | Restrict scale bars to selected panels and control exact publication text, font, outline, label spacing, offset, and bar thickness |
-| Gallery gutters and frame | `gallery_gap_px`, `gallery_gap_color` | Adds fixed inter-panel gutters; when a color is set, the same thickness is also used as the outside frame and panel-frame stroke for pixel-perfect SVG grids |
+| Gallery gap and borders | `inter_panel_gap_px`, `inter_panel_gap_color`, `gallery_outer_border_px`, `gallery_outer_border_color`, `panel_inner_border_px`, `panel_inner_border_color` | Separately controls the layer between panels, the outside gallery frame, and each panel's own inner stroke for browser, SVG, and static previews |
 | Pan (drag) | per-image pan | Image translates; with `link_pan` all panels move together |
 | Zoom (wheel) | `initial_zoom`, `zoom_row`, `zoom_col` | Zooms about the cursor |
 | Smooth toggle | `smooth` | Bilinear vs nearest sampling |
@@ -388,22 +388,28 @@ Accepted `scale_bar_style` keys:
 
 ### Pixel-perfect gutters
 
-Use `gallery_gap_px` and `gallery_gap_color` for manuscript grids:
+Use explicit gallery chrome controls for manuscript grids:
 
 ```python
 Show2D(
     panels,
     labels=labels,
     ncols=3,
-    gallery_gap_px=2,
-    gallery_gap_color="#000000",
+    inter_panel_gap_px=2,
+    inter_panel_gap_color="#000000",
+    gallery_outer_border_px=2,
+    gallery_outer_border_color="#000000",
+    panel_inner_border_px=1,
+    panel_inner_border_color="#000000",
 )
 ```
 
-When `gallery_gap_color` is non-empty, the SVG and browser layout use the same
-thickness for internal gutters and the outside frame. A 2-pixel black grid puts
-the first image at `(2, 2)`, the next image after `panel_width + 2`, and uses
-black panel-frame strokes so Illustrator does not show a light seam.
+`inter_panel_gap_*` controls only the layer between panels.
+`gallery_outer_border_*` controls the frame around the whole grid.
+`panel_inner_border_*` controls the stroke drawn inside each image panel. The
+older `gallery_gap_px` / `gallery_gap_color` names remain as aliases for old
+notebooks; when used together they populate all three black-grid layers for
+the historical pixel-perfect SVG behavior.
 
 ## Which denoise filter should I use?
 

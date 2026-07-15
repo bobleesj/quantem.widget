@@ -53,6 +53,8 @@ from quantem.widget.show2d import (
     _normalize_panel_title_style,
     _normalize_rotation_list,
     _normalise_title_span_sequence,
+    _nonnegative_float,
+    _nonnegative_int,
     _reject_unknown_kwargs,
     _rotation_to_quarter_turns,
     _title_span_sequence_length,
@@ -829,6 +831,16 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         Gap in CSS pixels between adjacent panels.  ``0`` = flush (panels share
         an edge - useful for tiled montages), ``20`` = roomy (clear separation
         for slides).  Single-panel widgets ignore this.
+    inter_panel_gap_px, inter_panel_gap_color : int, str, optional
+        Explicit replacement for ``panel_gap`` when the layer between panels
+        needs a chosen color. The gap is real layout space between panel slots,
+        not a stroke drawn inside a panel.
+    gallery_outer_border_px, gallery_outer_border_color : int, str, optional
+        Frame around the entire multi-panel gallery. This is separate from the
+        inter-panel gap and from per-panel strokes.
+    panel_inner_border_px, panel_inner_border_color : float, str, optional
+        Stroke drawn inside each panel slot over the image edge. Defaults to
+        ``0`` in Show3D to preserve the existing no-stroke canvas look.
     panel_title_font_size : int, default 11
         Font size in CSS pixels for the per-panel title drawn at the top of
         each multi-panel slot.  Bump to ``14–16`` for slide-projection clarity;
@@ -1139,6 +1151,12 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
     show_panel_titles = traitlets.Bool(True).tag(sync=True)
     panel_title_font_size = traitlets.Int(11).tag(sync=True)
     panel_title_style = traitlets.Dict(default_value={}).tag(sync=True)
+    inter_panel_gap_px = traitlets.Int(0).tag(sync=True)
+    inter_panel_gap_color = traitlets.Unicode("").tag(sync=True)
+    gallery_outer_border_px = traitlets.Int(0).tag(sync=True)
+    gallery_outer_border_color = traitlets.Unicode("").tag(sync=True)
+    panel_inner_border_px = traitlets.Float(0.0).tag(sync=True)
+    panel_inner_border_color = traitlets.Unicode("#000000").tag(sync=True)
     panel_gap = traitlets.Int(0).tag(sync=True)
     # Hover-x hide feature: enables UI to drop frames from scrubber without
     # rebuilding the widget. hidden_indices is the live state; visible_indices
@@ -2406,6 +2424,12 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         verbose: bool = True,
         max_cols: int | None = None,
         panel_gap: int | None = None,
+        inter_panel_gap_px: int | None = None,
+        inter_panel_gap_color: str | None = None,
+        gallery_outer_border_px: int | None = None,
+        gallery_outer_border_color: str | None = None,
+        panel_inner_border_px: float | int | None = None,
+        panel_inner_border_color: str | None = None,
         panel_title_font_size: int | None = None,
         panel_title_style: Mapping[str, object] | None = None,
         show_panel_titles: bool | None = None,
@@ -2458,8 +2482,29 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         kwargs["show_title"] = show_title
         if max_cols is not None:
             kwargs["max_cols"] = int(max_cols)
-        if panel_gap is not None:
-            kwargs["panel_gap"] = int(panel_gap)
+        resolved_inter_panel_gap_px = _nonnegative_int(
+            0 if inter_panel_gap_px is None and panel_gap is None
+            else panel_gap if inter_panel_gap_px is None
+            else inter_panel_gap_px,
+            name="inter_panel_gap_px",
+        )
+        kwargs["inter_panel_gap_px"] = resolved_inter_panel_gap_px
+        kwargs["inter_panel_gap_color"] = "" if inter_panel_gap_color is None else str(inter_panel_gap_color)
+        kwargs["gallery_outer_border_px"] = (
+            0 if gallery_outer_border_px is None
+            else _nonnegative_int(gallery_outer_border_px, name="gallery_outer_border_px")
+        )
+        kwargs["gallery_outer_border_color"] = (
+            "" if gallery_outer_border_color is None else str(gallery_outer_border_color)
+        )
+        kwargs["panel_inner_border_px"] = (
+            0.0 if panel_inner_border_px is None
+            else _nonnegative_float(panel_inner_border_px, name="panel_inner_border_px")
+        )
+        kwargs["panel_inner_border_color"] = (
+            "#000000" if panel_inner_border_color is None else str(panel_inner_border_color)
+        )
+        kwargs["panel_gap"] = resolved_inter_panel_gap_px
         if panel_title_font_size is not None:
             kwargs["panel_title_font_size"] = int(panel_title_font_size)
         kwargs["show_panel_titles"] = show_panel_titles
@@ -3516,6 +3561,7 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         elif self.vmax is not None:
             vmax = self.vmax
 
+        chrome = self._gallery_export_chrome()
         return Show2D(
             frames,
             labels=labels,
@@ -3542,9 +3588,31 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             display_bin=1,
             show_panel_titles=self.show_panel_titles,
             panel_title_font_size=int(self.panel_title_font_size or 11),
-            gallery_gap_px=max(0, int(self.panel_gap)),
+            inter_panel_gap_px=int(chrome["inter_panel_gap_px"]),
+            inter_panel_gap_color=str(chrome["inter_panel_gap_color"]),
+            gallery_outer_border_px=int(chrome["gallery_outer_border_px"]),
+            gallery_outer_border_color=str(chrome["gallery_outer_border_color"]),
+            panel_inner_border_px=float(chrome["panel_inner_border_px"]),
+            panel_inner_border_color=str(chrome["panel_inner_border_color"]),
             save_state=False,
         )
+
+    def _gallery_export_chrome(self) -> dict[str, int | float | str]:
+        """Return resolved gallery chrome for Show3D exports and previews."""
+        gap_px = max(0, int(getattr(self, "inter_panel_gap_px", self.panel_gap)))
+        gap_color = str(getattr(self, "inter_panel_gap_color", "") or "")
+        outer_px = max(0, int(getattr(self, "gallery_outer_border_px", 0)))
+        outer_color = str(getattr(self, "gallery_outer_border_color", "") or gap_color)
+        panel_border_px = max(0.0, float(getattr(self, "panel_inner_border_px", 0.0)))
+        panel_border_color = str(getattr(self, "panel_inner_border_color", "#000000") or "#000000")
+        return {
+            "inter_panel_gap_px": gap_px,
+            "inter_panel_gap_color": gap_color,
+            "gallery_outer_border_px": outer_px,
+            "gallery_outer_border_color": outer_color,
+            "panel_inner_border_px": panel_border_px,
+            "panel_inner_border_color": panel_border_color,
+        }
 
     def _on_handoff_request_change(self, change: dict) -> None:
         """Build a Python-side prepared view from a frontend toolbar request."""
@@ -3992,6 +4060,12 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             "controls_collapsed": self.controls_collapsed,
             "max_cols": self.max_cols,
             "panel_gap": self.panel_gap,
+            "inter_panel_gap_px": int(self.inter_panel_gap_px),
+            "inter_panel_gap_color": str(self.inter_panel_gap_color),
+            "gallery_outer_border_px": int(self.gallery_outer_border_px),
+            "gallery_outer_border_color": str(self.gallery_outer_border_color),
+            "panel_inner_border_px": float(self.panel_inner_border_px),
+            "panel_inner_border_color": str(self.panel_inner_border_color),
             "show_panel_titles": self.show_panel_titles,
             "panel_title_font_size": self.panel_title_font_size,
             "panel_title_style": dict(self.panel_title_style),
@@ -4510,6 +4584,31 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 state["panel_title_style"] = _normalize_panel_title_style(state["panel_title_style"])
             except (TypeError, ValueError):
                 state.pop("panel_title_style")
+        if "inter_panel_gap_px" not in state and "panel_gap" in state:
+            state["inter_panel_gap_px"] = state["panel_gap"]
+        for key in ("inter_panel_gap_px", "gallery_outer_border_px", "panel_gap"):
+            if key in state:
+                try:
+                    state[key] = _nonnegative_int(state[key], name=key)
+                except ValueError:
+                    state.pop(key)
+        if "inter_panel_gap_px" in state:
+            state["panel_gap"] = state["inter_panel_gap_px"]
+        if "panel_inner_border_px" in state:
+            try:
+                state["panel_inner_border_px"] = _nonnegative_float(
+                    state["panel_inner_border_px"],
+                    name="panel_inner_border_px",
+                )
+            except ValueError:
+                state.pop("panel_inner_border_px")
+        for key in (
+            "inter_panel_gap_color",
+            "gallery_outer_border_color",
+            "panel_inner_border_color",
+        ):
+            if key in state and state[key] is not None:
+                state[key] = str(state[key])
         if "panel_cmaps" in state and isinstance(state["panel_cmaps"], list):
             panel_cmaps = [str(value) for value in state["panel_cmaps"]]
             if panel_cmaps and len(panel_cmaps) != int(self.n_panels):
@@ -5713,7 +5812,17 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             downsample=downsample,
             max_edge_px=max_edge_px,
         )
-        panel_gap = max(0, int(round(float(self.panel_gap) * scale)))
+        chrome = self._gallery_export_chrome()
+        panel_gap = max(0, int(round(float(chrome["inter_panel_gap_px"]) * scale)))
+        gap_background = (
+            str(chrome["inter_panel_gap_color"])
+            if str(chrome["inter_panel_gap_color"])
+            else background
+        )
+        outer_border = max(0, int(round(float(chrome["gallery_outer_border_px"]) * scale)))
+        outer_border_color = str(chrome["gallery_outer_border_color"]) or gap_background
+        panel_inner_border = max(0, int(round(float(chrome["panel_inner_border_px"]) * scale)))
+        panel_inner_border_color = str(chrome["panel_inner_border_color"]) or "black"
         title_font_size = max(8, int(round(float(self.panel_title_font_size) * scale)))
         include_scale_bar = bool(self.scale_bar_visible) if show_scale_bar is None else bool(show_scale_bar)
         include_zoom = bool(self.show_zoom_indicator) if show_zoom is None else bool(show_zoom)
@@ -5759,7 +5868,11 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                     title_font_size=title_font_size,
                     max_cols=int(self.max_cols),
                     panel_gap=panel_gap,
-                    background=background,
+                    background=gap_background,
+                    outer_border=outer_border,
+                    outer_border_color=outer_border_color,
+                    panel_inner_border=panel_inner_border,
+                    panel_inner_border_color=panel_inner_border_color,
                 )
             )
         return frames
@@ -6856,6 +6969,12 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             offline=quantized,
             max_cols=self.max_cols,
             panel_gap=self.panel_gap,
+            inter_panel_gap_px=int(self.inter_panel_gap_px),
+            inter_panel_gap_color=str(self.inter_panel_gap_color),
+            gallery_outer_border_px=int(self.gallery_outer_border_px),
+            gallery_outer_border_color=str(self.gallery_outer_border_color),
+            panel_inner_border_px=float(self.panel_inner_border_px),
+            panel_inner_border_color=str(self.panel_inner_border_color),
             panel_title_font_size=self.panel_title_font_size,
             panel_title_style=dict(self.panel_title_style),
             show_panel_titles=self.show_panel_titles,
@@ -7485,6 +7604,7 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         preview_ncols = int(self.notebook_preview_ncols)
         if preview_ncols <= 0:
             preview_ncols = int(self.max_cols) if int(self.max_cols) > 0 else len(frames)
+        chrome = self._gallery_export_chrome()
         preview = Show2D(
             frames,
             labels=labels,
@@ -7509,7 +7629,12 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             display_bin=1,
             show_panel_titles=self.show_panel_titles,
             panel_title_font_size=int(self.panel_title_font_size or 11),
-            gallery_gap_px=max(0, int(self.panel_gap)),
+            inter_panel_gap_px=int(chrome["inter_panel_gap_px"]),
+            inter_panel_gap_color=str(chrome["inter_panel_gap_color"]),
+            gallery_outer_border_px=int(chrome["gallery_outer_border_px"]),
+            gallery_outer_border_color=str(chrome["gallery_outer_border_color"]),
+            panel_inner_border_px=float(chrome["panel_inner_border_px"]),
+            panel_inner_border_color=str(chrome["panel_inner_border_color"]),
             save_state=False,
         )
         if (

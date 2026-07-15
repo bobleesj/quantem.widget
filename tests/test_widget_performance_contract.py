@@ -261,6 +261,14 @@ def test_show2d_batch_selection_and_marker_frame_contract():
     assert 'data-show3d-marker-style={markerAround ? "around" : "left"}' in show3d
     assert 'useModelState<PanelTitleStyle>("panel_title_style")' in show2d
     assert 'useModelState<PanelTitleStyle>("panel_title_style")' in show3d
+    assert 'useModelState<number>("inter_panel_gap_px")' in show2d
+    assert 'useModelState<string>("inter_panel_gap_color")' in show2d
+    assert 'useModelState<number>("gallery_outer_border_px")' in show2d
+    assert 'useModelState<string>("gallery_outer_border_color")' in show2d
+    assert 'useModelState<number>("panel_inner_border_px")' in show2d
+    assert 'useModelState<string>("panel_inner_border_color")' in show2d
+    assert "galleryGapColorResolved" in show2d
+    assert "panelInnerBorderColor" in show2d
     assert 'useModelState<MarkerMap>("row_markers")' in show2d
     assert 'useModelState<MarkerMap>("row_markers")' in show3d
     assert 'useModelState<PanelAnnotationSpec[][]>("panel_annotations")' in show2d
@@ -335,8 +343,9 @@ def test_show_panel_chrome_uses_rich_labels_and_collapsed_export():
     assert "{panelTitleContent(panel)}" in show3d
     assert "{panelTitleContent(statsIdx)}" in show2d
     assert "{panelTitleContent(st.panel)}" in show3d
-    assert "showAnimationExportOptions = exportEnabled || canDownloadCurrentHtml" in show3d
-    assert "GIF and MP4 export require the live Python backend" in show3d
+    assert "(exportEnabled || canDownloadCurrentHtml || canExportStandaloneGif)" in show3d
+    assert "MP4 export requires the live Python backend" in show3d
+    assert "Standalone HTML can export GIF or download itself as HTML" in show3d
 
 
 def test_show2d_fft_gallery_quality_labels_stay_readable():
@@ -549,6 +558,18 @@ def test_show3d_bottom_fft_layout_always_stacks_below_main_panel():
     assert 'fftLayoutBottom && (nPanels || 1) > 1' not in show3d
 
 
+def test_show3d_right_fft_layout_tracks_wrapped_toolbar_height_contract():
+    """C1: side FFT canvas should stay aligned when the main toolbar wraps."""
+    show3d = (ROOT / "js" / "show3d" / "index.tsx").read_text(encoding="utf-8")
+
+    assert "const toolControlsRef = React.useRef<HTMLDivElement>(null)" in show3d
+    assert "const [toolControlsHeight, setToolControlsHeight] = React.useState(28)" in show3d
+    assert "new ResizeObserver(measure)" in show3d
+    assert 'ref={toolControlsRef} data-show3d-tool-controls="true"' in show3d
+    assert 'data-show3d-fft-tool-spacer="true"' in show3d
+    assert "height: !fftLayoutBottom && controlsVisible ? toolControlsHeight : \"auto\"" in show3d
+
+
 def test_show2d_and_show3d_fft_zoom_labels_cover_every_interactive_fft():
     """FFT views expose their live multiplier in every supported layout."""
     figure = (ROOT / "js" / "figure.ts").read_text(encoding="utf-8")
@@ -688,6 +709,34 @@ def test_show3d_fft_cache_ignores_frame_delivery_counter():
     assert "`seq=${frameSeq || 0}`" not in show3d
     assert "fftCacheInvalidations" in show3d
     assert "fftCacheHits" in show3d
+
+
+def test_show3d_fft_overlay_updates_during_playback_contract():
+    """C1: Show3D playback recomputes FFT from the displayed frame."""
+    show3d = (ROOT / "js" / "show3d" / "index.tsx").read_text(encoding="utf-8")
+    show3d_fft_compute = show3d.split(
+        "// Compute FFT magnitude (expensive", 1
+    )[1].split("// Clear FFT measurement", 1)[0]
+
+    assert "FFT_PLAYBACK_UPDATE_INTERVAL_MS" in show3d
+    assert "const playbackFft = Boolean(playing)" in show3d_fft_compute
+    assert "fftPlaybackComputeInFlightRef" in show3d_fft_compute
+    assert "playbackFft ? playbackIdxRef.current" in show3d_fft_compute
+    assert "if (!data && offline) data = getOfflineFrame(fftFrameIdx)" in show3d_fft_compute
+    assert "if (!playbackFft) cancelled = true" in show3d_fft_compute
+    assert "dbg.lastFftFrame = fftFrameIdx" in show3d_fft_compute
+    assert "dbg.lastFftPlayback = playbackFft" in show3d_fft_compute
+    assert "During playback keep the last FFT visible" not in show3d_fft_compute
+
+
+def test_show3d_fft_overlay_top_corners_clear_panel_titles_contract():
+    """C1: dragged top FFT overlays should not collide with panel title chrome."""
+    show3d = (ROOT / "js" / "show3d" / "index.tsx").read_text(encoding="utf-8")
+
+    assert "function fftOverlayTopInsetPad" in show3d
+    assert "showPanelTitles === false || panelCount <= 1" in show3d
+    assert show3d.count("const topInsetPad = fftOverlayTopInsetPad(") == 2
+    assert "panelTop + topInsetPad" in show3d
 
 
 def test_show2d_show3d_foreground_canvas_repaint_uses_cached_fft_contract():

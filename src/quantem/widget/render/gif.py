@@ -238,11 +238,15 @@ def compose_panel_grid(
     max_cols: int = 4,
     panel_gap: int = 10,
     background: str | tuple[int, int, int] = "dark",
+    outer_border: int = 0,
+    outer_border_color: str | tuple[int, int, int] | None = None,
+    panel_inner_border: int = 0,
+    panel_inner_border_color: str | tuple[int, int, int] = "black",
 ):
     """Compose per-panel PIL images into the widget-style panel grid."""
     if not images:
         raise ValueError("compose_panel_grid requires at least one image")
-    from PIL import Image
+    from PIL import Image, ImageDraw
     n_panels = len(images)
     cols = n_panels if max_cols <= 0 else min(max(1, int(max_cols)), n_panels)
     rows = int(math.ceil(n_panels / cols))
@@ -251,11 +255,30 @@ def compose_panel_grid(
     cell_w = max(widths)
     cell_h = max(heights)
     gap = max(0, int(panel_gap))
+    outer = max(0, int(outer_border))
+    inner = max(0, int(panel_inner_border))
+    bg_rgb = normalize_background(background)
+    outer_rgb = normalize_background(outer_border_color) if outer_border_color is not None else bg_rgb
     canvas = Image.new(
         "RGB",
-        (cols * cell_w + gap * (cols - 1), rows * cell_h + gap * (rows - 1)),
-        normalize_background(background),
+        (
+            cols * cell_w + gap * (cols - 1) + 2 * outer,
+            rows * cell_h + gap * (rows - 1) + 2 * outer,
+        ),
+        outer_rgb,
     )
+    if gap > 0 and bg_rgb != outer_rgb:
+        draw = ImageDraw.Draw(canvas)
+        draw.rectangle(
+            [
+                outer,
+                outer,
+                canvas.size[0] - outer,
+                canvas.size[1] - outer,
+            ],
+            fill=bg_rgb,
+            outline=None,
+        )
     for i, src in enumerate(images):
         panel = src.convert("RGB").copy()
         if show_panel_titles:
@@ -266,9 +289,22 @@ def compose_panel_grid(
                 title_parts.append(str(frame_labels[i]))
             _draw_panel_title(panel, " · ".join(title_parts), title_font_size)
         row, col = divmod(i, cols)
-        x = col * (cell_w + gap) + (cell_w - panel.size[0]) // 2
-        y = row * (cell_h + gap) + (cell_h - panel.size[1]) // 2
+        x = outer + col * (cell_w + gap) + (cell_w - panel.size[0]) // 2
+        y = outer + row * (cell_h + gap) + (cell_h - panel.size[1]) // 2
         canvas.paste(panel, (x, y))
+        if inner > 0:
+            draw = ImageDraw.Draw(canvas)
+            color = normalize_background(panel_inner_border_color)
+            for offset in range(inner):
+                draw.rectangle(
+                    [
+                        x + offset,
+                        y + offset,
+                        x + panel.size[0] - 1 - offset,
+                        y + panel.size[1] - 1 - offset,
+                    ],
+                    outline=color,
+                )
     return canvas
 
 

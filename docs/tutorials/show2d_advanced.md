@@ -494,25 +494,29 @@ fine-tune the final positions interactively without panning the image.
 
 ### Match black manuscript gutters and outer frame
 
-For pixel-perfect manuscript grids, use the same value for the internal gutter
-and the outside frame. `Show2D` does this automatically when both
-`gallery_gap_px` and `gallery_gap_color` are set:
+For pixel-perfect manuscript grids, set the layer between panels, the outside
+gallery frame, and the per-panel inner stroke independently:
 
 ```{code-cell} python
 w = Show2D(
     panels,
     labels=labels,
     ncols=3,
-    gallery_gap_px=2,
-    gallery_gap_color="#000000",
+    inter_panel_gap_px=2,
+    inter_panel_gap_color="#000000",
+    gallery_outer_border_px=2,
+    gallery_outer_border_color="#000000",
+    panel_inner_border_px=1,
+    panel_inner_border_color="#000000",
 )
 w
 ```
 
-With `gallery_gap_px=2` and a non-empty `gallery_gap_color`, `Show2D` places
-the first panel at `(2, 2)` in SVG coordinates, inserts 2 pixels between
-panels, and adds a 2-pixel frame around the outside. Panel frame strokes use
-the same color so Illustrator does not show a light seam over the black gutter.
+With the settings above, `Show2D` places the first panel at `(2, 2)` in SVG
+coordinates, inserts 2 pixels between panels, adds a 2-pixel frame around the
+outside, and draws a 1-pixel inner stroke on each panel. To remove only the
+between-panel layer while keeping individual frames, set `inter_panel_gap_px=0`
+and keep `panel_inner_border_px > 0`.
 
 ### Put the scale bar on only one panel
 

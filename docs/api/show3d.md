@@ -32,6 +32,7 @@ export. See the [Show3D tutorial](../tutorials/show3d).
 | Export button | `export_request`, `export_status` | Writes standalone HTML from live widgets; live Show3D can also request GIF/MP4 animation exports |
 | Page controls (paged galleries) | `page_idx`, `n_pages`, `panels_per_page`, `page_starred`; `star_page()`, `unstar_page()` | Shows, stars, or plays through one page of panels at a time |
 | Panel layout (multi-panel) | `n_panels`, `link_panels`, `max_cols` | Panels arrange; linked scrub moves all |
+| Gallery gap and borders | `inter_panel_gap_px`, `inter_panel_gap_color`, `gallery_outer_border_px`, `gallery_outer_border_color`, `panel_inner_border_px`, `panel_inner_border_color` | Separately controls the layer between Show3D panels, the outside gallery frame, and each panel's own inner stroke for live display, HTML, and GIF/MP4 exports |
 | Panel visibility (multi-panel) | `hidden_panels` | Panels collapse from view without deleting data |
 | Panel reorder (multi-panel) | `panel_order`; `set_panel_order()`, `move_panel()`, `reset_panel_order()` | Reorders panel display without changing source data, labels, stars, or hidden state |
 | Viewer chrome preset | `ui_mode` plus explicit `show_*` kwargs | Applies shared display presets; see [Viewer UI controls](viewer-ui) |
@@ -54,6 +55,30 @@ export. See the [Show3D tutorial](../tutorials/show3d).
 | More menu: Flip | `flip_horizontal`, `flip_vertical`, `flip_rows`, `flip_cols` | Display-only orientation checks for row/column or horizontal/vertical review |
 | More menu: Rotate | `image_rotation`, `rotation_scope`, `frame_rotations`; `rotation=`, `rotations=` | Display-only 0/90/180/270° rotation for the whole stack or the selected frame |
 | More menu: Compare | `compare_mode`, `compare_pair`, `blink_fps`, `diff_cmap`, `compare_background` | Blink, difference, or overlay two frames for point-defect and time-series change detection |
+
+## Multi-panel gallery chrome
+
+Use the same explicit names as Show2D when preparing Show3D panels for slides
+or publication:
+
+```python
+Show3D(
+    raw_stack,
+    denoised_stack,
+    max_cols=2,
+    inter_panel_gap_px=4,
+    inter_panel_gap_color="#000000",
+    gallery_outer_border_px=4,
+    gallery_outer_border_color="#000000",
+    panel_inner_border_px=1,
+    panel_inner_border_color="#000000",
+)
+```
+
+`inter_panel_gap_px` is real space between panel slots. `gallery_outer_border_px`
+is the frame around the whole Show3D gallery. `panel_inner_border_px` is drawn
+inside each panel over the image edge. The older `panel_gap` argument remains a
+compatibility alias for `inter_panel_gap_px`.
 
 ## Rich panel labels and math
 
