@@ -80,9 +80,9 @@ default**; `?gqk=full` restores the old layout.
   (10-bit mantissa vs values spanning ~4.5e6 dynamic range). Rejected —
   strictly worse than herm16 which spends its 16 bits after per-pixel scaling.
 - **Band-limit crop in q**: exact only when the scan oversamples the 2-alpha
-  double-overlap disk. This dataset (0.5 A sampling, 30 mrad, 300 kV) is
-  in-band across the whole q-plane — zero win here, dataset-dependent in
-  general. Not implemented.
+  double-overlap disk. This dataset (10.4 A scan sampling, 30 mrad, 300 kV;
+  q_Nyquist 0.048 1/A << 2-alpha/lambda 3.05 1/A) is in-band across the whole
+  q-plane — zero win here, dataset-dependent in general. Not implemented.
 - **Store raw counts, rebuild G per drag**: unbounded memory win but turns
   every slider move into a full FFT rebuild — kills the 15 ms interactivity.
   Only sensible as a future explicit "final full-BF render" button.
@@ -202,3 +202,21 @@ Conclusions:
 7. **Verify the adapter before believing any GPU number** (`adapter.info` must
    not be SwiftShader), and serve folder exports with a Range-capable server -
    two silent failure modes that produce plausible-looking nonsense.
+
+## Follow-ups landed 2026-07-17
+
+- **VRAM budget clamp wired** (was dead code): the active BF set is capped at
+  `budget / (storedPlane x bytesPerValue)` with uniform stride, default 4.5 GB
+  (`__QUANTEM_SHOWPTYCHO_GQK_BUDGET_GB__` override), status line announces the
+  clamp. Mode-aware: herm16 admits 4x more BF pixels under the same budget.
+- **rfft half-plane calibrations accepted**: the CUDA backend now stores
+  Hermitian-half `G_qk` (n x n/2+1) and exports that `g_shape`; the viewer
+  derives n from either layout (it rebuilds its own G from the folder source).
+- **Flattened scan input**: verified `(N, det, det)` works end to end -
+  square scan inferred (or `scan_shape=` explicit) before `g_shape` is written.
+- **Corrected-calibration visual A/B** (scan sampling fixed to 10.4 A,
+  refit C10 383 nm / C12 79 nm / phi12 80 deg): full vs herm16 phase images
+  indistinguishable; difference map is structureless noise, max 1.24e-4 rad
+  (0.16 % of span), rms 2.7e-5 rad (0.035 %). full 856 MB / 13.8 ms vs herm16
+  215 MB / 14.0 ms at 408 BF. Caution from the fit: C10 and C12 landed near
+  the +-400 / 100 nm search bounds - widen the search when refitting.
