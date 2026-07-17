@@ -162,7 +162,7 @@ The Hermitian half-plane is **bit-exact** at every supported scan size
 |---|---|---|---|
 | Hermitian half-plane `G(q,k)` — 2x less memory, bit-exact, faster | Done (default; `?gqk=full` opt-out) | Todo | Todo |
 | snorm16 block-quantized `G(q,k)` — 4x, ~1e-4 rad error | Done (opt-in `?gqk=herm16`) | Todo | Todo |
-| VRAM budget clamp on BF count | Todo | n/a | Todo |
+| VRAM budget clamp on BF count | Done (4.5 GB default, mode-aware; `__QUANTEM_SHOWPTYCHO_GQK_BUDGET_GB__` override) | n/a | Todo |
 | Streamed initial build (bounded peak) | Todo | n/a | Todo |
 
 ## Docs
