@@ -334,6 +334,8 @@ class Show4DSTEMMPS(Show4DSTEM):
         if getattr(self, "_mps_initializing", False):
             self.virtual_image_bytes = b""
             return
+        if self.vi_source != "roi":
+            return
         if not isinstance(data, ChunkedFrames):
             return super()._compute_virtual_image_from_roi()
         cached = self._get_cached_preset()

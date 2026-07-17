@@ -24,6 +24,7 @@ import tempfile
 import threading
 import time
 from collections import OrderedDict
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Self, Sequence
 
 if TYPE_CHECKING:
@@ -52,6 +53,56 @@ _CHUNK_BYTE_BUDGET = 600 * 1024 * 1024
 # Sparse detector-mask gathers are fastest with smaller transient slabs; large
 # slabs burn time in allocation/copy overhead on full no-bin CUDA compare grids.
 _SPARSE_MASK_CHUNK_BYTE_BUDGET = 64 * 1024 * 1024
+
+
+class _NumpyShow4DSTEMComputeBackend:
+    """Small CPU fallback for local array viewers without ``quantem.gpu``."""
+
+    def __init__(self, data: Any):
+        self.data = to_numpy(data)
+
+    def _flat(self) -> np.ndarray:
+        arr = np.asarray(self.data)
+        if arr.ndim < 3:
+            raise ValueError(
+                "Show4DSTEM compute data must have detector dimensions in the last two axes."
+            )
+        return arr.reshape((-1, arr.shape[-2], arr.shape[-1]))
+
+    def mean_dp(self) -> np.ndarray:
+        arr = np.asarray(self.data)
+        if arr.ndim == 2:
+            return arr.astype(np.float32, copy=False)
+        axes = tuple(range(arr.ndim - 2))
+        return arr.mean(axis=axes, dtype=np.float64).astype(np.float32, copy=False)
+
+    def frame(self, idx: int) -> np.ndarray:
+        flat = self._flat()
+        index = max(0, min(int(idx), flat.shape[0] - 1))
+        return flat[index]
+
+    def reduce_frames(self, indices: Sequence[int], reduce: str = "mean") -> np.ndarray:
+        flat = self._flat()
+        if len(indices) == 0:
+            return np.zeros(flat.shape[1:], dtype=np.float32)
+        safe = np.clip(np.asarray(indices, dtype=np.int64), 0, flat.shape[0] - 1)
+        selected = flat[safe]
+        mode = (reduce or "mean").lower()
+        if mode == "sum":
+            return selected.sum(axis=0, dtype=np.float64).astype(np.float32, copy=False)
+        if mode == "max":
+            return selected.max(axis=0).astype(np.float32, copy=False)
+        return selected.mean(axis=0, dtype=np.float64).astype(np.float32, copy=False)
+
+    def masked_sum(self, mask: np.ndarray) -> np.ndarray:
+        arr = np.asarray(self.data)
+        mask_arr = np.asarray(mask, dtype=np.float32)
+        if arr.shape[-2:] != mask_arr.shape:
+            raise ValueError(
+                f"Mask shape {mask_arr.shape} does not match detector shape {arr.shape[-2:]}."
+            )
+        out = (arr.astype(np.float32, copy=False) * mask_arr).sum(axis=(-2, -1))
+        return np.asarray(out, dtype=np.float32)
 
 
 def _is_recoverable_allocation_error(exc: BaseException) -> bool:
@@ -118,6 +169,14 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         Bright field disk radius in pixels. If not provided, estimated as 1/8 of detector size.
     precompute_virtual_images : bool, default True
         Precompute BF/ABF/LAADF/HAADF virtual images for preset switching.
+    DPC_row, DPC_col, SSB : array_like, optional
+        Precomputed real-space maps to expose in the image panel alongside the
+        ROI-derived virtual image. Each map must be real-valued with shape
+        ``(scan_rows, scan_cols)`` or ``(n_frames, scan_rows, scan_cols)``.
+        ``SSB`` is the phase map; complex SSB inputs are rejected so amplitude
+        is not selected silently.
+    vi_source : {"roi", "DPC_row", "DPC_col", "SSB"}, optional
+        Initial image-panel source. Defaults to the ROI-derived virtual image.
     frame_dim_label : str, optional
         Label for the frame dimension when 5D data is provided.
         Defaults to "Frame". Common values: "Tilt", "Time", "Focus".
@@ -300,6 +359,12 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     virtual_image_bytes = traitlets.Bytes(b"").tag(
         sync=True
     )  # Raw float32 (JS computes stats + range)
+    vi_source = traitlets.Unicode("roi").tag(sync=True)
+    vi_product_labels = traitlets.List(
+        traitlets.Unicode(), default_value=[]
+    ).tag(sync=True)
+    vi_product_map_frames = traitlets.Int(0).tag(sync=True)
+    vi_product_maps_bytes = traitlets.Bytes(b"").tag(sync=True)
 
     # Offline / browser-compute mode: ship a compact 4D stack so JS runs the
     # virtual-image and DP-from-ROI reductions with no Python kernel. Inline gzip
@@ -350,6 +415,27 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     export_payload = traitlets.Bytes(b"").tag(sync=True)
     export_payload_id = traitlets.Unicode("").tag(sync=True)
     export_filename = traitlets.Unicode("").tag(sync=True)
+
+    # Kernel-backed SSB compute. Exported/static HTML can display precomputed
+    # SSB maps, but cannot launch this Python/CUDA path.
+    ssb_compute_request = traitlets.Unicode("").tag(sync=True)
+    ssb_compute_status = traitlets.Unicode("").tag(sync=True)
+    ssb_compute_busy = traitlets.Bool(False).tag(sync=True)
+    ssb_compute_enabled = traitlets.Bool(True).tag(sync=True)
+    ssb_compute_n_trials = traitlets.Int(200).tag(sync=True)
+    ssb_compute_refine = traitlets.Bool(True).tag(sync=True)
+    ssb_compute_bf_subsample = traitlets.Float(0.3).tag(sync=True)
+    ssb_compute_bf_pixels = traitlets.Int(0).tag(sync=True)
+    ssb_compute_bf_selected_pixels = traitlets.Int(0).tag(sync=True)
+    ssb_compute_manual_aberrations = traitlets.Bool(False).tag(sync=True)
+    ssb_compute_lock_c10 = traitlets.Bool(False).tag(sync=True)
+    ssb_compute_lock_c12 = traitlets.Bool(False).tag(sync=True)
+    ssb_compute_c10_nm = traitlets.Float(0.0).tag(sync=True)
+    ssb_compute_c12_nm = traitlets.Float(0.0).tag(sync=True)
+    ssb_compute_phi12_deg = traitlets.Float(0.0).tag(sync=True)
+    ssb_compute_rotation_angle_deg = traitlets.Float(0.0).tag(sync=True)
+    ssb_compute_calibration_json = traitlets.Unicode("").tag(sync=True)
+    ssb_compute_calibration_filename = traitlets.Unicode("").tag(sync=True)
 
     # =========================================================================
     # VI ROI (real-space region selection for summed DP)
@@ -576,6 +662,586 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             )
         return mode
 
+    @staticmethod
+    def _normalise_vi_source(value: str | None) -> str:
+        source = str(value or "roi").strip()
+        key = source.lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "": "roi",
+            "roi": "roi",
+            "virtual": "roi",
+            "virtual_image": "roi",
+            "bf": "roi",
+            "dpc_row": "DPC_row",
+            "dpc_com_row": "DPC_row",
+            "dpc_r": "DPC_row",
+            "dpcr": "DPC_row",
+            "dpc_col": "DPC_col",
+            "dpc_com_col": "DPC_col",
+            "dpc_c": "DPC_col",
+            "dpcc": "DPC_col",
+            "ssb": "SSB",
+            "ssb_phase": "SSB",
+            "phase": "SSB",
+        }
+        return aliases.get(key, source)
+
+    def _normalise_vi_product_array(self, label: str, value: Any) -> np.ndarray:
+        arr = np.asarray(to_numpy(value))
+        if np.iscomplexobj(arr):
+            raise ValueError(
+                f"{label} must be a real-valued map. Pass the SSB phase map "
+                "rather than a complex reconstruction or amplitude stack."
+            )
+        if arr.ndim == 2:
+            if arr.shape != (self.shape_rows, self.shape_cols):
+                raise ValueError(
+                    f"{label} shape {arr.shape} does not match the scan shape "
+                    f"{self.shape_rows}x{self.shape_cols}."
+                )
+            arr = arr.reshape(1, self.shape_rows, self.shape_cols)
+        elif arr.ndim == 3:
+            if arr.shape[0] != self.n_frames:
+                raise ValueError(
+                    f"{label} has {arr.shape[0]} frames, but Show4DSTEM has "
+                    f"{self.n_frames} frame(s)."
+                )
+            if arr.shape[1:] != (self.shape_rows, self.shape_cols):
+                raise ValueError(
+                    f"{label} frame shape {arr.shape[1:]} does not match the "
+                    f"scan shape {self.shape_rows}x{self.shape_cols}."
+                )
+        else:
+            raise ValueError(
+                f"{label} must have shape (scan_rows, scan_cols) or "
+                f"(n_frames, scan_rows, scan_cols); got {arr.shape}."
+            )
+        return np.ascontiguousarray(arr, dtype=np.float32)
+
+    def _set_vi_product_maps(self, maps: dict[str, Any]) -> None:
+        products: dict[str, np.ndarray] = {}
+        for label in ("DPC_row", "DPC_col", "SSB"):
+            value = maps.get(label)
+            if value is None:
+                continue
+            products[label] = self._normalise_vi_product_array(label, value)
+
+        self._vi_product_maps = products
+        labels = list(products)
+        self.vi_product_labels = labels
+        if not products:
+            self.vi_product_map_frames = 0
+            self.vi_product_maps_bytes = b""
+            return
+
+        frame_count = max(arr.shape[0] for arr in products.values())
+        stacked = []
+        for label in labels:
+            arr = products[label]
+            if arr.shape[0] == 1 and frame_count > 1:
+                arr = np.broadcast_to(arr, (frame_count, self.shape_rows, self.shape_cols))
+            elif arr.shape[0] != frame_count:
+                raise ValueError(
+                    f"{label} has {arr.shape[0]} product frame(s), but another "
+                    f"product map has {frame_count}."
+                )
+            stacked.append(np.ascontiguousarray(arr, dtype=np.float32))
+        self.vi_product_map_frames = int(frame_count)
+        self.vi_product_maps_bytes = np.ascontiguousarray(
+            np.stack(stacked, axis=0), dtype=np.float32
+        ).tobytes()
+
+    def _current_vi_product_map(self, source: str | None = None) -> np.ndarray | None:
+        label = self._normalise_vi_source(source or self.vi_source)
+        arr = getattr(self, "_vi_product_maps", {}).get(label)
+        if arr is None:
+            return None
+        frame_count = int(arr.shape[0])
+        frame = 0 if frame_count == 1 else max(0, min(int(self.frame_idx), frame_count - 1))
+        return np.ascontiguousarray(arr[frame], dtype=np.float32)
+
+    def set_vi_product_map(self, label: str, value: Any) -> Self:
+        """Attach or replace a static virtual-image product map."""
+        label = self._normalise_vi_source(label)
+        if label not in {"DPC_row", "DPC_col", "SSB"}:
+            raise ValueError(
+                f"Unsupported virtual-image product {label!r}. "
+                "Use one of 'DPC_row', 'DPC_col', or 'SSB'."
+            )
+        maps = dict(getattr(self, "_vi_product_maps", {}))
+        maps[label] = value
+        self._set_vi_product_maps(maps)
+        if self._normalise_vi_source(self.vi_source) == label:
+            self._refresh_compare_virtual_images()
+        return self
+
+    @staticmethod
+    def _ssb_positive_pair(value: Any, *, name: str) -> tuple[float, float]:
+        if isinstance(value, (int, float)) or np.isscalar(value):
+            pair = (float(value), float(value))
+        else:
+            pair = tuple(float(v) for v in value)
+            if len(pair) != 2:
+                raise ValueError(f"{name} must be a scalar or length-2 pair.")
+        if pair[0] <= 0 or pair[1] <= 0:
+            raise ValueError(f"{name} must be positive, got {pair}.")
+        return pair
+
+    @staticmethod
+    def _ssb_unit_key(unit: str | None) -> str:
+        key = str(unit or "").strip().lower()
+        key = key.replace("µ", "u").replace("μ", "u").replace("å", "a")
+        key = key.replace("angstroms", "angstrom").replace("angstrom", "a")
+        key = key.replace(" per pixel", "").replace("/pixel", "").replace("/px", "")
+        key = key.replace(" ", "").replace("_", "")
+        return key
+
+    @classmethod
+    def _to_angstrom(cls, value: float, unit: str, *, axis: str) -> float:
+        key = cls._ssb_unit_key(unit)
+        factors = {
+            "a": 1.0,
+            "ang": 1.0,
+            "nm": 10.0,
+            "pm": 0.01,
+        }
+        if key in factors:
+            out = float(value) * factors[key]
+            if out <= 0:
+                raise ValueError(f"{axis} sampling must be positive, got {out}.")
+            return out
+        raise ValueError(
+            "Compute SSB needs real-space scan sampling in Angstroms. "
+            "Pass ssb_scan_sampling_A=(row_A, col_A), or construct "
+            "Show4DSTEM with sampling=(scan_row, scan_col, ..., ...) and "
+            "units=('A', 'A', ..., ...)."
+        )
+
+    @classmethod
+    def _to_mrad(cls, value: float, unit: str) -> float:
+        key = cls._ssb_unit_key(unit)
+        factors = {
+            "mrad": 1.0,
+            "rad": 1000.0,
+            "urad": 0.001,
+        }
+        if key not in factors:
+            raise ValueError("Detector sampling is not an angular unit.")
+        out = float(value) * factors[key]
+        if out <= 0:
+            raise ValueError(f"Detector sampling must be positive, got {out}.")
+        return out
+
+    def _resolved_ssb_scan_sampling_A(self, value: Any | None) -> tuple[float, float]:
+        if value is not None:
+            return self._ssb_positive_pair(value, name="ssb_scan_sampling_A")
+        sampling = getattr(self, "_axis_sampling", (self.pixel_size, self.pixel_size))
+        units = getattr(self, "_axis_units", [self.pixel_unit, self.pixel_unit])
+        row = self._to_angstrom(
+            float(sampling[0]), units[0] if len(units) > 0 else self.pixel_unit, axis="scan row"
+        )
+        col = self._to_angstrom(
+            float(sampling[1] if len(sampling) > 1 else sampling[0]),
+            units[1] if len(units) > 1 else self.pixel_unit,
+            axis="scan col",
+        )
+        return (row, col)
+
+    def _resolved_ssb_det_sampling_mrad(
+        self, value: Any | None
+    ) -> tuple[float, float] | None:
+        if value is not None:
+            return self._ssb_positive_pair(value, name="ssb_det_sampling_mrad")
+        sampling = getattr(self, "_axis_sampling", ())
+        units = getattr(self, "_axis_units", [])
+        if len(sampling) < 4 or len(units) < 4:
+            return None
+        try:
+            row = self._to_mrad(float(sampling[2]), units[2])
+            col = self._to_mrad(float(sampling[3]), units[3])
+        except ValueError:
+            return None
+        return (row, col)
+
+    def _resolved_ssb_semiangle_mrad(
+        self,
+        value: float | None,
+        det_sampling: tuple[float, float] | None,
+    ) -> float:
+        if value is not None:
+            semiangle = float(value)
+        elif det_sampling is not None and float(self.bf_radius) > 0:
+            semiangle = float(self.bf_radius) * float(det_sampling[1])
+        else:
+            raise ValueError(
+                "Compute SSB needs ssb_semiangle_mrad, or calibrated detector "
+                "sampling in mrad/pixel plus a detected BF radius."
+            )
+        if semiangle <= 0:
+            raise ValueError(f"ssb_semiangle_mrad must be positive, got {semiangle}.")
+        return semiangle
+
+    @staticmethod
+    def _ssb_selected_bf_count(full_num_bf: int, ratio: float | None) -> int:
+        """Return the BF subset count used by the quantem.gpu stride sampler."""
+        full = max(0, int(full_num_bf))
+        if full == 0 or ratio is None or float(ratio) >= 1.0:
+            return full
+        ratio_f = float(ratio)
+        if ratio_f <= 0.0:
+            raise ValueError(f"bf_subsample must be in (0, 1], got {ratio}.")
+        stride = max(1, int(round(1.0 / ratio_f)))
+        return int((full + stride - 1) // stride)
+
+    def _ssb_cupy_frame(self):
+        """Return the current 4D frame as a CuPy array plus an owner reference."""
+        try:
+            import cupy as cp
+        except ImportError as exc:
+            raise ImportError(
+                "Compute SSB requires CuPy and the CUDA quantem.gpu SSB engine."
+            ) from exc
+
+        frame = self._frame_data
+        if hasattr(frame, "chunks") or getattr(frame, "_is_gpu_frames", False):
+            raise ValueError(
+                "Compute SSB from Show4DSTEM currently requires a resident CUDA, "
+                "CuPy, NumPy, or CPU Torch 4D frame. For MPS/chunked data, "
+                "precompute SSB separately and pass SSB=phase_map."
+            )
+        if isinstance(frame, torch.Tensor):
+            if frame.device.type == "cuda":
+                owner = frame.contiguous()
+                device_index = owner.device.index
+                if device_index is None:
+                    device_index = torch.cuda.current_device()
+                with cp.cuda.Device(int(device_index)):
+                    return cp.from_dlpack(owner), owner
+            if frame.device.type == "cpu":
+                arr = frame.detach().contiguous().numpy()
+                return cp.asarray(arr), arr
+            raise ValueError(
+                f"Compute SSB requires CUDA/CuPy; got Torch device {frame.device}."
+            )
+
+        if type(frame).__module__.split(".", 1)[0] == "cupy":
+            return cp.asarray(frame), frame
+
+        arr = np.asarray(to_numpy(frame))
+        return cp.asarray(arr), arr
+
+    def _compute_ssb_phase(
+        self,
+        *,
+        semiangle_mrad: float | None = None,
+        scan_sampling_A: float | tuple[float, float] | None = None,
+        det_sampling_mrad: float | tuple[float, float] | None = None,
+        voltage_kV: float | None = None,
+        energy_eV: float | None = None,
+        bf_radius: int | None = None,
+        aberrations: dict[str, float] | None = None,
+        rotation_angle_deg: float | None = None,
+        bf_intensity_threshold: float | None = None,
+        n_trials: int | None = None,
+        refine: bool | None = None,
+        lock_aberrations: bool = False,
+        lock_c10: bool = False,
+        lock_c12: bool = False,
+        seed: int | None = None,
+        bf_subsample: float | None = None,
+        verbose: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Run the CUDA SSB solver for the current 4D frame.
+
+        Returns ``(phase, dpc_row, dpc_col)``. The DPC center-of-mass maps come
+        for free: the 4D frame is already resident on the GPU for SSB, so CoM
+        is two cheap reductions, aligned with the solved scan rotation.
+        """
+        if self.n_frames != 1:
+            raise ValueError(
+                "Compute SSB currently runs on a single 4D Show4DSTEM frame. "
+                "For a 5D stack, open the target frame as a 4D widget or pass "
+                "precomputed SSB=(n_frames, scan_rows, scan_cols)."
+            )
+        if (self.shape_rows, self.shape_cols) not in ((128, 128), (256, 256), (512, 512)):
+            raise ValueError(
+                "Compute SSB currently supports square 128x128, 256x256, or "
+                f"512x512 scan grids; got {self.shape_rows}x{self.shape_cols}."
+            )
+
+        cfg = dict(getattr(self, "_ssb_compute_config", {}))
+        scan_sampling = self._resolved_ssb_scan_sampling_A(
+            scan_sampling_A if scan_sampling_A is not None else cfg.get("scan_sampling_A")
+        )
+        det_sampling = self._resolved_ssb_det_sampling_mrad(
+            det_sampling_mrad if det_sampling_mrad is not None else cfg.get("det_sampling_mrad")
+        )
+        semiangle = self._resolved_ssb_semiangle_mrad(
+            semiangle_mrad if semiangle_mrad is not None else cfg.get("semiangle_mrad"),
+            det_sampling,
+        )
+        voltage = voltage_kV if voltage_kV is not None else cfg.get("voltage_kV")
+        energy = energy_eV if energy_eV is not None else cfg.get("energy_eV")
+        if voltage is None and energy is None:
+            raise ValueError(
+                "Compute SSB needs ssb_voltage_kV or ssb_energy_eV. "
+                "Example: Show4DSTEM(data, ssb_voltage_kV=300, ...)."
+            )
+        trials = cfg.get("n_trials", 200) if n_trials is None else n_trials
+        trials = int(trials)
+        if trials < 0:
+            raise ValueError(f"n_trials must be >= 0, got {trials}.")
+        do_refine = bool(cfg.get("refine", True) if refine is None else refine)
+        seed = int(cfg.get("seed", 42) if seed is None else seed)
+        bf_subsample = cfg.get("bf_subsample") if bf_subsample is None else bf_subsample
+        if bf_subsample is not None:
+            bf_subsample = float(bf_subsample)
+            if bf_subsample <= 0.0:
+                raise ValueError(f"bf_subsample must be in (0, 1], got {bf_subsample}.")
+        bf_threshold = (
+            cfg.get("bf_intensity_threshold", 0.5)
+            if bf_intensity_threshold is None
+            else bf_intensity_threshold
+        )
+        bf_radius = cfg.get("bf_radius") if bf_radius is None else bf_radius
+        aberrations = cfg.get("aberrations") if aberrations is None else aberrations
+        rotation = (
+            cfg.get("rotation_angle_deg", 0.0)
+            if rotation_angle_deg is None
+            else rotation_angle_deg
+        )
+        optimize_aberrations = None
+        if aberrations is not None:
+            c10 = float(aberrations.get("C10", aberrations.get("C10_nm", 0.0)))
+            c12 = float(aberrations.get("C12", aberrations.get("C12_nm", 0.0)))
+            if "phi12_deg" in aberrations:
+                phi12_deg = float(aberrations["phi12_deg"])
+                phi12 = math.radians(phi12_deg)
+            else:
+                phi12 = float(aberrations.get("phi12", 0.0))
+                phi12_deg = math.degrees(phi12)
+            aberrations = {"C10": c10, "C12": c12, "phi12": phi12}
+            if lock_aberrations:
+                optimize_aberrations = {
+                    "C10_nm": c10,
+                    "C12_nm": c12,
+                    "phi12_deg": phi12_deg,
+                }
+        if optimize_aberrations is None and (lock_c10 or lock_c12):
+            base = aberrations or {}
+            locked_c10 = float(base.get("C10", self.ssb_compute_c10_nm))
+            locked_c12 = float(base.get("C12", self.ssb_compute_c12_nm))
+            locked_phi12_deg = (
+                math.degrees(float(base["phi12"]))
+                if "phi12" in base
+                else float(self.ssb_compute_phi12_deg)
+            )
+            # Scalar pins the coefficient; tuple keeps the production search
+            # range from SSB.optimize defaults. Locking C12 pins phi12 too:
+            # astigmatism is a magnitude+angle pair.
+            optimize_aberrations = {
+                "C10_nm": locked_c10 if lock_c10 else (-400.0, 400.0),
+                "C12_nm": locked_c12 if lock_c12 else (0.0, 100.0),
+                "phi12_deg": locked_phi12_deg if lock_c12 else (-90.0, 90.0),
+            }
+
+        try:
+            from quantem.gpu.ssb import SSB as QuantemSSB
+        except ImportError as exc:
+            raise ImportError(
+                "Compute SSB requires quantem.gpu with the CUDA SSB engine installed."
+            ) from exc
+
+        self.ssb_compute_status = "Preparing SSB data..."
+        data_gpu, owner = self._ssb_cupy_frame()
+        try:
+            self.ssb_compute_status = "Building SSB engine..."
+            ssb = QuantemSSB(
+                data_gpu,
+                semiangle=float(semiangle),
+                scan_sampling=scan_sampling,
+                det_sampling=det_sampling,
+                voltage_kV=None if voltage is None else float(voltage),
+                energy=None if energy is None else float(energy),
+                scan_shape=(self.shape_rows, self.shape_cols) if data_gpu.ndim == 3 else None,
+                bf_intensity_threshold=float(bf_threshold),
+                bf_radius=None if bf_radius is None else int(bf_radius),
+                aberrations=aberrations,
+                rotation_angle_deg=float(rotation),
+            )
+            full_bf = int(len(ssb.bf_inds_row))
+            selected_bf = self._ssb_selected_bf_count(full_bf, bf_subsample)
+            self.ssb_compute_bf_pixels = full_bf
+            self.ssb_compute_bf_selected_pixels = selected_bf
+            if lock_aberrations and aberrations is not None:
+                self.ssb_compute_status = (
+                    f"Using manual SSB coefficients "
+                    f"({selected_bf}/{full_bf} BF pixels)..."
+                )
+            elif trials > 0:
+                self.ssb_compute_status = (
+                    f"Optimizing SSB ({trials} trials, "
+                    f"{selected_bf}/{full_bf} BF pixels)..."
+                )
+                ssb.optimize(
+                    aberrations=optimize_aberrations,
+                    rotation_angle_deg=float(rotation),
+                    n_trials=trials,
+                    seed=seed,
+                    verbose=verbose,
+                    bf_subsample=bf_subsample,
+                )
+            # The GPU Nelder-Mead refiner has no locked mode yet; with a pinned
+            # coefficient the Optuna search already respects the lock, so skip
+            # refine rather than let it move the pinned value.
+            if do_refine and not (lock_aberrations and aberrations is not None) and not (lock_c10 or lock_c12):
+                self.ssb_compute_status = (
+                    f"Refining SSB ({selected_bf}/{full_bf} BF pixels)..."
+                )
+                ssb.refine(verbose=verbose, bf_subsample=bf_subsample)
+            self.ssb_compute_status = "Reconstructing SSB phase..."
+            result = ssb.result()
+            phase = result.phase
+            result_aberrations = dict(
+                getattr(result, "aberrations", None)
+                or getattr(ssb, "aberrations", {})
+                or {}
+            )
+            c10_nm = float(result_aberrations.get("C10", self.ssb_compute_c10_nm))
+            c12_nm = float(result_aberrations.get("C12", self.ssb_compute_c12_nm))
+            phi12_rad = float(
+                result_aberrations.get(
+                    "phi12",
+                    math.radians(float(self.ssb_compute_phi12_deg)),
+                )
+            )
+            rotation_final = float(
+                getattr(result, "rotation_angle_deg", float(rotation))
+            )
+            self.ssb_compute_c10_nm = c10_nm
+            self.ssb_compute_c12_nm = c12_nm
+            self.ssb_compute_phi12_deg = math.degrees(phi12_rad)
+            self.ssb_compute_rotation_angle_deg = rotation_final
+            self.ssb_compute_calibration_json = json.dumps(
+                {
+                    "schema": "quantem.ssb.calibration.v1",
+                    "created_utc": datetime.now(timezone.utc)
+                    .replace(microsecond=0)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                    "source": {
+                        "widget": "Show4DSTEM",
+                        "title": self.title,
+                        "frame_idx": int(self.frame_idx),
+                        "scan_shape": [int(self.shape_rows), int(self.shape_cols)],
+                        "detector_shape": [int(self.det_rows), int(self.det_cols)],
+                    },
+                    "aberrations": {
+                        "C10": c10_nm,
+                        "C12": c12_nm,
+                        "phi12": phi12_rad,
+                    },
+                    "aberration_units": {
+                        "C10": "nm",
+                        "C12": "nm",
+                        "phi12": "rad",
+                    },
+                    "rotation_angle_deg": rotation_final,
+                    "calibration": {
+                        "voltage_kV": None if voltage is None else float(voltage),
+                        "energy_eV": None if energy is None else float(energy),
+                        "semiangle_mrad": float(semiangle),
+                        "scan_sampling_A": [float(x) for x in scan_sampling],
+                        "det_sampling_mrad": [float(x) for x in det_sampling],
+                        "bf_radius": None if bf_radius is None else int(bf_radius),
+                        "bf_intensity_threshold": float(bf_threshold),
+                        "bf_subsample": None if bf_subsample is None else float(bf_subsample),
+                        "bf_pixels": full_bf,
+                        "bf_selected_pixels": selected_bf,
+                    },
+                    "run": {
+                        "n_trials": trials,
+                        "refine": do_refine,
+                        "manual_locked": bool(lock_aberrations and aberrations is not None),
+                        "seed": seed,
+                        "loss": (
+                            None
+                            if getattr(result, "loss", None) is None
+                            else float(getattr(result, "loss"))
+                        ),
+                        "elapsed_s": (
+                            None
+                            if getattr(result, "elapsed", None) is None
+                            else float(getattr(result, "elapsed"))
+                        ),
+                        "refine_method": getattr(result, "refine_method", None),
+                        "refine_nfev": getattr(result, "refine_nfev", None),
+                        "refine_elapsed_s": (
+                            None
+                            if getattr(result, "refine_elapsed", None) is None
+                            else float(getattr(result, "refine_elapsed"))
+                        ),
+                    },
+                },
+                indent=2,
+            )
+            self.ssb_compute_calibration_filename = self._default_ssb_calibration_filename()
+            if hasattr(phase, "get"):
+                phase = phase.get()
+            phase_np = np.asarray(phase, dtype=np.float32)
+            # DPC comes for free here: the 4D frame is already resident on the
+            # GPU, so CoM row/col is two cheap reductions. Align with the SSB
+            # scan rotation so the maps match quantem.live's dpc_com_*_aligned.
+            from quantem.gpu.dpc import center_of_mass
+            com_k_row, com_k_col = center_of_mass(
+                data_gpu, scan_shape=(self.shape_rows, self.shape_cols)
+            )
+            theta = math.radians(rotation_final)
+            cos_t, sin_t = math.cos(theta), math.sin(theta)
+            dpc_row_np = np.ascontiguousarray(
+                cos_t * com_k_row - sin_t * com_k_col, dtype=np.float32
+            )
+            dpc_col_np = np.ascontiguousarray(
+                sin_t * com_k_row + cos_t * com_k_col, dtype=np.float32
+            )
+        finally:
+            del owner
+            gc.collect()
+
+        if phase_np.shape != (self.shape_rows, self.shape_cols):
+            raise ValueError(
+                f"SSB result shape {phase_np.shape} does not match the widget "
+                f"scan shape {self.shape_rows}x{self.shape_cols}."
+            )
+        return np.ascontiguousarray(phase_np, dtype=np.float32), dpc_row_np, dpc_col_np
+
+    def compute_ssb(self, *, set_source: bool = True, verbose: bool = False, **kwargs) -> np.ndarray:
+        """Compute SSB phase in the live kernel and attach it as the SSB map."""
+        if self.ssb_compute_busy:
+            raise RuntimeError("Compute SSB is already running.")
+        start = time.perf_counter()
+        self.ssb_compute_busy = True
+        self.ssb_compute_status = "Computing SSB..."
+        self.ssb_compute_calibration_json = ""
+        self.ssb_compute_calibration_filename = ""
+        try:
+            phase, dpc_row, dpc_col = self._compute_ssb_phase(verbose=verbose, **kwargs)
+            self.set_vi_product_map("DPC_row", dpc_row)
+            self.set_vi_product_map("DPC_col", dpc_col)
+            self.set_vi_product_map("SSB", phase)
+            if set_source:
+                self.vi_source = "SSB"
+            elapsed = time.perf_counter() - start
+            self.ssb_compute_status = (
+                f"SSB ready ({phase.shape[0]}x{phase.shape[1]}, {elapsed:.1f}s)"
+            )
+            return phase
+        except Exception as exc:
+            self.ssb_compute_status = f"SSB failed: {exc}"
+            raise
+        finally:
+            self.ssb_compute_busy = False
+
     def __init__(
         self,
         data: "Dataset4dstem | np.ndarray",
@@ -585,6 +1251,28 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         center: tuple[float, float] | None = None,
         bf_radius: float | None = None,
         precompute_virtual_images: bool = True,
+        DPC_row: Any | None = None,
+        DPC_col: Any | None = None,
+        SSB: Any | None = None,
+        vi_source: str | None = None,
+        ssb_semiangle_mrad: float | None = None,
+        ssb_scan_sampling_A: float | tuple[float, float] | None = None,
+        ssb_det_sampling_mrad: float | tuple[float, float] | None = None,
+        ssb_voltage_kV: float | None = None,
+        ssb_energy_eV: float | None = None,
+        ssb_bf_radius: int | None = None,
+        ssb_bf_intensity_threshold: float = 0.5,
+        ssb_aberrations: dict[str, float] | None = None,
+        ssb_rotation_angle_deg: float = 0.0,
+        ssb_n_trials: int = 200,
+        ssb_refine: bool = True,
+        ssb_seed: int = 42,
+        ssb_bf_subsample: float | None = 0.3,
+        ssb_manual_aberrations: bool = False,
+        ssb_c10_nm: float = 0.0,
+        ssb_c12_nm: float = 0.0,
+        ssb_phi12_deg: float = 0.0,
+        ssb_compute_enabled: bool = True,
         frame_dim_label: str | None = None,
         frame_labels: list[str] | None = None,
         view_mode: str = "single",
@@ -786,10 +1474,49 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
 
         self.title = title
         self.show_title = show_title
+        self._axis_sampling = tuple(float(s) for s in sampling)
+        self._axis_units = list(units)
         self.pixel_size = sampling[1]  # scan_col axis (horizontal scale bar)
         self.pixel_unit = units[1] if len(units) > 1 else "pixels"
         self.k_pixel_size = sampling[3] if len(sampling) > 3 else 1.0
         self.k_pixel_unit = units[3] if len(units) > 3 else "pixels"
+        self._ssb_compute_config = {
+            "semiangle_mrad": ssb_semiangle_mrad,
+            "scan_sampling_A": ssb_scan_sampling_A,
+            "det_sampling_mrad": ssb_det_sampling_mrad,
+            "voltage_kV": ssb_voltage_kV,
+            "energy_eV": ssb_energy_eV,
+            "bf_radius": ssb_bf_radius,
+            "bf_intensity_threshold": float(ssb_bf_intensity_threshold),
+            "aberrations": ssb_aberrations,
+            "rotation_angle_deg": float(ssb_rotation_angle_deg),
+            "n_trials": int(ssb_n_trials),
+            "refine": bool(ssb_refine),
+            "seed": int(ssb_seed),
+            "bf_subsample": ssb_bf_subsample,
+        }
+        self.ssb_compute_enabled = bool(ssb_compute_enabled)
+        self.ssb_compute_n_trials = int(ssb_n_trials)
+        self.ssb_compute_refine = bool(ssb_refine)
+        self.ssb_compute_bf_subsample = 1.0 if ssb_bf_subsample is None else float(ssb_bf_subsample)
+        self.ssb_compute_manual_aberrations = bool(ssb_manual_aberrations)
+        self.ssb_compute_c10_nm = float(
+            ssb_aberrations.get("C10", ssb_c10_nm)
+            if ssb_aberrations is not None
+            else ssb_c10_nm
+        )
+        self.ssb_compute_c12_nm = float(
+            ssb_aberrations.get("C12", ssb_c12_nm)
+            if ssb_aberrations is not None
+            else ssb_c12_nm
+        )
+        phi12_default = (
+            math.degrees(float(ssb_aberrations.get("phi12", math.radians(ssb_phi12_deg))))
+            if ssb_aberrations is not None
+            else ssb_phi12_deg
+        )
+        self.ssb_compute_phi12_deg = float(phi12_default)
+        self.ssb_compute_rotation_angle_deg = float(ssb_rotation_angle_deg)
         # k-space considered calibrated when its unit is real (mrad, 1/Å, etc.).
         self.k_calibrated = self.k_pixel_unit not in ("pixels", "")
         self.show_fft = show_fft
@@ -965,6 +1692,21 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         self.shape_cols = self._scan_shape[1]
         self.det_rows = self._det_shape[0]
         self.det_cols = self._det_shape[1]
+        self._set_vi_product_maps(
+            {
+                "DPC_row": DPC_row,
+                "DPC_col": DPC_col,
+                "SSB": SSB,
+            }
+        )
+        initial_vi_source = self._normalise_vi_source(vi_source or "roi")
+        if initial_vi_source != "roi" and initial_vi_source not in self._vi_product_maps:
+            available = ["roi", *self.vi_product_labels]
+            raise ValueError(
+                f"vi_source={vi_source!r} requires a matching map. "
+                f"Available image sources: {available}."
+            )
+        self.vi_source = initial_vi_source
         # Initial position at center
         self.pos_row = self.shape_rows // 2
         self.pos_col = self.shape_cols // 2
@@ -1113,6 +1855,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         )
         # Observe compound roi_center for batched updates from JS
         self.observe(self._on_roi_center_change, names=["roi_center"])
+        self.observe(self._on_vi_source_change, names=["vi_source"])
         # Invalidate precomputed virtual image caches when calibration changes
         self.observe(
             self._on_calibration_change, names=["center_row", "center_col", "bf_radius"]
@@ -1162,6 +1905,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         self.observe(self._on_path_index_change, names=["path_index"])
         self.observe(self._on_gif_export, names=["_gif_export_requested"])
         self.observe(self._on_export_request_change, names=["export_request"])
+        self.observe(self._on_ssb_compute_request_change, names=["ssb_compute_request"])
 
         # Frame animation (5D): observe frame_idx changes from frontend
         self.observe(self._on_frame_idx_change, names=["frame_idx"])
@@ -1276,6 +2020,9 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         def _resend():
             for name in (
                 "virtual_image_bytes",
+                "vi_product_labels",
+                "vi_product_map_frames",
+                "vi_product_maps_bytes",
                 "frame_bytes",
                 "compare_virtual_image_bytes",
             ):
@@ -1689,6 +2436,16 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         suffix = f"{prefix}_rbin{scan_bin}_kbin{det_bin}"
         return pathlib.Path.cwd() / f"{slug}_{shape}_{suffix}.html"
 
+    def _default_ssb_calibration_filename(self) -> str:
+        label = self.title.strip() or "show4dstem"
+        slug = "".join(ch.lower() if ch.isalnum() else "_" for ch in label).strip("_")
+        while "__" in slug:
+            slug = slug.replace("__", "_")
+        if not slug:
+            slug = "show4dstem"
+        shape = f"{self.shape_rows}x{self.shape_cols}x{self.det_rows}x{self.det_cols}"
+        return f"{slug}_{shape}_ssb_calibration.json"
+
     def _write_html_export(
         self,
         path: str | pathlib.Path,
@@ -1776,6 +2533,12 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         )
         units = [self.pixel_unit, self.pixel_unit, self.k_pixel_unit, self.k_pixel_unit]
         center = (self.center_row / k_scale, self.center_col / k_scale)
+        product_kwargs = self._export_vi_product_kwargs(scan_bin=scan_bin)
+        export_vi_source = (
+            self.vi_source
+            if self.vi_source == "roi" or self.vi_source in product_kwargs
+            else "roi"
+        )
         clone = type(self)(
             data,
             sampling=sampling,
@@ -1783,6 +2546,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             center=center,
             bf_radius=max(1.0, self.bf_radius / k_scale),
             precompute_virtual_images=False,
+            vi_source=export_vi_source,
             frame_dim_label=self.frame_dim_label,
             frame_labels=list(self.frame_labels),
             title=self.title,
@@ -1803,7 +2567,9 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             compare_max_panels=self.compare_max_panels,
             compare_group_mode=self.compare_group_mode,
             compare_dp_mode=self.compare_dp_mode,
+            ssb_compute_enabled=False,
             verbose=False,
+            **product_kwargs,
         )
         clone.load_state_dict(self._export_state_for_bin(det_bin, scan_bin=scan_bin))
         clone._pack_export_inline(dtype=dtype)
@@ -1812,8 +2578,22 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         clone.export_payload = b""
         clone.export_payload_id = ""
         clone.export_filename = ""
+        clone.ssb_compute_enabled = False
+        clone.ssb_compute_status = ""
+        clone.ssb_compute_request = ""
+        clone.ssb_compute_busy = False
+        clone.ssb_compute_calibration_json = ""
+        clone.ssb_compute_calibration_filename = ""
         clone._save_state = True
         return clone
+
+    def _export_vi_product_kwargs(self, *, scan_bin: int = 1) -> dict[str, np.ndarray]:
+        out: dict[str, np.ndarray] = {}
+        for label, arr in getattr(self, "_vi_product_maps", {}).items():
+            binned = Show4DSTEM._mean_scan_bin_array(arr, scan_bin)
+            binned = np.ascontiguousarray(binned, dtype=np.float32)
+            out[label] = binned[0] if binned.shape[0] == 1 else binned
+        return out
 
     def _export_data_array(
         self, *, dtype: str, det_bin: int, scan_bin: int = 1
@@ -1967,6 +2747,11 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             return arr.reshape(
                 sr // scan_bin, scan_bin, sc // scan_bin, scan_bin, dr, dc
             ).mean(axis=(1, 3))
+        if arr.ndim == 3:
+            nf, sr, sc = arr.shape
+            return arr.reshape(
+                nf, sr // scan_bin, scan_bin, sc // scan_bin, scan_bin
+            ).mean(axis=(2, 4))
         if arr.ndim == 2:
             sr, sc = arr.shape
             return arr.reshape(sr // scan_bin, scan_bin, sc // scan_bin, scan_bin).mean(
@@ -2787,6 +3572,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             "vi_roi_width": self.vi_roi_width,
             "vi_roi_height": self.vi_roi_height,
             "vi_roi_reduce": self.vi_roi_reduce,
+            "vi_source": self.vi_source,
             "dp_colormap": self.dp_colormap,
             "vi_colormap": self.vi_colormap,
             "fft_colormap": self.fft_colormap,
@@ -2860,6 +3646,10 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                     val = self._normalise_compare_dp_mode(val)
                 elif key == "compare_group_mode":
                     val = self._normalise_compare_group_mode(val)
+                elif key == "vi_source":
+                    val = self._normalise_vi_source(val)
+                    if val != "roi" and val not in getattr(self, "_vi_product_maps", {}):
+                        val = "roi"
                 setattr(self, key, val)
         if pending_frame_idx is not None:
             self.frame_idx = int(max(0, min(int(pending_frame_idx), self.n_frames - 1)))
@@ -3106,9 +3896,14 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         """
         fd = self._frame_data
         if getattr(self, "_compute_for", None) is not fd:
-            from quantem.gpu.compute.backends import compute_backend
-
-            self._compute_backend = compute_backend(fd)
+            try:
+                from quantem.gpu.compute.backends import compute_backend
+            except ModuleNotFoundError as exc:
+                if exc.name != "quantem.gpu":
+                    raise
+                self._compute_backend = _NumpyShow4DSTEMComputeBackend(fd)
+            else:
+                self._compute_backend = compute_backend(fd)
             self._compute_for = fd
         return self._compute_backend
 
@@ -3260,6 +4055,101 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         if name in ("bf", "abf", "adf", "haadf"):
             self.apply_preset(name)
             self._preset_request = ""  # consume trigger
+
+    def _on_ssb_compute_request_change(self, change):
+        """JS More → Compute SSB request."""
+        raw = str(change.get("new") or "")
+        if not raw:
+            return
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            payload = {"action": raw}
+        action = str(payload.get("action", "compute_ssb")).strip().lower()
+        self.ssb_compute_request = ""  # consume trigger before any long work
+        if action in {"clear", "reset"}:
+            self.ssb_compute_status = ""
+            return
+        if action not in {"compute_ssb", "ssb", "compute"}:
+            self.ssb_compute_status = f"SSB failed: unknown request {action!r}"
+            return
+        if not self.ssb_compute_enabled:
+            self.ssb_compute_status = (
+                "Compute SSB is available only in a live Python kernel. "
+                "Precompute SSB before exporting standalone HTML."
+            )
+            return
+        if self.ssb_compute_busy:
+            self.ssb_compute_status = "SSB compute is already running."
+            return
+
+        kwargs: dict[str, Any] = {}
+        key_map = {
+            "semiangle_mrad": "semiangle_mrad",
+            "scan_sampling_A": "scan_sampling_A",
+            "det_sampling_mrad": "det_sampling_mrad",
+            "voltage_kV": "voltage_kV",
+            "energy_eV": "energy_eV",
+            "bf_radius": "bf_radius",
+            "bf_intensity_threshold": "bf_intensity_threshold",
+            "rotation_angle_deg": "rotation_angle_deg",
+            "n_trials": "n_trials",
+            "refine": "refine",
+            "seed": "seed",
+            "bf_subsample": "bf_subsample",
+            "lock_aberrations": "lock_aberrations",
+        }
+        for src_key, dst_key in key_map.items():
+            if src_key in payload:
+                kwargs[dst_key] = payload[src_key]
+        if "n_trials" in kwargs:
+            self.ssb_compute_n_trials = int(kwargs["n_trials"])
+        if "refine" in kwargs:
+            self.ssb_compute_refine = bool(kwargs["refine"])
+        if "bf_subsample" in kwargs:
+            self.ssb_compute_bf_subsample = float(kwargs["bf_subsample"])
+
+        manual_aberrations = bool(payload.get("manual_aberrations", False))
+        self.ssb_compute_manual_aberrations = manual_aberrations
+        if manual_aberrations:
+            c10 = float(payload.get("c10_nm", self.ssb_compute_c10_nm))
+            c12 = float(payload.get("c12_nm", self.ssb_compute_c12_nm))
+            phi12_deg = float(payload.get("phi12_deg", self.ssb_compute_phi12_deg))
+            rotation_deg = float(
+                payload.get("rotation_angle_deg", self.ssb_compute_rotation_angle_deg)
+            )
+            self.ssb_compute_c10_nm = c10
+            self.ssb_compute_c12_nm = c12
+            self.ssb_compute_phi12_deg = phi12_deg
+            self.ssb_compute_rotation_angle_deg = rotation_deg
+            kwargs["aberrations"] = {
+                "C10": c10,
+                "C12": c12,
+                "phi12": math.radians(phi12_deg),
+            }
+            kwargs["rotation_angle_deg"] = rotation_deg
+            kwargs["lock_aberrations"] = True
+        lock_c10 = bool(payload.get("lock_c10", self.ssb_compute_lock_c10))
+        lock_c12 = bool(payload.get("lock_c12", self.ssb_compute_lock_c12))
+        self.ssb_compute_lock_c10 = lock_c10
+        self.ssb_compute_lock_c12 = lock_c12
+        if not manual_aberrations:
+            kwargs["lock_c10"] = lock_c10
+            kwargs["lock_c12"] = lock_c12
+
+        def worker() -> None:
+            try:
+                self.compute_ssb(verbose=bool(payload.get("verbose", False)), **kwargs)
+            except Exception:
+                # compute_ssb already publishes the concise failure string.
+                return
+
+        thread = threading.Thread(
+            target=worker,
+            name="Show4DSTEM-compute-SSB",
+            daemon=True,
+        )
+        thread.start()
 
     def _on_compare_config_change(self, change=None) -> None:
         """Refresh compare-grid payload after relevant config/readiness changes."""
@@ -3621,6 +4511,9 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         return (rgba[..., :3] * 255).astype(np.uint8)
 
     def _get_virtual_image_array(self) -> np.ndarray:
+        product = self._current_vi_product_map()
+        if product is not None:
+            return np.asarray(product, dtype=np.float32).copy()
         if not self.virtual_image_bytes:
             return np.zeros((self.shape_rows, self.shape_cols), dtype=np.float32)
         arr = np.frombuffer(self.virtual_image_bytes, dtype=np.float32)
@@ -4315,6 +5208,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         try:
             if preset_name == "bf":
                 with self.hold_trait_notifications():
+                    self.vi_source = "roi"
                     self.roi_active = True
                     self.roi_mode = "circle"
                     self.roi_center_row = center_row
@@ -4322,6 +5216,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                     self.roi_radius = float(max(1.0, bf))
             elif preset_name == "abf":
                 with self.hold_trait_notifications():
+                    self.vi_source = "roi"
                     self.roi_active = True
                     self.roi_mode = "annular"
                     self.roi_center_row = center_row
@@ -4330,6 +5225,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                     self.roi_radius = float(max(1.0, bf))
             elif preset_name == "adf":
                 with self.hold_trait_notifications():
+                    self.vi_source = "roi"
                     self.roi_active = True
                     self.roi_mode = "annular"
                     self.roi_center_row = center_row
@@ -4338,6 +5234,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                     self.roi_radius = float(max(bf + 1.0, bf * 2.0))
             elif preset_name == "haadf":
                 with self.hold_trait_notifications():
+                    self.vi_source = "roi"
                     self.roi_active = True
                     self.roi_mode = "annular"
                     self.roi_center_row = center_row
@@ -4686,6 +5583,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             return
         if getattr(self, "_suppress_roi_recompute", False):
             return
+        if self.vi_source != "roi":
+            return
         if self.view_mode != "multiple":
             self._compute_virtual_image_from_roi()
         self._refresh_compare_virtual_images()
@@ -4711,8 +5610,27 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             self.observe(
                 self._on_roi_change, names=["roi_center_col", "roi_center_row"]
             )
+        if self.vi_source != "roi":
+            return
         if self.view_mode != "multiple":
             self._compute_virtual_image_from_roi()
+        self._refresh_compare_virtual_images()
+
+    def _on_vi_source_change(self, change=None):
+        """Switch the image panel between detector-ROI VI and product maps."""
+        source = self._normalise_vi_source(change.get("new") if change else self.vi_source)
+        if source != self.vi_source:
+            self.vi_source = source
+            return
+        if source != "roi" and source not in getattr(self, "_vi_product_maps", {}):
+            self.vi_source = "roi"
+            return
+
+        if source == "roi":
+            if self.view_mode != "multiple":
+                self._compute_virtual_image_from_roi()
+            self._refresh_compare_virtual_images()
+            return
         self._refresh_compare_virtual_images()
 
     def _on_vi_roi_center_change(self, change=None):
@@ -7741,6 +8659,25 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             else None
         )
         try:
+            if self.vi_source != "roi":
+                if self._normalise_vi_source(self.vi_source) not in getattr(
+                    self, "_vi_product_maps", {}
+                ):
+                    self._clear_compare_virtual_images()
+                    return
+                shown_indices = [int(idx) for idx in indices]
+                with self.hold_trait_notifications():
+                    self.compare_panel_count = len(shown_indices)
+                    self.compare_panel_indices = shown_indices
+                    self.compare_status = self._compare_status_for_indices(
+                        shown_indices,
+                        all_groups=(
+                            self._normalise_compare_group_mode(self.compare_group_mode)
+                            == "all"
+                        ),
+                    )
+                self._clear_gpu_memory_warning()
+                return
             cached = self._get_cached_compare_preset(indices)
             if cached is not None:
                 payload, cached_indices, _ = cached
@@ -8482,6 +9419,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     def _compute_virtual_image_from_roi(self):
         """Compute virtual image based on ROI mode."""
         if self._data is None:
+            return
+        if self.vi_source != "roi":
             return
         cached = self._get_cached_preset()
         if cached is not None:

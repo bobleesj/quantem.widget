@@ -48,13 +48,24 @@ def is_mps_show4dstem_payload(value: Any) -> bool:
     return hasattr(payload, "chunks") or is_mps_frames
 
 
+def _lazy_macbook_dataset_types() -> tuple[type, ...]:
+    """Return optional MPS lazy-dataset classes when ``quantem.gpu`` exists."""
+    try:
+        from quantem.widget.multidataset_mps import LazyMacbookDatasets
+    except ModuleNotFoundError as exc:
+        if exc.name != "quantem.gpu":
+            raise
+        return ()
+    return (LazyMacbookDatasets,)
+
+
 def show4dstem_backend_kind(value: Any) -> str:
     """Classify the backend family the public factory will select."""
-    from quantem.widget.multidataset_mps import LazyMacbookDatasets
-
     payload = _payload(value)
-    if isinstance(value, LazyMacbookDatasets) or isinstance(
-        payload, LazyMacbookDatasets
+    lazy_macbook_types = _lazy_macbook_dataset_types()
+    if lazy_macbook_types and (
+        isinstance(value, lazy_macbook_types)
+        or isinstance(payload, lazy_macbook_types)
     ):
         return "mps"
     if is_mps_show4dstem_payload(payload):
@@ -105,12 +116,11 @@ def Show4DSTEM(data: Any, **kwargs: Any) -> Any:
     Web aliases ``backend="browser"``, ``backend="webgpu"``, and
     ``offline=True`` are accepted by the base viewer for compatibility.
     """
-    from quantem.widget.multidataset_mps import LazyMacbookDatasets
-
     payload = _payload(data)
-    if isinstance(data, LazyMacbookDatasets):
+    lazy_macbook_types = _lazy_macbook_dataset_types()
+    if lazy_macbook_types and isinstance(data, lazy_macbook_types):
         return data.build_viewer(**kwargs)
-    if isinstance(payload, LazyMacbookDatasets):
+    if lazy_macbook_types and isinstance(payload, lazy_macbook_types):
         return payload.build_viewer(**kwargs)
     if is_mps_show4dstem_payload(payload):
         return _build_mps_viewer(payload, **kwargs)

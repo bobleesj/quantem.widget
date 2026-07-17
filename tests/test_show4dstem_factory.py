@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 from collections import namedtuple
 from types import SimpleNamespace
 
@@ -81,6 +82,37 @@ def test_show4dstem_keeps_cuda_gpu_frame_proxy_on_base_viewer(monkeypatch) -> No
 
     assert result == {"kind": "base", "data": payload, "kwargs": {"verbose": False}}
     assert factory.show4dstem_backend_kind(payload) == "base"
+
+
+def test_show4dstem_base_route_does_not_require_optional_mps_import(monkeypatch) -> None:
+    """C1: quantem.gpu absent, expect normal base payloads to still open."""
+    payload = SimpleNamespace(ndim=4)
+    original_import = builtins.__import__
+    import_attempts: list[str] = []
+
+    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "quantem.widget.multidataset_mps":
+            import_attempts.append(name)
+            raise ModuleNotFoundError(
+                "No module named 'quantem.gpu'",
+                name="quantem.gpu",
+            )
+        return original_import(name, globals, locals, fromlist, level)
+
+    def _fake_base(data, **kwargs):
+        return {"kind": "base", "data": data, "kwargs": kwargs}
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+    monkeypatch.setattr(factory, "_Show4DSTEMBase", _fake_base)
+
+    result = factory.Show4DSTEM(payload, verbose=False)
+
+    assert result == {"kind": "base", "data": payload, "kwargs": {"verbose": False}}
+    assert factory.show4dstem_backend_kind(payload) == "base"
+    assert import_attempts == [
+        "quantem.widget.multidataset_mps",
+        "quantem.widget.multidataset_mps",
+    ]
 
 
 def test_show4dstem_labels_5d_loadresult_as_dataset_stack(monkeypatch) -> None:
