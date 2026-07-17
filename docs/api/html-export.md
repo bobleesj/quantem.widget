@@ -136,6 +136,7 @@ The public Python calls are:
 | Show3D | `export_html(path=None, title=None, mode="single", encoding="full", downsample=None)`; multi-GB folder reviews use `export_sidecar(out_dir)` |
 | Show3DSlices | `export_html(path=None, title=None, mode="single", encoding="full", downsample=None)` |
 | Show4DSTEM | `export_html(path=None, title=None, mode="single", encoding="uint8", downsample=1)` |
+| ShowPtycho | `export_webgpu_folder(out_dir)` for browser-side SSB review from compressed HDF5 source files; transient BF-indexed reducers are built in WebGPU |
 | ShowEDS | `export_html(path=None, title=None, mode="single", encoding="full", downsample=None)` |
 | ShowFolder | `export_html(path=None, title=None)` |
 

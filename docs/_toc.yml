@@ -53,6 +53,7 @@ parts:
           - file: api/show3d
           - file: api/show3dslices
           - file: api/show4dstem
+          - file: api/showptycho
           - file: api/showeds
           - file: api/showdiffraction
           - file: api/showfolder

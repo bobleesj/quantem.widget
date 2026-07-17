@@ -106,6 +106,7 @@ def test_show3d_set_image_replaces_stack_and_triggers_new_frame_transfer() -> No
     assert widget.slice_idx == 1
     assert widget.playing is False
     assert widget.hidden_panels == []
+    assert widget.selected_panels == []
     assert widget.panel_order == []
     assert widget.panel_titles == []
     assert widget.starred == [-1]
@@ -146,6 +147,9 @@ def test_show3d_controls_collapsed_roundtrips_state_and_html(tmp_path: pathlib.P
 
 
 def test_show3d_ui_mode_presets_and_overrides() -> None:
+    interactive = Show3D(*_panels()[:2], verbose=False)
+    assert interactive.show_zoom_indicator is False
+
     presentation = Show3D(*_panels()[:2], ui_mode="presentation", verbose=False)
     assert presentation.show_title is True
     assert presentation.show_controls is True
@@ -262,15 +266,20 @@ def test_show3d_hidden_panels_roundtrip_in_state_and_html(tmp_path: pathlib.Path
 
     state = widget.state_dict()
     assert state["hidden_panels"] == [1]
+    widget.selected_panels = [0, 0, 1, 99]
+    state = widget.state_dict()
+    assert state["selected_panels"] == [0, 1]
 
     restored = Show3D(*_panels()[:2], panel_titles=["SSB", "Mean DP"], show_controls=False)
     restored.load_state_dict(state)
     assert restored.hidden_panels == [1]
+    assert restored.selected_panels == [0]
     assert restored.visible_panels == [0]
 
     out = widget.export_html(tmp_path / "show3d_hidden_panel.html", encoding="full")
     html = out.read_text()
     assert "hidden_panels" in html
+    assert "selected_panels" in html
     assert "Mean DP" in html
 
 
@@ -280,6 +289,7 @@ def test_show3d_panel_order_controls_visible_order_and_handoff() -> None:
         panel_titles=["SSB", "Mean DP", "Probe"],
         panel_order=["Probe", "SSB", "Mean DP"],
         hidden_panels=["Mean DP"],
+        cmap=["magma", "viridis", "inferno"],
         show_controls=False,
     )
 
@@ -293,6 +303,7 @@ def test_show3d_panel_order_controls_visible_order_and_handoff() -> None:
 
     out = widget.to_show2d(frame=1)
     assert out.labels == ["Probe 2/3", "SSB 2/3"]
+    assert out.panel_cmaps == ["inferno", "magma"]
     np.testing.assert_allclose(out._data[0], _panels()[2][1])
     np.testing.assert_allclose(out._data[1], _panels()[0][1])
 

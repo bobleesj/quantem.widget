@@ -2068,7 +2068,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
     scale_bar_length = traitlets.Float(None, allow_none=True).tag(sync=True)
     scale_bar_label = traitlets.Unicode("").tag(sync=True)
     scale_bar_style = traitlets.Dict(default_value={}).tag(sync=True)
-    show_zoom_indicator = traitlets.Bool(True).tag(sync=True)
+    show_zoom_indicator = traitlets.Bool(False).tag(sync=True)
     size = traitlets.Int(0).tag(sync=True)  # Canvas rendering size in CSS pixels; 0 = frontend default
     smooth = traitlets.Bool(False).tag(sync=True)
     initial_zoom = traitlets.Float(1.0).tag(sync=True)
@@ -2327,7 +2327,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         scale_bar_length: float | None = None,
         scale_bar_label: str | None = None,
         scale_bar_style: Mapping[str, object] | None = None,
-        show_zoom_indicator: bool = True,
+        show_zoom_indicator: bool = False,
         show_fft: bool = False,
         fft_window: bool = True,
         fft_metrics: bool = True,
@@ -5142,15 +5142,20 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                     scale_color = svg_color(scale_style.get("color"), "#fff")
                     scale_outline_color = svg_color(scale_style.get("outline_color"), "#000")
                     scale_outline_width = float(scale_style.get("outline_width", 0.0))
-                    shadow_color = svg_color(scale_style.get("shadow_color"), "#000")
+                    shadow_value = scale_style.get("shadow_color")
+                    shadow_color = svg_color(shadow_value, "#000")
                     scale_left = self.scale_bar_position == "bottom-left"
                     bar_x = x + (12 if scale_left else panel_w - bar_px - 12) + offset_x
                     bar_y = y + panel_h - 12 + offset_y
                     font_weight_attr = f' font-weight="{esc_attr(scale_font_weight)}"' if scale_font_weight != "" else ""
-                    elements.extend([
-                        f'<rect x="{bar_x + 1:g}" y="{bar_y + 1:g}" width="{bar_px:g}" height="{bar_height:g}" fill="{esc_attr(shadow_color)}" fill-opacity="0.5"/>',
-                        f'<rect x="{bar_x:g}" y="{bar_y:g}" width="{bar_px:g}" height="{bar_height:g}" fill="{esc_attr(scale_color)}"/>',
-                    ])
+                    if shadow_value is not None:
+                        elements.append(
+                            f'<rect x="{bar_x + 1:g}" y="{bar_y + 1:g}" width="{bar_px:g}" '
+                            f'height="{bar_height:g}" fill="{esc_attr(shadow_color)}" fill-opacity="0.5"/>'
+                        )
+                    elements.append(
+                        f'<rect x="{bar_x:g}" y="{bar_y:g}" width="{bar_px:g}" height="{bar_height:g}" fill="{esc_attr(scale_color)}"/>'
+                    )
                     text_x = bar_x + bar_px / 2
                     text_y = bar_y - label_gap
                     if scale_outline_width > 0:
@@ -6230,15 +6235,11 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                         path_effects=stroke)
             if self.scale_bar_visible:
                 # drawScaleBarHiDPI (js/figure.ts): margin 12, bar 5 px thick,
-                # 16px label centered 4px above the bar, optional zoom
-                # badge on the opposite corner sharing the bar's bottom edge,
-                # all under a soft (1,1)-offset half-black shadow
+                # 16px label centered 4px above the bar, optional zoom badge
+                # on the opposite corner sharing the bar's bottom edge.
                 scale_left = self.scale_bar_position == "bottom-left"
                 bar_x = 12 if scale_left else css_w - bar_css - 12
                 bar_y = css_h - 12
-                ax.add_patch(matplotlib.patches.Rectangle(
-                    css_xy(bar_x + 1, bar_y + 1), bar_css * k, 5 * k,
-                    facecolor=(0, 0, 0, 0.5), edgecolor="none"))
                 ax.add_patch(matplotlib.patches.Rectangle(
                     css_xy(bar_x, bar_y), bar_css * k, 5 * k,
                     facecolor="white", edgecolor="none"))

@@ -439,10 +439,13 @@ function renderLatexMath(expr: string, keyPrefix: string): React.ReactNode[] {
   return nodes;
 }
 
+// Same UI font as panel titles / badges (not Cambria Math italic) so χ², λ, etc. match body text.
+const UI_MATH_FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+
 function renderMathExpression(expr: string, keyPrefix: string): React.ReactNode {
   const normalized = expr.trim().replace(/\\+(?=[A-Za-z])/g, "\\");
   return (
-    <span key={keyPrefix} data-quantem-math="true" style={{ fontFamily: "Cambria Math, STIX Two Math, Times New Roman, serif", fontStyle: "italic" }}>
+    <span key={keyPrefix} data-quantem-math="true" style={{ fontFamily: UI_MATH_FONT, fontStyle: "normal" }}>
       {renderLatexMath(normalized, keyPrefix)}
     </span>
   );
@@ -1378,6 +1381,18 @@ type DetailTile = {
 // on a slow kernel->browser channel. Mirrors Show2D._DETAIL_BUDGET_BYTES.
 const DETAIL_BUDGET_BYTES = 8 * 1024 * 1024;
 const MAX_PANEL_COLUMNS = 12;
+
+function shouldIgnoreWidgetShortcut(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  return target.closest([
+    "input", "textarea", "button", "select",
+    "[contenteditable='true']", "[role='button']", "[role='slider']",
+    "[role='switch']", "[role='textbox']", "[role='combobox']", "[role='menuitem']",
+    ".MuiSlider-root", ".MuiSelect-select",
+  ].join(",")) !== null;
+}
+
 type TouchZoomState = {
   idx: number;
   mode: "pan" | "pinch";
@@ -5907,13 +5922,16 @@ function Show2D() {
           ctx.scale(DPR, DPR);
           const barColor = styleString(scaleBarStyle?.color, "#fff");
           const shadowColor = styleString(scaleBarStyle?.shadow_color, "rgba(0,0,0,0.85)");
+          const barShadowColor = scaleBarStyle?.shadow_color == null ? "" : shadowColor;
           const outlineColor = styleString(scaleBarStyle?.outline_color, "rgba(0,0,0,0.85)");
           const outlineWidth = Math.max(0, styleNumber(scaleBarStyle?.outline_width, 0));
           const labelGap = styleNumber(scaleBarStyle?.label_gap, 4);
-          ctx.fillStyle = shadowColor;
-          ctx.globalAlpha = 0.5;
-          ctx.fillRect(geom.barX + 1, geom.barY + 1, geom.barPx, geom.barHeight);
-          ctx.globalAlpha = 1;
+          if (barShadowColor) {
+            ctx.fillStyle = barShadowColor;
+            ctx.globalAlpha = 0.5;
+            ctx.fillRect(geom.barX + 1, geom.barY + 1, geom.barPx, geom.barHeight);
+            ctx.globalAlpha = 1;
+          }
           ctx.fillStyle = barColor;
           ctx.fillRect(geom.barX, geom.barY, geom.barPx, geom.barHeight);
           ctx.font = scaleBarCanvasFont(scaleBarStyle);
@@ -8800,16 +8818,17 @@ function Show2D() {
             const barX = x + geom.barX;
             const barColor = svgColor(scaleBarStyle?.color, "#fff");
             const shadowColor = svgColor(scaleBarStyle?.shadow_color, "#000");
+            const barShadowColor = scaleBarStyle?.shadow_color == null ? "" : shadowColor;
             const outlineColor = svgColor(scaleBarStyle?.outline_color, "#000");
             const outlineWidth = Math.max(0, styleNumber(scaleBarStyle?.outline_width, 0));
             const labelGap = styleNumber(scaleBarStyle?.label_gap, 4);
             const fontAttrs = scaleBarSvgFontAttrs(scaleBarStyle);
             const labelX = barX + geom.barPx / 2;
             const labelY = barY - labelGap;
-            body.push(
-              `<rect x="${barX + 1}" y="${barY + 1}" width="${geom.barPx}" height="${geom.barHeight}" fill="${escapeXmlAttr(shadowColor)}" fill-opacity="0.5"/>`,
-              `<rect x="${barX}" y="${barY}" width="${geom.barPx}" height="${geom.barHeight}" fill="${escapeXmlAttr(barColor)}"/>`
-            );
+            if (barShadowColor) {
+              body.push(`<rect x="${barX + 1}" y="${barY + 1}" width="${geom.barPx}" height="${geom.barHeight}" fill="${escapeXmlAttr(barShadowColor)}" fill-opacity="0.5"/>`);
+            }
+            body.push(`<rect x="${barX}" y="${barY}" width="${geom.barPx}" height="${geom.barHeight}" fill="${escapeXmlAttr(barColor)}"/>`);
             if (outlineWidth > 0) {
               body.push(
                 `<text x="${labelX}" y="${labelY}" text-anchor="middle" ${fontAttrs} fill="none" stroke="${escapeXmlAttr(outlineColor)}" stroke-width="${outlineWidth}" stroke-linejoin="round">${escapeXmlText(geom.label)}</text>`,
@@ -9091,6 +9110,7 @@ function Show2D() {
   // Keyboard shortcuts
   // -------------------------------------------------------------------------
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (shouldIgnoreWidgetShortcut(e.target)) return;
     // Number keys 1-9 select gallery images (avoids arrow key conflicts with Jupyter)
     if (isGallery && e.key >= "1" && e.key <= "9") {
       const target = pageShortcutTarget(
@@ -9143,6 +9163,17 @@ function Show2D() {
         if (measureActive) {
           setMeasureActive(false);
           setMeasurePoints([]);
+        }
+        break;
+      case "h":
+      case "H":
+        if (isGallery) {
+          const candidates = selectedVisiblePanels.length > 0 ? selectedVisiblePanels : [selectedIdx];
+          const hideable = candidates.filter((panel) => visibleImageIndices.includes(panel));
+          if (hideable.length > 0 && visibleImageCount - hideable.length >= 1) {
+            e.preventDefault();
+            setPanelsHidden(hideable, true);
+          }
         }
         break;
       case "]":
@@ -9496,7 +9527,7 @@ function Show2D() {
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Poisson (Anscombe): counting noise grows with signal (variance = mean), so a plain blur over-smooths bright regions. The Anscombe transform y = 2&radic;(x + 3/8) makes the noise variance about 1 everywhere, a Gaussian of width &sigma; is applied, then the inverse (y/2)&sup2; - 3/8 maps back to counts. Best for sparse EDS; pair with Bin 2 and &sigma; 6 to 10.</Typography>
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Gaussian: a simple blur of width &sigma;, fine for decent-dose images. None: raw counts, for any quantitative measurement.</Typography>
               <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
-              <KeyboardShortcuts items={isGallery ? [["← / →", hasLocalPanelStacks ? "Prev / Next frame in a selected stack; otherwise select panel" : "Prev / Next image"], ["1 – 9", "Select image"], ["] / [", "Rotate CW / CCW 90°"], ["Del / ⌫", "Delete selected ROI"], ["M", "Measure distance"], ["Esc", "Exit measure"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]] : [["← / →", hasLocalPanelStacks ? "Prev / Next frame" : "No action"], ["] / [", "Rotate CW / CCW 90°"], ["Del / ⌫", "Delete selected ROI"], ["M", "Measure distance"], ["Esc", "Exit measure"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
+              <KeyboardShortcuts items={isGallery ? [["← / →", hasLocalPanelStacks ? "Prev / Next frame in a selected stack; otherwise select panel" : "Prev / Next image"], ["1 – 9", "Select image"], ["Shift-click", "Select panel range"], ["Ctrl/⌘-click", "Toggle panel selection"], ["H", "Hide selected panels"], ["] / [", "Rotate CW / CCW 90°"], ["Del / ⌫", "Delete selected ROI"], ["M", "Measure distance"], ["Esc", "Exit measure"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]] : [["← / →", hasLocalPanelStacks ? "Prev / Next frame" : "No action"], ["] / [", "Rotate CW / CCW 90°"], ["Del / ⌫", "Delete selected ROI"], ["M", "Measure distance"], ["Esc", "Exit measure"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
 	            </Box>} theme={themeInfo.theme} />}
 	            {showControls && (
 	              <Button

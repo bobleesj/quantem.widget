@@ -42,6 +42,12 @@ Keep commit messages single-line unless a detailed body is requested, preserve
 the user's configured author identity, and do not add `Co-authored-by` trailers
 unless explicitly requested.
 
+## Push Policy
+
+Do not push directly to `main` unless Bob explicitly asks for that push in the
+current conversation. Local commits and branches are fine when useful, but
+publishing to `main` is opt-in.
+
 ## User-facing export language
 
 For docs, menus, README text, and tutorials, use science-friendly export terms:

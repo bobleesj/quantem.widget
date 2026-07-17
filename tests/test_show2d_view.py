@@ -353,6 +353,37 @@ def test_export_svg_respects_publication_text_and_scale_bar_panels(tmp_path):
     assert 'text-anchor="start"' in svg
 
 
+def test_export_svg_scale_bar_shadow_is_opt_in(tmp_path):
+    """C6: default publication scale bar has no bar underlay; shadow remains opt-in."""
+    data = np.random.default_rng(183).random((24, 24), dtype=np.float32)
+    default = Show2D(
+        data,
+        sampling=0.2,
+        units="nm",
+        scale_bar_length=1.0,
+        scale_bar_style={"bar_height": 3},
+        show_zoom_indicator=False,
+        verbose=False,
+    )
+    default_svg = default.export_svg(tmp_path / "default_scale_bar.svg").read_text(encoding="utf-8")
+
+    assert 'height="3" fill="#fff"' in default_svg
+    assert 'fill-opacity="0.5"' not in default_svg
+
+    shadowed = Show2D(
+        data,
+        sampling=0.2,
+        units="nm",
+        scale_bar_length=1.0,
+        scale_bar_style={"bar_height": 3, "shadow_color": "#123456"},
+        show_zoom_indicator=False,
+        verbose=False,
+    )
+    shadowed_svg = shadowed.export_svg(tmp_path / "shadowed_scale_bar.svg").read_text(encoding="utf-8")
+
+    assert 'fill="#123456" fill-opacity="0.5"' in shadowed_svg
+
+
 def test_current_view_uses_zoom_center():
     w = Show2D(_image(128), zoom=4.0, zoom_row=16.0, zoom_col=112.0, verbose=False)
     view = w.current_view
@@ -600,7 +631,7 @@ def test_padding_keeps_fft_and_scale_bar_geometry_compatible():
     specs = w._static_panel_specs()
     assert specs[0]["frame"].shape == (w.height, w.width)
     _label, zoom_text, bar_text, bar_px = w._static_overlay_texts(specs)[0]
-    assert zoom_text == "1.0×"
+    assert zoom_text == ""
     assert bar_text.endswith("nm")
     assert bar_px > 0
 

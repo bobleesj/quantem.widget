@@ -524,8 +524,8 @@ struct Params {
   src_region_width: u32,
   out_height: u32,
   out_width: u32,
-  _unused_cols: u32,
-  _unused_rows: u32,
+  origin_x: f32,
+  origin_y: f32,
   log_scale: u32,
   bg_rgb: u32,
   zoom: f32,
@@ -566,12 +566,12 @@ fn unpack_rgb(rgb: u32) -> vec4f {
   let region_x0 = min(params.src_x0, params.src_width - 1u);
   let out_w = f32(max(1u, params.out_width));
   let out_h = f32(max(1u, params.out_height));
-  let local_x = in.uv.x * out_w;
-  let local_y = in.uv.y * out_h;
+  let local_x = in.pos.x - params.origin_x;
+  let local_y = in.pos.y - params.origin_y;
   let image_x = (local_x - params.pan_x) / max(params.zoom, 1e-6);
   let image_y = (local_y - params.pan_y) / max(params.zoom, 1e-6);
   if (image_x < 0.0 || image_y < 0.0 || image_x >= out_w || image_y >= out_h) {
-    return unpack_rgb(params.bg_rgb);
+    return vec4f(0.0, 0.0, 0.0, 1.0);
   }
   var val: f32;
   if (params.smooth == 1u) {
@@ -632,7 +632,7 @@ const PACKED_PANEL_TRANSFORM_SHADER = /* wgsl */ `
 struct Params {
   dims0: vec4u,  // src_width, src_height, source_panel_width, out_width
   dims1: vec4u,  // out_height, panel_count, cols, rows
-  flags: vec4u,  // log_scale, bg_rgb, smooth, _pad
+  flags: vec4u,  // log_scale, bg_rgb, smooth, use_source_indices
   geom: vec4f,   // gap, _pad0, _pad1, _pad2
 };
 
@@ -717,10 +717,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let image_x = (local_x - transform.y) / zoom;
   let image_y = (local_y - transform.z) / zoom;
   if (image_x < 0.0 || image_y < 0.0 || image_x >= panel_w || image_y >= panel_h) {
-    rgba[out_idx] = bg;
+    rgba[out_idx] = 0xFF000000u;
     return;
   }
-  let source_panel = min(source_panels[panel_idx], max(1u, params.dims0.x / max(1u, params.dims0.z)) - 1u);
+  let source_panel_raw = select(panel_idx, source_panels[panel_idx], params.flags.w == 1u);
+  let source_panel = min(source_panel_raw, max(1u, params.dims0.x / max(1u, params.dims0.z)) - 1u);
   let src_x0 = min(source_panel * params.dims0.z, params.dims0.x - 1u);
   let region_w = max(1u, min(params.dims0.z, params.dims0.x - src_x0));
   var val = sample_value(src_x0, region_w, image_x, image_y, panel_w, panel_h);
@@ -2417,15 +2418,6 @@ export class GPUColormapEngine {
     const panelH = (outH - gap * (rows - 1)) / rows;
     if (panelW <= 0 || panelH <= 0) return false;
 
-    const computeRendered = this.renderPackedPanelTransformComputeToCanvas(
-      slot,
-      range,
-      logScale,
-      ctx,
-      opts,
-    );
-    if (computeRendered) return true;
-
     const fmt = navigator.gpu.getPreferredCanvasFormat();
     this.ensureDirectSlotPipeline(fmt);
     const pipeline = this.directSlotPipeline;
@@ -2445,8 +2437,10 @@ export class GPUColormapEngine {
       pu[3] = slot.width;
       pu[4] = Math.max(1, Math.round(panelH));
       pu[5] = Math.max(1, Math.round(panelW));
-      pu[6] = 1;
-      pu[7] = 1;
+      const col = panel % cols;
+      const row = Math.floor(panel / cols);
+      pf[6] = col * (panelW + gap);
+      pf[7] = row * (panelH + gap);
       pu[8] = panelLogScale ? 1 : 0;
       pu[9] = opts.bgRgb & 0xFFFFFF;
       const transform = opts.transforms?.[panel];
@@ -2673,6 +2667,7 @@ export class GPUColormapEngine {
     const packedTransforms = new Float32Array(n * 4);
     const packedIndices = new Uint32Array(n);
     let useSmooth = false;
+    let usesExplicitSourcePanels = false;
     for (let panel = 0; panel < n; panel++) {
       const panelRange = Array.isArray(range) ? (range[panel] ?? range[0]) : range;
       const panelLogScale = Array.isArray(logScale) ? !!logScale[panel] : logScale;
@@ -2686,7 +2681,9 @@ export class GPUColormapEngine {
       packedTransforms[panel * 4 + 1] = transform?.panX ?? 0;
       packedTransforms[panel * 4 + 2] = transform?.panY ?? 0;
       packedTransforms[panel * 4 + 3] = 0;
-      packedIndices[panel] = Math.max(0, Math.round(opts.sourcePanelIndices?.[panel] ?? panel));
+      const sourcePanel = Math.max(0, Math.round(opts.sourcePanelIndices?.[panel] ?? panel));
+      packedIndices[panel] = sourcePanel;
+      usesExplicitSourcePanels = usesExplicitSourcePanels || sourcePanel !== panel;
       useSmooth = useSmooth
         || shouldSmoothDirectSample(opts.smooth, zoomValue, sourcePanelW, slot.height, panelW, panelH);
     }
@@ -2708,7 +2705,7 @@ export class GPUColormapEngine {
     pu[8] = 0;
     pu[9] = opts.bgRgb & 0xFFFFFF;
     pu[10] = useSmooth ? 1 : 0;
-    pu[11] = 0;
+    pu[11] = usesExplicitSourcePanels ? 1 : 0;
     pf[12] = gap;
     pf[13] = 0;
     pf[14] = 0;
@@ -2795,6 +2792,14 @@ export class GPUColormapEngine {
     if (!this.lutBuffer) return false;
     const slot = this.slots[slotIdx];
     if (!slot) return false;
+    const hasActiveTransform = (opts.transforms || []).some((transform) => (
+      Math.abs((transform?.zoom ?? 1) - 1) > 1e-6 ||
+      Math.abs(transform?.panX ?? 0) > 1e-3 ||
+      Math.abs(transform?.panY ?? 0) > 1e-3
+    ));
+    if (!hasActiveTransform && this.renderPackedPanelTransformComputeToCanvas(slot, range, logScale, ctx, opts)) {
+      return true;
+    }
     const outW = Math.max(1, Math.round(opts.width));
     const outH = Math.max(1, Math.round(opts.height));
     const n = Math.max(1, Math.round(opts.panelCount));
@@ -2838,8 +2843,10 @@ export class GPUColormapEngine {
       pu[3] = sourceWidth;
       pu[4] = Math.max(1, Math.round(panelH));
       pu[5] = Math.max(1, Math.round(panelW));
-      pu[6] = 1;
-      pu[7] = 1;
+      const col = panel % cols;
+      const row = Math.floor(panel / cols);
+      pf[6] = col * (panelW + gap);
+      pf[7] = row * (panelH + gap);
       pu[8] = panelLogScale ? 1 : 0;
       pu[9] = opts.bgRgb & 0xFFFFFF;
       pu[10] = 1;

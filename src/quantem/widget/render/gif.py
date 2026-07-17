@@ -18,6 +18,10 @@ import numpy as np
 # Resolution multiplier per quality tier. GIF is a 256-colour palette format
 # regardless, so quality here means spatial resolution (and therefore file size).
 QUALITY_SCALE = {"high": 1.0, "medium": 0.6, "low": 0.35}
+MIN_TITLE_FONT_SIZE = 12
+MIN_SCALE_FONT_SIZE = 12
+MIN_SCALE_BAR_THICKNESS = 5
+MIN_OVERLAY_MARGIN = 12
 BACKGROUND_COLORS = {
     "dark": (12, 12, 12),
     "black": (0, 0, 0),
@@ -85,27 +89,25 @@ def _draw_scalebar(
 ):
     """Burn the Show3D canvas scale bar and optional zoom readout into a frame.
 
-    The geometry mirrors the widget canvas overlay: a 60 px target bar capped at
-    25% of the panel width, 5 px bar thickness, 16 px text, 12 px margin, and a
-    1 px drop shadow. The zoom readout is bottom-left; the scale bar is
-    bottom-right.
+    The geometry mirrors the widget canvas overlay, with publication-readable
+    minimums: a 60 px target bar capped at 25% of the panel width, at least a
+    5 px bar thickness, at least 12 px text, and at least 12 px margin.  The
+    zoom readout is bottom-left when enabled; the scale bar is bottom-right.
     """
     from PIL import ImageDraw, ImageFont
     if pixel_size <= 0:
         return img
     width, height = img.size
     target_bar_px = min(60.0, width * 0.25)
-    bar_thickness = 5
-    font_size = 16
-    margin = 12
+    bar_thickness = MIN_SCALE_BAR_THICKNESS
+    font_size = max(MIN_SCALE_FONT_SIZE, 16)
+    margin = MIN_OVERLAY_MARGIN
     effective_zoom = max(1e-6, float(zoom))
     nice_phys = _round_to_nice_value((target_bar_px / effective_zoom) * pixel_size)
     bar_px = (nice_phys / pixel_size) * effective_zoom
     bar_y = height - margin
     bar_x = width - bar_px - margin
     draw = ImageDraw.Draw(img)
-    # 1px drop shadow (figure.ts uses shadowOffset 1,1): black underlay then white.
-    draw.rectangle([bar_x + 1, bar_y + 1, bar_x + bar_px + 1, bar_y + bar_thickness + 1], fill=(0, 0, 0))
     draw.rectangle([bar_x, bar_y, bar_x + bar_px, bar_y + bar_thickness], fill=(255, 255, 255))
     label = _format_scale_label(nice_phys, unit)
     try:
@@ -218,7 +220,7 @@ def _draw_panel_title(img, text: str, font_size: int) -> None:
         return
     from PIL import ImageDraw
     width, _height = img.size
-    font = _font(max(8, int(font_size)), bold=True)
+    font = _font(max(MIN_TITLE_FONT_SIZE, int(font_size)), bold=True)
     draw = ImageDraw.Draw(img)
     bbox = draw.textbbox((0, 0), text, font=font)
     tw = bbox[2] - bbox[0]

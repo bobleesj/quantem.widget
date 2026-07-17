@@ -85,6 +85,65 @@ def test_show3d_animation_grid_uses_dark_background_by_default() -> None:
     assert frame.getpixel((4, 0)) == (12, 12, 12)
 
 
+def test_show3d_animation_grid_does_not_add_borders_when_unset() -> None:
+    widget = Show3D(
+        np.zeros((1, 4, 4), dtype=np.float32),
+        np.ones((1, 4, 4), dtype=np.float32),
+        max_cols=2,
+        inter_panel_gap_px=0,
+        gallery_outer_border_px=0,
+        panel_inner_border_px=0,
+        cmap="viridis",
+        vmin=0,
+        vmax=1,
+        show_controls=False,
+        show_scale_bar=False,
+        show_panel_titles=False,
+    )
+
+    frame = widget._render_animation_frames(
+        quality="high",
+        playback="forward",
+        show_frame_labels=False,
+        background="black",
+    )[0].convert("RGB")
+
+    assert frame.size == (8, 4)
+    # C1: no implicit gutter or frame is inserted between adjacent panels.
+    assert frame.getpixel((3, 0)) != (0, 0, 0)
+    assert frame.getpixel((4, 0)) != (0, 0, 0)
+    assert frame.getpixel((3, 0)) != frame.getpixel((4, 0))
+
+
+def test_show3d_animation_titles_keep_publication_minimum_size(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_compose_panel_grid(images, **kwargs):
+        captured["title_font_size"] = kwargs["title_font_size"]
+        captured["panel_gap"] = kwargs["panel_gap"]
+        return images[0]
+
+    monkeypatch.setattr(gif_utils, "compose_panel_grid", fake_compose_panel_grid)
+    widget = Show3D(
+        np.zeros((2, 64, 64), dtype=np.float32),
+        panel_titles=["raw"],
+        panel_title_font_size=9,
+        show_controls=False,
+        show_scale_bar=False,
+        show_panel_titles=True,
+    )
+
+    widget._render_animation_frames(
+        quality="low",
+        playback="forward",
+        show_frame_labels=False,
+        background="black",
+        downsample=4,
+    )
+
+    assert captured["title_font_size"] == gif_utils.MIN_TITLE_FONT_SIZE
+
+
 def test_show3d_animation_grid_chrome_layers_are_independent() -> None:
     widget = Show3D(
         np.zeros((1, 4, 4), dtype=np.float32),
@@ -266,6 +325,85 @@ def test_show3d_gif_multi_panel_draws_live_style_overlays() -> None:
     assert white[:14].sum() > 8  # centered top labels
     assert white[-24:, :42].sum() > 5  # bottom-left 1.0x zoom readout
     assert white[-18:, -52:].sum() > 20  # bottom-right scale bar and label
+
+
+def test_show3d_uint16_animation_exports_keep_media_contract(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    yy, xx = np.mgrid[:48, :64].astype(np.float32)
+    frames = []
+    for idx in range(5):
+        image = (
+            0.45 * np.sin((xx + idx) / 4.0)
+            + 0.35 * np.cos((yy - idx) / 5.0)
+            + np.exp(-((xx - 28 - idx) ** 2 + (yy - 22) ** 2) / 60.0)
+        )
+        scaled = (image - image.min()) / max(1e-6, image.max() - image.min())
+        frames.append(np.round(scaled * 65535).astype(np.uint16))
+    stack = np.stack(frames)
+    widget = Show3D(
+        stack,
+        stack // 2,
+        panel_titles=["a raw", "b half"],
+        panel_frame_labels=[["t0", "t1", "t2", "t3", "t4"]] * 2,
+        sampling=0.5,
+        units="nm",
+        max_cols=2,
+        inter_panel_gap_px=2,
+        inter_panel_gap_color="#000000",
+        panel_inner_border_px=1,
+        panel_inner_border_color="#000000",
+        cmap="magma",
+        fps=8,
+        show_controls=False,
+        show_panel_titles=True,
+        show_scale_bar=True,
+        show_zoom_indicator=False,
+    )
+
+    gif_path = widget.save_gif(
+        tmp_path / "uint16.gif",
+        quality="high",
+        fps=8,
+        show_frame_labels=True,
+        background="black",
+    )
+
+    assert gif_path.exists()
+    with Image.open(gif_path) as img:
+        assert img.is_animated
+        assert img.n_frames == 5
+        assert img.size == (64 * 2 + 2, 48)
+
+    captured: dict[str, object] = {}
+
+    def fake_write_mp4(frames, path, fps, *, crf=18):
+        captured["n_frames"] = len(frames)
+        captured["size"] = frames[0].size
+        captured["fps"] = fps
+        captured["crf"] = crf
+        path = pathlib.Path(path)
+        path.write_bytes(b"mp4")
+        return path
+
+    monkeypatch.setattr(gif_utils, "write_mp4", fake_write_mp4)
+    mp4_path = widget.save_mp4(
+        tmp_path / "uint16.mp4",
+        quality="high",
+        fps=8,
+        crf=16,
+        show_frame_labels=True,
+        background="black",
+    )
+
+    assert mp4_path.read_bytes() == b"mp4"
+    assert captured == {
+        "n_frames": 5,
+        "size": (64 * 2 + 2, 48),
+        "fps": 8.0,
+        "crf": 16,
+    }
 
 
 def test_show3d_frontend_gif_export_request_creates_payload() -> None:

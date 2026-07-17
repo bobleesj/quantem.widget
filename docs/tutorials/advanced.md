@@ -22,6 +22,9 @@ around a real question from the microscope room:
 - **Full-resolution Show3D folder viewers** - keep the microscope/reconstruction
   pixels at native shape while the browser loads a nearby data file instead of
   one giant HTML blob.
+- **ShowPtycho WebGPU folder viewers** - share ptychography aberration review
+  with a small HTML viewer and a BF-indexed `G(k)` payload; use full BF for
+  final claims and fewer BF pixels for fast exploration.
 - **Rich math labels and annotations** - use λ, χ², colored spans, and local
   region labels in Show2D/Show3D panels without exposing raw TeX markup.
 - **Geometric panel overlays** - add reproducible circles, rectangles, and
@@ -630,8 +633,16 @@ w.export_html("regularization_review.html", encoding="uint8")
 The collapsed view still shows `Controls` and `Export` in the title chrome.
 In live Jupyter, Show3D's Export menu can write HTML and request GIF/MP4
 animation exports through Python. In standalone HTML, the page can download
-itself as HTML; GIF/MP4 entries are visible but disabled because browser-side
-movie encoding is not implemented yet.
+itself as HTML, export GIF in the browser, and export MP4 when the browser
+provides WebCodecs H.264 support. If browser MP4 is unavailable, reopen the
+live Python widget for MP4 export.
+
+For PowerPoint, Slack, or publication review, export movies from the live
+widget or from exact HTML when possible. A standalone HTML file made with
+`encoding="uint8"` is still useful for compact review, but GIF/MP4 from that
+file uses the encoded display data and GIF then applies a 256-color palette.
+The export panel warns about this path and points users back to
+`encoding="full"` when fidelity matters.
 
 This math support is intentionally compact: use it for labels such as
 `λ`, `χ²`, `σ`, `μ`, `Δ`, subscripts, superscripts, and short units. For a
