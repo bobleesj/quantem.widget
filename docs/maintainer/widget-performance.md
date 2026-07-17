@@ -525,7 +525,7 @@ about 18 GiB resident, so 20-30 masters no-bin is a capacity stress, not a
 reasonable default expectation on every two-GPU machine.
 
 2026-07-05 CUDA no-bin result on a private NVIDIA lab workstation: two RTX PRO
-6000 GPUs (about 96 GiB each) loaded real sampleA masters at `det_bin=1`. A
+6000 GPUs (about 96 GiB each) loaded real experimental masters at `det_bin=1`. A
 four-master stack (4 x 512 x 512 x 192 x 192 uint16, about 72 GiB resident)
 passed the browser-enabled signoff: first master load was about 0.8 s, widget
 build about 0.6 s, stack growth to four masters about 1.5 s, and browser

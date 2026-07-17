@@ -236,8 +236,8 @@ unnecessarily large.
 
 For end-to-end widget, browser, visual, and performance signoff, prefer real
 reconstructed experimental data that matches the scientist workflow. Use the
-available partner ptychography reconstructions for relevant Show3DSlices and
-Show3D checks. Record the source path, shape, dtype, transforms, and any
+available experimental ptychography reconstructions for relevant Show3DSlices
+and Show3D checks. Record the source path, shape, dtype, transforms, and any
 binning in the test report.
 
 Synthetic data is appropriate for focused unit tests and controlled failure

@@ -24,8 +24,8 @@ def first_existing(*paths: "str | Path") -> Path:
     -------
     >>> from quantem.widget import first_existing
     >>> SESSION = first_existing(
-    ...     "/data/shared/arina/collaborator/20260525_polymer__sectioned_Withcollaborator",
-    ...     "~/ssd/arina/collaborator/20260525_polymer__sectioned_Withcollaborator",
+    ...     "/data/shared/arina/20260525_session",
+    ...     "~/ssd/arina/20260525_session",
     ... )
     """
     if not paths:
