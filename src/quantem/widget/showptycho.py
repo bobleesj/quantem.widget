@@ -1533,7 +1533,7 @@ def _show_ptycho_from_ssb(
     auto_phi12 = float(aberrations.get("phi12", 0.0))
 
     if c10_range is None:
-        c10_range = (auto_c10 - 200.0, auto_c10 + 200.0)
+        c10_range = (min(-300.0, auto_c10), max(300.0, auto_c10))
     if c12_range is None:
         c12_range = (-100.0, 100.0)
     if phi12_range is None:
