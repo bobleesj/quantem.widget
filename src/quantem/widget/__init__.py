@@ -23,23 +23,68 @@ from quantem.widget.showeds import ShowEDS, SpectrumImage, bin_spectrum_image, l
 from quantem.widget.show4dstem_factory import Show4DSTEM
 from quantem.widget.showdiffraction import ShowDiffraction
 from quantem.widget.showfolder import ShowFolder, prebuild_showfolder_cache, show_folder
-from quantem.widget.io import load, load_scan_region, read_gif, read_image, read_image_stack, read_images
-from . import movie
+try:
+    from quantem.widget.io import load, load_scan_region, read_gif, read_image, read_image_stack, read_images
+except ModuleNotFoundError as exc:
+    if exc.name != "quantem.gpu":
+        raise
+try:
+    from . import movie
+except ModuleNotFoundError as exc:
+    if exc.name != "quantem.gpu":
+        raise
 from quantem.widget.paths import first_existing
-from quantem.widget.backend import detect_backend, resolve_backend
-from quantem.widget.gpu import gpu_info
-from quantem.gpu.detector import detect_bf_radius, dp_mean, virtual_image
+try:
+    from quantem.widget.backend import detect_backend, resolve_backend
+except ModuleNotFoundError as exc:
+    if exc.name != "quantem.gpu":
+        raise
+
+    def detect_backend(*args, **kwargs):
+        raise ModuleNotFoundError("quantem.gpu is required for backend detection")
+
+    def resolve_backend(*args, **kwargs):
+        raise ModuleNotFoundError("quantem.gpu is required for backend resolution")
+
+try:
+    from quantem.widget.gpu import gpu_info
+except ModuleNotFoundError as exc:
+    if exc.name != "quantem.gpu":
+        raise
+
+    def gpu_info(*args, **kwargs):
+        raise ModuleNotFoundError("quantem.gpu is required for GPU information")
+try:
+    from quantem.gpu.detector import detect_bf_radius, dp_mean, virtual_image
+except ModuleNotFoundError as exc:
+    if exc.name != "quantem.gpu":
+        raise
 from quantem.widget.folder_picker import FolderPicker, pick_folder
-from quantem.widget.multidataset_mps import load_4dstem_macbook
+try:
+    from quantem.widget.multidataset_mps import load_4dstem_macbook
+except ModuleNotFoundError as exc:
+    if exc.name != "quantem.gpu":
+        raise
+
+    def load_4dstem_macbook(*args, **kwargs):
+        raise ModuleNotFoundError("quantem.gpu is required for multi-dataset MPS loading")
 from quantem.widget.export import (
     HTML_EXPORT_TRAITS,
     SupportsFrontendHtmlExport,
     SupportsHtmlExport,
     supports_html_export,
 )
-from quantem.gpu.dpc import idpc, com
+try:
+    from quantem.gpu.dpc import idpc, com
+except ModuleNotFoundError as exc:
+    if exc.name != "quantem.gpu":
+        raise
 from quantem.widget.info import device_info
-from quantem.gpu.detector import bf, adf, df
+try:
+    from quantem.gpu.detector import bf, adf, df
+except ModuleNotFoundError as exc:
+    if exc.name != "quantem.gpu":
+        raise
 from quantem.widget._timing import (
     WidgetProfile,
     format_timing_table,
@@ -54,6 +99,30 @@ try:
 except PackageNotFoundError:
     # Source-tree imports (e.g. `PYTHONPATH=src pytest`) skip pip install.
     __version__ = "0.0.0+local"
+
+
+def __getattr__(name: str):
+    """Lazy-load optional widget modules with generated frontend bundles."""
+
+    if name in {
+        "ShowPtycho",
+        "PtychoCalibration",
+        "load_ptycho_calibration",
+    }:
+        from quantem.widget.showptycho import (
+            PtychoCalibration,
+            ShowPtycho,
+            load_ptycho_calibration,
+        )
+
+        exports = {
+            "ShowPtycho": ShowPtycho,
+            "PtychoCalibration": PtychoCalibration,
+            "load_ptycho_calibration": load_ptycho_calibration,
+        }
+        globals().update(exports)
+        return exports[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def profile() -> None:
@@ -167,6 +236,9 @@ __all__ = [
     "ShowDiffraction",
     "ShowEDS",
     "ShowFolder",
+    "ShowPtycho",
+    "PtychoCalibration",
+    "load_ptycho_calibration",
     "prebuild_showfolder_cache",
     "SpectrumImage",
     "bin_spectrum_image",

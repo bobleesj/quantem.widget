@@ -41,7 +41,13 @@ async function createGPUDevice(): Promise<GPUDevice | null> {
     // (maxStorageBufferBindingSize 128 MB, maxTextureDimension2D 8192); without
     // this, buffers > 128 MB silently invalidate bind groups and wide panels fail.
     const requiredLimits: Record<string, number> = {};
-    for (const key of ["maxBufferSize", "maxStorageBufferBindingSize", "maxTextureDimension2D"] as const) {
+    for (const key of [
+      "maxBufferSize",
+      "maxStorageBufferBindingSize",
+      "maxTextureDimension2D",
+      "maxComputeInvocationsPerWorkgroup",
+      "maxComputeWorkgroupSizeX",
+    ] as const) {
       const v = adapter.limits[key] || 0;
       if (v > 0) requiredLimits[key] = v;
     }

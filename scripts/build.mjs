@@ -14,6 +14,7 @@ const widgets = [
   { name: "show4dstem" },
   { name: "showdiffraction" },
   { name: "showeds" },
+  { name: "showptycho" },
 ];
 
 rmSync("src/quantem/widget/static", { recursive: true, force: true });
@@ -52,6 +53,14 @@ for (const w of widgets) {
     if (existsSync(cssSrc)) {
       copyFileSync(cssSrc, `src/quantem/widget/static/${w.name}.css`);
       break;
+    }
+  }
+  // ShowPtycho keeps a private WebGPU kernel probe beside the bundled frontend
+  // artifacts. The user-facing folder export embeds the normal anywidget UI.
+  if (w.name === "showptycho") {
+    const webgpuSrc = "js/showptycho/webgpu_index.html";
+    if (existsSync(webgpuSrc)) {
+      copyFileSync(webgpuSrc, "src/quantem/widget/static/showptycho_webgpu_index.html");
     }
   }
 }

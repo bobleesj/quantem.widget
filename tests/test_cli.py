@@ -139,6 +139,113 @@ def test_detect_master_wins_over_images(tmp_path):
     assert cli._detect(tmp_path, "auto") == "4dstem"
 
 
+def _showptycho_folder(tmp_path):
+    folder = tmp_path / "logic013_512_bfr24"
+    folder.mkdir()
+    source = folder / "source"
+    source.mkdir()
+    (source / "scan_master.h5").write_bytes(b"master")
+    (source / "scan_data_000001.h5").write_bytes(b"data")
+    (folder / "index.html").write_text("<!doctype html><title>ShowPtycho</title>", encoding="utf-8")
+    (folder / "manifest.json").write_text(
+        """{
+  "schema_version": 2,
+  "format": "quantem.showptycho.webgpu.folder.v2",
+  "title": "ShowPtycho smoke",
+  "source": {
+    "kind": "hdf5",
+    "master": "source/scan_master.h5",
+    "data_files": ["source/scan_data_000001.h5"],
+    "link_mode": ["hardlink"]
+  },
+  "arrays": {}
+}
+""",
+        encoding="utf-8",
+    )
+    return folder
+
+
+def test_detect_showptycho_folder_export(tmp_path):
+    folder = _showptycho_folder(tmp_path)
+
+    assert cli._detect(folder, "auto") == "showptycho"
+    assert cli._detect(folder / "index.html", "auto") == "showptycho"
+    assert cli._detect(folder, "ptycho") == "showptycho"
+
+
+def test_detect_showptycho_master_when_forced(tmp_path):
+    """C1: explicit showptycho on a master builds ptychography, not Show4DSTEM."""
+    master = tmp_path / "scan_master.h5"
+    master.write_bytes(b"\x00")
+
+    assert cli._detect(master, "auto") == "4dstem"
+    assert cli._detect(master, "ptycho") == "showptycho-master"
+
+
+def test_showptycho_master_cli_uses_native_bin_default(tmp_path, monkeypatch):
+    """C2: ShowPtycho master generation keeps native detector pixels by default."""
+    master = tmp_path / "scan_master.h5"
+    master.write_bytes(b"\x00")
+    folder = _showptycho_folder(tmp_path)
+    seen = {}
+
+    def fake_render(path, args):
+        seen["path"] = path
+        seen["det_bin"] = cli._effective_det_bin(args, default=1)
+        return folder
+
+    def fake_serve(path, *, bind, port, no_open):
+        seen["served"] = path
+        seen["no_open"] = no_open
+
+    monkeypatch.setattr(cli, "_render_showptycho_master", fake_render)
+    monkeypatch.setattr(cli, "_serve_showptycho_folder", fake_serve)
+
+    assert cli.main(["showptycho", str(master), "--no-open"]) == 0
+    assert seen["path"] == master.resolve()
+    assert seen["det_bin"] == 1
+    assert seen["served"] == folder
+    assert seen["no_open"] is True
+
+
+def test_showptycho_auto_calibration_selects_matching_source(tmp_path):
+    """C3: automatic calibration search picks the matching microscope source."""
+    master = tmp_path / "BTO_18_master.h5"
+    master.write_bytes(b"\x00")
+    cal_dir = tmp_path / "quantem" / "screen"
+    cal_dir.mkdir(parents=True)
+    cal_path = cal_dir / "_calibrations.json"
+    cal_path.write_text(
+        """[
+  {
+    "source_stem": "BTO_17",
+    "rotation_angle_deg": 1,
+    "aberrations": {"C10": 2, "C12": 3, "phi12": 0.1},
+    "loss": 9
+  },
+  {
+    "source_stem": "BTO_18",
+    "rotation_angle_deg": 158.9,
+    "aberrations": {"C10": 78.1, "C12": 17.4, "phi12": 0.58},
+    "semiangle_mrad": 30,
+    "scan_sampling_A": 0.264,
+    "voltage_kV": 300,
+    "loss": 0.01
+  }
+]""",
+        encoding="utf-8",
+    )
+    args = type("Args", (), {"calibration": "auto"})()
+
+    calibration, path = cli._resolve_showptycho_calibration(master, args)
+
+    assert path == cal_path
+    assert calibration.source_stem == "BTO_18"
+    assert calibration.rotation_angle_deg == 158.9
+    assert calibration.semiangle_mrad == 30
+
+
 def test_detect_forced_4dstem(tmp_path):
     _png(tmp_path / "a.png")
     assert cli._detect(tmp_path, "4dstem") == "4dstem"
@@ -342,6 +449,34 @@ def test_show4dstem_watch_requires_live_folder_notebook(tmp_path):
 
     assert cli.main(["show4dstem", str(master), "--watch", "--no-open"]) == 1
     assert cli.main(["show4dstem", str(tmp_path), "--watch", "--html", "--no-open"]) == 1
+
+
+def test_showptycho_cli_validates_folder_without_opening(tmp_path, capsys):
+    folder = _showptycho_folder(tmp_path)
+
+    assert cli.main(["showptycho", str(folder), "--no-open"]) == 0
+
+    out = capsys.readouterr().out
+    assert "ShowPtycho folder:" in out
+    assert "compressed HDF5" in out
+    assert "no persistent BF-G cache" in out
+    assert "ready: run without --no-open" in out
+
+
+def test_show_auto_routes_showptycho_folder(tmp_path, capsys):
+    folder = _showptycho_folder(tmp_path)
+
+    assert cli.main(["show", str(folder), "--no-open"]) == 0
+
+    out = capsys.readouterr().out
+    assert "ShowPtycho folder:" in out
+
+
+def test_showptycho_range_parser_accepts_first_bytes():
+    assert cli._parse_http_range("bytes=0-3", 16) == (0, 3)
+    assert cli._parse_http_range("bytes=4-", 16) == (4, 15)
+    assert cli._parse_http_range("bytes=-4", 16) == (12, 15)
+    assert cli._parse_http_range("bytes=99-100", 16) is None
 
 
 def test_data_transfer_cli_plan_inspect_copy_update_and_show4dstem(tmp_path, monkeypatch, capsys):
