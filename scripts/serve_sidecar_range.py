@@ -12,6 +12,7 @@ import argparse
 import email.utils
 import http.server
 import mimetypes
+import os
 from pathlib import Path
 import posixpath
 import re
@@ -19,7 +20,7 @@ import sys
 import urllib.parse
 
 
-CHUNK_BYTES = 1024 * 1024
+CHUNK_BYTES = 16 * 1024 * 1024
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)$")
 
 
@@ -56,7 +57,7 @@ class RangeRequestHandler(http.server.BaseHTTPRequestHandler):
         end = size - 1
         partial = False
         if range_header:
-            parsed = self._parse_range(range_header, size)
+            parsed = _parse_range(range_header, size)
             if parsed is None:
                 self.send_response(416)
                 self._send_common_headers()
@@ -78,23 +79,38 @@ class RangeRequestHandler(http.server.BaseHTTPRequestHandler):
 
         if send_body:
             with path.open("rb") as handle:
-                handle.seek(start)
-                remaining = content_length
-                while remaining > 0:
-                    chunk = handle.read(min(CHUNK_BYTES, remaining))
-                    if not chunk:
-                        break
-                    try:
-                        self.wfile.write(chunk)
-                    except BrokenPipeError:
-                        break
-                    remaining -= len(chunk)
+                self._send_file_body(handle, start=start, length=content_length)
 
     def _send_common_headers(self) -> None:
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Range, Content-Type")
+
+    def _send_file_body(self, handle, *, start: int, length: int) -> None:
+        """Send a file range with zero-copy when the local socket supports it."""
+        if length <= 0:
+            return
+        if not os.environ.get("QUANTEM_DISABLE_HTTP_SENDFILE") and hasattr(self.connection, "sendfile"):
+            try:
+                self.connection.sendfile(handle, offset=start, count=length)
+                return
+            except BrokenPipeError:
+                return
+            except (OSError, ValueError):
+                pass
+        handle.seek(start)
+        remaining = length
+        chunk_bytes = _range_chunk_bytes()
+        while remaining > 0:
+            chunk = handle.read(min(chunk_bytes, remaining))
+            if not chunk:
+                break
+            try:
+                self.wfile.write(chunk)
+            except BrokenPipeError:
+                break
+            remaining -= len(chunk)
 
     def _resolve_path(self) -> Path | None:
         parsed = urllib.parse.urlsplit(self.path)
@@ -108,26 +124,37 @@ class RangeRequestHandler(http.server.BaseHTTPRequestHandler):
             return None
         return candidate
 
-    @staticmethod
-    def _parse_range(value: str, size: int) -> tuple[int, int] | None:
-        match = RANGE_RE.fullmatch(value.strip())
-        if not match or size < 0:
+
+def _range_chunk_bytes() -> int:
+    raw = os.environ.get("QUANTEM_HTTP_RANGE_CHUNK_MB", "")
+    if raw:
+        try:
+            mb = int(raw)
+        except ValueError:
+            mb = 16
+        return max(1, mb) * 1024 * 1024
+    return CHUNK_BYTES
+
+
+def _parse_range(value: str, size: int) -> tuple[int, int] | None:
+    match = RANGE_RE.fullmatch(value.strip())
+    if not match or size < 0:
+        return None
+    start_text, end_text = match.groups()
+    if start_text == "" and end_text == "":
+        return None
+    if start_text == "":
+        suffix = int(end_text)
+        if suffix <= 0:
             return None
-        start_text, end_text = match.groups()
-        if start_text == "" and end_text == "":
-            return None
-        if start_text == "":
-            suffix = int(end_text)
-            if suffix <= 0:
-                return None
-            start = max(0, size - suffix)
-            end = size - 1
-        else:
-            start = int(start_text)
-            end = int(end_text) if end_text else size - 1
-        if start >= size or end < start:
-            return None
-        return start, min(end, size - 1)
+        start = max(0, size - suffix)
+        end = size - 1
+    else:
+        start = int(start_text)
+        end = int(end_text) if end_text else size - 1
+    if start >= size or end < start:
+        return None
+    return start, min(end, size - 1)
 
 
 def main(argv: list[str] | None = None) -> int:

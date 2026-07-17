@@ -13,19 +13,29 @@ for images, ``io.discover_masters`` + ``io.load(det_bin=...)`` for 4D-STEM, the
 lets a laptop browse data that never fit full resolution (bin the detector first).
 """
 import argparse
+import email.utils
 import http.server
 import json
+import mimetypes
 import os
 import pathlib
+import posixpath
+import re
+import shutil
 import socketserver
 import sys
 import threading
+import urllib.parse
 import webbrowser
 
 # Single image -> Show2D, a folder of frames -> Show3D, a folder of differently
 # sized images -> a Show2D gallery. These are the formats read_image understands.
 IMAGE_EXTS = {".png", ".tif", ".tiff", ".jpg", ".jpeg", ".bmp", ".dm3", ".dm4", ".emd", ".npy"}
 MASTER_PATTERN = "*_master.h5"
+SHOWPTYCHO_MASTER_PATTERNS = ("*_master.h5", "*_master_wrapper.h5")
+SHOWPTYCHO_FOLDER_FORMAT = "quantem.showptycho.webgpu.folder"
+_RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)$")
+_RANGE_FALLBACK_CHUNK_BYTES = 16 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -39,12 +49,19 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
     # `show` auto-detects; show2d/show3d/show4dstem force the widget so the command
     # reads exactly like the widget it opens. All share the same options + engine.
-    forced = {"show": "auto", "show2d": "2d", "show3d": "3d", "show4dstem": "4dstem"}
+    forced = {
+        "show": "auto",
+        "show2d": "2d",
+        "show3d": "3d",
+        "show4dstem": "4dstem",
+        "showptycho": "ptycho",
+    }
     helps = {
         "show": "Auto-detect PATH(s) and render the matching viewer.",
         "show2d": "Render an image (or a folder of images) as Show2D.",
         "show3d": "Render a folder of frames as a Show3D scrub.",
         "show4dstem": "Render 4D-STEM master(s) as Show4DSTEM (live notebook, or --html).",
+        "showptycho": "Open or build a ShowPtycho WebGPU folder export.",
     }
     for name in forced:
         _add_show_args(sub.add_parser(name, help=helps[name]))
@@ -559,10 +576,17 @@ def _capture_full_ui(html: pathlib.Path, n_expected: int) -> list[bytes]:
     os.environ.setdefault("DISPLAY", ":1")
     from playwright.sync_api import sync_playwright
     shots: list[bytes] = []
+    launch_kwargs = {}
+    for candidate in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        executable = shutil.which(candidate)
+        if executable:
+            launch_kwargs["executable_path"] = executable
+            print(f"  browser executable: {executable}")
+            break
     with sync_playwright() as play:
         browser = play.chromium.launch(headless=False, args=[
             "--enable-unsafe-webgpu", "--use-angle=vulkan", "--enable-features=Vulkan",
-            "--ignore-gpu-blocklist", "--disable-gpu-sandbox", "--no-sandbox"])
+            "--ignore-gpu-blocklist", "--disable-gpu-sandbox", "--no-sandbox"], **launch_kwargs)
         page = browser.new_page(viewport={"width": 1300, "height": 2400}, device_scale_factor=2)
         page.goto(html.as_uri(), wait_until="load", timeout=90000)
         page.wait_for_timeout(13000)  # anywidget mount + WebGPU paint
@@ -615,7 +639,7 @@ def _prepare_github(args: argparse.Namespace) -> int:
                     if c["cell_type"] == "code" and any(w in "".join(c["source"]) for w in _WIDGET_CELL)]
     capture_cells = [
         c for c in widget_cells
-        if _cell_has_widget_view_output(c) or not _cell_has_image_output(c)
+        if not _cell_has_image_output(c)
     ]
     if capture_cells:
         try:
@@ -848,8 +872,11 @@ def _add_show_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("path", nargs="+",
                         help="An image, a folder of images, a 4D-STEM master, a folder of masters, "
                              "or several master files (-> one 5D multi-tilt viewer).")
-    parser.add_argument("--bin", type=int, default=8, dest="det_bin",
-                        help="Detector binning factor for 4D-STEM (default 8). Keeps a laptop-sized stack.")
+    parser.add_argument("--bin", type=int, default=None, dest="det_bin",
+                        help=(
+                            "Detector binning factor. Show4DSTEM defaults to 8 "
+                            "for laptop browsing; ShowPtycho defaults to 1."
+                        ))
     parser.add_argument("--combined", action="store_true",
                         help="Many 4D masters -> one 5D HTML viewer (with --html; needs a local serve).")
     parser.add_argument("--out", default=None,
@@ -866,14 +893,48 @@ def _add_show_args(parser: argparse.ArgumentParser) -> None:
                         help="4D-STEM --watch: comma-separated CUDA GPU ids, e.g. 0 or 0,1. Default preserves loader device.")
     parser.add_argument("--page-budget", default="auto",
                         help="4D-STEM --watch: resident dataset cache, e.g. auto, 1, 2, or none (default auto).")
-    parser.add_argument("--dtype", default="u8", choices=("u8", "u16", "float32"),
-                        help="4D-STEM --watch browse dtype (default u8).")
+    parser.add_argument("--dtype", default="u8", choices=("u8", "uint8", "u16", "uint16", "float32"),
+                        help="4D-STEM/ShowPtycho browse dtype (default u8).")
     parser.add_argument("--scan-size", type=int, default=None,
                         help="4D-STEM --watch: only include masters with this square scan size.")
     parser.add_argument("--no-open", action="store_true", help="Write the file(s) but do not launch anything.")
     parser.add_argument("--serve", action="store_true",
                         help="Open via a local HTTP server even for self-contained files (tunnelable URL).")
+    parser.add_argument("--port", type=int, default=None,
+                        help="Folder exports: port for the local HTTP server (default: auto-pick).")
+    parser.add_argument("--bind", default="127.0.0.1",
+                        help="Folder exports: bind address for the local HTTP server (default: 127.0.0.1).")
     parser.add_argument("--title", default=None, help="Viewer page title.")
+    parser.add_argument("--backend", default="auto", choices=("auto", "cuda", "mps", "cpu"),
+                        help="ShowPtycho master generation: HDF5 load backend (default auto).")
+    parser.add_argument("--calibration", default="auto",
+                        help=(
+                            "ShowPtycho master generation: calibration JSON, "
+                            "'auto' to search nearby QuantEM results, or 'none'."
+                        ))
+    parser.add_argument("--semiangle", "--semiangle-mrad", dest="semiangle_mrad",
+                        type=float, default=None,
+                        help="ShowPtycho master generation: probe semi-angle in mrad.")
+    parser.add_argument("--scan-sampling", "--scan-sampling-A", dest="scan_sampling_A",
+                        type=float, default=None,
+                        help="ShowPtycho master generation: scan pixel size in Angstrom.")
+    parser.add_argument("--det-sampling", "--det-sampling-mrad-px", dest="det_sampling_mrad_px",
+                        type=float, default=None,
+                        help="ShowPtycho master generation: detector angular sampling in mrad/pixel.")
+    parser.add_argument("--voltage-kv", dest="voltage_kv", type=float, default=None,
+                        help="ShowPtycho master generation: accelerating voltage in kV.")
+    parser.add_argument("--bf-radius", type=float, default=None,
+                        help="ShowPtycho master generation: bright-field radius in detector pixels.")
+    parser.add_argument("--bf-threshold", type=float, default=0.5,
+                        help="ShowPtycho master generation: BF intensity threshold fraction (default 0.5).")
+    parser.add_argument("--drag-bf", type=float, default=0.3,
+                        help="ShowPtycho browser preview BF fraction/count: 0.3 is 30%%, 1.0 is full BF, >1 is a count (default 0.3).")
+    parser.add_argument("--size", type=int, default=800,
+                        help="ShowPtycho initial panel size in pixels (default 800).")
+    parser.add_argument("--fft", action="store_true",
+                        help="ShowPtycho opens with the FFT panel visible.")
+    parser.add_argument("--force", action="store_true",
+                        help="ShowPtycho master generation: rebuild an existing output folder.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose progress.")
 
 
@@ -903,6 +964,15 @@ def _show(args: argparse.Namespace) -> int:
         return _do_4dstem(masters, f"{len(masters)}_datasets", args)
     path = paths[0]
     kind = _detect(path, args.widget)
+    if kind == "showptycho-master":
+        master = _showptycho_master_source(path)
+        folder = _render_showptycho_master(master, args)
+        _serve_showptycho_folder(folder, bind=args.bind, port=args.port, no_open=args.no_open)
+        return 0
+    if kind == "showptycho":
+        folder = _showptycho_folder(path)
+        _serve_showptycho_folder(folder, bind=args.bind, port=args.port, no_open=args.no_open)
+        return 0
     if kind == "4dstem":
         if args.watch:
             if args.html:
@@ -937,6 +1007,7 @@ def _do_4dstem(masters: list[str], label: str, args: argparse.Namespace) -> int:
     """Dispatch 4D-STEM master(s) to either a live notebook (default) or an offline
     HTML (``--html``), then launch/open it. One master loads alone; many load stacked
     into a 5D viewer with a dataset slider (the multi-tilt case)."""
+    args.det_bin = _effective_det_bin(args, default=8)
     if args.html:
         outputs = _render_4dstem(masters, label, args)
         _open_html(outputs[0], serve=args.serve or args.combined, no_open=args.no_open)
@@ -949,12 +1020,23 @@ def _do_4dstem(masters: list[str], label: str, args: argparse.Namespace) -> int:
 
 
 def _detect(path: pathlib.Path, forced: str) -> str:
-    """Return the content kind: 'image' (single file), 'images' (folder), or '4dstem'.
+    """Return the content kind: image, images, 4dstem, showptycho, or ptycho master.
 
     A single file is always 'image' unless it is a master or 4D is forced (a lone
     file can't be a 3D scrub). For a folder: the command's forced widget wins, else a
     ``*_master.h5`` makes it 4D and image files make it 'images'. The stack-vs-gallery
     split for 'images' is decided later from the forced widget."""
+    if forced == "ptycho":
+        if _is_showptycho_folder_export(path):
+            return "showptycho"
+        if path.is_file() and _is_showptycho_master_name(path.name):
+            return "showptycho-master"
+        if path.is_dir() and _showptycho_master_candidates(path):
+            return "showptycho-master"
+        _showptycho_folder(path)
+        return "showptycho"
+    if _is_showptycho_folder_export(path):
+        return "showptycho"
     if path.is_file():
         if forced == "4dstem" or path.name.endswith("_master.h5"):
             return "4dstem"
@@ -971,6 +1053,386 @@ def _detect(path: pathlib.Path, forced: str) -> str:
     if any(p.suffix.lower() in IMAGE_EXTS for p in path.iterdir()):
         return "images"
     raise ValueError(f"no images or *_master.h5 found in {path}")
+
+
+def _effective_det_bin(args: argparse.Namespace, *, default: int) -> int:
+    """Return a positive detector bin, using the command-specific default."""
+
+    raw = getattr(args, "det_bin", None)
+    value = default if raw is None else raw
+    try:
+        det_bin = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"--bin must be a positive integer, got {value!r}") from exc
+    if det_bin < 1:
+        raise ValueError(f"--bin must be a positive integer, got {det_bin}")
+    return det_bin
+
+
+def _showptycho_decode_dtype(args: argparse.Namespace) -> str:
+    """Return the explicit browser decode dtype for ShowPtycho source HDF5."""
+
+    raw = str(getattr(args, "dtype", "u8") or "u8").lower()
+    if raw in {"u8", "uint8"}:
+        return "uint8"
+    if raw in {"u16", "uint16"}:
+        return "uint16"
+    if raw == "float32":
+        return "float32"
+    raise ValueError(f"ShowPtycho --dtype must be u8, u16, or float32; got {raw!r}")
+
+
+def _is_showptycho_master_name(name: str) -> bool:
+    """Return whether ``name`` is a supported ShowPtycho source master."""
+
+    return name.endswith("_master.h5") or name.endswith("_master_wrapper.h5")
+
+
+def _showptycho_master_candidates(path: pathlib.Path) -> list[pathlib.Path]:
+    """Find supported ShowPtycho source masters in a folder."""
+
+    masters: set[pathlib.Path] = set()
+    for pattern in SHOWPTYCHO_MASTER_PATTERNS:
+        masters.update(path.glob(pattern))
+    return sorted(masters)
+
+
+def _showptycho_folder(path: pathlib.Path) -> pathlib.Path:
+    """Return the folder for a ShowPtycho WebGPU export, or raise with next steps."""
+    folder = path.parent if path.is_file() and path.name == "index.html" else path
+    if not folder.is_dir():
+        raise FileNotFoundError(f"not a ShowPtycho folder export: {path}")
+    index = folder / "index.html"
+    manifest = folder / "manifest.json"
+    if not index.is_file():
+        raise ValueError(f"ShowPtycho folder export is missing index.html: {folder}")
+    if not manifest.is_file():
+        raise ValueError(f"ShowPtycho folder export is missing manifest.json: {folder}")
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"ShowPtycho manifest is not valid JSON: {manifest}") from exc
+    format_name = str(payload.get("format", ""))
+    if not format_name.startswith(SHOWPTYCHO_FOLDER_FORMAT):
+        raise ValueError(
+            "not a ShowPtycho WebGPU folder export; expected manifest format "
+            f"{SHOWPTYCHO_FOLDER_FORMAT!r}, got {format_name!r}"
+        )
+    return folder
+
+
+def _is_showptycho_folder_export(path: pathlib.Path) -> bool:
+    """Best-effort detector used by ``quantem show`` before normal image/4D routing."""
+    folder = path.parent if path.is_file() and path.name == "index.html" else path
+    manifest = folder / "manifest.json"
+    if not manifest.is_file():
+        return False
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return str(payload.get("format", "")).startswith(SHOWPTYCHO_FOLDER_FORMAT)
+
+
+def _showptycho_master_source(path: pathlib.Path) -> pathlib.Path:
+    """Resolve a ShowPtycho source master from a file or one-master folder."""
+
+    if path.is_file():
+        if not _is_showptycho_master_name(path.name):
+            raise ValueError(
+                "ShowPtycho generation expects *_master.h5 or "
+                f"*_master_wrapper.h5, got {path.name}"
+            )
+        return path
+    masters = _showptycho_master_candidates(path)
+    if not masters:
+        raise ValueError(f"no ShowPtycho master HDF5 file found in {path}")
+    if len(masters) > 1:
+        raise ValueError(
+            "ShowPtycho generation expects one master at a time; pass the "
+            f"specific master file (found {len(masters)} in {path})."
+        )
+    return masters[0]
+
+
+def _showptycho_source_stem(master: pathlib.Path) -> str:
+    """Return the microscope source stem without the Arina ``_master`` suffix."""
+
+    stem = master.stem
+    if stem.endswith("_master_wrapper"):
+        return stem[:-len("_master_wrapper")]
+    return stem[:-len("_master")] if stem.endswith("_master") else stem
+
+
+def _showptycho_output_dir(master: pathlib.Path, args: argparse.Namespace) -> pathlib.Path:
+    """Resolve the ShowPtycho folder output path."""
+
+    if args.out:
+        target = pathlib.Path(args.out).expanduser()
+        if target.suffix.lower() in {".html", ".htm", ".ipynb"}:
+            raise ValueError("ShowPtycho writes a folder export; pass --out as a directory.")
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+    target = _default_out_dir() / f"{_showptycho_source_stem(master)}_showptycho"
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _showptycho_calibration_search_paths(master: pathlib.Path) -> list[pathlib.Path]:
+    """Nearby calibration files created by the QuantEM ptychography workflow."""
+
+    stem = _showptycho_source_stem(master)
+    root = master.parent
+    return [
+        root / "quantem" / "screen" / "_calibrations.json",
+        root / "quantem" / "screen" / stem / "calibration.json",
+        root / "quantem" / "ptycho" / stem / "calibration.json",
+    ]
+
+
+def _showptycho_master_calib_paths(master: pathlib.Path) -> list[pathlib.Path]:
+    """Nearby run metadata files that can fill microscope geometry."""
+
+    stem = _showptycho_source_stem(master)
+    root = master.parent
+    return [
+        root / "quantem" / "ptycho" / stem / "master_calib.json",
+        root / "quantem" / "ptycho" / stem / "_runspec.json",
+    ]
+
+
+def _mapping_matches_showptycho_source(
+    payload: dict,
+    *,
+    master: pathlib.Path,
+) -> bool:
+    """Return whether a calibration object belongs to ``master``."""
+
+    stem = _showptycho_source_stem(master)
+    candidates = {
+        str(payload.get("source_stem", "")),
+        str(payload.get("label", "")),
+    }
+    source_file = payload.get("source_file") or payload.get("master_path")
+    if source_file:
+        candidates.add(_showptycho_source_stem(pathlib.Path(str(source_file))))
+    return stem in candidates or master.stem in candidates
+
+
+def _calibration_from_showptycho_mapping(payload: dict):
+    """Convert a calibration mapping to ``PtychoCalibration``."""
+
+    from quantem.widget.showptycho import PtychoCalibration
+
+    aberrations = {
+        str(k): float(v) for k, v in (payload.get("aberrations") or {}).items()
+    }
+    if "C10" not in aberrations and "C10_nm" in payload:
+        aberrations["C10"] = float(payload["C10_nm"])
+    if "C12" not in aberrations and "C12_nm" in payload:
+        aberrations["C12"] = float(payload["C12_nm"])
+    if "phi12" not in aberrations and "phi12_rad" in payload:
+        aberrations["phi12"] = float(payload["phi12_rad"])
+    if "phi12" not in aberrations and "phi12_deg" in payload:
+        import math
+
+        aberrations["phi12"] = math.radians(float(payload["phi12_deg"]))
+    if "rotation_angle_deg" not in payload:
+        raise ValueError("calibration is missing rotation_angle_deg")
+    return PtychoCalibration(
+        rotation_angle_deg=float(payload["rotation_angle_deg"]),
+        aberrations=aberrations,
+        higher_order={
+            str(k): float(v) for k, v in (payload.get("higher_order") or {}).items()
+        },
+        flip_phase=bool(payload.get("flip_phase", False)),
+        voltage_kV=payload.get("voltage_kV") or payload.get("voltage_kv"),
+        semiangle_mrad=payload.get("semiangle_mrad") or payload.get("semiangle"),
+        scan_sampling_A=(
+            payload.get("scan_sampling_A")
+            or payload.get("scan_sampling")
+            or payload.get("scan_sampling_A_per_px")
+        ),
+        loss=payload.get("loss"),
+        source_file=payload.get("source_file"),
+        source_stem=payload.get("source_stem"),
+        label=payload.get("label"),
+        notes=str(payload.get("notes", "")),
+    )
+
+
+def _load_showptycho_calibration(path: pathlib.Path, *, master: pathlib.Path):
+    """Load a single calibration, choosing the matching entry from a list file."""
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict) and isinstance(payload.get("calibrations"), list):
+        payload = payload["calibrations"]
+    if isinstance(payload, list):
+        matches = [
+            item for item in payload
+            if isinstance(item, dict)
+            and "rotation_angle_deg" in item
+            and _mapping_matches_showptycho_source(item, master=master)
+        ]
+        if not matches:
+            raise ValueError(f"no calibration in {path} matches {_showptycho_source_stem(master)}")
+
+        def score(item: dict) -> float:
+            loss = item.get("loss")
+            try:
+                return float(loss)
+            except (TypeError, ValueError):
+                return float("inf")
+
+        payload = min(matches, key=score)
+    if not isinstance(payload, dict):
+        raise ValueError(f"calibration must be a JSON object or list: {path}")
+    return _calibration_from_showptycho_mapping(payload)
+
+
+def _resolve_showptycho_calibration(master: pathlib.Path, args: argparse.Namespace):
+    """Resolve an explicit, automatic, or disabled ShowPtycho calibration."""
+
+    raw = str(getattr(args, "calibration", "auto") or "auto").strip()
+    if raw.lower() in {"none", "off", "false", "0"}:
+        return None, None
+    if raw.lower() != "auto":
+        path = pathlib.Path(raw).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"ShowPtycho calibration file not found: {path}")
+        return _load_showptycho_calibration(path, master=master), path
+    for path in _showptycho_calibration_search_paths(master):
+        if not path.is_file():
+            continue
+        try:
+            return _load_showptycho_calibration(path, master=master), path
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+            continue
+    return None, None
+
+
+def _read_showptycho_master_calib(master: pathlib.Path) -> dict:
+    """Read optional ptychography run metadata next to a master."""
+
+    for path in _showptycho_master_calib_paths(master):
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
+def _first_number(mapping: dict, *keys: str) -> float | None:
+    """Return the first finite numeric value found under ``keys``."""
+
+    for key in keys:
+        value = mapping.get(key)
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if number == number:
+            return number
+    return None
+
+
+def _render_showptycho_master(
+    master: pathlib.Path,
+    args: argparse.Namespace,
+) -> pathlib.Path:
+    """Build a ShowPtycho WebGPU folder from one raw ``*_master.h5`` file."""
+
+    master = master.expanduser().resolve()
+    out_dir = _showptycho_output_dir(master, args)
+    if _is_showptycho_folder_export(out_dir) and not getattr(args, "force", False):
+        print(f"ShowPtycho folder already exists: {out_dir}")
+        print("  using existing folder; pass --force to rebuild")
+        return out_dir
+
+    det_bin = _effective_det_bin(args, default=1)
+    calibration, calibration_path = _resolve_showptycho_calibration(master, args)
+    meta = _read_showptycho_master_calib(master)
+    semiangle = (
+        args.semiangle_mrad
+        or (calibration.semiangle_mrad if calibration is not None else None)
+        or _first_number(meta, "semiangle_mrad", "semiangle")
+    )
+    scan_sampling = (
+        args.scan_sampling_A
+        or (calibration.scan_sampling_A if calibration is not None else None)
+        or _first_number(meta, "scan_sampling_A", "scan_sampling", "scan_sampling_A_per_px")
+    )
+    voltage = (
+        args.voltage_kv
+        or (calibration.voltage_kV if calibration is not None else None)
+        or _first_number(meta, "voltage_kV", "voltage_kv", "voltage")
+    )
+    det_sampling = (
+        args.det_sampling_mrad_px
+        or _first_number(meta, "det_sampling_mrad_per_px", "det_sampling_mrad_px")
+    )
+    if semiangle is None or scan_sampling is None:
+        raise ValueError(
+            "ShowPtycho master generation needs microscope geometry. Provide "
+            "--semiangle/--scan-sampling, or place a matching QuantEM calibration "
+            "next to the master under quantem/screen/_calibrations.json."
+        )
+    if voltage is None:
+        raise ValueError(
+            "ShowPtycho master generation needs voltage. Provide --voltage-kv, "
+            "or include voltage_kV in the matching calibration JSON."
+        )
+
+    from quantem.widget import ShowPtycho
+    from quantem.widget.io import load
+
+    print(f"{master.name}: *_master.h5 -> ShowPtycho WebGPU folder")
+    print(f"  output: {out_dir}")
+    print(f"  detector bin: {det_bin} ({'native' if det_bin == 1 else 'downsampled'})")
+    if calibration_path is not None:
+        print(f"  calibration: {calibration_path}")
+    else:
+        print("  calibration: none; using provided geometry and zero aberration start")
+    load_kwargs = {
+        "det_bin": det_bin,
+        "dtype": _showptycho_decode_dtype(args),
+        "verbose": bool(getattr(args, "verbose", False)),
+        "backend": getattr(args, "backend", "auto"),
+    }
+    result = load(str(master), **load_kwargs)
+    data = result
+    payload = getattr(result, "data", None)
+    if payload is not None and not hasattr(payload, "chunks"):
+        data = payload
+    aberrations = dict(getattr(calibration, "aberrations", {}) or {}) if calibration else None
+    rotation = float(calibration.rotation_angle_deg) if calibration else 0.0
+    widget = ShowPtycho(
+        data,
+        semiangle=float(semiangle),
+        scan_sampling=float(scan_sampling),
+        det_sampling=float(det_sampling) if det_sampling is not None else None,
+        voltage_kV=float(voltage),
+        bf_intensity_threshold=float(args.bf_threshold),
+        bf_radius=int(round(float(args.bf_radius))) if args.bf_radius is not None else None,
+        aberrations=aberrations,
+        rotation_angle_deg=rotation,
+        calibration=calibration,
+        source_file=str(master),
+        drag_bf=float(args.drag_bf),
+        size=int(args.size),
+        fft_on=bool(args.fft),
+        webgpu_preview="off",
+    )
+    return widget.export_webgpu_folder(
+        out_dir,
+        title=args.title or f"{_showptycho_source_stem(master)} ShowPtycho",
+        overwrite=True,
+        decode_dtype=_showptycho_decode_dtype(args),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1397,6 +1859,210 @@ def _default_out_dir() -> pathlib.Path:
     Downloads folder exists (servers, CI)."""
     downloads = pathlib.Path.home() / "Downloads"
     return downloads if downloads.is_dir() else pathlib.Path.cwd()
+
+
+class _RangeRequestHandler(http.server.BaseHTTPRequestHandler):
+    """Static file handler with single byte-range support for folder exports."""
+
+    root: pathlib.Path
+
+    def log_message(self, format: str, *args) -> None:  # noqa: A003 - stdlib API name.
+        if os.environ.get("QUANTEM_CLI_HTTP_LOG"):
+            super().log_message(format, *args)
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self._send_common_headers()
+        self.end_headers()
+
+    def do_HEAD(self) -> None:
+        self._serve(send_body=False)
+
+    def do_GET(self) -> None:
+        self._serve(send_body=True)
+
+    def _serve(self, *, send_body: bool) -> None:
+        path = self._resolve_path()
+        if path is None:
+            self.send_error(404, "file not found")
+            return
+        if path.is_dir():
+            path = path / "index.html"
+        if not path.is_file():
+            self.send_error(404, "file not found")
+            return
+
+        size = path.stat().st_size
+        start, end, partial = 0, size - 1, False
+        range_header = self.headers.get("Range")
+        if range_header:
+            parsed = _parse_http_range(range_header, size)
+            if parsed is None:
+                self.send_response(416)
+                self._send_common_headers()
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            start, end = parsed
+            partial = True
+
+        content_length = max(0, end - start + 1)
+        self.send_response(206 if partial else 200)
+        self._send_common_headers()
+        self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+        self.send_header("Content-Length", str(content_length))
+        self.send_header("Last-Modified", email.utils.formatdate(path.stat().st_mtime, usegmt=True))
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+
+        if not send_body:
+            return
+        with path.open("rb") as handle:
+            self._send_file_body(handle, start=start, length=content_length)
+
+    def _send_common_headers(self) -> None:
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Range, Content-Type")
+
+    def _send_file_body(self, handle, *, start: int, length: int) -> None:
+        """Send a file range with zero-copy when the local socket supports it."""
+        if length <= 0:
+            return
+        if not os.environ.get("QUANTEM_DISABLE_HTTP_SENDFILE") and hasattr(self.connection, "sendfile"):
+            try:
+                self.connection.sendfile(handle, offset=start, count=length)
+                return
+            except BrokenPipeError:
+                return
+            except (OSError, ValueError):
+                pass
+        handle.seek(start)
+        remaining = length
+        chunk_bytes = _range_fallback_chunk_bytes()
+        while remaining > 0:
+            chunk = handle.read(min(chunk_bytes, remaining))
+            if not chunk:
+                break
+            try:
+                self.wfile.write(chunk)
+            except BrokenPipeError:
+                break
+            remaining -= len(chunk)
+
+    def _resolve_path(self) -> pathlib.Path | None:
+        parsed = urllib.parse.urlsplit(self.path)
+        raw_path = urllib.parse.unquote(parsed.path)
+        norm = posixpath.normpath(raw_path)
+        rel = pathlib.Path(norm.lstrip("/"))
+        root = self.root.resolve()
+        candidate = root / rel
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return None
+        return candidate
+
+
+def _range_fallback_chunk_bytes() -> int:
+    """Return the fallback HTTP chunk size for large local folder exports."""
+    raw = os.environ.get("QUANTEM_HTTP_RANGE_CHUNK_MB", "")
+    if raw:
+        try:
+            mb = int(raw)
+        except ValueError:
+            mb = 16
+        return max(1, mb) * 1024 * 1024
+    return _RANGE_FALLBACK_CHUNK_BYTES
+
+
+def _parse_http_range(value: str, size: int) -> tuple[int, int] | None:
+    """Parse a single HTTP byte range header."""
+    match = _RANGE_RE.fullmatch(value.strip())
+    if not match or size < 0:
+        return None
+    start_text, end_text = match.groups()
+    if start_text == "" and end_text == "":
+        return None
+    if start_text == "":
+        suffix = int(end_text)
+        if suffix <= 0:
+            return None
+        start = max(0, size - suffix)
+        end = size - 1
+    else:
+        start = int(start_text)
+        end = int(end_text) if end_text else size - 1
+    if start >= size or end < start:
+        return None
+    return start, min(end, size - 1)
+
+
+def _showptycho_manifest(folder: pathlib.Path) -> dict:
+    """Read a ShowPtycho folder manifest after validation."""
+    return json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+
+
+def _host_for_url(bind: str) -> str:
+    return "127.0.0.1" if bind in {"", "0.0.0.0", "::"} else bind
+
+
+def _serve_showptycho_folder(
+    folder: pathlib.Path,
+    *,
+    bind: str,
+    port: int | None,
+    no_open: bool,
+) -> None:
+    """Serve a ShowPtycho WebGPU folder export and open it for the user."""
+    folder = _showptycho_folder(folder)
+    manifest = _showptycho_manifest(folder)
+    arrays = manifest.get("arrays", {})
+    g_bf = arrays.get("g_bf", {})
+    g_path = folder / str(g_bf.get("path", "g_bf.c64"))
+    source = manifest.get("source", {})
+    shape = g_bf.get("shape", [])
+    print(f"ShowPtycho folder: {folder}")
+    if source.get("kind") == "hdf5":
+        data_files = source.get("data_files") or []
+        link_mode = ", ".join(source.get("link_mode") or []) or "linked"
+        print(
+            "  source: compressed HDF5 "
+            f"{source.get('master', 'source master')} + {len(data_files)} data file(s) "
+            f"({link_mode}); no persistent BF-G cache"
+        )
+    elif len(shape) == 3 and g_path.exists():
+        print(
+            "  BF payload: "
+            f"{shape[0]} BF terms x {shape[1]} x {shape[2]} phase grid, "
+            f"{_fmt_bytes(g_path.stat().st_size)}"
+        )
+    elif g_path.exists():
+        print(f"  BF payload: {_fmt_bytes(g_path.stat().st_size)}")
+    else:
+        print(f"  warning: BF payload missing: {g_path}", file=sys.stderr)
+    if no_open:
+        print("  ready: run without --no-open to serve and open this folder.")
+        return
+
+    handler = type("QuantemShowPtychoRangeHandler", (_RangeRequestHandler,), {"root": folder})
+    server = http.server.ThreadingHTTPServer((bind, port or 0), handler)
+    actual_port = server.server_address[1]
+    url = f"http://{_host_for_url(bind)}:{actual_port}/index.html"
+    print(f"  open: {url}")
+    print("  serving folder export; press Ctrl-C to stop")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    headless = sys.platform != "darwin" and not os.environ.get("DISPLAY")
+    if not headless:
+        webbrowser.open(url)
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        server.shutdown()
+    finally:
+        server.server_close()
 
 
 def _open_html(path: pathlib.Path, *, serve: bool, no_open: bool) -> None:

@@ -25,9 +25,20 @@ export interface H5Volume {
   chunkScanCounts: number[];   // frame count per chunk (== spec.nFrames)
 }
 
+export interface H5MasterInfo {
+  badPixels: number[];
+  detectorShape?: [number, number];
+  totalFrames?: number;
+}
+
 // jsfive dataset path candidates, in priority order. Arina data files use entry/data/data;
 // fall back to a search for the first 3D unsigned-int dataset for other layouts.
 const PATH_CANDIDATES = ["entry/data/data", "entry/data", "data"];
+const PIXEL_MASK_CANDIDATES = [
+  "entry/instrument/detector/detectorSpecific/pixel_mask",
+  "entry/instrument/detector/pixel_mask",
+  "entry/instrument/detector/detectorSpecific/pixel_mask_applied",
+];
 
 function readBE32(b: Uint8Array, off: number): number {
   return ((b[off] << 24) | (b[off + 1] << 16) | (b[off + 2] << 8) | b[off + 3]) >>> 0;
@@ -94,10 +105,50 @@ function findStack(file: any): any {
   return found;
 }
 
+function readPixelMask(file: any): { badPixels: number[]; detectorShape?: [number, number] } {
+  for (const path of PIXEL_MASK_CANDIDATES) {
+    try {
+      const ds = file.get(path);
+      const shape = Array.isArray(ds?.shape) && ds.shape.length === 2
+        ? [Number(ds.shape[0]), Number(ds.shape[1])] as [number, number]
+        : undefined;
+      const values = ds?.value as ArrayLike<number> | undefined;
+      if (!values || !Number.isFinite(values.length)) continue;
+      const badPixels: number[] = [];
+      for (let i = 0; i < values.length; i++) {
+        if (Number(values[i]) !== 0) badPixels.push(i);
+      }
+      return { badPixels, detectorShape: shape };
+    } catch {
+      // Try the next common Arina/Dectris metadata path.
+    }
+  }
+  return { badPixels: [] };
+}
+
+function readScalarNumber(file: any, path: string): number | undefined {
+  try {
+    const value = file.get(path)?.value as ArrayLike<number> | number | undefined;
+    const raw = typeof value === "number" ? value : value && value.length ? Number(value[0]) : undefined;
+    return Number.isFinite(raw) && raw !== undefined ? Number(raw) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function readH5MasterInfo(buffer: ArrayBuffer, name = "master"): H5MasterInfo {
+  const file = new jsfive.File(buffer, name);
+  const mask = readPixelMask(file);
+  const ntrigger = readScalarNumber(file, "entry/instrument/detector/detectorSpecific/ntrigger");
+  const nimages = readScalarNumber(file, "entry/instrument/detector/detectorSpecific/nimages");
+  const totalFrames = ntrigger ?? (nimages !== undefined && nimages > 1 ? nimages : undefined);
+  return { ...mask, totalFrames };
+}
+
 // Parse one Arina/HDF5 file's raw chunks into chunked Bslz4Spec(s). framesPerChunk bounds
 // the decoded GPU buffer (uint8 stack <= ~0.95 GB): detSize bytes/frame, so the default
 // keeps each chunk under the 1 GB per-buffer cap.
-export function readH5Volume(buffer: ArrayBuffer, name: string, _framesPerChunk?: number): H5Volume {
+export function readH5Volume(buffer: ArrayBuffer, name: string, framesPerChunk?: number): H5Volume {
   const file = new jsfive.File(buffer, name);
   const ds = findStack(file);
   const [nFrames, detRows, detCols] = ds.shape;
@@ -120,18 +171,48 @@ export function readH5Volume(buffer: ArrayBuffer, name: string, _framesPerChunk?
   const blockBytes = readBE32(fileBytes, offsets[0] + 8);
   const blockElems = blockBytes / srcBytes;
   const nBlocksPerFrame = Math.ceil(detSize / blockElems);
-  const meta: number[] = [];
-  for (let f = 0; f < nFrames; f++) {
-    // each chunk: 12B header, then per block [4B BE clen][lz4]; record the absolute offset
-    // of every block's LZ4 bytes (addr + pos + 4) and its compressed length.
+  const frameCompressedEnds: number[] = new Array(nFrames);
+  const readFrameBlockMeta = (f: number, rangeStart: number, out: number[]): void => {
+    // Each frame chunk: 12B header, then per block [4B BE clen][lz4].
+    // Record offsets relative to this frame group's compressed byte range.
     const addr = offsets[f];
     let pos = 12;
     for (let b = 0; b < nBlocksPerFrame; b++) {
       const clen = readBE32(fileBytes, addr + pos);
-      meta.push(addr + pos + 4, clen);
+      out.push(addr + pos + 4 - rangeStart, clen);
       pos += 4 + clen;
     }
+    frameCompressedEnds[f] = addr + pos;
+  };
+  for (let f = 0; f < nFrames; f++) {
+    readFrameBlockMeta(f, 0, []);
   }
-  const spec: Bslz4Spec = { compressed: fileBytes, blockMeta: new Uint32Array(meta), nFrames, nBlocksPerFrame, blockElems, detSize };
-  return { name, detRows, detCols, detSize, blockElems, nBlocksPerFrame, srcDtype, nFrames, chunks: [spec], chunkScanCounts: [nFrames] };
+
+  const defaultFramesPerChunk = Math.max(1, Math.floor((1024 * 1024 * 1024) / detSize));
+  const frameStep = Math.max(1, Math.floor(framesPerChunk || defaultFramesPerChunk));
+  const chunks: Bslz4Spec[] = [];
+  const chunkScanCounts: number[] = [];
+  for (let start = 0; start < nFrames; start += frameStep) {
+    const stop = Math.min(nFrames, start + frameStep);
+    let rangeStart = Number.POSITIVE_INFINITY;
+    let rangeEnd = 0;
+    for (let f = start; f < stop; f++) {
+      rangeStart = Math.min(rangeStart, offsets[f]);
+      rangeEnd = Math.max(rangeEnd, frameCompressedEnds[f]);
+    }
+    const meta: number[] = [];
+    for (let f = start; f < stop; f++) {
+      readFrameBlockMeta(f, rangeStart, meta);
+    }
+    chunks.push({
+      compressed: fileBytes.subarray(rangeStart, rangeEnd),
+      blockMeta: new Uint32Array(meta),
+      nFrames: stop - start,
+      nBlocksPerFrame,
+      blockElems,
+      detSize,
+    });
+    chunkScanCounts.push(stop - start);
+  }
+  return { name, detRows, detCols, detSize, blockElems, nBlocksPerFrame, srcDtype, nFrames, chunks, chunkScanCounts };
 }

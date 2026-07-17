@@ -259,7 +259,7 @@ export class Show4DSTEMCompute {
   // 0-255, half memory) or "uint16" (lossless). The decoded buffer is packed in
   // [scanPos][detPixel] order matching sample() for that mode, so masked_sum /
   // reduceFrames run on it unchanged.
-  static async createFromBslz4(spec: Bslz4Spec, dtype: "uint8" | "uint16" | "float32" = "uint8", srcDtype: "uint8" | "uint16" | "float32" = "uint16"): Promise<Show4DSTEMCompute | null> {
+  static async createFromBslz4(spec: Bslz4Spec, dtype: "uint8" | "uint16" | "float32" = "uint8", srcDtype: "uint8" | "uint16" | "uint32" | "float32" = "uint16"): Promise<Show4DSTEMCompute | null> {
     const decoded = await decodeBslz4ToStack(spec, dtype, srcDtype);
     if (!decoded) return null;
     const chunks: Chunk[] = [{ buffer: decoded.buffer, startScan: 0, nScan: spec.nFrames }];
@@ -280,7 +280,7 @@ export class Show4DSTEMCompute {
   static async createFromBslz4Chunked(
     chunkSpecs: (Bslz4Spec & { startScan: number; nScan: number })[],
     scanCount: number, detSize: number, dtype: "uint8" | "uint16" | "float32" = "uint8",
-    srcDtype: "uint8" | "uint16" | "float32" = "uint16",
+    srcDtype: "uint8" | "uint16" | "uint32" | "float32" = "uint16",
   ): Promise<Show4DSTEMCompute | null> {
     // Batch the per-chunk decodes (one submit + await per group) so the GPU overlaps
     // upload and compute instead of draining after every chunk.
