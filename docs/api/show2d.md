@@ -65,7 +65,7 @@ no console error, no NaN frame).
 | More menu: Flip | `image_flips_horizontal`, `image_flips_vertical` | Display-only horizontal/vertical flips help compare orientations and point-defect neighborhoods without changing stored arrays |
 | More menu: Rotate | `image_rotations`, `rotation_scope`; `rotation=`, `rotations=` | Display-only 0/90/180/270° rotation for every panel or the selected panel; raw data and `(row, col)` coordinates stay unchanged |
 | Panel inset plots | `inset_plots` | Optional per-panel mini line plots for calibration curves, ACF/R sweeps, or other scientific context; hover reports the nearest plotted coordinate |
-| Scale bar placement | `scale_bar_position`, `show_zoom_indicator` | Move the scale bar between bottom corners and hide the zoom badge when an inset plot needs that space |
+| Scale bar placement | `scale_bar_position`, `show_zoom_indicator` | Move the scale bar between bottom corners and opt into a zoom badge when a workflow needs a live magnification readout |
 
 ## Rich panel labels and math
 
@@ -381,7 +381,7 @@ Accepted `scale_bar_style` keys:
 | `font_family`, `font_size`, `font_weight` | Scale-bar label typography |
 | `color` | Bar and label fill color |
 | `outline_color`, `outline_width` | Label text stroke |
-| `shadow_color` | Fallback label/bar shadow when no outline is used |
+| `shadow_color` | Fallback label shadow when no outline is used; also opts into a small scale-bar shadow |
 | `bar_height` | Bar thickness in SVG/browser CSS pixels |
 | `label_gap` | Pixels between label baseline and bar |
 | `offset` | Pixel nudge `(dx, dy)` for the whole scale bar |

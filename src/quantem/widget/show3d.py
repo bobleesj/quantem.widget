@@ -880,11 +880,10 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         any handle resizes the entire multi-panel canvas (linked).  Set
         ``False`` to declutter a screenshot or printed figure where the
         operator already has the layout they want.
-    show_zoom_indicator : bool, default True
+    show_zoom_indicator : bool, default False
         Draw the live ``1.0×``-style zoom readout at the bottom-left of every
-        real-space panel and every FFT tile or inset. Set ``False`` for clean
-        static layouts or when the scale bar alone is enough to communicate
-        scale.
+        real-space panel and every FFT tile or inset. The default keeps clean
+        static layouts where the scale bar alone communicates scale.
     show_scale_bar : bool, default True
         Draw the bottom-right scale bar. When ``pixel_size`` is provided the
         label uses physical units; otherwise it shows pixel units. Set
@@ -1126,6 +1125,7 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
     # Per-panel visibility. Hidden panels stay in state/export but are collapsed
     # from the canvas grid and skipped by panel-scoped frontend computations.
     hidden_panels = traitlets.List(traitlets.Int(), default_value=[]).tag(sync=True)
+    selected_panels = traitlets.List(traitlets.Int(), default_value=[]).tag(sync=True)
     panel_order = traitlets.List(traitlets.Int(), default_value=[]).tag(sync=True)
     # Real frame count per panel for stack comparison: stacks of different
     # lengths get auto-padded to the longest; this trait lets JS mark
@@ -1147,7 +1147,7 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
     max_cols = traitlets.Int(4).tag(sync=True)
     # Per-widget customization for multi-panel display.
     show_resize_handles = traitlets.Bool(True).tag(sync=True)
-    show_zoom_indicator = traitlets.Bool(True).tag(sync=True)
+    show_zoom_indicator = traitlets.Bool(False).tag(sync=True)
     show_panel_titles = traitlets.Bool(True).tag(sync=True)
     panel_title_font_size = traitlets.Int(11).tag(sync=True)
     panel_title_style = traitlets.Dict(default_value={}).tag(sync=True)
@@ -1680,6 +1680,24 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             raise traitlets.TraitError(
                 "hidden_panels cannot hide every panel; at least one panel must remain visible"
             )
+        return clean
+
+    @traitlets.validate("selected_panels")
+    def _validate_selected_panels(self, proposal: dict) -> list[int]:
+        """Normalize selected panel indices while preserving display order."""
+        n_pan = int(self.n_panels)
+        clean: list[int] = []
+        seen: set[int] = set()
+        for value in proposal["value"]:
+            if isinstance(value, bool):
+                continue
+            try:
+                idx = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= idx < n_pan and idx not in seen:
+                clean.append(idx)
+                seen.add(idx)
         return clean
 
     def _normalize_hidden_page_slots(
@@ -2455,7 +2473,7 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 "show_stats": False,
                 "show_panel_titles": True,
                 "show_resize_handles": True,
-                "show_zoom_indicator": True,
+                "show_zoom_indicator": False,
                 "show_scale_bar": True,
             },
             overrides={
@@ -3560,13 +3578,18 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             vmax = [self.vmax_per_panel[p] if p < len(self.vmax_per_panel) else None for p in panel_indices]
         elif self.vmax is not None:
             vmax = self.vmax
+        cmap = (
+            [self.panel_cmaps[p] if p < len(self.panel_cmaps) else self.cmap for p in panel_indices]
+            if self.panel_cmaps
+            else self.cmap
+        )
 
         chrome = self._gallery_export_chrome()
         return Show2D(
             frames,
             labels=labels,
             title=title if title is not None else self.title,
-            cmap=list(self.panel_cmaps) if self.panel_cmaps else self.cmap,
+            cmap=cmap,
             sampling=self.pixel_size if self.pixel_size > 0 else None,
             units=self.pixel_unit,
             scale_bar_visible=self.scale_bar_visible,
@@ -3797,6 +3820,7 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         self.panel_titles = []
         self.starred = [-1]
         self.hidden_panels = []
+        self.selected_panels = []
         self.panel_order = []
         self.panel_groups = []
         self.panel_annotations = []
@@ -4103,6 +4127,7 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             "bookmarked_frames": self.bookmarked_frames,
             "starred": list(self.starred),
             "hidden_panels": list(self.hidden_panels),
+            "selected_panels": list(self.selected_panels),
             "panel_order": list(self.panel_order),
             "n_pages": int(self.n_pages),
             "page_idx": int(self.page_idx),
@@ -4682,6 +4707,22 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             if len(clean) >= n_pan:
                 clean = clean[:-1]
             state["hidden_panels"] = clean
+        if "selected_panels" in state and isinstance(state["selected_panels"], list):
+            n_pan = int(self.n_panels)
+            selected: list[int] = []
+            seen: set[int] = set()
+            hidden = set(state.get("hidden_panels", self.hidden_panels) or [])
+            for value in state["selected_panels"]:
+                if isinstance(value, bool):
+                    continue
+                try:
+                    idx = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= idx < n_pan and idx not in seen and idx not in hidden:
+                    selected.append(idx)
+                    seen.add(idx)
+            state["selected_panels"] = selected
         if "hidden_page_slots" in state and isinstance(state["hidden_page_slots"], list):
             state["hidden_page_slots"] = self._normalize_hidden_page_slots(
                 state["hidden_page_slots"],
@@ -5796,7 +5837,14 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         show_scale_bar: bool | None = None,
         show_zoom: bool | None = None,
     ) -> list[Any]:
-        """Render panel-only animation frames as RGB PIL images."""
+        """Render panel-only animation frames as RGB PIL images.
+
+        This renderer keeps explicit publication chrome from the live view:
+        panel titles, scale bars, zoom labels, inter-panel gaps, gallery outer
+        borders, and per-panel inner borders. Transient UI affordances such as
+        hover, focus, selection outlines, and resize handles are intentionally
+        omitted.
+        """
         from quantem.widget.render import gif as gif_utils
 
         if quality not in gif_utils.QUALITY_SCALE:
@@ -5823,7 +5871,10 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         outer_border_color = str(chrome["gallery_outer_border_color"]) or gap_background
         panel_inner_border = max(0, int(round(float(chrome["panel_inner_border_px"]) * scale)))
         panel_inner_border_color = str(chrome["panel_inner_border_color"]) or "black"
-        title_font_size = max(8, int(round(float(self.panel_title_font_size) * scale)))
+        title_font_size = max(
+            gif_utils.MIN_TITLE_FONT_SIZE,
+            int(round(float(self.panel_title_font_size) * scale)),
+        )
         include_scale_bar = bool(self.scale_bar_visible) if show_scale_bar is None else bool(show_scale_bar)
         include_zoom = bool(self.show_zoom_indicator) if show_zoom is None else bool(show_zoom)
         include_panel_titles = bool(self.show_panel_titles) if show_panel_titles is None else bool(show_panel_titles)
@@ -5896,8 +5947,9 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
 
         Each frame is colorized with the current ``cmap`` and contrast
         (``vmin`` / ``vmax`` or percentile auto-contrast, ``log_scale`` honored),
-        carries per-panel scale bars when enabled, respects hidden panels and
-        panel titles, and excludes FFT/profiles/controls from the export.
+        carries per-panel scale bars when enabled, respects hidden panels,
+        panel titles, inter-panel gaps, gallery outer borders, and per-panel
+        inner borders, and excludes FFT/profiles/controls from the export.
 
         Parameters
         ----------
@@ -5990,7 +6042,8 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
 
         The rendered content matches :meth:`save_gif`: image panels only, with
         current colormap/contrast, panel titles, frame labels, hidden panels,
-        and scale bars. FFT/profiles/controls are omitted.
+        scale bars, inter-panel gaps, gallery outer borders, and per-panel
+        inner borders. FFT/profiles/controls are omitted.
 
         Parameters
         ----------

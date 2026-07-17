@@ -68,6 +68,7 @@ const SHOW3D_TO_SHOW2D_LINKED_TRAITS = [
   { source: "show_fft" },
   { source: "hidden_panels" },
   { source: "hidden_page_slots" },
+  { source: "selected_panels" },
 ];
 
 const SHOW3D_STANDALONE_VIEW_STATE_KEYS = [
@@ -149,6 +150,7 @@ const SHOW3D_STANDALONE_VIEW_STATE_KEYS = [
   "rotation_scope",
   "row_markers",
   "scale_bar_visible",
+  "selected_panels",
   "show_controls",
   "show_denoise",
   "show_fft",
@@ -414,10 +416,13 @@ function renderLatexMath(expr: string, keyPrefix: string): React.ReactNode[] {
   return nodes;
 }
 
+// Same UI font as panel titles / badges (not Cambria Math italic) so χ², λ, etc. match body text.
+const UI_MATH_FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+
 function renderMathExpression(expr: string, keyPrefix: string): React.ReactNode {
   const normalized = expr.trim().replace(/\\+(?=[A-Za-z])/g, "\\");
   return (
-    <span key={keyPrefix} data-quantem-math="true" style={{ fontFamily: "Cambria Math, STIX Two Math, Times New Roman, serif", fontStyle: "italic" }}>
+    <span key={keyPrefix} data-quantem-math="true" style={{ fontFamily: UI_MATH_FONT, fontStyle: "normal" }}>
       {renderLatexMath(normalized, keyPrefix)}
     </span>
   );
@@ -740,6 +745,58 @@ type Show3DSavePickerOptions = {
 
 type Show3DWindow = Window & typeof globalThis & {
   showSaveFilePicker?: (options?: Show3DSavePickerOptions) => Promise<Show3DFileHandle>;
+};
+
+type BrowserEncodedVideoChunk = {
+  type: string;
+  timestamp: number;
+  duration?: number | null;
+  byteLength: number;
+  copyTo: (destination: Uint8Array) => void;
+};
+
+type BrowserEncodedVideoChunkMetadata = {
+  decoderConfig?: {
+    description?: ArrayBufferLike | ArrayBufferView<ArrayBufferLike>;
+  };
+};
+
+type BrowserVideoEncoderConfig = {
+  codec: string;
+  width: number;
+  height: number;
+  bitrate: number;
+  framerate: number;
+  hardwareAcceleration?: "prefer-hardware" | "prefer-software" | "no-preference";
+  avc?: { format: "avc" | "annexb" };
+};
+
+type BrowserVideoEncoder = {
+  configure: (config: BrowserVideoEncoderConfig) => void;
+  encode: (frame: BrowserVideoFrame, options?: { keyFrame?: boolean }) => void;
+  flush: () => Promise<void>;
+  close: () => void;
+};
+
+type BrowserVideoEncoderConstructor = {
+  new(init: {
+    output: (chunk: BrowserEncodedVideoChunk, metadata?: BrowserEncodedVideoChunkMetadata) => void;
+    error: (error: unknown) => void;
+  }): BrowserVideoEncoder;
+  isConfigSupported?: (config: BrowserVideoEncoderConfig) => Promise<{ supported: boolean; config?: BrowserVideoEncoderConfig }>;
+};
+
+type BrowserVideoFrame = {
+  close: () => void;
+};
+
+type BrowserVideoFrameConstructor = {
+  new(source: HTMLCanvasElement, init: { timestamp: number; duration: number }): BrowserVideoFrame;
+};
+
+type BrowserMp4Window = Window & typeof globalThis & {
+  VideoEncoder?: BrowserVideoEncoderConstructor;
+  VideoFrame?: BrowserVideoFrameConstructor;
 };
 
 type PanelStats = {
@@ -2004,6 +2061,8 @@ function pointToSegmentDistance(col: number, row: number, col0: number, row0: nu
 // never clobbers a cached playback slot.
 const OFFLINE_HIST_SLOT = 1_000_000;
 const CANVAS_TARGET_SIZE = 600;
+const MAX_INTERACTIVE_GRID_CANVAS_EDGE = 4096;
+const MAX_INTERACTIVE_GRID_CANVAS_PIXELS = 8_388_608;
 const MAX_PANEL_COLUMNS = 12;
 const FFT_OVERLAY_MAX_SOURCE_SIZE = 512;
 const FFT_PLAYBACK_UPDATE_INTERVAL_MS = 250;
@@ -2012,6 +2071,11 @@ const MIN_IMAGE_ZOOM = 1;
 const MAX_ZOOM = 30;
 const MAX_PLAYBACK_FPS = 60;
 const HTML_EXPORT_OVERHEAD_BYTES = 700_000;
+const DEFAULT_ANIMATION_EXPORT_FPS = 8;
+const MIN_ANIMATION_TITLE_FONT_PX = 12;
+const MIN_ANIMATION_SCALE_FONT_PX = 12;
+const MIN_ANIMATION_SCALE_BAR_THICKNESS_PX = 5;
+const MIN_ANIMATION_OVERLAY_MARGIN_PX = 12;
 const ANIMATION_QUALITY_SCALE: Record<string, number> = { low: 0.35, medium: 0.6, high: 1.0 };
 const ANIMATION_QUALITY_OPTIONS = ["low", "medium", "high"] as const;
 type AnimationQuality = typeof ANIMATION_QUALITY_OPTIONS[number];
@@ -2201,6 +2265,242 @@ function encodeIndexedGif(
   return concatUint8(parts);
 }
 
+type Mp4Sample = {
+  data: Uint8Array;
+  timestamp: number;
+  duration: number;
+  key: boolean;
+};
+
+function mp4U8(...values: number[]): Uint8Array {
+  return new Uint8Array(values.map((value) => value & 0xff));
+}
+
+function mp4U16(value: number): Uint8Array {
+  const v = Math.max(0, Math.min(0xffff, Math.round(value)));
+  return new Uint8Array([(v >>> 8) & 0xff, v & 0xff]);
+}
+
+function mp4U32(value: number): Uint8Array {
+  const v = Math.max(0, Math.min(0xffffffff, Math.round(value)));
+  return new Uint8Array([(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff]);
+}
+
+function mp4Ascii(value: string): Uint8Array {
+  return asciiBytes(value);
+}
+
+function mp4Zeros(length: number): Uint8Array {
+  return new Uint8Array(Math.max(0, Math.round(length)));
+}
+
+function copyMp4Bytes(source: ArrayBufferLike | ArrayBufferView<ArrayBufferLike>): Uint8Array {
+  const view = ArrayBuffer.isView(source)
+    ? new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    : new Uint8Array(source);
+  const out = new Uint8Array(view.byteLength);
+  out.set(view);
+  return out;
+}
+
+function mp4Box(type: string, ...payloads: Uint8Array[]): Uint8Array {
+  const payload = concatUint8(payloads);
+  const size = 8 + payload.byteLength;
+  return concatUint8([mp4U32(size), mp4Ascii(type), payload]);
+}
+
+function mp4FullBox(type: string, version: number, flags: number, ...payloads: Uint8Array[]): Uint8Array {
+  return mp4Box(
+    type,
+    mp4U8(version & 0xff, (flags >>> 16) & 0xff, (flags >>> 8) & 0xff, flags & 0xff),
+    ...payloads,
+  );
+}
+
+function mp4Fixed16(value: number): Uint8Array {
+  return mp4U32(Math.round(value * 65536));
+}
+
+function mp4Fixed8(value: number): Uint8Array {
+  return mp4U16(Math.round(value * 256));
+}
+
+function mp4CompressorName(value: string): Uint8Array {
+  const out = new Uint8Array(32);
+  const name = asciiBytes(value.slice(0, 31));
+  out[0] = name.byteLength;
+  out.set(name, 1);
+  return out;
+}
+
+function mp4Matrix(): Uint8Array {
+  return concatUint8([
+    mp4Fixed16(1), mp4U32(0), mp4U32(0),
+    mp4U32(0), mp4Fixed16(1), mp4U32(0),
+    mp4U32(0), mp4U32(0), mp4U32(0x40000000),
+  ]);
+}
+
+function mp4Ftyp(): Uint8Array {
+  return mp4Box("ftyp", mp4Ascii("isom"), mp4U32(0x200), mp4Ascii("isom"), mp4Ascii("iso2"), mp4Ascii("avc1"), mp4Ascii("mp41"));
+}
+
+function mp4Stts(durations: number[]): Uint8Array {
+  const entries: { count: number; duration: number }[] = [];
+  for (const duration of durations) {
+    const d = Math.max(1, Math.round(duration));
+    const last = entries[entries.length - 1];
+    if (last && last.duration === d) last.count++;
+    else entries.push({ count: 1, duration: d });
+  }
+  return mp4FullBox("stts", 0, 0, mp4U32(entries.length), ...entries.flatMap((entry) => [mp4U32(entry.count), mp4U32(entry.duration)]));
+}
+
+function mp4Stss(samples: Mp4Sample[]): Uint8Array {
+  const keys = samples
+    .map((sample, index) => sample.key ? index + 1 : 0)
+    .filter((index) => index > 0);
+  const syncSamples = keys.length ? keys : [1];
+  return mp4FullBox("stss", 0, 0, mp4U32(syncSamples.length), ...syncSamples.map(mp4U32));
+}
+
+function mp4Avc1(width: number, height: number, avcDescription: Uint8Array): Uint8Array {
+  return mp4Box(
+    "avc1",
+    mp4Zeros(6),
+    mp4U16(1),
+    mp4U16(0),
+    mp4U16(0),
+    mp4Zeros(12),
+    mp4U16(width),
+    mp4U16(height),
+    mp4Fixed16(72),
+    mp4Fixed16(72),
+    mp4U32(0),
+    mp4U16(1),
+    mp4CompressorName("QuantEM WebCodecs"),
+    mp4U16(0x18),
+    mp4U16(0xffff),
+    mp4Box("avcC", avcDescription),
+  );
+}
+
+function mp4Moov(
+  samples: Mp4Sample[],
+  width: number,
+  height: number,
+  timescale: number,
+  avcDescription: Uint8Array,
+  chunkOffset: number,
+): Uint8Array {
+  const durations = samples.map((sample) => sample.duration);
+  const totalDuration = durations.reduce((sum, duration) => sum + duration, 0);
+  const sampleSizes = samples.map((sample) => sample.data.byteLength);
+  const mvhd = mp4FullBox(
+    "mvhd",
+    0,
+    0,
+    mp4U32(0),
+    mp4U32(0),
+    mp4U32(timescale),
+    mp4U32(totalDuration),
+    mp4Fixed16(1),
+    mp4Fixed8(1),
+    mp4Zeros(10),
+    mp4Matrix(),
+    mp4Zeros(24),
+    mp4U32(2),
+  );
+  const tkhd = mp4FullBox(
+    "tkhd",
+    0,
+    0x000007,
+    mp4U32(0),
+    mp4U32(0),
+    mp4U32(1),
+    mp4U32(0),
+    mp4U32(totalDuration),
+    mp4Zeros(8),
+    mp4U16(0),
+    mp4U16(0),
+    mp4Fixed8(0),
+    mp4U16(0),
+    mp4Matrix(),
+    mp4Fixed16(width),
+    mp4Fixed16(height),
+  );
+  const mdhd = mp4FullBox("mdhd", 0, 0, mp4U32(0), mp4U32(0), mp4U32(timescale), mp4U32(totalDuration), mp4U16(0x55c4), mp4U16(0));
+  const hdlr = mp4FullBox("hdlr", 0, 0, mp4U32(0), mp4Ascii("vide"), mp4Zeros(12), mp4Ascii("VideoHandler\0"));
+  const vmhd = mp4FullBox("vmhd", 0, 1, mp4U16(0), mp4U16(0), mp4U16(0), mp4U16(0));
+  const dref = mp4FullBox("dref", 0, 0, mp4U32(1), mp4FullBox("url ", 0, 1));
+  const dinf = mp4Box("dinf", dref);
+  const stsd = mp4FullBox("stsd", 0, 0, mp4U32(1), mp4Avc1(width, height, avcDescription));
+  const stsc = mp4FullBox("stsc", 0, 0, mp4U32(1), mp4U32(1), mp4U32(samples.length), mp4U32(1));
+  const stsz = mp4FullBox("stsz", 0, 0, mp4U32(0), mp4U32(sampleSizes.length), ...sampleSizes.map(mp4U32));
+  const stco = mp4FullBox("stco", 0, 0, mp4U32(1), mp4U32(chunkOffset));
+  const stbl = mp4Box("stbl", stsd, mp4Stts(durations), mp4Stss(samples), stsc, stsz, stco);
+  const minf = mp4Box("minf", vmhd, dinf, stbl);
+  const mdia = mp4Box("mdia", mdhd, hdlr, minf);
+  const trak = mp4Box("trak", tkhd, mdia);
+  return mp4Box("moov", mvhd, trak);
+}
+
+function encodeAvcMp4(samples: Mp4Sample[], width: number, height: number, avcDescription: Uint8Array): Uint8Array {
+  if (!samples.length) throw new Error("MP4 export needs at least one encoded frame.");
+  if (!avcDescription.byteLength) throw new Error("Browser did not provide the H.264 AVC configuration needed for MP4.");
+  const timescale = 1_000_000;
+  const mdatPayload = concatUint8(samples.map((sample) => sample.data));
+  const ftyp = mp4Ftyp();
+  let moov = mp4Moov(samples, width, height, timescale, avcDescription, 0);
+  const chunkOffset = ftyp.byteLength + moov.byteLength + 8;
+  moov = mp4Moov(samples, width, height, timescale, avcDescription, chunkOffset);
+  return concatUint8([ftyp, moov, mp4Box("mdat", mdatPayload)]);
+}
+
+function browserMp4Bitrate(width: number, height: number, fps: number): number {
+  const pixelsPerSecond = Math.max(1, width * height * clampPlaybackFps(fps));
+  return Math.max(500_000, Math.min(12_000_000, Math.round(pixelsPerSecond * 0.18)));
+}
+
+function browserMp4Window(): BrowserMp4Window {
+  return window as BrowserMp4Window;
+}
+
+const BROWSER_MP4_CODECS = ["avc1.42001e", "avc1.42E01E", "avc1.42001f"];
+
+function browserMp4Config(width: number, height: number, fps: number, codec = BROWSER_MP4_CODECS[0]): BrowserVideoEncoderConfig {
+  return {
+    codec,
+    width,
+    height,
+    bitrate: browserMp4Bitrate(width, height, fps),
+    framerate: clampPlaybackFps(fps),
+    hardwareAcceleration: "no-preference",
+    avc: { format: "avc" },
+  };
+}
+
+async function selectBrowserMp4Config(width = 512, height = 512, fps = 8): Promise<BrowserVideoEncoderConfig | null> {
+  const w = browserMp4Window();
+  if (!w.VideoEncoder || !w.VideoFrame || !w.VideoEncoder.isConfigSupported) return null;
+  const evenW = width + (width % 2);
+  const evenH = height + (height % 2);
+  for (const codec of BROWSER_MP4_CODECS) {
+    try {
+      const config = browserMp4Config(evenW, evenH, fps, codec);
+      const support = await w.VideoEncoder.isConfigSupported(config);
+      if (support.supported) return support.config || config;
+    } catch {
+      // Keep probing lower/fallback H.264 profiles.
+    }
+  }
+  return null;
+}
+
+async function supportsBrowserMp4(width = 512, height = 512, fps = 8): Promise<boolean> {
+  return (await selectBrowserMp4Config(width, height, fps)) !== null;
+}
+
 function formatEstimatedHtmlSize(payloadBytes: number): string {
   const htmlBytes = Math.max(0, payloadBytes) * 4 / 3 + HTML_EXPORT_OVERHEAD_BYTES;
   const mb = htmlBytes / (1024 * 1024);
@@ -2215,12 +2515,21 @@ function animationOutputScale(
   quality: string,
   downsample = 1,
   maxEdgePx: number | null = null,
+  visiblePanels = 1,
+  maxCols = 1,
+  panelGap = 0,
 ): number {
   const base = ANIMATION_QUALITY_SCALE[quality] ?? ANIMATION_QUALITY_SCALE.medium;
   const factor = Math.max(1, Math.round(downsample || 1));
   let scale = Math.min(1, base / factor);
   if (maxEdgePx && maxEdgePx > 0) {
-    scale = Math.min(scale, maxEdgePx / Math.max(1, width, height));
+    const panels = Math.max(1, Math.round(visiblePanels || 1));
+    const cols = maxCols <= 0 ? panels : Math.max(1, Math.min(Math.round(maxCols || 1), panels));
+    const rows = Math.max(1, Math.ceil(panels / cols));
+    const gap = Math.max(0, Number(panelGap) || 0);
+    const layoutW = cols * Math.max(1, width) + Math.max(0, cols - 1) * gap;
+    const layoutH = rows * Math.max(1, height) + Math.max(0, rows - 1) * gap;
+    scale = Math.min(scale, maxEdgePx / Math.max(1, layoutW, layoutH));
   }
   return Math.max(scale, 1 / Math.max(1, width, height));
 }
@@ -2265,7 +2574,7 @@ function formatEstimatedAnimationWork(
   downsample = 1,
   maxEdgePx: number | null = null,
 ): string {
-  const scale = animationOutputScale(width, height, quality, downsample, maxEdgePx);
+  const scale = animationOutputScale(width, height, quality, downsample, maxEdgePx, visiblePanels, maxCols, panelGap);
   const panelW = Math.max(1, Math.floor(Math.max(1, width) * scale));
   const panelH = Math.max(1, Math.floor(Math.max(1, height) * scale));
   const panels = Math.max(1, visiblePanels);
@@ -3351,6 +3660,7 @@ function Show3D() {
   const [panelRealFrames] = useModelState<number[]>("panel_real_frames");
   const [starred, setStarred] = useModelState<number[]>("starred");
   const [hiddenPanels, setHiddenPanels] = useModelState<number[]>("hidden_panels");
+  const [selectedPanels, setSelectedPanels] = useModelState<number[]>("selected_panels");
   const [hiddenPageSlotsTrait, setHiddenPageSlotsTrait] = useModelState<number[] | undefined>("hidden_page_slots");
   const [panelOrder, setPanelOrder] = useModelState<number[]>("panel_order");
   const [nPages] = useModelState<number>("n_pages");
@@ -3375,6 +3685,7 @@ function Show3D() {
   const reorderDragVisualRef = React.useRef<ReorderDragVisual | null>(null);
   const reorderGhostRef = React.useRef<HTMLDivElement>(null);
   const reorderGhostRafRef = React.useRef<number | null>(null);
+  const lastSelectedPanelRef = React.useRef<number | null>(null);
   const reorderGhostPendingRef = React.useRef<{ x: number; y: number } | null>(null);
   const reorderDragStartRef = React.useRef<ReorderDragStart | null>(null);
   const reorderDragActivatedRef = React.useRef(false);
@@ -3532,6 +3843,19 @@ function Show3D() {
   const visiblePanelCount = visiblePanelIndices.length;
   const panelMenuTotal = isPaged ? activePanelCount : totalPanelCount;
   const hasPanelChoices = panelMenuTotal > 1;
+  const selectedPanelSet = React.useMemo(() => {
+    const out = new Set<number>();
+    for (const value of selectedPanels || []) {
+      const panel = Math.trunc(Number(value));
+      if (Number.isFinite(panel) && panel >= 0 && panel < totalPanelCount && !hiddenPanelSet.has(panel)) out.add(panel);
+    }
+    return out;
+  }, [hiddenPanelSet, selectedPanels, totalPanelCount]);
+  const selectedVisiblePanels = React.useMemo(
+    () => visiblePanelIndices.filter((panel) => selectedPanelSet.has(panel)),
+    [selectedPanelSet, visiblePanelIndices],
+  );
+  const selectedVisibleCount = selectedVisiblePanels.length;
   const panelLabel = React.useCallback((panel: number) => (
     (panelTitles && panelTitles[panel]) || `Panel ${panel + 1}`
   ), [panelTitles]);
@@ -3577,6 +3901,87 @@ function Show3D() {
     }
     setHiddenPanels(Array.from(next).sort((a, b) => a - b));
   }, [activePageEnd, activePageStart, activePanelCount, hiddenPageSlots, hiddenPanels, totalPanelCount, isPaged, activePageIndices, setHiddenPanels, setHiddenPageSlotsTrait]);
+  const setPanelsHidden = React.useCallback((panels: number[], hidden: boolean) => {
+    const panelSet = new Set(
+      panels
+        .map((panel) => Math.trunc(Number(panel)))
+        .filter((panel) => Number.isFinite(panel) && panel >= 0 && panel < totalPanelCount),
+    );
+    if (panelSet.size === 0) return;
+    if (isPaged) {
+      const next = new Set<number>();
+      for (const value of hiddenPageSlots || []) {
+        const slot = Math.trunc(Number(value));
+        if (Number.isFinite(slot) && slot >= 0 && slot < activePanelCount) next.add(slot);
+      }
+      for (const panel of panelSet) {
+        if (panel < activePageStart || panel >= activePageEnd) continue;
+        const slot = panel - activePageStart;
+        if (hidden) next.add(slot);
+        else next.delete(slot);
+      }
+      if (activePanelCount - next.size <= 0) return;
+      const slots = normalizeHiddenPageSlots(Array.from(next), activePanelCount);
+      setHiddenPageSlots(slots);
+      setHiddenPageSlotsTrait(slots);
+      return;
+    }
+    const next = new Set<number>();
+    for (const value of hiddenPanels || []) {
+      const idx = Math.trunc(Number(value));
+      if (Number.isFinite(idx) && idx >= 0 && idx < totalPanelCount) next.add(idx);
+    }
+    for (const panel of panelSet) {
+      if (hidden) next.add(panel);
+      else next.delete(panel);
+    }
+    if (next.size >= totalPanelCount) return;
+    setHiddenPanels(Array.from(next).sort((a, b) => a - b));
+  }, [activePageEnd, activePageStart, activePanelCount, hiddenPageSlots, hiddenPanels, totalPanelCount, isPaged, setHiddenPanels, setHiddenPageSlotsTrait]);
+  const handlePanelSelectionMouseDown = React.useCallback((event: React.MouseEvent, panel: number): boolean => {
+    if (!hasPanelChoices || reorderMode || panel < 0) return false;
+    const orderedVisible = displayOrderedPanelIndices.filter((idx) => visiblePanelIndices.includes(idx));
+    const current = new Set(selectedPanelSet);
+    let next: number[];
+    if (event.shiftKey) {
+      const anchor = lastSelectedPanelRef.current !== null && orderedVisible.includes(lastSelectedPanelRef.current)
+        ? lastSelectedPanelRef.current
+        : (selectedVisiblePanels[selectedVisiblePanels.length - 1] ?? orderedVisible[0] ?? panel);
+      const a = orderedVisible.indexOf(anchor);
+      const b = orderedVisible.indexOf(panel);
+      if (a >= 0 && b >= 0) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        next = orderedVisible.slice(lo, hi + 1);
+      } else {
+        next = [panel];
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    } else if (event.metaKey || event.ctrlKey) {
+      if (current.has(panel) && current.size > 1) current.delete(panel);
+      else current.add(panel);
+      next = orderedVisible.filter((idx) => current.has(idx));
+      event.preventDefault();
+      event.stopPropagation();
+    } else {
+      next = [panel];
+    }
+    lastSelectedPanelRef.current = panel;
+    setSelectedPanels(next);
+    return event.shiftKey || event.metaKey || event.ctrlKey;
+  }, [displayOrderedPanelIndices, hasPanelChoices, reorderMode, selectedPanelSet, selectedVisiblePanels, setSelectedPanels, visiblePanelIndices]);
+  React.useEffect(() => {
+    if (!hasPanelChoices) {
+      lastSelectedPanelRef.current = null;
+      if ((selectedPanels || []).length > 0) setSelectedPanels([]);
+      return;
+    }
+    const clean = visiblePanelIndices.filter((panel) => selectedPanelSet.has(panel));
+    if (!sameNumberArray(selectedPanels, clean)) setSelectedPanels(clean);
+    if (lastSelectedPanelRef.current !== null && !visiblePanelIndices.includes(lastSelectedPanelRef.current)) {
+      lastSelectedPanelRef.current = clean[clean.length - 1] ?? null;
+    }
+  }, [hasPanelChoices, selectedPanelSet, selectedPanels, setSelectedPanels, visiblePanelIndices]);
   const applyPanelOrder = React.useCallback((order: number[]) => {
     const clean = order.filter((value) => Number.isInteger(value) && value >= 0 && value < totalPanelCount);
     if (clean.length !== totalPanelCount || new Set(clean).size !== totalPanelCount) return;
@@ -4493,6 +4898,23 @@ function Show3D() {
 
   // Canvas refs
   const rootRef = React.useRef<HTMLDivElement>(null);
+  const [rootLayoutWidth, setRootLayoutWidth] = React.useState(0);
+  React.useLayoutEffect(() => {
+    const element = rootRef.current;
+    if (!element) return;
+    const measure = () => {
+      const next = Math.max(0, Math.floor(element.getBoundingClientRect().width));
+      setRootLayoutWidth((current) => (Math.abs(current - next) < 2 ? current : next));
+    };
+    measure();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    observer?.observe(element);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
   const hasLiveFrameBytes = !!rawFrameBytes && rawFrameBytes.byteLength > 0;
   const hasOfflineStack = !!offlineStack && offlineStack.byteLength > 0;
   const hasOfflineFloatStack = !!offlineFloatStack && offlineFloatStack.byteLength > 0;
@@ -4585,10 +5007,11 @@ function Show3D() {
   const [exportFrameEnd, setExportFrameEnd] = React.useState(Math.max(1, nSlices || 1));
   const [exportEveryN, setExportEveryN] = React.useState(1);
   const [exportMaxFrames, setExportMaxFrames] = React.useState(40);
-  const [exportFps, setExportFps] = React.useState(Math.max(1, Math.round(playbackFps || 10)));
+  const [exportFps, setExportFps] = React.useState(DEFAULT_ANIMATION_EXPORT_FPS);
   const [exportSpatialPreset, setExportSpatialPreset] = React.useState<ExportSpatialPreset>("edge512");
   const [exportGifPreset, setExportGifPreset] = React.useState<GifExportPreset>("slides");
   const [localExportStatus, setLocalExportStatus] = React.useState("");
+  const [browserMp4Support, setBrowserMp4Support] = React.useState<"checking" | "supported" | "unsupported">("checking");
   const fftOverlayDragRef = React.useRef<{
     pointerId: number;
     startClientX: number;
@@ -4635,13 +5058,17 @@ function Show3D() {
   const quantizedExportSize4 = formatEstimatedHtmlSize(Math.ceil(voxelCount / 16));
   const quantizedExportSize8 = formatEstimatedHtmlSize(Math.ceil(voxelCount / 64));
   const selectedSpatialOption = spatialOptionFor(exportSpatialPreset);
+  const animationPanelWidth = sharedPanelSource
+    ? Math.max(1, width)
+    : Math.max(1, panelWidthPx || Math.floor(width / Math.max(1, nPanels || 1)) || width);
+  const animationPanelHeight = Math.max(1, height);
   const exportFrameIndices = React.useMemo(
     () => buildAnimationFrameIndices(nSlices, exportFrameStart, exportFrameEnd, exportEveryN, exportMaxFrames),
     [nSlices, exportFrameStart, exportFrameEnd, exportEveryN, exportMaxFrames],
   );
   const animationWorkEstimate = formatEstimatedAnimationWork(
-    width,
-    height,
+    animationPanelWidth,
+    animationPanelHeight,
     exportFrameIndices.length,
     visiblePanelCount,
     maxCols,
@@ -4650,9 +5077,11 @@ function Show3D() {
     selectedSpatialOption.downsample,
     selectedSpatialOption.maxEdgePx,
   );
-  const exportFrameSummary = `${exportFrameIndices.length}/${Math.max(1, nSlices || 1)} frames`;
+  const exportFpsValue = Math.max(1, Math.round(exportFps || DEFAULT_ANIMATION_EXPORT_FPS));
+  const exportDurationSeconds = exportFrameIndices.length / exportFpsValue;
+  const exportFrameSummary = `${exportFrameIndices.length}/${Math.max(1, nSlices || 1)} frames · ${exportDurationSeconds.toFixed(1)} s at ${exportFpsValue} fps`;
   const animationExportRequest = React.useMemo(() => ({
-    fps: Math.max(1, Math.round(exportFps || playbackFps || 10)),
+    fps: exportFpsValue,
     frame_start: exportFrameIndices[0] ?? 0,
     frame_stop: (exportFrameIndices[exportFrameIndices.length - 1] ?? 0) + 1,
     every_n: Math.max(1, Math.round(exportEveryN || 1)),
@@ -4663,10 +5092,9 @@ function Show3D() {
     slides_preset: exportGifPreset === "slides",
     show_panel_titles: showPanelTitles !== false,
     show_scale_bar: Boolean(scaleBarVisible),
-    show_zoom: showZoomIndicator !== false,
+    show_zoom: showZoomIndicator === true,
   }), [
-    exportFps,
-    playbackFps,
+    exportFpsValue,
     exportFrameIndices,
     exportEveryN,
     exportMaxFrames,
@@ -4678,17 +5106,35 @@ function Show3D() {
     showZoomIndicator,
   ]);
   const canDownloadCurrentHtml = !exportEnabled && (offline || hasOfflineStack || hasOfflineFloatStack || offlineForTheme);
-  const standaloneHtmlMode = offline || hasOfflineStack ? "quantized" : "exact";
+  const standaloneHtmlMode = hasOfflineFloatStack ? "exact" : "quantized";
   const standaloneHtmlLabel = standaloneHtmlMode === "quantized"
     ? `HTML encoded uint8 (${quantizedExportSize})`
     : `HTML exact float32 (${exactExportSize})`;
   const canExportStandaloneGif = !exportEnabled && offline && width > 0 && height > 0 && nSlices > 0 && (
     hasOfflineStack || hasOfflineFloatStack || sidecarRamReady
   );
+  const canExportStandaloneMp4 = canExportStandaloneGif && browserMp4Support === "supported";
   const standaloneGifUnavailableTitle = sidecarMode && !sidecarRamReady
     ? "GIF export becomes available after the folder data finishes loading into RAM."
     : "GIF export needs embedded or loaded standalone image data.";
-  const standaloneMp4UnavailableTitle = "MP4 export requires the live Python backend. Standalone HTML can export GIF or download itself as HTML.";
+  const standaloneMp4UnavailableTitle = !canExportStandaloneGif
+    ? "MP4 export needs embedded or loaded standalone image data."
+    : browserMp4Support === "checking"
+      ? "Checking browser WebCodecs H.264 support for standalone MP4 export."
+      : "Standalone MP4 export requires browser WebCodecs H.264 support. Use GIF here, or open the live Python widget for MP4.";
+  const standaloneAnimationUsesEncodedUint8 = !exportEnabled && hasOfflineStack && !hasOfflineFloatStack;
+  const standaloneAnimationSourceNote = exportEnabled
+    ? "Source: live Python widget can export from the original stack."
+    : hasOfflineFloatStack
+      ? "Source: exact float32 embedded data."
+      : hasOfflineStack
+        ? "Source: encoded uint8 standalone data. For best movie fidelity, export/open HTML exact float32 from the live widget."
+        : sidecarRamReady
+          ? "Source: loaded folder data in browser RAM."
+          : "";
+  const standaloneAnimationQualityWarning = standaloneAnimationUsesEncodedUint8
+    ? 'Warning: this standalone HTML stores encoded uint8 frames, not the original float32 stack. GIF adds a 256-color palette step and may change noisy or continuous colormaps. For publication-quality movies, export from the live widget or open an HTML exact float32 export with encoding="full".'
+    : "";
   const handleExportMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
     setExportPanelMode("home");
     setExportMenuAnchor(event.currentTarget);
@@ -4702,8 +5148,17 @@ function Show3D() {
     setExportFrameEnd((current) => Math.max(1, Math.min(total, Math.round(current || total))));
   }, [nSlices]);
   React.useEffect(() => {
-    setExportFps(Math.max(1, Math.round(playbackFps || 10)));
-  }, [playbackFps]);
+    let cancelled = false;
+    if (!offline) {
+      setBrowserMp4Support("unsupported");
+      return () => { cancelled = true; };
+    }
+    setBrowserMp4Support("checking");
+    void supportsBrowserMp4().then((supported) => {
+      if (!cancelled) setBrowserMp4Support(supported ? "supported" : "unsupported");
+    });
+    return () => { cancelled = true; };
+  }, [offline]);
   const handleExportSelect = async (
     mode: string,
     quality = "medium",
@@ -4755,24 +5210,33 @@ function Show3D() {
       setLocalExportStatus(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
-  const renderStandaloneGifFrame = (
+  const renderStandaloneAnimationCanvas = (
     frameIdx: number,
     quality: string,
     options: { downsample: number; maxEdgePx: number | null },
-  ): { width: number; height: number; indices: Uint8Array } | null => {
+  ): { width: number; height: number; canvas: HTMLCanvasElement } | null => {
     const frame = getOfflineFrame(frameIdx);
     if (!frame) return null;
     const sourcePanelCount = Math.max(1, nPanels || 1);
     const panelW = sharedPanelSource ? Math.max(1, width) : Math.max(1, panelWidthPx || Math.floor(width / sourcePanelCount) || width);
     const panelH = Math.max(1, height);
-    const scale = animationOutputScale(panelW, panelH, quality, options.downsample, options.maxEdgePx);
     const panels = (visiblePanelIndices.length ? visiblePanelIndices : [0])
       .filter((panel) => panel >= 0 && panel < sourcePanelCount);
     const activePanels = panels.length ? panels : [0];
-    const panelOutW = Math.max(1, Math.round(panelW * scale));
-    const panelOutH = Math.max(1, Math.round(panelH * scale));
     const cols = panelColsForCount(activePanels.length);
     const rows = Math.max(1, Math.ceil(activePanels.length / cols));
+    const scale = animationOutputScale(
+      panelW,
+      panelH,
+      quality,
+      options.downsample,
+      options.maxEdgePx,
+      activePanels.length,
+      cols,
+      panelGapPx,
+    );
+    const panelOutW = Math.max(1, Math.round(panelW * scale));
+    const panelOutH = Math.max(1, Math.round(panelH * scale));
     const gap = activePanels.length > 1 ? Math.max(0, Math.round((panelGapPx) * scale)) : 0;
     const outer = Math.max(0, Math.round(galleryOuterBorderPx * scale));
     const innerBorder = Math.max(0, Math.round(panelInnerBorderPx * scale));
@@ -4877,7 +5341,7 @@ function Show3D() {
         const label = panelTitleText(panel);
         if (label) {
           outCtx.save();
-          outCtx.font = `700 ${Math.max(8, Math.round(11 * scale))}px ${UI_FONT}`;
+          outCtx.font = `700 ${Math.max(MIN_ANIMATION_TITLE_FONT_PX, Math.round((panelTitleFontSize || 11) * scale))}px ${UI_FONT}`;
           outCtx.textAlign = "center";
           outCtx.textBaseline = "top";
           outCtx.shadowColor = "rgba(0,0,0,0.75)";
@@ -4885,40 +5349,51 @@ function Show3D() {
           outCtx.shadowOffsetX = 1;
           outCtx.shadowOffsetY = 1;
           outCtx.fillStyle = "white";
-          outCtx.fillText(label, x + panelOutW / 2, y + Math.max(2, Math.round(3 * scale)));
+          outCtx.fillText(label, x + panelOutW / 2, y + Math.max(3, Math.round(3 * scale)));
           outCtx.restore();
         }
       }
       if (scaleBarVisible && pixelSize > 0) {
         const outputPixelSize = pixelSize / Math.max(1e-6, scale);
-        const targetBarPx = Math.min(60 * scale, panelOutW * 0.25);
+        const targetBarPx = Math.min(60, panelOutW * 0.25);
         const nicePhysical = roundToNiceValue(targetBarPx * outputPixelSize);
         const barPx = Math.max(1, (nicePhysical / outputPixelSize));
-        const barThickness = Math.max(2, Math.round(5 * scale));
-        const fontSize = Math.max(8, Math.round(16 * scale));
-        const margin = Math.max(6, Math.round(12 * scale));
+        const barThickness = Math.max(MIN_ANIMATION_SCALE_BAR_THICKNESS_PX, Math.round(5 * scale));
+        const fontSize = Math.max(MIN_ANIMATION_SCALE_FONT_PX, Math.round(16 * scale));
+        const margin = Math.max(MIN_ANIMATION_OVERLAY_MARGIN_PX, Math.round(12 * scale));
         const barX = x + panelOutW - barPx - margin;
         const barY = y + panelOutH - margin;
         outCtx.save();
+        outCtx.fillStyle = "white";
+        outCtx.fillRect(barX, barY, barPx, barThickness);
         outCtx.shadowColor = "rgba(0,0,0,0.75)";
         outCtx.shadowBlur = 2;
         outCtx.shadowOffsetX = 1;
         outCtx.shadowOffsetY = 1;
-        outCtx.fillStyle = "white";
-        outCtx.fillRect(barX, barY, barPx, barThickness);
         outCtx.font = `${fontSize}px ${UI_FONT}`;
         outCtx.textAlign = "center";
         outCtx.textBaseline = "bottom";
         outCtx.fillText(formatScaleLabel(nicePhysical, pixelUnit || "px"), barX + barPx / 2, barY - Math.max(2, Math.round(4 * scale)));
-        if (showZoomIndicator !== false) {
+        if (showZoomIndicator === true) {
           outCtx.textAlign = "left";
           outCtx.fillText(formatZoomLabel(1), x + margin, y + panelOutH - margin + barThickness);
         }
         outCtx.restore();
       }
     }
-    const rgba = outCtx.getImageData(0, 0, outW, outH).data;
-    return { width: outW, height: outH, indices: quantizeRgbaForBrowserGif(rgba) };
+    return { width: outW, height: outH, canvas: out };
+  };
+  const renderStandaloneGifFrame = (
+    frameIdx: number,
+    quality: string,
+    options: { downsample: number; maxEdgePx: number | null },
+  ): { width: number; height: number; indices: Uint8Array } | null => {
+    const rendered = renderStandaloneAnimationCanvas(frameIdx, quality, options);
+    if (!rendered) return null;
+    const ctx = rendered.canvas.getContext("2d");
+    if (!ctx) return null;
+    const rgba = ctx.getImageData(0, 0, rendered.width, rendered.height).data;
+    return { width: rendered.width, height: rendered.height, indices: quantizeRgbaForBrowserGif(rgba) };
   };
   const handleStandaloneGifDownload = async (
     quality = "medium",
@@ -4965,9 +5440,123 @@ function Show3D() {
       setExportBusy(false);
     }
   };
+  const evenVideoCanvas = (canvas: HTMLCanvasElement, width: number, height: number): { canvas: HTMLCanvasElement; width: number; height: number } => {
+    const evenW = width + (width % 2);
+    const evenH = height + (height % 2);
+    if (evenW === width && evenH === height) return { canvas, width, height };
+    const out = document.createElement("canvas");
+    out.width = evenW;
+    out.height = evenH;
+    const ctx = out.getContext("2d");
+    if (!ctx) throw new Error("Could not create an MP4 export canvas.");
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, evenW, evenH);
+    ctx.drawImage(canvas, 0, 0);
+    return { canvas: out, width: evenW, height: evenH };
+  };
+  const handleStandaloneMp4Download = async (
+    quality = "medium",
+    requestOptions: Record<string, unknown> = {},
+  ) => {
+    setExportMenuAnchor(null);
+    if (!canExportStandaloneMp4) {
+      setLocalExportStatus(standaloneMp4UnavailableTitle);
+      return;
+    }
+    const w = browserMp4Window();
+    if (!w.VideoEncoder || !w.VideoFrame) {
+      setLocalExportStatus("Export failed: this browser does not expose WebCodecs VideoEncoder.");
+      return;
+    }
+    const VideoFrameCtor = w.VideoFrame;
+    const filename = makeExportFilename(title, nSlices, height, width, "mp4", quality);
+    setExportBusy(true);
+    setLocalExportStatus(`Preparing ${filename}...`);
+    try {
+      const frameIndices = exportFrameIndices.length ? exportFrameIndices : [Math.max(0, Math.min(Math.max(1, nSlices || 1) - 1, sliceIdx || 0))];
+      const spatialOption = {
+        downsample: Number(requestOptions.downsample ?? selectedSpatialOption.downsample),
+        maxEdgePx: requestOptions.max_edge_px == null ? null : Number(requestOptions.max_edge_px),
+      };
+      const fps = clampPlaybackFps(Number(requestOptions.fps ?? exportFps ?? playbackFps));
+      const frameDurationUs = Math.max(1, Math.round(1_000_000 / fps));
+      const firstRendered = renderStandaloneAnimationCanvas(frameIndices[0], quality, spatialOption);
+      if (!firstRendered) throw new Error(`frame ${frameIndices[0] + 1}/${Math.max(1, nSlices || 1)} is not loaded`);
+      const first = evenVideoCanvas(firstRendered.canvas, firstRendered.width, firstRendered.height);
+      const config = await selectBrowserMp4Config(first.width, first.height, fps);
+      if (!config) {
+        throw new Error("this browser cannot encode H.264/AVC MP4 at the selected size. Try Size = Max edge 1024 px or 2x downsample.");
+      }
+
+      const samples: Mp4Sample[] = [];
+      let avcDescription: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
+      let encoderError: unknown = null;
+      const encoder = new w.VideoEncoder({
+        output: (chunk, metadata) => {
+          const data = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(data);
+          const description = metadata?.decoderConfig?.description;
+          if (description) avcDescription = copyMp4Bytes(description);
+          samples.push({
+            data,
+            timestamp: Math.max(0, Math.round(chunk.timestamp || 0)),
+            duration: Math.max(1, Math.round(chunk.duration || frameDurationUs)),
+            key: chunk.type === "key",
+          });
+        },
+        error: (error) => {
+          encoderError = error;
+        },
+      });
+      encoder.configure(config);
+
+      const encodeCanvas = (canvas: HTMLCanvasElement, slot: number) => {
+        const frame = new VideoFrameCtor(canvas, {
+          timestamp: slot * frameDurationUs,
+          duration: frameDurationUs,
+        });
+        try {
+          encoder.encode(frame, { keyFrame: slot === 0 });
+        } finally {
+          frame.close();
+        }
+      };
+
+      encodeCanvas(first.canvas, 0);
+      const total = frameIndices.length;
+      for (let slot = 1; slot < total; slot++) {
+        const frameIdx = frameIndices[slot];
+        const rendered = renderStandaloneAnimationCanvas(frameIdx, quality, spatialOption);
+        if (!rendered) throw new Error(`frame ${frameIdx + 1}/${Math.max(1, nSlices || 1)} is not loaded`);
+        const even = evenVideoCanvas(rendered.canvas, rendered.width, rendered.height);
+        encodeCanvas(even.canvas, slot);
+        if (slot === total - 1 || (slot + 1) % 4 === 0) {
+          setLocalExportStatus(`Encoding ${filename}... ${slot + 1}/${total}`);
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        }
+      }
+      await encoder.flush();
+      encoder.close();
+      if (encoderError) throw encoderError instanceof Error ? encoderError : new Error(String(encoderError));
+      samples.sort((a, b) => a.timestamp - b.timestamp);
+      setLocalExportStatus(`Muxing ${filename}...`);
+      const mp4 = encodeAvcMp4(samples, first.width, first.height, avcDescription);
+      const blob = new Blob([mp4 as BlobPart], { type: "video/mp4" });
+      downloadBlob(blob, filename);
+      setLocalExportStatus(`Downloaded ${filename} to browser Downloads (${formatSavedBytes(blob.size)})`);
+    } catch (err) {
+      setLocalExportStatus(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setExportBusy(false);
+    }
+  };
   const handleAnimationExportSelect = (mode: "gif" | "mp4", quality: string, requestOptions = animationExportRequest) => {
     if (mode === "gif" && canExportStandaloneGif) {
       void handleStandaloneGifDownload(quality, requestOptions);
+      return;
+    }
+    if (mode === "mp4" && canExportStandaloneMp4) {
+      void handleStandaloneMp4Download(quality, requestOptions);
       return;
     }
     void handleExportSelect(mode, quality, 1, requestOptions);
@@ -4981,7 +5570,7 @@ function Show3D() {
       setExportQuality("medium");
       setExportEveryN(1);
       setExportMaxFrames(40);
-      setExportFps(Math.min(10, Math.max(1, Math.round(playbackFps || 10))));
+      setExportFps(DEFAULT_ANIMATION_EXPORT_FPS);
       setExportSpatialPreset("edge512");
     } else if (preset === "compact") {
       setExportQuality("low");
@@ -4993,10 +5582,21 @@ function Show3D() {
       setExportQuality("high");
       setExportEveryN(1);
       setExportMaxFrames(0);
-      setExportFps(Math.max(1, Math.round(playbackFps || 10)));
+      setExportFps(DEFAULT_ANIMATION_EXPORT_FPS);
       setExportSpatialPreset("full");
     }
-  }, [nSlices, playbackFps]);
+  }, [nSlices]);
+  const applyMp4ExportDefaults = React.useCallback(() => {
+    setExportPanelMode("mp4");
+    setExportGifPreset("custom");
+    setExportQuality("high");
+    setExportFrameStart(1);
+    setExportFrameEnd(Math.max(1, nSlices || 1));
+    setExportEveryN(1);
+    setExportMaxFrames(0);
+    setExportFps(DEFAULT_ANIMATION_EXPORT_FPS);
+    setExportSpatialPreset("edge1024");
+  }, [nSlices]);
   const markGifPresetCustom = React.useCallback(() => {
     setExportGifPreset((preset) => preset === "custom" ? preset : "custom");
   }, []);
@@ -5007,7 +5607,7 @@ function Show3D() {
   const exportPanelButtonSx = { ...compactButton, fontSize: 11, border: `1px solid ${themeColors.border}` } as const;
   const renderAnimationExportPanel = (mode: "gif" | "mp4") => {
     const isGif = mode === "gif";
-    const disabled = isGif ? !(exportEnabled || canExportStandaloneGif) : !exportEnabled;
+    const disabled = isGif ? !(exportEnabled || canExportStandaloneGif) : !(exportEnabled || canExportStandaloneMp4);
     const disabledTitle = isGif ? standaloneGifUnavailableTitle : standaloneMp4UnavailableTitle;
     const titleText = isGif ? "GIF" : "MP4 video";
     return (
@@ -5035,8 +5635,31 @@ function Show3D() {
         <Typography sx={{ fontSize: 11, color: themeColors.textMuted, lineHeight: 1.35 }}>
           {isGif
             ? "GIF exports the current panel movie without toolbar chrome. Use a preset, then export."
-            : "MP4 is secondary for presentation workflows and requires the live Python backend."}
+            : canExportStandaloneMp4
+              ? "MP4 uses browser WebCodecs H.264 when available, with the same panel-only frames as GIF."
+              : "MP4 is secondary for presentation workflows. Use the live Python backend, or a browser with WebCodecs H.264 support."}
         </Typography>
+        {standaloneAnimationSourceNote && (
+          <Typography sx={{ fontSize: 11, color: themeColors.textMuted, lineHeight: 1.35 }}>
+            {standaloneAnimationSourceNote}
+          </Typography>
+        )}
+        {standaloneAnimationQualityWarning && (
+          <Box
+            data-show3d-encoded-source-animation-warning="true"
+            sx={{
+              border: `1px solid ${themeColors.accentYellow}`,
+              bgcolor: themeInfo.theme === "dark" ? "rgba(255, 193, 7, 0.12)" : "rgba(255, 193, 7, 0.18)",
+              color: themeColors.text,
+              px: 0.8,
+              py: 0.65,
+              fontSize: 11,
+              lineHeight: 1.35,
+            }}
+          >
+            {standaloneAnimationQualityWarning}
+          </Box>
+        )}
         {isGif && (
           <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 0.5 }}>
             {GIF_EXPORT_PRESETS.map((preset) => (
@@ -5120,13 +5743,13 @@ function Show3D() {
     if (exportPanelMode === "html") return renderHtmlExportPanel();
     return (
       <Box sx={{ width: 320, maxWidth: "86vw", py: 0.5 }}>
-        <MenuItem disabled={!(exportEnabled || canExportStandaloneGif)} title={!(exportEnabled || canExportStandaloneGif) ? standaloneGifUnavailableTitle : undefined} onClick={() => setExportPanelMode("gif")}>
+        <MenuItem disabled={!(exportEnabled || canExportStandaloneGif)} title={!(exportEnabled || canExportStandaloneGif) ? standaloneGifUnavailableTitle : undefined} onClick={() => applyGifExportPreset("slides")}>
           GIF
         </MenuItem>
         <MenuItem disabled={!(exportEnabled || canDownloadCurrentHtml)} onClick={() => setExportPanelMode("html")}>
           Interactive HTML
         </MenuItem>
-        <MenuItem disabled={!exportEnabled} title={!exportEnabled ? standaloneMp4UnavailableTitle : undefined} onClick={() => setExportPanelMode("mp4")}>
+        <MenuItem disabled={!(exportEnabled || canExportStandaloneMp4)} title={!(exportEnabled || canExportStandaloneMp4) ? standaloneMp4UnavailableTitle : undefined} onClick={applyMp4ExportDefaults}>
           MP4 video (secondary)
         </MenuItem>
         <Box sx={{ px: 2, py: 0.75, borderTop: `1px solid ${themeColors.border}` }}>
@@ -5287,6 +5910,7 @@ function Show3D() {
     imageVminPct: 0,
     imageVmaxPct: 100,
   };
+  type RenderRange = { vmin: number; vmax: number };
   type Show3DViewState = {
     linked_state?: Partial<PanelState>;
     panel_states?: Partial<PanelState>[];
@@ -5443,14 +6067,18 @@ function Show3D() {
     const n = Math.max(1, count || 1);
     const requestedCols = (maxCols && maxCols > 0) ? Math.min(maxCols, n, MAX_PANEL_COLUMNS) : Math.min(n, MAX_PANEL_COLUMNS);
     if (n <= 1) return 1;
-    return Math.max(1, requestedCols);
-  }, [maxCols]);
+    const preferredPanelWidth = canvasSizeTrait > 0 ? canvasSizeTrait : 500;
+    const responsiveCols = rootLayoutWidth > 0
+      ? Math.max(1, Math.min(n, Math.floor(rootLayoutWidth / Math.max(1, preferredPanelWidth))))
+      : requestedCols;
+    return Math.max(1, Math.min(requestedCols, responsiveCols));
+  }, [canvasSizeTrait, maxCols, rootLayoutWidth]);
   const show3dColumnOptions = React.useMemo(() => {
     const n = Math.max(1, visiblePanelCount || 1);
     const values = new Set<number>([1, 2, 3, 4, 5, 6, 8, 10, 12]);
     return Array.from(values).filter((cols) => cols >= 1 && cols <= n).sort((a, b) => a - b);
   }, [visiblePanelCount]);
-  const clampedMaxCols = Math.max(1, Math.min((maxCols && maxCols > 0) ? maxCols : visiblePanelCount || 1, visiblePanelCount || 1, MAX_PANEL_COLUMNS));
+  const clampedMaxCols = panelColsForCount(visiblePanelCount || 1);
 
   // Cursor readout state
   const [cursorInfo, setCursorInfo] = React.useState<CursorInfo | null>(null);
@@ -6742,7 +7370,14 @@ function Show3D() {
     const req = benchmarkRequest ?? {};
     const token = req.token;
     const mode = typeof req.mode === "string" ? req.mode : "playback";
-    if ((typeof token !== "string" && typeof token !== "number") || mode === "renderBurst" || mode === "scrubTransport" || mode === "scrubPreviewTransport" || lastBenchmarkTokenRef.current === token) return;
+    if (
+      (typeof token !== "string" && typeof token !== "number")
+      || mode === "renderBurst"
+      || mode === "scrubTransport"
+      || mode === "scrubPreviewTransport"
+      || mode === "transformBurst"
+      || lastBenchmarkTokenRef.current === token
+    ) return;
     lastBenchmarkTokenRef.current = token;
 
     let cancelled = false;
@@ -7175,17 +7810,34 @@ function Show3D() {
     : Math.max(1, width);
   const sourcePanelHeight = Math.max(1, height);
   const isMultiPanelSource = totalPanelCount > 1;
-  const displayScale = isMultiPanelSource
+  const requestedDisplayScale = isMultiPanelSource
     ? mainCanvasSize / Math.max(1, sourcePanelWidth * _colsLocal)
     : mainCanvasSize / Math.max(width, height);
   // For 90°/270° rotations, swap canvas dims so non-square images fit without clipping.
   const rotSwap = (imageRotation % 2) !== 0;
+  const requestedCanvasW = isMultiPanelSource
+    ? Math.round(sourcePanelWidth * requestedDisplayScale * _colsLocal)
+    : Math.round((rotSwap ? height : width) * requestedDisplayScale);
+  // Grid layout: when max_cols wraps panels into multiple rows, canvasH grows to fit `rows` rows.
+  const _requestedCanvasHSingleRow = Math.round((rotSwap ? width : height) * requestedDisplayScale);
+  const _gapForLayout = _nPanelsLocal > 1 ? (panelGapPx) : 0;
+  const _requestedSlotWForLayout = (requestedCanvasW - _gapForLayout * (_colsLocal - 1)) / _colsLocal;
+  const _requestedSlotHForLayout = _requestedSlotWForLayout * (sourcePanelHeight / sourcePanelWidth);
+  const requestedCanvasH = isMultiPanelSource
+    ? Math.round(_requestedSlotHForLayout * _rowsLocal + _gapForLayout * (_rowsLocal - 1))
+    : _requestedCanvasHSingleRow;
+  const gridCanvasCap = isMultiPanelSource
+    ? Math.min(
+        1,
+        MAX_INTERACTIVE_GRID_CANVAS_EDGE / Math.max(1, requestedCanvasW, requestedCanvasH),
+        Math.sqrt(MAX_INTERACTIVE_GRID_CANVAS_PIXELS / Math.max(1, requestedCanvasW * requestedCanvasH)),
+      )
+    : 1;
+  const displayScale = requestedDisplayScale * gridCanvasCap;
   const canvasW = isMultiPanelSource
     ? Math.round(sourcePanelWidth * displayScale * _colsLocal)
     : Math.round((rotSwap ? height : width) * displayScale);
-  // Grid layout: when max_cols wraps panels into multiple rows, canvasH grows to fit `rows` rows.
   const _canvasHSingleRow = Math.round((rotSwap ? width : height) * displayScale);
-  const _gapForLayout = _nPanelsLocal > 1 ? (panelGapPx) : 0;
   const _slotWForLayout = (canvasW - _gapForLayout * (_colsLocal - 1)) / _colsLocal;
   const _slotHForLayout = _slotWForLayout * (sourcePanelHeight / sourcePanelWidth);
   const canvasH = isMultiPanelSource
@@ -7194,6 +7846,17 @@ function Show3D() {
   const mainPanelFrameWidth = canvasW + 2 * galleryOuterBorderPx;
   const mainPanelWidth = `min(100%, ${mainPanelFrameWidth}px)`;
   const mainPanelAspectRatio = `${Math.max(canvasW, 1)} / ${Math.max(canvasH, 1)}`;
+  React.useEffect(() => {
+    const dbg = show3dPerfDebug();
+    if (!dbg) return;
+    dbg.layoutWidth = rootLayoutWidth;
+    dbg.layoutRequestedMaxCols = maxCols;
+    dbg.layoutCols = _colsLocal;
+    dbg.layoutRows = _rowsLocal;
+    dbg.layoutCanvasW = canvasW;
+    dbg.layoutCanvasH = canvasH;
+    dbg.layoutGridCanvasCap = gridCanvasCap;
+  }, [rootLayoutWidth, maxCols, _colsLocal, _rowsLocal, canvasW, canvasH, gridCanvasCap]);
   const groupMarkerOverlays = React.useMemo(() => {
     if ((nPanels || 1) <= 1 || visiblePanelIndices.length === 0 || canvasW <= 0 || canvasH <= 0) return [];
     const count = Math.max(1, visiblePanelCount || 1);
@@ -7948,14 +8611,93 @@ function Show3D() {
     void displayAndFrequencyFrameForIndex(idx, raw, { allowRawOnMiss: true });
   };
 
+  const sharedDirectDisplayRange = (
+    normalized: number,
+    c: typeof playRef.current,
+  ): RenderRange => {
+    if (c.autoContrast) {
+      const cached = cachedAutoDisplayRange(c.autoVmins, c.autoVmaxs, normalized, c.logScale)
+        || cachedAutoDisplayRange(localAutoVminsRef.current, localAutoVmaxsRef.current, normalized, c.logScale);
+      if (cached) return cached;
+    }
+    return resolveDisplayRange(
+      c.dataMin,
+      c.dataMax,
+      c.traitVmin,
+      c.traitVmax,
+      c.logScale,
+      c.imageVminPct,
+      c.imageVmaxPct,
+    );
+  };
+
+  const directPanelRanges = (
+    normalized: number,
+    panels: number[],
+    c: typeof playRef.current,
+  ): RenderRange | RenderRange[] => {
+    if (panels.length > 1 && !c.linkContrast) {
+      const sharedAutoRange = c.autoContrast ? sharedDirectDisplayRange(normalized, c) : null;
+      const stack = resolveDisplayBounds(c.dataMin, c.dataMax, c.traitVmin, c.traitVmax, c.logScale);
+      return panels.map((panel) => {
+        const pdr = panelDataRanges[panel];
+        const bounds = (perPanelHistogramEnabled && pdr && pdr.max > pdr.min) ? pdr : stack;
+        return resolvePanelRange(panel, bounds, sharedAutoRange);
+      });
+    }
+    return sharedDirectDisplayRange(normalized, c);
+  };
+
+  const directPanelTransforms = (
+    panels: number[],
+    c: typeof playRef.current,
+  ): { zoom: number; panX: number; panY: number }[] => panels.map((panel) => {
+    const base = c.panelStates[panel] || initialState;
+    return {
+      zoom: c.linkPanels ? c.linkedState.zoom : base.zoom,
+      panX: c.linkPanels ? c.linkedState.panX : base.panX,
+      panY: c.linkPanels ? c.linkedState.panY : base.panY,
+    };
+  });
+
   const renderGpuPanelSlice = (idx: number, updateDisplayState = true): boolean => {
     const normalized = ((Math.round(idx) % Math.max(1, nSlices)) + Math.max(1, nSlices)) % Math.max(1, nSlices);
-    if (!separatePanelFrames || !gpuFrameCacheUploadedRef.current.has(normalized)) return false;
+    if (!separatePanelFrames) return false;
     const engine = gpuCmapRef.current;
     if (!engine || !gpuCmapReadyRef.current) return false;
     const c = playRef.current;
     if (c.imageRotation % 4 !== 0) return false;
     const sourcePanelCount = Math.max(1, nPanels || 1);
+    const rawPackedFrame = rawFrameForIndex(normalized, normalized, rawFrameDataRef.current);
+    const transformPixelsActive = (
+      requiresClientFrameTransform({ offline, diffMode: c.diffMode, avgWindow: c.avgWindow })
+      || browserFilterOnRef.current
+      || frequencyFilterIsActive
+    );
+    const packedFrame = rawPackedFrame && transformPixelsActive
+      ? (displayAndFrequencyFrameForIndex(normalized, rawPackedFrame) ?? rawPackedFrame)
+      : rawPackedFrame;
+    const hasPackedFrame = !!packedFrame && packedFrame.length >= c.width * c.height;
+    if (!gpuFrameCacheUploadedRef.current.has(normalized)) {
+      if (!offline && !hasPackedFrame) return false;
+      const raw = packedFrame;
+      if (!raw || raw.length < c.width * c.height) {
+        if (!hasPackedFrame) return false;
+      } else {
+      const uploadPanelW = Math.max(1, panelWidthPx || Math.round(c.width / sourcePanelCount));
+      for (let panel = 0; panel < sourcePanelCount; panel++) {
+        const panelFrame = extractPanelSlice(raw, panel, false);
+        if (!panelFrame || panelFrame.length < uploadPanelW * c.height) return false;
+        engine.uploadData(normalized * sourcePanelCount + panel, panelFrame, uploadPanelW, c.height, undefined, true);
+      }
+      gpuFrameCacheUploadedRef.current.add(normalized);
+      const dbg = show3dPerfDebug();
+      if (dbg) {
+        dbg.gpuFrameCacheUploaded = gpuFrameCacheUploadedRef.current.size;
+        dbg.lastFrameSource = "offline-panel-gpu-upload";
+      }
+      }
+    }
     const n = Math.max(1, visiblePanelCount || 1);
     const cols = panelColsForCount(n);
     const rows = Math.ceil(n / cols);
@@ -8034,6 +8776,69 @@ function Show3D() {
         panY: c.linkPanels ? c.linkedState.panY : base.panY,
       };
     });
+    const hasActivePanelTransform = transforms.some(t => (
+      Math.abs(t.zoom - 1) > 1e-6 ||
+      Math.abs(t.panX) > 1e-3 ||
+      Math.abs(t.panY) > 1e-3
+    ));
+    if (!hasActivePanelTransform && hasPackedFrame && packedFrame) {
+      const packedSlotIdx = Math.max(1, nSlices || 1) * sourcePanelCount + normalized;
+      const rgbaCapacity = Math.max(1, Math.round(c.canvasW * c.canvasH));
+      const sourcePanelWidth = Math.max(1, panelWidthPx || Math.round(c.width / sourcePanelCount));
+      engine.uploadData(packedSlotIdx, packedFrame, c.width, c.height, rgbaCapacity);
+      const renderedPacked = engine.renderCombinedPanelRegionsDirectToCanvas(
+        packedSlotIdx,
+        renderRanges,
+        renderLogScale,
+        gpuCtx,
+        {
+          width: c.canvasW,
+          height: c.canvasH,
+          panelCount: n,
+          cols,
+          rows,
+          gap,
+          bgRgb: packedRgbFromHex(interPanelGapColor),
+          sourcePanelWidth,
+          transforms,
+          sourcePanelIndices: visiblePanelIndices,
+          smooth: c.smooth,
+        },
+      );
+      if (renderedPacked) {
+        setGpuDisplayVisible(true);
+        playbackIdxRef.current = normalized;
+        if (updateDisplayState) setDisplaySliceIdx(normalized);
+        const dbg = show3dPerfDebug();
+        if (dbg) {
+          dbg.missingFrame = null;
+          dbg.lastFrame = normalized;
+          dbg.lastFrameSource = "gpu-packed-frame-transform";
+          dbg.lastRenderPath = hasActivePanelTransform
+            ? "webgpu-grid-separate-panels-packed-transform-fragment"
+            : "webgpu-grid-separate-panels-packed-transform-compute";
+          dbg.lastRenderMs = Number((performance.now() - renderStartMs).toFixed(2));
+          dbg.lastPanelTransforms = transforms.map(t => ({
+            zoom: Number(t.zoom.toFixed(3)),
+            panX: Number(t.panX.toFixed(1)),
+            panY: Number(t.panY.toFixed(1)),
+          }));
+          dbg.lastDirectPanelRanges = Array.isArray(renderRanges)
+            ? renderRanges.map(r => ({
+                vmin: Number(r.vmin.toPrecision(6)),
+                vmax: Number(r.vmax.toPrecision(6)),
+              }))
+            : {
+                vmin: Number(renderRanges.vmin.toPrecision(6)),
+                vmax: Number(renderRanges.vmax.toPrecision(6)),
+              };
+          dbg.lastDirectSourcePanelIndices = visiblePanelIndices.slice();
+          dbg.lastDirectSourcePanelWidth = sourcePanelWidth;
+          dbg.lastDirectPackedFrameShape = [c.width, c.height];
+        }
+        return true;
+      }
+    }
     const rendered = engine.renderPanelSlotsDirectToCanvas(
       panelSlots,
       renderRanges,
@@ -8048,6 +8853,7 @@ function Show3D() {
         gap,
         bgRgb: packedRgbFromHex(interPanelGapColor),
         transforms,
+        smooth: c.smooth,
       },
     );
     if (!rendered) return false;
@@ -8066,6 +8872,125 @@ function Show3D() {
         panX: Number(t.panX.toFixed(1)),
         panY: Number(t.panY.toFixed(1)),
       }));
+    }
+    return true;
+  };
+
+  const renderGpuPackedPanelTransformSlice = (idx: number, updateDisplayState = false): boolean => {
+    const packedPanelSource = !separatePanelFrames;
+    if (
+      !packedPanelSource
+      || sharedPanelSource
+      || isRgb
+      || hasMixedPanelCmaps
+      || flipRows
+      || flipCols
+      || imageRotation % 4 !== 0
+    ) {
+      return false;
+    }
+    const panelSourceCount = Math.max(1, nPanels || 1);
+    if (panelSourceCount <= 1 || width <= 0 || height <= 0 || canvasW <= 0 || canvasH <= 0) return false;
+    const normalized = ((Math.round(idx) % Math.max(1, nSlices)) + Math.max(1, nSlices)) % Math.max(1, nSlices);
+    const engine = gpuCmapRef.current;
+    if (!engine || !gpuCmapReadyRef.current) return false;
+    const c = playRef.current;
+    if (c.imageRotation % 4 !== 0 || c.width <= 0 || c.height <= 0 || c.canvasW <= 0 || c.canvasH <= 0) return false;
+    const panels = (c.visiblePanelIndices.length ? c.visiblePanelIndices : visiblePanelIndices)
+      .filter((panel) => Number.isFinite(panel) && panel >= 0 && panel < panelSourceCount);
+    if (panels.length === 0) return false;
+    const sourcePanelWidth = Math.max(1, panelWidthPx || Math.round(c.width / panelSourceCount));
+    if (sourcePanelWidth <= 0 || sourcePanelWidth > c.width) return false;
+    const gpuCtx = ensureGpuDisplayContext(engine, c.canvasW, c.canvasH);
+    if (!gpuCtx) return false;
+
+    const rawCurrentFrame = rawFrameForIndex(normalized, normalized, rawFrameDataRef.current);
+    const transformPixelsActive = (
+      requiresClientFrameTransform({ offline, diffMode, avgWindow })
+      || browserFilterOnRef.current
+      || frequencyFilterIsActive
+    );
+    if (transformPixelsActive && (!rawFrameDataRef.current || rawCurrentFrame !== rawFrameDataRef.current)) {
+      return false;
+    }
+    let slotIdx: number | null = null;
+    let renderLogScale = c.logScale;
+    if (gpuFrameCacheUploadedRef.current.has(normalized)) {
+      slotIdx = normalized;
+    } else {
+      const upload = gpuUploadRef.current;
+      if (
+        upload &&
+        rawCurrentFrame &&
+        upload.source === rawCurrentFrame &&
+        upload.width === c.width &&
+        upload.height === c.height
+      ) {
+        slotIdx = 0;
+        renderLogScale = upload.logScale ? false : c.logScale;
+      } else if (rawCurrentFrame && rawCurrentFrame.length >= c.width * c.height) {
+        const rgbaCapacity = Math.max(1, Math.round(c.canvasW * c.canvasH));
+        engine.uploadData(normalized, rawCurrentFrame, c.width, c.height, rgbaCapacity);
+        gpuFrameCacheUploadedRef.current.add(normalized);
+        slotIdx = normalized;
+      }
+    }
+    if (slotIdx === null) return false;
+
+    const lut = COLORMAPS[c.cmap] || COLORMAPS.inferno;
+    engine.uploadLUT(c.cmap, lut);
+    const panelCount = panels.length;
+    const cols = panelColsForCount(panelCount);
+    const rows = Math.ceil(panelCount / cols);
+    const gap = panelCount > 1 ? panelGapPx : 0;
+    const ranges = directPanelRanges(normalized, panels, c);
+    const transforms = directPanelTransforms(panels, c);
+    const rendered = engine.renderCombinedPanelRegionsDirectToCanvas(
+      slotIdx,
+      ranges,
+      renderLogScale,
+      gpuCtx,
+      {
+        width: c.canvasW,
+        height: c.canvasH,
+        panelCount,
+        cols,
+        rows,
+        gap,
+        bgRgb: packedRgbFromHex(interPanelGapColor),
+        sourcePanelWidth,
+        transforms,
+        sourcePanelIndices: panels,
+        smooth: c.smooth,
+      },
+    );
+    if (!rendered) return false;
+    setGpuDisplayVisible(true);
+    playbackIdxRef.current = normalized;
+    if (updateDisplayState) setDisplaySliceIdx(normalized);
+    const dbg = show3dPerfDebug();
+    if (dbg) {
+      dbg.missingFrame = null;
+      dbg.lastFrame = normalized;
+      dbg.lastFrameSource = slotIdx === normalized ? "gpu-cache" : "gpu-current-upload";
+      dbg.lastRenderPath = "webgpu-grid-packed-panels-transform-direct-fragment";
+      dbg.lastPanelTransforms = transforms.map(t => ({
+        zoom: Number(t.zoom.toFixed(3)),
+        panX: Number(t.panX.toFixed(1)),
+        panY: Number(t.panY.toFixed(1)),
+      }));
+      dbg.lastDirectPanelRanges = Array.isArray(ranges)
+        ? ranges.map(r => ({
+            vmin: Number(r.vmin.toPrecision(6)),
+            vmax: Number(r.vmax.toPrecision(6)),
+          }))
+        : {
+            vmin: Number(ranges.vmin.toPrecision(6)),
+            vmax: Number(ranges.vmax.toPrecision(6)),
+          };
+      dbg.lastDirectSourcePanelIndices = panels.slice();
+      dbg.lastDirectSourcePanelWidth = sourcePanelWidth;
+      dbg.gpuFrameCacheUploaded = gpuFrameCacheUploadedRef.current.size;
     }
     return true;
   };
@@ -8313,7 +9238,18 @@ function Show3D() {
           void fetch(reportUrl, { method: "POST", mode: "no-cors", body: JSON.stringify(result) }).catch(() => {});
         }
       } catch (err) {
-        setStatus("error", { error: err instanceof Error ? err.message : String(err) });
+        const result = {
+          token,
+          label,
+          status: "error",
+          mode,
+          targetFps,
+          error: err instanceof Error ? err.message : String(err),
+        };
+        setBenchmarkResult(result);
+        if (reportUrl) {
+          void fetch(reportUrl, { method: "POST", mode: "no-cors", body: JSON.stringify(result) }).catch(() => {});
+        }
       }
     })();
 
@@ -8937,6 +9873,7 @@ function Show3D() {
                       bgRgb: packedRgbFromHex(interPanelGapColor),
                       sourcePanelWidth: panelW,
                       transforms: panelTransformsForDirect,
+                      smooth: c.smooth,
                     },
                   );
                   if (dbg) {
@@ -9508,6 +10445,27 @@ function Show3D() {
     // Invalidate any rAF/mapAsync work from the previous render before every
     // early ownership return (notably the transition into playback).
     const renderSerial = ++gpuRenderSerialRef.current;
+    const confirmOfflineStaticCanvasPresent = (reason: string) => {
+      if (!offline || playing || sidecarMode) return;
+      const present = (phase: string) => {
+        if (renderSerial !== gpuRenderSerialRef.current) return;
+        const canvas = canvasRef.current;
+        const offscreen = mainOffscreenRef.current;
+        const ctx = canvas?.getContext("2d");
+        if (!canvas || !offscreen || !ctx) return;
+        setGpuDisplayVisible(false);
+        drawMain(ctx, offscreen, {
+          sourcePanelWidth: mainOffscreenSourcePanelWidthRef.current,
+        });
+        const dbg = show3dPerfDebug();
+        if (dbg) {
+          dbg.lastInitialStaticPresent = `${reason}:${phase}`;
+          dbg.lastStaticPaintSkipReason = null;
+        }
+      };
+      requestAnimationFrame(() => requestAnimationFrame(() => present("raf2")));
+      window.setTimeout(() => present("timeout"), 180);
+    };
     let frameData = rawFrameDataRef.current;
     if (!frameData || frameData.length === 0) return;
     if (!isRgb && compareMode !== "off" && width > 0 && height > 0) {
@@ -9527,6 +10485,24 @@ function Show3D() {
       }
     }
     if (!mainOffscreenRef.current || !mainImgDataRef.current) return;
+    if (
+      gpuDisplayVisibleRef.current === true &&
+      imageRotation % 4 === 0 &&
+      !playing &&
+      !sidecarMode &&
+      !isRgb &&
+      compareMode === "off"
+    ) {
+      try {
+        if (renderCurrentPanelTransformDirect()) {
+          const d = show3dPerfDebug();
+          if (d) d.lastStaticPaintSkipReason = "gpu-transform-display";
+          return;
+        }
+      } catch (err) {
+        console.warn("[Show3D] WebGPU transform refresh failed during static paint; using retained 2D canvas", err);
+      }
+    }
     // True-color RGB: paint on the GPU (paintRgbFrame), applying the moving
     // average across color frames when avg > 1 so an avg change re-denoises the
     // static frame, not just live playback.
@@ -9633,6 +10609,26 @@ function Show3D() {
     };
 
     if (offline) {
+      if (
+        sidecarViewTransformActive() &&
+        imageRotation % 4 === 0 &&
+        !flipRows &&
+        !flipCols &&
+        !sidecarMode &&
+        !isRgb &&
+        compareMode === "off" &&
+        !frameTransformActive()
+      ) {
+        try {
+          if (renderCurrentPanelTransformDirect()) {
+            const d = show3dPerfDebug();
+            if (d) d.lastStaticPaintSkipReason = "active-view-transform";
+            return;
+          }
+        } catch (err) {
+          console.warn("[Show3D] WebGPU transform refresh failed during offline paint; using retained 2D canvas", err);
+        }
+      }
       const canvas = canvasRef.current;
       const offscreen = mainOffscreenRef.current;
       const imgData = mainImgDataRef.current;
@@ -9646,6 +10642,7 @@ function Show3D() {
         renderToOffscreenReuse(processed, lut, vmin, vmax, offscreen, imgData);
       }
       drawMain(ctx, offscreen);
+      confirmOfflineStaticCanvasPresent("offline-static");
       return;
     }
 
@@ -9840,8 +10837,17 @@ function Show3D() {
         linkedState.panX === 0 &&
         linkedState.panY === 0
       ));
-    if (!keepDirectGpuVisible && !options.preserveGpuDisplay) {
+    const preserveActiveGpuTransform =
+      gpuDisplayVisibleRef.current === true &&
+      imageRotation % 4 === 0 &&
+      !sidecarMode &&
+      !frameTransformActive() &&
+      sidecarViewTransformActive();
+    if (!keepDirectGpuVisible && !options.preserveGpuDisplay && !preserveActiveGpuTransform) {
       setGpuDisplayVisible(false);
+    } else if (preserveActiveGpuTransform) {
+      const d = show3dPerfDebug();
+      if (d) d.lastDrawMainPreservedGpu = "active-view-transform";
     }
     ctx.imageSmoothingEnabled = smooth;
     // Clear entire canvas to the configured inter-panel layer. Slot-level bg
@@ -11472,6 +12478,29 @@ function Show3D() {
   };
 
   const renderCurrentPanelTransformDirect = (): boolean => {
+    // Interactive zoom/pan owns the visible canvas. Invalidate any pending
+    // static GPU->2D blit scheduled by the data effect so it cannot hide the
+    // WebGPU canvas after this transform frame presents.
+    gpuRenderSerialRef.current++;
+    const drawCanvasTransformFallback = (path: string): boolean => {
+      const canvas = canvasRef.current;
+      const offscreen = mainOffscreenRef.current;
+      const ctx = canvas?.getContext("2d");
+      if (!canvas || !offscreen || !ctx) return false;
+      const fallbackStart = performance.now();
+      gpuDisplayVisibleRef.current = false;
+      setGpuDisplayVisible(false);
+      drawMain(ctx, offscreen);
+      const dbg = show3dPerfDebug();
+      if (dbg) {
+        const latencyMs = transformInputAtRef.current > 0 ? performance.now() - transformInputAtRef.current : 0;
+        dbg.lastInteractionRenderMs = Number((performance.now() - fallbackStart).toFixed(2));
+        dbg.lastInteractionLatencyMs = Number(latencyMs.toFixed(2));
+        dbg.lastInteractionRenderFrame = playbackIdxRef.current;
+        dbg.lastInteractionRenderPath = path;
+      }
+      return true;
+    };
     if (offline && sidecarMode && (sidecarRamReadyRef.current || sidecarU8FrameCacheRef.current.size > 0)) {
       const idx = Number.isFinite(playbackIdxRef.current) ? playbackIdxRef.current : liveSliceIdx;
       const start = performance.now();
@@ -11486,48 +12515,264 @@ function Show3D() {
       }
       return rendered;
     }
-    if (!separatePanelFrames) {
-      const canvas = canvasRef.current;
-      const offscreen = mainOffscreenRef.current;
-      const ctx = canvas?.getContext("2d");
-      if (!canvas || !offscreen || !ctx) return false;
-      const start = performance.now();
-      drawMain(ctx, offscreen);
-      const dbg = show3dPerfDebug();
-      if (dbg) {
-        const latencyMs = transformInputAtRef.current > 0 ? performance.now() - transformInputAtRef.current : 0;
-        dbg.lastInteractionRenderMs = Number((performance.now() - start).toFixed(2));
-        dbg.lastInteractionLatencyMs = Number(latencyMs.toFixed(2));
-        dbg.lastInteractionRenderFrame = playbackIdxRef.current;
-        dbg.lastInteractionRenderPath = "canvas-packed-transform";
-      }
-      return true;
-    }
-    if (
-      offline
-      || imageRotation % 4 !== 0
-      || requiresClientFrameTransform({ offline, diffMode, avgWindow })
-      || browserFilterOnRef.current
-      || frequencyFilterIsActive
-    ) return false;
     const n = Math.max(1, nSlices || 1);
     const idx = ((Math.round(playbackIdxRef.current) % n) + n) % n;
-    if (!gpuFrameCacheUploadedRef.current.has(idx)) return false;
-    const start = performance.now();
-    const rendered = renderGpuPanelSlice(idx, false);
-    const dbg = show3dPerfDebug();
-    if (dbg) {
-      const latencyMs = transformInputAtRef.current > 0 ? performance.now() - transformInputAtRef.current : 0;
-      dbg.lastInteractionRenderMs = Number((performance.now() - start).toFixed(2));
-      dbg.lastInteractionLatencyMs = Number(latencyMs.toFixed(2));
-      dbg.lastInteractionRenderFrame = idx;
-      dbg.lastInteractionRenderPath = rendered ? "webgpu-panel-transform" : "miss";
+    if (separatePanelFrames) {
+      if (
+        imageRotation % 4 !== 0 ||
+        requiresClientFrameTransform({ offline, diffMode, avgWindow }) ||
+        browserFilterOnRef.current ||
+        frequencyFilterIsActive
+      ) {
+        return offline ? drawCanvasTransformFallback("canvas-panel-transform") : false;
+      }
+      if (offline) {
+        return drawCanvasTransformFallback("canvas-panel-transform");
+      }
+      const start = performance.now();
+      const gpuRendered = renderGpuPanelSlice(idx, false);
+      if (gpuRendered) {
+        const dbg = show3dPerfDebug();
+        if (dbg) {
+          const latencyMs = transformInputAtRef.current > 0 ? performance.now() - transformInputAtRef.current : 0;
+          dbg.lastInteractionRenderMs = Number((performance.now() - start).toFixed(2));
+          dbg.lastInteractionLatencyMs = Number(latencyMs.toFixed(2));
+          dbg.lastInteractionRenderFrame = idx;
+          dbg.lastInteractionRenderPath = "webgpu-panel-transform";
+        }
+        return true;
+      }
+      return offline ? drawCanvasTransformFallback("canvas-panel-transform") : false;
     }
-    return rendered;
+    if (!separatePanelFrames || offline) {
+      const start = performance.now();
+      const gpuRendered = renderGpuPackedPanelTransformSlice(idx, false);
+      if (gpuRendered) {
+        const dbg = show3dPerfDebug();
+        if (dbg) {
+          const latencyMs = transformInputAtRef.current > 0 ? performance.now() - transformInputAtRef.current : 0;
+          dbg.lastInteractionRenderMs = Number((performance.now() - start).toFixed(2));
+          dbg.lastInteractionLatencyMs = Number(latencyMs.toFixed(2));
+          dbg.lastInteractionRenderFrame = idx;
+          dbg.lastInteractionRenderPath = "webgpu-packed-panel-transform";
+        }
+        return true;
+      }
+      return drawCanvasTransformFallback("canvas-packed-transform");
+    }
+    return false;
   };
 
+  const lastTransformBurstBenchmarkTokenRef = React.useRef<unknown>(null);
+  React.useEffect(() => {
+    const req = benchmarkRequest ?? {};
+    const token = req.token;
+    const mode = typeof req.mode === "string" ? req.mode : "playback";
+    if ((typeof token !== "string" && typeof token !== "number") || mode !== "transformBurst" || lastTransformBurstBenchmarkTokenRef.current === token) return;
+    lastTransformBurstBenchmarkTokenRef.current = token;
+
+    let cancelled = false;
+    const sleep = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms));
+    const nextFrame = () => new Promise<number>(resolve => window.requestAnimationFrame(resolve));
+    const numberFromReq = (key: string, fallback: number) => {
+      const value = req[key];
+      return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+    };
+    const sampleMs = Math.max(500, numberFromReq("sampleMs", 5000));
+    const warmupMs = Math.max(0, numberFromReq("warmupMs", 500));
+    const targetFps = Math.max(1, Math.min(60, numberFromReq("targetFps", 60)));
+    const requestedPanel = Math.round(numberFromReq("panel", visiblePanelIndices[0] ?? 0));
+    const label = typeof req.label === "string" ? req.label : "show3d transform burst";
+    const reportUrl = typeof req.reportUrl === "string" ? req.reportUrl : "";
+
+    void (async () => {
+      const setStatus = (status: string, extra: Record<string, unknown> = {}) => {
+        if (!cancelled) setBenchmarkResult({ token, label, status, targetFps, mode, ...extra });
+      };
+      try {
+        setStatus("preparing");
+        const panelCount = Math.max(1, nPanels || 1);
+        const panels = visiblePanelIndices.filter((panel) => panel >= 0 && panel < panelCount);
+        const panelIdx = panels.includes(requestedPanel) ? requestedPanel : (panels[0] ?? 0);
+        const frameCount = Math.max(1, nSlices || 1);
+        const idx = ((Math.round(playbackIdxRef.current) % frameCount) + frameCount) % frameCount;
+        if (separatePanelFrames) {
+          const engine = gpuCmapRef.current;
+          if (engine && gpuCmapReadyRef.current && !gpuFrameCacheUploadedRef.current.has(idx)) {
+            const rgbaCapacity = Math.max(1, Math.round(canvasW * canvasH));
+            await ensurePanelFrameGpu(idx, rgbaCapacity);
+          }
+        } else if (!gpuFrameCacheUploadedRef.current.has(idx)) {
+          renderGpuPackedPanelTransformSlice(idx, false);
+        }
+        await sleep(warmupMs);
+        if (cancelled) return;
+
+        const intervals: number[] = [];
+        const drawMs: number[] = [];
+        const latencyMs: number[] = [];
+        const paths: string[] = [];
+        let frames = 0;
+        let misses = 0;
+        let lastTs = await nextFrame();
+        const start = performance.now();
+        while (!cancelled && performance.now() - start < sampleMs) {
+          const ts = await nextFrame();
+          intervals.push(ts - lastTs);
+          lastTs = ts;
+          const phase = (performance.now() - start) / Math.max(1, sampleMs);
+          const zoomValue = 1 + 0.85 * (0.5 + 0.5 * Math.sin(phase * Math.PI * 8));
+          const panValue = -12 * Math.sin(phase * Math.PI * 6);
+          syncPlaybackPanelTransform(panelIdx, zoomValue, panValue, panValue * 0.5);
+          transformInputAtRef.current = performance.now();
+          const drawStart = performance.now();
+          const rendered = renderCurrentPanelTransformDirect();
+          const elapsed = performance.now() - drawStart;
+          drawMs.push(elapsed);
+          const dbg = show3dPerfDebug();
+          latencyMs.push(Number(dbg?.lastInteractionLatencyMs ?? elapsed));
+          if (dbg?.lastInteractionRenderPath) paths.push(String(dbg.lastInteractionRenderPath));
+          if (rendered) frames++;
+          else misses++;
+        }
+        commitLivePanelTransforms();
+        const elapsedSeconds = Math.max(0.001, (performance.now() - start) / 1000);
+        const mean = (values: number[]) => values.length
+          ? values.reduce((sum, value) => sum + value, 0) / values.length
+          : 0;
+        const latestDbg = show3dPerfDebug() ?? {};
+        const measuredFps = frames / elapsedSeconds;
+        const result = {
+          token,
+          label,
+          status: "done",
+          mode,
+          targetFps,
+          measuredFps: Number(measuredFps.toFixed(2)),
+          pass60: measuredFps >= 60 * 0.98,
+          frames,
+          misses,
+          elapsedSeconds: Number(elapsedSeconds.toFixed(2)),
+          frameIntervalAvgMs: Number(mean(intervals).toFixed(2)),
+          frameIntervalP95Ms: percentileFromHistory(intervals, 95),
+          drawAvgMs: Number(mean(drawMs).toFixed(2)),
+          drawP95Ms: percentileFromHistory(drawMs, 95),
+          latencyAvgMs: Number(mean(latencyMs).toFixed(2)),
+          latencyP95Ms: percentileFromHistory(latencyMs, 95),
+          lastInteractionRenderPath: latestDbg.lastInteractionRenderPath ?? paths[paths.length - 1] ?? null,
+          lastRenderPath: latestDbg.lastRenderPath ?? null,
+          gpuFrameCacheUploaded: latestDbg.gpuFrameCacheUploaded ?? null,
+          gpuPreloadDone: latestDbg.gpuPreloadDone ?? null,
+          usedPaths: Array.from(new Set(paths)).slice(0, 8),
+        };
+        setBenchmarkResult(result);
+        if (reportUrl) {
+          void fetch(reportUrl, { method: "POST", mode: "no-cors", body: JSON.stringify(result) }).catch(() => {});
+        }
+      } catch (err) {
+        setStatus("error", { error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [benchmarkRequest, nPanels, nSlices, separatePanelFrames, canvasW, canvasH, visiblePanelIndices]);
+
+  React.useEffect(() => {
+    const dbg = show3dPerfDebug();
+    if (!dbg) return;
+    const runTransformBurst = async (options: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
+      const numberFromOptions = (key: string, fallback: number) => {
+        const value = options[key];
+        return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+      };
+      const sampleMs = Math.max(500, numberFromOptions("sampleMs", 5000));
+      const targetFps = Math.max(1, Math.min(60, numberFromOptions("targetFps", 60)));
+      const requestedPanel = Math.round(numberFromOptions("panel", visiblePanelIndices[0] ?? 0));
+      const panelCount = Math.max(1, nPanels || 1);
+      const panels = visiblePanelIndices.filter((panel) => panel >= 0 && panel < panelCount);
+      const panelIdx = panels.includes(requestedPanel) ? requestedPanel : (panels[0] ?? 0);
+      const frameCount = Math.max(1, nSlices || 1);
+      const idx = ((Math.round(playbackIdxRef.current) % frameCount) + frameCount) % frameCount;
+      if (separatePanelFrames && !offline) {
+        const engine = gpuCmapRef.current;
+        if (engine && gpuCmapReadyRef.current && !gpuFrameCacheUploadedRef.current.has(idx)) {
+          const rgbaCapacity = Math.max(1, Math.round(canvasW * canvasH));
+          await ensurePanelFrameGpu(idx, rgbaCapacity);
+        }
+      } else if (!gpuFrameCacheUploadedRef.current.has(idx)) {
+        renderGpuPackedPanelTransformSlice(idx, false);
+      }
+
+      const nextFrame = () => new Promise<number>(resolve => window.requestAnimationFrame(resolve));
+      const intervals: number[] = [];
+      const drawMs: number[] = [];
+      const latencyMs: number[] = [];
+      const paths: string[] = [];
+      let frames = 0;
+      let misses = 0;
+      let lastTs = await nextFrame();
+      const start = performance.now();
+      while (performance.now() - start < sampleMs) {
+        const ts = await nextFrame();
+        intervals.push(ts - lastTs);
+        lastTs = ts;
+        const phase = (performance.now() - start) / Math.max(1, sampleMs);
+        const zoomValue = 1 + 0.85 * (0.5 + 0.5 * Math.sin(phase * Math.PI * 8));
+        const panValue = -12 * Math.sin(phase * Math.PI * 6);
+        syncPlaybackPanelTransform(panelIdx, zoomValue, panValue, panValue * 0.5);
+        transformInputAtRef.current = performance.now();
+        const drawStart = performance.now();
+        const rendered = renderCurrentPanelTransformDirect();
+        const elapsed = performance.now() - drawStart;
+        drawMs.push(elapsed);
+        const currentDbg = show3dPerfDebug();
+        latencyMs.push(Number(currentDbg?.lastInteractionLatencyMs ?? elapsed));
+        if (currentDbg?.lastInteractionRenderPath) paths.push(String(currentDbg.lastInteractionRenderPath));
+        if (rendered) frames++;
+        else misses++;
+      }
+      commitLivePanelTransforms();
+      const mean = (values: number[]) => values.length
+        ? values.reduce((sum, value) => sum + value, 0) / values.length
+        : 0;
+      const elapsedSeconds = Math.max(0.001, (performance.now() - start) / 1000);
+      const measuredFps = frames / elapsedSeconds;
+      const latestDbg = show3dPerfDebug() ?? {};
+      const result = {
+        status: "done",
+        targetFps,
+        measuredFps: Number(measuredFps.toFixed(2)),
+        pass60: measuredFps >= 60 * 0.98,
+        frames,
+        misses,
+        elapsedSeconds: Number(elapsedSeconds.toFixed(2)),
+        frameIntervalAvgMs: Number(mean(intervals).toFixed(2)),
+        frameIntervalP95Ms: percentileFromHistory(intervals, 95),
+        drawAvgMs: Number(mean(drawMs).toFixed(2)),
+        drawP95Ms: percentileFromHistory(drawMs, 95),
+        latencyAvgMs: Number(mean(latencyMs).toFixed(2)),
+        latencyP95Ms: percentileFromHistory(latencyMs, 95),
+        lastInteractionRenderPath: latestDbg.lastInteractionRenderPath ?? paths[paths.length - 1] ?? null,
+        lastRenderPath: latestDbg.lastRenderPath ?? null,
+        gpuFrameCacheUploaded: latestDbg.gpuFrameCacheUploaded ?? null,
+        gpuPreloadDone: latestDbg.gpuPreloadDone ?? null,
+        usedPaths: Array.from(new Set(paths)).slice(0, 8),
+      };
+      dbg.transformBurstResult = result;
+      return result;
+    };
+    dbg.runTransformBurst = runTransformBurst;
+    return () => {
+      if (dbg.runTransformBurst === runTransformBurst) delete dbg.runTransformBurst;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nPanels, nSlices, separatePanelFrames, offline, canvasW, canvasH, visiblePanelIndices]);
+
   const scheduleTransformRender = (): boolean => {
-    if (separatePanelFrames && !sidecarMode && (offline || imageRotation % 4 !== 0)) return false;
+    if (separatePanelFrames && !sidecarMode && imageRotation % 4 !== 0) return false;
     if (transformRenderRafRef.current !== null) return true;
     transformRenderRafRef.current = window.requestAnimationFrame(() => {
       transformRenderRafRef.current = null;
@@ -11570,8 +12815,14 @@ function Show3D() {
     );
     if (offlineGpuPlaybackOwnsCanvas) return;
     const viewTransformActive = sidecarViewTransformActive();
-    const preserveGpuDisplay = playing && gpuDisplayVisibleRef.current === true && imageRotation % 4 === 0 && !viewTransformActive;
-    if (preserveGpuDisplay && separatePanelFrames) return;
+    const preserveGpuDisplay = gpuDisplayVisibleRef.current === true && imageRotation % 4 === 0 && !viewTransformActive;
+    if (preserveGpuDisplay) {
+      try {
+        if (renderCurrentPanelTransformDirect()) return;
+      } catch (err) {
+        console.warn("[Show3D] WebGPU transform repaint failed; using retained 2D canvas", err);
+      }
+    }
     if (offline && sidecarMode && viewTransformActive && sidecarRamReadyRef.current) {
       if (drawSidecarBitmapFrame(playing ? playbackIdxRef.current : liveSliceIdx, false, "layout-transform")) return;
     }
@@ -11619,11 +12870,18 @@ function Show3D() {
       return;
     }
     const transformActive = requiresClientFrameTransform({ offline, diffMode, avgWindow }) || browserFilterOnRef.current || frequencyFilterIsActive;
-    if (!offline && !transformActive && gpuDisplayVisibleRef.current) {
+    if (gpuDisplayVisibleRef.current && imageRotation % 4 === 0) {
+      try {
+        restoredGpu = renderCurrentPanelTransformDirect();
+      } catch (err) {
+        console.warn("[Show3D] Foreground WebGPU re-present failed; using the retained 2D frame", err);
+      }
+    }
+    if (!restoredGpu && !offline && !transformActive && gpuDisplayVisibleRef.current) {
       try {
         restoredGpu = renderGpuCachedSliceDirect(frameIdx, false);
       } catch (err) {
-        console.warn("[Show3D] Foreground WebGPU re-present failed; using the retained 2D frame", err);
+        console.warn("[Show3D] Foreground WebGPU cached-frame re-present failed; using the retained 2D frame", err);
       }
     }
     if (!restoredGpu && offline && sidecarMode && sidecarRamReadyRef.current && !isRgb) {
@@ -12251,7 +13509,7 @@ function Show3D() {
     const ctx = uiRef.current.getContext("2d");
     if (!ctx) return;
     ctx.clearRect(0, 0, uiRef.current.width, uiRef.current.height);
-    const showImageZoomIndicator = showZoomIndicator !== false && panelChromeVisible;
+    const showImageZoomIndicator = showZoomIndicator === true && panelChromeVisible;
     if (scaleBarVisible || showImageZoomIndicator || panelInnerBorderPx > 0) {
       const unit = pixelSize > 0 ? pixelUnit : "px";
       const pxSize = pixelSize > 0 ? pixelSize : 1;
@@ -12295,10 +13553,6 @@ function Show3D() {
           ctx.strokeRect(slotX + inset, slotY + inset, Math.max(0, slotW - panelInnerBorderPx), Math.max(0, slotH - panelInnerBorderPx));
           ctx.restore();
         }
-        ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
-        ctx.shadowBlur = 2;
-        ctx.shadowOffsetX = 1;
-        ctx.shadowOffsetY = 1;
         ctx.fillStyle = "white";
         if (scaleBarVisible) {
           // Cap bar at 25% of slot width so it never overflows a small slot.
@@ -12318,13 +13572,25 @@ function Show3D() {
           const barPx = (nicePhysical / pxSize) * effectiveZoom;
           const barY = slotY + slotH - margin;
           const barX = slotX + slotW - barPx - margin;
+          ctx.shadowColor = "transparent";
+          ctx.shadowBlur = 0;
+          ctx.shadowOffsetX = 0;
+          ctx.shadowOffsetY = 0;
           ctx.fillRect(barX, barY, barPx, barThickness);
+          ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
+          ctx.shadowBlur = 2;
+          ctx.shadowOffsetX = 1;
+          ctx.shadowOffsetY = 1;
           const label = formatScaleLabel(nicePhysical, unit);
           ctx.textAlign = "center";
           ctx.textBaseline = "bottom";
           ctx.fillText(label, barX + barPx / 2, barY - 4);
         }
         if (showImageZoomIndicator) {
+          ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
+          ctx.shadowBlur = 2;
+          ctx.shadowOffsetX = 1;
+          ctx.shadowOffsetY = 1;
           ctx.textAlign = "left";
           ctx.textBaseline = "bottom";
           ctx.fillText(formatZoomLabel(panelState.zoom), slotX + margin, slotY + slotH - margin + barThickness);
@@ -13996,7 +15262,9 @@ function Show3D() {
     // Ignore clicks in empty grid cells (partial last row when N isn't a
     // multiple of max_cols). Otherwise the click attributes to the last
     // real panel and zoom/pan jumps unexpectedly.
-    if (panelIdxFromEvent(e) < 0) return;
+    const panelForSelection = panelIdxFromEvent(e);
+    if (panelForSelection < 0) return;
+    if (handlePanelSelectionMouseDown(e, panelForSelection)) return;
     clickStartRef.current = { x: e.clientX, y: e.clientY };
     pendingRoiAddRef.current = null;
     // Check if clicking on lens inset for drag or resize
@@ -15663,6 +16931,17 @@ function Show3D() {
             handled = true;
           }
           break;
+        case "h":
+        case "H": {
+          if (hasPanelChoices && selectedVisiblePanels.length > 0) {
+            const hideable = selectedVisiblePanels.filter((panel) => visiblePanelIndices.includes(panel));
+            if (hideable.length > 0 && visiblePanelCount - hideable.length >= 1) {
+              setPanelsHidden(hideable, true);
+              handled = true;
+            }
+          }
+          break;
+        }
         case "Delete":
         case "Backspace":
           if (overlayEditMode && overlaySelection) {
@@ -15795,6 +17074,7 @@ function Show3D() {
     ["Home / End", `First / Last ${dimLabel.toLowerCase()}`],
     ["R", "Reset zoom"],
     ["C", "Copy cursor coords"],
+    ...(hasPanelChoices ? [["Shift-click", "Select panel range"], ["Ctrl/⌘-click", "Toggle panel selection"], ["H", "Hide selected panels"]] as [string, string][] : []),
     ...(roiAllowed ? [["Del", "Delete selected ROI"], ["Ctrl/⌘+D", "Duplicate selected ROI"]] as [string, string][] : []),
     ["Esc", "Release keyboard focus"],
     ["Scroll", "Zoom"],
@@ -16080,13 +17360,13 @@ function Show3D() {
 	                    lineHeight: "16px",
 	                    verticalAlign: "baseline",
 	                  }}
-	                  disabled={exportBusy || (!exportEnabled && !canDownloadCurrentHtml)}
+                  disabled={exportBusy || (!exportEnabled && !canDownloadCurrentHtml && !canExportStandaloneGif && !canExportStandaloneMp4)}
 	                  onClick={handleExportMenuOpen}
 	                  aria-label="Export widget or animation"
 	                  aria-controls={exportMenuAnchor ? "show3d-export-menu-collapsed" : undefined}
 	                  aria-expanded={exportMenuAnchor ? "true" : undefined}
 	                  aria-haspopup="menu"
-	                  title={localExportStatus || exportStatus || (exportEnabled ? "Export HTML, GIF, or MP4 with a save dialog" : "Export this standalone HTML")}
+	                  title={localExportStatus || exportStatus || (exportEnabled ? "Export HTML, GIF, or MP4 with a save dialog" : "Export standalone HTML, GIF, or browser MP4 when supported")}
 	                >
 	                  {exportBusy ? "Exporting" : "Export"}
 	                </Button>
@@ -16228,7 +17508,7 @@ function Show3D() {
                   sx={{ ...themedSelect, minWidth: 48, fontSize: 10 }}
                   MenuProps={themedMenuProps}
                   inputProps={{ "aria-label": "Show3D panel columns" }}
-                  title="Number of Show3D panel columns"
+                  title="Maximum panel columns; the viewer reduces columns when the window is too narrow"
                 >
                   {show3dColumnOptions.map((cols) => (
                     <MenuItem key={cols} value={String(cols)}>{cols}</MenuItem>
@@ -16755,6 +18035,17 @@ function Show3D() {
                   >
                     {visiblePanelCount === panelMenuTotal ? "Panels" : `Panels ${visiblePanelCount}/${panelMenuTotal}`}
                   </Button>
+                  {selectedVisibleCount > 1 && selectedVisibleCount < visiblePanelCount && (
+                    <Button
+                      size="small"
+                      sx={compactButton}
+                      onClick={() => setPanelsHidden(selectedVisiblePanels, true)}
+                      aria-label={`Hide ${selectedVisibleCount} selected panels`}
+                      title={`Hide ${selectedVisibleCount} selected panels`}
+                    >
+                      Hide {selectedVisibleCount}
+                    </Button>
+                  )}
                   <Menu
                     id="show3d-panels-menu"
                     anchorEl={panelMenuAnchor}
@@ -16796,6 +18087,23 @@ function Show3D() {
                     >
                       <VisibilityIcon sx={{ fontSize: 16, mr: 1, color: themeColors.accent }} />
                       <Typography sx={{ fontSize: 11 }}>Show all panels</Typography>
+                    </MenuItem>
+                    <MenuItem
+                      dense
+                      disabled={selectedVisibleCount <= 1 || selectedVisibleCount >= visiblePanelCount}
+                      onClick={() => setPanelsHidden(selectedVisiblePanels, true)}
+                      title={selectedVisibleCount >= visiblePanelCount ? "At least one panel must remain visible" : undefined}
+                    >
+                      <VisibilityOffIcon sx={{ fontSize: 16, mr: 1, color: themeColors.accent }} />
+                      <Typography sx={{ fontSize: 11 }}>Hide selected ({selectedVisibleCount})</Typography>
+                    </MenuItem>
+                    <MenuItem
+                      dense
+                      disabled={selectedVisibleCount <= 1}
+                      onClick={() => setSelectedPanels([])}
+                    >
+                      <VisibilityIcon sx={{ fontSize: 16, mr: 1, color: themeColors.textMuted }} />
+                      <Typography sx={{ fontSize: 11 }}>Clear selection</Typography>
                     </MenuItem>
                     {!isPaged && (
                       <MenuItem
@@ -16843,13 +18151,13 @@ function Show3D() {
                   <Button
                     size="small"
                     sx={compactButton}
-                    disabled={exportBusy || (!exportEnabled && !canDownloadCurrentHtml)}
+                  disabled={exportBusy || (!exportEnabled && !canDownloadCurrentHtml && !canExportStandaloneGif && !canExportStandaloneMp4)}
                     onClick={handleExportMenuOpen}
                     aria-label="Export widget or animation"
                     aria-controls={exportMenuAnchor ? "show3d-export-menu" : undefined}
                     aria-expanded={exportMenuAnchor ? "true" : undefined}
                     aria-haspopup="menu"
-                    title={localExportStatus || exportStatus || (exportEnabled ? "Export HTML, GIF, or MP4 with a save dialog" : "Export this standalone HTML")}
+                    title={localExportStatus || exportStatus || (exportEnabled ? "Export HTML, GIF, or MP4 with a save dialog" : "Export standalone HTML, GIF, or browser MP4 when supported")}
                   >
                     {exportBusy ? "Exporting" : "Export"}
                   </Button>
@@ -16865,7 +18173,7 @@ function Show3D() {
                   </Menu>
                 </>
               )}
-              {(exportEnabled || canDownloadCurrentHtml || canExportStandaloneGif) && (localExportStatus || exportStatus) && (
+              {(exportEnabled || canDownloadCurrentHtml || canExportStandaloneGif || canExportStandaloneMp4) && (localExportStatus || exportStatus) && (
                 <Typography
                   sx={{
                     ...typography.label,
@@ -17053,6 +18361,35 @@ function Show3D() {
                       : "0 0 0 1px rgba(0,0,0,0.45)",
                     pointerEvents: "none",
                     zIndex: 8,
+                  }}
+                />
+              );
+            })}
+            {(nPanels || 1) > 1 && visiblePanelIndices.map((panel, slot) => {
+              if (!selectedPanelSet.has(panel)) return null;
+              const n = Math.max(1, visiblePanelCount || 1);
+              const cols = panelColsForCount(n);
+              const rows = Math.ceil(n / cols);
+              const gap = n > 1 ? (panelGapPx) : 0;
+              const panelW = (canvasW - gap * (cols - 1)) / cols;
+              const panelH = (canvasH - gap * (rows - 1)) / rows;
+              const panelLeft = (slot % cols) * (panelW + gap);
+              const panelTop = Math.floor(slot / cols) * (panelH + gap);
+              return (
+                <Box
+                  key={`panel-selection-${panel}`}
+                  data-show3d-panel-selection={panel}
+                  title={`Selected ${panelLabel(panel)}`}
+                  sx={{
+                    position: "absolute",
+                    left: `${(panelLeft / Math.max(1, canvasW)) * 100}%`,
+                    top: `${(panelTop / Math.max(1, canvasH)) * 100}%`,
+                    width: `${(panelW / Math.max(1, canvasW)) * 100}%`,
+                    height: `${(panelH / Math.max(1, canvasH)) * 100}%`,
+                    boxSizing: "border-box",
+                    boxShadow: `inset 0 0 0 3px ${themeColors.accent}, inset 0 0 0 5px rgba(0,0,0,0.78)`,
+                    pointerEvents: "none",
+                    zIndex: 9,
                   }}
                 />
               );
@@ -17572,7 +18909,7 @@ function Show3D() {
                         "&:hover": { opacity: 1 },
                       }}
                     />
-                    {showZoomIndicator !== false && panelChromeVisible && (
+                    {showZoomIndicator === true && panelChromeVisible && (
                       <Box
                         className="quantem-fft-zoom-label"
                         data-show3d-fft-zoom-indicator={panel}
@@ -18266,7 +19603,7 @@ function Show3D() {
               <canvas ref={fftCanvasRef} width={canvasW} height={canvasH} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", imageRendering: smooth ? "auto" : "pixelated", touchAction: "none" }} role="img" aria-label={roiFftActive && fftCropDims ? `FFT power spectrum of ROI crop (${fftCropDims.cropWidth} by ${fftCropDims.cropHeight} pixels)` : "FFT power spectrum of current frame"} />
               <canvas ref={fftOverlayRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} aria-hidden="true" />
               {show3dFrequencyRing}
-              {showZoomIndicator !== false && panelChromeVisible && (() => {
+              {showZoomIndicator === true && panelChromeVisible && (() => {
                 const n = Math.max(1, visiblePanelCount || 1);
                 const cols = panelColsForCount(n);
                 const rows = Math.ceil(n / cols);

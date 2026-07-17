@@ -47,7 +47,7 @@ export. See the [Show3D tutorial](../tutorials/show3d).
 | FFT toggle | `show_fft` | Shows the FFT view for the current frame or visible panel grid |
 | FFT quality labels | `fft_metrics` | Compact in-panel label reports FFT sharpness, peak count, and peak SNR from the cached FFT magnitude |
 | FFT window toggle | `fft_window` | Apodization on/off before FFT rendering |
-| Resize / zoom chrome | `show_resize_handles`, `show_zoom_indicator` | Resize handles and zoom readouts show/hide; the zoom setting covers every real-space panel and FFT tile/inset |
+| Resize / zoom chrome | `show_resize_handles`, `show_zoom_indicator` | Resize handles show/hide; zoom readouts are hidden by default and can be enabled for every real-space panel and FFT tile/inset |
 | FFT layout and initial view | `fft_layout`, `fft_overlay_position`, `fft_overlay_size`, `fft_overlay_zoom` | Places FFTs below, right, or inside every panel and initializes their shared zoom |
 | Denoise | `denoise_enabled`, `denoise`, `denoise_sigma`, `denoise_bin`, `show_denoise` | The master swaps raw/denoised frames without losing settings; Settings expands the Method/σ/bin editor; an active filter also reshapes FFT |
 | Filter | `frequency_filter_enabled`, `frequency_filter`, `frequency_filter_cutoff`, `frequency_filter_center`, `frequency_filter_width`, `show_frequency_filter` | View-only low/high/band-pass filtering with a draggable FFT ring; stored frames, statistics, and raw exports remain unchanged |
@@ -217,9 +217,9 @@ w.export_html("lambda_movie.html", encoding="uint8")
 
 In a live Python-backed widget, the Export menu can write HTML and request
 GIF/MP4 animation exports through the Python backend. In standalone HTML, the
-page can download itself as HTML; GIF/MP4 entries remain visible but disabled
-with a backend-required explanation until browser-side animation encoding is
-implemented.
+page can download itself as HTML, export GIF in the browser, and export MP4 in
+browsers with WebCodecs H.264 support. If browser MP4 is unavailable, the MP4
+entry remains visible with a browser-support or live-backend explanation.
 
 The denoise family matches Show2D. See
 [Which denoise filter should I use?](show2d.md#which-denoise-filter-should-i-use)
@@ -293,11 +293,10 @@ The first FFT for a frame or ROI may take a moment on large data. After that,
 Show3D reuses the cached FFT magnitude when you return to the same frame and
 when you redraw, zoom, pan, scrub, or show metric labels.
 
-Every visible FFT tile or overlay inset shows the shared live magnification as
-an `N.N×` badge, even for uncalibrated arrays. Wheel or pinch zoom updates it;
-double-click, double-tap, or Reset returns to `1.0×`. Pass
-`fft_overlay_zoom=2.0` to initialize any FFT layout at `2.0×`, and set
-`show_zoom_indicator=False` to hide both real-space and FFT zoom badges.
+When `show_zoom_indicator=True`, every visible FFT tile or overlay inset shows
+the shared live magnification as an `N.N×` badge, even for uncalibrated arrays.
+Wheel or pinch zoom updates it; double-click, double-tap, or Reset returns to
+`1.0×`. Pass `fft_overlay_zoom=2.0` to initialize any FFT layout at `2.0×`.
 
 ## Reuse ROI coordinates across a stack
 
@@ -656,6 +655,14 @@ w.save_gif("movie_slides.gif", quality="medium", fps=8, slides_preset=True)
 The GIF/MP4 path exports the full panel frames. Browser-only zoom and pan
 gestures are view state, so use HTML export when collaborators need to continue
 zooming, panning, or changing contrast interactively.
+
+For publication or presentation movies, prefer exporting from the live widget
+or from an exact standalone HTML export. Standalone HTML files written with
+`encoding="uint8"` store encoded display data, not the original float32/uint16
+stack. The standalone GIF/MP4 export remains available for quick sharing, but
+the export panel warns that GIF adds another 256-color palette step and that
+exact/live export is the fidelity path for PowerPoint, Slack, or publication
+review.
 
 Use the Python API for frame labels, background color, bounce playback, and other
 presentation-specific choices. `frame_start` and `frame_stop` follow normal

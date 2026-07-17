@@ -12,6 +12,8 @@ quantem show2d ./frames/ --watch               # live folder        -> append ne
 quantem show4dstem ./masters/                  # *_master.h5        -> live Show4DSTEM
 quantem show4dstem a_master.h5 b_master.h5     # several masters    -> one 5D multi-tilt viewer
 quantem show4dstem ./masters/ --html           # 4D-STEM            -> shareable offline HTML
+quantem showptycho scan_master.h5               # raw 4D-STEM master -> ShowPtycho WebGPU folder
+quantem showptycho ./ptycho-export/             # ShowPtycho folder  -> WebGPU browser review
 quantem showfolder ./session/                  # microscopy folder  -> ShowFolder notebook/HTML
 quantem data-transfer plan ./raw/ /ssd0/run /ssd1/run --manifest run.json
 quantem data-transfer show4dstem --manifest run.json --gpus 0,1 --dtype u8 --bin 1
@@ -27,6 +29,7 @@ quantem github tutorial_github.ipynb --no-execute # optional static copy for Git
 | `quantem show2d <image / folder>` | one image, or a folder | a Show2D HTML (a folder becomes a gallery); with `--watch`, a live ShowFolder notebook |
 | `quantem show3d <folder>` | a folder of same-size frames | a Show3D scrub HTML; with `--watch`, a live ShowFolder notebook |
 | `quantem show4dstem <master(s) / folder>` | one or more `*_master.h5` | a live Show4DSTEM notebook (or `--html`) |
+| `quantem showptycho <master.h5 / folder>` | a raw `*_master.h5` or a ShowPtycho WebGPU folder export | builds/serves a ShowPtycho browser review |
 | `quantem showfolder <folder>` | microscopy session folder | a ShowFolder notebook (or `--html`) |
 | `quantem data-transfer plan/inspect/copy/update/masters/show4dstem` | `*_master.h5` folder plus target roots | manifest-backed transfer planning, state inspection, explicit copy, resume/update, ready-master listing, and Show4DSTEM notebook handoff |
 | `quantem html <notebook.ipynb>` | a notebook you wrote | runs it, or with `--no-execute` exports saved outputs/state, into one standalone interactive HTML |
@@ -44,6 +47,55 @@ offline file (served locally, since a `file://` page can't fetch its companion).
 
 Everything lands in `~/Downloads` (or the current directory on machines without
 one) and opens automatically on a desktop.
+
+## ShowPtycho folder review
+
+ShowPtycho WebGPU review can start directly from one `*_master.h5`:
+
+```bash
+quantem showptycho BTO_18_master.h5
+```
+
+The command looks for a matching QuantEM calibration next to the master, for
+example `quantem/screen/_calibrations.json`. When that file is not present,
+provide the microscope geometry explicitly:
+
+```bash
+quantem showptycho BTO_18_master.h5 \
+  --semiangle 30 --scan-sampling 0.264 --voltage-kv 300
+```
+
+ShowPtycho defaults to native detector pixels (`--bin 1`) because ptychography
+review should not silently downsample the bright-field disk. Use `--bin N` only
+when you intentionally want a downsampled exploratory export. The generated
+artifact is a folder containing `index.html`, `manifest.json`, calibration
+metadata, and a `source/` directory with the original compressed HDF5 master and
+data files linked or copied into the review folder. It does not save persistent
+float32 reference images or a complex64 BF reducer by default. The browser
+decodes HDF5 chunks on WebGPU and builds the BF-indexed reducers transiently.
+The default interactive BF preview is 30 percent of the selected disk; move the
+BF control to full count in the widget for the authoritative full-disk view, or
+start full-BF review directly with `--drag-bf 1.0`.
+
+Existing ShowPtycho WebGPU exports are also folders because the microscopy
+payload can be several gigabytes. Open them with the CLI:
+
+```bash
+quantem showptycho ./logic013_512_bfr24/
+```
+
+or let auto-detection choose the same path:
+
+```bash
+quantem show ./logic013_512_bfr24/
+```
+
+The command validates `manifest.json`, prints the compressed HDF5 source
+summary, starts the required local HTTP server with byte-range support, opens
+`index.html`, and stays alive until Ctrl-C. Use `--port 8900` for a fixed port
+or `--bind 0.0.0.0` only when you intentionally want another device on the
+network to reach the viewer. Share the whole folder with a colleague; sending
+only `index.html` omits the HDF5 source files needed for WebGPU reconstruction.
 
 ## DataTransfer
 
@@ -107,7 +159,7 @@ HTML; serve HTML from GitHub Pages or another static host.
 
 | Option | Effect |
 |---|---|
-| `--bin N` | detector mean-bin factor for 4D-STEM (default 8 for `show*`; `data-transfer` defaults to 1) |
+| `--bin N` | detector mean-bin factor; Show4DSTEM defaults to 8, ShowPtycho and `data-transfer` default to 1 |
 | `--html` | 4D-STEM: write the offline-WebGPU HTML instead of a notebook |
 | `--watch` | folder: write a live ShowFolder-watched notebook; Show2D/Show3D append new image files, Show4DSTEM opens lazy masters |
 | `--gpus 0,1`, `--page-budget auto` | watched Show4DSTEM: pick CUDA cards and GPU-resident dataset cache policy |
@@ -115,6 +167,8 @@ HTML; serve HTML from GitHub Pages or another static host.
 | `--out PATH` | output file or directory (default `~/Downloads`) |
 | `--no-open` | write the file(s) without launching a browser or Jupyter |
 | `--title`, `-v/--verbose` | page title; verbose progress |
+| `--calibration`, `--semiangle`, `--scan-sampling`, `--voltage-kv` | ShowPtycho master generation geometry and calibration controls |
+| `--drag-bf X` | ShowPtycho BF preview fraction or count; `0.3` is 30 percent, `1.0` is full BF, values greater than 1 are explicit BF-pixel counts |
 
 ## Backends
 

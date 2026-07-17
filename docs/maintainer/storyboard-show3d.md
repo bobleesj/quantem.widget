@@ -193,6 +193,8 @@ bottom, right, or overlay without changing real-space interaction semantics.
 - Toggle FFT right layout and verify vertical height aligns with real-space
   panels and controls remain reachable.
 - Toggle FFT overlay and verify every visible panel receives one overlay.
+- Press Play with FFT visible and verify the overlay follows the current frame
+  at a bounded cadence rather than freezing on the pre-playback frame.
 - In every layout, verify each FFT tile or inset shows the current shared
   `N.N×` multiplier, including uncalibrated data and narrow/mobile layouts;
   `show_zoom_indicator=False` must hide the FFT badges.
@@ -254,10 +256,21 @@ sizes.
 - Export GIF and MP4 panel-only animations.
 - Verify expected frame count, multi-panel layout, live-style labels, scale bar,
   zoom readout, border/background, playback speed, and file size.
+- Include at least one uint16 source-stack case. The decoded GIF/MP4 frames
+  should match the widget-rendered frame size, panel count, black inter-panel
+  gap, inner/outer borders, panel labels, scale bars, and playback fps.
 - Verify quality/speed options are visible and have clear labels.
+- For standalone HTML with encoded uint8 data, verify GIF/MP4 remain available
+  but show a warning before export that the movie uses encoded display data and
+  that exact/live export is required for publication-quality fidelity.
 - Use labels and title spans containing symbols and inline math such as
   `\lambda=0.03 raw` and `$\\chi^2$/pixel`; verify the panel menu, stats rows,
   and animation labels render symbols/math and never show raw markup.
+- For PowerPoint or Slack sharing, attach the exported GIF/MP4 and verify the
+  receiving app recognizes the media. For PowerPoint, inspect the PPTX package
+  for embedded `ppt/media/*` assets rather than linked local files, open the
+  deck in native PowerPoint when Mac automation is available, and record whether
+  playback was actually verified or blocked by OS permissions.
 - Run `PYTHONPATH=src:. python scripts/widget_show3d_animation_smoke.py` when
   judging whether a GIF is good enough for PowerPoint/email sharing.
 
@@ -276,8 +289,9 @@ sizes to match the Show2D export vocabulary.
   sizes.
 - Collapse controls for presentation-style viewing and verify Export remains
   reachable from the title chrome in live and standalone HTML.
-- In standalone HTML, verify GIF/MP4 choices remain visible but disabled with a
-  backend-required explanation until a browser-side animation encoder exists.
+- In standalone HTML, verify GIF works in-browser. Verify MP4 is enabled when
+  WebCodecs H.264 is supported, and otherwise remains visible but disabled with
+  a browser-support or live-backend explanation.
 - Verify cancellation/status text clears after the documented timeout.
 - Export HTML exact and quantized where supported.
 - [x] **S3-EX-2**: Open an exact standalone export with display-only denoise
