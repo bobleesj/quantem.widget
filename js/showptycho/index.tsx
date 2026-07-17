@@ -26,6 +26,7 @@ import PauseIcon from "@mui/icons-material/Pause";
 import PushPinIcon from "@mui/icons-material/PushPin";
 import ShuffleIcon from "@mui/icons-material/Shuffle";
 import SaveIcon from "@mui/icons-material/Save";
+import FileDownloadIcon from "@mui/icons-material/FileDownload";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import { useTheme, type ThemeColors } from "../theme";
 import { extractFloat32, formatNumber } from "../format";
@@ -313,13 +314,52 @@ function renderFFTOffscreen(
   return { canvas: renderToOffscreen(mag, w, h, lut, vmin, vmax), min, max };
 }
 
-function makeThumbnail(data: Float32Array, w: number, h: number) {
-  const { canvas: full } = renderPhaseOffscreen(data, w, h, COLORMAPS.viridis, 1, 99);
+function makeThumbnail(data: Float32Array, w: number, h: number, cmapName: string) {
+  const lut = COLORMAPS[cmapName as keyof typeof COLORMAPS] || COLORMAPS.viridis;
+  const { canvas: full } = renderPhaseOffscreen(data, w, h, lut, 1, 99);
   if (!full) return null;
   const thumb = document.createElement("canvas");
   thumb.width = THUMB_BITMAP_PX; thumb.height = THUMB_BITMAP_PX;
   thumb.getContext("2d")!.drawImage(full, 0, 0, THUMB_BITMAP_PX, THUMB_BITMAP_PX);
   return thumb;
+}
+
+function slugPart(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "pin";
+}
+
+function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    if (typeof canvas.toBlob !== "function") {
+      try {
+        const dataUrl = canvas.toDataURL("image/png");
+        const [meta, base64] = dataUrl.split(",");
+        const mime = meta.match(/data:([^;]+)/)?.[1] || "image/png";
+        const raw = atob(base64);
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        resolve(new Blob([bytes], { type: mime }));
+      } catch (err) {
+        reject(err);
+      }
+      return;
+    }
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Could not encode pinned image as PNG."));
+    }, "image/png");
+  });
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function publishShowPtychoTestPhase(data: Float32Array, w: number, h: number): void {
@@ -1104,6 +1144,14 @@ function Explore() {
   }, [defaultBfCount, dragBfTrait, setDragBfTrait, totalBf]);
   const [pinned, setPinned] = React.useState<PinnedEntry[]>([]);
   const [viewPin, setViewPin] = React.useState<number | null>(null);
+  const [exportStatus, setExportStatus] = React.useState("");
+  const [dragOverPin, setDragOverPin] = React.useState<number | null>(null);
+  const [draggingPin, setDraggingPin] = React.useState<number | null>(null);
+  const [newPinId, setNewPinId] = React.useState<number | null>(null);
+  const draggedPinRef = React.useRef<number | null>(null);
+  const didDragPinRef = React.useRef(false);
+  const pinPointerDragRef = React.useRef<{ id: number; x: number; y: number; active: boolean } | null>(null);
+  const pinLayoutBeforeRef = React.useRef<Map<number, DOMRect> | null>(null);
 
   const [phaseZoom, setPhaseZoom] = React.useState(ZOOM_RESET);
   const [fftZoom, setFFTZoom] = React.useState(ZOOM_RESET);
@@ -2019,10 +2067,57 @@ function Explore() {
   };
   const resetZoom = () => { setPhaseZoom(ZOOM_RESET); setFFTZoom(ZOOM_RESET); };
 
+  const capturePinLayout = React.useCallback(() => {
+    const rects = new Map<number, DOMRect>();
+    document.querySelectorAll<HTMLElement>("[data-showptycho-pin-id]").forEach(el => {
+      const id = Number(el.getAttribute("data-showptycho-pin-id"));
+      if (Number.isFinite(id)) rects.set(id, el.getBoundingClientRect());
+    });
+    pinLayoutBeforeRef.current = rects;
+  }, []);
+
+  React.useLayoutEffect(() => {
+    const before = pinLayoutBeforeRef.current;
+    if (!before) return;
+    pinLayoutBeforeRef.current = null;
+    window.requestAnimationFrame(() => {
+      document.querySelectorAll<HTMLElement>("[data-showptycho-pin-id]").forEach(el => {
+        const id = Number(el.getAttribute("data-showptycho-pin-id"));
+        const previous = before.get(id);
+        if (!previous && id === newPinId) {
+          el.animate(
+            [
+              { opacity: 0, transform: "scale(0.82)" },
+              { opacity: 1, transform: "scale(1.06)" },
+              { opacity: 1, transform: "scale(1)" },
+            ],
+            { duration: 320, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+          );
+          document.documentElement.setAttribute("data-showptycho-last-pin-animation", `add:${id}`);
+          return;
+        }
+        if (!previous) return;
+        const next = el.getBoundingClientRect();
+        const dx = previous.left - next.left;
+        const dy = previous.top - next.top;
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+        el.animate(
+          [
+            { transform: `translate(${dx}px, ${dy}px) scale(1)`, zIndex: 2 },
+            { transform: "translate(0, 0) scale(1)", zIndex: 2 },
+          ],
+          { duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+        );
+        document.documentElement.setAttribute("data-showptycho-last-pin-animation", `move:${id}`);
+      });
+    });
+  }, [newPinId, pinned]);
+
   /* --- Pin --- */
   const doPin = React.useCallback(() => {
     const phase = rawPhaseRef.current;
     if (!phase || busy) return;
+    capturePinLayout();
     const entry: PinnedEntry = {
       id: Date.now(),
       C10: sliderVals.current.c10,
@@ -2035,26 +2130,169 @@ function Explore() {
       timestamp: new Date().toISOString(),
       phaseData: new Float32Array(phase.data),
       w: phase.w, h: phase.h,
-      thumb: makeThumbnail(phase.data, phase.w, phase.h),
+      thumb: makeThumbnail(phase.data, phase.w, phase.h, cmapRef.current),
     };
     setPinned(prev => {
       const next = [...prev, entry];
       if (next.length > MAX_PINS) next.shift();
       return next;
     });
+    setNewPinId(entry.id);
+    window.setTimeout(() => setNewPinId(current => current === entry.id ? null : current), 700);
     setPinJson(JSON.stringify({
       action: "pin", id: entry.id,
       C10: entry.C10, C12: entry.C12, phi12_deg: entry.phi12_deg,
       rotation_deg: entry.rotation_deg, flip_phase: entry.flip_phase,
       loss: entry.loss, timestamp: entry.timestamp,
     }));
-  }, [busy, loss, rotationDeg, flipPhase, setPinJson]);
+  }, [busy, capturePinLayout, loss, rotationDeg, flipPhase, setPinJson]);
+
+  React.useEffect(() => {
+    setPinned(prev => {
+      if (prev.length === 0) return prev;
+      return prev.map(p => ({
+        ...p,
+        thumb: makeThumbnail(p.phaseData, p.w, p.h, cmap),
+      }));
+    });
+  }, [cmap]);
+
+  const doExportPinned = React.useCallback(async () => {
+    if (pinned.length === 0) return;
+    setExportStatus(`Exporting ${pinned.length}`);
+    try {
+      const lut = COLORMAPS[cmapRef.current as keyof typeof COLORMAPS] || COLORMAPS.viridis;
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const manifest = {
+        exported_at: new Date().toISOString(),
+        colormap: cmapRef.current,
+        contrast_percentiles: [1, 99],
+        count: pinned.length,
+        pins: pinned.map((p, i) => ({
+          index: i + 1,
+          filename: `showptycho_pin_${String(i + 1).padStart(2, "0")}_C10_${slugPart(p.C10.toFixed(0))}_C12_${slugPart(p.C12.toFixed(0))}_phi_${slugPart(p.phi12_deg.toFixed(0))}.png`,
+          C10: p.C10,
+          C12: p.C12,
+          phi12_deg: p.phi12_deg,
+          rotation_deg: p.rotation_deg,
+          flip_phase: p.flip_phase,
+          loss: p.loss,
+          starred: p.starred,
+          timestamp: p.timestamp,
+          shape: [p.h, p.w],
+        })),
+      };
+
+      let exported = 0;
+      for (const [i, p] of pinned.entries()) {
+        const { canvas } = renderPhaseOffscreen(p.phaseData, p.w, p.h, lut, 1, 99);
+        if (!canvas) continue;
+        const blob = await canvasToPngBlob(canvas);
+        downloadBlob(blob, manifest.pins[i].filename);
+        exported += 1;
+        await new Promise(resolve => window.setTimeout(resolve, 80));
+      }
+      const manifestName = `showptycho_pins_${stamp}.json`;
+      downloadBlob(
+        new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" }),
+        manifestName,
+      );
+      const message = `Exported ${exported} PNG + JSON`;
+      setExportStatus(message);
+      document.documentElement.setAttribute("data-showptycho-last-export", JSON.stringify({
+        count: exported,
+        manifest: manifestName,
+        colormap: cmapRef.current,
+      }));
+    } catch (err) {
+      const message = `Export failed ${err instanceof Error ? err.message : String(err)}`;
+      setExportStatus(message);
+      document.documentElement.setAttribute("data-showptycho-last-export", JSON.stringify({ error: message }));
+    }
+  }, [pinned]);
+
+  const reorderPinned = React.useCallback((fromId: number, toId: number) => {
+    if (fromId === toId) return;
+    capturePinLayout();
+    setPinned(prev => {
+      const from = prev.findIndex(p => p.id === fromId);
+      const to = prev.findIndex(p => p.id === toId);
+      if (from < 0 || to < 0 || from === to) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  }, [capturePinLayout]);
+
+  const pinIdFromPoint = React.useCallback((clientX: number, clientY: number) => {
+    const el = document.elementFromPoint(clientX, clientY)?.closest("[data-showptycho-pin-id]");
+    const raw = el?.getAttribute("data-showptycho-pin-id");
+    const id = raw ? Number(raw) : NaN;
+    return Number.isFinite(id) ? id : null;
+  }, []);
+
+  const beginPinDrag = React.useCallback((id: number, clientX: number, clientY: number) => {
+    pinPointerDragRef.current = { id, x: clientX, y: clientY, active: false };
+    draggedPinRef.current = id;
+  }, []);
+
+  const updatePinDrag = React.useCallback((id: number, clientX: number, clientY: number) => {
+    const drag = pinPointerDragRef.current;
+    if (!drag || drag.id !== id) return false;
+    const dx = clientX - drag.x;
+    const dy = clientY - drag.y;
+    if (!drag.active && Math.hypot(dx, dy) < 6) return false;
+    drag.active = true;
+    setDraggingPin(id);
+    didDragPinRef.current = true;
+    setDragOverPin(pinIdFromPoint(clientX, clientY));
+    return true;
+  }, [pinIdFromPoint]);
+
+  const finishPinDrag = React.useCallback((id: number, clientX: number, clientY: number) => {
+    const drag = pinPointerDragRef.current;
+    if (!drag || drag.id !== id) return;
+    const overId = pinIdFromPoint(clientX, clientY);
+    if (drag.active && overId != null) reorderPinned(drag.id, overId);
+    pinPointerDragRef.current = null;
+    draggedPinRef.current = null;
+    setDraggingPin(null);
+    setDragOverPin(null);
+    if (drag.active) window.setTimeout(() => { didDragPinRef.current = false; }, 0);
+  }, [pinIdFromPoint, reorderPinned]);
+
+  const cancelPinDrag = React.useCallback(() => {
+    pinPointerDragRef.current = null;
+    draggedPinRef.current = null;
+    setDraggingPin(null);
+    setDragOverPin(null);
+    window.setTimeout(() => { didDragPinRef.current = false; }, 0);
+  }, []);
+
+  React.useEffect(() => {
+    const handleMouseMove = (event: MouseEvent) => {
+      const drag = pinPointerDragRef.current;
+      if (drag) updatePinDrag(drag.id, event.clientX, event.clientY);
+    };
+    const handleMouseUp = (event: MouseEvent) => {
+      const drag = pinPointerDragRef.current;
+      if (drag) finishPinDrag(drag.id, event.clientX, event.clientY);
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [finishPinDrag, updatePinDrag]);
 
   const doUnpin = React.useCallback((id: number) => {
+    capturePinLayout();
     setPinned(prev => prev.filter(p => p.id !== id));
     setViewPin(current => current === id ? null : current);
     setPinJson(JSON.stringify({ action: "unpin", id }));
-  }, [setPinJson]);
+  }, [capturePinLayout, setPinJson]);
 
   // Toggle star on a pin; Python persists the new state to disk.
   const doToggleStar = React.useCallback((id: number) => {
@@ -2923,6 +3161,22 @@ function Explore() {
               <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>
                 Pinned ({pinned.length}/{MAX_PINS}) · P pin · ← → view · S star · Esc exit
               </Typography>
+              <Tooltip title="Export every pinned phase image as PNG plus a JSON manifest with aberration metadata." placement="top" arrow>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<FileDownloadIcon sx={{ fontSize: 14 }} />}
+                  onClick={() => { void doExportPinned(); }}
+                  sx={{ ...compactButton(tc), height: ACTION_CONTROL_HEIGHT, color: tc.accent, borderColor: tc.accent, minWidth: 78 }}
+                >
+                  Export
+                </Button>
+              </Tooltip>
+              {exportStatus && (
+                <Typography sx={{ ...typography.value, color: exportStatus.startsWith("Export failed") ? STATUS_BAD : tc.textMuted }}>
+                  {exportStatus}
+                </Typography>
+              )}
               <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>size</Typography>
               <Select
                 value={thumbSize}
@@ -2945,22 +3199,107 @@ function Explore() {
             <Stack direction="row" spacing={`${SPACING.XS}px`} sx={{ overflowX: "auto", pb: 0.5 }}>
               {pinned.map(p => {
                 const px = THUMB_SIZE_PX[thumbSize];
+                const isDraggingPin = draggingPin === p.id;
+                const isNewPin = newPinId === p.id;
                 return (
-                  <Box key={p.id} onClick={() => doViewPin(p)} sx={{
-                    position: "relative", cursor: "pointer", flexShrink: 0,
+                  <Box
+                    key={p.id}
+                    data-showptycho-pin-id={p.id}
+                    data-showptycho-pin-state={isDraggingPin ? "dragging" : isNewPin ? "new" : undefined}
+                    title="Drag to reorder pinned images. Click to view."
+                    onClick={() => {
+                      if (didDragPinRef.current) {
+                        didDragPinRef.current = false;
+                        return;
+                      }
+                      doViewPin(p);
+                    }}
+                    onPointerDown={(e) => {
+                      if (e.button !== 0) return;
+                      beginPinDrag(p.id, e.clientX, e.clientY);
+                      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+                    }}
+                    onPointerMove={(e) => {
+                      if (updatePinDrag(p.id, e.clientX, e.clientY)) e.preventDefault();
+                    }}
+                    onPointerUp={(e) => {
+                      finishPinDrag(p.id, e.clientX, e.clientY);
+                    }}
+                    onPointerCancel={() => {
+                      cancelPinDrag();
+                    }}
+                    onMouseDown={(e) => {
+                      if (e.button !== 0) return;
+                      beginPinDrag(p.id, e.clientX, e.clientY);
+                    }}
+                    onMouseMove={(e) => {
+                      if (updatePinDrag(p.id, e.clientX, e.clientY)) e.preventDefault();
+                    }}
+                    onMouseUp={(e) => {
+                      finishPinDrag(p.id, e.clientX, e.clientY);
+                    }}
+                    onMouseLeave={(e) => {
+                      if (pinPointerDragRef.current?.active) {
+                        updatePinDrag(p.id, e.clientX, e.clientY);
+                      }
+                    }}
+                    onDragStart={(e) => {
+                      draggedPinRef.current = p.id;
+                      didDragPinRef.current = true;
+                      setDragOverPin(p.id);
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", String(p.id));
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      setDragOverPin(p.id);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const fromId = Number(e.dataTransfer.getData("text/plain") || draggedPinRef.current);
+                      if (Number.isFinite(fromId)) reorderPinned(fromId, p.id);
+                      draggedPinRef.current = null;
+                      setDragOverPin(null);
+                    }}
+                    onDragEnd={() => {
+                      draggedPinRef.current = null;
+                      setDragOverPin(null);
+                      window.setTimeout(() => { didDragPinRef.current = false; }, 0);
+                    }}
+                    sx={{
+                    position: "relative", cursor: "grab", flexShrink: 0,
                     border: viewPin === p.id
                       ? `2px solid ${tc.accent}`
                       : p.starred ? `2px solid ${STATUS_GOOD}` : "2px solid transparent",
-                    overflow: "hidden", "&:hover": { borderColor: tc.accent },
+                    outline: dragOverPin === p.id ? `2px solid ${tc.accent}` : "none",
+                    outlineOffset: 1,
+                    boxShadow: isDraggingPin ? `0 6px 16px ${tc.shadow}` : "none",
+                    transform: isDraggingPin ? "scale(1.045)" : "scale(1)",
+                    transition: "border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease, outline-color 120ms ease",
+                    animation: isNewPin ? "showptycho-pin-add 320ms cubic-bezier(0.2, 0, 0, 1)" : "none",
+                    overflow: "hidden",
+                    userSelect: "none",
+                    touchAction: "none",
+                    zIndex: isDraggingPin ? 3 : 1,
+                    "&:active": { cursor: "grabbing" },
+                    "&:hover": { borderColor: tc.accent },
+                    "@keyframes showptycho-pin-add": {
+                      "0%": { opacity: 0, transform: "scale(0.82)" },
+                      "70%": { opacity: 1, transform: "scale(1.06)" },
+                      "100%": { opacity: 1, transform: "scale(1)" },
+                    },
                   }}>
                     <canvas
+                      key={`${p.id}-${cmap}`}
+                      data-cmap={cmap}
                       ref={el => {
                         if (el && p.thumb) {
                           el.width = THUMB_BITMAP_PX; el.height = THUMB_BITMAP_PX;
                           el.getContext("2d")!.drawImage(p.thumb, 0, 0);
                         }
                       }}
-                      style={{ width: px, height: px, display: "block" }}
+                      style={{ width: px, height: px, display: "block", pointerEvents: "none" }}
                     />
                     {/* Bottom metadata strip — sized so small thumbs stay readable. */}
                     <Box sx={{

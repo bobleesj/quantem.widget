@@ -187,9 +187,24 @@ def test_showptycho_from_ssb_uses_widget_contract(monkeypatch):
     assert widget.initial_fft_on is True
     assert widget.total_bf == 8
     assert widget.drag_bf == 2
+    assert widget.c10_min == -300.0
+    assert widget.c10_max == 300.0
     result = json.loads(widget.result_json)
     assert result["loss"] == 0.125
     assert ssb._showptycho_widget is widget
+
+
+def test_showptycho_default_c10_range_includes_outlier_auto(monkeypatch):
+    """C1a: default C10 range is -300..300 unless auto C10 sits outside it."""
+    from quantem.widget import ShowPtycho
+
+    monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
+    ssb = _FakeSSB()
+    ssb.aberrations["C10"] = 383.3
+    widget = ShowPtycho(ssb)
+
+    assert widget.c10_min == -300.0
+    assert widget.c10_max == 383.3
 
 
 def test_showptycho_drag_bf_fraction_one_means_full_bf(monkeypatch):
