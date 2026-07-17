@@ -23,9 +23,9 @@ import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { useTheme } from "../theme";
 import { COLORMAPS, applyColormap } from "../colormaps";
-import { WebGPUFFT, getWebGPUFFT, fft2d, fftshift, autoEnhanceFFT, nextPow2, applyHannWindow2D } from "../fft";
+import { WebGPUFFT, getWebGPUFFT, fft2dAsync, fftshift, autoEnhanceFFT, nextPow2, applyHannWindow2D } from "../fft";
 import { Show4DSTEMCompute, Show4DSTEMCpuCompute } from "../engine/compute";
-import { readH5Volume } from "../engine/h5reader";
+import { readH5MasterInfo, readH5Volume } from "../engine/h5reader";
 import { decodeBslz4ToStack, type Bslz4Spec } from "../engine/bslz4";
 import { LazyShow4DSTEM } from "../engine/lazy";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
@@ -104,6 +104,88 @@ function buildScanMask(model: any, scanRows: number, scanCols: number): Uint32Ar
     }
   }
   return mask;
+}
+
+function normaliseViSource(value: unknown): string {
+  const raw = String(value || "roi").trim();
+  const key = raw.toLowerCase().replace(/[-\s]+/g, "_");
+  if (["", "roi", "virtual", "virtual_image", "bf"].includes(key)) return "roi";
+  if (["dpc_row", "dpc_com_row", "dpc_r", "dpcr"].includes(key)) return "DPC_row";
+  if (["dpc_col", "dpc_com_col", "dpc_c", "dpcc"].includes(key)) return "DPC_col";
+  if (["ssb", "ssb_phase", "phase"].includes(key)) return "SSB";
+  return raw;
+}
+
+function viSourceLabel(source: string): string {
+  if (source === "roi") return "ROI";
+  if (source === "DPC_row") return "DPC_row";
+  if (source === "DPC_col") return "DPC_col";
+  if (source === "SSB") return "SSB";
+  return source;
+}
+
+function ViSourceLabel({ source }: { source: string }) {
+  if (source === "DPC_row" || source === "DPC_col") {
+    return (
+      <Box component="span" sx={{ display: "inline-flex", alignItems: "baseline" }}>
+        DPC<Box component="sub" sx={{ fontSize: "0.72em", lineHeight: 0 }}>{source === "DPC_row" ? "row" : "col"}</Box>
+      </Box>
+    );
+  }
+  return <>{viSourceLabel(source)}</>;
+}
+
+function viSourceUsesSymmetricRange(source: string): boolean {
+  return source === "DPC_row" || source === "DPC_col";
+}
+
+function viProductFrameView(
+  model: any,
+  scanRows: number,
+  scanCols: number,
+  sourceOverride?: string,
+): DataView | null {
+  const source = normaliseViSource(sourceOverride ?? model.get("vi_source"));
+  if (source === "roi") return null;
+  const labels = Array.isArray(model.get("vi_product_labels")) ? model.get("vi_product_labels") as string[] : [];
+  const productIndex = labels.indexOf(source);
+  if (productIndex < 0) return null;
+  const bytes = model.get("vi_product_maps_bytes") as DataView | undefined;
+  if (!bytes || bytes.byteLength === 0) return null;
+  const frames = Math.max(1, Math.round(Number(model.get("vi_product_map_frames") || 1)));
+  const pixels = Math.max(1, scanRows * scanCols);
+  const frame = frames <= 1 ? 0 : Math.max(0, Math.min(frames - 1, Math.round(Number(model.get("frame_idx") || 0))));
+  const start = ((productIndex * frames + frame) * pixels) * 4;
+  const end = start + pixels * 4;
+  if (end > bytes.byteLength) return null;
+  return new DataView(bytes.buffer, bytes.byteOffset + start, pixels * 4);
+}
+
+function viProductStackForIndices(
+  model: any,
+  indices: number[],
+  scanRows: number,
+  scanCols: number,
+): DataView | null {
+  const source = normaliseViSource(model.get("vi_source"));
+  if (source === "roi" || indices.length === 0) return null;
+  const labels = Array.isArray(model.get("vi_product_labels")) ? model.get("vi_product_labels") as string[] : [];
+  const productIndex = labels.indexOf(source);
+  if (productIndex < 0) return null;
+  const bytes = model.get("vi_product_maps_bytes") as DataView | undefined;
+  if (!bytes || bytes.byteLength === 0) return null;
+  const frames = Math.max(1, Math.round(Number(model.get("vi_product_map_frames") || 1)));
+  const pixels = Math.max(1, scanRows * scanCols);
+  const out = new Float32Array(indices.length * pixels);
+  for (let slot = 0; slot < indices.length; slot++) {
+    const frame = frames <= 1 ? 0 : Math.max(0, Math.min(frames - 1, Math.round(Number(indices[slot]) || 0)));
+    const start = ((productIndex * frames + frame) * pixels) * 4;
+    const end = start + pixels * 4;
+    if (end > bytes.byteLength) return null;
+    const src = new Float32Array(bytes.buffer, bytes.byteOffset + start, pixels);
+    out.set(src, slot * pixels);
+  }
+  return new DataView(out.buffer);
 }
 
 const MIN_ZOOM = 0.5;
@@ -369,6 +451,35 @@ const LIGHT_ROI_COLORS: RoiColors = {
   innerHandleFill: "rgba(0, 160, 200, 0.85)",
   textColor: "#0a0",
 };
+
+const VI_SOURCE_COLORS = {
+  bf: { dark: DARK_ROI_COLORS.textColor, light: LIGHT_ROI_COLORS.textColor },
+  abf: { dark: "#44aaff", light: "#1769aa" },
+  adf: { dark: "#ffaa44", light: "#9a5a00" },
+  DPC_row: { dark: "#38bdf8", light: "#0369a1" },
+  DPC_col: { dark: "#a78bfa", light: "#6d28d9" },
+  SSB: { dark: "#f472b6", light: "#be185d" },
+} as const;
+
+function viSourceColorKey(source: string): keyof typeof VI_SOURCE_COLORS | null {
+  const normalised = normaliseViSource(source);
+  if (normalised === "DPC_row" || normalised === "DPC_col" || normalised === "SSB") {
+    return normalised;
+  }
+
+  const key = String(source || "").trim().toLowerCase().replace(/[-\s]+/g, "_");
+  if (key === "bf" || key === "roi") return "bf";
+  if (key === "abf") return "abf";
+  if (key === "adf") return "adf";
+  return null;
+}
+
+function viSourceDisplayColor(source: string, themeName: string): string | null {
+  const key = viSourceColorKey(source);
+  if (!key) return null;
+  const palette = VI_SOURCE_COLORS[key];
+  return themeName === "light" ? palette.light : palette.dark;
+}
 
 // Interaction constants
 const RESIZE_HIT_AREA_PX = 10;
@@ -2229,6 +2340,27 @@ function Show4DSTEM() {
 
   const [frameBytes] = useModelState<DataView>("frame_bytes");
   const [virtualImageBytes] = useModelState<DataView>("virtual_image_bytes");
+  const [viSource, setViSourceModel] = useModelState<string>("vi_source");
+  const [viProductLabels] = useModelState<string[]>("vi_product_labels");
+  const [viProductMapFrames] = useModelState<number>("vi_product_map_frames");
+  const [viProductMapsBytes] = useModelState<DataView>("vi_product_maps_bytes");
+  const [, setSsbComputeRequest] = useModelState<string>("ssb_compute_request");
+  const [ssbComputeStatus] = useModelState<string>("ssb_compute_status");
+  const [ssbComputeBusy] = useModelState<boolean>("ssb_compute_busy");
+  const [ssbComputeEnabled] = useModelState<boolean>("ssb_compute_enabled");
+  const [ssbComputeNTrials, setSsbComputeNTrials] = useModelState<number>("ssb_compute_n_trials");
+  const [ssbComputeRefine, setSsbComputeRefine] = useModelState<boolean>("ssb_compute_refine");
+  const [ssbComputeLockC10, setSsbComputeLockC10] = useModelState<boolean>("ssb_compute_lock_c10");
+  const [ssbComputeLockC12, setSsbComputeLockC12] = useModelState<boolean>("ssb_compute_lock_c12");
+  const [ssbComputeBfSubsample, setSsbComputeBfSubsample] = useModelState<number>("ssb_compute_bf_subsample");
+  const [ssbComputeBfPixels] = useModelState<number>("ssb_compute_bf_pixels");
+  const [ssbComputeBfSelectedPixels] = useModelState<number>("ssb_compute_bf_selected_pixels");
+  const [ssbComputeC10Nm, setSsbComputeC10Nm] = useModelState<number>("ssb_compute_c10_nm");
+  const [ssbComputeC12Nm, setSsbComputeC12Nm] = useModelState<number>("ssb_compute_c12_nm");
+  const [ssbComputePhi12Deg, setSsbComputePhi12Deg] = useModelState<number>("ssb_compute_phi12_deg");
+  const [ssbComputeRotationDeg, setSsbComputeRotationDeg] = useModelState<number>("ssb_compute_rotation_angle_deg");
+  const [ssbComputeCalibrationJson] = useModelState<string>("ssb_compute_calibration_json");
+  const [ssbComputeCalibrationFilename] = useModelState<string>("ssb_compute_calibration_filename");
 
   // ROI state
   const [roiRadiusModel, setRoiRadius] = useModelState<number>("roi_radius");
@@ -2762,6 +2894,8 @@ function Show4DSTEM() {
         compute = lz as unknown as Show4DSTEMCompute;
         if (compute) computes.push(compute);
       } else if (h5Url) {
+        let h5BadPx = new Uint32Array(0);
+        let h5TotalFrames = 0;
         if (/_master\.h5$/.test(h5Url)) {
           // Full no-bin merged = N external data files (each <2 GB, the browser ArrayBuffer cap).
           // The browser's fetch->arrayBuffer runs ~0.7 GB/s on ONE connection, so a sequential
@@ -2779,10 +2913,23 @@ function Show4DSTEM() {
           let next = 1;
           for (; next <= W; next++) inflight.set(next, fetchOne(next));
           const gpuChunks: { buffer: GPUBuffer; startScan: number; nScan: number }[] = [];
-          let startScan = 0, ds = 0;
+          let startScan = 0, ds = 0, computeMode = 1, decodedBytes = 0;
+          let maxDataFiles = Number.POSITIVE_INFINITY;
           let dev: GPUDevice | null = null;
+          let decodeDtype: "uint8" | "float32" = "uint8";
+          let sourceDtype = "unknown";
           const __t0 = performance.now(); let __decMs = 0, __parseMs = 0, __fetchBytes = 0, __waitMs = 0;
           try {
+            try {
+              const masterResp = await fetch(h5Url);
+              if (masterResp.ok) {
+                const masterInfo = readH5MasterInfo(await masterResp.arrayBuffer());
+                if (masterInfo.badPixels.length) h5BadPx = new Uint32Array(masterInfo.badPixels);
+                h5TotalFrames = Math.max(0, Math.round(Number(masterInfo.totalFrames || 0)));
+              }
+            } catch (e) {
+              console.warn("Could not read HDF5 hot-pixel mask; continuing without detector mask", e);
+            }
             for (let n = 1; !disposed; n++) {
               const p = inflight.get(n);
               if (!p) break;
@@ -2795,31 +2942,51 @@ function Show4DSTEM() {
               const __pt = performance.now();
               const vol = readH5Volume(buf, "merged");
               __parseMs += performance.now() - __pt;
+              if (h5TotalFrames > 0 && !Number.isFinite(maxDataFiles)) {
+                maxDataFiles = Math.ceil(h5TotalFrames / Math.max(1, vol.nFrames));
+              }
               ds = vol.detSize;
+              sourceDtype = vol.srcDtype;
+              decodeDtype = vol.srcDtype === "float32" ? "float32" : "uint8";
               const __dt = performance.now();
-              const dec = await decodeBslz4ToStack({ ...vol.chunks[0], startScan, nScan: vol.nFrames } as never, "float32", "float32");
+              const dec = await decodeBslz4ToStack({ ...vol.chunks[0], startScan, nScan: vol.nFrames } as never, decodeDtype, vol.srcDtype);
               __decMs += performance.now() - __dt;
               if (!dec) break;
               dev = dec.device;
+              computeMode = dec.mode;
+              decodedBytes += vol.nFrames * vol.detSize * (decodeDtype === "float32" ? 4 : 1);
               gpuChunks.push({ buffer: dec.buffer, startScan, nScan: vol.nFrames });
               startScan += vol.nFrames;
-              inflight.set(next, fetchOne(next));
-              next++;
+              if (next <= maxDataFiles) {
+                inflight.set(next, fetchOne(next));
+                next++;
+              }
             }
           } catch (e) {
             gpuChunks.forEach((c) => c.buffer.destroy());   // no mid-stream VRAM leak on fetch/parse error
             throw e;
           }
-          const __decGB = startScan * ds * 4 / 1e9;
+          const __decGB = decodedBytes / 1e9;
           (window as unknown as { __loadprof: unknown }).__loadprof = { totalMs: Math.round(performance.now() - __t0),
-            fetchedCompressedGB: +(__fetchBytes / 1e9).toFixed(1), decodedFloat32GB: +__decGB.toFixed(1),
+            fetchedCompressedGB: +(__fetchBytes / 1e9).toFixed(1), decodedGB: +__decGB.toFixed(1),
+            sourceDtype, decodeDtype, chunks: gpuChunks.length, frames: startScan,
+            badPixels: h5BadPx.length,
             fetchWaitMs: Math.round(__waitMs), decompressMs: Math.round(__decMs), parseMs: Math.round(__parseMs),
             decompressGBps: +(__decGB / (__decMs / 1000)).toFixed(2) };
-          if (dev) compute = Show4DSTEMCompute.fromGpuChunks(dev, gpuChunks, scanRows * scanCols, ds, 2);
+          if (dev) compute = Show4DSTEMCompute.fromGpuChunks(dev, gpuChunks, scanRows * scanCols, ds, computeMode);
         } else {
-          const vol = readH5Volume(await (await fetch(h5Url)).arrayBuffer(), "merged");
-          compute = await Show4DSTEMCompute.createFromBslz4Chunked([{ ...vol.chunks[0], startScan: 0, nScan: vol.nFrames }], scanRows * scanCols, vol.detSize, "float32", "float32");
+          const h5Buffer = await (await fetch(h5Url)).arrayBuffer();
+          try {
+            const masterInfo = readH5MasterInfo(h5Buffer, "merged");
+            if (masterInfo.badPixels.length) h5BadPx = new Uint32Array(masterInfo.badPixels);
+          } catch (e) {
+            console.warn("Could not read HDF5 hot-pixel mask; continuing without detector mask", e);
+          }
+          const vol = readH5Volume(h5Buffer, "merged");
+          const decodeDtype = vol.srcDtype === "float32" ? "float32" : "uint8";
+          compute = await Show4DSTEMCompute.createFromBslz4Chunked([{ ...vol.chunks[0], startScan: 0, nScan: vol.nFrames }], scanRows * scanCols, vol.detSize, decodeDtype, vol.srcDtype);
         }
+        if (compute && h5BadPx.length) compute.badPx = h5BadPx;
         if (compute) computes.push(compute);
       } else if (bslz4Meta) {
         // bslz4 mode: ship native HDF5 bitshuffle+LZ4 bytes (~6x smaller than uint16),
@@ -2924,6 +3091,11 @@ function Show4DSTEM() {
       const badPxJson = model.get("_offline_bad_px") as string | undefined;
       if (badPxJson) compute.badPx = new Uint32Array(JSON.parse(badPxJson) as number[]);
       const recomputeVI = async () => {
+        const product = viProductFrameView(model, scanRows, scanCols);
+        if (product) {
+          model.set("virtual_image_bytes", product);
+          return;
+        }
         const vi = await compute!.maskedSum(buildDetectorMask(model, detR, detC));
         model.set("virtual_image_bytes", new DataView(vi.buffer));
       };
@@ -2972,6 +3144,13 @@ function Show4DSTEM() {
       const recomputeCompareVI = async () => {
         const indices = compareVisibleIndices();
         if (!indices.length) return;
+        const productStack = viProductStackForIndices(model, indices, scanRows, scanCols);
+        if (productStack) {
+          model.set("compare_virtual_image_bytes", productStack);
+          model.set("compare_panel_count", indices.length);
+          model.set("compare_panel_indices", indices);
+          return;
+        }
         const gen = ++compareViGen;
         const mask = buildDetectorMask(model, detR, detC);
         let maskArea = 0;
@@ -3083,6 +3262,7 @@ function Show4DSTEM() {
         if (!name) return;
         const bf = model.get("bf_radius") || 1;
         model.set("roi_active", true);
+        model.set("vi_source", "roi");
         model.set("roi_center_row", model.get("center_row"));
         model.set("roi_center_col", model.get("center_col"));
         if (name === "bf") { model.set("roi_mode", "circle"); model.set("roi_radius", Math.max(1, bf)); }
@@ -3111,6 +3291,7 @@ function Show4DSTEM() {
       const dpTraits = ["vi_roi_center_row", "vi_roi_center_col", "vi_roi_radius", "vi_roi_mode", "vi_roi_width", "vi_roi_height", "vi_roi_reduce"];
       viTraits.forEach((t) => model.on("change:" + t, onVI));
       dpTraits.forEach((t) => model.on("change:" + t, onDP));
+      model.on("change:vi_source", onVI);
       model.on("change:roi_center", onRoiCenter);
       model.on("change:vi_roi_center", onViCenter);
       model.on("change:_preset_request", onPreset);
@@ -3125,6 +3306,7 @@ function Show4DSTEM() {
       detach = () => {
         viTraits.forEach((t) => model.off("change:" + t, onVI));
         dpTraits.forEach((t) => model.off("change:" + t, onDP));
+        model.off("change:vi_source", onVI);
         model.off("change:roi_center", onRoiCenter);
         model.off("change:vi_roi_center", onViCenter);
         model.off("change:_preset_request", onPreset);
@@ -3183,10 +3365,62 @@ function Show4DSTEM() {
   const effectiveShowFft = showFft;
   const displayViewMode = viewMode === "compare" ? "multiple" : viewMode === "temporal" ? "single" : (viewMode || "single");
   const compareMode = (displayViewMode === "multiple" || viewMode === "compare") && nFrames > 1;
+  const viProductSourceOptions = React.useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    (Array.isArray(viProductLabels) ? viProductLabels : []).forEach((label) => {
+      const source = normaliseViSource(label);
+      if (!["DPC_row", "DPC_col", "SSB"].includes(source) || seen.has(source)) return;
+      seen.add(source);
+      out.push(source);
+    });
+    return out;
+  }, [viProductLabels]);
+  const activeViSource = React.useMemo(() => {
+    const source = normaliseViSource(viSource);
+    return source === "roi" || viProductSourceOptions.includes(source) ? source : "roi";
+  }, [viProductSourceOptions, viSource]);
+  const hasViProductSources = viProductSourceOptions.length > 0;
+  const roiVirtualDetectorActive = activeViSource === "roi";
+  const setViSource = React.useCallback((nextSource: string) => {
+    const source = normaliseViSource(nextSource);
+    setViSourceModel(source);
+    model.set("vi_source", source);
+    model.save_changes();
+  }, [model, setViSourceModel]);
+  const displayedVirtualImageBytes = React.useMemo(() => {
+    if (activeViSource === "roi") return virtualImageBytes;
+    return viProductFrameView(model, shapeRows, shapeCols, activeViSource) ?? virtualImageBytes;
+  }, [
+    activeViSource,
+    frameIdx,
+    model,
+    shapeCols,
+    shapeRows,
+    viProductLabels,
+    viProductMapFrames,
+    viProductMapsBytes,
+    virtualImageBytes,
+  ]);
   const compareAllGroups = String(compareGroupMode || "paged") === "all";
   const activeComparePageCount = Math.max(1, Math.round(Number(comparePageCount || 1)));
   const activeComparePageIdx = Math.max(0, Math.min(activeComparePageCount - 1, Math.round(Number(comparePageIdx || 0))));
   const comparePageStatus = compareAllGroups ? "All groups" : `${activeComparePageIdx + 1}/${activeComparePageCount}`;
+  const displayedCompareVirtualImageBytes = React.useMemo(() => {
+    if (activeViSource === "roi") return compareVirtualImageBytes;
+    const indices = Array.isArray(comparePanelIndices) ? comparePanelIndices : [];
+    return viProductStackForIndices(model, indices, shapeRows, shapeCols) ?? compareVirtualImageBytes;
+  }, [
+    activeViSource,
+    comparePanelIndices,
+    compareVirtualImageBytes,
+    model,
+    shapeCols,
+    shapeRows,
+    viProductLabels,
+    viProductMapFrames,
+    viProductMapsBytes,
+  ]);
   const comparePageButtonItems = React.useMemo<(number | "gap")[]>(() => {
     if (activeComparePageCount <= 8) {
       return Array.from({ length: activeComparePageCount }, (_, idx) => idx);
@@ -3345,6 +3579,8 @@ function Show4DSTEM() {
 
   // Export
   const [dpExportAnchor, setDpExportAnchor] = React.useState<HTMLElement | null>(null);
+  const [dpMoreAnchor, setDpMoreAnchor] = React.useState<HTMLElement | null>(null);
+  const [ssbCalOpen, setSsbCalOpen] = React.useState(false);
   const [, setExportRequest] = useModelState<string>("export_request");
   const [exportStatus] = useModelState<string>("export_status");
   const [exportEnabled] = useModelState<boolean>("export_enabled");
@@ -3368,6 +3604,74 @@ function Show4DSTEM() {
       setHtmlExportBusy(false);
     }
   }, [exportStatus]);
+  const requestSsbCompute = React.useCallback((options?: {
+    manualAberrations?: boolean;
+    closeMenu?: boolean;
+    c10Nm?: number;
+    c12Nm?: number;
+    phi12Deg?: number;
+    rotationDeg?: number;
+  }) => {
+    const nTrials = Math.max(0, Math.round(Number(ssbComputeNTrials ?? 200)));
+    const bfSubsample = Math.max(0.01, Math.min(1, Number(ssbComputeBfSubsample ?? 0.3)));
+    const manualAberrations = Boolean(options?.manualAberrations);
+    const c10Nm = Number(options?.c10Nm ?? ssbComputeC10Nm ?? 0);
+    const c12Nm = Number(options?.c12Nm ?? ssbComputeC12Nm ?? 0);
+    const phi12Deg = Number(options?.phi12Deg ?? ssbComputePhi12Deg ?? 0);
+    const rotationDeg = Number(options?.rotationDeg ?? ssbComputeRotationDeg ?? 0);
+    const payload = JSON.stringify({
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      action: "compute_ssb",
+      n_trials: nTrials,
+      refine: Boolean(ssbComputeRefine),
+      bf_subsample: bfSubsample,
+      lock_c10: Boolean(ssbComputeLockC10),
+      lock_c12: Boolean(ssbComputeLockC12),
+      manual_aberrations: manualAberrations,
+      lock_aberrations: manualAberrations,
+      ...(manualAberrations ? {
+        c10_nm: c10Nm,
+        c12_nm: c12Nm,
+        phi12_deg: phi12Deg,
+        rotation_angle_deg: rotationDeg,
+      } : {}),
+    });
+    if (options?.closeMenu !== false) setDpMoreAnchor(null);
+    setSsbComputeRequest(payload);
+    model.set("ssb_compute_request", payload);
+    model.save_changes();
+  }, [
+    model,
+    setSsbComputeRequest,
+    ssbComputeBfSubsample,
+    ssbComputeC10Nm,
+    ssbComputeC12Nm,
+    ssbComputeLockC10,
+    ssbComputeLockC12,
+    ssbComputeNTrials,
+    ssbComputePhi12Deg,
+    ssbComputeRefine,
+    ssbComputeRotationDeg,
+  ]);
+  const requestSsbManualReconstruct = React.useCallback((values?: {
+    c10Nm?: number;
+    c12Nm?: number;
+    phi12Deg?: number;
+    rotationDeg?: number;
+  }) => {
+    requestSsbCompute({
+      manualAberrations: true,
+      closeMenu: false,
+      ...values,
+    });
+  }, [requestSsbCompute]);
+  const downloadSsbCalibration = React.useCallback(() => {
+    const text = String(ssbComputeCalibrationJson || "").trim();
+    if (!text) return;
+    const filename = String(ssbComputeCalibrationFilename || "").trim() || "show4dstem_ssb_calibration.json";
+    downloadBlob(new Blob([text], { type: "application/json;charset=utf-8" }), filename);
+    setDpMoreAnchor(null);
+  }, [ssbComputeCalibrationFilename, ssbComputeCalibrationJson]);
   const reportDatasetCount = React.useCallback((datasetScope: HtmlDatasetScope) => {
     const hidden = new Set((compareHiddenPanels || []).filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < nFrames));
     const unhidden = Math.max(1, nFrames - hidden.size);
@@ -3993,17 +4297,17 @@ function Show4DSTEM() {
 
   // Store raw data for filtering/FFT
   const rawVirtualImageRef = React.useRef<Float32Array | null>(null);
-  const fftWorkRealRef = React.useRef<Float32Array | null>(null);
-  const fftWorkImagRef = React.useRef<Float32Array | null>(null);
   const fftMagnitudeRef = React.useRef<Float32Array | null>(null);
   const fftMagCacheRef = React.useRef<Float32Array | null>(null);
 
-  // Parse virtual image bytes into Float32Array and apply scale for histogram
+  // Parse displayed image bytes into Float32Array and apply scale for histogram.
+  // For DPC/SSB product maps this is a view into vi_product_maps_bytes, so source
+  // switching reuses the static map payload instead of asking Python to resend it.
   React.useEffect(() => {
-    if (!virtualImageBytes) return;
+    if (!displayedVirtualImageBytes) return;
     // Parse as Float32Array
-    const numFloats = virtualImageBytes.byteLength / 4;
-    const rawData = new Float32Array(virtualImageBytes.buffer, virtualImageBytes.byteOffset, numFloats);
+    const numFloats = displayedVirtualImageBytes.byteLength / 4;
+    const rawData = new Float32Array(displayedVirtualImageBytes.buffer, displayedVirtualImageBytes.byteOffset, numFloats);
 
     // Store a copy for filtering/FFT (rawData is a view, we need a copy)
     let storedData = rawVirtualImageRef.current;
@@ -4026,8 +4330,14 @@ function Show4DSTEM() {
     if (!compareMode) {
       const s = computeStats(rawData);
       setViStats([s.mean, s.min, s.max, s.std]);
-      setViDataMin(s.min);
-      setViDataMax(s.max);
+      if (viSourceUsesSymmetricRange(activeViSource)) {
+        const span = Math.max(Math.abs(s.min), Math.abs(s.max), 1e-12);
+        setViDataMin(-span);
+        setViDataMax(span);
+      } else {
+        setViDataMin(s.min);
+        setViDataMax(s.max);
+      }
     }
 
     // Apply scale transformation for histogram display
@@ -4042,23 +4352,29 @@ function Show4DSTEM() {
       }
       setViHistogramData(scaledData);
     }
-  }, [compareMode, virtualImageBytes, viScaleMode]);
+  }, [activeViSource, compareMode, displayedVirtualImageBytes, viScaleMode]);
 
   React.useEffect(() => {
     if (!compareMode) return;
     const expectedFloats = Math.max(0, (comparePanelCount || 0) * shapeRows * shapeCols);
-    if (!compareVirtualImageBytes || expectedFloats === 0 || compareVirtualImageBytes.byteLength < expectedFloats * 4) {
+    if (!displayedCompareVirtualImageBytes || expectedFloats === 0 || displayedCompareVirtualImageBytes.byteLength < expectedFloats * 4) {
       return;
     }
     const rawData = new Float32Array(
-      compareVirtualImageBytes.buffer,
-      compareVirtualImageBytes.byteOffset,
+      displayedCompareVirtualImageBytes.buffer,
+      displayedCompareVirtualImageBytes.byteOffset,
       expectedFloats,
     );
     const s = computeStats(rawData);
     setViStats([s.mean, s.min, s.max, s.std]);
-    setViDataMin(s.min);
-    setViDataMax(s.max);
+    if (viSourceUsesSymmetricRange(activeViSource)) {
+      const span = Math.max(Math.abs(s.min), Math.abs(s.max), 1e-12);
+      setViDataMin(-span);
+      setViDataMax(span);
+    } else {
+      setViDataMin(s.min);
+      setViDataMax(s.max);
+    }
 
     const scaledData = new Float32Array(expectedFloats);
     if (viScaleMode === "log") {
@@ -4069,7 +4385,7 @@ function Show4DSTEM() {
       scaledData.set(rawData);
     }
     setViHistogramData(scaledData);
-  }, [compareMode, comparePanelCount, compareVirtualImageBytes, shapeCols, shapeRows, viScaleMode]);
+  }, [activeViSource, compareMode, comparePanelCount, displayedCompareVirtualImageBytes, shapeCols, shapeRows, viScaleMode]);
 
   // Render DP with zoom (use summed DP when VI ROI is active)
   // Expensive: colormap + data processing → cached offscreen canvas
@@ -4183,8 +4499,13 @@ function Show4DSTEM() {
     // VI panel until comm catches up. findDataRange on a scan-shape buffer
     // (~64K-256K floats) is sub-millisecond.
     const r = findDataRange(scaled);
-    const dataMin = r.min;
-    const dataMax = r.max;
+    let dataMin = r.min;
+    let dataMax = r.max;
+    if (viSourceUsesSymmetricRange(activeViSource)) {
+      const span = Math.max(Math.abs(r.min), Math.abs(r.max), 1e-12);
+      dataMin = -span;
+      dataMax = span;
+    }
 
     // Apply absolute bounds or percentile clipping
     let vmin: number, vmax: number;
@@ -4232,7 +4553,7 @@ function Show4DSTEM() {
     applyColormap(scaled, imageData.data, lut, vmin, vmax);
     offCtx.putImageData(imageData, 0, 0);
     setViOffscreenVersion(v => v + 1);
-  }, [virtualImageBytes, shapeRows, shapeCols, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viAutoContrast]);
+  }, [activeViSource, displayedVirtualImageBytes, shapeRows, shapeCols, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viAutoContrast]);
 
   // Cheap: VI zoom/pan redraw — just drawImage from cached offscreen
   React.useLayoutEffect(() => {
@@ -4264,10 +4585,12 @@ function Show4DSTEM() {
   // Compute FFT (expensive, async — only re-run on data/GPU changes)
   const fftRealRef = React.useRef<Float32Array | null>(null);
   const fftImagRef = React.useRef<Float32Array | null>(null);
+  const fftRunSeqRef = React.useRef(0);
   const [fftVersion, setFftVersion] = React.useState(0);
 
   React.useEffect(() => {
     if (!rawVirtualImageRef.current || !effectiveShowFft) { setFftCropDims(null); return; }
+    const runSeq = ++fftRunSeqRef.current;
     let cancelled = false;
     let width = shapeCols;
     let height = shapeRows;
@@ -4319,37 +4642,13 @@ function Show4DSTEM() {
     }
 
     const fftW = width, fftH = height;
-    if (gpuFFTRef.current && gpuReady) {
-      const runGpuFFT = async () => {
-        const real = sourceData.slice();
-        const imag = new Float32Array(real.length);
-        const { real: fReal, imag: fImag } = await gpuFFTRef.current!.fft2D(real, imag, fftW, fftH, false);
-        if (cancelled) return;
-        fftshift(fReal, fftW, fftH);
-        fftshift(fImag, fftW, fftH);
-        fftRealRef.current = fReal;
-        fftImagRef.current = fImag;
-        if (origCropW > 0) {
-          setFftCropDims({ cropWidth: origCropW, cropHeight: origCropH, fftWidth: fftW, fftHeight: fftH });
-        } else if (fftW !== shapeCols || fftH !== shapeRows) {
-          setFftCropDims({ cropWidth: shapeCols, cropHeight: shapeRows, fftWidth: fftW, fftHeight: fftH });
-        } else {
-          setFftCropDims(null);
-        }
-        setFftVersion(v => v + 1);
-      };
-      runGpuFFT();
-      return () => { cancelled = true; };
-    } else {
-      const len = sourceData.length;
-      let real = fftWorkRealRef.current;
-      if (!real || real.length !== len) { real = new Float32Array(len); fftWorkRealRef.current = real; }
-      real.set(sourceData);
-      let imag = fftWorkImagRef.current;
-      if (!imag || imag.length !== len) { imag = new Float32Array(len); fftWorkImagRef.current = imag; } else { imag.fill(0); }
-      fft2d(real, imag, fftW, fftH, false);
-      fftshift(real, fftW, fftH);
-      fftshift(imag, fftW, fftH);
+    const commitFft = (
+      real: Float32Array,
+      imag: Float32Array,
+      startedAt: number,
+      mode: "webgpu" | "worker",
+    ) => {
+      if (cancelled || runSeq !== fftRunSeqRef.current) return;
       fftRealRef.current = real;
       fftImagRef.current = imag;
       if (origCropW > 0) {
@@ -4359,9 +4658,53 @@ function Show4DSTEM() {
       } else {
         setFftCropDims(null);
       }
+      const profile = {
+        mode,
+        width: fftW,
+        height: fftH,
+        ms: Math.round(performance.now() - startedAt),
+        seq: runSeq,
+      };
+      const win = window as unknown as {
+        __show4dstemFftProfile?: unknown;
+        __show4dstemFftHistory?: unknown[];
+      };
+      const history = Array.isArray(win.__show4dstemFftHistory) ? win.__show4dstemFftHistory : [];
+      history.push(profile);
+      if (history.length > 60) history.splice(0, history.length - 60);
+      win.__show4dstemFftProfile = profile;
+      win.__show4dstemFftHistory = history;
       setFftVersion(v => v + 1);
-    }
-  }, [virtualImageBytes, shapeRows, shapeCols, gpuReady, effectiveShowFft, roiFftActive, viRoiMode, viRoiCenterRow, viRoiCenterCol, localViRoiCenterRow, localViRoiCenterCol, viRoiRadius, viRoiWidth, viRoiHeight, fftWindow]);
+    };
+    const timer = window.setTimeout(() => {
+      if (gpuFFTRef.current && gpuReady) {
+        const runGpuFFT = async () => {
+          const startedAt = performance.now();
+          const real = sourceData.slice();
+          const imag = new Float32Array(real.length);
+          const { real: fReal, imag: fImag } = await gpuFFTRef.current!.fft2D(real, imag, fftW, fftH, false);
+          if (cancelled || runSeq !== fftRunSeqRef.current) return;
+          fftshift(fReal, fftW, fftH);
+          fftshift(fImag, fftW, fftH);
+          commitFft(fReal, fImag, startedAt, "webgpu");
+        };
+        runGpuFFT();
+      } else {
+        const runWorkerFFT = async () => {
+          const startedAt = performance.now();
+          const real = sourceData.slice();
+          const imag = new Float32Array(real.length);
+          const result = await fft2dAsync(real, imag, fftW, fftH, false);
+          commitFft(result.real, result.imag, startedAt, "worker");
+        };
+        runWorkerFFT();
+      }
+    }, 16);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [displayedVirtualImageBytes, shapeRows, shapeCols, gpuReady, effectiveShowFft, roiFftActive, viRoiMode, viRoiCenterRow, viRoiCenterCol, localViRoiCenterRow, localViRoiCenterCol, viRoiRadius, viRoiWidth, viRoiHeight, fftWindow]);
 
   // Expensive: FFT magnitude + histogram + colormap → cached offscreen canvas
   React.useEffect(() => {
@@ -4496,7 +4839,7 @@ function Show4DSTEM() {
   // Clear FFT click info when virtual image changes (scan position, VI ROI, etc.)
   React.useEffect(() => {
     setFftClickInfo(null);
-  }, [virtualImageBytes]);
+  }, [displayedVirtualImageBytes]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // High-DPI Scale Bar UI Overlays
@@ -4511,17 +4854,21 @@ function Show4DSTEM() {
     // Draw scale bar first when enabled.
     const kUnit = kCalibrated ? kPixelUnit : "px";
     if (showScaleBar) drawScaleBarHiDPI(canvas, DPR, dpZoom, kPixelSize || 1, kUnit, detCols);
-    // Draw ROI overlay (circle, square, rect, annular) or point crosshair
-    if (roiMode === "point") {
-      drawDpCrosshairHiDPI(dpUiRef.current, DPR, localKCol, localKRow, dpZoom, dpPanX, dpPanY, detCols, detRows, isDraggingDP, roiColors);
-    } else {
-      drawRoiOverlayHiDPI(
-        dpUiRef.current, DPR, roiMode,
-        localKCol, localKRow, roiRadius, roiRadiusInner, roiWidth, roiHeight,
-        dpZoom, dpPanX, dpPanY, detCols, detRows,
-        isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner,
-        roiColors
-      );
+    // Draw detector ROI only when the displayed virtual image is produced from
+    // the live detector mask. Precomputed DPC/SSB maps are static products, so
+    // showing the BF/ADF circle there is misleading.
+    if (roiVirtualDetectorActive) {
+      if (roiMode === "point") {
+        drawDpCrosshairHiDPI(dpUiRef.current, DPR, localKCol, localKRow, dpZoom, dpPanX, dpPanY, detCols, detRows, isDraggingDP, roiColors);
+      } else {
+        drawRoiOverlayHiDPI(
+          dpUiRef.current, DPR, roiMode,
+          localKCol, localKRow, roiRadius, roiRadiusInner, roiWidth, roiHeight,
+          dpZoom, dpPanX, dpPanY, detCols, detRows,
+          isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner,
+          roiColors
+        );
+      }
     }
 
     // Profile line overlay
@@ -4605,7 +4952,7 @@ function Show4DSTEM() {
         ctx.restore();
       }
     }
-  }, [dpZoom, dpPanX, dpPanY, kPixelSize, kPixelUnit, kCalibrated, detRows, detCols, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, localKCol, localKRow, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner,
+  }, [roiVirtualDetectorActive, dpZoom, dpPanX, dpPanY, kPixelSize, kPixelUnit, kCalibrated, detRows, detCols, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, localKCol, localKRow, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner,
       profileActive, profilePoints, profileWidth, themeColors, showDpColorbar, showScaleBar, dpColormap, dpScaleMode, dpVminPct, dpVmaxPct, canvasSize, roiColors]);
   
   // VI scale bar + crosshair + ROI + profile lines (high-DPI)
@@ -4695,7 +5042,7 @@ function Show4DSTEM() {
     } else {
       setViProfileData(null);
     }
-  }, [viProfilePoints, virtualImageBytes, shapeCols, shapeRows]);
+  }, [viProfilePoints, displayedVirtualImageBytes, shapeCols, shapeRows]);
 
   // ── Profile sparkline rendering ──
   React.useEffect(() => {
@@ -5166,6 +5513,7 @@ function Show4DSTEM() {
   // anywhere on the ROI's EDGE (circle perimeter / square border), not just the
   // 45-deg handle dot. Dragging the edge is the natural "resize" gesture.
   const isNearResizeHandle = (imgX: number, imgY: number): boolean => {
+    if (!roiVirtualDetectorActive) return false;
     if (roiMode === "rect") {
       const handleX = activeRoiCenterCol + roiWidth / 2;
       const handleY = activeRoiCenterRow + roiHeight / 2;
@@ -5197,6 +5545,7 @@ function Show4DSTEM() {
 
   // Helper: check if point is near the inner resize handle (annular mode only)
   const isNearResizeHandleInner = (imgX: number, imgY: number): boolean => {
+    if (!roiVirtualDetectorActive) return false;
     if (roiMode !== "annular" || !roiRadiusInner) return false;
     const offset = roiRadiusInner * CIRCLE_HANDLE_ANGLE;
     const handleX = activeRoiCenterCol + offset;
@@ -5241,6 +5590,7 @@ function Show4DSTEM() {
 
   // Helper: check if point is inside the DP ROI area
   const isInsideDpRoi = (imgX: number, imgY: number): boolean => {
+    if (!roiVirtualDetectorActive) return false;
     if (roiMode === "point") return false;
     const dx = imgX - activeRoiCenterCol;
     const dy = imgY - activeRoiCenterRow;
@@ -5378,6 +5728,15 @@ function Show4DSTEM() {
       return;
     }
 
+    if (!roiVirtualDetectorActive) {
+      setIsDraggingDP(false);
+      setIsDraggingResize(false);
+      setIsDraggingResizeInner(false);
+      setIsHoveringResize(false);
+      setIsHoveringResizeInner(false);
+      return;
+    }
+
     // Check if clicking on resize handle (inner first, then outer)
     if (isNearResizeHandleInner(imgX, imgY)) {
       setIsDraggingResizeInner(true);
@@ -5480,7 +5839,13 @@ function Show4DSTEM() {
     }
 
     // Handle inner resize dragging (annular mode)
-    if (resizeDpRoiFromImagePoint(imgX, imgY, e.shiftKey)) {
+    if (roiVirtualDetectorActive && resizeDpRoiFromImagePoint(imgX, imgY, e.shiftKey)) {
+      return;
+    }
+
+    if (!roiVirtualDetectorActive) {
+      if (isHoveringResize) setIsHoveringResize(false);
+      if (isHoveringResizeInner) setIsHoveringResizeInner(false);
       return;
     }
 
@@ -6242,6 +6607,17 @@ function Show4DSTEM() {
     whiteSpace: "nowrap",
     flexShrink: 0,
   };
+  const viSourceButtonSx = (source: string, active = false) => {
+    const color = viSourceDisplayColor(source, themeInfo.theme) ?? themeColors.textMuted;
+    return {
+      ...statsTextSx,
+      color,
+      fontWeight: active ? 800 : 700,
+      opacity: active ? 1 : 0.9,
+      cursor: "pointer",
+      "&:hover": { color, opacity: 1, textDecoration: "underline" },
+    };
+  };
   const statsValueSx = { color: themeColors.accent };
   const memoryWarningSx = {
     mb: `${SPACING.SM}px`,
@@ -6365,8 +6741,102 @@ function Show4DSTEM() {
     flexWrap: "wrap",
   };
   const dpOptionSummary = `${optionLabel(roiMode)}${roiMode === "annular" ? ` ${Math.round(roiRadiusInner)}-${Math.round(roiRadius)}px` : roiMode !== "point" ? ` ${Math.round(roiRadius)}px` : ""} | ${optionLabel(dpColormap)} | ${dpScaleMode === "log" ? "Log" : "Lin"}`;
-  const viOptionSummary = `${viRoiMode === "off" ? "ROI off" : `${optionLabel(viRoiMode)} ${Math.round(viRoiRadius || 5)}px`} | ${optionLabel(viColormap)} | ${viScaleMode === "log" ? "Log" : "Lin"}`;
+  const viOptionSummary = `${viSourceLabel(activeViSource)} | ${viRoiMode === "off" ? "ROI off" : `${optionLabel(viRoiMode)} ${Math.round(viRoiRadius || 5)}px`} | ${optionLabel(viColormap)} | ${viScaleMode === "log" ? "Log" : "Lin"}`;
   const fftOptionSummary = `${fftScaleMode === "log" ? "Log" : "Lin"} | ${optionLabel(fftColormap)}${fftAuto ? " | Auto" : ""}`;
+  const activeSsbBfSubsample = Math.max(0.01, Math.min(1, Number(ssbComputeBfSubsample ?? 0.3)));
+  const ssbBfCountText = Number(ssbComputeBfPixels || 0) > 0
+    ? `${Math.max(0, Math.round(Number(ssbComputeBfSelectedPixels || 0)))} / ${Math.max(0, Math.round(Number(ssbComputeBfPixels || 0)))} BF px`
+    : "BF count appears after first run";
+  const hasSsbCalibrationDownload = String(ssbComputeCalibrationJson || "").trim().length > 0;
+  const ssbProgressText = String(ssbComputeStatus || "").trim()
+    || (ssbComputeBusy ? "Running SSB..." : "");
+  const ssbDisplayStatus = ssbProgressText;
+  const ssbStatusIsFailure = ssbDisplayStatus.startsWith("SSB failed");
+  const hasSsbProductMap = viProductSourceOptions.includes("SSB");
+  const showSsbCalibrationPanel = controlsVisible
+    && ssbComputeEnabled
+    && hasSsbProductMap
+    && hasSsbCalibrationDownload
+    && !compareMode;
+  const ssbC10Limit = Math.max(100, Math.ceil(Math.abs(Number(ssbComputeC10Nm ?? 0)) * 2 / 25) * 25);
+  const ssbC12Limit = Math.max(100, Math.ceil(Math.abs(Number(ssbComputeC12Nm ?? 0)) * 2 / 25) * 25);
+  const ssbTuneSliderSx = {
+    ...sliderStyles.small,
+    minWidth: 115,
+    flex: 1,
+    mx: 0.75,
+  };
+  const ssbCalSummary = `C10 ${Number(ssbComputeC10Nm ?? 0).toFixed(0)} nm | C12 ${Number(ssbComputeC12Nm ?? 0).toFixed(0)} nm | φ12 ${Number(ssbComputePhi12Deg ?? 0).toFixed(0)}° | rot ${Number(ssbComputeRotationDeg ?? 0).toFixed(1)}°`;
+  const ssbCalToggleSx = {
+    ...compactButton,
+    display: "flex",
+    width: "100%",
+    justifyContent: "space-between",
+    border: `1px solid ${themeColors.border}`,
+    bgcolor: themeColors.controlBg,
+    color: themeColors.text,
+    textTransform: "none",
+    minHeight: 22,
+    px: 0.75,
+    py: 0,
+    fontSize: 10,
+    lineHeight: "20px",
+    "& .MuiButton-endIcon": { ml: 0.25, mr: 0 },
+    "& .MuiSvgIcon-root": { fontSize: 16 },
+  };
+  const ssbTuneCommit = React.useCallback((values?: {
+    c10Nm?: number;
+    c12Nm?: number;
+    phi12Deg?: number;
+    rotationDeg?: number;
+  }) => {
+    requestSsbManualReconstruct({
+      c10Nm: Number(values?.c10Nm ?? ssbComputeC10Nm ?? 0),
+      c12Nm: Number(values?.c12Nm ?? ssbComputeC12Nm ?? 0),
+      phi12Deg: Number(values?.phi12Deg ?? ssbComputePhi12Deg ?? 0),
+      rotationDeg: Number(values?.rotationDeg ?? ssbComputeRotationDeg ?? 0),
+    });
+  }, [
+    requestSsbManualReconstruct,
+    ssbComputeC10Nm,
+    ssbComputeC12Nm,
+    ssbComputePhi12Deg,
+    ssbComputeRotationDeg,
+  ]);
+  const ssbTuneDebounceRef = React.useRef<number | null>(null);
+  const scheduleSsbTuneCommit = React.useCallback((values?: {
+    c10Nm?: number;
+    c12Nm?: number;
+    phi12Deg?: number;
+    rotationDeg?: number;
+  }) => {
+    if (ssbComputeBusy) return;
+    if (ssbTuneDebounceRef.current !== null) {
+      window.clearTimeout(ssbTuneDebounceRef.current);
+    }
+    ssbTuneDebounceRef.current = window.setTimeout(() => {
+      ssbTuneDebounceRef.current = null;
+      ssbTuneCommit(values);
+    }, 350);
+  }, [ssbComputeBusy, ssbTuneCommit]);
+  const commitSsbTuneNow = React.useCallback((values?: {
+    c10Nm?: number;
+    c12Nm?: number;
+    phi12Deg?: number;
+    rotationDeg?: number;
+  }) => {
+    if (ssbTuneDebounceRef.current !== null) {
+      window.clearTimeout(ssbTuneDebounceRef.current);
+      ssbTuneDebounceRef.current = null;
+    }
+    ssbTuneCommit(values);
+  }, [ssbTuneCommit]);
+  React.useEffect(() => () => {
+    if (ssbTuneDebounceRef.current !== null) {
+      window.clearTimeout(ssbTuneDebounceRef.current);
+      ssbTuneDebounceRef.current = null;
+    }
+  }, []);
 
   return (
     <Box
@@ -6400,17 +6870,17 @@ function Show4DSTEM() {
           ]} />
           <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>DP: Diffraction pattern I(kx,ky) at scan position. Drag to move ROI center.</Typography>
-          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Detector: ROI mask shape — defines which DP pixels are integrated for the virtual image.</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Detector: ROI mask shape defines which DP pixels are integrated for the virtual image.</Typography>
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>BF/ABF/ADF: Preset detector configurations (bright-field, annular bright-field, annular dark-field).</Typography>
-          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Image: Virtual image — integrated intensity within detector ROI at each scan position.</Typography>
-          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>FFT: Spatial frequency content of the virtual image. Auto masks DC + clips to 99.9th percentile.</Typography>
-          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Smooth: CSS bilinear blit on the VI canvas. No data change — browser smooths the upscale visually. Off = nearest-neighbor (sharp pixel boundaries).</Typography>
-          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Auto: Percentile contrast (1st–99th). Clips outliers automatically.</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Image: Virtual image, integrated intensity within detector ROI at each scan position.</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>FFT: Spatial frequency content of the virtual image. Auto masks DC and clips to the 99.9th percentile.</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Smooth: CSS bilinear blit on the VI canvas. No data change; browser smooths the upscale visually. Off = nearest-neighbor.</Typography>
+          <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Auto: Percentile contrast (1st-99th). Clips outliers automatically.</Typography>
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Profile: Click two points on DP to draw a line intensity profile.</Typography>
           {nFrames > 1 && <>
-            <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Frame Playback ({frameDimLabel})</Typography>
-            <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Loop: Loop playback. Bounce: Ping-pong — alternates forward and reverse.</Typography>
-            <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>FPS: Adjust playback speed (1–30 frames per second).</Typography>
+            <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Frame playback ({frameDimLabel})</Typography>
+            <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Loop: Loop playback. Bounce: Ping-pong, alternates forward and reverse.</Typography>
+            <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>FPS: Adjust playback speed (1-30 frames per second).</Typography>
           </>}
           <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
           <KeyboardShortcuts items={keyboardShortcutItems} />
@@ -6492,7 +6962,7 @@ function Show4DSTEM() {
                   HTML report: static PNG, no raw 4D
                 </Box>
                 <MenuItem onClick={() => handleHtmlExportSelect("report", "uint8", reportDetBin, reportScanBin, "unhidden")} sx={{ fontSize: 12 }}>
-                  Unhidden · rbin {reportScanBin} · DP kbin {reportDetBin} ({estimateHtmlExportSize("report", "uint8", reportDetBin, reportScanBin, "unhidden")})
+                    Unhidden · rbin {reportScanBin} · DP kbin {reportDetBin} ({estimateHtmlExportSize("report", "uint8", reportDetBin, reportScanBin, "unhidden")})
                 </MenuItem>
                 {currentPageReportCount > 0 && (
                   <MenuItem onClick={() => handleHtmlExportSelect("report", "uint8", reportDetBin, detailedReportScanBin, "current_page")} sx={{ fontSize: 12 }}>
@@ -6517,6 +6987,145 @@ function Show4DSTEM() {
                   </MenuItem>
                 ))}
               </Menu>}
+              {ssbComputeEnabled && <Button
+                size="small"
+                sx={compactButton}
+                onClick={(e) => setDpMoreAnchor(e.currentTarget)}
+                title="More actions"
+              >
+                More
+              </Button>}
+              {ssbComputeEnabled && <Menu
+                anchorEl={dpMoreAnchor}
+                open={Boolean(dpMoreAnchor)}
+                onClose={() => setDpMoreAnchor(null)}
+                anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+                transformOrigin={{ vertical: "top", horizontal: "left" }}
+                sx={{ zIndex: 9999 }}
+                PaperProps={{ sx: { bgcolor: themeColors.bgAlt, backgroundImage: "none", color: themeColors.text, border: `1px solid ${themeColors.border}` } }}
+              >
+                <Box sx={{ px: 1.5, py: 1, width: 242, boxSizing: "border-box" }}>
+                  <Stack direction="row" alignItems="center" sx={{ mb: 0.75, gap: 0.25 }}>
+                    <Typography sx={{ ...typo.label, color: themeColors.text }}>
+                      SSB
+                    </Typography>
+                    <InfoTooltip
+                      theme={themeInfo.theme}
+                      text={
+                        <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+                          <Typography sx={{ fontSize: 11, lineHeight: 1.35 }}>
+                            SSB (single-sideband ptychography) computes a phase image from the 4D-STEM diffraction stack using the live backend.
+                          </Typography>
+                          <Typography sx={{ fontSize: 11, lineHeight: 1.35 }}>
+                            Trials controls the aberration search; Refine runs a final local fit. Lock C10 or C12 to pin a coefficient at its slider value during the search.
+                          </Typography>
+                          <Typography sx={{ fontSize: 11, lineHeight: 1.35 }}>
+                            BF ratio uses a uniform subset of detected BF pixels for optimize/refine. Calibration sliders appear below the image after the phase is ready.
+                          </Typography>
+                        </Box>
+                      }
+                    />
+                  </Stack>
+                  <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.75, gap: 1 }}>
+                    <Typography sx={typo.label}>Trials</Typography>
+                    <Select
+                      value={Math.max(0, Math.round(Number(ssbComputeNTrials ?? 200)))}
+                      onChange={(e) => setSsbComputeNTrials(Number(e.target.value))}
+                      size="small"
+                      disabled={ssbComputeBusy}
+                      sx={{ ...themedSelect, minWidth: 82, fontSize: 10 }}
+                      MenuProps={themedMenuProps}
+                    >
+                      <MenuItem value={0}>0</MenuItem>
+                      <MenuItem value={20}>20</MenuItem>
+                      <MenuItem value={50}>50</MenuItem>
+                      <MenuItem value={100}>100</MenuItem>
+                      <MenuItem value={200}>200</MenuItem>
+                    </Select>
+                  </Stack>
+                  <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, gap: 1 }}>
+                    <Typography sx={typo.label}>Refine</Typography>
+                    <Switch
+                      checked={Boolean(ssbComputeRefine)}
+                      onChange={(e) => setSsbComputeRefine(e.target.checked)}
+                      disabled={ssbComputeBusy}
+                      size="small"
+                      sx={switchStyles.small}
+                    />
+                  </Stack>
+                  <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, gap: 1 }}>
+                    <Typography sx={typo.label}>BF ratio</Typography>
+                    <Select
+                      value={activeSsbBfSubsample}
+                      onChange={(e) => setSsbComputeBfSubsample(Number(e.target.value))}
+                      size="small"
+                      disabled={ssbComputeBusy}
+                      sx={{ ...themedSelect, minWidth: 82, fontSize: 10 }}
+                      MenuProps={themedMenuProps}
+                    >
+                      <MenuItem value={0.3}>0.3</MenuItem>
+                      <MenuItem value={0.5}>0.5</MenuItem>
+                      <MenuItem value={1}>1.0</MenuItem>
+                    </Select>
+                  </Stack>
+                  <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, gap: 1 }}>
+                    <Typography sx={typo.label} title="Pin C10 at its slider value during the aberration search">
+                      Lock C10 <Box component="span" sx={{ color: themeColors.textMuted }}>{Number(ssbComputeC10Nm ?? 0).toFixed(0)} nm</Box>
+                    </Typography>
+                    <Switch
+                      checked={Boolean(ssbComputeLockC10)}
+                      onChange={(e) => setSsbComputeLockC10(e.target.checked)}
+                      disabled={ssbComputeBusy}
+                      size="small"
+                      sx={switchStyles.small}
+                    />
+                  </Stack>
+                  <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, gap: 1 }}>
+                    <Typography sx={typo.label} title="Pin C12 and φ12 at their slider values during the aberration search">
+                      Lock C12 <Box component="span" sx={{ color: themeColors.textMuted }}>{Number(ssbComputeC12Nm ?? 0).toFixed(0)} nm</Box>
+                    </Typography>
+                    <Switch
+                      checked={Boolean(ssbComputeLockC12)}
+                      onChange={(e) => setSsbComputeLockC12(e.target.checked)}
+                      disabled={ssbComputeBusy}
+                      size="small"
+                      sx={switchStyles.small}
+                    />
+                  </Stack>
+                  <Typography sx={{ ...typo.label, color: themeColors.textMuted, whiteSpace: "normal", lineHeight: 1.35, mb: 0.75 }}>
+                    {ssbBfCountText}
+                  </Typography>
+                  {ssbProgressText && (
+                    <Typography
+                      role="status"
+                      sx={{
+                        ...typo.label,
+                        color: ssbStatusIsFailure
+                          ? "#d32f2f"
+                          : ssbComputeBusy
+                            ? themeColors.accent
+                            : themeColors.textMuted,
+                        whiteSpace: "normal",
+                        lineHeight: 1.35,
+                        mb: 0.75,
+                      }}
+                    >
+                      {ssbDisplayStatus}
+                    </Typography>
+                  )}
+                  <Typography sx={{ ...typo.label, color: themeColors.textMuted, whiteSpace: "normal", lineHeight: 1.35 }}>
+                    Default is 200 trials, refine on, BF ratio 0.3. Full 512 scans can take seconds to about a minute.
+                  </Typography>
+                </Box>
+                <MenuItem onClick={() => requestSsbCompute()} disabled={ssbComputeBusy} sx={{ fontSize: 12 }}>
+                  Calculate Phase
+                </MenuItem>
+                {hasSsbCalibrationDownload && (
+                  <MenuItem onClick={downloadSsbCalibration} disabled={ssbComputeBusy} sx={{ fontSize: 12 }}>
+                    Download calibration JSON
+                  </MenuItem>
+                )}
+              </Menu>}
               {exportEnabled && (localHtmlExportStatus || exportStatus) && (
                 <Typography
                   sx={{
@@ -6530,6 +7139,25 @@ function Show4DSTEM() {
                   title={localHtmlExportStatus || exportStatus}
                 >
                   {localHtmlExportStatus || exportStatus}
+                </Typography>
+              )}
+              {(ssbComputeStatus || ssbComputeBusy) && (
+                <Typography
+                  sx={{
+                    ...typo.label,
+                    maxWidth: 140,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    color: ssbStatusIsFailure
+                      ? "#d32f2f"
+                      : ssbComputeBusy
+                        ? themeColors.accent
+                        : themeColors.textMuted,
+                  }}
+                  title={ssbDisplayStatus || "Running SSB..."}
+                >
+                  {ssbDisplayStatus || "Running SSB..."}
                 </Typography>
               )}
             </Stack>}
@@ -6582,9 +7210,24 @@ function Show4DSTEM() {
               <Typography sx={statsTextSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(dpStats[3])}</Box></Typography>
               {controlsVisible && <>
                 <Box sx={{ flex: 1, minWidth: 4, "@media (max-width: 700px)": { display: "none" } }} />
-                <Typography component="span" onClick={() => { model.set("_preset_request", "bf"); model.save_changes(); }} sx={{ ...statsTextSx, color: roiColors.textColor, fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>BF</Typography>
-                <Typography component="span" onClick={() => { model.set("_preset_request", "abf"); model.save_changes(); }} sx={{ ...statsTextSx, color: "#4af", fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>ABF</Typography>
-                <Typography component="span" onClick={() => { model.set("_preset_request", "adf"); model.save_changes(); }} sx={{ ...statsTextSx, color: "#fa4", fontWeight: "bold", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>ADF</Typography>
+                <Typography component="span" onClick={() => { model.set("_preset_request", "bf"); model.save_changes(); }} sx={viSourceButtonSx("bf", activeViSource === "roi")}>BF</Typography>
+                <Typography component="span" onClick={() => { model.set("_preset_request", "abf"); model.save_changes(); }} sx={viSourceButtonSx("abf")}>ABF</Typography>
+                <Typography component="span" onClick={() => { model.set("_preset_request", "adf"); model.save_changes(); }} sx={viSourceButtonSx("adf")}>ADF</Typography>
+                {hasViProductSources && viProductSourceOptions.map((source) => {
+                  const active = activeViSource === source;
+                  return (
+                    <Typography
+                      key={source}
+                      component="span"
+                      aria-label={`Show ${viSourceLabel(source)} virtual detector`}
+                      aria-pressed={active}
+                      onClick={() => setViSource(source)}
+                      sx={viSourceButtonSx(source, active)}
+                    >
+                      <ViSourceLabel source={source} />
+                    </Typography>
+                  );
+                })}
               </>}
             </Box>
           )}
@@ -6668,6 +7311,8 @@ function Show4DSTEM() {
                         <MenuItem value="plasma">Plasma</MenuItem>
                         <MenuItem value="magma">Magma</MenuItem>
                         <MenuItem value="hot">Hot</MenuItem>
+                        <MenuItem value="RdBu_r">RdBu</MenuItem>
+                        <MenuItem value="twilight_shifted">Twilight</MenuItem>
                         <MenuItem value="gray">Gray</MenuItem>
                       </Select>
                       <Typography sx={{ ...typo.label, fontSize: 10 }}>Scale</Typography>
@@ -6696,7 +7341,7 @@ function Show4DSTEM() {
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ ...panelHeaderSx, ...hideBetweenPanelsOnMobileSx }}>
             <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} sx={{ minWidth: 0, flexWrap: "wrap", rowGap: 0.5 }}>
               <Typography sx={{ ...typo.label, color: themeColors.textMuted, flexShrink: 0 }}>
-                {compareMode ? `Multiple grid | ${shapeRows}×${shapeCols}` : `${shapeRows}×${shapeCols} | ${detRows}×${detCols}`}
+                {compareMode ? "Multiple " : ""}<ViSourceLabel source={activeViSource} />{compareMode ? ` | ${shapeRows}×${shapeCols}` : ` | ${shapeRows}×${shapeCols} | ${detRows}×${detCols}`}
               </Typography>
               {controlsVisible && compareMode && activeComparePageCount > 1 && (
                 <Box sx={{ display: "flex", alignItems: "center", gap: 0.35, flexShrink: 0 }}>
@@ -6946,7 +7591,7 @@ function Show4DSTEM() {
           {/* VI Canvas */}
           {compareMode ? (
             <CompareVirtualGrid
-              bytes={compareVirtualImageBytes}
+              bytes={displayedCompareVirtualImageBytes}
               count={comparePanelCount || 0}
               indices={comparePanelIndices || []}
               progressivePage={progressiveComparePage}
@@ -7122,6 +7767,8 @@ function Show4DSTEM() {
                         <MenuItem value="plasma">Plasma</MenuItem>
                         <MenuItem value="magma">Magma</MenuItem>
                         <MenuItem value="hot">Hot</MenuItem>
+                        <MenuItem value="RdBu_r">RdBu</MenuItem>
+                        <MenuItem value="twilight_shifted">Twilight</MenuItem>
                         <MenuItem value="gray">Gray</MenuItem>
                       </Select>
                       <Typography sx={{ ...typo.label, fontSize: 10 }}>Scale</Typography>
@@ -7137,6 +7784,163 @@ function Show4DSTEM() {
                   </Box>
                 </Box>
               </Box>
+              {showSsbCalibrationPanel && (
+                <Box sx={{ mt: `${SPACING.XS}px`, width: "100%", maxWidth: viCanvasWidth, boxSizing: "border-box" }}>
+                  <Button
+                    size="small"
+                    onClick={() => setSsbCalOpen(!ssbCalOpen)}
+                    sx={ssbCalToggleSx}
+                    endIcon={ssbCalOpen ? <KeyboardArrowUpIcon fontSize="small" /> : <KeyboardArrowDownIcon fontSize="small" />}
+                    aria-expanded={ssbCalOpen}
+                  >
+                    <Box component="span">SSB calibration</Box>
+                    <Box component="span" sx={mobileOptionSummarySx}>{ssbCalSummary}</Box>
+                  </Button>
+                  {ssbCalOpen && (
+                  <Box
+                    sx={{
+                      border: `1px solid ${themeColors.border}`,
+                      borderTop: "none",
+                      bgcolor: themeColors.controlBg,
+                      px: 1,
+                      py: 0.75,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: `${SPACING.XS}px`,
+                      boxSizing: "border-box",
+                    }}
+                  >
+                  <Stack direction="row" alignItems="center" sx={{ gap: 0.75, flexWrap: "wrap" }}>
+                    {ssbDisplayStatus && (
+                      <Typography
+                        role="status"
+                        sx={{
+                          ...typo.label,
+                          color: ssbStatusIsFailure
+                            ? "#d32f2f"
+                            : ssbComputeBusy
+                              ? themeColors.accent
+                              : themeColors.textMuted,
+                          minWidth: 0,
+                          flex: "1 1 120px",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                        title={ssbDisplayStatus}
+                      >
+                        {ssbDisplayStatus}
+                      </Typography>
+                    )}
+                    {hasSsbCalibrationDownload && (
+                      <Button
+                        size="small"
+                        onClick={downloadSsbCalibration}
+                        disabled={ssbComputeBusy}
+                        sx={{ ...compactButton, color: themeColors.accent, ml: "auto" }}
+                      >
+                        Download JSON
+                      </Button>
+                    )}
+                  </Stack>
+                  <Box
+                    sx={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                      gap: "4px 12px",
+                      "@media (max-width: 700px)": {
+                        gridTemplateColumns: "1fr",
+                      },
+                    }}
+                  >
+                    {([
+                      {
+                        key: "c10",
+                        label: "C10",
+                        unit: "nm",
+                        value: Number(ssbComputeC10Nm ?? 0),
+                        min: -ssbC10Limit,
+                        max: ssbC10Limit,
+                        step: 1,
+                        precision: 0,
+                        setValue: setSsbComputeC10Nm,
+                        schedule: (value: number) => scheduleSsbTuneCommit({ c10Nm: value }),
+                        commit: (value: number) => commitSsbTuneNow({ c10Nm: value }),
+                        title: "Defocus in nanometers. Release the slider to reconstruct.",
+                      },
+                      {
+                        key: "c12",
+                        label: "C12",
+                        unit: "nm",
+                        value: Number(ssbComputeC12Nm ?? 0),
+                        min: 0,
+                        max: ssbC12Limit,
+                        step: 1,
+                        precision: 0,
+                        setValue: setSsbComputeC12Nm,
+                        schedule: (value: number) => scheduleSsbTuneCommit({ c12Nm: value }),
+                        commit: (value: number) => commitSsbTuneNow({ c12Nm: value }),
+                        title: "Two-fold astigmatism magnitude in nanometers. Release the slider to reconstruct.",
+                      },
+                      {
+                        key: "phi12",
+                        label: "φ12",
+                        unit: "°",
+                        value: Number(ssbComputePhi12Deg ?? 0),
+                        min: -180,
+                        max: 180,
+                        step: 1,
+                        precision: 0,
+                        setValue: setSsbComputePhi12Deg,
+                        schedule: (value: number) => scheduleSsbTuneCommit({ phi12Deg: value }),
+                        commit: (value: number) => commitSsbTuneNow({ phi12Deg: value }),
+                        title: "Two-fold astigmatism angle. Release the slider to reconstruct.",
+                      },
+                      {
+                        key: "rotation",
+                        label: "Rotation",
+                        unit: "°",
+                        value: Number(ssbComputeRotationDeg ?? 0),
+                        min: -180,
+                        max: 180,
+                        step: 0.1,
+                        precision: 1,
+                        setValue: setSsbComputeRotationDeg,
+                        schedule: (value: number) => scheduleSsbTuneCommit({ rotationDeg: value }),
+                        commit: (value: number) => commitSsbTuneNow({ rotationDeg: value }),
+                        title: "Scan-detector rotation angle. Release the slider to reconstruct.",
+                      },
+                    ] as const).map((cfg) => (
+                      <Box key={cfg.key} sx={{ minWidth: 0 }}>
+                        <Tooltip title={cfg.title} placement="top" arrow>
+                          <Typography sx={{ ...typo.label, color: themeColors.textMuted, cursor: "help", mb: -0.5 }}>
+                            {cfg.label} <Box component="span" sx={{ color: themeColors.accent }}>{cfg.value.toFixed(cfg.precision)}</Box> {cfg.unit}
+                          </Typography>
+                        </Tooltip>
+                        <Slider
+                          value={cfg.value}
+                          min={cfg.min}
+                          max={cfg.max}
+                          step={cfg.step}
+                          disabled={ssbComputeBusy}
+                          onChange={(_, value) => {
+                            const next = Number(Array.isArray(value) ? value[0] : value);
+                            cfg.setValue(next);
+                            cfg.schedule(next);
+                          }}
+                          onChangeCommitted={(_, value) => cfg.commit(Number(Array.isArray(value) ? value[0] : value))}
+                          size="small"
+                          valueLabelDisplay="auto"
+                          valueLabelFormat={(value) => `${Number(value).toFixed(cfg.precision)} ${cfg.unit}`}
+                          sx={ssbTuneSliderSx}
+                        />
+                      </Box>
+                    ))}
+                  </Box>
+                  </Box>
+                  )}
+                </Box>
+              )}
             </>
           )}
         </Box>
