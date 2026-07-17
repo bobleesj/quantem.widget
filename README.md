@@ -30,6 +30,7 @@ python -c "import quantem.widget; print(quantem.widget.__version__)"
 | `Show3D` | 3D stack | scrub / play through frames |
 | `Show3DSlices` | 3D volume | orthogonal-slice viewer |
 | `Show4DSTEM` | 4D-STEM array, or 5D stack | live virtual detectors (BF / ABF / ADF), CoM / iCoM / DPC, dataset slider + compare grid, offline WebGPU export |
+| `ShowPtycho` | 4D-STEM master / SSB result | interactive SSB phase review: C10/C12/phi12/rotation sliders re-reconstruct in ~5-18 ms on-GPU; kernel-less WebGPU folder export for laptops |
 | `ShowDiffraction` | 2D pattern or 3D stack | d-spacing, g-vector, and angle measurement on Bragg spots and rings |
 | `ShowEDS` | EDS/EELS spectrum image | linked element map, spectrum, energy band, real-space ROI, and automatic element identification |
 | `ShowFolder` | microscopy session folder | fast thumbnail browser, grouping, and file selection |
@@ -145,6 +146,24 @@ one) and opens automatically on a desktop.
 Runs on CUDA, Apple Silicon (MPS), or CPU - the loader picks the backend. On a MacBook,
 `quantem show4dstem ./masters/ --html --bin 8` loads on Metal, bins, and writes a
 double-clickable HTML in seconds.
+
+## GPU SSB backend coverage
+
+SSB phase reconstruction runs on three backends. Headline numbers (real
+512x512x192x192 experimental data, Apple M5 browser): one aberration-slider move
+re-reconstructs the full 512x512 phase in **16 ms** (Hermitian mode, default;
+was 18 ms full-plane) or **13 ms** quantized, at **2x / 4x less GPU memory**.
+The Hermitian half-plane is **bit-exact** at every supported scan size
+(128-1024); snorm16 quantization stays below 0.2 % phase error up to 512
+(1.35 % at 1024 - preview quality). Details, full sweep table, and the port recipe:
+[docs/maintainer/2026-07-16-showptycho-gqk-memory-modes.md](docs/maintainer/2026-07-16-showptycho-gqk-memory-modes.md)
+
+| Optimization | WebGPU (browser / folder export) | CUDA (`quantem.gpu`) | MPS (`quantem.gpu`) |
+|---|---|---|---|
+| Hermitian half-plane `G(q,k)` — 2x less memory, bit-exact, faster | Done (default; `?gqk=full` opt-out) | Todo | Todo |
+| snorm16 block-quantized `G(q,k)` — 4x, ~1e-4 rad error | Done (opt-in `?gqk=herm16`) | Todo | Todo |
+| VRAM budget clamp on BF count | Todo | n/a | Todo |
+| Streamed initial build (bounded peak) | Todo | n/a | Todo |
 
 ## Docs
 
