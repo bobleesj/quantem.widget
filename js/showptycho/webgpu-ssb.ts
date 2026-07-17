@@ -7,7 +7,17 @@ import { decodeBslz4ToStack, type Bslz4Spec } from "../engine/bslz4";
 const SUPPORTED_SSB_SIZES = [128, 256, 512, 1024] as const;
 const MAX_BF_WORKGROUPS_PER_SUBMIT = 256;
 const MAX_GQK_CHUNK_BYTES = 1024 * 1024 * 1024;
+// Resident G(q,k) budget. Caps how many BF pixels the session keeps resident
+// so a full-BF drag on a big scan cannot device-lost a small GPU. Override:
+// globalThis.__QUANTEM_SHOWPTYCHO_GQK_BUDGET_GB__ = 8.
 const FULL_STACK_GPU_BUDGET_BYTES = 4.5 * 1024 * 1024 * 1024;
+const GQK_GPU_BUDGET_BYTES = FULL_STACK_GPU_BUDGET_BYTES;
+
+function gqkBudgetBytes(): number {
+  const raw = (globalThis as { __QUANTEM_SHOWPTYCHO_GQK_BUDGET_GB__?: number }).__QUANTEM_SHOWPTYCHO_GQK_BUDGET_GB__;
+  if (Number.isFinite(raw) && Number(raw) > 0) return Number(raw) * 1024 * 1024 * 1024;
+  return GQK_GPU_BUDGET_BYTES;
+}
 const REDUCE_BF_GROUP = 32;
 const BF_COLUMN_UNPACK_WORKGROUP_X = 32;
 const BF_COLUMN_UNPACK_WORKGROUP_Y = 8;
@@ -523,7 +533,7 @@ function makeBufferFromBytes(
   const chunk = 32 * 1024 * 1024;
   for (let off = 0; off < bytes.byteLength; off += chunk) {
     const len = Math.min(chunk, bytes.byteLength - off);
-    device.queue.writeBuffer(buffer, off, bytes, off, len);
+    device.queue.writeBuffer(buffer, off, bytes as unknown as BufferSource, off, len);
   }
   return buffer;
 }
@@ -1480,10 +1490,6 @@ function bytesFromDataView(view: DataView): Uint8Array {
   return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
 }
 
-async function fetchPrefixBytes(url: string, byteLength: number): Promise<Uint8Array> {
-  return fetchRangeBytes(url, 0, byteLength);
-}
-
 async function fetchRangeBytes(url: string, byteOffset: number, byteLength: number): Promise<Uint8Array> {
   const res = await fetch(url, {
     headers: { Range: `bytes=${byteOffset}-${Math.max(byteOffset, byteOffset + byteLength - 1)}` },
@@ -1497,6 +1503,10 @@ async function fetchRangeBytes(url: string, byteOffset: number, byteLength: numb
     );
   }
   return bytes.byteLength === byteLength ? bytes : bytes.slice(0, byteLength);
+}
+
+async function fetchPrefixBytes(url: string, byteLength: number): Promise<Uint8Array> {
+  return fetchRangeBytes(url, 0, byteLength);
 }
 
 function readBE32(bytes: Uint8Array, off: number): number {
@@ -1886,9 +1896,8 @@ function chooseChunkCapacity(nbf: number, plane: number, device: GPUDevice): num
 
 function canUseFullStack(nbf: number, plane: number, device: GPUDevice): boolean {
   // The full-stack path keeps one giant stage/phase stack and is disabled for
-  // the browser review contract.  FULL_STACK_GPU_BUDGET_BYTES documents the
-  // old threshold; chunking remains safer for multi-GB folder exports.
-  void nbf; void plane; void device; void FULL_STACK_GPU_BUDGET_BYTES;
+  // the browser review contract; chunking remains safer for multi-GB folders.
+  void nbf; void plane; void device;
   return false;
 }
 
@@ -1918,9 +1927,18 @@ export class ShowPtychoWebGPUSSB {
     this.cal = JSON.parse(calJson) as SsbCal;
     const ny = Number(this.cal.g_shape?.[1] || 0);
     const nx = Number(this.cal.g_shape?.[2] || 0);
-    const n = ny === nx ? supportedSsbSize(ny) : null;
+    // Accept square full-plane (n x n) and rfft half-plane (n x n/2+1)
+    // calibrations - CUDA/MPS backends store Hermitian-half G_qk and export
+    // that shape. The viewer only derives the scan size n here; it rebuilds
+    // its own G(q,k) from the folder source, so the backend layout is
+    // irrelevant beyond n. Flattened scan positions (N, det, det) are already
+    // squared by the loaders before g_shape is written.
+    const squareN = ny === nx ? ny : (nx === ny / 2 + 1 ? ny : 0);
+    const n = supportedSsbSize(squareN);
     if (!n) {
-      throw new Error(`WebGPU SSB supports square ${SUPPORTED_SSB_SIZES.join("/")} G(k), got ${this.cal.g_shape?.join("x")}`);
+      throw new Error(
+        `WebGPU SSB supports square ${SUPPORTED_SSB_SIZES.join("/")} G(k) (full or rfft half-plane), got ${this.cal.g_shape?.join("x")}`,
+      );
     }
     this.n = n;
     this.plane = n * n;
@@ -1938,7 +1956,7 @@ export class ShowPtychoWebGPUSSB {
     } else if (gBfSource && typeof gBfSource === "object" && "kind" in gBfSource && gBfSource.kind === "bf_columns") {
       this.source = { kind: "bf-columns", source: JSON.parse(gBfSource.json) as BfColumnSsbSource };
     } else {
-      this.source = { kind: "g-bf", bytes: bytesFromDataView(gBfSource), url: null };
+      this.source = { kind: "g-bf", bytes: bytesFromDataView(gBfSource as DataView), url: null };
     }
   }
 
@@ -2052,7 +2070,29 @@ export class ShowPtychoWebGPUSSB {
     }
     this.device = device;
     const nbf = Math.max(1, Math.min(this.cal.num_bf, Math.round(capacity)));
-    const activeSourceIndices = collectActiveBfIndices(this.cal, nbf, rotationDeg);
+    let activeSourceIndices = collectActiveBfIndices(this.cal, nbf, rotationDeg);
+    // GPU-memory clamp: resident G(q,k) is activeBf x storedPlane x bytesPer.
+    // Cap the active set so one full-BF drag cannot exceed the budget and
+    // device-lost the tab on a small GPU. Uniform stride keeps BF coverage.
+    const clampMode = resolveGqkMode();
+    const perBfBytes = storedPlaneFor(n, clampMode) * gqkBytesPerValue(clampMode);
+    const budgetMaxBf = Math.max(1, Math.floor(gqkBudgetBytes() / perBfBytes));
+    if (activeSourceIndices.length > budgetMaxBf) {
+      const stride = activeSourceIndices.length / budgetMaxBf;
+      const clamped = new Uint32Array(budgetMaxBf);
+      for (let i = 0; i < budgetMaxBf; i++) clamped[i] = activeSourceIndices[Math.floor(i * stride)];
+      console.warn(
+        `[showptycho] BF clamped ${activeSourceIndices.length} -> ${budgetMaxBf} by GPU budget `
+        + `(${(gqkBudgetBytes() / 1e9).toFixed(1)} GB, ${(perBfBytes / 1e6).toFixed(1)} MB/BF in ${clampMode} mode)`,
+      );
+      this.emitProgress({
+        stage: "pipeline",
+        message: `BF capped at ${budgetMaxBf} by GPU memory budget`,
+        detail: `${(gqkBudgetBytes() / 1e9).toFixed(1)} GB budget, ${(perBfBytes / 1e6).toFixed(1)} MB per BF pixel (${clampMode})`,
+        activeBf: budgetMaxBf,
+      });
+      activeSourceIndices = clamped;
+    }
     const nonzeroBfCount = activeSourceIndices.length;
     const activeIndices = nonzeroBfCount > 0 ? activeSourceIndices : new Uint32Array([0]);
     const activeBfCount = activeIndices.length;
@@ -2239,7 +2279,7 @@ export class ShowPtychoWebGPUSSB {
           entries,
         });
       }),
-      cols: buffers.paramsChunks.map((params, index) => device.createBindGroup({
+      cols: buffers.paramsChunks.map((params) => device.createBindGroup({
         layout: pipelines.cols.getBindGroupLayout(0),
         entries: [
           { binding: 0, resource: { buffer: params } },
@@ -2248,7 +2288,7 @@ export class ShowPtychoWebGPUSSB {
           { binding: 7, resource: { buffer: buffers.phaseStack } },
         ],
       })),
-      reducePartial: buffers.paramsChunks.map((params, index) => device.createBindGroup({
+      reducePartial: buffers.paramsChunks.map((params) => device.createBindGroup({
         layout: pipelines.reducePartial.getBindGroupLayout(0),
         entries: [
           { binding: 0, resource: { buffer: params } },
@@ -2317,8 +2357,8 @@ export class ShowPtychoWebGPUSSB {
     const requested = rotationDeg == null || !Number.isFinite(rotationDeg) ? baseRotationDeg(this.cal) : Number(rotationDeg);
     if (this.geometryRotationDeg != null && Math.abs(requested - this.geometryRotationDeg) < 1e-9) return;
     const { geom, trig } = packGeometry(this.cal, buffers.activeSourceIndices, requested);
-    device.queue.writeBuffer(buffers.bfGeom, 0, geom);
-    device.queue.writeBuffer(buffers.bfTrig, 0, trig);
+    device.queue.writeBuffer(buffers.bfGeom, 0, geom as unknown as BufferSource);
+    device.queue.writeBuffer(buffers.bfTrig, 0, trig as unknown as BufferSource);
     this.geometryRotationDeg = requested;
   }
 
@@ -2349,7 +2389,7 @@ export class ShowPtychoWebGPUSSB {
         throw new Error("WebGPU SSB buffers are not ready after setup");
       }
       const aberrations = packAberrations(c10, c12, phi12Deg, options.higherOrder);
-      device.queue.writeBuffer(buffers.aberrations, 0, aberrations.data);
+      device.queue.writeBuffer(buffers.aberrations, 0, aberrations.data as unknown as BufferSource);
       const t0 = performance.now();
       const enc = device.createCommandEncoder();
       if (buffers.fullStack) {
