@@ -6079,6 +6079,23 @@ function Show3D() {
     }
     if (sidecarMode) invalidateSidecarViewportCache("view-transform");
   };
+  const clampPanelViewForDraw = React.useCallback((
+    panelState: PanelState,
+    viewportW: number,
+    viewportH: number,
+  ) => {
+    const clampAxis = (pan: number, viewport: number, zoomValue: number) => {
+      if (viewport <= 0) return 0;
+      if (zoomValue <= 1) return viewport * (1 - zoomValue) / 2;
+      return Math.max(viewport * (1 - zoomValue), Math.min(0, pan));
+    };
+    const zoomValue = Math.max(MIN_IMAGE_ZOOM, Math.min(MAX_ZOOM, panelState.zoom || 1));
+    return {
+      zoom: zoomValue,
+      panX: clampAxis(panelState.panX || 0, viewportW, zoomValue),
+      panY: clampAxis(panelState.panY || 0, viewportH, zoomValue),
+    };
+  }, []);
   // Back-compat aliases for the single-panel code paths (ROI, profile, etc.)
   // which still expect plain zoom/panX/panY. Use panel 0's state.
   const zoom = stateFor(0).zoom;
@@ -11021,6 +11038,7 @@ function Show3D() {
       const bitmap = bitmaps[panelIdx];
       if (!bitmap) continue;
       const panelState = stateFor(panelIdx);
+      const drawView = clampPanelViewForDraw(panelState, outPanelW, outPanelH);
       const col = slot % cols;
       const row = Math.floor(slot / cols);
       const slotX = col * (outPanelW + gap);
@@ -11033,15 +11051,15 @@ function Show3D() {
       ctx.beginPath();
       ctx.rect(slotX, slotY, outPanelW, outPanelH);
       ctx.clip();
-      ctx.translate(slotX + panelState.panX, slotY + panelState.panY);
-      ctx.scale(panelState.zoom, panelState.zoom);
+      ctx.translate(slotX + drawView.panX, slotY + drawView.panY);
+      ctx.scale(drawView.zoom, drawView.zoom);
       if (flipCols || flipRows) {
         ctx.translate(flipCols ? outPanelW : 0, flipRows ? outPanelH : 0);
         ctx.scale(flipCols ? -1 : 1, flipRows ? -1 : 1);
       }
       if (imageRotation % 4 !== 0) {
-        const cx = outPanelW / 2 / panelState.zoom;
-        const cy = outPanelH / 2 / panelState.zoom;
+        const cx = outPanelW / 2 / drawView.zoom;
+        const cy = outPanelH / 2 / drawView.zoom;
         ctx.translate(cx, cy);
         ctx.rotate((imageRotation * Math.PI) / 2);
         ctx.translate(-outPanelW / 2, -outPanelH / 2);
@@ -11062,6 +11080,7 @@ function Show3D() {
     panelInnerBorderColor,
     panelInnerBorderPx,
     stateFor,
+    clampPanelViewForDraw,
     themeColors.bg,
     panelRealFrames,
     flipCols,
@@ -11120,6 +11139,7 @@ function Show3D() {
       const panelState = linkPanels
         ? linkedStateLiveRef.current
         : (panelStatesLiveRef.current[panelIdx] || stateFor(panelIdx));
+      const drawView = clampPanelViewForDraw(panelState, outPanelWFloat, outPanelHFloat);
       const slotX0 = Math.max(0, Math.round((slot % cols) * (outPanelWFloat + gap)));
       const slotY0 = Math.max(0, Math.round(Math.floor(slot / cols) * (outPanelHFloat + gap)));
       const slotX1 = Math.min(targetW, Math.round(slotX0 + outPanelWFloat));
@@ -11190,13 +11210,13 @@ function Show3D() {
       let sampleMapped: number | null = null;
       let sampleRgb: number | null = null;
       for (let y = slotY0; y < slotY1; y++) {
-        const localDrawY = ((y - slotY0) - (panelState.panY || 0)) / Math.max(1e-6, panelState.zoom || 1);
+        const localDrawY = ((y - slotY0) - drawView.panY) / drawView.zoom;
         if (localDrawY < 0 || localDrawY >= outPanelHFloat) continue;
         let localY = localDrawY / Math.max(1, outPanelHFloat);
         if (flipRows) localY = 1 - localY;
         let dst = (y * targetW + slotX0) * 4;
         for (let x = slotX0; x < slotX1; x++, dst += 4) {
-          const localDrawX = ((x - slotX0) - (panelState.panX || 0)) / Math.max(1e-6, panelState.zoom || 1);
+          const localDrawX = ((x - slotX0) - drawView.panX) / drawView.zoom;
           if (localDrawX < 0 || localDrawX >= outPanelWFloat) continue;
           let localX = localDrawX / Math.max(1, outPanelWFloat);
           if (flipCols) localX = 1 - localX;
@@ -11245,6 +11265,9 @@ function Show3D() {
         flipCols,
         flipRows,
         wrote: wrotePanelPixel,
+        effectiveZoom: Number(drawView.zoom.toFixed(3)),
+        effectivePanX: Number(drawView.panX.toFixed(1)),
+        effectivePanY: Number(drawView.panY.toFixed(1)),
         sampleByte,
         sampleMapped,
         sampleRgb,
@@ -11308,6 +11331,7 @@ function Show3D() {
     panelInnerBorderPx,
     visiblePanelIndices,
     stateFor,
+    clampPanelViewForDraw,
     linkPanels,
     panelRealFrames,
     panelCmapFor,
@@ -11404,6 +11428,7 @@ function Show3D() {
       const bitmap = bitmaps[panelIdx];
       if (!bitmap) continue;
       const panelState = stateFor(panelIdx);
+      const drawView = clampPanelViewForDraw(panelState, outPanelW, outPanelH);
       const col = slot % cols;
       const row = Math.floor(slot / cols);
       const slotX = col * (outPanelW + gap);
@@ -11416,15 +11441,15 @@ function Show3D() {
       ctx.beginPath();
       ctx.rect(slotX, slotY, outPanelW, outPanelH);
       ctx.clip();
-      ctx.translate(slotX + panelState.panX, slotY + panelState.panY);
-      ctx.scale(panelState.zoom, panelState.zoom);
+      ctx.translate(slotX + drawView.panX, slotY + drawView.panY);
+      ctx.scale(drawView.zoom, drawView.zoom);
       if (flipCols || flipRows) {
         ctx.translate(flipCols ? outPanelW : 0, flipRows ? outPanelH : 0);
         ctx.scale(flipCols ? -1 : 1, flipRows ? -1 : 1);
       }
       if (imageRotation % 4 !== 0) {
-        const cx = outPanelW / 2 / panelState.zoom;
-        const cy = outPanelH / 2 / panelState.zoom;
+        const cx = outPanelW / 2 / drawView.zoom;
+        const cy = outPanelH / 2 / drawView.zoom;
         ctx.translate(cx, cy);
         ctx.rotate((imageRotation * Math.PI) / 2);
         ctx.translate(-outPanelW / 2, -outPanelH / 2);
@@ -11461,6 +11486,7 @@ function Show3D() {
     panelInnerBorderPx,
     nSlices,
     stateFor,
+    clampPanelViewForDraw,
     themeColors.bg,
     panelRealFrames,
     flipCols,
