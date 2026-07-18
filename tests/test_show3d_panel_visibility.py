@@ -171,6 +171,13 @@ def test_show3d_paged_frontend_preserves_view_transform() -> None:
     assert "if (rgba[p + 3] !== 0) continue;" in sidecar_viewport_helper
     assert 'const bg = themeColors.bg || interPanelGapColor || "#fff";' in sidecar_viewport_helper
 
+    manual_commit_helper = frontend.split("const commitSlice = (idx: number) => {", 1)[1].split(
+        "const handleLoopSliderMouseDown",
+        1,
+    )[0]
+    assert 'drawSidecarBitmapFrame(next, false, "scrub-commit")' in manual_commit_helper
+    assert 'drawSidecarBitmapFrame(next, false, "scrub-commit-confirm")' in manual_commit_helper
+
 
 def test_show3d_ui_mode_presets_and_overrides() -> None:
     interactive = Show3D(*_panels()[:2], verbose=False)
