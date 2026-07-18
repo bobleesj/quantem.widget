@@ -8460,31 +8460,18 @@ function Show3D() {
     return false;
   }, [flipCols, flipRows, imageRotation, linkPanels, nPanels, stateFor, visiblePanelIndices]);
 
-  const resetPagedViewTransform = React.useCallback(() => {
+  const preparePagedPageChange = React.useCallback(() => {
     if (!isPaged) return;
     if (sidecarMode) invalidateSidecarViewportCache("page-change");
-    setGpuDisplayVisible(false);
-    const reset = { zoom: 1, panX: 0, panY: 0 };
-    const nextLinkedState = { ...linkedStateLiveRef.current, ...reset };
-    const livePanelStates = panelStatesLiveRef.current.length ? panelStatesLiveRef.current : panelStates;
-    const nextPanelStates = livePanelStates.map(state => ({ ...state, ...reset }));
-    linkedStateLiveRef.current = nextLinkedState;
-    panelStatesLiveRef.current = nextPanelStates;
-    setLinkedState(state => ({ ...state, ...reset }));
-    setPanelStates(states => states.map(state => ({ ...state, ...reset })));
-    setViewState({
-      linked_state: { ...nextLinkedState },
-      panel_states: nextPanelStates.map(state => ({ ...state })),
-    });
-  }, [invalidateSidecarViewportCache, isPaged, panelStates, setGpuDisplayVisible, sidecarMode, setViewState]);
+  }, [invalidateSidecarViewportCache, isPaged, sidecarMode]);
 
   const previousActivePageStartRef = React.useRef(activePageStart);
   React.useEffect(() => {
     const previous = previousActivePageStartRef.current;
     previousActivePageStartRef.current = activePageStart;
     if (previous === activePageStart || !isPaged) return;
-    resetPagedViewTransform();
-  }, [activePageStart, isPaged, resetPagedViewTransform]);
+    preparePagedPageChange();
+  }, [activePageStart, isPaged, preparePagedPageChange]);
 
   const frameTransformActive = () => requiresClientFrameTransform({
     offline,
@@ -11482,7 +11469,7 @@ function Show3D() {
     const previous = previousSidecarPagePaintStartRef.current;
     previousSidecarPagePaintStartRef.current = activePageStart;
     if (previous === activePageStart || !offline || !sidecarMode || playing) return;
-    resetPagedViewTransform();
+    preparePagedPageChange();
     const frameIdx = Number.isFinite(playbackIdxRef.current) ? playbackIdxRef.current : liveSliceIdx;
     drawSidecarBitmapFrame(frameIdx, false, "page-change");
     updatePlaybackLiveControls(frameIdx);
@@ -11497,7 +11484,7 @@ function Show3D() {
     liveSliceIdx,
     offline,
     playing,
-    resetPagedViewTransform,
+    preparePagedPageChange,
     sidecarMode,
     updatePlaybackLiveControls,
   ]);
@@ -17595,7 +17582,6 @@ function Show3D() {
 	                  onChange={(_, value) => {
 	                    const raw = Array.isArray(value) ? value[0] : value;
 	                    const next = clampPageIdx(Number(raw));
-	                    if (next !== pageControlIdx) resetPagedViewTransform();
 	                    setPageSliderPreviewIdx(next);
 	                    commitPageIdx(next);
 	                  }}
@@ -17603,7 +17589,6 @@ function Show3D() {
 	                    const raw = Array.isArray(value) ? value[0] : value;
 	                    const next = clampPageIdx(Number(raw));
 	                    stopPagePlayback();
-	                    if (next !== pageControlIdx) resetPagedViewTransform();
 	                    setPageSliderPreviewIdx(next);
 	                    commitPageIdx(next, true);
 	                  }}
