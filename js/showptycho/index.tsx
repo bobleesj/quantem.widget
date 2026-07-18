@@ -76,11 +76,20 @@ function compactIconButton(tc: ThemeColors, color?: string) {
     height: 26,
     minWidth: 26,
     flex: "0 0 26px",
+    boxSizing: "border-box",
     p: 0.25,
     border: `1px solid ${color || tc.border}`,
     borderRadius: "4px",
     color: color || tc.textMuted,
     bgcolor: tc.bgAlt,
+    transition: "none",
+    transform: "none",
+    "&:active": { transform: "none" },
+    "& .MuiTouchRipple-root": { display: "none" },
+    "&.Mui-focusVisible": {
+      outline: `1px solid ${color || tc.accent}`,
+      outlineOffset: 0,
+    },
     "&:hover": {
       bgcolor: tc.controlBg,
       borderColor: color || tc.accent,
@@ -3185,6 +3194,22 @@ function Explore() {
             {phaseWidth}×{phaseHeight}
           </Typography>
         )}
+        <Typography
+          sx={{
+            ...typography.value,
+            color: animationExportStatus.startsWith("Export failed") || animationExportStatus.includes("unavailable") ? STATUS_BAD : tc.textMuted,
+            width: 220,
+            minWidth: 0,
+            flex: "0 1 220px",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "clip",
+            opacity: animationExportStatus ? 1 : 0,
+          }}
+          title={animationExportStatus}
+        >
+          {animationExportStatus || " "}
+        </Typography>
         <Button
           size="small"
           variant="outlined"
@@ -3218,22 +3243,6 @@ function Explore() {
             MP4 video
           </MenuItem>
         </Menu>
-        <Typography
-          sx={{
-            ...typography.value,
-            color: animationExportStatus.startsWith("Export failed") || animationExportStatus.includes("unavailable") ? STATUS_BAD : tc.textMuted,
-            width: 220,
-            minWidth: 0,
-            flex: "0 1 220px",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "clip",
-            opacity: animationExportStatus ? 1 : 0,
-          }}
-          title={animationExportStatus}
-        >
-          {animationExportStatus || " "}
-        </Typography>
         <Button
           size="small"
           variant="outlined"
@@ -3693,6 +3702,9 @@ function Explore() {
           <Tooltip title={playing ? "Pause sweep (Space)" : "Play: sweep the selected aberration (Space)"} placement="top" arrow>
             <IconButton
               size="small"
+              disableRipple
+              disableFocusRipple
+              disableTouchRipple
               onClick={() => setPlaying(p => !p)}
               sx={{ ...compactIconButton(tc, playing ? STATUS_GOOD : tc.accent), height: ACTION_CONTROL_HEIGHT }}
               aria-label={playing ? "Pause sweep" : "Play sweep"}
@@ -3792,6 +3804,9 @@ function Explore() {
           <Tooltip title="Pin the current snapshot (P)" placement="top" arrow>
             <IconButton
               size="small"
+              disableRipple
+              disableFocusRipple
+              disableTouchRipple
               onClick={doPin}
               disabled={busy || !rawPhaseRef.current}
               sx={{ ...compactIconButton(tc, tc.accent), height: ACTION_CONTROL_HEIGHT }}
@@ -3805,6 +3820,9 @@ function Explore() {
           <Tooltip title="Jump to random aberration values.  Click chips to scope." placement="top" arrow>
             <IconButton
               size="small"
+              disableRipple
+              disableFocusRipple
+              disableTouchRipple
               onClick={doRandom}
               sx={{ ...compactIconButton(tc, tc.textMuted), height: ACTION_CONTROL_HEIGHT }}
               aria-label="Randomize aberrations"
