@@ -3024,6 +3024,7 @@ function Show3D() {
   const sidecarCompositeReadyRef = React.useRef(false);
   const sidecarCompositeCompleteRef = React.useRef(false);
   const sidecarCompositeBuildSerialRef = React.useRef(0);
+  const sidecarPaintScratchCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const sidecarGpuPresenterRef = React.useRef<{
     device: GPUDevice;
     context: GPUCanvasContext;
@@ -11338,6 +11339,21 @@ function Show3D() {
     linkContrast,
   ]);
 
+  const getSidecarPaintScratchContext = React.useCallback((
+    targetW: number,
+    targetH: number,
+  ): CanvasRenderingContext2D | null => {
+    if (typeof document === "undefined") return null;
+    let scratch = sidecarPaintScratchCanvasRef.current;
+    if (!scratch) {
+      scratch = document.createElement("canvas");
+      sidecarPaintScratchCanvasRef.current = scratch;
+    }
+    if (scratch.width !== targetW) scratch.width = targetW;
+    if (scratch.height !== targetH) scratch.height = targetH;
+    return scratch.getContext("2d");
+  }, []);
+
   const drawSidecarBitmapFrame = React.useCallback((
     idx: number,
     updateDisplayState = true,
@@ -11358,8 +11374,19 @@ function Show3D() {
     );
     if (liveViewportPaint) {
       setGpuDisplayVisible(false);
-      const ok = paintSidecarU8ViewportToContext(ctx, drawIdx, canvasW, canvasH);
+      const scratchCtx = getSidecarPaintScratchContext(canvasW, canvasH);
+      const paintCtx = scratchCtx || ctx;
+      if (scratchCtx) {
+        scratchCtx.imageSmoothingEnabled = false;
+        scratchCtx.clearRect(0, 0, canvasW, canvasH);
+        scratchCtx.drawImage(canvas, 0, 0, canvasW, canvasH);
+      }
+      const ok = paintSidecarU8ViewportToContext(paintCtx, drawIdx, canvasW, canvasH);
       if (!ok) return false;
+      if (scratchCtx) {
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(scratchCtx.canvas, 0, 0, canvasW, canvasH);
+      }
       playbackIdxRef.current = drawIdx;
       if (updateDisplayState) {
         if (displaySliceIdx !== drawIdx) setDisplaySliceIdx(drawIdx);
@@ -11388,9 +11415,14 @@ function Show3D() {
       ? sidecarCompositeFrameCacheRef.current.get(drawIdx)
       : null;
     if (composite) {
-      ctx.imageSmoothingEnabled = false;
-      ctx.clearRect(0, 0, canvasW, canvasH);
-      ctx.drawImage(composite, 0, 0, composite.width, composite.height, 0, 0, canvasW, canvasH);
+      const scratchCtx = getSidecarPaintScratchContext(canvasW, canvasH);
+      const paintCtx = scratchCtx || ctx;
+      paintCtx.imageSmoothingEnabled = false;
+      paintCtx.drawImage(composite, 0, 0, composite.width, composite.height, 0, 0, canvasW, canvasH);
+      if (scratchCtx) {
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(scratchCtx.canvas, 0, 0, canvasW, canvasH);
+      }
       playbackIdxRef.current = drawIdx;
       if (updateDisplayState) {
         if (displaySliceIdx !== drawIdx) setDisplaySliceIdx(drawIdx);
@@ -11415,8 +11447,10 @@ function Show3D() {
     }
     const bitmaps = sidecarBitmapFrameCacheRef.current.get(drawIdx);
     if (!bitmaps || bitmaps.length === 0) return false;
-    ctx.imageSmoothingEnabled = smooth;
-    clearWithGridBackground(ctx, canvasW, canvasH);
+    const scratchCtx = getSidecarPaintScratchContext(canvasW, canvasH);
+    const paintCtx = scratchCtx || ctx;
+    paintCtx.imageSmoothingEnabled = smooth;
+    clearWithGridBackground(paintCtx, canvasW, canvasH);
     const visibleCountLocal = Math.max(1, visiblePanelCount || 1);
     const cols = panelColsForCount(visibleCountLocal);
     const rows = Math.ceil(visibleCountLocal / cols);
@@ -11433,31 +11467,35 @@ function Show3D() {
       const row = Math.floor(slot / cols);
       const slotX = col * (outPanelW + gap);
       const slotY = row * (outPanelH + gap);
-      ctx.fillStyle = themeColors.bg;
-      ctx.fillRect(slotX, slotY, outPanelW, outPanelH);
+      paintCtx.fillStyle = themeColors.bg;
+      paintCtx.fillRect(slotX, slotY, outPanelW, outPanelH);
       const realN = panelRealFrames && panelRealFrames[panelIdx];
       const pastEnd = !!(realN && drawIdx >= realN);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(slotX, slotY, outPanelW, outPanelH);
-      ctx.clip();
-      ctx.translate(slotX + drawView.panX, slotY + drawView.panY);
-      ctx.scale(drawView.zoom, drawView.zoom);
+      paintCtx.save();
+      paintCtx.beginPath();
+      paintCtx.rect(slotX, slotY, outPanelW, outPanelH);
+      paintCtx.clip();
+      paintCtx.translate(slotX + drawView.panX, slotY + drawView.panY);
+      paintCtx.scale(drawView.zoom, drawView.zoom);
       if (flipCols || flipRows) {
-        ctx.translate(flipCols ? outPanelW : 0, flipRows ? outPanelH : 0);
-        ctx.scale(flipCols ? -1 : 1, flipRows ? -1 : 1);
+        paintCtx.translate(flipCols ? outPanelW : 0, flipRows ? outPanelH : 0);
+        paintCtx.scale(flipCols ? -1 : 1, flipRows ? -1 : 1);
       }
       if (imageRotation % 4 !== 0) {
         const cx = outPanelW / 2 / drawView.zoom;
         const cy = outPanelH / 2 / drawView.zoom;
-        ctx.translate(cx, cy);
-        ctx.rotate((imageRotation * Math.PI) / 2);
-        ctx.translate(-outPanelW / 2, -outPanelH / 2);
+        paintCtx.translate(cx, cy);
+        paintCtx.rotate((imageRotation * Math.PI) / 2);
+        paintCtx.translate(-outPanelW / 2, -outPanelH / 2);
       }
-      if (pastEnd) ctx.filter = "blur(4px)";
-      ctx.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height, 0, 0, outPanelW, outPanelH);
-      ctx.restore();
-      strokePanelInnerBorder(ctx, slotX, slotY, outPanelW, outPanelH);
+      if (pastEnd) paintCtx.filter = "blur(4px)";
+      paintCtx.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height, 0, 0, outPanelW, outPanelH);
+      paintCtx.restore();
+      strokePanelInnerBorder(paintCtx, slotX, slotY, outPanelW, outPanelH);
+    }
+    if (scratchCtx) {
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(scratchCtx.canvas, 0, 0, canvasW, canvasH);
     }
     playbackIdxRef.current = drawIdx;
     if (updateDisplayState) {
@@ -11487,6 +11525,7 @@ function Show3D() {
     nSlices,
     stateFor,
     clampPanelViewForDraw,
+    getSidecarPaintScratchContext,
     themeColors.bg,
     panelRealFrames,
     flipCols,
