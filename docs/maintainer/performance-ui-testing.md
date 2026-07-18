@@ -219,6 +219,12 @@ For Show3D, drive and record:
   full-resolution pixels,
 - paged panel sweeps: Page slider scrubs and Page play should not wait for a
   Python trait round trip before the rendered page changes,
+- sidecar/manual scrub flash check: in exported Show3D HTML, zoom into a
+  multi-panel paged sidecar view, scrub the lower frame slider by clicking,
+  dragging the current-frame thumb, releasing, and then using Page play. The
+  scientific canvas must keep the previous or next painted frame visible during
+  every transition. Treat any full-panel black/white beat as a failure even if
+  autoplay looks clean,
 - hidden panels in paged views should be page-slot based and must remain hidden
   after Page slider scrubs, Page play, and page-label changes,
 - wheel zoom and drag pan with linked zoom on/off,
@@ -518,6 +524,18 @@ not one absolute source index, so a hidden slot remains hidden as the page
 changes. Standalone Show3D HTML should render the current page/frame first,
 then prewarm neighboring frames and later frames in the background using a
 bounded cache with debug counters.
+
+Show3D sidecar scrubbing has a separate anti-flash contract. Manual frame
+slider scrubs, slider release commits, keyboard frame steps, Page slider
+changes, Page play, and autoplay must all use the same immediate browser paint
+discipline before syncing model traits. Do not clear a sidecar canvas, hide the
+GPU canvas, or fill a transformed viewport with the dark inter-panel backing
+unless the replacement scientific pixels are already drawn in the same task.
+When a transformed sidecar frame needs a scratch image, start from the existing
+canvas pixels and fill only transparent/unwritten pixels with the normal widget
+background. On manual scrub release, repaint once before committing the synced
+`slice_idx` trait and once on the next animation frame, because the non-playing
+model-sync path can otherwise expose the dark backing for one frame.
 
 Every heavy compute feature needs both math proof and cache proof:
 

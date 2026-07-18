@@ -157,6 +157,37 @@ Remote Jupyter is a first-class production path for Show3D: the browser may be
 on a laptop while the kernel, data, CUDA device, and any Python frame server
 live on a workstation reached through `ssh -L`.
 
+## Show3D sidecar anti-flash contract
+
+Large exported Show3D reviews often use browser-local sidecar caches. In that
+mode the canvas must never be cleared to a blank, black, or white backing while
+waiting for the next page/frame. Keep the last scientific pixels visible until
+the replacement pixels are ready, then swap in the new frame.
+
+The risky paths are not all the same. Page play, frame autoplay, keyboard
+steps, Page slider changes, manual frame-slider drag, and manual frame-slider
+release can each pass through different handlers. A fix that covers autoplay
+does not prove manual slider scrubbing is safe. For sidecar code, keep these
+rules:
+
+- Paint the requested page/frame from browser-local data before syncing the
+  Python/model trait that represents the same state.
+- On manual frame-slider release, repaint before the `slice_idx` commit and
+  repaint again on the next animation frame.
+- Do not call `clearRect`, hide the GPU canvas, or fill the full transformed
+  viewport with `inter_panel_gap_color` unless the replacement scientific
+  pixels are painted in that same task.
+- For transformed sidecar viewports, start from `getImageData()` of the
+  current canvas and fill only transparent/unwritten pixels with the normal
+  widget background.
+- Preserve zoom/pan across page changes. Page changes should invalidate stale
+  sidecar page caches and repaint, not reset the user's inspection view.
+
+Browser signoff must include burst screenshots or equivalent pixel sampling
+during manual lower-slider drag and release, Page slider scrub, Page play, and
+frame autoplay. Scan for both white and black spikes in the scientific canvas
+area; a final nonblank screenshot is not enough.
+
 A kernel-local frame server on `127.0.0.1` is only fast if the browser can reach
 that exact endpoint. Across an SSH tunnel, the browser's localhost is the
 laptop; use measurement to prove whether frame fetches are actually reaching
