@@ -153,8 +153,11 @@ def test_show3d_paged_side_panels_align_with_image_canvas():
 def test_show3d_histogram_drag_repaints_single_file_exports():
     """C1: normal exported Show3D histograms react while the user drags."""
     show3d = (ROOT / "js" / "show3d" / "index.tsx").read_text(encoding="utf-8")
+    stress = (ROOT / "scripts" / "widget_show3d_stress.py").read_text(encoding="utf-8")
 
     assert show3d.count("commitOnChange={!sidecarMode}") == 2
+    assert "freezeCurrentPanelContrastAsManual(panel, { min, max })" in show3d
+    assert "keep the visible Auto windows as the editable manual baseline" in show3d
     assert (
         "if (sidecarMode) window.setTimeout(commitPanelRange, 0);\n"
         "                              else commitPanelRange();"
@@ -163,6 +166,45 @@ def test_show3d_histogram_drag_repaints_single_file_exports():
         "if (sidecarMode) window.setTimeout(commitSharedRange, 0);\n"
         "                      else commitSharedRange();"
     ) in show3d
+    assert '"histogram_contrast": histogram_contrast' in stress
+    assert "manual independent histogram drag reset other panels to full range" in stress
+
+
+def test_show3d_arrow_keys_are_stress_tested_for_frame_navigation():
+    """C1: keyboard frame navigation remains a real browser stress gate."""
+    show3d = (ROOT / "js" / "show3d" / "index.tsx").read_text(encoding="utf-8")
+    stress = (ROOT / "scripts" / "widget_show3d_stress.py").read_text(encoding="utf-8")
+
+    assert 'const FRAME_NAVIGATION_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End"]);' in show3d
+    assert "shouldIgnoreWidgetShortcut(e.target, e.key)" in show3d
+    assert "rootRef.current?.focus({ preventScroll: true });" in show3d
+    assert "target.closest(WIDGET_TEXT_OR_VALUE_CONTROL_SELECTOR)" in show3d
+    assert "def _drive_keyboard_scrub(page, *, fps_ms: int)" in stress
+    assert 'page.keyboard.press("ArrowRight")' in stress
+    assert '"keyboard_scrub": keyboard_scrub' in stress
+    assert "ArrowRight did not change the rendered frame" in stress
+
+
+def test_show2d_folder_uint8_export_uses_per_panel_frame_files():
+    """C1: large exact 4k folder exports avoid one giant browser allocation."""
+    show2d_py = (ROOT / "src" / "quantem" / "widget" / "show2d.py").read_text(encoding="utf-8")
+    show2d_js = (ROOT / "js" / "show2d" / "index.tsx").read_text(encoding="utf-8")
+    profile = (ROOT / "scripts" / "widget_external_html_profile.py").read_text(encoding="utf-8")
+
+    assert "frame_bytes_urls = traitlets.List" in show2d_py
+    assert 'name = f"frame_{image_index:06d}.bin"' in show2d_py
+    assert '"frame_bytes_files": frame_file_names' in show2d_py
+    assert 'useModelState<string[]>("frame_bytes_urls")' in show2d_js
+    assert "setFetchedFrameBytePanels(loaded.slice())" in show2d_js
+    assert "data-show2d-main-canvas={i}" in show2d_js
+    assert "data-show2d-selected-panel={selectedIdx}" in show2d_js
+    assert "onMouseDownCapture={handleRootMouseDownCapture}" in show2d_js
+    assert "const uint8FolderPreviewMode = !!uint8FolderFrameBytes ||" in show2d_js
+    assert "previousSource.frameSourceKey !== frameSourceKey" in show2d_js
+    assert "def _show2d_main_canvas_screenshots" in profile
+    assert "visible Show2D main canvases were blank/flat" in profile
+    assert "def _run_show2d_keyboard_step" in profile
+    assert "show2d_keyboard_shortcuts ArrowRight did not change the selected panel" in profile
 
 
 def test_show2d_show3d_offline_export_bakes_current_view_state():
@@ -817,6 +859,8 @@ def test_show3d_playback_row_bookmarks_current_frame_contract():
     assert "const toggleCurrentFrameBookmark" in show3d
     assert "aria-pressed={currentFrameBookmarked}" in show3d
     assert 'currentFrameBookmarked ? "Unstar" : "Star"' in show3d
+    assert 'thumb.getAttribute("data-index") !== "1"' in show3d
+    assert show3d.count("onPointerDownCapture={handleLoopSliderPointerDownCapture}") == 2
 
 
 def test_show3d_offline_packed_panel_playback_uses_per_panel_contrast_contract():

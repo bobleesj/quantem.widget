@@ -151,19 +151,47 @@ double-clickable HTML in seconds.
 
 SSB phase reconstruction runs on three backends. Headline numbers (real
 512x512x192x192 experimental data, Apple M5 browser): one aberration-slider move
-re-reconstructs the full 512x512 phase in **16 ms** (Hermitian mode, default;
-was 18 ms full-plane) or **13 ms** quantized, at **2x / 4x less GPU memory**.
-The Hermitian half-plane is **bit-exact** at every supported scan size
-(128-1024); snorm16 quantization stays below 0.2 % phase error up to 512
+re-reconstructs the full 512x512 phase in **16 ms** in Exact mode (default) or
+**13 ms** in Fast preview mode, at **2x / 4x less GPU memory** than the old
+n x n implementation. Exact mode is **bit-exact** at every supported scan
+size (128-1024); Fast preview stays below 0.2 % phase error up to 512
 (1.35 % at 1024 - preview quality). Details, full sweep table, and the port recipe:
 [docs/maintainer/2026-07-16-showptycho-gqk-memory-modes.md](docs/maintainer/2026-07-16-showptycho-gqk-memory-modes.md)
 
-| Optimization | WebGPU (browser / folder export) | CUDA (`quantem.gpu`) | MPS (`quantem.gpu`) |
+Implementation status:
+
+| Capability | WebGPU (browser / folder export) | CUDA (`quantem.gpu`) | MPS (`quantem.gpu`) |
 |---|---|---|---|
-| Hermitian half-plane `G(q,k)` — 2x less memory, bit-exact, faster | Done (default; `?gqk=full` opt-out) | Todo | Todo |
-| snorm16 block-quantized `G(q,k)` — 4x, ~1e-4 rad error | Done (opt-in `?gqk=herm16`) | Todo | Todo |
+| Exact `G(q,k)` storage — Hermitian half-plane, 2x less memory, bit-exact, faster | Done (default) | Todo | Todo |
+| Fast preview `G(q,k)` storage — snorm16 half-plane, 4x less memory, ~1e-4 rad error | Done (opt-in `?gqk=preview` or `?gqk=herm16`) | Todo | Todo |
 | VRAM budget clamp on BF count | Done (4.5 GB default, mode-aware; `__QUANTEM_SHOWPTYCHO_GQK_BUDGET_GB__` override) | n/a | Todo |
 | Streamed initial build (bounded peak) | Todo | n/a | Todo |
+
+WebGPU scan-size coverage:
+
+| Scan size | Exact complex64 Hermitian `G(q,k)` | Fast preview `herm16` | Notes |
+|---|---|---|---|
+| 128x128 | Done | Done | Synthetic parity sweep passed; launch overhead dominates timing. |
+| 256x256 | Done | Done | Synthetic parity sweep passed. |
+| 512x512 | Done | Done | Real experimental parity and headed-browser timing measured. |
+| 1024x1024 | Done | Done | Exact is bit-exact; Fast preview is preview-quality because measured error was larger than at 512. |
+
+Resident `G(q,k)` memory planning:
+
+These numbers are the resident reducer memory, not total browser or driver
+memory. Peak first-load memory can be higher because temporary build chunks,
+phase/loss images, and browser overhead also exist. `Active BF` means
+nonzero-aperture BF pixels after the BF policy is applied.
+
+| Scan | Active BF | Typical use | Old n x n baseline (not runtime) | Exact default | Fast preview |
+|---|---:|---|---:|---:|---:|
+| 512x512 | 12 | Small smoke test | 25 MB | 13 MB | 6.3 MB |
+| 512x512 | 408 | 0.30 BF preview in the Phil report | 856 MB | 429 MB | 215 MB |
+| 512x512 | 1360 | Full-BF estimate for the sparse experimental 512 dataset | 2.85 GB | 1.43 GB | 0.72 GB |
+| 512x512 | 9070 | Dense experimental full active BF | 19.0 GB | 9.55 GB | 4.77 GB |
+| 1024x1024 | 12 | Small smoke test | 101 MB | 50 MB | 25 MB |
+| 1024x1024 | 1382 | Berk full active BF | 11.6 GB | 5.81 GB | 2.90 GB |
+| 1024x1024 | 9070 | Workstation stress projection | 76.1 GB | 38.1 GB | 19.1 GB |
 
 ## Docs
 
@@ -262,6 +290,11 @@ A. Yang, T. Zhang, Y. Xiao, and S. J. L. Billinge, *Digital Discovery*, 2026).
 - [ ] Histogram UI matches the existing Show2D-style interaction: compact panel,
   no extra whitespace, draggable min/max handles, fast center drag, and no
   visible lag.
+- [ ] Hover inspection is independent of selection. In Show2D, Show3D,
+  Show4DSTEM, and other multi-target widgets, hover at least two unselected
+  panels/regions and verify coordinates, value/readout, labels, detector/ROI
+  context, and stats follow the hovered target while edit controls remain
+  scoped to the explicitly selected target.
 - [ ] New or changed widget interactions have a matching storyboard story in
   [docs/maintainer/storyboard-\<widget\>.md](docs/maintainer/storyboard.md)
   (add stories for new behavior, update stale ones), and the storyboard

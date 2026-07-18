@@ -1721,10 +1721,6 @@ async function fetchRangeBytes(url: string, byteOffset: number, byteLength: numb
   return bytes.byteLength === byteLength ? bytes : bytes.slice(0, byteLength);
 }
 
-async function fetchPrefixBytes(url: string, byteLength: number): Promise<Uint8Array> {
-  return fetchRangeBytes(url, 0, byteLength);
-}
-
 function readBE32(bytes: Uint8Array, off: number): number {
   return ((bytes[off] << 24) | (bytes[off + 1] << 16) | (bytes[off + 2] << 8) | bytes[off + 3]) >>> 0;
 }

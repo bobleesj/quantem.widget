@@ -231,6 +231,11 @@ const STATUS_BAD = "#f44336";
 
 type ZoomState = { zoom: number; panX: number; panY: number };
 const ZOOM_RESET: ZoomState = { zoom: 1, panX: 0, panY: 0 };
+type RealViewMode = "phase" | "amp" | "complex";
+type ExtraRealViewMode = Exclude<RealViewMode, "phase">;
+type FFTPlacement = "panel" | "inset";
+type FFTInsetBox = { x: number; y: number; size: number };
+type GPUColormapSlot = 0 | 1 | 2;
 
 interface PinnedEntry {
   id: number;
@@ -243,6 +248,7 @@ interface PinnedEntry {
   starred: boolean;
   timestamp: string;
   phaseData: Float32Array;
+  displayMode: RealViewMode;
   w: number;
   h: number;
   thumb: HTMLCanvasElement | null;
@@ -262,6 +268,74 @@ function renderPhaseOffscreen(
   const canvas = renderToOffscreen(data, w, h, lut, vmin, vmax);
   const tRender = performance.now();
   return { canvas, min, max, clipMs: tClip - t0, renderMs: tRender - tClip };
+}
+
+function phaseAbsData(data: Float32Array): Float32Array {
+  const out = new Float32Array(data.length);
+  for (let i = 0; i < data.length; i++) out[i] = Math.abs(data[i]);
+  return out;
+}
+
+function phaseDisplayData(
+  phase: Float32Array,
+  mode: RealViewMode,
+  cache: React.MutableRefObject<{ source: Float32Array | null; abs: Float32Array | null }>,
+): Float32Array {
+  if (mode === "phase") return phase;
+  if (cache.current.source !== phase || !cache.current.abs) {
+    cache.current = { source: phase, abs: phaseAbsData(phase) };
+  }
+  return cache.current.abs ?? phase;
+}
+
+function hsvToRgb(h: number, s: number, v: number): [number, number, number] {
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+  switch (i % 6) {
+    case 0: return [v, t, p];
+    case 1: return [q, v, p];
+    case 2: return [p, v, t];
+    case 3: return [p, q, v];
+    case 4: return [t, p, v];
+    default: return [v, p, q];
+  }
+}
+
+function renderComplexPhaseOffscreen(
+  phase: Float32Array,
+  w: number,
+  h: number,
+  pctLo: number,
+  pctHi: number,
+): { canvas: HTMLCanvasElement | null; min: number; max: number; clipMs: number; renderMs: number; amp: Float32Array } {
+  const t0 = performance.now();
+  const amp = phaseAbsData(phase);
+  const { vmin, vmax, min, max } = percentileClip(amp, pctLo, pctHi);
+  const tClip = performance.now();
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return { canvas: null, min, max, clipMs: tClip - t0, renderMs: performance.now() - tClip, amp };
+  const img = ctx.createImageData(w, h);
+  const range = vmax > vmin ? vmax - vmin : 1;
+  for (let i = 0; i < phase.length; i++) {
+    const hue = ((phase[i] + Math.PI) / (2 * Math.PI) % 1 + 1) % 1;
+    const clipped = Math.max(vmin, Math.min(vmax, amp[i]));
+    const value = Math.max(0, Math.min(1, (clipped - vmin) / range));
+    const [r, g, b] = hsvToRgb(hue, 0.92, value);
+    const j = i * 4;
+    img.data[j] = Math.round(r * 255);
+    img.data[j + 1] = Math.round(g * 255);
+    img.data[j + 2] = Math.round(b * 255);
+    img.data[j + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const tRender = performance.now();
+  return { canvas, min, max, clipMs: tClip - t0, renderMs: tRender - tClip, amp };
 }
 
 /** Mean-subtract, Hann-window, zero-pad — shared prelude for both FFT paths. */
@@ -350,9 +424,11 @@ function renderFFTOffscreen(
   return { canvas: renderToOffscreen(mag, w, h, lut, vmin, vmax), min, max };
 }
 
-function makeThumbnail(data: Float32Array, w: number, h: number, cmapName: string) {
+function makeThumbnail(data: Float32Array, w: number, h: number, cmapName: string, mode: RealViewMode = "phase") {
   const lut = COLORMAPS[cmapName as keyof typeof COLORMAPS] || COLORMAPS.viridis;
-  const { canvas: full } = renderPhaseOffscreen(data, w, h, lut, 1, 99);
+  const { canvas: full } = mode === "complex"
+    ? renderComplexPhaseOffscreen(data, w, h, 1, 99)
+    : renderPhaseOffscreen(mode === "amp" ? phaseAbsData(data) : data, w, h, lut, 1, 99);
   if (!full) return null;
   const thumb = document.createElement("canvas");
   thumb.width = THUMB_BITMAP_PX; thumb.height = THUMB_BITMAP_PX;
@@ -730,7 +806,7 @@ function ImagePanel({
   offscreen, label, size, tc, zoom, onZoomChange,
   showResize, onResizeStart,
   pixelSize, imageWidth, isFFT,
-  rawData, smooth,
+  rawData, smooth, inset,
 }: {
   offscreen: HTMLCanvasElement | null;
   label: string;
@@ -745,6 +821,7 @@ function ImagePanel({
   imageWidth?: number;
   isFFT?: boolean;
   rawData?: Float32Array | null;
+  inset?: React.ReactNode;
 }) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const overlayRef = React.useRef<HTMLCanvasElement>(null);
@@ -968,6 +1045,7 @@ function ImagePanel({
             }}
           />
         )}
+        {inset}
         {showResize && onResizeStart && (
           <Box onMouseDown={onResizeStart} sx={{
             position: "absolute", bottom: 0, right: 0, width: 16, height: 16,
@@ -976,6 +1054,206 @@ function ImagePanel({
             "&:hover": { opacity: 1 },
           }} />
         )}
+      </Box>
+    </Box>
+  );
+}
+
+function FFTInset({
+  offscreen, rawData, size, panelSize, box, onBoxChange, tc, smooth, pixelSize,
+}: {
+  offscreen: HTMLCanvasElement | null;
+  rawData?: Float32Array | null;
+  size: number;
+  panelSize: number;
+  box: FFTInsetBox;
+  onBoxChange: React.Dispatch<React.SetStateAction<FFTInsetBox>>;
+  tc: ThemeColors;
+  smooth?: boolean;
+  pixelSize?: number;
+}) {
+  const canvasRef = React.useRef<HTMLCanvasElement>(null);
+  const overlayRef = React.useRef<HTMLCanvasElement>(null);
+  const [fftClickInfo, setFftClickInfo] = React.useState<{
+    row: number; col: number; dSpacing: number | null;
+  } | null>(null);
+
+  React.useEffect(() => {
+    drawCanvas(canvasRef.current, offscreen, size, ZOOM_RESET, "#000", "#fff", !!smooth);
+  }, [offscreen, size, smooth]);
+
+  React.useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    overlay.width = size * DPR;
+    overlay.height = size * DPR;
+    const ctx = overlay.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    if (!fftClickInfo || !offscreen) return;
+    const scale = size / Math.max(offscreen.width, offscreen.height);
+    const cssX = (size - offscreen.width * scale) / 2 + fftClickInfo.col * scale;
+    const cssY = (size - offscreen.height * scale) / 2 + fftClickInfo.row * scale;
+    ctx.save();
+    ctx.scale(DPR, DPR);
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    ctx.shadowColor = "rgba(0,0,0,0.7)";
+    ctx.shadowBlur = 2;
+    ctx.lineWidth = 1.4;
+    const r = 7;
+    ctx.beginPath();
+    ctx.moveTo(cssX - r, cssY); ctx.lineTo(cssX - 3, cssY);
+    ctx.moveTo(cssX + 3, cssY); ctx.lineTo(cssX + r, cssY);
+    ctx.moveTo(cssX, cssY - r); ctx.lineTo(cssX, cssY - 3);
+    ctx.moveTo(cssX, cssY + 3); ctx.lineTo(cssX, cssY + r);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cssX, cssY, 3.5, 0, Math.PI * 2);
+    ctx.stroke();
+    if (fftClickInfo.dSpacing != null) {
+      const d = fftClickInfo.dSpacing;
+      const label = d >= 10 ? `${(d / 10).toFixed(2)} nm` : `${d.toFixed(2)} Å`;
+      ctx.font = "bold 10px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.fillStyle = "white";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "bottom";
+      ctx.fillText(label, Math.min(size - 54, cssX + 8), Math.max(14, cssY - 4));
+    }
+    ctx.restore();
+  }, [fftClickInfo, offscreen, size]);
+
+  const measurePeak = React.useCallback((clientX: number, clientY: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas || !offscreen || !rawData) return;
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = clientX - rect.left;
+    const mouseY = clientY - rect.top;
+    const scale = size / Math.max(offscreen.width, offscreen.height);
+    const xOffset = (size - offscreen.width * scale) / 2;
+    const yOffset = (size - offscreen.height * scale) / 2;
+    let imgCol = (mouseX - xOffset) / scale;
+    let imgRow = (mouseY - yOffset) / scale;
+    const fftW = offscreen.width;
+    const fftH = offscreen.height;
+    if (imgCol < 0 || imgCol >= fftW || imgRow < 0 || imgRow >= fftH) return;
+    const snapped = findFFTPeak(rawData, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
+    imgCol = snapped.col; imgRow = snapped.row;
+    const halfW = Math.floor(fftW / 2);
+    const halfH = Math.floor(fftH / 2);
+    const dcol = imgCol - halfW;
+    const drow = imgRow - halfH;
+    if (Math.sqrt(dcol * dcol + drow * drow) < 1) {
+      setFftClickInfo(null);
+      return;
+    }
+    let dSpacing: number | null = null;
+    if (pixelSize && pixelSize > 0) {
+      const paddedW = nextPow2(fftW);
+      const paddedH = nextPow2(fftH);
+      const binC = ((Math.round(imgCol) - halfW) % fftW + fftW) % fftW;
+      const binR = ((Math.round(imgRow) - halfH) % fftH + fftH) % fftH;
+      const freqC = binC <= paddedW / 2 ? binC / (paddedW * pixelSize) : (binC - paddedW) / (paddedW * pixelSize);
+      const freqR = binR <= paddedH / 2 ? binR / (paddedH * pixelSize) : (binR - paddedH) / (paddedH * pixelSize);
+      const spatialFreq = Math.sqrt(freqC * freqC + freqR * freqR);
+      dSpacing = spatialFreq > 0 ? 1 / spatialFreq : null;
+    }
+    setFftClickInfo({ row: imgRow, col: imgCol, dSpacing });
+  }, [offscreen, rawData, size, pixelSize]);
+
+  const onMouseDown = React.useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const start = { x: e.clientX, y: e.clientY, box };
+    let moved = false;
+    const handleMove = (moveEvent: MouseEvent) => {
+      const dx = moveEvent.clientX - start.x;
+      const dy = moveEvent.clientY - start.y;
+      if (Math.sqrt(dx * dx + dy * dy) > 3) moved = true;
+      const sizeFrac = size / Math.max(1, panelSize);
+      onBoxChange({
+        ...start.box,
+        x: Math.max(0, Math.min(1 - sizeFrac, start.box.x + dx / Math.max(1, panelSize))),
+        y: Math.max(0, Math.min(1 - sizeFrac, start.box.y + dy / Math.max(1, panelSize))),
+      });
+      moveEvent.preventDefault();
+    };
+    const handleUp = (upEvent: MouseEvent) => {
+      document.removeEventListener("mousemove", handleMove);
+      document.removeEventListener("mouseup", handleUp);
+      if (!moved) measurePeak(upEvent.clientX, upEvent.clientY);
+    };
+    document.addEventListener("mousemove", handleMove);
+    document.addEventListener("mouseup", handleUp);
+  }, [box, measurePeak, onBoxChange, panelSize, size]);
+
+  const sizeFrac = size / Math.max(1, panelSize);
+  const leftPct = Math.max(0, Math.min(1 - sizeFrac, box.x)) * 100;
+  const topPct = Math.max(0, Math.min(1 - sizeFrac, box.y)) * 100;
+
+  return (
+    <Box
+      onMouseDown={onMouseDown}
+      onDoubleClick={(e) => { e.stopPropagation(); setFftClickInfo(null); }}
+      sx={{
+        position: "absolute",
+        top: `${topPct}%`,
+        left: `${leftPct}%`,
+        width: size,
+        height: size,
+        bgcolor: "rgba(0,0,0,0.82)",
+        border: `1px solid ${tc.border}`,
+        boxShadow: `0 2px 10px ${tc.shadow}`,
+        cursor: "move",
+        pointerEvents: "auto",
+        userSelect: "none",
+      }}
+      title="Drag FFT inset. Click a peak to measure d-spacing. Double-click to clear marker."
+    >
+      <canvas
+        ref={canvasRef}
+        aria-label="FFT inset"
+        style={{ width: size, height: size, display: "block", imageRendering: smooth ? "auto" : "pixelated", pointerEvents: "none" }}
+      />
+      <canvas
+        ref={overlayRef}
+        aria-label="FFT inset peak marker"
+        style={{ position: "absolute", inset: 0, width: size, height: size, pointerEvents: "none" }}
+      />
+      <Typography
+        sx={{
+          position: "absolute",
+          top: 2,
+          left: 4,
+          fontSize: 9,
+          fontFamily: "monospace",
+          color: "#fff",
+          textShadow: "0 1px 2px #000",
+          lineHeight: 1,
+          pointerEvents: "none",
+        }}
+      >
+        FFT
+      </Typography>
+      <Box
+        sx={{
+          position: "absolute",
+          top: 0,
+          right: 0,
+          width: 16,
+          height: 16,
+          bgcolor: "rgba(0,0,0,0.48)",
+          borderLeft: "1px solid rgba(255,255,255,0.22)",
+          borderBottom: "1px solid rgba(255,255,255,0.22)",
+          color: "#fff",
+          fontSize: 10,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          pointerEvents: "none",
+        }}
+      >
+        ↕
       </Box>
     </Box>
   );
@@ -1414,8 +1692,12 @@ function Explore() {
   const pinLayoutBeforeRef = React.useRef<Map<number, DOMRect> | null>(null);
 
   const [phaseZoom, setPhaseZoom] = React.useState(ZOOM_RESET);
+  const [ampZoom, setAmpZoom] = React.useState(ZOOM_RESET);
+  const [complexZoom, setComplexZoom] = React.useState(ZOOM_RESET);
   const [fftZoom, setFFTZoom] = React.useState(ZOOM_RESET);
   const [phaseOff, setPhaseOff] = React.useState<HTMLCanvasElement | null>(null);
+  const [ampOff, setAmpOff] = React.useState<HTMLCanvasElement | null>(null);
+  const [complexOff, setComplexOff] = React.useState<HTMLCanvasElement | null>(null);
   const [fftOff, setFFTOff] = React.useState<HTMLCanvasElement | null>(null);
 
   // Cached data for re-rendering without recomputing FFT
@@ -1427,6 +1709,9 @@ function Explore() {
   // one-shot effect below; useState's lazy initializer can't see the trait
   // value yet because anywidget traits arrive asynchronously on mount.
   const [showFFT, setShowFFT] = React.useState<boolean>(false);
+  const [fftPlacement, setFFTPlacement] = React.useState<FFTPlacement>("panel");
+  const [fftInsetBox, setFFTInsetBox] = React.useState<FFTInsetBox>({ x: 0.72, y: 0.02, size: 0.28 });
+  const [extraRealViews, setExtraRealViews] = React.useState<Record<ExtraRealViewMode, boolean>>({ amp: false, complex: false });
   const [smooth, setSmooth] = React.useState<boolean>(false);
   const [cmap, setCmap] = React.useState("viridis");
   const [fftCmap, setFftCmap] = React.useState("inferno");
@@ -1445,9 +1730,13 @@ function Explore() {
   const autoContrastRef = React.useRef(autoContrast); autoContrastRef.current = autoContrast;
   const fftAutoContrastRef = React.useRef(fftAutoContrast); fftAutoContrastRef.current = fftAutoContrast;
   const showFFTRef = React.useRef(showFFT); showFFTRef.current = showFFT;
+  const extraRealViewsRef = React.useRef(extraRealViews); extraRealViewsRef.current = extraRealViews;
   const rotationDegRef = React.useRef(rotationDeg ?? 0); rotationDegRef.current = rotationDeg ?? 0;
   const flipPhaseRef = React.useRef(flipPhase);
   flipPhaseRef.current = !!flipPhase;
+  const displayDataCacheRef = React.useRef<{ source: Float32Array | null; abs: Float32Array | null }>({ source: null, abs: null });
+  const activeRealDataRef = React.useRef<{ data: Float32Array; w: number; h: number; mode: RealViewMode } | null>(null);
+  const ampDataRef = React.useRef<{ data: Float32Array; w: number; h: number } | null>(null);
 
   const [panel, setPanel] = React.useState<number>(DEFAULT_PANEL);
 
@@ -1614,15 +1903,16 @@ function Explore() {
   }, []);
 
   // WebGPU colormap engine.
-  // Slot 0 = phase, slot 1 = FFT.  Null until init resolves; falls back to CPU renderToOffscreen.
+  // Slot 0 = phase, slot 1 = FFT, slot 2 = optional amplitude panel.  Null
+  // until init resolves; falls back to CPU renderToOffscreen.
   // Generation counter discards stale async GPU results if newer data lands first.
   const gpuCmapRef = React.useRef<GPUColormapEngine | null>(null);
-  const gpuCmapGenRef = React.useRef(0);
+  const gpuCmapGenRef = React.useRef<Record<GPUColormapSlot, number>>({ 0: 0, 1: 0, 2: 0 });
   const gpuCmapReadyRef = React.useRef(false);
-  // Track the LUT currently uploaded to slot 0/1 so we only re-upload when the cmap changes.
-  const gpuCmapCurrentLutRef = React.useRef<string>("");
+  // Track the LUT currently uploaded to each slot so we only re-upload when the cmap changes.
+  const gpuCmapCurrentLutRef = React.useRef<Record<GPUColormapSlot, string | null>>({ 0: null, 1: null, 2: null });
   // Track the data uploaded to each slot so we only re-upload on real data change.
-  const gpuSlotDataRef = React.useRef<{ 0: Float32Array | null; 1: Float32Array | null }>({ 0: null, 1: null });
+  const gpuSlotDataRef = React.useRef<Record<GPUColormapSlot, Float32Array | null>>({ 0: null, 1: null, 2: null });
   React.useEffect(() => {
     let cancelled = false;
     getGPUColormapEngine().then(engine => {
@@ -2007,7 +2297,7 @@ function Explore() {
   /* --- GPU colormap render for phase — uploads data once, re-applies cmap
          shader when contrast/cmap changes.  Falls back to the CPU path if
          the WebGPU engine isn't available on this browser. --- */
-  const renderPhaseGPU = React.useCallback((data: Float32Array, w: number, h: number, slot: 0 | 1, cmapName: string, pctLo: number, pctHi: number) => {
+  const renderPhaseGPU = React.useCallback((data: Float32Array, w: number, h: number, slot: GPUColormapSlot, cmapName: string, pctLo: number, pctHi: number) => {
     const engine = gpuCmapRef.current;
     if (!engine || !gpuCmapReadyRef.current) return false;
     // Upload data only if it actually changed (new reconstruction), not on every contrast tick.
@@ -2018,28 +2308,31 @@ function Explore() {
     }
     // Upload LUT only when cmap changes (cheap but still avoid per-frame work).
     const fullLutKey = `${slot}:${cmapName}`;
-    if (gpuCmapCurrentLutRef.current !== fullLutKey) {
+    if (gpuCmapCurrentLutRef.current[slot] !== fullLutKey) {
       const lut = COLORMAPS[cmapName as keyof typeof COLORMAPS] || COLORMAPS.viridis;
       engine.uploadLUT(cmapName, lut);
-      gpuCmapCurrentLutRef.current = fullLutKey;
+      gpuCmapCurrentLutRef.current[slot] = fullLutKey;
     }
     // Compute vmin/vmax from data+percentiles on CPU (cheap, ~1 ms for 512²).
     const { vmin, vmax, min, max } = percentileClip(data, pctLo, pctHi);
-    const gen = ++gpuCmapGenRef.current;
+    const gen = ++gpuCmapGenRef.current[slot];
     const fallback = () => {
       const lut = COLORMAPS[cmapName as keyof typeof COLORMAPS] || (slot === 0 ? COLORMAPS.viridis : COLORMAPS.inferno);
       if (slot === 0) {
         const cpu = renderPhaseOffscreen(data, w, h, lut, pctLo, pctHi);
         setPhaseOff(cpu.canvas);
         setDataRange({ min: cpu.min, max: cpu.max });
-      } else {
+      } else if (slot === 1) {
         const cpu = renderFFTOffscreen(data, w, h, lut, pctLo, pctHi);
         setFFTOff(cpu.canvas);
         setFftDataRange({ min: cpu.min, max: cpu.max });
+      } else {
+        const cpu = renderPhaseOffscreen(data, w, h, lut, pctLo, pctHi);
+        setAmpOff(cpu.canvas);
       }
     };
     engine.applySingle(slot, vmin, vmax, false).then(rgba => {
-      if (gen !== gpuCmapGenRef.current) return;  // stale — newer data already queued
+      if (gen !== gpuCmapGenRef.current[slot]) return;  // stale — newer data already queued
       if (!rgba) {
         fallback();
         return;
@@ -2055,27 +2348,67 @@ function Explore() {
       if (slot === 0) {
         setPhaseOff(canvas);
         setDataRange({ min, max });
-      } else {
+      } else if (slot === 1) {
         setFFTOff(canvas);
         setFftDataRange({ min, max });
+      } else {
+        setAmpOff(canvas);
       }
     }).catch(() => {
-      if (gen !== gpuCmapGenRef.current) return;
+      if (gen !== gpuCmapGenRef.current[slot]) return;
       fallback();
     });
     return true;
   }, []);
 
-  /* --- Re-render phase when contrast/cmap changes (no FFT recompute) --- */
-  const rerenderPhase = React.useCallback((data: Float32Array, w: number, h: number) => {
+  /* --- Re-render real-space displays when additive views/contrast/cmap changes. --- */
+  const renderRealDisplay = React.useCallback((phase: Float32Array, w: number, h: number) => {
+    const displayData = phaseDisplayData(phase, "phase", displayDataCacheRef);
+    activeRealDataRef.current = { data: displayData, w, h, mode: "phase" };
     // GPU-first: the applySingle shader is ~300× faster than the CPU loop.
-    if (renderPhaseGPU(data, w, h, 0, cmap, contrastRange[0], contrastRange[1])) return;
-    // CPU fallback — WebGPU not available in this browser/context.
-    const lut = COLORMAPS[cmap as keyof typeof COLORMAPS] || COLORMAPS.viridis;
-    const { canvas, min, max } = renderPhaseOffscreen(data, w, h, lut, contrastRange[0], contrastRange[1]);
-    setPhaseOff(canvas);
-    setDataRange({ min, max });
-  }, [cmap, contrastRange, renderPhaseGPU]);
+    if (renderPhaseGPU(displayData, w, h, 0, cmapRef.current, contrastRange[0], contrastRange[1])) {
+      const extras = extraRealViewsRef.current;
+      if (extras.amp || extras.complex) {
+        const ampData = phaseDisplayData(phase, "amp", displayDataCacheRef);
+        ampDataRef.current = { data: ampData, w, h };
+        if (extras.amp) {
+          if (!renderPhaseGPU(ampData, w, h, 2, cmapRef.current, contrastRange[0], contrastRange[1])) {
+            const lut = COLORMAPS[cmapRef.current as keyof typeof COLORMAPS] || COLORMAPS.viridis;
+            setAmpOff(renderPhaseOffscreen(ampData, w, h, lut, contrastRange[0], contrastRange[1]).canvas);
+          }
+        } else {
+          setAmpOff(null);
+        }
+        if (extras.complex) {
+          setComplexOff(renderComplexPhaseOffscreen(phase, w, h, contrastRange[0], contrastRange[1]).canvas);
+        } else {
+          setComplexOff(null);
+        }
+      } else {
+        ampDataRef.current = null;
+        setAmpOff(null);
+        setComplexOff(null);
+      }
+      return { clipMs: 0, renderMs: 0, min: 0, max: 1, canvas: null, gpuHandled: true };
+    }
+    // CPU fallback — WebGPU colormap unavailable in this browser/context.
+    const lut = COLORMAPS[cmapRef.current as keyof typeof COLORMAPS] || COLORMAPS.viridis;
+    const cpu = renderPhaseOffscreen(displayData, w, h, lut, contrastRange[0], contrastRange[1]);
+    setPhaseOff(cpu.canvas);
+    setDataRange({ min: cpu.min, max: cpu.max });
+    const extras = extraRealViewsRef.current;
+    if (extras.amp || extras.complex) {
+      const ampData = phaseDisplayData(phase, "amp", displayDataCacheRef);
+      ampDataRef.current = { data: ampData, w, h };
+      setAmpOff(extras.amp ? renderPhaseOffscreen(ampData, w, h, lut, contrastRange[0], contrastRange[1]).canvas : null);
+      setComplexOff(extras.complex ? renderComplexPhaseOffscreen(phase, w, h, contrastRange[0], contrastRange[1]).canvas : null);
+    } else {
+      ampDataRef.current = null;
+      setAmpOff(null);
+      setComplexOff(null);
+    }
+    return { clipMs: cpu.clipMs, renderMs: cpu.renderMs, min: cpu.min, max: cpu.max, canvas: cpu.canvas, gpuHandled: false };
+  }, [contrastRange, renderPhaseGPU]);
 
   /* --- Re-render FFT when its contrast/cmap changes (no FFT recompute).
          GPU-first; CPU fallback.  Uses the user-selected FFT colormap
@@ -2092,7 +2425,7 @@ function Explore() {
     setFftDataRange({ min, max });
   }, [fftContrastRange, fftCmap, renderPhaseGPU]);
 
-  /* --- Full render: phase synchronous, FFT only when the panel is visible --- */
+  /* --- Full render: real-space view synchronous, FFT only when requested. --- */
   const renderPreviewPhase = React.useCallback((data: Float32Array, w: number, h: number) => {
     const t0 = performance.now();
     publishShowPtychoTestPhase(data, w, h);
@@ -2101,16 +2434,8 @@ function Explore() {
       const r = contrastRef.current;
       if (r[0] !== 1 || r[1] !== 99) setContrastRange([1, 99]);
     }
-    const cr = contrastRef.current;
-    const gpuHandled = renderPhaseGPU(data, w, h, 0, cmapRef.current, cr[0], cr[1]);
-    let clipMs = 0, renderMs = 0, canvas: HTMLCanvasElement | null = null;
-    let min = 0, max = 1;
-    if (!gpuHandled) {
-      const lut = COLORMAPS[cmapRef.current as keyof typeof COLORMAPS] || COLORMAPS.viridis;
-      const cpu = renderPhaseOffscreen(data, w, h, lut, cr[0], cr[1]);
-      canvas = cpu.canvas; min = cpu.min; max = cpu.max;
-      clipMs = cpu.clipMs; renderMs = cpu.renderMs;
-    }
+    const rendered = renderRealDisplay(data, w, h);
+    const { clipMs, renderMs, canvas, min, max, gpuHandled } = rendered;
     const tAfterRender = performance.now();
     if (!gpuHandled) {
       setPhaseOff(canvas);
@@ -2130,7 +2455,7 @@ function Explore() {
       lastStagesRef.current = { ...lastStagesRef.current!, paint: paintMs };
       setStageTiming({ ...lastStagesRef.current! });
     });
-  }, [renderPhaseGPU]);
+  }, [renderRealDisplay]);
 
   const renderAll = React.useCallback((data: Float32Array, w: number, h: number) => {
     const t0 = performance.now();
@@ -2147,19 +2472,8 @@ function Explore() {
       const fr = fftContrastRef.current;
       if (fr[0] !== 1 || fr[1] !== 99) setFftContrastRange([1, 99]);
     }
-    const cr = contrastRef.current;
-    // Try GPU colormap first; if it fires, we also update the offscreen + ranges
-    // via its async callback (which sets phaseOff + dataRange asynchronously).
-    // For telemetry, also compute a quick percentileClip so clipMs is comparable.
-    const gpuHandled = renderPhaseGPU(data, w, h, 0, cmapRef.current, cr[0], cr[1]);
-    let clipMs = 0, renderMs = 0, canvas: HTMLCanvasElement | null = null;
-    let min = 0, max = 1;
-    if (!gpuHandled) {
-      const lut = COLORMAPS[cmapRef.current as keyof typeof COLORMAPS] || COLORMAPS.viridis;
-      const cpu = renderPhaseOffscreen(data, w, h, lut, cr[0], cr[1]);
-      canvas = cpu.canvas; min = cpu.min; max = cpu.max;
-      clipMs = cpu.clipMs; renderMs = cpu.renderMs;
-    }
+    const rendered = renderRealDisplay(data, w, h);
+    const { clipMs, renderMs, canvas, min, max, gpuHandled } = rendered;
     const tAfterRender = performance.now();
     if (!gpuHandled) {
       setPhaseOff(canvas);
@@ -2194,7 +2508,7 @@ function Explore() {
       );
     });
 
-    // Skip FFT compute entirely when the panel is hidden — saves 30-80 ms/frame.
+    // Skip FFT compute entirely when hidden — saves 30-80 ms/frame.
     if (!showFFTRef.current) {
       fftMagRef.current = null;
       return;
@@ -2226,7 +2540,7 @@ function Explore() {
     } else {
       applyFFT(computeFFTMag(data, w, h));
     }
-  }, []);
+  }, [renderPhaseGPU, renderRealDisplay]);
 
   const runFrontendPreview = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal: number): boolean => {
     const engine = webgpuSsbRef.current;
@@ -2394,18 +2708,18 @@ function Explore() {
     frontendPreviewRef.current?.(autoC10, autoC12, autoPhi12, autoRotation ?? rotationDegRef.current);
   }, [autoC10, autoC12, autoPhi12, autoRotation, selectedDragBfCount, totalBf, webgpuRuntimeStatus, webgpuStandalone]);
 
-  /* --- Re-render phase only when contrast/cmap changes --- */
+  /* --- Re-render real-space display when mode/contrast/cmap changes. --- */
   React.useEffect(() => {
     const p = rawPhaseRef.current;
-    if (p) rerenderPhase(p.data, p.w, p.h);
-  }, [cmap, contrastRange, rerenderPhase]);
+    if (p) renderRealDisplay(p.data, p.w, p.h);
+  }, [cmap, contrastRange, extraRealViews, renderRealDisplay]);
 
   /* --- Re-render FFT when its contrast or colormap changes --- */
   React.useEffect(() => {
     rerenderFFT();
   }, [fftContrastRange, fftCmap, rerenderFFT]);
 
-  /* --- When user turns FFT on, compute it once for the current phase data --- */
+  /* --- When user turns FFT on or moves it between panel/inset, compute once. --- */
   React.useEffect(() => {
     if (!showFFT) return;
     if (fftMagRef.current) return;  // already have a current FFT
@@ -2413,7 +2727,7 @@ function Explore() {
     if (!p) return;
     // Re-render for the same data, now with FFT path enabled (showFFTRef is already true).
     renderAll(p.data, p.w, p.h);
-  }, [showFFT, renderAll]);
+  }, [showFFT, fftPlacement, renderAll]);
 
   /* --- Flip is a display-sign convention, not a new reconstruction.
          The live notebook path also receives a Python trait update, but the
@@ -2466,7 +2780,12 @@ function Explore() {
     }
     sendCommit(c10Rand, c12Rand, phi12Rand, rotationRand);
   };
-  const resetZoom = () => { setPhaseZoom(ZOOM_RESET); setFFTZoom(ZOOM_RESET); };
+  const resetZoom = () => {
+    setPhaseZoom(ZOOM_RESET);
+    setAmpZoom(ZOOM_RESET);
+    setComplexZoom(ZOOM_RESET);
+    setFFTZoom(ZOOM_RESET);
+  };
 
   const capturePinLayout = React.useCallback(() => {
     const rects = new Map<number, DOMRect>();
@@ -2530,8 +2849,15 @@ function Explore() {
       starred: false,
       timestamp: new Date().toISOString(),
       phaseData: new Float32Array(phase.data),
+      displayMode: extraRealViewsRef.current.complex ? "complex" : extraRealViewsRef.current.amp ? "amp" : "phase",
       w: phase.w, h: phase.h,
-      thumb: makeThumbnail(phase.data, phase.w, phase.h, cmapRef.current),
+      thumb: makeThumbnail(
+        phase.data,
+        phase.w,
+        phase.h,
+        cmapRef.current,
+        extraRealViewsRef.current.complex ? "complex" : extraRealViewsRef.current.amp ? "amp" : "phase",
+      ),
     };
     setPinned(prev => {
       const next = [...prev, entry];
@@ -2544,6 +2870,7 @@ function Explore() {
       action: "pin", id: entry.id,
       C10: entry.C10, C12: entry.C12, phi12_deg: entry.phi12_deg,
       rotation_deg: entry.rotation_deg, flip_phase: entry.flip_phase,
+      display_mode: entry.displayMode,
       loss: entry.loss, timestamp: entry.timestamp,
     }));
   }, [busy, capturePinLayout, loss, rotationDeg, flipPhase, setPinJson]);
@@ -2553,7 +2880,7 @@ function Explore() {
       if (prev.length === 0) return prev;
       return prev.map(p => ({
         ...p,
-        thumb: makeThumbnail(p.phaseData, p.w, p.h, cmap),
+        thumb: makeThumbnail(p.phaseData, p.w, p.h, cmap, p.displayMode),
       }));
     });
   }, [cmap]);
@@ -2645,6 +2972,7 @@ function Explore() {
           phi12_deg: p.phi12_deg,
           rotation_deg: p.rotation_deg,
           flip_phase: p.flip_phase,
+          display_mode: p.displayMode,
           loss: p.loss,
           starred: p.starred,
           timestamp: p.timestamp,
@@ -2654,7 +2982,9 @@ function Explore() {
 
       let exported = 0;
       for (const [i, p] of pinned.entries()) {
-        const { canvas } = renderPhaseOffscreen(p.phaseData, p.w, p.h, lut, 1, 99);
+        const { canvas } = p.displayMode === "complex"
+          ? renderComplexPhaseOffscreen(p.phaseData, p.w, p.h, 1, 99)
+          : renderPhaseOffscreen(p.displayMode === "amp" ? phaseAbsData(p.phaseData) : p.phaseData, p.w, p.h, lut, 1, 99);
         if (!canvas) continue;
         const blob = await canvasToPngBlob(canvas);
         downloadBlob(blob, manifest.pins[i].filename);
@@ -2943,6 +3273,10 @@ function Explore() {
   const doViewPin = React.useCallback((entry: PinnedEntry) => {
     setViewPin(entry.id);
     setActiveTrialRank(null);  // pins + trials are mutually exclusive selections
+    const mode = entry.displayMode ?? "phase";
+    const extras = { amp: mode === "amp", complex: mode === "complex" };
+    setExtraRealViews(extras);
+    extraRealViewsRef.current = extras;
     setC10(entry.C10); setC12(entry.C12); setPhi12(entry.phi12_deg);
     setLoss(entry.loss);
     setGpuMs(null); setUiMs(null); setJsMs(null);
@@ -3045,7 +3379,12 @@ function Explore() {
 
   /* --- Derived --- */
   const delta = loss != null && autoLoss > 0 ? loss - autoLoss : null;
-  const totalW = showFFT ? panel * 2 + PANEL_GAP : panel;
+  const fftAsPanel = showFFT && fftPlacement === "panel";
+  const fftAsInset = showFFT && fftPlacement === "inset";
+  const realPanelCount = 1 + (extraRealViews.amp ? 1 : 0) + (extraRealViews.complex ? 1 : 0);
+  const visiblePanelCount = realPanelCount + (fftAsPanel ? 1 : 0);
+  const totalW = panel * visiblePanelCount + PANEL_GAP * Math.max(0, visiblePanelCount - 1);
+  const fftInsetSize = Math.max(96, Math.min(180, Math.round(panel * 0.28)));
   const loadProgressPercent = webgpuLoadProgress ? webgpuProgressPercent(webgpuLoadProgress) : null;
   const loadProgressIsError = webgpuLoadProgress?.stage === "error";
   const runtimeStatusLabel = webgpuRuntimeStatus ? compactRuntimeStatus(webgpuRuntimeStatus) : "";
@@ -3171,6 +3510,19 @@ function Explore() {
           size="small"
           sx={switchStyles.small}
         />
+        {showFFT && (
+          <Select
+            value={fftPlacement}
+            onChange={(e) => setFFTPlacement(e.target.value as FFTPlacement)}
+            size="small"
+            sx={{ ...actionSelect, width: 72, flex: "0 0 72px" }}
+            MenuProps={themedMenuProps}
+            aria-label="FFT placement"
+          >
+            <MenuItem value="inset">Inset</MenuItem>
+            <MenuItem value="panel">Panel</MenuItem>
+          </Select>
+        )}
         <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted, ml: 1 }}>
           BF
         </Typography>
@@ -3188,19 +3540,57 @@ function Explore() {
           aria-label={totalBf > 0 ? `BF pixels ${localDragBf} of ${totalBf}` : "BF pixels"}
           sx={{ width: 120, flex: "0 0 120px", mx: 0.5 }}
         />
-        <Box sx={{ flex: 1 }} />
-        {phaseWidth > 0 && phaseHeight > 0 && (
-          <Typography sx={{ ...typography.value, color: tc.textMuted, opacity: 0.7 }}>
-            {phaseWidth}×{phaseHeight}
-          </Typography>
-        )}
+        <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted, ml: 0.5 }}>
+          View
+        </Typography>
+        <Box
+          role="group"
+          aria-label="Real-space extra views"
+          sx={{
+            display: "inline-flex",
+            alignItems: "center",
+            height: ACTION_CONTROL_HEIGHT,
+            border: `1px solid ${tc.border}`,
+            bgcolor: tc.controlBg,
+            flex: "0 0 auto",
+          }}
+        >
+          {([
+            ["amp", "Amp"],
+            ["complex", "Complex"],
+          ] as [ExtraRealViewMode, string][]).map(([mode, label]) => {
+            const active = extraRealViews[mode];
+            return (
+              <Button
+                key={mode}
+                size="small"
+                onClick={() => setExtraRealViews(prev => ({ ...prev, [mode]: !prev[mode] }))}
+                aria-pressed={active}
+                sx={{
+                  ...compactButton(tc),
+                  height: ACTION_CONTROL_HEIGHT - 2,
+                  minHeight: ACTION_CONTROL_HEIGHT - 2,
+                  px: 0.85,
+                  borderRadius: 0,
+                  border: 0,
+                  borderRight: mode === "complex" ? 0 : `1px solid ${tc.border}`,
+                  color: active ? "#fff" : tc.text,
+                  bgcolor: active ? tc.accent : "transparent",
+                  "&:hover": { bgcolor: active ? tc.accent : tc.bgAlt },
+                }}
+              >
+                {label}
+              </Button>
+            );
+          })}
+        </Box>
         <Typography
           sx={{
             ...typography.value,
             color: animationExportStatus.startsWith("Export failed") || animationExportStatus.includes("unavailable") ? STATUS_BAD : tc.textMuted,
-            width: 220,
+            width: 180,
             minWidth: 0,
-            flex: "0 1 220px",
+            flex: "0 1 180px",
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "clip",
@@ -3210,6 +3600,12 @@ function Explore() {
         >
           {animationExportStatus || " "}
         </Typography>
+        <Box sx={{ flex: 1 }} />
+        {phaseWidth > 0 && phaseHeight > 0 && (
+          <Typography sx={{ ...typography.value, color: tc.textMuted, opacity: 0.7 }}>
+            {phaseWidth}×{phaseHeight}
+          </Typography>
+        )}
         <Button
           size="small"
           variant="outlined"
@@ -3247,7 +3643,7 @@ function Explore() {
           size="small"
           variant="outlined"
           onClick={resetZoom}
-          disabled={phaseZoom.zoom === 1 && fftZoom.zoom === 1}
+          disabled={phaseZoom.zoom === 1 && ampZoom.zoom === 1 && complexZoom.zoom === 1 && fftZoom.zoom === 1}
           sx={{ ...compactButton(tc), width: 52, minWidth: 52, color: tc.textMuted, borderColor: tc.border }}
         >
           Reset
@@ -3261,10 +3657,43 @@ function Explore() {
           zoom={phaseZoom} onZoomChange={setPhaseZoom}
           showResize onResizeStart={startResize}
           pixelSize={pixelSize} imageWidth={rawPhaseRef.current?.w}
-          rawData={rawPhaseRef.current?.data}
+          rawData={activeRealDataRef.current?.data ?? rawPhaseRef.current?.data}
           smooth={smooth}
+          inset={fftAsInset ? (
+            <FFTInset
+              offscreen={fftOff}
+              rawData={fftMagRef.current?.mag}
+              size={fftInsetSize}
+              panelSize={panel}
+              box={fftInsetBox}
+              onBoxChange={setFFTInsetBox}
+              tc={tc}
+              smooth={smooth}
+              pixelSize={pixelSize}
+            />
+          ) : undefined}
         />
-        {showFFT && (
+        {extraRealViews.amp && (
+          <ImagePanel
+            offscreen={ampOff} label="Amplitude" size={panel} tc={tc}
+            zoom={ampZoom} onZoomChange={setAmpZoom}
+            showResize onResizeStart={startResize}
+            pixelSize={pixelSize} imageWidth={rawPhaseRef.current?.w}
+            rawData={ampDataRef.current?.data}
+            smooth={smooth}
+          />
+        )}
+        {extraRealViews.complex && (
+          <ImagePanel
+            offscreen={complexOff} label="Complex" size={panel} tc={tc}
+            zoom={complexZoom} onZoomChange={setComplexZoom}
+            showResize onResizeStart={startResize}
+            pixelSize={pixelSize} imageWidth={rawPhaseRef.current?.w}
+            rawData={ampDataRef.current?.data ?? rawPhaseRef.current?.data}
+            smooth={smooth}
+          />
+        )}
+        {fftAsPanel && (
           <ImagePanel
             offscreen={fftOff} label="FFT" size={panel} tc={tc}
             zoom={fftZoom} onZoomChange={setFFTZoom}
@@ -3463,13 +3892,14 @@ function Explore() {
               </Box>
             )}
 
-            {/* Display controls: Phase + (optionally) FFT colormap + Auto toggle,
-                all on ONE bordered row to save vertical space. */}
+            {/* Display controls: color/contrast controls stay below the stats; primary
+                real-space view mode lives in the top toolbar next to BF. */}
             <Box sx={{ ...controlBand(tc), width: "fit-content" }}>
-              <Typography sx={{ ...typography.label, fontSize: 10 }}>Phase</Typography>
+              <Typography sx={{ ...typography.label, fontSize: 10 }}>Color</Typography>
               <Select
                 value={cmap} onChange={(e) => setCmap(e.target.value)}
                 size="small" sx={{ ...themedSelect, minWidth: 78, fontSize: 10 }}
+                MenuProps={themedMenuProps}
               >
                 {COLORMAP_NAMES.map(n => (
                   <MenuItem key={n} value={n}>{n.charAt(0).toUpperCase() + n.slice(1)}</MenuItem>
@@ -3494,6 +3924,7 @@ function Explore() {
                   <Select
                     value={fftCmap} onChange={(e) => setFftCmap(e.target.value)}
                     size="small" sx={{ ...themedSelect, minWidth: 78, fontSize: 10 }}
+                    MenuProps={themedMenuProps}
                   >
                     {COLORMAP_NAMES.map(n => (
                       <MenuItem key={n} value={n}>{n.charAt(0).toUpperCase() + n.slice(1)}</MenuItem>
@@ -3514,9 +3945,11 @@ function Explore() {
               flips the matching Auto switch OFF so the user's range persists. */}
           <Box sx={{ display: "flex", flexDirection: "row", alignItems: "flex-end", gap: 1, flexShrink: 0 }}>
             <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.25 }}>
-              <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Phase</Typography>
+              <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>
+                Phase
+              </Typography>
               <Histogram
-                data={rawPhaseRef.current?.data ?? null}
+                data={activeRealDataRef.current?.data ?? rawPhaseRef.current?.data ?? null}
                 vminPct={contrastRange[0]}
                 vmaxPct={contrastRange[1]}
                 onRangeChange={(lo, hi) => { setContrastRange([lo, hi]); setAutoContrast(false); }}

@@ -2394,6 +2394,42 @@ function meanDownsample2D(data: Float32Array, width: number, height: number, fac
   return { data: out, width: outW, height: outH };
 }
 
+function renderSampledFrameToOffscreenReuse(
+  data: ArrayLike<number>,
+  sourceW: number,
+  sourceH: number,
+  lut: Uint8Array,
+  vmin: number,
+  vmax: number,
+  logScale: boolean,
+  offscreen: HTMLCanvasElement,
+  imgData: ImageData,
+): void {
+  const outW = Math.max(1, offscreen.width);
+  const outH = Math.max(1, offscreen.height);
+  const rgba = imgData.data;
+  const range = vmax > vmin ? vmax - vmin : 1;
+  const uniformData = !(vmax > vmin);
+  for (let y = 0; y < outH; y++) {
+    const sy = Math.min(sourceH - 1, Math.floor(((y + 0.5) * sourceH) / outH));
+    const row = sy * sourceW;
+    for (let x = 0; x < outW; x++) {
+      const sx = Math.min(sourceW - 1, Math.floor(((x + 0.5) * sourceW) / outW));
+      const raw = data[row + sx] ?? 0;
+      const value = logScale ? displayValue(raw, true) : raw;
+      const clipped = Math.max(vmin, Math.min(vmax, value));
+      const lutValue = uniformData ? 128 : Math.min(255, Math.floor(((clipped - vmin) / range) * 255));
+      const dst = (y * outW + x) * 4;
+      const src = lutValue * 3;
+      rgba[dst] = lut[src];
+      rgba[dst + 1] = lut[src + 1];
+      rgba[dst + 2] = lut[src + 2];
+      rgba[dst + 3] = 255;
+    }
+  }
+  offscreen.getContext("2d")!.putImageData(imgData, 0, 0);
+}
+
 function canvasLooksBlank(canvas: HTMLCanvasElement, maxSamples = 32): boolean {
   const ctx = canvas.getContext("2d");
   if (!ctx || canvas.width <= 0 || canvas.height <= 0) return true;
@@ -2456,7 +2492,7 @@ const imagePanelRadius = 0;
 function Show2D() {
   const isMobileViewport = useMobileViewport();
   const canvasRepaintSignal = useCanvasRepaintSignal();
-  const allowResizeControls = !isMobileViewport;
+  const allowResizeControls = true;
   const model = useModel();
   const folderWatchLive = useFolderWatchModelLive(model);
   React.useLayoutEffect(() => applyStandaloneWidgetViewState(model), [model]);
@@ -2609,17 +2645,112 @@ function Show2D() {
   const [width] = useModelState<number>("width");
   const [height] = useModelState<number>("height");
   const [frameBytes] = useModelState<DataView>("frame_bytes");
+  const [frameBytesUrl] = useModelState<string>("frame_bytes_url");
+  const [frameBytesUrlsTrait] = useModelState<string[]>("frame_bytes_urls");
   const [panelFrameCounts] = useModelState<number[]>("panel_frame_counts");
   const [panelFrameIndices, setPanelFrameIndices] = useModelState<number[]>("panel_frame_indices");
   const [panelPlaybackFpsTrait] = useModelState<number>("panel_playback_fps");
   const panelPlaybackFps = clampPanelPlaybackFps(panelPlaybackFpsTrait);
   const [panelStackOffsets] = useModelState<number[]>("panel_stack_offsets");
   const [panelStackBytes] = useModelState<DataView>("panel_stack_bytes");
+  const [panelStackBytesUrl] = useModelState<string>("panel_stack_bytes_url");
   const [panelStackMins] = useModelState<number[]>("_panel_stack_mins");
   const [panelStackMaxs] = useModelState<number[]>("_panel_stack_maxs");
   const [staticFallbackJpeg] = useModelState<string>("_static_fallback_jpeg");
   const [staticFallbackMime] = useModelState<string>("_static_fallback_mime");
-  const hasLiveFrameBytes = !!frameBytes && frameBytes.byteLength > 0;
+  const [fetchedFrameBytes, setFetchedFrameBytes] = React.useState<DataView | null>(null);
+  const [fetchedFrameBytePanels, setFetchedFrameBytePanels] = React.useState<(DataView | null)[]>([]);
+  const [fetchedPanelStackBytes, setFetchedPanelStackBytes] = React.useState<DataView | null>(null);
+  const frameBytesUrlList = React.useMemo(
+    () => Array.isArray(frameBytesUrlsTrait)
+      ? frameBytesUrlsTrait.filter(url => typeof url === "string" && url.length > 0)
+      : [],
+    [frameBytesUrlsTrait],
+  );
+  const frameBytesUrlListKey = frameBytesUrlList.join("\n");
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!frameBytesUrl) {
+      setFetchedFrameBytes(null);
+      return () => { cancelled = true; };
+    }
+    setFetchedFrameBytes(null);
+    fetch(new URL(frameBytesUrl, window.location.href).href)
+      .then(response => {
+        if (!response.ok) throw new Error(`frame_bytes_url HTTP ${response.status}`);
+        return response.arrayBuffer();
+      })
+      .then(buffer => {
+        if (!cancelled) setFetchedFrameBytes(new DataView(buffer));
+      })
+      .catch(error => console.error("[Show2D] Failed to load folder frame bytes", error));
+    return () => { cancelled = true; };
+  }, [frameBytesUrl]);
+  React.useEffect(() => {
+    let cancelled = false;
+    if (frameBytesUrlList.length === 0) {
+      setFetchedFrameBytePanels([]);
+      return () => { cancelled = true; };
+    }
+    const loaded: (DataView | null)[] = new Array(frameBytesUrlList.length).fill(null);
+    setFetchedFrameBytePanels(loaded.slice());
+    const loadFrames = async () => {
+      const eagerCount = Math.min(frameBytesUrlList.length, 20);
+      for (let i = 0; i < frameBytesUrlList.length; i++) {
+        const response = await fetch(new URL(frameBytesUrlList[i], window.location.href).href);
+        if (!response.ok) throw new Error(`frame_bytes_urls[${i}] HTTP ${response.status}`);
+        const buffer = await response.arrayBuffer();
+        if (cancelled) return;
+        loaded[i] = new DataView(buffer);
+        if (
+          i === 0
+          || (i + 1 <= eagerCount && (i + 1) % 4 === 0)
+          || i + 1 === eagerCount
+          || i + 1 === frameBytesUrlList.length
+        ) {
+          setFetchedFrameBytePanels(loaded.slice());
+        }
+        if (i + 1 === eagerCount && i + 1 < frameBytesUrlList.length) {
+          await new Promise<void>(resolve => window.setTimeout(resolve, 2500));
+          if (cancelled) return;
+        } else if (i + 1 > eagerCount && i + 1 < frameBytesUrlList.length) {
+          await new Promise<void>(resolve => window.setTimeout(resolve, 50));
+          if (cancelled) return;
+        }
+      }
+    };
+    loadFrames().catch(error => console.error("[Show2D] Failed to load per-panel folder frame bytes", error));
+    return () => { cancelled = true; };
+  }, [frameBytesUrlListKey]);
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!panelStackBytesUrl) {
+      setFetchedPanelStackBytes(null);
+      return () => { cancelled = true; };
+    }
+    setFetchedPanelStackBytes(null);
+    fetch(new URL(panelStackBytesUrl, window.location.href).href)
+      .then(response => {
+        if (!response.ok) throw new Error(`panel_stack_bytes_url HTTP ${response.status}`);
+        return response.arrayBuffer();
+      })
+      .then(buffer => {
+        if (!cancelled) setFetchedPanelStackBytes(new DataView(buffer));
+      })
+      .catch(error => console.error("[Show2D] Failed to load folder panel stack bytes", error));
+    return () => { cancelled = true; };
+  }, [panelStackBytesUrl]);
+  const effectiveFrameBytes = frameBytes && frameBytes.byteLength > 0 ? frameBytes : fetchedFrameBytes;
+  const effectivePanelStackBytes = panelStackBytes && panelStackBytes.byteLength > 0 ? panelStackBytes : fetchedPanelStackBytes;
+  const hasLiveFrameBytes = !!effectiveFrameBytes && effectiveFrameBytes.byteLength > 0;
+  const hasPerPanelFrameBytes = frameBytesUrlList.length > 0;
+  const fetchedFrameBytePanelCount = React.useMemo(
+    () => fetchedFrameBytePanels.reduce((count, view) => count + (view && view.byteLength > 0 ? 1 : 0), 0),
+    [fetchedFrameBytePanels],
+  );
+  const frameSourceKey = hasPerPanelFrameBytes
+    ? `panel-files:${frameBytesUrlListKey}:${fetchedFrameBytePanelCount}`
+    : `single-buffer:${effectiveFrameBytes?.byteLength ?? 0}`;
   const staticFallbackUrl = staticFallbackJpeg
     ? `data:${staticFallbackMime || "image/jpeg"};base64,${staticFallbackJpeg}`
     : "";
@@ -2854,6 +2985,10 @@ function Show2D() {
     const value = markerColors?.[panel];
     return value || IDENTITY_PALETTE[panel % IDENTITY_PALETTE.length];
   }, [markerColors]);
+  const hasPanelMarkers = React.useMemo(
+    () => Array.isArray(markerColors) && markerColors.some(Boolean),
+    [markerColors],
+  );
   const hasInsetPlots = React.useMemo(
     () => Array.isArray(insetPlots) && insetPlots.some(spec => Array.isArray(spec?.y) && spec.y.length >= 2),
     [insetPlots],
@@ -3769,6 +3904,7 @@ function Show2D() {
   const filterInputSourceRef = React.useRef<{
     allFloats: Float32Array | null;
     allPanelStackFloats: Float32Array | null;
+    frameSourceKey: string;
     width: number;
     height: number;
     nImages: number;
@@ -4415,22 +4551,61 @@ function Show2D() {
   const [offlineMax] = useModelState<number>("_offline_max");
   const [offlineMins] = useModelState<number[]>("_offline_mins");
   const [offlineMaxs] = useModelState<number[]>("_offline_maxs");
+  const expectedFrameValueCount = panelFloatOffsets[panelFloatOffsets.length - 1];
+  const uint8FolderIdentityEncoding = React.useMemo(() => {
+    if (!offline) return false;
+    if ((isRgbFlags || []).some(Boolean)) return false;
+    if (hasLocalPanelStacks) return false;
+    const n = Math.max(1, nImages || 1);
+    return Array.from({ length: n }).every((_, img) => {
+      const lo = (offlineMins && offlineMins.length > img) ? offlineMins[img] : offlineMin;
+      const hi = (offlineMaxs && offlineMaxs.length > img) ? offlineMaxs[img] : offlineMax;
+      return lo === 0 && hi === 255;
+    });
+  }, [hasLocalPanelStacks, isRgbFlags, nImages, offline, offlineMin, offlineMax, offlineMins, offlineMaxs]);
+  const uint8FolderFrameBytes = React.useMemo(() => {
+    if (!uint8FolderIdentityEncoding || !effectiveFrameBytes || effectiveFrameBytes.byteLength === 0) return null;
+    if (effectiveFrameBytes.byteLength !== expectedFrameValueCount) return null;
+    return new Uint8Array(effectiveFrameBytes.buffer, effectiveFrameBytes.byteOffset, effectiveFrameBytes.byteLength);
+  }, [effectiveFrameBytes, expectedFrameValueCount, uint8FolderIdentityEncoding]);
+  const uint8FolderPreviewMode = !!uint8FolderFrameBytes || (hasPerPanelFrameBytes && uint8FolderIdentityEncoding);
   const decodedFramesRef = React.useRef<Float32Array | null>(null);
   const allFloats = React.useMemo(() => {
-    const expectedLength = panelFloatOffsets[panelFloatOffsets.length - 1];
-    if (!frameBytes || frameBytes.byteLength === 0) {
+    const expectedLength = expectedFrameValueCount;
+    if (uint8FolderFrameBytes) {
+      decodedFramesRef.current = null;
+      return uint8FolderFrameBytes as unknown as Float32Array;
+    }
+    if (hasPerPanelFrameBytes) {
+      decodedFramesRef.current = null;
+      return new Float32Array(0);
+    }
+    if (!effectiveFrameBytes || effectiveFrameBytes.byteLength === 0) {
       const cached = decodedFramesRef.current;
+      if (frameBytesUrl) {
+        return cached !== null && cached.length === expectedLength ? cached : new Float32Array(0);
+      }
       return cached !== null && cached.length === expectedLength ? cached : new Float32Array(expectedLength);
     }
     let decoded: Float32Array;
-    if (offline && frameBytes && frameBytes.byteLength > 0) {
+    if (offline && effectiveFrameBytes && effectiveFrameBytes.byteLength > 0) {
       // Offline mode: bytes are uint8-quantized PER IMAGE. Dequantize each panel
       // with its own (lo, hi) so a gallery of differently-scaled panels stays
       // exact - a single global scale combs the narrow panels' histograms.
-      const u8 = new Uint8Array(frameBytes.buffer, frameBytes.byteOffset, frameBytes.byteLength);
-      const f32 = new Float32Array(u8.length);
+      const u8 = new Uint8Array(effectiveFrameBytes.buffer, effectiveFrameBytes.byteOffset, effectiveFrameBytes.byteLength);
       const per = width * height;
       const n = (offlineMins && offlineMins.length > 0) ? offlineMins.length : 1;
+      const rawUint8 = n > 0 && Array.from({ length: n }).every((_, img) => {
+        const lo = (offlineMins && offlineMins.length > img) ? offlineMins[img] : offlineMin;
+        const hi = (offlineMaxs && offlineMaxs.length > img) ? offlineMaxs[img] : offlineMax;
+        return lo === 0 && hi === 255;
+      });
+      if (rawUint8) {
+        decoded = new Float32Array(u8);
+        decodedFramesRef.current = decoded;
+        return decoded;
+      }
+      const f32 = new Float32Array(u8.length);
       for (let img = 0; img < n; img++) {
         // Fall back to the legacy global scalars if the per-image lists are absent.
         const lo = (offlineMins && offlineMins.length > img) ? offlineMins[img] : offlineMin;
@@ -4441,11 +4616,11 @@ function Show2D() {
       }
       decoded = f32;
     } else {
-      decoded = extractFloat32(frameBytes, expectedLength) ?? new Float32Array(expectedLength);
+      decoded = extractFloat32(effectiveFrameBytes, expectedLength) ?? new Float32Array(expectedLength);
     }
     decodedFramesRef.current = decoded;
     return decoded;
-  }, [frameBytes, offline, offlineMin, offlineMax, offlineMins, offlineMaxs, nImages, width, height, panelFloatOffsets]);
+  }, [effectiveFrameBytes, expectedFrameValueCount, frameBytesUrl, hasPerPanelFrameBytes, offline, offlineMin, offlineMax, offlineMins, offlineMaxs, nImages, width, height, panelFloatOffsets, uint8FolderFrameBytes]);
 
   const panelStackFloatCount = React.useMemo(() => {
     const perImage = width * height;
@@ -4457,8 +4632,13 @@ function Show2D() {
   const decodedPanelStacksRef = React.useRef<Float32Array | null>(null);
   const allPanelStackFloats = React.useMemo(() => {
     if (panelStackFloatCount <= 0) return new Float32Array(0);
-    if (!panelStackBytes || panelStackBytes.byteLength === 0) {
+    if (!effectivePanelStackBytes || effectivePanelStackBytes.byteLength === 0) {
       const cached = decodedPanelStacksRef.current;
+      if (panelStackBytesUrl) {
+        return cached !== null && cached.length === panelStackFloatCount
+          ? cached
+          : new Float32Array(0);
+      }
       return cached !== null && cached.length === panelStackFloatCount
         ? cached
         : new Float32Array(panelStackFloatCount);
@@ -4466,9 +4646,9 @@ function Show2D() {
     let decoded: Float32Array;
     if (offline) {
       const u8 = new Uint8Array(
-        panelStackBytes.buffer,
-        panelStackBytes.byteOffset,
-        panelStackBytes.byteLength
+        effectivePanelStackBytes.buffer,
+        effectivePanelStackBytes.byteOffset,
+        effectivePanelStackBytes.byteLength
       );
       const f32 = new Float32Array(panelStackFloatCount);
       const perImage = width * height;
@@ -4486,13 +4666,14 @@ function Show2D() {
       }
       decoded = f32;
     } else {
-      decoded = extractFloat32(panelStackBytes, panelStackFloatCount)
+      decoded = extractFloat32(effectivePanelStackBytes, panelStackFloatCount)
         ?? new Float32Array(panelStackFloatCount);
     }
     decodedPanelStacksRef.current = decoded;
     return decoded;
   }, [
-    panelStackBytes,
+    effectivePanelStackBytes,
+    panelStackBytesUrl,
     panelStackFloatCount,
     offline,
     width,
@@ -4891,7 +5072,9 @@ function Show2D() {
   const filterBannerText = browserFilterActive ? (browserFilterBanner ?? "") : (displayFilterBanner || "");
 
   React.useEffect(() => {
-    if (!allFloats || allFloats.length === 0) return;
+    const hasAggregateFrames = !!allFloats && allFloats.length > 0;
+    const hasPanelFrames = hasPerPanelFrameBytes && fetchedFrameBytePanelCount > 0;
+    if (!hasAggregateFrames && !hasPanelFrames) return;
     const dataArrays: Float32Array[] = [];
     const rgbArrays: (Float32Array | null)[] = [];
     const perImage = width * height;
@@ -4916,8 +5099,27 @@ function Show2D() {
         if (frameCount > 1 && stackOffset >= 0 && allPanelStackFloats.length >= stackOffset + (frameIndex + 1) * perImage) {
           const frameStart = stackOffset + frameIndex * perImage;
           dataArrays.push(new Float32Array(allPanelStackFloats.subarray(frameStart, frameStart + perImage)));
+        } else if (hasPerPanelFrameBytes) {
+          const view = fetchedFrameBytePanels[i] || null;
+          if (!view || view.byteLength === 0) {
+            dataArrays.push(new Float32Array(0));
+            continue;
+          }
+          const length = Math.min(perImage, view.byteLength);
+          const frame = new Uint8Array(view.buffer, view.byteOffset, length);
+          if (uint8FolderIdentityEncoding && length >= perImage) {
+            dataArrays.push(frame as unknown as Float32Array);
+          } else {
+            const decoded = new Float32Array(perImage);
+            const lo = (offlineMins && offlineMins.length > i) ? offlineMins[i] : offlineMin;
+            const hi = (offlineMaxs && offlineMaxs.length > i) ? offlineMaxs[i] : offlineMax;
+            const scale = (hi - lo) / 255.0;
+            for (let k = 0; k < length; k++) decoded[k] = frame[k] * scale + lo;
+            dataArrays.push(decoded);
+          }
         } else {
-          dataArrays.push(new Float32Array(allFloats.subarray(start, start + perImage)));
+          const frame = allFloats.subarray(start, start + perImage);
+          dataArrays.push(uint8FolderPreviewMode ? frame : new Float32Array(frame));
         }
       }
     }
@@ -4926,6 +5128,7 @@ function Show2D() {
     const sourceChanged = !previousSource
       || previousSource.allFloats !== allFloats
       || previousSource.allPanelStackFloats !== allPanelStackFloats
+      || previousSource.frameSourceKey !== frameSourceKey
       || previousSource.width !== width
       || previousSource.height !== height
       || previousSource.nImages !== nImages;
@@ -4952,7 +5155,7 @@ function Show2D() {
       rawDataRef.current = arrays;
       rgbDataRef.current = rgbArrays;
       lastAppliedPanelFrameIndicesRef.current = [...normalizedPanelFrameIndices];
-      filterInputSourceRef.current = { allFloats, allPanelStackFloats, width, height, nImages };
+      filterInputSourceRef.current = { allFloats, allPanelStackFloats, frameSourceKey, width, height, nImages };
       appliedPanelViewSignaturesRef.current = panelViewSignatures;
       const epochs = galleryFftPanelEpochsRef.current.length === nImages
         ? [...galleryFftPanelEpochsRef.current]
@@ -5004,7 +5207,7 @@ function Show2D() {
       setDetailStreamStatus("preview");
       // Upload to GPU colormap engine if available (ref check, no state trigger)
       const engine = gpuCmapRef.current;
-      if (engine && gpuCmapReadyRef.current) {
+      if (!uint8FolderPreviewMode && engine && gpuCmapReadyRef.current) {
         for (let i = 0; i < arrays.length; i++) engine.uploadData(i, arrays[i], width, height);
         gpuDataVersionRef.current++;
         setGpuCmapVersion(v => v + 1);
@@ -5033,6 +5236,14 @@ function Show2D() {
     height,
     panelFloatOffsets,
     isRgbFlags,
+    fetchedFrameBytePanelCount,
+    fetchedFrameBytePanels,
+    frameSourceKey,
+    hasPerPanelFrameBytes,
+    offlineMin,
+    offlineMax,
+    offlineMins,
+    offlineMaxs,
     panelFrameCounts,
     panelStackOffsets,
     browserFilterActive,
@@ -5040,6 +5251,8 @@ function Show2D() {
     filterFrameForPanel,
     frequencyFilterEnabled,
     panelFrequencyKnobs,
+    uint8FolderIdentityEncoding,
+    uint8FolderPreviewMode,
   ]);
 
   React.useEffect(() => {
@@ -5141,19 +5354,31 @@ function Show2D() {
   // Initialize reusable offscreen canvases (one per image, resized when dimensions change)
   React.useEffect(() => {
     if (width <= 0 || height <= 0 || nImages <= 0) return;
+    if (uint8FolderPreviewMode && (canvasW <= 0 || canvasH <= 0)) return;
+    const offscreenW = uint8FolderPreviewMode ? Math.max(1, Math.round(canvasW)) : width;
+    const offscreenH = uint8FolderPreviewMode ? Math.max(1, Math.round(canvasH)) : height;
+    const current = mainOffscreensRef.current;
+    if (
+      current.length === nImages
+      && current.every(canvas => canvas && canvas.width === offscreenW && canvas.height === offscreenH)
+      && mainImgDatasRef.current.length === nImages
+      && mainImgDatasRef.current.every(imgData => imgData.width === offscreenW && imgData.height === offscreenH)
+    ) {
+      return;
+    }
     const canvases: HTMLCanvasElement[] = [];
     const imgDatas: ImageData[] = [];
     for (let i = 0; i < nImages; i++) {
       const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
+      canvas.width = offscreenW;
+      canvas.height = offscreenH;
       canvases.push(canvas);
-      imgDatas.push(canvas.getContext("2d")!.createImageData(width, height));
+      imgDatas.push(canvas.getContext("2d")!.createImageData(offscreenW, offscreenH));
     }
     mainOffscreensRef.current = canvases;
     mainImgDatasRef.current = imgDatas;
-    logBufferRef.current = new Float32Array(width * height);
-  }, [width, height, nImages]);
+    logBufferRef.current = new Float32Array(offscreenW * offscreenH);
+  }, [width, height, nImages, canvasW, canvasH, uint8FolderPreviewMode]);
 
   // Compute histogram data for the displayed image (reflects log scale)
   // GPU path: uses persistent per-slot histogram buffers — no CPU data scan
@@ -5262,6 +5487,7 @@ function Show2D() {
   // This prevents an early raw upload from winning deterministically when the
   // filter commit completed before/after engine initialization.
   React.useEffect(() => {
+    if (uint8FolderPreviewMode) return;
     const engine = gpuCmapRef.current;
     const arrays = rawDataRef.current;
     if (!engine || !gpuCmapReadyRef.current || !arrays || arrays.length === 0) return;
@@ -5273,7 +5499,7 @@ function Show2D() {
     engine.uploadLUT(cmapRef.current, lut);
     gpuDataVersionRef.current++;
     setGpuCmapVersion(v => v + 1);
-  }, [dataVersion, gpuCmapReadyVersion, width, height]);
+  }, [dataVersion, gpuCmapReadyVersion, width, height, uint8FolderPreviewMode]);
   // Generation counter for colormap — coalesces rapid slider events to ≤1 render per frame
   // Cached per-image data ranges — only recomputed when data or logScale changes, NOT on slider drag
   const dataRangesRef = React.useRef<{ min: number; max: number }[]>([]);
@@ -5299,7 +5525,7 @@ function Show2D() {
     const engine = gpuCmapRef.current;
     const nImg = rawDataRef.current.length;
 
-    if (engine && gpuCmapReadyRef.current && engine.slotCount >= nImg) {
+    if (!uint8FolderPreviewMode && engine && gpuCmapReadyRef.current && engine.slotCount >= nImg) {
       // GPU path: batch compute min/max on GPU (async, updates refs when done)
       const indices = Array.from({ length: nImg }, (_, i) => i);
       engine.computeRangeBatch(indices).then(rawRanges => {
@@ -5320,7 +5546,7 @@ function Show2D() {
       dataRangesRef.current = logScale ? logRanges : rawRanges;
     }
     logDataCacheRef.current = rawDataRef.current.slice();
-  }, [dataVersion, gpuCmapVersion]);
+  }, [dataVersion, gpuCmapVersion, uint8FolderPreviewMode]);
 
   // When logScale toggles, just swap cached ranges (no data scan)
   React.useEffect(() => {
@@ -5335,6 +5561,7 @@ function Show2D() {
   // One GPU submission for all images. Caches results for synchronous use in render.
   React.useEffect(() => {
     if (!autoContrast) { autoContrastCacheRef.current = []; return; }
+    if (uint8FolderPreviewMode) return;
     const engine = gpuCmapRef.current;
     if (!engine || !gpuCmapReadyRef.current || !rawDataRef.current) return;
     const cachedRanges = dataRangesRef.current;
@@ -5428,7 +5655,7 @@ function Show2D() {
       console.log(`[Show2D] GPU auto-contrast: ${nImg} images, ${allBins.length} histograms`);
       setAutoContrastVersion(v => v + 1);
     })();
-  }, [autoContrast, dataVersion, logScale, gpuCmapVersion, linkedContrast, traitVmin, traitVmax, traitVmins, traitVmaxs]);
+  }, [autoContrast, dataVersion, logScale, gpuCmapVersion, linkedContrast, traitVmin, traitVmax, traitVmins, traitVmaxs, uint8FolderPreviewMode]);
 
   // -------------------------------------------------------------------------
   // Data effect: normalize + colormap → reusable offscreen canvases
@@ -5574,9 +5801,13 @@ function Show2D() {
         if (!offscreen || !imgData) continue;
         const raw = rawDataRef.current?.[i];
         if (!raw) continue;
-        const processed = logScale ? applyLogScale(raw) : raw;
         const panelLut = COLORMAPS[panelCmapNames[i]] || COLORMAPS.inferno;
-        renderToOffscreenReuse(processed, panelLut, ranges[i].vmin, ranges[i].vmax, offscreen, imgData);
+        if (uint8FolderPreviewMode) {
+          renderSampledFrameToOffscreenReuse(raw, width, height, panelLut, ranges[i].vmin, ranges[i].vmax, logScale, offscreen, imgData);
+        } else {
+          const processed = logScale ? applyLogScale(raw) : raw;
+          renderToOffscreenReuse(processed, panelLut, ranges[i].vmin, ranges[i].vmax, offscreen, imgData);
+        }
       }
       if (isCurrentRender()) setOffscreenVersion(v => v + 1);
     };
@@ -5586,7 +5817,7 @@ function Show2D() {
     // commit into the retained offscreens. This also prevents a late black GPU
     // clear frame from overwriting a newer foreground repaint.
     const engine = gpuCmapRef.current;
-    const gpuReady = !hasMixedPanelCmaps && engine && gpuCmapReadyRef.current && engine.slotCount >= nImages;
+    const gpuReady = !uint8FolderPreviewMode && !hasMixedPanelCmaps && engine && gpuCmapReadyRef.current && engine.slotCount >= nImages;
     if (gpuReady) {
       engine!.uploadLUT(cmap, lut);
       const capturedRanges = ranges.slice();
@@ -5671,7 +5902,7 @@ function Show2D() {
       cancelled = true;
       if (renderRaf !== null) window.cancelAnimationFrame(renderRaf);
     };
-  }, [dataVersion, gpuCmapVersion, autoContrastVersion, nImages, width, height, cmap, panelCmaps, panelCmapFor, logScale, autoContrast, linkedContrast, linkedContrastState, contrastStates, traitVmin, traitVmax, traitVmins, traitVmaxs, diffMode, isRgbFlags, canvasRepaintSignal, visibleImageIndices]);
+  }, [dataVersion, gpuCmapVersion, autoContrastVersion, nImages, width, height, canvasW, canvasH, cmap, panelCmaps, panelCmapFor, logScale, autoContrast, linkedContrast, linkedContrastState, contrastStates, traitVmin, traitVmax, traitVmins, traitVmaxs, diffMode, isRgbFlags, canvasRepaintSignal, visibleImageIndices, uint8FolderPreviewMode]);
 
   // -------------------------------------------------------------------------
   // Maps-style detail fetch (preview binned only, _display_bin_factor > 1).
@@ -5870,7 +6101,7 @@ function Show2D() {
         ctx.translate(flipX ? drawW : 0, flipY ? drawH : 0);
         ctx.scale(flipX ? -1 : 1, flipY ? -1 : 1);
       }
-      ctx.drawImage(offscreen, 0, 0, width, height, 0, 0, drawW, drawH);
+      ctx.drawImage(offscreen, 0, 0, offscreen.width, offscreen.height, 0, 0, drawW, drawH);
       // Detail tile on top of the preview (same zoom/pan transform): tile
       // coordinates are full-res pixels, so divide by the preview bin factor
       // to land in the preview's coordinate space. Outside the tile the
@@ -8622,6 +8853,25 @@ function Show2D() {
       setPanningIdx(null);
     }
   };
+  const clearTransientHoverInspection = () => {
+    setCursorInfo(null);
+    insetHoverKeyRef.current = "";
+    setInsetHoverInfo(null);
+    setIsHoveringOverlay(false);
+    setIsHoveringResize(false);
+    setIsHoveringResizeInner(false);
+    setHoveredProfileEndpoint(null);
+    setIsHoveringProfileLine(false);
+  };
+  const handleRootMouseMoveCapture = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!cursorInfo && !insetHoverInfo && !isHoveringOverlay && !isHoveringResize && !isHoveringResizeInner && hoveredProfileEndpoint === null && !isHoveringProfileLine) return;
+    const target = e.target instanceof Element ? e.target : null;
+    if (target?.closest("[data-show2d-image-panel], [data-show2d-fft-panel]")) return;
+    clearTransientHoverInspection();
+  };
+  const handleRootMouseLeave = () => {
+    clearTransientHoverInspection();
+  };
 
   // -------------------------------------------------------------------------
   // Copy to clipboard handler
@@ -9213,12 +9463,22 @@ function Show2D() {
         break;
     }
   };
+  const handleRootMouseDownCapture = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (shouldIgnoreWidgetShortcut(e.target)) return;
+    staticFallbackRootRef.current?.focus({ preventScroll: true });
+  };
 
   // -------------------------------------------------------------------------
   // Render (Show3D-style layout)
   // -------------------------------------------------------------------------
   const needsReset = getZoomState(isGallery ? selectedIdx : 0).zoom !== 1 || getZoomState(isGallery ? selectedIdx : 0).panX !== 0 || getZoomState(isGallery ? selectedIdx : 0).panY !== 0;
-  const statsIdx = isGallery ? selectedIdx : 0;
+  // Scientists inspect across galleries by moving the mouse, not by selecting
+  // every panel first. Keep control state tied to selectedIdx, but let the
+  // stats/readout strip follow the hovered panel while the cursor is over it.
+  const hoverStatsIdx = isGallery && cursorInfo && visibleImageIndices.includes(cursorInfo.idx)
+    ? cursorInfo.idx
+    : null;
+  const statsIdx = isGallery ? (hoverStatsIdx ?? selectedIdx) : 0;
   const currentFrameStats = localPanelFrameStats.get(statsIdx);
   const svgExportAvailable = canvasW > 0 && canvasH > 0 && visibleImageIndices.length > 0;
   const isDraggingEditableDecoration = isDraggingOverlay || isDraggingAnnotation;
@@ -9393,7 +9653,15 @@ function Show2D() {
       ref={staticFallbackRootRef}
       tabIndex={0}
       onKeyDown={handleKeyDown}
+      onMouseDownCapture={handleRootMouseDownCapture}
+      onMouseMoveCapture={handleRootMouseMoveCapture}
+      onMouseLeave={handleRootMouseLeave}
       data-show2d-panel-playback-fps={panelPlaybackFps}
+      data-show2d-folder-frame-files={frameBytesUrlList.length}
+      data-show2d-folder-frame-files-loaded={fetchedFrameBytePanelCount}
+      data-show2d-selected-panel={selectedIdx}
+      data-show2d-selected-panels={(selectedPanels || []).join(",")}
+      data-show2d-visible-panel-count={visibleImageCount}
       data-show2d-canvas-repaint-signal={canvasRepaintSignal}
       data-show2d-fft-cache-hits={galleryFftDebug?.galleryFftCacheHits ?? 0}
       data-show2d-fft-cache-misses={galleryFftDebug?.galleryFftCacheMisses ?? 0}
@@ -10506,7 +10774,7 @@ function Show2D() {
                     onTouchEnd={reorderMode ? undefined : (e) => handleTouchEnd(e, i)}
                     onTouchCancel={reorderMode ? undefined : (e) => handleTouchEnd(e, i)}
                   >
-                    {markerAround ? (
+                    {hasPanelMarkers && (markerAround ? (
                       <Box
                         data-show2d-marker-color={panelMarkerColor(i)}
                         data-show2d-marker-style="around"
@@ -10537,8 +10805,9 @@ function Show2D() {
                           zIndex: 8,
                         }}
                       />
-                    )}
+                    ))}
                     <canvas
+                      data-show2d-main-canvas={i}
                       ref={(el) => { if (el && canvasRefs.current[i] !== el) { canvasRefs.current[i] = el; setCanvasReady(c => c + 1); } }}
                       width={canvasW} height={canvasH}
                       style={responsiveCanvasStyle}
@@ -11078,8 +11347,9 @@ function Show2D() {
               onTouchEnd={(e) => handleTouchEnd(e, 0)}
               onTouchCancel={(e) => handleTouchEnd(e, 0)}
             >
-              <canvas
-                ref={(el) => { if (el && canvasRefs.current[0] !== el) { canvasRefs.current[0] = el; setCanvasReady(c => c + 1); } }}
+            <canvas
+              data-show2d-main-canvas={0}
+              ref={(el) => { if (el && canvasRefs.current[0] !== el) { canvasRefs.current[0] = el; setCanvasReady(c => c + 1); } }}
                 width={canvasW} height={canvasH}
                 style={responsiveCanvasStyle}
               />

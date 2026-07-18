@@ -443,6 +443,58 @@ def _primary_canvas_nonblank(page) -> dict[str, Any]:
     return {"box": primary, "nonblank": bool(nonblank), "stats": stats}
 
 
+def _primary_canvas_content_signature(page) -> dict[str, Any]:
+    """Return a small content hash for the largest visible canvas."""
+
+    return page.evaluate(
+        """() => {
+          const visible = (canvas) => {
+            const rect = canvas.getBoundingClientRect();
+            const style = getComputedStyle(canvas);
+            return rect.width > 24 && rect.height > 24 && canvas.width > 0 && canvas.height > 0 &&
+              style.display !== "none" && style.visibility !== "hidden" &&
+              Number(style.opacity || "1") > 0.05;
+          };
+          const canvases = [...document.querySelectorAll("canvas")]
+            .map((canvas, index) => ({canvas, index, rect: canvas.getBoundingClientRect()}))
+            .filter((item) => visible(item.canvas))
+            .sort((a, b) => (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height));
+          if (!canvases.length) return {ok: false, error: "no visible canvas"};
+          const {canvas, index, rect} = canvases[0];
+          const sample = document.createElement("canvas");
+          sample.width = 32;
+          sample.height = 32;
+          const ctx = sample.getContext("2d", {willReadFrequently: true});
+          if (!ctx) return {ok: false, error: "no 2d context", index};
+          try {
+            ctx.drawImage(canvas, 0, 0, sample.width, sample.height);
+            const data = ctx.getImageData(0, 0, sample.width, sample.height).data;
+            let hash = 2166136261 >>> 0;
+            let sum = 0;
+            let nonzero = 0;
+            for (let i = 0; i < data.length; i += 4) {
+              const value = (data[i] + data[i + 1] * 3 + data[i + 2] * 7 + data[i + 3] * 11) & 255;
+              sum += value;
+              if (value) nonzero += 1;
+              hash ^= value;
+              hash = Math.imul(hash, 16777619) >>> 0;
+            }
+            return {
+              ok: true,
+              index,
+              hash: hash.toString(16).padStart(8, "0"),
+              sum,
+              nonzero,
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+            };
+          } catch (error) {
+            return {ok: false, error: String(error), index, width: Math.round(rect.width), height: Math.round(rect.height)};
+          }
+        }"""
+    )
+
+
 def _drive_playback(page, *, wait_ms: int) -> dict[str, Any]:
     before = _read_debug(page)
     before_layout = _canvas_layout_summary(page)
@@ -461,6 +513,435 @@ def _drive_playback(page, *, wait_ms: int) -> dict[str, Any]:
         "debug_after": after,
         "text_changed": before_text != after_text,
         "layout_changed": before_layout.get("all_signature") != after_layout.get("all_signature"),
+    }
+
+
+def _playback_slider_box(page) -> dict[str, Any]:
+    """Find the Show3D frame playback slider by its accessible label."""
+
+    return page.evaluate(
+        """() => {
+          const visible = (node) => {
+            const rect = node.getBoundingClientRect();
+            const style = getComputedStyle(node);
+            return rect.width > 0 && rect.height > 0 &&
+              style.display !== "none" && style.visibility !== "hidden";
+          };
+          const nodes = [...document.querySelectorAll(".MuiSlider-root [aria-label]")];
+          const match = nodes.find((node) => {
+            const label = String(node.getAttribute("aria-label") || "").toLowerCase();
+            return (
+              label.includes("current frame") ||
+              label.includes("current slice") ||
+              label.includes("current roi") ||
+              label.includes("loop range and current")
+            );
+          });
+          if (!match) return {found: false};
+          const root = match.closest(".MuiSlider-root") || match.closest('[role="slider"]') || match;
+          if (!root || !visible(root)) return {found: false, label: match.getAttribute("aria-label")};
+          const rect = root.getBoundingClientRect();
+          const thumb = root.querySelector(".MuiSlider-thumb[data-index='1']") ||
+            root.querySelector(".MuiSlider-thumb");
+          const thumbRect = thumb ? thumb.getBoundingClientRect() : null;
+          return {
+            found: true,
+            label: match.getAttribute("aria-label"),
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            thumb_x: thumbRect ? thumbRect.x : null,
+            thumb_y: thumbRect ? thumbRect.y : null,
+            thumb_width: thumbRect ? thumbRect.width : null,
+            thumb_height: thumbRect ? thumbRect.height : null,
+          };
+        }"""
+    )
+
+
+def _playback_count_text(page) -> str:
+    return str(
+        page.evaluate(
+            """() => {
+              const node = document.querySelector("[data-show3d-playback-count='true']");
+              return node ? (node.textContent || "").trim() : "";
+            }"""
+        )
+        or ""
+    )
+
+
+def _drive_slider_scrub(page, *, fps_ms: int) -> dict[str, Any]:
+    """Drag the frame slider and verify real frame updates during the drag."""
+
+    box = _playback_slider_box(page)
+    if not box.get("found"):
+        return {"found": False, "errors": ["playback slider was not found"]}
+    page.evaluate(
+        """() => {
+          const nodes = [...document.querySelectorAll(".MuiSlider-root [aria-label]")];
+          const match = nodes.find((node) => {
+            const label = String(node.getAttribute("aria-label") || "").toLowerCase();
+            return (
+              label.includes("current frame") ||
+              label.includes("current slice") ||
+              label.includes("current roi") ||
+              label.includes("loop range and current")
+            );
+          });
+          const root = match?.closest(".MuiSlider-root") || match;
+          root?.scrollIntoView({block: "center", inline: "nearest"});
+        }"""
+    )
+    page.wait_for_timeout(120)
+    box = _playback_slider_box(page)
+    if not box.get("found"):
+        return {"found": False, "errors": ["playback slider disappeared after scroll"]}
+    root_x = float(box["x"])
+    root_w = float(box["width"])
+    thumb_x = box.get("thumb_x")
+    thumb_w = box.get("thumb_width")
+    thumb_y = box.get("thumb_y")
+    thumb_h = box.get("thumb_height")
+    if thumb_x is not None and thumb_w is not None and thumb_y is not None and thumb_h is not None:
+        x0 = float(thumb_x) + float(thumb_w) / 2
+        y = float(thumb_y) + float(thumb_h) / 2
+    else:
+        x0 = root_x + max(4, root_w * 0.50)
+        y = float(box["y"]) + float(box["height"]) / 2
+    midpoint = root_x + root_w / 2
+    target_pct = 0.15 if x0 >= midpoint else 0.85
+    x1 = root_x + max(8, root_w * target_pct)
+
+    before_debug = _read_debug(page)
+    before_text = _playback_count_text(page)
+    before_sig = _primary_canvas_content_signature(page)
+
+    page.evaluate(
+        """() => {
+          window.__qwShow3DSliderDragCounting = true;
+          window.__qwShow3DSliderDragFrames = 0;
+          window.__qwShow3DSliderDragStart = performance.now();
+          const step = () => {
+            if (!window.__qwShow3DSliderDragCounting) return;
+            window.__qwShow3DSliderDragFrames += 1;
+            requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+        }"""
+    )
+    started = time.perf_counter()
+    page.mouse.move(x0, y)
+    page.mouse.down()
+    for step in range(1, 18):
+        x = x0 + (x1 - x0) * step / 17
+        page.mouse.move(x, y, steps=2)
+        page.wait_for_timeout(18)
+    page.wait_for_timeout(120)
+    mid_debug = _read_debug(page)
+    mid_text = _playback_count_text(page)
+    mid_sig = _primary_canvas_content_signature(page)
+    page.mouse.up()
+    page.wait_for_timeout(450)
+    final_debug = _read_debug(page)
+    final_text = _playback_count_text(page)
+    final_sig = _primary_canvas_content_signature(page)
+    raf_fps = float(
+        page.evaluate(
+            """() => {
+              window.__qwShow3DSliderDragCounting = false;
+              const elapsed = performance.now() - (window.__qwShow3DSliderDragStart || performance.now());
+              return (window.__qwShow3DSliderDragFrames || 0) * 1000 / Math.max(1, elapsed);
+            }"""
+        )
+    )
+    settle_fps = round(float(_measure_fps(page, fps_ms)), 1)
+    changed_debug = (
+        before_debug.get("lastFrame") != mid_debug.get("lastFrame") or
+        before_debug.get("lastFrame") != final_debug.get("lastFrame")
+    )
+    changed_text = before_text != mid_text or before_text != final_text
+    changed_pixels = (
+        before_sig.get("hash") != mid_sig.get("hash") or
+        before_sig.get("hash") != final_sig.get("hash")
+    )
+    return {
+        "found": True,
+        "slider": box,
+        "duration_s": round(time.perf_counter() - started, 3),
+        "drag_fps": round(raf_fps, 1),
+        "settle_fps": settle_fps,
+        "before_text": before_text,
+        "mid_text": mid_text,
+        "final_text": final_text,
+        "before_debug": before_debug,
+        "mid_debug": mid_debug,
+        "final_debug": final_debug,
+        "before_signature": before_sig,
+        "mid_signature": mid_sig,
+        "final_signature": final_sig,
+        "changed_debug": bool(changed_debug),
+        "changed_text": bool(changed_text),
+        "changed_pixels": bool(changed_pixels),
+    }
+
+
+def _parse_frame_count(text: str) -> int | None:
+    match = re.search(r"\b\d+\s*/\s*(\d+)\b", str(text or ""))
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _drive_keyboard_scrub(page, *, fps_ms: int) -> dict[str, Any]:
+    """Press frame navigation keys after clicking the rendered widget surface."""
+
+    boxes = _visible_canvas_boxes(page)
+    if not boxes:
+        return {"found": False, "errors": ["no visible canvas for keyboard focus"]}
+    primary = sorted(boxes, key=lambda item: item["width"] * item["height"], reverse=True)[0]
+    viewport = page.viewport_size or {"width": 1200, "height": 900}
+    click_x = min(
+        max(float(primary["x"]) + float(primary["width"]) * 0.5, 16),
+        float(viewport["width"]) - 16,
+    )
+    click_y = min(
+        max(float(primary["y"]) + float(primary["height"]) * 0.5, 72),
+        float(viewport["height"]) - 20,
+    )
+    page.mouse.click(click_x, click_y)
+    page.wait_for_timeout(120)
+    focus_after_click = page.evaluate(
+        """() => {
+          const active = document.activeElement;
+          return {
+            tag: active?.tagName || "",
+            className: String(active?.className || ""),
+            isRoot: Boolean(active?.classList?.contains("show3d-root")),
+          };
+        }"""
+    )
+
+    page.keyboard.press("Home")
+    page.wait_for_timeout(250)
+    baseline_text = _playback_count_text(page)
+    baseline_debug = _read_debug(page)
+    baseline_sig = _primary_canvas_content_signature(page)
+
+    page.keyboard.press("ArrowRight")
+    page.wait_for_timeout(350)
+    right_text = _playback_count_text(page)
+    right_debug = _read_debug(page)
+    right_sig = _primary_canvas_content_signature(page)
+
+    page.keyboard.press("ArrowLeft")
+    page.wait_for_timeout(350)
+    left_text = _playback_count_text(page)
+    left_debug = _read_debug(page)
+    left_sig = _primary_canvas_content_signature(page)
+    settle_fps = round(float(_measure_fps(page, fps_ms)), 1)
+
+    total_frames = (
+        _parse_frame_count(baseline_text)
+        or _parse_frame_count(right_text)
+        or _parse_frame_count(left_text)
+        or None
+    )
+    changed_debug = baseline_debug.get("lastFrame") != right_debug.get("lastFrame")
+    changed_text = baseline_text != right_text
+    changed_pixels = baseline_sig.get("hash") != right_sig.get("hash")
+    returned_debug = right_debug.get("lastFrame") != left_debug.get("lastFrame")
+    returned_text = right_text != left_text
+    returned_pixels = right_sig.get("hash") != left_sig.get("hash")
+    return {
+        "found": True,
+        "click": {"x": round(click_x, 1), "y": round(click_y, 1), "canvas": primary},
+        "focus_after_click": focus_after_click,
+        "total_frames": total_frames,
+        "baseline_text": baseline_text,
+        "right_text": right_text,
+        "left_text": left_text,
+        "baseline_debug": baseline_debug,
+        "right_debug": right_debug,
+        "left_debug": left_debug,
+        "baseline_signature": baseline_sig,
+        "right_signature": right_sig,
+        "left_signature": left_sig,
+        "changed_debug": bool(changed_debug),
+        "changed_text": bool(changed_text),
+        "changed_pixels": bool(changed_pixels),
+        "returned_debug": bool(returned_debug),
+        "returned_text": bool(returned_text),
+        "returned_pixels": bool(returned_pixels),
+        "settle_fps": settle_fps,
+    }
+
+
+def _histogram_clip_sliders(page) -> list[dict[str, Any]]:
+    """Return unique Show3D histogram clip slider roots and thumb values."""
+
+    return list(
+        page.evaluate(
+            """() => {
+              const visible = (node) => {
+                const rect = node.getBoundingClientRect();
+                const style = getComputedStyle(node);
+                return rect.width > 0 && rect.height > 0 &&
+                  style.display !== "none" && style.visibility !== "hidden";
+              };
+              const roots = [];
+              const seen = new Set();
+              for (const input of document.querySelectorAll('[aria-label="Histogram intensity clip range"]')) {
+                const root = input.closest(".MuiSlider-root") || input;
+                if (!root || !visible(root)) continue;
+                const rect = root.getBoundingClientRect();
+                const key = `${Math.round(rect.x)}:${Math.round(rect.y)}:${Math.round(rect.width)}:${Math.round(rect.height)}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                const values = [...root.querySelectorAll('[aria-label="Histogram intensity clip range"]')]
+                  .map((node) => Number(node.getAttribute("aria-valuenow") || node.value || 0));
+                roots.push({
+                  index: roots.length,
+                  x: rect.x,
+                  y: rect.y,
+                  width: rect.width,
+                  height: rect.height,
+                  values,
+                });
+              }
+              return roots;
+            }"""
+        )
+        or []
+    )
+
+
+def _show3d_switch_state(page) -> dict[str, bool]:
+    """Read compact Show3D switch state by accessible label."""
+
+    return dict(
+        page.evaluate(
+            """() => {
+              const out = {};
+              for (const input of document.querySelectorAll('input[type="checkbox"]')) {
+                const label = input.getAttribute("aria-label") || "";
+                if (label) out[label] = Boolean(input.checked);
+              }
+              return out;
+            }"""
+        )
+        or {}
+    )
+
+
+def _drive_histogram_contrast(page, *, fps_ms: int) -> dict[str, Any]:
+    """Drag the first histogram and catch Auto/off contrast reset regressions."""
+
+    sliders = _histogram_clip_sliders(page)
+    if not sliders:
+        return {"found": False, "errors": ["histogram clip slider was not found"]}
+    page.evaluate(
+        """() => {
+          const input = document.querySelector('[aria-label="Histogram intensity clip range"]');
+          const root = input?.closest(".MuiSlider-root") || input;
+          root?.scrollIntoView({block: "center", inline: "nearest"});
+        }"""
+    )
+    page.wait_for_timeout(120)
+    sliders = _histogram_clip_sliders(page)
+    if not sliders:
+        return {"found": False, "errors": ["histogram clip slider disappeared after scroll"]}
+
+    before_switches = _show3d_switch_state(page)
+    before_values = [item.get("values", []) for item in sliders]
+    before_sig = _primary_canvas_content_signature(page)
+    item = sliders[0]
+    x0 = float(item["x"]) + max(4, float(item["width"]) * 0.20)
+    x1 = float(item["x"]) + max(8, float(item["width"]) * 0.75)
+    y = float(item["y"]) + float(item["height"]) / 2
+
+    page.evaluate(
+        """() => {
+          window.__qwShow3DHistogramDragCounting = true;
+          window.__qwShow3DHistogramDragFrames = 0;
+          window.__qwShow3DHistogramDragStart = performance.now();
+          const step = () => {
+            if (!window.__qwShow3DHistogramDragCounting) return;
+            window.__qwShow3DHistogramDragFrames += 1;
+            requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+        }"""
+    )
+    page.mouse.move(x0, y)
+    page.mouse.down()
+    for step in range(1, 20):
+        x = x0 + (x1 - x0) * step / 19
+        page.mouse.move(x, y, steps=2)
+        page.wait_for_timeout(18)
+    mid_sig = _primary_canvas_content_signature(page)
+    mid_values = [item.get("values", []) for item in _histogram_clip_sliders(page)]
+    page.mouse.up()
+    page.wait_for_timeout(450)
+    final_sig = _primary_canvas_content_signature(page)
+    final_values = [item.get("values", []) for item in _histogram_clip_sliders(page)]
+    final_switches = _show3d_switch_state(page)
+    drag_fps = float(
+        page.evaluate(
+            """() => {
+              window.__qwShow3DHistogramDragCounting = false;
+              const elapsed = performance.now() - (window.__qwShow3DHistogramDragStart || performance.now());
+              return (window.__qwShow3DHistogramDragFrames || 0) * 1000 / Math.max(1, elapsed);
+            }"""
+        )
+        or 0.0
+    )
+    settle_fps = float(_measure_fps(page, fps_ms))
+
+    def _is_full_range(values: list[Any]) -> bool:
+        if len(values) < 2:
+            return False
+        lo = float(values[0])
+        hi = float(values[1])
+        return lo <= 0.5 and hi >= 99.5
+
+    started_auto = bool(
+        before_switches.get("Toggle stack-wide automatic contrast")
+        or before_switches.get("Toggle automatic percentile-based contrast")
+    )
+    ended_auto = bool(
+        final_switches.get("Toggle stack-wide automatic contrast")
+        or final_switches.get("Toggle automatic percentile-based contrast")
+    )
+    independent = before_switches.get("Link contrast across panels") is False and len(before_values) > 1
+    reset_other_panels = []
+    if independent and started_auto:
+        for idx, (before, after) in enumerate(zip(before_values[1:], final_values[1:]), start=1):
+            if before and after and not _is_full_range(before) and _is_full_range(after):
+                reset_other_panels.append(idx)
+
+    return {
+        "found": True,
+        "before_switches": before_switches,
+        "final_switches": final_switches,
+        "before_values": before_values,
+        "mid_values": mid_values,
+        "final_values": final_values,
+        "before_signature": before_sig,
+        "mid_signature": mid_sig,
+        "final_signature": final_sig,
+        "changed_mid": before_sig.get("hash") != mid_sig.get("hash"),
+        "changed_final": before_sig.get("hash") != final_sig.get("hash"),
+        "started_auto": started_auto,
+        "ended_auto": ended_auto,
+        "independent": independent,
+        "reset_other_panels": reset_other_panels,
+        "drag_fps": round(drag_fps, 1),
+        "settle_fps": round(settle_fps, 1),
     }
 
 
@@ -568,6 +1049,9 @@ def _run_case(
     initial_debug = _read_debug(page)
     initial_fps = round(float(_measure_fps(page, 700)), 1)
     initial_shot = _save_screenshot(page, screenshots_dir / f"{case_name}-initial.png")
+    histogram_contrast = _drive_histogram_contrast(page, fps_ms=700)
+    page.evaluate("() => window.scrollTo(0, 0)")
+    page.wait_for_timeout(120)
 
     col_steps = []
     for cols in (1, 2, 3, 4, 6, 8, 12):
@@ -581,6 +1065,8 @@ def _run_case(
 
     fft_step = _exercise_fft_toggle(page)
     playback = _drive_playback(page, wait_ms=max(900, min(2200, int(seconds * 350))))
+    keyboard_scrub = _drive_keyboard_scrub(page, fps_ms=700)
+    slider_scrub = _drive_slider_scrub(page, fps_ms=700)
     stress = _drive_zoom_pan_stress(page, seconds=seconds)
     final_fps = round(float(_measure_fps(page, 900)), 1)
     final_layout = _canvas_layout_summary(page)
@@ -596,6 +1082,44 @@ def _run_case(
         errors.append("canvas became blank after zoom/pan stress")
     if final_fps < min_fps:
         errors.append(f"final browser FPS {final_fps} is below --min-fps={min_fps}")
+    if not slider_scrub.get("found"):
+        errors.append("playback slider was not found for mouse-drag scrub")
+    elif not (
+        slider_scrub.get("changed_pixels")
+        or slider_scrub.get("changed_debug")
+        or slider_scrub.get("changed_text")
+    ):
+        errors.append("mouse-drag scrub did not change the rendered frame or frame counter")
+    if slider_scrub.get("settle_fps", min_fps) < min_fps:
+        errors.append(f"mouse-drag scrub settle FPS {slider_scrub.get('settle_fps')} is below --min-fps={min_fps}")
+    if not keyboard_scrub.get("found"):
+        errors.append("keyboard scrub could not focus the rendered widget")
+    elif (keyboard_scrub.get("total_frames") or 0) > 1 and not (
+        keyboard_scrub.get("changed_pixels")
+        or keyboard_scrub.get("changed_debug")
+        or keyboard_scrub.get("changed_text")
+    ):
+        errors.append("ArrowRight did not change the rendered frame or frame counter after clicking the widget")
+    if keyboard_scrub.get("settle_fps", min_fps) < min_fps:
+        errors.append(f"keyboard scrub settle FPS {keyboard_scrub.get('settle_fps')} is below --min-fps={min_fps}")
+    if keyboard_scrub.get("found") and not keyboard_scrub.get("focus_after_click", {}).get("isRoot"):
+        warnings.append("keyboard focus after canvas click did not land on the Show3D root")
+    if not histogram_contrast.get("found"):
+        warnings.append("histogram clip slider was not found for contrast drag")
+    elif not (histogram_contrast.get("changed_mid") or histogram_contrast.get("changed_final")):
+        errors.append("histogram drag did not change the rendered image")
+    if histogram_contrast.get("started_auto") and histogram_contrast.get("ended_auto"):
+        errors.append("manual histogram drag did not turn Auto contrast off")
+    reset_other_panels = histogram_contrast.get("reset_other_panels") or []
+    if reset_other_panels:
+        errors.append(
+            "manual independent histogram drag reset other panels to full range: "
+            + ", ".join(str(idx) for idx in reset_other_panels)
+        )
+    if histogram_contrast.get("settle_fps", min_fps) < min_fps:
+        errors.append(
+            f"histogram drag settle FPS {histogram_contrast.get('settle_fps')} is below --min-fps={min_fps}"
+        )
     if page_errors:
         errors.extend(f"page error: {message}" for message in page_errors)
     for message in console_messages:
@@ -643,8 +1167,11 @@ def _run_case(
         "final_debug": final_debug,
         "column_reflow": col_steps,
         "contrast": contrast_step,
+        "histogram_contrast": histogram_contrast,
         "fft_toggle": fft_step,
         "playback": playback,
+        "keyboard_scrub": keyboard_scrub,
+        "slider_scrub": slider_scrub,
         "zoom_pan_stress": stress,
         "screenshots": [initial_shot, final_shot],
         "responses": responses,
@@ -681,6 +1208,10 @@ def _write_report(artifact_dir: Path, report: dict[str, Any]) -> None:
         f"<td>{_escape(case.get('viewport', {}).get('name'))}</td>"
         f"<td>{_escape(case.get('first_paint', {}).get('first_paint_ms'))}</td>"
         f"<td>{_escape(case.get('final_fps'))}</td>"
+        f"<td>{_escape(case.get('keyboard_scrub', {}).get('settle_fps'))}</td>"
+        f"<td>{_escape(case.get('slider_scrub', {}).get('settle_fps'))}</td>"
+        f"<td>{_escape(case.get('histogram_contrast', {}).get('settle_fps'))}</td>"
+        f"<td>{_escape(case.get('histogram_contrast', {}).get('reset_other_panels'))}</td>"
         f"<td>{_escape(case.get('zoom_pan_stress', {}).get('cycles'))}</td>"
         f"<td>{'PASS' if case.get('passed') else 'FAIL'}</td>"
         "</tr>"
@@ -702,6 +1233,9 @@ def _write_report(artifact_dir: Path, report: dict[str, Any]) -> None:
                 "initial_fps",
                 "final_fps",
                 "contrast",
+                "histogram_contrast",
+                "keyboard_scrub",
+                "slider_scrub",
                 "final_layout",
                 "final_debug",
                 "responses",
@@ -748,7 +1282,7 @@ def _write_report(artifact_dir: Path, report: dict[str, Any]) -> None:
   <ul>{sources_html}</ul>
   <h2>Summary</h2>
   <table>
-    <thead><tr><th>Case</th><th>Mode</th><th>Viewport</th><th>First paint ms</th><th>Final FPS</th><th>Zoom cycles</th><th>Status</th></tr></thead>
+    <thead><tr><th>Case</th><th>Mode</th><th>Viewport</th><th>First paint ms</th><th>Final FPS</th><th>Key FPS</th><th>Slider FPS</th><th>Hist FPS</th><th>Hist reset panels</th><th>Zoom cycles</th><th>Status</th></tr></thead>
     <tbody>{rows}</tbody>
   </table>
   <h2>Errors</h2>
