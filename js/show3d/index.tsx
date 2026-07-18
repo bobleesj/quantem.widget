@@ -11484,6 +11484,8 @@ function Show3D() {
     if (previous === activePageStart || !offline || !sidecarMode || playing) return;
     resetPagedViewTransform();
     const frameIdx = Number.isFinite(playbackIdxRef.current) ? playbackIdxRef.current : liveSliceIdx;
+    drawSidecarBitmapFrame(frameIdx, false, "page-change");
+    updatePlaybackLiveControls(frameIdx);
     const raf = window.requestAnimationFrame(() => {
       drawSidecarBitmapFrame(frameIdx, false, "page-change");
       updatePlaybackLiveControls(frameIdx);
