@@ -6090,16 +6090,28 @@ function Show3D() {
   const [mainCanvasSize, setMainCanvasSize] = React.useState(CANVAS_TARGET_SIZE);
   const rawFrameDataRef = React.useRef<Float32Array | null>(null);
   const initialCanvasSizeRef = React.useRef<number>(canvasSizeTrait > 0 ? canvasSizeTrait : CANVAS_TARGET_SIZE);
+  const defaultPanelCssSizeForCount = React.useCallback((count: number) => {
+    const n = Math.max(1, count || 1);
+    if (canvasSizeTrait > 0) return canvasSizeTrait;
+    if (n <= 1) return CANVAS_TARGET_SIZE;
+    const requestedCols = (maxCols && maxCols > 0)
+      ? Math.min(maxCols, n, MAX_PANEL_COLUMNS)
+      : Math.min(n, MAX_PANEL_COLUMNS);
+    if (n >= 8 && requestedCols >= 3 && rootLayoutWidth > 0) {
+      return Math.max(180, Math.min(500, Math.floor(rootLayoutWidth / requestedCols)));
+    }
+    return 500;
+  }, [canvasSizeTrait, maxCols, rootLayoutWidth]);
   const panelColsForCount = React.useCallback((count: number) => {
     const n = Math.max(1, count || 1);
     const requestedCols = (maxCols && maxCols > 0) ? Math.min(maxCols, n, MAX_PANEL_COLUMNS) : Math.min(n, MAX_PANEL_COLUMNS);
     if (n <= 1) return 1;
-    const preferredPanelWidth = canvasSizeTrait > 0 ? canvasSizeTrait : 500;
+    const preferredPanelWidth = defaultPanelCssSizeForCount(n);
     const responsiveCols = rootLayoutWidth > 0
       ? Math.max(1, Math.min(n, Math.floor(rootLayoutWidth / Math.max(1, preferredPanelWidth))))
       : requestedCols;
     return Math.max(1, Math.min(requestedCols, responsiveCols));
-  }, [canvasSizeTrait, maxCols, rootLayoutWidth]);
+  }, [defaultPanelCssSizeForCount, maxCols, rootLayoutWidth]);
   const show3dColumnOptions = React.useMemo(() => {
     const n = Math.max(1, visiblePanelCount || 1);
     const values = new Set<number>([1, 2, 3, 4, 5, 6, 8, 10, 12]);
@@ -7874,13 +7886,13 @@ function Show3D() {
     // drags the resize handle larger when they want pixel-1:1.
     const n = Math.max(1, visiblePanelCount || 1);
     const cols = panelColsForCount(n);
-    const perPanel = canvasSizeTrait > 0 ? canvasSizeTrait : (n > 1 ? 500 : CANVAS_TARGET_SIZE);
+    const perPanel = defaultPanelCssSizeForCount(n);
     const target = perPanel * cols;
     setMainCanvasSize(target);
     if (initialCanvasSizeRef.current === CANVAS_TARGET_SIZE) {
       initialCanvasSizeRef.current = target;
     }
-  }, [canvasSizeTrait, visiblePanelCount, panelColsForCount]);
+  }, [defaultPanelCssSizeForCount, visiblePanelCount, panelColsForCount]);
 
   // Calculate display scale. In multi-panel mode `width` may be either the
   // concatenated source width or one shared source frame drawn into N slots.
