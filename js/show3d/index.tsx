@@ -11736,15 +11736,18 @@ function Show3D() {
   ]);
 
   React.useEffect(() => {
-    if (!offline || !sidecarMode || playing || (!sidecarBitmapReady && !sidecarCompositeReady)) return;
+    if (!offline || !sidecarMode || playing) return;
+    if (!sidecarRamReady && !sidecarBitmapReady && !sidecarCompositeReady) return;
     drawSidecarBitmapFrame(liveSliceIdx, true, "scrub");
   }, [
     offline,
     sidecarMode,
     playing,
+    sidecarRamReady,
     sidecarBitmapReady,
     sidecarCompositeReady,
     liveSliceIdx,
+    visiblePanelIndices,
     drawSidecarBitmapFrame,
   ]);
 
