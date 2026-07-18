@@ -1,4 +1,4 @@
-# 2026-07-16 — ShowPtycho WebGPU resident-memory experiment: Hermitian half-plane and snorm16 block quantization
+# 2026-07-16 — ShowPtycho WebGPU resident-memory experiment: Exact and Fast preview storage
 
 ## Question
 
@@ -22,8 +22,10 @@ collaborators can open these folders on ordinary laptops?
   — real hardware confirmed via `adapter.info`, not SwiftShader).
 - Harness: folder served by `scripts/serve_sidecar_range.py` (plain
   `python -m http.server` FAILS — no HTTP Range support, viewer dies with
-  "Failed to fetch"). Page driven over CDP; each mode selected with the new
-  `?gqk=full|herm|herm16` URL parameter; the engine stashes
+  "Failed to fetch"). Page driven over CDP; public viewer choices are Exact
+  (default, or `?gqk=exact`) and Fast preview (`?gqk=preview` or
+  `?gqk=herm16`). Earlier parity runs also measured the old n x n storage
+  baseline before that runtime path was removed. The engine stashes
   `globalThis.__quantemSsbLast = {gqkMode, residentGqkBytes, gpuMs, phase, ...}`
   after every reconstruct, and the harness pulls the raw `Float32Array` phase
   out over CDP for offline numpy comparison. Same aberrations, same BF set
@@ -31,20 +33,44 @@ collaborators can open these folders on ordinary laptops?
 
 ## Raw numbers
 
-| G(q,k) mode | resident VRAM | reconstruct (gpuMs) | max abs dphase vs full | rms dphase | phase corr |
+| G(q,k) mode | resident VRAM | reconstruct (gpuMs) | max abs dphase vs old n x n baseline | rms dphase | phase corr |
 |---|---|---|---|---|---|
-| `full` (complex64 full plane, prior behavior) | 0.856 GB | 18.2 ms | — | — | — |
-| `herm` (complex64 Hermitian half-plane) | 0.429 GB (2.0x) | 16.4 ms | **0.0 (bit-exact)** | 0.0 | 1.0 |
-| `herm16` (half-plane + snorm16, one f32 scale per BF px) | 0.215 GB (4.0x) | 12.6 ms | 1.204e-4 rad | 2.60e-5 rad | 0.9999954 |
+| old n x n baseline (removed runtime path) | 0.856 GB | 18.2 ms | — | — | — |
+| Exact / `herm` (complex64 Hermitian half-plane) | 0.429 GB (2.0x) | 16.4 ms | **0.0 (bit-exact)** | 0.0 | 1.0 |
+| Fast preview / `herm16` (half-plane + snorm16, one f32 scale per BF px) | 0.215 GB (4.0x) | 12.6 ms | 1.204e-4 rad | 2.60e-5 rad | 0.9999954 |
 
-Phase image span was 0.0748 rad, so `herm16` worst-case error is 0.16 % of
+Phase image span was 0.0748 rad, so Fast preview worst-case error is 0.16 % of
 span (rms 0.03 %) — far below shot noise on 17-count data.
 
 Projection for this dataset at **full BF (13137 px, ~1360 active est.)**:
-full ~2.9 GB, herm ~1.4 GB, herm16 ~0.7 GB. Upper-bound projection if every
-selected BF pixel were aperture-active: 27.6 / 13.9 / 6.9 GB. Per-BF-pixel
-cost by scan size: 2 MB at 512^2, 0.5 MB at 256^2, 0.125 MB at 128^2 (full
-mode; divide by 2 or 4 for herm/herm16).
+old n x n baseline ~2.9 GB, Exact ~1.4 GB, Fast preview ~0.7 GB.
+Upper-bound projection if every selected BF pixel were aperture-active:
+27.6 / 13.9 / 6.9 GB. Per-BF-pixel cost by scan size: 2 MB at 512^2,
+0.5 MB at 256^2, 0.125 MB at 128^2 for the old n x n baseline;
+divide by 2 for Exact and by 4 for Fast preview.
+
+## Memory planning table
+
+These are resident `G(q,k)` reducer sizes only. First load may need additional
+temporary chunk, phase/loss, canvas, and browser memory. `Active BF` means
+nonzero-aperture BF pixels after the BF policy is applied; it is often smaller
+than the raw BF label shown in the UI.
+
+| Scan | Active BF | Typical use | Old n x n baseline (not runtime) | Exact default | Fast preview |
+|---|---:|---|---:|---:|---:|
+| 512x512 | 12 | Small smoke test | 25 MB | 13 MB | 6.3 MB |
+| 512x512 | 408 | 0.30 BF preview in the Phil report | 856 MB | 429 MB | 215 MB |
+| 512x512 | 1360 | Full-BF estimate for the sparse experimental 512 dataset | 2.85 GB | 1.43 GB | 0.72 GB |
+| 512x512 | 9070 | Dense experimental full active BF | 19.0 GB | 9.55 GB | 4.77 GB |
+| 1024x1024 | 12 | Small smoke test | 101 MB | 50 MB | 25 MB |
+| 1024x1024 | 1382 | Berk full active BF | 11.6 GB | 5.81 GB | 2.90 GB |
+| 1024x1024 | 9070 | Workstation stress projection | 76.1 GB | 38.1 GB | 19.1 GB |
+
+Formula:
+
+- Old n x n baseline: `active_BF * N * N * 8` bytes.
+- Exact default: `active_BF * N * (N/2 + 1) * 8` bytes.
+- Fast preview: `active_BF * N * (N/2 + 1) * 4 + active_BF * 4` bytes.
 
 ## Why herm is exactly lossless — and faster
 
@@ -56,20 +82,22 @@ FFT's rounding errors are themselves conjugate-symmetric for real input, so
 the discarded half was a bitwise mirror all along. It is *faster* because the
 per-drag reduce is bandwidth-bound (re-reads all of G every slider move) and
 now reads half the bytes. Strictly better on every axis => **`herm` is the new
-default**; `?gqk=full` restores the old layout.
+default Exact path**; the old n x n storage branch has been removed from the
+runtime and now exists only as historical baseline data in this report.
 
 ## Implementation (js/showptycho/webgpu-ssb.ts)
 
-- `GqkMode` = `full | herm | herm16`, resolved from `?gqk=` URL param or
-  `globalThis.__QUANTEM_SHOWPTYCHO_GQK_MODE__`; default `herm`.
+- `GqkMode` = `herm | herm16`, resolved from `?gqk=` URL param or
+  `globalThis.__QUANTEM_SHOWPTYCHO_GQK_MODE__`; default `herm`. Public aliases:
+  `exact` -> `herm`, `preview` / `fast` -> `herm16`.
 - `makeSsbShader(n, mode)` templates a `fetch_g(local_bf, bf_global, row, x)`
   WGSL helper: direct read for `x <= n/2`, mirror `(r,c) = ((n-row) % n, n-x)`
   + conjugate otherwise; `herm16` additionally
   `unpack2x16snorm(word) * gqkScale[bf_global]`.
-- Build path unchanged (full-plane chunks, gather + in-place FFT), then a new
+- Build path unchanged (temporary n x n chunks, gather + in-place FFT), then a new
   GPU post-pass `transformGqkChunks` runs `scaleMax` (per-BF-pixel max |G| over
   the half-plane, workgroup tree reduce) and `compact` (copy or
-  `pack2x16snorm(clamp(v/scale))`) per chunk, destroying each full chunk
+  `pack2x16snorm(clamp(v/scale))`) per chunk, destroying each temporary chunk
   immediately — build peak only briefly exceeds the old peak by one compacted
   chunk; the *resident* session footprint is what shrinks.
 - `__quantemSsbLast` debug hook on every reconstruct for harnesses.
@@ -78,7 +106,8 @@ default**; `?gqk=full` restores the old layout.
 
 - **float16 storage**: 2x, but real mantissa loss on FFT accumulations
   (10-bit mantissa vs values spanning ~4.5e6 dynamic range). Rejected —
-  strictly worse than herm16 which spends its 16 bits after per-pixel scaling.
+  strictly worse than Fast preview, which spends its 16 bits after per-pixel
+  scaling.
 - **Band-limit crop in q**: exact only when the scan oversamples the 2-alpha
   double-overlap disk. This dataset (10.4 A scan sampling, 30 mrad, 300 kV;
   q_Nyquist 0.048 1/A << 2-alpha/lambda 3.05 1/A) is in-band across the whole
@@ -114,10 +143,19 @@ per-BF-pixel snorm16/int16 block quantization transfers directly.
 
 | Optimization | WebGPU (`quantem.widget/js/showptycho/webgpu-ssb.ts`) | CUDA (`quantem.gpu/src/quantem/gpu/ssb/engine.py`) | MPS (`quantem.gpu/src/quantem/gpu/ssb/mps.py`) |
 |---|---|---|---|
-| Hermitian half-plane G(q,k) (2x, bit-exact, faster) | **DONE — default** (`?gqk=full` opt-out) | TODO — `self.G_qk` is full-plane complex64; also the streaming `result_buffer`/staging buffers (batch x bf x scan^2 x c64) would halve | TODO — `mx.complex64` full plane; gamma kernels at mps.py:430-440 already compute conj explicitly, mirror fetch slots in there |
-| snorm16/int16 block-quantized G (4x, ~1e-4 rad error) | **DONE — opt-in** `?gqk=herm16` | TODO — cupy int16 pairs + per-BF f32 scale; dequant inside the variance/correction kernels | TODO — mx int16 + scale; check MLX gather perf before committing |
+| Exact Hermitian half-plane G(q,k) (2x, bit-exact, faster) | **DONE — default** | TODO — `self.G_qk` is n x n complex64; also the streaming `result_buffer`/staging buffers (batch x bf x scan^2 x c64) would halve | TODO — `mx.complex64` n x n storage; gamma kernels at mps.py:430-440 already compute conj explicitly, mirror fetch slots in there |
+| Fast preview snorm16/int16 block storage (4x, ~1e-4 rad error) | **DONE — opt-in** `?gqk=preview` (`?gqk=herm16` alias) | TODO — cupy int16 pairs + per-BF f32 scale; dequant inside the variance/correction kernels | TODO — mx int16 + scale; check MLX gather perf before committing |
 | VRAM budget clamp on BF count | TODO — `FULL_STACK_GPU_BUDGET_BYTES` still dead code | n/a (96 GB workstation assumption baked in; revisit for L40S) | TODO — unified memory, clamp matters most on 8-16 GB Macs |
 | Streamed initial build (bounded peak, not just resident) | TODO — needs real-u16 time-domain gather or per-chunk re-decode | n/a today | TODO |
+
+WebGPU scan-size coverage:
+
+| Scan size | Exact complex64 Hermitian `G(q,k)` | Fast preview `herm16` | Verification status |
+|---|---|---|---|
+| 128x128 | Done | Done | Synthetic parity sweep passed. |
+| 256x256 | Done | Done | Synthetic parity sweep passed. |
+| 512x512 | Done | Done | Real experimental parity and headed-browser timing measured. |
+| 1024x1024 | Done | Done | Synthetic parity sweep passed; Fast preview is preview-quality because error was larger than at 512. |
 
 Verification recipe for a port (what was used here): compute the same
 reconstruction with the optimization off and on (same aberrations, same BF
@@ -129,7 +167,7 @@ Raw parity harness for the WebGPU case: CDP + `globalThis.__quantemSsbLast`
 
 ## Scan-size sweep (added same day)
 
-Full kernel sweep across all supported scan sizes, three modes each, on phil
+Reference kernel sweep across all supported scan sizes, three modes each, on phil
 (`apple/metal-3`). 128/256/1024 are synthetic Arina-style masters written with
 `quantem.gpu.io.save` (uint16, 48x48 detector, disk + gradient-shift phase
 object, semiangle 8 mrad, det sampling 1 mrad/px); 512 is the real
@@ -137,31 +175,31 @@ experimental row from the table above. Preview BF (0.30); activeBf ~60 for
 the synthetic sets, 408 for real 512. gpuMs is the first reconstruct (launch-
 dominated at small BF counts; the 512-real row is the bandwidth-relevant one).
 
-| scan | mode | resident | gpuMs | max abs dphase vs full | rms | phase span |
+| scan | mode | resident | gpuMs | max abs dphase vs old n x n baseline | rms | phase span |
 |---|---|---|---|---|---|---|
-| 128 | full | 8.0 MB | 4.7 | — | — | 1.002 rad |
-| 128 | herm | 4.1 MB | 4.5 | **0.0** | 0.0 | |
-| 128 | herm16 | 2.0 MB | 4.8 | 7.0e-4 (0.07 % span) | 1.5e-4 | |
-| 256 | full | 31.5 MB | 8.5 | — | — | 0.813 rad |
-| 256 | herm | 15.9 MB | 5.8 | **0.0** | 0.0 | |
-| 256 | herm16 | 7.9 MB | 5.3 | 1.3e-3 (0.16 % span) | 3.1e-4 | |
-| 512 (real) | full | 856 MB | 18.2 | — | — | 0.075 rad |
-| 512 (real) | herm | 429 MB | 16.4 | **0.0** | 0.0 | |
-| 512 (real) | herm16 | 215 MB | 12.6 | 1.2e-4 (0.16 % span) | 2.6e-5 | |
-| 1024 | full | 495 MB | 13.1 | — | — | 0.459 rad |
-| 1024 | herm | 248 MB | 12.5 | **0.0** | 0.0 | |
-| 1024 | herm16 | 124 MB | 11.6 | 6.2e-3 (1.35 % span) | 1.3e-3 | |
+| 128 | old n x n baseline | 8.0 MB | 4.7 | — | — | 1.002 rad |
+| 128 | Exact / herm | 4.1 MB | 4.5 | **0.0** | 0.0 | |
+| 128 | Fast preview / herm16 | 2.0 MB | 4.8 | 7.0e-4 (0.07 % span) | 1.5e-4 | |
+| 256 | old n x n baseline | 31.5 MB | 8.5 | — | — | 0.813 rad |
+| 256 | Exact / herm | 15.9 MB | 5.8 | **0.0** | 0.0 | |
+| 256 | Fast preview / herm16 | 7.9 MB | 5.3 | 1.3e-3 (0.16 % span) | 3.1e-4 | |
+| 512 (real) | old n x n baseline | 856 MB | 18.2 | — | — | 0.075 rad |
+| 512 (real) | Exact / herm | 429 MB | 16.4 | **0.0** | 0.0 | |
+| 512 (real) | Fast preview / herm16 | 215 MB | 12.6 | 1.2e-4 (0.16 % span) | 2.6e-5 | |
+| 1024 | old n x n baseline | 495 MB | 13.1 | — | — | 0.459 rad |
+| 1024 | Exact / herm | 248 MB | 12.5 | **0.0** | 0.0 | |
+| 1024 | Fast preview / herm16 | 124 MB | 11.6 | 6.2e-3 (1.35 % span) | 1.3e-3 | |
 
 Conclusions:
 
-- **herm is bit-exact at every supported size** (128/256/512/1024, synthetic
-  and real data) and never slower. Safe as the unconditional default.
-- **herm16 error grows with scan size**: 0.07 % of span at 128 up to 1.35 %
+- **Exact / herm is bit-exact at every supported size** (128/256/512/1024,
+  synthetic and real data) and never slower. Safe as the unconditional default.
+- **Fast preview / herm16 error grows with scan size**: 0.07 % of span at 128 up to 1.35 %
   at 1024. Cause: one snorm16 scale per BF pixel spans the whole q-plane, and
   the dynamic range inside G(q,k) (DC-dominated peak vs weak high-q tail)
   widens with n, so a single per-pixel scale under-resolves the tail.
-  Recommendation: herm16 is comfortably below shot noise up to 512; at 1024
-  treat it as a preview mode, or implement **per-q-row block scales**
+  Recommendation: Fast preview is comfortably below shot noise up to 512; at
+  1024 treat it as preview-only, or implement **per-q-row block scales**
   (n scales per BF pixel instead of 1, +0.4 % memory) to pull the error back
   down — noted as the follow-up for whoever extends the quantization.
 - Repro: masters under `/home/owner/ssd/tmp/claude-1000/ssb_sweep/`, harness
@@ -215,8 +253,77 @@ Conclusions:
 - **Flattened scan input**: verified `(N, det, det)` works end to end -
   square scan inferred (or `scan_shape=` explicit) before `g_shape` is written.
 - **Corrected-calibration visual A/B** (scan sampling fixed to 10.4 A,
-  refit C10 383 nm / C12 79 nm / phi12 80 deg): full vs herm16 phase images
-  indistinguishable; difference map is structureless noise, max 1.24e-4 rad
-  (0.16 % of span), rms 2.7e-5 rad (0.035 %). full 856 MB / 13.8 ms vs herm16
-  215 MB / 14.0 ms at 408 BF. Caution from the fit: C10 and C12 landed near
-  the +-400 / 100 nm search bounds - widen the search when refitting.
+  refit C10 383 nm / C12 79 nm / phi12 80 deg): old n x n baseline vs Fast
+  preview phase images indistinguishable; difference map is structureless
+  noise, max 1.24e-4 rad (0.16 % of span), rms 2.7e-5 rad (0.035 %).
+  Old n x n baseline 856 MB / 13.8 ms vs Fast preview 215 MB / 14.0 ms at
+  408 BF. Caution from the fit: C10 and C12 landed near the +-400 / 100 nm
+  search bounds - widen the search when refitting.
+
+## Object-redraw fast path ported from CUDA (2026-07-17 late)
+
+The CUDA team's overnight identity - `mean_bf(ifft2(corrected_bf)) ==
+ifft2(mean_bf(corrected_bf))` - ported to the WebGPU drag path: sum the
+gamma-corrected G(q,k) over BF pixels in Fourier space (one bandwidth-bound
+pass per chunk), then ONE 2D inverse FFT + one atan2 pass, instead of two FFT
+passes + atan2 per BF pixel.
+
+Measured (512x512 experimental folder, M-series, herm storage, 408 active BF):
+
+| path | per-reconstruct | estimator |
+|---|---|---|
+| exact per-BF (before / loss commits) | 18 ms | mean(angle(object)) |
+| object fast path (drags, default now) | **7-8 ms (2.5x)** | angle(mean(object)) - same as Python `SSB.result()` |
+
+Correctness: fast vs exact at identical state corr 0.9965; fast vs the Python
+CUDA `result()` object phase corr 0.997 (better than the exact mean-phase
+path's 0.9916, because the estimator now MATCHES the backend reference).
+Loss commits (slider release at full BF) always use the exact per-BF path -
+`mean(angle)` variance needs per-BF phases.
+
+Debug war story worth keeping: an initial "the fast path is broken"
+conclusion (corr 0.3) was a BASELINE ERROR - comparing a 408-BF preview
+subset against the full-13137-BF reference; the exact path scored the same
+0.379 against that wrong baseline. Rule: when validating an estimator change,
+hold BF subset, aberrations, and estimator definition fixed and compare
+apples-to-apples first. Opt-out: `globalThis.__QUANTEM_SSB_OBJ_FAST__ = false`.
+Also gained: `__QUANTEM_SSB_OBJ_ONLY_CHUNK__` chunk-isolation debug toggle.
+
+### Object fast path across all sizes (same session)
+
+Initial reconstruct, herm storage, preview BF, M-series (synthetic folders for
+128/256/1024 carry only ~60 active BF; the real 512 row carries 408):
+
+| scan | exact path | object fast path | note |
+|---|---|---|---|
+| 128 (61 BF) | 4.5 ms | 7.1 ms | tiny-BF regime: fixed FFT/dispatch overhead dominates, no win |
+| 256 (60 BF) | 5.8 ms | 6.6 ms | parity |
+| 512 real (408 BF) | 18 ms | **7.8 ms (2.3x)** | the win scales with BF count |
+| 1024 (59 BF) | 12.5 ms | 12.4 ms | parity at synthetic BF; expect large win at real BF counts |
+
+The speedup comes from removing two FFT passes + atan2 PER BF PIXEL, so it
+grows linearly with active BF count. At <100 BF both paths are launch-bound
+and equal; potential refinement: auto-select exact path below ~100 active BF
+(both are instant there, so not urgent).
+
+### Real-data full-BF result (the number that matters)
+
+Re-measured with REAL pointer drags on the 512x512x192x192 experimental
+dataset (19.3 GB), drag-BF at 1.0 = all 13137 BF (3418 aperture-active),
+recorder capturing every reconstruct (24 in one drag):
+
+| path | per-reconstruct | FPS |
+|---|---|---|
+| exact per-BF + loss (commits) | 112-127 ms | ~8 |
+| **object fast path (drags)** | **18-23 ms (median ~20)** | **~50** |
+
+**5.6x at real full BF.** 20 ms for 3.6 GB of herm G reads = ~180 GB/s -
+right at M-class unified-memory bandwidth, i.e. the fast path is now
+bandwidth-floor-limited, which is as fast as this storage layout can go.
+Earlier suspect 4-8 ms "full-BF" readings were stale-stash sampling
+artifacts; only synthetic input events miss the drag handler - real pointer
+drags hit the fast path correctly, so there is NO routing gap for users.
+Rule reinforced: never quote FPS from small/synthetic BF counts - the
+per-size table above with ~60-BF synthetic folders shows path parity only
+because both are launch-bound there; real BF counts are where the identity
+pays.
