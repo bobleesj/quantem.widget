@@ -722,6 +722,8 @@ const CONTRAST_PRESETS = [
   { value: "1-99", label: "1–99", low: 1, high: 99 },
   { value: "2-98", label: "2–98", low: 2, high: 98 },
   { value: "3-97", label: "3–97", low: 3, high: 97 },
+  { value: "5-95", label: "5–95", low: 5, high: 95 },
+  { value: "10-90", label: "10–90", low: 10, high: 90 },
 ] as const;
 const IDENTITY_PALETTE = ["#2e7d32", "#c62828", "#d81b60", "#1565c0", "#f9a825", "#6a1b9a"] as const;
 
