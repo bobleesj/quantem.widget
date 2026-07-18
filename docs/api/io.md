@@ -110,7 +110,7 @@ the frame shift, and a small scan halo, then sample the final ROI from the
 local patch. The detector counts remain raw; drift stays as scan-position
 metadata.
 
-On the collaboratorP native-detector ROI loader timing check, loading ten full frames
+On a native-detector ROI loader timing check, loading ten full frames
 before cropping took `9.66 s` and used an `18.0 GiB` temporary per frame.
 Loading the needed `133 x 133` patch took `2.44 s` and used a `1.215 GiB`
 temporary per frame. The current region loader is CUDA-only; use

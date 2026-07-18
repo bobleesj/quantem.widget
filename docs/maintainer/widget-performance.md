@@ -294,7 +294,7 @@ needs its own signoff.
 
 ### Show2D local-panel stack signoff (2026-07-09)
 
-Private real-data signoff used one collaboratorD Velox EDS acquisition with a
+Private real-data signoff used one collaborator Velox EDS acquisition with a
 `131 x 234 x 237` uint16 HAADF stack and four `234 x 237` elemental maps. The
 source stayed outside git. Standalone artifacts were served over local HTTP and
 driven with headless Playwright Chromium because in-app browser control was not
