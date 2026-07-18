@@ -11363,13 +11363,6 @@ function Show3D() {
       }
       return true;
     }
-    if (sidecarGpuReadyRef.current && renderSidecarGpuFrame(drawIdx, reason)) {
-      if (updateDisplayState) {
-        if (displaySliceIdx !== drawIdx) setDisplaySliceIdx(drawIdx);
-        if (playbackUiSliceIdx !== drawIdx) setPlaybackUiSliceIdx(drawIdx);
-      }
-      return true;
-    }
     setGpuDisplayVisible(false);
     const composite = sidecarCompositeReadyRef.current
       ? sidecarCompositeFrameCacheRef.current.get(drawIdx)
@@ -11390,6 +11383,13 @@ function Show3D() {
         d.lastPaintMs = d.lastRenderMs;
         d.lastFrame = drawIdx;
         d.sidecarCompositeCacheFrames = sidecarCompositeFrameCacheRef.current.size;
+      }
+      return true;
+    }
+    if (sidecarGpuReadyRef.current && renderSidecarGpuFrame(drawIdx, reason)) {
+      if (updateDisplayState) {
+        if (displaySliceIdx !== drawIdx) setDisplaySliceIdx(drawIdx);
+        if (playbackUiSliceIdx !== drawIdx) setPlaybackUiSliceIdx(drawIdx);
       }
       return true;
     }
