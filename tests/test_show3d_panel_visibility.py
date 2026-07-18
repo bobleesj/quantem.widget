@@ -146,6 +146,24 @@ def test_show3d_controls_collapsed_roundtrips_state_and_html(tmp_path: pathlib.P
     assert "controls_collapsed" in html
 
 
+def test_show3d_paged_frontend_preserves_view_transform() -> None:
+    frontend = pathlib.Path("js/show3d/index.tsx").read_text()
+
+    # C1: page switching should repaint the newly active page while keeping the
+    # scientist's zoom/pan inspection view, not reset it to the full image.
+    assert "const resetPagedViewTransform" not in frontend
+    assert "const preparePagedPageChange" in frontend
+    assert "resetPagedViewTransform()" not in frontend
+    page_change_helper = frontend.split("const preparePagedPageChange", 1)[1].split(
+        "const previousActivePageStartRef",
+        1,
+    )[0]
+    assert "setGpuDisplayVisible(false)" not in page_change_helper
+    assert "zoom: 1" not in page_change_helper
+    assert "panX: 0" not in page_change_helper
+    assert "panY: 0" not in page_change_helper
+
+
 def test_show3d_ui_mode_presets_and_overrides() -> None:
     interactive = Show3D(*_panels()[:2], verbose=False)
     assert interactive.show_zoom_indicator is False
