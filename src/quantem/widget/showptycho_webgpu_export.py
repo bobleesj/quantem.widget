@@ -770,8 +770,14 @@ def export_showptycho_webgpu_folder(
     )
     (out_path / "README.md").write_text(
         "# ShowPtycho WebGPU Folder\n\n"
-        "Open this folder through `quantem showptycho <folder>` or another local HTTP server. "
-        "When available, the browser reads the detector-major BF-column count companion under "
+        "Two ways to open this review - no install needed for the first:\n\n"
+        "1. **Double-click** `index.html` in Chrome or Edge, click **Open data folder**, "
+        "and select this folder. No server, no Python, no terminal. "
+        "(If it opens in Safari, drag `index.html` onto Chrome instead.)\n"
+        "2. **CLI**: `quantem showptycho <this folder>` serves it and opens the browser "
+        "automatically (needs the `quantem-widget` package). Any other Range-capable "
+        "static server works too.\n\n"
+        "The browser reads the detector-major BF-column count companion under "
         "`source/` and builds BF reducers transiently in GPU memory. The original compressed "
         "HDF5 files are also preserved as paper truth and fallback input. The folder "
         "intentionally does not store `g_bf.c64`, reference `.f32` images, or detector-binned data.\n",

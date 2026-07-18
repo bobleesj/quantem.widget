@@ -37,6 +37,43 @@ class RangeRequestHandler(http.server.BaseHTTPRequestHandler):
     def do_HEAD(self) -> None:
         self._serve(send_body=False)
 
+    def _saves_target(self):
+        """Resolve a writable path strictly under <root>/saves, or None."""
+        rel = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path).lstrip("/")
+        rel = posixpath.normpath(rel)
+        if not rel.startswith("saves/") or ".." in rel.split("/"):
+            return None
+        target = (self.root / rel).resolve()
+        saves_root = (self.root / "saves").resolve()
+        if saves_root != target and saves_root not in target.parents:
+            return None
+        return target
+
+    def do_PUT(self) -> None:
+        # Viewer save write-back: persists review states (JPEG + saves.json)
+        # into the export folder so saves survive relaunch. saves/ only.
+        target = self._saves_target()
+        if target is None:
+            self.send_error(403, "writes are restricted to saves/")
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length) if length else b""
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_bytes(body)
+        tmp.replace(target)
+        self.send_response(204)
+        self.end_headers()
+
+    def do_DELETE(self) -> None:
+        target = self._saves_target()
+        if target is None or not target.is_file():
+            self.send_error(404)
+            return
+        target.unlink()
+        self.send_response(204)
+        self.end_headers()
+
     def do_GET(self) -> None:
         self._serve(send_body=True)
 
