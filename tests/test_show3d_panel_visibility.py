@@ -170,6 +170,8 @@ def test_show3d_paged_frontend_preserves_view_transform() -> None:
     assert "ctx.getImageData(0, 0, targetW, targetH)" in sidecar_viewport_helper
     assert "if (rgba[p + 3] !== 0) continue;" in sidecar_viewport_helper
     assert 'const bg = themeColors.bg || interPanelGapColor || "#fff";' in sidecar_viewport_helper
+    assert "const drawView = clampPanelViewForDraw(panelState, outPanelWFloat, outPanelHFloat);" in sidecar_viewport_helper
+    assert "effectivePanX" in sidecar_viewport_helper
 
     manual_commit_helper = frontend.split("const commitSlice = (idx: number) => {", 1)[1].split(
         "const handleLoopSliderMouseDown",
