@@ -12975,9 +12975,9 @@ function Show3D() {
     if (
       offline &&
       sidecarMode &&
-      sidecarRamReadyRef.current &&
       !isRgb &&
-      sidecarViewTransformActive()
+      sidecarViewTransformActive() &&
+      sidecarRamReadyRef.current
     ) {
       if (transformRenderRafRef.current !== null) {
         window.cancelAnimationFrame(transformRenderRafRef.current);
@@ -18730,7 +18730,7 @@ function Show3D() {
             {/* Per-panel "best frame" stars. One gold ★ button top-right of
                 each panel. Click toggles the star on the currently displayed
                 slice for THAT panel. Programmatic API: widget.star_panel(i). */}
-	            {panelChromeVisible && visiblePanelIndices.map((i, slot) => {
+	            {panelChromeVisible && hasPanelChoices && visiblePanelIndices.map((i, slot) => {
               const n = Math.max(1, visiblePanelCount || 1);
               const cols = panelColsForCount(n);
               const gap = n > 1 ? (panelGapPx) : 0;
