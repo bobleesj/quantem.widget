@@ -108,6 +108,10 @@ label, histogram, and slider to stay synchronized at the selected FPS.
 - Press Play/Pause at 30 FPS and verify image and slider stay synchronized.
 - Increase FPS and record whether the slider lags the image.
 - Drag the frame slider slowly and quickly.
+- [x] **S3D-PLAY-4**: In an exported/offline multi-panel Show3D, zoom or pan a
+  packed panel, press Play, then keep dragging while playback is active. Verify
+  the current frame repaints in the zoomed viewport without touching the
+  histogram or any other control.
 - [x] **S3-DN-3**: Start with browser-side Gaussian denoise enabled, scrub from
   the initial frame to a later frame, and verify both canvases remain visibly
   smooth rather than briefly or permanently showing raw pixels.
