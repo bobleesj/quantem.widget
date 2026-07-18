@@ -180,6 +180,14 @@ def test_show3d_paged_frontend_preserves_view_transform() -> None:
     assert 'drawSidecarBitmapFrame(next, false, "scrub-commit")' in manual_commit_helper
     assert 'drawSidecarBitmapFrame(next, false, "scrub-commit-confirm")' in manual_commit_helper
 
+    sidecar_draw_helper = frontend.split(
+        "const drawSidecarBitmapFrame",
+        1,
+    )[1].split("const previousSidecarPagePaintStartRef", 1)[0]
+    assert "getSidecarPaintScratchContext(canvasW, canvasH)" in sidecar_draw_helper
+    assert "paintSidecarU8ViewportToContext(paintCtx, drawIdx, canvasW, canvasH)" in sidecar_draw_helper
+    assert "ctx.clearRect(0, 0, canvasW, canvasH)" not in sidecar_draw_helper
+
 
 def test_show3d_ui_mode_presets_and_overrides() -> None:
     interactive = Show3D(*_panels()[:2], verbose=False)
