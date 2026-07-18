@@ -17170,10 +17170,22 @@ function Show3D() {
       window.clearTimeout(sidecarSliceCommitTimerRef.current);
       sidecarSliceCommitTimerRef.current = null;
     }
+    const sidecarDirectCommit = offline && sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current || sidecarRamReadyRef.current) && !isRgb;
+    if (sidecarDirectCommit) {
+      playbackIdxRef.current = next;
+      drawSidecarBitmapFrame(next, false, "scrub-commit");
+      updatePlaybackLiveControls(next);
+    }
     setLiveSliceIdx(next);
     setDisplaySliceIdx(next);
     setPlaybackUiSliceIdx(next);
     setSliceIdx(next);
+    if (sidecarDirectCommit) {
+      requestAnimationFrame(() => {
+        drawSidecarBitmapFrame(next, false, "scrub-commit-confirm");
+        updatePlaybackLiveControls(next);
+      });
+    }
   };
   const handleLoopSliderMouseDown = (e: React.MouseEvent<HTMLSpanElement>) => {
     const target = e.target as HTMLElement;
