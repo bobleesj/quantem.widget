@@ -18390,7 +18390,7 @@ function Show3D() {
                     width: `${(panelW / Math.max(1, canvasW)) * 100}%`,
                     height: `${(panelH / Math.max(1, canvasH)) * 100}%`,
                     boxSizing: "border-box",
-                    boxShadow: `inset 0 0 0 3px ${themeColors.accent}, inset 0 0 0 5px rgba(0,0,0,0.78)`,
+                    boxShadow: `inset 0 0 0 3px ${themeColors.accent}`,
                     pointerEvents: "none",
                     zIndex: 9,
                   }}
