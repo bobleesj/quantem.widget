@@ -11084,11 +11084,19 @@ function Show3D() {
     const rows = Math.ceil(visibleCountLocal / cols);
     const gap = visibleCountLocal > 1 ? Math.max(0, Math.round(panelGapPx)) : 0;
     const sourcePanelW = Math.max(1, Math.round(panelWidthPx || Math.floor(width / Math.max(1, nPanels || 1)) || width));
-    const img = ctx.createImageData(targetW, targetH);
+    let img: ImageData;
+    try {
+      img = ctx.getImageData(0, 0, targetW, targetH);
+    } catch {
+      img = ctx.createImageData(targetW, targetH);
+    }
+    if (img.width !== targetW || img.height !== targetH) {
+      img = ctx.createImageData(targetW, targetH);
+    }
     const rgba = img.data;
-    const bg = interPanelGapColor || themeColors.bg || "#000";
+    const bg = themeColors.bg || interPanelGapColor || "#fff";
     const parsedBg = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(bg.trim());
-    let bgR = 0, bgG = 0, bgB = 0;
+    let bgR = 255, bgG = 255, bgB = 255;
     if (parsedBg) {
       const raw = parsedBg[1];
       const hex = raw.length === 3 ? raw.split("").map((ch) => ch + ch).join("") : raw;
@@ -11098,6 +11106,7 @@ function Show3D() {
       bgB = value & 255;
     }
     for (let p = 0; p < rgba.length; p += 4) {
+      if (rgba[p + 3] !== 0) continue;
       rgba[p] = bgR;
       rgba[p + 1] = bgG;
       rgba[p + 2] = bgB;
