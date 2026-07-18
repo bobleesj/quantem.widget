@@ -180,7 +180,7 @@ subpixel sampler in local patch coordinates. Do not save the sampled patch as a
 new raw acquisition; drift is scan-position metadata, and detector counts stay
 physically unchanged.
 
-Measured on a native-detector collaboratorP 5D-STEM ROI loader timing check
+Measured on a native-detector 5D-STEM ROI loader timing check
 (`10 x 128 x 128 x 192 x 192`, CUDA, no detector binning):
 
 | Path | Loader wall time | Max loaded CuPy buffer |

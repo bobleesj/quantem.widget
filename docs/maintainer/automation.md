@@ -143,8 +143,8 @@ Show3D GIF presentation smoke writes:
 - `index.html`: PowerPoint/email-oriented GIF preview report.
 - `report.json`: source, shape, native size, FPS, playback mode, quality tier,
   export time, GIF dimensions, frame count, file size, and frame-delta metric.
-- `show3d-collaboratorC-timeseries-*.gif`: low/medium/high GIF exports when the local
-  collaboratorC time-series folder is present, otherwise the selected fallback source.
+- `show3d-timeseries-*.gif`: low/medium/high GIF exports when the local
+  reference time-series folder is present, otherwise the selected fallback source.
 
 ## Browser Cleanup
 
@@ -264,9 +264,9 @@ frame count, or quality tiers` means adjust `--crop-size`, `--frames`, or
 `--qualities` before spending time on the full export. Use `--max-native-mb` and
 `--max-work-mb` to tighten or relax those dry-run warnings.
 
-The default `auto` source uses local collaboratorC Show3D PNG/TIFF time-series frames
+The default `auto` source uses local reference Show3D PNG/TIFF time-series frames
 when they are available, then falls back to the public tutorial Show3D data, and
-finally to a tiny synthetic CI fallback. Use `--source collaboratorC`, `--source
+finally to a tiny synthetic CI fallback. Use `--source timeseries`, `--source
 tutorial`, or `--source synthetic` when the report must be explicit.
 
 The report is multi-panel by default (`Raw`, `Smoothed`, `Change`) so it checks
