@@ -9678,7 +9678,7 @@ function Show3D() {
       // entirely. The two paths fought on Mac/retina (Linux didn't expose it),
       // producing the "play is flaky while drag is smooth" symptom verified
       // 2026-05-24 on sample_device_trial.html.
-      if (offline && !offlineDirectRender) {
+      if (offline && !offlineDirectRender && !offlinePackedPanelPlaybackUsesStaticCanvas) {
         setGpuDisplayVisible(false);
         const d = show3dPerfDebug();
         if (d) {
@@ -10722,26 +10722,6 @@ function Show3D() {
     };
 
     if (offline) {
-      if (
-        sidecarViewTransformActive() &&
-        imageRotation % 4 === 0 &&
-        !flipRows &&
-        !flipCols &&
-        !sidecarMode &&
-        !isRgb &&
-        compareMode === "off" &&
-        !frameTransformActive()
-      ) {
-        try {
-          if (renderCurrentPanelTransformDirect()) {
-            const d = show3dPerfDebug();
-            if (d) d.lastStaticPaintSkipReason = "active-view-transform";
-            return;
-          }
-        } catch (err) {
-          console.warn("[Show3D] WebGPU transform refresh failed during offline paint; using retained 2D canvas", err);
-        }
-      }
       const canvas = canvasRef.current;
       const offscreen = mainOffscreenRef.current;
       const imgData = mainImgDataRef.current;
