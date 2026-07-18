@@ -1721,6 +1721,10 @@ async function fetchRangeBytes(url: string, byteOffset: number, byteLength: numb
   return bytes.byteLength === byteLength ? bytes : bytes.slice(0, byteLength);
 }
 
+async function fetchPrefixBytes(url: string, byteLength: number): Promise<Uint8Array> {
+  return fetchRangeBytes(url, 0, byteLength);
+}
+
 function readBE32(bytes: Uint8Array, off: number): number {
   return ((bytes[off] << 24) | (bytes[off + 1] << 16) | (bytes[off + 2] << 8) | bytes[off + 3]) >>> 0;
 }
@@ -1749,7 +1753,10 @@ type ParsedChunkIndex = {
 async function fetchChunkIndex(index: H5ChunkIndexSource, fallbackUrl: string): Promise<ParsedChunkIndex> {
   const indexUrl = index.url || index.path;
   if (!indexUrl) throw new Error("HDF5 chunk index is missing a URL.");
-  const idxBytes = await readSourceBytes(indexUrl);
+  const expectedBytes = Math.max(0, Math.round(index.frames || 0)) * 16;
+  const idxBytes = expectedBytes > 0
+    ? await fetchPrefixBytes(indexUrl, expectedBytes)
+    : await readSourceBytes(indexUrl);
   const buf = idxBytes.buffer.slice(idxBytes.byteOffset, idxBytes.byteOffset + idxBytes.byteLength);
   const frames = Math.floor(buf.byteLength / 16);
   const dv = new DataView(buf);

@@ -28,6 +28,23 @@ def _is_pil_frame_sequence(data: Any) -> bool:
     return all(isinstance(frame, Image.Image) for frame in data)
 
 
+def _patched_cpu_writer() -> Any | None:
+    gpu_writer = getattr(_gpu_movie, "_write_mp4", None) if _gpu_movie is not None else None
+    gpu_writer_module = str(getattr(gpu_writer, "__module__", ""))
+    if callable(gpu_writer) and not gpu_writer_module.startswith("quantem.gpu."):
+        return gpu_writer
+    return None
+
+
+def _min_movie_edge(data: Any) -> int:
+    shape = getattr(data, "shape", None)
+    if shape is None and isinstance(data, (list, tuple)) and data:
+        shape = getattr(data[0], "shape", None)
+    if shape is None or len(shape) < 2:
+        return 0
+    return int(min(shape[-2], shape[-1]))
+
+
 def save_gif(data: MovieData, path: str | Path, *, fps: float = 12.0, **kwargs: Any) -> Path:
     if _is_pil_frame_sequence(data) and not kwargs:
         from quantem.widget.render import gif as gif_utils
@@ -47,15 +64,29 @@ def save_mp4(
     **kwargs: Any,
 ) -> Path:
     if _is_pil_frame_sequence(data) and not kwargs:
-        gpu_writer = getattr(_gpu_movie, "_write_mp4", None) if _gpu_movie is not None else None
-        gpu_writer_module = str(getattr(gpu_writer, "__module__", ""))
-        if callable(gpu_writer) and not gpu_writer_module.startswith("quantem.gpu."):
+        gpu_writer = _patched_cpu_writer()
+        if gpu_writer is not None:
             return gpu_writer(list(data), path, fps=fps, crf=crf)
         from quantem.widget.render import gif as gif_utils
 
         return gif_utils.write_mp4(list(data), path, fps=fps, crf=crf)
     if _gpu_movie is None:
         raise ImportError("array MP4 export requires quantem.gpu; Show3D-rendered MP4 frames do not")
+    backend = str(kwargs.get("backend", "auto")).lower()
+    if backend == "auto" and _patched_cpu_writer() is not None:
+        try_cuda = False
+        try:
+            from quantem.gpu.movie import cuda_mp4
+
+            try_cuda = bool(_min_movie_edge(data) >= 256 and cuda_mp4.is_available())
+        except ImportError:
+            try_cuda = False
+        if try_cuda:
+            try:
+                return _gpu_movie.save_mp4(data, path, fps=fps, crf=crf, **{**kwargs, "backend": "cuda"})
+            except Exception:
+                pass
+        return _gpu_movie.save_mp4(data, path, fps=fps, crf=crf, **{**kwargs, "backend": "cpu"})
     return _gpu_movie.save_mp4(data, path, fps=fps, crf=crf, **kwargs)
 
 
