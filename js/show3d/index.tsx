@@ -18383,16 +18383,6 @@ function Show3D() {
               height: "auto",
               overscrollBehavior: "contain",
               touchAction: "none",
-              "&:hover .show3d-panel-hide-button, &:focus-within .show3d-panel-hide-button": {
-                opacity: 1,
-                pointerEvents: "auto",
-                transform: "translateY(0)",
-              },
-              "@media (hover: none), (pointer: coarse)": {
-                "& .show3d-panel-hide-button": {
-                  display: "none",
-                },
-              },
               ...(reorderMode ? {
                 "@keyframes show3d-reorder-jiggle": {
                   "0%": { rotate: "-0.45deg" },
@@ -18702,52 +18692,6 @@ function Show3D() {
                 >
                   {isStarredHere ? "★" : "☆"}
                 </button>
-              );
-            })}
-            {panelChromeVisible && hasPanelChoices && visiblePanelIndices.map((panel, slot) => {
-              const n = Math.max(1, visiblePanelCount || 1);
-              const cols = panelColsForCount(n);
-              const gap = n > 1 ? (panelGapPx) : 0;
-              const panelW = (canvasW - gap * (cols - 1)) / cols;
-              const panelH = (canvasH - gap * (Math.ceil(n / cols) - 1)) / Math.ceil(n / cols);
-              const panelLeft = (slot % cols) * (panelW + gap);
-              const panelTop = Math.floor(slot / cols) * (panelH + gap);
-              const disabled = visiblePanelCount <= 1;
-              const label = disabled ? `Cannot hide the last visible panel` : `Hide ${panelLabel(panel)}`;
-              return (
-                <IconButton
-                  key={`panel-hide-${panel}`}
-                  className="show3d-panel-hide-button"
-                  size="small"
-                  disabled={disabled}
-                  onMouseDown={(event) => event.stopPropagation()}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setPanelHidden(panel, true);
-                  }}
-                  aria-label={label}
-                  title={label}
-                  sx={{
-                    position: "absolute",
-                    top: `${((panelTop + 5) / Math.max(1, canvasH)) * 100}%`,
-                    left: `${((panelLeft + 5) / Math.max(1, canvasW)) * 100}%`,
-                    width: 22,
-                    height: 22,
-                    p: 0,
-                    opacity: 0,
-                    transform: "translateY(-3px)",
-                    transition: "opacity 120ms ease, transform 120ms ease, background-color 120ms ease, color 120ms ease",
-                    color: disabled ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.75)",
-                    bgcolor: "rgba(0,0,0,0.22)",
-                    pointerEvents: "none",
-                    "&:hover, &:focus-visible": {
-                      bgcolor: "rgba(0,0,0,0.42)",
-                      color: "rgba(255,255,255,0.95)",
-                    },
-                  }}
-                >
-                  <VisibilityOffIcon sx={{ fontSize: 15 }} />
-                </IconButton>
               );
             })}
             {panelChromeVisible && reorderMode && (nPanels || 1) > 1 && visiblePanelIndices.map((panel, slot) => {
