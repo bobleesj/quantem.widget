@@ -19,6 +19,8 @@ import IconButton from "@mui/material/IconButton";
 import Switch from "@mui/material/Switch";
 import Select from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
+import Menu from "@mui/material/Menu";
+import Badge from "@mui/material/Badge";
 import Tooltip from "@mui/material/Tooltip";
 import LinearProgress from "@mui/material/LinearProgress";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
@@ -35,7 +37,7 @@ import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, GPUColormapEngine, getGPU
 import { fft2d, nextPow2, fftshift, computeMagnitude, applyHannWindow2D, getWebGPUFFT, WebGPUFFT } from "../fft";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI } from "../figure";
 import { computeHistogramFromBytes } from "../stats";
-import { ShowPtychoWebGPUSSB, type WebGPULoadProgress } from "./webgpu-ssb";
+import { ShowPtychoWebGPUSSB, deleteShowPtychoFolderFile, readShowPtychoFolderBytes, readShowPtychoFolderJson, setShowPtychoLocalDirectory, setShowPtychoLocalFiles, showPtychoFolderWritable, showPtychoNeedsLocalSource, writeShowPtychoFolderFile, type WebGPULoadProgress } from "./webgpu-ssb";
 
 /* ================================================================
    Design tokens (matching Live / Show2D)
@@ -61,6 +63,9 @@ function compactButton(tc: ThemeColors) {
     py: 0.25,
     px: 1,
     minWidth: 0,
+    boxSizing: "border-box",
+    whiteSpace: "nowrap",
+    flexShrink: 0,
     "&.Mui-disabled": { color: tc.textMuted, borderColor: tc.border },
   };
 }
@@ -69,6 +74,8 @@ function compactIconButton(tc: ThemeColors, color?: string) {
   return {
     width: 26,
     height: 26,
+    minWidth: 26,
+    flex: "0 0 26px",
     p: 0.25,
     border: `1px solid ${color || tc.border}`,
     borderRadius: "4px",
@@ -83,6 +90,26 @@ function compactIconButton(tc: ThemeColors, color?: string) {
       color: tc.textMuted,
       borderColor: tc.border,
       opacity: 0.45,
+    },
+  };
+}
+
+function compactBareIconButton(tc: ThemeColors, color?: string) {
+  return {
+    width: 22,
+    height: 22,
+    p: 0,
+    border: "none",
+    borderRadius: "50%",
+    color: color || tc.textMuted,
+    bgcolor: "transparent",
+    "&:hover": {
+      bgcolor: tc.controlBg,
+      color: color || tc.accent,
+    },
+    "&.Mui-disabled": {
+      color: tc.textMuted,
+      opacity: 0.32,
     },
   };
 }
@@ -360,6 +387,155 @@ function downloadBlob(blob: Blob, filename: string): void {
   a.click();
   a.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+let browserGifPaletteCache: Uint8Array | null = null;
+
+function asciiBytes(value: string): Uint8Array {
+  const out = new Uint8Array(value.length);
+  for (let i = 0; i < value.length; i++) out[i] = value.charCodeAt(i) & 0xff;
+  return out;
+}
+
+function u16Bytes(value: number): Uint8Array {
+  const v = Math.max(0, Math.min(65535, Math.round(value)));
+  return new Uint8Array([v & 0xff, (v >> 8) & 0xff]);
+}
+
+function concatUint8(parts: Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const part of parts) total += part.byteLength;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.byteLength;
+  }
+  return out;
+}
+
+function browserGifPalette(): Uint8Array {
+  if (browserGifPaletteCache) return browserGifPaletteCache;
+  const palette = new Uint8Array(256 * 3);
+  let idx = 0;
+  for (let r = 0; r < 6; r++) {
+    for (let g = 0; g < 6; g++) {
+      for (let b = 0; b < 6; b++) {
+        const j = idx * 3;
+        palette[j] = r * 51;
+        palette[j + 1] = g * 51;
+        palette[j + 2] = b * 51;
+        idx++;
+      }
+    }
+  }
+  const grayCount = 256 - idx;
+  for (let i = 0; idx < 256; idx++, i++) {
+    const v = grayCount <= 1 ? 0 : Math.round((i / (grayCount - 1)) * 255);
+    const j = idx * 3;
+    palette[j] = v;
+    palette[j + 1] = v;
+    palette[j + 2] = v;
+  }
+  browserGifPaletteCache = palette;
+  return palette;
+}
+
+function quantizeRgbaForBrowserGif(rgba: Uint8ClampedArray): Uint8Array {
+  const out = new Uint8Array(Math.floor(rgba.length / 4));
+  for (let i = 0, j = 0; i < out.length; i++, j += 4) {
+    const a = rgba[j + 3];
+    const r = a === 255 ? rgba[j] : Math.round((rgba[j] * a + 255 * (255 - a)) / 255);
+    const g = a === 255 ? rgba[j + 1] : Math.round((rgba[j + 1] * a + 255 * (255 - a)) / 255);
+    const b = a === 255 ? rgba[j + 2] : Math.round((rgba[j + 2] * a + 255 * (255 - a)) / 255);
+    const rq = Math.max(0, Math.min(5, Math.round(r / 51)));
+    const gq = Math.max(0, Math.min(5, Math.round(g / 51)));
+    const bq = Math.max(0, Math.min(5, Math.round(b / 51)));
+    out[i] = rq * 36 + gq * 6 + bq;
+  }
+  return out;
+}
+
+function gifLzwEncode(indices: Uint8Array): Uint8Array {
+  const minCodeSize = 8;
+  const clearCode = 1 << minCodeSize;
+  const endCode = clearCode + 1;
+  const codeSize = minCodeSize + 1;
+  const bytes: number[] = [];
+  let bitBuffer = 0;
+  let bitCount = 0;
+  const writeCode = (code: number) => {
+    bitBuffer |= code << bitCount;
+    bitCount += codeSize;
+    while (bitCount >= 8) {
+      bytes.push(bitBuffer & 0xff);
+      bitBuffer >>= 8;
+      bitCount -= 8;
+    }
+  };
+  writeCode(clearCode);
+  let sinceClear = 0;
+  for (let i = 0; i < indices.length; i++) {
+    if (sinceClear >= 250) {
+      writeCode(clearCode);
+      sinceClear = 0;
+    }
+    writeCode(indices[i]);
+    sinceClear++;
+  }
+  writeCode(endCode);
+  if (bitCount > 0) bytes.push(bitBuffer & 0xff);
+  return new Uint8Array(bytes);
+}
+
+function pushGifSubBlocks(parts: Uint8Array[], data: Uint8Array): void {
+  for (let offset = 0; offset < data.length; offset += 255) {
+    const chunk = data.subarray(offset, Math.min(offset + 255, data.length));
+    parts.push(new Uint8Array([chunk.length]));
+    parts.push(chunk);
+  }
+  parts.push(new Uint8Array([0]));
+}
+
+function encodeIndexedGif(width: number, height: number, frames: Uint8Array[], delayCs: number): Uint8Array {
+  if (width <= 0 || height <= 0 || frames.length === 0) {
+    throw new Error("GIF export needs at least one frame.");
+  }
+  const parts: Uint8Array[] = [
+    asciiBytes("GIF89a"),
+    u16Bytes(width),
+    u16Bytes(height),
+    new Uint8Array([0xf7, 0, 0]),
+    browserGifPalette(),
+    new Uint8Array([0x21, 0xff, 0x0b]),
+    asciiBytes("NETSCAPE2.0"),
+    new Uint8Array([0x03, 0x01, 0x00, 0x00, 0x00]),
+  ];
+  const delay = Math.max(1, Math.min(65535, Math.round(delayCs)));
+  for (const frame of frames) {
+    parts.push(new Uint8Array([0x21, 0xf9, 0x04, 0x04]));
+    parts.push(u16Bytes(delay));
+    parts.push(new Uint8Array([0, 0]));
+    parts.push(new Uint8Array([0x2c]));
+    parts.push(u16Bytes(0), u16Bytes(0), u16Bytes(width), u16Bytes(height));
+    parts.push(new Uint8Array([0, 8]));
+    pushGifSubBlocks(parts, gifLzwEncode(frame));
+  }
+  parts.push(new Uint8Array([0x3b]));
+  return concatUint8(parts);
+}
+
+function formatSavedBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${Math.round(bytes)} B`;
+}
+
+function makeShowPtychoExportFilename(mode: "gif" | "mp4", sweepParam: string, frameCount: number): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const target = slugPart(sweepParam.replace(/^bundle:/, "").replace(/^ho:/, ""));
+  return `showptycho_${target}_${frameCount}f_${stamp}.${mode}`;
 }
 
 function publishShowPtychoTestPhase(data: Float32Array, w: number, h: number): void {
@@ -886,23 +1062,112 @@ function HigherOrderPanel({
     setValues(prev => ({ ...prev, [`${name}_angle`]: deg }));
   }, [setValues]);
   const resetAll = React.useCallback(() => setValues({}), [setValues]);
-
-  const handleRowReset = (name: string, hasAngle: boolean) => {
+  const resetMag = React.useCallback((name: string, hasAngle: boolean) => {
     setValues(prev => {
       const next = { ...prev };
       const magKey = hasAngle ? `${name}_mag` : name;
       delete next[magKey];
-      if (hasAngle) delete next[`${name}_angle`];
       return next;
     });
-  };
+  }, [setValues]);
+  const resetAngle = React.useCallback((name: string) => {
+    setValues(prev => {
+      const next = { ...prev };
+      delete next[`${name}_angle`];
+      return next;
+    });
+  }, [setValues]);
+  const orderColumns = React.useMemo(() => [[2, 3], [4, 5]], []);
+  const renderEntry = React.useCallback((e: HOEntry) => {
+    const magKey = e.hasAngle ? `${e.name}_mag` : e.name;
+    const mag = values[magKey] ?? 0;
+    const ang = e.hasAngle ? (values[`${e.name}_angle`] ?? 0) : 0;
+    const isActive = Math.abs(mag) > 0;
+    const hasAngleOffset = e.hasAngle && Math.abs(ang) > 0;
+    return (
+      <Box
+        key={e.name}
+        sx={{
+          display: "flex", alignItems: "center", gap: `${SPACING.SM}px`,
+          py: 0.25,
+        }}
+      >
+        <Tooltip title={e.tooltip} placement="right" arrow>
+          <Typography
+            sx={{
+              ...typography.value,
+              color: isActive ? tc.accent : tc.textMuted,
+              minWidth: 34,
+            }}
+          >
+            {e.name}
+          </Typography>
+        </Tooltip>
+        {/* Cap slider width so rows stay compact in the two-column panel. */}
+        <Box sx={{ flex: 1, maxWidth: 140, minWidth: 80 }}>
+          <Slider
+            value={mag} min={-e.mag_max} max={e.mag_max} step={e.step_nm}
+            onChange={(_, v) => updateMag(magKey, v as number)}
+            size="small" sx={{ py: 0.5 }}
+          />
+        </Box>
+        <Typography sx={{
+          ...typography.value, color: isActive ? tc.accent : tc.textMuted,
+          minWidth: 58, textAlign: "right",
+        }}>
+          {formatHOValue(mag, e.mag_max, e.display_scale)} {e.unit_display}
+        </Typography>
+        <IconButton
+          size="small"
+          aria-label={`Reset ${e.name} magnitude`}
+          disabled={!isActive}
+          onClick={() => resetMag(e.name, e.hasAngle)}
+          sx={compactBareIconButton(tc)}
+        >
+          <RestartAltIcon sx={{ fontSize: 13 }} />
+        </IconButton>
+        {e.hasAngle && (
+          <>
+            <Box sx={{ flex: 1, maxWidth: 110, minWidth: 60 }}>
+              <Slider
+                value={ang} min={-180} max={180} step={1}
+                onChange={(_, v) => updateAngle(e.name, v as number)}
+                size="small" sx={{ py: 0.5 }}
+                disabled={!isActive}
+              />
+            </Box>
+            <Typography sx={{
+              ...typography.value,
+              color: hasAngleOffset ? tc.accent : tc.textMuted,
+              minWidth: 38, textAlign: "right",
+            }}>
+              {ang.toFixed(0)}°
+            </Typography>
+            <IconButton
+              size="small"
+              aria-label={`Reset ${e.name} angle`}
+              disabled={!hasAngleOffset}
+              onClick={() => resetAngle(e.name)}
+              sx={compactBareIconButton(tc)}
+            >
+              <RestartAltIcon sx={{ fontSize: 13 }} />
+            </IconButton>
+          </>
+        )}
+        {!e.hasAngle && (
+          // Filler to keep column alignment consistent across rows.
+          <Box sx={{ flex: 1, maxWidth: 176, minWidth: 0 }} />
+        )}
+      </Box>
+    );
+  }, [resetAngle, resetMag, tc, updateAngle, updateMag, values]);
 
   return (
     <Box sx={{
       display: "inline-flex",
       flexDirection: "column",
-      width: "fit-content",
-      maxWidth: "100%",
+      width: open ? "max-content" : "fit-content",
+      maxWidth: open ? "none" : "100%",
       border: `1px solid ${tc.border}`,
       bgcolor: tc.controlBg,
     }}>
@@ -928,105 +1193,54 @@ function HigherOrderPanel({
             </Box>
           </Tooltip>
         )}
-        {activeCount > 0 && (
-          <Tooltip title="Reset all higher-order sliders to 0.  Returns reconstruction to the fast C10/C12/phi12 path." placement="top" arrow>
-            <Button
-              size="small" variant="outlined"
+        <Tooltip title="Reset all higher-order sliders to 0.  Returns reconstruction to the fast C10/C12/phi12 path." placement="top" arrow>
+          <span>
+            <IconButton
+              size="small"
+              aria-label="Reset all higher-order aberrations"
+              disabled={activeCount === 0}
               onClick={(e) => { e.stopPropagation(); resetAll(); }}
-              sx={{ ...compactButton(tc), color: tc.textMuted, borderColor: tc.border }}
+              sx={compactBareIconButton(tc)}
             >
-              RESET HO
-            </Button>
-          </Tooltip>
-        )}
+              <RestartAltIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </span>
+        </Tooltip>
       </Box>
 
       {open && (
-        <Box sx={{ px: 1, py: 0.5, overflowX: "auto" }}>
-          {[2, 3, 4, 5].map((order) => (
-            <Box key={order} sx={{ mb: 0.5 }}>
-              <Typography sx={{
-                ...typography.labelSmall,
-                color: tc.textMuted, fontFamily: "monospace",
-                mt: order === 2 ? 0 : 0.5, mb: 0.25,
-              }}>
-                n = {order}
-              </Typography>
-              {HO_BY_ORDER[order].map(e => {
-                const magKey = e.hasAngle ? `${e.name}_mag` : e.name;
-                const mag = values[magKey] ?? 0;
-                const ang = e.hasAngle ? (values[`${e.name}_angle`] ?? 0) : 0;
-                const isActive = Math.abs(mag) > 0;
-                return (
-                  <Box
-                    key={e.name}
-                    sx={{
-                      display: "flex", alignItems: "center", gap: `${SPACING.SM}px`,
-                      py: 0.25,
-                    }}
-                  >
-                    <Tooltip title={e.tooltip} placement="right" arrow>
-                      <Typography
-                        onClick={() => handleRowReset(e.name, e.hasAngle)}
-                        sx={{
-                          ...typography.value,
-                          color: isActive ? tc.accent : tc.textMuted,
-                          minWidth: 34, cursor: "pointer",
-                          "&:hover": { color: tc.text, textDecoration: "line-through" },
-                        }}
-                      >
-                        {e.name}
-                      </Typography>
-                    </Tooltip>
-                    {/* Cap slider width so the rows don't stretch unreasonably
-                        on wide panels.  140 px matches the compact action-row
-                        dropdown width and leaves room for two sliders + two
-                        readouts per row without sprawl. */}
-                    <Box sx={{ flex: 1, maxWidth: 140, minWidth: 80 }}>
-                      <Slider
-                        value={mag} min={-e.mag_max} max={e.mag_max} step={e.step_nm}
-                        onChange={(_, v) => updateMag(magKey, v as number)}
-                        size="small" sx={{ py: 0.5 }}
-                      />
-                    </Box>
+        <Box sx={{ px: 1, py: 0.5, overflowX: "auto", maxWidth: "calc(100vw - 32px)" }}>
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: "repeat(2, max-content)",
+              columnGap: `${SPACING.LG}px`,
+              rowGap: `${SPACING.SM}px`,
+              alignItems: "start",
+              width: "fit-content",
+            }}
+          >
+            {orderColumns.map((orders) => (
+              <Box key={orders.join("-")} sx={{ minWidth: 420 }}>
+                {orders.map((order, idx) => (
+                  <Box key={order} sx={{ mb: 0.5 }}>
                     <Typography sx={{
-                      ...typography.value, color: isActive ? tc.accent : tc.textMuted,
-                      minWidth: 58, textAlign: "right",
+                      ...typography.labelSmall,
+                      color: tc.textMuted, fontFamily: "monospace",
+                      mt: idx === 0 ? 0 : 0.5, mb: 0.25,
                     }}>
-                      {formatHOValue(mag, e.mag_max, e.display_scale)} {e.unit_display}
+                      n = {order}
                     </Typography>
-                    {e.hasAngle && (
-                      <>
-                        <Box sx={{ flex: 1, maxWidth: 110, minWidth: 60 }}>
-                          <Slider
-                            value={ang} min={-180} max={180} step={1}
-                            onChange={(_, v) => updateAngle(e.name, v as number)}
-                            size="small" sx={{ py: 0.5 }}
-                            disabled={!isActive}
-                          />
-                        </Box>
-                        <Typography sx={{
-                          ...typography.value,
-                          color: isActive ? tc.accent : tc.textMuted,
-                          minWidth: 38, textAlign: "right",
-                        }}>
-                          {ang.toFixed(0)}°
-                        </Typography>
-                      </>
-                    )}
-                    {!e.hasAngle && (
-                      // Filler to keep column alignment consistent across rows.
-                      <Box sx={{ flex: 1, maxWidth: 148, minWidth: 0 }} />
-                    )}
+                    {HO_BY_ORDER[order].map(renderEntry)}
                   </Box>
-                );
-              })}
-            </Box>
-          ))}
+                ))}
+              </Box>
+            ))}
+          </Box>
           <Typography sx={{
             ...typography.labelSmall, color: tc.textMuted, mt: 0.5, fontFamily: "monospace",
           }}>
-            Click a name to zero that row.  Magnitudes in nm, angles in deg.
+            Use reset icons to zero individual magnitudes or angles.  Magnitudes in nm, angles in deg.
           </Typography>
         </Box>
       )}
@@ -1089,6 +1303,39 @@ function Explore() {
   const [c10, setC10] = React.useState(0);
   const [c12, setC12] = React.useState(0);
   const [phi12, setPhi12] = React.useState(0);
+  type AberKey = "c10" | "c12" | "phi12" | "rot";
+  type MainRanges = Record<AberKey, [number, number]>;
+  const [uiRanges, setUiRanges] = React.useState<MainRanges>({
+    c10: [-300, 300],
+    c12: [-100, 100],
+    phi12: [-180, 180],
+    rot: [-180, 180],
+  });
+  const uiRangesSeededRef = React.useRef(false);
+  React.useEffect(() => {
+    if (uiRangesSeededRef.current) return;
+    const arrived =
+      c10Min !== 0 || c10Max !== 0 ||
+      c12Min !== 0 || c12Max !== 0 ||
+      phi12Min !== 0 || phi12Max !== 0 ||
+      rotationMin !== 0 || rotationMax !== 0;
+    if (!arrived) return;
+    uiRangesSeededRef.current = true;
+    setUiRanges({
+      c10: [c10Min, c10Max],
+      c12: [c12Min, c12Max],
+      phi12: [phi12Min, phi12Max],
+      rot: [rotationMin, rotationMax],
+    });
+  }, [c10Min, c10Max, c12Min, c12Max, phi12Min, phi12Max, rotationMin, rotationMax]);
+  const c10UiMin = uiRanges.c10[0];
+  const c10UiMax = uiRanges.c10[1];
+  const c12UiMin = uiRanges.c12[0];
+  const c12UiMax = uiRanges.c12[1];
+  const phi12UiMin = uiRanges.phi12[0];
+  const phi12UiMax = uiRanges.phi12[1];
+  const rotationUiMin = uiRanges.rot[0];
+  const rotationUiMax = uiRanges.rot[1];
 
   /* --- Higher-order aberration state.  Keys: C21_mag/C21_angle, ..., C56_mag/C56_angle,
          plus C30/C50 as bare magnitudes (no angle).  All values default to 0. */
@@ -1145,9 +1392,13 @@ function Explore() {
   const [pinned, setPinned] = React.useState<PinnedEntry[]>([]);
   const [viewPin, setViewPin] = React.useState<number | null>(null);
   const [exportStatus, setExportStatus] = React.useState("");
+  const [animationExportStatus, setAnimationExportStatus] = React.useState("");
+  const [animationExportBusy, setAnimationExportBusy] = React.useState(false);
+  const [animationExportAnchor, setAnimationExportAnchor] = React.useState<HTMLElement | null>(null);
   const [dragOverPin, setDragOverPin] = React.useState<number | null>(null);
   const [draggingPin, setDraggingPin] = React.useState<number | null>(null);
   const [newPinId, setNewPinId] = React.useState<number | null>(null);
+  const [moreMenuAnchor, setMoreMenuAnchor] = React.useState<HTMLElement | null>(null);
   const draggedPinRef = React.useRef<number | null>(null);
   const didDragPinRef = React.useRef(false);
   const pinPointerDragRef = React.useRef<{ id: number; x: number; y: number; active: boolean } | null>(null);
@@ -1221,10 +1472,96 @@ function Explore() {
     return Math.max(1, Math.min(total, requested));
   }, [defaultBfCount, totalBf]);
 
+  // No-server mode: on file:// the sibling data files cannot be fetch()ed, so
+  // the folder must be granted once (picker or webkitdirectory input) before
+  // the engine is created. HTTP-served folders skip this entirely.
+  const [localSourceGranted, setLocalSourceGranted] = React.useState(() => !showPtychoNeedsLocalSource());
+  const [localSourceError, setLocalSourceError] = React.useState("");
+  const localDirInputRef = React.useRef<HTMLInputElement | null>(null);
+  // Name of the folder this HTML lives in, so the banner can say exactly what
+  // to select in the picker (the exported folder name).
+  const localFolderName = React.useMemo(() => {
+    try {
+      const parts = decodeURIComponent(globalThis.location?.pathname || "").split("/").filter(Boolean);
+      return parts.length >= 2 ? parts[parts.length - 2] : "";
+    } catch {
+      return "";
+    }
+  }, []);
+  const grantLocalDirectory = React.useCallback(async () => {
+    const picker = (globalThis as {
+      showDirectoryPicker?: (options?: { startIn?: string }) => Promise<FileSystemDirectoryHandle>;
+    }).showDirectoryPicker;
+    if (picker) {
+      try {
+        const handle = await picker.call(globalThis, { startIn: "downloads", mode: "readwrite" } as { startIn: string });
+        // Validate: the data folder must contain cal.json next to this HTML.
+        try {
+          await handle.getFileHandle("cal.json");
+        } catch {
+          setLocalSourceError(
+            `That folder has no cal.json - select the folder named "${localFolderName || "the one containing this page"}" (the folder this index.html lives in).`,
+          );
+          return;
+        }
+        setShowPtychoLocalDirectory(handle);
+        setLocalSourceError("");
+        setLocalSourceGranted(true);
+        return;
+      } catch { /* canceled - fall through to input */ }
+    }
+    localDirInputRef.current?.click();
+  }, [localFolderName]);
+  // Folder-persisted saves: JPEG + entry in saves/saves.json inside the
+  // export folder. Survive relaunch from CLI serve AND double-click; loadable,
+  // deletable, downloadable from the strip below the action row.
+  type FolderSaveRecord = {
+    id: string;
+    timestamp: string;
+    C10: number;
+    C12: number;
+    phi12_deg: number;
+    rotation_deg: number;
+    flip_phase: boolean;
+    loss: number | null;
+    bf: number;
+    notes: string;
+    image: string;
+  };
+  const [folderSaves, setFolderSaves] = React.useState<FolderSaveRecord[]>([]);
+  const [folderSaveStatus, setFolderSaveStatus] = React.useState("");
+  const refreshFolderSaves = React.useCallback(async () => {
+    const data = await readShowPtychoFolderJson<FolderSaveRecord[]>("saves/saves.json");
+    if (Array.isArray(data)) setFolderSaves(data);
+  }, []);
+  React.useEffect(() => {
+    if (webgpuStandalone && localSourceGranted) void refreshFolderSaves();
+  }, [webgpuStandalone, localSourceGranted, refreshFolderSaves]);
+  const onLocalDirInput = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (files && files.length > 0) {
+      const names = new Set(Array.from(files).map((f) => f.name));
+      if (!names.has("cal.json")) {
+        setLocalSourceError(
+          `That folder has no cal.json - select the folder named "${localFolderName || "the one containing this page"}".`,
+        );
+        return;
+      }
+      setShowPtychoLocalFiles(Array.from(files));
+      setLocalSourceError("");
+      setLocalSourceGranted(true);
+    }
+  }, [localFolderName]);
   React.useEffect(() => {
     const hasEmbeddedBytes = !!webgpuGbfBytes && webgpuGbfBytes.byteLength > 0;
     const hasUrl = !!webgpuGbfUrl;
     const hasH5Source = !!webgpuH5SourceJson && webgpuH5SourceJson.trim() !== "" && webgpuH5SourceJson.trim() !== "{}";
+    if (!localSourceGranted) {
+      webgpuSsbRef.current = null;
+      setWebgpuRuntimeStatus("No-server mode: grant the folder containing this HTML to start");
+      setWebgpuLoadProgress(null);
+      return;
+    }
     if (!webgpuPreviewEnabled || !webgpuCalJson || (!hasEmbeddedBytes && !hasUrl && !hasH5Source)) {
       webgpuSsbRef.current = null;
       setWebgpuRuntimeStatus(webgpuPreviewStatus || "");
@@ -1253,7 +1590,7 @@ function Explore() {
         percent: 0,
       });
     }
-  }, [webgpuPreviewEnabled, webgpuCalJson, webgpuGbfBytes, webgpuGbfUrl, webgpuH5SourceJson, webgpuPreviewStatus]);
+  }, [localSourceGranted, webgpuPreviewEnabled, webgpuCalJson, webgpuGbfBytes, webgpuGbfUrl, webgpuH5SourceJson, webgpuPreviewStatus]);
 
   // WebGPU FFT (async, off main thread). Null until init resolves or if unsupported.
   const gpuFFTRef = React.useRef<WebGPUFFT | null>(null);
@@ -1447,11 +1784,29 @@ function Explore() {
   const [sweepSteps] = React.useState(40);  // fixed 40-frame sweep; good balance
   const sweepIdxRef = React.useRef(0);
   const sweepDirRef = React.useRef<1 | -1>(1);  // boomerang direction
+  const sweepMainKeys = React.useCallback((param: SweepParam): AberKey[] => {
+    switch (param) {
+      case "c10":
+      case "c12":
+      case "phi12":
+      case "rot":
+        return [param];
+      case "bundle:c10c12":
+        return ["c10", "c12"];
+      case "bundle:c10c12phi12":
+        return ["c10", "c12", "phi12"];
+      case "bundle:c10c12phi12rot":
+        return ["c10", "c12", "phi12", "rot"];
+      default:
+        return [];
+    }
+  }, []);
 
   // Full range [lo, hi] for the currently-selected sweep parameter.  Used
   // both as the bounds of the range slider and the auto-reset target when the
   // user changes the sweep parameter.
   const getFullSweepRange = React.useCallback((param: SweepParam): [number, number] => {
+    if (param.startsWith("bundle:")) return [0, 1];
     if (param.startsWith("ho:")) {
       const hoKey = param.slice(3);
       if (hoKey.endsWith("_angle")) return [-180, 180];
@@ -1463,17 +1818,16 @@ function Explore() {
       return [0, 0];
     }
     switch (param) {
-      case "c10":   return [c10Min, c10Max];
-      case "c12":   return [c12Min, c12Max];
-      case "phi12": return [phi12Min, phi12Max];
-      case "rot":   return [rotationMin, rotationMax];
+      case "c10":   return [c10UiMin, c10UiMax];
+      case "c12":   return [c12UiMin, c12UiMax];
+      case "phi12": return [phi12UiMin, phi12UiMax];
+      case "rot":   return [rotationUiMin, rotationUiMax];
     }
     return [0, 0];  // unreachable; keeps TS happy with future SweepParam variants
-  }, [c10Min, c10Max, c12Min, c12Max, phi12Min, phi12Max, rotationMin, rotationMax]);
+  }, [c10UiMin, c10UiMax, c12UiMin, c12UiMax, phi12UiMin, phi12UiMax, rotationUiMin, rotationUiMax]);
 
   // Per-parameter sweep range.  Each aberration slider has its own stopper
   // brackets; switching the sweep param doesn't reset the others' windows.
-  type AberKey = "c10" | "c12" | "phi12" | "rot";
   type SweepRanges = Record<AberKey, [number, number]>;
   const [sweepRanges, setSweepRanges] = React.useState<SweepRanges>(() => ({
     c10: getFullSweepRange("c10"),
@@ -1490,29 +1844,48 @@ function Explore() {
   React.useEffect(() => {
     if (sweepRangesSeededRef.current) return;
     const full: SweepRanges = {
-      c10: [c10Min, c10Max],
-      c12: [c12Min, c12Max],
-      phi12: [phi12Min, phi12Max],
-      rot: [rotationMin, rotationMax],
+      c10: [c10UiMin, c10UiMax],
+      c12: [c12UiMin, c12UiMax],
+      phi12: [phi12UiMin, phi12UiMax],
+      rot: [rotationUiMin, rotationUiMax],
     };
     // Only consider traits "arrived" once at least one min/max is non-default.
     const arrived =
-      c10Min !== 0 || c10Max !== 0 ||
-      phi12Min !== 0 || phi12Max !== 0 ||
-      rotationMin !== 0 || rotationMax !== 0;
+      c10UiMin !== 0 || c10UiMax !== 0 ||
+      phi12UiMin !== 0 || phi12UiMax !== 0 ||
+      rotationUiMin !== 0 || rotationUiMax !== 0;
     if (!arrived) return;
     sweepRangesSeededRef.current = true;
     setSweepRanges(full);
-  }, [c10Min, c10Max, c12Min, c12Max, phi12Min, phi12Max, rotationMin, rotationMax]);
+  }, [c10UiMin, c10UiMax, c12UiMin, c12UiMax, phi12UiMin, phi12UiMax, rotationUiMin, rotationUiMax]);
   const updateSweepRange = React.useCallback((key: AberKey, range: [number, number]) => {
     setSweepRanges(prev => ({ ...prev, [key]: range }));
   }, []);
+  const previousUiRangesRef = React.useRef(uiRanges);
+  React.useEffect(() => {
+    const old = previousUiRangesRef.current;
+    setSweepRanges(prev => {
+      const next = { ...prev };
+      (Object.keys(uiRanges) as AberKey[]).forEach(key => {
+        const [lo, hi] = uiRanges[key];
+        const oldFull = old[key];
+        const current = prev[key];
+        const wasFull = current[0] === oldFull[0] && current[1] === oldFull[1];
+        next[key] = wasFull
+          ? [lo, hi]
+          : [Math.max(lo, Math.min(hi, current[0])), Math.max(lo, Math.min(hi, current[1]))];
+      });
+      return next;
+    });
+    previousUiRangesRef.current = uiRanges;
+  }, [uiRanges]);
   const sweepRangesRef = React.useRef(sweepRanges);
   sweepRangesRef.current = sweepRanges;
 
   // Compatibility aliases for the existing PLAY tick: it reads "sweepRange"
   // as the window for the CURRENTLY-SELECTED sweep param.  Map through.
   const sweepRange: [number, number] = React.useMemo(() => {
+    if (sweepParam.startsWith("bundle:")) return [0, 1];
     if (sweepParam.startsWith("ho:")) return getFullSweepRange(sweepParam);
     return sweepRanges[sweepParam as AberKey];
   }, [sweepParam, sweepRanges, getFullSweepRange]);
@@ -1534,6 +1907,25 @@ function Explore() {
         // higher_order_json changes (debounced 20 ms in the other effect), so
         // this indirectly triggers reconstruct_full through the 14-coef path.
         setHigherOrder(prev => ({ ...prev, [hoKey!]: val }));
+      } else if (sweepParam.startsWith("bundle:")) {
+        const keys = sweepMainKeys(sweepParam);
+        const nextC10 = keys.includes("c10")
+          ? sweepRangesRef.current.c10[0] + frac * (sweepRangesRef.current.c10[1] - sweepRangesRef.current.c10[0])
+          : sliderVals.current.c10;
+        const nextC12 = keys.includes("c12")
+          ? sweepRangesRef.current.c12[0] + frac * (sweepRangesRef.current.c12[1] - sweepRangesRef.current.c12[0])
+          : sliderVals.current.c12;
+        const nextPhi12 = keys.includes("phi12")
+          ? sweepRangesRef.current.phi12[0] + frac * (sweepRangesRef.current.phi12[1] - sweepRangesRef.current.phi12[0])
+          : sliderVals.current.phi12;
+        const nextRot = keys.includes("rot")
+          ? sweepRangesRef.current.rot[0] + frac * (sweepRangesRef.current.rot[1] - sweepRangesRef.current.rot[0])
+          : rotationDegRef.current;
+        if (keys.includes("c10")) setC10(nextC10);
+        if (keys.includes("c12")) setC12(nextC12);
+        if (keys.includes("phi12")) setPhi12(nextPhi12);
+        if (keys.includes("rot")) setRotationDeg(nextRot);
+        sendDrag(nextC10, nextC12, nextPhi12, nextRot);
       } else if (sweepParam === "c10") {
         setC10(val); sendDrag(val, sliderVals.current.c12, sliderVals.current.phi12);
       } else if (sweepParam === "c12") {
@@ -2054,13 +2446,13 @@ function Explore() {
     c10: true, c12: true, phi12: true, rotation: true,
   });
   const doRandom = () => {
-    const c10Rand   = randScope.c10   ? Math.round(c10Min   + Math.random() * (c10Max   - c10Min))   : sliderVals.current.c10;
-    const c12Rand   = randScope.c12   ? Math.round(c12Min   + Math.random() * (c12Max   - c12Min))   : sliderVals.current.c12;
-    const phi12Rand = randScope.phi12 ? Math.round(phi12Min + Math.random() * (phi12Max - phi12Min)) : sliderVals.current.phi12;
+    const c10Rand   = randScope.c10   ? Math.round(c10UiMin   + Math.random() * (c10UiMax   - c10UiMin))   : sliderVals.current.c10;
+    const c12Rand   = randScope.c12   ? Math.round(c12UiMin   + Math.random() * (c12UiMax   - c12UiMin))   : sliderVals.current.c12;
+    const phi12Rand = randScope.phi12 ? Math.round(phi12UiMin + Math.random() * (phi12UiMax - phi12UiMin)) : sliderVals.current.phi12;
     setC10(c10Rand); setC12(c12Rand); setPhi12(phi12Rand);
     let rotationRand = rotationDegRef.current;
     if (randScope.rotation) {
-      rotationRand = rotationMin + Math.random() * (rotationMax - rotationMin);
+      rotationRand = rotationUiMin + Math.random() * (rotationUiMax - rotationUiMin);
       setRotationDeg(rotationRand);
     }
     sendCommit(c10Rand, c12Rand, phi12Rand, rotationRand);
@@ -2157,6 +2549,74 @@ function Explore() {
     });
   }, [cmap]);
 
+  const doFolderSave = React.useCallback(async () => {
+    const phase = rawPhaseRef.current;
+    if (!phase || busy) return;
+    try {
+      const lut = COLORMAPS[cmapRef.current as keyof typeof COLORMAPS] || COLORMAPS.viridis;
+      const { canvas } = renderPhaseOffscreen(phase.data, phase.w, phase.h, lut, 1, 99);
+      if (!canvas) throw new Error("no phase canvas");
+      const jpeg: Blob = await new Promise((resolve, reject) => {
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("JPEG encode failed"))), "image/jpeg", 0.92);
+      });
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const record: FolderSaveRecord = {
+        id: stamp,
+        timestamp: new Date().toISOString(),
+        C10: sliderVals.current.c10,
+        C12: sliderVals.current.c12,
+        phi12_deg: sliderVals.current.phi12,
+        rotation_deg: rotationDeg ?? 0,
+        flip_phase: !!flipPhase,
+        loss: loss ?? null,
+        bf: Math.round(dragBfRef.current || 0),
+        notes: String(notes ?? ""),
+        image: `saves/save_${stamp}_C10_${slugPart(sliderVals.current.c10.toFixed(0))}.jpg`,
+      };
+      const next = [...folderSaves, record];
+      if (showPtychoFolderWritable()) {
+        await writeShowPtychoFolderFile(record.image, jpeg);
+        await writeShowPtychoFolderFile("saves/saves.json", JSON.stringify(next, null, 2));
+        setFolderSaves(next);
+        setFolderSaveStatus(`Saved to folder (${next.length}) + downloaded`);
+      } else {
+        // webkitdirectory grants are read-only - fall back to download-only
+        setFolderSaveStatus("Folder is read-only here - image downloaded (use the Open data folder picker for persistent saves)");
+      }
+      downloadBlob(jpeg, record.image.split("/").pop() || "showptycho_save.jpg");
+    } catch (err) {
+      setFolderSaveStatus(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [busy, folderSaves, loss, notes, rotationDeg, flipPhase]);
+  const loadFolderSave = React.useCallback((record: FolderSaveRecord) => {
+    setC10(record.C10);
+    setC12(record.C12);
+    setPhi12(record.phi12_deg);
+    setRotationDeg(record.rotation_deg);
+    setFlipPhase(record.flip_phase);
+    sliderVals.current = { c10: record.C10, c12: record.C12, phi12: record.phi12_deg };
+    frontendFullRef.current?.(record.C10, record.C12, record.phi12_deg, record.rotation_deg);
+  }, [setRotationDeg, setFlipPhase]);
+  const downloadFolderSave = React.useCallback(async (record: FolderSaveRecord) => {
+    try {
+      const bytes = await readShowPtychoFolderBytes(record.image);
+      downloadBlob(new Blob([bytes as unknown as BlobPart], { type: "image/jpeg" }), record.image.split("/").pop() || "save.jpg");
+    } catch (err) {
+      setFolderSaveStatus(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, []);
+  const deleteFolderSave = React.useCallback(async (record: FolderSaveRecord) => {
+    try {
+      const next = folderSaves.filter((r) => r.id !== record.id);
+      await writeShowPtychoFolderFile("saves/saves.json", JSON.stringify(next, null, 2));
+      try { await deleteShowPtychoFolderFile(record.image); } catch { /* image may already be gone */ }
+      setFolderSaves(next);
+      setFolderSaveStatus(`Deleted save (${next.length} left)`);
+    } catch (err) {
+      setFolderSaveStatus(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [folderSaves]);
+
   const doExportPinned = React.useCallback(async () => {
     if (pinned.length === 0) return;
     setExportStatus(`Exporting ${pinned.length}`);
@@ -2210,6 +2670,170 @@ function Explore() {
       document.documentElement.setAttribute("data-showptycho-last-export", JSON.stringify({ error: message }));
     }
   }, [pinned]);
+
+  const animationFrameValues = React.useCallback((frameCount = Math.min(24, sweepSteps)) => {
+    const count = Math.max(2, Math.min(120, Math.round(frameCount || sweepSteps)));
+    const frames: Array<{
+      c10: number; c12: number; phi12: number; rotation: number; higherOrder: Record<string, number>; label: string;
+    }> = [];
+    const mainKeys = sweepMainKeys(sweepParam);
+    const hoKey = sweepParam.startsWith("ho:") ? sweepParam.slice(3) : null;
+    const hoRange = hoKey ? getFullSweepRange(sweepParam) : null;
+    for (let i = 0; i < count; i++) {
+      const frac = count <= 1 ? 0 : i / (count - 1);
+      const nextHo = { ...higherOrderRef.current };
+      let nextC10 = sliderVals.current.c10;
+      let nextC12 = sliderVals.current.c12;
+      let nextPhi12 = sliderVals.current.phi12;
+      let nextRot = rotationDegRef.current;
+      if (mainKeys.includes("c10")) nextC10 = sweepRangesRef.current.c10[0] + frac * (sweepRangesRef.current.c10[1] - sweepRangesRef.current.c10[0]);
+      if (mainKeys.includes("c12")) nextC12 = sweepRangesRef.current.c12[0] + frac * (sweepRangesRef.current.c12[1] - sweepRangesRef.current.c12[0]);
+      if (mainKeys.includes("phi12")) nextPhi12 = sweepRangesRef.current.phi12[0] + frac * (sweepRangesRef.current.phi12[1] - sweepRangesRef.current.phi12[0]);
+      if (mainKeys.includes("rot")) nextRot = sweepRangesRef.current.rot[0] + frac * (sweepRangesRef.current.rot[1] - sweepRangesRef.current.rot[0]);
+      if (hoKey && hoRange) nextHo[hoKey] = hoRange[0] + frac * (hoRange[1] - hoRange[0]);
+      frames.push({
+        c10: nextC10,
+        c12: nextC12,
+        phi12: nextPhi12,
+        rotation: nextRot,
+        higherOrder: nextHo,
+        label: `C10 ${nextC10.toFixed(0)} nm · C12 ${nextC12.toFixed(0)} nm · φ12 ${nextPhi12.toFixed(0)}° · rot ${nextRot.toFixed(1)}°`,
+      });
+    }
+    return frames;
+  }, [getFullSweepRange, sweepMainKeys, sweepParam, sweepSteps]);
+
+  const renderAnimationFrameCanvas = React.useCallback(async (
+    frame: { c10: number; c12: number; phi12: number; rotation: number; higherOrder: Record<string, number>; label: string },
+    maxPanelEdge = 512,
+  ): Promise<HTMLCanvasElement> => {
+    const engine = webgpuSsbRef.current;
+    if (!engine) throw new Error("GIF/MP4 export needs the WebGPU ShowPtycho engine.");
+    const bfCount = selectedDragBfCount();
+    const total = Math.max(1, Math.round(totalBf || bfCount));
+    const result = await engine.reconstruct(frame.c10, frame.c12, frame.phi12, {
+      preview: bfCount < total,
+      bfCount,
+      computeLoss: false,
+      rotationDeg: frame.rotation,
+      higherOrder: frame.higherOrder,
+    });
+    const phase = result.phase;
+    if (flipPhaseRef.current) {
+      for (let i = 0; i < phase.length; i++) phase[i] = -phase[i];
+    }
+    const phaseLut = COLORMAPS[cmapRef.current as keyof typeof COLORMAPS] || COLORMAPS.viridis;
+    const cr = contrastRef.current;
+    const phaseRender = renderPhaseOffscreen(phase, result.width, result.height, phaseLut, cr[0], cr[1]);
+    if (!phaseRender.canvas) throw new Error("Could not render phase export frame.");
+    let fftCanvas: HTMLCanvasElement | null = null;
+    if (showFFTRef.current) {
+      const fft = computeFFTMag(phase, result.width, result.height);
+      const fftLut = COLORMAPS[fftCmapRef.current as keyof typeof COLORMAPS] || COLORMAPS.inferno;
+      const fr = fftContrastRef.current;
+      fftCanvas = renderFFTOffscreen(fft.mag, result.width, result.height, fftLut, fr[0], fr[1]).canvas;
+    }
+    const panelEdge = Math.max(64, Math.min(maxPanelEdge, result.width, result.height));
+    const labelH = 22;
+    const out = document.createElement("canvas");
+    out.width = panelEdge * (fftCanvas ? 2 : 1);
+    out.height = panelEdge + labelH;
+    const ctx = out.getContext("2d");
+    if (!ctx) throw new Error("Could not create export canvas.");
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(phaseRender.canvas, 0, 0, panelEdge, panelEdge);
+    if (fftCanvas) ctx.drawImage(fftCanvas, panelEdge, 0, panelEdge, panelEdge);
+    ctx.fillStyle = "rgba(0,0,0,0.84)";
+    ctx.fillRect(0, panelEdge, out.width, labelH);
+    ctx.fillStyle = "#e8f0ff";
+    ctx.font = "11px monospace";
+    ctx.textBaseline = "middle";
+    ctx.fillText(frame.label, 6, panelEdge + labelH / 2);
+    return out;
+  }, [selectedDragBfCount, totalBf]);
+
+  const exportAnimationGif = React.useCallback(async () => {
+    setAnimationExportAnchor(null);
+    const frames = animationFrameValues();
+    const filename = makeShowPtychoExportFilename("gif", sweepParam, frames.length);
+    setAnimationExportBusy(true);
+    setAnimationExportStatus(`Preparing ${filename}`);
+    try {
+      const indexed: Uint8Array[] = [];
+      let outW = 0;
+      let outH = 0;
+      for (let i = 0; i < frames.length; i++) {
+        const canvas = await renderAnimationFrameCanvas(frames[i], 512);
+        outW = canvas.width;
+        outH = canvas.height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Could not read export frame.");
+        indexed.push(quantizeRgbaForBrowserGif(ctx.getImageData(0, 0, outW, outH).data));
+        if (i === 0 || i === frames.length - 1 || (i + 1) % 4 === 0) {
+          setAnimationExportStatus(`Encoding ${filename} ${i + 1}/${frames.length}`);
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        }
+      }
+      const gif = encodeIndexedGif(outW, outH, indexed, 100 / Math.max(1, Math.min(30, playFps)));
+      const blob = new Blob([gif as BlobPart], { type: "image/gif" });
+      downloadBlob(blob, filename);
+      setAnimationExportStatus(`Downloaded ${filename} (${formatSavedBytes(blob.size)})`);
+      document.documentElement.setAttribute("data-showptycho-last-animation-export", JSON.stringify({ mode: "gif", frames: frames.length, bytes: blob.size }));
+    } catch (err) {
+      setAnimationExportStatus(`Export failed ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setAnimationExportBusy(false);
+    }
+  }, [animationFrameValues, playFps, renderAnimationFrameCanvas, sweepParam]);
+
+  const exportAnimationMp4 = React.useCallback(async () => {
+    setAnimationExportAnchor(null);
+    const mime = "video/mp4";
+    if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported(mime)) {
+      setAnimationExportStatus("MP4 export unavailable in this browser; use GIF here.");
+      return;
+    }
+    const frames = animationFrameValues();
+    const filename = makeShowPtychoExportFilename("mp4", sweepParam, frames.length);
+    setAnimationExportBusy(true);
+    setAnimationExportStatus(`Preparing ${filename}`);
+    try {
+      const first = await renderAnimationFrameCanvas(frames[0], 768);
+      const even = document.createElement("canvas");
+      even.width = first.width + (first.width % 2);
+      even.height = first.height + (first.height % 2);
+      const ctx = even.getContext("2d");
+      if (!ctx) throw new Error("Could not create MP4 canvas.");
+      const stream = even.captureStream(Math.max(1, Math.min(30, playFps)));
+      const recorder = new MediaRecorder(stream, { mimeType: mime });
+      const chunks: BlobPart[] = [];
+      recorder.ondataavailable = (event) => { if (event.data.size > 0) chunks.push(event.data); };
+      const stopped = new Promise<void>((resolve, reject) => {
+        recorder.onstop = () => resolve();
+        recorder.onerror = () => reject(new Error("MP4 recorder failed."));
+      });
+      recorder.start();
+      for (let i = 0; i < frames.length; i++) {
+        const frameCanvas = i === 0 ? first : await renderAnimationFrameCanvas(frames[i], 768);
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, even.width, even.height);
+        ctx.drawImage(frameCanvas, 0, 0);
+        setAnimationExportStatus(`Recording ${filename} ${i + 1}/${frames.length}`);
+        await new Promise<void>((resolve) => window.setTimeout(resolve, Math.max(34, 1000 / Math.max(1, Math.min(30, playFps)))));
+      }
+      recorder.stop();
+      await stopped;
+      const blob = new Blob(chunks, { type: mime });
+      downloadBlob(blob, filename);
+      setAnimationExportStatus(`Downloaded ${filename} (${formatSavedBytes(blob.size)})`);
+      document.documentElement.setAttribute("data-showptycho-last-animation-export", JSON.stringify({ mode: "mp4", frames: frames.length, bytes: blob.size }));
+    } catch (err) {
+      setAnimationExportStatus(`Export failed ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setAnimationExportBusy(false);
+    }
+  }, [animationFrameValues, playFps, renderAnimationFrameCanvas, sweepParam]);
 
   const reorderPinned = React.useCallback((fromId: number, toId: number) => {
     if (fromId === toId) return;
@@ -2441,6 +3065,86 @@ function Explore() {
       alignItems: "center",
     },
   };
+  const themedMenuProps = {
+    PaperProps: {
+      sx: {
+        bgcolor: tc.bgAlt,
+        color: tc.text,
+        border: `1px solid ${tc.border}`,
+        boxShadow: `0 8px 24px ${tc.shadow}`,
+        "& .MuiMenuItem-root": {
+          fontFamily: "monospace",
+          fontSize: 11,
+          minHeight: 28,
+        },
+      },
+    },
+  };
+  const canRecordMp4 = typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported("video/mp4");
+  const rangeInputSx = {
+    width: 66,
+    height: 22,
+    boxSizing: "border-box",
+    fontFamily: "monospace",
+    fontSize: 10,
+    color: tc.text,
+    bgcolor: tc.bg,
+    border: `1px solid ${tc.border}`,
+    borderRadius: 0,
+    px: 0.5,
+    outline: "none",
+    "&:focus": { borderColor: tc.accent },
+  };
+  const defaultUiRanges: MainRanges = {
+    c10: [c10Min, c10Max],
+    c12: [c12Min, c12Max],
+    phi12: [phi12Min, phi12Max],
+    rot: [rotationMin, rotationMax],
+  };
+  const rangeStep = React.useCallback((key: AberKey) => (key === "rot" ? 0.1 : 1), []);
+  const setUiRangeBound = React.useCallback((key: AberKey, side: 0 | 1, raw: string) => {
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return;
+    setUiRanges(prev => {
+      const next: MainRanges = { ...prev };
+      const current: [number, number] = [...prev[key]];
+      const gap = rangeStep(key);
+      if (side === 0) current[0] = Math.min(value, current[1] - gap);
+      else current[1] = Math.max(value, current[0] + gap);
+      next[key] = current;
+      return next;
+    });
+  }, [rangeStep]);
+  const resetUiRange = React.useCallback((key: AberKey) => {
+    setUiRanges(prev => ({ ...prev, [key]: defaultUiRanges[key] }));
+  }, [defaultUiRanges]);
+  const resetAllUiRanges = React.useCallback(() => {
+    setUiRanges(defaultUiRanges);
+  }, [defaultUiRanges]);
+  const editedRangeCount = (Object.keys(uiRanges) as AberKey[]).filter(key => (
+    uiRanges[key][0] !== defaultUiRanges[key][0] || uiRanges[key][1] !== defaultUiRanges[key][1]
+  )).length;
+  const renderRangeEditor = (key: AberKey, label: string, unit: string, decimals = 0) => (
+    <Box
+      key={key}
+      sx={{
+        display: "grid",
+        gridTemplateColumns: "42px auto auto auto",
+        gap: 0.75,
+        alignItems: "center",
+      }}
+    >
+      <Typography sx={{ ...typography.labelSmall, color: tc.text, fontWeight: 700 }}>{label}</Typography>
+      <Box component="input" type="number" step={rangeStep(key)} value={uiRanges[key][0].toFixed(decimals)} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setUiRangeBound(key, 0, e.target.value)} sx={rangeInputSx} aria-label={`${label} minimum`} />
+      <Box component="input" type="number" step={rangeStep(key)} value={uiRanges[key][1].toFixed(decimals)} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setUiRangeBound(key, 1, e.target.value)} sx={rangeInputSx} aria-label={`${label} maximum`} />
+      <IconButton size="small" onClick={() => resetUiRange(key)} disabled={uiRanges[key][0] === defaultUiRanges[key][0] && uiRanges[key][1] === defaultUiRanges[key][1]} sx={compactBareIconButton(tc)} aria-label={`Reset ${label} range`}>
+        <RestartAltIcon sx={{ fontSize: 14 }} />
+      </IconButton>
+      <Typography sx={{ ...typography.labelSmall, color: tc.textMuted, gridColumn: "2 / span 2", mt: -0.75 }}>
+        {unit}
+      </Typography>
+    </Box>
+  );
 
   return (
     <Box sx={{ ...container.root, bgcolor: tc.bg, color: tc.text }}>
@@ -2472,13 +3176,9 @@ function Explore() {
           size="small"
           valueLabelDisplay="auto"
           valueLabelFormat={(v) => totalBf > 0 ? `${(v / totalBf).toFixed(2)} (${v}/${totalBf})` : "--"}
-          sx={{ width: 110, mx: 0.5 }}
+          aria-label={totalBf > 0 ? `BF pixels ${localDragBf} of ${totalBf}` : "BF pixels"}
+          sx={{ width: 120, flex: "0 0 120px", mx: 0.5 }}
         />
-        {totalBf > 0 ? (
-          <Typography sx={{ ...typography.value, color: tc.textMuted, opacity: 0.7, minWidth: 68, fontSize: 10 }}>
-            {`${(localDragBf / totalBf).toFixed(2)} · ${localDragBf}/${totalBf}`}
-          </Typography>
-        ) : null}
         <Box sx={{ flex: 1 }} />
         {phaseWidth > 0 && phaseHeight > 0 && (
           <Typography sx={{ ...typography.value, color: tc.textMuted, opacity: 0.7 }}>
@@ -2488,9 +3188,58 @@ function Explore() {
         <Button
           size="small"
           variant="outlined"
+          disabled={animationExportBusy || !rawPhaseRef.current}
+          onClick={(e) => setAnimationExportAnchor(e.currentTarget)}
+          aria-label="Export GIF or MP4"
+          aria-controls={animationExportAnchor ? "showptycho-animation-export-menu" : undefined}
+          aria-expanded={animationExportAnchor ? "true" : undefined}
+          aria-haspopup="menu"
+          title={animationExportStatus || "Export GIF or MP4 sweep animation"}
+          sx={{ ...compactButton(tc), width: 58, minWidth: 58, color: tc.accent, borderColor: tc.accent }}
+        >
+          Export
+        </Button>
+        <Menu
+          id="showptycho-animation-export-menu"
+          anchorEl={animationExportAnchor}
+          open={Boolean(animationExportAnchor)}
+          onClose={() => setAnimationExportAnchor(null)}
+          MenuListProps={{ "aria-label": "Animation export options" }}
+          {...themedMenuProps}
+        >
+          <MenuItem onClick={() => { void exportAnimationGif(); }}>
+            GIF
+          </MenuItem>
+          <MenuItem
+            onClick={() => { void exportAnimationMp4(); }}
+            disabled={!canRecordMp4}
+            title={!canRecordMp4 ? "MP4 requires browser video/mp4 MediaRecorder support. Use GIF here." : undefined}
+          >
+            MP4 video
+          </MenuItem>
+        </Menu>
+        <Typography
+          sx={{
+            ...typography.value,
+            color: animationExportStatus.startsWith("Export failed") || animationExportStatus.includes("unavailable") ? STATUS_BAD : tc.textMuted,
+            width: 220,
+            minWidth: 0,
+            flex: "0 1 220px",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "clip",
+            opacity: animationExportStatus ? 1 : 0,
+          }}
+          title={animationExportStatus}
+        >
+          {animationExportStatus || " "}
+        </Typography>
+        <Button
+          size="small"
+          variant="outlined"
           onClick={resetZoom}
           disabled={phaseZoom.zoom === 1 && fftZoom.zoom === 1}
-          sx={{ ...compactButton(tc), color: tc.textMuted, borderColor: tc.border }}
+          sx={{ ...compactButton(tc), width: 52, minWidth: 52, color: tc.textMuted, borderColor: tc.border }}
         >
           Reset
         </Button>
@@ -2625,6 +3374,33 @@ function Explore() {
               </Typography>
             </Box>
 
+            {!localSourceGranted && (
+              <Box sx={{ border: `1px solid ${tc.border}`, bgcolor: tc.bgAlt, px: 1, py: 0.75, display: "flex", alignItems: "center", gap: 1 }}>
+                <Typography sx={{ ...typography.value, color: tc.text }}>
+                  {localFolderName
+                    ? `No server needed - click Open data folder, then select the folder "${localFolderName}" (the one this page lives in, usually in Downloads).`
+                    : "No server needed - grant this page access to its own folder to load the data."}
+                </Typography>
+                {localSourceError && (
+                  <Typography sx={{ ...typography.value, color: STATUS_BAD }}>
+                    {localSourceError}
+                  </Typography>
+                )}
+                <Typography sx={{ ...typography.value, color: tc.textMuted, fontSize: 11 }}>
+                  Alternative: `quantem showptycho &lt;folder&gt;` serves and opens this automatically.
+                </Typography>
+                <Button size="small" variant="outlined" onClick={grantLocalDirectory} sx={{ textTransform: "none", fontSize: 12 }} data-showptycho-open-folder>
+                  Open data folder
+                </Button>
+                <input
+                  ref={localDirInputRef}
+                  type="file"
+                  style={{ display: "none" }}
+                  onChange={onLocalDirInput}
+                  {...({ webkitdirectory: "", directory: "", multiple: true } as object)}
+                />
+              </Box>
+            )}
             {webgpuLoadProgress && (
               <Box
                 sx={{
@@ -2788,28 +3564,28 @@ function Explore() {
             {
               key: "c10" as AberKey, label: "C10", unit: "nm", value: c10, displayPrec: 0,
               tipFull: "C10 — defocus.  Positive = overfocus, negative = underfocus.  The dominant aberration.",
-              min: c10Min, max: c10Max, step: 1,
+              min: c10UiMin, max: c10UiMax, step: 1,
               setValue: (v: number) => { setC10(v); sendDrag(v, sliderVals.current.c12, sliderVals.current.phi12); },
               commitValue: (v: number) => { if (shouldCommitOnReleaseRef.current) sendCommit(v, sliderVals.current.c12, sliderVals.current.phi12); },
             },
             {
               key: "c12" as AberKey, label: "C12", unit: "nm", value: c12, displayPrec: 0,
               tipFull: "C12 — 2-fold astigmatism magnitude.  Paired with φ₁₂.",
-              min: c12Min, max: c12Max, step: 1,
+              min: c12UiMin, max: c12UiMax, step: 1,
               setValue: (v: number) => { setC12(v); sendDrag(sliderVals.current.c10, v, sliderVals.current.phi12); },
               commitValue: (v: number) => { if (shouldCommitOnReleaseRef.current) sendCommit(sliderVals.current.c10, v, sliderVals.current.phi12); },
             },
             {
               key: "phi12" as AberKey, label: "φ₁₂", unit: "°", value: phi12, displayPrec: 0,
               tipFull: "φ₁₂ — angle of 2-fold astigmatism.  Meaningful when C12 ≠ 0.",
-              min: phi12Min, max: phi12Max, step: 1,
+              min: phi12UiMin, max: phi12UiMax, step: 1,
               setValue: (v: number) => { setPhi12(v); sendDrag(sliderVals.current.c10, sliderVals.current.c12, v); },
               commitValue: (v: number) => { if (shouldCommitOnReleaseRef.current) sendCommit(sliderVals.current.c10, sliderVals.current.c12, v); },
             },
             {
               key: "rot" as AberKey, label: "scan-det rot", unit: "°", value: rotationDeg ?? 0, displayPrec: 1,
               tipFull: "Scan-detector rotation — angle between scan axes and detector axes.  Sweep to find the sharpest reconstruction.",
-              min: rotationMin, max: rotationMax, step: 0.1,
+              min: rotationUiMin, max: rotationUiMax, step: 0.1,
               setValue: (v: number) => {
                 setRotationDeg(v);
                 if (webgpuSsbRef.current) sendDrag(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, v);
@@ -2820,9 +3596,10 @@ function Explore() {
             },
           ] as const).map(cfg => {
             const range = sweepRanges[cfg.key];
-            const isActiveSweep = sweepParam === cfg.key;
+            const isActiveSweep = sweepMainKeys(sweepParam).includes(cfg.key);
             const isAtFull = range[0] === cfg.min && range[1] === cfg.max;
             const sliderWidth = cfg.key === "rot" ? ROTATION_SLIDER_WIDTH : ABERRATION_SLIDER_WIDTH;
+            const visibleValue = Math.max(cfg.min, Math.min(cfg.max, cfg.value));
             return (
               <Box key={cfg.key} sx={{ flex: `0 0 ${sliderWidth}px`, width: sliderWidth, minWidth: 0 }}>
                 <Tooltip title={cfg.tipFull} placement="top" arrow>
@@ -2841,7 +3618,7 @@ function Explore() {
                     stopper first.  Zero separate sub-slider — everything on one
                     track. */}
                 <Slider
-                  value={[range[0], cfg.value, range[1]]}
+                  value={[range[0], visibleValue, range[1]]}
                   min={cfg.min} max={cfg.max} step={cfg.step}
                   disableSwap
                   onChange={(_, v, activeThumb) => {
@@ -2882,10 +3659,10 @@ function Explore() {
               size="small"
               onClick={() => {
                 doReset();
-                updateSweepRange("c10", [c10Min, c10Max]);
-                updateSweepRange("c12", [c12Min, c12Max]);
-                updateSweepRange("phi12", [phi12Min, phi12Max]);
-                updateSweepRange("rot", [rotationMin, rotationMax]);
+                updateSweepRange("c10", [c10UiMin, c10UiMax]);
+                updateSweepRange("c12", [c12UiMin, c12UiMax]);
+                updateSweepRange("phi12", [phi12UiMin, phi12UiMax]);
+                updateSweepRange("rot", [rotationUiMin, rotationUiMax]);
               }}
               sx={compactIconButton(tc, tc.textMuted)}
               aria-label="Reset aberrations"
@@ -2927,13 +3704,16 @@ function Explore() {
             value={sweepParam}
             onChange={(e) => setSweepParam(e.target.value as SweepParam)}
             size="small"
-            sx={{ ...actionSelect, minWidth: 78 }}
+            sx={{ ...actionSelect, width: 118, minWidth: 118, flex: "0 0 118px" }}
             title="Sweep parameter"
           >
             <MenuItem value="c10">C10</MenuItem>
             <MenuItem value="c12">C12</MenuItem>
             <MenuItem value="phi12">φ₁₂</MenuItem>
             <MenuItem value="rot">rot</MenuItem>
+            <MenuItem value="bundle:c10c12">C10+C12</MenuItem>
+            <MenuItem value="bundle:c10c12phi12">C10+C12+φ₁₂</MenuItem>
+            <MenuItem value="bundle:c10c12phi12rot">C10+C12+φ₁₂+rot</MenuItem>
             {Object.keys(higherOrder)
               .filter(k => (k.endsWith("_angle")
                 ? (higherOrder[k] !== undefined)
@@ -2951,11 +3731,61 @@ function Explore() {
             value={playFps}
             onChange={(e) => setPlayFps(Number(e.target.value))}
             size="small"
-            sx={{ ...actionSelect, minWidth: 48 }}
+            sx={{ ...actionSelect, width: 52, minWidth: 52, flex: "0 0 52px" }}
             title="Sweep FPS — ≥15 needs the drag BF subset"
           >
-            {[5, 10, 15, 30].map(fps => (<MenuItem key={fps} value={fps}>{fps}</MenuItem>))}
+            {[1, 3, 5, 10, 15, 30].map(fps => (<MenuItem key={fps} value={fps}>{fps}</MenuItem>))}
           </Select>
+          <Badge
+            badgeContent={editedRangeCount}
+            invisible={editedRangeCount === 0}
+            sx={{ "& .MuiBadge-badge": { bgcolor: tc.accent, color: "#fff", fontSize: 9, fontWeight: 600, minWidth: 14, height: 14, px: 0.25 } }}
+          >
+            <Button
+              size="small"
+              sx={{ ...compactButton(tc), height: ACTION_CONTROL_HEIGHT, width: 52, minWidth: 52, color: editedRangeCount > 0 ? tc.accent : tc.text }}
+              onClick={(e) => setMoreMenuAnchor(e.currentTarget)}
+              aria-label="More sweep controls"
+              aria-controls={moreMenuAnchor ? "showptycho-more-menu" : undefined}
+              aria-expanded={moreMenuAnchor ? "true" : undefined}
+              aria-haspopup="menu"
+              title="More sweep controls"
+            >
+              More
+            </Button>
+          </Badge>
+          <Menu
+            id="showptycho-more-menu"
+            anchorEl={moreMenuAnchor}
+            open={Boolean(moreMenuAnchor)}
+            onClose={() => setMoreMenuAnchor(null)}
+            MenuListProps={{ "aria-label": "More sweep controls" }}
+            {...themedMenuProps}
+          >
+            <Box
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+              sx={{ px: 1.25, py: 1, minWidth: 280, display: "flex", flexDirection: "column", gap: 0.75 }}
+            >
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Typography sx={{ ...typography.label, color: tc.text, fontWeight: 700, flex: 1 }}>
+                  Sweep Ranges
+                </Typography>
+                <Button size="small" onClick={resetAllUiRanges} disabled={editedRangeCount === 0} sx={{ ...compactButton(tc), minHeight: 22 }}>
+                  Reset
+                </Button>
+              </Stack>
+              <Box sx={{ display: "grid", gridTemplateColumns: "42px 66px 66px 22px", gap: 0.75, alignItems: "center" }}>
+                <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Param</Typography>
+                <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Min</Typography>
+                <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Max</Typography>
+              </Box>
+              {renderRangeEditor("c10", "C10", "nm")}
+              {renderRangeEditor("c12", "C12", "nm")}
+              {renderRangeEditor("phi12", "φ₁₂", "deg")}
+              {renderRangeEditor("rot", "rot", "deg", 1)}
+            </Box>
+          </Menu>
 
           {/* Divider: PLAY group | PIN */}
           <Box sx={{ width: "1px", height: 20, bgcolor: tc.border, mx: 0.5, alignSelf: "center" }} />
@@ -2993,9 +3823,11 @@ function Explore() {
               onClick={() => setRandScope(s => ({ ...s, [key]: !s[key as keyof typeof s] }))}
               sx={{
                 height: ACTION_CONTROL_HEIGHT,
+                width: key === "phi12" ? 34 : 30,
+                flex: `0 0 ${key === "phi12" ? 34 : 30}px`,
                 px: 0.5, py: 0,
                 fontSize: 9, fontFamily: "monospace",
-                display: "inline-flex", alignItems: "center",
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
                 cursor: "pointer", userSelect: "none",
                 border: `1px solid ${tc.border}`,
                 color: randScope[key as keyof typeof randScope] ? tc.accent : tc.textMuted,
@@ -3014,8 +3846,8 @@ function Explore() {
             <Button
               size="small" variant="outlined"
               startIcon={<SaveIcon sx={{ fontSize: 14 }} />}
-              onClick={() => setSaveTrigger((saveTrigger ?? 0) + 1)}
-              sx={{ ...compactButton(tc), height: ACTION_CONTROL_HEIGHT, color: STATUS_GOOD, borderColor: STATUS_GOOD, minWidth: 76 }}
+              onClick={() => { if (webgpuStandalone) { void doFolderSave(); } else { setSaveTrigger((saveTrigger ?? 0) + 1); } }}
+              sx={{ ...compactButton(tc), height: ACTION_CONTROL_HEIGHT, color: STATUS_GOOD, borderColor: STATUS_GOOD, width: 76, minWidth: 76 }}
             >
               Save
             </Button>
@@ -3047,6 +3879,34 @@ function Explore() {
             </Tooltip>
           )}
         </Box>
+
+        {/* Folder-persisted saves - live in saves/ inside the export folder,
+            so they reappear on relaunch from CLI serve or double-click. */}
+        {webgpuStandalone && (folderSaves.length > 0 || folderSaveStatus) && (
+          <Box sx={{ pt: `${SPACING.XS}px`, borderTop: `1px solid ${tc.border}`, display: "flex", flexDirection: "column", gap: 0.25 }}>
+            {folderSaveStatus && (
+              <Typography sx={{ ...typography.value, color: /failed|read-only/i.test(folderSaveStatus) ? STATUS_BAD : STATUS_GOOD }}>
+                {folderSaveStatus}
+              </Typography>
+            )}
+            {folderSaves.length > 0 && (
+              <Typography sx={{ ...typography.label, color: tc.textMuted }}>Saved states ({folderSaves.length})</Typography>
+            )}
+            {folderSaves.map((record) => (
+              <Box key={record.id} sx={{ display: "flex", alignItems: "center", gap: 1, fontFamily: "monospace", fontSize: 11 }}>
+                <Typography sx={{ ...typography.value, color: tc.text, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                  C10 {record.C10.toFixed(1)} · C12 {record.C12.toFixed(1)} · φ12 {record.phi12_deg.toFixed(0)}° · rot {record.rotation_deg.toFixed(1)}°
+                  {record.loss != null ? ` · loss ${record.loss.toFixed(6)}` : ""}
+                  {` · ${record.timestamp.slice(0, 16).replace("T", " ")}`}
+                  {record.notes ? ` · ${record.notes}` : ""}
+                </Typography>
+                <Button size="small" onClick={() => loadFolderSave(record)} sx={{ ...compactButton(tc), minWidth: 44 }}>Load</Button>
+                <Button size="small" onClick={() => void downloadFolderSave(record)} sx={{ ...compactButton(tc), minWidth: 30 }}>⬇</Button>
+                <Button size="small" onClick={() => void deleteFolderSave(record)} sx={{ ...compactButton(tc), minWidth: 30, color: STATUS_BAD }}>✕</Button>
+              </Box>
+            ))}
+          </Box>
+        )}
 
         {/* Optuna trials strip — scrollable, loss-ranked.  Click any tile to
             preview that trial's aberrations.  Best-loss tile is highlighted so
