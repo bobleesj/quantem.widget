@@ -163,6 +163,14 @@ def test_show3d_paged_frontend_preserves_view_transform() -> None:
     assert "panX: 0" not in page_change_helper
     assert "panY: 0" not in page_change_helper
 
+    sidecar_viewport_helper = frontend.split(
+        "const paintSidecarU8ViewportToContext",
+        1,
+    )[1].split("const drawSidecarBitmapFrame", 1)[0]
+    assert "ctx.getImageData(0, 0, targetW, targetH)" in sidecar_viewport_helper
+    assert "if (rgba[p + 3] !== 0) continue;" in sidecar_viewport_helper
+    assert 'const bg = themeColors.bg || interPanelGapColor || "#fff";' in sidecar_viewport_helper
+
 
 def test_show3d_ui_mode_presets_and_overrides() -> None:
     interactive = Show3D(*_panels()[:2], verbose=False)
