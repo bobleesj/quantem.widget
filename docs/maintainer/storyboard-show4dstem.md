@@ -45,6 +45,9 @@ in the virtual image to update the diffraction panel immediately.
 - Click and drag scan position across the virtual image.
 - Verify diffraction updates at the current scan position and labels/readouts
   stay synchronized.
+- Hover scan positions without clicking and verify hover coordinates/readouts
+  update for the hovered position without committing a new selected scan
+  position or changing the diffraction panel until the user clicks or drags.
 - Use keyboard or slider navigation if available.
 - Record FPS or latency for scan-position movement.
 
@@ -79,6 +82,9 @@ inspect diffraction features without losing the linked scan context.
 
 - Pan and zoom the diffraction panel.
 - Change diffraction contrast, colormap, log/linear scale, and smoothing.
+- Hover diffraction features without selecting a new scan position or detector
+  and verify diffraction readouts follow the hovered pixel while detector and
+  virtual-image controls remain scoped to the explicitly selected state.
 - Verify detector overlays remain aligned during pan/zoom/resize.
 - Verify colorbar/histogram controls are readable on dark and light displays.
 
@@ -206,6 +212,10 @@ page using comparable colors, labels, scale bars, and top toolbar actions.
   panel visually balanced on desktop, notebook, and narrow viewports.
 - Verify labels and readouts use the same row/column convention and units as the
   other storyboards.
+- Verify hover inspection follows the same rule as Show2D and Show3D: moving
+  the pointer over an unselected virtual image, diffraction panel, detector
+  mask, or ROI shows that target's readout without silently retargeting edit
+  controls.
 - Verify Export GUI choices match the Python API terms: ``mode``, ``encoding``,
   and ``downsample`` rather than older ambiguous names.
 - Drive the same user path in live Jupyter and exported HTML; document any GUI

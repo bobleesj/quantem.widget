@@ -894,15 +894,27 @@ const valueToPct = (value: number | null | undefined, min: number, max: number, 
 const pctToValue = (pct: number, min: number, max: number): number => min + (max - min) * (clampPct(pct) / 100);
 const clampByte = (x: number): number => Math.max(0, Math.min(255, Math.round(x)));
 
-function shouldIgnoreWidgetShortcut(target: EventTarget | null): boolean {
+const WIDGET_SHORTCUT_IGNORE_SELECTOR = [
+  "input", "textarea", "button", "select",
+  "[contenteditable='true']", "[role='button']", "[role='slider']",
+  "[role='switch']", "[role='textbox']", "[role='combobox']", "[role='menuitem']",
+  ".MuiSlider-root", ".MuiSelect-select",
+].join(",");
+const WIDGET_TEXT_OR_VALUE_CONTROL_SELECTOR = [
+  "input", "textarea", "select",
+  "[contenteditable='true']", "[role='slider']",
+  "[role='switch']", "[role='textbox']", "[role='combobox']", "[role='menuitem']",
+  ".MuiSlider-root", ".MuiSelect-select",
+].join(",");
+const FRAME_NAVIGATION_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End"]);
+
+function shouldIgnoreWidgetShortcut(target: EventTarget | null, key = ""): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
-  return target.closest([
-    "input", "textarea", "button", "select",
-    "[contenteditable='true']", "[role='button']", "[role='slider']",
-    "[role='switch']", "[role='textbox']", "[role='combobox']", "[role='menuitem']",
-    ".MuiSlider-root", ".MuiSelect-select",
-  ].join(",")) !== null;
+  if (FRAME_NAVIGATION_KEYS.has(key)) {
+    return target.closest(WIDGET_TEXT_OR_VALUE_CONTROL_SELECTOR) !== null;
+  }
+  return target.closest(WIDGET_SHORTCUT_IGNORE_SELECTOR) !== null;
 }
 
 function findFFTPeak(
@@ -2993,11 +3005,9 @@ function Show3D() {
   const offlineFramePrewarmSerialRef = React.useRef(0);
   // Local live index used by the offline frameBytes useMemo. During MUI Slider
   // drag, `setSliceIdx` (anywidget useModelState) goes through model.set +
-  // save_changes which appears to batch under rapid mousemove ticks - useMemo
-  // doesn't see sliceIdx change until the user releases the slider, so the
-  // canvas stays on the old frame the whole drag. Local React state updates
-  // synchronously per tick. scrubToSlice writes both; the model trait is still
-  // updated for state.dict round-trips and observers.
+  // save_changes and can batch under rapid pointer ticks. Keep slider/canvas
+  // state local while dragging; commit the synced model trait on release or
+  // after the scrub stream settles.
   const [liveSliceIdx, setLiveSliceIdx] = React.useState<number>(sliceIdx);
   React.useEffect(() => { setLiveSliceIdx(sliceIdx); }, [sliceIdx]);
   // Sidecar: load FULL stack into RAM once (per-frame Uint8Array slots — never
@@ -4316,7 +4326,7 @@ function Show3D() {
   const [maxCols, setMaxCols] = useModelState<number>("max_cols");
   const [linkPanels, setLinkPanels] = useModelState<boolean>("link_panels");
   const [showResizeHandles] = useModelState<boolean>("show_resize_handles");
-  const allowResizeControls = showResizeHandles !== false && !isMobileViewport;
+  const allowResizeControls = showResizeHandles !== false;
   const [showZoomIndicator] = useModelState<boolean>("show_zoom_indicator");
   const [showPanelTitles] = useModelState<boolean>("show_panel_titles");
   const [panelTitleFontSize] = useModelState<number>("panel_title_font_size");
@@ -4358,6 +4368,13 @@ function Show3D() {
     const value = identityColors?.[panel] || markerColors?.[panel];
     return value || IDENTITY_PALETTE[panel % IDENTITY_PALETTE.length];
   }, [identityColors, markerColors]);
+  const hasPanelMarkers = React.useMemo(
+    () => Boolean(
+      (Array.isArray(identityColors) && identityColors.some(Boolean))
+      || (Array.isArray(markerColors) && markerColors.some(Boolean)),
+    ),
+    [identityColors, markerColors],
+  );
   const markerAround = (markerStyle || "left") === "around";
   const normalizedPanelCmaps = React.useMemo(
     () => Array.isArray(panelCmaps) ? panelCmaps : [],
@@ -4447,6 +4464,16 @@ function Show3D() {
   const toolControlsRef = React.useRef<HTMLDivElement>(null);
   const [toolControlsHeight, setToolControlsHeight] = React.useState(28);
   const debugFps = useDebugFps(Boolean(debug));
+  const resizeGripSx = React.useMemo(() => ({
+    width: 16,
+    height: 16,
+    cursor: "nwse-resize",
+    opacity: 0.6,
+    background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`,
+    touchAction: "none",
+    zIndex: 5,
+    "&:hover": { opacity: 1 },
+  }), [themeColors.accent]);
   const [statsMean] = useModelState<number>("stats_mean");
   const [statsMin] = useModelState<number>("stats_min");
   const [statsMax] = useModelState<number>("stats_max");
@@ -7107,7 +7134,16 @@ function Show3D() {
   const perPanelHistogramEnabled = (nPanels || 1) > 1 && !linkContrast;
 
   const updatePanelState = (panel: number, patch: Partial<PanelState>) => {
-    setPanelStates(prev => prev.map((state, i) => i === panel ? { ...state, ...patch } : state));
+    const n = Math.max(1, nPanels || 1);
+    const live = panelStatesLiveRef.current.length === n
+      ? panelStatesLiveRef.current
+      : panelStates;
+    const next = Array.from({ length: n }, (_, i) => {
+      const state = live[i] || panelStates[i] || initialState;
+      return i === panel ? { ...state, ...patch } : state;
+    });
+    panelStatesLiveRef.current = next;
+    setPanelStates(next);
   };
   const setPanelRangeValues = (panel: number, minValue: number | null, maxValue: number | null) => {
     const n = Math.max(1, nPanels || 1);
@@ -7245,6 +7281,51 @@ function Show3D() {
     panelStatesLiveRef.current = nextStates;
     setPanelStates(nextStates);
   };
+  const freezeCurrentPanelContrastAsManual = (
+    editedPanel: number | null = null,
+    editedRangePct: { min: number; max: number } | null = null,
+  ) => {
+    const stackBounds = resolveDisplayBounds(dataMin, dataMax, traitVmin, traitVmax, logScale);
+    const n = Math.max(1, nPanels || 1);
+    const liveStates = panelStatesLiveRef.current.length === n ? panelStatesLiveRef.current : panelStates;
+    const nextStates = Array.from({ length: n }, (_, i) => {
+      const state = liveStates[i] || panelStates[i] || initialState;
+      return i === editedPanel && editedRangePct
+        ? { ...state, imageVminPct: editedRangePct.min, imageVmaxPct: editedRangePct.max }
+        : { ...state };
+    });
+    const nextMins = Array.from({ length: n }, (_, i) => vminPerPanelLiveRef.current[i] ?? null);
+    const nextMaxs = Array.from({ length: n }, (_, i) => vmaxPerPanelLiveRef.current[i] ?? null);
+    for (let i = 0; i < n; i++) {
+      const panelRange = panelDataRanges[i];
+      const range = (panelRange && panelRange.max > panelRange.min) ? panelRange : stackBounds;
+      if (range.max <= range.min) continue;
+      const state = nextStates[i] || initialState;
+      nextMins[i] = pctToValue(state.imageVminPct, range.min, range.max);
+      nextMaxs[i] = pctToValue(state.imageVmaxPct, range.min, range.max);
+    }
+    panelStatesLiveRef.current = nextStates;
+    vminPerPanelLiveRef.current = nextMins;
+    vmaxPerPanelLiveRef.current = nextMaxs;
+    setPanelStates(nextStates);
+    setVminPerPanel(nextMins);
+    setVmaxPerPanel(nextMaxs);
+  };
+  const freezeCurrentSharedContrastAsManual = () => {
+    const bounds = resolveDisplayBounds(dataMin, dataMax, traitVmin, traitVmax, logScale);
+    const span = bounds.max - bounds.min;
+    if (span <= 0) return;
+    const renderIdx = clampSlice(displaySliceIdx);
+    const cached = cachedAutoDisplayRange(autoVmins, autoVmaxs, renderIdx, logScale)
+      || cachedAutoDisplayRange(localAutoVminsRef.current, localAutoVmaxsRef.current, renderIdx, logScale);
+    const range = cached
+      ?? (imageHistogramData && imageHistogramData.length > 0
+        ? percentileClip(imageHistogramData, percentileLow, percentileHigh)
+        : null);
+    if (!range || range.vmax <= range.vmin) return;
+    setImageVminPct(Math.max(0, Math.min(100, ((range.vmin - bounds.min) / span) * 100)));
+    setImageVmaxPct(Math.max(0, Math.min(100, ((range.vmax - bounds.min) / span) * 100)));
+  };
 
   const resolvePanelRenderRange = (
     panel: number,
@@ -7278,8 +7359,12 @@ function Show3D() {
         // causing a 1-frame flash to washed contrast on every toggle.
       } else {
         // OFF restores manual contrast. If the user never set a manual range,
-        // default to each panel's full local histogram range.
-        restorePanelManualClipPcts();
+        // keep the visible Auto windows as the editable manual baseline.
+        const hasManualPanelWindow =
+          vminPerPanelLiveRef.current.some((value) => value != null) ||
+          vmaxPerPanelLiveRef.current.some((value) => value != null);
+        if (hasManualPanelWindow) restorePanelManualClipPcts();
+        else freezeCurrentPanelContrastAsManual();
         manualImageRangeBeforeAutoRef.current = null;
       }
       return;
@@ -7303,8 +7388,7 @@ function Show3D() {
         setImageVmaxPct(restore.max);
         manualImageRangeBeforeAutoRef.current = null;
       } else {
-        setImageVminPct(0);
-        setImageVmaxPct(100);
+        freezeCurrentSharedContrastAsManual();
       }
     }
   };
@@ -7361,7 +7445,8 @@ function Show3D() {
 
   const handleRootMouseDownCapture = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement | null;
-    if (target?.closest("canvas")) rootRef.current?.focus();
+    if (target && target.closest(WIDGET_TEXT_OR_VALUE_CONTROL_SELECTOR)) return;
+    rootRef.current?.focus({ preventScroll: true });
   };
 
   const lastBenchmarkTokenRef = React.useRef<unknown>(null);
@@ -8349,7 +8434,9 @@ function Show3D() {
       ? visiblePanelIndices
       : Array.from({ length: Math.max(1, nPanels || 1) }, (_, idx) => idx);
     for (const panelIdx of panels) {
-      const state = stateFor(panelIdx);
+      const state = linkPanels
+        ? linkedStateLiveRef.current
+        : (panelStatesLiveRef.current[panelIdx] || stateFor(panelIdx));
       if (
         Math.abs((state.zoom || 1) - 1) > 1e-3 ||
         Math.abs(state.panX || 0) > 0.5 ||
@@ -8359,7 +8446,33 @@ function Show3D() {
       }
     }
     return false;
-  }, [flipCols, flipRows, imageRotation, nPanels, stateFor, visiblePanelIndices]);
+  }, [flipCols, flipRows, imageRotation, linkPanels, nPanels, stateFor, visiblePanelIndices]);
+
+  const resetPagedViewTransform = React.useCallback(() => {
+    if (!isPaged) return;
+    if (sidecarMode) invalidateSidecarViewportCache("page-change");
+    setGpuDisplayVisible(false);
+    const reset = { zoom: 1, panX: 0, panY: 0 };
+    const nextLinkedState = { ...linkedStateLiveRef.current, ...reset };
+    const livePanelStates = panelStatesLiveRef.current.length ? panelStatesLiveRef.current : panelStates;
+    const nextPanelStates = livePanelStates.map(state => ({ ...state, ...reset }));
+    linkedStateLiveRef.current = nextLinkedState;
+    panelStatesLiveRef.current = nextPanelStates;
+    setLinkedState(state => ({ ...state, ...reset }));
+    setPanelStates(states => states.map(state => ({ ...state, ...reset })));
+    setViewState({
+      linked_state: { ...nextLinkedState },
+      panel_states: nextPanelStates.map(state => ({ ...state })),
+    });
+  }, [invalidateSidecarViewportCache, isPaged, panelStates, setGpuDisplayVisible, sidecarMode, setViewState]);
+
+  const previousActivePageStartRef = React.useRef(activePageStart);
+  React.useEffect(() => {
+    const previous = previousActivePageStartRef.current;
+    previousActivePageStartRef.current = activePageStart;
+    if (previous === activePageStart || !isPaged) return;
+    resetPagedViewTransform();
+  }, [activePageStart, isPaged, resetPagedViewTransform]);
 
   const frameTransformActive = () => requiresClientFrameTransform({
     offline,
@@ -9243,7 +9356,7 @@ function Show3D() {
           label,
           status: "error",
           mode,
-          targetFps,
+          targetFps: 0,
           error: err instanceof Error ? err.message : String(err),
         };
         setBenchmarkResult(result);
@@ -11016,7 +11129,9 @@ function Show3D() {
     const debugPaintPanels: Array<Record<string, number | string | boolean | null>> = [];
     for (let slot = 0; slot < visibleCountLocal; slot++) {
       const panelIdx = visiblePanelIndices[slot] ?? slot;
-      const panelState = stateFor(panelIdx);
+      const panelState = linkPanels
+        ? linkedStateLiveRef.current
+        : (panelStatesLiveRef.current[panelIdx] || stateFor(panelIdx));
       const slotX0 = Math.max(0, Math.round((slot % cols) * (outPanelWFloat + gap)));
       const slotY0 = Math.max(0, Math.round(Math.floor(slot / cols) * (outPanelHFloat + gap)));
       const slotX1 = Math.min(targetW, Math.round(slotX0 + outPanelWFloat));
@@ -11205,6 +11320,7 @@ function Show3D() {
     panelInnerBorderPx,
     visiblePanelIndices,
     stateFor,
+    linkPanels,
     panelRealFrames,
     panelCmapFor,
     linkContrast,
@@ -11367,6 +11483,29 @@ function Show3D() {
     setGpuDisplayVisible,
     sidecarViewTransformActive,
     paintSidecarU8ViewportToContext,
+  ]);
+
+  const previousSidecarPagePaintStartRef = React.useRef(activePageStart);
+  React.useLayoutEffect(() => {
+    const previous = previousSidecarPagePaintStartRef.current;
+    previousSidecarPagePaintStartRef.current = activePageStart;
+    if (previous === activePageStart || !offline || !sidecarMode || playing) return;
+    resetPagedViewTransform();
+    const frameIdx = Number.isFinite(playbackIdxRef.current) ? playbackIdxRef.current : liveSliceIdx;
+    const raf = window.requestAnimationFrame(() => {
+      drawSidecarBitmapFrame(frameIdx, false, "page-change");
+      updatePlaybackLiveControls(frameIdx);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [
+    activePageStart,
+    drawSidecarBitmapFrame,
+    liveSliceIdx,
+    offline,
+    playing,
+    resetPagedViewTransform,
+    sidecarMode,
+    updatePlaybackLiveControls,
   ]);
 
   const paintHistogramPreviewSidecar = React.useCallback((reason = "hist-preview") => {
@@ -16877,7 +17016,7 @@ function Show3D() {
 
   // Keyboard
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (shouldIgnoreWidgetShortcut(e.target)) return;
+    if (shouldIgnoreWidgetShortcut(e.target, e.key)) return;
 
     let handled = false;
     const sidecarDirectNavigation =
@@ -16979,6 +17118,19 @@ function Show3D() {
     if (separatePanelFrames) return false;
     return requestCommFramePreview(clampSlice(idx), "scrub");
   };
+  const scheduleScrubModelCommit = (idx: number, delayMs = 350) => {
+    const next = clampSlice(idx);
+    if (sidecarSliceCommitTimerRef.current !== null) {
+      window.clearTimeout(sidecarSliceCommitTimerRef.current);
+    }
+    sidecarSliceCommitTimerRef.current = window.setTimeout(() => {
+      sidecarSliceCommitTimerRef.current = null;
+      setLiveSliceIdx(next);
+      setDisplaySliceIdx(next);
+      setPlaybackUiSliceIdx(next);
+      setSliceIdx(next);
+    }, delayMs);
+  };
   const scrubToSlice = (idx: number) => {
     const next = clampSlice(idx);
     if (playing) setPlaying(false);
@@ -16987,22 +17139,23 @@ function Show3D() {
       playbackIdxRef.current = next;
       drawSidecarBitmapFrame(next, false, "scrub-direct");
       updatePlaybackLiveControls(next);
-      if (sidecarSliceCommitTimerRef.current !== null) {
-        window.clearTimeout(sidecarSliceCommitTimerRef.current);
-      }
-      sidecarSliceCommitTimerRef.current = window.setTimeout(() => {
-        sidecarSliceCommitTimerRef.current = null;
-        setLiveSliceIdx(next);
-        setDisplaySliceIdx(next);
-        setPlaybackUiSliceIdx(next);
-        setSliceIdx(next);
-      }, 750);
+      setPlaybackUiSliceIdx(next);
+      setLiveSliceIdx(next);
+      setDisplaySliceIdx(next);
+      scheduleScrubModelCommit(next);
       return;
     }
     setPlaybackUiSliceIdx(next);
-    if (!transformActive && renderGpuCachedSliceDirect(next)) return;
-    setLiveSliceIdx(next);
-    if (renderBufferedSlice(next)) return;
+    if (offline) setLiveSliceIdx(next);
+    if (!transformActive && renderGpuCachedSliceDirect(next)) {
+      if (offline) scheduleScrubModelCommit(next);
+      return;
+    }
+    if (!offline) setLiveSliceIdx(next);
+    if (renderBufferedSlice(next)) {
+      if (offline) scheduleScrubModelCommit(next);
+      return;
+    }
     if (!offline && frameServerUrl) {
       setDisplaySliceIdx(next);
       setPlaybackUiSliceIdx(next);
@@ -17015,6 +17168,10 @@ function Show3D() {
     setDisplaySliceIdx(next);
     setPlaybackUiSliceIdx(next);
     if (!transformActive && requestScrubPreview(next)) return;
+    if (offline) {
+      scheduleScrubModelCommit(next);
+      return;
+    }
     setSliceIdx(next);
   };
   const commitSlice = (idx: number) => {
@@ -17024,6 +17181,7 @@ function Show3D() {
       sidecarSliceCommitTimerRef.current = null;
     }
     setLiveSliceIdx(next);
+    setDisplaySliceIdx(next);
     setPlaybackUiSliceIdx(next);
     setSliceIdx(next);
   };
@@ -17041,11 +17199,17 @@ function Show3D() {
   const handleLoopSliderPointerDownCapture = (e: React.PointerEvent<HTMLSpanElement>) => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
-    if (target.closest(".MuiSlider-thumb")) return;
+    const thumb = target.closest(".MuiSlider-thumb") as HTMLElement | null;
+    // Loop sliders have start/current/end thumbs. Leave start/end to MUI so
+    // range editing still works, but own the current-frame thumb and track
+    // because anywidget trait commits can batch under rapid pointer drags.
+    if (loop && thumb && thumb.getAttribute("data-index") !== "1") return;
     const rect = e.currentTarget.getBoundingClientRect();
+    const lo = loop ? Math.max(0, Math.min(loopStart, nSlices - 1)) : 0;
+    const hi = loop ? Math.max(lo, Math.min(effectiveLoopEnd, nSlices - 1)) : nSlices - 1;
     const sliceFromClientX = (clientX: number) => {
       const pct = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
-      return clampSlice(pct * Math.max(0, nSlices - 1));
+      return Math.max(lo, Math.min(hi, clampSlice(pct * Math.max(0, nSlices - 1))));
     };
     const moveCurrent = (clientX: number, commit: boolean) => {
       const next = sliceFromClientX(clientX);
@@ -17437,6 +17601,7 @@ function Show3D() {
 	                  onChange={(_, value) => {
 	                    const raw = Array.isArray(value) ? value[0] : value;
 	                    const next = clampPageIdx(Number(raw));
+	                    if (next !== pageControlIdx) resetPagedViewTransform();
 	                    setPageSliderPreviewIdx(next);
 	                    commitPageIdx(next);
 	                  }}
@@ -17444,6 +17609,7 @@ function Show3D() {
 	                    const raw = Array.isArray(value) ? value[0] : value;
 	                    const next = clampPageIdx(Number(raw));
 	                    stopPagePlayback();
+	                    if (next !== pageControlIdx) resetPagedViewTransform();
 	                    setPageSliderPreviewIdx(next);
 	                    commitPageIdx(next, true);
 	                  }}
@@ -18335,7 +18501,7 @@ function Show3D() {
                 )}
               </Box>
             ))}
-            {(nPanels || 1) > 1 && visiblePanelIndices.map((panel, slot) => {
+            {hasPanelMarkers && (nPanels || 1) > 1 && visiblePanelIndices.map((panel, slot) => {
               const n = Math.max(1, visiblePanelCount || 1);
               const cols = panelColsForCount(n);
               const rows = Math.ceil(n / cols);
@@ -18790,8 +18956,8 @@ function Show3D() {
             )}
             {/* Per-panel resize corner. Empty cells (partial last row) get
                 no handle. Each handle scales the whole multi-panel canvas
-                (linked behavior). Match Show2D gallery: 16x16, grey, 0.6/1.0.
-                User trait `show_resize_handles` toggles visibility. */}
+                (linked behavior). User trait `show_resize_handles` toggles
+                visibility. */}
             {showResizeControls && (() => {
               const n = Math.max(1, visiblePanelCount || 1);
               const cols = panelColsForCount(n);
@@ -18806,22 +18972,16 @@ function Show3D() {
                 const slotY = row * (outPanelH + gap);
                 return (
                   <Box
-                    key={`resize-${panel}`}
-                    onMouseDown={handleMainResizeStart}
-                    sx={{
-                      position: "absolute",
-                      left: `calc(${((slotX + outPanelW) / Math.max(1, canvasW)) * 100}% - 16px)`,
-                      top: `calc(${((slotY + outPanelH) / Math.max(1, canvasH)) * 100}% - 16px)`,
-                      width: 16,
-                      height: 16,
-                      cursor: "nwse-resize",
-                      opacity: 0.6,
-                      background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`,
-                      touchAction: "none",
-                      zIndex: 5,
-                      "&:hover": { opacity: 1 },
-                    }}
-                  />
+                      key={`resize-${panel}`}
+                      onMouseDown={handleMainResizeStart}
+                      title="Resize panels"
+                      sx={{
+                        position: "absolute",
+                        left: `calc(${((slotX + outPanelW) / Math.max(1, canvasW)) * 100}% - 16px)`,
+                        top: `calc(${((slotY + outPanelH) / Math.max(1, canvasH)) * 100}% - 16px)`,
+                        ...resizeGripSx,
+                      }}
+                    />
                 );
               });
             })()}
@@ -19153,7 +19313,7 @@ function Show3D() {
                     {loop ? (
                       <Slider ref={playbackSliderRef} value={[loopStart, activeIdx, effectiveLoopEnd]} onMouseDown={handleLoopSliderMouseDown} onPointerDownCapture={handleLoopSliderPointerDownCapture} onChange={(_, v) => { const vals = v as number[]; setLoopStart(vals[0]); scrubToSlice(vals[1]); setLoopEnd(vals[2]); }} onChangeCommitted={(_, v) => { const vals = v as number[]; setLoopStart(vals[0]); commitSlice(vals[1]); setLoopEnd(vals[2]); }} disableSwap min={0} max={nSlices - 1} size="small" valueLabelDisplay="auto" valueLabelFormat={(v) => formatFrameValueLabel(v)} marks={bookmarkedFrameMarks} aria-label={`Loop range and current ${dimLabel.toLowerCase()} (frame ${activeIdx + 1} of ${nSlices}, loop ${loopStart + 1} to ${effectiveLoopEnd + 1})`} sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 90, "& .MuiSlider-thumb[data-index='0']": { width: 8, height: 8, bgcolor: themeColors.textMuted }, "& .MuiSlider-thumb[data-index='1']": { width: 12, height: 12 }, "& .MuiSlider-thumb[data-index='2']": { width: 8, height: 8, bgcolor: themeColors.textMuted }, "& .MuiSlider-mark": { bgcolor: "#ffc107", width: 5, height: 5, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" }, "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }} />
                     ) : (
-                      <Slider ref={playbackSliderRef} value={activeIdx} onChange={(_, v) => scrubToSlice(v as number)} onChangeCommitted={(_, v) => commitSlice(v as number)} min={0} max={nSlices - 1} size="small" valueLabelDisplay="auto" valueLabelFormat={(v) => formatFrameValueLabel(v)} marks={bookmarkedFrameMarks} aria-label={`Current ${dimLabel.toLowerCase()} (${activeIdx + 1} of ${nSlices})`} sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 90, "& .MuiSlider-mark": { bgcolor: "#ffc107", width: 5, height: 5, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" }, "& .MuiSlider-valueLabel": { maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }} />
+                      <Slider ref={playbackSliderRef} value={activeIdx} onPointerDownCapture={handleLoopSliderPointerDownCapture} onChange={(_, v) => scrubToSlice(v as number)} onChangeCommitted={(_, v) => commitSlice(v as number)} min={0} max={nSlices - 1} size="small" valueLabelDisplay="auto" valueLabelFormat={(v) => formatFrameValueLabel(v)} marks={bookmarkedFrameMarks} aria-label={`Current ${dimLabel.toLowerCase()} (${activeIdx + 1} of ${nSlices})`} sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 90, "& .MuiSlider-mark": { bgcolor: "#ffc107", width: 5, height: 5, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" }, "& .MuiSlider-valueLabel": { maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }} />
                     )}
                     <span
                       ref={playbackLiveCountRef}
@@ -19291,12 +19451,13 @@ function Show3D() {
                               panelHistogramPreviewPctRef.current.set(panel, [min, max]);
                               scheduleHistogramPreviewPaint("hist-commit");
                               const commitPanelRange = () => {
-                                updatePanelState(panel, { imageVminPct: min, imageVmaxPct: max });
-                                setPanelRangeValues(panel, pctToValue(min, panelRange.min, panelRange.max), pctToValue(max, panelRange.min, panelRange.max));
                                 if (autoContrast) {
-                                  restorePanelManualClipPcts();
+                                  freezeCurrentPanelContrastAsManual(panel, { min, max });
                                   manualImageRangeBeforeAutoRef.current = null;
                                   setAutoContrast(false);
+                                } else {
+                                  updatePanelState(panel, { imageVminPct: min, imageVmaxPct: max });
+                                  setPanelRangeValues(panel, pctToValue(min, panelRange.min, panelRange.max), pctToValue(max, panelRange.min, panelRange.max));
                                 }
                               };
                               if (sidecarMode) window.setTimeout(commitPanelRange, 0);
@@ -19509,7 +19670,7 @@ function Show3D() {
               <canvas ref={previewCanvasRef} width={previewCanvasDims.w} height={previewCanvasDims.h} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", imageRendering: "pixelated" }} role="img" aria-label={`ROI preview crop${previewCropDims ? ` (${previewCropDims.w} by ${previewCropDims.h} pixels)` : ""}`} />
               <canvas ref={previewOverlayRef} width={Math.round(previewCanvasDims.w * DPR)} height={Math.round(previewCanvasDims.h * DPR)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} aria-hidden="true" />
               {showResizeControls && (
-                <Box onMouseDown={handleMainResizeStart} sx={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, cursor: "nwse-resize", opacity: 0.6, background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`, touchAction: "none", zIndex: 5, "&:hover": { opacity: 1 } }} />
+                <Box onMouseDown={handleMainResizeStart} title="Resize image" sx={{ position: "absolute", bottom: 0, right: 0, ...resizeGripSx }} />
               )}
             </Box>
             {/* All-ROI Stats - one row per ROI, same style as main stats bar */}
@@ -19689,18 +19850,12 @@ function Show3D() {
                     <Box
                       key={`fft-resize-${panel}`}
                       onMouseDown={handleMainResizeStart}
+                      title="Resize FFT panels"
                       sx={{
                         position: "absolute",
                         left: `calc(${((slotX + outPanelW) / Math.max(1, canvasW)) * 100}% - 16px)`,
                         top: `calc(${((slotY + outPanelH) / Math.max(1, canvasH)) * 100}% - 16px)`,
-                        width: 16,
-                        height: 16,
-                        cursor: "nwse-resize",
-                        opacity: 0.6,
-                        background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`,
-                        touchAction: "none",
-                        zIndex: 5,
-                        "&:hover": { opacity: 1 },
+                        ...resizeGripSx,
                       }}
                     />
                   );

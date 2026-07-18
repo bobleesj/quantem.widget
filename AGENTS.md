@@ -120,6 +120,15 @@ React state updates on every `mousemove`/touchmove; use animation-frame
 scheduling, stable overlay DOM, and opacity/transform transitions where
 possible.
 
+Hover inspection is not selection. For Show2D, Show3D, Show4DSTEM, and any
+other multi-panel or multi-region widget, a user must be able to move the
+pointer over any visible scientific panel and see that panel's coordinates,
+value/readout, detector/ROI label, and stats without clicking it first.
+Selection remains the explicit state for applying controls, editing, hiding,
+starring, linking, or exporting. Browser-drive tests for hover/readout changes
+must include hovering at least two unselected panels or regions and verifying
+that controls do not silently retarget just because the pointer moved.
+
 For ShowEDS real-data work, keep band, ROI, zoom, contrast, and smooth/auto
 display interactions at real-time speed. Treat loss of 30 FPS interaction as a
 bug unless the limitation is explicitly documented and accepted.

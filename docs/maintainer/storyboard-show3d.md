@@ -40,6 +40,9 @@ for parity.
 
 - Compare labels, scale bars, color maps, panel borders, stats, and histogram
   controls against Show2D.
+- Hover unselected movie panels and verify the cursor readout, frame-aware
+  stats, and Color dropdown/reporting context follow the hovered panel without
+  changing which panel the edit controls will modify.
 - Pass ``cmap=["RdBu", "viridis", ...]`` for a multi-panel Show3D comparison
   and verify every panel keeps its own colormap in the Python API, live UI,
   saved state, static notebook fallback, and standalone HTML export. Hover or
@@ -174,6 +177,9 @@ and linked contrast to be fast and reversible.
 - Toggle linked contrast; verify contrast changes apply consistently when
   linked and independently when unlinked.
 - Change scale mode, colormap, Smooth, and histogram range while scrubbing.
+- While one panel is selected for controls, hover neighboring panels during
+  scrub/playback and verify readout/stats follow the hovered panel but linked
+  or independent edits still apply only according to the selected/link state.
 - Resize the grid and verify current frame, labels, scale bars, and histogram UI
   do not jump unexpectedly.
 
@@ -383,6 +389,10 @@ panel/file workflows when the scientific workflow produces that many outputs.
   zoom anchor, labels, scale bars, and contrast state.
 - Hide and restore panels during playback and verify hidden panels do not keep
   unnecessary frame or FFT work active.
+- Sweep hover across visible panels while playback is paused and while it is
+  playing. Verify the active readout/stats are per-hovered-panel and that hover
+  alone does not change the selected panel, hidden-panel state, or playback
+  target.
 - Record whether playback, frame slider, histogram, and overlay interactions
   remain near the target FPS, or document the limiting case.
 

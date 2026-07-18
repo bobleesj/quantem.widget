@@ -108,6 +108,11 @@ blindly clicking through a list.
   when those data are available on the backend.
 - Test desktop and mobile-sized viewports. A narrow browser viewport is a
   pre-check; physical iPhone Safari is required for iPhone-specific claims.
+- Treat hover as inspection, not selection. For multi-panel or multi-region
+  widgets, hover at least two unselected panels/regions and verify coordinates,
+  values, labels, detector/ROI context, and stats follow the hovered target
+  while edit controls stay on the explicitly selected target until the user
+  clicks or chooses a new target.
 - Record backend host, frontend browser, URL/notebook, widget source path,
   data path, shape, dtype, native bytes, panel count, frame count, display bin,
   first-paint time, and interaction FPS method.

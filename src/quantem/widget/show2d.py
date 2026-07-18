@@ -1955,6 +1955,8 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
     # Used by the Python-side truthful timing print (end-to-end wall clock, not just __init__).
     _js_rendered = traitlets.Bool(False).tag(sync=True)
     frame_bytes = traitlets.Bytes(b"").tag(sync=True)
+    frame_bytes_url = traitlets.Unicode("").tag(sync=True)
+    frame_bytes_urls = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
     # Optional per-panel frame stacks. Static panels keep count=1 and are not
     # duplicated in panel_stack_bytes; offsets are -1 for those panels.
     panel_frame_counts = traitlets.List(traitlets.Int(), default_value=[]).tag(sync=True)
@@ -1962,6 +1964,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
     panel_playback_fps = traitlets.Float(10.0).tag(sync=True)
     panel_stack_offsets = traitlets.List(traitlets.Int(), default_value=[]).tag(sync=True)
     panel_stack_bytes = traitlets.Bytes(b"").tag(sync=True)
+    panel_stack_bytes_url = traitlets.Unicode("").tag(sync=True)
     _panel_stack_mins = traitlets.List(trait=traitlets.Float(), default_value=[]).tag(sync=True)
     _panel_stack_maxs = traitlets.List(trait=traitlets.Float(), default_value=[]).tag(sync=True)
     # Offline mode: stack quantized to uint8 against global (min, max). 4x
@@ -2426,6 +2429,9 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
     ):
         import time as _time
         _t0 = _time.perf_counter()
+        skip_initial_frame_pack = bool(kwargs.pop("_skip_initial_frame_pack", False))
+        skip_initial_stats = bool(kwargs.pop("_skip_initial_stats", False))
+        preserve_input_dtype_for_export = bool(kwargs.pop("_preserve_input_dtype_for_export", False))
         requested_panel_cmaps = (
             [_cmap_name(item) for item in cmap]
             if _is_cmap_sequence(cmap)
@@ -2725,7 +2731,10 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 underlay=underlay, underlay_alpha=underlay_alpha,
                 underlay_haadf_gain=underlay_haadf_gain,
                 underlay_mode=underlay_mode, stretch_percentiles=stretch_percentiles,
-                display_gamma=display_gamma, dual_gain=dual_gain)
+                display_gamma=display_gamma, dual_gain=dual_gain,
+                skip_initial_frame_pack=skip_initial_frame_pack,
+                skip_initial_stats=skip_initial_stats,
+                preserve_input_dtype_for_export=preserve_input_dtype_for_export)
 
     def _init_sync(self, *, data, labels, panel_title_spans, title, cmap, panel_cmaps, n_pages, panels_per_page,
                    page_labels, page_starred, show_title, sampling, units,
@@ -2758,7 +2767,9 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                    underlay=False, underlay_alpha=0.95,
                    underlay_haadf_gain=0.35, underlay_mode="haadf",
                    stretch_percentiles=(4.0, 99.0), display_gamma=0.75,
-                   dual_gain=(1.0, 1.0)):
+                   dual_gain=(1.0, 1.0), skip_initial_frame_pack=False,
+                   skip_initial_stats=False,
+                   preserve_input_dtype_for_export=False):
         import time as _time
         self._verbose = verbose
         self.widget_version = resolve_widget_version()
@@ -2864,8 +2875,13 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         if data.ndim == 2:
             data = data[np.newaxis, ...]
 
-        # Avoid redundant copy: np.asarray is a no-op when already float32 + contiguous
-        if data.dtype == np.float32:
+        # Avoid redundant copy: np.asarray is a no-op when already float32 + contiguous.
+        # Folder export can preserve uint8 stress fixtures because the browser
+        # receives explicit external bytes and does not need an intermediate
+        # float32 trait payload.
+        if preserve_input_dtype_for_export and data.dtype == np.uint8:
+            self._data = np.asarray(data)
+        elif data.dtype == np.float32:
             self._data = np.array(data, dtype=np.float32, copy=True)
         else:
             self._data = np.asarray(data, dtype=np.float32)
@@ -2978,8 +2994,12 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         self._panel_stacks = panel_stacks
         self._panel_stacks_original = [stack for stack in panel_stacks]
         self._panel_stack_originals_are_views = True
-        self.panel_frame_counts = [int(stack.shape[0]) for stack in panel_stacks]
-        self.panel_frame_indices = list(resolved_panel_frame_indices or [0] * self.n_images)
+        self._updating_panel_frames = True
+        try:
+            self.panel_frame_counts = [int(stack.shape[0]) for stack in panel_stacks]
+            self.panel_frame_indices = list(resolved_panel_frame_indices or [0] * self.n_images)
+        finally:
+            self._updating_panel_frames = False
         self.panel_stack_offsets = [-1] * self.n_images
         self.inset_plots = _normalize_inset_plot_specs(inset_plots, n_items=self.n_images)
         self.show_inset_plots = bool(show_inset_plots)
@@ -3416,10 +3436,21 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         self._view_ops_ready = True
 
         # Compute initial stats (from full-res data)
-        self._compute_all_stats()
+        if skip_initial_stats:
+            axes = (1, 2) if self._data.ndim == 3 else None
+            self.stats_mean = np.mean(self._data, axis=axes).ravel().tolist()
+            self.stats_min = np.min(self._data, axis=axes).ravel().tolist()
+            self.stats_max = np.max(self._data, axis=axes).ravel().tolist()
+            self.stats_std = [0.0] * len(self.stats_mean)
+        else:
+            self._compute_all_stats()
 
         # Send display data to JS (possibly binned)
-        self._update_all_frames()
+        if skip_initial_frame_pack:
+            self.frame_bytes = b""
+            self.panel_stack_bytes = b""
+        else:
+            self._update_all_frames()
 
         self.selected_idx = 0
 
@@ -5030,10 +5061,10 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 defs.append(
                     f'<clipPath id="{clip_id}"><rect x="{x:g}" y="{y:g}" width="{panel_w:g}" height="{panel_h:g}"/></clipPath>'
                 )
-                marker_color = svg_color(
-                    self.marker_colors[panel_index]
+                marker_color = (
+                    svg_color(self.marker_colors[panel_index])
                     if panel_index < len(self.marker_colors) and self.marker_colors[panel_index]
-                    else _IDENTITY_PALETTE[panel_index % len(_IDENTITY_PALETTE)]
+                    else ""
                 )
                 panel_stroke = svg_color(panel_border_color, "#d0d0d0")
                 elements.extend([
@@ -5049,13 +5080,13 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                         f'<rect x="{x}" y="{y}" width="{panel_w}" height="{panel_h}" fill="none" '
                         f'stroke="{esc_attr(panel_stroke)}" stroke-width="{panel_border_px:g}"/>'
                     )
-                if str(self.marker_style or "left") == "around":
+                if marker_color and str(self.marker_style or "left") == "around":
                     elements.append(
                         f'<rect x="{x + 1.5:g}" y="{y + 1.5:g}" width="{max(0, panel_w - 3):g}" '
                         f'height="{max(0, panel_h - 3):g}" fill="none" '
                         f'stroke="{esc_attr(marker_color)}" stroke-width="3"/>'
                     )
-                else:
+                elif marker_color:
                     elements.append(
                         f'<rect x="{x}" y="{y}" width="5" height="{panel_h}" fill="{esc_attr(marker_color)}"/>'
                     )
@@ -6623,17 +6654,18 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 "the export clone rebuilds from the grayscale stack and would drop the color channels."
             )
 
-        quantized = self._normalise_html_export_options(
+        export_mode, quantized = self._normalise_html_export_options(
             mode=mode,
             encoding=encoding,
             downsample=downsample,
             quantized=quantized,
         )
         export_path = pathlib.Path(path) if path is not None else self._default_html_export_path(quantized)
-        self._write_html_export(export_path, quantized=quantized, title=title)
+        self._write_html_export(export_path, quantized=quantized, title=title, mode=export_mode)
         size_mb = export_path.stat().st_size / (1024 * 1024)
         label = self._export_mode_label(quantized)
-        self.export_status = f"Exported {export_path.name} ({size_mb:.1f} MB, {label})"
+        mode_label = "folder, " if export_mode == "folder" else ""
+        self.export_status = f"Exported {export_path.name} ({size_mb:.1f} MB, {mode_label}{label})"
         return export_path
 
     def _normalise_html_export_options(
@@ -6643,7 +6675,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         encoding: str = "full",
         downsample: int | None = None,
         quantized: bool | None = None,
-    ) -> bool:
+    ) -> tuple[str, bool]:
         raw_mode = str(mode or "single").strip().lower().replace("_", "-")
         if raw_mode in {"exact", "full"}:
             raw_mode = "single"
@@ -6651,8 +6683,10 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         elif raw_mode in {"quantized", "uint8", "u8"}:
             raw_mode = "single"
             encoding = "uint8"
-        if raw_mode != "single":
-            raise ValueError("Show2D HTML export supports mode='single'")
+        elif raw_mode in {"sidecar", "linked-folder", "linked-data-folder"}:
+            raw_mode = "folder"
+        if raw_mode not in {"single", "folder"}:
+            raise ValueError("Show2D HTML export supports mode='single' or mode='folder'")
         if downsample not in (None, 1, "1", "", 0, "0"):
             raise NotImplementedError("Show2D HTML export does not support downsample yet")
         raw_encoding = str(encoding or "full").strip().lower().replace("_", "-")
@@ -6661,9 +6695,9 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         elif quantized is False and raw_encoding in {"quantized", "uint8", "u8"}:
             raw_encoding = "uint8"
         if raw_encoding in {"full", "exact", "float32", "f32"}:
-            return False
+            return raw_mode, False
         if raw_encoding in {"uint8", "u8", "quantized"}:
-            return True
+            return raw_mode, True
         raise ValueError(f"unknown Show2D export encoding {encoding!r}; expected 'full' or 'uint8'")
 
     def _on_export_request_change(self, change: dict) -> None:
@@ -6678,7 +6712,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 self.export_payload_id = ""
                 self.export_filename = ""
                 return
-            quantized = self._normalise_html_export_options(
+            export_mode, quantized = self._normalise_html_export_options(
                 mode=mode,
                 encoding=str(payload.get("encoding", "full")),
                 downsample=payload.get("downsample"),
@@ -6697,7 +6731,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 self.export_status = f"Ready {filename} ({size_mb:.1f} MB, {label})"
             else:
                 self.export_status = f"Exporting {mode} HTML..."
-                self.export_html(quantized=quantized)
+                self.export_html(mode=export_mode, quantized=quantized)
         except Exception as exc:
             self.export_status = f"Export failed: {exc}"
 
@@ -6745,6 +6779,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         *,
         quantized: bool,
         title: str | None = None,
+        mode: str = "single",
     ) -> pathlib.Path:
         from ipywidgets.embed import dependency_state, embed_minimal_html
 
@@ -6753,8 +6788,57 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         export_path = pathlib.Path(path)
         export_path.parent.mkdir(parents=True, exist_ok=True)
         page_title = title or self.title or "Show2D"
+        has_local_stacks = any(count > 1 for count in self.panel_frame_counts)
+        if mode == "folder" and not has_local_stacks and not any(self.is_rgb):
+            self._write_html_folder_export_fast(
+                export_path,
+                quantized=quantized,
+                title=page_title,
+            )
+            ensure_mobile_viewport(export_path)
+            return export_path
         export_widget = self._clone_for_html_export(quantized=quantized)
         try:
+            if mode == "folder":
+                data_dir = export_path.parent / f"{export_path.stem}_files"
+                data_dir.mkdir(parents=True, exist_ok=True)
+                frame_name = "frame_bytes.bin"
+                frame_path = data_dir / frame_name
+                frame_path.write_bytes(bytes(export_widget.frame_bytes))
+                export_widget.frame_bytes = b""
+                export_widget.frame_bytes_url = f"{data_dir.name}/{frame_name}"
+                export_widget.frame_bytes_urls = []
+                panel_stack_size = 0
+                if export_widget.panel_stack_bytes:
+                    stack_name = "panel_stack_bytes.bin"
+                    stack_path = data_dir / stack_name
+                    stack_path.write_bytes(bytes(export_widget.panel_stack_bytes))
+                    panel_stack_size = stack_path.stat().st_size
+                    export_widget.panel_stack_bytes = b""
+                    export_widget.panel_stack_bytes_url = f"{data_dir.name}/{stack_name}"
+                else:
+                    export_widget.panel_stack_bytes_url = ""
+                (data_dir / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "format": "quantem.widget.show2d.folder.v1",
+                            "n_images": int(export_widget.n_images),
+                            "height": int(export_widget.height),
+                            "width": int(export_widget.width),
+                            "encoding": "uint8" if quantized else "float32",
+                            "frame_bytes": frame_name,
+                            "frame_bytes_size": frame_path.stat().st_size,
+                            "panel_stack_bytes": "panel_stack_bytes.bin" if panel_stack_size else "",
+                            "panel_stack_bytes_size": panel_stack_size,
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+            else:
+                export_widget.frame_bytes_url = ""
+                export_widget.frame_bytes_urls = []
+                export_widget.panel_stack_bytes_url = ""
             state = dependency_state([export_widget], drop_defaults=False)
             embed_minimal_html(
                 str(export_path),
@@ -6767,6 +6851,150 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             export_widget.close()
         ensure_mobile_viewport(export_path)
         return export_path
+
+    def _folder_frame_payload(self, *, quantized: bool) -> tuple[bytes, list[float], list[float]]:
+        """Return packed display bytes and dequantization ranges for folder export."""
+        data = self._display_data if self._display_data is not None else self._data
+        data = self._crop_view_stack(data)
+        data = self._filtered_frames(data)
+        data = self._pad_view_stack(data)
+        if quantized:
+            if np.asarray(data).dtype == np.uint8:
+                arr = np.ascontiguousarray(data)
+                mins = [0.0] * int(arr.shape[0])
+                maxs = [255.0] * int(arr.shape[0])
+                return _b64_safe(arr.tobytes()), mins, maxs
+            arr = np.ascontiguousarray(data, dtype=np.float32)
+            flat = arr.reshape(arr.shape[0], -1)
+            out = np.empty(flat.shape, dtype=np.uint8)
+            mins, maxs = [], []
+            for i in range(flat.shape[0]):
+                finite = flat[i][np.isfinite(flat[i])]
+                lo = float(finite.min()) if finite.size else 0.0
+                hi = float(finite.max()) if finite.size else 1.0
+                rng = hi - lo if hi > lo else 1.0
+                out[i] = np.clip((flat[i] - lo) * (255.0 / rng), 0, 255).astype(np.uint8)
+                mins.append(lo)
+                maxs.append(hi)
+            return _b64_safe(out.tobytes()), mins, maxs
+        arr = np.ascontiguousarray(data, dtype=np.float32)
+        return _b64_safe(arr.tobytes()), [], []
+
+    def _write_html_folder_export_fast(
+        self,
+        export_path: pathlib.Path,
+        *,
+        quantized: bool,
+        title: str,
+    ) -> None:
+        """Write folder-mode HTML without cloning or embedding pixel buffers."""
+        from ipywidgets.embed import dependency_state, embed_minimal_html
+
+        data_dir = export_path.parent / f"{export_path.stem}_files"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        frame_name = "frame_bytes.bin"
+        frame_bytes, mins, maxs = self._folder_frame_payload(quantized=quantized)
+        per_frame_bytes = int(self.height) * int(self.width)
+        identity_uint8 = (
+            quantized
+            and per_frame_bytes > 0
+            and len(frame_bytes) >= int(self.n_images) * per_frame_bytes
+            and len(mins) == int(self.n_images)
+            and len(maxs) == int(self.n_images)
+            and all(lo == 0.0 and hi == 255.0 for lo, hi in zip(mins, maxs, strict=False))
+        )
+        frame_file_names: list[str] = []
+        frame_bytes_size = 0
+        frame_path: pathlib.Path | None = None
+        if identity_uint8 and int(self.n_images) > 1:
+            view = memoryview(frame_bytes)
+            for image_index in range(int(self.n_images)):
+                name = f"frame_{image_index:06d}.bin"
+                start = image_index * per_frame_bytes
+                stop = start + per_frame_bytes
+                (data_dir / name).write_bytes(view[start:stop])
+                frame_file_names.append(name)
+            frame_name = ""
+            frame_bytes_size = sum((data_dir / name).stat().st_size for name in frame_file_names)
+        else:
+            frame_path = data_dir / frame_name
+            frame_path.write_bytes(frame_bytes)
+            frame_bytes_size = frame_path.stat().st_size
+
+        old_values = {
+            "_save_state": getattr(self, "_save_state", False),
+            "offline": self.offline,
+            "_export_light": self._export_light,
+            "frame_bytes": self.frame_bytes,
+            "frame_bytes_url": self.frame_bytes_url,
+            "frame_bytes_urls": list(self.frame_bytes_urls),
+            "panel_stack_bytes": self.panel_stack_bytes,
+            "panel_stack_bytes_url": self.panel_stack_bytes_url,
+            "_offline_mins": list(self._offline_mins),
+            "_offline_maxs": list(self._offline_maxs),
+            "_offline_min": self._offline_min,
+            "_offline_max": self._offline_max,
+            "_webgpu_filter_ok": self._webgpu_filter_ok,
+            "export_enabled": self.export_enabled,
+            "export_status": self.export_status,
+            "export_payload": self.export_payload,
+            "export_payload_id": self.export_payload_id,
+            "export_filename": self.export_filename,
+            "handoff_enabled": self.handoff_enabled,
+            "handoff_status": self.handoff_status,
+            "handoff_request": self.handoff_request,
+        }
+        try:
+            self._save_state = True
+            self.offline = quantized
+            self._export_light = True
+            self.frame_bytes = b""
+            self.frame_bytes_url = f"{data_dir.name}/{frame_name}" if frame_name else ""
+            self.frame_bytes_urls = [f"{data_dir.name}/{name}" for name in frame_file_names]
+            self.panel_stack_bytes = b""
+            self.panel_stack_bytes_url = ""
+            self._offline_mins = mins if quantized else []
+            self._offline_maxs = maxs if quantized else []
+            self._offline_min = mins[0] if mins else 0.0
+            self._offline_max = maxs[0] if maxs else 1.0
+            self._webgpu_filter_ok = True
+            self.export_enabled = False
+            self.export_status = ""
+            self.export_payload = b""
+            self.export_payload_id = ""
+            self.export_filename = ""
+            self.handoff_enabled = False
+            self.handoff_status = ""
+            self.handoff_request = ""
+            state = dependency_state([self], drop_defaults=False)
+            embed_minimal_html(
+                str(export_path),
+                views=[self],
+                title=title,
+                drop_defaults=False,
+                state=state,
+            )
+        finally:
+            for name, value in old_values.items():
+                setattr(self, name, value)
+        (data_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "format": "quantem.widget.show2d.folder.v1",
+                    "n_images": int(self.n_images),
+                    "height": int(self.height),
+                    "width": int(self.width),
+                    "encoding": "uint8" if quantized else "float32",
+                    "frame_bytes": frame_name,
+                    "frame_bytes_files": frame_file_names,
+                    "frame_bytes_size": frame_bytes_size,
+                    "panel_stack_bytes": "",
+                    "panel_stack_bytes_size": 0,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     def _html_export_bytes(self, *, quantized: bool) -> bytes:
         with tempfile.TemporaryDirectory(prefix="show2d-export-") as tmp:

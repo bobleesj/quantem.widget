@@ -89,6 +89,11 @@ https://doi.org/10.1039/d6dd00121a
 - [ ] Histogram UI matches the existing Show2D-style interaction: compact panel,
   no extra whitespace, draggable min/max handles, fast center drag, and no
   visible lag.
+- [ ] Hover inspection is independent of selection. In Show2D, Show3D,
+  Show4DSTEM, and other multi-target widgets, hover at least two unselected
+  panels/regions and verify coordinates, value/readout, labels, detector/ROI
+  context, and stats follow the hovered target while edit controls remain
+  scoped to the explicitly selected target.
 - [ ] New or changed widget interactions have a matching storyboard story in
   [docs/maintainer/storyboard-&lt;widget&gt;.md](https://github.com/bobleesj/quantem.widget/blob/main/docs/maintainer/storyboard.md)
   (add stories for new behavior, update stale ones), and the storyboard
