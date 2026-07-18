@@ -188,6 +188,18 @@ def test_show3d_paged_frontend_preserves_view_transform() -> None:
     assert "paintSidecarU8ViewportToContext(paintCtx, drawIdx, canvasW, canvasH)" in sidecar_draw_helper
     assert "ctx.clearRect(0, 0, canvasW, canvasH)" not in sidecar_draw_helper
 
+    transform_render_helper = frontend.split(
+        "const scheduleTransformRender = (): boolean => {",
+        1,
+    )[1].split("React.useEffect(() => () => {", 1)[0]
+    assert 'drawSidecarBitmapFrame(\n        playing ? playbackIdxRef.current : liveSliceIdx,\n        false,\n        "transform-immediate",' in transform_render_helper
+
+    wheel_zoom_helper = frontend.split(
+        "const applyCanvasWheelZoom =",
+        1,
+    )[1].split("canvasWheelHandlerRef.current", 1)[0]
+    assert "setGpuDisplayVisible(false)" not in wheel_zoom_helper
+
 
 def test_show3d_ui_mode_presets_and_overrides() -> None:
     interactive = Show3D(*_panels()[:2], verbose=False)

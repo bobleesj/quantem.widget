@@ -12970,6 +12970,23 @@ function Show3D() {
 
   const scheduleTransformRender = (): boolean => {
     if (separatePanelFrames && !sidecarMode && imageRotation % 4 !== 0) return false;
+    if (
+      offline &&
+      sidecarMode &&
+      sidecarRamReadyRef.current &&
+      !isRgb &&
+      sidecarViewTransformActive()
+    ) {
+      if (transformRenderRafRef.current !== null) {
+        window.cancelAnimationFrame(transformRenderRafRef.current);
+        transformRenderRafRef.current = null;
+      }
+      return drawSidecarBitmapFrame(
+        playing ? playbackIdxRef.current : liveSliceIdx,
+        false,
+        "transform-immediate",
+      );
+    }
     if (transformRenderRafRef.current !== null) return true;
     transformRenderRafRef.current = window.requestAnimationFrame(() => {
       transformRenderRafRef.current = null;
@@ -15207,7 +15224,6 @@ function Show3D() {
     const newPanY = localY - (localY - cur.panY) * zoomRatio;
     syncPlaybackPanelTransform(panelIdx, newZoom, newPanX, newPanY);
     transformInputAtRef.current = performance.now();
-    if (sidecarMode) setGpuDisplayVisible(false);
     if (scheduleTransformRender()) {
       scheduleTransformStateCommit();
     } else {
@@ -15693,7 +15709,6 @@ function Show3D() {
       );
     }
     transformInputAtRef.current = performance.now();
-    if (sidecarMode) setGpuDisplayVisible(false);
     if (scheduleTransformRender()) scheduleTransformStateCommit();
     else commitLivePanelTransforms();
   };
@@ -15738,7 +15753,6 @@ function Show3D() {
       };
       syncPlaybackPanelTransform(panStartPanelRef.current, current.zoom, newPanX, newPanY);
       transformInputAtRef.current = performance.now();
-      if (sidecarMode) setGpuDisplayVisible(false);
       if (scheduleTransformRender()) scheduleTransformStateCommit();
       else commitLivePanelTransforms();
       return;
