@@ -94,10 +94,18 @@ def test_show4dstem_webgpu_engine_has_selected_index_vi_kernel() -> None:
     assert "sampleF(base + idx[j]" in source
     assert "maskedSumBuffer(mask: Uint32Array)" in source
     assert "maskedDpcBuffer(mask: Uint32Array" in source
+    assert "getDevice(): GPUDevice" in source
+    assert "readFloatBuffer(buf: GPUBuffer" in source
     assert "const DPC_MEAN_WGSL" in source
     assert "const DPC_COMPONENT_WGSL" in source
     assert "enable subgroups;" in source
+    assert "adoptBuffer(idx: number, buffer: GPUBuffer" in (
+        repo / "js" / "colormaps.ts"
+    ).read_text(encoding="utf-8")
     assert "function buildDetectorMask" not in frontend
     assert "function buildScanMask" not in frontend
     assert "buildFullDetectorMask" in frontend
     assert "maskedDpc" in frontend
+    assert "dpcBufferOnly" in frontend
+    assert "virtualGpuCanvasRef" in frontend
+    assert "renderPanelSlotsDirectToCanvas" in frontend

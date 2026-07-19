@@ -22,7 +22,7 @@ import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { useTheme } from "../theme";
-import { COLORMAPS, applyColormap } from "../colormaps";
+import { COLORMAPS, GPUColormapEngine, applyColormap } from "../colormaps";
 import { WebGPUFFT, getWebGPUFFT, fft2dAsync, fftshift, autoEnhanceFFT, nextPow2, applyHannWindow2D } from "../fft";
 import {
   buildDetectorMask,
@@ -94,6 +94,15 @@ function ViSourceLabel({ source }: { source: string }) {
 function viSourceUsesSymmetricRange(source: string): boolean {
   return source === "DPC_row" || source === "DPC_col";
 }
+
+const VI_GPU_DPC_SLOT = 41;
+type DpcGpuSource = "DPC_row" | "DPC_col";
+type ViGpuDpcImage = {
+  source: DpcGpuSource;
+  slot: number;
+  width: number;
+  height: number;
+};
 
 function viProductFrameView(
   model: any,
@@ -2798,6 +2807,35 @@ function Show4DSTEM() {
   const [viRoiDpBytes] = useModelState<DataView>("vi_roi_dp_bytes");
   const [viRoiReduce, setViRoiReduce] = useModelState<string>("vi_roi_reduce");
   const [webgpuDpcReady, setWebgpuDpcReady] = React.useState(false);
+  const [viGpuDpcVersion, setViGpuDpcVersion] = React.useState(0);
+  const viGpuDpcImageRef = React.useRef<ViGpuDpcImage | null>(null);
+  const viGpuColormapRef = React.useRef<GPUColormapEngine | null>(null);
+  const viGpuColormapDeviceRef = React.useRef<GPUDevice | null>(null);
+  const ensureViGpuColormap = React.useCallback((
+    backend: Show4DSTEMCompute | Show4DSTEMCpuCompute,
+  ): GPUColormapEngine | null => {
+    const maybeDevice = backend as unknown as { getDevice?: () => GPUDevice };
+    const device = typeof maybeDevice.getDevice === "function" ? maybeDevice.getDevice() : null;
+    if (!device) return null;
+    if (!viGpuColormapRef.current || viGpuColormapDeviceRef.current !== device) {
+      viGpuColormapRef.current?.destroy();
+      viGpuColormapRef.current = new GPUColormapEngine(device);
+      viGpuColormapDeviceRef.current = device;
+    }
+    return viGpuColormapRef.current;
+  }, []);
+  const clearViGpuDpcDisplay = React.useCallback(() => {
+    if (!viGpuDpcImageRef.current) return;
+    viGpuDpcImageRef.current = null;
+    setViGpuDpcVersion(v => v + 1);
+  }, []);
+
+  React.useEffect(() => () => {
+    viGpuDpcImageRef.current = null;
+    viGpuColormapRef.current?.destroy();
+    viGpuColormapRef.current = null;
+    viGpuColormapDeviceRef.current = null;
+  }, []);
 
   // ── Offline WebGPU compute backend ──────────────────────────────────────
   // Small datasets ship the full uint16 stack (the `_offline_stack` trait); we
@@ -3044,7 +3082,8 @@ function Show4DSTEM() {
       }
       if (!compute || disposed) { compute?.dispose(); return; }
       setWebgpuDpcReady(Boolean(
-        (compute as unknown as { maskedDpc?: unknown }).maskedDpc
+        (compute as unknown as { maskedDpcBuffer?: unknown }).maskedDpcBuffer
+        || (compute as unknown as { maskedDpc?: unknown }).maskedDpc
         || (compute as unknown as { maskedCoM?: unknown }).maskedCoM,
       ));
       // Auto-filter hot/dead detector pixels (from the HDF5 pixel_mask) so the
@@ -3074,20 +3113,68 @@ function Show4DSTEM() {
         for (let i = 0; i < values.length; i++) out[i] = values[i] - mean;
         return out;
       };
+      let dpcBufferQueue: Promise<void> = Promise.resolve();
+      const computeDpcBufferImage = async (
+        backend: Show4DSTEMCompute | Show4DSTEMCpuCompute,
+        source: DpcGpuSource,
+      ): Promise<boolean> => {
+        const run = async (): Promise<boolean> => {
+          const component = source === "DPC_row" ? "row" : "col";
+          const engine = ensureViGpuColormap(backend);
+          const maybeDpc = backend as unknown as {
+            maskedDpcBuffer?: (mask: Uint32Array, detCols: number, component: "row" | "col") => { buffer: GPUBuffer; n: number; cleanup?: () => void };
+          };
+          if (!engine || typeof maybeDpc.maskedDpcBuffer !== "function") {
+            return false;
+          }
+          await engine.getDevice().queue.onSubmittedWorkDone().catch(() => {});
+          const { buffer, n, cleanup } = maybeDpc.maskedDpcBuffer(dpcMask, detC, component);
+          await engine.getDevice().queue.onSubmittedWorkDone().catch(() => {});
+          cleanup?.();
+          if (n === 0) {
+            buffer.destroy();
+            return false;
+          }
+          engine.adoptBuffer(VI_GPU_DPC_SLOT, buffer, scanCols, scanRows);
+          viGpuDpcImageRef.current = { source, slot: VI_GPU_DPC_SLOT, width: scanCols, height: scanRows };
+          setViGpuDpcVersion(v => v + 1);
+          try {
+            (window as unknown as { __sh4dDpcDisplay?: Record<string, unknown> }).__sh4dDpcDisplay = {
+              source,
+              gpuBufferToDisplay: true,
+              rendered: false,
+              pixels: scanRows * scanCols,
+              slot: VI_GPU_DPC_SLOT,
+            };
+          } catch {
+            // Diagnostics must not affect rendering.
+          }
+          return true;
+        };
+        const queued = dpcBufferQueue.then(run, run);
+        dpcBufferQueue = queued.then(() => undefined, () => undefined);
+        return await queued;
+      };
       const recomputeVI = async () => {
         const source = normaliseViSource(model.get("vi_source"));
         const product = viProductFrameView(model, scanRows, scanCols, source);
         if (product) {
+          clearViGpuDpcDisplay();
           model.set("virtual_image_bytes", product);
           return;
         }
         if (source === "DPC_row" || source === "DPC_col") {
+          const displayed = await computeDpcBufferImage(compute!, source);
+          if (!displayed) {
+            clearViGpuDpcDisplay();
+          }
           const dpc = await computeDpcImage(compute!, source);
           if (dpc) {
             model.set("virtual_image_bytes", new DataView(dpc.buffer));
             return;
           }
         }
+        clearViGpuDpcDisplay();
         const vi = await compute!.maskedSum(buildDetectorMask(model, detR, detC));
         model.set("virtual_image_bytes", new DataView(vi.buffer));
       };
@@ -3187,6 +3274,18 @@ function Show4DSTEM() {
           let sum = 0;
           if (dpc) for (let i = 0; i < dpc.length; i++) sum += dpc[i];
           return { length: dpc?.length ?? 0, sum };
+        },
+        dpcBufferOnly: async () => {
+          const displayed = await computeDpcBufferImage(compute!, "DPC_row");
+          const dpc = await computeDpcImage(compute!, "DPC_row");
+          let sum = 0;
+          if (dpc) for (let i = 0; i < dpc.length; i++) sum += dpc[i];
+          return {
+            available: displayed,
+            displayed: Boolean(viGpuDpcImageRef.current),
+            length: dpc?.length ?? 0,
+            sum,
+          };
         },
         comLen: () => { const c = compute as unknown as { com?: Float32Array | null }; return c && c.com ? c.com.length : -1; },
         rd: () => ({ mode: model.get("roi_mode"), r: model.get("roi_radius"), ri: model.get("roi_radius_inner"),
@@ -3346,8 +3445,8 @@ function Show4DSTEM() {
       requestAnimationFrame(() => { if (!disposed) { void recomputeVI(); void recomputeCompareVI(); } });
       setTimeout(() => { if (!disposed) { void recomputeVI(); void recomputeCompareVI(); } }, 200);
     })();
-    return () => { disposed = true; setWebgpuDpcReady(false); detach?.(); };
-  }, [offline]);
+    return () => { disposed = true; setWebgpuDpcReady(false); clearViGpuDpcDisplay(); detach?.(); };
+  }, [clearViGpuDpcDisplay, ensureViGpuColormap, offline]);
   // dp_stats are computed in JS from frameBytes (Python side no longer
   // syncs a dp_stats trait — saves 4 trait sync round-trips per click).
   const [viStats, setViStats] = React.useState<number[]>([0, 0, 0, 0]);
@@ -4263,6 +4362,8 @@ function Show4DSTEM() {
   const dpUiRef = React.useRef<HTMLCanvasElement>(null);  // High-DPI UI overlay for scale bar
   const dpOffscreenRef = React.useRef<HTMLCanvasElement | null>(null);
   const dpImageDataRef = React.useRef<ImageData | null>(null);
+  const virtualGpuCanvasRef = React.useRef<HTMLCanvasElement>(null);
+  const virtualGpuCanvasContextRef = React.useRef<GPUCanvasContext | null>(null);
   const virtualCanvasRef = React.useRef<HTMLCanvasElement>(null);
   const virtualOverlayRef = React.useRef<HTMLCanvasElement>(null);
   const viUiRef = React.useRef<HTMLCanvasElement>(null);  // High-DPI UI overlay for scale bar
@@ -4498,6 +4599,13 @@ function Show4DSTEM() {
   // Expensive: VI colormap + data processing → cached offscreen canvas
   React.useEffect(() => {
     if (!rawVirtualImageRef.current) return;
+    if (
+      !compareMode
+      && viGpuDpcImageRef.current
+      && activeViSource === viGpuDpcImageRef.current.source
+    ) {
+      return;
+    }
 
     const width = shapeCols;
     const height = shapeRows;
@@ -4572,7 +4680,123 @@ function Show4DSTEM() {
     applyColormap(scaled, imageData.data, lut, vmin, vmax);
     offCtx.putImageData(imageData, 0, 0);
     setViOffscreenVersion(v => v + 1);
-  }, [activeViSource, displayedVirtualImageBytes, shapeRows, shapeCols, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viAutoContrast]);
+  }, [activeViSource, compareMode, displayedVirtualImageBytes, shapeRows, shapeCols, viGpuDpcVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viAutoContrast]);
+
+  // DPC WebGPU display path: the reduction output stays as a GPUBuffer and the
+  // colormap shader renders it to a dedicated WebGPU canvas layer. The
+  // virtual_image_bytes trait is still populated from the same buffer so stats,
+  // FFT, profile, COPY fallback, and non-WebGPU paths keep working.
+  React.useEffect(() => {
+    const gpuImage = viGpuDpcImageRef.current;
+    const engine = viGpuColormapRef.current;
+    const canvas = virtualGpuCanvasRef.current;
+    const raw = rawVirtualImageRef.current;
+    const currentSource = normaliseViSource(model.get("vi_source"));
+    if (
+      !gpuImage
+      || !engine
+      || !canvas
+      || compareMode
+      || (activeViSource !== gpuImage.source && currentSource !== gpuImage.source)
+      || !raw
+      || raw.length !== gpuImage.width * gpuImage.height
+    ) {
+      return;
+    }
+
+    let scaled = raw;
+    if (viScaleMode === "log") {
+      scaled = new Float32Array(raw.length);
+      for (let i = 0; i < raw.length; i++) {
+        scaled[i] = Math.log1p(Math.max(0, raw[i]));
+      }
+    }
+
+    const r = findDataRange(scaled);
+    let dataMin = r.min;
+    let dataMax = r.max;
+    if (viSourceUsesSymmetricRange(activeViSource)) {
+      const span = Math.max(Math.abs(r.min), Math.abs(r.max), 1e-12);
+      dataMin = -span;
+      dataMax = span;
+    }
+
+    let vmin: number, vmax: number;
+    if (traitViVmin != null && traitViVmax != null) {
+      if (viScaleMode === "log") {
+        vmin = Math.log1p(Math.max(traitViVmin, 0));
+        vmax = Math.log1p(Math.max(traitViVmax, 0));
+      } else {
+        vmin = traitViVmin;
+        vmax = traitViVmax;
+      }
+    } else if (viAutoContrast) {
+      ({ vmin, vmax } = percentileClip(scaled, 1, 99));
+    } else {
+      ({ vmin, vmax } = sliderRange(dataMin, dataMax, viVminPct, viVmaxPct));
+    }
+
+    const lut = COLORMAPS[viColormap] || COLORMAPS.inferno;
+    engine.uploadLUT(viColormap, lut);
+    if (
+      !virtualGpuCanvasContextRef.current
+      || canvas.width !== shapeCols
+      || canvas.height !== shapeRows
+    ) {
+      virtualGpuCanvasContextRef.current = engine.configureCanvas(canvas, shapeCols, shapeRows);
+    }
+    const ctx = virtualGpuCanvasContextRef.current;
+    if (!ctx) return;
+    const rendered = engine.renderPanelSlotsDirectToCanvas(
+      [gpuImage.slot],
+      { vmin, vmax },
+      viScaleMode === "log",
+      ctx,
+      {
+        width: shapeCols,
+        height: shapeRows,
+        panelCount: 1,
+        cols: 1,
+        rows: 1,
+        gap: 0,
+        bgRgb: 0,
+        transforms: [{ zoom: viZoom, panX: viPanX, panY: viPanY }],
+        smooth: viSmooth,
+      },
+    );
+    if (rendered) {
+      try {
+        (window as unknown as { __sh4dDpcDisplay?: Record<string, unknown> }).__sh4dDpcDisplay = {
+          ...((window as unknown as { __sh4dDpcDisplay?: Record<string, unknown> }).__sh4dDpcDisplay || {}),
+          source: gpuImage.source,
+          gpuBufferToDisplay: true,
+          rendered: true,
+          width: shapeCols,
+          height: shapeRows,
+        };
+      } catch {
+        // Diagnostics must not affect rendering.
+      }
+    }
+  }, [
+    activeViSource,
+    compareMode,
+    shapeRows,
+    shapeCols,
+    viGpuDpcVersion,
+    viColormap,
+    viVminPct,
+    viVmaxPct,
+    viScaleMode,
+    traitViVmin,
+    traitViVmax,
+    viAutoContrast,
+    viZoom,
+    viPanX,
+    viPanY,
+    viSmooth,
+    model,
+  ]);
 
   // Cheap: VI zoom/pan redraw — just drawImage from cached offscreen
   React.useLayoutEffect(() => {
@@ -6856,6 +7080,20 @@ function Show4DSTEM() {
       ssbTuneDebounceRef.current = null;
     }
   }, []);
+  const currentViSource = normaliseViSource(model.get("vi_source"));
+  const viGpuDpcVisible = Boolean(
+    viGpuDpcVersion >= 0
+    && !compareMode
+    && viGpuDpcImageRef.current
+    && (
+      activeViSource === viGpuDpcImageRef.current.source
+      || currentViSource === viGpuDpcImageRef.current.source
+    ),
+  );
+  const getActiveViCanvas = React.useCallback((): HTMLCanvasElement | null => {
+    if (viGpuDpcVisible && virtualGpuCanvasRef.current) return virtualGpuCanvasRef.current;
+    return virtualCanvasRef.current;
+  }, [viGpuDpcVisible]);
 
   return (
     <Box
@@ -7594,13 +7832,14 @@ function Show4DSTEM() {
                 }} size="small" sx={switchStyles.small} />
                 <Button size="small" sx={compactButton} disabled={viZoom === 1 && viPanX === 0 && viPanY === 0} onClick={() => { setViZoom(1); setViPanX(0); setViPanY(0); }}>Reset</Button>
                 <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={async () => {
-                  if (!virtualCanvasRef.current) return;
+                  const canvas = getActiveViCanvas();
+                  if (!canvas) return;
                   try {
-                    const blob = await new Promise<Blob | null>(resolve => virtualCanvasRef.current!.toBlob(resolve, "image/png"));
+                    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
                     if (!blob) return;
                     await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
                   } catch {
-                    virtualCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "show4dstem_vi.png"); }, "image/png");
+                    canvas.toBlob((b) => { if (b) downloadBlob(b, "show4dstem_vi.png"); }, "image/png");
                   }
                 }}>Copy</Button>
               </>}
@@ -7657,7 +7896,30 @@ function Show4DSTEM() {
             />
           ) : (
             <Box sx={{ ...container.imageBox, width: "100%", maxWidth: viCanvasWidth, aspectRatio: `${shapeCols} / ${shapeRows}`, height: "auto", touchAction: "none", ...mobileImageBoxSx }}>
-              <canvas ref={virtualCanvasRef} width={shapeCols} height={shapeRows} style={{ position: "absolute", width: "100%", height: "100%", imageRendering: "pixelated" }} />
+              <canvas
+                ref={virtualGpuCanvasRef}
+                width={shapeCols}
+                height={shapeRows}
+                style={{
+                  position: "absolute",
+                  width: "100%",
+                  height: "100%",
+                  imageRendering: "pixelated",
+                  display: viGpuDpcVisible ? "block" : "none",
+                }}
+              />
+              <canvas
+                ref={virtualCanvasRef}
+                width={shapeCols}
+                height={shapeRows}
+                style={{
+                  position: "absolute",
+                  width: "100%",
+                  height: "100%",
+                  imageRendering: "pixelated",
+                  display: viGpuDpcVisible ? "none" : "block",
+                }}
+              />
               <canvas
                 ref={virtualOverlayRef} width={shapeCols} height={shapeRows}
                 onPointerDown={handleViMouseDown} onPointerMove={handleViMouseMove}

@@ -308,6 +308,14 @@ export class Show4DSTEMCompute {
     this.frameAtPipe = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: FRAME_WGSL }), entryPoint: "main" } });
   }
 
+  getDevice(): GPUDevice {
+    return this.device;
+  }
+
+  async readFloatBuffer(buf: GPUBuffer, n: number): Promise<Float32Array> {
+    return await this.readF32(buf, n);
+  }
+
   // One frame's diffraction pattern (f32[detSize]) for scan position scanIdx -
   // a GPU extract from whichever chunk holds it. Drives the offline DP panel.
   async frameAt(scanIdx: number): Promise<Float32Array> {
@@ -351,13 +359,13 @@ export class Show4DSTEMCompute {
     this.encodeMaskedCoM(pass, idxBuf, com, detCols);
     pass.end();
     device.queue.submit([enc.finish()]);
-    idxBuf.destroy();
+    this.retireBuffers([idxBuf]);
     return { buffer: com, n };
   }
 
   // GPU-resident centered DPC component. This keeps the common CoMx/CoMy display path on GPU:
   // CoM reduction -> global mean -> component subtraction, with no JavaScript pass over scan pixels.
-  maskedDpcBuffer(mask: Uint32Array, detCols: number, component: "row" | "col" | 0 | 1): { buffer: GPUBuffer; n: number } {
+  maskedDpcBuffer(mask: Uint32Array, detCols: number, component: "row" | "col" | 0 | 1): { buffer: GPUBuffer; n: number; cleanup?: () => void } {
     const device = this.device;
     const out = device.createBuffer({ size: this.scanCount * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     const { idx, n } = this.detectorIndices(mask);
@@ -382,13 +390,17 @@ export class Show4DSTEMCompute {
     pass.dispatchWorkgroups(Math.ceil(this.scanCount / 256));
     pass.end();
     device.queue.submit([enc.finish()]);
-    idxBuf.destroy(); com.destroy(); mean.destroy(); meanDims.destroy(); compDims.destroy();
-    return { buffer: out, n };
+    return {
+      buffer: out,
+      n,
+      cleanup: () => { idxBuf.destroy(); com.destroy(); mean.destroy(); meanDims.destroy(); compDims.destroy(); },
+    };
   }
 
   async maskedDpc(mask: Uint32Array, detCols: number, component: "row" | "col" | 0 | 1): Promise<Float32Array> {
-    const { buffer, n } = this.maskedDpcBuffer(mask, detCols, component);
+    const { buffer, n, cleanup } = this.maskedDpcBuffer(mask, detCols, component);
     const out = await this.readF32(buffer, this.scanCount);
+    cleanup?.();
     buffer.destroy();
     if (n === 0) out.fill(0);
     return out;
@@ -510,7 +522,7 @@ export class Show4DSTEMCompute {
     }
     pass.end();
     device.queue.submit([enc.finish()]);
-    idxBuf.destroy();   // vi handed to caller; dims are cached + reused, NOT destroyed
+    this.retireBuffers([idxBuf]);   // vi handed to caller; dims are cached + reused, NOT destroyed
     return { buffer: vi, n };
   }
 
@@ -609,6 +621,14 @@ export class Show4DSTEMCompute {
   private uniform(vals: number[]): GPUBuffer {
     const b = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const a = new Uint32Array(vals); this.device.queue.writeBuffer(b, 0, a.buffer as ArrayBuffer, a.byteOffset, a.byteLength); return b;
+  }
+  private retireBuffers(buffers: GPUBuffer[]): void {
+    if (!buffers.length) return;
+    void this.device.queue.onSubmittedWorkDone()
+      .catch(() => {})
+      .finally(() => {
+        for (const b of buffers) b.destroy();
+      });
   }
   private dispatch(pipe: GPUComputePipeline, bind: GPUBindGroup, groups: number, gy = 1) {
     const enc = this.device.createCommandEncoder(); const pass = enc.beginComputePass();
