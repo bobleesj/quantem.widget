@@ -1084,8 +1084,11 @@ export class GPUColormapEngine {
   private volBlitBindGroup: GPUBindGroup | null = null;
   private volComputeBindGroup: GPUBindGroup | null = null;
   private volTextureBindGroup: GPUBindGroup | null = null;
+  private retiredSlots: GPUSlot[] = [];
 
   constructor(device: GPUDevice) { this.device = device; }
+
+  getDevice(): GPUDevice { return this.device; }
 
   private destroySlot(slot: GPUSlot): void {
     slot.dataBuffer.destroy();
@@ -1097,6 +1100,18 @@ export class GPUColormapEngine {
     slot.histReadBuffer.destroy();
     slot.rangeBuffer?.destroy();
     for (const buf of slot.directRegionParamsBuffers) buf?.destroy();
+  }
+
+  private retireSlot(slot: GPUSlot): void {
+    this.retiredSlots.push(slot);
+    void this.device.queue.onSubmittedWorkDone()
+      .catch(() => {})
+      .finally(() => {
+        const idx = this.retiredSlots.indexOf(slot);
+        if (idx < 0) return;
+        this.retiredSlots.splice(idx, 1);
+        this.destroySlot(slot);
+      });
   }
 
   releaseSlot(idx: number): void {
@@ -1354,6 +1369,57 @@ export class GPUColormapEngine {
       width: w,
       height: h,
       directOnly,
+    };
+  }
+
+  /**
+   * Adopt an externally produced float32 GPU buffer as a display slot. The slot
+   * owns the buffer after this call; callers should hand off a fresh buffer for
+   * each recompute. This keeps WebGPU reductions (for example Show4DSTEM DPC)
+   * resident through the colormap/display pass instead of round-tripping through
+   * CPU RGBA.
+   */
+  adoptBuffer(idx: number, buffer: GPUBuffer, width: number, height: number): void {
+    while (this.slots.length <= idx) this.slots.push(null as never);
+    const old = this.slots[idx];
+    if (old) this.retireSlot(old);
+    const count = Math.max(1, width * height);
+    const tinyStorage = () => this.device.createBuffer({
+      size: 16,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
+    this.slots[idx] = {
+      dataBuffer: buffer,
+      rgbaBuffer: tinyStorage(),
+      readBuffer: this.device.createBuffer({
+        size: 16,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+      }),
+      paramsBuffer: this.device.createBuffer({
+        size: 64,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      }),
+      blitParamsBuffer: this.device.createBuffer({
+        size: 8,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      }),
+      histBinsBuffer: tinyStorage(),
+      histReadBuffer: this.device.createBuffer({
+        size: 16,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+      }),
+      rangeBuffer: null,
+      directGridBindGroup: null,
+      directSlotBindGroup: null,
+      directRegionParamsBuffers: [],
+      directRegionBindGroups: [],
+      sharedGridBindGroup: null,
+      sharedGridBlitBindGroup: null,
+      count,
+      rgbaCapacity: 1,
+      width,
+      height,
+      directOnly: true,
     };
   }
 
@@ -2935,6 +3001,8 @@ export class GPUColormapEngine {
       if (slot) this.destroySlot(slot);
     }
     this.slots = [];
+    for (const slot of this.retiredSlots) this.destroySlot(slot);
+    this.retiredSlots = [];
     this.lutBuffer?.destroy();
     this.lutBuffer = null;
     this.directGridRangesBuffer?.destroy();

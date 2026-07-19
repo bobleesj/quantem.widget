@@ -44,30 +44,60 @@ def _click_copy_buttons(page):
 
 def _exercise_dpc_backend(page, expected_pixels):
     page.wait_for_function(
-        "window.__sh4d && typeof window.__sh4d.dpcOnly === 'function' && document.body.innerText.includes('DPC')",
+        "window.__sh4d && typeof window.__sh4d.dpcOnly === 'function' && typeof window.__sh4d.dpcBufferOnly === 'function' && document.body.innerText.includes('DPC')",
         timeout=60_000,
     )
+    warm = page.evaluate("window.__sh4d.dpcOnly()")
+    assert warm["length"] == expected_pixels
     for source in ("DPC_row", "DPC_col"):
         result = page.evaluate(
             """async ({source, expectedPixels}) => {
               const api = window.__sh4d;
-              api.model.set("vi_source", source);
-              await api.recomputeVI();
+              try {
+                api.model.set("vi_source", source);
+                for (let attempt = 0; attempt < 120; attempt++) {
+                  await new Promise(resolve => requestAnimationFrame(resolve));
+                  const display = window.__sh4dDpcDisplay || {};
+                  const view = api.model.get("virtual_image_bytes");
+                  const len = view ? (view.byteLength / 4) : 0;
+                  if (display.source === source && display.rendered === true && len === expectedPixels) {
+                    break;
+                  }
+                }
+              } catch (error) {
+                return {
+                  source: api.model.get("vi_source"),
+                  length: -1,
+                  expectedPixels,
+                  error: error && error.message ? error.message : String(error),
+                  display: window.__sh4dDpcDisplay || {},
+                };
+              }
               const view = api.model.get("virtual_image_bytes");
               const arr = new Float32Array(view.buffer, view.byteOffset, view.byteLength / 4);
               let sum = 0;
               for (let i = 0; i < arr.length; i++) sum += arr[i];
+              const display = window.__sh4dDpcDisplay || {};
               return {
                 source: api.model.get("vi_source"),
                 length: arr.length,
                 expectedPixels,
                 sum,
+                displaySource: display.source,
+                gpuBufferToDisplay: display.gpuBufferToDisplay === true,
+                rendered: display.rendered === true,
+                display,
+                error: null,
               };
             }""",
             {"source": source, "expectedPixels": expected_pixels},
         )
+        assert result["error"] is None, result
         assert result["source"] == source
         assert result["length"] == expected_pixels
+        assert result["displaySource"] == source
+        assert result["gpuBufferToDisplay"] is True, result
+        assert result["rendered"] is True, result
 
 
 @pytest.mark.skipif(
