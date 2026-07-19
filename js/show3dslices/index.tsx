@@ -1566,12 +1566,6 @@ function Show3DSlices() {
   const alignmentRafRef = React.useRef<number | null>(null);
   const sliceAlignmentModeRef = React.useRef(sliceAlignment || "off");
   const sliceAlignmentCachedRef = React.useRef(!!sliceAlignmentCached);
-  const exportedAlignmentRef = React.useRef({
-    cached: !!sliceAlignmentCached,
-    rowShift: rowShiftPxPerSlice || 0,
-    colShift: colShiftPxPerSlice || 0,
-    mode: (sliceAlignment === "manual" ? "manual" : "auto") as "auto" | "manual",
-  });
   const pendingExportRef = React.useRef<{
     id: string;
     filename: string;
@@ -1862,41 +1856,6 @@ function Show3DSlices() {
       });
     });
   }, [setSliceAlignment, setSliceAlignmentCached]);
-  const resetSliceAlignment = () => {
-    if (alignmentRafRef.current != null) {
-      cancelAnimationFrame(alignmentRafRef.current);
-      alignmentRafRef.current = null;
-    }
-    pendingAlignmentRef.current = null;
-    if (offline && exportedAlignmentRef.current.cached) {
-      const exported = exportedAlignmentRef.current;
-      setLiveRowShift(exported.rowShift);
-      setLiveColShift(exported.colShift);
-      setRowShiftPxPerSlice(exported.rowShift);
-      setColShiftPxPerSlice(exported.colShift);
-      setSliceAlignmentCached(true);
-      setSliceAlignment(exported.mode);
-      sliceAlignmentCachedRef.current = true;
-      sliceAlignmentModeRef.current = exported.mode;
-      alignedFloatsCacheRef.current = null;
-      lastAlignmentModeRef.current = exported.mode;
-      setLocalAlignmentStatus("");
-      return;
-    }
-    setLiveRowShift(0);
-    setLiveColShift(0);
-    setRowShiftPxPerSlice(0);
-    setColShiftPxPerSlice(0);
-    setSliceAlignmentCached(false);
-    setSliceAlignment("off");
-    sliceAlignmentCachedRef.current = false;
-    sliceAlignmentModeRef.current = "off";
-    alignedFloatsCacheRef.current = null;
-    lastAlignmentModeRef.current = "auto";
-    setLocalAlignmentStatus("");
-    if (offline) return;
-    setSliceAlignmentRequest(JSON.stringify({ mode: "reset", id: `${Date.now()}-${Math.random().toString(36).slice(2)}` }));
-  };
 
   React.useEffect(() => {
     const pending = pendingExportRef.current;
@@ -5519,16 +5478,6 @@ function Show3DSlices() {
                   />
                 </>
               )}
-              <Button
-                size="small"
-                sx={{ ...compactButton, color: tc.accent }}
-                disabled={!sliceAlignmentCached}
-                onClick={resetSliceAlignment}
-                aria-label="Reset slice alignment"
-                title={offline ? "Restore the exported alignment estimate" : "Discard the cached alignment estimate"}
-              >
-                Reset
-              </Button>
               {alignmentStatusText && (
                 <Typography
                   sx={{
