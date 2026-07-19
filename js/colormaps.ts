@@ -799,19 +799,49 @@ struct VParams {
   index: u32, outW: u32, outH: u32, logScale: u32,
   flip: u32, viewMode: u32, canvasW: u32, canvasH: u32,
   vmin: f32, vmax: f32, zoom: f32, panX: f32,
-  panY: f32, _p0: f32, _p1: f32, _p2: f32,
+  panY: f32, rowShift: f32, colShift: f32, segStartX: f32,
+  segStartY: f32, segStopX: f32, segStopY: f32, _p0: f32,
 };
 @group(0) @binding(0) var<uniform> p: VParams;
 @group(0) @binding(1) var<storage, read> vol: array<f32>;
 @group(0) @binding(2) var<storage, read> lut: array<u32>;
 @group(0) @binding(3) var<storage, read_write> rgba: array<u32>;
 
+fn loadVolume(z: u32, x: u32, y: u32) -> f32 {
+  return vol[z * p.ny * p.nx + y * p.nx + x];
+}
+
+fn sampleAligned(zRaw: f32, xRaw: f32, yRaw: f32) -> f32 {
+  let z = u32(clamp(round(zRaw), 0.0, f32(p.nz - 1u)));
+  let center = (f32(max(p.nz, 1u)) - 1.0) * 0.5;
+  let x = clamp(xRaw - (f32(z) - center) * p.colShift, 0.0, f32(p.nx - 1u));
+  let y = clamp(yRaw - (f32(z) - center) * p.rowShift, 0.0, f32(p.ny - 1u));
+  let x0 = u32(floor(x));
+  let y0 = u32(floor(y));
+  let x1 = min(p.nx - 1u, x0 + 1u);
+  let y1 = min(p.ny - 1u, y0 + 1u);
+  let tx = x - f32(x0);
+  let ty = y - f32(y0);
+  let v00 = loadVolume(z, x0, y0);
+  let v10 = loadVolume(z, x1, y0);
+  let v01 = loadVolume(z, x0, y1);
+  let v11 = loadVolume(z, x1, y1);
+  return mix(mix(v00, v10, tx), mix(v01, v11, tx), ty);
+}
+
 fn sampleSlice(p_axis: u32, p_index: u32, nx: u32, ny: u32, sliceX: u32, sliceY: u32) -> f32 {
-  var sx: u32; var sy: u32; var sz: u32;
-  if (p_axis == 0u) { sx = sliceX; sy = sliceY; sz = p_index; }          // XY
-  else if (p_axis == 1u) { sx = sliceX; sy = p_index; sz = sliceY; }     // XZ
-  else { sx = p_index; sy = sliceX; sz = sliceY; }                       // YZ
-  return vol[sz * ny * nx + sy * nx + sx];
+  var x: f32; var y: f32; var z: f32;
+  if (p_axis == 0u) { x = f32(sliceX); y = f32(sliceY); z = f32(p_index); }          // XY
+  else if (p_axis == 1u) { x = f32(sliceX); y = f32(p_index); z = f32(sliceY); }     // XZ
+  else if (p_axis == 2u) { x = f32(p_index); y = f32(sliceX); z = f32(sliceY); }     // YZ
+  else {
+    let denom = max(f32(p.canvasW - 1u), 1.0);
+    let t = f32(sliceX) / denom;
+    x = mix(p.segStartX, p.segStopX, t);
+    y = mix(p.segStartY, p.segStopY, t);
+    z = f32(sliceY);
+  }
+  return sampleAligned(z, x, y);
 }
 
 fn signedLog1p(v: f32) -> f32 {
@@ -826,7 +856,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var fullW: u32; var fullH: u32;
   if (p.axis == 0u) { fullW = p.nx; fullH = p.ny; }        // XY
   else if (p.axis == 1u) { fullW = p.nx; fullH = p.nz; }   // XZ
-  else { fullW = p.ny; fullH = p.nz; }                     // YZ
+  else if (p.axis == 2u) { fullW = p.ny; fullH = p.nz; }    // YZ
+  else { fullW = max(1u, p.canvasW); fullH = p.nz; }        // oblique
   var x0: u32; var y0: u32; var x1: u32; var y1: u32;
   if (p.viewMode == 0u) {
     // AREA AVERAGE downsample: this output pixel covers the source block
@@ -889,19 +920,49 @@ struct VParams {
   index: u32, outW: u32, outH: u32, logScale: u32,
   flip: u32, viewMode: u32, canvasW: u32, canvasH: u32,
   vmin: f32, vmax: f32, zoom: f32, panX: f32,
-  panY: f32, _p0: f32, _p1: f32, _p2: f32,
+  panY: f32, rowShift: f32, colShift: f32, segStartX: f32,
+  segStartY: f32, segStopX: f32, segStopY: f32, _p0: f32,
 };
 @group(0) @binding(0) var<uniform> p: VParams;
 @group(0) @binding(1) var volTex: texture_2d_array<f32>;
 @group(0) @binding(2) var<storage, read> lut: array<u32>;
 @group(0) @binding(3) var<storage, read_write> rgba: array<u32>;
 
+fn loadVolume(z: u32, x: u32, y: u32) -> f32 {
+  return textureLoad(volTex, vec2<i32>(i32(x), i32(y)), i32(z), 0).r;
+}
+
+fn sampleAligned(zRaw: f32, xRaw: f32, yRaw: f32) -> f32 {
+  let z = u32(clamp(round(zRaw), 0.0, f32(p.nz - 1u)));
+  let center = (f32(max(p.nz, 1u)) - 1.0) * 0.5;
+  let x = clamp(xRaw - (f32(z) - center) * p.colShift, 0.0, f32(p.nx - 1u));
+  let y = clamp(yRaw - (f32(z) - center) * p.rowShift, 0.0, f32(p.ny - 1u));
+  let x0 = u32(floor(x));
+  let y0 = u32(floor(y));
+  let x1 = min(p.nx - 1u, x0 + 1u);
+  let y1 = min(p.ny - 1u, y0 + 1u);
+  let tx = x - f32(x0);
+  let ty = y - f32(y0);
+  let v00 = loadVolume(z, x0, y0);
+  let v10 = loadVolume(z, x1, y0);
+  let v01 = loadVolume(z, x0, y1);
+  let v11 = loadVolume(z, x1, y1);
+  return mix(mix(v00, v10, tx), mix(v01, v11, tx), ty);
+}
+
 fn sampleSlice(p_axis: u32, p_index: u32, sliceX: u32, sliceY: u32) -> f32 {
-  var sx: u32; var sy: u32; var sz: u32;
-  if (p_axis == 0u) { sx = sliceX; sy = sliceY; sz = p_index; }
-  else if (p_axis == 1u) { sx = sliceX; sy = p_index; sz = sliceY; }
-  else { sx = p_index; sy = sliceX; sz = sliceY; }
-  return textureLoad(volTex, vec2<i32>(i32(sx), i32(sy)), i32(sz), 0).r;
+  var x: f32; var y: f32; var z: f32;
+  if (p_axis == 0u) { x = f32(sliceX); y = f32(sliceY); z = f32(p_index); }
+  else if (p_axis == 1u) { x = f32(sliceX); y = f32(p_index); z = f32(sliceY); }
+  else if (p_axis == 2u) { x = f32(p_index); y = f32(sliceX); z = f32(sliceY); }
+  else {
+    let denom = max(f32(p.canvasW - 1u), 1.0);
+    let t = f32(sliceX) / denom;
+    x = mix(p.segStartX, p.segStopX, t);
+    y = mix(p.segStartY, p.segStopY, t);
+    z = f32(sliceY);
+  }
+  return sampleAligned(z, x, y);
 }
 
 fn signedLog1p(v: f32) -> f32 {
@@ -915,7 +976,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var fullW: u32; var fullH: u32;
   if (p.axis == 0u) { fullW = p.nx; fullH = p.ny; }
   else if (p.axis == 1u) { fullW = p.nx; fullH = p.nz; }
-  else { fullW = p.ny; fullH = p.nz; }
+  else if (p.axis == 2u) { fullW = p.ny; fullH = p.nz; }
+  else { fullW = max(1u, p.canvasW); fullH = p.nz; }
   var x0: u32; var y0: u32; var x1: u32; var y1: u32;
   if (p.viewMode == 0u) {
     x0 = (gid.x * fullW) / p.outW;
@@ -976,6 +1038,15 @@ interface VolumeSliceView {
   panY: number;
   canvasW: number;
   canvasH: number;
+}
+
+interface VolumeSliceAlignment {
+  rowShift: number;
+  colShift: number;
+  segment?: {
+    start: { x: number; y: number };
+    stop: { x: number; y: number };
+  };
 }
 
 // Tiny per-pass GPU buffers (e.g. 32B region uniforms) that must live until
@@ -1989,6 +2060,7 @@ export class GPUColormapEngine {
     logScale: boolean, flip: boolean,
     maxOut?: number,
     view?: VolumeSliceView,
+    alignment?: VolumeSliceAlignment,
   ): ImageBitmap | null {
     const texturePipeline = this.volUseTexture ? this.volumeTexturePipeline : null;
     const textureView = this.volUseTexture ? this.volTextureView : null;
@@ -2000,7 +2072,13 @@ export class GPUColormapEngine {
     this.ensureBlitPipeline(fmt);
     if (!this.blitPipeline) return null;
     const nx = this.volNx, ny = this.volNy, nz = this.volNz;
-    const fullW = axis === 0 ? nx : axis === 1 ? nx : ny;
+    const segmentWidth = alignment?.segment
+      ? Math.max(1, Math.ceil(Math.hypot(
+        alignment.segment.stop.x - alignment.segment.start.x,
+        alignment.segment.stop.y - alignment.segment.start.y,
+      )) + 1)
+      : 1;
+    const fullW = axis === 0 ? nx : axis === 1 ? nx : axis === 2 ? ny : segmentWidth;
     const fullH = axis === 0 ? ny : nz;
     // If maxOut is supplied, cap the output raster while still sampling from
     // the full-resolution source. Callers that need native-pixel zoom leave it
@@ -2038,6 +2116,13 @@ export class GPUColormapEngine {
     f[14] = view ? Math.max(1e-6, view.zoom) : 1;
     f[15] = view ? view.panX : 0;
     f[16] = view ? view.panY : 0;
+    f[17] = alignment && Number.isFinite(alignment.rowShift) ? alignment.rowShift : 0;
+    f[18] = alignment && Number.isFinite(alignment.colShift) ? alignment.colShift : 0;
+    f[19] = alignment?.segment ? alignment.segment.start.x : 0;
+    f[20] = alignment?.segment ? alignment.segment.start.y : 0;
+    f[21] = alignment?.segment ? alignment.segment.stop.x : 0;
+    f[22] = alignment?.segment ? alignment.segment.stop.y : 0;
+    f[23] = 0;
     this.device.queue.writeBuffer(paramsBuffer, 0, vp);
     const encoder = this.device.createCommandEncoder();
     if (useTexture) {
