@@ -1514,6 +1514,7 @@ function Show3DSlices() {
   const [liveColShift, setLiveColShift] = React.useState(colShiftPxPerSlice || 0);
   const pendingAlignmentRef = React.useRef<{ rowShift: number; colShift: number } | null>(null);
   const alignmentRafRef = React.useRef<number | null>(null);
+  const alignmentPreviewRef = React.useRef<((rowShift: number, colShift: number) => void) | null>(null);
   const sliceAlignmentModeRef = React.useRef(sliceAlignment || "off");
   const sliceAlignmentCachedRef = React.useRef(!!sliceAlignmentCached);
   const exportedAlignmentRef = React.useRef({
@@ -1744,6 +1745,7 @@ function Show3DSlices() {
     pendingAlignmentRef.current = null;
     setLiveRowShift(rowShift);
     setLiveColShift(colShift);
+    alignmentPreviewRef.current?.(rowShift, colShift);
     setRowShiftPxPerSlice(rowShift);
     setColShiftPxPerSlice(colShift);
     setSliceAlignmentCached(true);
@@ -1775,6 +1777,7 @@ function Show3DSlices() {
         setLiveRowShift(pending.rowShift);
         setLiveColShift(pending.colShift);
       });
+      alignmentPreviewRef.current?.(pending.rowShift, pending.colShift);
     });
   }, [setSliceAlignment, setSliceAlignmentCached]);
   const resetSliceAlignment = () => {
@@ -1787,6 +1790,7 @@ function Show3DSlices() {
       const exported = exportedAlignmentRef.current;
       setLiveRowShift(exported.rowShift);
       setLiveColShift(exported.colShift);
+      alignmentPreviewRef.current?.(exported.rowShift, exported.colShift);
       setRowShiftPxPerSlice(exported.rowShift);
       setColShiftPxPerSlice(exported.colShift);
       setSliceAlignmentCached(true);
@@ -1799,6 +1803,7 @@ function Show3DSlices() {
     }
     setLiveRowShift(0);
     setLiveColShift(0);
+    alignmentPreviewRef.current?.(0, 0);
     setRowShiftPxPerSlice(0);
     setColShiftPxPerSlice(0);
     setSliceAlignmentCached(false);
@@ -2327,6 +2332,8 @@ function Show3DSlices() {
     obliqueStartY: obliqueSegment.start.y,
     obliqueEndX: obliqueSegment.stop.x,
     obliqueEndY: obliqueSegment.stop.y,
+    rowShiftPxPerSlice: gpuSliceAlignment?.rowShift ?? 0,
+    colShiftPxPerSlice: gpuSliceAlignment?.colShift ?? 0,
     vmin: volTexRange.vmin, vmax: volTexRange.vmax,
   });
   volumeRenderParamsRef.current = {
@@ -2337,6 +2344,8 @@ function Show3DSlices() {
     obliqueStartY: obliqueSegment.start.y,
     obliqueEndX: obliqueSegment.stop.x,
     obliqueEndY: obliqueSegment.stop.y,
+    rowShiftPxPerSlice: gpuSliceAlignment?.rowShift ?? 0,
+    colShiftPxPerSlice: gpuSliceAlignment?.colShift ?? 0,
     vmin: volTexRange.vmin, vmax: volTexRange.vmax,
   };
   const bgColorRef = React.useRef<[number, number, number]>([0, 0, 0]);
@@ -2353,7 +2362,7 @@ function Show3DSlices() {
     const renderer = volumeRendererRef.current;
     if (!renderer || !volumeFloats || volumeFloats.length === 0) return;
     renderer.render(volumeRenderParamsRef.current, camera, bgColorRef.current, undefined, undefined, zStretch, orthographic);
-  }, [volumeFloats, sliceX, sliceY, sliceZ, obliqueAngle, obliqueSegment, nx, ny, nz, cmap, camera, volumeCanvasSize, tc.bg, slicePlaneMask, slicePlaneOpacity, volumeDrag, rendererReady, volTexRange, opacityA, zStretch, orthographic, flip]);
+  }, [volumeFloats, sliceX, sliceY, sliceZ, obliqueAngle, obliqueSegment, nx, ny, nz, cmap, camera, volumeCanvasSize, tc.bg, slicePlaneMask, slicePlaneOpacity, volumeDrag, rendererReady, volTexRange, opacityA, zStretch, orthographic, flip, gpuSliceAlignment]);
 
   // First-frame paint guard: the very first synchronous render after the renderer
   // mounts can land before the canvas swapchain is ready (flush race) and commit a
@@ -2728,18 +2737,29 @@ function Show3DSlices() {
     nx: number; ny: number; nz: number;
     traitVmin: number | null; traitVmax: number | null;
     flip: boolean;
-  }>({ sliceX: -1, sliceY: -1, sliceZ: -1, cmap: "", logScale: false, autoContrast: false, imageVminPct: -1, imageVmaxPct: -1, imageRangeMin: Number.NaN, imageRangeMax: Number.NaN, allFloats: null, nx: 0, ny: 0, nz: 0, traitVmin: null, traitVmax: null, flip: false });
+    alignRowShift: number; alignColShift: number;
+    alignStartX: number; alignStartY: number; alignStopX: number; alignStopY: number;
+  }>({ sliceX: -1, sliceY: -1, sliceZ: -1, cmap: "", logScale: false, autoContrast: false, imageVminPct: -1, imageVmaxPct: -1, imageRangeMin: Number.NaN, imageRangeMax: Number.NaN, allFloats: null, nx: 0, ny: 0, nz: 0, traitVmin: null, traitVmax: null, flip: false, alignRowShift: Number.NaN, alignColShift: Number.NaN, alignStartX: Number.NaN, alignStartY: Number.NaN, alignStopX: Number.NaN, alignStopY: Number.NaN });
 
   React.useLayoutEffect(() => {
     if (!allFloats || allFloats.length === 0) return;
 
     const prev = prevCacheRef.current;
+    const alignRowShift = gpuSliceAlignment?.rowShift ?? 0;
+    const alignColShift = gpuSliceAlignment?.colShift ?? 0;
+    const alignStartX = gpuSliceAlignment?.segment.start.x ?? 0;
+    const alignStartY = gpuSliceAlignment?.segment.start.y ?? 0;
+    const alignStopX = gpuSliceAlignment?.segment.stop.x ?? 0;
+    const alignStopY = gpuSliceAlignment?.segment.stop.y ?? 0;
     const globalChanged = allFloats !== prev.allFloats || cmap !== prev.cmap ||
       logScale !== prev.logScale || autoContrast !== prev.autoContrast ||
       imageVminPct !== prev.imageVminPct || imageVmaxPct !== prev.imageVmaxPct ||
       displayDataRange.min !== prev.imageRangeMin || displayDataRange.max !== prev.imageRangeMax ||
       traitVmin !== prev.traitVmin || traitVmax !== prev.traitVmax ||
       flip !== prev.flip ||
+      alignRowShift !== prev.alignRowShift || alignColShift !== prev.alignColShift ||
+      alignStartX !== prev.alignStartX || alignStartY !== prev.alignStartY ||
+      alignStopX !== prev.alignStopX || alignStopY !== prev.alignStopY ||
       nx !== prev.nx || ny !== prev.ny || nz !== prev.nz;
     const axisChanged = [
       globalChanged || sliceZ !== prev.sliceZ,
@@ -2828,7 +2848,7 @@ function Show3DSlices() {
         sliceOffscreenRefs.current[a] = renderToOffscreen(processed, sliceW, sliceH, lut, vmin, vmax);
       }
     }
-    prevCacheRef.current = { sliceX, sliceY, sliceZ, cmap, logScale, autoContrast, imageVminPct, imageVmaxPct, imageRangeMin: displayDataRange.min, imageRangeMax: displayDataRange.max, allFloats, nx, ny, nz, traitVmin, traitVmax, flip };
+    prevCacheRef.current = { sliceX, sliceY, sliceZ, cmap, logScale, autoContrast, imageVminPct, imageVmaxPct, imageRangeMin: displayDataRange.min, imageRangeMax: displayDataRange.max, allFloats, nx, ny, nz, traitVmin, traitVmax, flip, alignRowShift, alignColShift, alignStartX, alignStartY, alignStopX, alignStopY };
   }, [allFloats, sliceX, sliceY, sliceZ, obliqueAngle, obliqueSegment, nx, ny, nz, cmap, logScale, autoContrast, sliceDims, imageVminPct, imageVmaxPct, displayDataRange, traitVmin, traitVmax, flip, cmapReady, gpuSliceAlignment]);
 
   // Snapshot of everything direct-paint needs, refreshed every render so the
@@ -2852,7 +2872,7 @@ function Show3DSlices() {
     const t0 = performance.now();
     const engine = gpuCmapRef.current;
     const p = paintParamsRef.current;
-    if (axis !== 0) return false;
+    if (axis !== 0 && axis !== 1) return false;
     if (!engine || !gpuVolReadyRef.current || !p) return false;
     const canvas = canvasRefs.current[axis];
     if (!canvas) return false;
@@ -2867,9 +2887,11 @@ function Show3DSlices() {
     ({ vmin, vmax } = p.flip ? { vmin: -vmax, vmax: -vmin } : { vmin, vmax });
     engine.uploadLUT(p.cmap, COLORMAPS[p.cmap] || COLORMAPS.inferno);
     const cw = cs.w, ch = cs.h;
+    const renderAxis = axis === 0 ? 0 : 3;
+    const renderIndex = axis === 0 ? idx : 0;
     const bitmap = engine.renderVolumeSliceToImageBitmap(
-      axis,
-      idx,
+      renderAxis,
+      renderIndex,
       { vmin, vmax },
       p.logScale,
       p.flip,
@@ -2905,6 +2927,27 @@ function Show3DSlices() {
     );
     recordPerfRef.current(action, performance.now() - t0, -1, -1, true);
   }, [orthographic, volumeFloats]);
+
+  const previewSliceAlignment = React.useCallback((rowShift: number, colShift: number) => {
+    const current = paintParamsRef.current;
+    const alignment = {
+      rowShift,
+      colShift,
+      segment: { start: obliqueSegment.start, stop: obliqueSegment.stop },
+    };
+    if (current) paintParamsRef.current = { ...current, alignment };
+    volumeRenderParamsRef.current = {
+      ...volumeRenderParamsRef.current,
+      rowShiftPxPerSlice: rowShift,
+      colShiftPxPerSlice: colShift,
+    };
+    const slices = liveSliderRef.current;
+    directPaintPlane(0, slices[0], "alignment");
+    directPaintPlane(1, 0, "alignment");
+    renderVolumePlanesLive("alignment");
+  }, [directPaintPlane, obliqueSegment, renderVolumePlanesLive]);
+
+  alignmentPreviewRef.current = previewSliceAlignment;
 
   // -------------------------------------------------------------------------
   // Redraw slices with zoom/pan (cheap: just drawImage from cached offscreen)
