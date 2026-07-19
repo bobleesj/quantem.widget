@@ -661,9 +661,12 @@ def from_folder(
 
         def validate_mps_master(master: Any) -> None:
             candidate = _master_file_contract(master)
+            # The MPS loader normalizes supported Arina browse dtypes to
+            # uint16 chunk-backed data, so a uint32/uint16 source mix is valid
+            # as long as the geometry and frame count match.
             mismatches = [
                 name
-                for name in ("scan_shape", "detector_shape", "n_frames", "dtype")
+                for name in ("scan_shape", "detector_shape", "n_frames")
                 if candidate.get(name) != expected_contract.get(name)
             ]
             if mismatches:
@@ -693,7 +696,7 @@ def from_folder(
                 "Show4DSTEM.from_folder skipped "
                 f"{len(skipped_contracts)} MPS master file"
                 f"{'s' if len(skipped_contracts) != 1 else ''} whose scan, detector, "
-                "frame-count, or dtype contract differs from the first ready master.",
+                "or frame-count contract differs from the first ready master.",
                 RuntimeWarning,
                 stacklevel=2,
             )

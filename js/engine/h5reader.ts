@@ -172,20 +172,24 @@ export function readH5Volume(buffer: ArrayBuffer, name: string, framesPerChunk?:
   const blockElems = blockBytes / srcBytes;
   const nBlocksPerFrame = Math.ceil(detSize / blockElems);
   const frameCompressedEnds: number[] = new Array(nFrames);
-  const readFrameBlockMeta = (f: number, rangeStart: number, out: number[]): void => {
+  const frameBlockMeta: number[][] = new Array(nFrames);
+  const readFrameBlockMeta = (f: number): void => {
     // Each frame chunk: 12B header, then per block [4B BE clen][lz4].
-    // Record offsets relative to this frame group's compressed byte range.
+    // Record absolute offsets once; chunk-relative blockMeta is derived below
+    // without walking the bslz4 headers a second time.
     const addr = offsets[f];
     let pos = 12;
+    const meta: number[] = [];
     for (let b = 0; b < nBlocksPerFrame; b++) {
       const clen = readBE32(fileBytes, addr + pos);
-      out.push(addr + pos + 4 - rangeStart, clen);
+      meta.push(addr + pos + 4, clen);
       pos += 4 + clen;
     }
     frameCompressedEnds[f] = addr + pos;
+    frameBlockMeta[f] = meta;
   };
   for (let f = 0; f < nFrames; f++) {
-    readFrameBlockMeta(f, 0, []);
+    readFrameBlockMeta(f);
   }
 
   const defaultFramesPerChunk = Math.max(1, Math.floor((1024 * 1024 * 1024) / detSize));
@@ -202,7 +206,10 @@ export function readH5Volume(buffer: ArrayBuffer, name: string, framesPerChunk?:
     }
     const meta: number[] = [];
     for (let f = start; f < stop; f++) {
-      readFrameBlockMeta(f, rangeStart, meta);
+      const frameMeta = frameBlockMeta[f];
+      for (let i = 0; i < frameMeta.length; i += 2) {
+        meta.push(frameMeta[i] - rangeStart, frameMeta[i + 1]);
+      }
     }
     chunks.push({
       compressed: fileBytes.subarray(rangeStart, rangeEnd),

@@ -215,6 +215,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   }
 }`;
 
+// Dense DF/ADF helper: out = full-detector total - complement sum. This mirrors
+// CUDA/MPS dense-mask behavior so dragging a large annulus reads the smaller
+// complement after the per-scan total image is cached.
+const SUBTRACT_FROM_TOTAL_WGSL = `
+@group(0) @binding(0) var<storage,read> total: array<f32>;
+@group(0) @binding(1) var<storage,read> subtract: array<f32>;
+@group(0) @binding(2) var<storage,read_write> out: array<f32>;
+@group(0) @binding(3) var<uniform> u: vec4<u32>; // scanCount, 0, 0, 0
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= u.x) { return; }
+  out[i] = total[i] - subtract[i];
+}`;
+
 const MAX_WG = 65535;   // max workgroups per dispatch dimension; >this needs a 2D grid
 
 interface Chunk { buffer: GPUBuffer; startScan: number; nScan: number; }
@@ -284,6 +299,7 @@ export class Show4DSTEMCompute {
   private maskedComPipe: GPUComputePipeline;
   private dpcMeanPipe: GPUComputePipeline;
   private dpcComponentPipe: GPUComputePipeline;
+  private subtractPipe: GPUComputePipeline;
   private reduceFramesPipe: GPUComputePipeline;
   private frameAtPipe: GPUComputePipeline;
   private chunks: Chunk[];
@@ -304,6 +320,7 @@ export class Show4DSTEMCompute {
     this.maskedComPipe = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: maskedComSrc(sg) }), entryPoint: "main" } });
     this.dpcMeanPipe = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: DPC_MEAN_WGSL }), entryPoint: "main" } });
     this.dpcComponentPipe = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: DPC_COMPONENT_WGSL }), entryPoint: "main" } });
+    this.subtractPipe = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: SUBTRACT_FROM_TOTAL_WGSL }), entryPoint: "main" } });
     this.reduceFramesPipe = device.createComputePipeline({ layout: "auto", compute: { module: rf, entryPoint: "main" } });
     this.frameAtPipe = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: FRAME_WGSL }), entryPoint: "main" } });
   }
@@ -505,13 +522,28 @@ export class Show4DSTEMCompute {
   // colormap rgba readback - were the ~100ms/repaint that capped the drag at ~9fps). Caller owns
   // the returned buffer (the colormap slot adopts it; freed on the next adopt / dispose).
   maskedSumBuffer(mask: Uint32Array): { buffer: GPUBuffer; n: number } {
+    const selected = this.detectorIndices(mask);
+    if (selected.n > this.detSize * 0.5) {
+      const complement = this.detectorComplementIndices(mask);
+      if (complement.n < selected.n) {
+        const total = this.totalSumBuffer();
+        if (complement.n === 0) {
+          return { buffer: this.copyScanBuffer(total), n: selected.n };
+        }
+        const complementSum = this.maskedSumBufferFromIndices(complement.idx, complement.n);
+        const out = this.subtractFromTotalBuffer(total, complementSum.buffer);
+        this.retireBuffers([complementSum.buffer]);
+        return { buffer: out, n: selected.n };
+      }
+    }
+    return this.maskedSumBufferFromIndices(selected.idx, selected.n);
+  }
+
+  private maskedSumBufferFromIndices(idx: Uint32Array, n: number): { buffer: GPUBuffer; n: number } {
     const device = this.device;
-    const bad = this.badPx.length ? new Set(this.badPx) : null;
-    const idxArr = new Uint32Array(this.detSize); let n = 0;
-    for (let k = 0; k < this.detSize; k++) if (mask[k] !== 0 && !(bad && bad.has(k))) idxArr[n++] = k;
-    const idx = idxArr.subarray(0, n || 1);
-    const idxBuf = this.upload(idx, GPUBufferUsage.STORAGE);
     const vi = device.createBuffer({ size: this.scanCount * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    if (n === 0) return { buffer: vi, n };
+    const idxBuf = this.upload(idx, GPUBufferUsage.STORAGE);
     const enc = device.createCommandEncoder();
     const pass = enc.beginComputePass(); pass.setPipeline(this.maskedSumPipe);
     for (const cd of this.sumDims()) {   // per-chunk dims are constant -> built once, reused every drag frame
@@ -618,6 +650,55 @@ export class Show4DSTEMCompute {
     for (let k = 0; k < this.detSize; k++) if (mask[k] !== 0 && !(bad && bad.has(k))) idxArr[n++] = k;
     return { idx: idxArr.subarray(0, n || 1), n };
   }
+  private detectorComplementIndices(mask: Uint32Array): { idx: Uint32Array; n: number } {
+    const bad = this.badPx.length ? new Set(this.badPx) : null;
+    const idxArr = new Uint32Array(this.detSize); let n = 0;
+    for (let k = 0; k < this.detSize; k++) if (mask[k] === 0 && !(bad && bad.has(k))) idxArr[n++] = k;
+    return { idx: idxArr.subarray(0, n || 1), n };
+  }
+  private fullDetectorIndices(): { idx: Uint32Array; n: number } {
+    const bad = this.badPx.length ? new Set(this.badPx) : null;
+    const idxArr = new Uint32Array(this.detSize); let n = 0;
+    for (let k = 0; k < this.detSize; k++) if (!(bad && bad.has(k))) idxArr[n++] = k;
+    return { idx: idxArr.subarray(0, n || 1), n };
+  }
+
+  private totalSumCache: GPUBuffer | null = null;
+  private totalSumCacheKey: string | null = null;
+  private totalSumBuffer(): GPUBuffer {
+    const key = this.badPixelKey();
+    if (!this.totalSumCache || this.totalSumCacheKey !== key) {
+      if (this.totalSumCache) this.totalSumCache.destroy();
+      const full = this.fullDetectorIndices();
+      this.totalSumCache = this.maskedSumBufferFromIndices(full.idx, full.n).buffer;
+      this.totalSumCacheKey = key;
+    }
+    return this.totalSumCache;
+  }
+  private badPixelKey(): string {
+    let hash = 2166136261;
+    for (const value of this.badPx) {
+      hash = Math.imul(hash ^ value, 16777619);
+    }
+    return `${this.badPx.length}:${hash >>> 0}`;
+  }
+  private copyScanBuffer(src: GPUBuffer): GPUBuffer {
+    const out = this.device.createBuffer({ size: this.scanCount * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+    const enc = this.device.createCommandEncoder();
+    enc.copyBufferToBuffer(src, 0, out, 0, this.scanCount * 4);
+    this.device.queue.submit([enc.finish()]);
+    return out;
+  }
+  private subtractFromTotalBuffer(total: GPUBuffer, subtract: GPUBuffer): GPUBuffer {
+    const out = this.device.createBuffer({ size: this.scanCount * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    const dims = this.uniform([this.scanCount, 0, 0, 0]);
+    const bind = this.device.createBindGroup({ layout: this.subtractPipe.getBindGroupLayout(0), entries: [
+      { binding: 0, resource: { buffer: total } }, { binding: 1, resource: { buffer: subtract } },
+      { binding: 2, resource: { buffer: out } }, { binding: 3, resource: { buffer: dims } } ] });
+    this.dispatch(this.subtractPipe, bind, Math.ceil(this.scanCount / 256));
+    this.retireBuffers([dims]);
+    return out;
+  }
   private uniform(vals: number[]): GPUBuffer {
     const b = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const a = new Uint32Array(vals); this.device.queue.writeBuffer(b, 0, a.buffer as ArrayBuffer, a.byteOffset, a.byteLength); return b;
@@ -643,6 +724,7 @@ export class Show4DSTEMCompute {
 
   dispose() {
     for (const c of this.chunks) c.buffer.destroy();
+    if (this.totalSumCache) { this.totalSumCache.destroy(); this.totalSumCache = null; this.totalSumCacheKey = null; }
     if (this.sumDimsCache) { for (const cd of this.sumDimsCache) { cd.dims.destroy(); cd.dims2.destroy(); } this.sumDimsCache = null; }
     if (this.comDimsCache) { for (const cd of this.comDimsCache.rows) { cd.dims.destroy(); cd.dims2.destroy(); } this.comDimsCache = null; }
   }
