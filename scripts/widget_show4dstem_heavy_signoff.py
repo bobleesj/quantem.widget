@@ -33,7 +33,6 @@ from widget_browser_smoke import (
 
 DEFAULT_ROOTS = [
     Path("/data"),
-    Path("/mnt/data"),
     Path("/Volumes"),
 ]
 
