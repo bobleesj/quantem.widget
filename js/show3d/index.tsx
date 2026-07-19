@@ -6142,17 +6142,25 @@ function Show3D() {
       percentileLow: Number(percentileLow || 0).toFixed(3),
       percentileHigh: Number(percentileHigh || 100).toFixed(3),
       linkContrast,
+      linkPanels,
+      imageRotation,
+      flipRows,
+      flipCols,
+      panelGapPx,
       imageVminPct: Number(imageVminPct || 0).toFixed(3),
       imageVmaxPct: Number(imageVmaxPct || 100).toFixed(3),
       autoVmins: (autoVmins || []).map((value) => Number(value).toFixed(6)),
       autoVmaxs: (autoVmaxs || []).map((value) => Number(value).toFixed(6)),
       panels: panels.map((panel) => {
-        const state = panelStates[panel] || initialState;
+        const state = linkPanels ? linkedState : (panelStates[panel] || initialState);
         return [
           panel,
           panelCmapFor(panel),
           Number(state.imageVminPct || 0).toFixed(3),
           Number(state.imageVmaxPct || 100).toFixed(3),
+          Number(state.zoom || 1).toFixed(4),
+          Number(state.panX || 0).toFixed(1),
+          Number(state.panY || 0).toFixed(1),
           offlineMins?.[panel] ?? offlineMin ?? null,
           offlineMaxs?.[panel] ?? offlineMax ?? null,
           vminPerPanel?.[panel] ?? null,
@@ -6165,10 +6173,15 @@ function Show3D() {
     autoVmins,
     autoVmaxs,
     cmap,
+    flipCols,
+    flipRows,
     imageVminPct,
     imageVmaxPct,
+    imageRotation,
     initialState,
     linkContrast,
+    linkPanels,
+    linkedState,
     logScale,
     nPanels,
     offlineMin,
@@ -6176,6 +6189,7 @@ function Show3D() {
     offlineMins,
     offlineMaxs,
     panelCmapFor,
+    panelGapPx,
     panelStates,
     percentileLow,
     percentileHigh,
@@ -6210,7 +6224,12 @@ function Show3D() {
       c.panelStates = next;
       panelStatesLiveRef.current = next;
     }
-    if (sidecarMode) invalidateSidecarViewportCache("view-transform");
+    if (
+      sidecarMode ||
+      (offline && !isRgb && !sharedPanelSource && Math.max(1, nPanels || 1) > 1 && !!offlineStack)
+    ) {
+      invalidateSidecarViewportCache("view-transform");
+    }
   };
   const clampPanelViewForDraw = React.useCallback((
     panelState: PanelState,
@@ -11795,10 +11814,22 @@ function Show3D() {
     const drawIdx = ((Math.round(idx) % nSlicesLocal) + nSlicesLocal) % nSlicesLocal;
     const start = performance.now();
     const transformActive = sidecarViewTransformActive();
+    const embeddedPackedViewportCacheReady = (
+      !sidecarMode &&
+      sidecarCompositeReadyRef.current &&
+      !sharedPanelSource &&
+      Math.max(1, nPanels || 1) > 1 &&
+      !!offlineStack
+    );
     const liveViewportPaint = (
-      transformActive ||
+      (transformActive && !embeddedPackedViewportCacheReady) ||
       sidecarDisplayCacheDirtyRef.current ||
-      (!sidecarCompositeReadyRef.current && !sidecarGpuReadyRef.current && sidecarRamReadyRef.current)
+      (
+        !embeddedPackedViewportCacheReady &&
+        !sidecarCompositeReadyRef.current &&
+        !sidecarGpuReadyRef.current &&
+        sidecarRamReadyRef.current
+      )
     );
     if (liveViewportPaint) {
       setGpuDisplayVisible(false);
@@ -11947,6 +11978,10 @@ function Show3D() {
     visiblePanelIndices,
     panelColsForCount,
     panelGapPx,
+    nPanels,
+    sidecarMode,
+    sharedPanelSource,
+    offlineStack,
     interPanelGapColor,
     panelInnerBorderColor,
     panelInnerBorderPx,
@@ -12326,8 +12361,7 @@ function Show3D() {
       !!offlineStack &&
       offlineStack.byteLength >= width * height * Math.max(1, nSlices || 1) &&
       canvasW > 0 &&
-      canvasH > 0 &&
-      !sidecarViewTransformActive()
+      canvasH > 0
     );
     if (!canCacheEmbeddedPackedViewport) {
       if (!sidecarMode) clearSidecarCompositeCache();
@@ -12430,7 +12464,6 @@ function Show3D() {
     paintEmbeddedPackedViewportToContext,
     drawSidecarBitmapFrame,
     clearSidecarCompositeCache,
-    sidecarViewTransformActive,
     sidecarDisplayStyleKey,
   ]);
 
@@ -13587,16 +13620,26 @@ function Show3D() {
     if (offline && sidecarMode && viewTransformActive && sidecarRamReadyRef.current) {
       if (drawSidecarBitmapFrame(playing ? playbackIdxRef.current : liveSliceIdx, false, "layout-transform")) return;
     }
+    const embeddedPackedViewportCacheReady = (
+      !sidecarMode &&
+      sidecarCompositeReadyRef.current &&
+      !sharedPanelSource &&
+      Math.max(1, nPanels || 1) > 1 &&
+      !!offlineStack
+    );
     if (
       offline &&
       !isRgb &&
-      !viewTransformActive &&
       (
-        (sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current)) ||
-        (!sidecarMode && sidecarCompositeReadyRef.current && !sharedPanelSource && Math.max(1, nPanels || 1) > 1 && !!offlineStack)
+        (!viewTransformActive && sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current)) ||
+        embeddedPackedViewportCacheReady
       )
     ) {
-      if (drawSidecarBitmapFrame(playing ? playbackIdxRef.current : liveSliceIdx, false, "layout")) return;
+      if (drawSidecarBitmapFrame(
+        playing ? playbackIdxRef.current : liveSliceIdx,
+        false,
+        embeddedPackedViewportCacheReady && viewTransformActive ? "layout-embedded-transform" : "layout",
+      )) return;
     }
     const ctx = canvasRef.current.getContext("2d");
     if (ctx) drawMain(ctx, mainOffscreenRef.current, {
