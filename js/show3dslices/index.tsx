@@ -346,57 +346,6 @@ function sampleVolumeBilinear(
   return (v00 * (1 - tx) + v10 * tx) * (1 - ty) + (v01 * (1 - tx) + v11 * tx) * ty;
 }
 
-function sampleVolumeBilinearNearest(
-  vol: Float32Array,
-  nx: number,
-  ny: number,
-  nz: number,
-  z: number,
-  x: number,
-  y: number,
-): number {
-  const xClamped = clampNumber(x, 0, Math.max(0, nx - 1));
-  const yClamped = clampNumber(y, 0, Math.max(0, ny - 1));
-  return sampleVolumeBilinear(vol, nx, ny, nz, z, xClamped, yClamped);
-}
-
-function applyGlobalSliceAlignment(
-  vol: Float32Array | null,
-  nx: number,
-  ny: number,
-  nz: number,
-  rowShiftPxPerSlice: number,
-  colShiftPxPerSlice: number,
-): Float32Array | null {
-  if (!vol || vol.length === 0) return vol;
-  const rowSlope = Number.isFinite(rowShiftPxPerSlice) ? rowShiftPxPerSlice : 0;
-  const colSlope = Number.isFinite(colShiftPxPerSlice) ? colShiftPxPerSlice : 0;
-  if (Math.abs(rowSlope) < 1e-12 && Math.abs(colSlope) < 1e-12) return vol;
-  const expected = Math.max(0, Math.floor(nx) * Math.floor(ny) * Math.floor(nz));
-  if (vol.length < expected || expected === 0) return vol;
-  const out = new Float32Array(expected);
-  const center = (Math.max(1, nz) - 1) / 2;
-  for (let z = 0; z < nz; z++) {
-    const rowShift = (z - center) * rowSlope;
-    const colShift = (z - center) * colSlope;
-    const base = z * ny * nx;
-    for (let row = 0; row < ny; row++) {
-      for (let col = 0; col < nx; col++) {
-        out[base + row * nx + col] = sampleVolumeBilinearNearest(
-          vol,
-          nx,
-          ny,
-          nz,
-          z,
-          col - colShift,
-          row - rowShift,
-        );
-      }
-    }
-  }
-  return out;
-}
-
 function extractOblique(
   vol: Float32Array,
   nx: number,
@@ -1408,6 +1357,7 @@ function Show3DSlices() {
     imageVminPct: number; imageVmaxPct: number; imageDataRange: { min: number; max: number };
     traitVmin: number | null; traitVmax: number | null;
     zooms: { zoom: number; panX: number; panY: number }[]; canvasSizes: { w: number; h: number }[]; smooth: boolean;
+    alignment?: { rowShift: number; colShift: number; segment: { start: { x: number; y: number }; stop: { x: number; y: number } } };
   } | null>(null);
   const fftComputeGenerationRef = React.useRef(0);
   const [gpuReady, setGpuReady] = React.useState(false);
@@ -1665,52 +1615,7 @@ function Show3DSlices() {
       lastAlignmentModeRef.current = alignmentMode;
     }
   }, [alignmentMode]);
-  const alignedFloatsCacheRef = React.useRef<{
-    raw: Float32Array;
-    nx: number;
-    ny: number;
-    nz: number;
-    rowShift: number;
-    colShift: number;
-    aligned: Float32Array;
-  } | null>(null);
-  const allFloats = React.useMemo(
-    () => {
-      if (!alignmentActive || !rawFloats) return rawFloats;
-      const cached = alignedFloatsCacheRef.current;
-      if (
-        cached
-        && cached.raw === rawFloats
-        && cached.nx === nx
-        && cached.ny === ny
-        && cached.nz === nz
-        && cached.rowShift === liveRowShift
-        && cached.colShift === liveColShift
-      ) {
-        return cached.aligned;
-      }
-      const aligned = applyGlobalSliceAlignment(
-        rawFloats,
-        nx,
-        ny,
-        nz,
-        liveRowShift,
-        liveColShift,
-      );
-      if (!aligned) return rawFloats;
-      alignedFloatsCacheRef.current = {
-        raw: rawFloats,
-        nx,
-        ny,
-        nz,
-        rowShift: liveRowShift,
-        colShift: liveColShift,
-        aligned,
-      };
-      return aligned;
-    },
-    [rawFloats, alignmentActive, nx, ny, nz, liveRowShift, liveColShift],
-  );
+  const allFloats = rawFloats;
   React.useEffect(() => {
     if (fftDataObjectRef.current === allFloats) return;
     fftDataObjectRef.current = allFloats;
@@ -1749,6 +1654,16 @@ function Show3DSlices() {
       explicit: false,
     };
   }, [obliqueProfileLine, nx, ny, sliceX, sliceY, obliqueAngle]);
+  const gpuSliceAlignment = React.useMemo(
+    () => alignmentActive
+      ? {
+        rowShift: liveRowShift,
+        colShift: liveColShift,
+        segment: { start: obliqueSegment.start, stop: obliqueSegment.stop },
+      }
+      : undefined,
+    [alignmentActive, liveRowShift, liveColShift, obliqueSegment],
+  );
   // SYNCHRONOUS data range (useMemo, not useState+effect). If this lands a frame
   // late, the first render uses the default {0,1} range so a value-based contrast
   // (vmin/vmax) converts to the wrong percent -> secondary planes paint with the
@@ -1878,7 +1793,6 @@ function Show3DSlices() {
       setSliceAlignment(exported.mode);
       sliceAlignmentCachedRef.current = true;
       sliceAlignmentModeRef.current = exported.mode;
-      alignedFloatsCacheRef.current = null;
       lastAlignmentModeRef.current = exported.mode;
       setLocalAlignmentStatus("");
       return;
@@ -1891,7 +1805,6 @@ function Show3DSlices() {
     setSliceAlignment("off");
     sliceAlignmentCachedRef.current = false;
     sliceAlignmentModeRef.current = "off";
-    alignedFloatsCacheRef.current = null;
     lastAlignmentModeRef.current = "auto";
     setLocalAlignmentStatus("");
     if (offline) return;
@@ -2860,7 +2773,7 @@ function Show3DSlices() {
       const rMin = displayDataRange.min;
       const rMax = displayDataRange.max;
       let vmin: number, vmax: number;
-      if (gpuVolReady && engine && a === 0) {
+      if (gpuVolReady && engine) {
         // Stack-wide range on the GPU path: no per-slice CPU percentile scan, so
         // contrast stays consistent across slices and scrubbing never touches the CPU.
         if (imageVminPct > 0 || imageVmaxPct < 100) {
@@ -2872,7 +2785,17 @@ function Show3DSlices() {
         // Always cache the native slice raster. The displayed panel may be
         // smaller, but zoom/pan must reveal source pixels instead of magnifying
         // a display-resolution scrub proxy.
-        const bitmap = engine.renderVolumeSliceToImageBitmap(0, sliceZ, { vmin, vmax }, logScale, flip);
+        const gpuAxis = a === 0 ? 0 : 3;
+        const bitmap = engine.renderVolumeSliceToImageBitmap(
+          gpuAxis,
+          a === 0 ? sliceZ : 0,
+          { vmin, vmax },
+          logScale,
+          flip,
+          undefined,
+          undefined,
+          gpuSliceAlignment,
+        );
         if (bitmap) {
           let offscreen = sliceOffscreenRefs.current[a];
           if (!offscreen || offscreen.width !== bitmap.width || offscreen.height !== bitmap.height) {
@@ -2906,14 +2829,14 @@ function Show3DSlices() {
       }
     }
     prevCacheRef.current = { sliceX, sliceY, sliceZ, cmap, logScale, autoContrast, imageVminPct, imageVmaxPct, imageRangeMin: displayDataRange.min, imageRangeMax: displayDataRange.max, allFloats, nx, ny, nz, traitVmin, traitVmax, flip };
-  }, [allFloats, sliceX, sliceY, sliceZ, obliqueAngle, obliqueSegment, nx, ny, nz, cmap, logScale, autoContrast, sliceDims, imageVminPct, imageVmaxPct, displayDataRange, traitVmin, traitVmax, flip, cmapReady]);
+  }, [allFloats, sliceX, sliceY, sliceZ, obliqueAngle, obliqueSegment, nx, ny, nz, cmap, logScale, autoContrast, sliceDims, imageVminPct, imageVmaxPct, displayDataRange, traitVmin, traitVmax, flip, cmapReady, gpuSliceAlignment]);
 
   // Snapshot of everything direct-paint needs, refreshed every render so the
   // slider handler (which fires faster than React commits) reads current values.
   React.useEffect(() => {
     paintParamsRef.current = {
       cmap, logScale, flip, autoContrast, imageVminPct, imageVmaxPct, imageDataRange: displayDataRange,
-      traitVmin, traitVmax, zooms, canvasSizes, smooth,
+      traitVmin, traitVmax, zooms, canvasSizes, smooth, alignment: gpuSliceAlignment,
     };
   });
 
@@ -2952,6 +2875,7 @@ function Show3DSlices() {
       p.flip,
       undefined,
       { zoom: zs?.zoom || 1, panX: zs?.panX || 0, panY: zs?.panY || 0, canvasW: cw, canvasH: ch },
+      p.alignment,
     );
     if (!bitmap) return false;
     const ctx = canvas.getContext("2d");
