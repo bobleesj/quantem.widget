@@ -114,6 +114,7 @@ def test_show4dstem_webgpu_engine_has_selected_index_vi_kernel() -> None:
     assert "warmStandardViCache" in frontend
     assert "warmCache: () => warmCacheSummary()" in frontend
     assert "suppressViTraitRecompute" in frontend
+    assert "const normalizedRadiusInner" in frontend
     assert '"launch_warm_cache"' in frontend
     assert "virtualGpuCanvasRef" in frontend
     assert "renderPanelSlotsDirectToCanvas" in frontend

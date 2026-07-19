@@ -3174,6 +3174,8 @@ function Show4DSTEM() {
         `scan:${scanRows}x${scanCols}`,
         `det:${detR}x${detC}`,
       ].join("|");
+      const normalizedRadiusInner = (geometry: WarmRoiGeometry) =>
+        geometry.mode === "annular" ? Math.max(0, geometry.radiusInner) : 0;
       const roiWarmCacheKey = (geometry: WarmRoiGeometry) => [
         activeVolumeCacheKey(),
         "roi",
@@ -3181,17 +3183,20 @@ function Show4DSTEM() {
         `cr:${roundedCacheValue(geometry.centerRow)}`,
         `cc:${roundedCacheValue(geometry.centerCol)}`,
         `r:${roundedCacheValue(geometry.radius)}`,
-        `ri:${roundedCacheValue(geometry.radiusInner)}`,
+        `ri:${roundedCacheValue(normalizedRadiusInner(geometry))}`,
         `scan:${scanRows}x${scanCols}`,
         `det:${detR}x${detC}`,
       ].join("|");
-      const currentRoiGeometry = (): WarmRoiGeometry => ({
-        mode: String(model.get("roi_mode") || "circle") === "annular" ? "annular" : "circle",
-        centerRow: Number(model.get("roi_center_row") || model.get("center_row") || detR / 2),
-        centerCol: Number(model.get("roi_center_col") || model.get("center_col") || detC / 2),
-        radius: Math.max(1, Number(model.get("roi_radius") || model.get("bf_radius") || 1)),
-        radiusInner: Math.max(0, Number(model.get("roi_radius_inner") || 0)),
-      });
+      const currentRoiGeometry = (): WarmRoiGeometry => {
+        const mode = String(model.get("roi_mode") || "circle") === "annular" ? "annular" : "circle";
+        return {
+          mode,
+          centerRow: Number(model.get("roi_center_row") || model.get("center_row") || detR / 2),
+          centerCol: Number(model.get("roi_center_col") || model.get("center_col") || detC / 2),
+          radius: Math.max(1, Number(model.get("roi_radius") || model.get("bf_radius") || 1)),
+          radiusInner: mode === "annular" ? Math.max(0, Number(model.get("roi_radius_inner") || 0)) : 0,
+        };
+      };
       const presetRoiGeometry = (name: WarmRoiPresetName): WarmRoiGeometry => {
         const bf = Math.max(1, Number(model.get("bf_radius") || 1));
         const centerRow = Number(model.get("center_row") || model.get("roi_center_row") || detR / 2);
@@ -3219,7 +3224,7 @@ function Show4DSTEM() {
           centerRow,
           centerCol,
           radius: bf,
-          radiusInner: Math.max(0, Number(model.get("roi_radius_inner") || 0)),
+          radiusInner: 0,
         };
       };
       const maskForRoiGeometry = (geometry: WarmRoiGeometry): Uint32Array => buildDetectorMask({
