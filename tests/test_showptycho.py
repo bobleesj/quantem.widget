@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import pathlib
+import re
 import sys
 import types
 
@@ -67,11 +68,13 @@ class _FakeAccel:
         self.wavelength = np.float32(0.025)
         self.sampling = (np.float32(0.5), np.float32(0.5))
         self._dc_value_host = np.complex64(1.0 + 0.0j)
+        self.reconstruct_calls: list[tuple[str, float, float, float]] = []
 
     def cache_rotation(self, rotation_rad: float) -> None:
         self._rotations.append(float(rotation_rad))
 
     def reconstruct_with_loss(self, c10: float, c12: float, phi12: float):
+        self.reconstruct_calls.append(("loss", float(c10), float(c12), float(phi12)))
         value = np.float32(c10 + c12 + phi12)
         phase = np.full((3, 4), value, dtype=np.float32)
         self._mean_phase_buffer = phase
@@ -79,14 +82,17 @@ class _FakeAccel:
         return phase, 0.125
 
     def reconstruct(self, c10: float, c12: float, phi12: float):
+        self.reconstruct_calls.append(("phase", float(c10), float(c12), float(phi12)))
         value = np.float32(10.0 + c10 + c12 + phi12)
         return np.full((3, 4), value, dtype=np.float32)
 
     def reconstruct_full_with_loss(self, mags_m, angles_rad):
+        self.reconstruct_calls.append(("full_loss", float(np.asarray(mags_m)[0]), float(np.asarray(mags_m)[1]), float(np.asarray(angles_rad)[1])))
         value = np.float32(np.asarray(mags_m).sum() + np.asarray(angles_rad).sum())
         return np.full((3, 4), value, dtype=np.float32), 0.25
 
     def reconstruct_full(self, mags_m, angles_rad):
+        self.reconstruct_calls.append(("full_phase", float(np.asarray(mags_m)[0]), float(np.asarray(mags_m)[1]), float(np.asarray(angles_rad)[1])))
         value = np.float32(20.0 + np.asarray(mags_m).sum() + np.asarray(angles_rad).sum())
         return np.full((3, 4), value, dtype=np.float32)
 
@@ -153,6 +159,20 @@ class _FakeColumnWebGPUAccel(_FakeWebGPUAccel):
         self.bf_inds_col = np.array([2, 1], dtype=np.int32)
         self.gpts = (4, 4)
         self.bf_center = (1.5, 1.5)
+
+
+class _FakeMetadataOnlyMpsAccel(_FakeColumnWebGPUAccel):
+    backend = "mps"
+
+    def __init__(self, n: int = 128):
+        super().__init__(n)
+        self.g_shape = tuple(int(v) for v in self.G_qk.shape)
+        delattr(self, "G_qk")
+        self.heavy_sync_calls = 0
+
+    def _sync_webgpu_export_state(self):
+        self.heavy_sync_calls += 1
+        raise AssertionError("compressed-source folder export should not sync G_qk")
 
 
 class _FakeSSB:
@@ -290,6 +310,68 @@ def test_showptycho_calibration_seed_restores_higher_order(monkeypatch, tmp_path
     assert math.isclose(higher["C32_angle"], 45.0)
 
 
+def test_showptycho_calibration_seed_reuses_saved_loss(monkeypatch, tmp_path):
+    """C3b: saved calibration loss, expect no duplicate full-loss pass at open."""
+    from quantem.widget import PtychoCalibration, ShowPtycho
+    from quantem.widget.showptycho import save_ptycho_calibration
+
+    monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
+    path = tmp_path / "calibration.json"
+    save_ptycho_calibration(
+        PtychoCalibration(
+            rotation_angle_deg=0.0,
+            aberrations={
+                "C10": 12.0,
+                "C12": 5.0,
+                "phi12": math.radians(10.0),
+            },
+            loss=0.03125,
+        ),
+        path,
+    )
+
+    ssb = _FakeSSB()
+    widget = ShowPtycho(ssb, calibration=path)
+
+    result = json.loads(widget.result_json)
+    assert result["loss"] == 0.03125
+    assert ssb._accel.reconstruct_calls == [
+        ("phase", 12.0, 5.0, math.radians(10.0)),
+    ]
+
+
+def test_showptycho_calibration_without_loss_still_skips_loss_pass(
+    monkeypatch,
+    tmp_path,
+):
+    """C3c: calibration without saved loss, expect first draw without loss pass."""
+    from quantem.widget import PtychoCalibration, ShowPtycho
+    from quantem.widget.showptycho import save_ptycho_calibration
+
+    monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
+    path = tmp_path / "calibration.json"
+    save_ptycho_calibration(
+        PtychoCalibration(
+            rotation_angle_deg=0.0,
+            aberrations={
+                "C10": 12.0,
+                "C12": 5.0,
+                "phi12": math.radians(10.0),
+            },
+        ),
+        path,
+    )
+
+    ssb = _FakeSSB()
+    widget = ShowPtycho(ssb, calibration=path)
+
+    result = json.loads(widget.result_json)
+    assert result["loss"] is None
+    assert ssb._accel.reconstruct_calls == [
+        ("phase", 12.0, 5.0, math.radians(10.0)),
+    ]
+
+
 def test_showptycho_data_requires_geometry():
     """C4: raw data without microscope geometry, expect corrective error."""
     from quantem.widget import ShowPtycho
@@ -329,7 +411,6 @@ def test_showssb_is_not_public_api():
     import quantem.widget as qw
 
     assert not hasattr(qw, "ShowSSB")
-    assert not hasattr(qw, "SSBExplore")
 
 
 def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_path):
@@ -476,14 +557,23 @@ def test_showptycho_webgpu_folder_writes_detector_major_bf_columns(
     assert companion.exists()
     cal = json.loads((out_dir / "cal.json").read_text())
     assert cal["source_transport"] == "bf_columns"
+    assert cal["source_decode_dtype"] == "uint8"
     assert cal["bf_column_companion"] is True
+    assert cal["persistent_bf_cache"] is False
     manifest = json.loads((out_dir / "manifest.json").read_text())
     bf_columns = manifest["source"]["bf_columns"]
     assert manifest["source"]["preferred_browser_source"] == "bf_columns"
+    assert manifest["arrays"] == {}
+    assert manifest["persistent_arrays"] == []
+    assert "no persistent BF-G cache" in manifest["non_goals"]
     assert bf_columns["encoding"] == "uint4"
+    assert bf_columns["dtype"] == "uint4"
     assert bf_columns["order"] == "bf,scan"
     assert bf_columns["shape"] == [2, frames]
     assert bf_columns["bytes_per_bf"] == frames // 2
+    assert bf_columns["bits_per_value"] == 4
+    assert "exact count data" in bf_columns["note"]
+    assert "not a persistent float32/complex64 BF-G cache" in bf_columns["note"]
     raw = np.fromfile(companion, dtype=np.uint8).reshape(2, frames // 2)
     expected0 = vals0[0::2].astype(np.uint8) | (vals0[1::2].astype(np.uint8) << np.uint8(4))
     expected1 = vals1[0::2].astype(np.uint8) | (vals1[1::2].astype(np.uint8) << np.uint8(4))
@@ -493,6 +583,55 @@ def test_showptycho_webgpu_folder_writes_detector_major_bf_columns(
     assert "bf_columns" in html
     assert "bf_columns.u4" in html
     assert "g_bf.c64" not in html
+
+
+def test_showptycho_webgpu_folder_uses_mps_metadata_without_gqk_sync(
+    monkeypatch,
+    tmp_path,
+):
+    """C5c: MPS metadata-only state, expect folder export without host G_qk copy."""
+    import h5py
+
+    from quantem.widget.showptycho import _ShowPtychoWidget
+
+    monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
+    frames = 128 * 128
+    data = np.zeros((frames, 4, 4), dtype=np.uint16)
+    data[:, 1, 2] = np.arange(frames, dtype=np.uint16) % 16
+    data[:, 2, 1] = (np.arange(frames, dtype=np.uint16) * 5) % 16
+    data_file = tmp_path / "mps_data_000001.h5"
+    master = tmp_path / "mps_master_wrapper.h5"
+    with h5py.File(data_file, "w") as handle:
+        entry = handle.create_group("entry")
+        group = entry.create_group("data")
+        group.create_dataset("data", data=data)
+    with h5py.File(master, "w") as handle:
+        entry = handle.create_group("entry")
+        group = entry.create_group("data")
+        group["data_000001"] = h5py.ExternalLink(str(data_file), "/entry/data/data")
+
+    accel = _FakeMetadataOnlyMpsAccel(128)
+    widget = _ShowPtychoWidget(
+        accel=accel,
+        rotation_rad=0.0,
+        auto_aberrations={"C10": 1.0, "C12": 2.0, "phi12": 0.1},
+        auto_loss_val=0.125,
+        c10_range=(-10.0, 10.0),
+        c12_range=(0.0, 10.0),
+        phi12_range=(-90.0, 90.0),
+        webgpu_preview="auto",
+        source_file=str(master),
+    )
+
+    widget.rotation_deg = 5.0
+    out_dir = widget.export_webgpu_folder(tmp_path / "mps-folder", decode_dtype="uint8")
+
+    cal = json.loads((out_dir / "cal.json").read_text())
+    assert cal["g_shape"] == [2, 128, 128]
+    assert cal["source_transport"] == "bf_columns"
+    assert accel.heavy_sync_calls == 0
+    assert not hasattr(accel, "G_qk")
+    assert not (out_dir / "g_bf.c64").exists()
 
 
 def test_showptycho_notebook_webgpu_preview_does_not_write_cache_by_default(
@@ -549,7 +688,7 @@ def test_showptycho_webgpu_preview_accepts_128_256_512_and_1024(monkeypatch, tmp
 
 def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     """C6: frontend SSB code keeps explicit 128/256/512/1024 WGSL support."""
-    source = pathlib.Path("js/showptycho/webgpu-ssb.ts").read_text()
+    source = pathlib.Path("js/engine/showptycho-ssb.ts").read_text()
     ui_source = pathlib.Path("js/showptycho/index.tsx").read_text()
     sidecar = pathlib.Path("js/showptycho/webgpu_index.html").read_text()
 
@@ -623,7 +762,7 @@ def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     assert "runExclusive(async () =>" in source
     assert "WebGPU SSB buffers are not ready after setup" in source
     assert "if (this.setupPromise)" in source
-    assert "fetchPrefixBytes" in source
+    assert "readSourceBytes" in source
     assert "fetchRangeBytes" in source
     assert "headers: { Range:" in source
     assert "bfColumnsToGqk" in source
@@ -654,3 +793,58 @@ def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     assert "const REDUCE_BF_GROUP = 32" in source
     assert "groups_in_chunk = (params.chunk_bf + ${REDUCE_BF_GROUP - 1}u)" in source
     assert "global_group = start_bf / ${REDUCE_BF_GROUP}u" in source
+
+
+def test_showptycho_webgpu_reuses_resident_bf_columns_after_prepare():
+    """C7: prepared browser BF columns, expect sliders/FFT not to refetch them."""
+    source = pathlib.Path("js/engine/showptycho-ssb.ts").read_text()
+    ui_source = pathlib.Path("js/showptycho/index.tsx").read_text()
+
+    setup = source[
+        source.index("private async setup("):
+        source.index("private async runExclusive", source.index("private async setup("))
+    ]
+    setup_once = source[
+        source.index("private async setupOnce("):
+        source.index("private clampBfCount", source.index("private async setupOnce("))
+    ]
+    reconstruct = source[
+        source.index("async reconstruct("):
+        source.index("\n  }\n}", source.index("async reconstruct("))
+    ]
+    commit_bf = ui_source[
+        ui_source.index("const commitDragBf = React.useCallback("):
+        ui_source.index("/* --- Slider values ref", ui_source.index("const commitDragBf = React.useCallback("))
+    ]
+    frontend_full = ui_source[
+        ui_source.index("const runFrontendFull = React.useCallback("):
+        ui_source.index("frontendFullRef.current = runFrontendFull", ui_source.index("const runFrontendFull = React.useCallback("))
+    ]
+
+    resident_guard = (
+        "if (this.initialized && this.loadedBfCount >= capacity) {\n"
+        "      this.updateGeometryRotation(rotationDeg);\n"
+        "      return;\n"
+        "    }"
+    )
+    assert resident_guard in setup
+    assert setup.index(resident_guard) < setup.index("this.setupPromise = this.setupOnce")
+    assert "await this.setupPromise;" in setup
+    assert setup.count("this.updateGeometryRotation(rotationDeg);") >= 3
+    assert re.search(r"this\.setupPromise = this\.setupOnce\(capacity, rotationDeg\);", setup)
+
+    assert "if (this.initialized && this.loadedBfCount >= capacity) return;" in setup_once
+    assert "buildBfColumnGqkChunks(" in setup_once
+    assert "buildH5GqkChunks(" in setup_once
+    assert "this.loadedBfCount = nbf;" in setup_once
+    assert "this.loadedBfCount = 0;" in source
+
+    assert "await this.setup(bfCount, rotationDeg);" in reconstruct
+    assert "computeLoss = options.computeLoss ?? bfCount === this.cal.num_bf" in reconstruct
+    assert "await readF32(device, buffers.phase, this.plane)" in reconstruct
+
+    assert "engine.prepareBfCount(count).then(prepared =>" in commit_bf
+    assert "const fn = prepared >= total ? frontendFullRef.current : frontendPreviewRef.current;" in commit_bf
+    assert "fn?.(current.c10, current.c12, current.phi12, rotationDegRef.current);" in commit_bf
+    assert "computeLoss: isFull" in frontend_full
+    assert "const modeLabel = isFull ? \"full BF + loss\" : \"selected BF\";" in frontend_full

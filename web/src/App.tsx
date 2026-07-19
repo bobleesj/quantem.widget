@@ -100,7 +100,18 @@ export default function App() {
         if (!compute) return { error: "no WebGPU device" };
         const vi = await compute.maskedSum(mask);
         const com = await compute.maskedCoM(mask, detCols);
-        return { virtual: Array.from(vi), comY: Array.from(com.comY), comX: Array.from(com.comX), scanCount, detRows, detCols };
+        const dpcY = await compute.maskedDpc(mask, detCols, "row");
+        const dpcX = await compute.maskedDpc(mask, detCols, "col");
+        return {
+          virtual: Array.from(vi),
+          comY: Array.from(com.comY),
+          comX: Array.from(com.comX),
+          dpcY: Array.from(dpcY),
+          dpcX: Array.from(dpcX),
+          scanCount,
+          detRows,
+          detCols,
+        };
       };
     // bslz4 Strategy-D parity + kernel-time verify hook.
     (window as unknown as { __verifyD: (url: string) => Promise<unknown> }).__verifyD =

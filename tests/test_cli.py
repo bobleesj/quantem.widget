@@ -479,6 +479,41 @@ def test_showptycho_range_parser_accepts_first_bytes():
     assert cli._parse_http_range("bytes=99-100", 16) is None
 
 
+def test_showptycho_range_handler_serves_bf_column_partial_content(tmp_path):
+    """C6: ShowPtycho folder server, expect real byte-range BF-column reads."""
+    import http.client
+    import http.server
+    import threading
+
+    folder = tmp_path / "showptycho-folder"
+    source = folder / "source"
+    source.mkdir(parents=True)
+    payload = bytes(range(16))
+    (source / "bf_columns.u8").write_bytes(payload)
+
+    handler = type("TestRangeHandler", (cli._RangeRequestHandler,), {"root": folder})
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    conn = None
+    thread.start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+        conn.request("GET", "/source/bf_columns.u8", headers={"Range": "bytes=2-5"})
+        response = conn.getresponse()
+        body = response.read()
+
+        assert response.status == 206
+        assert response.getheader("Accept-Ranges") == "bytes"
+        assert response.getheader("Content-Range") == "bytes 2-5/16"
+        assert body == payload[2:6]
+    finally:
+        if conn is not None:
+            conn.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_data_transfer_cli_plan_inspect_copy_update_and_show4dstem(tmp_path, monkeypatch, capsys):
     import json
     import quantem.widget.io.hdf5 as hdf5

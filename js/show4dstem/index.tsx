@@ -24,7 +24,13 @@ import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { useTheme } from "../theme";
 import { COLORMAPS, applyColormap } from "../colormaps";
 import { WebGPUFFT, getWebGPUFFT, fft2dAsync, fftshift, autoEnhanceFFT, nextPow2, applyHannWindow2D } from "../fft";
-import { Show4DSTEMCompute, Show4DSTEMCpuCompute } from "../engine/compute";
+import {
+  buildDetectorMask,
+  buildFullDetectorMask,
+  buildScanMask,
+  Show4DSTEMCompute,
+  Show4DSTEMCpuCompute,
+} from "../engine/compute";
 import { readH5MasterInfo, readH5Volume } from "../engine/h5reader";
 import { decodeBslz4ToStack, type Bslz4Spec } from "../engine/bslz4";
 import { LazyShow4DSTEM } from "../engine/lazy";
@@ -55,56 +61,6 @@ import {
   type ComparePageMessage,
   type ProgressiveComparePage,
 } from "./progressiveCompare";
-
-// Detector mask for the offline WebGPU virtual-image sum. Mirrors the Python
-// mask geometry exactly (show4dstem.py _create_*_mask): cx pairs with column,
-// cy with row, so the browser virtual image matches the kernel's pixel-for-pixel.
-function buildDetectorMask(model: any, detRows: number, detCols: number): Uint32Array {
-  const mask = new Uint32Array(detRows * detCols);
-  const cx = model.get("roi_center_col");
-  const cy = model.get("roi_center_row");
-  const mode = model.get("roi_mode") || "circle";
-  const radius = model.get("roi_radius") || 0;
-  const inner = model.get("roi_radius_inner") || 0;
-  const halfW = (model.get("roi_width") || 0) / 2;
-  const halfH = (model.get("roi_height") || 0) / 2;
-  for (let row = 0; row < detRows; row++) {
-    for (let col = 0; col < detCols; col++) {
-      const dx = col - cx, dy = row - cy, d2 = dx * dx + dy * dy;
-      let inside = false;
-      if (mode === "circle") inside = d2 <= radius * radius;
-      else if (mode === "annular") inside = d2 > inner * inner && d2 <= radius * radius;
-      else if (mode === "square") inside = Math.abs(dx) <= radius && Math.abs(dy) <= radius;
-      else if (mode === "rect") inside = Math.abs(dx) <= halfW && Math.abs(dy) <= halfH;
-      else if (mode === "point") inside = Math.round(cx) === col && Math.round(cy) === row;
-      mask[row * detCols + col] = inside ? 1 : 0;
-    }
-  }
-  return mask;
-}
-
-// Scan-ROI mask for the offline DP-from-region reduce (mirrors the vi_roi_mode
-// geometry in show4dstem.py _compute_vi_roi_dp).
-function buildScanMask(model: any, scanRows: number, scanCols: number): Uint32Array {
-  const mask = new Uint32Array(scanRows * scanCols);
-  const cx = model.get("vi_roi_center_col");
-  const cy = model.get("vi_roi_center_row");
-  const mode = model.get("vi_roi_mode") || "circle";
-  const radius = model.get("vi_roi_radius") || 0;
-  const halfW = (model.get("vi_roi_width") || 0) / 2;
-  const halfH = (model.get("vi_roi_height") || 0) / 2;
-  for (let row = 0; row < scanRows; row++) {
-    for (let col = 0; col < scanCols; col++) {
-      const dx = col - cx, dy = row - cy;
-      let inside = false;
-      if (mode === "circle") inside = dx * dx + dy * dy <= radius * radius;
-      else if (mode === "square") inside = Math.abs(dx) <= radius && Math.abs(dy) <= radius;
-      else if (mode === "rect") inside = Math.abs(dx) <= halfW && Math.abs(dy) <= halfH;
-      mask[row * scanCols + col] = inside ? 1 : 0;
-    }
-  }
-  return mask;
-}
 
 function normaliseViSource(value: unknown): string {
   const raw = String(value || "roi").trim();
@@ -2841,6 +2797,7 @@ function Show4DSTEM() {
   const [localViRoiCenterCol, setLocalViRoiCenterCol] = React.useState(viRoiCenterCol || 0);
   const [viRoiDpBytes] = useModelState<DataView>("vi_roi_dp_bytes");
   const [viRoiReduce, setViRoiReduce] = useModelState<string>("vi_roi_reduce");
+  const [webgpuDpcReady, setWebgpuDpcReady] = React.useState(false);
 
   // ── Offline WebGPU compute backend ──────────────────────────────────────
   // Small datasets ship the full uint16 stack (the `_offline_stack` trait); we
@@ -2851,7 +2808,7 @@ function Show4DSTEM() {
   // so the browser masked-sum (u32 accumulate) is bit-exact to the kernel.
   const [offline] = useModelState<boolean>("offline");
   React.useEffect(() => {
-    if (!offline) return;
+    if (!offline) { setWebgpuDpcReady(false); return; }
     let disposed = false;
     let detach: (() => void) | null = null;
     (async () => {
@@ -3086,15 +3043,50 @@ function Show4DSTEM() {
         }
       }
       if (!compute || disposed) { compute?.dispose(); return; }
+      setWebgpuDpcReady(Boolean(
+        (compute as unknown as { maskedDpc?: unknown }).maskedDpc
+        || (compute as unknown as { maskedCoM?: unknown }).maskedCoM,
+      ));
       // Auto-filter hot/dead detector pixels (from the HDF5 pixel_mask) so the
       // offline result matches CUDA's apply_mask path - no manual masking needed.
       const badPxJson = model.get("_offline_bad_px") as string | undefined;
       if (badPxJson) compute.badPx = new Uint32Array(JSON.parse(badPxJson) as number[]);
+      const dpcMask = buildFullDetectorMask(detR, detC);
+      const computeDpcImage = async (
+        backend: Show4DSTEMCompute | Show4DSTEMCpuCompute,
+        source: string,
+      ): Promise<Float32Array | null> => {
+        const component = source === "DPC_row" ? "row" : "col";
+        const maybeDpc = backend as unknown as {
+          maskedDpc?: (mask: Uint32Array, detCols: number, component: "row" | "col") => Promise<Float32Array>;
+          maskedCoM?: (mask: Uint32Array, detCols: number) => Promise<{ comY: Float32Array; comX: Float32Array }>;
+        };
+        if (typeof maybeDpc.maskedDpc === "function") {
+          return await maybeDpc.maskedDpc(dpcMask, detC, component);
+        }
+        if (typeof maybeDpc.maskedCoM !== "function") return null;
+        const { comY, comX } = await maybeDpc.maskedCoM(dpcMask, detC);
+        const values = component === "row" ? comY : comX;
+        let mean = 0;
+        for (let i = 0; i < values.length; i++) mean += values[i];
+        mean /= Math.max(1, values.length);
+        const out = new Float32Array(values.length);
+        for (let i = 0; i < values.length; i++) out[i] = values[i] - mean;
+        return out;
+      };
       const recomputeVI = async () => {
-        const product = viProductFrameView(model, scanRows, scanCols);
+        const source = normaliseViSource(model.get("vi_source"));
+        const product = viProductFrameView(model, scanRows, scanCols, source);
         if (product) {
           model.set("virtual_image_bytes", product);
           return;
+        }
+        if (source === "DPC_row" || source === "DPC_col") {
+          const dpc = await computeDpcImage(compute!, source);
+          if (dpc) {
+            model.set("virtual_image_bytes", new DataView(dpc.buffer));
+            return;
+          }
         }
         const vi = await compute!.maskedSum(buildDetectorMask(model, detR, detC));
         model.set("virtual_image_bytes", new DataView(vi.buffer));
@@ -3144,6 +3136,7 @@ function Show4DSTEM() {
       const recomputeCompareVI = async () => {
         const indices = compareVisibleIndices();
         if (!indices.length) return;
+        const source = normaliseViSource(model.get("vi_source"));
         const productStack = viProductStackForIndices(model, indices, scanRows, scanCols);
         if (productStack) {
           model.set("compare_virtual_image_bytes", productStack);
@@ -3152,12 +3145,26 @@ function Show4DSTEM() {
           return;
         }
         const gen = ++compareViGen;
+        const panelPixels = scanRows * scanCols;
+        const stack = new Float32Array(indices.length * panelPixels);
+        if (source === "DPC_row" || source === "DPC_col") {
+          for (let slot = 0; slot < indices.length; slot++) {
+            const idx = indices[slot];
+            const panelCompute = getVol ? await getVol(idx) : compute;
+            if (gen !== compareViGen || !panelCompute) return;
+            const dpc = await computeDpcImage(panelCompute, source);
+            if (gen !== compareViGen || !dpc) return;
+            stack.set(dpc, slot * panelPixels);
+          }
+          model.set("compare_virtual_image_bytes", new DataView(stack.buffer));
+          model.set("compare_panel_count", indices.length);
+          model.set("compare_panel_indices", indices);
+          return;
+        }
         const mask = buildDetectorMask(model, detR, detC);
         let maskArea = 0;
         for (let i = 0; i < mask.length; i++) maskArea += mask[i] ? 1 : 0;
         maskArea = Math.max(1, maskArea);
-        const panelPixels = scanRows * scanCols;
-        const stack = new Float32Array(indices.length * panelPixels);
         for (let slot = 0; slot < indices.length; slot++) {
           const idx = indices[slot];
           const panelCompute = getVol ? await getVol(idx) : compute;
@@ -3175,6 +3182,12 @@ function Show4DSTEM() {
       (window as unknown as { __sh4d: unknown }).__sh4d = { model, recomputeVI, recomputeCompareVI,
         detMask: () => buildDetectorMask(model, detR, detC),
         deriveOnly: async () => { const vi = await compute!.maskedSum(buildDetectorMask(model, detR, detC)); return vi.length; },
+        dpcOnly: async () => {
+          const dpc = await computeDpcImage(compute!, "DPC_row");
+          let sum = 0;
+          if (dpc) for (let i = 0; i < dpc.length; i++) sum += dpc[i];
+          return { length: dpc?.length ?? 0, sum };
+        },
         comLen: () => { const c = compute as unknown as { com?: Float32Array | null }; return c && c.com ? c.com.length : -1; },
         rd: () => ({ mode: model.get("roi_mode"), r: model.get("roi_radius"), ri: model.get("roi_radius_inner"),
           cr: model.get("roi_center_row"), cc: model.get("roi_center_col"), active: model.get("roi_active") }) };
@@ -3333,7 +3346,7 @@ function Show4DSTEM() {
       requestAnimationFrame(() => { if (!disposed) { void recomputeVI(); void recomputeCompareVI(); } });
       setTimeout(() => { if (!disposed) { void recomputeVI(); void recomputeCompareVI(); } }, 200);
     })();
-    return () => { disposed = true; detach?.(); };
+    return () => { disposed = true; setWebgpuDpcReady(false); detach?.(); };
   }, [offline]);
   // dp_stats are computed in JS from frameBytes (Python side no longer
   // syncs a dp_stats trait — saves 4 trait sync round-trips per click).
@@ -3368,14 +3381,20 @@ function Show4DSTEM() {
   const viProductSourceOptions = React.useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
-    (Array.isArray(viProductLabels) ? viProductLabels : []).forEach((label) => {
-      const source = normaliseViSource(label);
+    const add = (source: string) => {
       if (!["DPC_row", "DPC_col", "SSB"].includes(source) || seen.has(source)) return;
       seen.add(source);
       out.push(source);
+    };
+    (Array.isArray(viProductLabels) ? viProductLabels : []).forEach((label) => {
+      add(normaliseViSource(label));
     });
+    if (webgpuDpcReady) {
+      add("DPC_row");
+      add("DPC_col");
+    }
     return out;
-  }, [viProductLabels]);
+  }, [viProductLabels, webgpuDpcReady]);
   const activeViSource = React.useMemo(() => {
     const source = normaliseViSource(viSource);
     return source === "roi" || viProductSourceOptions.includes(source) ? source : "roi";

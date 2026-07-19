@@ -261,6 +261,8 @@ def _run_browser_profile(args: argparse.Namespace, html_path: Path, profile_dir:
         "--hover-canvas-limit",
         str(args.hover_canvas_limit),
     ]
+    if args.headed:
+        command.append("--headed")
     if args.no_hover_stress:
         command.append("--no-hover-stress")
     env = os.environ.copy()
@@ -329,6 +331,7 @@ def _write_report(
 
     images_html = ""
     if metrics:
+        image_items = []
         for key, label in [
             ("initial_screenshot", "Initial exported widget"),
             ("initial_primary_canvas", "Primary canvas crop"),
@@ -336,10 +339,19 @@ def _write_report(
             shot = metrics.get(key, {})
             rel = shot.get("rel")
             if rel:
-                images_html += (
-                    f"<section class=\"card\"><h2>{_escape(label)}</h2>"
-                    f"<img src=\"profile/{_escape(rel)}\"></section>"
-                )
+                image_items.append((label, f"profile/{rel}"))
+        for step in metrics.get("steps", []):
+            shot = step.get("screenshot") or {}
+            rel = shot.get("rel")
+            if rel:
+                label = str(step.get("name", "step")).replace("_", " ")
+                image_items.append((label, f"profile/{rel}"))
+        if image_items:
+            figures = "".join(
+                f"<figure><img src=\"{_escape(rel)}\"><figcaption>{_escape(label)}</figcaption></figure>"
+                for label, rel in image_items
+            )
+            images_html = f"<section class=\"card\"><h2>Visual evidence</h2><div class=\"shots\">{figures}</div></section>"
 
     artifacts = [
         ("Generated notebook", notebook_path),
@@ -365,6 +377,7 @@ def _write_report(
         ("Manifest name", manifest.get("name")),
         ("Manifest note", manifest.get("scientific_note")),
         ("Panel limit", args.panel_limit or "all"),
+        ("Colormap", args.cmap),
         ("Export mode", args.mode),
         ("Export encoding", args.encoding),
         ("Export downsample", args.downsample or "none"),
@@ -372,12 +385,23 @@ def _write_report(
         ("No backend after export", True),
     ]
     data_html = "".join(f"<tr><th>{_escape(k)}</th><td>{_escape(v)}</td></tr>" for k, v in data_rows)
+    zoom_pan_step = next(
+        (step for step in metrics.get("steps", []) if step.get("name") == "show2d_zoom_pan"),
+        None,
+    )
     profile_summary = {
         "passed": metrics.get("passed"),
         "load_to_ready_s": metrics.get("load_to_ready_s"),
-        "initial_fps": metrics.get("initial_fps"),
-        "final_fps": metrics.get("final_fps"),
+        "initial_browser_raf_fps": metrics.get("initial_fps"),
+        "final_browser_raf_fps": metrics.get("final_fps"),
         "initial_canvas_count": metrics.get("initial_canvas_count"),
+        "show2d_zoom_pan_actual_user_timing": {
+            "wheel_events": (zoom_pan_step or {}).get("wheel_event_probe"),
+            "wheel_paint": (zoom_pan_step or {}).get("wheel_perf_debug"),
+            "drag_events": (zoom_pan_step or {}).get("drag_event_probe"),
+            "drag_paint": (zoom_pan_step or {}).get("drag_perf_debug"),
+            "changed_panel_count": (zoom_pan_step or {}).get("changed_panel_count"),
+        },
         "hover_sweep": next(
             (step for step in metrics.get("steps", []) if step.get("name") == "hover_sweep"),
             None,
@@ -397,8 +421,12 @@ def _write_report(
     th {{ background: #f6f8fa; }}
     .pass {{ color: #167a3b; font-weight: 700; }}
     .fail {{ color: #b42318; font-weight: 700; }}
-    .card {{ border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; margin: 16px 0; }}
-    img {{ max-width: 100%; border: 1px solid #d0d7de; }}
+    .card {{ border: 2px solid #ff2bbd; border-radius: 8px; padding: 16px; margin: 16px 0; background: white; box-shadow: 0 0 0 3px rgba(255, 43, 189, 0.10); }}
+    .card h2 {{ display: inline-block; margin-top: 0; padding: 3px 8px; background: #ff2bbd; color: white; border-radius: 4px; }}
+    .shots {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; }}
+    figure {{ margin: 0; }}
+    img {{ max-width: 100%; border: 3px solid #ff2bbd; background: #2a001e; box-sizing: border-box; }}
+    figcaption {{ display: inline-block; margin-top: 3px; padding: 2px 6px; color: white; background: #ff2bbd; border-radius: 4px; font-size: 12px; }}
     pre, code {{ background: #f6f8fa; border-radius: 4px; }}
     pre {{ padding: 12px; overflow: auto; }}
   </style>
@@ -503,7 +531,7 @@ def main() -> int:
     parser.add_argument("--artifact-dir", default=str(_default_artifact_dir()))
     parser.add_argument("--panel-limit", type=int, default=4, help="Panels to load/export; use 24 for the full gold_4k stress source.")
     parser.add_argument("--ncols", type=int, default=2)
-    parser.add_argument("--cmap", default="gray")
+    parser.add_argument("--cmap", default="magma")
     parser.add_argument("--title")
     parser.add_argument("--mode", default="single", choices=["single", "folder"])
     parser.add_argument("--encoding", default="uint8", choices=["uint8", "full"])
@@ -518,6 +546,7 @@ def main() -> int:
     parser.add_argument("--settle-ms", type=int, default=1500)
     parser.add_argument("--hover-canvas-limit", type=int, default=80)
     parser.add_argument("--no-hover-stress", action="store_true")
+    parser.add_argument("--headed", action="store_true", help="Run the browser profile in a visible Chromium window.")
     parser.add_argument("--viewport-width", type=int, default=1800)
     parser.add_argument("--viewport-height", type=int, default=1200)
     args = parser.parse_args()

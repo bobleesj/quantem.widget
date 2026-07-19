@@ -42,6 +42,34 @@ def _click_copy_buttons(page):
         assert "image/png" in types
 
 
+def _exercise_dpc_backend(page, expected_pixels):
+    page.wait_for_function(
+        "window.__sh4d && typeof window.__sh4d.dpcOnly === 'function' && document.body.innerText.includes('DPC')",
+        timeout=60_000,
+    )
+    for source in ("DPC_row", "DPC_col"):
+        result = page.evaluate(
+            """async ({source, expectedPixels}) => {
+              const api = window.__sh4d;
+              api.model.set("vi_source", source);
+              await api.recomputeVI();
+              const view = api.model.get("virtual_image_bytes");
+              const arr = new Float32Array(view.buffer, view.byteOffset, view.byteLength / 4);
+              let sum = 0;
+              for (let i = 0; i < arr.length; i++) sum += arr[i];
+              return {
+                source: api.model.get("vi_source"),
+                length: arr.length,
+                expectedPixels,
+                sum,
+              };
+            }""",
+            {"source": source, "expectedPixels": expected_pixels},
+        )
+        assert result["source"] == source
+        assert result["length"] == expected_pixels
+
+
 @pytest.mark.skipif(
     os.environ.get("QT_RUN_BROWSER_TESTS") != "1",
     reason="set QT_RUN_BROWSER_TESTS=1 to run headed WebGPU browser smoke tests",
@@ -58,7 +86,8 @@ def test_webgpu_multi_volume_export_fetches_second_volume(tmp_path):
     data[0] += 3
     data[1] += 17
 
-    out_dir = tmp_path / "webgpu-multi"
+    out_dir = tmp_path / "webgpu-multi-data"
+    html_path = tmp_path / "index.html"
     w = Show4DSTEM(
         data,
         frame_dim_label="Dataset",
@@ -69,7 +98,7 @@ def test_webgpu_multi_volume_export_fetches_second_volume(tmp_path):
         precompute_virtual_images=False,
         verbose=False,
     )
-    w.export_html(str(out_dir / "index.html"), title="small multi-volume WebGPU")
+    w.export_html(str(html_path), title="small multi-volume WebGPU")
 
     port = int(os.environ.get("QT_BROWSER_TEST_PORT", "8898"))
     server = subprocess.Popen(
@@ -81,7 +110,7 @@ def test_webgpu_multi_volume_export_fetches_second_volume(tmp_path):
             "--bind",
             "127.0.0.1",
             "--directory",
-            str(out_dir),
+            str(tmp_path),
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -113,7 +142,10 @@ def test_webgpu_multi_volume_export_fetches_second_volume(tmp_path):
                     if ("vol0/" in request.url or "vol1/" in request.url)
                     else None,
                 )
-                page.goto(f"http://127.0.0.1:{port}/index.html", wait_until="domcontentloaded")
+                page.goto(
+                    f"http://127.0.0.1:{port}/index.html",
+                    wait_until="domcontentloaded",
+                )
                 page.wait_for_function(
                     "document.body.innerText.includes('first') && document.querySelectorAll('canvas').length >= 4",
                     timeout=120_000,
@@ -131,16 +163,25 @@ def test_webgpu_multi_volume_export_fetches_second_volume(tmp_path):
                       .find(root => root.inputs.some(inp => inp.min === '0' && inp.max === '1'))"""
                 )
                 assert dataset_slider is not None
-                rect = dataset_slider["rect"]
-                page.mouse.move(rect["x"] + 2, rect["y"] + rect["h"] / 2)
+                slider = page.locator(".MuiSlider-root").nth(int(dataset_slider["i"]))
+                slider.scroll_into_view_if_needed()
+                page.wait_for_timeout(250)
+                rect = slider.bounding_box()
+                assert rect is not None
+                page.mouse.move(rect["x"] + 2, rect["y"] + rect["height"] / 2)
                 page.mouse.down()
-                page.mouse.move(rect["x"] + rect["w"] - 2, rect["y"] + rect["h"] / 2, steps=10)
+                page.mouse.move(
+                    rect["x"] + rect["width"] - 2,
+                    rect["y"] + rect["height"] / 2,
+                    steps=10,
+                )
                 page.mouse.up()
                 page.wait_for_function("document.body.innerText.includes('second')", timeout=60_000)
                 page.wait_for_timeout(3000)
 
                 assert any("vol0/" in url for url in requested)
                 assert any("vol1/" in url for url in requested)
+                _exercise_dpc_backend(page, 8 * 8)
                 _click_copy_buttons(page)
             finally:
                 context.close()

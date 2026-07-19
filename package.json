@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "npm run build -- --watch",
     "build": "node scripts/build.mjs",
+    "sync:webgpu": "node scripts/sync-gpu-webgpu.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

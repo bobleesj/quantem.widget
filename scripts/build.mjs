@@ -4,8 +4,12 @@
 
 import { build, context } from "esbuild";
 import { rmSync, copyFileSync, mkdirSync, existsSync } from "fs";
+import { syncGpuWebgpuSources } from "./sync-gpu-webgpu.mjs";
 
 const watch = process.argv.includes("--watch");
+if (process.env.QUANTEM_WIDGET_SKIP_GPU_WEBGPU_SYNC !== "1") {
+  syncGpuWebgpuSources();
+}
 const widgets = [
   { name: "show1d" },
   { name: "show2d" },
