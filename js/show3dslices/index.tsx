@@ -1562,6 +1562,10 @@ function Show3DSlices() {
   const [localAlignmentStatus, setLocalAlignmentStatus] = React.useState("");
   const [liveRowShift, setLiveRowShift] = React.useState(rowShiftPxPerSlice || 0);
   const [liveColShift, setLiveColShift] = React.useState(colShiftPxPerSlice || 0);
+  const pendingAlignmentRef = React.useRef<{ rowShift: number; colShift: number } | null>(null);
+  const alignmentRafRef = React.useRef<number | null>(null);
+  const sliceAlignmentModeRef = React.useRef(sliceAlignment || "off");
+  const sliceAlignmentCachedRef = React.useRef(!!sliceAlignmentCached);
   const exportedAlignmentRef = React.useRef({
     cached: !!sliceAlignmentCached,
     rowShift: rowShiftPxPerSlice || 0,
@@ -1592,6 +1596,15 @@ function Show3DSlices() {
   React.useEffect(() => {
     setLiveColShift(colShiftPxPerSlice || 0);
   }, [colShiftPxPerSlice]);
+  React.useEffect(() => {
+    sliceAlignmentModeRef.current = sliceAlignment || "off";
+  }, [sliceAlignment]);
+  React.useEffect(() => {
+    sliceAlignmentCachedRef.current = !!sliceAlignmentCached;
+  }, [sliceAlignmentCached]);
+  React.useEffect(() => () => {
+    if (alignmentRafRef.current != null) cancelAnimationFrame(alignmentRafRef.current);
+  }, []);
   React.useEffect(() => {
     if (!sliceAlignmentStatus) return;
     if (/^(Aligned|Cached) row/.test(sliceAlignmentStatus)) {
@@ -1809,16 +1822,52 @@ function Show3DSlices() {
     }
   };
   const commitManualSliceAlignment = (rowShift: number, colShift: number) => {
+    if (alignmentRafRef.current != null) {
+      cancelAnimationFrame(alignmentRafRef.current);
+      alignmentRafRef.current = null;
+    }
+    pendingAlignmentRef.current = null;
     setLiveRowShift(rowShift);
     setLiveColShift(colShift);
     setRowShiftPxPerSlice(rowShift);
     setColShiftPxPerSlice(colShift);
     setSliceAlignmentCached(true);
     setSliceAlignment("manual");
+    sliceAlignmentCachedRef.current = true;
+    sliceAlignmentModeRef.current = "manual";
     lastAlignmentModeRef.current = "manual";
     setLocalAlignmentStatus("");
   };
+  const stageManualSliceAlignment = React.useCallback((rowShift: number, colShift: number) => {
+    pendingAlignmentRef.current = { rowShift, colShift };
+    if (sliceAlignmentModeRef.current !== "manual") {
+      sliceAlignmentModeRef.current = "manual";
+      setSliceAlignment("manual");
+    }
+    if (!sliceAlignmentCachedRef.current) {
+      sliceAlignmentCachedRef.current = true;
+      setSliceAlignmentCached(true);
+    }
+    lastAlignmentModeRef.current = "manual";
+    setLocalAlignmentStatus("");
+    if (alignmentRafRef.current != null) return;
+    alignmentRafRef.current = requestAnimationFrame(() => {
+      alignmentRafRef.current = null;
+      const pending = pendingAlignmentRef.current;
+      pendingAlignmentRef.current = null;
+      if (!pending) return;
+      React.startTransition(() => {
+        setLiveRowShift(pending.rowShift);
+        setLiveColShift(pending.colShift);
+      });
+    });
+  }, [setSliceAlignment, setSliceAlignmentCached]);
   const resetSliceAlignment = () => {
+    if (alignmentRafRef.current != null) {
+      cancelAnimationFrame(alignmentRafRef.current);
+      alignmentRafRef.current = null;
+    }
+    pendingAlignmentRef.current = null;
     if (offline && exportedAlignmentRef.current.cached) {
       const exported = exportedAlignmentRef.current;
       setLiveRowShift(exported.rowShift);
@@ -1827,6 +1876,8 @@ function Show3DSlices() {
       setColShiftPxPerSlice(exported.colShift);
       setSliceAlignmentCached(true);
       setSliceAlignment(exported.mode);
+      sliceAlignmentCachedRef.current = true;
+      sliceAlignmentModeRef.current = exported.mode;
       alignedFloatsCacheRef.current = null;
       lastAlignmentModeRef.current = exported.mode;
       setLocalAlignmentStatus("");
@@ -1838,6 +1889,8 @@ function Show3DSlices() {
     setColShiftPxPerSlice(0);
     setSliceAlignmentCached(false);
     setSliceAlignment("off");
+    sliceAlignmentCachedRef.current = false;
+    sliceAlignmentModeRef.current = "off";
     alignedFloatsCacheRef.current = null;
     lastAlignmentModeRef.current = "auto";
     setLocalAlignmentStatus("");
@@ -5423,11 +5476,7 @@ function Show3DSlices() {
                     max={alignmentShiftLimit}
                     step={0.05}
                     onLiveChange={(value) => {
-                      setLiveRowShift(value);
-                      setSliceAlignment("manual");
-                      setSliceAlignmentCached(true);
-                      lastAlignmentModeRef.current = "manual";
-                      setLocalAlignmentStatus("");
+                      stageManualSliceAlignment(value, liveColShift);
                     }}
                     onCommit={(value) => commitManualSliceAlignment(value, liveColShift)}
                     sx={{ ...sliderStyles.small, width: 58, flexShrink: 0 }}
@@ -5439,11 +5488,7 @@ function Show3DSlices() {
                     max={alignmentShiftLimit}
                     step={0.05}
                     onLiveChange={(value) => {
-                      setLiveRowShift(value);
-                      setSliceAlignment("manual");
-                      setSliceAlignmentCached(true);
-                      lastAlignmentModeRef.current = "manual";
-                      setLocalAlignmentStatus("");
+                      stageManualSliceAlignment(value, liveColShift);
                     }}
                     onCommit={(value) => commitManualSliceAlignment(value, liveColShift)}
                     ariaLabel="Edit row shift per slice"
@@ -5455,11 +5500,7 @@ function Show3DSlices() {
                     max={alignmentShiftLimit}
                     step={0.05}
                     onLiveChange={(value) => {
-                      setLiveColShift(value);
-                      setSliceAlignment("manual");
-                      setSliceAlignmentCached(true);
-                      lastAlignmentModeRef.current = "manual";
-                      setLocalAlignmentStatus("");
+                      stageManualSliceAlignment(liveRowShift, value);
                     }}
                     onCommit={(value) => commitManualSliceAlignment(liveRowShift, value)}
                     sx={{ ...sliderStyles.small, width: 58, flexShrink: 0 }}
@@ -5471,11 +5512,7 @@ function Show3DSlices() {
                     max={alignmentShiftLimit}
                     step={0.05}
                     onLiveChange={(value) => {
-                      setLiveColShift(value);
-                      setSliceAlignment("manual");
-                      setSliceAlignmentCached(true);
-                      lastAlignmentModeRef.current = "manual";
-                      setLocalAlignmentStatus("");
+                      stageManualSliceAlignment(liveRowShift, value);
                     }}
                     onCommit={(value) => commitManualSliceAlignment(liveRowShift, value)}
                     ariaLabel="Edit column shift per slice"
