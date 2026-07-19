@@ -12226,14 +12226,14 @@ function Show3D() {
       setOfflineStackFetchStatus(
         sidecarDisplayCacheDirtyRef.current
           ? `Updating display playback cache… 0/${n} frames`
-          : `Preparing viewport playback cache… 0/${n} frames`,
+          : `Building display cache… 0/${n} frames`,
       );
       const scratch = document.createElement("canvas");
       scratch.width = Math.max(1, Math.round(canvasW));
       scratch.height = Math.max(1, Math.round(canvasH));
       const ctx = scratch.getContext("2d");
       if (!ctx) {
-        setOfflineStackFetchStatus("Failed to prepare viewport playback cache: no 2D context");
+        setOfflineStackFetchStatus("Failed to prepare display cache: no 2D context");
         return;
       }
       const started = performance.now();
@@ -12270,7 +12270,7 @@ function Show3D() {
             setOfflineStackFetchStatus(
               builtFrames === n
                 ? ""
-                : `Preparing viewport playback cache… ${builtFrames}/${n} frames (${elapsed}s)`,
+                : `Building display cache… ${builtFrames}/${n} frames (${elapsed}s)`,
             );
           }
           const d = show3dPerfDebug();
@@ -12307,7 +12307,7 @@ function Show3D() {
       } catch (err) {
         clearSidecarCompositeCache();
         setOfflineStackFetchStatus(
-          `Failed to prepare viewport playback cache: ${err instanceof Error ? err.message : String(err)}`,
+          `Failed to prepare display cache: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     };
@@ -12372,13 +12372,13 @@ function Show3D() {
     let cancelled = false;
     const build = async () => {
       clearSidecarCompositeCache();
-      setOfflineStackFetchStatus(`Preparing viewport playback cache… 0/${n} frames`);
+      setOfflineStackFetchStatus(`Building display cache… 0/${n} frames`);
       const scratch = document.createElement("canvas");
       scratch.width = Math.max(1, Math.round(canvasW));
       scratch.height = Math.max(1, Math.round(canvasH));
       const ctx = scratch.getContext("2d");
       if (!ctx) {
-        setOfflineStackFetchStatus("Failed to prepare viewport playback cache: no 2D context");
+        setOfflineStackFetchStatus("Failed to prepare display cache: no 2D context");
         return;
       }
       const started = performance.now();
@@ -12410,7 +12410,7 @@ function Show3D() {
             setOfflineStackFetchStatus(
               builtFrames === n
                 ? ""
-                : `Preparing viewport playback cache… ${builtFrames}/${n} frames (${elapsed}s)`,
+                : `Building display cache… ${builtFrames}/${n} frames (${elapsed}s)`,
             );
           }
           const d = show3dPerfDebug();
@@ -12439,7 +12439,7 @@ function Show3D() {
       } catch (err) {
         clearSidecarCompositeCache();
         setOfflineStackFetchStatus(
-          `Failed to prepare viewport playback cache: ${err instanceof Error ? err.message : String(err)}`,
+          `Failed to prepare display cache: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     };
@@ -12541,14 +12541,14 @@ function Show3D() {
     const serial = ++sidecarCompositeBuildSerialRef.current;
     let cancelled = false;
     clearSidecarCompositeCache();
-    setOfflineStackFetchStatus(`Preparing viewport playback cache… 0/${n} frames`);
+    setOfflineStackFetchStatus(`Building display cache… 0/${n} frames`);
     const build = async () => {
       const scratch = document.createElement("canvas");
       scratch.width = Math.max(1, Math.round(canvasW));
       scratch.height = Math.max(1, Math.round(canvasH));
       const ctx = scratch.getContext("2d");
       if (!ctx) {
-        setOfflineStackFetchStatus("Failed to prepare viewport playback cache: no 2D context");
+        setOfflineStackFetchStatus("Failed to prepare display cache: no 2D context");
         return;
       }
       const started = performance.now();
@@ -12569,7 +12569,7 @@ function Show3D() {
           sidecarCompositeFrameCacheRef.current.set(idx, retained);
           if (idx % 4 === 0 || idx === n - 1) {
             const elapsed = ((performance.now() - started) / 1000).toFixed(1);
-            setOfflineStackFetchStatus(`Preparing viewport playback cache… ${idx + 1}/${n} frames (${elapsed}s)`);
+            setOfflineStackFetchStatus(`Building display cache… ${idx + 1}/${n} frames (${elapsed}s)`);
           }
           if (idx % 4 === 3) await new Promise((resolve) => setTimeout(resolve, 0));
         }
@@ -12590,7 +12590,7 @@ function Show3D() {
       } catch (err) {
         clearSidecarCompositeCache();
         setOfflineStackFetchStatus(
-          `Failed to prepare viewport playback cache: ${err instanceof Error ? err.message : String(err)}`,
+          `Failed to prepare display cache: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     };
@@ -12672,7 +12672,7 @@ function Show3D() {
     sidecarGpuPresenterRef.current = null;
     sidecarGpuReadyRef.current = false;
     setSidecarGpuReady(false);
-    setOfflineStackFetchStatus(`Uploading viewport playback cache to GPU… 0/${n} frames`);
+    setOfflineStackFetchStatus(`Uploading display cache to GPU… 0/${n} frames`);
     const build = async () => {
       try {
         const adapter = await navigator.gpu.requestAdapter();
@@ -12740,7 +12740,7 @@ function Show3D() {
           }));
           if (idx % 8 === 0 || idx === n - 1) {
             const elapsed = ((performance.now() - started) / 1000).toFixed(1);
-            setOfflineStackFetchStatus(`Uploading viewport playback cache to GPU… ${idx + 1}/${n} frames (${elapsed}s)`);
+            setOfflineStackFetchStatus(`Uploading display cache to GPU… ${idx + 1}/${n} frames (${elapsed}s)`);
             await new Promise((resolve) => setTimeout(resolve, 0));
           }
         }
@@ -12760,7 +12760,7 @@ function Show3D() {
         }
         renderSidecarGpuFrame(playbackIdxRef.current, "ready");
       } catch (err) {
-        setOfflineStackFetchStatus(`Failed to upload viewport playback cache to GPU: ${err instanceof Error ? err.message : String(err)}`);
+        setOfflineStackFetchStatus(`Failed to upload display cache to GPU: ${err instanceof Error ? err.message : String(err)}`);
       }
     };
     void build();
