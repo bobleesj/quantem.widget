@@ -7847,6 +7847,8 @@ function Show3D() {
   const [fftZoom, setFftZoom] = React.useState(1);
   const [fftPanX, setFftPanX] = React.useState(0);
   const [fftPanY, setFftPanY] = React.useState(0);
+  const defaultFftViewState = React.useMemo(() => ({ zoom: 1, panX: 0, panY: 0 }), []);
+  const [panelFftStates, setPanelFftStates] = React.useState<Map<number, { zoom: number; panX: number; panY: number }>>(new Map());
   const internalFftZoomSyncRef = React.useRef(false);
   const fftViewLiveRef = React.useRef({ zoom: 1, panX: 0, panY: 0 });
   const fftViewRafRef = React.useRef<number | null>(null);
@@ -7894,6 +7896,24 @@ function Show3D() {
     }
   }, [commitFftViewReactState, setFftOverlayZoomTrait]);
 
+  const getFftViewForPanel = React.useCallback((panelIdx: number) => {
+    return linkPanels
+      ? fftViewLiveRef.current
+      : (panelFftStates.get(panelIdx) || defaultFftViewState);
+  }, [defaultFftViewState, linkPanels, panelFftStates]);
+
+  const setFftViewForPanel = React.useCallback((panelIdx: number, next: { zoom: number; panX: number; panY: number }, syncTrait = false, directOnly = false) => {
+    if (linkPanels) {
+      scheduleFftViewState(next, syncTrait, directOnly);
+      return;
+    }
+    setPanelFftStates(prev => {
+      const map = new Map(prev);
+      map.set(panelIdx, next);
+      return map;
+    });
+  }, [linkPanels, scheduleFftViewState]);
+
   React.useEffect(() => {
     fftViewLiveRef.current = { zoom: fftZoom, panX: fftPanX, panY: fftPanY };
   }, [fftZoom, fftPanX, fftPanY]);
@@ -7927,6 +7947,23 @@ function Show3D() {
     setFftPanX(reset.panX);
     setFftPanY(reset.panY);
   }, [resolvedFftOverlayZoom]);
+
+  const previousFftLinkPanelsRef = React.useRef(linkPanels);
+  React.useEffect(() => {
+    const previous = previousFftLinkPanelsRef.current;
+    if (previous && !linkPanels) {
+      const shared = { zoom: fftZoom, panX: fftPanX, panY: fftPanY };
+      setPanelFftStates(() => new Map(Array.from({ length: totalPanelCount }, (_, idx) => [idx, { ...shared }])));
+    } else if (!previous && linkPanels) {
+      const panel = visiblePanelIndices[0] ?? 0;
+      const current = panelFftStates.get(panel) || defaultFftViewState;
+      fftViewLiveRef.current = current;
+      setFftZoom(current.zoom);
+      setFftPanX(current.panX);
+      setFftPanY(current.panY);
+    }
+    previousFftLinkPanelsRef.current = linkPanels;
+  }, [defaultFftViewState, fftPanX, fftPanY, fftZoom, linkPanels, panelFftStates, totalPanelCount, visiblePanelIndices]);
 
   React.useEffect(() => {
     if (fftLayoutOverlay && !fftOverlayWasActiveRef.current) {
@@ -8219,13 +8256,15 @@ function Show3D() {
         const srcX = srcCol * grid.panelWidth;
         const srcY = srcRow * grid.panelHeight;
         const dst = getFftSlot(slot, grid.count, grid.cols, grid.rows);
+        const panel = visiblePanelIndices[slot] ?? slot;
+        const view = linkPanels ? { zoom: fftZoom, panX: fftPanX, panY: fftPanY } : (panelFftStates.get(panel) || defaultFftViewState);
         ctx.imageSmoothingEnabled = grid.panelWidth < dst.w || grid.panelHeight < dst.h;
         ctx.save();
         ctx.beginPath();
         ctx.rect(dst.x, dst.y, dst.w, dst.h);
         ctx.clip();
-        ctx.translate(dst.x + fftPanX, dst.y + fftPanY);
-        ctx.scale(fftZoom, fftZoom);
+        ctx.translate(dst.x + view.panX, dst.y + view.panY);
+        ctx.scale(view.zoom, view.zoom);
         ctx.drawImage(
           offscreen,
           srcX,
@@ -8247,7 +8286,7 @@ function Show3D() {
       ctx.drawImage(offscreen, 0, 0, canvasW, canvasH);
       ctx.restore();
     }
-  }, [canvasW, canvasH, fftPanX, fftPanY, fftZoom, getFftSlot, interPanelGapColor]);
+  }, [canvasW, canvasH, defaultFftViewState, fftPanX, fftPanY, fftZoom, getFftSlot, interPanelGapColor, linkPanels, panelFftStates, visiblePanelIndices]);
   const panelGlobalColOffset = (panelIdx: number) => (totalPanelCount > 1 && !sharedPanelSource) ? panelIdx * sourcePanelWidth : 0;
   const panelLocalCol = (globalCol: number, panelIdx: number) => globalCol - panelGlobalColOffset(panelIdx);
   const panelGlobalCol = (localCol: number, panelIdx: number) => localCol + panelGlobalColOffset(panelIdx);
@@ -16139,7 +16178,7 @@ function Show3D() {
 
   // FFT mouse handlers
   const [isFftDragging, setIsFftDragging] = React.useState(false);
-  const [fftPanStart, setFftPanStart] = React.useState<{ x: number, y: number, pX: number, pY: number } | null>(null);
+  const [fftPanStart, setFftPanStart] = React.useState<{ x: number, y: number, pX: number, pY: number, panelIdx: number | null, viewportW: number, viewportH: number } | null>(null);
 
   const clampFftPan = React.useCallback((panX: number, panY: number, zoom: number, viewportW: number, viewportH: number) => {
     const clampAxis = (pan: number, viewport: number) => {
@@ -16152,8 +16191,10 @@ function Show3D() {
     };
   }, []);
 
-  const zoomFftAtPoint = React.useCallback((anchorX: number, anchorY: number, deltaY: number, viewportW?: number, viewportH?: number) => {
-    const currentBase = fftViewLiveRef.current;
+  const zoomFftAtPoint = React.useCallback((anchorX: number, anchorY: number, deltaY: number, viewportW?: number, viewportH?: number, panelIdx: number | null = null) => {
+    const currentBase = panelIdx != null && !linkPanels
+      ? getFftViewForPanel(panelIdx)
+      : fftViewLiveRef.current;
     const current = !fftUserAdjustedViewRef.current && currentBase.zoom > 1 && viewportW != null && viewportH != null
       ? {
         zoom: currentBase.zoom,
@@ -16173,8 +16214,13 @@ function Show3D() {
     const clamped = viewportW != null && viewportH != null
       ? clampFftPan(nextPanX, nextPanY, newZoom, viewportW, viewportH)
       : { panX: nextPanX, panY: nextPanY };
-    scheduleFftViewState({ zoom: newZoom, panX: clamped.panX, panY: clamped.panY }, true, fftLayoutOverlay);
-  }, [clampFftPan, fftLayoutOverlay, scheduleFftViewState]);
+    const next = { zoom: newZoom, panX: clamped.panX, panY: clamped.panY };
+    if (panelIdx != null && !linkPanels) {
+      setFftViewForPanel(panelIdx, next);
+    } else {
+      scheduleFftViewState(next, true, fftLayoutOverlay);
+    }
+  }, [clampFftPan, fftLayoutOverlay, getFftViewForPanel, linkPanels, scheduleFftViewState, setFftViewForPanel]);
 
   fftInsetNativeWheelHandlerRef.current = (event: WheelEvent) => {
     const target = event.target;
@@ -16221,7 +16267,8 @@ function Show3D() {
         if (mouseX < dst.x || mouseX >= dst.x + dst.w || mouseY < dst.y || mouseY >= dst.y + dst.h) continue;
         const localX = mouseX - dst.x;
         const localY = mouseY - dst.y;
-        zoomFftAtPoint(localX, localY, e.deltaY, dst.w, dst.h);
+        const panel = visiblePanelIndices[slot] ?? slot;
+        zoomFftAtPoint(localX, localY, e.deltaY, dst.w, dst.h, panel);
         return;
       }
     }
@@ -16532,8 +16579,10 @@ function Show3D() {
       for (let slot = 0; slot < panelGrid.count; slot++) {
         const dst = getFftSlot(slot, panelGrid.count, panelGrid.cols, panelGrid.rows);
         if (mouseX < dst.x || mouseX >= dst.x + dst.w || mouseY < dst.y || mouseY >= dst.y + dst.h) continue;
-        const localX = (mouseX - dst.x - fftPanX) / fftZoom;
-        const localY = (mouseY - dst.y - fftPanY) / fftZoom;
+        const panel = visiblePanelIndices[slot] ?? slot;
+        const view = linkPanels ? { zoom: fftZoom, panX: fftPanX, panY: fftPanY } : getFftViewForPanel(panel);
+        const localX = (mouseX - dst.x - view.panX) / view.zoom;
+        const localY = (mouseY - dst.y - view.panY) / view.zoom;
         if (localX < 0 || localX >= dst.w || localY < 0 || localY >= dst.h) return null;
         const srcCol = slot % panelGrid.cols;
         const srcRow = Math.floor(slot / panelGrid.cols);
@@ -16559,7 +16608,26 @@ function Show3D() {
   const handleFftMouseDown = (e: React.MouseEvent) => {
     fftClickStartRef.current = { x: e.clientX, y: e.clientY };
     setIsFftDragging(true);
-    setFftPanStart({ x: e.clientX, y: e.clientY, pX: fftPanX, pY: fftPanY });
+    const canvas = fftCanvasRef.current;
+    if (!canvas) {
+      setFftPanStart({ x: e.clientX, y: e.clientY, pX: fftPanX, pY: fftPanY, panelIdx: null, viewportW: canvasW, viewportH: canvasH });
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = (e.clientX - rect.left) * (canvas.width / Math.max(1, rect.width));
+    const mouseY = (e.clientY - rect.top) * (canvas.height / Math.max(1, rect.height));
+    const panelGrid = fftPanelGridRef.current;
+    if (panelGrid) {
+      for (let slot = 0; slot < panelGrid.count; slot++) {
+        const dst = getFftSlot(slot, panelGrid.count, panelGrid.cols, panelGrid.rows);
+        if (mouseX < dst.x || mouseX >= dst.x + dst.w || mouseY < dst.y || mouseY >= dst.y + dst.h) continue;
+        const panel = visiblePanelIndices[slot] ?? slot;
+        const view = getFftViewForPanel(panel);
+        setFftPanStart({ x: e.clientX, y: e.clientY, pX: view.panX, pY: view.panY, panelIdx: panel, viewportW: dst.w, viewportH: dst.h });
+        return;
+      }
+    }
+    setFftPanStart({ x: e.clientX, y: e.clientY, pX: fftPanX, pY: fftPanY, panelIdx: null, viewportW: canvas.width, viewportH: canvas.height });
   };
 
   const handleFftMouseMove = (e: React.MouseEvent) => {
@@ -16571,11 +16639,16 @@ function Show3D() {
       const scaleY = canvas.height / rect.height;
       const dx = (e.clientX - fftPanStart.x) * scaleX;
       const dy = (e.clientY - fftPanStart.y) * scaleY;
-      const panelGrid = fftPanelGridRef.current;
-      const viewport = panelGrid ? getFftSlot(0, panelGrid.count, panelGrid.cols, panelGrid.rows) : { w: canvas.width, h: canvas.height };
-      const clamped = clampFftPan(fftPanStart.pX + dx, fftPanStart.pY + dy, fftZoom, viewport.w, viewport.h);
-      setFftPanX(clamped.panX);
-      setFftPanY(clamped.panY);
+      const view = fftPanStart.panelIdx != null && !linkPanels
+        ? getFftViewForPanel(fftPanStart.panelIdx)
+        : { zoom: fftZoom, panX: fftPanX, panY: fftPanY };
+      const clamped = clampFftPan(fftPanStart.pX + dx, fftPanStart.pY + dy, view.zoom, fftPanStart.viewportW, fftPanStart.viewportH);
+      if (fftPanStart.panelIdx != null && !linkPanels) {
+        setFftViewForPanel(fftPanStart.panelIdx, { zoom: view.zoom, panX: clamped.panX, panY: clamped.panY });
+      } else {
+        setFftPanX(clamped.panX);
+        setFftPanY(clamped.panY);
+      }
     }
   };
 
@@ -16753,6 +16826,7 @@ function Show3D() {
     setFftOverlayZoomTrait(1);
     setFftPanX(reset.panX);
     setFftPanY(reset.panY);
+    setPanelFftStates(new Map());
     setFftClickInfo(null);
   };
 
@@ -19196,11 +19270,15 @@ function Show3D() {
                       }}
                     />
                     {showZoomIndicator === true && panelChromeVisible && (
+                      (() => {
+                        const fftView = linkPanels ? { zoom: fftZoom, panX: fftPanX, panY: fftPanY } : getFftViewForPanel(panel);
+                        const zoomLabel = formatZoomLabel(fftView.zoom);
+                        return (
                       <Box
                         className="quantem-fft-zoom-label"
                         data-show3d-fft-zoom-indicator={panel}
-                        data-fft-zoom={formatZoomLabel(fftZoom)}
-                        aria-label={`FFT zoom for ${panelLabel(panel)}: ${formatZoomLabel(fftZoom)}`}
+                        data-fft-zoom={zoomLabel}
+                        aria-label={`FFT zoom for ${panelLabel(panel)}: ${zoomLabel}`}
                         sx={{
                           position: "absolute",
                           left: Math.min(12, Math.max(5, insetW * 0.08)),
@@ -19217,8 +19295,10 @@ function Show3D() {
                           zIndex: 3,
                         }}
                       >
-                        {formatZoomLabel(fftZoom)}
+                        {zoomLabel}
                       </Box>
+                        );
+                      })()
                     )}
                     {slot === 0 && fftMetricsEnabled && fftQuality && (
                       <Box
@@ -19914,13 +19994,15 @@ function Show3D() {
                   const row = Math.floor(slot / cols);
                   const slotX = col * (outPanelW + gap);
                   const slotY = row * (outPanelH + gap);
+                  const fftView = linkPanels ? { zoom: fftZoom, panX: fftPanX, panY: fftPanY } : getFftViewForPanel(panel);
+                  const zoomLabel = formatZoomLabel(fftView.zoom);
                   return (
                     <Box
                       key={`fft-zoom-${panel}`}
                       className="quantem-fft-zoom-label"
                       data-show3d-fft-zoom-indicator={panel}
-                      data-fft-zoom={formatZoomLabel(fftZoom)}
-                      aria-label={`FFT zoom for ${panelLabel(panel)}: ${formatZoomLabel(fftZoom)}`}
+                      data-fft-zoom={zoomLabel}
+                      aria-label={`FFT zoom for ${panelLabel(panel)}: ${zoomLabel}`}
                       sx={{
                         position: "absolute",
                         left: `calc(${(slotX / Math.max(1, canvasW)) * 100}% + 12px)`,
@@ -19938,7 +20020,7 @@ function Show3D() {
                         zIndex: 4,
                       }}
                     >
-                      {formatZoomLabel(fftZoom)}
+                      {zoomLabel}
                     </Box>
                   );
                 });

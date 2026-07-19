@@ -384,6 +384,199 @@ def _measure_fps(page, duration_ms: int) -> float:
     )
 
 
+def _start_canvas_update_probe(page, *, selector: str = "canvas", label: str = "interaction") -> dict[str, Any]:
+    """Start sampling visible canvas pixels on every browser animation frame.
+
+    This measures whether the user-visible pixels actually change during a
+    pointer interaction. It is deliberately separate from requestAnimationFrame
+    FPS, which only proves that the browser event loop is alive.
+    """
+
+    return dict(
+        page.evaluate(
+            r"""({selector, label}) => {
+              const existing = window.__quantemCanvasUpdateProbe;
+              if (existing) existing.active = false;
+              const viewportW = window.innerWidth || 0;
+              const viewportH = window.innerHeight || 0;
+              const visible = (node) => {
+                const rect = node.getBoundingClientRect();
+                const style = getComputedStyle(node);
+                return rect.width >= 24 && rect.height >= 24 &&
+                  rect.right > 0 && rect.bottom > 0 &&
+                  rect.left < viewportW && rect.top < viewportH &&
+                  node.width > 0 && node.height > 0 &&
+                  style.display !== "none" && style.visibility !== "hidden";
+              };
+              const candidates = [...document.querySelectorAll(selector)]
+                .map((canvas, domIndex) => {
+                  const rect = canvas.getBoundingClientRect();
+                  return {
+                    canvas,
+                    domIndex,
+                    rect,
+                    area: rect.width * rect.height,
+                    visible: visible(canvas),
+                  };
+                })
+                .filter((item) => item.visible)
+                .sort((a, b) => b.area - a.area);
+              const item = candidates[0];
+              if (!item) {
+                return {started: false, selector, label, reason: "no visible canvas"};
+              }
+              const canvas = item.canvas;
+              const ctx = canvas.getContext("2d", {willReadFrequently: true});
+              if (!ctx) {
+                return {started: false, selector, label, reason: "canvas 2d context unavailable"};
+              }
+              const hashCanvas = () => {
+                try {
+                  const sw = Math.max(1, Math.min(48, Math.floor(canvas.width / 4) || canvas.width));
+                  const sh = Math.max(1, Math.min(48, Math.floor(canvas.height / 4) || canvas.height));
+                  const x0 = Math.max(0, Math.min(canvas.width - sw, Math.floor(canvas.width * 0.38 - sw / 2)));
+                  const y0 = Math.max(0, Math.min(canvas.height - sh, Math.floor(canvas.height * 0.38 - sh / 2)));
+                  const data = ctx.getImageData(x0, y0, sw, sh).data;
+                  let h1 = 2166136261 >>> 0;
+                  let h2 = 16777619 >>> 0;
+                  let sum = 0;
+                  for (let i = 0; i < data.length; i += 16) {
+                    const v = data[i] + 3 * data[i + 1] + 5 * data[i + 2] + 7 * data[i + 3];
+                    sum += v;
+                    h1 ^= v & 255;
+                    h1 = Math.imul(h1, 16777619) >>> 0;
+                    h2 ^= (v >>> 8) & 255;
+                    h2 = Math.imul(h2, 2166136261) >>> 0;
+                  }
+                  return `${h1.toString(16)}:${h2.toString(16)}:${sum}`;
+                } catch (error) {
+                  return `error:${String(error).slice(0, 120)}`;
+                }
+              };
+              const start = performance.now();
+              const probe = {
+                active: true,
+                selector,
+                label,
+                start,
+                samples: 0,
+                changes: [],
+                events: [],
+                initialHash: null,
+                lastHash: null,
+                lastSampleMs: 0,
+                target: {
+                  domIndex: item.domIndex,
+                  x: Math.round(item.rect.x),
+                  y: Math.round(item.rect.y),
+                  width: Math.round(item.rect.width),
+                  height: Math.round(item.rect.height),
+                  backingWidth: canvas.width,
+                  backingHeight: canvas.height,
+                },
+              };
+              const recordEvent = (event) => {
+                if (!probe.active) return;
+                probe.events.push({
+                  type: event.type,
+                  t: Number((performance.now() - start).toFixed(1)),
+                  x: Math.round(event.clientX),
+                  y: Math.round(event.clientY),
+                });
+              };
+              const eventTypes = ["pointerdown", "pointermove", "pointerup", "mousedown", "mousemove", "mouseup", "wheel"];
+              eventTypes.forEach((type) => canvas.addEventListener(type, recordEvent, {passive: true}));
+              probe.cleanup = () => eventTypes.forEach((type) => canvas.removeEventListener(type, recordEvent));
+              window.__quantemCanvasUpdateProbe = probe;
+              const sample = (now) => {
+                if (!probe.active) return;
+                const t = now - start;
+                const hash = hashCanvas();
+                probe.samples += 1;
+                probe.lastSampleMs = t;
+                if (probe.initialHash === null) {
+                  probe.initialHash = hash;
+                  probe.lastHash = hash;
+                } else if (hash !== probe.lastHash) {
+                  probe.changes.push({t: Number(t.toFixed(1)), hash});
+                  probe.lastHash = hash;
+                }
+                requestAnimationFrame(sample);
+              };
+              requestAnimationFrame(sample);
+              return {started: true, selector, label, target: probe.target};
+            }""",
+            {"selector": selector, "label": label},
+        )
+        or {}
+    )
+
+
+def _stop_canvas_update_probe(page) -> dict[str, Any]:
+    """Stop the canvas pixel-update probe and summarize visible-change timing."""
+
+    return dict(
+        page.evaluate(
+            r"""() => {
+              const probe = window.__quantemCanvasUpdateProbe;
+              if (!probe) return {started: false, reason: "probe was not started"};
+              probe.active = false;
+              if (probe.cleanup) probe.cleanup();
+              const durationMs = Math.max(1, performance.now() - probe.start);
+              const changeTimes = probe.changes.map((item) => Number(item.t));
+              const eventTimes = (probe.events || []).map((item) => Number(item.t));
+              const intervals = [];
+              for (let i = 1; i < changeTimes.length; i += 1) {
+                intervals.push(changeTimes[i] - changeTimes[i - 1]);
+              }
+              const percentile = (values, pct) => {
+                if (!values.length) return null;
+                const sorted = [...values].sort((a, b) => a - b);
+                const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((pct / 100) * sorted.length) - 1));
+                return Number(sorted[idx].toFixed(1));
+              };
+              const stallCandidates = [];
+              if (changeTimes.length) {
+                stallCandidates.push(changeTimes[0]);
+                stallCandidates.push(...intervals);
+                stallCandidates.push(durationMs - changeTimes[changeTimes.length - 1]);
+              } else {
+                stallCandidates.push(durationMs);
+              }
+              return {
+                started: true,
+                selector: probe.selector,
+                label: probe.label,
+                target: probe.target,
+                duration_ms: Number(durationMs.toFixed(1)),
+                sample_count: probe.samples,
+                browser_raf_fps: Number((probe.samples * 1000 / durationMs).toFixed(1)),
+                event_count: eventTimes.length,
+                first_event_ms: eventTimes.length ? Number(eventTimes[0].toFixed(1)) : null,
+                last_event_ms: eventTimes.length ? Number(eventTimes[eventTimes.length - 1].toFixed(1)) : null,
+                first_event_to_first_change_ms: (
+                  eventTimes.length && changeTimes.length
+                    ? Number((changeTimes[0] - eventTimes[0]).toFixed(1))
+                    : null
+                ),
+                visual_changes: changeTimes.length,
+                visual_update_hz: Number((changeTimes.length * 1000 / durationMs).toFixed(1)),
+                first_change_ms: changeTimes.length ? Number(changeTimes[0].toFixed(1)) : null,
+                last_change_ms: changeTimes.length ? Number(changeTimes[changeTimes.length - 1].toFixed(1)) : null,
+                inter_change_p50_ms: percentile(intervals, 50),
+                inter_change_p95_ms: percentile(intervals, 95),
+                max_visual_stall_ms: Number(Math.max(...stallCandidates).toFixed(1)),
+                events: (probe.events || []).slice(0, 40),
+                truncated_events: (probe.events || []).length > 40,
+                change_times_ms: changeTimes.slice(0, 40),
+                truncated_change_times: changeTimes.length > 40,
+              };
+            }"""
+        )
+        or {}
+    )
+
+
 def _click_text_controls(page, labels: list[str]) -> list[str]:
     clicked: list[str] = []
     for label in labels:

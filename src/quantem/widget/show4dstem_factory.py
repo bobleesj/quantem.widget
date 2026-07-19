@@ -111,7 +111,9 @@ def Show4DSTEM(data: Any, **kwargs: Any) -> Any:
       - Apple Silicon MPS single-file loads use the raw-Metal real-time viewer.
       - Apple Silicon MPS multi-file loads use a lazy handle; dataset 0 shows
         immediately and later datasets fill behind the dataset slider.
-      - CUDA / CPU single or multi-file loads use the universal torch viewer.
+      - CUDA CuPy loads use the base viewer with ``quantem.gpu`` RawKernel
+        reducers for BF/DF/ADF interaction.
+      - CPU and other tensor loads use the base viewer's Torch/NumPy fallback.
 
     Web aliases ``backend="browser"``, ``backend="webgpu"``, and
     ``offline=True`` are accepted by the base viewer for compatibility.

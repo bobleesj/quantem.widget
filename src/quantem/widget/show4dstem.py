@@ -1,9 +1,9 @@
 """
 show4dstem: Fast interactive 4D-STEM viewer widget.
 
-Single chunked-torch path on every device (CUDA / MPS / CPU). Reductions cast
-uint16 → float32 in scan-row chunks bounded by _CHUNK_BYTE_BUDGET, so transient
-memory stays the same regardless of total dataset size.
+The public factory routes Apple chunk-backed loads to the MPS Metal viewer. This
+base viewer keeps CUDA CuPy inputs resident so ``quantem.gpu`` can use its
+RawKernel virtual-image reducers; Torch remains the generic CPU/tensor fallback.
 
 To reduce data size, bin k-space at the dataset level before viewing:
 
@@ -1546,6 +1546,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         is_dataset5dstem = type(data).__name__ == "Dataset5dstem" and hasattr(
             data, "frame"
         )
+        self._cuda_compute_data = None
+        self._cuda_compare_compute_backends: OrderedDict[int, Any] = OrderedDict()
         if hasattr(data, "chunks") and not getattr(data, "_is_gpu_frames", False):
             from quantem.gpu.compute.mps import ChunkedFrames
 
@@ -1557,6 +1559,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         # block to CPU and re-uploads (a 19.3 GB no-bin load -> ~58 GB transient and
         # an OOM kernel crash). dlpack keeps it on-device, no copy.
         if type(data).__module__.split(".")[0] == "cupy":
+            self._cuda_compute_data = data
             data = torch.from_dlpack(data)
         # Torch tensor input keeps its device (lets user pin a specific GPU via
         # `data.cuda(1)`). NumPy / Dataset input gets default-validated device.
@@ -1980,6 +1983,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             cls = self._compute.__class__.__name__
             backend, where = {
                 "MetalCompute": ("Apple GPU (raw Metal)", "Apple unified memory"),
+                "MetalRawBackend": ("Apple GPU (raw Metal)", "Apple unified memory"),
                 "CudaKernelCompute": ("NVIDIA GPU (CUDA, cupy)", "GPU VRAM"),
             }.get(cls, (None, None))
             if backend is None:  # TorchCompute — backend depends on the torch device
@@ -3706,6 +3710,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         import gc
 
         data = self._data
+        self._cuda_compute_data = None
+        self._cuda_compare_compute_backends.clear()
         cuda_indices: set[int] = set()
         needs_mps_clear = False
 
@@ -3877,6 +3883,16 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         return self._data
 
     @property
+    def _compute_frame_data(self):
+        """Current frame data for backend reductions, preserving CuPy when present."""
+        cuda_data = getattr(self, "_cuda_compute_data", None)
+        if cuda_data is not None:
+            if self.n_frames > 1:
+                return cuda_data[self.frame_idx]
+            return cuda_data
+        return self._frame_data
+
+    @property
     def _compute(self):
         """UI-agnostic Python compute backend for the CURRENT frame's data,
         rebuilt when the frame changes. Two families:
@@ -3894,7 +3910,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         Construction is cheap (views, no copy) so the backend rebuilds when
         ``_frame_data`` changes (5D time-series scrub).
         """
-        fd = self._frame_data
+        fd = self._compute_frame_data
         if getattr(self, "_compute_for", None) is not fd:
             try:
                 from quantem.gpu.compute.backends import compute_backend
@@ -5689,10 +5705,10 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         if n_positions == 0:
             self.vi_roi_dp_bytes = b""
             return
-        # Flat scan indices inside the ROI, reduced (mean/sum/max) by the compute
-        # backend (torch gather on tensor data, Metal mean_frames on chunk-backed
-        # frames). One path for every backend; gives consistent results across
-        # CUDA / MPS instead of the old torch-vs-subclass index-math divergence.
+        # Flat scan indices inside the ROI, reduced (mean/sum/max) by the
+        # compute backend (CUDA RawKernel, raw Metal for chunk-backed frames, or
+        # Torch/NumPy fallback). One widget call path keeps results consistent
+        # across backends.
         indices = (
             torch.nonzero(mask.reshape(-1), as_tuple=False).flatten().cpu().numpy()
         )
@@ -7206,6 +7222,28 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         )
         backend = compute_backend(dataset)
         return np.asarray(backend.masked_sum(mask_np), dtype=np.float32)
+
+    def _cuda_compare_backend_for_index(self, idx: int):
+        """Return a cached CUDA compute backend for one compare-grid panel."""
+        cuda_data = getattr(self, "_cuda_compute_data", None)
+        if cuda_data is None:
+            return None
+        key = int(idx) if self.n_frames > 1 else 0
+        cache = self._cuda_compare_compute_backends
+        backend = cache.get(key)
+        if backend is not None:
+            cache.move_to_end(key)
+            return backend
+
+        from quantem.gpu.compute.backends import compute_backend
+
+        frame = cuda_data[key] if self.n_frames > 1 else cuda_data
+        backend = compute_backend(frame)
+        cache[key] = backend
+        max_entries = max(1, int(getattr(self, "compare_max_panels", 1)) * 2)
+        while len(cache) > max_entries:
+            cache.popitem(last=False)
+        return backend
 
     def _detector_mask_area(self, mask) -> float:
         """Number of detector pixels contributing to the current ROI."""
@@ -9296,6 +9334,26 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         self, indices: Sequence[int], mask
     ) -> list[np.ndarray]:
         mask_area = self._detector_mask_area(mask)
+        cuda_data = getattr(self, "_cuda_compute_data", None)
+        if cuda_data is not None:
+            mask_np = (
+                mask.detach().cpu().numpy()
+                if hasattr(mask, "detach")
+                else np.asarray(mask)
+            )
+            images: list[np.ndarray] = []
+            for idx in indices:
+                backend = self._cuda_compare_backend_for_index(int(idx))
+                if backend is None:
+                    continue
+                image = backend.masked_sum(mask_np)
+                images.append(
+                    np.ascontiguousarray(
+                        image / mask_area,
+                        dtype=np.float32,
+                    ).reshape(self.shape_rows, self.shape_cols)
+                )
+            return images
         tensor_images: list[torch.Tensor] = []
         allocation_failed = False
         needs_fallback = False
