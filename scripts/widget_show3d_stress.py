@@ -38,6 +38,8 @@ from widget_browser_smoke import (
     _free_port,
     _image_nonblank,
     _measure_fps,
+    _start_canvas_update_probe,
+    _stop_canvas_update_probe,
     _visible_canvas_boxes,
 )
 
@@ -617,19 +619,10 @@ def _drive_slider_scrub(page, *, fps_ms: int) -> dict[str, Any]:
     before_debug = _read_debug(page)
     before_text = _playback_count_text(page)
     before_sig = _primary_canvas_content_signature(page)
-
-    page.evaluate(
-        """() => {
-          window.__qwShow3DSliderDragCounting = true;
-          window.__qwShow3DSliderDragFrames = 0;
-          window.__qwShow3DSliderDragStart = performance.now();
-          const step = () => {
-            if (!window.__qwShow3DSliderDragCounting) return;
-            window.__qwShow3DSliderDragFrames += 1;
-            requestAnimationFrame(step);
-          };
-          requestAnimationFrame(step);
-        }"""
+    update_probe_start = _start_canvas_update_probe(
+        page,
+        selector="canvas",
+        label="show3d frame slider drag",
     )
     started = time.perf_counter()
     page.mouse.move(x0, y)
@@ -647,15 +640,7 @@ def _drive_slider_scrub(page, *, fps_ms: int) -> dict[str, Any]:
     final_debug = _read_debug(page)
     final_text = _playback_count_text(page)
     final_sig = _primary_canvas_content_signature(page)
-    raf_fps = float(
-        page.evaluate(
-            """() => {
-              window.__qwShow3DSliderDragCounting = false;
-              const elapsed = performance.now() - (window.__qwShow3DSliderDragStart || performance.now());
-              return (window.__qwShow3DSliderDragFrames || 0) * 1000 / Math.max(1, elapsed);
-            }"""
-        )
-    )
+    update_probe = _stop_canvas_update_probe(page)
     settle_fps = round(float(_measure_fps(page, fps_ms)), 1)
     changed_debug = (
         before_debug.get("lastFrame") != mid_debug.get("lastFrame") or
@@ -670,7 +655,10 @@ def _drive_slider_scrub(page, *, fps_ms: int) -> dict[str, Any]:
         "found": True,
         "slider": box,
         "duration_s": round(time.perf_counter() - started, 3),
-        "drag_fps": round(raf_fps, 1),
+        "update_probe_start": update_probe_start,
+        "update_probe": update_probe,
+        "drag_visual_update_hz": update_probe.get("visual_update_hz"),
+        "drag_browser_raf_fps": update_probe.get("browser_raf_fps"),
         "settle_fps": settle_fps,
         "before_text": before_text,
         "mid_text": mid_text,
@@ -864,18 +852,10 @@ def _drive_histogram_contrast(page, *, fps_ms: int) -> dict[str, Any]:
     x1 = float(item["x"]) + max(8, float(item["width"]) * 0.75)
     y = float(item["y"]) + float(item["height"]) / 2
 
-    page.evaluate(
-        """() => {
-          window.__qwShow3DHistogramDragCounting = true;
-          window.__qwShow3DHistogramDragFrames = 0;
-          window.__qwShow3DHistogramDragStart = performance.now();
-          const step = () => {
-            if (!window.__qwShow3DHistogramDragCounting) return;
-            window.__qwShow3DHistogramDragFrames += 1;
-            requestAnimationFrame(step);
-          };
-          requestAnimationFrame(step);
-        }"""
+    update_probe_start = _start_canvas_update_probe(
+        page,
+        selector="canvas",
+        label="show3d histogram contrast drag",
     )
     page.mouse.move(x0, y)
     page.mouse.down()
@@ -890,16 +870,7 @@ def _drive_histogram_contrast(page, *, fps_ms: int) -> dict[str, Any]:
     final_sig = _primary_canvas_content_signature(page)
     final_values = [item.get("values", []) for item in _histogram_clip_sliders(page)]
     final_switches = _show3d_switch_state(page)
-    drag_fps = float(
-        page.evaluate(
-            """() => {
-              window.__qwShow3DHistogramDragCounting = false;
-              const elapsed = performance.now() - (window.__qwShow3DHistogramDragStart || performance.now());
-              return (window.__qwShow3DHistogramDragFrames || 0) * 1000 / Math.max(1, elapsed);
-            }"""
-        )
-        or 0.0
-    )
+    update_probe = _stop_canvas_update_probe(page)
     settle_fps = float(_measure_fps(page, fps_ms))
 
     def _is_full_range(values: list[Any]) -> bool:
@@ -940,7 +911,10 @@ def _drive_histogram_contrast(page, *, fps_ms: int) -> dict[str, Any]:
         "ended_auto": ended_auto,
         "independent": independent,
         "reset_other_panels": reset_other_panels,
-        "drag_fps": round(drag_fps, 1),
+        "update_probe_start": update_probe_start,
+        "update_probe": update_probe,
+        "drag_visual_update_hz": update_probe.get("visual_update_hz"),
+        "drag_browser_raf_fps": update_probe.get("browser_raf_fps"),
         "settle_fps": round(settle_fps, 1),
     }
 
@@ -973,30 +947,38 @@ def _drive_zoom_pan_stress(page, *, seconds: float) -> dict[str, Any]:
     render_paths: list[str] = []
     samples: list[dict[str, Any]] = []
     last_sample = 0.0
-    while time.perf_counter() < end_time:
-        boxes = _visible_canvas_boxes(page)
-        if not boxes:
-            break
-        primary = sorted(boxes, key=lambda item: item["width"] * item["height"], reverse=True)[0]
-        _drive_visible_canvas_region(page, primary)
-        cycles += 1
-        dbg = _read_debug(page)
-        path = dbg.get("lastInteractionRenderPath")
-        if path:
-            render_paths.append(str(path))
-        now = time.perf_counter()
-        if now - last_sample >= 0.9:
-            samples.append({
-                "fps": round(float(_measure_fps(page, 250)), 1),
-                "debug": dbg,
-                "layout": _canvas_layout_summary(page),
-            })
-            last_sample = now
+    update_probe_start = _start_canvas_update_probe(page, selector="canvas", label="show3d zoom pan stress")
+    try:
+        while time.perf_counter() < end_time:
+            boxes = _visible_canvas_boxes(page)
+            if not boxes:
+                break
+            primary = sorted(boxes, key=lambda item: item["width"] * item["height"], reverse=True)[0]
+            _drive_visible_canvas_region(page, primary)
+            cycles += 1
+            dbg = _read_debug(page)
+            path = dbg.get("lastInteractionRenderPath")
+            if path:
+                render_paths.append(str(path))
+            now = time.perf_counter()
+            if now - last_sample >= 0.9:
+                samples.append({
+                    "browser_raf_fps": round(float(_measure_fps(page, 250)), 1),
+                    "debug": dbg,
+                    "layout": _canvas_layout_summary(page),
+                })
+                last_sample = now
+    finally:
+        update_probe = _stop_canvas_update_probe(page)
     return {
         "seconds": seconds,
         "cycles": cycles,
         "render_paths": sorted(set(render_paths)),
         "samples": samples,
+        "update_probe_start": update_probe_start,
+        "update_probe": update_probe,
+        "visual_update_hz": update_probe.get("visual_update_hz"),
+        "browser_raf_fps": update_probe.get("browser_raf_fps"),
         "final_canvas": _primary_canvas_nonblank(page),
         "debug": _read_debug(page),
     }
@@ -1049,7 +1031,9 @@ def _run_case(
     initial_debug = _read_debug(page)
     initial_fps = round(float(_measure_fps(page, 700)), 1)
     initial_shot = _save_screenshot(page, screenshots_dir / f"{case_name}-initial.png")
+    screenshots = [initial_shot]
     histogram_contrast = _drive_histogram_contrast(page, fps_ms=700)
+    screenshots.append(_save_screenshot(page, screenshots_dir / f"{case_name}-histogram-contrast.png"))
     page.evaluate("() => window.scrollTo(0, 0)")
     page.wait_for_timeout(120)
 
@@ -1064,14 +1048,20 @@ def _run_case(
             break
 
     fft_step = _exercise_fft_toggle(page)
+    screenshots.append(_save_screenshot(page, screenshots_dir / f"{case_name}-fft-toggle.png"))
     playback = _drive_playback(page, wait_ms=max(900, min(2200, int(seconds * 350))))
+    screenshots.append(_save_screenshot(page, screenshots_dir / f"{case_name}-playback.png"))
     keyboard_scrub = _drive_keyboard_scrub(page, fps_ms=700)
+    screenshots.append(_save_screenshot(page, screenshots_dir / f"{case_name}-keyboard-scrub.png"))
     slider_scrub = _drive_slider_scrub(page, fps_ms=700)
+    screenshots.append(_save_screenshot(page, screenshots_dir / f"{case_name}-slider-scrub.png"))
     stress = _drive_zoom_pan_stress(page, seconds=seconds)
+    screenshots.append(_save_screenshot(page, screenshots_dir / f"{case_name}-zoom-pan.png"))
     final_fps = round(float(_measure_fps(page, 900)), 1)
     final_layout = _canvas_layout_summary(page)
     final_debug = _read_debug(page)
     final_shot = _save_screenshot(page, screenshots_dir / f"{case_name}-final.png")
+    screenshots.append(final_shot)
     wall_s = round(time.perf_counter() - started, 3)
 
     errors: list[str] = []
@@ -1092,6 +1082,8 @@ def _run_case(
         errors.append("mouse-drag scrub did not change the rendered frame or frame counter")
     if slider_scrub.get("settle_fps", min_fps) < min_fps:
         errors.append(f"mouse-drag scrub settle FPS {slider_scrub.get('settle_fps')} is below --min-fps={min_fps}")
+    if int((slider_scrub.get("update_probe") or {}).get("visual_changes") or 0) <= 0:
+        errors.append("mouse-drag scrub produced no visible canvas pixel updates during interaction")
     if not keyboard_scrub.get("found"):
         errors.append("keyboard scrub could not focus the rendered widget")
     elif (keyboard_scrub.get("total_frames") or 0) > 1 and not (
@@ -1120,6 +1112,8 @@ def _run_case(
         errors.append(
             f"histogram drag settle FPS {histogram_contrast.get('settle_fps')} is below --min-fps={min_fps}"
         )
+    if histogram_contrast.get("found") and int((histogram_contrast.get("update_probe") or {}).get("visual_changes") or 0) <= 0:
+        errors.append("histogram drag produced no visible canvas pixel updates during interaction")
     if page_errors:
         errors.extend(f"page error: {message}" for message in page_errors)
     for message in console_messages:
@@ -1142,6 +1136,8 @@ def _run_case(
         errors.append(f"multi-panel primary canvas is still strip-like, aspect={aspect:.2f}")
     if not stress.get("render_paths"):
         warnings.append("zoom/pan stress did not report an interaction render path")
+    if int((stress.get("update_probe") or {}).get("visual_changes") or 0) <= 0:
+        errors.append("zoom/pan stress produced no visible canvas pixel updates during interaction")
     if target.mode == "sidecar":
         range_hits = [item for item in responses if item.get("status") == 206]
         if not range_hits:
@@ -1173,7 +1169,7 @@ def _run_case(
         "keyboard_scrub": keyboard_scrub,
         "slider_scrub": slider_scrub,
         "zoom_pan_stress": stress,
-        "screenshots": [initial_shot, final_shot],
+        "screenshots": screenshots,
         "responses": responses,
         "console_messages": console_messages[-80:],
         "page_errors": page_errors,
@@ -1209,9 +1205,12 @@ def _write_report(artifact_dir: Path, report: dict[str, Any]) -> None:
         f"<td>{_escape(case.get('first_paint', {}).get('first_paint_ms'))}</td>"
         f"<td>{_escape(case.get('final_fps'))}</td>"
         f"<td>{_escape(case.get('keyboard_scrub', {}).get('settle_fps'))}</td>"
+        f"<td>{_escape((case.get('slider_scrub', {}).get('update_probe') or {}).get('visual_update_hz'))}</td>"
         f"<td>{_escape(case.get('slider_scrub', {}).get('settle_fps'))}</td>"
+        f"<td>{_escape((case.get('histogram_contrast', {}).get('update_probe') or {}).get('visual_update_hz'))}</td>"
         f"<td>{_escape(case.get('histogram_contrast', {}).get('settle_fps'))}</td>"
         f"<td>{_escape(case.get('histogram_contrast', {}).get('reset_other_panels'))}</td>"
+        f"<td>{_escape((case.get('zoom_pan_stress', {}).get('update_probe') or {}).get('visual_update_hz'))}</td>"
         f"<td>{_escape(case.get('zoom_pan_stress', {}).get('cycles'))}</td>"
         f"<td>{'PASS' if case.get('passed') else 'FAIL'}</td>"
         "</tr>"
@@ -1267,11 +1266,12 @@ def _write_report(artifact_dir: Path, report: dict[str, Any]) -> None:
     code {{ background: #f0f2f5; padding: 1px 4px; border-radius: 4px; }}
     pre {{ white-space: pre-wrap; overflow: auto; max-height: 420px; background: #f6f8fa; padding: 12px; border-radius: 6px; }}
     .status {{ font-weight: 800; color: {"#087f23" if status == "PASS" else "#b00020"}; }}
-    .card {{ border: 1px solid #d8dee9; border-radius: 8px; padding: 14px; margin: 16px 0; }}
+    .card {{ border: 2px solid #ff2bbd; border-radius: 8px; padding: 14px; margin: 16px 0; background: white; box-shadow: 0 0 0 3px rgba(255, 43, 189, 0.10); }}
+    .card h2 {{ display: inline-block; margin-top: 0; padding: 3px 8px; background: #ff2bbd; color: white; border-radius: 4px; }}
     .shots {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 12px; }}
     figure {{ margin: 0; }}
-    img {{ width: 100%; border: 1px solid #d8dee9; background: #f7f8fa; }}
-    figcaption {{ font-size: 12px; color: #5b6472; }}
+    img {{ width: 100%; border: 3px solid #ff2bbd; background: #2a001e; box-sizing: border-box; }}
+    figcaption {{ display: inline-block; margin-top: 3px; padding: 2px 6px; font-size: 12px; color: white; background: #ff2bbd; border-radius: 4px; }}
   </style>
 </head>
 <body>
@@ -1282,7 +1282,7 @@ def _write_report(artifact_dir: Path, report: dict[str, Any]) -> None:
   <ul>{sources_html}</ul>
   <h2>Summary</h2>
   <table>
-    <thead><tr><th>Case</th><th>Mode</th><th>Viewport</th><th>First paint ms</th><th>Final FPS</th><th>Key FPS</th><th>Slider FPS</th><th>Hist FPS</th><th>Hist reset panels</th><th>Zoom cycles</th><th>Status</th></tr></thead>
+    <thead><tr><th>Case</th><th>Mode</th><th>Viewport</th><th>First paint ms</th><th>Final browser rAF FPS</th><th>Key settle rAF FPS</th><th>Slider visual Hz</th><th>Slider settle rAF FPS</th><th>Hist visual Hz</th><th>Hist settle rAF FPS</th><th>Hist reset panels</th><th>Zoom visual Hz</th><th>Zoom cycles</th><th>Status</th></tr></thead>
     <tbody>{rows}</tbody>
   </table>
   <h2>Errors</h2>

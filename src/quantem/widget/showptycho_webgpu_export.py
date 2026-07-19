@@ -47,6 +47,11 @@ def _jsonable_int_list(array: object) -> list[int]:
 
 def _sidecar_calibration(widget: Any, accel: Any) -> dict[str, Any]:
     cache = accel._cache
+    g_shape = getattr(accel, "g_shape", None)
+    if g_shape is None and hasattr(accel, "G_qk"):
+        g_shape = getattr(accel.G_qk, "shape", None)
+    if g_shape is None:
+        g_shape = (int(cache["num_bf"]), int(cache["ny"]), int(cache["nx"]))
     c10 = float(widget._current_c10())
     c12 = float(widget._current_c12())
     phi12_deg = float(widget._current_phi12_deg())
@@ -88,7 +93,7 @@ def _sidecar_calibration(widget: Any, accel: Any) -> dict[str, Any]:
         "backend_reference": "ShowPtycho SSBEngine.reconstruct_with_loss",
         "bf_radius_px": getattr(widget, "_bf_radius_px", None),
         "num_bf": int(cache["num_bf"]),
-        "g_shape": [int(accel.G_qk.shape[0]), int(accel.G_qk.shape[1]), int(accel.G_qk.shape[2])],
+        "g_shape": [int(g_shape[0]), int(g_shape[1]), int(g_shape[2])],
         "g_dtype": "complex64_interleaved_re_im_native_le",
         "phase_shape": [int(cache["ny"]), int(cache["nx"])],
         "phase_dtype": "float32_native_le",
@@ -153,6 +158,8 @@ def build_showptycho_webgpu_payload(
     """
 
     accel = widget._accel
+    if not hasattr(accel, "G_qk") and hasattr(accel, "_sync_webgpu_export_state"):
+        accel._sync_webgpu_export_state()
     if not hasattr(accel, "G_qk") or not hasattr(accel, "_cache"):
         return None, b"", "WebGPU preview requires a CUDA BF-indexed G_qk cache."
     try:
@@ -796,6 +803,8 @@ def export_showptycho_webgpu_sidecar(
     """Export a ShowPtycho WebGPU folder from a live widget instance."""
 
     accel = widget._accel
+    if not hasattr(accel, "G_qk") and hasattr(accel, "_sync_webgpu_export_state"):
+        accel._sync_webgpu_export_state()
     if not hasattr(accel, "G_qk") or not hasattr(accel, "_cache"):
         raise NotImplementedError(
             "ShowPtycho WebGPU folder export currently requires the CUDA "
@@ -809,6 +818,8 @@ def export_showptycho_webgpu_sidecar(
     out_path.mkdir(parents=True, exist_ok=True)
 
     accel.cache_rotation(math.radians(float(widget.rotation_deg)))
+    if not hasattr(accel, "G_qk") and hasattr(accel, "_sync_webgpu_export_state"):
+        accel._sync_webgpu_export_state()
     c10 = float(widget._current_c10())
     c12 = float(widget._current_c12())
     phi12_deg = float(widget._current_phi12_deg())

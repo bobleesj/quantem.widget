@@ -609,10 +609,9 @@ export async function datasetMeanDp(source: string, date: string, name: string, 
   const ds = await ensureLoaded(source, date, name, detBin, dtype); return ds.meanDP;
 }
 
-// GPU-resident virtual image for the 60fps aperture-drag fast path: returns the maskedSum result
-// as a GPU buffer (NO readback) so the caller colormaps it straight to the canvas. Only the
-// mask modes (BF/ADF/DF) - CoM/iCoM need a CPU post-process (descan, integrate) so they stay on
-// the readback path. Returns null for those (caller falls back to the normal path).
+// GPU-resident virtual image for the 60fps aperture-drag fast path: returns the maskedSum/DPC
+// result as a GPU buffer (NO readback) so the caller colormaps it straight to the canvas.
+// CoMmag/iCoM still need CPU post-processing, so they stay on the readback path.
 export async function virtualImageBufferGpu(
   source: string, date: string, name: string, mode: DetectorMode,
   inner: number, outer: number, cx: number | null, cy: number | null, detBin: DetBin = 1, dtype: BrowseDtype = "uint8",
@@ -622,8 +621,13 @@ export async function virtualImageBufferGpu(
   let mask: Uint32Array;
   if (mode === "BF") mask = diskMask(ds.detRows, ds.detCols, ccy, ccx, (outer || 1) * r);
   else if (mode === "ADF" || mode === "DF") mask = annulusMask(ds.detRows, ds.detCols, ccy, ccx, (inner || 1.2) * r, (outer || 4) * r);
+  else if (mode === "CoMx" || mode === "CoMy") mask = diskMask(ds.detRows, ds.detCols, ccy, ccx, 1.5 * r);
   else return null;
-  const { buffer } = ds.compute.maskedSumBuffer(mask);
+  const { buffer } = mode === "CoMx"
+    ? ds.compute.maskedDpcBuffer(mask, ds.detCols, "col")
+    : mode === "CoMy"
+      ? ds.compute.maskedDpcBuffer(mask, ds.detCols, "row")
+      : ds.compute.maskedSumBuffer(mask);
   return { buffer, width: ds.scanCols, height: ds.scanRows };
 }
 
@@ -642,6 +646,12 @@ export async function virtualImage(
     return reshapeVI(await ds.compute.maskedSum(mask), ds); }
   // CoM / iCoM (DPC): intensity-weighted centroid over the BF disk per scan position.
   const comMask = diskMask(ds.detRows, ds.detCols, ccy, ccx, 1.5 * r);
+  if (mode === "CoMx" || mode === "CoMy") {
+    return reshapeVI(
+      await ds.compute.maskedDpc(comMask, ds.detCols, mode === "CoMx" ? "col" : "row"),
+      ds,
+    );
+  }
   const { comY, comX } = await ds.compute.maskedCoM(comMask, ds.detCols);
   const my = mean(comY), mx = mean(comX);
   const dy = new Float32Array(comY.length), dx = new Float32Array(comX.length);

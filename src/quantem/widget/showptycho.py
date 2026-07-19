@@ -428,6 +428,10 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         size: int = 800,
         fft_on: bool = False,
         webgpu_preview: bool | str = "auto",
+        initial_compute_loss: bool = True,
+        initial_loss_val: float | None = None,
+        initial_flip_phase: bool = False,
+        initial_higher_order: dict[str, float] | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -502,6 +506,15 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         self.initial_panel_size = int(size)
         self.initial_fft_on = bool(fft_on)
 
+        # Seed saved-calibration state before observers are connected and
+        # before the first phase image is reconstructed.  Otherwise loading a
+        # higher-order calibration first draws the 3-parameter image, then
+        # immediately triggers a second full reconstruction when the
+        # higher-order JSON trait is assigned.
+        self.flip_phase = bool(initial_flip_phase)
+        if initial_higher_order:
+            self.higher_order_json = json.dumps(initial_higher_order)
+
         # Listen for events
         self.observe(self._on_request, names=["request_json"])
         self.observe(self._on_save, names=["save_trigger"])
@@ -518,10 +531,16 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         # can render a browsable trials strip.  Capped at 50 for payload size.
         self.trials_json = self._build_trials_payload()
 
-        # Initial reconstruction (full BF + loss) - also warms up chunk buffers
+        # Initial reconstruction. Saved calibrations already contain the loss, so
+        # they only need the phase image for first display.
         self._inflight_id = 0
         self._do_reconstruct(
-            0, self.auto_c10, self.auto_c12, self.auto_phi12_deg
+            0,
+            self.auto_c10,
+            self.auto_c12,
+            self.auto_phi12_deg,
+            compute_loss=bool(initial_compute_loss),
+            loss_override=initial_loss_val,
         )
 
         # Start with an interactive BF fraction. Full BF is still available by
@@ -694,7 +713,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             self._drag_state = None
             self._full_state = None
         self._accel.cache_rotation(new_rad)
-        if drag_count > 0:
+        if drag_count > 0 and getattr(self._accel, "backend", None) != "mps":
             self._build_drag_state(drag_count)
         # Re-reconstruct with the last-committed aberrations.
         self._inflight_id += 1
@@ -943,6 +962,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         c12: float,
         phi12_deg: float,
         compute_loss: bool = True,
+        loss_override: float | None = None,
     ):
         """Run GPU reconstruction and push result to JS.
 
@@ -977,7 +997,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
                 loss = float(loss_val)
             else:
                 phase = self._accel.reconstruct(c10, c12, phi12_rad)
-                loss = None
+                loss = None if loss_override is None else float(loss_override)
             t_gpu = time.perf_counter()
             phase_np = _to_numpy(phase)
             if phase_np.dtype != np.float32:
@@ -1287,12 +1307,16 @@ class _MpsPtychoAccelerator:
         bf_intensity_threshold: float,
         bf_radius: int | None,
         rotation_angle_deg: float,
-        chunk_bf: int = 16,
+        chunk_bf: int | None = None,
+        setup_chunk_bf: int | None = None,
+        redraw_chunk_bf: int | None = None,
     ) -> None:
         from quantem.gpu.ssb.mps import (
             _as_chunked_frames,
             _as_sampling,
             _bf_pixels,
+            _default_object_redraw_chunk_bf,
+            _default_object_setup_chunk_bf,
             _prepare_selection,
             _reconstruct_prepared,
             _scan_shape,
@@ -1306,7 +1330,17 @@ class _MpsPtychoAccelerator:
         self._voltage_kV = float(voltage_kV)
         self._semiangle_mrad = float(semiangle_mrad)
         self._scan_sampling = _as_sampling(scan_sampling)
-        self._chunk_bf = max(1, int(chunk_bf))
+        requested_chunk_bf = 1 if chunk_bf is None else max(1, int(chunk_bf))
+        self._setup_chunk_bf = (
+            max(1, int(setup_chunk_bf))
+            if setup_chunk_bf is not None
+            else max(requested_chunk_bf, int(_default_object_setup_chunk_bf()))
+        )
+        self._chunk_bf = (
+            max(1, int(redraw_chunk_bf))
+            if redraw_chunk_bf is not None
+            else max(requested_chunk_bf, int(_default_object_redraw_chunk_bf()))
+        )
         self._bf_row, self._bf_col, self._bf_center, self._bf_radius, detected_radius = (
             _bf_pixels(self._frames, bf_intensity_threshold, bf_radius)
         )
@@ -1336,10 +1370,11 @@ class _MpsPtychoAccelerator:
             self._prepared is not None
             and abs(rotation_angle_deg - self._rotation_angle_deg) < 1e-9
         ):
-            if not hasattr(self, "G_qk"):
-                self._sync_webgpu_export_state()
+            self._sync_webgpu_export_metadata()
             return
         self._rotation_angle_deg = rotation_angle_deg
+        if hasattr(self, "G_qk"):
+            delattr(self, "G_qk")
         self._prepared = self._mps_prepare_selection(
             self._frames,
             scan_shape=self._scan_shape,
@@ -1352,12 +1387,12 @@ class _MpsPtychoAccelerator:
             scan_sampling=self._scan_sampling,
             det_sampling=self._det_sampling,
             rotation_angle_deg=self._rotation_angle_deg,
-            chunk_bf=self._chunk_bf,
+            chunk_bf=self._setup_chunk_bf,
         )
-        self._sync_webgpu_export_state()
+        self._sync_webgpu_export_metadata()
 
-    def _sync_webgpu_export_state(self) -> None:
-        """Expose MPS-prepared BF-G data through the CUDA-style export contract."""
+    def _sync_webgpu_export_metadata(self) -> None:
+        """Expose small MPS calibration metadata without copying GB-scale G_qk."""
 
         prepared = self._prepared
         if prepared is None:
@@ -1376,7 +1411,11 @@ class _MpsPtychoAccelerator:
             ang_y_rad=float(prepared.ang_y_rad),
             ang_x_rad=float(prepared.ang_x_rad),
         )
-        self.G_qk = np.asarray(prepared.g_qk).astype(np.complex64, copy=False)
+        self.g_shape = (
+            int(prepared.num_bf),
+            int(self._scan_shape[0]),
+            int(self._scan_shape[1]),
+        )
         self.bf_inds_row = self._bf_row.astype(np.int32, copy=False)
         self.bf_inds_col = self._bf_col.astype(np.int32, copy=False)
         self.bf_center = tuple(float(v) for v in self._bf_center)
@@ -1403,6 +1442,21 @@ class _MpsPtychoAccelerator:
             "ang_y_rad": np.float32(prepared.ang_y_rad),
             "ang_x_rad": np.float32(prepared.ang_x_rad),
         }
+
+    def _sync_webgpu_export_state(self) -> None:
+        """Expose MPS-prepared BF-G data through the CUDA-style export contract.
+
+        This is intentionally explicit because it copies the full BF-indexed
+        Fourier stack from MPS memory to host memory. Normal calibrated notebook
+        opens and compressed-source folder exports only need the lightweight
+        metadata from ``_sync_webgpu_export_metadata``.
+        """
+
+        prepared = self._prepared
+        if prepared is None:
+            return
+        self._sync_webgpu_export_metadata()
+        self.G_qk = np.asarray(prepared.g_qk).astype(np.complex64, copy=False)
 
     def reconstruct_with_loss(self, c10: float, c12: float, phi12: float):
         _object_wave, loss, phase = self._mps_reconstruct_prepared(
@@ -1484,7 +1538,7 @@ def _apply_calibration(
     ssb: object,
     calibration: object,
     source_file: str | None,
-) -> tuple[bool, dict[str, float], str | None]:
+) -> tuple[bool, dict[str, float], float | None, str | None]:
     cal = _coerce_calibration(calibration)
     primary = {
         "C10": float(cal.aberrations.get("C10", 0.0)),
@@ -1501,6 +1555,7 @@ def _apply_calibration(
     return (
         bool(cal.flip_phase),
         _higher_order_widget_payload(cal),
+        None if cal.loss is None else float(cal.loss),
         source_file or cal.source_file,
     )
 
@@ -1522,8 +1577,9 @@ def _show_ptycho_from_ssb(
 ) -> _ShowPtychoWidget:
     flip_from_cal: bool | None = None
     ho_from_cal: dict[str, float] | None = None
+    loss_from_cal: float | None = None
     if calibration is not None:
-        flip_from_cal, ho_from_cal, source_file = _apply_calibration(
+        flip_from_cal, ho_from_cal, loss_from_cal, source_file = _apply_calibration(
             ssb, calibration, source_file,
         )
 
@@ -1542,15 +1598,18 @@ def _show_ptycho_from_ssb(
     accel = ssb._get_accelerator()
     rotation_rad = float(getattr(ssb, "_rotation_angle_rad", 0.0))
     accel.cache_rotation(rotation_rad)
-    _, auto_loss_full = accel.reconstruct_with_loss(
-        auto_c10, auto_c12, auto_phi12,
+    auto_loss_val = (
+        float(loss_from_cal)
+        if loss_from_cal is not None and math.isfinite(float(loss_from_cal))
+        else float("nan")
     )
+    initial_compute_loss = calibration is None and not math.isfinite(auto_loss_val)
 
     widget = _ShowPtychoWidget(
         accel=accel,
         rotation_rad=rotation_rad,
         auto_aberrations=aberrations,
-        auto_loss_val=float(auto_loss_full),
+        auto_loss_val=auto_loss_val,
         c10_range=c10_range,
         c12_range=c12_range,
         phi12_range=phi12_range,
@@ -1563,12 +1622,12 @@ def _show_ptycho_from_ssb(
         size=size,
         fft_on=fft_on,
         webgpu_preview=webgpu_preview,
+        initial_compute_loss=initial_compute_loss,
+        initial_loss_val=auto_loss_val if math.isfinite(auto_loss_val) else None,
+        initial_flip_phase=bool(flip_from_cal) if flip_from_cal is not None else False,
+        initial_higher_order=ho_from_cal,
     )
 
-    if flip_from_cal is not None:
-        widget.flip_phase = flip_from_cal
-    if ho_from_cal:
-        widget.higher_order_json = json.dumps(ho_from_cal)
     ssb._showptycho_widget = widget
     return widget
 
@@ -1629,6 +1688,17 @@ def ShowPtycho(
         ShowPtycho widget instance backed by the ``quantem.gpu`` SSB engine.
     """
 
+    calibration_seed = _coerce_calibration(calibration) if calibration is not None else None
+    prepared_rotation_angle_deg = float(rotation_angle_deg)
+    prepared_aberrations = aberrations
+    if calibration_seed is not None:
+        prepared_rotation_angle_deg = float(calibration_seed.rotation_angle_deg)
+        prepared_aberrations = {
+            **(aberrations or {}),
+            **calibration_seed.higher_order,
+            **calibration_seed.aberrations,
+        }
+
     if _is_ssb_like(data_or_ssb):
         ssb = data_or_ssb
     else:
@@ -1648,12 +1718,12 @@ def ShowPtycho(
                 det_sampling=det_sampling,
                 bf_intensity_threshold=bf_intensity_threshold,
                 bf_radius=bf_radius,
-                rotation_angle_deg=rotation_angle_deg,
+                rotation_angle_deg=prepared_rotation_angle_deg,
             )
             ssb = _MpsPtychoState(
                 accel=accel,
-                aberrations=aberrations,
-                rotation_angle_deg=rotation_angle_deg,
+                aberrations=prepared_aberrations,
+                rotation_angle_deg=prepared_rotation_angle_deg,
                 voltage_kV=voltage,
                 semiangle_mrad=float(semiangle),
                 scan_sampling=scan_sampling,
@@ -1673,7 +1743,7 @@ def ShowPtycho(
                         det_sampling=det_sampling,
                         bf_intensity_threshold=bf_intensity_threshold,
                         bf_radius=bf_radius,
-                        rotation_angle_deg=rotation_angle_deg,
+                        rotation_angle_deg=prepared_rotation_angle_deg,
                     )
                 except Exception:
                     raise ImportError(
@@ -1682,8 +1752,8 @@ def ShowPtycho(
                     ) from exc
                 ssb = _MpsPtychoState(
                     accel=accel,
-                    aberrations=aberrations,
-                    rotation_angle_deg=rotation_angle_deg,
+                    aberrations=prepared_aberrations,
+                    rotation_angle_deg=prepared_rotation_angle_deg,
                     voltage_kV=voltage,
                     semiangle_mrad=float(semiangle),
                     scan_sampling=scan_sampling,
@@ -1704,8 +1774,8 @@ def ShowPtycho(
                     scan_shape=scan_shape,
                     bf_intensity_threshold=bf_intensity_threshold,
                     bf_radius=bf_radius,
-                    aberrations=aberrations,
-                    rotation_angle_deg=rotation_angle_deg,
+                    aberrations=prepared_aberrations,
+                    rotation_angle_deg=prepared_rotation_angle_deg,
                 )
 
     return _show_ptycho_from_ssb(

@@ -6,6 +6,15 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Show4DSTEM WebGPU virtual-image/DPC mask construction now imports from the
+  synced `quantem.gpu.webgpu` engine source; DPC row/col buttons can now use
+  the browser WGSL backend even when no static DPC product maps were supplied.
+  Browser signoff covers exported sidecar HTML and live Jupyter interaction with
+  dataset flips, DPC row/col recompute, FFT toggles, PNG copy buttons, and
+  BF/CoM/DPC WGSL parity.
+- Show4DSTEM CUDA compare grids now reuse per-panel `quantem.gpu` compute
+  backends, so repeated BF/ADF/DF updates keep detector-index and dense
+  total-count caches instead of rebuilding them every refresh.
 - ShowPtycho WebGPU folders now open with no server at all: double-click `index.html`, click "Open data folder", pick the folder (named in the banner, picker starts in Downloads). `quantem showptycho <folder>` still serves and opens it automatically - two equal paths, both in the folder README.
 - Save inside the review persists to the folder: Save writes the phase JPEG plus the aberration state into `saves/` (and downloads the JPEG), so saved states reappear with Load / download / delete on any relaunch - double-click or CLI. The bundled range server accepts writes only under `saves/`.
 - SSB reconstruction in the browser is 5.6x faster at full bright field: slider drags use a Fourier-domain BF sum with a single inverse FFT (the same `angle(mean(object))` estimator as the Python reference, corr 0.997), reaching ~50 FPS on a real 512x512x192x192 dataset at all 13137 BF pixels on an Apple-silicon laptop. Release commits keep the exact per-BF path for the loss readout.

@@ -1429,6 +1429,14 @@ type Show2DPerfCounters = {
   galleryFftPending: number;
   galleryFftActiveKeys: string[];
   lastGalleryFftMs: number;
+  mainCanvasPaintCount: number;
+  lastMainCanvasPaintAt: number;
+  lastMainCanvasPaintPanel: number | null;
+  zoomPanEventCount: number;
+  lastZoomPanEventAt: number;
+  lastZoomPanEventKind: string;
+  lastZoomPanPaintLatencyMs: number | null;
+  zoomPanPaintLatenciesMs: number[];
 };
 
 function show2dPerfDebug(): Show2DPerfCounters | null {
@@ -1446,9 +1454,43 @@ function show2dPerfDebug(): Show2DPerfCounters | null {
       galleryFftPending: 0,
       galleryFftActiveKeys: [],
       lastGalleryFftMs: 0,
+      mainCanvasPaintCount: 0,
+      lastMainCanvasPaintAt: 0,
+      lastMainCanvasPaintPanel: null,
+      zoomPanEventCount: 0,
+      lastZoomPanEventAt: 0,
+      lastZoomPanEventKind: "",
+      lastZoomPanPaintLatencyMs: null,
+      zoomPanPaintLatenciesMs: [],
     };
   }
   return host.__quantemShow2DPerf;
+}
+
+function recordShow2DZoomPanEvent(kind: string): void {
+  const perf = show2dPerfDebug();
+  if (!perf) return;
+  perf.lastZoomPanEventAt = performance.now();
+  perf.lastZoomPanEventKind = kind;
+  perf.zoomPanEventCount += 1;
+}
+
+function recordShow2DMainCanvasPaint(panel: number): void {
+  const perf = show2dPerfDebug();
+  if (!perf) return;
+  const now = performance.now();
+  perf.mainCanvasPaintCount += 1;
+  perf.lastMainCanvasPaintAt = now;
+  perf.lastMainCanvasPaintPanel = panel;
+  if (perf.lastZoomPanEventAt > 0) {
+    const latency = now - perf.lastZoomPanEventAt;
+    if (latency >= 0 && latency < 5000) {
+      const rounded = Number(latency.toFixed(1));
+      perf.lastZoomPanPaintLatencyMs = rounded;
+      perf.zoomPanPaintLatenciesMs.push(rounded);
+      if (perf.zoomPanPaintLatenciesMs.length > 120) perf.zoomPanPaintLatenciesMs.shift();
+    }
+  }
 }
 
 function updateGalleryFftCacheDebug(
@@ -4215,6 +4257,14 @@ function Show2D() {
       event.stopPropagation();
     } else {
       next = [panel];
+      if (
+        selectedIdx === panel &&
+        selectedVisiblePanels.length === 1 &&
+        selectedVisiblePanels[0] === panel
+      ) {
+        lastSelectedPanelRef.current = panel;
+        return false;
+      }
     }
     lastSelectedPanelRef.current = panel;
     setSelectedIdx(panel);
@@ -4420,13 +4470,12 @@ function Show2D() {
     if (canvasW <= 0 || canvasH <= 0 || width <= 0 || height <= 0 || state.zoom <= 0) return;
     const row = height * (0.5 - state.panY / (state.zoom * canvasH));
     const col = width * (0.5 - state.panX / (state.zoom * canvasW));
-    setInitialZoom(state.zoom);
-    setZoomRowTrait(Math.max(0, Math.min(height - 1, row)));
-    setZoomColTrait(Math.max(0, Math.min(width - 1, col)));
-    // Sync the visible region (row0, row1, col0, col1) in image pixels so
-    // Python's current_view can capture the exact field of view for figures.
-    // Same inverse transform as the cursor readout: canvas -> image pixels.
-    // Debounced: wheel zoom calls persist per tick; one trait write per gesture.
+    const nextZoom = state.zoom;
+    const nextRow = Math.max(0, Math.min(height - 1, row));
+    const nextCol = Math.max(0, Math.min(width - 1, col));
+    // Persisting traits is for notebook/Python state and current_view capture.
+    // The visible canvas has already updated through local zoom state, so keep
+    // trait writes out of the high-frequency wheel/drag path.
     const cx = canvasW / 2;
     const cy = canvasH / 2;
     const row0 = Math.max(0, ((0 - cy - state.panY) / state.zoom + cy) / displayScale);
@@ -4434,7 +4483,12 @@ function Show2D() {
     const col0 = Math.max(0, ((0 - cx - state.panX) / state.zoom + cx) / displayScale);
     const col1 = Math.min(width, ((canvasW - cx - state.panX) / state.zoom + cx) / displayScale);
     window.clearTimeout(viewBoxTimerRef.current);
-    viewBoxTimerRef.current = window.setTimeout(() => setViewBoxTrait([row0, row1, col0, col1]), 100);
+    viewBoxTimerRef.current = window.setTimeout(() => {
+      setInitialZoom(nextZoom);
+      setZoomRowTrait(nextRow);
+      setZoomColTrait(nextCol);
+      setViewBoxTrait([row0, row1, col0, col1]);
+    }, 120);
   }, [canvasW, canvasH, width, height, displayScale, setInitialZoom, setZoomRowTrait, setZoomColTrait, setViewBoxTrait]);
 
   // Initial pan from zoom_row/zoom_col — runs once after first render with valid canvas dims.
@@ -6130,6 +6184,7 @@ function Show2D() {
         }
       }
       ctx.restore();
+      recordShow2DMainCanvasPaint(i);
     }
   }, [offscreenVersion, detailPaintVersion, displayBinFactor, nImages, width, height, displayScale, canvasW, canvasH, canvasReady, linkedZoom, linkedZoomState, zoomStates, smooth, currentDetailWindow, canvasRepaintSignal, imageFlipsHorizontal, imageFlipsVertical, offlineForTheme, rotationForPanel, visibleImageIndices]);
 
@@ -7661,6 +7716,7 @@ function Show2D() {
     const newPanY = mouseCanvasY - (mouseImageY - cy) * newZoom - cy;
 
     const nextState = { zoom: newZoom, panX: newPanX, panY: newPanY };
+    recordShow2DZoomPanEvent("wheel");
     setZoomState(idx, nextState);
     persistZoomState(nextState);
   };
@@ -8503,6 +8559,7 @@ function Show2D() {
       const dx = (e.clientX - panStart.x) * scaleX;
       const dy = (e.clientY - panStart.y) * scaleY;
       const zs = getZoomState(idx);
+      recordShow2DZoomPanEvent("pan");
       setZoomState(idx, { ...zs, panX: panStart.pX + dx, panY: panStart.pY + dy });
       return;
     }

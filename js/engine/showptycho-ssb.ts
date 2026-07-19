@@ -1,8 +1,8 @@
 /// <reference types="@webgpu/types" />
 
-import { getGPUDevice, getGPUInfo, isSoftwareGPUAdapter } from "../engine/device";
-import { readH5MasterInfo, readH5Volume } from "../engine/h5reader";
-import { decodeBslz4ToStack, type Bslz4Spec } from "../engine/bslz4";
+import { getGPUDevice, getGPUInfo, isSoftwareGPUAdapter } from "./device";
+import { readH5MasterInfo, readH5Volume } from "./h5reader";
+import { decodeBslz4ToStack, type Bslz4Spec } from "./bslz4";
 
 const SUPPORTED_SSB_SIZES = [128, 256, 512, 1024] as const;
 const MAX_BF_WORKGROUPS_PER_SUBMIT = 256;
@@ -32,7 +32,7 @@ function supportedSsbSize(n: number): SupportedSsbSize | null {
 // Public contract:
 // - "herm" is Exact mode. It stores the Hermitian half-plane, which is
 //   bit-identical to the old n x n storage for real-count scan FFTs.
-// - "herm16" is Fast preview. It keeps the same half-plane and block-quantizes
+// - "herm16" is compact preview. It keeps the same half-plane and block-quantizes
 //   each BF pixel to snorm16 with one f32 scale.
 type GqkMode = "herm" | "herm16";
 
@@ -46,7 +46,7 @@ function resolveGqkMode(): GqkMode {
   const key = raw.trim().toLowerCase();
   if (
     key === "herm16" || key === "i16" || key === "quant"
-    || key === "preview" || key === "fast" || key === "compact"
+    || key === "preview" || key === "compact"
   ) return "herm16";
   if (key === "herm" || key === "exact" || key === "half") return "herm";
   // Default: Hermitian half-plane. Measured bit-exact against the old n x n path

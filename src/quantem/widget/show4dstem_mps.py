@@ -9,7 +9,7 @@ modules. The responsibilities split across layers like this:
 
 * ``show4dstem_factory`` decides whether public ``Show4DSTEM(...)`` should route
   to the base viewer or this MPS adapter.
-* ``kernels/io/mps.py`` owns HDF5/Metal decode and detector binning.
+* ``quantem.gpu.io.backends.mps`` owns HDF5/Metal decode and detector binning.
 * ``quantem.gpu.compute.backends.MetalRawBackend`` owns masked-sum compute,
   fast-sidecar/radial-cache lifecycles, and lazy multi-dataset backend state.
 * ``Show4DSTEMMPS`` owns only widget-facing traitlets, observers, preset caches,
@@ -39,7 +39,8 @@ from quantem.gpu.compute.mps import (
 
 def _drop_cached_decompressor():
     """Release decoder scratch buffers before allocating interaction sidecars."""
-    from quantem.widget.io import clear_mps_cache
+    from quantem.gpu.io.backends.mps import clear_mps_cache
+
     clear_mps_cache()
 
 

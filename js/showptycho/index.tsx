@@ -37,7 +37,7 @@ import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, GPUColormapEngine, getGPU
 import { fft2d, nextPow2, fftshift, computeMagnitude, applyHannWindow2D, getWebGPUFFT, WebGPUFFT } from "../fft";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI } from "../figure";
 import { computeHistogramFromBytes } from "../stats";
-import { ShowPtychoWebGPUSSB, deleteShowPtychoFolderFile, readShowPtychoFolderBytes, readShowPtychoFolderJson, setShowPtychoLocalDirectory, setShowPtychoLocalFiles, showPtychoFolderWritable, showPtychoNeedsLocalSource, writeShowPtychoFolderFile, type WebGPULoadProgress } from "./webgpu-ssb";
+import { ShowPtychoWebGPUSSB, deleteShowPtychoFolderFile, readShowPtychoFolderBytes, readShowPtychoFolderJson, setShowPtychoLocalDirectory, setShowPtychoLocalFiles, showPtychoFolderWritable, showPtychoNeedsLocalSource, writeShowPtychoFolderFile, type WebGPULoadProgress } from "../engine/showptycho-ssb";
 
 /* ================================================================
    Design tokens (matching Live / Show2D)
@@ -1903,8 +1903,11 @@ function Explore() {
   }, []);
 
   // WebGPU colormap engine.
-  // Slot 0 = phase, slot 1 = FFT, slot 2 = optional amplitude panel.  Null
-  // until init resolves; falls back to CPU renderToOffscreen.
+  // ShowPtycho uses the shared WebGPU colormap engine only for the primary
+  // phase panel.  The engine has one LUT binding, so using it concurrently for
+  // FFT/amplitude can make those panels leak their colormap back into phase.
+  // Extra panels use the deterministic CPU path until the shared engine grows
+  // true per-slot LUT bindings.
   // Generation counter discards stale async GPU results if newer data lands first.
   const gpuCmapRef = React.useRef<GPUColormapEngine | null>(null);
   const gpuCmapGenRef = React.useRef<Record<GPUColormapSlot, number>>({ 0: 0, 1: 0, 2: 0 });
@@ -2298,6 +2301,7 @@ function Explore() {
          shader when contrast/cmap changes.  Falls back to the CPU path if
          the WebGPU engine isn't available on this browser. --- */
   const renderPhaseGPU = React.useCallback((data: Float32Array, w: number, h: number, slot: GPUColormapSlot, cmapName: string, pctLo: number, pctHi: number) => {
+    if (slot !== 0) return false;
     const engine = gpuCmapRef.current;
     if (!engine || !gpuCmapReadyRef.current) return false;
     // Upload data only if it actually changed (new reconstruction), not on every contrast tick.

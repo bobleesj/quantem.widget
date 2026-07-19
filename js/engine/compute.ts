@@ -2,6 +2,7 @@
 // Offline 4D-STEM compute in the browser via WebGPU - no Python kernel.
 // Primitives (browser siblings of the Python backends):
 //   maskedSum(detectorMask) -> virtual image  (one thread per scan position)
+//   maskedDpc(detectorMask) -> DPC row/col image (CoM + mean subtraction on GPU)
 //   reduceFrames(scanMask)  -> diffraction DP  (one thread per detector pixel)
 //
 // CHUNKED: the stack is split into scan-row ranges, each in its own GPU buffer
@@ -165,14 +166,124 @@ ${sg
   }`}
 }`;
 
+// CoM -> DPC mean reduction. One workgroup reduces the scan-position CoM arrays
+// to their global row/col means. DPC display is then centered without pulling the
+// two full CoM maps back to JavaScript.
+const DPC_MEAN_WGSL = `
+@group(0) @binding(0) var<storage,read> com: array<f32>;       // [row...][col...]
+@group(0) @binding(1) var<storage,read_write> mean: array<f32>; // mean[0]=row, mean[1]=col
+@group(0) @binding(2) var<uniform> u: vec4<u32>;                // scanCount, 0, 0, 0
+var<workgroup> partRow: array<f32, 256>;
+var<workgroup> partCol: array<f32, 256>;
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
+  let tid = lid.x; let n = u.x;
+  var rowSum = 0.0; var colSum = 0.0;
+  for (var i = tid; i < n; i = i + 256u) {
+    rowSum = rowSum + com[i];
+    colSum = colSum + com[n + i];
+  }
+  partRow[tid] = rowSum; partCol[tid] = colSum; workgroupBarrier();
+  for (var s = 128u; s > 0u; s = s >> 1u) {
+    if (tid < s) {
+      partRow[tid] = partRow[tid] + partRow[tid + s];
+      partCol[tid] = partCol[tid] + partCol[tid + s];
+    }
+    workgroupBarrier();
+  }
+  if (tid == 0u) {
+    let denom = max(f32(n), 1.0);
+    mean[0] = partRow[0] / denom;
+    mean[1] = partCol[0] / denom;
+  }
+}`;
+
+// Select one centered DPC component for display. component=0 -> row/Y, 1 -> col/X.
+const DPC_COMPONENT_WGSL = `
+@group(0) @binding(0) var<storage,read> com: array<f32>;
+@group(0) @binding(1) var<storage,read> mean: array<f32>;
+@group(0) @binding(2) var<storage,read_write> out: array<f32>;
+@group(0) @binding(3) var<uniform> u: vec4<u32>; // scanCount, component, 0, 0
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x; let n = u.x;
+  if (i >= n) { return; }
+  if (u.y == 0u) {
+    out[i] = com[i] - mean[0];
+  } else {
+    out[i] = com[n + i] - mean[1];
+  }
+}`;
+
 const MAX_WG = 65535;   // max workgroups per dispatch dimension; >this needs a 2D grid
 
 interface Chunk { buffer: GPUBuffer; startScan: number; nScan: number; }
+
+interface TraitReader { get(name: string): any; }
+
+// Detector mask for the offline WebGPU virtual-image sum. Mirrors the Python
+// mask geometry exactly (show4dstem.py _create_*_mask): cx pairs with column,
+// cy with row, so the browser virtual image matches the native backend result
+// pixel-for-pixel.
+export function buildDetectorMask(model: TraitReader, detRows: number, detCols: number): Uint32Array {
+  const mask = new Uint32Array(detRows * detCols);
+  const cx = model.get("roi_center_col");
+  const cy = model.get("roi_center_row");
+  const mode = model.get("roi_mode") || "circle";
+  const radius = model.get("roi_radius") || 0;
+  const inner = model.get("roi_radius_inner") || 0;
+  const halfW = (model.get("roi_width") || 0) / 2;
+  const halfH = (model.get("roi_height") || 0) / 2;
+  for (let row = 0; row < detRows; row++) {
+    for (let col = 0; col < detCols; col++) {
+      const dx = col - cx, dy = row - cy, d2 = dx * dx + dy * dy;
+      let inside = false;
+      if (mode === "circle") inside = d2 <= radius * radius;
+      else if (mode === "annular") inside = d2 > inner * inner && d2 <= radius * radius;
+      else if (mode === "square") inside = Math.abs(dx) <= radius && Math.abs(dy) <= radius;
+      else if (mode === "rect") inside = Math.abs(dx) <= halfW && Math.abs(dy) <= halfH;
+      else if (mode === "point") inside = Math.round(cx) === col && Math.round(cy) === row;
+      mask[row * detCols + col] = inside ? 1 : 0;
+    }
+  }
+  return mask;
+}
+
+export function buildFullDetectorMask(detRows: number, detCols: number): Uint32Array {
+  const mask = new Uint32Array(detRows * detCols);
+  mask.fill(1);
+  return mask;
+}
+
+// Scan-ROI mask for the offline DP-from-region reduce (mirrors the vi_roi_mode
+// geometry in show4dstem.py _compute_vi_roi_dp).
+export function buildScanMask(model: TraitReader, scanRows: number, scanCols: number): Uint32Array {
+  const mask = new Uint32Array(scanRows * scanCols);
+  const cx = model.get("vi_roi_center_col");
+  const cy = model.get("vi_roi_center_row");
+  const mode = model.get("vi_roi_mode") || "circle";
+  const radius = model.get("vi_roi_radius") || 0;
+  const halfW = (model.get("vi_roi_width") || 0) / 2;
+  const halfH = (model.get("vi_roi_height") || 0) / 2;
+  for (let row = 0; row < scanRows; row++) {
+    for (let col = 0; col < scanCols; col++) {
+      const dx = col - cx, dy = row - cy;
+      let inside = false;
+      if (mode === "circle") inside = dx * dx + dy * dy <= radius * radius;
+      else if (mode === "square") inside = Math.abs(dx) <= radius && Math.abs(dy) <= radius;
+      else if (mode === "rect") inside = Math.abs(dx) <= halfW && Math.abs(dy) <= halfH;
+      mask[row * scanCols + col] = inside ? 1 : 0;
+    }
+  }
+  return mask;
+}
 
 export class Show4DSTEMCompute {
   private device: GPUDevice;
   private maskedSumPipe: GPUComputePipeline;
   private maskedComPipe: GPUComputePipeline;
+  private dpcMeanPipe: GPUComputePipeline;
+  private dpcComponentPipe: GPUComputePipeline;
   private reduceFramesPipe: GPUComputePipeline;
   private frameAtPipe: GPUComputePipeline;
   private chunks: Chunk[];
@@ -191,6 +302,8 @@ export class Show4DSTEMCompute {
     const rf = device.createShaderModule({ code: REDUCE_FRAMES_WGSL });
     this.maskedSumPipe = device.createComputePipeline({ layout: "auto", compute: { module: ms, entryPoint: "main" } });
     this.maskedComPipe = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: maskedComSrc(sg) }), entryPoint: "main" } });
+    this.dpcMeanPipe = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: DPC_MEAN_WGSL }), entryPoint: "main" } });
+    this.dpcComponentPipe = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: DPC_COMPONENT_WGSL }), entryPoint: "main" } });
     this.reduceFramesPipe = device.createComputePipeline({ layout: "auto", compute: { module: rf, entryPoint: "main" } });
     this.frameAtPipe = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: FRAME_WGSL }), entryPoint: "main" } });
   }
@@ -215,37 +328,70 @@ export class Show4DSTEMCompute {
   // (CoMx/CoMy/CoMmag/iCoM). detCols unravels the flat pixel index to (row,col); badPx
   // are excluded from the mask, matching every other reduction.
   async maskedCoM(mask: Uint32Array, detCols: number): Promise<{ comY: Float32Array; comX: Float32Array }> {
-    const device = this.device;
-    const bad = this.badPx.length ? new Set(this.badPx) : null;
-    const idxArr = new Uint32Array(this.detSize); let n = 0;
-    for (let k = 0; k < this.detSize; k++) if (mask[k] !== 0 && !(bad && bad.has(k))) idxArr[n++] = k;
-    const idx = idxArr.subarray(0, n || 1);
-    const idxBuf = this.upload(idx, GPUBufferUsage.STORAGE);
-    const com = device.createBuffer({ size: this.scanCount * 2 * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
-    const temps: GPUBuffer[] = [];
-    // One workgroup per scan position (2D grid), all chunks in ONE encoder + submit, readback
-    // folded in. com slices are disjoint per chunk (no accumulation), so no zero-init needed.
-    const enc = device.createCommandEncoder();
-    const pass = enc.beginComputePass(); pass.setPipeline(this.maskedComPipe);
-    for (const ch of this.chunks) {
-      const gx = Math.min(ch.nScan, MAX_WG), gy = Math.ceil(ch.nScan / MAX_WG);
-      const dims = this.uniform([ch.startScan, ch.nScan, this.detSize, this.mode]); temps.push(dims);
-      const dims2 = this.uniform([detCols, this.scanCount, gx, 0]); temps.push(dims2);
-      const bind = device.createBindGroup({ layout: this.maskedComPipe.getBindGroupLayout(0), entries: [
-        { binding: 0, resource: { buffer: ch.buffer } }, { binding: 1, resource: { buffer: idxBuf } },
-        { binding: 2, resource: { buffer: com } }, { binding: 3, resource: { buffer: dims } }, { binding: 4, resource: { buffer: dims2 } } ] });
-      pass.setBindGroup(0, bind); pass.dispatchWorkgroups(gx, gy);
-    }
-    pass.end();
-    const rb = device.createBuffer({ size: this.scanCount * 2 * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-    enc.copyBufferToBuffer(com, 0, rb, 0, this.scanCount * 2 * 4);
-    device.queue.submit([enc.finish()]);
-    await rb.mapAsync(GPUMapMode.READ);
-    const flat = new Float32Array(rb.getMappedRange().slice(0)); rb.unmap(); rb.destroy();
-    idxBuf.destroy(); com.destroy(); temps.forEach((b) => b.destroy());
+    const { buffer: com, n } = this.maskedCoMBuffer(mask, detCols);
+    const flat = await this.readF32(com, this.scanCount * 2);
+    com.destroy();
     const comY = flat.slice(0, this.scanCount), comX = flat.slice(this.scanCount, this.scanCount * 2);
     if (n === 0) { comY.fill(0); comX.fill(0); }
     return { comY, comX };
+  }
+
+  // GPU-resident CoM maps. Caller owns the returned buffer.
+  maskedCoMBuffer(mask: Uint32Array, detCols: number): { buffer: GPUBuffer; n: number } {
+    const device = this.device;
+    const { idx, n } = this.detectorIndices(mask);
+    const idxBuf = this.upload(idx, GPUBufferUsage.STORAGE);
+    const com = device.createBuffer({ size: this.scanCount * 2 * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    if (n === 0) {
+      idxBuf.destroy();
+      return { buffer: com, n };
+    }
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    this.encodeMaskedCoM(pass, idxBuf, com, detCols);
+    pass.end();
+    device.queue.submit([enc.finish()]);
+    idxBuf.destroy();
+    return { buffer: com, n };
+  }
+
+  // GPU-resident centered DPC component. This keeps the common CoMx/CoMy display path on GPU:
+  // CoM reduction -> global mean -> component subtraction, with no JavaScript pass over scan pixels.
+  maskedDpcBuffer(mask: Uint32Array, detCols: number, component: "row" | "col" | 0 | 1): { buffer: GPUBuffer; n: number } {
+    const device = this.device;
+    const out = device.createBuffer({ size: this.scanCount * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    const { idx, n } = this.detectorIndices(mask);
+    if (n === 0) return { buffer: out, n };
+    const idxBuf = this.upload(idx, GPUBufferUsage.STORAGE);
+    const com = device.createBuffer({ size: this.scanCount * 2 * 4, usage: GPUBufferUsage.STORAGE });
+    const mean = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE });
+    const meanDims = this.uniform([this.scanCount, 0, 0, 0]);
+    const comp = component === "row" || component === 0 ? 0 : 1;
+    const compDims = this.uniform([this.scanCount, comp, 0, 0]);
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    this.encodeMaskedCoM(pass, idxBuf, com, detCols);
+    pass.setPipeline(this.dpcMeanPipe);
+    pass.setBindGroup(0, device.createBindGroup({ layout: this.dpcMeanPipe.getBindGroupLayout(0), entries: [
+      { binding: 0, resource: { buffer: com } }, { binding: 1, resource: { buffer: mean } }, { binding: 2, resource: { buffer: meanDims } } ] }));
+    pass.dispatchWorkgroups(1);
+    pass.setPipeline(this.dpcComponentPipe);
+    pass.setBindGroup(0, device.createBindGroup({ layout: this.dpcComponentPipe.getBindGroupLayout(0), entries: [
+      { binding: 0, resource: { buffer: com } }, { binding: 1, resource: { buffer: mean } },
+      { binding: 2, resource: { buffer: out } }, { binding: 3, resource: { buffer: compDims } } ] }));
+    pass.dispatchWorkgroups(Math.ceil(this.scanCount / 256));
+    pass.end();
+    device.queue.submit([enc.finish()]);
+    idxBuf.destroy(); com.destroy(); mean.destroy(); meanDims.destroy(); compDims.destroy();
+    return { buffer: out, n };
+  }
+
+  async maskedDpc(mask: Uint32Array, detCols: number, component: "row" | "col" | 0 | 1): Promise<Float32Array> {
+    const { buffer, n } = this.maskedDpcBuffer(mask, detCols, component);
+    const out = await this.readF32(buffer, this.scanCount);
+    buffer.destroy();
+    if (n === 0) out.fill(0);
+    return out;
   }
 
   // Single decompressed stack -> one chunk (the common, fits-in-one-buffer case).
@@ -382,6 +528,33 @@ export class Show4DSTEMCompute {
     return this.sumDimsCache;
   }
 
+  private comDimsCache: { detCols: number; rows: { chunk: GPUBuffer; dims: GPUBuffer; dims2: GPUBuffer; gx: number; gy: number }[] } | null = null;
+  private comDims(detCols: number) {
+    if (!this.comDimsCache || this.comDimsCache.detCols !== detCols) {
+      if (this.comDimsCache) {
+        for (const cd of this.comDimsCache.rows) { cd.dims.destroy(); cd.dims2.destroy(); }
+      }
+      this.comDimsCache = {
+        detCols,
+        rows: this.chunks.map((ch) => {
+          const gx = Math.min(ch.nScan, MAX_WG), gy = Math.ceil(ch.nScan / MAX_WG);
+          return { chunk: ch.buffer, dims: this.uniform([ch.startScan, ch.nScan, this.detSize, this.mode]), dims2: this.uniform([detCols, this.scanCount, gx, 0]), gx, gy };
+        }),
+      };
+    }
+    return this.comDimsCache.rows;
+  }
+
+  private encodeMaskedCoM(pass: GPUComputePassEncoder, idxBuf: GPUBuffer, com: GPUBuffer, detCols: number) {
+    pass.setPipeline(this.maskedComPipe);
+    for (const cd of this.comDims(detCols)) {
+      const bind = this.device.createBindGroup({ layout: this.maskedComPipe.getBindGroupLayout(0), entries: [
+        { binding: 0, resource: { buffer: cd.chunk } }, { binding: 1, resource: { buffer: idxBuf } },
+        { binding: 2, resource: { buffer: com } }, { binding: 3, resource: { buffer: cd.dims } }, { binding: 4, resource: { buffer: cd.dims2 } } ] });
+      pass.setBindGroup(0, bind); pass.dispatchWorkgroups(cd.gx, cd.gy);
+    }
+  }
+
   // DP over a real-space ROI: f32[detSize]. scanMask is GLOBAL; chunks accumulate
   // in INTEGER (u32, bit-exact) - the mean divide happens once in f64 at readback,
   // so the result matches the torch/CUDA integer-sum-then-divide exactly (even on
@@ -427,6 +600,12 @@ export class Show4DSTEMCompute {
     const b = this.device.createBuffer({ size: Math.max(16, arr.byteLength), usage: usage | GPUBufferUsage.COPY_DST });
     this.device.queue.writeBuffer(b, 0, arr.buffer as ArrayBuffer, arr.byteOffset, arr.byteLength); return b;
   }
+  private detectorIndices(mask: Uint32Array): { idx: Uint32Array; n: number } {
+    const bad = this.badPx.length ? new Set(this.badPx) : null;
+    const idxArr = new Uint32Array(this.detSize); let n = 0;
+    for (let k = 0; k < this.detSize; k++) if (mask[k] !== 0 && !(bad && bad.has(k))) idxArr[n++] = k;
+    return { idx: idxArr.subarray(0, n || 1), n };
+  }
   private uniform(vals: number[]): GPUBuffer {
     const b = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const a = new Uint32Array(vals); this.device.queue.writeBuffer(b, 0, a.buffer as ArrayBuffer, a.byteOffset, a.byteLength); return b;
@@ -445,6 +624,7 @@ export class Show4DSTEMCompute {
   dispose() {
     for (const c of this.chunks) c.buffer.destroy();
     if (this.sumDimsCache) { for (const cd of this.sumDimsCache) { cd.dims.destroy(); cd.dims2.destroy(); } this.sumDimsCache = null; }
+    if (this.comDimsCache) { for (const cd of this.comDimsCache.rows) { cd.dims.destroy(); cd.dims2.destroy(); } this.comDimsCache = null; }
   }
 }
 
@@ -490,6 +670,46 @@ export class Show4DSTEMCpuCompute {
       for (let j = 0; j < idx.length; j++) sum += this.sample(base + idx[j]);
       out[scan] = sum;
     }
+    return out;
+  }
+
+  async maskedCoM(mask: Uint32Array, detCols: number): Promise<{ comY: Float32Array; comX: Float32Array }> {
+    const bad = this.badPx.length ? new Set(this.badPx) : null;
+    const idx: number[] = [];
+    for (let k = 0; k < this.detSize; k++) {
+      if (mask[k] !== 0 && !(bad && bad.has(k))) idx.push(k);
+    }
+    const comY = new Float32Array(this.scanCount);
+    const comX = new Float32Array(this.scanCount);
+    if (idx.length === 0) return { comY, comX };
+    for (let scan = 0; scan < this.scanCount; scan++) {
+      const base = scan * this.detSize;
+      let wsum = 0;
+      let ysum = 0;
+      let xsum = 0;
+      for (let j = 0; j < idx.length; j++) {
+        const p = idx[j];
+        const v = this.sample(base + p);
+        wsum += v;
+        ysum += Math.floor(p / detCols) * v;
+        xsum += (p % detCols) * v;
+      }
+      if (wsum > 0) {
+        comY[scan] = ysum / wsum;
+        comX[scan] = xsum / wsum;
+      }
+    }
+    return { comY, comX };
+  }
+
+  async maskedDpc(mask: Uint32Array, detCols: number, component: "row" | "col" | 0 | 1): Promise<Float32Array> {
+    const { comY, comX } = await this.maskedCoM(mask, detCols);
+    const values = component === "row" || component === 0 ? comY : comX;
+    let mean = 0;
+    for (let i = 0; i < values.length; i++) mean += values[i];
+    mean /= Math.max(1, values.length);
+    const out = new Float32Array(values.length);
+    for (let i = 0; i < values.length; i++) out[i] = values[i] - mean;
     return out;
   }
 
