@@ -853,6 +853,81 @@ const LiveNumberSlider = React.memo(function LiveNumberSlider({
   );
 });
 
+interface NumberCommitInputProps {
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onLiveChange?: (value: number) => void;
+  onCommit: (value: number) => void;
+  ariaLabel: string;
+}
+
+function formatNumberInput(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  if (Math.abs(value) >= 100) return value.toFixed(1);
+  if (Math.abs(value) >= 10) return value.toFixed(2);
+  return value.toFixed(3);
+}
+
+const NumberCommitInput = React.memo(function NumberCommitInput({
+  value, min, max, step = 0.05, onLiveChange, onCommit, ariaLabel,
+}: NumberCommitInputProps) {
+  const [draft, setDraft] = React.useState(formatNumberInput(value));
+  React.useEffect(() => { setDraft(formatNumberInput(value)); }, [value]);
+  const commitDraft = () => {
+    const rawNext = Number(draft);
+    if (!Number.isFinite(rawNext)) {
+      setDraft(formatNumberInput(value));
+      return;
+    }
+    const next = clampNumber(rawNext, min, max);
+    setDraft(formatNumberInput(next));
+    onCommit(next);
+  };
+  return (
+    <Box
+      component="input"
+      type="number"
+      value={draft}
+      min={min}
+      max={max}
+      step={step}
+      aria-label={ariaLabel}
+      onChange={(event) => {
+        const nextDraft = event.currentTarget.value;
+        setDraft(nextDraft);
+        const next = Number(nextDraft);
+        if (Number.isFinite(next)) onLiveChange?.(clampNumber(next, min, max));
+      }}
+      onBlur={commitDraft}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.currentTarget.blur();
+        } else if (event.key === "Escape") {
+          setDraft(formatNumberInput(value));
+          event.currentTarget.blur();
+        }
+      }}
+      sx={{
+        width: 48,
+        height: 20,
+        boxSizing: "border-box",
+        px: 0.5,
+        border: "1px solid",
+        borderColor: "divider",
+        borderRadius: 0.5,
+        bgcolor: "background.paper",
+        color: "text.primary",
+        fontSize: 10,
+        fontFamily: "monospace",
+        textAlign: "right",
+        "&:focus": { outline: "1px solid", outlineColor: "primary.main" },
+      }}
+    />
+  );
+});
+
 const controlLabel = { ...typography.label, ...typographyLabel };
 const clickableControlLabel = {
   ...controlLabel,
@@ -1487,6 +1562,16 @@ function Show3DSlices() {
   const [localAlignmentStatus, setLocalAlignmentStatus] = React.useState("");
   const [liveRowShift, setLiveRowShift] = React.useState(rowShiftPxPerSlice || 0);
   const [liveColShift, setLiveColShift] = React.useState(colShiftPxPerSlice || 0);
+  const pendingAlignmentRef = React.useRef<{ rowShift: number; colShift: number } | null>(null);
+  const alignmentRafRef = React.useRef<number | null>(null);
+  const sliceAlignmentModeRef = React.useRef(sliceAlignment || "off");
+  const sliceAlignmentCachedRef = React.useRef(!!sliceAlignmentCached);
+  const exportedAlignmentRef = React.useRef({
+    cached: !!sliceAlignmentCached,
+    rowShift: rowShiftPxPerSlice || 0,
+    colShift: colShiftPxPerSlice || 0,
+    mode: (sliceAlignment === "manual" ? "manual" : "auto") as "auto" | "manual",
+  });
   const pendingExportRef = React.useRef<{
     id: string;
     filename: string;
@@ -1512,7 +1597,21 @@ function Show3DSlices() {
     setLiveColShift(colShiftPxPerSlice || 0);
   }, [colShiftPxPerSlice]);
   React.useEffect(() => {
-    if (sliceAlignmentStatus) setLocalAlignmentStatus(sliceAlignmentStatus);
+    sliceAlignmentModeRef.current = sliceAlignment || "off";
+  }, [sliceAlignment]);
+  React.useEffect(() => {
+    sliceAlignmentCachedRef.current = !!sliceAlignmentCached;
+  }, [sliceAlignmentCached]);
+  React.useEffect(() => () => {
+    if (alignmentRafRef.current != null) cancelAnimationFrame(alignmentRafRef.current);
+  }, []);
+  React.useEffect(() => {
+    if (!sliceAlignmentStatus) return;
+    if (/^(Aligned|Cached) row/.test(sliceAlignmentStatus)) {
+      setLocalAlignmentStatus("");
+      return;
+    }
+    setLocalAlignmentStatus(sliceAlignmentStatus);
   }, [sliceAlignmentStatus]);
 
   // Cursor readout state
@@ -1585,8 +1684,8 @@ function Show3DSlices() {
         && cached.nx === nx
         && cached.ny === ny
         && cached.nz === nz
-        && cached.rowShift === rowShiftPxPerSlice
-        && cached.colShift === colShiftPxPerSlice
+        && cached.rowShift === liveRowShift
+        && cached.colShift === liveColShift
       ) {
         return cached.aligned;
       }
@@ -1595,8 +1694,8 @@ function Show3DSlices() {
         nx,
         ny,
         nz,
-        rowShiftPxPerSlice,
-        colShiftPxPerSlice,
+        liveRowShift,
+        liveColShift,
       );
       if (!aligned) return rawFloats;
       alignedFloatsCacheRef.current = {
@@ -1604,13 +1703,13 @@ function Show3DSlices() {
         nx,
         ny,
         nz,
-        rowShift: rowShiftPxPerSlice,
-        colShift: colShiftPxPerSlice,
+        rowShift: liveRowShift,
+        colShift: liveColShift,
         aligned,
       };
       return aligned;
     },
-    [rawFloats, alignmentActive, nx, ny, nz, rowShiftPxPerSlice, colShiftPxPerSlice],
+    [rawFloats, alignmentActive, nx, ny, nz, liveRowShift, liveColShift],
   );
   React.useEffect(() => {
     if (fftDataObjectRef.current === allFloats) return;
@@ -1723,23 +1822,79 @@ function Show3DSlices() {
     }
   };
   const commitManualSliceAlignment = (rowShift: number, colShift: number) => {
+    if (alignmentRafRef.current != null) {
+      cancelAnimationFrame(alignmentRafRef.current);
+      alignmentRafRef.current = null;
+    }
+    pendingAlignmentRef.current = null;
+    setLiveRowShift(rowShift);
+    setLiveColShift(colShift);
     setRowShiftPxPerSlice(rowShift);
     setColShiftPxPerSlice(colShift);
     setSliceAlignmentCached(true);
     setSliceAlignment("manual");
+    sliceAlignmentCachedRef.current = true;
+    sliceAlignmentModeRef.current = "manual";
     lastAlignmentModeRef.current = "manual";
-    setLocalAlignmentStatus(`Manual row ${rowShift >= 0 ? "+" : ""}${rowShift.toFixed(3)}, col ${colShift >= 0 ? "+" : ""}${colShift.toFixed(3)} px/slice`);
+    setLocalAlignmentStatus("");
   };
+  const stageManualSliceAlignment = React.useCallback((rowShift: number, colShift: number) => {
+    pendingAlignmentRef.current = { rowShift, colShift };
+    if (sliceAlignmentModeRef.current !== "manual") {
+      sliceAlignmentModeRef.current = "manual";
+      setSliceAlignment("manual");
+    }
+    if (!sliceAlignmentCachedRef.current) {
+      sliceAlignmentCachedRef.current = true;
+      setSliceAlignmentCached(true);
+    }
+    lastAlignmentModeRef.current = "manual";
+    setLocalAlignmentStatus("");
+    if (alignmentRafRef.current != null) return;
+    alignmentRafRef.current = requestAnimationFrame(() => {
+      alignmentRafRef.current = null;
+      const pending = pendingAlignmentRef.current;
+      pendingAlignmentRef.current = null;
+      if (!pending) return;
+      React.startTransition(() => {
+        setLiveRowShift(pending.rowShift);
+        setLiveColShift(pending.colShift);
+      });
+    });
+  }, [setSliceAlignment, setSliceAlignmentCached]);
   const resetSliceAlignment = () => {
+    if (alignmentRafRef.current != null) {
+      cancelAnimationFrame(alignmentRafRef.current);
+      alignmentRafRef.current = null;
+    }
+    pendingAlignmentRef.current = null;
+    if (offline && exportedAlignmentRef.current.cached) {
+      const exported = exportedAlignmentRef.current;
+      setLiveRowShift(exported.rowShift);
+      setLiveColShift(exported.colShift);
+      setRowShiftPxPerSlice(exported.rowShift);
+      setColShiftPxPerSlice(exported.colShift);
+      setSliceAlignmentCached(true);
+      setSliceAlignment(exported.mode);
+      sliceAlignmentCachedRef.current = true;
+      sliceAlignmentModeRef.current = exported.mode;
+      alignedFloatsCacheRef.current = null;
+      lastAlignmentModeRef.current = exported.mode;
+      setLocalAlignmentStatus("");
+      return;
+    }
     setLiveRowShift(0);
     setLiveColShift(0);
     setRowShiftPxPerSlice(0);
     setColShiftPxPerSlice(0);
     setSliceAlignmentCached(false);
     setSliceAlignment("off");
+    sliceAlignmentCachedRef.current = false;
+    sliceAlignmentModeRef.current = "off";
     alignedFloatsCacheRef.current = null;
     lastAlignmentModeRef.current = "auto";
     setLocalAlignmentStatus("");
+    if (offline) return;
     setSliceAlignmentRequest(JSON.stringify({ mode: "reset", id: `${Date.now()}-${Math.random().toString(36).slice(2)}` }));
   };
 
@@ -4636,14 +4791,12 @@ function Show3DSlices() {
   };
   const alignmentShiftLimit = Math.max(
     2,
-    Math.ceil(Math.max(Math.abs(liveRowShift), Math.abs(liveColShift), 1) * 1.5),
+    Math.ceil(Math.max(nx, ny) / Math.max(1, nz - 1)),
   );
   const alignmentStatusText = localAlignmentStatus || (
-    sliceAlignmentCached
-      ? `${alignmentActive ? "Applied" : "Cached"} row ${rowShiftPxPerSlice >= 0 ? "+" : ""}${(rowShiftPxPerSlice || 0).toFixed(3)}, col ${colShiftPxPerSlice >= 0 ? "+" : ""}${(colShiftPxPerSlice || 0).toFixed(3)} px/slice`
-      : alignmentActive
-        ? "Estimating slice alignment..."
-        : offline ? "Estimate in a live notebook before export." : ""
+    !sliceAlignmentCached && alignmentActive
+      ? "Estimating..."
+      : offline && !sliceAlignmentCached ? "Estimate in notebook before export." : ""
   );
   const topRightActions = (
     <Box sx={{
@@ -5305,14 +5458,14 @@ function Show3DSlices() {
               </Button>
             </Box>
             {advancedControlsOpen && <Box id="show3dslices-advanced-controls" sx={contentControlRow}>
-              <Typography sx={{ ...controlLabel }} title="Display-only global post-alignment through depth. Raw volume data is unchanged.">Slice alignment</Typography>
+              <Typography sx={{ ...controlLabel }} title="Display-only global post-alignment through depth. Raw volume data is unchanged.">Align</Typography>
               <Switch
                 checked={alignmentActive}
                 onChange={(e) => handleSliceAlignmentToggle(e.target.checked)}
                 disabled={offline && !sliceAlignmentCached}
                 size="small"
                 sx={switchStyles.small}
-                inputProps={{ "aria-label": "Enable automatic global slice alignment" }}
+                inputProps={{ "aria-label": "Align slices with automatic global slice alignment" }}
               />
               {alignmentActive && (
                 <>
@@ -5322,40 +5475,60 @@ function Show3DSlices() {
                     min={-alignmentShiftLimit}
                     max={alignmentShiftLimit}
                     step={0.05}
-                    onLiveChange={setLiveRowShift}
+                    onLiveChange={(value) => {
+                      stageManualSliceAlignment(value, liveColShift);
+                    }}
                     onCommit={(value) => commitManualSliceAlignment(value, liveColShift)}
                     sx={{ ...sliderStyles.small, width: 58, flexShrink: 0 }}
                     ariaLabel={`Row shift per slice ${liveRowShift.toFixed(3)} pixels`}
                   />
-                  <Typography sx={{ ...typography.value, color: tc.textMuted, minWidth: 42, textAlign: "right" }}>
-                    {liveRowShift >= 0 ? "+" : ""}{liveRowShift.toFixed(2)}
-                  </Typography>
+                  <NumberCommitInput
+                    value={liveRowShift}
+                    min={-alignmentShiftLimit}
+                    max={alignmentShiftLimit}
+                    step={0.05}
+                    onLiveChange={(value) => {
+                      stageManualSliceAlignment(value, liveColShift);
+                    }}
+                    onCommit={(value) => commitManualSliceAlignment(value, liveColShift)}
+                    ariaLabel="Edit row shift per slice"
+                  />
                   <Typography sx={{ ...controlLabel, color: tc.textMuted }}>Col</Typography>
                   <LiveNumberSlider
                     value={liveColShift}
                     min={-alignmentShiftLimit}
                     max={alignmentShiftLimit}
                     step={0.05}
-                    onLiveChange={setLiveColShift}
+                    onLiveChange={(value) => {
+                      stageManualSliceAlignment(liveRowShift, value);
+                    }}
                     onCommit={(value) => commitManualSliceAlignment(liveRowShift, value)}
                     sx={{ ...sliderStyles.small, width: 58, flexShrink: 0 }}
                     ariaLabel={`Column shift per slice ${liveColShift.toFixed(3)} pixels`}
                   />
-                  <Typography sx={{ ...typography.value, color: tc.textMuted, minWidth: 42, textAlign: "right" }}>
-                    {liveColShift >= 0 ? "+" : ""}{liveColShift.toFixed(2)}
-                  </Typography>
+                  <NumberCommitInput
+                    value={liveColShift}
+                    min={-alignmentShiftLimit}
+                    max={alignmentShiftLimit}
+                    step={0.05}
+                    onLiveChange={(value) => {
+                      stageManualSliceAlignment(liveRowShift, value);
+                    }}
+                    onCommit={(value) => commitManualSliceAlignment(liveRowShift, value)}
+                    ariaLabel="Edit column shift per slice"
+                  />
+                  <Button
+                    size="small"
+                    sx={{ ...compactButton, color: tc.accent }}
+                    disabled={!sliceAlignmentCached}
+                    onClick={resetSliceAlignment}
+                    aria-label="Reset slice alignment"
+                    title={offline ? "Restore the exported alignment estimate" : "Discard the cached alignment estimate"}
+                  >
+                    Reset
+                  </Button>
                 </>
               )}
-              <Button
-                size="small"
-                sx={compactButton}
-                disabled={!sliceAlignmentCached || offline}
-                onClick={resetSliceAlignment}
-                aria-label="Reset slice alignment"
-                title={offline ? "Reset cached alignment in the live notebook before export" : "Discard the cached alignment estimate"}
-              >
-                Reset
-              </Button>
               {alignmentStatusText && (
                 <Typography
                   sx={{

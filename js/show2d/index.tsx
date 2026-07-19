@@ -11648,7 +11648,14 @@ function Show2D() {
                       </Box>
                       <Box sx={controlPairSx}>
                         <Typography sx={compactLabelSx}>Color</Typography>
-                        <Select size="small" value={selectedCmap} onChange={(e) => setSelectedCmap(String(e.target.value))} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 60 }}>
+                        <Select
+                          size="small"
+                          value={selectedCmap}
+                          onChange={(e) => setSelectedCmap(String(e.target.value))}
+                          MenuProps={themedMenuProps}
+                          sx={{ ...themedSelect, minWidth: 60 }}
+                          inputProps={{ "aria-label": colorShared ? "Shared colormap for all panels" : "Selected panel colormap" }}
+                        >
                           {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
                         </Select>
                       </Box>

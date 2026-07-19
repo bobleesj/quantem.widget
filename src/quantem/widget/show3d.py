@@ -1024,6 +1024,10 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
     denoise = traitlets.Unicode("none").tag(sync=True)
     denoise_sigma = traitlets.Float(4.0).tag(sync=True)
     denoise_bin = traitlets.Int(1).tag(sync=True)
+    denoise_modes = traitlets.List(traitlets.Unicode()).tag(sync=True)
+    denoise_sigmas = traitlets.List(traitlets.Float()).tag(sync=True)
+    denoise_bins = traitlets.List(traitlets.Int()).tag(sync=True)
+    denoise_scope = traitlets.Enum(["all", "panel"], default_value="all").tag(sync=True)
     denoise_banner = traitlets.Unicode("").tag(sync=True)
     # The denoise controls row is hidden by default; auto-enabled when the
     # widget starts with an active denoise (house rule: knobs that explain a
@@ -1043,6 +1047,11 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
     frequency_filter_cutoff = traitlets.Float(0.15).tag(sync=True)
     frequency_filter_center = traitlets.Float(0.30).tag(sync=True)
     frequency_filter_width = traitlets.Float(0.12).tag(sync=True)
+    frequency_filter_modes = traitlets.List(traitlets.Unicode()).tag(sync=True)
+    frequency_filter_cutoffs = traitlets.List(traitlets.Float()).tag(sync=True)
+    frequency_filter_centers = traitlets.List(traitlets.Float()).tag(sync=True)
+    frequency_filter_widths = traitlets.List(traitlets.Float()).tag(sync=True)
+    frequency_filter_scope = traitlets.Enum(["all", "panel"], default_value="all").tag(sync=True)
     frequency_filter_banner = traitlets.Unicode("").tag(sync=True)
     show_frequency_filter = traitlets.Bool(False).tag(sync=True)
     subpixel_align_enabled = traitlets.Bool(False).tag(sync=True)
@@ -2424,18 +2433,20 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         notebook_preview_max_px: int = 512,
         notebook_preview_frames: Sequence[int] | int | None = None,
         notebook_preview_ncols: int | None = None,
-        denoise: str = "none",
-        denoise_sigma: float = 4.0,
-        denoise_bin: int = 1,
+        denoise: str | Sequence[str] = "none",
+        denoise_sigma: float | Sequence[float] = 4.0,
+        denoise_bin: int | Sequence[int] = 1,
+        denoise_scope: str = "panel",
         display_filter: str | None = None,
         display_sigma: float | None = None,
         spatial_bin: int | None = None,
         show_denoise: bool = False,
-        frequency_filter: str = "none",
+        frequency_filter: str | Sequence[str] = "none",
         frequency_filter_enabled: bool | None = None,
-        frequency_filter_cutoff: float = 0.15,
-        frequency_filter_center: float = 0.30,
-        frequency_filter_width: float = 0.12,
+        frequency_filter_cutoff: float | Sequence[float] = 0.15,
+        frequency_filter_center: float | Sequence[float] = 0.30,
+        frequency_filter_width: float | Sequence[float] = 0.12,
+        frequency_filter_scope: str = "panel",
         show_frequency_filter: bool = False,
         subpixel_align: bool = False,
         subpixel_align_reference: int = 0,
@@ -2703,12 +2714,14 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                             notebook_preview_frames=notebook_preview_frames,
                             notebook_preview_ncols=notebook_preview_ncols,
                             denoise=denoise, denoise_sigma=denoise_sigma,
-                            denoise_bin=denoise_bin, show_denoise=show_denoise,
+                            denoise_bin=denoise_bin, denoise_scope=denoise_scope,
+                            show_denoise=show_denoise,
                             frequency_filter=frequency_filter,
                             frequency_filter_enabled=frequency_filter_enabled,
                             frequency_filter_cutoff=frequency_filter_cutoff,
                             frequency_filter_center=frequency_filter_center,
                             frequency_filter_width=frequency_filter_width,
+                            frequency_filter_scope=frequency_filter_scope,
                             show_frequency_filter=show_frequency_filter,
                             subpixel_align=subpixel_align,
                             subpixel_align_reference=subpixel_align_reference,
@@ -2781,13 +2794,17 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                    dedupe_identical_panels: bool, _t0: float,
                    notebook_preview_frames: Sequence[int] | int | None = None,
                    notebook_preview_ncols: int | None = None,
-                   denoise: str = "none", denoise_sigma: float = 4.0,
-                   denoise_bin: int = 1, show_denoise: bool = False,
-                   frequency_filter: str = "none",
+                   denoise: str | Sequence[str] = "none",
+                   denoise_sigma: float | Sequence[float] = 4.0,
+                   denoise_bin: int | Sequence[int] = 1,
+                   denoise_scope: str = "panel",
+                   show_denoise: bool = False,
+                   frequency_filter: str | Sequence[str] = "none",
                    frequency_filter_enabled: bool | None = None,
-                   frequency_filter_cutoff: float = 0.15,
-                   frequency_filter_center: float = 0.30,
-                   frequency_filter_width: float = 0.12,
+                   frequency_filter_cutoff: float | Sequence[float] = 0.15,
+                   frequency_filter_center: float | Sequence[float] = 0.30,
+                   frequency_filter_width: float | Sequence[float] = 0.12,
+                   frequency_filter_scope: str = "panel",
                    show_frequency_filter: bool = False,
                    subpixel_align: bool = False,
                    subpixel_align_reference: int = 0) -> None:
@@ -3408,14 +3425,42 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         # constructor-selected filter shows from the first paint.
         self._display_filter_ready = False
         self._display_filter_cache = {}
+
+        def per_panel(value, kind: str, cast):
+            if isinstance(value, (list, tuple, np.ndarray)):
+                values = [cast(v) for v in value]
+                if len(values) != int(self.n_panels):
+                    raise ValueError(
+                        f"{kind} sequence length ({len(values)}) must equal the "
+                        f"panel count ({int(self.n_panels)})"
+                    )
+                return values, False
+            return [cast(value)] * int(self.n_panels), True
+
         # Compound spellings (bin2, bin2_anscombe, bin4_anscombe) are aliases
         # for (mode, bin); the traits always hold the canonical trio.
         from quantem.widget.utils.display_filter import resolve_denoise_mode
 
-        resolved_mode, resolved_bin = resolve_denoise_mode(str(denoise), int(denoise_bin))
-        self.denoise = resolved_mode
-        self.denoise_sigma = float(denoise_sigma)
-        self.denoise_bin = int(resolved_bin)
+        filters, filters_scalar = per_panel(denoise, "denoise", str)
+        sigmas, sigmas_scalar = per_panel(denoise_sigma, "denoise_sigma", float)
+        bins, bins_scalar = per_panel(denoise_bin, "denoise_bin", int)
+        resolved = [resolve_denoise_mode(mode, bin_value) for mode, bin_value in zip(filters, bins)]
+        self.denoise_modes = [mode for mode, _ in resolved]
+        self.denoise_sigmas = sigmas
+        self.denoise_bins = [bin_value for _, bin_value in resolved]
+        raw_denoise_scope = str(denoise_scope or "all").strip().lower()
+        if raw_denoise_scope not in {"all", "panel"}:
+            raise ValueError("denoise_scope must be 'all' or 'panel'")
+        denoise_scalar_knobs = filters_scalar and sigmas_scalar and bins_scalar
+        if raw_denoise_scope == "all" and not denoise_scalar_knobs:
+            raise ValueError(
+                "denoise_scope='all' broadcasts one setting to every panel, but "
+                "a per-panel denoise/denoise_sigma/denoise_bin sequence was also given."
+            )
+        self.denoise_scope = "all" if int(self.n_panels) <= 1 else raw_denoise_scope
+        self.denoise = self.denoise_modes[0]
+        self.denoise_sigma = float(self.denoise_sigmas[0])
+        self.denoise_bin = int(self.denoise_bins[0])
         self._display_filter_ready = True
         # Master switch starts ON iff built with an active denoise config.
         self.denoise_enabled = self._has_denoise_config()
@@ -3425,28 +3470,63 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             if self.is_rgb
             else bool(show_denoise) or self._display_filter_active()
         )
-        normalized_frequency_filter = str(frequency_filter).strip().lower().replace("-", "")
-        if normalized_frequency_filter not in {"none", "lowpass", "highpass", "bandpass"}:
+        frequency_modes, frequency_modes_scalar = per_panel(frequency_filter, "frequency_filter", str)
+        frequency_cutoffs, frequency_cutoffs_scalar = per_panel(
+            frequency_filter_cutoff, "frequency_filter_cutoff", float
+        )
+        frequency_centers, frequency_centers_scalar = per_panel(
+            frequency_filter_center, "frequency_filter_center", float
+        )
+        frequency_widths, frequency_widths_scalar = per_panel(
+            frequency_filter_width, "frequency_filter_width", float
+        )
+        frequency_modes = [mode.strip().lower().replace("-", "") for mode in frequency_modes]
+        invalid_frequency = next(
+            (mode for mode in frequency_modes if mode not in {"none", "lowpass", "highpass", "bandpass"}),
+            None,
+        )
+        if invalid_frequency is not None:
             raise ValueError(
                 "frequency_filter must be 'none', 'lowpass', 'highpass', or "
-                f"'bandpass'; got {frequency_filter!r}"
+                f"'bandpass'; got {invalid_frequency!r}"
             )
-        for name, value in {
-            "frequency_filter_cutoff": frequency_filter_cutoff,
-            "frequency_filter_center": frequency_filter_center,
-            "frequency_filter_width": frequency_filter_width,
+        for name, values in {
+            "frequency_filter_cutoff": frequency_cutoffs,
+            "frequency_filter_center": frequency_centers,
+            "frequency_filter_width": frequency_widths,
         }.items():
-            if not 0.0 <= float(value) <= 1.0:
-                raise ValueError(f"{name} must be between 0 and 1 (Nyquist); got {value}")
-        self.frequency_filter = normalized_frequency_filter
+            invalid = next((value for value in values if not 0.0 <= float(value) <= 1.0), None)
+            if invalid is not None:
+                raise ValueError(f"{name} must be between 0 and 1 (Nyquist); got {invalid}")
+        raw_frequency_scope = str(frequency_filter_scope or "all").strip().lower()
+        if raw_frequency_scope not in {"all", "panel"}:
+            raise ValueError("frequency_filter_scope must be 'all' or 'panel'")
+        frequency_scalar_knobs = (
+            frequency_modes_scalar
+            and frequency_cutoffs_scalar
+            and frequency_centers_scalar
+            and frequency_widths_scalar
+        )
+        if raw_frequency_scope == "all" and not frequency_scalar_knobs:
+            raise ValueError(
+                "frequency_filter_scope='all' broadcasts one setting to every panel, but "
+                "a per-panel frequency_filter/frequency_filter_cutoff/frequency_filter_center/"
+                "frequency_filter_width sequence was also given."
+            )
+        self.frequency_filter_modes = frequency_modes
+        self.frequency_filter_cutoffs = frequency_cutoffs
+        self.frequency_filter_centers = frequency_centers
+        self.frequency_filter_widths = frequency_widths
+        self.frequency_filter_scope = "all" if int(self.n_panels) <= 1 else raw_frequency_scope
+        self.frequency_filter = frequency_modes[0]
         self.frequency_filter_enabled = (
-            normalized_frequency_filter != "none"
+            any(mode != "none" for mode in frequency_modes)
             if frequency_filter_enabled is None
             else bool(frequency_filter_enabled)
         )
-        self.frequency_filter_cutoff = float(frequency_filter_cutoff)
-        self.frequency_filter_center = float(frequency_filter_center)
-        self.frequency_filter_width = float(frequency_filter_width)
+        self.frequency_filter_cutoff = float(frequency_cutoffs[0])
+        self.frequency_filter_center = float(frequency_centers[0])
+        self.frequency_filter_width = float(frequency_widths[0])
         self.show_frequency_filter = False if self.is_rgb else bool(show_frequency_filter)
         self.subpixel_align_enabled = False if self.is_rgb else bool(subpixel_align)
         self.subpixel_align_reference = int(subpixel_align_reference)
@@ -4159,15 +4239,24 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             "panel_annotations": list(self.panel_annotations),
             "panel_overlays": list(self.panel_overlays),
             "denoise": self.denoise,
+            "denoise_modes": list(self.denoise_modes),
             "show_denoise": self.show_denoise,
             "denoise_enabled": self.denoise_enabled,
             "denoise_sigma": self.denoise_sigma,
+            "denoise_sigmas": list(self.denoise_sigmas),
             "denoise_bin": self.denoise_bin,
+            "denoise_bins": list(self.denoise_bins),
+            "denoise_scope": self.denoise_scope,
             "frequency_filter": self.frequency_filter,
+            "frequency_filter_modes": list(self.frequency_filter_modes),
             "frequency_filter_enabled": self.frequency_filter_enabled,
             "frequency_filter_cutoff": self.frequency_filter_cutoff,
+            "frequency_filter_cutoffs": list(self.frequency_filter_cutoffs),
             "frequency_filter_center": self.frequency_filter_center,
+            "frequency_filter_centers": list(self.frequency_filter_centers),
             "frequency_filter_width": self.frequency_filter_width,
+            "frequency_filter_widths": list(self.frequency_filter_widths),
+            "frequency_filter_scope": self.frequency_filter_scope,
             "show_frequency_filter": self.show_frequency_filter,
             "subpixel_align_enabled": self.subpixel_align_enabled,
             "subpixel_align_reference": self.subpixel_align_reference,
@@ -8032,7 +8121,9 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
 
         if bool(getattr(self, "is_rgb", False)):
             return False
-        return _normalize_mode(self.denoise) != "none" or int(self.denoise_bin) > 1
+        modes = [self.denoise, *list(getattr(self, "denoise_modes", []) or [])]
+        bins = [self.denoise_bin, *list(getattr(self, "denoise_bins", []) or [])]
+        return any(_normalize_mode(mode) != "none" for mode in modes) or any(int(bin_value) > 1 for bin_value in bins)
 
     def _display_filter_active(self) -> bool:
         """Denoise is actually applied: has a config AND the master switch is on.
