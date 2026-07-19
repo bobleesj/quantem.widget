@@ -603,7 +603,7 @@ by `os.pathsep` (`:` on Linux/macOS). Use that form when a folder was split
 across multiple NVMe mounts, for example:
 
 ```bash
-export QUANTEM_WIDGET_BENCH_MASTERS_GLOB='/mnt/nvme0/run/*_master.h5:/mnt/nvme1/run/*_master.h5'
+export QUANTEM_WIDGET_BENCH_MASTERS_GLOB='/path/to/disk0/*_master.h5:/path/to/disk1/*_master.h5'
 ```
 
 The scripts write Markdown tables under `/tmp/quantem-widget-load-bench/` by

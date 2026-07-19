@@ -203,7 +203,7 @@ Conclusions:
   1024 treat it as preview-only, or implement **per-q-row block scales**
   (n scales per BF pixel instead of 1, +0.4 % memory) to pull the error back
   down — noted as the follow-up for whoever extends the quantization.
-- Repro: masters under `/home/owner/ssd/tmp/claude-1000/ssb_sweep/`, harness
+- Repro: masters under a local private SSB sweep directory, harness
   `sweep_run.py` in the session scratchpad, per-mode viewer selection via
   `?gqk=`.
 
