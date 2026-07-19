@@ -5442,7 +5442,7 @@ function Show3DSlices() {
               )}
               <Button
                 size="small"
-                sx={compactButton}
+                sx={{ ...compactButton, color: tc.accent }}
                 disabled={!sliceAlignmentCached}
                 onClick={resetSliceAlignment}
                 aria-label="Reset slice alignment"
