@@ -6131,6 +6131,11 @@ function Show3D() {
       ? linkedStateLiveRef.current
       : (livePanels[panelIdx] || panelStates[panelIdx] || initialState);
   }, [linkPanels, panelStates]);
+  // A cached packed composite already includes rotation and flips.  Plain
+  // zoom/pan can be applied while painting that image, but those orientation
+  // transforms need the original per-pixel viewport path to retain their
+  // exact screen-space pan semantics.
+  const packedViewportTransformRequiresRebuild = imageRotation % 4 !== 0 || flipRows || flipCols;
   const sidecarDisplayStyleKey = React.useMemo(() => {
     const panels = visiblePanelIndices.length
       ? visiblePanelIndices
@@ -6158,9 +6163,9 @@ function Show3D() {
           panelCmapFor(panel),
           Number(state.imageVminPct || 0).toFixed(3),
           Number(state.imageVmaxPct || 100).toFixed(3),
-          Number(state.zoom || 1).toFixed(4),
-          Number(state.panX || 0).toFixed(1),
-          Number(state.panY || 0).toFixed(1),
+          packedViewportTransformRequiresRebuild ? Number(state.zoom || 1).toFixed(4) : null,
+          packedViewportTransformRequiresRebuild ? Number(state.panX || 0).toFixed(1) : null,
+          packedViewportTransformRequiresRebuild ? Number(state.panY || 0).toFixed(1) : null,
           offlineMins?.[panel] ?? offlineMin ?? null,
           offlineMaxs?.[panel] ?? offlineMax ?? null,
           vminPerPanel?.[panel] ?? null,
@@ -6191,6 +6196,7 @@ function Show3D() {
     panelCmapFor,
     panelGapPx,
     panelStates,
+    packedViewportTransformRequiresRebuild,
     percentileLow,
     percentileHigh,
     visiblePanelIndices,
@@ -6226,7 +6232,14 @@ function Show3D() {
     }
     if (
       sidecarMode ||
-      (offline && !isRgb && !sharedPanelSource && Math.max(1, nPanels || 1) > 1 && !!offlineStack)
+      (
+        packedViewportTransformRequiresRebuild &&
+        offline &&
+        !isRgb &&
+        !sharedPanelSource &&
+        Math.max(1, nPanels || 1) > 1 &&
+        !!offlineStack
+      )
     ) {
       invalidateSidecarViewportCache("view-transform");
     }
@@ -11786,6 +11799,78 @@ function Show3D() {
     panelInnerBorderColor,
   ]);
 
+  // Packed offline exports retain an untransformed composite for every frame.
+  // Reusing that image while drawing per-panel viewport transforms keeps a
+  // zoom/pan gesture from rebuilding the entire movie on the main thread.
+  const paintEmbeddedPackedCompositeTransform = React.useCallback((
+    ctx: CanvasRenderingContext2D,
+    composite: HTMLCanvasElement,
+    targetW: number,
+    targetH: number,
+  ): boolean => {
+    if (
+      sidecarMode ||
+      packedViewportTransformRequiresRebuild ||
+      sharedPanelSource ||
+      Math.max(1, nPanels || 1) <= 1
+    ) return false;
+    const visibleCountLocal = Math.max(1, visiblePanelCount || 1);
+    const cols = panelColsForCount(visibleCountLocal);
+    const rows = Math.ceil(visibleCountLocal / cols);
+    const gap = visibleCountLocal > 1 ? panelGapPx : 0;
+    const outPanelW = (targetW - gap * (cols - 1)) / cols;
+    const outPanelH = (targetH - gap * (rows - 1)) / rows;
+    clearWithGridBackground(ctx, targetW, targetH);
+    ctx.imageSmoothingEnabled = false;
+    for (let slot = 0; slot < visibleCountLocal; slot++) {
+      const panelIdx = visiblePanelIndices[slot] ?? slot;
+      const col = slot % cols;
+      const row = Math.floor(slot / cols);
+      const slotX = col * (outPanelW + gap);
+      const slotY = row * (outPanelH + gap);
+      const panelState = linkPanels
+        ? linkedStateLiveRef.current
+        : (panelStatesLiveRef.current[panelIdx] || stateFor(panelIdx));
+      const drawView = clampPanelViewForDraw(panelState, outPanelW, outPanelH);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(slotX, slotY, outPanelW, outPanelH);
+      ctx.clip();
+      ctx.translate(slotX + drawView.panX, slotY + drawView.panY);
+      ctx.scale(drawView.zoom, drawView.zoom);
+      ctx.drawImage(
+        composite,
+        slotX,
+        slotY,
+        outPanelW,
+        outPanelH,
+        0,
+        0,
+        outPanelW,
+        outPanelH,
+      );
+      ctx.restore();
+      strokePanelInnerBorder(ctx, slotX, slotY, outPanelW, outPanelH);
+    }
+    return true;
+  }, [
+    sidecarMode,
+    packedViewportTransformRequiresRebuild,
+    sharedPanelSource,
+    nPanels,
+    visiblePanelCount,
+    panelColsForCount,
+    panelGapPx,
+    visiblePanelIndices,
+    linkPanels,
+    stateFor,
+    clampPanelViewForDraw,
+    themeColors.bg,
+    interPanelGapColor,
+    panelInnerBorderColor,
+    panelInnerBorderPx,
+  ]);
+
   const getSidecarPaintScratchContext = React.useCallback((
     targetW: number,
     targetH: number,
@@ -11877,7 +11962,15 @@ function Show3D() {
       const scratchCtx = getSidecarPaintScratchContext(canvasW, canvasH);
       const paintCtx = scratchCtx || ctx;
       paintCtx.imageSmoothingEnabled = false;
-      paintCtx.drawImage(composite, 0, 0, composite.width, composite.height, 0, 0, canvasW, canvasH);
+      const transformed = transformActive && embeddedPackedViewportCacheReady && paintEmbeddedPackedCompositeTransform(
+        paintCtx,
+        composite,
+        canvasW,
+        canvasH,
+      );
+      if (!transformed) {
+        paintCtx.drawImage(composite, 0, 0, composite.width, composite.height, 0, 0, canvasW, canvasH);
+      }
       if (scratchCtx) {
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(scratchCtx.canvas, 0, 0, canvasW, canvasH);
@@ -11889,7 +11982,9 @@ function Show3D() {
       }
       const d = show3dPerfDebug();
       if (d) {
-        d.lastRenderPath = `sidecar-composite-${reason}`;
+        d.lastRenderPath = transformed
+          ? `embedded-packed-composite-transform-${reason}`
+          : `sidecar-composite-${reason}`;
         d.lastRenderMs = performance.now() - start;
         d.lastPaintMs = d.lastRenderMs;
         d.lastFrame = drawIdx;
@@ -11999,6 +12094,7 @@ function Show3D() {
     setGpuDisplayVisible,
     sidecarViewTransformActive,
     paintSidecarU8ViewportToContext,
+    paintEmbeddedPackedCompositeTransform,
   ]);
 
   const previousSidecarPagePaintStartRef = React.useRef(activePageStart);
