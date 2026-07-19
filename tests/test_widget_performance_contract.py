@@ -822,6 +822,31 @@ def test_show3d_sidecar_zoom_skips_viewport_cache_contract():
     assert "debug.sidecarDisplayStyleDirty = true;" in show3d
 
 
+def test_show3d_embedded_packed_zoom_reuses_frame_cache_contract():
+    """C1: zooming a packed multi-panel export must not rebuild its whole movie."""
+    show3d = (ROOT / "js" / "show3d" / "index.tsx").read_text(encoding="utf-8")
+    style_key = show3d.split("const sidecarDisplayStyleKey", 1)[1].split(
+        "const syncPlaybackPanelTransform", 1
+    )[0]
+    transform_sync = show3d.split("const syncPlaybackPanelTransform", 1)[1].split(
+        "const clampPanelViewForDraw", 1
+    )[0]
+
+    # C1: ordinary pan/zoom does not change a packed cache key; orientation
+    # transforms retain the exact legacy per-pixel viewport path.
+    assert "const packedViewportTransformRequiresRebuild" in show3d
+    assert "packedViewportTransformRequiresRebuild ? Number(state.zoom" in style_key
+    assert "packedViewportTransformRequiresRebuild ? Number(state.panX" in style_key
+    assert "packedViewportTransformRequiresRebuild ? Number(state.panY" in style_key
+    # C2: a packed cache invalidates on a viewport transform only when that
+    # transform changes source-pixel orientation semantics.
+    assert "sidecarMode ||" in transform_sync
+    assert "packedViewportTransformRequiresRebuild" in transform_sync
+    # C3: packed exports draw the cached frame through the current panel view.
+    assert "paintEmbeddedPackedCompositeTransform" in show3d
+    assert "embedded-packed-composite-transform" in show3d
+
+
 def test_show3d_sidecar_export_preserves_display_contrast_contract():
     """C1: folder export should preserve microscope contrast state."""
     show3d = (ROOT / "src" / "quantem" / "widget" / "show3d.py").read_text(encoding="utf-8")
