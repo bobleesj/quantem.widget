@@ -917,6 +917,10 @@ const NumberCommitInput = React.memo(function NumberCommitInput({
   );
 });
 
+function formatAlignmentStatus(rowShift: number, colShift: number): string {
+  return `row ${rowShift >= 0 ? "+" : ""}${(rowShift || 0).toFixed(3)}, col ${colShift >= 0 ? "+" : ""}${(colShift || 0).toFixed(3)} px/slice`;
+}
+
 const controlLabel = { ...typography.label, ...typographyLabel };
 const clickableControlLabel = {
   ...controlLabel,
@@ -1798,7 +1802,7 @@ function Show3DSlices() {
     setSliceAlignmentCached(true);
     setSliceAlignment("manual");
     lastAlignmentModeRef.current = "manual";
-    setLocalAlignmentStatus(`Manual row ${rowShift >= 0 ? "+" : ""}${rowShift.toFixed(3)}, col ${colShift >= 0 ? "+" : ""}${colShift.toFixed(3)} px/slice`);
+    setLocalAlignmentStatus(formatAlignmentStatus(rowShift, colShift));
   };
   const resetSliceAlignment = () => {
     if (offline && exportedAlignmentRef.current.cached) {
@@ -4724,7 +4728,7 @@ function Show3DSlices() {
   );
   const alignmentStatusText = localAlignmentStatus || (
     sliceAlignmentCached
-      ? `${alignmentActive ? "Applied" : "Cached"} row ${rowShiftPxPerSlice >= 0 ? "+" : ""}${(rowShiftPxPerSlice || 0).toFixed(3)}, col ${colShiftPxPerSlice >= 0 ? "+" : ""}${(colShiftPxPerSlice || 0).toFixed(3)} px/slice`
+      ? formatAlignmentStatus(rowShiftPxPerSlice, colShiftPxPerSlice)
       : alignmentActive
         ? "Estimating slice alignment..."
         : offline ? "Estimate in a live notebook before export." : ""
