@@ -738,7 +738,7 @@ def _exercise_show3d_reorder(page) -> dict[str, Any]:
     target = boxes[-1]
     start_x = source["x"] + source["width"] * 0.5
     start_y = source["y"] + source["height"] * 0.5
-    end_x = target["x"] + target["width"] * 0.78
+    end_x = target["x"] + target["width"] * 0.9
     end_y = target["y"] + target["height"] * 0.5
     page.mouse.move(start_x, start_y)
     page.mouse.down()
@@ -746,6 +746,7 @@ def _exercise_show3d_reorder(page) -> dict[str, Any]:
     ghost_start = _show3d_reorder_ghost(page)
     page.mouse.move(start_x + (end_x - start_x) * 0.35, start_y + (end_y - start_y) * 0.25, steps=6)
     page.mouse.move(start_x + (end_x - start_x) * 0.85, start_y + (end_y - start_y) * 0.1, steps=8)
+    page.mouse.move(end_x, end_y, steps=8)
     page.wait_for_timeout(220)
     ghost_mid = _show3d_reorder_ghost(page)
     during = _show3d_reorder_labels(page)
@@ -780,6 +781,13 @@ def _story_ids_for(row: dict[str, Any]) -> list[str]:
     if variant.startswith("show4dstem"):
         return STORY_IDS_BY_VARIANT["show4dstem"]
     return STORY_IDS_BY_VARIANT.get(variant, [])
+
+
+def _panel_text_key(value: Any) -> str:
+    text = str(value)
+    for token in ("Unavailable", "★", "☆", "\u200b", "\n", " "):
+        text = text.replace(token, "")
+    return text
 
 
 def _semantic_checks(page, row: dict[str, Any], canvas_count: int) -> dict[str, Any]:
@@ -828,7 +836,7 @@ def _semantic_checks(page, row: dict[str, Any], canvas_count: int) -> dict[str, 
     }
     show3d_column_targets = {
         "show3d-hidden-panel": 1,
-        "show3d-four-panel-downsample": 2,
+        "show3d-four-panel-downsample": 1,
     }
     if variant in show2d_column_targets:
         column_check = _exercise_column_select(page, "Gallery columns", show2d_column_targets[variant])
@@ -1058,7 +1066,11 @@ def _semantic_checks(page, row: dict[str, Any], canvas_count: int) -> dict[str, 
         ):
             errors.append(f"Show4DSTEM compare grid has tiny/invalid panels: {compare}")
         compare_text = str(compare.get("text", ""))
-        if "Multiple grid" not in compare_text and "Compare grid" not in compare_text:
+        if (
+            "Multiple grid" not in compare_text
+            and "Compare grid" not in compare_text
+            and "Multiple ROI" not in compare_text
+        ):
             errors.append("Show4DSTEM multiple grid label is not visible")
         if not after_frame_text:
             errors.append("Show4DSTEM compare panel click did not select the second dataset")
@@ -1066,13 +1078,15 @@ def _semantic_checks(page, row: dict[str, Any], canvas_count: int) -> dict[str, 
             errors.append(f"Show4DSTEM compare panel controls failed: {compare_actions['error']}")
         if "Unstar" not in str(compare_actions.get("star_after", "")):
             errors.append(f"Show4DSTEM compare star button did not toggle: {compare_actions}")
-        if not compare_actions.get("after_reorder", [""])[0].startswith("scan-1"):
+        after_reorder_key = _panel_text_key((compare_actions.get("after_reorder") or [""])[0])
+        if not after_reorder_key.startswith("scan-1"):
             errors.append(f"Show4DSTEM compare reorder did not move scan-1 first: {compare_actions}")
         if compare_actions.get("count_after_hide") != 13:
             errors.append(f"Show4DSTEM compare hide did not remove one panel: {compare_actions}")
         if compare_actions.get("count_after_show_all") != 14:
             errors.append(f"Show4DSTEM compare show-all did not restore panels: {compare_actions}")
-        if not compare_actions.get("after_reset", [""])[0].startswith("scan-0"):
+        after_reset_key = _panel_text_key((compare_actions.get("after_reset") or [""])[0])
+        if not after_reset_key.startswith("scan-0"):
             errors.append(f"Show4DSTEM compare reset did not restore natural order: {compare_actions}")
 
     checks["errors"] = errors

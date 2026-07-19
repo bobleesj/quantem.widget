@@ -87,8 +87,12 @@ const SHOW3D_STANDALONE_VIEW_STATE_KEYS = [
   "debug",
   "denoise",
   "denoise_bin",
+  "denoise_bins",
   "denoise_enabled",
+  "denoise_modes",
+  "denoise_scope",
   "denoise_sigma",
+  "denoise_sigmas",
   "diff_cmap",
   "diff_mode",
   "fft_layout",
@@ -103,9 +107,14 @@ const SHOW3D_STANDALONE_VIEW_STATE_KEYS = [
   "frame_rotations",
   "frequency_filter",
   "frequency_filter_center",
+  "frequency_filter_centers",
   "frequency_filter_cutoff",
+  "frequency_filter_cutoffs",
   "frequency_filter_enabled",
+  "frequency_filter_modes",
+  "frequency_filter_scope",
   "frequency_filter_width",
+  "frequency_filter_widths",
   "hidden_indices",
   "hidden_page_slots",
   "hidden_panels",
@@ -4696,6 +4705,10 @@ function Show3D() {
   const [displayFilter, setDisplayFilter] = useModelState<string>("denoise");
   const [displaySigma, setDisplaySigma] = useModelState<number>("denoise_sigma");
   const [spatialBin, setSpatialBin] = useModelState<number>("denoise_bin");
+  const [displayFilters, setDisplayFilters] = useModelState<string[]>("denoise_modes");
+  const [displaySigmas, setDisplaySigmas] = useModelState<number[]>("denoise_sigmas");
+  const [spatialBins, setSpatialBins] = useModelState<number[]>("denoise_bins");
+  const [denoiseScope, setDenoiseScope] = useModelState<string>("denoise_scope");
   const [displayFilterBanner] = useModelState<string>("denoise_banner");
   const [showDenoise, setShowDenoise] = useModelState<boolean>("show_denoise");
   // Master ON/OFF of the denoise EFFECT (off -> raw, config preserved & gated).
@@ -4705,6 +4718,11 @@ function Show3D() {
   const [frequencyFilterCutoff, setFrequencyFilterCutoff] = useModelState<number>("frequency_filter_cutoff");
   const [frequencyFilterCenter, setFrequencyFilterCenter] = useModelState<number>("frequency_filter_center");
   const [frequencyFilterWidth, setFrequencyFilterWidth] = useModelState<number>("frequency_filter_width");
+  const [frequencyFilterModes, setFrequencyFilterModes] = useModelState<string[]>("frequency_filter_modes");
+  const [frequencyFilterCutoffs, setFrequencyFilterCutoffs] = useModelState<number[]>("frequency_filter_cutoffs");
+  const [frequencyFilterCenters, setFrequencyFilterCenters] = useModelState<number[]>("frequency_filter_centers");
+  const [frequencyFilterWidths, setFrequencyFilterWidths] = useModelState<number[]>("frequency_filter_widths");
+  const [frequencyFilterScope, setFrequencyFilterScope] = useModelState<string>("frequency_filter_scope");
   const [showFrequencyFilter, setShowFrequencyFilter] = useModelState<boolean>("show_frequency_filter");
   const [subpixelAlignEnabled, setSubpixelAlignEnabled] = useModelState<boolean>("subpixel_align_enabled");
   const [subpixelAlignReference, setSubpixelAlignReference] = useModelState<number>("subpixel_align_reference");
@@ -4719,7 +4737,6 @@ function Show3D() {
   const [frequencyFilterBackend, setFrequencyFilterBackend] = React.useState("off");
   const frequencyFilterCacheRef = React.useRef<Map<string, Float32Array>>(new Map());
   const frequencyFilterPendingRef = React.useRef<Set<string>>(new Set());
-  const frequencyFilterIsActive = !!frequencyFilterEnabled && frequencyFilterActive(frequencyFilter) && !isRgb;
   const frequencyOptions = React.useMemo(() => {
     const mode = normalizeFrequencyFilterMode(frequencyFilter);
     return {
@@ -4729,6 +4746,61 @@ function Show3D() {
       width: frequencyFilterWidth,
     };
   }, [frequencyFilter, frequencyDraft, frequencyFilterCutoff, frequencyFilterCenter, frequencyFilterWidth]);
+  const scopedPanelForEdit = React.useMemo(() => {
+    const fallback = visiblePanelIndices[0] ?? 0;
+    const selected = selectedVisiblePanels[selectedVisiblePanels.length - 1] ?? fallback;
+    return Math.max(0, Math.min(Math.max(0, (nPanels || 1) - 1), selected));
+  }, [nPanels, selectedVisiblePanels, visiblePanelIndices]);
+  const denoiseScopeAll = String(denoiseScope || "all") === "all" || (nPanels || 1) <= 1;
+  const frequencyFilterScopeAll = String(frequencyFilterScope || "all") === "all" || (nPanels || 1) <= 1;
+  const updateScopedArray = React.useCallback(<T,>(
+    values: T[] | undefined,
+    nextValue: T,
+    fallback: T,
+    scopeAll: boolean,
+  ) => {
+    const count = Math.max(1, nPanels || 1);
+    const current = Array.from({ length: count }, (_, idx) => values?.[idx] ?? fallback);
+    if (scopeAll) return current.map(() => nextValue);
+    current[scopedPanelForEdit] = nextValue;
+    return current;
+  }, [nPanels, scopedPanelForEdit]);
+  const denoiseKnobsForPanel = React.useCallback((panel: number) => {
+    const idx = Math.max(0, Math.min(Math.max(0, (nPanels || 1) - 1), panel));
+    const mode = denoiseScopeAll ? displayFilter : (displayFilters?.[idx] ?? displayFilter);
+    return {
+      mode: resolveDenoiseMode(mode || "none", denoiseScopeAll ? (spatialBin || 1) : (spatialBins?.[idx] ?? spatialBin ?? 1)).mode,
+      sigma: denoiseScopeAll ? Number(displaySigma ?? 4) : Number(displaySigmas?.[idx] ?? displaySigma ?? 4),
+      bin: denoiseScopeAll ? Number(spatialBin || 1) : Number(spatialBins?.[idx] ?? spatialBin ?? 1),
+    };
+  }, [denoiseScopeAll, displayFilter, displayFilters, displaySigma, displaySigmas, nPanels, spatialBin, spatialBins]);
+  const frequencyKnobsForPanel = React.useCallback((panel: number) => {
+    const idx = Math.max(0, Math.min(Math.max(0, (nPanels || 1) - 1), panel));
+    const mode = normalizeFrequencyFilterMode(frequencyFilterScopeAll ? frequencyFilter : (frequencyFilterModes?.[idx] ?? frequencyFilter));
+    return {
+      mode,
+      cutoff: frequencyFilterScopeAll ? Number(frequencyFilterCutoff ?? 0.15) : Number(frequencyFilterCutoffs?.[idx] ?? frequencyFilterCutoff ?? 0.15),
+      center: frequencyFilterScopeAll ? Number(frequencyFilterCenter ?? 0.30) : Number(frequencyFilterCenters?.[idx] ?? frequencyFilterCenter ?? 0.30),
+      width: frequencyFilterScopeAll ? Number(frequencyFilterWidth ?? 0.12) : Number(frequencyFilterWidths?.[idx] ?? frequencyFilterWidth ?? 0.12),
+    };
+  }, [frequencyFilter, frequencyFilterCenter, frequencyFilterCenters, frequencyFilterCutoff, frequencyFilterCutoffs, frequencyFilterModes, frequencyFilterScopeAll, frequencyFilterWidth, frequencyFilterWidths, nPanels]);
+  const syncDenoisePanelKnob = React.useCallback((name: "mode" | "sigma" | "bin", value: string | number) => {
+    if (name === "mode") setDisplayFilters(updateScopedArray(displayFilters, String(value), "none", denoiseScopeAll));
+    else if (name === "sigma") setDisplaySigmas(updateScopedArray(displaySigmas, Number(value), 4, denoiseScopeAll));
+    else setSpatialBins(updateScopedArray(spatialBins, Number(value), 1, denoiseScopeAll));
+  }, [denoiseScopeAll, displayFilters, displaySigmas, setDisplayFilters, setDisplaySigmas, setSpatialBins, spatialBins, updateScopedArray]);
+  const syncFrequencyPanelKnob = React.useCallback((name: "mode" | "cutoff" | "center" | "width", value: string | number) => {
+    if (name === "mode") setFrequencyFilterModes(updateScopedArray(frequencyFilterModes, String(value), "none", frequencyFilterScopeAll));
+    else if (name === "cutoff") setFrequencyFilterCutoffs(updateScopedArray(frequencyFilterCutoffs, Number(value), 0.15, frequencyFilterScopeAll));
+    else if (name === "center") setFrequencyFilterCenters(updateScopedArray(frequencyFilterCenters, Number(value), 0.30, frequencyFilterScopeAll));
+    else setFrequencyFilterWidths(updateScopedArray(frequencyFilterWidths, Number(value), 0.12, frequencyFilterScopeAll));
+  }, [frequencyFilterScopeAll, frequencyFilterCenters, frequencyFilterCutoffs, frequencyFilterModes, frequencyFilterWidths, setFrequencyFilterCenters, setFrequencyFilterCutoffs, setFrequencyFilterModes, setFrequencyFilterWidths, updateScopedArray]);
+  const frequencyFilterIsActive = !!frequencyFilterEnabled && !isRgb && (
+    frequencyFilterScopeAll
+      ? frequencyFilterActive(frequencyFilter)
+      : Array.from({ length: Math.max(1, nPanels || 1) }, (_, panel) => frequencyKnobsForPanel(panel))
+          .some((knobs) => frequencyFilterActive(knobs.mode))
+  );
   const frequencyValueLabel = React.useCallback((value: number) => {
     const unit = String(pixelUnit || "").trim().toLowerCase();
     if (pixelSize > 0 && (unit === "nm" || unit.includes("nanometer"))) return `${(value / (2 * pixelSize)).toFixed(3)} nm⁻¹`;
@@ -4736,7 +4808,10 @@ function Show3D() {
     return `${value.toFixed(3)} Nyq`;
   }, [pixelSize, pixelUnit]);
   const setFrequencyMaster = (enabled: boolean) => {
-    if (enabled && !frequencyFilterActive(frequencyFilter)) setFrequencyFilter("lowpass");
+    if (enabled && !frequencyFilterActive(frequencyFilter)) {
+      setFrequencyFilter("lowpass");
+      syncFrequencyPanelKnob("mode", "lowpass");
+    }
     setFrequencyFilterEnabled(enabled);
     setShowFrequencyFilter(enabled); // reveal the settings row while filtering; hide it when off (mirrors Denoise)
   };
@@ -4758,8 +4833,10 @@ function Show3D() {
   const denoiseResolved = resolveDenoiseMode(displayFilter || "none", spatialBin || 1);
   const denoiseSigmaLive = sigmaDraft ?? Number(displaySigma ?? 4);
   const browserFilterKnobsOn = browserFilterActive
-    && filterKnobsActive(denoiseResolved.mode, denoiseResolved.bin)
-    && browserFilterSupported(denoiseResolved.mode);
+    && (denoiseScopeAll
+      ? filterKnobsActive(denoiseResolved.mode, denoiseResolved.bin) && browserFilterSupported(denoiseResolved.mode)
+      : Array.from({ length: Math.max(1, nPanels || 1) }, (_, panel) => denoiseKnobsForPanel(panel))
+          .some((knobs) => filterKnobsActive(knobs.mode, knobs.bin) && browserFilterSupported(knobs.mode)));
   // Filtered-frame cache keyed on the Python frame sequence as well as the
   // logical index and view knobs. During a live scrub, slice_idx can arrive
   // before the replacement frame_bytes. Without frameSeq, that old byte view
@@ -4770,11 +4847,11 @@ function Show3D() {
   const [browserFilterTick, setBrowserFilterTick] = React.useState(0);
   const applyPackedPanelTransform = React.useCallback(async (
     frame: Float32Array,
-    transform: (panelFrame: Float32Array, panelWidth: number, panelHeight: number) => Promise<Float32Array>,
+    transform: (panelFrame: Float32Array, panelWidth: number, panelHeight: number, panel: number) => Promise<Float32Array>,
   ): Promise<Float32Array> => {
     const panelCount = Math.max(1, nPanels || 1);
     if (panelCount <= 1 || sharedPanelSource || width % panelCount !== 0) {
-      return transform(frame, width, height);
+      return transform(frame, width, height, 0);
     }
     const panelWidth = width / panelCount;
     const output = new Float32Array(frame.length);
@@ -4786,7 +4863,7 @@ function Show3D() {
         const dstOffset = row * panelWidth;
         panelFrame.set(frame.subarray(srcOffset, srcOffset + panelWidth), dstOffset);
       }
-      const filtered = await transform(panelFrame, panelWidth, height);
+      const filtered = await transform(panelFrame, panelWidth, height, panel);
       for (let row = 0; row < height; row++) {
         const srcOffset = row * panelWidth;
         const dstOffset = row * width + srcX0;
@@ -4814,12 +4891,16 @@ function Show3D() {
   const browserFilterFrame = React.useCallback((idx: number, frame: Float32Array | null, options: { allowRawOnMiss?: boolean } = {}): Float32Array | null => {
     if (!frame || !browserFilterKnobsOn) return frame;
     const allowRawOnMiss = options.allowRawOnMiss !== false;
+    const scopedDenoiseKey = Array.from({ length: Math.max(1, nPanels || 1) }, (_, panel) => {
+      const knobs = denoiseKnobsForPanel(panel);
+      return `${panel}:${knobs.mode}:${Number(knobs.sigma).toFixed(2)}:${Math.round(knobs.bin)}`;
+    }).join("|");
     const key = browserFilterCacheKey({
       frameIndex: idx,
       frameSeq,
-      mode: denoiseResolved.mode,
-      sigma: denoiseSigmaLive,
-      bin: denoiseResolved.bin,
+      mode: denoiseScopeAll ? denoiseResolved.mode : scopedDenoiseKey,
+      sigma: denoiseScopeAll ? denoiseSigmaLive : 0,
+      bin: denoiseScopeAll ? denoiseResolved.bin : 1,
       avgWindow: playRef.current.avgWindow,
       diffMode: playRef.current.diffMode,
       panels: (Math.max(1, nPanels || 1) > 1 && !sharedPanelSource) ? Math.max(1, nPanels || 1) : 1,
@@ -4831,7 +4912,11 @@ function Show3D() {
     browserFilterPendingRef.current.add(key);
     applyPackedPanelTransform(
       frame,
-      (panelFrame, panelWidth, panelHeight) => applyDisplayFilterBrowser(panelFrame, panelWidth, panelHeight, denoiseResolved.mode, denoiseSigmaLive, denoiseResolved.bin),
+      (panelFrame, panelWidth, panelHeight, panel) => {
+        const knobs = denoiseScopeAll ? { mode: denoiseResolved.mode, sigma: denoiseSigmaLive, bin: denoiseResolved.bin } : denoiseKnobsForPanel(panel);
+        if (!filterKnobsActive(knobs.mode, knobs.bin)) return Promise.resolve(panelFrame);
+        return applyDisplayFilterBrowser(panelFrame, panelWidth, panelHeight, knobs.mode, knobs.sigma, knobs.bin);
+      },
     )
       .then((filtered) => {
         browserFilterPendingRef.current.delete(key);
@@ -4841,7 +4926,7 @@ function Show3D() {
       })
       .catch(() => { browserFilterPendingRef.current.delete(key); });
     return allowRawOnMiss ? frame : null;
-  }, [applyPackedPanelTransform, browserFilterKnobsOn, denoiseResolved.mode, denoiseResolved.bin, denoiseSigmaLive, frameSeq, height, nPanels, sharedPanelSource, width]);
+  }, [applyPackedPanelTransform, browserFilterKnobsOn, denoiseKnobsForPanel, denoiseResolved.mode, denoiseResolved.bin, denoiseScopeAll, denoiseSigmaLive, frameSeq, height, nPanels, sharedPanelSource, width]);
   // The "Denoise" toggle is the master ON/OFF of the EFFECT: ON shows the
   // denoised view, OFF shows raw (nothing of the denoised view leaks through).
   // The config (mode/sigma/bin) is PRESERVED across the toggle; a clean widget
@@ -4850,7 +4935,10 @@ function Show3D() {
     const next = !denoiseEnabled;
     setDenoiseEnabled(next);
     setShowDenoise(next); // editor follows: shown while denoising, hidden when raw
-    if (next && displayFilterOff) setDisplayFilter("gaussian");
+    if (next && displayFilterOff) {
+      setDisplayFilter("gaussian");
+      syncDenoisePanelKnob("mode", "gaussian");
+    }
     // Turning OFF preserves the config; browserFilterActive gates the display.
   };
   const [imageRotation, setImageRotation] = useModelState<number>("image_rotation");
@@ -8650,17 +8738,23 @@ function Show3D() {
 
   const frequencyFilterKeyForIndex = React.useCallback((idx: number) => {
     const mode = normalizeFrequencyFilterMode(frequencyFilter);
+    const scopedFrequencyKey = frequencyFilterScopeAll
+      ? ""
+      : Array.from({ length: Math.max(1, nPanels || 1) }, (_, panel) => {
+          const knobs = frequencyKnobsForPanel(panel);
+          return `${panel}:${knobs.mode}:${Number(knobs.cutoff).toFixed(4)}:${Number(knobs.center).toFixed(4)}:${Number(knobs.width).toFixed(4)}`;
+        }).join("|");
     const packedPanels = (Math.max(1, nPanels || 1) > 1 && !sharedPanelSource) ? Math.max(1, nPanels || 1) : 1;
     return [
       Math.round(idx),
       frameSeq,
-      mode,
+      frequencyFilterScopeAll ? mode : scopedFrequencyKey,
       Number(frequencyOptions.cutoff ?? 0).toFixed(4),
       Number(frequencyOptions.center ?? 0).toFixed(4),
       Number(frequencyOptions.width ?? 0).toFixed(4),
       `panels${packedPanels}`,
     ].join(":");
-  }, [frameSeq, frequencyFilter, frequencyOptions, nPanels, sharedPanelSource]);
+  }, [frameSeq, frequencyFilter, frequencyFilterScopeAll, frequencyKnobsForPanel, frequencyOptions, nPanels, sharedPanelSource]);
 
   const frequencyFilterFrameForDisplay = React.useCallback((idx: number, frame: Float32Array | null, options: { allowRawOnMiss?: boolean } = {}): Float32Array | null => {
     if (!frame || !frequencyFilterIsActive) return frame;
@@ -8673,7 +8767,11 @@ function Show3D() {
     frequencyFilterPendingRef.current.add(key);
     applyPackedPanelTransform(
       frame,
-      (panelFrame, panelWidth, panelHeight) => applyFrequencyFilterBrowser(panelFrame, panelWidth, panelHeight, frequencyOptions),
+      (panelFrame, panelWidth, panelHeight, panel) => {
+        const knobs = frequencyFilterScopeAll ? frequencyOptions : frequencyKnobsForPanel(panel);
+        if (!frequencyFilterActive(knobs.mode)) return Promise.resolve(panelFrame);
+        return applyFrequencyFilterBrowser(panelFrame, panelWidth, panelHeight, knobs);
+      },
     )
       .then((filtered) => {
         frequencyFilterPendingRef.current.delete(key);
@@ -8687,7 +8785,7 @@ function Show3D() {
         console.warn("[Show3D] frequency filter failed; showing unfiltered frame", error);
       });
     return allowRawOnMiss ? frame : null;
-  }, [applyPackedPanelTransform, frequencyFilterIsActive, frequencyFilterKeyForIndex, frequencyOptions, height, width]);
+  }, [applyPackedPanelTransform, frequencyFilterIsActive, frequencyFilterKeyForIndex, frequencyFilterScopeAll, frequencyKnobsForPanel, frequencyOptions, height, width]);
 
   const displayFrameForIndex = (idx: number, currentFrame: Float32Array | null, options: { allowRawOnMiss?: boolean } = {}): Float32Array | null => {
     const activeCompareMode = String(compareMode || "off");
@@ -13014,9 +13112,9 @@ function Show3D() {
     if (
       offline &&
       sidecarMode &&
-      sidecarRamReadyRef.current &&
       !isRgb &&
-      sidecarViewTransformActive()
+      sidecarViewTransformActive() &&
+      sidecarRamReadyRef.current
     ) {
       if (transformRenderRafRef.current !== null) {
         window.cancelAnimationFrame(transformRenderRafRef.current);
@@ -18804,7 +18902,7 @@ function Show3D() {
             {/* Per-panel "best frame" stars. One gold ★ button top-right of
                 each panel. Click toggles the star on the currently displayed
                 slice for THAT panel. Programmatic API: widget.star_panel(i). */}
-	            {panelChromeVisible && visiblePanelIndices.map((i, slot) => {
+	            {panelChromeVisible && hasPanelChoices && visiblePanelIndices.map((i, slot) => {
               const n = Math.max(1, visiblePanelCount || 1);
               const cols = panelColsForCount(n);
               const gap = n > 1 ? (panelGapPx) : 0;
@@ -19321,7 +19419,7 @@ function Show3D() {
                     )}
                     MenuProps={themedFastMenuProps}
                     sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}
-                    inputProps={{ "aria-label": nPanels > 1 ? "Current panel colormap" : "Image colormap" }}
+                    inputProps={{ "aria-label": nPanels > 1 ? (colorShared ? "Shared colormap for all panels" : "Hovered or selected panel colormap") : "Image colormap" }}
                   >
                     {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name} dense>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
                   </Select>
@@ -19346,51 +19444,63 @@ function Show3D() {
                 {/* Row 3 (toggle-gated): display-only denoise for sparse map stacks (EDS, low dose) */}
                 {showDenoise && (
                 <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+                  {nPanels > 1 && (
+                    <>
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }} title="Link denoise settings across all panels. Off edits only the selected panel.">Link Denoise</Typography>
+                      <Switch checked={denoiseScopeAll} onChange={() => setDenoiseScope(denoiseScopeAll ? "panel" : "all")} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle linked denoise settings across panels" } }} />
+                    </>
+                  )}
                   <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }} title="Poisson (Anscombe): count-respecting smoothing for sparse EDS/counting data - recommended with Bin 2, sigma 6-10. Gaussian: simple smooth for decent-dose images. None: raw counts (use for anything quantitative).">Denoise</Typography>
-                  <Select size="small" value={resolveDenoiseMode(displayFilter || "none").mode} onChange={(e) => { setDisplayFilter(e.target.value); if (resolveDenoiseMode(e.target.value).mode !== "none" || (spatialBin || 1) > 1) setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 88, fontSize: 10 }} inputProps={{ "aria-label": "Display-only denoise method" }}>
+                  <Select size="small" value={denoiseKnobsForPanel(scopedPanelForEdit).mode} onChange={(e) => { const value = String(e.target.value); setDisplayFilter(value); syncDenoisePanelKnob("mode", value); if (resolveDenoiseMode(value).mode !== "none" || (denoiseKnobsForPanel(scopedPanelForEdit).bin || 1) > 1) setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 88, fontSize: 10 }} inputProps={{ "aria-label": denoiseScopeAll ? "Display-only denoise method for all panels" : "Display-only denoise method for selected panel" }}>
                     {[["none", "None"], ["gaussian", "Gaussian"], ["anscombe", "Poisson (Anscombe)"]].map(([mode, label]) => (
                       <MenuItem key={mode} value={mode}>{label}</MenuItem>
                     ))}
                   </Select>
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 40, display: "inline-block" }}>σ {(sigmaDraft ?? Number(displaySigma ?? 4)).toFixed(1)}</Typography>
+                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 40, display: "inline-block" }}>σ {(sigmaDraft ?? denoiseKnobsForPanel(scopedPanelForEdit).sigma).toFixed(1)}</Typography>
                   <Slider
-                    value={sigmaDraft ?? Number(displaySigma ?? 4)}
+                    value={sigmaDraft ?? denoiseKnobsForPanel(scopedPanelForEdit).sigma}
                     min={0} max={20} step={0.5}
-                    onChange={(_, v) => { if (displayFilterOff) setDisplayFilter("gaussian"); setSigmaDraft(v as number); }}
-                    onChangeCommitted={(_, v) => { setDisplaySigma(v as number); setSigmaDraft(null); if (displayFilterOff) setDisplayFilter("gaussian"); setDenoiseEnabled(true); }}
+                    onChange={(_, v) => { if (displayFilterOff) { setDisplayFilter("gaussian"); syncDenoisePanelKnob("mode", "gaussian"); } setSigmaDraft(v as number); }}
+                    onChangeCommitted={(_, v) => { setDisplaySigma(v as number); syncDenoisePanelKnob("sigma", v as number); setSigmaDraft(null); if (displayFilterOff) { setDisplayFilter("gaussian"); syncDenoisePanelKnob("mode", "gaussian"); } setDenoiseEnabled(true); }}
                     size="small" sx={{ ...sliderStyles.small, width: 60 }}
                     aria-label="Display filter sigma in pixels"
                   />
                   <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }} title="Display-side 2x bin passes for SNR, combined with the denoise method. 1 is lossless.">Bin</Typography>
-                  <Select size="small" value={String(spatialBin || 1)} onChange={(e) => { const b = parseInt(e.target.value, 10); setSpatialBin(b); if (b > 1 || resolveDenoiseMode(displayFilter || "none").mode !== "none") setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 40, fontSize: 10 }} inputProps={{ "aria-label": "Display spatial bin factor" }}>
+                  <Select size="small" value={String(denoiseKnobsForPanel(scopedPanelForEdit).bin || 1)} onChange={(e) => { const b = parseInt(e.target.value, 10); setSpatialBin(b); syncDenoisePanelKnob("bin", b); if (b > 1 || resolveDenoiseMode(denoiseKnobsForPanel(scopedPanelForEdit).mode).mode !== "none") setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 40, fontSize: 10 }} inputProps={{ "aria-label": denoiseScopeAll ? "Display spatial bin factor for all panels" : "Display spatial bin factor for selected panel" }}>
                     {[1, 2, 4].map((b) => (<MenuItem key={b} value={String(b)}>{b}</MenuItem>))}
                   </Select>
                 </Box>
                 )}
                 {showFrequencyFilter && (
                 <Box sx={{ ...controlRow, ...mobileControlRowSx, width: "100%", maxWidth: "100%", border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+                  {nPanels > 1 && (
+                    <Box sx={{ display: "inline-flex", alignItems: "center", gap: `${SPACING.XS}px`, flexWrap: "nowrap" }}>
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }} title="Link frequency filter settings across all panels. Off edits only the selected panel.">Link Filter</Typography>
+                      <Switch checked={frequencyFilterScopeAll} onChange={() => setFrequencyFilterScope(frequencyFilterScopeAll ? "panel" : "all")} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle linked frequency filter settings across panels" } }} />
+                    </Box>
+                  )}
                   <Box sx={{ display: "inline-flex", alignItems: "center", gap: `${SPACING.XS}px`, flexWrap: "nowrap" }}>
                     <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }} title="Low-pass removes fine detail; High-pass removes slow background; Band-pass isolates a periodicity.">Filter</Typography>
-                    <Select size="small" value={normalizeFrequencyFilterMode(frequencyFilter)} onChange={(event) => { const mode = String(event.target.value); setFrequencyFilter(mode); if (mode !== "none") setFrequencyFilterEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 84, fontSize: 10 }} inputProps={{ "aria-label": "Frequency filter mode" }}>
+                    <Select size="small" value={frequencyKnobsForPanel(scopedPanelForEdit).mode} onChange={(event) => { const mode = String(event.target.value); setFrequencyFilter(mode); syncFrequencyPanelKnob("mode", mode); if (mode !== "none") setFrequencyFilterEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 84, fontSize: 10 }} inputProps={{ "aria-label": frequencyFilterScopeAll ? "Frequency filter mode for all panels" : "Frequency filter mode for selected panel" }}>
                       <MenuItem value="none">None</MenuItem>
                       <MenuItem value="lowpass">Low-pass</MenuItem>
                       <MenuItem value="highpass">High-pass</MenuItem>
                       <MenuItem value="bandpass">Band-pass</MenuItem>
                     </Select>
                   </Box>
-                  {normalizeFrequencyFilterMode(frequencyFilter) === "bandpass" ? (<>
+                  {frequencyKnobsForPanel(scopedPanelForEdit).mode === "bandpass" ? (<>
                     <Box sx={{ display: "inline-flex", alignItems: "center", gap: `${SPACING.XS}px`, flexWrap: "nowrap" }}>
-                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 84, display: "inline-block" }}>Center {frequencyValueLabel(frequencyDraft ?? frequencyFilterCenter)}</Typography>
-                      <Slider value={frequencyDraft ?? frequencyFilterCenter} min={0} max={1} step={0.005} onChange={(_, value) => setFrequencyDraft(value as number)} onChangeCommitted={(_, value) => { setFrequencyFilterCenter(value as number); setFrequencyDraft(null); }} size="small" sx={{ ...sliderStyles.small, width: 72 }} aria-label="Band-pass center as fraction of Nyquist" />
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 84, display: "inline-block" }}>Center {frequencyValueLabel(frequencyDraft ?? frequencyKnobsForPanel(scopedPanelForEdit).center)}</Typography>
+                      <Slider value={frequencyDraft ?? frequencyKnobsForPanel(scopedPanelForEdit).center} min={0} max={1} step={0.005} onChange={(_, value) => setFrequencyDraft(value as number)} onChangeCommitted={(_, value) => { setFrequencyFilterCenter(value as number); syncFrequencyPanelKnob("center", value as number); setFrequencyDraft(null); }} size="small" sx={{ ...sliderStyles.small, width: 72 }} aria-label="Band-pass center as fraction of Nyquist" />
                     </Box>
                     <Box sx={{ display: "inline-flex", alignItems: "center", gap: `${SPACING.XS}px`, flexWrap: "nowrap" }}>
-                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 80, display: "inline-block" }}>Width {frequencyValueLabel(frequencyFilterWidth)}</Typography>
-                      <Slider value={frequencyFilterWidth} min={0.01} max={1} step={0.005} onChange={(_, value) => setFrequencyFilterWidth(value as number)} size="small" sx={{ ...sliderStyles.small, width: 72 }} aria-label="Band-pass width as fraction of Nyquist" />
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 80, display: "inline-block" }}>Width {frequencyValueLabel(frequencyKnobsForPanel(scopedPanelForEdit).width)}</Typography>
+                      <Slider value={frequencyKnobsForPanel(scopedPanelForEdit).width} min={0.01} max={1} step={0.005} onChange={(_, value) => { setFrequencyFilterWidth(value as number); syncFrequencyPanelKnob("width", value as number); }} size="small" sx={{ ...sliderStyles.small, width: 72 }} aria-label="Band-pass width as fraction of Nyquist" />
                     </Box>
                   </>) : (<>
                     <Box sx={{ display: "inline-flex", alignItems: "center", gap: `${SPACING.XS}px`, flexWrap: "nowrap" }}>
-                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 84, display: "inline-block" }}>Cutoff {frequencyValueLabel(frequencyDraft ?? frequencyFilterCutoff)}</Typography>
-                      <Slider value={frequencyDraft ?? frequencyFilterCutoff} min={0} max={1} step={0.005} disabled={!frequencyFilterActive(frequencyFilter)} onChange={(_, value) => setFrequencyDraft(value as number)} onChangeCommitted={(_, value) => { setFrequencyFilterCutoff(value as number); setFrequencyDraft(null); }} size="small" sx={{ ...sliderStyles.small, width: 72 }} aria-label="Frequency cutoff as fraction of Nyquist" />
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 84, display: "inline-block" }}>Cutoff {frequencyValueLabel(frequencyDraft ?? frequencyKnobsForPanel(scopedPanelForEdit).cutoff)}</Typography>
+                      <Slider value={frequencyDraft ?? frequencyKnobsForPanel(scopedPanelForEdit).cutoff} min={0} max={1} step={0.005} disabled={!frequencyFilterActive(frequencyKnobsForPanel(scopedPanelForEdit).mode)} onChange={(_, value) => setFrequencyDraft(value as number)} onChangeCommitted={(_, value) => { setFrequencyFilterCutoff(value as number); syncFrequencyPanelKnob("cutoff", value as number); setFrequencyDraft(null); }} size="small" sx={{ ...sliderStyles.small, width: 72 }} aria-label="Frequency cutoff as fraction of Nyquist" />
                     </Box>
                   </>)}
                 </Box>

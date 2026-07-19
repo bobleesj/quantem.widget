@@ -3441,7 +3441,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             self.stats_mean = np.mean(self._data, axis=axes).ravel().tolist()
             self.stats_min = np.min(self._data, axis=axes).ravel().tolist()
             self.stats_max = np.max(self._data, axis=axes).ravel().tolist()
-            self.stats_std = [0.0] * len(self.stats_mean)
+            self.stats_std = np.std(self._data, axis=axes).ravel().tolist()
         else:
             self._compute_all_stats()
 
@@ -6619,21 +6619,39 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
     def save(self, path: str):
         save_state_file(path, "Show2D", self.state_dict())
 
+    _HTML_EXPORT_SAFE_MB = 80.0
+
+    def _estimate_html_export_mb(self, *, quantized: bool, downsample: int) -> float:
+        """Rough MB an embedded single-file Show2D HTML would occupy."""
+        downsample_factor = max(1, int(downsample))
+        has_local_stacks = any(count > 1 for count in self.panel_frame_counts)
+        if has_local_stacks and getattr(self, "_display_panel_stacks", None):
+            elements = sum(int(np.prod(stack.shape)) for stack in self._display_panel_stacks)
+        else:
+            data = self._display_data if self._display_data is not None else self._data
+            elements = int(np.prod(data.shape)) if data is not None else 0
+        elements //= downsample_factor**2
+        bytes_per = 1 if quantized else 4
+        payload_mb = elements * bytes_per * (4.0 / 3.0) / (1024 * 1024)
+        return payload_mb + 2.0
+
     def export_html(self, path: str | pathlib.Path | None = None,
                     *,
                     title: str | None = None,
                     mode: str = "single",
                     encoding: str = "full",
                     downsample: int | None = None,
-                    quantized: bool | None = None) -> pathlib.Path:
+                    quantized: bool | None = None,
+                    max_mb: float | None = _HTML_EXPORT_SAFE_MB) -> pathlib.Path:
         """Write a standalone HTML viewer for this widget.
 
         The exported file mounts the live anywidget JS bundle with the current
         widget state (data, labels, cmap, vmin/vmax, log_scale, sampling, ...).
         Opens in any browser without a Jupyter kernel.
         Preferred export options are ``mode="single"``, ``encoding="full"`` or
-        ``encoding="uint8"``, and ``downsample=None``. ``quantized`` is kept as
-        a compatibility alias for ``encoding="uint8"``.
+        ``encoding="uint8"``, and ``downsample=None``. Use ``downsample=2`` /
+        ``4`` / ``8`` with ``encoding="uint8"`` for compact visual reports.
+        ``quantized`` is kept as a compatibility alias for ``encoding="uint8"``.
 
         Parameters
         ----------
@@ -6654,16 +6672,43 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 "the export clone rebuilds from the grayscale stack and would drop the color channels."
             )
 
-        export_mode, quantized = self._normalise_html_export_options(
+        export_mode, quantized, downsample_factor = self._normalise_html_export_options(
             mode=mode,
             encoding=encoding,
             downsample=downsample,
             quantized=quantized,
         )
-        export_path = pathlib.Path(path) if path is not None else self._default_html_export_path(quantized)
-        self._write_html_export(export_path, quantized=quantized, title=title, mode=export_mode)
+        if export_mode == "single" and max_mb is not None:
+            estimate_mb = self._estimate_html_export_mb(
+                quantized=quantized,
+                downsample=downsample_factor,
+            )
+            if estimate_mb > float(max_mb):
+                uint8_mb = self._estimate_html_export_mb(
+                    quantized=True,
+                    downsample=downsample_factor,
+                )
+                raise ValueError(
+                    f"This export would embed about {estimate_mb:.0f} MB into one HTML file, "
+                    f"above the {float(max_mb):.0f} MB safe limit (large single-file exports often "
+                    f"fail to open under Chrome file://). Options: encoding='uint8' "
+                    f"(about {uint8_mb:.0f} MB), downsample=2 or 4 to shrink spatially, "
+                    f"mode='folder' for a thin HTML plus nearby data folder, or pass "
+                    f"max_mb={estimate_mb:.0f} to force this size."
+                )
+        export_path = pathlib.Path(path) if path is not None else self._default_html_export_path(
+            quantized,
+            downsample=downsample_factor,
+        )
+        self._write_html_export(
+            export_path,
+            quantized=quantized,
+            title=title,
+            mode=export_mode,
+            downsample=downsample_factor,
+        )
         size_mb = export_path.stat().st_size / (1024 * 1024)
-        label = self._export_mode_label(quantized)
+        label = self._export_mode_label(quantized, downsample=downsample_factor)
         mode_label = "folder, " if export_mode == "folder" else ""
         self.export_status = f"Exported {export_path.name} ({size_mb:.1f} MB, {mode_label}{label})"
         return export_path
@@ -6675,7 +6720,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         encoding: str = "full",
         downsample: int | None = None,
         quantized: bool | None = None,
-    ) -> tuple[str, bool]:
+    ) -> tuple[str, bool, int]:
         raw_mode = str(mode or "single").strip().lower().replace("_", "-")
         if raw_mode in {"exact", "full"}:
             raw_mode = "single"
@@ -6687,17 +6732,27 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             raw_mode = "folder"
         if raw_mode not in {"single", "folder"}:
             raise ValueError("Show2D HTML export supports mode='single' or mode='folder'")
-        if downsample not in (None, 1, "1", "", 0, "0"):
-            raise NotImplementedError("Show2D HTML export does not support downsample yet")
+        if downsample in (None, "", 0, "0"):
+            downsample_factor = 1
+        else:
+            if isinstance(downsample, bool):
+                raise ValueError("Show2D HTML export downsample must be an integer factor, not bool")
+            downsample_factor = int(downsample)
+        if downsample_factor < 1:
+            raise ValueError(f"Show2D HTML export downsample must be >= 1, got {downsample!r}")
+        if downsample_factor not in {1, 2, 4, 8}:
+            raise ValueError("Show2D HTML export downsample must be one of 1, 2, 4, or 8")
         raw_encoding = str(encoding or "full").strip().lower().replace("_", "-")
         if quantized is True:
             raw_encoding = "uint8"
         elif quantized is False and raw_encoding in {"quantized", "uint8", "u8"}:
             raw_encoding = "uint8"
         if raw_encoding in {"full", "exact", "float32", "f32"}:
-            return raw_mode, False
+            if downsample_factor != 1:
+                raise ValueError("Show2D exact float32 HTML export does not support downsample; use encoding='uint8'")
+            return raw_mode, False, downsample_factor
         if raw_encoding in {"uint8", "u8", "quantized"}:
-            return raw_mode, True
+            return raw_mode, True, downsample_factor
         raise ValueError(f"unknown Show2D export encoding {encoding!r}; expected 'full' or 'uint8'")
 
     def _on_export_request_change(self, change: dict) -> None:
@@ -6712,26 +6767,29 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 self.export_payload_id = ""
                 self.export_filename = ""
                 return
-            export_mode, quantized = self._normalise_html_export_options(
+            export_mode, quantized, downsample_factor = self._normalise_html_export_options(
                 mode=mode,
                 encoding=str(payload.get("encoding", "full")),
                 downsample=payload.get("downsample"),
                 quantized=None,
             )
             if payload.get("download"):
-                filename = str(payload.get("filename") or self._default_html_export_path(quantized).name)
+                filename = str(payload.get("filename") or self._default_html_export_path(
+                    quantized,
+                    downsample=downsample_factor,
+                ).name)
                 request_id = str(payload.get("id") or "")
                 self.export_status = f"Preparing {filename}..."
-                html = self._html_export_bytes(quantized=quantized)
+                html = self._html_export_bytes(quantized=quantized, downsample=downsample_factor)
                 self.export_filename = filename
                 self.export_payload = html
                 self.export_payload_id = request_id
                 size_mb = len(html) / (1024 * 1024)
-                label = self._export_mode_label(quantized)
+                label = self._export_mode_label(quantized, downsample=downsample_factor)
                 self.export_status = f"Ready {filename} ({size_mb:.1f} MB, {label})"
             else:
                 self.export_status = f"Exporting {mode} HTML..."
-                self.export_html(mode=export_mode, quantized=quantized)
+                self.export_html(mode=export_mode, quantized=quantized, downsample=downsample_factor)
         except Exception as exc:
             self.export_status = f"Export failed: {exc}"
 
@@ -6759,7 +6817,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         except Exception as exc:
             self.saved_view_status = f"State action failed: {exc}"
 
-    def _default_html_export_path(self, quantized: bool) -> pathlib.Path:
+    def _default_html_export_path(self, quantized: bool, *, downsample: int = 1) -> pathlib.Path:
         label = self.title.strip() or "show2d"
         slug = "".join(ch.lower() if ch.isalnum() else "_" for ch in label).strip("_")
         while "__" in slug:
@@ -6767,11 +6825,16 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         if not slug:
             slug = "show2d"
         mode = "quantized" if quantized else "exact"
+        suffix = f"_{int(downsample)}xdownsample" if quantized and int(downsample) > 1 else ""
         shape = f"{self.n_images}x{self.height}x{self.width}" if self.n_images > 1 else f"{self.height}x{self.width}"
-        return pathlib.Path.cwd() / f"{slug}_{shape}_{mode}.html"
+        return pathlib.Path.cwd() / f"{slug}_{shape}_{mode}{suffix}.html"
 
-    def _export_mode_label(self, quantized: bool) -> str:
-        return "uint8" if quantized else "full float32"
+    def _export_mode_label(self, quantized: bool, *, downsample: int = 1) -> str:
+        if not quantized:
+            return "full float32"
+        if int(downsample) > 1:
+            return f"uint8, {int(downsample)}x downsample"
+        return "uint8"
 
     def _write_html_export(
         self,
@@ -6780,6 +6843,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         quantized: bool,
         title: str | None = None,
         mode: str = "single",
+        downsample: int = 1,
     ) -> pathlib.Path:
         from ipywidgets.embed import dependency_state, embed_minimal_html
 
@@ -6797,7 +6861,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             )
             ensure_mobile_viewport(export_path)
             return export_path
-        export_widget = self._clone_for_html_export(quantized=quantized)
+        export_widget = self._clone_for_html_export(quantized=quantized, downsample=downsample)
         try:
             if mode == "folder":
                 data_dir = export_path.parent / f"{export_path.stem}_files"
@@ -6996,13 +7060,16 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             encoding="utf-8",
         )
 
-    def _html_export_bytes(self, *, quantized: bool) -> bytes:
+    def _html_export_bytes(self, *, quantized: bool, downsample: int = 1) -> bytes:
         with tempfile.TemporaryDirectory(prefix="show2d-export-") as tmp:
-            path = pathlib.Path(tmp) / self._default_html_export_path(quantized).name
-            self._write_html_export(path, quantized=quantized)
+            path = pathlib.Path(tmp) / self._default_html_export_path(
+                quantized,
+                downsample=downsample,
+            ).name
+            self._write_html_export(path, quantized=quantized, downsample=downsample)
             return path.read_bytes()
 
-    def _clone_for_html_export(self, *, quantized: bool) -> Self:
+    def _clone_for_html_export(self, *, quantized: bool, downsample: int = 1) -> Self:
         if any(self.is_rgb):
             raise NotImplementedError(
                 "HTML export is not supported when the gallery contains RGB panels; "
@@ -7011,17 +7078,36 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         data = self._display_data if self._display_data is not None else self._data
         if data is None:
             raise ValueError("Cannot export HTML after free(); rebuild the widget first.")
+        downsample = int(downsample)
+
+        def downsample_frame(frame: np.ndarray) -> np.ndarray:
+            arr = np.ascontiguousarray(frame, dtype=np.float32)
+            if downsample <= 1:
+                return arr
+            from quantem.widget.utils.array import bin2d
+            return np.ascontiguousarray(bin2d(arr, factor=downsample, mode="mean"), dtype=np.float32)
+
+        def downsample_stack(stack: np.ndarray) -> np.ndarray:
+            arr = np.ascontiguousarray(stack, dtype=np.float32)
+            if downsample <= 1:
+                return arr
+            return np.ascontiguousarray(
+                np.stack([downsample_frame(frame) for frame in arr], axis=0),
+                dtype=np.float32,
+            )
+
         has_local_stacks = any(count > 1 for count in self.panel_frame_counts)
         if has_local_stacks:
             display_stacks = getattr(self, "_display_panel_stacks", None)
             if not display_stacks:
                 raise ValueError("Cannot export local panel stacks after their data has been freed")
             export_data = [
-                np.ascontiguousarray(stack if stack.shape[0] > 1 else stack[0], dtype=np.float32)
+                downsample_stack(stack) if stack.shape[0] > 1 else downsample_frame(stack[0])
                 for stack in display_stacks
             ]
         else:
-            export_data = np.ascontiguousarray(data, dtype=np.float32)
+            export_data = downsample_stack(data)
+        export_pixel_size = self.pixel_size * downsample if self.pixel_size > 0 else self.pixel_size
         clone = type(self)(
             export_data,
             labels=list(self.labels),
@@ -7029,7 +7115,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             title=self.title,
             show_title=self.show_title,
             cmap=list(self.panel_cmaps) if self.panel_cmaps else self.cmap,
-            sampling=self.pixel_size if self.pixel_size > 0 else None,
+            sampling=export_pixel_size if export_pixel_size > 0 else None,
             units=self.pixel_unit,
             scale_bar_visible=self.scale_bar_visible,
             scale_bar_position=self.scale_bar_position,
