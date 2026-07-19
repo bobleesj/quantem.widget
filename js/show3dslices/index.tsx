@@ -853,6 +853,70 @@ const LiveNumberSlider = React.memo(function LiveNumberSlider({
   );
 });
 
+interface NumberCommitInputProps {
+  value: number;
+  step?: number;
+  onCommit: (value: number) => void;
+  ariaLabel: string;
+}
+
+function formatNumberInput(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  if (Math.abs(value) >= 100) return value.toFixed(1);
+  if (Math.abs(value) >= 10) return value.toFixed(2);
+  return value.toFixed(3);
+}
+
+const NumberCommitInput = React.memo(function NumberCommitInput({
+  value, step = 0.05, onCommit, ariaLabel,
+}: NumberCommitInputProps) {
+  const [draft, setDraft] = React.useState(formatNumberInput(value));
+  React.useEffect(() => { setDraft(formatNumberInput(value)); }, [value]);
+  const commitDraft = () => {
+    const next = Number(draft);
+    if (!Number.isFinite(next)) {
+      setDraft(formatNumberInput(value));
+      return;
+    }
+    setDraft(formatNumberInput(next));
+    onCommit(next);
+  };
+  return (
+    <Box
+      component="input"
+      type="number"
+      value={draft}
+      step={step}
+      aria-label={ariaLabel}
+      onChange={(event) => setDraft(event.currentTarget.value)}
+      onBlur={commitDraft}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.currentTarget.blur();
+        } else if (event.key === "Escape") {
+          setDraft(formatNumberInput(value));
+          event.currentTarget.blur();
+        }
+      }}
+      sx={{
+        width: 48,
+        height: 20,
+        boxSizing: "border-box",
+        px: 0.5,
+        border: "1px solid",
+        borderColor: "divider",
+        borderRadius: 0.5,
+        bgcolor: "background.paper",
+        color: "text.primary",
+        fontSize: 10,
+        fontFamily: "monospace",
+        textAlign: "right",
+        "&:focus": { outline: "1px solid", outlineColor: "primary.main" },
+      }}
+    />
+  );
+});
+
 const controlLabel = { ...typography.label, ...typographyLabel };
 const clickableControlLabel = {
   ...controlLabel,
@@ -5347,9 +5411,12 @@ function Show3DSlices() {
                     sx={{ ...sliderStyles.small, width: 58, flexShrink: 0 }}
                     ariaLabel={`Row shift per slice ${liveRowShift.toFixed(3)} pixels`}
                   />
-                  <Typography sx={{ ...typography.value, color: tc.textMuted, minWidth: 42, textAlign: "right" }}>
-                    {liveRowShift >= 0 ? "+" : ""}{liveRowShift.toFixed(2)}
-                  </Typography>
+                  <NumberCommitInput
+                    value={liveRowShift}
+                    step={0.05}
+                    onCommit={(value) => commitManualSliceAlignment(value, liveColShift)}
+                    ariaLabel="Edit row shift per slice"
+                  />
                   <Typography sx={{ ...controlLabel, color: tc.textMuted }}>Col</Typography>
                   <LiveNumberSlider
                     value={liveColShift}
@@ -5361,9 +5428,12 @@ function Show3DSlices() {
                     sx={{ ...sliderStyles.small, width: 58, flexShrink: 0 }}
                     ariaLabel={`Column shift per slice ${liveColShift.toFixed(3)} pixels`}
                   />
-                  <Typography sx={{ ...typography.value, color: tc.textMuted, minWidth: 42, textAlign: "right" }}>
-                    {liveColShift >= 0 ? "+" : ""}{liveColShift.toFixed(2)}
-                  </Typography>
+                  <NumberCommitInput
+                    value={liveColShift}
+                    step={0.05}
+                    onCommit={(value) => commitManualSliceAlignment(liveRowShift, value)}
+                    ariaLabel="Edit column shift per slice"
+                  />
                 </>
               )}
               <Button
