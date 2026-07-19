@@ -1,6 +1,7 @@
 """Show4DSTEM precomputed image-source maps."""
 
 import json
+import pathlib
 import sys
 import time
 import types
@@ -232,8 +233,59 @@ def test_show4dstem_ssb_advanced_overrides_are_synced():
     assert widget.ssb_compute_bf_subsample == 0.5
 
 
+def test_show4dstem_frontend_more_menu_direct_ptycho_contract():
+    """C7d: More menu, expect one-click phase compute plus advanced controls."""
+    source = pathlib.Path("js/show4dstem/index.tsx").read_text()
+    request = source[
+        source.index("const requestSsbCompute = React.useCallback("):
+        source.index("const requestSsbManualReconstruct", source.index("const requestSsbCompute = React.useCallback("))
+    ]
+    more_menu = source[
+        source.index("{ssbComputeEnabled && <Button"):
+        source.index("{exportEnabled && (localHtmlExportStatus || exportStatus)", source.index("{ssbComputeEnabled && <Button"))
+    ]
+    calibration_panel = source[
+        source.index("{showSsbCalibrationPanel && ("):
+        source.index("{effectiveShowFft && (", source.index("{showSsbCalibrationPanel && ("))
+    ]
+
+    assert "title=\"More actions\"" in more_menu
+    assert "More" in more_menu
+    assert "Calculate Phase" in more_menu
+    assert "Compute SSB" not in more_menu
+    assert "Trials" in more_menu
+    assert "<MenuItem value={200}>200</MenuItem>" in more_menu
+    assert "Refine" in more_menu
+    assert "BF ratio" in more_menu
+    assert "<MenuItem value={0.3}>0.3</MenuItem>" in more_menu
+    assert "<MenuItem value={0.5}>0.5</MenuItem>" in more_menu
+    assert "<MenuItem value={1}>1.0</MenuItem>" in more_menu
+    assert "Lock C10" in more_menu
+    assert "Lock C12" in more_menu
+    assert "Default is 200 trials, refine on, BF ratio 0.3" in more_menu
+    assert "Download calibration JSON" in more_menu
+    assert "Running SSB..." in source
+
+    assert 'action: "compute_ssb"' in request
+    assert "n_trials: nTrials" in request
+    assert "refine: Boolean(ssbComputeRefine)" in request
+    assert "bf_subsample: bfSubsample" in request
+    assert "manual_aberrations: manualAberrations" in request
+    assert "model.set(\"ssb_compute_request\", payload);" in request
+    assert "model.save_changes();" in request
+
+    assert "SSB calibration" in calibration_panel
+    assert "Download JSON" in calibration_panel
+    assert "scheduleSsbTuneCommit" in calibration_panel
+    assert "commitSsbTuneNow" in calibration_panel
+    assert "C10" in calibration_panel
+    assert "C12" in calibration_panel
+    assert "φ12" in calibration_panel
+    assert "Rotation" in calibration_panel
+
+
 def test_show4dstem_ssb_manual_coeff_request_passes_solver_kwargs(monkeypatch):
-    """C7d: manual SSB coefficients are opt-in and passed in solver units."""
+    """C7e: manual SSB coefficients are opt-in and passed in solver units."""
     phase = np.full((4, 4), -0.5, dtype=np.float32)
     seen = {}
 

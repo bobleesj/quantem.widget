@@ -1429,6 +1429,14 @@ type Show2DPerfCounters = {
   galleryFftPending: number;
   galleryFftActiveKeys: string[];
   lastGalleryFftMs: number;
+  mainCanvasPaintCount: number;
+  lastMainCanvasPaintAt: number;
+  lastMainCanvasPaintPanel: number | null;
+  zoomPanEventCount: number;
+  lastZoomPanEventAt: number;
+  lastZoomPanEventKind: string;
+  lastZoomPanPaintLatencyMs: number | null;
+  zoomPanPaintLatenciesMs: number[];
 };
 
 function show2dPerfDebug(): Show2DPerfCounters | null {
@@ -1446,9 +1454,43 @@ function show2dPerfDebug(): Show2DPerfCounters | null {
       galleryFftPending: 0,
       galleryFftActiveKeys: [],
       lastGalleryFftMs: 0,
+      mainCanvasPaintCount: 0,
+      lastMainCanvasPaintAt: 0,
+      lastMainCanvasPaintPanel: null,
+      zoomPanEventCount: 0,
+      lastZoomPanEventAt: 0,
+      lastZoomPanEventKind: "",
+      lastZoomPanPaintLatencyMs: null,
+      zoomPanPaintLatenciesMs: [],
     };
   }
   return host.__quantemShow2DPerf;
+}
+
+function recordShow2DZoomPanEvent(kind: string): void {
+  const perf = show2dPerfDebug();
+  if (!perf) return;
+  perf.lastZoomPanEventAt = performance.now();
+  perf.lastZoomPanEventKind = kind;
+  perf.zoomPanEventCount += 1;
+}
+
+function recordShow2DMainCanvasPaint(panel: number): void {
+  const perf = show2dPerfDebug();
+  if (!perf) return;
+  const now = performance.now();
+  perf.mainCanvasPaintCount += 1;
+  perf.lastMainCanvasPaintAt = now;
+  perf.lastMainCanvasPaintPanel = panel;
+  if (perf.lastZoomPanEventAt > 0) {
+    const latency = now - perf.lastZoomPanEventAt;
+    if (latency >= 0 && latency < 5000) {
+      const rounded = Number(latency.toFixed(1));
+      perf.lastZoomPanPaintLatencyMs = rounded;
+      perf.zoomPanPaintLatenciesMs.push(rounded);
+      if (perf.zoomPanPaintLatenciesMs.length > 120) perf.zoomPanPaintLatenciesMs.shift();
+    }
+  }
 }
 
 function updateGalleryFftCacheDebug(
@@ -3763,23 +3805,23 @@ function Show2D() {
   const [fftScaleMode, setFftScaleMode] = React.useState<"linear" | "log" | "power">("linear");
   const [fftAuto, setFftAuto] = React.useState(true);
   const [fftSmooth, setFftSmooth] = React.useState(true);
-  const [fftLinkedZoom, setFftLinkedZoom] = React.useState(false);
-  const [fftLinkPan, setFftLinkPan] = React.useState(false);
-  const [fftLinkedContrast, setFftLinkedContrast] = React.useState(true);
-  // Per-image FFT contrast (used when fftLinkedContrast=false)
+  const effectiveFftLinkedZoom = linkedZoom;
+  const effectiveFftLinkPan = linkPan;
+  const effectiveFftLinkedContrast = linkedContrast;
+  // Per-image FFT contrast (used when global linked contrast is off)
   const [fftContrastStates, setFftContrastStates] = React.useState<Map<number, { vminPct: number; vmaxPct: number }>>(new Map());
   const fftContrastFor = React.useCallback((idx: number) => {
-    if (fftLinkedContrast) return { vminPct: fftVminPct, vmaxPct: fftVmaxPct };
+    if (effectiveFftLinkedContrast) return { vminPct: fftVminPct, vmaxPct: fftVmaxPct };
     return fftContrastStates.get(idx) || { vminPct: 0, vmaxPct: 100 };
-  }, [fftLinkedContrast, fftVminPct, fftVmaxPct, fftContrastStates]);
+  }, [effectiveFftLinkedContrast, fftVminPct, fftVmaxPct, fftContrastStates]);
   const setFftContrastFor = React.useCallback((idx: number, val: { vminPct: number; vmaxPct: number }) => {
-    if (fftLinkedContrast) {
+    if (effectiveFftLinkedContrast) {
       setFftVminPct(val.vminPct);
       setFftVmaxPct(val.vmaxPct);
     } else {
       setFftContrastStates(prev => new Map(prev).set(idx, val));
     }
-  }, [fftLinkedContrast]);
+  }, [effectiveFftLinkedContrast]);
   const [fftStats, setFftStats] = React.useState<number[] | null>(null);
   const [fftQuality, setFftQuality] = React.useState<FftQualityMetrics | null>(null);
   const [galleryFftQuality, setGalleryFftQuality] = React.useState<Array<FftQualityMetrics | null>>([]);
@@ -3856,32 +3898,79 @@ function Show2D() {
   const getGalleryFftState = React.useCallback((idx: number) => {
     const per = galleryFftStates.get(idx) || { zoom: DEFAULT_FFT_ZOOM, panX: 0, panY: 0 };
     return {
-      zoom: fftLinkedZoom ? linkedFftZoomState.zoom : per.zoom,
-      panX: fftLinkPan ? linkedFftZoomState.panX : per.panX,
-      panY: fftLinkPan ? linkedFftZoomState.panY : per.panY,
+      zoom: effectiveFftLinkedZoom ? linkedFftZoomState.zoom : per.zoom,
+      panX: effectiveFftLinkPan ? linkedFftZoomState.panX : per.panX,
+      panY: effectiveFftLinkPan ? linkedFftZoomState.panY : per.panY,
     };
-  }, [fftLinkedZoom, fftLinkPan, linkedFftZoomState, galleryFftStates]);
+  }, [effectiveFftLinkedZoom, effectiveFftLinkPan, linkedFftZoomState, galleryFftStates]);
   const setGalleryFftState = React.useCallback((idx: number, state: ZoomState) => {
-    if (fftLinkedZoom || fftLinkPan) {
+    if (effectiveFftLinkedZoom || effectiveFftLinkPan) {
       setLinkedFftZoomState(prev => ({
-        zoom: fftLinkedZoom ? state.zoom : prev.zoom,
-        panX: fftLinkPan ? state.panX : prev.panX,
-        panY: fftLinkPan ? state.panY : prev.panY,
+        zoom: effectiveFftLinkedZoom ? state.zoom : prev.zoom,
+        panX: effectiveFftLinkPan ? state.panX : prev.panX,
+        panY: effectiveFftLinkPan ? state.panY : prev.panY,
       }));
     }
-    if (!fftLinkedZoom || !fftLinkPan) {
+    if (!effectiveFftLinkedZoom || !effectiveFftLinkPan) {
       setGalleryFftStates(prev => {
         const cur = prev.get(idx) || { zoom: DEFAULT_FFT_ZOOM, panX: 0, panY: 0 };
         const next = new Map(prev);
         next.set(idx, {
-          zoom: fftLinkedZoom ? cur.zoom : state.zoom,
-          panX: fftLinkPan ? cur.panX : state.panX,
-          panY: fftLinkPan ? cur.panY : state.panY,
+          zoom: effectiveFftLinkedZoom ? cur.zoom : state.zoom,
+          panX: effectiveFftLinkPan ? cur.panX : state.panX,
+          panY: effectiveFftLinkPan ? cur.panY : state.panY,
         });
         return next;
       });
     }
-  }, [fftLinkedZoom, fftLinkPan]);
+  }, [effectiveFftLinkedZoom, effectiveFftLinkPan]);
+  const previousEffectiveFftLinkRef = React.useRef({ zoom: effectiveFftLinkedZoom, pan: effectiveFftLinkPan, contrast: effectiveFftLinkedContrast });
+  React.useEffect(() => {
+    const previous = previousEffectiveFftLinkRef.current;
+    const zoomJustLinked = !previous.zoom && effectiveFftLinkedZoom;
+    const panJustLinked = !previous.pan && effectiveFftLinkPan;
+    const zoomJustUnlinked = previous.zoom && !effectiveFftLinkedZoom;
+    const panJustUnlinked = previous.pan && !effectiveFftLinkPan;
+    const contrastJustLinked = !previous.contrast && effectiveFftLinkedContrast;
+    const contrastJustUnlinked = previous.contrast && !effectiveFftLinkedContrast;
+    if (zoomJustLinked || panJustLinked) {
+      const current = galleryFftStates.get(selectedIdx) || { zoom: DEFAULT_FFT_ZOOM, panX: 0, panY: 0 };
+      setLinkedFftZoomState(prev => ({
+        zoom: zoomJustLinked ? current.zoom : prev.zoom,
+        panX: panJustLinked ? current.panX : prev.panX,
+        panY: panJustLinked ? current.panY : prev.panY,
+      }));
+    }
+    if (zoomJustUnlinked || panJustUnlinked) {
+      const shared = linkedFftZoomState;
+      setGalleryFftStates(prev => {
+        const next = new Map(prev);
+        for (let idx = 0; idx < nImages; idx++) {
+          const current = next.get(idx) || { zoom: DEFAULT_FFT_ZOOM, panX: 0, panY: 0 };
+          next.set(idx, {
+            zoom: zoomJustUnlinked ? shared.zoom : current.zoom,
+            panX: panJustUnlinked ? shared.panX : current.panX,
+            panY: panJustUnlinked ? shared.panY : current.panY,
+          });
+        }
+        return next;
+      });
+    }
+    if (contrastJustLinked) {
+      const current = fftContrastStates.get(selectedIdx) || { vminPct: fftVminPct, vmaxPct: fftVmaxPct };
+      setFftVminPct(current.vminPct);
+      setFftVmaxPct(current.vmaxPct);
+    }
+    if (contrastJustUnlinked) {
+      const shared = { vminPct: fftVminPct, vmaxPct: fftVmaxPct };
+      setFftContrastStates(prev => {
+        const next = new Map(prev);
+        for (let idx = 0; idx < nImages; idx++) next.set(idx, shared);
+        return next;
+      });
+    }
+    previousEffectiveFftLinkRef.current = { zoom: effectiveFftLinkedZoom, pan: effectiveFftLinkPan, contrast: effectiveFftLinkedContrast };
+  }, [effectiveFftLinkedZoom, effectiveFftLinkPan, effectiveFftLinkedContrast, galleryFftStates, linkedFftZoomState, fftContrastStates, fftVminPct, fftVmaxPct, nImages, selectedIdx]);
 
   // Resizable state (gallery starts smaller)
   const [canvasSize, setCanvasSize] = React.useState(nImages > 1 ? GALLERY_IMAGE_TARGET : SINGLE_IMAGE_TARGET);
@@ -4215,6 +4304,14 @@ function Show2D() {
       event.stopPropagation();
     } else {
       next = [panel];
+      if (
+        selectedIdx === panel &&
+        selectedVisiblePanels.length === 1 &&
+        selectedVisiblePanels[0] === panel
+      ) {
+        lastSelectedPanelRef.current = panel;
+        return false;
+      }
     }
     lastSelectedPanelRef.current = panel;
     setSelectedIdx(panel);
@@ -4420,13 +4517,12 @@ function Show2D() {
     if (canvasW <= 0 || canvasH <= 0 || width <= 0 || height <= 0 || state.zoom <= 0) return;
     const row = height * (0.5 - state.panY / (state.zoom * canvasH));
     const col = width * (0.5 - state.panX / (state.zoom * canvasW));
-    setInitialZoom(state.zoom);
-    setZoomRowTrait(Math.max(0, Math.min(height - 1, row)));
-    setZoomColTrait(Math.max(0, Math.min(width - 1, col)));
-    // Sync the visible region (row0, row1, col0, col1) in image pixels so
-    // Python's current_view can capture the exact field of view for figures.
-    // Same inverse transform as the cursor readout: canvas -> image pixels.
-    // Debounced: wheel zoom calls persist per tick; one trait write per gesture.
+    const nextZoom = state.zoom;
+    const nextRow = Math.max(0, Math.min(height - 1, row));
+    const nextCol = Math.max(0, Math.min(width - 1, col));
+    // Persisting traits is for notebook/Python state and current_view capture.
+    // The visible canvas has already updated through local zoom state, so keep
+    // trait writes out of the high-frequency wheel/drag path.
     const cx = canvasW / 2;
     const cy = canvasH / 2;
     const row0 = Math.max(0, ((0 - cy - state.panY) / state.zoom + cy) / displayScale);
@@ -4434,7 +4530,12 @@ function Show2D() {
     const col0 = Math.max(0, ((0 - cx - state.panX) / state.zoom + cx) / displayScale);
     const col1 = Math.min(width, ((canvasW - cx - state.panX) / state.zoom + cx) / displayScale);
     window.clearTimeout(viewBoxTimerRef.current);
-    viewBoxTimerRef.current = window.setTimeout(() => setViewBoxTrait([row0, row1, col0, col1]), 100);
+    viewBoxTimerRef.current = window.setTimeout(() => {
+      setInitialZoom(nextZoom);
+      setZoomRowTrait(nextRow);
+      setZoomColTrait(nextCol);
+      setViewBoxTrait([row0, row1, col0, col1]);
+    }, 120);
   }, [canvasW, canvasH, width, height, displayScale, setInitialZoom, setZoomRowTrait, setZoomColTrait, setViewBoxTrait]);
 
   // Initial pan from zoom_row/zoom_col — runs once after first render with valid canvas dims.
@@ -6130,6 +6231,7 @@ function Show2D() {
         }
       }
       ctx.restore();
+      recordShow2DMainCanvasPaint(i);
     }
   }, [offscreenVersion, detailPaintVersion, displayBinFactor, nImages, width, height, displayScale, canvasW, canvasH, canvasReady, linkedZoom, linkedZoomState, zoomStates, smooth, currentDetailWindow, canvasRepaintSignal, imageFlipsHorizontal, imageFlipsVertical, offlineForTheme, rotationForPanel, visibleImageIndices]);
 
@@ -7573,7 +7675,7 @@ function Show2D() {
 
     renderGalleryFft();
     return () => { cancelled = true; };
-  }, [effectiveShowFft, isGallery, nImages, width, height, galleryFftMagVersion, fftColormap, fftScaleMode, fftAuto, fftVminPct, fftVmaxPct, selectedIdx, fftLinkedContrast, fftContrastStates, canvasRepaintSignal, visibleImageIndices]);
+  }, [effectiveShowFft, isGallery, nImages, width, height, galleryFftMagVersion, fftColormap, fftScaleMode, fftAuto, fftVminPct, fftVmaxPct, selectedIdx, effectiveFftLinkedContrast, fftContrastStates, canvasRepaintSignal, visibleImageIndices]);
 
   React.useEffect(() => {
     if (!effectiveShowFft || !isGallery || !fftMetricsEnabled) {
@@ -7619,7 +7721,7 @@ function Show2D() {
       ctx.drawImage(offscreen, 0, 0, fftW, fftH, 0, 0, canvasW, canvasH);
       ctx.restore();
     }
-  }, [effectiveShowFft, isGallery, nImages, canvasW, canvasH, width, height, galleryFftOffscreenVersion, galleryFftStates, fftLinkedZoom, linkedFftZoomState, fftSmooth, canvasRepaintSignal, visibleImageIndices]);
+  }, [effectiveShowFft, isGallery, nImages, canvasW, canvasH, width, height, galleryFftOffscreenVersion, galleryFftStates, effectiveFftLinkedZoom, effectiveFftLinkPan, linkedFftZoomState, fftSmooth, canvasRepaintSignal, visibleImageIndices]);
 
   // -------------------------------------------------------------------------
   // Mouse Handlers for Zoom/Pan
@@ -7661,6 +7763,7 @@ function Show2D() {
     const newPanY = mouseCanvasY - (mouseImageY - cy) * newZoom - cy;
 
     const nextState = { zoom: newZoom, panX: newPanX, panY: newPanY };
+    recordShow2DZoomPanEvent("wheel");
     setZoomState(idx, nextState);
     persistZoomState(nextState);
   };
@@ -7964,14 +8067,14 @@ function Show2D() {
 
   // Gallery FFT zoom/pan handlers (only selected image's FFT responds)
   const handleGalleryFftWheel = (e: React.WheelEvent, idx: number) => {
-    if (isGallery && idx !== selectedIdx && !fftLinkedZoom) return;
+    if (isGallery && idx !== selectedIdx && !effectiveFftLinkedZoom) return;
     const zs = getGalleryFftState(idx);
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
     setGalleryFftState(idx, { ...zs, zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zs.zoom * zoomFactor)) });
   };
 
   const handleGalleryFftMouseDown = (e: React.MouseEvent, idx: number) => {
-    if (isGallery && idx !== selectedIdx) {
+    if (isGallery && idx !== selectedIdx && !effectiveFftLinkPan) {
       setSelectedIdx(idx);
       return; // Select first, don't start panning
     }
@@ -8503,6 +8606,7 @@ function Show2D() {
       const dx = (e.clientX - panStart.x) * scaleX;
       const dy = (e.clientY - panStart.y) * scaleY;
       const zs = getZoomState(idx);
+      recordShow2DZoomPanEvent("pan");
       setZoomState(idx, { ...zs, panX: panStart.pX + dx, panY: panStart.pY + dy });
       return;
     }
@@ -11148,7 +11252,7 @@ function Show2D() {
 	                        },
                         cursor: "grab",
                       }}
-                      onWheel={(i === selectedIdx || fftLinkedZoom) ? (e) => handleGalleryFftWheel(e, i) : undefined}
+                      onWheel={(i === selectedIdx || effectiveFftLinkedZoom) ? (e) => handleGalleryFftWheel(e, i) : undefined}
                       onDoubleClick={() => setGalleryFftState(i, { zoom: DEFAULT_FFT_ZOOM, panX: 0, panY: 0 })}
                       onMouseDown={(e) => handleGalleryFftMouseDown(e, i)}
                       onMouseMove={(e) => handleGalleryFftMouseMove(e, i)}
@@ -11972,16 +12076,16 @@ function Show2D() {
                     <>
                       <Box sx={controlPairSx}>
                         <Typography sx={{ ...typography.label, fontSize: 10 }}>Link</Typography>
-                        <Typography sx={{ ...typography.label, fontSize: 10 }} title="Zoom together across FFT panels (FFT-only, independent of main image link).">Zoom</Typography>
-                        <Switch checked={fftLinkedZoom} onChange={() => { setFftLinkedZoom(!fftLinkedZoom); }} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Link FFT zoom across panels" } }} />
+                        <Typography sx={{ ...typography.label, fontSize: 10 }} title="Zoom together across image and FFT panels.">Zoom</Typography>
+                        <Switch checked={effectiveFftLinkedZoom} onChange={() => { setLinkedZoom(!linkedZoom); }} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Link FFT zoom across panels" } }} />
                       </Box>
                       <Box sx={controlPairSx}>
-                        <Typography sx={{ ...typography.label, fontSize: 10 }} title="Pan FFT panels together (FFT-only).">Pan</Typography>
-                        <Switch checked={fftLinkPan} onChange={() => { setFftLinkPan(!fftLinkPan); }} size="small" sx={switchStyles.small} />
+                        <Typography sx={{ ...typography.label, fontSize: 10 }} title="Pan image and FFT panels together.">Pan</Typography>
+                        <Switch checked={effectiveFftLinkPan} onChange={() => { setLinkPan(!linkPan); }} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Link FFT pan across panels" } }} />
                       </Box>
                       <Box sx={controlPairSx}>
-                        <Typography sx={{ ...typography.label, fontSize: 10 }} title="Share FFT contrast slider across panels (FFT-only).">Contrast</Typography>
-                        <Switch checked={fftLinkedContrast} onChange={() => { setFftLinkedContrast(!fftLinkedContrast); }} size="small" sx={switchStyles.small} />
+                        <Typography sx={{ ...typography.label, fontSize: 10 }} title="Share image and FFT contrast sliders across panels.">Contrast</Typography>
+                        <Switch checked={effectiveFftLinkedContrast} onChange={() => { setLinkedContrast(!linkedContrast); }} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Link FFT contrast across panels" } }} />
                       </Box>
                     </>
                   )}
@@ -11990,7 +12094,7 @@ function Show2D() {
               {(
                 <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", flex: "0 1 auto", maxWidth: "100%", opacity: 1, pointerEvents: "auto" }}>
                   {fftHistogramData && (
-                    !fftLinkedContrast && isGallery ? (
+                    !effectiveFftLinkedContrast && isGallery ? (
                       <Box sx={{ display: "grid", gridTemplateColumns: histogramGridColumns, gap: `${histogramGapPx}px`, width: "100%", maxWidth: histogramGridMaxWidth, justifyContent: "start" }}>
                         {/* Match the image-histogram grid: current page only, hidden panels skipped. */}
                         {visibleImageIndices.map((i) => {

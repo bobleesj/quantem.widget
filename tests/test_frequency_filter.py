@@ -118,7 +118,6 @@ def test_show3d_frequency_filter_state_round_trip():
 
 
 def test_show3d_frequency_filter_accepts_per_panel_settings():
-    # C9: multi-panel Show3D comparison, expect independent frequency recipes.
     panels = [
         np.ones((3, 8, 8), dtype=np.float32),
         np.eye(8, dtype=np.float32)[None, ...].repeat(3, axis=0),

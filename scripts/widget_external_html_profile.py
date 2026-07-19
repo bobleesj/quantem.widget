@@ -18,7 +18,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from widget_browser_smoke import _chrome_executable, _image_nonblank, _measure_fps, _visible_canvas_boxes
+from widget_browser_smoke import (
+    _chrome_executable,
+    _image_nonblank,
+    _measure_fps,
+    _visible_canvas_boxes,
+)
 
 
 def _timestamp() -> str:
@@ -307,6 +312,161 @@ def _show2d_canvas_hashes(page, limit: int) -> list[dict[str, Any]]:
     )
 
 
+def _first_visible_show2d_canvas_box(page) -> dict[str, Any] | None:
+    """Return the largest visible Show2D scientific canvas box in the viewport."""
+
+    return page.evaluate(
+        r"""() => {
+          const viewportW = window.innerWidth || 0;
+          const viewportH = window.innerHeight || 0;
+          const visible = (node) => {
+            const rect = node.getBoundingClientRect();
+            const style = getComputedStyle(node);
+            return rect.width >= 32 && rect.height >= 32 &&
+              rect.right > 0 && rect.bottom > 0 &&
+              rect.left < viewportW && rect.top < viewportH &&
+              style.display !== "none" && style.visibility !== "hidden";
+          };
+          const boxes = [...document.querySelectorAll("canvas[data-show2d-main-canvas]")]
+            .map((canvas, domIndex) => {
+              const rect = canvas.getBoundingClientRect();
+              return {
+                panel: canvas.getAttribute("data-show2d-main-canvas") || String(domIndex),
+                domIndex,
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+                area: rect.width * rect.height,
+                visible: visible(canvas),
+              };
+            })
+            .filter((item) => item.visible)
+            .sort((a, b) => b.area - a.area);
+          return boxes[0] || null;
+        }"""
+    )
+
+
+def _show2d_perf_debug(page) -> dict[str, Any]:
+    """Return a JSON-safe snapshot of Show2D browser-side performance counters."""
+
+    return dict(
+        page.evaluate(
+            r"""() => JSON.parse(JSON.stringify(window.__quantemShow2DPerf || {}))"""
+        )
+        or {}
+    )
+
+
+def _reset_show2d_zoom_pan_perf(page) -> None:
+    """Reset Show2D zoom/pan timing counters before a measured interaction."""
+
+    page.evaluate(
+        r"""() => {
+          const perf = window.__quantemShow2DPerf;
+          if (!perf) return;
+          perf.mainCanvasPaintCount = 0;
+          perf.lastMainCanvasPaintAt = 0;
+          perf.lastMainCanvasPaintPanel = null;
+          perf.zoomPanEventCount = 0;
+          perf.lastZoomPanEventAt = 0;
+          perf.lastZoomPanEventKind = "";
+          perf.lastZoomPanPaintLatencyMs = null;
+          perf.zoomPanPaintLatenciesMs = [];
+        }"""
+    )
+
+
+def _start_show2d_event_probe(page, label: str) -> dict[str, Any]:
+    """Start a non-invasive event timestamp probe on the visible Show2D canvas."""
+
+    return dict(
+        page.evaluate(
+            r"""(label) => {
+              const viewportW = window.innerWidth || 0;
+              const viewportH = window.innerHeight || 0;
+              const visible = (node) => {
+                const rect = node.getBoundingClientRect();
+                const style = getComputedStyle(node);
+                return rect.width >= 32 && rect.height >= 32 &&
+                  rect.right > 0 && rect.bottom > 0 &&
+                  rect.left < viewportW && rect.top < viewportH &&
+                  style.display !== "none" && style.visibility !== "hidden";
+              };
+              const item = [...document.querySelectorAll("canvas[data-show2d-main-canvas]")]
+                .map((canvas, domIndex) => ({canvas, domIndex, rect: canvas.getBoundingClientRect()}))
+                .filter((entry) => visible(entry.canvas))
+                .sort((a, b) => (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height))[0];
+              if (!item) return {started: false, label, reason: "no visible Show2D canvas"};
+              const start = performance.now();
+              const probe = {
+                active: true,
+                label,
+                start,
+                events: [],
+                target: {
+                  domIndex: item.domIndex,
+                  x: Math.round(item.rect.x),
+                  y: Math.round(item.rect.y),
+                  width: Math.round(item.rect.width),
+                  height: Math.round(item.rect.height),
+                },
+              };
+              const record = (event) => {
+                if (!probe.active) return;
+                probe.events.push({
+                  type: event.type,
+                  t: Number((performance.now() - start).toFixed(1)),
+                  x: Math.round(event.clientX),
+                  y: Math.round(event.clientY),
+                });
+              };
+              const eventTypes = ["pointerdown", "pointermove", "pointerup", "mousedown", "mousemove", "mouseup", "wheel"];
+              eventTypes.forEach((type) => item.canvas.addEventListener(type, record, {passive: true}));
+              probe.cleanup = () => eventTypes.forEach((type) => item.canvas.removeEventListener(type, record));
+              window.__quantemShow2DEventProbe = probe;
+              return {started: true, label, target: probe.target};
+            }""",
+            label,
+        )
+        or {}
+    )
+
+
+def _stop_show2d_event_probe(page) -> dict[str, Any]:
+    """Stop the non-invasive Show2D event probe."""
+
+    return dict(
+        page.evaluate(
+            r"""() => {
+              const probe = window.__quantemShow2DEventProbe;
+              if (!probe) return {started: false, reason: "event probe was not started"};
+              probe.active = false;
+              if (probe.cleanup) probe.cleanup();
+              const durationMs = Math.max(1, performance.now() - probe.start);
+              const events = probe.events || [];
+              const eventTimes = events.map((item) => Number(item.t));
+              const counts = {};
+              for (const item of events) counts[item.type] = (counts[item.type] || 0) + 1;
+              return {
+                started: true,
+                label: probe.label,
+                target: probe.target,
+                duration_ms: Number(durationMs.toFixed(1)),
+                event_count: events.length,
+                event_type_counts: counts,
+                first_event_ms: eventTimes.length ? eventTimes[0] : null,
+                last_event_ms: eventTimes.length ? eventTimes[eventTimes.length - 1] : null,
+                events: events.slice(0, 60),
+                truncated_events: events.length > 60,
+              };
+            }"""
+        )
+        or {}
+    )
+
+
 def _scroll_show2d_histogram_slider_into_view(page) -> dict[str, Any]:
     """Scroll the first Show2D histogram drag target into view."""
 
@@ -588,6 +748,121 @@ def _run_show2d_keyboard_step(page, fps_ms: int) -> dict[str, Any]:
     }
 
 
+def _run_show2d_zoom_pan_step(page, fps_ms: int, canvas_limit: int) -> dict[str, Any]:
+    """Wheel-zoom and drag-pan a Show2D scientific canvas."""
+
+    canvases = page.locator("canvas[data-show2d-main-canvas]")
+    try:
+        canvas_count = canvases.count()
+    except Exception:
+        canvas_count = 0
+    if canvas_count <= 0:
+        return {"found": False, "reason": "no Show2D main canvases"}
+
+    box = _first_visible_show2d_canvas_box(page)
+    if not box or box["width"] < 32 or box["height"] < 32:
+        try:
+            canvases.first.scroll_into_view_if_needed(timeout=5000)
+            page.wait_for_timeout(120)
+            box = _first_visible_show2d_canvas_box(page)
+        except Exception as exc:
+            return {"found": False, "reason": f"could not scroll Show2D canvas into view: {exc}"[:300]}
+    if not box or box["width"] < 32 or box["height"] < 32:
+        return {"found": False, "reason": f"invalid visible Show2D canvas box: {box}"}
+
+    before = _show2d_canvas_hashes(page, canvas_limit)
+    before_by_panel = {item["panel"]: item["hash"] for item in before}
+    center_x = float(box["x"] + box["width"] * 0.5)
+    center_y = float(box["y"] + box["height"] * 0.5)
+    page.mouse.click(center_x, center_y)
+    page.wait_for_timeout(120)
+    page.mouse.move(center_x, center_y)
+    _reset_show2d_zoom_pan_perf(page)
+    wheel_probe_start = _start_show2d_event_probe(page, "show2d wheel zoom")
+    for _ in range(4):
+        page.mouse.wheel(0, -420)
+        page.wait_for_timeout(90)
+    page.wait_for_timeout(160)
+    wheel_probe = _stop_show2d_event_probe(page)
+    wheel_perf = _show2d_perf_debug(page)
+    after_zoom = _show2d_canvas_hashes(page, canvas_limit)
+
+    drag_to_x = center_x + min(120.0, float(box["width"]) * 0.18)
+    drag_to_y = center_y + min(80.0, float(box["height"]) * 0.14)
+    _reset_show2d_zoom_pan_perf(page)
+    drag_probe_start = _start_show2d_event_probe(page, "show2d drag pan")
+    page.mouse.move(center_x, center_y)
+    page.mouse.down()
+    for step_idx in range(1, 19):
+        x = center_x + (drag_to_x - center_x) * step_idx / 18
+        y = center_y + (drag_to_y - center_y) * step_idx / 18
+        page.mouse.move(x, y)
+        page.wait_for_timeout(18)
+    page.mouse.up()
+    page.wait_for_timeout(220)
+    drag_probe = _stop_show2d_event_probe(page)
+    drag_perf = _show2d_perf_debug(page)
+    after_pan = _show2d_canvas_hashes(page, canvas_limit)
+    fps = round(float(_measure_fps(page, fps_ms)), 1)
+
+    def changed_panels(items: list[dict[str, Any]]) -> list[str]:
+        return [
+            item["panel"]
+            for item in items
+            if item["panel"] in before_by_panel and item["hash"] != before_by_panel[item["panel"]]
+        ]
+
+    return {
+        "found": True,
+        "clicked": True,
+        "canvas_count": canvas_count,
+        "target_panel": box.get("panel"),
+        "target_dom_index": box.get("domIndex"),
+        "before_hash_count": len(before),
+        "after_zoom_hash_count": len(after_zoom),
+        "after_pan_hash_count": len(after_pan),
+        "zoom_changed_panels": changed_panels(after_zoom),
+        "pan_changed_panels": changed_panels(after_pan),
+        "changed_panel_count": len(set(changed_panels(after_zoom) + changed_panels(after_pan))),
+        "wheel_event_probe_start": wheel_probe_start,
+        "wheel_event_probe": wheel_probe,
+        "wheel_perf_debug": wheel_perf,
+        "drag_event_probe_start": drag_probe_start,
+        "drag_event_probe": drag_probe,
+        "drag_perf_debug": drag_perf,
+        "wheel_events": 4,
+        "drag": {
+            "start_x": round(center_x, 1),
+            "start_y": round(center_y, 1),
+            "target_x": round(drag_to_x, 1),
+            "target_y": round(drag_to_y, 1),
+        },
+        "browser_raf_fps_after_interaction": fps,
+        "fps": fps,
+    }
+
+
+def _reset_show2d_zoom_pan(page) -> bool:
+    """Best-effort double-click reset after capturing zoom/pan evidence."""
+
+    canvases = page.locator("canvas[data-show2d-main-canvas]")
+    try:
+        if canvases.count() <= 0:
+            return False
+        box = _first_visible_show2d_canvas_box(page)
+        if not box:
+            canvases.first.scroll_into_view_if_needed(timeout=5000)
+            page.wait_for_timeout(120)
+            box = _first_visible_show2d_canvas_box(page)
+        if not box:
+            return False
+        page.mouse.dblclick(float(box["x"] + box["width"] * 0.5), float(box["y"] + box["height"] * 0.5))
+        page.wait_for_timeout(220)
+        return True
+    except Exception:
+        return False
+
+
 def _run_play_button_step(page, label: str, pause_labels: list[str], wait_ms: int, fps_ms: int) -> dict[str, Any]:
     before_summary = _text_summary(page)
     before_signature = _canvas_signature(page)
@@ -749,8 +1024,8 @@ def _write_report(artifact_dir: Path, metrics: dict[str, Any]) -> None:
         ("URL", metrics.get("url")),
         ("HTTP status", metrics.get("status")),
         ("Ready time", f"{metrics.get('load_to_ready_s')} s"),
-        ("Initial FPS", metrics.get("initial_fps")),
-        ("Final FPS", metrics.get("final_fps")),
+        ("Initial browser rAF FPS", metrics.get("initial_fps")),
+        ("Final browser rAF FPS", metrics.get("final_fps")),
         ("Canvas count", metrics.get("initial_canvas_count")),
         ("Show2D visible panels", metrics.get("initial_show2d_main_canvas_count")),
         ("Show2D blank panels", metrics.get("initial_show2d_blank_main_canvas_count")),
@@ -798,8 +1073,9 @@ def _write_report(artifact_dir: Path, metrics: dict[str, Any]) -> None:
     th {{ text-align: left; padding: 6px 16px 6px 0; vertical-align: top; white-space: nowrap; }}
     td {{ padding: 6px 0; }}
     .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 18px; }}
-    .card {{ border: 1px solid #d8dee9; border-radius: 8px; padding: 14px; margin: 14px 0; background: white; }}
-    img {{ max-width: 100%; border: 1px solid #d8dee9; background: #f7f8fa; }}
+    .card {{ border: 2px solid #ff2bbd; border-radius: 8px; padding: 14px; margin: 14px 0; background: white; box-shadow: 0 0 0 3px rgba(255, 43, 189, 0.10); }}
+    .card h2, .card h3 {{ display: inline-block; margin-top: 0; padding: 3px 8px; background: #ff2bbd; color: white; border-radius: 4px; }}
+    img {{ max-width: 100%; border: 3px solid #ff2bbd; background: #2a001e; box-sizing: border-box; }}
     pre {{ white-space: pre-wrap; background: #f6f8fa; padding: 10px; border-radius: 6px; max-height: 360px; overflow: auto; }}
     code {{ background: #f0f2f5; padding: 1px 4px; border-radius: 4px; }}
     .pass {{ color: #087f23; font-weight: 700; }}
@@ -888,13 +1164,22 @@ def run_profile(args: argparse.Namespace) -> dict[str, Any]:
                 step["name"] = "show2d_keyboard_shortcuts"
                 step["screenshot"] = _screenshot(page, screenshot_dir / "01-show2d-keyboard.png")
                 metrics["steps"].append(step)
+                step = _run_show2d_zoom_pan_step(
+                    page,
+                    fps_ms=args.fps_sample_ms,
+                    canvas_limit=args.contrast_canvas_check_limit,
+                )
+                step["name"] = "show2d_zoom_pan"
+                step["screenshot"] = _screenshot(page, screenshot_dir / "02-show2d-zoom-pan.png")
+                step["reset_after_screenshot"] = _reset_show2d_zoom_pan(page)
+                metrics["steps"].append(step)
                 step = _run_show2d_linked_contrast_step(
                     page,
                     fps_ms=args.fps_sample_ms,
                     canvas_limit=args.contrast_canvas_check_limit,
                 )
                 step["name"] = "show2d_linked_contrast_drag"
-                step["screenshot"] = _screenshot(page, screenshot_dir / "06-show2d-linked-contrast.png")
+                step["screenshot"] = _screenshot(page, screenshot_dir / "07-show2d-linked-contrast.png")
                 metrics["steps"].append(step)
 
             if _button_present(summary, "Play pages"):
@@ -906,7 +1191,7 @@ def run_profile(args: argparse.Namespace) -> dict[str, Any]:
                     fps_ms=args.fps_sample_ms,
                 )
                 step["name"] = "page_autoplay"
-                step["screenshot"] = _screenshot(page, screenshot_dir / "02-page-autoplay.png")
+                step["screenshot"] = _screenshot(page, screenshot_dir / "03-page-autoplay.png")
                 metrics["steps"].append(step)
 
             if _button_present(summary, "Play forward"):
@@ -918,14 +1203,14 @@ def run_profile(args: argparse.Namespace) -> dict[str, Any]:
                     fps_ms=args.fps_sample_ms,
                 )
                 step["name"] = "frame_playback"
-                step["screenshot"] = _screenshot(page, screenshot_dir / "03-frame-playback.png")
+                step["screenshot"] = _screenshot(page, screenshot_dir / "04-frame-playback.png")
                 metrics["steps"].append(step)
 
             hide_label = _first_hide_button(_text_summary(page))
             if hide_label:
                 step = _run_hide_step(page, hide_label, fps_ms=args.fps_sample_ms)
                 step["name"] = "hide_restore_panel"
-                step["screenshot"] = _screenshot(page, screenshot_dir / "04-hide-panel.png")
+                step["screenshot"] = _screenshot(page, screenshot_dir / "05-hide-panel.png")
                 metrics["steps"].append(step)
 
             if not args.no_hover_stress:
@@ -935,7 +1220,7 @@ def run_profile(args: argparse.Namespace) -> dict[str, Any]:
                     max_canvases=args.hover_canvas_limit,
                 )
                 step["name"] = "hover_sweep"
-                step["screenshot"] = _screenshot(page, screenshot_dir / "05-hover-sweep.png")
+                step["screenshot"] = _screenshot(page, screenshot_dir / "06-hover-sweep.png")
                 metrics["steps"].append(step)
 
             metrics["final_canvas_count"] = len(_visible_canvas_boxes(page))
@@ -1010,6 +1295,25 @@ def run_profile(args: argparse.Namespace) -> dict[str, Any]:
                     "show2d_linked_contrast_drag did not update enough visible panels: "
                     f"{step.get('changed_panel_count')} changed, expected at least {expected}"
                 )
+        if step["name"] == "show2d_zoom_pan":
+            if not step.get("found"):
+                errors.append(f"show2d_zoom_pan did not find a usable Show2D canvas: {step.get('reason')}")
+            if int(step.get("changed_panel_count") or 0) <= 0:
+                errors.append("show2d_zoom_pan did not change any checked scientific canvas")
+            wheel_probe = step.get("wheel_event_probe") or {}
+            drag_probe = step.get("drag_event_probe") or {}
+            wheel_perf = step.get("wheel_perf_debug") or {}
+            drag_perf = step.get("drag_perf_debug") or {}
+            wheel_latencies = wheel_perf.get("zoomPanPaintLatenciesMs") or []
+            drag_latencies = drag_perf.get("zoomPanPaintLatenciesMs") or []
+            if int(wheel_probe.get("event_count") or 0) <= 0:
+                errors.append("show2d_zoom_pan wheel zoom delivered no user input events")
+            if int(drag_probe.get("event_count") or 0) <= 0:
+                errors.append("show2d_zoom_pan drag pan delivered no user input events")
+            if len(wheel_latencies) <= 0:
+                errors.append("show2d_zoom_pan wheel zoom recorded no widget paint after input")
+            if len(drag_latencies) <= 0:
+                errors.append("show2d_zoom_pan drag pan recorded no widget paint after input")
         if step["name"] in {"page_autoplay", "frame_playback"} and not (
             step.get("text_changed") or step.get("canvas_signature_changed")
         ):
