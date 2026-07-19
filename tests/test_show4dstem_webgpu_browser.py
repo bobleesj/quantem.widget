@@ -55,6 +55,7 @@ def _exercise_dpc_backend(page, expected_pixels):
               const api = window.__sh4d;
               try {
                 api.model.set("vi_source", source);
+                await api.recomputeVI();
                 for (let attempt = 0; attempt < 120; attempt++) {
                   await new Promise(resolve => requestAnimationFrame(resolve));
                   const display = window.__sh4dDpcDisplay || {};
@@ -95,9 +96,70 @@ def _exercise_dpc_backend(page, expected_pixels):
         assert result["error"] is None, result
         assert result["source"] == source
         assert result["length"] == expected_pixels
-        assert result["displaySource"] == source
+        assert result["displaySource"] == source, result
         assert result["gpuBufferToDisplay"] is True, result
         assert result["rendered"] is True, result
+
+
+def _exercise_roi_backend(page, expected_pixels):
+    page.wait_for_function(
+        "window.__sh4d && typeof window.__sh4d.roiBufferOnly === 'function' && document.body.innerText.includes('ROI')",
+        timeout=60_000,
+    )
+    warm = page.evaluate("window.__sh4d.roiBufferOnly()")
+    assert warm["available"] is True, warm
+    assert warm["displayed"] is True, warm
+    assert warm["length"] == expected_pixels
+    result = page.evaluate(
+        """async ({expectedPixels}) => {
+          const api = window.__sh4d;
+          try {
+            api.model.set("vi_source", "roi");
+            await api.recomputeVI();
+            for (let attempt = 0; attempt < 120; attempt++) {
+              await new Promise(resolve => requestAnimationFrame(resolve));
+              const display = window.__sh4dViDisplay || {};
+              const view = api.model.get("virtual_image_bytes");
+              const len = view ? (view.byteLength / 4) : 0;
+              if (display.source === "roi" && display.rendered === true && len === expectedPixels) {
+                break;
+              }
+            }
+          } catch (error) {
+            return {
+              source: api.model.get("vi_source"),
+              length: -1,
+              expectedPixels,
+              error: error && error.message ? error.message : String(error),
+              display: window.__sh4dViDisplay || {},
+            };
+          }
+          const view = api.model.get("virtual_image_bytes");
+          const arr = new Float32Array(view.buffer, view.byteOffset, view.byteLength / 4);
+          let sum = 0;
+          for (let i = 0; i < arr.length; i++) sum += arr[i];
+          const display = window.__sh4dViDisplay || {};
+          return {
+            source: api.model.get("vi_source"),
+            length: arr.length,
+            expectedPixels,
+            sum,
+            displaySource: display.source,
+            gpuBufferToDisplay: display.gpuBufferToDisplay === true,
+            rendered: display.rendered === true,
+            rangeMode: display.rangeMode,
+            display,
+            error: null,
+          };
+        }""",
+        {"expectedPixels": expected_pixels},
+    )
+    assert result["error"] is None, result
+    assert result["source"] == "roi"
+    assert result["length"] == expected_pixels
+    assert result["displaySource"] == "roi"
+    assert result["gpuBufferToDisplay"] is True, result
+    assert result["rendered"] is True, result
 
 
 @pytest.mark.skipif(
@@ -154,6 +216,9 @@ def test_webgpu_multi_volume_export_fetches_second_volume(tmp_path):
                 args=[
                     "--enable-unsafe-webgpu",
                     "--enable-features=Vulkan,WebGPU",
+                    "--use-angle=vulkan",
+                    "--ignore-gpu-blocklist",
+                    "--disable-software-rasterizer",
                     "--no-first-run",
                     "--no-default-browser-check",
                 ],
@@ -211,6 +276,7 @@ def test_webgpu_multi_volume_export_fetches_second_volume(tmp_path):
 
                 assert any("vol0/" in url for url in requested)
                 assert any("vol1/" in url for url in requested)
+                _exercise_roi_backend(page, 8 * 8)
                 _exercise_dpc_backend(page, 8 * 8)
                 _click_copy_buttons(page)
             finally:

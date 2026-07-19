@@ -102,10 +102,19 @@ def test_show4dstem_webgpu_engine_has_selected_index_vi_kernel() -> None:
     assert "adoptBuffer(idx: number, buffer: GPUBuffer" in (
         repo / "js" / "colormaps.ts"
     ).read_text(encoding="utf-8")
+    assert "renderSlotDirectWithGpuRangeToCanvas" in (
+        repo / "js" / "colormaps.ts"
+    ).read_text(encoding="utf-8")
     assert "function buildDetectorMask" not in frontend
     assert "function buildScanMask" not in frontend
     assert "buildFullDetectorMask" in frontend
     assert "maskedDpc" in frontend
+    assert "roiBufferOnly" in frontend
     assert "dpcBufferOnly" in frontend
+    assert "warmStandardViCache" in frontend
+    assert "warmCache: () => warmCacheSummary()" in frontend
+    assert "suppressViTraitRecompute" in frontend
+    assert '"launch_warm_cache"' in frontend
     assert "virtualGpuCanvasRef" in frontend
     assert "renderPanelSlotsDirectToCanvas" in frontend
+    assert "renderSlotDirectWithGpuRangeToCanvas" in frontend

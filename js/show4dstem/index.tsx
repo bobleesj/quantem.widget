@@ -74,20 +74,13 @@ function normaliseViSource(value: unknown): string {
 
 function viSourceLabel(source: string): string {
   if (source === "roi") return "ROI";
-  if (source === "DPC_row") return "DPC_row";
-  if (source === "DPC_col") return "DPC_col";
+  if (source === "DPC_row") return "DPC row";
+  if (source === "DPC_col") return "DPC col";
   if (source === "SSB") return "SSB";
   return source;
 }
 
 function ViSourceLabel({ source }: { source: string }) {
-  if (source === "DPC_row" || source === "DPC_col") {
-    return (
-      <Box component="span" sx={{ display: "inline-flex", alignItems: "baseline" }}>
-        DPC<Box component="sub" sx={{ fontSize: "0.72em", lineHeight: 0 }}>{source === "DPC_row" ? "row" : "col"}</Box>
-      </Box>
-    );
-  }
   return <>{viSourceLabel(source)}</>;
 }
 
@@ -95,13 +88,32 @@ function viSourceUsesSymmetricRange(source: string): boolean {
   return source === "DPC_row" || source === "DPC_col";
 }
 
-const VI_GPU_DPC_SLOT = 41;
+function publishShow4DSTEMViDisplay(detail: Record<string, unknown>) {
+  try {
+    const target = window as unknown as {
+      __sh4dViDisplay?: Record<string, unknown>;
+      __sh4dDpcDisplay?: Record<string, unknown>;
+    };
+    target.__sh4dViDisplay = detail;
+    if (detail.source === "DPC_row" || detail.source === "DPC_col") {
+      target.__sh4dDpcDisplay = detail;
+    }
+  } catch {
+    // Diagnostics must not affect rendering.
+  }
+}
+
+const VI_GPU_SLOT = 41;
 type DpcGpuSource = "DPC_row" | "DPC_col";
-type ViGpuDpcImage = {
-  source: DpcGpuSource;
+type ViGpuSource = "roi" | DpcGpuSource;
+type ViGpuRangeMode = "cpu" | "gpu";
+type ViGpuImage = {
+  source: ViGpuSource;
   slot: number;
   width: number;
   height: number;
+  rangeMode: ViGpuRangeMode;
+  rawVersionAfter: number;
 };
 
 function viProductFrameView(
@@ -2747,6 +2759,19 @@ function Show4DSTEM() {
       roiRadiusRafRef.current = requestAnimationFrame(flushRoiRadius);
     }
   }, [flushRoiRadius]);
+  const dpRoiInteractiveRef = React.useRef(false);
+  const requestViFinalizeRef = React.useRef<(() => void) | null>(null);
+  const finishDpRoiInteraction = React.useCallback(() => {
+    const wasInteractive = dpRoiInteractiveRef.current;
+    dpRoiInteractiveRef.current = false;
+    flushRoiCenter();
+    flushRoiRadius();
+    if (wasInteractive) {
+      requestAnimationFrame(() => {
+        requestViFinalizeRef.current?.();
+      });
+    }
+  }, [flushRoiCenter, flushRoiRadius]);
   const [isDraggingVI, setIsDraggingVI] = React.useState(false);
   const [isDraggingFFT, setIsDraggingFFT] = React.useState(false);
   const [fftDragStart, setFftDragStart] = React.useState<{ x: number, y: number, panX: number, panY: number } | null>(null);
@@ -2807,8 +2832,9 @@ function Show4DSTEM() {
   const [viRoiDpBytes] = useModelState<DataView>("vi_roi_dp_bytes");
   const [viRoiReduce, setViRoiReduce] = useModelState<string>("vi_roi_reduce");
   const [webgpuDpcReady, setWebgpuDpcReady] = React.useState(false);
-  const [viGpuDpcVersion, setViGpuDpcVersion] = React.useState(0);
-  const viGpuDpcImageRef = React.useRef<ViGpuDpcImage | null>(null);
+  const [viGpuVersion, setViGpuVersion] = React.useState(0);
+  const viGpuImageRef = React.useRef<ViGpuImage | null>(null);
+  const rawVirtualImageVersionRef = React.useRef(0);
   const viGpuColormapRef = React.useRef<GPUColormapEngine | null>(null);
   const viGpuColormapDeviceRef = React.useRef<GPUDevice | null>(null);
   const ensureViGpuColormap = React.useCallback((
@@ -2824,14 +2850,15 @@ function Show4DSTEM() {
     }
     return viGpuColormapRef.current;
   }, []);
-  const clearViGpuDpcDisplay = React.useCallback(() => {
-    if (!viGpuDpcImageRef.current) return;
-    viGpuDpcImageRef.current = null;
-    setViGpuDpcVersion(v => v + 1);
+  const clearViGpuDisplay = React.useCallback(() => {
+    if (!viGpuImageRef.current) return;
+    viGpuImageRef.current = null;
+    publishShow4DSTEMViDisplay({ gpuBufferToDisplay: false, rendered: false });
+    setViGpuVersion(v => v + 1);
   }, []);
 
   React.useEffect(() => () => {
-    viGpuDpcImageRef.current = null;
+    viGpuImageRef.current = null;
     viGpuColormapRef.current?.destroy();
     viGpuColormapRef.current = null;
     viGpuColormapDeviceRef.current = null;
@@ -3113,6 +3140,146 @@ function Show4DSTEM() {
         for (let i = 0; i < values.length; i++) out[i] = values[i] - mean;
         return out;
       };
+      type WarmRoiPresetName = "bf" | "abf" | "adf";
+      type WarmRoiGeometry = {
+        mode: "circle" | "annular";
+        centerRow: number;
+        centerCol: number;
+        radius: number;
+        radiusInner: number;
+      };
+      type WarmViCacheEntry = {
+        source: ViGpuSource;
+        label: string;
+        data: Float32Array;
+        key: string;
+        kind: string;
+        computedMs: number;
+      };
+      const viWarmCache = new Map<string, WarmViCacheEntry>();
+      let viWarmupStarted = false;
+      let viWarmupGeneration = 0;
+      let viWarmupStatus: "idle" | "warming" | "ready" | "failed" = "idle";
+      let suppressViTraitRecompute = false;
+      const roundedCacheValue = (value: unknown): string => {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return "0";
+        return String(Math.round(n * 1000) / 1000);
+      };
+      const activeVolumeCacheKey = () => `vol:${Math.max(0, Math.round(Number(model.get("frame_idx") || 0)))}`;
+      const dpcWarmCacheKey = (source: DpcGpuSource) => [
+        activeVolumeCacheKey(),
+        "dpc",
+        source,
+        `scan:${scanRows}x${scanCols}`,
+        `det:${detR}x${detC}`,
+      ].join("|");
+      const roiWarmCacheKey = (geometry: WarmRoiGeometry) => [
+        activeVolumeCacheKey(),
+        "roi",
+        geometry.mode,
+        `cr:${roundedCacheValue(geometry.centerRow)}`,
+        `cc:${roundedCacheValue(geometry.centerCol)}`,
+        `r:${roundedCacheValue(geometry.radius)}`,
+        `ri:${roundedCacheValue(geometry.radiusInner)}`,
+        `scan:${scanRows}x${scanCols}`,
+        `det:${detR}x${detC}`,
+      ].join("|");
+      const currentRoiGeometry = (): WarmRoiGeometry => ({
+        mode: String(model.get("roi_mode") || "circle") === "annular" ? "annular" : "circle",
+        centerRow: Number(model.get("roi_center_row") || model.get("center_row") || detR / 2),
+        centerCol: Number(model.get("roi_center_col") || model.get("center_col") || detC / 2),
+        radius: Math.max(1, Number(model.get("roi_radius") || model.get("bf_radius") || 1)),
+        radiusInner: Math.max(0, Number(model.get("roi_radius_inner") || 0)),
+      });
+      const presetRoiGeometry = (name: WarmRoiPresetName): WarmRoiGeometry => {
+        const bf = Math.max(1, Number(model.get("bf_radius") || 1));
+        const centerRow = Number(model.get("center_row") || model.get("roi_center_row") || detR / 2);
+        const centerCol = Number(model.get("center_col") || model.get("roi_center_col") || detC / 2);
+        if (name === "abf") {
+          return {
+            mode: "annular",
+            centerRow,
+            centerCol,
+            radius: bf,
+            radiusInner: Math.max(0.5, bf * 0.5),
+          };
+        }
+        if (name === "adf") {
+          return {
+            mode: "annular",
+            centerRow,
+            centerCol,
+            radius: bf * 2,
+            radiusInner: bf,
+          };
+        }
+        return {
+          mode: "circle",
+          centerRow,
+          centerCol,
+          radius: bf,
+          radiusInner: Math.max(0, Number(model.get("roi_radius_inner") || 0)),
+        };
+      };
+      const maskForRoiGeometry = (geometry: WarmRoiGeometry): Uint32Array => buildDetectorMask({
+        get: (name: string) => {
+          if (name === "roi_center_row") return geometry.centerRow;
+          if (name === "roi_center_col") return geometry.centerCol;
+          if (name === "roi_mode") return geometry.mode;
+          if (name === "roi_radius") return geometry.radius;
+          if (name === "roi_radius_inner") return geometry.radiusInner;
+          if (name === "roi_width" || name === "roi_height") return 0;
+          return model.get(name);
+        },
+      }, detR, detC);
+      const warmCacheSummary = () => ({
+        status: viWarmupStatus,
+        generation: viWarmupGeneration,
+        count: viWarmCache.size,
+        keys: Array.from(viWarmCache.keys()),
+        entries: Array.from(viWarmCache.values()).map((entry) => ({
+          label: entry.label,
+          source: entry.source,
+          kind: entry.kind,
+          pixels: entry.data.length,
+          computedMs: entry.computedMs,
+        })),
+      });
+      const publishWarmCacheSummary = (extra: Record<string, unknown> = {}) => {
+        try {
+          (window as unknown as { __sh4dWarmCache?: unknown }).__sh4dWarmCache = {
+            ...warmCacheSummary(),
+            ...extra,
+          };
+        } catch {
+          // Diagnostics must not affect interaction.
+        }
+      };
+      const dataViewForFloat32 = (data: Float32Array): DataView => (
+        new DataView(data.buffer as ArrayBuffer, data.byteOffset, data.byteLength)
+      );
+      const setWarmCacheEntry = (entry: WarmViCacheEntry) => {
+        viWarmCache.set(entry.key, entry);
+        publishWarmCacheSummary({ lastStored: entry.label });
+      };
+      const serveWarmCacheEntry = (
+        key: string,
+        source: ViGpuSource,
+        startedAt: number,
+        generation: number,
+      ): boolean => {
+        if (dpRoiInteractiveRef.current) return false;
+        const cached = viWarmCache.get(key);
+        if (!cached || cached.source !== source || cached.data.length !== scanRows * scanCols) {
+          return false;
+        }
+        clearViGpuDisplay();
+        model.set("virtual_image_bytes", dataViewForFloat32(cached.data));
+        recordViProfile(source, `${cached.kind}_hit`, startedAt, generation);
+        publishWarmCacheSummary({ lastHit: cached.label });
+        return true;
+      };
       let dpcBufferQueue: Promise<void> = Promise.resolve();
       const computeDpcBufferImage = async (
         backend: Show4DSTEMCompute | Show4DSTEMCpuCompute,
@@ -3135,48 +3302,246 @@ function Show4DSTEM() {
             buffer.destroy();
             return false;
           }
-          engine.adoptBuffer(VI_GPU_DPC_SLOT, buffer, scanCols, scanRows);
-          viGpuDpcImageRef.current = { source, slot: VI_GPU_DPC_SLOT, width: scanCols, height: scanRows };
-          setViGpuDpcVersion(v => v + 1);
-          try {
-            (window as unknown as { __sh4dDpcDisplay?: Record<string, unknown> }).__sh4dDpcDisplay = {
-              source,
-              gpuBufferToDisplay: true,
-              rendered: false,
-              pixels: scanRows * scanCols,
-              slot: VI_GPU_DPC_SLOT,
-            };
-          } catch {
-            // Diagnostics must not affect rendering.
-          }
+          engine.adoptBuffer(VI_GPU_SLOT, buffer, scanCols, scanRows);
+          viGpuImageRef.current = {
+            source,
+            slot: VI_GPU_SLOT,
+            width: scanCols,
+            height: scanRows,
+            rangeMode: "gpu",
+            rawVersionAfter: rawVirtualImageVersionRef.current + 1,
+          };
+          setViGpuVersion(v => v + 1);
+          publishShow4DSTEMViDisplay({
+            source,
+            gpuBufferToDisplay: true,
+            rendered: false,
+            pixels: scanRows * scanCols,
+            slot: VI_GPU_SLOT,
+            rangeMode: "gpu",
+          });
           return true;
         };
         const queued = dpcBufferQueue.then(run, run);
         dpcBufferQueue = queued.then(() => undefined, () => undefined);
         return await queued;
       };
+      const computeRoiBufferImage = (
+        backend: Show4DSTEMCompute | Show4DSTEMCpuCompute,
+        mask: Uint32Array,
+      ): boolean => {
+        const engine = ensureViGpuColormap(backend);
+        const maybeVi = backend as unknown as {
+          maskedSumBuffer?: (mask: Uint32Array) => { buffer: GPUBuffer; n: number };
+        };
+        if (!engine || typeof maybeVi.maskedSumBuffer !== "function") {
+          return false;
+        }
+        const t0 = performance.now();
+        const { buffer, n } = maybeVi.maskedSumBuffer(mask);
+        if (n === 0) {
+          buffer.destroy();
+          return false;
+        }
+        engine.adoptBuffer(VI_GPU_SLOT, buffer, scanCols, scanRows);
+        viGpuImageRef.current = {
+          source: "roi",
+          slot: VI_GPU_SLOT,
+          width: scanCols,
+          height: scanRows,
+          rangeMode: "gpu",
+          rawVersionAfter: rawVirtualImageVersionRef.current + 1,
+        };
+        setViGpuVersion(v => v + 1);
+        publishShow4DSTEMViDisplay({
+          source: "roi",
+          gpuBufferToDisplay: true,
+          rendered: false,
+          pixels: scanRows * scanCols,
+          maskPixels: n,
+          slot: VI_GPU_SLOT,
+          rangeMode: "gpu",
+          submitMs: performance.now() - t0,
+        });
+        return true;
+      };
+      let viRecomputeGen = 0;
+      const recordViProfile = (
+        source: string,
+        kind: string,
+        startedAt: number,
+        generation: number,
+      ) => {
+        try {
+          const profile = {
+            source,
+            kind,
+            generation,
+            ms: Math.round((performance.now() - startedAt) * 10) / 10,
+            roiMode: String(model.get("roi_mode") || ""),
+            roiRadius: Number(model.get("roi_radius") || 0),
+            roiRadiusInner: Number(model.get("roi_radius_inner") || 0),
+            timestamp: Math.round(performance.now()),
+          };
+          const win = window as unknown as {
+            __sh4dViProfile?: unknown;
+            __sh4dViHistory?: unknown[];
+          };
+          const history = Array.isArray(win.__sh4dViHistory) ? win.__sh4dViHistory : [];
+          history.push(profile);
+          if (history.length > 80) history.splice(0, history.length - 80);
+          win.__sh4dViProfile = profile;
+          win.__sh4dViHistory = history;
+        } catch {
+          // Diagnostics must not affect interaction.
+        }
+      };
       const recomputeVI = async () => {
+        const generation = ++viRecomputeGen;
+        const startedAt = performance.now();
         const source = normaliseViSource(model.get("vi_source"));
         const product = viProductFrameView(model, scanRows, scanCols, source);
         if (product) {
-          clearViGpuDpcDisplay();
+          if (generation !== viRecomputeGen) return;
+          clearViGpuDisplay();
           model.set("virtual_image_bytes", product);
+          recordViProfile(source, "product", startedAt, generation);
           return;
         }
         if (source === "DPC_row" || source === "DPC_col") {
-          const displayed = await computeDpcBufferImage(compute!, source);
-          if (!displayed) {
-            clearViGpuDpcDisplay();
-          }
-          const dpc = await computeDpcImage(compute!, source);
-          if (dpc) {
-            model.set("virtual_image_bytes", new DataView(dpc.buffer));
+          if (serveWarmCacheEntry(dpcWarmCacheKey(source), source, startedAt, generation)) {
             return;
           }
+          const displayed = await computeDpcBufferImage(compute!, source);
+          if (generation !== viRecomputeGen) return;
+          if (!displayed) {
+            clearViGpuDisplay();
+          }
+          const dpc = await computeDpcImage(compute!, source);
+          if (generation !== viRecomputeGen) return;
+          if (dpc) {
+            setWarmCacheEntry({
+              source,
+              label: viSourceLabel(source),
+              data: dpc,
+              key: dpcWarmCacheKey(source),
+              kind: displayed ? "dpc_gpu_display_warm_cache" : "dpc_warm_cache",
+              computedMs: Math.round((performance.now() - startedAt) * 10) / 10,
+            });
+            model.set("virtual_image_bytes", new DataView(dpc.buffer));
+            recordViProfile(source, displayed ? "dpc_gpu_display" : "dpc", startedAt, generation);
+            return;
+          }
+          return;
         }
-        clearViGpuDpcDisplay();
-        const vi = await compute!.maskedSum(buildDetectorMask(model, detR, detC));
+        const mask = buildDetectorMask(model, detR, detC);
+        const roiKey = roiWarmCacheKey(currentRoiGeometry());
+        if (serveWarmCacheEntry(roiKey, "roi", startedAt, generation)) {
+          return;
+        }
+        const displayed = computeRoiBufferImage(compute!, mask);
+        if (!displayed) {
+          clearViGpuDisplay();
+        }
+        if (generation !== viRecomputeGen) return;
+        if (displayed && dpRoiInteractiveRef.current) {
+          recordViProfile(source, "masked_sum_gpu_display_interactive", startedAt, generation);
+          return;
+        }
+        const vi = await compute!.maskedSum(mask);
+        if (generation !== viRecomputeGen) return;
+        setWarmCacheEntry({
+          source: "roi",
+          label: String(model.get("roi_mode") || "ROI"),
+          data: vi,
+          key: roiKey,
+          kind: displayed ? "masked_sum_gpu_display_warm_cache" : "masked_sum_warm_cache",
+          computedMs: Math.round((performance.now() - startedAt) * 10) / 10,
+        });
         model.set("virtual_image_bytes", new DataView(vi.buffer));
+        recordViProfile(source, displayed ? "masked_sum_gpu_display" : "masked_sum", startedAt, generation);
+      };
+      const warmStandardViCache = async () => {
+        if (viWarmupStarted || disposed || !compute) {
+          return warmCacheSummary();
+        }
+        viWarmupStarted = true;
+        viWarmupStatus = "warming";
+        const warmGeneration = ++viWarmupGeneration;
+        const startedAt = performance.now();
+        publishWarmCacheSummary({ status: "warming" });
+        try {
+          for (const preset of ["bf", "abf", "adf"] as WarmRoiPresetName[]) {
+            if (disposed || warmGeneration !== viWarmupGeneration || !compute) {
+              return warmCacheSummary();
+            }
+            const geometry = presetRoiGeometry(preset);
+            const key = roiWarmCacheKey(geometry);
+            if (viWarmCache.has(key)) continue;
+            const t0 = performance.now();
+            const data = await compute.maskedSum(maskForRoiGeometry(geometry));
+            if (disposed || warmGeneration !== viWarmupGeneration) {
+              return warmCacheSummary();
+            }
+            setWarmCacheEntry({
+              source: "roi",
+              label: preset.toUpperCase(),
+              data,
+              key,
+              kind: "launch_warm_cache",
+              computedMs: Math.round((performance.now() - t0) * 10) / 10,
+            });
+          }
+          for (const source of ["DPC_row", "DPC_col"] as DpcGpuSource[]) {
+            if (disposed || warmGeneration !== viWarmupGeneration || !compute) {
+              return warmCacheSummary();
+            }
+            const key = dpcWarmCacheKey(source);
+            if (viWarmCache.has(key)) continue;
+            const t0 = performance.now();
+            const data = await computeDpcImage(compute, source);
+            if (!data || disposed || warmGeneration !== viWarmupGeneration) {
+              continue;
+            }
+            setWarmCacheEntry({
+              source,
+              label: viSourceLabel(source),
+              data,
+              key,
+              kind: "launch_warm_cache",
+              computedMs: Math.round((performance.now() - t0) * 10) / 10,
+            });
+          }
+          publishWarmCacheSummary({
+            status: "ready",
+            warmMs: Math.round((performance.now() - startedAt) * 10) / 10,
+          });
+          viWarmupStatus = "ready";
+        } catch (error) {
+          viWarmupStatus = "failed";
+          publishWarmCacheSummary({
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return warmCacheSummary();
+      };
+      const resetWarmViCache = (reason: string) => {
+        viWarmupGeneration += 1;
+        viWarmupStarted = false;
+        viWarmupStatus = "idle";
+        viWarmCache.clear();
+        publishWarmCacheSummary({ status: "idle", reason });
+      };
+      const scheduleWarmStandardViCache = () => {
+        if (viWarmupStarted || disposed) return;
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (!disposed) {
+              void warmStandardViCache();
+            }
+          });
+        });
       };
       let compareViGen = 0;
       const comparePageState = () => {
@@ -3269,6 +3634,21 @@ function Show4DSTEM() {
       (window as unknown as { __sh4d: unknown }).__sh4d = { model, recomputeVI, recomputeCompareVI,
         detMask: () => buildDetectorMask(model, detR, detC),
         deriveOnly: async () => { const vi = await compute!.maskedSum(buildDetectorMask(model, detR, detC)); return vi.length; },
+        warmStandardViCache,
+        warmCache: () => warmCacheSummary(),
+        roiBufferOnly: async () => {
+          const mask = buildDetectorMask(model, detR, detC);
+          const t0 = performance.now();
+          const displayed = computeRoiBufferImage(compute!, mask);
+          await ensureViGpuColormap(compute!)?.getDevice().queue.onSubmittedWorkDone().catch(() => {});
+          return {
+            available: displayed,
+            displayed: Boolean(viGpuImageRef.current && viGpuImageRef.current.source === "roi"),
+            length: scanRows * scanCols,
+            elapsedMs: performance.now() - t0,
+            detail: (window as unknown as { __sh4dViDisplay?: Record<string, unknown> }).__sh4dViDisplay || {},
+          };
+        },
         dpcOnly: async () => {
           const dpc = await computeDpcImage(compute!, "DPC_row");
           let sum = 0;
@@ -3282,7 +3662,7 @@ function Show4DSTEM() {
           if (dpc) for (let i = 0; i < dpc.length; i++) sum += dpc[i];
           return {
             available: displayed,
-            displayed: Boolean(viGpuDpcImageRef.current),
+            displayed: Boolean(viGpuImageRef.current),
             length: dpc?.length ?? 0,
             sum,
           };
@@ -3290,6 +3670,10 @@ function Show4DSTEM() {
         comLen: () => { const c = compute as unknown as { com?: Float32Array | null }; return c && c.com ? c.com.length : -1; },
         rd: () => ({ mode: model.get("roi_mode"), r: model.get("roi_radius"), ri: model.get("roi_radius_inner"),
           cr: model.get("roi_center_row"), cc: model.get("roi_center_col"), active: model.get("roi_active") }) };
+      requestViFinalizeRef.current = () => {
+        void recomputeVI();
+        void recomputeCompareVI();
+      };
       const recomputeDP = async () => {
         const mode = model.get("vi_roi_mode");
         if (!mode || mode === "off") { model.set("vi_roi_dp_bytes", new DataView(new ArrayBuffer(0))); return; }
@@ -3333,8 +3717,16 @@ function Show4DSTEM() {
           : await compute!.frameAt(scanIdx);
         model.set("frame_bytes", new DataView(frame.buffer)); model.save_changes();
       };
-      const onVI = () => { void recomputeVI(); void recomputeCompareVI(); };
-      const onDP = () => { void recomputeDP(); };
+      let splittingRoiCenter = false;
+      let splittingViCenter = false;
+      const onVI = () => {
+        if (splittingRoiCenter || suppressViTraitRecompute) return;
+        void recomputeVI(); void recomputeCompareVI();
+      };
+      const onDP = () => {
+        if (splittingViCenter) return;
+        void recomputeDP();
+      };
       const onPos = () => { void recomputeFrame(); };
       const onCompareFrameSource = () => { void recomputeFrame(); };
       const onCompareGridSource = () => { void recomputeCompareVI(); void recomputeFrame(); };
@@ -3361,7 +3753,9 @@ function Show4DSTEM() {
         const gen = ++frameGen;                  // ignore a stale decode if the user keeps scrubbing
         const ready = await activateCurrentVolume();
         if (gen !== frameGen || !ready) return;   // a newer scroll superseded this one
+        resetWarmViCache("frame");
         void recomputeVI(); void recomputeCompareVI(); void recomputeDP(); void recomputeFrame();
+        scheduleWarmStandardViCache();
       };
       if (getVol) model.on("change:frame_idx", onFrame);
       model.on("change:view_mode", recomputeActiveView);
@@ -3373,15 +3767,20 @@ function Show4DSTEM() {
         const name = String(model.get("_preset_request") || "").toLowerCase();
         if (!name) return;
         const bf = model.get("bf_radius") || 1;
-        model.set("roi_active", true);
-        model.set("vi_source", "roi");
-        model.set("roi_center_row", model.get("center_row"));
-        model.set("roi_center_col", model.get("center_col"));
-        if (name === "bf") { model.set("roi_mode", "circle"); model.set("roi_radius", Math.max(1, bf)); }
-        else if (name === "abf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", Math.max(0.5, bf * 0.5)); model.set("roi_radius", Math.max(1, bf)); }
-        else if (name === "adf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", bf); model.set("roi_radius", bf * 2); }
-        else if (name === "haadf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", bf * 2); model.set("roi_radius", bf * 4); }
-        model.set("_preset_request", "");  // consume so the same preset can fire again
+        suppressViTraitRecompute = true;
+        try {
+          model.set("roi_active", true);
+          model.set("vi_source", "roi");
+          model.set("roi_center_row", model.get("center_row"));
+          model.set("roi_center_col", model.get("center_col"));
+          if (name === "bf") { model.set("roi_mode", "circle"); model.set("roi_radius", Math.max(1, bf)); }
+          else if (name === "abf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", Math.max(0.5, bf * 0.5)); model.set("roi_radius", Math.max(1, bf)); }
+          else if (name === "adf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", bf); model.set("roi_radius", bf * 2); }
+          else if (name === "haadf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", bf * 2); model.set("roi_radius", bf * 4); }
+          model.set("_preset_request", "");  // consume so the same preset can fire again
+        } finally {
+          suppressViTraitRecompute = false;
+        }
         void recomputeVI(); void recomputeCompareVI();
       };
       // Dragging the aperture sets the COMPOUND roi_center [row, col]; the kernel
@@ -3391,12 +3790,28 @@ function Show4DSTEM() {
       // real-space vi_roi_center drag.
       const onRoiCenter = () => {
         const rc = model.get("roi_center");
-        if (Array.isArray(rc) && rc.length === 2) { model.set("roi_center_row", rc[0]); model.set("roi_center_col", rc[1]); }
+        if (Array.isArray(rc) && rc.length === 2) {
+          splittingRoiCenter = true;
+          try {
+            model.set("roi_center_row", rc[0]);
+            model.set("roi_center_col", rc[1]);
+          } finally {
+            splittingRoiCenter = false;
+          }
+        }
         void recomputeVI(); void recomputeCompareVI();
       };
       const onViCenter = () => {
         const rc = model.get("vi_roi_center");
-        if (Array.isArray(rc) && rc.length === 2) { model.set("vi_roi_center_row", rc[0]); model.set("vi_roi_center_col", rc[1]); }
+        if (Array.isArray(rc) && rc.length === 2) {
+          splittingViCenter = true;
+          try {
+            model.set("vi_roi_center_row", rc[0]);
+            model.set("vi_roi_center_col", rc[1]);
+          } finally {
+            splittingViCenter = false;
+          }
+        }
         void recomputeDP();
       };
       const viTraits = ["roi_center_row", "roi_center_col", "roi_radius", "roi_radius_inner", "roi_mode", "roi_width", "roi_height"];
@@ -3438,15 +3853,16 @@ function Show4DSTEM() {
       };
       await recomputeVI();  // initial virtual image, no interaction needed
       await recomputeCompareVI();
+      scheduleWarmStandardViCache();
       // Safety re-run: at first mount the offline stack / roi-detector traits can
       // still be settling, so the very first maskedSum can return an empty (zero)
       // virtual image - leaving the panel blank until the user nudges the detector.
       // A deferred recompute guarantees the BF image appears with no interaction.
       requestAnimationFrame(() => { if (!disposed) { void recomputeVI(); void recomputeCompareVI(); } });
-      setTimeout(() => { if (!disposed) { void recomputeVI(); void recomputeCompareVI(); } }, 200);
+      setTimeout(() => { if (!disposed) { void recomputeVI(); void recomputeCompareVI(); scheduleWarmStandardViCache(); } }, 200);
     })();
-    return () => { disposed = true; setWebgpuDpcReady(false); clearViGpuDpcDisplay(); detach?.(); };
-  }, [clearViGpuDpcDisplay, ensureViGpuColormap, offline]);
+    return () => { disposed = true; requestViFinalizeRef.current = null; setWebgpuDpcReady(false); clearViGpuDisplay(); detach?.(); };
+  }, [clearViGpuDisplay, ensureViGpuColormap, offline]);
   // dp_stats are computed in JS from frameBytes (Python side no longer
   // syncs a dp_stats trait — saves 4 trait sync round-trips per click).
   const [viStats, setViStats] = React.useState<number[]>([0, 0, 0, 0]);
@@ -4436,6 +4852,7 @@ function Show4DSTEM() {
       rawVirtualImageRef.current = storedData;
     }
     storedData.set(rawData);
+    rawVirtualImageVersionRef.current += 1;
 
     // Also store for VI profile sampling
     if (!rawViDataRef.current || rawViDataRef.current.length !== numFloats) {
@@ -4601,8 +5018,8 @@ function Show4DSTEM() {
     if (!rawVirtualImageRef.current) return;
     if (
       !compareMode
-      && viGpuDpcImageRef.current
-      && activeViSource === viGpuDpcImageRef.current.source
+      && viGpuImageRef.current
+      && activeViSource === viGpuImageRef.current.source
     ) {
       return;
     }
@@ -4680,14 +5097,14 @@ function Show4DSTEM() {
     applyColormap(scaled, imageData.data, lut, vmin, vmax);
     offCtx.putImageData(imageData, 0, 0);
     setViOffscreenVersion(v => v + 1);
-  }, [activeViSource, compareMode, displayedVirtualImageBytes, shapeRows, shapeCols, viGpuDpcVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viAutoContrast]);
+  }, [activeViSource, compareMode, displayedVirtualImageBytes, shapeRows, shapeCols, viGpuVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viAutoContrast]);
 
-  // DPC WebGPU display path: the reduction output stays as a GPUBuffer and the
-  // colormap shader renders it to a dedicated WebGPU canvas layer. The
-  // virtual_image_bytes trait is still populated from the same buffer so stats,
-  // FFT, profile, COPY fallback, and non-WebGPU paths keep working.
+  // WebGPU virtual-image display path: the reduction output stays as a GPUBuffer
+  // and the colormap shader renders it to a dedicated canvas layer. The
+  // virtual_image_bytes trait is still populated afterward so stats, FFT,
+  // profile, COPY fallback, and non-WebGPU paths keep working.
   React.useEffect(() => {
-    const gpuImage = viGpuDpcImageRef.current;
+    const gpuImage = viGpuImageRef.current;
     const engine = viGpuColormapRef.current;
     const canvas = virtualGpuCanvasRef.current;
     const raw = rawVirtualImageRef.current;
@@ -4698,42 +5115,59 @@ function Show4DSTEM() {
       || !canvas
       || compareMode
       || (activeViSource !== gpuImage.source && currentSource !== gpuImage.source)
-      || !raw
-      || raw.length !== gpuImage.width * gpuImage.height
     ) {
       return;
     }
 
-    let scaled = raw;
-    if (viScaleMode === "log") {
-      scaled = new Float32Array(raw.length);
-      for (let i = 0; i < raw.length; i++) {
-        scaled[i] = Math.log1p(Math.max(0, raw[i]));
-      }
-    }
-
-    const r = findDataRange(scaled);
-    let dataMin = r.min;
-    let dataMax = r.max;
-    if (viSourceUsesSymmetricRange(activeViSource)) {
-      const span = Math.max(Math.abs(r.min), Math.abs(r.max), 1e-12);
-      dataMin = -span;
-      dataMax = span;
-    }
-
-    let vmin: number, vmax: number;
-    if (traitViVmin != null && traitViVmax != null) {
+    const expectedPixels = gpuImage.width * gpuImage.height;
+    let vmin: number | null = null;
+    let vmax: number | null = null;
+    const rawReady = Boolean(
+      raw
+      && raw.length === expectedPixels
+      && rawVirtualImageVersionRef.current >= gpuImage.rawVersionAfter,
+    );
+    if (rawReady && raw) {
+      let scaled = raw;
       if (viScaleMode === "log") {
-        vmin = Math.log1p(Math.max(traitViVmin, 0));
-        vmax = Math.log1p(Math.max(traitViVmax, 0));
-      } else {
-        vmin = traitViVmin;
-        vmax = traitViVmax;
+        scaled = new Float32Array(raw.length);
+        for (let i = 0; i < raw.length; i++) {
+          scaled[i] = Math.log1p(Math.max(0, raw[i]));
+        }
       }
-    } else if (viAutoContrast) {
-      ({ vmin, vmax } = percentileClip(scaled, 1, 99));
-    } else {
-      ({ vmin, vmax } = sliderRange(dataMin, dataMax, viVminPct, viVmaxPct));
+
+      const r = findDataRange(scaled);
+      let dataMin = r.min;
+      let dataMax = r.max;
+      if (viSourceUsesSymmetricRange(gpuImage.source)) {
+        const span = Math.max(Math.abs(r.min), Math.abs(r.max), 1e-12);
+        dataMin = -span;
+        dataMax = span;
+      }
+
+      if (traitViVmin != null && traitViVmax != null) {
+        if (viScaleMode === "log") {
+          vmin = Math.log1p(Math.max(traitViVmin, 0));
+          vmax = Math.log1p(Math.max(traitViVmax, 0));
+        } else {
+          vmin = traitViVmin;
+          vmax = traitViVmax;
+        }
+      } else if (viAutoContrast) {
+        ({ vmin, vmax } = percentileClip(scaled, 1, 99));
+        const span = dataMax - dataMin;
+        if (span > 0) {
+          const lo = Math.max(0, Math.min(100, ((vmin - dataMin) / span) * 100));
+          const hi = Math.max(0, Math.min(100, ((vmax - dataMin) / span) * 100));
+          if (Math.abs(lo - viVminPct) > 0.5) setViVminPct(lo);
+          if (Math.abs(hi - viVmaxPct) > 0.5) setViVmaxPct(hi);
+        }
+      } else {
+        ({ vmin, vmax } = sliderRange(dataMin, dataMax, viVminPct, viVmaxPct));
+      }
+    } else if (traitViVmin != null && traitViVmax != null && viScaleMode !== "log") {
+      vmin = traitViVmin;
+      vmax = traitViVmax;
     }
 
     const lut = COLORMAPS[viColormap] || COLORMAPS.inferno;
@@ -4747,43 +5181,66 @@ function Show4DSTEM() {
     }
     const ctx = virtualGpuCanvasContextRef.current;
     if (!ctx) return;
-    const rendered = engine.renderPanelSlotsDirectToCanvas(
-      [gpuImage.slot],
-      { vmin, vmax },
-      viScaleMode === "log",
-      ctx,
-      {
-        width: shapeCols,
-        height: shapeRows,
-        panelCount: 1,
-        cols: 1,
-        rows: 1,
-        gap: 0,
-        bgRgb: 0,
-        transforms: [{ zoom: viZoom, panX: viPanX, panY: viPanY }],
-        smooth: viSmooth,
-      },
-    );
-    if (rendered) {
-      try {
-        (window as unknown as { __sh4dDpcDisplay?: Record<string, unknown> }).__sh4dDpcDisplay = {
-          ...((window as unknown as { __sh4dDpcDisplay?: Record<string, unknown> }).__sh4dDpcDisplay || {}),
-          source: gpuImage.source,
-          gpuBufferToDisplay: true,
-          rendered: true,
+    const renderStart = performance.now();
+    let displayRange = "cpu";
+    let rendered = false;
+    if (vmin != null && vmax != null) {
+      rendered = engine.renderPanelSlotsDirectToCanvas(
+        [gpuImage.slot],
+        { vmin, vmax },
+        viScaleMode === "log",
+        ctx,
+        {
           width: shapeCols,
           height: shapeRows,
-        };
-      } catch {
-        // Diagnostics must not affect rendering.
-      }
+          panelCount: 1,
+          cols: 1,
+          rows: 1,
+          gap: 0,
+          bgRgb: 0,
+          transforms: [{ zoom: viZoom, panX: viPanX, panY: viPanY }],
+          smooth: viSmooth,
+        },
+      );
+    } else if (gpuImage.rangeMode === "gpu" && viScaleMode !== "log") {
+      displayRange = "gpu";
+      rendered = engine.renderSlotDirectWithGpuRangeToCanvas(
+        gpuImage.slot,
+        viVminPct,
+        viVmaxPct,
+        false,
+        ctx,
+        {
+          width: shapeCols,
+          height: shapeRows,
+          bgRgb: 0,
+          transform: { zoom: viZoom, panX: viPanX, panY: viPanY },
+          smooth: viSmooth,
+        },
+      );
+    }
+    if (rendered) {
+      publishShow4DSTEMViDisplay({
+        source: gpuImage.source,
+        gpuBufferToDisplay: true,
+        rendered: true,
+        width: shapeCols,
+        height: shapeRows,
+        slot: gpuImage.slot,
+        rangeMode: displayRange,
+        rawReady,
+        rawVersion: rawVirtualImageVersionRef.current,
+        rawVersionAfter: gpuImage.rawVersionAfter,
+        renderSubmitMs: performance.now() - renderStart,
+      });
     }
   }, [
     activeViSource,
     compareMode,
+    displayedVirtualImageBytes,
     shapeRows,
     shapeCols,
-    viGpuDpcVersion,
+    viGpuVersion,
     viColormap,
     viVminPct,
     viVmaxPct,
@@ -4796,6 +5253,8 @@ function Show4DSTEM() {
     viPanY,
     viSmooth,
     model,
+    setViVminPct,
+    setViVmaxPct,
   ]);
 
   // Cheap: VI zoom/pan redraw — just drawImage from cached offscreen
@@ -5917,6 +6376,7 @@ function Show4DSTEM() {
       }
     };
     const onUp = () => {
+      finishDpRoiInteraction();
       setIsDraggingResize(false);
       setIsDraggingResizeInner(false);
       setLocalRoiRadius(null);
@@ -5928,7 +6388,7 @@ function Show4DSTEM() {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp); window.removeEventListener("pointercancel", onUp);
     };
-  }, [getDpImageCoordsFromClient, isDraggingResize, isDraggingResizeInner, resizeDpRoiFromImagePoint]);
+  }, [finishDpRoiInteraction, getDpImageCoordsFromClient, isDraggingResize, isDraggingResizeInner, resizeDpRoiFromImagePoint]);
 
   const handleDpMouseDown = (e: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
     // Capture the pointer so a fast edge-drag resize keeps receiving move/up
@@ -5979,6 +6439,8 @@ function Show4DSTEM() {
       setIsHoveringResizeInner(false);
       return;
     }
+
+    dpRoiInteractiveRef.current = true;
 
     // Check if clicking on resize handle (inner first, then outer)
     if (isNearResizeHandleInner(imgX, imgY)) {
@@ -6109,6 +6571,7 @@ function Show4DSTEM() {
   };
 
   const handleDpMouseUp = (e: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
+    finishDpRoiInteraction();
     if (draggingDpProfileEndpoint !== null || isDraggingDpProfileLine) {
       setDraggingDpProfileEndpoint(null);
       setIsDraggingDpProfileLine(false);
@@ -6161,6 +6624,7 @@ function Show4DSTEM() {
   };
   const handleDpMouseLeave = () => {
     dpClickStartRef.current = null;
+    finishDpRoiInteraction();
     setIsDraggingDP(false); setIsDraggingResize(false); setIsDraggingResizeInner(false);
     setLocalRoiRadius(null);
     setDraggingDpProfileEndpoint(null);
@@ -6858,6 +7322,9 @@ function Show4DSTEM() {
       fontWeight: active ? 800 : 700,
       opacity: active ? 1 : 0.9,
       cursor: "pointer",
+      display: "inline-flex",
+      alignItems: "center",
+      whiteSpace: "nowrap",
       "&:hover": { color, opacity: 1, textDecoration: "underline" },
     };
   };
@@ -7081,19 +7548,19 @@ function Show4DSTEM() {
     }
   }, []);
   const currentViSource = normaliseViSource(model.get("vi_source"));
-  const viGpuDpcVisible = Boolean(
-    viGpuDpcVersion >= 0
+  const viGpuVisible = Boolean(
+    viGpuVersion >= 0
     && !compareMode
-    && viGpuDpcImageRef.current
+    && viGpuImageRef.current
     && (
-      activeViSource === viGpuDpcImageRef.current.source
-      || currentViSource === viGpuDpcImageRef.current.source
+      activeViSource === viGpuImageRef.current.source
+      || currentViSource === viGpuImageRef.current.source
     ),
   );
   const getActiveViCanvas = React.useCallback((): HTMLCanvasElement | null => {
-    if (viGpuDpcVisible && virtualGpuCanvasRef.current) return virtualGpuCanvasRef.current;
+    if (viGpuVisible && virtualGpuCanvasRef.current) return virtualGpuCanvasRef.current;
     return virtualCanvasRef.current;
-  }, [viGpuDpcVisible]);
+  }, [viGpuVisible]);
 
   return (
     <Box
@@ -7905,7 +8372,7 @@ function Show4DSTEM() {
                   width: "100%",
                   height: "100%",
                   imageRendering: "pixelated",
-                  display: viGpuDpcVisible ? "block" : "none",
+                  display: viGpuVisible ? "block" : "none",
                 }}
               />
               <canvas
@@ -7917,7 +8384,7 @@ function Show4DSTEM() {
                   width: "100%",
                   height: "100%",
                   imageRendering: "pixelated",
-                  display: viGpuDpcVisible ? "none" : "block",
+                  display: viGpuVisible ? "none" : "block",
                 }}
               />
               <canvas

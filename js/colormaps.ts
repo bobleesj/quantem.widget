@@ -529,7 +529,7 @@ struct Params {
   log_scale: u32,
   bg_rgb: u32,
   zoom: f32,
-  smooth: u32,
+  smooth_sample: u32,
   vmin: f32,
   vmax: f32,
   pan_x: f32,
@@ -574,7 +574,7 @@ fn unpack_rgb(rgb: u32) -> vec4f {
     return vec4f(0.0, 0.0, 0.0, 1.0);
   }
   var val: f32;
-  if (params.smooth == 1u) {
+  if (params.smooth_sample == 1u) {
     let src_fx = clamp((image_x + 0.5) * f32(region_w) / out_w - 0.5, 0.0, f32(region_w - 1u));
     let src_fy = clamp((image_y + 0.5) * f32(params.src_height) / out_h - 0.5, 0.0, f32(params.src_height - 1u));
     let x0_local = u32(floor(src_fx));
@@ -607,6 +607,106 @@ fn unpack_rgb(rgb: u32) -> vec4f {
   let range = max(params.vmax - params.vmin, 1e-30);
   let clipped = clamp(val, params.vmin, params.vmax);
   let t = (clipped - params.vmin) / range;
+  let lut_idx = min(u32(t * 255.0), 255u);
+  return unpack_rgb(lut[lut_idx]);
+}
+`;
+
+const DIRECT_SLOT_GPU_RANGE_COLORMAP_SHADER = /* wgsl */ `
+struct Params {
+  src_width: u32,
+  src_height: u32,
+  src_x0: u32,
+  src_region_width: u32,
+  out_height: u32,
+  out_width: u32,
+  origin_x: f32,
+  origin_y: f32,
+  log_scale: u32,
+  bg_rgb: u32,
+  zoom: f32,
+  smooth_sample: u32,
+  vmin_pct: f32,
+  vmax_pct: f32,
+  pan_x: f32,
+  pan_y: f32,
+};
+struct RangeOut { vmin: f32, vmax: f32, _p0: f32, _p1: f32 };
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> data: array<f32>;
+@group(0) @binding(2) var<storage, read> lut: array<u32>;
+@group(0) @binding(3) var<storage, read> range_in: RangeOut;
+
+struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> VSOut {
+  var out: VSOut;
+  let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
+  let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
+  out.pos = vec4f(x, y, 0.0, 1.0);
+  out.uv = vec2f((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+  return out;
+}
+
+fn unpack_rgb(rgb: u32) -> vec4f {
+  let r = f32(rgb & 0xFFu) / 255.0;
+  let g = f32((rgb >> 8u) & 0xFFu) / 255.0;
+  let b = f32((rgb >> 16u) & 0xFFu) / 255.0;
+  return vec4f(r, g, b, 1.0);
+}
+
+@fragment fn fs(in: VSOut) -> @location(0) vec4f {
+  if (params.src_width == 0u || params.src_height == 0u) {
+    return vec4f(0.0, 0.0, 0.0, 1.0);
+  }
+  let region_w = max(1u, min(params.src_region_width, params.src_width));
+  let region_x0 = min(params.src_x0, params.src_width - 1u);
+  let out_w = f32(max(1u, params.out_width));
+  let out_h = f32(max(1u, params.out_height));
+  let local_x = in.pos.x - params.origin_x;
+  let local_y = in.pos.y - params.origin_y;
+  let image_x = (local_x - params.pan_x) / max(params.zoom, 1e-6);
+  let image_y = (local_y - params.pan_y) / max(params.zoom, 1e-6);
+  if (image_x < 0.0 || image_y < 0.0 || image_x >= out_w || image_y >= out_h) {
+    return vec4f(0.0, 0.0, 0.0, 1.0);
+  }
+  var val: f32;
+  if (params.smooth_sample == 1u) {
+    let src_fx = clamp((image_x + 0.5) * f32(region_w) / out_w - 0.5, 0.0, f32(region_w - 1u));
+    let src_fy = clamp((image_y + 0.5) * f32(params.src_height) / out_h - 0.5, 0.0, f32(params.src_height - 1u));
+    let x0_local = u32(floor(src_fx));
+    let y0 = u32(floor(src_fy));
+    let x1_local = min(x0_local + 1u, region_w - 1u);
+    let y1 = min(y0 + 1u, params.src_height - 1u);
+    let x0 = min(region_x0 + x0_local, params.src_width - 1u);
+    let x1 = min(region_x0 + x1_local, params.src_width - 1u);
+    let tx = src_fx - f32(x0_local);
+    let ty = src_fy - f32(y0);
+    let row0 = y0 * params.src_width;
+    let row1 = y1 * params.src_width;
+    let v00 = data[row0 + x0];
+    let v10 = data[row0 + x1];
+    let v01 = data[row1 + x0];
+    let v11 = data[row1 + x1];
+    let v0 = v00 + (v10 - v00) * tx;
+    let v1 = v01 + (v11 - v01) * tx;
+    val = v0 + (v1 - v0) * ty;
+  } else {
+    let src_local_x = min(u32(image_x * f32(region_w) / out_w), region_w - 1u);
+    let src_x = min(region_x0 + src_local_x, params.src_width - 1u);
+    let src_y = min(u32(image_y * f32(params.src_height) / out_h), params.src_height - 1u);
+    val = data[src_y * params.src_width + src_x];
+  }
+  if (params.log_scale == 1u) {
+    val = log(1.0 + max(val, 0.0));
+  }
+  let span = range_in.vmax - range_in.vmin;
+  let vmin = range_in.vmin + span * clamp(params.vmin_pct, 0.0, 100.0) / 100.0;
+  let vmax = range_in.vmin + span * clamp(params.vmax_pct, 0.0, 100.0) / 100.0;
+  let range = max(vmax - vmin, 1e-30);
+  let clipped = clamp(val, vmin, vmax);
+  let t = (clipped - vmin) / range;
   let lut_idx = min(u32(t * 255.0), 255u);
   return unpack_rgb(lut[lut_idx]);
 }
@@ -1024,6 +1124,7 @@ export class GPUColormapEngine {
   private directGridPipeline: GPURenderPipeline | null = null;
   private directGridRangesPipeline: GPURenderPipeline | null = null;
   private directSlotPipeline: GPURenderPipeline | null = null;
+  private directSlotGpuRangePipeline: GPURenderPipeline | null = null;
   private packedPanelTransformPipeline: GPUComputePipeline | null = null;
   private blitPipeline: GPURenderPipeline | null = null;
   // GPU temporal-average state: a compute pipeline that means N window frames
@@ -1245,6 +1346,21 @@ export class GPUColormapEngine {
     if (this.directSlotPipeline) return;
     const module = this.device.createShaderModule({ code: DIRECT_SLOT_COLORMAP_SHADER });
     this.directSlotPipeline = this.device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module, entryPoint: "vs" },
+      fragment: {
+        module,
+        entryPoint: "fs",
+        targets: [{ format }],
+      },
+      primitive: { topology: "triangle-list" },
+    });
+  }
+
+  private ensureDirectSlotGpuRangePipeline(format: GPUTextureFormat): void {
+    if (this.directSlotGpuRangePipeline) return;
+    const module = this.device.createShaderModule({ code: DIRECT_SLOT_GPU_RANGE_COLORMAP_SHADER });
+    this.directSlotGpuRangePipeline = this.device.createRenderPipeline({
       layout: "auto",
       vertex: { module, entryPoint: "vs" },
       fragment: {
@@ -2564,6 +2680,91 @@ export class GPUColormapEngine {
     }
     pass.end();
     this.device.queue.submit([encoder.finish()]);
+    return true;
+  }
+
+  renderSlotDirectWithGpuRangeToCanvas(
+    idx: number,
+    vminPct: number,
+    vmaxPct: number,
+    logScale: boolean,
+    ctx: GPUCanvasContext,
+    opts: {
+      width: number;
+      height: number;
+      bgRgb: number;
+      transform?: { zoom: number; panX: number; panY: number };
+      smooth?: boolean;
+    },
+  ): boolean {
+    if (!this.lutBuffer) return false;
+    const slot = this.slots[idx];
+    if (!slot) return false;
+    const outW = Math.max(1, Math.round(opts.width));
+    const outH = Math.max(1, Math.round(opts.height));
+    const fmt = navigator.gpu.getPreferredCanvasFormat();
+    this.ensureRangeRegionPipeline();
+    this.ensureDirectSlotGpuRangePipeline(fmt);
+    const pipeline = this.directSlotGpuRangePipeline;
+    if (!this.rangeRegionPipeline || !pipeline) return false;
+
+    const encoder = this.device.createCommandEncoder();
+    if (!this.recordComputeRangeRegion(encoder, idx)) return false;
+
+    const params = this.directGridParams;
+    const pu = this.directGridParamsU32;
+    const pf = this.directGridParamsF32;
+    pu[0] = slot.width;
+    pu[1] = slot.height;
+    pu[2] = 0;
+    pu[3] = slot.width;
+    pu[4] = outH;
+    pu[5] = outW;
+    pf[6] = 0;
+    pf[7] = 0;
+    pu[8] = logScale ? 1 : 0;
+    pu[9] = opts.bgRgb & 0xFFFFFF;
+    const transform = opts.transform;
+    const zoomValue = Math.max(1e-6, transform?.zoom ?? 1);
+    pf[10] = zoomValue;
+    pu[11] = shouldSmoothDirectSample(opts.smooth, zoomValue, slot.width, slot.height, outW, outH) ? 1 : 0;
+    pf[12] = vminPct;
+    pf[13] = vmaxPct;
+    pf[14] = transform?.panX ?? 0;
+    pf[15] = transform?.panY ?? 0;
+    this.device.queue.writeBuffer(slot.paramsBuffer, 0, params);
+
+    const rangeBuffer = this.ensureSlotRangeBuffer(slot);
+    const bindGroup = this.device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: slot.paramsBuffer } },
+        { binding: 1, resource: { buffer: slot.dataBuffer } },
+        { binding: 2, resource: { buffer: this.lutBuffer } },
+        { binding: 3, resource: { buffer: rangeBuffer } },
+      ],
+    });
+
+    const texture = ctx.getCurrentTexture();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: texture.createView(),
+        loadOp: "clear" as GPULoadOp,
+        storeOp: "store" as GPUStoreOp,
+        clearValue: {
+          r: ((opts.bgRgb & 0xFF) / 255),
+          g: (((opts.bgRgb >> 8) & 0xFF) / 255),
+          b: (((opts.bgRgb >> 16) & 0xFF) / 255),
+          a: 1,
+        },
+      }],
+    });
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bindGroup);
+    pass.draw(3);
+    pass.end();
+    this.device.queue.submit([encoder.finish()]);
+    flushParamsBufQueue();
     return true;
   }
 
