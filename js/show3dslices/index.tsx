@@ -855,6 +855,8 @@ const LiveNumberSlider = React.memo(function LiveNumberSlider({
 
 interface NumberCommitInputProps {
   value: number;
+  min: number;
+  max: number;
   step?: number;
   onLiveChange?: (value: number) => void;
   onCommit: (value: number) => void;
@@ -869,16 +871,17 @@ function formatNumberInput(value: number): string {
 }
 
 const NumberCommitInput = React.memo(function NumberCommitInput({
-  value, step = 0.05, onLiveChange, onCommit, ariaLabel,
+  value, min, max, step = 0.05, onLiveChange, onCommit, ariaLabel,
 }: NumberCommitInputProps) {
   const [draft, setDraft] = React.useState(formatNumberInput(value));
   React.useEffect(() => { setDraft(formatNumberInput(value)); }, [value]);
   const commitDraft = () => {
-    const next = Number(draft);
-    if (!Number.isFinite(next)) {
+    const rawNext = Number(draft);
+    if (!Number.isFinite(rawNext)) {
       setDraft(formatNumberInput(value));
       return;
     }
+    const next = clampNumber(rawNext, min, max);
     setDraft(formatNumberInput(next));
     onCommit(next);
   };
@@ -887,13 +890,15 @@ const NumberCommitInput = React.memo(function NumberCommitInput({
       component="input"
       type="number"
       value={draft}
+      min={min}
+      max={max}
       step={step}
       aria-label={ariaLabel}
       onChange={(event) => {
         const nextDraft = event.currentTarget.value;
         setDraft(nextDraft);
         const next = Number(nextDraft);
-        if (Number.isFinite(next)) onLiveChange?.(next);
+        if (Number.isFinite(next)) onLiveChange?.(clampNumber(next, min, max));
       }}
       onBlur={commitDraft}
       onKeyDown={(event) => {
@@ -4733,7 +4738,7 @@ function Show3DSlices() {
   };
   const alignmentShiftLimit = Math.max(
     2,
-    Math.ceil(Math.max(Math.abs(liveRowShift), Math.abs(liveColShift), 1) * 1.5),
+    Math.ceil(Math.max(nx, ny) / Math.max(1, nz - 1)),
   );
   const alignmentStatusText = localAlignmentStatus || (
     !sliceAlignmentCached && alignmentActive
@@ -5430,6 +5435,8 @@ function Show3DSlices() {
                   />
                   <NumberCommitInput
                     value={liveRowShift}
+                    min={-alignmentShiftLimit}
+                    max={alignmentShiftLimit}
                     step={0.05}
                     onLiveChange={(value) => {
                       setLiveRowShift(value);
@@ -5460,6 +5467,8 @@ function Show3DSlices() {
                   />
                   <NumberCommitInput
                     value={liveColShift}
+                    min={-alignmentShiftLimit}
+                    max={alignmentShiftLimit}
                     step={0.05}
                     onLiveChange={(value) => {
                       setLiveColShift(value);
