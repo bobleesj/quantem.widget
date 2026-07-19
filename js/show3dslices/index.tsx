@@ -5389,14 +5389,14 @@ function Show3DSlices() {
               </Button>
             </Box>
             {advancedControlsOpen && <Box id="show3dslices-advanced-controls" sx={contentControlRow}>
-              <Typography sx={{ ...controlLabel }} title="Display-only global post-alignment through depth. Raw volume data is unchanged.">Slice alignment</Typography>
+              <Typography sx={{ ...controlLabel }} title="Display-only global post-alignment through depth. Raw volume data is unchanged.">Align slice</Typography>
               <Switch
                 checked={alignmentActive}
                 onChange={(e) => handleSliceAlignmentToggle(e.target.checked)}
                 disabled={offline && !sliceAlignmentCached}
                 size="small"
                 sx={switchStyles.small}
-                inputProps={{ "aria-label": "Enable automatic global slice alignment" }}
+                inputProps={{ "aria-label": "Align slices with automatic global slice alignment" }}
               />
               {alignmentActive && (
                 <>
