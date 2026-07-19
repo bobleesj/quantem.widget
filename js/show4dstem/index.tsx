@@ -3778,7 +3778,7 @@ function Show4DSTEM() {
           model.set("vi_source", "roi");
           model.set("roi_center_row", model.get("center_row"));
           model.set("roi_center_col", model.get("center_col"));
-          if (name === "bf") { model.set("roi_mode", "circle"); model.set("roi_radius", Math.max(1, bf)); }
+          if (name === "bf") { model.set("roi_mode", "circle"); model.set("roi_radius_inner", 0); model.set("roi_radius", Math.max(1, bf)); }
           else if (name === "abf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", Math.max(0.5, bf * 0.5)); model.set("roi_radius", Math.max(1, bf)); }
           else if (name === "adf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", bf); model.set("roi_radius", bf * 2); }
           else if (name === "haadf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", bf * 2); model.set("roi_radius", bf * 4); }
@@ -3921,12 +3921,29 @@ function Show4DSTEM() {
   }, [viProductSourceOptions, viSource]);
   const hasViProductSources = viProductSourceOptions.length > 0;
   const roiVirtualDetectorActive = activeViSource === "roi";
+  const saveChangesIfLiveComm = React.useCallback(() => {
+    const liveModel = model as unknown as { comm?: unknown; save_changes?: () => void };
+    if (!liveModel.comm || typeof liveModel.save_changes !== "function") return;
+    requestAnimationFrame(() => {
+      window.setTimeout(() => {
+        try {
+          liveModel.save_changes?.();
+        } catch (error) {
+          console.warn("Show4DSTEM could not sync virtual detector state", error);
+        }
+      }, 0);
+    });
+  }, [model]);
+  const requestViPreset = React.useCallback((preset: "bf" | "abf" | "adf") => {
+    model.set("_preset_request", preset);
+    saveChangesIfLiveComm();
+  }, [model, saveChangesIfLiveComm]);
   const setViSource = React.useCallback((nextSource: string) => {
     const source = normaliseViSource(nextSource);
     setViSourceModel(source);
     model.set("vi_source", source);
-    model.save_changes();
-  }, [model, setViSourceModel]);
+    saveChangesIfLiveComm();
+  }, [model, saveChangesIfLiveComm, setViSourceModel]);
   const displayedVirtualImageBytes = React.useMemo(() => {
     if (activeViSource === "roi") return virtualImageBytes;
     return viProductFrameView(model, shapeRows, shapeCols, activeViSource) ?? virtualImageBytes;
@@ -7939,9 +7956,9 @@ function Show4DSTEM() {
               <Typography sx={statsTextSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(dpStats[3])}</Box></Typography>
               {controlsVisible && <>
                 <Box sx={{ flex: 1, minWidth: 4, "@media (max-width: 700px)": { display: "none" } }} />
-                <Typography component="span" onClick={() => { model.set("_preset_request", "bf"); model.save_changes(); }} sx={viSourceButtonSx("bf", activeViSource === "roi")}>BF</Typography>
-                <Typography component="span" onClick={() => { model.set("_preset_request", "abf"); model.save_changes(); }} sx={viSourceButtonSx("abf")}>ABF</Typography>
-                <Typography component="span" onClick={() => { model.set("_preset_request", "adf"); model.save_changes(); }} sx={viSourceButtonSx("adf")}>ADF</Typography>
+                <Typography component="span" onClick={() => requestViPreset("bf")} sx={viSourceButtonSx("bf", activeViSource === "roi")}>BF</Typography>
+                <Typography component="span" onClick={() => requestViPreset("abf")} sx={viSourceButtonSx("abf")}>ABF</Typography>
+                <Typography component="span" onClick={() => requestViPreset("adf")} sx={viSourceButtonSx("adf")}>ADF</Typography>
                 {hasViProductSources && viProductSourceOptions.map((source) => {
                   const active = activeViSource === source;
                   return (
