@@ -2759,6 +2759,48 @@ function renderFramePlayback(
   }
 }
 
+/** Render one packed multi-panel slice into RGBA without allocating a panel copy.
+ *
+ * Large standalone reports can pack many panels side-by-side in one frame
+ * (for example 8 × 1366 × 1366). Copying each panel into a fresh Float32Array
+ * during playback allocates tens of MB per frame and can crash Chromium with
+ * `Array buffer allocation failed`. This renderer walks the packed source rows
+ * directly and writes into a reusable per-panel ImageData buffer.
+ */
+function renderPackedPanelPlayback(
+  source: Float32Array,
+  sourceWidth: number,
+  sourceX0: number,
+  panelWidth: number,
+  panelHeight: number,
+  rgba: Uint8ClampedArray,
+  lut: Uint8Array,
+  vmin: number,
+  vmax: number,
+  logScale: boolean,
+): void {
+  const range = vmax - vmin;
+  const invRange = range > 0 ? 255 / range : 0;
+  let dst = 0;
+  for (let row = 0; row < panelHeight; row++) {
+    let src = row * sourceWidth + sourceX0;
+    const end = src + panelWidth;
+    for (; src < end; src++) {
+      const raw = source[src];
+      const value = logScale
+        ? (raw >= 0 ? Math.log1p(raw) : -Math.log1p(-raw))
+        : raw;
+      const idx = value <= vmin ? 0 : value >= vmax ? 255 : ((value - vmin) * invRange) | 0;
+      const lutIdx = idx * 3;
+      rgba[dst] = lut[lutIdx];
+      rgba[dst + 1] = lut[lutIdx + 1];
+      rgba[dst + 2] = lut[lutIdx + 2];
+      rgba[dst + 3] = 255;
+      dst += 4;
+    }
+  }
+}
+
 function renderFrameScaledPlayback(
   data: Float32Array,
   rgba: Uint8ClampedArray,
@@ -8630,7 +8672,16 @@ function Show3D() {
     const n = Math.max(1, nSlices || 1);
     const normalized = ((Math.round(idx) % n) + n) % n;
     if (currentFrame && normalized === ((Math.round(currentIdx) % n) + n) % n) return currentFrame;
-    if (offline && sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current) && !frameTransformActive()) return null;
+    if (
+      offline &&
+      !frameTransformActive() &&
+      (
+        (sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current)) ||
+        (!sidecarMode && sidecarCompositeReadyRef.current && !sharedPanelSource && Math.max(1, nPanels || 1) > 1 && !!offlineStack)
+      )
+    ) {
+      return null;
+    }
     if (offline) return getOfflineFrame(normalized);
     const frameSize = width * height;
     const fromBuffer = getFrameFromBuffer(bufferRef.current, bufferStartRef.current, bufferCountRef.current, n, normalized, frameSize)
@@ -8835,7 +8886,15 @@ function Show3D() {
   };
   const refreshCurrentDisplayFrameForTransform = React.useCallback(() => {
     if (!offline || isRgb || width <= 0 || height <= 0 || nSlices <= 0) return;
-    if (sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current) && !frameTransformActive()) return;
+    if (
+      !frameTransformActive() &&
+      (
+        (sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current)) ||
+        (!sidecarMode && sidecarCompositeReadyRef.current && !sharedPanelSource && Math.max(1, nPanels || 1) > 1 && !!offlineStack)
+      )
+    ) {
+      return;
+    }
     const idx = clampSlice(liveSliceIdx);
     const raw = getOfflineFrame(idx);
     if (!raw) return;
@@ -9697,10 +9756,12 @@ function Show3D() {
       // drawMain applies the rotation. Verified bug 2026-05-29.
       if (
         offline &&
-        sidecarMode &&
-        (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current) &&
         !isRgb &&
-        !transformActive
+        !transformActive &&
+        (
+          (sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current)) ||
+          (!sidecarMode && sidecarCompositeReadyRef.current && !sharedPanelSource && Math.max(1, nPanels || 1) > 1 && !!offlineStack)
+        )
       ) {
         if (drawSidecarBitmapFrame(next, false, "playback")) {
           playbackIdxRef.current = next;
@@ -9708,7 +9769,7 @@ function Show3D() {
           if (dbg) {
             dbg.missingFrame = null;
             dbg.lastFrame = next;
-            dbg.lastFrameSource = "sidecar-imagebitmap-cache";
+            dbg.lastFrameSource = sidecarMode ? "sidecar-imagebitmap-cache" : "embedded-viewport-cache";
           }
           const d = show3dPerfDebug();
           if (d) {
@@ -9997,21 +10058,25 @@ function Show3D() {
           const ctx = canvas?.getContext("2d");
           if (!offscreen || !offCtx || !ctx) return false;
           const panelW = Math.max(1, Math.floor(c.width / panelCountForGrid));
+          const sourceW = frame.length === c.height * panelW ? panelW : c.width;
+          if (sourceW <= 0 || frame.length < c.height * sourceW) return false;
           const panelImg = offCtx.createImageData(panelW, c.height);
           const sharedAutoRange = c.autoContrast ? { vmin, vmax } : null;
           offCtx.clearRect(0, 0, offscreen.width, offscreen.height);
           for (const panel of c.visiblePanelIndices) {
             if (panel < 0 || panel >= panelCountForGrid) continue;
-            const panelData = extractPanelSlice(frame, panel, c.logScale);
-            if (!panelData) continue;
+            const srcPanel = Math.min(Math.max(0, panel), panelCountForGrid - 1);
+            const x0 = Math.min(Math.max(0, srcPanel * panelW), Math.max(0, sourceW - panelW));
             const pdr = panelDataRanges[panel];
-            const panelRange = panelData.length > 0
-              ? findDataRange(panelData)
-              : ((perPanelHistogramEnabled && pdr && pdr.max > pdr.min)
-                  ? pdr
-                  : resolveDisplayBounds(c.dataMin, c.dataMax, c.traitVmin, c.traitVmax, c.logScale));
-            const range = resolvePanelRenderRange(panel, panelRange, sharedAutoRange, panelData, c.autoContrast, c.percentileLow, c.percentileHigh);
-            applyColormap(panelData, panelImg.data, lut, range.vmin, range.vmax);
+            // Do not allocate/copy the panel during playback. The detailed
+            // per-panel percentile window refreshes on idle/static paints; the
+            // playback hot path reuses the remembered panel range (or the
+            // stack range) so large real-data reports stay responsive.
+            const panelRange = (perPanelHistogramEnabled && pdr && pdr.max > pdr.min)
+              ? pdr
+              : resolveDisplayBounds(c.dataMin, c.dataMax, c.traitVmin, c.traitVmax, c.logScale);
+            const range = resolvePanelRenderRange(panel, panelRange, sharedAutoRange, null, c.autoContrast, c.percentileLow, c.percentileHigh);
+            renderPackedPanelPlayback(frame, sourceW, x0, panelW, c.height, panelImg.data, lut, range.vmin, range.vmax, c.logScale);
             offCtx.putImageData(panelImg, panel * panelW, 0);
           }
           drawMain(ctx, offscreen);
@@ -10304,23 +10369,16 @@ function Show3D() {
         playbackHistogramCounterRef.current = (playbackHistogramCounterRef.current + 1) % 2;
         if (playbackHistogramCounterRef.current === 0) {
           if ((nPanels || 1) > 1 && !linkContrast && frame) {
-            // Per-panel histograms have no single GPU slot; keep the per-panel
-            // CPU extract (cold-ish, only when contrast is unlinked).
-            const n = Math.max(1, nPanels || 1);
-            const nextData: (Float32Array | null)[] = Array.from({ length: n }, () => null);
-            const nextRanges: { min: number; max: number }[] = Array.from(
-              { length: n },
-              () => resolveDisplayBounds(c.dataMin, c.dataMax, c.traitVmin, c.traitVmax, c.logScale),
-            );
-            for (const panel of c.visiblePanelIndices) {
-              const panelData = extractPanelSlice(frame, panel, c.logScale);
-              nextData[panel] = panelData;
-              nextRanges[panel] = panelData && panelData.length > 0
-                ? findDataRange(panelData)
-                : resolveDisplayBounds(c.dataMin, c.dataMax, c.traitVmin, c.traitVmax, c.logScale);
+            // Keep playback free of per-panel Float32Array copies. The static
+            // histogram effect refreshes panel ranges after playback stops or
+            // when the user commits a scrub. On large 8-panel exports this is
+            // the difference between microscope-like playback and a browser
+            // ArrayBuffer allocation crash.
+            const d = show3dPerfDebug();
+            if (d) {
+              d.lastHistogramFrame = next;
+              d.lastHistogramSource = "deferred-per-panel-playback";
             }
-            setPanelHistogramData(nextData);
-            setPanelDataRanges(nextRanges);
           } else {
             // GPU histogram for the current frame (honors WebGPU-first-class):
             // refreshHistogram computes bins on the GPU (live slot or offline
@@ -11478,6 +11536,237 @@ function Show3D() {
     linkContrast,
   ]);
 
+  const paintEmbeddedPackedViewportToContext = React.useCallback((
+    ctx: CanvasRenderingContext2D,
+    drawIdx: number,
+    targetW: number,
+    targetH: number,
+  ): boolean => {
+    if (
+      !offline ||
+      sidecarMode ||
+      isRgb ||
+      sharedPanelSource ||
+      !offlineStack ||
+      offlineStack.byteLength <= 0 ||
+      width <= 0 ||
+      height <= 0
+    ) {
+      return false;
+    }
+    const panelCount = Math.max(1, nPanels || 1);
+    if (panelCount <= 1) return false;
+    const n = Math.max(1, Math.round(nSlices || 1));
+    const frameIdx = ((Math.round(drawIdx) % n) + n) % n;
+    const bytesPerFrame = width * height;
+    const start = frameIdx * bytesPerFrame;
+    if (start < 0 || start + bytesPerFrame > offlineStack.byteLength) return false;
+    const u8 = new Uint8Array(offlineStack.buffer, offlineStack.byteOffset + start, bytesPerFrame);
+    const rotation = ((Math.round(imageRotation) % 4) + 4) % 4;
+    const visibleCountLocal = Math.max(1, visiblePanelCount || 1);
+    const cols = panelColsForCount(visibleCountLocal);
+    const rows = Math.ceil(visibleCountLocal / cols);
+    const gap = visibleCountLocal > 1 ? Math.max(0, Math.round(panelGapPx)) : 0;
+    const sourcePanelW = Math.max(1, Math.round(panelWidthPx || Math.floor(width / panelCount) || width));
+    let img: ImageData;
+    try {
+      img = ctx.getImageData(0, 0, targetW, targetH);
+    } catch {
+      img = ctx.createImageData(targetW, targetH);
+    }
+    if (img.width !== targetW || img.height !== targetH) {
+      img = ctx.createImageData(targetW, targetH);
+    }
+    const rgba = img.data;
+    const bg = themeColors.bg || interPanelGapColor || "#fff";
+    const parsedBg = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(bg.trim());
+    let bgR = 255, bgG = 255, bgB = 255;
+    if (parsedBg) {
+      const raw = parsedBg[1];
+      const hex = raw.length === 3 ? raw.split("").map((ch) => ch + ch).join("") : raw;
+      const value = Number.parseInt(hex, 16);
+      bgR = (value >> 16) & 255;
+      bgG = (value >> 8) & 255;
+      bgB = value & 255;
+    }
+    for (let p = 0; p < rgba.length; p += 4) {
+      rgba[p] = bgR;
+      rgba[p + 1] = bgG;
+      rgba[p + 2] = bgB;
+      rgba[p + 3] = 255;
+    }
+    const outPanelWFloat = (targetW - gap * (cols - 1)) / cols;
+    const outPanelHFloat = (targetH - gap * (rows - 1)) / rows;
+    for (let slot = 0; slot < visibleCountLocal; slot++) {
+      const panelIdx = visiblePanelIndices[slot] ?? slot;
+      if (panelIdx < 0 || panelIdx >= panelCount) continue;
+      const panelState = linkPanels
+        ? linkedStateLiveRef.current
+        : (panelStatesLiveRef.current[panelIdx] || stateFor(panelIdx));
+      const drawView = clampPanelViewForDraw(panelState, outPanelWFloat, outPanelHFloat);
+      const slotX0 = Math.max(0, Math.round((slot % cols) * (outPanelWFloat + gap)));
+      const slotY0 = Math.max(0, Math.round(Math.floor(slot / cols) * (outPanelHFloat + gap)));
+      const slotX1 = Math.min(targetW, Math.round(slotX0 + outPanelWFloat));
+      const slotY1 = Math.min(targetH, Math.round(slotY0 + outPanelHFloat));
+      if (slotX1 <= slotX0 || slotY1 <= slotY0) continue;
+      const realN = panelRealFrames && panelRealFrames[panelIdx];
+      if (realN && frameIdx >= realN) continue;
+      const lut = COLORMAPS[panelCmapFor(panelIdx)] || COLORMAPS.inferno;
+      const panelStateRange = !linkContrast ? panelState : null;
+      const panelPreview = panelHistogramPreviewPctRef.current.get(panelIdx) ?? null;
+      const sharedPreview = imageHistogramPreviewPctRef.current;
+      const preview = panelStateRange ? panelPreview : sharedPreview;
+      const panelByteMin = (
+        offlineMins?.length >= panelCount &&
+        Number.isFinite(offlineMins[panelIdx])
+      )
+        ? offlineMins[panelIdx]
+        : offlineMin;
+      const panelByteMax = (
+        offlineMaxs?.length >= panelCount &&
+        Number.isFinite(offlineMaxs[panelIdx])
+      )
+        ? offlineMaxs[panelIdx]
+        : offlineMax;
+      const valueToPanelByte = (value: number): number | null => {
+        if (!Number.isFinite(value) || !Number.isFinite(panelByteMin) || !Number.isFinite(panelByteMax) || panelByteMax <= panelByteMin) {
+          return null;
+        }
+        return clampByte(((value - panelByteMin) / (panelByteMax - panelByteMin)) * 255);
+      };
+      let loByte: number;
+      let hiByte: number;
+      if (preview) {
+        loByte = clampByte((Number(preview[0]) || 0) * 2.55);
+        hiByte = clampByte((Number(preview[1]) || 100) * 2.55);
+      } else if (autoContrast) {
+        const autoRange = cachedAutoDisplayRange(autoVmins, autoVmaxs, frameIdx, logScale)
+          || cachedAutoDisplayRange(localAutoVminsRef.current, localAutoVmaxsRef.current, frameIdx, logScale);
+        const mappedLo = autoRange ? valueToPanelByte(autoRange.vmin) : null;
+        const mappedHi = autoRange ? valueToPanelByte(autoRange.vmax) : null;
+        if (mappedLo !== null && mappedHi !== null && mappedHi > mappedLo) {
+          loByte = mappedLo;
+          hiByte = mappedHi;
+        } else {
+          loByte = clampByte((Number(percentileLow) || 0) * 2.55);
+          hiByte = clampByte((Number(percentileHigh) || 100) * 2.55);
+        }
+      } else {
+        const loPct = panelStateRange ? panelStateRange.imageVminPct : imageVminPct;
+        const hiPct = panelStateRange ? panelStateRange.imageVmaxPct : imageVmaxPct;
+        loByte = clampByte((Number(loPct) || 0) * 2.55);
+        hiByte = clampByte((Number(hiPct) || 100) * 2.55);
+      }
+      if (hiByte <= loByte) hiByte = Math.min(255, loByte + 1);
+      const byteSpan = Math.max(1, hiByte - loByte);
+      const srcPanelX = Math.max(0, Math.min(width - 1, panelIdx * sourcePanelW));
+      const srcPanelXMax = Math.max(srcPanelX, Math.min(width - 1, srcPanelX + sourcePanelW - 1));
+      for (let y = slotY0; y < slotY1; y++) {
+        const localDrawY = ((y - slotY0) - drawView.panY) / drawView.zoom;
+        if (localDrawY < 0 || localDrawY >= outPanelHFloat) continue;
+        let localY = localDrawY / Math.max(1, outPanelHFloat);
+        if (flipRows) localY = 1 - localY;
+        let dst = (y * targetW + slotX0) * 4;
+        for (let x = slotX0; x < slotX1; x++, dst += 4) {
+          const localDrawX = ((x - slotX0) - drawView.panX) / drawView.zoom;
+          if (localDrawX < 0 || localDrawX >= outPanelWFloat) continue;
+          let localX = localDrawX / Math.max(1, outPanelWFloat);
+          if (flipCols) localX = 1 - localX;
+          let srcNormX = localX;
+          let srcNormY = localY;
+          if (rotation === 1) {
+            srcNormX = localY;
+            srcNormY = 1 - localX;
+          } else if (rotation === 2) {
+            srcNormX = 1 - localX;
+            srcNormY = 1 - localY;
+          } else if (rotation === 3) {
+            srcNormX = 1 - localY;
+            srcNormY = localX;
+          }
+          const srcY = Math.max(0, Math.min(height - 1, Math.floor(srcNormY * height)));
+          const srcX = Math.max(srcPanelX, Math.min(srcPanelXMax, srcPanelX + Math.floor(srcNormX * sourcePanelW)));
+          const v = clampByte(((u8[srcY * width + srcX] - loByte) / byteSpan) * 255);
+          const li = v * 3;
+          rgba[dst] = lut[li];
+          rgba[dst + 1] = lut[li + 1];
+          rgba[dst + 2] = lut[li + 2];
+          rgba[dst + 3] = 255;
+        }
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    if (panelInnerBorderPx > 0) {
+      ctx.save();
+      ctx.strokeStyle = panelInnerBorderColor;
+      ctx.lineWidth = panelInnerBorderPx;
+      const inset = panelInnerBorderPx / 2;
+      for (let slot = 0; slot < visibleCountLocal; slot++) {
+        const slotX0 = Math.max(0, Math.round((slot % cols) * (outPanelWFloat + gap)));
+        const slotY0 = Math.max(0, Math.round(Math.floor(slot / cols) * (outPanelHFloat + gap)));
+        const slotX1 = Math.min(targetW, Math.round(slotX0 + outPanelWFloat));
+        const slotY1 = Math.min(targetH, Math.round(slotY0 + outPanelHFloat));
+        ctx.strokeRect(
+          slotX0 + inset,
+          slotY0 + inset,
+          Math.max(0, slotX1 - slotX0 - panelInnerBorderPx),
+          Math.max(0, slotY1 - slotY0 - panelInnerBorderPx),
+        );
+      }
+      ctx.restore();
+    }
+    const debug = show3dPerfDebug();
+    if (debug) {
+      debug.embeddedPackedViewportPaint = {
+        frame: frameIdx,
+        visibleCount: visibleCountLocal,
+        width: targetW,
+        height: targetH,
+      };
+    }
+    return true;
+  }, [
+    offline,
+    sidecarMode,
+    isRgb,
+    sharedPanelSource,
+    offlineStack,
+    width,
+    height,
+    nPanels,
+    nSlices,
+    imageRotation,
+    flipCols,
+    flipRows,
+    visiblePanelCount,
+    panelColsForCount,
+    panelGapPx,
+    panelWidthPx,
+    themeColors.bg,
+    interPanelGapColor,
+    visiblePanelIndices,
+    linkPanels,
+    stateFor,
+    clampPanelViewForDraw,
+    panelRealFrames,
+    panelCmapFor,
+    linkContrast,
+    offlineMins,
+    offlineMaxs,
+    offlineMin,
+    offlineMax,
+    autoContrast,
+    autoVmins,
+    autoVmaxs,
+    logScale,
+    percentileLow,
+    percentileHigh,
+    imageVminPct,
+    imageVmaxPct,
+    panelInnerBorderPx,
+    panelInnerBorderColor,
+  ]);
+
   const getSidecarPaintScratchContext = React.useCallback((
     targetW: number,
     targetH: number,
@@ -12022,6 +12311,125 @@ function Show3D() {
     drawSidecarBitmapFrame,
     clearSidecarCompositeCache,
     invalidateSidecarViewportCache,
+    sidecarViewTransformActive,
+    sidecarDisplayStyleKey,
+  ]);
+
+  React.useEffect(() => {
+    const panelCount = Math.max(1, nPanels || 1);
+    const canCacheEmbeddedPackedViewport = (
+      offline &&
+      !sidecarMode &&
+      !isRgb &&
+      !sharedPanelSource &&
+      panelCount > 1 &&
+      !!offlineStack &&
+      offlineStack.byteLength >= width * height * Math.max(1, nSlices || 1) &&
+      canvasW > 0 &&
+      canvasH > 0 &&
+      !sidecarViewTransformActive()
+    );
+    if (!canCacheEmbeddedPackedViewport) {
+      if (!sidecarMode) clearSidecarCompositeCache();
+      return;
+    }
+    const n = Math.max(1, Math.round(nSlices || 1));
+    const serial = ++sidecarCompositeBuildSerialRef.current;
+    let cancelled = false;
+    const build = async () => {
+      clearSidecarCompositeCache();
+      setOfflineStackFetchStatus(`Preparing viewport playback cache… 0/${n} frames`);
+      const scratch = document.createElement("canvas");
+      scratch.width = Math.max(1, Math.round(canvasW));
+      scratch.height = Math.max(1, Math.round(canvasH));
+      const ctx = scratch.getContext("2d");
+      if (!ctx) {
+        setOfflineStackFetchStatus("Failed to prepare viewport playback cache: no 2D context");
+        return;
+      }
+      const started = performance.now();
+      const order = prioritizedSidecarFrameOrder(playbackIdxRef.current || liveSliceIdx || 0, n);
+      let builtFrames = 0;
+      try {
+        for (const idx of order) {
+          if (cancelled || serial !== sidecarCompositeBuildSerialRef.current) return;
+          const ok = paintEmbeddedPackedViewportToContext(ctx, idx, scratch.width, scratch.height);
+          if (!ok) {
+            setOfflineStackFetchStatus("");
+            return;
+          }
+          const retained = document.createElement("canvas");
+          retained.width = scratch.width;
+          retained.height = scratch.height;
+          const retainedCtx = retained.getContext("2d");
+          if (!retainedCtx) continue;
+          retainedCtx.drawImage(scratch, 0, 0);
+          sidecarCompositeFrameCacheRef.current.set(idx, retained);
+          builtFrames += 1;
+          if (!sidecarCompositeReadyRef.current) {
+            sidecarCompositeReadyRef.current = true;
+            setSidecarCompositeReady(true);
+            drawSidecarBitmapFrame(idx, false, "embedded-viewport-first");
+          }
+          if (builtFrames === 1 || builtFrames % 4 === 0 || builtFrames === n) {
+            const elapsed = ((performance.now() - started) / 1000).toFixed(1);
+            setOfflineStackFetchStatus(
+              builtFrames === n
+                ? ""
+                : `Preparing viewport playback cache… ${builtFrames}/${n} frames (${elapsed}s)`,
+            );
+          }
+          const d = show3dPerfDebug();
+          if (d) {
+            d.embeddedPackedViewportCacheFrames = sidecarCompositeFrameCacheRef.current.size;
+            d.embeddedPackedViewportCacheBuildMs = performance.now() - started;
+            d.sidecarCompositeSource = "embedded-packed-viewport";
+          }
+          if (builtFrames % 4 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        if (cancelled || serial !== sidecarCompositeBuildSerialRef.current) return;
+        sidecarCompositeReadyRef.current = true;
+        sidecarCompositeCompleteRef.current = true;
+        sidecarDisplayCacheDirtyRef.current = false;
+        sidecarCompositeStyleKeyRef.current = sidecarDisplayStyleKey;
+        setSidecarCompositeReady(true);
+        setSidecarCompositeComplete(true);
+        setOfflineStackFetchStatus("");
+        const d = show3dPerfDebug();
+        if (d) {
+          d.embeddedPackedViewportCacheFrames = sidecarCompositeFrameCacheRef.current.size;
+          d.embeddedPackedViewportCacheBuildMs = performance.now() - started;
+          d.sidecarCompositeSource = "embedded-packed-viewport";
+          d.lastRenderPath = "embedded-packed-viewport-cache-ready";
+        }
+      } catch (err) {
+        clearSidecarCompositeCache();
+        setOfflineStackFetchStatus(
+          `Failed to prepare viewport playback cache: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    };
+    void build();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    offline,
+    sidecarMode,
+    isRgb,
+    sharedPanelSource,
+    nPanels,
+    offlineStack,
+    width,
+    height,
+    nSlices,
+    canvasW,
+    canvasH,
+    liveSliceIdx,
+    prioritizedSidecarFrameOrder,
+    paintEmbeddedPackedViewportToContext,
+    drawSidecarBitmapFrame,
+    clearSidecarCompositeCache,
     sidecarViewTransformActive,
     sidecarDisplayStyleKey,
   ]);
@@ -13179,7 +13587,15 @@ function Show3D() {
     if (offline && sidecarMode && viewTransformActive && sidecarRamReadyRef.current) {
       if (drawSidecarBitmapFrame(playing ? playbackIdxRef.current : liveSliceIdx, false, "layout-transform")) return;
     }
-    if (offline && sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current) && !viewTransformActive) {
+    if (
+      offline &&
+      !isRgb &&
+      !viewTransformActive &&
+      (
+        (sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current)) ||
+        (!sidecarMode && sidecarCompositeReadyRef.current && !sharedPanelSource && Math.max(1, nPanels || 1) > 1 && !!offlineStack)
+      )
+    ) {
       if (drawSidecarBitmapFrame(playing ? playbackIdxRef.current : liveSliceIdx, false, "layout")) return;
     }
     const ctx = canvasRef.current.getContext("2d");
@@ -17162,7 +17578,15 @@ function Show3D() {
     setDisplaySliceIdx(start);
     setPlaybackUiSliceIdx(start);
     setLiveSliceIdx(start);
-    if (!(offline && sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current) && !isRgb)) setSliceIdx(start);
+    const viewportCacheReady = (
+      offline &&
+      !isRgb &&
+      (
+        (sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current)) ||
+        (!sidecarMode && sidecarCompositeReadyRef.current && !sharedPanelSource && Math.max(1, nPanels || 1) > 1 && !!offlineStack)
+      )
+    );
+    if (!viewportCacheReady) setSliceIdx(start);
     if (direction !== null) setReverse(nextReverse);
     setPlaying(true);
   };
@@ -17264,12 +17688,14 @@ function Show3D() {
     let handled = false;
     const sidecarDirectNavigation =
       offline &&
-      sidecarMode &&
-      (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current) &&
       !isRgb &&
       !requiresClientFrameTransform({ offline, diffMode, avgWindow }) &&
       !browserFilterOnRef.current &&
-      !frequencyFilterIsActive;
+      !frequencyFilterIsActive &&
+      (
+        (sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current)) ||
+        (!sidecarMode && sidecarCompositeReadyRef.current && !sharedPanelSource && Math.max(1, nPanels || 1) > 1 && !!offlineStack)
+      );
     const shortcutBaseIdx = sidecarDirectNavigation
       ? clampSlice(playbackIdxRef.current)
       : visibleSliceIdx;
@@ -17378,13 +17804,22 @@ function Show3D() {
     const next = clampSlice(idx);
     if (playing) setPlaying(false);
     const transformActive = frameTransformActive();
-    if (offline && sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current) && !isRgb && !transformActive) {
+    if (
+      offline &&
+      !isRgb &&
+      !transformActive &&
+      (
+        (sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current)) ||
+        (!sidecarMode && sidecarCompositeReadyRef.current && !sharedPanelSource && Math.max(1, nPanels || 1) > 1 && !!offlineStack)
+      )
+    ) {
       playbackIdxRef.current = next;
       drawSidecarBitmapFrame(next, false, "scrub-direct");
       updatePlaybackLiveControls(next);
-      setPlaybackUiSliceIdx(next);
-      setLiveSliceIdx(next);
-      setDisplaySliceIdx(next);
+      // Keep active slider drags microscope-smooth. The cached viewport draw and
+      // small DOM count update are immediate; React/model state commits after
+      // the pointer settles (or onChangeCommitted fires) so a drag does not
+      // re-render the notebook chrome for every pointer sample.
       scheduleScrubModelCommit(next);
       return;
     }
@@ -17423,7 +17858,14 @@ function Show3D() {
       window.clearTimeout(sidecarSliceCommitTimerRef.current);
       sidecarSliceCommitTimerRef.current = null;
     }
-    const sidecarDirectCommit = offline && sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current || sidecarRamReadyRef.current) && !isRgb;
+    const sidecarDirectCommit = (
+      offline &&
+      !isRgb &&
+      (
+        (sidecarMode && (sidecarBitmapReadyRef.current || sidecarCompositeReadyRef.current || sidecarRamReadyRef.current)) ||
+        (!sidecarMode && sidecarCompositeReadyRef.current && !sharedPanelSource && Math.max(1, nPanels || 1) > 1 && !!offlineStack)
+      )
+    );
     if (sidecarDirectCommit) {
       playbackIdxRef.current = next;
       drawSidecarBitmapFrame(next, false, "scrub-commit");
