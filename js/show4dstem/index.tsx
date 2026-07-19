@@ -33,6 +33,7 @@ import {
 } from "../engine/compute";
 import { readH5MasterInfo, readH5Volume } from "../engine/h5reader";
 import { decodeBslz4ToStack, type Bslz4Spec } from "../engine/bslz4";
+import { getGPUInfo, isSoftwareGPUAdapter } from "../engine/device";
 import { LazyShow4DSTEM } from "../engine/lazy";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
 import { findDataRange, sliderRange, computeStats, computeHistogramFromBytes, percentileClip } from "../stats";
@@ -163,6 +164,94 @@ function viProductStackForIndices(
     out.set(src, slot * pixels);
   }
   return new DataView(out.buffer);
+}
+
+function float32MapStackForLabel(
+  model: any,
+  labelsTrait: string,
+  framesTrait: string,
+  bytesTrait: string,
+  label: string,
+  indices: number[],
+  scanRows: number,
+  scanCols: number,
+): DataView | null {
+  if (!indices.length) return null;
+  const labels = Array.isArray(model.get(labelsTrait)) ? model.get(labelsTrait) as string[] : [];
+  const mapIndex = labels.map((value) => String(value).toUpperCase()).indexOf(label.toUpperCase());
+  if (mapIndex < 0) return null;
+  const bytes = model.get(bytesTrait) as DataView | undefined;
+  if (!bytes || bytes.byteLength === 0) return null;
+  const frames = Math.max(1, Math.round(Number(model.get(framesTrait) || 1)));
+  const pixels = Math.max(1, scanRows * scanCols);
+  const out = new Float32Array(indices.length * pixels);
+  for (let slot = 0; slot < indices.length; slot++) {
+    const frame = frames <= 1 ? 0 : Math.max(0, Math.min(frames - 1, Math.round(Number(indices[slot]) || 0)));
+    const start = ((mapIndex * frames + frame) * pixels) * 4;
+    const end = start + pixels * 4;
+    if (end > bytes.byteLength) return null;
+    const src = new Float32Array(bytes.buffer, bytes.byteOffset + start, pixels);
+    out.set(src, slot * pixels);
+  }
+  return new DataView(out.buffer);
+}
+
+function viPresetLabelForCurrentRoi(model: any): string | null {
+  const mode = String(model.get("roi_mode") || "circle").trim().toLowerCase();
+  const bf = Math.max(1, Number(model.get("bf_radius") || 1));
+  const centerRow = Number(model.get("center_row") || 0);
+  const centerCol = Number(model.get("center_col") || 0);
+  const roiCenterRow = Number(model.get("roi_center_row") || centerRow);
+  const roiCenterCol = Number(model.get("roi_center_col") || centerCol);
+  const radius = Number(model.get("roi_radius") || 0);
+  const radiusInner = Number(model.get("roi_radius_inner") || 0);
+  const close = (a: number, b: number, tol = 1.0) => Math.abs(a - b) <= tol;
+  if (!close(roiCenterRow, centerRow) || !close(roiCenterCol, centerCol)) return null;
+  if (mode === "circle" && close(radius, bf)) return "BF";
+  if (mode === "annular" && close(radiusInner, bf * 0.5) && close(radius, bf)) return "ABF";
+  if (mode === "annular" && close(radiusInner, bf) && close(radius, bf * 2.0)) return "ADF";
+  if (mode === "annular" && close(radiusInner, bf * 2.0) && close(radius, bf * 4.0)) return "HAADF";
+  return null;
+}
+
+function viPresetFrameView(
+  model: any,
+  scanRows: number,
+  scanCols: number,
+): DataView | null {
+  const label = viPresetLabelForCurrentRoi(model);
+  if (!label) return null;
+  const frame = Math.round(Number(model.get("frame_idx") || 0));
+  return float32MapStackForLabel(
+    model,
+    "vi_preset_labels",
+    "vi_preset_map_frames",
+    "vi_preset_maps_bytes",
+    label,
+    [frame],
+    scanRows,
+    scanCols,
+  );
+}
+
+function viPresetStackForIndices(
+  model: any,
+  indices: number[],
+  scanRows: number,
+  scanCols: number,
+): DataView | null {
+  const label = viPresetLabelForCurrentRoi(model);
+  if (!label) return null;
+  return float32MapStackForLabel(
+    model,
+    "vi_preset_labels",
+    "vi_preset_map_frames",
+    "vi_preset_maps_bytes",
+    label,
+    indices,
+    scanRows,
+    scanCols,
+  );
 }
 
 const MIN_ZOOM = 0.5;
@@ -2664,6 +2753,8 @@ function Show4DSTEM() {
   const [localPosCol, setLocalPosCol] = React.useState(posCol);
   const scanPositionPendingRef = React.useRef<[number, number] | null>(null);
   const scanPositionRafRef = React.useRef<number | null>(null);
+  const scanPositionTimerRef = React.useRef<number | null>(null);
+  const scanPositionLastSyncRef = React.useRef(0);
   const scanPositionOptimisticRef = React.useRef<[number, number] | null>(null);
   const scanPositionCurrentRef = React.useRef<[number, number]>([Math.round(posRow), Math.round(posCol)]);
   const writeQueuedScanPosition = React.useCallback(() => {
@@ -2675,6 +2766,7 @@ function Show4DSTEM() {
     model.set("pos_row", row);
     model.set("pos_col", col);
     model.save_changes();
+    scanPositionLastSyncRef.current = performance.now();
   }, [model]);
   const queueScanPosition = React.useCallback((row: number, col: number) => {
     const current = scanPositionPendingRef.current
@@ -2683,14 +2775,23 @@ function Show4DSTEM() {
     if (current[0] === row && current[1] === col) return;
     scanPositionPendingRef.current = [row, col];
     scanPositionOptimisticRef.current = [row, col];
-    if (scanPositionRafRef.current === null) {
-      scanPositionRafRef.current = requestAnimationFrame(() => {
-        scanPositionRafRef.current = null;
-        writeQueuedScanPosition();
-      });
+    if (scanPositionTimerRef.current === null && scanPositionRafRef.current === null) {
+      const elapsed = performance.now() - scanPositionLastSyncRef.current;
+      const delay = Math.max(0, 33 - elapsed);
+      scanPositionTimerRef.current = window.setTimeout(() => {
+        scanPositionTimerRef.current = null;
+        scanPositionRafRef.current = requestAnimationFrame(() => {
+          scanPositionRafRef.current = null;
+          writeQueuedScanPosition();
+        });
+      }, delay);
     }
   }, [writeQueuedScanPosition]);
   const flushScanPosition = React.useCallback(() => {
+    if (scanPositionTimerRef.current !== null) {
+      window.clearTimeout(scanPositionTimerRef.current);
+      scanPositionTimerRef.current = null;
+    }
     if (scanPositionRafRef.current !== null) {
       cancelAnimationFrame(scanPositionRafRef.current);
       scanPositionRafRef.current = null;
@@ -2699,8 +2800,12 @@ function Show4DSTEM() {
   }, [writeQueuedScanPosition]);
   React.useEffect(() => {
     return () => {
+      if (scanPositionTimerRef.current !== null) {
+        window.clearTimeout(scanPositionTimerRef.current);
+      }
       if (scanPositionRafRef.current !== null) {
         cancelAnimationFrame(scanPositionRafRef.current);
+        scanPositionRafRef.current = null;
       }
     };
   }, []);
@@ -2896,11 +3001,13 @@ function Show4DSTEM() {
       let computes: (Show4DSTEMCompute | Show4DSTEMCpuCompute)[] = [];   // resident set for single / non-lazy paths
       let volMetas: any[] = [];                  // multi-volume descriptors (lazy)
       const volCache = new Map<number, Show4DSTEMCompute>();   // LRU: idx -> decoded volume
+      const volLoadPromises = new Map<number, Promise<Show4DSTEMCompute | Show4DSTEMCpuCompute | null>>();
       const inlineVolCache = new Map<number, Show4DSTEMCompute | Show4DSTEMCpuCompute>(); // LRU for inline gzip 5D exports
       const compareResidentTarget = Math.max(3, Math.min(12, Math.max(1, Number(model.get("compare_max_panels") || 3))));
       const MAX_RESIDENT = compareResidentTarget; // recent / compare volumes kept hot for instant scrub and detector drags
       let volumeCount = 0;
       let getVol: ((idx: number) => Promise<Show4DSTEMCompute | Show4DSTEMCpuCompute | null>) | null = null;
+      let initialVolumeLoad: Promise<Show4DSTEMCompute | Show4DSTEMCpuCompute | null> | null = null;
       // H5 source: read the merged float32 .h5 file straight off disk via WebGPU
       // (jsfive parse + GPU bitshuffle+LZ4 decode). Nothing embedded - the data stays a
       // file; the HTML just points at it. This is the "click HTML, GPU decompresses the
@@ -2911,10 +3018,156 @@ function Show4DSTEM() {
       // the render below (recomputeVI / recomputeFrame / recomputeCoM) works unchanged.
       const lazyUrl = model.get("_lazy_url") as string | undefined;
       const h5Url = model.get("_h5_url") as string | undefined;
+      const h5UrlsJson = model.get("_h5_urls") as string | undefined;
+      const h5Urls = (() => {
+        if (!h5UrlsJson) return [] as string[];
+        try {
+          const parsed = JSON.parse(h5UrlsJson);
+          return Array.isArray(parsed) ? parsed.map((value) => String(value)).filter(Boolean) : [];
+        } catch {
+          return [] as string[];
+        }
+      })();
+      const hasInlineViMaps = () => {
+        const preset = model.get("vi_preset_maps_bytes") as DataView | undefined;
+        const product = model.get("vi_product_maps_bytes") as DataView | undefined;
+        return Boolean((preset && preset.byteLength > 0) || (product && product.byteLength > 0));
+      };
+      const loadH5Compute = async (sourceUrl: string): Promise<Show4DSTEMCompute | null> => {
+        let h5BadPx = new Uint32Array(0);
+        if (/_master\.h5(?:[?#].*)?$/.test(sourceUrl)) {
+          const base = sourceUrl.replace(/_master\.h5(?:[?#].*)?$/, "");
+          const W = 8;
+          const fetchOne = async (n: number): Promise<ArrayBuffer | null> => {
+            const resp = await fetch(`${base}_data_${String(n).padStart(6, "0")}.h5`);
+            return resp.ok ? resp.arrayBuffer() : null;
+          };
+          const inflight = new Map<number, Promise<ArrayBuffer | null>>();
+          let next = 1;
+          for (; next <= W; next++) inflight.set(next, fetchOne(next));
+          const gpuChunks: { buffer: GPUBuffer; startScan: number; nScan: number }[] = [];
+          let startScan = 0, ds = 0, computeMode = 1, decodedBytes = 0;
+          let maxDataFiles = Number.POSITIVE_INFINITY;
+          let h5TotalFrames = 0;
+          let dev: GPUDevice | null = null;
+          let decodeDtype: "uint8" | "float32" = "uint8";
+          let sourceDtype = "unknown";
+          const __t0 = performance.now(); let __decMs = 0, __parseMs = 0, __fetchBytes = 0, __waitMs = 0, __masterMs = 0;
+          try {
+            try {
+              const __mt = performance.now();
+              const masterResp = await fetch(sourceUrl);
+              __masterMs += performance.now() - __mt;
+              if (masterResp.ok) {
+                const masterInfo = readH5MasterInfo(await masterResp.arrayBuffer());
+                if (masterInfo.badPixels.length) h5BadPx = new Uint32Array(masterInfo.badPixels);
+                h5TotalFrames = Math.max(0, Math.round(Number(masterInfo.totalFrames || 0)));
+              }
+            } catch (e) {
+              console.warn("Could not read HDF5 hot-pixel mask; continuing without detector mask", e);
+            }
+            for (let n = 1; !disposed; n++) {
+              const p = inflight.get(n);
+              if (!p) break;
+              inflight.delete(n);
+              const __wt = performance.now();
+              const buf = await p;
+              __waitMs += performance.now() - __wt;
+              if (!buf) break;
+              __fetchBytes += buf.byteLength;
+              const __pt = performance.now();
+              const vol = readH5Volume(buf, "merged");
+              __parseMs += performance.now() - __pt;
+              if (!Number.isFinite(maxDataFiles)) {
+                maxDataFiles = Math.ceil((h5TotalFrames || scanRows * scanCols) / Math.max(1, vol.nFrames));
+              }
+              ds = vol.detSize;
+              sourceDtype = vol.srcDtype;
+              decodeDtype = vol.srcDtype === "float32" ? "float32" : "uint8";
+              const __dt = performance.now();
+              const dec = await decodeBslz4ToStack({ ...vol.chunks[0], startScan, nScan: vol.nFrames } as never, decodeDtype, vol.srcDtype);
+              __decMs += performance.now() - __dt;
+              if (!dec) break;
+              dev = dec.device;
+              computeMode = dec.mode;
+              decodedBytes += vol.nFrames * vol.detSize * (decodeDtype === "float32" ? 4 : 1);
+              gpuChunks.push({ buffer: dec.buffer, startScan, nScan: vol.nFrames });
+              startScan += vol.nFrames;
+              if (next <= maxDataFiles) {
+                inflight.set(next, fetchOne(next));
+                next++;
+              }
+            }
+          } catch (e) {
+            gpuChunks.forEach((c) => c.buffer.destroy());
+            throw e;
+          }
+          const __decGB = decodedBytes / 1e9;
+          (window as unknown as { __loadprof: unknown }).__loadprof = { totalMs: Math.round(performance.now() - __t0),
+            fetchedCompressedGB: +(__fetchBytes / 1e9).toFixed(1), decodedGB: +__decGB.toFixed(1),
+            sourceDtype, decodeDtype, chunks: gpuChunks.length, frames: startScan,
+            badPixels: h5BadPx.length,
+            adapterInfo: getGPUInfo(), softwareAdapter: isSoftwareGPUAdapter(),
+            timestampQuery: Boolean(dev?.features.has("timestamp-query")),
+            subgroups: Boolean(dev?.features.has("subgroups" as GPUFeatureName)),
+            maxBufferGB: dev ? +(Number(dev.limits.maxBufferSize || 0) / 1e9).toFixed(2) : null,
+            maxStorageBufferGB: dev ? +(Number(dev.limits.maxStorageBufferBindingSize || 0) / 1e9).toFixed(2) : null,
+            dataFilesExpected: Number.isFinite(maxDataFiles) ? maxDataFiles : null,
+            targetFrames: h5TotalFrames || scanRows * scanCols,
+            fetchWaitMs: Math.round(__waitMs), masterFetchMs: Math.round(__masterMs),
+            decompressMs: Math.round(__decMs), parseMs: Math.round(__parseMs),
+            decodeIncludesUpload: true,
+            decompressGBps: +(__decGB / Math.max(0.001, __decMs / 1000)).toFixed(2) };
+          const created = dev ? Show4DSTEMCompute.fromGpuChunks(dev, gpuChunks, scanRows * scanCols, ds, computeMode) : null;
+          if (created && h5BadPx.length) created.badPx = h5BadPx;
+          return created;
+        }
+        const h5Buffer = await (await fetch(sourceUrl)).arrayBuffer();
+        try {
+          const masterInfo = readH5MasterInfo(h5Buffer, "merged");
+          if (masterInfo.badPixels.length) h5BadPx = new Uint32Array(masterInfo.badPixels);
+        } catch (e) {
+          console.warn("Could not read HDF5 hot-pixel mask; continuing without detector mask", e);
+        }
+        const vol = readH5Volume(h5Buffer, "merged");
+        const decodeDtype = vol.srcDtype === "float32" ? "float32" : "uint8";
+        const created = await Show4DSTEMCompute.createFromBslz4Chunked([{ ...vol.chunks[0], startScan: 0, nScan: vol.nFrames }], scanRows * scanCols, vol.detSize, decodeDtype, vol.srcDtype);
+        if (created && h5BadPx.length) created.badPx = h5BadPx;
+        return created;
+      };
       if (lazyUrl) {
         const lz = await LazyShow4DSTEM.create(lazyUrl);
         compute = lz as unknown as Show4DSTEMCompute;
         if (compute) computes.push(compute);
+      } else if (h5Urls.length) {
+        volumeCount = h5Urls.length;
+        getVol = async (idx: number) => {
+          const clamped = Math.max(0, Math.min(h5Urls.length - 1, idx));
+          if (volCache.has(clamped)) return volCache.get(clamped)!;
+          const existingLoad = volLoadPromises.get(clamped);
+          if (existingLoad) return await existingLoad;
+          const loadPromise = (async () => {
+            const cc = await loadH5Compute(h5Urls[clamped]);
+            if (cc) {
+              volCache.set(clamped, cc);
+              const activeFrame = Math.max(0, Math.min(h5Urls.length - 1, model.get("frame_idx") | 0));
+              while (volCache.size > MAX_RESIDENT) {
+                const old = [...volCache.keys()].find((k) => k !== clamped && k !== activeFrame);
+                if (old === undefined) break;
+                volCache.get(old)!.dispose(); volCache.delete(old);
+              }
+            }
+            return cc;
+          })().finally(() => { volLoadPromises.delete(clamped); });
+          volLoadPromises.set(clamped, loadPromise);
+          return await loadPromise;
+        };
+        const initialIdx = Math.max(0, Math.min(h5Urls.length - 1, model.get("frame_idx") | 0));
+        if (hasInlineViMaps()) {
+          initialVolumeLoad = getVol(initialIdx);
+        } else {
+          compute = await getVol(initialIdx);
+        }
       } else if (h5Url) {
         let h5BadPx = new Uint32Array(0);
         let h5TotalFrames = 0;
@@ -2940,10 +3193,12 @@ function Show4DSTEM() {
           let dev: GPUDevice | null = null;
           let decodeDtype: "uint8" | "float32" = "uint8";
           let sourceDtype = "unknown";
-          const __t0 = performance.now(); let __decMs = 0, __parseMs = 0, __fetchBytes = 0, __waitMs = 0;
+          const __t0 = performance.now(); let __decMs = 0, __parseMs = 0, __fetchBytes = 0, __waitMs = 0, __masterMs = 0;
           try {
             try {
+              const __mt = performance.now();
               const masterResp = await fetch(h5Url);
+              __masterMs += performance.now() - __mt;
               if (masterResp.ok) {
                 const masterInfo = readH5MasterInfo(await masterResp.arrayBuffer());
                 if (masterInfo.badPixels.length) h5BadPx = new Uint32Array(masterInfo.badPixels);
@@ -2993,8 +3248,17 @@ function Show4DSTEM() {
             fetchedCompressedGB: +(__fetchBytes / 1e9).toFixed(1), decodedGB: +__decGB.toFixed(1),
             sourceDtype, decodeDtype, chunks: gpuChunks.length, frames: startScan,
             badPixels: h5BadPx.length,
-            fetchWaitMs: Math.round(__waitMs), decompressMs: Math.round(__decMs), parseMs: Math.round(__parseMs),
-            decompressGBps: +(__decGB / (__decMs / 1000)).toFixed(2) };
+            adapterInfo: getGPUInfo(), softwareAdapter: isSoftwareGPUAdapter(),
+            timestampQuery: Boolean(dev?.features.has("timestamp-query")),
+            subgroups: Boolean(dev?.features.has("subgroups" as GPUFeatureName)),
+            maxBufferGB: dev ? +(Number(dev.limits.maxBufferSize || 0) / 1e9).toFixed(2) : null,
+            maxStorageBufferGB: dev ? +(Number(dev.limits.maxStorageBufferBindingSize || 0) / 1e9).toFixed(2) : null,
+            dataFilesExpected: Number.isFinite(maxDataFiles) ? maxDataFiles : null,
+            targetFrames: h5TotalFrames || scanRows * scanCols,
+            fetchWaitMs: Math.round(__waitMs), masterFetchMs: Math.round(__masterMs),
+            decompressMs: Math.round(__decMs), parseMs: Math.round(__parseMs),
+            decodeIncludesUpload: true,
+            decompressGBps: +(__decGB / Math.max(0.001, __decMs / 1000)).toFixed(2) };
           if (dev) compute = Show4DSTEMCompute.fromGpuChunks(dev, gpuChunks, scanRows * scanCols, ds, computeMode);
         } else {
           const h5Buffer = await (await fetch(h5Url)).arrayBuffer();
@@ -3032,17 +3296,23 @@ function Show4DSTEM() {
           volumeCount = volMetas.length;
           getVol = async (idx: number) => {
             if (volCache.has(idx)) return volCache.get(idx)!;
-            const cc = await decodeVol(volMetas[idx]);
-            if (cc) {
-              volCache.set(idx, cc);
-              const activeFrame = Math.max(0, Math.min(volMetas.length - 1, model.get("frame_idx") | 0));
-              while (volCache.size > MAX_RESIDENT) {           // evict the oldest non-active volume
-                const old = [...volCache.keys()].find((k) => k !== idx && k !== activeFrame);
-                if (old === undefined) break;
-                volCache.get(old)!.dispose(); volCache.delete(old);
+            const existingLoad = volLoadPromises.get(idx);
+            if (existingLoad) return await existingLoad;
+            const loadPromise = (async () => {
+              const cc = await decodeVol(volMetas[idx]);
+              if (cc) {
+                volCache.set(idx, cc);
+                const activeFrame = Math.max(0, Math.min(volMetas.length - 1, model.get("frame_idx") | 0));
+                while (volCache.size > MAX_RESIDENT) {           // evict the oldest non-active volume
+                  const old = [...volCache.keys()].find((k) => k !== idx && k !== activeFrame);
+                  if (old === undefined) break;
+                  volCache.get(old)!.dispose(); volCache.delete(old);
+                }
               }
-            }
-            return cc;
+              return cc;
+            })().finally(() => { volLoadPromises.delete(idx); });
+            volLoadPromises.set(idx, loadPromise);
+            return await loadPromise;
           };
           compute = await getVol(Math.max(0, Math.min(volMetas.length - 1, model.get("frame_idx") | 0)));
         } else if (Array.isArray(m.chunks)) {
@@ -3107,12 +3377,15 @@ function Show4DSTEM() {
           compute = await Show4DSTEMCompute.create(stack, scanRows * scanCols, detR * detC) ?? Show4DSTEMCpuCompute.create(stack, scanRows * scanCols, detR * detC);
         }
       }
-      if (!compute || disposed) { compute?.dispose(); return; }
-      setWebgpuDpcReady(Boolean(
-        (compute as unknown as { maskedDpcBuffer?: unknown }).maskedDpcBuffer
-        || (compute as unknown as { maskedDpc?: unknown }).maskedDpc
-        || (compute as unknown as { maskedCoM?: unknown }).maskedCoM,
-      ));
+      const publishComputeDpcReady = (backend: Show4DSTEMCompute | Show4DSTEMCpuCompute) => {
+        setWebgpuDpcReady(Boolean(
+          (backend as unknown as { maskedDpcBuffer?: unknown }).maskedDpcBuffer
+          || (backend as unknown as { maskedDpc?: unknown }).maskedDpc
+          || (backend as unknown as { maskedCoM?: unknown }).maskedCoM,
+        ));
+      };
+      if ((!compute && !initialVolumeLoad) || disposed) { compute?.dispose(); return; }
+      if (compute) publishComputeDpcReady(compute);
       // Auto-filter hot/dead detector pixels (from the HDF5 pixel_mask) so the
       // offline result matches CUDA's apply_mask path - no manual masking needed.
       const badPxJson = model.get("_offline_bad_px") as string | undefined;
@@ -3413,10 +3686,21 @@ function Show4DSTEM() {
           recordViProfile(source, "product", startedAt, generation);
           return;
         }
+        if (source === "roi") {
+          const preset = viPresetFrameView(model, scanRows, scanCols);
+          if (preset) {
+            if (generation !== viRecomputeGen) return;
+            clearViGpuDisplay();
+            model.set("virtual_image_bytes", preset);
+            recordViProfile(source, "preset_product", startedAt, generation);
+            return;
+          }
+        }
         if (source === "DPC_row" || source === "DPC_col") {
           if (serveWarmCacheEntry(dpcWarmCacheKey(source), source, startedAt, generation)) {
             return;
           }
+          if (!compute) return;
           const displayed = await computeDpcBufferImage(compute!, source);
           if (generation !== viRecomputeGen) return;
           if (!displayed) {
@@ -3444,6 +3728,7 @@ function Show4DSTEM() {
         if (serveWarmCacheEntry(roiKey, "roi", startedAt, generation)) {
           return;
         }
+        if (!compute) return;
         const displayed = computeRoiBufferImage(compute!, mask);
         if (!displayed) {
           clearViGpuDisplay();
@@ -3601,6 +3886,15 @@ function Show4DSTEM() {
           model.set("compare_panel_indices", indices);
           return;
         }
+        const presetStack = source === "roi"
+          ? viPresetStackForIndices(model, indices, scanRows, scanCols)
+          : null;
+        if (presetStack) {
+          model.set("compare_virtual_image_bytes", presetStack);
+          model.set("compare_panel_count", indices.length);
+          model.set("compare_panel_indices", indices);
+          return;
+        }
         const gen = ++compareViGen;
         const panelPixels = scanRows * scanCols;
         const stack = new Float32Array(indices.length * panelPixels);
@@ -3682,6 +3976,7 @@ function Show4DSTEM() {
       const recomputeDP = async () => {
         const mode = model.get("vi_roi_mode");
         if (!mode || mode === "off") { model.set("vi_roi_dp_bytes", new DataView(new ArrayBuffer(0))); return; }
+        if (!compute) { model.set("vi_roi_dp_bytes", new DataView(new ArrayBuffer(0))); return; }
         const dp = await compute!.reduceFrames(buildScanMask(model, scanRows, scanCols), model.get("vi_roi_reduce") !== "sum");
         model.set("vi_roi_dp_bytes", new DataView(dp.buffer));
       };
@@ -3717,6 +4012,7 @@ function Show4DSTEM() {
           }
         }
         // bslz4 / chunked stacks have no CPU copy -> extract the frame on the GPU.
+        if (!compute) return;
         const frame = cpuStack
           ? (() => { const f = new Float32Array(detSize); const base = scanIdx * detSize; for (let k = 0; k < detSize; k++) f[k] = sample(base + k); return f; })()
           : await compute!.frameAt(scanIdx);
@@ -3742,8 +4038,20 @@ function Show4DSTEM() {
         const cc = await getVol(v);
         if (!cc) return false;
         compute = cc;
+        publishComputeDpcReady(cc);
         return true;
       };
+      if (initialVolumeLoad) {
+        void initialVolumeLoad.then((cc) => {
+          if (!cc || disposed) return;
+          compute = cc;
+          publishComputeDpcReady(cc);
+          void recomputeFrame();
+          scheduleWarmStandardViCache();
+        }).catch((error) => {
+          console.warn("Show4DSTEM background H5 load failed", error);
+        });
+      }
       const recomputeActiveView = async () => {
         const ready = await activateCurrentVolume();
         if (!ready || disposed) return;

@@ -365,6 +365,11 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     ).tag(sync=True)
     vi_product_map_frames = traitlets.Int(0).tag(sync=True)
     vi_product_maps_bytes = traitlets.Bytes(b"").tag(sync=True)
+    vi_preset_labels = traitlets.List(
+        traitlets.Unicode(), default_value=[]
+    ).tag(sync=True)
+    vi_preset_map_frames = traitlets.Int(0).tag(sync=True)
+    vi_preset_maps_bytes = traitlets.Bytes(b"").tag(sync=True)
 
     # Offline / browser-compute mode: ship a compact 4D stack so JS runs the
     # virtual-image and DP-from-ROI reductions with no Python kernel. Inline gzip
@@ -392,11 +397,11 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     # multi-volume {volumes:[{base,chunks,badPx}], ...}. The browser decode is
     # bit-exact to the uint8-clipped reference (verified).
     _offline_bslz4 = traitlets.Unicode("").tag(sync=True)
-    # H5-source mode: the HTML points at a sibling float32 .h5 file (the merged data); the
-    # JS reads it straight off disk via WebGPU (jsfive parse + GPU bitshuffle+LZ4 decode) -
-    # NOTHING embedded, the data stays a file. Needs HTTP (fetch CORS-blocked under file://).
-    # The "click HTML, GPU decompresses the merged H5, real Show4DSTEM renders it" path.
+    # H5-source mode: the HTML points at sibling HDF5 files; JS reads them via
+    # WebGPU (jsfive parse + GPU bitshuffle+LZ4 decode). NOTHING embedded, the
+    # data stays a file. Needs HTTP (fetch CORS-blocked under file://).
     _h5_url = traitlets.Unicode("").tag(sync=True)
+    _h5_urls = traitlets.Unicode("").tag(sync=True)
     # Lazy mode: a sidecar bundle URL (radial profile + CoM + frame index + data files). The JS
     # derives the virtual image from the ~100 MB profile in VRAM and lazy-fetches CBED frames from
     # disk - nothing bulk-loads. Real-time scrub + detector with no 38 GB resident.
@@ -751,6 +756,39 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             np.stack(stacked, axis=0), dtype=np.float32
         ).tobytes()
 
+    def _set_vi_preset_maps(self, maps: dict[str, Any]) -> None:
+        presets: dict[str, np.ndarray] = {}
+        for label in ("BF", "ABF", "ADF", "HAADF"):
+            value = maps.get(label)
+            if value is None:
+                continue
+            presets[label] = self._normalise_vi_product_array(label, value)
+
+        self._vi_preset_maps = presets
+        labels = list(presets)
+        self.vi_preset_labels = labels
+        if not presets:
+            self.vi_preset_map_frames = 0
+            self.vi_preset_maps_bytes = b""
+            return
+
+        frame_count = max(arr.shape[0] for arr in presets.values())
+        stacked = []
+        for label in labels:
+            arr = presets[label]
+            if arr.shape[0] == 1 and frame_count > 1:
+                arr = np.broadcast_to(arr, (frame_count, self.shape_rows, self.shape_cols))
+            elif arr.shape[0] != frame_count:
+                raise ValueError(
+                    f"{label} has {arr.shape[0]} preset frame(s), but another "
+                    f"preset map has {frame_count}."
+                )
+            stacked.append(np.ascontiguousarray(arr, dtype=np.float32))
+        self.vi_preset_map_frames = int(frame_count)
+        self.vi_preset_maps_bytes = np.ascontiguousarray(
+            np.stack(stacked, axis=0), dtype=np.float32
+        ).tobytes()
+
     def _current_vi_product_map(self, source: str | None = None) -> np.ndarray | None:
         label = self._normalise_vi_source(source or self.vi_source)
         arr = getattr(self, "_vi_product_maps", {}).get(label)
@@ -773,6 +811,26 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         self._set_vi_product_maps(maps)
         if self._normalise_vi_source(self.vi_source) == label:
             self._refresh_compare_virtual_images()
+        return self
+
+    def set_vi_preset_map(self, label: str, value: Any) -> Self:
+        """Attach or replace a static BF/ABF/ADF/HAADF preset map."""
+        raw = str(label or "").strip().upper().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "BRIGHT_FIELD": "BF",
+            "BRIGHTFIELD": "BF",
+            "DARK_FIELD": "ADF",
+            "DARKFIELD": "ADF",
+        }
+        label = aliases.get(raw, raw)
+        if label not in {"BF", "ABF", "ADF", "HAADF"}:
+            raise ValueError(
+                f"Unsupported virtual-image preset {label!r}. "
+                "Use one of 'BF', 'ABF', 'ADF', or 'HAADF'."
+            )
+        maps = dict(getattr(self, "_vi_preset_maps", {}))
+        maps[label] = value
+        self._set_vi_preset_maps(maps)
         return self
 
     @staticmethod
@@ -1290,6 +1348,9 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         data_url: str | None = None,
         offline_codec: str = "gzip",
         offline_dtype: str = "uint8",
+        h5_url: str | None = None,
+        h5_urls: Sequence[str] | None = None,
+        detector_shape: tuple[int, int] | None = None,
         show_fft: bool = False,
         fft_window: bool = True,
         show_controls: bool | None = None,
@@ -1433,29 +1494,54 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         _verbose = verbose
 
         _io_labels = None
+        webgpu_h5_urls = [str(value) for value in (h5_urls or [])]
+        if h5_url:
+            webgpu_h5_urls = [str(h5_url), *webgpu_h5_urls]
+        # Preserve order but drop accidental duplicates; repeated URLs would waste
+        # browser VRAM and create indistinguishable compare panels.
+        if webgpu_h5_urls:
+            webgpu_h5_urls = list(dict.fromkeys(webgpu_h5_urls))
+            if scan_shape is None:
+                raise ValueError(
+                    "Show4DSTEM(..., h5_urls=...) requires scan_shape=(rows, cols)."
+                )
+            if detector_shape is None:
+                raise ValueError(
+                    "Show4DSTEM(..., h5_urls=...) requires detector_shape=(rows, cols)."
+                )
+            if backend not in (None, "web", "browser", "webgpu"):
+                raise ValueError(
+                    "H5-source Show4DSTEM uses browser WebGPU; backend must be "
+                    f"'webgpu'/'web' or None, got {backend!r}."
+                )
+            offline = True
+            backend = "webgpu"
 
         # Extract underlying array / tensor + auto-calibrate from Dataset input
         # (duck-typed via the dual-slot private attributes _tensor / _array).
-        is_dataset5dstem_input = type(data).__name__ == "Dataset5dstem" and hasattr(
-            data, "frame"
-        )
-        tensor = None if is_dataset5dstem_input else getattr(data, "_tensor", None)
-        array = None if is_dataset5dstem_input else getattr(data, "_array", None)
-        if tensor is not None or array is not None:
-            if not title and getattr(data, "name", ""):
-                title = str(data.name)
-            if sampling is None:
-                sampling = tuple(float(s) for s in data.sampling)
-            if units is None:
-                units = list(data.units)
-            data = tensor if tensor is not None else array
-        elif is_dataset5dstem_input:
-            if not title and getattr(data, "name", ""):
-                title = str(data.name)
-            if sampling is None:
-                sampling = tuple(float(s) for s in data.sampling)
-            if units is None:
-                units = list(data.units)
+        if not webgpu_h5_urls:
+            is_dataset5dstem_input = type(data).__name__ == "Dataset5dstem" and hasattr(
+                data, "frame"
+            )
+            tensor = None if is_dataset5dstem_input else getattr(data, "_tensor", None)
+            array = None if is_dataset5dstem_input else getattr(data, "_array", None)
+            if tensor is not None or array is not None:
+                if not title and getattr(data, "name", ""):
+                    title = str(data.name)
+                if sampling is None:
+                    sampling = tuple(float(s) for s in data.sampling)
+                if units is None:
+                    units = list(data.units)
+                data = tensor if tensor is not None else array
+            elif is_dataset5dstem_input:
+                if not title and getattr(data, "name", ""):
+                    title = str(data.name)
+                if sampling is None:
+                    sampling = tuple(float(s) for s in data.sampling)
+                if units is None:
+                    units = list(data.units)
+        else:
+            is_dataset5dstem_input = False
 
         # Resolve sampling + units (4 axes for 4D-STEM):
         # [scan_row, scan_col, k_row, k_col]. Scalar/None broadcast to (1, 1, 1, 1).
@@ -1537,61 +1623,80 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         # Accept the io.load(...) output directly so `Show4DSTEM(load(path))` just
         # works on any backend. Unwrap a LoadResult NamedTuple, then wrap a raw MPS
         # chunked-load (MPSChunked4DSTEM) for the Metal compute path.
-        if hasattr(data, "_fields") and "data" in getattr(data, "_fields", ()):
-            data = data.data
-        # Dataset5dstem is the CUDA/MPS-friendly 5D series wrapper. Keep it as a
-        # frame-backed object instead of calling `.tensor`: sharded CUDA series may
-        # hold each 18 GiB no-bin master on a different GPU, and `.tensor` would
-        # gather everything onto one card.
-        is_dataset5dstem = type(data).__name__ == "Dataset5dstem" and hasattr(
-            data, "frame"
-        )
+        self._webgpu_h5_source = bool(webgpu_h5_urls)
         self._cuda_compute_data = None
         self._cuda_compare_compute_backends: OrderedDict[int, Any] = OrderedDict()
-        if hasattr(data, "chunks") and not getattr(data, "_is_gpu_frames", False):
-            from quantem.gpu.compute.mps import ChunkedFrames
-
-            data = ChunkedFrames(
-                data, row_prefix=bool(getattr(data, "row_prefix", False))
-            )
-        # cupy array (io.load default on CUDA) -> ZERO-COPY torch tensor on the same
-        # GPU via dlpack. Without this, the fallback cp.asnumpy round-trips the whole
-        # block to CPU and re-uploads (a 19.3 GB no-bin load -> ~58 GB transient and
-        # an OOM kernel crash). dlpack keeps it on-device, no copy.
-        if type(data).__module__.split(".")[0] == "cupy":
-            self._cuda_compute_data = data
-            data = torch.from_dlpack(data)
-        # Torch tensor input keeps its device (lets user pin a specific GPU via
-        # `data.cuda(1)`). NumPy / Dataset input gets default-validated device.
-        if is_dataset5dstem:
-            self._device = data.device
-            self._data_pre = data
-            data_np = None
-        elif isinstance(data, torch.Tensor) or getattr(data, "_is_gpu_frames", False):
-            # `_is_gpu_frames` lets a duck-typed GPU array (e.g. a chunk-backed
-            # no-bin stack that can't be one tensor) take the GPU path without a
-            # numpy round-trip. It must expose .shape/.dtype/.ndim/.device and
-            # single-frame integer indexing.
-            self._device = data.device
-            self._data_pre = data
-            data_np = None
-        else:
-            device_str, _ = _validate_device(None)
-            self._device = torch.device(device_str)
-            data_np = to_numpy(data)
+        if self._webgpu_h5_source:
+            self._device = torch.device("cpu")
             self._data_pre = None
-            self._saturation_value = (
-                65535
-                if data_np.dtype == np.uint16
-                else 255
-                if data_np.dtype == np.uint8
-                else None
+            data_np = None
+            rows, cols = (int(scan_shape[0]), int(scan_shape[1]))
+            det_r, det_c = (int(detector_shape[0]), int(detector_shape[1]))
+            if rows <= 0 or cols <= 0 or det_r <= 0 or det_c <= 0:
+                raise ValueError(
+                    "scan_shape and detector_shape entries must all be positive."
+                )
+            shape = (
+                (len(webgpu_h5_urls), rows, cols, det_r, det_c)
+                if len(webgpu_h5_urls) > 1
+                else (rows, cols, det_r, det_c)
             )
-        # Handle dimensionality — 5D loads eagerly for instant frame switching
-        # Resolve shape from whichever input path we took
-        shape = (
-            tuple(self._data_pre.shape) if self._data_pre is not None else data_np.shape
-        )
+        else:
+            if hasattr(data, "_fields") and "data" in getattr(data, "_fields", ()):
+                data = data.data
+            # Dataset5dstem is the CUDA/MPS-friendly 5D series wrapper. Keep it as a
+            # frame-backed object instead of calling `.tensor`: sharded CUDA series may
+            # hold each 18 GiB no-bin master on a different GPU, and `.tensor` would
+            # gather everything onto one card.
+            is_dataset5dstem = type(data).__name__ == "Dataset5dstem" and hasattr(
+                data, "frame"
+            )
+            if hasattr(data, "chunks") and not getattr(data, "_is_gpu_frames", False):
+                from quantem.gpu.compute.mps import ChunkedFrames
+
+                data = ChunkedFrames(
+                    data, row_prefix=bool(getattr(data, "row_prefix", False))
+                )
+            # cupy array (io.load default on CUDA) -> ZERO-COPY torch tensor on the same
+            # GPU via dlpack. Without this, the fallback cp.asnumpy round-trips the whole
+            # block to CPU and re-uploads (a 19.3 GB no-bin load -> ~58 GB transient and
+            # an OOM kernel crash). dlpack keeps it on-device, no copy.
+            if type(data).__module__.split(".")[0] == "cupy":
+                self._cuda_compute_data = data
+                data = torch.from_dlpack(data)
+            # Torch tensor input keeps its device (lets user pin a specific GPU via
+            # `data.cuda(1)`). NumPy / Dataset input gets default-validated device.
+            if is_dataset5dstem:
+                self._device = data.device
+                self._data_pre = data
+                data_np = None
+            elif isinstance(data, torch.Tensor) or getattr(data, "_is_gpu_frames", False):
+                # `_is_gpu_frames` lets a duck-typed GPU array (e.g. a chunk-backed
+                # no-bin stack that can't be one tensor) take the GPU path without a
+                # numpy round-trip. It must expose .shape/.dtype/.ndim/.device and
+                # single-frame integer indexing.
+                self._device = data.device
+                self._data_pre = data
+                data_np = None
+            else:
+                device_str, _ = _validate_device(None)
+                self._device = torch.device(device_str)
+                data_np = to_numpy(data)
+                self._data_pre = None
+                self._saturation_value = (
+                    65535
+                    if data_np.dtype == np.uint16
+                    else 255
+                    if data_np.dtype == np.uint8
+                    else None
+                )
+            # Handle dimensionality — 5D loads eagerly for instant frame switching
+            # Resolve shape from whichever input path we took
+            shape = (
+                tuple(self._data_pre.shape)
+                if self._data_pre is not None
+                else data_np.shape
+            )
         ndim = len(shape)
         _tc = time.perf_counter()
         if ndim == 5:
@@ -1620,7 +1725,10 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             raise ValueError(
                 f"Show4DSTEM expects a 3D ((N, det_h, det_w) flat-scan), 4D ((scan_h, scan_w, det_h, det_w)), or 5D ((n_frames, scan_h, scan_w, det_h, det_w)) array. Got {ndim}D."
             )
-        if self._data_pre is not None:
+        if self._webgpu_h5_source:
+            self._data = None
+            self._dataset_page_config = None
+        elif self._data_pre is not None:
             self._data = (
                 self._data_pre
                 if is_dataset5dstem or self._data_pre.device == self._device
@@ -1679,7 +1787,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                     chunk.masked_fill_(chunk == -1, 0)
         # Keep native dtype (uint8/uint16) to bound memory at ~ data_size.
         # Reductions cast in chunks (bounded transient).
-        if _verbose:
+        if _verbose and not self._webgpu_h5_source:
             if str(self._device) == "mps":
                 torch.mps.synchronize()
             n_bytes = (
@@ -1722,6 +1830,117 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         self._frame_labels = resolved_labels
         if resolved_labels:
             self.frame_labels = list(resolved_labels)
+        if self._webgpu_h5_source:
+            self._offline_codec = offline_codec
+            self._h5_url = webgpu_h5_urls[0] if len(webgpu_h5_urls) == 1 else ""
+            self._h5_urls = json.dumps(webgpu_h5_urls) if len(webgpu_h5_urls) > 1 else ""
+            self.offline = True
+            self._offline_stack = b""
+            self._offline_url = ""
+            self._offline_chunks = ""
+            self._offline_bslz4 = ""
+            self._offline_bad_px = ""
+            self._offline_gzip = False
+            self.ssb_compute_enabled = False
+            self.dp_global_min = MIN_LOG_VALUE
+            self.dp_global_max = 1.0
+            self._det_row_coords = torch.arange(
+                self.det_rows, device=self._device, dtype=torch.float32
+            )[:, None]
+            self._det_col_coords = torch.arange(
+                self.det_cols, device=self._device, dtype=torch.float32
+            )[None, :]
+            self._scan_row_coords = torch.arange(
+                self.shape_rows, device=self._device, dtype=torch.float32
+            )[:, None]
+            self._scan_col_coords = torch.arange(
+                self.shape_cols, device=self._device, dtype=torch.float32
+            )[None, :]
+            det_size = min(self.det_rows, self.det_cols)
+            if center is not None:
+                self.center_row = float(center[0])
+                self.center_col = float(center[1])
+            else:
+                self.center_row = float(self.det_rows / 2)
+                self.center_col = float(self.det_cols / 2)
+            self.bf_radius = float(
+                bf_radius if bf_radius is not None else det_size * DEFAULT_BF_RATIO
+            )
+            self._cached_bf_virtual = None
+            self._cached_abf_virtual = None
+            self._cached_adf_virtual = None
+            self._cached_haadf_virtual = None
+            self._compare_virtual_page_cache = OrderedDict()
+            self._compare_virtual_page_cache_bytes = 0
+            self._compare_diffraction_cache = OrderedDict()
+            self._compare_diffraction_cache_bytes = 0
+            self._compare_cache_pages = max(0, int(compare_cache_pages))
+            self._compare_cache_max_bytes = (
+                None
+                if compare_cache_max_bytes is None
+                else max(0, int(compare_cache_max_bytes))
+            )
+            self._compare_compute_lock = threading.RLock()
+            self._compare_cache_lock = threading.RLock()
+            self._compare_cache_generation = 0
+            self._compare_cache_warm_stop = None
+            self._compare_cache_warm_thread = None
+            self._compare_cache_warm_status = "idle"
+            self._compare_page_stop = None
+            self._compare_page_thread = None
+            self._compare_maintenance_stop = None
+            self._compare_maintenance_thread = None
+            self._compare_page_worker_lock = threading.Lock()
+            self._compare_page_request_lock = threading.RLock()
+            self._compare_page_generation_counter = 0
+            self._compare_page_last_error = ""
+            self._compare_page_last_send_error = ""
+            self._compare_page_fresh_indices = set()
+            self._compare_page_working_images = {}
+            self._compare_page_paint_clients = set()
+            self._compare_page_paint_legacy_active = False
+            self._compare_page_paint_ack_enabled = False
+            self._folder_update_page_idx = -1
+            self._folder_update_expected_indices = ()
+            self._folder_update_backend_complete_generation = 0
+            self._folder_update_painted_generation = 0
+            self._folder_update_painted_page_idx = -1
+            self._folder_update_paint_timeout_seconds = 30.0
+            self._folder_update_paint_timeout = None
+            self._folder_update_paint_timeout_generation = 0
+            self.roi_mode = "circle"
+            self.roi_center_col = self.center_col
+            self.roi_center_row = self.center_row
+            self.roi_center = [self.center_row, self.center_col]
+            self.roi_radius = float(max(1.0, self.bf_radius))
+            self.roi_active = True
+            self.virtual_image_bytes = np.zeros(
+                self.shape_rows * self.shape_cols, dtype=np.float32
+            ).tobytes()
+            self.frame_bytes = np.zeros(
+                self.det_rows * self.det_cols, dtype=np.float32
+            ).tobytes()
+            visible_count = (
+                min(int(self.n_frames), max(1, int(compare_max_panels)))
+                if self.view_mode == "multiple"
+                else 0
+            )
+            if visible_count:
+                self.compare_panel_count = visible_count
+                self.compare_panel_indices = list(range(visible_count))
+                self.compare_virtual_image_bytes = np.zeros(
+                    visible_count * self.shape_rows * self.shape_cols,
+                    dtype=np.float32,
+                ).tobytes()
+                self.compare_status = (
+                    f"{visible_count}/{int(self.n_frames)} browser WebGPU H5 panels"
+                )
+            self.compare_page_count = max(
+                1, math.ceil(max(1, int(self.n_frames)) / max(1, int(compare_max_panels)))
+            )
+            self.gpu_memory_label = "Browser WebGPU H5 source"
+            self.memory_warning = ""
+            return
         # Histogram axis range — first frame is enough (JS does per-frame percentile clipping).
         # Cast to float for min/max reductions: PyTorch CUDA lacks integer min/max kernels,
         # and the first slice is tiny (144 KB at 192×192) so the cast is free.
@@ -2027,6 +2246,9 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 "vi_product_labels",
                 "vi_product_map_frames",
                 "vi_product_maps_bytes",
+                "vi_preset_labels",
+                "vi_preset_map_frames",
+                "vi_preset_maps_bytes",
                 "frame_bytes",
                 "compare_virtual_image_bytes",
             ):
@@ -2200,7 +2422,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         ``real_space_bin``) bins scan pixels by mean over ``scan_bin x scan_bin``
         blocks. ``dtype`` may be ``"uint8"`` or ``"uint16"``.
         """
-        if self._data is None:
+        if self._data is None and not getattr(self, "_webgpu_h5_source", False):
             raise ValueError(
                 "Cannot export HTML after free(); rebuild the widget first."
             )
@@ -2465,6 +2687,30 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
 
         out = pathlib.Path(path)
         out.parent.mkdir(parents=True, exist_ok=True)
+        if getattr(self, "_webgpu_h5_source", False):
+            if det_bin != 1 or scan_bin != 1:
+                raise ValueError(
+                    "Binned interactive raw export is not available for H5-source "
+                    "Show4DSTEM exports because the browser reads the real H5 data "
+                    "directly. Use det_bin=1 and scan_bin=1 to preserve the full data."
+                )
+            prev_enabled = self.export_enabled
+            prev_save_state = self._save_state
+            self.export_enabled = False
+            self._save_state = True
+            try:
+                embed_minimal_html(
+                    str(out),
+                    views=[self],
+                    title=title or self.title or "Show4DSTEM",
+                    drop_defaults=False,
+                    state=dependency_state([self], drop_defaults=False),
+                )
+            finally:
+                self.export_enabled = prev_enabled
+                self._save_state = prev_save_state
+            ensure_mobile_viewport(out)
+            return out
         if self._offline_bslz4:
             if det_bin != 1 or scan_bin != 1:
                 raise ValueError(
