@@ -275,7 +275,7 @@ widget.preview_cache_info
 `preview_cache="auto"` uses the QuantEM user cache, honoring
 `QUANTEM_WIDGET_CACHE` when it is set. `True` is equivalent to automatic user
 caching, `"folder"` selects a project-local `.quantem` cache, and `False`
-disables persistent reads and writes. `preview_cache_dir="/fast/ssd/cache"`
+disables persistent reads and writes. `preview_cache_dir="preview-cache"`
 overrides the location. Use `rebuild_preview_cache=True` to ignore entries from
 an earlier run and repopulate them. The default disk limit is 4 GiB; least
 recently used complete entries are evicted when `preview_cache_max_bytes` is

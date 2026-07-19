@@ -60,7 +60,7 @@ def _widget_hdf5_module() -> Any:
 def _default_glob() -> str:
     return os.environ.get(
         "QUANTEM_WIDGET_BENCH_MASTERS_GLOB",
-        os.environ.get("QUANTEM_BENCH_MASTER_GLOB", "/home/owner/data/**/*_master.h5"),
+        os.environ.get("QUANTEM_BENCH_MASTER_GLOB", "data/**/*_master.h5"),
     )
 
 
