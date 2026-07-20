@@ -8,6 +8,12 @@ import numpy as np
 import pytest
 
 
+def _webgpu_source(name: str) -> str:
+    from quantem.gpu import webgpu
+
+    return webgpu.source_text(name)
+
+
 def test_show4dstem_cuda_keeps_cupy_compute_source_for_rawkernel() -> None:
     cp = pytest.importorskip("cupy")
     try:
@@ -82,7 +88,7 @@ def test_show4dstem_mps_contract_uses_quantem_gpu_metal_backend() -> None:
 
 def test_show4dstem_webgpu_engine_has_selected_index_vi_kernel() -> None:
     repo = Path(__file__).resolve().parents[1]
-    source = (repo / "js" / "engine" / "compute.ts").read_text(encoding="utf-8")
+    source = _webgpu_source("compute.ts")
     frontend = (repo / "js" / "show4dstem" / "index.tsx").read_text(
         encoding="utf-8"
     )
@@ -129,13 +135,9 @@ def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
     frontend = (repo / "js" / "show4dstem" / "index.tsx").read_text(
         encoding="utf-8"
     )
-    local_h5 = (repo / "js" / "engine" / "local-h5.ts").read_text(
-        encoding="utf-8"
-    )
-    compute = (repo / "js" / "engine" / "compute.ts").read_text(
-        encoding="utf-8"
-    )
-    bslz4 = (repo / "js" / "engine" / "bslz4.ts").read_text(encoding="utf-8")
+    local_h5 = _webgpu_source("local-h5.ts")
+    compute = _webgpu_source("compute.ts")
+    bslz4 = _webgpu_source("bslz4.ts")
 
     assert "decodeBslz4Batch" in frontend
     assert "const pendingSpecs" in frontend

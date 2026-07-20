@@ -30,18 +30,18 @@ import {
   buildScanMask,
   Show4DSTEMCompute,
   Show4DSTEMCpuCompute,
-} from "../engine/compute";
-import { readH5MasterInfo, readH5Volume } from "../engine/h5reader";
-import { decodeBslz4Batch, type Bslz4Spec } from "../engine/bslz4";
+} from "../.generated/engine/compute";
+import { readH5MasterInfo, readH5Volume } from "../.generated/engine/h5reader";
+import { decodeBslz4Batch, type Bslz4Spec } from "../.generated/engine/bslz4";
 import {
   collectShow4DSTEMLocalH5Files,
   loadShow4DSTEMLocalH5MaskedSum,
   loadShow4DSTEMLocalH5Master,
   setShow4DSTEMLocalFiles,
   show4DSTEMHasLocalFiles,
-} from "../engine/local-h5";
-import { getGPUInfo, isSoftwareGPUAdapter } from "../engine/device";
-import { LazyShow4DSTEM } from "../engine/lazy";
+} from "../.generated/engine/local-h5";
+import { getGPUInfo, isSoftwareGPUAdapter } from "../.generated/engine/device";
+import { LazyShow4DSTEM } from "../.generated/engine/lazy";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
 import { findDataRange, sliderRange, computeStats, computeHistogramFromBytes, percentileClip } from "../stats";
 import { downloadBlob, extractBytes, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";

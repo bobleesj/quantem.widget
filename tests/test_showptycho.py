@@ -10,6 +10,12 @@ import types
 import numpy as np
 
 
+def _webgpu_source(name: str) -> str:
+    from quantem.gpu import webgpu
+
+    return webgpu.source_text(name)
+
+
 class _FakeCuPy(types.SimpleNamespace):
     ndarray = np.ndarray
     float32 = np.float32
@@ -832,7 +838,7 @@ def test_showptycho_webgpu_preview_accepts_128_256_512_and_1024(monkeypatch, tmp
 
 def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     """C6: frontend SSB code keeps explicit 128/256/512/1024 WGSL support."""
-    source = pathlib.Path("js/engine/showptycho-ssb.ts").read_text()
+    source = _webgpu_source("showptycho-ssb.ts")
     ui_source = pathlib.Path("js/showptycho/index.tsx").read_text()
     sidecar = pathlib.Path("js/showptycho/webgpu_index.html").read_text()
 
@@ -944,7 +950,7 @@ def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
 
 def test_showptycho_webgpu_reuses_resident_bf_columns_after_prepare():
     """C7: prepared browser BF columns, expect sliders/FFT not to refetch them."""
-    source = pathlib.Path("js/engine/showptycho-ssb.ts").read_text()
+    source = _webgpu_source("showptycho-ssb.ts")
     ui_source = pathlib.Path("js/showptycho/index.tsx").read_text()
 
     setup = source[
