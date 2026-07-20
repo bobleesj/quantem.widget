@@ -1413,6 +1413,11 @@ const SINGLE_IMAGE_TARGET = 500;
 const GALLERY_IMAGE_TARGET = 300;
 const DEFAULT_FFT_ZOOM = 2;
 const GALLERY_FFT_OVERVIEW_MAX_DIM = 2048;
+// A paged gallery may revisit many more panels than are visible at once. Keep
+// its overview FFTs small enough that a complete pass can stay in the bounded
+// LRU, rather than evicting the first page while the user is playing through
+// later pages. ROI FFTs remain native-resolution below.
+const PAGED_GALLERY_FFT_OVERVIEW_MAX_DIM = 1024;
 const PROFILE_COLORS = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"];
 type ROIItem = { row: number; col: number; shape: string; radius: number; radius_inner: number; width: number; height: number; color: string; line_width: number; highlight: boolean };
 const ROI_COLORS = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"];
@@ -2677,15 +2682,6 @@ function Show2D() {
   React.useEffect(() => {
     if (!isPaged || (nPages || 1) <= 1) setPagePlaying(false);
   }, [isPaged, nPages]);
-  React.useEffect(() => {
-    if (!pagePlaying || !isPaged || (nPages || 1) <= 1) return;
-    const timeout = window.setTimeout(() => {
-      const next = (currentPageIdx + 1) % Math.max(1, nPages || 1);
-      setPageSliderPreviewIdx(next);
-      setPageIdx(next);
-    }, 1000 / Math.max(1, pagePlayFps));
-    return () => window.clearTimeout(timeout);
-  }, [currentPageIdx, isPaged, nPages, pagePlayFps, pagePlaying, setPageIdx, setPageSliderPreviewIdx]);
   const [width] = useModelState<number>("width");
   const [height] = useModelState<number>("height");
   const [frameBytes] = useModelState<DataView>("frame_bytes");
@@ -4057,6 +4053,39 @@ function Show2D() {
   const galleryFftDimsRef = React.useRef<{ w: number; h: number } | null>(null);
   const galleryFftOverviewRef = React.useRef<{ downsample: number; sourceW: number; sourceH: number; fftW: number; fftH: number } | null>(null);
   const [galleryFftMagVersion, setGalleryFftMagVersion] = React.useState(0);
+  // Page playback must wait for a cached FFT to be painted, not merely for its
+  // magnitude to exist. Otherwise a rapid page change can show quality text
+  // above an unpainted black FFT canvas.
+  const [galleryFftOffscreenVersion, setGalleryFftOffscreenVersion] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!pagePlaying || !isPaged || (nPages || 1) <= 1) return;
+    // The magnitude cache can already contain this page while its colorized
+    // canvas is still being uploaded. Hold here until the pixels exist so
+    // scientist-facing page playback never flashes a black FFT.
+    const fftPageReady = !effectiveShowFft || activePageIndices.every(
+      idx => !!fftOffscreensRef.current[idx],
+    );
+    if (!fftPageReady) return;
+    const timeout = window.setTimeout(() => {
+      const next = (currentPageIdx + 1) % Math.max(1, nPages || 1);
+      setPageSliderPreviewIdx(next);
+      setPageIdx(next);
+    }, 1000 / Math.max(1, pagePlayFps));
+    return () => window.clearTimeout(timeout);
+  }, [
+    activePageIndices,
+    currentPageIdx,
+    effectiveShowFft,
+    galleryFftOffscreenVersion,
+    isPaged,
+    nPages,
+    pagePlayFps,
+    pagePlaying,
+    setPageIdx,
+    setPageSliderPreviewIdx,
+  ]);
+
   const galleryFftPipelineRef = React.useRef<({
     displayData: Float32Array;
     displayMin: number;
@@ -7222,7 +7251,12 @@ function Show2D() {
 
       const useRoiCrop = roiFftActive && roiList && roiSelectedIdx >= 0 && roiSelectedIdx < roiList.length;
       const roi = useRoiCrop ? roiList[roiSelectedIdx] : null;
-      const overviewDownsample = roi ? 1 : Math.max(1, Math.ceil(Math.max(width, height) / GALLERY_FFT_OVERVIEW_MAX_DIM));
+      const overviewMaxDim = isPaged
+        ? PAGED_GALLERY_FFT_OVERVIEW_MAX_DIM
+        : GALLERY_FFT_OVERVIEW_MAX_DIM;
+      const overviewDownsample = roi
+        ? 1
+        : Math.max(1, Math.ceil(Math.max(width, height) / overviewMaxDim));
       const fftPanelIndices = visibleImageIndices;
       const visibleFftSet = new Set(fftPanelIndices);
       for (let idx = 0; idx < nImages; idx++) {
@@ -7526,7 +7560,6 @@ function Show2D() {
 
   // Gallery FFT data effect: normalize + colormap → cached offscreen canvases
   // (does NOT depend on gallery zoom/pan states)
-  const [galleryFftOffscreenVersion, setGalleryFftOffscreenVersion] = React.useState(0);
   React.useEffect(() => {
     if (!effectiveShowFft || !isGallery) return;
     const lut = COLORMAPS[fftColormap] || COLORMAPS.inferno;
