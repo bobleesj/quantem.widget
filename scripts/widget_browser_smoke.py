@@ -40,6 +40,7 @@ STORY_IDS_BY_VARIANT = {
     "show3d-four-panel-downsample": ["S3D-14", "S3D-15", "S3D-16"],
     "show4dstem": ["S4D-01", "S4D-02", "S4D-03", "S4D-06", "S4D-09"],
     "show4dstem-compare": ["S4D-02", "S4D-03", "S4D-07", "S4D-16"],
+    "showptycho-webgpu-folder": ["SP-01", "SP-02", "SP-05", "SP-09"],
     "showfolder": ["SF-2", "SF-5", "SF-8"],
 }
 
@@ -116,6 +117,13 @@ def _sha256(data: bytes) -> str:
 
 def _safe_name(name: str) -> str:
     return "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in name)
+
+
+def _served_export_path(artifact_dir: Path, path: str | Path) -> str:
+    try:
+        return Path(path).resolve().relative_to(artifact_dir.resolve()).as_posix()
+    except ValueError:
+        return Path(path).name
 
 
 def _visible_canvas_boxes(page) -> list[dict[str, float]]:
@@ -1271,6 +1279,24 @@ def _semantic_checks(page, row: dict[str, Any], canvas_count: int) -> dict[str, 
         if not after_reset_key.startswith("scan-0"):
             errors.append(f"Show4DSTEM compare reset did not restore natural order: {compare_actions}")
 
+    if variant == "showptycho-webgpu-folder":
+        body_text = str(page.evaluate("document.body.innerText"))
+        showptycho_text = {
+            "has_bf": "BF" in body_text,
+            "has_c10": "C10" in body_text,
+            "has_higher_order": "Higher-order" in body_text,
+            "has_webgpu_status": "WebGPU" in body_text,
+        }
+        checks["showptycho_text"] = showptycho_text
+        if not showptycho_text["has_bf"]:
+            errors.append("ShowPtycho BF control/status is not visible")
+        if not showptycho_text["has_c10"]:
+            errors.append("ShowPtycho C10 control is not visible")
+        if not showptycho_text["has_higher_order"]:
+            errors.append("ShowPtycho higher-order panel control is not visible")
+        if not showptycho_text["has_webgpu_status"]:
+            errors.append("ShowPtycho WebGPU status text is not visible")
+
     checks["errors"] = errors
     return checks
 
@@ -1350,6 +1376,12 @@ def _check_page(
     def _handle_console(msg) -> None:
         if msg.type != "error" or "Failed to load resource:" in msg.text:
             return
+        if (
+            "[showptycho] WebGPU preview failed" in msg.text
+            and "WebGPU device unavailable" in msg.text
+        ):
+            console_warnings.append(msg.text)
+            return
         if "Unable to preventDefault inside passive event listener invocation." in msg.text:
             console_warnings.append(msg.text)
             return
@@ -1373,7 +1405,7 @@ def _check_page(
         "widget": widget,
         "variant": variant,
         "viewport": viewport_label,
-        "url": f"{base_url}/{Path(str(row['path'])).name}",
+        "url": f"{base_url}/{_served_export_path(artifact_dir, str(row['path']))}",
         "screenshot": screenshot_name,
         "canvas_screenshot": canvas_name,
         "story_ids": _story_ids_for(row),
@@ -1413,7 +1445,7 @@ def _check_page(
             if not nonblank:
                 result["errors"].append("primary canvas is blank or flat")
 
-            if widget in {"show2d", "show3d"}:
+            if widget in {"show2d", "show3d", "showptycho"}:
                 continuity = _exercise_zoom_continuity(page, box)
                 result["zoom_continuity"] = continuity
                 if not continuity.get("started"):
