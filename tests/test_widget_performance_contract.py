@@ -548,6 +548,10 @@ def test_show3d_many_panel_zoom_uses_correct_transform_path():
     assert "projectedW >= Math.max(1, sourceWidth) * 0.75" in colormaps
     assert "pu[11] = shouldSmoothDirectSample(opts.smooth" in colormaps
     assert "smooth: c.smooth" in show3d
+    assert "function samplePackedU8Viewport(" in show3d
+    assert "const sample = samplePackedU8Viewport(" in show3d
+    assert show3d.count("const sample = samplePackedU8Viewport(") == 2
+    assert "ctx.imageSmoothingEnabled = smooth;" in show3d
     assert "if (!hasActivePanelTransform && hasPackedFrame && packedFrame)" in show3d
     assert '"webgpu-grid-separate-panels-packed-transform-fragment"' in show3d
     assert '"webgpu-grid-separate-panels-panel-slots-direct-fragment"' in show3d
@@ -561,6 +565,35 @@ def test_show3d_many_panel_zoom_uses_correct_transform_path():
     assert '"active-view-transform"' in show3d
     assert "sidecarViewTransformActive() &&" in show3d
     assert "Restores 60 fps on the GPU-cached multi-panel path" in show3d
+
+
+def test_show3d_offline_viewport_honors_smooth_toggle():
+    """C1: a smooth offline zoom interpolates within, never across, panel strips."""
+    show3d = (ROOT / "js" / "show3d" / "index.tsx").read_text(encoding="utf-8")
+
+    assert "function samplePackedU8Viewport(" in show3d
+    assert "const x1 = Math.min(maxX, x0 + 1);" in show3d
+    assert "if (!smooth) return values[y0 * width + x0];" in show3d
+    assert show3d.count("const sample = samplePackedU8Viewport(") == 2
+    assert "ctx.imageSmoothingEnabled = smooth;" in show3d
+
+
+def test_show3d_offline_zoom_keeps_retained_canvas_visible():
+    """C1: standalone zoom never reveals a cleared WebGPU presentation frame."""
+    show3d = (ROOT / "js" / "show3d" / "index.tsx").read_text(encoding="utf-8")
+
+    assert 'if (offline) return drawCanvasTransformFallback("canvas-packed-transform");' in show3d
+
+
+def test_browser_smoke_guards_zoom_canvas_continuity():
+    """C1: browser smoke fails when a zoom briefly exposes a cleared canvas."""
+    smoke = (ROOT / "scripts" / "widget_browser_smoke.py").read_text(encoding="utf-8")
+
+    assert "def _start_zoom_continuity_probe" in smoke
+    assert "def _exercise_zoom_continuity" in smoke
+    assert "zoom changed the visible canvas composition" in smoke
+    assert "zoom exposed a blank or flat canvas frame" in smoke
+    assert 'if widget in {"show2d", "show3d"}:' in smoke
 
 
 def test_show3d_stress_runner_covers_exact_and_sidecar_exports():
