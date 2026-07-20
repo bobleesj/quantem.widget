@@ -16,8 +16,11 @@ collaborators can open these folders on ordinary laptops?
   (512x512 scan, 192x192 Arina, 19.3 GB raw, max pixel 17 counts).
   Calibration: fresh SSB fit, 200 Optuna trials + Nelder-Mead refine
   (`Show4DSTEM.compute_ssb`, rotation seeded from a prior batch screen fit).
-- Export: `quantem showptycho <master> --calibration <fit.json> --html`
+- Export at the time of this experiment: `quantem ptycho <master> --calibration <fit.json>`
+  with the historical BF-column companion enabled
   (WebGPU folder, compressed HDF5 + `bf_columns.u8` companion, 5.9 GB on disk).
+  Current default exports use the compressed-HDF5 WebGPU source directly; use
+  `--webgpu-source bf-columns` only to reproduce this older transport.
 - Viewer host: phil (M5 MacBook, 24 GB unified, Chrome, adapter `apple/metal-3`
   — real hardware confirmed via `adapter.info`, not SwiftShader).
 - Harness: folder served by `scripts/serve_sidecar_range.py` (plain

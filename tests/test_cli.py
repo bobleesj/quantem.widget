@@ -3,6 +3,8 @@
 4D-STEM rendering needs a GPU + real master files, so it is exercised manually
 (see docs); here we cover the routing logic and the image paths, which run on CPU.
 """
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from PIL import Image
@@ -183,8 +185,9 @@ def test_detect_showptycho_master_when_forced(tmp_path):
     assert cli._detect(master, "ptycho") == "showptycho-master"
 
 
-def test_showptycho_master_cli_uses_native_bin_default(tmp_path, monkeypatch):
-    """C2: ShowPtycho master generation keeps native detector pixels by default."""
+@pytest.mark.parametrize("command", ["ptycho", "showptycho"])
+def test_ptycho_master_cli_uses_native_bin_default(tmp_path, monkeypatch, command):
+    """C2: ptychography master generation keeps native detector pixels by default."""
     master = tmp_path / "scan_master.h5"
     master.write_bytes(b"\x00")
     folder = _showptycho_folder(tmp_path)
@@ -202,7 +205,7 @@ def test_showptycho_master_cli_uses_native_bin_default(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_render_showptycho_master", fake_render)
     monkeypatch.setattr(cli, "_serve_showptycho_folder", fake_serve)
 
-    assert cli.main(["showptycho", str(master), "--no-open"]) == 0
+    assert cli.main([command, str(master), "--no-open"]) == 0
     assert seen["path"] == master.resolve()
     assert seen["det_bin"] == 1
     assert seen["served"] == folder
@@ -244,6 +247,69 @@ def test_showptycho_auto_calibration_selects_matching_source(tmp_path):
     assert calibration.source_stem == "BTO_18"
     assert calibration.rotation_angle_deg == 158.9
     assert calibration.semiangle_mrad == 30
+
+
+def test_ptycho_geometry_defaults_when_calibration_missing():
+    args = SimpleNamespace(
+        semiangle_mrad=None,
+        scan_sampling_A=None,
+        voltage_kv=None,
+        det_sampling_mrad_px=None,
+    )
+
+    semiangle, scan_sampling, voltage, det_sampling, warnings = (
+        cli._resolve_showptycho_geometry(args, None, {})
+    )
+
+    assert semiangle == cli.DEFAULT_PTYCHO_SEMIANGLE_MRAD
+    assert scan_sampling == cli.DEFAULT_PTYCHO_SCAN_SAMPLING_A
+    assert voltage == cli.DEFAULT_PTYCHO_VOLTAGE_KV
+    assert det_sampling is None
+    assert len(warnings) == 3
+    assert "--semiangle" in warnings[0]
+    assert "--scan-sampling" in warnings[1]
+    assert "--voltage-kv" in warnings[2]
+
+
+def test_ptycho_geometry_prefers_cli_then_calibration_then_metadata():
+    args = SimpleNamespace(
+        semiangle_mrad=None,
+        scan_sampling_A=0.31,
+        voltage_kv=None,
+        det_sampling_mrad_px=None,
+    )
+    calibration = SimpleNamespace(
+        semiangle_mrad=28,
+        scan_sampling_A=0.27,
+        voltage_kV=200,
+    )
+    meta = {
+        "semiangle_mrad": 22,
+        "voltage_kV": 120,
+        "det_sampling_mrad_px": 0.05,
+    }
+
+    semiangle, scan_sampling, voltage, det_sampling, warnings = (
+        cli._resolve_showptycho_geometry(args, calibration, meta)
+    )
+
+    assert semiangle == 28
+    assert scan_sampling == 0.31
+    assert voltage == 200
+    assert det_sampling == 0.05
+    assert warnings == []
+
+
+def test_ptycho_geometry_rejects_bad_explicit_value():
+    args = SimpleNamespace(
+        semiangle_mrad=None,
+        scan_sampling_A=0,
+        voltage_kv=None,
+        det_sampling_mrad_px=None,
+    )
+
+    with pytest.raises(ValueError, match="--scan-sampling"):
+        cli._resolve_showptycho_geometry(args, None, {})
 
 
 def test_detect_forced_4dstem(tmp_path):
@@ -451,14 +517,16 @@ def test_show4dstem_watch_requires_live_folder_notebook(tmp_path):
     assert cli.main(["show4dstem", str(tmp_path), "--watch", "--html", "--no-open"]) == 1
 
 
-def test_showptycho_cli_validates_folder_without_opening(tmp_path, capsys):
+@pytest.mark.parametrize("command", ["ptycho", "showptycho"])
+def test_ptycho_cli_validates_folder_without_opening(tmp_path, capsys, command):
     folder = _showptycho_folder(tmp_path)
 
-    assert cli.main(["showptycho", str(folder), "--no-open"]) == 0
+    assert cli.main([command, str(folder), "--no-open"]) == 0
 
     out = capsys.readouterr().out
     assert "ShowPtycho folder:" in out
     assert "compressed HDF5" in out
+    assert "browser source: compressed_hdf5" in out
     assert "no persistent BF-G cache" in out
     assert "ready: run without --no-open" in out
 

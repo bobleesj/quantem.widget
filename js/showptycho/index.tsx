@@ -2,8 +2,8 @@
  * ShowPtycho — interactive ptychography aberration explorer widget.
  *
  * Two panels (Phase + optional FFT) following Show2D/Live design.
- * Uses a BF fraction for responsive exploration; full BF is selected from the
- * same BF-count control for final review.
+ * Uses full selected BF by default; a smaller BF fraction can still be selected
+ * from the same BF-count control for faster exploratory review.
  * Features: zoom/pan, scale bar, histogram contrast, colormap selector,
  * pin system, resize handle.
  */
@@ -50,7 +50,7 @@ const typography = {
 };
 
 const SPACING = { XS: 4, SM: 8, MD: 12, LG: 16 };
-const DEFAULT_BF_FRACTION = 0.3;
+const DEFAULT_BF_FRACTION = 1.0;
 
 const container = {
   root: { p: 2, bgcolor: "transparent", color: "inherit", fontFamily: "monospace", overflow: "visible" },
@@ -806,7 +806,7 @@ function ImagePanel({
   offscreen, label, size, tc, zoom, onZoomChange,
   showResize, onResizeStart,
   pixelSize, imageWidth, isFFT,
-  rawData, smooth, inset,
+  rawData, smooth, inset, cropRegion, cropSelecting, onCropSelect,
 }: {
   offscreen: HTMLCanvasElement | null;
   label: string;
@@ -822,6 +822,9 @@ function ImagePanel({
   isFFT?: boolean;
   rawData?: Float32Array | null;
   inset?: React.ReactNode;
+  cropRegion?: [number, number, number, number] | null;
+  cropSelecting?: boolean;
+  onCropSelect?: (row: number, col: number) => void;
 }) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const overlayRef = React.useRef<HTMLCanvasElement>(null);
@@ -924,13 +927,27 @@ function ImagePanel({
 
   const onDown = React.useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
+    if (cropSelecting && !isFFT && canvasRef.current && offscreen) {
+      const rect = canvasRef.current.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left, mouseY = e.clientY - rect.top;
+      const baseFit = Math.min(size / offscreen.width, size / offscreen.height);
+      const scale = baseFit * zoomRef.current.zoom;
+      const xOffset = (size - offscreen.width * scale) / 2 + zoomRef.current.panX;
+      const yOffset = (size - offscreen.height * scale) / 2 + zoomRef.current.panY;
+      const col = Math.floor((mouseX - xOffset) / scale);
+      const row = Math.floor((mouseY - yOffset) / scale);
+      if (row >= 0 && row < offscreen.height && col >= 0 && col < offscreen.width) {
+        onCropSelect?.(row, col);
+      }
+      return;
+    }
     dragState.current = {
       on: true,
       x: e.clientX, y: e.clientY,
       panX0: zoomRef.current.panX, panY0: zoomRef.current.panY,
     };
     if (isFFT) fftClickStartRef.current = { x: e.clientX, y: e.clientY };
-  }, [isFFT]);
+  }, [cropSelecting, isFFT, offscreen, onCropSelect, size]);
   // Mouse up handler on the FFT canvas: detect short click (no drag) and
   // compute d-spacing at the clicked peak, snapped to the nearest local-max.
   const onFFTUp = React.useCallback((e: React.MouseEvent) => {
@@ -1012,6 +1029,19 @@ function ImagePanel({
     return () => { window.removeEventListener("mousemove", handleMove); window.removeEventListener("mouseup", handleUp); };
   }, [onZoomChange]);
 
+  const cropOverlay = React.useMemo(() => {
+    if (!cropRegion || !offscreen || isFFT) return null;
+    const [r0, r1, c0, c1] = cropRegion;
+    const baseFit = Math.min(size / offscreen.width, size / offscreen.height);
+    const scale = baseFit * zoom.zoom;
+    return {
+      left: (size - offscreen.width * scale) / 2 + zoom.panX + c0 * scale,
+      top: (size - offscreen.height * scale) / 2 + zoom.panY + r0 * scale,
+      width: (c1 - c0) * scale,
+      height: (r1 - r0) * scale,
+    };
+  }, [cropRegion, isFFT, offscreen, size, zoom]);
+
   return (
     <Box sx={{ width: size, flexShrink: 0, display: "flex", flexDirection: "column" }}>
       <Box sx={{ ...container.imageBox, bgcolor: tc.bgAlt, border: `1px solid ${tc.border}`, width: size, height: size }}>
@@ -1023,8 +1053,18 @@ function ImagePanel({
           onMouseUp={isFFT ? onFFTUp : undefined}
           onMouseLeave={() => { onLeave(); if (isFFT) onLeaveFFT(); }}
           onDoubleClick={() => { onZoomChange(ZOOM_RESET); if (isFFT) setFftClickInfo(null); }}
-          style={{ width: size, height: size, cursor: isFFT ? "crosshair" : "grab", display: "block", imageRendering: smooth ? "auto" : "pixelated" }}
+          style={{ width: size, height: size, cursor: isFFT || cropSelecting ? "crosshair" : "grab", display: "block", imageRendering: smooth ? "auto" : "pixelated" }}
         />
+        {cropOverlay && (
+          <Box sx={{
+            position: "absolute", pointerEvents: "none",
+            left: cropOverlay.left, top: cropOverlay.top,
+            width: cropOverlay.width, height: cropOverlay.height,
+            border: `2px solid ${cropSelecting ? STATUS_GOOD : tc.accent}`,
+            bgcolor: cropSelecting ? `${STATUS_GOOD}16` : `${tc.accent}12`,
+            boxSizing: "border-box",
+          }} />
+        )}
         {(cursor || zoom.zoom !== 1) && (
           <Box sx={{
             position: "absolute", top: 4, right: 4, px: 0.5, py: 0.15,
@@ -1585,6 +1625,11 @@ function Explore() {
   const [webgpuH5SourceJson] = useModelState<string>("webgpu_h5_source_json");
   const [webgpuPreviewStatus] = useModelState<string>("webgpu_preview_status");
   const [webgpuStandalone] = useModelState<boolean>("webgpu_standalone");
+  const [scanRows] = useModelState<number>("scan_rows");
+  const [scanCols] = useModelState<number>("scan_cols");
+  const [cropRefitAvailable] = useModelState<boolean>("crop_refit_available");
+  const [cropRefitStatus] = useModelState<string>("crop_refit_status");
+  const [, setCropRefitRequestJson] = useModelState<string>("crop_refit_request_json");
 
   /* --- Local state --- */
   const [c10, setC10] = React.useState(0);
@@ -1699,6 +1744,64 @@ function Explore() {
   const [ampOff, setAmpOff] = React.useState<HTMLCanvasElement | null>(null);
   const [complexOff, setComplexOff] = React.useState<HTMLCanvasElement | null>(null);
   const [fftOff, setFFTOff] = React.useState<HTMLCanvasElement | null>(null);
+  const [cropSelecting, setCropSelecting] = React.useState(false);
+  const [cropSize, setCropSize] = React.useState(128);
+  const [scanCrop, setScanCrop] = React.useState<[number, number, number, number] | null>(null);
+  const [cropRefitPending, setCropRefitPending] = React.useState(false);
+  React.useEffect(() => {
+    const rows = Math.round(scanRows || phaseHeight || 0);
+    const cols = Math.round(scanCols || phaseWidth || 0);
+    const sizes = [128, 256, 512, 1024].filter(size => size <= rows && size <= cols);
+    if (!sizes.length) {
+      setScanCrop(null);
+      return;
+    }
+    const side = sizes.includes(cropSize) ? cropSize : sizes[0];
+    if (side !== cropSize) setCropSize(side);
+    setScanCrop(previous => {
+      if (
+        previous && previous[0] >= 0 && previous[2] >= 0
+        && previous[1] <= rows && previous[3] <= cols
+        && previous[1] - previous[0] === side
+        && previous[3] - previous[2] === side
+      ) return previous;
+      const r0 = Math.floor((rows - side) / 2);
+      const c0 = Math.floor((cols - side) / 2);
+      return [r0, r0 + side, c0, c0 + side];
+    });
+  }, [cropSize, phaseHeight, phaseWidth, scanCols, scanRows]);
+  React.useEffect(() => {
+    if (/^(Refit complete:|Crop refit failed:)/.test(cropRefitStatus || "")) {
+      setCropRefitPending(false);
+    }
+  }, [cropRefitStatus]);
+  const chooseCropCenter = React.useCallback((row: number, col: number) => {
+    const rows = Math.round(scanRows || phaseHeight || 0);
+    const cols = Math.round(scanCols || phaseWidth || 0);
+    const side = Math.min(cropSize, rows, cols);
+    const r0 = Math.max(0, Math.min(rows - side, Math.round(row - side / 2)));
+    const c0 = Math.max(0, Math.min(cols - side, Math.round(col - side / 2)));
+    setScanCrop([r0, r0 + side, c0, c0 + side]);
+  }, [cropSize, phaseHeight, phaseWidth, scanCols, scanRows]);
+  const changeCropSize = React.useCallback((side: number) => {
+    setCropSize(side);
+    const rows = Math.round(scanRows || phaseHeight || 0);
+    const cols = Math.round(scanCols || phaseWidth || 0);
+    if (rows < side || cols < side) return;
+    const centerRow = scanCrop ? (scanCrop[0] + scanCrop[1]) / 2 : rows / 2;
+    const centerCol = scanCrop ? (scanCrop[2] + scanCrop[3]) / 2 : cols / 2;
+    const r0 = Math.max(0, Math.min(rows - side, Math.round(centerRow - side / 2)));
+    const c0 = Math.max(0, Math.min(cols - side, Math.round(centerCol - side / 2)));
+    setScanCrop([r0, r0 + side, c0, c0 + side]);
+  }, [phaseHeight, phaseWidth, scanCols, scanCrop, scanRows]);
+  const requestCropRefit = React.useCallback(() => {
+    if (!scanCrop || !cropRefitAvailable) return;
+    setCropSelecting(false);
+    setCropRefitPending(true);
+    setCropRefitRequestJson(JSON.stringify({
+      id: Date.now(), scan_region: scanCrop, n_trials: 200,
+    }));
+  }, [cropRefitAvailable, scanCrop, setCropRefitRequestJson]);
 
   // Cached data for re-rendering without recomputing FFT
   const rawPhaseRef = React.useRef<{ data: Float32Array; w: number; h: number } | null>(null);
@@ -2053,7 +2156,8 @@ function Explore() {
      Like Show3D playback: pick which aberration to sweep, set FPS, hit play.
      Each tick advances the sweep index and fires a normal drag/commit request
      so the image updates with the same pipeline users see when they drag a slider.
-     For 30 FPS responsiveness, reduce BF subset via the existing drag_bf slider. */
+     For 30 FPS responsiveness on very large full-BF disks, reduce BF subset via
+     the existing drag_bf slider. */
   // SweepParam: one of the main-slider keys, or a higher-order key of the form
   // "ho:<hoKey>" where <hoKey> is either a magnitude key (e.g. "C32_mag",
   // "C30") or an angle key ("C32_angle").
@@ -3663,6 +3767,9 @@ function Explore() {
           pixelSize={pixelSize} imageWidth={rawPhaseRef.current?.w}
           rawData={activeRealDataRef.current?.data ?? rawPhaseRef.current?.data}
           smooth={smooth}
+          cropRegion={cropRefitAvailable ? scanCrop : null}
+          cropSelecting={cropRefitAvailable && cropSelecting}
+          onCropSelect={chooseCropCenter}
           inset={fftAsInset ? (
             <FFTInset
               offscreen={fftOff}
@@ -4132,6 +4239,12 @@ function Explore() {
           setValues={setHigherOrder}
         />
 
+        {cropRefitAvailable && cropRefitStatus && (
+          <Typography sx={{ ...typography.value, color: /^Crop refit failed/i.test(cropRefitStatus) ? STATUS_BAD : tc.textMuted }}>
+            {cropRefitStatus}
+          </Typography>
+        )}
+
         {/* Single compact action row — PLAY + PIN + RAND + RESET + SAVE CALIBRATION.
             Dropdowns and scope chips live inline.  Wraps to a second line only
             on narrow widgets (below ~520 px panel size). */}
@@ -4235,6 +4348,46 @@ function Explore() {
               {renderRangeEditor("rot", "rot", "deg", 1)}
             </Box>
           </Menu>
+
+          {cropRefitAvailable && scanCrop && (
+            <>
+              <Box sx={{ width: "1px", height: 20, bgcolor: tc.border, mx: 0.5, alignSelf: "center" }} />
+              <Button
+                size="small"
+                onClick={() => setCropSelecting(value => !value)}
+                sx={{
+                  ...compactButton(tc), height: ACTION_CONTROL_HEIGHT,
+                  minWidth: 48, color: cropSelecting ? STATUS_GOOD : tc.text,
+                  borderColor: cropSelecting ? STATUS_GOOD : tc.border,
+                }}
+                aria-pressed={cropSelecting}
+                title="Choose the center of the SSB refit crop on the phase image"
+              >
+                Crop
+              </Button>
+              <Select
+                value={cropSize}
+                onChange={(e) => changeCropSize(Number(e.target.value))}
+                size="small"
+                sx={{ ...actionSelect, width: 58, minWidth: 58 }}
+                title="Square scan crop size"
+              >
+                {[128, 256, 512, 1024]
+                  .filter(size => size <= Math.min(scanRows || 0, scanCols || 0))
+                  .map(size => <MenuItem key={size} value={size}>{size}</MenuItem>)}
+              </Select>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={requestCropRefit}
+                disabled={busy || cropRefitPending}
+                sx={{ ...compactButton(tc), height: ACTION_CONTROL_HEIGHT, minWidth: 70, color: STATUS_GOOD, borderColor: STATUS_GOOD }}
+                title={`Refit the selected ${cropSize}x${cropSize} scan crop with 200 SSB optimization trials`}
+              >
+                Refit SSB
+              </Button>
+            </>
+          )}
 
           {/* Divider: PLAY group | PIN */}
           <Box sx={{ width: "1px", height: 20, bgcolor: tc.border, mx: 0.5, alignSelf: "center" }} />

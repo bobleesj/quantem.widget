@@ -55,6 +55,34 @@ _CHUNK_BYTE_BUDGET = 600 * 1024 * 1024
 _SPARSE_MASK_CHUNK_BYTE_BUDGET = 64 * 1024 * 1024
 
 
+def _local_h5_url_path(url: str, base_dir: pathlib.Path) -> pathlib.Path | None:
+    """Resolve a local HDF5 URL used by browser-source exports."""
+    if not url or "://" in url:
+        return None
+    clean = url.split("?", 1)[0].split("#", 1)[0]
+    path = pathlib.Path(clean)
+    if not path.is_absolute():
+        path = base_dir / path
+    return path
+
+
+def _h5_bad_pixel_json_for_export(url: str, base_dir: pathlib.Path) -> str | None:
+    """Return a JSON bad-pixel list for a local HDF5 master, or None if unreadable."""
+    path = _local_h5_url_path(url, base_dir)
+    if path is None or not path.exists():
+        return None
+    try:
+        from quantem.gpu.io.hdf5 import read_pixel_mask
+
+        mask = read_pixel_mask(path)
+    except Exception:
+        return None
+    if mask is None:
+        return None
+    bad = np.flatnonzero(np.asarray(mask).reshape(-1) > 0).astype(int).tolist()
+    return json.dumps(bad)
+
+
 class _NumpyShow4DSTEMComputeBackend:
     """Small CPU fallback for local array viewers without ``quantem.gpu``."""
 
@@ -402,6 +430,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     # data stays a file. Needs HTTP (fetch CORS-blocked under file://).
     _h5_url = traitlets.Unicode("").tag(sync=True)
     _h5_urls = traitlets.Unicode("").tag(sync=True)
+    _h5_uint8_lossless = traitlets.Bool(False).tag(sync=True)
     # Lazy mode: a sidecar bundle URL (radial profile + CoM + frame index + data files). The JS
     # derives the virtual image from the ~100 MB profile in VRAM and lazy-fetches CBED frames from
     # disk - nothing bulk-loads. Real-time scrub + detector with no 38 GB resident.
@@ -429,7 +458,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     ssb_compute_enabled = traitlets.Bool(True).tag(sync=True)
     ssb_compute_n_trials = traitlets.Int(200).tag(sync=True)
     ssb_compute_refine = traitlets.Bool(True).tag(sync=True)
-    ssb_compute_bf_subsample = traitlets.Float(0.3).tag(sync=True)
+    ssb_compute_bf_subsample = traitlets.Float(1.0).tag(sync=True)
     ssb_compute_bf_pixels = traitlets.Int(0).tag(sync=True)
     ssb_compute_bf_selected_pixels = traitlets.Int(0).tag(sync=True)
     ssb_compute_manual_aberrations = traitlets.Bool(False).tag(sync=True)
@@ -1325,7 +1354,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         ssb_n_trials: int = 200,
         ssb_refine: bool = True,
         ssb_seed: int = 42,
-        ssb_bf_subsample: float | None = 0.3,
+        ssb_bf_subsample: float | None = 1.0,
         ssb_manual_aberrations: bool = False,
         ssb_c10_nm: float = 0.0,
         ssb_c12_nm: float = 0.0,
@@ -1350,6 +1379,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         offline_dtype: str = "uint8",
         h5_url: str | None = None,
         h5_urls: Sequence[str] | None = None,
+        h5_uint8_lossless: bool = False,
         detector_shape: tuple[int, int] | None = None,
         show_fft: bool = False,
         fft_window: bool = True,
@@ -1834,6 +1864,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             self._offline_codec = offline_codec
             self._h5_url = webgpu_h5_urls[0] if len(webgpu_h5_urls) == 1 else ""
             self._h5_urls = json.dumps(webgpu_h5_urls) if len(webgpu_h5_urls) > 1 else ""
+            self._h5_uint8_lossless = bool(h5_uint8_lossless)
             self.offline = True
             self._offline_stack = b""
             self._offline_url = ""
@@ -1926,14 +1957,11 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 else 0
             )
             if visible_count:
-                self.compare_panel_count = visible_count
-                self.compare_panel_indices = list(range(visible_count))
-                self.compare_virtual_image_bytes = np.zeros(
-                    visible_count * self.shape_rows * self.shape_cols,
-                    dtype=np.float32,
-                ).tobytes()
+                self.compare_panel_count = 0
+                self.compare_panel_indices = []
+                self.compare_virtual_image_bytes = b""
                 self.compare_status = (
-                    f"{visible_count}/{int(self.n_frames)} browser WebGPU H5 panels"
+                    f"Loading {visible_count}/{int(self.n_frames)} browser WebGPU H5 panels"
                 )
             self.compare_page_count = max(
                 1, math.ceil(max(1, int(self.n_frames)) / max(1, int(compare_max_panels)))
@@ -2696,9 +2724,17 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 )
             prev_enabled = self.export_enabled
             prev_save_state = self._save_state
+            prev_bad_px = self._offline_bad_px
             self.export_enabled = False
             self._save_state = True
             try:
+                if not self._offline_bad_px and self._h5_url:
+                    embedded_bad_px = _h5_bad_pixel_json_for_export(
+                        self._h5_url,
+                        out.parent,
+                    )
+                    if embedded_bad_px is not None:
+                        self._offline_bad_px = embedded_bad_px
                 embed_minimal_html(
                     str(out),
                     views=[self],
@@ -2709,6 +2745,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             finally:
                 self.export_enabled = prev_enabled
                 self._save_state = prev_save_state
+                self._offline_bad_px = prev_bad_px
             ensure_mobile_viewport(out)
             return out
         if self._offline_bslz4:

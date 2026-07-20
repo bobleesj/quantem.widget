@@ -189,6 +189,51 @@ class _FakeSSB:
         return self._accel
 
 
+def test_ssb_crop_requires_native_square_scan_region():
+    """C1: crop requests use supported native squares, expect clear errors."""
+    from quantem.widget.showptycho import _validate_ssb_scan_region
+
+    assert _validate_ssb_scan_region((0, 128, 128, 256), (512, 512)) == (
+        0,
+        128,
+        128,
+        256,
+    )
+    for region in ((0, 127, 0, 127), (0, 128, 0, 256), (-1, 127, 0, 128)):
+        try:
+            _validate_ssb_scan_region(region, (512, 512))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"accepted invalid SSB crop {region}")
+
+
+def test_showptycho_crop_request_uses_global_source_coordinates(monkeypatch, tmp_path):
+    """C2: nested crop selection, expect source-relative SSB refit coordinates."""
+    from quantem.widget import ShowPtycho
+
+    monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
+    master = tmp_path / "scan_master.h5"
+    master.write_bytes(b"master")
+    ssb = _FakeSSB()
+    ssb._scan_shape = (1024, 1024)
+    ssb.optimize = lambda **_kwargs: None
+    widget = ShowPtycho(ssb, source_file=str(master))
+    widget._scan_region = (128, 640, 256, 768)
+    received: dict[str, object] = {}
+
+    def fake_refit(region, *, n_trials):
+        received["region"] = region
+        received["n_trials"] = n_trials
+
+    monkeypatch.setattr(widget, "_refit_ssb_crop", fake_refit)
+    widget.crop_refit_request_json = json.dumps(
+        {"id": 1, "scan_region": [64, 192, 128, 256], "n_trials": 200}
+    )
+
+    assert received == {"region": (192, 320, 384, 512), "n_trials": 200}
+
+
 def test_showptycho_from_ssb_uses_widget_contract(monkeypatch):
     """C1: prepared SSB input, expect a ready widget without quantem.gpu import."""
     from quantem.widget import ShowPtycho
@@ -198,7 +243,7 @@ def test_showptycho_from_ssb_uses_widget_contract(monkeypatch):
     widget = ShowPtycho(ssb, size=320, fft_on=True)
 
     assert widget.__class__.__name__ == "_ShowPtychoWidget"
-    assert repr(widget) == "ShowPtycho(0 pinned, drag_bf=2)"
+    assert repr(widget) == "ShowPtycho(0 pinned, drag_bf=8)"
     assert widget.phase_width == 4
     assert widget.phase_height == 3
     assert len(widget.phase_bytes) == 3 * 4 * 4
@@ -206,12 +251,41 @@ def test_showptycho_from_ssb_uses_widget_contract(monkeypatch):
     assert widget.initial_panel_size == 320
     assert widget.initial_fft_on is True
     assert widget.total_bf == 8
-    assert widget.drag_bf == 2
+    assert widget.drag_bf == 8
     assert widget.c10_min == -300.0
     assert widget.c10_max == 300.0
     result = json.loads(widget.result_json)
     assert result["loss"] == 0.125
     assert ssb._showptycho_widget is widget
+
+
+def test_showptycho_embedded_state_is_strict_json_with_unknown_loss(monkeypatch):
+    """C1a: unknown/non-finite losses must not emit NaN into exported HTML."""
+    from ipywidgets.embed import dependency_state
+
+    from quantem.widget import ShowPtycho
+
+    monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
+    ssb = _FakeSSB()
+    ssb._optuna_trials = [
+        {
+            "loss": float("nan"),
+            "params": {"C10_nm": 1.0, "C12_nm": 2.0, "phi12_deg": 3.0},
+        },
+        {
+            "loss": 0.25,
+            "params": {"C10_nm": 4.0, "C12_nm": 5.0, "phi12_deg": 6.0},
+        },
+    ]
+
+    widget = ShowPtycho(ssb)
+    state = dependency_state([widget], drop_defaults=False)
+
+    json.dumps(state, allow_nan=False)
+    assert widget.auto_loss == 0.0
+    assert json.loads(widget.trials_json) == [
+        {"rank": 0, "C10": 4.0, "C12": 5.0, "phi12_deg": 6.0, "loss": 0.25},
+    ]
 
 
 def test_showptycho_default_c10_range_includes_outlier_auto(monkeypatch):
@@ -389,20 +463,27 @@ def test_showptycho_mps_accel_does_not_require_cupy(monkeypatch):
     from quantem.widget.showptycho import _ShowPtychoWidget
 
     monkeypatch.delitem(sys.modules, "cupy", raising=False)
+    ssb = _FakeSSB()
+    ssb._accel = _FakeMpsAccel()
+    ssb.optimize = lambda **_kwargs: None
     widget = _ShowPtychoWidget(
-        accel=_FakeMpsAccel(),
+        accel=ssb._accel,
         rotation_rad=0.0,
         auto_aberrations={"C10": 1.0, "C12": 2.0, "phi12": 0.1},
         auto_loss_val=0.125,
         c10_range=(-10.0, 10.0),
         c12_range=(0.0, 10.0),
         phi12_range=(-90.0, 90.0),
+        ssb_ref=ssb,
+        source_file=__file__,
     )
 
     assert widget.phase_width == 4
     assert widget.phase_height == 3
     assert len(widget.phase_bytes) == 3 * 4 * 4
     assert json.loads(widget.result_json)["loss"] == 0.125
+    assert widget.crop_refit_available is False
+    assert "CUDA SSB backend" in widget.crop_refit_status
     assert "cupy" not in sys.modules
 
 
@@ -445,10 +526,13 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
     assert not (out_dir / "ref_products.npz").exists()
     assert (out_dir / "source" / master.name).exists()
     assert (out_dir / "source" / data_file.name).exists()
+    assert json.loads((out_dir / "saves" / "saves.json").read_text()) == []
     cal = json.loads((out_dir / "cal.json").read_text())
     assert cal["kind"] == "showptycho_webgpu_folder"
     assert cal["source_file"] == "scan_master.h5"
     assert cal["source_transport"] == "compressed_hdf5"
+    assert cal["webgpu_source_policy"] == "compressed_hdf5"
+    assert cal["bf_column_companion"] is False
     assert cal["persistent_bf_cache"] is False
     assert cal["source_calibration"] == "redacted_local_calibration"
     assert cal["num_bf"] == 1
@@ -457,6 +541,8 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
     assert manifest["format"] == "quantem.showptycho.webgpu.folder.v2"
     assert manifest["arrays"] == {}
     assert manifest["source"]["kind"] == "hdf5"
+    assert "bf_columns" not in manifest["source"]
+    assert "preferred_browser_source" not in manifest["source"]
     assert manifest["persistent_arrays"] == []
     html = (out_dir / "index.html").read_text()
     assert "application/vnd.jupyter.widget-state+json" in html
@@ -473,16 +559,23 @@ def test_showptycho_exports_wrapper_master_external_hdf5_source(monkeypatch, tmp
     from quantem.widget.showptycho import _ShowPtychoWidget
 
     monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
-    data_file = tmp_path / "berk_inline.h5"
+    data_file = tmp_path / "berk_inline_000001.h5"
+    data_file_2 = tmp_path / "berk_inline_000002.h5"
     master = tmp_path / "berk_master_wrapper.h5"
-    with h5py.File(data_file, "w") as handle:
-        entry = handle.create_group("entry")
-        data = entry.create_group("data")
-        data.create_dataset("data", data=np.zeros((1, 2, 2), dtype=np.uint16))
+    for data_path in (data_file, data_file_2):
+        with h5py.File(data_path, "w") as handle:
+            entry = handle.create_group("entry")
+            data = entry.create_group("data")
+            data.create_dataset(
+                "data",
+                data=np.zeros((1, 2, 2), dtype=np.uint16),
+                chunks=(1, 2, 2),
+            )
     with h5py.File(master, "w") as handle:
         entry = handle.create_group("entry")
         data = entry.create_group("data")
         data["data_000001"] = h5py.ExternalLink(str(data_file), "/entry/data/data")
+        data["data_000002"] = h5py.ExternalLink(str(data_file_2), "/entry/data/data")
 
     widget = _ShowPtychoWidget(
         accel=_FakeWebGPUAccel(128),
@@ -500,14 +593,43 @@ def test_showptycho_exports_wrapper_master_external_hdf5_source(monkeypatch, tmp
 
     assert (out_dir / "source" / master.name).exists()
     assert (out_dir / "source" / data_file.name).exists()
+    assert (out_dir / "source" / data_file_2.name).exists()
+    sidecar = out_dir / "source" / "chunks.u64"
+    assert sidecar.exists()
+    assert list((out_dir / "source").glob("*.chunks.u64")) == []
     assert not (out_dir / "g_bf.c64").exists()
     cal = json.loads((out_dir / "cal.json").read_text())
     assert cal["source_file"] == master.name
     assert cal["source_decode_dtype"] == "uint8"
+    assert cal["source_transport"] == "compressed_hdf5"
+    assert cal["webgpu_source_policy"] == "compressed_hdf5"
+    assert cal["bf_column_companion"] is False
     manifest = json.loads((out_dir / "manifest.json").read_text())
     assert manifest["source"]["master"] == f"source/{master.name}"
-    assert manifest["source"]["data_files"] == [f"source/{data_file.name}"]
+    assert manifest["source"]["data_files"] == [
+        f"source/{data_file.name}",
+        f"source/{data_file_2.name}",
+    ]
     assert manifest["source"]["decode_dtype"] == "uint8"
+    assert "bf_columns" not in manifest["source"]
+    assert "preferred_browser_source" not in manifest["source"]
+    indexes = manifest["source"]["chunk_indexes"]
+    assert len(indexes) == 2
+    assert {index["path"] for index in indexes} == {"source/chunks.u64"}
+    assert [index["byte_offset"] for index in indexes] == [0, indexes[0]["bytes"]]
+    assert sidecar.stat().st_size == sum(index["bytes"] for index in indexes)
+    for index in indexes:
+        assert index["frames"] == 1
+        assert index["detector_shape"] == [2, 2]
+        assert index["dtype"] == "uint16"
+        assert index["chunk_shape"] == [1, 2, 2]
+        assert index["record"] == "u64le_offset,u64le_size"
+    assert manifest["source"]["files"][1]["chunk_index"] == "source/chunks.u64"
+    assert manifest["source"]["files"][1]["chunk_index_byte_offset"] == 0
+    assert manifest["source"]["files"][1]["chunk_index_bytes"] == indexes[0]["bytes"]
+    assert manifest["source"]["files"][2]["chunk_index"] == "source/chunks.u64"
+    assert manifest["source"]["files"][2]["chunk_index_byte_offset"] == indexes[0]["bytes"]
+    assert manifest["source"]["files"][2]["chunk_index_bytes"] == indexes[1]["bytes"]
     assert manifest["persistent_arrays"] == []
 
 
@@ -515,7 +637,7 @@ def test_showptycho_webgpu_folder_writes_detector_major_bf_columns(
     monkeypatch,
     tmp_path,
 ):
-    """C5b: HDF5 exact counts, expect detector-major BF columns instead of g_bf."""
+    """C5b: BF-column source is explicit; default stays compressed HDF5."""
     import h5py
 
     from quantem.widget.showptycho import _ShowPtychoWidget
@@ -550,13 +672,32 @@ def test_showptycho_webgpu_folder_writes_detector_major_bf_columns(
         source_file=str(master),
     )
 
-    out_dir = widget.export_webgpu_folder(tmp_path / "bfcols-folder", decode_dtype="uint8")
+    default_dir = widget.export_webgpu_folder(tmp_path / "bfcols-default", decode_dtype="uint8")
+
+    default_cal = json.loads((default_dir / "cal.json").read_text())
+    assert default_cal["source_transport"] == "compressed_hdf5"
+    assert default_cal["webgpu_source_policy"] == "compressed_hdf5"
+    assert default_cal["bf_column_companion"] is False
+    default_manifest = json.loads((default_dir / "manifest.json").read_text())
+    assert "bf_columns" not in default_manifest["source"]
+    assert "preferred_browser_source" not in default_manifest["source"]
+    assert not list((default_dir / "source").glob("bf_columns.*"))
+    default_html = (default_dir / "index.html").read_text()
+    assert "bf_columns.u4" not in default_html
+    assert "g_bf.c64" not in default_html
+
+    out_dir = widget.export_webgpu_folder(
+        tmp_path / "bfcols-folder",
+        decode_dtype="uint8",
+        webgpu_source="bf_columns",
+    )
 
     assert not (out_dir / "g_bf.c64").exists()
     companion = out_dir / "source" / "bf_columns.u4"
     assert companion.exists()
     cal = json.loads((out_dir / "cal.json").read_text())
     assert cal["source_transport"] == "bf_columns"
+    assert cal["webgpu_source_policy"] == "bf_columns"
     assert cal["source_decode_dtype"] == "uint8"
     assert cal["bf_column_companion"] is True
     assert cal["persistent_bf_cache"] is False
@@ -628,10 +769,13 @@ def test_showptycho_webgpu_folder_uses_mps_metadata_without_gqk_sync(
 
     cal = json.loads((out_dir / "cal.json").read_text())
     assert cal["g_shape"] == [2, 128, 128]
-    assert cal["source_transport"] == "bf_columns"
+    assert cal["source_transport"] == "compressed_hdf5"
+    assert cal["webgpu_source_policy"] == "compressed_hdf5"
+    assert cal["bf_column_companion"] is False
     assert accel.heavy_sync_calls == 0
     assert not hasattr(accel, "G_qk")
     assert not (out_dir / "g_bf.c64").exists()
+    assert not list((out_dir / "source").glob("bf_columns.*"))
 
 
 def test_showptycho_notebook_webgpu_preview_does_not_write_cache_by_default(
@@ -722,6 +866,9 @@ def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     assert "paramsChunks" in source
     assert "chooseChunkCapacity" in source
     assert "FULL_STACK_GPU_BUDGET_BYTES" in source
+    assert "function clippedBslz4Frames" in source
+    assert "const fileFramesToRead = Math.min(index.frames, Math.max(0, plane - sourceFrames))" in source
+    assert "const frameStop = Math.min(fileFramesToRead, frameStart + framesPerChunk)" in source
     assert "prepareBfCount" in source
     assert "bfCount?: number" in source
     assert "computeLoss?: boolean" in source
@@ -775,7 +922,7 @@ def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     assert "__showptychoBfColumnProfile" in source
     assert "loadedBfCount" in source
     assert "setup(requiredBfCount" in source
-    assert "DEFAULT_BF_FRACTION = 0.3" in ui_source
+    assert "DEFAULT_BF_FRACTION = 1.0" in ui_source
     assert "defaultBfCount(total)" in ui_source
     assert "dragBfRef.current = count" in ui_source
     assert "setLocalDragBf(count)" in ui_source

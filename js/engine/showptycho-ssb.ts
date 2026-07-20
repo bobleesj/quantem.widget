@@ -251,6 +251,8 @@ type BfColumnSsbSource = {
 type H5ChunkIndexSource = {
   path?: string;
   url?: string;
+  byte_offset?: number;
+  bytes?: number;
   frames: number;
   detector_shape?: [number, number];
   dtype?: string;
@@ -1124,6 +1126,17 @@ function detectorFlatPixels(cal: SsbCal, activeIndices: Uint32Array): Uint32Arra
   return out;
 }
 
+function clippedBslz4Frames(h5Chunk: Bslz4Spec, nFrames: number): Bslz4Spec {
+  const safeFrames = Math.max(0, Math.min(h5Chunk.nFrames, Math.floor(nFrames)));
+  if (safeFrames === h5Chunk.nFrames) return h5Chunk;
+  const metaValues = safeFrames * h5Chunk.nBlocksPerFrame * 2;
+  return {
+    ...h5Chunk,
+    nFrames: safeFrames,
+    blockMeta: h5Chunk.blockMeta.subarray(0, metaValues),
+  };
+}
+
 function uniformU32(device: GPUDevice, values: number[], label: string): GPUBuffer {
   const b = device.createBuffer({ size: Math.max(16, Math.ceil(values.length / 4) * 16), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label });
   const arr = new Uint32Array(Math.ceil(values.length / 4) * 4);
@@ -1219,24 +1232,27 @@ async function buildH5GqkChunks(
     chunkIndex: number,
     chunkTotal: number,
   ) => {
+    const remainingFrames = plane - sourceFrames;
+    if (remainingFrames <= 0) return;
+    const scanChunk = clippedBslz4Frames(h5Chunk, remainingFrames);
     const decodeT = performance.now();
     emit({
       stage: "decode",
       message: "Decompressing detector frames on WebGPU",
-      detail: `${h5Chunk.nFrames} scan positions, ${decodeDtype}, chunk ${chunkIndex + 1}/${chunkTotal}`,
+      detail: `${scanChunk.nFrames} scan positions, ${decodeDtype}, chunk ${chunkIndex + 1}/${chunkTotal}`,
       current: fileIndex + 1,
       total: finiteDataUrlCount,
       percent: finiteDataUrlCount ? ((fileIndex + 0.35) / finiteDataUrlCount) * 70 : Math.min(75, (sourceFrames / plane) * 70 + 5),
       sourceFrames,
     });
-    const dec = await decodeBslz4ToStack(h5Chunk, decodeDtype, srcDtype);
+    const dec = await decodeBslz4ToStack(scanChunk, decodeDtype, srcDtype);
     decodeMs += performance.now() - decodeT;
     if (!dec) throw new Error("WebGPU HDF5 decode failed.");
     const gatherT = performance.now();
     emit({
       stage: "gather",
       message: "Gathering selected BF pixels",
-      detail: `${activeSourceIndices.length}/${cal.num_bf} BF pixels from ${h5Chunk.nFrames} frames`,
+      detail: `${activeSourceIndices.length}/${cal.num_bf} BF pixels from ${scanChunk.nFrames} frames`,
       current: fileIndex + 1,
       total: finiteDataUrlCount,
       percent: finiteDataUrlCount ? ((fileIndex + 0.7) / finiteDataUrlCount) * 70 : Math.min(82, (sourceFrames / plane) * 70 + 12),
@@ -1248,7 +1264,7 @@ async function buildH5GqkChunks(
       const chunkBf = chunkBfCounts[i];
       const params = uniformU32(
         device,
-        [sourceFrames, h5Chunk.nFrames, detSize, dec.mode, chunkBf, plane, 0, 0],
+        [sourceFrames, scanChunk.nFrames, detSize, dec.mode, chunkBf, plane, 0, 0],
         `showptycho hdf5 gather params ${fileIndex}-${chunkIndex}-${i}`,
       );
       gatherTemps.push(params);
@@ -1264,7 +1280,7 @@ async function buildH5GqkChunks(
       const pass = enc.beginComputePass();
       pass.setPipeline(gatherPipe);
       pass.setBindGroup(0, bind);
-      pass.dispatchWorkgroups(Math.ceil(h5Chunk.nFrames / 16), Math.ceil(chunkBf / 16));
+      pass.dispatchWorkgroups(Math.ceil(scanChunk.nFrames / 16), Math.ceil(chunkBf / 16));
       pass.end();
     }
     device.queue.submit([enc.finish()]);
@@ -1272,7 +1288,7 @@ async function buildH5GqkChunks(
     gatherTemps.forEach(b => b.destroy());
     gatherMs += performance.now() - gatherT;
     dec.buffer.destroy();
-    sourceFrames += h5Chunk.nFrames;
+    sourceFrames += scanChunk.nFrames;
     emit({
       stage: "gather",
       message: "Accumulating BF reducer",
@@ -1321,7 +1337,9 @@ async function buildH5GqkChunks(
         decodeDtype,
         device.limits.maxStorageBufferBindingSize,
       );
-      const chunkTotal = Math.ceil(index.frames / framesPerChunk);
+      const fileFramesToRead = Math.min(index.frames, Math.max(0, plane - sourceFrames));
+      if (fileFramesToRead <= 0) break;
+      const chunkTotal = Math.ceil(fileFramesToRead / framesPerChunk);
       type IndexedFetchPlan = {
         h5ChunkIndex: number;
         frameStart: number;
@@ -1341,7 +1359,7 @@ async function buildH5GqkChunks(
       const plans: IndexedFetchPlan[] = [];
       for (let h5ChunkIndex = 0; h5ChunkIndex < chunkTotal; h5ChunkIndex++) {
         const frameStart = h5ChunkIndex * framesPerChunk;
-        const frameStop = Math.min(index.frames, frameStart + framesPerChunk);
+        const frameStop = Math.min(fileFramesToRead, frameStart + framesPerChunk);
         let rangeStart = Number.POSITIVE_INFINITY;
         let rangeEnd = 0;
         let payloadBytes = 0;
@@ -1388,7 +1406,6 @@ async function buildH5GqkChunks(
         while (
           nextFetchIndex < plans.length
           && inFlight.size < indexedPrefetchWindow
-          && plans[nextFetchIndex].frameStart < plane
         ) {
           inFlight.set(nextFetchIndex, startFetch(plans[nextFetchIndex]));
           nextFetchIndex += 1;
@@ -1451,6 +1468,7 @@ async function buildH5GqkChunks(
       );
     }
     for (let h5ChunkIndex = 0; h5ChunkIndex < vol.chunks.length; h5ChunkIndex++) {
+      if (sourceFrames >= plane) break;
       const h5Chunk = vol.chunks[h5ChunkIndex];
       await decodeAndGather(h5Chunk, vol.srcDtype, vol.detSize, fileIndex, h5ChunkIndex, vol.chunks.length);
     }
@@ -1721,10 +1739,6 @@ async function fetchRangeBytes(url: string, byteOffset: number, byteLength: numb
   return bytes.byteLength === byteLength ? bytes : bytes.slice(0, byteLength);
 }
 
-async function fetchPrefixBytes(url: string, byteLength: number): Promise<Uint8Array> {
-  return fetchRangeBytes(url, 0, byteLength);
-}
-
 function readBE32(bytes: Uint8Array, off: number): number {
   return ((bytes[off] << 24) | (bytes[off + 1] << 16) | (bytes[off + 2] << 8) | bytes[off + 3]) >>> 0;
 }
@@ -1754,8 +1768,10 @@ async function fetchChunkIndex(index: H5ChunkIndexSource, fallbackUrl: string): 
   const indexUrl = index.url || index.path;
   if (!indexUrl) throw new Error("HDF5 chunk index is missing a URL.");
   const expectedBytes = Math.max(0, Math.round(index.frames || 0)) * 16;
-  const idxBytes = expectedBytes > 0
-    ? await fetchPrefixBytes(indexUrl, expectedBytes)
+  const byteOffset = Math.max(0, Math.round(Number(index.byte_offset || 0)));
+  const byteLength = Math.max(0, Math.round(Number(index.bytes || expectedBytes)));
+  const idxBytes = byteOffset > 0 || byteLength > 0
+    ? await fetchRangeBytes(indexUrl, byteOffset, byteLength || expectedBytes)
     : await readSourceBytes(indexUrl);
   const buf = idxBytes.buffer.slice(idxBytes.byteOffset, idxBytes.byteOffset + idxBytes.byteLength);
   const frames = Math.floor(buf.byteLength / 16);
@@ -2162,7 +2178,7 @@ export class ShowPtychoWebGPUSSB {
     this.plane = n * n;
     this.previewBfCount = Math.max(
       1,
-      Math.min(this.cal.num_bf, Math.round(Number(this.cal.num_bf || 1) * 0.3)),
+      Math.min(this.cal.num_bf, Math.round(Number(this.cal.num_bf || 1))),
     );
     if (typeof gBfSource === "string") {
       this.source = { kind: "g-bf", bytes: null, url: gBfSource };

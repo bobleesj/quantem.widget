@@ -690,11 +690,17 @@ def _stop_zoom_continuity_probe(page) -> dict[str, Any]:
 
 
 def _exercise_zoom_continuity(page, box: dict[str, float]) -> dict[str, Any]:
-    """Perform rapid zoom in/out and fail on a presentation-layer handoff."""
+    """Perform rapid zoom in/out with continuity and paint-latency evidence.
+
+    Browser rAF cadence can remain high even if wheel input takes a long time
+    to alter scientific pixels. Keep the two signals separate so this smoke
+    report cannot accidentally present an idle FPS as interaction proof.
+    """
 
     probe = _start_zoom_continuity_probe(page)
     if not probe.get("started"):
         return probe
+    paint_probe = _start_canvas_update_probe(page, label="rapid zoom")
     x = box["x"] + box["width"] * 0.52
     y = box["y"] + box["height"] * 0.52
     page.mouse.move(x, y)
@@ -702,7 +708,55 @@ def _exercise_zoom_continuity(page, box: dict[str, float]) -> dict[str, Any]:
         page.mouse.wheel(0, delta_y)
         page.wait_for_timeout(45)
     page.wait_for_timeout(180)
-    return _stop_zoom_continuity_probe(page)
+    continuity = _stop_zoom_continuity_probe(page)
+    continuity["paint_latency"] = _stop_canvas_update_probe(page)
+    return continuity
+
+
+def _exercise_show3d_smooth_zoom(page, box: dict[str, float]) -> dict[str, Any]:
+    """Verify both Smooth states survive an offline Show3D zoom gesture.
+
+    This is intentionally an interaction check, not a source inspection: the
+    cached display composite must never briefly reuse pixels sampled under the
+    opposite Smooth setting.
+    """
+    control = page.locator('input[aria-label="Toggle bilinear smoothing"]')
+    if control.count() != 1:
+        return {"found": False}
+
+    def visible_rendering() -> str | None:
+        return page.evaluate(
+            """() => {
+              const canvas = [...document.querySelectorAll('canvas')]
+                .map((node) => ({node, rect: node.getBoundingClientRect(), style: getComputedStyle(node)}))
+                .filter(({rect, style}) => rect.width > 100 && rect.height > 100 &&
+                  style.display !== 'none' && style.visibility !== 'hidden' &&
+                  Number(style.opacity || '1') > 0.05)
+                .sort((a, b) => b.rect.width * b.rect.height - a.rect.width * a.rect.height)[0];
+              return canvas ? canvas.style.imageRendering : null;
+            }"""
+        )
+
+    initial = bool(control.is_checked())
+    if initial:
+        control.click()
+    page.wait_for_timeout(120)
+    off = {
+        "checked": bool(control.is_checked()),
+        "image_rendering": visible_rendering(),
+        "continuity": _exercise_zoom_continuity(page, box),
+    }
+    control.click()
+    page.wait_for_timeout(120)
+    on = {
+        "checked": bool(control.is_checked()),
+        "image_rendering": visible_rendering(),
+        "continuity": _exercise_zoom_continuity(page, box),
+    }
+    if not initial:
+        control.click()
+        page.wait_for_timeout(80)
+    return {"found": True, "initial": initial, "off": off, "on": on}
 
 
 def _click_text_controls(page, labels: list[str]) -> list[str]:
@@ -1370,6 +1424,37 @@ def _check_page(
                     )
                 elif continuity.get("readable_frames", 0) and continuity.get("flat_frames", 0) > 0:
                     result["errors"].append("zoom exposed a blank or flat canvas frame")
+
+            if widget == "show3d":
+                smooth_zoom = _exercise_show3d_smooth_zoom(page, box)
+                result["smooth_zoom"] = smooth_zoom
+                if not smooth_zoom.get("found"):
+                    result["errors"].append("Show3D Smooth toggle could not be found")
+                else:
+                    off = smooth_zoom["off"]
+                    on = smooth_zoom["on"]
+                    if off["checked"] or off["image_rendering"] != "pixelated":
+                        result["errors"].append(
+                            f"Smooth off did not keep nearest-neighbour rendering: {off}"
+                        )
+                    if not on["checked"] or on["image_rendering"] != "auto":
+                        result["errors"].append(
+                            f"Smooth on did not restore interpolated rendering: {on}"
+                        )
+                    for state_name, state in (("off", off), ("on", on)):
+                        continuity = state["continuity"]
+                        if not continuity.get("started"):
+                            result["errors"].append(
+                                f"Show3D Smooth {state_name} zoom probe did not start: {continuity}"
+                            )
+                        elif continuity.get("composition_changes", 0) > 0:
+                            result["errors"].append(
+                                f"Show3D Smooth {state_name} changed visible canvas composition during zoom"
+                            )
+                        elif continuity.get("readable_frames", 0) and continuity.get("flat_frames", 0) > 0:
+                            result["errors"].append(
+                                f"Show3D Smooth {state_name} exposed a blank or flat canvas frame"
+                            )
 
             _drive_canvas(page, box)
             after = locator.screenshot(timeout=timeout_ms)

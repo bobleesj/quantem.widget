@@ -715,7 +715,10 @@ const upwardMenuProps = {
   transformOrigin: { vertical: "bottom" as const, horizontal: "left" as const },
   sx: { zIndex: 9999 },
 };
-const PAGE_PLAY_FPS_OPTIONS = [1, 2, 3, 4] as const;
+// Page galleries are normally used as a quick visual sweep, rather than as a
+// slow slide show. Keep 2 fps available for careful inspection, but make the
+// first-play experience responsive on cached local panels.
+const PAGE_PLAY_FPS_OPTIONS = [1, 2, 4, 8, 12] as const;
 const CONTRAST_PRESETS = [
   { value: "manual", label: "Manual", low: 0, high: 100 },
   { value: "0.5-99.5", label: "0.5–99.5", low: 0.5, high: 99.5 },
@@ -1435,6 +1438,7 @@ type Show2DPerfCounters = {
   galleryFftActiveKeys: string[];
   lastGalleryFftMs: number;
   mainCanvasPaintCount: number;
+  lastMainCanvasPaintBatchPanels: number;
   lastMainCanvasPaintAt: number;
   lastMainCanvasPaintPanel: number | null;
   zoomPanEventCount: number;
@@ -1460,6 +1464,7 @@ function show2dPerfDebug(): Show2DPerfCounters | null {
       galleryFftActiveKeys: [],
       lastGalleryFftMs: 0,
       mainCanvasPaintCount: 0,
+      lastMainCanvasPaintBatchPanels: 0,
       lastMainCanvasPaintAt: 0,
       lastMainCanvasPaintPanel: null,
       zoomPanEventCount: 0,
@@ -1496,6 +1501,12 @@ function recordShow2DMainCanvasPaint(panel: number): void {
       if (perf.zoomPanPaintLatenciesMs.length > 120) perf.zoomPanPaintLatenciesMs.shift();
     }
   }
+}
+
+function recordShow2DMainCanvasPaintBatch(panelCount: number): void {
+  const perf = show2dPerfDebug();
+  if (!perf) return;
+  perf.lastMainCanvasPaintBatchPanels = panelCount;
 }
 
 function updateGalleryFftCacheDebug(
@@ -2617,7 +2628,7 @@ function Show2D() {
   const isItemPaged = isPaged && pageKind === "items";
   const currentPageIdx = Math.max(0, Math.min((nPages || 1) - 1, Math.round(pageIdx || 0)));
   const [pagePlaying, setPagePlaying] = React.useState(false);
-  const [pagePlayFps, setPagePlayFps] = React.useState<number>(2);
+  const [pagePlayFps, setPagePlayFps] = React.useState<number>(8);
   const [pageSliderPreviewIdx, setPageSliderPreviewIdxState] = React.useState<number | null>(null);
   const pageSliderPreviewIdxRef = React.useRef<number | null>(null);
   const currentPageIdxRef = React.useRef(0);
@@ -3598,6 +3609,19 @@ function Show2D() {
   const [zoomStates, setZoomStates] = React.useState<Map<number, ZoomState>>(new Map());
   const [linkedZoomState, setLinkedZoomState] = React.useState<ZoomState>(initialZoomState);
   const [linkedZoom, setLinkedZoom] = useModelState<boolean>("link_zoom");
+  // Wheel and trackpad events can arrive faster than the display refreshes.
+  // Keep an immediate mirror for correct cursor-anchored math, then commit at
+  // most once per animation frame. This keeps a large gallery responsive
+  // without dropping any accumulated zoom steps.
+  const zoomStateMirrorRef = React.useRef<{ linked: ZoomState; per: Map<number, ZoomState> }>({
+    linked: initialZoomState,
+    per: new Map(),
+  });
+  const pendingWheelZoomRef = React.useRef<{ idx: number; state: ZoomState } | null>(null);
+  const wheelZoomCommitRafRef = React.useRef(0);
+  const activeViewInteractionPanelRef = React.useRef<number | null>(null);
+  const settleViewPaintTimerRef = React.useRef(0);
+  const [settledViewPaintVersion, setSettledViewPaintVersion] = React.useState(0);
   const [isDraggingPan, setIsDraggingPan] = React.useState(false);
   const [panStart, setPanStart] = React.useState<{ x: number, y: number, pX: number, pY: number } | null>(null);
 
@@ -3636,10 +3660,40 @@ function Show2D() {
     };
   }, [linkedZoom, linkPan, linkedZoomState, zoomStates, initialZoomState]);
 
+  React.useEffect(() => {
+    zoomStateMirrorRef.current = { linked: linkedZoomState, per: new Map(zoomStates) };
+  }, [linkedZoomState, zoomStates]);
+
+  const getImmediateZoomState = React.useCallback((idx: number): ZoomState => {
+    const mirror = zoomStateMirrorRef.current;
+    const per = mirror.per.get(idx) || initialZoomState;
+    return {
+      zoom: linkedZoom ? mirror.linked.zoom : per.zoom,
+      panX: linkPan ? mirror.linked.panX : per.panX,
+      panY: linkPan ? mirror.linked.panY : per.panY,
+    };
+  }, [initialZoomState, linkedZoom, linkPan]);
+
   // Helper to set zoom state for an image. zoom and pan honored independently:
   //   zoom: writes to linkedZoomState if linkedZoom, else per-image
   //   pan:  writes to linkedZoomState if linkPan, else per-image
   const setZoomState = React.useCallback((idx: number, state: ZoomState) => {
+    const mirror = zoomStateMirrorRef.current;
+    if (linkedZoom || linkPan) {
+      mirror.linked = {
+        zoom: linkedZoom ? state.zoom : mirror.linked.zoom,
+        panX: linkPan ? state.panX : mirror.linked.panX,
+        panY: linkPan ? state.panY : mirror.linked.panY,
+      };
+    }
+    if (!linkedZoom || !linkPan) {
+      const cur = mirror.per.get(idx) || initialZoomState;
+      mirror.per.set(idx, {
+        zoom: linkedZoom ? cur.zoom : state.zoom,
+        panX: linkPan ? cur.panX : state.panX,
+        panY: linkPan ? cur.panY : state.panY,
+      });
+    }
     if (linkedZoom || linkPan) {
       setLinkedZoomState(prev => ({
         zoom: linkedZoom ? state.zoom : prev.zoom,
@@ -3660,6 +3714,53 @@ function Show2D() {
       });
     }
   }, [linkedZoom, linkPan, initialZoomState]);
+
+  const scheduleWheelZoomState = React.useCallback((idx: number, state: ZoomState) => {
+    // Update the mirror immediately so several wheel events in one frame use
+    // the result of the previous event instead of stale React state.
+    const mirror = zoomStateMirrorRef.current;
+    if (linkedZoom || linkPan) {
+      mirror.linked = {
+        zoom: linkedZoom ? state.zoom : mirror.linked.zoom,
+        panX: linkPan ? state.panX : mirror.linked.panX,
+        panY: linkPan ? state.panY : mirror.linked.panY,
+      };
+    }
+    if (!linkedZoom || !linkPan) {
+      const cur = mirror.per.get(idx) || initialZoomState;
+      mirror.per.set(idx, {
+        zoom: linkedZoom ? cur.zoom : state.zoom,
+        panX: linkPan ? cur.panX : state.panX,
+        panY: linkPan ? cur.panY : state.panY,
+      });
+    }
+    pendingWheelZoomRef.current = { idx, state };
+    if (wheelZoomCommitRafRef.current) return;
+    wheelZoomCommitRafRef.current = requestAnimationFrame(() => {
+      wheelZoomCommitRafRef.current = 0;
+      const pending = pendingWheelZoomRef.current;
+      pendingWheelZoomRef.current = null;
+      if (pending) setZoomState(pending.idx, pending.state);
+    });
+  }, [initialZoomState, linkPan, linkedZoom, setZoomState]);
+  React.useEffect(() => () => {
+    cancelAnimationFrame(wheelZoomCommitRafRef.current);
+  }, []);
+
+  // During a non-linked gallery zoom, the user's gesture changes one panel.
+  // Repainting every nearby panel for each wheel event makes large report
+  // galleries feel sticky.  Paint the active panel during the gesture, then
+  // repaint the viewport once it settles so any unrelated display update is
+  // still reconciled without sacrificing interaction latency.
+  const beginViewInteraction = React.useCallback((idx: number) => {
+    activeViewInteractionPanelRef.current = idx;
+    window.clearTimeout(settleViewPaintTimerRef.current);
+    settleViewPaintTimerRef.current = window.setTimeout(() => {
+      activeViewInteractionPanelRef.current = null;
+      setSettledViewPaintVersion((version) => version + 1);
+    }, 140);
+  }, []);
+  React.useEffect(() => () => window.clearTimeout(settleViewPaintTimerRef.current), []);
 
   // FFT zoom/pan state (single mode)
   const [fftZoom, setFftZoom] = React.useState(DEFAULT_FFT_ZOOM);
@@ -4196,6 +4297,53 @@ function Show2D() {
     [hiddenPanelSet, orderedImageIndices]
   );
   visibleImageIndicesRef.current = visibleImageIndices;
+  // A large report gallery can have one hundred panels while a fullscreen
+  // viewport only shows a handful.  Keep data and panel state for every
+  // panel, but limit hot canvas repaint work (zoom/pan and overlays) to the
+  // viewport.  Without this, one wheel notch
+  // repaints every offscreen canvas in a full-detector report.
+  const [viewportPanelIndices, setViewportPanelIndices] = React.useState<number[]>([]);
+  React.useEffect(() => {
+    if (!isGallery || visibleImageIndices.length <= 12) {
+      setViewportPanelIndices([]);
+      return;
+    }
+    if (typeof IntersectionObserver === "undefined") {
+      setViewportPanelIndices(visibleImageIndices);
+      return;
+    }
+    const visible = new Set<number>();
+    const nodes = visibleImageIndices
+      .map((idx) => ({ idx, node: imageContainerRefs.current[idx] }))
+      .filter((item): item is { idx: number; node: HTMLDivElement } => !!item.node);
+    if (nodes.length === 0) return;
+    const commit = () => {
+      const next = visibleImageIndices.filter((idx) => visible.has(idx));
+      setViewportPanelIndices((previous) => (
+        previous.length === next.length && previous.every((idx, pos) => idx === next[pos])
+          ? previous
+          : next
+      ));
+    };
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const item = nodes.find((candidate) => candidate.node === entry.target);
+        if (!item) continue;
+        if (entry.isIntersecting) visible.add(item.idx);
+        else visible.delete(item.idx);
+      }
+      commit();
+    }, { root: null, rootMargin: "0px", threshold: 0.01 });
+    nodes.forEach(({ node }) => observer.observe(node));
+    return () => observer.disconnect();
+  }, [isGallery, visibleImageIndices]);
+  const viewportPaintImageIndices = React.useMemo(() => {
+    if (!isGallery || visibleImageIndices.length <= 12 || viewportPanelIndices.length === 0) {
+      return visibleImageIndices;
+    }
+    const inViewport = new Set(viewportPanelIndices);
+    return visibleImageIndices.filter((idx) => inViewport.has(idx));
+  }, [isGallery, visibleImageIndices, viewportPanelIndices]);
   const selectedPanelSet = React.useMemo(() => {
     const out = new Set<number>();
     for (const value of selectedPanels || []) {
@@ -6187,8 +6335,13 @@ function Show2D() {
   // -------------------------------------------------------------------------
   React.useLayoutEffect(() => {
     if (mainOffscreensRef.current.length === 0) return;
+    const activePanel = activeViewInteractionPanelRef.current;
+    const paintIndices = (
+      isGallery && !linkedZoom && !linkPan && activePanel !== null
+    ) ? [activePanel] : viewportPaintImageIndices;
+    recordShow2DMainCanvasPaintBatch(paintIndices.length);
 
-    for (const i of visibleImageIndices) {
+    for (const i of paintIndices) {
       const canvas = canvasRefs.current[i];
       const offscreen = mainOffscreensRef.current[i];
       if (!canvas || !offscreen) continue;
@@ -6262,13 +6415,17 @@ function Show2D() {
       ctx.restore();
       recordShow2DMainCanvasPaint(i);
     }
-  }, [offscreenVersion, detailPaintVersion, displayBinFactor, nImages, width, height, displayScale, canvasW, canvasH, canvasReady, linkedZoom, linkedZoomState, zoomStates, smooth, currentDetailWindow, canvasRepaintSignal, imageFlipsHorizontal, imageFlipsVertical, offlineForTheme, rotationForPanel, visibleImageIndices]);
+  }, [offscreenVersion, detailPaintVersion, displayBinFactor, nImages, width, height, displayScale, canvasW, canvasH, canvasReady, isGallery, linkedZoom, linkPan, linkedZoomState, zoomStates, smooth, currentDetailWindow, canvasRepaintSignal, imageFlipsHorizontal, imageFlipsVertical, offlineForTheme, rotationForPanel, viewportPaintImageIndices, settledViewPaintVersion]);
 
   // -------------------------------------------------------------------------
   // Render Overlays (scale bar, colorbar, zoom indicator)
   // -------------------------------------------------------------------------
   React.useEffect(() => {
-    for (const i of visibleImageIndices) {
+    const activePanel = activeViewInteractionPanelRef.current;
+    const paintIndices = (
+      isGallery && !linkedZoom && !linkPan && activePanel !== null
+    ) ? [activePanel] : viewportPaintImageIndices;
+    for (const i of paintIndices) {
       const overlay = overlayRefs.current[i];
       if (!overlay) continue;
       const ctx = overlay.getContext("2d");
@@ -6554,7 +6711,7 @@ function Show2D() {
         ctx.restore();
       }
     }
-  }, [nImages, pixelSizeForPanel, pixelUnit, panelHasScaleBar, scaleBarPosition, scaleBarLength, scaleBarLabel, scaleBarStyle, showZoomIndicator, selectedIdx, isGallery, canvasW, canvasH, width, height, displayScale, linkedZoom, linkedZoomState, zoomStates, dataVersion, showColorbar, cmap, offscreenVersion, logScale, profileActive, profilePoints, roiActive, roiList, roiSelectedIdx, isDraggingROI, themeColors, measureActive, measurePoints, canvasRepaintSignal, insetPlots, insetPlotSpecFor, insetDragVersion, showInsetPlots, panelMarkerColor, visibleImageIndices, panelOverlays, overlaySelection]);
+  }, [nImages, pixelSizeForPanel, pixelUnit, panelHasScaleBar, scaleBarPosition, scaleBarLength, scaleBarLabel, scaleBarStyle, showZoomIndicator, selectedIdx, isGallery, canvasW, canvasH, width, height, displayScale, linkedZoom, linkPan, linkedZoomState, zoomStates, dataVersion, showColorbar, cmap, offscreenVersion, logScale, profileActive, profilePoints, roiActive, roiList, roiSelectedIdx, isDraggingROI, themeColors, measureActive, measurePoints, canvasRepaintSignal, insetPlots, insetPlotSpecFor, insetDragVersion, showInsetPlots, panelMarkerColor, viewportPaintImageIndices, panelOverlays, overlaySelection, settledViewPaintVersion]);
 
   // -------------------------------------------------------------------------
   // Inset magnifier (lens) — renders magnified region at cursor in bottom-left
@@ -7768,7 +7925,7 @@ function Show2D() {
     const rect = canvas.getBoundingClientRect();
     
     // Get current zoom state
-    const zs = getZoomState(idx);
+    const zs = getImmediateZoomState(idx);
     
     // Mouse position relative to canvas (in canvas pixel coordinates)
     const mouseCanvasX = (e.clientX - rect.left) * (canvas.width / rect.width);
@@ -7797,7 +7954,8 @@ function Show2D() {
 
     const nextState = { zoom: newZoom, panX: newPanX, panY: newPanY };
     recordShow2DZoomPanEvent("wheel");
-    setZoomState(idx, nextState);
+    beginViewInteraction(idx);
+    scheduleWheelZoomState(idx, nextState);
     persistZoomState(nextState);
   };
 
@@ -10064,7 +10222,7 @@ function Show2D() {
 	                </IconButton>
 	                <Select
 	                  value={String(pagePlayFps)}
-	                  onChange={(e) => setPagePlayFps(Number(e.target.value) || 2)}
+	                  onChange={(e) => setPagePlayFps(Number(e.target.value) || 8)}
 	                  size="small"
 	                  sx={{ ...themedSelect, minWidth: 48, fontSize: 10 }}
 	                  MenuProps={themedTopMenuProps}

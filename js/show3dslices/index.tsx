@@ -2267,8 +2267,11 @@ function Show3DSlices() {
       // Surface the REAL reason - a swallowed error here used to show a generic
       // "WebGPU not available" even when the adapter was fine but the volume
       // pipeline/3D-texture init failed, making the bug undebuggable.
-      console.error("[Show3DSlices] 3D volume renderer init failed:", err);
-      setVolumeInitError(String(err?.message || err));
+      const message = String(err?.message || err);
+      const unavailable = /WebGPU not available|requestAdapter|navigator\.gpu/i.test(message);
+      const logger = unavailable ? console.warn : console.error;
+      logger("[Show3DSlices] 3D volume renderer init failed:", err);
+      setVolumeInitError(message);
       setWebgpuSupported(false);
     });
     return () => { disposed = true; volumeRendererRef.current?.dispose(); volumeRendererRef.current = null; };

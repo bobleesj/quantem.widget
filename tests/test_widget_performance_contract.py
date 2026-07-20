@@ -276,6 +276,9 @@ def test_show2d_local_stack_fft_cache_and_playback_contract():
     # the bounded LRU, so revisiting the first page does not recompute it.
     assert "PAGED_GALLERY_FFT_OVERVIEW_MAX_DIM = 1024" in show2d
     assert "const overviewMaxDim = isPaged" in show2d
+    # C3: the page player is a visual sweep, not a slow slide show.
+    assert "PAGE_PLAY_FPS_OPTIONS = [1, 2, 4, 8, 12]" in show2d
+    assert "useState<number>(8)" in show2d
 
 
 def test_show2d_hidden_panels_skip_hot_render_paths():
@@ -288,7 +291,16 @@ def test_show2d_hidden_panels_skip_hot_render_paths():
     assert "const indices = visibleImageIndices.filter(i => i >= 0 && i < capturedNImages);" in show2d
     assert "const signature = visibleImageIndices.map((i) => {" in show2d
     assert "for (const i of visibleImageIndices) {\n        const win = currentDetailWindow(i);" in show2d
-    assert "for (const i of visibleImageIndices) {\n      const canvas = canvasRefs.current[i];" in show2d
+    # C2: a large gallery only repaints the panels near the browser viewport
+    # during zoom; offscreen panels keep their cached display until scrolled in.
+    assert "const [viewportPanelIndices, setViewportPanelIndices]" in show2d
+    assert 'rootMargin: "0px"' in show2d
+    assert "const viewportPaintImageIndices" in show2d
+    assert "const paintIndices = (" in show2d
+    assert ") ? [activePanel] : viewportPaintImageIndices;" in show2d
+    assert "for (const i of paintIndices) {\n      const canvas = canvasRefs.current[i];" in show2d
+    assert "const beginViewInteraction" in show2d
+    assert "beginViewInteraction(idx);" in show2d
     assert "if (hiddenPanelSet.has(panel)) return null;" in show2d
     assert "hiddenPanels && hiddenPanels.includes(panel)" not in show2d
 
@@ -531,8 +543,8 @@ def test_show3d_many_panel_zoom_uses_correct_transform_path():
     assert "opts.sourcePanelIndices?.[panel]" in colormaps
     assert "const hasActiveTransform = (opts.transforms || []).some" in colormaps
     assert "if (!hasActiveTransform && this.renderPackedPanelTransformComputeToCanvas" in colormaps
-    assert "smooth: u32" in colormaps
-    assert "params.smooth == 1u" in colormaps
+    assert "smooth_sample: u32" in colormaps
+    assert "params.smooth_sample == 1u" in colormaps
     assert "origin_x: f32" in colormaps
     assert "origin_y: f32" in colormaps
     assert "let local_x = in.pos.x - params.origin_x;" in colormaps
@@ -576,6 +588,11 @@ def test_show3d_offline_viewport_honors_smooth_toggle():
     assert "if (!smooth) return values[y0 * width + x0];" in show3d
     assert show3d.count("const sample = samplePackedU8Viewport(") == 2
     assert "ctx.imageSmoothingEnabled = smooth;" in show3d
+    # C2: toggling Smooth invalidates the rendered composite rather than
+    # briefly applying the new zoom sampler to a cache made with old pixels.
+    assert 'smooth,' in show3d[show3d.index("const sidecarDisplayStyleKey"):show3d.index("const sidecarDisplayStyleKey") + 700]
+    assert show3d.count("sidecarCompositeStyleKeyRef.current === sidecarDisplayStyleKey") == 2
+    assert 'sidecarCompositeStyleKeyRef.current = "";' in show3d
 
 
 def test_show3d_offline_zoom_keeps_retained_canvas_visible():

@@ -12,8 +12,8 @@ quantem show2d ./frames/ --watch               # live folder        -> append ne
 quantem show4dstem ./masters/                  # *_master.h5        -> live Show4DSTEM
 quantem show4dstem a_master.h5 b_master.h5     # several masters    -> one 5D multi-tilt viewer
 quantem show4dstem ./masters/ --html           # 4D-STEM            -> shareable offline HTML
-quantem showptycho scan_master.h5               # raw 4D-STEM master -> ShowPtycho WebGPU folder
-quantem showptycho ./ptycho-export/             # ShowPtycho folder  -> WebGPU browser review
+quantem ptycho scan_master.h5                   # raw 4D-STEM master -> ptychography WebGPU review
+quantem ptycho ./ptycho-export/                 # ShowPtycho folder  -> WebGPU browser review
 quantem showfolder ./session/                  # microscopy folder  -> ShowFolder notebook/HTML
 quantem data-transfer plan ./raw/ /ssd0/run /ssd1/run --manifest run.json
 quantem data-transfer show4dstem --manifest run.json --gpus 0,1 --dtype u8 --bin 1
@@ -29,7 +29,8 @@ quantem github tutorial_github.ipynb --no-execute # optional static copy for Git
 | `quantem show2d <image / folder>` | one image, or a folder | a Show2D HTML (a folder becomes a gallery); with `--watch`, a live ShowFolder notebook |
 | `quantem show3d <folder>` | a folder of same-size frames | a Show3D scrub HTML; with `--watch`, a live ShowFolder notebook |
 | `quantem show4dstem <master(s) / folder>` | one or more `*_master.h5` | a live Show4DSTEM notebook (or `--html`) |
-| `quantem showptycho <master.h5 / folder>` | a raw `*_master.h5` or a ShowPtycho WebGPU folder export | builds/serves a ShowPtycho browser review |
+| `quantem ptycho <master.h5 / folder>` | a raw `*_master.h5` or a ShowPtycho WebGPU folder export | builds/serves a ptychography browser review |
+| `quantem showptycho <master.h5 / folder>` | same as `quantem ptycho` | compatibility alias |
 | `quantem showfolder <folder>` | microscopy session folder | a ShowFolder notebook (or `--html`) |
 | `quantem data-transfer plan/inspect/copy/update/masters/show4dstem` | `*_master.h5` folder plus target roots | manifest-backed transfer planning, state inspection, explicit copy, resume/update, ready-master listing, and Show4DSTEM notebook handoff |
 | `quantem html <notebook.ipynb>` | a notebook you wrote | runs it, or with `--no-execute` exports saved outputs/state, into one standalone interactive HTML |
@@ -53,15 +54,23 @@ one) and opens automatically on a desktop.
 ShowPtycho WebGPU review can start directly from one `*_master.h5`:
 
 ```bash
-quantem showptycho BTO_18_master.h5
+quantem ptycho BTO_18_master.h5
 ```
 
 The command looks for a matching QuantEM calibration next to the master, for
-example `quantem/screen/_calibrations.json`. When that file is not present,
-provide the microscope geometry explicitly:
+example `quantem/screen/_calibrations.json`. When that file is not present, it
+uses quick-start defaults and prints them before loading:
+
+```text
+semiangle=30 mrad, scan_sampling=0.5 A, voltage=300 kV
+```
+
+Those defaults are enough for fast local review and collaborator handoff. For
+measurement, publication, or calibration signoff, provide the microscope
+geometry explicitly:
 
 ```bash
-quantem showptycho BTO_18_master.h5 \
+quantem ptycho BTO_18_master.h5 \
   --semiangle 30 --scan-sampling 0.264 --voltage-kv 300
 ```
 
@@ -73,15 +82,20 @@ metadata, and a `source/` directory with the original compressed HDF5 master and
 data files linked or copied into the review folder. It does not save persistent
 float32 reference images or a complex64 BF reducer by default. The browser
 decodes HDF5 chunks on WebGPU and builds the BF-indexed reducers transiently.
-The default interactive BF preview is 30 percent of the selected disk; move the
-BF control to full count in the widget for the authoritative full-disk view, or
-start full-BF review directly with `--drag-bf 1.0`.
+The default interactive BF policy is full selected BF (`--drag-bf 1.0`) so the
+first view uses all known BF evidence without loading non-BF detector pixels.
+Use `--drag-bf 0.3` or another smaller fraction only when you intentionally want
+a faster exploratory preview.
+
+The default browser source is the compressed-HDF5 WebGPU path. Use
+`--webgpu-source bf-columns` only when you intentionally want the older
+detector-major BF-column companion for fallback or side-by-side comparison.
 
 Existing ShowPtycho WebGPU exports are also folders because the microscopy
 payload can be several gigabytes. Open them with the CLI:
 
 ```bash
-quantem showptycho ./logic013_512_bfr24/
+quantem ptycho ./logic013_512_bfr24/
 ```
 
 or let auto-detection choose the same path:
@@ -168,7 +182,7 @@ HTML; serve HTML from GitHub Pages or another static host.
 | `--no-open` | write the file(s) without launching a browser or Jupyter |
 | `--title`, `-v/--verbose` | page title; verbose progress |
 | `--calibration`, `--semiangle`, `--scan-sampling`, `--voltage-kv` | ShowPtycho master generation geometry and calibration controls |
-| `--drag-bf X` | ShowPtycho BF preview fraction or count; `0.3` is 30 percent, `1.0` is full BF, values greater than 1 are explicit BF-pixel counts |
+| `--drag-bf X` | ShowPtycho BF fraction or count; default `1.0` is full BF, `0.3` is 30 percent, values greater than 1 are explicit BF-pixel counts |
 
 ## Backends
 
