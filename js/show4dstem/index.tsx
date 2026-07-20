@@ -3389,7 +3389,7 @@ function Show4DSTEM() {
       // Auto-filter hot/dead detector pixels (from the HDF5 pixel_mask) so the
       // offline result matches CUDA's apply_mask path - no manual masking needed.
       const badPxJson = model.get("_offline_bad_px") as string | undefined;
-      if (badPxJson) compute.badPx = new Uint32Array(JSON.parse(badPxJson) as number[]);
+      if (badPxJson && compute) compute.badPx = new Uint32Array(JSON.parse(badPxJson) as number[]);
       const dpcMask = buildFullDetectorMask(detR, detC);
       const computeDpcImage = async (
         backend: Show4DSTEMCompute | Show4DSTEMCpuCompute,

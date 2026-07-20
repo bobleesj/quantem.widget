@@ -1517,11 +1517,10 @@ function Show3DSlices() {
   const alignmentPreviewRef = React.useRef<((rowShift: number, colShift: number) => void) | null>(null);
   const sliceAlignmentModeRef = React.useRef(sliceAlignment || "off");
   const sliceAlignmentCachedRef = React.useRef(!!sliceAlignmentCached);
-  const exportedAlignmentRef = React.useRef({
-    cached: !!sliceAlignmentCached,
+  const autoAlignmentRef = React.useRef({
+    cached: !!sliceAlignmentCached || Math.abs(rowShiftPxPerSlice || 0) >= 1e-12 || Math.abs(colShiftPxPerSlice || 0) >= 1e-12,
     rowShift: rowShiftPxPerSlice || 0,
     colShift: colShiftPxPerSlice || 0,
-    mode: (sliceAlignment === "manual" ? "manual" : "auto") as "auto" | "manual",
   });
   const pendingExportRef = React.useRef<{
     id: string;
@@ -1553,6 +1552,15 @@ function Show3DSlices() {
   React.useEffect(() => {
     sliceAlignmentCachedRef.current = !!sliceAlignmentCached;
   }, [sliceAlignmentCached]);
+  React.useEffect(() => {
+    if (sliceAlignment === "auto" && sliceAlignmentCached) {
+      autoAlignmentRef.current = {
+        cached: true,
+        rowShift: rowShiftPxPerSlice || 0,
+        colShift: colShiftPxPerSlice || 0,
+      };
+    }
+  }, [sliceAlignment, sliceAlignmentCached, rowShiftPxPerSlice, colShiftPxPerSlice]);
   React.useEffect(() => () => {
     if (alignmentRafRef.current != null) cancelAnimationFrame(alignmentRafRef.current);
   }, []);
@@ -1725,17 +1733,27 @@ function Show3DSlices() {
       setLocalAlignmentStatus("");
       return;
     }
-    if (offline && !sliceAlignmentCached) {
+    const auto = autoAlignmentRef.current;
+    if (auto.cached) {
+      setLiveRowShift(auto.rowShift);
+      setLiveColShift(auto.colShift);
+      alignmentPreviewRef.current?.(auto.rowShift, auto.colShift);
+      setRowShiftPxPerSlice(auto.rowShift);
+      setColShiftPxPerSlice(auto.colShift);
+      setSliceAlignmentCached(true);
+      setSliceAlignment("auto");
+      sliceAlignmentCachedRef.current = true;
+      sliceAlignmentModeRef.current = "auto";
+      lastAlignmentModeRef.current = "auto";
+      setLocalAlignmentStatus("");
+      return;
+    }
+    if (offline) {
       setLocalAlignmentStatus("Estimate alignment in a live notebook before export.");
       return;
     }
-    if (sliceAlignmentCached) {
-      setSliceAlignment(lastAlignmentModeRef.current);
-      setLocalAlignmentStatus("");
-    } else {
-      setSliceAlignment("auto");
-      requestSliceAlignmentEstimate();
-    }
+    setSliceAlignment("auto");
+    requestSliceAlignmentEstimate();
   };
   const commitManualSliceAlignment = (rowShift: number, colShift: number) => {
     if (alignmentRafRef.current != null) {
@@ -1786,18 +1804,18 @@ function Show3DSlices() {
       alignmentRafRef.current = null;
     }
     pendingAlignmentRef.current = null;
-    if (offline && exportedAlignmentRef.current.cached) {
-      const exported = exportedAlignmentRef.current;
-      setLiveRowShift(exported.rowShift);
-      setLiveColShift(exported.colShift);
-      alignmentPreviewRef.current?.(exported.rowShift, exported.colShift);
-      setRowShiftPxPerSlice(exported.rowShift);
-      setColShiftPxPerSlice(exported.colShift);
+    if (autoAlignmentRef.current.cached) {
+      const auto = autoAlignmentRef.current;
+      setLiveRowShift(auto.rowShift);
+      setLiveColShift(auto.colShift);
+      alignmentPreviewRef.current?.(auto.rowShift, auto.colShift);
+      setRowShiftPxPerSlice(auto.rowShift);
+      setColShiftPxPerSlice(auto.colShift);
       setSliceAlignmentCached(true);
-      setSliceAlignment(exported.mode);
+      setSliceAlignment("auto");
       sliceAlignmentCachedRef.current = true;
-      sliceAlignmentModeRef.current = exported.mode;
-      lastAlignmentModeRef.current = exported.mode;
+      sliceAlignmentModeRef.current = "auto";
+      lastAlignmentModeRef.current = "auto";
       setLocalAlignmentStatus("");
       return;
     }
