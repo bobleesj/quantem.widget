@@ -272,6 +272,10 @@ def test_show2d_local_stack_fft_cache_and_playback_contract():
     assert "makeGalleryFftCacheKey" in local_stack
     assert "GALLERY_FFT_CACHE_MAX_BYTES" in local_stack
     assert "protectedKeys" in local_stack
+    # C2: many pages of large panels must fit one overview FFT per panel in
+    # the bounded LRU, so revisiting the first page does not recompute it.
+    assert "PAGED_GALLERY_FFT_OVERVIEW_MAX_DIM = 1024" in show2d
+    assert "const overviewMaxDim = isPaged" in show2d
 
 
 def test_show2d_hidden_panels_skip_hot_render_paths():
