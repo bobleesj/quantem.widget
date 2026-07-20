@@ -577,6 +577,134 @@ def _stop_canvas_update_probe(page) -> dict[str, Any]:
     )
 
 
+def _start_zoom_continuity_probe(page) -> dict[str, Any]:
+    """Sample the visible canvas composition through a rapid wheel gesture.
+
+    A zoom must transform already painted pixels.  In particular, an exported
+    viewer must not briefly swap a stable 2D canvas for a newly cleared WebGPU
+    presentation canvas.  The probe therefore watches both the composed canvas
+    visibility signature and a small pixel sample on every animation frame.
+    """
+
+    return dict(
+        page.evaluate(
+            r"""() => {
+              const existing = window.__quantemZoomContinuityProbe;
+              if (existing) existing.active = false;
+              const visible = (canvas) => {
+                const rect = canvas.getBoundingClientRect();
+                const style = getComputedStyle(canvas);
+                return rect.width >= 24 && rect.height >= 24 &&
+                  rect.right > 0 && rect.bottom > 0 &&
+                  rect.left < innerWidth && rect.top < innerHeight &&
+                  canvas.width > 0 && canvas.height > 0 &&
+                  style.display !== "none" && style.visibility !== "hidden" &&
+                  Number(style.opacity || "1") > 0.05;
+              };
+              const candidates = [...document.querySelectorAll("canvas")]
+                .map((canvas, index) => ({canvas, index, rect: canvas.getBoundingClientRect()}))
+                .filter((item) => visible(item.canvas))
+                .sort((a, b) => b.rect.width * b.rect.height - a.rect.width * a.rect.height);
+              const target = candidates[0];
+              if (!target) return {started: false, reason: "no visible canvas"};
+              const fingerprint = () => [...document.querySelectorAll("canvas")]
+                .map((canvas, index) => {
+                  const rect = canvas.getBoundingClientRect();
+                  const style = getComputedStyle(canvas);
+                  return [
+                    index, Math.round(rect.width), Math.round(rect.height),
+                    style.display, style.visibility, style.opacity || "1",
+                  ].join(":");
+                }).join("|");
+              const isFlat = () => {
+                const canvas = target.canvas;
+                const ctx = canvas.getContext("2d", {willReadFrequently: true});
+                if (!ctx) return null;
+                try {
+                  const sw = Math.max(1, Math.min(48, canvas.width));
+                  const sh = Math.max(1, Math.min(48, canvas.height));
+                  const x0 = Math.max(0, Math.min(canvas.width - sw, Math.floor(canvas.width * 0.45 - sw / 2)));
+                  const y0 = Math.max(0, Math.min(canvas.height - sh, Math.floor(canvas.height * 0.45 - sh / 2)));
+                  const data = ctx.getImageData(x0, y0, sw, sh).data;
+                  let min = 255;
+                  let max = 0;
+                  for (let i = 0; i < data.length; i += 16) {
+                    min = Math.min(min, data[i], data[i + 1], data[i + 2]);
+                    max = Math.max(max, data[i], data[i + 1], data[i + 2]);
+                  }
+                  return max - min < 8;
+                } catch (_) {
+                  return null;
+                }
+              };
+              const probe = {
+                active: true,
+                frames: 0,
+                compositionChanges: 0,
+                flatFrames: 0,
+                readableFrames: 0,
+                baseline: fingerprint(),
+                target: {index: target.index, width: target.canvas.width, height: target.canvas.height},
+              };
+              window.__quantemZoomContinuityProbe = probe;
+              const sample = () => {
+                if (!probe.active) return;
+                probe.frames += 1;
+                if (fingerprint() !== probe.baseline) probe.compositionChanges += 1;
+                const flat = isFlat();
+                if (flat !== null) {
+                  probe.readableFrames += 1;
+                  if (flat) probe.flatFrames += 1;
+                }
+                requestAnimationFrame(sample);
+              };
+              requestAnimationFrame(sample);
+              return {started: true, target: probe.target};
+            }"""
+        )
+        or {}
+    )
+
+
+def _stop_zoom_continuity_probe(page) -> dict[str, Any]:
+    """Stop the rapid-zoom continuity probe and return its frame evidence."""
+
+    return dict(
+        page.evaluate(
+            """() => {
+              const probe = window.__quantemZoomContinuityProbe;
+              if (!probe) return {started: false, reason: "probe was not started"};
+              probe.active = false;
+              return {
+                started: true,
+                frame_count: probe.frames,
+                composition_changes: probe.compositionChanges,
+                flat_frames: probe.flatFrames,
+                readable_frames: probe.readableFrames,
+                target: probe.target,
+              };
+            }"""
+        )
+        or {}
+    )
+
+
+def _exercise_zoom_continuity(page, box: dict[str, float]) -> dict[str, Any]:
+    """Perform rapid zoom in/out and fail on a presentation-layer handoff."""
+
+    probe = _start_zoom_continuity_probe(page)
+    if not probe.get("started"):
+        return probe
+    x = box["x"] + box["width"] * 0.52
+    y = box["y"] + box["height"] * 0.52
+    page.mouse.move(x, y)
+    for delta_y in (-420, -420, 840):
+        page.mouse.wheel(0, delta_y)
+        page.wait_for_timeout(45)
+    page.wait_for_timeout(180)
+    return _stop_zoom_continuity_probe(page)
+
+
 def _click_text_controls(page, labels: list[str]) -> list[str]:
     clicked: list[str] = []
     for label in labels:
@@ -1106,6 +1234,7 @@ def _write_html_report(artifact_dir: Path, report: dict[str, Any]) -> None:
         f"<td>{html.escape(str(row['switches_clicked']))}</td>"
         f"<td>{html.escape(str(row['slider_dragged']))}</td>"
         f"<td>{html.escape(str(row['canvas_changed']))}</td>"
+        f"<td>{html.escape(str(row.get('zoom_continuity', {})))}</td>"
         f"<td><a href='{html.escape(row['screenshot'])}'>{html.escape(row['screenshot'])}</a></td>"
         f"<td>{html.escape('; '.join(row['errors']))}</td>"
         f"<td>{html.escape('; '.join(row.get('console_warnings', [])))}</td>"
@@ -1135,7 +1264,7 @@ def _write_html_report(artifact_dir: Path, report: dict[str, Any]) -> None:
   drives basic widget interactions.</p>
   <p>Passed: <strong>{report['passed']}</strong> / {len(report['pages'])}</p>
   <table>
-    <thead><tr><th>Viewport</th><th>Widget</th><th>Variant</th><th>Status</th><th>Canvases</th><th>FPS</th><th>Stories</th><th>Switches</th><th>Slider</th><th>Canvas changed</th><th>Screenshot</th><th>Errors</th><th>Warnings</th></tr></thead>
+    <thead><tr><th>Viewport</th><th>Widget</th><th>Variant</th><th>Status</th><th>Canvases</th><th>FPS</th><th>Stories</th><th>Switches</th><th>Slider</th><th>Canvas changed</th><th>Zoom continuity</th><th>Screenshot</th><th>Errors</th><th>Warnings</th></tr></thead>
     <tbody>{rows}</tbody>
   </table>
   <h2>Machine-readable report</h2>
@@ -1197,6 +1326,7 @@ def _check_page(
         "canvas_count": 0,
         "canvas_nonblank": False,
         "canvas_changed": False,
+        "zoom_continuity": {},
         "fps": 0.0,
         "min_fps": min_fps,
         "fps_passed": False,
@@ -1228,6 +1358,18 @@ def _check_page(
             result["canvas_stats"] = image_stats
             if not nonblank:
                 result["errors"].append("primary canvas is blank or flat")
+
+            if widget in {"show2d", "show3d"}:
+                continuity = _exercise_zoom_continuity(page, box)
+                result["zoom_continuity"] = continuity
+                if not continuity.get("started"):
+                    result["errors"].append(f"zoom continuity probe did not start: {continuity}")
+                elif continuity.get("composition_changes", 0) > 0:
+                    result["errors"].append(
+                        "zoom changed the visible canvas composition; retained pixels were not preserved"
+                    )
+                elif continuity.get("readable_frames", 0) and continuity.get("flat_frames", 0) > 0:
+                    result["errors"].append("zoom exposed a blank or flat canvas frame")
 
             _drive_canvas(page, box)
             after = locator.screenshot(timeout=timeout_ms)

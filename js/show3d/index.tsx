@@ -905,6 +905,32 @@ const valueToPct = (value: number | null | undefined, min: number, max: number, 
 const pctToValue = (pct: number, min: number, max: number): number => min + (max - min) * (clampPct(pct) / 100);
 const clampByte = (x: number): number => Math.max(0, Math.min(255, Math.round(x)));
 
+/** Sample a packed offline frame without leaking across adjacent panel strips. */
+function samplePackedU8Viewport(
+  values: Uint8Array,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+  minX: number,
+  maxX: number,
+  smooth: boolean,
+): number {
+  const safeX = Math.max(minX, Math.min(maxX, x));
+  const safeY = Math.max(0, Math.min(height - 1, y));
+  const x0 = Math.floor(safeX);
+  const y0 = Math.floor(safeY);
+  if (!smooth) return values[y0 * width + x0];
+
+  const x1 = Math.min(maxX, x0 + 1);
+  const y1 = Math.min(height - 1, y0 + 1);
+  const tx = safeX - x0;
+  const ty = safeY - y0;
+  const top = values[y0 * width + x0] * (1 - tx) + values[y0 * width + x1] * tx;
+  const bottom = values[y1 * width + x0] * (1 - tx) + values[y1 * width + x1] * tx;
+  return top * (1 - ty) + bottom * ty;
+}
+
 const WIDGET_SHORTCUT_IGNORE_SELECTOR = [
   "input", "textarea", "button", "select",
   "[contenteditable='true']", "[role='button']", "[role='slider']",
@@ -11462,13 +11488,15 @@ function Show3D() {
             srcNormX = 1 - localY;
             srcNormY = localX;
           }
-          const srcY = Math.max(0, Math.min(height - 1, Math.floor(srcNormY * height)));
-          const srcX = Math.max(srcPanelX, Math.min(srcPanelXMax, srcPanelX + Math.floor(srcNormX * sourcePanelW)));
-          const src = srcY * width + srcX;
-          const v = Math.max(0, Math.min(255, Math.floor(((u8[src] - loByte) / byteSpan) * 255)));
+          const srcY = Math.max(0, Math.min(height - 1, srcNormY * height));
+          const srcX = Math.max(srcPanelX, Math.min(srcPanelXMax, srcPanelX + srcNormX * sourcePanelW));
+          const sample = samplePackedU8Viewport(
+            u8, width, height, srcX, srcY, srcPanelX, srcPanelXMax, smooth,
+          );
+          const v = Math.max(0, Math.min(255, Math.floor(((sample - loByte) / byteSpan) * 255)));
           const li = v * 3;
           if (sampleByte === null) {
-            sampleByte = u8[src];
+            sampleByte = Math.round(sample);
             sampleMapped = v;
             sampleRgb = lut[li];
           }
@@ -11716,9 +11744,12 @@ function Show3D() {
             srcNormX = 1 - localY;
             srcNormY = localX;
           }
-          const srcY = Math.max(0, Math.min(height - 1, Math.floor(srcNormY * height)));
-          const srcX = Math.max(srcPanelX, Math.min(srcPanelXMax, srcPanelX + Math.floor(srcNormX * sourcePanelW)));
-          const v = clampByte(((u8[srcY * width + srcX] - loByte) / byteSpan) * 255);
+          const srcY = Math.max(0, Math.min(height - 1, srcNormY * height));
+          const srcX = Math.max(srcPanelX, Math.min(srcPanelXMax, srcPanelX + srcNormX * sourcePanelW));
+          const sample = samplePackedU8Viewport(
+            u8, width, height, srcX, srcY, srcPanelX, srcPanelXMax, smooth,
+          );
+          const v = clampByte(((sample - loByte) / byteSpan) * 255);
           const li = v * 3;
           rgba[dst] = lut[li];
           rgba[dst + 1] = lut[li + 1];
@@ -11821,7 +11852,7 @@ function Show3D() {
     const outPanelW = (targetW - gap * (cols - 1)) / cols;
     const outPanelH = (targetH - gap * (rows - 1)) / rows;
     clearWithGridBackground(ctx, targetW, targetH);
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = smooth;
     for (let slot = 0; slot < visibleCountLocal; slot++) {
       const panelIdx = visiblePanelIndices[slot] ?? slot;
       const col = slot % cols;
@@ -11869,6 +11900,7 @@ function Show3D() {
     interPanelGapColor,
     panelInnerBorderColor,
     panelInnerBorderPx,
+    smooth,
   ]);
 
   const getSidecarPaintScratchContext = React.useCallback((
@@ -13418,6 +13450,12 @@ function Show3D() {
       return offline ? drawCanvasTransformFallback("canvas-panel-transform") : false;
     }
     if (!separatePanelFrames || offline) {
+      // A standalone export already owns a colorized 2D offscreen frame.  On
+      // zoom, keep that frame visible and transform it in place instead of
+      // switching opacity to a freshly cleared WebGPU presentation canvas.
+      // The latter produces a one-frame black/contrast flash on some browsers
+      // even though the data range itself has not changed.
+      if (offline) return drawCanvasTransformFallback("canvas-packed-transform");
       const start = performance.now();
       const gpuRendered = renderGpuPackedPanelTransformSlice(idx, false);
       if (gpuRendered) {
