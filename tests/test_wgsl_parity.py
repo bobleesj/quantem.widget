@@ -1,7 +1,7 @@
 """WGSL/WebGPU compute parity: browser BF/DF/CoM/DPC kernels vs a numpy reference.
 
 quantem.gpu owns the canonical WebGPU compute sources; quantem.widget syncs them
-into js/engine before bundling. The Python torch path is covered by
+into js/.generated/engine before bundling. The Python torch path is covered by
 test_dpc_virtual_parity.py; this is the missing leg - it proves the WGSL output
 matches numpy on a deterministic fixture.
 

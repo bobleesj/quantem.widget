@@ -145,7 +145,7 @@ builds `G(q,k)` as the scan-space FFT of real intensity traces, so the
 Hermitian identity `G(-q,k) = conj(G(q,k))` holds everywhere, and the
 per-BF-pixel snorm16/int16 block quantization transfers directly.
 
-| Optimization | WebGPU (`quantem.gpu.webgpu/showptycho-ssb.ts`, synced to `quantem.widget/js/engine/showptycho-ssb.ts`) | CUDA (`quantem.gpu/src/quantem/gpu/ssb/engine.py`) | MPS (`quantem.gpu/src/quantem/gpu/ssb/mps.py`) |
+| Optimization | WebGPU (`quantem.gpu.webgpu/showptycho-ssb.ts`, generated into `quantem.widget/js/.generated/engine/showptycho-ssb.ts` for bundling) | CUDA (`quantem.gpu/src/quantem/gpu/ssb/engine.py`) | MPS (`quantem.gpu/src/quantem/gpu/ssb/mps.py`) |
 |---|---|---|---|
 | Exact Hermitian half-plane G(q,k) (2x, bit-exact, faster) | **DONE — default** | TODO — `self.G_qk` is n x n complex64; also the streaming `result_buffer`/staging buffers (batch x bf x scan^2 x c64) would halve | TODO — `mx.complex64` n x n storage; gamma kernels at mps.py:430-440 already compute conj explicitly, mirror fetch slots in there |
 | Compact preview snorm16/int16 block storage (4x, ~1e-4 rad error) | **DONE — opt-in** `?gqk=preview` (`?gqk=herm16` alias) | TODO — cupy int16 pairs + per-BF f32 scale; dequant inside the variance/correction kernels | TODO — mx int16 + scale; check MLX gather perf before committing |

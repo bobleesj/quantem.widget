@@ -1,9 +1,9 @@
 /// <reference types="@webgpu/types" />
 /**
  * WebGPU FFT — GPU-accelerated 2D FFT for real-time ROI analysis.
- * Ported from quantem.widget/js/webgpu-fft.ts
+ * Uses the generated quantem.gpu WebGPU device and FFT shader source.
  */
-import { getGPUDevice as engineGetGPUDevice, onGPULost } from "../engine/device";
+import { getGPUDevice as engineGetGPUDevice, onGPULost } from "../../../js/.generated/engine/device";
 
 function nextPow2(n: number): number { return Math.pow(2, Math.ceil(Math.log2(n))); }
 type WebGPUFftOptions = {
@@ -16,7 +16,7 @@ async function waitWhileDeferred(shouldDefer?: () => boolean): Promise<void> {
   }
 }
 
-import { FFT_2D_SHADER } from "../engine/fft-shader";
+import { FFT_2D_SHADER } from "../../../js/.generated/engine/fft-shader";
 
 export class WebGPUFFT {
   private device: GPUDevice;
