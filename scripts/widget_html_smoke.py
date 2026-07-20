@@ -157,6 +157,13 @@ def _ptycho_phase_template(n: int) -> np.ndarray:
 
 
 def _showptycho_master(folder_root: Path, rng: np.random.Generator) -> Path:
+    try:
+        import hdf5plugin
+    except Exception as exc:  # pragma: no cover - environment problem
+        raise RuntimeError(
+            "ShowPtycho compressed-HDF5 smoke requires hdf5plugin so the "
+            "fixture uses real bitshuffle-LZ4 detector chunks."
+        ) from exc
     frames = 128 * 128
     data = np.zeros((frames, 4, 4), dtype=np.uint16)
     data[:, 1, 2] = rng.integers(0, 16, size=frames, dtype=np.uint16)
@@ -165,7 +172,12 @@ def _showptycho_master(folder_root: Path, rng: np.random.Generator) -> Path:
     master = folder_root / "showptycho_master.h5"
     with h5py.File(data_file, "w") as handle:
         group = handle.create_group("entry/data")
-        group.create_dataset("data", data=data, chunks=(256, 4, 4))
+        group.create_dataset(
+            "data",
+            data=data,
+            chunks=(1, 4, 4),
+            **hdf5plugin.Bitshuffle(cname="lz4"),
+        )
     with h5py.File(master, "w") as handle:
         group = handle.create_group("entry/data")
         group["data_000001"] = h5py.ExternalLink(data_file.name, "/entry/data/data")
