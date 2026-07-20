@@ -10,7 +10,7 @@
 // == h5py chunk, and engine decode == CUDA decode.
 
 import * as jsfive from "jsfive";
-import type { Bslz4Spec } from "./bslz4";
+import type { Bslz4MaskedSumSpec, Bslz4Spec } from "./bslz4";
 
 export interface H5Volume {
   name: string;
@@ -31,6 +31,55 @@ export interface H5MasterInfo {
   totalFrames?: number;
 }
 
+export interface H5VolumeFrameIndex {
+  detRows: number;
+  detCols: number;
+  nFrames: number;
+  srcDtype: "uint8" | "uint16" | "uint32" | "float32";
+  frameOffsets: number[];
+}
+
+export interface H5BlockIndexChunk {
+  startFrame: number;
+  nFrames: number;
+  rangeStart: number;
+  rangeEnd: number;
+  metaOffsetWords: number;
+  metaWords: number;
+}
+
+export interface H5BlockIndexMetadata {
+  detRows: number;
+  detCols: number;
+  nFrames: number;
+  srcDtype: "uint8" | "uint16" | "uint32" | "float32";
+  blockElems: number;
+  nBlocksPerFrame: number;
+  chunks: H5BlockIndexChunk[];
+}
+
+export interface Bslz4SelectedBlockVolume {
+  name: string;
+  detRows: number;
+  detCols: number;
+  detSize: number;
+  blockElems: number;
+  nFrames: number;
+  srcDtype: "uint8" | "uint16" | "uint32" | "float32";
+  selectedBlockIds: number[];
+  chunk: Bslz4MaskedSumSpec;
+}
+
+export interface Bslz4SelectedBlockMetadata {
+  detRows: number;
+  detCols: number;
+  nFrames: number;
+  srcDtype: "uint8" | "uint16" | "uint32" | "float32";
+  blockElems: number;
+  selectedBlockIds: number[];
+  startScan?: number;
+}
+
 // jsfive dataset path candidates, in priority order. Arina data files use entry/data/data;
 // fall back to a search for the first 3D unsigned-int dataset for other layouts.
 const PATH_CANDIDATES = ["entry/data/data", "entry/data", "data"];
@@ -39,9 +88,14 @@ const PIXEL_MASK_CANDIDATES = [
   "entry/instrument/detector/pixel_mask",
   "entry/instrument/detector/detectorSpecific/pixel_mask_applied",
 ];
+const H5_BLOCK_INDEX_MAGIC = "QH5IDX01";
 
 function readBE32(b: Uint8Array, off: number): number {
   return ((b[off] << 24) | (b[off + 1] << 16) | (b[off + 2] << 8) | b[off + 3]) >>> 0;
+}
+
+function align4(n: number): number {
+  return Math.ceil(n / 4) * 4;
 }
 
 // Walk a chunked dataset's B-tree and return per-frame raw bslz4 chunk bytes, indexed by
@@ -152,7 +206,6 @@ export function readH5Volume(buffer: ArrayBuffer, name: string, framesPerChunk?:
   const file = new jsfive.File(buffer, name);
   const ds = findStack(file);
   const [nFrames, detRows, detCols] = ds.shape;
-  const detSize = detRows * detCols;
   // Arina writes uint8/uint16/uint32 detector data depending on bit-depth; jsfive reports
   // "|u1"/"<u2"/"<u4". A MAPED-merged stack is float32 ("<f4"). The element byte width drives
   // the bitshuffle plane count (8/16/32) - float32 is 4-byte, so it de-bitshuffles exactly
@@ -160,60 +213,61 @@ export function readH5Volume(buffer: ArrayBuffer, name: string, framesPerChunk?:
   const dt = String(ds.dtype);
   const srcDtype: "uint8" | "uint16" | "uint32" | "float32" =
     /f4|float32/.test(dt) ? "float32" : /u1|int8/.test(dt) ? "uint8" : /u4|int32/.test(dt) ? "uint32" : "uint16";
+  const offsets = frameOffsets(ds);
+  return readH5VolumeFromFrameIndex(buffer, name, { detRows, detCols, nFrames, srcDtype, frameOffsets: offsets }, framesPerChunk);
+}
+
+export function readH5VolumeFromFrameIndex(
+  buffer: ArrayBuffer,
+  name: string,
+  index: H5VolumeFrameIndex,
+  framesPerChunk?: number,
+): H5Volume {
+  const { detRows, detCols, nFrames, srcDtype } = index;
+  const detSize = detRows * detCols;
+  const offsets = index.frameOffsets;
+  if (offsets.length < nFrames) {
+    throw new Error(`HDF5 frame index for ${name} has ${offsets.length} offsets, expected ${nFrames}.`);
+  }
   const srcBytes = srcDtype === "uint8" ? 1 : (srcDtype === "uint32" || srcDtype === "float32") ? 4 : 2;
   // Zero-copy: one GPU buffer = the WHOLE file (a view, no copy), one spec for the dataset.
   // blockMeta holds ABSOLUTE byte offsets into the file, so the decoder reads each block's
   // LZ4 stream straight from the uploaded file - no per-chunk slice, no concatenation blob.
   const fileBytes = new Uint8Array(buffer);
-  const offsets = frameOffsets(ds);
   // Block geometry from the first chunk's 12-byte header: bytes 8-11 (BE) are the per-block
   // uncompressed byte count; blockElems = that / element bytes.
   const blockBytes = readBE32(fileBytes, offsets[0] + 8);
   const blockElems = blockBytes / srcBytes;
   const nBlocksPerFrame = Math.ceil(detSize / blockElems);
-  const frameCompressedEnds: number[] = new Array(nFrames);
-  const frameBlockMeta: number[][] = new Array(nFrames);
-  const readFrameBlockMeta = (f: number): void => {
-    // Each frame chunk: 12B header, then per block [4B BE clen][lz4].
-    // Record absolute offsets once; chunk-relative blockMeta is derived below
-    // without walking the bslz4 headers a second time.
-    const addr = offsets[f];
-    let pos = 12;
-    const meta: number[] = [];
-    for (let b = 0; b < nBlocksPerFrame; b++) {
-      const clen = readBE32(fileBytes, addr + pos);
-      meta.push(addr + pos + 4, clen);
-      pos += 4 + clen;
-    }
-    frameCompressedEnds[f] = addr + pos;
-    frameBlockMeta[f] = meta;
-  };
-  for (let f = 0; f < nFrames; f++) {
-    readFrameBlockMeta(f);
-  }
-
   const defaultFramesPerChunk = Math.max(1, Math.floor((1024 * 1024 * 1024) / detSize));
   const frameStep = Math.max(1, Math.floor(framesPerChunk || defaultFramesPerChunk));
   const chunks: Bslz4Spec[] = [];
   const chunkScanCounts: number[] = [];
   for (let start = 0; start < nFrames; start += frameStep) {
     const stop = Math.min(nFrames, start + frameStep);
+    const framesThisChunk = stop - start;
     let rangeStart = Number.POSITIVE_INFINITY;
     let rangeEnd = 0;
+    const meta = new Uint32Array(framesThisChunk * nBlocksPerFrame * 2);
+    let m = 0;
     for (let f = start; f < stop; f++) {
-      rangeStart = Math.min(rangeStart, offsets[f]);
-      rangeEnd = Math.max(rangeEnd, frameCompressedEnds[f]);
-    }
-    const meta: number[] = [];
-    for (let f = start; f < stop; f++) {
-      const frameMeta = frameBlockMeta[f];
-      for (let i = 0; i < frameMeta.length; i += 2) {
-        meta.push(frameMeta[i] - rangeStart, frameMeta[i + 1]);
+      const addr = offsets[f];
+      rangeStart = Math.min(rangeStart, addr);
+      let pos = 12;
+      for (let b = 0; b < nBlocksPerFrame; b++) {
+        const clen = readBE32(fileBytes, addr + pos);
+        meta[m++] = addr + pos + 4;
+        meta[m++] = clen;
+        pos += 4 + clen;
       }
+      rangeEnd = Math.max(rangeEnd, addr + pos);
+    }
+    for (let i = 0; i < meta.length; i += 2) {
+      meta[i] -= rangeStart;
     }
     chunks.push({
       compressed: fileBytes.subarray(rangeStart, rangeEnd),
-      blockMeta: new Uint32Array(meta),
+      blockMeta: meta,
       nFrames: stop - start,
       nBlocksPerFrame,
       blockElems,
@@ -222,4 +276,143 @@ export function readH5Volume(buffer: ArrayBuffer, name: string, framesPerChunk?:
     chunkScanCounts.push(stop - start);
   }
   return { name, detRows, detCols, detSize, blockElems, nBlocksPerFrame, srcDtype, nFrames, chunks, chunkScanCounts };
+}
+
+function parseH5BlockIndex(buffer: ArrayBuffer, name: string): { meta: H5BlockIndexMetadata; blockMeta: Uint32Array } {
+  const bytes = new Uint8Array(buffer);
+  const magic = new TextDecoder().decode(bytes.subarray(0, 8));
+  if (magic !== H5_BLOCK_INDEX_MAGIC) {
+    throw new Error(`HDF5 block-index sidecar ${name} is not a ${H5_BLOCK_INDEX_MAGIC} file.`);
+  }
+  const dv = new DataView(buffer);
+  const jsonLen = dv.getUint32(8, true);
+  const blockMetaWords = dv.getUint32(12, true);
+  const jsonStart = 16;
+  const jsonStop = jsonStart + jsonLen;
+  if (jsonStop > buffer.byteLength) {
+    throw new Error(`HDF5 block-index sidecar ${name} metadata header is truncated.`);
+  }
+  const metaStart = align4(jsonStop);
+  if (metaStart + blockMetaWords * 4 > buffer.byteLength) {
+    throw new Error(`HDF5 block-index sidecar ${name} block metadata is truncated.`);
+  }
+  const raw = JSON.parse(new TextDecoder().decode(bytes.subarray(jsonStart, jsonStop))) as H5BlockIndexMetadata;
+  const chunks = Array.from(raw.chunks || []).map((chunk) => ({
+    startFrame: Math.max(0, Math.round(Number(chunk.startFrame || 0))),
+    nFrames: Math.max(0, Math.round(Number(chunk.nFrames || 0))),
+    rangeStart: Math.max(0, Math.round(Number(chunk.rangeStart || 0))),
+    rangeEnd: Math.max(0, Math.round(Number(chunk.rangeEnd || 0))),
+    metaOffsetWords: Math.max(0, Math.round(Number(chunk.metaOffsetWords || 0))),
+    metaWords: Math.max(0, Math.round(Number(chunk.metaWords || 0))),
+  }));
+  const meta: H5BlockIndexMetadata = {
+    detRows: Math.round(Number(raw.detRows)),
+    detCols: Math.round(Number(raw.detCols)),
+    nFrames: Math.round(Number(raw.nFrames)),
+    srcDtype: raw.srcDtype,
+    blockElems: Math.round(Number(raw.blockElems)),
+    nBlocksPerFrame: Math.round(Number(raw.nBlocksPerFrame)),
+    chunks,
+  };
+  const blockMeta = new Uint32Array(buffer, metaStart, blockMetaWords);
+  return { meta, blockMeta };
+}
+
+export function readH5BlockIndexMetadata(buffer: ArrayBuffer, name: string): H5BlockIndexMetadata {
+  return parseH5BlockIndex(buffer, name).meta;
+}
+
+export function readH5VolumeFromBlockIndex(h5Buffer: ArrayBuffer, indexBuffer: ArrayBuffer, name: string): H5Volume {
+  const { meta, blockMeta } = parseH5BlockIndex(indexBuffer, name);
+  const fileBytes = new Uint8Array(h5Buffer);
+  const detSize = meta.detRows * meta.detCols;
+  const chunks = meta.chunks.map((chunk) => ({
+    compressed: fileBytes.subarray(chunk.rangeStart, chunk.rangeEnd),
+    blockMeta: blockMeta.subarray(chunk.metaOffsetWords, chunk.metaOffsetWords + chunk.metaWords),
+    nFrames: chunk.nFrames,
+    nBlocksPerFrame: meta.nBlocksPerFrame,
+    blockElems: meta.blockElems,
+    detSize,
+  }));
+  const chunkScanCounts = meta.chunks.map((chunk) => chunk.nFrames);
+  return {
+    name,
+    detRows: meta.detRows,
+    detCols: meta.detCols,
+    detSize,
+    blockElems: meta.blockElems,
+    nBlocksPerFrame: meta.nBlocksPerFrame,
+    srcDtype: meta.srcDtype,
+    nFrames: meta.nFrames,
+    chunks,
+    chunkScanCounts,
+  };
+}
+
+export function readBslz4SelectedBlockVolume(buffer: ArrayBuffer, name: string): Bslz4SelectedBlockVolume {
+  const bytes = new Uint8Array(buffer);
+  const magic = new TextDecoder().decode(bytes.subarray(0, 8));
+  if (magic !== "QBSLZ4S1") {
+    throw new Error(`Selected-block file ${name} is not a QBSLZ4S1 file.`);
+  }
+  const dv = new DataView(buffer);
+  const jsonLen = dv.getUint32(8, true);
+  const blockMetaWords = dv.getUint32(12, true);
+  const jsonStart = 16;
+  const jsonStop = jsonStart + jsonLen;
+  const metaStart = align4(jsonStop);
+  const compressedStart = metaStart + blockMetaWords * 4;
+  const meta = JSON.parse(new TextDecoder().decode(bytes.subarray(jsonStart, jsonStop))) as Bslz4SelectedBlockMetadata;
+  const selectedBlockIds = Array.from(meta.selectedBlockIds || []).map((v) => Math.round(Number(v)));
+  const blockMeta = new Uint32Array(buffer, metaStart, blockMetaWords);
+  const compressed = bytes.subarray(compressedStart);
+  const detRows = Math.round(Number(meta.detRows));
+  const detCols = Math.round(Number(meta.detCols));
+  const detSize = detRows * detCols;
+  const nFrames = Math.round(Number(meta.nFrames));
+  const blockElems = Math.round(Number(meta.blockElems));
+  return {
+    name,
+    detRows,
+    detCols,
+    detSize,
+    blockElems,
+    nFrames,
+    srcDtype: meta.srcDtype,
+    selectedBlockIds,
+    chunk: {
+      compressed,
+      blockMeta,
+      nFrames,
+      nBlocksPerFrame: selectedBlockIds.length,
+      blockElems,
+      detSize,
+      startScan: Math.round(Number(meta.startScan || 0)),
+      sourceStartScan: Math.round(Number(meta.startScan || 0)),
+      selectedBlockIds,
+    },
+  };
+}
+
+export function readBslz4SelectedBlockMetadata(buffer: ArrayBuffer, name: string): Bslz4SelectedBlockMetadata {
+  const bytes = new Uint8Array(buffer);
+  const magic = new TextDecoder().decode(bytes.subarray(0, 8));
+  if (magic !== "QBSLZ4S1") {
+    throw new Error(`Selected-block file ${name} is not a QBSLZ4S1 file.`);
+  }
+  const jsonLen = new DataView(buffer).getUint32(8, true);
+  const jsonStart = 16;
+  const jsonStop = jsonStart + jsonLen;
+  if (jsonStop > buffer.byteLength) {
+    throw new Error(`Selected-block file ${name} metadata header is truncated.`);
+  }
+  const meta = JSON.parse(new TextDecoder().decode(bytes.subarray(jsonStart, jsonStop))) as Bslz4SelectedBlockMetadata;
+  return {
+    ...meta,
+    detRows: Math.round(Number(meta.detRows)),
+    detCols: Math.round(Number(meta.detCols)),
+    nFrames: Math.round(Number(meta.nFrames)),
+    blockElems: Math.round(Number(meta.blockElems)),
+    selectedBlockIds: Array.from(meta.selectedBlockIds || []).map((v) => Math.round(Number(v))),
+  };
 }

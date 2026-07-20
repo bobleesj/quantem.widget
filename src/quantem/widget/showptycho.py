@@ -1,9 +1,9 @@
 """
 ShowPtycho - interactive anywidget for ptychography aberration exploration.
 
-Renders phase and optional FFT while tuning aberrations.  A full bright-field
-disk gives the authoritative reconstruction; a smaller BF subset can be used
-for fast exploratory drag previews.
+Renders phase and optional FFT while tuning aberrations.  The default uses the
+full selected bright-field disk for the authoritative reconstruction; a smaller
+BF subset can still be requested explicitly for exploratory drag previews.
 
 Usage::
 
@@ -34,7 +34,8 @@ import traitlets
 # notebook is executing so the "next cell" can read it back.
 _DEFAULT_STARS_FILENAME = "showptycho_stars.json"
 _CALIBRATION_SCHEMA_VERSION = 1
-_DEFAULT_DRAG_BF_FRACTION = 0.3
+_DEFAULT_DRAG_BF_FRACTION = 1.0
+_SSB_CROP_SIZES = (128, 256, 512, 1024)
 
 
 @dataclass
@@ -61,6 +62,7 @@ class PtychoCalibration:
     scan_sampling_A: float | None = None
     loss: float | None = None
     source_file: str | None = None
+    scan_region: tuple[int, int, int, int] | None = None
     source_stem: str | None = None
     label: str | None = None
     notes: str = ""
@@ -75,6 +77,16 @@ def _atomic_write_json(path: pathlib.Path, payload: object) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, default=str))
     tmp.replace(path)
+
+
+def _finite_float_or_none(value: object) -> float | None:
+    """Return a JSON-safe finite float, or ``None`` for missing/non-finite values."""
+
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
 
 
 def _calibration_from_mapping(data: dict[str, Any]) -> PtychoCalibration:
@@ -92,6 +104,11 @@ def _calibration_from_mapping(data: dict[str, Any]) -> PtychoCalibration:
         scan_sampling_A=data.get("scan_sampling_A"),
         loss=data.get("loss"),
         source_file=data.get("source_file"),
+        scan_region=(
+            tuple(int(v) for v in data["scan_region"])
+            if data.get("scan_region") is not None
+            else None
+        ),
         source_stem=data.get("source_stem"),
         label=data.get("label"),
         notes=str(data.get("notes", "")),
@@ -155,6 +172,11 @@ def _coerce_calibration(calibration: object) -> PtychoCalibration:
             scan_sampling_A=getattr(calibration, "scan_sampling_A", None),
             loss=getattr(calibration, "loss", None),
             source_file=getattr(calibration, "source_file", None),
+            scan_region=(
+                tuple(int(v) for v in getattr(calibration, "scan_region"))
+                if getattr(calibration, "scan_region", None) is not None
+                else None
+            ),
             source_stem=getattr(calibration, "source_stem", None),
             label=getattr(calibration, "label", None),
             notes=str(getattr(calibration, "notes", "")),
@@ -233,6 +255,37 @@ def _resolve_drag_bf_count(
     return max(1, min(total, int(round(value))))
 
 
+def _validate_ssb_scan_region(
+    scan_region: object,
+    full_scan_shape: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    """Validate one native square scan crop for a fresh SSB fit.
+
+    A crop is reconstruction input, not a display view.  The SSB kernels use
+    native square scan sizes, so accepting an arbitrary rectangle here would
+    cause the backend to pad it silently and blur the provenance of the fit.
+    """
+
+    if not isinstance(scan_region, (tuple, list)) or len(scan_region) != 4:
+        raise TypeError(
+            "scan_region must be (row_start, row_stop, col_start, col_stop)"
+        )
+    r0, r1, c0, c1 = (int(v) for v in scan_region)
+    rows, cols = int(full_scan_shape[0]), int(full_scan_shape[1])
+    if not (0 <= r0 < r1 <= rows and 0 <= c0 < c1 <= cols):
+        raise ValueError(
+            f"scan crop [{r0}:{r1}, {c0}:{c1}] is outside {rows}x{cols} data"
+        )
+    height, width = r1 - r0, c1 - c0
+    if height != width or height not in _SSB_CROP_SIZES:
+        sizes = "/".join(str(size) for size in _SSB_CROP_SIZES)
+        raise ValueError(
+            "SSB refit crops must be square native scan sizes "
+            f"({sizes}); got {height}x{width}."
+        )
+    return r0, r1, c0, c1
+
+
 def _bf_geometry_1d_numpy(
     kx: np.ndarray,
     ky: np.ndarray,
@@ -280,9 +333,9 @@ def _bf_geometry_1d_numpy(
 class _ShowPtychoWidget(anywidget.AnyWidget):
     """ShowPtycho anywidget with GPU-accelerated reconstruction.
 
-    During slider drag, uses a deterministic BF-pixel subset by default for
-    responsive preview.  Slide the BF control to the full count when the
-    microscopist wants the authoritative full-disk reconstruction.
+    During slider drag, uses the full selected BF disk by default. A smaller
+    deterministic BF-pixel subset can be requested explicitly for responsive
+    exploratory previews.
 
     The widget exclusively owns the ``accel`` (SSBEngine) - no other code
     should call methods on it while the widget is active.
@@ -300,9 +353,9 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
     c10_range, c12_range, phi12_range : tuple[float, float]
         Slider ranges.
     drag_bf : int
-        Number of BF pixels for preview.  Float values in ``(0, 1)`` are
-        interpreted as a fraction of the detected BF disk; the default is
-        30 percent.
+        Number of BF pixels for preview.  Float values in ``(0, 1]`` are
+        interpreted as a fraction of the detected BF disk; the default is full
+        selected BF (``1.0``).
     save_dir : str or Path, optional
         Directory for saving results.
     ssb_ref : SSB, optional
@@ -410,6 +463,15 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
     )
     webgpu_standalone = traitlets.Bool(False).tag(sync=True)
 
+    # -- Crop-and-refit SSB (JS ↔ Python).  This deliberately rebuilds SSB
+    # from raw 4D-STEM input; it is not a display crop of the current phase. --
+    scan_rows = traitlets.Int(0).tag(sync=True)
+    scan_cols = traitlets.Int(0).tag(sync=True)
+    scan_region_json = traitlets.Unicode("").tag(sync=True)
+    crop_refit_available = traitlets.Bool(False).tag(sync=True)
+    crop_refit_status = traitlets.Unicode("").tag(sync=True)
+    crop_refit_request_json = traitlets.Unicode("").tag(sync=True)
+
     def __init__(
         self,
         accel,
@@ -432,6 +494,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         initial_loss_val: float | None = None,
         initial_flip_phase: bool = False,
         initial_higher_order: dict[str, float] | None = None,
+        scan_region: tuple[int, int, int, int] | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -443,6 +506,21 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         # calibration.json and every starred entry so time-series `Live.watch(...,
         # calibrations=...)` can match a star to the right file by stem.
         self._source_file = str(source_file) if source_file else None
+        initial_scan_shape = (
+            getattr(ssb_ref, "_scan_shape", None) if ssb_ref is not None else None
+        )
+        if initial_scan_shape is None:
+            initial_scan_shape = (
+                int(accel._cache.get("ny", 0)),
+                int(accel._cache.get("nx", 0)),
+            )
+        self._scan_shape = tuple(int(v) for v in initial_scan_shape)
+        self._source_scan_shape = self._scan_shape
+        self._scan_region = (
+            _validate_ssb_scan_region(scan_region, self._scan_shape)
+            if scan_region is not None
+            else (0, self._scan_shape[0], 0, self._scan_shape[1])
+        )
         self._pinned: list[dict] = []
         self._last_phase_np: np.ndarray | None = None
         self._inflight_id: int = -1
@@ -469,6 +547,21 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         # ``3_live.ipynb`` reads via ``load_calibration()``.
         self._calibration_path = stars_dir / "calibration.json"
 
+        accel_backend = str(getattr(accel, "backend", "cuda")).lower()
+        self.scan_rows, self.scan_cols = self._scan_shape
+        self.scan_region_json = json.dumps(self._scan_region)
+        self.crop_refit_available = bool(
+            self._source_file
+            and pathlib.Path(self._source_file).is_file()
+            and accel_backend == "cuda"
+            and hasattr(ssb_ref, "optimize")
+        )
+        self.crop_refit_status = (
+            "Ready to refit a native square scan crop."
+            if self.crop_refit_available
+            else "Crop refit needs a re-loadable master file and CUDA SSB backend."
+        )
+
         # Cache rotation
         accel.cache_rotation(rotation_rad)
 
@@ -494,7 +587,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         self.auto_c10 = auto_aberrations.get("C10", 0.0)
         self.auto_c12 = auto_aberrations.get("C12", 0.0)
         self.auto_phi12_deg = math.degrees(auto_aberrations.get("phi12", 0.0))
-        self.auto_loss = auto_loss_val
+        self.auto_loss = _finite_float_or_none(auto_loss_val) or 0.0
         self.auto_rotation_deg = start_deg
 
         # Set pixel size for scale bar
@@ -523,6 +616,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         self.observe(self._on_rotation_change, names=["rotation_deg"])
         self.observe(self._on_flip_change, names=["flip_phase"])
         self.observe(self._on_higher_order_change, names=["higher_order_json"])
+        self.observe(self._on_crop_refit_request, names=["crop_refit_request_json"])
 
         # Publish total BF count so the UI can clamp user input to valid range
         self.total_bf = int(accel._cache["num_bf"])
@@ -801,16 +895,27 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         raw = getattr(ssb, "_optuna_trials", None) if ssb is not None else None
         if not raw:
             return ""
-        sorted_trials = sorted(raw, key=lambda t: t.get("loss", float("inf")))[:max_trials]
+        finite_trials = []
+        for trial in raw:
+            loss = _finite_float_or_none(trial.get("loss"))
+            if loss is None:
+                continue
+            finite_trials.append((loss, trial))
+        sorted_trials = [
+            trial for _loss, trial in sorted(finite_trials, key=lambda item: item[0])
+        ][:max_trials]
         payload = []
         for rank, trial in enumerate(sorted_trials):
             p = trial.get("params", {})
+            loss = _finite_float_or_none(trial.get("loss"))
+            if loss is None:
+                continue
             payload.append({
                 "rank": rank,
                 "C10": float(p.get("C10_nm", 0.0)),
                 "C12": float(p.get("C12_nm", 0.0)),
                 "phi12_deg": float(p.get("phi12_deg", 0.0)),
-                "loss": float(trial.get("loss", 0.0)),
+                "loss": loss,
             })
         return json.dumps(payload)
 
@@ -903,6 +1008,118 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         self._do_reconstruct(
             req["id"], req["c10"], req["c12"], req["phi12_deg"],
             compute_loss=req.get("committed", False),
+        )
+
+    def _on_crop_refit_request(self, change):
+        """Rebuild SSB from a selected scan crop and refit aberrations.
+
+        The current SSB object retains only its BF-indexed Fourier cache, not
+        raw diffraction frames.  A crop therefore has to reload the selected
+        scan region from the original master before a scientifically valid
+        optimization can start.
+        """
+
+        raw = change["new"]
+        if not raw:
+            return
+        try:
+            request = json.loads(raw)
+            local_region = _validate_ssb_scan_region(
+                request["scan_region"], self._scan_shape
+            )
+            n_trials = int(request.get("n_trials", 200))
+            if n_trials < 1:
+                raise ValueError("SSB refit needs at least one optimization trial.")
+            if not self.crop_refit_available or not self._source_file:
+                raise RuntimeError(
+                    "Crop refit is unavailable. Open ShowPtycho with "
+                    "source_file=<master.h5> on a CUDA SSB session."
+                )
+
+            origin_r, _origin_r1, origin_c, _origin_c1 = self._scan_region
+            global_region = (
+                origin_r + local_region[0],
+                origin_r + local_region[1],
+                origin_c + local_region[2],
+                origin_c + local_region[3],
+            )
+            self.crop_refit_status = (
+                f"Loading [{global_region[0]}:{global_region[1]}, "
+                f"{global_region[2]}:{global_region[3]}] and fitting SSB "
+                f"({n_trials} trials)..."
+            )
+            self._refit_ssb_crop(global_region, n_trials=n_trials)
+        except Exception as exc:
+            self.crop_refit_status = f"Crop refit failed: {exc}"
+
+    def _refit_ssb_crop(
+        self,
+        scan_region: tuple[int, int, int, int],
+        *,
+        n_trials: int,
+    ) -> None:
+        """Load one raw scan crop, optimize SSB, and replace widget state."""
+
+        if self._ssb_ref is None or not self._source_file:
+            raise RuntimeError("Crop refit requires a source-backed SSB session.")
+        scan_region = _validate_ssb_scan_region(scan_region, self._source_scan_shape)
+
+        from quantem.widget.io import load_scan_region
+        from quantem.gpu.ssb import SSB
+
+        previous = self._ssb_ref
+        loaded = load_scan_region(
+            self._source_file,
+            scan_region,
+            backend="cuda",
+            scan_shape=self._source_scan_shape,
+            verbose=False,
+        )
+        rebuilt = SSB(
+            loaded.data,
+            semiangle=float(previous.semiangle_mrad),
+            scan_sampling=previous.scan_sampling,
+            det_sampling=getattr(previous, "angular_sampling", None),
+            voltage_kV=float(previous.voltage_kV),
+            aberrations={
+                "C10": float(self._last_result.get("C10", previous.aberrations.get("C10", 0.0))),
+                "C12": float(self._last_result.get("C12", previous.aberrations.get("C12", 0.0))),
+                "phi12": math.radians(float(self._last_result.get("phi12_deg", math.degrees(previous.aberrations.get("phi12", 0.0))))),
+            },
+            rotation_angle_deg=math.degrees(self._rotation_rad),
+            bf_intensity_threshold=float(getattr(previous, "bf_intensity_threshold", 0.5)),
+        )
+        rebuilt.optimize(n_trials=n_trials, verbose=False)
+        rebuilt.refine(verbose=False)
+
+        self._ssb_ref = rebuilt
+        self._accel = rebuilt._get_accelerator()
+        self._scan_shape = tuple(int(v) for v in rebuilt._scan_shape)
+        self._scan_region = scan_region
+        self.scan_rows, self.scan_cols = self._scan_shape
+        self.scan_region_json = json.dumps(scan_region)
+        self.total_bf = int(self._accel._cache["num_bf"])
+        self.drag_bf = self.total_bf
+        self._rotation_rad = float(rebuilt._rotation_angle_rad)
+        self.rotation_deg = math.degrees(self._rotation_rad)
+        self.auto_rotation_deg = self.rotation_deg
+        self.auto_c10 = float(rebuilt.aberrations["C10"])
+        self.auto_c12 = float(rebuilt.aberrations["C12"])
+        self.auto_phi12_deg = math.degrees(float(rebuilt.aberrations["phi12"]))
+        self.auto_loss = _finite_float_or_none(rebuilt._best_loss) or 0.0
+        self.higher_order_json = "{}"
+        self.trials_json = self._build_trials_payload()
+        self._inflight_id += 1
+        self._do_reconstruct(
+            self._inflight_id,
+            self.auto_c10,
+            self.auto_c12,
+            self.auto_phi12_deg,
+            compute_loss=True,
+        )
+        self.crop_refit_status = (
+            f"Refit complete: [{scan_region[0]}:{scan_region[1]}, "
+            f"{scan_region[2]}:{scan_region[3]}], {n_trials} trials."
         )
 
     def _higher_order_arrays(
@@ -1186,6 +1403,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             scan_sampling_A=scan_sampling_A,
             loss=float(loss) if loss is not None else None,
             source_file=source_file,
+            scan_region=self._scan_region,
         )
         if (self.notes or None) is not None:
             cal_kwargs["notes"] = self.notes
@@ -1209,6 +1427,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         title: str | None = None,
         overwrite: bool = True,
         decode_dtype: str = "uint16",
+        webgpu_source: str = "compressed_hdf5",
     ) -> pathlib.Path:
         """Export a kernel-less WebGPU folder for the current ShowPtycho state."""
 
@@ -1217,7 +1436,12 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         )
 
         return export_showptycho_webgpu_folder(
-            self, out_dir, title=title, overwrite=overwrite, decode_dtype=decode_dtype,
+            self,
+            out_dir,
+            title=title,
+            overwrite=overwrite,
+            decode_dtype=decode_dtype,
+            webgpu_source=webgpu_source,
         )
 
     def export_webgpu_sidecar(
@@ -1227,11 +1451,16 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         title: str | None = None,
         overwrite: bool = True,
         decode_dtype: str = "uint16",
+        webgpu_source: str = "compressed_hdf5",
     ) -> pathlib.Path:
         """Compatibility alias for :meth:`export_webgpu_folder`."""
 
         return self.export_webgpu_folder(
-            out_dir, title=title, overwrite=overwrite, decode_dtype=decode_dtype,
+            out_dir,
+            title=title,
+            overwrite=overwrite,
+            decode_dtype=decode_dtype,
+            webgpu_source=webgpu_source,
         )
 
     def export_sidecar(
@@ -1241,11 +1470,16 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         title: str | None = None,
         overwrite: bool = True,
         decode_dtype: str = "uint16",
+        webgpu_source: str = "compressed_hdf5",
     ) -> pathlib.Path:
         """Compatibility alias for :meth:`export_webgpu_folder`."""
 
         return self.export_webgpu_folder(
-            out_dir, title=title, overwrite=overwrite, decode_dtype=decode_dtype,
+            out_dir,
+            title=title,
+            overwrite=overwrite,
+            decode_dtype=decode_dtype,
+            webgpu_source=webgpu_source,
         )
 
 
@@ -1674,6 +1908,11 @@ def ShowPtycho(
     voltage_kV, energy : float, optional
         Accelerating voltage. ``voltage_kV`` is the public notebook-friendly
         form; ``energy`` is accepted for compatibility.
+    source_file : str, optional
+        Path to the raw 4D-STEM master HDF5 file.  When this path is available
+        on a CUDA SSB session, the toolbar offers native square real-space
+        crops (128, 256, 512, or 1024 scan pixels) and can rebuild/refit SSB
+        from the selected detector data with 200 optimization trials.
     calibration : path or object, optional
         Previously saved calibration used to seed aberrations, rotation, phase
         flip, and higher-order controls.

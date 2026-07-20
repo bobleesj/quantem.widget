@@ -13,11 +13,11 @@ viewer.
 
 In a WebGPU folder export, the browser owns the interactive review. The default
 folder contains a small `index.html` viewer, calibration metadata, and an exact
-microscopy payload under `source/`. The preferred payload is a detector-major
-BF-column companion: it stores the original detector counts for the candidate
-BF pixels as `[bf, scan]`, often losslessly packed, so the browser can range-read
-only the BF evidence needed for the current review. If that companion is not
-present, the viewer falls back to the compressed HDF5 master/data source. Moving
+microscopy payload under `source/`. The default payload is the original
+compressed HDF5 master/data source; the browser uses WebGPU to decompress the
+selected BF evidence and build BF-indexed `G(k)` reducers transiently in GPU
+memory. A detector-major BF-column companion can still be requested explicitly
+with `webgpu_source="bf_columns"` for fallback or comparison exports. Moving
 C10, C12, phi12, or scan rotation makes the browser build BF-indexed `G(k)`
 reducers transiently in GPU memory and run the SSB phase reconstruction from
 those transient buffers. The export does not persist expanded float32 images or
@@ -26,6 +26,34 @@ complex64 BF reducers by default.
 FFT is a display analysis of the current reconstructed phase. When the FFT panel
 is visible, the widget computes the FFT from the latest phase image and redraws
 that FFT panel. It is not re-running the raw detector preprocessing.
+
+## Real-Space Crop And SSB Refit
+
+For a region-specific probe/aberration fit, open the prepared CUDA SSB with the
+raw master path. ShowPtycho then exposes `Crop` beside the saved-state controls.
+Choose a crop size, click its center in the phase panel, and use `Refit SSB`.
+The widget reloads only that scan region from the original HDF5 source, runs 200
+SSB optimization trials followed by refinement, and replaces the phase/FFT and
+their calibration with the result.
+
+```python
+ssb = SSB(data, semiangle=20.0, scan_sampling=0.276, voltage_kV=300.0)
+w = ShowPtycho(
+    ssb,
+    source_file="BTO_20_master.h5",
+    fft_on=True,
+)
+```
+
+Crop candidates are intentionally limited to native square `128 x 128`,
+`256 x 256`, `512 x 512`, and `1024 x 1024` scan regions. These are the native
+SSB shapes, so the backend does not silently zero-pad an arbitrary crop before
+the fit. This is a reconstruction operation, not a display crop.
+
+The refit control is absent from standalone HTML/WebGPU exports and MPS-only
+sessions. Those modes can inspect an existing result interactively, but only a
+source-backed CUDA session has the raw detector data and SSB optimizer needed
+to make a new scientific fit.
 
 ## Bright-Field Count
 
@@ -43,7 +71,7 @@ Use the full BF count for final microscopy claims:
   a complex `G(k)` image. Those reducers are transient in the default folder
   workflow, not saved as a persistent cache.
 
-Use fewer BF pixels for exploration:
+Use fewer BF pixels explicitly for exploration:
 
 - Slider drag, playback, and sweep review can stay responsive.
 - The large aberration trend is usually visible quickly.
@@ -52,10 +80,10 @@ Use fewer BF pixels for exploration:
 - The UI status reports the active count as `used/total BF`, so a scientist can
   tell whether they are looking at a drag preview or a full-BF result.
 
-For example, a 30 percent BF preview is useful for rapidly finding the right
-defocus or astigmatism neighborhood. After the view looks right, recompute with
-the full BF count before saving a starred state, exporting a figure, or making a
-scientific comparison.
+For example, `drag_bf=0.3` is useful for rapidly finding the right defocus or
+astigmatism neighborhood on memory-constrained browsers. The default is
+`drag_bf=1.0`, so the first view and saved/signoff states use the full selected
+BF disk.
 
 ## WebGPU Signoff Checklist
 
@@ -66,7 +94,7 @@ interactive microscopy review:
   is not valid performance evidence.
 - [ ] Record the native scan size. The browser kernels support square
   `128 x 128`, `256 x 256`, `512 x 512`, and `1024 x 1024` phase grids.
-- [ ] Record the payload path: BF-column companion or compressed HDF5 fallback.
+- [ ] Record the payload path: compressed HDF5 default or explicit BF-column companion.
   Do not treat a saved `g_bf.c64`/float32 cache as the default sharing path.
 - [ ] Record the BF policy. Include both selected BF pixels and active aperture
   BF pixels, for example `542/1805 selected, 379 active`.
@@ -94,8 +122,14 @@ Use a WebGPU folder export when a colleague needs to open the same ptychography
 review without the notebook kernel:
 
 ```python
-w = ShowPtycho(ssb, fft_on=True)  # starts at 30 percent BF for interaction
+w = ShowPtycho(ssb, fft_on=True)  # starts at full selected BF
 w.export_webgpu_folder("logic013_512_review")
+```
+
+Use BF columns only as an explicit fallback or comparison transport:
+
+```python
+w.export_webgpu_folder("logic013_512_bfcols", webgpu_source="bf_columns")
 ```
 
 To start the viewer directly in the authoritative full-BF mode, pass
@@ -122,15 +156,16 @@ logic013_512_review/
 Open the folder with the `quantem` CLI:
 
 ```bash
-quantem showptycho /path/to/logic013_512_review
+quantem ptycho /path/to/logic013_512_review
 ```
 
-The command validates the folder, prints the compressed HDF5 source summary,
-starts the required local HTTP server, and opens `index.html` in the browser.
-It stays alive until Ctrl-C. Use `--port 8900` only when you need a stable URL,
-and use `--bind 0.0.0.0` only when the viewer should be reachable from another
-device. Double-clicking `index.html` is not the supported path because the
-browser still needs normal HTTP fetches for the nearby HDF5 files.
+`quantem showptycho` remains a compatibility alias. The command validates the
+folder, prints the compressed HDF5 source summary, starts the required local
+HTTP server, and opens `index.html` in the browser. It stays alive until Ctrl-C.
+Use `--port 8900` only when you need a stable URL, and use `--bind 0.0.0.0`
+only when the viewer should be reachable from another device. Double-clicking
+`index.html` is not the supported path because the browser still needs normal
+HTTP fetches for the nearby HDF5 files.
 
 The HTML file should stay small because it is only the viewer. The microscopy
 payload is the original compressed HDF5 data under `source/`; the export avoids
@@ -159,7 +194,7 @@ notebook round trip in WebGPU folder mode.
 | phi12 slider | Tune astigmatism angle | Phase updates; FFT follows when visible |
 | Rotation slider | Tune scan-detector rotation | Reconstruction updates in the live backend path |
 | FFT toggle | Show/hide reciprocal-space phase FFT | FFT computes only when visible |
-| BF slider | Choose how much of the BF disk contributes to each interactive reconstruction | Starts at 30 percent; the right edge is full BF |
+| BF slider | Choose how much of the BF disk contributes to each interactive reconstruction | Starts at full BF; drag left for a smaller exploratory subset |
 | Phase colormap / histogram | Change display mapping | Current image repaints; reconstruction data is unchanged |
 | FFT colormap / histogram | Change FFT display mapping | FFT panel repaints; phase reconstruction is unchanged |
 | Flip phase | Invert phase sign | Current phase and FFT update without recomputing BF data |

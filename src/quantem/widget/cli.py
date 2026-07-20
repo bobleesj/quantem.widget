@@ -4,13 +4,15 @@ masters becomes a rendered, standalone HTML viewer in one command, no notebook.
     quantem show ./frames/                # PNG/TIFF folder -> Show3D scrub HTML
     quantem show scan.png                 # single image    -> Show2D HTML
     quantem show ./masters/ --bin 8       # *_master.h5     -> offline WebGPU Show4DSTEM
+    quantem ptycho scan_master.h5         # raw 4D-STEM    -> ShowPtycho WebGPU folder
     quantem html tutorial.ipynb           # run a notebook  -> standalone shareable HTML
 
 The CLI only orchestrates existing pieces: ``io.read_image`` / ``read_image_stack``
-for images, ``io.discover_masters`` + ``io.load(det_bin=...)`` for 4D-STEM, the
-``Show2D`` / ``Show3D`` / ``Show4DSTEM`` widgets, and each widget's ``export_html``.
-4D-STEM is packed offline so the browser does all compute on WebGPU, which is what
-lets a laptop browse data that never fit full resolution (bin the detector first).
+for images, ``io.discover_masters`` + ``io.load(det_bin=...)`` for 4D-STEM and
+ptychography review, the ``Show2D`` / ``Show3D`` / ``Show4DSTEM`` / ``ShowPtycho``
+widgets, and each widget's export helpers. 4D-STEM is packed offline so the browser
+does all compute on WebGPU, which is what lets a laptop browse data that never fit
+full resolution (bin the detector first).
 """
 import argparse
 import email.utils
@@ -34,6 +36,9 @@ IMAGE_EXTS = {".png", ".tif", ".tiff", ".jpg", ".jpeg", ".bmp", ".dm3", ".dm4", 
 MASTER_PATTERN = "*_master.h5"
 SHOWPTYCHO_MASTER_PATTERNS = ("*_master.h5", "*_master_wrapper.h5")
 SHOWPTYCHO_FOLDER_FORMAT = "quantem.showptycho.webgpu.folder"
+DEFAULT_PTYCHO_SEMIANGLE_MRAD = 30.0
+DEFAULT_PTYCHO_SCAN_SAMPLING_A = 0.5
+DEFAULT_PTYCHO_VOLTAGE_KV = 300.0
 _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)$")
 _RANGE_FALLBACK_CHUNK_BYTES = 16 * 1024 * 1024
 
@@ -54,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
         "show2d": "2d",
         "show3d": "3d",
         "show4dstem": "4dstem",
+        "ptycho": "ptycho",
         "showptycho": "ptycho",
     }
     helps = {
@@ -61,7 +67,8 @@ def main(argv: list[str] | None = None) -> int:
         "show2d": "Render an image (or a folder of images) as Show2D.",
         "show3d": "Render a folder of frames as a Show3D scrub.",
         "show4dstem": "Render 4D-STEM master(s) as Show4DSTEM (live notebook, or --html).",
-        "showptycho": "Open or build a ShowPtycho WebGPU folder export.",
+        "ptycho": "Open or build a ptychography WebGPU review folder.",
+        "showptycho": "Compatibility alias for `quantem ptycho`.",
     }
     for name in forced:
         _add_show_args(sub.add_parser(name, help=helps[name]))
@@ -907,6 +914,13 @@ def _add_show_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--title", default=None, help="Viewer page title.")
     parser.add_argument("--backend", default="auto", choices=("auto", "cuda", "mps", "cpu"),
                         help="ShowPtycho master generation: HDF5 load backend (default auto).")
+    parser.add_argument("--webgpu-source", default="compressed-hdf5",
+                        choices=("compressed-hdf5", "hdf5", "bf-columns", "auto"),
+                        help=(
+                            "ShowPtycho folder browser source. Default compressed-hdf5 uses "
+                            "the original HDF5 files and browser WebGPU decompression; "
+                            "bf-columns is an explicit fallback/comparison companion."
+                        ))
     parser.add_argument("--calibration", default="auto",
                         help=(
                             "ShowPtycho master generation: calibration JSON, "
@@ -927,8 +941,8 @@ def _add_show_args(parser: argparse.ArgumentParser) -> None:
                         help="ShowPtycho master generation: bright-field radius in detector pixels.")
     parser.add_argument("--bf-threshold", type=float, default=0.5,
                         help="ShowPtycho master generation: BF intensity threshold fraction (default 0.5).")
-    parser.add_argument("--drag-bf", type=float, default=0.3,
-                        help="ShowPtycho browser preview BF fraction/count: 0.3 is 30%%, 1.0 is full BF, >1 is a count (default 0.3).")
+    parser.add_argument("--drag-bf", type=float, default=1.0,
+                        help="ShowPtycho browser BF fraction/count: 1.0 is full BF, 0.3 is 30%%, values greater than 1 are explicit BF-pixel counts (default 1.0).")
     parser.add_argument("--size", type=int, default=800,
                         help="ShowPtycho initial panel size in pixels (default 800).")
     parser.add_argument("--fft", action="store_true",
@@ -1080,6 +1094,18 @@ def _showptycho_decode_dtype(args: argparse.Namespace) -> str:
     if raw == "float32":
         return "float32"
     raise ValueError(f"ShowPtycho --dtype must be u8, u16, or float32; got {raw!r}")
+
+
+def _showptycho_webgpu_source(args: argparse.Namespace) -> str:
+    """Return the browser source policy for generated ShowPtycho folders."""
+
+    raw = str(getattr(args, "webgpu_source", "compressed-hdf5") or "compressed-hdf5").lower()
+    return {
+        "compressed-hdf5": "compressed_hdf5",
+        "hdf5": "compressed_hdf5",
+        "bf-columns": "bf_columns",
+        "auto": "auto",
+    }[raw]
 
 
 def _is_showptycho_master_name(name: str) -> bool:
@@ -1340,6 +1366,102 @@ def _first_number(mapping: dict, *keys: str) -> float | None:
     return None
 
 
+def _positive_cli_number(value: object, option: str) -> float | None:
+    """Return a positive finite CLI number, or raise for an invalid explicit value."""
+
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{option} must be a positive finite number, got {value!r}") from exc
+    if not (number == number and number > 0):
+        raise ValueError(f"{option} must be a positive finite number, got {value!r}")
+    return number
+
+
+def _positive_optional_number(value: object) -> float | None:
+    """Return ``value`` when it is positive and finite, otherwise ``None``."""
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number and number > 0 else None
+
+
+def _first_positive_number(mapping: dict, *keys: str) -> float | None:
+    """Return the first positive finite numeric value found under ``keys``."""
+
+    number = _first_number(mapping, *keys)
+    return number if number is not None and number > 0 else None
+
+
+def _showptycho_default_warning(label: str, value: float, unit: str, option: str) -> str:
+    """Format one visible quick-start geometry default warning."""
+
+    return (
+        f"using default ptychography {label} {value:g} {unit}; pass {option} "
+        "or a calibration JSON for microscope-specific geometry"
+    )
+
+
+def _resolve_showptycho_geometry(
+    args: argparse.Namespace,
+    calibration,
+    meta: dict,
+) -> tuple[float, float, float, float | None, list[str]]:
+    """Resolve ShowPtycho geometry from CLI args, calibration, metadata, or defaults."""
+
+    semiangle = (
+        _positive_cli_number(getattr(args, "semiangle_mrad", None), "--semiangle")
+        or _positive_optional_number(
+            calibration.semiangle_mrad if calibration is not None else None
+        )
+        or _first_positive_number(meta, "semiangle_mrad", "semiangle")
+    )
+    scan_sampling = (
+        _positive_cli_number(getattr(args, "scan_sampling_A", None), "--scan-sampling")
+        or _positive_optional_number(
+            calibration.scan_sampling_A if calibration is not None else None
+        )
+        or _first_positive_number(
+            meta, "scan_sampling_A", "scan_sampling", "scan_sampling_A_per_px"
+        )
+    )
+    voltage = (
+        _positive_cli_number(getattr(args, "voltage_kv", None), "--voltage-kv")
+        or _positive_optional_number(
+            calibration.voltage_kV if calibration is not None else None
+        )
+        or _first_positive_number(meta, "voltage_kV", "voltage_kv", "voltage")
+    )
+    det_sampling = (
+        _positive_cli_number(getattr(args, "det_sampling_mrad_px", None), "--det-sampling")
+        or _first_positive_number(
+            meta, "det_sampling_mrad_per_px", "det_sampling_mrad_px"
+        )
+    )
+
+    warnings: list[str] = []
+    if semiangle is None:
+        semiangle = DEFAULT_PTYCHO_SEMIANGLE_MRAD
+        warnings.append(_showptycho_default_warning(
+            "semiangle", semiangle, "mrad", "--semiangle",
+        ))
+    if scan_sampling is None:
+        scan_sampling = DEFAULT_PTYCHO_SCAN_SAMPLING_A
+        warnings.append(_showptycho_default_warning(
+            "scan sampling", scan_sampling, "A", "--scan-sampling",
+        ))
+    if voltage is None:
+        voltage = DEFAULT_PTYCHO_VOLTAGE_KV
+        warnings.append(_showptycho_default_warning(
+            "voltage", voltage, "kV", "--voltage-kv",
+        ))
+    return semiangle, scan_sampling, voltage, det_sampling, warnings
+
+
 def _render_showptycho_master(
     master: pathlib.Path,
     args: argparse.Namespace,
@@ -1356,36 +1478,9 @@ def _render_showptycho_master(
     det_bin = _effective_det_bin(args, default=1)
     calibration, calibration_path = _resolve_showptycho_calibration(master, args)
     meta = _read_showptycho_master_calib(master)
-    semiangle = (
-        args.semiangle_mrad
-        or (calibration.semiangle_mrad if calibration is not None else None)
-        or _first_number(meta, "semiangle_mrad", "semiangle")
+    semiangle, scan_sampling, voltage, det_sampling, geometry_warnings = (
+        _resolve_showptycho_geometry(args, calibration, meta)
     )
-    scan_sampling = (
-        args.scan_sampling_A
-        or (calibration.scan_sampling_A if calibration is not None else None)
-        or _first_number(meta, "scan_sampling_A", "scan_sampling", "scan_sampling_A_per_px")
-    )
-    voltage = (
-        args.voltage_kv
-        or (calibration.voltage_kV if calibration is not None else None)
-        or _first_number(meta, "voltage_kV", "voltage_kv", "voltage")
-    )
-    det_sampling = (
-        args.det_sampling_mrad_px
-        or _first_number(meta, "det_sampling_mrad_per_px", "det_sampling_mrad_px")
-    )
-    if semiangle is None or scan_sampling is None:
-        raise ValueError(
-            "ShowPtycho master generation needs microscope geometry. Provide "
-            "--semiangle/--scan-sampling, or place a matching QuantEM calibration "
-            "next to the master under quantem/screen/_calibrations.json."
-        )
-    if voltage is None:
-        raise ValueError(
-            "ShowPtycho master generation needs voltage. Provide --voltage-kv, "
-            "or include voltage_kV in the matching calibration JSON."
-        )
 
     from quantem.widget import ShowPtycho
     from quantem.widget.io import load
@@ -1396,7 +1491,15 @@ def _render_showptycho_master(
     if calibration_path is not None:
         print(f"  calibration: {calibration_path}")
     else:
-        print("  calibration: none; using provided geometry and zero aberration start")
+        print("  calibration: none; using resolved geometry and zero aberration start")
+    print(
+        f"  geometry: semiangle={semiangle:g} mrad, "
+        f"scan_sampling={scan_sampling:g} A, voltage={voltage:g} kV"
+    )
+    if det_sampling is not None:
+        print(f"  detector sampling: {det_sampling:g} mrad/pixel")
+    for warning in geometry_warnings:
+        print(f"warning: {warning}", file=sys.stderr)
     load_kwargs = {
         "det_bin": det_bin,
         "dtype": _showptycho_decode_dtype(args),
@@ -1432,6 +1535,7 @@ def _render_showptycho_master(
         title=args.title or f"{_showptycho_source_stem(master)} ShowPtycho",
         overwrite=True,
         decode_dtype=_showptycho_decode_dtype(args),
+        webgpu_source=_showptycho_webgpu_source(args),
     )
 
 
@@ -2028,11 +2132,13 @@ def _serve_showptycho_folder(
     if source.get("kind") == "hdf5":
         data_files = source.get("data_files") or []
         link_mode = ", ".join(source.get("link_mode") or []) or "linked"
+        preferred = source.get("preferred_browser_source") or "compressed_hdf5"
         print(
             "  source: compressed HDF5 "
             f"{source.get('master', 'source master')} + {len(data_files)} data file(s) "
             f"({link_mode}); no persistent BF-G cache"
         )
+        print(f"  browser source: {preferred}")
     elif len(shape) == 3 and g_path.exists():
         print(
             "  BF payload: "

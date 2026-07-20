@@ -264,9 +264,10 @@ def _run_master_live_smoke(artifact_dir: Path) -> dict[str, Any]:
     folder.mkdir(parents=True, exist_ok=True)
     _write_master(folder / "scan_000_master.h5")
 
-    real_load = qw.load
-    real_discover_masters = wio.discover_masters
-    real_is_master_ready = wio.is_master_ready
+    sentinel = object()
+    real_load = qw.__dict__.get("load", sentinel)
+    real_discover_masters = wio.__dict__.get("discover_masters", sentinel)
+    real_is_master_ready = wio.__dict__.get("is_master_ready", sentinel)
 
     def fake_discover_masters(
         path: str,
@@ -347,9 +348,18 @@ def _run_master_live_smoke(artifact_dir: Path) -> dict[str, Any]:
             "export_rows": export_rows,
         }
     finally:
-        qw.load = real_load
-        wio.discover_masters = real_discover_masters
-        wio.is_master_ready = real_is_master_ready
+        if real_load is sentinel:
+            qw.__dict__.pop("load", None)
+        else:
+            qw.load = real_load
+        if real_discover_masters is sentinel:
+            wio.__dict__.pop("discover_masters", None)
+        else:
+            wio.discover_masters = real_discover_masters
+        if real_is_master_ready is sentinel:
+            wio.__dict__.pop("is_master_ready", None)
+        else:
+            wio.is_master_ready = real_is_master_ready
 
 
 def _run_direct_image_live_smoke(

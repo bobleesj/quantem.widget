@@ -3165,6 +3165,10 @@ function Show3D() {
     sidecarCompositeFrameCacheRef.current.clear();
     sidecarCompositeReadyRef.current = false;
     sidecarCompositeCompleteRef.current = false;
+    // A cache is only valid for the exact display style that generated it.
+    // Clear the key with the frames so a Smooth toggle cannot momentarily
+    // reuse a nearest-neighbour (or interpolated) composite while zooming.
+    sidecarCompositeStyleKeyRef.current = "";
     setSidecarCompositeReady(false);
     setSidecarCompositeComplete(false);
     if (sidecarGpuPresenterRef.current) {
@@ -6168,6 +6172,7 @@ function Show3D() {
       : Array.from({ length: Math.max(1, nPanels || 1) }, (_, idx) => idx);
     return JSON.stringify({
       cmap,
+      smooth,
       autoContrast,
       logScale,
       percentileLow: Number(percentileLow || 0).toFixed(3),
@@ -6200,6 +6205,7 @@ function Show3D() {
       }),
     });
   }, [
+    smooth,
     autoContrast,
     autoVmins,
     autoVmaxs,
@@ -11934,6 +11940,7 @@ function Show3D() {
     const embeddedPackedViewportCacheReady = (
       !sidecarMode &&
       sidecarCompositeReadyRef.current &&
+      sidecarCompositeStyleKeyRef.current === sidecarDisplayStyleKey &&
       !sharedPanelSource &&
       Math.max(1, nPanels || 1) > 1 &&
       !!offlineStack
@@ -12388,6 +12395,11 @@ function Show3D() {
           builtFrames += 1;
           if (!sidecarCompositeReadyRef.current) {
             sidecarCompositeReadyRef.current = true;
+            // The first retained frame is already safe to use: associate it
+            // with this exact style now, rather than waiting for the whole
+            // stack to finish building.  A later Smooth toggle clears the
+            // key before any frame from the old cache can be sampled.
+            sidecarCompositeStyleKeyRef.current = sidecarDisplayStyleKey;
             setSidecarCompositeReady(true);
             if ((compareMode || "off") === "off") {
               drawSidecarBitmapFrame(idx, false, "viewport-first");
@@ -12530,6 +12542,10 @@ function Show3D() {
           builtFrames += 1;
           if (!sidecarCompositeReadyRef.current) {
             sidecarCompositeReadyRef.current = true;
+            // See the sidecar builder above: this enables the current-style
+            // cache immediately, while refusing a cache made with another
+            // Smooth setting during a zoom gesture.
+            sidecarCompositeStyleKeyRef.current = sidecarDisplayStyleKey;
             setSidecarCompositeReady(true);
             drawSidecarBitmapFrame(idx, false, "embedded-viewport-first");
           }
@@ -13757,6 +13773,7 @@ function Show3D() {
     const embeddedPackedViewportCacheReady = (
       !sidecarMode &&
       sidecarCompositeReadyRef.current &&
+      sidecarCompositeStyleKeyRef.current === sidecarDisplayStyleKey &&
       !sharedPanelSource &&
       Math.max(1, nPanels || 1) > 1 &&
       !!offlineStack

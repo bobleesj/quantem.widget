@@ -214,7 +214,7 @@ def test_show4dstem_ssb_advanced_defaults_are_synced():
 
     assert widget.ssb_compute_n_trials == 200
     assert widget.ssb_compute_refine is True
-    assert widget.ssb_compute_bf_subsample == 0.3
+    assert widget.ssb_compute_bf_subsample == 1.0
     assert widget.ssb_compute_manual_aberrations is False
 
 
@@ -262,7 +262,7 @@ def test_show4dstem_frontend_more_menu_direct_ptycho_contract():
     assert "<MenuItem value={1}>1.0</MenuItem>" in more_menu
     assert "Lock C10" in more_menu
     assert "Lock C12" in more_menu
-    assert "Default is 200 trials, refine on, BF ratio 0.3" in more_menu
+    assert "Default is 200 trials, refine on, BF ratio 1.0" in more_menu
     assert "Download calibration JSON" in more_menu
     assert "Running SSB..." in source
 

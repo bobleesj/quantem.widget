@@ -333,6 +333,43 @@ export class Show4DSTEMCompute {
     return await this.readF32(buf, n);
   }
 
+  async checksumFrames(scanIndices: number[]): Promise<Array<{ scanIndex: number; sum: number; min: number; max: number; n: number }>> {
+    const bytesPerPixel = this.mode === 0 ? 2 : this.mode === 2 ? 4 : 1;
+    const bad = this.badPx.length ? new Set(this.badPx) : null;
+    const out: Array<{ scanIndex: number; sum: number; min: number; max: number; n: number }> = [];
+    for (const rawIndex of scanIndices) {
+      const scanIndex = Math.max(0, Math.min(this.scanCount - 1, Math.round(Number(rawIndex) || 0)));
+      const ch = this.chunks.find((c) => scanIndex >= c.startScan && scanIndex < c.startScan + c.nScan) ?? this.chunks[0];
+      const localBase = (scanIndex - ch.startScan) * this.detSize;
+      const byteOffset = localBase * bytesPerPixel;
+      const byteLength = this.detSize * bytesPerPixel;
+      const rb = this.device.createBuffer({
+        size: Math.max(4, Math.ceil(byteLength / 4) * 4),
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+      const enc = this.device.createCommandEncoder();
+      enc.copyBufferToBuffer(ch.buffer, byteOffset, rb, 0, byteLength);
+      this.device.queue.submit([enc.finish()]);
+      await rb.mapAsync(GPUMapMode.READ);
+      const mapped = rb.getMappedRange();
+      let sum = 0, min = Number.POSITIVE_INFINITY, max = Number.NEGATIVE_INFINITY;
+      if (this.mode === 0) {
+        const values = new Uint16Array(mapped, 0, this.detSize);
+        for (let i = 0; i < values.length; i++) { const v = bad?.has(i) ? 0 : values[i]; sum += v; if (v < min) min = v; if (v > max) max = v; }
+      } else if (this.mode === 2) {
+        const values = new Float32Array(mapped, 0, this.detSize);
+        for (let i = 0; i < values.length; i++) { const v = bad?.has(i) ? 0 : values[i]; sum += v; if (v < min) min = v; if (v > max) max = v; }
+      } else {
+        const values = new Uint8Array(mapped, 0, this.detSize);
+        for (let i = 0; i < values.length; i++) { const v = bad?.has(i) ? 0 : values[i]; sum += v; if (v < min) min = v; if (v > max) max = v; }
+      }
+      rb.unmap();
+      rb.destroy();
+      out.push({ scanIndex, sum, min, max, n: this.detSize });
+    }
+    return out;
+  }
+
   // One frame's diffraction pattern (f32[detSize]) for scan position scanIdx -
   // a GPU extract from whichever chunk holds it. Drives the offline DP panel.
   async frameAt(scanIdx: number): Promise<Float32Array> {

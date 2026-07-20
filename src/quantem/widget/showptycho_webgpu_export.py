@@ -5,9 +5,28 @@ import math
 import os
 import pathlib
 import shutil
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
+
+
+ShowPtychoWebGPUSource = Literal["compressed_hdf5", "bf_columns", "auto"]
+
+
+def _normalize_webgpu_source(value: str) -> ShowPtychoWebGPUSource:
+    """Normalize the ShowPtycho browser source policy."""
+
+    normalized = str(value).strip().lower().replace("-", "_")
+    if normalized in {"hdf5", "compressed", "compressed_hdf5"}:
+        return "compressed_hdf5"
+    if normalized in {"bf", "bf_column", "bf_columns"}:
+        return "bf_columns"
+    if normalized == "auto":
+        return "auto"
+    raise ValueError(
+        "webgpu_source must be 'compressed_hdf5', 'bf_columns', or 'auto'; "
+        f"got {value!r}"
+    )
 
 
 def _to_numpy(array: object) -> np.ndarray:
@@ -35,6 +54,16 @@ def _showptycho_fft_mag(array: np.ndarray) -> np.ndarray:
     fft = np.fft.fft2(padded).astype(np.complex64)
     mag = np.abs(fft[:h, :w]).astype(np.float32)
     return np.log1p(np.fft.fftshift(mag)).astype(np.float32)
+
+
+def _write_empty_saves_manifest(out_path: pathlib.Path) -> None:
+    """Seed optional standalone folder saves so the UI has no startup 404."""
+
+    saves_dir = out_path / "saves"
+    saves_dir.mkdir(parents=True, exist_ok=True)
+    saves_json = saves_dir / "saves.json"
+    if not saves_json.exists():
+        saves_json.write_text("[]\n", encoding="utf-8")
 
 
 def _jsonable_float_list(array: object) -> list[float]:
@@ -303,8 +332,10 @@ def _find_hdf5_stack(handle: Any) -> Any:
     raise ValueError("no 3D detector-stack dataset found in HDF5 data file")
 
 
-def _write_hdf5_chunk_index(src: pathlib.Path, dst: pathlib.Path) -> dict[str, Any] | None:
-    """Write compact raw-chunk offset metadata for browser range reads."""
+def _hdf5_chunk_index_records(
+    src: pathlib.Path,
+) -> tuple[dict[str, Any], np.ndarray] | None:
+    """Return compact raw-chunk offset metadata for browser range reads."""
 
     try:
         import h5py
@@ -334,17 +365,27 @@ def _write_hdf5_chunk_index(src: pathlib.Path, dst: pathlib.Path) -> dict[str, A
     if not np.all(records[:, 1] > 0):
         return None
 
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    records.tofile(dst)
     return {
-        "path": dst.name,
         "frames": int(shape[0]),
         "detector_shape": [int(shape[1]), int(shape[2])],
         "dtype": dtype_name,
         "chunk_shape": chunk_shape,
         "record": "u64le_offset,u64le_size",
-        "bytes": int(dst.stat().st_size),
-    }
+    }, records
+
+
+def _write_hdf5_chunk_index(src: pathlib.Path, dst: pathlib.Path) -> dict[str, Any] | None:
+    """Write a compact single-file raw-chunk index for browser range reads."""
+
+    built = _hdf5_chunk_index_records(src)
+    if built is None:
+        return None
+    index, records = built
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    records.tofile(dst)
+    index["path"] = dst.name
+    index["bytes"] = int(dst.stat().st_size)
+    return index
 
 
 def _external_hdf5_source_files(master: pathlib.Path) -> list[pathlib.Path]:
@@ -414,6 +455,7 @@ def _prepare_hdf5_source_folder(master: pathlib.Path, out_path: pathlib.Path) ->
     files = _collect_hdf5_source_files(master)
     links = []
     chunk_indexes = []
+    chunk_index_payloads: list[tuple[dict[str, Any], dict[str, Any], np.ndarray]] = []
     for src in files:
         rel = pathlib.Path("source") / src.name
         mode = _link_or_copy(src, out_path / rel)
@@ -424,13 +466,29 @@ def _prepare_hdf5_source_folder(master: pathlib.Path, out_path: pathlib.Path) ->
             "link": mode,
         }
         if src != files[0]:
-            index_rel = pathlib.Path("source") / f"{src.name}.chunks.u64"
-            index = _write_hdf5_chunk_index(src, out_path / index_rel)
-            if index is not None:
-                index["path"] = index_rel.as_posix()
-                entry["chunk_index"] = index["path"]
-                chunk_indexes.append(index)
+            built = _hdf5_chunk_index_records(src)
+            if built is not None:
+                index, records = built
+                chunk_index_payloads.append((entry, index, records))
         links.append(entry)
+    if chunk_index_payloads and len(chunk_index_payloads) == max(0, len(files) - 1):
+        index_rel = pathlib.Path("source") / "chunks.u64"
+        index_path = out_path / index_rel
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        offset = 0
+        with index_path.open("wb") as handle:
+            for entry, index, records in chunk_index_payloads:
+                payload = records.astype("<u8", copy=False).tobytes(order="C")
+                handle.write(payload)
+                index = dict(index)
+                index["path"] = index_rel.as_posix()
+                index["byte_offset"] = offset
+                index["bytes"] = len(payload)
+                entry["chunk_index"] = index["path"]
+                entry["chunk_index_byte_offset"] = offset
+                entry["chunk_index_bytes"] = len(payload)
+                chunk_indexes.append(index)
+                offset += len(payload)
     master_rel = pathlib.Path("source") / files[0].name
     return {
         "kind": "hdf5",
@@ -669,6 +727,7 @@ def export_showptycho_webgpu_folder(
     overwrite: bool = True,
     source_master: str | pathlib.Path | None = None,
     decode_dtype: str = "uint16",
+    webgpu_source: ShowPtychoWebGPUSource | str = "compressed_hdf5",
 ) -> pathlib.Path:
     """Export a ShowPtycho WebGPU folder backed by compressed HDF5 source files."""
 
@@ -677,6 +736,7 @@ def export_showptycho_webgpu_folder(
             "decode_dtype must be 'uint8', 'uint16', or 'float32'; "
             f"got {decode_dtype!r}"
         )
+    source_policy = _normalize_webgpu_source(webgpu_source)
     accel = widget._accel
     if not hasattr(accel, "_cache"):
         raise NotImplementedError("ShowPtycho WebGPU folder export requires SSB calibration state.")
@@ -719,12 +779,23 @@ def export_showptycho_webgpu_folder(
     source = _prepare_hdf5_source_folder(master, out_path)
     source["decode_dtype"] = decode_dtype
     files = _collect_hdf5_source_files(master)
-    bf_columns = _write_bf_column_companion(files=files, out_path=out_path, cal=cal)
+    bf_columns = (
+        _write_bf_column_companion(files=files, out_path=out_path, cal=cal)
+        if source_policy in {"bf_columns", "auto"}
+        else None
+    )
+    if source_policy == "bf_columns" and bf_columns is None:
+        raise ValueError(
+            "webgpu_source='bf_columns' was requested, but the exact BF-column "
+            "companion could not be written from this HDF5 source. Use "
+            "webgpu_source='compressed_hdf5' for the default WebGPU decompression path."
+        )
     if bf_columns is not None:
         source["bf_columns"] = bf_columns
         source["preferred_browser_source"] = "bf_columns"
     cal["source_file"] = pathlib.Path(source["master"]).name
     cal["source_transport"] = "bf_columns" if bf_columns is not None else "compressed_hdf5"
+    cal["webgpu_source_policy"] = source_policy
     cal["source_files"] = source["data_files"]
     cal["source_decode_dtype"] = decode_dtype
     cal["bf_column_companion"] = bf_columns is not None
@@ -749,6 +820,7 @@ def export_showptycho_webgpu_folder(
     (out_path / "manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8",
     )
+    _write_empty_saves_manifest(out_path)
     browser_source = {
         "kind": "hdf5",
         "masterUrl": source["master"],
@@ -775,18 +847,32 @@ def export_showptycho_webgpu_folder(
         calibration=cal,
         h5_source=browser_source,
     )
+    if bf_columns is not None:
+        source_note = (
+            "The browser reads the detector-major BF-column count companion under "
+            "`source/` and builds BF reducers transiently in GPU memory. The original "
+            "compressed HDF5 files are also preserved as paper truth and fallback input."
+        )
+    else:
+        source_note = (
+            "The browser reads the original compressed HDF5 master/data files under "
+            "`source/`, decompresses the selected BF evidence with WebGPU, and builds "
+            "BF reducers transiently in GPU memory. No BF-column companion is written "
+            "by default; use `webgpu_source='bf_columns'` or "
+            "`quantem ptycho --webgpu-source bf-columns` only for an explicit fallback "
+            "or comparison export."
+        )
     (out_path / "README.md").write_text(
         "# ShowPtycho WebGPU Folder\n\n"
         "Two ways to open this review - no install needed for the first:\n\n"
         "1. **Double-click** `index.html` in Chrome or Edge, click **Open data folder**, "
         "and select this folder. No server, no Python, no terminal. "
         "(If it opens in Safari, drag `index.html` onto Chrome instead.)\n"
-        "2. **CLI**: `quantem showptycho <this folder>` serves it and opens the browser "
-        "automatically (needs the `quantem-widget` package). Any other Range-capable "
+        "2. **CLI**: `quantem ptycho <this folder>` serves it and opens the browser "
+        "automatically (needs the `quantem-widget` package; `quantem showptycho` "
+        "also works as a compatibility alias). Any other Range-capable "
         "static server works too.\n\n"
-        "The browser reads the detector-major BF-column count companion under "
-        "`source/` and builds BF reducers transiently in GPU memory. The original compressed "
-        "HDF5 files are also preserved as paper truth and fallback input. The folder "
+        f"{source_note} The folder "
         "intentionally does not store `g_bf.c64`, reference `.f32` images, or detector-binned data.\n",
         encoding="utf-8",
     )
@@ -903,6 +989,7 @@ def export_showptycho_webgpu_sidecar(
     (out_path / "manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8",
     )
+    _write_empty_saves_manifest(out_path)
     _write_embedded_widget_html(
         widget,
         out_path / "index.html",
