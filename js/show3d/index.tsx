@@ -11993,6 +11993,16 @@ function Show3D() {
       }
       return true;
     }
+    // Once native-resolution sidecar frames are uploaded, use the WebGPU
+    // presenter before the CPU compositor. This keeps playback on the cached
+    // GPU path instead of redrawing every multi-panel frame on the CPU.
+    if (sidecarGpuReadyRef.current && renderSidecarGpuFrame(drawIdx, reason)) {
+      if (updateDisplayState) {
+        if (displaySliceIdx !== drawIdx) setDisplaySliceIdx(drawIdx);
+        if (playbackUiSliceIdx !== drawIdx) setPlaybackUiSliceIdx(drawIdx);
+      }
+      return true;
+    }
     setGpuDisplayVisible(false);
     const composite = sidecarCompositeReadyRef.current
       ? sidecarCompositeFrameCacheRef.current.get(drawIdx)
@@ -12028,13 +12038,6 @@ function Show3D() {
         d.lastPaintMs = d.lastRenderMs;
         d.lastFrame = drawIdx;
         d.sidecarCompositeCacheFrames = sidecarCompositeFrameCacheRef.current.size;
-      }
-      return true;
-    }
-    if (sidecarGpuReadyRef.current && renderSidecarGpuFrame(drawIdx, reason)) {
-      if (updateDisplayState) {
-        if (displaySliceIdx !== drawIdx) setDisplaySliceIdx(drawIdx);
-        if (playbackUiSliceIdx !== drawIdx) setPlaybackUiSliceIdx(drawIdx);
       }
       return true;
     }
