@@ -843,6 +843,20 @@ def test_show3d_offline_gpu_playback_owns_canvas_contract():
     assert show3d.count("if (offlineGpuPlaybackOwnsCanvas) return;") >= 2
 
 
+def test_show3d_sidecar_playback_prefers_ready_gpu_frames():
+    """C1: a cached multi-panel folder movie avoids CPU compositing."""
+    show3d = (ROOT / "js" / "show3d" / "index.tsx").read_text(encoding="utf-8")
+    draw_sidecar = show3d.split("const drawSidecarBitmapFrame", 1)[1].split(
+        "const previousSidecarPagePaintStartRef", 1
+    )[0]
+
+    gpu_path = "if (sidecarGpuReadyRef.current && renderSidecarGpuFrame(drawIdx, reason))"
+    composite_path = "const composite = sidecarCompositeReadyRef.current"
+    assert gpu_path in draw_sidecar
+    assert composite_path in draw_sidecar
+    assert draw_sidecar.index(gpu_path) < draw_sidecar.index(composite_path)
+
+
 def test_show3d_sidecar_zoom_skips_viewport_cache_contract():
     """C1: zoomed sidecar inspection must not present stale viewport cache."""
     show3d = (ROOT / "js" / "show3d" / "index.tsx").read_text(encoding="utf-8")
