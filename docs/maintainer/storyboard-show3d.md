@@ -120,6 +120,40 @@ label, histogram, and slider to stay synchronized at the selected FPS.
 - Toggle Loop and Bounce and verify end-of-stack behavior.
 - Verify no background flash, stale frame, or delayed label appears.
 
+### S3D-05A: Keep Multi-Panel Display State Independent
+
+**User story**: As a scientist comparing several reconstructions over many
+pages, I want each panel to retain its own contrast, colormap, zoom, pan, and
+border state unless I explicitly link it, so I can inspect one result without
+silently changing another or seeing an empty canvas between pages.
+
+**Primary widgets**: Show3D.
+
+**Data to use**: a real or real-derived multi-panel stack with at least three
+pages and visibly different intensity ranges between panels.
+
+**Acceptance checks**:
+
+- With Link Contrast off, move one panel's histogram handle. Only that panel's
+  clip range and pixels may change; neighboring panels keep their own histogram,
+  color, and pixels.
+- Change page by slider, keyboard, and Page Play while playback is running.
+  The prior complete scientific pixels must remain until the next direct paint
+  is ready; no black, white, or empty panel is acceptable during the change.
+- Zoom, pan, resize, and hover any unselected panel. None of these actions may
+  alter another panel's contrast, colormap, Smooth state, selected panel, or
+  border.
+- Verify title, scale bar, panel border, histogram, and frame label remain
+  synchronized across the same page/frame transition.
+- The canvas has one authoritative direct rendering path from the current
+  frame and that panel's current state. Do not add a prebuilt
+  `HTMLCanvasElement`/composite display cache or a separate display-cache state
+  machine; numerical caches such as decoded source frames and FFT magnitudes are
+  allowed only when they cannot own zoom, contrast, page, or panel state.
+- Run the scenario in a live Jupyter widget and a freshly exported HTML file.
+  Capture one transition-time screenshot or pixel sample, not only the final
+  settled view.
+
 ### S3D-05B: Explore Time-Series Dynamics With Playback Presets
 
 **User story**: As a scientist inspecting time-series Show3D data, I want
@@ -145,7 +179,7 @@ because collaborators often review time series outside Jupyter.
 - Configure denoise plus a low-pass, high-pass, or band-pass FFT filter before
   pressing Play; verify transitions stay visibly filtered and smooth, the
   slider remains honest, and the viewer does not flash raw/noisy frames while
-  cached filtered frames warm.
+  the current filtered display settles.
 - Run at least one organic notebook trial that starts from a plain
   `Show3D(stack)` or similarly minimal call. A reviewer should turn Denoise,
   Filter, FFT, Loop/Bounce, playback style, and speed/range controls on from
