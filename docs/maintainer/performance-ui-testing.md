@@ -30,7 +30,7 @@ change needs them.
 | `scripts/widget_browser_smoke.py` | Exported HTML actually renders and responds in Chromium. | Nonblank canvases, wheel/drag interaction, switches, sliders, console/page/HTTP errors, `requestAnimationFrame` FPS, FFT state, storyboard IDs, optional mobile viewport. | `scripts/widget_local_signoff.sh --quick --browser`; add `--mobile` for narrow/touch layout changes. | `browser-smoke.html`, `browser-smoke-report.json`, screenshots. |
 | `scripts/widget_performance_smoke.py` | Backend export packing and small real-data Show2D/Show3D payloads are measurable. | Real-data discovery, export time, output size, browser-drive plan. | `--performance` signoff or when checking export size/time trends. Add `--browser` to local signoff when those exports also need automated Chromium interaction/FPS proof. | `index.html`, `report.json`, `browser-plan.json`, exported real-data HTML; plus `browser-smoke.html` when driven through local signoff with `--browser`. |
 | `scripts/widget_external_html_profile.py` | A standalone exported HTML report that already exists outside the repo remains interactive and fast. | Opens a provided URL, checks nonblank canvases, samples FPS, drives common Show3D page/play/hide controls when present, captures screenshots and console/page errors. | Local-only review of Tailscale-served or hosted real-data reports, especially when a user points to an existing exported HTML file. | `index.html`, `metrics.json`, screenshots under `/tmp` or `--artifact-dir`. |
-| `scripts/widget_heavy_perf_signoff.py` | Heavy Show2D/Show3D real-data browser performance is acceptable on lab data. | Local real-data discovery, paged heavy exports, browser FPS, nonblank render, screenshots, page-scrub latency, hidden-panel persistence across page swaps, Show3D offline frame-cache/prewarm counters, Show3D FFT overlay idle-cache guard, and FFT metric stats-toggle cache guard. | Local-only HPC/workstation performance claims; never normal CI. | `index.html`, `heavy-signoff-report.json`, `browser-smoke-report.json`, screenshots under `/tmp`. |
+| `scripts/widget_heavy_perf_signoff.py` | Heavy Show2D/Show3D real-data browser performance is acceptable on lab data. | Local real-data discovery, paged heavy exports, browser FPS, nonblank transition render, screenshots, page-scrub latency, hidden-panel persistence across page swaps, Show3D panel-independence checks, Show3D FFT overlay idle-cache guard, and FFT metric stats-toggle cache guard. | Local-only HPC/workstation performance claims; never normal CI. | `index.html`, `heavy-signoff-report.json`, `browser-smoke-report.json`, screenshots under `/tmp`. |
 | `scripts/widget_show4dstem_heavy_signoff.py` | Heavy Show4DSTEM real-data loading, NVIDIA/CUDA backend memory, append/stack-growth, export, and browser interaction are acceptable on lab data. | Local 4D-STEM master discovery, CUDA first-load timing, backend memory report, append/stack-growth timing, dataset/frame flip FPS, virtual-detector drag FPS, scan-position FPS, browser WebGPU/backend split, GPU memory before/after. | Local-only Show4DSTEM performance claims; never normal CI. | `index.html`, `show4dstem-heavy-signoff-report.json`, exported Show4DSTEM HTML, browser screenshot under `/tmp`. |
 | `scripts/widget_phone_handoff.py` | A human can verify physical phone Safari behavior with shared logs. | Serves report on `0.0.0.0`, prints Tailscale/HTTPS handoff command, records viewport/touch/pointer/WebGPU events. | Physical iPhone/iPad checks after browser smoke, especially WebGPU or touch changes. | Served report, `phone-probe.html`, `phone-events.ndjson`. |
 | `scripts/widget_visual_signoff.sh` | Visual stories can be driven in Jupyter/browser before release. | Story-oriented widget drive packets, screenshots, selected release gates. | Broad UI or release-candidate work when a human/agent must drive real workflows. | Signoff packet/report under `/tmp` or configured artifact path. |
@@ -462,8 +462,9 @@ The heavy signoff:
 - runs `scripts/widget_browser_smoke.py` against the generated standalone HTML,
 - checks browser FPS against the configured threshold,
 - checks that paged Show2D and Show3D keep hidden-panel state after page scrubs,
-- checks that standalone Show3D exports expose bounded offline frame-cache and
-  prewarm counters in `window.__quantemShow3DPerf`,
+- checks that standalone Show3D page/frame transitions retain scientific pixels
+  until the direct current-frame render is ready and that independent-panel
+  contrast edits do not alter neighbors,
 - checks that Show3D FFT cache counters do not grow while the page is idle,
 - checks that a new Show3D FFT frame increments misses/computes once, then a
   return scrub to a previously computed frame increments hits while misses and
@@ -518,24 +519,19 @@ Separate the work into four phases:
    React rerenders on every pointer event.
 
 Paged Show2D/Show3D sliders are in the pointer/UI layer. Render the requested
-page from local browser state immediately, then batch the synced trait write
-with `requestAnimationFrame`. Hidden panels in paged viewers are layout slots,
-not one absolute source index, so a hidden slot remains hidden as the page
-changes. Standalone Show3D HTML should render the current page/frame first,
-then prewarm neighboring frames and later frames in the background using a
-bounded cache with debug counters.
+page/frame through the one authoritative renderer, then batch only the synced
+trait write with `requestAnimationFrame`. Hidden panels in paged viewers are
+layout slots, not one absolute source index, so a hidden slot remains hidden as
+the page changes. Keep the last complete scientific pixels visible until the
+direct current page/frame paint is ready; do not maintain a separate prebuilt
+canvas/composite display cache.
 
-Show3D sidecar scrubbing has a separate anti-flash contract. Manual frame
-slider scrubs, slider release commits, keyboard frame steps, Page slider
-changes, Page play, and autoplay must all use the same immediate browser paint
-discipline before syncing model traits. Do not clear a sidecar canvas, hide the
-GPU canvas, or fill a transformed viewport with the dark inter-panel backing
-unless the replacement scientific pixels are already drawn in the same task.
-When a transformed sidecar frame needs a scratch image, start from the existing
-canvas pixels and fill only transparent/unwritten pixels with the normal widget
-background. On manual scrub release, repaint once before committing the synced
-`slice_idx` trait and once on the next animation frame, because the non-playing
-model-sync path can otherwise expose the dark backing for one frame.
+Show3D manual slider scrubs, slider release commits, keyboard steps, Page
+slider changes, Page play, and autoplay must all obey the same no-blank and
+panel-independence contract. Do not clear or hide a canvas, or fill a transformed
+viewport with the inter-panel backing, unless replacement scientific pixels are
+painted in the same task. With Link Contrast off, confirm an edit to one
+histogram neither changes another panel's pixels nor rewrites its color range.
 
 Every heavy compute feature needs both math proof and cache proof:
 

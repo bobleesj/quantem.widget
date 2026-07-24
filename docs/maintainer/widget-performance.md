@@ -113,7 +113,7 @@ one common metric plus widget-specific metrics:
 - **Common**: UI FPS, dropped frames, pointer-to-preview latency.
 - **Show2D**: image decode/draw, histogram draw, FFT prep/worker/GPU/post time,
   ROI/profile time, page scrub latency, and panel cache state.
-- **Show3D**: frame fetch/decode, frame cache hit/miss, prewarm status, play
+- **Show3D**: frame fetch/decode, numerical source/FFT cache hit/miss, play
   FPS, frame scrub latency, remote Comm/tunnel receive latency,
   scrub-preview factor/bytes when active, FFT/FFT-metric time, and panel/page
   cache state.
@@ -138,7 +138,7 @@ evidence.
 | --- | --- | --- | --- |
 | Show1D | Inspect scalar traces, losses, spectra, or per-iteration diagnostics while deciding which image view to open. | Cursor/readout movement, snapshot selection, and handoff to Show2D. | Lightweight state tests plus browser story when handoff or snapshot rendering changes. |
 | Show2D | Compare one image or many related images, often 4K microscopy outputs, with zoom, pan, histogram, FFT, profile, pages, and export. | Zoom/pan, histogram controls, page slider/play, hidden panels, FFT redraws after first compute, and HTML reopen. | `scripts/widget_browser_smoke.py` for exported HTML; `scripts/widget_heavy_perf_signoff.py` for 4K real-data panels. |
-| Show3D | Scrub or play time series, focal stacks, iterative reconstructions, and multi-panel comparisons without rebuilding the widget. | Frame scrub/play, remote-tunnel drag preview with native restoration, page slider/play, hidden panels, frame cache/prewarm, FFT return-scrub cache, FFT metric labels, GIF/MP4/HTML export. | `scripts/widget_heavy_perf_signoff.py`; [S3D-20](storyboard-show3d.md#s3d-20-scrub-full-resolution-movies-over-a-remote-jupyter-tunnel) live Jupyter tunnel proof; exported HTML profile for existing reports; animation smoke for GIF/MP4. |
+| Show3D | Scrub or play time series, focal stacks, iterative reconstructions, and multi-panel comparisons without rebuilding the widget. | Frame scrub/play, remote-tunnel drag preview with native restoration, page slider/play, hidden panels, independent panel contrast, FFT return-scrub cache, FFT metric labels, GIF/MP4/HTML export. | `scripts/widget_heavy_perf_signoff.py`; [S3D-20](storyboard-show3d.md#s3d-20-scrub-full-resolution-movies-over-a-remote-jupyter-tunnel) live Jupyter tunnel proof; exported HTML profile for existing reports; animation smoke for GIF/MP4. |
 | Show3DSlices | Browse volume slices and orthogonal views with synchronized crosshair/plane controls. | Slice sliders, crosshair movement, oblique line endpoint/body drags, side-plane redraw, oblique FFT redraw during line drag, FFT return-scrub cache hits for slice/oblique sliders, histogram controls, FFT/log/smooth toggles, and export reopen. | Browser smoke plus focused visual story when slice/crosshair/oblique-line behavior changes. |
 | Show4DSTEM | Inspect diffraction patterns and virtual images from real 4D-STEM datasets without loading unnecessary data. | Scan-position movement, detector drag, BF/ABF/ADF updates, compare pages, cache-backed folder reopen, lazy folder sessions, and export reopen. | `scripts/widget_show4dstem_heavy_signoff.py` covers direct backend/export interaction only. S4D-19 additionally requires a recorded fresh-process folder-paging/cache runner and browser report; do not infer that signoff from the heavy script. Lightweight CI checks only the protocol. |
 | ShowEDS | Explore spectral maps, ROIs, energy bands, element lines, and sparse/folder-backed EDS cubes. | Band dragging, map/spectrum sync, ROI changes, periodic table selection, sparse lookup/cache, and export reopen. | Browser story plus EDS-specific real-data smoke when backend or map/spectrum logic changes. |
@@ -157,36 +157,44 @@ Remote Jupyter is a first-class production path for Show3D: the browser may be
 on a laptop while the kernel, data, CUDA device, and any Python frame server
 live on a workstation reached through `ssh -L`.
 
-## Show3D sidecar anti-flash contract
+## Show3D direct-display no-blank contract
 
-Large exported Show3D reviews often use browser-local sidecar caches. In that
-mode the canvas must never be cleared to a blank, black, or white backing while
-waiting for the next page/frame. Keep the last scientific pixels visible until
-the replacement pixels are ready, then swap in the new frame.
+The Show3D canvas is rendered directly from the selected frame and the selected
+panel's state. Do not introduce a browser-side prebuilt canvas/composite display
+cache or a second display-state machine: those paths have repeatedly let page,
+frame, contrast, and zoom disagree. Decoded source frames and numerical FFT
+results may be cached when their keys are scientific inputs, but a numerical
+cache must never independently decide which pixels, contrast, or transform are
+shown.
 
-The risky paths are not all the same. Page play, frame autoplay, keyboard
-steps, Page slider changes, manual frame-slider drag, and manual frame-slider
-release can each pass through different handlers. A fix that covers autoplay
-does not prove manual slider scrubbing is safe. For sidecar code, keep these
-rules:
+Page play, frame autoplay, keyboard steps, Page slider changes, manual
+frame-slider drag, and release can each use different handlers. A fix that
+covers autoplay does not prove manual scrubbing is safe. Keep these rules:
 
-- Paint the requested page/frame from browser-local data before syncing the
-  Python/model trait that represents the same state.
-- On manual frame-slider release, repaint before the `slice_idx` commit and
-  repaint again on the next animation frame.
-- Do not call `clearRect`, hide the GPU canvas, or fill the full transformed
-  viewport with `inter_panel_gap_color` unless the replacement scientific
-  pixels are painted in that same task.
-- For transformed sidecar viewports, start from `getImageData()` of the
-  current canvas and fill only transparent/unwritten pixels with the normal
-  widget background.
-- Preserve zoom/pan across page changes. Page changes should invalidate stale
-  sidecar page caches and repaint, not reset the user's inspection view.
+- One renderer owns every panel paint from the current frame plus that panel's
+  current display state.
+- Retain the last complete scientific pixels until the next direct paint is
+  ready. Do not `clearRect`, hide the GPU canvas, or fill the viewport with an
+  inter-panel color unless replacement scientific pixels are painted in the
+  same task.
+- Preserve zoom/pan across a page change, without recomputing or copying a
+  different panel's contrast, colormap, Smooth state, or selection.
+- With linking off, a histogram edit writes only the addressed panel state;
+  with linking on, the propagation is explicit and testable.
 
-Browser signoff must include burst screenshots or equivalent pixel sampling
-during manual lower-slider drag and release, Page slider scrub, Page play, and
-frame autoplay. Scan for both white and black spikes in the scientific canvas
-area; a final nonblank screenshot is not enough.
+Browser signoff must include transition-time screenshots or equivalent pixel
+sampling during manual lower-slider drag/release, Page slider scrub, Page play,
+and frame autoplay. Scan for both white and black spikes in the scientific
+canvas area; a final nonblank screenshot is not enough.
+
+### Mistake log: do not reintroduce the display cache casually
+
+The retired display-cache path combined prebuilt frame canvases, asynchronous
+page preparation, and independent contrast/zoom state. Under normal scientist
+actions it produced stale frames, blinking contrast, cross-panel edits, and
+blank canvases. Any proposal to reintroduce it requires a dedicated issue,
+one rendering owner, live-Jupyter plus fresh-export visual proof, and the
+independence/no-blank checks in S3D-05A.
 
 A kernel-local frame server on `127.0.0.1` is only fast if the browser can reach
 that exact endpoint. Across an SSH tunnel, the browser's localhost is the
