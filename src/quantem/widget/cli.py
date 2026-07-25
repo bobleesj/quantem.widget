@@ -914,13 +914,6 @@ def _add_show_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--title", default=None, help="Viewer page title.")
     parser.add_argument("--backend", default="auto", choices=("auto", "cuda", "mps", "cpu"),
                         help="ShowPtycho master generation: HDF5 load backend (default auto).")
-    parser.add_argument("--webgpu-source", default="compressed-hdf5",
-                        choices=("compressed-hdf5", "hdf5", "bf-columns", "auto"),
-                        help=(
-                            "ShowPtycho folder browser source. Default compressed-hdf5 uses "
-                            "the original HDF5 files and browser WebGPU decompression; "
-                            "bf-columns is an explicit fallback/comparison companion."
-                        ))
     parser.add_argument("--calibration", default="auto",
                         help=(
                             "ShowPtycho master generation: calibration JSON, "
@@ -1096,16 +1089,6 @@ def _showptycho_decode_dtype(args: argparse.Namespace) -> str:
     raise ValueError(f"ShowPtycho --dtype must be u8, u16, or float32; got {raw!r}")
 
 
-def _showptycho_webgpu_source(args: argparse.Namespace) -> str:
-    """Return the browser source policy for generated ShowPtycho folders."""
-
-    raw = str(getattr(args, "webgpu_source", "compressed-hdf5") or "compressed-hdf5").lower()
-    return {
-        "compressed-hdf5": "compressed_hdf5",
-        "hdf5": "compressed_hdf5",
-        "bf-columns": "bf_columns",
-        "auto": "auto",
-    }[raw]
 
 
 def _is_showptycho_master_name(name: str) -> bool:
@@ -1535,7 +1518,6 @@ def _render_showptycho_master(
         title=args.title or f"{_showptycho_source_stem(master)} ShowPtycho",
         overwrite=True,
         decode_dtype=_showptycho_decode_dtype(args),
-        webgpu_source=_showptycho_webgpu_source(args),
     )
 
 
