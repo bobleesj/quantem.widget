@@ -138,7 +138,7 @@ class _ShowPtychoFolderSmoke:
     ) -> Path:
         target = Path(path or "showptycho-webgpu-folder.html")
         out_dir = target.with_suffix("")
-        return self.widget.export_webgpu_folder(out_dir, title=title, **options) / "index.html"
+        return self.widget.export(out_dir, title=title, **options) / "index.html"
 
 
 def _ptycho_phase_template(n: int) -> np.ndarray:

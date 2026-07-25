@@ -2491,11 +2491,29 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 scan_bin=scan_bin,
                 title=title,
             )
+            # The interactive export fetches its data file over HTTP (CORS blocks
+            # file://), so write a double-click launcher that serves the folder
+            # and opens this page in Chrome. The static "report" kind is
+            # self-contained and needs no launcher.
+            from quantem.widget.command_launcher import write_command_launcher
+
+            write_command_launcher(
+                export_path.parent, "Show4DSTEM", viewer_html=export_path.name
+            )
         size_mb = export_path.stat().st_size / (1024 * 1024)
-        self.export_status = (
-            f"Exported {export_path.name} "
-            f"({size_mb:.1f} MB, {self._export_mode_label(dtype, det_bin, scan_bin, export_kind=kind)})"
-        )
+        mode = self._export_mode_label(dtype, det_bin, scan_bin, export_kind=kind)
+        if kind == "report":
+            # Self-contained single HTML: no data file, opens by double-click.
+            how = "self-contained HTML - double-click to open, no server needed"
+        else:
+            # Interactive: HTML + a data file fetched over HTTP (CORS blocks
+            # file://), so it needs the local server, not a bare double-click.
+            how = (
+                f"WebGPU folder - reads its data file over HTTP; double-click "
+                f"Show4DSTEM.command in {export_path.parent.name}/ to open (a bare "
+                f"double-click of the HTML will not load the data)"
+            )
+        self.export_status = f"Exported {export_path.name} ({size_mb:.1f} MB, {mode}) - {how}"
         return export_path
 
     def _on_export_request_change(self, change: dict) -> None:

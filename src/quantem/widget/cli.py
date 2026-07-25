@@ -1530,7 +1530,7 @@ def _render_showptycho_master(
         fft_on=bool(args.fft),
         webgpu_preview="off",
     )
-    return widget.export_webgpu_folder(
+    return widget.export(
         out_dir,
         title=args.title or f"{_showptycho_source_stem(master)} ShowPtycho",
         overwrite=True,

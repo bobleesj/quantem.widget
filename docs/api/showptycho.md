@@ -30,8 +30,9 @@ that FFT panel. It is not re-running the raw detector preprocessing.
 ## Real-Space Crop And SSB Refit
 
 For a region-specific probe/aberration fit, open the prepared CUDA SSB with the
-raw master path. ShowPtycho then exposes `Crop` beside the saved-state controls.
-Choose a crop size, click its center in the phase panel, and use `Refit SSB`.
+raw master path. ShowPtycho then exposes `Crop` in the top-right action group
+beside `Export` and `Reset`. Enable `Crop`, drag a rectangle on the phase panel,
+inspect the live row/column region readout, then use `Refit SSB`.
 The widget reloads only that scan region from the original HDF5 source, runs 200
 SSB optimization trials followed by refinement, and replaces the phase/FFT and
 their calibration with the result.
@@ -45,10 +46,9 @@ w = ShowPtycho(
 )
 ```
 
-Crop candidates are intentionally limited to native square `128 x 128`,
-`256 x 256`, `512 x 512`, and `1024 x 1024` scan regions. These are the native
-SSB shapes, so the backend does not silently zero-pad an arbitrary crop before
-the fit. This is a reconstruction operation, not a display crop.
+The selection may be rectangular; each dimension must span at least `32` scan
+positions. `Crop Reset` clears the selection without changing the current
+reconstruction. This is a reconstruction operation, not a display crop.
 
 The refit control is absent from standalone HTML/WebGPU exports and MPS-only
 sessions. Those modes can inspect an existing result interactively, but only a
@@ -123,13 +123,13 @@ review without the notebook kernel:
 
 ```python
 w = ShowPtycho(ssb, fft_on=True)  # starts at full selected BF
-w.export_webgpu_folder("logic013_512_review")
+w.export("logic013_512_review")
 ```
 
 Use BF columns only as an explicit fallback or comparison transport:
 
 ```python
-w.export_webgpu_folder("logic013_512_bfcols", webgpu_source="bf_columns")
+w.export("logic013_512_bfcols", webgpu_source="bf_columns")
 ```
 
 To start the viewer directly in the authoritative full-BF mode, pass

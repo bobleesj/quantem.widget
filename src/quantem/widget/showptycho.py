@@ -35,7 +35,40 @@ import traitlets
 _DEFAULT_STARS_FILENAME = "showptycho_stars.json"
 _CALIBRATION_SCHEMA_VERSION = 1
 _DEFAULT_DRAG_BF_FRACTION = 1.0
-_SSB_CROP_SIZES = (128, 256, 512, 1024)
+_MIN_SSB_CROP_SPAN = 32
+
+
+def _resolve_export_dir(
+    widget: Any,
+    path: "str | pathlib.Path | None",
+    data: "str | pathlib.Path | None",
+) -> pathlib.Path:
+    """Pick the viewer output folder for :meth:`ShowPtycho.export`.
+
+    ``path`` wins when given. Otherwise the location follows ``data`` so the
+    viewer lands next to the source and the raw HDF5 is never duplicated:
+    ``"in-place"`` uses the source file's own directory; an explicit path uses
+    that directory; ``None`` defaults to a ``<name>_showptycho`` folder beside
+    the source (or the current directory if the source path is unknown).
+    """
+    if data not in (None, "in-place"):
+        raise ValueError(
+            f"data={data!r} is not supported; use None (bundle) or 'in-place'."
+        )
+    if path is not None:
+        return pathlib.Path(path).expanduser()
+    source = getattr(widget, "_source_file", None)
+    if data == "in-place" and source:
+        return pathlib.Path(source).expanduser().resolve().parent
+    if source:
+        base = pathlib.Path(source).expanduser().resolve()
+        stem = (
+            base.name[: -len("_master.h5")]
+            if base.name.endswith("_master.h5")
+            else base.stem
+        )
+        return base.parent / f"{stem}_showptycho"
+    return pathlib.Path.cwd() / "showptycho_export"
 
 
 @dataclass
@@ -259,7 +292,7 @@ def _validate_ssb_scan_region(
     scan_region: object,
     full_scan_shape: tuple[int, int],
 ) -> tuple[int, int, int, int]:
-    """Validate one native square scan crop for a fresh SSB fit.
+    """Validate one in-bounds real-space scan crop for a fresh SSB fit.
 
     A crop is reconstruction input, not a display view.  The SSB kernels use
     native square scan sizes, so accepting an arbitrary rectangle here would
@@ -277,11 +310,10 @@ def _validate_ssb_scan_region(
             f"scan crop [{r0}:{r1}, {c0}:{c1}] is outside {rows}x{cols} data"
         )
     height, width = r1 - r0, c1 - c0
-    if height != width or height not in _SSB_CROP_SIZES:
-        sizes = "/".join(str(size) for size in _SSB_CROP_SIZES)
+    if height < _MIN_SSB_CROP_SPAN or width < _MIN_SSB_CROP_SPAN:
         raise ValueError(
-            "SSB refit crops must be square native scan sizes "
-            f"({sizes}); got {height}x{width}."
+            "SSB refit crops must be at least "
+            f"{_MIN_SSB_CROP_SPAN}x{_MIN_SSB_CROP_SPAN}; got {height}x{width}."
         )
     return r0, r1, c0, c1
 
@@ -655,7 +687,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             self.webgpu_preview_enabled = False
             self.webgpu_preview_status = (
                 "Notebook WebGPU preview does not write a persistent BF-G cache by default. "
-                "Use export_webgpu_folder() for compressed-source browser review, or pass "
+                "Use export() for compressed-source browser review, or pass "
                 "webgpu_preview='cache' for the legacy local cache."
             )
             return
@@ -1064,13 +1096,13 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             raise RuntimeError("Crop refit requires a source-backed SSB session.")
         scan_region = _validate_ssb_scan_region(scan_region, self._source_scan_shape)
 
-        from quantem.widget.io import load_scan_region
+        from quantem.widget.io import load
         from quantem.gpu.ssb import SSB
 
         previous = self._ssb_ref
-        loaded = load_scan_region(
+        loaded = load(
             self._source_file,
-            scan_region,
+            scan_region=scan_region,
             backend="cuda",
             scan_shape=self._source_scan_shape,
             verbose=False,
@@ -1420,61 +1452,52 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             drag = f", drag_bf={bf}"
         return f"ShowPtycho({n} pinned{drag})"
 
-    def export_webgpu_folder(
+    def export(
         self,
-        out_dir: str | pathlib.Path,
+        path: str | pathlib.Path | None = None,
         *,
+        backend: str = "webgpu",
+        data: str | pathlib.Path | None = None,
         title: str | None = None,
         overwrite: bool = True,
         decode_dtype: str = "uint16",
         webgpu_source: str = "compressed_hdf5",
     ) -> pathlib.Path:
-        """Export a kernel-less WebGPU folder for the current ShowPtycho state."""
+        """Export a shareable interactive viewer folder for the current state.
 
+        This is the standard export verb across all widgets. It writes an
+        ``index.html`` viewer plus a double-click ``ShowPtycho.command`` launcher,
+        so the reconstruction can be reopened later with no kernel.
+
+        Parameters
+        ----------
+        path : str or Path, optional
+            Where to write the viewer folder. If ``None``, defaults to the
+            directory of ``data`` (in-place) when given, else a folder named from
+            the source file next to it.
+        backend : str, default "webgpu"
+            Compute backend the exported viewer uses. Only ``"webgpu"`` is
+            supported today; the argument exists so other backends can be added
+            without a new method.
+        data : {None, "in-place"}, optional
+            How the HDF5 source is handled. ``None`` (default) bundles the source
+            into the viewer folder, hard-linked when on the same filesystem so
+            there is no real copy - the folder is self-contained and portable.
+            ``"in-place"`` writes the viewer next to the existing source and
+            serves it there, so nothing is copied at all (the viewer is tied to
+            that data folder).
+        """
+        if backend != "webgpu":
+            raise ValueError(
+                f"backend={backend!r} is not supported; only 'webgpu' today."
+            )
         from quantem.widget.showptycho_webgpu_export import (
             export_showptycho_webgpu_folder,
         )
 
+        out_dir = _resolve_export_dir(self, path, data)
         return export_showptycho_webgpu_folder(
             self,
-            out_dir,
-            title=title,
-            overwrite=overwrite,
-            decode_dtype=decode_dtype,
-            webgpu_source=webgpu_source,
-        )
-
-    def export_webgpu_sidecar(
-        self,
-        out_dir: str | pathlib.Path,
-        *,
-        title: str | None = None,
-        overwrite: bool = True,
-        decode_dtype: str = "uint16",
-        webgpu_source: str = "compressed_hdf5",
-    ) -> pathlib.Path:
-        """Compatibility alias for :meth:`export_webgpu_folder`."""
-
-        return self.export_webgpu_folder(
-            out_dir,
-            title=title,
-            overwrite=overwrite,
-            decode_dtype=decode_dtype,
-            webgpu_source=webgpu_source,
-        )
-
-    def export_sidecar(
-        self,
-        out_dir: str | pathlib.Path,
-        *,
-        title: str | None = None,
-        overwrite: bool = True,
-        decode_dtype: str = "uint16",
-        webgpu_source: str = "compressed_hdf5",
-    ) -> pathlib.Path:
-        """Compatibility alias for :meth:`export_webgpu_folder`."""
-
-        return self.export_webgpu_folder(
             out_dir,
             title=title,
             overwrite=overwrite,
@@ -1700,7 +1723,7 @@ class _MpsPtychoAccelerator:
             phi12=float(phi12),
             chunk_bf=self._chunk_bf,
             compute_loss=True,
-            compute_object=True,
+            compute_object=False,
         )
         phase_np = np.asarray(phase, dtype=np.float32)
         self._mean_phase_buffer = phase_np
@@ -1715,7 +1738,7 @@ class _MpsPtychoAccelerator:
             phi12=float(phi12),
             chunk_bf=self._chunk_bf,
             compute_loss=False,
-            compute_object=True,
+            compute_object=False,
         )
         return phase
 

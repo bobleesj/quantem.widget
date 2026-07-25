@@ -876,6 +876,10 @@ def export_showptycho_webgpu_folder(
         "intentionally does not store `g_bf.c64`, reference `.f32` images, or detector-binned data.\n",
         encoding="utf-8",
     )
+    # Double-click launcher (see quantem.widget.command_launcher).
+    from quantem.widget.command_launcher import write_command_launcher
+
+    write_command_launcher(out_path, "ShowPtycho")
     return out_path
 
 
@@ -1003,4 +1007,9 @@ def export_showptycho_webgpu_sidecar(
         "and fetches the folder-local BF-G payload from `g_bf.c64`.\n",
         encoding="utf-8",
     )
+    # Double-click launcher: users can open the viewer without a terminal or a
+    # File System Access grant (see quantem.widget.command_launcher).
+    from quantem.widget.command_launcher import write_command_launcher
+
+    write_command_launcher(out_path, "ShowPtycho")
     return out_path
