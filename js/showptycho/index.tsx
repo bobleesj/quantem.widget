@@ -2816,15 +2816,37 @@ function Explore() {
     frontendPreviewRef.current?.(autoC10, autoC12, autoPhi12, autoRotation ?? rotationDegRef.current);
   }, [autoC10, autoC12, autoPhi12, autoRotation, selectedDragBfCount, totalBf, webgpuRuntimeStatus, webgpuStandalone]);
 
-  /* --- Re-render real-space display when mode/contrast/cmap changes. --- */
+  /* --- Re-render real-space display when mode/contrast/cmap changes.
+         Coalesce to one render per animation frame: the histogram slider fires
+         many times per drag, and each render kicks an async GPU colormap pass;
+         without throttling those pile up and arrive interleaved, which makes the
+         phase and histogram flicker/jitter while dragging. --- */
+  const contrastRafRef = React.useRef<number | null>(null);
   React.useEffect(() => {
     const p = rawPhaseRef.current;
-    if (p) renderRealDisplay(p.data, p.w, p.h);
+    if (!p) return;
+    if (contrastRafRef.current !== null) cancelAnimationFrame(contrastRafRef.current);
+    contrastRafRef.current = requestAnimationFrame(() => {
+      contrastRafRef.current = null;
+      renderRealDisplay(p.data, p.w, p.h);
+    });
+    return () => {
+      if (contrastRafRef.current !== null) cancelAnimationFrame(contrastRafRef.current);
+    };
   }, [cmap, contrastRange, extraRealViews, renderRealDisplay]);
 
-  /* --- Re-render FFT when its contrast or colormap changes --- */
+  /* --- Re-render FFT when its contrast or colormap changes (same rAF
+         coalescing so the FFT histogram drag does not flicker). --- */
+  const fftContrastRafRef = React.useRef<number | null>(null);
   React.useEffect(() => {
-    rerenderFFT();
+    if (fftContrastRafRef.current !== null) cancelAnimationFrame(fftContrastRafRef.current);
+    fftContrastRafRef.current = requestAnimationFrame(() => {
+      fftContrastRafRef.current = null;
+      rerenderFFT();
+    });
+    return () => {
+      if (fftContrastRafRef.current !== null) cancelAnimationFrame(fftContrastRafRef.current);
+    };
   }, [fftContrastRange, fftCmap, rerenderFFT]);
 
   /* --- When user turns FFT on or moves it between panel/inset, compute once. --- */
