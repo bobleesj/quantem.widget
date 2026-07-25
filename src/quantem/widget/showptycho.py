@@ -1461,7 +1461,6 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         title: str | None = None,
         overwrite: bool = True,
         decode_dtype: str = "uint16",
-        webgpu_source: str = "compressed_hdf5",
     ) -> pathlib.Path:
         """Export a shareable interactive viewer folder for the current state.
 
@@ -1502,7 +1501,6 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             title=title,
             overwrite=overwrite,
             decode_dtype=decode_dtype,
-            webgpu_source=webgpu_source,
         )
 
 

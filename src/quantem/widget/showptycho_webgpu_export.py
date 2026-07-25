@@ -5,28 +5,9 @@ import math
 import os
 import pathlib
 import shutil
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
-
-
-ShowPtychoWebGPUSource = Literal["compressed_hdf5", "bf_columns", "auto"]
-
-
-def _normalize_webgpu_source(value: str) -> ShowPtychoWebGPUSource:
-    """Normalize the ShowPtycho browser source policy."""
-
-    normalized = str(value).strip().lower().replace("-", "_")
-    if normalized in {"hdf5", "compressed", "compressed_hdf5"}:
-        return "compressed_hdf5"
-    if normalized in {"bf", "bf_column", "bf_columns"}:
-        return "bf_columns"
-    if normalized == "auto":
-        return "auto"
-    raise ValueError(
-        "webgpu_source must be 'compressed_hdf5', 'bf_columns', or 'auto'; "
-        f"got {value!r}"
-    )
 
 
 def _to_numpy(array: object) -> np.ndarray:
@@ -258,12 +239,7 @@ def _write_embedded_widget_html(
             widget.phase_bytes = b""
             widget.phase_width = 0
             widget.phase_height = 0
-        if h5_source and h5_source.get("kind") == "bf_columns":
-            widget.webgpu_preview_status = (
-                "WebGPU folder ready: browser reads detector BF-column counts "
-                "and builds BF reducers transiently."
-            )
-        elif h5_source:
+        if h5_source:
             widget.webgpu_preview_status = (
                 "WebGPU folder ready: browser reads compressed HDF5 source "
                 "and builds BF reducers transiently."
@@ -504,221 +480,6 @@ def _prepare_hdf5_source_folder(master: pathlib.Path, out_path: pathlib.Path) ->
     }
 
 
-def _bf_column_batch_frames() -> int:
-    """Return the scan-frame batch used to transpose HDF5 into BF columns."""
-
-    raw = os.environ.get("QUANTEM_SHOWPTYCHO_BF_COLUMN_BATCH", "")
-    try:
-        frames = int(raw) if raw else 2048
-    except ValueError:
-        frames = 2048
-    # Keep this even so uint4 packing never has to split a nibble pair.
-    return max(2, frames + (frames % 2))
-
-
-def _iter_hdf5_detector_stacks(files: list[pathlib.Path]):
-    """Yield detector-stack datasets from data files, skipping the master file."""
-
-    try:
-        try:
-            import hdf5plugin  # noqa: F401
-        except ImportError:
-            pass
-        import h5py
-    except ImportError:
-        return
-
-    for file in files[1:]:
-        handle = h5py.File(file, "r")
-        try:
-            yield file, handle, _find_hdf5_stack(handle)
-        finally:
-            handle.close()
-
-
-def _hdf5_scan_total(files: list[pathlib.Path]) -> tuple[int, tuple[int, int] | None, np.dtype | None]:
-    """Return total scan frames, detector shape, and dtype for HDF5 data files."""
-
-    total = 0
-    detector_shape: tuple[int, int] | None = None
-    dtype: np.dtype | None = None
-    for _file, _handle, dataset in _iter_hdf5_detector_stacks(files):
-        shape = tuple(int(v) for v in dataset.shape)
-        if len(shape) != 3:
-            raise ValueError(f"expected a 3D detector stack, got shape {shape}")
-        current_detector = (shape[1], shape[2])
-        if detector_shape is None:
-            detector_shape = current_detector
-            dtype = np.dtype(dataset.dtype)
-        elif detector_shape != current_detector:
-            raise ValueError(
-                "all HDF5 data files must share detector shape; "
-                f"got {current_detector}, expected {detector_shape}"
-            )
-        total += shape[0]
-    return total, detector_shape, dtype
-
-
-def _scan_hdf5_bf_max(
-    files: list[pathlib.Path],
-    *,
-    bf_rows: np.ndarray,
-    bf_cols: np.ndarray,
-) -> int:
-    """Return the maximum selected BF count without materializing all columns."""
-
-    max_value = 0
-    batch_frames = _bf_column_batch_frames()
-    for _file, _handle, dataset in _iter_hdf5_detector_stacks(files):
-        n_frames = int(dataset.shape[0])
-        for start in range(0, n_frames, batch_frames):
-            stop = min(n_frames, start + batch_frames)
-            block = np.asarray(dataset[start:stop])
-            cols = block[:, bf_rows, bf_cols]
-            if cols.size:
-                max_value = max(max_value, int(np.max(cols)))
-    return max_value
-
-
-def _write_uint4_columns(
-    out: np.memmap,
-    values_bf_scan: np.ndarray,
-    *,
-    scan_start: int,
-) -> None:
-    """Pack two 4-bit detector counts per byte into detector-major columns."""
-
-    if scan_start % 2:
-        raise ValueError("uint4 BF-column writes require even scan_start")
-    if values_bf_scan.shape[1] % 2:
-        raise ValueError("uint4 BF-column writes require even scan batch length")
-    vals = np.asarray(values_bf_scan, dtype=np.uint8)
-    if vals.size and int(vals.max()) > 15:
-        raise ValueError("uint4 BF-column companion can only store counts <= 15")
-    packed = vals[:, 0::2] | (vals[:, 1::2] << np.uint8(4))
-    byte_start = scan_start // 2
-    out[:, byte_start:byte_start + packed.shape[1]] = packed
-
-
-def _write_bf_column_companion(
-    *,
-    files: list[pathlib.Path],
-    out_path: pathlib.Path,
-    cal: dict[str, Any],
-) -> dict[str, Any] | None:
-    """Write exact raw BF evidence in detector-major scan columns.
-
-    The companion is not a persistent Fourier/complex reducer.  It stores the
-    original selected BF detector counts as ``[bf, scan]`` so the browser can
-    fetch only the BF disk columns it needs, then run the same transient WebGPU
-    FFT/reduction path as the scan-major HDF5 loader.
-    """
-
-    if os.environ.get("QUANTEM_SHOWPTYCHO_DISABLE_BF_COLUMNS"):
-        return None
-    try:
-        bf_rows = np.asarray(cal["bf_rows"], dtype=np.intp)
-        bf_cols = np.asarray(cal["bf_cols"], dtype=np.intp)
-        num_bf = int(cal["num_bf"])
-        plane_shape = tuple(int(v) for v in cal["phase_shape"])
-        plane = int(plane_shape[0] * plane_shape[1])
-        total_frames, detector_shape, dtype = _hdf5_scan_total(files)
-        if total_frames != plane:
-            return None
-        if detector_shape is None or dtype is None:
-            return None
-        if bf_rows.shape[0] != num_bf or bf_cols.shape[0] != num_bf:
-            return None
-        if np.any(bf_rows < 0) or np.any(bf_cols < 0):
-            return None
-        if np.any(bf_rows >= detector_shape[0]) or np.any(bf_cols >= detector_shape[1]):
-            return None
-        if not np.issubdtype(dtype, np.integer):
-            return None
-        max_value = _scan_hdf5_bf_max(files, bf_rows=bf_rows, bf_cols=bf_cols)
-        data_frame_counts = [
-            int(dataset.shape[0])
-            for _file, _handle, dataset in _iter_hdf5_detector_stacks(files)
-        ]
-        if max_value <= 15:
-            if plane % 2 == 0 and all(count % 2 == 0 for count in data_frame_counts):
-                encoding = "uint4"
-                suffix = "u4"
-                itemsize = 0.5
-                bytes_per_bf = (plane + 1) // 2
-                mmap_dtype = np.uint8
-                shape = (num_bf, bytes_per_bf)
-            else:
-                # Odd split files would make packed-nibble writes cross file
-                # boundaries.  Keep exact detector counts and use uint8 instead
-                # of writing a hard-to-audit partial nibble stream.
-                encoding = "uint8"
-                suffix = "u8"
-                itemsize = 1
-                bytes_per_bf = plane
-                mmap_dtype = np.uint8
-                shape = (num_bf, plane)
-        elif max_value <= 255:
-            encoding = "uint8"
-            suffix = "u8"
-            itemsize = 1
-            bytes_per_bf = plane
-            mmap_dtype = np.uint8
-            shape = (num_bf, plane)
-        elif max_value <= 65535:
-            encoding = "uint16"
-            suffix = "u16"
-            itemsize = 2
-            bytes_per_bf = plane * 2
-            mmap_dtype = np.dtype("<u2")
-            shape = (num_bf, plane)
-        else:
-            return None
-
-        rel = pathlib.Path("source") / f"bf_columns.{suffix}"
-        dst = out_path / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.exists():
-            dst.unlink()
-        out = np.memmap(dst, dtype=mmap_dtype, mode="w+", shape=shape)
-        scan_offset = 0
-        batch_frames = _bf_column_batch_frames()
-        for _file, _handle, dataset in _iter_hdf5_detector_stacks(files):
-            n_frames = int(dataset.shape[0])
-            for start in range(0, n_frames, batch_frames):
-                stop = min(n_frames, start + batch_frames)
-                block = np.asarray(dataset[start:stop])
-                cols = block[:, bf_rows, bf_cols].T
-                global_start = scan_offset + start
-                if encoding == "uint4":
-                    _write_uint4_columns(out, cols, scan_start=global_start)
-                else:
-                    out[:, global_start:global_start + cols.shape[1]] = cols.astype(mmap_dtype, copy=False)
-            scan_offset += n_frames
-        out.flush()
-        del out
-        return {
-            "kind": "bf_columns",
-            "path": rel.as_posix(),
-            "encoding": encoding,
-            "dtype": encoding,
-            "order": "bf,scan",
-            "shape": [num_bf, plane],
-            "scan_shape": [int(plane_shape[0]), int(plane_shape[1])],
-            "detector_shape": [int(detector_shape[0]), int(detector_shape[1])],
-            "bits_per_value": 4 if encoding == "uint4" else int(itemsize * 8),
-            "bytes_per_bf": int(bytes_per_bf),
-            "max_value": int(max_value),
-            "bytes": int(dst.stat().st_size),
-            "note": (
-                "Detector-major raw BF evidence companion. This is exact count data, "
-                "not a persistent float32/complex64 BF-G cache."
-            ),
-        }
-    except Exception:
-        return None
-
-
 def export_showptycho_webgpu_folder(
     widget: Any,
     out_dir: str | pathlib.Path,
@@ -727,7 +488,6 @@ def export_showptycho_webgpu_folder(
     overwrite: bool = True,
     source_master: str | pathlib.Path | None = None,
     decode_dtype: str = "uint16",
-    webgpu_source: ShowPtychoWebGPUSource | str = "compressed_hdf5",
 ) -> pathlib.Path:
     """Export a ShowPtycho WebGPU folder backed by compressed HDF5 source files."""
 
@@ -736,7 +496,6 @@ def export_showptycho_webgpu_folder(
             "decode_dtype must be 'uint8', 'uint16', or 'float32'; "
             f"got {decode_dtype!r}"
         )
-    source_policy = _normalize_webgpu_source(webgpu_source)
     accel = widget._accel
     if not hasattr(accel, "_cache"):
         raise NotImplementedError("ShowPtycho WebGPU folder export requires SSB calibration state.")
@@ -778,27 +537,10 @@ def export_showptycho_webgpu_folder(
     cal = _sidecar_calibration(widget, accel)
     source = _prepare_hdf5_source_folder(master, out_path)
     source["decode_dtype"] = decode_dtype
-    files = _collect_hdf5_source_files(master)
-    bf_columns = (
-        _write_bf_column_companion(files=files, out_path=out_path, cal=cal)
-        if source_policy in {"bf_columns", "auto"}
-        else None
-    )
-    if source_policy == "bf_columns" and bf_columns is None:
-        raise ValueError(
-            "webgpu_source='bf_columns' was requested, but the exact BF-column "
-            "companion could not be written from this HDF5 source. Use "
-            "webgpu_source='compressed_hdf5' for the default WebGPU decompression path."
-        )
-    if bf_columns is not None:
-        source["bf_columns"] = bf_columns
-        source["preferred_browser_source"] = "bf_columns"
     cal["source_file"] = pathlib.Path(source["master"]).name
-    cal["source_transport"] = "bf_columns" if bf_columns is not None else "compressed_hdf5"
-    cal["webgpu_source_policy"] = source_policy
+    cal["source_transport"] = "compressed_hdf5"
     cal["source_files"] = source["data_files"]
     cal["source_decode_dtype"] = decode_dtype
-    cal["bf_column_companion"] = bf_columns is not None
     cal["persistent_bf_cache"] = False
 
     (out_path / "cal.json").write_text(json.dumps(cal, indent=2), encoding="utf-8")
@@ -828,18 +570,6 @@ def export_showptycho_webgpu_folder(
         "chunkIndexes": source.get("chunk_indexes", []),
         "decodeDtype": decode_dtype,
     }
-    if bf_columns is not None:
-        browser_source = {
-            "kind": "bf_columns",
-            "url": bf_columns["path"],
-            "dtype": bf_columns["dtype"],
-            "encoding": bf_columns["encoding"],
-            "numBf": bf_columns["shape"][0],
-            "plane": bf_columns["shape"][1],
-            "scanShape": bf_columns["scan_shape"],
-            "bytesPerBf": bf_columns["bytes_per_bf"],
-            "bitsPerValue": bf_columns["bits_per_value"],
-        }
     _write_embedded_widget_html(
         widget,
         out_path / "index.html",
@@ -847,30 +577,19 @@ def export_showptycho_webgpu_folder(
         calibration=cal,
         h5_source=browser_source,
     )
-    if bf_columns is not None:
-        source_note = (
-            "The browser reads the detector-major BF-column count companion under "
-            "`source/` and builds BF reducers transiently in GPU memory. The original "
-            "compressed HDF5 files are also preserved as paper truth and fallback input."
-        )
-    else:
-        source_note = (
-            "The browser reads the original compressed HDF5 master/data files under "
-            "`source/`, decompresses the selected BF evidence with WebGPU, and builds "
-            "BF reducers transiently in GPU memory. No BF-column companion is written "
-            "by default; use `webgpu_source='bf_columns'` or "
-            "`quantem ptycho --webgpu-source bf-columns` only for an explicit fallback "
-            "or comparison export."
-        )
+    source_note = (
+        "The browser reads the original compressed HDF5 master/data files under "
+        "`source/`, decompresses the selected BF evidence with WebGPU, and builds "
+        "BF reducers transiently in GPU memory."
+    )
     (out_path / "README.md").write_text(
         "# ShowPtycho WebGPU Folder\n\n"
         "Two ways to open this review - no install needed for the first:\n\n"
-        "1. **Double-click** `index.html` in Chrome or Edge, click **Open data folder**, "
-        "and select this folder. No server, no Python, no terminal. "
-        "(If it opens in Safari, drag `index.html` onto Chrome instead.)\n"
-        "2. **CLI**: `quantem ptycho <this folder>` serves it and opens the browser "
-        "automatically (needs the `quantem-widget` package; `quantem showptycho` "
-        "also works as a compatibility alias). Any other Range-capable "
+        "1. **Double-click** `ShowPtycho.command` (macOS) - it serves this folder "
+        "and opens the viewer in Chrome. Or double-click `index.html`, click "
+        "**Open data folder**, and select this folder.\n"
+        "2. **CLI**: `quantem show <this folder>` serves it and opens the browser "
+        "automatically (needs the `quantem-widget` package). Any other Range-capable "
         "static server works too.\n\n"
         f"{source_note} The folder "
         "intentionally does not store `g_bf.c64`, reference `.f32` images, or detector-binned data.\n",
@@ -883,133 +602,3 @@ def export_showptycho_webgpu_folder(
     return out_path
 
 
-def export_showptycho_webgpu_sidecar(
-    widget: Any,
-    out_dir: str | pathlib.Path,
-    *,
-    title: str | None = None,
-    overwrite: bool = True,
-) -> pathlib.Path:
-    """Export a ShowPtycho WebGPU folder from a live widget instance."""
-
-    accel = widget._accel
-    if not hasattr(accel, "G_qk") and hasattr(accel, "_sync_webgpu_export_state"):
-        accel._sync_webgpu_export_state()
-    if not hasattr(accel, "G_qk") or not hasattr(accel, "_cache"):
-        raise NotImplementedError(
-            "ShowPtycho WebGPU folder export currently requires the CUDA "
-            "SSB accelerator with BF-indexed G_qk."
-        )
-    ny, nx = _ensure_supported_webgpu_shape(accel)
-
-    out_path = pathlib.Path(out_dir)
-    if out_path.exists() and not overwrite:
-        raise FileExistsError(f"{out_path} already exists")
-    out_path.mkdir(parents=True, exist_ok=True)
-
-    accel.cache_rotation(math.radians(float(widget.rotation_deg)))
-    if not hasattr(accel, "G_qk") and hasattr(accel, "_sync_webgpu_export_state"):
-        accel._sync_webgpu_export_state()
-    c10 = float(widget._current_c10())
-    c12 = float(widget._current_c12())
-    phi12_deg = float(widget._current_phi12_deg())
-    phi12 = math.radians(phi12_deg)
-    if hasattr(widget, "_higher_order_arrays"):
-        mags_m, angles_rad, any_ho = widget._higher_order_arrays(c10, c12, phi12_deg)
-    else:
-        mags_m = angles_rad = None
-        any_ho = False
-    if any_ho and hasattr(accel, "reconstruct_full_with_loss"):
-        phase_gpu, loss = accel.reconstruct_full_with_loss(mags_m, angles_rad)
-    else:
-        phase_gpu, loss = accel.reconstruct_with_loss(c10, c12, phi12)
-    phase = _to_numpy(phase_gpu).astype(np.float32, copy=False)
-    if bool(widget.flip_phase):
-        phase = -phase
-    fft_mag = _showptycho_fft_mag(phase)
-    mean_phase = getattr(accel, "_mean_phase_buffer", None)
-    sumsq = getattr(accel, "_sumsq_buffer", None)
-    if mean_phase is None or sumsq is None:
-        variance = np.zeros_like(phase, dtype=np.float32)
-    else:
-        variance = _to_numpy(
-            sumsq / float(accel._cache["num_bf"]) - mean_phase ** 2
-        ).astype(np.float32, copy=False)
-    try:
-        amplitude = _to_numpy(accel.reconstruct_object(c10, c12, phi12))
-        amplitude = np.abs(amplitude).astype(np.float32, copy=False)
-    except Exception:
-        amplitude = np.zeros_like(phase, dtype=np.float32)
-
-    g_qk = _to_numpy(accel.G_qk).astype(np.complex64, copy=False)
-    if g_qk.ndim != 3 or tuple(g_qk.shape[1:]) != (ny, nx):
-        raise ValueError(f"Expected G_qk[:,{ny},{nx}], got {g_qk.shape}.")
-    g_qk.tofile(out_path / "g_bf.c64")
-    phase.tofile(out_path / "ref_phase.f32")
-    fft_mag.tofile(out_path / "ref_fft.f32")
-    variance.tofile(out_path / "ref_phase_variance.f32")
-    amplitude.tofile(out_path / "ref_amplitude.f32")
-    np.save(out_path / "ref_phase.npy", phase)
-    np.save(out_path / "ref_fft.npy", fft_mag)
-    np.savez_compressed(
-        out_path / "ref_products.npz",
-        phase=phase,
-        fft=fft_mag,
-        phase_variance=variance,
-        amplitude=amplitude,
-    )
-
-    cal = _sidecar_calibration(widget, accel)
-    cal["loss"] = float(loss)
-    (out_path / "cal.json").write_text(json.dumps(cal, indent=2), encoding="utf-8")
-    manifest = {
-        "schema_version": 1,
-        "format": "quantem.showptycho.webgpu.folder.v1",
-        "title": title or "ShowPtycho",
-        "index": "index.html",
-        "calibration": "cal.json",
-        "arrays": {
-            "g_bf": {
-                "path": "g_bf.c64",
-                "shape": list(g_qk.shape),
-                "dtype": "complex64",
-                "layout": "bf,row,col interleaved float32 re,im",
-            },
-            "ref_phase": {"path": "ref_phase.f32", "shape": list(phase.shape), "dtype": "float32"},
-            "ref_fft": {"path": "ref_fft.f32", "shape": list(fft_mag.shape), "dtype": "float32"},
-            "ref_phase_variance": {
-                "path": "ref_phase_variance.f32",
-                "shape": list(variance.shape),
-                "dtype": "float32",
-            },
-            "ref_amplitude": {
-                "path": "ref_amplitude.f32",
-                "shape": list(amplitude.shape),
-                "dtype": "float32",
-            },
-        },
-        "non_goals": ["no raw diffraction patterns", "no full detector G", "no silent binning"],
-    }
-    (out_path / "manifest.json").write_text(
-        json.dumps(manifest, indent=2), encoding="utf-8",
-    )
-    _write_empty_saves_manifest(out_path)
-    _write_embedded_widget_html(
-        widget,
-        out_path / "index.html",
-        title=str(manifest["title"]),
-        calibration=cal,
-        g_bf_url="g_bf.c64",
-    )
-    (out_path / "PARITY.md").write_text(
-        "# ShowPtycho WebGPU Folder\n\n"
-        "Open `index.html` over HTTP. It renders the same ShowPtycho widget UI "
-        "and fetches the folder-local BF-G payload from `g_bf.c64`.\n",
-        encoding="utf-8",
-    )
-    # Double-click launcher: users can open the viewer without a terminal or a
-    # File System Access grant (see quantem.widget.command_launcher).
-    from quantem.widget.command_launcher import write_command_launcher
-
-    write_command_launcher(out_path, "ShowPtycho")
-    return out_path

@@ -16,8 +16,7 @@ folder contains a small `index.html` viewer, calibration metadata, and an exact
 microscopy payload under `source/`. The default payload is the original
 compressed HDF5 master/data source; the browser uses WebGPU to decompress the
 selected BF evidence and build BF-indexed `G(k)` reducers transiently in GPU
-memory. A detector-major BF-column companion can still be requested explicitly
-with `webgpu_source="bf_columns"` for fallback or comparison exports. Moving
+memory. Moving
 C10, C12, phi12, or scan rotation makes the browser build BF-indexed `G(k)`
 reducers transiently in GPU memory and run the SSB phase reconstruction from
 those transient buffers. The export does not persist expanded float32 images or
@@ -124,12 +123,6 @@ review without the notebook kernel:
 ```python
 w = ShowPtycho(ssb, fft_on=True)  # starts at full selected BF
 w.export("logic013_512_review")
-```
-
-Use BF columns only as an explicit fallback or comparison transport:
-
-```python
-w.export("logic013_512_bfcols", webgpu_source="bf_columns")
 ```
 
 To start the viewer directly in the authoritative full-BF mode, pass
