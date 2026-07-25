@@ -195,17 +195,17 @@ class _FakeSSB:
         return self._accel
 
 
-def test_ssb_crop_requires_native_square_scan_region():
-    """C1: crop requests use supported native squares, expect clear errors."""
+def test_ssb_crop_accepts_in_bounds_rectangles_with_minimum_span():
+    """C1: rectangular crop requests are valid when both spans are usable."""
     from quantem.widget.showptycho import _validate_ssb_scan_region
 
-    assert _validate_ssb_scan_region((0, 128, 128, 256), (512, 512)) == (
+    assert _validate_ssb_scan_region((0, 128, 128, 320), (512, 512)) == (
         0,
         128,
         128,
-        256,
+        320,
     )
-    for region in ((0, 127, 0, 127), (0, 128, 0, 256), (-1, 127, 0, 128)):
+    for region in ((0, 31, 0, 128), (0, 128, 0, 31), (-1, 127, 0, 128)):
         try:
             _validate_ssb_scan_region(region, (512, 512))
         except ValueError:
@@ -493,6 +493,67 @@ def test_showptycho_mps_accel_does_not_require_cupy(monkeypatch):
     assert "cupy" not in sys.modules
 
 
+def test_showptycho_mps_accel_uses_phase_only_reconstruct(monkeypatch):
+    """MPS ShowPtycho should hit the fused phase/loss path, not object-wave work."""
+    import quantem.gpu.ssb.mps as mps
+    from quantem.widget.showptycho import _MpsPtychoAccelerator
+
+    class FakePrepared:
+        num_bf = 2
+        scan_shape = (4, 4)
+        kx_np = np.array([0.0, 0.1], dtype=np.float32)
+        ky_np = np.array([0.0, -0.1], dtype=np.float32)
+        wavelength = 0.025
+        semiangle_rad = 0.02
+        ang_y_rad = 0.001
+        ang_x_rad = 0.001
+        dc_value = 1.0 + 0.0j
+        g_qk = np.ones((2, 4, 3), dtype=np.complex64)
+
+    calls: list[dict] = []
+    fake_prepared = FakePrepared()
+
+    monkeypatch.setattr(mps, "_as_chunked_frames", lambda data: data)
+    monkeypatch.setattr(mps, "_scan_shape", lambda frames: (4, 4))
+    monkeypatch.setattr(mps, "_as_sampling", lambda value: (float(value), float(value)))
+    monkeypatch.setattr(
+        mps,
+        "_bf_pixels",
+        lambda *_args, **_kwargs: (
+            np.array([1, 2], dtype=np.int32),
+            np.array([2, 1], dtype=np.int32),
+            (1.5, 1.5),
+            2.0,
+            2.0,
+        ),
+    )
+    monkeypatch.setattr(mps, "_default_object_redraw_chunk_bf", lambda: 16)
+    monkeypatch.setattr(mps, "_default_object_setup_chunk_bf", lambda: 16)
+    monkeypatch.setattr(mps, "_prepare_selection", lambda *_args, **_kwargs: fake_prepared)
+
+    def fake_reconstruct(_prepared, **kwargs):
+        calls.append(dict(kwargs))
+        return None, 0.25 if kwargs["compute_loss"] else None, np.zeros((4, 4), dtype=np.float32)
+
+    monkeypatch.setattr(mps, "_reconstruct_prepared", fake_reconstruct)
+
+    accel = _MpsPtychoAccelerator(
+        types.SimpleNamespace(shape=(16, 4, 4)),
+        voltage_kV=200.0,
+        semiangle_mrad=21.4,
+        scan_sampling=0.5,
+        det_sampling=None,
+        bf_intensity_threshold=0.5,
+        bf_radius=2,
+        rotation_angle_deg=0.0,
+    )
+    accel.reconstruct_with_loss(1.0, 2.0, 0.3)
+    accel.reconstruct(1.0, 2.0, 0.3)
+
+    assert [call["compute_loss"] for call in calls] == [True, False]
+    assert [call["compute_object"] for call in calls] == [False, False]
+
+
 def test_showssb_is_not_public_api():
     """The public widget name is ShowPtycho."""
     import quantem.widget as qw
@@ -523,7 +584,7 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
         source_file=str(master),
     )
 
-    out_dir = widget.export_webgpu_folder(tmp_path / "folder")
+    out_dir = widget.export(tmp_path / "folder")
 
     assert (out_dir / "index.html").exists()
     assert not (out_dir / "g_bf.c64").exists()
@@ -595,7 +656,7 @@ def test_showptycho_exports_wrapper_master_external_hdf5_source(monkeypatch, tmp
         source_file=str(master),
     )
 
-    out_dir = widget.export_webgpu_folder(tmp_path / "wrapper-folder", decode_dtype="uint8")
+    out_dir = widget.export(tmp_path / "wrapper-folder", decode_dtype="uint8")
 
     assert (out_dir / "source" / master.name).exists()
     assert (out_dir / "source" / data_file.name).exists()
@@ -678,7 +739,7 @@ def test_showptycho_webgpu_folder_writes_detector_major_bf_columns(
         source_file=str(master),
     )
 
-    default_dir = widget.export_webgpu_folder(tmp_path / "bfcols-default", decode_dtype="uint8")
+    default_dir = widget.export(tmp_path / "bfcols-default", decode_dtype="uint8")
 
     default_cal = json.loads((default_dir / "cal.json").read_text())
     assert default_cal["source_transport"] == "compressed_hdf5"
@@ -692,7 +753,7 @@ def test_showptycho_webgpu_folder_writes_detector_major_bf_columns(
     assert "bf_columns.u4" not in default_html
     assert "g_bf.c64" not in default_html
 
-    out_dir = widget.export_webgpu_folder(
+    out_dir = widget.export(
         tmp_path / "bfcols-folder",
         decode_dtype="uint8",
         webgpu_source="bf_columns",
@@ -771,7 +832,7 @@ def test_showptycho_webgpu_folder_uses_mps_metadata_without_gqk_sync(
     )
 
     widget.rotation_deg = 5.0
-    out_dir = widget.export_webgpu_folder(tmp_path / "mps-folder", decode_dtype="uint8")
+    out_dir = widget.export(tmp_path / "mps-folder", decode_dtype="uint8")
 
     cal = json.loads((out_dir / "cal.json").read_text())
     assert cal["g_shape"] == [2, 128, 128]
