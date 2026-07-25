@@ -653,6 +653,17 @@ interface HistogramProps {
   bins?: number[] | null;
 }
 
+// Same table as Show2D so both widgets speak the same contrast language.
+const CONTRAST_PRESETS = [
+  { value: "manual", label: "Manual", low: 0, high: 100 },
+  { value: "0.5-99.5", label: "0.5\u201399.5", low: 0.5, high: 99.5 },
+  { value: "1-99", label: "1\u201399", low: 1, high: 99 },
+  { value: "2-98", label: "2\u201398", low: 2, high: 98 },
+  { value: "3-97", label: "3\u201397", low: 3, high: 97 },
+  { value: "5-95", label: "5\u201395", low: 5, high: 95 },
+  { value: "10-90", label: "10\u201390", low: 10, high: 90 },
+] as const;
+
 const Histogram = React.memo(function Histogram({
   data, vminPct, vmaxPct, onRangeChange,
   width = 110, height = 40, theme = "dark",
@@ -2407,6 +2418,7 @@ function Show3D() {
   const [traitVmax] = useModelState<number | null>("vmax");
   const [imageVminPct, setImageVminPct] = useModelState<number>("image_vmin_pct");
   const [imageVmaxPct, setImageVmaxPct] = useModelState<number>("image_vmax_pct");
+  const [contrastPreset, setContrastPreset] = useModelState<string>("contrast_preset");
   const manualImageRangeBeforeAutoRef = React.useRef<{ min: number; max: number } | null>(null);
   const [vminPerPanel, setVminPerPanel] = useModelState<(number | null)[]>("vmin_per_panel");
   const [vmaxPerPanel, setVmaxPerPanel] = useModelState<(number | null)[]>("vmax_per_panel");
@@ -3889,6 +3901,22 @@ function Show3D() {
     return resolvePanelRange(panel, range, sharedAutoRange);
   };
 
+  // Mirrors Show2D: a preset drops Auto and pins the histogram window to a
+  // fixed percent range, so "2-98" means the same thing in both widgets.
+  const applyContrastPreset = (preset: string) => {
+    setContrastPreset(preset);
+    if (preset === "manual" || preset === "custom") {
+      setAutoContrast(false);
+      return;
+    }
+    const match = preset.match(/^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/);
+    if (!match) return;
+    const lo = Math.max(0, Math.min(100, Number(match[1])));
+    const hi = Math.max(lo + 0.01, Math.min(100, Number(match[2])));
+    setAutoContrast(false);
+    setImageVminPct(lo);
+    setImageVmaxPct(hi);
+  };
   const handleAutoContrastChange = (on: boolean) => {
     if (on) {
       manualImageRangeBeforeAutoRef.current = { min: imageVminPct, max: imageVmaxPct };
@@ -11758,6 +11786,27 @@ function Show3D() {
                 <Typography sx={{ flex: 1, fontSize: 12, color: "inherit" }} title="Mean / min / max / std readout under the image.">Stats</Typography>
                 <Switch checked={showStats} onClick={(e) => e.stopPropagation()} onChange={(e) => setShowStats(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle statistics readout" } }} />
               </MenuItem>
+              <Box
+                onClick={(event) => event.stopPropagation()}
+                sx={{ px: 1.5, py: 0.75, minWidth: 200, display: "grid", gridTemplateColumns: "1fr auto", gap: 1, alignItems: "center" }}
+              >
+                <Typography sx={{ fontSize: 12, color: themeColors.text }} title="Apply a percentile contrast window. The histogram handles track it.">
+                  Contrast
+                </Typography>
+                <Select
+                  size="small"
+                  value={contrastPreset || "manual"}
+                  onChange={(event) => applyContrastPreset(String(event.target.value))}
+                  renderValue={(value) => CONTRAST_PRESETS.find((preset) => preset.value === value)?.label || "Manual"}
+                  MenuProps={themedMenuProps}
+                  sx={{ ...themedSelect, minWidth: 76 }}
+                  inputProps={{ "aria-label": "Contrast percentile preset" }}
+                >
+                  {CONTRAST_PRESETS.map((preset) => (
+                    <MenuItem key={preset.value} value={preset.value}>{preset.label}</MenuItem>
+                  ))}
+                </Select>
+              </Box>
               <MenuItem dense onClick={toggleDenoise} sx={{ fontSize: 12, gap: 1, color: denoiseEnabled ? themeColors.accent : themeColors.text }}>
                 <Typography sx={{ flex: 1, fontSize: 12, color: "inherit" }} title="Display-only denoise: ON shows the denoised view, OFF shows raw (config preserved). Raw data and stats keep original counts.">Denoise</Typography>
                 <Switch checked={denoiseEnabled ?? false} onClick={(e) => e.stopPropagation()} onChange={toggleDenoise} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle denoise on/off" } }} />
