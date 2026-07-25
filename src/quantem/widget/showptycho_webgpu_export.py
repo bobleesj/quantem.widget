@@ -55,7 +55,7 @@ def _jsonable_int_list(array: object) -> list[int]:
     return _to_numpy(array).astype(np.int32, copy=False).tolist()
 
 
-def _sidecar_calibration(widget: Any, accel: Any) -> dict[str, Any]:
+def _folder_calibration(widget: Any, accel: Any) -> dict[str, Any]:
     cache = accel._cache
     g_shape = getattr(accel, "g_shape", None)
     if g_shape is None and hasattr(accel, "G_qk"):
@@ -191,7 +191,7 @@ def build_showptycho_webgpu_payload(
             f"{nbytes / 1e6:.1f} MB > {int(max_bytes) / 1e6:.1f} MB.",
         )
 
-    cal = _sidecar_calibration(widget, accel)
+    cal = _folder_calibration(widget, accel)
     cal["notebook_payload_bytes"] = nbytes
     cal["notebook_preview"] = True
     return cal, g_qk.tobytes(), (
@@ -206,7 +206,6 @@ def _write_embedded_widget_html(
     *,
     title: str,
     calibration: dict[str, Any],
-    g_bf_url: str = "",
     h5_source: dict[str, Any] | None = None,
 ) -> None:
     """Write the same ShowPtycho widget UI with folder-local WebGPU data."""
@@ -233,7 +232,7 @@ def _write_embedded_widget_html(
         widget.webgpu_standalone = True
         widget.webgpu_cal_json = json.dumps(calibration)
         widget.webgpu_g_bf_bytes = b""
-        widget.webgpu_g_bf_url = g_bf_url
+        widget.webgpu_g_bf_url = ""
         widget.webgpu_h5_source_json = json.dumps(h5_source or {})
         if h5_source:
             widget.phase_bytes = b""
@@ -534,7 +533,7 @@ def export_showptycho_webgpu_folder(
     master = pathlib.Path(raw_source).expanduser()
     master = master.resolve()
     accel.cache_rotation(math.radians(float(widget.rotation_deg)))
-    cal = _sidecar_calibration(widget, accel)
+    cal = _folder_calibration(widget, accel)
     source = _prepare_hdf5_source_folder(master, out_path)
     source["decode_dtype"] = decode_dtype
     cal["source_file"] = pathlib.Path(source["master"]).name

@@ -19,8 +19,8 @@ collaborators can open these folders on ordinary laptops?
 - Export at the time of this experiment: `quantem ptycho <master> --calibration <fit.json>`
   with the historical BF-column companion enabled
   (WebGPU folder, compressed HDF5 + `bf_columns.u8` companion, 5.9 GB on disk).
-  Current default exports use the compressed-HDF5 WebGPU source directly; use
-  `--webgpu-source bf-columns` only to reproduce this older transport.
+  Current exports use the compressed-HDF5 WebGPU source directly; the
+  BF-column companion transport was later removed.
 - Viewer host: phil (M5 MacBook, 24 GB unified, Chrome, adapter `apple/metal-3`
   — real hardware confirmed via `adapter.info`, not SwiftShader).
 - Harness: folder served by `scripts/serve_sidecar_range.py` (plain

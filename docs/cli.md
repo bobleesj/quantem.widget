@@ -87,9 +87,9 @@ first view uses all known BF evidence without loading non-BF detector pixels.
 Use `--drag-bf 0.3` or another smaller fraction only when you intentionally want
 a faster exploratory preview.
 
-The default browser source is the compressed-HDF5 WebGPU path. Use
-`--webgpu-source bf-columns` only when you intentionally want the older
-detector-major BF-column companion for fallback or side-by-side comparison.
+The browser source is the compressed HDF5 WebGPU path: the exported folder
+carries the original compressed HDF5 under `source/`, and the browser
+decompresses the selected BF evidence with WebGPU.
 
 Existing ShowPtycho WebGPU exports are also folders because the microscopy
 payload can be several gigabytes. Open them with the CLI:
