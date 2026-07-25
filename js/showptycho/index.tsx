@@ -671,9 +671,17 @@ function drawCanvas(
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
-  canvas.width = size * DPR;
-  canvas.height = size * DPR;
-  ctx.scale(DPR, DPR);
+  // Only resize when the size actually changes. Assigning canvas.width/height
+  // clears the canvas to transparent, so doing it every draw (e.g. on every
+  // histogram-drag tick) wipes the visible image before the redraw lands, which
+  // reads as flicker. When the size is unchanged, repaint in place instead.
+  const targetW = Math.round(size * DPR);
+  const targetH = Math.round(size * DPR);
+  if (canvas.width !== targetW || canvas.height !== targetH) {
+    canvas.width = targetW;
+    canvas.height = targetH;
+  }
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.fillStyle = bgColor;
   ctx.fillRect(0, 0, size, size);
 
