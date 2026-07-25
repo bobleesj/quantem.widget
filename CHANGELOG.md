@@ -6,6 +6,20 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Exported standalone HTML no longer dies on a first-time (cold cache) load.
+  requirejs's default 7 s per-module timeout could make the widget manager load
+  a second copy of the anywidget runtime while the CDN fetch was still in
+  flight; the model registered its binding in one copy, the view looked it up
+  in the other, and the page showed only "Failed to create view ... 
+  WidgetBinding not found". The export now pins one anywidget URL and disables
+  the requirejs timeout, so every export-capable widget survives an empty
+  browser cache. Verified on fresh Chrome profiles that previously reproduced
+  the blank page deterministically.
+- Show3D gained the same contrast percentile presets Show2D has: the More menu
+  now offers Manual / 0.5-99.5 / 1-99 / 2-98 / 3-97 / 5-95 / 10-90, picking one
+  pins the histogram window and drops Auto, and `contrast_preset="2-98"` works
+  from the constructor and round-trips through `state_dict`.
+
 - Show3DSlices oblique panel geometry is no longer tied to the Align control.
   The GPU slice shader receives the cut's start/stop on every render, so the
   Angle and Position sliders move the vertical cut whether or not slice
