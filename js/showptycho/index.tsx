@@ -1779,15 +1779,20 @@ function Explore() {
   const effectiveTotalBf = webgpuStandalone && webgpuCalActiveBf > 0
     ? webgpuCalActiveBf
     : Math.max(0, Math.round(totalBf || 0));
+  const standaloneBfSeededRef = React.useRef(false);
   React.useEffect(() => {
     const total = effectiveTotalBf;
     const raw = Math.round(dragBfTrait ?? 0);
-    const nextRaw = total > 0 && raw <= 0 ? defaultBfCount(total) : raw;
+    const seedStandaloneDefault = webgpuStandalone && !standaloneBfSeededRef.current && total > 0;
+    const nextRaw = total > 0 && (raw <= 0 || seedStandaloneDefault) ? defaultBfCount(total) : raw;
     const next = total > 0 ? Math.max(1, Math.min(total, nextRaw)) : nextRaw;
     setLocalDragBf(next);
     dragBfRef.current = next;
-    if (total > 0 && raw <= 0) setDragBfTrait(next);
-  }, [defaultBfCount, dragBfTrait, effectiveTotalBf, setDragBfTrait]);
+    if (seedStandaloneDefault) standaloneBfSeededRef.current = true;
+    if (total > 0 && (raw <= 0 || seedStandaloneDefault) && raw !== next) {
+      setDragBfTrait(next);
+    }
+  }, [defaultBfCount, dragBfTrait, effectiveTotalBf, setDragBfTrait, webgpuStandalone]);
   const [pinned, setPinned] = React.useState<PinnedEntry[]>([]);
   const [viewPin, setViewPin] = React.useState<number | null>(null);
   const [exportStatus, setExportStatus] = React.useState("");
