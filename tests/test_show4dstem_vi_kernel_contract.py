@@ -169,6 +169,10 @@ def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
     assert "__QT_H5_SOURCE_SCAN_ROWS" in frontend
     assert "__QT_H5_SOURCE_SCAN_COLS" in frontend
     assert "__QT_H5_SCAN_REGION" in frontend
+    assert "detBin: show4DSTEMOptionalGlobalInt(\"__QT_H5_DET_BIN\", 1, 16)" in frontend
+    assert "decodeDtype: (globalThis as { __QT_H5_DECODE_DTYPE?: unknown })" in frontend
+    assert "const bytesPerPixel = local.mode === 2 ? 4 : local.mode === 0 ? 2 : 1;" in frontend
+    assert "const httpDecodeOverride = String((globalThis as { __QT_H5_DECODE_DTYPE?: unknown })" in frontend
     assert "localFiles: true" in frontend
     assert "h5LocalFilesGranted, h5SourceAvailable, offline" in frontend
     assert "rawChecksums:" in frontend
@@ -207,6 +211,8 @@ def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
     assert "const READ_WORKER_SOURCE" in local_h5
     assert "new Blob([READ_WORKER_SOURCE]" in local_h5
     assert "decodeBslz4ToStack({ ...vol.chunks[0], startScan" not in frontend
+    assert "const mergedSpecs = vol.chunks.map((chunk) => {" in frontend
+    assert "Show4DSTEMCompute.createFromBslz4Chunked(mergedSpecs" in frontend
     assert "_h5_uint8_lossless" in (
         repo / "src" / "quantem" / "widget" / "show4dstem.py"
     ).read_text(encoding="utf-8")
@@ -283,6 +289,7 @@ def test_show4dstem_multiple_detector_drag_uses_live_gpu_compare_slots() -> None
     assert "requestCompareViLiveRef" in frontend
     assert "requestCompareViLive();" in frontend
     assert "requestCompareViLiveRef.current = () => {" in frontend
+    assert 'type DpcGpuSource = "DPC_row" | "DPC_col" | "iDPC";' in frontend
     assert "gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine && scaleMode !== \"log\")" in frontend
     assert "entry.panel !== undefined || entry.gpuLoaded" in frontend
     assert "const loaded = panel !== undefined || gpuLoaded;" in frontend
@@ -293,6 +300,22 @@ def test_show4dstem_multiple_detector_drag_uses_live_gpu_compare_slots() -> None
     assert "if (gpuEngine) gpuEngine.uploadLUT(colormap, lut);" in frontend
     assert "renderSlotDirectWithGpuRangeToCanvas" in frontend
     assert "renderSlotGpuRangeToOffscreen" not in frontend
+    assert "let comparePersistentStack: Float32Array | null = null;" in frontend
+    assert "if (interactiveDrag && !volIsResident(idx)) continue;" in frontend
+
+
+def test_show4dstem_webgpu_fits_bf_disk_in_browser_for_h5_sources() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    frontend = (repo / "js" / "show4dstem" / "index.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "const fitBfDiskFromMeanDp = async (): Promise<void> => {" in frontend
+    assert "const ratioGuess = Math.min(detR, detC) * 0.125;" in frontend
+    assert "const scanMask = new Uint32Array(scanCount);" in frontend
+    assert "const dp = await compute.reduceFrames(scanMask, true);" in frontend
+    assert "model.set(\"bf_radius\", edge);" in frontend
+    assert "await fitBfDiskFromMeanDp().catch((error) => {" in frontend
 
 
 def test_show4dstem_h5_export_embeds_local_bad_pixel_mask(tmp_path: Path) -> None:
