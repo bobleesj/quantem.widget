@@ -1943,14 +1943,21 @@ function Explore() {
     if (picker) {
       try {
         const handle = await picker.call(globalThis, { startIn: "downloads", mode: "readwrite" } as { startIn: string });
-        // Validate: the data folder must contain cal.json next to this HTML.
+        // Validate old exports with root cal.json and clean exports with
+        // snapshots/cal.json; calibration is embedded, this only catches a
+        // wrong folder selection before source/saves reads fail later.
         try {
           await handle.getFileHandle("cal.json");
         } catch {
-          setLocalSourceError(
-            `That folder has no cal.json - select the folder named "${localFolderName || "the one containing this page"}" (the folder this index.html lives in).`,
-          );
-          return;
+          try {
+            const snapshots = await handle.getDirectoryHandle("snapshots");
+            await snapshots.getFileHandle("cal.json");
+          } catch {
+            setLocalSourceError(
+              `That folder has no calibration snapshot - select the folder named "${localFolderName || "the one containing this page"}" (the folder this index.html lives in).`,
+            );
+            return;
+          }
         }
         setShowPtychoLocalDirectory(handle);
         setLocalSourceError("");
@@ -1960,8 +1967,8 @@ function Explore() {
     }
     localDirInputRef.current?.click();
   }, [localFolderName]);
-  // Folder-persisted saves: JPEG + entry in saves/saves.json inside the
-  // export folder. Survive relaunch from CLI serve AND double-click; loadable,
+  // Folder-persisted snapshots: JPEG + entry in snapshots/snapshots.json inside
+  // the export folder. Survive relaunch from CLI serve AND double-click; loadable,
   // deletable, downloadable from the strip below the action row.
   type FolderSaveRecord = {
     id: string;
@@ -1979,7 +1986,7 @@ function Explore() {
   const [folderSaves, setFolderSaves] = React.useState<FolderSaveRecord[]>([]);
   const [folderSaveStatus, setFolderSaveStatus] = React.useState("");
   const refreshFolderSaves = React.useCallback(async () => {
-    const data = await readShowPtychoFolderJson<FolderSaveRecord[]>("saves/saves.json");
+    const data = await readShowPtychoFolderJson<FolderSaveRecord[]>("snapshots/snapshots.json");
     if (Array.isArray(data)) setFolderSaves(data);
   }, []);
   React.useEffect(() => {
@@ -1988,10 +1995,15 @@ function Explore() {
   const onLocalDirInput = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (files && files.length > 0) {
-      const names = new Set(Array.from(files).map((f) => f.name));
-      if (!names.has("cal.json")) {
+      const names = new Set(Array.from(files).flatMap((f) => [
+        f.name,
+        (f as File & { webkitRelativePath?: string }).webkitRelativePath || "",
+      ]));
+      const hasCalibration = names.has("cal.json")
+        || Array.from(names).some((name) => name.endsWith("snapshots/cal.json"));
+      if (!hasCalibration) {
         setLocalSourceError(
-          `That folder has no cal.json - select the folder named "${localFolderName || "the one containing this page"}".`,
+          `That folder has no calibration snapshot - select the folder named "${localFolderName || "the one containing this page"}".`,
         );
         return;
       }
@@ -3102,17 +3114,17 @@ function Explore() {
         loss: loss ?? null,
         bf: Math.round(dragBfRef.current || 0),
         notes: String(notes ?? ""),
-        image: `saves/save_${stamp}_C10_${slugPart(sliderVals.current.c10.toFixed(0))}.jpg`,
+        image: `snapshots/snapshot_${stamp}_C10_${slugPart(sliderVals.current.c10.toFixed(0))}.jpg`,
       };
       const next = [...folderSaves, record];
       if (showPtychoFolderWritable()) {
         await writeShowPtychoFolderFile(record.image, jpeg);
-        await writeShowPtychoFolderFile("saves/saves.json", JSON.stringify(next, null, 2));
+        await writeShowPtychoFolderFile("snapshots/snapshots.json", JSON.stringify(next, null, 2));
         setFolderSaves(next);
-        setFolderSaveStatus(`Saved to folder (${next.length}) + downloaded`);
+        setFolderSaveStatus(`Snapshot saved (${next.length}) + downloaded`);
       } else {
         // webkitdirectory grants are read-only - fall back to download-only
-        setFolderSaveStatus("Folder is read-only here - image downloaded (use the Open data folder picker for persistent saves)");
+        setFolderSaveStatus("Folder is read-only here - image downloaded (use the Open data folder picker for persistent snapshots)");
       }
       downloadBlob(jpeg, record.image.split("/").pop() || "showptycho_save.jpg");
     } catch (err) {
@@ -3139,10 +3151,10 @@ function Explore() {
   const deleteFolderSave = React.useCallback(async (record: FolderSaveRecord) => {
     try {
       const next = folderSaves.filter((r) => r.id !== record.id);
-      await writeShowPtychoFolderFile("saves/saves.json", JSON.stringify(next, null, 2));
+      await writeShowPtychoFolderFile("snapshots/snapshots.json", JSON.stringify(next, null, 2));
       try { await deleteShowPtychoFolderFile(record.image); } catch { /* image may already be gone */ }
       setFolderSaves(next);
-      setFolderSaveStatus(`Deleted save (${next.length} left)`);
+      setFolderSaveStatus(`Deleted snapshot (${next.length} left)`);
     } catch (err) {
       setFolderSaveStatus(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -4541,7 +4553,7 @@ function Explore() {
           )}
         </Box>
 
-        {/* Folder-persisted saves - live in saves/ inside the export folder,
+        {/* Folder-persisted snapshots - live in snapshots/ inside the export folder,
             so they reappear on relaunch from CLI serve or double-click. */}
         {webgpuStandalone && (folderSaves.length > 0 || folderSaveStatus) && (
           <Box sx={{ pt: `${SPACING.XS}px`, borderTop: `1px solid ${tc.border}`, display: "flex", flexDirection: "column", gap: 0.25 }}>
@@ -4551,7 +4563,7 @@ function Explore() {
               </Typography>
             )}
             {folderSaves.length > 0 && (
-              <Typography sx={{ ...typography.label, color: tc.textMuted }}>Saved states ({folderSaves.length})</Typography>
+              <Typography sx={{ ...typography.label, color: tc.textMuted }}>Snapshots ({folderSaves.length})</Typography>
             )}
             {folderSaves.map((record) => (
               <Box key={record.id} sx={{ display: "flex", alignItems: "center", gap: 1, fontFamily: "monospace", fontSize: 11 }}>

@@ -563,15 +563,23 @@ def test_showssb_is_not_public_api():
 
 def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_path):
     """Widget-owned WebGPU folder export embeds the same ShowPtycho UI."""
+    import h5py
+
     from quantem.widget.showptycho import _ShowPtychoWidget
 
     monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
     master = tmp_path / "scan_master.h5"
     data_file = tmp_path / "scan_data_000001.h5"
     master.write_bytes(b"master")
-    data_file.write_bytes(b"data")
+    with h5py.File(data_file, "w") as handle:
+        entry = handle.create_group("entry")
+        group = entry.create_group("data")
+        data = np.zeros((128 * 128, 4, 4), dtype=np.uint16)
+        data[:, 1, 2] = 3
+        data[:, 2, 1] = 7
+        group.create_dataset("data", data=data, chunks=(512, 4, 4))
     widget = _ShowPtychoWidget(
-        accel=_FakeWebGPUAccel(128),
+        accel=_FakeColumnWebGPUAccel(128),
         rotation_rad=0.0,
         auto_aberrations={"C10": 1.0, "C12": 2.0, "phi12": 0.1},
         auto_loss_val=0.125,
@@ -593,31 +601,56 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
     assert not (out_dir / "ref_products.npz").exists()
     assert (out_dir / "source" / master.name).exists()
     assert (out_dir / "source" / data_file.name).exists()
-    assert json.loads((out_dir / "saves" / "saves.json").read_text()) == []
-    cal = json.loads((out_dir / "cal.json").read_text())
+    assert (out_dir / "source" / "bf_columns.u8").exists()
+    assert not (out_dir / "saves").exists()
+    assert json.loads((out_dir / "snapshots" / "snapshots.json").read_text()) == []
+    assert (out_dir / "snapshots" / "cal.json").exists()
+    assert (out_dir / "snapshots" / "manifest.json").exists()
+    assert not (out_dir / "cal.json").exists()
+    assert not (out_dir / "manifest.json").exists()
+    top_level = {p.name for p in out_dir.iterdir()}
+    assert top_level == {"index.html", "source", "snapshots", ".viewer", "ShowPtycho.command"}
+    cal = json.loads((out_dir / "snapshots" / "cal.json").read_text())
     assert cal["kind"] == "showptycho_webgpu_folder"
     assert cal["source_file"] == "scan_master.h5"
     assert cal["source_transport"] == "compressed_hdf5"
+    assert cal["bf_column_companion"] is True
+    assert cal["bf_column_companion_path"] == "source/bf_columns.u8"
     assert cal["persistent_bf_cache"] is False
     assert cal["source_calibration"] == "redacted_local_calibration"
-    assert cal["num_bf"] == 1
-    assert cal["g_shape"] == [1, 128, 128]
-    manifest = json.loads((out_dir / "manifest.json").read_text())
+    assert cal["num_bf"] == 2
+    assert cal["g_shape"] == [2, 128, 128]
+    manifest = json.loads((out_dir / "snapshots" / "manifest.json").read_text())
     assert manifest["format"] == "quantem.showptycho.webgpu.folder.v2"
     assert manifest["arrays"] == {}
     assert manifest["source"]["kind"] == "hdf5"
-    assert "bf_columns" not in manifest["source"]
-    assert "preferred_browser_source" not in manifest["source"]
+    assert manifest["calibration"] == "snapshots/cal.json"
+    assert manifest["source"]["preferred_browser_source"] == "bf_columns"
+    assert manifest["source"]["bf_columns"]["path"] == "source/bf_columns.u8"
+    assert manifest["source"]["bf_columns"]["encoding"] == "uint8"
+    assert manifest["source"]["bf_columns"]["num_bf"] == 2
+    assert manifest["source"]["bf_columns"]["scan_shape"] == [128, 128]
+    assert manifest["source"]["bf_columns"]["plane"] == 128 * 128
     assert manifest["persistent_arrays"] == []
+    from quantem.widget.cli import (
+        _is_showptycho_folder_export,
+        _showptycho_folder,
+        _showptycho_manifest,
+    )
+
+    assert _is_showptycho_folder_export(out_dir)
+    assert _showptycho_folder(out_dir) == out_dir
+    assert _showptycho_manifest(out_dir)["calibration"] == "snapshots/cal.json"
     html = (out_dir / "index.html").read_text()
     assert "application/vnd.jupyter.widget-state+json" in html
     assert "webgpu_standalone" in html
     assert "webgpu_h5_source_json" in html
+    assert "bf_columns.u8" in html
     assert "g_bf.c64" not in html
     assert "ShowPtycho WebGPU Sidecar" not in html
 
 
-def test_showptycho_exports_wrapper_master_external_hdf5_source(monkeypatch, tmp_path):
+def test_showptycho_exports_wrapper_master_external_hdf5_source_fallback(monkeypatch, tmp_path):
     """C5: wrapper master, expect external HDF5 source kept compressed."""
     import h5py
 
@@ -654,7 +687,7 @@ def test_showptycho_exports_wrapper_master_external_hdf5_source(monkeypatch, tmp
         source_file=str(master),
     )
 
-    out_dir = widget.export(tmp_path / "wrapper-folder", decode_dtype="uint8")
+    out_dir = widget.export(tmp_path / "wrapper-folder", decode_dtype="uint8", webgpu_source="hdf5")
 
     assert (out_dir / "source" / master.name).exists()
     assert (out_dir / "source" / data_file.name).exists()
@@ -663,11 +696,12 @@ def test_showptycho_exports_wrapper_master_external_hdf5_source(monkeypatch, tmp
     assert sidecar.exists()
     assert list((out_dir / "source").glob("*.chunks.u64")) == []
     assert not (out_dir / "g_bf.c64").exists()
-    cal = json.loads((out_dir / "cal.json").read_text())
+    cal = json.loads((out_dir / "snapshots" / "cal.json").read_text())
     assert cal["source_file"] == master.name
     assert cal["source_decode_dtype"] == "uint8"
     assert cal["source_transport"] == "compressed_hdf5"
-    manifest = json.loads((out_dir / "manifest.json").read_text())
+    assert cal["bf_column_companion"] is False
+    manifest = json.loads((out_dir / "snapshots" / "manifest.json").read_text())
     assert manifest["source"]["master"] == f"source/{master.name}"
     assert manifest["source"]["data_files"] == [
         f"source/{data_file.name}",
@@ -737,13 +771,14 @@ def test_showptycho_webgpu_folder_uses_mps_metadata_without_gqk_sync(
     widget.rotation_deg = 5.0
     out_dir = widget.export(tmp_path / "mps-folder", decode_dtype="uint8")
 
-    cal = json.loads((out_dir / "cal.json").read_text())
+    cal = json.loads((out_dir / "snapshots" / "cal.json").read_text())
     assert cal["g_shape"] == [2, 128, 128]
     assert cal["source_transport"] == "compressed_hdf5"
+    assert cal["bf_column_companion"] is True
     assert accel.heavy_sync_calls == 0
     assert not hasattr(accel, "G_qk")
     assert not (out_dir / "g_bf.c64").exists()
-    assert not list((out_dir / "source").glob("bf_columns.*"))
+    assert list((out_dir / "source").glob("bf_columns.*"))
 
 
 def test_showptycho_notebook_webgpu_preview_does_not_write_cache_by_default(

@@ -1112,11 +1112,13 @@ def _showptycho_folder(path: pathlib.Path) -> pathlib.Path:
     if not folder.is_dir():
         raise FileNotFoundError(f"not a ShowPtycho folder export: {path}")
     index = folder / "index.html"
-    manifest = folder / "manifest.json"
+    manifest = _showptycho_manifest_path(folder)
     if not index.is_file():
         raise ValueError(f"ShowPtycho folder export is missing index.html: {folder}")
-    if not manifest.is_file():
-        raise ValueError(f"ShowPtycho folder export is missing manifest.json: {folder}")
+    if manifest is None:
+        raise ValueError(
+            f"ShowPtycho folder export is missing snapshots/manifest.json: {folder}"
+        )
     try:
         payload = json.loads(manifest.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -1133,14 +1135,23 @@ def _showptycho_folder(path: pathlib.Path) -> pathlib.Path:
 def _is_showptycho_folder_export(path: pathlib.Path) -> bool:
     """Best-effort detector used by ``quantem show`` before normal image/4D routing."""
     folder = path.parent if path.is_file() and path.name == "index.html" else path
-    manifest = folder / "manifest.json"
-    if not manifest.is_file():
+    manifest = _showptycho_manifest_path(folder)
+    if manifest is None:
         return False
     try:
         payload = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
     return str(payload.get("format", "")).startswith(SHOWPTYCHO_FOLDER_FORMAT)
+
+
+def _showptycho_manifest_path(folder: pathlib.Path) -> pathlib.Path | None:
+    """Return the ShowPtycho manifest path for clean or legacy exports."""
+
+    for candidate in (folder / "snapshots" / "manifest.json", folder / "manifest.json"):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _showptycho_master_source(path: pathlib.Path) -> pathlib.Path:
@@ -2088,7 +2099,10 @@ def _parse_http_range(value: str, size: int) -> tuple[int, int] | None:
 
 def _showptycho_manifest(folder: pathlib.Path) -> dict:
     """Read a ShowPtycho folder manifest after validation."""
-    return json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    manifest = _showptycho_manifest_path(folder)
+    if manifest is None:
+        raise ValueError(f"ShowPtycho folder export is missing snapshots/manifest.json: {folder}")
+    return json.loads(manifest.read_text(encoding="utf-8"))
 
 
 def _host_for_url(bind: str) -> str:
@@ -2115,12 +2129,19 @@ def _serve_showptycho_folder(
         data_files = source.get("data_files") or []
         link_mode = ", ".join(source.get("link_mode") or []) or "linked"
         preferred = source.get("preferred_browser_source") or "compressed_hdf5"
+        bf_columns = source.get("bf_columns") or {}
         print(
             "  source: compressed HDF5 "
             f"{source.get('master', 'source master')} + {len(data_files)} data file(s) "
             f"({link_mode}); no persistent BF-G cache"
         )
         print(f"  browser source: {preferred}")
+        if preferred == "bf_columns" and bf_columns:
+            print(
+                "  BF columns: "
+                f"{bf_columns.get('num_bf', '?')} BF x {bf_columns.get('plane', '?')} scan, "
+                f"{_fmt_bytes(int(bf_columns.get('bytes', 0) or 0))}"
+            )
     elif len(shape) == 3 and g_path.exists():
         print(
             "  BF payload: "

@@ -1,10 +1,10 @@
 """Write a double-click ``.command`` launcher into an exported viewer folder.
 
 An exported ShowPtycho / Show4DSTEM WebGPU folder is a static site: an
-``index.html`` viewer plus a compressed HDF5 payload the browser fetches with
-HTTP Range requests. Opening it needs either a File System Access grant or a
-Range-capable local server. This module writes a self-contained macOS launcher
-so the user can just double-click:
+``index.html`` viewer plus source payloads the browser fetches with HTTP Range
+requests. Opening it needs either a File System Access grant or a Range-capable
+local server. This module writes a self-contained macOS launcher so the user can
+just double-click:
 
 - ``<WidgetLabel>.command`` at the folder root: a zsh script that starts the
   bundled Range server and opens the viewer in Google Chrome (WebGPU needs a

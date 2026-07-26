@@ -2,8 +2,8 @@
 
 This tutorial exports a ShowPtycho reconstruction as a **self-contained,
 no-server HTML folder** and opens it — no Python kernel, no Jupyter, no server.
-The browser decompresses the HDF5 with WebGPU and runs SSB live as you tune
-aberrations.
+The exported viewer opens from exact bright-field detector columns by default,
+then runs SSB live as you tune aberrations.
 
 If you just want the interactive widget inside a notebook, see
 [ShowPtycho in Jupyter](showptycho.md) instead. This page assumes you already
@@ -24,14 +24,13 @@ w.export("out/", title="my sample SSB")
 This writes a folder:
 
 - `index.html` — the viewer
-- `cal.json` — calibration, including the **optimized** aberrations; the viewer
-  auto-loads these on open, so the reconstruction starts at your solved optimum
-- `manifest.json`
-- `source/` — the compressed HDF5 source (hard-linked when on the same
-  filesystem, so it costs almost no extra disk)
+- `ShowPtycho.command` — double-click launcher for Chrome on macOS
+- `source/` — the exact BF-column browser source plus linked HDF5 evidence
+- `snapshots/` — calibration, manifest, viewer snapshots, and review metadata
 
-The export persists no expanded float32 images and no complex64 BF reducers; the
-browser rebuilds those transiently in GPU memory from the compressed source.
+The export persists no expanded float32 images and no complex64 BF reducers.
+By default, the browser range-reads `source/bf_columns.u8` or
+`source/bf_columns.u16` and does not decode the compressed HDF5 stack on open.
 
 ### Export at native detector size
 
@@ -48,14 +47,14 @@ with blank panels. Always build and export at native detector size
 
 ## Run it
 
-The exported folder needs the HDF5 in `source/` present next to `index.html`.
-There are two ways to open it.
+The exported folder needs `source/` and `snapshots/` present next to
+`index.html`. There are two ways to open it.
 
 ### A. Double-click (File System Access)
 
 1. Double-click `index.html`.
 2. Click **Open data folder** and grant the folder the HTML lives in.
-3. It renders, starting at the calibration in `cal.json`.
+3. It renders, starting at the embedded calibration snapshot.
 
 One grant per session. This works fully offline.
 
@@ -77,7 +76,7 @@ inconvenient (for example over a remote connection).
   milliseconds on a real GPU.
 - Toggle the **FFT** panel to watch Bragg spots sharpen as aberrations improve.
 - Change colormap, contrast, and the amplitude/complex view.
-- **Save** writes the current aberrations back to `cal.json`.
+- **Save** writes the current aberrations and preview JPEG into `snapshots/`.
 
 ## Verify WebGPU is on real hardware
 
@@ -92,12 +91,13 @@ launch the browser with GPU blocklisting ignored.
 
 1. The `ssb` was optimized (`optimize()` + `refine()`) before export.
 2. Native detector (`det_bin=1`) — the browser cannot bin.
-3. Export writes `index.html` + `cal.json` + `source/`.
+3. Export writes a clean root: `index.html`, `ShowPtycho.command`, `source/`,
+   and `snapshots/`.
 4. Open by double-click + **Open data folder**, or `quantem show out/`.
 5. On open, the stats bar shows a non-null `loss` and the phase renders.
 
 ## Privacy
 
-Exports embed the source HDF5 file basenames in `cal.json`/`manifest.json` (the
-browser needs them to locate the granted folder). Keep exported folders local and
-do not publish them if the dataset or filenames are not yours to share.
+Exports embed source HDF5 file basenames in the metadata under `snapshots/` and
+in the viewer state. Keep exported folders local and do not publish them if the
+dataset or filenames are not yours to share.

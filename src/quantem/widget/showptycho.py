@@ -482,7 +482,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
     higher_order_json = traitlets.Unicode("{}").tag(sync=True)
 
     # -- Optional browser-side WebGPU SSB preview payload (Python → JS).
-    # Default exports point the browser at the original compressed HDF5 source
+    # Default folder exports point the browser at exact BF-column source data
     # and let WebGPU build transient BF reducers.  The g_bf fields are retained
     # only for explicit compatibility cache paths.
     webgpu_preview_enabled = traitlets.Bool(False).tag(sync=True)
@@ -1461,6 +1461,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         title: str | None = None,
         overwrite: bool = True,
         decode_dtype: str = "uint16",
+        webgpu_source: str = "bf_columns",
     ) -> pathlib.Path:
         """Export a shareable interactive viewer folder for the current state.
 
@@ -1485,6 +1486,11 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             ``"in-place"`` writes the viewer next to the existing source and
             serves it there, so nothing is copied at all (the viewer is tied to
             that data folder).
+        webgpu_source : {"bf_columns", "hdf5"}, default "bf_columns"
+            Browser source layout. ``"bf_columns"`` writes exact detector
+            bright-field columns and uses them on open, avoiding compressed HDF5
+            decode unless a fallback is explicitly requested. ``"hdf5"`` keeps
+            the older compressed-source browser path.
         """
         if backend != "webgpu":
             raise ValueError(
@@ -1501,6 +1507,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             title=title,
             overwrite=overwrite,
             decode_dtype=decode_dtype,
+            webgpu_source=webgpu_source,
         )
 
 

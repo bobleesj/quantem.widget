@@ -12,11 +12,10 @@ backend, usually CUDA on Linux or Metal/MPS on Apple silicon. The browser is the
 viewer.
 
 In a WebGPU folder export, the browser owns the interactive review. The default
-folder contains a small `index.html` viewer, calibration metadata, and an exact
-microscopy payload under `source/`. The default payload is the original
-compressed HDF5 master/data source; the browser uses WebGPU to decompress the
-selected BF evidence and build BF-indexed `G(k)` reducers transiently in GPU
-memory. Moving
+folder contains a small `index.html` viewer, calibration metadata under
+`snapshots/`, and exact microscopy payloads under `source/`. The default browser
+payload is a BF-column file (`source/bf_columns.u8` or `.u16`), so the browser
+range-reads only the bright-field evidence it needs on open. Moving
 C10, C12, phi12, or scan rotation makes the browser build BF-indexed `G(k)`
 reducers transiently in GPU memory and run the SSB phase reconstruction from
 those transient buffers. The export does not persist expanded float32 images or
@@ -93,7 +92,7 @@ interactive microscopy review:
   is not valid performance evidence.
 - [ ] Record the native scan size. The browser kernels support square
   `128 x 128`, `256 x 256`, `512 x 512`, and `1024 x 1024` phase grids.
-- [ ] Record the payload path: compressed HDF5 default or explicit BF-column companion.
+- [ ] Record the payload path: BF-column default or explicit compressed-HDF5 fallback.
   Do not treat a saved `g_bf.c64`/float32 cache as the default sharing path.
 - [ ] Record the BF policy. Include both selected BF pixels and active aperture
   BF pixels, for example `542/1805 selected, 379 active`.
@@ -137,14 +136,22 @@ The default folder contains:
 ```text
 logic013_512_review/
 ├── index.html
-├── manifest.json
-├── cal.json
-├── README.md
+├── ShowPtycho.command
+├── snapshots/
+│   ├── manifest.json
+│   ├── cal.json
+│   ├── snapshots.json
+│   └── README.md
 └── source/
+    ├── bf_columns.u8
     ├── scan_master.h5
     ├── scan_data_000001.h5
     └── ...
 ```
+
+The BF-column file is exact detector evidence, not detector binning. The
+compressed HDF5 files remain in `source/` as provenance and fallback data, but
+the browser opens from BF columns by default.
 
 Open the folder with the `quantem` CLI:
 
@@ -154,17 +161,17 @@ quantem ptycho /path/to/logic013_512_review
 
 `quantem showptycho` remains a compatibility alias. The command validates the
 folder, prints the compressed HDF5 source summary, starts the required local
-HTTP server, and opens `index.html` in the browser. It stays alive until Ctrl-C.
+HTTP server, reports the BF-column browser source when present, and opens
+`index.html` in the browser. It stays alive until Ctrl-C.
 Use `--port 8900` only when you need a stable URL, and use `--bind 0.0.0.0`
 only when the viewer should be reachable from another device. Double-clicking
 `index.html` is not the supported path because the browser still needs normal
-HTTP fetches for the nearby HDF5 files.
+HTTP range fetches for the nearby source files.
 
 The HTML file should stay small because it is only the viewer. The microscopy
-payload is the original compressed HDF5 data under `source/`; the export avoids
-writing `g_bf.c64`, `.f32` reference images, or detector-binned copies by
-default. A legacy persistent BF cache is a compatibility/debug path, not the
-normal sharing workflow.
+payload is under `source/`; the export avoids writing `g_bf.c64`, `.f32`
+reference images, or detector-binned copies by default. A legacy persistent BF
+cache is a compatibility/debug path, not the normal sharing workflow.
 
 ## Reference
 
