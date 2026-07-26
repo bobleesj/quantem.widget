@@ -2794,7 +2794,7 @@ export class GPUColormapEngine {
     if (!this.rangeRegionPipeline || !pipeline) return false;
 
     const encoder = this.device.createCommandEncoder();
-    if (!this.recordComputeRangeRegion(encoder, idx)) return false;
+    if (!this.recordComputeRangeRegion(encoder, idx, undefined, logScale)) return false;
 
     const params = this.directGridParams;
     const pu = this.directGridParamsU32;
@@ -3465,7 +3465,7 @@ fn reduce(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocation_i
     // fullWidth is the stride of the underlying data buffer.
     const code = /* wgsl */ `
 struct RangeOut { vmin: f32, vmax: f32, _p0: f32, _p1: f32 };
-struct RegionParams { region: vec4u, fullWidth: u32, _pad0: u32, _pad1: u32, _pad2: u32 };
+struct RegionParams { region: vec4u, fullWidth: u32, log_scale: u32, _pad1: u32, _pad2: u32 };
 
 @group(0) @binding(0) var<storage, read> data: array<f32>;
 @group(0) @binding(1) var<uniform> params: RegionParams;
@@ -3486,7 +3486,10 @@ fn reduce(@builtin(local_invocation_index) lid: u32) {
     if (i >= n) { break; }
     let r = i / rw;
     let c = i - r * rw;
-    let v = data[(params.region.y + r) * params.fullWidth + params.region.x + c];
+    var v = data[(params.region.y + r) * params.fullWidth + params.region.x + c];
+    if (params.log_scale == 1u) {
+      v = log(1.0 + max(v, 0.0));
+    }
     if (v < lmin) { lmin = v; }
     if (v > lmax) { lmax = v; }
     i = i + 256u;
@@ -3599,6 +3602,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     encoder: GPUCommandEncoder,
     idx: number,
     region?: { x: number; y: number; width: number; height: number },
+    logScale: boolean = false,
   ): boolean {
     this.ensureRangeRegionPipeline();
     const slot = this.slots[idx];
@@ -3613,7 +3617,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     });
     this.device.queue.writeBuffer(
       paramsBuf, 0,
-      new Uint32Array([r.x, r.y, r.width, r.height, slot.width, 0, 0, 0]),
+      new Uint32Array([r.x, r.y, r.width, r.height, slot.width, logScale ? 1 : 0, 0, 0]),
     );
 
     const bg = this.device.createBindGroup({
@@ -3644,9 +3648,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   computeRangeRegion(
     idx: number,
     region?: { x: number; y: number; width: number; height: number },
+    logScale: boolean = false,
   ): void {
     const encoder = this.device.createCommandEncoder();
-    if (!this.recordComputeRangeRegion(encoder, idx, region)) return;
+    if (!this.recordComputeRangeRegion(encoder, idx, region, logScale)) return;
     this.device.queue.submit([encoder.finish()]);
     flushParamsBufQueue();
   }
@@ -3904,7 +3909,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       });
       this.device.queue.writeBuffer(
         rgParams, 0,
-        new Uint32Array([r.x, r.y, r.width, r.height, slot.width, 0, 0, 0]),
+        new Uint32Array([r.x, r.y, r.width, r.height, slot.width, logScale ? 1 : 0, 0, 0]),
       );
       tempBuffers.push(rgParams);
       const rgGroup = this.device.createBindGroup({
