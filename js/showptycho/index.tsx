@@ -776,6 +776,7 @@ function Histogram({
       />
       <Slider
         value={[vminPct, vmaxPct]}
+        disableSwap
         onChange={(_, v) => {
           const [lo, hi] = v as number[];
           onRangeChange(Math.min(lo, hi - 1), Math.max(hi, lo + 1));
@@ -811,12 +812,13 @@ function Histogram({
    ================================================================ */
 
 function ImagePanel({
-  offscreen, label, size, tc, zoom, onZoomChange,
+  offscreen, offscreenVersion, label, size, tc, zoom, onZoomChange,
   showResize, onResizeStart,
   pixelSize, imageWidth, isFFT,
-  rawData, smooth, inset, cropRegion, cropSelecting, onCropSelect,
+  rawData, smooth, inset, cropRegion, cropSelecting, onCropChange,
 }: {
   offscreen: HTMLCanvasElement | null;
+  offscreenVersion?: number;
   label: string;
   size: number;
   tc: ThemeColors;
@@ -832,12 +834,15 @@ function ImagePanel({
   inset?: React.ReactNode;
   cropRegion?: [number, number, number, number] | null;
   cropSelecting?: boolean;
-  onCropSelect?: (row: number, col: number) => void;
+  onCropChange?: (startRow: number, startCol: number, endRow: number, endCol: number) => void;
 }) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const overlayRef = React.useRef<HTMLCanvasElement>(null);
   const zoomRef = React.useRef(zoom); zoomRef.current = zoom;
   const dragState = React.useRef({ on: false, x: 0, y: 0, panX0: 0, panY0: 0 });
+  const cropDragRef = React.useRef<{ row: number; col: number } | null>(null);
+  const cropRafRef = React.useRef<number | null>(null);
+  const pendingCropRef = React.useRef<{ startRow: number; startCol: number; endRow: number; endCol: number } | null>(null);
   const [cursor, setCursor] = React.useState<{ row: number; col: number; val: number } | null>(null);
   // FFT d-spacing measurement (only used when isFFT)
   const fftClickStartRef = React.useRef<{ x: number; y: number } | null>(null);
@@ -848,7 +853,7 @@ function ImagePanel({
 
   React.useEffect(() => {
     drawCanvas(canvasRef.current, offscreen, size, zoom, tc.bgAlt, tc.textMuted, !!smooth);
-  }, [offscreen, size, zoom, tc, smooth]);
+  }, [offscreen, offscreenVersion, size, zoom, tc, smooth]);
 
   // Scale bar overlay
   React.useEffect(() => {
@@ -933,19 +938,39 @@ function ImagePanel({
     return () => canvas.removeEventListener("wheel", handler);
   }, []);
 
+  const imageCoordinate = React.useCallback((clientX: number, clientY: number) => {
+    if (!canvasRef.current || !offscreen) return null;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mouseX = clientX - rect.left, mouseY = clientY - rect.top;
+    const baseFit = Math.min(size / offscreen.width, size / offscreen.height);
+    const scale = baseFit * zoomRef.current.zoom;
+    const xOffset = (size - offscreen.width * scale) / 2 + zoomRef.current.panX;
+    const yOffset = (size - offscreen.height * scale) / 2 + zoomRef.current.panY;
+    const col = Math.floor((mouseX - xOffset) / scale);
+    const row = Math.floor((mouseY - yOffset) / scale);
+    if (row < 0 || row >= offscreen.height || col < 0 || col >= offscreen.width) return null;
+    return { row, col };
+  }, [offscreen, size]);
+  const publishCrop = React.useCallback((startRow: number, startCol: number, endRow: number, endCol: number) => {
+    pendingCropRef.current = { startRow, startCol, endRow, endCol };
+    if (cropRafRef.current != null) return;
+    cropRafRef.current = requestAnimationFrame(() => {
+      cropRafRef.current = null;
+      const crop = pendingCropRef.current;
+      if (crop) onCropChange?.(crop.startRow, crop.startCol, crop.endRow, crop.endCol);
+    });
+  }, [onCropChange]);
+  React.useEffect(() => () => {
+    if (cropRafRef.current != null) cancelAnimationFrame(cropRafRef.current);
+  }, []);
+
   const onDown = React.useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
-    if (cropSelecting && !isFFT && canvasRef.current && offscreen) {
-      const rect = canvasRef.current.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left, mouseY = e.clientY - rect.top;
-      const baseFit = Math.min(size / offscreen.width, size / offscreen.height);
-      const scale = baseFit * zoomRef.current.zoom;
-      const xOffset = (size - offscreen.width * scale) / 2 + zoomRef.current.panX;
-      const yOffset = (size - offscreen.height * scale) / 2 + zoomRef.current.panY;
-      const col = Math.floor((mouseX - xOffset) / scale);
-      const row = Math.floor((mouseY - yOffset) / scale);
-      if (row >= 0 && row < offscreen.height && col >= 0 && col < offscreen.width) {
-        onCropSelect?.(row, col);
+    if (cropSelecting && !isFFT) {
+      const point = imageCoordinate(e.clientX, e.clientY);
+      if (point) {
+        cropDragRef.current = point;
+        publishCrop(point.row, point.col, point.row, point.col);
       }
       return;
     }
@@ -955,7 +980,7 @@ function ImagePanel({
       panX0: zoomRef.current.panX, panY0: zoomRef.current.panY,
     };
     if (isFFT) fftClickStartRef.current = { x: e.clientX, y: e.clientY };
-  }, [cropSelecting, isFFT, offscreen, onCropSelect, size]);
+  }, [cropSelecting, imageCoordinate, isFFT, publishCrop]);
   // Mouse up handler on the FFT canvas: detect short click (no drag) and
   // compute d-spacing at the clicked peak, snapped to the nearest local-max.
   const onFFTUp = React.useCallback((e: React.MouseEvent) => {
@@ -1019,7 +1044,19 @@ function ImagePanel({
       return;
     }
     setCursor({ row, col, val: rawData[row * offscreen.width + col] });
-  }, [offscreen, size, rawData]);
+    if (cropSelecting && cropDragRef.current && !isFFT) {
+      publishCrop(cropDragRef.current.row, cropDragRef.current.col, row, col);
+    }
+  }, [cropSelecting, isFFT, offscreen, publishCrop, size, rawData]);
+  const onUp = React.useCallback((e: React.MouseEvent) => {
+    if (cropSelecting && cropDragRef.current && !isFFT) {
+      const point = imageCoordinate(e.clientX, e.clientY);
+      if (point) publishCrop(cropDragRef.current.row, cropDragRef.current.col, point.row, point.col);
+      cropDragRef.current = null;
+      return;
+    }
+    if (isFFT) onFFTUp(e);
+  }, [cropSelecting, imageCoordinate, isFFT, onFFTUp, publishCrop]);
   const onLeave = React.useCallback(() => setCursor(null), []);
 
   React.useEffect(() => {
@@ -1058,7 +1095,7 @@ function ImagePanel({
           ref={canvasRef}
           onMouseDown={onDown}
           onMouseMove={onMove}
-          onMouseUp={isFFT ? onFFTUp : undefined}
+          onMouseUp={onUp}
           onMouseLeave={() => { onLeave(); if (isFFT) onLeaveFFT(); }}
           onDoubleClick={() => { onZoomChange(ZOOM_RESET); if (isFFT) setFftClickInfo(null); }}
           style={{ width: size, height: size, cursor: isFFT || cropSelecting ? "crosshair" : "grab", display: "block", imageRendering: smooth ? "auto" : "pixelated" }}
@@ -1068,9 +1105,11 @@ function ImagePanel({
             position: "absolute", pointerEvents: "none",
             left: cropOverlay.left, top: cropOverlay.top,
             width: cropOverlay.width, height: cropOverlay.height,
-            border: `2px solid ${cropSelecting ? STATUS_GOOD : tc.accent}`,
-            bgcolor: cropSelecting ? `${STATUS_GOOD}16` : `${tc.accent}12`,
+            border: "3px solid #54e36a",
+            bgcolor: "rgba(84, 227, 106, 0.07)",
+            boxShadow: "0 0 0 1px rgba(2, 24, 8, 0.88), 0 0 0 9999px rgba(2, 8, 5, 0.46)",
             boxSizing: "border-box",
+            zIndex: 2,
           }} />
         )}
         {(cursor || zoom.zoom !== 1) && (
@@ -1108,9 +1147,10 @@ function ImagePanel({
 }
 
 function FFTInset({
-  offscreen, rawData, size, panelSize, box, onBoxChange, tc, smooth, pixelSize,
+  offscreen, offscreenVersion, rawData, size, panelSize, box, onBoxChange, tc, smooth, pixelSize,
 }: {
   offscreen: HTMLCanvasElement | null;
+  offscreenVersion?: number;
   rawData?: Float32Array | null;
   size: number;
   panelSize: number;
@@ -1128,7 +1168,7 @@ function FFTInset({
 
   React.useEffect(() => {
     drawCanvas(canvasRef.current, offscreen, size, ZOOM_RESET, "#000", "#fff", !!smooth);
-  }, [offscreen, size, smooth]);
+  }, [offscreen, offscreenVersion, size, smooth]);
 
   React.useEffect(() => {
     const overlay = overlayRef.current;
@@ -1735,6 +1775,7 @@ function Explore() {
   const [animationExportStatus, setAnimationExportStatus] = React.useState("");
   const [animationExportBusy, setAnimationExportBusy] = React.useState(false);
   const [animationExportAnchor, setAnimationExportAnchor] = React.useState<HTMLElement | null>(null);
+  const [toolbarMoreAnchor, setToolbarMoreAnchor] = React.useState<HTMLElement | null>(null);
   const [dragOverPin, setDragOverPin] = React.useState<number | null>(null);
   const [draggingPin, setDraggingPin] = React.useState<number | null>(null);
   const [newPinId, setNewPinId] = React.useState<number | null>(null);
@@ -1753,55 +1794,46 @@ function Explore() {
   const [complexOff, setComplexOff] = React.useState<HTMLCanvasElement | null>(null);
   const [fftOff, setFFTOff] = React.useState<HTMLCanvasElement | null>(null);
   const [cropSelecting, setCropSelecting] = React.useState(false);
-  const [cropSize, setCropSize] = React.useState(128);
   const [scanCrop, setScanCrop] = React.useState<[number, number, number, number] | null>(null);
   const [cropRefitPending, setCropRefitPending] = React.useState(false);
   React.useEffect(() => {
     const rows = Math.round(scanRows || phaseHeight || 0);
     const cols = Math.round(scanCols || phaseWidth || 0);
-    const sizes = [128, 256, 512, 1024].filter(size => size <= rows && size <= cols);
-    if (!sizes.length) {
-      setScanCrop(null);
-      return;
-    }
-    const side = sizes.includes(cropSize) ? cropSize : sizes[0];
-    if (side !== cropSize) setCropSize(side);
     setScanCrop(previous => {
-      if (
-        previous && previous[0] >= 0 && previous[2] >= 0
-        && previous[1] <= rows && previous[3] <= cols
-        && previous[1] - previous[0] === side
-        && previous[3] - previous[2] === side
-      ) return previous;
-      const r0 = Math.floor((rows - side) / 2);
-      const c0 = Math.floor((cols - side) / 2);
-      return [r0, r0 + side, c0, c0 + side];
+      if (!previous) return null;
+      const [r0, r1, c0, c1] = previous;
+      if (r0 >= 0 && c0 >= 0 && r1 <= rows && c1 <= cols) return previous;
+      return null;
     });
-  }, [cropSize, phaseHeight, phaseWidth, scanCols, scanRows]);
+  }, [phaseHeight, phaseWidth, scanCols, scanRows]);
   React.useEffect(() => {
-    if (/^(Refit complete:|Crop refit failed:)/.test(cropRefitStatus || "")) {
+    if (/^Refit complete:/.test(cropRefitStatus || "")) {
+      setCropRefitPending(false);
+      setCropSelecting(false);
+      setScanCrop(null);
+    } else if (/^Crop refit failed:/.test(cropRefitStatus || "")) {
       setCropRefitPending(false);
     }
   }, [cropRefitStatus]);
-  const chooseCropCenter = React.useCallback((row: number, col: number) => {
+  const chooseCropRectangle = React.useCallback((startRow: number, startCol: number, endRow: number, endCol: number) => {
     const rows = Math.round(scanRows || phaseHeight || 0);
     const cols = Math.round(scanCols || phaseWidth || 0);
-    const side = Math.min(cropSize, rows, cols);
-    const r0 = Math.max(0, Math.min(rows - side, Math.round(row - side / 2)));
-    const c0 = Math.max(0, Math.min(cols - side, Math.round(col - side / 2)));
-    setScanCrop([r0, r0 + side, c0, c0 + side]);
-  }, [cropSize, phaseHeight, phaseWidth, scanCols, scanRows]);
-  const changeCropSize = React.useCallback((side: number) => {
-    setCropSize(side);
-    const rows = Math.round(scanRows || phaseHeight || 0);
-    const cols = Math.round(scanCols || phaseWidth || 0);
-    if (rows < side || cols < side) return;
-    const centerRow = scanCrop ? (scanCrop[0] + scanCrop[1]) / 2 : rows / 2;
-    const centerCol = scanCrop ? (scanCrop[2] + scanCrop[3]) / 2 : cols / 2;
-    const r0 = Math.max(0, Math.min(rows - side, Math.round(centerRow - side / 2)));
-    const c0 = Math.max(0, Math.min(cols - side, Math.round(centerCol - side / 2)));
-    setScanCrop([r0, r0 + side, c0, c0 + side]);
-  }, [phaseHeight, phaseWidth, scanCols, scanCrop, scanRows]);
+    if (!rows || !cols) return;
+    const minSpan = Math.min(32, rows, cols);
+    let r0 = Math.max(0, Math.min(startRow, endRow));
+    let r1 = Math.min(rows, Math.max(startRow, endRow) + 1);
+    let c0 = Math.max(0, Math.min(startCol, endCol));
+    let c1 = Math.min(cols, Math.max(startCol, endCol) + 1);
+    if (r1 - r0 < minSpan) r1 = Math.min(rows, r0 + minSpan);
+    if (r1 - r0 < minSpan) r0 = Math.max(0, r1 - minSpan);
+    if (c1 - c0 < minSpan) c1 = Math.min(cols, c0 + minSpan);
+    if (c1 - c0 < minSpan) c0 = Math.max(0, c1 - minSpan);
+    setScanCrop([r0, r1, c0, c1]);
+  }, [phaseHeight, phaseWidth, scanCols, scanRows]);
+  const resetCrop = React.useCallback(() => {
+    setScanCrop(null);
+    setCropSelecting(false);
+  }, []);
   const requestCropRefit = React.useCallback(() => {
     if (!scanCrop || !cropRefitAvailable) return;
     setCropSelecting(false);
@@ -1810,6 +1842,11 @@ function Explore() {
       id: Date.now(), scan_region: scanCrop, n_trials: 200,
     }));
   }, [cropRefitAvailable, scanCrop, setCropRefitRequestJson]);
+  const cropSummary = React.useMemo(() => {
+    if (!scanCrop) return "Draw a region";
+    const [r0, r1, c0, c1] = scanCrop;
+    return `r ${r0}:${r1}  c ${c0}:${c1}  ${r1 - r0}x${c1 - c0}`;
+  }, [scanCrop]);
 
   // Cached data for re-rendering without recomputing FFT
   const rawPhaseRef = React.useRef<{ data: Float32Array; w: number; h: number } | null>(null);
@@ -1823,6 +1860,8 @@ function Explore() {
   const [fftPlacement, setFFTPlacement] = React.useState<FFTPlacement>("panel");
   const [fftInsetBox, setFFTInsetBox] = React.useState<FFTInsetBox>({ x: 0.72, y: 0.02, size: 0.28 });
   const [extraRealViews, setExtraRealViews] = React.useState<Record<ExtraRealViewMode, boolean>>({ amp: false, complex: false });
+  const toolbarMoreActiveCount =
+    Number(extraRealViews.amp) + Number(extraRealViews.complex) + Number(cropSelecting || Boolean(scanCrop));
   const [smooth, setSmooth] = React.useState<boolean>(false);
   const [cmap, setCmap] = React.useState("viridis");
   const [fftCmap, setFftCmap] = React.useState("inferno");
@@ -2022,6 +2061,12 @@ function Explore() {
   // Generation counter discards stale async GPU results if newer data lands first.
   const gpuCmapRef = React.useRef<GPUColormapEngine | null>(null);
   const gpuCmapGenRef = React.useRef<Record<GPUColormapSlot, number>>({ 0: 0, 1: 0, 2: 0 });
+  const gpuSlotCanvasRef = React.useRef<Record<GPUColormapSlot, HTMLCanvasElement | null>>({ 0: null, 1: null, 2: null });
+  const gpuCmapBusyRef = React.useRef<Record<GPUColormapSlot, boolean>>({ 0: false, 1: false, 2: false });
+  const gpuCmapPendingRef = React.useRef<Record<GPUColormapSlot, (() => void) | null>>({ 0: null, 1: null, 2: null });
+  const [phaseVersion, setPhaseVersion] = React.useState(0);
+  const [fftVersion, setFftVersion] = React.useState(0);
+  const [ampVersion, setAmpVersion] = React.useState(0);
   const gpuCmapReadyRef = React.useRef(false);
   // Track the LUT currently uploaded to each slot so we only re-upload when the cmap changes.
   const gpuCmapCurrentLutRef = React.useRef<Record<GPUColormapSlot, string | null>>({ 0: null, 1: null, 2: null });
@@ -2416,64 +2461,71 @@ function Explore() {
     if (slot !== 0) return false;
     const engine = gpuCmapRef.current;
     if (!engine || !gpuCmapReadyRef.current) return false;
-    // Upload data only if it actually changed (new reconstruction), not on every contrast tick.
-    const prev = gpuSlotDataRef.current[slot];
-    if (prev !== data) {
-      engine.uploadData(slot, data, w, h);
-      gpuSlotDataRef.current[slot] = data;
-    }
-    // Upload LUT only when cmap changes (cheap but still avoid per-frame work).
-    const fullLutKey = `${slot}:${cmapName}`;
-    if (gpuCmapCurrentLutRef.current[slot] !== fullLutKey) {
-      const lut = COLORMAPS[cmapName as keyof typeof COLORMAPS] || COLORMAPS.viridis;
-      engine.uploadLUT(cmapName, lut);
-      gpuCmapCurrentLutRef.current[slot] = fullLutKey;
-    }
-    // Compute vmin/vmax from data+percentiles on CPU (cheap, ~1 ms for 512²).
-    const { vmin, vmax, min, max } = percentileClip(data, pctLo, pctHi);
     const gen = ++gpuCmapGenRef.current[slot];
-    const fallback = () => {
-      const lut = COLORMAPS[cmapName as keyof typeof COLORMAPS] || (slot === 0 ? COLORMAPS.viridis : COLORMAPS.inferno);
-      if (slot === 0) {
-        const cpu = renderPhaseOffscreen(data, w, h, lut, pctLo, pctHi);
-        setPhaseOff(cpu.canvas);
-        setDataRange({ min: cpu.min, max: cpu.max });
-      } else if (slot === 1) {
-        const cpu = renderFFTOffscreen(data, w, h, lut, pctLo, pctHi);
-        setFFTOff(cpu.canvas);
-        setFftDataRange({ min: cpu.min, max: cpu.max });
-      } else {
-        const cpu = renderPhaseOffscreen(data, w, h, lut, pctLo, pctHi);
-        setAmpOff(cpu.canvas);
+    const launch = () => {
+      gpuCmapBusyRef.current[slot] = true;
+      // Upload data only if it actually changed (new reconstruction), not on every contrast tick.
+      const prev = gpuSlotDataRef.current[slot];
+      if (prev !== data) {
+        engine.uploadData(slot, data, w, h);
+        gpuSlotDataRef.current[slot] = data;
       }
+      // Upload LUT only when cmap changes (cheap but still avoid per-frame work).
+      const fullLutKey = `${slot}:${cmapName}`;
+      if (gpuCmapCurrentLutRef.current[slot] !== fullLutKey) {
+        const lut = COLORMAPS[cmapName as keyof typeof COLORMAPS] || COLORMAPS.viridis;
+        engine.uploadLUT(cmapName, lut);
+        gpuCmapCurrentLutRef.current[slot] = fullLutKey;
+      }
+      // Compute vmin/vmax from data+percentiles on CPU (cheap, ~1 ms for 512²).
+      const { vmin, vmax, min, max } = percentileClip(data, pctLo, pctHi);
+      // Keep at most one GPU colormap pass in flight per slot. Histogram input
+      // can arrive faster than GPU readback; queueing every tick makes old
+      // ranges drain later and looks like the phase contrast flips/jitters.
+      // applySingle keeps the colormap compute on WebGPU but avoids the flaky
+      // OffscreenCanvas/ImageBitmap snapshot path.
+      engine.applySingle(slot, vmin, vmax, false).then(rgba => {
+        if (gen !== gpuCmapGenRef.current[slot] || !rgba) return;
+        let canvas = gpuSlotCanvasRef.current[slot];
+        const fresh = !canvas || canvas.width !== w || canvas.height !== h;
+        if (fresh) {
+          canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          gpuSlotCanvasRef.current[slot] = canvas;
+        }
+        const ctx = canvas!.getContext("2d");
+        if (!ctx) return;
+        const image = ctx.createImageData(w, h);
+        image.data.set(rgba);
+        ctx.putImageData(image, 0, 0);
+        if (slot === 0) {
+          if (fresh) setPhaseOff(canvas!);
+          setPhaseVersion(v => v + 1);
+          setDataRange({ min, max });
+        } else if (slot === 1) {
+          if (fresh) setFFTOff(canvas!);
+          setFftVersion(v => v + 1);
+          setFftDataRange({ min, max });
+        } else {
+          if (fresh) setAmpOff(canvas!);
+          setAmpVersion(v => v + 1);
+        }
+      }).catch((error) => {
+        if (gen === gpuCmapGenRef.current[slot]) {
+          setWebgpuRuntimeStatus(`WebGPU phase colormap failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }).finally(() => {
+        gpuCmapBusyRef.current[slot] = false;
+        const pending = gpuCmapPendingRef.current[slot];
+        gpuCmapPendingRef.current[slot] = null;
+        pending?.();
+      });
     };
-    engine.applySingle(slot, vmin, vmax, false).then(rgba => {
-      if (gen !== gpuCmapGenRef.current[slot]) return;  // stale — newer data already queued
-      if (!rgba) {
-        fallback();
-        return;
-      }
-      // Copy RGBA into an ImageData and paint onto the offscreen canvas.
-      const canvas = document.createElement("canvas");
-      canvas.width = w; canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      const imgData = ctx.createImageData(w, h);
-      imgData.data.set(rgba);
-      ctx.putImageData(imgData, 0, 0);
-      if (slot === 0) {
-        setPhaseOff(canvas);
-        setDataRange({ min, max });
-      } else if (slot === 1) {
-        setFFTOff(canvas);
-        setFftDataRange({ min, max });
-      } else {
-        setAmpOff(canvas);
-      }
-    }).catch(() => {
-      if (gen !== gpuCmapGenRef.current[slot]) return;
-      fallback();
-    });
+    if (gpuCmapBusyRef.current[slot]) {
+      gpuCmapPendingRef.current[slot] = launch;
+    } else {
+      launch();
+    }
     return true;
   }, []);
 
@@ -2830,18 +2882,21 @@ function Explore() {
          without throttling those pile up and arrive interleaved, which makes the
          phase and histogram flicker/jitter while dragging. --- */
   const contrastRafRef = React.useRef<number | null>(null);
+  const renderRealDisplayRef = React.useRef(renderRealDisplay);
+  renderRealDisplayRef.current = renderRealDisplay;
   React.useEffect(() => {
-    const p = rawPhaseRef.current;
-    if (!p) return;
-    if (contrastRafRef.current !== null) cancelAnimationFrame(contrastRafRef.current);
+    if (!rawPhaseRef.current || contrastRafRef.current !== null) return;
     contrastRafRef.current = requestAnimationFrame(() => {
       contrastRafRef.current = null;
-      renderRealDisplay(p.data, p.w, p.h);
+      const latest = rawPhaseRef.current;
+      if (latest) renderRealDisplayRef.current(latest.data, latest.w, latest.h);
     });
+  }, [cmap, contrastRange, extraRealViews]);
+  React.useEffect(() => {
     return () => {
       if (contrastRafRef.current !== null) cancelAnimationFrame(contrastRafRef.current);
     };
-  }, [cmap, contrastRange, extraRealViews, renderRealDisplay]);
+  }, []);
 
   /* --- Re-render FFT when its contrast or colormap changes (same rAF
          coalescing so the FFT histogram drag does not flicker). --- */
@@ -3639,7 +3694,10 @@ function Explore() {
         direction="row"
         alignItems="center"
         spacing={`${SPACING.SM}px`}
-        sx={{ mb: `${SPACING.XS}px`, height: 28, width: totalW }}
+        sx={{
+          mb: `${SPACING.XS}px`, minHeight: 28, height: "auto", width: "100%",
+          flexWrap: "wrap", rowGap: `${SPACING.XS}px`,
+        }}
       >
         <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>FFT</Typography>
         <Switch
@@ -3678,105 +3736,114 @@ function Explore() {
           aria-label={totalBf > 0 ? `BF pixels ${localDragBf} of ${totalBf}` : "BF pixels"}
           sx={{ width: 120, flex: "0 0 120px", mx: 0.5 }}
         />
-        <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted, ml: 0.5 }}>
-          View
-        </Typography>
-        <Box
-          role="group"
-          aria-label="Real-space extra views"
-          sx={{
-            display: "inline-flex",
-            alignItems: "center",
-            height: ACTION_CONTROL_HEIGHT,
-            border: `1px solid ${tc.border}`,
-            bgcolor: tc.controlBg,
-            flex: "0 0 auto",
-          }}
+        <Button
+          size="small"
+          onClick={() => setExtraRealViews(prev => ({ ...prev, amp: !prev.amp }))}
+          aria-pressed={extraRealViews.amp}
+          title="Toggle amplitude view"
+          sx={{ ...compactButton(tc), color: extraRealViews.amp ? tc.accent : tc.text }}
         >
-          {([
-            ["amp", "Amp"],
-            ["complex", "Complex"],
-          ] as [ExtraRealViewMode, string][]).map(([mode, label]) => {
+          Amp
+        </Button>
+        <Button
+          size="small"
+          onClick={() => setExtraRealViews(prev => ({ ...prev, complex: !prev.complex }))}
+          aria-pressed={extraRealViews.complex}
+          title="Toggle complex view"
+          sx={{ ...compactButton(tc), color: extraRealViews.complex ? tc.accent : tc.text }}
+        >
+          Complex
+        </Button>
+        <Badge
+          badgeContent={toolbarMoreActiveCount}
+          invisible={toolbarMoreActiveCount === 0}
+          sx={{ "& .MuiBadge-badge": { bgcolor: tc.accent, color: "#fff", fontSize: 9, fontWeight: 600, minWidth: 14, height: 14, px: 0.25 } }}
+        >
+          <Button
+            size="small"
+            onClick={(e) => setToolbarMoreAnchor(e.currentTarget)}
+            aria-label="More tools"
+            aria-controls={toolbarMoreAnchor ? "showptycho-toolbar-more-menu" : undefined}
+            aria-expanded={toolbarMoreAnchor ? "true" : undefined}
+            aria-haspopup="menu"
+            title="More tools: views, crop refit, export"
+            sx={{ ...compactButton(tc), color: toolbarMoreActiveCount > 0 ? tc.accent : tc.text }}
+          >
+            More
+          </Button>
+        </Badge>
+        <Menu
+          id="showptycho-toolbar-more-menu"
+          anchorEl={toolbarMoreAnchor}
+          open={Boolean(toolbarMoreAnchor)}
+          onClose={() => setToolbarMoreAnchor(null)}
+          MenuListProps={{ "aria-label": "More tools" }}
+          {...themedMenuProps}
+        >
+          <Box sx={{ px: 1.5, pt: 0.75, pb: 0.35, minWidth: 260 }}>
+            <Typography sx={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", color: tc.textMuted, textTransform: "uppercase" }}>Views</Typography>
+          </Box>
+          {(["amp", "complex"] as ExtraRealViewMode[]).map((mode) => {
+            const label = mode === "amp" ? "Amplitude" : "Complex";
             const active = extraRealViews[mode];
             return (
-              <Button
-                key={mode}
-                size="small"
-                onClick={() => setExtraRealViews(prev => ({ ...prev, [mode]: !prev[mode] }))}
-                aria-pressed={active}
-                sx={{
-                  ...compactButton(tc),
-                  height: ACTION_CONTROL_HEIGHT - 2,
-                  minHeight: ACTION_CONTROL_HEIGHT - 2,
-                  px: 0.85,
-                  borderRadius: 0,
-                  border: 0,
-                  borderRight: mode === "complex" ? 0 : `1px solid ${tc.border}`,
-                  color: active ? "#fff" : tc.text,
-                  bgcolor: active ? tc.accent : "transparent",
-                  "&:hover": { bgcolor: active ? tc.accent : tc.bgAlt },
-                }}
-              >
-                {label}
-              </Button>
+              <MenuItem key={mode} dense onClick={() => setExtraRealViews(prev => ({ ...prev, [mode]: !prev[mode] }))} sx={{ fontSize: 12, gap: 1, color: active ? tc.accent : tc.text }}>
+                <Typography sx={{ flex: 1, fontSize: 12, color: "inherit" }}>{label}</Typography>
+                <Switch checked={active} onClick={(e) => e.stopPropagation()} onChange={() => setExtraRealViews(prev => ({ ...prev, [mode]: !prev[mode] }))} size="small" sx={switchStyles.small} />
+              </MenuItem>
             );
           })}
-        </Box>
-        <Typography
-          sx={{
-            ...typography.value,
-            color: animationExportStatus.startsWith("Export failed") || animationExportStatus.includes("unavailable") ? STATUS_BAD : tc.textMuted,
-            width: 180,
-            minWidth: 0,
-            flex: "0 1 180px",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "clip",
-            opacity: animationExportStatus ? 1 : 0,
-          }}
-          title={animationExportStatus}
-        >
-          {animationExportStatus || " "}
-        </Typography>
+          {cropRefitAvailable && <>
+            <Box sx={{ mx: 1.5, my: 0.5, borderTop: `1px solid ${tc.border}` }} />
+            <Box sx={{ px: 1.5, pt: 0.35, pb: 0.35 }}>
+              <Typography sx={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", color: tc.textMuted, textTransform: "uppercase" }}>SSB Crop</Typography>
+            </Box>
+            <MenuItem dense onClick={() => { setCropSelecting(value => !value); setToolbarMoreAnchor(null); }} sx={{ fontSize: 12, gap: 1, color: cropSelecting ? STATUS_GOOD : tc.text }}>
+              <Typography sx={{ flex: 1, fontSize: 12, color: "inherit" }}>Draw crop region</Typography>
+              <Switch checked={cropSelecting} onClick={(e) => e.stopPropagation()} onChange={() => { setCropSelecting(value => !value); setToolbarMoreAnchor(null); }} size="small" sx={switchStyles.small} />
+            </MenuItem>
+            {(cropSelecting || scanCrop) && (
+              <Box sx={{ px: 1.5, py: 0.6, minWidth: 260 }}>
+                <Typography sx={{ ...typography.value, fontVariantNumeric: "tabular-nums", color: scanCrop ? tc.text : tc.textMuted }}>{cropSummary}</Typography>
+              </Box>
+            )}
+            <MenuItem dense onClick={() => { resetCrop(); setToolbarMoreAnchor(null); }} disabled={!scanCrop && !cropSelecting} sx={{ fontSize: 12 }}>
+              Crop Reset
+            </MenuItem>
+            <MenuItem dense onClick={() => { requestCropRefit(); setToolbarMoreAnchor(null); }} disabled={busy || cropRefitPending || !scanCrop} sx={{ fontSize: 12, color: STATUS_GOOD }}>
+              Refit SSB (200 trials)
+            </MenuItem>
+          </>}
+          <Box sx={{ mx: 1.5, my: 0.5, borderTop: `1px solid ${tc.border}` }} />
+          <Box sx={{ px: 1.5, pt: 0.35, pb: 0.35 }}>
+            <Typography sx={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", color: tc.textMuted, textTransform: "uppercase" }}>Export</Typography>
+          </Box>
+          <MenuItem dense onClick={() => { void exportAnimationGif(); setToolbarMoreAnchor(null); }} disabled={animationExportBusy || !rawPhaseRef.current} sx={{ fontSize: 12 }}>
+            Export GIF
+          </MenuItem>
+          <MenuItem dense onClick={() => { void exportAnimationMp4(); setToolbarMoreAnchor(null); }} disabled={animationExportBusy || !rawPhaseRef.current || !canRecordMp4} sx={{ fontSize: 12 }}>
+            Export MP4
+          </MenuItem>
+          {animationExportStatus && (
+            <Box sx={{ px: 1.5, py: 0.6, minWidth: 260 }}>
+              <Typography sx={{ ...typography.value, color: animationExportStatus.startsWith("Export failed") ? STATUS_BAD : tc.textMuted }}>{animationExportStatus}</Typography>
+            </Box>
+          )}
+        </Menu>
         <Box sx={{ flex: 1 }} />
         {phaseWidth > 0 && phaseHeight > 0 && (
           <Typography sx={{ ...typography.value, color: tc.textMuted, opacity: 0.7 }}>
             {phaseWidth}×{phaseHeight}
           </Typography>
         )}
-        <Button
-          size="small"
-          variant="outlined"
-          disabled={animationExportBusy || !rawPhaseRef.current}
-          onClick={(e) => setAnimationExportAnchor(e.currentTarget)}
-          aria-label="Export GIF or MP4"
-          aria-controls={animationExportAnchor ? "showptycho-animation-export-menu" : undefined}
-          aria-expanded={animationExportAnchor ? "true" : undefined}
-          aria-haspopup="menu"
-          title={animationExportStatus || "Export GIF or MP4 sweep animation"}
-          sx={{ ...compactButton(tc), width: 58, minWidth: 58, color: tc.accent, borderColor: tc.accent }}
-        >
-          Export
-        </Button>
-        <Menu
-          id="showptycho-animation-export-menu"
-          anchorEl={animationExportAnchor}
-          open={Boolean(animationExportAnchor)}
-          onClose={() => setAnimationExportAnchor(null)}
-          MenuListProps={{ "aria-label": "Animation export options" }}
-          {...themedMenuProps}
-        >
-          <MenuItem onClick={() => { void exportAnimationGif(); }}>
-            GIF
-          </MenuItem>
-          <MenuItem
-            onClick={() => { void exportAnimationMp4(); }}
-            disabled={!canRecordMp4}
-            title={!canRecordMp4 ? "MP4 requires browser video/mp4 MediaRecorder support. Use GIF here." : undefined}
-          >
-            MP4 video
-          </MenuItem>
-        </Menu>
+        {(cropSelecting || scanCrop) && (
+          <Typography sx={{ ...typography.value, fontVariantNumeric: "tabular-nums", color: scanCrop ? STATUS_GOOD : tc.textMuted }}>
+            {cropSummary}
+          </Typography>
+        )}
+        {cropRefitStatus.startsWith("Refit complete:") && (
+          <Typography sx={{ ...typography.value, color: STATUS_GOOD }}>SSB refit complete</Typography>
+        )}
         <Button
           size="small"
           variant="outlined"
@@ -3791,7 +3858,7 @@ function Explore() {
       {/* ---- Two panels ---- */}
       <Stack direction="row" spacing={`${PANEL_GAP}px`}>
         <ImagePanel
-          offscreen={phaseOff} label="Phase" size={panel} tc={tc}
+          offscreen={phaseOff} offscreenVersion={phaseVersion} label="Phase" size={panel} tc={tc}
           zoom={phaseZoom} onZoomChange={setPhaseZoom}
           showResize onResizeStart={startResize}
           pixelSize={pixelSize} imageWidth={rawPhaseRef.current?.w}
@@ -3799,10 +3866,10 @@ function Explore() {
           smooth={smooth}
           cropRegion={cropRefitAvailable ? scanCrop : null}
           cropSelecting={cropRefitAvailable && cropSelecting}
-          onCropSelect={chooseCropCenter}
+          onCropChange={chooseCropRectangle}
           inset={fftAsInset ? (
             <FFTInset
-              offscreen={fftOff}
+              offscreen={fftOff} offscreenVersion={fftVersion}
               rawData={fftMagRef.current?.mag}
               size={fftInsetSize}
               panelSize={panel}
@@ -3816,7 +3883,7 @@ function Explore() {
         />
         {extraRealViews.amp && (
           <ImagePanel
-            offscreen={ampOff} label="Amplitude" size={panel} tc={tc}
+            offscreen={ampOff} offscreenVersion={ampVersion} label="Amplitude" size={panel} tc={tc}
             zoom={ampZoom} onZoomChange={setAmpZoom}
             showResize onResizeStart={startResize}
             pixelSize={pixelSize} imageWidth={rawPhaseRef.current?.w}
@@ -3836,7 +3903,7 @@ function Explore() {
         )}
         {fftAsPanel && (
           <ImagePanel
-            offscreen={fftOff} label="FFT" size={panel} tc={tc}
+            offscreen={fftOff} offscreenVersion={fftVersion} label="FFT" size={panel} tc={tc}
             zoom={fftZoom} onZoomChange={setFFTZoom}
             showResize onResizeStart={startResize}
             pixelSize={fftPixelSize} imageWidth={rawPhaseRef.current?.w} isFFT
@@ -4269,12 +4336,6 @@ function Explore() {
           setValues={setHigherOrder}
         />
 
-        {cropRefitAvailable && cropRefitStatus && (
-          <Typography sx={{ ...typography.value, color: /^Crop refit failed/i.test(cropRefitStatus) ? STATUS_BAD : tc.textMuted }}>
-            {cropRefitStatus}
-          </Typography>
-        )}
-
         {/* Single compact action row — PLAY + PIN + RAND + RESET + SAVE CALIBRATION.
             Dropdowns and scope chips live inline.  Wraps to a second line only
             on narrow widgets (below ~520 px panel size). */}
@@ -4378,46 +4439,6 @@ function Explore() {
               {renderRangeEditor("rot", "rot", "deg", 1)}
             </Box>
           </Menu>
-
-          {cropRefitAvailable && scanCrop && (
-            <>
-              <Box sx={{ width: "1px", height: 20, bgcolor: tc.border, mx: 0.5, alignSelf: "center" }} />
-              <Button
-                size="small"
-                onClick={() => setCropSelecting(value => !value)}
-                sx={{
-                  ...compactButton(tc), height: ACTION_CONTROL_HEIGHT,
-                  minWidth: 48, color: cropSelecting ? STATUS_GOOD : tc.text,
-                  borderColor: cropSelecting ? STATUS_GOOD : tc.border,
-                }}
-                aria-pressed={cropSelecting}
-                title="Choose the center of the SSB refit crop on the phase image"
-              >
-                Crop
-              </Button>
-              <Select
-                value={cropSize}
-                onChange={(e) => changeCropSize(Number(e.target.value))}
-                size="small"
-                sx={{ ...actionSelect, width: 58, minWidth: 58 }}
-                title="Square scan crop size"
-              >
-                {[128, 256, 512, 1024]
-                  .filter(size => size <= Math.min(scanRows || 0, scanCols || 0))
-                  .map(size => <MenuItem key={size} value={size}>{size}</MenuItem>)}
-              </Select>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={requestCropRefit}
-                disabled={busy || cropRefitPending}
-                sx={{ ...compactButton(tc), height: ACTION_CONTROL_HEIGHT, minWidth: 70, color: STATUS_GOOD, borderColor: STATUS_GOOD }}
-                title={`Refit the selected ${cropSize}x${cropSize} scan crop with 200 SSB optimization trials`}
-              >
-                Refit SSB
-              </Button>
-            </>
-          )}
 
           {/* Divider: PLAY group | PIN */}
           <Box sx={{ width: "1px", height: 20, bgcolor: tc.border, mx: 0.5, alignSelf: "center" }} />

@@ -910,6 +910,24 @@ def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     assert "global_group = start_bf / ${REDUCE_BF_GROUP}u" in source
 
 
+def test_showptycho_phase_contrast_coalesces_gpu_updates_without_thumb_swaps():
+    """C7: rapid phase contrast drags, expect latest-only GPU paints."""
+    ui_source = pathlib.Path("js/showptycho/index.tsx").read_text()
+
+    assert "disableSwap" in ui_source
+    assert "gpuCmapBusyRef" in ui_source
+    assert "gpuCmapPendingRef" in ui_source
+    assert "if (gpuCmapBusyRef.current[slot])" in ui_source
+    assert "gpuCmapPendingRef.current[slot] = launch" in ui_source
+    assert "pending?.()" in ui_source
+    assert "engine.applySingle(slot, vmin, vmax, false).then(rgba =>" in ui_source
+    assert "image.data.set(rgba)" in ui_source
+    assert "if (!rawPhaseRef.current || contrastRafRef.current !== null) return" in ui_source
+    assert "renderRealDisplayRef.current(latest.data, latest.w, latest.h)" in ui_source
+    assert 'aria-pressed={extraRealViews.amp}' in ui_source
+    assert 'aria-pressed={extraRealViews.complex}' in ui_source
+
+
 def test_showptycho_webgpu_reuses_resident_bf_columns_after_prepare():
     """C7: prepared browser BF columns, expect sliders/FFT not to refetch them."""
     source = _webgpu_source("showptycho-ssb.ts")
