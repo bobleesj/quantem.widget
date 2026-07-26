@@ -487,6 +487,62 @@ The interactive section offers a size-sorted ladder of `uint8`/`uint16`,
 real-space-bin, and detector-bin presets so users can choose between a quick
 preview, a practical offline browser file, and exact raw 4D HTML deliberately.
 
+## WebGPU HDF5 Bundle
+
+For large HDF5 acquisitions, prefer keeping the compressed `*_master.h5` family
+on disk and letting the browser load/decode chunks through WebGPU. This avoids
+embedding a huge raw 4D payload in the HTML file and keeps the exported viewer
+portable.
+
+```python
+import numpy as np
+from quantem.widget import Show4DSTEM
+from quantem.widget.show4dstem_webgpu_export import (
+    bundle_master_urls,
+    export_show4dstem_webgpu_bundle,
+)
+
+folder = "/path/to/h5_family"
+viewer = Show4DSTEM(
+    np.zeros((1, 1, 1, 1), dtype=np.uint8),
+    h5_urls=bundle_master_urls(folder),
+    scan_shape=(512, 512),
+    detector_shape=(192, 192),
+    backend="webgpu",
+    view_mode="multiple",
+    compare_group_mode="all",
+    compare_max_panels=7,
+    precompute_virtual_images=False,
+)
+export_show4dstem_webgpu_bundle(viewer, folder)
+```
+
+The bundle writes `Show4DSTEM.command` plus a hidden `.viewer/` folder. On
+macOS, double-clicking the command starts a local range-capable server and opens
+the vendored viewer page in Chrome. The exported page ships the required browser
+widget-manager assets, so the handoff does not depend on public CDNs.
+
+Use `h5_uint8_lossless=True` only after auditing the detector counts. It enables
+the low8 WebGPU decode path and is lossless only when every corrected good-pixel
+count fits in 8 bits. Leave it off for exact native `uint16` browsing; the bundle
+then injects `__QT_H5_DECODE_DTYPE="u2"` and keeps the high bitplanes.
+
+The browser loader also honors these optional globals when injected before the
+widget bundle:
+
+| Global | Purpose |
+|---|---|
+| `__QT_H5_DECODE_DTYPE` | `"uint8"`, `"u2"`/`"uint16"`, `"native"`, or `"float32"` decode request |
+| `__QT_H5_DET_BIN` | Detector mean-binning factor for local HDF5 loads |
+| `__QT_H5_SCAN_REGION` | `(row_start, row_stop, col_start, col_stop)` scan crop |
+| `__QT_H5_SOURCE_SCAN_ROWS`, `__QT_H5_SOURCE_SCAN_COLS` | Source scan shape when loading a cropped region |
+| `__QT_H5_FETCH_WINDOW`, `__QT_H5_DECODE_QUEUE` | HTTP fetch/decode queue depth |
+| `__QT_H5_LOCAL_GROUP`, `__QT_H5_LOCAL_WORKERS` | Browser local-file read/decode grouping |
+
+For performance signoff, inspect `window.__loadprof` after load and
+`window.__sh4dLiveViStats` while dragging the virtual detector. The maintainer
+performance notes record the current seven-panel WebGPU compare-grid signoff.
+
 ## Reference
 
 ```{eval-rst}
