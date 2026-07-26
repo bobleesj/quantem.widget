@@ -1571,13 +1571,14 @@ export class GPUColormapEngine {
     const old = this.slots[idx];
     if (old) this.retireSlot(old);
     const count = Math.max(1, width * height);
-    const tinyStorage = () => this.device.createBuffer({
-      size: 16,
+    const rgbaCapacity = count;
+    const rgbaBuffer = this.device.createBuffer({
+      size: rgbaCapacity * 4,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
     });
     this.slots[idx] = {
       dataBuffer: buffer,
-      rgbaBuffer: tinyStorage(),
+      rgbaBuffer,
       readBuffer: this.device.createBuffer({
         size: 16,
         usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
@@ -1590,7 +1591,10 @@ export class GPUColormapEngine {
         size: 8,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       }),
-      histBinsBuffer: tinyStorage(),
+      histBinsBuffer: this.device.createBuffer({
+        size: 16,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+      }),
       histReadBuffer: this.device.createBuffer({
         size: 16,
         usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
@@ -1603,10 +1607,10 @@ export class GPUColormapEngine {
       sharedGridBindGroup: null,
       sharedGridBlitBindGroup: null,
       count,
-      rgbaCapacity: 1,
+      rgbaCapacity,
       width,
       height,
-      directOnly: true,
+      directOnly: false,
     };
   }
 
@@ -3758,6 +3762,122 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       else bitmaps.push(null as never);
     }
     return bitmaps;
+  }
+
+  /**
+   * Async range-aware slot rendering that keeps the min/max range on the GPU.
+   * This is the no-readback variant used by GPU-resident Show4DSTEM compare
+   * panels: range reduction, colormap, and blit are submitted together, then
+   * the OffscreenCanvas is snapshotted only after the queue drains.
+   */
+  async renderSlotsWithComputedGpuRangeAsync(
+    indices: number[],
+    vminPct: number[],
+    vmaxPct: number[],
+    logScale: boolean = false,
+  ): Promise<ImageBitmap[] | null> {
+    this.ensureColormapRangePipeline();
+    if (!this.colormapRangePipeline || !this.lutBuffer || indices.length === 0) return null;
+    const fmt = navigator.gpu.getPreferredCanvasFormat();
+    this.ensureBlitPipeline(fmt);
+    if (!this.blitPipeline) return null;
+
+    const encoder = this.device.createCommandEncoder();
+    const params = new ArrayBuffer(32);
+    const canvases: (OffscreenCanvas | null)[] = [];
+    const tempBuffers: GPUBuffer[] = [];
+    let encoded = 0;
+
+    for (const idx of indices) {
+      if (this.recordComputeRangeRegion(encoder, idx, undefined, logScale)) encoded++;
+    }
+    if (encoded === 0) {
+      flushParamsBufQueue();
+      return null;
+    }
+
+    for (let k = 0; k < indices.length; k++) {
+      const i = indices[k];
+      const slot = this.slots[i];
+      if (!slot || slot.directOnly || slot.rgbaCapacity < slot.count || !slot.rangeBuffer) {
+        canvases.push(null);
+        continue;
+      }
+      const lowPct = vminPct[k] ?? 0;
+      const highPct = vmaxPct[k] ?? 100;
+
+      const pu = new Uint32Array(params);
+      const pf = new Float32Array(params);
+      pu[0] = slot.width;
+      pu[1] = slot.height;
+      pf[2] = lowPct;
+      pf[3] = highPct;
+      pu[4] = logScale ? 1 : 0;
+      pu[5] = 0;
+      pu[6] = 0;
+      pu[7] = slot.width;
+      this.device.queue.writeBuffer(slot.paramsBuffer, 0, params);
+
+      const computeGroup = this.device.createBindGroup({
+        layout: this.colormapRangePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: slot.paramsBuffer } },
+          { binding: 1, resource: { buffer: slot.dataBuffer } },
+          { binding: 2, resource: { buffer: this.lutBuffer } },
+          { binding: 3, resource: { buffer: slot.rgbaBuffer } },
+          { binding: 4, resource: { buffer: slot.rangeBuffer } },
+        ],
+      });
+      const computePass = encoder.beginComputePass();
+      computePass.setPipeline(this.colormapRangePipeline);
+      computePass.setBindGroup(0, computeGroup);
+      computePass.dispatchWorkgroups(Math.ceil(slot.width / 16), Math.ceil(slot.height / 16));
+      computePass.end();
+
+      const oc = new OffscreenCanvas(slot.width, slot.height);
+      const ctx = oc.getContext("webgpu") as GPUCanvasContext | null;
+      if (!ctx) {
+        canvases.push(null);
+        continue;
+      }
+      ctx.configure({ device: this.device, format: fmt, alphaMode: "opaque" });
+
+      const blitParamsBuffer = this.device.createBuffer({
+        size: 8,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      this.device.queue.writeBuffer(blitParamsBuffer, 0, new Uint32Array([slot.width, slot.height]));
+      tempBuffers.push(blitParamsBuffer);
+
+      const blitGroup = this.device.createBindGroup({
+        layout: this.blitPipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: blitParamsBuffer } },
+          { binding: 1, resource: { buffer: slot.rgbaBuffer } },
+        ],
+      });
+
+      const texture = ctx.getCurrentTexture();
+      const renderPass = encoder.beginRenderPass({
+        colorAttachments: [{
+          view: texture.createView(),
+          loadOp: "clear" as GPULoadOp,
+          storeOp: "store" as GPUStoreOp,
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+        }],
+      });
+      renderPass.setPipeline(this.blitPipeline);
+      renderPass.setBindGroup(0, blitGroup);
+      renderPass.draw(3);
+      renderPass.end();
+      canvases.push(oc);
+    }
+
+    this.device.queue.submit([encoder.finish()]);
+    await this.device.queue.onSubmittedWorkDone();
+    for (const b of tempBuffers) b.destroy();
+    flushParamsBufQueue();
+    return this._transferOffscreens(canvases);
   }
 
   /**
