@@ -1986,8 +1986,14 @@ function Explore() {
   const [folderSaves, setFolderSaves] = React.useState<FolderSaveRecord[]>([]);
   const [folderSaveStatus, setFolderSaveStatus] = React.useState("");
   const refreshFolderSaves = React.useCallback(async () => {
-    const data = await readShowPtychoFolderJson<FolderSaveRecord[]>("snapshots/snapshots.json");
-    if (Array.isArray(data)) setFolderSaves(data);
+    const current = await readShowPtychoFolderJson<FolderSaveRecord[]>("snapshots/snapshots.json");
+    const legacy = await readShowPtychoFolderJson<FolderSaveRecord[]>("saves/saves.json");
+    if (Array.isArray(current) || Array.isArray(legacy)) {
+      const byId = new Map<string, FolderSaveRecord>();
+      for (const record of Array.isArray(legacy) ? legacy : []) byId.set(record.id, record);
+      for (const record of Array.isArray(current) ? current : []) byId.set(record.id, record);
+      setFolderSaves(Array.from(byId.values()));
+    }
   }, []);
   React.useEffect(() => {
     if (webgpuStandalone && localSourceGranted) void refreshFolderSaves();
