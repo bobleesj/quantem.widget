@@ -2927,6 +2927,8 @@ function Explore() {
          exported WebGPU HTML has no kernel observer. Negate the currently
          displayed phase immediately so both paths feel identical. --- */
   const flipInitializedRef = React.useRef(false);
+  const renderAllRef = React.useRef(renderAll);
+  renderAllRef.current = renderAll;
   React.useEffect(() => {
     if (!flipInitializedRef.current) {
       flipInitializedRef.current = true;
@@ -2936,8 +2938,8 @@ function Explore() {
     if (!p) return;
     const flipped = new Float32Array(p.data.length);
     for (let i = 0; i < p.data.length; i++) flipped[i] = -p.data[i];
-    renderAll(flipped, p.w, p.h);
-  }, [flipPhase, renderAll]);
+    renderAllRef.current(flipped, p.w, p.h);
+  }, [flipPhase]);
 
   /* --- Render when new data arrives --- */
   React.useEffect(() => {

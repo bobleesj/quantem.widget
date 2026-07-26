@@ -895,7 +895,8 @@ def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     assert "dragBfRef.current = count" in ui_source
     assert "setLocalDragBf(count)" in ui_source
     assert "exported WebGPU HTML has no kernel observer" in ui_source
-    assert "renderAll(flipped, p.w, p.h)" in ui_source
+    assert "renderAllRef.current(flipped, p.w, p.h)" in ui_source
+    assert "}, [flipPhase]);" in ui_source
     assert "__QUANTEM_SHOWPTYCHO_CAPTURE__" in ui_source
     assert "__QUANTEM_SHOWPTYCHO_LAST_PHASE__" in ui_source
     assert "full BF phase" in ui_source
