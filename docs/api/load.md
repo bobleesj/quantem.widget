@@ -191,12 +191,3 @@ Measured on a native-detector 5D-STEM ROI loader timing check
 The patch path is CUDA-only today and targets chunked 4D-STEM masters with one
 detector frame per HDF5 chunk. Use `load()` for full-field browsing and for
 Apple Metal/MPS until the region loader is ported there.
-
-## Region-loader compatibility reference
-
-`load_scan_region()` remains available for existing code, but new examples
-should use `load(..., scan_region=...)`.
-
-```{eval-rst}
-.. autofunction:: quantem.widget.io.hdf5.load_scan_region
-```
