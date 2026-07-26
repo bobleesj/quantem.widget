@@ -1761,14 +1761,33 @@ function Explore() {
     const n = Math.max(1, Math.round(total || 1));
     return Math.max(1, Math.min(n, Math.round(n * DEFAULT_BF_FRACTION)));
   }, []);
+  const webgpuCalActiveBf = React.useMemo(() => {
+    if (!webgpuCalJson) return 0;
+    try {
+      const cal = JSON.parse(webgpuCalJson);
+      const numBf = Number(cal?.num_bf || 0);
+      const aperture = Array.isArray(cal?.aperture_k) ? cal.aperture_k : [];
+      const active = aperture.reduce((count: number, value: unknown) => (
+        Math.abs(Number(value || 0)) > 1e-12 ? count + 1 : count
+      ), 0);
+      const total = active > 0 ? active : numBf;
+      return Number.isFinite(total) && total > 0 ? Math.round(total) : 0;
+    } catch {
+      return 0;
+    }
+  }, [webgpuCalJson]);
+  const effectiveTotalBf = webgpuStandalone && webgpuCalActiveBf > 0
+    ? webgpuCalActiveBf
+    : Math.max(0, Math.round(totalBf || 0));
   React.useEffect(() => {
-    const total = Math.max(0, Math.round(totalBf || 0));
+    const total = effectiveTotalBf;
     const raw = Math.round(dragBfTrait ?? 0);
-    const next = total > 0 && raw <= 0 ? defaultBfCount(total) : raw;
+    const nextRaw = total > 0 && raw <= 0 ? defaultBfCount(total) : raw;
+    const next = total > 0 ? Math.max(1, Math.min(total, nextRaw)) : nextRaw;
     setLocalDragBf(next);
     dragBfRef.current = next;
     if (total > 0 && raw <= 0) setDragBfTrait(next);
-  }, [defaultBfCount, dragBfTrait, setDragBfTrait, totalBf]);
+  }, [defaultBfCount, dragBfTrait, effectiveTotalBf, setDragBfTrait]);
   const [pinned, setPinned] = React.useState<PinnedEntry[]>([]);
   const [viewPin, setViewPin] = React.useState<number | null>(null);
   const [exportStatus, setExportStatus] = React.useState("");
@@ -1914,11 +1933,11 @@ function Explore() {
   const webgpuPendingRef = React.useRef<[number, number, number, number] | null>(null);
   const webgpuPendingFullRef = React.useRef(false);
   const selectedDragBfCount = React.useCallback(() => {
-    const total = Math.max(1, Math.round(totalBf || 1));
+    const total = Math.max(1, effectiveTotalBf || 1);
     const requested = Math.round(dragBfRef.current || 0);
     if (requested <= 0) return defaultBfCount(total);
     return Math.max(1, Math.min(total, requested));
-  }, [defaultBfCount, totalBf]);
+  }, [defaultBfCount, effectiveTotalBf]);
 
   // No-server mode: on file:// the sibling data files cannot be fetch()ed, so
   // the folder must be granted once (picker or webkitdirectory input) before
@@ -2166,7 +2185,7 @@ function Explore() {
   }, [fireRequest]);
 
   const commitDragBf = React.useCallback((val: number) => {
-    const total = Math.max(1, Math.round(totalBf || 1));
+    const total = Math.max(1, effectiveTotalBf || 1);
     const count = Math.max(1, Math.min(total, Math.round(val)));
     dragBfRef.current = count;
     setLocalDragBf(count);
@@ -2200,7 +2219,7 @@ function Explore() {
       });
       setWebgpuRuntimeStatus(`BF reducer unavailable: ${message}`);
     });
-  }, [setDragBfTrait, totalBf]);
+  }, [effectiveTotalBf, setDragBfTrait]);
 
   /* --- Slider values ref (so callbacks read fresh values without re-creating) --- */
   const sliderVals = React.useRef({ c10: 0, c12: 0, phi12: 0 });
@@ -2741,7 +2760,7 @@ function Explore() {
     setViewPin(null);
     const t0 = performance.now();
     const bfCount = selectedDragBfCount();
-    const total = Math.max(1, Math.round(totalBf || bfCount));
+    const total = Math.max(1, effectiveTotalBf || bfCount);
     const isFull = bfCount >= total;
     engine.reconstruct(c10Val, c12Val, phi12Val, {
       preview: !isFull,
@@ -2804,7 +2823,7 @@ function Explore() {
       }
     });
     return true;
-  }, [fireRequest, renderAll, renderPreviewPhase, selectedDragBfCount, totalBf, webgpuStandalone]);
+  }, [effectiveTotalBf, fireRequest, renderAll, renderPreviewPhase, selectedDragBfCount, webgpuStandalone]);
 
   frontendPreviewRef.current = runFrontendPreview;
   const runFrontendFull = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal: number): boolean => {
@@ -2820,7 +2839,7 @@ function Explore() {
     setViewPin(null);
     const t0 = performance.now();
     const bfCount = selectedDragBfCount();
-    const total = Math.max(1, Math.round(totalBf || bfCount));
+    const total = Math.max(1, effectiveTotalBf || bfCount);
     const isFull = bfCount >= total;
     engine.reconstruct(c10Val, c12Val, phi12Val, {
       preview: !isFull,
@@ -2868,7 +2887,7 @@ function Explore() {
       }
     });
     return true;
-  }, [renderAll, selectedDragBfCount, totalBf, webgpuStandalone]);
+  }, [effectiveTotalBf, renderAll, selectedDragBfCount, webgpuStandalone]);
 
   frontendFullRef.current = runFrontendFull;
   shouldCommitOnReleaseRef.current = dragBfRef.current > 0 || !!webgpuSsbRef.current;
@@ -2878,7 +2897,7 @@ function Explore() {
     if (!webgpuSsbRef.current || !initRef.current) return;
     if (rawPhaseRef.current) return;
     standaloneInitialRenderRef.current = true;
-    const total = Math.max(1, Math.round(totalBf || 1));
+    const total = Math.max(1, effectiveTotalBf || 1);
     const count = selectedDragBfCount();
     setWebgpuLoadProgress({
       stage: "device",
@@ -2892,7 +2911,7 @@ function Explore() {
     });
     setWebgpuRuntimeStatus("Preparing compressed HDF5 source on WebGPU");
     frontendPreviewRef.current?.(autoC10, autoC12, autoPhi12, autoRotation ?? rotationDegRef.current);
-  }, [autoC10, autoC12, autoPhi12, autoRotation, selectedDragBfCount, totalBf, webgpuRuntimeStatus, webgpuStandalone]);
+  }, [autoC10, autoC12, autoPhi12, autoRotation, effectiveTotalBf, selectedDragBfCount, webgpuRuntimeStatus, webgpuStandalone]);
 
   /* --- Re-render real-space display when mode/contrast/cmap changes.
          Coalesce to one render per animation frame: the histogram slider fires
@@ -3262,7 +3281,7 @@ function Explore() {
     const engine = webgpuSsbRef.current;
     if (!engine) throw new Error("GIF/MP4 export needs the WebGPU ShowPtycho engine.");
     const bfCount = selectedDragBfCount();
-    const total = Math.max(1, Math.round(totalBf || bfCount));
+    const total = Math.max(1, effectiveTotalBf || bfCount);
     const result = await engine.reconstruct(frame.c10, frame.c12, frame.phi12, {
       preview: bfCount < total,
       bfCount,
@@ -3303,7 +3322,7 @@ function Explore() {
     ctx.textBaseline = "middle";
     ctx.fillText(frame.label, 6, panelEdge + labelH / 2);
     return out;
-  }, [selectedDragBfCount, totalBf]);
+  }, [effectiveTotalBf, selectedDragBfCount]);
 
   const exportAnimationGif = React.useCallback(async () => {
     setAnimationExportAnchor(null);
@@ -3744,16 +3763,16 @@ function Explore() {
         </Typography>
         <Slider
           value={localDragBf}
-          min={totalBf > 0 ? 1 : 0}
-          max={totalBf > 0 ? totalBf : 0}
+          min={effectiveTotalBf > 0 ? 1 : 0}
+          max={effectiveTotalBf > 0 ? effectiveTotalBf : 0}
           step={1}
-          disabled={totalBf <= 0}
+          disabled={effectiveTotalBf <= 0}
           onChange={(_, val) => setLocalDragBf(val as number)}
           onChangeCommitted={(_, val) => commitDragBf(val as number)}
           size="small"
           valueLabelDisplay="auto"
-          valueLabelFormat={(v) => totalBf > 0 ? `${(v / totalBf).toFixed(2)} (${v}/${totalBf})` : "--"}
-          aria-label={totalBf > 0 ? `BF pixels ${localDragBf} of ${totalBf}` : "BF pixels"}
+          valueLabelFormat={(v) => effectiveTotalBf > 0 ? `${(v / effectiveTotalBf).toFixed(2)} (${v}/${effectiveTotalBf})` : "--"}
+          aria-label={effectiveTotalBf > 0 ? `BF pixels ${localDragBf} of ${effectiveTotalBf}` : "BF pixels"}
           sx={{ width: 120, flex: "0 0 120px", mx: 0.5 }}
         />
         <Button
