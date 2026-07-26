@@ -3151,12 +3151,10 @@ function Explore() {
         await writeShowPtychoFolderFile(record.image, jpeg);
         await writeShowPtychoFolderFile("snapshots/snapshots.json", JSON.stringify(next, null, 2));
         setFolderSaves(next);
-        setFolderSaveStatus(`Snapshot saved (${next.length}) + downloaded`);
+        setFolderSaveStatus(`Snapshot saved (${next.length})`);
       } else {
-        // webkitdirectory grants are read-only - fall back to download-only
-        setFolderSaveStatus("Folder is read-only here - image downloaded (use the Open data folder picker for persistent snapshots)");
+        setFolderSaveStatus("Folder is read-only here - use Open data folder for persistent snapshots");
       }
-      downloadBlob(jpeg, record.image.split("/").pop() || "showptycho_save.jpg");
     } catch (err) {
       setFolderSaveStatus(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
     }
