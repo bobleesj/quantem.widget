@@ -3841,7 +3841,7 @@ function Explore() {
             {cropSummary}
           </Typography>
         )}
-        {cropRefitStatus.startsWith("Refit complete:") && (
+        {(cropRefitStatus || "").startsWith("Refit complete:") && (
           <Typography sx={{ ...typography.value, color: STATUS_GOOD }}>SSB refit complete</Typography>
         )}
         <Button
