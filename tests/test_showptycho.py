@@ -1045,4 +1045,6 @@ def test_showptycho_webgpu_folder_uses_active_bf_disk_total():
     assert "if (computeLoss && bfCount === this.cal.num_bf)" not in source
     assert "const webgpuCalActiveBf = React.useMemo(() =>" in ui_source
     assert "const effectiveTotalBf = webgpuStandalone && webgpuCalActiveBf > 0" in ui_source
+    assert "const seedStandaloneDefault = webgpuStandalone && !standaloneBfSeededRef.current && total > 0" in ui_source
+    assert "raw <= 0 || seedStandaloneDefault" in ui_source
     assert "max={effectiveTotalBf > 0 ? effectiveTotalBf : 0}" in ui_source
