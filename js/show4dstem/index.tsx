@@ -1651,6 +1651,8 @@ function CompareVirtualGrid({
   const canvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
   const gpuCanvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
   const gpuCanvasContextsRef = React.useRef<(GPUCanvasContext | null)[]>([]);
+  const gpuBitmapPaintSeqRef = React.useRef(0);
+  const gpuDirectPaintedRef = React.useRef(false);
   const canvasDrawCacheRef = React.useRef(new Map<number, {
     canvas: HTMLCanvasElement;
     panel: Float32Array;
@@ -1770,7 +1772,10 @@ function CompareVirtualGrid({
         canvasDrawCacheRef.current.delete(frame);
       }
     });
-    if (painted > 0) onGpuPaint?.(painted);
+    if (painted > 0) {
+      gpuDirectPaintedRef.current = true;
+      onGpuPaint?.(painted);
+    }
     return painted;
   }, [
     colormap,
@@ -1823,7 +1828,7 @@ function CompareVirtualGrid({
     canvasDrawCacheRef.current.forEach((_, frame) => {
       if (!visibleFrames.has(frame)) canvasDrawCacheRef.current.delete(frame);
     });
-    let gpuPaintedPanels = 0;
+    let directPaintedPanels = 0;
     renderEntries.forEach(({ frame, panel }, idx) => {
       const canvas = canvasRefs.current[idx];
       if (!canvas) return;
@@ -1862,12 +1867,10 @@ function CompareVirtualGrid({
               },
             )
             : false;
-          if (rendered) {
-            gpuPaintedPanels++;
-            canvasDrawCacheRef.current.delete(frame);   // CPU cache no longer matches the canvas
-            return;
-          }
+          if (rendered) directPaintedPanels++;
         }
+        canvasDrawCacheRef.current.delete(frame);
+        return;
       }
       if (!panel) {
         ctx.clearRect(0, 0, shapeCols, shapeRows);
@@ -1899,8 +1902,10 @@ function CompareVirtualGrid({
       ctx.putImageData(imageData, 0, 0);
       canvasDrawCacheRef.current.set(frame, { canvas, panel, styleKey });
     });
-    if (gpuPaintedPanels > 0) onGpuPaint?.(gpuPaintedPanels);
-
+    if (directPaintedPanels > 0) {
+      gpuDirectPaintedRef.current = true;
+      onGpuPaint?.(directPaintedPanels);
+    }
     const expected = progressivePage?.expectedIndices ?? [];
     const drawnExpectedIndices = expected.filter((frame) => {
       const currentPanel = panelByFrame.get(frame);
@@ -1937,6 +1942,83 @@ function CompareVirtualGrid({
       });
     }
   }, [autoContrast, colormap, comparePanX, comparePanY, compareZoom, gpuEngine, gpuSlots, gpuVersion, onFreshVisiblePaint, onGpuPaint, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
+
+  React.useEffect(() => {
+    if (!gpuEngine || !gpuSlots) return;
+    if (gpuDirectPaintedRef.current) return;
+    const gpuEntries = renderEntries
+      .map((entry, localIdx) => ({
+        frame: entry.frame,
+        localIdx,
+        slot: gpuSlots.get(entry.frame),
+      }))
+      .filter((entry): entry is { frame: number; localIdx: number; slot: number } => entry.slot !== undefined);
+    if (gpuEntries.length === 0) return;
+
+    const seq = ++gpuBitmapPaintSeqRef.current;
+    let cancelled = false;
+    const lut = COLORMAPS[colormap] || COLORMAPS.inferno;
+    gpuEngine.uploadLUT(colormap, lut);
+
+    gpuEntries.forEach(({ localIdx }) => {
+      const canvas = canvasRefs.current[localIdx];
+      if (!canvas) return;
+      if (canvas.width !== shapeCols) canvas.width = shapeCols;
+      if (canvas.height !== shapeRows) canvas.height = shapeRows;
+    });
+
+    void (async () => {
+      const bitmaps = await gpuEngine.renderSlotsWithComputedGpuRangeAsync(
+        gpuEntries.map((entry) => entry.slot),
+        gpuEntries.map(() => vminPct),
+        gpuEntries.map(() => vmaxPct),
+        scaleMode === "log",
+      );
+      if (!bitmaps) return;
+      if (cancelled || seq !== gpuBitmapPaintSeqRef.current) {
+        bitmaps.forEach((bitmap) => bitmap?.close?.());
+        return;
+      }
+
+      let painted = 0;
+      bitmaps.forEach((bitmap, i) => {
+        if (!bitmap) return;
+        const entry = gpuEntries[i];
+        const canvas = canvasRefs.current[entry.localIdx];
+        const ctx = canvas?.getContext("2d");
+        if (!canvas || !ctx) {
+          bitmap.close?.();
+          return;
+        }
+        if (canvas.width !== shapeCols) canvas.width = shapeCols;
+        if (canvas.height !== shapeRows) canvas.height = shapeRows;
+        ctx.clearRect(0, 0, shapeCols, shapeRows);
+        ctx.imageSmoothingEnabled = smooth;
+        if (smooth) ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(bitmap, 0, 0, shapeCols, shapeRows);
+        bitmap.close?.();
+        canvasDrawCacheRef.current.delete(entry.frame);
+        painted++;
+      });
+      if (painted > 0) onGpuPaint?.(painted);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    colormap,
+    gpuEngine,
+    gpuSlots,
+    onGpuPaint,
+    renderEntries,
+    scaleMode,
+    shapeCols,
+    shapeRows,
+    smooth,
+    vmaxPct,
+    vminPct,
+  ]);
 
   React.useEffect(() => {
     return () => {
@@ -2350,7 +2432,7 @@ function CompareVirtualGrid({
                   height: imageHeight,
                   imageRendering: smooth ? "auto" : "pixelated",
                   pointerEvents: "none",
-                  opacity: loaded ? 1 : 0,
+                  opacity: panel || gpuLoaded ? 1 : 0,
                   transition: "opacity 160ms ease",
                 }}
               />
@@ -3060,6 +3142,8 @@ function Show4DSTEM() {
   const requestViFinalizeRef = React.useRef<(() => void) | null>(null);
   const requestCompareViLiveRef = React.useRef<(() => void) | null>(null);
   const compareViLiveRafRef = React.useRef<number | null>(null);
+  const compareViLiveInFlightRef = React.useRef(false);
+  const compareViLivePendingRef = React.useRef(false);
   const requestDpFrameLiveRef = React.useRef<(() => void) | null>(null);
   const dpFrameLiveRafRef = React.useRef<number | null>(null);
   const requestCompareViLive = React.useCallback(() => {
@@ -3093,6 +3177,7 @@ function Show4DSTEM() {
       cancelAnimationFrame(compareViLiveRafRef.current);
       compareViLiveRafRef.current = null;
     }
+    compareViLivePendingRef.current = false;
     flushRoiCenter();
     flushRoiRadius();
     if (wasInteractive) {
@@ -3221,9 +3306,14 @@ function Show4DSTEM() {
     const statsWindow = window as unknown as {
       __sh4dLiveViStats?: Record<string, unknown>;
       __sh4dLiveCompareStats?: Record<string, unknown>;
+      __sh4dLiveCompareHistory?: Record<string, unknown>[];
     };
     statsWindow.__sh4dLiveViStats = payload;
     statsWindow.__sh4dLiveCompareStats = payload;
+    const history = statsWindow.__sh4dLiveCompareHistory ?? [];
+    history.push(payload);
+    if (history.length > 240) history.splice(0, history.length - 240);
+    statsWindow.__sh4dLiveCompareHistory = history;
   }, []);
   const rawVirtualImageVersionRef = React.useRef(0);
   const viGpuColormapRef = React.useRef<GPUColormapEngine | null>(null);
@@ -4668,7 +4758,8 @@ function Show4DSTEM() {
             let removedPixels = 0;
             let packedWords = 0;
             if (
-              previous
+              interactiveDrag
+              && previous
               && previous.indicesKey === indicesKey
               && previous.mask.length === mask0.length
               && batchFrames.every((frame) => previous.buffers.has(frame))
@@ -5359,7 +5450,22 @@ function Show4DSTEM() {
         rd: () => ({ mode: model.get("roi_mode"), r: model.get("roi_radius"), ri: model.get("roi_radius_inner"),
           cr: model.get("roi_center_row"), cc: model.get("roi_center_col"), active: model.get("roi_active") }) };
       requestCompareViLiveRef.current = () => {
-        void recomputeCompareVI();
+        if (compareViLiveInFlightRef.current) {
+          compareViLivePendingRef.current = true;
+          return;
+        }
+        flushRoiCenter();
+        flushRoiRadius();
+        compareViLiveInFlightRef.current = true;
+        void recomputeCompareVI().finally(() => {
+          compareViLiveInFlightRef.current = false;
+          if (compareViLivePendingRef.current && dpRoiInteractiveRef.current) {
+            compareViLivePendingRef.current = false;
+            requestCompareViLive();
+          } else {
+            compareViLivePendingRef.current = false;
+          }
+        });
       };
       requestViFinalizeRef.current = () => {
         void recomputeVI();
@@ -7066,21 +7172,22 @@ function Show4DSTEM() {
           smooth: viSmooth,
         },
       );
-    } else if (gpuImage.rangeMode === "gpu" && viScaleMode !== "log") {
+    } else if (gpuImage.rangeMode === "gpu") {
       displayRange = "gpu";
+      const renderOpts = {
+        width: shapeCols,
+        height: shapeRows,
+        bgRgb: 0,
+        transform: { zoom: viZoom, panX: viPanX, panY: viPanY },
+        smooth: viSmooth,
+      };
       rendered = engine.renderSlotDirectWithGpuRangeToCanvas(
         gpuImage.slot,
         viVminPct,
         viVmaxPct,
-        false,
+        viScaleMode === "log",
         ctx,
-        {
-          width: shapeCols,
-          height: shapeRows,
-          bgRgb: 0,
-          transform: { zoom: viZoom, panX: viPanX, panY: viPanY },
-          smooth: viSmooth,
-        },
+        renderOpts,
       );
     }
     if (rendered) {
