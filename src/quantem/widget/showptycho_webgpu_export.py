@@ -37,14 +37,14 @@ def _showptycho_fft_mag(array: np.ndarray) -> np.ndarray:
     return np.log1p(np.fft.fftshift(mag)).astype(np.float32)
 
 
-def _write_empty_saves_manifest(out_path: pathlib.Path) -> None:
-    """Seed optional standalone folder saves so the UI has no startup 404."""
+def _write_empty_snapshots_manifest(out_path: pathlib.Path) -> None:
+    """Seed optional standalone folder snapshots so the UI has no startup 404."""
 
-    saves_dir = out_path / "saves"
-    saves_dir.mkdir(parents=True, exist_ok=True)
-    saves_json = saves_dir / "saves.json"
-    if not saves_json.exists():
-        saves_json.write_text("[]\n", encoding="utf-8")
+    snapshots_dir = out_path / "snapshots"
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+    snapshots_json = snapshots_dir / "snapshots.json"
+    if not snapshots_json.exists():
+        snapshots_json.write_text("[]\n", encoding="utf-8")
 
 
 def _jsonable_float_list(array: object) -> list[float]:
@@ -238,7 +238,12 @@ def _write_embedded_widget_html(
             widget.phase_bytes = b""
             widget.phase_width = 0
             widget.phase_height = 0
-        if h5_source:
+        if h5_source and h5_source.get("kind") == "bf_columns":
+            widget.webgpu_preview_status = (
+                "WebGPU folder ready: browser range-reads exact BF columns "
+                "and builds reducers transiently."
+            )
+        elif h5_source:
             widget.webgpu_preview_status = (
                 "WebGPU folder ready: browser reads compressed HDF5 source "
                 "and builds BF reducers transiently."
@@ -423,11 +428,16 @@ def _collect_hdf5_source_files(master: pathlib.Path) -> list[pathlib.Path]:
     return [master, *data_files]
 
 
-def _prepare_hdf5_source_folder(master: pathlib.Path, out_path: pathlib.Path) -> dict[str, Any]:
+def _prepare_hdf5_source_folder(
+    master: pathlib.Path,
+    out_path: pathlib.Path,
+    *,
+    files: list[pathlib.Path] | None = None,
+) -> dict[str, Any]:
     """Expose compressed HDF5 source files inside the review folder."""
 
     source_dir = out_path / "source"
-    files = _collect_hdf5_source_files(master)
+    files = files or _collect_hdf5_source_files(master)
     links = []
     chunk_indexes = []
     chunk_index_payloads: list[tuple[dict[str, Any], dict[str, Any], np.ndarray]] = []
@@ -479,6 +489,127 @@ def _prepare_hdf5_source_folder(master: pathlib.Path, out_path: pathlib.Path) ->
     }
 
 
+def _source_stack_files(files: list[pathlib.Path]) -> list[pathlib.Path]:
+    """Return HDF5 files that hold scan-frame detector stacks."""
+
+    if len(files) > 1:
+        return files[1:]
+    return files
+
+
+def _detector_stack_shape(src: pathlib.Path) -> tuple[int, int, int, np.dtype]:
+    """Return ``(frames, detector_rows, detector_cols, dtype)`` for ``src``."""
+
+    import h5py
+
+    with h5py.File(src, "r") as handle:
+        dataset = _find_hdf5_stack(handle)
+        frames, det_rows, det_cols = (int(v) for v in dataset.shape)
+        return frames, det_rows, det_cols, np.dtype(dataset.dtype)
+
+
+def _write_bf_column_source(
+    files: list[pathlib.Path],
+    out_path: pathlib.Path,
+    calibration: dict[str, Any],
+) -> dict[str, Any]:
+    """Write exact detector BF columns for browser-first ShowPtycho loading."""
+
+    import h5py
+
+    stack_files = _source_stack_files(files)
+    if not stack_files:
+        raise ValueError("ShowPtycho BF-column export found no HDF5 detector stack files.")
+
+    bf_rows = np.asarray(calibration["bf_rows"], dtype=np.int64)
+    bf_cols = np.asarray(calibration["bf_cols"], dtype=np.int64)
+    if bf_rows.shape != bf_cols.shape or bf_rows.ndim != 1:
+        raise ValueError("ShowPtycho BF-column export needs 1D bf_rows and bf_cols.")
+    num_bf = int(bf_rows.size)
+    if num_bf <= 0:
+        raise ValueError("ShowPtycho BF-column export found no BF detector pixels.")
+
+    shapes = [_detector_stack_shape(src) for src in stack_files]
+    detector_shapes = {(det_rows, det_cols) for _, det_rows, det_cols, _ in shapes}
+    if len(detector_shapes) != 1:
+        raise ValueError(f"ShowPtycho source files have inconsistent detector shapes: {sorted(detector_shapes)!r}")
+    det_rows, det_cols = next(iter(detector_shapes))
+    if int(bf_rows.max()) >= det_rows or int(bf_cols.max()) >= det_cols:
+        raise ValueError(
+            "ShowPtycho BF mask is outside the source detector shape: "
+            f"max row/col {(int(bf_rows.max()), int(bf_cols.max()))}, detector {(det_rows, det_cols)}."
+        )
+    plane = int(sum(frames for frames, _, _, _ in shapes))
+    scan_shape = list(calibration.get("scan_region", {}).get("shape") or calibration.get("phase_shape") or [])
+
+    source_dir = out_path / "source"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = source_dir / "bf_columns.tmp.u16"
+    if tmp_path.exists():
+        tmp_path.unlink()
+    columns_u16 = np.memmap(tmp_path, dtype="<u2", mode="w+", shape=(num_bf, plane))
+    offset = 0
+    max_value = 0
+    for src, (frames, _det_rows, _det_cols, _dtype) in zip(stack_files, shapes, strict=True):
+        with h5py.File(src, "r") as handle:
+            dataset = _find_hdf5_stack(handle)
+            for frame0 in range(0, frames, 1024):
+                frame1 = min(frames, frame0 + 1024)
+                frames_block = np.asarray(dataset[frame0:frame1])
+                block = frames_block[:, bf_rows, bf_cols]
+                if block.ndim != 2 or block.shape[1] != num_bf:
+                    raise ValueError(
+                        f"ShowPtycho BF-column slice from {src} returned {block.shape}, "
+                        f"expected ({frame1 - frame0}, {num_bf})."
+                    )
+                if block.size:
+                    max_value = max(max_value, int(np.max(block)))
+                columns_u16[:, offset + frame0 : offset + frame1] = block.T.astype("<u2", copy=False)
+        offset += frames
+    columns_u16.flush()
+
+    if max_value <= 255:
+        rel = pathlib.Path("source") / "bf_columns.u8"
+        final_path = out_path / rel
+        if final_path.exists():
+            final_path.unlink()
+        columns_u8 = np.memmap(final_path, dtype="u1", mode="w+", shape=(num_bf, plane))
+        for bf0 in range(0, num_bf, 256):
+            bf1 = min(num_bf, bf0 + 256)
+            columns_u8[bf0:bf1, :] = columns_u16[bf0:bf1, :].astype("u1", copy=False)
+        columns_u8.flush()
+        del columns_u8
+        del columns_u16
+        tmp_path.unlink(missing_ok=True)
+        dtype = "uint8"
+        bytes_per_value = 1
+    else:
+        rel = pathlib.Path("source") / "bf_columns.u16"
+        final_path = out_path / rel
+        if final_path.exists():
+            final_path.unlink()
+        del columns_u16
+        tmp_path.replace(final_path)
+        dtype = "uint16"
+        bytes_per_value = 2
+
+    return {
+        "kind": "bf_columns",
+        "path": rel.as_posix(),
+        "url": rel.as_posix(),
+        "dtype": dtype,
+        "encoding": dtype,
+        "num_bf": num_bf,
+        "scan_shape": [int(v) for v in scan_shape],
+        "plane": plane,
+        "bytes_per_bf": int(plane * bytes_per_value),
+        "bits_per_value": int(bytes_per_value * 8),
+        "bytes": int(final_path.stat().st_size),
+        "max_value": int(max_value),
+        "note": "Exact detector BF columns; browser range-reads only the BF evidence needed on open.",
+    }
+
+
 def export_showptycho_webgpu_folder(
     widget: Any,
     out_dir: str | pathlib.Path,
@@ -487,13 +618,19 @@ def export_showptycho_webgpu_folder(
     overwrite: bool = True,
     source_master: str | pathlib.Path | None = None,
     decode_dtype: str = "uint16",
+    webgpu_source: str = "bf_columns",
 ) -> pathlib.Path:
-    """Export a ShowPtycho WebGPU folder backed by compressed HDF5 source files."""
+    """Export a ShowPtycho WebGPU folder backed by browser-ready source files."""
 
     if decode_dtype not in {"uint8", "uint16", "float32"}:
         raise ValueError(
             "decode_dtype must be 'uint8', 'uint16', or 'float32'; "
             f"got {decode_dtype!r}"
+        )
+    if webgpu_source not in {"bf_columns", "hdf5"}:
+        raise ValueError(
+            "webgpu_source must be 'bf_columns' or 'hdf5'; "
+            f"got {webgpu_source!r}"
         )
     accel = widget._accel
     if not hasattr(accel, "_cache"):
@@ -515,6 +652,10 @@ def export_showptycho_webgpu_folder(
             "ref_fft.npy",
             "ref_products.npz",
             "PARITY.md",
+            "cal.json",
+            "manifest.json",
+            "README.md",
+            "serve_range.py",
         ):
             (out_path / stale).unlink(missing_ok=True)
         source_dir = out_path / "source"
@@ -523,6 +664,16 @@ def export_showptycho_webgpu_folder(
                 shutil.rmtree(source_dir)
             else:
                 source_dir.unlink()
+        saves_dir = out_path / "saves"
+        if saves_dir.exists() or saves_dir.is_symlink():
+            if saves_dir.is_dir() and not saves_dir.is_symlink():
+                shutil.rmtree(saves_dir)
+            else:
+                saves_dir.unlink()
+        snapshots_dir = out_path / "snapshots"
+        if snapshots_dir.exists() and snapshots_dir.is_dir():
+            for stale in ("cal.json", "manifest.json", "README.md"):
+                (snapshots_dir / stale).unlink(missing_ok=True)
 
     raw_source = source_master if source_master is not None else getattr(widget, "_source_file", None)
     if not raw_source:
@@ -534,21 +685,35 @@ def export_showptycho_webgpu_folder(
     master = master.resolve()
     accel.cache_rotation(math.radians(float(widget.rotation_deg)))
     cal = _folder_calibration(widget, accel)
-    source = _prepare_hdf5_source_folder(master, out_path)
+    source_files = _collect_hdf5_source_files(master)
+    source = _prepare_hdf5_source_folder(master, out_path, files=source_files)
     source["decode_dtype"] = decode_dtype
     cal["source_file"] = pathlib.Path(source["master"]).name
     cal["source_transport"] = "compressed_hdf5"
     cal["source_files"] = source["data_files"]
     cal["source_decode_dtype"] = decode_dtype
     cal["persistent_bf_cache"] = False
+    if webgpu_source == "bf_columns":
+        bf_columns = _write_bf_column_source(source_files, out_path, cal)
+        source["bf_columns"] = bf_columns
+        source["preferred_browser_source"] = "bf_columns"
+        cal["bf_column_companion"] = True
+        cal["bf_column_companion_path"] = bf_columns["path"]
+        cal["bf_column_encoding"] = bf_columns["encoding"]
+        cal["webgpu_source_policy"] = "bf_columns_preferred_exact"
+    else:
+        cal["bf_column_companion"] = False
+        cal["webgpu_source_policy"] = "compressed_hdf5_fallback"
 
-    (out_path / "cal.json").write_text(json.dumps(cal, indent=2), encoding="utf-8")
+    snapshots_dir = out_path / "snapshots"
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+    (snapshots_dir / "cal.json").write_text(json.dumps(cal, indent=2), encoding="utf-8")
     manifest = {
         "schema_version": 2,
         "format": "quantem.showptycho.webgpu.folder.v2",
         "title": title or "ShowPtycho",
         "index": "index.html",
-        "calibration": "cal.json",
+        "calibration": "snapshots/cal.json",
         "source": source,
         "arrays": {},
         "persistent_arrays": [],
@@ -558,17 +723,31 @@ def export_showptycho_webgpu_folder(
             "no detector binning",
         ],
     }
-    (out_path / "manifest.json").write_text(
+    (snapshots_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8",
     )
-    _write_empty_saves_manifest(out_path)
-    browser_source = {
-        "kind": "hdf5",
-        "masterUrl": source["master"],
-        "dataUrls": source["data_files"],
-        "chunkIndexes": source.get("chunk_indexes", []),
-        "decodeDtype": decode_dtype,
-    }
+    _write_empty_snapshots_manifest(out_path)
+    if webgpu_source == "bf_columns":
+        bf_columns = source["bf_columns"]
+        browser_source = {
+            "kind": "bf_columns",
+            "url": bf_columns["url"],
+            "dtype": bf_columns["dtype"],
+            "encoding": bf_columns["encoding"],
+            "numBf": bf_columns["num_bf"],
+            "plane": bf_columns["plane"],
+            "scanShape": bf_columns["scan_shape"],
+            "bytesPerBf": bf_columns["bytes_per_bf"],
+            "bitsPerValue": bf_columns["bits_per_value"],
+        }
+    else:
+        browser_source = {
+            "kind": "hdf5",
+            "masterUrl": source["master"],
+            "dataUrls": source["data_files"],
+            "chunkIndexes": source.get("chunk_indexes", []),
+            "decodeDtype": decode_dtype,
+        }
     _write_embedded_widget_html(
         widget,
         out_path / "index.html",
@@ -576,12 +755,19 @@ def export_showptycho_webgpu_folder(
         calibration=cal,
         h5_source=browser_source,
     )
-    source_note = (
-        "The browser reads the original compressed HDF5 master/data files under "
-        "`source/`, decompresses the selected BF evidence with WebGPU, and builds "
-        "BF reducers transiently in GPU memory."
-    )
-    (out_path / "README.md").write_text(
+    if webgpu_source == "bf_columns":
+        source_note = (
+            "The browser range-reads exact bright-field detector columns from "
+            "`source/bf_columns.*` by default, so opening the viewer does not "
+            "decode the compressed HDF5 stack unless a fallback path is needed."
+        )
+    else:
+        source_note = (
+            "The browser reads the original compressed HDF5 master/data files under "
+            "`source/`, decompresses the selected BF evidence with WebGPU, and builds "
+            "BF reducers transiently in GPU memory."
+        )
+    (snapshots_dir / "README.md").write_text(
         "# ShowPtycho WebGPU Folder\n\n"
         "Two ways to open this review - no install needed for the first:\n\n"
         "1. **Double-click** `ShowPtycho.command` (macOS) - it serves this folder "
@@ -599,5 +785,3 @@ def export_showptycho_webgpu_folder(
 
     write_command_launcher(out_path, "ShowPtycho")
     return out_path
-
-
