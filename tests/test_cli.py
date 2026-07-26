@@ -582,6 +582,54 @@ def test_showptycho_range_handler_serves_bf_column_partial_content(tmp_path):
         thread.join(timeout=5)
 
 
+def test_showptycho_range_handler_writes_snapshots_only(tmp_path):
+    """C6: ShowPtycho folder server, expect persisted snapshots without saves/."""
+    import http.client
+    import http.server
+    import threading
+
+    folder = tmp_path / "showptycho-folder"
+    folder.mkdir()
+
+    handler = type("TestRangeHandler", (cli._RangeRequestHandler,), {"root": folder})
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    conn = None
+    thread.start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+        conn.request("PUT", "/snapshots/snapshots.json", body=b'[{"C10": 1}]')
+        response = conn.getresponse()
+        assert response.status == 204
+        response.read()
+        assert (folder / "snapshots" / "snapshots.json").read_bytes() == b'[{"C10": 1}]'
+        assert not (folder / "saves").exists()
+
+        conn.request("PUT", "/snapshots/snapshot_test.jpg", body=b"jpeg")
+        response = conn.getresponse()
+        assert response.status == 204
+        response.read()
+        assert (folder / "snapshots" / "snapshot_test.jpg").read_bytes() == b"jpeg"
+
+        conn.request("DELETE", "/snapshots/snapshot_test.jpg")
+        response = conn.getresponse()
+        assert response.status == 204
+        response.read()
+        assert not (folder / "snapshots" / "snapshot_test.jpg").exists()
+
+        conn.request("PUT", "/source/bad.txt", body=b"bad")
+        response = conn.getresponse()
+        assert response.status == 403
+        response.read()
+        assert not (folder / "source" / "bad.txt").exists()
+    finally:
+        if conn is not None:
+            conn.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_data_transfer_cli_plan_inspect_copy_update_and_show4dstem(tmp_path, monkeypatch, capsys):
     import json
     import quantem.widget.io.hdf5 as hdf5

@@ -26,7 +26,7 @@ import pathlib
 _SERVE_RANGE_PY = '''\
 #!/usr/bin/env python3
 """Range-capable local HTTP server for a QuantEM WebGPU viewer folder."""
-import argparse, os
+import argparse, os, posixpath, urllib.parse
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
@@ -35,6 +35,8 @@ class RangeHandler(SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS, PUT, DELETE")
+        self.send_header("Access-Control-Allow-Headers", "Range, Content-Type")
         self.send_header("Cross-Origin-Resource-Policy", "cross-origin")
         super().end_headers()
 
@@ -83,6 +85,53 @@ class RangeHandler(SimpleHTTPRequestHandler):
 
     def do_HEAD(self):
         self._serve()
+
+    def _snapshot_write_path(self, *, allow_json):
+        raw = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        rel = posixpath.normpath(raw).lstrip("/")
+        name = rel.removeprefix("snapshots/")
+        if allow_json and rel == "snapshots/snapshots.json":
+            pass
+        elif (
+            rel.startswith("snapshots/snapshot_")
+            and "/" not in name
+            and (name.endswith(".jpg") or name.endswith(".jpeg"))
+        ):
+            pass
+        else:
+            self.send_error(403, "writes are restricted to snapshots")
+            return None
+        root = Path.cwd().resolve()
+        path = (root / rel).resolve()
+        try:
+            path.relative_to(root / "snapshots")
+        except ValueError:
+            self.send_error(403, "invalid snapshot path")
+            return None
+        return path
+
+    def do_PUT(self):
+        path = self._snapshot_write_path(allow_json=True)
+        if path is None:
+            return
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        body = self.rfile.read(length)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(body)
+        self.send_response(204)
+        self.end_headers()
+
+    def do_DELETE(self):
+        path = self._snapshot_write_path(allow_json=False)
+        if path is None:
+            return
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        self.send_response(204)
+        self.end_headers()
 
     def log_message(self, *args):
         pass

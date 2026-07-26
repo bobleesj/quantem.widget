@@ -1978,6 +1978,35 @@ class _RangeRequestHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         self._serve(send_body=True)
 
+    def do_PUT(self) -> None:
+        path = self._resolve_snapshot_write_path(allow_json=True)
+        if path is None:
+            self.send_error(403, "writes are restricted to snapshots")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            self.send_error(400, "invalid content length")
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(self.rfile.read(max(0, length)))
+        self.send_response(204)
+        self._send_common_headers()
+        self.end_headers()
+
+    def do_DELETE(self) -> None:
+        path = self._resolve_snapshot_write_path(allow_json=False)
+        if path is None:
+            self.send_error(403, "deletes are restricted to snapshot images")
+            return
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        self.send_response(204)
+        self._send_common_headers()
+        self.end_headers()
+
     def _serve(self, *, send_body: bool) -> None:
         path = self._resolve_path()
         if path is None:
@@ -2021,7 +2050,7 @@ class _RangeRequestHandler(http.server.BaseHTTPRequestHandler):
     def _send_common_headers(self) -> None:
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS, PUT, DELETE")
         self.send_header("Access-Control-Allow-Headers", "Range, Content-Type")
 
     def _send_file_body(self, handle, *, start: int, length: int) -> None:
@@ -2058,6 +2087,30 @@ class _RangeRequestHandler(http.server.BaseHTTPRequestHandler):
         candidate = root / rel
         try:
             candidate.relative_to(root)
+        except ValueError:
+            return None
+        return candidate
+
+    def _resolve_snapshot_write_path(self, *, allow_json: bool) -> pathlib.Path | None:
+        parsed = urllib.parse.urlsplit(self.path)
+        raw_path = urllib.parse.unquote(parsed.path)
+        norm = posixpath.normpath(raw_path)
+        rel_text = norm.lstrip("/")
+        name = rel_text.removeprefix("snapshots/")
+        if allow_json and rel_text == "snapshots/snapshots.json":
+            pass
+        elif (
+            rel_text.startswith("snapshots/snapshot_")
+            and "/" not in name
+            and (name.endswith(".jpg") or name.endswith(".jpeg"))
+        ):
+            pass
+        else:
+            return None
+        root = self.root.resolve()
+        candidate = (root / rel_text).resolve()
+        try:
+            candidate.relative_to(root / "snapshots")
         except ValueError:
             return None
         return candidate
