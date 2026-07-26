@@ -630,9 +630,6 @@ the right to share.
 ```{eval-rst}
 .. autofunction:: quantem.widget.io.hdf5.load
 ```
-```{eval-rst}
-.. autofunction:: quantem.widget.io.hdf5.load_scan_region
-```
 
 ### Discover + inspect
 

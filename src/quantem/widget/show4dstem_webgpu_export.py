@@ -35,7 +35,7 @@ def _write_vendor_asset(name: str, viewer: pathlib.Path) -> None:
     if not source.is_file():
         raise FileNotFoundError(
             f"missing vendored Show4DSTEM browser asset: {source}; "
-            "rebuild the package with src/quantem/widget/static/vendor included"
+            "rebuild the package with src/quantem/widget/vendor included"
         )
     with gzip.open(source, "rb") as src, (viewer / name).open("wb") as dst:
         dst.write(src.read())
