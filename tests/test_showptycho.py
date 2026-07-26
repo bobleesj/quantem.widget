@@ -1026,3 +1026,23 @@ def test_showptycho_webgpu_reuses_resident_bf_columns_after_prepare():
     assert "fn?.(current.c10, current.c12, current.phi12, rotationDegRef.current);" in commit_bf
     assert "computeLoss: isFull" in frontend_full
     assert "const modeLabel = isFull ? \"full BF + loss\" : \"selected BF\";" in frontend_full
+
+
+def test_showptycho_webgpu_folder_uses_active_bf_disk_total():
+    """C7b: standalone folder BF slider, expect active aperture pixels."""
+    source = _webgpu_source("showptycho-ssb.ts")
+    ui_source = pathlib.Path("js/showptycho/index.tsx").read_text()
+
+    active_selector = source[
+        source.index("function collectActiveBfIndices("):
+        source.index("function packGeometry", source.index("function collectActiveBfIndices("))
+    ]
+
+    assert "for (let i = 0; i < cal.num_bf; i++)" in active_selector
+    assert active_selector.index("for (let i = 0; i < cal.num_bf; i++)") < active_selector.index("const count =")
+    assert "Math.floor((i + 0.5) * stride)" in active_selector
+    assert "if (computeLoss) {" in source
+    assert "if (computeLoss && bfCount === this.cal.num_bf)" not in source
+    assert "const webgpuCalActiveBf = React.useMemo(() =>" in ui_source
+    assert "const effectiveTotalBf = webgpuStandalone && webgpuCalActiveBf > 0" in ui_source
+    assert "max={effectiveTotalBf > 0 ? effectiveTotalBf : 0}" in ui_source
