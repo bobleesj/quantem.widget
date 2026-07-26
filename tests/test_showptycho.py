@@ -659,6 +659,21 @@ def test_showptycho_folder_ui_reads_legacy_saved_states() -> None:
     assert "byId.set(record.id, record)" in ui_source
 
 
+def test_showptycho_folder_save_persists_without_automatic_download() -> None:
+    """C1: standalone Save, expect silent snapshot JSON write without browser prompt."""
+    ui_source = pathlib.Path("js/showptycho/index.tsx").read_text(encoding="utf-8")
+    save_block = ui_source[
+        ui_source.index("const doFolderSave = React.useCallback(async () => {"):
+        ui_source.index("const loadFolderSave = React.useCallback", ui_source.index("const doFolderSave"))
+    ]
+
+    assert 'writeShowPtychoFolderFile(record.image, jpeg)' in save_block
+    assert 'writeShowPtychoFolderFile("snapshots/snapshots.json", JSON.stringify(next, null, 2))' in save_block
+    assert 'setFolderSaveStatus(`Snapshot saved (${next.length})`)' in save_block
+    assert "downloadBlob(" not in save_block
+    assert "+ downloaded" not in save_block
+
+
 def test_showptycho_exports_wrapper_master_external_hdf5_source_fallback(monkeypatch, tmp_path):
     """C5: wrapper master, expect external HDF5 source kept compressed."""
     import h5py
