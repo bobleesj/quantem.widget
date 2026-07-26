@@ -24,7 +24,7 @@ from quantem.widget.show4dstem_factory import Show4DSTEM
 from quantem.widget.showdiffraction import ShowDiffraction
 from quantem.widget.showfolder import ShowFolder, prebuild_showfolder_cache, show_folder
 try:
-    from quantem.widget.io import load, load_scan_region, read_gif, read_image, read_image_stack, read_images
+    from quantem.widget.io import load, read_gif, read_image, read_image_stack, read_images
 except ModuleNotFoundError as exc:
     if exc.name != "quantem.gpu":
         raise
@@ -245,7 +245,6 @@ __all__ = [
     "load_eds",
     "load_emd_spectrum_image",
     "load",
-    "load_scan_region",
     "show_folder",
     "read_gif",
     "read_image",

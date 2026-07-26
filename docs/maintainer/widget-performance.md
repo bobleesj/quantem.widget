@@ -36,6 +36,21 @@ wrong, how to recognize the pattern, and what to do instead.
   sharded reload is close but not below target yet. The full remote
   Show4DSTEM browser signoff was blocked in that MJGOAT environment by a
   neighboring `quantem.core` circular import during `import quantem.widget`.
+- 2026-07-25 Show4DSTEM WebGPU seven-tilt browser signoff:
+  seven full audited U8-masked `512 x 512 x 192 x 192` HDF5 tilt families
+  loaded through Chrome WebGPU on the Apple Metal adapter. The visible
+  `Show4DSTEM.command` bundle used audited `h5_uint8_lossless=True`, low8
+  bitshuffle/LZ4 decode, fetch/parse/decode queueing, and
+  `compare_max_panels=7` with `compare_group_mode="all"`. A CDP-driven
+  2-second detector drag measured live compare virtual-image GPU slot updates
+  for all seven panels: `paintFps=21`, `lastPaintedPanels=7`,
+  `lastAdoptedPanels=7`, and `lastComputeMs=0.8`. The first broken attempt
+  showed `computeFps>0` but `paintFps=0`; the fix was to upload the colormap LUT
+  before compare-grid GPU paints and render each live compare panel through a
+  visible WebGPU canvas with `renderSlotDirectWithGpuRangeToCanvas`, matching
+  the single-tilt VI path. The browser-local proof object is
+  `window.__sh4dLiveViStats`; it intentionally does not sync high-frequency
+  samples to Python traits.
 
 ## Timing protocol for every widget
 
