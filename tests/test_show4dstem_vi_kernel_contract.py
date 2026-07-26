@@ -101,6 +101,8 @@ def test_show4dstem_webgpu_engine_has_selected_index_vi_kernel() -> None:
     assert "sampleF(base + idx[j]" in source
     assert "maskedSumBuffer(mask: Uint32Array)" in source
     assert "maskedDpcBuffer(mask: Uint32Array" in source
+    assert "maskedIDpcBuffer(" in source
+    assert "const IDPC_POISSON_WGSL" in source
     assert "getDevice(): GPUDevice" in source
     assert "readFloatBuffer(buf: GPUBuffer" in source
     assert "const DPC_MEAN_WGSL" in source
@@ -116,8 +118,11 @@ def test_show4dstem_webgpu_engine_has_selected_index_vi_kernel() -> None:
     assert "function buildScanMask" not in frontend
     assert "buildFullDetectorMask" in frontend
     assert "maskedDpc" in frontend
+    assert "maskedIDpc" in frontend
+    assert "iDPC" in frontend
     assert "roiBufferOnly" in frontend
     assert "dpcBufferOnly" in frontend
+    assert "dpcCompareReference" in frontend
     assert "warmStandardViCache" in frontend
     assert "warmCache: () => warmCacheSummary()" in frontend
     assert "suppressViTraitRecompute" in frontend
@@ -140,11 +145,14 @@ def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
     bslz4 = _webgpu_source("bslz4.ts")
 
     assert "decodeBslz4Batch" in frontend
-    assert "const pendingSpecs" in frontend
+    assert "const decodeQueue" in frontend
+    assert "decodeWorker" in frontend
+    assert "pipelineMode: \"fetch-parse-decode-queue\"" in frontend
     assert "embeddedBadPxJson" in frontend
     assert "hasEmbeddedBadPx" in frontend
     assert "__QT_H5_DECODE_BATCH" in frontend
     assert "__QT_H5_FETCH_WINDOW" in frontend
+    assert "__QT_H5_DECODE_QUEUE" in frontend
     assert "function show4DSTEMGlobalInt" in frontend
     assert "decodeBatch," in frontend
     assert "fetchWindow," in frontend
@@ -158,6 +166,9 @@ def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
     assert "collectShow4DSTEMLocalH5Files" in frontend
     assert "__QT_H5_LOCAL_WORKERS" in frontend
     assert "__QT_H5_LOCAL_GROUP" in frontend
+    assert "__QT_H5_SOURCE_SCAN_ROWS" in frontend
+    assert "__QT_H5_SOURCE_SCAN_COLS" in frontend
+    assert "__QT_H5_SCAN_REGION" in frontend
     assert "localFiles: true" in frontend
     assert "h5LocalFilesGranted, h5SourceAvailable, offline" in frontend
     assert "rawChecksums:" in frontend
@@ -165,6 +176,10 @@ def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
     assert "checksumFrames(scanIndices" in compute
     assert "const bad = this.badPx.length ? new Set(this.badPx) : null;" in compute
     assert "bad?.has(i) ? 0" in compute
+    assert "if (local.badPixels.length) created.badPx = local.badPixels;" in frontend
+    assert "compute.detSize === detR * detC" in frontend
+    assert "local.scanCount" in frontend
+    assert "rawFrame:" not in frontend
     assert "BSLZ4_LOW8_ONLY" in bslz4
     assert "BSLZ4_COOP_LOW8" in bslz4
     assert "BSLZ4_FRAME_LOW8" in bslz4
@@ -257,6 +272,27 @@ def test_show4dstem_h5_multiple_starts_with_loading_compare_state() -> None:
         assert widget.compare_status == "Loading 3/3 browser WebGPU H5 panels"
     finally:
         widget.close()
+
+
+def test_show4dstem_multiple_detector_drag_uses_live_gpu_compare_slots() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    frontend = (repo / "js" / "show4dstem" / "index.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "requestCompareViLiveRef" in frontend
+    assert "requestCompareViLive();" in frontend
+    assert "requestCompareViLiveRef.current = () => {" in frontend
+    assert "gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine && scaleMode !== \"log\")" in frontend
+    assert "entry.panel !== undefined || entry.gpuLoaded" in frontend
+    assert "const loaded = panel !== undefined || gpuLoaded;" in frontend
+    assert "onChangeCommitted={finishDpRoiInteraction}" in frontend
+    assert "__sh4dLiveViStats" in frontend
+    assert "gpuOnlyHotPath: true" in frontend
+    assert 'publishLiveCompareViStats("paint"' in frontend
+    assert "if (gpuEngine) gpuEngine.uploadLUT(colormap, lut);" in frontend
+    assert "renderSlotDirectWithGpuRangeToCanvas" in frontend
+    assert "renderSlotGpuRangeToOffscreen" not in frontend
 
 
 def test_show4dstem_h5_export_embeds_local_bad_pixel_mask(tmp_path: Path) -> None:
