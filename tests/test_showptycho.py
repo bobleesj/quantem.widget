@@ -650,6 +650,15 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
     assert "ShowPtycho WebGPU Sidecar" not in html
 
 
+def test_showptycho_folder_ui_reads_legacy_saved_states() -> None:
+    """C1: renamed snapshot storage still recalls old folder save manifests."""
+    ui_source = pathlib.Path("js/showptycho/index.tsx").read_text(encoding="utf-8")
+
+    assert 'readShowPtychoFolderJson<FolderSaveRecord[]>("snapshots/snapshots.json")' in ui_source
+    assert 'readShowPtychoFolderJson<FolderSaveRecord[]>("saves/saves.json")' in ui_source
+    assert "byId.set(record.id, record)" in ui_source
+
+
 def test_showptycho_exports_wrapper_master_external_hdf5_source_fallback(monkeypatch, tmp_path):
     """C5: wrapper master, expect external HDF5 source kept compressed."""
     import h5py
