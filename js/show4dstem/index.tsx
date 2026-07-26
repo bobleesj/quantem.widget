@@ -1598,6 +1598,7 @@ interface CompareVirtualGridProps {
     paintedIndices: number[],
   ) => void;
   onGpuPaint?: (panelCount: number) => void;
+  onGpuRendererReady?: (renderNow: (() => number) | null) => void;
 }
 
 function CompareVirtualGrid({
@@ -1645,6 +1646,7 @@ function CompareVirtualGrid({
   onPositionChange,
   onFreshVisiblePaint,
   onGpuPaint,
+  onGpuRendererReady,
 }: CompareVirtualGridProps) {
   const canvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
   const gpuCanvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
@@ -1725,10 +1727,72 @@ function CompareVirtualGrid({
       .map((frame) => ({
         frame,
         panel: panelByFrame.get(frame),
-        gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine && scaleMode !== "log"),
+        gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine),
       }))
       .filter((entry) => Boolean(progressivePage) || entry.panel !== undefined || entry.gpuLoaded);
   }, [gpuEngine, gpuSlots, gpuVersion, panelByFrame, progressivePage, renderIndices, scaleMode]);
+
+  const renderGpuSlotsNow = React.useCallback((): number => {
+    if (!gpuEngine || !gpuSlots) return 0;
+    const lut = COLORMAPS[colormap] || COLORMAPS.inferno;
+    gpuEngine.uploadLUT(colormap, lut);
+    let painted = 0;
+    renderEntries.forEach(({ frame }, idx) => {
+      const gpuSlot = gpuSlots.get(frame);
+      if (gpuSlot === undefined) return;
+      const gpuCanvas = gpuCanvasRefs.current[idx];
+      if (!gpuCanvas) return;
+      if (
+        !gpuCanvasContextsRef.current[idx]
+        || gpuCanvas.width !== shapeCols
+        || gpuCanvas.height !== shapeRows
+      ) {
+        gpuCanvasContextsRef.current[idx] = gpuEngine.configureCanvas(gpuCanvas, shapeCols, shapeRows);
+      }
+      const gpuCtx = gpuCanvasContextsRef.current[idx];
+      if (!gpuCtx) return;
+      const rendered = gpuEngine.renderSlotDirectWithGpuRangeToCanvas(
+        gpuSlot,
+        vminPct,
+        vmaxPct,
+        scaleMode === "log",
+        gpuCtx,
+        {
+          width: shapeCols,
+          height: shapeRows,
+          bgRgb: 0,
+          transform: { zoom: compareZoom, panX: comparePanX, panY: comparePanY },
+          smooth,
+        },
+      );
+      if (rendered) {
+        painted++;
+        canvasDrawCacheRef.current.delete(frame);
+      }
+    });
+    if (painted > 0) onGpuPaint?.(painted);
+    return painted;
+  }, [
+    colormap,
+    comparePanX,
+    comparePanY,
+    compareZoom,
+    gpuEngine,
+    gpuSlots,
+    onGpuPaint,
+    renderEntries,
+    scaleMode,
+    shapeCols,
+    shapeRows,
+    smooth,
+    vmaxPct,
+    vminPct,
+  ]);
+
+  React.useEffect(() => {
+    onGpuRendererReady?.(renderGpuSlotsNow);
+    return () => onGpuRendererReady?.(null);
+  }, [onGpuRendererReady, renderGpuSlotsNow]);
 
   const movePreviewFrame = React.useCallback((dragFrame: number, targetFrame: number) => {
     if (dragFrame === targetFrame) return;
@@ -1770,7 +1834,7 @@ function CompareVirtualGrid({
       if (!ctx) return;
       // GPU-resident path: adopted slot -> visible WebGPU canvas. This mirrors
       // the single-panel VI path and avoids readback or CPU colormap work.
-      const gpuSlot = gpuEngine && gpuSlots && scaleMode !== "log" ? gpuSlots.get(frame) : undefined;
+      const gpuSlot = gpuEngine && gpuSlots ? gpuSlots.get(frame) : undefined;
       if (gpuSlot !== undefined && gpuEngine) {
         const gpuCanvas = gpuCanvasRefs.current[idx];
         if (gpuCanvas) {
@@ -1787,7 +1851,7 @@ function CompareVirtualGrid({
               gpuSlot,
               vminPct,
               vmaxPct,
-              false,
+              scaleMode === "log",
               gpuCtx,
               {
                 width: shapeCols,
@@ -1841,7 +1905,10 @@ function CompareVirtualGrid({
     const drawnExpectedIndices = expected.filter((frame) => {
       const currentPanel = panelByFrame.get(frame);
       const drawn = canvasDrawCacheRef.current.get(frame);
-      return Boolean(currentPanel && drawn?.panel === currentPanel && drawn.canvas.isConnected);
+      return Boolean(
+        (currentPanel && drawn?.panel === currentPanel && drawn.canvas.isConnected)
+        || (gpuEngine && gpuSlots?.has(frame)),
+      );
     });
     const paintRaf = visiblePaintRafRef.current;
     if (drawnExpectedIndices.length > 0 && paintRaf.beforePaint === 0 && paintRaf.afterPaint === 0) {
@@ -1855,7 +1922,10 @@ function CompareVirtualGrid({
           const paintedIndices = currentPage.expectedIndices.filter((frame) => {
             const currentPanel = currentPanels.get(frame);
             const drawn = canvasDrawCacheRef.current.get(frame);
-            return Boolean(currentPanel && drawn?.panel === currentPanel && drawn.canvas.isConnected);
+            return Boolean(
+              (currentPanel && drawn?.panel === currentPanel && drawn.canvas.isConnected)
+              || (gpuEngine && gpuSlots?.has(frame)),
+            );
           });
           recordComparePageFirstPanelPaint(currentPage, paintedIndices);
           // Performance telemetry is optional and may not be initialized when
@@ -2004,7 +2074,7 @@ function CompareVirtualGrid({
 
   React.useEffect(() => {
     const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
-    renderEntries.forEach(({ panel }, idx) => {
+    renderEntries.forEach(({ panel, gpuLoaded }, idx) => {
       const overlay = overlayRefs.current[idx];
       const tile = tileRefs.current[idx];
       if (!overlay || !tile) return;
@@ -2016,7 +2086,7 @@ function CompareVirtualGrid({
       if (overlay.height !== height) overlay.height = height;
       const ctx = overlay.getContext("2d");
       ctx?.clearRect(0, 0, overlay.width, overlay.height);
-      if (!panel) return;
+      if (!panel && !gpuLoaded) return;
       if (showScaleBar) {
         const unit = pixelSize > 0 ? pixelUnit || "px" : "px";
         const pxSize = pixelSize > 0 ? pixelSize : 1;
@@ -2322,7 +2392,7 @@ function CompareVirtualGrid({
                   zIndex: 1,
                 }}
               >
-                {placeholderText}
+                {loaded ? "" : placeholderText}
               </Box>
               <canvas
                 ref={(node) => { overlayRefs.current[localIdx] = node; }}
@@ -2885,6 +2955,12 @@ function Show4DSTEM() {
     model.save_changes();
     scanPositionLastSyncRef.current = performance.now();
   }, [model]);
+  const writeRoiCenterModel = React.useCallback((row: number, col: number) => {
+    model.set("roi_center_row", row);
+    model.set("roi_center_col", col);
+    model.set("roi_center", [row, col]);
+    model.save_changes();
+  }, [model]);
   const queueScanPosition = React.useCallback((row: number, col: number) => {
     const current = scanPositionPendingRef.current
       ?? scanPositionOptimisticRef.current
@@ -2935,12 +3011,11 @@ function Show4DSTEM() {
   const flushRoiCenter = React.useCallback(() => {
     if (roiCenterPendingRef.current) {
       const [r, c] = roiCenterPendingRef.current;
-      model.set("roi_center", [r, c]);
-      model.save_changes();
+      writeRoiCenterModel(r, c);
       roiCenterPendingRef.current = null;
     }
     roiCenterRafRef.current = null;
-  }, [model]);
+  }, [writeRoiCenterModel]);
   const queueRoiCenter = React.useCallback((row: number, col: number) => {
     roiCenterPendingRef.current = [row, col];
     if (roiCenterRafRef.current === null) {
@@ -2985,6 +3060,8 @@ function Show4DSTEM() {
   const requestViFinalizeRef = React.useRef<(() => void) | null>(null);
   const requestCompareViLiveRef = React.useRef<(() => void) | null>(null);
   const compareViLiveRafRef = React.useRef<number | null>(null);
+  const requestDpFrameLiveRef = React.useRef<(() => void) | null>(null);
+  const dpFrameLiveRafRef = React.useRef<number | null>(null);
   const requestCompareViLive = React.useCallback(() => {
     if (compareViLiveRafRef.current !== null) return;
     compareViLiveRafRef.current = requestAnimationFrame(() => {
@@ -2992,10 +3069,21 @@ function Show4DSTEM() {
       requestCompareViLiveRef.current?.();
     });
   }, []);
+  const requestDpFrameLive = React.useCallback(() => {
+    if (dpFrameLiveRafRef.current !== null) return;
+    dpFrameLiveRafRef.current = requestAnimationFrame(() => {
+      dpFrameLiveRafRef.current = null;
+      requestDpFrameLiveRef.current?.();
+    });
+  }, []);
   React.useEffect(() => () => {
     if (compareViLiveRafRef.current !== null) {
       cancelAnimationFrame(compareViLiveRafRef.current);
       compareViLiveRafRef.current = null;
+    }
+    if (dpFrameLiveRafRef.current !== null) {
+      cancelAnimationFrame(dpFrameLiveRafRef.current);
+      dpFrameLiveRafRef.current = null;
     }
   }, []);
   const finishDpRoiInteraction = React.useCallback(() => {
@@ -3079,6 +3167,12 @@ function Show4DSTEM() {
   // the interactive compare recompute (no readback), consumed by the grid painter.
   const [compareGpuVersion, setCompareGpuVersion] = React.useState(0);
   const compareGpuSlotsRef = React.useRef(new Map<number, number>());
+  const compareGpuRenderNowRef = React.useRef<(() => number) | null>(null);
+  const compareIncrementalRef = React.useRef<{
+    mask: Uint32Array;
+    buffers: Map<number, GPUBuffer>;
+    indicesKey: string;
+  } | null>(null);
   const liveCompareViStatsRef = React.useRef({
     computeTimes: [] as number[],
     paintTimes: [] as number[],
@@ -3089,12 +3183,12 @@ function Show4DSTEM() {
     lastPaintedPanels: 0,
   });
   const publishLiveCompareViStats = React.useCallback((
-    event: "compute" | "paint",
-    detail: { ms?: number; adoptedPanels?: number; requestedPanels?: number; paintedPanels?: number },
+    event: string,
+    detail: { ms?: number; adoptedPanels?: number; requestedPanels?: number; paintedPanels?: number; addedPixels?: number; removedPixels?: number; packedWords?: number },
   ) => {
     const now = performance.now();
     const stats = liveCompareViStatsRef.current;
-    if (event === "compute") {
+    if (event !== "paint") {
       stats.computeTimes.push(now);
       stats.lastComputeMs = detail.ms ?? 0;
       stats.lastAdoptedPanels = detail.adoptedPanels ?? 0;
@@ -3109,7 +3203,7 @@ function Show4DSTEM() {
     while (stats.paintTimes.length && stats.paintTimes[0] < cutoff) stats.paintTimes.shift();
     const recentCompute = stats.computeTimes.length;
     const recentPaint = stats.paintTimes.length;
-    (window as unknown as { __sh4dLiveViStats?: Record<string, unknown> }).__sh4dLiveViStats = {
+    const payload = {
       event,
       gpuOnlyHotPath: true,
       computeFps: Math.round(recentCompute * 10) / 10,
@@ -3118,9 +3212,18 @@ function Show4DSTEM() {
       lastAdoptedPanels: stats.lastAdoptedPanels,
       lastRequestedPanels: stats.lastRequestedPanels,
       lastPaintedPanels: stats.lastPaintedPanels,
+      addedPixels: detail.addedPixels ?? 0,
+      removedPixels: detail.removedPixels ?? 0,
+      packedWords: detail.packedWords ?? 0,
       updatedAtMs: Math.round(now),
       note: "Counts live compare virtual-image GPU slot updates/paints during detector drag; CPU still schedules browser events and WebGPU commands.",
     };
+    const statsWindow = window as unknown as {
+      __sh4dLiveViStats?: Record<string, unknown>;
+      __sh4dLiveCompareStats?: Record<string, unknown>;
+    };
+    statsWindow.__sh4dLiveViStats = payload;
+    statsWindow.__sh4dLiveCompareStats = payload;
   }, []);
   const rawVirtualImageVersionRef = React.useRef(0);
   const viGpuColormapRef = React.useRef<GPUColormapEngine | null>(null);
@@ -3234,10 +3337,12 @@ function Show4DSTEM() {
       const inlineVolCache = new Map<number, Show4DSTEMCompute | Show4DSTEMCpuCompute>(); // LRU for inline gzip 5D exports
       const compareResidentTarget = Math.max(3, Math.min(12, Math.max(1, Number(model.get("compare_max_panels") || 3))));
       const MAX_RESIDENT = compareResidentTarget; // recent / compare volumes kept hot for instant scrub and detector drags
+      let latestResidentVolumeIndex: number | null = null;
       let volumeCount = 0;
       let getVol: ((idx: number) => Promise<Show4DSTEMCompute | Show4DSTEMCpuCompute | null>) | null = null;
       let initialVolumeLoad: Promise<Show4DSTEMCompute | Show4DSTEMCpuCompute | null> | null = null;
       let h5VolumePreload: Promise<void> | null = null;
+      let h5VolumePreloadDone = false;
       // H5 source: read the merged float32 .h5 file straight off disk via WebGPU
       // (jsfive parse + GPU bitshuffle+LZ4 decode). Nothing embedded - the data stays a
       // file; the HTML just points at it. This is the "click HTML, GPU decompresses the
@@ -3593,6 +3698,7 @@ function Show4DSTEM() {
             const cc = await loadH5Compute(h5Urls[clamped], `dataset ${clamped + 1}/${h5Urls.length}`);
             if (cc) {
               volCache.set(clamped, cc);
+              latestResidentVolumeIndex = clamped;
               const activeFrame = Math.max(0, Math.min(h5Urls.length - 1, model.get("frame_idx") | 0));
               while (volCache.size > MAX_RESIDENT) {
                 const old = [...volCache.keys()].find((k) => k !== clamped && k !== activeFrame);
@@ -3697,6 +3803,11 @@ function Show4DSTEM() {
                 if (cc) profile.completed += 1;
                 else profile.failed += 1;
                 profile.volumes.push({ index, elapsedMs, ok: Boolean(cc) });
+                if (cc && !disposed) {
+                  latestResidentVolumeIndex = index;
+                  requestCompareViLive();
+                  requestDpFrameLive();
+                }
               } catch (error) {
                 profile.failed += 1;
                 profile.volumes.push({
@@ -3712,7 +3823,9 @@ function Show4DSTEM() {
           };
           return Promise.all(Array.from({ length: Math.min(preloadWindow, order.length) }, worker)).then(() => undefined);
         };
-        h5VolumePreload = startH5Preloads();
+        h5VolumePreload = startH5Preloads().finally(() => {
+          h5VolumePreloadDone = true;
+        });
         if (hasInlineViMaps()) {
           initialVolumeLoad = getVol(initialIdx);
         } else {
@@ -3752,6 +3865,7 @@ function Show4DSTEM() {
               const cc = await decodeVol(volMetas[idx]);
               if (cc) {
                 volCache.set(idx, cc);
+                latestResidentVolumeIndex = idx;
                 const activeFrame = Math.max(0, Math.min(volMetas.length - 1, model.get("frame_idx") | 0));
                 while (volCache.size > MAX_RESIDENT) {           // evict the oldest non-active volume
                   const old = [...volCache.keys()].find((k) => k !== idx && k !== activeFrame);
@@ -4497,6 +4611,7 @@ function Show4DSTEM() {
         });
       };
       const settleCompareGpuSlots = () => {
+        compareIncrementalRef.current = null;
         if (compareGpuSlotsRef.current.size) {
           compareGpuSlotsRef.current.clear();
           setCompareGpuVersion(v => v + 1);
@@ -4518,48 +4633,112 @@ function Show4DSTEM() {
       const recomputeCompareVI = async () => {
         const indices = compareVisibleIndices();
         if (!indices.length) return;
-        // During a drag every RESIDENT panel renders fully on the GPU: masked sum
-        // into a device buffer, adopted straight into a per-panel colormap slot,
-        // painted by the grid with a GPU-computed range. No readback, no 262k-pixel
-        // CPU pass, no 4 MB trait sync per mouse move - those only run on settle
-        // (release / preset click), which is also what save-state and export need.
-        if (dpRoiInteractiveRef.current) {
-          const source0 = normaliseViSource(model.get("vi_source"));
+        const source = normaliseViSource(model.get("vi_source"));
+        const interactiveDrag = dpRoiInteractiveRef.current;
+        // ROI compare panels render through GPU-resident slots both for the
+        // initial/settled image and for drag updates. The initial frame uses a
+        // full exact masked sum; subsequent geometry changes use exact deltas.
+        const updateRoiCompareGpuSlots = async (): Promise<boolean> => {
+          if (source !== "roi") return false;
           const engine0 = compute ? ensureViGpuColormap(compute) : null;
-          if (engine0 && !isDpcGpuSource(source0) && source0 !== "SSB") {
-            const computeStartedAt = performance.now();
-            const mask0 = buildDetectorMask(model, detR, detC);
-            let slotCursor = 0;
-            let adopted = 0;
-            for (const idx of indices) {
-              const slot = COMPARE_GPU_SLOT_BASE + slotCursor++;
-              if (!volIsResident(idx)) continue;   // panel keeps its previous slot image
-              const panelCompute = getVol ? await getVol(idx) : compute;
-              const maybeBuffer = panelCompute as unknown as {
-                maskedSumBuffer?: (mask: Uint32Array) => { buffer: GPUBuffer; n: number };
-              };
-              if (!panelCompute || typeof maybeBuffer.maskedSumBuffer !== "function") continue;
-              const { buffer } = maybeBuffer.maskedSumBuffer(mask0);
-              engine0.adoptBuffer(slot, buffer, scanCols, scanRows);
-              compareGpuSlotsRef.current.set(idx, slot);
+          if (!engine0) return false;
+          const computeStartedAt = performance.now();
+          const mask0 = buildDetectorMask(model, detR, detC);
+          let slotCursor = 0;
+          const batchComputes: Show4DSTEMCompute[] = [];
+          const batchSlots: number[] = [];
+          const batchFrames: number[] = [];
+          for (const idx of indices) {
+            const slot = COMPARE_GPU_SLOT_BASE + slotCursor++;
+            if (getVol && !volIsResident(idx) && (interactiveDrag || !h5VolumePreloadDone)) continue;
+            const panelCompute = getVol ? await getVol(idx) : compute;
+            if (!(panelCompute instanceof Show4DSTEMCompute)) continue;
+            batchComputes.push(panelCompute);
+            batchSlots.push(slot);
+            batchFrames.push(idx);
+            compareGpuSlotsRef.current.set(idx, slot);
+          }
+          let adopted = 0;
+          if (batchComputes.length) {
+            const indicesKey = batchFrames.join(",");
+            const previous = compareIncrementalRef.current;
+            let buffers: GPUBuffer[];
+            let path: string;
+            let addedPixels = 0;
+            let removedPixels = 0;
+            let packedWords = 0;
+            if (
+              previous
+              && previous.indicesKey === indicesKey
+              && previous.mask.length === mask0.length
+              && batchFrames.every((frame) => previous.buffers.has(frame))
+            ) {
+              const addedMask = new Uint32Array(mask0.length);
+              const removedMask = new Uint32Array(mask0.length);
+              for (let i = 0; i < mask0.length; i++) {
+                const next = mask0[i] !== 0;
+                const prev = previous.mask[i] !== 0;
+                if (next && !prev) { addedMask[i] = 1; addedPixels++; }
+                else if (!next && prev) { removedMask[i] = 1; removedPixels++; }
+              }
+              if (addedPixels === 0 && removedPixels === 0) {
+                publishLiveCompareViStats("delta-skip", {
+                  ms: performance.now() - computeStartedAt,
+                  adoptedPanels: 0,
+                  requestedPanels: indices.length,
+                });
+                return true;
+              }
+              const prevBuffers = batchFrames.map((frame) => previous.buffers.get(frame)!);
+              const delta = Show4DSTEMCompute.maskedSumDeltaBuffersBatch(batchComputes, prevBuffers, addedMask, removedMask);
+              buffers = delta.buffers;
+              path = delta.path;
+              addedPixels = delta.addedPixels;
+              removedPixels = delta.removedPixels;
+              packedWords = delta.packedWords ?? 0;
+            } else {
+              const full = Show4DSTEMCompute.maskedSumBuffersBatch(batchComputes, mask0);
+              buffers = full.buffers;
+              path = full.path;
+            }
+            const nextBuffers = new Map<number, GPUBuffer>();
+            for (let i = 0; i < buffers.length; i++) {
+              engine0.adoptBuffer(batchSlots[i], buffers[i], scanCols, scanRows);
+              nextBuffers.set(batchFrames[i], buffers[i]);
               adopted++;
             }
-            if (adopted) {
-              publishLiveCompareViStats("compute", {
-                ms: performance.now() - computeStartedAt,
-                adoptedPanels: adopted,
-                requestedPanels: indices.length,
-              });
-              bumpCompareGpuVersion();
-            }
-            return;
+            compareIncrementalRef.current = {
+              mask: new Uint32Array(mask0),
+              buffers: nextBuffers,
+              indicesKey,
+            };
+            const paintedNow = interactiveDrag ? (compareGpuRenderNowRef.current?.() ?? 0) : 0;
+            publishLiveCompareViStats(path, {
+              ms: performance.now() - computeStartedAt,
+              adoptedPanels: adopted,
+              requestedPanels: indices.length,
+              addedPixels,
+              removedPixels,
+              packedWords,
+              paintedPanels: paintedNow,
+            });
           }
+          if (adopted) bumpCompareGpuVersion();
+          if (batchFrames.length) {
+            progressiveCompareGenerationRef.current = null;
+            setProgressiveComparePage(null);
+            model.set("compare_panel_count", indices.length);
+            model.set("compare_panel_indices", indices);
+          }
+          return adopted > 0 || interactiveDrag;
+        };
+        if (await updateRoiCompareGpuSlots()) return;
+        if (interactiveDrag) {
           // No engine (CPU compute fallback): keep the old throttled bytes path.
           const now = performance.now();
           if (now - compareLastInteractiveMs < 150) return;
           compareLastInteractiveMs = now;
         }
-        const source = normaliseViSource(model.get("vi_source"));
         const productStack = viProductStackForIndices(model, indices, scanRows, scanCols);
         if (productStack) {
           settleCompareGpuSlots();
@@ -4576,7 +4755,6 @@ function Show4DSTEM() {
         }
         const gen = ++compareViGen;
         const panelPixels = scanRows * scanCols;
-        const interactiveDrag = dpRoiInteractiveRef.current;
         const stackLength = indices.length * panelPixels;
         if (!comparePersistentStack || comparePersistentStack.length !== stackLength) {
           comparePersistentStack = new Float32Array(stackLength);
@@ -4630,6 +4808,463 @@ function Show4DSTEM() {
         },
         warmStandardViCache,
         warmCache: () => warmCacheSummary(),
+        compareGpuBench: async (options?: {
+          mode?: string;
+          centerRow?: number;
+          centerCol?: number;
+          radius?: number;
+          innerRadius?: number;
+          iterations?: number;
+          render?: boolean;
+          logScale?: boolean;
+        }) => {
+          const indices = compareVisibleIndices();
+          const engine = compute ? ensureViGpuColormap(compute) : null;
+          const device = engine?.getDevice();
+          if (!engine || !device || !indices.length) {
+            return { available: false, reason: "compare GPU engine or visible indices unavailable" };
+          }
+          const mode = String(options?.mode ?? model.get("roi_mode") ?? "circle");
+          const centerRow = Number(options?.centerRow ?? model.get("roi_center_row") ?? detR / 2);
+          const centerCol = Number(options?.centerCol ?? model.get("roi_center_col") ?? detC / 2);
+          const radius = Number(options?.radius ?? model.get("roi_radius") ?? 1);
+          const innerRadius = Number(options?.innerRadius ?? model.get("roi_radius_inner") ?? 0);
+          const iterations = Math.max(1, Math.min(20, Math.round(Number(options?.iterations ?? 3))));
+          const render = options?.render !== false;
+          const logScale = options?.logScale ?? String(model.get("vi_scale_mode") || "linear") === "log";
+          model.set("vi_source", "roi");
+          model.set("roi_active", true);
+          model.set("roi_mode", mode);
+          model.set("roi_center_row", centerRow);
+          model.set("roi_center_col", centerCol);
+          model.set("roi_center", [centerRow, centerCol]);
+          model.set("roi_radius", radius);
+          model.set("roi_radius_inner", innerRadius);
+          model.set("compare_max_panels", Math.max(indices.length, Number(model.get("compare_max_panels") || 0)));
+          model.set("compare_group_mode", "all");
+          model.set("vi_scale_mode", logScale ? "log" : "linear");
+          model.save_changes();
+
+          const mask = buildDetectorMask(model, detR, detC);
+          let maskPixels = 0;
+          for (let i = 0; i < mask.length; i++) if (mask[i]) maskPixels++;
+          const prepStartedAt = performance.now();
+          const loaded = [] as Show4DSTEMCompute[];
+          for (const idx of indices) {
+            const panelCompute = getVol ? await getVol(idx) : compute;
+            if (panelCompute instanceof Show4DSTEMCompute) loaded.push(panelCompute);
+          }
+          await device.queue.onSubmittedWorkDone().catch(() => {});
+          const prepMs = performance.now() - prepStartedAt;
+
+          const lut = COLORMAPS[String(model.get("vi_colormap") || "inferno")] || COLORMAPS.inferno;
+          engine.uploadLUT(String(model.get("vi_colormap") || "inferno"), lut);
+          const benchWindow = window as unknown as {
+            __sh4dBenchCanvases?: HTMLCanvasElement[];
+            __sh4dBenchContexts?: (GPUCanvasContext | null)[];
+          };
+          if (render && (!benchWindow.__sh4dBenchCanvases || benchWindow.__sh4dBenchCanvases.length < loaded.length)) {
+            benchWindow.__sh4dBenchCanvases = Array.from({ length: loaded.length }, () => {
+              const canvas = document.createElement("canvas");
+              canvas.style.position = "fixed";
+              canvas.style.left = "-10000px";
+              canvas.style.top = "0";
+              canvas.style.width = "32px";
+              canvas.style.height = "32px";
+              canvas.width = scanCols;
+              canvas.height = scanRows;
+              document.body.appendChild(canvas);
+              return canvas;
+            });
+            benchWindow.__sh4dBenchContexts = benchWindow.__sh4dBenchCanvases.map((canvas) =>
+              engine.configureCanvas(canvas, scanCols, scanRows),
+            );
+          }
+
+          const results = [] as Record<string, unknown>[];
+          for (let iter = 0; iter < iterations; iter++) {
+            const slots = [] as number[];
+            const computeSubmitStartedAt = performance.now();
+            let adopted = 0;
+            const { buffers, path } = Show4DSTEMCompute.maskedSumBuffersBatch(loaded, mask);
+            for (let i = 0; i < buffers.length; i++) {
+              const slot = COMPARE_GPU_SLOT_BASE + i;
+              engine.adoptBuffer(slot, buffers[i], scanCols, scanRows);
+              slots.push(slot);
+              adopted++;
+            }
+            const computeSubmitMs = performance.now() - computeSubmitStartedAt;
+            const computeWaitStartedAt = performance.now();
+            await device.queue.onSubmittedWorkDone().catch(() => {});
+            const computeGpuDoneMs = performance.now() - computeWaitStartedAt;
+            const computeTotalMs = performance.now() - computeSubmitStartedAt;
+
+            let renderSubmitMs = 0;
+            let renderGpuDoneMs = 0;
+            let rendered = 0;
+            if (render && slots.length) {
+              const renderSubmitStartedAt = performance.now();
+              const contexts = benchWindow.__sh4dBenchContexts || [];
+              for (let i = 0; i < slots.length; i++) {
+                const ctx = contexts[i];
+                if (!ctx) continue;
+                const ok = engine.renderSlotDirectWithGpuRangeToCanvas(
+                  slots[i],
+                  Number(model.get("vi_vmin_pct") ?? 0),
+                  Number(model.get("vi_vmax_pct") ?? 100),
+                  logScale,
+                  ctx,
+                  {
+                    width: scanCols,
+                    height: scanRows,
+                    bgRgb: 0,
+                    transform: { zoom: 1, panX: 0, panY: 0 },
+                    smooth: Boolean(model.get("vi_smooth")),
+                  },
+                );
+                if (ok) rendered++;
+              }
+              renderSubmitMs = performance.now() - renderSubmitStartedAt;
+              const renderWaitStartedAt = performance.now();
+              await device.queue.onSubmittedWorkDone().catch(() => {});
+              renderGpuDoneMs = performance.now() - renderWaitStartedAt;
+            }
+            results.push({
+              iter,
+              adopted,
+              rendered,
+              path,
+              computeSubmitMs: Math.round(computeSubmitMs * 10) / 10,
+              computeGpuDoneMs: Math.round(computeGpuDoneMs * 10) / 10,
+              computeTotalMs: Math.round(computeTotalMs * 10) / 10,
+              renderSubmitMs: Math.round(renderSubmitMs * 10) / 10,
+              renderGpuDoneMs: Math.round(renderGpuDoneMs * 10) / 10,
+            });
+          }
+          const payload = {
+            available: true,
+            indices,
+            loaded: loaded.length,
+            maskPixels,
+            mode,
+            centerRow,
+            centerCol,
+            radius,
+            innerRadius,
+            logScale,
+            render,
+            batch: true,
+            maxStorageBuffersPerShaderStage: device.limits.maxStorageBuffersPerShaderStage,
+            prepMs: Math.round(prepMs * 10) / 10,
+            results,
+            adapterInfo: getGPUInfo(),
+            softwareAdapter: isSoftwareGPUAdapter(),
+          };
+          (window as unknown as { __sh4dCompareGpuBench?: unknown }).__sh4dCompareGpuBench = payload;
+          return payload;
+        },
+        compareIncrementalBench: async (options?: {
+          mode?: string;
+          centerRow?: number;
+          centerCol?: number;
+          radius?: number;
+          innerRadius?: number;
+          steps?: Array<[number, number]>;
+          render?: boolean;
+          logScale?: boolean;
+        }) => {
+          const indices = compareVisibleIndices();
+          const engine = compute ? ensureViGpuColormap(compute) : null;
+          const device = engine?.getDevice();
+          if (!engine || !device || !indices.length) {
+            return { available: false, reason: "compare GPU engine or visible indices unavailable" };
+          }
+          const mode = String(options?.mode ?? model.get("roi_mode") ?? "annular");
+          const centerRow = Number(options?.centerRow ?? model.get("roi_center_row") ?? detR / 2);
+          const centerCol = Number(options?.centerCol ?? model.get("roi_center_col") ?? detC / 2);
+          const radius = Number(options?.radius ?? model.get("roi_radius") ?? 1);
+          const innerRadius = Number(options?.innerRadius ?? model.get("roi_radius_inner") ?? 0);
+          const render = options?.render !== false;
+          const logScale = options?.logScale ?? true;
+          const centers = options?.steps?.length
+            ? options.steps
+            : Array.from({ length: 8 }, (_, i): [number, number] => [centerRow + (i > 3 ? 1 : 0), centerCol + i]);
+          const waitForFrame = () => new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+
+          const previousInteractive = dpRoiInteractiveRef.current;
+          compareIncrementalRef.current = null;
+          suppressViTraitRecompute = true;
+          try {
+            model.set("vi_source", "roi");
+            model.set("roi_active", true);
+            model.set("roi_mode", mode);
+            model.set("roi_radius", radius);
+            model.set("roi_radius_inner", innerRadius);
+            model.set("compare_max_panels", Math.max(indices.length, Number(model.get("compare_max_panels") || 0)));
+            model.set("compare_group_mode", "all");
+            model.set("vi_scale_mode", logScale ? "log" : "linear");
+            model.save_changes();
+          } finally {
+            suppressViTraitRecompute = false;
+          }
+          await device.queue.onSubmittedWorkDone().catch(() => {});
+
+          const results = [] as Record<string, unknown>[];
+          try {
+            dpRoiInteractiveRef.current = true;
+            for (let iter = 0; iter < centers.length; iter++) {
+              const [row, col] = centers[iter];
+              const startedAt = performance.now();
+              suppressViTraitRecompute = true;
+              try {
+                writeRoiCenterModel(row, col);
+                await recomputeCompareVI();
+              } finally {
+                suppressViTraitRecompute = false;
+              }
+              const computeStats = ((window as unknown as {
+                __sh4dLiveCompareStats?: Record<string, unknown>;
+              }).__sh4dLiveCompareStats) || {};
+              const computeSubmittedMs = performance.now() - startedAt;
+              const waitStartedAt = performance.now();
+              await device.queue.onSubmittedWorkDone().catch(() => {});
+              const computeGpuDoneMs = performance.now() - waitStartedAt;
+              let paintStats = null as Record<string, unknown> | null;
+              if (render) {
+                await waitForFrame();
+                await waitForFrame();
+                await device.queue.onSubmittedWorkDone().catch(() => {});
+                paintStats = ((window as unknown as {
+                  __sh4dLiveCompareStats?: Record<string, unknown>;
+                }).__sh4dLiveCompareStats) || null;
+              }
+              const totalMs = performance.now() - startedAt;
+              results.push({
+                iter,
+                row,
+                col,
+                event: computeStats.event,
+                addedPixels: computeStats.addedPixels,
+                removedPixels: computeStats.removedPixels,
+                packedWords: computeStats.packedWords,
+                computeSubmitMs: Math.round(computeSubmittedMs * 10) / 10,
+                computeGpuDoneMs: Math.round(computeGpuDoneMs * 10) / 10,
+                totalMs: Math.round(totalMs * 10) / 10,
+                fps: totalMs > 0 ? Math.round((1000 / totalMs) * 10) / 10 : null,
+                liveComputeFps: computeStats.computeFps,
+                livePaintFps: paintStats?.paintFps ?? computeStats.paintFps,
+                paintedPanels: paintStats?.lastPaintedPanels ?? computeStats.lastPaintedPanels,
+              });
+            }
+          } finally {
+            dpRoiInteractiveRef.current = previousInteractive;
+          }
+          const deltaResults = results.filter((result) => String(result.event || "").startsWith("delta"));
+          const deltaTotalMs = deltaResults.map((result) => Number(result.totalMs)).filter(Number.isFinite);
+          const meanDeltaMs = deltaTotalMs.length
+            ? deltaTotalMs.reduce((sum, ms) => sum + ms, 0) / deltaTotalMs.length
+            : null;
+          const payload = {
+            available: true,
+            indices,
+            loaded: indices.length,
+            mode,
+            radius,
+            innerRadius,
+            logScale,
+            render,
+            centers,
+            firstFullMs: results.length ? results[0].totalMs : null,
+            meanDeltaMs: meanDeltaMs == null ? null : Math.round(meanDeltaMs * 10) / 10,
+            meanDeltaFps: meanDeltaMs && meanDeltaMs > 0 ? Math.round((1000 / meanDeltaMs) * 10) / 10 : null,
+            results,
+            adapterInfo: getGPUInfo(),
+            softwareAdapter: isSoftwareGPUAdapter(),
+          };
+          (window as unknown as { __sh4dCompareIncrementalBench?: unknown }).__sh4dCompareIncrementalBench = payload;
+          return payload;
+        },
+        compareIncrementalKernelBench: async (options?: {
+          mode?: string;
+          centerRow?: number;
+          centerCol?: number;
+          radius?: number;
+          innerRadius?: number;
+          steps?: Array<[number, number]>;
+          render?: boolean;
+          logScale?: boolean;
+        }) => {
+          const indices = compareVisibleIndices();
+          const engine = compute ? ensureViGpuColormap(compute) : null;
+          const device = engine?.getDevice();
+          if (!engine || !device || !indices.length) {
+            return { available: false, reason: "compare GPU engine or visible indices unavailable" };
+          }
+          const mode = String(options?.mode ?? model.get("roi_mode") ?? "annular");
+          const centerRow = Number(options?.centerRow ?? model.get("roi_center_row") ?? detR / 2);
+          const centerCol = Number(options?.centerCol ?? model.get("roi_center_col") ?? detC / 2);
+          const radius = Number(options?.radius ?? model.get("roi_radius") ?? 1);
+          const innerRadius = Number(options?.innerRadius ?? model.get("roi_radius_inner") ?? 0);
+          const render = options?.render !== false;
+          const logScale = options?.logScale ?? true;
+          const centers = options?.steps?.length
+            ? options.steps
+            : Array.from({ length: 8 }, (_, i): [number, number] => [centerRow + (i > 3 ? 1 : 0), centerCol + i]);
+          const loaded = [] as Show4DSTEMCompute[];
+          const loadedIndices = [] as number[];
+          for (const idx of indices) {
+            const panelCompute = getVol ? await getVol(idx) : compute;
+            if (panelCompute instanceof Show4DSTEMCompute) {
+              loaded.push(panelCompute);
+              loadedIndices.push(idx);
+            }
+          }
+          await device.queue.onSubmittedWorkDone().catch(() => {});
+          const lut = COLORMAPS[String(model.get("vi_colormap") || "inferno")] || COLORMAPS.inferno;
+          engine.uploadLUT(String(model.get("vi_colormap") || "inferno"), lut);
+          const benchWindow = window as unknown as {
+            __sh4dKernelBenchCanvases?: HTMLCanvasElement[];
+            __sh4dKernelBenchContexts?: (GPUCanvasContext | null)[];
+          };
+          if (render && (!benchWindow.__sh4dKernelBenchCanvases || benchWindow.__sh4dKernelBenchCanvases.length < loaded.length)) {
+            benchWindow.__sh4dKernelBenchCanvases = Array.from({ length: loaded.length }, () => {
+              const canvas = document.createElement("canvas");
+              canvas.style.position = "fixed";
+              canvas.style.left = "-10000px";
+              canvas.style.top = "40px";
+              canvas.style.width = "32px";
+              canvas.style.height = "32px";
+              canvas.width = scanCols;
+              canvas.height = scanRows;
+              document.body.appendChild(canvas);
+              return canvas;
+            });
+            benchWindow.__sh4dKernelBenchContexts = benchWindow.__sh4dKernelBenchCanvases.map((canvas) =>
+              engine.configureCanvas(canvas, scanCols, scanRows),
+            );
+          }
+          const maskForCenter = (row: number, col: number) => buildDetectorMask({
+            get: (name: string) => {
+              if (name === "roi_mode") return mode;
+              if (name === "roi_center_row") return row;
+              if (name === "roi_center_col") return col;
+              if (name === "roi_radius") return radius;
+              if (name === "roi_radius_inner") return innerRadius;
+              if (name === "roi_width" || name === "roi_height") return 0;
+              return model.get(name);
+            },
+          }, detR, detC);
+          let previousMask: Uint32Array | null = null;
+          let previousBuffers: GPUBuffer[] | null = null;
+          const results = [] as Record<string, unknown>[];
+          for (let iter = 0; iter < centers.length; iter++) {
+            const [row, col] = centers[iter];
+            const mask = maskForCenter(row, col);
+            let addedPixels = 0;
+            let removedPixels = 0;
+            let packedWords = 0;
+            let buffers: GPUBuffer[];
+            let path = "full";
+            const startedAt = performance.now();
+            if (previousMask && previousBuffers) {
+              const addedMask = new Uint32Array(mask.length);
+              const removedMask = new Uint32Array(mask.length);
+              for (let i = 0; i < mask.length; i++) {
+                const next = mask[i] !== 0;
+                const prev = previousMask[i] !== 0;
+                if (next && !prev) { addedMask[i] = 1; addedPixels++; }
+                else if (!next && prev) { removedMask[i] = 1; removedPixels++; }
+              }
+              const delta = Show4DSTEMCompute.maskedSumDeltaBuffersBatch(loaded, previousBuffers, addedMask, removedMask);
+              buffers = delta.buffers;
+              path = delta.path;
+              addedPixels = delta.addedPixels;
+              removedPixels = delta.removedPixels;
+              packedWords = delta.packedWords ?? 0;
+            } else {
+              const full = Show4DSTEMCompute.maskedSumBuffersBatch(loaded, mask);
+              buffers = full.buffers;
+              path = full.path;
+            }
+            const submitMs = performance.now() - startedAt;
+            const waitStartedAt = performance.now();
+            await device.queue.onSubmittedWorkDone().catch(() => {});
+            const computeGpuDoneMs = performance.now() - waitStartedAt;
+            let renderSubmitMs = 0;
+            let renderGpuDoneMs = 0;
+            let rendered = 0;
+            if (render) {
+              const contexts = benchWindow.__sh4dKernelBenchContexts || [];
+              const renderStartedAt = performance.now();
+              for (let i = 0; i < buffers.length; i++) {
+                const slot = COMPARE_GPU_SLOT_BASE + 128 + i;
+                engine.adoptBuffer(slot, buffers[i], scanCols, scanRows);
+                const ctx = contexts[i];
+                if (!ctx) continue;
+                const ok = engine.renderSlotDirectWithGpuRangeToCanvas(
+                  slot,
+                  Number(model.get("vi_vmin_pct") ?? 0),
+                  Number(model.get("vi_vmax_pct") ?? 100),
+                  logScale,
+                  ctx,
+                  {
+                    width: scanCols,
+                    height: scanRows,
+                    bgRgb: 0,
+                    transform: { zoom: 1, panX: 0, panY: 0 },
+                    smooth: Boolean(model.get("vi_smooth")),
+                  },
+                );
+                if (ok) rendered++;
+              }
+              renderSubmitMs = performance.now() - renderStartedAt;
+              const renderWaitStartedAt = performance.now();
+              await device.queue.onSubmittedWorkDone().catch(() => {});
+              renderGpuDoneMs = performance.now() - renderWaitStartedAt;
+            }
+            previousMask = new Uint32Array(mask);
+            previousBuffers = buffers;
+            const totalMs = performance.now() - startedAt;
+            results.push({
+              iter,
+              row,
+              col,
+              path,
+              addedPixels,
+              removedPixels,
+              packedWords,
+              submitMs: Math.round(submitMs * 10) / 10,
+              computeGpuDoneMs: Math.round(computeGpuDoneMs * 10) / 10,
+              renderSubmitMs: Math.round(renderSubmitMs * 10) / 10,
+              renderGpuDoneMs: Math.round(renderGpuDoneMs * 10) / 10,
+              rendered,
+              totalMs: Math.round(totalMs * 10) / 10,
+              fps: totalMs > 0 ? Math.round((1000 / totalMs) * 10) / 10 : null,
+            });
+          }
+          const deltaMs = results.slice(1).map((result) => Number(result.totalMs)).filter(Number.isFinite);
+          const meanDeltaMs = deltaMs.length ? deltaMs.reduce((sum, ms) => sum + ms, 0) / deltaMs.length : null;
+          const payload = {
+            available: true,
+            indices: loadedIndices,
+            loaded: loaded.length,
+            mode,
+            radius,
+            innerRadius,
+            logScale,
+            render,
+            firstFullMs: results.length ? results[0].totalMs : null,
+            meanDeltaMs: meanDeltaMs == null ? null : Math.round(meanDeltaMs * 10) / 10,
+            meanDeltaFps: meanDeltaMs && meanDeltaMs > 0 ? Math.round((1000 / meanDeltaMs) * 10) / 10 : null,
+            results,
+            adapterInfo: getGPUInfo(),
+            softwareAdapter: isSoftwareGPUAdapter(),
+          };
+          (window as unknown as { __sh4dCompareIncrementalKernelBench?: unknown }).__sh4dCompareIncrementalKernelBench = payload;
+          return payload;
+        },
         roiBufferOnly: async () => {
           const mask = buildDetectorMask(model, detR, detC);
           const t0 = performance.now();
@@ -4751,9 +5386,17 @@ function Show4DSTEM() {
         if ((mode === "multiple" || mode === "compare") && dpMode !== "selected" && getVol) {
           const indices = compareAverageDpIndices();
           if (indices.length) {
+            const latestLoaded = latestResidentVolumeIndex != null && volIsResident(latestResidentVolumeIndex)
+              ? latestResidentVolumeIndex
+              : null;
+            const averageIndices = h5VolumePreloadDone
+              ? indices
+              : latestLoaded != null
+                ? [latestLoaded]
+                : indices.filter((idx) => volIsResident(idx));
             const averaged = new Float32Array(detSize);
             let count = 0;
-            for (const idx of indices) {
+            for (const idx of averageIndices) {
               const source = await getVol(idx);
               if (!source) continue;
               const frame = await source.frameAt(scanIdx);
@@ -4763,6 +5406,13 @@ function Show4DSTEM() {
             if (count > 0) {
               for (let k = 0; k < detSize; k++) averaged[k] /= count;
               model.set("frame_bytes", new DataView(averaged.buffer));
+              (window as unknown as { __show4dstemLatestDp?: unknown }).__show4dstemLatestDp = {
+                scanIdx,
+                source: h5VolumePreloadDone ? "average-loaded" : "latest-resident",
+                indices: averageIndices,
+                count,
+                updatedAt: Math.round(performance.now()),
+              };
               model.save_changes();
               return;
             }
@@ -4774,6 +5424,9 @@ function Show4DSTEM() {
           ? (() => { const f = new Float32Array(detSize); const base = scanIdx * detSize; for (let k = 0; k < detSize; k++) f[k] = sample(base + k); return f; })()
           : await compute!.frameAt(scanIdx);
         model.set("frame_bytes", new DataView(frame.buffer)); model.save_changes();
+      };
+      requestDpFrameLiveRef.current = () => {
+        void recomputeFrame();
       };
       if (h5VolumePreload) {
         void h5VolumePreload.then(() => {
@@ -4891,6 +5544,7 @@ function Show4DSTEM() {
             splittingRoiCenter = false;
           }
         }
+        if (suppressViTraitRecompute) return;
         void recomputeVI(); void recomputeCompareVI();
       };
       const onViCenter = () => {
@@ -5046,6 +5700,7 @@ function Show4DSTEM() {
       disposed = true;
       requestViFinalizeRef.current = null;
       requestCompareViLiveRef.current = null;
+      requestDpFrameLiveRef.current = null;
       setWebgpuDpcReady(false);
       setOfflineBackendLoading(false);
       setOfflineBackendStatus("");
@@ -5053,7 +5708,7 @@ function Show4DSTEM() {
       clearViGpuDisplay();
       detach?.();
     };
-  }, [clearViGpuDisplay, ensureViGpuColormap, h5LocalFilesGranted, h5SourceAvailable, offline]);
+  }, [clearViGpuDisplay, ensureViGpuColormap, h5LocalFilesGranted, h5SourceAvailable, offline, requestCompareViLive, requestDpFrameLive]);
   // dp_stats are computed in JS from frameBytes (Python side no longer
   // syncs a dp_stats trait — saves 4 trait sync round-trips per click).
   const [viStats, setViStats] = React.useState<number[]>([0, 0, 0, 0]);
@@ -7678,8 +8333,7 @@ function Show4DSTEM() {
     const newCol = Math.round(Math.max(0, Math.min(detCols - 1, imgX)));
     const newRow = Math.round(Math.max(0, Math.min(detRows - 1, imgY)));
     model.set("roi_active", true);
-    model.set("roi_center", [newRow, newCol]);
-    model.save_changes();
+    writeRoiCenterModel(newRow, newCol);
     requestCompareViLive();
   };
 
@@ -8804,8 +9458,13 @@ function Show4DSTEM() {
       </Typography>
     </Box>
   ), [panelLoadingOverlaySx, panelLoadingTextSx]);
-  const dpPanelLoading = offlineBackendLoading;
-  const viPanelLoading = offlineBackendLoading && !compareMode;
+  const dpPanelReady = Boolean(displayedDpBytes && displayedDpBytes.byteLength >= detRows * detCols * 4);
+  const viPanelReady = Boolean(
+    viGpuVisible
+    || (displayedVirtualImageBytes && displayedVirtualImageBytes.byteLength >= shapeRows * shapeCols * 4),
+  );
+  const dpPanelLoading = offlineBackendLoading && !dpPanelReady;
+  const viPanelLoading = offlineBackendLoading && !compareMode && !viPanelReady;
   const fftPanelLoading = offlineBackendLoading && effectiveShowFft;
   const offlineStatusText = offlineBackendError || offlineBackendStatus;
   const offlineStatusIsError = Boolean(offlineBackendError);
@@ -9219,7 +9878,6 @@ function Show4DSTEM() {
             <canvas ref={dpUiRef} width={canvasSize * DPR} height={canvasSize * DPR} style={{ position: "absolute", width: "100%", height: "100%", pointerEvents: "none" }} />
             {(dpPanelLoading || offlineBackendError) && renderPanelLoadingOverlay(
               offlineBackendError ? "Show4DSTEM load failed" : "Loading DP",
-              offlineBackendError || offlineBackendStatus,
             )}
             {panelChromeVisible && cursorInfo && cursorInfo.panel === "DP" && (
               <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
@@ -9673,6 +10331,9 @@ function Show4DSTEM() {
               onPositionChange={updateScanPosition}
               onFreshVisiblePaint={acknowledgeFreshComparePagePaint}
               onGpuPaint={(panelCount) => publishLiveCompareViStats("paint", { paintedPanels: panelCount })}
+              onGpuRendererReady={(renderNow) => {
+                compareGpuRenderNowRef.current = renderNow;
+              }}
             />
           ) : (
             <Box sx={{ ...container.imageBox, width: "100%", maxWidth: viCanvasWidth, aspectRatio: `${shapeCols} / ${shapeRows}`, height: "auto", touchAction: "none", ...mobileImageBoxSx }}>
@@ -9725,7 +10386,6 @@ function Show4DSTEM() {
               <canvas ref={viUiRef} width={viCanvasWidth * DPR} height={viCanvasHeight * DPR} style={{ position: "absolute", width: "100%", height: "100%", pointerEvents: "none" }} />
               {(viPanelLoading || offlineBackendError) && renderPanelLoadingOverlay(
                 offlineBackendError ? "Show4DSTEM load failed" : "Loading virtual image",
-                offlineBackendError || offlineBackendStatus,
               )}
               {panelChromeVisible && cursorInfo && cursorInfo.panel === "VI" && (
                 <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
