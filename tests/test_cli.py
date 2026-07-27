@@ -740,6 +740,28 @@ def test_data_transfer_cli_plan_inspect_copy_update_and_show4dstem(tmp_path, mon
     assert "Show4DSTEM(" in code
 
 
+def test_show4dstem_html_cli_threads_full_dtype_to_load_and_export() -> None:
+    """C1: CLI full export docs, expect --dtype uint16 to reach load and export."""
+    import inspect
+
+    source = inspect.getsource(cli._render_4dstem)
+    loader_source = inspect.getsource(cli._master_to_binned_numpy)
+
+    assert "export_dtype = _show4dstem_export_dtype(args)" in source
+    assert "_master_to_binned_numpy(master, args.det_bin, args.dtype)" in source
+    assert "widget.export_html(str(out), title=args.title or stem, dtype=export_dtype)" in source
+    assert "load(master, det_bin=det_bin, dtype=dtype)" in loader_source
+    assert cli._show4dstem_export_dtype(SimpleNamespace(dtype="uint16")) == "uint16"
+    assert cli._show4dstem_export_dtype(SimpleNamespace(dtype="u16")) == "uint16"
+    assert cli._show4dstem_export_dtype(SimpleNamespace(dtype="uint8")) == "uint8"
+
+
+def test_show4dstem_html_cli_rejects_float32_export_dtype() -> None:
+    """C1: CLI HTML export, expect float32 to stay a live-notebook workflow."""
+    with pytest.raises(ValueError, match="Use a live notebook for float32 analysis"):
+        cli._show4dstem_export_dtype(SimpleNamespace(dtype="float32"))
+
+
 def test_out_path_explicit_file(tmp_path):
     p = tmp_path / "img.png"
     _png(p)

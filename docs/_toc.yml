@@ -16,6 +16,8 @@ parts:
       - file: tutorials/show3d
       - file: tutorials/show3dslices
       - file: tutorials/show4dstem
+      - file: tutorials/show4dstem_export
+        title: Show4DSTEM export
       - file: tutorials/showptycho
       - file: tutorials/showptycho_export
       - file: tutorials/showeds

@@ -686,7 +686,7 @@ w.save_gif(
 ```
 
 ```{note}
-`export_html(quantized=True)` writes the smaller single-file uint8 pack; the
+`export_html(encoding="uint8")` writes the smaller single-file uint8 pack; the
 default writes exact float32 into one HTML file. For multi-GB Show3D reviews,
 use the folder export above instead of forcing one huge HTML file. See the
 [widget export tutorial](../tutorials/widget_export).

@@ -39,8 +39,10 @@ quantem github tutorial_github.ipynb --no-execute # optional static copy for Git
 
 **Images** save a standalone HTML and open in your browser. **4D-STEM** opens a
 live, kernel-backed notebook by default (full real-time interaction); `--html`
-instead writes a **self-contained offline viewer that runs entirely on WebGPU** -
-drag detectors, switch BF/ABF/ADF, pan diffraction, all with no kernel.
+instead writes an **offline WebGPU browser export** - drag detectors, switch
+BF/ABF/ADF, pan diffraction, all with no kernel. Compact single-file exports can
+be opened directly; interactive raw 4D exports may include a local launcher when
+Chrome must fetch a companion data payload over HTTP.
 
 Several masters (a folder, or listed explicitly) stack into **one 5D viewer with a
 Dataset slider** to flip between scans. `--combined --html` writes that as one
@@ -48,6 +50,76 @@ offline file (served locally, since a `file://` page can't fetch its companion).
 
 Everything lands in `~/Downloads` (or the current directory on machines without
 one) and opens automatically on a desktop.
+
+## Show4DSTEM HTML export
+
+Use the CLI when you want a quick browser artifact from raw masters:
+
+```bash
+quantem show4dstem scan_001_master.h5 --html --bin 8
+quantem show4dstem scan_001_master.h5 --html --bin 1 --dtype uint16
+quantem show4dstem ./session_masters --html --bin 8 --out ~/Downloads
+quantem show4dstem scan_001_master.h5 scan_002_master.h5 --html --combined --bin 8
+```
+
+`--bin` is detector mean binning for the exported browser payload. The default
+Show4DSTEM CLI export is an interactive raw-4D WebGPU viewer after that explicit
+binning choice. It is meant for offline detector-ROI browsing, not as the
+smallest possible report.
+
+Use `--bin 1 --dtype uint16` when the user wants the full native detector
+sampling path without opening Jupyter:
+
+```bash
+quantem show4dstem /data/session --html --bin 1 --dtype uint16 --out ~/Downloads
+```
+
+That command can produce very large browser artifacts. It is the right no-notebook
+choice when native detector detail matters; for quick laptop browsing use
+`--bin 8 --dtype uint8`, and for compact collaborator review use the Python
+`export_kind="report"` path below.
+
+For large lazy folders, curated comparison grids, or collaborator screening,
+open a live viewer and export a compact report from Python instead:
+
+```python
+from quantem.widget import Show4DSTEM
+
+viewer = Show4DSTEM.from_folder(
+    "/data/session",
+    gpus=[0, 1],
+    det_bin=1,
+    dtype="u8",
+    view_mode="multiple",
+    page_size=12,
+)
+
+viewer.export_html(
+    "show4dstem_report.html",
+    export_kind="report",
+    dataset_scope="unhidden",
+    scan_bin=2,
+    det_bin=8,
+    dtype="uint8",
+)
+```
+
+Use `export_kind="interactive"` from Python when you want the same offline
+browser interaction as the CLI but need finer control over real-space binning,
+detector binning, or dtype:
+
+```python
+viewer.export_html(
+    "show4dstem_interactive.html",
+    export_kind="interactive",
+    dtype="uint8",
+    scan_bin=2,
+    det_bin=4,
+)
+```
+
+See [Show4DSTEM export recipes](tutorials/show4dstem_export) for the decision
+table and LLM-friendly checklist.
 
 ## ShowPtycho folder review
 
@@ -174,6 +246,7 @@ HTML; serve HTML from GitHub Pages or another static host.
 | Option | Effect |
 |---|---|
 | `--bin N` | detector mean-bin factor; Show4DSTEM defaults to 8, ShowPtycho and `data-transfer` default to 1 |
+| `--dtype uint8/uint16` | Show4DSTEM HTML export/storage dtype; `uint8` is compact browse, `uint16` keeps the wider detector-count range |
 | `--html` | 4D-STEM: write the offline-WebGPU HTML instead of a notebook |
 | `--watch` | folder: write a live ShowFolder-watched notebook; Show2D/Show3D append new image files, Show4DSTEM opens lazy masters |
 | `--gpus 0,1`, `--page-budget auto` | watched Show4DSTEM: pick CUDA cards and GPU-resident dataset cache policy |

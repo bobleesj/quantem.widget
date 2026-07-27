@@ -106,11 +106,12 @@ quantem html tutorial.ipynb                  # a notebook          -> standalone
 | `quantem github <notebook.ipynb>` | a notebook copy for GitHub | strips widget state, embeds compressed pictures for GitHub's preview |
 
 **Images** save a standalone HTML and open in your browser. **4D-STEM** opens a live,
-kernel-backed notebook by default (full real-time interaction); `--html` instead bakes a
-**self-contained offline viewer that runs entirely on WebGPU** - drag detectors, switch
-BF/ABF/ADF, pan diffraction, all with no kernel. The detector is **mean-binned** (`--bin`,
-default 8) so the packed stack stays small and fits a laptop's browser - you can browse
-data that never fit full resolution. Several masters (a folder, or listed explicitly)
+kernel-backed notebook by default (full real-time interaction); `--html` instead writes
+an offline WebGPU browser export - drag detectors, switch BF/ABF/ADF, pan diffraction,
+all with no kernel. The detector is **mean-binned** (`--bin`, default 8) unless you pass
+`--bin 1`, so the packed stack can stay small enough for a laptop browser. Interactive
+raw 4D exports may include a `Show4DSTEM.command` launcher when the browser must fetch
+a companion data payload over HTTP. Several masters (a folder, or listed explicitly)
 stack into one 5D viewer with a dataset slider (the multi-tilt case).
 
 For live microscope sessions, keep the Show4DSTEM viewer mounted and append new
@@ -136,6 +137,7 @@ one) and opens automatically on a desktop.
 | Option | Effect |
 |---|---|
 | `--bin N` | detector mean-bin factor for 4D-STEM (default 8 for `show*`; `data-transfer` defaults to 1) |
+| `--dtype uint8/uint16` | 4D-STEM HTML export dtype; `uint8` is compact browse, `uint16` keeps the wider detector-count range |
 | `--html` | 4D-STEM: write the offline-WebGPU HTML instead of a notebook |
 | `--watch` | show2d/show3d/show4dstem folders: keep appending new files to a live notebook |
 | `--combined` | many masters -> one 5D HTML viewer (served locally) |
@@ -146,6 +148,67 @@ one) and opens automatically on a desktop.
 Runs on CUDA, Apple Silicon (MPS), or CPU - the loader picks the backend. On a MacBook,
 `quantem show4dstem ./masters/ --html --bin 8` loads on Metal, bins, and writes a
 double-clickable HTML in seconds.
+
+## Show4DSTEM export quick reference
+
+Most users want one of these paths:
+
+| Goal | Use this | Result |
+|---|---|---|
+| Keep working interactively in Python | `quantem show4dstem ./masters/` or `Show4DSTEM(load(...))` | Live notebook, kernel-backed CUDA/MPS interaction |
+| Share a compact screening result | `widget.export_html(..., export_kind="report")` | One self-contained HTML report; PNG virtual-image pages; no raw 4D payload |
+| Share an offline browser widget | `widget.export_html(..., export_kind="interactive", dtype="uint8", scan_bin=2, det_bin=4)` | WebGPU HTML that can still drag detector ROIs, but embeds binned raw 4D data |
+| Open directly from the terminal | `quantem show4dstem ./masters/ --html --bin 8` | Browser WebGPU export built from one or more masters |
+| Open full native detector sampling from the terminal | `quantem show4dstem ./masters/ --html --bin 1 --dtype uint16` | Large no-notebook WebGPU export with native detector sampling |
+
+The default recommendation for large folders is a **report export** first:
+
+```python
+from quantem.widget import Show4DSTEM
+
+viewer = Show4DSTEM.from_folder(
+    "/data/session",
+    gpus=[0, 1],
+    det_bin=1,
+    dtype="u8",
+    view_mode="multiple",
+    page_size=12,
+)
+
+viewer.export_html(
+    "show4dstem_report.html",
+    export_kind="report",
+    dataset_scope="unhidden",  # "current_page", "starred", or "all" also work
+    scan_bin=2,                # real-space mean bin for smaller PNG pages
+    det_bin=8,                 # detector mean bin for representative DP thumbnails
+    dtype="uint8",
+)
+```
+
+Use **interactive raw 4D export** only when the recipient must keep dragging the
+detector ROI offline:
+
+```python
+viewer.export_html(
+    "show4dstem_interactive.html",
+    export_kind="interactive",
+    dtype="uint8",  # use "uint16" only when the larger exact-count file is intended
+    scan_bin=2,
+    det_bin=4,
+)
+```
+
+For users who do not want a notebook and want native detector sampling, use the
+CLI full path:
+
+```bash
+quantem show4dstem /data/session --html --bin 1 --dtype uint16 --out ~/Downloads
+```
+
+Both `scan_bin` and `det_bin` are explicit mean-binning choices for the export.
+They are not hidden performance shortcuts. See the LLM-friendly
+[Show4DSTEM export recipes](docs/tutorials/show4dstem_export.md) and the
+[Show4DSTEM API export section](docs/api/show4dstem.md#exporting-reports-and-raw-4d-viewers).
 
 ## GPU SSB backend coverage
 
