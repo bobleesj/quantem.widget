@@ -378,6 +378,17 @@ def test_show4dstem_webgpu_fits_bf_disk_in_browser_for_h5_sources() -> None:
     assert "const dp = await compute.reduceFrames(scanMask, true);" in frontend
     assert "model.set(\"bf_radius\", edge);" in frontend
     assert "await fitBfDiskFromMeanDp().catch((error) => {" in frontend
+    initial_load = frontend.split(
+        "await recomputeVI();  // initial virtual image, no interaction needed",
+        1,
+    )[1].split(
+        "requestAnimationFrame(() => { if (!disposed) { void recomputeVI();",
+        1,
+    )[0]
+    assert initial_load.index("await fitBfDiskFromMeanDp().catch((error) => {") < (
+        initial_load.index("scheduleWarmStandardViCache();")
+    )
+    assert "if (Math.abs(current - ratioGuess) > 0.51) return;" in frontend
 
 
 def test_show4dstem_h5_export_embeds_local_bad_pixel_mask(tmp_path: Path) -> None:

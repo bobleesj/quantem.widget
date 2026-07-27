@@ -11,6 +11,19 @@ from quantem.gpu.compute.mps import MultiChunkedFrames
 from quantem.widget.multidataset_mps import LazyMacbookDatasets
 
 
+def _offset_bf_disk_data(
+    *,
+    scan_shape: tuple[int, int] = (3, 4),
+    detector_shape: tuple[int, int] = (32, 32),
+    center: tuple[float, float] = (11.0, 18.0),
+    radius: float = 5.0,
+) -> np.ndarray:
+    rows, cols = np.indices(detector_shape)
+    disk = ((rows - center[0]) ** 2 + (cols - center[1]) ** 2) <= radius**2
+    dp = np.where(disk, 100, 1).astype(np.uint16)
+    return np.broadcast_to(dp, (*scan_shape, *detector_shape)).copy()
+
+
 class _DummyFrames:
     def __init__(self, *, scan: int = 4, det: tuple[int, int] = (8, 8), value: int = 0):
         self._det = det
@@ -114,6 +127,28 @@ def test_show4dstem_keeps_dataset5dstem_frame_backing_for_export() -> None:
 
     assert vi.shape == (4, 4)
     assert np.all(vi == 100)
+
+
+def test_show4dstem_mps_adapter_auto_detects_bf_disk_when_calibration_is_omitted() -> None:
+    from quantem.widget.show4dstem_mps import Show4DSTEMMPS
+
+    data = _offset_bf_disk_data()
+    widget = Show4DSTEMMPS(
+        data,
+        precompute_virtual_images=False,
+        initial_preset=None,
+        verbose=False,
+    )
+
+    try:
+        assert widget.center_row == 11.0
+        assert widget.center_col == 18.0
+        assert abs(widget.bf_radius - 5.08) < 0.1
+        assert widget.roi_center_row == widget.center_row
+        assert widget.roi_center_col == widget.center_col
+        assert widget.roi_radius == widget.bf_radius
+    finally:
+        widget.close()
 
 
 def test_lazy_macbook_datasets_append_master_sync() -> None:
