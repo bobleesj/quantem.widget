@@ -9708,10 +9708,10 @@ function Show4DSTEM() {
             py: 0.25,
             border: `1px solid ${offlineStatusIsError ? "#d32f2f" : themeColors.border}`,
             bgcolor: themeColors.controlBg,
+            ...typo.label,
             color: offlineStatusIsError ? "#d32f2f" : themeColors.textMuted,
             width: "fit-content",
             maxWidth: "100%",
-            ...typo.label,
             lineHeight: 1.35,
             overflowWrap: "anywhere",
           }}

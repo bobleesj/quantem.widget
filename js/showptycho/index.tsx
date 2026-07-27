@@ -1798,7 +1798,6 @@ function Explore() {
   const [exportStatus, setExportStatus] = React.useState("");
   const [animationExportStatus, setAnimationExportStatus] = React.useState("");
   const [animationExportBusy, setAnimationExportBusy] = React.useState(false);
-  const [animationExportAnchor, setAnimationExportAnchor] = React.useState<HTMLElement | null>(null);
   const [toolbarMoreAnchor, setToolbarMoreAnchor] = React.useState<HTMLElement | null>(null);
   const [dragOverPin, setDragOverPin] = React.useState<number | null>(null);
   const [draggingPin, setDraggingPin] = React.useState<number | null>(null);
@@ -3328,7 +3327,6 @@ function Explore() {
   }, [effectiveTotalBf, selectedDragBfCount]);
 
   const exportAnimationGif = React.useCallback(async () => {
-    setAnimationExportAnchor(null);
     const frames = animationFrameValues();
     const filename = makeShowPtychoExportFilename("gif", sweepParam, frames.length);
     setAnimationExportBusy(true);
@@ -3362,7 +3360,6 @@ function Explore() {
   }, [animationFrameValues, playFps, renderAnimationFrameCanvas, sweepParam]);
 
   const exportAnimationMp4 = React.useCallback(async () => {
-    setAnimationExportAnchor(null);
     const mime = "video/mp4";
     if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported(mime)) {
       setAnimationExportStatus("MP4 export unavailable in this browser; use GIF here.");
