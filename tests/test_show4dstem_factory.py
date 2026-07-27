@@ -12,6 +12,19 @@ import quantem.widget.show4dstem_factory as factory
 LoadResult = namedtuple("LoadResult", ["data", "metadata"])
 
 
+def _offset_bf_disk_data(
+    *,
+    scan_shape: tuple[int, int] = (3, 4),
+    detector_shape: tuple[int, int] = (32, 32),
+    center: tuple[float, float] = (11.0, 18.0),
+    radius: float = 5.0,
+) -> np.ndarray:
+    rows, cols = np.indices(detector_shape)
+    disk = ((rows - center[0]) ** 2 + (cols - center[1]) ** 2) <= radius**2
+    dp = np.where(disk, 100, 1).astype(np.uint16)
+    return np.broadcast_to(dp, (*scan_shape, *detector_shape)).copy()
+
+
 def test_public_show4dstem_import_uses_factory() -> None:
     from quantem.widget import Show4DSTEM
 
@@ -174,6 +187,43 @@ def test_public_show4dstem_constructs_small_binned_numpy_viewer() -> None:
         assert widget.det_rows == 4
         assert widget.det_cols == 4
         assert widget.show_controls is False
+    finally:
+        widget.close()
+
+
+def test_show4dstem_auto_detects_bf_disk_when_calibration_is_omitted() -> None:
+    from quantem.widget import Show4DSTEM
+
+    data = _offset_bf_disk_data()
+    widget = Show4DSTEM(data, precompute_virtual_images=False, verbose=False)
+
+    try:
+        assert widget.center_row == 11.0
+        assert widget.center_col == 18.0
+        assert abs(widget.bf_radius - 5.08) < 0.1
+        assert widget.roi_center_row == widget.center_row
+        assert widget.roi_center_col == widget.center_col
+        assert widget.roi_radius == widget.bf_radius
+    finally:
+        widget.close()
+
+
+def test_show4dstem_explicit_bf_calibration_is_not_auto_overwritten() -> None:
+    from quantem.widget import Show4DSTEM
+
+    data = _offset_bf_disk_data()
+    widget = Show4DSTEM(
+        data,
+        center=(16, 16),
+        bf_radius=4,
+        precompute_virtual_images=False,
+        verbose=False,
+    )
+
+    try:
+        assert widget.center_row == 16.0
+        assert widget.center_col == 16.0
+        assert widget.bf_radius == 4.0
     finally:
         widget.close()
 
