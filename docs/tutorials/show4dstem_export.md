@@ -1,0 +1,235 @@
+# Show4DSTEM Export Recipes
+
+This page is the copy-paste reference for exporting `Show4DSTEM` results. It is
+written for both humans and LLM agents: choose the goal, copy the matching
+recipe, and keep the reduction choices explicit.
+
+## Decision Table
+
+| Goal | Recommended path | Output | Opens without Python? | Contains raw 4D data? |
+|---|---|---|---:|---:|
+| Continue analysis | `Show4DSTEM(load(...))` or `quantem show4dstem ...` | Live notebook | no | yes, in the Python session |
+| Share a compact screening result | `export_html(export_kind="report")` | One HTML report | yes | no |
+| Share an offline detector-ROI browser | `export_html(export_kind="interactive")` | WebGPU HTML/folder | yes | yes, binned/encoded |
+| Export quickly from a terminal | `quantem show4dstem ... --html --bin N` | WebGPU HTML | yes | yes, after detector binning |
+| Export full native detector sampling from a terminal | `quantem show4dstem ... --html --bin 1 --dtype uint16` | Large WebGPU HTML | yes | yes, native detector sampling |
+| Preserve compressed HDF5 beside the viewer | WebGPU HDF5 bundle | `Show4DSTEM.command` + `.viewer/` | yes, via local server | yes, in source HDF5 files |
+
+Default recommendation: use `export_kind="report"` for large folders, many
+datasets, or collaborator screening. Use `export_kind="interactive"` only when
+the recipient must drag detector ROIs in the exported browser.
+
+## Minimal Report Export
+
+Report export writes a compact, self-contained HTML file. It contains rendered
+virtual-image PNG pages and a representative diffraction pattern, not raw 4D
+detector data. This is the safest default for lazy folder viewers.
+
+```python
+from quantem.widget import Show4DSTEM
+
+viewer = Show4DSTEM.from_folder(
+    "/data/session",
+    gpus=[0, 1],
+    det_bin=1,
+    dtype="u8",
+    view_mode="multiple",
+    page_size=12,
+    compare_group_mode="paged",
+    compare_dp_mode="selected",
+)
+
+path = viewer.export_html(
+    "show4dstem_report.html",
+    export_kind="report",
+    dataset_scope="unhidden",  # "current_page", "starred", "unhidden", or "all"
+    scan_bin=2,                # mean-bin real-space PNG pages
+    det_bin=8,                 # mean-bin representative diffraction thumbnail
+    dtype="uint8",
+)
+print(path)
+```
+
+Use `dataset_scope` deliberately:
+
+| `dataset_scope` | Meaning |
+|---|---|
+| `"current_page"` | Export only the visible comparison page. |
+| `"starred"` | Export curated starred panels. |
+| `"unhidden"` | Export every panel that has not been hidden. |
+| `"all"` | Export every dataset, including hidden panels. |
+
+## Minimal Interactive Raw 4D Export
+
+Interactive export embeds a raw 4D payload, after the explicit `scan_bin`,
+`det_bin`, and `dtype` choices. The exported page can run virtual-detector
+interaction in the browser without a Python kernel, but the file can be much
+larger than a report.
+
+```python
+path = viewer.export_html(
+    "show4dstem_interactive.html",
+    export_kind="interactive",
+    dtype="uint8",  # "uint16" keeps the wider integer range and makes a larger file
+    scan_bin=2,     # mean-bin scan rows/cols before embedding raw 4D
+    det_bin=4,      # mean-bin detector rows/cols before embedding raw 4D
+)
+print(path)
+```
+
+Use this when the recipient needs to:
+
+- drag BF/ABF/ADF/HAADF or custom detector ROIs offline,
+- inspect diffraction and virtual-image panels without Jupyter,
+- compare a small number of binned datasets in a browser.
+
+Do not use this as the first choice for a large multi-master screening report.
+Report export is smaller and faster because it does not embed raw 4D data.
+
+## Terminal Export
+
+The command-line path is the fastest way to hand a master or folder to a
+non-notebook user:
+
+```bash
+quantem show4dstem /data/session --html --bin 8 --out ~/Downloads
+```
+
+Useful variants:
+
+```bash
+# One master, detector mean-bin by 8 for a laptop-sized browser file.
+quantem show4dstem scan_001_master.h5 --html --bin 8
+
+# Several masters as one 5D viewer with a Dataset slider.
+quantem show4dstem scan_001_master.h5 scan_002_master.h5 --html --combined --bin 8
+
+# Write without opening a browser.
+quantem show4dstem /data/session --html --bin 8 --no-open
+```
+
+CLI `--bin` is detector mean binning for the export. It is intentionally
+visible in the command so a report can say exactly how the data was reduced.
+
+## Full Native Export Without A Notebook
+
+Some users do not want Jupyter at all, and sometimes they want native detector
+sampling. Use the CLI with `--html --bin 1`:
+
+```bash
+# Native detector sampling, uint16 export payload.
+quantem show4dstem scan_001_master.h5 --html --bin 1 --dtype uint16 --out ~/Downloads
+
+# Native detector sampling for every master in a folder.
+quantem show4dstem /data/session --html --bin 1 --dtype uint16 --out ~/Downloads
+
+# Several native-sampling masters in one Dataset-slider viewer.
+quantem show4dstem scan_001_master.h5 scan_002_master.h5 \
+  --html --combined --bin 1 --dtype uint16 --out ~/Downloads
+```
+
+This is the no-notebook path for a full interactive browser artifact. It can be
+very large because it keeps native detector sampling and uses the wider
+`uint16` payload. Use it when native detector detail matters and the recipient
+has enough RAM/GPU/browser capacity. Use `--bin 8 --dtype uint8` for quick
+laptop browsing, and use `export_kind="report"` when the recipient only needs a
+curated review page.
+
+Equivalent Python:
+
+```python
+viewer.export_html(
+    "show4dstem_full_interactive.html",
+    export_kind="interactive",
+    dtype="uint16",
+    scan_bin=1,
+    det_bin=1,
+)
+```
+
+## Size And Fidelity Rules
+
+Use these rules when choosing export settings:
+
+| Setting | Effect |
+|---|---|
+| `export_kind="report"` | Smallest practical review artifact; no raw 4D payload. |
+| `export_kind="interactive"` | Browser-owned raw 4D interaction; larger file. |
+| `dtype="uint8"` | Compact browse payload; use when count clipping/narrowing is acceptable or already audited. |
+| `dtype="uint16"` | Larger payload; keeps the wider integer range for interactive export. |
+| `scan_bin=2/4/8` | Mean-bin real-space scan pixels before export. |
+| `det_bin=2/4/8` | Mean-bin detector pixels before export. |
+
+Both `scan_bin` and `det_bin` use mean binning in Show4DSTEM export. They reduce
+display/review payload size; they are not a hidden scientific reconstruction
+step. Put the exact settings in notebooks, captions, and handoff notes.
+
+## Choosing Uint8 Or Uint16
+
+The dtype choice is separate from the binning choice:
+
+| Choose | When | Tradeoff |
+|---|---|---|
+| `dtype="uint8"` / `--dtype uint8` | First-pass browsing, laptop-sized HTML, tutorials, quick collaborator review where detector-count saturation is acceptable or audited. | 1 byte per detector pixel after any binning; values above 255 clip/narrow, so do not call it exact unless the count range fits. |
+| `dtype="uint16"` / `--dtype uint16` | Native-count review, full/no-bin export, detector detail, or any claim where high-count detector values matter. | 2 bytes per detector pixel after any binning; larger files and more browser/GPU memory, but keeps the 0-65535 integer range. |
+
+Use `uint8` for the common browse path:
+
+```bash
+quantem show4dstem /data/session --html --bin 8 --dtype uint8
+```
+
+Use `uint16` for the full no-notebook path:
+
+```bash
+quantem show4dstem /data/session --html --bin 1 --dtype uint16
+```
+
+Use `uint16` from Python when the exported browser must preserve the wider
+integer range:
+
+```python
+viewer.export_html(
+    "show4dstem_uint16_interactive.html",
+    export_kind="interactive",
+    dtype="uint16",
+    scan_bin=1,
+    det_bin=1,
+)
+```
+
+`uint16` does not make a report export raw. A report still contains rendered
+PNG review pages. `uint16` matters for `export_kind="interactive"`, where the
+browser receives a raw 4D payload.
+
+## Opening Exported Files
+
+Report export is one self-contained HTML file. It can be double-clicked or
+served from any static host.
+
+Interactive raw 4D export may write a local `Show4DSTEM.command` launcher next
+to the HTML when the browser needs to fetch a companion data payload over HTTP.
+On macOS, double-click `Show4DSTEM.command`; do not open only the HTML if the
+status says it needs a local server.
+
+For phones and tablets, WebGPU requires a secure context. Use HTTPS or localhost
+and see [Viewing exported HTML on mobile](../maintainer/viewing-html-on-mobile.md).
+
+## LLM Checklist
+
+When generating or reviewing Show4DSTEM export code, verify these points:
+
+- State the goal: live notebook, report, interactive raw 4D, CLI export, or HDF5 bundle.
+- Use `export_kind="report"` for large lazy folders unless raw 4D browser interaction is required.
+- Use `export_kind="interactive"` only with explicit `dtype`, `scan_bin`, and `det_bin`.
+- Do not call a report export "raw" or "exact"; it contains rendered PNG virtual images.
+- Do not call `dtype="uint8"` exact unless detector counts were audited to fit.
+- Mention that `scan_bin` and `det_bin` are mean-binning choices.
+- Keep generated HTML, screenshots, and private data outside the repository unless they are intentional docs artifacts.
+
+## Related Pages
+
+- [Show4DSTEM tutorial](show4dstem)
+- [Show4DSTEM API](../api/show4dstem)
+- [HTML export API](../api/html-export)
+- [Command line](../cli)

@@ -63,7 +63,7 @@ Preferred heavy datasets on the lab machines:
 | PUI-2D-STRESS | Show2D | 45 to 85 panels, 4096 x 4096 | Optional stress pass when backend memory allows |
 | PUI-3D-SINGLE | Show3D | 1 panel, at least 512 x 512 x 100 frames | Real time series, focal stack, or SSB iteration stack |
 | PUI-3D-MULTI | Show3D | 12 panels x 32 frames x 2048 x 2048 source | Real-derived drift/ptycho/gold stack |
-| PUI-3D-EXPORT | Show3D | same as PUI-3D-MULTI | Exact/quantized/binned HTML export paths |
+| PUI-3D-EXPORT | Show3D | same as PUI-3D-MULTI | Full, uint8, and downsampled HTML export paths |
 | PUI-EDS | ShowEDS | native sparse EDS stream, no hidden crop/bin | DGGG 0039 or equivalent Velox EDS stream |
 | PUI-4DSTEM | Show4DSTEM | real scan with diffraction and virtual images | 4D-STEM tutorial or paper data on an HPC/workstation or hosted dataset |
 | PUI-4DSTEM-NOBIN | Show4DSTEM | 30-40 ready real masters at `det_bin=1` as a capacity probe, plus a browser-enabled no-bin stack that fits | Private lab 4D-STEM masters on an NVIDIA workstation; never commit data or reports |
@@ -244,7 +244,7 @@ For Show3D, drive and record:
   `Scale`, `Color`, `Auto`, `Smooth`, `Diff`, `fps`, `avg`, `Loop`, `Bounce`,
   FFT controls, and any page/column controls, with no overlap or orphaned
   switch/menu controls,
-- export exact, quantized, GIF, MP4, and binned quantized HTML where supported,
+- export full, uint8, GIF, MP4, and downsampled uint8 HTML where supported,
 - `Cmd+S` save/reopen with compact visible output.
 
 Targets:

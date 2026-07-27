@@ -1845,7 +1845,21 @@ def _launch_notebook(notebook: pathlib.Path, *, no_open: bool) -> None:
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def _master_to_binned_numpy(master: str, det_bin: int):
+def _show4dstem_export_dtype(args: argparse.Namespace) -> str:
+    """Return the Show4DSTEM HTML export dtype requested by the CLI."""
+
+    raw = str(getattr(args, "dtype", "u8") or "u8").strip().lower()
+    if raw in {"u8", "uint8"}:
+        return "uint8"
+    if raw in {"u16", "uint16"}:
+        return "uint16"
+    raise ValueError(
+        "Show4DSTEM --html export supports --dtype u8/uint8 or u16/uint16. "
+        "Use a live notebook for float32 analysis."
+    )
+
+
+def _master_to_binned_numpy(master: str, det_bin: int, dtype: str = "u8"):
     """Load one master with detector binning and return a mean-binned 4D numpy array
     ``(scan_row, scan_col, det_row, det_col)``. Binning happens at LOAD time (so the
     full 19 GB stack never materializes - fits a laptop), and since the loader
@@ -1855,7 +1869,7 @@ def _master_to_binned_numpy(master: str, det_bin: int):
     import numpy as np
     import torch
     from quantem.widget import load
-    result = load(master, det_bin=det_bin)
+    result = load(master, det_bin=det_bin, dtype=dtype)
     data = result.data if hasattr(result, "data") else result
     meta = getattr(result, "metadata", {}) or {}
     if hasattr(data, "chunks"):
@@ -1885,12 +1899,13 @@ def _render_4dstem(masters: list[str], label: str, args: argparse.Namespace) -> 
     import numpy as np
     from quantem.widget import Show4DSTEM
     out_dir = _out_dir(args.out)
+    export_dtype = _show4dstem_export_dtype(args)
     if args.combined and len(masters) > 1:
         # Stack the masters into one 5D numpy array and pass THAT to the viewer. A
         # 5D array routes to the universal Show4DSTEM (which has the offline
         # multi-volume WebGPU frame-flip), not the MacBook live-Metal viewer (whose
         # offline export can't switch volumes kernel-lessly).
-        volumes = [_master_to_binned_numpy(m, args.det_bin) for m in masters]
+        volumes = [_master_to_binned_numpy(m, args.det_bin, args.dtype) for m in masters]
         stack = np.stack(volumes, axis=0)
         data_url = out_dir / "widget-data"
         widget = Show4DSTEM(
@@ -1899,7 +1914,7 @@ def _render_4dstem(masters: list[str], label: str, args: argparse.Namespace) -> 
             frame_labels=[pathlib.Path(m).stem.replace("_master", "") for m in masters],
         )
         out = out_dir / f"{label}_combined.html"
-        widget.export_html(str(out), title=args.title)
+        widget.export_html(str(out), title=args.title, dtype=export_dtype)
         return [out]
     outputs = []
     iterator = masters
@@ -1915,10 +1930,10 @@ def _render_4dstem(masters: list[str], label: str, args: argparse.Namespace) -> 
             # Mean-bin at load (memory-safe: the full 19 GB stack never materializes)
             # so uint8 never clips the bright field. Data is already binned, so the
             # export does no further binning.
-            arr = _master_to_binned_numpy(master, args.det_bin)
+            arr = _master_to_binned_numpy(master, args.det_bin, args.dtype)
             widget = Show4DSTEM(arr, backend="web")
             out = out_dir / f"{stem}.html"
-            widget.export_html(str(out), title=args.title or stem)
+            widget.export_html(str(out), title=args.title or stem, dtype=export_dtype)
             outputs.append(out)
         except (RuntimeError, ValueError, OSError, MemoryError) as err:
             print(f"quantem: skipped {stem}: {err}", file=sys.stderr)

@@ -124,7 +124,7 @@ browse-quality or count-preserving.
 | Show2D | yes | `single` | `full`, `uint8` | planned | no | `uint8` stores display-scaled image data |
 | Show3D | yes | `single`; large reviews use `export_sidecar(...)` folder output | `full`, `uint8` | planned | yes, via `export_sidecar(...)` | `uint8` stores display-scaled volume data; folder output keeps the viewer HTML small and loads the stack from a nearby data file. See the [advanced tutorial](../tutorials/advanced.md) for the full-resolution folder workflow. |
 | Show3DSlices | yes | `single` | `full`, `uint8` | planned | no | `uint8` stores display-scaled volume data |
-| Show4DSTEM | yes | `single`, `folder` when data already uses a companion folder | `uint8`, `full` | `1`, `2`, `4`, `8` | sometimes | `uint8` detector downsample uses mean for compact browse export; full/uint16 export should document whether downsample is count-preserving sum or display-stable mean |
+| Show4DSTEM | yes | `single`; interactive exports may write a local launcher/folder when a companion payload must be served | `uint8`, `full`/`uint16` | detector: `1`, `2`, `4`, `8`; scan: `1`, `2`, `4`, `8` | yes, for companion-data interactive exports and HDF5 bundles | `export_kind="report"` writes static PNG virtual-image pages with no raw 4D; `export_kind="interactive"` writes browser WebGPU raw-4D payload. `scan_bin` and `det_bin` are explicit mean-binning choices. |
 | ShowEDS | yes | `single`, `folder` | `full` | `2`, `4` | yes | count-preserving sum downsample across spatial and energy axes |
 
 The public Python calls are:
@@ -135,7 +135,7 @@ The public Python calls are:
 | Show2D | `export_html(path=None, title=None, mode="single", encoding="full", downsample=None)` |
 | Show3D | `export_html(path=None, title=None, mode="single", encoding="full", downsample=None)`; multi-GB folder reviews use `export_sidecar(out_dir)` |
 | Show3DSlices | `export_html(path=None, title=None, mode="single", encoding="full", downsample=None)` |
-| Show4DSTEM | `export_html(path=None, title=None, mode="single", encoding="uint8", downsample=1)` |
+| Show4DSTEM | `export_html(path=None, title=None, mode="single", encoding=None, downsample=None, dtype="uint8", det_bin=1, scan_bin=1, real_space_bin=None, export_kind="interactive", dataset_scope="unhidden")`; for compact screening use `export_kind="report"` |
 | ShowPtycho | `export_webgpu_folder(out_dir)` for browser-side SSB review from compressed HDF5 source files; transient BF-indexed reducers are built in WebGPU |
 | ShowEDS | `export_html(path=None, title=None, mode="single", encoding="full", downsample=None)` |
 | ShowFolder | `export_html(path=None, title=None)` |
@@ -150,6 +150,10 @@ Existing compatibility aliases remain supported:
 | `det_bin=2` | `downsample=2` |
 | `binning=4` | `downsample=4` |
 | `mode="sidecar"` | `mode="folder"` |
+
+For Show4DSTEM, prefer the newer explicit names instead of the generic
+compatibility aliases: `dtype="uint8"` or `"uint16"`, `det_bin=...`,
+`scan_bin=...`, and `export_kind="report"` or `"interactive"`.
 
 ## Single and folder exports
 
@@ -185,6 +189,62 @@ exports such as `full`/uint16 should preserve detector counts; if they
 downsample, sum is usually the scientifically expected reducer when the stored
 dtype can hold the result. If a widget chooses mean for a full export, the UI
 and docs must say so.
+
+## Show4DSTEM report versus interactive export
+
+Show4DSTEM intentionally exposes an additional `export_kind` option because
+4D-STEM data can be too large for a single raw interactive artifact.
+
+Use `export_kind="report"` for collaborator screening, multi-master folder
+reviews, and static scientific handoff. It writes a self-contained HTML report
+with virtual-image PNG pages and representative diffraction images. It does not
+embed raw 4D detector data, so the reader cannot drag a new detector ROI in the
+exported page.
+
+Use `export_kind="interactive"` when the reader must keep changing detector ROIs
+offline in the browser. It embeds or serves a binned raw-4D payload and runs the
+virtual-detector math in WebGPU. This can be much larger than a report.
+
+Choose `dtype="uint8"` for compact browse payloads and `dtype="uint16"` when
+the exported interactive raw-4D payload must preserve the wider detector-count
+range. `uint8` uses one byte per detector pixel and may clip values above 255;
+`uint16` uses two bytes per detector pixel and can produce much larger browser
+artifacts. The full no-bin interactive path is:
+
+```python
+viewer.export_html(
+    "show4dstem_full_interactive.html",
+    export_kind="interactive",
+    dtype="uint16",
+    scan_bin=1,
+    det_bin=1,
+)
+```
+
+Copyable examples:
+
+```python
+# Compact report: safe default for large folders.
+viewer.export_html(
+    "show4dstem_report.html",
+    export_kind="report",
+    dataset_scope="unhidden",
+    scan_bin=2,
+    det_bin=8,
+    dtype="uint8",
+)
+
+# Offline raw 4D browser: use only when the exported page needs live ROI changes.
+viewer.export_html(
+    "show4dstem_interactive.html",
+    export_kind="interactive",
+    dtype="uint8",
+    scan_bin=2,
+    det_bin=4,
+)
+```
+
+For more recipes, see [Show4DSTEM export recipes](../tutorials/show4dstem_export.md).
 
 ## Notebook sharing
 

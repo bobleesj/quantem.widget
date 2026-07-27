@@ -451,7 +451,20 @@ Show4DSTEM has two HTML export modes with different goals:
 | Export kind | Use when | Data included | Memory behavior |
 |---|---|---|---|
 | `export_kind="report"` | Sharing a curated folder/multiple-grid result or saving a compact screening report | Static PNG virtual-image pages plus a representative diffraction pattern | Page-aware; lazy folder data is rendered page by page and raw 4D tensors are not embedded |
-| `export_kind="interactive"` | The recipient must drive the actual 4D dataset offline in the browser | Raw 4D payload, optionally quantized/binned | Can be large; use binning deliberately before sending |
+| `export_kind="interactive"` | The recipient must drive the actual 4D dataset offline in the browser | Raw 4D payload, explicitly encoded as `uint8` or `uint16` and optionally binned | Can be large; use dtype and binning deliberately before sending |
+
+Quick decision rule:
+
+- Use `report` first for large folders, many masters, starred/hidden panel
+  curation, and collaborator screening.
+- Use `interactive` only when the exported browser page must still recompute new
+  detector ROIs from raw 4D data.
+- Use the CLI `quantem show4dstem ... --html --bin N --dtype uint8` for a fast
+  terminal-made interactive browser artifact.
+- Use the CLI `quantem show4dstem ... --html --bin 1 --dtype uint16` when a
+  no-notebook user needs native detector sampling and accepts a large artifact.
+- Keep the original notebook or Python script when the recipient needs to keep
+  doing analysis, not just view an export.
 
 Report exports are the safe default for large lazy folders:
 
@@ -479,6 +492,24 @@ widget.export_html(
 )
 ```
 
+Full native interactive export, without detector or scan binning:
+
+```python
+widget.export_html(
+    "show4dstem_full_interactive.html",
+    export_kind="interactive",
+    dtype="uint16",
+    scan_bin=1,
+    det_bin=1,
+)
+```
+
+Equivalent CLI for users who do not want a notebook:
+
+```bash
+quantem show4dstem /data/session --html --bin 1 --dtype uint16 --out ~/Downloads
+```
+
 Both `scan_bin` and `det_bin` use mean binning, not summing. This keeps display
 exports from saturating `uint8` and makes the file-size estimate in the GUI
 match the binned payload shape. The GUI export menu labels the same distinction
@@ -486,6 +517,41 @@ as **HTML report: static PNG, no raw 4D** and **HTML interactive raw 4D**.
 The interactive section offers a size-sorted ladder of `uint8`/`uint16`,
 real-space-bin, and detector-bin presets so users can choose between a quick
 preview, a practical offline browser file, and exact raw 4D HTML deliberately.
+
+Choose export dtype deliberately:
+
+| Dtype | Use for | Do not use for |
+|---|---|---|
+| `uint8` | Compact browser payloads, first-pass screening, tutorials, and audited low-count data. | Claims that need high detector counts unless values above 255 are known not to matter. |
+| `uint16` | Full/native interactive exports, detector-detail review, and count-range-preserving browser payloads. | Small public demos or reports where the recipient only needs rendered virtual-image pages. |
+
+`uint8` uses one byte per exported detector pixel and may clip/narrow detector
+values above 255. `uint16` uses two bytes per exported detector pixel and can
+produce much larger artifacts, but preserves the wider 0-65535 integer range.
+The dtype choice matters for `export_kind="interactive"` because that path sends
+raw 4D data to the browser. A report export remains a rendered PNG review
+artifact even if `dtype="uint16"` is passed.
+
+For LLM agents and scripted docs, prefer these explicit parameter names:
+
+```python
+widget.export_html(
+    path="show4dstem_report.html",
+    export_kind="report",
+    dataset_scope="unhidden",
+    dtype="uint8",
+    scan_bin=2,
+    det_bin=8,
+)
+```
+
+Do not describe a report export as "raw" or "exact"; it is a rendered review
+artifact. Do not describe a `uint8` interactive export as exact unless the
+detector count range was audited. Always mention the `scan_bin` and `det_bin`
+values in a figure caption, notebook markdown cell, or handoff note.
+
+See the copyable [Show4DSTEM export recipes](../tutorials/show4dstem_export.md)
+for terminal commands, report settings, and interactive raw-4D settings.
 
 ## WebGPU HDF5 Bundle
 
