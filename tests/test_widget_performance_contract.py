@@ -651,12 +651,18 @@ def test_show3d_filtered_playback_waits_for_cached_display_frames():
     )
     assert "warmPlaybackDisplayFrame(next + warmDirection, next, frame)" in show3d
     assert (
-        "}) || browserFilterOnRef.current || frequencyFilterIsActive || !!subpixelAlignEnabled"
+        "}) || browserFilterOnRef.current || frequencyFilterIsActive;"
         in show3d
     )
     assert (
         "if (frequencyFilterPendingRef.current.has(key)) "
         "return allowRawOnMiss ? frame : null;"
+    ) in show3d
+    assert "browserFilterReadyForIndex" in show3d
+    assert "low-pass(raw)" in show3d
+    assert (
+        "if (frequencyFilterIsActive && browserFilterKnobsOn "
+        "&& !browserFilterReadyForIndex(idx))"
     ) in show3d
     assert "Do not clamp this live DOM update to loop handles" in show3d
     assert "users see \"1/18\" while the canvas was already showing a later frame" in show3d

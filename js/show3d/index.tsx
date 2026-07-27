@@ -2552,10 +2552,8 @@ function Show3D() {
   // The GPU filter is async, so on a cache miss we return the raw frame now and
   // repaint once the filtered result lands (setBrowserFilterTick). Stats/ROI
   // keep reading raw frames (frame_bytes ships raw), so numbers stay honest.
-  const browserFilterFrame = React.useCallback((idx: number, frame: Float32Array | null, options: { allowRawOnMiss?: boolean } = {}): Float32Array | null => {
-    if (!frame || !browserFilterKnobsOn) return frame;
-    const allowRawOnMiss = options.allowRawOnMiss !== false;
-    const key = browserFilterCacheKey({
+  const browserFilterCacheKeyForIndex = React.useCallback((idx: number) => {
+    return browserFilterCacheKey({
       frameIndex: idx,
       frameSeq,
       mode: denoiseResolved.mode,
@@ -2565,6 +2563,17 @@ function Show3D() {
       diffMode: playRef.current.diffMode,
       panels: (Math.max(1, nPanels || 1) > 1 && !sharedPanelSource) ? Math.max(1, nPanels || 1) : 1,
     });
+  }, [denoiseResolved.mode, denoiseResolved.bin, denoiseSigmaLive, frameSeq, nPanels, sharedPanelSource]);
+
+  const browserFilterReadyForIndex = React.useCallback((idx: number) => {
+    if (!browserFilterKnobsOn) return true;
+    return browserFilterCacheRef.current.has(browserFilterCacheKeyForIndex(idx));
+  }, [browserFilterCacheKeyForIndex, browserFilterKnobsOn]);
+
+  const browserFilterFrame = React.useCallback((idx: number, frame: Float32Array | null, options: { allowRawOnMiss?: boolean } = {}): Float32Array | null => {
+    if (!frame || !browserFilterKnobsOn) return frame;
+    const allowRawOnMiss = options.allowRawOnMiss !== false;
+    const key = browserFilterCacheKeyForIndex(idx);
     const cache = browserFilterCacheRef.current;
     const hit = cache.get(key);
     if (hit) return hit;
@@ -2582,7 +2591,7 @@ function Show3D() {
       })
       .catch(() => { browserFilterPendingRef.current.delete(key); });
     return allowRawOnMiss ? frame : null;
-  }, [applyPackedPanelTransform, browserFilterKnobsOn, denoiseResolved.mode, denoiseResolved.bin, denoiseSigmaLive, frameSeq, height, nPanels, sharedPanelSource, width]);
+  }, [applyPackedPanelTransform, browserFilterCacheKeyForIndex, browserFilterKnobsOn, denoiseResolved.mode, denoiseResolved.bin, denoiseSigmaLive, height, width]);
   // The "Denoise" toggle is the master ON/OFF of the EFFECT: ON shows the
   // denoised view, OFF shows raw (nothing of the denoised view leaks through).
   // The config (mode/sigma/bin) is PRESERVED across the toggle; a clean widget
@@ -3001,6 +3010,10 @@ function Show3D() {
   const [panStart, setPanStart] = React.useState<{ x: number, y: number, pX: number, pY: number } | null>(null);
   const panStartPanelRef = React.useRef<number>(0);
   const [mainCanvasSize, setMainCanvasSize] = React.useState(CANVAS_TARGET_SIZE);
+  // Raw scientific pixels for the current frame. Display-only transforms such
+  // as denoise/frequency filtering must always start from this source; the
+  // painted/display frame below may already be filtered.
+  const sourceFrameDataRef = React.useRef<Float32Array | null>(null);
   const rawFrameDataRef = React.useRef<Float32Array | null>(null);
   const initialCanvasSizeRef = React.useRef<number>(canvasSizeTrait > 0 ? canvasSizeTrait : CANVAS_TARGET_SIZE);
   const panelColsForCount = React.useCallback((count: number) => {
@@ -4962,16 +4975,26 @@ function Show3D() {
   const frequencyFilterKeyForIndex = React.useCallback((idx: number) => {
     const mode = normalizeFrequencyFilterMode(frequencyFilter);
     const packedPanels = (Math.max(1, nPanels || 1) > 1 && !sharedPanelSource) ? Math.max(1, nPanels || 1) : 1;
+    // Frequency filtering runs after display denoise/diff/avg. Its cache key
+    // must include the upstream display transform; otherwise a σ/bin/mode
+    // change can correctly update the denoise cache but the final painted
+    // frequency-filtered frame stays frozen on the old upstream pixels.
+    const denoiseKey = browserFilterKnobsOn
+      ? `${denoiseResolved.mode}:${Number(denoiseSigmaLive ?? 0).toFixed(3)}:bin${denoiseResolved.bin}`
+      : "raw";
     return [
       Math.round(idx),
       frameSeq,
+      denoiseKey,
+      `avg${playRef.current.avgWindow}`,
+      `diff${playRef.current.diffMode}`,
       mode,
       Number(frequencyOptions.cutoff ?? 0).toFixed(4),
       Number(frequencyOptions.center ?? 0).toFixed(4),
       Number(frequencyOptions.width ?? 0).toFixed(4),
       `panels${packedPanels}`,
     ].join(":");
-  }, [frameSeq, frequencyFilter, frequencyOptions, nPanels, sharedPanelSource]);
+  }, [browserFilterKnobsOn, denoiseResolved.mode, denoiseResolved.bin, denoiseSigmaLive, frameSeq, frequencyFilter, frequencyOptions, nPanels, sharedPanelSource]);
 
   const frequencyFilterFrameForDisplay = React.useCallback((idx: number, frame: Float32Array | null, options: { allowRawOnMiss?: boolean } = {}): Float32Array | null => {
     if (!frame || !frequencyFilterIsActive) return frame;
@@ -5020,6 +5043,14 @@ function Show3D() {
 
   const displayAndFrequencyFrameForIndex = (idx: number, currentFrame: Float32Array | null, options: { allowRawOnMiss?: boolean } = {}): Float32Array | null => {
     const display = displayFrameForIndex(idx, currentFrame, options);
+    if (frequencyFilterIsActive && browserFilterKnobsOn && !browserFilterReadyForIndex(idx)) {
+      // Denoise/filter are layered display transforms. On a denoise cache miss,
+      // displayFrameForIndex returns the pre-denoise fallback so the canvas can
+      // stay responsive while WGSL finishes. Do not let the frequency filter
+      // cache that fallback under the new sigma/bin key; otherwise a scientist
+      // can drag sigma, see the label move, and keep looking at low-pass(raw).
+      return display;
+    }
     return frequencyFilterFrameForDisplay(idx, display, options);
   };
 
@@ -5621,6 +5652,7 @@ function Show3D() {
         dbg.lastFrameSource = frameSource;
       }
 
+      const sourceFrame = frame;
       if (frame && transformActive && !isRgb) {
         const filteredFrame = displayAndFrequencyFrameForIndex(next, frame, { allowRawOnMiss: false });
         if (!filteredFrame) {
@@ -5638,8 +5670,10 @@ function Show3D() {
       updatePlaybackLiveControls(next);
       if (frame && isRgb && offline && frame.length >= c.width * c.height * 3) {
         rgbFrameDataRef.current = frame;
+        sourceFrameDataRef.current = sourceFrame;
         rawFrameDataRef.current = rgbFrameToLuminance(frame, c.width * c.height);
       } else if (frame) {
+        sourceFrameDataRef.current = sourceFrame;
         rawFrameDataRef.current = frame;
       }
       const offlinePackedPanelPlaybackUsesStaticCanvas = (
@@ -6222,9 +6256,11 @@ function Show3D() {
     if (isRgb) {
       // Keep color plane for paint; expose Rec. 709 luminance for stats/FFT.
       rgbFrameDataRef.current = parsed;
+      sourceFrameDataRef.current = parsed;
       rawFrameDataRef.current = rgbFrameToLuminance(parsed, width * height);
     } else {
       rgbFrameDataRef.current = null;
+      sourceFrameDataRef.current = parsed;
       const displayFrame = displayAndFrequencyFrameForIndex(offline ? liveSliceIdx : sliceIdx, parsed) ?? parsed;
       rawFrameDataRef.current = displayFrame;
     }
@@ -6513,8 +6549,14 @@ function Show3D() {
     // Invalidate any rAF/mapAsync work from the previous render before every
     // early ownership return (notably the transition into playback).
     const renderSerial = ++gpuRenderSerialRef.current;
-    const frameData = rawFrameDataRef.current;
-    if (!frameData || frameData.length === 0) return;
+    const sourceFrameData = sourceFrameDataRef.current ?? rawFrameDataRef.current;
+    if (!sourceFrameData || sourceFrameData.length === 0) return;
+    const renderIdx = offline ? liveSliceIdx : displaySliceIdx;
+    const transformedFrame = !isRgb
+      ? displayAndFrequencyFrameForIndex(renderIdx, sourceFrameData, { allowRawOnMiss: true })
+      : sourceFrameData;
+    const frameData = transformedFrame ?? sourceFrameData;
+    rawFrameDataRef.current = frameData;
     if (!mainOffscreenRef.current || !mainImgDataRef.current) return;
     // True-color RGB: paint on the GPU (paintRgbFrame), applying the moving
     // average across color frames when avg > 1 so an avg change re-denoises the
@@ -7032,6 +7074,7 @@ function Show3D() {
         ? averagedRgbFrameForIndex(idx, inputFrame)
         : inputFrame;
       rgbFrameDataRef.current = toPaint;
+      sourceFrameDataRef.current = inputFrame;
       rawFrameDataRef.current = rgbFrameToLuminance(toPaint, width * height);
       return paintRgbFrame(toPaint);
     }
@@ -7047,6 +7090,7 @@ function Show3D() {
 
     gpuRenderSerialRef.current++;
     playbackIdxRef.current = idx;
+    sourceFrameDataRef.current = inputFrame;
     rawFrameDataRef.current = frame;
     setDisplaySliceIdx(idx);
 
