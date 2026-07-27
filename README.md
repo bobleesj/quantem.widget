@@ -106,13 +106,13 @@ quantem html tutorial.ipynb                  # a notebook          -> standalone
 | `quantem github <notebook.ipynb>` | a notebook copy for GitHub | strips widget state, embeds compressed pictures for GitHub's preview |
 
 **Images** save a standalone HTML and open in your browser. **4D-STEM** opens a live,
-kernel-backed notebook by default (full real-time interaction); `--html` instead writes
-an offline WebGPU browser export - drag detectors, switch BF/ABF/ADF, pan diffraction,
-all with no kernel. The detector is **mean-binned** (`--bin`, default 8) unless you pass
-`--bin 1`, so the packed stack can stay small enough for a laptop browser. Interactive
-raw 4D exports may include a `Show4DSTEM.command` launcher when the browser must fetch
-a companion data payload over HTTP. Several masters (a folder, or listed explicitly)
-stack into one 5D viewer with a dataset slider (the multi-tilt case).
+kernel-backed notebook by default (full detector sampling and real-time interaction);
+`--html` instead writes an offline WebGPU browser export - drag detectors, switch
+BF/ABF/ADF, pan diffraction, all with no kernel. Use `--bin N` only when you
+explicitly want a detector-binned preview. Interactive raw 4D exports may include a
+`Show4DSTEM.command` launcher when the browser must fetch a companion data payload
+over HTTP. Several masters (a folder, or listed explicitly) stack into one 5D viewer
+with a dataset slider (the multi-tilt case).
 
 For live microscope sessions, keep the Show4DSTEM viewer mounted and append new
 completed `*_master.h5` acquisitions into the same dataset slider. On Apple
@@ -136,18 +136,21 @@ one) and opens automatically on a desktop.
 
 | Option | Effect |
 |---|---|
-| `--bin N` | detector mean-bin factor for 4D-STEM (default 8 for `show*`; `data-transfer` defaults to 1) |
+| `--bin N` | detector mean-bin factor for 4D-STEM (default 1: full detector sampling) |
 | `--dtype uint8/uint16` | 4D-STEM HTML export dtype; `uint8` is compact browse, `uint16` keeps the wider detector-count range |
 | `--html` | 4D-STEM: write the offline-WebGPU HTML instead of a notebook |
+| `--backend auto/cuda/mps/cpu/webgpu` | Show4DSTEM backend; use `webgpu` with `--html` |
+| `--count N` | Show4DSTEM: require and load this many compatible masters from the input |
+| `--devices 0,1` | Show4DSTEM CUDA placement; alias of `--gpus` |
 | `--watch` | show2d/show3d/show4dstem folders: keep appending new files to a live notebook |
 | `--combined` | many masters -> one 5D HTML viewer (served locally) |
 | `--out PATH` | output file or directory (default `~/Downloads`) |
 | `--no-open` | write the file(s) without launching a browser or Jupyter |
 | `--title`, `-v/--verbose` | page title; verbose progress |
 
-Runs on CUDA, Apple Silicon (MPS), or CPU - the loader picks the backend. On a MacBook,
-`quantem show4dstem ./masters/ --html --bin 8` loads on Metal, bins, and writes a
-double-clickable HTML in seconds.
+Runs on CUDA, Apple Silicon (MPS), CPU, or browser WebGPU. On a MacBook,
+`quantem show4dstem ./masters/ --backend webgpu --html --count 1` writes a
+double-clickable lazy WebGPU browser folder without copying raw data.
 
 ## Show4DSTEM export quick reference
 
@@ -158,8 +161,8 @@ Most users want one of these paths:
 | Keep working interactively in Python | `quantem show4dstem ./masters/` or `Show4DSTEM(load(...))` | Live notebook, kernel-backed CUDA/MPS interaction |
 | Share a compact screening result | `widget.export_html(..., export_kind="report")` | One self-contained HTML report; PNG virtual-image pages; no raw 4D payload |
 | Share an offline browser widget | `widget.export_html(..., export_kind="interactive", dtype="uint8", scan_bin=2, det_bin=4)` | WebGPU HTML that can still drag detector ROIs, but embeds binned raw 4D data |
-| Open directly from the terminal | `quantem show4dstem ./masters/ --html --bin 8` | Browser WebGPU export built from one or more masters |
-| Open full native detector sampling from the terminal | `quantem show4dstem ./masters/ --html --bin 1 --dtype uint16` | Large no-notebook WebGPU export with native detector sampling |
+| Open directly from the terminal | `quantem show4dstem ./masters/ --backend webgpu --html --count 1` | Browser WebGPU export built from source H5 masters |
+| Open full native detector sampling from the terminal | `quantem show4dstem ./masters/ --backend webgpu --html --count 7 --bin 1 --dtype uint8` | No-notebook WebGPU export with native detector sampling |
 
 The default recommendation for large folders is a **report export** first:
 

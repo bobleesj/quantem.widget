@@ -2875,6 +2875,24 @@ function Show2D() {
   // Local slider value during drag; the model (and the Python refilter) only
   // updates on release so scrubbing sigma stays smooth on large galleries.
   const [sigmaDraft, setSigmaDraft] = React.useState<number | null>(null);
+  const [sigmaFilterDraft, setSigmaFilterDraft] = React.useState<number | null>(null);
+  const sigmaFilterDraftRafRef = React.useRef<number | null>(null);
+  const sigmaFilterDraftPendingRef = React.useRef<number | null>(null);
+  const setSigmaDraftDuringDrag = React.useCallback((value: number) => {
+    setSigmaDraft(value);
+    sigmaFilterDraftPendingRef.current = value;
+    if (sigmaFilterDraftRafRef.current !== null) return;
+    sigmaFilterDraftRafRef.current = window.requestAnimationFrame(() => {
+      sigmaFilterDraftRafRef.current = null;
+      setSigmaFilterDraft(sigmaFilterDraftPendingRef.current);
+    });
+  }, []);
+  React.useEffect(() => () => {
+    if (sigmaFilterDraftRafRef.current !== null) {
+      window.cancelAnimationFrame(sigmaFilterDraftRafRef.current);
+      sigmaFilterDraftRafRef.current = null;
+    }
+  }, []);
   // Canonical method for the UI menu; compound aliases (bin2_anscombe, ...)
   // from older saved states resolve to their base method for display.
   const denoiseBaseMode = resolveDenoiseMode(displayFilter || "none", spatialBin || 1).mode;
@@ -3152,6 +3170,7 @@ function Show2D() {
     if (Number(displaySigma ?? 4) !== nextSigma) setDisplaySigma(nextSigma);
     if (Number(spatialBin || 1) !== nextBin) setSpatialBin(nextBin);
     setSigmaDraft(null);
+    setSigmaFilterDraft(null);
   }, [isGallery, denoiseScopeAll, nImages, selectedIdx, displayFilters,
       displaySigmas, spatialBins, displayFilter, displaySigma, spatialBin,
       setDisplayFilter, setDisplaySigma, setSpatialBin]);
@@ -5229,7 +5248,7 @@ function Show2D() {
   // drag, so scrubbing sigma is live with zero kernel round trips; the model
   // commit still happens on release. tv panels arrive Python-filtered and are
   // passed through untouched (browserFilterSupported is false).
-  const sigmaDraftForFilter = browserFilterActive ? sigmaDraft : null;
+  const sigmaDraftForFilter = browserFilterActive ? sigmaFilterDraft : null;
   const sigmaDraftPanel = sigmaDraftForFilter === null ? -1 : selectedIdx;
   const panelFilterKnobs = React.useCallback((panel: number) => {
     const { mode, sigma: resolvedSigma, bin } = resolvePanelDenoiseKnobs(
@@ -11956,8 +11975,8 @@ function Show2D() {
                         <Slider
                           value={sigmaDraft ?? Number(displaySigma ?? 4)}
                           min={0} max={20} step={0.5}
-                          onChange={(_, v) => { if (denoiseBaseMode === "none") { setDisplayFilter("gaussian"); mirrorFilterKnobEdit("mode", "gaussian"); } setSigmaDraft(v as number); }}
-                          onChangeCommitted={(_, v) => { setDisplaySigma(v as number); mirrorFilterKnobEdit("sigma", v as number); setSigmaDraft(null); if (denoiseBaseMode === "none") { setDisplayFilter("gaussian"); mirrorFilterKnobEdit("mode", "gaussian"); } setDenoiseEnabled(true); }}
+                          onChange={(_, v) => { if (denoiseBaseMode === "none") { setDisplayFilter("gaussian"); mirrorFilterKnobEdit("mode", "gaussian"); } setSigmaDraftDuringDrag(v as number); }}
+                          onChangeCommitted={(_, v) => { setDisplaySigma(v as number); mirrorFilterKnobEdit("sigma", v as number); setSigmaDraft(null); setSigmaFilterDraft(null); sigmaFilterDraftPendingRef.current = null; if (denoiseBaseMode === "none") { setDisplayFilter("gaussian"); mirrorFilterKnobEdit("mode", "gaussian"); } setDenoiseEnabled(true); }}
                           size="small" sx={{ ...sliderStyles.small, width: 60 }}
                         />
                       </Box>

@@ -11,9 +11,9 @@ recipe, and keep the reduction choices explicit.
 | Continue analysis | `Show4DSTEM(load(...))` or `quantem show4dstem ...` | Live notebook | no | yes, in the Python session |
 | Share a compact screening result | `export_html(export_kind="report")` | One HTML report | yes | no |
 | Share an offline detector-ROI browser | `export_html(export_kind="interactive")` | WebGPU HTML/folder | yes | yes, binned/encoded |
-| Export quickly from a terminal | `quantem show4dstem ... --html --bin N` | WebGPU HTML | yes | yes, after detector binning |
-| Export full native detector sampling from a terminal | `quantem show4dstem ... --html --bin 1 --dtype uint16` | Large WebGPU HTML | yes | yes, native detector sampling |
-| Preserve compressed HDF5 beside the viewer | WebGPU HDF5 bundle | `Show4DSTEM.command` + `.viewer/` | yes, via local server | yes, in source HDF5 files |
+| Export quickly from a terminal | `quantem show4dstem ... --backend webgpu --html --count N` | WebGPU lazy folder | yes | yes, in source HDF5 files |
+| Export full native detector sampling from a terminal | `quantem show4dstem ... --backend webgpu --html --bin 1 --dtype uint8` | WebGPU lazy folder | yes | yes, native detector sampling |
+| Preserve compressed HDF5 beside the viewer | WebGPU lazy folder | `index.html` + `Show4DSTEM.command` + `.viewer/` + `tilt_NN_lazy/` | yes, via local server | yes, in source HDF5 files |
 
 Default recommendation: use `export_kind="report"` for large folders, many
 datasets, or collaborator screening. Use `export_kind="interactive"` only when
@@ -92,24 +92,25 @@ The command-line path is the fastest way to hand a master or folder to a
 non-notebook user:
 
 ```bash
-quantem show4dstem /data/session --html --bin 8 --out ~/Downloads
+quantem show4dstem /data/session --backend webgpu --html --count 1 --out ~/Downloads
 ```
 
 Useful variants:
 
 ```bash
-# One master, detector mean-bin by 8 for a laptop-sized browser file.
-quantem show4dstem scan_001_master.h5 --html --bin 8
+# One master, full detector sampling, browser WebGPU lazy folder.
+quantem show4dstem scan_001_master.h5 --backend webgpu --html --bin 1
 
-# Several masters as one 5D viewer with a Dataset slider.
-quantem show4dstem scan_001_master.h5 scan_002_master.h5 --html --combined --bin 8
+# Seven compatible masters as one 5D viewer with a Dataset slider.
+quantem show4dstem /data/session --backend webgpu --html --count 7 --bin 1
 
 # Write without opening a browser.
-quantem show4dstem /data/session --html --bin 8 --no-open
+quantem show4dstem /data/session --backend webgpu --html --count 7 --no-open
 ```
 
-CLI `--bin` is detector mean binning for the export. It is intentionally
-visible in the command so a report can say exactly how the data was reduced.
+CLI `--bin` is detector mean binning for the export. The default is `--bin 1`,
+meaning full detector sampling. Use a larger value only when making an explicit
+preview, and state that reduction in the report.
 
 ## Full Native Export Without A Notebook
 
@@ -117,23 +118,23 @@ Some users do not want Jupyter at all, and sometimes they want native detector
 sampling. Use the CLI with `--html --bin 1`:
 
 ```bash
-# Native detector sampling, uint16 export payload.
-quantem show4dstem scan_001_master.h5 --html --bin 1 --dtype uint16 --out ~/Downloads
+# Native detector sampling, browser WebGPU lazy folder.
+quantem show4dstem scan_001_master.h5 --backend webgpu --html --bin 1 --dtype uint8 --out ~/Downloads
 
 # Native detector sampling for every master in a folder.
-quantem show4dstem /data/session --html --bin 1 --dtype uint16 --out ~/Downloads
+quantem show4dstem /data/session --backend webgpu --html --count 7 --bin 1 --dtype uint8 --out ~/Downloads
 
 # Several native-sampling masters in one Dataset-slider viewer.
 quantem show4dstem scan_001_master.h5 scan_002_master.h5 \
-  --html --combined --bin 1 --dtype uint16 --out ~/Downloads
+  --backend webgpu --html --bin 1 --dtype uint8 --out ~/Downloads
 ```
 
-This is the no-notebook path for a full interactive browser artifact. It can be
-very large because it keeps native detector sampling and uses the wider
-`uint16` payload. Use it when native detector detail matters and the recipient
-has enough RAM/GPU/browser capacity. Use `--bin 8 --dtype uint8` for quick
-laptop browsing, and use `export_kind="report"` when the recipient only needs a
-curated review page.
+This is the no-notebook path for a full interactive browser artifact. It keeps
+native detector sampling, builds lazy startup sidecars, and reads source HDF5
+frames through a local range server only when the browser needs them. Use it
+when native detector detail matters. Use an explicit detector bin only for a
+preview, and use `export_kind="report"` when the recipient only needs a curated
+review page.
 
 Equivalent Python:
 
@@ -173,16 +174,16 @@ The dtype choice is separate from the binning choice:
 | `dtype="uint8"` / `--dtype uint8` | First-pass browsing, laptop-sized HTML, tutorials, quick collaborator review where detector-count saturation is acceptable or audited. | 1 byte per detector pixel after any binning; values above 255 clip/narrow, so do not call it exact unless the count range fits. |
 | `dtype="uint16"` / `--dtype uint16` | Native-count review, full/no-bin export, detector detail, or any claim where high-count detector values matter. | 2 bytes per detector pixel after any binning; larger files and more browser/GPU memory, but keeps the 0-65535 integer range. |
 
-Use `uint8` for the common browse path:
+Use `uint8` for the common full-detector WebGPU browse path:
 
 ```bash
-quantem show4dstem /data/session --html --bin 8 --dtype uint8
+quantem show4dstem /data/session --backend webgpu --html --count 7 --bin 1 --dtype uint8
 ```
 
-Use `uint16` for the full no-notebook path:
+Use `uint16` when the browser artifact must preserve the wider integer range:
 
 ```bash
-quantem show4dstem /data/session --html --bin 1 --dtype uint16
+quantem show4dstem /data/session --backend webgpu --html --count 7 --bin 1 --dtype uint16
 ```
 
 Use `uint16` from Python when the exported browser must preserve the wider

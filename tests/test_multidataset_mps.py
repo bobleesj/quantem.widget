@@ -970,6 +970,7 @@ def test_show4dstem_from_folder_mps_honors_public_folder_options(
         *,
         det_bin=4,
         scan_size=None,
+        output_dtype=None,
         verbose=True,
         skip_mps_memory_check=None,
         validate_master=None,
@@ -978,6 +979,7 @@ def test_show4dstem_from_folder_mps_honors_public_folder_options(
             "paths": list(paths),
             "det_bin": det_bin,
             "scan_size": scan_size,
+            "output_dtype": output_dtype,
             "verbose": verbose,
             "skip_mps_memory_check": skip_mps_memory_check,
             "validate_master": validate_master,
@@ -1007,7 +1009,7 @@ def test_show4dstem_from_folder_mps_honors_public_folder_options(
         },
     )
 
-    with pytest.warns(RuntimeWarning, match="dtype='u8'.*paging/preload"):
+    with pytest.warns(RuntimeWarning, match="dtype='u8'.*browse clipping"):
         viewer = factory.from_folder(
             tmp_path,
             backend="mps",
@@ -1042,6 +1044,7 @@ def test_show4dstem_from_folder_mps_honors_public_folder_options(
         "paths": [masters[0], masters[2]],
         "det_bin": 8,
         "scan_size": 256,
+        "output_dtype": "u8",
         "verbose": False,
         "skip_mps_memory_check": True,
         "validate_master": calls["loader"]["validate_master"],

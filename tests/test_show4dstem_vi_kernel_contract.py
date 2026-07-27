@@ -159,7 +159,11 @@ def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
     assert "uploadMs:" in frontend
     assert "gpuWaitMs:" in frontend
     assert "decodeCompressedMB:" in frontend
-    assert "if (!hasEmbeddedBadPx)" in frontend
+    assert "const h5MasterInfoCache = new Map" in frontend
+    assert "readH5MasterInfoCached" in frontend
+    assert "const masterInfo = await readH5MasterInfoCached(sourceUrl, \"master\");" in frontend
+    assert "masterInfo.dataFileCount" in frontend
+    assert "const initialFetchLimit = Number.isFinite(maxDataFiles)" in frontend
     assert 'compute = await loadH5Compute(h5Url, "dataset 1/1");' in frontend
     assert "loadShow4DSTEMLocalH5Master" in frontend
     assert "setShow4DSTEMLocalFiles" in frontend
@@ -223,6 +227,33 @@ def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
     assert "__BSLZ4_LOW8_ONLY = true" in frontend
     assert "const low8Only = h5Uint8Lossless ||" in frontend
 
+    show4dstem_py = (repo / "src" / "quantem" / "widget" / "show4dstem.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def _show4dstem_h5_webgpu_tuning" in show4dstem_py
+    assert 'globalThis.__QT_H5_DECODE_DTYPE ??= "{decode_dtype}";' in show4dstem_py
+    assert "globalThis.__BSLZ4_PIPELINE_STAGING ??= false;" in show4dstem_py
+    assert "_inject_show4dstem_h5_webgpu_tuning(" in show4dstem_py
+
+
+def test_show4dstem_webgpu_h5_prefetch_is_bounded_by_master_data_file_count() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    frontend = (repo / "js" / "show4dstem" / "index.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    start = frontend.index("const prefetchVolume = async")
+    stop = frontend.index("let next = 0;", start)
+    prefetch = frontend[start:stop]
+
+    assert "let fileLimit = maxPrefetchFiles;" in prefetch
+    assert "const masterInfo = await readH5MasterInfoCached(h5Urls[index]" in prefetch
+    assert "masterInfo?.dataFileCount" in prefetch
+    assert "fileLimit = Math.min(fileLimit" in prefetch
+    assert "nextFile <= Math.min(prefetchWindow, fileLimit)" in prefetch
+    assert "n <= fileLimit" in prefetch
+    assert "nextFile <= fileLimit" in prefetch
+
 
 def test_show4dstem_webgpu_h5_initial_load_uses_visible_loading_panels() -> None:
     repo = Path(__file__).resolve().parents[1]
@@ -234,7 +265,7 @@ def test_show4dstem_webgpu_h5_initial_load_uses_visible_loading_panels() -> None
     assert "offlineBackendStatus" in frontend
     assert "offlineBackendError" in frontend
     assert "setOfflineBackendLoading(true);" in frontend
-    assert 'setOfflineBackendStatus(h5SourceAvailable ? "Preparing browser WebGPU HDF5 load" : "Preparing offline 4D-STEM load");' in frontend
+    assert 'setOfflineBackendStatus(h5SourceAvailable ? "Loading WebGPU source" : "Loading offline 4D-STEM data");' in frontend
     assert 'data-testid="show4dstem-offline-status"' in frontend
     assert 'Show4DSTEM load failed: ${offlineStatusText}' in frontend
     assert 'data-show4dstem-panel-loading="true"' in frontend
@@ -275,9 +306,30 @@ def test_show4dstem_h5_multiple_starts_with_loading_compare_state() -> None:
         assert widget.compare_panel_count == 0
         assert widget.compare_panel_indices == []
         assert widget.compare_virtual_image_bytes == b""
-        assert widget.compare_status == "Loading 3/3 browser WebGPU H5 panels"
+        assert widget.compare_status == "Loading 3/3 browser WebGPU panels"
     finally:
         widget.close()
+
+
+def test_show4dstem_frontend_virtual_image_bytes_use_react_setter() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    frontend = (repo / "js" / "show4dstem" / "index.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        'const [virtualImageBytes, setVirtualImageBytes] = '
+        'useModelState<DataView>("virtual_image_bytes");'
+    ) in frontend
+    assert (
+        "const [frontendVirtualImageBytes, setFrontendVirtualImageBytes] = "
+        "React.useState<DataView | null>(null);"
+    ) in frontend
+    assert "const publishVirtualImageBytes = React.useCallback" in frontend
+    assert "setFrontendVirtualImageBytes(bytes);" in frontend
+    assert "setVirtualImageBytes(bytes);" in frontend
+    assert 'model.set("virtual_image_bytes"' not in frontend
+    assert "publishVirtualImageBytes(new DataView(vi.buffer));" in frontend
 
 
 def test_show4dstem_multiple_detector_drag_uses_live_gpu_compare_slots() -> None:
@@ -289,6 +341,15 @@ def test_show4dstem_multiple_detector_drag_uses_live_gpu_compare_slots() -> None
     assert "requestCompareViLiveRef" in frontend
     assert "requestCompareViLive();" in frontend
     assert "requestCompareViLiveRef.current = () => {" in frontend
+    live_drag = frontend.split("requestCompareViLiveRef.current = () => {", 1)[1].split(
+        "requestViFinalizeRef.current",
+        1,
+    )[0]
+    assert "await recomputeVI();" in live_drag
+    assert "await recomputeCompareVI();" in live_drag
+    assert live_drag.index("await recomputeVI();") < live_drag.index(
+        "await recomputeCompareVI();"
+    )
     assert 'type DpcGpuSource = "DPC_row" | "DPC_col" | "iDPC";' in frontend
     assert "gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine)" in frontend
     assert 'scaleMode === "log"' in frontend

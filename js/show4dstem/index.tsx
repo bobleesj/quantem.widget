@@ -2617,7 +2617,8 @@ function Show4DSTEM() {
   const [memoryWarning] = useModelState<string>("memory_warning");
 
   const [frameBytes] = useModelState<DataView>("frame_bytes");
-  const [virtualImageBytes] = useModelState<DataView>("virtual_image_bytes");
+  const [virtualImageBytes, setVirtualImageBytes] = useModelState<DataView>("virtual_image_bytes");
+  const [frontendVirtualImageBytes, setFrontendVirtualImageBytes] = React.useState<DataView | null>(null);
   const [viSource, setViSourceModel] = useModelState<string>("vi_source");
   const [viProductLabels] = useModelState<string[]>("vi_product_labels");
   const [viProductMapFrames] = useModelState<number>("vi_product_map_frames");
@@ -3299,7 +3300,12 @@ function Show4DSTEM() {
   const [offlineBackendLoading, setOfflineBackendLoading] = React.useState(false);
   const [offlineBackendStatus, setOfflineBackendStatus] = React.useState("");
   const [offlineBackendError, setOfflineBackendError] = React.useState("");
-  const h5SourceAvailable = Boolean(model.get("_h5_url") || model.get("_h5_urls"));
+  const h5SourceAvailable = Boolean(
+    model.get("_h5_url")
+    || model.get("_h5_urls")
+    || model.get("_lazy_url")
+    || model.get("_lazy_urls")
+  );
   const [h5LocalFilesGranted, setH5LocalFilesGranted] = React.useState(show4DSTEMHasLocalFiles());
   const [h5LocalSourceStatus, setH5LocalSourceStatus] = React.useState("");
   const h5LocalInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -3345,7 +3351,7 @@ function Show4DSTEM() {
     let detach: (() => void) | null = null;
     setOfflineBackendLoading(true);
     setOfflineBackendError("");
-    setOfflineBackendStatus(h5SourceAvailable ? "Preparing browser WebGPU HDF5 load" : "Preparing offline 4D-STEM load");
+    setOfflineBackendStatus(h5SourceAvailable ? "Loading WebGPU source" : "Loading offline 4D-STEM data");
     (async () => {
       const scanRows = model.get("shape_rows"), scanCols = model.get("shape_cols");
       const detR = model.get("det_rows"), detC = model.get("det_cols");
@@ -3376,15 +3382,25 @@ function Show4DSTEM() {
       let initialVolumeLoad: Promise<Show4DSTEMCompute | Show4DSTEMCpuCompute | null> | null = null;
       let h5VolumePreload: Promise<void> | null = null;
       let h5VolumePreloadDone = false;
-      // H5 source: read the merged float32 .h5 file straight off disk via WebGPU
-      // (jsfive parse + GPU bitshuffle+LZ4 decode). Nothing embedded - the data stays a
-      // file; the HTML just points at it. This is the "click HTML, GPU decompresses the
-      // merged H5, real Show4DSTEM renders it" path.
+      // Legacy HDF5 source: read the merged data files through WebGPU
+      // (jsfive parse + GPU bitshuffle+LZ4 decode). The normal CLI export path
+      // uses lazy sidecars below; this compatibility path remains for focused
+      // debug tests and older exports.
       // Lazy mode: a sidecar bundle (radial profile + CoM + frame index) at _lazy_url lets the
       // virtual image derive from a ~100 MB profile in VRAM and the CBED lazy-fetch one frame from
       // disk - NOTHING bulk-loads. LazyShow4DSTEM has the same interface as Show4DSTEMCompute, so
       // the render below (recomputeVI / recomputeFrame / recomputeCoM) works unchanged.
       const lazyUrl = model.get("_lazy_url") as string | undefined;
+      const lazyUrlsJson = model.get("_lazy_urls") as string | undefined;
+      const lazyUrls = (() => {
+        if (!lazyUrlsJson) return [] as string[];
+        try {
+          const parsed = JSON.parse(lazyUrlsJson);
+          return Array.isArray(parsed) ? parsed.map((value) => String(value)).filter(Boolean) : [];
+        } catch {
+          return [] as string[];
+        }
+      })();
       const h5Url = model.get("_h5_url") as string | undefined;
       const h5UrlsJson = model.get("_h5_urls") as string | undefined;
       const h5Urls = (() => {
@@ -3420,6 +3436,14 @@ function Show4DSTEM() {
         if (existing) return existing;
         const promise = fetch(url).then((resp) => resp.ok ? resp.arrayBuffer() : null);
         h5RawFileCache.set(url, promise);
+        return promise;
+      };
+      const h5MasterInfoCache = new Map<string, Promise<ReturnType<typeof readH5MasterInfo> | null>>();
+      const readH5MasterInfoCached = (sourceUrl: string, name = "master"): Promise<ReturnType<typeof readH5MasterInfo> | null> => {
+        const existing = h5MasterInfoCache.get(sourceUrl);
+        if (existing) return existing;
+        const promise = h5FetchCached(sourceUrl).then((buffer) => buffer ? readH5MasterInfo(buffer, name) : null);
+        h5MasterInfoCache.set(sourceUrl, promise);
         return promise;
       };
       const loadH5Compute = async (sourceUrl: string, label = "HDF5 source"): Promise<Show4DSTEMCompute | null> => {
@@ -3509,7 +3533,6 @@ function Show4DSTEM() {
           };
           const inflight = new Map<number, Promise<ArrayBuffer | null>>();
           let next = 1;
-          for (; next <= fetchWindow; next++) inflight.set(next, fetchOne(next));
           const gpuChunks: { buffer: GPUBuffer; startScan: number; nScan: number }[] = [];
           let startScan = 0, ds = 0, computeMode = 1, decodedBytes = 0;
           let maxDataFiles = Number.POSITIVE_INFINITY;
@@ -3590,19 +3613,25 @@ function Show4DSTEM() {
           };
           try {
             const decodePromise = decodeWorker();
-            if (!hasEmbeddedBadPx) {
-              try {
-                const __mt = performance.now();
-                const masterResp = await fetch(sourceUrl);
-                __masterMs += performance.now() - __mt;
-                if (masterResp.ok) {
-                  const masterInfo = readH5MasterInfo(await masterResp.arrayBuffer());
-                  if (masterInfo.badPixels.length) h5BadPx = new Uint32Array(masterInfo.badPixels);
-                  h5TotalFrames = Math.max(0, Math.round(Number(masterInfo.totalFrames || 0)));
+            try {
+              const __mt = performance.now();
+              const masterInfo = await readH5MasterInfoCached(sourceUrl, "master");
+              __masterMs += performance.now() - __mt;
+              if (masterInfo) {
+                if (!hasEmbeddedBadPx && masterInfo.badPixels.length) h5BadPx = new Uint32Array(masterInfo.badPixels);
+                h5TotalFrames = Math.max(0, Math.round(Number(masterInfo.totalFrames || h5TotalFrames || 0)));
+                if (Number.isFinite(masterInfo.dataFileCount) && Number(masterInfo.dataFileCount) > 0) {
+                  maxDataFiles = Math.round(Number(masterInfo.dataFileCount));
                 }
-              } catch (e) {
-                console.warn("Could not read HDF5 hot-pixel mask; continuing without detector mask", e);
               }
+            } catch (e) {
+              console.warn("Could not read HDF5 master metadata; continuing without detector mask/file-count bounds", e);
+            }
+            const initialFetchLimit = Number.isFinite(maxDataFiles)
+              ? Math.min(fetchWindow, maxDataFiles)
+              : fetchWindow;
+            for (; next <= initialFetchLimit; next++) {
+              inflight.set(next, fetchOne(next));
             }
             for (let n = 1; !disposed; n++) {
               const p = inflight.get(n);
@@ -3716,10 +3745,34 @@ function Show4DSTEM() {
         if (!disposed) setOfflineBackendStatus(`${label} ready`);
         return created;
       };
-      if (lazyUrl) {
-        const lz = await LazyShow4DSTEM.create(lazyUrl);
+      if (lazyUrl || lazyUrls.length) {
+        const urls = lazyUrls.length ? lazyUrls : [lazyUrl!];
+        volumeCount = urls.length;
+        getVol = async (idx: number) => {
+          const clamped = Math.max(0, Math.min(urls.length - 1, idx));
+          if (volCache.has(clamped)) return volCache.get(clamped)!;
+          const existingLoad = volLoadPromises.get(clamped);
+          if (existingLoad) return await existingLoad;
+          const loadPromise = (async () => {
+            const cc = await LazyShow4DSTEM.create(urls[clamped]) as unknown as Show4DSTEMCompute | null;
+            if (cc) {
+              volCache.set(clamped, cc);
+              latestResidentVolumeIndex = clamped;
+              const activeFrame = Math.max(0, Math.min(urls.length - 1, model.get("frame_idx") | 0));
+              while (volCache.size > MAX_RESIDENT) {
+                const old = [...volCache.keys()].find((k) => k !== clamped && k !== activeFrame);
+                if (old === undefined) break;
+                volCache.get(old)!.dispose(); volCache.delete(old);
+              }
+            }
+            return cc;
+          })().finally(() => { volLoadPromises.delete(clamped); });
+          volLoadPromises.set(clamped, loadPromise);
+          return await loadPromise;
+        };
+        const initialIdx = Math.max(0, Math.min(urls.length - 1, model.get("frame_idx") | 0));
+        const lz = await getVol(initialIdx);
         compute = lz as unknown as Show4DSTEMCompute;
-        if (compute) computes.push(compute);
       } else if (h5Urls.length) {
         volumeCount = h5Urls.length;
         getVol = async (idx: number) => {
@@ -3799,19 +3852,28 @@ function Show4DSTEM() {
             prefetchStarted.add(index);
             const t = performance.now();
             let files = 0;
+            let fileLimit = maxPrefetchFiles;
+            try {
+              const masterInfo = await readH5MasterInfoCached(h5Urls[index], `prefetch-${index}`);
+              if (Number.isFinite(masterInfo?.dataFileCount) && Number(masterInfo?.dataFileCount) > 0) {
+                fileLimit = Math.min(fileLimit, Math.round(Number(masterInfo?.dataFileCount)));
+              }
+            } catch (error) {
+              console.warn("Show4DSTEM HDF5 prefetch could not read master metadata", error);
+            }
             const inflight = new Map<number, Promise<ArrayBuffer | null>>();
             let nextFile = 1;
-            for (; nextFile <= prefetchWindow; nextFile++) {
+            for (; nextFile <= Math.min(prefetchWindow, fileLimit); nextFile++) {
               inflight.set(nextFile, h5FetchCached(h5DataFileUrl(h5Urls[index], nextFile)));
             }
-            for (let n = 1; n <= maxPrefetchFiles && !disposed; n++) {
+            for (let n = 1; n <= fileLimit && !disposed; n++) {
               const p = inflight.get(n);
               if (!p) break;
               inflight.delete(n);
               const buf = await p.catch(() => null);
               if (!buf) break;
               files += 1;
-              if (nextFile <= maxPrefetchFiles) {
+              if (nextFile <= fileLimit) {
                 inflight.set(nextFile, h5FetchCached(h5DataFileUrl(h5Urls[index], nextFile)));
                 nextFile += 1;
               }
@@ -4175,7 +4237,7 @@ function Show4DSTEM() {
           return false;
         }
         clearViGpuDisplay();
-        model.set("virtual_image_bytes", dataViewForFloat32(cached.data));
+        publishVirtualImageBytes(dataViewForFloat32(cached.data));
         recordViProfile(source, `${cached.kind}_hit`, startedAt, generation);
         publishWarmCacheSummary({ lastHit: cached.label });
         return true;
@@ -4397,7 +4459,7 @@ function Show4DSTEM() {
         if (product) {
           if (generation !== viRecomputeGen) return;
           clearViGpuDisplay();
-          model.set("virtual_image_bytes", product);
+          publishVirtualImageBytes(product);
           recordViProfile(source, "product", startedAt, generation);
           return;
         }
@@ -4406,7 +4468,7 @@ function Show4DSTEM() {
           if (preset) {
             if (generation !== viRecomputeGen) return;
             clearViGpuDisplay();
-            model.set("virtual_image_bytes", preset);
+            publishVirtualImageBytes(preset);
             recordViProfile(source, "preset_product", startedAt, generation);
             return;
           }
@@ -4433,7 +4495,7 @@ function Show4DSTEM() {
                 kind: "dpc_gpu_display_warm_cache",
                 computedMs: Math.round((performance.now() - startedAt) * 10) / 10,
               });
-              model.set("virtual_image_bytes", new DataView(dpc.buffer));
+              publishVirtualImageBytes(new DataView(dpc.buffer));
             })();
             return;
           }
@@ -4448,7 +4510,7 @@ function Show4DSTEM() {
               kind: displayed ? "dpc_gpu_display_warm_cache" : "dpc_warm_cache",
               computedMs: Math.round((performance.now() - startedAt) * 10) / 10,
             });
-            model.set("virtual_image_bytes", new DataView(dpc.buffer));
+            publishVirtualImageBytes(new DataView(dpc.buffer));
             recordViProfile(source, displayed ? "dpc_gpu_display" : "dpc", startedAt, generation);
             return;
           }
@@ -4472,7 +4534,7 @@ function Show4DSTEM() {
               kind: h5Product.displayed ? "h5_product_first_gpu_display_warm_cache" : "h5_product_first_warm_cache",
               computedMs: Math.round((performance.now() - startedAt) * 10) / 10,
             });
-            model.set("virtual_image_bytes", new DataView(h5Product.data.buffer));
+            publishVirtualImageBytes(new DataView(h5Product.data.buffer));
             recordViProfile(source, h5Product.displayed ? "h5_product_first_gpu_display" : "h5_product_first", startedAt, generation);
             return;
           }
@@ -4497,7 +4559,7 @@ function Show4DSTEM() {
           kind: displayed ? "masked_sum_gpu_display_warm_cache" : "masked_sum_warm_cache",
           computedMs: Math.round((performance.now() - startedAt) * 10) / 10,
         });
-        model.set("virtual_image_bytes", new DataView(vi.buffer));
+        publishVirtualImageBytes(new DataView(vi.buffer));
         recordViProfile(source, displayed ? "masked_sum_gpu_display" : "masked_sum", startedAt, generation);
       };
       const warmStandardViCache = async () => {
@@ -5334,7 +5396,7 @@ function Show4DSTEM() {
           const t0 = performance.now();
           const result = await computeH5ProductFirstRoi(mask, generation);
           if (!result) return { available: false, elapsedMs: performance.now() - t0 };
-          model.set("virtual_image_bytes", new DataView(result.data.buffer));
+          publishVirtualImageBytes(new DataView(result.data.buffer));
           return {
             available: true,
             displayed: result.displayed,
@@ -5416,7 +5478,10 @@ function Show4DSTEM() {
         flushRoiCenter();
         flushRoiRadius();
         compareViLiveInFlightRef.current = true;
-        void recomputeCompareVI().finally(() => {
+        void (async () => {
+          await recomputeVI();
+          await recomputeCompareVI();
+        })().finally(() => {
           compareViLiveInFlightRef.current = false;
           if (compareViLivePendingRef.current && dpRoiInteractiveRef.current) {
             compareViLivePendingRef.current = false;
@@ -5849,6 +5914,13 @@ function Show4DSTEM() {
       }, 0);
     });
   }, [model]);
+  const publishVirtualImageBytes = React.useCallback((bytes: DataView) => {
+    setFrontendVirtualImageBytes(bytes);
+    setVirtualImageBytes(bytes);
+  }, [setVirtualImageBytes]);
+  React.useEffect(() => {
+    if (virtualImageBytes) setFrontendVirtualImageBytes(virtualImageBytes);
+  }, [virtualImageBytes]);
   const requestViPreset = React.useCallback((preset: "bf" | "abf" | "adf") => {
     model.set("_preset_request", preset);
     saveChangesIfLiveComm();
@@ -5860,10 +5932,12 @@ function Show4DSTEM() {
     saveChangesIfLiveComm();
   }, [model, saveChangesIfLiveComm, setViSourceModel]);
   const displayedVirtualImageBytes = React.useMemo(() => {
-    if (activeViSource === "roi") return virtualImageBytes;
-    return viProductFrameView(model, shapeRows, shapeCols, activeViSource) ?? virtualImageBytes;
+    const roiBytes = frontendVirtualImageBytes ?? virtualImageBytes;
+    if (activeViSource === "roi") return roiBytes;
+    return viProductFrameView(model, shapeRows, shapeCols, activeViSource) ?? roiBytes;
   }, [
     activeViSource,
+    frontendVirtualImageBytes,
     frameIdx,
     model,
     shapeCols,

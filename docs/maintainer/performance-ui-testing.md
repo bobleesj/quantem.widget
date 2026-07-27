@@ -636,8 +636,66 @@ full-detector backend behavior, and virtual-detector latency.
 Use a compact export bin for that pass unless the explicit goal is to measure a
 large private standalone HTML payload.
 
-Use `--backend mps` only for local MacBook fallback checks. It is not the
-primary heavy signoff when an NVIDIA backend is available.
+### Private Seven-Tilt Gate
+
+Use this gate after Show4DSTEM backend, WebGPU, MPS, CUDA, export, or
+high-frequency UI changes. The seven-tilt data are private: keep the real folder
+path in a local environment variable, do not commit data or generated reports,
+and do not paste raw JSON until checking that paths and screenshots are safe.
+
+```bash
+export MAC_SHOW4DSTEM_7TILT_DIR=/private/path/on/mac/to/512x512x192x192-seven-tilt-folder
+export CUDA_SHOW4DSTEM_7TILT_DIR=/private/path/on/cuda-host/to/512x512x192x192-seven-tilt-folder
+```
+
+Do not copy the raw H5 data into the repo or reports. Use the seven entry
+points below. They are full-detector gates: `--bin 1` means no detector
+binning. Do not substitute a detector-binned run unless the report is explicitly
+labeled as a quick diagnostic instead of signoff.
+
+Before each machine's gate, build and install the checkout in the environment
+that will launch the widget:
+
+```bash
+npm run build
+python -m pip install -e .
+python -c "import quantem.widget as w; print(w.__file__)"
+```
+
+```bash
+# 1. macOS: Apple MPS backend, one master.
+quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend mps --count 1 --bin 1 --dtype u8
+
+# 2. macOS: Apple MPS backend, seven masters.
+quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend mps --count 7 --bin 1 --dtype u8
+
+# 3. macOS: browser/WebGPU lazy lane, one master.
+quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend webgpu --html --count 1 --bin 1 --dtype u8
+
+# 4. macOS: browser/WebGPU lazy lane, seven masters.
+quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend webgpu --html --count 7 --bin 1 --dtype u8
+
+# 5. CUDA host: CUDA backend, one master.
+quantem show4dstem "$CUDA_SHOW4DSTEM_7TILT_DIR" --backend cuda --count 1 --devices 0 --bin 1 --dtype u8
+
+# 6. CUDA host: CUDA backend, seven masters.
+quantem show4dstem "$CUDA_SHOW4DSTEM_7TILT_DIR" --backend cuda --count 7 --devices 0 --bin 1 --dtype u8
+
+# 7. CUDA host: CUDA backend, seven masters split across two GPUs.
+quantem show4dstem "$CUDA_SHOW4DSTEM_7TILT_DIR" --backend cuda --count 7 --devices 0,1 --bin 1 --dtype u8
+```
+
+The MPS and CUDA entries launch live notebook-backed widgets. The WebGPU
+entries create anonymous H5 symlinks inside the artifact folder, write an
+interactive browser HTML, and leave a `Show4DSTEM.command` launcher in the
+artifact folder. After launch, an agent should drive the UI in the desktop
+browser or Jupyter: switch datasets, move scan positions, drag detector ROIs, adjust
+histogram/contrast, check save/load where relevant, reload/reopen once, and
+record screenshots, console errors, backend/device shape, and timing/FPS. The
+gate is still local-only; normal CI must not depend on these data.
+
+Use `--backend mps` outside this gate only for local MacBook fallback checks. It
+is not the primary heavy signoff when an NVIDIA backend is available.
 
 For the high-risk capacity test the user cares about, run the backend-only
 stress first so a too-large request fails cleanly and releases memory:

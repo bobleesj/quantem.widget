@@ -1,3 +1,5 @@
+import json
+import re
 import stat
 
 import numpy as np
@@ -8,6 +10,7 @@ hdf5plugin = pytest.importorskip("hdf5plugin")
 
 from quantem.widget import Show4DSTEM
 from quantem.widget.show4dstem_webgpu_export import (
+    build_lazy_show4dstem_sidecar,
     bundle_master_urls,
     export_show4dstem_webgpu_bundle,
 )
@@ -47,6 +50,10 @@ def test_bundle_export_writes_launcher_viewer_and_vendored_page(tmp_path):
     assert launcher.stat().st_mode & stat.S_IXUSR
     command = launcher.read_text()
     assert "8899" in command and "serve_range.py" in command
+    assert "__quantem_viewer_root__" in command
+    assert "EXISTING_ROOT" in command
+    assert "PORT=$((PORT + 1))" in command
+    assert "Reusing local Show4DSTEM viewer server for this folder" in command
     viewer = tmp_path / ".viewer"
     for name in ("Show4DSTEM.html", "require.min.js", "embed-amd.js", "anywidget.min.js", "serve_range.py"):
         assert (viewer / name).exists(), name
@@ -55,6 +62,7 @@ def test_bundle_export_writes_launcher_viewer_and_vendored_page(tmp_path):
     assert "__QT_H5_DECODE_DTYPE" in page and "__BSLZ4_FRAME_WG" in page
     assert 'globalThis.__QT_H5_DECODE_DTYPE ??= "u2"' in page
     assert "globalThis.__QT_H5_FORCE_LOW8 ??= false" in page
+    assert "globalThis.__BSLZ4_PIPELINE_STAGING ??= false" in page
     assert "../tilt_a_master.h5" in page
 
 
@@ -79,6 +87,75 @@ def test_bundle_export_uses_low8_for_audited_uint8_h5(tmp_path):
     assert 'globalThis.__QT_H5_DECODE_DTYPE ??= "uint8"' in page
     assert "globalThis.__QT_H5_FORCE_LOW8 ??= true" in page
     assert "globalThis.__BSLZ4_LOW8_ONLY ??= true" in page
+
+
+def test_show4dstem_lazy_urls_export_uses_lazy_source(tmp_path):
+    widget = Show4DSTEM(
+        np.zeros((1, 1, 1, 1), np.uint8),
+        lazy_urls=["tilt_00_lazy/", "tilt_01_lazy/"],
+        scan_shape=(4, 4),
+        detector_shape=(32, 32),
+        backend="webgpu",
+        precompute_virtual_images=False,
+        verbose=False,
+    )
+    try:
+        out = tmp_path / "lazy.html"
+        widget.export_html(str(out), title="lazy", dtype="uint8", det_bin=1)
+    finally:
+        widget.close()
+    page = out.read_text(encoding="utf-8")
+    assert '"_lazy_urls": "[\\"tilt_00_lazy/\\", \\"tilt_01_lazy/\\"]"' in page
+    assert '"_h5_url": ""' in page
+    assert '"_h5_urls": ""' in page
+    assert '"gpu_memory_label": "Browser WebGPU lazy source"' in page
+    state_match = re.search(
+        r'<script type="application/vnd\.jupyter\.widget-state\+json">\s*(.*?)\s*</script>',
+        page,
+        re.DOTALL,
+    )
+    assert state_match is not None
+    state = json.loads(state_match.group(1))
+    offline_buffers = [
+        buffer
+        for buffer in state["state"].values()
+        for buffer in buffer.get("buffers", [])
+        if buffer.get("path") == ["_offline_stack"]
+    ]
+    assert offline_buffers == [{"encoding": "base64", "path": ["_offline_stack"], "data": ""}]
+
+
+def test_build_lazy_show4dstem_sidecar_indexes_h5_ranges(tmp_path):
+    _write_arina_family(tmp_path, "tilt_00", n_frames=16, det=32)
+
+    url = build_lazy_show4dstem_sidecar(
+        tmp_path,
+        label="tilt_00",
+        scan_shape=(4, 4),
+        detector_shape=(32, 32),
+    )
+
+    lazy = tmp_path / "tilt_00_lazy"
+    assert url == "tilt_00_lazy/"
+    meta = __import__("json").loads((lazy / "meta.json").read_text())
+    assert meta["SR"] == 4
+    assert meta["SC"] == 4
+    assert meta["D"] == 32
+    assert meta["files"] == ["../tilt_00_data_000001.h5"]
+    index = np.memmap(lazy / "index.bin", mode="r", dtype=np.uint32, shape=(16, 3))
+    assert np.all(index[:, 0] == 0)
+    assert np.all(index[:, 1] > 0)
+    assert np.all(index[:, 2] > 0)
+    profile = np.memmap(
+        lazy / "profile.bin",
+        mode="r",
+        dtype=np.float32,
+        shape=(16, meta["NB"]),
+    )
+    assert np.all(profile[:, 0] == 500)
+    com = np.memmap(lazy / "com.bin", mode="r", dtype=np.float32, shape=(2, 16))
+    assert np.allclose(com[0], 16)
+    assert np.allclose(com[1], 16)
 
 
 def test_bundle_export_requires_masters(tmp_path):

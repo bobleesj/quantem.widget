@@ -1039,7 +1039,12 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
     # Set True by the frontend when a real (non-software) WebGPU adapter is
     # available: denoise then runs in the browser (WGSL, live sigma scrub) and
     # Python ships RAW frames. False keeps the scipy path (e.g. SwiftShader).
-    _webgpu_filter_ok = traitlets.Bool(False).tag(sync=True)
+    # Default True: the browser owns display denoise. js/displayFilter.ts ships
+    # The browser has WGSL and CPU TypeScript filter paths that match NumPy, so
+    # every viewer can filter client-side and Python never needs the scipy
+    # round trip (which cost a full re-send of the frame per knob edit). The
+    # frontend downgrades this to False only when it finds a software adapter.
+    _webgpu_filter_ok = traitlets.Bool(True).tag(sync=True)
     frequency_filter = traitlets.Enum(
         ["none", "lowpass", "highpass", "bandpass"], default_value="none"
     ).tag(sync=True)
