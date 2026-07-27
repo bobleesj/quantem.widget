@@ -274,11 +274,13 @@ const MAX_ZOOM = 10;
 // ============================================================================
 // UI Styles - component styling helpers
 // ============================================================================
+const SHOW4DSTEM_UI_FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
+
 const typography = {
-  label: { fontSize: 11 },
-  labelSmall: { fontSize: 10 },
+  label: { fontSize: 11, fontFamily: SHOW4DSTEM_UI_FONT },
+  labelSmall: { fontSize: 10, fontFamily: SHOW4DSTEM_UI_FONT },
   value: { fontSize: 10, fontFamily: "monospace" },
-  title: { fontWeight: "bold" as const },
+  title: { fontWeight: "bold" as const, fontFamily: SHOW4DSTEM_UI_FONT },
 };
 
 const controlPanel = {
@@ -1147,6 +1149,7 @@ function drawRoiOverlayHiDPI(
 
 interface HistogramProps {
   data: Float32Array | null;
+  bins?: number[] | Float32Array | null;
   vminPct: number;
   vmaxPct: number;
   onRangeChange: (min: number, max: number) => void;
@@ -1222,6 +1225,7 @@ function KeyboardShortcuts({ items }: { items: [string, string][] }) {
  */
 function Histogram({
   data,
+  bins: precomputedBins = null,
   vminPct,
   vmaxPct,
   onRangeChange,
@@ -1238,7 +1242,10 @@ function Histogram({
   const onRangeChangeRef = React.useRef(onRangeChange);
   const pendingRangeRef = React.useRef<[number, number] | null>(null);
   const rangeRafRef = React.useRef<number | null>(null);
-  const bins = React.useMemo(() => computeHistogramFromBytes(data), [data]);
+  const bins = React.useMemo(
+    () => precomputedBins ? Array.from(precomputedBins) : computeHistogramFromBytes(data),
+    [data, precomputedBins],
+  );
 
   // Theme-aware colors
   const colors = theme === "dark" ? {
@@ -3188,6 +3195,7 @@ function Show4DSTEM() {
   // the interactive compare recompute (no readback), consumed by the grid painter.
   const [compareGpuVersion, setCompareGpuVersion] = React.useState(0);
   const compareGpuSlotsRef = React.useRef(new Map<number, number>());
+  const compareGpuHistogramGenRef = React.useRef(0);
   const compareGpuRenderNowRef = React.useRef<(() => number) | null>(null);
   const compareIncrementalRef = React.useRef<{
     mask: Uint32Array;
@@ -4834,6 +4842,26 @@ function Show4DSTEM() {
         },
         warmStandardViCache,
         warmCache: () => warmCacheSummary(),
+        prepareDetectorMajor: async (options?: { maxVolumes?: number }) => {
+          const indices = compareVisibleIndices();
+          const maxVolumes = Math.max(1, Math.min(indices.length, Math.round(Number(options?.maxVolumes ?? indices.length))));
+          const loaded = [] as Show4DSTEMCompute[];
+          for (const idx of indices) {
+            if (loaded.length >= maxVolumes) break;
+            const panelCompute = getVol ? await getVol(idx) : compute;
+            if (panelCompute instanceof Show4DSTEMCompute) loaded.push(panelCompute);
+          }
+          const device = loaded[0]?.getDevice();
+          if (!device || !loaded.length) return { available: false, reason: "no loaded WebGPU volumes" };
+          const startedAt = performance.now();
+          const result = Show4DSTEMCompute.prepareU8WordMajorBatch(loaded);
+          await device.queue.onSubmittedWorkDone().catch(() => {});
+          return {
+            ...result,
+            loaded: loaded.length,
+            elapsedMs: Math.round((performance.now() - startedAt) * 10) / 10,
+          };
+        },
         compareGpuBench: async (options?: {
           mode?: string;
           centerRow?: number;
@@ -5011,7 +5039,7 @@ function Show4DSTEM() {
           const radius = Number(options?.radius ?? model.get("roi_radius") ?? 1);
           const innerRadius = Number(options?.innerRadius ?? model.get("roi_radius_inner") ?? 0);
           const render = options?.render !== false;
-          const logScale = options?.logScale ?? true;
+          const logScale = options?.logScale ?? String(model.get("vi_scale_mode") || "linear") === "log";
           const centers = options?.steps?.length
             ? options.steps
             : Array.from({ length: 8 }, (_, i): [number, number] => [centerRow + (i > 3 ? 1 : 0), centerCol + i]);
@@ -5133,7 +5161,7 @@ function Show4DSTEM() {
           const radius = Number(options?.radius ?? model.get("roi_radius") ?? 1);
           const innerRadius = Number(options?.innerRadius ?? model.get("roi_radius_inner") ?? 0);
           const render = options?.render !== false;
-          const logScale = options?.logScale ?? true;
+          const logScale = options?.logScale ?? String(model.get("vi_scale_mode") || "linear") === "log";
           const centers = options?.steps?.length
             ? options.steps
             : Array.from({ length: 8 }, (_, i): [number, number] => [centerRow + (i > 3 ? 1 : 0), centerCol + i]);
@@ -5917,6 +5945,30 @@ function Show4DSTEM() {
     }
     return [...order];
   }, [comparePanelOrder, nFrames]);
+  const visibleCompareHistogramFrames = React.useMemo(() => {
+    const source = progressiveComparePage?.expectedIndices?.length
+      ? progressiveComparePage.expectedIndices
+      : Array.isArray(comparePanelIndices)
+        ? comparePanelIndices
+        : [];
+    if (!source.length) return [] as number[];
+    const available = new Set(source);
+    const hidden = new Set(
+      (compareHiddenPanels || []).filter((idx) => Number.isInteger(idx) && available.has(idx)),
+    );
+    const ordered: number[] = [];
+    const seen = new Set<number>();
+    normalizedCompareOrder().forEach((idx) => {
+      if (available.has(idx) && !hidden.has(idx) && !seen.has(idx)) {
+        ordered.push(idx);
+        seen.add(idx);
+      }
+    });
+    source.forEach((idx) => {
+      if (!hidden.has(idx) && !seen.has(idx)) ordered.push(idx);
+    });
+    return ordered;
+  }, [compareHiddenPanels, comparePanelIndices, normalizedCompareOrder, progressiveComparePage]);
   const requestComparePage = React.useCallback((page: number) => {
     const next = Math.max(0, Math.min(activeComparePageCount - 1, Math.round(Number(page) || 0)));
     if (next === activeComparePageIdx) return;
@@ -6397,6 +6449,7 @@ function Show4DSTEM() {
   // Histogram data - use state to ensure re-renders (both are Float32Array now)
   const [dpHistogramData, setDpHistogramData] = React.useState<Float32Array | null>(null);
   const [viHistogramData, setViHistogramData] = React.useState<Float32Array | null>(null);
+  const [viHistogramBins, setViHistogramBins] = React.useState<Float32Array | null>(null);
 
   // DP stats computed JS-side from frame_bytes (was Python trait pre-refactor;
   // moving to JS skips 4 sync trait round-trips per scan-position click).
@@ -6796,6 +6849,7 @@ function Show4DSTEM() {
       } else {
         scaledData.set(rawData);
       }
+      setViHistogramBins(null);
       setViHistogramData(scaledData);
     }
   }, [activeViSource, compareMode, displayedVirtualImageBytes, viScaleMode]);
@@ -6830,8 +6884,73 @@ function Show4DSTEM() {
     } else {
       scaledData.set(rawData);
     }
+    setViHistogramBins(null);
     setViHistogramData(scaledData);
   }, [activeViSource, compareMode, comparePanelCount, displayedCompareVirtualImageBytes, shapeCols, shapeRows, viScaleMode]);
+
+  React.useEffect(() => {
+    if (!compareMode || activeViSource !== "roi") return;
+    const engine = viGpuColormapRef.current;
+    if (!engine) return;
+    const slotIndices = visibleCompareHistogramFrames
+      .map((frame) => compareGpuSlotsRef.current.get(frame))
+      .filter((slot): slot is number => slot !== undefined);
+    if (slotIndices.length === 0) return;
+
+    let cancelled = false;
+    const generation = ++compareGpuHistogramGenRef.current;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const rawRanges = await engine.computeRangeBatch(slotIndices);
+          if (cancelled || generation !== compareGpuHistogramGenRef.current) return;
+          const logScale = viScaleMode === "log";
+          const ranges = rawRanges
+            .map((range) => {
+              if (!Number.isFinite(range.min) || !Number.isFinite(range.max)) return null;
+              if (!logScale) return range;
+              return {
+                min: Math.log1p(Math.max(0, range.min)),
+                max: Math.log1p(Math.max(0, range.max)),
+              };
+            })
+            .filter((range): range is { min: number; max: number } => Boolean(range));
+          if (ranges.length === 0) return;
+          let dmin = Number.POSITIVE_INFINITY;
+          let dmax = Number.NEGATIVE_INFINITY;
+          ranges.forEach((range) => {
+            if (range.min < dmin) dmin = range.min;
+            if (range.max > dmax) dmax = range.max;
+          });
+          if (!Number.isFinite(dmin) || !Number.isFinite(dmax)) return;
+          if (dmax <= dmin) dmax = dmin + 1e-12;
+          const histograms = await engine.computeHistogramBatch(
+            slotIndices,
+            slotIndices.map(() => ({ min: dmin, max: dmax })),
+            logScale,
+          );
+          if (cancelled || generation !== compareGpuHistogramGenRef.current || histograms.length === 0) return;
+          const merged = new Float32Array(256);
+          histograms.forEach((histogram) => {
+            for (let i = 0; i < Math.min(256, histogram.length); i++) {
+              merged[i] += Number(histogram[i]) || 0;
+            }
+          });
+          setViDataMin(dmin);
+          setViDataMax(dmax);
+          setViHistogramData(null);
+          setViHistogramBins(merged);
+        } catch (error) {
+          console.warn("Show4DSTEM multiple histogram update failed", error);
+        }
+      })();
+    }, 120);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeViSource, compareGpuVersion, compareMode, viScaleMode, visibleCompareHistogramFrames]);
 
   // Render DP with zoom (use summed DP when VI ROI is active)
   // Expensive: colormap + data processing → cached offscreen canvas
@@ -9492,6 +9611,7 @@ function Show4DSTEM() {
     borderRadius: "4px",
     bgcolor: themeInfo.theme === "dark" ? "rgba(0,0,0,0.35)" : "rgba(255,255,255,0.78)",
     color: themeColors.textMuted,
+    fontFamily: SHOW4DSTEM_UI_FONT,
     fontSize: 12,
     fontWeight: 600,
     letterSpacing: 0,
@@ -9514,6 +9634,8 @@ function Show4DSTEM() {
   const fftPanelLoading = offlineBackendLoading && effectiveShowFft;
   const offlineStatusText = offlineBackendError || offlineBackendStatus;
   const offlineStatusIsError = Boolean(offlineBackendError);
+  const offlineStatusIsReady = !offlineStatusIsError && /\bready\b/i.test(offlineStatusText);
+  const showOfflineStatus = offline && Boolean(offlineStatusText) && !offlineStatusIsReady;
 
   return (
     <Box
@@ -9576,21 +9698,21 @@ function Show4DSTEM() {
           {memoryWarning}
         </Box>
       )}
-      {offline && offlineStatusText && (
+      {showOfflineStatus && (
         <Box
           role="status"
           data-testid="show4dstem-offline-status"
           sx={{
             mb: `${SPACING.SM}px`,
             px: 1,
-            py: 0.5,
+            py: 0.25,
             border: `1px solid ${offlineStatusIsError ? "#d32f2f" : themeColors.border}`,
             bgcolor: themeColors.controlBg,
             color: offlineStatusIsError ? "#d32f2f" : themeColors.textMuted,
             width: "fit-content",
             maxWidth: "100%",
-            fontSize: 11,
-            fontWeight: 600,
+            ...typo.label,
+            lineHeight: 1.35,
             overflowWrap: "anywhere",
           }}
         >
@@ -10365,8 +10487,6 @@ function Show4DSTEM() {
               panelGapPx={comparePanelGapPx}
               onResizeStart={handleCompareGridResizeStart}
               onSelect={(idx) => {
-                setFramePlaying(false);
-                setCompareDpMode("selected");
                 setFrameIdx(Math.max(0, Math.min(nFrames - 1, idx)));
               }}
               onToggleStar={toggleCompareStar}
@@ -10551,7 +10671,7 @@ function Show4DSTEM() {
                   </Box>
                   {/* Right: Histogram spanning both rows */}
                   <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", flex: "0 0 auto", maxWidth: "100%" }}>
-                    <Histogram data={viHistogramData} vminPct={viVminPct} vmaxPct={viVmaxPct} onRangeChange={(min, max) => { if (viAutoContrast) { viPreAutoPctRef.current = null; setViAutoContrast(false); } setViVminPct(min); setViVmaxPct(max); }} width={110} height={58} theme={themeInfo.theme} dataMin={viDataMin} dataMax={viDataMax} />
+                    <Histogram data={viHistogramData} bins={viHistogramBins} vminPct={viVminPct} vmaxPct={viVmaxPct} onRangeChange={(min, max) => { if (viAutoContrast) { viPreAutoPctRef.current = null; setViAutoContrast(false); } setViVminPct(min); setViVmaxPct(max); }} width={110} height={58} theme={themeInfo.theme} dataMin={viDataMin} dataMax={viDataMax} />
                   </Box>
                 </Box>
               </Box>
@@ -10904,16 +11024,16 @@ function Show4DSTEM() {
           )}
           <Typography sx={{ ...typo.label, fontSize: 10, flexShrink: 0 }}>{frameSliderLabel}:</Typography>
           <Stack direction="row" spacing={0} sx={{ flexShrink: 0 }}>
-            <IconButton size="small" onClick={() => { setFrameReverse(true); setFramePlaying(true); }} sx={{ color: frameReverse && framePlaying ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
+            <IconButton size="small" aria-label="Show4DSTEM play frames backward" onClick={() => { setFrameReverse(true); setFramePlaying(true); }} sx={{ color: frameReverse && framePlaying ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
               <FastRewindIcon sx={{ fontSize: 18 }} />
             </IconButton>
-            <IconButton size="small" onClick={() => setFramePlaying(!framePlaying)} sx={{ color: themeColors.accent, p: 0.25 }}>
+            <IconButton size="small" aria-label={framePlaying ? "Show4DSTEM pause frames" : "Show4DSTEM play frames"} onClick={() => setFramePlaying(!framePlaying)} sx={{ color: themeColors.accent, p: 0.25 }}>
               {framePlaying ? <PauseIcon sx={{ fontSize: 18 }} /> : <PlayArrowIcon sx={{ fontSize: 18 }} />}
             </IconButton>
-            <IconButton size="small" onClick={() => { setFrameReverse(false); setFramePlaying(true); }} sx={{ color: !frameReverse && framePlaying ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
+            <IconButton size="small" aria-label="Show4DSTEM play frames forward" onClick={() => { setFrameReverse(false); setFramePlaying(true); }} sx={{ color: !frameReverse && framePlaying ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
               <FastForwardIcon sx={{ fontSize: 18 }} />
             </IconButton>
-            <IconButton size="small" onClick={() => { setFramePlaying(false); setFrameIdx(0); }} sx={{ color: themeColors.textMuted, p: 0.25 }}>
+            <IconButton size="small" aria-label="Show4DSTEM stop frames" onClick={() => { setFramePlaying(false); setFrameIdx(0); }} sx={{ color: themeColors.textMuted, p: 0.25 }}>
               <StopIcon sx={{ fontSize: 16 }} />
             </IconButton>
           </Stack>

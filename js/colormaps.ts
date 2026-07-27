@@ -1561,14 +1561,14 @@ export class GPUColormapEngine {
 
   /**
    * Adopt an externally produced float32 GPU buffer as a display slot. The slot
-   * owns the buffer after this call; callers should hand off a fresh buffer for
-   * each recompute. This keeps WebGPU reductions (for example Show4DSTEM DPC)
-   * resident through the colormap/display pass instead of round-tripping through
-   * CPU RGBA.
+   * owns the buffer after this call. If the same buffer is adopted again, keep
+   * the existing display resources so in-place GPU updates can repaint without
+   * retiring their own source.
    */
   adoptBuffer(idx: number, buffer: GPUBuffer, width: number, height: number): void {
     while (this.slots.length <= idx) this.slots.push(null as never);
     const old = this.slots[idx];
+    if (old && old.dataBuffer === buffer && old.width === width && old.height === height) return;
     if (old) this.retireSlot(old);
     const count = Math.max(1, width * height);
     const rgbaCapacity = count;
@@ -1592,11 +1592,11 @@ export class GPUColormapEngine {
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       }),
       histBinsBuffer: this.device.createBuffer({
-        size: 16,
+        size: 256 * 4,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
       }),
       histReadBuffer: this.device.createBuffer({
-        size: 16,
+        size: 256 * 4,
         usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
       }),
       rangeBuffer: null,

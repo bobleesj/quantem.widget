@@ -531,7 +531,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     vi_colormap = traitlets.Unicode("inferno").tag(sync=True)
     fft_colormap = traitlets.Unicode("inferno").tag(sync=True)
 
-    dp_scale_mode = traitlets.Unicode("linear").tag(sync=True)  # "linear" | "log"
+    dp_scale_mode = traitlets.Unicode("log").tag(sync=True)  # "linear" | "log"
     vi_scale_mode = traitlets.Unicode("linear").tag(sync=True)  # "linear" | "log"
     fft_scale_mode = traitlets.Unicode("linear").tag(sync=True)  # "linear" | "log"
 
@@ -5265,7 +5265,9 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 unit = "mrad" if self.k_calibrated else "px"
                 self._draw_scalebar_overlay(out, float(self.k_pixel_size), unit)
             elif panel_key == "virtual":
-                self._draw_scalebar_overlay(out, float(self.pixel_size), "Å")
+                self._draw_scalebar_overlay(
+                    out, float(self.pixel_size), self.pixel_unit or "px"
+                )
         return out
 
     def _render_panel_image(
