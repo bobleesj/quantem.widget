@@ -56,28 +56,26 @@ one) and opens automatically on a desktop.
 Use the CLI when you want a quick browser artifact from raw masters:
 
 ```bash
-quantem show4dstem scan_001_master.h5 --html --bin 8
-quantem show4dstem scan_001_master.h5 --html --bin 1 --dtype uint16
-quantem show4dstem ./session_masters --html --bin 8 --out ~/Downloads
-quantem show4dstem scan_001_master.h5 scan_002_master.h5 --html --combined --bin 8
+quantem show4dstem scan_001_master.h5 --backend webgpu --html --bin 1
+quantem show4dstem ./session_masters --backend webgpu --html --count 7 --bin 1 --out ~/Downloads
+quantem show4dstem scan_001_master.h5 scan_002_master.h5 --backend webgpu --html --bin 1
 ```
 
 `--bin` is detector mean binning for the exported browser payload. The default
-Show4DSTEM CLI export is an interactive raw-4D WebGPU viewer after that explicit
-binning choice. It is meant for offline detector-ROI browsing, not as the
-smallest possible report.
+is `--bin 1`, meaning full detector sampling. Use a larger value only for an
+explicit preview, and label that reduction in the report.
 
-Use `--bin 1 --dtype uint16` when the user wants the full native detector
-sampling path without opening Jupyter:
+Use `--backend webgpu --html --bin 1` when the user wants the full native
+detector sampling path without opening Jupyter:
 
 ```bash
-quantem show4dstem /data/session --html --bin 1 --dtype uint16 --out ~/Downloads
+quantem show4dstem /data/session --backend webgpu --html --count 7 --bin 1 --dtype uint8 --out ~/Downloads
 ```
 
-That command can produce very large browser artifacts. It is the right no-notebook
-choice when native detector detail matters; for quick laptop browsing use
-`--bin 8 --dtype uint8`, and for compact collaborator review use the Python
-`export_kind="report"` path below.
+That command writes a browser folder with anonymous H5 symlinks plus
+`Show4DSTEM.command`, so it does not copy raw data into a giant HTML file. It is
+the right no-notebook choice when native detector detail matters. For a compact
+collaborator review, use the Python `export_kind="report"` path below.
 
 For large lazy folders, curated review grids, or collaborator screening,
 open a live viewer and export a compact report from Python instead:
@@ -245,7 +243,10 @@ HTML; serve HTML from GitHub Pages or another static host.
 
 | Option | Effect |
 |---|---|
-| `--bin N` | detector mean-bin factor; Show4DSTEM defaults to 8, ShowPtycho and `data-transfer` default to 1 |
+| `--bin N` | detector mean-bin factor; Show4DSTEM, ShowPtycho, and `data-transfer` default to 1, meaning full detector sampling |
+| `--backend auto/cuda/mps/cpu/webgpu` | Show4DSTEM backend; use `webgpu` with `--html` for a browser-owned full-detector lazy WebGPU viewer |
+| `--count N` | Show4DSTEM: require and load exactly this many compatible masters from the input |
+| `--devices 0,1` | Show4DSTEM CUDA placement; alias of `--gpus` |
 | `--dtype uint8/uint16` | Show4DSTEM HTML export/storage dtype; `uint8` is compact browse, `uint16` keeps the wider detector-count range |
 | `--html` | 4D-STEM: write the offline-WebGPU HTML instead of a notebook |
 | `--watch` | folder: write a live ShowFolder-watched notebook; Show2D/Show3D append new image files, Show4DSTEM opens lazy masters |
@@ -263,11 +264,10 @@ The loader picks the backend automatically - **CUDA** on an NVIDIA box, **Apple
 Metal (MPS)** on a Mac, **CPU** otherwise. No flag needed. On a MacBook:
 
 ```bash
-quantem show4dstem ./masters/ --html --bin 8
+quantem show4dstem ./masters/ --backend webgpu --html --count 1 --bin 1
 ```
 
-loads on Metal, mean-bins the detector to fit the laptop, and writes a
-double-clickable HTML in seconds. The detector is **mean-binned** (not summed) so
-the bright field never clips at uint8, and binning happens at load so the full
-multi-gigabyte stack never has to fit in memory. See [Load and I/O](api/io) for
-the backend + binning details.
+uses browser WebGPU and writes a double-clickable lazy folder without copying
+raw data. If you pass `--bin N` with `N > 1`, the detector is
+**mean-binned** (not summed) so the bright field never clips at uint8. See
+[Load and I/O](api/io) for the backend + binning details.

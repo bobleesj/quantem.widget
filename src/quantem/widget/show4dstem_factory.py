@@ -300,6 +300,21 @@ def _dtype_token(dtype: Any) -> str | None:
     return str(dtype).strip().lower().replace("_", "")
 
 
+def _mps_output_dtype(dtype: Any) -> str | None:
+    """Return the raw-Metal folder output dtype requested by the public API."""
+    token = _dtype_token(dtype)
+    if token in {None, "", "auto", "native", "full", "exact"}:
+        return None
+    if token in {"u8", "uint8"}:
+        return "u8"
+    if token in {"u16", "uint16"}:
+        return "u16"
+    raise ValueError(
+        "Show4DSTEM.from_folder(..., backend='mps') currently supports "
+        f"dtype='auto', 'u8', or 'u16'; got dtype={dtype!r}."
+    )
+
+
 def _is_recoverable_allocation_error(exc: BaseException) -> bool:
     """True when a loader failed from memory pressure, not bad input data."""
     if isinstance(exc, MemoryError):
@@ -434,16 +449,13 @@ def _warn_mps_from_folder_limits(
     """Warn for public from_folder knobs the raw-Metal MPS path cannot honor."""
     messages: list[str] = []
     token = _dtype_token(dtype)
-    if token in {"u8", "uint8", "auto"}:
+    if token in {"u8", "uint8"}:
         messages.append(
-            f"dtype={dtype!r} is ignored; the raw-Metal MPS folder loader keeps "
-            "native uint16 chunk buffers."
+            "MPS folder dtype='u8' uses browse clipping before raw-Metal "
+            "interaction. Use dtype='auto' for native detector counts."
         )
-    elif token not in {None, "", "u16", "uint16", "native", "full", "exact"}:
-        raise ValueError(
-            "Show4DSTEM.from_folder(..., backend='mps') currently supports only "
-            f"native uint16 chunk buffers; got dtype={dtype!r}."
-        )
+    else:
+        _mps_output_dtype(dtype)
 
     page_options_changed = (
         page_budget is not None
@@ -527,6 +539,8 @@ def from_folder(
     pattern: str = "*_master.h5",
     recursive: bool = True,
     scan_size: int | None = None,
+    max_masters: int | None = None,
+    min_masters: int | None = None,
     ready_only: bool = True,
     gpus=None,
     page_budget: int | str | None = "auto",
@@ -611,6 +625,14 @@ def from_folder(
             "preview_cache_max_bytes must be >= 0 or None, got "
             f"{preview_cache_max_bytes}"
         )
+    if max_masters is not None:
+        max_masters = int(max_masters)
+        if max_masters < 1:
+            raise ValueError(f"max_masters must be >= 1, got {max_masters}")
+    if min_masters is not None:
+        min_masters = int(min_masters)
+        if min_masters < 1:
+            raise ValueError(f"min_masters must be >= 1, got {min_masters}")
     if page_size is not None and preload_initial_page is True:
         preload_initial_page = compare_max_panels
 
@@ -657,6 +679,13 @@ def from_folder(
             list(masters),
             verbose=bool(verbose),
         )
+        if min_masters is not None and len(masters) < min_masters:
+            raise ValueError(
+                f"Show4DSTEM.from_folder requires at least {min_masters} "
+                f"compatible master(s), but found {len(masters)}."
+            )
+        if max_masters is not None:
+            masters = masters[:max_masters]
         expected_contract = _master_file_contract(masters[0])
 
         def validate_mps_master(master: Any) -> None:
@@ -711,6 +740,7 @@ def from_folder(
             masters,
             det_bin=det_bin,
             scan_size=scan_size,
+            output_dtype=_mps_output_dtype(dtype),
             verbose=verbose,
             skip_mps_memory_check=skip_mps_memory_check,
             validate_master=validate_mps_master,
@@ -769,6 +799,13 @@ def from_folder(
         list(masters),
         verbose=bool(verbose),
     )
+    if min_masters is not None and len(masters) < min_masters:
+        raise ValueError(
+            f"Show4DSTEM.from_folder requires at least {min_masters} "
+            f"compatible master(s), but found {len(masters)}."
+        )
+    if max_masters is not None:
+        masters = masters[:max_masters]
     if warm_cache:
         viewer_kwargs.setdefault(
             "compare_cache_pages",

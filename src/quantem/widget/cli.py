@@ -881,9 +881,11 @@ def _add_show_args(parser: argparse.ArgumentParser) -> None:
                              "or several master files (-> one 5D multi-tilt viewer).")
     parser.add_argument("--bin", type=int, default=None, dest="det_bin",
                         help=(
-                            "Detector binning factor. Show4DSTEM defaults to 8 "
-                            "for laptop browsing; ShowPtycho defaults to 1."
+                            "Detector binning factor. Show4DSTEM and ShowPtycho "
+                            "default to 1, meaning full detector sampling."
                         ))
+    parser.add_argument("--count", type=int, default=None,
+                        help="Show4DSTEM: require and load this many compatible masters from the input.")
     parser.add_argument("--combined", action="store_true",
                         help="Many 4D masters -> one 5D HTML viewer (with --html; needs a local serve).")
     parser.add_argument("--out", default=None,
@@ -896,8 +898,8 @@ def _add_show_args(parser: argparse.ArgumentParser) -> None:
                         help="Folder: write a live ShowFolder-watched notebook that appends new files.")
     parser.add_argument("--watch-interval", type=float, default=2.0,
                         help="Polling interval in seconds for --watch live folders (default 2).")
-    parser.add_argument("--gpus", default=None,
-                        help="4D-STEM --watch: comma-separated CUDA GPU ids, e.g. 0 or 0,1. Default preserves loader device.")
+    parser.add_argument("--gpus", "--devices", dest="gpus", default=None,
+                        help="4D-STEM CUDA devices, e.g. 0 or 0,1. Default preserves loader device.")
     parser.add_argument("--page-budget", default="auto",
                         help="4D-STEM --watch: resident dataset cache, e.g. auto, 1, 2, or none (default auto).")
     parser.add_argument("--dtype", default="u8", choices=("u8", "uint8", "u16", "uint16", "float32"),
@@ -912,8 +914,8 @@ def _add_show_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--bind", default="127.0.0.1",
                         help="Folder exports: bind address for the local HTTP server (default: 127.0.0.1).")
     parser.add_argument("--title", default=None, help="Viewer page title.")
-    parser.add_argument("--backend", default="auto", choices=("auto", "cuda", "mps", "cpu"),
-                        help="ShowPtycho master generation: HDF5 load backend (default auto).")
+    parser.add_argument("--backend", default="auto", choices=("auto", "cuda", "mps", "cpu", "webgpu"),
+                        help="4D-STEM/ShowPtycho backend. Use webgpu with Show4DSTEM --html.")
     parser.add_argument("--calibration", default="auto",
                         help=(
                             "ShowPtycho master generation: calibration JSON, "
@@ -967,8 +969,8 @@ def _show(args: argparse.Namespace) -> int:
             out = _render_gallery(paths, "gallery", args)
             _open_html(out, serve=args.serve, no_open=args.no_open)
             return 0
-        masters = [str(p) for p in paths]
-        return _do_4dstem(masters, f"{len(masters)}_datasets", args)
+        masters = _select_show4dstem_masters([str(p) for p in paths], args)
+        return _do_4dstem(masters, f"{len(masters)}_datasets", args, source_path=None)
     path = paths[0]
     kind = _detect(path, args.widget)
     if kind == "showptycho-master":
@@ -990,12 +992,13 @@ def _show(args: argparse.Namespace) -> int:
         masters = [str(path)] if path.is_file() else discover_masters(str(path), verbose=args.verbose)
         if not masters:
             raise ValueError(f"no *_master.h5 found in {path}")
+        masters = _select_show4dstem_masters(masters, args)
         label = pathlib.Path(masters[0]).stem.replace("_master", "") if path.is_file() else path.name
         if args.watch:
             notebook = _render_4dstem_watch_notebook(path, label, args)
             _launch_notebook(notebook, no_open=args.no_open)
             return 0
-        return _do_4dstem(masters, label, args)
+        return _do_4dstem(masters, label, args, source_path=path)
     if args.watch:
         if args.html:
             raise ValueError("--watch writes a live notebook; omit --html.")
@@ -1010,20 +1013,62 @@ def _show(args: argparse.Namespace) -> int:
     return 0
 
 
-def _do_4dstem(masters: list[str], label: str, args: argparse.Namespace) -> int:
+def _do_4dstem(
+    masters: list[str],
+    label: str,
+    args: argparse.Namespace,
+    *,
+    source_path: pathlib.Path | None = None,
+) -> int:
     """Dispatch 4D-STEM master(s) to either a live notebook (default) or an offline
     HTML (``--html``), then launch/open it. One master loads alone; many load stacked
     into a 5D viewer with a dataset slider (the multi-tilt case)."""
-    args.det_bin = _effective_det_bin(args, default=8)
+    args.det_bin = _effective_det_bin(args, default=1)
+    backend = _normalise_show4dstem_backend(args.backend)
     if args.html:
+        if backend == "webgpu":
+            output = _render_4dstem_webgpu_h5(masters, label, args)
+            _open_show4dstem_command(output.parent / "Show4DSTEM.command", no_open=args.no_open)
+            return 0
         outputs = _render_4dstem(masters, label, args)
         _open_html(outputs[0], serve=args.serve or args.combined, no_open=args.no_open)
         if len(outputs) > 1:
             print(f"wrote {len(outputs)} HTML files to {outputs[0].parent}")
         return 0
-    notebook = _render_4dstem_notebook(masters, label, args)
+    if backend == "webgpu":
+        raise ValueError("Show4DSTEM --backend webgpu writes browser HTML; add --html.")
+    notebook = _render_4dstem_notebook(masters, label, args, source_path=source_path)
     _launch_notebook(notebook, no_open=args.no_open)
     return 0
+
+
+def _select_show4dstem_masters(masters: list[str], args: argparse.Namespace) -> list[str]:
+    """Apply Show4DSTEM ``--count`` as an exact compatible-master request."""
+
+    count = getattr(args, "count", None)
+    if count is None:
+        return list(masters)
+    count = int(count)
+    if count < 1:
+        raise ValueError(f"--count must be a positive integer, got {count}")
+    if len(masters) < count:
+        raise ValueError(
+            f"--count {count} requested but only {len(masters)} master(s) were found."
+        )
+    return list(masters[:count])
+
+
+def _normalise_show4dstem_backend(value: str | None) -> str | None:
+    """Return the Show4DSTEM backend token used by generated notebooks/exports."""
+
+    token = str(value or "auto").strip().lower()
+    if token in {"", "auto"}:
+        return None
+    if token in {"web", "browser", "webgpu"}:
+        return "webgpu"
+    if token in {"cuda", "mps", "cpu"}:
+        return token
+    raise ValueError(f"unsupported Show4DSTEM backend {value!r}")
 
 
 def _detect(path: pathlib.Path, forced: str) -> str:
@@ -1577,22 +1622,93 @@ def _load_2d(path: pathlib.Path):
     return _read_frame(path)
 
 
-def _render_4dstem_notebook(masters: list[str], label: str, args: argparse.Namespace) -> pathlib.Path:
+def _render_4dstem_notebook(
+    masters: list[str],
+    label: str,
+    args: argparse.Namespace,
+    *,
+    source_path: pathlib.Path | None = None,
+) -> pathlib.Path:
     """Write a live Jupyter notebook that loads the 4D-STEM master(s) and opens a
     kernel-backed ``Show4DSTEM`` (full real-time WebGPU, no baked HTML). One master
     loads on its own; many load stacked into a 5D viewer with a dataset slider (the
     multi-tilt case). The notebook is the editable, real-use surface; ``--html`` is
     the share artifact."""
     import json
-    print(f"{len(masters)} master(s), bin {args.det_bin} -> Show4DSTEM (live notebook)")
-    arg = repr(masters[0]) if len(masters) == 1 else repr(masters)
-    source = (
-        "from quantem.widget import load, Show4DSTEM\n"
-        f"Show4DSTEM(load({arg}, det_bin={args.det_bin}))"
+    backend = _normalise_show4dstem_backend(args.backend)
+    devices = _python_gpus(args.gpus)
+    page_budget = _python_page_budget(args.page_budget)
+    backend_label = backend or "auto"
+    print(
+        f"{len(masters)} master(s), backend {backend_label}, bin {args.det_bin}, "
+        f"dtype {args.dtype}, devices {devices} -> Show4DSTEM (live notebook)"
     )
+    if source_path is not None and source_path.is_dir():
+        gpus_arg = "None" if backend == "mps" else devices
+        backend_arg = "None" if backend is None else repr(backend)
+        source = (
+            "from quantem.widget import Show4DSTEM\n"
+            "\n"
+            f"folder = {str(source_path)!r}\n"
+            f"backend = {backend_arg}\n"
+            f"gpus = {gpus_arg}\n"
+            "print('folder:', folder)\n"
+            "print('backend:', backend or 'auto')\n"
+            "print('gpus:', gpus)\n"
+            "viewer = Show4DSTEM.from_folder(\n"
+            "    folder,\n"
+            f"    backend={backend_arg},\n"
+            f"    max_masters={len(masters)},\n"
+            f"    min_masters={len(masters)},\n"
+            f"    det_bin={int(args.det_bin)},\n"
+            f"    dtype={args.dtype!r},\n"
+            "    gpus=gpus,\n"
+            f"    page_budget={page_budget},\n"
+            "    watch=False,\n"
+            "    verbose=True,\n"
+            ")\n"
+            "viewer\n"
+        )
+    else:
+        arg = repr(masters[0]) if len(masters) == 1 else repr(masters)
+        backend_line = "" if backend is None else f"    backend={backend!r},\n"
+        devices_line = (
+            f"    devices={devices},\n    series_type='generic',\n"
+            if backend == "cuda" and devices != "None"
+            else ""
+        )
+        page_device = devices if backend == "cuda" and devices != "None" else "None"
+        source = (
+            "from quantem.widget import load, Show4DSTEM\n"
+            "\n"
+            f"masters = {arg}\n"
+            "data = load(\n"
+            "    masters,\n"
+            f"    det_bin={int(args.det_bin)},\n"
+            f"    dtype={args.dtype!r},\n"
+            f"{backend_line}"
+            f"{devices_line}"
+            "    verbose=True,\n"
+            ")\n"
+            "Show4DSTEM(\n"
+            "    data,\n"
+            f"    page_budget={page_budget},\n"
+            f"    page_device={page_device},\n"
+            "    verbose=True,\n"
+            ")\n"
+        )
     nb = {
         "cells": [
-            {"cell_type": "markdown", "id": "title", "metadata": {}, "source": [f"# {label}\n", f"\n{len(masters)} master(s), detector bin {args.det_bin}."]},
+            {
+                "cell_type": "markdown",
+                "id": "title",
+                "metadata": {},
+                "source": [
+                    f"# {label}\n",
+                    f"\n{len(masters)} master(s), backend `{backend_label}`, "
+                    f"detector bin {args.det_bin}, dtype `{args.dtype}`.",
+                ],
+            },
             {"cell_type": "code", "id": "viewer", "execution_count": None, "metadata": {}, "outputs": [], "source": source.splitlines(keepends=True)},
         ],
         "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
@@ -1833,16 +1949,151 @@ def _launch_notebook(notebook: pathlib.Path, *, no_open: bool) -> None:
     import shutil
     import subprocess
     headless = sys.platform != "darwin" and not os.environ.get("DISPLAY")
-    if no_open or headless or shutil.which("jupyter") is None:
+    if no_open or headless:
         print(f"wrote {notebook}")
         if headless:
             print(f"  open it from your Mac:  mj jupyter cuda-env quantem   (then open {notebook.name})")
-        elif shutil.which("jupyter") is None:
-            print("  jupyter not found; install it or open the notebook in your editor")
+        return
+    jupyter = shutil.which("jupyter")
+    if jupyter is None:
+        probe = subprocess.run(
+            [sys.executable, "-m", "jupyter", "lab", "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        command = [sys.executable, "-m", "jupyter", "lab", str(notebook)] if probe.returncode == 0 else None
+    else:
+        command = [jupyter, "lab", str(notebook)]
+    if command is None:
+        print(f"wrote {notebook}")
+        print("  jupyter not found in this Python; install it or open the notebook in your editor")
         return
     print(f"launching jupyter lab on {notebook}")
-    subprocess.Popen(["jupyter", "lab", str(notebook)],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _open_show4dstem_command(command: pathlib.Path, *, no_open: bool) -> None:
+    """Open a generated Show4DSTEM folder launcher when a desktop is available."""
+
+    if no_open:
+        print(f"wrote {command}")
+        return
+    headless = sys.platform != "darwin" and not os.environ.get("DISPLAY")
+    if headless or not command.is_file():
+        print(f"wrote {command}")
+        return
+    import subprocess
+
+    if sys.platform == "darwin":
+        subprocess.Popen(
+            ["open", str(command)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    else:
+        webbrowser.open(command.as_uri())
+    print(f"opened {command}")
+
+
+def _render_4dstem_webgpu_h5(
+    masters: list[str],
+    label: str,
+    args: argparse.Namespace,
+) -> pathlib.Path:
+    """Render Show4DSTEM WebGPU HTML using lazy sidecars over linked H5 data."""
+
+    import numpy as np
+    from quantem.widget import Show4DSTEM
+    from quantem.widget.show4dstem_factory import _master_file_contract
+    from quantem.widget.show4dstem_webgpu_export import build_lazy_show4dstem_sidecar
+
+    if int(args.det_bin) != 1:
+        raise ValueError(
+            "Show4DSTEM --backend webgpu uses lazy sidecars over linked HDF5 files; "
+            "keep --bin 1."
+        )
+    contracts = [_master_file_contract(master) for master in masters]
+    first = contracts[0]
+    scan_shape = first.get("scan_shape")
+    detector_shape = first.get("detector_shape")
+    n_frames = first.get("n_frames")
+    if scan_shape is None or detector_shape is None or n_frames is None:
+        raise ValueError("could not infer scan/detector shape from the first master")
+    expected = {
+        "scan_shape": tuple(int(value) for value in scan_shape),
+        "detector_shape": tuple(int(value) for value in detector_shape),
+        "n_frames": int(n_frames),
+    }
+    for master, contract in zip(masters[1:], contracts[1:], strict=True):
+        observed = {
+            "scan_shape": tuple(int(value) for value in contract.get("scan_shape") or ()),
+            "detector_shape": tuple(int(value) for value in contract.get("detector_shape") or ()),
+            "n_frames": int(contract.get("n_frames") or 0),
+        }
+        if observed != expected:
+            raise ValueError(
+                f"incompatible Show4DSTEM master {pathlib.Path(master).name!r}: "
+                f"{observed}; expected {expected}"
+            )
+
+    out_dir = _out_dir(args.out) / f"{label}_show4dstem_webgpu"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    labels = [f"tilt_{idx:02d}" for idx in range(len(masters))]
+    lazy_urls = []
+    for master, tilt_label in zip(masters, labels, strict=True):
+        _link_show4dstem_h5_family(out_dir, pathlib.Path(master), tilt_label)
+        lazy_urls.append(
+            build_lazy_show4dstem_sidecar(
+                out_dir,
+                label=tilt_label,
+                scan_shape=expected["scan_shape"],
+                detector_shape=expected["detector_shape"],
+            )
+        )
+
+    widget = Show4DSTEM(
+        np.zeros((1, 1, 1, 1), dtype=np.uint8),
+        lazy_urls=lazy_urls,
+        backend="webgpu",
+        scan_shape=expected["scan_shape"],
+        detector_shape=expected["detector_shape"],
+        frame_dim_label="Dataset",
+        frame_labels=labels,
+        title=args.title or label,
+        verbose=bool(args.verbose),
+        show_controls=True,
+    )
+    out = out_dir / "index.html"
+    widget.export_html(str(out), title=args.title or label, dtype=_show4dstem_export_dtype(args), det_bin=1)
+    print(
+        f"{len(masters)} master(s), backend webgpu, bin 1, dtype {args.dtype} "
+        f"-> {out_dir / 'Show4DSTEM.command'}"
+    )
+    return out
+
+
+def _link_show4dstem_h5_family(out_dir: pathlib.Path, master: pathlib.Path, label: str) -> str:
+    """Symlink a master and same-prefix data chunks under an anonymous label."""
+
+    source_master = master.expanduser().resolve()
+    source_prefix = source_master.name[: -len("_master.h5")]
+    master_link = out_dir / f"{label}_master.h5"
+    _replace_symlink(master_link, source_master)
+    for data_file in sorted(source_master.parent.glob(f"{source_prefix}_data_*.h5")):
+        data_link = out_dir / data_file.name.replace(source_prefix, label, 1)
+        _replace_symlink(data_link, data_file.resolve())
+    return master_link.name
+
+
+def _replace_symlink(link: pathlib.Path, target: pathlib.Path) -> None:
+    """Replace only symlink artifacts; never overwrite a real data file."""
+
+    if link.exists() or link.is_symlink():
+        if not link.is_symlink():
+            raise ValueError(f"refusing to replace non-symlink artifact file: {link}")
+        link.unlink()
+    link.symlink_to(target)
 
 
 def _show4dstem_export_dtype(args: argparse.Namespace) -> str:
@@ -1892,8 +2143,8 @@ def _master_to_binned_numpy(master: str, det_bin: int, dtype: str = "u8"):
 def _render_4dstem(masters: list[str], label: str, args: argparse.Namespace) -> list[pathlib.Path]:
     """Render 4D-STEM master(s) as offline WebGPU Show4DSTEM HTML.
 
-    Each master is loaded with detector binning (``--bin``, default 8) so the stack
-    fits a laptop and packs inline as a self-contained file. ``--combined`` instead
+    Each master is loaded with the requested detector binning (``--bin``, default
+    1 for full detector sampling). ``--combined`` instead
     stacks every master into one 5D viewer (a bslz4 companion folder + a local
     serve, since file:// cannot fetch the companion)."""
     import numpy as np

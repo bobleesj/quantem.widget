@@ -1933,7 +1933,12 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
     # js/displayFilter.ts filters client-side, so the sigma slider scrubs live
     # with no kernel round trip and kernel-less HTML exports keep working
     # knobs. tv panels always stay on this Python path.
-    _webgpu_filter_ok = traitlets.Bool(False).tag(sync=True)
+    # Default True: the browser owns display denoise. js/displayFilter.ts ships
+    # The browser has WGSL and CPU TypeScript filter paths that match NumPy, so
+    # every viewer filters client-side and Python never needs the scipy round
+    # trip, which re-sent the whole frame over comm on every knob edit. The
+    # frontend downgrades this to False only on a software (SwiftShader) adapter.
+    _webgpu_filter_ok = traitlets.Bool(True).tag(sync=True)
     # Chemistry-on-structure view: HAADF-modulated blend of an element map on
     # the HAADF lattice as a third RGB panel (haadf | map | blend). Enabled at
     # construction with underlay=True on exactly two grayscale inputs.

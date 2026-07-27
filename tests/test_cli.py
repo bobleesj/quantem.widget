@@ -3,6 +3,7 @@
 4D-STEM rendering needs a GPU + real master files, so it is exercised manually
 (see docs); here we cover the routing logic and the image paths, which run on CPU.
 """
+import pathlib
 from types import SimpleNamespace
 
 import numpy as np
@@ -33,6 +34,31 @@ def test_jupyter_launch_enables_widget_state_save(tmp_path, monkeypatch):
     cli._enable_jupyterlab_widget_state_save()
     assert '"other": 3' in settings_path.read_text()
     assert '"saveState": true' in settings_path.read_text()
+
+
+def test_launch_notebook_uses_current_python_when_jupyter_not_on_path(tmp_path, monkeypatch):
+    notebook = tmp_path / "viewer.ipynb"
+    notebook.write_text("{}")
+    calls = []
+
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr("shutil.which", lambda name: None)
+
+    def fake_run(command, **kwargs):
+        calls.append(("run", command, kwargs))
+        return SimpleNamespace(returncode=0)
+
+    def fake_popen(command, **kwargs):
+        calls.append(("popen", command, kwargs))
+        return SimpleNamespace()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    cli._launch_notebook(notebook, no_open=False)
+
+    assert calls[0][1][:4] == [cli.sys.executable, "-m", "jupyter", "lab"]
+    assert calls[1][1] == [cli.sys.executable, "-m", "jupyter", "lab", str(notebook)]
 
 
 def test_embed_jpeg_adds_image_to_widget_only_output(tmp_path):
@@ -212,8 +238,185 @@ def test_ptycho_master_cli_uses_native_bin_default(tmp_path, monkeypatch, comman
     assert seen["no_open"] is True
 
 
+def test_show4dstem_cli_count_defaults_to_full_detector(tmp_path, monkeypatch):
+    """C3: Show4DSTEM CLI count gates use native detector pixels by default."""
+    for idx in range(2):
+        (tmp_path / f"scan_{idx}_master.h5").write_bytes(b"\x00")
+    seen = {}
+
+    def fake_discover(path, verbose=False):
+        seen["discover_path"] = path
+        return [str(tmp_path / "scan_0_master.h5"), str(tmp_path / "scan_1_master.h5")]
+
+    def fake_render(masters, label, args, *, source_path=None):
+        seen["masters"] = masters
+        seen["label"] = label
+        seen["det_bin"] = args.det_bin
+        seen["backend"] = args.backend
+        seen["source_path"] = source_path
+        return tmp_path / "viewer.ipynb"
+
+    def fake_launch(notebook, *, no_open):
+        seen["notebook"] = notebook
+        seen["no_open"] = no_open
+
+    monkeypatch.setattr("quantem.widget.io.discover_masters", fake_discover)
+    monkeypatch.setattr(cli, "_render_4dstem_notebook", fake_render)
+    monkeypatch.setattr(cli, "_launch_notebook", fake_launch)
+
+    assert cli.main(["show4dstem", str(tmp_path), "--count", "1", "--backend", "mps", "--no-open"]) == 0
+    assert seen["discover_path"] == str(tmp_path.resolve())
+    assert seen["masters"] == [str(tmp_path / "scan_0_master.h5")]
+    assert seen["label"] == tmp_path.name
+    assert seen["det_bin"] == 1
+    assert seen["backend"] == "mps"
+    assert seen["source_path"] == tmp_path.resolve()
+    assert seen["notebook"] == tmp_path / "viewer.ipynb"
+    assert seen["no_open"] is True
+
+
+def test_show4dstem_cli_count_requires_enough_masters(tmp_path, monkeypatch):
+    """C4: a seven-tilt command fails instead of silently running fewer tilts."""
+    (tmp_path / "scan_0_master.h5").write_bytes(b"\x00")
+
+    def fake_discover(path, verbose=False):
+        return [str(tmp_path / "scan_0_master.h5")]
+
+    monkeypatch.setattr("quantem.widget.io.discover_masters", fake_discover)
+
+    assert cli.main(["show4dstem", str(tmp_path), "--count", "7", "--no-open"]) == 1
+
+
+def test_show4dstem_webgpu_cli_opens_generated_command(tmp_path, monkeypatch):
+    """C5: WebGPU CLI uses the browser lazy export entry path."""
+    (tmp_path / "scan_0_master.h5").write_bytes(b"\x00")
+    out = tmp_path / "artifact" / "index.html"
+    out.parent.mkdir()
+    command = out.parent / "Show4DSTEM.command"
+    command.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    seen = {}
+
+    def fake_discover(path, verbose=False):
+        return [str(tmp_path / "scan_0_master.h5")]
+
+    def fake_render(masters, label, args):
+        seen["masters"] = masters
+        seen["label"] = label
+        seen["det_bin"] = args.det_bin
+        seen["backend"] = args.backend
+        return out
+
+    def fake_open(path, *, no_open):
+        seen["opened"] = path
+        seen["no_open"] = no_open
+
+    monkeypatch.setattr("quantem.widget.io.discover_masters", fake_discover)
+    monkeypatch.setattr(cli, "_render_4dstem_webgpu_h5", fake_render)
+    monkeypatch.setattr(cli, "_open_show4dstem_command", fake_open)
+
+    assert cli.main([
+        "show4dstem",
+        str(tmp_path),
+        "--backend",
+        "webgpu",
+        "--html",
+        "--count",
+        "1",
+        "--no-open",
+    ]) == 0
+    assert seen["masters"] == [str(tmp_path / "scan_0_master.h5")]
+    assert seen["label"] == tmp_path.name
+    assert seen["det_bin"] == 1
+    assert seen["backend"] == "webgpu"
+    assert seen["opened"] == command
+    assert seen["no_open"] is True
+
+
+def test_render_show4dstem_webgpu_h5_uses_anonymous_symlinks(tmp_path, monkeypatch):
+    """C6: WebGPU CLI export links source H5 masters instead of copying data."""
+    import quantem.widget as qw
+
+    masters = []
+    for idx in range(2):
+        master = tmp_path / f"private_source_{idx}_master.h5"
+        master.write_bytes(f"private-{idx}".encode())
+        (tmp_path / f"private_source_{idx}_data_000001.h5").write_bytes(f"chunk-{idx}".encode())
+        masters.append(str(master))
+    seen = {}
+
+    def fake_contract(master):
+        return {"scan_shape": (4, 4), "detector_shape": (8, 8), "n_frames": 16}
+
+    def fake_lazy_sidecar(folder, *, label, scan_shape, detector_shape):
+        sidecar = pathlib.Path(folder) / f"{label}_lazy"
+        sidecar.mkdir()
+        (sidecar / "meta.json").write_text("{}", encoding="utf-8")
+        return f"{label}_lazy/"
+
+    class FakeShow4DSTEM:
+        def __init__(self, data, **kwargs):
+            seen["kwargs"] = kwargs
+
+        def export_html(self, path, *, title=None, dtype=None, det_bin=None):
+            seen["export"] = {"path": path, "title": title, "dtype": dtype, "det_bin": det_bin}
+            target = pathlib.Path(path)
+            target.write_text("<!doctype html>", encoding="utf-8")
+            (target.parent / "Show4DSTEM.command").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+
+    monkeypatch.setattr("quantem.widget.show4dstem_factory._master_file_contract", fake_contract)
+    monkeypatch.setattr(
+        "quantem.widget.show4dstem_webgpu_export.build_lazy_show4dstem_sidecar",
+        fake_lazy_sidecar,
+    )
+    monkeypatch.setattr(qw, "Show4DSTEM", FakeShow4DSTEM)
+    args = SimpleNamespace(det_bin=1, dtype="u8", out=str(tmp_path / "out"), title=None, verbose=False)
+
+    html = cli._render_4dstem_webgpu_h5(masters, "private_folder", args)
+
+    assert html == tmp_path / "out" / "private_folder_show4dstem_webgpu" / "index.html"
+    assert "h5_urls" not in seen["kwargs"]
+    assert seen["kwargs"]["lazy_urls"] == ["tilt_00_lazy/", "tilt_01_lazy/"]
+    assert seen["kwargs"]["backend"] == "webgpu"
+    assert seen["kwargs"]["scan_shape"] == (4, 4)
+    assert seen["kwargs"]["detector_shape"] == (8, 8)
+    assert seen["export"]["dtype"] == "uint8"
+    assert seen["export"]["det_bin"] == 1
+    assert (html.parent / "tilt_00_master.h5").is_symlink()
+    assert (html.parent / "tilt_00_master.h5").resolve() == pathlib.Path(masters[0])
+    assert (html.parent / "tilt_00_data_000001.h5").is_symlink()
+    assert (html.parent / "tilt_00_data_000001.h5").resolve() == tmp_path / "private_source_0_data_000001.h5"
+
+
+def test_render_show4dstem_folder_notebook_records_backend_count_and_devices(tmp_path):
+    """C7: generated CUDA folder notebooks preserve the seven-entry gate options."""
+    args = SimpleNamespace(
+        backend="cuda",
+        det_bin=1,
+        dtype="u8",
+        gpus="0,1",
+        page_budget="auto",
+        out=str(tmp_path),
+    )
+
+    notebook = cli._render_4dstem_notebook(
+        [str(tmp_path / f"tilt_{idx:02d}_master.h5") for idx in range(7)],
+        "seven",
+        args,
+        source_path=tmp_path,
+    )
+
+    text = notebook.read_text(encoding="utf-8")
+    assert "Show4DSTEM.from_folder(" in text
+    assert "backend='cuda'" in text
+    assert "max_masters=7" in text
+    assert "min_masters=7" in text
+    assert "det_bin=1" in text
+    assert "dtype='u8'" in text
+    assert "gpus = [0, 1]" in text
+
+
 def test_showptycho_auto_calibration_selects_matching_source(tmp_path):
-    """C3: automatic calibration search picks the matching microscope source."""
+    """C7: automatic calibration search picks the matching microscope source."""
     master = tmp_path / "BTO_18_master.h5"
     master.write_bytes(b"\x00")
     cal_dir = tmp_path / "quantem" / "screen"
@@ -373,7 +576,9 @@ def test_4dstem_default_writes_notebook(tmp_path):
     import json
     nb = json.loads(notebooks[0].read_text())
     code = "".join(nb["cells"][1]["source"])
-    assert "Show4DSTEM(load(" in code and "det_bin=8" in code
+    assert "Show4DSTEM.from_folder(" in code
+    assert "det_bin=1" in code
+    assert "max_masters=1" in code
 
 
 def test_multiple_masters_one_5d_notebook(tmp_path):
@@ -387,8 +592,9 @@ def test_multiple_masters_one_5d_notebook(tmp_path):
     assert len(notebooks) == 1
     import json
     code = "".join(json.loads(notebooks[0].read_text())["cells"][1]["source"])
-    # Both masters in a single load([...]) -> one 5D viewer.
-    assert "load([" in code and "a_master.h5" in code and "b_master.h5" in code
+    # Both explicit masters stay in one load call -> one 5D viewer.
+    assert "masters = [" in code and "a_master.h5" in code and "b_master.h5" in code
+    assert "det_bin=1" in code
 
 
 def test_multiple_images_one_gallery(tmp_path):

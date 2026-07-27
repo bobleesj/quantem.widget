@@ -1,19 +1,24 @@
-"""No-server Show4DSTEM WebGPU bundle export.
+"""Local-server Show4DSTEM WebGPU bundle export.
 
 Mirrors the ShowPtycho handoff protocol: the recipient double-clicks one
 ``Show4DSTEM.command``, a local range-capable HTTP server starts over the data
-folder, and Chrome opens a fully vendored viewer page that decodes the raw
-bslz4 HDF5 family in WebGPU. No Python, no network, no folder-grant click at
-view time. Everything the page needs (require.js, the Jupyter widget manager,
-anywidget, the server script) ships from this package's ``static/vendor``.
+folder, and Chrome opens a fully vendored viewer page. The current CLI path
+uses lazy sidecars for first BF/VI paint and byte ranges into the original HDF5
+files for on-demand diffraction frames. No Python package install, no network,
+and no folder-grant click are required at view time. Everything the page needs
+(require.js, the Jupyter widget manager, anywidget, the server script) ships
+from this package's ``static/vendor``.
 """
 
 from __future__ import annotations
 
 import gzip
+import json
 import pathlib
 import re
 from typing import Any, Sequence
+
+import numpy as np
 
 from quantem.widget.command_launcher import write_command_launcher
 
@@ -53,6 +58,7 @@ def _tuning(*, h5_uint8_lossless: bool) -> str:
         f"globalThis.__QT_H5_FORCE_LOW8 ??= {low8};\n"
         f"globalThis.__BSLZ4_LOW8_ONLY ??= {low8};\n"
         "globalThis.__BSLZ4_FRAME_WG ??= 64;\n"
+        "globalThis.__BSLZ4_PIPELINE_STAGING ??= false;\n"
         "globalThis.__QT_H5_FETCH_WINDOW ??= 8;\n"
         "globalThis.__QT_H5_DECODE_QUEUE ??= 8;\n"
         "globalThis.__QT_H5_PRELOAD_WINDOW ??= 1;\n"
@@ -71,12 +77,12 @@ def export_show4dstem_webgpu_bundle(
 ) -> pathlib.Path:
     """Write a double-clickable Show4DSTEM WebGPU bundle into ``out_dir``.
 
-    ``out_dir`` must be the folder holding the ``*_master.h5`` family the widget
-    was built from (``h5_url``/``h5_urls`` given as bare basenames or ``../``
-    relative names). Produces ``Show4DSTEM.command`` at the root and a hidden
-    ``.viewer/`` with the vendored page and the range-capable server. Returns
-    the path to the launcher. Without this bundle the recipient needs Python,
-    the CDNs, and a folder-grant click; with it the demo is one double-click.
+    ``out_dir`` must be the folder holding the linked ``*_master.h5`` family and
+    any ``*_lazy/`` sidecars the widget references. Produces
+    ``Show4DSTEM.command`` at the root and a hidden ``.viewer/`` with the
+    vendored page and the range-capable server. Returns the path to the
+    launcher. Without this bundle the recipient needs Python, the CDNs, and a
+    folder-grant click; with it the demo is one double-click.
     """
     root = pathlib.Path(out_dir)
     if not root.is_dir():
@@ -126,3 +132,118 @@ def bundle_master_urls(folder: str | pathlib.Path, names: Sequence[str] | None =
             picked.append(hits[0])
         masters = picked
     return [f"../{name}" for name in masters]
+
+
+def build_lazy_show4dstem_sidecar(
+    folder: str | pathlib.Path,
+    *,
+    label: str,
+    scan_shape: tuple[int, int],
+    detector_shape: tuple[int, int],
+) -> str:
+    """Build a lazy WebGPU sidecar for an anonymous HDF5 family.
+
+    The sidecar is intentionally small compared with the raw HDF5 family:
+    ``profile.bin`` stores radial detector-bin sums per scan position,
+    ``index.bin`` stores one range-fetch pointer per scan frame, and ``com.bin``
+    stores a full-detector center-of-mass field. Raw detector frames stay in the
+    linked ``*_data_*.h5`` files and are fetched on demand by byte range.
+    """
+
+    import h5py
+
+    root = pathlib.Path(folder)
+    data_files = sorted(root.glob(f"{label}_data_*.h5"))
+    if not data_files:
+        raise ValueError(f"no linked HDF5 data files found for {label!r} in {root}")
+    scan_rows, scan_cols = (int(scan_shape[0]), int(scan_shape[1]))
+    det_rows, det_cols = (int(detector_shape[0]), int(detector_shape[1]))
+    if det_rows != det_cols:
+        raise ValueError(
+            "Show4DSTEM lazy WebGPU sidecars currently require a square detector; "
+            f"got detector_shape={detector_shape!r}."
+        )
+    scan_count = scan_rows * scan_cols
+    detector_size = det_rows * det_cols
+    nbins = max(1, det_rows // 2)
+    lazy_dir = root / f"{label}_lazy"
+    lazy_dir.mkdir(parents=True, exist_ok=True)
+
+    rows = np.arange(det_rows, dtype=np.float32)[:, None]
+    cols = np.arange(det_cols, dtype=np.float32)[None, :]
+    radial_bins = np.floor(
+        np.hypot(rows - det_rows / 2, cols - det_cols / 2)
+    ).astype(np.int32)
+    radial_bins = np.clip(radial_bins.reshape(-1), 0, nbins - 1)
+    radial_one_hot = np.zeros((detector_size, nbins), dtype=np.float32)
+    radial_one_hot[np.arange(detector_size), radial_bins] = 1.0
+    row_coords = np.broadcast_to(
+        np.arange(det_rows, dtype=np.float32)[:, None], (det_rows, det_cols)
+    ).reshape(-1)
+    col_coords = np.broadcast_to(
+        np.arange(det_cols, dtype=np.float32)[None, :], (det_rows, det_cols)
+    ).reshape(-1)
+
+    profile_path = lazy_dir / "profile.bin"
+    index_path = lazy_dir / "index.bin"
+    com_path = lazy_dir / "com.bin"
+    profile = np.memmap(profile_path, mode="w+", dtype=np.float32, shape=(scan_count, nbins))
+    frame_index = np.memmap(index_path, mode="w+", dtype=np.uint32, shape=(scan_count, 3))
+    com = np.memmap(com_path, mode="w+", dtype=np.float32, shape=(2, scan_count))
+
+    frame_cursor = 0
+    for file_index, data_file in enumerate(data_files):
+        with h5py.File(data_file, "r") as handle:
+            dataset = handle.get("entry/data/data")
+            if dataset is None:
+                raise ValueError(f"{data_file.name} has no entry/data/data dataset")
+            if tuple(int(value) for value in dataset.shape[-2:]) != (det_rows, det_cols):
+                raise ValueError(
+                    f"{data_file.name} detector shape {dataset.shape[-2:]} does not "
+                    f"match {detector_shape!r}."
+                )
+            n_frames = int(dataset.shape[0])
+            for frame in range(n_frames):
+                if frame_cursor >= scan_count:
+                    raise ValueError(
+                        f"{label!r} has more frames than scan_shape={scan_shape!r}."
+                    )
+                info = dataset.id.get_chunk_info_by_coord((frame, 0, 0))
+                frame_index[frame_cursor] = (
+                    file_index,
+                    int(info.byte_offset),
+                    int(info.size),
+                )
+                frame_cursor += 1
+            batch = 512
+            start_scan = frame_cursor - n_frames
+            for start in range(0, n_frames, batch):
+                stop = min(n_frames, start + batch)
+                frames = np.asarray(dataset[start:stop], dtype=np.float32).reshape(
+                    stop - start, detector_size
+                )
+                out_slice = slice(start_scan + start, start_scan + stop)
+                profile[out_slice, :] = frames @ radial_one_hot
+                totals = frames.sum(axis=1)
+                safe_totals = np.where(totals > 0, totals, 1.0)
+                com[0, out_slice] = (frames @ row_coords) / safe_totals
+                com[1, out_slice] = (frames @ col_coords) / safe_totals
+
+    if frame_cursor != scan_count:
+        raise ValueError(
+            f"{label!r} has {frame_cursor} frames, expected {scan_count} from "
+            f"scan_shape={scan_shape!r}."
+        )
+    profile.flush()
+    frame_index.flush()
+    com.flush()
+    meta = {
+        "SR": scan_rows,
+        "SC": scan_cols,
+        "D": det_rows,
+        "NB": nbins,
+        "nFrames": scan_count,
+        "files": [f"../{path.name}" for path in data_files],
+    }
+    (lazy_dir / "meta.json").write_text(json.dumps(meta, separators=(",", ":")))
+    return f"{label}_lazy/"

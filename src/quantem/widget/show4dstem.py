@@ -83,6 +83,47 @@ def _h5_bad_pixel_json_for_export(url: str, base_dir: pathlib.Path) -> str | Non
     return json.dumps(bad)
 
 
+def _show4dstem_h5_webgpu_tuning(*, dtype: str, h5_uint8_lossless: bool) -> str:
+    """Return runtime settings for browser-owned HDF5 WebGPU exports."""
+    decode_dtype = "uint8" if dtype == "uint8" else "u2"
+    low8 = "true" if h5_uint8_lossless else "false"
+    return (
+        "<script>\n"
+        f'globalThis.__QT_H5_DECODE_DTYPE ??= "{decode_dtype}";\n'
+        f"globalThis.__QT_H5_FORCE_LOW8 ??= {low8};\n"
+        f"globalThis.__BSLZ4_LOW8_ONLY ??= {low8};\n"
+        "globalThis.__BSLZ4_FRAME_WG ??= 64;\n"
+        "globalThis.__BSLZ4_PIPELINE_STAGING ??= false;\n"
+        "globalThis.__QT_H5_FETCH_WINDOW ??= 8;\n"
+        "globalThis.__QT_H5_DECODE_QUEUE ??= 8;\n"
+        "globalThis.__QT_H5_PRELOAD_WINDOW ??= 1;\n"
+        "globalThis.__QT_H5_LOCAL_GROUP ??= 8;\n"
+        "globalThis.__QT_H5_LOCAL_WORKERS ??= 8;\n"
+        "</script>\n"
+    )
+
+
+def _inject_show4dstem_h5_webgpu_tuning(
+    path: pathlib.Path,
+    *,
+    dtype: str,
+    h5_uint8_lossless: bool,
+) -> None:
+    """Inject HDF5 WebGPU runtime settings into an exported HTML page."""
+    text = path.read_text(encoding="utf-8")
+    if "__QT_H5_DECODE_DTYPE" in text and "__BSLZ4_PIPELINE_STAGING" in text:
+        return
+    script = _show4dstem_h5_webgpu_tuning(
+        dtype=dtype,
+        h5_uint8_lossless=h5_uint8_lossless,
+    )
+    if "<head>" in text:
+        text = text.replace("<head>", "<head>\n" + script, 1)
+    else:
+        text = script + text
+    path.write_text(text, encoding="utf-8")
+
+
 class _NumpyShow4DSTEMComputeBackend:
     """Small CPU fallback for local array viewers without ``quantem.gpu``."""
 
@@ -425,9 +466,9 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     # multi-volume {volumes:[{base,chunks,badPx}], ...}. The browser decode is
     # bit-exact to the uint8-clipped reference (verified).
     _offline_bslz4 = traitlets.Unicode("").tag(sync=True)
-    # H5-source mode: the HTML points at sibling HDF5 files; JS reads them via
-    # WebGPU (jsfive parse + GPU bitshuffle+LZ4 decode). NOTHING embedded, the
-    # data stays a file. Needs HTTP (fetch CORS-blocked under file://).
+    # Browser-source mode: normal CLI exports point at lazy sidecars plus
+    # sibling HDF5 files for on-demand byte-range frame reads. The legacy H5
+    # source fields remain for compatibility and focused debug tests.
     _h5_url = traitlets.Unicode("").tag(sync=True)
     _h5_urls = traitlets.Unicode("").tag(sync=True)
     _h5_uint8_lossless = traitlets.Bool(False).tag(sync=True)
@@ -435,6 +476,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     # derives the virtual image from the ~100 MB profile in VRAM and lazy-fetches CBED frames from
     # disk - nothing bulk-loads. Real-time scrub + detector with no 38 GB resident.
     _lazy_url = traitlets.Unicode("").tag(sync=True)
+    _lazy_urls = traitlets.Unicode("").tag(sync=True)
     # Hot/dead detector pixel indices (JSON list) auto-applied by the offline WebGPU
     # compute - mirrors CUDA load(apply_mask=True) so the browser data is filtered
     # automatically (no saturated pixel dominating the VI/DP).
@@ -1379,6 +1421,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         offline_dtype: str = "uint8",
         h5_url: str | None = None,
         h5_urls: Sequence[str] | None = None,
+        lazy_url: str | None = None,
+        lazy_urls: Sequence[str] | None = None,
         h5_uint8_lossless: bool = False,
         detector_shape: tuple[int, int] | None = None,
         show_fft: bool = False,
@@ -1524,24 +1568,33 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         _verbose = verbose
 
         _io_labels = None
+        webgpu_lazy_urls = [str(value) for value in (lazy_urls or [])]
+        if lazy_url:
+            webgpu_lazy_urls = [str(lazy_url), *webgpu_lazy_urls]
+        webgpu_lazy_urls = list(dict.fromkeys(webgpu_lazy_urls))
         webgpu_h5_urls = [str(value) for value in (h5_urls or [])]
         if h5_url:
             webgpu_h5_urls = [str(h5_url), *webgpu_h5_urls]
         # Preserve order but drop accidental duplicates; repeated URLs would waste
         # browser VRAM and create indistinguishable compare panels.
-        if webgpu_h5_urls:
+        if webgpu_h5_urls and webgpu_lazy_urls:
+            raise ValueError("Use h5_urls= or lazy_urls=, not both.")
+        webgpu_source_count = len(webgpu_lazy_urls) or len(webgpu_h5_urls)
+        if webgpu_source_count:
             webgpu_h5_urls = list(dict.fromkeys(webgpu_h5_urls))
             if scan_shape is None:
                 raise ValueError(
-                    "Show4DSTEM(..., h5_urls=...) requires scan_shape=(rows, cols)."
+                    "Show4DSTEM(..., h5_urls=... or lazy_url/lazy_urls=...) "
+                    "requires scan_shape=(rows, cols)."
                 )
             if detector_shape is None:
                 raise ValueError(
-                    "Show4DSTEM(..., h5_urls=...) requires detector_shape=(rows, cols)."
+                    "Show4DSTEM(..., h5_urls=... or lazy_url/lazy_urls=...) "
+                    "requires detector_shape=(rows, cols)."
                 )
             if backend not in (None, "web", "browser", "webgpu"):
                 raise ValueError(
-                    "H5-source Show4DSTEM uses browser WebGPU; backend must be "
+                    "Browser-source Show4DSTEM uses WebGPU; backend must be "
                     f"'webgpu'/'web' or None, got {backend!r}."
                 )
             offline = True
@@ -1653,7 +1706,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         # Accept the io.load(...) output directly so `Show4DSTEM(load(path))` just
         # works on any backend. Unwrap a LoadResult NamedTuple, then wrap a raw MPS
         # chunked-load (MPSChunked4DSTEM) for the Metal compute path.
-        self._webgpu_h5_source = bool(webgpu_h5_urls)
+        self._webgpu_h5_source = bool(webgpu_source_count)
         self._cuda_compute_data = None
         self._cuda_compare_compute_backends: OrderedDict[int, Any] = OrderedDict()
         if self._webgpu_h5_source:
@@ -1667,8 +1720,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                     "scan_shape and detector_shape entries must all be positive."
                 )
             shape = (
-                (len(webgpu_h5_urls), rows, cols, det_r, det_c)
-                if len(webgpu_h5_urls) > 1
+                (webgpu_source_count, rows, cols, det_r, det_c)
+                if webgpu_source_count > 1
                 else (rows, cols, det_r, det_c)
             )
         else:
@@ -1864,6 +1917,10 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             self._offline_codec = offline_codec
             self._h5_url = webgpu_h5_urls[0] if len(webgpu_h5_urls) == 1 else ""
             self._h5_urls = json.dumps(webgpu_h5_urls) if len(webgpu_h5_urls) > 1 else ""
+            self._lazy_url = webgpu_lazy_urls[0] if len(webgpu_lazy_urls) == 1 else ""
+            self._lazy_urls = (
+                json.dumps(webgpu_lazy_urls) if len(webgpu_lazy_urls) > 1 else ""
+            )
             self._h5_uint8_lossless = bool(h5_uint8_lossless)
             self.offline = True
             self._offline_stack = b""
@@ -1961,12 +2018,16 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 self.compare_panel_indices = []
                 self.compare_virtual_image_bytes = b""
                 self.compare_status = (
-                    f"Loading {visible_count}/{int(self.n_frames)} browser WebGPU H5 panels"
+                    f"Loading {visible_count}/{int(self.n_frames)} browser WebGPU panels"
                 )
             self.compare_page_count = max(
                 1, math.ceil(max(1, int(self.n_frames)) / max(1, int(compare_max_panels)))
             )
-            self.gpu_memory_label = "Browser WebGPU H5 source"
+            self.gpu_memory_label = (
+                "Browser WebGPU lazy source"
+                if webgpu_lazy_urls
+                else "Browser WebGPU HDF5 source"
+            )
             self.memory_warning = ""
             return
         # Histogram axis range — first frame is enough (JS does per-frame percentile clipping).
@@ -2316,9 +2377,15 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         """
         if self._data.ndim not in (4, 5):
             return
-        # H5-source / lazy mode: the merged data stays files on disk, read by WebGPU at runtime.
-        # No uint8 pack, nothing embedded - the JS fetches the sidecars/frames and decodes on GPU.
-        if getattr(self, "_h5_url", "") or getattr(self, "_lazy_url", ""):
+        # Browser-source mode: the raw frames stay as files on disk and WebGPU
+        # reads either the legacy source or the lazy sidecar/frame ranges at
+        # runtime. Do not pack/embed data for these browser-source paths.
+        if (
+            getattr(self, "_h5_url", "")
+            or getattr(self, "_h5_urls", "")
+            or getattr(self, "_lazy_url", "")
+            or getattr(self, "_lazy_urls", "")
+        ):
             self.offline = True
             return
         offline_dtype = getattr(self, "_offline_dtype", "uint8")
@@ -2736,7 +2803,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         if getattr(self, "_webgpu_h5_source", False):
             if det_bin != 1 or scan_bin != 1:
                 raise ValueError(
-                    "Binned interactive raw export is not available for H5-source "
+                    "Binned interactive raw export is not available for browser-source "
                     "Show4DSTEM exports because the browser reads the real H5 data "
                     "directly. Use det_bin=1 and scan_bin=1 to preserve the full data."
                 )
@@ -2759,6 +2826,11 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                     title=title or self.title or "Show4DSTEM",
                     drop_defaults=False,
                     state=dependency_state([self], drop_defaults=False),
+                )
+                _inject_show4dstem_h5_webgpu_tuning(
+                    out,
+                    dtype=dtype,
+                    h5_uint8_lossless=bool(self._h5_uint8_lossless),
                 )
             finally:
                 self.export_enabled = prev_enabled

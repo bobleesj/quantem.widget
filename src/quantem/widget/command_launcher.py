@@ -6,10 +6,12 @@ requests. Opening it needs either a File System Access grant or a Range-capable
 local server. This module writes a self-contained macOS launcher so the user can
 just double-click:
 
-- ``<WidgetLabel>.command`` at the folder root: a zsh script that starts the
-  bundled Range server and opens the viewer in Google Chrome (WebGPU needs a
-  Chromium browser, not Safari). Reuses an already-running server on the same
-  port; cleans the server up on exit.
+- ``<WidgetLabel>.command`` at the folder root: a zsh script that starts or
+  reuses the bundled Range server for this exact folder and opens the viewer in
+  Google Chrome (WebGPU needs a Chromium browser, not Safari). If the preferred
+  port is already busy with another folder or unknown server, the launcher
+  advances to the next free port; closing the Terminal window stops a new
+  server.
 - ``.viewer/serve_range.py``: a stdlib-only Range HTTP server (no third-party
   deps, uses the Mac's built-in ``/usr/bin/python3``).
 
@@ -45,6 +47,15 @@ class RangeHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def _serve(self):
+        if urllib.parse.urlsplit(self.path).path == "/__quantem_viewer_root__":
+            body = str(Path.cwd().resolve()).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+            return
         path = Path(self.translate_path(self.path))
         if path.is_dir():
             path = path / "index.html"
@@ -160,18 +171,48 @@ def _command_script(widget_label: str, port: int, viewer_html: str) -> str:
 set -u
 DIR="${{0:A:h}}"
 PORT="${{QUANTEM_HANDOFF_PORT:-{port}}}"
-URL="http://127.0.0.1:${{PORT}}/{viewer_html}"
-if lsof -nP -iTCP:${{PORT}} -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "Reusing local viewer server on port ${{PORT}}"
-  open -a "Google Chrome" "$URL" 2>/dev/null || open "$URL"
-  exit 0
-fi
 cd "$DIR"
+while lsof -nP -iTCP:${{PORT}} -sTCP:LISTEN >/dev/null 2>&1; do
+  EXISTING_ROOT="$(/usr/bin/python3 - "$PORT" <<'PY'
+import sys
+import urllib.request
+
+url = "http://127.0.0.1:" + sys.argv[1] + "/__quantem_viewer_root__"
+try:
+    print(urllib.request.urlopen(url, timeout=0.5).read().decode("utf-8").strip())
+except Exception:
+    pass
+PY
+)"
+  if [[ "$EXISTING_ROOT" == "$DIR" ]]; then
+    URL="http://127.0.0.1:${{PORT}}/{viewer_html}"
+    echo "Reusing local {widget_label} viewer server for this folder on port ${{PORT}}"
+    open -a "Google Chrome" "$URL" 2>/dev/null || open "$URL"
+    echo "$URL"
+    exit 0
+  fi
+  PORT=$((PORT + 1))
+done
+URL="http://127.0.0.1:${{PORT}}/{viewer_html}"
 echo "Starting local {widget_label} viewer. Keep this Terminal window open while viewing."
 /usr/bin/python3 "$DIR/.viewer/serve_range.py" --root "$DIR" --host 127.0.0.1 --port "$PORT" &
 PID=$!
 trap 'kill $PID 2>/dev/null || true' INT TERM EXIT
-sleep 1
+for _ in {{1..40}}; do
+  READY_ROOT="$(/usr/bin/python3 - "$PORT" <<'PY'
+import sys
+import urllib.request
+
+url = "http://127.0.0.1:" + sys.argv[1] + "/__quantem_viewer_root__"
+try:
+    print(urllib.request.urlopen(url, timeout=0.1).read().decode("utf-8").strip())
+except Exception:
+    pass
+PY
+)"
+  [[ "$READY_ROOT" == "$DIR" ]] && break
+  sleep 0.025
+done
 open -a "Google Chrome" "$URL" 2>/dev/null || open "$URL"
 echo "$URL"
 wait "$PID"
