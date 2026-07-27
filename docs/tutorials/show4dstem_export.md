@@ -54,7 +54,7 @@ Use `dataset_scope` deliberately:
 
 | `dataset_scope` | Meaning |
 |---|---|
-| `"current_page"` | Export only the visible comparison page. |
+| `"current_page"` | Export only the visible review page. |
 | `"starred"` | Export curated starred panels. |
 | `"unhidden"` | Export every panel that has not been hidden. |
 | `"all"` | Export every dataset, including hidden panels. |
@@ -81,7 +81,7 @@ Use this when the recipient needs to:
 
 - drag BF/ABF/ADF/HAADF or custom detector ROIs offline,
 - inspect diffraction and virtual-image panels without Jupyter,
-- compare a small number of binned datasets in a browser.
+- review a small number of binned datasets in a browser.
 
 Do not use this as the first choice for a large multi-master screening report.
 Report export is smaller and faster because it does not embed raw 4D data.

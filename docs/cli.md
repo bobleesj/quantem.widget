@@ -79,7 +79,7 @@ choice when native detector detail matters; for quick laptop browsing use
 `--bin 8 --dtype uint8`, and for compact collaborator review use the Python
 `export_kind="report"` path below.
 
-For large lazy folders, curated comparison grids, or collaborator screening,
+For large lazy folders, curated review grids, or collaborator screening,
 open a live viewer and export a compact report from Python instead:
 
 ```python
