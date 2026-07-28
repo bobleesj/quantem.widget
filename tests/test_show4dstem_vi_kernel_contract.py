@@ -140,6 +140,7 @@ def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
     frontend = (repo / "js" / "show4dstem" / "index.tsx").read_text(
         encoding="utf-8"
     )
+    lazy = _webgpu_source("lazy.ts")
     local_h5 = _webgpu_source("local-h5.ts")
     compute = _webgpu_source("compute.ts")
     bslz4 = _webgpu_source("bslz4.ts")
@@ -185,6 +186,19 @@ def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
     assert "const bad = this.badPx.length ? new Set(this.badPx) : null;" in compute
     assert "bad?.has(i) ? 0" in compute
     assert "if (local.badPixels.length) created.badPx = local.badPixels;" in frontend
+    assert "badPixels?: number[]" in lazy
+    assert 'sourceDtype?: LazySourceDtype;' in lazy
+    assert 'function lazySourceDtype(value: unknown): LazySourceDtype' in lazy
+    assert 'function bytesPerLazyPixel(dtype: LazySourceDtype): number' in lazy
+    assert ': "uint16";' in lazy
+    assert "Array.isArray(meta.badPixels)" in lazy
+    assert "created.badPx = new Uint32Array(bad);" in lazy
+    assert "const sourceDtype = lazySourceDtype(this.meta.sourceDtype);" in lazy
+    assert "const bb = be32(ch, 8), be = bb / bytesPerLazyPixel(sourceDtype)" in lazy
+    assert "const byteLength = this.detSize * bytesPerLazyPixel(sourceDtype);" in lazy
+    assert "}, sourceDtype, sourceDtype);" in lazy
+    assert 'sourceDtype === "uint16"' in lazy
+    assert "for (const bp of this.badPx) v[bp] = 0;" in lazy
     assert "compute.detSize === detR * detC" in frontend
     assert "local.scanCount" in frontend
     assert "rawFrame:" not in frontend

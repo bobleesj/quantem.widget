@@ -2,10 +2,10 @@
 
 Mirrors the ShowPtycho handoff protocol: the recipient double-clicks one
 ``Show4DSTEM.command``, a local range-capable HTTP server starts over the data
-folder, and Chrome opens a fully vendored viewer page. The current CLI path
-uses lazy sidecars for first BF/VI paint and byte ranges into the original HDF5
-files for on-demand diffraction frames. No Python package install, no network,
-and no folder-grant click are required at view time. Everything the page needs
+folder, and Chrome opens a fully vendored viewer page. The normal CLI path keeps
+the compressed HDF5 family on disk and lets the browser range-fetch and
+decompress detector chunks directly. No Python package install, no network, and
+no folder-grant click are required at view time. Everything the page needs
 (require.js, the Jupyter widget manager, anywidget, the server script) ships
 from this package's ``static/vendor``.
 """
@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
 import pathlib
 import re
+import struct
 from typing import Any, Sequence
 
 import numpy as np
@@ -49,8 +51,8 @@ def _write_vendor_asset(name: str, viewer: pathlib.Path) -> None:
 # Promoted WebGPU decode configuration. Native uint16 is the conservative
 # default; audited uint8 browse sources can use the low8-only kernel to skip the
 # high bitplanes that only hold masked detector sentinels.
-def _tuning(*, h5_uint8_lossless: bool) -> str:
-    dtype = "uint8" if h5_uint8_lossless else "u2"
+def _tuning(*, h5_decode_dtype: str, h5_uint8_lossless: bool) -> str:
+    dtype = "uint8" if h5_uint8_lossless or h5_decode_dtype in {"u8", "uint8"} else "u2"
     low8 = "true" if h5_uint8_lossless else "false"
     return (
         "<script>\n"
@@ -74,12 +76,13 @@ def export_show4dstem_webgpu_bundle(
     *,
     port: int = 8794,
     title: str | None = None,
+    h5_decode_dtype: str = "uint16",
 ) -> pathlib.Path:
     """Write a double-clickable Show4DSTEM WebGPU bundle into ``out_dir``.
 
-    ``out_dir`` must be the folder holding the linked ``*_master.h5`` family and
-    any ``*_lazy/`` sidecars the widget references. Produces
-    ``Show4DSTEM.command`` at the root and a hidden ``.viewer/`` with the
+    ``out_dir`` must be the folder holding the linked ``*_master.h5`` family the
+    widget references. Produces ``Show4DSTEM.command`` at the root and a hidden
+    ``.viewer/`` with the
     vendored page and the range-capable server. Returns the path to the
     launcher. Without this bundle the recipient needs Python, the CDNs, and a
     folder-grant click; with it the demo is one double-click.
@@ -98,7 +101,10 @@ def export_show4dstem_webgpu_bundle(
     text = text.replace(
         "<head>",
         "<head>\n"
-        + _tuning(h5_uint8_lossless=bool(getattr(widget, "_h5_uint8_lossless", False))),
+        + _tuning(
+            h5_decode_dtype=str(h5_decode_dtype).lower(),
+            h5_uint8_lossless=bool(getattr(widget, "_h5_uint8_lossless", False)),
+        ),
         1,
     )
     for pattern, local in _CDN_REWRITES:
@@ -106,10 +112,25 @@ def export_show4dstem_webgpu_bundle(
     html.write_text(text, encoding="utf-8")
     for name in ("require.min.js", "embed-amd.js", "anywidget.min.js"):
         _write_vendor_asset(name, viewer)
+    (root / "index.html").write_text(
+        """<!doctype html>
+<html><head><meta charset="utf-8"><title>Show4DSTEM</title></head>
+<body>
+<script>
+if (window.location.protocol === "file:") {
+  document.body.innerHTML = '<main style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Arial,sans-serif;max-width:760px;margin:72px auto;padding:0 24px;line-height:1.45;color:#1f2933"><h1 style="font-size:24px;margin:0 0 12px">Show4DSTEM</h1><p style="font-size:16px;margin:0 0 12px">This Show4DSTEM package must be opened through its local range server.</p><p style="font-size:16px;margin:0 0 18px">Double-click <strong>Show4DSTEM.command</strong> in this folder.</p><p style="font-size:13px;color:#64748b">Direct file:// opening cannot stream the HDF5 sources.</p></main>';
+} else {
+  window.location.replace(".viewer/Show4DSTEM.html" + window.location.search + window.location.hash);
+}
+</script>
+</body></html>
+""",
+        encoding="utf-8",
+    )
     return write_command_launcher(
         root,
         "Show4DSTEM",
-        viewer_html=".viewer/Show4DSTEM.html",
+        viewer_html="index.html",
         port=int(port),
     )
 
@@ -132,6 +153,123 @@ def bundle_master_urls(folder: str | pathlib.Path, names: Sequence[str] | None =
             picked.append(hits[0])
         masters = picked
     return [f"../{name}" for name in masters]
+
+
+def _read_h5_bad_pixel_indices(path: pathlib.Path, detector_size: int) -> tuple[list[int], bool]:
+    """Return detector pixels from HDF5 metadata and whether a mask existed."""
+    try:
+        from quantem.gpu.io.hdf5 import read_pixel_mask
+
+        mask = read_pixel_mask(path)
+    except Exception:
+        return [], False
+    if mask is None:
+        return [], False
+    bad = np.flatnonzero(np.asarray(mask).reshape(-1) > 0)
+    bad = bad[(bad >= 0) & (bad < detector_size)]
+    return bad.astype(int).tolist(), True
+
+
+def _bslz4_payload_size_at(
+    handle,
+    offset: int,
+    file_size: int,
+    *,
+    expected_uncompressed_bytes: int,
+) -> int | None:
+    """Return one raw BSLZ4 chunk payload size from a file offset."""
+    if offset < 0 or offset + 12 > file_size:
+        return None
+    handle.seek(offset)
+    header = handle.read(12)
+    if len(header) != 12:
+        return None
+    _, uncompressed_bytes, block_bytes = struct.unpack(">III", header)
+    if uncompressed_bytes != expected_uncompressed_bytes or block_bytes <= 0:
+        return None
+    n_blocks = math.ceil(uncompressed_bytes / block_bytes)
+    size = 12
+    for _ in range(n_blocks):
+        raw = handle.read(4)
+        if len(raw) != 4:
+            return None
+        (compressed_size,) = struct.unpack(">I", raw)
+        if handle.tell() + compressed_size > file_size:
+            return None
+        handle.seek(compressed_size, 1)
+        size += 4 + compressed_size
+    return size
+
+
+def _find_next_bslz4_payload_offset(
+    handle,
+    start_offset: int,
+    file_size: int,
+    *,
+    expected_uncompressed_bytes: int,
+    search_window: int = 1024 * 1024,
+) -> int | None:
+    """Find the next BSLZ4 chunk header after an HDF5 metadata gap."""
+    if start_offset < 0 or start_offset >= file_size:
+        return None
+    handle.seek(start_offset)
+    data = handle.read(min(search_window, file_size - start_offset))
+    needle = struct.pack(">II", 0, int(expected_uncompressed_bytes))
+    pos = data.find(needle)
+    while pos >= 0:
+        candidate = start_offset + pos
+        size = _bslz4_payload_size_at(
+            handle,
+            candidate,
+            file_size,
+            expected_uncompressed_bytes=expected_uncompressed_bytes,
+        )
+        if size is not None:
+            return candidate
+        pos = data.find(needle, pos + 1)
+    return None
+
+
+def _contiguous_bslz4_frame_index(
+    data_file: pathlib.Path,
+    *,
+    first_offset: int,
+    n_frames: int,
+    uncompressed_bytes: int,
+) -> list[tuple[int, int, int]] | None:
+    """Derive frame byte ranges when HDF5 stores raw chunks contiguously."""
+    file_size = data_file.stat().st_size
+    out: list[tuple[int, int, int]] = []
+    offset = int(first_offset)
+    with data_file.open("rb") as handle:
+        for frame in range(int(n_frames)):
+            size = _bslz4_payload_size_at(
+                handle,
+                offset,
+                file_size,
+                expected_uncompressed_bytes=uncompressed_bytes,
+            )
+            if size is None:
+                next_offset = _find_next_bslz4_payload_offset(
+                    handle,
+                    offset,
+                    file_size,
+                    expected_uncompressed_bytes=uncompressed_bytes,
+                )
+                if next_offset is None:
+                    return None
+                offset = next_offset
+                size = _bslz4_payload_size_at(
+                    handle,
+                    offset,
+                    file_size,
+                    expected_uncompressed_bytes=uncompressed_bytes,
+                )
+            if size is None:
+                return None
+            out.append((frame, offset, size))
+            offset += size
+    return out
 
 
 def build_lazy_show4dstem_sidecar(
@@ -168,6 +306,13 @@ def build_lazy_show4dstem_sidecar(
     nbins = max(1, det_rows // 2)
     lazy_dir = root / f"{label}_lazy"
     lazy_dir.mkdir(parents=True, exist_ok=True)
+    bad_pixels, has_h5_pixel_mask = _read_h5_bad_pixel_indices(
+        root / f"{label}_master.h5",
+        detector_size,
+    )
+    bad_mask = np.zeros(detector_size, dtype=bool)
+    if bad_pixels:
+        bad_mask[np.asarray(bad_pixels, dtype=np.int64)] = True
 
     rows = np.arange(det_rows, dtype=np.float32)[:, None]
     cols = np.arange(det_cols, dtype=np.float32)[None, :]
@@ -175,14 +320,45 @@ def build_lazy_show4dstem_sidecar(
         np.hypot(rows - det_rows / 2, cols - det_cols / 2)
     ).astype(np.int32)
     radial_bins = np.clip(radial_bins.reshape(-1), 0, nbins - 1)
-    radial_one_hot = np.zeros((detector_size, nbins), dtype=np.float32)
-    radial_one_hot[np.arange(detector_size), radial_bins] = 1.0
+    radial_order = np.argsort(radial_bins)
+    radial_sorted_bins = radial_bins[radial_order]
+    radial_unique_bins, radial_starts = np.unique(radial_sorted_bins, return_index=True)
     row_coords = np.broadcast_to(
         np.arange(det_rows, dtype=np.float32)[:, None], (det_rows, det_cols)
     ).reshape(-1)
     col_coords = np.broadcast_to(
         np.arange(det_cols, dtype=np.float32)[None, :], (det_rows, det_cols)
     ).reshape(-1)
+    batch = 512
+    source_dtype: str | None = None
+    if not has_h5_pixel_mask:
+        for data_file in data_files:
+            with h5py.File(data_file, "r") as handle:
+                dataset = handle.get("entry/data/data")
+                if dataset is None:
+                    raise ValueError(f"{data_file.name} has no entry/data/data dataset")
+                if tuple(int(value) for value in dataset.shape[-2:]) != (det_rows, det_cols):
+                    raise ValueError(
+                        f"{data_file.name} detector shape {dataset.shape[-2:]} does not "
+                        f"match {detector_shape!r}."
+                    )
+                dtype_name = np.dtype(dataset.dtype).name
+                if source_dtype is None:
+                    source_dtype = dtype_name
+                elif source_dtype != dtype_name:
+                    raise ValueError(
+                        f"{label!r} mixes HDF5 source dtypes {source_dtype!r} and "
+                        f"{dtype_name!r}; WebGPU lazy sidecars require one dtype."
+                    )
+                if not np.issubdtype(dataset.dtype, np.integer):
+                    continue
+                saturated_value = np.iinfo(dataset.dtype).max
+                for start in range(0, int(dataset.shape[0]), batch):
+                    stop = min(int(dataset.shape[0]), start + batch)
+                    frames = np.asarray(dataset[start:stop]).reshape(
+                        stop - start, detector_size
+                    )
+                    bad_mask |= (frames >= saturated_value).any(axis=0)
 
     profile_path = lazy_dir / "profile.bin"
     index_path = lazy_dir / "index.bin"
@@ -202,28 +378,75 @@ def build_lazy_show4dstem_sidecar(
                     f"{data_file.name} detector shape {dataset.shape[-2:]} does not "
                     f"match {detector_shape!r}."
                 )
-            n_frames = int(dataset.shape[0])
-            for frame in range(n_frames):
-                if frame_cursor >= scan_count:
-                    raise ValueError(
-                        f"{label!r} has more frames than scan_shape={scan_shape!r}."
-                    )
-                info = dataset.id.get_chunk_info_by_coord((frame, 0, 0))
-                frame_index[frame_cursor] = (
-                    file_index,
-                    int(info.byte_offset),
-                    int(info.size),
+            dtype_name = np.dtype(dataset.dtype).name
+            if source_dtype is None:
+                source_dtype = dtype_name
+            elif source_dtype != dtype_name:
+                raise ValueError(
+                    f"{label!r} mixes HDF5 source dtypes {source_dtype!r} and "
+                    f"{dtype_name!r}; WebGPU lazy sidecars require one dtype."
                 )
-                frame_cursor += 1
-            batch = 512
-            start_scan = frame_cursor - n_frames
+            n_frames = int(dataset.shape[0])
+            if frame_cursor + n_frames > scan_count:
+                raise ValueError(
+                    f"{label!r} has more frames than scan_shape={scan_shape!r}."
+                )
+            start_scan = frame_cursor
+            indexed = False
+            first_info = dataset.id.get_chunk_info_by_coord((0, 0, 0))
+            contiguous_infos = _contiguous_bslz4_frame_index(
+                data_file,
+                first_offset=int(first_info.byte_offset),
+                n_frames=n_frames,
+                uncompressed_bytes=int(np.dtype(dataset.dtype).itemsize) * detector_size,
+            )
+            if (
+                contiguous_infos is not None
+                and len(contiguous_infos) == n_frames
+                and contiguous_infos[0][2] == int(first_info.size)
+            ):
+                for frame, byte_offset, size in contiguous_infos:
+                    frame_index[start_scan + frame] = (file_index, byte_offset, size)
+                indexed = True
+            if (
+                not indexed
+                and hasattr(dataset.id, "get_num_chunks")
+                and hasattr(dataset.id, "get_chunk_info")
+            ):
+                infos = []
+                for chunk_index in range(int(dataset.id.get_num_chunks())):
+                    info = dataset.id.get_chunk_info(chunk_index)
+                    offset = tuple(int(value) for value in info.chunk_offset)
+                    if len(offset) >= 1 and 0 <= offset[0] < n_frames:
+                        infos.append((offset[0], int(info.byte_offset), int(info.size)))
+                if len(infos) == n_frames:
+                    for frame, byte_offset, size in sorted(infos):
+                        frame_index[start_scan + frame] = (file_index, byte_offset, size)
+                    indexed = True
+            if not indexed:
+                for frame in range(n_frames):
+                    info = dataset.id.get_chunk_info_by_coord((frame, 0, 0))
+                    frame_index[start_scan + frame] = (
+                        file_index,
+                        int(info.byte_offset),
+                        int(info.size),
+                    )
+            frame_cursor += n_frames
             for start in range(0, n_frames, batch):
                 stop = min(n_frames, start + batch)
                 frames = np.asarray(dataset[start:stop], dtype=np.float32).reshape(
                     stop - start, detector_size
                 )
                 out_slice = slice(start_scan + start, start_scan + stop)
-                profile[out_slice, :] = frames @ radial_one_hot
+                if bad_mask.any():
+                    frames[:, bad_mask] = 0
+                radial_sums = np.zeros((stop - start, nbins), dtype=np.float32)
+                radial_sums[:, radial_unique_bins] = np.add.reduceat(
+                    frames[:, radial_order],
+                    radial_starts,
+                    axis=1,
+                )
+                profile[out_slice, :] = radial_sums
                 totals = frames.sum(axis=1)
                 safe_totals = np.where(totals > 0, totals, 1.0)
                 com[0, out_slice] = (frames @ row_coords) / safe_totals
@@ -244,6 +467,8 @@ def build_lazy_show4dstem_sidecar(
         "NB": nbins,
         "nFrames": scan_count,
         "files": [f"../{path.name}" for path in data_files],
+        "sourceDtype": source_dtype or "uint16",
+        "badPixels": np.flatnonzero(bad_mask).astype(int).tolist(),
     }
     (lazy_dir / "meta.json").write_text(json.dumps(meta, separators=(",", ":")))
     return f"{label}_lazy/"

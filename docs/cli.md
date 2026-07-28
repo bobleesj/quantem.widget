@@ -77,7 +77,7 @@ That command writes a browser folder with anonymous H5 symlinks plus
 the right no-notebook choice when native detector detail matters. For a compact
 collaborator review, use the Python `export_kind="report"` path below.
 
-For large lazy folders, curated review grids, or collaborator screening,
+For large live folders, curated review grids, or collaborator screening,
 open a live viewer and export a compact report from Python instead:
 
 ```python
@@ -244,7 +244,7 @@ HTML; serve HTML from GitHub Pages or another static host.
 | Option | Effect |
 |---|---|
 | `--bin N` | detector mean-bin factor; Show4DSTEM, ShowPtycho, and `data-transfer` default to 1, meaning full detector sampling |
-| `--backend auto/cuda/mps/cpu/webgpu` | Show4DSTEM backend; use `webgpu` with `--html` for a browser-owned full-detector lazy WebGPU viewer |
+| `--backend auto/cuda/mps/cpu/webgpu` | Show4DSTEM backend; use `webgpu` with `--html` for a browser-owned full-detector HDF5-backed viewer |
 | `--count N` | Show4DSTEM: require and load exactly this many compatible masters from the input |
 | `--devices 0,1` | Show4DSTEM CUDA placement; alias of `--gpus` |
 | `--dtype uint8/uint16` | Show4DSTEM HTML export/storage dtype; `uint8` is compact browse, `uint16` keeps the wider detector-count range |
@@ -267,7 +267,7 @@ Metal (MPS)** on a Mac, **CPU** otherwise. No flag needed. On a MacBook:
 quantem show4dstem ./masters/ --backend webgpu --html --count 1 --bin 1
 ```
 
-uses browser WebGPU and writes a double-clickable lazy folder without copying
-raw data. If you pass `--bin N` with `N > 1`, the detector is
+uses browser WebGPU and writes a double-clickable HDF5-backed folder without
+copying raw data. If you pass `--bin N` with `N > 1`, the detector is
 **mean-binned** (not summed) so the bright field never clips at uint8. See
 [Load and I/O](api/io) for the backend + binning details.

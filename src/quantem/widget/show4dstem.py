@@ -466,9 +466,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     # multi-volume {volumes:[{base,chunks,badPx}], ...}. The browser decode is
     # bit-exact to the uint8-clipped reference (verified).
     _offline_bslz4 = traitlets.Unicode("").tag(sync=True)
-    # Browser-source mode: normal CLI exports point at lazy sidecars plus
-    # sibling HDF5 files for on-demand byte-range frame reads. The legacy H5
-    # source fields remain for compatibility and focused debug tests.
+    # Browser-source mode: normal CLI exports point at sibling HDF5 files for
+    # on-demand byte-range frame reads.
     _h5_url = traitlets.Unicode("").tag(sync=True)
     _h5_urls = traitlets.Unicode("").tag(sync=True)
     _h5_uint8_lossless = traitlets.Bool(False).tag(sync=True)
@@ -737,6 +736,10 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 f"compare_group_mode must be 'paged' or 'all', got {value!r}"
             )
         return mode
+
+    def _multiple_view_active(self) -> bool:
+        """Return True when the multiple-panel virtual-image surface is visible."""
+        return self.view_mode == "multiple" and self.n_frames > 1
 
     @staticmethod
     def _normalise_vi_source(value: str | None) -> str:
@@ -2010,7 +2013,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             ).tobytes()
             visible_count = (
                 min(int(self.n_frames), max(1, int(compare_max_panels)))
-                if self.view_mode == "multiple"
+                if self._multiple_view_active()
                 else 0
             )
             if visible_count:
@@ -2378,8 +2381,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         if self._data.ndim not in (4, 5):
             return
         # Browser-source mode: the raw frames stay as files on disk and WebGPU
-        # reads either the legacy source or the lazy sidecar/frame ranges at
-        # runtime. Do not pack/embed data for these browser-source paths.
+        # reads HDF5 byte ranges or an explicitly supplied internal lazy source
+        # at runtime. Do not pack/embed data for these browser-source paths.
         if (
             getattr(self, "_h5_url", "")
             or getattr(self, "_h5_urls", "")
@@ -4556,7 +4559,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             )
         progressive = self._uses_progressive_compare_pages()
         self._refresh_compare_virtual_images()
-        if self.view_mode == "multiple":
+        if self._multiple_view_active():
             # A page change normally moves the selected diffraction panel to
             # the first visible slot. Suppress that observer's legacy eager
             # frame load while a folder page is being streamed in the worker.
@@ -4577,7 +4580,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             self.compare_dp_mode = self._normalise_compare_dp_mode(
                 change.get("new", "average")
             )
-        if self.view_mode == "multiple":
+        if self._multiple_view_active():
             self._update_frame()
 
     def _on_frame_idx_change(self, change=None):
@@ -4593,7 +4596,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         self._cached_abf_virtual = None
         self._cached_adf_virtual = None
         self._cached_haadf_virtual = None
-        if self.view_mode == "multiple":
+        if self._multiple_view_active():
             self._sync_compare_page_to_frame_idx()
             if getattr(self, "_suppress_progressive_frame_update", False) or (
                 self._uses_progressive_compare_pages()
@@ -4603,7 +4606,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         # Recompute virtual image only when it is visible. In multiple mode the
         # visible virtual-image surface is the compare grid; switching back to
         # single recomputes the per-frame virtual image in _on_compare_config_change.
-        if self.view_mode != "multiple":
+        if not self._multiple_view_active():
             self._compute_virtual_image_from_roi()
         self._update_frame()
         # Recompute reduced DP if VI ROI is active
@@ -5639,7 +5642,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         finally:
             self._suppress_roi_recompute = False
         # Single recompute with final, consistent state.
-        if self.view_mode != "multiple":
+        if not self._multiple_view_active():
             self._compute_virtual_image_from_roi()
         self._refresh_compare_virtual_images()
         return self
@@ -5976,7 +5979,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             return
         if self.vi_source != "roi":
             return
-        if self.view_mode != "multiple":
+        if not self._multiple_view_active():
             self._compute_virtual_image_from_roi()
         self._refresh_compare_virtual_images()
 
@@ -6003,7 +6006,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             )
         if self.vi_source != "roi":
             return
-        if self.view_mode != "multiple":
+        if not self._multiple_view_active():
             self._compute_virtual_image_from_roi()
         self._refresh_compare_virtual_images()
 
@@ -6018,7 +6021,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             return
 
         if source == "roi":
-            if self.view_mode != "multiple":
+            if not self._multiple_view_active():
                 self._compute_virtual_image_from_roi()
             self._refresh_compare_virtual_images()
             return
@@ -8018,7 +8021,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             )
             and type(data).__name__ == "Dataset5dstem"
             and getattr(data, "is_lazy", False)
-            and self.view_mode == "multiple"
+            and self._multiple_view_active()
         )
 
     def _compare_page_request_is_current(
@@ -9053,7 +9056,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         if getattr(self, "_data", None) is None:
             self._clear_compare_virtual_images()
             return
-        if self.view_mode != "multiple":
+        if not self._multiple_view_active():
             if self.compare_panel_count or self.compare_virtual_image_bytes:
                 self._clear_compare_virtual_images()
             return

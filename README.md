@@ -150,7 +150,7 @@ one) and opens automatically on a desktop.
 
 Runs on CUDA, Apple Silicon (MPS), CPU, or browser WebGPU. On a MacBook,
 `quantem show4dstem ./masters/ --backend webgpu --html --count 1` writes a
-double-clickable lazy WebGPU browser folder without copying raw data.
+double-clickable HDF5-backed WebGPU browser folder without copying raw data.
 
 ## Show4DSTEM export quick reference
 

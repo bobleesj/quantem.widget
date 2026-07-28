@@ -288,7 +288,7 @@ def test_show4dstem_cli_count_requires_enough_masters(tmp_path, monkeypatch):
 
 
 def test_show4dstem_webgpu_cli_opens_generated_command(tmp_path, monkeypatch):
-    """C5: WebGPU CLI uses the browser lazy export entry path."""
+    """C5: WebGPU CLI uses the browser HDF5-backed export entry path."""
     (tmp_path / "scan_0_master.h5").write_bytes(b"\x00")
     out = tmp_path / "artifact" / "index.html"
     out.parent.mkdir()
@@ -332,8 +332,8 @@ def test_show4dstem_webgpu_cli_opens_generated_command(tmp_path, monkeypatch):
     assert seen["no_open"] is True
 
 
-def test_render_show4dstem_webgpu_h5_uses_anonymous_symlinks(tmp_path, monkeypatch):
-    """C6: WebGPU CLI export links source H5 masters instead of copying data."""
+def test_render_show4dstem_webgpu_h5_uses_anonymous_h5_urls(tmp_path, monkeypatch):
+    """C6: WebGPU CLI export links source H5 masters instead of preprocessing them."""
     import quantem.widget as qw
 
     masters = []
@@ -347,26 +347,25 @@ def test_render_show4dstem_webgpu_h5_uses_anonymous_symlinks(tmp_path, monkeypat
     def fake_contract(master):
         return {"scan_shape": (4, 4), "detector_shape": (8, 8), "n_frames": 16}
 
-    def fake_lazy_sidecar(folder, *, label, scan_shape, detector_shape):
-        sidecar = pathlib.Path(folder) / f"{label}_lazy"
-        sidecar.mkdir()
-        (sidecar / "meta.json").write_text("{}", encoding="utf-8")
-        return f"{label}_lazy/"
+    def fake_export(widget, out_dir, *, title=None, h5_decode_dtype=None):
+        seen["bundle"] = {
+            "out_dir": pathlib.Path(out_dir),
+            "title": title,
+            "h5_decode_dtype": h5_decode_dtype,
+        }
+        root = pathlib.Path(out_dir)
+        (root / ".viewer").mkdir()
+        (root / ".viewer" / "Show4DSTEM.html").write_text("<!doctype html>", encoding="utf-8")
+        (root / "Show4DSTEM.command").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
 
     class FakeShow4DSTEM:
         def __init__(self, data, **kwargs):
             seen["kwargs"] = kwargs
 
-        def export_html(self, path, *, title=None, dtype=None, det_bin=None):
-            seen["export"] = {"path": path, "title": title, "dtype": dtype, "det_bin": det_bin}
-            target = pathlib.Path(path)
-            target.write_text("<!doctype html>", encoding="utf-8")
-            (target.parent / "Show4DSTEM.command").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
-
     monkeypatch.setattr("quantem.widget.show4dstem_factory._master_file_contract", fake_contract)
     monkeypatch.setattr(
-        "quantem.widget.show4dstem_webgpu_export.build_lazy_show4dstem_sidecar",
-        fake_lazy_sidecar,
+        "quantem.widget.show4dstem_webgpu_export.export_show4dstem_webgpu_bundle",
+        fake_export,
     )
     monkeypatch.setattr(qw, "Show4DSTEM", FakeShow4DSTEM)
     args = SimpleNamespace(det_bin=1, dtype="u8", out=str(tmp_path / "out"), title=None, verbose=False)
@@ -374,17 +373,21 @@ def test_render_show4dstem_webgpu_h5_uses_anonymous_symlinks(tmp_path, monkeypat
     html = cli._render_4dstem_webgpu_h5(masters, "private_folder", args)
 
     assert html == tmp_path / "out" / "private_folder_show4dstem_webgpu" / "index.html"
-    assert "h5_urls" not in seen["kwargs"]
-    assert seen["kwargs"]["lazy_urls"] == ["tilt_00_lazy/", "tilt_01_lazy/"]
+    assert "lazy_urls" not in seen["kwargs"]
+    assert seen["kwargs"]["h5_urls"] == ["../tilt_00_master.h5", "../tilt_01_master.h5"]
     assert seen["kwargs"]["backend"] == "webgpu"
     assert seen["kwargs"]["scan_shape"] == (4, 4)
     assert seen["kwargs"]["detector_shape"] == (8, 8)
-    assert seen["export"]["dtype"] == "uint8"
-    assert seen["export"]["det_bin"] == 1
+    assert seen["kwargs"]["view_mode"] == "multiple"
+    assert seen["kwargs"]["compare_max_panels"] == 2
+    assert seen["kwargs"]["compare_group_mode"] == "all"
+    assert seen["bundle"]["h5_decode_dtype"] == "uint8"
+    assert seen["bundle"]["out_dir"] == html.parent
     assert (html.parent / "tilt_00_master.h5").is_symlink()
     assert (html.parent / "tilt_00_master.h5").resolve() == pathlib.Path(masters[0])
     assert (html.parent / "tilt_00_data_000001.h5").is_symlink()
     assert (html.parent / "tilt_00_data_000001.h5").resolve() == tmp_path / "private_source_0_data_000001.h5"
+    assert not (html.parent / "tilt_00_lazy").exists()
 
 
 def test_render_show4dstem_folder_notebook_records_backend_count_and_devices(tmp_path):

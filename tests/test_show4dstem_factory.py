@@ -25,6 +25,38 @@ def _offset_bf_disk_data(
     return np.broadcast_to(dp, (*scan_shape, *detector_shape)).copy()
 
 
+def _preset_region_data(
+    *,
+    n_frames: int | None = None,
+    scan_shape: tuple[int, int] = (4, 5),
+    detector_shape: tuple[int, int] = (16, 16),
+    center: tuple[float, float] = (8.0, 8.0),
+    bf_radius: float = 3.0,
+) -> np.ndarray:
+    """Return 4D/5D data with distinct BF/ABF/ADF detector sums."""
+    scan_rows, scan_cols = scan_shape
+    det_rows, det_cols = detector_shape
+    det_y, det_x = np.indices(detector_shape)
+    radius = np.sqrt((det_y - center[0]) ** 2 + (det_x - center[1]) ** 2)
+    scale = np.arange(1, scan_rows * scan_cols + 1, dtype=np.uint16).reshape(
+        scan_shape
+    )
+    frame = np.zeros((*scan_shape, *detector_shape), dtype=np.uint16)
+    frame[..., radius <= bf_radius * 0.5] = scale[..., None] * 2
+    frame[..., (radius >= bf_radius * 0.5) & (radius <= bf_radius)] = (
+        scale[..., None] * 11
+    )
+    frame[..., (radius >= bf_radius) & (radius <= bf_radius * 2.0)] = (
+        scale[..., None] * 23
+    )
+    frame[..., (radius >= bf_radius * 2.0) & (radius <= bf_radius * 4.0)] = (
+        scale[..., None] * 37
+    )
+    if n_frames is None:
+        return frame
+    return np.stack([frame + idx for idx in range(n_frames)], axis=0)
+
+
 def test_public_show4dstem_import_uses_factory() -> None:
     from quantem.widget import Show4DSTEM
 
@@ -372,6 +404,112 @@ def test_show4dstem_5d_offline_save_state_embeds_inline_stack() -> None:
         state = widget.get_state(drop_defaults=False)
         assert state["offline"] is True
         assert state["_offline_stack"] == widget._offline_stack
+    finally:
+        widget.close()
+
+
+def test_show4dstem_one_frame_multiple_mode_keeps_single_virtual_image_live() -> None:
+    """C1: one 4D dataset with multiple selected, expect single VI drag updates."""
+    from quantem.widget import Show4DSTEM
+
+    data = np.arange(3 * 4 * 8 * 8, dtype=np.uint16).reshape(3, 4, 8, 8)
+    widget = Show4DSTEM(
+        data,
+        view_mode="multiple",
+        center=(4, 4),
+        bf_radius=2,
+        precompute_virtual_images=False,
+        verbose=False,
+    )
+
+    try:
+        assert widget.view_mode == "multiple"
+        assert widget.n_frames == 1
+        assert widget.compare_panel_count == 0
+        assert widget.compare_virtual_image_bytes == b""
+
+        before = widget.virtual_image_bytes
+        widget.roi_center = [2, 2]
+
+        assert widget.virtual_image_bytes != before
+        assert widget.compare_panel_count == 0
+        assert widget.compare_virtual_image_bytes == b""
+    finally:
+        widget.close()
+
+
+def test_show4dstem_one_frame_multiple_mode_preset_clicks_update_single_vi() -> None:
+    """C1: BF/ABF/ADF clicks update the visible VI in one-frame multiple mode."""
+    from quantem.widget import Show4DSTEM
+
+    data = _preset_region_data()
+    widget = Show4DSTEM(
+        data,
+        view_mode="multiple",
+        center=(8, 8),
+        bf_radius=3,
+        precompute_virtual_images=True,
+        verbose=False,
+    )
+
+    try:
+        assert widget.n_frames == 1
+        assert widget.compare_panel_count == 0
+        assert widget.compare_virtual_image_bytes == b""
+
+        payloads: dict[str, bytes] = {}
+        for preset in ("adf", "bf", "abf", "haadf"):
+            before = widget.virtual_image_bytes
+            widget._preset_request = preset
+            assert widget._preset_request == ""
+            assert widget.vi_source == "roi"
+            assert len(widget.virtual_image_bytes) == 4 * 5 * 4
+            assert widget.compare_panel_count == 0
+            assert widget.compare_virtual_image_bytes == b""
+            if payloads:
+                assert widget.virtual_image_bytes != before
+            payloads[preset] = widget.virtual_image_bytes
+
+        assert len(set(payloads.values())) == len(payloads)
+        assert widget.roi_mode == "annular"
+        assert widget.roi_radius_inner == 6
+        assert widget.roi_radius == 12
+    finally:
+        widget.close()
+
+
+def test_show4dstem_multiple_mode_preset_clicks_update_compare_grid() -> None:
+    """C2: BF/ABF/ADF clicks update the visible compare-grid virtual images."""
+    from quantem.widget import Show4DSTEM
+
+    data = _preset_region_data(n_frames=3)
+    widget = Show4DSTEM(
+        data,
+        view_mode="multiple",
+        center=(8, 8),
+        bf_radius=3,
+        compare_max_panels=3,
+        precompute_virtual_images=False,
+        verbose=False,
+    )
+
+    try:
+        assert widget.n_frames == 3
+        assert widget.compare_panel_count == 3
+
+        payloads: dict[str, bytes] = {}
+        for preset in ("bf", "abf", "adf", "haadf"):
+            before = widget.compare_virtual_image_bytes
+            widget._preset_request = preset
+            assert widget._preset_request == ""
+            assert widget.vi_source == "roi"
+            assert widget.compare_panel_count == 3
+            assert len(widget.compare_virtual_image_bytes) == 3 * 4 * 5 * 4
+            if payloads:
+                assert widget.compare_virtual_image_bytes != before
+            payloads[preset] = widget.compare_virtual_image_bytes
+
+        assert len(set(payloads.values())) == len(payloads)
     finally:
         widget.close()
 
