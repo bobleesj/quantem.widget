@@ -11,9 +11,9 @@ recipe, and keep the reduction choices explicit.
 | Continue analysis | `Show4DSTEM(load(...))` or `quantem show4dstem ...` | Live notebook | no | yes, in the Python session |
 | Share a compact screening result | `export_html(export_kind="report")` | One HTML report | yes | no |
 | Share an offline detector-ROI browser | `export_html(export_kind="interactive")` | WebGPU HTML/folder | yes | yes, binned/encoded |
-| Export quickly from a terminal | `quantem show4dstem ... --backend webgpu --html --count N` | WebGPU lazy folder | yes | yes, in source HDF5 files |
-| Export full native detector sampling from a terminal | `quantem show4dstem ... --backend webgpu --html --bin 1 --dtype uint8` | WebGPU lazy folder | yes | yes, native detector sampling |
-| Preserve compressed HDF5 beside the viewer | WebGPU lazy folder | `index.html` + `Show4DSTEM.command` + `.viewer/` + `tilt_NN_lazy/` | yes, via local server | yes, in source HDF5 files |
+| Export quickly from a terminal | `quantem show4dstem ... --backend webgpu --html --count N` | WebGPU HDF5 folder | yes | yes, in source HDF5 files |
+| Export full native detector sampling from a terminal | `quantem show4dstem ... --backend webgpu --html --bin 1 --dtype uint8` | WebGPU HDF5 folder | yes | yes, native detector sampling |
+| Preserve compressed HDF5 beside the viewer | WebGPU HDF5 folder | `index.html` + `Show4DSTEM.command` + `.viewer/` + `tilt_NN_master.h5` + `tilt_NN_data_*.h5` | yes, via local server | yes, in source HDF5 files |
 
 Default recommendation: use `export_kind="report"` for large folders, many
 datasets, or collaborator screening. Use `export_kind="interactive"` only when
@@ -23,7 +23,7 @@ the recipient must drag detector ROIs in the exported browser.
 
 Report export writes a compact, self-contained HTML file. It contains rendered
 virtual-image PNG pages and a representative diffraction pattern, not raw 4D
-detector data. This is the safest default for lazy folder viewers.
+detector data. This is the safest default for large folder viewers.
 
 ```python
 from quantem.widget import Show4DSTEM
@@ -98,7 +98,7 @@ quantem show4dstem /data/session --backend webgpu --html --count 1 --out ~/Downl
 Useful variants:
 
 ```bash
-# One master, full detector sampling, browser WebGPU lazy folder.
+# One master, full detector sampling, browser WebGPU HDF5 folder.
 quantem show4dstem scan_001_master.h5 --backend webgpu --html --bin 1
 
 # Seven compatible masters as one 5D viewer with a Dataset slider.
@@ -118,7 +118,7 @@ Some users do not want Jupyter at all, and sometimes they want native detector
 sampling. Use the CLI with `--html --bin 1`:
 
 ```bash
-# Native detector sampling, browser WebGPU lazy folder.
+# Native detector sampling, browser WebGPU HDF5 folder.
 quantem show4dstem scan_001_master.h5 --backend webgpu --html --bin 1 --dtype uint8 --out ~/Downloads
 
 # Native detector sampling for every master in a folder.
@@ -130,11 +130,10 @@ quantem show4dstem scan_001_master.h5 scan_002_master.h5 \
 ```
 
 This is the no-notebook path for a full interactive browser artifact. It keeps
-native detector sampling, builds lazy startup sidecars, and reads source HDF5
-frames through a local range server only when the browser needs them. Use it
-when native detector detail matters. Use an explicit detector bin only for a
-preview, and use `export_kind="report"` when the recipient only needs a curated
-review page.
+native detector sampling and reads source HDF5 frames through a local range
+server only when the browser needs them. Use it when native detector detail
+matters. Use an explicit detector bin only for a preview, and use
+`export_kind="report"` when the recipient only needs a curated review page.
 
 Equivalent Python:
 
@@ -221,7 +220,7 @@ and see [Viewing exported HTML on mobile](../maintainer/viewing-html-on-mobile.m
 When generating or reviewing Show4DSTEM export code, verify these points:
 
 - State the goal: live notebook, report, interactive raw 4D, CLI export, or HDF5 bundle.
-- Use `export_kind="report"` for large lazy folders unless raw 4D browser interaction is required.
+- Use `export_kind="report"` for large folders unless raw 4D browser interaction is required.
 - Use `export_kind="interactive"` only with explicit `dtype`, `scan_bin`, and `det_bin`.
 - Do not call a report export "raw" or "exact"; it contains rendered PNG virtual images.
 - Do not call `dtype="uint8"` exact unless detector counts were audited to fit.

@@ -9,6 +9,7 @@ h5py = pytest.importorskip("h5py")
 hdf5plugin = pytest.importorskip("hdf5plugin")
 
 from quantem.widget import Show4DSTEM
+from quantem.widget.cli import _prepare_show4dstem_webgpu_output_dir
 from quantem.widget.show4dstem_webgpu_export import (
     build_lazy_show4dstem_sidecar,
     bundle_master_urls,
@@ -16,9 +17,12 @@ from quantem.widget.show4dstem_webgpu_export import (
 )
 
 
-def _write_arina_family(folder, stem, n_frames=16, det=32):
+def _write_arina_family(folder, stem, n_frames=16, det=32, bad_pixels=None, write_mask=True):
     frames = np.zeros((n_frames, det, det), np.uint16)
     frames[:, det // 2, det // 2] = 500  # a >255 count so uint16 matters
+    pixel_mask = np.zeros((det, det), np.uint32)
+    for row, col in bad_pixels or []:
+        pixel_mask[int(row), int(col)] = 1
     with h5py.File(folder / f"{stem}_data_000001.h5", "w") as f:
         f.create_group("entry/data").create_dataset(
             "data", data=frames, chunks=(1, det, det),
@@ -28,7 +32,8 @@ def _write_arina_family(folder, stem, n_frames=16, det=32):
         g = f.create_group("entry/instrument/detector/detectorSpecific")
         g.create_dataset("ntrigger", data=n_frames)
         g.create_dataset("nimages", data=1)
-        g.create_dataset("pixel_mask", data=np.zeros((det, det), np.uint32))
+        if write_mask:
+            g.create_dataset("pixel_mask", data=pixel_mask)
 
 
 def test_bundle_export_writes_launcher_viewer_and_vendored_page(tmp_path):
@@ -50,11 +55,16 @@ def test_bundle_export_writes_launcher_viewer_and_vendored_page(tmp_path):
     assert launcher.stat().st_mode & stat.S_IXUSR
     command = launcher.read_text()
     assert "8899" in command and "serve_range.py" in command
+    assert "/index.html" in command
     assert "__quantem_viewer_root__" in command
     assert "EXISTING_ROOT" in command
     assert "PORT=$((PORT + 1))" in command
     assert "Reusing local Show4DSTEM viewer server for this folder" in command
     viewer = tmp_path / ".viewer"
+    root_index = tmp_path / "index.html"
+    assert root_index.exists()
+    assert ".viewer/Show4DSTEM.html" in root_index.read_text(encoding="utf-8")
+    assert "Direct file:// opening cannot stream the HDF5 sources" in root_index.read_text(encoding="utf-8")
     for name in ("Show4DSTEM.html", "require.min.js", "embed-amd.js", "anywidget.min.js", "serve_range.py"):
         assert (viewer / name).exists(), name
     page = (viewer / "Show4DSTEM.html").read_text(encoding="utf-8")
@@ -80,7 +90,7 @@ def test_bundle_export_uses_low8_for_audited_uint8_h5(tmp_path):
         verbose=False,
     )
     try:
-        export_show4dstem_webgpu_bundle(widget, tmp_path, port=8899)
+        export_show4dstem_webgpu_bundle(widget, tmp_path, port=8899, h5_decode_dtype="uint8")
     finally:
         widget.close()
     page = (tmp_path / ".viewer" / "Show4DSTEM.html").read_text(encoding="utf-8")
@@ -125,6 +135,23 @@ def test_show4dstem_lazy_urls_export_uses_lazy_source(tmp_path):
     assert offline_buffers == [{"encoding": "base64", "path": ["_offline_stack"], "data": ""}]
 
 
+def test_show4dstem_webgpu_cli_replaces_existing_export_dir(tmp_path):
+    source = tmp_path / "source_data_000001.h5"
+    source.write_bytes(b"source")
+    out_dir = tmp_path / "seven-tilts_show4dstem_webgpu"
+    out_dir.mkdir()
+    (out_dir / "index.html").write_text("old html")
+    (out_dir / "tilt_00_lazy").mkdir()
+    (out_dir / "tilt_00_lazy" / "meta.json").write_text('{"old": true}')
+    (out_dir / "tilt_00_data_000001.h5").symlink_to(source)
+
+    assert _prepare_show4dstem_webgpu_output_dir(out_dir) is True
+
+    assert out_dir.is_dir()
+    assert list(out_dir.iterdir()) == []
+    assert source.read_bytes() == b"source"
+
+
 def test_build_lazy_show4dstem_sidecar_indexes_h5_ranges(tmp_path):
     _write_arina_family(tmp_path, "tilt_00", n_frames=16, det=32)
 
@@ -141,6 +168,7 @@ def test_build_lazy_show4dstem_sidecar_indexes_h5_ranges(tmp_path):
     assert meta["SR"] == 4
     assert meta["SC"] == 4
     assert meta["D"] == 32
+    assert meta["sourceDtype"] == "uint16"
     assert meta["files"] == ["../tilt_00_data_000001.h5"]
     index = np.memmap(lazy / "index.bin", mode="r", dtype=np.uint32, shape=(16, 3))
     assert np.all(index[:, 0] == 0)
@@ -156,6 +184,58 @@ def test_build_lazy_show4dstem_sidecar_indexes_h5_ranges(tmp_path):
     com = np.memmap(lazy / "com.bin", mode="r", dtype=np.float32, shape=(2, 16))
     assert np.allclose(com[0], 16)
     assert np.allclose(com[1], 16)
+
+
+def test_build_lazy_show4dstem_sidecar_applies_h5_hot_pixel_mask(tmp_path):
+    det = 32
+    center = (det // 2, det // 2)
+    _write_arina_family(tmp_path, "tilt_00", n_frames=16, det=det, bad_pixels=[center])
+
+    build_lazy_show4dstem_sidecar(
+        tmp_path,
+        label="tilt_00",
+        scan_shape=(4, 4),
+        detector_shape=(det, det),
+    )
+
+    lazy = tmp_path / "tilt_00_lazy"
+    meta = json.loads((lazy / "meta.json").read_text())
+    assert meta["badPixels"] == [center[0] * det + center[1]]
+    profile = np.memmap(
+        lazy / "profile.bin",
+        mode="r",
+        dtype=np.float32,
+        shape=(16, meta["NB"]),
+    )
+    assert np.all(profile[:, 0] == 0)
+    com = np.memmap(lazy / "com.bin", mode="r", dtype=np.float32, shape=(2, 16))
+    assert np.allclose(com, 0)
+
+
+def test_build_lazy_show4dstem_sidecar_masks_saturated_pixels_without_h5_mask(tmp_path):
+    det = 32
+    center = (det // 2, det // 2)
+    _write_arina_family(tmp_path, "tilt_00", n_frames=16, det=det, write_mask=False)
+    with h5py.File(tmp_path / "tilt_00_data_000001.h5", "r+") as f:
+        f["entry/data/data"][0, center[0], center[1]] = np.iinfo(np.uint16).max
+
+    build_lazy_show4dstem_sidecar(
+        tmp_path,
+        label="tilt_00",
+        scan_shape=(4, 4),
+        detector_shape=(det, det),
+    )
+
+    lazy = tmp_path / "tilt_00_lazy"
+    meta = json.loads((lazy / "meta.json").read_text())
+    assert meta["badPixels"] == [center[0] * det + center[1]]
+    profile = np.memmap(
+        lazy / "profile.bin",
+        mode="r",
+        dtype=np.float32,
+        shape=(16, meta["NB"]),
+    )
+    assert np.all(profile[:, 0] == 0)
 
 
 def test_bundle_export_requires_masters(tmp_path):

@@ -3382,14 +3382,8 @@ function Show4DSTEM() {
       let initialVolumeLoad: Promise<Show4DSTEMCompute | Show4DSTEMCpuCompute | null> | null = null;
       let h5VolumePreload: Promise<void> | null = null;
       let h5VolumePreloadDone = false;
-      // Legacy HDF5 source: read the merged data files through WebGPU
-      // (jsfive parse + GPU bitshuffle+LZ4 decode). The normal CLI export path
-      // uses lazy sidecars below; this compatibility path remains for focused
-      // debug tests and older exports.
-      // Lazy mode: a sidecar bundle (radial profile + CoM + frame index) at _lazy_url lets the
-      // virtual image derive from a ~100 MB profile in VRAM and the CBED lazy-fetch one frame from
-      // disk - NOTHING bulk-loads. LazyShow4DSTEM has the same interface as Show4DSTEMCompute, so
-      // the render below (recomputeVI / recomputeFrame / recomputeCoM) works unchanged.
+      // Browser HDF5 source: normal CLI exports use H5 URLs below. Lazy URLs are
+      // an explicit internal source path, not the default CLI launch path.
       const lazyUrl = model.get("_lazy_url") as string | undefined;
       const lazyUrlsJson = model.get("_lazy_urls") as string | undefined;
       const lazyUrls = (() => {
@@ -5902,8 +5896,8 @@ function Show4DSTEM() {
   const hasViProductSources = viProductSourceOptions.length > 0;
   const roiVirtualDetectorActive = activeViSource === "roi";
   const saveChangesIfLiveComm = React.useCallback(() => {
-    const liveModel = model as unknown as { comm?: unknown; save_changes?: () => void };
-    if (!liveModel.comm || typeof liveModel.save_changes !== "function") return;
+    const liveModel = model as unknown as { save_changes?: () => void };
+    if (typeof liveModel.save_changes !== "function") return;
     requestAnimationFrame(() => {
       window.setTimeout(() => {
         try {

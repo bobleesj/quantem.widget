@@ -67,8 +67,8 @@ w = Show4DSTEM(load(path), backend="web", offline_codec="bslz4",
 w.export_html("show4dstem.html")
 ```
 
-`backend="browser"`, `backend="webgpu"`, and `offline=True` are compatibility
-aliases for `backend="web"`.
+Use `backend="web"` for browser-owned WebGPU compute in notebooks, and use the
+CLI `--backend webgpu --html` folder export for large standalone HDF5 review.
 
 ## Backend ownership
 
@@ -450,7 +450,7 @@ Show4DSTEM has two HTML export modes with different goals:
 
 | Export kind | Use when | Data included | Memory behavior |
 |---|---|---|---|
-| `export_kind="report"` | Sharing a curated folder/multiple-grid result or saving a compact screening report | Static PNG virtual-image pages plus a representative diffraction pattern | Page-aware; lazy folder data is rendered page by page and raw 4D tensors are not embedded |
+| `export_kind="report"` | Sharing a curated folder/multiple-grid result or saving a compact screening report | Static PNG virtual-image pages plus a representative diffraction pattern | Page-aware; folder data is rendered page by page and raw 4D tensors are not embedded |
 | `export_kind="interactive"` | The recipient must drive the actual 4D dataset offline in the browser | Raw 4D payload, explicitly encoded as `uint8` or `uint16` and optionally binned | Can be large; use dtype and binning deliberately before sending |
 
 Quick decision rule:
@@ -466,7 +466,7 @@ Quick decision rule:
 - Keep the original notebook or Python script when the recipient needs to keep
   doing analysis, not just view an export.
 
-Report exports are the safe default for large lazy folders:
+Report exports are the safe default for large folders:
 
 ```python
 widget.export_html(
@@ -556,22 +556,24 @@ for terminal commands, report settings, and interactive raw-4D settings.
 ## WebGPU HDF5 Folder
 
 For large HDF5 acquisitions, prefer the CLI folder export. It keeps the
-compressed `*_master.h5` family on disk, writes lazy startup sidecars, and lets
-the browser range-fetch detector frames only when needed. Do not hand-build a
-normal WebGPU export around `_h5_url` or `_h5_urls`; that legacy path can fetch
-all HDF5 shards before the first useful image.
+compressed `*_master.h5` family on disk and lets the browser range-fetch and
+decompress detector chunks only when needed. Do not make normal CLI launches
+depend on precomputed `profile.bin`/`com.bin` sidecars; those are generated
+products, not the fast click-to-open path.
 
 ```bash
 quantem show4dstem /path/to/h5_family --backend webgpu --html --bin 1 --count 1
 quantem show4dstem /path/to/h5_family --backend webgpu --html --bin 1 --count 7
 ```
 
-The folder writes `index.html`, `Show4DSTEM.command`, a hidden `.viewer/`
-server folder, linked `tilt_NN_master.h5`/`tilt_NN_data_*.h5` files, and
-`tilt_NN_lazy/` startup sidecars. On macOS, double-clicking the command starts a
-local range-capable server and opens the vendored viewer page in Chrome. The
-exported page ships the required browser widget-manager assets, so the handoff
-does not depend on public CDNs.
+The folder writes `Show4DSTEM.command`, a hidden `.viewer/` server/viewer
+folder, and linked `tilt_NN_master.h5`/`tilt_NN_data_*.h5` files. On macOS,
+double-clicking the command starts a local range-capable server and opens the
+vendored viewer page in Chrome. The exported page ships the required browser
+widget-manager assets, so the handoff does not depend on public CDNs. Rerunning
+the same CLI into the same `--out` replaces the generated
+`*_show4dstem_webgpu` viewer folder, which prevents stale HTML or stale links
+from surviving a regeneration.
 
 Use `h5_uint8_lossless=True` only after auditing the detector counts. It enables
 the low8 WebGPU decode path and is lossless only when every corrected good-pixel

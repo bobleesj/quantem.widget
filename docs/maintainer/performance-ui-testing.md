@@ -669,10 +669,10 @@ quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend mps --count 1 --bin 1 -
 # 2. macOS: Apple MPS backend, seven masters.
 quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend mps --count 7 --bin 1 --dtype u8
 
-# 3. macOS: browser/WebGPU lazy lane, one master.
+# 3. macOS: browser/WebGPU HDF5-backed lane, one master.
 quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend webgpu --html --count 1 --bin 1 --dtype u8
 
-# 4. macOS: browser/WebGPU lazy lane, seven masters.
+# 4. macOS: browser/WebGPU HDF5-backed lane, seven masters.
 quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend webgpu --html --count 7 --bin 1 --dtype u8
 
 # 5. CUDA host: CUDA backend, one master.

@@ -3,16 +3,17 @@ masters becomes a rendered, standalone HTML viewer in one command, no notebook.
 
     quantem show ./frames/                # PNG/TIFF folder -> Show3D scrub HTML
     quantem show scan.png                 # single image    -> Show2D HTML
-    quantem show ./masters/ --bin 8       # *_master.h5     -> offline WebGPU Show4DSTEM
+    quantem show4dstem ./masters/ --backend webgpu --html --bin 1
+                                            # *_master.h5 -> HDF5-backed WebGPU folder
     quantem ptycho scan_master.h5         # raw 4D-STEM    -> ShowPtycho WebGPU folder
     quantem html tutorial.ipynb           # run a notebook  -> standalone shareable HTML
 
 The CLI only orchestrates existing pieces: ``io.read_image`` / ``read_image_stack``
 for images, ``io.discover_masters`` + ``io.load(det_bin=...)`` for 4D-STEM and
 ptychography review, the ``Show2D`` / ``Show3D`` / ``Show4DSTEM`` / ``ShowPtycho``
-widgets, and each widget's export helpers. 4D-STEM is packed offline so the browser
-does all compute on WebGPU, which is what lets a laptop browse data that never fit
-full resolution (bin the detector first).
+widgets, and each widget's export helpers. Show4DSTEM WebGPU HTML keeps the
+compressed HDF5 family on disk and lets Chrome range-fetch/decompress H5 chunks
+instead of preprocessing every frame before the viewer opens.
 """
 import argparse
 import email.utils
@@ -1686,6 +1687,7 @@ def _render_4dstem_notebook(
             "    masters,\n"
             f"    det_bin={int(args.det_bin)},\n"
             f"    dtype={args.dtype!r},\n"
+            "    apply_mask=True,\n"
             f"{backend_line}"
             f"{devices_line}"
             "    verbose=True,\n"
@@ -2001,17 +2003,20 @@ def _render_4dstem_webgpu_h5(
     label: str,
     args: argparse.Namespace,
 ) -> pathlib.Path:
-    """Render Show4DSTEM WebGPU HTML using lazy sidecars over linked H5 data."""
+    """Render Show4DSTEM WebGPU HTML over linked H5 data."""
 
     import numpy as np
     from quantem.widget import Show4DSTEM
     from quantem.widget.show4dstem_factory import _master_file_contract
-    from quantem.widget.show4dstem_webgpu_export import build_lazy_show4dstem_sidecar
+    from quantem.widget.show4dstem_webgpu_export import (
+        bundle_master_urls,
+        export_show4dstem_webgpu_bundle,
+    )
 
     if int(args.det_bin) != 1:
         raise ValueError(
-            "Show4DSTEM --backend webgpu uses lazy sidecars over linked HDF5 files; "
-            "keep --bin 1."
+            "Show4DSTEM --backend webgpu uses linked HDF5 files with browser "
+            "range reads; keep --bin 1."
         )
     contracts = [_master_file_contract(master) for master in masters]
     first = contracts[0]
@@ -2038,39 +2043,63 @@ def _render_4dstem_webgpu_h5(
             )
 
     out_dir = _out_dir(args.out) / f"{label}_show4dstem_webgpu"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    replaced = _prepare_show4dstem_webgpu_output_dir(out_dir)
+    if replaced:
+        print(f"replaced existing Show4DSTEM WebGPU export: {out_dir}")
     labels = [f"tilt_{idx:02d}" for idx in range(len(masters))]
-    lazy_urls = []
     for master, tilt_label in zip(masters, labels, strict=True):
         _link_show4dstem_h5_family(out_dir, pathlib.Path(master), tilt_label)
-        lazy_urls.append(
-            build_lazy_show4dstem_sidecar(
-                out_dir,
-                label=tilt_label,
-                scan_shape=expected["scan_shape"],
-                detector_shape=expected["detector_shape"],
-            )
-        )
 
     widget = Show4DSTEM(
         np.zeros((1, 1, 1, 1), dtype=np.uint8),
-        lazy_urls=lazy_urls,
+        h5_urls=bundle_master_urls(out_dir),
         backend="webgpu",
         scan_shape=expected["scan_shape"],
         detector_shape=expected["detector_shape"],
         frame_dim_label="Dataset",
         frame_labels=labels,
+        view_mode="multiple" if len(masters) > 1 else "single",
+        compare_max_panels=max(1, len(masters)),
+        compare_group_mode="all",
         title=args.title or label,
         verbose=bool(args.verbose),
         show_controls=True,
     )
+    decode_dtype = "uint8" if str(args.dtype).lower() in {"u8", "uint8"} else "uint16"
+    export_show4dstem_webgpu_bundle(
+        widget,
+        out_dir,
+        title=args.title or label,
+        h5_decode_dtype=decode_dtype,
+    )
     out = out_dir / "index.html"
-    widget.export_html(str(out), title=args.title or label, dtype=_show4dstem_export_dtype(args), det_bin=1)
     print(
         f"{len(masters)} master(s), backend webgpu, bin 1, dtype {args.dtype} "
         f"-> {out_dir / 'Show4DSTEM.command'}"
     )
     return out
+
+
+def _prepare_show4dstem_webgpu_output_dir(out_dir: pathlib.Path) -> bool:
+    """Create a fresh generated Show4DSTEM WebGPU export directory.
+
+    The CLI owns ``*_show4dstem_webgpu`` directories. Reusing one is unsafe:
+    stale ``index.html`` files, lazy metadata, or generated shards can make a
+    launcher open yesterday's viewer while appearing to run today's command.
+    """
+
+    if not out_dir.name.endswith("_show4dstem_webgpu"):
+        raise ValueError(
+            "internal error: refusing to replace a non-Show4DSTEM WebGPU "
+            f"output directory: {out_dir}"
+        )
+    existed = out_dir.exists() or out_dir.is_symlink()
+    if out_dir.is_symlink() or out_dir.is_file():
+        out_dir.unlink()
+    elif out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=False)
+    return existed
 
 
 def _link_show4dstem_h5_family(out_dir: pathlib.Path, master: pathlib.Path, label: str) -> str:
