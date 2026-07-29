@@ -15,10 +15,8 @@ on:
       - ".github/workflows/widget-docs.yml"
   workflow_dispatch:
 
-# Origin-only. Builds + DEPLOYS the docs to GitHub Pages from this widget branch
-# (it holds the live docs). The `github-pages` environment allowlist on
-# bobleesj/quantem includes this branch, so the deploy is accepted; `main` is kept
-# for when the work merges. Published at https://bobleesj.github.io/quantem/.
+# Origin-only. Builds and deploys the docs from `main` to this repository's
+# GitHub Pages site: https://bobleesj.github.io/quantem.widget/.
 permissions:
   contents: read
   pages: write
