@@ -8,22 +8,28 @@ parts:
     chapters:
       - file: install
       - file: cli
+  # Show4DSTEM and ShowPtycho lead: they are the flagship workflows.
+  # tutorials/show1d is hidden for now (restore from git history when ready).
   - caption: Tutorials
     chapters:
       - file: tutorials/download_data
-      - file: tutorials/show1d
+      - file: tutorials/show4dstem
+      - file: tutorials/showptycho
       - file: tutorials/show2d
       - file: tutorials/show3d
       - file: tutorials/show3dslices
-      - file: tutorials/show4dstem
-      - file: tutorials/show4dstem_export
-        title: Show4DSTEM export
-      - file: tutorials/showptycho
-      - file: tutorials/showptycho_export
       # tutorials/showeds hidden until the ShowEDS widget is updated.
       - file: tutorials/showdiffraction
       - file: tutorials/io_gpu
         title: IO/GPU
+  - caption: Exporting
+    chapters:
+      - file: tutorials/show4dstem_export
+        title: Show4DSTEM export
+      - file: tutorials/showptycho_export
+      - file: tutorials/widget_export
+      - file: tutorials/movie_export
+        title: Saving GIF and MP4 movies
   # Advanced and Maintainers are each one expandable parent link (chevron) so
   # the sidebar stays short. These parts deliberately have NO caption: the
   # parent link is the label, and a caption would render a duplicate header
@@ -35,9 +41,6 @@ parts:
           - file: tutorials/show2d_advanced
             title: Advanced Show2D
           - file: tutorials/showfolder
-          - file: tutorials/widget_export
-          - file: tutorials/movie_export
-            title: Saving GIF and MP4 movies
           - file: tutorials/memory_management
             title: Memory management
           - file: tutorials/watch_folder
