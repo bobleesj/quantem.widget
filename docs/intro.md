@@ -45,7 +45,6 @@ detector at load (`det_bin`) to cut memory and speed first paint - see
 | `Show3DSlices` | Side-by-side slices of a 3D volume across an axis | [tutorial](tutorials/show3dslices) · [API](api/show3dslices) |
 | `Show4DSTEM` | 4D-STEM: live virtual detectors, multi-master review, and WebGPU HTML export | [tutorial](tutorials/show4dstem) · [export](tutorials/show4dstem_export) · [API](api/show4dstem) |
 | `ShowPtycho` | Ptychography aberration review: phase, FFT, BF-count tradeoffs, and WebGPU folder export | [API](api/showptycho) |
-| `ShowEDS` | Experimental EDS/EELS spectrum image: linked element map, spectrum, energy band, and ROI | [tutorial](tutorials/showeds) · [API](api/showeds) |
 | `ShowDiffraction` | 2D/3D diffraction d-spacing: Bragg spots, rings, center finding, k calibration | [tutorial](tutorials/showdiffraction) · [API](api/showdiffraction) |
 | `ShowFolder` | Folder-level microscopy browser: navigate a session, review thumbnails, select files/folders, and save curation state | [tutorial](tutorials/showfolder) · [API](api/showfolder) |
 

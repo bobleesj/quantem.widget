@@ -20,7 +20,7 @@ parts:
         title: Show4DSTEM export
       - file: tutorials/showptycho
       - file: tutorials/showptycho_export
-      - file: tutorials/showeds
+      # tutorials/showeds hidden until the ShowEDS widget is updated.
       - file: tutorials/showdiffraction
       - file: tutorials/io_gpu
         title: IO/GPU
@@ -58,7 +58,7 @@ parts:
           - file: api/show3dslices
           - file: api/show4dstem
           - file: api/showptycho
-          - file: api/showeds
+          # api/showeds hidden until the ShowEDS widget is updated.
           - file: api/showdiffraction
           - file: api/showfolder
           - file: api/html-export
@@ -99,8 +99,7 @@ parts:
                 title: Show3DSlices
               - file: maintainer/storyboard-show4dstem
                 title: Show4DSTEM
-              - file: maintainer/storyboard-showeds
-                title: ShowEDS
+              # maintainer/storyboard-showeds hidden until ShowEDS is updated.
               - file: maintainer/storyboard-showfolder
                 title: ShowFolder
               - file: maintainer/storyboard-data-transfer
