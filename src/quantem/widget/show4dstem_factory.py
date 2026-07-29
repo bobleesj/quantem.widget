@@ -19,7 +19,7 @@ import types
 import warnings
 from typing import Any
 
-from quantem.gpu.io import LoadResult
+from quantem.gpu.io.load import LoadResult
 from quantem.widget.show4dstem import Show4DSTEM as _Show4DSTEMBase
 
 

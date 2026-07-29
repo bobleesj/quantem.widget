@@ -132,7 +132,9 @@ def _showptycho_folder(tmp_path):
     (source / "scan_master.h5").write_bytes(b"master")
     (source / "scan_data_000001.h5").write_bytes(b"data")
     (folder / "index.html").write_text("<!doctype html><title>ShowPtycho</title>", encoding="utf-8")
-    (folder / "manifest.json").write_text(
+    snapshots = folder / "snapshots"
+    snapshots.mkdir()
+    (snapshots / "manifest.json").write_text(
         """{
   "schema_version": 2,
   "format": "quantem.showptycho.webgpu.folder.v2",
@@ -157,6 +159,20 @@ def test_detect_showptycho_folder_export(tmp_path):
     assert cli._detect(folder, "auto") == "showptycho"
     assert cli._detect(folder / "index.html", "auto") == "showptycho"
     assert cli._detect(folder, "showptycho") == "showptycho"
+
+
+def test_showptycho_folder_rejects_retired_top_level_manifest(tmp_path):
+    folder = tmp_path / "retired-export"
+    folder.mkdir()
+    (folder / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    (folder / "manifest.json").write_text(
+        json.dumps({"format": "quantem.showptycho.webgpu.folder.v2"}),
+        encoding="utf-8",
+    )
+
+    assert cli._is_showptycho_folder_export(folder) is False
+    with pytest.raises(ValueError, match="snapshots/manifest.json"):
+        cli._showptycho_folder(folder)
 
 
 def test_detect_showptycho_master_when_forced(tmp_path):

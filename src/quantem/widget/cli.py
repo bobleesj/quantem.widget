@@ -962,12 +962,10 @@ def _is_showptycho_folder_export(path: pathlib.Path) -> bool:
 
 
 def _showptycho_manifest_path(folder: pathlib.Path) -> pathlib.Path | None:
-    """Return the ShowPtycho manifest path for clean or legacy exports."""
+    """Return the canonical ShowPtycho snapshot manifest, when present."""
 
-    for candidate in (folder / "snapshots" / "manifest.json", folder / "manifest.json"):
-        if candidate.is_file():
-            return candidate
-    return None
+    candidate = folder / "snapshots" / "manifest.json"
+    return candidate if candidate.is_file() else None
 
 
 def _showptycho_source_stem(master: pathlib.Path) -> str:

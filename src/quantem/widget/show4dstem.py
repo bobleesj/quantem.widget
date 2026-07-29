@@ -1275,7 +1275,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             phase_np = np.asarray(phase, dtype=np.float32)
             # DPC comes for free here: the 4D frame is already resident on the
             # GPU, so CoM row/col is two cheap reductions. Align with the SSB
-            # scan rotation so the maps match quantem.live's dpc_com_*_aligned.
+            # scan rotation so the maps follow the shared aligned-DPC convention.
             from quantem.gpu.dpc import center_of_mass
             com_k_row, com_k_col = center_of_mass(
                 data_gpu, scan_shape=(self.shape_rows, self.shape_cols)
@@ -1923,7 +1923,6 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             self._compare_page_fresh_indices = set()
             self._compare_page_working_images = {}
             self._compare_page_paint_clients = set()
-            self._compare_page_paint_legacy_active = False
             self._compare_page_paint_ack_enabled = False
             self._folder_update_page_idx = -1
             self._folder_update_expected_indices = ()
@@ -2058,7 +2057,6 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         self._compare_page_fresh_indices: set[int] = set()
         self._compare_page_working_images: dict[int, np.ndarray] = {}
         self._compare_page_paint_clients: set[str] = set()
-        self._compare_page_paint_legacy_active = False
         self._compare_page_paint_ack_enabled = False
         self._folder_update_page_idx = -1
         self._folder_update_expected_indices: tuple[int, ...] = ()
@@ -2227,11 +2225,10 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             # compute class first (raw Metal / cupy), else the torch device.
             cls = self._compute.__class__.__name__
             backend, where = {
-                "MetalCompute": ("Apple GPU (raw Metal)", "Apple unified memory"),
                 "MetalRawBackend": ("Apple GPU (raw Metal)", "Apple unified memory"),
                 "CudaKernelCompute": ("NVIDIA GPU (CUDA, cupy)", "GPU VRAM"),
             }.get(cls, (None, None))
-            if backend is None:  # TorchCompute — backend depends on the torch device
+            if backend is None:  # TorchBackend depends on the torch device
                 dev = str(self._device)
                 if "cuda" in dev:
                     backend, where = "NVIDIA GPU (CUDA, torch)", "GPU VRAM"
@@ -4487,7 +4484,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         self._refresh_compare_virtual_images()
         if self._multiple_view_active():
             # A page change normally moves the selected diffraction panel to
-            # the first visible slot. Suppress that observer's legacy eager
+            # the first visible slot. Suppress that observer's direct eager
             # frame load while a folder page is being streamed in the worker.
             self._suppress_progressive_frame_update = progressive
             try:
@@ -4749,8 +4746,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         # error a single full-stack reduce hits once positions*det > 2^31 (a bin2
         # 512x512x96x96 stack = 2.42e9 elements). The chunk cap keeps each op's
         # element count well under 2^31; the (det, det) accumulator is tiny.
-        # Mean DP over all scan positions via the compute backend (TorchCompute
-        # int64-accumulates in chunks; MetalCompute uses the raw detector_sum
+        # Mean DP over all scan positions via the compute backend (TorchBackend
+        # int64-accumulates in chunks; MetalRawBackend uses the raw detector_sum
         # kernel). Centroid + radius are scale-invariant, so mean vs sum is the
         # same center/radius. The (det, det) result is tiny - torch for the centroid.
         mean_dp = torch.as_tensor(self._compute.mean_dp(), device=self._device).float()
@@ -6500,10 +6497,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 return
             active = bool(content.get("active", True))
             client_id = content.get("client_id")
-            if client_id is None:
-                # Compatibility with frontend bundles predating per-view IDs.
-                self._compare_page_paint_legacy_active = active
-            elif (
+            if (
                 isinstance(client_id, str)
                 and bool(client_id)
                 and len(client_id) <= 128
@@ -6515,8 +6509,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             else:
                 return
             self._compare_page_paint_ack_enabled = bool(
-                self._compare_page_paint_legacy_active
-                or self._compare_page_paint_clients
+                self._compare_page_paint_clients
             )
             if not self._compare_page_paint_ack_enabled and bool(
                 getattr(self, "_folder_update_pending", False)
@@ -9748,8 +9741,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     def _fast_masked_sum(self, mask) -> np.ndarray:
         """Virtual image: sum data over scan positions weighted by a detector mask.
 
-        Delegates to the compute backend (TorchCompute chunked tensordot on any
-        torch device, MetalCompute raw kernel on chunk-backed Metal frames) so the
+        Delegates to the compute backend (TorchBackend chunked tensordot on any
+        torch device, MetalRawBackend raw kernel on chunk-backed Metal frames) so the
         widget follows the same detector geometry across CUDA, MPS, and test references.
         Returns numpy (scan_r, scan_c) float32; the only consumer is
         `_to_float32_bytes`. Verified bit-identical to the old inline tensordot

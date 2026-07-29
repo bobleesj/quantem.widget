@@ -415,6 +415,18 @@ def test_show4dstem_mounted_watch_waits_for_fresh_browser_paint_ack(
     )
     widget.watch_folder(interval=60)
     try:
+        widget._handle_compare_page_paint_msg(
+            widget,
+            {
+                "type": "compare_page_paint_capability",
+                "version": 1,
+                "active": True,
+            },
+            [],
+        )
+        assert widget._compare_page_paint_clients == set()
+        assert widget._compare_page_paint_ack_enabled is False
+
         # C0: two notebook views can share one widget model, expect one view
         # unmounting not to disable paint proof for the remaining mounted view.
         for client_id in ("view-a", "view-b"):

@@ -335,10 +335,11 @@ mounted Jupyter Show4DSTEM to discover every newly completed acquisition,
 expose it exactly once without rebuilding or silently changing precision, and
 remain interactive while incomplete detector files finish writing.
 
-**Primary widgets**: ``Show4DSTEM.from_folder(...)``. Test the CUDA/CPU
+**Primary widgets**: ``Show4DSTEM.from_folder(...)``. Test the CUDA
 ``Dataset5dstem`` path and the public ``backend="mps"`` path separately because
-their paging and memory lifecycles differ. Standalone HTML is a snapshot and
-does not continue watching a filesystem.
+their paging and memory lifecycles differ. CPU is only a deterministic unit-test
+reference. Standalone HTML is a snapshot and does not continue watching a
+filesystem.
 
 **Data to use**: A temporary watched folder and at least three genuine 4D-STEM
 acquisition groups. Begin with one ready ``*_master.h5``. Introduce a second
@@ -355,7 +356,7 @@ control only and does not establish real-workflow signoff.
   model ID, browser container, Dataset/page, panel order, stars, hidden panels,
   detector ROI, scan cursor, zoom, and playback state.
 - Keep one compact accessible watch badge near the folder/title area in stable
-  DOM for both CUDA/CPU and MPS. Require green-dot ``Watching`` only while the
+  DOM for both CUDA and MPS. Require green-dot ``Watching`` only while the
   actual watcher worker is alive. Enter ``Updating`` while discovery is active
   and keep it through real master/chunk validation and append. An idle poll may
   briefly show ``Updating`` but must return to ``Watching`` without decode,
@@ -380,7 +381,7 @@ control only and does not establish real-workflow signoff.
   count, page control, or reserved placeholder paint; then selecting/requesting
   the new dataset to first virtual-image **and** diffraction paint. Do not call
   a Python trait update alone “append-to-paint.”
-- On CUDA/CPU, append each master as a cold lazy ``Dataset5dstem`` slot. Do not
+- On CUDA, append each master as a cold lazy ``Dataset5dstem`` slot. Do not
   eagerly load every arrival, clear unrelated reduced pages, exceed
   ``page_budget``, or silently change shape, dtype, detector bin, or scan bin.
   Recompute fit and placement safely after each append; cross-check the paging
