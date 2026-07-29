@@ -2,11 +2,8 @@
 # build step) to render the NumPy-style docstrings as proper field lists; heavy /
 # native deps (cupy, Mac Metal, lazy io extras) are mocked in _config.yml.
 jupyter-book>=1.0,<2
-# Theme pair is PINNED: pydata-sphinx-theme 0.17 ships its own (hidden)
-# .primary-toggle header button, and both theme scripts bind the sidebar
-# toggle to document.querySelector('.primary-toggle') — the hidden one —
-# which killed the mobile hamburger on the published site (2026-07-28).
-# Bump both together only after driving the mobile drawer on a built page.
-sphinx-book-theme==1.2.0
-pydata-sphinx-theme==0.16.1
+# Theme versions float on purpose (no pins). pydata-sphinx-theme >= 0.17
+# ships a hidden .primary-toggle button that steals the mobile hamburger's
+# click handlers; _static/nav-toggle-fix.js rewires the visible button and
+# scripts/check_docs_nav_toggle.py guards the built pages in CI.
 ipywidgets
