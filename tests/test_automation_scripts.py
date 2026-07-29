@@ -228,12 +228,15 @@ def test_real_data_loader_benchmark_scripts_are_documented_as_local_only() -> No
         ROOT / "scripts/widget_load_bench_sharded.py",
     ]:
         result = _run(sys.executable, str(script), "--help")
+        source = script.read_text(encoding="utf-8")
         normalized = result.stdout.replace("\n", "").replace(" ", "")
 
         assert result.returncode == 0, result.stdout
         assert "private real" in result.stdout
         assert "masters-glob" in result.stdout
         assert "/tmp/quantem-widget-load-bench" in normalized
+        assert "from quantem.gpu.io import load" in source
+        assert "quantem.widget.io.hdf5" not in source
 
 
 def test_sharded_loader_benchmark_exercises_public_u8_api() -> None:
@@ -241,6 +244,7 @@ def test_sharded_loader_benchmark_exercises_public_u8_api() -> None:
 
     assert 'kwargs["dtype"] = "u8"' in script
     assert 'kwargs["output_dtype"]' not in script
+    assert "_assign_indices_to_devices" in script
 
 
 def test_signoff_dashboard_summarizes_available_reports(tmp_path: Path) -> None:

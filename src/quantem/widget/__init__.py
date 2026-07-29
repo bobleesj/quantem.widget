@@ -216,7 +216,6 @@ __all__ = [
     "bin_spectrum_image",
     "load_eds",
     "load_emd_spectrum_image",
-    "load",
     "show_folder",
     "read_gif",
     "read_image",

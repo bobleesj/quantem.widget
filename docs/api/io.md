@@ -63,7 +63,7 @@ folder.paths("image")  # selected files after you star panels
 ```
 
 For 4D-STEM master files, use `quantem.gpu.io.discover` to return sorted master paths
-for a scripted load. Then inspect one file with `get_metadata` or load it with
+for a scripted load. Then inspect one file with `quantem.gpu.io.inspect` or load it with
 the memory-reduction options shown below.
 
 Prefer `discover` when you just want the sorted paths back for a
@@ -76,16 +76,14 @@ masters = discover("/data/session")               # all
 masters = discover("/data/session", scan_shape=(512, 512))  # filter by scan size
 ```
 
-Prefer `get_metadata` when you want raw HDF5 attributes of one file without
-loading it — returns a dict of HDF5 tree paths plus the widget-friendly keys
-`scan_shape`, `detector_shape`, `n_frames`, `dwell_time_us`, `saturation`,
-`detector_name`:
+Use `inspect` when you want readiness, shape, dtype, and calibration metadata
+without loading detector frames:
 
 ```python
-from quantem.widget.io import get_metadata
+from quantem.gpu.io import inspect
 
-meta = get_metadata("/data/session/scan_00_master.h5")
-print(meta["scan_shape"], meta["detector_shape"])
+report = inspect("/data/session/scan_00_master.h5")
+print(report.scan_shape, report.detector_shape, report.dtype)
 # e.g. (512, 512) (192, 192)
 ```
 
@@ -445,10 +443,10 @@ before calling `load`.
 ## How do I inspect a single master's calibration + metadata without loading it?
 
 ```python
-from quantem.widget.io import get_metadata
+from quantem.gpu.io import inspect
 
-meta = get_metadata("scan_master.h5")
-print(meta)   # voltage_kV, semiangle_mrad, scan_sampling_A, det_shape, ...
+report = inspect("scan_master.h5")
+print(report.metadata)  # voltage, semiangle, sampling, and source metadata
 ```
 
 ## I have HAADF or a 2D image (Velox EMD, TIFF, PNG). How do I load that?
@@ -645,7 +643,7 @@ the right to share.
 .. autofunction:: quantem.gpu.io.discover
 ```
 ```{eval-rst}
-.. autofunction:: quantem.widget.io.get_metadata
+.. autofunction:: quantem.gpu.io.inspect
 ```
 
 ### Images (2D / 3D)
@@ -655,12 +653,6 @@ the right to share.
 ```
 ```{eval-rst}
 .. autofunction:: quantem.widget.io.image.read_image_stack
-```
-
-### Detector binning
-
-```{eval-rst}
-.. autofunction:: quantem.widget.io.bin
 ```
 
 ### Hugging Face datasets

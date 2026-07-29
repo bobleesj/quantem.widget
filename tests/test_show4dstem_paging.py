@@ -20,7 +20,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from quantem.widget import Show4DSTEM  # noqa: E402
-from quantem.gpu.io import LoadResult  # noqa: E402
+from quantem.gpu.io.load import LoadResult  # noqa: E402
 from quantem.widget.data.dataset5dstem import Dataset5dstem  # noqa: E402
 
 cuda_required = pytest.mark.skipif(

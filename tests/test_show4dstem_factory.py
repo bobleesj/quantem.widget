@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from quantem.gpu.io import LoadResult
+from quantem.gpu.io.load import LoadResult
 
 import quantem.widget.show4dstem_factory as factory
 

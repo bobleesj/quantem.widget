@@ -30,6 +30,7 @@ def test_widget_has_no_duplicate_gpu_or_io_public_api() -> None:
             stale_files.append(relative)
     assert stale_files == []
     assert not hasattr(widget, "load")
+    assert "load" not in widget.__all__
     for name in (
         "LoadResult",
         "MasterReadiness",
@@ -43,6 +44,12 @@ def test_widget_has_no_duplicate_gpu_or_io_public_api() -> None:
         "save",
     ):
         assert not hasattr(widget_io, name)
+
+
+def test_live_gpu_status_hook_remains_available() -> None:
+    from quantem.widget.gpu import vram_status
+
+    assert callable(vram_status)
 
 
 def test_widget_source_uses_public_gpu_domains() -> None:
