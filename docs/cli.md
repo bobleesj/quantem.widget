@@ -39,14 +39,16 @@ quantem github tutorial_github.ipynb --no-execute # optional static copy for Git
 
 **Images** save a standalone HTML and open in your browser. **4D-STEM** opens a
 live, kernel-backed notebook by default (full real-time interaction); `--html`
-instead writes an **offline WebGPU browser export** - drag detectors, switch
-BF/ABF/ADF, pan diffraction, all with no kernel. Compact single-file exports can
-be opened directly; interactive raw 4D exports may include a local launcher when
-Chrome must fetch a companion data payload over HTTP.
+instead writes an **offline WebGPU browser folder** - drag detectors, switch
+BF/ABF/ADF, pan diffraction, all with no kernel. Full-detector WebGPU exports
+keep compressed HDF5 files beside the viewer. Open `index.html` and grant the
+data folder when prompted, or double-click `Show4DSTEM.command` to serve that
+same folder locally without a grant click.
 
 Several masters (a folder, or listed explicitly) stack into **one 5D viewer with a
-Dataset slider** to flip between scans. `--combined --html` writes that as one
-offline file (served locally, since a `file://` page can't fetch its companion).
+Dataset slider** to flip between scans. WebGPU HDF5 folders use anonymous local
+links such as `tilt_00_master.h5` and `tilt_00_data_*.h5`; rerunning the CLI
+replaces the generated viewer folder so stale HTML and metadata do not survive.
 
 Everything lands in `~/Downloads` (or the current directory on machines without
 one) and opens automatically on a desktop.
@@ -74,7 +76,9 @@ quantem show4dstem /data/session --backend webgpu --html --count 7 --bin 1 --dty
 
 That command writes a browser folder with anonymous H5 symlinks plus
 `Show4DSTEM.command`, so it does not copy raw data into a giant HTML file. It is
-the right no-notebook choice when native detector detail matters. For a compact
+the right no-notebook choice when native detector detail matters. Double-click
+`index.html` and grant the export folder when Chrome asks, or use
+`Show4DSTEM.command` when you want the local server path. For a compact
 collaborator review, use the Python `export_kind="report"` path below.
 
 For large live folders, curated review grids, or collaborator screening,

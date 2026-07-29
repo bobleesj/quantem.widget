@@ -101,6 +101,11 @@ def export_show4dstem_webgpu_bundle(
     text = text.replace(
         "<head>",
         "<head>\n"
+        "<script>\n"
+        "if (globalThis.location?.protocol === \"file:\") {\n"
+        "  globalThis.__QT_REQUIRE_LOCAL_H5_FILES = true;\n"
+        "}\n"
+        "</script>\n"
         + _tuning(
             h5_decode_dtype=str(h5_decode_dtype).lower(),
             h5_uint8_lossless=bool(getattr(widget, "_h5_uint8_lossless", False)),
@@ -118,7 +123,7 @@ def export_show4dstem_webgpu_bundle(
 <body>
 <script>
 if (window.location.protocol === "file:") {
-  document.body.innerHTML = '<main style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Arial,sans-serif;max-width:760px;margin:72px auto;padding:0 24px;line-height:1.45;color:#1f2933"><h1 style="font-size:24px;margin:0 0 12px">Show4DSTEM</h1><p style="font-size:16px;margin:0 0 12px">This Show4DSTEM package must be opened through its local range server.</p><p style="font-size:16px;margin:0 0 18px">Double-click <strong>Show4DSTEM.command</strong> in this folder.</p><p style="font-size:13px;color:#64748b">Direct file:// opening cannot stream the HDF5 sources.</p></main>';
+  window.location.replace(".viewer/Show4DSTEM.html" + window.location.search + window.location.hash);
 } else {
   window.location.replace(".viewer/Show4DSTEM.html" + window.location.search + window.location.hash);
 }

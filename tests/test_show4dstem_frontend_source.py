@@ -20,3 +20,18 @@ def test_show4dstem_preset_clicks_sync_without_comm_guard() -> None:
     assert 'typeof liveModel.save_changes !== "function"' in save_block
     assert 'model.set("_preset_request", preset);' in preset_block
     assert "saveChangesIfLiveComm();" in preset_block
+
+
+def test_show4dstem_file_open_exports_keep_local_h5_folder_grant_visible() -> None:
+    """C2: file-opened H5 exports must expose the no-server folder grant path."""
+    repo_root = pathlib.Path(__file__).resolve().parents[1]
+    source = (repo_root / "js" / "show4dstem" / "index.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "__QT_REQUIRE_LOCAL_H5_FILES" in source
+    assert "showLocalH5GrantBanner" in source
+    assert "data-show4dstem-open-folder" in source
+    assert "Open data folder" in source
+    assert "webkitdirectory" in source
+    assert "No server needed" in source

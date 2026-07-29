@@ -89,6 +89,8 @@ quantem show2d ./frames/ --watch             # live folder         -> append new
 quantem show4dstem ./masters/                # *_master.h5         -> live Show4DSTEM
 quantem show4dstem a_master.h5 b_master.h5   # several masters     -> one 5D multi-tilt viewer
 quantem show4dstem ./masters/ --html         # 4D-STEM             -> shareable offline HTML
+quantem ptycho scan_master.h5                # raw 4D-STEM master  -> ShowPtycho WebGPU folder
+quantem ptycho ./ptycho-export/              # ShowPtycho folder   -> WebGPU browser review
 quantem showfolder ./session/                # microscopy folder   -> ShowFolder notebook/HTML
 quantem data-transfer plan ./raw/ /ssd0/run /ssd1/run --manifest run.json
 quantem html tutorial.ipynb                  # a notebook          -> standalone offline HTML
@@ -100,6 +102,8 @@ quantem html tutorial.ipynb                  # a notebook          -> standalone
 | `quantem show2d <img / folder>` | one image, or a folder | Show2D HTML (a folder becomes a gallery); with `--watch`, a live ShowFolder notebook |
 | `quantem show3d <folder>` | a folder of same-size frames | Show3D scrub HTML; with `--watch`, a live ShowFolder notebook |
 | `quantem show4dstem <master(s) / folder>` | one or more `*_master.h5` | live Show4DSTEM notebook (or `--html`) |
+| `quantem ptycho <master.h5 / folder>` | a raw `*_master.h5` or a ShowPtycho WebGPU folder export | builds or serves a ptychography browser review |
+| `quantem showptycho <master.h5 / folder>` | same as `quantem ptycho` | compatibility alias |
 | `quantem showfolder <folder>` | microscopy session folder | ShowFolder notebook (or `--html`) |
 | `quantem data-transfer plan/inspect/copy/update/masters/show4dstem` | `*_master.h5` folder plus target roots | manifest-backed transfer planning, state inspection, explicit copy, resume/update, ready-master listing, and Show4DSTEM handoff |
 | `quantem html <notebook.ipynb>` | a notebook you wrote | runs it, bakes outputs into one offline HTML |
@@ -107,12 +111,13 @@ quantem html tutorial.ipynb                  # a notebook          -> standalone
 
 **Images** save a standalone HTML and open in your browser. **4D-STEM** opens a live,
 kernel-backed notebook by default (full detector sampling and real-time interaction);
-`--html` instead writes an offline WebGPU browser export - drag detectors, switch
+`--html` instead writes an offline WebGPU browser folder - drag detectors, switch
 BF/ABF/ADF, pan diffraction, all with no kernel. Use `--bin N` only when you
-explicitly want a detector-binned preview. Interactive raw 4D exports may include a
-`Show4DSTEM.command` launcher when the browser must fetch a companion data payload
-over HTTP. Several masters (a folder, or listed explicitly) stack into one 5D viewer
-with a dataset slider (the multi-tilt case).
+explicitly want a detector-binned preview. Full-detector WebGPU exports keep the
+compressed HDF5 files next to the viewer; open `index.html` and grant the data
+folder, or double-click `Show4DSTEM.command` to serve the same folder locally.
+Several masters (a folder, or listed explicitly) stack into one 5D viewer with a
+dataset slider (the multi-tilt case).
 
 For live microscope sessions, keep the Show4DSTEM viewer mounted and append new
 completed `*_master.h5` acquisitions into the same dataset slider. On Apple

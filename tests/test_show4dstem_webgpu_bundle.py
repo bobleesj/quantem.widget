@@ -64,11 +64,13 @@ def test_bundle_export_writes_launcher_viewer_and_vendored_page(tmp_path):
     root_index = tmp_path / "index.html"
     assert root_index.exists()
     assert ".viewer/Show4DSTEM.html" in root_index.read_text(encoding="utf-8")
-    assert "Direct file:// opening cannot stream the HDF5 sources" in root_index.read_text(encoding="utf-8")
+    assert "window.location.protocol === \"file:\"" in root_index.read_text(encoding="utf-8")
+    assert "This Show4DSTEM package must be opened through its local range server" not in root_index.read_text(encoding="utf-8")
     for name in ("Show4DSTEM.html", "require.min.js", "embed-amd.js", "anywidget.min.js", "serve_range.py"):
         assert (viewer / name).exists(), name
     page = (viewer / "Show4DSTEM.html").read_text(encoding="utf-8")
     assert "cdnjs.cloudflare.com" not in page and "cdn.jsdelivr.net" not in page
+    assert "__QT_REQUIRE_LOCAL_H5_FILES" in page
     assert "__QT_H5_DECODE_DTYPE" in page and "__BSLZ4_FRAME_WG" in page
     assert 'globalThis.__QT_H5_DECODE_DTYPE ??= "u2"' in page
     assert "globalThis.__QT_H5_FORCE_LOW8 ??= false" in page
@@ -97,6 +99,29 @@ def test_bundle_export_uses_low8_for_audited_uint8_h5(tmp_path):
     assert 'globalThis.__QT_H5_DECODE_DTYPE ??= "uint8"' in page
     assert "globalThis.__QT_H5_FORCE_LOW8 ??= true" in page
     assert "globalThis.__BSLZ4_LOW8_ONLY ??= true" in page
+
+
+def test_h5_export_sets_file_protocol_local_file_guard(tmp_path):
+    _write_arina_family(tmp_path, "tilt_a")
+    widget = Show4DSTEM(
+        np.zeros((1, 1, 1, 1), np.uint8),
+        h5_url="sources/tilt_a_master.h5",
+        scan_shape=(4, 4),
+        detector_shape=(32, 32),
+        backend="webgpu",
+        precompute_virtual_images=False,
+        verbose=False,
+    )
+    try:
+        out = tmp_path / "index.html"
+        widget.export_html(out, title="h5 direct", dtype="uint8", det_bin=1)
+    finally:
+        widget.close()
+    page = out.read_text(encoding="utf-8")
+    assignment = "__QT_REQUIRE_LOCAL_H5_FILES = true"
+    assert assignment in page
+    assert page.find(assignment) < page.find("__QT_H5_DECODE_DTYPE")
+    assert page.find(assignment) < page.find("sources/tilt_a_master.h5")
 
 
 def test_show4dstem_lazy_urls_export_uses_lazy_source(tmp_path):
