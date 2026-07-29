@@ -1,44 +1,79 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 
-def test_widget_backend_shims_delegate_to_quantem_gpu() -> None:
-    import importlib
-
-    import quantem.gpu.compute.backend as gpu_compute_backend
-    import quantem.gpu.compute.backends as gpu_compute_backends
-    import quantem.gpu.compute.mps as gpu_compute_mps
+def test_widget_has_no_duplicate_gpu_backend_modules() -> None:
     import quantem.gpu.io.backends as gpu_io_backends
-    import quantem.gpu.io.bitshuffle as gpu_bitshuffle
-    import quantem.gpu.io.constants as gpu_constants
-    import quantem.gpu.io.save as gpu_save
-    import quantem.widget.io.backends as widget_io_backends
-    import quantem.widget.io.bitshuffle as widget_bitshuffle
-    import quantem.widget.io.constants as widget_constants
-    import quantem.widget.io.save as widget_save
-    import quantem.widget.kernels.compute.backend as widget_compute_backend
-    import quantem.widget.kernels.compute.backends as widget_compute_backends
-    import quantem.widget.kernels.compute.mps as widget_compute_mps
+    import quantem.widget as widget
+    import quantem.widget.io as widget_io
 
-    gpu_detector = importlib.import_module("quantem.gpu.detector")
-    gpu_dpc = importlib.import_module("quantem.gpu.dpc")
-    widget_backend = importlib.import_module("quantem.widget.backend")
-    widget_detector = importlib.import_module("quantem.widget.detector")
-    widget_dpc = importlib.import_module("quantem.widget.dpc")
+    repo = Path(__file__).resolve().parents[1]
+    widget_package = repo / "src" / "quantem" / "widget"
+    stale_modules = [
+        "backend.py",
+        "detector.py",
+        "dpc.py",
+        "io/backends",
+        "io/bitshuffle.py",
+        "io/constants.py",
+        "io/hdf5.py",
+        "io/save.py",
+        "kernels/compute",
+        "kernels/io",
+    ]
 
-    assert widget_backend.detect_backend is gpu_io_backends.detect_backend
-    assert widget_io_backends.resolve_backend is gpu_io_backends.resolve_backend
-    assert widget_detector.bf is gpu_detector.bf
-    assert widget_detector.virtual_image is gpu_detector.virtual_image
-    assert widget_dpc.dpc is gpu_dpc.dpc
-    assert widget_dpc.center_of_mass is gpu_dpc.center_of_mass
-    assert widget_compute_backend.ComputeBackend is gpu_compute_backend.ComputeBackend
-    assert widget_compute_backends.compute_backend is gpu_compute_backends.compute_backend
-    assert widget_compute_mps.ChunkedFrames is gpu_compute_mps.ChunkedFrames
-    assert widget_constants.BLOCK_SIZE == gpu_constants.BLOCK_SIZE
-    assert widget_save.save is gpu_save.save
-    assert widget_bitshuffle.__getattr__ is gpu_bitshuffle.__getattr__
+    stale_files = []
+    for relative in stale_modules:
+        path = widget_package / relative
+        if path.is_file() or (path.is_dir() and any(path.rglob("*.py"))):
+            stale_files.append(relative)
+    assert stale_files == []
+    assert not hasattr(widget, "detect_backend")
+    assert not hasattr(widget, "resolve_backend")
+    assert widget_io.detect_backend is gpu_io_backends.detect_backend
+    assert widget_io.resolve_backend is gpu_io_backends.resolve_backend
+
+
+def test_widget_source_imports_compute_from_quantem_gpu() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    widget_package = repo / "src" / "quantem" / "widget"
+    stale_imports = (
+        "quantem.widget.backend",
+        "quantem.widget.detector",
+        "quantem.widget.dpc",
+        "quantem.widget.io.backends",
+        "quantem.widget.io.bitshuffle",
+        "quantem.widget.io.constants",
+        "quantem.widget.io.hdf5",
+        "quantem.widget.io.save",
+        "quantem.widget.kernels.compute",
+        "quantem.widget.kernels.io",
+    )
+
+    offenders = []
+    for path in widget_package.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        imported_modules = {
+            name.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for name in node.names
+        }
+        imported_modules.update(
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        )
+        if any(
+            module == stale_import or module.startswith(f"{stale_import}.")
+            for module in imported_modules
+            for stale_import in stale_imports
+        ):
+            offenders.append(path.relative_to(widget_package).as_posix())
+    assert offenders == []
 
 
 def test_widget_webgpu_sources_are_generated_from_quantem_gpu() -> None:
@@ -66,8 +101,8 @@ def test_widget_webgpu_sources_are_generated_from_quantem_gpu() -> None:
 
     assert 'targetDir = "js/.generated/engine"' in sync_script
     assert "syncGpuWebgpuSources()" in build_script
-    assert "../.generated/engine/bslz4" in show4dstem
-    assert "../.generated/engine/local-h5" in show4dstem
-    assert "../.generated/engine/showptycho-ssb" in showptycho
-    assert "../../../js/.generated/engine/h5reader" in web_store
-    assert "../../js/.generated/engine/compute" in web_app
+    assert "../.generated/engine/webgpu/bslz4" in show4dstem
+    assert "../.generated/engine/webgpu/local-h5" in show4dstem
+    assert "../.generated/engine/ssb/compute/webgpu/backend" in showptycho
+    assert "../../../js/.generated/engine/webgpu/h5reader" in web_store
+    assert "../../js/.generated/engine/webgpu/compute" in web_app

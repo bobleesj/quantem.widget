@@ -11,7 +11,7 @@ import pytest
 def _webgpu_source(name: str) -> str:
     from quantem.gpu import webgpu
 
-    return webgpu.source_text(name)
+    return webgpu.source_text(f"webgpu/{name}")
 
 
 def test_show4dstem_cuda_keeps_cupy_compute_source_for_rawkernel() -> None:

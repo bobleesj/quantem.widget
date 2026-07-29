@@ -17,7 +17,7 @@ To export a standalone HTML viewer you can open without a kernel, see
 ```python
 import cupy as cp
 from quantem.gpu.io import load
-from quantem.gpu.ssb.reconstruction import SSB
+from quantem.gpu import SSB
 from quantem.widget import ShowPtycho
 
 # 1. Load the native detector — do NOT bin (see "No detector binning" below).
@@ -55,7 +55,7 @@ solver to find the aberrations, build an `SSB`, call `optimize()` then `refine()
 and pass the `ssb` object: `ShowPtycho(ssb)`.
 
 You can confirm the solve ran: the stats bar shows a non-null `loss`, and the
-`Optuna trials + nmead` panel at the bottom is populated.
+`Optuna trials + Nelder-Mead` panel at the bottom is populated.
 
 ## No detector binning
 

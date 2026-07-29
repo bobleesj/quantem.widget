@@ -155,7 +155,7 @@ class DataTransferSummary:
 
 def _disk_of_existing(path: Path) -> str:
     """Return the physical disk for *path* or its nearest existing parent."""
-    from quantem.widget.io.hdf5 import disk_of
+    from quantem.gpu.io.hdf5 import disk_of
 
     probe = path.expanduser()
     while not probe.exists() and probe.parent != probe:
@@ -276,7 +276,7 @@ def collect_data_transfer_groups(
     list[DataTransferGroup]
         One group per master, including matching ``*_data_*.h5`` sidecars.
     """
-    from quantem.widget.io.hdf5 import is_master_ready
+    from quantem.gpu.io.hdf5 import is_master_ready
 
     hash_algorithm = _normalize_hash_algorithm(hash_algorithm)
     if isinstance(source, (list, tuple)):

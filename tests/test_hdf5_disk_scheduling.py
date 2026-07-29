@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from quantem.widget.io import hdf5
+import quantem.gpu.io.hdf5 as hdf5
 
 
 def _patch_disks(monkeypatch: pytest.MonkeyPatch, disk_map: dict[str, str]) -> None:

@@ -4,7 +4,7 @@ import numpy as np
 def test_load_stacked_u8_routes_to_direct_output_dtype(monkeypatch):
     """Public dtype='u8' must reach stacked list loads before materializing U16."""
     import quantem.gpu.io.hdf5 as gpu_hdf5
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
 
     calls = {}
 
@@ -27,7 +27,7 @@ def test_load_stacked_u8_routes_to_direct_output_dtype(monkeypatch):
 def test_load_sharded_u8_routes_to_direct_output_dtype(monkeypatch):
     """devices=[...] list loads should also use the direct U8 browse path."""
     import quantem.gpu.io.hdf5 as gpu_hdf5
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
 
     calls = {}
 
@@ -56,7 +56,7 @@ def test_load_sharded_u8_routes_to_direct_output_dtype(monkeypatch):
 def test_load_parallel_u8_routes_to_direct_output_dtype(monkeypatch):
     """gpus=/stack=False placement should not decode as U16 first."""
     import quantem.gpu.io.hdf5 as gpu_hdf5
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
 
     calls = {}
 
@@ -86,7 +86,7 @@ def test_load_parallel_u8_routes_to_direct_output_dtype(monkeypatch):
 def test_load_u8_does_not_override_explicit_output_dtype(monkeypatch):
     """Explicit lower-level output_dtype remains authoritative."""
     import quantem.gpu.io.hdf5 as gpu_hdf5
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
 
     calls = {}
 

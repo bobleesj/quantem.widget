@@ -10,7 +10,7 @@ from quantem.widget import load
 ## Reference
 
 ```{eval-rst}
-.. autofunction:: quantem.widget.io.hdf5.load
+.. autofunction:: quantem.widget.io.load
 ```
 
 ```{tip}

@@ -1,5 +1,6 @@
 import os as _os
 import warnings as _warnings
+from importlib import import_module as _import_module
 from importlib.metadata import PackageNotFoundError, version
 
 # Silence two noisy-but-harmless warnings at import, BEFORE anything imports cupy
@@ -15,83 +16,60 @@ _os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 _warnings.filterwarnings("ignore", message=r"(?s).*multiple CuPy packages.*")
 _warnings.filterwarnings("ignore", message=r"(?s).*HF_TOKEN.*")
 
-from quantem.widget.show1d import Show1D
-from quantem.widget.show2d import Show2D
-from quantem.widget.show3d import Show3D
-from quantem.widget.show3dslices import Show3DSlices
-from quantem.widget.showeds import ShowEDS, SpectrumImage, bin_spectrum_image, load_eds, load_emd_spectrum_image
-from quantem.widget.show4dstem_factory import Show4DSTEM
-from quantem.widget.showdiffraction import ShowDiffraction
-from quantem.widget.showfolder import ShowFolder, prebuild_showfolder_cache, show_folder
-try:
-    from quantem.widget.io import load, read_gif, read_image, read_image_stack, read_images
-except ModuleNotFoundError as exc:
-    if exc.name != "quantem.gpu":
-        raise
-try:
-    from . import movie
-except ModuleNotFoundError as exc:
-    if exc.name != "quantem.gpu":
-        raise
-from quantem.widget.paths import first_existing
-try:
-    from quantem.widget.backend import detect_backend, resolve_backend
-except ModuleNotFoundError as exc:
-    if exc.name != "quantem.gpu":
-        raise
-
-    def detect_backend(*args, **kwargs):
-        raise ModuleNotFoundError("quantem.gpu is required for backend detection")
-
-    def resolve_backend(*args, **kwargs):
-        raise ModuleNotFoundError("quantem.gpu is required for backend resolution")
-
-try:
-    from quantem.widget.gpu import gpu_info
-except ModuleNotFoundError as exc:
-    if exc.name != "quantem.gpu":
-        raise
-
-    def gpu_info(*args, **kwargs):
-        raise ModuleNotFoundError("quantem.gpu is required for GPU information")
-try:
-    from quantem.gpu.detector import detect_bf_radius, dp_mean, virtual_image
-except ModuleNotFoundError as exc:
-    if exc.name != "quantem.gpu":
-        raise
-from quantem.widget.folder_picker import FolderPicker, pick_folder
-try:
-    from quantem.widget.multidataset_mps import load_4dstem_macbook
-except ModuleNotFoundError as exc:
-    if exc.name != "quantem.gpu":
-        raise
-
-    def load_4dstem_macbook(*args, **kwargs):
-        raise ModuleNotFoundError("quantem.gpu is required for multi-dataset MPS loading")
-from quantem.widget.export import (
-    HTML_EXPORT_TRAITS,
-    SupportsFrontendHtmlExport,
-    SupportsHtmlExport,
-    supports_html_export,
-)
-try:
-    from quantem.gpu.dpc import idpc, com
-except ModuleNotFoundError as exc:
-    if exc.name != "quantem.gpu":
-        raise
-from quantem.widget.info import device_info
-try:
-    from quantem.gpu.detector import bf, adf, df
-except ModuleNotFoundError as exc:
-    if exc.name != "quantem.gpu":
-        raise
-from quantem.widget._timing import (
-    WidgetProfile,
-    format_timing_table,
-    format_widget_render_timing,
-    profile_widget,
-    widget_timing_report,
-)
+_LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
+    "Show1D": ("quantem.widget.show1d", "Show1D"),
+    "Show2D": ("quantem.widget.show2d", "Show2D"),
+    "Show3D": ("quantem.widget.show3d", "Show3D"),
+    "Show3DSlices": ("quantem.widget.show3dslices", "Show3DSlices"),
+    "Show4DSTEM": ("quantem.widget.show4dstem_factory", "Show4DSTEM"),
+    "ShowDiffraction": ("quantem.widget.showdiffraction", "ShowDiffraction"),
+    "ShowEDS": ("quantem.widget.showeds", "ShowEDS"),
+    "ShowFolder": ("quantem.widget.showfolder", "ShowFolder"),
+    "ShowPtycho": ("quantem.widget.showptycho", "ShowPtycho"),
+    "PtychoCalibration": ("quantem.widget.showptycho", "PtychoCalibration"),
+    "load_ptycho_calibration": (
+        "quantem.widget.showptycho",
+        "load_ptycho_calibration",
+    ),
+    "prebuild_showfolder_cache": (
+        "quantem.widget.showfolder",
+        "prebuild_showfolder_cache",
+    ),
+    "show_folder": ("quantem.widget.showfolder", "show_folder"),
+    "SpectrumImage": ("quantem.widget.showeds", "SpectrumImage"),
+    "bin_spectrum_image": ("quantem.widget.showeds", "bin_spectrum_image"),
+    "load_eds": ("quantem.widget.showeds", "load_eds"),
+    "load_emd_spectrum_image": (
+        "quantem.widget.showeds",
+        "load_emd_spectrum_image",
+    ),
+    "load": ("quantem.gpu.io.hdf5", "load"),
+    "read_gif": ("quantem.widget.io.image", "read_gif"),
+    "read_image": ("quantem.widget.io.image", "read_image"),
+    "read_image_stack": ("quantem.widget.io.image", "read_image_stack"),
+    "read_images": ("quantem.widget.io.image", "read_images"),
+    "movie": ("quantem.widget.movie", None),
+    "first_existing": ("quantem.widget.paths", "first_existing"),
+    "gpu_info": ("quantem.widget.gpu", "gpu_info"),
+    "FolderPicker": ("quantem.widget.folder_picker", "FolderPicker"),
+    "pick_folder": ("quantem.widget.folder_picker", "pick_folder"),
+    "HTML_EXPORT_TRAITS": ("quantem.widget.export", "HTML_EXPORT_TRAITS"),
+    "SupportsFrontendHtmlExport": (
+        "quantem.widget.export",
+        "SupportsFrontendHtmlExport",
+    ),
+    "SupportsHtmlExport": ("quantem.widget.export", "SupportsHtmlExport"),
+    "supports_html_export": ("quantem.widget.export", "supports_html_export"),
+    "device_info": ("quantem.widget.info", "device_info"),
+    "WidgetProfile": ("quantem.widget._timing", "WidgetProfile"),
+    "format_timing_table": ("quantem.widget._timing", "format_timing_table"),
+    "format_widget_render_timing": (
+        "quantem.widget._timing",
+        "format_widget_render_timing",
+    ),
+    "profile_widget": ("quantem.widget._timing", "profile_widget"),
+    "widget_timing_report": ("quantem.widget._timing", "widget_timing_report"),
+}
 
 
 try:
@@ -102,27 +80,22 @@ except PackageNotFoundError:
 
 
 def __getattr__(name: str):
-    """Lazy-load optional widget modules with generated frontend bundles."""
+    """Load one explicitly declared public export on first use."""
 
-    if name in {
-        "ShowPtycho",
-        "PtychoCalibration",
-        "load_ptycho_calibration",
-    }:
-        from quantem.widget.showptycho import (
-            PtychoCalibration,
-            ShowPtycho,
-            load_ptycho_calibration,
-        )
+    export = _LAZY_EXPORTS.get(name)
+    if export is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute_name = export
+    module = _import_module(module_name)
+    value = module if attribute_name is None else module.__dict__[attribute_name]
+    globals()[name] = value
+    return value
 
-        exports = {
-            "ShowPtycho": ShowPtycho,
-            "PtychoCalibration": PtychoCalibration,
-            "load_ptycho_calibration": load_ptycho_calibration,
-        }
-        globals().update(exports)
-        return exports[name]
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+def __dir__() -> list[str]:
+    """Include explicit lazy exports in interactive discovery."""
+
+    return sorted(set(globals()) | set(_LAZY_EXPORTS))
 
 
 def profile() -> None:
@@ -255,12 +228,7 @@ __all__ = [
     "SupportsFrontendHtmlExport",
     "SupportsHtmlExport",
     "supports_html_export",
-    "idpc",
-    "com",
     "device_info",
-    "bf",
-    "adf",
-    "df",
     "profile",
     "free_gpu",
 ]

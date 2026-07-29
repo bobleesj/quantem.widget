@@ -15,6 +15,7 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import os
 import pathlib
 import re
 import struct
@@ -23,6 +24,7 @@ from typing import Any, Sequence
 import numpy as np
 
 from quantem.widget.command_launcher import write_command_launcher
+from quantem.widget.io.hdf5_family import collect_hdf5_family
 
 _VENDOR = pathlib.Path(__file__).parent / "vendor"
 # CDN references embed_minimal_html emits; each is replaced by a vendored copy so
@@ -91,6 +93,7 @@ def export_show4dstem_webgpu_bundle(
     if not root.is_dir():
         raise ValueError(f"bundle out_dir must be an existing data folder: {root}")
     masters = sorted(root.glob("*_master.h5"))
+    masters.extend(sorted(root.glob("*_master_wrapper.h5")))
     if not masters:
         raise ValueError(f"no *_master.h5 files in {root}; the bundle serves the data folder itself")
     viewer = root / ".viewer"
@@ -158,6 +161,100 @@ def bundle_master_urls(folder: str | pathlib.Path, names: Sequence[str] | None =
             picked.append(hits[0])
         masters = picked
     return [f"../{name}" for name in masters]
+
+
+def _link_read_only(source: pathlib.Path, target: pathlib.Path) -> str:
+    """Link one source file without ever falling back to a physical copy."""
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() or target.is_symlink():
+        target.unlink()
+    try:
+        os.link(source, target)
+        return "hardlink"
+    except OSError:
+        try:
+            target.symlink_to(source)
+            return "symlink"
+        except OSError as exc:
+            raise ValueError(
+                "Show4DSTEM needs a hard link or symbolic link to keep the raw "
+                f"source read-only without copying it: {source}"
+            ) from exc
+
+
+def export_show4dstem_hdf5_viewer(
+    master: str | pathlib.Path,
+    out_dir: str | pathlib.Path,
+    *,
+    scan_shape: tuple[int, int],
+    detector_shape: tuple[int, int],
+    title: str,
+    target_stem: str | None = None,
+) -> pathlib.Path:
+    """Write a direct WebGPU viewer linked to one read-only HDF5 family.
+
+    The output contains hard links when source and project share a filesystem,
+    otherwise symbolic links. Raw detector bytes are never copied.
+    """
+
+    from quantem.widget import Show4DSTEM
+
+    source_master = pathlib.Path(master).expanduser().resolve()
+    root = pathlib.Path(out_dir).expanduser().resolve()
+    if root == source_master.parent:
+        raise ValueError(
+            "Show4DSTEM project output must differ from the source HDF5 folder"
+        )
+    root.mkdir(parents=True, exist_ok=True)
+    # This function owns the raw-family aliases in ``root``. Remove aliases
+    # from an earlier export so --force cannot leave acquisition names or
+    # obsolete detector parts behind. The source files remain untouched.
+    for pattern in ("*_master.h5", "*_data_*.h5"):
+        for stale in root.glob(pattern):
+            if stale.is_file() or stale.is_symlink():
+                stale.unlink()
+
+    family = collect_hdf5_family(source_master)
+    source_stem = family[0].name.removesuffix("_master.h5")
+    linked: list[pathlib.Path] = []
+    for source in family:
+        target_name = source.name
+        if target_stem is not None:
+            if source == family[0]:
+                if not source.name.endswith("_master.h5"):
+                    raise ValueError(
+                        "an anonymous Show4DSTEM companion requires a native "
+                        "*_master.h5 family"
+                    )
+                target_name = f"{target_stem}_master.h5"
+            else:
+                prefix = f"{source_stem}_data_"
+                if not source.name.startswith(prefix):
+                    raise ValueError(
+                        "an anonymous Show4DSTEM companion requires detector "
+                        "files named <source>_data_*.h5"
+                    )
+                target_name = f"{target_stem}_data_{source.name[len(prefix):]}"
+        target = root / target_name
+        _link_read_only(source, target)
+        linked.append(target)
+
+    widget = Show4DSTEM(
+        np.zeros((1, 1, 1, 1), dtype=np.uint8),
+        h5_urls=[f"../{linked[0].name}"],
+        h5_uint8_lossless=False,
+        scan_shape=tuple(int(value) for value in scan_shape),
+        detector_shape=tuple(int(value) for value in detector_shape),
+        backend="webgpu",
+        precompute_virtual_images=False,
+        verbose=False,
+    )
+    try:
+        export_show4dstem_webgpu_bundle(widget, root, title=title)
+    finally:
+        widget.close()
+    return root / ".viewer" / "Show4DSTEM.html"
 
 
 def _read_h5_bad_pixel_indices(path: pathlib.Path, detector_size: int) -> tuple[list[int], bool]:

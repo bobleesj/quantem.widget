@@ -1844,7 +1844,7 @@ def inspect_master_file(path: str | Path) -> MasterQC:
         stem=stem,
         status="bad",
         reason="not inspected",
-        action="do not screen",
+        action="do not load",
         master_bytes=master.stat().st_size if master.exists() else 0,
     )
     if not master.exists():

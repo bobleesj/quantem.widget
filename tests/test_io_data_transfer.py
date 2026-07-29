@@ -23,7 +23,7 @@ def test_collect_data_transfer_groups_keeps_master_and_sidecars_together(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
     from quantem.widget.io.data_transfer import collect_data_transfer_groups
 
     monkeypatch.setattr(hdf5, "is_master_ready", lambda path: True)
@@ -49,7 +49,7 @@ def test_collect_data_transfer_groups_keeps_master_and_sidecars_together(
 
 
 def test_plan_data_transfer_balances_groups_by_size(monkeypatch, tmp_path: Path) -> None:
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
     from quantem.widget.io.data_transfer import plan_data_transfer
 
     source = tmp_path / "source"
@@ -95,7 +95,7 @@ def test_plan_data_transfer_balances_groups_by_size(monkeypatch, tmp_path: Path)
 
 
 def test_plan_data_transfer_can_skip_not_ready_masters(monkeypatch, tmp_path: Path) -> None:
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
     from quantem.widget.io.data_transfer import plan_data_transfer
 
     good = _master(tmp_path / "source", "good", 10)
@@ -113,7 +113,7 @@ def test_plan_data_transfer_can_skip_not_ready_masters(monkeypatch, tmp_path: Pa
 
 
 def test_data_transfer_manifest_and_copy_are_safe_by_default(monkeypatch, tmp_path: Path) -> None:
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
     from quantem.widget.io.data_transfer import (
         copy_data_transfer,
         data_transfer_load_warnings,
@@ -175,7 +175,7 @@ def test_data_transfer_load_warnings_report_single_disk_multi_gpu(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
     from quantem.widget.io.data_transfer import data_transfer_load_warnings, plan_data_transfer
 
     source = tmp_path / "source"
@@ -201,7 +201,7 @@ def test_update_data_transfer_plan_appends_without_moving_existing_targets(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
     from quantem.widget.io.data_transfer import plan_data_transfer, update_data_transfer_plan
 
     source = tmp_path / "source"
@@ -226,7 +226,7 @@ def test_update_data_transfer_plan_appends_without_moving_existing_targets(
 
 
 def test_data_transfer_core_can_copy_only_pending(monkeypatch, tmp_path: Path) -> None:
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
     from quantem.widget.io.data_transfer import (
         copy_data_transfer,
         filter_data_transfer_plan,
@@ -284,7 +284,7 @@ def test_data_transfer_core_rescans_without_widget(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
     from quantem.widget.io.data_transfer import plan_data_transfer, update_data_transfer_plan
 
     source = tmp_path / "source"
@@ -308,7 +308,7 @@ def test_data_transfer_core_rescans_without_widget(
 
 
 def test_copy_data_transfer_refuses_different_existing_target(monkeypatch, tmp_path: Path) -> None:
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
     from quantem.widget.io.data_transfer import copy_data_transfer, plan_data_transfer
 
     source = tmp_path / "source"
@@ -326,7 +326,7 @@ def test_copy_data_transfer_refuses_different_existing_target(monkeypatch, tmp_p
 
 
 def test_hash_verification_catches_same_size_target(monkeypatch, tmp_path: Path) -> None:
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
     from quantem.widget.io.data_transfer import copy_data_transfer, inspect_data_transfer, plan_data_transfer
 
     source = tmp_path / "source"
@@ -353,7 +353,7 @@ def test_inspect_data_transfer_reports_partial_and_mismatch(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    from quantem.widget.io import hdf5
+    import quantem.gpu.io.hdf5 as hdf5
     from quantem.widget.io.data_transfer import inspect_data_transfer, plan_data_transfer
 
     source = tmp_path / "source"

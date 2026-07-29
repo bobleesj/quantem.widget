@@ -37,7 +37,7 @@ import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, GPUColormapEngine, getGPU
 import { fft2d, nextPow2, fftshift, computeMagnitude, applyHannWindow2D, getWebGPUFFT, WebGPUFFT } from "../fft";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI } from "../figure";
 import { computeHistogramFromBytes } from "../stats";
-import { ShowPtychoWebGPUSSB, deleteShowPtychoFolderFile, readShowPtychoFolderBytes, readShowPtychoFolderJson, setShowPtychoLocalDirectory, setShowPtychoLocalFiles, showPtychoFolderWritable, showPtychoNeedsLocalSource, writeShowPtychoFolderFile, type WebGPULoadProgress } from "../.generated/engine/showptycho-ssb";
+import { WebGPUSSBBackend, deleteSSBFolderFile, readSSBFolderBytes, readSSBFolderJson, setSSBLocalDirectory, setSSBLocalFiles, ssbFolderWritable, ssbNeedsLocalSource, writeSSBFolderFile, type WebGPULoadProgress } from "../.generated/engine/ssb/compute/webgpu/backend";
 
 /* ================================================================
    Design tokens (matching Live / Show2D)
@@ -1668,8 +1668,6 @@ function Explore() {
   const [, setHigherOrderJson] = useModelState<string>("higher_order_json");
   const [webgpuPreviewEnabled] = useModelState<boolean>("webgpu_preview_enabled");
   const [webgpuCalJson] = useModelState<string>("webgpu_cal_json");
-  const [webgpuGbfBytes] = useModelState<DataView>("webgpu_g_bf_bytes");
-  const [webgpuGbfUrl] = useModelState<string>("webgpu_g_bf_url");
   const [webgpuH5SourceJson] = useModelState<string>("webgpu_h5_source_json");
   const [webgpuPreviewStatus] = useModelState<string>("webgpu_preview_status");
   const [webgpuStandalone] = useModelState<boolean>("webgpu_standalone");
@@ -1761,23 +1759,23 @@ function Explore() {
     const n = Math.max(1, Math.round(total || 1));
     return Math.max(1, Math.min(n, Math.round(n * DEFAULT_BF_FRACTION)));
   }, []);
-  const webgpuCalActiveBf = React.useMemo(() => {
+  const webgpuCalLogicalBf = React.useMemo(() => {
     if (!webgpuCalJson) return 0;
     try {
       const cal = JSON.parse(webgpuCalJson);
       const numBf = Number(cal?.num_bf || 0);
-      const aperture = Array.isArray(cal?.aperture_k) ? cal.aperture_k : [];
-      const active = aperture.reduce((count: number, value: unknown) => (
-        Math.abs(Number(value || 0)) > 1e-12 ? count + 1 : count
-      ), 0);
-      const total = active > 0 ? active : numBf;
-      return Number.isFinite(total) && total > 0 ? Math.round(total) : 0;
+      return Number.isFinite(numBf) && numBf > 0 ? Math.round(numBf) : 0;
     } catch {
       return 0;
     }
   }, [webgpuCalJson]);
-  const effectiveTotalBf = webgpuStandalone && webgpuCalActiveBf > 0
-    ? webgpuCalActiveBf
+  // The engine's BF count is a prefix into the full, row-major detector
+  // coordinate list. Aperture-active pixels are not a contiguous prefix, so
+  // replacing this logical total with the active count silently drops valid BF
+  // evidence near the bottom/right of the disk. Memory compaction happens after
+  // collectActiveBfIndices() has inspected the complete requested prefix.
+  const effectiveTotalBf = webgpuStandalone && webgpuCalLogicalBf > 0
+    ? webgpuCalLogicalBf
     : Math.max(0, Math.round(totalBf || 0));
   const standaloneBfSeededRef = React.useRef(false);
   React.useEffect(() => {
@@ -1932,7 +1930,7 @@ function Explore() {
   const shouldCommitOnReleaseRef = React.useRef(false);
   const [webgpuRuntimeStatus, setWebgpuRuntimeStatus] = React.useState("");
   const [webgpuLoadProgress, setWebgpuLoadProgress] = React.useState<WebGPULoadProgress | null>(null);
-  const webgpuSsbRef = React.useRef<ShowPtychoWebGPUSSB | null>(null);
+  const webgpuSsbRef = React.useRef<WebGPUSSBBackend | null>(null);
   const webgpuInFlightRef = React.useRef(false);
   const webgpuPendingRef = React.useRef<[number, number, number, number] | null>(null);
   const webgpuPendingFullRef = React.useRef(false);
@@ -1946,7 +1944,7 @@ function Explore() {
   // No-server mode: on file:// the sibling data files cannot be fetch()ed, so
   // the folder must be granted once (picker or webkitdirectory input) before
   // the engine is created. HTTP-served folders skip this entirely.
-  const [localSourceGranted, setLocalSourceGranted] = React.useState(() => !showPtychoNeedsLocalSource());
+  const [localSourceGranted, setLocalSourceGranted] = React.useState(() => !ssbNeedsLocalSource());
   const [localSourceError, setLocalSourceError] = React.useState("");
   const localDirInputRef = React.useRef<HTMLInputElement | null>(null);
   // Name of the folder this HTML lives in, so the banner can say exactly what
@@ -1982,7 +1980,7 @@ function Explore() {
             return;
           }
         }
-        setShowPtychoLocalDirectory(handle);
+        setSSBLocalDirectory(handle);
         setLocalSourceError("");
         setLocalSourceGranted(true);
         return;
@@ -2009,14 +2007,8 @@ function Explore() {
   const [folderSaves, setFolderSaves] = React.useState<FolderSaveRecord[]>([]);
   const [folderSaveStatus, setFolderSaveStatus] = React.useState("");
   const refreshFolderSaves = React.useCallback(async () => {
-    const current = await readShowPtychoFolderJson<FolderSaveRecord[]>("snapshots/snapshots.json");
-    const legacy = await readShowPtychoFolderJson<FolderSaveRecord[]>("saves/saves.json");
-    if (Array.isArray(current) || Array.isArray(legacy)) {
-      const byId = new Map<string, FolderSaveRecord>();
-      for (const record of Array.isArray(legacy) ? legacy : []) byId.set(record.id, record);
-      for (const record of Array.isArray(current) ? current : []) byId.set(record.id, record);
-      setFolderSaves(Array.from(byId.values()));
-    }
+    const current = await readSSBFolderJson<FolderSaveRecord[]>("snapshots/snapshots.json");
+    setFolderSaves(Array.isArray(current) ? current : []);
   }, []);
   React.useEffect(() => {
     if (webgpuStandalone && localSourceGranted) void refreshFolderSaves();
@@ -2036,14 +2028,12 @@ function Explore() {
         );
         return;
       }
-      setShowPtychoLocalFiles(Array.from(files));
+      setSSBLocalFiles(Array.from(files));
       setLocalSourceError("");
       setLocalSourceGranted(true);
     }
   }, [localFolderName]);
   React.useEffect(() => {
-    const hasEmbeddedBytes = !!webgpuGbfBytes && webgpuGbfBytes.byteLength > 0;
-    const hasUrl = !!webgpuGbfUrl;
     const hasH5Source = !!webgpuH5SourceJson && webgpuH5SourceJson.trim() !== "" && webgpuH5SourceJson.trim() !== "{}";
     if (!localSourceGranted) {
       webgpuSsbRef.current = null;
@@ -2051,17 +2041,19 @@ function Explore() {
       setWebgpuLoadProgress(null);
       return;
     }
-    if (!webgpuPreviewEnabled || !webgpuCalJson || (!hasEmbeddedBytes && !hasUrl && !hasH5Source)) {
+    if (!webgpuPreviewEnabled || !webgpuCalJson || !hasH5Source) {
       webgpuSsbRef.current = null;
       setWebgpuRuntimeStatus(webgpuPreviewStatus || "");
       setWebgpuLoadProgress(null);
       return;
     }
     try {
-      const source = hasH5Source
-        ? { kind: "hdf5" as const, json: webgpuH5SourceJson }
-        : hasUrl ? webgpuGbfUrl : webgpuGbfBytes;
-      const engine = new ShowPtychoWebGPUSSB(webgpuCalJson, source);
+      const parsedSource = JSON.parse(webgpuH5SourceJson) as { kind?: string };
+      const source = {
+        kind: parsedSource.kind === "bf_columns" ? "bf_columns" as const : "hdf5" as const,
+        json: webgpuH5SourceJson,
+      };
+      const engine = new WebGPUSSBBackend(webgpuCalJson, source);
       engine.setProgressHandler((progress) => {
         setWebgpuLoadProgress(progress.stage === "ready" ? null : progress);
         setWebgpuRuntimeStatus(webgpuProgressLabel(progress));
@@ -2079,7 +2071,7 @@ function Explore() {
         percent: 0,
       });
     }
-  }, [localSourceGranted, webgpuPreviewEnabled, webgpuCalJson, webgpuGbfBytes, webgpuGbfUrl, webgpuH5SourceJson, webgpuPreviewStatus]);
+  }, [localSourceGranted, webgpuPreviewEnabled, webgpuCalJson, webgpuH5SourceJson, webgpuPreviewStatus]);
 
   // WebGPU FFT (async, off main thread). Null until init resolves or if unsupported.
   const gpuFFTRef = React.useRef<WebGPUFFT | null>(null);
@@ -2382,8 +2374,7 @@ function Explore() {
   const sweepRangesRef = React.useRef(sweepRanges);
   sweepRangesRef.current = sweepRanges;
 
-  // Compatibility aliases for the existing PLAY tick: it reads "sweepRange"
-  // as the window for the CURRENTLY-SELECTED sweep param.  Map through.
+  // Resolve the active PLAY range from the selected sweep parameter.
   const sweepRange: [number, number] = React.useMemo(() => {
     if (sweepParam.startsWith("bundle:")) return [0, 1];
     if (sweepParam.startsWith("ho:")) return getFullSweepRange(sweepParam);
@@ -2766,7 +2757,7 @@ function Explore() {
     const bfCount = selectedDragBfCount();
     const total = Math.max(1, effectiveTotalBf || bfCount);
     const isFull = bfCount >= total;
-    engine.reconstruct(c10Val, c12Val, phi12Val, {
+    engine.reconstruct(c10Val, c12Val, phi12Val * Math.PI / 180, {
       preview: !isFull,
       bfCount,
       computeLoss: false,
@@ -2845,7 +2836,7 @@ function Explore() {
     const bfCount = selectedDragBfCount();
     const total = Math.max(1, effectiveTotalBf || bfCount);
     const isFull = bfCount >= total;
-    engine.reconstruct(c10Val, c12Val, phi12Val, {
+    engine.reconstruct(c10Val, c12Val, phi12Val * Math.PI / 180, {
       preview: !isFull,
       bfCount,
       computeLoss: isFull,
@@ -3146,9 +3137,9 @@ function Explore() {
         image: `snapshots/snapshot_${stamp}_C10_${slugPart(sliderVals.current.c10.toFixed(0))}.jpg`,
       };
       const next = [...folderSaves, record];
-      if (showPtychoFolderWritable()) {
-        await writeShowPtychoFolderFile(record.image, jpeg);
-        await writeShowPtychoFolderFile("snapshots/snapshots.json", JSON.stringify(next, null, 2));
+      if (ssbFolderWritable()) {
+        await writeSSBFolderFile(record.image, jpeg);
+        await writeSSBFolderFile("snapshots/snapshots.json", JSON.stringify(next, null, 2));
         setFolderSaves(next);
         setFolderSaveStatus(`Snapshot saved (${next.length})`);
       } else {
@@ -3169,7 +3160,7 @@ function Explore() {
   }, [setRotationDeg, setFlipPhase]);
   const downloadFolderSave = React.useCallback(async (record: FolderSaveRecord) => {
     try {
-      const bytes = await readShowPtychoFolderBytes(record.image);
+      const bytes = await readSSBFolderBytes(record.image);
       downloadBlob(new Blob([bytes as unknown as BlobPart], { type: "image/jpeg" }), record.image.split("/").pop() || "save.jpg");
     } catch (err) {
       setFolderSaveStatus(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -3178,8 +3169,8 @@ function Explore() {
   const deleteFolderSave = React.useCallback(async (record: FolderSaveRecord) => {
     try {
       const next = folderSaves.filter((r) => r.id !== record.id);
-      await writeShowPtychoFolderFile("snapshots/snapshots.json", JSON.stringify(next, null, 2));
-      try { await deleteShowPtychoFolderFile(record.image); } catch { /* image may already be gone */ }
+      await writeSSBFolderFile("snapshots/snapshots.json", JSON.stringify(next, null, 2));
+      try { await deleteSSBFolderFile(record.image); } catch { /* image may already be gone */ }
       setFolderSaves(next);
       setFolderSaveStatus(`Deleted snapshot (${next.length} left)`);
     } catch (err) {
@@ -3284,13 +3275,18 @@ function Explore() {
     if (!engine) throw new Error("GIF/MP4 export needs the WebGPU ShowPtycho engine.");
     const bfCount = selectedDragBfCount();
     const total = Math.max(1, effectiveTotalBf || bfCount);
-    const result = await engine.reconstruct(frame.c10, frame.c12, frame.phi12, {
+    const result = await engine.reconstruct(
+      frame.c10,
+      frame.c12,
+      frame.phi12 * Math.PI / 180,
+      {
       preview: bfCount < total,
       bfCount,
       computeLoss: false,
       rotationDeg: frame.rotation,
       higherOrder: frame.higherOrder,
-    });
+      },
+    );
     const phase = result.phase;
     if (flipPhaseRef.current) {
       for (let i = 0; i < phase.length; i++) phase[i] = -phase[i];
@@ -4343,7 +4339,7 @@ function Explore() {
               <Switch checked={!!flipPhase} onChange={(_, v) => setFlipPhase(v)} size="small" />
             </Box>
           </Tooltip>
-          <Tooltip title="Reset all aberrations to the auto (nmead-refined) reference and restore every sweep-stopper to its full range." placement="top" arrow>
+          <Tooltip title="Reset all aberrations to the automatic Nelder-Mead result and restore every sweep-stopper to its full range." placement="top" arrow>
             <IconButton
               size="small"
               onClick={() => {
@@ -4540,7 +4536,7 @@ function Explore() {
               gone — each aberration slider now has its own inline ↺. */}
           <Box sx={{ width: "1px", height: 20, bgcolor: tc.border, mx: 0.5, alignSelf: "center" }} />
 
-          <Tooltip title="Write calibration.json next to the notebook.  3_live.ipynb picks it up via load_calibration()." placement="top" arrow>
+          <Tooltip title="Save calibration.json in this ShowPtycho project for later sessions and downstream analysis." placement="top" arrow>
             <Button
               size="small" variant="outlined"
               startIcon={<SaveIcon sx={{ fontSize: 14 }} />}
@@ -4608,7 +4604,7 @@ function Explore() {
 
         {/* Optuna trials strip — scrollable, loss-ranked.  Click any tile to
             preview that trial's aberrations.  Best-loss tile is highlighted so
-            the user can immediately verify that nmead's refined point is near
+            the user can immediately verify that Nelder-Mead's refined point is near
             (or past) Optuna's best. */}
         {trials.length > 0 && (
           <Box sx={{ pt: `${SPACING.XS}px`, borderTop: `1px solid ${tc.border}` }}>
@@ -4617,13 +4613,13 @@ function Explore() {
                 onClick={() => setTrialsExpanded(v => !v)}
                 sx={{ cursor: "pointer", userSelect: "none", color: tc.textMuted, fontSize: 10, fontFamily: "monospace" }}
               >
-                {trialsExpanded ? "▼" : "▶"} Optuna trials ({trials.length}) + nmead · loss-sorted · click to preview
+                {trialsExpanded ? "▼" : "▶"} Optuna trials ({trials.length}) + Nelder-Mead · loss-sorted · click to preview
               </Box>
               <Box sx={{ flex: 1 }} />
               {trials.length > 0 && (
-                <Tooltip title={`Optuna explored ${trials.length} trials.  Nelder-Mead then refined the best one — that's the "nmead" tile.  Auto loss = ${autoLoss?.toFixed(8) ?? '—'}; best Optuna loss = ${formatNumber(trials[0].loss, 8)}.`} placement="top" arrow>
+                <Tooltip title={`Optuna explored ${trials.length} trials. Nelder-Mead then refined the best one. Auto loss = ${autoLoss?.toFixed(8) ?? '—'}; best Optuna loss = ${formatNumber(trials[0].loss, 8)}.`} placement="top" arrow>
                   <Typography sx={{ ...typography.value, color: tc.textMuted, cursor: "help" }}>
-                    nmead {autoLoss?.toFixed(8) ?? '—'}  ·  best optuna {formatNumber(trials[0].loss, 8)}
+                    Nelder-Mead {autoLoss?.toFixed(8) ?? '—'}  ·  best Optuna {formatNumber(trials[0].loss, 8)}
                   </Typography>
                 </Tooltip>
               )}
@@ -4655,7 +4651,7 @@ function Explore() {
                     >
                       <Stack direction="row" alignItems="baseline" spacing={0.5}>
                         <Typography sx={{ fontSize: 9, color: STATUS_GOOD, fontFamily: "monospace", fontWeight: "bold" }}>
-                          nmead
+                          Nelder-Mead
                         </Typography>
                         <Typography sx={{ fontSize: 11, color: STATUS_GOOD, fontFamily: "monospace", fontWeight: "bold" }}>
                           {autoLoss?.toFixed(8) ?? '—'}

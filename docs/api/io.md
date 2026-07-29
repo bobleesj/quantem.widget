@@ -628,16 +628,16 @@ the right to share.
 ## Function reference
 
 ```{eval-rst}
-.. autofunction:: quantem.widget.io.hdf5.load
+.. autofunction:: quantem.widget.io.load
 ```
 
 ### Discover + inspect
 
 ```{eval-rst}
-.. autofunction:: quantem.widget.io.hdf5.discover_masters
+.. autofunction:: quantem.widget.io.discover_masters
 ```
 ```{eval-rst}
-.. autofunction:: quantem.widget.io.hdf5.get_metadata
+.. autofunction:: quantem.widget.io.get_metadata
 ```
 
 ### Images (2D / 3D)
@@ -652,7 +652,7 @@ the right to share.
 ### Detector binning
 
 ```{eval-rst}
-.. autofunction:: quantem.widget.io.hdf5.bin
+.. autofunction:: quantem.widget.io.bin
 ```
 
 ### Hugging Face datasets
@@ -676,5 +676,5 @@ the right to share.
 ### Save
 
 ```{eval-rst}
-.. autofunction:: quantem.widget.io.save.save
+.. autofunction:: quantem.widget.io.save
 ```
