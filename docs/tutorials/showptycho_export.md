@@ -52,17 +52,28 @@ with blank panels. Always build and export at native detector size
 ## Run it
 
 The exported folder needs `source/` and `snapshots/` present next to
-`index.html`. There are two ways to open it.
+`index.html`. There are three ways to open it.
 
-### A. Double-click (File System Access)
+### A. Double-click `ShowPtycho.command` (macOS, zero setup)
+
+1. Double-click `ShowPtycho.command` at the folder root.
+2. A Terminal window starts the bundled range server (stdlib-only, uses the
+   Mac's built-in Python) and Chrome opens the viewer already wired to it.
+3. Close the Terminal window when done; that stops the server.
+
+The launcher serves only this folder, from wherever it sits — copy the folder
+to another Mac and the same double-click works, nothing to install.
+
+### B. Double-click `index.html` (File System Access)
 
 1. Double-click `index.html`.
-2. Click **Open data folder** and grant the folder the HTML lives in.
+2. Click **Open data folder** and grant the folder the HTML lives in (browsers
+   without the folder picker fall back to a plain file chooser).
 3. It renders, starting at the embedded calibration snapshot.
 
 One grant per session. This works fully offline.
 
-### B. CLI (serves and opens, no grant click)
+### C. CLI (serves and opens, no grant click)
 
 ```bash
 quantem showptycho out/

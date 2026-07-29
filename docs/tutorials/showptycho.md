@@ -9,7 +9,9 @@ lower quality than iterative multislice ptychography. Use ShowPtycho for quick
 aberration tuning and review, not as a substitute for a full iterative
 reconstruction.
 
-To export a standalone HTML viewer you can open without a kernel, see
+To export a standalone HTML viewer you can open without a kernel — the folder
+ships a double-click `ShowPtycho.command` launcher, or open `index.html` in
+Chrome and grant it the data folder — see
 [Export and run ShowPtycho](showptycho_export.md).
 
 ## The one rule: always optimize before you view
