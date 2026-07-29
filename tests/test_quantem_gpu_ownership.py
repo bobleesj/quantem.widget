@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import json
+import re
 from pathlib import Path
 
 
@@ -50,6 +52,94 @@ def test_live_gpu_status_hook_remains_available() -> None:
     from quantem.widget.gpu import vram_status
 
     assert callable(vram_status)
+
+
+def test_public_docs_use_the_canonical_gpu_api() -> None:
+    """Tutorials must not revive widget-owned IO or retired SSB fit calls."""
+
+    repo = Path(__file__).resolve().parents[1]
+    docs = repo / "docs"
+    documents = list(docs.rglob("*.md"))
+    retired_widget_load = re.compile(
+        r"from\s+quantem\.widget\s+import\s+(?:\([^)]*\)|[^\n]*)"
+    )
+    retired_ssb_member = re.compile(
+        r"\b(?:ssb|workflow)\.(?:optimize|refine|result|explore)\b"
+    )
+    offenders: list[str] = []
+    for path in documents:
+        source = path.read_text(encoding="utf-8")
+        if any(
+            re.search(r"\bload\b", match.group(0))
+            for match in retired_widget_load.finditer(source)
+        ):
+            offenders.append(path.relative_to(repo).as_posix())
+        if "quantem.widget.load" in source:
+            offenders.append(path.relative_to(repo).as_posix())
+        if retired_ssb_member.search(source):
+            offenders.append(path.relative_to(repo).as_posix())
+
+    showptycho_docs = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((docs / "tutorials").glob("showptycho*.md"))
+    )
+    assert re.search(r"\bSSB\.open\s*\(", showptycho_docs)
+    assert offenders == []
+
+
+def test_tutorial_notebook_code_is_valid_and_uses_gpu_owned_io() -> None:
+    """Every committed tutorial code cell must parse and avoid widget load."""
+
+    repo = Path(__file__).resolve().parents[1]
+    offenders: list[str] = []
+    retired_widget_load = re.compile(
+        r"from\s+quantem\.widget\s+import\s+(?:\([^)]*\)|[^\n]*)"
+    )
+    retired_ssb_member = re.compile(
+        r"\b(?:ssb|workflow)\.(?:optimize|refine|result|explore)\b"
+    )
+    for path in sorted((repo / "docs" / "tutorials").glob("*.ipynb")):
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        for cell_index, cell in enumerate(notebook.get("cells", [])):
+            source = "".join(cell.get("source", []))
+            if any(
+                re.search(r"\bload\b", match.group(0))
+                for match in retired_widget_load.finditer(source)
+            ) or "quantem.widget.load" in source or retired_ssb_member.search(source):
+                offenders.append(f"{path.name}:cell-{cell_index}")
+            if cell.get("cell_type") != "code":
+                continue
+            tree = ast.parse(source, filename=f"{path}:cell-{cell_index}")
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    if node.module == "quantem.widget" and any(
+                        name.name == "load" for name in node.names
+                    ):
+                        offenders.append(f"{path.name}:cell-{cell_index}")
+                if (
+                    isinstance(node, ast.Attribute)
+                    and node.attr == "load"
+                    and isinstance(node.value, ast.Attribute)
+                    and node.value.attr == "widget"
+                    and isinstance(node.value.value, ast.Name)
+                    and node.value.value.id == "quantem"
+                ):
+                    offenders.append(f"{path.name}:cell-{cell_index}")
+    assert offenders == []
+
+
+def test_public_docs_do_not_contain_private_deployment_identifiers() -> None:
+    """Published guidance uses placeholders, not lab hostnames or dated mounts."""
+
+    repo = Path(__file__).resolve().parents[1]
+    paths = [
+        *repo.joinpath("docs").rglob("*.md"),
+        *repo.joinpath("docs", "tutorials").glob("*.ipynb"),
+        repo / "src/quantem/widget/paths.py",
+    ]
+    source = "\n".join(path.read_text(encoding="utf-8") for path in paths)
+    assert re.search(r"\btail[0-9a-f]+\.ts\.net\b", source) is None
+    assert re.search(r"/data/(?:shared/)?arina/\d{8}[_-]", source) is None
 
 
 def test_widget_source_uses_public_gpu_domains() -> None:

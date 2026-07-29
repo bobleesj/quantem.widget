@@ -8,16 +8,16 @@ you tune aberrations.
 
 If you just want the interactive widget inside a notebook, see
 [ShowPtycho in Jupyter](showptycho.md) instead. This page assumes you already
-have an **optimized** `ssb` (built and solved with `ssb.optimize()` +
-`ssb.refine()` — that solve is required; an un-optimized export produces a junk
-phase).
+have a **fitted** `ssb` (solved with `ssb.fit(trials=200,
+refinement="nelder-mead")`; an unfitted export uses only the supplied starting
+aberrations).
 
 ## Export
 
 ```python
 from quantem.widget import ShowPtycho
 
-# ssb is already optimized: SSB(...).optimize(n_trials=200).refine()
+# ssb is already fitted: result = ssb.fit(trials=200, refinement="nelder-mead")
 w = ShowPtycho(ssb, source_file="scan_master.h5", save_dir="out/")
 w.export("out/", title="my sample SSB")
 ```
@@ -104,15 +104,32 @@ launch the browser with GPU blocklisting ignored.
 
 ## Checklist
 
-1. The `ssb` was optimized (`optimize()` + `refine()`) before export.
+1. The `ssb` was fitted with `fit(trials=200, refinement="nelder-mead")` before export.
 2. Native detector (`det_bin=1`) — the browser cannot bin.
 3. Export writes a clean root: `index.html`, `ShowPtycho.command`, `source/`,
    and `snapshots/`.
-4. Open by double-click + **Open data folder**, or `quantem show out/`.
+4. Open by double-click + **Open data folder**, or `quantem showptycho out/`.
 5. On open, the stats bar shows a non-null `loss` and the phase renders.
 
 ## Privacy
 
 Exports embed source HDF5 file basenames in the metadata under `snapshots/` and
-in the viewer state. Keep exported folders local and do not publish them if the
-dataset or filenames are not yours to share.
+in the viewer state. The direct `w.export(...)` example above is therefore for
+local or otherwise trusted use.
+
+For a community-facing folder, build it through the canonical CLI and request
+redaction explicitly:
+
+```bash
+quantem showptycho scan_master.h5 \
+  --out shared-review \
+  --anonymize \
+  --trials 200 \
+  --refinement nelder-mead
+```
+
+`--anonymize` replaces the local acquisition name and source paths in saved
+calibration and optimization provenance while retaining the scientific fit and
+software-version record. Inspect the resulting folder before publishing it;
+the detector evidence itself is still experimental data and must be yours to
+share.
