@@ -41,13 +41,24 @@ jobs:
         with:
           node-version: "22"
       - uses: actions/configure-pages@v6
-      # The executed widgets load their JS from src/quantem/widget/static/,
-      # which is a build artifact (gitignored) — build it before the notebooks run.
-      - run: npm ci && npm run build
+      # Python deps must install BEFORE the frontend build: npm run build syncs
+      # the WebGPU engine sources from quantem.gpu (scripts/sync-gpu-webgpu.mjs),
+      # which imports quantem.gpu and its deps (numpy).
       - run: pip install -r docs/requirements.txt
       # .[hub] pulls quantem.data (widget_export tutorial); the loaders need
       # huggingface_hub + h5py + tifffile to download and read tutorial data.
       - run: pip install --extra-index-url https://test.pypi.org/simple/ -e ".[hub]" huggingface_hub h5py tifffile
+      # The TestPyPI quantem.gpu release can lag the webgpu module, so also
+      # check out the source tree as the sync script's QUANTEM_GPU_SRC fallback.
+      - uses: actions/checkout@v7
+        with:
+          repository: bobleesj/quantem.gpu
+          path: quantem-gpu-src
+      # The executed widgets load their JS from src/quantem/widget/static/,
+      # which is a build artifact (gitignored) — build it before the notebooks run.
+      - run: npm ci && npm run build
+        env:
+          QUANTEM_GPU_SRC: ${{ github.workspace }}/quantem-gpu-src/src
       # Cache the Hugging Face tutorial downloads across builds.
       - uses: actions/cache@v4
         with:

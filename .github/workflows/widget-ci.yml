@@ -64,6 +64,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # npm run build (inside the signoff) syncs the WebGPU engine sources from
+      # quantem.gpu; the TestPyPI release can lag the webgpu module, so check
+      # out the source tree as the sync script's QUANTEM_GPU_SRC fallback.
+      - uses: actions/checkout@v7
+        with:
+          repository: bobleesj/quantem.gpu
+          path: quantem-gpu-src
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -96,6 +104,8 @@ jobs:
         env:
           # Silence the HF "unauthenticated requests" warning in baked outputs.
           HF_HUB_VERBOSITY: error
+          # WebGPU source-sync fallback (see the quantem.gpu checkout above).
+          QUANTEM_GPU_SRC: ${{ github.workspace }}/quantem-gpu-src/src
         run: |
           args=(--artifact-dir /tmp/quantem-widget-ci-signoff)
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
