@@ -104,17 +104,15 @@ environment when possible.
 **Acceptance checks**:
 
 - Record WebGPU adapter availability in the report.
-- Record Python backend and data loader path: CUDA/Torch, raw Metal/MPS,
-  Torch-MPS, CPU, or browser/WebGPU.
+- Record the GPU backend and loader path: CUDA, raw Metal/MPS, Torch-MPS, or
+  browser WebGPU.
 - Verify accelerated detector/virtual-image updates when WebGPU is available.
 - Verify MacBook live-Jupyter browsing can use MPS/raw Metal loading and
   computation for first-pass review.
-- Verify backend="web" exported/offline pages use browser WebGPU and do not
+- Verify `backend="webgpu"` exported/offline pages use browser WebGPU and do not
   need Python, Torch, or MPS after export.
-- Verify fallback path is usable and clearly communicated when WebGPU is not
-  available.
-- Do not claim WebGPU performance from CPU fallback.
-- Do not claim MPS/raw-Metal performance from a Torch-MPS or CPU path.
+- Verify WebGPU unavailability produces a clear corrective error.
+- Do not claim MPS/raw-Metal performance from a Torch-MPS path.
 
 ### S4D-06: Save, Export, And Reopen 4D-STEM Views
 
@@ -395,8 +393,8 @@ control only and does not establish real-workflow signoff.
   Silicon. Identify the lazy MacBook/raw-Metal path explicitly, verify append
   ordering and memory, and report unsupported dtype or page-budget options as
   limitations rather than claiming CUDA ``Dataset5dstem`` behavior.
-- Run a small CPU fallback for lifecycle correctness, labeling it as
-  non-performance evidence. On the same genuine source, separately verify a
+- Run a small synthetic CPU reference only in tests for lifecycle correctness;
+  production must not route through it. On the same genuine source, verify a
   count-preserving full path such as ``det_bin=1, dtype="u16"`` and an explicit
   reduced preview path such as ``det_bin=4``; binned success is not proof of
   full-resolution support.

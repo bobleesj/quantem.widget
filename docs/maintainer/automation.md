@@ -227,12 +227,12 @@ timelines. The direct checks prove initial or arrival probation, one unchanged
 follow-up poll, same Python/model identity, `Waiting`/`Updating`/`Watching`/
 `Stopped`, stopped saved/static state without false green, and authoritative
 Show4DSTEM active-page pixels before the final green state. Direct Show4DSTEM
-uses the production CPU loader over tiny external-link masters; the older
+uses the native GPU loader over tiny bitshuffle-LZ4 external-link masters; the older
 ShowFolder-only 4D handoff explicitly labels its monkeypatched tiny loader.
 
 The report writes top-level `exports` rows and `browser-plan.json` in the schema
 accepted by `scripts/widget_browser_smoke.py`. Browser driving remains a
-separate opt-in step; the default lifecycle smoke launches no browser or GPU.
+separate opt-in step; the default lifecycle smoke launches no browser.
 Keep ShowFolder's real cache as numeric arrays for widget handoff. WebP belongs
 in reports, dashboards, and other visual review surfaces, not in the selection
 or data cache.

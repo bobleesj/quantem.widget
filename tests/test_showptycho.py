@@ -14,9 +14,10 @@ from quantem.gpu import SSB
 
 
 def _webgpu_source(name: str) -> str:
-    from quantem.gpu import webgpu
-
-    return webgpu.source_text(name)
+    root = pathlib.Path(__file__).resolve().parents[1]
+    return (root / "js" / ".generated" / "engine" / name).read_text(
+        encoding="utf-8"
+    )
 
 
 class _FakeCuPy(types.SimpleNamespace):

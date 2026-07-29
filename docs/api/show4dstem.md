@@ -3,24 +3,21 @@
 Public import:
 
 ```python
-from quantem.widget import load, Show4DSTEM
+from quantem.gpu.io import load
+from quantem.widget import Show4DSTEM
 ```
 
 `Show4DSTEM` is a dispatcher/factory with one operator-facing API. It picks the
 viewer from what `load(...)` returns and from the requested widget backend:
-CUDA/Torch on Linux, raw Metal on Apple Silicon MPS loads, CPU fallback, or
-browser WebGPU.
+CUDA on Linux, Metal on Apple Silicon MPS loads, or explicit browser WebGPU.
 
-The MPS code is intentionally a backend implementation, not a separate public
-viewer to choose in notebooks. Direct names such as `Show4DSTEMMPS`,
-`Show4DSTEM_MACBOOK`, and `show_4dstem_mps(...)` stay importable for old
-notebooks and backend tests, but new code should use the single factory:
-`Show4DSTEM(load(path, backend="mps", det_bin=...))`.
+The MPS code is an implementation detail, not a separate public viewer. Use
+the single factory: `Show4DSTEM(load(path, backend="mps", det_bin=...))`.
 
 Canonical forms:
 
 ```python
-# Auto-pick CUDA / MPS / CPU from the loaded data.
+# Auto-pick CUDA or MPS from the loaded data.
 w = Show4DSTEM(load(path))
 
 # Apple Silicon raw-Metal path, with sampling read from metadata when present.
@@ -53,22 +50,24 @@ w = Show4DSTEM.from_folder(
 
 # Apple Silicon live acquisition folder: dataset 0 appears first, then newly
 # completed *_master.h5 files append into the same Dataset slider.
-from quantem.widget.multidataset_mps import load_macbook_datasets
-
-live = load_macbook_datasets("/data/live-scope-session", det_bin=1, scan_size=512)
-w = Show4DSTEM(live)
-live.watch_master_folder("/data/live-scope-session", interval=2.0, scan_size=512)
+w = Show4DSTEM.from_folder(
+    "/data/live-scope-session",
+    backend="mps",
+    det_bin=1,
+    scan_size=512,
+    watch=True,
+)
 
 # Live-kernel WebGPU: the browser owns virtual-detector compute.
-w = Show4DSTEM(load(path), backend="web")
+w = Show4DSTEM(load(path), backend="webgpu")
 
 # Standalone backendless export for large data: HTML + companion data folder.
-w = Show4DSTEM(load(path), backend="web", offline_codec="bslz4",
+w = Show4DSTEM(load(path), backend="webgpu", offline_codec="bslz4",
                data_url="show4dstem-data")
 w.export_html("show4dstem.html")
 ```
 
-Use `backend="web"` for browser-owned WebGPU compute in notebooks, and use the
+Use `backend="webgpu"` for browser-owned compute in notebooks, and use the
 CLI `--backend webgpu --html` folder export for large standalone HDF5 review.
 
 ## Backend ownership
@@ -77,7 +76,7 @@ Show4DSTEM has two different acceleration surfaces:
 
 - **Live Python-backed viewers** use the data object returned by ``load(...)``.
   Depending on hardware this may be CUDA/Torch, raw Metal/MPS on Apple Silicon,
-  Torch-MPS for specific paths, or CPU fallback.
+  native MPS sessions on Apple Silicon.
 - **Exported/offline browser viewers** use the packed HTML/folder payload and
   browser WebGPU when available. After export, interaction should not depend on
   Python, Torch, CUDA, or MPS.
@@ -95,9 +94,9 @@ Metal allocation would exceed the Mac's conservative working-set budget,
 `det_bin` value. This is intentional: it protects laptop sessions from
 unresponsive unified-memory pressure while keeping the MPS backend automatic.
 
-Routing lives in `quantem.widget.show4dstem_factory`: chunked MPS payloads and
-lazy MacBook multi-dataset handles go to the raw-Metal backend, while CUDA/CPU
-arrays and CUDA 5D dataset wrappers stay on the universal base viewer. This
+Routing lives in `quantem.widget.show4dstem_factory`: MPS payloads go to the
+Metal adapter, while CUDA arrays and CUDA 5D dataset wrappers stay on the base
+viewer. This
 keeps the user-facing API stable while backend-specific code stays isolated.
 
 ## Live scope folders
@@ -347,23 +346,26 @@ metadata-compatible group and warns with the skipped count. This prevents a
 mixed folder from failing halfway through page loading. Use `scan_size=` or a
 narrower `pattern=` when you intentionally want a smaller group.
 
-On the Apple Silicon raw-Metal path, `load_macbook_datasets(...)` remains the
-backend-specific live handle:
+On Apple Silicon the same folder API selects the MPS loader:
 
 ```python
 from quantem.widget import Show4DSTEM
-from quantem.widget.multidataset_mps import load_macbook_datasets
 
-live = load_macbook_datasets("/data/live-scope-session", det_bin=1, scan_size=512)
-widget = Show4DSTEM(live, title="Live 4D-STEM")
-live.watch_master_folder("/data/live-scope-session", interval=2.0, scan_size=512)
+widget = Show4DSTEM.from_folder(
+    "/data/live-scope-session",
+    backend="mps",
+    det_bin=1,
+    scan_size=512,
+    watch=True,
+    title="Live 4D-STEM",
+)
 widget
 ```
 
-`watch_master_folder(...)` polls for `*_master.h5` files, ignores masters whose
-linked data files are not present yet, and appends only new acquisitions. The
+The folder watcher polls for `*_master.h5` files, ignores masters whose linked
+data files are not present yet, and appends only new acquisitions. The
 notebook cell and viewer stay stable; the dataset slider grows as files become
-ready. Use `live.stop_watch()` before switching to a different folder.
+ready. Use `widget.stop_folder_watch()` before switching folders.
 
 GPU memory is owned by the loaded data object and the Python session, not by the
 visual widget alone. The live widget shows a compact GPU memory label in its
@@ -378,13 +380,11 @@ Use `view_mode="multiple"` when the extra frame axis represents multiple
 acquisitions that should be inspected side by side. The viewer keeps the
 standard diffraction-panel workflow: one shared detector ROI, one shared scan
 cursor, and one Dataset slider. The virtual-image side becomes a grid of ready
-frames or datasets. Older notebooks that pass `view_mode="compare"` still load
-as the same multiple-grid mode. Older `view_mode="temporal"` inputs are treated
-as `view_mode="single"` because the one-at-a-time dataset browser is the single
-view.
+frames or datasets. Use `view_mode="single"` for one-at-a-time browsing.
 
 ```python
-from quantem.widget import load, Show4DSTEM
+from quantem.gpu.io import load
+from quantem.widget import Show4DSTEM
 
 widget = Show4DSTEM(
     load([path1, path2, path3, path4], det_bin=1),
@@ -618,14 +618,14 @@ performance notes record the current seven-panel WebGPU compare-grid signoff.
 ```{note}
 The generated reference above is the universal base viewer. The public
 `quantem.widget.Show4DSTEM` factory accepts the same viewer options plus dispatch
-options such as `backend="web"`, `offline_codec`, `data_url`, and
+options such as `backend="webgpu"`, `offline_codec`, `data_url`, and
 `export_html(...)`.
 ```
 
 ## Interactive controls
 
-With a running kernel these recompute on the GPU backend (CUDA / MPS / CPU). In
-`backend="web"` mode, the same controls run in the browser via WebGPU with no
+With a running kernel these recompute on the GPU backend (CUDA or MPS). In
+`backend="webgpu"` mode, the same controls run in the browser with no
 Python round trip - see [Performance](../maintainer/widget-performance).
 
 | Control | Trait | Expected effect |

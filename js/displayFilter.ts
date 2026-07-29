@@ -29,7 +29,7 @@
 //                       stabilized = 2*sqrt(counts + 3/8), gaussian with
 //                       max(1, sigma*0.85), inverse, * scale/30.
 
-import { getGPUDevice, getGPUInfo, isSoftwareGPUAdapter } from "./.generated/engine/webgpu/device";
+import { getGPUDevice, getGPUInfo, isSoftwareGPUAdapter } from "./.generated/engine/device/webgpu";
 
 /** Filter modes the browser can evaluate; mirrors BROWSER_DISPLAY_FILTER_MODES in Python. */
 export const BROWSER_FILTER_MODES = new Set([

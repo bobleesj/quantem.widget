@@ -10,7 +10,8 @@ masters becomes a rendered, standalone HTML viewer in one command, no notebook.
     quantem html tutorial.ipynb           # run a notebook  -> standalone shareable HTML
 
 The CLI only orchestrates existing pieces: ``io.read_image`` / ``read_image_stack``
-for images, ``io.discover_masters`` + ``io.load(det_bin=...)`` for 4D-STEM and
+for images, ``quantem.gpu.io.discover`` + ``quantem.gpu.io.load(det_bin=...)``
+for 4D-STEM and
 ptychography review, the ``Show2D`` / ``Show3D`` / ``Show4DSTEM`` / ``ShowPtycho``
 widgets, and each widget's export helpers. Show4DSTEM WebGPU HTML keeps the
 compressed HDF5 family on disk and lets Chrome range-fetch/decompress H5 chunks
@@ -602,7 +603,7 @@ def _add_show_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--scan-size", type=int, default=None,
                         help="4D-STEM --watch: only include masters with this square scan size.")
     parser.add_argument("--backend", default="auto",
-                        choices=("auto", "cuda", "mps", "cpu", "webgpu"),
+                        choices=("auto", "cuda", "mps", "webgpu"),
                         help="Show4DSTEM backend. Use webgpu with --html.")
 
 
@@ -751,8 +752,11 @@ def _show(args: argparse.Namespace) -> int:
                 raise ValueError("--watch writes a live notebook; omit --html.")
             if not path.is_dir():
                 raise ValueError("--watch requires a folder path containing *_master.h5 files.")
-        from quantem.widget.io import discover_masters
-        masters = [str(path)] if path.is_file() else discover_masters(str(path), verbose=args.verbose)
+        from quantem.gpu.io import discover
+
+        masters = [str(path)] if path.is_file() else discover(
+            str(path), verbose=args.verbose
+        )
         if not masters:
             raise ValueError(f"no *_master.h5 found in {path}")
         masters = _select_show4dstem_masters(masters, args)
@@ -827,9 +831,9 @@ def _normalise_show4dstem_backend(value: str | None) -> str | None:
     token = str(value or "auto").strip().lower()
     if token in {"", "auto"}:
         return None
-    if token in {"web", "browser", "webgpu"}:
+    if token == "webgpu":
         return "webgpu"
-    if token in {"cuda", "mps", "cpu"}:
+    if token in {"cuda", "mps"}:
         return token
     raise ValueError(f"unsupported Show4DSTEM backend {value!r}")
 
@@ -1731,7 +1735,8 @@ def _render_4dstem_notebook(
         )
         page_device = devices if backend == "cuda" and devices != "None" else "None"
         source = (
-            "from quantem.widget import load, Show4DSTEM\n"
+            "from quantem.gpu.io import load\n"
+            "from quantem.widget import Show4DSTEM\n"
             "\n"
             f"masters = {arg}\n"
             "data = load(\n"
@@ -2124,7 +2129,7 @@ def _master_to_binned_numpy(master: str, det_bin: int, dtype: str = "u8"):
     ChunkedFrames, materialized via its chunks) / CPU."""
     import numpy as np
     import torch
-    from quantem.widget import load
+    from quantem.gpu.io import load
     result = load(master, det_bin=det_bin, dtype=dtype)
     data = result.data if hasattr(result, "data") else result
     meta = getattr(result, "metadata", {}) or {}
@@ -2165,7 +2170,7 @@ def _render_4dstem(masters: list[str], label: str, args: argparse.Namespace) -> 
         stack = np.stack(volumes, axis=0)
         data_url = out_dir / "widget-data"
         widget = Show4DSTEM(
-            stack, backend="web", offline_codec="bslz4", data_url=str(data_url),
+            stack, backend="webgpu", offline_codec="bslz4", data_url=str(data_url),
             frame_dim_label="Dataset",
             frame_labels=[pathlib.Path(m).stem.replace("_master", "") for m in masters],
         )
@@ -2187,7 +2192,7 @@ def _render_4dstem(masters: list[str], label: str, args: argparse.Namespace) -> 
             # so uint8 never clips the bright field. Data is already binned, so the
             # export does no further binning.
             arr = _master_to_binned_numpy(master, args.det_bin, args.dtype)
-            widget = Show4DSTEM(arr, backend="web")
+            widget = Show4DSTEM(arr, backend="webgpu")
             out = out_dir / f"{stem}.html"
             widget.export_html(str(out), title=args.title or stem, dtype=export_dtype)
             outputs.append(out)

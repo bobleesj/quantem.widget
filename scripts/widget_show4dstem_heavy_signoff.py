@@ -172,7 +172,7 @@ def _discover_real_masters(
     limit: int,
     ready_only: bool,
 ) -> tuple[list[Path], list[str]]:
-    from quantem.widget.io import discover_masters, is_master_ready
+    from quantem.gpu.io import discover, inspect
 
     notes: list[str] = []
     masters: list[Path] = []
@@ -182,7 +182,7 @@ def _discover_real_masters(
         if len(masters) >= limit:
             break
         try:
-            found = discover_masters(
+            found = discover(
                 root,
                 pattern=pattern,
                 recursive=True,
@@ -200,7 +200,7 @@ def _discover_real_masters(
                 continue
             if ready_only:
                 try:
-                    if not is_master_ready(path):
+                    if not inspect(path).ready:
                         notes.append(f"{path.name}: not ready yet")
                         continue
                 except Exception as exc:
@@ -214,7 +214,7 @@ def _discover_real_masters(
 
 
 def _describe_chunks(live: Any) -> dict[str, Any]:
-    multi = getattr(live, "multi", None)
+    multi = live
     datasets = list(getattr(multi, "datasets", []) or [])
     rows: list[dict[str, Any]] = []
     total_bytes = 0
@@ -711,13 +711,14 @@ def main() -> int:
         print(f"No real Show4DSTEM masters found. Report: {artifact_dir / 'index.html'}")
         return 2
 
-    from quantem.widget import Show4DSTEM, load
-    from quantem.widget.backend import resolve_backend
+    from quantem.gpu.device import resolve
+    from quantem.gpu.io import load
+    from quantem.widget import Show4DSTEM
 
     timing: list[dict[str, Any]] = []
     cleanup_records: list[dict[str, Any]] = []
     errors: list[str] = []
-    backend = "webgpu" if args.backend == "webgpu" else resolve_backend(args.backend)
+    backend = resolve(args.backend)
     load_dtype = _load_dtype_token(args.load_dtype)
     scan_shape = (int(args.scan_size), int(args.scan_size)) if args.scan_size else None
     devices = [int(item.strip()) for item in args.devices.split(",") if item.strip()] or None
@@ -755,7 +756,7 @@ def main() -> int:
                 lambda: Show4DSTEM(
                     np.zeros((1, 1, 1, 1), dtype=np.uint8),
                     h5_urls=h5_urls,
-                    backend="web",
+                    backend="webgpu",
                     scan_shape=tuple(int(value) for value in source_scan_shape),
                     detector_shape=tuple(int(value) for value in detector_shape),
                     frame_dim_label="Dataset",
@@ -852,22 +853,22 @@ def main() -> int:
         return 0 if report["passed"] else 1
 
     if backend == "mps":
-        from quantem.widget.multidataset_mps import load_macbook_datasets
-
-        lazy, load_error = _timed_maybe(
+        loaded, load_error = _timed_maybe(
             "load_first_master_lazy_mps",
             timing,
-            lambda: load_macbook_datasets(
+            lambda: load(
                 [masters[0]],
+                backend="mps",
                 det_bin=args.det_bin,
-                scan_size=args.scan_size,
-                output_dtype=load_dtype,
+                scan_shape=scan_shape,
+                dtype=load_dtype or "auto",
                 verbose=True,
             ),
         )
         if load_error is not None:
             errors.append(f"initial {backend} load failed: {load_error}")
-        active_data = lazy
+        lazy = None if loaded is None else loaded.data
+        active_data = loaded
         append_strategy = "mps_live_lazy_append"
     else:
         active_data, load_error = _timed_maybe(
@@ -957,7 +958,13 @@ def main() -> int:
         before = _memory_snapshot(f"append:{label}:before")
         try:
             if backend == "mps" and lazy is not None:
-                indices = lazy.append_new_masters([master], async_=False)
+                indices = lazy.poll(
+                    master.parent,
+                    pattern=master.name,
+                    recursive=False,
+                    ready_only=True,
+                    async_=False,
+                )
                 chunking_after = _describe_chunks(lazy)
                 active_data = lazy
                 last_good_count = idx
@@ -1079,8 +1086,8 @@ def main() -> int:
 
     if widget is not None and hasattr(widget, "close"):
         widget.close()
-    if hasattr(lazy, "stop_watch"):
-        lazy.stop_watch()
+    if lazy is not None:
+        lazy.stop()
     if widget is not None:
         del widget
     if not args.no_free_gpu_after:

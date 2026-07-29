@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import builtins
-from collections import namedtuple
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
+from quantem.gpu.io import LoadResult
 
 import quantem.widget.show4dstem_factory as factory
-
-
-LoadResult = namedtuple("LoadResult", ["data", "metadata"])
 
 
 def _offset_bf_disk_data(
@@ -61,6 +58,46 @@ def test_public_show4dstem_import_uses_factory() -> None:
     from quantem.widget import Show4DSTEM
 
     assert Show4DSTEM is factory.Show4DSTEM
+
+
+def test_master_file_contract_rejects_not_ready_inspection(monkeypatch) -> None:
+    report = SimpleNamespace(
+        ready=False,
+        reason="external detector data are still being written",
+        action="Wait for acquisition to finish and try again.",
+        scan_shape=(2, 3),
+        detector_shape=(8, 8),
+        actual_frames=5,
+        dtype="uint16",
+    )
+    monkeypatch.setattr("quantem.gpu.io.inspect", lambda _path: report)
+
+    with pytest.raises(ValueError) as error:
+        factory._master_file_contract("sample_master.h5")
+
+    message = str(error.value)
+    assert report.reason in message
+    assert report.action in message
+
+
+def test_master_file_contract_rejects_missing_required_field(monkeypatch) -> None:
+    report = SimpleNamespace(
+        ready=True,
+        reason="master is ready",
+        action="Recreate the master with complete detector metadata.",
+        scan_shape=(2, 3),
+        detector_shape=(8, 8),
+        actual_frames=6,
+        dtype=None,
+    )
+    monkeypatch.setattr("quantem.gpu.io.inspect", lambda _path: report)
+
+    with pytest.raises(ValueError) as error:
+        factory._master_file_contract("sample_master.h5")
+
+    message = str(error.value)
+    assert "dtype" in message
+    assert report.action in message
 
 
 def test_show4dstem_routes_chunked_payload_to_mps_builder(monkeypatch) -> None:
@@ -129,35 +166,19 @@ def test_show4dstem_keeps_cuda_gpu_frame_proxy_on_base_viewer(monkeypatch) -> No
     assert factory.show4dstem_backend_kind(payload) == "base"
 
 
-def test_show4dstem_base_route_does_not_require_optional_mps_import(monkeypatch) -> None:
-    """C1: quantem.gpu absent, expect normal base payloads to still open."""
+def test_show4dstem_base_route_does_not_import_mps_implementation(monkeypatch) -> None:
+    """C1: base payload, expect no MPS implementation import."""
     payload = SimpleNamespace(ndim=4)
-    original_import = builtins.__import__
-    import_attempts: list[str] = []
-
-    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "quantem.widget.multidataset_mps":
-            import_attempts.append(name)
-            raise ModuleNotFoundError(
-                "No module named 'quantem.gpu'",
-                name="quantem.gpu",
-            )
-        return original_import(name, globals, locals, fromlist, level)
 
     def _fake_base(data, **kwargs):
         return {"kind": "base", "data": data, "kwargs": kwargs}
 
-    monkeypatch.setattr(builtins, "__import__", _fake_import)
     monkeypatch.setattr(factory, "_Show4DSTEMBase", _fake_base)
 
     result = factory.Show4DSTEM(payload, verbose=False)
 
     assert result == {"kind": "base", "data": payload, "kwargs": {"verbose": False}}
     assert factory.show4dstem_backend_kind(payload) == "base"
-    assert import_attempts == [
-        "quantem.widget.multidataset_mps",
-        "quantem.widget.multidataset_mps",
-    ]
 
 
 def test_show4dstem_labels_5d_loadresult_as_dataset_stack(monkeypatch) -> None:
@@ -171,33 +192,10 @@ def test_show4dstem_labels_5d_loadresult_as_dataset_stack(monkeypatch) -> None:
 
     result = factory.Show4DSTEM(load_result, verbose=False)
 
-    assert result["data"] is load_result
+    assert result["data"] is payload
     assert result["kwargs"]["frame_dim_label"] == "Dataset"
     assert result["kwargs"]["frame_labels"] == ["first.h5", "second.h5"]
     assert result["kwargs"]["verbose"] is False
-
-
-def test_show4dstem_uses_lazy_macbook_handle_directly(monkeypatch) -> None:
-    from quantem.widget.multidataset_mps import LazyMacbookDatasets
-
-    lazy = LazyMacbookDatasets(
-        masters=["first_master.h5"],
-        det_bin=4,
-        names=["first"],
-        multi=object(),
-        decode=lambda path: object(),
-        verbose=False,
-    )
-
-    def _fake_build_viewer(**kwargs):
-        return {"kind": "lazy-mps", "kwargs": kwargs}
-
-    monkeypatch.setattr(lazy, "build_viewer", _fake_build_viewer)
-
-    result = factory.Show4DSTEM(lazy, ui_mode="report")
-
-    assert result == {"kind": "lazy-mps", "kwargs": {"ui_mode": "report"}}
-    assert factory.show4dstem_backend_kind(lazy) == "mps"
 
 
 def test_public_show4dstem_constructs_small_binned_numpy_viewer() -> None:
@@ -742,23 +740,20 @@ def test_show4dstem_frame_virtual_image_uses_sparse_detector_mask(monkeypatch) -
         widget.close()
 
 
-def test_torch_backend_sparse_masked_sum_matches_dense_reference() -> None:
+def test_detector_session_masked_sum_matches_dense_reference() -> None:
     import torch
 
-    from quantem.gpu.compute.backends import compute_backend
+    from quantem.gpu.detector import prepare
 
     data = torch.arange(4 * 4 * 16 * 16, dtype=torch.int32).to(torch.uint16)
     data = data.reshape(4, 4, 16, 16)
     yy, xx = np.ogrid[:16, :16]
     mask = ((yy - 8) ** 2 + (xx - 8) ** 2 <= 3**2).astype(np.float32)
-    backend = compute_backend(data)
+    session = prepare(data)
 
-    sparse = backend._sparse_masked_sum(mask)
-    vi = backend.masked_sum(mask)
+    vi = session.masked_sum(mask)
     expected = (data.float() * torch.as_tensor(mask)).sum(dim=(2, 3)).numpy()
 
-    assert sparse is not None
-    np.testing.assert_allclose(sparse, expected)
     np.testing.assert_allclose(vi, expected)
 
 
@@ -829,19 +824,13 @@ def test_show4dstem_single_view_refreshes_after_multiple_mode() -> None:
         widget.close()
 
 
-def test_show4dstem_view_mode_legacy_aliases() -> None:
+def test_show4dstem_rejects_noncanonical_view_modes() -> None:
     from quantem.widget import Show4DSTEM
 
     data = np.zeros((2, 2, 2, 4, 4), dtype=np.uint16)
-
-    compare_alias = Show4DSTEM(data, view_mode="compare", verbose=False)
-    temporal_alias = Show4DSTEM(data, view_mode="temporal", verbose=False)
-    try:
-        assert compare_alias.view_mode == "multiple"
-        assert temporal_alias.view_mode == "single"
-    finally:
-        compare_alias.close()
-        temporal_alias.close()
+    for view_mode in ("compare", "temporal"):
+        with pytest.raises(ValueError, match="view_mode"):
+            Show4DSTEM(data, view_mode=view_mode, verbose=False)
 
 
 def test_show4dstem_compare_grid_validates_api() -> None:

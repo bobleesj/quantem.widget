@@ -184,7 +184,7 @@ def test_webgpu_multi_volume_export_fetches_second_volume(tmp_path):
         data,
         frame_dim_label="Dataset",
         frame_labels=["first", "second"],
-        backend="web",
+        backend="webgpu",
         offline_codec="bslz4",
         data_url=str(out_dir),
         precompute_virtual_images=False,

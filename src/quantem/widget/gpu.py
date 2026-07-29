@@ -83,8 +83,8 @@ def gpu_info(device_id: int | None = None) -> None:
 def free_gpu() -> None:
     """Free all CuPy memory pool blocks to release GPU VRAM.
 
-    Clears Python references, CuPy FFT plan cache, IO decompressor buffers,
-    and both device and pinned memory pools.
+    Clears Python references, the CuPy FFT plan cache, and both device and
+    pinned memory pools. GPU I/O sessions own and release their decoder state.
     """
     import cupy as cp
     gc.collect()
@@ -92,13 +92,6 @@ def free_gpu() -> None:
     try:
         cp.fft.config.get_plan_cache().clear()
     except (AttributeError, RuntimeError):
-        pass
-    # Clear quantem.gpu IO decompressor buffers when the CUDA loader was used.
-    try:
-        import quantem.gpu.io.hdf5 as gpu_hdf5
-
-        gpu_hdf5._default_decompressor = None
-    except (AttributeError, ImportError, RuntimeError):
         pass
     gc.collect()
     cp.get_default_memory_pool().free_all_blocks()

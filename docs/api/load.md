@@ -1,16 +1,16 @@
 # load
 
-Reads compressed 4D-STEM data straight onto the GPU (CUDA / Apple Metal) or CPU
-and returns a `LoadResult` you hand to [`Show4DSTEM`](show4dstem). Public import:
+Reads compressed 4D-STEM data straight onto CUDA or Apple Metal and returns a
+typed `LoadResult` accepted directly by [`Show4DSTEM`](show4dstem). Public import:
 
 ```python
-from quantem.widget import load
+from quantem.gpu.io import load
 ```
 
 ## Reference
 
 ```{eval-rst}
-.. autofunction:: quantem.widget.io.load
+.. autofunction:: quantem.gpu.io.load
 ```
 
 ```{tip}
@@ -19,17 +19,18 @@ Use `det_bin=2` or `4` only as an explicit preview or memory policy; pass a list
 of file paths to stack several datasets behind a single "Dataset" slider.
 ```
 
-## Backend (CUDA / Apple Silicon / CPU)
+## Backend (CUDA / Apple Silicon)
 
-`load` detects the device automatically: an NVIDIA box loads onto **CUDA**, a Mac
-loads onto **Apple Metal (MPS)**, and anything else falls back to **CPU**. No flag
-is required - the same call works everywhere:
+`load` detects the native GPU automatically: an NVIDIA box loads onto **CUDA**
+and a Mac loads onto **Apple Metal (MPS)**. Scientific loading does not silently
+fall back to CPU.
 
 ```python
-from quantem.widget import load, Show4DSTEM
+from quantem.gpu.io import load
+from quantem.widget import Show4DSTEM
 
-data = load("scan_master.h5")   # CUDA on a workstation, MPS on a MacBook
-Show4DSTEM(data)
+result = load("scan_master.h5")   # CUDA on a workstation, MPS on a MacBook
+Show4DSTEM(result)
 ```
 
 On a MacBook the read uses a raw-Metal path, so a memory-rich laptop can browse
@@ -37,8 +38,8 @@ native 4D-STEM directly and smaller machines can use an explicit detector-bin
 preview. A conservative preview session is:
 
 ```python
-data = load("scan_master.h5", det_bin=8)   # MPS, detector binned 8x -> small preview
-Show4DSTEM(data)
+result = load("scan_master.h5", det_bin=8)   # MPS, detector binned 8x -> small preview
+Show4DSTEM(result)
 ```
 
 MPS loads include a preflight memory guard. Before allocating Metal buffers, the
@@ -51,18 +52,11 @@ laptop:
 data = load("scan_master.h5", backend="mps", det_bin=4)
 ```
 
-Bypass the check only when you have a clean memory budget and need the exact
-no-bin stack:
-
-```python
-data = load("scan_master.h5", backend="mps", skip_mps_memory_check=True)
-```
-
 For the smallest browse workflows, combine detector binning with compact dtype:
 
 ```python
-data = load("scan_master.h5", backend="mps", det_bin=8, dtype="u8")
-Show4DSTEM(data)
+result = load("scan_master.h5", backend="mps", det_bin=8, dtype="u8")
+Show4DSTEM(result)
 ```
 
 That path is intended for screening, layout, and export-to-browser review. Use
@@ -77,7 +71,8 @@ scan_master.h5 --bin 8`.
 Use one public entry point for a time-series or tilt-series stack:
 
 ```python
-from quantem.widget import load, Show4DSTEM
+from quantem.gpu.io import load
+from quantem.widget import Show4DSTEM
 
 masters = [
     "/data/session/file_001_master.h5",
@@ -155,7 +150,7 @@ selected HDF5 detector-frame chunks, decompresses them on CUDA, and returns a
 local patch.
 
 ```python
-from quantem.widget import load
+from quantem.gpu.io import load
 
 patch = load(
     "scan_master.h5",

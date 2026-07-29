@@ -46,7 +46,8 @@ def _notebook_source():
         full = os.environ.get("QT_WEBGPU_LIVE_FULL") == "1"
         return f"""
 import numpy as np
-from quantem.widget import load, Show4DSTEM
+from quantem.gpu.io import load
+from quantem.widget import Show4DSTEM
 master = {master!r}
 res = load(master, det_bin={det_bin}, dtype={dtype!r}, verbose=True)
 data = res.data
@@ -61,7 +62,7 @@ w = Show4DSTEM(
     data,
     frame_dim_label="Dataset" if data.ndim == 5 else None,
     frame_labels=["first", "second"] if data.ndim == 5 and data.shape[0] == 2 else None,
-    backend="web",
+    backend="webgpu",
     title="Live WebGPU Jupyter smoke",
     precompute_virtual_images=False,
     show_fft=True,
@@ -89,7 +90,7 @@ w = Show4DSTEM(
     data,
     frame_dim_label="Dataset",
     frame_labels=["first", "second"],
-    backend="web",
+    backend="webgpu",
     title="Live WebGPU Jupyter smoke",
     precompute_virtual_images=False,
     show_fft=True,

@@ -52,7 +52,8 @@ ShowFolder("/data/session")
 ## Load data
 
 ```python
-from quantem.widget import ShowEDS, Show4DSTEM, load, load_eds
+from quantem.gpu.io import load
+from quantem.widget import ShowEDS, Show4DSTEM, load_eds
 
 data = load("scan_master.h5")   # Arina 4D-STEM .h5 -> GPU
 Show4DSTEM(data)
@@ -144,7 +145,7 @@ specific project location or `--in-place` to opt into
 | `--bin N` | detector mean-bin factor for Show4DSTEM (default 1: full detector sampling); ShowPtycho always uses native detector sampling |
 | `--dtype uint8/uint16` | 4D-STEM HTML export dtype; `uint8` is compact browse, `uint16` keeps the wider detector-count range |
 | `--html` | 4D-STEM: write the offline-WebGPU HTML instead of a notebook |
-| `--backend auto/cuda/mps/cpu/webgpu` | Show4DSTEM backend; use `webgpu` with `--html` |
+| `--backend auto/cuda/mps/webgpu` | Show4DSTEM backend; use `webgpu` with `--html` |
 | `--count N` | Show4DSTEM: require and load this many compatible masters from the input |
 | `--devices 0,1` | Show4DSTEM CUDA placement; alias of `--gpus` |
 | `--watch` | show2d/show3d/show4dstem folders: keep appending new files to a live notebook |
@@ -153,7 +154,7 @@ specific project location or `--in-place` to opt into
 | `--no-open` | write the file(s) without launching a browser or Jupyter |
 | `--title`, `-v/--verbose` | page title; verbose progress |
 
-Runs on CUDA, Apple Silicon (MPS), CPU, or browser WebGPU. On a MacBook,
+Runs on CUDA, Apple Silicon (MPS), or browser WebGPU. On a MacBook,
 `quantem show4dstem ./masters/ --backend webgpu --html --count 1` writes a
 double-clickable HDF5-backed WebGPU browser folder without copying raw data.
 

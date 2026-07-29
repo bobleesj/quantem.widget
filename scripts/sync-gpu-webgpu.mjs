@@ -16,8 +16,31 @@ export function syncGpuWebgpuSources({ targetDir = "js/.generated/engine" } = {}
   const python = process.env.PYTHON || "python";
   const code = `
 import json
-from quantem.gpu import webgpu
-print(json.dumps({name: webgpu.source_text(name) for name in webgpu.source_names()}))
+from importlib.resources import files
+
+names = (
+    "device/webgpu.ts",
+    "io/backends/webgpu/bslz4.ts",
+    "io/backends/webgpu/h5reader.ts",
+    "io/backends/webgpu/local-h5.ts",
+    "detector/compute/webgpu/backend.ts",
+    "dpc/compute/webgpu/fft.ts",
+    "dpc/compute/webgpu/kernels.ts",
+    "ssb/compute/webgpu/backend.ts",
+    "ssb/compute/webgpu/optimizer.ts",
+    "ssb/compute/webgpu/protocol.ts",
+    "ssb/compute/webgpu/kernels/common.ts",
+    "ssb/compute/webgpu/kernels/fft128.ts",
+    "ssb/compute/webgpu/kernels/fft256.ts",
+    "ssb/compute/webgpu/kernels/fft512.ts",
+    "ssb/compute/webgpu/kernels/fft1024.ts",
+    "ssb/compute/webgpu/kernels/index.ts",
+)
+root = files("quantem.gpu")
+print(json.dumps({
+    name: root.joinpath(*name.split("/")).read_text(encoding="utf-8")
+    for name in names
+}))
 `;
   const runExport = (env = process.env) => spawnSync(python, ["-c", code], {
     encoding: "utf8",
@@ -53,20 +76,10 @@ print(json.dumps({name: webgpu.source_text(name) for name in webgpu.source_names
   }
 
   const sources = JSON.parse(result.stdout);
+  // This tree is generated exclusively from the explicit GPU manifest above.
+  // Recreate it so renamed or deleted domain files cannot remain importable.
+  rmSync(outputDir, { recursive: true, force: true });
   mkdirSync(outputDir, { recursive: true });
-  for (const legacyName of [
-    "bslz4.ts",
-    "compute.ts",
-    "device.ts",
-    "fft-shader.ts",
-    "h5reader.ts",
-    "lazy.ts",
-    "local-h5.ts",
-    "showptycho-ssb.ts",
-  ]) {
-    const legacyPath = path.join(outputDir, legacyName);
-    if (existsSync(legacyPath)) rmSync(legacyPath);
-  }
   let changed = 0;
   let unchanged = 0;
   for (const [name, text] of Object.entries(sources)) {
@@ -81,7 +94,7 @@ print(json.dumps({name: webgpu.source_text(name) for name in webgpu.source_names
     changed += 1;
   }
   console.log(
-    `synced quantem.gpu.webgpu -> ${targetDir} (${changed} updated, ${unchanged} unchanged)`
+    `synced quantem.gpu WebGPU domains -> ${targetDir} (${changed} updated, ${unchanged} unchanged)`
   );
 }
 

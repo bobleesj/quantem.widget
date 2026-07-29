@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local-only real-data ``quantem.widget.load`` benchmark matrix.
+"""Local-only real-data ``quantem.gpu.io.load`` benchmark matrix.
 
 This is the widget-side version of the QuantEM.live loader matrix. It is not a
 normal CI test: it expects private ``*_master.h5`` files on the workstation and

@@ -4,9 +4,9 @@
 // (virtual image, CBED frame, summed DP) is produced on the GPU by the generated
 // quantem.gpu WebGPU engine. No Python, no network.
 
-import { readH5Volume } from "../../../js/.generated/engine/webgpu/h5reader";
-import { Show4DSTEMCompute } from "../../../js/.generated/engine/webgpu/compute";
-import { decodeBslz4Batch, type Bslz4Spec } from "../../../js/.generated/engine/webgpu/bslz4";
+import { readH5Volume } from "../../../js/.generated/engine/io/backends/webgpu/h5reader";
+import { DetectorCompute } from "../../../js/.generated/engine/detector/compute/webgpu/backend";
+import { decodeBslz4Batch, type Bslz4Spec } from "../../../js/.generated/engine/io/backends/webgpu/bslz4";
 import type { Session, MasterFile, RawData, DetectorMode, DetShape, ShapeParams, DetBin, BrowseDtype } from "../pages/browse/types";
 
 // A picked file, uniform over File System Access handles and <input webkitdirectory>.
@@ -87,7 +87,7 @@ const DATA_RE = /_data_\d+\.h5$/i;
 
 interface Handles { master: LocalFile | null; dataFiles: LocalFile[]; }
 interface LoadedDS {
-  compute: Show4DSTEMCompute;
+  compute: DetectorCompute;
   meanDP: Float32Array;
   scanRows: number; scanCols: number; detRows: number; detCols: number; detSize: number; scanCount: number;
   bf: { cy: number; cx: number; r_bf: number };
@@ -468,7 +468,7 @@ async function ensureLoaded(source: string, date: string, name: string, detBin: 
     await drain();
     if (!device) throw new Error("WebGPU unavailable");
     const tC = performance.now();
-    const compute = Show4DSTEMCompute.fromGpuChunks(device, chunks, startScan, residentDetSize, residentMode);
+    const compute = DetectorCompute.fromGpuChunks(device, chunks, startScan, residentDetSize, residentMode);
     compute.badPx = binBadPx(geom.badPx, geom.detRows, geom.detCols, detBin);
     const meanDP = await compute.reduceFrames(new Uint32Array(startScan).fill(1), true);
     PERF.push({ key: k, loadDecodeMs: Math.round(tC - tA), reduceMs: Math.round(performance.now() - tC), totalMs: Math.round(performance.now() - tA) });

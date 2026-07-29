@@ -3,7 +3,7 @@
  * WebGPU FFT — GPU-accelerated 2D FFT for real-time ROI analysis.
  * Uses the generated quantem.gpu WebGPU device and FFT shader source.
  */
-import { getGPUDevice as engineGetGPUDevice, onGPULost } from "../../../js/.generated/engine/webgpu/device";
+import { getGPUDevice as engineGetGPUDevice, onGPULost } from "../../../js/.generated/engine/device/webgpu";
 
 function nextPow2(n: number): number { return Math.pow(2, Math.ceil(Math.log2(n))); }
 type WebGPUFftOptions = {
@@ -16,7 +16,7 @@ async function waitWhileDeferred(shouldDefer?: () => boolean): Promise<void> {
   }
 }
 
-import { FFT_2D_SHADER } from "../../../js/.generated/engine/webgpu/fft-shader";
+import { FFT_2D_SHADER } from "../../../js/.generated/engine/dpc/compute/webgpu/fft";
 
 export class WebGPUFFT {
   private device: GPUDevice;
