@@ -75,8 +75,11 @@ That command writes a browser folder with anonymous H5 symlinks plus
 `Show4DSTEM.command`, so it does not copy raw data into a giant HTML file. It is
 the right no-notebook choice when native detector detail matters. Double-click
 `index.html` and grant the export folder when Chrome asks, or use
-`Show4DSTEM.command` when you want the local server path. For a compact
-collaborator review, use the Python `export_kind="report"` path below.
+`Show4DSTEM.command` when you want the local server path. Multi-master WebGPU
+exports open as one dataset-slider viewer; generated review/demo exports should
+use `view_mode="multiple"` and `compare_dp_mode="selected"` when the point is to
+compare tilts or scans side by side. For a compact collaborator review, use the
+Python `export_kind="report"` path below.
 
 For large live folders, curated review grids, or collaborator inspection,
 open a live viewer and export a compact report from Python instead:

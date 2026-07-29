@@ -32,7 +32,7 @@ ShowFolder(path)
 
 # 4. Discover the master.h5 files + load the first + open the viewer
 masters = discover_masters(path)     # sorted list of Path
-data = load(masters[0], det_bin=4)   # fast browse preset (see next section)
+data = load(masters[0])              # native detector sampling when it fits
 Show4DSTEM(data)
 ```
 
@@ -74,7 +74,7 @@ masters = discover_masters("/data/session")               # all
 masters = discover_masters("/data/session", scan_shape=(512, 512))  # filter by scan size
 ```
 
-Prefer `get_metadata` when you want raw HDF5 attributes of ONE file without
+Prefer `get_metadata` when you want raw HDF5 attributes of one file without
 loading it — returns a dict of HDF5 tree paths plus the widget-friendly keys
 `scan_shape`, `detector_shape`, `n_frames`, `dwell_time_us`, `saturation`,
 `detector_name`:
@@ -277,10 +277,11 @@ data = load("scan_master.h5")
 Show4DSTEM(data)
 ```
 
-## I want to browse fast without caring about full detector detail.
+## I want a smaller preview and do not need full detector detail.
 
-Bin harder + drop to uint8. Great for scrolling through a session to find good
-scans; not for reconstruction.
+Bin deliberately and drop to uint8. This is useful for scrolling through a
+session on constrained hardware; it is not a reconstruction or count-preserving
+path.
 
 ```python
 data = load("scan_master.h5", det_bin=4, dtype="u8")
@@ -301,7 +302,7 @@ masters = [
     "/data/session/file_002_master.h5",
     "/data/session/file_003_master.h5",
 ]
-data = load(masters, det_bin=4, dtype="u8")
+data = load(masters, det_bin=1, dtype="u8")
 Show4DSTEM(data)
 ```
 
@@ -319,7 +320,8 @@ Show4DSTEM(data)
 `dtype="u8"` is the fast browse contract. It decodes directly into uint8 before
 stacking or sharding, so the loader does not build a full uint16 stack first.
 Values above 255 clip, so use uint16/no-bin when detector counts are the
-scientific result.
+scientific result. Add `det_bin=2` or `4` only when you intentionally want a
+detector-reduced preview.
 
 The sharded path is disk-aware. If masters live on independent NVMe devices,
 `load(..., devices=[0, 1])` interleaves files by physical disk and GPU. If every
@@ -415,12 +417,13 @@ to control exactly what enters the stack:
 from quantem.widget import load, discover_masters, Show4DSTEM
 
 masters = discover_masters("/data/session")   # sorted, filters to *_master.h5
-data = load(masters, det_bin=4)
+data = load(masters, det_bin=1)
 Show4DSTEM(data)
 ```
 
 `discover_masters` also accepts a `scan_shape=(512, 512)` filter to keep only
-matching acquisitions when a folder mixes scan sizes.
+matching acquisitions when a folder mixes scan sizes. Add `det_bin=2` or `4`
+only when you intentionally want a detector-reduced preview.
 
 ## Before loading anything, how do I check what's in a folder?
 

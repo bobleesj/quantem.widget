@@ -249,8 +249,9 @@ dataset for reference parity.
 ### S4D-11: Use MacBook MPS For Live Loading And U8 Export
 
 **User story**: As a MacBook user opening large 4D-STEM data, I want first-pass
-browsing to use the fast Apple Silicon path, usually detector-binned U8, so the
-viewer opens quickly without exhausting unified memory.
+browsing to use the fast Apple Silicon path at native detector sampling when
+memory allows, and to use detector-binned U8 only when I explicitly choose a
+preview to avoid exhausting unified memory.
 
 **Primary widgets**: Show4DSTEM.
 
@@ -259,11 +260,14 @@ Jupyter server, plus a smaller deterministic fixture for export parity.
 
 **Acceptance checks**:
 
-- Load with ``load(path, backend="mps", det_bin=4 or 8, dtype="u8")`` and
-  construct ``Show4DSTEM`` from that result.
+- Load first with ``load(path, backend="mps", det_bin=1)`` when the Mac memory
+  budget allows, then construct ``Show4DSTEM`` from that result. Run
+  ``det_bin=4`` or ``8`` only as an explicitly labeled preview/capacity check.
 - Record load time, first paint, detector bin, dtype, resident memory, and
   whether the path is raw Metal/MPS, Torch-MPS, or CPU.
-- Export compact HTML with ``encoding="uint8"`` and reopen it in the browser.
+- Export full-detector WebGPU/HDF5 HTML when the gate is native detector
+  behavior; export compact HTML with ``encoding="uint8"`` only as an explicitly
+  labeled preview.
 - Verify reopened HTML uses browser/WebGPU for interaction when available, not
   the Python MPS backend.
 - Compare one virtual detector and one diffraction frame against a Python
@@ -394,12 +398,13 @@ control only and does not establish real-workflow signoff.
 - Run a small CPU fallback for lifecycle correctness, labeling it as
   non-performance evidence. On the same genuine source, separately verify a
   count-preserving full path such as ``det_bin=1, dtype="u16"`` and an explicit
-  browse/downsample path such as ``det_bin=4``; binned success is not proof of
+  reduced preview path such as ``det_bin=4``; binned success is not proof of
   full-resolution support.
 - After append, verify ``compare_dp_mode="selected"`` follows the clicked new
-  dataset and ``compare_dp_mode="average"`` matches a CPU reference over the
-  current visible ready page, excluding hidden and incomplete datasets. Compare
-  virtual images and diffraction patterns at two or more scan positions.
+  dataset. If the average-DP mode is part of the change, also verify
+  ``compare_dp_mode="average"`` matches a CPU reference over the current visible
+  ready page, excluding hidden and incomplete datasets. Compare virtual images
+  and diffraction patterns at two or more scan positions.
 - Drive the live path in real JupyterLab through the in-app browser while files
   arrive. Capture before/after screenshots, console errors, Debug UI FPS and
   folder/page/cache/memory counters, detector drag, scan movement, diffraction

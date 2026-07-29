@@ -177,6 +177,13 @@ The BF-column file is exact detector evidence, not detector binning. The
 compressed HDF5 files remain in `source/` as provenance and fallback data, but
 the browser opens from BF columns by default.
 
+The `snapshots/` folder is the persistent review state. `snapshots/cal.json`
+stores the active calibration, `snapshots/snapshots.json` stores saved
+aberration states, and reopening the folder loads those states automatically
+after the browser has a folder grant or the command/local server is serving the
+folder. Pressing **Save** updates the snapshot JSON in place; it should not
+prompt for a separate download in the normal local folder workflow.
+
 Open the folder with the `quantem` CLI:
 
 ```bash

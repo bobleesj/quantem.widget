@@ -13,7 +13,7 @@ recipe, and keep the reduction choices explicit.
 | Share an offline detector-ROI browser | `export_html(export_kind="interactive")` | WebGPU HTML/folder | yes | yes, binned/encoded |
 | Export quickly from a terminal | `quantem show4dstem ... --backend webgpu --html --count N` | WebGPU HDF5 folder | yes | yes, in source HDF5 files |
 | Export full native detector sampling from a terminal | `quantem show4dstem ... --backend webgpu --html --bin 1 --dtype uint8` | WebGPU HDF5 folder | yes | yes, native detector sampling |
-| Preserve compressed HDF5 beside the viewer | WebGPU HDF5 folder | `index.html` + `Show4DSTEM.command` + `.viewer/` + `tilt_NN_master.h5` + `tilt_NN_data_*.h5` | yes, via local server | yes, in source HDF5 files |
+| Preserve compressed HDF5 beside the viewer | WebGPU HDF5 folder | `index.html` + `Show4DSTEM.command` + `.viewer/` + `tilt_NN_master.h5` + `tilt_NN_data_*.h5` | yes, via folder grant or local server | yes, in source HDF5 files |
 
 Default recommendation: use `export_kind="report"` for large folders, many
 datasets, or collaborator screening. Use `export_kind="interactive"` only when
@@ -89,7 +89,8 @@ Report export is smaller and faster because it does not embed raw 4D data.
 ## Terminal Export
 
 The command-line path is the fastest way to hand a master or folder to a
-non-notebook user:
+non-notebook user. It writes a folder-backed browser viewer rather than copying
+raw HDF5 into one huge HTML file:
 
 ```bash
 quantem show4dstem /data/session --backend webgpu --html --count 1 --out ~/Downloads
@@ -130,9 +131,9 @@ quantem show4dstem scan_001_master.h5 scan_002_master.h5 \
 ```
 
 This is the no-notebook path for a full interactive browser artifact. It keeps
-native detector sampling and reads source HDF5 frames through a local range
-server only when the browser needs them. Use it when native detector detail
-matters. Use an explicit detector bin only for a preview, and use
+native detector sampling and reads source HDF5 frames through a direct browser
+folder grant or local range server. Use it when native detector detail matters.
+Use an explicit detector bin only for a preview, and use
 `export_kind="report"` when the recipient only needs a curated review page.
 
 Equivalent Python:
@@ -207,12 +208,13 @@ browser receives a raw 4D payload.
 Report export is one self-contained HTML file. It can be double-clicked or
 served from any static host.
 
-Interactive raw 4D export may write a local `Show4DSTEM.command` launcher next
-to the HTML when the browser needs byte-range access to nearby HDF5 files. On
-macOS, either double-click `index.html` and grant the export folder when Chrome
-shows **Open data folder**, or double-click `Show4DSTEM.command` to start the
-local range server automatically. Keep the HDF5 files next to the HTML; sending
-only `index.html` is not a complete interactive export.
+Interactive raw 4D and HDF5-folder exports may write a local
+`Show4DSTEM.command` launcher next to the HTML when the browser needs
+byte-range access to nearby data files. On macOS, either double-click
+`index.html` and grant the export folder when Chrome shows **Open data
+folder**, or double-click `Show4DSTEM.command` to start the local range server
+automatically. Keep the HDF5 files next to the HTML; sending only `index.html`
+is not a complete interactive export.
 
 For phones and tablets, WebGPU requires a secure context. Use HTTPS or localhost
 and see [Viewing exported HTML on mobile](../maintainer/viewing-html-on-mobile.md).
@@ -227,6 +229,9 @@ When generating or reviewing Show4DSTEM export code, verify these points:
 - Do not call a report export "raw" or "exact"; it contains rendered PNG virtual images.
 - Do not call `dtype="uint8"` exact unless detector counts were audited to fit.
 - Mention that `scan_bin` and `det_bin` are mean-binning choices.
+- For multi-master or tilt-series review demos, use `view_mode="multiple"` and
+  `compare_dp_mode="selected"` unless an average diffraction pattern is the
+  actual measurement being shown.
 - Keep generated HTML, screenshots, and private data outside the repository unless they are intentional docs artifacts.
 
 ## Related Pages

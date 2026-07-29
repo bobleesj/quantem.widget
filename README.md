@@ -165,7 +165,7 @@ Most users want one of these paths:
 |---|---|---|
 | Keep working interactively in Python | `quantem show4dstem ./masters/` or `Show4DSTEM(load(...))` | Live notebook, kernel-backed CUDA/MPS interaction |
 | Share a compact review result | `widget.export_html(..., export_kind="report")` | One self-contained HTML report; PNG virtual-image pages; no raw 4D payload |
-| Share an offline browser widget | `widget.export_html(..., export_kind="interactive", dtype="uint8", scan_bin=2, det_bin=4)` | WebGPU HTML that can still drag detector ROIs, but embeds binned raw 4D data |
+| Share a small offline raw-4D widget | `widget.export_html(..., export_kind="interactive", dtype="uint8", scan_bin=2, det_bin=4)` | WebGPU HTML that can still drag detector ROIs, but embeds an explicitly reduced raw 4D payload |
 | Open directly from the terminal | `quantem show4dstem ./masters/ --backend webgpu --html --count 1` | Browser WebGPU export built from source H5 masters |
 | Open full native detector sampling from the terminal | `quantem show4dstem ./masters/ --backend webgpu --html --count 7 --bin 1 --dtype uint8` | No-notebook WebGPU export with native detector sampling |
 
@@ -194,7 +194,8 @@ viewer.export_html(
 ```
 
 Use **interactive raw 4D export** only when the recipient must keep dragging the
-detector ROI offline:
+detector ROI offline and the embedded raw payload is intentionally small enough
+to share:
 
 ```python
 viewer.export_html(
@@ -210,7 +211,7 @@ For users who do not want a notebook and want native detector sampling, use the
 CLI full path:
 
 ```bash
-quantem show4dstem /data/session --html --bin 1 --dtype uint16 --out ~/Downloads
+quantem show4dstem /data/session --backend webgpu --html --bin 1 --dtype uint16 --out ~/Downloads
 ```
 
 Both `scan_bin` and `det_bin` are explicit mean-binning choices for the export.
