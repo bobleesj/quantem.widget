@@ -43,6 +43,12 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Check out quantem.gpu browser-compute sources
+        uses: actions/checkout@v7
+        with:
+          repository: bobleesj/quantem.gpu
+          path: quantem-gpu-src
+
       - name: Resolve widget version from tag
         id: version
         run: |
@@ -62,6 +68,8 @@ jobs:
           PY
 
       - name: Build frontend assets
+        env:
+          QUANTEM_GPU_SRC: ${{ github.workspace }}/quantem-gpu-src/src
         run: |
           npm ci
           npm run typecheck

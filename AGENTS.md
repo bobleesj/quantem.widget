@@ -146,16 +146,16 @@ it does not replace at least one organic UI-drive trial for interaction bugs.
 
 Split work by what it is, not by how big it is: rendering versus computation.
 
-**Widget development and testing runs on the Mac.** The primary dev MacBook
-(128 GB RAM, fast Apple GPU) is the DEFAULT and preferred surface for anything
+**Widget development and testing runs on Apple Silicon.** A reference development
+machine is the default and preferred surface for anything
 that renders or drives a widget: unit tests, driving the live widget in a local
 JupyterLab or the in-app Browser pane, and working with real data of any size.
 This is faster than a remote round-trip and is the retina (devicePixelRatio 2)
 context real users see, where Mac-only WebGPU render bugs surface. A widget
 showing a large dataset is still tested here.
 
-**Heavy scientific computation runs on the remote backend.** Reserve the project
-development backend / HPC (mjgoat) for number-crunching that genuinely exceeds
+**Heavy scientific computation runs on a CUDA or HPC backend.** Reserve remote
+compute for number-crunching that genuinely exceeds
 the laptop: drift correction, merging many 4D-STEM datasets, tomography,
 ptychography, large tutorial-data generation, long processing jobs, and
 CUDA-kernel-specific work the Mac's Metal path cannot cover. Send the compute
