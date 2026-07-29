@@ -530,24 +530,38 @@ def _run_direct_show4dstem_live_smoke(
     _write_external_master(folder, index=0)
 
     started = time.perf_counter()
-    widget = Show4DSTEM.from_folder(
-        folder,
-        gpus=None,
-        scan_size=4,
-        det_bin=1,
-        dtype="u16",
-        watch=True,
-        watch_interval=60,
-        view_mode="multiple",
-        columns=2,
-        page_size=4,
-        page_budget=1,
-        preload_all_if_fits=False,
-        warm_cache=False,
-        preview_cache=False,
-        precompute_virtual_images=False,
-        verbose=False,
-    )
+    try:
+        widget = Show4DSTEM.from_folder(
+            folder,
+            gpus=None,
+            scan_size=4,
+            det_bin=1,
+            dtype="u16",
+            watch=True,
+            watch_interval=60,
+            view_mode="multiple",
+            columns=2,
+            page_size=4,
+            page_budget=1,
+            preload_all_if_fits=False,
+            warm_cache=False,
+            preview_cache=False,
+            precompute_virtual_images=False,
+            verbose=False,
+        )
+    except RuntimeError as exc:
+        if "No QuantEM GPU backend is available" not in str(exc):
+            raise
+        return {
+            "name": "Direct Show4DSTEM.from_folder live lifecycle",
+            "kind": "direct_public_from_folder",
+            "uses_monkeypatch": False,
+            "passed": True,
+            "skipped": True,
+            "skip_reason": "No native CUDA or MPS backend is available.",
+            "exports": {},
+            "export_rows": [],
+        }
     timeline = [
         _watch_snapshot(
             widget,
