@@ -89,6 +89,9 @@ def _show4dstem_h5_webgpu_tuning(*, dtype: str, h5_uint8_lossless: bool) -> str:
     low8 = "true" if h5_uint8_lossless else "false"
     return (
         "<script>\n"
+        "if (globalThis.location?.protocol === \"file:\") {\n"
+        "  globalThis.__QT_REQUIRE_LOCAL_H5_FILES = true;\n"
+        "}\n"
         f'globalThis.__QT_H5_DECODE_DTYPE ??= "{decode_dtype}";\n'
         f"globalThis.__QT_H5_FORCE_LOW8 ??= {low8};\n"
         f"globalThis.__BSLZ4_LOW8_ONLY ??= {low8};\n"
@@ -111,7 +114,12 @@ def _inject_show4dstem_h5_webgpu_tuning(
 ) -> None:
     """Inject HDF5 WebGPU runtime settings into an exported HTML page."""
     text = path.read_text(encoding="utf-8")
-    if "__QT_H5_DECODE_DTYPE" in text and "__BSLZ4_PIPELINE_STAGING" in text:
+    has_runtime_tuning = (
+        "__QT_H5_DECODE_DTYPE" in text
+        and "__BSLZ4_PIPELINE_STAGING" in text
+    )
+    has_file_guard = "__QT_REQUIRE_LOCAL_H5_FILES = true" in text
+    if has_runtime_tuning and has_file_guard:
         return
     script = _show4dstem_h5_webgpu_tuning(
         dtype=dtype,

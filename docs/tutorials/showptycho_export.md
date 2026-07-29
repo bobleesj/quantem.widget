@@ -1,9 +1,10 @@
 # Export and run ShowPtycho
 
-This tutorial exports a ShowPtycho reconstruction as a **self-contained,
-no-server HTML folder** and opens it — no Python kernel, no Jupyter, no server.
-The exported viewer opens from exact bright-field detector columns by default,
-then runs SSB live as you tune aberrations.
+This tutorial exports a ShowPtycho reconstruction as a **browser folder** and
+opens it with no Python kernel and no Jupyter. You can run it by granting the
+folder to Chrome, or by using the generated local launcher. The exported viewer
+opens from exact bright-field detector columns by default, then runs SSB live as
+you tune aberrations.
 
 If you just want the interactive widget inside a notebook, see
 [ShowPtycho in Jupyter](showptycho.md) instead. This page assumes you already
@@ -64,10 +65,11 @@ One grant per session. This works fully offline.
 quantem show out/
 ```
 
-`quantem showptycho` is an alias for `quantem show`. Point it at the exported
-folder; it serves the folder over range-capable HTTP and opens it, so the viewer
-loads without the manual folder-grant. Use this when double-click + grant is
-inconvenient (for example over a remote connection).
+`quantem showptycho` is a compatibility alias for `quantem ptycho`, and
+`quantem show` auto-detects the same folder. Point either command at the
+exported folder; it serves the folder over range-capable HTTP and opens it, so
+the viewer loads without the manual folder grant. Use this when double-click +
+grant is inconvenient, for example over a remote connection.
 
 ## What you can do in the viewer
 

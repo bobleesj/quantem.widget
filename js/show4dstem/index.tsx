@@ -3309,6 +3309,18 @@ function Show4DSTEM() {
   const [h5LocalFilesGranted, setH5LocalFilesGranted] = React.useState(show4DSTEMHasLocalFiles());
   const [h5LocalSourceStatus, setH5LocalSourceStatus] = React.useState("");
   const h5LocalInputRef = React.useRef<HTMLInputElement | null>(null);
+  const requireLocalH5Files = (globalThis as { __QT_REQUIRE_LOCAL_H5_FILES?: boolean })
+    .__QT_REQUIRE_LOCAL_H5_FILES === true;
+  const localH5FolderName = React.useMemo(() => {
+    try {
+      const parts = decodeURIComponent(globalThis.location?.pathname || "").split("/").filter(Boolean);
+      const viewerIdx = parts.lastIndexOf(".viewer");
+      if (viewerIdx > 0) return parts[viewerIdx - 1];
+      return parts.length >= 2 ? parts[parts.length - 2] : "";
+    } catch {
+      return "";
+    }
+  }, []);
   const onH5LocalInput = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files ? Array.from(event.target.files) : [];
     if (!files.length) return;
@@ -3406,8 +3418,6 @@ function Show4DSTEM() {
           return [] as string[];
         }
       })();
-      const requireLocalH5Files = (globalThis as { __QT_REQUIRE_LOCAL_H5_FILES?: boolean })
-        .__QT_REQUIRE_LOCAL_H5_FILES === true;
       if (requireLocalH5Files && (h5Url || h5Urls.length) && !show4DSTEMHasLocalFiles()) {
         if (!disposed) {
           setOfflineBackendStatus("Waiting for local HDF5 files");
@@ -5840,7 +5850,7 @@ function Show4DSTEM() {
       clearViGpuDisplay();
       detach?.();
     };
-  }, [clearViGpuDisplay, ensureViGpuColormap, h5LocalFilesGranted, h5SourceAvailable, offline, requestCompareViLive, requestDpFrameLive]);
+  }, [clearViGpuDisplay, ensureViGpuColormap, h5LocalFilesGranted, h5SourceAvailable, offline, requestCompareViLive, requestDpFrameLive, requireLocalH5Files]);
   // dp_stats are computed in JS from frameBytes (Python side no longer
   // syncs a dp_stats trait — saves 4 trait sync round-trips per click).
   const [viStats, setViStats] = React.useState<number[]>([0, 0, 0, 0]);
@@ -9704,6 +9714,7 @@ function Show4DSTEM() {
   const offlineStatusIsError = Boolean(offlineBackendError);
   const offlineStatusIsReady = !offlineStatusIsError && /\bready\b/i.test(offlineStatusText);
   const showOfflineStatus = offline && Boolean(offlineStatusText) && !offlineStatusIsReady;
+  const showLocalH5GrantBanner = offline && h5SourceAvailable && requireLocalH5Files && !h5LocalFilesGranted;
 
   return (
     <Box
@@ -9726,6 +9737,7 @@ function Show4DSTEM() {
         accept=".h5,.hdf5"
         onChange={onH5LocalInput}
         style={{ display: "none" }}
+        {...({ webkitdirectory: "", directory: "" } as object)}
       />
       {/* HEADER */}
       {showTitle && <Typography variant="h6" sx={{ ...typo.title, mb: `${SPACING.SM}px` }}>
@@ -9785,6 +9797,49 @@ function Show4DSTEM() {
           }}
         >
           {offlineStatusIsError ? `Show4DSTEM load failed: ${offlineStatusText}` : offlineStatusText}
+        </Box>
+      )}
+      {showLocalH5GrantBanner && (
+        <Box
+          role="status"
+          data-testid="show4dstem-local-h5-grant"
+          sx={{
+            mb: `${SPACING.SM}px`,
+            px: 1,
+            py: 0.75,
+            border: `1px solid ${themeColors.border}`,
+            bgcolor: themeColors.controlBg,
+            color: themeColors.text,
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            flexWrap: "wrap",
+            maxWidth: "100%",
+            boxSizing: "border-box",
+          }}
+        >
+          <Typography sx={{ ...typo.label, color: themeColors.text }}>
+            {localH5FolderName
+              ? `No server needed - click Open data folder, then select "${localH5FolderName}".`
+              : "No server needed - grant this page access to its exported HDF5 folder."}
+          </Typography>
+          {h5LocalSourceStatus && (
+            <Typography sx={{ ...typo.label, color: h5LocalSourceStatus.includes("No ") ? "#d32f2f" : themeColors.textMuted }}>
+              {h5LocalSourceStatus}
+            </Typography>
+          )}
+          <Typography sx={{ ...typo.label, color: themeColors.textMuted, fontSize: 11 }}>
+            Alternative: double-click Show4DSTEM.command.
+          </Typography>
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={grantH5LocalFiles}
+            sx={{ ...compactButton, color: themeColors.accent }}
+            data-show4dstem-open-folder
+          >
+            Open data folder
+          </Button>
         </Box>
       )}
       {/* MAIN CONTENT: DP | VI | FFT (three columns when FFT shown) */}

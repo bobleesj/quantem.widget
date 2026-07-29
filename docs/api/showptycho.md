@@ -165,8 +165,9 @@ HTTP server, reports the BF-column browser source when present, and opens
 `index.html` in the browser. It stays alive until Ctrl-C.
 Use `--port 8900` only when you need a stable URL, and use `--bind 0.0.0.0`
 only when the viewer should be reachable from another device. Double-clicking
-`index.html` is not the supported path because the browser still needs normal
-HTTP range fetches for the nearby source files.
+`index.html` is supported in Chromium browsers that expose the File System
+Access API: click **Open data folder** and grant the export folder. Use the CLI
+or `ShowPtycho.command` when you want the no-prompt local-server path.
 
 The HTML file should stay small because it is only the viewer. The microscopy
 payload is under `source/`; the export avoids writing `g_bf.c64`, `.f32`

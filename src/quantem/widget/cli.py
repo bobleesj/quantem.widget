@@ -2175,7 +2175,7 @@ def _render_4dstem(masters: list[str], label: str, args: argparse.Namespace) -> 
     Each master is loaded with the requested detector binning (``--bin``, default
     1 for full detector sampling). ``--combined`` instead
     stacks every master into one 5D viewer (a bslz4 companion folder + a local
-    serve, since file:// cannot fetch the companion)."""
+    serve, or open through the file-grant browser path)."""
     import numpy as np
     from quantem.widget import Show4DSTEM
     out_dir = _out_dir(args.out)
