@@ -10,8 +10,9 @@ watching the reconstructed phase update.
 `quantem.widget` owns presentation, project layout, and browser export. It does
 not implement CUDA, MPS, or WebGPU SSB kernels. Exact fitting and final
 reconstruction enter through the shared `quantem.gpu.SSB` API and return one
-`SSBResult`, regardless of compute backend. `ShowPtycho` consumes that result
-and the same calibration fields for notebook and browser interaction.
+`SSBResult`, regardless of compute backend. `ShowPtycho` consumes the prepared
+`SSB` session so it can reuse resident buffers for notebook interaction; the
+returned result remains the compact analysis output.
 
 The canonical folder workflow is:
 
@@ -60,7 +61,17 @@ SSB optimization trials followed by refinement, and replaces the phase/FFT and
 their calibration with the result.
 
 ```python
-ssb = SSB(data, semiangle=20.0, scan_sampling=0.276, voltage_kV=300.0)
+from quantem.gpu import SSB
+from quantem.widget import ShowPtycho
+
+ssb = SSB.open(
+    "reference_master.h5",
+    backend="auto",
+    semiangle_mrad=20.0,
+    scan_sampling_A=0.276,
+    voltage_kV=300.0,
+)
+result = ssb.fit(trials=200, refinement="nelder-mead")
 w = ShowPtycho(
     ssb,
     source_file="reference_master.h5",

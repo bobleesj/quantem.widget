@@ -208,8 +208,10 @@ only `index.html` omits the HDF5 source files needed for WebGPU reconstruction.
 
 ## Backends
 
-The loader picks the backend automatically - **CUDA** on an NVIDIA box, **Apple
-Metal (MPS)** on a Mac, **CPU** otherwise. No flag needed. On a MacBook:
+The loader picks the accelerated backend automatically - **CUDA** on an NVIDIA
+box and **Apple Metal (MPS)** on a Mac. It does not silently choose CPU when no
+GPU backend is available; `cpu` is an explicit reference/test choice. On a
+MacBook:
 
 ```bash
 quantem show4dstem ./masters/ --backend webgpu --html --count 1 --bin 1

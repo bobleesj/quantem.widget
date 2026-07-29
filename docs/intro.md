@@ -31,10 +31,12 @@ We serve two audiences first:
 - **Linux with NVIDIA CUDA** - workstations and HPC.
 
 **CUDA and MPS are the primary backends.** Work stays on the GPU as PyTorch
-tensors; we avoid NumPy on the hot path. CPU is a fallback, not a target - it
-runs through the same PyTorch path, just slower. For large datasets, bin the
-detector at load (`det_bin`) to cut memory and speed first paint - see
-[Load and I/O](api/io).
+tensors; we avoid NumPy on the hot path. Automatic scientific loading and
+compute never silently fall back to CPU: an unsupported machine fails with a
+corrective error. The explicit CPU reference exists for parity tests, while the
+viewers can still display ordinary NumPy arrays supplied by a user. For large
+datasets, bin the detector at load (`det_bin`) to cut memory and speed first
+paint - see [Load and I/O](api/io).
 
 ## Widgets
 

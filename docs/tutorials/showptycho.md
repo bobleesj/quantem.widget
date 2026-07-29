@@ -14,47 +14,46 @@ ships a double-click `ShowPtycho.command` launcher, or open `index.html` in
 Chrome and grant it the data folder — see
 [Export and run ShowPtycho](showptycho_export.md).
 
-## The one rule: always optimize before you view
+## The one rule: always fit before you view
 
 ```python
-import cupy as cp
-from quantem.gpu.io import load
 from quantem.gpu import SSB
 from quantem.widget import ShowPtycho
 
-# 1. Load the native detector — do NOT bin (see "No detector binning" below).
-data = load("scan_master.h5", dtype=None).data        # dtype=None keeps native uint16
-
-# 2. Build the SSB reconstruction with your microscope calibration.
-ssb = SSB(
-    data,
-    semiangle=30.0,          # convergence semiangle, mrad
-    scan_sampling=0.264,     # real-space scan step, Angstrom
+# 1. Open the native source with your microscope calibration.
+ssb = SSB.open(
+    "scan_master.h5",
+    backend="auto",
+    semiangle_mrad=30.0,        # convergence semiangle, mrad
+    scan_sampling_A=0.264,      # real-space scan step, Angstrom
     voltage_kV=300.0,
     rotation_angle_deg=158.9,   # scan-detector rotation (run find_rotation if unknown)
 )
 
-# 3. Solve the aberrations.  THIS STEP IS REQUIRED.
-ssb.optimize(n_trials=200)   # Optuna TPE global search for C10/C12/phi12 (~1-2 s)
-ssb.refine()                 # Nelder-Mead exact minimum (~1 s)
+# 2. Fit and refine the aberrations. THIS STEP IS REQUIRED.
+result = ssb.fit(trials=200, refinement="nelder-mead")
 
-# 4. Open the interactive widget — it starts at the solved optimum.
+# 3. Open the interactive widget — it reuses the prepared GPU session.
 ShowPtycho(ssb)
 ```
 
-### Do NOT skip step 3
+### Do NOT skip step 2
 
 ```python
-# WRONG — this NEVER optimizes.  It uses whatever aberrations you pass verbatim,
+# WRONG — this NEVER fits. It uses whatever aberrations you pass verbatim,
 # so the phase and FFT are junk unless your numbers were already perfect.
-ShowPtycho(data, semiangle=30.0, scan_sampling=0.264,
+ShowPtycho(data, semiangle_mrad=30.0, scan_sampling_A=0.264,
+           voltage_kV=300.0,
            aberrations={"C10": 78.0, "C12": 17.0, "phi12": 0.5})
 ```
 
 `ShowPtycho(data, aberrations=...)` is a convenience constructor that trusts the
-aberrations you hand it. It does not run Optuna or Nelder-Mead. If you want the
-solver to find the aberrations, build an `SSB`, call `optimize()` then `refine()`,
-and pass the `ssb` object: `ShowPtycho(ssb)`.
+aberrations you hand it. It does not fit them. If you want the solver to find
+the aberrations, build an `SSB`, call `fit(trials=200,
+refinement="nelder-mead")`, and pass that same prepared `ssb` object to
+`ShowPtycho(ssb)`. The returned `SSBResult` is also available as `result` for
+non-interactive analysis through `result.phase`, `result.amplitude`, and
+`result.object_wave`.
 
 You can confirm the solve ran: the stats bar shows a non-null `loss`, and the
 `Optuna trials + Nelder-Mead` panel at the bottom is populated.
@@ -80,14 +79,21 @@ Two ways to crop:
   HDF5 source, runs 200 optimization trials plus refinement, and replaces the
   phase/FFT and calibration.
 
-- **In code.** Load only the region, then optimize as usual:
+- **In code.** Load only the region, then fit as usual:
 
   ```python
+  from quantem.gpu.io import load
+
   data = load("scan_master.h5", dtype=None,
               scan_region=(128, 384, 128, 384)).data   # 256x256 center crop
-  ssb = SSB(data, semiangle=30.0, scan_sampling=0.264,
-            voltage_kV=300.0, rotation_angle_deg=158.9)
-  ssb.optimize(n_trials=200); ssb.refine()
+  ssb = SSB.from_array(
+      data,
+      semiangle_mrad=30.0,
+      scan_sampling_A=0.264,
+      voltage_kV=300.0,
+      rotation_angle_deg=158.9,
+  )
+  result = ssb.fit(trials=200, refinement="nelder-mead")
   ShowPtycho(ssb)
   ```
 
@@ -96,8 +102,8 @@ Two ways to crop:
 
 ## Checklist
 
-1. `dtype=None` on load — native uint16, no lossy `uint8` clip.
+1. Leave `SSB.open(..., dtype=None)` at its default for native detector precision.
 2. Native detector, `det_bin=1` — do not bin.
-3. `ssb.optimize(n_trials=200)` then `ssb.refine()` — the solve is not optional.
+3. `ssb.fit(trials=200, refinement="nelder-mead")` — the fit is not optional.
 4. Pass the `ssb` object to `ShowPtycho`, not `data` + hand-typed aberrations.
 5. Confirm: stats bar `loss` is non-null and the trials panel is populated.
