@@ -20,6 +20,8 @@ parts:
       - file: tutorials/show3dslices
       # tutorials/showeds hidden until the ShowEDS widget is updated.
       - file: tutorials/showdiffraction
+      - file: tutorials/choose_lattice
+        title: Choose Lattice
       - file: tutorials/io_gpu
         title: IO/GPU
   - caption: Exporting
@@ -63,6 +65,7 @@ parts:
           - file: api/showptycho
           # api/showeds hidden until the ShowEDS widget is updated.
           - file: api/showdiffraction
+          - file: api/choose-lattice
           - file: api/showfolder
           - file: api/html-export
           - file: api/io
@@ -105,6 +108,8 @@ parts:
               # maintainer/storyboard-showeds hidden until ShowEDS is updated.
               - file: maintainer/storyboard-showfolder
                 title: ShowFolder
+              - file: maintainer/storyboard-choose-lattice
+                title: ChooseLattice
               - file: maintainer/storyboard-data-transfer
                 title: DataTransfer
           - file: maintainer/widget-performance
