@@ -35,6 +35,7 @@ readers and test agents.
 | [Show4DSTEM](show4dstem) | `quantem.widget.Show4DSTEM` dispatcher | state JSON, PNG, interactive WebGPU HTML; large exports use a companion data directory |
 | [ShowPtycho](showptycho) | `quantem.widget.ShowPtycho` | ptychography state JSON, WebGPU folder export with BF-indexed `G(k)` payload |
 | [ShowDiffraction](showdiffraction) | `quantem.widget.showdiffraction.ShowDiffraction` | state JSON, PNG, interactive HTML |
+| [ChooseLattice](choose-lattice) | `quantem.widget.choose_lattice.ChooseLattice` | state JSON (`save_state=True`) |
 | [ShowFolder](showfolder) | `quantem.widget.showfolder.ShowFolder` | selection JSON for selected microscopy files and folders |
 
 All widget-level HTML exports follow the [HTML export](html-export) protocol.

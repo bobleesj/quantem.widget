@@ -77,6 +77,7 @@ whether a canvas appears.
 - [Show3DSlices](storyboard-show3dslices)
 - [Show4DSTEM](storyboard-show4dstem)
 - [ShowFolder](storyboard-showfolder)
+- [ChooseLattice](storyboard-choose-lattice)
 - [DataTransfer](storyboard-data-transfer)
 
 ## Story Format

@@ -19,6 +19,7 @@ const widgets = [
   { name: "showdiffraction" },
   { name: "showeds" },
   { name: "showptycho" },
+  { name: "chooselattice" },
 ];
 
 rmSync("src/quantem/widget/static", { recursive: true, force: true });
