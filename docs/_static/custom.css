@@ -24,6 +24,36 @@ div.cell_output,
   max-width: 100%;
 }
 
+/* Phones: below the theme's 960px breakpoint, long inline code literals and
+   API signatures must wrap instead of pushing the page wider than the screen
+   (Sphinx gives span.pre white-space: pre, which never wraps). Code BLOCKS
+   (div.highlight pre) keep their own horizontal scrollbar and are untouched. */
+@media (max-width: 959.98px) {
+  code.docutils.literal span.pre,
+  dt.sig span.pre {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  dt.sig {
+    white-space: normal;
+  }
+  /* The auto-generated general index is a fixed two-column table of long
+     entries; let it scroll on its own instead of widening the page. */
+  table.indextable {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
+/* The ipywidgets embed manager wraps each widget in a light box (.widget-subarea).
+   In dark mode let the page theme show through so the area around the widget
+   matches; the widget itself already follows the page theme via theme.ts. */
+html[data-theme="dark"] .widget-subarea,
+html[data-theme="dark"] .jp-OutputArea-output,
+html[data-theme="dark"] .jupyter-widgets-output-area {
+  background: transparent !important;
+}
+
 /* The ipywidgets embed manager wraps each widget in a light box (.widget-subarea).
    In dark mode let the page theme show through so the area around the widget
    matches; the widget itself already follows the page theme via theme.ts. */
