@@ -7,7 +7,7 @@
 # silently blank every widget. Building locally needs the package installed
 # with data extras and `npm run build` done first (see widget-docs.yml).
 title: quantem.widget
-author: Sangjoon Bob Lee, et al
+author: ""
 logo: ""
 only_build_toc_files: true
 exclude_patterns:
