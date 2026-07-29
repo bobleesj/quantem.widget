@@ -6,6 +6,9 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Add `ChooseLattice`, an interactive 2D selector for choosing an ordered
+  origin, a1, and a2 and exposing their `(row, col)` coordinates and derived
+  lattice vectors for downstream analysis.
 - Exported standalone HTML no longer dies on a first-time (cold cache) load.
   requirejs's default 7 s per-module timeout could make the widget manager load
   a second copy of the anywidget runtime while the CDN fetch was still in

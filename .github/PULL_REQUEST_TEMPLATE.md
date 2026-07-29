@@ -42,6 +42,10 @@ https://doi.org/10.1039/d6dd00121a
 
 - [ ] The widget has a small, stable Python API with NumPy-style docs, helpful
   errors, and `(row, col)` coordinate wording where positions are shown.
+- [ ] Every new public widget or API is exported from `quantem.widget`, listed
+  in the README widget catalog and import example, linked from the API index
+  and documentation sidebar, and recorded under **Unreleased** in
+  `CHANGELOG.md`.
 - [ ] Documentation includes a minimal tutorial notebook under
   [docs/tutorials](https://github.com/bobleesj/quantem.widget/tree/main/docs/tutorials)
   and an API page under
