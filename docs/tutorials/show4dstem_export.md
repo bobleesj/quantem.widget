@@ -208,13 +208,22 @@ browser receives a raw 4D payload.
 Report export is one self-contained HTML file. It can be double-clicked or
 served from any static host.
 
-Interactive raw 4D and HDF5-folder exports may write a local
-`Show4DSTEM.command` launcher next to the HTML when the browser needs
-byte-range access to nearby data files. On macOS, either double-click
-`index.html` and grant the export folder when Chrome shows **Open data
-folder**, or double-click `Show4DSTEM.command` to start the local range server
-automatically. Keep the HDF5 files next to the HTML; sending only `index.html`
-is not a complete interactive export.
+Interactive raw 4D and HDF5-folder exports write a `Show4DSTEM.command`
+launcher next to the HTML when the browser needs byte-range access to nearby
+data files. Three ways to open the exported folder:
+
+- **Double-click `Show4DSTEM.command`** (macOS). A Terminal window starts the
+  bundled range server for this exact folder and Chrome opens the viewer —
+  nothing to install, no clicks in the browser. Closing the Terminal window
+  stops the server.
+- **Double-click `index.html`** and grant the export folder when Chrome shows
+  **Open data folder** (File System Access; browsers without the folder picker
+  fall back to a plain file chooser).
+- **`quantem show out/`** from a terminal serves the folder and opens the
+  viewer without the grant click — handy over remote connections.
+
+Keep the HDF5 files next to the HTML; sending only `index.html` is not a
+complete interactive export.
 
 For phones and tablets, WebGPU requires a secure context. Use HTTPS or localhost
 and see [Viewing exported HTML on mobile](../maintainer/viewing-html-on-mobile.md).
