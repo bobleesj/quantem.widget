@@ -609,42 +609,51 @@ def test_widget_showfolder_live_smoke_writes_report(tmp_path: Path) -> None:
             assert required in states
 
     # C2: direct production GPU Show4DSTEM appends after header probation,
-    # expect fresh visible-page pixels before its final green state.
-    assert direct_show4d["same_mounted_model"] is True
-    assert direct_show4d["arrival_probation_added"] == []
-    assert direct_show4d["stable_arrival_added"] == [1]
-    assert direct_show4d["authoritative_before_green"] is True
-    assert direct_show4d["active_page_indices"] == [0, 1]
-    if direct_show4d["backend"] == "mps":
-        assert direct_show4d["active_page_loaded_count"] in {0, 1}
-        assert len(direct_show4d["virtual_image_means"]) == 1
+    # expect fresh visible-page pixels before its final green state. CPU-only
+    # CI skips this native-GPU integration without introducing a fallback.
+    show4d_skipped = bool(direct_show4d.get("skipped", False))
+    if show4d_skipped:
+        assert direct_show4d["skip_reason"] == (
+            "No native CUDA or MPS backend is available."
+        )
     else:
-        assert direct_show4d["active_page_loaded_count"] == 2
-        assert direct_show4d["virtual_image_means"][1] > direct_show4d[
-            "virtual_image_means"
-        ][0]
-    green = [
-        point
-        for point in direct_show4d["timeline"]
-        if point["state"] == "watching" and point["count"] == 2
-    ][-1]
-    assert green["compare_page_loading"] is False
-    if direct_show4d["backend"] != "mps":
-        assert green["compare_page_loaded_count"] == 2
-    assert green["compare_panel_indices"] == [0, 1]
-    assert direct_show4d["static_watch_contract"]["watching_embedded"] is False
+        assert direct_show4d["same_mounted_model"] is True
+        assert direct_show4d["arrival_probation_added"] == []
+        assert direct_show4d["stable_arrival_added"] == [1]
+        assert direct_show4d["authoritative_before_green"] is True
+        assert direct_show4d["active_page_indices"] == [0, 1]
+        if direct_show4d["backend"] == "mps":
+            assert direct_show4d["active_page_loaded_count"] in {0, 1}
+            assert len(direct_show4d["virtual_image_means"]) == 1
+        else:
+            assert direct_show4d["active_page_loaded_count"] == 2
+            assert direct_show4d["virtual_image_means"][1] > direct_show4d[
+                "virtual_image_means"
+            ][0]
+        green = [
+            point
+            for point in direct_show4d["timeline"]
+            if point["state"] == "watching" and point["count"] == 2
+        ][-1]
+        assert green["compare_page_loading"] is False
+        if direct_show4d["backend"] != "mps":
+            assert green["compare_page_loaded_count"] == 2
+        assert green["compare_panel_indices"] == [0, 1]
+        assert direct_show4d["static_watch_contract"]["watching_embedded"] is False
 
-    assert len(report["exports"]) == 7
+    assert len(report["exports"]) == (6 if show4d_skipped else 7)
     assert len(plan["pages"]) == len(report["exports"])
+    expected_static_variants = {
+        "show2d-folder-watch-static",
+        "show3d-folder-watch-static",
+    }
+    if not show4d_skipped:
+        expected_static_variants.add("show4dstem-folder-watch-static")
     assert {
         row["variant"]
         for row in report["exports"]
         if row["variant"].endswith("folder-watch-static")
-    } == {
-        "show2d-folder-watch-static",
-        "show3d-folder-watch-static",
-        "show4dstem-folder-watch-static",
-    }
+    } == expected_static_variants
     for row in report["exports"]:
         assert Path(row["path"]).exists()
     assert "ShowFolder live-folder smoke: PASS" in index
@@ -656,7 +665,9 @@ def test_widget_showfolder_live_smoke_writes_report(tmp_path: Path) -> None:
     assert (artifact_dir / "showfolder-live-show4dstem.html").exists()
     assert (artifact_dir / "show2d-from-folder-stopped.html").exists()
     assert (artifact_dir / "show3d-from-folder-stopped.html").exists()
-    assert (artifact_dir / "show4dstem-from-folder-stopped.html").exists()
+    assert (artifact_dir / "show4dstem-from-folder-stopped.html").exists() is (
+        not show4d_skipped
+    )
 
 
 def test_widget_show3d_animation_smoke_writes_gif_report(tmp_path: Path) -> None:

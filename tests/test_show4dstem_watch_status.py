@@ -562,7 +562,13 @@ def test_show4dstem_mounted_watch_waits_for_fresh_browser_paint_ack(
 def test_public_show4dstem_from_folder_paints_real_external_arrival(
     tmp_path: Path,
 ) -> None:
+    from quantem.gpu.device import detect
     from quantem.widget import Show4DSTEM as PublicShow4DSTEM
+
+    try:
+        detect()
+    except RuntimeError as exc:
+        pytest.skip(f"native GPU integration requires CUDA or MPS: {exc}")
 
     _write_external_master(tmp_path, 0)
     widget = PublicShow4DSTEM.from_folder(
