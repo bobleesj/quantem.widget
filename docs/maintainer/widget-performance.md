@@ -524,12 +524,13 @@ On MacBook/Apple Silicon, the raw Metal/MPS path is preferred for large
 first-pass 4D-STEM browsing because it gives tighter control over chunking,
 detector binning, dtype, and transient memory than a generic Torch-MPS tensor
 path. Torch-MPS can still be valid for specific tensor workflows, but reports
-must say which path was used and whether any operation fell back to CPU.
+path. Scientific detector compute must fail clearly instead of falling back to
+CPU.
 
-Multi-master `load([masters])` differs by backend: CUDA and CPU eager-stack
-all masters into one resident 5D array, while MPS decodes dataset 0
+Multi-master `load([masters])` differs by backend: CUDA eager-stacks masters
+into one resident 5D array, while MPS decodes dataset 0
 synchronously, shows the viewer immediately, and fills datasets 1..N-1 from a
-single background GPU worker (`multidataset_mps.py`). Performance reports for
+single background GPU worker owned by `quantem.gpu.io`. Performance reports for
 multi-master sessions must say which of the two paths ran.
 
 GPU memory belongs to the backend data object and Python session, not the

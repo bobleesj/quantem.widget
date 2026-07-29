@@ -5,7 +5,8 @@ Interactive, GPU-aware Python widgets for electron microscopy, built on
 JupyterLab, VS Code, or Colab.
 
 ```python
-from quantem.widget import Show1D, Show2D, Show3D, Show3DSlices, Show4DSTEM, ShowPtycho, ShowEDS, ShowDiffraction, ShowFolder, load
+from quantem.gpu.io import load
+from quantem.widget import Show1D, Show2D, Show3D, Show3DSlices, Show4DSTEM, ShowPtycho, ShowEDS, ShowDiffraction, ShowFolder
 ```
 
 ## Quickest start: no notebook needed

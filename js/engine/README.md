@@ -1,9 +1,11 @@
 # Generated WebGPU Engine Sources
 
 The reusable WebGPU browser-compute sources are generated into
-`js/.generated/engine/` from `quantem.gpu.webgpu` before frontend builds.
+`js/.generated/engine/` from their scientific domains in `quantem.gpu` before
+frontend builds.
 
-Edit the canonical sources in `quantem.gpu/src/quantem/gpu/webgpu/`, then run:
+Edit the canonical source under `quantem.gpu/src/quantem/gpu/device/`, `io/`,
+`detector/`, `dpc/`, or `ssb/`, then run:
 
 ```bash
 npm run sync:webgpu

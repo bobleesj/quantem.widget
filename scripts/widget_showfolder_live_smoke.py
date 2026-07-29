@@ -10,9 +10,11 @@ import re
 import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import h5py
+import hdf5plugin
 import numpy as np
 import torch
 
@@ -52,13 +54,15 @@ def _write_master(path: Path) -> None:
 
 
 def _write_external_master(folder: Path, *, index: int) -> Path:
-    """Write one tiny external-link master accepted by the production CPU loader."""
+    """Write one tiny external-link master accepted by the GPU loader."""
     data_path = folder / f"scan_{index:03d}_data_000001.h5"
     master_path = folder / f"scan_{index:03d}_master.h5"
     with h5py.File(data_path, "w") as h5:
         h5.create_dataset(
             "entry/data/data",
             data=np.full((16, 4, 4), index + 1, dtype=np.uint16),
+            chunks=(1, 4, 4),
+            **hdf5plugin.Bitshuffle(nelems=0, cname="lz4"),
         )
     with h5py.File(master_path, "w") as h5:
         h5.require_group("entry/data")["data_000001"] = h5py.ExternalLink(
@@ -257,19 +261,17 @@ def _run_image_live_smoke(artifact_dir: Path) -> dict[str, Any]:
 
 
 def _run_master_live_smoke(artifact_dir: Path) -> dict[str, Any]:
-    import quantem.widget as qw
-    import quantem.widget.io as wio
+    from quantem.gpu import io as gpu_io
 
     folder = artifact_dir / "live-4dstem"
     folder.mkdir(parents=True, exist_ok=True)
     _write_master(folder / "scan_000_master.h5")
 
-    sentinel = object()
-    real_load = qw.__dict__.get("load", sentinel)
-    real_discover_masters = wio.__dict__.get("discover_masters", sentinel)
-    real_is_master_ready = wio.__dict__.get("is_master_ready", sentinel)
+    real_load = gpu_io.load
+    real_discover = gpu_io.discover
+    real_inspect = gpu_io.inspect
 
-    def fake_discover_masters(
+    def fake_discover(
         path: str,
         *,
         scan_shape=None,
@@ -278,8 +280,22 @@ def _run_master_live_smoke(artifact_dir: Path) -> dict[str, Any]:
     ):
         return sorted(str(item) for item in Path(path).glob("*_master.h5"))
 
-    def fake_is_master_ready(path: str) -> bool:
-        return Path(path).exists()
+    def fake_inspect(path: str, **kwargs):
+        ready = Path(path).exists()
+        return SimpleNamespace(
+            ready=ready,
+            reason="" if ready else "missing",
+            action="" if ready else "wait",
+            metadata={},
+            pixel_mask=None,
+            source_kind="hdf5",
+            actual_frames=16 if ready else 0,
+            expected_frames=16,
+            scan_shape=(4, 4),
+            detector_shape=(8, 8),
+            dtype="uint8",
+            source_signature=str(path),
+        )
 
     class _LoadResult:
         def __init__(self, path: str) -> None:
@@ -290,9 +306,9 @@ def _run_master_live_smoke(artifact_dir: Path) -> dict[str, Any]:
     def fake_load(path: str, *, det_bin=4, dtype="u8", verbose: bool = False, **kwargs):
         return _LoadResult(path)
 
-    qw.load = fake_load
-    wio.discover_masters = fake_discover_masters
-    wio.is_master_ready = fake_is_master_ready
+    gpu_io.load = fake_load
+    gpu_io.discover = fake_discover
+    gpu_io.inspect = fake_inspect
     try:
         widget = ShowFolder(
             folder,
@@ -335,7 +351,7 @@ def _run_master_live_smoke(artifact_dir: Path) -> dict[str, Any]:
             "loader_note": (
                 "Synthetic handoff-only scenario: discovery, readiness, and the "
                 "tiny torch loader are explicitly monkeypatched. The separate "
-                "direct Show4DSTEM step uses the production CPU loader."
+                "direct Show4DSTEM step uses the production GPU loader."
             ),
             "passed": True,
             "watch_changed": changed,
@@ -348,18 +364,9 @@ def _run_master_live_smoke(artifact_dir: Path) -> dict[str, Any]:
             "export_rows": export_rows,
         }
     finally:
-        if real_load is sentinel:
-            qw.__dict__.pop("load", None)
-        else:
-            qw.load = real_load
-        if real_discover_masters is sentinel:
-            wio.__dict__.pop("discover_masters", None)
-        else:
-            wio.discover_masters = real_discover_masters
-        if real_is_master_ready is sentinel:
-            wio.__dict__.pop("is_master_ready", None)
-        else:
-            wio.is_master_ready = real_is_master_ready
+        gpu_io.load = real_load
+        gpu_io.discover = real_discover
+        gpu_io.inspect = real_inspect
 
 
 def _run_direct_image_live_smoke(
@@ -517,7 +524,7 @@ def _run_direct_image_live_smoke(
 def _run_direct_show4dstem_live_smoke(
     artifact_dir: Path,
 ) -> dict[str, Any]:
-    """Exercise the production public CPU Show4DSTEM folder watcher."""
+    """Exercise the production public GPU Show4DSTEM folder watcher."""
     folder = artifact_dir / "direct-show4dstem"
     folder.mkdir(parents=True, exist_ok=True)
     _write_external_master(folder, index=0)
@@ -525,10 +532,8 @@ def _run_direct_show4dstem_live_smoke(
     started = time.perf_counter()
     widget = Show4DSTEM.from_folder(
         folder,
-        backend="cpu",
         gpus=None,
         scan_size=4,
-        load_kwargs={"scan_shape": (4, 4)},
         det_bin=1,
         dtype="u16",
         watch=True,
@@ -607,17 +612,28 @@ def _run_direct_show4dstem_live_smoke(
         assert id(widget) == initial_python_id
         assert str(widget.model_id) == initial_model_id
         assert widget.compare_page_loading is False
-        assert widget.compare_page_loaded_count == 2
-        assert widget.compare_panel_count == 2
-        assert list(widget.compare_panel_indices) == [0, 1]
-        virtual_images = np.frombuffer(
-            widget.compare_virtual_image_bytes,
-            dtype=np.float32,
-        ).reshape(2, 4, 4)
-        image_means = [float(np.mean(image)) for image in virtual_images]
-        assert np.all(np.isfinite(virtual_images))
-        assert image_means[0] > 0
-        assert image_means[1] > image_means[0]
+        is_mps = hasattr(widget, "_mps_folder_live")
+        if is_mps:
+            widget.frame_idx = 1
+            virtual_image = np.frombuffer(
+                widget.virtual_image_bytes,
+                dtype=np.float32,
+            ).reshape(4, 4)
+            assert np.all(np.isfinite(virtual_image))
+            image_means = [float(np.mean(virtual_image))]
+            assert image_means[0] > 0
+        else:
+            assert widget.compare_page_loaded_count == 2
+            assert widget.compare_panel_count == 2
+            assert list(widget.compare_panel_indices) == [0, 1]
+            virtual_images = np.frombuffer(
+                widget.compare_virtual_image_bytes,
+                dtype=np.float32,
+            ).reshape(2, 4, 4)
+            image_means = [float(np.mean(image)) for image in virtual_images]
+            assert np.all(np.isfinite(virtual_images))
+            assert image_means[0] > 0
+            assert image_means[1] > image_means[0]
         assert widget.folder_watch_state == "watching"
 
         arrival_timeline = timeline[arrival_start:]
@@ -630,8 +646,9 @@ def _run_direct_show4dstem_live_smoke(
         assert green_points
         authoritative_green = green_points[-1]
         assert authoritative_green["compare_page_loading"] is False
-        assert authoritative_green["compare_page_loaded_count"] == 2
-        assert authoritative_green["compare_panel_indices"] == [0, 1]
+        if not is_mps:
+            assert authoritative_green["compare_page_loaded_count"] == 2
+            assert authoritative_green["compare_panel_indices"] == [0, 1]
         assert authoritative_green["virtual_image_bytes"] > 0
 
         widget.stop_folder_watch()
@@ -681,10 +698,11 @@ def _run_direct_show4dstem_live_smoke(
         return {
             "name": "Direct Show4DSTEM.from_folder live lifecycle",
             "kind": "direct_public_from_folder",
+            "backend": "mps" if is_mps else "cuda",
             "uses_monkeypatch": False,
             "loader_note": (
-                "Production Show4DSTEM.from_folder with backend='cpu' over tiny "
-                "external-link HDF5 masters; no fake loader or GPU."
+                "Production native-GPU path over tiny bitshuffle-LZ4 external-link "
+                "HDF5 masters; no fake loader."
             ),
             "passed": True,
             "same_mounted_model": same_model,
@@ -831,7 +849,7 @@ def _write_report(artifact_dir: Path, report: dict[str, Any]) -> None:
   public <code>Show2D.from_folder</code>, <code>Show3D.from_folder</code>, and
   <code>Show4DSTEM.from_folder</code> lifecycles. Direct viewers retain one Python
   object and widget model through probation, stable arrival, update, and stop.
-  The Show4DSTEM direct step uses the production CPU loader and waits for fresh
+  The Show4DSTEM direct step uses the native GPU loader and waits for fresh
   visible-page pixels before accepting green Watching. Heavy real-data and GPU
   performance remain separate local-only signoffs.</p>
   <h2>Review Exports</h2>

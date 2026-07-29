@@ -405,7 +405,7 @@ def test_show4dstem_cli_count_defaults_to_full_detector(tmp_path, monkeypatch):
         seen["notebook"] = notebook
         seen["no_open"] = no_open
 
-    monkeypatch.setattr("quantem.widget.io.discover_masters", fake_discover)
+    monkeypatch.setattr("quantem.gpu.io.discover", fake_discover)
     monkeypatch.setattr(cli, "_render_4dstem_notebook", fake_render)
     monkeypatch.setattr(cli, "_launch_notebook", fake_launch)
 
@@ -427,7 +427,7 @@ def test_show4dstem_cli_count_requires_enough_masters(tmp_path, monkeypatch):
     def fake_discover(path, verbose=False):
         return [str(tmp_path / "scan_0_master.h5")]
 
-    monkeypatch.setattr("quantem.widget.io.discover_masters", fake_discover)
+    monkeypatch.setattr("quantem.gpu.io.discover", fake_discover)
 
     assert cli.main(["show4dstem", str(tmp_path), "--count", "7", "--no-open"]) == 1
 
@@ -455,7 +455,7 @@ def test_show4dstem_webgpu_cli_opens_generated_command(tmp_path, monkeypatch):
         seen["opened"] = path
         seen["no_open"] = no_open
 
-    monkeypatch.setattr("quantem.widget.io.discover_masters", fake_discover)
+    monkeypatch.setattr("quantem.gpu.io.discover", fake_discover)
     monkeypatch.setattr(cli, "_render_4dstem_webgpu_h5", fake_render)
     monkeypatch.setattr(cli, "_open_show4dstem_command", fake_open)
 

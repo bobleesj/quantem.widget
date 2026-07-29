@@ -17,8 +17,10 @@ If you don't have a 4D-STEM master.h5 on disk yet, use one of the reference
 datasets on Hugging Face — the whole flow is four lines:
 
 ```python
-from quantem.widget import ShowFolder, load, Show4DSTEM
-from quantem.widget.io import list_datasets, download, discover_masters
+from quantem.gpu.io import load
+from quantem.widget import ShowFolder, Show4DSTEM
+from quantem.gpu.io import discover
+from quantem.widget.io import list_datasets, download
 
 # 1. See what's available (returns names like '4dstem/gold_512' with prefix)
 list_datasets()
@@ -31,9 +33,9 @@ path = download("gold_512")
 ShowFolder(path)
 
 # 4. Discover the master.h5 files + load the first + open the viewer
-masters = discover_masters(path)     # sorted list of Path
-data = load(masters[0])              # native detector sampling when it fits
-Show4DSTEM(data)
+masters = discover(path)             # sorted list of Path
+result = load(masters[0])            # native detector sampling when it fits
+Show4DSTEM(result)
 ```
 
 **Gotcha**: `list_datasets()` returns `4dstem/gold_512` (with prefix) but
@@ -60,18 +62,18 @@ folder = ShowFolder("/data/session")
 folder.paths("image")  # selected files after you star panels
 ```
 
-For 4D-STEM master files, use `discover_masters` to return sorted master paths
+For 4D-STEM master files, use `quantem.gpu.io.discover` to return sorted master paths
 for a scripted load. Then inspect one file with `get_metadata` or load it with
 the memory-reduction options shown below.
 
-Prefer `discover_masters` when you just want the sorted paths back for a
+Prefer `discover` when you just want the sorted paths back for a
 scripted load:
 
 ```python
-from quantem.widget.io import discover_masters
+from quantem.gpu.io import discover
 
-masters = discover_masters("/data/session")               # all
-masters = discover_masters("/data/session", scan_shape=(512, 512))  # filter by scan size
+masters = discover("/data/session")               # all
+masters = discover("/data/session", scan_shape=(512, 512))  # filter by scan size
 ```
 
 Prefer `get_metadata` when you want raw HDF5 attributes of one file without
@@ -94,7 +96,7 @@ need a scan patch plus halo instead of the full scan plane. It reads only the
 selected HDF5 detector-frame chunks and returns a local CuPy patch:
 
 ```python
-from quantem.widget import load
+from quantem.gpu.io import load
 
 result = load(
     "/data/session/scan_00_master.h5",
@@ -181,10 +183,11 @@ domain file format when you want data that another analysis step will consume.
 ## I'm on a Linux workstation with an NVIDIA RTX GPU. How do I load a scan?
 
 ```python
-from quantem.widget import load, Show4DSTEM
+from quantem.gpu.io import load
+from quantem.widget import Show4DSTEM
 
-data = load("scan_master.h5")
-Show4DSTEM(data)
+result = load("scan_master.h5")
+Show4DSTEM(result)
 ```
 
 `load` auto-detects CUDA and decompresses straight onto the GPU (zero-copy
@@ -206,10 +209,11 @@ GPU: RTX PRO 6000 Blackwell (96 GB), L40S / A100 (48 GB), RTX 4090 / A6000
 Same one-liner as CUDA:
 
 ```python
-from quantem.widget import load, Show4DSTEM
+from quantem.gpu.io import load
+from quantem.widget import Show4DSTEM
 
-data = load("scan_master.h5")
-Show4DSTEM(data)
+result = load("scan_master.h5")
+Show4DSTEM(result)
 ```
 
 `load` auto-detects Apple Metal (MPS) and uses a zero-copy **raw-Metal**
@@ -240,8 +244,8 @@ Yes, after the 2026-07-02 `mean_dp` fix. Full-res uint16 no-bin peak = ~21 GB
 (data + widget). Fits 24 GB with ~2.5 GB headroom.
 
 ```python
-data = load("scan_master.h5")   # dtype defaults to uint16, no bin
-Show4DSTEM(data)                # ~21 GB VRAM peak
+result = load("scan_master.h5")   # dtype defaults to uint16, no bin
+Show4DSTEM(result)                # ~21 GB VRAM peak
 ```
 
 If you need more headroom for downstream compute (reconstruction, SSB), bin
@@ -414,14 +418,15 @@ Use explicit discovery plus `load(...)` when the file list is fixed and you want
 to control exactly what enters the stack:
 
 ```python
-from quantem.widget import load, discover_masters, Show4DSTEM
+from quantem.gpu.io import discover, load
+from quantem.widget import Show4DSTEM
 
-masters = discover_masters("/data/session")   # sorted, filters to *_master.h5
+masters = discover("/data/session")   # sorted, filters to *_master.h5
 data = load(masters, det_bin=1)
 Show4DSTEM(data)
 ```
 
-`discover_masters` also accepts a `scan_shape=(512, 512)` filter to keep only
+`discover` also accepts a `scan_shape=(512, 512)` filter to keep only
 matching acquisitions when a folder mixes scan sizes. Add `det_bin=2` or `4`
 only when you intentionally want a detector-reduced preview.
 
@@ -434,7 +439,7 @@ folder = ShowFolder("/data/session")  # thumbnails, metadata, selection, cache
 ```
 
 Use the embedded selection panel to open starred images as Show2D or Show3D.
-For 4D-STEM master files, pair this with `discover_masters` and `get_metadata`
+For 4D-STEM master files, pair this with `discover` and `inspect`
 before calling `load`.
 
 ## How do I inspect a single master's calibration + metadata without loading it?
@@ -477,7 +482,7 @@ data = load(path)
 ## I want to save a `LoadResult` back to disk (e.g. after binning).
 
 ```python
-from quantem.widget.io import save
+from quantem.gpu.io import save
 
 save(data, "binned_out.h5")   # compressed, matches original chunk shape
 ```
@@ -532,7 +537,7 @@ CUDA_VISIBLE_DEVICES=0 jupyter lab --no-browser --ip=0.0.0.0
 ```
 
 Use `1`, `2`, etc. for another physical GPU. This is a CUDA/NVIDIA control; it
-is not used for Apple Silicon or CPU-only machines.
+is not used for Apple Silicon machines.
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 jupyter lab --no-browser --ip=0.0.0.0
@@ -631,13 +636,13 @@ the right to share.
 ## Function reference
 
 ```{eval-rst}
-.. autofunction:: quantem.widget.io.load
+.. autofunction:: quantem.gpu.io.load
 ```
 
 ### Discover + inspect
 
 ```{eval-rst}
-.. autofunction:: quantem.widget.io.discover_masters
+.. autofunction:: quantem.gpu.io.discover
 ```
 ```{eval-rst}
 .. autofunction:: quantem.widget.io.get_metadata
@@ -679,5 +684,5 @@ the right to share.
 ### Save
 
 ```{eval-rst}
-.. autofunction:: quantem.widget.io.save
+.. autofunction:: quantem.gpu.io.save
 ```

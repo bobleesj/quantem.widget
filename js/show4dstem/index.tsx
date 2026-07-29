@@ -28,20 +28,19 @@ import {
   buildDetectorMask,
   buildFullDetectorMask,
   buildScanMask,
-  Show4DSTEMCompute,
-  Show4DSTEMCpuCompute,
-} from "../.generated/engine/webgpu/compute";
-import { readH5MasterInfo, readH5Volume } from "../.generated/engine/webgpu/h5reader";
-import { decodeBslz4Batch, type Bslz4Spec } from "../.generated/engine/webgpu/bslz4";
+  DetectorCompute,
+} from "../.generated/engine/detector/compute/webgpu/backend";
+import { readH5MasterInfo, readH5Volume } from "../.generated/engine/io/backends/webgpu/h5reader";
+import { decodeBslz4Batch, type Bslz4Spec } from "../.generated/engine/io/backends/webgpu/bslz4";
 import {
   collectShow4DSTEMLocalH5Files,
   loadShow4DSTEMLocalH5MaskedSum,
   loadShow4DSTEMLocalH5Master,
   setShow4DSTEMLocalFiles,
   show4DSTEMHasLocalFiles,
-} from "../.generated/engine/webgpu/local-h5";
-import { getGPUInfo, isSoftwareGPUAdapter } from "../.generated/engine/webgpu/device";
-import { LazyShow4DSTEM } from "../.generated/engine/webgpu/lazy";
+} from "../.generated/engine/io/backends/webgpu/local-h5";
+import { getGPUInfo, isSoftwareGPUAdapter } from "../.generated/engine/device/webgpu";
+import { LazyShow4DSTEM } from "./lazy";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
 import { findDataRange, sliderRange, computeStats, computeHistogramFromBytes, percentileClip } from "../stats";
 import { downloadBlob, extractBytes, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";
@@ -3263,7 +3262,7 @@ function Show4DSTEM() {
   const viGpuColormapRef = React.useRef<GPUColormapEngine | null>(null);
   const viGpuColormapDeviceRef = React.useRef<GPUDevice | null>(null);
   const ensureViGpuColormap = React.useCallback((
-    backend: Show4DSTEMCompute | Show4DSTEMCpuCompute,
+    backend: DetectorCompute,
   ): GPUColormapEngine | null => {
     const maybeDevice = backend as unknown as { getDevice?: () => GPUDevice };
     const device = typeof maybeDevice.getDevice === "function" ? maybeDevice.getDevice() : null;
@@ -3375,23 +3374,23 @@ function Show4DSTEM() {
       const chunksMeta = model.get("_offline_chunks") as string | undefined;
       const bslz4Meta = model.get("_offline_bslz4") as string | undefined;
       const gunzip = async (b: Uint8Array) => new Uint8Array(await new Response(new Blob([b as BlobPart]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
-      let compute: Show4DSTEMCompute | Show4DSTEMCpuCompute | null = null;
+      let compute: DetectorCompute | null = null;
       let cpuStack: Uint8Array | null = null;  // full decompressed stack for the per-frame probe (single-chunk only)
       // Multi-VOLUME (5D): several datasets, decoded LAZILY (decode-on-scrub) with a
       // small LRU of resident volumes. Only the viewed dataset (plus a few recent)
       // lives in VRAM, so it runs on a laptop regardless of how many h5 files - and
       // first paint is one decode, not N. The frame slider picks the active dataset.
-      let computes: (Show4DSTEMCompute | Show4DSTEMCpuCompute)[] = [];   // resident set for single / non-lazy paths
+      let computes: (DetectorCompute)[] = [];   // resident set for single / non-lazy paths
       let volMetas: any[] = [];                  // multi-volume descriptors (lazy)
-      const volCache = new Map<number, Show4DSTEMCompute>();   // LRU: idx -> decoded volume
-      const volLoadPromises = new Map<number, Promise<Show4DSTEMCompute | Show4DSTEMCpuCompute | null>>();
-      const inlineVolCache = new Map<number, Show4DSTEMCompute | Show4DSTEMCpuCompute>(); // LRU for inline gzip 5D exports
+      const volCache = new Map<number, DetectorCompute>();   // LRU: idx -> decoded volume
+      const volLoadPromises = new Map<number, Promise<DetectorCompute | null>>();
+      const inlineVolCache = new Map<number, DetectorCompute>(); // LRU for inline gzip 5D exports
       const compareResidentTarget = Math.max(3, Math.min(12, Math.max(1, Number(model.get("compare_max_panels") || 3))));
       const MAX_RESIDENT = compareResidentTarget; // recent / compare volumes kept hot for instant scrub and detector drags
       let latestResidentVolumeIndex: number | null = null;
       let volumeCount = 0;
-      let getVol: ((idx: number) => Promise<Show4DSTEMCompute | Show4DSTEMCpuCompute | null>) | null = null;
-      let initialVolumeLoad: Promise<Show4DSTEMCompute | Show4DSTEMCpuCompute | null> | null = null;
+      let getVol: ((idx: number) => Promise<DetectorCompute | null>) | null = null;
+      let initialVolumeLoad: Promise<DetectorCompute | null> | null = null;
       let h5VolumePreload: Promise<void> | null = null;
       let h5VolumePreloadDone = false;
       // Browser HDF5 source: normal CLI exports use H5 URLs below. Lazy URLs are
@@ -3450,7 +3449,7 @@ function Show4DSTEM() {
         h5MasterInfoCache.set(sourceUrl, promise);
         return promise;
       };
-      const loadH5Compute = async (sourceUrl: string, label = "HDF5 source"): Promise<Show4DSTEMCompute | null> => {
+      const loadH5Compute = async (sourceUrl: string, label = "HDF5 source"): Promise<DetectorCompute | null> => {
         if (!disposed) setOfflineBackendStatus(`Loading ${label}`);
         let h5BadPx = new Uint32Array(0);
         const embeddedBadPxJson = model.get("_offline_bad_px") as string | undefined;
@@ -3508,7 +3507,7 @@ function Show4DSTEM() {
               };
               if (!disposed) setH5LocalSourceStatus(`Local HDF5 ${local.profile.totalMs} ms`);
               if (!disposed) setOfflineBackendStatus(`Local ${label} ready in ${local.profile.totalMs} ms`);
-              const created = Show4DSTEMCompute.fromGpuChunks(
+              const created = DetectorCompute.fromGpuChunks(
                 local.device,
                 local.chunks,
                 local.scanCount,
@@ -3723,7 +3722,7 @@ function Show4DSTEM() {
             decodeCompressedMB: Math.round(__decodeCompressedMB),
             decodeIncludesUpload: true,
             decompressGBps: +(__decGB / Math.max(0.001, __decMs / 1000)).toFixed(2) };
-          const created = dev ? Show4DSTEMCompute.fromGpuChunks(dev, gpuChunks, scanRows * scanCols, ds, computeMode) : null;
+          const created = dev ? DetectorCompute.fromGpuChunks(dev, gpuChunks, scanRows * scanCols, ds, computeMode) : null;
           if (created && h5BadPx.length) created.badPx = h5BadPx;
           if (!disposed) setOfflineBackendStatus(`${label} ready`);
           return created;
@@ -3744,7 +3743,7 @@ function Show4DSTEM() {
           mergedStart += chunk.nFrames;
           return spec;
         });
-        const created = await Show4DSTEMCompute.createFromBslz4Chunked(mergedSpecs, scanRows * scanCols, vol.detSize, decodeDtype, vol.srcDtype);
+        const created = await DetectorCompute.createFromBslz4Chunked(mergedSpecs, scanRows * scanCols, vol.detSize, decodeDtype, vol.srcDtype);
         if (created && h5BadPx.length) created.badPx = h5BadPx;
         if (!disposed) setOfflineBackendStatus(`${label} ready`);
         return created;
@@ -3758,7 +3757,7 @@ function Show4DSTEM() {
           const existingLoad = volLoadPromises.get(clamped);
           if (existingLoad) return await existingLoad;
           const loadPromise = (async () => {
-            const cc = await LazyShow4DSTEM.create(urls[clamped]) as unknown as Show4DSTEMCompute | null;
+            const cc = await LazyShow4DSTEM.create(urls[clamped]) as unknown as DetectorCompute | null;
             if (cc) {
               volCache.set(clamped, cc);
               latestResidentVolumeIndex = clamped;
@@ -3776,7 +3775,7 @@ function Show4DSTEM() {
         };
         const initialIdx = Math.max(0, Math.min(urls.length - 1, model.get("frame_idx") | 0));
         const lz = await getVol(initialIdx);
-        compute = lz as unknown as Show4DSTEMCompute;
+        compute = lz as unknown as DetectorCompute;
       } else if (h5Urls.length) {
         volumeCount = h5Urls.length;
         getVol = async (idx: number) => {
@@ -3949,7 +3948,7 @@ function Show4DSTEM() {
           for (const c of v.chunks) specs.push({ compressed: await fetchU8(v.base + c.bin), blockMeta: await fetchU32(v.base + c.meta),
             nFrames: c.nScan, nBlocksPerFrame: c.nBlocksPerFrame, blockElems: c.blockElems,
             detSize: detR * detC, startScan: c.startScan, nScan: c.nScan });
-          const cc = await Show4DSTEMCompute.createFromBslz4Chunked(specs, scanRows * scanCols, detR * detC, "uint8", srcDtype);
+          const cc = await DetectorCompute.createFromBslz4Chunked(specs, scanRows * scanCols, detR * detC, "uint8", srcDtype);
           if (cc && v.badPx) cc.badPx = new Uint32Array(v.badPx);
           return cc;
         };
@@ -3982,7 +3981,7 @@ function Show4DSTEM() {
           const c = await decodeVol(m); if (c) computes.push(c); compute = c;
         } else {
           const raw = await fetchU8(offlineUrl!);
-          compute = await Show4DSTEMCompute.createFromBslz4({ compressed: raw, blockMeta: new Uint32Array(m.blockMeta),
+          compute = await DetectorCompute.createFromBslz4({ compressed: raw, blockMeta: new Uint32Array(m.blockMeta),
             nFrames: m.nFrames, nBlocksPerFrame: m.nBlocksPerFrame, blockElems: m.blockElems, detSize: detR * detC }, "uint8");
           if (compute) computes.push(compute);
         }
@@ -3996,7 +3995,7 @@ function Show4DSTEM() {
           const bytes = await gunzip(blob.subarray(m.coff, m.coff + m.clen));
           specs.push({ bytes, startScan: m.startScan, nScan: m.nScan });
         }
-        compute = await Show4DSTEMCompute.createChunked(specs, scanRows * scanCols, detR * detC);
+        compute = await DetectorCompute.createChunked(specs, scanRows * scanCols, detR * detC);
       } else {
         // Single stack: companion fetch or inline, then inflate (gzip, lossless).
         let stack: Uint8Array;
@@ -4021,7 +4020,7 @@ function Show4DSTEM() {
             if (inlineVolCache.has(idx)) return inlineVolCache.get(idx)!;
             const start = idx * volumeBytes;
             const bytes = stack.subarray(start, start + volumeBytes);
-            const cc = await Show4DSTEMCompute.create(bytes, scanCount, detSize) ?? Show4DSTEMCpuCompute.create(bytes, scanCount, detSize);
+            const cc = await DetectorCompute.create(bytes, scanCount, detSize);
             if (cc) {
               inlineVolCache.set(idx, cc);
               const activeFrame = Math.max(0, Math.min(widgetFrames - 1, model.get("frame_idx") | 0));
@@ -4037,10 +4036,10 @@ function Show4DSTEM() {
           compute = await getVol(Math.max(0, Math.min(widgetFrames - 1, model.get("frame_idx") | 0)));
         } else {
           cpuStack = stack;  // keep for the per-frame probe (single-chunk only)
-          compute = await Show4DSTEMCompute.create(stack, scanRows * scanCols, detR * detC) ?? Show4DSTEMCpuCompute.create(stack, scanRows * scanCols, detR * detC);
+          compute = await DetectorCompute.create(stack, scanRows * scanCols, detR * detC);
         }
       }
-      const publishComputeDpcReady = (backend: Show4DSTEMCompute | Show4DSTEMCpuCompute) => {
+      const publishComputeDpcReady = (backend: DetectorCompute) => {
         setWebgpuDpcReady(Boolean(
           (backend as unknown as { maskedDpcBuffer?: unknown }).maskedDpcBuffer
           || (backend as unknown as { maskedIDpcBuffer?: unknown }).maskedIDpcBuffer
@@ -4051,7 +4050,9 @@ function Show4DSTEM() {
       if ((!compute && !initialVolumeLoad) || disposed) {
         compute?.dispose();
         if (!disposed) {
-          setOfflineBackendError("Could not initialize the 4D-STEM browser data source.");
+          setOfflineBackendError(
+            "WebGPU is unavailable. Show4DSTEM scientific compute requires a GPU; no CPU fallback is used."
+          );
           setOfflineBackendStatus("");
           setOfflineBackendLoading(false);
         }
@@ -4066,7 +4067,7 @@ function Show4DSTEM() {
       }
       const dpcMask = buildFullDetectorMask(detR, detC);
       const computeDpcImage = async (
-        backend: Show4DSTEMCompute | Show4DSTEMCpuCompute,
+        backend: DetectorCompute,
         source: DpcGpuSource,
       ): Promise<Float32Array | null> => {
         if (source === "iDPC") {
@@ -4248,7 +4249,7 @@ function Show4DSTEM() {
       };
       let dpcBufferQueue: Promise<void> = Promise.resolve();
       const computeDpcBufferImage = async (
-        backend: Show4DSTEMCompute | Show4DSTEMCpuCompute,
+        backend: DetectorCompute,
         source: DpcGpuSource,
       ): Promise<boolean> => {
         const run = async (): Promise<boolean> => {
@@ -4312,7 +4313,7 @@ function Show4DSTEM() {
         return await queued;
       };
       const computeRoiBufferImage = (
-        backend: Show4DSTEMCompute | Show4DSTEMCpuCompute,
+        backend: DetectorCompute,
         mask: Uint32Array,
       ): boolean => {
         const engine = ensureViGpuColormap(backend);
@@ -4395,7 +4396,7 @@ function Show4DSTEM() {
         }
         const engine = ensureViGpuColormap({
           getDevice: () => product.device,
-        } as unknown as Show4DSTEMCompute);
+        } as unknown as DetectorCompute);
         let displayed = false;
         if (engine) {
           engine.adoptBuffer(VI_GPU_SLOT, product.buffer, product.scanCols, product.scanRows);
@@ -4744,14 +4745,14 @@ function Show4DSTEM() {
           const computeStartedAt = performance.now();
           const mask0 = buildDetectorMask(model, detR, detC);
           let slotCursor = 0;
-          const batchComputes: Show4DSTEMCompute[] = [];
+          const batchComputes: DetectorCompute[] = [];
           const batchSlots: number[] = [];
           const batchFrames: number[] = [];
           for (const idx of indices) {
             const slot = COMPARE_GPU_SLOT_BASE + slotCursor++;
             if (getVol && !volIsResident(idx) && (interactiveDrag || !h5VolumePreloadDone)) continue;
             const panelCompute = getVol ? await getVol(idx) : compute;
-            if (!(panelCompute instanceof Show4DSTEMCompute)) continue;
+            if (!(panelCompute instanceof DetectorCompute)) continue;
             batchComputes.push(panelCompute);
             batchSlots.push(slot);
             batchFrames.push(idx);
@@ -4789,13 +4790,13 @@ function Show4DSTEM() {
                 return true;
               }
               const prevBuffers = batchFrames.map((frame) => previous.buffers.get(frame)!);
-              const delta = Show4DSTEMCompute.maskedSumDeltaBuffersBatch(batchComputes, prevBuffers, addedMask, removedMask);
+              const delta = DetectorCompute.maskedSumDeltaBuffersBatch(batchComputes, prevBuffers, addedMask, removedMask);
               buffers = delta.buffers;
               path = delta.path;
               addedPixels = delta.addedPixels;
               removedPixels = delta.removedPixels;
             } else {
-              const full = Show4DSTEMCompute.maskedSumBuffersBatch(batchComputes, mask0);
+              const full = DetectorCompute.maskedSumBuffersBatch(batchComputes, mask0);
               buffers = full.buffers;
               path = full.path;
             }
@@ -4911,16 +4912,16 @@ function Show4DSTEM() {
         prepareDetectorMajor: async (options?: { maxVolumes?: number }) => {
           const indices = compareVisibleIndices();
           const maxVolumes = Math.max(1, Math.min(indices.length, Math.round(Number(options?.maxVolumes ?? indices.length))));
-          const loaded = [] as Show4DSTEMCompute[];
+          const loaded = [] as DetectorCompute[];
           for (const idx of indices) {
             if (loaded.length >= maxVolumes) break;
             const panelCompute = getVol ? await getVol(idx) : compute;
-            if (panelCompute instanceof Show4DSTEMCompute) loaded.push(panelCompute);
+            if (panelCompute instanceof DetectorCompute) loaded.push(panelCompute);
           }
           const device = loaded[0]?.getDevice();
           if (!device || !loaded.length) return { available: false, reason: "no loaded WebGPU volumes" };
           const startedAt = performance.now();
-          const result = Show4DSTEMCompute.prepareU8WordMajorBatch(loaded);
+          const result = DetectorCompute.prepareU8WordMajorBatch(loaded);
           await device.queue.onSubmittedWorkDone().catch(() => {});
           return {
             ...result,
@@ -4969,10 +4970,10 @@ function Show4DSTEM() {
           let maskPixels = 0;
           for (let i = 0; i < mask.length; i++) if (mask[i]) maskPixels++;
           const prepStartedAt = performance.now();
-          const loaded = [] as Show4DSTEMCompute[];
+          const loaded = [] as DetectorCompute[];
           for (const idx of indices) {
             const panelCompute = getVol ? await getVol(idx) : compute;
-            if (panelCompute instanceof Show4DSTEMCompute) loaded.push(panelCompute);
+            if (panelCompute instanceof DetectorCompute) loaded.push(panelCompute);
           }
           await device.queue.onSubmittedWorkDone().catch(() => {});
           const prepMs = performance.now() - prepStartedAt;
@@ -5006,7 +5007,7 @@ function Show4DSTEM() {
             const slots = [] as number[];
             const computeSubmitStartedAt = performance.now();
             let adopted = 0;
-            const { buffers, path } = Show4DSTEMCompute.maskedSumBuffersBatch(loaded, mask);
+            const { buffers, path } = DetectorCompute.maskedSumBuffersBatch(loaded, mask);
             for (let i = 0; i < buffers.length; i++) {
               const slot = COMPARE_GPU_SLOT_BASE + i;
               engine.adoptBuffer(slot, buffers[i], scanCols, scanRows);
@@ -5231,11 +5232,11 @@ function Show4DSTEM() {
           const centers = options?.steps?.length
             ? options.steps
             : Array.from({ length: 8 }, (_, i): [number, number] => [centerRow + (i > 3 ? 1 : 0), centerCol + i]);
-          const loaded = [] as Show4DSTEMCompute[];
+          const loaded = [] as DetectorCompute[];
           const loadedIndices = [] as number[];
           for (const idx of indices) {
             const panelCompute = getVol ? await getVol(idx) : compute;
-            if (panelCompute instanceof Show4DSTEMCompute) {
+            if (panelCompute instanceof DetectorCompute) {
               loaded.push(panelCompute);
               loadedIndices.push(idx);
             }
@@ -5295,13 +5296,13 @@ function Show4DSTEM() {
                 if (next && !prev) { addedMask[i] = 1; addedPixels++; }
                 else if (!next && prev) { removedMask[i] = 1; removedPixels++; }
               }
-              const delta = Show4DSTEMCompute.maskedSumDeltaBuffersBatch(loaded, previousBuffers, addedMask, removedMask);
+              const delta = DetectorCompute.maskedSumDeltaBuffersBatch(loaded, previousBuffers, addedMask, removedMask);
               buffers = delta.buffers;
               path = delta.path;
               addedPixels = delta.addedPixels;
               removedPixels = delta.removedPixels;
             } else {
-              const full = Show4DSTEMCompute.maskedSumBuffersBatch(loaded, mask);
+              const full = DetectorCompute.maskedSumBuffersBatch(loaded, mask);
               buffers = full.buffers;
               path = full.path;
             }

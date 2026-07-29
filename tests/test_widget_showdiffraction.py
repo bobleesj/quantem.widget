@@ -1,11 +1,13 @@
 import json
+from collections import namedtuple
 
 import numpy as np
 import pytest
 import torch
 
 from quantem.widget import ShowDiffraction
-from quantem.widget.io import LoadResult
+
+LoadResult = namedtuple("LoadResult", ("data", "metadata"))
 
 
 def test_showdiffraction_2d_single_frame():

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local-only sharded multi-GPU ``quantem.widget.load`` benchmark.
+"""Local-only sharded multi-GPU ``quantem.gpu.io.load`` benchmark.
 
 Use this when a scientist wants to browse many real 4D-STEM masters from one
 folder and keep them split across multiple NVIDIA GPUs. The benchmark reports

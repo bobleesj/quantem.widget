@@ -868,7 +868,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             raise RuntimeError("Crop refit requires a source-backed SSB session.")
         scan_region = _validate_ssb_scan_region(scan_region, self._source_scan_shape)
 
-        from quantem.widget.io import LoadResult, load
+        from quantem.gpu.io import load
 
         previous = self._ssb_ref
         loaded = load(
@@ -878,11 +878,6 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             scan_shape=self._source_scan_shape,
             verbose=False,
         )
-        if not isinstance(loaded, LoadResult):
-            raise TypeError(
-                "A ShowPtycho crop must load one 4D-STEM dataset; "
-                f"got {type(loaded).__name__}."
-            )
         rebuilt = SSB.from_array(
             loaded.data,
             backend=previous.backend,

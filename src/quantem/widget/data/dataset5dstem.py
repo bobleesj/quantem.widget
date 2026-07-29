@@ -7,7 +7,7 @@ array-backed). So this is a self-contained torch container - it does NOT depend
 on quantem core - and ships with quantem.live today.
 
 Migrate back to ``quantem.core.datastructures.Dataset5dstem`` once #228/#231
-merge: re-point the import in ``quantem.gpu.io.hdf5`` and delete this file. The
+merge: re-point the import in ``quantem.gpu.io`` and delete this file. The
 public surface (from_tensor / from_frames / shape / devices / summary / free /
 to / offload / numpy / frames / is_sharded / indexing) mirrors the core version to keep that
 swap mechanical. See the migration GitHub issue.

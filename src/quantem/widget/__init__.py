@@ -43,7 +43,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
         "quantem.widget.showeds",
         "load_emd_spectrum_image",
     ),
-    "load": ("quantem.gpu.io.hdf5", "load"),
     "read_gif": ("quantem.widget.io.image", "read_gif"),
     "read_image": ("quantem.widget.io.image", "read_image"),
     "read_image_stack": ("quantem.widget.io.image", "read_image_stack"),

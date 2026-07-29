@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import json
 from pathlib import Path
 
@@ -9,9 +8,10 @@ import pytest
 
 
 def _webgpu_source(name: str) -> str:
-    from quantem.gpu import webgpu
-
-    return webgpu.source_text(f"webgpu/{name}")
+    repo = Path(__file__).resolve().parents[1]
+    return (repo / "js" / ".generated" / "engine" / name).read_text(
+        encoding="utf-8"
+    )
 
 
 def test_show4dstem_cuda_keeps_cupy_compute_source_for_rawkernel() -> None:
@@ -34,12 +34,10 @@ def test_show4dstem_cuda_keeps_cupy_compute_source_for_rawkernel() -> None:
     mask = np.zeros((12, 12), dtype=bool)
     mask[4:8, 4:8] = True
 
-    assert widget._compute.__class__.__name__ == "CudaKernelCompute"
     np.testing.assert_array_equal(
         widget._fast_masked_sum(mask),
         np.full((4, 4), int(mask.sum()), dtype=np.float32),
     )
-    assert widget._compute._total_cache_uint64 is None
 
 
 def test_show4dstem_cuda_compare_grid_uses_rawkernel_frames() -> None:
@@ -56,7 +54,7 @@ def test_show4dstem_cuda_compare_grid_uses_rawkernel_frames() -> None:
     widget = Show4DSTEM(
         data,
         precompute_virtual_images=False,
-        view_mode="compare",
+        view_mode="multiple",
         compare_max_panels=2,
         center=(5.5, 5.5),
         bf_radius=2.0,
@@ -75,20 +73,23 @@ def test_show4dstem_cuda_compare_grid_uses_rawkernel_frames() -> None:
     assert list(widget._cuda_compare_compute_backends) == [0, 1]
 
 
-def test_show4dstem_mps_contract_uses_quantem_gpu_metal_backend() -> None:
-    from quantem.gpu.compute.backends import MetalRawBackend
+def test_show4dstem_uses_public_detector_session() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "quantem"
+        / "widget"
+        / "show4dstem.py"
+    ).read_text(encoding="utf-8")
 
-    source = inspect.getsource(MetalRawBackend.masked_sum)
-
-    assert "fast_vi" in source
-    assert "_masked_sum_with_total_cache" in source
-    assert "_total_cache" in source
-    assert "TorchBackend" not in source
+    assert "from quantem.gpu.detector import prepare" in source
+    assert "quantem.gpu.detector.compute" not in source
 
 
 def test_show4dstem_webgpu_engine_has_selected_index_vi_kernel() -> None:
     repo = Path(__file__).resolve().parents[1]
-    source = _webgpu_source("compute.ts")
+    source = _webgpu_source("detector/compute/webgpu/backend.ts")
+    dpc_source = _webgpu_source("dpc/compute/webgpu/kernels.ts")
     frontend = (repo / "js" / "show4dstem" / "index.tsx").read_text(
         encoding="utf-8"
     )
@@ -102,12 +103,11 @@ def test_show4dstem_webgpu_engine_has_selected_index_vi_kernel() -> None:
     assert "maskedSumBuffer(mask: Uint32Array)" in source
     assert "maskedDpcBuffer(mask: Uint32Array" in source
     assert "maskedIDpcBuffer(" in source
-    assert "const IDPC_POISSON_WGSL" in source
+    assert "const IDPC_POISSON_WGSL" in dpc_source
     assert "getDevice(): GPUDevice" in source
     assert "readFloatBuffer(buf: GPUBuffer" in source
-    assert "const DPC_MEAN_WGSL" in source
-    assert "const DPC_COMPONENT_WGSL" in source
-    assert "enable subgroups;" in source
+    assert "const DPC_MEAN_WGSL" in dpc_source
+    assert "const DPC_COMPONENT_WGSL" in dpc_source
     assert "adoptBuffer(idx: number, buffer: GPUBuffer" in (
         repo / "js" / "colormaps.ts"
     ).read_text(encoding="utf-8")
@@ -140,10 +140,10 @@ def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
     frontend = (repo / "js" / "show4dstem" / "index.tsx").read_text(
         encoding="utf-8"
     )
-    lazy = _webgpu_source("lazy.ts")
-    local_h5 = _webgpu_source("local-h5.ts")
-    compute = _webgpu_source("compute.ts")
-    bslz4 = _webgpu_source("bslz4.ts")
+    lazy = (repo / "js" / "show4dstem" / "lazy.ts").read_text(encoding="utf-8")
+    local_h5 = _webgpu_source("io/backends/webgpu/local-h5.ts")
+    compute = _webgpu_source("detector/compute/webgpu/backend.ts")
+    bslz4 = _webgpu_source("io/backends/webgpu/bslz4.ts")
 
     assert "decodeBslz4Batch" in frontend
     assert "const decodeQueue" in frontend
@@ -230,7 +230,7 @@ def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
     assert "new Blob([READ_WORKER_SOURCE]" in local_h5
     assert "decodeBslz4ToStack({ ...vol.chunks[0], startScan" not in frontend
     assert "const mergedSpecs = vol.chunks.map((chunk) => {" in frontend
-    assert "Show4DSTEMCompute.createFromBslz4Chunked(mergedSpecs" in frontend
+    assert "DetectorCompute.createFromBslz4Chunked(mergedSpecs" in frontend
     assert "_h5_uint8_lossless" in (
         repo / "src" / "quantem" / "widget" / "show4dstem.py"
     ).read_text(encoding="utf-8")

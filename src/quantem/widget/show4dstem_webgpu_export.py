@@ -260,9 +260,9 @@ def export_show4dstem_hdf5_viewer(
 def _read_h5_bad_pixel_indices(path: pathlib.Path, detector_size: int) -> tuple[list[int], bool]:
     """Return detector pixels from HDF5 metadata and whether a mask existed."""
     try:
-        from quantem.gpu.io.hdf5 import read_pixel_mask
+        from quantem.gpu.io import inspect
 
-        mask = read_pixel_mask(path)
+        mask = inspect(path).pixel_mask
     except Exception:
         return [], False
     if mask is None:
