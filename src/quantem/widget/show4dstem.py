@@ -9219,25 +9219,30 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         key = self._compare_preset_cache_key(indices, preset_name=preset_name)
         if key is None:
             return None
-        with self._compare_cache_lock:
-            cached = self._compare_virtual_page_cache.get(key)
-            if cached is None:
-                return None
-        payload, cached_indices, status, _, source_token = cached
-        if source_token is not None:
-            current_token = self._compare_source_signature_token(cached_indices)
-            if current_token != source_token:
-                with self._compare_cache_lock:
-                    current = self._compare_virtual_page_cache.get(key)
-                    if current is cached:
-                        self._compare_virtual_page_cache.pop(key, None)
-                        self._compare_virtual_page_cache_bytes -= cached[3]
-                return None
-        with self._compare_cache_lock:
-            if self._compare_virtual_page_cache.get(key) is not cached:
-                return None
-            self._compare_virtual_page_cache.move_to_end(key)
-            return payload, cached_indices, status
+        while True:
+            with self._compare_cache_lock:
+                cached = self._compare_virtual_page_cache.get(key)
+                if cached is None:
+                    return None
+            payload, cached_indices, status, _, source_token = cached
+            current_token = (
+                self._compare_source_signature_token(cached_indices)
+                if source_token is not None
+                else None
+            )
+            with self._compare_cache_lock:
+                current = self._compare_virtual_page_cache.get(key)
+                if current is not cached:
+                    # A background refresh published a newer value while the
+                    # source signature was checked. Validate that value instead
+                    # of exposing a transient cache miss to the visible page.
+                    continue
+                if source_token is not None and current_token != source_token:
+                    self._compare_virtual_page_cache.pop(key, None)
+                    self._compare_virtual_page_cache_bytes -= cached[3]
+                    return None
+                self._compare_virtual_page_cache.move_to_end(key)
+                return payload, cached_indices, status
 
     def _store_cached_compare_preset(
         self,
