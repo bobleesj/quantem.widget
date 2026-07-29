@@ -610,7 +610,7 @@ def test_browser_smoke_guards_zoom_canvas_continuity():
     assert "def _exercise_zoom_continuity" in smoke
     assert "zoom changed the visible canvas composition" in smoke
     assert "zoom exposed a blank or flat canvas frame" in smoke
-    assert 'if widget in {"show2d", "show3d"}:' in smoke
+    assert 'if widget in {"show2d", "show3d", "showptycho"}:' in smoke
 
 
 def test_show3d_stress_runner_covers_exact_and_sidecar_exports():

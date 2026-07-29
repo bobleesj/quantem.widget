@@ -562,6 +562,9 @@ def test_crop_applies_before_denoise():
 
     image = _image(256)
     w = Show2D(image, denoise="gaussian", denoise_sigma=3, view_box=(32, 32, 64), verbose=False)
+    # Exercise the Python reference path explicitly. Browser/WebGPU filtering
+    # intentionally ships the cropped frame raw and applies denoise in-browser.
+    w._webgpu_filter_ok = False
     w.crop_to_view()
     sent = np.frombuffer(w.frame_bytes, dtype=np.float32, count=64 * 64).reshape(64, 64)
     expected = apply_display_filter(image[32:96, 32:96], mode="gaussian", sigma=3.0)
