@@ -16,7 +16,8 @@ export function syncGpuWebgpuSources({ targetDir = "js/.generated/engine" } = {}
   const python = process.env.PYTHON || "python";
   const code = `
 import json
-from importlib.resources import files
+import os
+from pathlib import Path
 
 names = (
     "device/webgpu.ts",
@@ -36,7 +37,13 @@ names = (
     "ssb/compute/webgpu/kernels/fft1024.ts",
     "ssb/compute/webgpu/kernels/index.ts",
 )
-root = files("quantem.gpu")
+source_root = os.environ.get("QUANTEM_GPU_SRC")
+if source_root:
+    root = Path(source_root) / "quantem" / "gpu"
+else:
+    from importlib.resources import files
+
+    root = files("quantem.gpu")
 print(json.dumps({
     name: root.joinpath(*name.split("/")).read_text(encoding="utf-8")
     for name in names
@@ -63,7 +70,11 @@ print(json.dumps({
         ...srcDirs,
         process.env.PYTHONPATH || "",
       ].filter(Boolean).join(path.delimiter);
-      result = runExport({ ...process.env, PYTHONPATH: pythonPath });
+      result = runExport({
+        ...process.env,
+        PYTHONPATH: pythonPath,
+        QUANTEM_GPU_SRC: srcDirs[0],
+      });
     }
   }
   if (result.status !== 0) {
