@@ -69,6 +69,9 @@ sphinx:
       - custom.css
     html_js_files:
       - toc-toggle.js
+      # Keeps the mobile hamburger wired across sphinx theme drift; the file
+      # is idempotent so double-inclusion via _static auto-add is harmless.
+      - nav-toggle-fix.js
     # Jupyter Book already injects the ipywidgets html-manager that rehydrates the
     # baked anywidget views, so we do NOT add our own embed-amd: a second manager
     # mounts every widget twice. (Confirmed: removing this kills the double render.)
