@@ -581,9 +581,9 @@ browser drawing, or standalone HTML export:
 PYTHONPATH=src:. python scripts/widget_show4dstem_heavy_signoff.py \
   --search-root /path/to/local/real/4dstem/data \
   --backend cuda \
-  --max-masters 2 \
-  --det-bin 4 \
-  --export-det-bin 4 \
+  --max-masters 1 \
+  --det-bin 1 \
+  --export-det-bin 1 \
   --min-fps 30
 ```
 
@@ -609,10 +609,19 @@ The Show4DSTEM signoff:
   and recompute latency,
 - writes `show4dstem-heavy-signoff-report.json` and `index.html`.
 
-Run two Show4DSTEM modes when memory allows:
+Run the full-detector mode first when memory allows:
 
 ```bash
-# Practical browse path: detector-binned live data on NVIDIA/CUDA.
+# Full detector path: this is the signoff gate for native detector behavior.
+PYTHONPATH=src:. python scripts/widget_show4dstem_heavy_signoff.py \
+  --search-root /path/to/local/real/4dstem/data \
+  --backend cuda \
+  --max-masters 1 \
+  --det-bin 1 \
+  --export-det-bin 1 \
+  --min-fps 30
+
+# Explicit preview path: only for a labeled capacity or automation diagnostic.
 PYTHONPATH=src:. python scripts/widget_show4dstem_heavy_signoff.py \
   --search-root /path/to/local/real/4dstem/data \
   --backend cuda \
@@ -620,21 +629,12 @@ PYTHONPATH=src:. python scripts/widget_show4dstem_heavy_signoff.py \
   --det-bin 4 \
   --export-det-bin 4 \
   --min-fps 30
-
-# No-bin backend path: full detector data in NVIDIA memory, compact export for sharing.
-PYTHONPATH=src:. python scripts/widget_show4dstem_heavy_signoff.py \
-  --search-root /path/to/local/real/4dstem/data \
-  --backend cuda \
-  --max-masters 1 \
-  --det-bin 1 \
-  --export-det-bin 8 \
-  --min-fps 30
 ```
 
 The no-bin pass is important because it exposes real resident memory pressure,
-full-detector backend behavior, and virtual-detector latency.
-Use a compact export bin for that pass unless the explicit goal is to measure a
-large private standalone HTML payload.
+full-detector backend behavior, and virtual-detector latency. A detector-binned
+pass is useful only as a labeled preview or capacity diagnostic; it does not
+prove full-resolution Show4DSTEM behavior.
 
 ### Private Seven-Tilt Gate
 

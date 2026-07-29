@@ -124,7 +124,7 @@ browse-quality or count-preserving.
 | Show2D | yes | `single` | `full`, `uint8` | planned | no | `uint8` stores display-scaled image data |
 | Show3D | yes | `single`; large reviews use `export_sidecar(...)` folder output | `full`, `uint8` | planned | yes, via `export_sidecar(...)` | `uint8` stores display-scaled volume data; folder output keeps the viewer HTML small and loads the stack from a nearby data file. See the [advanced tutorial](../tutorials/advanced.md) for the full-resolution folder workflow. |
 | Show3DSlices | yes | `single` | `full`, `uint8` | planned | no | `uint8` stores display-scaled volume data |
-| Show4DSTEM | yes | `single`; interactive exports may write a local launcher/folder when a companion payload must be served | `uint8`, `full`/`uint16` | detector: `1`, `2`, `4`, `8`; scan: `1`, `2`, `4`, `8` | yes, for companion-data interactive exports and HDF5 bundles | `export_kind="report"` writes static PNG virtual-image pages with no raw 4D; `export_kind="interactive"` writes browser WebGPU raw-4D payload. `scan_bin` and `det_bin` are explicit mean-binning choices. |
+| Show4DSTEM | yes | `single`; interactive exports may write a local launcher/folder when a companion payload must be served | `uint8`, `full`/`uint16` | detector: `1`, `2`, `4`, `8`; scan: `1`, `2`, `4`, `8` | yes, for companion-data interactive exports and HDF5 bundles | `export_kind="report"` writes static PNG virtual-image pages with no raw 4D; `export_kind="interactive"` writes browser WebGPU raw-4D payload. The CLI WebGPU folder keeps source HDF5 beside `index.html` and `Show4DSTEM.command`. `scan_bin` and `det_bin` are explicit mean-binning choices. |
 | ShowEDS | yes | `single`, `folder` | `full` | `2`, `4` | yes | count-preserving sum downsample across spatial and energy axes |
 
 The public Python calls are:
@@ -163,6 +163,13 @@ is easiest to email, upload, and move around.
 Use `mode="folder"` when the HTML file should read exact data from a nearby
 data folder or URL. The HTML contains the viewer and startup state; the large
 dataset stays outside the HTML file.
+
+For Show4DSTEM WebGPU CLI exports, this folder shape is the normal
+full-detector no-notebook path: `index.html`, `Show4DSTEM.command`, `.viewer/`,
+and anonymous `tilt_NN_master.h5` / `tilt_NN_data_*.h5` links. Double-click
+`index.html` and grant the folder in Chromium, or run the command file to serve
+the same folder locally. Do not replace that path with a precomputed lazy
+`profile.bin`/`com.bin` bundle in public docs.
 
 Use `mode="folder"` when:
 
@@ -204,6 +211,13 @@ exported page.
 Use `export_kind="interactive"` when the reader must keep changing detector ROIs
 offline in the browser. It embeds or serves a binned raw-4D payload and runs the
 virtual-detector math in WebGPU. This can be much larger than a report.
+
+For raw HDF5 masters, prefer the CLI WebGPU folder route when the user wants
+native detector sampling without a notebook:
+
+```bash
+quantem show4dstem /data/session --backend webgpu --html --count 7 --bin 1 --dtype uint8
+```
 
 Choose `dtype="uint8"` for compact browse payloads and `dtype="uint16"` when
 the exported interactive raw-4D payload must preserve the wider detector-count

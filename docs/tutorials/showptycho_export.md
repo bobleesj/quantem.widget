@@ -32,6 +32,9 @@ This writes a folder:
 The export persists no expanded float32 images and no complex64 BF reducers.
 By default, the browser range-reads `source/bf_columns.u8` or
 `source/bf_columns.u16` and does not decode the compressed HDF5 stack on open.
+Saved aberration states live in `snapshots/snapshots.json`; reopening the
+folder through a folder grant or `quantem showptycho out/` reads them back into
+the snapshot strip automatically.
 
 ### Export at native detector size
 
@@ -76,7 +79,8 @@ inconvenient (for example over a remote connection).
   milliseconds on a real GPU.
 - Toggle the **FFT** panel to watch Bragg spots sharpen as aberrations improve.
 - Change colormap, contrast, and the amplitude/complex view.
-- **Save** writes the current aberrations and preview JPEG into `snapshots/`.
+- **Save** writes the current aberrations and preview JPEG into `snapshots/`
+  without prompting for a separate download in the normal local folder workflow.
 
 ## Verify WebGPU is on real hardware
 
