@@ -32,16 +32,18 @@ python -c "import quantem.widget; print(quantem.widget.__version__)"
 | `Show4DSTEM` | 4D-STEM array, or 5D stack | live virtual detectors (BF / ABF / ADF), CoM / iCoM / DPC, dataset slider + compare grid, offline WebGPU export |
 | `ShowPtycho` | 4D-STEM master / SSB result | interactive SSB phase review: C10/C12/phi12/rotation sliders re-reconstruct in ~5-18 ms on-GPU; kernel-less WebGPU folder export for laptops |
 | `ShowDiffraction` | 2D pattern or 3D stack | d-spacing, g-vector, and angle measurement on Bragg spots and rings |
+| `ChooseLattice` | 2D image | ordered origin, a1, and a2 point selection for lattice-vector measurements |
 | `ShowEDS` | EDS/EELS spectrum image | linked element map, spectrum, energy band, real-space ROI, and automatic element identification |
 | `ShowFolder` | microscopy session folder | fast thumbnail browser, grouping, and file selection |
 
 ```python
 import numpy as np
 from quantem.widget import (
-    Show1D, Show2D, Show3D, Show3DSlices,
+    ChooseLattice, Show1D, Show2D, Show3D, Show3DSlices,
     Show4DSTEM, ShowDiffraction, ShowEDS, ShowFolder,
 )
 
+ChooseLattice(np.random.rand(512, 512))
 Show1D(np.random.rand(100), x_label="frame", y_label="defocus", y_unit="nm")
 Show2D(np.random.rand(512, 512))
 Show4DSTEM(np.random.rand(64, 64, 128, 128))
@@ -335,6 +337,10 @@ A. Yang, T. Zhang, Y. Xiao, and S. J. L. Billinge, *Digital Discovery*, 2026).
 
 - [ ] The widget has a small, stable Python API with NumPy-style docs, helpful
   errors, and `(row, col)` coordinate wording where positions are shown.
+- [ ] Every new public widget or API is exported from `quantem.widget`, listed
+  in the README widget catalog and import example, linked from the API index
+  and documentation sidebar, and recorded under **Unreleased** in
+  `CHANGELOG.md`.
 - [ ] The frontend follows the local viewer patterns instead of inventing a new
   design system; compare against [Show2D](docs/tutorials/show2d.ipynb),
   [Show3D](docs/tutorials/show3d.ipynb),
