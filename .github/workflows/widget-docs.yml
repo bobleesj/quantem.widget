@@ -75,6 +75,9 @@ jobs:
           # baked into tutorial outputs on the published pages.
           HF_HUB_VERBOSITY: error
           QUANTEM_WIDGET_STATIC_FALLBACK: "0"
+      # Theme-drift guard: a page with two primary-toggle buttons means the
+      # mobile hamburger is dead (see scripts/check_docs_nav_toggle.py).
+      - run: python scripts/check_docs_nav_toggle.py docs/_build/html
       - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/_build/html
