@@ -76,7 +76,6 @@ whether a canvas appears.
 - [Show3D](storyboard-show3d)
 - [Show3DSlices](storyboard-show3dslices)
 - [Show4DSTEM](storyboard-show4dstem)
-- [ShowEDS](storyboard-showeds)
 - [ShowFolder](storyboard-showfolder)
 - [DataTransfer](storyboard-data-transfer)
 
