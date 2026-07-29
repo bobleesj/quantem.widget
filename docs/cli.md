@@ -192,10 +192,13 @@ only `index.html` omits the HDF5 source files needed for WebGPU reconstruction.
 | Option | Effect |
 |---|---|
 | `--bin N` | detector mean-bin factor; Show4DSTEM defaults to 1 and ShowPtycho always uses native detector sampling |
-| `--backend auto/cuda/mps/cpu/webgpu` | Show4DSTEM backend; use `webgpu` with `--html` for a browser-owned full-detector HDF5-backed viewer |
+| `--backend auto/cuda/mps/webgpu` | Show4DSTEM backend; use `webgpu` with `--html` for a browser-owned full-detector HDF5-backed viewer. ShowPtycho accepts `auto/cuda/mps` |
 | `--count N` | Show4DSTEM: require and load exactly this many compatible masters from the input |
 | `--devices 0,1` | Show4DSTEM CUDA placement; alias of `--gpus` |
-| `--dtype uint8/uint16` | Show4DSTEM HTML export/storage dtype; `uint8` is compact browse, `uint16` keeps the wider detector-count range |
+| `--dtype uint8/uint16/float32` | browse/storage dtype; `uint8` is compact browse, `uint16` keeps the wider detector-count range |
+| `--serve` | open via a local HTTP server even for self-contained files (tunnelable URL) |
+| `--port N`, `--bind ADDR` | folder exports: local HTTP server port (default auto) and bind address (default 127.0.0.1) |
+| `--quantized` | image widgets: uint8 pack for a smaller file |
 | `--html` | 4D-STEM: write the offline-WebGPU HTML instead of a notebook |
 | `--watch` | folder: write a live ShowFolder-watched notebook; Show2D/Show3D append new image files, Show4DSTEM opens lazy masters |
 | `--gpus 0,1`, `--page-budget auto` | watched Show4DSTEM: pick CUDA cards and GPU-resident dataset cache policy |
@@ -203,15 +206,17 @@ only `index.html` omits the HDF5 source files needed for WebGPU reconstruction.
 | `--out PATH` | output file or directory (default `~/Downloads`) |
 | `--no-open` | write the file(s) without launching a browser or Jupyter |
 | `--title`, `-v/--verbose` | page title; verbose progress |
-| `--calibration`, `--semiangle`, `--scan-sampling`, `--voltage-kv` | ShowPtycho master generation geometry and calibration controls |
+| `--calibration`, `--semiangle`, `--scan-sampling`, `--det-sampling`, `--voltage-kv` | ShowPtycho master generation geometry and calibration controls |
+| `--trials N`, `--refinement nelder-mead/none` | ShowPtycho: exact GPU Optuna trial budget (default 200; `0` reuses a resolved calibration) and post-trial refinement |
+| `--in-place`, `--anonymize` | ShowPtycho: write under `SOURCE/quantem/showptycho`; redact the local acquisition name/path from saved provenance |
 | `--drag-bf X` | ShowPtycho BF fraction or count; default `1.0` is full BF, `0.3` is 30 percent, values greater than 1 are explicit BF-pixel counts |
+| `--size PX`, `--fft`, `--force` | ShowPtycho: initial panel size, open with the FFT panel visible, rebuild an existing output folder |
 
 ## Backends
 
 The loader picks the accelerated backend automatically - **CUDA** on an NVIDIA
-box and **Apple Metal (MPS)** on a Mac. It does not silently choose CPU when no
-GPU backend is available; `cpu` is an explicit reference/test choice. On a
-MacBook:
+box and **Apple Metal (MPS)** on a Mac. `--backend webgpu` hands the compute to
+the browser instead of the Python process. On a MacBook:
 
 ```bash
 quantem show4dstem ./masters/ --backend webgpu --html --count 1 --bin 1
