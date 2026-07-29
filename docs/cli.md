@@ -1,6 +1,6 @@
 # Command line
 
-Installing `quantem.widget` adds a `quantem` command (and a short `qw` alias).
+Installing `quantem.widget` adds the `quantem` command.
 Point it at a file or a folder and it renders the right viewer - no notebook,
 no Python.
 
@@ -12,11 +12,9 @@ quantem show2d ./frames/ --watch               # live folder        -> append ne
 quantem show4dstem ./masters/                  # *_master.h5        -> live Show4DSTEM
 quantem show4dstem a_master.h5 b_master.h5     # several masters    -> one 5D multi-tilt viewer
 quantem show4dstem ./masters/ --html           # 4D-STEM            -> shareable offline HTML
-quantem ptycho scan_master.h5                   # raw 4D-STEM master -> ptychography WebGPU review
-quantem ptycho ./ptycho-export/                 # ShowPtycho folder  -> WebGPU browser review
+quantem showptycho scan_master.h5               # raw 4D-STEM master -> full-BF SSB review project
+quantem showptycho ./masters/                    # master folder     -> ShowPtycho project catalog
 quantem showfolder ./session/                  # microscopy folder  -> ShowFolder notebook/HTML
-quantem data-transfer plan ./raw/ /ssd0/run /ssd1/run --manifest run.json
-quantem data-transfer show4dstem --manifest run.json --gpus 0,1 --dtype u8 --bin 1
 quantem html tutorial.ipynb                    # a notebook         -> standalone interactive HTML
 quantem github tutorial_github.ipynb --no-execute # optional static copy for GitHub preview
 ```
@@ -29,13 +27,10 @@ quantem github tutorial_github.ipynb --no-execute # optional static copy for Git
 | `quantem show2d <image / folder>` | one image, or a folder | a Show2D HTML (a folder becomes a gallery); with `--watch`, a live ShowFolder notebook |
 | `quantem show3d <folder>` | a folder of same-size frames | a Show3D scrub HTML; with `--watch`, a live ShowFolder notebook |
 | `quantem show4dstem <master(s) / folder>` | one or more `*_master.h5` | a live Show4DSTEM notebook (or `--html`) |
-| `quantem ptycho <master.h5 / folder>` | a raw `*_master.h5` or a ShowPtycho WebGPU folder export | builds/serves a ptychography browser review |
-| `quantem showptycho <master.h5 / folder>` | same as `quantem ptycho` | compatibility alias |
+| `quantem showptycho <master.h5 / folder>` | raw `*_master.h5` files, a folder of masters, or an existing ShowPtycho project | runs full-BF SSB and builds one index with direct ShowPtycho and Show4DSTEM browser viewers |
 | `quantem showfolder <folder>` | microscopy session folder | a ShowFolder notebook (or `--html`) |
-| `quantem data-transfer plan/inspect/copy/update/masters/show4dstem` | `*_master.h5` folder plus target roots | manifest-backed transfer planning, state inspection, explicit copy, resume/update, ready-master listing, and Show4DSTEM notebook handoff |
 | `quantem html <notebook.ipynb>` | a notebook you wrote | runs it, or with `--no-execute` exports saved outputs/state, into one standalone interactive HTML |
 | `quantem github <notebook.ipynb>` | an optional static copy of a notebook | strips widget state and embeds compressed pictures for GitHub's notebook preview |
-| `quantem jupyter` | nothing (run on the GPU box) | starts JupyterLab (`--env`, `--port`) and prints the SSH-tunnel line to paste on your laptop |
 
 **Images** save a standalone HTML and open in your browser. **4D-STEM** opens a
 live, kernel-backed notebook by default (full real-time interaction); `--html`
@@ -50,8 +45,10 @@ Dataset slider** to flip between scans. WebGPU HDF5 folders use anonymous local
 links such as `tilt_00_master.h5` and `tilt_00_data_*.h5`; rerunning the CLI
 replaces the generated viewer folder so stale HTML and metadata do not survive.
 
-Everything lands in `~/Downloads` (or the current directory on machines without
-one) and opens automatically on a desktop.
+Image and Show4DSTEM outputs land in `~/Downloads` by default. ShowPtycho
+projects use the user-owned `~/QuantEM/showptycho/<acquisition>` root. Use
+`--out PATH` to choose another writable project folder or `--in-place` to opt
+into `SOURCE/quantem/showptycho`.
 
 ## Show4DSTEM HTML export
 
@@ -81,7 +78,7 @@ the right no-notebook choice when native detector detail matters. Double-click
 `Show4DSTEM.command` when you want the local server path. For a compact
 collaborator review, use the Python `export_kind="report"` path below.
 
-For large live folders, curated review grids, or collaborator screening,
+For large live folders, curated review grids, or collaborator inspection,
 open a live viewer and export a compact report from Python instead:
 
 ```python
@@ -128,11 +125,11 @@ table and LLM-friendly checklist.
 ShowPtycho WebGPU review can start directly from one `*_master.h5`:
 
 ```bash
-quantem ptycho BTO_18_master.h5
+quantem showptycho reference_512_master.h5
 ```
 
-The command looks for a matching QuantEM calibration next to the master, for
-example `quantem/screen/_calibrations.json`. When that file is not present, it
+The command looks for a matching ShowPtycho calibration next to the master, for
+example `quantem/showptycho/<dataset>/calibration.json`. When that file is not present, it
 uses quick-start defaults and prints them before loading:
 
 ```text
@@ -144,16 +141,16 @@ measurement, publication, or calibration signoff, provide the microscope
 geometry explicitly:
 
 ```bash
-quantem ptycho BTO_18_master.h5 \
+quantem showptycho reference_512_master.h5 \
   --semiangle 30 --scan-sampling 0.264 --voltage-kv 300
 ```
 
-ShowPtycho defaults to native detector pixels (`--bin 1`) because ptychography
-review should not silently downsample the bright-field disk. Use `--bin N` only
-when you intentionally want a downsampled exploratory export. The generated
-artifact is a folder containing `index.html`, `manifest.json`, calibration
-metadata, and a `source/` directory with the original compressed HDF5 master and
-data files linked or copied into the review folder. It does not save persistent
+ShowPtycho always uses native detector sampling because ptychography review must
+not silently downsample the bright-field disk. The generated project contains
+an `index.html` catalog, one exact ShowPtycho folder per dataset, and one direct
+Show4DSTEM WebGPU viewer per dataset. Show4DSTEM reads the original compressed
+HDF5 family through hard links or symbolic links; it does not duplicate the raw detector data. ShowPtycho stores only
+the source links and exact BF evidence required by its browser workflow. It does not save persistent
 float32 reference images or a complex64 BF reducer by default. The browser
 decodes HDF5 chunks on WebGPU and builds the BF-indexed reducers transiently.
 The default interactive BF policy is full selected BF (`--drag-bf 1.0`) so the
@@ -161,15 +158,17 @@ first view uses all known BF evidence without loading non-BF detector pixels.
 Use `--drag-bf 0.3` or another smaller fraction only when you intentionally want
 a faster exploratory preview.
 
-The browser source is the compressed HDF5 WebGPU path: the exported folder
-carries the original compressed HDF5 under `source/`, and the browser
-decompresses the selected BF evidence with WebGPU.
+The default ShowPtycho browser source is the exact BF-column payload. The
+exported folder also carries the original compressed HDF5 family under
+`source/` for provenance and the Show4DSTEM companion. This keeps ShowPtycho
+startup focused on the detector columns required by SSB without detector
+binning or loading non-BF pixels.
 
 Existing ShowPtycho WebGPU exports are also folders because the microscopy
 payload can be several gigabytes. Open them with the CLI:
 
 ```bash
-quantem ptycho ./logic013_512_bfr24/
+quantem showptycho ./logic013_512_bfr24/
 ```
 
 or let auto-detection choose the same path:
@@ -185,69 +184,11 @@ or `--bind 0.0.0.0` only when you intentionally want another device on the
 network to reach the viewer. Share the whole folder with a colleague; sending
 only `index.html` omits the HDF5 source files needed for WebGPU reconstruction.
 
-## DataTransfer
-
-Use `data-transfer` before heavy multi-GPU browsing or ptychography when a
-session should be split across fast disks. It writes a durable manifest that the
-CLI, Python utilities, and downstream tools can inspect later.
-
-```bash
-quantem data-transfer plan ./raw_session/ /nvme0/session /nvme1/session --manifest session.json
-quantem data-transfer inspect --manifest session.json
-quantem data-transfer copy --manifest session.json          # dry-run by default
-quantem data-transfer copy --manifest session.json --execute
-quantem data-transfer masters --manifest session.json
-quantem data-transfer show4dstem --manifest session.json --gpus 0,1 --dtype u8 --bin 1
-```
-
-`copy` writes through `*.partial` files and refuses mismatched existing targets.
-Default verification is by file size for speed; add `--hash sha256` at planning
-time and `--verify hash` at inspect/copy time when the extra full-file reads are
-worth the stronger guarantee.
-
-`update` rescans the original source folder and appends new masters without
-moving old target assignments:
-
-```bash
-quantem data-transfer update --manifest session.json
-quantem data-transfer copy --manifest session.json --execute
-```
-
-`masters` prints only target masters whose full acquisition group is complete by
-default. Use `--all-masters` when you want the planned target paths before the
-copy has finished. `show4dstem` writes a live notebook from those ready target
-masters. The command is GPU-friendly but still explicit: `--gpus 0,1` becomes
-`load(masters, devices=[0, 1], ...)` in the generated notebook, `--dtype u8`
-uses direct uint8 browse decoding for fast screening, and `--bin 1` keeps native
-detector sampling.
-
-Python equivalent:
-
-```python
-from quantem.widget import Show4DSTEM, load
-from quantem.widget.io import read_data_transfer_manifest, target_masters
-
-plan = read_data_transfer_manifest("session.json")
-masters = [str(path) for path in target_masters(plan)]
-data = load(masters, det_bin=1, dtype="u8", devices=[0, 1])
-Show4DSTEM(data, page_budget="auto", page_device=[0, 1])
-```
-
-If all targets resolve to one physical disk, the CLI warns that cold load speed
-is still disk-bound. Multiple GPUs help capacity, but fast cold flips need files
-spread across independent disks.
-
-For notebook sharing, keep the full-state `.ipynb` for collaborators and use
-`quantem html --no-execute` for an interactive web artifact. Use `quantem github
---no-execute` only when you specifically need a non-interactive copy for
-GitHub's native notebook renderer. GitHub blob/raw pages do not execute exported
-HTML; serve HTML from GitHub Pages or another static host.
-
 ## Options
 
 | Option | Effect |
 |---|---|
-| `--bin N` | detector mean-bin factor; Show4DSTEM, ShowPtycho, and `data-transfer` default to 1, meaning full detector sampling |
+| `--bin N` | detector mean-bin factor; Show4DSTEM defaults to 1 and ShowPtycho always uses native detector sampling |
 | `--backend auto/cuda/mps/cpu/webgpu` | Show4DSTEM backend; use `webgpu` with `--html` for a browser-owned full-detector HDF5-backed viewer |
 | `--count N` | Show4DSTEM: require and load exactly this many compatible masters from the input |
 | `--devices 0,1` | Show4DSTEM CUDA placement; alias of `--gpus` |

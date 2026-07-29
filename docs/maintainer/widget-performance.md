@@ -9,8 +9,8 @@ wrong, how to recognize the pattern, and what to do instead.
 2026-07-05 Show4DSTEM loader work:
 
 - Exact `uint16` no-bin loading is already on the same fast path as browse
-  `uint8` for a single real 512 x 512 x 192 x 192 Arina master. On the private
-  MJGOAT workstation, the new benchmark script measured `uint16` at 0.634 s
+  `uint8` for a single real 512 x 512 x 192 x 192 Arina master. On a private
+  reference CUDA workstation, the benchmark script measured `uint16` at 0.634 s
   cold / 0.405 s hot and `uint8` at 0.591 s cold / 0.392 s hot on the freer GPU.
 - Multi-GPU loading now uses disk-aware scheduling. `load(masters,
   devices=[0, 1])` interleaves files by physical disk before assigning work to
@@ -23,18 +23,18 @@ wrong, how to recognize the pattern, and what to do instead.
 - Keep real benchmark outputs under `/tmp/quantem-widget-load-bench/`. Do not
   commit private paths, raw data, generated benchmark payloads, screenshots, or
   large reports.
-- Current MJGOAT sampled masters resolve to one physical disk (`nvme2n1`), so
+- The sampled masters resolve to one physical NVMe disk, so
   the smoke validates the sharded code path and report harness, not an actual
   two-disk bandwidth gain. Prove the disk speedup on a host where
   `group_by_disk(masters)` reports at least two real disks.
-- 2026-07-06 U8 follow-up on real private BTOSTO masters:
+- 2026-07-06 U8 follow-up on real private reference masters:
   `load(master, dtype="u8", det_bin=1)` measured 0.850 s cold / 0.385 s hot
   for one 512 x 512 x 192 x 192 master with parity enabled. Sharded
   `dtype="u8"`, two no-bin masters across `devices=[0, 1]`, measured
   1.428 s cold / 0.641 s hot with one 9.0 GiB U8 file resident on each GPU.
   The single-master browse path meets the <0.5 s hot-load target; the two-master
   sharded reload is close but not below target yet. The full remote
-  Show4DSTEM browser signoff was blocked in that MJGOAT environment by a
+  Show4DSTEM browser signoff was blocked in that workstation environment by a
   neighboring `quantem.core` circular import during `import quantem.widget`.
 - 2026-07-25 Show4DSTEM WebGPU seven-tilt browser signoff:
   seven full audited U8-masked `512 x 512 x 192 x 192` HDF5 tilt families
@@ -650,7 +650,7 @@ Loader policy:
   inside the load timer; a full uint64 sum over tens of GiB is a correctness
   check, not load latency.
 
-Current private MJGOAT measurement, single real 512 x 512 x 192 x 192 Arina
+Current private reference-workstation measurement, single real 512 x 512 x 192 x 192 Arina
 master, no detector binning, parity checked against the full tensor:
 
 | path | first measured load | hot repeated load | resident size | note |
@@ -676,7 +676,7 @@ confirmed that the entrypoints run end to end. This smoke used
 | sharded, two masters, `dtype="u8"`, no-bin, `devices=[0, 1]` | 1.428 s | 0.641 s | 18.0 GiB total | one 9.0 GiB U8 master per GPU; close, not yet <0.5 s |
 | matrix, `dtype="u16"`, no-bin, single master | ERR | - | - | current GPU memory was not clean enough for the exact-count allocation |
 
-The current MJGOAT sample resolved to one physical disk (`nvme2n1`) for the
+The current sample resolved to one physical NVMe disk for the
 available real masters, so the smoke validates sharded GPU placement and the
 benchmark harness, not a real multi-disk bandwidth gain. To prove the disk
 speedup, run `widget_load_bench_sharded.py` on a host where
@@ -708,7 +708,7 @@ IO review and next optimization targets:
   split-disk cold/warm timing with the same master count, dtype, and detector
   binning. Use `quantem data-transfer plan/copy/masters/show4dstem` to create
   and record that split layout; keep the manifest path and timing report local
-  when it contains private MJGOAT paths.
+  when it contains private workstation paths.
 - Do not run two GPU-heavy loader benchmarks concurrently on the same GPUs.
   Parallel benchmark processes create artificial OOMs and hide the true loader
   behavior. Run U8/U16 and sharded/single cases serially unless the goal is an

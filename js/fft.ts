@@ -4,7 +4,7 @@
  * WebGPU FFT — shared 2D FFT with GPU acceleration and CPU fallback.
  * Handles non-power-of-2 dimensions via zero-padding.
  */
-import { getGPUDevice as engineGetGPUDevice, getGPUInfo as engineGetGPUInfo, isSoftwareGPUAdapter, onGPULost } from "./.generated/engine/device";
+import { getGPUDevice as engineGetGPUDevice, getGPUInfo as engineGetGPUInfo, isSoftwareGPUAdapter, onGPULost } from "./.generated/engine/webgpu/device";
 
 // ============================================================================
 // CPU FFT fallback
@@ -155,7 +155,7 @@ export function fft2dAsync(
 // WebGPU FFT (compute shader, GPU-resident)
 // ============================================================================
 
-import { FFT_2D_SHADER } from "./.generated/engine/fft-shader";
+import { FFT_2D_SHADER } from "./.generated/engine/webgpu/fft-shader";
 
 export class WebGPUFFT {
   private device: GPUDevice;

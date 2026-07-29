@@ -5,6 +5,30 @@ raw 4D-STEM data. `ShowPtycho` lets a microscopist tune defocus, astigmatism,
 scan-detector rotation, phase flip, display contrast, and the FFT view while
 watching the reconstructed phase update.
 
+## Workflow and ownership
+
+`quantem.widget` owns presentation, project layout, and browser export. It does
+not implement CUDA, MPS, or WebGPU SSB kernels. Exact fitting and final
+reconstruction enter through the shared `quantem.gpu.SSB` API and return one
+`SSBResult`, regardless of compute backend. `ShowPtycho` consumes that result
+and the same calibration fields for notebook and browser interaction.
+
+The canonical folder workflow is:
+
+1. `quantem showptycho SOURCE` discovers native HDF5 masters and resolves the
+   microscope geometry.
+2. `quantem.gpu.SSB` performs the requested exact trials, Nelder-Mead
+   refinement, and final reconstruction on the selected compute backend.
+3. The widget writes one project containing the result, calibration,
+   provenance, exact bright-field evidence, and browser launchers.
+4. Reopening that project serves the existing files; it does not silently fit
+   again or choose a different backend.
+
+Backend-specific choices therefore stop at the `quantem.gpu` boundary. The
+widget records both the software revision that produced a fit and the revision
+that exported the project, so re-exporting never rewrites historical scientific
+provenance.
+
 ## What The Browser Computes
 
 In a live notebook, Python owns the reconstruction state and uses the available
@@ -39,7 +63,7 @@ their calibration with the result.
 ssb = SSB(data, semiangle=20.0, scan_sampling=0.276, voltage_kV=300.0)
 w = ShowPtycho(
     ssb,
-    source_file="BTO_20_master.h5",
+    source_file="reference_master.h5",
     fft_on=True,
 )
 ```
@@ -112,7 +136,7 @@ Current implementation coverage:
 | `128 x 128` | Implemented by the shared WGSL path | Source/unit guard covered; use real headed data before paper claims |
 | `256 x 256` | Implemented by the shared WGSL path | Source/unit guard covered; use real headed data before paper claims |
 | `512 x 512` | Implemented by the shared WGSL path | Real experimental full-BF browser drive has reached about 24 FPS for C10 changes |
-| `1024 x 1024` | Implemented by the shared WGSL path | Real Berk BF-column browser drive works, but full active-BF controls remain about 6 FPS on Phil Metal and fail the 30 FPS target |
+| `1024 x 1024` | Implemented by the shared WGSL path | Real-data BF-column browser drive works, but full active-BF controls remain about 6 FPS on Apple Silicon Metal and fail the 30 FPS target |
 
 ## Folder Export
 
@@ -156,11 +180,10 @@ the browser opens from BF columns by default.
 Open the folder with the `quantem` CLI:
 
 ```bash
-quantem ptycho /path/to/logic013_512_review
+quantem showptycho /path/to/logic013_512_review
 ```
 
-`quantem showptycho` remains a compatibility alias. The command validates the
-folder, prints the compressed HDF5 source summary, starts the required local
+The command validates the folder, prints the compressed HDF5 source summary, starts the required local
 HTTP server, reports the BF-column browser source when present, and opens
 `index.html` in the browser. It stays alive until Ctrl-C.
 Use `--port 8900` only when you need a stable URL, and use `--bind 0.0.0.0`
@@ -171,8 +194,7 @@ or `ShowPtycho.command` when you want the no-prompt local-server path.
 
 The HTML file should stay small because it is only the viewer. The microscopy
 payload is under `source/`; the export avoids writing `g_bf.c64`, `.f32`
-reference images, or detector-binned copies by default. A legacy persistent BF
-cache is a compatibility/debug path, not the normal sharing workflow.
+reference images, or detector-binned copies by default.
 
 ## Reference
 

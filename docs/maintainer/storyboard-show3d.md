@@ -624,7 +624,7 @@ transport rule for comparable paged or stacked image review paths.
 **Data to use**: A real or real-derived multi-panel movie on the backend. The
 canonical stress case is a 3x3 grid of 2048 x 2048 float32 panels, where one
 native concatenated frame is 150,994,944 bytes. Use the actual lab deployment
-when possible: laptop browser on phil, Jupyter kernel and data on mjgoat, and
+when possible: laptop browser on Apple Silicon, Jupyter kernel and data on a remote GPU workstation, and
 an `ssh -L` tunnel. Synthetic data may be used only as a post-fix control when
 it preserves the same native spatial shape and per-frame payload.
 

@@ -10,7 +10,7 @@ rules, in order of importance:
 - **present = known**: a field is written only when known; absent means
   "unknown, resolve it yourself". Never a guessed default.
 
-Field names match quantem ptycho ``config.json`` / ``dataset.yaml`` exactly, and
+Field names match ShowPtycho ``config.json`` / ``dataset.yaml`` exactly, and
 unit suffixes follow the unit symbol's official capitalization (``voltage_kV``,
 ``semiangle_mrad``, ``scan_sampling_A``, ``pixel_size_nm``).
 

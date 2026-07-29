@@ -3,7 +3,7 @@
 ## Goal
 
 Measure the slow Show3D scrub path before optimizing it. The target deployment is
-JupyterLab in a Mac browser on phil, with the kernel and data on mjgoat over an
+JupyterLab in an Apple Silicon browser, with the kernel and data on a remote GPU workstation over an
 SSH `-L` tunnel. Playback already uses a sliding buffer; interactive scrubbing
 commits `slice_idx` and receives one `frame_bytes` payload per tick, so this note
 separates the Python, Comm, browser decode, and paint-proxy costs for that path.
@@ -54,7 +54,7 @@ widget.benchmark_request = {
     "sampleCount": 12,
     "settleMs": 80,
     "timeoutMs": 8000,
-    "label": "mjgoat tunnel Show3D scrub",
+    "label": "remote GPU tunnel Show3D scrub",
 }
 ```
 
@@ -72,23 +72,23 @@ widget.benchmark_request = {
     "settleMs": 80,
     "timeoutMs": 8000,
     "maxBytes": 16 * 1024 * 1024,
-    "label": "mjgoat tunnel Show3D scrub preview",
+    "label": "remote GPU tunnel Show3D scrub preview",
 }
 ```
 
 ## Measurement matrix
 
-Fill this table only with real tunnel measurements from the phil browser to the
-mjgoat kernel. Do not substitute localhost numbers.
+Fill this table only with real tunnel measurements from the Apple Silicon
+browser to the remote GPU kernel. Do not substitute localhost numbers.
 
 | Run | Widget/data | Shape | Panels | Bytes per scrub frame | Tunnel | Python prepare avg/p95 ms | Python encode avg/p95 ms | Browser receive avg/p95 ms | JS decode avg/p95 ms | UI latency avg/p95 ms | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 2026-07-12 initial scrub | Show3D from `800C_1.3Mx.panels.npy`; first 4 frames of real `panels.npy` | `(4, 2048, 18432)` float32 display stack from source `(9, 69, 2048, 2048)` | 9 native 2048 x 2048 panels concatenated for the current Comm path | 150,994,944 B (144 MiB) | phil in-app browser -> ssh -L `127.0.0.1:54297` -> mjgoat kernel | 0.018 / 0.046 | 65.3 / 104.6 | 806.0 / 1209.8 | 0 / 0 | 895.1 / 1248.8 | Browser benchmark `scrubTransport`, token `remote-scrub-20260712-1783887349078435277`; excluded one stale pre-request sample (`seq=6`) from an earlier unmounted-widget attempt. The time axis was shortened to 4 frames because mjgoat had only about 8-16 GiB available; spatial pixels and per-scrub payload stayed native and unreduced. |
-| 2026-07-12 post-fix smoke | Show3D synthetic full-spatial stack | `(2, 2048, 18432)` float32 | 9 native 2048 x 2048 panels concatenated | 150,994,944 B (144 MiB) native frame; 16,785,408 B preview | phil in-app browser -> ssh -L `127.0.0.1:50074` -> mjgoat kernel | not sampled | not sampled | not sampled | not sampled | not sampled | Browser-driven slider drag emitted `[Show3D scrub preview] displaying 3x reduced frames during slider drag; release the slider or zoom/settle the view to request native full resolution.` Canvas stayed mounted; frame control moved between `1/2` and `2/2`. Synthetic was used only for the post-fix smoke because the real `.npz` archive inflated the full source array before slicing and blocked the scratch kernel. |
-| 2026-07-12 post-fix preview benchmark | Show3D synthetic full-spatial stack, `mode="scrubPreviewTransport"` | `(2, 2048, 18432)` float32 | 9 native 2048 x 2048 panels concatenated | 150,994,944 B (144 MiB) native frame; 16,785,408 B preview | phil in-app browser -> ssh -L `127.0.0.1:52186` -> mjgoat kernel | 753.0 / 1554.8 cold-inclusive; warm frame-1 samples ~3.9 ms | 6.9 / 9.3 | 27.7 / 51.3 | 0 / 0 | 27.7 / 51.3 | Token `s3d20-preview-1783890306601978258`, 4 samples, factor 3, preview shape `683 x 6144`. Two frame-0 samples had cold preparation spikes (~1.45-1.55 s), while frame-1 warm samples prepared in ~4 ms. Transport/UI latency for the 16.8 MB preview was realtime-ish over the tunnel. |
-| 2026-07-12 reference constructor profile, first frame only | `Show3D.from_panel_folders` target data, six real experimental PNG panel folders | first frame per panel, each native `2048 x 2048` | 6 | 100,663,296 B native combined frame; initial Comm frame payload 0 B | Python profiler on mjgoat, same data path as `127.0.0.1:55064` notebook | load/decode total 295.2 ms; construct 142.5 ms | n/a | n/a | n/a | total 439.7 ms | Real local time-series data path; full source stays on disk and reachable by frame server. This is the only measured path under the 0.5 s mount target. |
-| 2026-07-12 reference constructor profile, eager 4 frames | Previous notebook strategy: decode four frames per six experimental panels before constructing widget | `(4, 2048, 12288)` logical six-panel native view | 6 | 100,663,296 B native combined frame; initial Comm frame payload 0 B after defer | Python profiler on mjgoat | load/decode total 403.6 ms; construct 557.6 ms | n/a | n/a | n/a | total 963.1 ms | Same real folders. Even four eager frames misses the 0.5 s target before user interaction starts. |
-| 2026-07-12 reference constructor profile, eager 12 frames | Previous notebook strategy: decode twelve frames per six experimental panels before constructing widget | `(12, 2048, 12288)` logical six-panel native view | 6 | 100,663,296 B native combined frame; initial Comm frame payload 0 B after defer | Python profiler on mjgoat | load/decode total 947.6 ms; construct 1644.1 ms | n/a | n/a | n/a | total 2593.6 ms | Same real folders. This confirms background/lazy hydration is required; eager preload cannot meet 0.5 s. |
+| 2026-07-12 initial scrub | Show3D from an anonymized panel array; first 4 frames of a real panel stack | `(4, 2048, 18432)` float32 display stack from source `(9, 69, 2048, 2048)` | 9 native 2048 x 2048 panels concatenated for the current Comm path | 150,994,944 B (144 MiB) | Apple Silicon browser -> SSH tunnel -> remote GPU kernel | 0.018 / 0.046 | 65.3 / 104.6 | 806.0 / 1209.8 | 0 / 0 | 895.1 / 1248.8 | Browser benchmark `scrubTransport`; excluded one stale pre-request sample (`seq=6`) from an earlier unmounted-widget attempt. The time axis was shortened to 4 frames because the remote host had only about 8-16 GiB available; spatial pixels and per-scrub payload stayed native and unreduced. |
+| 2026-07-12 post-fix smoke | Show3D synthetic full-spatial stack | `(2, 2048, 18432)` float32 | 9 native 2048 x 2048 panels concatenated | 150,994,944 B (144 MiB) native frame; 16,785,408 B preview | Apple Silicon browser -> SSH tunnel -> remote GPU kernel | not sampled | not sampled | not sampled | not sampled | not sampled | Browser-driven slider drag emitted `[Show3D scrub preview] displaying 3x reduced frames during slider drag; release the slider or zoom/settle the view to request native full resolution.` Canvas stayed mounted; frame control moved between `1/2` and `2/2`. Synthetic was used only for the post-fix smoke because the real `.npz` archive inflated the full source array before slicing and blocked the scratch kernel. |
+| 2026-07-12 post-fix preview benchmark | Show3D synthetic full-spatial stack, `mode="scrubPreviewTransport"` | `(2, 2048, 18432)` float32 | 9 native 2048 x 2048 panels concatenated | 150,994,944 B (144 MiB) native frame; 16,785,408 B preview | Apple Silicon browser -> SSH tunnel -> remote GPU kernel | 753.0 / 1554.8 cold-inclusive; warm frame-1 samples ~3.9 ms | 6.9 / 9.3 | 27.7 / 51.3 | 0 / 0 | 27.7 / 51.3 | Four samples, factor 3, preview shape `683 x 6144`. Two frame-0 samples had cold preparation spikes (~1.45-1.55 s), while frame-1 warm samples prepared in ~4 ms. Transport/UI latency for the 16.8 MB preview was realtime-ish over the tunnel. |
+| 2026-07-12 reference constructor profile, first frame only | `Show3D.from_panel_folders` target data, six real experimental PNG panel folders | first frame per panel, each native `2048 x 2048` | 6 | 100,663,296 B native combined frame; initial Comm frame payload 0 B | Python profiler on the remote GPU workstation | load/decode total 295.2 ms; construct 142.5 ms | n/a | n/a | n/a | total 439.7 ms | Real local time-series data path; full source stays on disk and reachable by frame server. This is the only measured path under the 0.5 s mount target. |
+| 2026-07-12 reference constructor profile, eager 4 frames | Previous notebook strategy: decode four frames per six experimental panels before constructing widget | `(4, 2048, 12288)` logical six-panel native view | 6 | 100,663,296 B native combined frame; initial Comm frame payload 0 B after defer | Python profiler on the remote GPU workstation | load/decode total 403.6 ms; construct 557.6 ms | n/a | n/a | n/a | total 963.1 ms | Same real folders. Even four eager frames misses the 0.5 s target before user interaction starts. |
+| 2026-07-12 reference constructor profile, eager 12 frames | Previous notebook strategy: decode twelve frames per six experimental panels before constructing widget | `(12, 2048, 12288)` logical six-panel native view | 6 | 100,663,296 B native combined frame; initial Comm frame payload 0 B after defer | Python profiler on the remote GPU workstation | load/decode total 947.6 ms; construct 1644.1 ms | n/a | n/a | n/a | total 2593.6 ms | Same real folders. This confirms background/lazy hydration is required; eager preload cannot meet 0.5 s. |
 
 ## S3D-20 drive result
 

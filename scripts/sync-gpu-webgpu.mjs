@@ -4,7 +4,7 @@
 // source.
 
 import { spawnSync } from "child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -13,7 +13,7 @@ const repoRoot = path.resolve(scriptDir, "..");
 
 export function syncGpuWebgpuSources({ targetDir = "js/.generated/engine" } = {}) {
   const outputDir = path.isAbsolute(targetDir) ? targetDir : path.join(repoRoot, targetDir);
-  const python = process.env.PYTHON || "python3";
+  const python = process.env.PYTHON || "python";
   const code = `
 import json
 from quantem.gpu import webgpu
@@ -54,10 +54,24 @@ print(json.dumps({name: webgpu.source_text(name) for name in webgpu.source_names
 
   const sources = JSON.parse(result.stdout);
   mkdirSync(outputDir, { recursive: true });
+  for (const legacyName of [
+    "bslz4.ts",
+    "compute.ts",
+    "device.ts",
+    "fft-shader.ts",
+    "h5reader.ts",
+    "lazy.ts",
+    "local-h5.ts",
+    "showptycho-ssb.ts",
+  ]) {
+    const legacyPath = path.join(outputDir, legacyName);
+    if (existsSync(legacyPath)) rmSync(legacyPath);
+  }
   let changed = 0;
   let unchanged = 0;
   for (const [name, text] of Object.entries(sources)) {
     const dest = path.join(outputDir, name);
+    mkdirSync(path.dirname(dest), { recursive: true });
     const current = existsSync(dest) ? readFileSync(dest, "utf8") : null;
     if (current === text) {
       unchanged += 1;

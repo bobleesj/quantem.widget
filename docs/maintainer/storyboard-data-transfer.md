@@ -143,6 +143,6 @@ PYTHONPATH=src pytest -q tests/test_cli.py::test_data_transfer_cli_plan_inspect_
 PYTHONPATH=src pytest -q tests/test_hdf5_disk_scheduling.py
 ```
 
-For real workstation signoff, run the CLI against private MJGOAT/NVIDIA data and
+For real workstation signoff, run the CLI against private NVIDIA workstation data and
 record source disks, target disks, bytes, elapsed copy time, and verification
 mode. Keep those raw files and generated benchmark artifacts out of Git.

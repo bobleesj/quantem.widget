@@ -406,7 +406,15 @@ def test_maintained_automation_docs_use_generic_backend_names() -> None:
     ]
 
     combined = "\n".join(path.read_text(encoding="utf-8") for path in checked_paths)
-    for forbidden in ["MJGOAT", "Mjgoat", "mjgoat", "Phil", "phil"]:
+    for forbidden in [
+        "MJ" "GOAT",
+        "Mj" "goat",
+        "mj" "goat",
+        "Ph" "il",
+        "ph" "il",
+        "Rod" "man",
+        "rod" "man",
+    ]:
         assert forbidden not in combined
 
 

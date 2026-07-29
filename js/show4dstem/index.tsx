@@ -30,18 +30,18 @@ import {
   buildScanMask,
   Show4DSTEMCompute,
   Show4DSTEMCpuCompute,
-} from "../.generated/engine/compute";
-import { readH5MasterInfo, readH5Volume } from "../.generated/engine/h5reader";
-import { decodeBslz4Batch, type Bslz4Spec } from "../.generated/engine/bslz4";
+} from "../.generated/engine/webgpu/compute";
+import { readH5MasterInfo, readH5Volume } from "../.generated/engine/webgpu/h5reader";
+import { decodeBslz4Batch, type Bslz4Spec } from "../.generated/engine/webgpu/bslz4";
 import {
   collectShow4DSTEMLocalH5Files,
   loadShow4DSTEMLocalH5MaskedSum,
   loadShow4DSTEMLocalH5Master,
   setShow4DSTEMLocalFiles,
   show4DSTEMHasLocalFiles,
-} from "../.generated/engine/local-h5";
-import { getGPUInfo, isSoftwareGPUAdapter } from "../.generated/engine/device";
-import { LazyShow4DSTEM } from "../.generated/engine/lazy";
+} from "../.generated/engine/webgpu/local-h5";
+import { getGPUInfo, isSoftwareGPUAdapter } from "../.generated/engine/webgpu/device";
+import { LazyShow4DSTEM } from "../.generated/engine/webgpu/lazy";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
 import { findDataRange, sliderRange, computeStats, computeHistogramFromBytes, percentileClip } from "../stats";
 import { downloadBlob, extractBytes, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";

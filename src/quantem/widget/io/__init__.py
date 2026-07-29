@@ -145,7 +145,7 @@ __all__ = [
 
 def __getattr__(name: str):
     if name in _HDF5_EXPORTS:
-        module = import_module("quantem.widget.io.hdf5")
+        module = import_module("quantem.gpu.io.hdf5")
         value = getattr(module, name)
         globals()[name] = value
         return value
@@ -170,12 +170,12 @@ def __getattr__(name: str):
         globals()[name] = value
         return value
     if name in _BACKEND_EXPORTS:
-        module = import_module("quantem.widget.io.backends")
+        module = import_module("quantem.gpu.io.backends")
         value = getattr(module, name)
         globals()[name] = value
         return value
     if name in _MPS_EXPORTS:
-        module = import_module("quantem.widget.io.backends.mps")
+        module = import_module("quantem.gpu.io.backends.mps")
         value = getattr(module, name)
         globals()[name] = value
         return value

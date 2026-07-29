@@ -48,6 +48,7 @@ class _SmokePtychoAccel:
     backend = "mps"
 
     def __init__(self, n: int = 128) -> None:
+        self._frames = None
         q = np.fft.fftfreq(n, d=0.5).astype(np.float32)
         self._cache = {
             "num_bf": 2,
@@ -74,9 +75,64 @@ class _SmokePtychoAccel:
         self.sampling = (np.float32(0.5), np.float32(0.5))
         self._dc_value_host = np.complex64(1.0 + 0.0j)
         self._phase_template = _ptycho_phase_template(n)
+        self._g_qk = np.ones((2, n, n), dtype=np.complex64)
+
+    @property
+    def scan_shape(self) -> tuple[int, int]:
+        return int(self._cache["ny"]), int(self._cache["nx"])
+
+    @property
+    def detector_shape(self) -> tuple[int, int]:
+        return self.gpts
+
+    @property
+    def num_bf(self) -> int:
+        return int(self._cache["num_bf"])
+
+    @staticmethod
+    def phase_to_numpy(phase) -> np.ndarray:
+        return np.asarray(phase, dtype=np.float32)
+
+    def browser_state(self):
+        from quantem.gpu.ssb.compute.protocol import SSBExportState
+        from quantem.gpu.ssb.bf_selector import BrightfieldDisk
+
+        selection = BrightfieldDisk(
+            rows=self.bf_inds_row,
+            cols=self.bf_inds_col,
+            center_row_col=self.bf_center,
+            radius_px=1.0,
+            detected_radius_px=1.0,
+            detector_shape=self.detector_shape,
+        )
+        return SSBExportState(
+            backend=self.backend,
+            scan_shape=self.scan_shape,
+            brightfield=selection,
+            kx_bf=self._cache["kx_bf"],
+            ky_bf=self._cache["ky_bf"],
+            qx_1d=self._cache["qx_1d"],
+            qy_1d=self._cache["qy_1d"],
+            aperture_k=self._cache["aperture_k_1d"],
+            alpha_k2=self._cache["alpha_k2_1d"],
+            cos2phi_k=self._cache["cos2phi_k_1d"],
+            sin2phi_k=self._cache["sin2phi_k_1d"],
+            wavelength_A=float(self.wavelength),
+            semiangle_rad=float(self._cache["semiangle_rad"]),
+            angular_sampling_rad=(
+                float(self._cache["ang_y_rad"]),
+                float(self._cache["ang_x_rad"]),
+            ),
+            sampling_A=tuple(float(value) for value in self.sampling),
+            dc_value=complex(self._dc_value_host),
+        )
 
     def cache_rotation(self, rotation_rad: float) -> None:
         self._rotation_rad = float(rotation_rad)
+
+    def preview_context(self, num_bf: int):
+        del num_bf
+        return None
 
     def reconstruct_with_loss(self, c10: float, c12: float, phi12: float):
         phase = self.reconstruct(c10, c12, phi12)
@@ -108,21 +164,76 @@ class _SmokePtychoAccel:
 
 class _SmokePtychoState:
     def __init__(self, accel: _SmokePtychoAccel) -> None:
+        self.backend = accel.backend
         self.aberrations = {"C10": 1.0, "C12": 2.0, "phi12": 0.1}
-        self._rotation_angle_rad = 0.0
-        self._optuna_trials = [
+        self.rotation_angle_deg = 0.0
+        self.trial_history = [
             {"loss": 0.18, "params": {"C10_nm": 1.0, "C12_nm": 2.0, "phi12_deg": 5.0}},
             {"loss": 0.22, "params": {"C10_nm": -8.0, "C12_nm": 6.0, "phi12_deg": 15.0}},
         ]
-        self._best_loss = 0.18
+        self.best_loss = 0.18
         self.voltage_kV = 300.0
         self.semiangle_mrad = 30.0
-        self.scan_sampling = 0.5
+        self.scan_sampling_A = 0.5
         self.angular_sampling = (1.0, 1.0)
         self._accel = accel
 
-    def _get_accelerator(self):
+    @property
+    def _backend_protocol(self):
         return self._accel
+
+    @property
+    def scan_shape(self) -> tuple[int, int]:
+        return self._accel.scan_shape
+
+    @property
+    def num_bf(self) -> int:
+        return self._accel.num_bf
+
+    def set_rotation(self, rotation_angle_deg: float) -> None:
+        self.rotation_angle_deg = float(rotation_angle_deg)
+        self._accel.cache_rotation(np.deg2rad(self.rotation_angle_deg))
+
+    def preview(
+        self,
+        aberrations: dict[str, float],
+        *,
+        compute_loss: bool = True,
+        higher_order_magnitudes=None,
+        higher_order_angles=None,
+    ):
+        if higher_order_magnitudes is not None:
+            if compute_loss:
+                phase, loss = self._accel.reconstruct_full_with_loss(
+                    higher_order_magnitudes,
+                    higher_order_angles,
+                )
+            else:
+                phase = self._accel.reconstruct_full(
+                    higher_order_magnitudes,
+                    higher_order_angles,
+                )
+                loss = None
+        elif compute_loss:
+            phase, loss = self._accel.reconstruct_with_loss(
+                aberrations["C10"],
+                aberrations["C12"],
+                aberrations["phi12"],
+            )
+        else:
+            phase = self._accel.reconstruct(
+                aberrations["C10"],
+                aberrations["C12"],
+                aberrations["phi12"],
+            )
+            loss = None
+        return np.asarray(phase, dtype=np.float32), loss
+
+    def preview_context(self, num_bf: int):
+        return self._accel.preview_context(num_bf)
+
+    def browser_state(self):
+        return self._accel.browser_state()
 
 
 class _ShowPtychoFolderSmoke:
@@ -188,10 +299,10 @@ def _showptycho_smoke(folder_root: Path, rng: np.random.Generator) -> _ShowPtych
     accel = _SmokePtychoAccel(128)
     ssb = _SmokePtychoState(accel)
     widget = _ShowPtychoWidget(
-        accel=accel,
+        accel=ssb,
         rotation_rad=0.0,
         auto_aberrations=ssb.aberrations,
-        auto_loss_val=ssb._best_loss,
+        auto_loss_val=ssb.best_loss,
         c10_range=(-20.0, 20.0),
         c12_range=(0.0, 20.0),
         phi12_range=(-45.0, 45.0),
@@ -201,7 +312,6 @@ def _showptycho_smoke(folder_root: Path, rng: np.random.Generator) -> _ShowPtych
         source_file=str(_showptycho_master(folder_root, rng)),
         size=320,
         fft_on=True,
-        webgpu_preview="off",
     )
     return _ShowPtychoFolderSmoke(widget)
 

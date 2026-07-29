@@ -79,7 +79,7 @@ see the docs.
 ## Command line
 
 Point `quantem` at a file or folder and it renders the right viewer - no notebook, no
-Python. Installing the package adds the `quantem` command (and a short `qw` alias).
+Python. Installing the package adds the `quantem` command.
 
 ```bash
 quantem show ./anything/                     # auto-detect content, pick the viewer
@@ -89,10 +89,9 @@ quantem show2d ./frames/ --watch             # live folder         -> append new
 quantem show4dstem ./masters/                # *_master.h5         -> live Show4DSTEM
 quantem show4dstem a_master.h5 b_master.h5   # several masters     -> one 5D multi-tilt viewer
 quantem show4dstem ./masters/ --html         # 4D-STEM             -> shareable offline HTML
-quantem ptycho scan_master.h5                # raw 4D-STEM master  -> ShowPtycho WebGPU folder
-quantem ptycho ./ptycho-export/              # ShowPtycho folder   -> WebGPU browser review
+quantem showptycho scan_master.h5            # raw 4D-STEM master  -> user-owned review project
+quantem showptycho ./ptycho-export/          # existing project    -> WebGPU browser review
 quantem showfolder ./session/                # microscopy folder   -> ShowFolder notebook/HTML
-quantem data-transfer plan ./raw/ /ssd0/run /ssd1/run --manifest run.json
 quantem html tutorial.ipynb                  # a notebook          -> standalone offline HTML
 ```
 
@@ -102,10 +101,8 @@ quantem html tutorial.ipynb                  # a notebook          -> standalone
 | `quantem show2d <img / folder>` | one image, or a folder | Show2D HTML (a folder becomes a gallery); with `--watch`, a live ShowFolder notebook |
 | `quantem show3d <folder>` | a folder of same-size frames | Show3D scrub HTML; with `--watch`, a live ShowFolder notebook |
 | `quantem show4dstem <master(s) / folder>` | one or more `*_master.h5` | live Show4DSTEM notebook (or `--html`) |
-| `quantem ptycho <master.h5 / folder>` | a raw `*_master.h5` or a ShowPtycho WebGPU folder export | builds or serves a ptychography browser review |
-| `quantem showptycho <master.h5 / folder>` | same as `quantem ptycho` | compatibility alias |
+| `quantem showptycho <master(s) / folder>` | one or more `*_master.h5`, or an existing project | one index with direct ShowPtycho and Show4DSTEM browser viewers |
 | `quantem showfolder <folder>` | microscopy session folder | ShowFolder notebook (or `--html`) |
-| `quantem data-transfer plan/inspect/copy/update/masters/show4dstem` | `*_master.h5` folder plus target roots | manifest-backed transfer planning, state inspection, explicit copy, resume/update, ready-master listing, and Show4DSTEM handoff |
 | `quantem html <notebook.ipynb>` | a notebook you wrote | runs it, bakes outputs into one offline HTML |
 | `quantem github <notebook.ipynb>` | a notebook copy for GitHub | strips widget state, embeds compressed pictures for GitHub's preview |
 
@@ -136,12 +133,15 @@ For GitHub notebook previews, make a copy and run
 this command keeps compressed pictures of each widget UI and removes heavy widget state.
 See the HTML export docs for the widget capability table and folder-export guidance.
 
-Everything lands in `~/Downloads` (or the current directory on machines without
-one) and opens automatically on a desktop.
+Image and Show4DSTEM outputs land in `~/Downloads` by default. ShowPtycho
+projects land in `~/QuantEM/showptycho/<acquisition>` so a shared or read-only
+acquisition is never used as an implicit output directory. Pass `--out` for a
+specific project location or `--in-place` to opt into
+`SOURCE/quantem/showptycho`.
 
 | Option | Effect |
 |---|---|
-| `--bin N` | detector mean-bin factor for 4D-STEM (default 1: full detector sampling) |
+| `--bin N` | detector mean-bin factor for Show4DSTEM (default 1: full detector sampling); ShowPtycho always uses native detector sampling |
 | `--dtype uint8/uint16` | 4D-STEM HTML export dtype; `uint8` is compact browse, `uint16` keeps the wider detector-count range |
 | `--html` | 4D-STEM: write the offline-WebGPU HTML instead of a notebook |
 | `--backend auto/cuda/mps/cpu/webgpu` | Show4DSTEM backend; use `webgpu` with `--html` |
@@ -164,7 +164,7 @@ Most users want one of these paths:
 | Goal | Use this | Result |
 |---|---|---|
 | Keep working interactively in Python | `quantem show4dstem ./masters/` or `Show4DSTEM(load(...))` | Live notebook, kernel-backed CUDA/MPS interaction |
-| Share a compact screening result | `widget.export_html(..., export_kind="report")` | One self-contained HTML report; PNG virtual-image pages; no raw 4D payload |
+| Share a compact review result | `widget.export_html(..., export_kind="report")` | One self-contained HTML report; PNG virtual-image pages; no raw 4D payload |
 | Share an offline browser widget | `widget.export_html(..., export_kind="interactive", dtype="uint8", scan_bin=2, det_bin=4)` | WebGPU HTML that can still drag detector ROIs, but embeds binned raw 4D data |
 | Open directly from the terminal | `quantem show4dstem ./masters/ --backend webgpu --html --count 1` | Browser WebGPU export built from source H5 masters |
 | Open full native detector sampling from the terminal | `quantem show4dstem ./masters/ --backend webgpu --html --count 7 --bin 1 --dtype uint8` | No-notebook WebGPU export with native detector sampling |
@@ -257,11 +257,11 @@ nonzero-aperture BF pixels after the BF policy is applied.
 | Scan | Active BF | Typical use | Old n x n baseline (not runtime) | Exact default | Fast preview |
 |---|---:|---|---:|---:|---:|
 | 512x512 | 12 | Small smoke test | 25 MB | 13 MB | 6.3 MB |
-| 512x512 | 408 | 0.30 BF preview in the Phil report | 856 MB | 429 MB | 215 MB |
+| 512x512 | 408 | 0.30 BF preview in the reference report | 856 MB | 429 MB | 215 MB |
 | 512x512 | 1360 | Full-BF estimate for the sparse experimental 512 dataset | 2.85 GB | 1.43 GB | 0.72 GB |
 | 512x512 | 9070 | Dense experimental full active BF | 19.0 GB | 9.55 GB | 4.77 GB |
 | 1024x1024 | 12 | Small smoke test | 101 MB | 50 MB | 25 MB |
-| 1024x1024 | 1382 | Berk full active BF | 11.6 GB | 5.81 GB | 2.90 GB |
+| 1024x1024 | 1382 | Reference full active BF | 11.6 GB | 5.81 GB | 2.90 GB |
 | 1024x1024 | 9070 | Workstation stress projection | 76.1 GB | 38.1 GB | 19.1 GB |
 
 ## Docs

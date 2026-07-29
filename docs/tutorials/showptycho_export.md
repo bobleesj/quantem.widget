@@ -62,14 +62,12 @@ One grant per session. This works fully offline.
 ### B. CLI (serves and opens, no grant click)
 
 ```bash
-quantem show out/
+quantem showptycho out/
 ```
 
-`quantem showptycho` is a compatibility alias for `quantem ptycho`, and
-`quantem show` auto-detects the same folder. Point either command at the
-exported folder; it serves the folder over range-capable HTTP and opens it, so
-the viewer loads without the manual folder grant. Use this when double-click +
-grant is inconvenient, for example over a remote connection.
+The command serves the folder over range-capable HTTP and opens it, so the viewer
+loads without the manual folder-grant. Use this when double-click + grant is
+inconvenient (for example over a remote connection).
 
 ## What you can do in the viewer
 

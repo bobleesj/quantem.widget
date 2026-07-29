@@ -6,8 +6,11 @@ import pathlib
 import re
 import sys
 import types
+from dataclasses import replace
 
 import numpy as np
+
+from quantem.gpu import SSB
 
 
 def _webgpu_source(name: str) -> str:
@@ -44,6 +47,8 @@ class _FakeCuPy(types.SimpleNamespace):
 
 
 class _FakeAccel:
+    backend = "cuda"
+
     def __init__(self):
         self._cache = {
             "num_bf": 8,
@@ -76,6 +81,59 @@ class _FakeAccel:
         self._dc_value_host = np.complex64(1.0 + 0.0j)
         self.reconstruct_calls: list[tuple[str, float, float, float]] = []
 
+    @property
+    def scan_shape(self):
+        return int(self._cache["ny"]), int(self._cache["nx"])
+
+    @property
+    def detector_shape(self):
+        return self.gpts
+
+    @property
+    def num_bf(self):
+        return int(self._cache["num_bf"])
+
+    def preview_context(self, num_bf: int):
+        return _FakePreparedSubset(num_bf)
+
+    @staticmethod
+    def phase_to_numpy(phase):
+        return np.asarray(phase, dtype=np.float32)
+
+    def browser_state(self):
+        from quantem.gpu.ssb.compute.protocol import SSBExportState
+        from quantem.gpu.ssb.bf_selector import BrightfieldDisk
+
+        selection = BrightfieldDisk(
+            rows=self.bf_inds_row,
+            cols=self.bf_inds_col,
+            center_row_col=self.bf_center,
+            radius_px=2.0,
+            detected_radius_px=2.0,
+            detector_shape=self.detector_shape,
+        )
+        return SSBExportState(
+            backend=self.backend,
+            scan_shape=self.scan_shape,
+            brightfield=selection,
+            kx_bf=self._cache["kx_bf"],
+            ky_bf=self._cache["ky_bf"],
+            qx_1d=self._cache["qx_1d"],
+            qy_1d=self._cache["qy_1d"],
+            aperture_k=self._cache["aperture_k_1d"],
+            alpha_k2=self._cache["alpha_k2_1d"],
+            cos2phi_k=self._cache["cos2phi_k_1d"],
+            sin2phi_k=self._cache["sin2phi_k_1d"],
+            wavelength_A=float(self.wavelength),
+            semiangle_rad=float(self._cache["semiangle_rad"]),
+            angular_sampling_rad=(
+                float(self._cache["ang_y_rad"]),
+                float(self._cache["ang_x_rad"]),
+            ),
+            sampling_A=tuple(float(value) for value in self.sampling),
+            dc_value=complex(self._dc_value_host),
+        )
+
     def cache_rotation(self, rotation_rad: float) -> None:
         self._rotations.append(float(rotation_rad))
 
@@ -102,6 +160,30 @@ class _FakeAccel:
         value = np.float32(20.0 + np.asarray(mags_m).sum() + np.asarray(angles_rad).sum())
         return np.full((3, 4), value, dtype=np.float32)
 
+    def preview(
+        self,
+        aberrations,
+        *,
+        compute_loss,
+        higher_order_magnitudes,
+        higher_order_angles,
+    ):
+        if higher_order_magnitudes is not None:
+            if compute_loss:
+                return self.reconstruct_full_with_loss(
+                    higher_order_magnitudes, higher_order_angles
+                )
+            return self.reconstruct_full(
+                higher_order_magnitudes, higher_order_angles
+            ), None
+        if compute_loss:
+            return self.reconstruct_with_loss(
+                aberrations["C10"], aberrations["C12"], aberrations["phi12"]
+            )
+        return self.reconstruct(
+            aberrations["C10"], aberrations["C12"], aberrations["phi12"]
+        ), None
+
     def reconstruct_object(self, c10: float, c12: float, phi12: float):
         value = np.complex64(1.0 + 0.5j + np.float32(c10 + c12 + phi12) * 0j)
         return np.full((3, 4), value, dtype=np.complex64)
@@ -109,6 +191,21 @@ class _FakeAccel:
 
 class _FakeMpsAccel(_FakeAccel):
     backend = "mps"
+    capabilities = ()
+
+
+class _FakePreparedSubset:
+    def __init__(self, num_bf: int):
+        self.num_bf = int(num_bf)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def close(self):
+        return None
 
 
 class _FakeWebGPUAccel(_FakeAccel):
@@ -172,6 +269,7 @@ class _FakeMetadataOnlyMpsAccel(_FakeColumnWebGPUAccel):
 
     def __init__(self, n: int = 128):
         super().__init__(n)
+        self._frames = object()
         self.g_shape = tuple(int(v) for v in self.G_qk.shape)
         delattr(self, "G_qk")
         self.heavy_sync_calls = 0
@@ -180,18 +278,26 @@ class _FakeMetadataOnlyMpsAccel(_FakeColumnWebGPUAccel):
         self.heavy_sync_calls += 1
         raise AssertionError("compressed-source folder export should not sync G_qk")
 
+    def browser_state(self):
+        return super().browser_state()
 
-class _FakeSSB:
-    def __init__(self):
+
+class _FakeSSB(SSB):
+    def __init__(self, accel=None):
         self.aberrations = {"C10": 1.0, "C12": 2.0, "phi12": 0.1}
-        self._rotation_angle_rad = 0.2
-        self._best_loss = float("inf")
-        self.scan_sampling = (0.5, 0.5)
+        self.rotation_angle_deg = math.degrees(0.2)
+        self.best_loss = float("inf")
+        self.trial_history = []
+        self.scan_sampling_A = (0.5, 0.5)
+        self.angular_sampling = (1.0, 1.0)
+        self.bf_intensity_threshold = 0.5
         self.voltage_kV = 300.0
         self.semiangle_mrad = 21.9
-        self._accel = _FakeAccel()
+        self._accel = _FakeAccel() if accel is None else accel
+        self.backend = self._accel.backend
 
-    def _get_accelerator(self):
+    @property
+    def _backend_protocol(self):
         return self._accel
 
 
@@ -222,8 +328,8 @@ def test_showptycho_crop_request_uses_global_source_coordinates(monkeypatch, tmp
     master = tmp_path / "scan_master.h5"
     master.write_bytes(b"master")
     ssb = _FakeSSB()
-    ssb._scan_shape = (1024, 1024)
-    ssb.optimize = lambda **_kwargs: None
+    ssb._accel._cache["ny"] = 1024
+    ssb._accel._cache["nx"] = 1024
     widget = ShowPtycho(ssb, source_file=str(master))
     widget._scan_region = (128, 640, 256, 768)
     received: dict[str, object] = {}
@@ -262,7 +368,34 @@ def test_showptycho_from_ssb_uses_widget_contract(monkeypatch):
     assert widget.c10_max == 300.0
     result = json.loads(widget.result_json)
     assert result["loss"] == 0.125
-    assert ssb._showptycho_widget is widget
+    assert not hasattr(ssb, "_showptycho_widget")
+
+
+def test_showptycho_rejects_conflicting_prepared_backend(monkeypatch):
+    """C1a: prepared CUDA session plus MPS request, expect deterministic error."""
+    from quantem.widget import ShowPtycho
+
+    monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
+    try:
+        ShowPtycho(_FakeSSB(), backend="mps")
+    except ValueError as exc:
+        assert "prepared 'cuda' session" in str(exc)
+    else:
+        raise AssertionError("ShowPtycho silently changed a prepared backend")
+
+
+def test_showptycho_python_uses_only_public_session_state() -> None:
+    """C1b: frontend boundary, expect no CUDA optimizer private fields."""
+    source = pathlib.Path("src/quantem/widget/showptycho.py").read_text()
+
+    for private_name in (
+        "_rotation_angle_rad",
+        "_best_loss",
+        "_optuna_trials",
+        "_showptycho_widget",
+        "_get_accelerator",
+    ):
+        assert private_name not in source
 
 
 def test_showptycho_embedded_state_is_strict_json_with_unknown_loss(monkeypatch):
@@ -273,7 +406,7 @@ def test_showptycho_embedded_state_is_strict_json_with_unknown_loss(monkeypatch)
 
     monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
     ssb = _FakeSSB()
-    ssb._optuna_trials = [
+    ssb.trial_history = [
         {
             "loss": float("nan"),
             "params": {"C10_nm": 1.0, "C12_nm": 2.0, "phi12_deg": 3.0},
@@ -381,7 +514,7 @@ def test_showptycho_calibration_seed_restores_higher_order(monkeypatch, tmp_path
     assert ssb.aberrations["C10"] == 12.0
     assert ssb.aberrations["C12"] == 5.0
     assert math.isclose(ssb.aberrations["phi12"], math.radians(10.0))
-    assert math.isclose(ssb._rotation_angle_rad, math.radians(30.0))
+    assert math.isclose(ssb.rotation_angle_deg, 30.0)
     assert widget.flip_phase is True
     assert widget._source_file == "example_master.h5"
     higher = json.loads(widget.higher_order_json)
@@ -418,6 +551,39 @@ def test_showptycho_calibration_seed_reuses_saved_loss(monkeypatch, tmp_path):
     assert ssb._accel.reconstruct_calls == [
         ("phase", 12.0, 5.0, math.radians(10.0)),
     ]
+
+
+def test_showptycho_calibration_seed_preserves_full_precision(monkeypatch, tmp_path):
+    """C3b1: calibration values retain precision in synchronized state."""
+    from quantem.widget import PtychoCalibration, ShowPtycho
+    from quantem.widget.showptycho import save_ptycho_calibration
+
+    monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
+    path = tmp_path / "calibration.json"
+    expected = {
+        "C10": 12.1234567890123,
+        "C12": 5.9876543210987,
+        "phi12_deg": 10.1234567890123,
+    }
+    save_ptycho_calibration(
+        PtychoCalibration(
+            rotation_angle_deg=0.0,
+            aberrations={
+                "C10": expected["C10"],
+                "C12": expected["C12"],
+                "phi12": math.radians(expected["phi12_deg"]),
+            },
+            loss=0.03125,
+        ),
+        path,
+    )
+
+    widget = ShowPtycho(_FakeSSB(), calibration=path)
+    result = json.loads(widget.result_json)
+
+    assert result["C10"] == expected["C10"]
+    assert result["C12"] == expected["C12"]
+    assert result["phi12_deg"] == expected["phi12_deg"]
 
 
 def test_showptycho_calibration_without_loss_still_skips_loss_pass(
@@ -459,7 +625,7 @@ def test_showptycho_data_requires_geometry():
     try:
         ShowPtycho(np.zeros((2, 2, 4, 4), dtype=np.float32))
     except ValueError as exc:
-        assert "semiangle and scan_sampling" in str(exc)
+        assert "voltage_kV, semiangle_mrad, and scan_sampling_A" in str(exc)
     else:
         raise AssertionError("ShowPtycho accepted raw data without geometry")
 
@@ -469,11 +635,9 @@ def test_showptycho_mps_accel_does_not_require_cupy(monkeypatch):
     from quantem.widget.showptycho import _ShowPtychoWidget
 
     monkeypatch.delitem(sys.modules, "cupy", raising=False)
-    ssb = _FakeSSB()
-    ssb._accel = _FakeMpsAccel()
-    ssb.optimize = lambda **_kwargs: None
+    ssb = _FakeSSB(_FakeMpsAccel())
     widget = _ShowPtychoWidget(
-        accel=ssb._accel,
+        accel=ssb,
         rotation_rad=0.0,
         auto_aberrations={"C10": 1.0, "C12": 2.0, "phi12": 0.1},
         auto_loss_val=0.125,
@@ -488,62 +652,74 @@ def test_showptycho_mps_accel_does_not_require_cupy(monkeypatch):
     assert widget.phase_height == 3
     assert len(widget.phase_bytes) == 3 * 4 * 4
     assert json.loads(widget.result_json)["loss"] == 0.125
-    assert widget.crop_refit_available is False
-    assert "CUDA SSB backend" in widget.crop_refit_status
+    assert widget.crop_refit_available is True
+    assert "Ready to refit" in widget.crop_refit_status
     assert "cupy" not in sys.modules
 
 
 def test_showptycho_mps_accel_uses_phase_only_reconstruct(monkeypatch):
     """MPS ShowPtycho should hit the fused phase/loss path, not object-wave work."""
-    import quantem.gpu.ssb.mps as mps
-    from quantem.widget.showptycho import _MpsPtychoAccelerator
+    import quantem.gpu.ssb.compute.mps.engine as mps
+    import quantem.gpu.ssb.compute.mps.backend as mps_engine
+    from quantem.gpu.ssb.compute.mps.backend import MpsSSBBackend
 
     class FakePrepared:
         num_bf = 2
         scan_shape = (4, 4)
-        kx_np = np.array([0.0, 0.1], dtype=np.float32)
-        ky_np = np.array([0.0, -0.1], dtype=np.float32)
+        kx_np = np.array([-0.02], dtype=np.float32)
+        ky_np = np.array([0.02], dtype=np.float32)
+        bf_storage_indices_np = np.array([0], dtype=np.int32)
         wavelength = 0.025
         semiangle_rad = 0.02
         ang_y_rad = 0.001
         ang_x_rad = 0.001
         dc_value = 1.0 + 0.0j
-        g_qk = np.ones((2, 4, 3), dtype=np.complex64)
+        g_qk = np.ones((1, 4, 3), dtype=np.complex64)
 
     calls: list[dict] = []
     fake_prepared = FakePrepared()
 
-    monkeypatch.setattr(mps, "_as_chunked_frames", lambda data: data)
-    monkeypatch.setattr(mps, "_scan_shape", lambda frames: (4, 4))
-    monkeypatch.setattr(mps, "_as_sampling", lambda value: (float(value), float(value)))
+    monkeypatch.setattr(mps_engine, "_as_chunked_frames", lambda data: data)
+    monkeypatch.setattr(mps_engine, "_scan_shape", lambda frames: (4, 4))
     monkeypatch.setattr(
-        mps,
-        "_bf_pixels",
-        lambda *_args, **_kwargs: (
-            np.array([1, 2], dtype=np.int32),
-            np.array([2, 1], dtype=np.int32),
-            (1.5, 1.5),
-            2.0,
-            2.0,
+        mps_engine,
+        "_as_sampling",
+        lambda value: (float(value), float(value)),
+    )
+    monkeypatch.setattr(
+        mps_engine,
+        "_resolve_bf_selection",
+        lambda *_args, **_kwargs: mps.BrightfieldDisk(
+            rows=np.array([1, 2], dtype=np.int32),
+            cols=np.array([2, 1], dtype=np.int32),
+            center_row_col=(1.5, 1.5),
+            radius_px=2.0,
+            detected_radius_px=2.0,
+            detector_shape=(4, 4),
         ),
     )
-    monkeypatch.setattr(mps, "_default_object_redraw_chunk_bf", lambda: 16)
-    monkeypatch.setattr(mps, "_default_object_setup_chunk_bf", lambda: 16)
-    monkeypatch.setattr(mps, "_prepare_selection", lambda *_args, **_kwargs: fake_prepared)
+    monkeypatch.setattr(mps_engine, "_default_object_redraw_chunk_bf", lambda: 16)
+    monkeypatch.setattr(mps_engine, "_default_object_setup_chunk_bf", lambda: 16)
+    monkeypatch.setattr(
+        mps_engine,
+        "_prepare_selection",
+        lambda *_args, **_kwargs: fake_prepared,
+    )
 
     def fake_reconstruct(_prepared, **kwargs):
         calls.append(dict(kwargs))
         return None, 0.25 if kwargs["compute_loss"] else None, np.zeros((4, 4), dtype=np.float32)
 
-    monkeypatch.setattr(mps, "_reconstruct_prepared", fake_reconstruct)
+    monkeypatch.setattr(mps_engine, "_reconstruct_prepared", fake_reconstruct)
 
-    accel = _MpsPtychoAccelerator(
-        types.SimpleNamespace(shape=(16, 4, 4)),
+    accel = MpsSSBBackend(
+        types.SimpleNamespace(shape=(16, 4, 4), detector_sum=None),
         voltage_kV=200.0,
         semiangle_mrad=21.4,
         scan_sampling=0.5,
         det_sampling=None,
         bf_intensity_threshold=0.5,
+        bf_center=None,
         bf_radius=2,
         rotation_angle_deg=0.0,
     )
@@ -552,6 +728,13 @@ def test_showptycho_mps_accel_uses_phase_only_reconstruct(monkeypatch):
 
     assert [call["compute_loss"] for call in calls] == [True, False]
     assert [call["compute_object"] for call in calls] == [False, False]
+    state = accel.browser_state()
+    from quantem.gpu.ssb.compute import SSBProtocol
+
+    assert isinstance(accel, SSBProtocol)
+    assert state.kx_bf.shape == (2,)
+    assert state.ky_bf.shape == (2,)
+    assert state.kx_bf[1] != 0.0
 
 
 def test_showssb_is_not_public_api():
@@ -579,7 +762,7 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
         data[:, 2, 1] = 7
         group.create_dataset("data", data=data, chunks=(512, 4, 4))
     widget = _ShowPtychoWidget(
-        accel=_FakeColumnWebGPUAccel(128),
+        accel=_FakeSSB(_FakeColumnWebGPUAccel(128)),
         rotation_rad=0.0,
         auto_aberrations={"C10": 1.0, "C12": 2.0, "phi12": 0.1},
         auto_loss_val=0.125,
@@ -588,7 +771,6 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
         phi12_range=(-90.0, 90.0),
         size=320,
         fft_on=True,
-        webgpu_preview="auto",
         source_file=str(master),
     )
 
@@ -599,8 +781,8 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
     assert not (out_dir / "ref_phase.f32").exists()
     assert not (out_dir / "ref_fft.f32").exists()
     assert not (out_dir / "ref_products.npz").exists()
-    assert (out_dir / "source" / master.name).exists()
-    assert (out_dir / "source" / data_file.name).exists()
+    assert not (out_dir / "source" / master.name).exists()
+    assert not (out_dir / "source" / data_file.name).exists()
     assert (out_dir / "source" / "bf_columns.u8").exists()
     assert not (out_dir / "saves").exists()
     assert json.loads((out_dir / "snapshots" / "snapshots.json").read_text()) == []
@@ -612,18 +794,22 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
     assert top_level == {"index.html", "source", "snapshots", ".viewer", "ShowPtycho.command"}
     cal = json.loads((out_dir / "snapshots" / "cal.json").read_text())
     assert cal["kind"] == "showptycho_webgpu_folder"
-    assert cal["source_file"] == "scan_master.h5"
-    assert cal["source_transport"] == "compressed_hdf5"
+    assert cal["source_file"] == "redacted_local_source"
+    assert cal["source_transport"] == "bf_columns"
     assert cal["bf_column_companion"] is True
     assert cal["bf_column_companion_path"] == "source/bf_columns.u8"
     assert cal["persistent_bf_cache"] is False
     assert cal["source_calibration"] == "redacted_local_calibration"
     assert cal["num_bf"] == 2
     assert cal["g_shape"] == [2, 128, 128]
+    assert cal["precision"] == {
+        "real_dtype": "float32",
+        "complex_dtype": "complex64",
+    }
     manifest = json.loads((out_dir / "snapshots" / "manifest.json").read_text())
     assert manifest["format"] == "quantem.showptycho.webgpu.folder.v2"
     assert manifest["arrays"] == {}
-    assert manifest["source"]["kind"] == "hdf5"
+    assert manifest["source"]["kind"] == "bf_columns"
     assert manifest["calibration"] == "snapshots/cal.json"
     assert manifest["source"]["preferred_browser_source"] == "bf_columns"
     assert manifest["source"]["bf_columns"]["path"] == "source/bf_columns.u8"
@@ -648,15 +834,81 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
     assert "bf_columns.u8" in html
     assert "g_bf.c64" not in html
     assert "ShowPtycho WebGPU Sidecar" not in html
+    exported_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in out_dir.rglob("*")
+        if path.is_file() and path.suffix in {".html", ".json", ".md"}
+    )
+    assert master.name not in exported_text
+    assert data_file.name not in exported_text
+    assert str(tmp_path) not in exported_text
 
 
-def test_showptycho_folder_ui_reads_legacy_saved_states() -> None:
-    """C1: renamed snapshot storage still recalls old folder save manifests."""
+def test_showptycho_export_reuses_matching_exact_bf_companion(
+    tmp_path,
+    monkeypatch,
+):
+    """C4: matching MPS BF source, expect a link without HDF5 re-extraction."""
+    from quantem.gpu.ssb.bf_selector import BrightfieldDisk
+    from quantem.gpu.ssb.compute.mps.engine import MpsBfColumnFrames
+
+    from quantem.widget.showptycho_webgpu_export import _reuse_bf_column_source
+
+    source = tmp_path / "existing" / "bf_columns.u8"
+    source.parent.mkdir()
+    source.write_bytes(np.arange(32, dtype=np.uint8).tobytes())
+    selection = BrightfieldDisk(
+        rows=np.asarray([1, 2], dtype=np.int32),
+        cols=np.asarray([2, 1], dtype=np.int32),
+        center_row_col=(1.5, 1.5),
+        radius_px=1.0,
+        detected_radius_px=1.0,
+        detector_shape=(4, 4),
+    )
+    monkeypatch.setattr(
+        MpsBfColumnFrames,
+        "_detector_sum_mps",
+        lambda self: np.zeros(self.det_shape, dtype=np.uint64),
+    )
+    frames = MpsBfColumnFrames(
+        source,
+        selection=selection,
+        scan_shape=(4, 4),
+        dtype=np.uint8,
+        max_value=31,
+    )
+    out = tmp_path / "out"
+    out.mkdir()
+    calibration = {
+        "bf_rows": [1, 2],
+        "bf_cols": [2, 1],
+        "scan_region": {"shape": [4, 4]},
+    }
+
+    state = replace(
+        _FakeColumnWebGPUAccel(4).browser_state(),
+        brightfield=selection,
+        bf_source_path=frames.source_path,
+        bf_source_dtype=frames.dtype,
+        bf_source_max_value=frames.max_value,
+    )
+    metadata = _reuse_bf_column_source(state, out, calibration)
+
+    assert metadata is not None
+    assert metadata["encoding"] == "uint8"
+    assert metadata["max_value"] == 31
+    assert metadata["num_bf"] == 2
+    assert metadata["plane"] == 16
+    assert (out / "source" / "bf_columns.u8").read_bytes() == source.read_bytes()
+
+
+def test_showptycho_folder_ui_reads_only_current_snapshot_state() -> None:
+    """C1: snapshot loading has one current manifest and no compatibility merge."""
     ui_source = pathlib.Path("js/showptycho/index.tsx").read_text(encoding="utf-8")
 
-    assert 'readShowPtychoFolderJson<FolderSaveRecord[]>("snapshots/snapshots.json")' in ui_source
-    assert 'readShowPtychoFolderJson<FolderSaveRecord[]>("saves/saves.json")' in ui_source
-    assert "byId.set(record.id, record)" in ui_source
+    assert 'readSSBFolderJson<FolderSaveRecord[]>("snapshots/snapshots.json")' in ui_source
+    assert 'readSSBFolderJson<FolderSaveRecord[]>("saves/saves.json")' not in ui_source
+    assert "byId.set(record.id, record)" not in ui_source
 
 
 def test_showptycho_folder_save_persists_without_automatic_download() -> None:
@@ -667,11 +919,24 @@ def test_showptycho_folder_save_persists_without_automatic_download() -> None:
         ui_source.index("const loadFolderSave = React.useCallback", ui_source.index("const doFolderSave"))
     ]
 
-    assert 'writeShowPtychoFolderFile(record.image, jpeg)' in save_block
-    assert 'writeShowPtychoFolderFile("snapshots/snapshots.json", JSON.stringify(next, null, 2))' in save_block
+    assert 'writeSSBFolderFile(record.image, jpeg)' in save_block
+    assert 'writeSSBFolderFile("snapshots/snapshots.json", JSON.stringify(next, null, 2))' in save_block
     assert 'setFolderSaveStatus(`Snapshot saved (${next.length})`)' in save_block
     assert "downloadBlob(" not in save_block
     assert "+ downloaded" not in save_block
+
+
+def test_showptycho_save_copy_is_project_agnostic() -> None:
+    """C1: Save copy, expect the public project workflow, not a private notebook."""
+    ui_source = pathlib.Path("js/showptycho/index.tsx").read_text(encoding="utf-8")
+    webgpu_source = pathlib.Path(
+        "js/.generated/engine/ssb/compute/webgpu/backend.ts"
+    ).read_text(encoding="utf-8")
+
+    assert "Save calibration.json in this ShowPtycho project" in ui_source
+    assert "3_live.ipynb" not in ui_source
+    assert "open this project with its .command launcher" in webgpu_source
+    assert "serve_sidecar_range.py" not in webgpu_source
 
 
 def test_showptycho_exports_wrapper_master_external_hdf5_source_fallback(monkeypatch, tmp_path):
@@ -700,14 +965,13 @@ def test_showptycho_exports_wrapper_master_external_hdf5_source_fallback(monkeyp
         data["data_000002"] = h5py.ExternalLink(str(data_file_2), "/entry/data/data")
 
     widget = _ShowPtychoWidget(
-        accel=_FakeWebGPUAccel(128),
+        accel=_FakeSSB(_FakeWebGPUAccel(128)),
         rotation_rad=0.0,
         auto_aberrations={"C10": 1.0, "C12": 2.0, "phi12": 0.1},
         auto_loss_val=0.125,
         c10_range=(-10.0, 10.0),
         c12_range=(0.0, 10.0),
         phi12_range=(-90.0, 90.0),
-        webgpu_preview="auto",
         source_file=str(master),
     )
 
@@ -781,14 +1045,13 @@ def test_showptycho_webgpu_folder_uses_mps_metadata_without_gqk_sync(
 
     accel = _FakeMetadataOnlyMpsAccel(128)
     widget = _ShowPtychoWidget(
-        accel=accel,
+        accel=_FakeSSB(accel),
         rotation_rad=0.0,
         auto_aberrations={"C10": 1.0, "C12": 2.0, "phi12": 0.1},
         auto_loss_val=0.125,
         c10_range=(-10.0, 10.0),
         c12_range=(0.0, 10.0),
         phi12_range=(-90.0, 90.0),
-        webgpu_preview="auto",
         source_file=str(master),
     )
 
@@ -797,7 +1060,7 @@ def test_showptycho_webgpu_folder_uses_mps_metadata_without_gqk_sync(
 
     cal = json.loads((out_dir / "snapshots" / "cal.json").read_text())
     assert cal["g_shape"] == [2, 128, 128]
-    assert cal["source_transport"] == "compressed_hdf5"
+    assert cal["source_transport"] == "bf_columns"
     assert cal["bf_column_companion"] is True
     assert accel.heavy_sync_calls == 0
     assert not hasattr(accel, "G_qk")
@@ -805,85 +1068,27 @@ def test_showptycho_webgpu_folder_uses_mps_metadata_without_gqk_sync(
     assert list((out_dir / "source").glob("bf_columns.*"))
 
 
-def test_showptycho_notebook_webgpu_preview_does_not_write_cache_by_default(
-    monkeypatch,
-    tmp_path,
-):
-    """Default notebook preview must not leave a persistent BF-G cache."""
-    from quantem.widget.showptycho import _ShowPtychoWidget
-
-    monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
-    monkeypatch.chdir(tmp_path)
-    widget = _ShowPtychoWidget(
-        accel=_FakeWebGPUAccel(),
-        rotation_rad=0.0,
-        auto_aberrations={"C10": 1.0, "C12": 2.0, "phi12": 0.1},
-        auto_loss_val=0.125,
-        c10_range=(-10.0, 10.0),
-        c12_range=(0.0, 10.0),
-        phi12_range=(-90.0, 90.0),
-        webgpu_preview="auto",
-    )
-
-    assert widget.webgpu_preview_enabled is False
-    assert widget.webgpu_g_bf_url == ""
-    assert not (tmp_path / "quantem_showptycho_webgpu").exists()
-    assert "does not write a persistent BF-G cache" in widget.webgpu_preview_status
-
-
-def test_showptycho_webgpu_preview_accepts_128_256_512_and_1024(monkeypatch, tmp_path):
-    """C5: WebGPU preview guard allows the native 128/256/512/1024 kernels."""
-    from quantem.widget.showptycho import _ShowPtychoWidget
-
-    monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
-    monkeypatch.chdir(tmp_path)
-
-    for n in (128, 256, 512, 1024):
-        widget = _ShowPtychoWidget(
-            accel=_FakeWebGPUAccel(n),
-            rotation_rad=0.0,
-            auto_aberrations={"C10": 1.0, "C12": 2.0, "phi12": 0.1},
-            auto_loss_val=0.125,
-            c10_range=(-10.0, 10.0),
-            c12_range=(0.0, 10.0),
-            phi12_range=(-90.0, 90.0),
-            webgpu_preview="cache",
-        )
-
-        assert widget.webgpu_preview_enabled is True
-        assert widget.webgpu_preview_status.startswith("WebGPU preview ready")
-        assert (tmp_path / widget.webgpu_g_bf_url.removeprefix("/files/")).stat().st_size == (
-            np.dtype(np.complex64).itemsize * n * n
-        )
-
-
 def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     """C6: frontend SSB code keeps explicit 128/256/512/1024 WGSL support."""
-    source = _webgpu_source("showptycho-ssb.ts")
+    source = _webgpu_source("ssb/compute/webgpu/backend.ts")
+    source += _webgpu_source("ssb/compute/webgpu/protocol.ts")
     ui_source = pathlib.Path("js/showptycho/index.tsx").read_text()
-    sidecar = pathlib.Path("js/showptycho/webgpu_index.html").read_text()
 
-    assert "const SUPPORTED_SSB_SIZES = [128, 256, 512, 1024]" in source
-    assert "const SUPPORTED_SSB_SIZES = [128, 256, 512, 1024]" in sidecar
+    registry = _webgpu_source("ssb/compute/webgpu/kernels/index.ts")
+    assert "SUPPORTED_SSB_SIZES = [128, 256, 512, 1024]" in registry
     assert "const workgroupSize = Math.min(n, 256)" in source
     assert "@compute @workgroup_size(${workgroupSize})" in source
-    assert "const workgroupSize = Math.min(n, 256)" in sidecar
-    assert "@compute @workgroup_size(${workgroupSize})" in sidecar
     assert "for (var off = 0u; off < ${n}u; off = off + ${workgroupSize}u)" in source
-    assert "for (var off = 0u; off < ${n}u; off = off + ${workgroupSize}u)" in sidecar
     assert "for (var butterfly = tid; butterfly < ${n / 2}u; butterfly = butterfly + ${workgroupSize}u)" in source
-    assert "for (var butterfly = tid; butterfly < ${n / 2}u; butterfly = butterfly + ${workgroupSize}u)" in sidecar
     assert "LAN-IP HTTP pages cannot use WebGPU" in source
     assert "makeFftStages(n" in source
-    assert "makeFftStages(n" in sidecar
-    assert "makeReduceBody" in sidecar
     assert "fn reducePartialGroups" in source
     assert "fn finalizePartialGroups" in source
     assert "bfGeom" in source
     assert "bfTrig" in source
     assert "collectActiveBfIndices" in source
     assert "packGeometry(this.cal, activeIndices, rotationDeg)" in source
-    assert "fetchPackedActiveBfBytes" in source
+    assert "fetchPackedBfColumnBytes" in source
     assert "active_bf: u32" in source
     assert "if (bg.w == 0.0) { return; }" in source
     assert "if (bf >= params.active_bf) { return; }" in source
@@ -892,7 +1097,7 @@ def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     assert "gqkChunks" in source
     assert "paramsChunks" in source
     assert "chooseChunkCapacity" in source
-    assert "FULL_STACK_GPU_BUDGET_BYTES" in source
+    assert "GQK_GPU_BUDGET_BYTES" in source
     assert "function clippedBslz4Frames" in source
     assert "const fileFramesToRead = Math.min(index.frames, Math.max(0, plane - sourceFrames))" in source
     assert "const frameStop = Math.min(fileFramesToRead, frameStart + framesPerChunk)" in source
@@ -926,7 +1131,7 @@ def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     assert "local_bf + params.bf_offset" in source
     assert "bfOffset = 0" in source
     assert "for (let bfOffset = 0; bfOffset < buffers.activeBfCount; bfOffset += buffers.dispatchChunkCapacity)" in source
-    assert "if (buffers.fullStack)" in source
+    assert "buffers.fullStack" not in source
     assert "pass.setPipeline(pipelines.reducePartial)" in source
     assert "pass.setPipeline(pipelines.finalizeGroups)" in source
     assert "pipelines.reducePartial" in source
@@ -946,7 +1151,7 @@ def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     assert "Math.ceil(chunkBf / BF_COLUMN_UNPACK_WORKGROUP_Y)" in source
     assert "pass.dispatchWorkgroups(Math.ceil(plane / 16)" not in source
     assert "mode == 3u" in source
-    assert "__showptychoBfColumnProfile" in source
+    assert "__ssbBfColumnProfile" in source
     assert "loadedBfCount" in source
     assert "setup(requiredBfCount" in source
     assert "DEFAULT_BF_FRACTION = 1.0" in ui_source
@@ -960,9 +1165,8 @@ def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     assert "__QUANTEM_SHOWPTYCHO_LAST_PHASE__" in ui_source
     assert "full BF phase" in ui_source
     assert "full BF + loss" in ui_source
-    assert "bindGroups.reducePreview" in sidecar
-    assert "loop {" not in source + sidecar
-    assert "var len: u32" not in source + sidecar
+    assert "loop {" not in source
+    assert "var len: u32" not in source
     assert "bf + 7u < params.chunk_bf" not in source
     assert "bf + 7u < params.num_bf" not in source
     assert "const REDUCE_BF_GROUP = 32" in source
@@ -990,7 +1194,7 @@ def test_showptycho_phase_contrast_coalesces_gpu_updates_without_thumb_swaps():
 
 def test_showptycho_webgpu_reuses_resident_bf_columns_after_prepare():
     """C7: prepared browser BF columns, expect sliders/FFT not to refetch them."""
-    source = _webgpu_source("showptycho-ssb.ts")
+    source = _webgpu_source("ssb/compute/webgpu/backend.ts")
     ui_source = pathlib.Path("js/showptycho/index.tsx").read_text()
 
     setup = source[
@@ -1036,6 +1240,9 @@ def test_showptycho_webgpu_reuses_resident_bf_columns_after_prepare():
     assert "computeLoss = options.computeLoss ?? bfCount === this.cal.num_bf" in reconstruct
     assert "await readF32(device, buffers.phase, this.plane)" in reconstruct
 
+    assert ui_source.count("phi12Val * Math.PI / 180") == 2
+    assert "frame.phi12 * Math.PI / 180" in ui_source
+
     assert "engine.prepareBfCount(count).then(prepared =>" in commit_bf
     assert "const fn = prepared >= total ? frontendFullRef.current : frontendPreviewRef.current;" in commit_bf
     assert "fn?.(current.c10, current.c12, current.phi12, rotationDegRef.current);" in commit_bf
@@ -1043,9 +1250,9 @@ def test_showptycho_webgpu_reuses_resident_bf_columns_after_prepare():
     assert "const modeLabel = isFull ? \"full BF + loss\" : \"selected BF\";" in frontend_full
 
 
-def test_showptycho_webgpu_folder_uses_active_bf_disk_total():
-    """C7b: standalone folder BF slider, expect active aperture pixels."""
-    source = _webgpu_source("showptycho-ssb.ts")
+def test_showptycho_webgpu_folder_uses_full_logical_bf_total():
+    """C7b: standalone BF slider, expect the complete coordinate prefix."""
+    source = _webgpu_source("ssb/compute/webgpu/backend.ts")
     ui_source = pathlib.Path("js/showptycho/index.tsx").read_text()
 
     active_selector = source[
@@ -1054,12 +1261,12 @@ def test_showptycho_webgpu_folder_uses_active_bf_disk_total():
     ]
 
     assert "for (let i = 0; i < cal.num_bf; i++)" in active_selector
-    assert active_selector.index("for (let i = 0; i < cal.num_bf; i++)") < active_selector.index("const count =")
-    assert "Math.floor((i + 0.5) * stride)" in active_selector
-    assert "if (computeLoss) {" in source
-    assert "if (computeLoss && bfCount === this.cal.num_bf)" not in source
-    assert "const webgpuCalActiveBf = React.useMemo(() =>" in ui_source
-    assert "const effectiveTotalBf = webgpuStandalone && webgpuCalActiveBf > 0" in ui_source
+    assert "if (aperture !== 0) active.push(i)" in active_selector
+    assert "const count = Math.max(1, Math.min(active.length, Math.round(numBf)))" in active_selector
+    assert "for (let i = 0; i < count; i++)" in active_selector
+    assert "const webgpuCalLogicalBf = React.useMemo(() =>" in ui_source
+    assert "const effectiveTotalBf = webgpuStandalone && webgpuCalLogicalBf > 0" in ui_source
+    assert "return Number.isFinite(numBf) && numBf > 0 ? Math.round(numBf) : 0" in ui_source
     assert "const seedStandaloneDefault = webgpuStandalone && !standaloneBfSeededRef.current && total > 0" in ui_source
     assert "raw <= 0 || seedStandaloneDefault" in ui_source
     assert "max={effectiveTotalBf > 0 ? effectiveTotalBf : 0}" in ui_source

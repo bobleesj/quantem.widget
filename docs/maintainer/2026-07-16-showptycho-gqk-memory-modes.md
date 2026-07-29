@@ -15,13 +15,14 @@ collaborators can open these folders on ordinary laptops?
 - Dataset: a real experimental 4D-STEM acquisition
   (512x512 scan, 192x192 Arina, 19.3 GB raw, max pixel 17 counts).
   Calibration: fresh SSB fit, 200 Optuna trials + Nelder-Mead refine
-  (`Show4DSTEM.compute_ssb`, rotation seeded from a prior batch screen fit).
-- Export at the time of this experiment: `quantem ptycho <master> --calibration <fit.json>`
+  (`Show4DSTEM.compute_ssb`, rotation seeded from a prior batch fit).
+- Current export command: `quantem showptycho <master> --calibration <fit.json>`
   with the historical BF-column companion enabled
   (WebGPU folder, compressed HDF5 + `bf_columns.u8` companion, 5.9 GB on disk).
   Current exports use the compressed-HDF5 WebGPU source directly; the
   BF-column companion transport was later removed.
-- Viewer host: phil (M5 MacBook, 24 GB unified, Chrome, adapter `apple/metal-3`
+- Viewer host: reference Apple Silicon laptop (M5 MacBook, 24 GB unified,
+  Chrome, adapter `apple/metal-3`
   — real hardware confirmed via `adapter.info`, not SwiftShader).
 - Harness: folder served by `scripts/serve_sidecar_range.py` (plain
   `python -m http.server` FAILS — no HTTP Range support, viewer dies with
@@ -62,11 +63,11 @@ than the raw BF label shown in the UI.
 | Scan | Active BF | Typical use | Old n x n baseline (not runtime) | Exact default | Compact preview |
 |---|---:|---|---:|---:|---:|
 | 512x512 | 12 | Small smoke test | 25 MB | 13 MB | 6.3 MB |
-| 512x512 | 408 | 0.30 BF preview in the Phil report | 856 MB | 429 MB | 215 MB |
+| 512x512 | 408 | 0.30 BF preview in the reference report | 856 MB | 429 MB | 215 MB |
 | 512x512 | 1360 | Full-BF estimate for the sparse experimental 512 dataset | 2.85 GB | 1.43 GB | 0.72 GB |
 | 512x512 | 9070 | Dense experimental full active BF | 19.0 GB | 9.55 GB | 4.77 GB |
 | 1024x1024 | 12 | Small smoke test | 101 MB | 50 MB | 25 MB |
-| 1024x1024 | 1382 | Berk full active BF | 11.6 GB | 5.81 GB | 2.90 GB |
+| 1024x1024 | 1382 | Reference full active BF | 11.6 GB | 5.81 GB | 2.90 GB |
 | 1024x1024 | 9070 | Workstation stress projection | 76.1 GB | 38.1 GB | 19.1 GB |
 
 Formula:
@@ -88,7 +89,7 @@ now reads half the bytes. Strictly better on every axis => **`herm` is the new
 default Exact path**; the old n x n storage branch has been removed from the
 runtime and now exists only as historical baseline data in this report.
 
-## Implementation (`quantem.gpu.webgpu/showptycho-ssb.ts`)
+## Implementation (`quantem.gpu.ssb.compute.webgpu/backend.ts`)
 
 - `GqkMode` = `herm | herm16`, resolved from `?gqk=` URL param or
   `globalThis.__QUANTEM_SHOWPTYCHO_GQK_MODE__`; default `herm`. Public aliases:
@@ -145,7 +146,7 @@ builds `G(q,k)` as the scan-space FFT of real intensity traces, so the
 Hermitian identity `G(-q,k) = conj(G(q,k))` holds everywhere, and the
 per-BF-pixel snorm16/int16 block quantization transfers directly.
 
-| Optimization | WebGPU (`quantem.gpu.webgpu/showptycho-ssb.ts`, generated into `quantem.widget/js/.generated/engine/showptycho-ssb.ts` for bundling) | CUDA (`quantem.gpu/src/quantem/gpu/ssb/engine.py`) | MPS (`quantem.gpu/src/quantem/gpu/ssb/mps.py`) |
+| Optimization | WebGPU (`quantem.gpu/ssb/compute/webgpu/backend.ts`, generated under the matching widget engine tree) | CUDA (`quantem.gpu/ssb/compute/cuda`) | MPS (`quantem.gpu/ssb/compute/mps`) |
 |---|---|---|---|
 | Exact Hermitian half-plane G(q,k) (2x, bit-exact, faster) | **DONE — default** | TODO — `self.G_qk` is n x n complex64; also the streaming `result_buffer`/staging buffers (batch x bf x scan^2 x c64) would halve | TODO — `mx.complex64` n x n storage; gamma kernels at mps.py:430-440 already compute conj explicitly, mirror fetch slots in there |
 | Compact preview snorm16/int16 block storage (4x, ~1e-4 rad error) | **DONE — opt-in** `?gqk=preview` (`?gqk=herm16` alias) | TODO — cupy int16 pairs + per-BF f32 scale; dequant inside the variance/correction kernels | TODO — mx int16 + scale; check MLX gather perf before committing |
@@ -171,7 +172,7 @@ Raw parity harness for the WebGPU case: CDP + `globalThis.__quantemSsbLast`
 
 ## Scan-size sweep (added same day)
 
-Reference kernel sweep across all supported scan sizes, three modes each, on phil
+Reference kernel sweep across all supported scan sizes, three modes each, on the reference laptop
 (`apple/metal-3`). 128/256/1024 are synthetic Arina-style masters written with
 `quantem.gpu.io.save` (uint16, 48x48 detector, disk + gradient-shift phase
 object, semiangle 8 mrad, det sampling 1 mrad/px); 512 is the real

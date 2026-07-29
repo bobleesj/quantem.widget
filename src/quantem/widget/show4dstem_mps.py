@@ -20,7 +20,6 @@ See ``quantem.gpu.compute.backend`` for the protocol and
 """
 from __future__ import annotations
 
-import gc
 import threading
 import time
 
@@ -28,11 +27,10 @@ import numpy as np
 import traitlets
 
 from quantem.widget.show4dstem import Show4DSTEM
-from quantem.widget.detector import detector_mask
+from quantem.gpu.detector import detector_mask
 from quantem.gpu.compute.mps import (
     ChunkedFrames,
     _DEFAULT_COMPACT_TARGET_BYTES,
-    _bin_mask,
     _upsample_bin_dp,
 )
 

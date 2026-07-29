@@ -14,6 +14,7 @@ from quantem.widget.show4dstem_webgpu_export import (
     build_lazy_show4dstem_sidecar,
     bundle_master_urls,
     export_show4dstem_webgpu_bundle,
+    export_show4dstem_hdf5_viewer,
 )
 
 
@@ -122,6 +123,66 @@ def test_h5_export_sets_file_protocol_local_file_guard(tmp_path):
     assert assignment in page
     assert page.find(assignment) < page.find("__QT_H5_DECODE_DTYPE")
     assert page.find(assignment) < page.find("sources/tilt_a_master.h5")
+
+
+def test_direct_hdf5_viewer_links_source_without_copying(tmp_path):
+    """C1: project viewer, expect direct HTML and the same raw file inodes."""
+
+    source = tmp_path / "source"
+    project = tmp_path / "project"
+    source.mkdir()
+    _write_arina_family(source, "tilt_a")
+
+    html = export_show4dstem_hdf5_viewer(
+        source / "tilt_a_master.h5",
+        project,
+        scan_shape=(4, 4),
+        detector_shape=(32, 32),
+        title="Tilt A Show4DSTEM",
+    )
+
+    assert html == project / ".viewer" / "Show4DSTEM.html"
+    assert html.is_file()
+    assert (project / "tilt_a_master.h5").samefile(
+        source / "tilt_a_master.h5"
+    )
+    assert (project / "tilt_a_data_000001.h5").samefile(
+        source / "tilt_a_data_000001.h5"
+    )
+    assert "../tilt_a_master.h5" in html.read_text(encoding="utf-8")
+
+
+def test_direct_hdf5_viewer_can_anonymize_family_names(tmp_path):
+    """C1: anonymous project, expect generic aliases with identical raw bytes."""
+
+    source = tmp_path / "source"
+    project = tmp_path / "project"
+    source.mkdir()
+    _write_arina_family(source, "private_scan")
+    project.mkdir()
+    (project / "stale_name_master.h5").write_bytes(b"stale")
+    (project / "stale_name_data_000001.h5").write_bytes(b"stale")
+
+    html = export_show4dstem_hdf5_viewer(
+        source / "private_scan_master.h5",
+        project,
+        scan_shape=(4, 4),
+        detector_shape=(32, 32),
+        title="Dataset 001 Show4DSTEM",
+        target_stem="dataset-001",
+    )
+
+    assert (project / "dataset-001_master.h5").samefile(
+        source / "private_scan_master.h5"
+    )
+    assert (project / "dataset-001_data_000001.h5").samefile(
+        source / "private_scan_data_000001.h5"
+    )
+    page = html.read_text(encoding="utf-8")
+    assert "../dataset-001_master.h5" in page
+    assert "private_scan" not in page
+    assert not (project / "stale_name_master.h5").exists()
+    assert not (project / "stale_name_data_000001.h5").exists()
 
 
 def test_show4dstem_lazy_urls_export_uses_lazy_source(tmp_path):

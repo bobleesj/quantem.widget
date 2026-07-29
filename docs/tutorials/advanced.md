@@ -184,7 +184,7 @@ Use this checklist for the browser signoff:
 | Look for leaks | repeat buttons, scrub, play, histogram, zoom | JS heap, DOM nodes/listeners, cache counts, RSS trend |
 
 Example report line from a full-resolution `9 x 69 x 2048 x 2048` Show3D
-folder viewer on Phil:
+folder viewer on an Apple Silicon laptop:
 
 ```text
 load_s=3.8; histogram drag 5 s: 114 preview paints, 22.8 fps,

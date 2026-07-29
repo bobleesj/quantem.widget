@@ -100,12 +100,19 @@ class RangeHandler(SimpleHTTPRequestHandler):
     def _snapshot_write_path(self, *, allow_json):
         raw = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         rel = posixpath.normpath(raw).lstrip("/")
-        name = rel.removeprefix("snapshots/")
-        if allow_json and rel == "snapshots/snapshots.json":
+        parts = Path(rel).parts
+        if len(parts) == 2 and parts[0] == "snapshots":
+            pass
+        elif len(parts) == 3 and parts[1] == "snapshots":
+            pass
+        else:
+            self.send_error(403, "writes are restricted to dataset snapshots")
+            return None
+        name = parts[-1]
+        if allow_json and name == "snapshots.json":
             pass
         elif (
-            rel.startswith("snapshots/snapshot_")
-            and "/" not in name
+            name.startswith("snapshot_")
             and (name.endswith(".jpg") or name.endswith(".jpeg"))
         ):
             pass
@@ -115,8 +122,11 @@ class RangeHandler(SimpleHTTPRequestHandler):
         root = Path.cwd().resolve()
         path = (root / rel).resolve()
         try:
-            path.relative_to(root / "snapshots")
+            path.parent.relative_to(root)
         except ValueError:
+            self.send_error(403, "invalid snapshot path")
+            return None
+        if path.parent.name != "snapshots":
             self.send_error(403, "invalid snapshot path")
             return None
         return path

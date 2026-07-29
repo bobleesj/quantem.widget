@@ -27,7 +27,7 @@ def _mac_chip_mem():
 def device_info(verbose: bool = True) -> dict:
     """Return (and by default print) version + backend + hardware for this machine."""
     import quantem.widget
-    from quantem.widget.io import detect_backend
+    from quantem.gpu.io.backends import detect_backend
     backend = detect_backend()
     info = {
         "widget_version": quantem.widget.__version__,

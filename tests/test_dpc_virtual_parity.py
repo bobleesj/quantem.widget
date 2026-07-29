@@ -21,7 +21,7 @@ def gold():
 
 
 def test_center_of_mass_matches_quantem_live(gold):
-    from quantem.widget.dpc import center_of_mass
+    from quantem.gpu.dpc import center_of_mass
     from quantem.live.engine.dpc import compute_center_of_mass
     com_row, com_col = center_of_mass(gold)                      # widget (mean-subtracted)
     ref_row, ref_col = compute_center_of_mass(                   # reference
@@ -33,7 +33,7 @@ def test_center_of_mass_matches_quantem_live(gold):
 
 
 def test_dpc_phase_matches_quantem_live(gold):
-    from quantem.widget.dpc import dpc
+    from quantem.gpu.dpc import dpc
     from quantem.live import dpc as live_dpc
     w = dpc(gold, verbose=False)
     r = live_dpc(cp.asarray(gold.reshape(-1, *gold.shape[-2:])), scan_shape=(512, 512), verbose=False)
@@ -45,7 +45,7 @@ def test_dpc_phase_matches_quantem_live(gold):
 
 def test_virtual_matches_manual_masked_sum(gold):
     """virtual(mode) at an explicit probe == a direct masked-sum over that band."""
-    from quantem.widget.detector import virtual, auto_probe, _detector_mask, _resolve_backend
+    from quantem.gpu.detector import virtual, auto_probe, _detector_mask, _resolve_backend
     mean_dp = np.asarray(_resolve_backend(gold).mean_dp(), dtype=np.float32)
     center, r = auto_probe(mean_dp)
     for mode in ("BF", "ABF", "ADF", "HAADF", "DF"):
@@ -60,8 +60,8 @@ def test_core_dataset4dstem_roundtrip(gold):
     """Core Dataset4dstem follows the same detector/DPC paths as raw arrays."""
     import torch
     from quantem.core.datastructures import Dataset4dstem
-    from quantem.widget.detector import adf, bf
-    from quantem.widget.dpc import com, dpc, idpc
+    from quantem.gpu.detector import adf, bf
+    from quantem.gpu.dpc import com, dpc, idpc
 
     ds = Dataset4dstem.from_array(torch.as_tensor(gold))
     assert ds.shape == (512, 512, 48, 48)
@@ -77,8 +77,8 @@ def test_uint8_browse_parity(gold):
     """uint8 browse block == uint16 for screening: bit-identical when counts fit
     255 (the common case), and = clip255(uint16) by construction always. Locks
     the dtype='u8' path so virtual images stay faithful (#757)."""
-    from quantem.widget.detector import adf, bf, df
-    from quantem.widget.dpc import com
+    from quantem.gpu.detector import adf, bf, df
+    from quantem.gpu.dpc import com
 
     u8 = np.minimum(gold, 255).astype(np.uint8)
     # the uint8 browse representation IS clip-at-255 (linear, so sums stay correct)
@@ -91,6 +91,7 @@ def test_uint8_browse_parity(gold):
         np.testing.assert_array_equal(com(u8).col, com(gold).col)
     else:  # clipped: BF/ADF still faithful for screening (normalized rmse small)
         def nrmse(a, b):
-            a = (a - a.min()) / (np.ptp(a) + 1e-9); b = (b - b.min()) / (np.ptp(b) + 1e-9)
+            a = (a - a.min()) / (np.ptp(a) + 1e-9)
+            b = (b - b.min()) / (np.ptp(b) + 1e-9)
             return float(np.sqrt(np.mean((a - b) ** 2)))
         assert nrmse(adf(u8), adf(gold)) < 0.05, "uint8 ADF diverges from uint16"

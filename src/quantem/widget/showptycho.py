@@ -9,7 +9,7 @@ Usage::
 
     from quantem.widget import ShowPtycho
 
-    ssb.optimize()
+    ssb.fit()
     del data
     ShowPtycho(ssb)   # opens the widget
 """
@@ -22,11 +22,13 @@ import pathlib
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import anywidget
 import numpy as np
 import traitlets
+
+from quantem.gpu import SSB
 
 
 # Default path for auto-saved starred aberration snapshots.  Users can pass
@@ -57,7 +59,7 @@ def _resolve_export_dir(
         )
     if path is not None:
         return pathlib.Path(path).expanduser()
-    source = getattr(widget, "_source_file", None)
+    source = widget._source_file
     if data == "in-place" and source:
         return pathlib.Path(source).expanduser().resolve().parent
     if source:
@@ -93,6 +95,7 @@ class PtychoCalibration:
     voltage_kV: float | None = None
     semiangle_mrad: float | None = None
     scan_sampling_A: float | None = None
+    det_sampling_mrad_px: float | None = None
     loss: float | None = None
     source_file: str | None = None
     scan_region: tuple[int, int, int, int] | None = None
@@ -135,6 +138,7 @@ def _calibration_from_mapping(data: dict[str, Any]) -> PtychoCalibration:
         voltage_kV=data.get("voltage_kV"),
         semiangle_mrad=data.get("semiangle_mrad"),
         scan_sampling_A=data.get("scan_sampling_A"),
+        det_sampling_mrad_px=data.get("det_sampling_mrad_px"),
         loss=data.get("loss"),
         source_file=data.get("source_file"),
         scan_region=(
@@ -188,43 +192,9 @@ def _coerce_calibration(calibration: object) -> PtychoCalibration:
         return calibration
     if isinstance(calibration, (str, pathlib.Path)):
         return load_ptycho_calibration(calibration)
-    if hasattr(calibration, "rotation_angle_deg") and hasattr(calibration, "aberrations"):
-        return PtychoCalibration(
-            rotation_angle_deg=float(getattr(calibration, "rotation_angle_deg")),
-            aberrations={
-                str(k): float(v)
-                for k, v in dict(getattr(calibration, "aberrations")).items()
-            },
-            higher_order={
-                str(k): float(v)
-                for k, v in dict(getattr(calibration, "higher_order", {}) or {}).items()
-            },
-            flip_phase=bool(getattr(calibration, "flip_phase", False)),
-            voltage_kV=getattr(calibration, "voltage_kV", None),
-            semiangle_mrad=getattr(calibration, "semiangle_mrad", None),
-            scan_sampling_A=getattr(calibration, "scan_sampling_A", None),
-            loss=getattr(calibration, "loss", None),
-            source_file=getattr(calibration, "source_file", None),
-            scan_region=(
-                tuple(int(v) for v in getattr(calibration, "scan_region"))
-                if getattr(calibration, "scan_region", None) is not None
-                else None
-            ),
-            source_stem=getattr(calibration, "source_stem", None),
-            label=getattr(calibration, "label", None),
-            notes=str(getattr(calibration, "notes", "")),
-            id=str(getattr(calibration, "id", uuid.uuid4().hex[:12])),
-            timestamp=str(
-                getattr(
-                    calibration,
-                    "timestamp",
-                    datetime.datetime.now().isoformat(timespec="seconds"),
-                )
-            ),
-        )
     raise TypeError(
-        "calibration must be a path or object with rotation_angle_deg and "
-        f"aberrations, got {type(calibration).__name__}"
+        "calibration must be a PtychoCalibration or calibration JSON path; "
+        f"got {type(calibration).__name__}."
     )
 
 
@@ -247,26 +217,6 @@ def _higher_order_widget_payload(calibration: PtychoCalibration) -> dict[str, fl
         elif key.startswith("C"):
             payload[f"{key}_mag"] = value
     return payload
-
-
-def _to_numpy(array: object) -> np.ndarray:
-    """Convert a small reconstructed phase image to NumPy."""
-
-    if hasattr(array, "get"):
-        array = array.get()
-    elif type(array).__module__.split(".", 1)[0] == "torch":
-        array = array.detach().cpu().numpy()
-    return np.asarray(array)
-
-
-def _array_module_for_accel(accel: object):
-    """Return the array module used for coefficient scratch buffers."""
-
-    if getattr(accel, "backend", None) == "mps":
-        return np
-    import cupy as cp
-
-    return cp
 
 
 def _resolve_drag_bf_count(
@@ -318,50 +268,6 @@ def _validate_ssb_scan_region(
     return r0, r1, c0, c1
 
 
-def _bf_geometry_1d_numpy(
-    kx: np.ndarray,
-    ky: np.ndarray,
-    *,
-    wavelength: float,
-    semiangle_rad: float,
-    ang_y_rad: float,
-    ang_x_rad: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Compute the BF-pixel one-dimensional geometry used by WebGPU export."""
-
-    dx = np.asarray(kx, dtype=np.float32)
-    dy = np.asarray(ky, dtype=np.float32)
-    dx2 = dx * dx
-    dy2 = dy * dy
-    r2 = dx2 + dy2
-    r = np.sqrt(r2).astype(np.float32, copy=False)
-    alpha = r * np.float32(wavelength)
-    alpha2 = alpha * alpha
-    inv_r2 = np.zeros_like(r2, dtype=np.float32)
-    np.divide(1.0, r2, out=inv_r2, where=r2 > np.float32(1e-30))
-    cos2phi = (dx2 - dy2) * inv_r2
-    sin2phi = np.float32(2.0) * dx * dy * inv_r2
-    denom_num2 = (dx * np.float32(ang_y_rad)) ** 2 + (
-        dy * np.float32(ang_x_rad)
-    ) ** 2
-    inv_r = np.zeros_like(r, dtype=np.float32)
-    np.divide(1.0, r, out=inv_r, where=r > np.float32(1e-15))
-    denom = np.sqrt(denom_num2).astype(np.float32, copy=False) * inv_r
-    edge = np.ones_like(r, dtype=np.float32)
-    valid = denom > np.float32(1e-15)
-    edge[valid] = (
-        (np.float32(semiangle_rad) - alpha[valid]) / denom[valid]
-        + np.float32(0.5)
-    )
-    aperture = np.clip(edge, 0.0, 1.0).astype(np.float32, copy=False)
-    return (
-        alpha2.astype(np.float32, copy=False),
-        cos2phi.astype(np.float32, copy=False),
-        sin2phi.astype(np.float32, copy=False),
-        aperture,
-    )
-
-
 class _ShowPtychoWidget(anywidget.AnyWidget):
     """ShowPtycho anywidget with GPU-accelerated reconstruction.
 
@@ -369,13 +275,13 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
     deterministic BF-pixel subset can be requested explicitly for responsive
     exploratory previews.
 
-    The widget exclusively owns the ``accel`` (SSBEngine) - no other code
+    The widget exclusively owns the ``accel`` backend - no other code
     should call methods on it while the widget is active.
 
     Parameters
     ----------
-    accel : SSBEngine
-        The GPU accelerator (already holds G_qk in VRAM).
+    accel : SSB
+        Prepared backend-neutral SSB session.
     rotation_rad : float
         Rotation angle in radians.
     auto_aberrations : dict
@@ -481,14 +387,11 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
     # chi_full kernel via SSBEngine.reconstruct_full. --
     higher_order_json = traitlets.Unicode("{}").tag(sync=True)
 
-    # -- Optional browser-side WebGPU SSB preview payload (Python → JS).
-    # Default folder exports point the browser at exact BF-column source data
-    # and let WebGPU build transient BF reducers.  The g_bf fields are retained
-    # only for explicit compatibility cache paths.
+    # -- Browser-side WebGPU SSB source (Python → JS).
+    # Folder exports point the browser at exact BF columns or compressed HDF5
+    # and let WebGPU build transient BF reducers on the device.
     webgpu_preview_enabled = traitlets.Bool(False).tag(sync=True)
     webgpu_cal_json = traitlets.Unicode("").tag(sync=True)
-    webgpu_g_bf_bytes = traitlets.Bytes(b"").tag(sync=True)
-    webgpu_g_bf_url = traitlets.Unicode("").tag(sync=True)
     webgpu_h5_source_json = traitlets.Unicode("").tag(sync=True)
     webgpu_preview_status = traitlets.Unicode("WebGPU preview not initialized.").tag(
         sync=True
@@ -506,7 +409,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
 
     def __init__(
         self,
-        accel,
+        accel: SSB,
         rotation_rad: float,
         auto_aberrations: dict,
         auto_loss_val: float,
@@ -516,12 +419,11 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         rotation_range: "tuple[float, float] | None" = None,
         drag_bf: int | float | None = _DEFAULT_DRAG_BF_FRACTION,
         save_dir: "str | pathlib.Path | None" = None,
-        ssb_ref=None,
+        ssb_ref: SSB | None = None,
         pixel_size: float = 0.0,
         source_file: "str | None" = None,
         size: int = 800,
         fft_on: bool = False,
-        webgpu_preview: bool | str = "auto",
         initial_compute_loss: bool = True,
         initial_loss_val: float | None = None,
         initial_flip_phase: bool = False,
@@ -538,15 +440,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         # calibration.json and every starred entry so time-series `Live.watch(...,
         # calibrations=...)` can match a star to the right file by stem.
         self._source_file = str(source_file) if source_file else None
-        initial_scan_shape = (
-            getattr(ssb_ref, "_scan_shape", None) if ssb_ref is not None else None
-        )
-        if initial_scan_shape is None:
-            initial_scan_shape = (
-                int(accel._cache.get("ny", 0)),
-                int(accel._cache.get("nx", 0)),
-            )
-        self._scan_shape = tuple(int(v) for v in initial_scan_shape)
+        self._scan_shape = accel.scan_shape
         self._source_scan_shape = self._scan_shape
         self._scan_region = (
             _validate_ssb_scan_region(scan_region, self._scan_shape)
@@ -556,46 +450,40 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         self._pinned: list[dict] = []
         self._last_phase_np: np.ndarray | None = None
         self._inflight_id: int = -1
-        self._drag_state: dict | None = None
-        self._full_state: dict | None = None
+        self._drag_state: Any | None = None
         # Cached decode of result_json so `_current_c10/c12/phi12_deg()` skip
         # JSON parse on every higher-order observer tick (3 parses/frame
         # → 0 parses/frame).  Refreshed at the end of _do_reconstruct.
         self._last_result: dict = {}
         self._webgpu_asset_dir: pathlib.Path | None = None
-        # Reusable coefficient scratch buffers for the higher-order kernel path.
-        # CUDA uses CuPy arrays; MPS uses NumPy arrays because the current MPS
-        # preview backend supports the 3-parameter C10/C12/phi12 path only.
-        xp = _array_module_for_accel(accel)
-        self._ho_mags_buf = xp.zeros(14, dtype=xp.float32)
-        self._ho_angs_buf = xp.zeros(14, dtype=xp.float32)
+        # Backend-neutral host coefficient buffers. Device conversion, when
+        # needed, belongs to the compute backend rather than the widget.
+        self._ho_mags_buf = np.zeros(14, dtype=np.float32)
+        self._ho_angs_buf = np.zeros(14, dtype=np.float32)
         # Starred snapshots are the time-series payload: every star/unstar is
         # atomically written to ``self._stars_path`` so downstream cells can
         # re-open the file and ingest the full defocus/C12/phi/rotation history.
         stars_dir = self._save_dir if self._save_dir is not None else pathlib.Path.cwd()
         self._stars_path = stars_dir / _DEFAULT_STARS_FILENAME
         self.stars_path = str(self._stars_path.resolve())
-        # Canonical location for the single-calibration file - same basename
-        # ``3_live.ipynb`` reads via ``load_calibration()``.
+        # Canonical location for the project calibration. Downstream workflows
+        # read this stable filename with ``load_calibration()``.
         self._calibration_path = stars_dir / "calibration.json"
 
-        accel_backend = str(getattr(accel, "backend", "cuda")).lower()
         self.scan_rows, self.scan_cols = self._scan_shape
         self.scan_region_json = json.dumps(self._scan_region)
         self.crop_refit_available = bool(
             self._source_file
             and pathlib.Path(self._source_file).is_file()
-            and accel_backend == "cuda"
-            and hasattr(ssb_ref, "optimize")
         )
         self.crop_refit_status = (
             "Ready to refit a native square scan crop."
             if self.crop_refit_available
-            else "Crop refit needs a re-loadable master file and CUDA SSB backend."
+            else "Crop refit needs a re-loadable master file."
         )
 
         # Cache rotation
-        accel.cache_rotation(rotation_rad)
+        accel.set_rotation(math.degrees(rotation_rad))
 
         # Set ranges
         self.c10_min, self.c10_max = c10_range
@@ -651,7 +539,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         self.observe(self._on_crop_refit_request, names=["crop_refit_request_json"])
 
         # Publish total BF count so the UI can clamp user input to valid range
-        self.total_bf = int(accel._cache["num_bf"])
+        self.total_bf = accel.num_bf
 
         # Publish Optuna trial history (sorted by ascending loss) so the widget
         # can render a browsable trials strip.  Capped at 50 for payload size.
@@ -673,138 +561,30 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         # moving the slider to the total count.
         self.drag_bf = _resolve_drag_bf_count(drag_bf, self.total_bf)
 
-        self._init_webgpu_preview(webgpu_preview)
-
-    def _init_webgpu_preview(self, mode: bool | str) -> None:
-        """Populate optional browser-side WebGPU payload when safe."""
-
-        mode_text = str(mode).lower()
-        if mode is False or mode_text in {"0", "false", "off", "none"}:
-            self.webgpu_preview_enabled = False
-            self.webgpu_preview_status = "WebGPU preview disabled by caller."
-            return
-        if mode_text not in {"cache", "legacy-cache", "g_bf"}:
-            self.webgpu_preview_enabled = False
-            self.webgpu_preview_status = (
-                "Notebook WebGPU preview does not write a persistent BF-G cache by default. "
-                "Use export() for compressed-source browser review, or pass "
-                "webgpu_preview='cache' for the legacy local cache."
-            )
-            return
-        try:
-            from quantem.widget.showptycho_webgpu_export import (
-                build_showptycho_webgpu_payload,
-            )
-
-            cal, g_bytes, status = build_showptycho_webgpu_payload(self)
-        except Exception as exc:
-            self.webgpu_preview_enabled = False
-            self.webgpu_preview_status = f"WebGPU preview unavailable: {exc}"
-            return
-        self.webgpu_preview_status = status
-        if cal is None or not g_bytes:
-            self.webgpu_preview_enabled = False
-            return
-        # Jupyter refuses to serve hidden paths under /files/, so keep the
-        # notebook-local WebGPU payload cache in a visible directory.
-        asset_root = pathlib.Path.cwd() / "quantem_showptycho_webgpu" / uuid.uuid4().hex
-        asset_root.mkdir(parents=True, exist_ok=True)
-        g_path = asset_root / "g_bf.c64"
-        g_path.write_bytes(g_bytes)
-        self._webgpu_asset_dir = asset_root
-        rel = g_path.relative_to(pathlib.Path.cwd()).as_posix()
-        self.webgpu_cal_json = json.dumps(cal)
-        # Keep the heavy BF-G payload out of widget comm state. Jupyter serves
-        # notebook-relative files through /files/ on the same origin, matching
-        # the folder export transport model.
-        self.webgpu_g_bf_bytes = b""
-        self.webgpu_g_bf_url = f"/files/{rel}"
-        self.webgpu_preview_enabled = True
-        self.webgpu_preview_status = (
-            f"{status} Browser will fetch BF-G from a notebook-local asset."
-        )
-
     # ------------------------------------------------------------------
     #  BF-subset drag preview state
     # ------------------------------------------------------------------
 
     def _build_drag_state(self, drag_bf: int) -> None:
-        """Pre-compute deterministic BF subset for ~60 FPS drag preview."""
-        accel = self._accel
-        xp = _array_module_for_accel(accel)
-        num_bf = int(accel._cache["num_bf"])
-        ny = int(accel._cache["ny"])
-        nx = int(accel._cache["nx"])
+        """Ask the compute backend to prepare a reusable BF subset."""
 
-        # Deterministic uniform stride for even angular coverage
-        step = max(1, num_bf // drag_bf)
-        indices = xp.arange(0, num_bf, step, dtype=xp.int64)[:drag_bf]
-
-        # Slice per-BF cache arrays
-        drag_cache = dict(accel._cache)
-        for k in ("kx_bf", "ky_bf", "alpha_k2_1d", "cos2phi_k_1d",
-                  "sin2phi_k_1d", "aperture_k_1d"):
-            if k in drag_cache:
-                drag_cache[k] = xp.ascontiguousarray(accel._cache[k][indices])
-        drag_cache["num_bf"] = int(indices.size)
-
-        self._drag_state = {
-            "G_qk": accel.G_qk[indices],
-            "bf_inds_row": accel.bf_inds_row[indices],
-            "bf_inds_col": accel.bf_inds_col[indices],
-            "cache": drag_cache,
-            "pk_buffer": xp.empty((int(indices.size),), dtype=xp.complex64),
-            "result_buffer": xp.empty(
-                (int(indices.size), ny, nx), dtype=xp.complex64,
-            ),
-            "mean_phase_buffer": xp.empty((ny, nx), dtype=xp.float32),
-        }
-
-        # Snapshot full state for restoration
-        self._full_state = {
-            "G_qk": accel.G_qk,
-            "bf_inds_row": accel.bf_inds_row,
-            "bf_inds_col": accel.bf_inds_col,
-            "cache": accel._cache,
-            "pk_buffer": accel._pk_buffer,
-            "result_buffer": accel._result_buffer,
-            "mean_phase_buffer": accel._mean_phase_buffer,
-        }
+        self._drag_state = self._accel.preview_context(drag_bf)
 
     def _enter_drag(self) -> None:
-        """Swap engine to BF-subset drag state (pointer swap, no copies)."""
-        s = self._drag_state
-        a = self._accel
-        a.G_qk = s["G_qk"]
-        a.bf_inds_row = s["bf_inds_row"]
-        a.bf_inds_col = s["bf_inds_col"]
-        a._cache = s["cache"]
-        a._pk_buffer = s["pk_buffer"]
-        a._result_buffer = s["result_buffer"]
-        a._corrected_buffer = None
-        a._mean_phase_buffer = s["mean_phase_buffer"]
+        """Enter the backend-owned BF-subset context."""
+
+        self._drag_state.__enter__()
 
     def _exit_drag(self) -> None:
-        """Restore engine to full BF state."""
-        a = self._accel
-        # Persist any buffers the engine may have (re)allocated
-        self._drag_state["result_buffer"] = a._result_buffer
-        self._drag_state["mean_phase_buffer"] = a._mean_phase_buffer
-        # Restore full state
-        s = self._full_state
-        a.G_qk = s["G_qk"]
-        a.bf_inds_row = s["bf_inds_row"]
-        a.bf_inds_col = s["bf_inds_col"]
-        a._cache = s["cache"]
-        a._pk_buffer = s["pk_buffer"]
-        a._result_buffer = s["result_buffer"]
-        a._corrected_buffer = None
-        a._mean_phase_buffer = s["mean_phase_buffer"]
+        """Restore full-BF state through the backend-owned context."""
+
+        self._drag_state.__exit__(None, None, None)
 
     def free_drag_state(self) -> None:
         """Explicitly release drag preview VRAM."""
+        if self._drag_state is not None:
+            self._drag_state.close()
         self._drag_state = None
-        self._full_state = None
 
     def _on_drag_bf_change(self, change):
         """Rebuild or drop the BF-subset drag state when the user changes count."""
@@ -813,21 +593,14 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             self.free_drag_state()
             return
         # Clamp to valid range and rebuild. Existing state is dropped first to release VRAM.
-        num_bf = int(self._accel._cache["num_bf"])
+        num_bf = self._accel.num_bf
         count = max(1, min(new_count, num_bf))
-        self._drag_state = None
-        self._full_state = None
-        if getattr(self._accel, "backend", None) == "mps":
-            # MPS live reconstruction owns its BF selection inside the prepared
-            # backend object. WebGPU folder mode uses this trait directly in the
-            # browser, so keep the positive count without creating a fake Python
-            # subset state.
-            return
+        self.free_drag_state()
         self._build_drag_state(count)
 
     def _on_rotation_change(self, change):
         """Re-cache the rotation on the engine and re-reconstruct with current aberrations."""
-        if getattr(self, "_rotation_deg_init", False):
+        if self._rotation_deg_init:
             return  # initial trait assignment during __init__; skip
         new_deg = float(change["new"])
         new_rad = math.radians(new_deg)
@@ -836,10 +609,9 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         # so drop drag state and rebuild on next drag if caller enabled it.
         drag_count = int(self.drag_bf)
         if drag_count > 0:
-            self._drag_state = None
-            self._full_state = None
-        self._accel.cache_rotation(new_rad)
-        if drag_count > 0 and getattr(self._accel, "backend", None) != "mps":
+            self.free_drag_state()
+        self._accel.set_rotation(new_deg)
+        if drag_count > 0:
             self._build_drag_state(drag_count)
         # Re-reconstruct with the last-committed aberrations.
         self._inflight_id += 1
@@ -915,7 +687,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         ]
 
     def _build_trials_payload(self, max_trials: int = 50) -> str:
-        """Serialize ``ssb._optuna_trials`` for the widget's trials panel.
+        """Serialize the session trial history for the widget's trials panel.
 
         The SSB optimizer stores trials as
         ``list[{"loss": float, "params": {"C10_nm", "C12_nm", "phi12_deg"}}]``.
@@ -924,7 +696,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         200-trial Optuna run doesn't bloat the initial trait payload.
         """
         ssb = self._ssb_ref
-        raw = getattr(ssb, "_optuna_trials", None) if ssb is not None else None
+        raw = ssb.trial_history if ssb is not None else None
         if not raw:
             return ""
         finite_trials = []
@@ -959,14 +731,14 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         microscope metadata pulled off ``self._ssb_ref``) plus the three
         widget extras ``id`` / ``timestamp`` / ``starred``.  This means
         ``load_calibrations(stars_path)`` returns a ``list[Calibration]``
-        directly - the bridge for time-series work in ``3_live.ipynb``.
+        directly, providing a stable bridge for downstream time-series work.
         """
         self._stars_path.parent.mkdir(parents=True, exist_ok=True)
 
         ssb = self._ssb_ref
-        voltage_kV = getattr(ssb, "voltage_kV", None) if ssb is not None else None
-        semiangle_mrad = getattr(ssb, "semiangle_mrad", None) if ssb is not None else None
-        scan_sampling = getattr(ssb, "scan_sampling", None) if ssb is not None else None
+        voltage_kV = ssb.voltage_kV if ssb is not None else None
+        semiangle_mrad = ssb.semiangle_mrad if ssb is not None else None
+        scan_sampling = ssb.scan_sampling_A if ssb is not None else None
         if isinstance(scan_sampling, (tuple, list)):
             scan_sampling_A = float(scan_sampling[0])
         elif scan_sampling is not None:
@@ -1065,7 +837,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             if not self.crop_refit_available or not self._source_file:
                 raise RuntimeError(
                     "Crop refit is unavailable. Open ShowPtycho with "
-                    "source_file=<master.h5> on a CUDA SSB session."
+                    "source_file=<master.h5>."
                 )
 
             origin_r, _origin_r1, origin_c, _origin_c1 = self._scan_region
@@ -1096,49 +868,76 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             raise RuntimeError("Crop refit requires a source-backed SSB session.")
         scan_region = _validate_ssb_scan_region(scan_region, self._source_scan_shape)
 
-        from quantem.widget.io import load
-        from quantem.gpu.ssb import SSB
+        from quantem.widget.io import LoadResult, load
 
         previous = self._ssb_ref
         loaded = load(
             self._source_file,
             scan_region=scan_region,
-            backend="cuda",
+            backend=self._accel.backend,
             scan_shape=self._source_scan_shape,
             verbose=False,
         )
-        rebuilt = SSB(
+        if not isinstance(loaded, LoadResult):
+            raise TypeError(
+                "A ShowPtycho crop must load one 4D-STEM dataset; "
+                f"got {type(loaded).__name__}."
+            )
+        rebuilt = SSB.from_array(
             loaded.data,
-            semiangle=float(previous.semiangle_mrad),
-            scan_sampling=previous.scan_sampling,
-            det_sampling=getattr(previous, "angular_sampling", None),
-            voltage_kV=float(previous.voltage_kV),
+            backend=previous.backend,
+            voltage_kV=previous.voltage_kV,
+            semiangle_mrad=previous.semiangle_mrad,
+            scan_sampling_A=previous.scan_sampling_A,
+            det_sampling=previous.det_sampling,
             aberrations={
-                "C10": float(self._last_result.get("C10", previous.aberrations.get("C10", 0.0))),
-                "C12": float(self._last_result.get("C12", previous.aberrations.get("C12", 0.0))),
-                "phi12": math.radians(float(self._last_result.get("phi12_deg", math.degrees(previous.aberrations.get("phi12", 0.0))))),
+                "C10": float(
+                    self._last_result.get(
+                        "C10",
+                        previous.aberrations.get("C10", 0.0),
+                    )
+                ),
+                "C12": float(
+                    self._last_result.get(
+                        "C12",
+                        previous.aberrations.get("C12", 0.0),
+                    )
+                ),
+                "phi12": math.radians(
+                    float(
+                        self._last_result.get(
+                            "phi12_deg",
+                            math.degrees(previous.aberrations.get("phi12", 0.0)),
+                        )
+                    )
+                ),
             },
             rotation_angle_deg=math.degrees(self._rotation_rad),
-            bf_intensity_threshold=float(getattr(previous, "bf_intensity_threshold", 0.5)),
+            bf_intensity_threshold=previous.bf_intensity_threshold,
+            bf_radius=previous.bf_radius,
+            source_path=previous.source_path,
         )
-        rebuilt.optimize(n_trials=n_trials, verbose=False)
-        rebuilt.refine(verbose=False)
+        rebuilt.fit(
+            trials=n_trials,
+            refinement="nelder-mead",
+            verbose=False,
+        )
 
         self._ssb_ref = rebuilt
-        self._accel = rebuilt._get_accelerator()
-        self._scan_shape = tuple(int(v) for v in rebuilt._scan_shape)
+        self._accel = rebuilt
+        self._scan_shape = rebuilt.scan_shape
         self._scan_region = scan_region
         self.scan_rows, self.scan_cols = self._scan_shape
         self.scan_region_json = json.dumps(scan_region)
-        self.total_bf = int(self._accel._cache["num_bf"])
+        self.total_bf = self._accel.num_bf
         self.drag_bf = self.total_bf
-        self._rotation_rad = float(rebuilt._rotation_angle_rad)
+        self._rotation_rad = math.radians(rebuilt.rotation_angle_deg)
         self.rotation_deg = math.degrees(self._rotation_rad)
         self.auto_rotation_deg = self.rotation_deg
         self.auto_c10 = float(rebuilt.aberrations["C10"])
         self.auto_c12 = float(rebuilt.aberrations["C12"])
         self.auto_phi12_deg = math.degrees(float(rebuilt.aberrations["phi12"]))
-        self.auto_loss = _finite_float_or_none(rebuilt._best_loss) or 0.0
+        self.auto_loss = _finite_float_or_none(rebuilt.best_loss) or 0.0
         self.higher_order_json = "{}"
         self.trials_json = self._build_trials_payload()
         self._inflight_id += 1
@@ -1160,8 +959,8 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         """Read ``higher_order_json`` and pack all 14 Krivanek coefs into
         backend coefficient arrays ready for ``reconstruct_full``.
 
-        The first two slots carry ``(C10, C12, phi12)`` from the existing
-        3-slider UI so the legacy control path keeps working.  Returns
+        The first two slots carry ``(C10, C12, phi12)`` from the main
+        three-slider UI. Returns
         ``(mags_m, angles_rad, any_higher_order_active)``.
 
         mags are in the engine's magnitude convention (nm-valued numeric -
@@ -1170,15 +969,14 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         """
         # Reuse scratch buffers allocated in __init__.  fill(0) is a single
         # memset, far cheaper than allocating two fresh (14,) arrays per frame.
-        xp = _array_module_for_accel(self._accel)
         mags = self._ho_mags_buf
         angs = self._ho_angs_buf
         mags.fill(0)
         angs.fill(0)
         # C10, C12, phi12 come from the main sliders (nm, nm, rad).
-        mags[0] = xp.float32(c10)
-        mags[1] = xp.float32(c12)
-        angs[1] = xp.float32(math.radians(phi12_deg))
+        mags[0] = np.float32(c10)
+        mags[1] = np.float32(c12)
+        angs[1] = np.float32(math.radians(phi12_deg))
 
         # Higher-order values come from the panel JSON.
         ho = json.loads(self.higher_order_json or "{}")
@@ -1200,8 +998,8 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
                 ang_deg = 0.0
             if mag != 0.0:
                 any_active = True
-            mags[idx] = xp.float32(mag)
-            angs[idx] = xp.float32(math.radians(ang_deg))
+            mags[idx] = np.float32(mag)
+            angs[idx] = np.float32(math.radians(ang_deg))
         return mags, angs, any_active
 
     def _do_reconstruct(
@@ -1235,22 +1033,15 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         if use_drag:
             self._enter_drag()
         try:
-            if any_ho and compute_loss:
-                phase, loss_val = self._accel.reconstruct_full_with_loss(mags_m, angles_rad)
-                loss = float(loss_val)
-            elif any_ho:
-                phase = self._accel.reconstruct_full(mags_m, angles_rad)
-                loss = None
-            elif compute_loss:
-                phase, loss_val = self._accel.reconstruct_with_loss(c10, c12, phi12_rad)
-                loss = float(loss_val)
-            else:
-                phase = self._accel.reconstruct(c10, c12, phi12_rad)
-                loss = None if loss_override is None else float(loss_override)
+            phase_np, loss = self._accel.preview(
+                {"C10": c10, "C12": c12, "phi12": phi12_rad},
+                compute_loss=compute_loss,
+                higher_order_magnitudes=mags_m if any_ho else None,
+                higher_order_angles=angles_rad if any_ho else None,
+            )
+            if not compute_loss and loss_override is not None:
+                loss = float(loss_override)
             t_gpu = time.perf_counter()
-            phase_np = _to_numpy(phase)
-            if phase_np.dtype != np.float32:
-                phase_np = phase_np.astype(np.float32, copy=False)
             t_d2h = time.perf_counter()
         finally:
             if use_drag:
@@ -1282,9 +1073,12 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
 
         entry = {
             "id": rid,
-            "C10": round(c10, 2),
-            "C12": round(c12, 2),
-            "phi12_deg": round(phi12_deg, 2),
+            # Keep scientific parameters at their optimizer precision. The
+            # frontend formats labels for readability; rounding the synced
+            # state here would silently perturb saved/exported calibration.
+            "C10": float(c10),
+            "C12": float(c12),
+            "phi12_deg": float(phi12_deg),
             "loss": loss,
             "time_ms": round((t_gpu - t0) * 1000, 1),        # GPU kernel only
             "d2h_ms":  round((t_d2h - t_gpu) * 1000, 1),     # cp.asnumpy + dtype
@@ -1358,9 +1152,9 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
                     self.phase_bytes = self._last_phase_np.astype(np.float32).tobytes()
                 self.result_json = json.dumps({
                     "id": pin_entry.get("id"),
-                    "C10": round(float(pin_entry.get("C10", 0.0)), 2),
-                    "C12": round(float(pin_entry.get("C12", 0.0)), 2),
-                    "phi12_deg": round(float(pin_entry.get("phi12_deg", 0.0)), 2),
+                    "C10": float(pin_entry.get("C10", 0.0)),
+                    "C12": float(pin_entry.get("C12", 0.0)),
+                    "phi12_deg": float(pin_entry.get("phi12_deg", 0.0)),
                     "loss": pin_entry.get("loss"),
                     "time_ms": None,
                 })
@@ -1395,15 +1189,15 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             self._ssb_ref.aberrations["C12"] = c12
             self._ssb_ref.aberrations["phi12"] = phi12_rad
             if loss is not None:
-                self._ssb_ref._best_loss = loss
+                self._ssb_ref.best_loss = float(loss)
 
         # Pull microscope metadata off the SSB instance - single source of
         # truth, avoids duplicating voltage/semiangle/scan_sampling in the
         # widget's constructor.
         ssb = self._ssb_ref
-        voltage_kV = getattr(ssb, "voltage_kV", None) if ssb is not None else None
-        semiangle_mrad = getattr(ssb, "semiangle_mrad", None) if ssb is not None else None
-        scan_sampling = getattr(ssb, "scan_sampling", None) if ssb is not None else None
+        voltage_kV = ssb.voltage_kV if ssb is not None else None
+        semiangle_mrad = ssb.semiangle_mrad if ssb is not None else None
+        scan_sampling = ssb.scan_sampling_A if ssb is not None else None
         if isinstance(scan_sampling, (tuple, list)):
             scan_sampling_A = float(scan_sampling[0])
         elif scan_sampling is not None:
@@ -1448,7 +1242,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         n = len(self._pinned)
         drag = ""
         if self._drag_state is not None:
-            bf = int(self._drag_state["cache"]["num_bf"])
+            bf = self._drag_state.num_bf
             drag = f", drag_bf={bf}"
         return f"ShowPtycho({n} pinned{drag})"
 
@@ -1512,292 +1306,18 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
 
 
 def _is_ssb_like(obj: object) -> bool:
-    return (
-        hasattr(obj, "_get_accelerator")
-        and hasattr(obj, "aberrations")
-        and hasattr(obj, "_rotation_angle_rad")
-    )
+    return isinstance(obj, SSB)
 
 
-def _scan_sampling_scalar(ssb: object) -> float:
-    scan_sampling = getattr(ssb, "scan_sampling", 0.0)
+def _scan_sampling_scalar(ssb: SSB) -> float:
+    scan_sampling = ssb.scan_sampling_A
     if isinstance(scan_sampling, (tuple, list)):
         return float(scan_sampling[0])
     return float(scan_sampling or 0.0)
 
 
-def _voltage_kv_from_inputs(
-    voltage_kV: float | None,
-    energy: float | None,
-) -> float:
-    if voltage_kV is not None:
-        return float(voltage_kV)
-    if energy is None:
-        raise ValueError(
-            "ShowPtycho(data, ...) requires voltage_kV or energy when using "
-            "the MPS data path."
-        )
-    value = float(energy)
-    return value / 1000.0 if value > 1000.0 else value
-
-
-def _looks_like_mps_data(data: object) -> bool:
-    if hasattr(data, "_fields") and "data" in getattr(data, "_fields", ()):
-        data = data.data
-    module = type(data).__module__
-    if "quantem.gpu" in module and "mps" in module:
-        return True
-    if hasattr(data, "chunks"):
-        return True
-    backend = getattr(data, "backend", None)
-    return str(backend).lower() == "mps"
-
-
-class _MpsPtychoAccelerator:
-    """Adapter from the MLX MPS SSB preview backend to ``ShowPtycho``."""
-
-    backend = "mps"
-
-    def __init__(
-        self,
-        data: object,
-        *,
-        voltage_kV: float,
-        semiangle_mrad: float,
-        scan_sampling: float | tuple[float, float],
-        det_sampling: float | tuple[float, float] | None,
-        bf_intensity_threshold: float,
-        bf_radius: int | None,
-        rotation_angle_deg: float,
-        chunk_bf: int | None = None,
-        setup_chunk_bf: int | None = None,
-        redraw_chunk_bf: int | None = None,
-    ) -> None:
-        from quantem.gpu.ssb.mps import (
-            _as_chunked_frames,
-            _as_sampling,
-            _bf_pixels,
-            _default_object_redraw_chunk_bf,
-            _default_object_setup_chunk_bf,
-            _prepare_selection,
-            _reconstruct_prepared,
-            _scan_shape,
-        )
-
-        self._mps_reconstruct_prepared = _reconstruct_prepared
-        self._mps_prepare_selection = _prepare_selection
-        self._frames = _as_chunked_frames(data)
-        self._scan_shape = _scan_shape(self._frames)
-        self._det_shape = tuple(int(x) for x in self._frames.shape[-2:])
-        self._voltage_kV = float(voltage_kV)
-        self._semiangle_mrad = float(semiangle_mrad)
-        self._scan_sampling = _as_sampling(scan_sampling)
-        requested_chunk_bf = 1 if chunk_bf is None else max(1, int(chunk_bf))
-        self._setup_chunk_bf = (
-            max(1, int(setup_chunk_bf))
-            if setup_chunk_bf is not None
-            else max(requested_chunk_bf, int(_default_object_setup_chunk_bf()))
-        )
-        self._chunk_bf = (
-            max(1, int(redraw_chunk_bf))
-            if redraw_chunk_bf is not None
-            else max(requested_chunk_bf, int(_default_object_redraw_chunk_bf()))
-        )
-        self._bf_row, self._bf_col, self._bf_center, self._bf_radius, detected_radius = (
-            _bf_pixels(self._frames, bf_intensity_threshold, bf_radius)
-        )
-        if det_sampling is None:
-            det_px = (2.0 * float(semiangle_mrad)) / float(detected_radius)
-            self._det_sampling = (det_px, det_px)
-        else:
-            self._det_sampling = _as_sampling(det_sampling)
-        self._rotation_angle_deg = float(rotation_angle_deg)
-        self._cache = {
-            "num_bf": int(self._bf_row.size),
-            "ny": int(self._scan_shape[0]),
-            "nx": int(self._scan_shape[1]),
-        }
-        self._prepared = None
-        self._mean_phase_buffer = None
-        self._sumsq_buffer = None
-        self.cache_rotation(math.radians(self._rotation_angle_deg))
-
-    @property
-    def num_bf(self) -> int:
-        return int(self._cache["num_bf"])
-
-    def cache_rotation(self, rotation_rad: float) -> None:
-        rotation_angle_deg = math.degrees(float(rotation_rad))
-        if (
-            self._prepared is not None
-            and abs(rotation_angle_deg - self._rotation_angle_deg) < 1e-9
-        ):
-            self._sync_webgpu_export_metadata()
-            return
-        self._rotation_angle_deg = rotation_angle_deg
-        if hasattr(self, "G_qk"):
-            delattr(self, "G_qk")
-        self._prepared = self._mps_prepare_selection(
-            self._frames,
-            scan_shape=self._scan_shape,
-            det_shape=self._det_shape,
-            bf_row=self._bf_row,
-            bf_col=self._bf_col,
-            center=self._bf_center,
-            voltage_kV=self._voltage_kV,
-            semiangle_mrad=self._semiangle_mrad,
-            scan_sampling=self._scan_sampling,
-            det_sampling=self._det_sampling,
-            rotation_angle_deg=self._rotation_angle_deg,
-            chunk_bf=self._setup_chunk_bf,
-        )
-        self._sync_webgpu_export_metadata()
-
-    def _sync_webgpu_export_metadata(self) -> None:
-        """Expose small MPS calibration metadata without copying GB-scale G_qk."""
-
-        prepared = self._prepared
-        if prepared is None:
-            return
-        qx_1d = np.fft.fftfreq(
-            int(self._scan_shape[0]), float(self._scan_sampling[0]),
-        ).astype(np.float32)
-        qy_1d = np.fft.fftfreq(
-            int(self._scan_shape[1]), float(self._scan_sampling[1]),
-        ).astype(np.float32)
-        alpha_k2, cos2_k, sin2_k, aperture_k = _bf_geometry_1d_numpy(
-            prepared.kx_np,
-            prepared.ky_np,
-            wavelength=float(prepared.wavelength),
-            semiangle_rad=float(prepared.semiangle_rad),
-            ang_y_rad=float(prepared.ang_y_rad),
-            ang_x_rad=float(prepared.ang_x_rad),
-        )
-        self.g_shape = (
-            int(prepared.num_bf),
-            int(self._scan_shape[0]),
-            int(self._scan_shape[1]),
-        )
-        self.bf_inds_row = self._bf_row.astype(np.int32, copy=False)
-        self.bf_inds_col = self._bf_col.astype(np.int32, copy=False)
-        self.bf_center = tuple(float(v) for v in self._bf_center)
-        self.gpts = tuple(int(v) for v in self._det_shape)
-        self.wavelength = np.float32(prepared.wavelength)
-        self.sampling = (
-            float(1.0 / ((float(prepared.ang_y_rad) / float(prepared.wavelength)) * self._det_shape[0])),
-            float(1.0 / ((float(prepared.ang_x_rad) / float(prepared.wavelength)) * self._det_shape[1])),
-        )
-        self._dc_value_host = np.complex64(prepared.dc_value)
-        self._cache = {
-            "num_bf": int(prepared.num_bf),
-            "ny": int(self._scan_shape[0]),
-            "nx": int(self._scan_shape[1]),
-            "kx_bf": prepared.kx_np.astype(np.float32, copy=False),
-            "ky_bf": prepared.ky_np.astype(np.float32, copy=False),
-            "qx_1d": qx_1d,
-            "qy_1d": qy_1d,
-            "aperture_k_1d": aperture_k,
-            "alpha_k2_1d": alpha_k2,
-            "cos2phi_k_1d": cos2_k,
-            "sin2phi_k_1d": sin2_k,
-            "semiangle_rad": np.float32(prepared.semiangle_rad),
-            "ang_y_rad": np.float32(prepared.ang_y_rad),
-            "ang_x_rad": np.float32(prepared.ang_x_rad),
-        }
-
-    def _sync_webgpu_export_state(self) -> None:
-        """Expose MPS-prepared BF-G data through the CUDA-style export contract.
-
-        This is intentionally explicit because it copies the full BF-indexed
-        Fourier stack from MPS memory to host memory. Normal calibrated notebook
-        opens and compressed-source folder exports only need the lightweight
-        metadata from ``_sync_webgpu_export_metadata``.
-        """
-
-        prepared = self._prepared
-        if prepared is None:
-            return
-        self._sync_webgpu_export_metadata()
-        self.G_qk = np.asarray(prepared.g_qk).astype(np.complex64, copy=False)
-
-    def reconstruct_with_loss(self, c10: float, c12: float, phi12: float):
-        _object_wave, loss, phase = self._mps_reconstruct_prepared(
-            self._prepared,
-            C10=float(c10),
-            C12=float(c12),
-            phi12=float(phi12),
-            chunk_bf=self._chunk_bf,
-            compute_loss=True,
-            compute_object=False,
-        )
-        phase_np = np.asarray(phase, dtype=np.float32)
-        self._mean_phase_buffer = phase_np
-        self._sumsq_buffer = phase_np * phase_np * float(self._cache["num_bf"])
-        return phase, float(loss)
-
-    def reconstruct(self, c10: float, c12: float, phi12: float):
-        _object_wave, _loss, phase = self._mps_reconstruct_prepared(
-            self._prepared,
-            C10=float(c10),
-            C12=float(c12),
-            phi12=float(phi12),
-            chunk_bf=self._chunk_bf,
-            compute_loss=False,
-            compute_object=False,
-        )
-        return phase
-
-    def _three_param_from_full(self, mags_m, angles_rad) -> tuple[float, float, float]:
-        mags = np.asarray(mags_m, dtype=np.float32)
-        angles = np.asarray(angles_rad, dtype=np.float32)
-        if np.any(mags[2:] != 0):
-            raise NotImplementedError(
-                "ShowPtycho on MPS currently supports C10/C12/phi12 only. "
-                "Higher-order controls require the CUDA SSB engine."
-            )
-        return float(mags[0]), float(mags[1]), float(angles[1])
-
-    def reconstruct_full_with_loss(self, mags_m, angles_rad):
-        c10, c12, phi12 = self._three_param_from_full(mags_m, angles_rad)
-        return self.reconstruct_with_loss(c10, c12, phi12)
-
-    def reconstruct_full(self, mags_m, angles_rad):
-        c10, c12, phi12 = self._three_param_from_full(mags_m, angles_rad)
-        return self.reconstruct(c10, c12, phi12)
-
-
-class _MpsPtychoState:
-    """Minimal SSB-like state object for ``ShowPtycho`` on MPS data."""
-
-    def __init__(
-        self,
-        *,
-        accel: _MpsPtychoAccelerator,
-        aberrations: dict[str, float] | None,
-        rotation_angle_deg: float,
-        voltage_kV: float,
-        semiangle_mrad: float,
-        scan_sampling: float | tuple[float, float],
-    ) -> None:
-        defaults = {"C10": 0.0, "C12": 0.0, "phi12": 0.0}
-        if aberrations:
-            defaults.update(
-                {k: float(v) for k, v in aberrations.items() if k in defaults}
-            )
-        self.aberrations = defaults
-        self._rotation_angle_rad = math.radians(float(rotation_angle_deg))
-        self._best_loss = float("inf")
-        self._accel = accel
-        self.voltage_kV = float(voltage_kV)
-        self.semiangle_mrad = float(semiangle_mrad)
-        self.scan_sampling = scan_sampling
-
-    def _get_accelerator(self):
-        return self._accel
-
-
 def _apply_calibration(
-    ssb: object,
+    ssb: SSB,
     calibration: object,
     source_file: str | None,
 ) -> tuple[bool, dict[str, float], float | None, str | None]:
@@ -1811,9 +1331,9 @@ def _apply_calibration(
         if key not in primary:
             primary[str(key)] = float(value)
     ssb.aberrations = primary
-    ssb._rotation_angle_rad = math.radians(float(cal.rotation_angle_deg))
+    ssb.set_rotation(float(cal.rotation_angle_deg))
     if cal.loss is not None:
-        ssb._best_loss = float(cal.loss)
+        ssb.best_loss = float(cal.loss)
     return (
         bool(cal.flip_phase),
         _higher_order_widget_payload(cal),
@@ -1823,7 +1343,7 @@ def _apply_calibration(
 
 
 def _show_ptycho_from_ssb(
-    ssb: object,
+    ssb: SSB,
     *,
     c10_range: tuple[float, float] | None,
     c12_range: tuple[float, float] | None,
@@ -1835,7 +1355,6 @@ def _show_ptycho_from_ssb(
     size: int,
     fft_on: bool,
     calibration: object | None,
-    webgpu_preview: bool | str,
 ) -> _ShowPtychoWidget:
     flip_from_cal: bool | None = None
     ho_from_cal: dict[str, float] | None = None
@@ -1845,10 +1364,8 @@ def _show_ptycho_from_ssb(
             ssb, calibration, source_file,
         )
 
-    aberrations = dict(getattr(ssb, "aberrations", {}) or {})
+    aberrations = dict(ssb.aberrations)
     auto_c10 = float(aberrations.get("C10", 0.0))
-    auto_c12 = float(aberrations.get("C12", 0.0))
-    auto_phi12 = float(aberrations.get("phi12", 0.0))
 
     if c10_range is None:
         c10_range = (min(-300.0, auto_c10), max(300.0, auto_c10))
@@ -1857,9 +1374,9 @@ def _show_ptycho_from_ssb(
     if phi12_range is None:
         phi12_range = (-90.0, 90.0)
 
-    accel = ssb._get_accelerator()
-    rotation_rad = float(getattr(ssb, "_rotation_angle_rad", 0.0))
-    accel.cache_rotation(rotation_rad)
+    accel = ssb
+    rotation_rad = math.radians(float(ssb.rotation_angle_deg))
+    accel.set_rotation(math.degrees(rotation_rad))
     auto_loss_val = (
         float(loss_from_cal)
         if loss_from_cal is not None and math.isfinite(float(loss_from_cal))
@@ -1883,25 +1400,23 @@ def _show_ptycho_from_ssb(
         source_file=source_file,
         size=size,
         fft_on=fft_on,
-        webgpu_preview=webgpu_preview,
         initial_compute_loss=initial_compute_loss,
         initial_loss_val=auto_loss_val if math.isfinite(auto_loss_val) else None,
         initial_flip_phase=bool(flip_from_cal) if flip_from_cal is not None else False,
         initial_higher_order=ho_from_cal,
     )
 
-    ssb._showptycho_widget = widget
     return widget
 
 
 def ShowPtycho(
     data_or_ssb: object,
     *,
-    semiangle: float | None = None,
-    scan_sampling: float | tuple[float, float] | None = None,
+    backend: Literal["auto", "cuda", "mps"] = "auto",
+    semiangle_mrad: float | None = None,
+    scan_sampling_A: float | tuple[float, float] | None = None,
     det_sampling: float | tuple[float, float] | None = None,
     voltage_kV: float | None = None,
-    energy: float | None = None,
     scan_shape: tuple[int, int] | None = None,
     bf_intensity_threshold: float = 0.5,
     bf_radius: int | None = None,
@@ -1917,38 +1432,34 @@ def ShowPtycho(
     size: int = 800,
     fft_on: bool = False,
     calibration: object | None = None,
-    webgpu_preview: bool | str = "auto",
 ) -> _ShowPtychoWidget:
     """Open an interactive ptychography aberration explorer.
 
     Parameters
     ----------
     data_or_ssb : object
-        Either a prepared ``quantem.gpu.ssb.SSB`` instance or a 4D-STEM array.
+        Either a prepared ``quantem.gpu.SSB`` instance or a 4D-STEM array.
         Passing an SSB instance is the preferred path because it reuses the
         existing GPU-resident preprocessing buffers.
-    semiangle : float, optional
+    backend : {"auto", "cuda", "mps"}, default "auto"
+        Compute backend used when ``data_or_ssb`` is raw detector data.
+        Prepared sessions already own their backend; a conflicting explicit
+        value raises an error rather than silently moving evidence.
+    semiangle_mrad : float, optional
         Probe semi-convergence angle in mrad. Required when passing raw data.
-    scan_sampling : float or tuple[float, float], optional
+    scan_sampling_A : float or tuple[float, float], optional
         Scan sampling in Angstroms. Required when passing raw data.
     det_sampling : float or tuple[float, float], optional
         Detector angular sampling in mrad per pixel.
-    voltage_kV, energy : float, optional
-        Accelerating voltage. ``voltage_kV`` is the public notebook-friendly
-        form; ``energy`` is accepted for compatibility.
+    voltage_kV : float, optional
+        Accelerating voltage in kV. Required when passing raw data.
     source_file : str, optional
-        Path to the raw 4D-STEM master HDF5 file.  When this path is available
-        on a CUDA SSB session, the toolbar offers native square real-space
-        crops (128, 256, 512, or 1024 scan pixels) and can rebuild/refit SSB
-        from the selected detector data with 200 optimization trials.
+        Path to the raw 4D-STEM master HDF5 file. When this path is available,
+        the toolbar offers native square real-space crops and can rebuild/refit
+        SSB from the selected detector data with 200 optimization trials.
     calibration : path or object, optional
         Previously saved calibration used to seed aberrations, rotation, phase
         flip, and higher-order controls.
-    webgpu_preview : bool or {"auto", "off"}, optional
-        Enable browser-side WebGPU SSB preview when the prepared BF-indexed
-        payload is small enough for notebook sync. ``"auto"`` currently enables
-        only the validated 128x128 C10/C12/phi12 path.
-
     Returns
     -------
     anywidget.AnyWidget
@@ -1968,82 +1479,33 @@ def ShowPtycho(
 
     if _is_ssb_like(data_or_ssb):
         ssb = data_or_ssb
-    else:
-        if semiangle is None or scan_sampling is None:
+        prepared_backend = ssb.backend
+        if backend != "auto" and backend != prepared_backend:
             raise ValueError(
-                "ShowPtycho(data, ...) requires semiangle and scan_sampling. "
-                "Pass a prepared quantem.gpu.ssb.SSB object to reuse an "
+                f"ShowPtycho received a prepared {prepared_backend!r} session "
+                f"with backend={backend!r}. Use backend='auto' or "
+                f"backend={prepared_backend!r}."
+            )
+    else:
+        if semiangle_mrad is None or scan_sampling_A is None or voltage_kV is None:
+            raise ValueError(
+                "ShowPtycho(data, ...) requires voltage_kV, semiangle_mrad, "
+                "and scan_sampling_A. Pass a prepared quantem.gpu.SSB object to reuse an "
                 "existing GPU-resident reconstruction."
             )
-        if _looks_like_mps_data(data_or_ssb):
-            voltage = _voltage_kv_from_inputs(voltage_kV, energy)
-            accel = _MpsPtychoAccelerator(
-                data_or_ssb,
-                voltage_kV=voltage,
-                semiangle_mrad=float(semiangle),
-                scan_sampling=scan_sampling,
-                det_sampling=det_sampling,
-                bf_intensity_threshold=bf_intensity_threshold,
-                bf_radius=bf_radius,
-                rotation_angle_deg=prepared_rotation_angle_deg,
-            )
-            ssb = _MpsPtychoState(
-                accel=accel,
-                aberrations=prepared_aberrations,
-                rotation_angle_deg=prepared_rotation_angle_deg,
-                voltage_kV=voltage,
-                semiangle_mrad=float(semiangle),
-                scan_sampling=scan_sampling,
-            )
-        else:
-            try:
-                import cupy as cp
-                from quantem.gpu.ssb import SSB
-            except ImportError as exc:
-                try:
-                    voltage = _voltage_kv_from_inputs(voltage_kV, energy)
-                    accel = _MpsPtychoAccelerator(
-                        data_or_ssb,
-                        voltage_kV=voltage,
-                        semiangle_mrad=float(semiangle),
-                        scan_sampling=scan_sampling,
-                        det_sampling=det_sampling,
-                        bf_intensity_threshold=bf_intensity_threshold,
-                        bf_radius=bf_radius,
-                        rotation_angle_deg=prepared_rotation_angle_deg,
-                    )
-                except Exception:
-                    raise ImportError(
-                        "ShowPtycho(data, ...) requires either CuPy for the "
-                        "CUDA quantem.gpu SSB engine or MLX for the MPS path."
-                    ) from exc
-                ssb = _MpsPtychoState(
-                    accel=accel,
-                    aberrations=prepared_aberrations,
-                    rotation_angle_deg=prepared_rotation_angle_deg,
-                    voltage_kV=voltage,
-                    semiangle_mrad=float(semiangle),
-                    scan_sampling=scan_sampling,
-                )
-            else:
-                data_gpu = (
-                    data_or_ssb
-                    if isinstance(data_or_ssb, cp.ndarray)
-                    else cp.asarray(data_or_ssb)
-                )
-                ssb = SSB(
-                    data_gpu,
-                    semiangle=float(semiangle),
-                    scan_sampling=scan_sampling,
-                    det_sampling=det_sampling,
-                    voltage_kV=voltage_kV,
-                    energy=energy,
-                    scan_shape=scan_shape,
-                    bf_intensity_threshold=bf_intensity_threshold,
-                    bf_radius=bf_radius,
-                    aberrations=prepared_aberrations,
-                    rotation_angle_deg=prepared_rotation_angle_deg,
-                )
+        ssb = SSB.from_array(
+            data_or_ssb,
+            backend=backend,
+            voltage_kV=float(voltage_kV),
+            semiangle_mrad=float(semiangle_mrad),
+            scan_sampling_A=scan_sampling_A,
+            det_sampling=det_sampling,
+            scan_shape=scan_shape,
+            bf_intensity_threshold=bf_intensity_threshold,
+            bf_radius=bf_radius,
+            aberrations=prepared_aberrations,
+            rotation_angle_deg=prepared_rotation_angle_deg,
+        )
 
     return _show_ptycho_from_ssb(
         ssb,
@@ -2057,5 +1519,4 @@ def ShowPtycho(
         size=size,
         fft_on=fft_on,
         calibration=calibration,
-        webgpu_preview=webgpu_preview,
     )

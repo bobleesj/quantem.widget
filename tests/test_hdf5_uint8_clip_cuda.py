@@ -2,51 +2,12 @@
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-import sys
-import types
-
 import numpy as np
 import pytest
 
 cp = pytest.importorskip("cupy")
 
-try:
-    from quantem.widget.io.hdf5 import _clip_to_uint8, _clip_to_uint8_count  # noqa: E402
-except ImportError as exc:
-    if "partially initialized module 'quantem.core.datastructures'" not in str(exc):
-        raise
-    # MJGOAT has a neighboring editable quantem checkout that can collide during
-    # collection. Keep this CUDA micro-test focused on quantem.widget's HDF5
-    # module without importing the package root.
-    root = Path(__file__).resolve().parents[1] / "src"
-    for name in [
-        "quantem.widget.io.hdf5",
-        "quantem.widget.io",
-        "quantem.widget",
-        "quantem",
-    ]:
-        sys.modules.pop(name, None)
-    q = types.ModuleType("quantem")
-    q.__path__ = [str(root / "quantem")]
-    sys.modules["quantem"] = q
-    w = types.ModuleType("quantem.widget")
-    w.__path__ = [str(root / "quantem" / "widget")]
-    sys.modules["quantem.widget"] = w
-    io = types.ModuleType("quantem.widget.io")
-    io.__path__ = [str(root / "quantem" / "widget" / "io")]
-    sys.modules["quantem.widget.io"] = io
-    spec = importlib.util.spec_from_file_location(
-        "quantem.widget.io.hdf5",
-        root / "quantem" / "widget" / "io" / "hdf5.py",
-    )
-    h5 = importlib.util.module_from_spec(spec)
-    sys.modules["quantem.widget.io.hdf5"] = h5
-    assert spec.loader is not None
-    spec.loader.exec_module(h5)
-    _clip_to_uint8 = h5._clip_to_uint8
-    _clip_to_uint8_count = h5._clip_to_uint8_count
+from quantem.gpu.io.hdf5 import _clip_to_uint8, _clip_to_uint8_count  # noqa: E402
 
 
 @pytest.mark.parametrize("dtype", [np.uint16, np.uint32])
