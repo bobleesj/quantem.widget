@@ -65,8 +65,8 @@ jobs:
       - uses: actions/checkout@v7
 
       # npm run build (inside the signoff) syncs the WebGPU engine sources from
-      # quantem.gpu; the TestPyPI release can lag the webgpu module, so check
-      # out the source tree as the sync script's QUANTEM_GPU_SRC fallback.
+      # quantem.gpu; the TestPyPI release can lag the webgpu module, so install
+      # quantem.gpu from its source tip (below) after the TestPyPI deps.
       - uses: actions/checkout@v7
         with:
           repository: bobleesj/quantem.gpu
@@ -90,6 +90,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r docs/requirements.txt
           python -m pip install --extra-index-url https://test.pypi.org/simple/ -e ".[test,hub]" huggingface_hub h5py tifffile
+          python -m pip install ./quantem-gpu-src
 
       - name: Cache Hugging Face tutorial data
         uses: actions/cache@v4

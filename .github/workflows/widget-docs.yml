@@ -48,12 +48,15 @@ jobs:
       # .[hub] pulls quantem.data (widget_export tutorial); the loaders need
       # huggingface_hub + h5py + tifffile to download and read tutorial data.
       - run: pip install --extra-index-url https://test.pypi.org/simple/ -e ".[hub]" huggingface_hub h5py tifffile
-      # The TestPyPI quantem.gpu release can lag the webgpu module, so also
-      # check out the source tree as the sync script's QUANTEM_GPU_SRC fallback.
+      # The TestPyPI quantem.gpu release can lag the webgpu module the sync
+      # script imports, so install quantem.gpu from its source tip instead
+      # (the installed quantem package is regular, not namespace, so a
+      # PYTHONPATH fallback cannot shadow a lagging site-packages release).
       - uses: actions/checkout@v7
         with:
           repository: bobleesj/quantem.gpu
           path: quantem-gpu-src
+      - run: pip install ./quantem-gpu-src
       # The executed widgets load their JS from src/quantem/widget/static/,
       # which is a build artifact (gitignored) — build it before the notebooks run.
       - run: npm ci && npm run build
