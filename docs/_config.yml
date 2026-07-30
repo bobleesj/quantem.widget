@@ -83,6 +83,6 @@ html:
   home_page_in_navbar: false
 
 repository:
-  url: https://github.com/bobleesj/quantem.widget
+  url: https://github.com/electronmicroscopy/quantem.widget
   path_to_book: docs
   branch: main

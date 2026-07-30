@@ -611,7 +611,7 @@ upload protocol is three steps:
    ```
 
    No write access to the shared repo? Either open an issue on
-   [quantem.widget](https://github.com/bobleesj/quantem.widget/issues) to get
+   [quantem.widget](https://github.com/electronmicroscopy/quantem.widget/issues) to get
    added, or pass `repo="you/your-data"` to use your own HF dataset repo with
    the same layout — every download helper accepts the same `repo=` override.
 

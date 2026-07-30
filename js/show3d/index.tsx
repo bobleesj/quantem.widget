@@ -11215,7 +11215,7 @@ function Show3D() {
         if (ok && !playing) requestAnimationFrame(() => { void blitAndDraw(true); });
       });
     } else {
-      // WebGPU-only per CLAUDE.md "WebGPU is THE pipeline" rule.
+      // WebGPU-only: do not silently substitute a CPU rendering path.
       // setGpuCmapReady(true) upstream triggers this effect to re-fire as
       // soon as the engine resolves. Skip painting until then (canvas
       // briefly blank for ~50-200 ms on some GPU workstations, never CPU-rendered).

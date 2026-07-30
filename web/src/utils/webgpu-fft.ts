@@ -182,7 +182,7 @@ let _gpuUnavailableReason = "WebGPU has not been checked yet.";
 onGPULost(() => { _gpuFFT = null; });
 // Module-scope warm-up promise. Shared across every component that needs FFT
 // so shader compile (50-500 ms) happens at most ONCE per app-load, not
-// per-component-mount. Per-CLAUDE.md: "GPU pipelines must be pre-warmed."
+// per-component-mount, keeping the GPU pipeline pre-warmed for interaction.
 let _warmed: Promise<void> | null = null;
 
 export function getGPUUnavailableReason(): string {
