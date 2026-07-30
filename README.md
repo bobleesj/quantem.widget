@@ -270,7 +270,7 @@ nonzero-aperture BF pixels after the BF policy is applied.
 
 ## Docs
 
-https://bobleesj.github.io/quantem.widget/
+https://electronmicroscopy.github.io/quantem.widget/
 
 The source tutorial notebooks live in [`docs/tutorials`](docs/tutorials). They
 can be opened directly in Colab. To make a GitHub-readable preview copy, see
@@ -291,13 +291,32 @@ detach the reviewer's inline comments and destroy the incremental
 "changes since last review" diff — append commits and `git revert` instead;
 we squash-merge, so branch tidiness costs nothing). Human contributors
 and coding agents/LLMs alike should apply these standards when writing code,
-commits, issues, and PRs — the same rules are mirrored in
-[AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md) so automated contributors
-pick them up. Reference: S. Lee, C. Myers, A. Yang, T. Zhang, Y. Xiao, and
+commits, issues, and PRs. This README is the canonical policy source; the
+[pull request template](.github/PULL_REQUEST_TEMPLATE.md) turns the policy
+into an operational checklist. Reference: S. Lee, C. Myers, A. Yang,
+T. Zhang, Y. Xiao, and
 S. J. L. Billinge, *Digital Discovery*, 2026,
 [doi:10.1039/d6dd00121a](https://doi.org/10.1039/d6dd00121a). For Git/GitHub
 tutorials and workflow onboarding, see
 [ophusgroup/dev](https://github.com/ophusgroup/dev).
+
+### Policy map
+
+This README defines the project policy. The following documents apply that
+policy to specific workflows without creating separate agent-specific rules:
+
+- [Contributing](CONTRIBUTING.md): setup, notebook hygiene, checks, commits,
+  and pull requests.
+- [Pull request template](.github/PULL_REQUEST_TEMPLATE.md): the review
+  checklist used for each change.
+- [Widget UI protocol](docs/maintainer/widget-ui-protocol.md): control wording,
+  layout, hover behavior, and visual verification.
+- [Performance](docs/maintainer/widget-performance.md) and
+  [automation](docs/maintainer/automation.md): timing, browser, real-data, and
+  hardware-specific evidence.
+- [HTML export](docs/api/html-export.md): public export terminology and API.
+- [Release](docs/maintainer/widget-release.md): release-candidate gates and
+  TestPyPI publication.
 
 ### Commit messages
 
@@ -317,8 +336,7 @@ docs: update HTML export protocol
 ```
 
 Keep commit messages single-line unless the change genuinely needs a body. Do
-not add `Co-authored-by` trailers unless requested. The same standard is
-mirrored in [CLAUDE.md](CLAUDE.md) for agent handoffs.
+not add `Co-authored-by` trailers unless requested.
 
 ### Widget PR checklist
 
@@ -464,4 +482,4 @@ A. Yang, T. Zhang, Y. Xiao, and S. J. L. Billinge, *Digital Discovery*, 2026).
 
 ## Issues
 
-https://github.com/bobleesj/quantem.widget/issues
+https://github.com/electronmicroscopy/quantem.widget/issues

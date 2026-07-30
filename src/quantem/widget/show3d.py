@@ -3229,7 +3229,7 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         orig_h = int(self._data.shape[1])
         orig_w = int(self._data.shape[2])
 
-        # NEVER BIN (CLAUDE.md rule). Display data is always source-pixel-exact.
+        # Display data is always source-pixel-exact unless explicitly requested.
         # Honor explicit display_bin=N>1 only if caller asks; "auto" stays 1.
         self._display_bin = 1
         if isinstance(display_bin, int) and display_bin > 1:

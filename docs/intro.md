@@ -95,6 +95,6 @@ See [Installation](install) to get started.
 ## Getting help
 
 - **Questions or bugs:** open an issue at
-  [github.com/bobleesj/quantem.widget/issues](https://github.com/bobleesj/quantem.widget/issues).
+  [github.com/electronmicroscopy/quantem.widget/issues](https://github.com/electronmicroscopy/quantem.widget/issues).
 - **Maintained by** the Ophus group. Contributions and feedback are welcome via
   pull request or issue.

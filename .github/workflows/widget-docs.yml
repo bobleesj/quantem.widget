@@ -1,5 +1,5 @@
-# Build the quantem.widget Jupyter Book and publish it to GitHub Pages on the
-# bobleesj fork. The runner EXECUTES the tutorial notebooks at build time
+# Build the quantem.widget Jupyter Book and publish it to this repository's
+# GitHub Pages site. The runner EXECUTES the tutorial notebooks at build time
 # (execute_notebooks: force in docs/_config.yml): tutorial data downloads from
 # Hugging Face, widgets run on CPU torch, and myst-nb bakes the widget state
 # into the published HTML. Committed notebooks stay small (no baked state);
@@ -15,8 +15,8 @@ on:
       - ".github/workflows/widget-docs.yml"
   workflow_dispatch:
 
-# Origin-only. Builds and deploys the docs from `main` to this repository's
-# GitHub Pages site: https://bobleesj.github.io/quantem.widget/.
+# Builds and deploys the docs from `main`; the Pages URL follows repository
+# ownership, so this workflow remains valid across an organization transfer.
 permissions:
   contents: read
   pages: write
@@ -28,7 +28,6 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'bobleesj/quantem.widget'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -81,9 +80,7 @@ jobs:
           path: docs/_build/html
 
   deploy:
-    # Publish from the active widget branch (its docs are the live ones); main kept for when it merges.
-    # The github-pages environment allowlist includes this branch, so the deploy is accepted.
-    if: github.repository == 'bobleesj/quantem.widget' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     environment:

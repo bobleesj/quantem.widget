@@ -35,6 +35,19 @@ hardcoding machine-specific paths in shared scripts.
 Use `QUANTEM_WIDGET_BENCH_MASTERS_GLOB` for raw loader benchmarks. It can contain
 multiple `:`-separated globs when a dataset was split across several disks.
 
+## Verification Data
+
+Use reconstructed experimental data for end-to-end widget, browser, visual,
+and performance claims whenever an appropriate dataset is available. Record
+the source description, shape, dtype, transforms, backend, and every crop,
+binning, downsample, or encoding choice in the report. Keep private source
+paths and raw data outside git.
+
+Synthetic data is appropriate for focused unit tests, deterministic failure
+cases, and small CI protocol checks. It does not establish real-workflow or
+real-data performance signoff; label the limitation when synthetic data is the
+only available evidence.
+
 ## Definition Of Done
 
 A widget automation task is done only when:
