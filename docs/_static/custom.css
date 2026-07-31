@@ -83,18 +83,3 @@ html[data-theme="dark"] .jupyter-widgets-output-area {
     overflow-x: auto;
   }
 }
-
-/* Left navigation: narrow and sticky, so widgets get the rest of the width and
-   the nav stays put while scrolling a long page. Desktop only — below the
-   theme's 960px breakpoint the sidebar is an off-canvas drawer and forcing
-   sticky/flex-basis on it shifts the whole article off-screen. */
-@media (min-width: 960px) {
-  .bd-sidebar-primary {
-    position: sticky;
-    top: 0;
-    max-height: 100vh;
-    overflow-y: auto;
-    width: 16rem;
-    flex: 0 0 16rem;
-  }
-}
