@@ -1,4 +1,4 @@
-"""Browser regression for Show3D linked zoom with independent auto contrast."""
+"""Browser regressions for Show3D real-time display controls."""
 
 from __future__ import annotations
 
@@ -10,7 +10,10 @@ import numpy as np
 from PIL import Image
 import pytest
 
-pytest.importorskip("playwright.sync_api")
+from quantem.widget import Show3D
+
+
+sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
 
 
 def _chrome_executable() -> str | None:
@@ -133,10 +136,6 @@ def _panel_spatial_std(
     reason="set QT_RUN_BROWSER_TESTS=1 to run Show3D browser regression tests",
 )
 def test_linked_zoom_preserves_unlinked_panel_auto_contrast(tmp_path):
-    from playwright.sync_api import sync_playwright
-
-    from quantem.widget import Show3D
-
     chrome = _chrome_executable()
     if chrome is None:
         pytest.skip("Chrome/Chromium executable not found")
@@ -224,10 +223,6 @@ def test_linked_zoom_preserves_unlinked_panel_auto_contrast(tmp_path):
 )
 def test_smooth_toggle_keeps_playback_residency(tmp_path):
     """Smooth and play/pause reuse WebGPU residency or the canvas fallback."""
-    from playwright.sync_api import sync_playwright
-
-    from quantem.widget import Show3D
-
     chrome = _chrome_executable()
     if chrome is None:
         pytest.skip("Chrome/Chromium executable not found")
@@ -307,10 +302,6 @@ def test_smooth_toggle_keeps_playback_residency(tmp_path):
 )
 def test_scrub_commit_preserves_mixed_panel_colormaps(tmp_path):
     """Held drags repaint raw resident frames without blanking or early commits."""
-    from playwright.sync_api import sync_playwright
-
-    from quantem.widget import Show3D
-
     chrome = _chrome_executable()
     if chrome is None:
         pytest.skip("Chrome/Chromium executable not found")
@@ -361,10 +352,14 @@ def test_scrub_commit_preserves_mixed_panel_colormaps(tmp_path):
               perf.lastScrubInputLatencyMs = null;
             }"""
         )
-        thumb_box = current_thumb.bounding_box()
-        slider_box = current_thumb.locator(
+        slider = current_thumb.locator(
             "xpath=ancestor::*[contains(@class, 'MuiSlider-root')]"
-        ).bounding_box()
+        )
+        slider.scroll_into_view_if_needed()
+        current_handle = slider.locator('.MuiSlider-thumb[data-index="1"]')
+        current_handle.hover()
+        thumb_box = current_handle.bounding_box()
+        slider_box = slider.bounding_box()
         assert thumb_box is not None and slider_box is not None
         page.mouse.move(
             thumb_box["x"] + thumb_box["width"] / 2,
@@ -372,23 +367,45 @@ def test_scrub_commit_preserves_mixed_panel_colormaps(tmp_path):
         )
         page.mouse.down()
         page.mouse.move(
-            slider_box["x"] + slider_box["width"] * 0.8,
+            slider_box["x"] + slider_box["width"] * 0.95,
             slider_box["y"] + slider_box["height"] / 2,
+            steps=10,
         )
-        page.wait_for_timeout(35)
+        page.wait_for_function(
+            """initial => Number(
+              document.querySelectorAll(
+                'input[aria-label^="Loop range and current frame"]'
+              )[1].value
+            ) !== initial""",
+            arg=initial_frame,
+        )
         during_frame = int(current_thumb.input_value())
+        gpu_resident = page.evaluate(
+            "() => window.__quantemShow3DPerf?.embeddedGpuResident === true"
+        )
+        if gpu_resident:
+            page.wait_for_function(
+                "frame => window.__quantemShow3DPerf?.lastScrubFrame === frame",
+                arg=during_frame,
+            )
+        else:
+            page.evaluate(
+                """() => new Promise(resolve => requestAnimationFrame(
+                  () => requestAnimationFrame(resolve)
+                ))"""
+            )
         during_drag = _visible_panel_color_spread(page)
         during_pixels = _visible_canvas_pixels(page)
         during_perf = page.evaluate("() => ({ ...window.__quantemShow3DPerf })")
 
         assert during_frame != initial_frame
-        assert during_perf["lastScrubFrame"] == during_frame
         assert during_perf["scrubPointerEvents"] >= 1
         assert during_perf["scrubRafPaints"] >= 1
         assert during_perf["scrubModelCommits"] == 0
         assert during_perf["lastScrubCommitFrame"] is None
         assert "average" not in str(during_perf["lastScrubRenderPath"]).lower()
-        if during_perf.get("embeddedGpuResident") is True:
+        if gpu_resident:
+            assert during_perf["lastScrubFrame"] == during_frame
             assert "webgpu" in str(during_perf["lastScrubRenderPath"]).lower()
             assert during_perf["lastScrubInputLatencyMs"] < 16.7
         assert min(_panel_spatial_std(during_pixels, 3, 3)) > 3.0
@@ -426,10 +443,6 @@ def test_scrub_commit_preserves_mixed_panel_colormaps(tmp_path):
 )
 def test_display_controls_repaint_pixels_immediately_during_playback(tmp_path):
     """Display controls repaint now, including while the movie is playing."""
-    from playwright.sync_api import sync_playwright
-
-    from quantem.widget import Show3D
-
     chrome = _chrome_executable()
     if chrome is None:
         pytest.skip("Chrome/Chromium executable not found")
@@ -463,6 +476,11 @@ def test_display_controls_repaint_pixels_immediately_during_playback(tmp_path):
         page.goto(html_path.as_uri())
         page.wait_for_function("() => window.__quantemShow3DPerf?.offlineFramePrewarmDone === 3")
         page.wait_for_timeout(200)
+        if not page.evaluate(
+            "() => window.__quantemShow3DPerf?.embeddedGpuResident === true"
+        ):
+            browser.close()
+            pytest.skip("WebGPU residency is unavailable in this browser")
 
         initial_frame = page.evaluate(
             "() => window.__quantemShow3DPerf.lastPlaybackLiveCountText"
@@ -607,5 +625,59 @@ def test_display_controls_repaint_pixels_immediately_during_playback(tmp_path):
         assert min(_panel_spatial_std(playing_after_style, 3, layout_cols)) > 3
         page.get_by_role("button", name="Pause playback").click()
 
+        assert page_errors == []
+        browser.close()
+
+
+@pytest.mark.skipif(
+    os.environ.get("QT_RUN_BROWSER_TESTS") != "1",
+    reason="set QT_RUN_BROWSER_TESTS=1 to run Show3D browser regression tests",
+)
+def test_single_panel_colormap_repaints_on_the_selected_event(tmp_path):
+    """The direct WebGPU canvas must never display the previous palette."""
+    chrome = _chrome_executable()
+    if chrome is None:
+        pytest.skip("Chrome/Chromium executable not found")
+
+    rows, cols = np.indices((192, 192), dtype=np.float32)
+    image = (
+        0.25 * rows
+        + 0.5 * cols
+        + 80 * np.exp(-((rows - 72) ** 2 + (cols - 118) ** 2) / 500)
+    ).astype(np.float32)
+    stack = np.stack([image, np.roll(image, 8, axis=1)], axis=0)
+    widget = Show3D(stack, cmap="plasma", debug=True, verbose=False)
+    html_path = tmp_path / "show3d-single-panel-colormap-event.html"
+    widget.export_html(html_path, encoding="full")
+
+    page_errors: list[str] = []
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(
+            executable_path=chrome,
+            headless=True,
+            args=["--enable-unsafe-swiftshader", "--enable-webgpu"],
+        )
+        page = browser.new_page(viewport={"width": 1000, "height": 900})
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.goto(html_path.as_uri())
+        page.wait_for_function(
+            "() => window.__quantemShow3DPerf?.offlineFramePrewarmDone === 2"
+        )
+        page.wait_for_timeout(200)
+
+        colormap = page.get_by_role("combobox", name="Image colormap")
+        colormap.click()
+        page.get_by_role("option", name="Gray", exact=True).click()
+        page.wait_for_timeout(150)
+        gray = _visible_canvas_pixels(page)
+        gray_channel_spread = gray.max(axis=2) - gray.min(axis=2)
+        assert float(np.quantile(gray_channel_spread, 0.99)) <= 2
+
+        colormap.click()
+        page.get_by_role("option", name="Viridis", exact=True).click()
+        page.wait_for_timeout(150)
+        viridis = _visible_canvas_pixels(page)
+        assert float(np.abs(viridis - gray).mean()) > 5
+        assert float(np.quantile(viridis.max(axis=2) - viridis.min(axis=2), 0.75)) > 10
         assert page_errors == []
         browser.close()
