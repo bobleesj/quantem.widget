@@ -26,6 +26,7 @@ from widget_browser_smoke import (
     _exercise_fft_toggle,
     _image_nonblank,
     _measure_fps,
+    _sha256,
     _start_canvas_update_probe,
     _stop_canvas_update_probe,
     _visible_canvas_boxes,
@@ -278,55 +279,48 @@ def _primary_canvas_nonblank(page) -> dict[str, Any]:
 
 
 def _primary_canvas_content_signature(page) -> dict[str, Any]:
-    """Return a small content hash for the largest visible canvas."""
+    """Hash the composited pixels in the largest visible canvas region.
 
-    return page.evaluate(
-        """() => {
-          const visible = (canvas) => {
-            const rect = canvas.getBoundingClientRect();
-            const style = getComputedStyle(canvas);
-            return rect.width > 24 && rect.height > 24 && canvas.width > 0 && canvas.height > 0 &&
-              style.display !== "none" && style.visibility !== "hidden" &&
-              Number(style.opacity || "1") > 0.05;
-          };
-          const canvases = [...document.querySelectorAll("canvas")]
-            .map((canvas, index) => ({canvas, index, rect: canvas.getBoundingClientRect()}))
-            .filter((item) => visible(item.canvas))
-            .sort((a, b) => (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height));
-          if (!canvases.length) return {ok: false, error: "no visible canvas"};
-          const {canvas, index, rect} = canvases[0];
-          const sample = document.createElement("canvas");
-          sample.width = 32;
-          sample.height = 32;
-          const ctx = sample.getContext("2d", {willReadFrequently: true});
-          if (!ctx) return {ok: false, error: "no 2d context", index};
-          try {
-            ctx.drawImage(canvas, 0, 0, sample.width, sample.height);
-            const data = ctx.getImageData(0, 0, sample.width, sample.height).data;
-            let hash = 2166136261 >>> 0;
-            let sum = 0;
-            let nonzero = 0;
-            for (let i = 0; i < data.length; i += 4) {
-              const value = (data[i] + data[i + 1] * 3 + data[i + 2] * 7 + data[i + 3] * 11) & 255;
-              sum += value;
-              if (value) nonzero += 1;
-              hash ^= value;
-              hash = Math.imul(hash, 16777619) >>> 0;
-            }
-            return {
-              ok: true,
-              index,
-              hash: hash.toString(16).padStart(8, "0"),
-              sum,
-              nonzero,
-              width: Math.round(rect.width),
-              height: Math.round(rect.height),
-            };
-          } catch (error) {
-            return {ok: false, error: String(error), index, width: Math.round(rect.width), height: Math.round(rect.height)};
-          }
-        }"""
-    )
+    A WebGPU canvas cannot be copied through a 2D ``drawImage`` context on all
+    browsers. A clipped page screenshot records the actual composited pixels
+    the scientist sees and works for both the CPU and WebGPU render paths.
+    """
+
+    viewport = page.viewport_size or {"width": 0, "height": 0}
+    viewport_width = float(viewport.get("width", 0))
+    viewport_height = float(viewport.get("height", 0))
+    candidates: list[tuple[float, dict[str, float], dict[str, float]]] = []
+    for box in _visible_canvas_boxes(page):
+        left = max(0.0, float(box["x"]))
+        top = max(0.0, float(box["y"]))
+        right = min(viewport_width, float(box["x"]) + float(box["width"]))
+        bottom = min(viewport_height, float(box["y"]) + float(box["height"]))
+        clip = {
+            "x": left,
+            "y": top,
+            "width": max(0.0, right - left),
+            "height": max(0.0, bottom - top),
+        }
+        area = clip["width"] * clip["height"]
+        if clip["width"] >= 24 and clip["height"] >= 24:
+            candidates.append((area, box, clip))
+    if not candidates:
+        return {"ok": False, "error": "no canvas intersects the viewport"}
+
+    _, box, clip = max(candidates, key=lambda item: item[0])
+    png = page.screenshot(clip=clip)
+    nonblank, stats = _image_nonblank(png, min_unique=8, min_span=8)
+    return {
+        "ok": True,
+        "index": int(box["index"]),
+        "hash": _sha256(png),
+        "nonblank": bool(nonblank),
+        "stats": stats,
+        "x": round(clip["x"]),
+        "y": round(clip["y"]),
+        "width": round(clip["width"]),
+        "height": round(clip["height"]),
+    }
 
 
 def _drive_playback(page, *, wait_ms: int) -> dict[str, Any]:
@@ -622,15 +616,25 @@ def _histogram_clip_sliders(page) -> list[dict[str, Any]]:
                 const key = `${Math.round(rect.x)}:${Math.round(rect.y)}:${Math.round(rect.width)}:${Math.round(rect.height)}`;
                 if (seen.has(key)) continue;
                 seen.add(key);
-                const values = [...root.querySelectorAll('[aria-label="Histogram intensity clip range"]')]
-                  .map((node) => Number(node.getAttribute("aria-valuenow") || node.value || 0));
+                const thumbs = [...root.querySelectorAll('[aria-label="Histogram intensity clip range"]')]
+                  .map((node) => {
+                    const box = node.getBoundingClientRect();
+                    return {
+                      x: box.x,
+                      y: box.y,
+                      width: box.width,
+                      height: box.height,
+                      value: Number(node.getAttribute("aria-valuenow") || node.value || 0),
+                    };
+                  });
                 roots.push({
                   index: roots.length,
                   x: rect.x,
                   y: rect.y,
                   width: rect.width,
                   height: rect.height,
-                  values,
+                  values: thumbs.map((thumb) => thumb.value),
+                  thumbs,
                 });
               }
               return roots;
@@ -680,9 +684,15 @@ def _drive_histogram_contrast(page, *, fps_ms: int) -> dict[str, Any]:
     before_values = [item.get("values", []) for item in sliders]
     before_sig = _primary_canvas_content_signature(page)
     item = sliders[0]
-    x0 = float(item["x"]) + max(4, float(item["width"]) * 0.20)
-    x1 = float(item["x"]) + max(8, float(item["width"]) * 0.75)
-    y = float(item["y"]) + float(item["height"]) / 2
+    thumbs = sorted(item.get("thumbs", []), key=lambda thumb: float(thumb["x"]))
+    if thumbs:
+        upper_thumb = thumbs[-1]
+        x0 = float(upper_thumb["x"]) + float(upper_thumb["width"]) / 2
+        y = float(upper_thumb["y"]) + float(upper_thumb["height"]) / 2
+    else:
+        x0 = float(item["x"]) + float(item["width"])
+        y = float(item["y"]) + float(item["height"]) / 2
+    x1 = float(item["x"]) + float(item["width"]) * 0.65
 
     update_probe_start = _start_canvas_update_probe(
         page,
@@ -944,7 +954,11 @@ def _run_case(
         errors.append(
             f"histogram drag settle FPS {histogram_contrast.get('settle_fps')} is below --min-fps={min_fps}"
         )
-    if histogram_contrast.get("found") and int((histogram_contrast.get("update_probe") or {}).get("visual_changes") or 0) <= 0:
+    if (
+        histogram_contrast.get("found")
+        and not histogram_contrast.get("changed_mid")
+        and int((histogram_contrast.get("update_probe") or {}).get("visual_changes") or 0) <= 0
+    ):
         errors.append("histogram drag produced no visible canvas pixel updates during interaction")
     if page_errors:
         errors.extend(f"page error: {message}" for message in page_errors)

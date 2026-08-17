@@ -5450,6 +5450,7 @@ function Show1DWidget() {
         >
           <Box ref={plotHostRef} sx={{ position: "relative", height: { xs: Math.max(260, Math.min(effectivePlotHeight, 520)), md: effectivePlotHeight }, minWidth: 0 }}>
             <canvas
+              data-quantem-scientific-output="show1d-plot"
               ref={canvasRef}
               onPointerMove={handlePointerMove}
               onPointerLeave={handlePointerLeave}

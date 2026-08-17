@@ -130,6 +130,8 @@ def test_automation_documentation_names_entrypoints() -> None:
         "scripts/widget_local_signoff.sh",
         "scripts/widget_signoff_dashboard.py",
         "scripts/docs_preview.sh",
+        "scripts/stage_docs_anywidget_runtime.py",
+        "scripts/check_docs_widget_provenance.py",
         "scripts/cleanup_browser_artifacts.py",
         "scripts/widget_html_smoke.py",
         "scripts/widget_showfolder_live_smoke.py",
@@ -190,6 +192,77 @@ def test_automation_documentation_names_entrypoints() -> None:
         "Do not run `pkill chrome`",
     ]:
         assert path in doc
+
+
+def test_stage_docs_anywidget_runtime_uses_installed_dependency(tmp_path: Path) -> None:
+    output = tmp_path / "tutorials" / "anywidget.js"
+
+    result = _run(
+        sys.executable,
+        "scripts/stage_docs_anywidget_runtime.py",
+        "--output",
+        str(output),
+    )
+
+    assert result.returncode == 0, result.stdout
+    runtime = output.read_text(encoding="utf-8")
+    assert 'define(["@jupyter-widgets/base"]' in runtime
+    assert "Staged AnyWidget runtime" in result.stdout
+
+
+def test_docs_build_entrypoints_stage_anywidget_before_build() -> None:
+    preview = (ROOT / "scripts/docs_preview.sh").read_text(encoding="utf-8")
+    signoff = (ROOT / "scripts/widget_local_signoff.sh").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github/workflows/widget-docs.yml").read_text(encoding="utf-8")
+
+    for text in [preview, signoff, workflow]:
+        assert text.index("stage_docs_anywidget_runtime.py") < text.rindex("jupyter-book build docs")
+        assert text.index("check_docs_widget_provenance.py") > text.rindex("jupyter-book build docs")
+
+
+def test_docs_widget_provenance_matches_checkout_bundle(tmp_path: Path) -> None:
+    static = tmp_path / "static"
+    tutorials = tmp_path / "html" / "tutorials"
+    static.mkdir()
+    tutorials.mkdir(parents=True)
+    bundle = "export default { render() {} };"
+    (static / "show2d.js").write_text(bundle, encoding="utf-8")
+    state = {
+        "state": {
+            "model": {
+                "model_module": "anywidget",
+                "state": {"_anywidget_id": "quantem.widget.show2d.Show2D", "_esm": bundle},
+            }
+        }
+    }
+    (tutorials / "show2d.html").write_text(
+        '<script type="application/vnd.jupyter.widget-state+json">'
+        + json.dumps(state)
+        + "</script>",
+        encoding="utf-8",
+    )
+
+    result = _run(
+        sys.executable,
+        "scripts/check_docs_widget_provenance.py",
+        str(tmp_path / "html"),
+        "--static-dir",
+        str(static),
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "1 baked model(s) match 1 checkout bundle(s)" in result.stdout
+
+    (static / "show2d.js").write_text("different bundle", encoding="utf-8")
+    result = _run(
+        sys.executable,
+        "scripts/check_docs_widget_provenance.py",
+        str(tmp_path / "html"),
+        "--static-dir",
+        str(static),
+    )
+    assert result.returncode == 1
+    assert "does not match this checkout's npm build" in result.stdout
 
 
 def test_ci_workflow_uploads_signoff_artifacts() -> None:
@@ -525,10 +598,11 @@ def test_widget_html_smoke_writes_visual_report(tmp_path: Path) -> None:
     plan = json.loads((artifact_dir / "browser-plan.json").read_text(encoding="utf-8"))
     index = (artifact_dir / "index.html").read_text(encoding="utf-8")
 
-    assert len(report["exports"]) == 18
+    assert len(report["exports"]) == 19
     assert sum(1 for item in report["exports"] if item["widget"] == "show2d") >= 5
     assert sum(1 for item in report["exports"] if item["widget"] == "show3d") >= 6
     assert {item["widget"] for item in report["exports"]} == {
+        "show1d",
         "show2d",
         "show3d",
         "show3dslices",
@@ -546,6 +620,7 @@ def test_widget_html_smoke_writes_visual_report(tmp_path: Path) -> None:
     assert "synthetic MoS2-like HAADF lattice" in index
     assert "ShowPtycho" in index
     assert {page["widget"] for page in plan["pages"]} == {
+        "show1d",
         "show2d",
         "show3d",
         "show3dslices",

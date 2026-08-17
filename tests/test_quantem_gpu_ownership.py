@@ -209,13 +209,42 @@ def test_widget_webgpu_sources_are_generated_from_quantem_gpu() -> None:
         encoding="utf-8"
     )
     web_app = (repo / "web" / "src" / "App.tsx").read_text(encoding="utf-8")
+    display_reexports = {
+        name: (repo / "js" / name).read_text(encoding="utf-8").strip()
+        for name in (
+            "colormaps.ts",
+            "displayFilter.ts",
+            "fft.ts",
+            "frequencyFilter.ts",
+            "geometry.ts",
+            "stats.ts",
+        )
+    }
 
     assert 'targetDir = "js/.generated/engine"' in sync_script
     assert '"device/webgpu.ts"' in sync_script
+    assert '"display/webgpu/colormaps.ts"' in sync_script
+    assert '"display/webgpu/fft.ts"' in sync_script
+    assert '"display/webgpu/filter.ts"' in sync_script
+    assert '"display/webgpu/frequencyFilter.ts"' in sync_script
+    assert '"display/webgpu/geometry.ts"' in sync_script
+    assert '"display/webgpu/stats.ts"' in sync_script
+    assert '"swift/Sources/MetalDisplayKernels/Resources/colormaps.json"' in sync_script
     assert '"io/backends/webgpu/bslz4.ts"' in sync_script
     assert '"detector/compute/webgpu/backend.ts"' in sync_script
     assert '"dpc/compute/webgpu/fft.ts"' in sync_script
     assert "syncGpuWebgpuSources()" in build_script
+    expected_reexports = {
+        "colormaps.ts": 'export * from "./.generated/engine/display/webgpu/colormaps";',
+        "displayFilter.ts": 'export * from "./.generated/engine/display/webgpu/filter";',
+        "fft.ts": 'export * from "./.generated/engine/display/webgpu/fft";',
+        "frequencyFilter.ts": 'export * from "./.generated/engine/display/webgpu/frequencyFilter";',
+        "geometry.ts": 'export * from "./.generated/engine/display/webgpu/geometry";',
+        "stats.ts": 'export * from "./.generated/engine/display/webgpu/stats";',
+    }
+    for name, expected in expected_reexports.items():
+        assert display_reexports[name].endswith(expected)
+        assert display_reexports[name].count("export *") == 1
     assert "../.generated/engine/io/backends/webgpu/bslz4" in show4dstem
     assert "../.generated/engine/io/backends/webgpu/local-h5" in show4dstem
     assert 'from "./lazy"' in show4dstem

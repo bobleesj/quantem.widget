@@ -1072,6 +1072,7 @@ def test_showptycho_cli_threads_explicit_dtype_to_ssb_open() -> None:
 def test_showptycho_fit_records_compute_and_ui_provenance(monkeypatch) -> None:
     """C1c: fit records identify all packages without local source paths."""
     import inspect
+    import quantem
 
     seen = []
 
@@ -1080,6 +1081,7 @@ def test_showptycho_fit_records_compute_and_ui_provenance(monkeypatch) -> None:
         return {"version": version, "commit": "abc123", "dirty": False}
 
     monkeypatch.setattr(cli, "_package_source_state", fake_source_state)
+    monkeypatch.delattr(quantem, "__version__", raising=False)
 
     provenance = cli._showptycho_software_provenance()
     render_source = inspect.getsource(cli._render_showptycho_master)

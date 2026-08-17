@@ -31,8 +31,9 @@ import { useTheme } from "../theme";
 import { VolumeRenderer, CameraState, DEFAULT_CAMERA } from "../webgpu-volume";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawColorbar } from "../figure";
 import { downloadBlob, extractBytes, extractFloat32, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";
-import { findDataRange, applyLogScale, percentileClip, sliderRange, computeHistogramFromBytes } from "../stats";
+import { findDataRange, applyLogScale, percentileClip, signedLog1p, sliderRange, computeHistogramFromBytes } from "../stats";
 import { MetadataSection } from "../widgetInfo";
+import { dequantizeUint8 } from "../quantization";
 
 const MAX_PLAYBACK_FPS = 30;
 const PAGE_PLAY_FPS_OPTIONS = [1, 2, 4, 8] as const;
@@ -111,7 +112,6 @@ const typography = {
 // ============================================================================
 // Inlined utilities (mirrors Show3D - keep widgets self-contained)
 // ============================================================================
-const signedLog1p = (x: number): number => x >= 0 ? Math.log1p(x) : -Math.log1p(-x);
 
 type Show3DSlicesWritableFile = {
   write: (data: BlobPart) => Promise<void>;
@@ -384,12 +384,11 @@ function extractVolumeFloat32(
   if (!offline) return extractFloat32(dataView, count);
   const bytes = extractBytes(dataView);
   if (bytes.length === 0 || count === 0) return null;
-  const out = new Float32Array(count);
   const usable = Math.min(count, bytes.length);
   const lo = Number.isFinite(offlineMin) ? offlineMin : 0;
   const hi = Number.isFinite(offlineMax) ? offlineMax : lo;
-  const scale = hi > lo ? (hi - lo) / 255.0 : 0;
-  for (let i = 0; i < usable; i++) out[i] = bytes[i] * scale + lo;
+  const out = new Float32Array(count);
+  dequantizeUint8(bytes.subarray(0, usable), lo, hi, out);
   if (usable < count) out.fill(lo, usable);
   return out;
 }
@@ -458,34 +457,6 @@ function transformDisplaySample(data: Float32Array | null, logScale: boolean, fl
     out[i] = flip ? -v : v;
   }
   return out;
-}
-
-function findFFTPeak(
-  mag: Float32Array, width: number, height: number,
-  col: number, row: number, radius: number,
-): { row: number; col: number } {
-  const c0 = Math.max(0, Math.floor(col) - radius);
-  const r0 = Math.max(0, Math.floor(row) - radius);
-  const c1 = Math.min(width - 1, Math.floor(col) + radius);
-  const r1 = Math.min(height - 1, Math.floor(row) + radius);
-  let bestCol = Math.round(col), bestRow = Math.round(row), bestVal = -Infinity;
-  for (let ir = r0; ir <= r1; ir++) {
-    for (let ic = c0; ic <= c1; ic++) {
-      const val = mag[ir * width + ic];
-      if (val > bestVal) { bestVal = val; bestCol = ic; bestRow = ir; }
-    }
-  }
-  const wc0 = Math.max(0, bestCol - 1), wc1 = Math.min(width - 1, bestCol + 1);
-  const wr0 = Math.max(0, bestRow - 1), wr1 = Math.min(height - 1, bestRow + 1);
-  let sumW = 0, sumWC = 0, sumWR = 0;
-  for (let ir = wr0; ir <= wr1; ir++) {
-    for (let ic = wc0; ic <= wc1; ic++) {
-      const w = mag[ir * width + ic];
-      sumW += w; sumWC += w * ic; sumWR += w * ir;
-    }
-  }
-  if (sumW > 0) return { row: sumWR / sumW, col: sumWC / sumW };
-  return { row: bestRow, col: bestCol };
 }
 
 function resolveDisplayBounds(
@@ -915,8 +886,9 @@ const upwardMenuProps = {
 
 import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine } from "../colormaps";
 
-import { WebGPUFFT, getWebGPUFFT, fft2d, fftshift, nextPow2, computeMagnitude, autoEnhanceFFT, applyHannWindow2D } from "../fft";
+import { WebGPUFFT, getWebGPUFFT, fft2d, fftshift, nextPow2, computeMagnitude, autoEnhanceFFT, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset } from "../fft";
 import { getGPUDevice } from "../fft";
+import { findFFTPeakWebGPU } from "../geometry";
 import { estimateSliceAlignment } from "../sliceAlignment";
 
 // ============================================================================
@@ -4296,7 +4268,7 @@ function Show3DSlices() {
     }
   };
 
-  const handleFftMouseUp = (e: React.MouseEvent, axis: number) => {
+  const handleFftMouseUp = async (e: React.MouseEvent, axis: number) => {
     // Click detection for d-spacing measurement
     if (fftClickStartRef.current && fftClickStartRef.current.axis === axis) {
       const dx = e.clientX - fftClickStartRef.current.x;
@@ -4323,7 +4295,13 @@ function Show3DSlices() {
 
           const cachedMag = fftMagCacheRefs.current[axis];
           if (cachedMag && imgCol >= 0 && imgCol < fftW && imgRow >= 0 && imgRow < fftH) {
-            const snapped = findFFTPeak(cachedMag, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
+            let snapped: { row: number; col: number };
+            try {
+              snapped = await findFFTPeakWebGPU(cachedMag, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
+            } catch (error) {
+              console.error("[Show3DSlices] WebGPU FFT peak refinement failed", error);
+              return;
+            }
             imgCol = snapped.col;
             imgRow = snapped.row;
           }
@@ -4347,10 +4325,14 @@ function Show3DSlices() {
               if (rowSpacing > 0 && colSpacing > 0) {
                 const paddedW = fftW;
                 const paddedH = fftH;
-                const freqC = dcCol / paddedW / colSpacing;
-                const freqR = dcRow / paddedH / rowSpacing;
-                spatialFreq = Math.sqrt(freqC * freqC + freqR * freqR);
-                dSpacing = spatialFreq > 0 ? 1 / spatialFreq : null;
+                ({ spatialFrequency: spatialFreq, dSpacing } = reciprocalCoordinatesFromShiftedOffset(
+                  dcRow,
+                  dcCol,
+                  paddedH,
+                  paddedW,
+                  rowSpacing,
+                  colSpacing,
+                ));
               }
               setFftClickInfo({ axis, row: imgRow, col: imgCol, distPx, spatialFreq, dSpacing });
             }
@@ -5122,6 +5104,7 @@ function Show3DSlices() {
                 onContextMenu={(e) => e.preventDefault()}
               >
                 <canvas
+                  data-quantem-scientific-output="show3dslices-volume"
                   ref={volumeCanvasRef}
                   style={{ width: volumeCanvasSize, height: volumeCanvasSize, display: "block" }}
                   role="img"
@@ -5237,6 +5220,7 @@ function Show3DSlices() {
                 onDoubleClick={() => handleDoubleClick(a)}
               >
                 <canvas
+                  data-quantem-scientific-output={`show3dslices-slice-${a}`}
                   ref={(el) => { canvasRefs.current[a] = el; }}
                   width={cw}
                   height={ch}
@@ -5318,6 +5302,7 @@ function Show3DSlices() {
                     onDoubleClick={() => handleFftDoubleClick(a)}
                   >
                     <canvas
+                      data-quantem-scientific-output={`show3dslices-fft-${a}`}
                       ref={(el) => { fftCanvasRefs.current[a] = el; }}
                       width={cw}
                       height={ch}

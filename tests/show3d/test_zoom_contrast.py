@@ -54,7 +54,9 @@ def test_frame_scrub_is_raf_coalesced_and_commits_once_on_release() -> None:
     """Pointer floods repaint resident data but commit only on release."""
     root = pathlib.Path(__file__).resolve().parents[2]
     frontend = (root / "js" / "show3d" / "index.tsx").read_text(encoding="utf-8")
-    colormaps = (root / "js" / "colormaps.ts").read_text(encoding="utf-8")
+    colormaps = (
+        root / "js" / ".generated" / "engine" / "display" / "webgpu" / "colormaps.ts"
+    ).read_text(encoding="utf-8")
 
     assert "averageResidentSlotsInto" in colormaps
     assert "encoder.copyBufferToBuffer(slot.dataBuffer" in colormaps
@@ -99,7 +101,9 @@ def test_playback_uses_live_per_panel_colormap_contract() -> None:
     """Resident, CPU, and offline playback must keep panel color identity."""
     root = pathlib.Path(__file__).resolve().parents[2]
     frontend = (root / "js" / "show3d" / "index.tsx").read_text(encoding="utf-8")
-    colormaps = (root / "js" / "colormaps.ts").read_text(encoding="utf-8")
+    colormaps = (
+        root / "js" / ".generated" / "engine" / "display" / "webgpu" / "colormaps.ts"
+    ).read_text(encoding="utf-8")
 
     assert "const panelCmapsLiveRef = React.useRef" in frontend
     assert "panelCmapsLiveRef.current = next" in frontend

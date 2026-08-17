@@ -15,6 +15,7 @@ import h5py
 import numpy as np
 
 from quantem.widget.export import supports_html_export
+from quantem.widget.show1d import Show1D
 from quantem.widget.show2d import Show2D
 from quantem.widget.show3d import Show3D
 from quantem.widget.show3dslices import Show3DSlices
@@ -385,6 +386,19 @@ def _cases(folder_root: Path) -> list[tuple[str, str, object, dict[str, object],
     show3d_panel_d = _mos2_lattice_stack(rng, 8, 144, 168)
 
     cases: list[tuple[str, str, object, dict[str, object], str]] = [
+        (
+            "show1d",
+            "show1d",
+            Show1D(
+                {
+                    "training loss": np.exp(-np.linspace(0.0, 4.0, 96)),
+                    "validation loss": 0.08 + 0.9 * np.exp(-np.linspace(0.0, 3.4, 96)),
+                },
+                title="Smoke Show1D",
+            ),
+            {"encoding": "full"},
+            "Smoke Show1D",
+        ),
         (
             "show2d",
             "show2d-single",
