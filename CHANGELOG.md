@@ -6,6 +6,18 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- ShowDiffraction detection denoise: center refinement and spot/ring detection
+  now run on a denoised view of the frame (`detect_denoise`, default `"auto"`:
+  Anscombe for sparse counting data, light Gaussian for moderate-SNR data,
+  identity when clean). All fits and measurements keep using the raw frame, so
+  positions and radii are never biased by the smoothing.
+- ShowDiffraction `detect_spots` exposes its shot-noise contrast floor as
+  `noise_sigma`; lower it on frames whose diffuse scattering or detector
+  shadows inflate the robust noise estimate past real peak contrast.
+- ShowDiffraction display denoise: a view-only `denoise` trait (including the
+  new Poisson non-local means `nlm` filter, which keeps spots sharp where the
+  detection blur softens them) and a `show_detection_view` toggle that
+  displays what detection saw; both leave stored data and measurements raw.
 - Add `Mask2D`, a focused image selector that turns one full-resolution
   rectangle, square, or circle into a Boolean `(row, col)` mask for downstream
   analysis while preserving calibrated dataset display and standalone HTML.
