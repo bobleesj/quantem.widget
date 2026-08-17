@@ -55,6 +55,7 @@ def _folder_calibration(widget: Any, state: Any) -> dict[str, Any]:
     c12 = float(widget._current_c12())
     phi12_deg = float(widget._current_phi12_deg())
     phi12 = math.radians(phi12_deg)
+    source_scan_shape = tuple(int(value) for value in widget._source_scan_shape)
     scan_region = widget._scan_region
     if scan_region is None:
         scan_region_payload = {
@@ -63,6 +64,7 @@ def _folder_calibration(widget: Any, state: Any) -> dict[str, Any]:
             "col_start": 0,
             "col_stop": nx,
             "shape": [ny, nx],
+            "source_shape": list(source_scan_shape),
         }
     else:
         row_start, row_stop, col_start, col_stop = scan_region
@@ -72,6 +74,7 @@ def _folder_calibration(widget: Any, state: Any) -> dict[str, Any]:
             "col_start": int(col_start),
             "col_stop": int(col_stop),
             "shape": [int(row_stop - row_start), int(col_stop - col_start)],
+            "source_shape": list(source_scan_shape),
         }
     ssb = widget._ssb_ref
     scan_sampling = ssb.scan_sampling_A if ssb is not None else None
@@ -430,8 +433,57 @@ def _write_bf_column_source(
             "ShowPtycho BF mask is outside the source detector shape: "
             f"max row/col {(int(bf_rows.max()), int(bf_cols.max()))}, detector {(det_rows, det_cols)}."
         )
-    plane = int(sum(frames for frames, _, _, _ in shapes))
-    scan_shape = list(calibration.get("scan_region", {}).get("shape") or calibration.get("phase_shape") or [])
+    source_plane = int(sum(frames for frames, _, _, _ in shapes))
+    scan_region = calibration.get("scan_region", {})
+    scan_shape = list(scan_region.get("shape") or calibration.get("phase_shape") or [])
+    if len(scan_shape) != 2:
+        raise ValueError(
+            f"ShowPtycho BF-column export needs a 2D scan shape, got {scan_shape!r}."
+        )
+    source_shape = list(scan_region.get("source_shape") or [])
+    if not source_shape:
+        if int(np.prod(scan_shape)) == source_plane:
+            source_shape = list(scan_shape)
+        else:
+            source_side = math.isqrt(source_plane)
+            if source_side * source_side != source_plane:
+                raise ValueError(
+                    "ShowPtycho cropped BF-column export needs scan_region.source_shape "
+                    f"for a non-square {source_plane}-frame source."
+                )
+            source_shape = [source_side, source_side]
+    if len(source_shape) != 2 or int(np.prod(source_shape)) != source_plane:
+        raise ValueError(
+            "ShowPtycho source scan shape does not match the HDF5 frame count: "
+            f"shape {source_shape!r}, frames {source_plane}."
+        )
+    source_rows, source_cols = (int(value) for value in source_shape)
+    row_start = int(scan_region.get("row_start", 0))
+    row_stop = int(scan_region.get("row_stop", row_start + int(scan_shape[0])))
+    col_start = int(scan_region.get("col_start", 0))
+    col_stop = int(scan_region.get("col_stop", col_start + int(scan_shape[1])))
+    if not (
+        0 <= row_start < row_stop <= source_rows
+        and 0 <= col_start < col_stop <= source_cols
+        and [row_stop - row_start, col_stop - col_start]
+        == [int(scan_shape[0]), int(scan_shape[1])]
+    ):
+        raise ValueError(
+            "ShowPtycho scan region is inconsistent with its source and output shapes: "
+            f"region {(row_start, row_stop, col_start, col_stop)}, "
+            f"source {(source_rows, source_cols)}, output {scan_shape!r}."
+        )
+    selected_frames = np.concatenate(
+        [
+            np.arange(
+                row * source_cols + col_start,
+                row * source_cols + col_stop,
+                dtype=np.int64,
+            )
+            for row in range(row_start, row_stop)
+        ]
+    )
+    plane = int(selected_frames.size)
 
     source_dir = out_path / "source"
     source_dir.mkdir(parents=True, exist_ok=True)
@@ -439,14 +491,26 @@ def _write_bf_column_source(
     if tmp_path.exists():
         tmp_path.unlink()
     columns_u16 = np.memmap(tmp_path, dtype="<u2", mode="w+", shape=(num_bf, plane))
-    offset = 0
+    source_offset = 0
+    destination_offset = 0
     max_value = 0
     for src, (frames, _det_rows, _det_cols, _dtype) in zip(stack_files, shapes, strict=True):
+        file_frames = selected_frames[
+            (selected_frames >= source_offset)
+            & (selected_frames < source_offset + frames)
+        ]
+        local_frames = file_frames - source_offset
         with h5py.File(src, "r") as handle:
             dataset = _find_hdf5_stack(handle)
-            for frame0 in range(0, frames, 1024):
-                frame1 = min(frames, frame0 + 1024)
-                frames_block = np.asarray(dataset[frame0:frame1])
+            for frame0 in range(0, int(local_frames.size), 1024):
+                frame1 = min(int(local_frames.size), frame0 + 1024)
+                indices = local_frames[frame0:frame1]
+                if indices.size > 1 and np.all(np.diff(indices) == 1):
+                    frames_block = np.asarray(
+                        dataset[int(indices[0]) : int(indices[-1]) + 1]
+                    )
+                else:
+                    frames_block = np.asarray(dataset[indices])
                 block = frames_block[:, bf_rows, bf_cols]
                 if block.ndim != 2 or block.shape[1] != num_bf:
                     raise ValueError(
@@ -455,8 +519,16 @@ def _write_bf_column_source(
                     )
                 if block.size:
                     max_value = max(max_value, int(np.max(block)))
-                columns_u16[:, offset + frame0 : offset + frame1] = block.T.astype("<u2", copy=False)
-        offset += frames
+                columns_u16[
+                    :, destination_offset + frame0 : destination_offset + frame1
+                ] = block.T.astype("<u2", copy=False)
+        destination_offset += int(local_frames.size)
+        source_offset += frames
+    if destination_offset != plane:
+        raise ValueError(
+            "ShowPtycho BF-column export did not find every requested scan frame: "
+            f"wrote {destination_offset}, expected {plane}."
+        )
     columns_u16.flush()
 
     if max_value <= 255:

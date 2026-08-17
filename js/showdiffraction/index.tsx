@@ -1859,7 +1859,7 @@ function ShowDiffraction() {
           </Typography>
           <Stack direction={isMobile ? "column" : "row"} spacing={`${SPACING.XS}px`} alignItems="flex-start" sx={{ width: isMobile ? "100%" : patternPanelWidth, maxWidth: "100%" }}>
           <Box ref={dpContainerRef} sx={{ ...canvasBox, flex: "0 1 auto", minWidth: 0 }}>
-            <canvas ref={dpCanvasRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", imageRendering: "pixelated" }} />
+            <canvas data-quantem-scientific-output={dpVersion > 0 ? "showdiffraction-pattern" : undefined} ref={dpCanvasRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", imageRendering: "pixelated" }} />
             <canvas ref={dpUiRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
             <canvas ref={dpScaleRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
             <canvas
@@ -1992,7 +1992,7 @@ function ShowDiffraction() {
                   <Box component="span" sx={{ ...typography.value, ml: 1, color: statusColors.warn }}>{paneStaleNote}</Box>
                 )}
               </Typography>
-              <canvas ref={azimuthalCanvasRef} style={{ display: "block", width: "100%", maxWidth: canvasSize, height: PROFILE_H, border: `1px solid ${themeColors.border}`, boxSizing: "border-box", opacity: paneStaleNote ? 0.4 : 1 }} />
+              <canvas data-quantem-scientific-output="showdiffraction-azimuthal-profile" ref={azimuthalCanvasRef} style={{ display: "block", width: "100%", maxWidth: canvasSize, height: PROFILE_H, border: `1px solid ${themeColors.border}`, boxSizing: "border-box", opacity: paneStaleNote ? 0.4 : 1 }} />
             </Box>
           )}
 

@@ -107,13 +107,19 @@ def _package_source_state(
 def _showptycho_software_provenance() -> dict[str, dict[str, str | bool | None]]:
     """Return the core, compute, and UI versions that produced an SSB fit."""
 
+    from importlib.metadata import version as distribution_version
+
     import quantem
     import quantem.gpu
     import quantem.widget
 
+    quantem_version = getattr(quantem, "__version__", None)
+    if quantem_version is None:
+        quantem_version = distribution_version("quantem")
+
     return {
         "quantem": _package_source_state(
-            version=quantem.__version__,
+            version=quantem_version,
             module_file=quantem.__file__,
         ),
         "quantem.gpu": _package_source_state(

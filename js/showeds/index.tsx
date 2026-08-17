@@ -1114,7 +1114,7 @@ async function ensureStreamGpu() {
 
 async function computeStreamMapGpu(start, end) {
   const gpu = await ensureStreamGpu();
-  if (!gpu) return null;
+  if (!gpu) throw new Error(streamGpu?.error || "Sparse EDS maps require hardware WebGPU");
   const rows = Math.max(1, Math.round(meta.rows));
   const cols = Math.max(1, Math.round(meta.cols));
   const p0 = channelOffsets[start];
@@ -1162,7 +1162,7 @@ function ensureStreamMapPreviewBuffers(gpu, outCount) {
 
 async function computeStreamMapPreviewGpu(start, end, viewRow, viewCol, viewRows, viewCols, outW, outH) {
   const gpu = await ensureStreamGpu();
-  if (!gpu) return null;
+  if (!gpu) throw new Error(streamGpu?.error || "Sparse EDS previews require hardware WebGPU");
   const rows = Math.max(1, Math.round(meta.rows));
   const cols = Math.max(1, Math.round(meta.cols));
   const width = Math.max(1, Math.round(outW));
@@ -1204,7 +1204,7 @@ async function computeStreamMapPreviewGpu(start, end, viewRow, viewCol, viewRows
 
 async function computeStreamSpectrumGpu(r0, c0, r1, c1, shape) {
   const gpu = await ensureStreamGpu();
-  if (!gpu) return null;
+  if (!gpu) throw new Error(streamGpu?.error || "Sparse EDS spectra require hardware WebGPU");
   const rows = Math.max(1, Math.round(meta.rows));
   const cols = Math.max(1, Math.round(meta.cols));
   const nEnergy = Math.max(1, Math.round(meta.n_energy));
@@ -1310,17 +1310,8 @@ self.onmessage = async (event) => {
           await ensureStreamIndexes();
           if (controller.signal.aborted) throw abortError();
           const gpuOut = await computeStreamMapGpu(s, e);
-          if (gpuOut) {
-            if (controller.signal.aborted) throw abortError();
-            self.postMessage({ id: msg.id, type: "map", buffer: gpuOut.buffer, ms: performance.now() - t0, backend: "webgpu-sparse" }, [gpuOut.buffer]);
-            return;
-          }
-          const out = new Uint32Array(meta.rows * meta.cols);
-          const p0 = channelOffsets[s];
-          const p1 = channelOffsets[e];
-          for (let i = p0; i < p1; i++) out[channelPixels[i]]++;
           if (controller.signal.aborted) throw abortError();
-          self.postMessage({ id: msg.id, type: "map", buffer: out.buffer, ms: performance.now() - t0, backend: "worker-sparse" }, [out.buffer]);
+          self.postMessage({ id: msg.id, type: "map", buffer: gpuOut.buffer, ms: performance.now() - t0, backend: "webgpu-sparse" }, [gpuOut.buffer]);
           return;
         }
         const [lo, hi] = await Promise.all([
@@ -1365,55 +1356,21 @@ self.onmessage = async (event) => {
           width,
           height,
         );
-        if (gpuOut) {
-          if (controller.signal.aborted) throw abortError();
-          self.postMessage({
-            id: msg.id,
-            type: "map",
-            buffer: gpuOut.buffer,
-            width,
-            height,
-            viewRow: Number(msg.viewRow || 0),
-            viewCol: Number(msg.viewCol || 0),
-            viewRows: Number(msg.viewRows || meta.rows),
-            viewCols: Number(msg.viewCols || meta.cols),
-            ms: performance.now() - t0,
-            backend: "webgpu-sparse-preview",
-          }, [gpuOut.buffer]);
-          return;
-        }
-        const out = new Uint32Array(width * height);
-        const viewRow = Number(msg.viewRow || 0);
-        const viewCol = Number(msg.viewCol || 0);
-        const viewRows = Math.max(1e-6, Number(msg.viewRows || meta.rows));
-        const viewCols = Math.max(1e-6, Number(msg.viewCols || meta.cols));
-        const p0 = channelOffsets[s];
-        const p1 = channelOffsets[e];
-        for (let i = p0; i < p1; i++) {
-          const pixel = channelPixels[i];
-          const row = Math.floor(pixel / meta.cols);
-          const col = pixel - row * meta.cols;
-          const xf = (col + 0.5 - viewCol) / viewCols;
-          const yf = (row + 0.5 - viewRow) / viewRows;
-          if (xf < 0 || xf >= 1 || yf < 0 || yf >= 1) continue;
-          const x = Math.min(width - 1, Math.floor(xf * width));
-          const y = Math.min(height - 1, Math.floor(yf * height));
-          out[y * width + x]++;
-        }
         if (controller.signal.aborted) throw abortError();
         self.postMessage({
           id: msg.id,
           type: "map",
-          buffer: out.buffer,
+          buffer: gpuOut.buffer,
           width,
           height,
-          viewRow,
-          viewCol,
-          viewRows,
-          viewCols,
+          viewRow: Number(msg.viewRow || 0),
+          viewCol: Number(msg.viewCol || 0),
+          viewRows: Number(msg.viewRows || meta.rows),
+          viewCols: Number(msg.viewCols || meta.cols),
           ms: performance.now() - t0,
-          backend: "worker-sparse-preview",
-        }, [out.buffer]);
+          backend: "webgpu-sparse-preview",
+        }, [gpuOut.buffer]);
+        return;
       } catch (error) {
         if (isAbortError(error)) {
           self.postMessage({ id: msg.id, type: "map", aborted: true });
@@ -1439,33 +1396,8 @@ self.onmessage = async (event) => {
           await ensureStreamIndexes();
           if (controller.signal.aborted) throw abortError();
           const gpuOut = await computeStreamSpectrumGpu(r0, c0, r1, c1, shape);
-          if (gpuOut) {
-            if (controller.signal.aborted) throw abortError();
-            self.postMessage({ id: msg.id, type: "spectrum", buffer: gpuOut.buffer, ms: performance.now() - t0, backend: "webgpu-sparse" }, [gpuOut.buffer]);
-            return;
-          }
-          const out = new Uint32Array(meta.n_energy);
-          for (let r = r0; r < r1; r++) {
-            if (controller.signal.aborted) throw abortError();
-            let segments;
-            if (shape === "rect") {
-              segments = [[c0, c1]];
-            } else {
-              const segment = roundSegmentForRow(r, r0, c0, r1, c1, shape);
-              segments = segment ? [segment] : [];
-            }
-            for (const [s0, s1] of segments) {
-              const pixelStart = r * meta.cols + s0;
-              const pixelEnd = r * meta.cols + s1;
-              for (let pixel = pixelStart; pixel < pixelEnd; pixel++) {
-                const o0 = pixelOffsets[pixel];
-                const o1 = pixelOffsets[pixel + 1];
-                for (let k = o0; k < o1; k++) out[pixelChannels[k]]++;
-              }
-            }
-          }
           if (controller.signal.aborted) throw abortError();
-          self.postMessage({ id: msg.id, type: "spectrum", buffer: out.buffer, ms: performance.now() - t0, backend: "worker-sparse" }, [out.buffer]);
+          self.postMessage({ id: msg.id, type: "spectrum", buffer: gpuOut.buffer, ms: performance.now() - t0, backend: "webgpu-sparse" }, [gpuOut.buffer]);
           return;
         }
         if (shape !== "rect") {
@@ -2564,6 +2496,7 @@ function ShowEDS() {
     const out = await readBuffer(gpu.device, gpu.map, rows * cols * 4);
     React.startTransition(() => setElementMap(out));
     setElementMapPreview(null);
+    recordComputeBackend("map", "webgpu");
     recordWidgetPerf("mapMs", performance.now() - t0);
   }, [cols, cubeDtype, isKernelBackend, isSparseWorkerBackend, isStreamBackend, mapView, model, nEnergy, recordComputeBackend, recordWidgetPerf, rows, requestSidecarWorker, sidecarUrl, size]);
 
@@ -2619,6 +2552,7 @@ function ShowEDS() {
     gpu.device.queue.submit([enc.finish()]);
     const out = await readBuffer(gpu.device, gpu.spectrum, nEnergy * 4);
     React.startTransition(() => setRoiSpectrum(out));
+    recordComputeBackend("spectrum", "webgpu");
     recordWidgetPerf("spectrumMs", performance.now() - t0);
   }, [cols, cubeDtype, isKernelBackend, isSparseWorkerBackend, model, nEnergy, recordComputeBackend, recordWidgetPerf, rows, requestSidecarWorker, sidecarUrl]);
 
@@ -3720,6 +3654,7 @@ function ShowEDS() {
               sx={{ position: "relative", width: size, height: size, bgcolor: themeColors.mapBg, border: `1px solid ${themeColors.border}`, overflow: "hidden" }}
             >
               <canvas
+                data-quantem-scientific-output="showeds-map"
                 ref={mapCanvasRef}
                 onMouseDown={onMapDown}
                 style={{
@@ -3816,6 +3751,7 @@ function ShowEDS() {
               sx={{ position: "relative", width: specW, overflow: "hidden" }}
             >
               <canvas
+                data-quantem-scientific-output="showeds-spectrum"
                 ref={specCanvasRef}
                 onMouseDown={onSpecDown}
                 style={{ width: specW, height: specH, display: "block", cursor: drag?.mode?.startsWith("band") ? "grabbing" : "ew-resize", background: themeColors.plotBg, border: `1px solid ${themeColors.border}` }}

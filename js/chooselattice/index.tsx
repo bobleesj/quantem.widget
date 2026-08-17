@@ -123,6 +123,18 @@ function ChooseLattice() {
     const x = cx - drawW / 2 + panX;
     const y = cy - drawH / 2 + panY;
     ctx.drawImage(image, x, y, drawW, drawH);
+    // Confirm the decoded bitmap on the next compositing frame. Static docs
+    // can mount while Chrome is still promoting the canvas layer; without a
+    // second paint that one-shot draw can remain a white presentation frame.
+    const confirmFrame = window.requestAnimationFrame(() => {
+      const current = canvasRef.current;
+      const currentCtx = current?.getContext("2d");
+      if (!current || !currentCtx) return;
+      currentCtx.fillStyle = themeColors.bg;
+      currentCtx.fillRect(0, 0, canvasW, canvasH);
+      currentCtx.drawImage(image, x, y, drawW, drawH);
+    });
+    return () => window.cancelAnimationFrame(confirmFrame);
   }, [image, width, height, displayScale, zoom, panX, panY, canvasW, canvasH, themeColors.bg]);
 
   // Convert a mouse event to original-image (row, col) coordinates.
@@ -381,6 +393,7 @@ function ChooseLattice() {
 
         <Box ref={containerRef} sx={canvasBox}>
           <canvas
+            data-quantem-scientific-output={image ? "choose-lattice-image" : undefined}
             ref={canvasRef}
             style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: canvasH, imageRendering: "pixelated" }}
           />

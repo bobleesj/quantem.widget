@@ -102,16 +102,194 @@ export default function App() {
         const com = await compute.maskedCoM(mask, detCols);
         const dpcY = await compute.maskedDpc(mask, detCols, "row");
         const dpcX = await compute.maskedDpc(mask, detCols, "col");
+        const dpcMagnitude = await compute.maskedDpcMagnitude(mask, detCols);
         return {
           virtual: Array.from(vi),
           comY: Array.from(com.comY),
           comX: Array.from(com.comX),
           dpcY: Array.from(dpcY),
           dpcX: Array.from(dpcX),
+          dpcMagnitude: Array.from(dpcMagnitude),
           scanCount,
           detRows,
           detCols,
         };
+      };
+    // Shared display parity probe: exercise the canonical quantem.gpu WebGPU
+    // colormap and histogram pipelines on signed float32 evidence. The Python
+    // gate compares these buffers with quantem.gpu.display.reference and CUDA.
+    (window as unknown as { __displayParity: () => Promise<unknown> }).__displayParity =
+      async () => {
+        const {
+          COLORMAPS,
+          createGPUColormapEngine,
+        } = await import("../../js/.generated/engine/display/webgpu/colormaps");
+        const {
+          getGPUInfo,
+          isSoftwareGPUAdapter,
+        } = await import("../../js/.generated/engine/device/webgpu");
+        const {
+          WebGPUFFT,
+          getGPUDevice,
+        } = await import("../../js/.generated/engine/display/webgpu/fft");
+        const values = new Float32Array([-7, -3, -1, 0, 0, 1, 3, 7]);
+        const engine = await createGPUColormapEngine();
+        if (!engine) return { error: "no WebGPU display engine" };
+        try {
+          engine.uploadLUT("gray", COLORMAPS.gray);
+          engine.uploadData(0, values, 4, 2);
+          const logValue = (value: number) => Math.sign(value) * Math.log1p(Math.abs(value));
+          const linearHistogram = await engine.computeHistogramWithRange(0, -7, 7, false);
+          const logHistogram = await engine.computeHistogramWithRange(
+            0,
+            logValue(-7),
+            logValue(7),
+            true,
+          );
+          const linearRgba = await engine.applySingle(0, -7, 7, false);
+          const namedViridisRgba = await engine.applySingleWithLut(
+            0,
+            -7,
+            7,
+            "viridis",
+            COLORMAPS.viridis,
+            false,
+          );
+          const logRgba = await engine.applySingle(
+            0,
+            logValue(-7),
+            logValue(7),
+            true,
+          );
+          const constantValues = new Float32Array([-7, 0, 3, 7]);
+          engine.uploadData(1, constantValues, 4, 1);
+          const constantHistogram = await engine.computeHistogramWithRange(1, 3, 3, false);
+          const constantRgba = await engine.applySingle(1, 3, 3, false);
+          const nonfiniteValues = new Float32Array([NaN, -Infinity, Infinity, -1, 0, 1]);
+          engine.uploadData(2, nonfiniteValues, 3, 2);
+          const nonfiniteHistogram = await engine.computeHistogramWithRange(2, -1, 1, false);
+          const nonfiniteRgba = await engine.applySingle(2, -1, 1, false);
+          const extremeLimit = 1e20;
+          const extremeValues = new Float32Array([
+            -extremeLimit, 0, extremeLimit,
+            -extremeLimit, 0, extremeLimit,
+          ]);
+          engine.uploadData(3, extremeValues, 3, 2);
+          const extremeHistogram = await engine.computeHistogramWithRange(
+            3,
+            -extremeLimit,
+            extremeLimit,
+            false,
+          );
+          const extremeRgba = await engine.applySingle(3, -extremeLimit, extremeLimit, false);
+          const device = await getGPUDevice();
+          if (!device) return { error: "no WebGPU FFT device" };
+          const fftInput = Float32Array.from(
+            { length: 16 },
+            (_, index) => ((index * 7) % 11) - 5,
+          );
+          const fft = await new WebGPUFFT(device).fft2D(
+            fftInput.slice(),
+            new Float32Array(fftInput.length),
+            4,
+            4,
+          );
+          const filterInput = Float32Array.from(
+            { length: 15 },
+            (_, index) => Math.fround(((index * 13) % 17) - 8),
+          );
+          const { applyDisplayFilterBrowser } = await import(
+            "../../js/.generated/engine/display/webgpu/filter"
+          );
+          const { applyFrequencyFilterBrowser } = await import(
+            "../../js/.generated/engine/display/webgpu/frequencyFilter"
+          );
+          const gaussianOdd = await applyDisplayFilterBrowser(
+            filterInput,
+            5,
+            3,
+            "gaussian",
+            1.25,
+            1,
+          );
+          const frequencyOdd = await applyFrequencyFilterBrowser(
+            filterInput,
+            5,
+            3,
+            { mode: "highpass", cutoff: 0.2, edge: 0.035 },
+          );
+          const {
+            cropMaskedRegionWebGPU,
+            findFFTPeakWebGPU,
+            rotateStackInPlaneWebGPU,
+            sampleLineProfileWebGPU,
+            sampleLineProfileUint8WebGPU,
+          } = await import("../../js/.generated/engine/display/webgpu/geometry");
+          const { dequantizeUint8WebGPU } = await import(
+            "../../js/.generated/engine/display/webgpu/quantization"
+          );
+          const cropOdd = await cropMaskedRegionWebGPU(filterInput, 5, 3, {
+            row: 1,
+            col: 2,
+            shape: "circle",
+            radius: 1.5,
+            width: 3,
+            height: 3,
+          });
+          const lineOdd = await sampleLineProfileWebGPU(
+            filterInput, 5, 3, -0.25, 0.5, 2.25, 4.5, 3,
+          );
+          const peakInput = new Float32Array(20);
+          peakInput[1 * 5 + 2] = 4;
+          peakInput[1 * 5 + 3] = 2;
+          peakInput[2 * 5 + 2] = 2;
+          const peak = await findFFTPeakWebGPU(peakInput, 5, 4, 2, 1, 1);
+          const quantizedInput = new Uint8Array([0, 1, 127, 128, 254, 255]);
+          const dequantized = await dequantizeUint8WebGPU(quantizedInput, -7.5, 12.5);
+          const quantizedImage = Uint8Array.from({ length: 15 }, (_, index) => (index * 17) & 255);
+          const quantizedLine = await sampleLineProfileUint8WebGPU(
+            quantizedImage, -3.25, 6.75, 5, 3, -0.25, 0.5, 2.25, 4.5, 3,
+          );
+          const rotationInput = Float32Array.from({ length: 15 }, (_, index) => index - 7);
+          const rotatedOdd = await rotateStackInPlaneWebGPU(rotationInput, 1, 3, 5, 30);
+          return {
+            values: Array.from(values),
+            linearHistogram,
+            logHistogram,
+            linearRgba: linearRgba ? Array.from(linearRgba) : null,
+            namedViridisRgba: namedViridisRgba ? Array.from(namedViridisRgba) : null,
+            logRgba: logRgba ? Array.from(logRgba) : null,
+            constantHistogram,
+            constantRgba: constantRgba ? Array.from(constantRgba) : null,
+            nonfiniteHistogram,
+            nonfiniteRgba: nonfiniteRgba ? Array.from(nonfiniteRgba) : null,
+            extremeHistogram,
+            extremeRgba: extremeRgba ? Array.from(extremeRgba) : null,
+            fftInput: Array.from(fftInput),
+            fftReal: Array.from(fft.real),
+            fftImag: Array.from(fft.imag),
+            filterInput: Array.from(filterInput),
+            gaussianOdd: Array.from(gaussianOdd),
+            frequencyOdd: Array.from(frequencyOdd),
+            cropOdd: cropOdd ? {
+              values: Array.from(cropOdd.cropped),
+              width: cropOdd.cropW,
+              height: cropOdd.cropH,
+            } : null,
+            lineOdd: Array.from(lineOdd),
+            quantizedInput: Array.from(quantizedInput),
+            dequantized: Array.from(dequantized),
+            quantizedImage: Array.from(quantizedImage),
+            quantizedLine: Array.from(quantizedLine),
+            rotationInput: Array.from(rotationInput),
+            rotatedOdd: Array.from(rotatedOdd),
+            peak,
+            adapter: getGPUInfo(),
+            softwareAdapter: isSoftwareGPUAdapter(),
+          };
+        } finally {
+          engine.destroy();
+        }
       };
     // bslz4 Strategy-D parity + kernel-time verify hook.
     (window as unknown as { __verifyD: (url: string) => Promise<unknown> }).__verifyD =

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.server
 import json
 import os
@@ -11,6 +12,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -140,6 +142,20 @@ def _drag_box(page: Any, box: dict[str, float]) -> None:
     page.mouse.up()
 
 
+def _wait_for_scientific_pixels(output: Any, timeout_ms: int) -> None:
+    """Wait for an asynchronous widget render to replace its loading frame."""
+    from widget_browser_smoke import _image_nonblank
+
+    deadline = time.monotonic() + min(timeout_ms, 15_000) / 1000
+    last_stats: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        passed, last_stats = _image_nonblank(output.screenshot(timeout=timeout_ms))
+        if passed:
+            return
+        time.sleep(0.75)
+    raise AssertionError(f"scientific output did not become ready: {last_stats}")
+
+
 def _verify_show4dstem_multiple_interaction(url: str, artifact_dir: Path) -> dict[str, Any]:
     from playwright.sync_api import Error, sync_playwright
 
@@ -193,6 +209,279 @@ def _verify_show4dstem_multiple_interaction(url: str, artifact_dir: Path) -> dic
             browser.close()
 
 
+def _widget_pages(book_dir: Path) -> list[tuple[str, Path, int]]:
+    """Return every rendered tutorial page that embeds live widget views."""
+
+    pages: list[tuple[str, Path, int]] = []
+    tutorials = book_dir / "tutorials"
+    for path in sorted(tutorials.glob("*.html")):
+        source = path.read_text(encoding="utf-8", errors="ignore")
+        view_count = source.count("application/vnd.jupyter.widget-view+json")
+        if view_count:
+            pages.append((path.stem, path, view_count))
+    return pages
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _set_first_slider(page: Any) -> bool:
+    sliders = page.get_by_role("slider")
+    for index in range(sliders.count()):
+        slider = sliders.nth(index)
+        if not slider.is_visible():
+            continue
+        before = slider.get_attribute("aria-valuenow") or slider.get_attribute("value")
+        slider.press("ArrowRight")
+        page.wait_for_timeout(100)
+        after = slider.get_attribute("aria-valuenow") or slider.get_attribute("value")
+        if before != after:
+            return True
+        slider.press("ArrowLeft")
+        page.wait_for_timeout(100)
+        after = slider.get_attribute("aria-valuenow") or slider.get_attribute("value")
+        if before != after:
+            return True
+    return False
+
+
+def _ignorable_docs_framework_message(message: str) -> bool:
+    """Return true only for known Jupyter Book/theme bootstrap noise."""
+
+    return message in {
+        "Got invalid theme mode: . Resetting to auto.",
+        "Identifier 'THEBE_JS_URL' has already been declared",
+    }
+
+
+def _drive_first_output(page: Any, output: Any) -> str:
+    """Change one live control, falling back to a real pointer drag."""
+
+    if _set_first_slider(page):
+        return "slider"
+    box = output.bounding_box()
+    if box is None:
+        return "none"
+    _drag_box(page, box)
+    return "pointer-drag"
+
+
+def _verify_book_interactions(
+    book_dir: Path,
+    artifact_dir: Path,
+    *,
+    timeout_ms: int,
+    headed: bool,
+    require_hardware_webgpu: bool,
+    page_names: set[str] | None = None,
+) -> dict[str, Any]:
+    """Drive every tutorial page containing a baked anywidget view."""
+
+    from playwright.sync_api import Error, sync_playwright
+
+    from widget_browser_smoke import (
+        _scientific_output_screenshots,
+        _webgpu_adapter_info,
+    )
+
+    pages_to_check = _widget_pages(book_dir)
+    if page_names:
+        pages_to_check = [page for page in pages_to_check if page[0] in page_names]
+    if not pages_to_check:
+        raise AssertionError(f"no rendered widget tutorial pages under {book_dir}")
+    screenshots = artifact_dir / "tutorial-screenshots"
+    screenshots.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / "screenshots").mkdir(parents=True, exist_ok=True)
+    port = _free_port()
+    results: list[dict[str, Any]] = []
+
+    with _StaticServer(book_dir, port) as base_url:
+        with sync_playwright() as pw:
+            launch_kwargs: dict[str, Any] = {
+                "headless": not headed,
+                "args": [
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--ignore-gpu-blocklist",
+                    "--enable-unsafe-webgpu",
+                ],
+            }
+            if sys.platform != "darwin":
+                launch_kwargs["args"].extend(
+                    ["--enable-features=Vulkan,WebGPU", "--use-angle=vulkan", "--disable-gpu-sandbox"]
+                )
+            chrome = _chrome_executable()
+            if chrome is not None:
+                launch_kwargs["executable_path"] = chrome
+            try:
+                browser = pw.chromium.launch(**launch_kwargs)
+            except Error as exc:
+                raise RuntimeError(f"Chromium could not be launched: {exc}") from exc
+            try:
+                for page_index, (name, path, expected_views) in enumerate(pages_to_check):
+                    print(
+                        f"tutorial page {name}: loading {expected_views} widget view(s)",
+                        flush=True,
+                    )
+                    page = browser.new_page(viewport={"width": 1440, "height": 1100})
+                    console_errors: list[str] = []
+                    page_errors: list[str] = []
+                    ignored_framework_messages: list[str] = []
+                    page.on(
+                        "console",
+                        lambda msg, errors=console_errors, ignored=ignored_framework_messages: (
+                            ignored.append(msg.text)
+                            if msg.type == "error" and _ignorable_docs_framework_message(msg.text)
+                            else errors.append(msg.text)
+                        )
+                        if msg.type == "error" and "Failed to load resource" not in msg.text
+                        else None,
+                    )
+                    page.on(
+                        "pageerror",
+                        lambda exc, errors=page_errors, ignored=ignored_framework_messages: (
+                            ignored.append(str(exc))
+                            if _ignorable_docs_framework_message(str(exc))
+                            else errors.append(str(exc))
+                        ),
+                    )
+                    relative = path.relative_to(book_dir).as_posix()
+                    url = f"{base_url}/{relative}"
+                    record: dict[str, Any] = {
+                        "name": name,
+                        "url": url,
+                        "expected_widget_views": expected_views,
+                        "scientific_outputs": [],
+                        "errors": [],
+                    }
+                    try:
+                        page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                        page.wait_for_function(
+                            "document.querySelectorAll('canvas, [data-quantem-scientific-output], .showfolder-root').length > 0",
+                            timeout=timeout_ms,
+                        )
+                        page.wait_for_timeout(1200)
+                        adapter = _webgpu_adapter_info(page)
+                        record["webgpu_adapter"] = adapter
+                        if require_hardware_webgpu and (
+                            not adapter.get("available") or adapter.get("software")
+                        ):
+                            record["errors"].append(
+                                f"hardware WebGPU adapter required: {adapter}"
+                            )
+
+                        fallback_count = page.locator("img.quantem-static-fallback").count()
+                        record["static_fallback_count"] = fallback_count
+                        if fallback_count:
+                            record["errors"].append(
+                                f"found {fallback_count} duplicate static fallback image(s)"
+                            )
+
+                        visible_load_errors = page.locator(
+                            '[data-quantem-load-error="true"]:visible'
+                        ).count()
+                        record["visible_load_error_count"] = visible_load_errors
+                        if visible_load_errors:
+                            record["errors"].append(
+                                f"found {visible_load_errors} visible widget load error(s)"
+                            )
+
+                        # Let notebook pages with several independent WebGPU
+                        # widgets finish device creation before screenshots;
+                        # rapid capture can otherwise monopolize compositing
+                        # while the first durable frame is still queued.
+                        page.wait_for_timeout(1800)
+                        output_locator = page.locator("[data-quantem-scientific-output]")
+                        record["scientific_output_count"] = output_locator.count()
+                        if not output_locator.count():
+                            record["errors"].append("no marked scientific output rendered")
+                        else:
+                            for output_index in range(output_locator.count()):
+                                output = output_locator.nth(output_index)
+                                output.scroll_into_view_if_needed(timeout=timeout_ms)
+                                _wait_for_scientific_pixels(output, timeout_ms)
+                            first = output_locator.first
+                            first.scroll_into_view_if_needed(timeout=timeout_ms)
+                            before = first.screenshot(timeout=timeout_ms)
+                            action = _drive_first_output(page, first)
+                            page.wait_for_timeout(900)
+                            after = first.screenshot(timeout=timeout_ms)
+                            record["interaction"] = action
+                            record["interaction_changed_pixels"] = _sha256(before) != _sha256(after)
+                            if not record["interaction_changed_pixels"]:
+                                box = first.bounding_box()
+                                if box is not None and action != "pointer-drag":
+                                    _drag_box(page, box)
+                                    page.wait_for_timeout(700)
+                                    after = first.screenshot(timeout=timeout_ms)
+                                    record["interaction"] = f"{action}+pointer-drag"
+                                    record["interaction_changed_pixels"] = _sha256(before) != _sha256(after)
+                            if not record["interaction_changed_pixels"]:
+                                record["errors"].append(
+                                    "real slider/pointer interaction did not change scientific pixels"
+                                )
+                            for output_index in range(output_locator.count()):
+                                output = output_locator.nth(output_index)
+                                output.scroll_into_view_if_needed(timeout=timeout_ms)
+                                _wait_for_scientific_pixels(output, timeout_ms)
+
+                        outputs = _scientific_output_screenshots(
+                            page,
+                            artifact_dir,
+                            f"tutorial-{name}",
+                            timeout_ms,
+                        )
+                        record["scientific_outputs"] = outputs
+                        for output in outputs:
+                            if not output.get("passed"):
+                                record["errors"].append(
+                                    f"scientific output {output.get('name')!r} is black, blank, or flat: "
+                                    f"{output.get('stats', {})}"
+                                )
+                        full_page = screenshots / f"{name}.png"
+                        page.screenshot(path=str(full_page), full_page=True, timeout=timeout_ms)
+                        record["screenshot"] = str(full_page)
+                        record["console_errors"] = console_errors
+                        record["page_errors"] = page_errors
+                        record["ignored_framework_messages"] = ignored_framework_messages
+                        record["errors"].extend(console_errors)
+                        record["errors"].extend(page_errors)
+                    except Exception as exc:
+                        record["errors"].append(str(exc))
+                    finally:
+                        page.close()
+                        if page_index + 1 < len(pages_to_check):
+                            # AnyWidget pages can own several GPU devices and
+                            # large resident textures. A fresh browser process
+                            # per tutorial proves each page independently and
+                            # prevents a previous stress page from exhausting
+                            # the next page's WebGPU resources.
+                            browser.close()
+                            time.sleep(5.0)
+                            browser = pw.chromium.launch(**launch_kwargs)
+                    record["passed"] = not record["errors"]
+                    results.append(record)
+                    print(
+                        f"tutorial page {name}: {'PASS' if record['passed'] else 'FAIL'} "
+                        f"({record.get('scientific_output_count', 0)} scientific outputs)",
+                        flush=True,
+                    )
+            finally:
+                browser.close()
+
+    return {
+        "mode": "jupyter-book",
+        "book_dir": str(book_dir),
+        "artifact_dir": str(artifact_dir),
+        "require_hardware_webgpu": require_hardware_webgpu,
+        "page_count": len(results),
+        "passed_count": sum(1 for result in results if result["passed"]),
+        "passed": all(result["passed"] for result in results),
+        "pages": results,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -208,28 +497,84 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--timeout", type=int, default=240, help="Per-cell nbconvert timeout in seconds.")
     parser.add_argument("--port", type=int, default=0, help="Local HTTP port. Default: choose a free port.")
+    parser.add_argument(
+        "--book-dir",
+        help="Drive every rendered tutorial page containing live widget views instead of executing one notebook.",
+    )
+    parser.add_argument("--headed", action="store_true", help="Show Chrome while driving rendered tutorial pages.")
+    parser.add_argument(
+        "--require-hardware-webgpu",
+        action="store_true",
+        help="Fail unless each rendered tutorial page acquires a non-software WebGPU adapter.",
+    )
+    parser.add_argument(
+        "--page",
+        action="append",
+        default=[],
+        help="With --book-dir, check only this tutorial stem (repeatable).",
+    )
     args = parser.parse_args(argv)
 
-    notebook = Path(args.notebook).expanduser().resolve()
     artifact_dir = Path(args.artifact_dir).expanduser().resolve()
-    html = _render_notebook(notebook, artifact_dir, timeout=args.timeout)
-    port = int(args.port) or _free_port()
-    with _StaticServer(artifact_dir, port) as base_url:
-        url = f"{base_url}/{html.name}"
-        _wait_for_http(url)
-        result = _verify_show4dstem_multiple_interaction(url, artifact_dir)
-
-    result.update(
-        {
-            "notebook": str(notebook),
-            "html": str(html),
-            "artifact_dir": str(artifact_dir),
+    if args.book_dir:
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        result = _verify_book_interactions(
+            Path(args.book_dir).expanduser().resolve(),
+            artifact_dir,
+            timeout_ms=max(30_000, int(args.timeout) * 1000),
+            headed=bool(args.headed),
+            require_hardware_webgpu=bool(args.require_hardware_webgpu),
+            page_names=set(args.page) or None,
+        )
+        failed_pages = {
+            page["name"] for page in result["pages"] if not page.get("passed")
         }
-    )
+        if failed_pages:
+            result["initial_failures"] = {
+                page["name"]: page.get("errors", [])
+                for page in result["pages"]
+                if page["name"] in failed_pages
+            }
+            retry = _verify_book_interactions(
+                Path(args.book_dir).expanduser().resolve(),
+                artifact_dir,
+                timeout_ms=max(30_000, int(args.timeout) * 1000),
+                headed=bool(args.headed),
+                require_hardware_webgpu=bool(args.require_hardware_webgpu),
+                page_names=failed_pages,
+            )
+            retry_by_name = {page["name"]: page for page in retry["pages"]}
+            result["pages"] = [
+                retry_by_name.get(page["name"], page) for page in result["pages"]
+            ]
+            result["retried_pages"] = sorted(failed_pages)
+            result["passed_count"] = sum(
+                1 for page in result["pages"] if page.get("passed")
+            )
+            result["passed"] = all(
+                page.get("passed") for page in result["pages"]
+            )
+    else:
+        notebook = Path(args.notebook).expanduser().resolve()
+        html = _render_notebook(notebook, artifact_dir, timeout=args.timeout)
+        port = int(args.port) or _free_port()
+        with _StaticServer(artifact_dir, port) as base_url:
+            url = f"{base_url}/{html.name}"
+            _wait_for_http(url)
+            result = _verify_show4dstem_multiple_interaction(url, artifact_dir)
+
+        result.update(
+            {
+                "notebook": str(notebook),
+                "html": str(html),
+                "artifact_dir": str(artifact_dir),
+                "passed": True,
+            }
+        )
     report = artifact_dir / "tutorial-interactivity-report.json"
     report.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))
-    return 0
+    return 0 if result.get("passed", True) else 1
 
 
 if __name__ == "__main__":

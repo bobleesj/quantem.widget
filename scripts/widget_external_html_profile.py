@@ -270,6 +270,8 @@ def _show2d_canvas_hashes(page, limit: int) -> list[dict[str, Any]]:
                 const canvas = canvases[domIndex];
                 const rect = canvas.getBoundingClientRect();
                 if (rect.width < 24 || rect.height < 24 || canvas.width <= 0 || canvas.height <= 0) continue;
+                if (rect.right <= 0 || rect.bottom <= 0 ||
+                    rect.left >= (window.innerWidth || 0) || rect.top >= (window.innerHeight || 0)) continue;
                 let hash = "";
                 try {
                   const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -478,9 +480,19 @@ def _scroll_show2d_histogram_slider_into_view(page) -> dict[str, Any]:
             return rect.width > 20 && rect.height > 4 &&
               style.display !== "none" && style.visibility !== "hidden";
           };
+          const sliderVisible = (node) => {
+            const rect = node.getBoundingClientRect();
+            const style = getComputedStyle(node);
+            return rect.width > 20 && rect.height > 0 &&
+              style.display !== "none" && style.visibility !== "hidden";
+          };
           const sliders = [...document.querySelectorAll(".show2d-root .MuiSlider-root")]
-            .map((root, index) => ({ root, index, thumbs: root.querySelectorAll("[role='slider']").length }))
-            .filter((item) => item.thumbs >= 2 && visible(item.root));
+            .map((root, index) => ({
+              root,
+              index,
+              thumbs: root.querySelectorAll("[role='slider'], input[type='range']").length,
+            }))
+            .filter((item) => item.thumbs >= 2 && sliderVisible(item.root));
           const histCanvases = [...document.querySelectorAll(".show2d-root canvas:not([data-show2d-main-canvas])")]
             .map((root, index) => ({ root, index }))
             .filter((item) => {
@@ -522,10 +534,18 @@ def _show2d_histogram_drag_target(page) -> dict[str, Any]:
               rect.bottom > 0 && rect.right > 0 &&
               rect.left < (window.innerWidth || 0) && rect.top < (window.innerHeight || 0);
           };
+          const sliderVisible = (node) => {
+            const rect = node.getBoundingClientRect();
+            const style = getComputedStyle(node);
+            return rect.width > 20 && rect.height > 0 &&
+              style.display !== "none" && style.visibility !== "hidden" &&
+              rect.bottom > 0 && rect.right > 0 &&
+              rect.left < (window.innerWidth || 0) && rect.top < (window.innerHeight || 0);
+          };
           const sliders = [...document.querySelectorAll(".show2d-root .MuiSlider-root")]
             .map((root, index) => {
               const rect = root.getBoundingClientRect();
-              const thumbs = [...root.querySelectorAll("[role='slider']")].map((thumb) => {
+              const thumbs = [...root.querySelectorAll("[role='slider'], input[type='range']")].map((thumb) => {
                 const box = thumb.getBoundingClientRect();
                 return {
                   x: box.x, y: box.y, width: box.width, height: box.height,
@@ -541,7 +561,7 @@ def _show2d_histogram_drag_target(page) -> dict[str, Any]:
                 height: rect.height,
                 thumbCount: thumbs.length,
                 thumbs,
-                visible: visible(root),
+                visible: sliderVisible(root),
               };
             })
             .filter((item) => item.visible && item.thumbCount >= 2 && item.width >= 40);
@@ -601,11 +621,11 @@ def _run_show2d_linked_contrast_step(page, fps_ms: int, canvas_limit: int) -> di
         profile_clicked = _click_labeled_switch(page, "Profile")
     if profile_clicked:
         page.wait_for_timeout(500)
-    before = _show2d_canvas_hashes(page, canvas_limit)
     scroll_result = _scroll_show2d_histogram_slider_into_view(page)
     if scroll_result.get("found"):
         page.wait_for_timeout(180)
     slider = _show2d_histogram_drag_target(page)
+    before = _show2d_canvas_hashes(page, canvas_limit)
     if not slider or slider.get("found") is False:
         return {
             "found": False,
@@ -618,8 +638,11 @@ def _run_show2d_linked_contrast_step(page, fps_ms: int, canvas_limit: int) -> di
         }
 
     if slider.get("kind") == "histogram_canvas":
+        # Older standalone bundles draw the range handles into the histogram
+        # canvas instead of exposing semantic slider thumbs. Start near the
+        # usual upper display handle at the far-right end of the track.
         start_x = float(slider["x"]) + float(slider["width"]) * 0.95
-        start_y = float(slider["y"]) + float(slider["height"]) - 10
+        start_y = float(slider["y"]) + float(slider["height"]) + 2
         target_x = float(slider["x"]) + float(slider["width"]) * 0.72
         target_y = start_y
     else:

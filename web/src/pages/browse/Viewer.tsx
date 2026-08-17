@@ -12,12 +12,12 @@ import {
   type Session, type Set5D, type ShapeParams,
 } from "./types";
 import { allocateSlot, getGPUColormapEngine } from "../../utils/gpu-colormap";
-import { applyColormap, COLORMAPS } from "../../utils/colormaps";
+import { COLORMAPS } from "../../utils/colormaps";
 import { bucketize, percentileClip, percentileClipMasked } from "../../utils/stats";
 import { pickScaleBarPx, scaleBarLabel as formatScaleBarLabel, SCALE_BAR_TARGET_PX } from "../../utils/scalebar";
 import { fft2dMagnitudeGPU } from "../../utils/webgpu-fft";
-import { fft2dMagnitude, prepareFftInput } from "../../utils/fft";
-import { sampleLineProfile } from "../../utils/lineProfile";
+import { prepareFftInput } from "../../utils/fft";
+import { sampleLineProfileWebGPU } from "../../../../js/.generated/engine/display/webgpu/geometry";
 
 type IntensityScale = "linear" | "log" | "sqrt" | "power";
 
@@ -898,8 +898,8 @@ function CanvasCard({
  *  `applyToCanvas` - NO rgba readback (the readback fence was ~half the per-frame cost). Source is
  *  either a CPU Float32Array (committed render) or an adopted GPU buffer (the drag fast-path, where
  *  the maskedSum result never leaves the GPU). vmin/vmax are passed in (computed once on commit,
- *  HELD during a drag) so no CPU percentile is needed per frame. Falls back to the 2D path when
- *  WebGPU is unavailable (headless). Returns true if it painted via WebGPU. */
+ *  HELD during a drag) so no CPU percentile is needed per frame. A 2D canvas
+ *  readback path remains available, but all numerical colorization is WebGPU. */
 async function renderRealspaceGpu(
   canvas: HTMLCanvasElement | null, slotIdx: number, cmap: string,
   src: { data: Float32Array } | { gpuBuffer: GPUBuffer }, width: number, height: number,
@@ -907,9 +907,10 @@ async function renderRealspaceGpu(
 ): Promise<boolean> {
   if (!canvas) return false;
   const engine = await getGPUColormapEngine();
+  if (!engine) throw new Error("Browse real-space display requires hardware WebGPU");
   let ctx: GPUCanvasContext | null = null;
   try { ctx = canvas.getContext("webgpu") as GPUCanvasContext | null; } catch { ctx = null; }
-  if (!engine || !ctx) {
+  if (!ctx) {
     if ("data" in src) await renderToCanvas(canvas, src.data, width, height, cmap, slotIdx, 0, 1, { vmin, vmax });
     return false;
   }
@@ -920,9 +921,7 @@ async function renderRealspaceGpu(
   return true;
 }
 
-/** Render Float32Array → 2D canvas via WebGPU colormap engine, with CPU
- *  fallback. Mirrors PanelViewer's WebGPU-first pattern but tuned for a
- *  single-slot use case (no FFT, no histogram-on-GPU). */
+/** Render Float32Array → 2D canvas through the WebGPU colormap engine. */
 async function renderToCanvas(
   canvas: HTMLCanvasElement | null,
   data: Float32Array, width: number, height: number,
@@ -940,29 +939,16 @@ async function renderToCanvas(
   if (canvas.height !== height) canvas.height = height;
   const { vmin, vmax } = clipOverride ?? percentileClip(data, pLo * 100, pHi * 100);
   const engine = await getGPUColormapEngine();
-  if (engine) {
-    engine.uploadLUT(cmap);
-    engine.uploadData(slotIdx, data, width, height);
-    const rgba = await engine.apply(slotIdx, vmin, vmax, false);
-    if (rgba) {
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      const buf = new ArrayBuffer(rgba.byteLength);
-      new Uint8Array(buf).set(rgba);
-      const img = new ImageData(new Uint8ClampedArray(buf), width, height);
-      ctx.putImageData(img, 0, 0);
-      return;
-    }
-  }
-  // CPU fallback — keeps Browse functional in headless tests, but the
-  // hot path on the user's GPU is always WebGPU.
+  if (!engine) throw new Error("Browse display requires hardware WebGPU");
+  engine.uploadLUT(cmap);
+  engine.uploadData(slotIdx, data, width, height);
+  const rgba = await engine.apply(slotIdx, vmin, vmax, false);
+  if (!rgba) throw new Error("WebGPU colormap returned no pixels");
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
-  const lut = COLORMAPS[cmap] || COLORMAPS["gray"];
-  const buf = new ArrayBuffer(width * height * 4);
-  const rgba = new Uint8ClampedArray(buf);
-  applyColormap(data, rgba, lut, vmin, vmax);
-  const img = new ImageData(rgba, width, height);
+  const buf = new ArrayBuffer(rgba.byteLength);
+  new Uint8Array(buf).set(rgba);
+  const img = new ImageData(new Uint8ClampedArray(buf), width, height);
   ctx.putImageData(img, 0, 0);
 }
 
@@ -1843,8 +1829,8 @@ export default function Viewer(props: Props) {
       if (seq !== fftSeqRef.current) return;
       const w = realData.w, h = realData.h;
       const windowed = prepareFftInput(realData.data, h, w, fftWindow);
-      let mag = await fft2dMagnitudeGPU(windowed, h, w);
-      if (!mag) mag = fft2dMagnitude(windowed, h, w);
+      const mag = await fft2dMagnitudeGPU(windowed, h, w);
+      if (!mag) throw new Error("Browse FFT requires hardware WebGPU");
       if (seq !== fftSeqRef.current) return;
       setFftData({ data: mag, w, h });
     })().catch(() => { /* fft is best-effort */ });
@@ -1886,13 +1872,23 @@ export default function Viewer(props: Props) {
   }, [dpDisplayData]);
   // Live profile values: bilinear sample of the (raw, pre-scale) virtual
   // image along the profileLine. Mirrors Show2D `profileData` derivation.
-  const profileValues = useMemo(() => {
-    if (!profileLine || !realData) return null;
-    return sampleLineProfile(
+  const [profileValues, setProfileValues] = useState<Float32Array | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!profileLine || !realData) {
+      setProfileValues(null);
+      return;
+    }
+    void sampleLineProfileWebGPU(
       realData.data, realData.w, realData.h,
       profileLine.row0, profileLine.col0, profileLine.row1, profileLine.col1,
       Math.max(1, Math.round(profileWidth)),
-    );
+    ).then(values => {
+      if (!cancelled) setProfileValues(values);
+    }).catch(error => {
+      if (!cancelled) console.error("[Browse] WebGPU line profile failed", error);
+    });
+    return () => { cancelled = true; };
   }, [profileLine, profileWidth, realData]);
 
   const dpInverseScale = useCallback((v: number): number => {
