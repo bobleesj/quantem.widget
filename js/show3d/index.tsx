@@ -48,7 +48,7 @@ import {
   standaloneWidgetStaticHtmlFromDocument,
 } from "../format";
 import { useHideStaticFallback } from "../staticFallback";
-import { findDataRange, applyLogScale, applyLogScaleInPlace, percentileClip, sliderRange, computeStats, computeHistogramFromBytes } from "../stats";
+import { findDataRange, applyLogScale, applyLogScaleInPlace, percentileClip, signedLog1p, sliderRange, computeStats } from "../stats";
 import { MetadataSection } from "../widgetInfo";
 import { EmbeddedWidgetView } from "../embeddedWidget";
 import { FolderWatchBadge, useFolderWatchModelLive } from "../folderWatchStatus";
@@ -739,7 +739,6 @@ function useMobileViewport(): boolean {
 // ============================================================================
 // Inlined utilities (matches Show2D/Show4DSTEM single-file convention)
 // ============================================================================
-const signedLog1p = (x: number): number => x >= 0 ? Math.log1p(x) : -Math.log1p(-x);
 const signedExpm1 = (x: number): number => x >= 0 ? Math.expm1(x) : -Math.expm1(-x);
 
 type Show3DWritableFile = {
@@ -926,34 +925,6 @@ function shouldIgnoreWidgetShortcut(target: EventTarget | null, key = ""): boole
     return target.closest(WIDGET_TEXT_OR_VALUE_CONTROL_SELECTOR) !== null;
   }
   return target.closest(WIDGET_SHORTCUT_IGNORE_SELECTOR) !== null;
-}
-
-function findFFTPeak(
-  mag: Float32Array, width: number, height: number,
-  col: number, row: number, radius: number,
-): { row: number; col: number } {
-  const c0 = Math.max(0, Math.floor(col) - radius);
-  const r0 = Math.max(0, Math.floor(row) - radius);
-  const c1 = Math.min(width - 1, Math.floor(col) + radius);
-  const r1 = Math.min(height - 1, Math.floor(row) + radius);
-  let bestCol = Math.round(col), bestRow = Math.round(row), bestVal = -Infinity;
-  for (let ir = r0; ir <= r1; ir++) {
-    for (let ic = c0; ic <= c1; ic++) {
-      const val = mag[ir * width + ic];
-      if (val > bestVal) { bestVal = val; bestCol = ic; bestRow = ir; }
-    }
-  }
-  const wc0 = Math.max(0, bestCol - 1), wc1 = Math.min(width - 1, bestCol + 1);
-  const wr0 = Math.max(0, bestRow - 1), wr1 = Math.min(height - 1, bestRow + 1);
-  let sumW = 0, sumWC = 0, sumWR = 0;
-  for (let ir = wr0; ir <= wr1; ir++) {
-    for (let ic = wc0; ic <= wc1; ic++) {
-      const w = mag[ir * width + ic];
-      sumW += w; sumWC += w * ic; sumWR += w * ir;
-    }
-  }
-  if (sumW > 0) return { row: sumWR / sumW, col: sumWC / sumW };
-  return { row: bestRow, col: bestCol };
 }
 
 function findFFTPeakInBounds(
@@ -1215,17 +1186,16 @@ interface HistogramProps {
   dataMax?: number;
   pinBinsToRange?: boolean;
   ariaHidden?: boolean;
-  // Pre-computed 256-element bin array (e.g. from GPU). When provided, the
-  // CPU `computeHistogramFromBytes` fallback is skipped entirely.
+  // Pre-computed 256-element GPU bin array.
   bins?: number[] | null;
 }
 
 const Histogram = React.memo(function Histogram({
-  data, vminPct, vmaxPct, onRangeChange,
+  vminPct, vmaxPct, onRangeChange,
   onRangePreview,
   commitOnChange = true,
   width = 110, height = 40, theme = "dark",
-  dataMin = 0, dataMax = 1, pinBinsToRange = true, ariaHidden = false,
+  dataMin = 0, dataMax = 1, ariaHidden = false,
   bins: precomputedBins = null,
 }: HistogramProps) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -1238,26 +1208,13 @@ const Histogram = React.memo(function Histogram({
   const previewRangeRef = React.useRef<[number, number] | null>(null);
   const [previewRange, setPreviewRange] = React.useState<[number, number] | null>(null);
   const rangeRafRef = React.useRef<number | null>(null);
-  // Bins source priority: GPU-precomputed > CPU memoized scan. The CPU path
-  // is an O(N) pass over 16.8 M Float32 at 4k (89% of scrub cost in profiling)
-  // so we only run it when the GPU path didn't produce bins.
+  // Histogram numerical work is WebGPU-only. Before bins arrive, render an
+  // empty histogram rather than scanning the scientific array on the CPU.
   const bins = React.useMemo(
-    () => {
-      // Use GPU-precomputed bins only if non-empty. The GPU path can return
-      // an all-zero array when the engine slot has no data yet (e.g. the
-      // colormap render effect hasn't run yet), which would draw a blank
-      // histogram. Falling back to the CPU bin scan in that case keeps the
-      // first paint correct; subsequent renders use the GPU bins.
-      if (precomputedBins && precomputedBins.length === 256) {
-        let total = 0;
-        for (let i = 0; i < precomputedBins.length; i++) total += precomputedBins[i];
-        if (total > 0) return precomputedBins;
-      }
-      return pinBinsToRange
-        ? computeHistogramFromBytes(data, 256, dataMin, dataMax)
-        : computeHistogramFromBytes(data);
-    },
-    [precomputedBins, data, dataMin, dataMax, pinBinsToRange],
+    () => precomputedBins && precomputedBins.length === 256
+      ? precomputedBins
+      : new Array<number>(256).fill(0),
+    [precomputedBins],
   );
   const colors = theme === "dark"
     ? { bg: "#1a1a1a", barActive: "#888", barInactive: "#444", border: "#333" }
@@ -1781,7 +1738,14 @@ function drawPanelOverlaySelection(
   ctx.restore();
 }
 
-import { WebGPUFFT, getWebGPUFFT, getGPUInfo, fft2d, fft2dAsync, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D } from "../fft";
+import { WebGPUFFT, getWebGPUFFT, getGPUInfo, fft2d, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset } from "../fft";
+import {
+  cropMaskedRegionWebGPU,
+  findFFTPeakWebGPU,
+  sampleLineProfileWebGPU,
+  sampleLineProfileUint8WebGPU,
+} from "../geometry";
+import { dequantizeUint8 } from "../quantization";
 import { computeFftQualityMetrics, formatFftQualityLabel, summarizeFftQualityMetrics, type FftQualityMetrics } from "../fftMetrics";
 import {
   browserFilterCacheKey,
@@ -1957,105 +1921,6 @@ function shiftFrameBilinear(
     }
   }
   return out;
-}
-
-/** Sample intensity values along a line using bilinear interpolation. */
-function sampleSingleLine(data: Float32Array, w: number, h: number, row0: number, col0: number, row1: number, col1: number): Float32Array {
-  const dc = col1 - col0;
-  const dr = row1 - row0;
-  const len = Math.sqrt(dc * dc + dr * dr);
-  const n = Math.max(2, Math.ceil(len));
-  const out = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const t = i / (n - 1);
-    const c = col0 + t * dc;
-    const r = row0 + t * dr;
-    const ci = Math.floor(c), ri = Math.floor(r);
-    const cf = c - ci, rf = r - ri;
-    const c0c = Math.max(0, Math.min(w - 1, ci));
-    const c1c = Math.max(0, Math.min(w - 1, ci + 1));
-    const r0c = Math.max(0, Math.min(h - 1, ri));
-    const r1c = Math.max(0, Math.min(h - 1, ri + 1));
-    out[i] = data[r0c * w + c0c] * (1 - cf) * (1 - rf) +
-             data[r0c * w + c1c] * cf * (1 - rf) +
-             data[r1c * w + c0c] * (1 - cf) * rf +
-             data[r1c * w + c1c] * cf * rf;
-  }
-  return out;
-}
-
-/** Sample intensity along a line, averaging over profileWidth perpendicular pixels. */
-function sampleLineProfile(data: Float32Array, w: number, h: number, row0: number, col0: number, row1: number, col1: number, profileWidth: number = 1): Float32Array {
-  if (profileWidth <= 1) return sampleSingleLine(data, w, h, row0, col0, row1, col1);
-  const dc = col1 - col0;
-  const dr = row1 - row0;
-  const len = Math.sqrt(dc * dc + dr * dr);
-  if (len < 1e-8) return sampleSingleLine(data, w, h, row0, col0, row1, col1);
-  const perpR = -dc / len;
-  const perpC = dr / len;
-  const half = (profileWidth - 1) / 2;
-  let accumulated: Float32Array | null = null;
-  for (let k = 0; k < profileWidth; k++) {
-    const off = -half + k;
-    const vals = sampleSingleLine(data, w, h, row0 + off * perpR, col0 + off * perpC, row1 + off * perpR, col1 + off * perpC);
-    if (!accumulated) {
-      accumulated = vals;
-    } else {
-      for (let i = 0; i < vals.length; i++) accumulated[i] += vals[i];
-    }
-  }
-  if (accumulated) for (let i = 0; i < accumulated.length; i++) accumulated[i] /= profileWidth;
-  return accumulated || new Float32Array(0);
-}
-
-// uint8-stack variants: dequantize ONLY the bilinear corners at each sample
-// point instead of materializing the whole frame. Critical for kymograph on 4k
-// stacks - sampling a line touches ~lineLen*4*width pixels, not width*height*N.
-// `u8` is the packed offline stack; `base` = frameIdx * w * h; value =
-// u8[base + idx] * scale + offset.
-function sampleSingleLineU8(u8: Uint8Array, base: number, w: number, h: number, scale: number, offset: number, row0: number, col0: number, row1: number, col1: number): Float32Array {
-  const dc = col1 - col0;
-  const dr = row1 - row0;
-  const len = Math.sqrt(dc * dc + dr * dr);
-  const n = Math.max(2, Math.ceil(len));
-  const out = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const t = i / (n - 1);
-    const c = col0 + t * dc;
-    const r = row0 + t * dr;
-    const ci = Math.floor(c), ri = Math.floor(r);
-    const cf = c - ci, rf = r - ri;
-    const c0c = Math.max(0, Math.min(w - 1, ci));
-    const c1c = Math.max(0, Math.min(w - 1, ci + 1));
-    const r0c = Math.max(0, Math.min(h - 1, ri));
-    const r1c = Math.max(0, Math.min(h - 1, ri + 1));
-    const v00 = u8[base + r0c * w + c0c] * scale + offset;
-    const v01 = u8[base + r0c * w + c1c] * scale + offset;
-    const v10 = u8[base + r1c * w + c0c] * scale + offset;
-    const v11 = u8[base + r1c * w + c1c] * scale + offset;
-    out[i] = v00 * (1 - cf) * (1 - rf) + v01 * cf * (1 - rf) + v10 * (1 - cf) * rf + v11 * cf * rf;
-  }
-  return out;
-}
-
-function sampleLineProfileU8(u8: Uint8Array, base: number, w: number, h: number, scale: number, offset: number, row0: number, col0: number, row1: number, col1: number, profileWidth: number = 1): Float32Array {
-  if (profileWidth <= 1) return sampleSingleLineU8(u8, base, w, h, scale, offset, row0, col0, row1, col1);
-  const dc = col1 - col0;
-  const dr = row1 - row0;
-  const len = Math.sqrt(dc * dc + dr * dr);
-  if (len < 1e-8) return sampleSingleLineU8(u8, base, w, h, scale, offset, row0, col0, row1, col1);
-  const perpR = -dc / len;
-  const perpC = dr / len;
-  const half = (profileWidth - 1) / 2;
-  let accumulated: Float32Array | null = null;
-  for (let k = 0; k < profileWidth; k++) {
-    const off = -half + k;
-    const vals = sampleSingleLineU8(u8, base, w, h, scale, offset, row0 + off * perpR, col0 + off * perpC, row1 + off * perpR, col1 + off * perpC);
-    if (!accumulated) accumulated = vals;
-    else for (let i = 0; i < vals.length; i++) accumulated[i] += vals[i];
-  }
-  if (accumulated) for (let i = 0; i < accumulated.length; i++) accumulated[i] /= profileWidth;
-  return accumulated || new Float32Array(0);
 }
 
 function pointToSegmentDistance(col: number, row: number, col0: number, row0: number, col1: number, row1: number): number {
@@ -2571,7 +2436,7 @@ function renderFramePlayback(
   if (logScale) {
     for (let i = 0; i < data.length; i++) {
       const d = data[i];
-      const v = d >= 0 ? Math.log1p(d) : -Math.log1p(-d);
+      const v = signedLog1p(d);
       const idx = v <= vmin ? 0 : v >= vmax ? 255 : ((v - vmin) * invRange) | 0;
       const j = i << 2;
       const k = idx * 3;
@@ -2623,7 +2488,7 @@ function renderPackedPanelPlayback(
     for (; src < end; src++) {
       const raw = source[src];
       const value = logScale
-        ? (raw >= 0 ? Math.log1p(raw) : -Math.log1p(-raw))
+        ? signedLog1p(raw)
         : raw;
       const idx = value <= vmin ? 0 : value >= vmax ? 255 : ((value - vmin) * invRange) | 0;
       const lutIdx = idx * 3;
@@ -2655,7 +2520,7 @@ function renderFrameScaledPlayback(
     const outRow = y * outW;
     for (let x = 0; x < outW; x++) {
       let v = data[srcRow + xMap[x]];
-      if (logScale) v = v >= 0 ? Math.log1p(v) : -Math.log1p(-v);
+      if (logScale) v = signedLog1p(v);
       const idx = v <= vmin ? 0 : v >= vmax ? 255 : ((v - vmin) * invRange) | 0;
       const j = (outRow + x) << 2;
       const k = idx * 3;
@@ -2665,58 +2530,6 @@ function renderFrameScaledPlayback(
       rgba[j + 3] = 255;
     }
   }
-}
-
-// ============================================================================
-// Crop ROI region from raw float32 data for ROI-scoped FFT
-// ============================================================================
-function cropROIRegion(
-  data: Float32Array, imgW: number, imgH: number,
-  roi: ROIItem,
-): { cropped: Float32Array; cropW: number; cropH: number } | null {
-  const shape = roi.shape || "circle";
-  let col0: number, row0: number, col1: number, row1: number;
-
-  if (shape === "rectangle") {
-    const hw = roi.width / 2;
-    const hh = roi.height / 2;
-    col0 = Math.max(0, Math.floor(roi.col - hw));
-    row0 = Math.max(0, Math.floor(roi.row - hh));
-    col1 = Math.min(imgW, Math.ceil(roi.col + hw));
-    row1 = Math.min(imgH, Math.ceil(roi.row + hh));
-  } else {
-    const r = roi.radius;
-    col0 = Math.max(0, Math.floor(roi.col - r));
-    row0 = Math.max(0, Math.floor(roi.row - r));
-    col1 = Math.min(imgW, Math.ceil(roi.col + r));
-    row1 = Math.min(imgH, Math.ceil(roi.row + r));
-  }
-
-  const cropW = col1 - col0;
-  const cropH = row1 - row0;
-  if (cropW < 2 || cropH < 2) return null;
-
-  const cropped = new Float32Array(cropW * cropH);
-
-  if (shape === "circle" || shape === "annular") {
-    const r = roi.radius;
-    const rSq = r * r;
-    for (let dy = 0; dy < cropH; dy++) {
-      for (let dx = 0; dx < cropW; dx++) {
-        const imgCol = col0 + dx;
-        const imgRow = row0 + dy;
-        const distSq = (imgCol - roi.col) * (imgCol - roi.col) + (imgRow - roi.row) * (imgRow - roi.row);
-        cropped[dy * cropW + dx] = distSq <= rSq ? data[imgRow * imgW + imgCol] : 0;
-      }
-    }
-  } else {
-    for (let dy = 0; dy < cropH; dy++) {
-      const srcOffset = (row0 + dy) * imgW + col0;
-      cropped.set(data.subarray(srcOffset, srcOffset + cropW), dy * cropW);
-    }
-  }
-
-  return { cropped, cropW, cropH };
 }
 
 // ============================================================================
@@ -2982,7 +2795,7 @@ function Show3D() {
       }
       const f32 = offlineScratch.current;
       if (isRgb) {
-        for (let i = 0; i < floatsPerFrame; i++) f32[i] = u8[i] / 255.0;
+        dequantizeUint8(u8, 0, 1, f32);
       } else {
         // Offline uint8 packs are already display-quantized per panel. Restore
         // physical units with a panel-tiled loop (not per-pixel panel index).
@@ -2993,17 +2806,16 @@ function Show3D() {
           for (let p = 0; p < panelCount; p++) {
             const lo = offlineMins[p] ?? offlineMin;
             const hi = offlineMaxs[p] ?? offlineMax;
-            const scale = (hi - lo) / 255.0;
             const x0 = p * panelW;
             const x1 = Math.min(width, x0 + panelW);
             for (let r = 0; r < height; r++) {
-              let i = r * width + x0;
-              for (let x = x0; x < x1; x++, i++) f32[i] = u8[i] * scale + lo;
+              const start = r * width + x0;
+              const end = r * width + x1;
+              dequantizeUint8(u8.subarray(start, end), lo, hi, f32.subarray(start, end));
             }
           }
         } else {
-          const scale = (offlineMax - offlineMin) / 255.0;
-          for (let i = 0; i < pixelCount; i++) f32[i] = u8[i] * scale + offlineMin;
+          dequantizeUint8(u8.subarray(0, pixelCount), offlineMin, offlineMax, f32);
         }
       }
       return new DataView(f32.buffer);
@@ -3054,8 +2866,7 @@ function Show3D() {
     const dequantU8 = (u8: Uint8Array): Float32Array => {
       const f32 = new Float32Array(floatsPerFrame);
       if (isRgb) {
-        for (let i = 0; i < floatsPerFrame; i++) f32[i] = u8[i] / 255.0;
-        return f32;
+        return dequantizeUint8(u8, 0, 1, f32);
       }
       const panelCount = Math.max(1, nPanels || 1);
       const panelRanges = panelCount > 1 && offlineMins?.length >= panelCount && offlineMaxs?.length >= panelCount;
@@ -3064,17 +2875,16 @@ function Show3D() {
         for (let p = 0; p < panelCount; p++) {
           const lo = offlineMins[p] ?? offlineMin;
           const hi = offlineMaxs[p] ?? offlineMax;
-          const scale = (hi - lo) / 255.0;
           const x0 = p * panelW;
           const x1 = Math.min(width, x0 + panelW);
           for (let r = 0; r < height; r++) {
-            let i = r * width + x0;
-            for (let x = x0; x < x1; x++, i++) f32[i] = u8[i] * scale + lo;
+            const start = r * width + x0;
+            const end = r * width + x1;
+            dequantizeUint8(u8.subarray(start, end), lo, hi, f32.subarray(start, end));
           }
         }
       } else {
-        const scale = (offlineMax - offlineMin) / 255.0;
-        for (let i = 0; i < pixelCount; i++) f32[i] = u8[i] * scale + offlineMin;
+        dequantizeUint8(u8.subarray(0, pixelCount), offlineMin, offlineMax, f32);
       }
       return f32;
     };
@@ -4274,7 +4084,7 @@ function Show3D() {
 
   const browserFilterFrame = React.useCallback((idx: number, frame: Float32Array | null, options: { allowRawOnMiss?: boolean } = {}): Float32Array | null => {
     if (!frame || !browserFilterKnobsOn) return frame;
-    const allowRawOnMiss = options.allowRawOnMiss !== false;
+    const allowRawOnMiss = options.allowRawOnMiss === true;
     const key = browserFilterCacheKeyForIndex(idx);
     const cache = browserFilterCacheRef.current;
     const hit = cache.get(key);
@@ -5597,9 +5407,7 @@ function Show3D() {
 
   // WebGPU FFT state
   const gpuFFTRef = React.useRef<WebGPUFFT | null>(null);
-  const gpuFftInitPromiseRef = React.useRef<Promise<WebGPUFFT | null> | null>(null);
-  const offlineFftGpuDisabledRef = React.useRef(false);
-  const offlineFftGpuInFlightRef = React.useRef(false);
+  const gpuFftInitPromiseRef = React.useRef<Promise<WebGPUFFT> | null>(null);
   const [, setGpuReady] = React.useState(false);  // value unused; setter gates FFT-ready re-renders
   const [fftBackendInfo, setFftBackendInfo] = React.useState<{
     webgpu: "unknown" | "ready" | "software" | "unavailable";
@@ -5630,30 +5438,16 @@ function Show3D() {
     ready: number;
     error: string;
   }>({ stage: "waiting", ready: 0, error: "" });
-  const ensureFftGpu = React.useCallback(async (): Promise<WebGPUFFT | null> => {
+  const ensureFftGpu = React.useCallback(async (): Promise<WebGPUFFT> => {
     if (gpuFFTRef.current) return gpuFFTRef.current;
     if (!gpuFftInitPromiseRef.current) {
       gpuFftInitPromiseRef.current = getWebGPUFFT().then(fft => {
-        if (fft) {
-          const info = getGPUInfo();
-          if (/swiftshader|software/i.test(info)) {
-            console.log(`[Show3D] Software WebGPU adapter detected (${info}); using CPU FFT fallback`);
-            setFftBackendInfo(prev => ({ ...prev, webgpu: "software", adapter: info || "software adapter" }));
-            return null;
-          }
-          gpuFFTRef.current = fft;
-          setGpuReady(true);
-          setFftBackendInfo(prev => ({ ...prev, webgpu: "ready", adapter: info || "GPU" }));
-          console.log(`[Show3D] WebGPU FFT initialized - ${info || "GPU"}`);
-        } else {
-          setFftBackendInfo(prev => ({ ...prev, webgpu: "unavailable", adapter: "" }));
-          console.log("[Show3D] WebGPU FFT unavailable - CPU fallback will be used");
-        }
+        const info = getGPUInfo();
+        gpuFFTRef.current = fft;
+        setGpuReady(true);
+        setFftBackendInfo(prev => ({ ...prev, webgpu: "ready", adapter: info || "GPU" }));
+        console.log(`[Show3D] WebGPU FFT initialized - ${info || "GPU"}`);
         return fft;
-      }).catch(err => {
-        console.warn("[Show3D] WebGPU FFT init failed; CPU fallback will be used.", err);
-        setFftBackendInfo(prev => ({ ...prev, webgpu: "unavailable", adapter: "" }));
-        return null;
       });
     }
     return gpuFftInitPromiseRef.current;
@@ -5834,6 +5628,46 @@ function Show3D() {
     }
     return gpuCanvasCtxRef.current;
   }, []);
+
+  const retainedGpuSnapshotSerialRef = React.useRef(0);
+  const retainGpuDisplayFrame = React.useCallback((
+    reason: string,
+    durableFrame?: Promise<ImageBitmap | null>,
+  ) => {
+    const gpuCanvas = gpuCanvasRef.current;
+    const canvas = canvasRef.current;
+    const engine = gpuCmapRef.current;
+    if (!gpuCanvas || !canvas || !engine || playing) return;
+    const serial = ++retainedGpuSnapshotSerialRef.current;
+    // A WebGPU canvas texture is presentation-only and may be discarded after
+    // compositing. Snapshot it immediately after submission, then keep the
+    // GPU-produced pixels on the durable 2D canvas while the view is idle.
+    const bitmapPromise = durableFrame ?? engine.getDevice().queue.onSubmittedWorkDone().then(() => {
+      if (serial !== retainedGpuSnapshotSerialRef.current || playing) return null;
+      return createImageBitmap(gpuCanvas);
+    });
+    void bitmapPromise.then(bitmap => {
+      if (!bitmap) return;
+      try {
+        if (serial !== retainedGpuSnapshotSerialRef.current || playing) return;
+        const current = canvasRef.current;
+        const ctx = current?.getContext("2d");
+        if (!current || !ctx) return;
+        ctx.clearRect(0, 0, current.width, current.height);
+        ctx.drawImage(bitmap, 0, 0, current.width, current.height);
+        setGpuDisplayVisible(false);
+        const dbg = show3dPerfDebug();
+        if (dbg) {
+          dbg.lastRetainedGpuFrame = reason;
+          dbg.lastRenderPath = `${String(dbg.lastRenderPath || "webgpu")}-retained`;
+        }
+      } finally {
+        bitmap.close();
+      }
+    }).catch(error => {
+      console.warn("[Show3D] Could not retain the presented WebGPU frame", error);
+    });
+  }, [playing, setGpuDisplayVisible]);
 
   React.useEffect(() => {
     localAutoVminsRef.current = [];
@@ -6864,12 +6698,13 @@ function Show3D() {
   const profileSampleColOffset = singlePanelPageProfile
     ? panelGlobalColOffset(activePageStart)
     : 0;
+  const profileComputeGenerationRef = React.useRef(0);
   const sampleProfileForActivePage = React.useCallback((
     data: Float32Array,
     p0: { row: number; col: number },
     p1: { row: number; col: number },
     widthPx: number = profileWidth,
-  ) => sampleLineProfile(
+  ) => sampleLineProfileWebGPU(
     data,
     width,
     height,
@@ -6879,6 +6714,21 @@ function Show3D() {
     p1.col + profileSampleColOffset,
     widthPx,
   ), [height, profileSampleColOffset, profileWidth, width]);
+  const updateProfileForActivePage = React.useCallback((
+    data: Float32Array,
+    p0: { row: number; col: number },
+    p1: { row: number; col: number },
+    widthPx: number = profileWidth,
+  ) => {
+    const generation = ++profileComputeGenerationRef.current;
+    void sampleProfileForActivePage(data, p0, p1, widthPx).then((profile) => {
+      if (generation === profileComputeGenerationRef.current) setProfileData(profile);
+    }).catch((error) => {
+      if (generation === profileComputeGenerationRef.current) {
+        console.error("[Show3D] WebGPU line profile failed", error);
+      }
+    });
+  }, [profileWidth, sampleProfileForActivePage]);
   const getImageHitRadius = (panelIdx: number) => {
     const geom = getPanelGeometry(panelIdx);
     if (!geom) return RESIZE_HIT_AREA_PX / Math.max(1e-6, displayScale * zoom);
@@ -7231,7 +7081,7 @@ function Show3D() {
 
   const frequencyFilterFrameForDisplay = React.useCallback((idx: number, frame: Float32Array | null, options: { allowRawOnMiss?: boolean } = {}): Float32Array | null => {
     if (!frame || !frequencyFilterIsActive) return frame;
-    const allowRawOnMiss = options.allowRawOnMiss !== false;
+    const allowRawOnMiss = options.allowRawOnMiss === true;
     const key = frequencyFilterKeyForIndex(idx);
     const cache = frequencyFilterCacheRef.current;
     const hit = cache.get(key);
@@ -7319,7 +7169,8 @@ function Show3D() {
     const idx = clampSlice(liveSliceIdx);
     const raw = getOfflineFrame(idx);
     if (!raw) return;
-    const display = displayAndFrequencyFrameForIndex(idx, raw, { allowRawOnMiss: true }) ?? raw;
+    const display = displayAndFrequencyFrameForIndex(idx, raw, { allowRawOnMiss: false });
+    if (!display) return;
     rawFrameDataRef.current = display;
     rgbFrameDataRef.current = null;
     gpuUploadRef.current = null;
@@ -7354,7 +7205,7 @@ function Show3D() {
   const warmPlaybackDisplayFrame = (idx: number, currentIdx: number, currentFrame: Float32Array | null) => {
     const raw = rawFrameForIndex(idx, currentIdx, currentFrame);
     if (!raw) return;
-    void displayAndFrequencyFrameForIndex(idx, raw, { allowRawOnMiss: true });
+    void displayAndFrequencyFrameForIndex(idx, raw, { allowRawOnMiss: false });
   };
 
   const sharedDirectDisplayRange = (
@@ -7530,6 +7381,30 @@ function Show3D() {
     );
     if (!rendered) return false;
     setGpuDisplayVisible(true);
+    if (!playing) {
+      retainGpuDisplayFrame(
+        "packed-panel-static",
+        engine.renderCombinedPanelRegionsToImageBitmapAsync(
+          slotIdx,
+          ranges,
+          renderLogScale,
+          {
+            width: c.canvasW,
+            height: c.canvasH,
+            panelCount,
+            cols,
+            rows,
+            gap,
+            bgRgb: packedRgbFromHex(interPanelGapColor),
+            sourcePanelWidth,
+            transforms,
+            sourcePanelIndices: panels,
+            panelLuts,
+            smooth: c.smooth,
+          },
+        ),
+      );
+    }
     playbackIdxRef.current = normalized;
     if (updateDisplayState) setDisplaySliceIdx(normalized);
     const dbg = show3dPerfDebug();
@@ -7711,6 +7586,27 @@ function Show3D() {
     );
     if (!rendered) return false;
     setGpuDisplayVisible(true);
+    if (!playing) {
+      retainGpuDisplayFrame(
+        "shared-grid-static",
+        engine.renderSharedGridToImageBitmapAsync(
+          renderSlotIdx,
+          { vmin, vmax },
+          c.logScale,
+          {
+            width: c.canvasW,
+            height: c.canvasH,
+            panelCount: n,
+            cols,
+            rows,
+            gap,
+            bgRgb: packedRgbFromHex(interPanelGapColor),
+            sourcePanelWidth: sourcePanelWidthForGrid,
+            sharedSource: !!sharedPanelSource,
+          },
+        ),
+      );
+    }
     playbackIdxRef.current = normalized;
     if (updateDisplayState) setDisplaySliceIdx(normalized);
     const dbg = show3dPerfDebug();
@@ -8666,7 +8562,8 @@ function Show3D() {
         if (frame && c.showStats) setLocalStats(computeStats(frame));
         if (frame && c.profileActive && c.profilePoints.length === 2) {
           const p0 = c.profilePoints[0], p1 = c.profilePoints[1];
-          setProfileData(sampleLineProfile(
+          const generation = ++profileComputeGenerationRef.current;
+          void sampleLineProfileWebGPU(
             frame,
             c.width,
             c.height,
@@ -8675,7 +8572,13 @@ function Show3D() {
             p1.row,
             p1.col + c.profileColOffset,
             c.profileWidth,
-          ));
+          ).then(profile => {
+            if (generation === profileComputeGenerationRef.current) setProfileData(profile);
+          }).catch(error => {
+            if (generation === profileComputeGenerationRef.current) {
+              console.error("[Show3D] WebGPU playback line profile failed", error);
+            }
+          });
         }
         // Histogram refresh during playback. The non-playback effect path is keyed on
         // frameBytes/frameSeq which DON'T change during rAF playback (frames come from
@@ -9079,8 +8982,9 @@ function Show3D() {
     if (!sourceFrameData || sourceFrameData.length === 0) return;
     const renderIdx = offline ? liveSliceIdx : displaySliceIdx;
     const transformedFrame = !isRgb
-      ? displayAndFrequencyFrameForIndex(renderIdx, sourceFrameData, { allowRawOnMiss: true })
+      ? displayAndFrequencyFrameForIndex(renderIdx, sourceFrameData, { allowRawOnMiss: false })
       : sourceFrameData;
+    if (!isRgb && (browserFilterKnobsOn || frequencyFilterIsActive) && !transformedFrame) return;
     let frameData = transformedFrame ?? sourceFrameData;
     rawFrameDataRef.current = frameData;
     if (!isRgb && compareMode !== "off" && width > 0 && height > 0) {
@@ -9181,8 +9085,8 @@ function Show3D() {
       // re-scanning the frame on every scrub. findDataRange does an O(N) min/max
       // pass which is ~8 ms at 4k - avoidable when the stack-wide bounds already
       // bracket the per-frame range.
-      const lo = logScale ? (dataMin >= 0 ? Math.log1p(dataMin) : -Math.log1p(-dataMin)) : dataMin;
-      const hi = logScale ? (dataMax >= 0 ? Math.log1p(dataMax) : -Math.log1p(-dataMax)) : dataMax;
+      const lo = logScale ? signedLog1p(dataMin) : dataMin;
+      const hi = logScale ? signedLog1p(dataMax) : dataMax;
       ({ vmin, vmax } = sliderRange(lo, hi, imageVminPct, imageVmaxPct));
     }
 
@@ -9324,7 +9228,11 @@ function Show3D() {
         // Zero-copy: GPU → OffscreenCanvas → ImageBitmap → drawImage
         const bitmaps = forceReadback
           ? null
-          : engine.renderSlotsToImageBitmap([0], [{ vmin: capturedVmin, vmax: capturedVmax }], false);
+          : await engine.renderSlotsToImageBitmapAsync(
+              [0],
+              [{ vmin: capturedVmin, vmax: capturedVmax }],
+              false,
+            );
         if (bitmaps && bitmaps[0]) {
           try {
             const ctx = mainOffscreenRef.current.getContext("2d");
@@ -9738,6 +9646,7 @@ function Show3D() {
       });
       return changed ? merged : prev;
     });
+    if (!playing) renderCurrentPanelTransformDirect();
   };
 
   const scheduleTransformStateCommit = (delayMs = 120) => {
@@ -10522,11 +10431,11 @@ function Show3D() {
     if (profilePoints.length === 2 && rawFrameDataRef.current) {
       const p0 = profilePoints[0], p1 = profilePoints[1];
       const data = rawFrameDataRef.current;
-      setProfileData(sampleProfileForActivePage(data, p0, p1));
+      updateProfileForActivePage(data, p0, p1);
     } else {
       setProfileData(null);
     }
-  }, [frameBytes, profilePoints, profileWidth, sampleProfileForActivePage]);
+  }, [frameBytes, profilePoints, profileWidth, updateProfileForActivePage]);
 
   // Render profile sparkline
   React.useEffect(() => {
@@ -10979,7 +10888,7 @@ function Show3D() {
       let data = rawFrameForIndex(fftFrameIdx, currentIdx, rawFrameDataRef.current);
       if (!data && offline) data = getOfflineFrame(fftFrameIdx);
       data = data
-        ? (displayAndFrequencyFrameForIndex(fftFrameIdx, data, { allowRawOnMiss: playbackFft }) ?? data)
+        ? displayAndFrequencyFrameForIndex(fftFrameIdx, data, { allowRawOnMiss: false })
         : null;
       if (!data) return;
       rawFrameDataRef.current = data;
@@ -11121,85 +11030,19 @@ function Show3D() {
         if (panels.length === 0) return;
 
         let results: { real: Float32Array; imag: Float32Array }[];
-        let fftSource = "worker-batch";
-        const gpuTimeoutMs = 5000;
-        const withGpuTimeout = <T,>(promise: Promise<T>): Promise<T> => {
-          if (!offline) return promise;
-          return Promise.race([
-            promise,
-            new Promise<T>((_, reject) => window.setTimeout(
-              () => reject(new Error("embedded WebGPU FFT timed out")),
-              gpuTimeoutMs,
-            )),
-          ]);
-        };
-        const offlineGpuDisabled = () => offlineFftGpuDisabledRef.current;
-        const disableOfflineGpu = () => {
-          offlineFftGpuDisabledRef.current = true;
-        };
-        const offlineGpuInFlight = () => offlineFftGpuInFlightRef.current;
-        const skipOfflineWebGpu = offline && /HeadlessChrome/i.test(navigator.userAgent);
-        // A replacement effect can start while an older offline GPU batch is
-        // still draining. Do not abandon the replacement (which left FFT
-        // blank until another interaction); compute it on CPU instead.
-        let fftGpu: WebGPUFFT | null = null;
-        if (!skipOfflineWebGpu && !offlineGpuDisabled() && !offlineGpuInFlight()) {
-          try {
-            const dbg = show3dPerfDebug();
-            if (dbg) dbg.lastFftStage = "webgpu-initializing";
-            fftGpu = await withGpuTimeout(ensureFftGpu());
-          } catch (err) {
-            console.warn("Show3D WebGPU FFT initialization timed out; falling back to worker FFT.", err);
-            if (offline) disableOfflineGpu();
-            const dbg = show3dPerfDebug();
-            if (dbg) dbg.lastFftStage = "worker-fallback-after-webgpu-init";
-          }
-        }
+        const fftSource = "webgpu-batch";
+        const fftDebug = show3dPerfDebug();
+        if (fftDebug) fftDebug.lastFftStage = "webgpu-initializing";
+        const fftGpu = await ensureFftGpu();
         if (cancelled || fftGeneration !== fftDataGenerationRef.current) return;
-        if (fftGpu && panels.length > 1) {
-          let startedOfflineGpu = false;
-          try {
-            if (offline) {
-              offlineFftGpuInFlightRef.current = true;
-              startedOfflineGpu = true;
-            }
-            results = await withGpuTimeout(
-              fftGpu.fft2DBatch(
-                panels.map(({ real, imag }) => ({ real, imag })),
-                fftW,
-                fftH,
-              )
-            );
-            fftSource = "webgpu-batch";
-          } catch (err) {
-            console.warn("Show3D WebGPU FFT failed; falling back to worker FFT.", err);
-            if (offline) {
-              disableOfflineGpu();
-              results = panels.map(({ real, imag }) => {
-                fft2d(real, imag, fftW, fftH, false);
-                fftshift(real, fftW, fftH);
-                fftshift(imag, fftW, fftH);
-                return { real, imag };
-              });
-              fftSource = "cpu-sync-shifted";
-            } else {
-              results = (await Promise.all(panels.map(({ real, imag }) => fft2dAsync(real, imag, fftW, fftH, false))))
-                .map(({ real, imag }) => ({ real, imag }));
-            }
-          } finally {
-            if (startedOfflineGpu) offlineFftGpuInFlightRef.current = false;
-          }
-        } else if (offline) {
-          results = panels.map(({ real, imag }) => {
-            fft2d(real, imag, fftW, fftH, false);
-            fftshift(real, fftW, fftH);
-            fftshift(imag, fftW, fftH);
-            return { real, imag };
-          });
-          fftSource = "cpu-sync-shifted";
+        if (panels.length > 1) {
+          results = await fftGpu.fft2DBatch(
+            panels.map(({ real, imag }) => ({ real, imag })),
+            fftW,
+            fftH,
+          );
         } else {
-          results = (await Promise.all(panels.map(({ real, imag }) => fft2dAsync(real, imag, fftW, fftH, false))))
-            .map(({ real, imag }) => ({ real, imag }));
+          results = [await fftGpu.fft2D(panels[0].real, panels[0].imag, fftW, fftH, false)];
         }
         if (cancelled || fftGeneration !== fftDataGenerationRef.current) return;
 
@@ -11208,13 +11051,10 @@ function Show3D() {
         const gridW = cols * fftW;
         const gridH = rows * fftH;
         const gridMag = new Float32Array(gridW * gridH);
-        const resultsAlreadyShifted = fftSource === "worker-batch" || fftSource === "cpu-sync-shifted";
         for (let panel = 0; panel < results.length; panel++) {
           const { real, imag } = results[panel];
-          if (!resultsAlreadyShifted) {
-            fftshift(real, fftW, fftH);
-            fftshift(imag, fftW, fftH);
-          }
+          fftshift(real, fftW, fftH);
+          fftshift(imag, fftW, fftH);
           const mag = computeMagnitude(real, imag);
           const col = panel % cols;
           const row = Math.floor(panel / cols);
@@ -11275,7 +11115,7 @@ function Show3D() {
       let origCropW = 0, origCropH = 0;
       if (roiFftActive && roiList && roiSelectedIdx >= 0 && roiSelectedIdx < roiList.length) {
         const roi = roiList[roiSelectedIdx];
-        const crop = cropROIRegion(data, fftDataWidth, fftDataHeight, roi);
+        const crop = await cropMaskedRegionWebGPU(data, fftDataWidth, fftDataHeight, roi);
         if (crop) {
           origCropW = crop.cropW;
           origCropH = crop.cropH;
@@ -11319,36 +11159,22 @@ function Show3D() {
 
       let real: Float32Array, imag: Float32Array;
 
-      let fftSource = "cpu";
+      let fftSource = "webgpu";
       const fftGpu = await ensureFftGpu();
       if (cancelled || fftGeneration !== fftDataGenerationRef.current) return;
-      if (fftGpu) {
-        try {
-          const gpuReal = inputData.slice();
-          const gpuImag = new Float32Array(inputData.length);
-          const result = await fftGpu.fft2D(gpuReal, gpuImag, fftW, fftH, false);
-          real = result.real;
-          imag = result.imag;
-          fftSource = "webgpu";
-        } catch (err) {
-          console.warn("Show3D WebGPU FFT failed; falling back to worker FFT.", err);
-          const result = await fft2dAsync(inputData.slice(), new Float32Array(inputData.length), fftW, fftH, false);
-          real = result.real;
-          imag = result.imag;
-          fftSource = "worker";
-        }
-      } else {
-        const result = await fft2dAsync(inputData.slice(), new Float32Array(inputData.length), fftW, fftH, false);
-        real = result.real;
-        imag = result.imag;
-        fftSource = "worker";
-      }
+      const result = await fftGpu.fft2D(
+        inputData.slice(),
+        new Float32Array(inputData.length),
+        fftW,
+        fftH,
+        false,
+      );
+      real = result.real;
+      imag = result.imag;
 
       if (cancelled || fftGeneration !== fftDataGenerationRef.current) return;
-      if (fftSource !== "worker") {
-        fftshift(real, fftW, fftH);
-        fftshift(imag, fftW, fftH);
-      }
+      fftshift(real, fftW, fftH);
+      fftshift(imag, fftW, fftH);
 
       fftMagRef.current = computeMagnitude(real, imag);
       fftActiveCacheKeyRef.current = fftCacheKey;
@@ -11678,41 +11504,55 @@ function Show3D() {
     };
 
     if (kymoExactStackReady && offlineFloatStack) {
-      const sampleFrame = (frameIdx: number): Float32Array => {
+      const sampleFrame = (frameIdx: number): Promise<Float32Array> => {
         const frame = float32FrameFromDataView(offlineFloatStack, frameIdx, pixelCount, false);
         return frame
-          ? sampleLineProfile(frame, width, height, row0, col0, row1, col1, profileWidth)
-          : new Float32Array(0);
+          ? sampleLineProfileWebGPU(frame, width, height, row0, col0, row1, col1, profileWidth)
+          : Promise.resolve(new Float32Array(0));
       };
-      const first = sampleFrame(0);
-      const lineLen = first.length;
-      if (lineLen < 2) { kymoDataRef.current = null; return; }
-      const kymo = new Float32Array(nSlices * lineLen);
-      kymo.set(first.subarray(0, lineLen), 0);
-      for (let f = 1; f < nSlices; f++) {
-        kymo.set(sampleFrame(f).subarray(0, lineLen), f * lineLen);
-      }
-      publish(kymo, lineLen);
+      void (async () => {
+        const first = await sampleFrame(0);
+        const lineLen = first.length;
+        if (lineLen < 2) {
+          if (!cancelled) kymoDataRef.current = null;
+          return;
+        }
+        const kymo = new Float32Array(nSlices * lineLen);
+        kymo.set(first.subarray(0, lineLen), 0);
+        for (let f = 1; f < nSlices; f++) {
+          if (cancelled) return;
+          const profile = await sampleFrame(f);
+          kymo.set(profile.subarray(0, lineLen), f * lineLen);
+        }
+        publish(kymo, lineLen);
+      })().catch(error => {
+        if (!cancelled) console.error("[Show3D] WebGPU kymograph profile failed", error);
+      });
       return () => { cancelled = true; };
     }
 
     if (kymoQuantizedStackReady && offlineStack) {
-      const scale = (offlineMax - offlineMin) / 255.0;
-      // Read straight from the packed uint8 stack, dequantizing only the
-      // bilinear corners per sample point. No whole-frame dequant.
+      // The qgpu kernel reads uint8+range directly and dequantizes only the
+      // bilinear corners used by the profile.
       const u8 = new Uint8Array(offlineStack.buffer, offlineStack.byteOffset, offlineStack.byteLength);
-      const sampleFrame = (frameIdx: number) =>
-        sampleLineProfileU8(u8, frameIdx * pixelCount, width, height, scale, offlineMin,
-          row0, col0, row1, col1, profileWidth);
-      const first = sampleFrame(0);
-      const lineLen = first.length;
-      if (lineLen < 2) { kymoDataRef.current = null; return; }
-      const kymo = new Float32Array(nSlices * lineLen);
-      kymo.set(first.subarray(0, lineLen), 0);
-      for (let f = 1; f < nSlices; f++) {
-        kymo.set(sampleFrame(f).subarray(0, lineLen), f * lineLen);
-      }
-      publish(kymo, lineLen);
+      const sampleFrame = (frameIdx: number) => sampleLineProfileUint8WebGPU(
+        u8.subarray(frameIdx * pixelCount, (frameIdx + 1) * pixelCount),
+        offlineMin, offlineMax, width, height, row0, col0, row1, col1, profileWidth,
+      );
+      void (async () => {
+        const first = await sampleFrame(0);
+        const lineLen = first.length;
+        if (lineLen < 2) { if (!cancelled) kymoDataRef.current = null; return; }
+        const kymo = new Float32Array(nSlices * lineLen);
+        kymo.set(first, 0);
+        for (let frame = 1; frame < nSlices; frame++) {
+          if (cancelled) return;
+          kymo.set(await sampleFrame(frame), frame * lineLen);
+        }
+        publish(kymo, lineLen);
+      })().catch(error => {
+        if (!cancelled) console.error("[Show3D] Quantized WebGPU kymograph profile failed", error);
+      });
       return () => { cancelled = true; };
     }
 
@@ -12014,6 +11854,7 @@ function Show3D() {
   // geometry, data, or display settings change - NOT on zoom/pan)
   // -------------------------------------------------------------------------
   React.useEffect(() => {
+    let cancelled = false;
     if (!previewVisible || !rawFrameDataRef.current) {
       previewOffscreenRef.current = null;
       return;
@@ -12023,60 +11864,65 @@ function Show3D() {
     if (!roiList || roiSelectedIdx < 0 || roiSelectedIdx >= roiList.length) return;
 
     const roi = roiList[roiSelectedIdx];
-    const crop = cropROIRegion(raw, width, height, roi);
-    if (!crop) {
-      previewOffscreenRef.current = null;
-      setPreviewCropDims(null);
+    void cropMaskedRegionWebGPU(raw, width, height, roi).then(crop => {
+      if (cancelled) return;
+      if (!crop) {
+        previewOffscreenRef.current = null;
+        setPreviewCropDims(null);
+        setPreviewVersion(v => v + 1);
+        return;
+      }
+
+      setPreviewCropDims({ w: crop.cropW, h: crop.cropH });
+
+      const processed = logScale ? applyLogScale(crop.cropped) : crop.cropped;
+      const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
+
+      let vmin: number, vmax: number;
+      const nP = Math.max(1, nPanels || 1);
+      const hasTraitRange = traitVmin != null || traitVmax != null;
+      const perPanelContrast = nP > 1 && !sharedPanelSource && width % nP === 0 && height > 0;
+      if (hasTraitRange) {
+        ({ vmin, vmax } = resolveDisplayRange(
+          dataMin,
+          dataMax,
+          traitVmin,
+          traitVmax,
+          logScale,
+          imageVminPct,
+          imageVmaxPct,
+        ));
+      } else if (autoContrast) {
+        const cached = cachedAutoDisplayRange(autoVmins, autoVmaxs, displaySliceIdx, logScale)
+          || cachedAutoDisplayRange(localAutoVminsRef.current, localAutoVmaxsRef.current, displaySliceIdx, logScale);
+        const mainProcessed = logScale ? applyLogScale(raw) : raw;
+        ({ vmin, vmax } = cached ?? percentileClip(mainProcessed, percentileLow, percentileHigh));
+      } else if (perPanelContrast) {
+        const panelW = width / nP;
+        const panel = Math.max(0, Math.min(nP - 1, Math.floor((Number(roi.col) || 0) / panelW)));
+        const panelData = extractPanelSlice(raw, panel, logScale);
+        const pdr = panelDataRanges[panel];
+        const panelRange = (perPanelHistogramEnabled && pdr && pdr.max > pdr.min)
+          ? pdr
+          : (panelData && panelData.length > 0
+              ? findDataRange(panelData)
+              : resolveDisplayBounds(dataMin, dataMax, traitVmin, traitVmax, logScale));
+        const resolved = resolvePanelRange(panel, panelRange, null);
+        vmin = resolved.vmin;
+        vmax = resolved.vmax;
+      } else {
+        const lo = logScale ? signedLog1p(dataMin) : dataMin;
+        const hi = logScale ? signedLog1p(dataMax) : dataMax;
+        ({ vmin, vmax } = sliderRange(lo, hi, imageVminPct, imageVmaxPct));
+      }
+
+      const offscreen = renderToOffscreen(processed, crop.cropW, crop.cropH, lut, vmin, vmax);
+      previewOffscreenRef.current = offscreen;
       setPreviewVersion(v => v + 1);
-      return;
-    }
-
-    setPreviewCropDims({ w: crop.cropW, h: crop.cropH });
-
-    const processed = logScale ? applyLogScale(crop.cropped) : crop.cropped;
-    const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
-
-    let vmin: number, vmax: number;
-    const nP = Math.max(1, nPanels || 1);
-    const hasTraitRange = traitVmin != null || traitVmax != null;
-    const perPanelContrast = nP > 1 && !sharedPanelSource && width % nP === 0 && height > 0;
-    if (hasTraitRange) {
-      ({ vmin, vmax } = resolveDisplayRange(
-        dataMin,
-        dataMax,
-        traitVmin,
-        traitVmax,
-        logScale,
-        imageVminPct,
-        imageVmaxPct,
-      ));
-    } else if (autoContrast) {
-      const cached = cachedAutoDisplayRange(autoVmins, autoVmaxs, displaySliceIdx, logScale)
-        || cachedAutoDisplayRange(localAutoVminsRef.current, localAutoVmaxsRef.current, displaySliceIdx, logScale);
-      const mainProcessed = logScale ? applyLogScale(raw) : raw;
-      ({ vmin, vmax } = cached ?? percentileClip(mainProcessed, percentileLow, percentileHigh));
-    } else if (perPanelContrast) {
-      const panelW = width / nP;
-      const panel = Math.max(0, Math.min(nP - 1, Math.floor((Number(roi.col) || 0) / panelW)));
-      const panelData = extractPanelSlice(raw, panel, logScale);
-      const pdr = panelDataRanges[panel];
-      const panelRange = (perPanelHistogramEnabled && pdr && pdr.max > pdr.min)
-        ? pdr
-        : (panelData && panelData.length > 0
-            ? findDataRange(panelData)
-            : resolveDisplayBounds(dataMin, dataMax, traitVmin, traitVmax, logScale));
-      const resolved = resolvePanelRange(panel, panelRange, null);
-      vmin = resolved.vmin;
-      vmax = resolved.vmax;
-    } else {
-      const lo = logScale ? (dataMin >= 0 ? Math.log1p(dataMin) : -Math.log1p(-dataMin)) : dataMin;
-      const hi = logScale ? (dataMax >= 0 ? Math.log1p(dataMax) : -Math.log1p(-dataMax)) : dataMax;
-      ({ vmin, vmax } = sliderRange(lo, hi, imageVminPct, imageVmaxPct));
-    }
-
-    const offscreen = renderToOffscreen(processed, crop.cropW, crop.cropH, lut, vmin, vmax);
-    previewOffscreenRef.current = offscreen;
-    setPreviewVersion(v => v + 1);
+    }).catch(error => {
+      if (!cancelled) console.error("[Show3D] WebGPU ROI preview crop failed", error);
+    });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewVisible, selectedRoiKey, cmap, logScale, autoContrast, imageVminPct, imageVmaxPct, dataMin, dataMax, traitVmin, traitVmax, percentileLow, percentileHigh, width, height, frameBytes, displaySliceIdx, autoVmins, autoVmaxs, nPanels, linkContrast, sharedPanelSource, panelStates, vminPerPanel, vmaxPerPanel, canvasRepaintSignal]);
 
@@ -12861,7 +12707,7 @@ function Show3D() {
           draggingProfileEndpoint === 1 ? { row: clampedRow, col: clampedCol } : profilePoints[1],
         ];
         setProfileLine(next);
-        setProfileData(sampleProfileForActivePage(rawFrameDataRef.current, next[0], next[1]));
+        updateProfileForActivePage(rawFrameDataRef.current, next[0], next[1]);
         return;
       }
       if (isDraggingProfileLine && profileDragStartRef.current) {
@@ -12882,7 +12728,7 @@ function Show3D() {
           { row: drag.p1.row + deltaRow, col: drag.p1.col + deltaCol },
         ];
         setProfileLine(next);
-        setProfileData(sampleProfileForActivePage(rawFrameDataRef.current, next[0], next[1]));
+        updateProfileForActivePage(rawFrameDataRef.current, next[0], next[1]);
         return;
       }
       const nextHoveredEndpoint: 0 | 1 | null = d0 <= hitRadius ? 0 : d1 <= hitRadius ? 1 : null;
@@ -12982,7 +12828,7 @@ function Show3D() {
             } else {
               const p0 = profilePoints[0];
               setProfileLine([p0, pt]);
-              setProfileData(sampleProfileForActivePage(rawFrameDataRef.current, p0, pt));
+              updateProfileForActivePage(rawFrameDataRef.current, p0, pt);
             }
           }
         }
@@ -13522,7 +13368,7 @@ function Show3D() {
     }
   };
 
-  const handleFftMouseUp = (e: React.MouseEvent) => {
+  const handleFftMouseUp = async (e: React.MouseEvent) => {
     // Click detection for d-spacing measurement
     if (fftClickStartRef.current) {
       const dx = e.clientX - fftClickStartRef.current.x;
@@ -13549,7 +13395,7 @@ function Show3D() {
             })() : null;
             const snapped = bounds
               ? findFFTPeakInBounds(fftMagCacheRef.current, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS, bounds.minCol, bounds.maxCol, bounds.minRow, bounds.maxRow)
-              : findFFTPeak(fftMagCacheRef.current, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
+              : await findFFTPeakWebGPU(fftMagCacheRef.current, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
             imgCol = snapped.col;
             imgRow = snapped.row;
           }
@@ -13576,12 +13422,14 @@ function Show3D() {
             if (pixelSize > 0) {
               const paddedW = nextPow2(local.width);
               const paddedH = nextPow2(local.height);
-              const binC = ((Math.round(local.col) - halfW) % local.width + local.width) % local.width;
-              const binR = ((Math.round(local.row) - halfH) % local.height + local.height) % local.height;
-              const freqC = binC <= paddedW / 2 ? binC / (paddedW * pixelSize) : (binC - paddedW) / (paddedW * pixelSize);
-              const freqR = binR <= paddedH / 2 ? binR / (paddedH * pixelSize) : (binR - paddedH) / (paddedH * pixelSize);
-              spatialFreq = Math.sqrt(freqC * freqC + freqR * freqR);
-              dSpacing = spatialFreq > 0 ? 1 / spatialFreq : null;
+              ({ spatialFrequency: spatialFreq, dSpacing } = reciprocalCoordinatesFromShiftedOffset(
+                Math.round(local.row) - halfH,
+                Math.round(local.col) - halfW,
+                paddedH,
+                paddedW,
+                pixelSize,
+                pixelSize,
+              ));
             }
             setFftClickInfo({ row: imgRow, col: imgCol, distPx, spatialFreq, dSpacing });
           }
@@ -15555,6 +15403,7 @@ function Show3D() {
             onDoubleClick={reorderMode ? undefined : handleDoubleClick}
           >
             <canvas
+              data-quantem-scientific-output="show3d-image"
               ref={canvasRef}
               width={canvasW}
               height={canvasH}
@@ -16906,7 +16755,7 @@ function Show3D() {
               onTouchEnd={handleFftTouchEnd}
               onTouchCancel={handleFftTouchEnd}
             >
-              <canvas ref={fftCanvasRef} width={canvasW} height={canvasH} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", imageRendering: smooth ? "auto" : "pixelated", touchAction: "none" }} role="img" aria-label={roiFftActive && fftCropDims ? `FFT power spectrum of ROI crop (${fftCropDims.cropWidth} by ${fftCropDims.cropHeight} pixels)` : "FFT power spectrum of current frame"} />
+              <canvas data-quantem-scientific-output="show3d-fft" ref={fftCanvasRef} width={canvasW} height={canvasH} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", imageRendering: smooth ? "auto" : "pixelated", touchAction: "none" }} role="img" aria-label={roiFftActive && fftCropDims ? `FFT power spectrum of ROI crop (${fftCropDims.cropWidth} by ${fftCropDims.cropHeight} pixels)` : "FFT power spectrum of current frame"} />
               <canvas ref={fftOverlayRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} aria-hidden="true" />
               {show3dFrequencyRing}
               {showZoomIndicator === true && panelChromeVisible && (() => {

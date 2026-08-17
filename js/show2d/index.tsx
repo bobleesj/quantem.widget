@@ -43,13 +43,19 @@ import {
   standaloneWidgetStaticHtmlFromDocument,
 } from "../format";
 import { useHideStaticFallback } from "../staticFallback";
-import { computeHistogramFromBytes, findDataRange, applyLogScale, percentileClip, sliderRange, computeStats } from "../stats";
+import { findDataRange, applyLogScale, signedLog1p, sliderRange, computeStats } from "../stats";
+import { dequantizeUint8 } from "../quantization";
 import { MetadataSection } from "../widgetInfo";
 import { EmbeddedWidgetView } from "../embeddedWidget";
 import { FolderWatchBadge, useFolderWatchModelLive } from "../folderWatchStatus";
-import { getWebGPUFFT, WebGPUFFT, fft2dAsync, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D, getGPUInfo } from "../fft";
+import { getWebGPUFFT, WebGPUFFT, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D, getGPUInfo, reciprocalCoordinatesFromShiftedOffset } from "../fft";
 import { computeFftQualityMetrics, formatFftQualityLabel, type FftQualityMetrics } from "../fftMetrics";
-import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, renderToOffscreenReuse, GPUColormapEngine, createGPUColormapEngine, getGPUMaxBufferSize } from "../colormaps";
+import {
+  cropMaskedRegionWebGPU,
+  findFFTPeakWebGPU,
+  sampleLineProfileWebGPU,
+} from "../geometry";
+import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, GPUColormapEngine, createGPUColormapEngine, getGPUMaxBufferSize } from "../colormaps";
 import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive, getGPUDisplayFilterEngine, normalizeFilterMode, resolveDenoiseMode, resolvePanelDenoiseKnobs } from "../displayFilter";
 import { applyFrequencyFilterBrowser, frequencyFilterActive, getFrequencyFilterBackend, normalizeFrequencyFilterMode } from "../frequencyFilter";
 import {
@@ -1084,7 +1090,7 @@ function isAbortLikeError(err: unknown): boolean {
 
 interface HistogramProps {
   data: Float32Array | null;
-  precomputedBins?: number[] | null;  // GPU-computed bins bypass computeHistogramFromBytes
+  precomputedBins?: number[] | null;
   vminPct: number;
   vmaxPct: number;
   onRangeChange: (min: number, max: number) => void;
@@ -1097,7 +1103,7 @@ interface HistogramProps {
   dataMax?: number;
 }
 
-function Histogram({ data, precomputedBins, vminPct, vmaxPct, onRangeChange, onRangePreview, onRangeCommit, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1, binMin, binMax }: HistogramProps & { binMin?: number; binMax?: number }) {
+function Histogram({ precomputedBins, vminPct, vmaxPct, onRangeChange, onRangePreview, onRangeCommit, width = 110, height = 40, theme = "dark", dataMin = 0, dataMax = 1 }: HistogramProps & { binMin?: number; binMax?: number }) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const sliderRef = React.useRef<HTMLDivElement | null>(null);
   const minLabelRef = React.useRef<HTMLElement | null>(null);
@@ -1110,15 +1116,12 @@ function Histogram({ data, precomputedBins, vminPct, vmaxPct, onRangeChange, onR
   const [liveRange, setLiveRange] = React.useState<[number, number]>([vminPct, vmaxPct]);
   React.useEffect(() => { setLiveRange([vminPct, vmaxPct]); }, [vminPct, vmaxPct]);
   const [liveVminPct, liveVmaxPct] = liveRange;
-  // binMin/binMax: range used to compute the histogram BARS. Falls back to
-  // dataMin/dataMax. Trait-anchored displays (vmin/vmax clip the image to a
-  // sub-range of the data) should set binMin/binMax to the FULL data range
-  // so bars show every value; dataMin/dataMax then label the slider in
-  // trait units. Without this split, traits hide most of the histogram.
-  const effBinMin = binMin !== undefined ? binMin : dataMin;
-  const effBinMax = binMax !== undefined ? binMax : dataMax;
-  const cpuBins = React.useMemo(() => precomputedBins ? null : computeHistogramFromBytes(data, 256, effBinMin, effBinMax), [data, precomputedBins, effBinMin, effBinMax]);
-  const bins = precomputedBins || cpuBins || new Array(256).fill(0);
+  const bins = React.useMemo(
+    () => precomputedBins && precomputedBins.length === 256
+      ? precomputedBins
+      : new Array<number>(256).fill(0),
+    [precomputedBins],
+  );
   const isDark = theme === "dark";
   const colors = isDark ? { bg: "#1a1a1a", barActive: "#888", barInactive: "#444", border: "#333" } : { bg: "#f0f0f0", barActive: "#666", barInactive: "#bbb", border: "#ccc" };
 
@@ -1305,30 +1308,6 @@ function Histogram({ data, precomputedBins, vminPct, vmaxPct, onRangeChange, onR
 // ============================================================================
 // Line profile sampling (bilinear interpolation along line)
 // ============================================================================
-function sampleLineProfile(data: Float32Array, w: number, h: number, row0: number, col0: number, row1: number, col1: number): Float32Array {
-  const dc = col1 - col0;
-  const dr = row1 - row0;
-  const len = Math.sqrt(dc * dc + dr * dr);
-  const n = Math.max(2, Math.ceil(len));
-  const out = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const t = i / (n - 1);
-    const c = col0 + t * dc;
-    const r = row0 + t * dr;
-    const ci = Math.floor(c), ri = Math.floor(r);
-    const cf = c - ci, rf = r - ri;
-    const c0c = Math.max(0, Math.min(w - 1, ci));
-    const c1c = Math.max(0, Math.min(w - 1, ci + 1));
-    const r0c = Math.max(0, Math.min(h - 1, ri));
-    const r1c = Math.max(0, Math.min(h - 1, ri + 1));
-    out[i] = data[r0c * w + c0c] * (1 - cf) * (1 - rf) +
-             data[r0c * w + c1c] * cf * (1 - rf) +
-             data[r1c * w + c0c] * (1 - cf) * rf +
-             data[r1c * w + c1c] * cf * rf;
-  }
-  return out;
-}
-
 function pointToSegmentDistance(col: number, row: number, col0: number, row0: number, col1: number, row1: number): number {
   const dc = col1 - col0;
   const dr = row1 - row0;
@@ -1339,36 +1318,6 @@ function pointToSegmentDistance(col: number, row: number, col0: number, row0: nu
   const projCol = col0 + t * dc;
   const projRow = row0 + t * dr;
   return Math.sqrt((col - projCol) ** 2 + (row - projRow) ** 2);
-}
-
-// ============================================================================
-// FFT peak finder (snap to Bragg spot with sub-pixel centroid refinement)
-// ============================================================================
-function findFFTPeak(mag: Float32Array, width: number, height: number, col: number, row: number, radius: number): { row: number; col: number } {
-  // Find brightest pixel in search window
-  const c0 = Math.max(0, Math.floor(col) - radius);
-  const r0 = Math.max(0, Math.floor(row) - radius);
-  const c1 = Math.min(width - 1, Math.floor(col) + radius);
-  const r1 = Math.min(height - 1, Math.floor(row) + radius);
-  let bestCol = Math.round(col), bestRow = Math.round(row), bestVal = -Infinity;
-  for (let ir = r0; ir <= r1; ir++) {
-    for (let ic = c0; ic <= c1; ic++) {
-      const val = mag[ir * width + ic];
-      if (val > bestVal) { bestVal = val; bestCol = ic; bestRow = ir; }
-    }
-  }
-  // Sub-pixel refinement via weighted centroid in 3×3 window
-  const wc0 = Math.max(0, bestCol - 1), wc1 = Math.min(width - 1, bestCol + 1);
-  const wr0 = Math.max(0, bestRow - 1), wr1 = Math.min(height - 1, bestRow + 1);
-  let sumW = 0, sumWC = 0, sumWR = 0;
-  for (let ir = wr0; ir <= wr1; ir++) {
-    for (let ic = wc0; ic <= wc1; ic++) {
-      const w = mag[ir * width + ic];
-      sumW += w; sumWC += w * ic; sumWR += w * ir;
-    }
-  }
-  if (sumW > 0) return { row: sumWR / sumW, col: sumWC / sumW };
-  return { row: bestRow, col: bestCol };
 }
 
 const FFT_SNAP_RADIUS = 5;
@@ -2340,75 +2289,8 @@ function svgColorbarElements(lut: Uint8Array, x: number, y: number, panelW: numb
   };
 }
 
-// ============================================================================
-// Crop ROI region from raw float32 data for ROI-scoped FFT
-// ============================================================================
-function cropROIRegion(
-  data: Float32Array, imgW: number, imgH: number,
-  roi: ROIItem,
-): { cropped: Float32Array; cropW: number; cropH: number } | null {
-  const shape = roi.shape || "circle";
-  let x0: number, y0: number, x1: number, y1: number;
-
-  if (shape === "rectangle") {
-    const hw = roi.width / 2;
-    const hh = roi.height / 2;
-    x0 = Math.max(0, Math.floor(roi.col - hw));
-    y0 = Math.max(0, Math.floor(roi.row - hh));
-    x1 = Math.min(imgW, Math.ceil(roi.col + hw));
-    y1 = Math.min(imgH, Math.ceil(roi.row + hh));
-  } else {
-    const r = roi.radius;
-    x0 = Math.max(0, Math.floor(roi.col - r));
-    y0 = Math.max(0, Math.floor(roi.row - r));
-    x1 = Math.min(imgW, Math.ceil(roi.col + r));
-    y1 = Math.min(imgH, Math.ceil(roi.row + r));
-  }
-
-  const cropW = x1 - x0;
-  const cropH = y1 - y0;
-  if (cropW < 2 || cropH < 2) return null;
-
-  const cropped = new Float32Array(cropW * cropH);
-
-  if (shape === "circle" || shape === "annular") {
-    const r = roi.radius;
-    const rSq = r * r;
-    for (let dy = 0; dy < cropH; dy++) {
-      for (let dx = 0; dx < cropW; dx++) {
-        const imgX = x0 + dx;
-        const imgY = y0 + dy;
-        const distSq = (imgX - roi.col) * (imgX - roi.col) + (imgY - roi.row) * (imgY - roi.row);
-        cropped[dy * cropW + dx] = distSq <= rSq ? data[imgY * imgW + imgX] : 0;
-      }
-    }
-  } else {
-    for (let dy = 0; dy < cropH; dy++) {
-      const srcOffset = (y0 + dy) * imgW + x0;
-      cropped.set(data.subarray(srcOffset, srcOffset + cropW), dy * cropW);
-    }
-  }
-
-  return { cropped, cropW, cropH };
-}
-
-function computeAutoRange(data: Float32Array, logScale: boolean): { vmin: number; vmax: number } {
-  const processed = logScale ? applyLogScale(data) : data;
-  const { vmin, vmax, min, max } = percentileClip(processed, 2, 98);
-  // If 2-98% percentile collapses (heavily clustered / sparse data → both
-  // percentile boundaries land in the same bin near 0), fall back to the
-  // full data extrema so the slider shows a real range instead of [0,0].
-  const eps = Math.max(1e-12, Math.abs(max - min) * 1e-6);
-  if (Number.isFinite(vmin) && Number.isFinite(vmax) && vmax - vmin > eps) return { vmin, vmax };
-  if (Number.isFinite(min) && Number.isFinite(max) && max > min) return { vmin: min, vmax: max };
-  // Truly degenerate (all values identical): pad ±0.5 so the slider is usable.
-  const v = Number.isFinite(min) ? min : 0;
-  return { vmin: v - 0.5, vmax: v + 0.5 };
-}
-
 function displayValue(value: number, logScale: boolean): number {
-  if (!logScale) return value;
-  return value >= 0 ? Math.log1p(value) : -Math.log1p(-value);
+  return logScale ? signedLog1p(value) : value;
 }
 
 function displayRange(min: number, max: number, logScale: boolean): { min: number; max: number } {
@@ -2461,42 +2343,6 @@ function meanDownsample2D(data: Float32Array, width: number, height: number, fac
     }
   }
   return { data: out, width: outW, height: outH };
-}
-
-function renderSampledFrameToOffscreenReuse(
-  data: ArrayLike<number>,
-  sourceW: number,
-  sourceH: number,
-  lut: Uint8Array,
-  vmin: number,
-  vmax: number,
-  logScale: boolean,
-  offscreen: HTMLCanvasElement,
-  imgData: ImageData,
-): void {
-  const outW = Math.max(1, offscreen.width);
-  const outH = Math.max(1, offscreen.height);
-  const rgba = imgData.data;
-  const range = vmax > vmin ? vmax - vmin : 1;
-  const uniformData = !(vmax > vmin);
-  for (let y = 0; y < outH; y++) {
-    const sy = Math.min(sourceH - 1, Math.floor(((y + 0.5) * sourceH) / outH));
-    const row = sy * sourceW;
-    for (let x = 0; x < outW; x++) {
-      const sx = Math.min(sourceW - 1, Math.floor(((x + 0.5) * sourceW) / outW));
-      const raw = data[row + sx] ?? 0;
-      const value = logScale ? displayValue(raw, true) : raw;
-      const clipped = Math.max(vmin, Math.min(vmax, value));
-      const lutValue = uniformData ? 128 : Math.min(255, Math.floor(((clipped - vmin) / range) * 255));
-      const dst = (y * outW + x) * 4;
-      const src = lutValue * 3;
-      rgba[dst] = lut[src];
-      rgba[dst + 1] = lut[src + 1];
-      rgba[dst + 2] = lut[src + 2];
-      rgba[dst + 3] = 255;
-    }
-  }
-  offscreen.getContext("2d")!.putImageData(imgData, 0, 0);
 }
 
 function canvasLooksBlank(canvas: HTMLCanvasElement, maxSamples = 32): boolean {
@@ -4960,9 +4806,9 @@ function Show2D() {
         // Fall back to the legacy global scalars if the per-image lists are absent.
         const lo = (offlineMins && offlineMins.length > img) ? offlineMins[img] : offlineMin;
         const hi = (offlineMaxs && offlineMaxs.length > img) ? offlineMaxs[img] : offlineMax;
-        const scale = (hi - lo) / 255.0;
         const base = img * per;
-        for (let k = 0; k < per && base + k < u8.length; k++) f32[base + k] = u8[base + k] * scale + lo;
+        const end = Math.min(u8.length, base + per);
+        if (end > base) dequantizeUint8(u8.subarray(base, end), lo, hi, f32.subarray(base, end));
       }
       decoded = f32;
     } else {
@@ -5008,11 +4854,9 @@ function Show2D() {
         if (count <= 1 || offset < 0) continue;
         const lo = panelStackMins?.[panel] ?? 0;
         const hi = panelStackMaxs?.[panel] ?? 1;
-        const scale = (hi - lo) / 255.0;
         const length = count * perImage;
-        for (let k = 0; k < length && offset + k < u8.length; k++) {
-          f32[offset + k] = u8[offset + k] * scale + lo;
-        }
+        const end = Math.min(u8.length, offset + length);
+        if (end > offset) dequantizeUint8(u8.subarray(offset, end), lo, hi, f32.subarray(offset, end));
       }
       decoded = f32;
     } else {
@@ -5064,10 +4908,8 @@ function Show2D() {
         gpuReadyRef.current = true;
         const info = getGPUInfo();
         console.log(`[Show2D] WebGPU FFT initialized — ${info || "GPU"}`);
-      } else {
-        console.log("[Show2D] WebGPU unavailable — using CPU Worker fallback");
       }
-    });
+    }).catch(error => console.error("[Show2D] hardware WebGPU FFT is required", error));
     // Display-filter negotiation: only a real (non software) adapter flips
     // _webgpu_filter_ok, so Python keeps its scipy path on SwiftShader-class
     // fallbacks. Offline pages keep the exported trait value: their frames
@@ -5081,13 +4923,6 @@ function Show2D() {
         return;
       }
       if (engine) {
-        const gpuInfo = getGPUInfo().toLowerCase();
-        const nvidiaLinux = gpuInfo.includes("nvidia") && navigator.userAgent.toLowerCase().includes("linux");
-        if (nvidiaLinux) {
-          engine.destroy();
-          console.warn(`[Show2D] WebGPU colormap disabled on ${getGPUInfo()} Linux adapter after headed validation showed black canvas transfers; using CPU colormap fallback`);
-          return;
-        }
         gpuCmapRef.current = engine;
         gpuCmapReadyRef.current = true;
         setGpuCmapReadyVersion(v => v + 1);
@@ -5097,7 +4932,7 @@ function Show2D() {
           if (bytes > 0) setGpuMaxBufferMB(Math.floor(bytes / (1024 * 1024)));
         });
       }
-    });
+    }).catch(error => console.error("[Show2D] hardware WebGPU display is required", error));
     return () => {
       disposed = true;
       gpuCmapReadyRef.current = false;
@@ -5134,28 +4969,14 @@ function Show2D() {
     }
     let cancelled = false;
     (async () => {
-      let mag: Float32Array;
-      if (gpuFFTRef.current && gpuReadyRef.current) {
-        try {
-          const result = await gpuFFTRef.current.fft2D(real, imag, fftW, fftH, false);
-          if (cancelled) return;
-          fftshift(result.real, fftW, fftH);
-          fftshift(result.imag, fftW, fftH);
-          mag = computeMagnitude(result.real, result.imag);
-        } catch (err) {
-          if (cancelled) return;
-          console.warn("[Show2D] Diff WebGPU FFT failed; using CPU worker", err);
-          const result = await fft2dAsync(real.slice(), imag.slice(), fftW, fftH, false);
-          if (cancelled) return;
-          // fft2dAsync already fftshifts and returns the centered magnitude.
-          mag = result.magnitude;
-        }
-      } else {
-        const result = await fft2dAsync(real, imag, fftW, fftH, false);
-        if (cancelled) return;
-        // Do not shift again: the worker result is already centered.
-        mag = result.magnitude;
-      }
+      const gpu = gpuFFTRef.current || await getWebGPUFFT();
+      gpuFFTRef.current = gpu;
+      gpuReadyRef.current = true;
+      const result = await gpu.fft2D(real, imag, fftW, fftH, false);
+      if (cancelled) return;
+      fftshift(result.real, fftW, fftH);
+      fftshift(result.imag, fftW, fftH);
+      const mag = computeMagnitude(result.real, result.imag);
       diffFftMagRef.current = mag;
       diffFftDimsRef.current = { width: fftW, height: fftH };
       setDiffFftMagVersion(v => v + 1);
@@ -5340,23 +5161,18 @@ function Show2D() {
   const filterFrameForPanel = React.useCallback(async (panel: number, frame: Float32Array): Promise<Float32Array> => {
     if (isRgbFlags && isRgbFlags[panel]) return frame;
     let displayed = frame;
-    try {
-      if (browserFilterActive) {
-        const { mode, sigma, bin } = panelFilterKnobs(panel);
-        if (filterKnobsActive(mode, bin) && browserFilterSupported(mode)) {
-          displayed = await applyDisplayFilterBrowser(displayed, width, height, mode, sigma, bin);
-        }
+    if (browserFilterActive) {
+      const { mode, sigma, bin } = panelFilterKnobs(panel);
+      if (filterKnobsActive(mode, bin) && browserFilterSupported(mode)) {
+        displayed = await applyDisplayFilterBrowser(displayed, width, height, mode, sigma, bin);
       }
-      const frequency = panelFrequencyKnobs(panel);
-      if (frequencyFilterEnabled && frequencyFilterActive(frequency.mode)) {
-        displayed = await applyFrequencyFilterBrowser(displayed, width, height, frequency);
-        setFrequencyFilterBackend(getFrequencyFilterBackend());
-      }
-      return displayed;
-    } catch (err) {
-      console.warn("[Show2D] browser view pipeline failed; showing raw frame", err);
-      return frame;
     }
+    const frequency = panelFrequencyKnobs(panel);
+    if (frequencyFilterEnabled && frequencyFilterActive(frequency.mode)) {
+      displayed = await applyFrequencyFilterBrowser(displayed, width, height, frequency);
+      setFrequencyFilterBackend(getFrequencyFilterBackend());
+    }
+    return displayed;
   }, [browserFilterActive, isRgbFlags, panelFilterKnobs, width, height, frequencyFilterEnabled,
       panelFrequencyKnobs]);
   // Generation token: any newer decode/scrub run invalidates pending async
@@ -5587,7 +5403,7 @@ function Show2D() {
       ? filterFrameForPanel(i, frame)
       : Promise.resolve(previousArrays?.[i] ?? frame))).then(filtered => {
       if (browserFilterGenerationRef.current === generation) commit(filtered);
-    });
+    }).catch(error => console.error("[Show2D] hardware WebGPU view pipeline failed", error));
   }, [
     allFloats,
     allPanelStackFloats,
@@ -5663,7 +5479,7 @@ function Show2D() {
         setGpuCmapVersion(version => version + 1);
       }
       setDataVersion(version => version + 1);
-    });
+    }).catch(error => console.error("[Show2D] hardware WebGPU view pipeline failed", error));
   }, [
     allPanelStackFloats,
     hasLocalPanelStacks,
@@ -5741,8 +5557,7 @@ function Show2D() {
   }, [width, height, nImages, canvasW, canvasH, uint8FolderPreviewMode]);
 
   // Compute histogram data for the displayed image (reflects log scale)
-  // GPU path: uses persistent per-slot histogram buffers — no CPU data scan
-  // CPU fallback: computeHistogramFromBytes (before GPU ready)
+  // Persistent WebGPU slot histograms are the only numerical source.
   React.useEffect(() => {
     if (!rawDataRef.current) return;
     const idx = nImages > 1 ? selectedIdx : 0;
@@ -5754,9 +5569,9 @@ function Show2D() {
       traitVmins && traitVmaxs && traitVmins[i] != null && traitVmaxs[i] != null
     ));
     const linkedHistogram = linkedContrast && isGallery && !hasAbsoluteRange && !hasAnyPerImageRange;
+    if (rawRangesRef.current.length < nImages) return;
     const imageRanges = Array.from({ length: nImages }, (_, i) => {
-      const cachedRaw = rawRangesRef.current[i];
-      const rawRange = cachedRaw || (rawDataRef.current?.[i] ? findDataRange(rawDataRef.current[i]) : { min: 0, max: 1 });
+      const rawRange = rawRangesRef.current[i];
       return displayRange(rawRange.min, rawRange.max, logScale);
     });
     const range = linkedHistogram ? mergeDataRanges(imageRanges) : (imageRanges[idx] || { min: 0, max: 1 });
@@ -5775,12 +5590,6 @@ function Show2D() {
           if (hasSignal) {
             setImageHistogramBins(merged);
             setImageHistogramData(null);
-          } else if (rawDataRef.current && rawDataRef.current.length > 0) {
-            const cpuHists = rawDataRef.current
-              .slice(0, nImages)
-              .map(d => computeHistogramFromBytes(logScale ? applyLogScale(d) : d, 256, range.min, range.max));
-            setImageHistogramBins(mergeHistogramBins(cpuHists));
-            setImageHistogramData(null);
           }
         });
       } else {
@@ -5793,29 +5602,14 @@ function Show2D() {
           if (hasSignal) {
             setImageHistogramBins(bins);
             setImageHistogramData(null);
-          } else if (rawDataRef.current && rawDataRef.current[idx]) {
-            const raw = rawDataRef.current[idx];
-            const cpu = computeHistogramFromBytes(logScale ? applyLogScale(raw) : raw, 256, range.min, range.max);
-            setImageHistogramBins(cpu);
-            setImageHistogramData(null);
           }
         });
       }
     } else {
-      // CPU fallback (before GPU ready)
-      if (linkedHistogram) {
-        const histograms = rawDataRef.current
-          .slice(0, nImages)
-          .map(d => computeHistogramFromBytes(logScale ? applyLogScale(d) : d, 256, range.min, range.max));
-        setImageHistogramBins(mergeHistogramBins(histograms));
-        setImageHistogramData(null);
-      } else {
-        const d = logScale ? applyLogScale(raw) : raw;
-        setImageHistogramBins(null);
-        setImageHistogramData(d);
-      }
+      setImageHistogramBins(null);
+      setImageHistogramData(null);
     }
-  }, [allFloats, nImages, floatsPerImage, logScale, selectedIdx, linkedContrast, isGallery, traitVmin, traitVmax, traitVmins, traitVmaxs, gpuCmapVersion]);
+  }, [allFloats, nImages, floatsPerImage, logScale, selectedIdx, linkedContrast, isGallery, traitVmin, traitVmax, traitVmins, traitVmaxs, gpuCmapVersion, autoContrastVersion]);
 
   // Prevent page scroll when scrolling on canvases (must use native listener with passive: false)
   // In gallery mode, only block scroll on the selected image (or all if linkedZoom)
@@ -5847,19 +5641,37 @@ function Show2D() {
   // This prevents an early raw upload from winning deterministically when the
   // filter commit completed before/after engine initialization.
   React.useEffect(() => {
-    if (uint8FolderPreviewMode) return;
     const engine = gpuCmapRef.current;
     const arrays = rawDataRef.current;
     if (!engine || !gpuCmapReadyRef.current || !arrays || arrays.length === 0) return;
     for (let i = 0; i < arrays.length; i++) {
       const data = arrays[i];
-      if (data) engine.uploadData(i, data, width, height);
+      if (!data) continue;
+      if (uint8FolderPreviewMode) {
+        if (!ArrayBuffer.isView(data) || data.BYTES_PER_ELEMENT !== 1) {
+          // The engine-ready effect can beat the folder fetch/commit by one
+          // render and still see the old float placeholder. The data-version
+          // rerun uploads the authoritative byte frame; never reinterpret the
+          // placeholder as packed uint8.
+          continue;
+        }
+        const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        engine.uploadUint8Data(
+          i,
+          bytes,
+          width,
+          height,
+          Math.max(1, Math.round(canvasW) * Math.round(canvasH)),
+        );
+      } else {
+        engine.uploadData(i, data, width, height);
+      }
     }
     const lut = COLORMAPS[cmapRef.current] || COLORMAPS.inferno;
     engine.uploadLUT(cmapRef.current, lut);
     gpuDataVersionRef.current++;
     setGpuCmapVersion(v => v + 1);
-  }, [dataVersion, gpuCmapReadyVersion, width, height, uint8FolderPreviewMode]);
+  }, [dataVersion, gpuCmapReadyVersion, width, height, canvasW, canvasH, uint8FolderPreviewMode]);
   // Generation counter for colormap — coalesces rapid slider events to ≤1 render per frame
   // Cached per-image data ranges — only recomputed when data or logScale changes, NOT on slider drag
   const dataRangesRef = React.useRef<{ min: number; max: number }[]>([]);
@@ -5885,25 +5697,18 @@ function Show2D() {
     const engine = gpuCmapRef.current;
     const nImg = rawDataRef.current.length;
 
-    if (!uint8FolderPreviewMode && engine && gpuCmapReadyRef.current && engine.slotCount >= nImg) {
+    if (engine && gpuCmapReadyRef.current && engine.slotCount >= nImg) {
       // GPU path: batch compute min/max on GPU (async, updates refs when done)
       const indices = Array.from({ length: nImg }, (_, i) => i);
       engine.computeRangeBatch(indices).then(rawRanges => {
         rawRangesRef.current = rawRanges;
         const logRanges = rawRanges.map(r => displayRange(r.min, r.max, true));
         dataRangesRef.current = logScaleRef.current ? logRanges : rawRanges;
+        setAutoContrastVersion(version => version + 1);
       });
     } else {
-      // CPU fallback: scan each image for min/max
-      const rawRanges: { min: number; max: number }[] = [];
-      for (let i = 0; i < nImg; i++) {
-        const rawData = rawDataRef.current[i];
-        if (!rawData) { rawRanges.push({ min: 0, max: 1 }); continue; }
-        rawRanges.push(findDataRange(rawData));
-      }
-      rawRangesRef.current = rawRanges;
-      const logRanges = rawRanges.map(r => displayRange(r.min, r.max, true));
-      dataRangesRef.current = logScale ? logRanges : rawRanges;
+      rawRangesRef.current = [];
+      dataRangesRef.current = [];
     }
     logDataCacheRef.current = rawDataRef.current.slice();
   }, [dataVersion, gpuCmapVersion, uint8FolderPreviewMode]);
@@ -5921,7 +5726,6 @@ function Show2D() {
   // One GPU submission for all images. Caches results for synchronous use in render.
   React.useEffect(() => {
     if (!autoContrast) { autoContrastCacheRef.current = []; return; }
-    if (uint8FolderPreviewMode) return;
     const engine = gpuCmapRef.current;
     if (!engine || !gpuCmapReadyRef.current || !rawDataRef.current) return;
     const ls = logScale;
@@ -5938,10 +5742,7 @@ function Show2D() {
         // returning and leaving the histogram thumbs at stale 0-100 forever.
         const rawRanges = await engine.computeRangeBatch(indices);
         if (request !== autoContrastRequestRef.current) return;
-        while (rawRanges.length < nImg) {
-          const raw = rawDataRef.current?.[rawRanges.length];
-          rawRanges.push(raw ? findDataRange(raw) : { min: 0, max: 1 });
-        }
+        if (rawRanges.length < nImg) return;
         rawRangesRef.current = rawRanges;
         cachedRanges = ls
           ? rawRanges.map((range) => displayRange(range.min, range.max, true))
@@ -5971,15 +5772,7 @@ function Show2D() {
         const range = cr.max - cr.min;
         acRanges.push({ vmin: cr.min + (binLow / 255) * range, vmax: cr.min + (binHigh / 255) * range });
       }
-      // Race fallback: GPU slots not yet populated → allBins empty / acRanges
-      // empty. Compute from rawDataRef on the CPU so Auto applies a real range
-      // instead of staying at the full data extrema (same fix as linked-hist).
-      if (acRanges.length < nImg && rawDataRef.current && rawDataRef.current.length >= nImg) {
-        for (let i = acRanges.length; i < nImg; i++) {
-          const raw = rawDataRef.current[i];
-          if (raw) acRanges.push(computeAutoRange(raw, ls));
-        }
-      }
+      if (acRanges.length < nImg) return;
       if (request !== autoContrastRequestRef.current) return;
       autoContrastCacheRef.current = acRanges;
       // Reflect the auto-computed range on the histogram dual-thumb slider so
@@ -5994,12 +5787,6 @@ function Show2D() {
         let cr = histRanges[k];
         const ac = acRanges[k];
         if (!ac) continue;
-        // cachedRanges can still be zero-init at this point — recompute from
-        // raw so percentile conversion has a real denominator.
-        if (!cr || cr.max <= cr.min) {
-          const raw = rawDataRef.current?.[k];
-          if (raw) cr = findDataRange(raw);
-        }
         if (!cr || cr.max <= cr.min) continue;
         const vminPct = Math.max(0, Math.min(100, ((ac.vmin - cr.min) / (cr.max - cr.min)) * 100));
         const vmaxPct = Math.max(0, Math.min(100, ((ac.vmax - cr.min) / (cr.max - cr.min)) * 100));
@@ -6090,6 +5877,7 @@ function Show2D() {
     // Compute per-image vmin/vmax from CACHED data ranges (no findDataRange per tick).
     // dataRangesRef is precomputed when data or logScale changes.
     const cachedRanges = dataRangesRef.current;
+    if (cachedRanges.length < nImages) return;
     const hasAbsoluteRange = traitVmin != null && traitVmax != null;
     const baseRanges: { min: number; max: number }[] = [];
     const hasPerImageRanges: boolean[] = [];
@@ -6104,13 +5892,7 @@ function Show2D() {
         baseRanges.push(displayRange(traitVmin!, traitVmax!, logScale));
       } else {
         let cached = cachedRanges[i];
-        if (!cached || cached.min === cached.max) {
-          const raw = rawDataRef.current?.[i];
-          if (raw) {
-            const rawRange = findDataRange(raw);
-            cached = displayRange(rawRange.min, rawRange.max, logScale);
-          }
-        }
+        if (!cached) return;
         baseRanges.push(cached || { min: 0, max: 1 });
       }
     }
@@ -6128,11 +5910,7 @@ function Show2D() {
       if (cachedAutoRanges.length === nImages && cachedAutoRanges.every(r => r && Number.isFinite(r.vmin) && Number.isFinite(r.vmax) && r.vmax > r.vmin)) {
         const merged = mergeDataRanges(grayOnly(cachedAutoRanges.map(r => ({ min: r.vmin, max: r.vmax }))));
         sharedAutoRange = { vmin: merged.min, vmax: merged.max };
-      } else {
-        const autoRanges = rawDataRef.current.slice(0, nImages).map(raw => computeAutoRange(raw, logScale));
-        const merged = mergeDataRanges(grayOnly(autoRanges.map(r => ({ min: r.vmin, max: r.vmax }))));
-        sharedAutoRange = { vmin: merged.min, vmax: merged.max };
-      }
+      } else return;
     }
     const ranges: { vmin: number; vmax: number }[] = [];
     for (let i = 0; i < nImages; i++) {
@@ -6149,20 +5927,12 @@ function Show2D() {
           ranges.push({ vmin, vmax });
           continue;
         }
-        // Auto-contrast: use GPU-precomputed percentile ranges when ready.
-        // Until then, compute the same 2-98% range on CPU so Auto is correct
-        // in offline exports, no-WebGPU browsers, and first paint races.
+        // Auto-contrast uses the GPU-precomputed percentile range. Retain the
+        // previous frame until that asynchronous range is ready.
         const acCache = autoContrastCacheRef.current[i];
         if (acCache && Number.isFinite(acCache.vmin) && Number.isFinite(acCache.vmax) && acCache.vmax > acCache.vmin) {
           vmin = acCache.vmin; vmax = acCache.vmax;
-        } else {
-          const raw = rawDataRef.current?.[i];
-          if (raw) {
-            ({ vmin, vmax } = computeAutoRange(raw, logScale));
-          } else {
-            vmin = rangeMin; vmax = rangeMax;
-          }
-        }
+        } else return;
       } else if (rangeMin !== rangeMax && (cs.vminPct > 0 || cs.vmaxPct < 100)) {
         ({ vmin, vmax } = sliderRange(rangeMin, rangeMax, cs.vminPct, cs.vmaxPct));
       } else {
@@ -6178,33 +5948,60 @@ function Show2D() {
     }
     panelRangesRef.current = ranges;  // keep detail tiles on the live contrast window
 
-    const renderCpuFallback = () => {
-      if (!isCurrentRender()) return;
-      for (const i of visibleImageIndices) {
-        if (isRgbFlags && isRgbFlags[i]) continue; // painted directly above
-        const offscreen = mainOffscreensRef.current[i];
-        const imgData = mainImgDatasRef.current[i];
-        if (!offscreen || !imgData) continue;
-        const raw = rawDataRef.current?.[i];
-        if (!raw) continue;
-        const panelLut = COLORMAPS[panelCmapNames[i]] || COLORMAPS.inferno;
-        if (uint8FolderPreviewMode) {
-          renderSampledFrameToOffscreenReuse(raw, width, height, panelLut, ranges[i].vmin, ranges[i].vmax, logScale, offscreen, imgData);
-        } else {
-          const processed = logScale ? applyLogScale(raw) : raw;
-          renderToOffscreenReuse(processed, panelLut, ranges[i].vmin, ranges[i].vmax, offscreen, imgData);
-        }
-      }
-      if (isCurrentRender()) setOffscreenVersion(v => v + 1);
-    };
-
     // GPU colormap — first-class citizen. A tab can be backgrounded while the
     // bitmap transfer is pending, so only the current visible generation may
     // commit into the retained offscreens. This also prevents a late black GPU
     // clear frame from overwriting a newer foreground repaint.
     const engine = gpuCmapRef.current;
-    const gpuReady = !uint8FolderPreviewMode && !hasMixedPanelCmaps && engine && gpuCmapReadyRef.current && engine.slotCount >= nImages;
-    if (gpuReady) {
+    const gpuReady = engine && gpuCmapReadyRef.current && engine.slotCount >= nImages;
+    if (gpuReady && (uint8FolderPreviewMode || hasMixedPanelCmaps)) {
+      const capturedRanges = ranges.slice();
+      const capturedLogScale = logScale;
+      const capturedNImages = nImages;
+      renderRaf = requestAnimationFrame(() => {
+        renderRaf = null;
+        void (async () => {
+          const indices = visibleImageIndices.filter(i => i >= 0 && i < capturedNImages);
+          let bitmaps: (ImageBitmap | null)[] = [];
+          try {
+            if (!isCurrentRender()) return;
+            // Encode every visible panel before awaiting the queue. Awaiting
+            // each panel serially made a 40-image native-4K gallery take long
+            // enough for a newer React generation to cancel the whole paint,
+            // leaving every scientific canvas transparent.
+            bitmaps = await Promise.all(indices.map(i => {
+              if (isRgbFlags && isRgbFlags[i]) return Promise.resolve(null);
+              const offscreen = mainOffscreensRef.current[i];
+              const lutName = panelCmapNames[i] || cmap;
+              const panelLut = COLORMAPS[lutName] || COLORMAPS.inferno;
+              return offscreen ? engine!.renderSlotScaledToImageBitmapAsync(
+                i,
+                capturedRanges[i] || { vmin: 0, vmax: 1 },
+                capturedLogScale,
+                offscreen.width,
+                offscreen.height,
+                lutName,
+                panelLut,
+              ) : Promise.resolve(null);
+            }));
+            if (!isCurrentRender()) return;
+            let painted = !!(isRgbFlags && isRgbFlags.some(Boolean));
+            for (let k = 0; k < bitmaps.length; k++) {
+              const bitmap = bitmaps[k];
+              if (!bitmap) continue;
+              const offscreen = mainOffscreensRef.current[indices[k]];
+              offscreen?.getContext("2d")?.drawImage(bitmap, 0, 0);
+              painted = true;
+            }
+            if (painted && isCurrentRender()) setOffscreenVersion(v => v + 1);
+          } catch (err) {
+            if (isCurrentRender()) console.error("[Show2D] scaled WebGPU colormap repaint failed", err);
+          } finally {
+            bitmaps.forEach(bitmap => bitmap?.close());
+          }
+        })();
+      });
+    } else if (gpuReady) {
       engine!.uploadLUT(cmap, lut);
       const capturedRanges = ranges.slice();
       const capturedLogScale = logScale;
@@ -6269,20 +6066,11 @@ function Show2D() {
           } catch (err) {
             closeBitmaps();
             if (isCurrentRender()) {
-              console.warn("[Show2D] WebGPU colormap repaint failed; falling back to CPU", err);
+              console.error("[Show2D] WebGPU colormap repaint failed", err);
             }
           }
-          // The mapAsync fallback used to write directly into live offscreens,
-          // which allowed stale hidden-tab work to land after a newer repaint.
-          // CPU fallback is uncommon and commits synchronously under the same
-          // generation guard.
-          renderCpuFallback();
         })();
       });
-    } else {
-      // CPU fallback: initial render or no WebGPU
-      // CPU must do log transform itself (GPU shader would handle it)
-      renderCpuFallback();
     }
     return () => {
       cancelled = true;
@@ -6904,20 +6692,23 @@ function Show2D() {
   // Auto-compute profile when profile_line is set (e.g. from Python)
   // -------------------------------------------------------------------------
   React.useEffect(() => {
+    let cancelled = false;
     if (profilePoints.length === 2 && rawDataRef.current) {
       const p0 = profilePoints[0], p1 = profilePoints[1];
-      const allProfiles: (Float32Array | null)[] = [];
-      for (let i = 0; i < rawDataRef.current.length; i++) {
-        if (hiddenPanelSet.has(i)) {
-          allProfiles.push(null);
-          continue;
-        }
-        const raw = rawDataRef.current[i];
-        allProfiles.push(raw ? sampleLineProfile(raw, width, height, p0.row, p0.col, p1.row, p1.col) : null);
-      }
-      setProfileDataAll(allProfiles);
-      if (!profileActive) setProfileActive(true);
+      const frames = rawDataRef.current;
+      void Promise.all(frames.map((raw, index) => (
+        hiddenPanelSet.has(index) || !raw
+          ? Promise.resolve(null)
+          : sampleLineProfileWebGPU(raw, width, height, p0.row, p0.col, p1.row, p1.col)
+      ))).then((allProfiles) => {
+        if (cancelled) return;
+        setProfileDataAll(allProfiles);
+        if (!profileActive) setProfileActive(true);
+      }).catch((error) => {
+        if (!cancelled) console.error("[Show2D] WebGPU line profile failed", error);
+      });
     }
+    return () => { cancelled = true; };
   }, [profilePoints, dataVersion, profileActive, hiddenPanelSet]);
 
   // -------------------------------------------------------------------------
@@ -7172,15 +6963,11 @@ function Show2D() {
       await new Promise<void>(r => requestAnimationFrame(() => r()));
       if (gen !== fftGenRef.current) return;
 
-      // Wait for WebGPU init if it's still in flight — avoids first-call CPU race.
-      if (!gpuReadyRef.current) {
-        try {
-          const fft = await getWebGPUFFT();
-          if (fft) { gpuFFTRef.current = fft; gpuReadyRef.current = true; }
-        } catch (_e) { /* fall to CPU */ }
-        if (gen !== fftGenRef.current) return;
-      }
-      const backend = gpuFFTRef.current && gpuReadyRef.current ? "WebGPU" : "CPU Worker";
+      const gpu = gpuFFTRef.current || await getWebGPUFFT();
+      gpuFFTRef.current = gpu;
+      gpuReadyRef.current = true;
+      if (gen !== fftGenRef.current) return;
+      const backend = "WebGPU";
       setFftComputing(true);
       setFftProgress(`Computing FFT… (${backend})`);
       const t0 = performance.now();
@@ -7193,7 +6980,7 @@ function Show2D() {
       let origCropW = 0, origCropH = 0;
       if (roiFftActive && roiList && roiSelectedIdx >= 0 && roiSelectedIdx < roiList.length) {
         const roi = roiList[roiSelectedIdx];
-        const crop = cropROIRegion(data, width, height, roi);
+        const crop = await cropMaskedRegionWebGPU(data, width, height, roi);
         if (crop) {
           origCropW = crop.cropW;
           origCropH = crop.cropH;
@@ -7241,29 +7028,13 @@ function Show2D() {
       const real = inputData.slice();
       const imag = new Float32Array(inputData.length);
 
-      if (gpuFFTRef.current && gpuReadyRef.current) {
-        try {
-          const result = await gpuFFTRef.current.fft2D(real, imag, fftW, fftH, false);
-          if (gen !== fftGenRef.current) return;
-          const tGpu = performance.now();
-          fftshift(result.real, fftW, fftH);
-          fftshift(result.imag, fftW, fftH);
-          fftMagCacheRef.current = computeMagnitude(result.real, result.imag);
-          console.log(`[Show2D FFT] GPU ${fftW}×${fftH}: crop=${(tCrop-t0).toFixed(1)}ms gpu=${(tGpu-tCrop).toFixed(1)}ms post=${(performance.now()-tGpu).toFixed(1)}ms`);
-        } catch (err) {
-          if (gen !== fftGenRef.current) return;
-          console.warn("[Show2D] WebGPU FFT failed; using CPU worker", err);
-          const result = await fft2dAsync(inputData.slice(), new Float32Array(inputData.length), fftW, fftH, false);
-          if (gen !== fftGenRef.current) return;
-          fftMagCacheRef.current = result.magnitude;
-        }
-      } else {
-        // CPU fallback: run in Web Worker to avoid blocking the main thread
-        const result = await fft2dAsync(real, imag, fftW, fftH, false);
-        if (gen !== fftGenRef.current) return;
-        fftMagCacheRef.current = result.magnitude;
-        console.log(`[Show2D FFT] Worker ${fftW}×${fftH}: crop=${(tCrop-t0).toFixed(1)}ms worker=${(performance.now()-tCrop).toFixed(1)}ms`);
-      }
+      const result = await gpu.fft2D(real, imag, fftW, fftH, false);
+      if (gen !== fftGenRef.current) return;
+      const tGpu = performance.now();
+      fftshift(result.real, fftW, fftH);
+      fftshift(result.imag, fftW, fftH);
+      fftMagCacheRef.current = computeMagnitude(result.real, result.imag);
+      console.log(`[Show2D FFT] GPU ${fftW}×${fftH}: crop=${(tCrop-t0).toFixed(1)}ms gpu=${(tGpu-tCrop).toFixed(1)}ms post=${(performance.now()-tGpu).toFixed(1)}ms`);
       // Track FFT dimensions when they differ from image dimensions (ROI crop or non-pow2 padding)
       if (origCropW > 0) {
         setFftCropDims({ cropWidth: origCropW, cropHeight: origCropH, fftWidth: fftW, fftHeight: fftH });
@@ -7347,20 +7118,13 @@ function Show2D() {
     const fftSlot = nImages;  // dedicate slot just past main image slots
     const colorGeneration = ++singleFftColorGenRef.current;
     let cancelled = false;
-    const renderCpu = () => {
-      if (cancelled || colorGeneration !== singleFftColorGenRef.current) return;
-      const offscreen = renderToOffscreen(cache.magnitude, fftW, fftH, lut, vmin, vmax);
-      if (!offscreen) return;
-      fftOffscreenRef.current = offscreen;
-      setFftOffscreenVersion(v => v + 1);
-    };
     if (engine && gpuCmapReadyRef.current) {
       try {
         if (sourceChanged) engine.uploadData(fftSlot, cache.magnitude, fftW, fftH);
         engine.uploadLUT(fftColormap, lut);
         void engine.renderSlotsToImageBitmapAsync([fftSlot], [{ vmin, vmax }], false).then(bitmaps => {
           if (!bitmaps || !bitmaps[0]) {
-            renderCpu();
+            console.error("[Show2D] WebGPU FFT colormap returned no bitmap");
             return;
           }
           try {
@@ -7372,7 +7136,7 @@ function Show2D() {
             if (ctx) {
               ctx.drawImage(bitmaps[0], 0, 0);
               if (vmax > vmin && canvasLooksBlank(oc)) {
-                renderCpu();
+                console.error("[Show2D] WebGPU FFT colormap returned a blank canvas");
                 return;
               }
               fftOffscreenRef.current = oc;
@@ -7382,15 +7146,13 @@ function Show2D() {
             bitmaps.forEach(bitmap => bitmap?.close());
           }
         }).catch(err => {
-          if (!cancelled) console.warn("[Show2D] FFT colormap GPU render failed; using CPU", err);
-          renderCpu();
+          if (!cancelled) console.error("[Show2D] FFT colormap GPU render failed", err);
         });
         return () => { cancelled = true; };
       } catch (err) {
-        console.warn("[Show2D] FFT colormap GPU setup failed; using CPU", err);
+        console.error("[Show2D] FFT colormap GPU setup failed", err);
       }
     }
-    renderCpu();
     return () => { cancelled = true; };
   }, [effectiveShowFft, isGallery, fftMagVersion, fftVminPct, fftVmaxPct, fftColormap, fftScaleMode, fftAuto, width, height, fftCropDims, nImages, pixelSize, pixelUnit, fftMetricsEnabled, canvasRepaintSignal]);
 
@@ -7596,28 +7358,22 @@ function Show2D() {
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
       if (cancelled || serial !== galleryFftComputeSerialRef.current) return;
 
-      // Wait for WebGPU init if it is still in flight. Cache hits above do not
-      // pay this initialization cost.
-      if (!gpuReadyRef.current) {
-        try {
-          const fft = await getWebGPUFFT();
-          if (fft) { gpuFFTRef.current = fft; gpuReadyRef.current = true; }
-        } catch (_e) { /* fall to CPU worker */ }
-        if (cancelled || serial !== galleryFftComputeSerialRef.current) return;
-      }
-      const useGPU = !!(gpuFFTRef.current && gpuReadyRef.current);
-      const backend = useGPU ? "WebGPU" : "CPU Worker";
+      const gpu = gpuFFTRef.current || await getWebGPUFFT();
+      gpuFFTRef.current = gpu;
+      gpuReadyRef.current = true;
+      if (cancelled || serial !== galleryFftComputeSerialRef.current) return;
+      const backend = "WebGPU";
       setFftProgress(`FFT (${backend})`);
       const t0 = performance.now();
 
       // Helper: prep one image for FFT (crop, pad, window)
-      const prepOne = (idx: number): { real: Float32Array; imag: Float32Array; w: number; h: number } | null => {
+      const prepOne = async (idx: number): Promise<{ real: Float32Array; imag: Float32Array; w: number; h: number } | null> => {
         const data = rawDataRef.current![idx];
         if (!data) return null;
         let inputData = data;
         let curW = width, curH = height;
         if (roi) {
-          const crop = cropROIRegion(data, width, height, roi);
+          const crop = await cropMaskedRegionWebGPU(data, width, height, roi);
           if (crop) {
             if (fftWindow) applyHannWindow2D(crop.cropped, crop.cropW, crop.cropH);
             const padW = nextPow2(crop.cropW), padH = nextPow2(crop.cropH);
@@ -7662,7 +7418,7 @@ function Show2D() {
           inputs.push({ real: new Float32Array(0), imag: new Float32Array(0) });
           continue;
         }
-        const input = prepOne(idx);
+        const input = await prepOne(idx);
         if (input) {
           fftW = input.w; fftH = input.h;
           inputs.push({ real: input.real, imag: input.imag });
@@ -7735,58 +7491,29 @@ function Show2D() {
         setFftProgress(`FFT ${batchStart + 1}–${Math.min(batchStart + BATCH_SIZE, missingIndices.length)}/${missingIndices.length} visible (${backend})`);
         let activatedBatchResult = false;
 
-        if (useGPU && batchInputs.length > 1) {
-          try {
-            // GPU batch: one submission for BATCH_SIZE images
-            const batchResults = await gpuFFTRef.current!.fft2DBatch(batchInputs, fftW, fftH);
-            if (cancelled || serial !== galleryFftComputeSerialRef.current) return;
-            let ri = 0;
-            for (const idx of batchIndices) {
-              if (!inputs[idx] || inputs[idx].real.length === 0) continue;
-              fftshift(batchResults[ri].real, fftW, fftH);
-              fftshift(batchResults[ri].imag, fftW, fftH);
-              const mag = computeMagnitude(batchResults[ri].real, batchResults[ri].imag);
-              activatedBatchResult = rememberResult(idx, mag) || activatedBatchResult;
-              ri++;
-            }
-          } catch (err) {
-            console.warn("[Show2D] Gallery WebGPU FFT batch failed; using CPU workers", err);
-            const workerResults = await Promise.all(batchInputs.map(input => (
-              fft2dAsync(input.real.slice(), input.imag.slice(), fftW, fftH, false)
-            )));
-            if (cancelled || serial !== galleryFftComputeSerialRef.current) return;
-            let ri = 0;
-            for (const idx of batchIndices) {
-              if (!inputs[idx] || inputs[idx].real.length === 0) continue;
-              activatedBatchResult = rememberResult(idx, workerResults[ri].magnitude) || activatedBatchResult;
-              ri++;
-            }
+        if (batchInputs.length > 1) {
+          const batchResults = await gpu.fft2DBatch(batchInputs, fftW, fftH);
+          if (cancelled || serial !== galleryFftComputeSerialRef.current) return;
+          let ri = 0;
+          for (const idx of batchIndices) {
+            if (!inputs[idx] || inputs[idx].real.length === 0) continue;
+            fftshift(batchResults[ri].real, fftW, fftH);
+            fftshift(batchResults[ri].imag, fftW, fftH);
+            const mag = computeMagnitude(batchResults[ri].real, batchResults[ri].imag);
+            activatedBatchResult = rememberResult(idx, mag) || activatedBatchResult;
+            ri++;
           }
         } else {
-          // Single GPU FFT or CPU-worker fallback.
           for (const idx of batchIndices) {
             if (!inputs[idx] || inputs[idx].real.length === 0) continue;
             if (cancelled || serial !== galleryFftComputeSerialRef.current) return;
             const { real, imag } = inputs[idx];
-            if (useGPU) {
-              try {
-                const result = await gpuFFTRef.current!.fft2D(real, imag, fftW, fftH, false);
-                if (cancelled || serial !== galleryFftComputeSerialRef.current) return;
-                fftshift(result.real, fftW, fftH);
-                fftshift(result.imag, fftW, fftH);
-                const mag = computeMagnitude(result.real, result.imag);
-                activatedBatchResult = rememberResult(idx, mag) || activatedBatchResult;
-              } catch (err) {
-                console.warn("[Show2D] Gallery WebGPU FFT failed; using CPU worker", err);
-                const result = await fft2dAsync(real.slice(), imag.slice(), fftW, fftH, false);
-                if (cancelled || serial !== galleryFftComputeSerialRef.current) return;
-                activatedBatchResult = rememberResult(idx, result.magnitude) || activatedBatchResult;
-              }
-            } else {
-              const result = await fft2dAsync(real, imag, fftW, fftH, false);
-              if (cancelled || serial !== galleryFftComputeSerialRef.current) return;
-              activatedBatchResult = rememberResult(idx, result.magnitude) || activatedBatchResult;
-            }
+            const result = await gpu.fft2D(real, imag, fftW, fftH, false);
+            if (cancelled || serial !== galleryFftComputeSerialRef.current) return;
+            fftshift(result.real, fftW, fftH);
+            fftshift(result.imag, fftW, fftH);
+            const mag = computeMagnitude(result.real, result.imag);
+            activatedBatchResult = rememberResult(idx, mag) || activatedBatchResult;
           }
         }
         // Show this batch immediately (progressive top-to-bottom). A stale
@@ -7954,21 +7681,9 @@ function Show2D() {
             }
           }
         } catch (err) {
-          console.warn("[Show2D FFT] Gallery WebGPU colormap failed; falling back to CPU", err);
+          console.error("[Show2D FFT] Gallery WebGPU colormap failed", err);
         }
       }
-
-      // CPU fallback: still uses cached transformed data/ranges, so contrast
-      // drag never recomputes FFT magnitudes.
-      for (const idx of visibleImageIndices) {
-        const cache = galleryFftPipelineRef.current[idx];
-        if (!cache) continue;
-        const fc = fftContrastFor(idx);
-        const { vmin, vmax } = sliderRange(cache.displayMin, cache.displayMax, fc.vminPct, fc.vmaxPct);
-        const offscreen = renderToOffscreen(cache.displayData, fftW, fftH, lut, vmin, vmax);
-        if (offscreen) fftOffscreensRef.current[idx] = offscreen;
-      }
-      if (!cancelled && gen === galleryFftColorGenRef.current) setGalleryFftOffscreenVersion(v => v + 1);
     };
 
     renderGalleryFft();
@@ -8309,7 +8024,7 @@ function Show2D() {
     setFftPanY(fftPanStart.pY + dy);
   };
 
-  const handleFftMouseUp = (e: React.MouseEvent) => {
+  const handleFftMouseUp = async (e: React.MouseEvent) => {
     // Click detection for d-spacing measurement
     if (fftClickStartRef.current) {
       const dx = e.clientX - fftClickStartRef.current.x;
@@ -8324,7 +8039,7 @@ function Show2D() {
           let imgRow = pos.row;
           // Snap to nearest Bragg spot (local max in FFT magnitude)
           if (fftMagCacheRef.current) {
-            const snapped = findFFTPeak(fftMagCacheRef.current, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
+            const snapped = await findFFTPeakWebGPU(fftMagCacheRef.current, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
             imgCol = snapped.col;
             imgRow = snapped.row;
           }
@@ -8341,12 +8056,14 @@ function Show2D() {
             if (pixelSize > 0) {
               const paddedW = nextPow2(fftW);
               const paddedH = nextPow2(fftH);
-              const binC = ((Math.round(imgCol) - halfW) % fftW + fftW) % fftW;
-              const binR = ((Math.round(imgRow) - halfH) % fftH + fftH) % fftH;
-              const freqC = binC <= paddedW / 2 ? binC / (paddedW * pixelSize) : (binC - paddedW) / (paddedW * pixelSize);
-              const freqR = binR <= paddedH / 2 ? binR / (paddedH * pixelSize) : (binR - paddedH) / (paddedH * pixelSize);
-              spatialFreq = Math.sqrt(freqC * freqC + freqR * freqR);
-              dSpacing = spatialFreq > 0 ? 1 / spatialFreq : null;
+              ({ spatialFrequency: spatialFreq, dSpacing } = reciprocalCoordinatesFromShiftedOffset(
+                Math.round(imgRow) - halfH,
+                Math.round(imgCol) - halfW,
+                paddedH,
+                paddedW,
+                pixelSize,
+                pixelSize,
+              ));
             }
             setFftClickInfo({ row: imgRow, col: imgCol, distPx, spatialFreq, dSpacing });
           }
@@ -8550,17 +8267,13 @@ function Show2D() {
     };
   };
 
-  const updateAllProfileData = (p0: { row: number; col: number }, p1: { row: number; col: number }) => {
+  const updateAllProfileData = async (p0: { row: number; col: number }, p1: { row: number; col: number }) => {
     if (!rawDataRef.current) return;
-    const allProfiles: (Float32Array | null)[] = [];
-    for (let j = 0; j < rawDataRef.current.length; j++) {
-      if (hiddenPanelSet.has(j)) {
-        allProfiles.push(null);
-        continue;
-      }
-      const raw = rawDataRef.current[j];
-      allProfiles.push(raw ? sampleLineProfile(raw, width, height, p0.row, p0.col, p1.row, p1.col) : null);
-    }
+    const allProfiles = await Promise.all(rawDataRef.current.map((raw, index) => (
+      hiddenPanelSet.has(index) || !raw
+        ? Promise.resolve(null)
+        : sampleLineProfileWebGPU(raw, width, height, p0.row, p0.col, p1.row, p1.col)
+    )));
     setProfileDataAll(allProfiles);
   };
 
@@ -11212,6 +10925,7 @@ function Show2D() {
                       />
                     ))}
                     <canvas
+                      data-quantem-scientific-output={`show2d-image-${i}`}
                       data-show2d-main-canvas={i}
                       ref={(el) => { if (el && canvasRefs.current[i] !== el) { canvasRefs.current[i] = el; setCanvasReady(c => c + 1); } }}
                       width={canvasW} height={canvasH}
@@ -11563,6 +11277,7 @@ function Show2D() {
                       onTouchCancel={(e) => handleFftTouchEnd(e, i)}
                     >
                       <canvas
+                        data-quantem-scientific-output={`show2d-fft-${i}`}
                         ref={(el) => { fftCanvasRefs.current[i] = el; }}
                         width={canvasW} height={canvasH}
                         style={responsiveCanvasStyle}
@@ -11753,6 +11468,7 @@ function Show2D() {
               onTouchCancel={(e) => handleTouchEnd(e, 0)}
             >
             <canvas
+              data-quantem-scientific-output="show2d-image-0"
               data-show2d-main-canvas={0}
               ref={(el) => { if (el && canvasRefs.current[0] !== el) { canvasRefs.current[0] = el; setCanvasReady(c => c + 1); } }}
                 width={canvasW} height={canvasH}
@@ -12468,7 +12184,7 @@ function Show2D() {
               onTouchEnd={(e) => handleFftTouchEnd(e, -1)}
               onTouchCancel={(e) => handleFftTouchEnd(e, -1)}
             >
-              <canvas ref={fftCanvasRef} width={canvasW} height={canvasH} style={responsiveCanvasStyle} />
+              <canvas data-quantem-scientific-output="show2d-fft-0" ref={fftCanvasRef} width={canvasW} height={canvasH} style={responsiveCanvasStyle} />
               <canvas ref={fftOverlayRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={responsiveOverlayStyle} />
               {frequencyRingOverlayForPanel(0)}
               <Box

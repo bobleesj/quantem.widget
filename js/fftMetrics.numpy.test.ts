@@ -190,4 +190,18 @@ const fixture = numpyReferenceFixture();
     expect(actual.snr).toBeCloseTo(fixture.expected.snr, 6);
     expect(actual.ring).toBeCloseTo(fixture.expected.ring, 6);
   });
+
+  it("handles zero, constant, non-finite, and non-square evidence deterministically", () => {
+    expect(computeFftQualityMetrics(new Float32Array(32 * 48), 48, 32)).toBeNull();
+
+    const constant = new Float32Array(32 * 48).fill(7);
+    const constantMetrics = computeFftQualityMetrics(constant, 48, 32);
+    expect(constantMetrics).not.toBeNull();
+    expect(Object.values(constantMetrics).every(value => value == null || Number.isFinite(value))).toBe(true);
+
+    const nonfinite = new Float32Array(32 * 48).fill(NaN);
+    nonfinite[0] = Infinity;
+    nonfinite[1] = -Infinity;
+    expect(computeFftQualityMetrics(nonfinite, 48, 32)).toBeNull();
+  });
 });

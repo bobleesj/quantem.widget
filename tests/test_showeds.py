@@ -1,4 +1,5 @@
 import json
+import pathlib
 
 import numpy as np
 import pytest
@@ -1338,3 +1339,11 @@ def test_line_hints_cap_keeps_major_lines_across_range():
     dropped_satellites = [h for h in all_eds_lines()
                           if 0.1 <= h["energy_keV"] <= 12.0 and (h["element"], h["line"]) not in kept]
     assert all(h["line"] not in {"Ka1", "La1", "Ma"} for h in dropped_satellites)
+
+
+def test_showeds_records_direct_webgpu_map_and_spectrum_evidence():
+    """Direct browser kernels report the backend that produced each result."""
+    source = pathlib.Path("js/showeds/index.tsx").read_text(encoding="utf-8")
+
+    assert 'recordComputeBackend("map", "webgpu")' in source
+    assert 'recordComputeBackend("spectrum", "webgpu")' in source

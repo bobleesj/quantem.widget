@@ -200,9 +200,11 @@ fi
 
 if [[ "$skip_docs" -eq 0 && "$mode" != "quick" ]]; then
   echo "== docs build =="
+  python scripts/stage_docs_anywidget_runtime.py
   # Match CI: docs pages bake live widget state, so skip the static preview
   # sibling that would render as a duplicate image under each widget.
   QUANTEM_WIDGET_STATIC_FALLBACK=0 jupyter-book build docs --all
+  python scripts/check_docs_widget_provenance.py docs/_build/html
   echo "== docs page size guard =="
   python scripts/check_docs_page_sizes.py
 fi

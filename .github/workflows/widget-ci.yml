@@ -74,6 +74,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: bobleesj/quantem.gpu
+          # Stacked migration: return this to main after quantem.gpu#4 lands.
+          ref: aug-17-shared-display-webgpu-migration
           path: quantem-gpu-src
 
       - uses: actions/setup-python@v6

@@ -109,10 +109,10 @@ def test_show4dstem_webgpu_engine_has_selected_index_vi_kernel() -> None:
     assert "const DPC_MEAN_WGSL" in dpc_source
     assert "const DPC_COMPONENT_WGSL" in dpc_source
     assert "adoptBuffer(idx: number, buffer: GPUBuffer" in (
-        repo / "js" / "colormaps.ts"
+        repo / "js" / ".generated" / "engine" / "display" / "webgpu" / "colormaps.ts"
     ).read_text(encoding="utf-8")
     assert "renderSlotDirectWithGpuRangeToCanvas" in (
-        repo / "js" / "colormaps.ts"
+        repo / "js" / ".generated" / "engine" / "display" / "webgpu" / "colormaps.ts"
     ).read_text(encoding="utf-8")
     assert "function buildDetectorMask" not in frontend
     assert "function buildScanMask" not in frontend
@@ -130,8 +130,10 @@ def test_show4dstem_webgpu_engine_has_selected_index_vi_kernel() -> None:
     assert "saveChangesIfLiveComm" in frontend
     assert "requestViPreset" in frontend
     assert '"launch_warm_cache"' in frontend
-    assert "virtualGpuCanvasRef" in frontend
-    assert "renderPanelSlotsDirectToCanvas" in frontend
+    assert "renderPanelSlotsToImageBitmapAsync" in frontend
+    assert "renderSlotDirectWithGpuRangeToImageBitmapAsync" in frontend
+    assert "virtualGpuCanvasRef" not in frontend
+    assert "renderPanelSlotsDirectToCanvas" not in frontend
     assert "renderSlotDirectWithGpuRangeToCanvas" in frontend
 
 

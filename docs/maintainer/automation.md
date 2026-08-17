@@ -27,6 +27,11 @@ real-data proof.
 
 Use `--artifact-dir /tmp/quantem-widget-signoff` when coordinating with another
 agent or serving the report over Tailscale.
+Documentation build entrypoints run `scripts/stage_docs_anywidget_runtime.py`
+before Jupyter Book so baked widget views resolve the installed AnyWidget AMD
+runtime locally instead of depending on a CDN. After the build,
+`scripts/check_docs_widget_provenance.py` verifies that every baked widget uses
+the frontend bundle produced by the checkout under test.
 When served locally, open the report URL in the browser, for example
 `http://127.0.0.1:8779/index.html`.
 Use `--search-root`, `QUANTEM_WIDGET_REAL_DATA_ROOTS`, or

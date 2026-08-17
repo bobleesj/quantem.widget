@@ -712,6 +712,10 @@ def test_showptycho_mps_accel_uses_phase_only_reconstruct(monkeypatch):
         return None, 0.25 if kwargs["compute_loss"] else None, np.zeros((4, 4), dtype=np.float32)
 
     monkeypatch.setattr(mps_engine, "_reconstruct_prepared", fake_reconstruct)
+    monkeypatch.setattr(
+        "quantem.gpu.ssb.compute.mps.backend.mean_dp",
+        lambda _frames: np.ones((4, 4), dtype=np.float32),
+    )
 
     accel = MpsSSBBackend(
         types.SimpleNamespace(shape=(16, 4, 4), detector_sum=None),
@@ -901,6 +905,54 @@ def test_showptycho_export_reuses_matching_exact_bf_companion(
     assert metadata["num_bf"] == 2
     assert metadata["plane"] == 16
     assert (out / "source" / "bf_columns.u8").read_bytes() == source.read_bytes()
+
+
+def test_showptycho_bf_column_export_extracts_exact_scan_crop(tmp_path):
+    """Cropped export preserves exact row-major source scan coordinates."""
+    import h5py
+
+    from quantem.widget.showptycho_webgpu_export import _write_bf_column_source
+
+    master = tmp_path / "scan_master.h5"
+    master.write_bytes(b"master")
+    source = np.zeros((16, 2, 2), dtype=np.uint16)
+    source[:, 0, 1] = np.arange(16, dtype=np.uint16) + 10
+    source[:, 1, 0] = np.arange(16, dtype=np.uint16) + 500
+    data_files = []
+    for part, block in enumerate((source[:8], source[8:]), start=1):
+        data_file = tmp_path / f"scan_data_{part:06d}.h5"
+        with h5py.File(data_file, "w") as handle:
+            handle.create_dataset("entry/data/data", data=block)
+        data_files.append(data_file)
+
+    out = tmp_path / "out"
+    out.mkdir()
+    metadata = _write_bf_column_source(
+        [master, *data_files],
+        out,
+        {
+            "bf_rows": [0, 1],
+            "bf_cols": [1, 0],
+            "scan_region": {
+                "row_start": 1,
+                "row_stop": 3,
+                "col_start": 1,
+                "col_stop": 3,
+                "shape": [2, 2],
+                "source_shape": [4, 4],
+            },
+        },
+    )
+
+    columns = np.fromfile(
+        out / "source" / "bf_columns.u16", dtype="<u2"
+    ).reshape(2, 4)
+    selected = np.asarray([5, 6, 9, 10])
+    np.testing.assert_array_equal(columns[0], selected + 10)
+    np.testing.assert_array_equal(columns[1], selected + 500)
+    assert metadata["scan_shape"] == [2, 2]
+    assert metadata["plane"] == 4
+    assert metadata["bytes_per_bf"] == 8
 
 
 def test_showptycho_folder_ui_reads_only_current_snapshot_state() -> None:
@@ -1112,6 +1164,11 @@ def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     assert "if (isFull || showFFTRef.current)" in ui_source
     assert "publishShowPtychoTestFFT" in ui_source
     assert "__QUANTEM_SHOWPTYCHO_LAST_FFT__" in ui_source
+    assert "reciprocalCoordinatesFromShiftedOffset(" in ui_source
+    assert "shiftedMagnitude(real, imag, pw, ph, true)" in ui_source
+    assert "const cropped = new Float32Array(w * h)" not in ui_source
+    assert "renderPhaseGPU(fftResult.mag, fftResult.pw, fftResult.ph" in ui_source
+    assert "realSpacePixelSize={pixelSize}" in ui_source
     assert "rotationDeg?: number" in source
     assert "updateGeometryRotation" in source
     assert "packGeometry(this.cal, buffers.activeSourceIndices, requested)" in source
@@ -1185,7 +1242,7 @@ def test_showptycho_phase_contrast_coalesces_gpu_updates_without_thumb_swaps():
     assert "if (gpuCmapBusyRef.current[slot])" in ui_source
     assert "gpuCmapPendingRef.current[slot] = launch" in ui_source
     assert "pending?.()" in ui_source
-    assert "engine.applySingle(slot, vmin, vmax, false).then(rgba =>" in ui_source
+    assert "engine.applySingleWithLut(slot, vmin, vmax, cmapName, lut, false).then(rgba =>" in ui_source
     assert "image.data.set(rgba)" in ui_source
     assert "if (!rawPhaseRef.current || contrastRafRef.current !== null) return" in ui_source
     assert "renderRealDisplayRef.current(latest.data, latest.w, latest.h)" in ui_source
