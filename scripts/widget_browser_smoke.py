@@ -96,19 +96,81 @@ class _StaticServer:
             self.thread.join(timeout=5)
 
 
-def _image_nonblank(png_bytes: bytes, *, min_unique: int = 4, min_span: int = 8) -> tuple[bool, dict[str, Any]]:
+def _image_nonblank(
+    png_bytes: bytes,
+    *,
+    min_unique: int = 8,
+    min_span: int = 8,
+    min_nonblack_fraction: float = 0.005,
+    min_nonwhite_fraction: float = 0.05,
+) -> tuple[bool, dict[str, Any]]:
     image = Image.open(BytesIO(png_bytes)).convert("RGB")
     # Downsample for cheap uniqueness checks while preserving blank/flat failures.
     image.thumbnail((160, 160))
     colors = image.getcolors(maxcolors=160 * 160 + 1) or []
     extrema = image.getextrema()
     span = max(hi - lo for lo, hi in extrema)
-    return len(colors) >= min_unique and span >= min_span, {
+    flattened = getattr(image, "get_flattened_data", None)
+    pixels = list(flattened() if flattened is not None else image.getdata())
+    nonblack = sum(1 for pixel in pixels if max(pixel) > 3)
+    nonblack_fraction = nonblack / max(1, len(pixels))
+    nonwhite = sum(1 for pixel in pixels if min(pixel) < 250)
+    nonwhite_fraction = nonwhite / max(1, len(pixels))
+    mean_luminance = sum(
+        0.2126 * red + 0.7152 * green + 0.0722 * blue
+        for red, green, blue in pixels
+    ) / max(1, len(pixels))
+    passed = (
+        len(colors) >= min_unique
+        and span >= min_span
+        and nonblack_fraction >= min_nonblack_fraction
+        and nonwhite_fraction >= min_nonwhite_fraction
+        and mean_luminance > 1.0
+    )
+    return passed, {
         "width": image.width,
         "height": image.height,
         "unique_colors": len(colors),
         "max_channel_span": span,
+        "nonblack_fraction": round(nonblack_fraction, 6),
+        "nonwhite_fraction": round(nonwhite_fraction, 6),
+        "mean_luminance": round(mean_luminance, 3),
     }
+
+
+def _scientific_output_screenshots(
+    page,
+    artifact_dir: Path,
+    screenshot_prefix: str,
+    timeout_ms: int,
+) -> list[dict[str, Any]]:
+    """Capture and validate every composited scientific output region."""
+    outputs: list[dict[str, Any]] = []
+    locator = page.locator("[data-quantem-scientific-output]")
+    for index in range(locator.count()):
+        output = locator.nth(index)
+        name = output.get_attribute("data-quantem-scientific-output") or f"output-{index}"
+        record: dict[str, Any] = {"name": name, "passed": False}
+        try:
+            if not output.is_visible():
+                record["error"] = "output marker is not visible"
+                outputs.append(record)
+                continue
+            output.scroll_into_view_if_needed(timeout=timeout_ms)
+            page.wait_for_timeout(80)
+            png = output.screenshot(timeout=timeout_ms)
+            relative_path = (
+                f"screenshots/{screenshot_prefix}-output-{index:02d}-{_safe_name(name)}.png"
+            )
+            (artifact_dir / relative_path).write_bytes(png)
+            passed, stats = _image_nonblank(png)
+            record.update({"passed": passed, "screenshot": relative_path, "stats": stats})
+            if not passed:
+                record["error"] = "scientific output is black, blank, or flat"
+        except Exception as exc:  # browser evidence should name the exact failed output
+            record["error"] = str(exc)
+        outputs.append(record)
+    return outputs
 
 
 def _sha256(data: bytes) -> str:
@@ -117,6 +179,35 @@ def _sha256(data: bytes) -> str:
 
 def _safe_name(name: str) -> str:
     return "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in name)
+
+
+def _webgpu_adapter_info(page) -> dict[str, Any]:
+    """Return browser adapter evidence without assuming vendor-specific fields."""
+    return dict(
+        page.evaluate(
+            """async () => {
+              if (!navigator.gpu) return {available: false, reason: "navigator.gpu unavailable"};
+              const adapter = await navigator.gpu.requestAdapter({forceFallbackAdapter: false});
+              if (!adapter) return {available: false, reason: "requestAdapter returned null"};
+              const info = adapter.info || {};
+              const values = [info.vendor, info.architecture, info.device, info.description]
+                .filter(Boolean).map(String);
+              const summary = values.join(" ").toLowerCase();
+              const software = Boolean(adapter.isFallbackAdapter) ||
+                ["swiftshader", "llvmpipe", "software"].some((name) => summary.includes(name));
+              return {
+                available: true,
+                vendor: info.vendor || null,
+                architecture: info.architecture || null,
+                device: info.device || null,
+                description: info.description || null,
+                is_fallback_adapter: Boolean(adapter.isFallbackAdapter),
+                software,
+              };
+            }"""
+        )
+        or {}
+    )
 
 
 def _served_export_path(artifact_dir: Path, path: str | Path) -> str:
@@ -609,11 +700,11 @@ def _start_zoom_continuity_probe(page) -> dict[str, Any]:
                   style.display !== "none" && style.visibility !== "hidden" &&
                   Number(style.opacity || "1") > 0.05;
               };
-              const candidates = [...document.querySelectorAll("canvas")]
+              const visibleCanvases = () => [...document.querySelectorAll("canvas")]
                 .map((canvas, index) => ({canvas, index, rect: canvas.getBoundingClientRect()}))
                 .filter((item) => visible(item.canvas))
                 .sort((a, b) => b.rect.width * b.rect.height - a.rect.width * a.rect.height);
-              const target = candidates[0];
+              const target = visibleCanvases()[0];
               if (!target) return {started: false, reason: "no visible canvas"};
               const fingerprint = () => [...document.querySelectorAll("canvas")]
                 .map((canvas, index) => {
@@ -625,7 +716,9 @@ def _start_zoom_continuity_probe(page) -> dict[str, Any]:
                   ].join(":");
                 }).join("|");
               const isFlat = () => {
-                const canvas = target.canvas;
+                const current = visibleCanvases()[0];
+                if (!current) return null;
+                const canvas = current.canvas;
                 const ctx = canvas.getContext("2d", {willReadFrequently: true});
                 if (!ctx) return null;
                 try {
@@ -645,12 +738,14 @@ def _start_zoom_continuity_probe(page) -> dict[str, Any]:
                   return null;
                 }
               };
+              const baselineFlat = isFlat();
               const probe = {
                 active: true,
                 frames: 0,
                 compositionChanges: 0,
                 flatFrames: 0,
                 readableFrames: 0,
+                baselineReadable: baselineFlat !== null,
                 baseline: fingerprint(),
                 target: {index: target.index, width: target.canvas.width, height: target.canvas.height},
               };
@@ -674,6 +769,46 @@ def _start_zoom_continuity_probe(page) -> dict[str, Any]:
     )
 
 
+def _wait_for_canvas_composition_stable(
+    page,
+    *,
+    stable_ms: int = 200,
+    timeout_ms: int = 2500,
+) -> bool:
+    """Wait for asynchronous CPU/WebGPU canvas handoff to finish."""
+    return bool(
+        page.evaluate(
+            """([stableMs, timeoutMs]) => new Promise((resolve) => {
+              const fingerprint = () => [...document.querySelectorAll("canvas")]
+                .map((canvas, index) => {
+                  const rect = canvas.getBoundingClientRect();
+                  const style = getComputedStyle(canvas);
+                  return [
+                    index, Math.round(rect.width), Math.round(rect.height),
+                    style.display, style.visibility, style.opacity || "1",
+                  ].join(":");
+                }).join("|");
+              const started = performance.now();
+              let stableSince = started;
+              let previous = fingerprint();
+              const sample = () => {
+                const now = performance.now();
+                const current = fingerprint();
+                if (current !== previous) {
+                  previous = current;
+                  stableSince = now;
+                }
+                if (now - stableSince >= stableMs) return resolve(true);
+                if (now - started >= timeoutMs) return resolve(false);
+                requestAnimationFrame(sample);
+              };
+              requestAnimationFrame(sample);
+            })""",
+            [stable_ms, timeout_ms],
+        )
+    )
+
+
 def _stop_zoom_continuity_probe(page) -> dict[str, Any]:
     """Stop the rapid-zoom continuity probe and return its frame evidence."""
 
@@ -689,6 +824,7 @@ def _stop_zoom_continuity_probe(page) -> dict[str, Any]:
                 composition_changes: probe.compositionChanges,
                 flat_frames: probe.flatFrames,
                 readable_frames: probe.readableFrames,
+                baseline_readable: probe.baselineReadable,
                 target: probe.target,
               };
             }"""
@@ -705,6 +841,8 @@ def _exercise_zoom_continuity(page, box: dict[str, float]) -> dict[str, Any]:
     report cannot accidentally present an idle FPS as interaction proof.
     """
 
+    if not _wait_for_canvas_composition_stable(page):
+        return {"started": False, "reason": "canvas composition did not settle before zoom"}
     probe = _start_zoom_continuity_probe(page)
     if not probe.get("started"):
         return probe
@@ -748,14 +886,23 @@ def _exercise_show3d_smooth_zoom(page, box: dict[str, float]) -> dict[str, Any]:
     initial = bool(control.is_checked())
     if initial:
         control.click()
-    page.wait_for_timeout(120)
+    page.mouse.dblclick(
+        box["x"] + box["width"] * 0.5,
+        box["y"] + box["height"] * 0.5,
+    )
+    page.wait_for_timeout(220)
     off = {
         "checked": bool(control.is_checked()),
         "image_rendering": visible_rendering(),
         "continuity": _exercise_zoom_continuity(page, box),
     }
+    page.mouse.dblclick(
+        box["x"] + box["width"] * 0.5,
+        box["y"] + box["height"] * 0.5,
+    )
+    page.wait_for_timeout(220)
     control.click()
-    page.wait_for_timeout(120)
+    page.wait_for_timeout(220)
     on = {
         "checked": bool(control.is_checked()),
         "image_rendering": visible_rendering(),
@@ -861,7 +1008,7 @@ def _show3d_reorder_labels(page) -> list[str]:
               return { label, x: rect.x, y: rect.y, width: rect.width, height: rect.height };
             })
             .filter((item) => item.label && item.width > 40 && item.height > 40)
-            .sort((a, b) => a.y - b.y || a.x - b.x)
+            .sort((a, b) => Math.abs(a.y - b.y) < 8 ? a.x - b.x : a.y - b.y)
             .map((item) => item.label);
         }"""
     )
@@ -919,7 +1066,7 @@ def _exercise_show3d_reorder(page) -> dict[str, Any]:
               return { label, x: rect.x, y: rect.y, width: rect.width, height: rect.height };
             })
             .filter((item) => item.label && item.width > 40 && item.height > 40)
-            .sort((a, b) => a.y - b.y || a.x - b.x);
+            .sort((a, b) => Math.abs(a.y - b.y) < 8 ? a.x - b.x : a.y - b.y);
         }"""
     )
     if len(boxes) < 2:
@@ -1200,19 +1347,27 @@ def _semantic_checks(page, row: dict[str, Any], canvas_count: int) -> dict[str, 
                     .map((panel) => panel.textContent.trim())"""
             )
 
-            page.locator('.show4dstem-compare-hide-button[data-frame="1"]').nth(0).click(timeout=2000, force=True)
-            page.wait_for_function(
-                "() => document.querySelectorAll('[aria-label^=\"Show4DSTEM multiple panel\"]').length === 13",
-                timeout=4000,
-            )
-            compare_actions["count_after_hide"] = page.locator('[aria-label^="Show4DSTEM multiple panel"]').count()
-            page.locator(".show4dstem-compare-hidden-menu").nth(0).click(timeout=2000)
-            page.locator('[aria-label="Show Show4DSTEM multiple panel 2"]').nth(0).click(timeout=2000)
-            page.wait_for_function(
-                "() => document.querySelectorAll('[aria-label^=\"Show4DSTEM multiple panel\"]').length === 14",
-                timeout=4000,
-            )
-            compare_actions["count_after_show_all"] = page.locator('[aria-label^="Show4DSTEM multiple panel"]').count()
+            if narrow_viewport:
+                compare_actions["hide_restore_skipped_reason"] = (
+                    "hover-only hide action is intentionally hidden on touch layouts"
+                )
+            else:
+                page.locator('.show4dstem-compare-hide-button[data-frame="1"]').nth(0).click(
+                    timeout=2000,
+                    force=True,
+                )
+                page.wait_for_function(
+                    "() => document.querySelectorAll('[aria-label^=\"Show4DSTEM multiple panel\"]').length === 13",
+                    timeout=4000,
+                )
+                compare_actions["count_after_hide"] = page.locator('[aria-label^="Show4DSTEM multiple panel"]').count()
+                page.locator(".show4dstem-compare-hidden-menu").nth(0).click(timeout=2000)
+                page.locator('[aria-label="Show Show4DSTEM multiple panel 2"]').nth(0).click(timeout=2000)
+                page.wait_for_function(
+                    "() => document.querySelectorAll('[aria-label^=\"Show4DSTEM multiple panel\"]').length === 14",
+                    timeout=4000,
+                )
+                compare_actions["count_after_show_all"] = page.locator('[aria-label^="Show4DSTEM multiple panel"]').count()
             page.locator(".show4dstem-compare-reset").nth(0).click(timeout=2000)
             page.wait_for_function(
                 """() => {
@@ -1256,7 +1411,7 @@ def _semantic_checks(page, row: dict[str, Any], canvas_count: int) -> dict[str, 
         ):
             errors.append(f"Show4DSTEM compare grid has tiny/invalid panels: {compare}")
         compare_text = str(compare.get("text", ""))
-        if (
+        if not narrow_viewport and (
             "Multiple grid" not in compare_text
             and "Compare grid" not in compare_text
             and "Multiple ROI" not in compare_text
@@ -1271,9 +1426,9 @@ def _semantic_checks(page, row: dict[str, Any], canvas_count: int) -> dict[str, 
         after_reorder_key = _panel_text_key((compare_actions.get("after_reorder") or [""])[0])
         if not after_reorder_key.startswith("scan-1"):
             errors.append(f"Show4DSTEM compare reorder did not move scan-1 first: {compare_actions}")
-        if compare_actions.get("count_after_hide") != 13:
+        if not narrow_viewport and compare_actions.get("count_after_hide") != 13:
             errors.append(f"Show4DSTEM compare hide did not remove one panel: {compare_actions}")
-        if compare_actions.get("count_after_show_all") != 14:
+        if not narrow_viewport and compare_actions.get("count_after_show_all") != 14:
             errors.append(f"Show4DSTEM compare show-all did not restore panels: {compare_actions}")
         after_reset_key = _panel_text_key((compare_actions.get("after_reset") or [""])[0])
         if not after_reset_key.startswith("scan-0"):
@@ -1309,6 +1464,7 @@ def _write_html_report(artifact_dir: Path, report: dict[str, Any]) -> None:
         f"<td>{html.escape(row['variant'])}</td>"
         f"<td>{'pass' if row['passed'] else 'fail'}</td>"
         f"<td>{html.escape(str(row['canvas_count']))}</td>"
+        f"<td>{html.escape(str(row.get('scientific_output_count', 0)))}</td>"
         f"<td>{html.escape(format(row.get('fps', 0), '.1f'))}</td>"
         f"<td>{html.escape(', '.join(row.get('story_ids', [])))}</td>"
         f"<td>{html.escape(str(row['switches_clicked']))}</td>"
@@ -1340,11 +1496,12 @@ def _write_html_report(artifact_dir: Path, report: dict[str, Any]) -> None:
 </head>
 <body>
   <h1>quantem.widget browser smoke</h1>
-  <p>This report opens exported HTML in Chromium, checks nonblank rendering, and
-  drives basic widget interactions.</p>
+  <p>This report opens exported HTML in Chromium, drives basic widget
+  interactions, and validates every marked scientific output for nonzero pixels,
+  dynamic range, and multiple rendered colors or tones.</p>
   <p>Passed: <strong>{report['passed']}</strong> / {len(report['pages'])}</p>
   <table>
-    <thead><tr><th>Viewport</th><th>Widget</th><th>Variant</th><th>Status</th><th>Canvases</th><th>FPS</th><th>Stories</th><th>Switches</th><th>Slider</th><th>Canvas changed</th><th>Zoom continuity</th><th>Screenshot</th><th>Errors</th><th>Warnings</th></tr></thead>
+    <thead><tr><th>Viewport</th><th>Widget</th><th>Variant</th><th>Status</th><th>Canvases</th><th>Scientific outputs</th><th>FPS</th><th>Stories</th><th>Switches</th><th>Slider</th><th>Canvas changed</th><th>Zoom continuity</th><th>Screenshot</th><th>Errors</th><th>Warnings</th></tr></thead>
     <tbody>{rows}</tbody>
   </table>
   <h2>Machine-readable report</h2>
@@ -1365,6 +1522,7 @@ def _check_page(
     viewport_label: str,
     fps_sample_ms: int,
     min_fps: float,
+    require_hardware_webgpu: bool,
 ) -> dict[str, Any]:
     page = context.new_page()
     browser_errors: list[str] = []
@@ -1411,6 +1569,8 @@ def _check_page(
         "story_ids": _story_ids_for(row),
         "canvas_count": 0,
         "canvas_nonblank": False,
+        "scientific_output_count": 0,
+        "scientific_outputs": [],
         "canvas_changed": False,
         "zoom_continuity": {},
         "fps": 0.0,
@@ -1427,6 +1587,13 @@ def _check_page(
         page.goto(result["url"], wait_until="domcontentloaded", timeout=timeout_ms)
         page.wait_for_function("document.body && document.body.innerText.length > 0", timeout=timeout_ms)
         page.wait_for_timeout(700)
+
+        adapter = _webgpu_adapter_info(page)
+        result["webgpu_adapter"] = adapter
+        if require_hardware_webgpu and (
+            not adapter.get("available") or adapter.get("software")
+        ):
+            result["errors"].append(f"hardware WebGPU adapter required: {adapter}")
 
         boxes = _visible_canvas_boxes(page)
         result["canvas_count"] = len(boxes)
@@ -1450,12 +1617,22 @@ def _check_page(
                 result["zoom_continuity"] = continuity
                 if not continuity.get("started"):
                     result["errors"].append(f"zoom continuity probe did not start: {continuity}")
-                elif continuity.get("composition_changes", 0) > 0:
+                elif continuity.get("flat_frames", 0) > 0:
+                    result["errors"].append("zoom exposed a blank or flat canvas frame")
+                elif (
+                    continuity.get("composition_changes", 0) > 0
+                    and continuity.get("baseline_readable")
+                ):
                     result["errors"].append(
                         "zoom changed the visible canvas composition; retained pixels were not preserved"
                     )
-                elif continuity.get("readable_frames", 0) and continuity.get("flat_frames", 0) > 0:
-                    result["errors"].append("zoom exposed a blank or flat canvas frame")
+                elif (
+                    continuity.get("composition_changes", 0) > 0
+                    and not continuity.get("readable_frames", 0)
+                ):
+                    result["errors"].append(
+                        "zoom changed from WebGPU without a readable retained canvas"
+                    )
 
             if widget == "show3d":
                 smooth_zoom = _exercise_show3d_smooth_zoom(page, box)
@@ -1479,18 +1656,44 @@ def _check_page(
                             result["errors"].append(
                                 f"Show3D Smooth {state_name} zoom probe did not start: {continuity}"
                             )
-                        elif continuity.get("composition_changes", 0) > 0:
+                        elif continuity.get("flat_frames", 0) > 0:
+                            result["errors"].append(
+                                f"Show3D Smooth {state_name} exposed a blank or flat canvas frame"
+                            )
+                        elif (
+                            continuity.get("composition_changes", 0) > 0
+                            and continuity.get("baseline_readable")
+                        ):
                             result["errors"].append(
                                 f"Show3D Smooth {state_name} changed visible canvas composition during zoom"
                             )
-                        elif continuity.get("readable_frames", 0) and continuity.get("flat_frames", 0) > 0:
+                        elif (
+                            continuity.get("composition_changes", 0) > 0
+                            and not continuity.get("readable_frames", 0)
+                        ):
                             result["errors"].append(
-                                f"Show3D Smooth {state_name} exposed a blank or flat canvas frame"
+                                f"Show3D Smooth {state_name} changed from WebGPU without a readable retained canvas"
                             )
 
             _drive_canvas(page, box)
             after = locator.screenshot(timeout=timeout_ms)
             result["canvas_changed"] = _sha256(before) != _sha256(after)
+
+        output_prefix = f"{_safe_name(viewport_label)}-{_safe_name(variant)}"
+        scientific_outputs = _scientific_output_screenshots(
+            page, artifact_dir, output_prefix, timeout_ms
+        )
+        result["scientific_outputs"] = scientific_outputs
+        result["scientific_output_count"] = len(scientific_outputs)
+        if widget != "showfolder" and not scientific_outputs:
+            result["errors"].append("no marked scientific output")
+        for output in scientific_outputs:
+            if not output["passed"]:
+                result["errors"].append(
+                    f"scientific output {output['name']!r} failed: "
+                    f"{output.get('error', 'pixel thresholds not met')}; "
+                    f"stats={output.get('stats', {})}"
+                )
 
         semantic = _semantic_checks(page, row, int(result["canvas_count"]))
         result["semantic_checks"] = semantic
@@ -1539,6 +1742,11 @@ def main() -> int:
     parser.add_argument("--min-fps", type=float, default=30.0, help="Minimum requestAnimationFrame FPS for each page.")
     parser.add_argument("--fps-sample-ms", type=int, default=1000, help="Milliseconds to sample requestAnimationFrame FPS.")
     parser.add_argument("--mobile", action="store_true", help="Also run the smoke in a 390x844 mobile Chromium viewport.")
+    parser.add_argument(
+        "--require-hardware-webgpu",
+        action="store_true",
+        help="Fail unless every page can acquire a non-software WebGPU adapter.",
+    )
     args = parser.parse_args()
 
     try:
@@ -1596,6 +1804,7 @@ def main() -> int:
                                 viewport_label,
                                 args.fps_sample_ms,
                                 args.min_fps,
+                                args.require_hardware_webgpu,
                             )
                             for row in rows
                         )
@@ -1612,6 +1821,7 @@ def main() -> int:
         "mobile": bool(args.mobile),
         "min_fps": float(args.min_fps),
         "fps_sample_ms": int(args.fps_sample_ms),
+        "require_hardware_webgpu": bool(args.require_hardware_webgpu),
         "passed": sum(1 for page in pages if page["passed"]),
         "pages": pages,
     }

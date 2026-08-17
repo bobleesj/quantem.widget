@@ -22,6 +22,7 @@ src/quantem/widget/static/browser/
 
 # Docs build
 docs/_build/
+docs/_extra/tutorials/anywidget.js
 
 # OS / scratch
 .DS_Store

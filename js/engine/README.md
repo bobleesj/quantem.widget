@@ -4,7 +4,7 @@ The reusable WebGPU browser-compute sources are generated into
 `js/.generated/engine/` from their scientific domains in `quantem.gpu` before
 frontend builds.
 
-Edit the canonical source under `quantem.gpu/src/quantem/gpu/device/`, `io/`,
+Edit the canonical source under `quantem.gpu/src/quantem/gpu/device/`, `display/`, `io/`,
 `detector/`, `dpc/`, or `ssb/`, then run:
 
 ```bash
@@ -18,3 +18,7 @@ HDF5 browser IO, Show4DSTEM reduction, or ShowPtycho SSB kernels.
 `quantem.widget` owns the UI, bundling, and exported HTML runtime. The shared
 kernel math and browser compute engine source belong in `quantem.gpu`,
 including Show4DSTEM WebGPU IO/reductions and ShowPtycho WebGPU SSB.
+
+See `docs/maintainer/gpu-migration.md` for the current migration boundary,
+coverage, acceptance gates, and known limitations. A synchronized source file
+is not by itself evidence that a migration is complete.

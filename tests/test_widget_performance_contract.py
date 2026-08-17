@@ -174,6 +174,9 @@ def test_show2d_folder_uint8_export_uses_per_panel_frame_files():
     assert "data-show2d-selected-panel={selectedIdx}" in show2d_js
     assert "onMouseDownCapture={handleRootMouseDownCapture}" in show2d_js
     assert "const uint8FolderPreviewMode = !!uint8FolderFrameBytes ||" in show2d_js
+    assert "engine.uploadUint8Data(" in show2d_js
+    assert "engine!.renderSlotScaledToImageBitmapAsync(" in show2d_js
+    assert "await Promise.all(indices.map" in show2d_js
     assert "previousSource.frameSourceKey !== frameSourceKey" in show2d_js
     assert "def _show2d_main_canvas_screenshots" in profile
     assert "visible Show2D main canvases were blank/flat" in profile
@@ -260,7 +263,7 @@ def test_show2d_hidden_panels_skip_hot_render_paths():
     show2d = (ROOT / "js" / "show2d" / "index.tsx").read_text(encoding="utf-8")
 
     assert "visibleImageIndicesRef.current = visibleImageIndices;" in show2d
-    assert "for (const i of visibleImageIndices) {\n        if (isRgbFlags && isRgbFlags[i]) continue; // painted directly above" in show2d
+    assert "for (const i of visibleImageIndices) {\n        if (!isRgbFlags[i]) continue;" in show2d
     assert "const indices = visibleImageIndices.filter(i => i >= 0 && i < capturedNImages);" in show2d
     assert "const signature = visibleImageIndices.map((i) => {" in show2d
     assert "for (const i of visibleImageIndices) {\n        const win = currentDetailWindow(i);" in show2d
@@ -494,7 +497,9 @@ def test_show3d_frontend_playback_budget_is_sixty_fps():
 def test_show3d_many_panel_zoom_uses_the_resident_gpu_transform_path():
     """Many-panel zoom samples the packed resident stack without retransfers."""
     show3d = (ROOT / "js" / "show3d" / "index.tsx").read_text(encoding="utf-8")
-    colormaps = (ROOT / "js" / "colormaps.ts").read_text(encoding="utf-8")
+    colormaps = (
+        ROOT / "js" / ".generated" / "engine" / "display" / "webgpu" / "colormaps.ts"
+    ).read_text(encoding="utf-8")
 
     assert "const renderGpuPackedPanelTransformSlice" in show3d
     assert "renderGpuPackedPanelTransformSlice(idx, false)" in show3d
@@ -547,6 +552,48 @@ def test_browser_smoke_guards_zoom_canvas_continuity():
     assert "zoom changed the visible canvas composition" in smoke
     assert "zoom exposed a blank or flat canvas frame" in smoke
     assert 'if widget in {"show2d", "show3d", "showptycho"}:' in smoke
+
+
+def test_browser_smoke_guards_every_scientific_output_against_black_frames():
+    """C1: every widget output is named and checked as composited pixels."""
+    smoke = (ROOT / "scripts" / "widget_browser_smoke.py").read_text(encoding="utf-8")
+    widget_sources = [
+        ROOT / "js" / name / "index.tsx"
+        for name in (
+            "show1d",
+            "show2d",
+            "show3d",
+            "show3dslices",
+            "show4dstem",
+            "showeds",
+            "showptycho",
+            "showdiffraction",
+        )
+    ]
+
+    assert "def _scientific_output_screenshots" in smoke
+    assert "def _webgpu_adapter_info" in smoke
+    assert '"--require-hardware-webgpu"' in smoke
+    assert 'page.locator("[data-quantem-scientific-output]")' in smoke
+    assert "min_nonblack_fraction" in smoke
+    assert "min_nonwhite_fraction" in smoke
+    assert "scientific output is black, blank, or flat" in smoke
+    for path in widget_sources:
+        assert "data-quantem-scientific-output" in path.read_text(encoding="utf-8")
+
+
+def test_tutorial_smoke_rejects_visible_widget_load_errors():
+    """A styled error overlay must never pass as colorful scientific output."""
+    smoke = (ROOT / "scripts" / "widget_tutorial_interactivity_smoke.py").read_text(
+        encoding="utf-8"
+    )
+    show4dstem = (ROOT / "js" / "show4dstem" / "index.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert '[data-quantem-load-error="true"]:visible' in smoke
+    assert "visible widget load error(s)" in smoke
+    assert "data-quantem-load-error" in show4dstem
 
 
 def test_show3d_stress_runner_covers_single_file_resident_exports():
@@ -888,9 +935,10 @@ def test_show2d_show3d_foreground_canvas_repaint_uses_cached_fft_contract():
     assert "autoEnhanceFFT(magnitude, dims.width, dims.height)" in show2d
     assert "createGPUColormapEngine().then" in show2d
     assert "getGPUColormapEngine().then" not in show2d
-    assert "Diff WebGPU FFT failed; using CPU worker" in show2d_diff_fft_compute
-    assert "mag = result.magnitude" in show2d_diff_fft_compute
-    assert "Do not shift again: the worker result is already centered" in show2d_diff_fft_compute
+    assert "const gpu = gpuFFTRef.current || await getWebGPUFFT()" in show2d_diff_fft_compute
+    assert "await gpu.fft2D(real, imag, fftW, fftH, false)" in show2d_diff_fft_compute
+    assert "fft2dAsync" not in show2d_diff_fft_compute
+    assert "using CPU worker" not in show2d_diff_fft_compute
     assert "inputData = data.slice();\n          applyHannWindow2D(inputData, width, height);" in show2d_single_fft_compute
     assert "applyHannWindow2D(inputData, curW, curH)" in show2d_gallery_fft_compute
     assert "renderSlotsToImageBitmapAsync([fftSlot]" in show2d

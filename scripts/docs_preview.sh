@@ -32,7 +32,9 @@ done
 cd "$(dirname "$0")/.."
 
 if [[ "$build" -eq 1 ]]; then
+  python scripts/stage_docs_anywidget_runtime.py
   jupyter-book build docs --all
+  python scripts/check_docs_widget_provenance.py docs/_build/html
 fi
 
 if [[ ! -d docs/_build/html ]]; then

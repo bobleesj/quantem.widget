@@ -34,7 +34,8 @@ import { useTheme, type ThemeColors } from "../theme";
 import { extractFloat32, formatNumber } from "../format";
 import { percentileClip } from "../stats";
 import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, GPUColormapEngine, getGPUColormapEngine } from "../colormaps";
-import { fft2d, nextPow2, fftshift, computeMagnitude, applyHannWindow2D, getWebGPUFFT, WebGPUFFT } from "../fft";
+import { nextPow2, shiftedMagnitude, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset, requireWebGPUFFT, WebGPUFFT } from "../fft";
+import { findFFTPeakWebGPU } from "../geometry";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI } from "../figure";
 import { computeHistogramFromBytes } from "../stats";
 import { WebGPUSSBBackend, deleteSSBFolderFile, readSSBFolderBytes, readSSBFolderJson, setSSBLocalDirectory, setSSBLocalFiles, ssbFolderWritable, ssbNeedsLocalSource, writeSSBFolderFile, type WebGPULoadProgress } from "../.generated/engine/ssb/compute/webgpu/backend";
@@ -355,64 +356,26 @@ function prepareFFTInput(data: Float32Array, w: number, h: number) {
   return { real, imag, pw, ph };
 }
 
-/** Crop log-magnitude back to original size + fftshift. Shared postlude. */
+/** Preserve the complete padded Fourier grid, shift DC to center, and log-scale. */
 function finalizeFFTMag(
   real: Float32Array, imag: Float32Array,
-  w: number, h: number, pw: number,
+  pw: number, ph: number,
 ): Float32Array {
-  const fullMag = computeMagnitude(real, imag);
-  const cropped = new Float32Array(w * h);
-  for (let y = 0; y < h; y++)
-    for (let x = 0; x < w; x++)
-      cropped[y * w + x] = fullMag[y * pw + x];
-  fftshift(cropped, w, h);
-  for (let i = 0; i < cropped.length; i++) cropped[i] = Math.log1p(cropped[i]);
-  return cropped;
+  return shiftedMagnitude(real, imag, pw, ph, true);
 }
 
-/** CPU fallback: synchronous JS FFT. */
 /** Find brightest pixel in FFT mag within radius of (col,row), then sub-pixel
  *  refine via 3×3 weighted centroid. Mirrors show2d's d-spacing snap. */
-function findFFTPeak(mag: Float32Array, width: number, height: number, col: number, row: number, radius: number): { row: number; col: number } {
-  const c0 = Math.max(0, Math.floor(col) - radius);
-  const r0 = Math.max(0, Math.floor(row) - radius);
-  const c1 = Math.min(width - 1, Math.floor(col) + radius);
-  const r1 = Math.min(height - 1, Math.floor(row) + radius);
-  let bestCol = Math.round(col), bestRow = Math.round(row), bestVal = -Infinity;
-  for (let ir = r0; ir <= r1; ir++) {
-    for (let ic = c0; ic <= c1; ic++) {
-      const v = mag[ir * width + ic];
-      if (v > bestVal) { bestVal = v; bestCol = ic; bestRow = ir; }
-    }
-  }
-  const wc0 = Math.max(0, bestCol - 1), wc1 = Math.min(width - 1, bestCol + 1);
-  const wr0 = Math.max(0, bestRow - 1), wr1 = Math.min(height - 1, bestRow + 1);
-  let sumW = 0, sumWC = 0, sumWR = 0;
-  for (let ir = wr0; ir <= wr1; ir++) {
-    for (let ic = wc0; ic <= wc1; ic++) {
-      const w = mag[ir * width + ic];
-      sumW += w; sumWC += w * ic; sumWR += w * ir;
-    }
-  }
-  if (sumW > 0) return { row: sumWR / sumW, col: sumWC / sumW };
-  return { row: bestRow, col: bestCol };
-}
 const FFT_SNAP_RADIUS = 5;
 
-function computeFFTMag(data: Float32Array, w: number, h: number): { mag: Float32Array; pw: number; ph: number } {
-  const { real, imag, pw, ph } = prepareFFTInput(data, w, h);
-  fft2d(real, imag, pw, ph, false);
-  return { mag: finalizeFFTMag(real, imag, w, h, pw), pw, ph };
-}
-
-/** WebGPU FFT when available — offloads from the main thread. */
+/** Hardware WebGPU FFT; no JavaScript FFT fallback is used. */
 async function computeFFTMagGPU(
   gpu: WebGPUFFT,
   data: Float32Array, w: number, h: number,
 ): Promise<{ mag: Float32Array; pw: number; ph: number }> {
   const { real, imag, pw, ph } = prepareFFTInput(data, w, h);
   const res = await gpu.fft2D(real, imag, pw, ph, false);
-  return { mag: finalizeFFTMag(res.real, res.imag, w, h, pw), pw, ph };
+  return { mag: finalizeFFTMag(res.real, res.imag, pw, ph), pw, ph };
 }
 
 function renderFFTOffscreen(
@@ -678,7 +641,7 @@ function Histogram({
 function ImagePanel({
   offscreen, offscreenVersion, label, size, tc, zoom, onZoomChange,
   showResize, onResizeStart,
-  pixelSize, imageWidth, isFFT,
+  pixelSize, realSpacePixelSize, imageWidth, isFFT,
   rawData, smooth, inset, cropRegion, cropSelecting, onCropChange,
 }: {
   offscreen: HTMLCanvasElement | null;
@@ -691,6 +654,7 @@ function ImagePanel({
   showResize?: boolean;
   onResizeStart?: (e: React.MouseEvent) => void;
   pixelSize?: number;
+  realSpacePixelSize?: number;
   smooth?: boolean;
   imageWidth?: number;
   isFFT?: boolean;
@@ -847,7 +811,7 @@ function ImagePanel({
   }, [cropSelecting, imageCoordinate, isFFT, publishCrop]);
   // Mouse up handler on the FFT canvas: detect short click (no drag) and
   // compute d-spacing at the clicked peak, snapped to the nearest local-max.
-  const onFFTUp = React.useCallback((e: React.MouseEvent) => {
+  const onFFTUp = React.useCallback(async (e: React.MouseEvent) => {
     if (!isFFT || !fftClickStartRef.current || !offscreen || !rawData) return;
     const dx = e.clientX - fftClickStartRef.current.x;
     const dy = e.clientY - fftClickStartRef.current.y;
@@ -864,7 +828,13 @@ function ImagePanel({
     const fftW = offscreen.width, fftH = offscreen.height;
     if (imgCol < 0 || imgCol >= fftW || imgRow < 0 || imgRow >= fftH) return;
     // Snap to nearest local-max — same as Show3D's findFFTPeak.
-    const snapped = findFFTPeak(rawData, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
+    let snapped: { row: number; col: number };
+    try {
+      snapped = await findFFTPeakWebGPU(rawData, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
+    } catch (error) {
+      console.error("[ShowPtycho] WebGPU FFT peak refinement failed", error);
+      return;
+    }
     imgCol = snapped.col; imgRow = snapped.row;
     // After fftshift, DC sits at (fftW/2, fftH/2). Pixel-distance from DC.
     const halfW = Math.floor(fftW / 2);
@@ -873,23 +843,15 @@ function ImagePanel({
     const drow = imgRow - halfH;
     const distPx = Math.sqrt(dcol * dcol + drow * drow);
     if (distPx < 1) { setFftClickInfo(null); return; }
-    // Bin → frequency. FFT computed at zero-padded next-pow2 size, cropped
-    // back to fftW. Bin index is mod-fftW (cropped), divisor is paddedW
-    // (true FFT resolution). Mirrors Show3D's d-spacing math exactly.
     let spatialFreq: number | null = null;
     let dSpacing: number | null = null;
-    if (pixelSize && pixelSize > 0) {
-      const paddedW = nextPow2(fftW);
-      const paddedH = nextPow2(fftH);
-      const binC = ((Math.round(imgCol) - halfW) % fftW + fftW) % fftW;
-      const binR = ((Math.round(imgRow) - halfH) % fftH + fftH) % fftH;
-      const freqC = binC <= paddedW / 2 ? binC / (paddedW * pixelSize) : (binC - paddedW) / (paddedW * pixelSize);
-      const freqR = binR <= paddedH / 2 ? binR / (paddedH * pixelSize) : (binR - paddedH) / (paddedH * pixelSize);
-      spatialFreq = Math.sqrt(freqC * freqC + freqR * freqR);
-      dSpacing = spatialFreq > 0 ? 1 / spatialFreq : null;
+    if (realSpacePixelSize && realSpacePixelSize > 0) {
+      ({ spatialFrequency: spatialFreq, dSpacing } = reciprocalCoordinatesFromShiftedOffset(
+        drow, dcol, fftH, fftW, realSpacePixelSize, realSpacePixelSize,
+      ));
     }
     setFftClickInfo({ row: imgRow, col: imgCol, distPx, spatialFreq, dSpacing });
-  }, [isFFT, offscreen, rawData, size, pixelSize, imageWidth]);
+  }, [isFFT, offscreen, rawData, size, realSpacePixelSize]);
   const onLeaveFFT = React.useCallback(() => { fftClickStartRef.current = null; }, []);
 
   // Cursor readout: map mouse position through zoom/pan to raw-data indices
@@ -955,6 +917,7 @@ function ImagePanel({
     <Box sx={{ width: size, flexShrink: 0, display: "flex", flexDirection: "column" }}>
       <Box sx={{ ...container.imageBox, bgcolor: tc.bgAlt, border: `1px solid ${tc.border}`, width: size, height: size }}>
         <canvas
+          data-quantem-scientific-output={label}
           aria-label={label}
           ref={canvasRef}
           onMouseDown={onDown}
@@ -1074,7 +1037,7 @@ function FFTInset({
     ctx.restore();
   }, [fftClickInfo, offscreen, size]);
 
-  const measurePeak = React.useCallback((clientX: number, clientY: number) => {
+  const measurePeak = React.useCallback(async (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
     if (!canvas || !offscreen || !rawData) return;
     const rect = canvas.getBoundingClientRect();
@@ -1088,7 +1051,13 @@ function FFTInset({
     const fftW = offscreen.width;
     const fftH = offscreen.height;
     if (imgCol < 0 || imgCol >= fftW || imgRow < 0 || imgRow >= fftH) return;
-    const snapped = findFFTPeak(rawData, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
+    let snapped: { row: number; col: number };
+    try {
+      snapped = await findFFTPeakWebGPU(rawData, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
+    } catch (error) {
+      console.error("[ShowPtycho] WebGPU inset peak refinement failed", error);
+      return;
+    }
     imgCol = snapped.col; imgRow = snapped.row;
     const halfW = Math.floor(fftW / 2);
     const halfH = Math.floor(fftH / 2);
@@ -1100,14 +1069,9 @@ function FFTInset({
     }
     let dSpacing: number | null = null;
     if (pixelSize && pixelSize > 0) {
-      const paddedW = nextPow2(fftW);
-      const paddedH = nextPow2(fftH);
-      const binC = ((Math.round(imgCol) - halfW) % fftW + fftW) % fftW;
-      const binR = ((Math.round(imgRow) - halfH) % fftH + fftH) % fftH;
-      const freqC = binC <= paddedW / 2 ? binC / (paddedW * pixelSize) : (binC - paddedW) / (paddedW * pixelSize);
-      const freqR = binR <= paddedH / 2 ? binR / (paddedH * pixelSize) : (binR - paddedH) / (paddedH * pixelSize);
-      const spatialFreq = Math.sqrt(freqC * freqC + freqR * freqR);
-      dSpacing = spatialFreq > 0 ? 1 / spatialFreq : null;
+      ({ dSpacing } = reciprocalCoordinatesFromShiftedOffset(
+        drow, dcol, fftH, fftW, pixelSize, pixelSize,
+      ));
     }
     setFftClickInfo({ row: imgRow, col: imgCol, dSpacing });
   }, [offscreen, rawData, size, pixelSize]);
@@ -1133,7 +1097,7 @@ function FFTInset({
     const handleUp = (upEvent: MouseEvent) => {
       document.removeEventListener("mousemove", handleMove);
       document.removeEventListener("mouseup", handleUp);
-      if (!moved) measurePeak(upEvent.clientX, upEvent.clientY);
+      if (!moved) void measurePeak(upEvent.clientX, upEvent.clientY);
     };
     document.addEventListener("mousemove", handleMove);
     document.addEventListener("mouseup", handleUp);
@@ -1937,24 +1901,23 @@ function Explore() {
     }
   }, [localSourceGranted, webgpuPreviewEnabled, webgpuCalJson, webgpuH5SourceJson, webgpuPreviewStatus]);
 
-  // WebGPU FFT (async, off main thread). Null until init resolves or if unsupported.
+  // Hardware WebGPU FFT. Missing hardware remains an explicit unsupported state.
   const gpuFFTRef = React.useRef<WebGPUFFT | null>(null);
   // Generation counter — discards stale async FFT results when newer data arrives.
   const fftGenRef = React.useRef(0);
   React.useEffect(() => {
     let cancelled = false;
-    getWebGPUFFT().then(fft => {
-      if (!cancelled && fft) gpuFFTRef.current = fft;
+    requireWebGPUFFT("ShowPtycho FFT").then(fft => {
+      if (!cancelled) gpuFFTRef.current = fft;
+    }).catch(error => {
+      if (!cancelled) setWebgpuRuntimeStatus(error instanceof Error ? error.message : String(error));
     });
     return () => { cancelled = true; };
   }, []);
 
   // WebGPU colormap engine.
-  // ShowPtycho uses the shared WebGPU colormap engine only for the primary
-  // phase panel.  The engine has one LUT binding, so using it concurrently for
-  // FFT/amplitude can make those panels leak their colormap back into phase.
-  // Extra panels use the deterministic CPU path until the shared engine grows
-  // true per-slot LUT bindings.
+  // Each panel binds an explicitly named LUT through applySingleWithLut, so
+  // phase/FFT/amplitude submissions cannot leak colormaps across slots.
   // Generation counter discards stale async GPU results if newer data lands first.
   const gpuCmapRef = React.useRef<GPUColormapEngine | null>(null);
   const gpuCmapGenRef = React.useRef<Record<GPUColormapSlot, number>>({ 0: 0, 1: 0, 2: 0 });
@@ -1965,21 +1928,17 @@ function Explore() {
   const [fftVersion, setFftVersion] = React.useState(0);
   const [ampVersion, setAmpVersion] = React.useState(0);
   const gpuCmapReadyRef = React.useRef(false);
-  // Track the LUT currently uploaded to each slot so we only re-upload when the cmap changes.
-  const gpuCmapCurrentLutRef = React.useRef<Record<GPUColormapSlot, string | null>>({ 0: null, 1: null, 2: null });
   // Track the data uploaded to each slot so we only re-upload on real data change.
   const gpuSlotDataRef = React.useRef<Record<GPUColormapSlot, Float32Array | null>>({ 0: null, 1: null, 2: null });
   React.useEffect(() => {
     let cancelled = false;
     getGPUColormapEngine().then(engine => {
       if (cancelled) return;
-      if (engine) {
-        gpuCmapRef.current = engine;
-        gpuCmapReadyRef.current = true;
-        console.log("[showptycho] WebGPU colormap engine initialized");
-      } else {
-        console.log("[showptycho] no WebGPU colormap — falling back to CPU renderToOffscreen");
-      }
+      gpuCmapRef.current = engine;
+      gpuCmapReadyRef.current = true;
+      console.log("[showptycho] WebGPU colormap engine initialized");
+    }).catch(error => {
+      if (!cancelled) setWebgpuRuntimeStatus(error instanceof Error ? error.message : String(error));
     });
     return () => { cancelled = true; };
   }, []);
@@ -2350,11 +2309,9 @@ function Explore() {
   const [dataRange, setDataRange] = React.useState({ min: 0, max: 1 });
   const [fftDataRange, setFftDataRange] = React.useState({ min: 0, max: 1 });
 
-  /* --- GPU colormap render for phase — uploads data once, re-applies cmap
-         shader when contrast/cmap changes.  Falls back to the CPU path if
-         the WebGPU engine isn't available on this browser. --- */
+  /* --- GPU colormap render for phase — uploads data once and re-applies the
+         shader when contrast/cmap changes. Hardware WebGPU is required. --- */
   const renderPhaseGPU = React.useCallback((data: Float32Array, w: number, h: number, slot: GPUColormapSlot, cmapName: string, pctLo: number, pctHi: number) => {
-    if (slot !== 0) return false;
     const engine = gpuCmapRef.current;
     if (!engine || !gpuCmapReadyRef.current) return false;
     const gen = ++gpuCmapGenRef.current[slot];
@@ -2366,13 +2323,7 @@ function Explore() {
         engine.uploadData(slot, data, w, h);
         gpuSlotDataRef.current[slot] = data;
       }
-      // Upload LUT only when cmap changes (cheap but still avoid per-frame work).
-      const fullLutKey = `${slot}:${cmapName}`;
-      if (gpuCmapCurrentLutRef.current[slot] !== fullLutKey) {
-        const lut = COLORMAPS[cmapName as keyof typeof COLORMAPS] || COLORMAPS.viridis;
-        engine.uploadLUT(cmapName, lut);
-        gpuCmapCurrentLutRef.current[slot] = fullLutKey;
-      }
+      const lut = COLORMAPS[cmapName as keyof typeof COLORMAPS] || COLORMAPS.viridis;
       // Compute vmin/vmax from data+percentiles on CPU (cheap, ~1 ms for 512²).
       const { vmin, vmax, min, max } = percentileClip(data, pctLo, pctHi);
       // Keep at most one GPU colormap pass in flight per slot. Histogram input
@@ -2380,7 +2331,7 @@ function Explore() {
       // ranges drain later and looks like the phase contrast flips/jitters.
       // applySingle keeps the colormap compute on WebGPU but avoids the flaky
       // OffscreenCanvas/ImageBitmap snapshot path.
-      engine.applySingle(slot, vmin, vmax, false).then(rgba => {
+      engine.applySingleWithLut(slot, vmin, vmax, cmapName, lut, false).then(rgba => {
         if (gen !== gpuCmapGenRef.current[slot] || !rgba) return;
         let canvas = gpuSlotCanvasRef.current[slot];
         const fresh = !canvas || canvas.width !== w || canvas.height !== h;
@@ -2436,18 +2387,12 @@ function Explore() {
         const ampData = phaseDisplayData(phase, "amp", displayDataCacheRef);
         ampDataRef.current = { data: ampData, w, h };
         if (extras.amp) {
-          if (!renderPhaseGPU(ampData, w, h, 2, cmapRef.current, contrastRange[0], contrastRange[1])) {
-            const lut = COLORMAPS[cmapRef.current as keyof typeof COLORMAPS] || COLORMAPS.viridis;
-            setAmpOff(renderPhaseOffscreen(ampData, w, h, lut, contrastRange[0], contrastRange[1]).canvas);
-          }
+          renderPhaseGPU(ampData, w, h, 2, cmapRef.current, contrastRange[0], contrastRange[1]);
         } else {
           setAmpOff(null);
         }
-        if (extras.complex) {
-          setComplexOff(renderComplexPhaseOffscreen(phase, w, h, contrastRange[0], contrastRange[1]).canvas);
-        } else {
-          setComplexOff(null);
-        }
+        setComplexOff(null);
+        if (extras.complex) setWebgpuRuntimeStatus("Complex HSV view is not yet available on WebGPU; phase and amplitude remain GPU-native.");
       } else {
         ampDataRef.current = null;
         setAmpOff(null);
@@ -2455,38 +2400,23 @@ function Explore() {
       }
       return { clipMs: 0, renderMs: 0, min: 0, max: 1, canvas: null, gpuHandled: true };
     }
-    // CPU fallback — WebGPU colormap unavailable in this browser/context.
-    const lut = COLORMAPS[cmapRef.current as keyof typeof COLORMAPS] || COLORMAPS.viridis;
-    const cpu = renderPhaseOffscreen(displayData, w, h, lut, contrastRange[0], contrastRange[1]);
-    setPhaseOff(cpu.canvas);
-    setDataRange({ min: cpu.min, max: cpu.max });
-    const extras = extraRealViewsRef.current;
-    if (extras.amp || extras.complex) {
-      const ampData = phaseDisplayData(phase, "amp", displayDataCacheRef);
-      ampDataRef.current = { data: ampData, w, h };
-      setAmpOff(extras.amp ? renderPhaseOffscreen(ampData, w, h, lut, contrastRange[0], contrastRange[1]).canvas : null);
-      setComplexOff(extras.complex ? renderComplexPhaseOffscreen(phase, w, h, contrastRange[0], contrastRange[1]).canvas : null);
-    } else {
-      ampDataRef.current = null;
-      setAmpOff(null);
-      setComplexOff(null);
-    }
-    return { clipMs: cpu.clipMs, renderMs: cpu.renderMs, min: cpu.min, max: cpu.max, canvas: cpu.canvas, gpuHandled: false };
+    setPhaseOff(null);
+    setAmpOff(null);
+    setComplexOff(null);
+    setWebgpuRuntimeStatus("ShowPtycho display requires hardware WebGPU; no CPU colormap fallback is used.");
+    return { clipMs: 0, renderMs: 0, min: 0, max: 1, canvas: null, gpuHandled: true };
   }, [contrastRange, renderPhaseGPU]);
 
   /* --- Re-render FFT when its contrast/cmap changes (no FFT recompute).
-         GPU-first; CPU fallback.  Uses the user-selected FFT colormap
+         Uses the user-selected FFT colormap
          (defaults to inferno but follows the dropdown state). --- */
   const rerenderFFT = React.useCallback(() => {
     const f = fftMagRef.current;
     if (!f) return;
     // Try GPU path (slot 1 reserved for FFT magnitude).
     if (renderPhaseGPU(f.mag, f.w, f.h, 1, fftCmap, fftContrastRange[0], fftContrastRange[1])) return;
-    // CPU fallback
-    const lut = COLORMAPS[fftCmap as keyof typeof COLORMAPS] || COLORMAPS.inferno;
-    const { canvas, min, max } = renderFFTOffscreen(f.mag, f.w, f.h, lut, fftContrastRange[0], fftContrastRange[1]);
-    setFFTOff(canvas);
-    setFftDataRange({ min, max });
+    setFFTOff(null);
+    setWebgpuRuntimeStatus("ShowPtycho FFT display requires hardware WebGPU.");
   }, [fftContrastRange, fftCmap, renderPhaseGPU]);
 
   /* --- Full render: real-space view synchronous, FFT only when requested. --- */
@@ -2579,31 +2509,31 @@ function Explore() {
     }
 
     const applyFFT = (fftResult: { mag: Float32Array; pw: number; ph: number }) => {
-      fftMagRef.current = { mag: fftResult.mag, w, h, pw: fftResult.pw, ph: fftResult.ph };
-      publishShowPtychoTestFFT(fftResult.mag, w, h, fftResult.pw, fftResult.ph);
+      fftMagRef.current = { mag: fftResult.mag, w: fftResult.pw, h: fftResult.ph, pw: fftResult.pw, ph: fftResult.ph };
+      publishShowPtychoTestFFT(fftResult.mag, fftResult.pw, fftResult.ph, fftResult.pw, fftResult.ph);
       const fr = fftContrastRef.current;
       const fftCmapName = fftCmapRef.current;
       // GPU-first for the FFT panel too (slot 1).
-      if (renderPhaseGPU(fftResult.mag, w, h, 1, fftCmapName, fr[0], fr[1])) return;
-      const lut = COLORMAPS[fftCmapName as keyof typeof COLORMAPS] || COLORMAPS.inferno;
-      const fftRender = renderFFTOffscreen(fftResult.mag, w, h, lut, fr[0], fr[1]);
-      setFFTOff(fftRender.canvas);
-      setFftDataRange({ min: fftRender.min, max: fftRender.max });
+      if (!renderPhaseGPU(fftResult.mag, fftResult.pw, fftResult.ph, 1, fftCmapName, fr[0], fr[1])) {
+        setFFTOff(null);
+        setWebgpuRuntimeStatus("ShowPtycho FFT display requires hardware WebGPU.");
+      }
     };
 
     const gen = ++fftGenRef.current;
-    const gpu = gpuFFTRef.current;
-    if (gpu) {
-      computeFFTMagGPU(gpu, data, w, h).then(fftResult => {
+    void (gpuFFTRef.current
+      ? Promise.resolve(gpuFFTRef.current)
+      : requireWebGPUFFT("ShowPtycho FFT")).then(gpu => {
+      gpuFFTRef.current = gpu;
+      return computeFFTMagGPU(gpu, data, w, h);
+    }).then(fftResult => {
         if (gen !== fftGenRef.current) return;  // stale — newer data already rendered
         applyFFT(fftResult);
-      }).catch(() => {
-        if (gen !== fftGenRef.current) return;
-        applyFFT(computeFFTMag(data, w, h));
-      });
-    } else {
-      applyFFT(computeFFTMag(data, w, h));
-    }
+    }).catch(error => {
+      if (gen !== fftGenRef.current) return;
+      setFFTOff(null);
+      setWebgpuRuntimeStatus(error instanceof Error ? error.message : String(error));
+    });
   }, [renderPhaseGPU, renderRealDisplay]);
 
   const runFrontendPreview = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal: number): boolean => {
@@ -2666,9 +2596,8 @@ function Explore() {
         setWebgpuRuntimeStatus(`WebGPU folder failed: ${message}`);
       } else {
         webgpuSsbRef.current = null;
-        setWebgpuLoadProgress(null);
-        setWebgpuRuntimeStatus(`WebGPU preview failed; using Python path: ${message}`);
-        fireRequest(c10Val, c12Val, phi12Val, true);
+        setWebgpuLoadProgress({ stage: "error", message: "WebGPU ptychography failed", detail: message, percent: 0 });
+        setWebgpuRuntimeStatus(`WebGPU preview failed: ${message}`);
       }
     }).finally(() => {
       webgpuInFlightRef.current = false;
@@ -3161,10 +3090,15 @@ function Explore() {
     if (!phaseRender.canvas) throw new Error("Could not render phase export frame.");
     let fftCanvas: HTMLCanvasElement | null = null;
     if (showFFTRef.current) {
-      const fft = computeFFTMag(phase, result.width, result.height);
+      const fft = await computeFFTMagGPU(
+        await requireWebGPUFFT("ShowPtycho animation FFT"),
+        phase,
+        result.width,
+        result.height,
+      );
       const fftLut = COLORMAPS[fftCmapRef.current as keyof typeof COLORMAPS] || COLORMAPS.inferno;
       const fr = fftContrastRef.current;
-      fftCanvas = renderFFTOffscreen(fft.mag, result.width, result.height, fftLut, fr[0], fr[1]).canvas;
+      fftCanvas = renderFFTOffscreen(fft.mag, fft.pw, fft.ph, fftLut, fr[0], fr[1]).canvas;
     }
     const panelEdge = Math.max(64, Math.min(maxPanelEdge, result.width, result.height));
     const labelH = 22;
@@ -3430,11 +3364,9 @@ function Explore() {
   const fftPixelSize = React.useMemo(() => {
     const f = fftMagRef.current;
     if (!f || !pixelSize || pixelSize <= 0) return 0;
-    // Reciprocal pixel size: 1 / (padded_N * real_space_pixel_size)
-    // We use the padded width since FFT was computed on padded grid, but
-    // we crop back to original size, so use original width for display.
+    // Reciprocal pixel size of the complete padded Fourier grid.
     return 1.0 / (f.w * pixelSize);
-  }, [pixelSize, fftOff]);
+  }, [pixelSize, fftVersion]);
 
   /* --- Derived --- */
   const delta = loss != null && autoLoss > 0 ? loss - autoLoss : null;
@@ -3769,7 +3701,8 @@ function Explore() {
             offscreen={fftOff} offscreenVersion={fftVersion} label="FFT" size={panel} tc={tc}
             zoom={fftZoom} onZoomChange={setFFTZoom}
             showResize onResizeStart={startResize}
-            pixelSize={fftPixelSize} imageWidth={rawPhaseRef.current?.w} isFFT
+            pixelSize={fftPixelSize} realSpacePixelSize={pixelSize}
+            imageWidth={fftMagRef.current?.w} isFFT
             rawData={fftMagRef.current?.mag}
           />
         )}

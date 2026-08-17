@@ -6,6 +6,7 @@
 
 import { readH5Volume } from "../../../js/.generated/engine/io/backends/webgpu/h5reader";
 import { DetectorCompute } from "../../../js/.generated/engine/detector/compute/webgpu/backend";
+import { annulusMask, diskMask } from "../../../js/.generated/engine/detector/geometry";
 import { decodeBslz4Batch, type Bslz4Spec } from "../../../js/.generated/engine/io/backends/webgpu/bslz4";
 import type { Session, MasterFile, RawData, DetectorMode, DetShape, ShapeParams, DetBin, BrowseDtype } from "../pages/browse/types";
 
@@ -509,92 +510,6 @@ function fitBfDisk(meanDP: Float32Array, detRows: number, detCols: number): { cy
 }
 
 // --- masks ---------------------------------------------------------------
-function diskMask(detRows: number, detCols: number, cy: number, cx: number, rad: number): Uint32Array {
-  const m = new Uint32Array(detRows * detCols), r2 = rad * rad;
-  for (let r = 0; r < detRows; r++) for (let c = 0; c < detCols; c++) {
-    const dr = r - cy, dc = c - cx; if (dr * dr + dc * dc <= r2) m[r * detCols + c] = 1;
-  }
-  return m;
-}
-function annulusMask(detRows: number, detCols: number, cy: number, cx: number, inner: number, outer: number): Uint32Array {
-  const m = new Uint32Array(detRows * detCols), i2 = inner * inner, o2 = outer * outer;
-  for (let r = 0; r < detRows; r++) for (let c = 0; c < detCols; c++) {
-    const dr = r - cy, dc = c - cx, d2 = dr * dr + dc * dc; if (d2 >= i2 && d2 <= o2) m[r * detCols + c] = 1;
-  }
-  return m;
-}
-
-function mean(a: Float32Array): number { let s = 0; for (const v of a) s += v; return s / (a.length || 1); }
-
-// In-place radix-2 Cooley-Tukey FFT (re/im length must be a power of two). sign=-1 forward.
-function fft1d(re: Float32Array, im: Float32Array, sign: number): void {
-  const n = re.length;
-  for (let i = 1, j = 0; i < n; i++) {
-    let bit = n >> 1;
-    for (; j & bit; bit >>= 1) j ^= bit;
-    j ^= bit;
-    if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
-  }
-  for (let len = 2; len <= n; len <<= 1) {
-    const ang = sign * 2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
-    for (let i = 0; i < n; i += len) {
-      let cr = 1, ci = 0;
-      for (let k = 0; k < len / 2; k++) {
-        const ar = re[i + k], ai = im[i + k];
-        const br = re[i + k + len / 2], bi = im[i + k + len / 2];
-        const tr = br * cr - bi * ci, ti = br * ci + bi * cr;
-        re[i + k] = ar + tr; im[i + k] = ai + ti;
-        re[i + k + len / 2] = ar - tr; im[i + k + len / 2] = ai - ti;
-        const ncr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = ncr;
-      }
-    }
-  }
-}
-function fft2d(re: Float32Array, im: Float32Array, rows: number, cols: number, sign: number): void {
-  const rr = new Float32Array(cols), ri = new Float32Array(cols);
-  for (let r = 0; r < rows; r++) {
-    rr.set(re.subarray(r * cols, r * cols + cols)); ri.set(im.subarray(r * cols, r * cols + cols));
-    fft1d(rr, ri, sign);
-    re.set(rr, r * cols); im.set(ri, r * cols);
-  }
-  const cr = new Float32Array(rows), ci = new Float32Array(rows);
-  for (let c = 0; c < cols; c++) {
-    for (let r = 0; r < rows; r++) { cr[r] = re[r * cols + c]; ci[r] = im[r * cols + c]; }
-    fft1d(cr, ci, sign);
-    for (let r = 0; r < rows; r++) { re[r * cols + c] = cr[r]; im[r * cols + c] = ci[r]; }
-  }
-}
-
-// Integrated CoM (DPC phase): solve grad(phi) = (dx, dy) in Fourier space,
-// phi_hat = (-i kx Gx - i ky Gy)/(kx^2 + ky^2), DC = 0. Real part is the phase image.
-// Falls back to CoM magnitude when the scan isn't a power-of-two square (FFT needs it).
-function integrateICoM(dx: Float32Array, dy: Float32Array, rows: number, cols: number): Float32Array {
-  const pow2 = (x: number) => (x & (x - 1)) === 0;
-  if (!pow2(rows) || !pow2(cols)) { const m = new Float32Array(dx.length); for (let i = 0; i < m.length; i++) m[i] = Math.hypot(dx[i], dy[i]); return m; }
-  const gxr = Float32Array.from(dx), gxi = new Float32Array(dx.length);
-  const gyr = Float32Array.from(dy), gyi = new Float32Array(dy.length);
-  fft2d(gxr, gxi, rows, cols, -1);
-  fft2d(gyr, gyi, rows, cols, -1);
-  const pr = new Float32Array(dx.length), pi = new Float32Array(dx.length);
-  for (let r = 0; r < rows; r++) {
-    const ky = 2 * Math.PI * (r <= rows / 2 ? r : r - rows) / rows;
-    for (let c = 0; c < cols; c++) {
-      const kx = 2 * Math.PI * (c <= cols / 2 ? c : c - cols) / cols;
-      const k2 = kx * kx + ky * ky;
-      const i = r * cols + c;
-      if (k2 === 0) continue;
-      // numerator = -i*kx*Gx - i*ky*Gy ; dividing complex G by treating -i*k as multiplier
-      const nr = kx * gxi[i] + ky * gyi[i];        // real part of (-i k)(Gr+iGi) = k*Gi
-      const ni = -(kx * gxr[i] + ky * gyr[i]);     // imag part = -k*Gr
-      pr[i] = nr / k2; pi[i] = ni / k2;
-    }
-  }
-  fft2d(pr, pi, rows, cols, +1);
-  const out = new Float32Array(dx.length), norm = rows * cols;
-  for (let i = 0; i < out.length; i++) out[i] = pr[i] / norm;   // inverse FFT normalization
-  return out;
-}
-
 function reshapeVI(vi: Float32Array, ds: LoadedDS): RawData { return { data: vi, width: ds.scanCols, height: ds.scanRows }; }
 function reshapeDP(dp: Float32Array, ds: LoadedDS): RawData { return { data: dp, width: ds.detCols, height: ds.detRows }; }
 
@@ -609,9 +524,8 @@ export async function datasetMeanDp(source: string, date: string, name: string, 
   const ds = await ensureLoaded(source, date, name, detBin, dtype); return ds.meanDP;
 }
 
-// GPU-resident virtual image for the 60fps aperture-drag fast path: returns the maskedSum/DPC
-// result as a GPU buffer (NO readback) so the caller colormaps it straight to the canvas.
-// CoMmag/iCoM still need CPU post-processing, so they stay on the readback path.
+// GPU-resident virtual image for the 60fps aperture-drag fast path: returns the
+// masked-sum/DPC result as a GPU buffer so the caller can colorize it directly.
 export async function virtualImageBufferGpu(
   source: string, date: string, name: string, mode: DetectorMode,
   inner: number, outer: number, cx: number | null, cy: number | null, detBin: DetBin = 1, dtype: BrowseDtype = "uint8",
@@ -621,8 +535,16 @@ export async function virtualImageBufferGpu(
   let mask: Uint32Array;
   if (mode === "BF") mask = diskMask(ds.detRows, ds.detCols, ccy, ccx, (outer || 1) * r);
   else if (mode === "ADF" || mode === "DF") mask = annulusMask(ds.detRows, ds.detCols, ccy, ccx, (inner || 1.2) * r, (outer || 4) * r);
-  else if (mode === "CoMx" || mode === "CoMy") mask = diskMask(ds.detRows, ds.detCols, ccy, ccx, 1.5 * r);
+  else if (mode === "CoMx" || mode === "CoMy" || mode === "CoMmag" || mode === "iCoM") mask = diskMask(ds.detRows, ds.detCols, ccy, ccx, 1.5 * r);
   else return null;
+  if (mode === "CoMmag") {
+    const { buffer } = await ds.compute.maskedDpcMagnitudeBuffer(mask, ds.detCols);
+    return { buffer, width: ds.scanCols, height: ds.scanRows };
+  }
+  if (mode === "iCoM") {
+    const { buffer } = await ds.compute.maskedIDpcBuffer(mask, ds.detCols, ds.scanRows, ds.scanCols);
+    return { buffer, width: ds.scanCols, height: ds.scanRows };
+  }
   const { buffer } = mode === "CoMx"
     ? ds.compute.maskedDpcBuffer(mask, ds.detCols, "col")
     : mode === "CoMy"
@@ -632,7 +554,7 @@ export async function virtualImageBufferGpu(
 }
 
 // Virtual image for a detector MODE with alpha-unit ring radii (1 = BF disk edge), like the
-// server's /realspace. BF = disk; ADF/DF = annulus. CoM/iCoM/SSB not yet on the GPU path.
+// server's /realspace. BF = disk; ADF/DF = annulus; CoM/iCoM are WebGPU DPC products.
 export async function virtualImage(
   source: string, date: string, name: string, mode: DetectorMode,
   inner: number, outer: number, cx: number | null, cy: number | null, detBin: DetBin = 1, dtype: BrowseDtype = "uint8",
@@ -652,17 +574,22 @@ export async function virtualImage(
       ds,
     );
   }
-  const { comY, comX } = await ds.compute.maskedCoM(comMask, ds.detCols);
-  const my = mean(comY), mx = mean(comX);
-  const dy = new Float32Array(comY.length), dx = new Float32Array(comX.length);
-  for (let i = 0; i < dy.length; i++) { dy[i] = comY[i] - my; dx[i] = comX[i] - mx; }  // remove descan offset
-  let field: Float32Array;
-  if (mode === "CoMx") field = dx;
-  else if (mode === "CoMy") field = dy;
-  else if (mode === "CoMmag") { field = new Float32Array(dx.length); for (let i = 0; i < dx.length; i++) field[i] = Math.hypot(dx[i], dy[i]); }
-  else if (mode === "iCoM") field = integrateICoM(dx, dy, ds.scanRows, ds.scanCols);
-  else return null;
-  return reshapeVI(field, ds);
+  if (mode === "CoMmag") {
+    return reshapeVI(await ds.compute.maskedDpcMagnitude(comMask, ds.detCols), ds);
+  }
+  if (mode === "CoMx") {
+    return reshapeVI(await ds.compute.maskedDpc(comMask, ds.detCols, "col"), ds);
+  }
+  if (mode === "CoMy") {
+    return reshapeVI(await ds.compute.maskedDpc(comMask, ds.detCols, "row"), ds);
+  }
+  if (mode === "iCoM") {
+    return reshapeVI(
+      await ds.compute.maskedIDpc(comMask, ds.detCols, ds.scanRows, ds.scanCols),
+      ds,
+    );
+  }
+  return null;
 }
 
 // CoM parity probe: raw per-scan intensity-weighted centroid (comY, comX) over the BF-disk

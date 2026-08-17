@@ -12,7 +12,7 @@
 import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyDisplayFilterCPU, resolvePanelDenoiseKnobs } from "./displayFilter";
+import { applyDisplayFilterBrowser, applyDisplayFilterCPU, resolvePanelDenoiseKnobs } from "./displayFilter";
 
 describe("per-panel denoise knobs", () => {
   it("returns the selected panel's independent mode, sigma, and bin", () => {
@@ -31,6 +31,14 @@ describe("per-panel denoise knobs", () => {
       [1, 1, 2],
       fallback,
     )).toEqual({ mode: "anscombe", sigma: 8, bin: 2 });
+  });
+});
+
+describe("display filter production backend", () => {
+  it("rejects active filtering when hardware WebGPU is unavailable", async () => {
+    await expect(applyDisplayFilterBrowser(
+      new Float32Array(15), 5, 3, "gaussian", 1.5, 1,
+    )).rejects.toThrow(/requires hardware WebGPU|requires a hardware WebGPU adapter/);
   });
 });
 

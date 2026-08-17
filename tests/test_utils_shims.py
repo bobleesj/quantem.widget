@@ -11,12 +11,14 @@ def test_state_io_compatibility_shim():
 
 
 def test_recon_config_compatibility_shim():
+    from quantem.gpu.display.geometry import rotate_stack_inplane
     from quantem.widget import config_utils
     from quantem.widget.utils import recon_config
 
     assert config_utils._load_quantem_config is recon_config._load_quantem_config
     assert config_utils._pixel_size_from_quantem_config is recon_config._pixel_size_from_quantem_config
     assert config_utils._rotate_stack_inplane is recon_config._rotate_stack_inplane
+    assert recon_config._rotate_stack_inplane.__globals__["rotate_stack_inplane"] is rotate_stack_inplane
 
 
 def test_array_utils_compatibility_shim():
