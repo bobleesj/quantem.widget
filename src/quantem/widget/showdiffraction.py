@@ -23,6 +23,7 @@ from scipy.signal.windows import tukey
 
 from quantem.widget.export import ensure_mobile_viewport
 from quantem.widget.utils.array import to_numpy
+from quantem.widget.utils.display_filter import apply_display_filter
 from quantem.widget.utils.state_io import resolve_widget_version, save_state_file, unwrap_state_payload
 from quantem.widget.utils.ui import UiMode, resolve_ui_mode
 
@@ -1703,6 +1704,14 @@ class ShowDiffraction(anywidget.AnyWidget):
         Search radius in pixels for snapping / Gaussian refinement.
     spot_refine : bool, default True
         Sub-pixel refine spots with a 2D Gaussian fit on add.
+    detect_denoise : {"auto", "none", "gaussian", "anscombe"}, default "auto"
+        Denoise applied to the frame before center refinement and spot/ring
+        detection. "auto" estimates the noise level and picks a mode; fits
+        and measurements always run on the raw data, so positions are not
+        biased by the smoothing. Set the ``show_detection_view`` trait to
+        display the denoised view instead of the raw frame, or the
+        ``denoise`` trait for a display-only filter (``"nlm"`` keeps spots
+        sharp) that touches neither detection nor measurements.
     dp_scale_mode : str, default "log"
         Diffraction display scaling ("linear", "log", "sqrt").
     ui_mode : {"interactive", "presentation", "report", "minimal"}, default "interactive"
@@ -1763,6 +1772,9 @@ class ShowDiffraction(anywidget.AnyWidget):
         "snap_enabled",
         "snap_radius",
         "spot_refine",
+        "detect_denoise",
+        "show_detection_view",
+        "denoise",
         "center_mode",
         "calibration_source",
         "calibration_ref_d",
@@ -1867,6 +1879,15 @@ class ShowDiffraction(anywidget.AnyWidget):
     rings = traitlets.List(traitlets.Dict()).tag(sync=True)
 
     spot_refine = traitlets.Bool(True).tag(sync=True)
+
+    # Denoise
+    detect_denoise = traitlets.Enum(
+        ("auto", "none", "gaussian", "anscombe"), default_value="auto"
+    ).tag(sync=True)
+    show_detection_view = traitlets.Bool(False).tag(sync=True)
+    denoise = traitlets.Enum(
+        ("none", "gaussian", "anscombe", "nlm", "tv"), default_value="none"
+    ).tag(sync=True)
 
     # Indexing
     zone_axis = traitlets.Unicode("").tag(sync=True)
@@ -1978,6 +1999,7 @@ class ShowDiffraction(anywidget.AnyWidget):
         snap_enabled: bool = False,
         snap_radius: int = 5,
         spot_refine: bool = True,
+        detect_denoise: str = "auto",
         dp_scale_mode: str = "log",
         ui_mode: UiMode = "interactive",
         show_title: bool | None = None,
@@ -2019,6 +2041,7 @@ class ShowDiffraction(anywidget.AnyWidget):
         self.snap_enabled = snap_enabled
         self.snap_radius = snap_radius
         self.spot_refine = spot_refine
+        self.detect_denoise = detect_denoise
         ui = resolve_ui_mode(
             ui_mode,
             defaults={
@@ -2102,7 +2125,10 @@ class ShowDiffraction(anywidget.AnyWidget):
             self.auto_detect_center()
 
     def _observe_traits(self) -> None:
-        self.observe(self._update_frame, names=["frame_idx"])
+        self.observe(
+            self._update_frame,
+            names=["frame_idx", "detect_denoise", "show_detection_view", "denoise"],
+        )
         self.observe(self._bake_offline_frames, names=["offline"])
         self.observe(self._on_spot_add_request, names=["_spot_add_request"])
         self.observe(self._on_spot_undo_request, names=["_spot_undo_request"])
@@ -2211,7 +2237,7 @@ class ShowDiffraction(anywidget.AnyWidget):
             raise ValueError(f"unknown refine method {method!r}")
 
         picked = pick_center(
-            self._displayed_frame().astype(np.float64),
+            self._detection_frame().astype(np.float64),
             method=method,
             mask=self._analysis_mask(),
             guess=(self.center_row, self.center_col),
@@ -2256,8 +2282,44 @@ class ShowDiffraction(anywidget.AnyWidget):
     def _displayed_frame(self) -> np.ndarray:
         return self._get_frame(self.frame_idx)
 
-    def _update_frame(self, change=None):
+    def _detection_frame(self) -> np.ndarray:
         frame = self._displayed_frame()
+        mode = self._resolve_detect_denoise(frame)
+        if mode == "none":
+            return frame
+        return apply_display_filter(frame, mode=mode, sigma=2.0)
+
+    def _resolve_detect_denoise(self, frame: np.ndarray) -> str:
+        mode = self.detect_denoise
+        if mode != "auto":
+            return mode
+
+        frame = np.asarray(frame, dtype=np.float64)
+        positive = frame[frame > 0]
+        if positive.size == 0:
+            return "none"
+
+        # Counting data
+        counts = positive / float(positive.min())
+        if np.allclose(counts, np.round(counts), atol=1e-3):
+            return "anscombe" if float(np.median(counts)) <= 30.0 else "none"
+
+        # Continuous data
+        residual = frame - ndimage.median_filter(frame, size=3)
+        noise = 1.4826 * float(np.median(np.abs(residual)))
+        if noise <= 0.0:
+            return "none"
+
+        signal = float(np.percentile(frame, 99.5) - np.median(frame))
+        return "gaussian" if signal < 50.0 * noise else "none"
+
+    def _update_frame(self, change=None):
+        if self.show_detection_view:
+            frame = self._detection_frame()
+        elif self.denoise != "none":
+            frame = apply_display_filter(self._displayed_frame(), mode=self.denoise, sigma=2.0)
+        else:
+            frame = self._displayed_frame()
         self.dp_stats = [
             float(frame.mean()),
             float(frame.min()),
@@ -2353,10 +2415,16 @@ class ShowDiffraction(anywidget.AnyWidget):
         min_distance: int = 6,
         min_relative: float = 0.1,
         exclude_radius: float | None = None,
+        noise_sigma: float = 5.0,
         replace: bool = True,
     ) -> Self:
-        """Detect Bragg spots with contrast at least ``min_relative`` of the strongest peak."""
-        frame = self._displayed_frame().astype(np.float64)
+        """Detect Bragg spots with contrast at least ``min_relative`` of the strongest peak.
+
+        ``noise_sigma`` sets the shot-noise contrast floor in robust sigma
+        units; lower it on frames whose background structure inflates the
+        estimate (diffuse scattering, detector shadows).
+        """
+        frame = self._detection_frame().astype(np.float64)
         n_rows, n_cols = frame.shape
         if exclude_radius is None:
             exclude_radius = max(self.bf_radius, 2.0 * float(min_distance))
@@ -2387,7 +2455,7 @@ class ShowDiffraction(anywidget.AnyWidget):
         # contrast relative to the strongest peak, with a noise floor on noisy data
         contrast = np.expm1(prominence)
         sigma = 1.4826 * float(np.median(np.abs(work - np.median(work))))
-        level = max(min_relative * float(contrast.max()), float(np.expm1(5.0 * sigma)))
+        level = max(min_relative * float(contrast.max()), float(np.expm1(noise_sigma * sigma)))
         keep = (prominence > 0) & (contrast >= level)
         coords, prominence = coords[keep], prominence[keep]
         if coords.size:
@@ -2424,7 +2492,7 @@ class ShowDiffraction(anywidget.AnyWidget):
     ) -> Self:
         """Detect Debye-Scherrer rings from radial profile peaks (max_rings=None keeps all)."""
         try:
-            radii_px, intensity = self._radial_profile()
+            radii_px, intensity = self._radial_profile(frame=self._detection_frame())
         except Exception:
             return self
         y = np.asarray(intensity, dtype=np.float64)
@@ -2876,6 +2944,53 @@ class ShowDiffraction(anywidget.AnyWidget):
                 continue
         return phases
 
+    def recover_predicted_rings(
+        self, phase: Phase, *, tol_px: float = 4.0, snr: float = 3.0
+    ) -> list[float]:
+        """Add rings the detector missed at radii the calibrated phase predicts.
+
+        For each allowed reflection with no ring within ``tol_px``, the raw
+        radial profile is tested near the predicted radius; a local maximum
+        at least ``snr`` robust sigmas above the detrended profile noise
+        becomes a ring. Returns the added radii in pixels.
+        """
+        if not self.k_calibrated:
+            raise ValueError("recover_predicted_rings needs a k calibration")
+
+        radii_px, intensity = self._radial_profile()
+        y_log = np.log1p(np.clip(intensity - intensity.min(), 0.0, None))
+        detrended = y_log - ndimage.gaussian_filter1d(y_log, sigma=max(3.0, y_log.size / 20.0))
+        # Profile noise estimate
+        steps = np.diff(detrended)
+        noise = 1.4826 * float(np.median(np.abs(steps))) / np.sqrt(2.0)
+        if noise <= 0.0:
+            return []
+
+        existing = [r["radius_px"] for r in self.rings]
+        added = []
+        for ref in phase.reflections():
+            r_pred = 1.0 / (ref["d"] * self.k_pixel_size)
+            if r_pred <= self.bf_radius or r_pred >= float(radii_px[-1]):
+                continue
+            if any(abs(r_pred - r) <= tol_px for r in existing):
+                continue
+            window = np.abs(radii_px - r_pred) <= tol_px
+            if not window.any():
+                continue
+            idx = np.flatnonzero(window)
+            peak = idx[np.argmax(detrended[idx])]
+            # Peak checks
+            if peak in (0, len(detrended) - 1) or peak in (idx[0], idx[-1]):
+                continue
+            if detrended[peak] < snr * noise:
+                continue
+            if detrended[peak] <= detrended[peak - 1] or detrended[peak] <= detrended[peak + 1]:
+                continue
+            self.add_ring(float(radii_px[peak]))
+            existing.append(float(radii_px[peak]))
+            added.append(float(radii_px[peak]))
+        return added
+
     def run_auto(
         self,
         phase: Phase | None = None,
@@ -2909,6 +3024,12 @@ class ShowDiffraction(anywidget.AnyWidget):
                 problems.append(f"calibration failed ({exc})")
                 phase = None
         if phase is not None and self.k_calibrated:
+            # Ring recovery
+            if self.recover_predicted_rings(phase):
+                try:
+                    self.fit_ring_profile()
+                except (ValueError, ImportError):
+                    pass
             try:
                 self.index_rings(phase)
                 if not any(r.get("hkl") for r in self.rings):
@@ -3040,8 +3161,10 @@ class ShowDiffraction(anywidget.AnyWidget):
         center: tuple[float, float] | None = None,
         angular_range: tuple[float, float] | None = None,
         frame_idx: int | None = None,
+        frame: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
-        frame = self._displayed_frame() if frame_idx is None else self._get_frame(frame_idx)
+        if frame is None:
+            frame = self._displayed_frame() if frame_idx is None else self._get_frame(frame_idx)
         return radial_profile_px(
             frame,
             center=center or (self.center_row, self.center_col),
