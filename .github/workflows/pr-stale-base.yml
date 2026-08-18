@@ -1,0 +1,18 @@
+name: pr stale base
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  guidance:
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    uses: bobleesj/github-bots/.github/workflows/_pr-stale-base.yml@v0
