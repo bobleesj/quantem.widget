@@ -1,14 +1,19 @@
 name: pr cleanup guidance
 
 on:
+  pull_request:
   pull_request_target:
     types: [opened, reopened, closed]
 
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   guidance:
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
     uses: bobleesj/github-bots/.github/workflows/_pr-cleanup-guidance.yml@v0
