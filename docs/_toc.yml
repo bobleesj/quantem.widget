@@ -23,7 +23,6 @@ parts:
           - file: tutorials/show4dstem_multiple
             title: Compare datasets or tilts
       - file: tutorials/showptycho
-      - file: tutorials/show1d
       - file: tutorials/show2d
       - file: tutorials/show3d
       - file: tutorials/show3dslices
@@ -66,7 +65,6 @@ parts:
         sections:
           - file: api/datasets
           - file: api/viewer-ui
-          - file: api/show1d
           - file: api/show2d
           - file: api/mask2d
           - file: api/show3d
