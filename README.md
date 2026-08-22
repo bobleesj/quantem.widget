@@ -39,7 +39,6 @@ for backend setup, Colab instructions, and verification.
 
 | Widget | Use it for | Learn more |
 |---|---|---|
-| `Show1D` | Scientific traces, reconstruction metrics, and live monitors | [API](https://electronmicroscopy.github.io/quantem.widget/api/show1d.html) |
 | `Show2D` | Images, contrast, FFTs, ROIs, profiles, and scale bars | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/show2d.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/show2d.html) |
 | `Mask2D` | Draw one rectangle, square, or circle and use its Boolean mask directly in Python | [guide and API](https://electronmicroscopy.github.io/quantem.widget/api/mask2d.html) |
 | `Show3D` | Scrub and play through image or volume stacks | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/show3d.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/show3d.html) |
