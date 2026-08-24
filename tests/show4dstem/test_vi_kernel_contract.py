@@ -114,6 +114,9 @@ def test_show4dstem_webgpu_engine_has_selected_index_vi_kernel() -> None:
     assert "renderSlotDirectWithGpuRangeToCanvas" in (
         repo / "js" / ".generated" / "engine" / "display" / "webgpu" / "colormaps.ts"
     ).read_text(encoding="utf-8")
+    assert "renderPanelSlotsToImageBitmapAsync" in (
+        repo / "js" / ".generated" / "engine" / "display" / "webgpu" / "colormaps.ts"
+    ).read_text(encoding="utf-8")
     assert "function buildDetectorMask" not in frontend
     assert "function buildScanMask" not in frontend
     assert "buildFullDetectorMask" in frontend
@@ -135,6 +138,11 @@ def test_show4dstem_webgpu_engine_has_selected_index_vi_kernel() -> None:
     assert "virtualGpuCanvasRef" not in frontend
     assert "renderPanelSlotsDirectToCanvas" not in frontend
     assert "renderSlotDirectWithGpuRangeToCanvas" in frontend
+    assert "compareGpuRangesRef" in frontend
+    assert "computeRangeBatch(batchSlots)" in frontend
+    assert "gpuRanges={compareGpuRangesRef.current}" in frontend
+    assert "rangeReadbackBytes" in frontend
+    assert "gpuOnlyHotPath: stats.lastRangeReadbackBytes === 0" in frontend
 
 
 def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
@@ -376,22 +384,61 @@ def test_show4dstem_multiple_detector_drag_uses_live_gpu_compare_slots() -> None
         "requestViFinalizeRef.current",
         1,
     )[0]
-    assert "await recomputeVI();" in live_drag
-    assert "await recomputeCompareVI();" in live_drag
-    assert live_drag.index("await recomputeVI();") < live_drag.index(
-        "await recomputeCompareVI();"
+    visible_route = frontend.split(
+        "const recomputeVisibleVirtualImages = async () => {",
+        1,
+    )[1].split(
+        '(window as unknown as { __sh4d: unknown })',
+        1,
+    )[0]
+    assert 'mode === "multiple" || mode === "compare"' in visible_route
+    assert visible_route.index("await recomputeCompareVI();") < visible_route.index(
+        "await recomputeVI();"
     )
+    assert "void recomputeVisibleVirtualImages().finally" in live_drag
+    assert "recomputeVI" not in live_drag
+    assert "recomputeCompareVI" not in live_drag
+    finalize = frontend.split("requestViFinalizeRef.current = () => {", 1)[1].split(
+        "};",
+        1,
+    )[0]
+    assert "void recomputeVisibleVirtualImages();" in finalize
+    detector_drag = frontend.split(
+        "const handleDpMouseMove =",
+        1,
+    )[1].split(
+        "const handleDpMouseUp =",
+        1,
+    )[0]
+    assert "Keep the detector geometry subpixel while dragging." in detector_drag
+    assert "Math.round(Math.max(0, Math.min(detCols - 1, centerCol)))" not in (
+        detector_drag
+    )
+    detector_resize = frontend.split(
+        "const resizeDpRoiFromImagePoint =",
+        1,
+    )[1].split(
+        "React.useEffect(() => {",
+        1,
+    )[0]
+    assert "Math.round(newRadius)" not in detector_resize
     assert 'type DpcGpuSource = "DPC_row" | "DPC_col" | "iDPC";' in frontend
-    assert "gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine)" in frontend
+    assert "gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuRanges?.has(frame) && gpuEngine)" in frontend
     assert 'scaleMode === "log"' in frontend
     assert "entry.panel !== undefined || entry.gpuLoaded" in frontend
     assert "const loaded = panel !== undefined || gpuLoaded;" in frontend
     assert "onChangeCommitted={finishDpRoiInteraction}" in frontend
     assert "__sh4dLiveViStats" in frontend
-    assert "gpuOnlyHotPath: true" in frontend
+    assert "gpuOnlyHotPath: stats.lastRangeReadbackBytes === 0" in frontend
     assert 'publishLiveCompareViStats("paint"' in frontend
     assert "if (gpuEngine) gpuEngine.uploadLUT(colormap, lut);" in frontend
-    assert "renderSlotDirectWithGpuRangeToCanvas" in frontend
+    assert "renderPanelSlotsToImageBitmapAsync" in frontend
+    assert "width: shapeCols * panels.length" in frontend
+    assert "panelCount: panels.length" in frontend
+    assert "cols: panels.length" in frontend
+    assert "index * shapeCols" in frontend
+    assert 'panel.canvas.getContext("2d")' in frontend
+    assert "computeRangeBatch(batchSlots)" in frontend
     assert "renderSlotGpuRangeToOffscreen" not in frontend
     assert "let comparePersistentStack: Float32Array | null = null;" in frontend
     assert "if (getVol && !volIsResident(idx)) continue;" in frontend
