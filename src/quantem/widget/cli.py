@@ -19,6 +19,7 @@ compressed HDF5 family on disk and lets Chrome range-fetch/decompress H5 chunks
 instead of preprocessing every frame before the viewer opens.
 """
 import argparse
+import copy
 import email.utils
 import http.server
 import json
@@ -31,6 +32,7 @@ import shutil
 import socketserver
 import sys
 import threading
+import tempfile
 import urllib.parse
 import webbrowser
 
@@ -472,6 +474,8 @@ def _render_html(args: argparse.Namespace) -> int:
 
 # ---------------------------------------------------------------------------
 _WIDGET_CELL = ("Show2D(", "Show3D(", "Show4DSTEM(", "Show3DSlices(", "ShowEDS(")
+_WIDGET_STATE_MIME = "application/vnd.jupyter.widget-state+json"
+_WIDGET_VIEW_MIME = "application/vnd.jupyter.widget-view+json"
 
 
 def _add_github_args(parser: argparse.ArgumentParser) -> None:
@@ -481,6 +485,8 @@ def _add_github_args(parser: argparse.ArgumentParser) -> None:
                         help="Use the notebook's existing outputs instead of re-running it.")
     parser.add_argument("--quality", type=int, default=92,
                         help="JPEG quality for the embedded renders (default 92).")
+    parser.add_argument("--max-width", type=int, default=1200,
+                        help="Maximum embedded UI width in pixels (default 1200).")
     parser.add_argument("--timeout", type=int, default=600,
                         help="Per-cell execution timeout in seconds (default 600).")
 
@@ -489,11 +495,24 @@ def _strip_state(nb: dict) -> None:
     """Drop the heavy offline live-widget manager-state + the dead widget-view output refs."""
     nb.get("metadata", {}).pop("widgets", None)
     for cell in nb.get("cells", []):
+        kept = []
         for out in cell.get("outputs", []):
             (out.get("data") or {}).pop("application/vnd.jupyter.widget-view+json", None)
+            if out.get("output_type") in {"display_data", "execute_result"} and not (
+                out.get("data") or {}
+            ):
+                continue
+            kept.append(out)
+        if "outputs" in cell:
+            cell["outputs"] = kept
 
 
-def _embed_jpeg(cell: dict, png_or_jpeg: bytes, quality: int) -> bool:
+def _embed_jpeg(
+    cell: dict,
+    png_or_jpeg: bytes,
+    quality: int,
+    max_width: int = 1200,
+) -> bool:
     """Replace a cell's visual output with one JPEG.
 
     Widget outputs usually have only ``application/vnd.jupyter.widget-view+json``,
@@ -504,6 +523,9 @@ def _embed_jpeg(cell: dict, png_or_jpeg: bytes, quality: int) -> bool:
     from io import BytesIO
     from PIL import Image
     img = Image.open(BytesIO(png_or_jpeg)).convert("RGB")
+    if max_width > 0 and img.width > max_width:
+        height = max(1, round(img.height * max_width / img.width))
+        img = img.resize((max_width, height), Image.Resampling.LANCZOS)
     buf = BytesIO()
     img.save(buf, format="JPEG", quality=quality, optimize=True)
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -517,13 +539,21 @@ def _embed_jpeg(cell: dict, png_or_jpeg: bytes, quality: int) -> bool:
             for k in [k for k in data if k.startswith("image/")]:
                 del data[k]
             data["image/jpeg"] = b64
-            out.setdefault("metadata", {})
+            metadata = out.setdefault("metadata", {})
+            quantem_metadata = metadata.setdefault("quantem.widget", {})
+            quantem_metadata["github_full_ui"] = True
+            quantem_metadata["github_quality"] = quality
+            quantem_metadata["github_width"] = img.width
             done = True
             break
     if not done:
         cell.setdefault("outputs", []).append({
             "output_type": "display_data",
-            "metadata": {},
+            "metadata": {"quantem.widget": {
+                "github_full_ui": True,
+                "github_quality": quality,
+                "github_width": img.width,
+            }},
             "data": {"image/jpeg": b64},
         })
         done = True
@@ -548,6 +578,312 @@ def _cell_has_widget_view_output(cell: dict) -> bool:
     return False
 
 
+def _cell_has_full_ui_output(cell: dict) -> bool:
+    """Return true when ``quantem github`` already embedded the full widget UI."""
+    for out in cell.get("outputs", []):
+        data = out.get("data") or {}
+        metadata = out.get("metadata") or {}
+        quantem_metadata = metadata.get("quantem.widget") or {}
+        if any(key.startswith("image/") for key in data) and quantem_metadata.get(
+            "github_full_ui"
+        ) is True:
+            return True
+    return False
+
+
+def _github_widget_cells(nb: dict) -> list[dict]:
+    """Find widget cells from runtime output first, with source as a fallback.
+
+    Public APIs such as ``drift.show()`` return QuantEM widgets without naming
+    ``Show2D`` in notebook source.  Runtime widget MIME is therefore the
+    authoritative signal after execution.  The source check retains support
+    for older or hand-edited notebooks, and the metadata marker recognizes a
+    notebook already prepared by this command.
+    """
+    return [
+        cell
+        for cell in nb.get("cells", [])
+        if cell.get("cell_type") == "code"
+        and (
+            _cell_has_widget_view_output(cell)
+            or _cell_has_full_ui_output(cell)
+            or any(widget in "".join(cell.get("source", [])) for widget in _WIDGET_CELL)
+        )
+    ]
+
+
+def _github_capture_cells(nb: dict) -> list[dict]:
+    """Return widget cells that still need a browser-captured full-UI image."""
+    return [
+        cell
+        for cell in _github_widget_cells(nb)
+        if not _cell_has_full_ui_output(cell)
+        and (
+            _cell_has_widget_view_output(cell)
+            or not _cell_has_image_output(cell)
+        )
+    ]
+
+
+def _widget_view_model_ids(cell: dict) -> list[str]:
+    """Return root widget model IDs referenced by one output cell."""
+    model_ids = []
+    for out in cell.get("outputs", []):
+        view = (out.get("data") or {}).get(_WIDGET_VIEW_MIME)
+        model_id = view.get("model_id") if isinstance(view, dict) else None
+        if model_id and model_id not in model_ids:
+            model_ids.append(model_id)
+    return model_ids
+
+
+def _widget_model_closure(state: dict, roots: list[str]) -> set[str]:
+    """Return each root model and every ``IPY_MODEL_`` dependency it references."""
+    found: set[str] = set()
+    pending = list(roots)
+
+    def references(value):
+        if isinstance(value, str) and value.startswith("IPY_MODEL_"):
+            yield value.removeprefix("IPY_MODEL_")
+        elif isinstance(value, dict):
+            for item in value.values():
+                yield from references(item)
+        elif isinstance(value, list):
+            for item in value:
+                yield from references(item)
+
+    while pending:
+        model_id = pending.pop()
+        if model_id in found:
+            continue
+        if model_id not in state:
+            raise ValueError(f"widget model {model_id!r} is absent from notebook state")
+        found.add(model_id)
+        pending.extend(ref for ref in references(state[model_id]) if ref not in found)
+    return found
+
+
+def _widget_capture_notebook(nb: dict, cell: dict) -> dict:
+    """Build a minimal notebook containing one live widget and its dependencies.
+
+    A scientific notebook can contain hundreds of megabytes of state per widget.
+    Rendering every model into one HTML document can exceed the browser's JSON
+    parser limit even though each widget renders correctly on its own.  This
+    temporary notebook keeps exactly the state required by one output view.
+    """
+    widget_payload = (
+        nb.get("metadata", {}).get("widgets", {}).get(_WIDGET_STATE_MIME)
+    )
+    state = widget_payload.get("state") if isinstance(widget_payload, dict) else None
+    roots = _widget_view_model_ids(cell)
+    if not roots:
+        raise ValueError("widget output has no model_id to capture")
+    if not isinstance(state, dict):
+        raise ValueError("notebook has no saved widget state; execute it before capture")
+    keep = _widget_model_closure(state, roots)
+
+    capture_cell = copy.deepcopy(cell)
+    capture_cell["source"] = []
+    capture_cell["outputs"] = [
+        {
+            "output_type": out.get("output_type", "display_data"),
+            "metadata": {},
+            "data": {_WIDGET_VIEW_MIME: copy.deepcopy((out.get("data") or {})[_WIDGET_VIEW_MIME])},
+        }
+        for out in cell.get("outputs", [])
+        if _WIDGET_VIEW_MIME in (out.get("data") or {})
+    ]
+    metadata = {
+        key: copy.deepcopy(value)
+        for key, value in nb.get("metadata", {}).items()
+        if key != "widgets"
+    }
+    capture_payload = {
+        key: copy.deepcopy(value)
+        for key, value in widget_payload.items()
+        if key != "state"
+    }
+    capture_payload["state"] = {
+        model_id: copy.deepcopy(state[model_id]) for model_id in keep
+    }
+    metadata["widgets"] = {_WIDGET_STATE_MIME: capture_payload}
+    return {
+        "cells": [capture_cell],
+        "metadata": metadata,
+        "nbformat": nb.get("nbformat", 4),
+        "nbformat_minor": nb.get("nbformat_minor", 5),
+    }
+
+
+def _capture_notebook_widget_uis(
+    notebook: pathlib.Path,
+    nb: dict,
+    capture_cells: list[dict],
+) -> list[bytes]:
+    """Render and capture widget cells independently to bound temporary HTML size."""
+    import subprocess
+
+    shots: list[bytes] = []
+    with tempfile.TemporaryDirectory(
+        prefix=f".{notebook.stem}-github-ui-", dir=notebook.parent
+    ) as folder:
+        temporary = pathlib.Path(folder)
+        for index, cell in enumerate(capture_cells, start=1):
+            capture_nb = temporary / f"widget-{index:02d}.ipynb"
+            capture_nb.write_text(
+                json.dumps(_widget_capture_notebook(nb, cell)), encoding="utf-8"
+            )
+            result = subprocess.run(
+                [
+                    "jupyter", "nbconvert", "--to", "html", str(capture_nb),
+                    "--output-dir", str(temporary), "--output", capture_nb.stem,
+                ]
+            )
+            if result.returncode != 0:
+                raise ValueError(
+                    f"nbconvert failed while preparing widget UI {index}"
+                )
+            html = temporary / f"{capture_nb.stem}.html"
+            print(
+                f"  widget {index}/{len(capture_cells)} temporary HTML: "
+                f"{html.stat().st_size / 1e6:.1f} MB"
+            )
+            captured = _capture_full_ui(html, 1)
+            if len(captured) != 1:
+                raise ValueError(
+                    f"captured {len(captured)} UI screenshot(s) for widget {index}"
+                )
+            shots.extend(captured)
+    return shots
+
+
+def _recompress_full_ui_outputs(nb: dict, quality: int, max_width: int) -> int:
+    """Re-encode previously prepared full-UI images at the requested quality."""
+    import base64
+
+    changed = 0
+    for cell in nb.get("cells", []):
+        for out in cell.get("outputs", []):
+            metadata = (out.get("metadata") or {}).get("quantem.widget") or {}
+            data = out.get("data") or {}
+            image = data.get("image/jpeg")
+            if (
+                metadata.get("github_full_ui") is True
+                and image
+                and (
+                    metadata.get("github_quality") != quality
+                    or metadata.get("github_width") != min(
+                        max_width, metadata.get("github_width", max_width + 1)
+                    )
+                )
+            ):
+                _embed_jpeg(cell, base64.b64decode(image), quality, max_width)
+                changed += 1
+                break
+    return changed
+
+
+def _prune_widget_fallbacks(nb: dict) -> int:
+    """Remove redundant auto-snapshots after a complete UI capture exists."""
+    removed = 0
+    for cell in _github_widget_cells(nb):
+        if not _cell_has_full_ui_output(cell):
+            continue
+        kept = []
+        for out in cell.get("outputs", []):
+            quantem_metadata = (out.get("metadata") or {}).get("quantem.widget") or {}
+            if (
+                quantem_metadata.get("static_fallback") is True
+                and quantem_metadata.get("github_full_ui") is not True
+            ):
+                removed += 1
+                continue
+            if quantem_metadata.get("github_full_ui") is True:
+                data = out.get("data") or {}
+                image = data.get("image/jpeg")
+                out["data"] = {"image/jpeg": image} if image else {}
+            kept.append(out)
+        cell["outputs"] = kept
+    return removed
+
+
+def _validate_github_widget_outputs(widget_cells: list[dict]) -> None:
+    """Require one browser-captured UI and no duplicate widget render per cell."""
+
+    problems = []
+    for index, cell in enumerate(widget_cells, start=1):
+        full_ui = []
+        fallbacks = 0
+        widget_views = 0
+        for out in cell.get("outputs", []):
+            data = out.get("data") or {}
+            quantem_metadata = (out.get("metadata") or {}).get(
+                "quantem.widget"
+            ) or {}
+            if quantem_metadata.get("github_full_ui") is True and any(
+                key.startswith("image/") for key in data
+            ):
+                full_ui.append(out)
+            if quantem_metadata.get("static_fallback") is True:
+                fallbacks += 1
+            if _WIDGET_VIEW_MIME in data:
+                widget_views += 1
+        if len(full_ui) != 1 or fallbacks or widget_views:
+            problems.append(
+                f"cell {index}: full_ui={len(full_ui)}, "
+                f"fallbacks={fallbacks}, widget_views={widget_views}"
+            )
+    if problems:
+        raise ValueError(
+            "GitHub notebook preparation requires exactly one browser-captured "
+            "widget UI per widget cell and no fallback duplicates: "
+            + "; ".join(problems)
+        )
+
+
+def _compress_large_raster_outputs(
+    nb: dict,
+    quality: int,
+    max_width: int,
+    threshold: int = 500_000,
+) -> int:
+    """JPEG-encode large ordinary PNG outputs while retaining readable dimensions."""
+    import base64
+    from io import BytesIO
+    from PIL import Image
+
+    changed = 0
+    for cell in nb.get("cells", []):
+        for out in cell.get("outputs", []):
+            metadata = (out.get("metadata") or {}).get("quantem.widget") or {}
+            if metadata.get("github_full_ui") is True:
+                continue
+            data = out.get("data") or {}
+            encoded = data.get("image/png")
+            if not encoded or len(encoded) <= threshold:
+                continue
+            image = Image.open(BytesIO(base64.b64decode(encoded)))
+            if image.mode in {"RGBA", "LA"}:
+                rgba = image.convert("RGBA")
+                background = Image.new("RGBA", rgba.size, "white")
+                background.alpha_composite(rgba)
+                image = background.convert("RGB")
+            else:
+                image = image.convert("RGB")
+            if max_width > 0 and image.width > max_width:
+                height = max(1, round(image.height * max_width / image.width))
+                image = image.resize((max_width, height), Image.Resampling.LANCZOS)
+            buffer = BytesIO()
+            image.save(buffer, format="JPEG", quality=quality, optimize=True)
+            data.pop("image/png")
+            data["image/jpeg"] = base64.b64encode(buffer.getvalue()).decode("ascii")
+            metadata = out.setdefault("metadata", {}).setdefault("quantem.widget", {})
+            metadata["github_compressed_from"] = "image/png"
+            metadata["github_quality"] = quality
+            metadata["github_width"] = image.width
+            changed += 1
+    return changed
+
+
 def _capture_full_ui(html: pathlib.Path, n_expected: int) -> list[bytes]:
     """Screenshot each widget's FULL UI (toolbar + toggles + panels + histograms) from the
     rendered live-widget HTML, deterministically, via Playwright on the real GPU. The widget
@@ -569,8 +905,30 @@ def _capture_full_ui(html: pathlib.Path, n_expected: int) -> list[bytes]:
             "--enable-unsafe-webgpu", "--use-angle=vulkan", "--enable-features=Vulkan",
             "--ignore-gpu-blocklist", "--disable-gpu-sandbox", "--no-sandbox"], **launch_kwargs)
         page = browser.new_page(viewport={"width": 1300, "height": 2400}, device_scale_factor=2)
-        page.goto(html.as_uri(), wait_until="load", timeout=90000)
-        page.wait_for_timeout(13000)  # anywidget mount + WebGPU paint
+        browser_errors = []
+        page.on("pageerror", lambda error: browser_errors.append(f"page: {error}"))
+        page.on(
+            "console",
+            lambda message: browser_errors.append(f"console: {message.text}")
+            if message.type == "error"
+            else None,
+        )
+        page.goto(html.as_uri(), wait_until="load", timeout=180000)
+        # Large scientific notebooks can carry hundreds of megabytes of
+        # temporary widget state. Wait for actual canvases instead of assuming
+        # that every browser mounts and paints them within a fixed 13 seconds.
+        canvas_count = 0
+        for _ in range(120):
+            canvas_count = page.locator(".jp-OutputArea-output canvas").count()
+            if canvas_count >= n_expected:
+                break
+            page.wait_for_timeout(1000)
+        if canvas_count < n_expected:
+            for error in browser_errors[-10:]:
+                print(f"  browser error: {error}")
+            print(f"  mounted canvases: {canvas_count}/{n_expected}")
+        else:
+            page.wait_for_timeout(2000)  # allow the first WebGPU frame to present
         arch = page.evaluate("async()=>{const a=await navigator.gpu?.requestAdapter();"
                              "return a?(a.info?.architecture||'?'):'none';}")
         print(f"  GPU adapter: {arch}")
@@ -613,30 +971,20 @@ def _prepare_github(args: argparse.Namespace) -> int:
     if not args.no_execute:
         print(f"executing {notebook.name} ...")
         if subprocess.run(["jupyter", "nbconvert", "--to", "notebook", "--execute", "--inplace",
-                           str(notebook), f"--ExecutePreprocessor.timeout={args.timeout}"]).returncode != 0:
+                           str(notebook), f"--ExecutePreprocessor.timeout={args.timeout}",
+                           "--ExecutePreprocessor.store_widget_state=True"]).returncode != 0:
             raise ValueError("nbconvert --execute failed (see output above)")
     nb = json.loads(notebook.read_text())
-    widget_cells = [c for c in nb["cells"]
-                    if c["cell_type"] == "code" and any(w in "".join(c["source"]) for w in _WIDGET_CELL)]
-    capture_cells = [
-        c for c in widget_cells
-        if not _cell_has_image_output(c)
-    ]
+    widget_cells = _github_widget_cells(nb)
+    capture_cells = _github_capture_cells(nb)
+    max_width = getattr(args, "max_width", 1200)
+    recompressed = _recompress_full_ui_outputs(nb, args.quality, max_width)
     if capture_cells:
         try:
-            html = notebook.with_suffix(".fullui.html")
-            subprocess.run(["jupyter", "nbconvert", "--to", "html", str(notebook),
-                            "--output-dir", str(notebook.parent), "--output", notebook.stem + ".fullui"],
-                           check=True)
             print(f"capturing {len(capture_cells)} widget UI(s) on the GPU ...")
-            shots = _capture_full_ui(html, len(capture_cells))
-            html.unlink(missing_ok=True)
-            if len(shots) != len(capture_cells):
-                raise ValueError(
-                    f"captured {len(shots)} widget UI screenshot(s) for {len(capture_cells)} widget cell(s)"
-                )
+            shots = _capture_notebook_widget_uis(notebook, nb, capture_cells)
             for cell, png in zip(capture_cells, shots):
-                _embed_jpeg(cell, png, args.quality)
+                _embed_jpeg(cell, png, args.quality, max_width)
             mode = f"{len(shots)} full-UI screenshots"
         except (ImportError, RuntimeError, OSError) as err:
             raise ValueError(
@@ -646,11 +994,20 @@ def _prepare_github(args: argparse.Namespace) -> int:
         mode = f"{len(widget_cells)} existing image output(s)"
     else:
         mode = "no widget cells - state stripped only"
+    fallbacks = _prune_widget_fallbacks(nb)
+    rasters = _compress_large_raster_outputs(nb, args.quality, max_width)
     _strip_state(nb)
+    _validate_github_widget_outputs(widget_cells)
     notebook.write_text(json.dumps(nb, indent=1))
     after = notebook.stat().st_size
     print(f"github-ready: {notebook.name}  {before / 1e6:.1f} MB -> {after / 1e6:.1f} MB"
-          f"  ({mode}, JPEG q{args.quality}, offline state stripped)")
+          f"  ({mode}, JPEG q{args.quality}, max {max_width}px, offline state stripped)")
+    if recompressed:
+        print(f"  re-encoded {recompressed} existing full-UI image(s) at JPEG q{args.quality}")
+    if fallbacks:
+        print(f"  removed {fallbacks} redundant widget fallback image(s)")
+    if rasters:
+        print(f"  compressed {rasters} large raster output(s) for repository display")
     if after > 5e6:
         print("  warning: still > 5 MB - GitHub may not render. Lower --quality or the widget's size=.")
     return 0

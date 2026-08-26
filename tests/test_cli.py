@@ -38,16 +38,150 @@ def test_embed_jpeg_adds_image_to_widget_only_output(tmp_path):
     }
 
     assert cli._embed_jpeg(cell, png.read_bytes(), quality=80)
-    data = cell["outputs"][0]["data"]
+    output = cell["outputs"][0]
+    data = output["data"]
     assert "image/jpeg" in data
     assert "application/vnd.jupyter.widget-view+json" in data
+    assert output["metadata"]["quantem.widget"]["github_full_ui"] is True
+    assert output["metadata"]["quantem.widget"]["github_quality"] == 80
+    assert output["metadata"]["quantem.widget"]["github_width"] == 24
 
 
 def test_github_widget_cell_detector_includes_showeds():
     assert "ShowEDS(" in cli._WIDGET_CELL
 
 
-def test_github_prepare_reuses_existing_image_outputs(tmp_path, monkeypatch):
+def test_github_widget_cell_detector_uses_runtime_widget_output_for_public_api():
+    cell = {
+        "cell_type": "code",
+        "source": ["drift.show(mode='interactive')"],
+        "outputs": [{
+            "output_type": "display_data",
+            "metadata": {},
+            "data": {
+                "application/vnd.jupyter.widget-view+json": {"model_id": "abc"},
+                "image/jpeg": "fallback",
+            },
+        }],
+    }
+    notebook = {"cells": [cell]}
+
+    assert cli._github_widget_cells(notebook) == [cell]
+    assert cli._github_capture_cells(notebook) == [cell]
+
+
+def test_github_capture_reuses_only_marked_full_ui_output():
+    cell = {
+        "cell_type": "code",
+        "source": ["drift.show(mode='interactive')"],
+        "outputs": [{
+            "output_type": "display_data",
+            "metadata": {"quantem.widget": {"github_full_ui": True}},
+            "data": {"image/jpeg": "full-ui"},
+        }],
+    }
+    notebook = {"cells": [cell]}
+
+    assert cli._github_widget_cells(notebook) == [cell]
+    assert cli._github_capture_cells(notebook) == []
+
+
+def test_widget_model_closure_includes_layout_dependency():
+    state = {
+        "root": {"state": {"layout": "IPY_MODEL_layout"}},
+        "layout": {"state": {}},
+        "unrelated": {"state": {}},
+    }
+
+    assert cli._widget_model_closure(state, ["root"]) == {"root", "layout"}
+
+
+def test_widget_capture_notebook_keeps_only_required_models():
+    view = {"model_id": "root", "version_major": 2, "version_minor": 0}
+    cell = {
+        "cell_type": "code",
+        "execution_count": 1,
+        "metadata": {},
+        "source": ["drift.show()"],
+        "outputs": [{
+            "output_type": "display_data",
+            "metadata": {},
+            "data": {cli._WIDGET_VIEW_MIME: view, "image/jpeg": "fallback"},
+        }],
+    }
+    notebook = {
+        "cells": [cell],
+        "metadata": {"widgets": {cli._WIDGET_STATE_MIME: {
+            "version_major": 2,
+            "version_minor": 0,
+            "state": {
+                "root": {"state": {"layout": "IPY_MODEL_layout"}},
+                "layout": {"state": {}},
+                "unrelated": {"state": {}},
+            },
+        }}},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+
+    capture = cli._widget_capture_notebook(notebook, cell)
+    payload = capture["metadata"]["widgets"][cli._WIDGET_STATE_MIME]
+    assert set(payload["state"]) == {"root", "layout"}
+    assert capture["cells"][0]["source"] == []
+    assert capture["cells"][0]["outputs"][0]["data"] == {
+        cli._WIDGET_VIEW_MIME: view
+    }
+
+
+def test_prune_widget_fallbacks_keeps_only_full_ui_visual():
+    cell = {
+        "cell_type": "code",
+        "source": ["drift.show()"],
+        "outputs": [
+            {
+                "output_type": "display_data",
+                "metadata": {"quantem.widget": {"github_full_ui": True}},
+                "data": {"image/jpeg": "ui", "text/html": "redundant"},
+            },
+            {
+                "output_type": "display_data",
+                "metadata": {"quantem.widget": {"static_fallback": True}},
+                "data": {"image/jpeg": "fallback", "text/html": "fallback"},
+            },
+        ],
+    }
+
+    assert cli._prune_widget_fallbacks({"cells": [cell]}) == 1
+    assert len(cell["outputs"]) == 1
+    assert cell["outputs"][0]["data"] == {"image/jpeg": "ui"}
+
+
+def test_github_validation_rejects_duplicate_fallback():
+    cell = {
+        "cell_type": "code",
+        "source": ["drift.show()"],
+        "outputs": [
+            {
+                "output_type": "display_data",
+                "metadata": {"quantem.widget": {"github_full_ui": True}},
+                "data": {"image/jpeg": "ui"},
+            },
+            {
+                "output_type": "display_data",
+                "metadata": {"quantem.widget": {"static_fallback": True}},
+                "data": {"image/jpeg": "fallback"},
+            },
+        ],
+    }
+
+    with pytest.raises(ValueError, match="fallbacks=1"):
+        cli._validate_github_widget_outputs([cell])
+
+    assert cli._prune_widget_fallbacks({"cells": [cell]}) == 1
+    cli._validate_github_widget_outputs([cell])
+
+
+def test_github_prepare_reuses_existing_full_ui_output(tmp_path, monkeypatch):
     notebook = tmp_path / "show2d_github.ipynb"
     notebook.write_text(
         """{
@@ -59,7 +193,13 @@ def test_github_prepare_reuses_existing_image_outputs(tmp_path, monkeypatch):
    "outputs": [
     {
      "output_type": "display_data",
-     "metadata": {},
+     "metadata": {
+      "quantem.widget": {
+       "github_full_ui": true,
+       "github_quality": 90,
+       "github_width": 1200
+      }
+     },
      "data": {
       "text/plain": "<quantem.widget.show2d.Show2D>",
       "image/jpeg": "/9j/4AAQSkZJRgABAQAAAQABAAD/2w=="
@@ -85,7 +225,7 @@ def test_github_prepare_reuses_existing_image_outputs(tmp_path, monkeypatch):
     )
 
     def fail_capture(*args, **kwargs):
-        raise AssertionError("existing image outputs should not trigger browser capture")
+        raise AssertionError("existing full-UI output should not trigger capture")
 
     monkeypatch.setattr(cli, "_capture_full_ui", fail_capture)
     args = type("Args", (), {
@@ -98,6 +238,7 @@ def test_github_prepare_reuses_existing_image_outputs(tmp_path, monkeypatch):
     assert cli._prepare_github(args) == 0
     text = notebook.read_text(encoding="utf-8")
     assert "image/jpeg" in text
+    assert text.count("github_full_ui") == 1
     assert "application/vnd.jupyter.widget-state+json" not in text
 
 
