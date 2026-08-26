@@ -4,6 +4,19 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
+def test_profile_shortens_rtx_pro_marketing_name() -> None:
+    """Notebook profiles show the GPU model without workstation marketing text."""
+    from quantem.widget.info import _concise_cuda_name
+
+    assert (
+        _concise_cuda_name(
+            "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition"
+        )
+        == "NVIDIA RTX PRO 6000"
+    )
+    assert _concise_cuda_name("NVIDIA H100 80GB HBM3") == "NVIDIA H100 80GB HBM3"
+
+
 def test_profile_reports_the_installed_quantem_stack(capsys) -> None:
     """A notebook records every QuantEM package through one profile call."""
     import quantem.widget as qw

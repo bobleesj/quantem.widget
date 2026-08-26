@@ -74,6 +74,7 @@ def test_bundle_export_writes_launcher_viewer_and_vendored_page(tmp_path):
     assert "__QT_REQUIRE_LOCAL_H5_FILES" in page
     assert "__QT_H5_DECODE_DTYPE" in page and "__BSLZ4_FRAME_WG" in page
     assert 'globalThis.__QT_H5_DECODE_DTYPE ??= "u2"' in page
+    assert "globalThis.__QT_H5_MAX_RESIDENT ??=" not in page
     assert "globalThis.__QT_H5_FORCE_LOW8 ??= false" in page
     assert "globalThis.__BSLZ4_PIPELINE_STAGING ??= false" in page
     assert "../tilt_a_master.h5" in page
@@ -98,6 +99,7 @@ def test_bundle_export_uses_low8_for_audited_uint8_h5(tmp_path):
         widget.close()
     page = (tmp_path / ".viewer" / "Show4DSTEM.html").read_text(encoding="utf-8")
     assert 'globalThis.__QT_H5_DECODE_DTYPE ??= "uint8"' in page
+    assert "globalThis.__QT_H5_MAX_RESIDENT ??=" not in page
     assert "globalThis.__QT_H5_FORCE_LOW8 ??= true" in page
     assert "globalThis.__BSLZ4_LOW8_ONLY ??= true" in page
     assert "globalThis.__QT_H5_MAX_RESIDENT ??= 1" not in page
