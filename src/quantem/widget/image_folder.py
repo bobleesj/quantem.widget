@@ -448,6 +448,12 @@ class WatchedImageFolder:
                 f"Applying {len(changed)} stable image file"
                 f"{'s' if len(changed) != 1 else ''}.",
             )
+        # Publish the first-frame transition before replacing the resident
+        # array. ``set_image`` exposes its new frame count partway through the
+        # update, so a concurrent notebook/UI reader must never observe
+        # ``n_slices > 0`` while ``folder_waiting`` is still true.
+        _safe_set_widget_status(widget, "_folder_waiting", False)
+        _safe_set_widget_status(widget, "folder_waiting", False)
         widget._apply_folder_image_records(
             old_records,
             new_records,
