@@ -5,6 +5,7 @@ import { useResidentPerformance, useResidentRenderTiming, useResidentChanges } f
 import * as React from "react";
 import { createRender, useModelState, useModel } from "@anywidget/react";
 import { CompareBatchCanvas } from "./batchCanvas";
+import { readSettledCompareHistogram } from "./settledHistogram";
 import { sharedCanvasLayout } from "./sharedCanvasLayout";
 import { source112MeanDelta, countImagesForRender, type CompareCountImages, type CompareGpuRenderer } from "./source112MeanDelta";
 import Box from "@mui/material/Box";
@@ -3498,6 +3499,14 @@ function Show4DSTEM() {
   const [compareGpuVersion, setCompareGpuVersion] = React.useState(0);
   const compareGpuSlotsRef = React.useRef(new Map<number, number>());
   const compareGpuHistogramGenRef = React.useRef(0);
+  const compareHistogramPendingSettleRef = React.useRef(false);
+  const beginDpRoiInteraction = React.useCallback(() => {
+    if (!dpRoiInteractiveRef.current) {
+      compareGpuHistogramGenRef.current++;
+      compareHistogramPendingSettleRef.current = true;
+    }
+    dpRoiInteractiveRef.current = true;
+  }, []);
   const compareGpuRenderNowRef = React.useRef<CompareGpuRenderer | null>(null);
   const compareIncrementalRef = React.useRef<{
     mask: Uint32Array;
@@ -5271,7 +5280,13 @@ function Show4DSTEM() {
               });
             } else completed();
           }
-          if (adopted && !interactiveDrag) bumpCompareGpuVersion();
+          if (adopted && !interactiveDrag) {
+            // A quick release alone does not make float slots current. Their
+            // settled normalization must be queued before histograms resume.
+            if (!disposed && gen === compareViGen && !dpRoiInteractiveRef.current)
+              compareHistogramPendingSettleRef.current = false;
+            bumpCompareGpuVersion();
+          }
           if (batchFrames.length && !interactiveDrag) {
             progressiveCompareGenerationRef.current = null;
             setProgressiveComparePage(null);
@@ -5596,7 +5611,7 @@ function Show4DSTEM() {
 
           const results = [] as Record<string, unknown>[];
           try {
-            dpRoiInteractiveRef.current = true;
+            beginDpRoiInteraction();
             for (let iter = 0; iter < centers.length; iter++) {
               const [row, col] = centers[iter];
               const startedAt = performance.now();
@@ -6330,6 +6345,8 @@ function Show4DSTEM() {
     });
     return () => {
       disposed = true;
+      compareGpuHistogramGenRef.current++;
+      compareHistogramPendingSettleRef.current = true;
       compareGpuRenderNowRef.current?.(null);
       sourceLoadAbort.abort();
       requestViFinalizeRef.current = null;
@@ -6349,7 +6366,7 @@ function Show4DSTEM() {
       clearViGpuDisplay();
       detach?.();
     };
-  }, [clearViGpuDisplay, countAnsSource, source112Source, ensureViGpuColormap, h5LocalFilesGranted, h5SourceAvailable, offline, ransLocalDirectory, ransLocalFiles, requestCompareViLive, requestDpFrameLive, requireLocalH5Files]);
+  }, [beginDpRoiInteraction, clearViGpuDisplay, countAnsSource, source112Source, ensureViGpuColormap, h5LocalFilesGranted, h5SourceAvailable, offline, ransLocalDirectory, ransLocalFiles, requestCompareViLive, requestDpFrameLive, requireLocalH5Files]);
   // dp_stats are computed in JS from frameBytes (Python side no longer
   // syncs a dp_stats trait — saves 4 trait sync round-trips per click).
   const [viStats, setViStats] = React.useState<number[]>([0, 0, 0, 0]);
@@ -7509,6 +7526,7 @@ function Show4DSTEM() {
 
   React.useEffect(() => {
     if (!compareMode || activeViSource !== "roi") return;
+    if (dpRoiInteractiveRef.current || compareHistogramPendingSettleRef.current) return;
     const engine = viGpuColormapRef.current;
     if (!engine) return;
     const slotIndices = visibleCompareHistogramFrames
@@ -7518,51 +7536,21 @@ function Show4DSTEM() {
 
     let cancelled = false;
     const generation = ++compareGpuHistogramGenRef.current;
+    const isCurrent = () => !cancelled
+      && generation === compareGpuHistogramGenRef.current
+      && !dpRoiInteractiveRef.current && !compareHistogramPendingSettleRef.current;
     const timer = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const rawRanges = await engine.computeRangeBatch(slotIndices);
-          if (cancelled || generation !== compareGpuHistogramGenRef.current) return;
-          const logScale = viScaleMode === "log";
-          const ranges = rawRanges
-            .map((range) => {
-              if (!Number.isFinite(range.min) || !Number.isFinite(range.max)) return null;
-              if (!logScale) return range;
-              return {
-                min: Math.log1p(Math.max(0, range.min)),
-                max: Math.log1p(Math.max(0, range.max)),
-              };
-            })
-            .filter((range): range is { min: number; max: number } => Boolean(range));
-          if (ranges.length === 0) return;
-          let dmin = Number.POSITIVE_INFINITY;
-          let dmax = Number.NEGATIVE_INFINITY;
-          ranges.forEach((range) => {
-            if (range.min < dmin) dmin = range.min;
-            if (range.max > dmax) dmax = range.max;
-          });
-          if (!Number.isFinite(dmin) || !Number.isFinite(dmax)) return;
-          if (dmax <= dmin) dmax = dmin + 1e-12;
-          const histograms = await engine.computeHistogramBatch(
-            slotIndices,
-            slotIndices.map(() => ({ min: dmin, max: dmax })),
-            logScale,
-          );
-          if (cancelled || generation !== compareGpuHistogramGenRef.current || histograms.length === 0) return;
-          const merged = new Float32Array(256);
-          histograms.forEach((histogram) => {
-            for (let i = 0; i < Math.min(256, histogram.length); i++) {
-              merged[i] += Number(histogram[i]) || 0;
-            }
-          });
-          setViDataMin(dmin);
-          setViDataMax(dmax);
+      void readSettledCompareHistogram(engine, slotIndices, viScaleMode === "log", isCurrent)
+        .then(summary => {
+          if (!summary || !isCurrent()) return;
+          setViDataMin(summary.min);
+          setViDataMax(summary.max);
           setViHistogramData(null);
-          setViHistogramBins(merged);
-        } catch (error) {
-          console.warn("Show4DSTEM multiple histogram update failed", error);
-        }
-      })();
+          setViHistogramBins(summary.bins);
+        })
+        .catch(error => {
+          if (isCurrent()) console.warn("Show4DSTEM multiple histogram update failed", error);
+        });
     }, 120);
 
     return () => {
@@ -9117,7 +9105,7 @@ function Show4DSTEM() {
       return;
     }
 
-    dpRoiInteractiveRef.current = true;
+    beginDpRoiInteraction();
 
     // Check if clicking on resize handle (inner first, then outer)
     if (isNearResizeHandleInner(imgX, imgY)) {
@@ -10872,7 +10860,7 @@ function Show4DSTEM() {
                           <Slider
                             value={roiMode === "annular" ? [roiRadiusInner, roiRadius] : [roiRadius]}
                             onChange={(_, v) => {
-                              dpRoiInteractiveRef.current = true;
+                              beginDpRoiInteraction();
                               if (roiMode === "annular") {
                                 const [inner, outer] = v as number[];
                                 setRoiRadiusInner(Math.min(inner, outer - 1));
