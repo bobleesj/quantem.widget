@@ -6,6 +6,7 @@ import * as React from "react";
 import { createRender, useModelState, useModel } from "@anywidget/react";
 import { CompareBatchCanvas } from "./batchCanvas";
 import { sharedCanvasLayout } from "./sharedCanvasLayout";
+import { source112MeanDelta } from "./source112MeanDelta";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Stack from "@mui/material/Stack";
@@ -5153,6 +5154,7 @@ function Show4DSTEM() {
             let path: string;
             let addedPixels = 0;
             let removedPixels = 0;
+            let normalizedSource112Delta = false;
             if (
               interactiveDrag
               && previous
@@ -5177,7 +5179,12 @@ function Show4DSTEM() {
                 return true;
               }
               const prevBuffers = batchFrames.map((frame) => previous.buffers.get(frame)!);
-              const delta = DetectorCompute.maskedSumDeltaBuffersBatch(batchComputes, prevBuffers, addedMask, removedMask);
+              // Native source112 owns exact counts separately from these display
+              // copies; refresh their mean once, without an unused sum conversion.
+              normalizedSource112Delta = ransSet instanceof Source112ResidentSet;
+              const delta = ransSet instanceof Source112ResidentSet
+                ? source112MeanDelta(ransSet, mask0, prevBuffers)
+                : DetectorCompute.maskedSumDeltaBuffersBatch(batchComputes, prevBuffers, addedMask, removedMask);
               buffers = delta.buffers;
               path = delta.path;
               addedPixels = delta.addedPixels;
@@ -5187,7 +5194,7 @@ function Show4DSTEM() {
               buffers = full.buffers;
               path = full.path;
             }
-            if (ransSet) {
+            if (ransSet && !normalizedSource112Delta) {
               const area = Math.max(1, mask0.reduce((n, value) => n + (value ? 1 : 0), 0));
               ransSet.normalizeDisplayBuffers(buffers, area);
             }
