@@ -24,6 +24,7 @@ parts:
             title: Compare datasets or tilts
       - file: tutorials/showptycho
       - file: tutorials/show1d
+      - file: tutorials/plot2d
       - file: tutorials/show2d
       - file: tutorials/show3d
       - file: tutorials/show3dslices
@@ -67,6 +68,7 @@ parts:
           - file: api/datasets
           - file: api/viewer-ui
           - file: api/show1d
+          - file: api/plot2d
           - file: api/show2d
           - file: api/mask2d
           - file: api/show3d
@@ -117,6 +119,8 @@ parts:
             sections:
               - file: maintainer/storyboard-show2d
                 title: Show2D
+              - file: maintainer/storyboard-plot2d
+                title: Plot2D
               - file: maintainer/storyboard-show3d
                 title: Show3D
               - file: maintainer/storyboard-show3dslices

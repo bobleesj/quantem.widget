@@ -11,6 +11,7 @@ if (process.env.QUANTEM_WIDGET_SKIP_GPU_WEBGPU_SYNC !== "1") {
   syncGpuWebgpuSources();
 }
 const widgets = [
+  { name: "plot2d" },
   { name: "show1d" },
   { name: "show2d" },
   { name: "mask2d" },
