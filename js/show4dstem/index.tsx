@@ -7,7 +7,7 @@ import { createRender, useModelState, useModel } from "@anywidget/react";
 import { CompareBatchCanvas } from "./batchCanvas";
 import { readSettledCompareHistogram } from "./settledHistogram";
 import { sharedCanvasLayout } from "./sharedCanvasLayout";
-import { source112MeanDelta, countImagesForRender, type CompareCountImages, type CompareGpuRenderer } from "./source112MeanDelta";
+import { source112MeanDelta, sameDetectorMaskSupport, countImagesForRender, type CompareCountImages, type CompareGpuRenderer } from "./source112MeanDelta";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Stack from "@mui/material/Stack";
@@ -5201,15 +5201,22 @@ function Show4DSTEM() {
               && previous.mask.length === mask0.length
               && batchFrames.every((frame) => previous.buffers.has(frame))
             ) {
-              const addedMask = new Uint32Array(mask0.length);
-              const removedMask = new Uint32Array(mask0.length);
-              for (let i = 0; i < mask0.length; i++) {
-                const next = mask0[i] !== 0;
-                const prev = previous.mask[i] !== 0;
-                if (next && !prev) { addedMask[i] = 1; addedPixels++; }
-                else if (!next && prev) { removedMask[i] = 1; removedPixels++; }
+              const nativeCounts = ransSet instanceof Source112ResidentSet;
+              // Source112 computes its own ranked deltas. Only an exact support
+              // comparison is needed here to preserve the no-change fast path.
+              const addedMask = nativeCounts ? null : new Uint32Array(mask0.length);
+              const removedMask = nativeCounts ? null : new Uint32Array(mask0.length);
+              let unchanged = nativeCounts && sameDetectorMaskSupport(mask0, previous.mask);
+              if (addedMask && removedMask) {
+                for (let i = 0; i < mask0.length; i++) {
+                  const next = mask0[i] !== 0;
+                  const prev = previous.mask[i] !== 0;
+                  if (next && !prev) { addedMask[i] = 1; addedPixels++; }
+                  else if (!next && prev) { removedMask[i] = 1; removedPixels++; }
+                }
+                unchanged = addedPixels === 0 && removedPixels === 0;
               }
-              if (addedPixels === 0 && removedPixels === 0) {
+              if (unchanged) {
                 publishLiveCompareViStats("delta-skip", {
                   ms: performance.now() - computeStartedAt,
                   adoptedPanels: 0,
@@ -5233,7 +5240,7 @@ function Show4DSTEM() {
                     if (directPainted !== batchFrames.length) { directPainted = 0; return false; }
                     return true;
                   })
-                : DetectorCompute.maskedSumDeltaBuffersBatch(batchComputes, prevBuffers, addedMask, removedMask);
+                : DetectorCompute.maskedSumDeltaBuffersBatch(batchComputes, prevBuffers, addedMask!, removedMask!);
               buffers = delta.buffers;
               path = delta.path;
               addedPixels = delta.addedPixels;
@@ -5255,7 +5262,8 @@ function Show4DSTEM() {
               adopted++;
             }
             compareIncrementalRef.current = {
-              mask: new Uint32Array(mask0),
+              // mask0 belongs to this update; source112 copies it internally.
+              mask: normalizedSource112Delta ? mask0 : new Uint32Array(mask0),
               buffers: nextBuffers,
               indicesKey,
             };
