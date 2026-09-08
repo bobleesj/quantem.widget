@@ -5,6 +5,7 @@ import { useResidentPerformance, useResidentRenderTiming, useResidentChanges } f
 import * as React from "react";
 import { createRender, useModelState, useModel } from "@anywidget/react";
 import { CompareBatchCanvas } from "./batchCanvas";
+import { sharedCanvasLayout } from "./sharedCanvasLayout";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Stack from "@mui/material/Stack";
@@ -1600,9 +1601,14 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   const batchRendererRef = React.useRef<Awaited<ReturnType<typeof CompareBatchCanvas.create>> | null>(null);
   const [batchReady, setBatchReady] = React.useState(false);
   const [batchFailed, setBatchFailed] = React.useState(false);
+  const sharedGpuEnabled = Boolean(gpuEngine && gpuSlots?.size && !progressivePage && !reorderMode);
+  const [sharedGpuReady, setSharedGpuReady] = React.useState(false);
+  const sharedGpuReadyRef = React.useRef(false);
+  const sharedContextRef = React.useRef<GPUCanvasContext | null>(null);
+  const sharedLayoutRef = React.useRef<ReturnType<typeof sharedCanvasLayout>>(null);
   const scalarType = residentScalarType(batchInfo);
   const integerCounts = scalarType !== "<f4";
-  const batchEnabled = Boolean(batchInfo?.request_id && !progressivePage && !autoContrast && bytes && count > 0);
+  const batchEnabled = Boolean(!sharedGpuEnabled && batchInfo?.request_id && !progressivePage && !autoContrast && bytes && count > 0);
   useResidentRenderTiming(batchEnabled, "grid_render_to_commit_ms");
   const batchTimingRef = React.useRef({ received: 0, requested: new Map<string, number>(), lastPaint: 0, lastId: -1 });
   const batchWorkRef = React.useRef({ busy: false, pending: null as (() => Promise<void>) | null });
@@ -1732,6 +1738,31 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     if (!gpuEngine || !gpuSlots) return 0;
     const lut = COLORMAPS[colormap] || COLORMAPS.inferno;
     gpuEngine.uploadLUT(colormap, lut);
+    if (sharedGpuEnabled) {
+      const layout = sharedLayoutRef.current;
+      const canvas = batchCanvasRef.current;
+      if (!layout || !canvas || layout.rectangles.length !== renderEntries.length) return 0;
+      if (!sharedContextRef.current || canvas.width !== layout.width || canvas.height !== layout.height) {
+        sharedContextRef.current = gpuEngine.configureCanvas(canvas, layout.width, layout.height);
+      }
+      const context = sharedContextRef.current;
+      if (!context) return 0;
+      const slots: number[] = [];
+      const rectangles: typeof layout.rectangles = [];
+      renderEntries.forEach((entry, i) => {
+        const slot = gpuSlots.get(entry.frame);
+        if (slot !== undefined) { slots.push(slot); rectangles.push(layout.rectangles[i]); }
+      });
+      const painted = gpuEngine.renderSlotsDirectWithGpuRangeToCanvas(slots, rectangles, context, vminPct, vmaxPct, scaleMode === "log", {
+        width: layout.width, height: layout.height, bgRgb: 0,
+        transform: { zoom: compareZoom, panX: comparePanX, panY: comparePanY }, smooth,
+      });
+      if (painted > 0) {
+        if (!sharedGpuReadyRef.current) { sharedGpuReadyRef.current = true; setSharedGpuReady(true); }
+        onGpuPaint?.(painted);
+      }
+      return painted;
+    }
     const slots: number[] = [];
     const contexts: GPUCanvasContext[] = [];
     renderEntries.forEach((entry, localIdx) => {
@@ -1758,7 +1789,22 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     );
     if (painted > 0) onGpuPaint?.(painted);
     return painted;
-  }, [colormap, comparePanX, comparePanY, compareZoom, gpuEngine, gpuSlots, onGpuPaint, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
+  }, [colormap, comparePanX, comparePanY, compareZoom, gpuEngine, gpuSlots, onGpuPaint, renderEntries, scaleMode, shapeCols, shapeRows, sharedGpuEnabled, smooth, vmaxPct, vminPct]);
+
+  React.useLayoutEffect(() => {
+    if (sharedGpuEnabled) {
+      gpuCanvasContextsRef.current.forEach(context => context?.unconfigure());
+      gpuCanvasContextsRef.current = [];
+    }
+    sharedGpuReadyRef.current = false;
+    setSharedGpuReady(false);
+    return () => {
+      sharedContextRef.current?.unconfigure();
+      sharedContextRef.current = null;
+      sharedLayoutRef.current = null;
+      sharedGpuReadyRef.current = false;
+    };
+  }, [gpuEngine, sharedGpuEnabled]);
 
   React.useEffect(() => {
     onGpuRendererReady?.(renderGpuSlotsNow);
@@ -2082,6 +2128,25 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   const gridCols = Math.max(1, Math.min(displayCount, requestedMaxCols));
   const mobileGridCols = Math.max(1, Math.min(gridCols, 2));
   const gridGapPx = Math.max(0, Math.floor(Number.isFinite(panelGapPx) ? panelGapPx : 0));
+  React.useLayoutEffect(() => {
+    if (!sharedGpuEnabled || !gpuEngine) return;
+    const grid = batchGridRef.current;
+    if (!grid) return;
+    const measure = () => {
+      const tiles = renderEntries.map((_, i) => tileRefs.current[i]);
+      if (tiles.some(tile => !tile)) return;
+      sharedLayoutRef.current = sharedCanvasLayout(grid.getBoundingClientRect(),
+        tiles.map(tile => tile!.getBoundingClientRect()), shapeRows, shapeCols,
+        gpuEngine.getDevice().limits.maxTextureDimension2D);
+      renderGpuSlotsNow();
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(grid);
+    tileRefs.current.slice(0, renderEntries.length).forEach(tile => { if (tile) observer.observe(tile); });
+    return () => observer.disconnect();
+  }, [gpuEngine, sharedGpuEnabled, renderEntries, renderGpuSlotsNow, gridCols, gridGapPx, shapeRows, shapeCols, overlayVersion]);
+
   const resizeGripSx = React.useMemo(() => ({
     position: "absolute",
     bottom: 0,
@@ -2240,7 +2305,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     renderEntries, panels, panelByFrame, indices, progressivePage, activeIdx, labels, starred, draggingFrame,
     pendingMoveFrame, themeColors, reorderMode, handleCompareDoubleClick,
     updatePositionFromPointer, updateRawReadout, hideRawReadout, onSelect, onPendingMoveFrameChange, onReorderFrame,
-    displayIndices, onDragFrameChange, movePreviewFrame, batchReady, shapeCols, shapeRows,
+    displayIndices, onDragFrameChange, movePreviewFrame, batchReady, sharedGpuReady, shapeCols, shapeRows,
     imageLeft, imageTop, imageWidth, imageHeight, smooth, panelChromeVisible,
     onToggleStar, onHide, onResizeStart, mobileGridCols, gridCols, resizeGripSx,
   });
@@ -2374,7 +2439,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
               }}
               sx={{
                 position: "relative",
-                bgcolor: batchReady ? "transparent" : "#000",
+                bgcolor: batchReady || sharedGpuReady ? "transparent" : "#000",
                 containerType: "inline-size",
                 border: "none",
                 boxSizing: "border-box",
@@ -2438,7 +2503,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                   height: imageHeight,
                   imageRendering: smooth ? "auto" : "pixelated",
                   pointerEvents: "none",
-                  opacity: batchReady ? 0 : panel || gpuLoaded ? 1 : 0,
+                  opacity: batchReady || sharedGpuReady ? 0 : panel || gpuLoaded ? 1 : 0,
                   transition: "opacity 160ms ease",
                 }}
               />
@@ -2457,7 +2522,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                   height: imageHeight,
                   imageRendering: smooth ? "auto" : "pixelated",
                   pointerEvents: "none",
-                  opacity: gpuLoaded ? 1 : 0,
+                  opacity: gpuLoaded && !sharedGpuReady ? 1 : 0,
                   zIndex: 2,
                 }}
               />
@@ -2653,7 +2718,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     renderEntries, progressivePage, activeIdx, labels, starred, draggingFrame,
     pendingMoveFrame, themeColors, reorderMode, handleCompareDoubleClick,
     updatePositionFromPointer, updateRawReadout, hideRawReadout, onSelect, onPendingMoveFrameChange, onReorderFrame,
-    displayIndices, onDragFrameChange, movePreviewFrame, batchReady, shapeCols, shapeRows,
+    displayIndices, onDragFrameChange, movePreviewFrame, batchReady, sharedGpuReady, shapeCols, shapeRows,
     imageLeft, imageTop, imageWidth, imageHeight, smooth, panelChromeVisible,
     onToggleStar, onHide, onResizeStart, mobileGridCols, gridCols, resizeGripSx,
   ]);
@@ -2717,8 +2782,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
           },
         }}
       >
-        <canvas ref={batchCanvasRef} data-quantem-scientific-output="show4dstem-compare-batch" data-resident-transport={batchInfo?.transport || "jupyter"}
-          style={{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none",opacity:batchReady?1:0}} />
+        <canvas key={sharedGpuEnabled ? "resident" : "batch"} ref={batchCanvasRef} data-quantem-scientific-output="show4dstem-compare-batch" data-resident-transport={sharedGpuEnabled ? "webgpu-resident" : batchInfo?.transport || "jupyter"}
+          style={{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none",opacity:batchReady || sharedGpuReady?1:0,imageRendering:smooth?"auto":"pixelated"}} />
         {panelTiles}
       </Box>
     </Box>
