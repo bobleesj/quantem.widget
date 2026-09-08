@@ -4167,7 +4167,7 @@ function Show4DSTEM() {
           if (!canonicalFiles.length) throw new Error("This viewer has no count-ANS files configured. Export it again from the source files.");
         }
         ransSet = model.get("_rans_format") === "source112-tans1024-pair-v1"
-          ? await Source112ResidentSet.loadFiles(ransDevice, ransLocalFiles || [], status, sourceLoadAbort.signal)
+          ? await Source112ResidentSet.loadFiles(ransDevice, ransLocalFiles || [], status, sourceLoadAbort.signal, { representation: 'huffman64' })
           : countAnsSource
           ? await RansResidentSet.loadCountANSFiles(ransDevice, canonicalFiles, status,
               JSON.parse(String(model.get("_offline_bad_px") || "[]")) as number[])
