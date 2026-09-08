@@ -1,3 +1,4 @@
+import { captureGpuCanvas } from "./captureGpuCanvas";
 import { createLatestFrameQueue } from "./latestFrameQueue";
 import { circularDragRadius, liveRoiGeometry } from "./roiRadiusDrag";
 import { createDpPointerOwner } from "./dpPointerOwner";
@@ -5029,7 +5030,9 @@ function Show4DSTEM() {
         }
         const mask = sourceDetectorMask(model, detR, detC);
         const roiKey = roiWarmCacheKey(currentRoiGeometry());
-        if (serveWarmCacheEntry(roiKey, "roi", startedAt, generation)) {
+        // A resident source already owns the exact image; keep its direct GPU
+        // display on view switches instead of reviving a CPU snapshot layer.
+        if (!(ransSet instanceof Source112ResidentSet) && serveWarmCacheEntry(roiKey, "roi", startedAt, generation)) {
           return;
         }
         const preferH5ProductFirst = (globalThis as { __QT_H5_PRODUCT_FIRST_VI?: unknown }).__QT_H5_PRODUCT_FIRST_VI === true;
@@ -7493,7 +7496,17 @@ function Show4DSTEM() {
   const dpUiRef = React.useRef<HTMLCanvasElement>(null);  // High-DPI UI overlay for scale bar
   const dpOffscreenRef = React.useRef<HTMLCanvasElement | null>(null);
   const dpImageDataRef = React.useRef<ImageData | null>(null);
-  const virtualGpuSnapshotSerialRef = React.useRef(0);
+  const virtualGpuCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const virtualGpuCaptureRef = React.useRef<(() => Promise<HTMLCanvasElement>) | null>(null);
+  const virtualGpuContextRef = React.useRef<{ engine: GPUColormapEngine; context: GPUCanvasContext } | null>(null);
+  const attachVirtualGpuCanvas = React.useCallback((canvas: HTMLCanvasElement | null) => {
+    if (virtualGpuCanvasRef.current !== canvas) {
+      virtualGpuContextRef.current?.context.unconfigure();
+      virtualGpuContextRef.current = null;
+      virtualGpuCaptureRef.current = null;
+      virtualGpuCanvasRef.current = canvas;
+    }
+  }, []);
   const virtualCanvasRef = React.useRef<HTMLCanvasElement>(null);
   const virtualOverlayRef = React.useRef<HTMLCanvasElement>(null);
   const viUiRef = React.useRef<HTMLCanvasElement>(null);  // High-DPI UI overlay for scale bar
@@ -7784,7 +7797,6 @@ function Show4DSTEM() {
       && viGpuImageRef.current
       && activeViSource === viGpuImageRef.current.source
     ) {
-      setViGpuRetainedReady(false);
       return;
     }
 
@@ -7863,8 +7875,8 @@ function Show4DSTEM() {
     setViOffscreenVersion(v => v + 1);
   }, [activeViSource, compareMode, displayedVirtualImageBytes, shapeRows, shapeCols, viGpuVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viAutoContrast]);
 
-  // WebGPU virtual-image display path: the reduction output stays as a GPUBuffer
-  // and the colormap shader renders it to a dedicated canvas layer. The
+  // Present resident reductions directly, including while the pointer is held.
+  // Offscreen bitmap snapshots can be black and can lag the latest detector. The
   // virtual_image_bytes trait is still populated afterward so stats, FFT,
   // profile, COPY fallback, and non-WebGPU paths keep working.
   React.useEffect(() => {
@@ -7936,60 +7948,41 @@ function Show4DSTEM() {
     engine.uploadLUT(viColormap, lut);
     const renderStart = performance.now();
     let displayRange = "cpu";
-    let durableFrame: Promise<ImageBitmap | null> | null = null;
-    if (vmin != null && vmax != null) {
-      durableFrame = engine.renderPanelSlotsToImageBitmapAsync(
-        [gpuImage.slot],
-        { vmin, vmax },
-        viScaleMode === "log",
-        {
-          width: shapeCols,
-          height: shapeRows,
-          panelCount: 1,
-          cols: 1,
-          rows: 1,
-          gap: 0,
-          bgRgb: 0,
-          transforms: [{ zoom: viZoom, panX: viPanX, panY: viPanY }],
-          smooth: viSmooth,
-        },
-      );
-    } else if (gpuImage.rangeMode === "gpu") {
-      displayRange = "gpu";
-      const renderOpts = {
-        width: shapeCols,
-        height: shapeRows,
-        bgRgb: 0,
-        transform: { zoom: viZoom, panX: viPanX, panY: viPanY },
-        smooth: viSmooth,
-      };
-      durableFrame = engine.renderSlotDirectWithGpuRangeToImageBitmapAsync(
-        gpuImage.slot,
-        viVminPct,
-        viVmaxPct,
-        viScaleMode === "log",
-        renderOpts,
-      );
+    const canvas = virtualGpuCanvasRef.current;
+    if (!canvas) return;
+    let target = virtualGpuContextRef.current;
+    if (!target || target.engine !== engine || canvas.width !== shapeCols || canvas.height !== shapeRows) {
+      target?.context.unconfigure();
+      const context = engine.configureCanvas(canvas, shapeCols, shapeRows);
+      if (!context) { setViGpuRetainedReady(false); return; }
+      context.configure({device: engine.getDevice(), format: navigator.gpu.getPreferredCanvasFormat(),
+        alphaMode: "opaque", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC});
+      target = { engine, context };
+      virtualGpuContextRef.current = target;
     }
-    if (durableFrame) {
-      const snapshotSerial = ++virtualGpuSnapshotSerialRef.current;
-      void durableFrame.then(bitmap => {
-        if (!bitmap) return;
-        try {
-          if (snapshotSerial !== virtualGpuSnapshotSerialRef.current) return;
-          const retained = virtualCanvasRef.current;
-          const retainedCtx = retained?.getContext("2d");
-          if (!retained || !retainedCtx) return;
-          retainedCtx.clearRect(0, 0, retained.width, retained.height);
-          retainedCtx.drawImage(bitmap, 0, 0, retained.width, retained.height);
-          setViGpuRetainedReady(true);
-        } finally {
-          bitmap.close();
-        }
-      }).catch(error => {
-        setViGpuRetainedReady(false);
-        console.warn("[Show4DSTEM] Could not retain the presented WebGPU virtual image", error);
-      });
+    const render = () => {
+      let rendered = false;
+      if (vmin != null && vmax != null) {
+        rendered = engine.renderPanelSlotsDirectToCanvas(
+          [gpuImage.slot], { vmin, vmax }, viScaleMode === "log", target.context,
+          { width: shapeCols, height: shapeRows, panelCount: 1, cols: 1, rows: 1,
+            gap: 0, bgRgb: 0,
+            transforms: [{ zoom: viZoom, panX: viPanX, panY: viPanY }], smooth: viSmooth },
+        );
+      } else if (gpuImage.rangeMode === "gpu") {
+        displayRange = "gpu";
+        rendered = engine.renderSlotDirectWithGpuRangeToCanvas(
+          gpuImage.slot, viVminPct, viVmaxPct, viScaleMode === "log", target.context,
+          { width: shapeCols, height: shapeRows, bgRgb: 0,
+            transform: { zoom: viZoom, panX: viPanX, panY: viPanY }, smooth: viSmooth },
+        );
+      }
+      return rendered;
+    };
+    virtualGpuCaptureRef.current = () => captureGpuCanvas(engine.getDevice(), target.context, render);
+    const rendered = render();
+    setViGpuRetainedReady(rendered);
+    if (rendered) {
       publishShow4DSTEMViDisplay({
         source: gpuImage.source,
         gpuBufferToDisplay: true,
@@ -10393,9 +10386,10 @@ function Show4DSTEM() {
       || currentViSource === viGpuImageRef.current.source
     ),
   );
-  const getActiveViCanvas = React.useCallback((): HTMLCanvasElement | null => {
-    return virtualCanvasRef.current;
-  }, []);
+  const getActiveViCanvas = React.useCallback(async (): Promise<HTMLCanvasElement | null> => {
+    return viGpuVisible && virtualGpuCaptureRef.current
+      ? virtualGpuCaptureRef.current() : virtualCanvasRef.current;
+  }, [viGpuVisible]);
   const panelLoadingOverlaySx = React.useMemo(() => ({
     position: "absolute",
     inset: 0,
@@ -11287,14 +11281,16 @@ function Show4DSTEM() {
                 }} size="small" sx={switchStyles.small} />
                 <Button size="small" sx={compactButton} disabled={viZoom === 1 && viPanX === 0 && viPanY === 0} onClick={() => { setViZoom(1); setViPanX(0); setViPanY(0); }}>Reset</Button>
                 <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={async () => {
-                  const canvas = getActiveViCanvas();
-                  if (!canvas) return;
+                  let canvas: HTMLCanvasElement | null = null;
                   try {
-                    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
+                    canvas = await getActiveViCanvas();
+                    if (!canvas) return;
+                    const captured = canvas;
+                    const blob = await new Promise<Blob | null>(resolve => captured.toBlob(resolve, "image/png"));
                     if (!blob) return;
                     await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
                   } catch {
-                    canvas.toBlob((b) => { if (b) downloadBlob(b, "show4dstem_vi.png"); }, "image/png");
+                    canvas?.toBlob((b) => { if (b) downloadBlob(b, "show4dstem_vi.png"); }, "image/png");
                   }
                 }}>Copy</Button>
               </>}
@@ -11356,7 +11352,7 @@ function Show4DSTEM() {
           ) : (
             <Box sx={{ ...container.imageBox, width: "100%", maxWidth: viCanvasWidth, aspectRatio: `${shapeCols} / ${shapeRows}`, height: "auto", touchAction: "none", ...mobileImageBoxSx }}>
               <canvas
-                data-quantem-scientific-output="show4dstem-virtual-image"
+                data-quantem-scientific-output={viGpuVisible ? "show4dstem-virtual-image-cpu" : "show4dstem-virtual-image"}
                 ref={virtualCanvasRef}
                 width={shapeCols}
                 height={shapeRows}
@@ -11367,6 +11363,12 @@ function Show4DSTEM() {
                   imageRendering: "pixelated",
                   display: "block",
                 }}
+              />
+              <canvas
+                data-quantem-scientific-output={viGpuVisible ? "show4dstem-virtual-image" : "show4dstem-virtual-image-gpu"}
+                ref={attachVirtualGpuCanvas}
+                style={{ position: "absolute", width: "100%", height: "100%",
+                  imageRendering: "pixelated", pointerEvents: "none", opacity: viGpuVisible ? 1 : 0 }}
               />
               <canvas
                 ref={virtualOverlayRef} width={shapeCols} height={shapeRows}
