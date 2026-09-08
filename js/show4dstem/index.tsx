@@ -1,3 +1,4 @@
+import { circularDragRadius, liveRoiGeometry } from "./roiRadiusDrag";
 import { createDpPointerOwner } from "./dpPointerOwner";
 /// <reference types="@webgpu/types" />
 import { residentDisplayValues, residentRawValues, residentScalarType, residentDivisor, type ResidentBatchInfo, type ResidentValues } from "./batchValues";
@@ -2929,7 +2930,7 @@ function Show4DSTEM() {
 
   // ROI state
   const [roiRadiusModel, setRoiRadius] = useModelState<number>("roi_radius");
-  const [roiRadiusInner, setRoiRadiusInner] = useModelState<number>("roi_radius_inner");
+  const [roiRadiusInnerModel, setRoiRadiusInner] = useModelState<number>("roi_radius_inner");
   const [roiMode, setRoiMode] = useModelState<string>("roi_mode");
   const [roiWidth, setRoiWidth] = useModelState<number>("roi_width");
   const [roiHeight, setRoiHeight] = useModelState<number>("roi_height");
@@ -3385,40 +3386,45 @@ function Show4DSTEM() {
       roiCenterRafRef.current = requestAnimationFrame(() => flushRoiCenter());
     }
   }, [flushRoiCenter]);
-  // rAF coalescing for ROI RADIUS drag — same reason as center: a no-bin BF/DF
-  // recompute is ~100ms in Python, and a resize-drag fires 60+ mousemoves/sec.
-  // Without coalescing every move becomes a queued comm message + recompute, so
-  // the image lags ~1s behind the cursor. Collapse to <=1 radius per frame.
-  // Local radius drives the ring/handle render INSTANTLY during a resize drag, so
-  // the ring tracks the cursor with no snap-back, while the model trait (which
-  // triggers the ~100ms Python recompute) is sent at most once per recompute.
+  // Both circular handles preserve latest geometry for resident computation;
+  // React ring updates and nonresident model writes remain RAF-coalesced.
   const [localRoiRadius, setLocalRoiRadius] = React.useState<number | null>(null);
-  // Effective radius used by ALL render/hit-test code below: the live local value
-  // while dragging, else the model value. Keeps the ring glued to the cursor.
-  const roiRadius = localRoiRadius != null ? localRoiRadius : roiRadiusModel;
-  // Coalesce radius writes with requestAnimationFrame, always flushing the LATEST
-  // radius (issue #751). Do NOT gate sends on virtual_image_bytes: the old guard
-  // waited for the VI bytes to change before sending the next radius, so if a send
-  // didn't land changed bytes the final drag value stayed local and Python never
-  // recomputed — the hand-drag resize silently did nothing. rAF flush is robust:
-  // one Python recompute per frame, last-value-wins, no stuck in-flight guard.
+  const [localRoiRadiusInner, setLocalRoiRadiusInner] = React.useState<number | null>(null);
+  const roiRadius = localRoiRadius ?? roiRadiusModel;
+  const roiRadiusInner = localRoiRadiusInner ?? roiRadiusInnerModel;
   const roiRadiusPendingRef = React.useRef<number | null>(null);
+  const roiRadiusInnerPendingRef = React.useRef<number | null>(null);
   const roiRadiusRafRef = React.useRef<number | null>(null);
   const flushRoiRadius = React.useCallback(() => {
-    if (roiRadiusPendingRef.current !== null) {
-      const r = roiRadiusPendingRef.current;
+    if (roiRadiusRafRef.current !== null) cancelAnimationFrame(roiRadiusRafRef.current);
+    if (dpRoiInteractiveRef.current && isResidentCompareDrag()) {
+      // Keep the refs current for every scientific update. Publish final traits
+      // after release; ring repaint is independent of scientific submission.
+      if (roiRadiusPendingRef.current !== null) setLocalRoiRadius(roiRadiusPendingRef.current);
+      if (roiRadiusInnerPendingRef.current !== null) setLocalRoiRadiusInner(roiRadiusInnerPendingRef.current);
+    } else {
+      const updates: Record<string, number> = {};
+      if (roiRadiusPendingRef.current !== null) updates.roi_radius = roiRadiusPendingRef.current;
+      if (roiRadiusInnerPendingRef.current !== null) updates.roi_radius_inner = roiRadiusInnerPendingRef.current;
       roiRadiusPendingRef.current = null;
-      model.set("roi_radius", r);
-      model.save_changes();
+      roiRadiusInnerPendingRef.current = null;
+      if (Object.keys(updates).length) {
+        for (const [name, radius] of Object.entries(updates)) model.set(name, radius);
+        model.save_changes();
+      }
     }
     roiRadiusRafRef.current = null;
-  }, [model]);
-  const sendRoiRadius = React.useCallback((radius: number) => {
-    roiRadiusPendingRef.current = radius;
-    if (roiRadiusRafRef.current === null) {
-      roiRadiusRafRef.current = requestAnimationFrame(flushRoiRadius);
-    }
+  }, [isResidentCompareDrag, model]);
+  const sendRoiRadius = React.useCallback((radius: number, boundary: "inner" | "outer" = "outer") => {
+    if (boundary === "inner") roiRadiusInnerPendingRef.current = radius;
+    else roiRadiusPendingRef.current = radius;
+    if (roiRadiusRafRef.current === null) roiRadiusRafRef.current = requestAnimationFrame(flushRoiRadius);
   }, [flushRoiRadius]);
+  React.useEffect(() => () => {
+    if (roiRadiusRafRef.current !== null) cancelAnimationFrame(roiRadiusRafRef.current);
+    roiRadiusPendingRef.current = null;
+    roiRadiusInnerPendingRef.current = null;
+  }, []);
   const dpRoiInteractiveRef = React.useRef(false);
   const requestViFinalizeRef = React.useRef<(() => void) | null>(null);
   const requestCompareViLiveRef = React.useRef<(() => void) | null>(null);
@@ -5220,10 +5226,9 @@ function Show4DSTEM() {
           if (!engine0) return false;
           const computeStartedAt = performance.now();
           const liveCenter = interactiveDrag && ransSet ? roiCenterPendingRef.current : null;
-          const mask0 = sourceDetectorMask(liveCenter ? {
-            get: (name: string) => name === "roi_center_row" ? liveCenter[0]
-              : name === "roi_center_col" ? liveCenter[1] : model.get(name),
-          } : model, detR, detC);
+          const mask0 = sourceDetectorMask(liveRoiGeometry(model, liveCenter,
+            interactiveDrag && ransSet ? roiRadiusPendingRef.current : null,
+            interactiveDrag && ransSet ? roiRadiusInnerPendingRef.current : null), detR, detC);
           let slotCursor = 0;
           const batchComputes: DetectorCompute[] = [];
           const batchSlots: number[] = [];
@@ -6417,6 +6422,11 @@ function Show4DSTEM() {
       compareGpuHistogramGenRef.current++;
       compareHistogramPendingSettleRef.current = true;
       compareGpuRenderNowRef.current?.(null);
+      if (roiRadiusRafRef.current !== null) cancelAnimationFrame(roiRadiusRafRef.current);
+      roiRadiusRafRef.current = null;
+      roiRadiusPendingRef.current = null;
+      roiRadiusInnerPendingRef.current = null;
+      setLocalRoiRadius(null); setLocalRoiRadiusInner(null);
       sourceLoadAbort.abort();
       requestViFinalizeRef.current = null;
       requestCompareViLiveRef.current = null;
@@ -9058,7 +9068,8 @@ function Show4DSTEM() {
       const dx = Math.abs(imgX - activeRoiCenterCol);
       const dy = Math.abs(imgY - activeRoiCenterRow);
       const newRadius = Math.sqrt(dx ** 2 + dy ** 2);
-      setRoiRadiusInner(Math.max(1, Math.min(roiRadius - 1, Math.round(newRadius))));
+      const outer = roiRadiusPendingRef.current ?? Number(model.get("roi_radius"));
+      sendRoiRadius(circularDragRadius(newRadius, "inner", outer), "inner");
       requestCompareViLive();
       return true;
     }
@@ -9078,9 +9089,9 @@ function Show4DSTEM() {
         setRoiHeight(newH);
       } else {
         const newRadius = roiMode === "square" ? Math.max(dx, dy) : Math.sqrt(dx ** 2 + dy ** 2);
-        const minRadius = roiMode === "annular" ? (roiRadiusInner || 0) + 1 : 1;
-        const rad = Math.max(minRadius, Math.round(newRadius));
-        setLocalRoiRadius(rad);
+        const rad = roiMode === "square" ? Math.max(1, Math.round(newRadius))
+          : circularDragRadius(newRadius, "outer", roiMode === "annular"
+            ? roiRadiusInnerPendingRef.current ?? Number(model.get("roi_radius_inner") || 0) : 0);
         sendRoiRadius(rad);
       }
       requestCompareViLive();
@@ -9090,7 +9101,7 @@ function Show4DSTEM() {
     return false;
   }, [
     activeRoiCenterCol, activeRoiCenterRow, isDraggingResize, isDraggingResizeInner,
-    requestCompareViLive, roiMode, roiRadius, roiRadiusInner, sendRoiRadius, setRoiHeight, setRoiRadiusInner, setRoiWidth
+    model, requestCompareViLive, roiMode, sendRoiRadius, setRoiHeight, setRoiWidth
   ]);
 
   const handleDpMouseDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -9310,9 +9321,9 @@ function Show4DSTEM() {
       dpClickStartRef.current = null;
       setIsDraggingDP(false);
       setIsDraggingResize(false);
-      setLocalRoiRadius(null);  // revert ring to committed model radius on release
+      setLocalRoiRadius(null); setLocalRoiRadiusInner(null);  // revert ring to committed model radius on release
       setIsDraggingResizeInner(false);
-      setLocalRoiRadius(null);
+      setLocalRoiRadius(null); setLocalRoiRadiusInner(null);
       setHoveredDpProfileEndpoint(null);
       setIsHoveringDpProfileLine(false);
       return;
@@ -9348,7 +9359,7 @@ function Show4DSTEM() {
     }
     dpClickStartRef.current = null;
     setIsDraggingDP(false); setIsDraggingResize(false); setIsDraggingResizeInner(false);
-    setLocalRoiRadius(null);
+    setLocalRoiRadius(null); setLocalRoiRadiusInner(null);
     setDraggingDpProfileEndpoint(null);
     setIsDraggingDpProfileLine(false);
     setHoveredDpProfileEndpoint(null);
@@ -9362,7 +9373,7 @@ function Show4DSTEM() {
     dpClickStartRef.current = null;
     finishDpRoiInteraction();
     setIsDraggingDP(false); setIsDraggingResize(false); setIsDraggingResizeInner(false);
-    setLocalRoiRadius(null);
+    setLocalRoiRadius(null); setLocalRoiRadiusInner(null);
     setDraggingDpProfileEndpoint(null);
     setIsDraggingDpProfileLine(false);
     setHoveredDpProfileEndpoint(null);
