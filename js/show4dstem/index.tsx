@@ -4790,6 +4790,12 @@ function Show4DSTEM() {
         // compare must re-establish its mask rather than skip an old equal pose.
         compareIncrementalRef.current = null;
       };
+      const displayRoiBuffer = (engine: GPUColormapEngine, slot: number, buffer: GPUBuffer) => {
+        // Source112 retains these reusable buffers across panel selection/reorder.
+        // A display slot may release its own resources without destroying the source.
+        if (ransSet instanceof Source112ResidentSet) engine.borrowBuffer(slot, buffer, scanCols, scanRows);
+        else engine.adoptBuffer(slot, buffer, scanCols, scanRows);
+      };
       const computeRoiBufferImage = (
         backend: DetectorCompute,
         mask: Uint32Array,
@@ -4808,7 +4814,7 @@ function Show4DSTEM() {
           buffer.destroy();
           return false;
         }
-        engine.adoptBuffer(VI_GPU_SLOT, buffer, scanCols, scanRows);
+        displayRoiBuffer(engine, VI_GPU_SLOT, buffer);
         viGpuImageRef.current = {
           source: "roi",
           slot: VI_GPU_SLOT,
@@ -5322,7 +5328,7 @@ function Show4DSTEM() {
             if (!directPaintQueued) compareGpuRenderNowRef.current?.(null);
             const nextBuffers = new Map<number, GPUBuffer>();
             for (let i = 0; i < buffers.length; i++) {
-              engine0.adoptBuffer(batchSlots[i], buffers[i], scanCols, scanRows);
+              displayRoiBuffer(engine0, batchSlots[i], buffers[i]);
               nextBuffers.set(batchFrames[i], buffers[i]);
               adopted++;
             }
@@ -5563,7 +5569,7 @@ function Show4DSTEM() {
             const { buffers, path } = DetectorCompute.maskedSumBuffersBatch(loaded, mask);
             for (let i = 0; i < buffers.length; i++) {
               const slot = COMPARE_GPU_SLOT_BASE + i;
-              engine.adoptBuffer(slot, buffers[i], scanCols, scanRows);
+              displayRoiBuffer(engine, slot, buffers[i]);
               slots.push(slot);
               adopted++;
             }
@@ -5871,7 +5877,7 @@ function Show4DSTEM() {
               const renderStartedAt = performance.now();
               for (let i = 0; i < buffers.length; i++) {
                 const slot = COMPARE_GPU_SLOT_BASE + 128 + i;
-                engine.adoptBuffer(slot, buffers[i], scanCols, scanRows);
+                displayRoiBuffer(engine, slot, buffers[i]);
                 const ctx = contexts[i];
                 if (!ctx) continue;
                 const ok = engine.renderSlotDirectWithGpuRangeToCanvas(
