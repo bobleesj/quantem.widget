@@ -245,4 +245,51 @@ describe("compare paint cadence", () => {
     scheduler.schedule(currentPaint); scheduler.cancel(); frames.tick();
     expect(currentPaint).toHaveBeenCalledTimes(1);
   });
+
+  it("freezes the drag mean before release replaces shared counts during an awaited readback", async () => {
+    const frames = animationFrames();
+    const scheduler = createComparePaintScheduler(frames.request, frames.cancel);
+    const queue: Array<() => void> = [];
+    let raw = 120, float = 0;
+    const paints: number[] = [];
+    let counts: CompareCountImages | null = {
+      images: new Map([[0, { divisor: 2 } as import("../colormaps").Uint32ImageView]]),
+      isCurrent: () => true,
+      refreshFloat: () => { queue.push(() => { float = Math.fround(raw / 2); }); },
+    };
+    scheduler.schedule(() => {
+      const view = countImagesForRender(counts, true);
+      if (view) paints.push(raw / view.images.get(0)!.divisor);
+    });
+    // Renderer 'invalidate' executes before the single-VI release computation.
+    scheduler.cancel();
+    const previous = counts; counts = null;
+    countImagesForRender(previous, false);
+    queue.push(() => { raw = 9; }); // Final released mask has area1, not area2.
+    await Promise.resolve(); // Single-image readback yields before compare refresh.
+    queue.splice(0).forEach(command => command());
+    frames.tick();
+    expect(paints).toEqual([]); // Never paints new9 / stale2.
+    expect(float).toBe(60); // Stable old mean remains valid for interim fallback.
+    expect(raw).toBe(9);
+    counts = { images: new Map([[0, { divisor: 1 } as import("../colormaps").Uint32ImageView]]),
+      isCurrent: () => true, refreshFloat: vi.fn() };
+    scheduler.schedule(() => { paints.push(raw / counts!.images.get(0)!.divisor); });
+    frames.tick();
+    expect(paints).toEqual([9]);
+  });
+
+  it("reports deferred rendering errors and allows subsequent paints", () => {
+    const frames = animationFrames();
+    const scheduler = createComparePaintScheduler(frames.request, frames.cancel);
+    const failure = new Error("Compare canvas device lost");
+    const visibleErrors = vi.fn();
+    scheduler.schedule(() => { throw failure; }, visibleErrors);
+    expect(() => frames.tick()).not.toThrow();
+    expect(visibleErrors).toHaveBeenCalledExactlyOnceWith(failure);
+    const paint = vi.fn();
+    scheduler.schedule(paint, visibleErrors); frames.tick();
+    expect(paint).toHaveBeenCalledTimes(1);
+  });
+
 });
