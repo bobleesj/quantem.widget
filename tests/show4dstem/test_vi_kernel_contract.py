@@ -382,7 +382,8 @@ def test_show4dstem_multiple_detector_drag_uses_live_gpu_compare_slots() -> None
         "await recomputeCompareVI();"
     )
     assert 'type DpcGpuSource = "DPC_row" | "DPC_col" | "iDPC";' in frontend
-    assert "gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine)" in frontend
+    assert "(gpuSlots?.has(frame) && gpuEngine)" in frontend
+    assert "integerCounts && batchEnabled && !batchFailed" in frontend
     assert 'scaleMode === "log"' in frontend
     assert "entry.panel !== undefined || entry.gpuLoaded" in frontend
     assert "const loaded = panel !== undefined || gpuLoaded;" in frontend

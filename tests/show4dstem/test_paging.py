@@ -2333,3 +2333,39 @@ def test_showfolder_open_show4dstem_drops_staging_frames_on_second_gpu(
         except Exception:
             pass
     assert leaked_after_free == []
+
+
+def test_compare_accepts_one_owned_resident_batch():
+    """A batched backend delivers every panel without per-image dispatch."""
+    data = torch.arange(3 * 3 * 3 * 4 * 4, dtype=torch.float32).reshape(3, 3, 3, 4, 4)
+    widget = Show4DSTEM(
+        data,
+        view_mode="multiple",
+        compare_group_mode="all",
+        compare_max_panels=3,
+        precompute_virtual_images=False,
+        verbose=False,
+    )
+    try:
+        widget._clear_compare_virtual_page_cache()
+        mask = widget._current_detector_mask().numpy().astype(bool)
+        expected = data.numpy()[..., mask].sum(axis=-1) / max(1, mask.sum())
+        batch = np.ascontiguousarray(expected, dtype=np.float32)
+        calls = []
+
+        def compute_batch(indices, requested_mask):
+            calls.append(tuple(indices))
+            np.testing.assert_array_equal(requested_mask.numpy().astype(bool), mask)
+            return batch
+
+        widget._compare_virtual_images_for_display_indices = compute_batch
+        widget._refresh_compare_virtual_images_sync()
+        assert calls == [(0, 1, 2)]
+        assert widget.compare_panel_indices == [0, 1, 2]
+        assert widget.compare_panel_count == 3
+        payload = widget.compare_virtual_image_bytes
+        np.testing.assert_array_equal(np.frombuffer(payload, np.float32).reshape(3, 3, 3), expected)
+        batch.fill(0)
+        np.testing.assert_array_equal(np.frombuffer(payload, np.float32).reshape(3, 3, 3), expected)
+    finally:
+        widget.close()

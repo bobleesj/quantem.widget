@@ -94,8 +94,8 @@ def export_show4dstem_webgpu_bundle(
         raise ValueError(f"bundle out_dir must be an existing data folder: {root}")
     masters = sorted(root.rglob("*_master.h5"))
     masters.extend(sorted(root.rglob("*_master_wrapper.h5")))
-    if not masters:
-        raise ValueError(f"no *_master.h5 files in {root}; the bundle serves the data folder itself")
+    if not masters and not (root / "rans" / "manifest.json").is_file():
+        raise ValueError(f"no *_master.h5 files or rans/manifest.json in {root}; the bundle serves the data folder itself")
     viewer = root / ".viewer"
     viewer.mkdir(exist_ok=True)
     html = viewer / "Show4DSTEM.html"
@@ -579,3 +579,103 @@ def build_lazy_show4dstem_sidecar(
     }
     (lazy_dir / "meta.json").write_text(json.dumps(meta, separators=(",", ":")))
     return f"{label}_lazy/"
+
+
+# --- browser-resident lossless (rANS) series -------------------------------------------------
+
+def export_show4dstem_rans_viewer(
+    build_result: str | pathlib.Path,
+    out_dir: str | pathlib.Path,
+    *,
+    tilts: Sequence[int] | None = None,
+    title: str = "Show4DSTEM",
+    frame_labels: Sequence[str] | None = None,
+    valid_pixels: np.ndarray | None = None,
+    debug: bool = False,
+) -> pathlib.Path:
+    """Write a WebGPU viewer whose source is an encoded rANS series decoded in the browser.
+
+    ``build_result`` is the JSON written by the detector-rANS encoder (one record per
+    acquisition with ``artifacts`` folder, ``scan_block``, ``model_frames``,
+    ``scale_bits``, ``models`` and ``shape``). The encoded payload files are linked
+    read-only into ``out_dir/rans`` and read by HTTP byte range, so nothing large is
+    copied. Decode tables (packed symbol entries, a 256-bucket slot lookup per column,
+    column metadata) are derived once here and written next to the links.
+    """
+
+    from quantem.widget import Show4DSTEM
+
+    records = json.loads(pathlib.Path(build_result).read_text())["tilts"]
+    chosen = list(tilts) if tilts is not None else list(range(len(records)))
+    root = pathlib.Path(out_dir).expanduser().resolve()
+    rans = root / "rans"
+    rans.mkdir(parents=True, exist_ok=True)
+    manifest: dict = {"schema": "quantem.show4dstem-rans-browser/v1", "tilts": []}
+    shape = None
+    for ordinal, tilt in enumerate(chosen):
+        record = records[tilt]
+        artifacts = pathlib.Path(record["artifacts"])
+        det_rows, det_cols = int(record["shape"][2]), int(record["shape"][3])
+        K = det_rows * det_cols
+        frames = int(record["scan_block"])
+        blocks = int(record["shape"][0]) * int(record["shape"][1]) // frames
+        shape = (int(record["shape"][0]), int(record["shape"][1]), det_rows, det_cols)
+        offsets = np.load(artifacts / "offsets.npy")
+        starts = np.load(artifacts / "block_starts.npy")
+        payload_name = f"t{ordinal}-payload.bin"
+        _link_read_only(artifacts / "payload.bin", rans / payload_name)
+        blocks_meta = []
+        for b in range(blocks):
+            np.ascontiguousarray(offsets[b], dtype=np.uint32).tofile(rans / f"t{ordinal}-offsets-{b:02d}.u32")
+            blocks_meta.append(dict(index=b, byte_start=int(starts[b]), byte_end=int(starts[b + 1]),
+                                    bytes=int(starts[b + 1] - starts[b]), model=(b * frames) // int(record["model_frames"])))
+        models = []
+        for mi, m in enumerate(record["models"]):
+            with np.load(artifacts / m["path"]) as z:
+                ctx, sym, cum, freq, lit = (z[k] for k in ("context_offsets", "symbols", "cumulative", "frequencies", "literal"))
+            entries = np.empty((sym.size, 2), dtype=np.uint32)
+            entries[:, 0] = sym.astype(np.uint32) | (cum.astype(np.uint32) << 16)
+            entries[:, 1] = freq.astype(np.uint32)
+            lut = np.zeros((K, 256), dtype=np.uint8)
+            for k in range(K):
+                lo, hi = int(ctx[k]), int(ctx[k + 1])
+                if hi > lo:
+                    lut[k] = np.clip(np.searchsorted(cum[lo:hi].astype(np.int64), np.arange(256) << 7, side="right") - 1, 0, hi - lo - 1)
+            entries.tofile(rans / f"t{ordinal}-entries-{mi}.u32")
+            lut.tofile(rans / f"t{ordinal}-lut-{mi}.u8")
+            ctx.astype(np.uint32).tofile(rans / f"t{ordinal}-ctx-{mi}.u32")
+            lit.astype(np.uint8).tofile(rans / f"t{ordinal}-literal-{mi}.u8")
+            models.append(dict(index=mi, symbols=int(sym.size)))
+        manifest["tilts"].append(dict(tilt=ordinal, source_tilt=int(tilt), K=K, frames=frames, blocks=blocks,
+                                      scale=int(record["scale_bits"]), model_frames=int(record["model_frames"]),
+                                      payload_url=payload_name, payload_sha256=record.get("payload_sha256"),
+                                      blocks_meta=blocks_meta, models=models))
+    if shape is None:
+        raise ValueError("no acquisitions selected")
+    if valid_pixels is not None:
+        bad = np.flatnonzero(~np.asarray(valid_pixels, dtype=bool).reshape(-1))
+        manifest["bad_pixels"] = [int(v) for v in bad]
+    manifest["scan_shape"] = [shape[0], shape[1]]
+    manifest["detector_shape"] = [shape[2], shape[3]]
+    (rans / "manifest.json").write_text(json.dumps(manifest, indent=1))
+    widget = Show4DSTEM(
+        np.zeros((1, 1, 1, 1), dtype=np.uint8),
+        rans_url="../rans/",
+        rans_count=len(chosen),
+        scan_shape=(shape[0], shape[1]),
+        detector_shape=(shape[2], shape[3]),
+        frame_labels=list(frame_labels) if frame_labels else None,
+        backend="webgpu",
+        view_mode="multiple" if len(chosen) > 1 else "single",
+        compare_max_panels=max(3, len(chosen)),
+        compare_group_mode="all",
+        compare_dp_mode="selected",
+        precompute_virtual_images=False,
+        debug=debug,
+        verbose=False,
+    )
+    try:
+        export_show4dstem_webgpu_bundle(widget, root, title=title)
+    finally:
+        widget.close()
+    return root / ".viewer" / "Show4DSTEM.html"
