@@ -32,6 +32,7 @@ def test_all66_source112_preserves_browser_admission():
         assert widget._rans_format == "source112-tans1024-pair-v1"
         assert widget._rans_dtype == "uint16"
         assert widget._rans_url == "./source/"
+        assert widget.gpu_memory_label == "Browser WebGPU lossless encoded source"
     finally:
         widget.close()
 
