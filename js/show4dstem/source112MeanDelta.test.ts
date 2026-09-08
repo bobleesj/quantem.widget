@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { source112MeanDelta, countImagesForRender, type CompareCountImages } from "./source112MeanDelta";
+import { source112MeanDelta, sameDetectorMaskSupport, countImagesForRender, type CompareCountImages } from "./source112MeanDelta";
 
 describe("source112 mean display deltas", () => {
   it("reuses owned displays and normalizes new counts exactly once per update", () => {
@@ -90,5 +90,56 @@ describe("borrowed count display lifecycle", () => {
     expect(countImagesForRender(counts, true)).toBeNull();
     expect(countImagesForRender(counts, false)).toBeNull();
     expect(refreshFloat).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("source112 unchanged detector support", () => {
+  it("skips equal support, including empty masks, without confusing equal areas", () => {
+    const first = new Uint32Array([0, 1, 2, 0]);
+    expect(sameDetectorMaskSupport(first, new Uint32Array([0, 5, 1, 0]))).toBe(true);
+    expect(sameDetectorMaskSupport(new Uint32Array(36864), new Uint32Array(36864))).toBe(true);
+    expect(sameDetectorMaskSupport(first, new Uint32Array([1, 0, 2, 0]))).toBe(false);
+    expect(sameDetectorMaskSupport(first, new Uint32Array([0, 1, 2]))).toBe(false);
+    expect(Array.from(first)).toEqual([0, 1, 2, 0]);
+  });
+
+  it("stops the skip comparison at the first moved detector pixel", () => {
+    let reads = 0;
+    const mask = new Proxy(new Uint32Array(36864), {get(target, key) {
+      if (key === 'length') return target.length;
+      if (typeof key === 'string' && /^\d+$/.test(key)) reads++;
+      return Reflect.get(target, key, target);
+    }});
+    const previous = new Uint32Array(36864); previous[0] = 1;
+    expect(sameDetectorMaskSupport(mask, previous)).toBe(false);
+    expect(reads).toBe(1);
+  });
+
+  it("preserves exact native delta counts and float fallback after an unchanged pose", () => {
+    let previous: Uint32Array = new Uint32Array([1, 0, 0]);
+    const source = {
+      integrate: vi.fn((next: Uint32Array) => {
+        const added = Array.from(next).filter((value, i) => value && !previous[i]).length;
+        const removed = Array.from(previous).filter((value, i) => value && !next[i]).length;
+        return {added, removed, full: false};
+      }),
+      normalizeDisplayBuffers: vi.fn(),
+    };
+    const buffers = [{} as GPUBuffer];
+    const update = (mask: Uint32Array) => {
+      if (sameDetectorMaskSupport(mask, previous)) return null;
+      const result = source112MeanDelta(source, mask, buffers, () => false);
+      previous = mask;
+      return result;
+    };
+    expect(update(new Uint32Array([1, 0, 0]))).toBeNull();
+    expect(source.integrate).not.toHaveBeenCalled();
+    const next = new Uint32Array([0, 1, 0]);
+    expect(update(next)).toEqual({buffers, path: 'delta', addedPixels: 1, removedPixels: 1});
+    expect(previous).toBe(next);
+    expect(Array.from(next)).toEqual([0, 1, 0]);
+    expect(source.normalizeDisplayBuffers).toHaveBeenCalledExactlyOnceWith(buffers, 1);
+    expect(update(new Uint32Array([0, 1, 0]))).toBeNull();
+    expect(source.integrate).toHaveBeenCalledTimes(1);
   });
 });

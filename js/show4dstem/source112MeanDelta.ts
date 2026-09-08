@@ -37,3 +37,12 @@ export function countImagesForRender(counts: CompareCountImages | null, shared: 
   counts.refreshFloat();
   return null;
 }
+
+/** Detector skip decisions depend on included pixels, not mask storage values. */
+export function sameDetectorMaskSupport(left: Uint32Array, right: Uint32Array): boolean {
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i++) {
+    if (Boolean(left[i]) !== Boolean(right[i])) return false;
+  }
+  return true;
+}
