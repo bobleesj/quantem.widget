@@ -109,3 +109,18 @@ it("stages unaligned blocks into exact packed buffers and reports complete readi
   expect(set.readyMs).toBeGreaterThanOrEqual(set.loadMs + set.checkpointMs);
   expect(fetch).not.toHaveBeenCalled();
 });
+
+it("accepts a browser directory-input FileList without collapsing relative paths", async () => {
+  const { ransLocalFilesSource } = await import("../.generated/engine/detector/compute/webgpu/rans-source");
+  const file = (path: string, bytes: number[]) => {
+    const blob = new Blob([new Uint8Array(bytes)]);
+    Object.defineProperties(blob, { name: { value: path.split("/").pop() }, webkitRelativePath: { value: path } });
+    return blob as File;
+  };
+  const files = [file("export/rans/manifest.json", [123, 125]), file("export/rans/a/payload.bin", [255, 1]), file("export/rans/b/payload.bin", [128, 0])];
+  const source = await ransLocalFilesSource(files);
+  expect(new Uint8Array(await source.read("a/payload.bin"))).toEqual(new Uint8Array([255, 1]));
+  expect(new Uint8Array(await source.read("b/payload.bin"))).toEqual(new Uint8Array([128, 0]));
+  await expect(source.read("missing.bin")).rejects.toThrow("Missing local rANS file");
+  await expect(ransLocalFilesSource([])).rejects.toThrow("Select one rANS export folder");
+});
