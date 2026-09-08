@@ -1,18 +1,18 @@
 import type { Source112ResidentSet } from "../.generated/engine/detector/compute/webgpu/source112";
 
-/** Integrate exact counts, then paint their mean directly or refresh float displays. */
+/** Integrate exact counts, then retain their mean for painting or refresh floats. */
 export function source112MeanDelta(
   source: Pick<Source112ResidentSet, "integrate" | "normalizeDisplayBuffers">,
   mask: Uint32Array,
   previous: GPUBuffer[],
-  paintMean?: (area: number) => boolean,
+  retainMean?: (area: number) => boolean,
 ) {
   const delta = source.integrate(mask);
   // The caller supplies the effective detector mask, including native validity.
   const area = Math.max(1, mask.reduce((sum, value) => sum + (value ? 1 : 0), 0));
-  let painted = false;
-  try { painted = paintMean?.(area) ?? false; }
-  finally { if (!painted) source.normalizeDisplayBuffers(previous, area); }
+  let retained = false;
+  try { retained = retainMean?.(area) ?? false; }
+  finally { if (!retained) source.normalizeDisplayBuffers(previous, area); }
   return {
     buffers: previous,
     path: "delta" as const,
@@ -26,7 +26,37 @@ export type CompareCountImages = {
   isCurrent: () => boolean;
   refreshFloat: () => void;
 };
-export type CompareGpuRenderer = (counts?: CompareCountImages | null) => number;
+/** The return value is accepted panels when deferred, painted panels otherwise. */
+export type CompareGpuRenderer = (counts?: CompareCountImages | null, deferPaint?: boolean) => number;
+
+/** One queued canvas paint; newer scientific submissions replace its callback.
+ * The callback must select current borrowed views and synchronously submit the
+ * render: this keeps their mean divisor ordered with their GPU count buffer.
+ */
+export function createComparePaintScheduler(
+  requestFrame: (callback: FrameRequestCallback) => number = requestAnimationFrame,
+  cancelFrame: (handle: number) => void = cancelAnimationFrame,
+) {
+  let handle: number | null = null;
+  let latest: (() => void) | null = null;
+  return {
+    schedule(paint: () => void) {
+      latest = paint;
+      if (handle !== null) return;
+      handle = requestFrame(() => {
+        handle = null;
+        const draw = latest;
+        latest = null;
+        draw?.();
+      });
+    },
+    cancel() {
+      if (handle !== null) cancelFrame(handle);
+      handle = null;
+      latest = null;
+    },
+  };
+}
 
 /** Retain a current borrowed image for repaints, or refresh its float fallback.
  * A replaced/disposed source is discarded without touching its retired buffers.

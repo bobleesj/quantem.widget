@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { source112MeanDelta, sameDetectorMaskSupport, countImagesForRender, type CompareCountImages } from "./source112MeanDelta";
+import { source112MeanDelta, sameDetectorMaskSupport, countImagesForRender, createComparePaintScheduler, type CompareCountImages } from "./source112MeanDelta";
 
 describe("source112 mean display deltas", () => {
   it("reuses owned displays and normalizes new counts exactly once per update", () => {
@@ -64,7 +64,7 @@ describe("source112 mean display deltas", () => {
 });
 
 describe("borrowed count display lifecycle", () => {
-  it("skips conversion only after a complete direct mean paint", () => {
+  it("skips conversion only after all direct mean views are accepted", () => {
     const source = {integrate: vi.fn(() => ({added: 1, removed: 0, full: false})), normalizeDisplayBuffers: vi.fn()};
     const buffers = [{} as GPUBuffer];
     const paint = vi.fn(area => { expect(area).toBe(2); return true; });
@@ -141,5 +141,108 @@ describe("source112 unchanged detector support", () => {
     expect(source.normalizeDisplayBuffers).toHaveBeenCalledExactlyOnceWith(buffers, 1);
     expect(update(new Uint32Array([0, 1, 0]))).toBeNull();
     expect(source.integrate).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("compare paint cadence", () => {
+  function animationFrames() {
+    const callbacks = new Map<number, FrameRequestCallback>();
+    let next = 0;
+    return {
+      request: (callback: FrameRequestCallback) => { callbacks.set(++next, callback); return next; },
+      cancel: (handle: number) => { callbacks.delete(handle); },
+      tick: () => { const pending = [...callbacks.values()]; callbacks.clear(); pending.forEach(callback => callback(0)); },
+      count: () => callbacks.size,
+    };
+  }
+
+  it("computes every pose but paints the newest all66 mean with queue-ordered area", () => {
+    const frames = animationFrames();
+    const scheduler = createComparePaintScheduler(frames.request, frames.cancel);
+    // Model ordered GPU submissions: compute, render and later compute are
+    // enqueued synchronously, but execute only when the simulated queue drains.
+    const queue: Array<() => void> = [];
+    const counts = new Uint32Array(66);
+    const patterns = Array.from({ length: 66 }, (_, frame) => [frame + 1, 100 + frame, 1000 + frame]);
+    const output = {} as GPUBuffer;
+    const displays = Array.from({ length: 66 }, () => ({} as GPUBuffer));
+    const paints: number[][] = [];
+    let latest: CompareCountImages | null = null;
+    let completions = 0;
+    const source = {
+      integrate(mask: Uint32Array) {
+        const exact = patterns.map(pattern => pattern.reduce((sum, value, q) => sum + (mask[q] ? value : 0), 0));
+        queue.push(() => { counts.set(exact); completions++; });
+        return { added: 1, removed: 1, full: false };
+      },
+      normalizeDisplayBuffers: vi.fn(),
+    };
+    const update = (mask: Uint32Array) => source112MeanDelta(source, mask, displays, area => {
+      latest = {
+        images: new Map(patterns.map((_, frame) => [frame, { buffer: output, divisor: area } as import("../colormaps").Uint32ImageView])),
+        isCurrent: () => true, refreshFloat: vi.fn(),
+      };
+      scheduler.schedule(() => {
+        const current = countImagesForRender(latest, true)!;
+        const areas = [...current.images.values()].map(view => view.divisor);
+        queue.push(() => { paints.push(Array.from(counts, (value, frame) => Math.fround(Math.fround(value) / areas[frame]))); });
+      });
+      return true;
+    });
+    update(new Uint32Array([1, 0, 0]));
+    update(new Uint32Array([1, 1, 0]));
+    expect(frames.count()).toBe(1);
+    expect(completions).toBe(0);
+    frames.tick(); // Paint uses second pose's counts and area2.
+    update(new Uint32Array([0, 0, 1])); // Later compute must not corrupt that queued paint.
+    queue.splice(0).forEach(command => command());
+    expect(completions).toBe(3);
+    expect(paints).toEqual([patterns.map(pattern => (pattern[0] + pattern[1]) / 2)]);
+    expect(Array.from(counts)).toEqual(patterns.map(pattern => pattern[2]));
+    frames.tick();
+    queue.splice(0).forEach(command => command());
+    expect(paints[1]).toEqual(patterns.map(pattern => pattern[2]));
+    expect(source.normalizeDisplayBuffers).not.toHaveBeenCalled();
+  });
+
+  it("uses current display settings at paint and refreshes the newest area for legacy mode", () => {
+    const frames = animationFrames();
+    const scheduler = createComparePaintScheduler(frames.request, frames.cancel);
+    let area = 2, shared = true, current = true;
+    let retained: CompareCountImages;
+    const refreshFloat = vi.fn();
+    const paints: Array<string | null> = [];
+    let scale = "linear";
+    const update = () => {
+      const divisor = area;
+      retained = { images: new Map([[0, { divisor } as import("../colormaps").Uint32ImageView]]), isCurrent: () => current,
+        refreshFloat: () => refreshFloat(divisor) };
+      scheduler.schedule(() => {
+        const view = countImagesForRender(retained, shared);
+        paints.push(view ? `${scale}:${view.images.get(0)!.divisor}` : null);
+      });
+    };
+    update(); area = 3; update(); scale = "log"; frames.tick();
+    expect(paints).toEqual(["log:3"]);
+    update(); shared = false; frames.tick();
+    expect(refreshFloat).toHaveBeenCalledExactlyOnceWith(3);
+    update(); current = false; frames.tick();
+    expect(refreshFloat).toHaveBeenCalledTimes(1);
+    expect(paints[paints.length - 1]).toBeNull();
+  });
+
+  it("cancels deferred work on settled replacement and unmount without owning source buffers", () => {
+    const frames = animationFrames();
+    const scheduler = createComparePaintScheduler(frames.request, frames.cancel);
+    const retiredPaint = vi.fn();
+    scheduler.schedule(retiredPaint);
+    scheduler.cancel(); frames.tick();
+    expect(retiredPaint).not.toHaveBeenCalled();
+    const currentPaint = vi.fn();
+    scheduler.schedule(currentPaint); frames.tick();
+    expect(currentPaint).toHaveBeenCalledTimes(1);
+    scheduler.schedule(currentPaint); scheduler.cancel(); frames.tick();
+    expect(currentPaint).toHaveBeenCalledTimes(1);
   });
 });
