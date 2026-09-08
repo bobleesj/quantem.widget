@@ -7,7 +7,7 @@ import { createRender, useModelState, useModel } from "@anywidget/react";
 import { CompareBatchCanvas } from "./batchCanvas";
 import { readSettledCompareHistogram } from "./settledHistogram";
 import { sharedCanvasLayout } from "./sharedCanvasLayout";
-import { source112MeanDelta, sameDetectorMaskSupport, countImagesForRender, type CompareCountImages, type CompareGpuRenderer } from "./source112MeanDelta";
+import { source112MeanDelta, sameDetectorMaskSupport, countImagesForRender, createComparePaintScheduler, type CompareCountImages, type CompareGpuRenderer } from "./source112MeanDelta";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Stack from "@mui/material/Stack";
@@ -1737,16 +1737,42 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   }, [integerCounts, batchEnabled, batchFailed, gpuEngine, gpuSlots, gpuVersion, panelByFrame, progressivePage, renderIndices, scaleMode]);
 
   const countImagesRef = React.useRef<CompareCountImages | null>(null);
-  React.useEffect(() => () => { countImagesRef.current = null; }, []);
-  const renderGpuSlotsNow = React.useCallback((counts?: CompareCountImages | null): number => {
+  const comparePaintScheduler = React.useMemo(() => createComparePaintScheduler(), []);
+  const latestComparePaintRef = React.useRef<() => void>(() => {});
+  React.useLayoutEffect(() => () => {
+    comparePaintScheduler.cancel();
+    countImagesRef.current = null;
+  }, [comparePaintScheduler]);
+  const renderGpuSlotsNow = React.useCallback((counts?: CompareCountImages | null, deferPaint = false): number => {
     // Null means a settled/full update already refreshed the stable float slots.
-    if (counts === null) { countImagesRef.current = null; return 0; }
+    if (counts === null) {
+      comparePaintScheduler.cancel();
+      countImagesRef.current = null;
+      return 0;
+    }
+    if (!deferPaint) comparePaintScheduler.cancel();
     if (counts) countImagesRef.current = counts;
     const sharedReady = Boolean(sharedGpuEnabled && gpuEngine && gpuSlots && sharedLayoutRef.current && batchCanvasRef.current
       && sharedLayoutRef.current.rectangles.length === renderEntries.length);
     // New hot counts fall back in their caller. Previously retained views must
     // refresh floats before a legacy/missing-canvas repaint can use those slots.
-    if (counts && !sharedReady) { countImagesRef.current = null; return 0; }
+    if (counts && !sharedReady) {
+      comparePaintScheduler.cancel();
+      countImagesRef.current = null;
+      return 0;
+    }
+    if (counts && deferPaint) {
+      if (!counts.isCurrent() || !sharedContextRef.current
+        || !renderEntries.every(entry => gpuSlots!.has(entry.frame) && counts.images.has(entry.frame))) {
+        comparePaintScheduler.cancel();
+        countImagesRef.current = null;
+        return 0;
+      }
+      // Retain the newest area immediately after its count submission. At RAF,
+      // drawing uses these current views; no await separates selection/submission.
+      comparePaintScheduler.schedule(() => { latestComparePaintRef.current(); });
+      return renderEntries.length;
+    }
     countImagesRef.current = countImagesForRender(countImagesRef.current, sharedReady);
     if (!gpuEngine || !gpuSlots) return 0;
     const lut = COLORMAPS[colormap] || COLORMAPS.inferno;
@@ -1820,7 +1846,11 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     );
     if (painted > 0) onGpuPaint?.(painted);
     return painted;
-  }, [colormap, comparePanX, comparePanY, compareZoom, gpuEngine, gpuSlots, onGpuPaint, renderEntries, scaleMode, shapeCols, shapeRows, sharedGpuEnabled, smooth, vmaxPct, vminPct]);
+  }, [colormap, comparePaintScheduler, comparePanX, comparePanY, compareZoom, gpuEngine, gpuSlots, onGpuPaint, renderEntries, scaleMode, shapeCols, shapeRows, sharedGpuEnabled, smooth, vmaxPct, vminPct]);
+
+  React.useLayoutEffect(() => {
+    latestComparePaintRef.current = () => { renderGpuSlotsNow(); };
+  }, [renderGpuSlotsNow]);
 
   React.useLayoutEffect(() => {
     if (sharedGpuEnabled) {
@@ -5193,7 +5223,7 @@ function Show4DSTEM() {
             let addedPixels = 0;
             let removedPixels = 0;
             let normalizedSource112Delta = false;
-            let directPainted = 0;
+            let directPaintQueued = false;
             if (
               interactiveDrag
               && previous
@@ -5232,13 +5262,13 @@ function Show4DSTEM() {
                 ? source112MeanDelta(ransSet, mask0, prevBuffers, area => {
                     const resident = ransSet;
                     const views = resident.imageViewsU32(batchFrames, area);
-                    directPainted = compareGpuRenderNowRef.current?.({
+                    const accepted = compareGpuRenderNowRef.current?.({
                       images: new Map(batchFrames.map((frame, i) => [frame, views[i]])),
                       isCurrent: () => !disposed && ransSet === resident,
                       refreshFloat: () => { if (!disposed && ransSet === resident) resident.normalizeDisplayBuffers(prevBuffers, area); },
-                    }) ?? 0;
-                    if (directPainted !== batchFrames.length) { directPainted = 0; return false; }
-                    return true;
+                    }, true) ?? 0;
+                    directPaintQueued = accepted === batchFrames.length;
+                    return directPaintQueued;
                   })
                 : DetectorCompute.maskedSumDeltaBuffersBatch(batchComputes, prevBuffers, addedMask!, removedMask!);
               buffers = delta.buffers;
@@ -5254,7 +5284,7 @@ function Show4DSTEM() {
               const area = Math.max(1, mask0.reduce((n, value) => n + (value ? 1 : 0), 0));
               ransSet.normalizeDisplayBuffers(buffers, area);
             }
-            if (!directPainted) compareGpuRenderNowRef.current?.(null);
+            if (!directPaintQueued) compareGpuRenderNowRef.current?.(null);
             const nextBuffers = new Map<number, GPUBuffer>();
             for (let i = 0; i < buffers.length; i++) {
               engine0.adoptBuffer(batchSlots[i], buffers[i], scanCols, scanRows);
@@ -5267,7 +5297,9 @@ function Show4DSTEM() {
               buffers: nextBuffers,
               indicesKey,
             };
-            const paintedNow = directPainted || (interactiveDrag ? (compareGpuRenderNowRef.current?.() ?? 0) : 0);
+            // A queued RAF is not a paint. Fresh science completions remain
+            // independent; the canvas reports actual paints via onGpuPaint.
+            const paintedNow = !directPaintQueued && interactiveDrag ? (compareGpuRenderNowRef.current?.() ?? 0) : 0;
             compareGpuCompletion = engine0.getDevice().queue.onSubmittedWorkDone();
             if (interactiveDrag && !ransSet) await compareGpuCompletion;
             if (disposed || gen !== compareViGen) return false;
