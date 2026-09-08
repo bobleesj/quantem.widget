@@ -6,7 +6,7 @@ import * as React from "react";
 import { createRender, useModelState, useModel } from "@anywidget/react";
 import { CompareBatchCanvas } from "./batchCanvas";
 import { sharedCanvasLayout } from "./sharedCanvasLayout";
-import { source112MeanDelta } from "./source112MeanDelta";
+import { source112MeanDelta, countImagesForRender, type CompareCountImages, type CompareGpuRenderer } from "./source112MeanDelta";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Stack from "@mui/material/Stack";
@@ -28,7 +28,7 @@ import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { useTheme } from "../theme";
-import { COLORMAPS, GPUColormapEngine, applyColormap } from "../colormaps";
+import { COLORMAPS, GPUColormapEngine, applyColormap, type Uint32ImageView } from "../colormaps";
 import { WebGPUFFT, getWebGPUFFT, fft2dAsync, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset } from "../fft";
 import { findFFTPeakWebGPU, sampleLineProfileWebGPU } from "../geometry";
 import {
@@ -1545,7 +1545,7 @@ interface CompareVirtualGridProps {
     paintedIndices: number[],
   ) => void;
   onGpuPaint?: (panelCount: number) => void;
-  onGpuRendererReady?: (renderNow: (() => number) | null) => void;
+  onGpuRendererReady?: (renderNow: CompareGpuRenderer | null) => void;
 }
 
 const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
@@ -1735,7 +1735,18 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       .filter((entry) => Boolean(progressivePage) || entry.panel !== undefined || entry.gpuLoaded);
   }, [integerCounts, batchEnabled, batchFailed, gpuEngine, gpuSlots, gpuVersion, panelByFrame, progressivePage, renderIndices, scaleMode]);
 
-  const renderGpuSlotsNow = React.useCallback((): number => {
+  const countImagesRef = React.useRef<CompareCountImages | null>(null);
+  React.useEffect(() => () => { countImagesRef.current = null; }, []);
+  const renderGpuSlotsNow = React.useCallback((counts?: CompareCountImages | null): number => {
+    // Null means a settled/full update already refreshed the stable float slots.
+    if (counts === null) { countImagesRef.current = null; return 0; }
+    if (counts) countImagesRef.current = counts;
+    const sharedReady = Boolean(sharedGpuEnabled && gpuEngine && gpuSlots && sharedLayoutRef.current && batchCanvasRef.current
+      && sharedLayoutRef.current.rectangles.length === renderEntries.length);
+    // New hot counts fall back in their caller. Previously retained views must
+    // refresh floats before a legacy/missing-canvas repaint can use those slots.
+    if (counts && !sharedReady) { countImagesRef.current = null; return 0; }
+    countImagesRef.current = countImagesForRender(countImagesRef.current, sharedReady);
     if (!gpuEngine || !gpuSlots) return 0;
     const lut = COLORMAPS[colormap] || COLORMAPS.inferno;
     gpuEngine.uploadLUT(colormap, lut);
@@ -1747,15 +1758,33 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         sharedContextRef.current = gpuEngine.configureCanvas(canvas, layout.width, layout.height);
       }
       const context = sharedContextRef.current;
-      if (!context) return 0;
+      if (!context) {
+        if (!counts) countImagesRef.current?.refreshFloat();
+        countImagesRef.current = null;
+        return 0;
+      }
       const slots: number[] = [];
       const rectangles: typeof layout.rectangles = [];
+      const currentCounts = countImagesRef.current;
+      const countViews = currentCounts ? new Map<number, Uint32ImageView>() : undefined;
+      let missingCountView = false;
       renderEntries.forEach((entry, i) => {
         const slot = gpuSlots.get(entry.frame);
-        if (slot !== undefined) { slots.push(slot); rectangles.push(layout.rectangles[i]); }
+        if (slot === undefined) return;
+        slots.push(slot); rectangles.push(layout.rectangles[i]);
+        if (countViews) {
+          const view = currentCounts!.images.get(entry.frame);
+          if (view) countViews.set(slot, view);
+          else missingCountView = true;
+        }
       });
+      if (missingCountView) {
+        countImagesRef.current = null;
+        if (!counts) currentCounts!.refreshFloat();
+        else return 0;
+      }
       const painted = gpuEngine.renderSlotsDirectWithGpuRangeToCanvas(slots, rectangles, context, vminPct, vmaxPct, scaleMode === "log", {
-        width: layout.width, height: layout.height, bgRgb: 0,
+        width: layout.width, height: layout.height, bgRgb: 0, counts: countImagesRef.current ? countViews : undefined,
         transform: { zoom: compareZoom, panX: comparePanX, panY: comparePanY }, smooth,
       });
       if (painted > 0) {
@@ -3469,7 +3498,7 @@ function Show4DSTEM() {
   const [compareGpuVersion, setCompareGpuVersion] = React.useState(0);
   const compareGpuSlotsRef = React.useRef(new Map<number, number>());
   const compareGpuHistogramGenRef = React.useRef(0);
-  const compareGpuRenderNowRef = React.useRef<(() => number) | null>(null);
+  const compareGpuRenderNowRef = React.useRef<CompareGpuRenderer | null>(null);
   const compareIncrementalRef = React.useRef<{
     mask: Uint32Array;
     buffers: Map<number, GPUBuffer>;
@@ -5155,6 +5184,7 @@ function Show4DSTEM() {
             let addedPixels = 0;
             let removedPixels = 0;
             let normalizedSource112Delta = false;
+            let directPainted = 0;
             if (
               interactiveDrag
               && previous
@@ -5180,10 +5210,20 @@ function Show4DSTEM() {
               }
               const prevBuffers = batchFrames.map((frame) => previous.buffers.get(frame)!);
               // Native source112 owns exact counts separately from these display
-              // copies; refresh their mean once, without an unused sum conversion.
+              // copies; render exact means directly when the shared canvas is ready.
               normalizedSource112Delta = ransSet instanceof Source112ResidentSet;
               const delta = ransSet instanceof Source112ResidentSet
-                ? source112MeanDelta(ransSet, mask0, prevBuffers)
+                ? source112MeanDelta(ransSet, mask0, prevBuffers, area => {
+                    const resident = ransSet;
+                    const views = resident.imageViewsU32(batchFrames, area);
+                    directPainted = compareGpuRenderNowRef.current?.({
+                      images: new Map(batchFrames.map((frame, i) => [frame, views[i]])),
+                      isCurrent: () => !disposed && ransSet === resident,
+                      refreshFloat: () => { if (!disposed && ransSet === resident) resident.normalizeDisplayBuffers(prevBuffers, area); },
+                    }) ?? 0;
+                    if (directPainted !== batchFrames.length) { directPainted = 0; return false; }
+                    return true;
+                  })
                 : DetectorCompute.maskedSumDeltaBuffersBatch(batchComputes, prevBuffers, addedMask, removedMask);
               buffers = delta.buffers;
               path = delta.path;
@@ -5198,6 +5238,7 @@ function Show4DSTEM() {
               const area = Math.max(1, mask0.reduce((n, value) => n + (value ? 1 : 0), 0));
               ransSet.normalizeDisplayBuffers(buffers, area);
             }
+            if (!directPainted) compareGpuRenderNowRef.current?.(null);
             const nextBuffers = new Map<number, GPUBuffer>();
             for (let i = 0; i < buffers.length; i++) {
               engine0.adoptBuffer(batchSlots[i], buffers[i], scanCols, scanRows);
@@ -5209,7 +5250,7 @@ function Show4DSTEM() {
               buffers: nextBuffers,
               indicesKey,
             };
-            const paintedNow = interactiveDrag ? (compareGpuRenderNowRef.current?.() ?? 0) : 0;
+            const paintedNow = directPainted || (interactiveDrag ? (compareGpuRenderNowRef.current?.() ?? 0) : 0);
             compareGpuCompletion = engine0.getDevice().queue.onSubmittedWorkDone();
             if (interactiveDrag && !ransSet) await compareGpuCompletion;
             if (disposed || gen !== compareViGen) return false;
@@ -6289,6 +6330,7 @@ function Show4DSTEM() {
     });
     return () => {
       disposed = true;
+      compareGpuRenderNowRef.current?.(null);
       sourceLoadAbort.abort();
       requestViFinalizeRef.current = null;
       requestCompareViLiveRef.current = null;
@@ -9929,7 +9971,7 @@ function Show4DSTEM() {
   const recordCompareGpuPaint = React.useCallback((panelCount: number) => {
     publishLiveCompareViStats("paint", { paintedPanels: panelCount });
   }, [publishLiveCompareViStats]);
-  const setCompareGpuRenderer = React.useCallback((renderNow: (() => number) | null) => {
+  const setCompareGpuRenderer = React.useCallback((renderNow: CompareGpuRenderer | null) => {
     compareGpuRenderNowRef.current = renderNow;
   }, []);
 
