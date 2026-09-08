@@ -3359,7 +3359,7 @@ function Show4DSTEM() {
   // Python comm message per animation frame. Without this, drag fires 60+
   // events/sec at >100ms Python compute each → queue piles up → laggy UX.
   const roiCenterPendingRef = React.useRef<[number, number] | null>(null);
-  const drawDpLiveRef = React.useRef<((center: [number, number]) => void) | null>(null);
+  const drawDpLiveRef = React.useRef<((center?: [number, number]) => void) | null>(null);
   const isResidentCompareDrag = React.useCallback(() => Boolean(model.get("_rans_url"))
     && ["multiple", "compare"].includes(String(model.get("view_mode")))
     && Number(model.get("n_frames")) > 1
@@ -3387,11 +3387,9 @@ function Show4DSTEM() {
     }
   }, [flushRoiCenter]);
   // Both circular handles preserve latest geometry for resident computation;
-  // React ring updates and nonresident model writes remain RAF-coalesced.
-  const [localRoiRadius, setLocalRoiRadius] = React.useState<number | null>(null);
-  const [localRoiRadiusInner, setLocalRoiRadiusInner] = React.useState<number | null>(null);
-  const roiRadius = localRoiRadius ?? roiRadiusModel;
-  const roiRadiusInner = localRoiRadiusInner ?? roiRadiusInnerModel;
+  // Imperative ring paints and nonresident model writes remain RAF-coalesced.
+  const roiRadius = roiRadiusModel;
+  const roiRadiusInner = roiRadiusInnerModel;
   const roiRadiusPendingRef = React.useRef<number | null>(null);
   const roiRadiusInnerPendingRef = React.useRef<number | null>(null);
   const roiRadiusRafRef = React.useRef<number | null>(null);
@@ -3400,8 +3398,7 @@ function Show4DSTEM() {
     if (dpRoiInteractiveRef.current && isResidentCompareDrag()) {
       // Keep the refs current for every scientific update. Publish final traits
       // after release; ring repaint is independent of scientific submission.
-      if (roiRadiusPendingRef.current !== null) setLocalRoiRadius(roiRadiusPendingRef.current);
-      if (roiRadiusInnerPendingRef.current !== null) setLocalRoiRadiusInner(roiRadiusInnerPendingRef.current);
+      drawDpLiveRef.current?.();
     } else {
       const updates: Record<string, number> = {};
       if (roiRadiusPendingRef.current !== null) updates.roi_radius = roiRadiusPendingRef.current;
@@ -6426,7 +6423,6 @@ function Show4DSTEM() {
       roiRadiusRafRef.current = null;
       roiRadiusPendingRef.current = null;
       roiRadiusInnerPendingRef.current = null;
-      setLocalRoiRadius(null); setLocalRoiRadiusInner(null);
       sourceLoadAbort.abort();
       requestViFinalizeRef.current = null;
       requestCompareViLiveRef.current = null;
@@ -8279,6 +8275,10 @@ function Show4DSTEM() {
   // DP scale bar + crosshair + ROI overlay + profile line (high-DPI)
   const drawDpUi = React.useCallback((center?: [number, number]) => {
     center ??= dpRoiInteractiveRef.current ? roiCenterPendingRef.current ?? undefined : undefined;
+    // Read the same pending radii as mask construction, including repaints
+    // caused by zoom/exposure while a handle is held. React commits on release.
+    const outer = dpRoiInteractiveRef.current ? roiRadiusPendingRef.current ?? roiRadius : roiRadius;
+    const inner = dpRoiInteractiveRef.current ? roiRadiusInnerPendingRef.current ?? roiRadiusInner : roiRadiusInner;
     if (!dpUiRef.current) return;
     const canvas = dpUiRef.current;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -8295,7 +8295,7 @@ function Show4DSTEM() {
       } else {
         drawRoiOverlayHiDPI(
           dpUiRef.current, DPR, roiMode,
-          center?.[1] ?? localKCol, center?.[0] ?? localKRow, roiRadius, roiRadiusInner, roiWidth, roiHeight,
+          center?.[1] ?? localKCol, center?.[0] ?? localKRow, outer, inner, roiWidth, roiHeight,
           dpZoom, dpPanX, dpPanY, detCols, detRows,
           isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner,
           roiColors
@@ -9321,9 +9321,7 @@ function Show4DSTEM() {
       dpClickStartRef.current = null;
       setIsDraggingDP(false);
       setIsDraggingResize(false);
-      setLocalRoiRadius(null); setLocalRoiRadiusInner(null);  // revert ring to committed model radius on release
       setIsDraggingResizeInner(false);
-      setLocalRoiRadius(null); setLocalRoiRadiusInner(null);
       setHoveredDpProfileEndpoint(null);
       setIsHoveringDpProfileLine(false);
       return;
@@ -9359,7 +9357,6 @@ function Show4DSTEM() {
     }
     dpClickStartRef.current = null;
     setIsDraggingDP(false); setIsDraggingResize(false); setIsDraggingResizeInner(false);
-    setLocalRoiRadius(null); setLocalRoiRadiusInner(null);
     setDraggingDpProfileEndpoint(null);
     setIsDraggingDpProfileLine(false);
     setHoveredDpProfileEndpoint(null);
@@ -9373,7 +9370,6 @@ function Show4DSTEM() {
     dpClickStartRef.current = null;
     finishDpRoiInteraction();
     setIsDraggingDP(false); setIsDraggingResize(false); setIsDraggingResizeInner(false);
-    setLocalRoiRadius(null); setLocalRoiRadiusInner(null);
     setDraggingDpProfileEndpoint(null);
     setIsDraggingDpProfileLine(false);
     setHoveredDpProfileEndpoint(null);
