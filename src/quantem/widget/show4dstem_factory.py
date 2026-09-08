@@ -28,6 +28,16 @@ def _payload(value: Any) -> Any:
     return value.data if isinstance(value, LoadResult) else value
 
 
+def _is_cuda_resident(value: Any) -> bool:
+    # Ordinary arrays keep working with released GPU packages predating this
+    # optional owner protocol. Import the adapter only for an explicit marker.
+    if getattr(value, "_quantem_cuda_resident_version", None) != 1:
+        return False
+    from quantem.gpu.io._resident import is_cuda_resident
+
+    return is_cuda_resident(value)
+
+
 def is_mps_show4dstem_payload(value: Any) -> bool:
     """Return True when ``value`` should use the raw-Metal Show4DSTEM path.
 
@@ -37,6 +47,8 @@ def is_mps_show4dstem_payload(value: Any) -> bool:
     viewer.
     """
     payload = _payload(value)
+    if _is_cuda_resident(payload):
+        return False
     payload_device = str(getattr(payload, "device", ""))
     is_mps_frames = (
         bool(getattr(payload, "_is_gpu_frames", False)) and "mps" in payload_device
@@ -47,6 +59,8 @@ def is_mps_show4dstem_payload(value: Any) -> bool:
 def show4dstem_backend_kind(value: Any) -> str:
     """Classify the backend family the public factory will select."""
     payload = _payload(value)
+    if _is_cuda_resident(payload):
+        return "resident"
     if is_mps_show4dstem_payload(payload):
         return "mps"
     return "base"
@@ -98,6 +112,10 @@ def Show4DSTEM(data: Any, **kwargs: Any) -> Any:
     """
     payload = _payload(data)
     _apply_loadresult_defaults(data, payload, kwargs)
+    if _is_cuda_resident(payload):
+        from quantem.widget.show4dstem_resident import _ResidentShow4DSTEM
+
+        return _ResidentShow4DSTEM(payload, **kwargs)
     if is_mps_show4dstem_payload(payload):
         return _build_mps_viewer(payload, **kwargs)
 

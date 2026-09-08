@@ -427,6 +427,9 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     # on-demand byte-range frame reads.
     _h5_url = traitlets.Unicode("").tag(sync=True)
     _h5_urls = traitlets.Unicode("").tag(sync=True)
+    # Browser-resident lossless (rANS) series folder: the WebGPU frontend decodes
+    # on the GPU and never uploads per interaction. Set by the rANS export.
+    _rans_url = traitlets.Unicode("").tag(sync=True)
     _h5_uint8_lossless = traitlets.Bool(False).tag(sync=True)
     # Lazy mode: a sidecar bundle URL (radial profile + CoM + frame index + data files). The JS
     # derives the virtual image from the ~100 MB profile in VRAM and lazy-fetches CBED frames from
@@ -603,6 +606,10 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         sync=True
     )
     compare_virtual_image_bytes = traitlets.Bytes(b"").tag(sync=True)
+    # Optional complete resident-batch metadata. Empty dictionaries retain the
+    # existing float32 comparison path; resident owners publish dtype explicitly.
+    resident_batch_info = traitlets.Dict(default_value={}).tag(sync=True)
+    resident_stream = traitlets.Dict(default_value={}).tag(sync=True)
     compare_panel_count = traitlets.Int(0).tag(sync=True)
     compare_panel_indices = traitlets.List(traitlets.Int(), default_value=[]).tag(
         sync=True
@@ -1376,6 +1383,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         offline_dtype: str = "uint8",
         h5_url: str | None = None,
         h5_urls: Sequence[str] | None = None,
+        rans_url: str | None = None,
+        rans_count: int = 1,
         lazy_url: str | None = None,
         lazy_urls: Sequence[str] | None = None,
         h5_uint8_lossless: bool = False,
@@ -1525,7 +1534,9 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         # browser VRAM and create indistinguishable compare panels.
         if webgpu_h5_urls and webgpu_lazy_urls:
             raise ValueError("Use h5_urls= or lazy_urls=, not both.")
-        webgpu_source_count = len(webgpu_lazy_urls) or len(webgpu_h5_urls)
+        if rans_url and (webgpu_h5_urls or webgpu_lazy_urls):
+            raise ValueError("Use rans_url= alone; it is a complete browser-resident source.")
+        webgpu_source_count = len(webgpu_lazy_urls) or len(webgpu_h5_urls) or (int(rans_count) if rans_url else 0)
         if webgpu_source_count:
             webgpu_h5_urls = list(dict.fromkeys(webgpu_h5_urls))
             if scan_shape is None:
@@ -1548,7 +1559,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
 
         # Extract underlying array / tensor + auto-calibrate from Dataset input
         # (duck-typed via the dual-slot private attributes _tensor / _array).
-        if not webgpu_h5_urls:
+        if not webgpu_h5_urls and not rans_url:
             is_dataset5dstem_input = type(data).__name__ == "Dataset5dstem" and hasattr(
                 data, "frame"
             )
@@ -1686,7 +1697,14 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 data = torch.from_dlpack(data)
             # Torch tensor input keeps its device (lets user pin a specific GPU via
             # `data.cuda(1)`). NumPy / Dataset input gets default-validated device.
-            if is_dataset5dstem:
+            is_resident_data = getattr(self, "_resident_source", None) is data
+            if is_resident_data:
+                # Only small UI coordinates/display products use Torch CPU.
+                # Scientific operations stay on the explicitly owned CUDA executor.
+                self._device = torch.device("cpu")
+                self._data_pre = data
+                data_np = None
+            elif is_dataset5dstem:
                 self._device = data.device
                 self._data_pre = data
                 data_np = None
@@ -1751,7 +1769,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         elif self._data_pre is not None:
             self._data = (
                 self._data_pre
-                if is_dataset5dstem or self._data_pre.device == self._device
+                if is_dataset5dstem or is_resident_data or self._data_pre.device == self._device
                 else self._data_pre.to(self._device)
             )
             del self._data_pre
@@ -1854,6 +1872,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             self._offline_codec = offline_codec
             self._h5_url = webgpu_h5_urls[0] if len(webgpu_h5_urls) == 1 else ""
             self._h5_urls = json.dumps(webgpu_h5_urls) if len(webgpu_h5_urls) > 1 else ""
+            self._rans_url = str(rans_url) if rans_url else ""
             self._lazy_url = webgpu_lazy_urls[0] if len(webgpu_lazy_urls) == 1 else ""
             self._lazy_urls = (
                 json.dumps(webgpu_lazy_urls) if len(webgpu_lazy_urls) > 1 else ""
@@ -1982,6 +2001,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         else:
             first_frame = self._data
         first_frame_sample = first_frame[0] if first_frame.ndim >= 3 else first_frame
+        if isinstance(first_frame_sample, np.ndarray):
+            first_frame_sample = torch.from_numpy(np.array(first_frame_sample, copy=True))
         if not torch.is_floating_point(first_frame_sample):
             first_frame_sample = first_frame_sample.float()
         self.dp_global_min = max(float(first_frame_sample.min()), MIN_LOG_VALUE)
@@ -9059,7 +9080,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 return
             mask = self._current_detector_mask()
             images = self._compare_virtual_images_for_display_indices(indices, mask)
-            if not images:
+            if len(images) == 0:
                 self._set_gpu_memory_warning(
                     action="compute any multiple-panel virtual images",
                     requested=len(indices),
@@ -9084,9 +9105,12 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 )
             else:
                 self._clear_gpu_memory_warning()
-            stack = np.ascontiguousarray(np.stack(images, axis=0), dtype=np.float32)
+            # Resident backends can return one contiguous batch directly. Avoid
+            # splitting it into images and stacking the same allocation again.
+            stack = np.ascontiguousarray(images, dtype=np.float32)
+            payload = stack.tobytes()
             with self.hold_trait_notifications():
-                self.compare_virtual_image_bytes = stack.tobytes()
+                self.compare_virtual_image_bytes = payload
                 self.compare_panel_count = len(shown_indices)
                 self.compare_panel_indices = shown_indices
                 self.compare_status = self._compare_status_for_indices(
@@ -9098,7 +9122,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                     partial_reason=partial_reason,
                 )
             self._store_cached_compare_preset(
-                stack.tobytes(),
+                payload,
                 tuple(shown_indices),
                 self.compare_status,
             )
