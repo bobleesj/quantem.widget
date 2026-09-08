@@ -40,7 +40,7 @@ def test_all66_source112_preserves_browser_admission():
 @pytest.mark.parametrize(
     "changes",
     [
-        {"rans_count": 65},
+        {"rans_count": 0},
         {"rans_count": 67},
         {"rans_count": 66.5},
         {"rans_dtype": "uint8"},
@@ -54,3 +54,15 @@ def test_all66_source112_preserves_browser_admission():
 def test_reject_incomplete_or_mixed_native_source(changes):
     with pytest.raises(ValueError):
         construct(**changes)
+
+
+@pytest.mark.parametrize("count", [1, 3, 66])
+def test_progressive_subset_keeps_complete_native_acquisitions(count):
+    widget = construct(rans_count=count)
+    try:
+        assert widget.n_frames == count
+        assert (widget.shape_rows, widget.shape_cols) == (512, 512)
+        assert (widget.det_rows, widget.det_cols) == (192, 192)
+        assert widget._rans_dtype == "uint16"
+    finally:
+        widget.close()
