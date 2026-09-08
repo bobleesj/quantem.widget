@@ -24,6 +24,7 @@ def test_calibrated_map_export_and_saved_state(tmp_path):
         colorbar_label="Normalized G3",
         width=1200,
         max_width=420,
+        save_state=True,
     )
     assert plot.plot_width_px == 420
     assert plot.layout.max_width == "min(100%, 420px)"
@@ -95,3 +96,27 @@ def test_meter_calibration_preserves_uniform_grid_requirement():
     for invalid in ([0, 1e-10, 5e-11], [0, 1e-10, 1e-10], [0, 1e-10, 5e-9]):
         with pytest.raises(ValueError, match="uniformly spaced bin centers"):
             Plot2D(values, x=np.array(invalid), y=angles)
+
+
+def test_lightweight_snapshot_preserves_live_values_and_current_preview():
+    """Save a calibrated view without embedding its source array by default."""
+    values = np.arange(24, dtype=float).reshape(4, 6)
+    plot = Plot2D(values, x=np.arange(6), y=np.arange(4))
+    first = plot.get_state()
+    assert "data_bytes" not in first
+    assert first["_static_fallback_mime"] == "image/png"
+    assert base64.b64decode(first["_static_fallback_jpeg"]).startswith(b"\x89PNG")
+    plot.view_bounds = [1, 4, 0, 2]
+    plot.horizontal_line = 1.5
+    plot.set_data(values[::-1])
+    saved = plot.get_state()
+    assert saved["_static_fallback_jpeg"] != first["_static_fallback_jpeg"]
+    assert saved["view_bounds"] == [1, 4, 0, 2]
+    assert saved["horizontal_line"] == 1.5
+    assert "data_bytes" not in saved
+    live = plot.get_state({"data_bytes", "grid"})
+    np.testing.assert_array_equal(
+        np.frombuffer(live["data_bytes"], dtype=np.float64, count=values.size),
+        values[::-1].ravel(),
+    )
+    plot.close()

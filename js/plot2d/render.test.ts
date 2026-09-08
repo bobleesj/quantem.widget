@@ -3,12 +3,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import plot2d from "./index";
 
 const gpu = vi.hoisted(() => ({
-  uploadData: vi.fn(), uploadLUT: vi.fn(), destroy: vi.fn(),
+  uploadData: vi.fn(), uploadLUT: vi.fn(), destroy: vi.fn(), create: vi.fn(),
   renderSlotsToImageBitmapAsync: vi.fn(),
 }));
 vi.mock("../colormaps", () => ({
   COLORMAPS: { viridis: new Uint8Array(768), magma: new Uint8Array(768).fill(255) },
-  createGPUColormapEngine: vi.fn(async () => gpu),
+  createGPUColormapEngine: () => gpu.create(),
   renderToOffscreen: vi.fn(() => document.createElement("canvas")),
 }));
 
@@ -72,6 +72,7 @@ beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as any);
   document.body.dataset.jpThemeLight = "true";
   el = document.createElement("div"); document.body.append(el); model = new Model();
+  gpu.create.mockResolvedValue(gpu);
   gpu.renderSlotsToImageBitmapAsync.mockResolvedValue([new Bitmap()]);
 });
 afterEach(async () => {
@@ -160,4 +161,33 @@ it("keeps a failed replacement from changing the displayed source", async () => 
   act(() => model.set("cmap", "magma")); await settle();
   expect(el.textContent).toContain("value 21.0000");
   expect(el.textContent).not.toContain("Display error");
+});
+
+
+it("shows a lightweight saved preview until live data arrives", async () => {
+  model.values.data_bytes = new Uint8Array();
+  model.values._static_fallback_jpeg = "iVBORw0KGgo=";
+  model.values._static_fallback_mime = "image/png";
+  await mount();
+  expect(el.querySelector("img")?.style.display).toBe("block");
+  expect(el.querySelector("canvas")?.style.display).toBe("none");
+  expect(gpu.uploadData).not.toHaveBeenCalled();
+  expect(el.textContent).toContain("rerun the cell for interaction");
+  act(() => model.set("data_bytes", new Uint8Array(new Float64Array([1, 2, 3, 4, 5, 6]).buffer)));
+  await settle(); hover();
+  expect(el.querySelector("img")?.style.display).toBe("none");
+  expect(el.querySelector("canvas")?.style.display).toBe("block");
+  expect(el.textContent).toContain("value 1.00000");
+});
+
+
+it("releases a late engine when a saved-preview view closes before initialization", async () => {
+  let resolve!: (value: typeof gpu) => void;
+  gpu.create.mockReturnValueOnce(new Promise<typeof gpu>(done => { resolve = done; }));
+  model.values.data_bytes = new Uint8Array();
+  await mount();
+  act(() => cleanup?.()); cleanup = undefined;
+  expect(gpu.destroy).not.toHaveBeenCalled();
+  resolve(gpu); await settle();
+  expect(gpu.destroy).toHaveBeenCalledOnce();
 });

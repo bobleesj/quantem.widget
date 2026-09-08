@@ -10,6 +10,7 @@ import {
 } from "../colormaps";
 import { extractBytes, downloadBlob } from "../format";
 import { detectTheme, getThemeColors, useTheme } from "../theme";
+import { useHideStaticFallback } from "../staticFallback";
 
 type Model = {
   get(key: string): any;
@@ -25,6 +26,9 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
   host.dataset.quantemPlot2d = "true";
   host.style.cssText =
     "width:100%;min-width:260px;font:12px system-ui;";
+  const preview = document.createElement("img");
+  preview.alt = "Plot2D saved preview; rerun the cell for interaction";
+  preview.style.cssText = "display:none;width:100%;height:auto";
   const canvas = document.createElement("canvas");
   canvas.dataset.quantemScientificOutput = "plot2d-map";
   canvas.style.cssText =
@@ -52,6 +56,7 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
   const colorRoot = createRoot(colorControl);
   function ColorControl() {
     const { colors } = useTheme();
+    useHideStaticFallback(model, { current: host }, Boolean(bitmap));
     React.useLayoutEffect(() => {
       themeColors = colors;
       host.style.color = colors.text;
@@ -89,7 +94,7 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
     colorRoot.render(<ColorControl />);
   }
   controls.append(colorControl, zoomIn, zoomOut, save, reset, zoomLabel, status);
-  host.append(canvas, controls, readout);
+  host.append(preview, canvas, controls, readout);
   el.append(host);
   let engine: GPUColormapEngine | null = null;
   let bitmap: CanvasImageSource | null = null;
@@ -157,7 +162,7 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
   }
   function paint() {
     frame = 0;
-    if (disposed) return;
+    if (disposed || canvas.style.display === "none") return;
     const g = geometry(),
       width = g.width - g.left - g.right,
       height = g.height - g.top - g.bottom;
@@ -281,6 +286,16 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
     .catch(() => null);
   function prepare() {
     const current = ++generation;
+    const bytes = extractBytes(model.get("data_bytes"));
+    if (!bytes.length) {
+      const saved = model.get("_static_fallback_jpeg");
+      if (saved) preview.src = `data:${model.get("_static_fallback_mime") || "image/png"};base64,${saved}`;
+      else preview.removeAttribute("src");
+      preview.style.display = saved ? "block" : "none";
+      canvas.style.display = controls.style.display = "none";
+      readout.textContent = "Saved preview · rerun the cell for interaction";
+      return;
+    }
     queue = queue
       .then(async () => {
         await ready;
@@ -325,6 +340,9 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
         if (bitmap instanceof ImageBitmap) bitmap.close();
         // Publish source, color metadata and pixels in the same synchronous paint.
         bitmap = next;
+        preview.style.display = "none";
+        canvas.style.display = "block";
+        controls.style.display = "flex";
         source = nextSource;
         displayCmap = cmap;
         displayMin = vmin;
@@ -332,6 +350,7 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
         status.textContent = `${usedGPU ? "WebGPU display" : "Canvas fallback"} · wheel to zoom`;
         cancelAnimationFrame(frame);
         paint();
+        updateColorControl();
       })
       .catch((error) => {
         if (!disposed && current === generation)
@@ -512,7 +531,7 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
     resize.disconnect();
     observers.forEach(([event, handler]) => model.off(event, handler));
     if (bitmap instanceof ImageBitmap) bitmap.close();
-    void queue.finally(() => engine?.destroy());
+    void Promise.all([queue, ready]).then(() => engine?.destroy());
     host.remove();
   };
 }

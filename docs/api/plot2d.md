@@ -40,15 +40,20 @@ rendering completes, including during rapid replacements.
 viewport. `plot.horizontal_line = 92.5` adds an angle-reading line without
 resending the map. `plot.figure()` returns a closed Matplotlib figure with
 the current axes, values, colormap and viewport, for example
-`plot.figure().savefig("g3.svg")`. Saved widget state includes displayed arrays;
-it is not a replacement for the scientific data files.
+`plot.figure().savefig("g3.svg")`. By default, saved snapshots omit the map array and retain a static PNG
+preview. Use `save_state=True` to embed the complete float64 map for interactive
+restoration in supporting frontends. Static previews record the view when
+Python renders the preview or creates a full snapshot; they do not track
+browser-only gestures continuously. Notebook-manager save/restore behavior
+varies by frontend. Keep scientific data files separately.
 
 ## Current scope
 
 This API targets small, finite scalar maps, not large spatial images. It does
 not support nonuniform coordinates, logarithmic axes, or standalone
-`export_html`. Interactive saved state currently embeds the full float64 map;
-keep large data outside notebooks. Controls, axes and the canvas follow the
+`export_html`. Full interactive embedding is opt-in with `save_state=True`;
+keep large data outside notebooks. Static previews use stride sampling above
+512 bins per axis, preserve calibrated bounds, and are for viewing only. Controls, axes and the canvas follow the
 notebook or documentation light/dark theme.
 
 ## Reference
