@@ -46,6 +46,7 @@ names = (
     "detector/compute/webgpu/source112-huffman-migration.ts",
     "detector/compute/webgpu/source112-huffman-readers.ts",
     "detector/compute/webgpu/source112-huffman64.ts",
+    "detector/compute/webgpu/source112-huffman-compact.ts",
     "detector/geometry.ts",
     "dpc/compute/webgpu/fft.ts",
     "dpc/compute/webgpu/kernels.ts",
