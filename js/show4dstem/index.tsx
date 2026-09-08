@@ -4207,6 +4207,11 @@ function Show4DSTEM() {
         // buffers and every detector change decodes only the changed columns.
         const ransDevice = await getGPUDevice();
         if (!ransDevice) throw new Error("WebGPU device unavailable for the rANS resident source");
+        void ransDevice.lost.then(info => {
+          if (disposed) return;
+          setOfflineBackendStatus("");
+          setOfflineBackendError(`The resident GPU source was lost. ${info.message || "The device is no longer available."} Reload the viewer and select the data folder again.`);
+        });
         const status = (text: string) => { if (!disposed) setOfflineBackendStatus(text); };
         let canonicalFiles: File[] = [];
         if (countAnsSource) {
