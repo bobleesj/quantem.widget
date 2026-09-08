@@ -26,8 +26,11 @@ export type CompareCountImages = {
   isCurrent: () => boolean;
   refreshFloat: () => void;
 };
-/** The return value is accepted panels when deferred, painted panels otherwise. */
-export type CompareGpuRenderer = (counts?: CompareCountImages | null, deferPaint?: boolean) => number;
+/** Return accepted panels when deferred, submitted panels otherwise.
+ * Null clears views after a full refresh; invalidate first preserves their mean
+ * in stable float slots before another operation changes the shared counts.
+ */
+export type CompareGpuRenderer = (counts?: CompareCountImages | null | "invalidate", deferPaint?: boolean) => number;
 
 /** One queued canvas paint; newer scientific submissions replace its callback.
  * The callback must select current borrowed views and synchronously submit the
@@ -38,16 +41,21 @@ export function createComparePaintScheduler(
   cancelFrame: (handle: number) => void = cancelAnimationFrame,
 ) {
   let handle: number | null = null;
-  let latest: (() => void) | null = null;
+  let latest: { paint: () => void; onError?: (error: unknown) => void } | null = null;
   return {
-    schedule(paint: () => void) {
-      latest = paint;
+    schedule(paint: () => void, onError?: (error: unknown) => void) {
+      latest = { paint, onError };
       if (handle !== null) return;
       handle = requestFrame(() => {
         handle = null;
         const draw = latest;
         latest = null;
-        draw?.();
+        if (!draw) return;
+        try { draw.paint(); }
+        catch (error) {
+          if (!draw.onError) throw error;
+          draw.onError(error);
+        }
       });
     },
     cancel() {

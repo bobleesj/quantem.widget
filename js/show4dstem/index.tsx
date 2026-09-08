@@ -1546,6 +1546,7 @@ interface CompareVirtualGridProps {
     paintedIndices: number[],
   ) => void;
   onGpuPaint?: (panelCount: number) => void;
+  onGpuRenderError?: (error: unknown) => void;
   onGpuRendererReady?: (renderNow: CompareGpuRenderer | null) => void;
 }
 
@@ -1595,6 +1596,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   onPositionChange,
   onFreshVisiblePaint,
   onGpuPaint,
+  onGpuRenderError,
   onGpuRendererReady,
 }: CompareVirtualGridProps) {
   const batchModel = useModel();
@@ -1743,7 +1745,16 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     comparePaintScheduler.cancel();
     countImagesRef.current = null;
   }, [comparePaintScheduler]);
-  const renderGpuSlotsNow = React.useCallback((counts?: CompareCountImages | null, deferPaint = false): number => {
+  const renderGpuSlotsNow = React.useCallback((counts?: CompareCountImages | null | "invalidate", deferPaint = false): number => {
+    if (counts === "invalidate") {
+      comparePaintScheduler.cancel();
+      const previous = countImagesRef.current;
+      countImagesRef.current = null;
+      // Queue a stable float snapshot before another ROI operation overwrites
+      // the shared count buffer. Its divisor still belongs to these old counts.
+      countImagesForRender(previous, false);
+      return 0;
+    }
     // Null means a settled/full update already refreshed the stable float slots.
     if (counts === null) {
       comparePaintScheduler.cancel();
@@ -1770,7 +1781,13 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       }
       // Retain the newest area immediately after its count submission. At RAF,
       // drawing uses these current views; no await separates selection/submission.
-      comparePaintScheduler.schedule(() => { latestComparePaintRef.current(); });
+      comparePaintScheduler.schedule(() => { latestComparePaintRef.current(); }, error => {
+        const previous = countImagesRef.current;
+        countImagesRef.current = null;
+        try { countImagesForRender(previous, false); }
+        catch { /* Preserve the render error if the device also rejects fallback. */ }
+        onGpuRenderError?.(error);
+      });
       return renderEntries.length;
     }
     countImagesRef.current = countImagesForRender(countImagesRef.current, sharedReady);
@@ -1846,7 +1863,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     );
     if (painted > 0) onGpuPaint?.(painted);
     return painted;
-  }, [colormap, comparePaintScheduler, comparePanX, comparePanY, compareZoom, gpuEngine, gpuSlots, onGpuPaint, renderEntries, scaleMode, shapeCols, shapeRows, sharedGpuEnabled, smooth, vmaxPct, vminPct]);
+  }, [colormap, comparePaintScheduler, comparePanX, comparePanY, compareZoom, gpuEngine, gpuSlots, onGpuPaint, onGpuRenderError, renderEntries, scaleMode, shapeCols, shapeRows, sharedGpuEnabled, smooth, vmaxPct, vminPct]);
 
   React.useLayoutEffect(() => {
     latestComparePaintRef.current = () => { renderGpuSlotsNow(); };
@@ -3585,7 +3602,7 @@ function Show4DSTEM() {
       addedPixels: detail.addedPixels ?? 0,
       removedPixels: detail.removedPixels ?? 0,
       updatedAtMs: Math.round(now),
-      note: "computeFps counts fresh GPU virtual-image buffers only; paintFps counts WebGPU canvas presents, including repeated presents of the latest buffer.",
+      note: "computeFps counts fresh GPU virtual-image buffers only; paintFps counts WebGPU render submissions, including repeats of the latest image; it does not measure physical presentation.",
     };
     const statsWindow = window as unknown as {
       __sh4dLiveViStats?: Record<string, unknown>;
@@ -4756,6 +4773,13 @@ function Show4DSTEM() {
         dpcBufferQueue = queued.then(() => undefined, () => undefined);
         return await queued;
       };
+      const invalidateResidentComparePaint = () => {
+        if (!ransSet) return;
+        compareGpuRenderNowRef.current?.("invalidate");
+        // A non-compare sum may change the authoritative support too. The next
+        // compare must re-establish its mask rather than skip an old equal pose.
+        compareIncrementalRef.current = null;
+      };
       const computeRoiBufferImage = (
         backend: DetectorCompute,
         mask: Uint32Array,
@@ -4767,6 +4791,7 @@ function Show4DSTEM() {
         if (!engine || typeof maybeVi.maskedSumBuffer !== "function") {
           return false;
         }
+        invalidateResidentComparePaint();
         const t0 = performance.now();
         const { buffer, n } = maybeVi.maskedSumBuffer(mask);
         if (n === 0) {
@@ -4998,6 +5023,7 @@ function Show4DSTEM() {
           recordViProfile(source, "masked_sum_gpu_display_interactive", startedAt, generation);
           return;
         }
+        invalidateResidentComparePaint();
         const vi = await compute!.maskedSum(mask);
         if (disposed || generation !== viRecomputeGen) return;
         setWarmCacheEntry({
@@ -5402,6 +5428,7 @@ function Show4DSTEM() {
           if (interactiveDrag && !volIsResident(idx)) continue;   // keep previous pixels
           const panelCompute = getVol ? await getVol(idx) : compute;
           if (disposed || gen !== compareViGen || !panelCompute) return;
+          invalidateResidentComparePaint();
           const vi = await panelCompute.maskedSum(mask);
           if (disposed || gen !== compareViGen) return;
           for (let p = 0; p < panelPixels; p++) {
@@ -5416,7 +5443,7 @@ function Show4DSTEM() {
       (window as unknown as { __sh4d: unknown }).__sh4d = { model, recomputeVI, recomputeCompareVI,
         residentSource: () => ransSet,
         detMask: () => sourceDetectorMask(model, detR, detC),
-        deriveOnly: async () => { const vi = await compute!.maskedSum(sourceDetectorMask(model, detR, detC)); return vi.length; },
+        deriveOnly: async () => { invalidateResidentComparePaint(); const vi = await compute!.maskedSum(sourceDetectorMask(model, detR, detC)); return vi.length; },
         rawChecksums: async (scanIndices: number[] = [0, Math.floor((scanRows * scanCols) / 2), scanRows * scanCols - 1]) => {
           const checksum = (compute as unknown as { checksumFrames?: (indices: number[]) => Promise<unknown> })?.checksumFrames;
           if (typeof checksum !== "function") return null;
@@ -9999,6 +10026,9 @@ function Show4DSTEM() {
   const recordCompareGpuPaint = React.useCallback((panelCount: number) => {
     publishLiveCompareViStats("paint", { paintedPanels: panelCount });
   }, [publishLiveCompareViStats]);
+  const reportCompareGpuRenderError = React.useCallback((error: unknown) => {
+    setOfflineBackendError(error instanceof Error ? error.message : String(error));
+  }, []);
   const setCompareGpuRenderer = React.useCallback((renderNow: CompareGpuRenderer | null) => {
     compareGpuRenderNowRef.current = renderNow;
   }, []);
@@ -11258,6 +11288,7 @@ function Show4DSTEM() {
               onPositionChange={updateScanPosition}
               onFreshVisiblePaint={acknowledgeFreshComparePagePaint}
               onGpuPaint={recordCompareGpuPaint}
+              onGpuRenderError={reportCompareGpuRenderError}
               onGpuRendererReady={setCompareGpuRenderer}
             />
           ) : (
