@@ -225,7 +225,8 @@ def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
     assert "uploadViaMapped" in bslz4
     assert "stageUploadCopies" in bslz4
     assert "decodeVariant" in local_h5
-    assert 'title={h5LocalSourceStatus || "Grant local HDF5 master/data files for browser WebGPU load"}' in frontend
+    assert '"Grant local HDF5 master/data files for browser WebGPU load"' in frontend
+    assert '"Open the local lossless data folder"' in frontend
     assert "export async function loadShow4DSTEMLocalH5Master" in local_h5
     assert 'acquisitionMode: "local-file"' in local_h5
     assert "const READ_WORKER_SOURCE" in local_h5
@@ -378,9 +379,9 @@ def test_show4dstem_multiple_detector_drag_uses_live_gpu_compare_slots() -> None
     )[0]
     assert "await recomputeVI();" in live_drag
     assert "await recomputeCompareVI();" in live_drag
-    assert live_drag.index("await recomputeVI();") < live_drag.index(
-        "await recomputeCompareVI();"
-    )
+    assert 'if (ransSet && compareVisibleIndices().length' in live_drag
+    assert live_drag.index("await recomputeCompareVI();") < live_drag.index("await recomputeVI();")
+    assert "compareGpuInFlight >= 2" in live_drag
     assert 'type DpcGpuSource = "DPC_row" | "DPC_col" | "iDPC";' in frontend
     assert "(gpuSlots?.has(frame) && gpuEngine)" in frontend
     assert "integerCounts && batchEnabled && !batchFailed" in frontend
