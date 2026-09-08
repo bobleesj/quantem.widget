@@ -1253,7 +1253,7 @@ function Histogram({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
 
     const dpr = window.devicePixelRatio || 1;
@@ -7568,7 +7568,10 @@ function Show4DSTEM() {
       offscreen.height = detRows;
       dpImageDataRef.current = null;
     }
-    const offCtx = offscreen.getContext("2d");
+    // These small CPU-colored canvases need CPU backing: on the verified
+    // Chrome/NVIDIA raster path, default 2D writes can stay fully transparent
+    // while the context reports no loss. Select the backing on first use.
+    const offCtx = offscreen.getContext("2d", { willReadFrequently: true });
     if (!offCtx) return;
 
     let imgData = dpImageDataRef.current;
@@ -7590,16 +7593,14 @@ function Show4DSTEM() {
     const offscreen = dpOffscreenRef.current;
     if (!offscreen || !dpCanvasRef.current) return;
     const canvas = dpCanvasRef.current;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const identity = dpZoom === 1 && dpPanX === 0 && dpPanY === 0;
     const pixels = dpImageDataRef.current;
     if (identity && pixels && pixels.width === canvas.width && pixels.height === canvas.height) {
-      // Exact pixel copy at identity view. Canvas-to-canvas drawImage is a
-      // compositing blit that some GPU raster backends (Chrome 147 with the
-      // Vulkan Skia path on NVIDIA) drop silently; putImageData is not.
+      // Exact pixel copy at identity view avoids unnecessary resampling.
       ctx.putImageData(pixels, 0, 0);
     } else {
       ctx.save();
@@ -7614,7 +7615,7 @@ function Show4DSTEM() {
   React.useEffect(() => {
     if (!dpOverlayRef.current) return;
     const canvas = dpOverlayRef.current;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     // All visual overlays (crosshair, ROI shapes, scale bar) are now on dpUiRef for crisp rendering
@@ -8164,7 +8165,7 @@ function Show4DSTEM() {
     center ??= dpRoiInteractiveRef.current ? roiCenterPendingRef.current ?? undefined : undefined;
     if (!dpUiRef.current) return;
     const canvas = dpUiRef.current;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     ctx?.clearRect(0, 0, canvas.width, canvas.height);
     // Draw scale bar first when enabled.
     const kUnit = kCalibrated ? kPixelUnit : "px";
