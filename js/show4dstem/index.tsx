@@ -1523,6 +1523,7 @@ interface CompareVirtualGridProps {
   cursorRow: number;
   cursorCol: number;
   status: string;
+  sourceLoading?: boolean;
   themeColors: ReturnType<typeof useTheme>["colors"];
   panelChromeVisible: boolean;
   showScaleBar: boolean;
@@ -1576,6 +1577,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   cursorRow,
   cursorCol,
   status,
+  sourceLoading = false,
   themeColors,
   panelChromeVisible,
   showScaleBar,
@@ -2383,7 +2385,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   }, [comparePanX, comparePanY, compareZoom, cursorCol, cursorRow, isDraggingPosition, overlayVersion, pixelSize, pixelUnit, renderEntries, shapeCols, shapeRows, showScaleBar]);
 
   useResidentChanges(batchEnabled, "panel_tile_dependency", {
-    renderEntries, panels, panelByFrame, indices, progressivePage, activeIdx, labels, starred, draggingFrame,
+    renderEntries, panels, panelByFrame, indices, progressivePage, sourceLoading, activeIdx, labels, starred, draggingFrame,
     pendingMoveFrame, themeColors, reorderMode, handleCompareDoubleClick,
     updatePositionFromPointer, updateRawReadout, hideRawReadout, onSelect, onPendingMoveFrameChange, onReorderFrame,
     displayIndices, onDragFrameChange, movePreviewFrame, batchReady, sharedGpuReady, shapeCols, shapeRows,
@@ -2398,7 +2400,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
             frame,
             loaded,
           );
-          const waiting = !loaded && (progressivePage?.loading ?? false);
+          const waiting = !loaded && (sourceLoading || (progressivePage?.loading ?? false));
           const placeholderText = waiting ? "Loading" : "Unavailable";
           const active = frame === activeIdx;
           const label = labels && labels.length > frame ? labels[frame] : `Dataset ${frame + 1}`;
@@ -2796,7 +2798,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
             </Box>
           );
         }), [
-    renderEntries, progressivePage, activeIdx, labels, starred, draggingFrame,
+    renderEntries, progressivePage, sourceLoading, activeIdx, labels, starred, draggingFrame,
     pendingMoveFrame, themeColors, reorderMode, handleCompareDoubleClick,
     updatePositionFromPointer, updateRawReadout, hideRawReadout, onSelect, onPendingMoveFrameChange, onReorderFrame,
     displayIndices, onDragFrameChange, movePreviewFrame, batchReady, sharedGpuReady, shapeCols, shapeRows,
@@ -3648,6 +3650,7 @@ function Show4DSTEM() {
   // so the browser masked-sum (u32 accumulate) is bit-exact to the kernel.
   const [offline] = useModelState<boolean>("offline");
   const [offlineBackendLoading, setOfflineBackendLoading] = React.useState(false);
+  const [residentSeriesLoading, setResidentSeriesLoading] = React.useState(false);
   const [offlineBackendStatus, setOfflineBackendStatus] = React.useState("");
   const [offlineBackendError, setOfflineBackendError] = React.useState("");
   const h5SourceAvailable = Boolean(
@@ -3783,6 +3786,17 @@ function Show4DSTEM() {
       const h5UrlsJson = model.get("_h5_urls") as string | undefined;
       const ransUrl = (model.get("_rans_url") as string | undefined) || "";
       let ransSet: RansResidentSet | Source112ResidentSet | null = null;
+      let refreshResidentProgress: (() => void) | null = null;
+      let interactionUntil = 0;
+      const noteInteraction = (event: PointerEvent) => {
+        if (event.buttons) interactionUntil = performance.now() + 150;
+      };
+      const yieldToInteraction = async () => {
+        while (performance.now() < interactionUntil) {
+          sourceLoadAbort.signal.throwIfAborted();
+          await new Promise(resolve => setTimeout(resolve, 16));
+        }
+      };
       const sourceDetectorMask = (
         state: Parameters<typeof buildDetectorMask>[0], rows: number, cols: number,
       ): Uint32Array => {
@@ -4200,6 +4214,8 @@ function Show4DSTEM() {
           setOfflineBackendStatus("");
           setOfflineBackendError(`The resident GPU source was lost. ${info.message || "The device is no longer available."} Reload the viewer and select the data folder again.`);
         });
+        window.addEventListener("pointermove", noteInteraction, {passive: true, signal: sourceLoadAbort.signal});
+        window.addEventListener("pointerdown", noteInteraction, {passive: true, signal: sourceLoadAbort.signal});
         const status = (text: string) => { if (!disposed) setOfflineBackendStatus(text); };
         let canonicalFiles: File[] = [];
         if (countAnsSource) {
@@ -4212,7 +4228,19 @@ function Show4DSTEM() {
           if (!canonicalFiles.length) throw new Error("This viewer has no count-ANS files configured. Export it again from the source files.");
         }
         ransSet = model.get("_rans_format") === "source112-tans1024-pair-v1"
-          ? await Source112ResidentSet.loadFiles(ransDevice, ransLocalFiles || [], status, sourceLoadAbort.signal, { representation: 'huffman64' })
+          ? await Source112ResidentSet.loadFiles(ransDevice, ransLocalFiles || [], status, sourceLoadAbort.signal, {
+              representation: 'huffman64', progressive: true,
+              maxAcquisitions: Math.max(1, Number(model.get("n_frames") || 1)),
+              yieldToInteraction,
+              onProgress: source => {
+                if (disposed) return;
+                setResidentSeriesLoading(source.loadedAcquisitions < source.acquisitionCount);
+                for (let i = 0; i < source.loadedAcquisitions; i++)
+                  volCache.set(i, source.computes[i] as unknown as DetectorCompute);
+                latestResidentVolumeIndex = source.loadedAcquisitions - 1;
+                refreshResidentProgress?.();
+              },
+            })
           : countAnsSource
           ? await RansResidentSet.loadCountANSFiles(ransDevice, canonicalFiles, status,
               JSON.parse(String(model.get("_offline_bad_px") || "[]")) as number[])
@@ -4230,10 +4258,15 @@ function Show4DSTEM() {
         }
         computes = ransSet.computes as unknown as DetectorCompute[];
         volumeCount = computes.length;
-        computes.forEach((c, i) => volCache.set(i, c));
-        getVol = async (idx: number) => computes[Math.max(0, Math.min(computes.length - 1, idx))];
-        compute = computes[Math.max(0, Math.min(computes.length - 1, model.get("frame_idx") | 0))];
-        latestResidentVolumeIndex = computes.length - 1;
+        const readyCount = ransSet instanceof Source112ResidentSet ? ransSet.loadedAcquisitions : computes.length;
+        computes.slice(0, readyCount).forEach((c, i) => volCache.set(i, c));
+        getVol = async (idx: number) => volCache.get(Math.max(0, Math.min(computes.length - 1, idx))) ?? null;
+        if (ransSet instanceof Source112ResidentSet) {
+          h5VolumePreload = ransSet.completion.then(() => { h5VolumePreloadDone = true; });
+          void h5VolumePreload.catch(error => { if (!disposed) { setResidentSeriesLoading(false); setOfflineBackendError(`Loading stopped: ${String(error)}. Ready acquisitions remain available.`); } });
+        }
+        compute = volCache.get(model.get("frame_idx") | 0) ?? computes[0];
+        latestResidentVolumeIndex = readyCount - 1;
         (globalThis as { __QT_RANS_PROFILE?: unknown }).__QT_RANS_PROFILE = {
           volumes: computes.length, payloadBytes: ransSet.payloadBytes, loadMs: ransSet.loadMs, checkpointMs: ransSet.checkpointMs,
           acquisitionMode: ransSet.acquisitionMode, timeToResidentReadyMs: ransSet.readyMs, loadProfile: ransSet.loadProfile,
@@ -5365,7 +5398,8 @@ function Show4DSTEM() {
           return adopted > 0 || interactiveDrag;
         };
         if (await updateRoiCompareGpuSlots()) {
-          if (ransSet && !interactiveDrag && gen === compareViGen && !disposed) {
+          if (ransSet && !interactiveDrag && gen === compareViGen && !disposed
+              && (!(ransSet instanceof Source112ResidentSet) || ransSet.loadedAcquisitions === ransSet.acquisitionCount)) {
             const mask = sourceDetectorMask(model, detR, detC);
             const area = Math.max(1, mask.reduce((n, value) => n + (value ? 1 : 0), 0));
             const pixels = scanRows * scanCols;
@@ -6322,10 +6356,14 @@ function Show4DSTEM() {
         volCache.forEach((c) => c.dispose()); volCache.clear();  // every cached lazy volume
         inlineVolCache.forEach((c) => c.dispose()); inlineVolCache.clear();
       };
+      refreshResidentProgress = () => {
+        void recomputeVI(); void recomputeCompareVI(); recomputeFrame();
+      };
       await recomputeVI();  // initial virtual image, no interaction needed
       await recomputeCompareVI();
       if (!initialVolumeLoad && !disposed) {
-        setOfflineBackendStatus("");
+        if (!(ransSet instanceof Source112ResidentSet) || ransSet.loadedAcquisitions === ransSet.acquisitionCount)
+          setOfflineBackendStatus("");
         setOfflineBackendLoading(false);
       }
       // Fit the BF disk from the mean diffraction pattern before the presets warm.
@@ -10404,7 +10442,7 @@ function Show4DSTEM() {
   const offlineStatusText = offlineBackendError || offlineBackendStatus;
   const offlineStatusIsError = Boolean(offlineBackendError);
   const offlineStatusIsReady = !offlineStatusIsError && /\bready\b/i.test(offlineStatusText);
-  const showOfflineStatus = offline && Boolean(offlineStatusText) && !offlineStatusIsReady;
+  const showOfflineStatus = offline && Boolean(offlineStatusText) && (!offlineStatusIsReady || residentSeriesLoading);
   const showLocalH5GrantBanner = offline && h5SourceAvailable && requireLocalH5Files && !h5LocalFilesGranted;
 
   return (
@@ -11274,6 +11312,7 @@ function Show4DSTEM() {
               gpuVersion={compareGpuVersion}
               gpuEngine={viGpuColormapRef.current}
               progressivePage={progressiveComparePage}
+              sourceLoading={residentSeriesLoading}
               labels={frameLabels || []}
               activeIdx={frameIdx}
               shapeRows={shapeRows}

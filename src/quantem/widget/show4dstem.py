@@ -1544,12 +1544,12 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             raise ValueError("Select detector-rans-v1, count-ans-v1, or source112-tans1024-pair-v1.")
         if rans_format == "source112-tans1024-pair-v1":
             if (not rans_url or not isinstance(rans_count, (int, np.integer))
-                    or rans_count != 66
+                    or not 1 <= rans_count <= 66
                     or (tuple(scan_shape) if scan_shape is not None else ()) != (512, 512)
                     or (tuple(detector_shape) if detector_shape is not None else ()) != (192, 192)
                     or rans_dtype != "uint16"):
                 raise ValueError(
-                    "Source112 requires all 66 native uint16 acquisitions with "
+                    "Source112 requires 1 to 66 native uint16 acquisitions with "
                     "scan_shape=(512, 512) and detector_shape=(192, 192)."
                 )
         if rans_format == "count-ans-v1":
