@@ -9,6 +9,7 @@ import {
   renderToOffscreen,
 } from "../colormaps";
 import { extractBytes, downloadBlob } from "../format";
+import { detectTheme, getThemeColors, useTheme } from "../theme";
 
 type Model = {
   get(key: string): any;
@@ -19,10 +20,11 @@ type Model = {
 };
 
 function render({ model, el }: { model: Model; el: HTMLElement }) {
+  let themeColors = getThemeColors(detectTheme().theme);
   const host = document.createElement("div");
   host.dataset.quantemPlot2d = "true";
   host.style.cssText =
-    "width:100%;min-width:260px;color:#203040;background:white;font:12px system-ui;";
+    "width:100%;min-width:260px;font:12px system-ui;";
   const canvas = document.createElement("canvas");
   canvas.dataset.quantemScientificOutput = "plot2d-map";
   canvas.style.cssText =
@@ -44,24 +46,47 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
   status.textContent = "Preparing display…";
   const readout = document.createElement("div");
   readout.style.cssText =
-    "height:22px;padding:3px 8px;font-variant-numeric:tabular-nums";
+    "height:22px;padding:3px 8px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
   const colorControl = document.createElement("span");
-  colorControl.style.cssText = "display:inline-flex;gap:6px;align-items:center";
+  colorControl.style.cssText = "display:inline-flex;gap:6px;align-items:center;flex-shrink:0";
   const colorRoot = createRoot(colorControl);
-  function updateColorControl() {
-    colorRoot.render(<>
+  function ColorControl() {
+    const { colors } = useTheme();
+    React.useLayoutEffect(() => {
+      themeColors = colors;
+      host.style.color = colors.text;
+      host.style.background = colors.bg;
+      status.style.color = zoomLabel.style.color = colors.textMuted;
+      for (const button of [reset, zoomIn, zoomOut, save]) {
+        Object.assign(button.style, {
+          color: colors.text, background: colors.controlBg,
+          border: `1px solid ${colors.border}`, borderRadius: "3px",
+          font: "10px system-ui", padding: "3px 8px", cursor: "pointer",
+        });
+      }
+      schedule();
+    }, [colors]);
+    return <>
       <span>Color</span>
       <Select size="small" value={model.get("cmap")}
         inputProps={{ "aria-label": "Color map" }}
-        sx={{ fontSize: 12, color: "#203040", background: "white", height: 28 }}
-        MenuProps={{ PaperProps: { sx: { maxHeight: 320 } } }}
+        sx={{ fontSize: 10, color: colors.text, bgcolor: colors.controlBg,
+          "& .MuiSelect-select": { py: 0.5 },
+          "& .MuiSelect-icon": { color: colors.text },
+          "& .MuiOutlinedInput-notchedOutline": { borderColor: colors.border },
+          "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: colors.accent } }}
+        MenuProps={{ PaperProps: { sx: { maxHeight: 320, bgcolor: colors.controlBg,
+          color: colors.text, border: `1px solid ${colors.border}` } } }}
         onChange={(event) => {
           model.set("cmap", event.target.value);
           model.save_changes();
         }}>
         {Object.keys(COLORMAPS).map(name => <MenuItem key={name} value={name}>{name}</MenuItem>)}
       </Select>
-    </>);
+    </>;
+  }
+  function updateColorControl() {
+    colorRoot.render(<ColorControl />);
   }
   controls.append(colorControl, zoomIn, zoomOut, save, reset, zoomLabel, status);
   host.append(canvas, controls, readout);
@@ -69,6 +94,10 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
   let engine: GPUColormapEngine | null = null;
   let bitmap: CanvasImageSource | null = null;
   let source = new Float64Array();
+  let displayCmap = model.get("cmap");
+  let displayMin = model.get("vmin");
+  let displayMax = model.get("vmax");
+  let pointer: { clientX: number; clientY: number } | null = null;
   let disposed = false,
     generation = 0,
     frame = 0;
@@ -81,12 +110,10 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
   let drag: { x: number; y: number; bounds: number[] } | null = null;
   let wheelTimer = 0;
   let readoutFrame = 0;
-  let pendingReadout = "";
-  function showReadout(text: string) {
-    pendingReadout = text;
+  function showReadout() {
     if (!readoutFrame) readoutFrame = requestAnimationFrame(() => {
       readoutFrame = 0;
-      readout.textContent = pendingReadout;
+      updateReadout();
     });
   }
   const full = () => model.get("grid").bounds as number[];
@@ -102,6 +129,8 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
     right: 18,
     bottom: 105,
   });
+  let paintedBounds = bounds.slice();
+  let paintedGeometry = geometry();
   const number = (value: number) => Number(value.toPrecision(4)).toString();
   const tickNumber = (value: number, span: number) =>
     number(Math.abs(value) < span * 1e-12 ? 0 : value);
@@ -138,7 +167,7 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
     canvas.style.height = `${g.height}px`;
     const ctx = canvas.getContext("2d")!;
     ctx.scale(ratio, ratio);
-    ctx.fillStyle = "white";
+    ctx.fillStyle = themeColors.bg;
     ctx.fillRect(0, 0, g.width, g.height);
     const grid = model.get("grid"),
       original = full();
@@ -167,10 +196,10 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
       );
       ctx.restore();
     }
-    ctx.strokeStyle = "#425467";
+    ctx.strokeStyle = themeColors.border;
     ctx.strokeRect(g.left, g.top, width, height);
     ctx.font = "12px system-ui";
-    ctx.fillStyle = "#203040";
+    ctx.fillStyle = themeColors.text;
     ctx.textAlign = "center";
     ctx.fillText(model.get("title"), g.left + width / 2, 17);
     for (let tick = 0; tick <= 4; tick++) {
@@ -201,7 +230,7 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
     ctx.rotate(-Math.PI / 2);
     ctx.fillText(model.get("y_label"), 0, 0);
     ctx.restore();
-    const lut = COLORMAPS[model.get("cmap")];
+    const lut = COLORMAPS[displayCmap];
     if (lut)
       for (let i = 0; i < 256; i++) {
         ctx.fillStyle = `rgb(${lut[i * 3]},${lut[i * 3 + 1]},${lut[i * 3 + 2]})`;
@@ -212,11 +241,11 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
           10,
         );
       }
-    ctx.fillStyle = "#203040";
+    ctx.fillStyle = themeColors.text;
     ctx.textAlign = "left";
-    ctx.fillText(number(model.get("vmin")), g.left, g.height - 27);
+    ctx.fillText(number(displayMin), g.left, g.height - 27);
     ctx.textAlign = "right";
-    ctx.fillText(number(model.get("vmax")), g.left + width, g.height - 27);
+    ctx.fillText(number(displayMax), g.left + width, g.height - 27);
     ctx.textAlign = "center";
     ctx.fillText(model.get("colorbar_label"), g.left + width / 2, g.height - 8);
     const line = model.get("horizontal_line");
@@ -230,6 +259,9 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
       ctx.lineTo(g.left + width, pos);
       ctx.stroke();
     }
+    paintedBounds = bounds.slice();
+    paintedGeometry = g;
+    updateReadout();
     canvas.setAttribute(
       "aria-label",
       `${model.get("title")}; ${model.get("x_label")}; ${model.get("y_label")}; ${model.get("colorbar_label")}`,
@@ -255,11 +287,12 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
         if (disposed || current !== generation) return;
         const grid = model.get("grid"),
           bytes = extractBytes(model.get("data_bytes"));
-        source = new Float64Array(
+        const nextSource = new Float64Array(
           bytes.slice(0, grid.rows * grid.cols * 8).buffer,
         );
-        const display = Float32Array.from(source),
-          lut = COLORMAPS[model.get("cmap")];
+        const cmap = model.get("cmap"),
+          vmin = model.get("vmin"), vmax = model.get("vmax");
+        const display = Float32Array.from(nextSource), lut = COLORMAPS[cmap];
         if (!lut) {
           status.textContent = "Unsupported colormap";
           return;
@@ -267,34 +300,42 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
         let next: CanvasImageSource | null = null;
         if (engine) {
           engine.uploadData(0, display, grid.cols, grid.rows);
-          engine.uploadLUT(model.get("cmap"), lut);
+          engine.uploadLUT(cmap, lut);
           const rendered = await engine.renderSlotsToImageBitmapAsync(
             [0],
-            [{ vmin: model.get("vmin"), vmax: model.get("vmax") }],
+            [{ vmin, vmax }],
           );
           next = rendered?.[0] ?? null;
         }
+        const usedGPU = Boolean(next);
         if (!next) {
           next = renderToOffscreen(
             display,
             grid.cols,
             grid.rows,
             lut,
-            model.get("vmin"),
-            model.get("vmax"),
+            vmin,
+            vmax,
           );
-          status.textContent = "Canvas fallback · wheel to zoom";
-        } else status.textContent = "WebGPU display · wheel to zoom";
+        }
         if (disposed || current !== generation) {
           if (next instanceof ImageBitmap) next.close();
           return;
         }
         if (bitmap instanceof ImageBitmap) bitmap.close();
+        // Publish source, color metadata and pixels in the same synchronous paint.
         bitmap = next;
-        schedule();
+        source = nextSource;
+        displayCmap = cmap;
+        displayMin = vmin;
+        displayMax = vmax;
+        status.textContent = `${usedGPU ? "WebGPU display" : "Canvas fallback"} · wheel to zoom`;
+        cancelAnimationFrame(frame);
+        paint();
       })
       .catch((error) => {
-        status.textContent = `Display error: ${String(error)}`;
+        if (!disposed && current === generation)
+          status.textContent = `Display error: ${String(error)}`;
       });
   }
   function plotPosition(event: MouseEvent) {
@@ -315,8 +356,7 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
     schedule();
   };
   canvas.onpointermove = (event) => {
-    const g = geometry(),
-      rect = canvas.getBoundingClientRect();
+    const g = geometry();
     const width = g.width - g.left - g.right,
       height = g.height - g.top - g.bottom;
     if (drag) {
@@ -332,19 +372,27 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
       ]);
       schedule();
     }
-    const colFraction = (event.clientX - rect.left - g.left) / width;
-    const rowFraction = 1 - (event.clientY - rect.top - g.top) / height;
+    pointer = { clientX: event.clientX, clientY: event.clientY };
+    showReadout();
+  };
+  function updateReadout() {
+    if (!pointer || !bitmap) { readout.title = readout.textContent = ""; return; }
+    const g = paintedGeometry, rect = canvas.getBoundingClientRect();
+    const width = g.width - g.left - g.right,
+      height = g.height - g.top - g.bottom;
+    const colFraction = (pointer.clientX - rect.left - g.left) / width;
+    const rowFraction = 1 - (pointer.clientY - rect.top - g.top) / height;
     if (
       colFraction < 0 ||
       colFraction >= 1 ||
       rowFraction < 0 ||
       rowFraction >= 1
     ) {
-      showReadout("");
+      readout.title = readout.textContent = "";
       return;
     }
-    const x = bounds[0] + colFraction * (bounds[1] - bounds[0]),
-      y = bounds[2] + rowFraction * (bounds[3] - bounds[2]);
+    const x = paintedBounds[0] + colFraction * (paintedBounds[1] - paintedBounds[0]),
+      y = paintedBounds[2] + rowFraction * (paintedBounds[3] - paintedBounds[2]);
     const grid = model.get("grid"),
       original = full();
     const col = Math.floor(
@@ -357,8 +405,8 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
       original[0] + ((col + 0.5) * (original[1] - original[0])) / grid.cols;
     const yc =
       original[2] + ((row + 0.5) * (original[3] - original[2])) / grid.rows;
-    showReadout(`Bin (${row}, ${col}) · x ${number(xc)} · y ${number(yc)} · value ${source[row * grid.cols + col]?.toPrecision(6)}`);
-  };
+    readout.title = readout.textContent = `Bin (${row}, ${col}) · x ${number(xc)} · y ${number(yc)} · value ${source[row * grid.cols + col]?.toPrecision(6)}`;
+  }
   canvas.onpointerup =
     canvas.onpointercancel =
     canvas.onlostpointercapture =
@@ -369,7 +417,8 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
         schedule();
       };
   canvas.onpointerleave = () => {
-    showReadout("");
+    pointer = null;
+    showReadout();
   };
   function zoomBy(factor: number, position = [0.5, 0.5]) {
     bounds = clampBounds(

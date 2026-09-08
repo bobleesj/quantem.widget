@@ -33,6 +33,9 @@ also available. The Color menu changes map and colorbar together; each plot is
 independent. A browser-local animation-frame scheduler handles gestures without
 Python round trips. Stable view bounds are saved after interaction.
 
+Map pixels, hover values and color-scale metadata update together after
+rendering completes, including during rapid replacements.
+
 `plot.set_data(next_values)` preserves the original grid, color limits and
 viewport. `plot.horizontal_line = 92.5` adds an angle-reading line without
 resending the map. `plot.figure()` returns a closed Matplotlib figure with
@@ -45,7 +48,8 @@ it is not a replacement for the scientific data files.
 This API targets small, finite scalar maps, not large spatial images. It does
 not support nonuniform coordinates, logarithmic axes, or standalone
 `export_html`. Interactive saved state currently embeds the full float64 map;
-keep large data outside notebooks. The current frontend is light-themed.
+keep large data outside notebooks. Controls, axes and the canvas follow the
+notebook or documentation light/dark theme.
 
 ## Reference
 
