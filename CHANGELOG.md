@@ -6,6 +6,9 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Add `Plot2D` for scalar maps with calibrated Cartesian axes, colormap
+  selection, viewport controls, and editable Matplotlib figure export.
+
 - Maintainer docs split pull requests into discuss-first (new widgets,
   cross-widget refactors) and incremental in-widget fixes, and add a
   `widget-tutorials/` upload page for the public

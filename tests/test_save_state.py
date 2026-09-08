@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from quantem.widget import Show1D, Show2D, Show3D, Show4DSTEM, ShowEDS
+from quantem.widget import Plot2D, Show1D, Show2D, Show3D, Show4DSTEM, ShowEDS
 
 
 IMAGE_MIME_KEYS = ("image/jpeg", "image/webp", "image/png")
@@ -70,6 +70,10 @@ def _mos2_like_stack(frames: int, rows: int, cols: int) -> np.ndarray:
 def _make(widget, *, save_state):
     """Construct a small instance of each widget plus the trait key that carries
     its live-render pixels (the one that must survive the targeted send path)."""
+    if widget is Plot2D:
+        data = np.arange(24, dtype=float).reshape(4, 6)
+        return Plot2D(data, x=np.arange(6), y=np.arange(4),
+                      save_state=save_state), "data_bytes"
     if widget is Show1D:
         # snapshot_bytes is empty on a plain trace widget but the KEY must
         # still survive the targeted path (it streams when a monitor attaches).
@@ -88,7 +92,7 @@ def _make(widget, *, save_state):
                       save_state=save_state), "virtual_image_bytes"
 
 
-WIDGETS = [Show1D, Show2D, Show3D, Show4DSTEM, ShowEDS]
+WIDGETS = [Plot2D, Show1D, Show2D, Show3D, Show4DSTEM, ShowEDS]
 
 
 @pytest.mark.parametrize("widget", WIDGETS)
@@ -101,7 +105,7 @@ def test_targeted_send_state_never_trimmed(widget):
     assert render_key in w.get_state(render_key), (
         f"{widget.__name__}: targeted get_state({render_key!r}) dropped the key "
         f"- live render would go blank")
-    assert render_key in w.get_state({render_key, "widget_version"}), (
+    assert render_key in w.get_state({render_key, "layout"}), (
         f"{widget.__name__}: hold_sync batch lost {render_key!r}")
 
 
@@ -127,8 +131,8 @@ def test_static_fallback_present(widget):
     bundle = w._repr_mimebundle_()
     data = bundle[0] if isinstance(bundle, tuple) else bundle
     image_keys = [key for key in IMAGE_MIME_KEYS if key in (data or {})]
-    assert image_keys == ["image/jpeg"], (
-        f"{widget.__name__}: no default JPEG static fallback for a cold reopen")
+    assert image_keys == ["image/png" if widget is Plot2D else "image/jpeg"], (
+        f"{widget.__name__}: missing expected static fallback for a cold reopen")
 
 
 @pytest.mark.parametrize("widget", WIDGETS)
@@ -1752,7 +1756,9 @@ def test_sibling_static_fallback_contract(widget, monkeypatch):
     assert png_calls, f"{widget.__name__}: deferred fill never rendered the PNG"
     assert "post_execute" not in hooks, "one-shot hook did not unregister"
     fill_data, fill_meta = updated[-1]
-    assert isinstance(fill_data["image/jpeg"], bytes) and len(fill_data["image/jpeg"]) > 1000
+    preview_mime = "image/png" if widget is Plot2D else "image/jpeg"
+    assert isinstance(fill_data[preview_mime], bytes)
+    assert len(fill_data[preview_mime]) > 1000
     assert "quantem-static-fallback" in fill_data["text/html"]
     assert fill_meta == {"quantem.widget": {"static_fallback": True}}
     # the saved-notebook snapshot must stay free of the bulk buffers

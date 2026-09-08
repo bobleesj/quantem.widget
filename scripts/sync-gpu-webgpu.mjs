@@ -59,6 +59,21 @@ else:
     from importlib.resources import files
 
     root = files("quantem.gpu")
+# New GPU versions retain display/webgpu/* as compatibility re-exports.
+# Include the canonical owners when present; older wheels provide the complete
+# implementations at the original paths. Keep the exported file list explicit.
+for name in tuple(names):
+    if name.startswith("display/webgpu/"):
+        canonical = name.replace("display/webgpu/", "display/backends/webgpu/", 1)
+        if root.joinpath(*canonical.split("/")).is_file():
+            names += (canonical,)
+    elif "/compute/webgpu/" in name:
+        canonical = name.replace("/compute/webgpu/", "/backends/webgpu/", 1)
+        if root.joinpath(*canonical.split("/")).is_file():
+            names += (canonical,)
+declarations = "io/backends/webgpu/jsfive.d.ts"
+if root.joinpath(*declarations.split("/")).is_file():
+    names += (declarations,)
 print(json.dumps({
     name: root.joinpath(*name.split("/")).read_text(encoding="utf-8")
     for name in names
