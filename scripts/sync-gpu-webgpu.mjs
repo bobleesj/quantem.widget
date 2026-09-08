@@ -36,6 +36,7 @@ names = (
     "io/backends/webgpu/local-h5.ts",
     "detector/compute/webgpu/backend.ts",
     "detector/compute/webgpu/rans.ts",
+    "detector/compute/webgpu/rans-source.ts",
     "detector/geometry.ts",
     "dpc/compute/webgpu/fft.ts",
     "dpc/compute/webgpu/kernels.ts",
