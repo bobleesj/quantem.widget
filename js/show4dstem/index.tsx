@@ -1741,8 +1741,9 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         panel: panelByFrame.get(frame),
         gpuLoaded: Boolean((integerCounts && batchEnabled && !batchFailed) || (gpuSlots?.has(frame) && gpuEngine)),
       }))
-      .filter((entry) => Boolean(progressivePage) || entry.panel !== undefined || entry.gpuLoaded);
-  }, [integerCounts, batchEnabled, batchFailed, gpuEngine, gpuSlots, gpuVersion, panelByFrame, progressivePage, renderIndices, scaleMode]);
+      // Reserve loading tiles so a ready image does not move beneath a drag.
+      .filter((entry) => sourceLoading || Boolean(progressivePage) || entry.panel !== undefined || entry.gpuLoaded);
+  }, [integerCounts, batchEnabled, batchFailed, gpuEngine, gpuSlots, gpuVersion, panelByFrame, progressivePage, sourceLoading, renderIndices, scaleMode]);
 
   const countImagesRef = React.useRef<CompareCountImages | null>(null);
   const comparePaintScheduler = React.useMemo(() => createComparePaintScheduler(), []);
@@ -6365,8 +6366,7 @@ function Show4DSTEM() {
       await recomputeVI();  // initial virtual image, no interaction needed
       await recomputeCompareVI();
       if (!initialVolumeLoad && !disposed) {
-        if (!(ransSet instanceof Source112ResidentSet) || ransSet.loadedAcquisitions === ransSet.acquisitionCount)
-          setOfflineBackendStatus("");
+        if (!(ransSet instanceof Source112ResidentSet)) setOfflineBackendStatus("");
         setOfflineBackendLoading(false);
       }
       // Fit the BF disk from the mean diffraction pattern before the presets warm.
@@ -10436,7 +10436,7 @@ function Show4DSTEM() {
   const offlineStatusText = offlineBackendError || offlineBackendStatus;
   const offlineStatusIsError = Boolean(offlineBackendError);
   const offlineStatusIsReady = !offlineStatusIsError && /\bready\b/i.test(offlineStatusText);
-  const showOfflineStatus = offline && Boolean(offlineStatusText) && (!offlineStatusIsReady || residentSeriesLoading);
+  const showOfflineStatus = offline && Boolean(offlineStatusText) && (!offlineStatusIsReady || residentSeriesLoading || source112Source);
   const showLocalH5GrantBanner = offline && h5SourceAvailable && requireLocalH5Files && !h5LocalFilesGranted;
 
   return (

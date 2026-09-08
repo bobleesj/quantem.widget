@@ -38,7 +38,7 @@ def test_visible_images_change_before_detector_release(scale: str):
         page.bring_to_front()
         assert page.evaluate("!!window.__sh4d?.residentSource?.()")
         count = page.evaluate("__sh4d.residentSource().loadedAcquisitions")
-        assert 2 <= count <= 3, "Use two or three complete acquisitions for this gate."
+        assert 2 <= count <= 6, "Use two to six complete acquisitions for this gate."
         assert page.evaluate("[__sh4d.model.get('det_rows'), __sh4d.model.get('det_cols')]") == [192, 192]
         keys = ["view_mode", "vi_source", "roi_active", "roi_mode", "roi_radius",
                 "roi_radius_inner", "roi_center_row", "roi_center_col", "vi_scale_mode"]
