@@ -2007,7 +2007,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             self.gpu_memory_label = (
                 "Browser WebGPU lazy source"
                 if webgpu_lazy_urls
-                else "Browser WebGPU lossless rANS source"
+                else "Browser WebGPU lossless encoded source"
                 if rans_url
                 else "Browser WebGPU HDF5 source"
             )
