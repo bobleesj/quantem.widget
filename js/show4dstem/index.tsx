@@ -3639,6 +3639,16 @@ function Show4DSTEM() {
       const h5UrlsJson = model.get("_h5_urls") as string | undefined;
       const ransUrl = (model.get("_rans_url") as string | undefined) || "";
       let ransSet: RansResidentSet | Source112ResidentSet | null = null;
+      const sourceDetectorMask = (
+        state: Parameters<typeof buildDetectorMask>[0], rows: number, cols: number,
+      ): Uint32Array => {
+        const mask = buildDetectorMask(state, rows, cols);
+        // Counts and presentation means must use the same admitted detector area.
+        if (ransSet instanceof Source112ResidentSet) {
+          for (const pixel of ransSet.badPx) mask[pixel] = 0;
+        }
+        return mask;
+      };
       const h5Urls = (() => {
         if (!h5UrlsJson) return [] as string[];
         try {
@@ -4489,7 +4499,7 @@ function Show4DSTEM() {
           radiusInner: 0,
         };
       };
-      const maskForRoiGeometry = (geometry: WarmRoiGeometry): Uint32Array => buildDetectorMask({
+      const maskForRoiGeometry = (geometry: WarmRoiGeometry): Uint32Array => sourceDetectorMask({
         get: (name: string) => {
           if (name === "roi_center_row") return geometry.centerRow;
           if (name === "roi_center_col") return geometry.centerCol;
@@ -4821,7 +4831,7 @@ function Show4DSTEM() {
           }
           return;
         }
-        const mask = buildDetectorMask(model, detR, detC);
+        const mask = sourceDetectorMask(model, detR, detC);
         const roiKey = roiWarmCacheKey(currentRoiGeometry());
         if (serveWarmCacheEntry(roiKey, "roi", startedAt, generation)) {
           return;
@@ -5048,7 +5058,7 @@ function Show4DSTEM() {
           if (!engine0) return false;
           const computeStartedAt = performance.now();
           const liveCenter = interactiveDrag && ransSet ? roiCenterPendingRef.current : null;
-          const mask0 = buildDetectorMask(liveCenter ? {
+          const mask0 = sourceDetectorMask(liveCenter ? {
             get: (name: string) => name === "roi_center_row" ? liveCenter[0]
               : name === "roi_center_col" ? liveCenter[1] : model.get(name),
           } : model, detR, detC);
@@ -5159,7 +5169,7 @@ function Show4DSTEM() {
         };
         if (await updateRoiCompareGpuSlots()) {
           if (ransSet && !interactiveDrag && gen === compareViGen && !disposed) {
-            const mask = buildDetectorMask(model, detR, detC);
+            const mask = sourceDetectorMask(model, detR, detC);
             const area = Math.max(1, mask.reduce((n, value) => n + (value ? 1 : 0), 0));
             const pixels = scanRows * scanCols;
             const settled = new Float32Array(indices.length * pixels);
@@ -5215,7 +5225,7 @@ function Show4DSTEM() {
           publishDirectCompareStack(new DataView(stack.slice().buffer), indices.length, indices);
           return;
         }
-        const mask = buildDetectorMask(model, detR, detC);
+        const mask = sourceDetectorMask(model, detR, detC);
         let maskArea = 0;
         for (let i = 0; i < mask.length; i++) maskArea += mask[i] ? 1 : 0;
         maskArea = Math.max(1, maskArea);
@@ -5237,8 +5247,8 @@ function Show4DSTEM() {
       };
       (window as unknown as { __sh4d: unknown }).__sh4d = { model, recomputeVI, recomputeCompareVI,
         residentSource: () => ransSet,
-        detMask: () => buildDetectorMask(model, detR, detC),
-        deriveOnly: async () => { const vi = await compute!.maskedSum(buildDetectorMask(model, detR, detC)); return vi.length; },
+        detMask: () => sourceDetectorMask(model, detR, detC),
+        deriveOnly: async () => { const vi = await compute!.maskedSum(sourceDetectorMask(model, detR, detC)); return vi.length; },
         rawChecksums: async (scanIndices: number[] = [0, Math.floor((scanRows * scanCols) / 2), scanRows * scanCols - 1]) => {
           const checksum = (compute as unknown as { checksumFrames?: (indices: number[]) => Promise<unknown> })?.checksumFrames;
           if (typeof checksum !== "function") return null;
@@ -5305,7 +5315,7 @@ function Show4DSTEM() {
           model.set("vi_scale_mode", logScale ? "log" : "linear");
           model.save_changes();
 
-          const mask = buildDetectorMask(model, detR, detC);
+          const mask = sourceDetectorMask(model, detR, detC);
           let maskPixels = 0;
           for (let i = 0; i < mask.length; i++) if (mask[i]) maskPixels++;
           const prepStartedAt = performance.now();
@@ -5604,7 +5614,7 @@ function Show4DSTEM() {
               engine.configureCanvas(canvas, scanCols, scanRows),
             );
           }
-          const maskForCenter = (row: number, col: number) => buildDetectorMask({
+          const maskForCenter = (row: number, col: number) => sourceDetectorMask({
             get: (name: string) => {
               if (name === "roi_mode") return mode;
               if (name === "roi_center_row") return row;
@@ -5722,7 +5732,7 @@ function Show4DSTEM() {
           return payload;
         },
         roiBufferOnly: async () => {
-          const mask = buildDetectorMask(model, detR, detC);
+          const mask = sourceDetectorMask(model, detR, detC);
           const t0 = performance.now();
           const displayed = computeRoiBufferImage(compute!, mask);
           await ensureViGpuColormap(compute!)?.getDevice().queue.onSubmittedWorkDone().catch(() => {});
@@ -5735,7 +5745,7 @@ function Show4DSTEM() {
           };
         },
         h5ProductFirstRoi: async () => {
-          const mask = buildDetectorMask(model, detR, detC);
+          const mask = sourceDetectorMask(model, detR, detC);
           const generation = ++viRecomputeGen;
           const t0 = performance.now();
           const result = await computeH5ProductFirstRoi(mask, generation);
