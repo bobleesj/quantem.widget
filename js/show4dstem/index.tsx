@@ -1,3 +1,4 @@
+import { createDpPointerOwner } from "./dpPointerOwner";
 /// <reference types="@webgpu/types" />
 import { residentDisplayValues, residentRawValues, residentScalarType, residentDivisor, type ResidentBatchInfo, type ResidentValues } from "./batchValues";
 import { useResidentTransport } from "./residentTransport";
@@ -3352,6 +3353,7 @@ function Show4DSTEM() {
     };
   }, []);
   const [isDraggingDP, setIsDraggingDP] = React.useState(false);
+  const dpPointerOwner = React.useMemo(() => createDpPointerOwner(), []);
   // rAF coalescing for ROI drag: collapse rapid mousemove events into ≤1
   // Python comm message per animation frame. Without this, drag fires 60+
   // events/sec at >100ms Python compute each → queue piles up → laggy UX.
@@ -9091,32 +9093,10 @@ function Show4DSTEM() {
     requestCompareViLive, roiMode, roiRadius, roiRadiusInner, sendRoiRadius, setRoiHeight, setRoiRadiusInner, setRoiWidth
   ]);
 
-  React.useEffect(() => {
-    if (!isDraggingResize && !isDraggingResizeInner) return;
-
-    const onMove = (event: MouseEvent | PointerEvent) => {
-      const coords = getDpImageCoordsFromClient(event.clientX, event.clientY);
-      if (!coords) return;
-      if (resizeDpRoiFromImagePoint(coords.imgX, coords.imgY, event.shiftKey)) {
-        event.preventDefault();
-      }
-    };
-    const onUp = () => {
-      finishDpRoiInteraction();
-      setIsDraggingResize(false);
-      setIsDraggingResizeInner(false);
-      setLocalRoiRadius(null);
-    };
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp); window.addEventListener("pointercancel", onUp);
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp); window.removeEventListener("pointercancel", onUp);
-    };
-  }, [finishDpRoiInteraction, getDpImageCoordsFromClient, isDraggingResize, isDraggingResizeInner, resizeDpRoiFromImagePoint]);
-
-  const handleDpMouseDown = (e: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
+  const handleDpMouseDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const coords = getDpImageCoordsFromClient(e.clientX, e.clientY);
+    if (!coords || !dpPointerOwner.start(e)) return;
+    const { imgX, imgY } = coords;
     // Capture the pointer so a fast edge-drag resize keeps receiving move/up
     // events even when the cursor leaves the canvas (#751). Without capture the
     // window listener can miss events and the radius never updates.
@@ -9130,9 +9110,6 @@ function Show4DSTEM() {
       model.send({ type: "resident_detector_gesture", ...gesture });
     }
     dpClickStartRef.current = { x: e.clientX, y: e.clientY };
-    const coords = getDpImageCoordsFromClient(e.clientX, e.clientY);
-    if (!coords) return;
-    const { imgX, imgY } = coords;
 
     // When profile mode is active, use profile interactions only
     if (profileActive) {
@@ -9203,7 +9180,10 @@ function Show4DSTEM() {
     requestCompareViLive();
   };
 
-  const handleDpMouseMove = (e: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
+  const handleDpMouseMove = (e: PointerEvent | React.PointerEvent<HTMLCanvasElement>) => {
+    const pointerMove = dpPointerOwner.move(e);
+    if (pointerMove === "ignore") return;
+    if (pointerMove === "release") { handleDpMouseUp(e); return; }
     const coords = getDpImageCoordsFromClient(e.clientX, e.clientY);
     if (!coords) return;
     const { imgX, imgY } = coords;
@@ -9211,6 +9191,7 @@ function Show4DSTEM() {
     // Fast path: skip cursor readout during any active drag — avoids setCursorInfo re-renders
     const anyDrag = isDraggingDP || isDraggingResize || isDraggingResizeInner
       || draggingDpProfileEndpoint !== null || isDraggingDpProfileLine;
+    if (anyDrag && pointerMove !== "drag") return;
 
     // Cursor readout: look up raw DP value at pixel position
     if (!anyDrag) {
@@ -9312,12 +9293,13 @@ function Show4DSTEM() {
     requestCompareViLive();
   };
 
-  const handleDpMouseUp = (e: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
+  const handleDpMouseUp = (e: PointerEvent | React.PointerEvent<HTMLCanvasElement>) => {
+    if (!dpPointerOwner.release(e)) return;
     if (residentBatchInfo) {
       const gesture = { phase: e.type === "pointercancel" ? "cancel" : "end",
         epoch_ms: performance.timeOrigin + performance.now(),
         pointer_id: "pointerId" in e ? e.pointerId : null, client: [e.clientX, e.clientY] };
-      e.currentTarget.dataset.residentGesture = JSON.stringify(gesture);
+      if (dpOverlayRef.current) dpOverlayRef.current.dataset.residentGesture = JSON.stringify(gesture);
       model.send({ type: "resident_detector_gesture", ...gesture });
     }
     finishDpRoiInteraction();
@@ -9337,7 +9319,7 @@ function Show4DSTEM() {
     }
 
     // Profile click capture
-    if (profileActive && dpClickStartRef.current) {
+    if (e.type === "pointerup" && profileActive && dpClickStartRef.current) {
       const dx = e.clientX - dpClickStartRef.current.x;
       const dy = e.clientY - dpClickStartRef.current.y;
       if (Math.sqrt(dx * dx + dy * dy) < 3) {
@@ -9374,6 +9356,9 @@ function Show4DSTEM() {
     dpProfileDragStartRef.current = null;
   };
   const handleDpMouseLeave = () => {
+    // Capture can be lost when the canvas is replaced. The owner-filtered
+    // window handlers continue the gesture outside it until real up/cancel.
+    if (dpPointerOwner.active) return;
     dpClickStartRef.current = null;
     finishDpRoiInteraction();
     setIsDraggingDP(false); setIsDraggingResize(false); setIsDraggingResizeInner(false);
@@ -9386,6 +9371,32 @@ function Show4DSTEM() {
     setIsHoveringResize(false); setIsHoveringResizeInner(false);
     setCursorInfo(prev => prev?.panel === "DP" ? null : prev);
   };
+  // Keep global delivery on the latest committed geometry/state, without
+  // detaching listeners during drag rerenders or processing canvas events twice.
+  const dpPointerHandlersRef = React.useRef({ move: handleDpMouseMove, up: handleDpMouseUp });
+  React.useLayoutEffect(() => {
+    dpPointerHandlersRef.current = { move: handleDpMouseMove, up: handleDpMouseUp };
+  });
+  React.useEffect(() => {
+    const onMove = (event: PointerEvent) => {
+      if (!dpPointerOwner.owns(event) || event.target === dpOverlayRef.current) return;
+      dpPointerHandlersRef.current.move(event);
+      event.preventDefault();
+    };
+    const onUp = (event: PointerEvent) => {
+      if (dpPointerOwner.owns(event)) dpPointerHandlersRef.current.up(event);
+    };
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      dpPointerOwner.reset();
+    };
+  }, [dpPointerOwner]);
+
   const handleDpDoubleClick = () => {
     dpViewRef.current.zoom = 1;
     dpViewRef.current.panX = 0;
@@ -10814,7 +10825,7 @@ function Show4DSTEM() {
             <canvas
               ref={dpOverlayRef} width={detCols} height={detRows}
               onPointerDown={handleDpMouseDown} onPointerMove={handleDpMouseMove}
-              onPointerUp={handleDpMouseUp} onPointerCancel={handleDpMouseUp} onMouseLeave={handleDpMouseLeave}
+              onPointerUp={handleDpMouseUp} onPointerCancel={handleDpMouseUp} onPointerLeave={handleDpMouseLeave}
               onWheel={createZoomHandler(setDpZoom, setDpPanX, setDpPanY, dpViewRef, dpOverlayRef)}
               onDoubleClick={handleDpDoubleClick}
               onTouchStart={handlePanelTouchStart("dp")}
