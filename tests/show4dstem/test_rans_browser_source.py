@@ -15,6 +15,7 @@ def test_rans_url_marks_a_webgpu_browser_source():
     widget = Show4DSTEM(np.zeros((1, 1, 1, 1), dtype=np.uint8), rans_url="../rans/", rans_count=3,
                         scan_shape=(4, 5), detector_shape=(6, 7), backend="webgpu", precompute_virtual_images=False, verbose=False)
     assert widget._rans_url == "../rans/" and widget._h5_url == "" and widget._h5_urls == ""
+    assert widget.gpu_memory_label == "Browser WebGPU lossless rANS source"
     assert widget.offline is True and widget._webgpu_h5_source
     assert widget.shape_rows == 4 and widget.shape_cols == 5 and widget.det_rows == 6 and widget.det_cols == 7
     with pytest.raises(ValueError):
