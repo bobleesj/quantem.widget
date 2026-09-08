@@ -45,6 +45,23 @@ function workflow() {
 }
 
 describe("resident radius overlay paint", () => {
+  it("keeps each scientific radius current while only painting at the scheduled frame", () => {
+    const {state, model, overlay, flush} = workflow();
+    for (const radius of [80.125, 80.25, 80.5, 80.875]) {
+      state.roiRadiusPendingRef.current = radius;
+      flush(false);
+      expect(liveRoiGeometry(model, null, state.roiRadiusPendingRef.current, null).get("roi_radius")).toBe(radius);
+    }
+    expect(overlay).not.toHaveBeenCalled();
+    expect(state.cancelAnimationFrame).not.toHaveBeenCalled();
+    expect(state.roiRadiusRafRef.current).toBe(7);
+    expect(model.set).not.toHaveBeenCalled();
+    flush();
+    expect(overlay).toHaveBeenCalledTimes(1);
+    expect(overlay.mock.lastCall![5]).toBe(80.875);
+    expect(state.roiRadiusRafRef.current).toBeNull();
+  });
+
   it.each(["inner", "outer"] as const)("paints latest %s geometry and exact mean support before model publication", boundary => {
     const {state, model, overlay, flush} = workflow();
     for (const radius of [0.125, 0.25, 0.375, 0.5]) {

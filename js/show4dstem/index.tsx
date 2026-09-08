@@ -3393,12 +3393,12 @@ function Show4DSTEM() {
   const roiRadiusPendingRef = React.useRef<number | null>(null);
   const roiRadiusInnerPendingRef = React.useRef<number | null>(null);
   const roiRadiusRafRef = React.useRef<number | null>(null);
-  const flushRoiRadius = React.useCallback(() => {
-    if (roiRadiusRafRef.current !== null) cancelAnimationFrame(roiRadiusRafRef.current);
+  const flushRoiRadius = React.useCallback((paint = true) => {
+    if (paint && roiRadiusRafRef.current !== null) cancelAnimationFrame(roiRadiusRafRef.current);
     if (dpRoiInteractiveRef.current && isResidentCompareDrag()) {
       // Keep the refs current for every scientific update. Publish final traits
       // after release; ring repaint is independent of scientific submission.
-      drawDpLiveRef.current?.();
+      if (paint) drawDpLiveRef.current?.();
     } else {
       const updates: Record<string, number> = {};
       if (roiRadiusPendingRef.current !== null) updates.roi_radius = roiRadiusPendingRef.current;
@@ -3410,12 +3410,12 @@ function Show4DSTEM() {
         model.save_changes();
       }
     }
-    roiRadiusRafRef.current = null;
+    if (paint) roiRadiusRafRef.current = null;
   }, [isResidentCompareDrag, model]);
   const sendRoiRadius = React.useCallback((radius: number, boundary: "inner" | "outer" = "outer") => {
     if (boundary === "inner") roiRadiusInnerPendingRef.current = radius;
     else roiRadiusPendingRef.current = radius;
-    if (roiRadiusRafRef.current === null) roiRadiusRafRef.current = requestAnimationFrame(flushRoiRadius);
+    if (roiRadiusRafRef.current === null) roiRadiusRafRef.current = requestAnimationFrame(() => flushRoiRadius());
   }, [flushRoiRadius]);
   React.useEffect(() => () => {
     if (roiRadiusRafRef.current !== null) cancelAnimationFrame(roiRadiusRafRef.current);
@@ -6035,7 +6035,8 @@ function Show4DSTEM() {
         }
         compareViLivePendingRef.current = false;
         flushRoiCenter(false);
-        flushRoiRadius();
+        // Keep scientific geometry current without repainting between display frames.
+        flushRoiRadius(false);
         compareViLiveInFlightRef.current = true;
         void (async () => {
           if (ransSet && compareVisibleIndices().length && normaliseViSource(model.get("vi_source")) === "roi") {
