@@ -1,3 +1,4 @@
+import { createLatestFrameQueue } from "./latestFrameQueue";
 import { circularDragRadius, liveRoiGeometry } from "./roiRadiusDrag";
 import { createDpPointerOwner } from "./dpPointerOwner";
 /// <reference types="@webgpu/types" />
@@ -3291,8 +3292,6 @@ function Show4DSTEM() {
   const [localPosCol, setLocalPosCol] = React.useState(posCol);
   const scanPositionPendingRef = React.useRef<[number, number] | null>(null);
   const scanPositionRafRef = React.useRef<number | null>(null);
-  const scanPositionTimerRef = React.useRef<number | null>(null);
-  const scanPositionLastSyncRef = React.useRef(0);
   const scanPositionOptimisticRef = React.useRef<[number, number] | null>(null);
   const scanPositionCurrentRef = React.useRef<[number, number]>([Math.round(posRow), Math.round(posCol)]);
   const writeQueuedScanPosition = React.useCallback(() => {
@@ -3301,10 +3300,11 @@ function Show4DSTEM() {
     const [row, col] = pending;
     scanPositionPendingRef.current = null;
     scanPositionCurrentRef.current = [row, col];
+    setLocalPosRow(row);
+    setLocalPosCol(col);
     model.set("pos_row", row);
     model.set("pos_col", col);
     model.save_changes();
-    scanPositionLastSyncRef.current = performance.now();
   }, [model]);
   const writeRoiCenterModel = React.useCallback((row: number, col: number) => {
     model.set("roi_center_row", row);
@@ -3319,23 +3319,14 @@ function Show4DSTEM() {
     if (current[0] === row && current[1] === col) return;
     scanPositionPendingRef.current = [row, col];
     scanPositionOptimisticRef.current = [row, col];
-    if (scanPositionTimerRef.current === null && scanPositionRafRef.current === null) {
-      const elapsed = performance.now() - scanPositionLastSyncRef.current;
-      const delay = Math.max(0, 33 - elapsed);
-      scanPositionTimerRef.current = window.setTimeout(() => {
-        scanPositionTimerRef.current = null;
-        scanPositionRafRef.current = requestAnimationFrame(() => {
-          scanPositionRafRef.current = null;
-          writeQueuedScanPosition();
-        });
-      }, delay);
+    if (scanPositionRafRef.current === null) {
+      scanPositionRafRef.current = requestAnimationFrame(() => {
+        scanPositionRafRef.current = null;
+        writeQueuedScanPosition();
+      });
     }
   }, [writeQueuedScanPosition]);
   const flushScanPosition = React.useCallback(() => {
-    if (scanPositionTimerRef.current !== null) {
-      window.clearTimeout(scanPositionTimerRef.current);
-      scanPositionTimerRef.current = null;
-    }
     if (scanPositionRafRef.current !== null) {
       cancelAnimationFrame(scanPositionRafRef.current);
       scanPositionRafRef.current = null;
@@ -3344,9 +3335,6 @@ function Show4DSTEM() {
   }, [writeQueuedScanPosition]);
   React.useEffect(() => {
     return () => {
-      if (scanPositionTimerRef.current !== null) {
-        window.clearTimeout(scanPositionTimerRef.current);
-      }
       if (scanPositionRafRef.current !== null) {
         cancelAnimationFrame(scanPositionRafRef.current);
         scanPositionRafRef.current = null;
@@ -6098,7 +6086,7 @@ function Show4DSTEM() {
       // the offline stack, so the DP follows the probe offline too.
       const detSize = detR * detC;
       const sample = (gp: number) => compute!.mode === 1 ? cpuStack![gp] : (cpuStack![gp * 2] | (cpuStack![gp * 2 + 1] << 8));
-      const recomputeFrame = async () => {
+      const computeFrame = async (isCurrent: () => boolean) => {
         const pr = Math.max(0, Math.min(scanRows - 1, model.get("pos_row") | 0));
         const pc = Math.max(0, Math.min(scanCols - 1, model.get("pos_col") | 0));
         const scanIdx = pr * scanCols + pc;
@@ -6126,6 +6114,7 @@ function Show4DSTEM() {
             }
             if (count > 0) {
               for (let k = 0; k < detSize; k++) averaged[k] /= count;
+              if (!isCurrent()) return;
               model.set("frame_bytes", new DataView(averaged.buffer));
               (window as unknown as { __show4dstemLatestDp?: unknown }).__show4dstemLatestDp = {
                 scanIdx,
@@ -6144,8 +6133,13 @@ function Show4DSTEM() {
         const frame = cpuStack
           ? (() => { const f = new Float32Array(detSize); const base = scanIdx * detSize; for (let k = 0; k < detSize; k++) f[k] = sample(base + k); return f; })()
           : await compute!.frameAt(scanIdx);
+        if (!isCurrent()) return;
         model.set("frame_bytes", new DataView(frame.buffer)); model.save_changes();
       };
+      const frameQueue = createLatestFrameQueue(computeFrame, error => {
+        if (!disposed) setOfflineBackendError(String(error));
+      });
+      const recomputeFrame = frameQueue.request;
       requestDpFrameLiveRef.current = () => {
         void recomputeFrame();
       };
@@ -6312,6 +6306,7 @@ function Show4DSTEM() {
         model.off("change:roi_center", onRoiCenter);
         model.off("change:vi_roi_center", onViCenter);
         model.off("change:_preset_request", onPreset);
+        frameQueue.close();
         model.off("change:pos_row", onPos);
         model.off("change:pos_col", onPos);
         model.off("change:compare_dp_mode", onCompareFrameSource);
@@ -7442,8 +7437,6 @@ function Show4DSTEM() {
   }, [posRow, posCol, isDraggingVI]);
 
   const updateScanPosition = React.useCallback((row: number, col: number, commit = false) => {
-    setLocalPosRow(row);
-    setLocalPosCol(col);
     queueScanPosition(row, col);
     if (commit) flushScanPosition();
   }, [flushScanPosition, queueScanPosition]);
