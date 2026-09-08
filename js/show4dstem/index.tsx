@@ -45,6 +45,7 @@ import {
   show4DSTEMHasLocalFiles,
 } from "../.generated/engine/io/backends/webgpu/local-h5";
 import { getGPUInfo, isSoftwareGPUAdapter, getGPUDevice } from "../.generated/engine/device/webgpu";
+import { Source112ResidentSet } from "../.generated/engine/detector/compute/webgpu/source112";
 import { RansResidentSet, isRansBatch } from "../.generated/engine/detector/compute/webgpu/rans";
 import { LazyShow4DSTEM } from "./lazy";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
@@ -3513,6 +3514,7 @@ function Show4DSTEM() {
   );
   const ransSourceAvailable = Boolean(model.get("_rans_url"));
   const countAnsSource = model.get("_rans_format") === "count-ans-v1";
+  const source112Source = model.get("_rans_format") === "source112-tans1024-pair-v1";
   const [ransLocalFiles, setRansLocalFiles] = React.useState<File[] | null>(null);
   const [ransLocalDirectory, setRansLocalDirectory] = React.useState<Parameters<typeof RansResidentSet.loadLocal>[1] | null>(null);
   const [h5LocalFilesGranted, setH5LocalFilesGranted] = React.useState(show4DSTEMHasLocalFiles());
@@ -3545,7 +3547,7 @@ function Show4DSTEM() {
   }, [ransSourceAvailable]);
   const grantH5LocalFiles = React.useCallback(async () => {
     setH5LocalSourceStatus("");
-    if (countAnsSource) {
+    if (countAnsSource || source112Source) {
       h5LocalInputRef.current?.click();
       return;
     }
@@ -3575,7 +3577,7 @@ function Show4DSTEM() {
       }
     }
     h5LocalInputRef.current?.click();
-  }, [countAnsSource, ransSourceAvailable]);
+  }, [countAnsSource, source112Source, ransSourceAvailable]);
   React.useEffect(() => {
     if (!offline) {
       setWebgpuDpcReady(false);
@@ -3585,6 +3587,7 @@ function Show4DSTEM() {
       return;
     }
     let disposed = false;
+    const sourceLoadAbort = new AbortController();
     let detach: (() => void) | null = null;
     setOfflineBackendLoading(true);
     setOfflineBackendError("");
@@ -3635,7 +3638,7 @@ function Show4DSTEM() {
       const h5Url = model.get("_h5_url") as string | undefined;
       const h5UrlsJson = model.get("_h5_urls") as string | undefined;
       const ransUrl = (model.get("_rans_url") as string | undefined) || "";
-      let ransSet: RansResidentSet | null = null;
+      let ransSet: RansResidentSet | Source112ResidentSet | null = null;
       const h5Urls = (() => {
         if (!h5UrlsJson) return [] as string[];
         try {
@@ -3667,9 +3670,9 @@ function Show4DSTEM() {
       const h5ResidentLimit = h5UsesNativeU16 && !h5AllowU16MultiResident
         ? 1
         : h5RequestedResidentLimit;
-      if (countAnsSource && !ransLocalFiles?.length) {
+      if ((countAnsSource || source112Source) && !ransLocalFiles?.length) {
         if (!disposed) {
-          setOfflineBackendStatus("Select the exported count-ANS files to load the lossless source");
+          setOfflineBackendStatus(source112Source ? "Select the complete encoded data folder to load all 66 acquisitions" : "Select the exported count-ANS files to load the lossless source");
           setOfflineBackendLoading(false);
         }
         return;
@@ -4049,7 +4052,9 @@ function Show4DSTEM() {
           });
           if (!canonicalFiles.length) throw new Error("This viewer has no count-ANS files configured. Export it again from the source files.");
         }
-        ransSet = countAnsSource
+        ransSet = model.get("_rans_format") === "source112-tans1024-pair-v1"
+          ? await Source112ResidentSet.loadFiles(ransDevice, ransLocalFiles || [], status, sourceLoadAbort.signal)
+          : countAnsSource
           ? await RansResidentSet.loadCountANSFiles(ransDevice, canonicalFiles, status,
               JSON.parse(String(model.get("_offline_bad_px") || "[]")) as number[])
           : ransLocalDirectory
@@ -6202,6 +6207,7 @@ function Show4DSTEM() {
     });
     return () => {
       disposed = true;
+      sourceLoadAbort.abort();
       requestViFinalizeRef.current = null;
       requestCompareViLiveRef.current = null;
       compareViLiveMicrotaskRef.current = null;
@@ -6219,7 +6225,7 @@ function Show4DSTEM() {
       clearViGpuDisplay();
       detach?.();
     };
-  }, [clearViGpuDisplay, countAnsSource, ensureViGpuColormap, h5LocalFilesGranted, h5SourceAvailable, offline, ransLocalDirectory, ransLocalFiles, requestCompareViLive, requestDpFrameLive, requireLocalH5Files]);
+  }, [clearViGpuDisplay, countAnsSource, source112Source, ensureViGpuColormap, h5LocalFilesGranted, h5SourceAvailable, offline, ransLocalDirectory, ransLocalFiles, requestCompareViLive, requestDpFrameLive, requireLocalH5Files]);
   // dp_stats are computed in JS from frameBytes (Python side no longer
   // syncs a dp_stats trait — saves 4 trait sync round-trips per click).
   const [viStats, setViStats] = React.useState<number[]>([0, 0, 0, 0]);
