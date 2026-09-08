@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { source112MeanDelta } from "./source112MeanDelta";
+import { source112MeanDelta, countImagesForRender, type CompareCountImages } from "./source112MeanDelta";
 
 describe("source112 mean display deltas", () => {
   it("reuses owned displays and normalizes new counts exactly once per update", () => {
@@ -60,5 +60,35 @@ describe("source112 mean display deltas", () => {
     source.integrate.mockImplementationOnce(() => { throw new Error("Source closed"); });
     expect(() => source112MeanDelta(source, new Uint32Array(3), previous)).toThrow("Source closed");
     expect(source.normalizeDisplayBuffers).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("borrowed count display lifecycle", () => {
+  it("skips conversion only after a complete direct mean paint", () => {
+    const source = {integrate: vi.fn(() => ({added: 1, removed: 0, full: false})), normalizeDisplayBuffers: vi.fn()};
+    const buffers = [{} as GPUBuffer];
+    const paint = vi.fn(area => { expect(area).toBe(2); return true; });
+    source112MeanDelta(source, new Uint32Array([1, 1, 0]), buffers, paint);
+    expect(source.normalizeDisplayBuffers).not.toHaveBeenCalled();
+    source112MeanDelta(source, new Uint32Array([1, 0, 0]), buffers, () => false);
+    expect(source.normalizeDisplayBuffers).toHaveBeenCalledExactlyOnceWith(buffers, 1);
+    expect(() => source112MeanDelta(source, new Uint32Array([1]), buffers, () => {throw Error("render failed");})).toThrow("render failed");
+    expect(source.normalizeDisplayBuffers).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains mean area for repaints and refreshes legacy views only for the current dataset", () => {
+    let current = true;
+    const refreshFloat = vi.fn();
+    const view = {divisor: 2472} as import("../colormaps").Uint32ImageView;
+    const counts: CompareCountImages = {images: new Map([[65, view]]), isCurrent: () => current, refreshFloat};
+    expect(countImagesForRender(counts, true)?.images.get(65)?.divisor).toBe(2472);
+    expect(countImagesForRender(counts, true)).toBe(counts);
+    expect(refreshFloat).not.toHaveBeenCalled();
+    expect(countImagesForRender(counts, false)).toBeNull();
+    expect(refreshFloat).toHaveBeenCalledTimes(1);
+    current = false; // The old source has been replaced/disposed.
+    expect(countImagesForRender(counts, true)).toBeNull();
+    expect(countImagesForRender(counts, false)).toBeNull();
+    expect(refreshFloat).toHaveBeenCalledTimes(1);
   });
 });

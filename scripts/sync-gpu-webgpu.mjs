@@ -22,6 +22,7 @@ from pathlib import Path
 names = (
     "device/webgpu.ts",
     "display/webgpu/colormaps.ts",
+    "display/webgpu/borrowed-image.ts",
     "display/webgpu/fft.ts",
     "display/webgpu/fftMetrics.ts",
     "display/webgpu/filter.ts",
