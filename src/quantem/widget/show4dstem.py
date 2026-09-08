@@ -1540,8 +1540,18 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         # browser VRAM and create indistinguishable compare panels.
         if webgpu_h5_urls and webgpu_lazy_urls:
             raise ValueError("Use h5_urls= or lazy_urls=, not both.")
-        if rans_format not in {"detector-rans-v1", "count-ans-v1"}:
-            raise ValueError("rans_format must be 'detector-rans-v1' or 'count-ans-v1'.")
+        if rans_format not in {"detector-rans-v1", "count-ans-v1", "source112-tans1024-pair-v1"}:
+            raise ValueError("Select detector-rans-v1, count-ans-v1, or source112-tans1024-pair-v1.")
+        if rans_format == "source112-tans1024-pair-v1":
+            if (not rans_url or not isinstance(rans_count, (int, np.integer))
+                    or rans_count != 66
+                    or (tuple(scan_shape) if scan_shape is not None else ()) != (512, 512)
+                    or (tuple(detector_shape) if detector_shape is not None else ()) != (192, 192)
+                    or rans_dtype != "uint16"):
+                raise ValueError(
+                    "Source112 requires all 66 native uint16 acquisitions with "
+                    "scan_shape=(512, 512) and detector_shape=(192, 192)."
+                )
         if rans_format == "count-ans-v1":
             if not rans_url or not rans_files or len(rans_files) != int(rans_count):
                 raise ValueError("Count-ANS requires a folder hint and one local filename per acquisition.")

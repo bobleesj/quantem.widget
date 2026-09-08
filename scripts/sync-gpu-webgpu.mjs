@@ -38,6 +38,8 @@ names = (
     "detector/compute/webgpu/rans.ts",
     "detector/compute/webgpu/rans-source.ts",
     "detector/compute/webgpu/count-ans.ts",
+    "detector/compute/webgpu/source112.ts",
+    "detector/compute/webgpu/source112-kernels.ts",
     "detector/geometry.ts",
     "dpc/compute/webgpu/fft.ts",
     "dpc/compute/webgpu/kernels.ts",
