@@ -584,7 +584,7 @@ def build_lazy_show4dstem_sidecar(
 # --- browser-resident lossless (rANS) series -------------------------------------------------
 
 def export_show4dstem_rans_viewer(
-    build_result: str | pathlib.Path,
+    build_result: str | pathlib.Path | Sequence[str | pathlib.Path],
     out_dir: str | pathlib.Path,
     *,
     tilts: Sequence[int] | None = None,
@@ -601,9 +601,55 @@ def export_show4dstem_rans_viewer(
     read-only into ``out_dir/rans`` and read by HTTP byte range, so nothing large is
     copied. Decode tables (packed symbol entries, a 256-bucket slot lookup per column,
     column metadata) are derived once here and written next to the links.
+
+    A canonical count-ANS file, or an ordered sequence of those files, uses the
+    same exporter. Geometry and native dtype are admitted from the validated
+    container metadata without decoding counts. Each container is linked into
+    the export; the browser requires an explicit local file grant instead of
+    fetching a whole container through HTTP. All selected acquisitions must
+    share geometry and dtype. ``tilts`` selects indices from the supplied order.
+
+    Parameters
+    ----------
+    build_result
+        Legacy encoder JSON, one canonical count-ANS file, or an ordered
+        sequence of canonical files.
+    out_dir
+        Destination bundle folder. Source containers are linked, never copied
+        or modified.
+    tilts
+        Optional indices selecting acquisitions from the supplied order.
+    frame_labels
+        One label per selected acquisition.
+    valid_pixels
+        Optional Boolean native detector mask, shared by the acquisitions.
+
+    Returns
+    -------
+    pathlib.Path
+        Standalone HTML viewer path inside the bundle.
+
+    Examples
+    --------
+    >>> export_show4dstem_rans_viewer(["tilt-0.ans", "tilt-1.ans"], "viewer")
+    PosixPath('.../.viewer/Show4DSTEM.html')
     """
 
     from quantem.widget import Show4DSTEM
+
+    if isinstance(build_result, (str, pathlib.Path)):
+        source_path = pathlib.Path(build_result).expanduser().resolve()
+        with source_path.open("rb") as stream:
+            canonical = stream.read(8) == b"QGANS\0\1\0"
+        canonical_paths = [source_path] if canonical else None
+        build_result = source_path
+    else:
+        canonical_paths = [pathlib.Path(path).expanduser().resolve() for path in build_result]
+    if canonical_paths is not None:
+        return _export_count_ans_viewer(
+            canonical_paths, out_dir, tilts=tilts, title=title,
+            frame_labels=frame_labels, valid_pixels=valid_pixels, debug=debug,
+        )
 
     records = json.loads(pathlib.Path(build_result).read_text())["tilts"]
     chosen = list(tilts) if tilts is not None else list(range(len(records)))
@@ -674,6 +720,79 @@ def export_show4dstem_rans_viewer(
         debug=debug,
         verbose=False,
     )
+    try:
+        export_show4dstem_webgpu_bundle(widget, root, title=title)
+    finally:
+        widget.close()
+    return root / ".viewer" / "Show4DSTEM.html"
+
+
+def _export_count_ans_viewer(
+    paths, out_dir, *, tilts, title, frame_labels, valid_pixels, debug,
+):
+    """Admit canonical containers and serialize a local-grant-only viewer."""
+    from quantem.gpu.io._ans import ANSFile
+    from quantem.widget import Show4DSTEM
+
+    chosen = list(tilts) if tilts is not None else list(range(len(paths)))
+    if not chosen or any(type(index) is not int or not 0 <= index < len(paths) for index in chosen):
+        raise ValueError("Select at least one valid acquisition index from the count-ANS files.")
+    if frame_labels is not None and len(frame_labels) != len(chosen):
+        raise ValueError("Provide one frame label per selected count-ANS acquisition.")
+    sources = []
+    shape = dtype = None
+    for ordinal, index in enumerate(chosen):
+        with ANSFile(paths[index]) as encoded:
+            if shape is None:
+                shape, dtype = encoded.shape, encoded.dtype.name
+            elif encoded.shape != shape or encoded.dtype.name != dtype:
+                raise ValueError("Count-ANS acquisitions must share native scan/detector geometry and dtype.")
+            sources.append({
+                "url": f"t{ordinal}-counts.ans",
+                "source_index": index,
+                "shape": list(encoded.shape),
+                "dtype": encoded.dtype.name,
+                "file_bytes": encoded.file_bytes,
+                "logical_sha256": encoded.manifest["logical_sha256"],
+            })
+    bad_pixels = []
+    if valid_pixels is not None:
+        valid = np.asarray(valid_pixels, dtype=bool)
+        if valid.shape != shape[2:]:
+            raise ValueError(f"valid_pixels must have native detector shape {shape[2:]}.")
+        bad_pixels = np.flatnonzero(~valid.reshape(-1)).astype(int).tolist()
+    root = pathlib.Path(out_dir).expanduser().resolve()
+    rans = root / "rans"
+    rans.mkdir(parents=True, exist_ok=True)
+    for index, record in zip(chosen, sources):
+        target = rans / record["url"]
+        if target.exists() and target.samefile(paths[index]):
+            record["link"] = "existing"
+        else:
+            record["link"] = _link_read_only(paths[index], target)
+    manifest = {
+        "schema": "quantem.show4dstem-count-ans-browser/v1",
+        "source_format": "count-ans-v1",
+        "local_grant_required": True,
+        "sources": sources,
+        "scan_shape": list(shape[:2]),
+        "detector_shape": list(shape[2:]),
+        "dtype": dtype,
+        "bad_pixels": bad_pixels,
+    }
+    (rans / "manifest.json").write_text(json.dumps(manifest, indent=1))
+    widget = Show4DSTEM(
+        np.zeros((1, 1, 1, 1), dtype=np.uint8),
+        rans_url="../rans/", rans_count=len(chosen),
+        rans_format="count-ans-v1", rans_files=[record["url"] for record in sources],
+        rans_dtype=dtype, scan_shape=shape[:2], detector_shape=shape[2:],
+        offline_dtype=dtype, frame_labels=list(frame_labels) if frame_labels else None,
+        backend="webgpu", view_mode="multiple" if len(chosen) > 1 else "single",
+        compare_max_panels=max(3, len(chosen)), compare_group_mode="all",
+        compare_dp_mode="selected", precompute_virtual_images=False,
+        debug=debug, verbose=False,
+    )
+    widget._offline_bad_px = json.dumps(bad_pixels)
     try:
         export_show4dstem_webgpu_bundle(widget, root, title=title)
     finally:

@@ -430,6 +430,9 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     # Browser-resident lossless (rANS) series folder: the WebGPU frontend decodes
     # on the GPU and never uploads per interaction. Set by the rANS export.
     _rans_url = traitlets.Unicode("").tag(sync=True)
+    _rans_format = traitlets.Unicode("detector-rans-v1").tag(sync=True)
+    _rans_files = traitlets.Unicode("[]").tag(sync=True)
+    _rans_dtype = traitlets.Unicode("uint16").tag(sync=True)
     _h5_uint8_lossless = traitlets.Bool(False).tag(sync=True)
     # Lazy mode: a sidecar bundle URL (radial profile + CoM + frame index + data files). The JS
     # derives the virtual image from the ~100 MB profile in VRAM and lazy-fetches CBED frames from
@@ -1385,6 +1388,9 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         h5_urls: Sequence[str] | None = None,
         rans_url: str | None = None,
         rans_count: int = 1,
+        rans_format: str = "detector-rans-v1",
+        rans_files: Sequence[str] | None = None,
+        rans_dtype: str = "uint16",
         lazy_url: str | None = None,
         lazy_urls: Sequence[str] | None = None,
         h5_uint8_lossless: bool = False,
@@ -1534,6 +1540,13 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         # browser VRAM and create indistinguishable compare panels.
         if webgpu_h5_urls and webgpu_lazy_urls:
             raise ValueError("Use h5_urls= or lazy_urls=, not both.")
+        if rans_format not in {"detector-rans-v1", "count-ans-v1"}:
+            raise ValueError("rans_format must be 'detector-rans-v1' or 'count-ans-v1'.")
+        if rans_format == "count-ans-v1":
+            if not rans_url or not rans_files or len(rans_files) != int(rans_count):
+                raise ValueError("Count-ANS requires a folder hint and one local filename per acquisition.")
+            if rans_dtype not in {"uint8", "uint16"}:
+                raise ValueError("Count-ANS requires its native uint8 or uint16 dtype.")
         if rans_url and (webgpu_h5_urls or webgpu_lazy_urls):
             raise ValueError("Use rans_url= alone; it is a complete browser-resident source.")
         webgpu_source_count = len(webgpu_lazy_urls) or len(webgpu_h5_urls) or (int(rans_count) if rans_url else 0)
@@ -1873,6 +1886,9 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             self._h5_url = webgpu_h5_urls[0] if len(webgpu_h5_urls) == 1 else ""
             self._h5_urls = json.dumps(webgpu_h5_urls) if len(webgpu_h5_urls) > 1 else ""
             self._rans_url = str(rans_url) if rans_url else ""
+            self._rans_format = rans_format
+            self._rans_files = json.dumps(list(rans_files or []))
+            self._rans_dtype = rans_dtype
             self._lazy_url = webgpu_lazy_urls[0] if len(webgpu_lazy_urls) == 1 else ""
             self._lazy_urls = (
                 json.dumps(webgpu_lazy_urls) if len(webgpu_lazy_urls) > 1 else ""
