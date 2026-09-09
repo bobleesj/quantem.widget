@@ -354,7 +354,12 @@ def test_widget_webgpu_sources_are_generated_from_quantem_gpu() -> None:
     assert '"display/webgpu/geometry.ts"' in sync_script
     assert '"display/webgpu/stats.ts"' in sync_script
     assert '"swift/Sources/MetalDisplayKernels/Resources/colormaps.json"' in sync_script
+    assert '"parity/scan_rotation_v1.json"' in sync_script
+    assert '"geometry/compute/webgpu/quarter-turn.ts"' in sync_script
     assert '"io/backends/webgpu/bslz4.ts"' in sync_script
+    assert '"io/backends/webgpu/logical-pixel-hash.ts"' in sync_script
+    assert '"detector/geometry.ts"' in sync_script
+    assert '"detector/compute/webgpu/exact-com.ts"' in sync_script
     assert '"detector/compute/webgpu/backend.ts"' in sync_script
     assert '"dpc/compute/webgpu/fft.ts"' in sync_script
     assert "syncGpuWebgpuSources()" in build_script

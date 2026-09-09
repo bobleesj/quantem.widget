@@ -55,6 +55,7 @@ Common entry points:
 | Tutorial | Colab | Source notebook |
 |---|---|---|
 | Example Data | [Open in Colab](https://colab.research.google.com/github/electronmicroscopy/quantem.widget/blob/main/docs/tutorials/download_data.ipynb) | [GitHub](https://github.com/electronmicroscopy/quantem.widget/blob/main/docs/tutorials/download_data.ipynb) |
+| Show1D | [Open in Colab](https://colab.research.google.com/github/electronmicroscopy/quantem.widget/blob/main/docs/tutorials/show1d.ipynb) | [GitHub](https://github.com/electronmicroscopy/quantem.widget/blob/main/docs/tutorials/show1d.ipynb) |
 | Show2D | [Open in Colab](https://colab.research.google.com/github/electronmicroscopy/quantem.widget/blob/main/docs/tutorials/show2d.ipynb) | [GitHub](https://github.com/electronmicroscopy/quantem.widget/blob/main/docs/tutorials/show2d.ipynb) |
 | Show3D | [Open in Colab](https://colab.research.google.com/github/electronmicroscopy/quantem.widget/blob/main/docs/tutorials/show3d.ipynb) | [GitHub](https://github.com/electronmicroscopy/quantem.widget/blob/main/docs/tutorials/show3d.ipynb) |
 | Show3DSlices | [Open in Colab](https://colab.research.google.com/github/electronmicroscopy/quantem.widget/blob/main/docs/tutorials/show3dslices.ipynb) | [GitHub](https://github.com/electronmicroscopy/quantem.widget/blob/main/docs/tutorials/show3dslices.ipynb) |

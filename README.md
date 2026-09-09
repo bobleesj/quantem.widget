@@ -39,6 +39,8 @@ for backend setup, Colab instructions, and verification.
 
 | Widget | Use it for | Learn more |
 |---|---|---|
+| `Plot2D` | Scalar maps with physical axes, color scales, and calibrated hover | [tutorial](docs/tutorials/plot2d.ipynb) · [API](docs/api/plot2d.md) |
+| `Show1D` | Scientific traces, reconstruction metrics, and live monitors | [API](https://electronmicroscopy.github.io/quantem.widget/api/show1d.html) |
 | `Show2D` | Images, contrast, FFTs, ROIs, profiles, and scale bars | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/show2d.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/show2d.html) |
 | `Mask2D` | Draw one rectangle, square, or circle and use its Boolean mask directly in Python | [guide and API](https://electronmicroscopy.github.io/quantem.widget/api/mask2d.html) |
 | `Show3D` | Scrub and play through image or volume stacks | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/show3d.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/show3d.html) |
@@ -50,10 +52,17 @@ for backend setup, Colab instructions, and verification.
 | `ShowEDS` | Explore linked EDS/EELS maps and spectra | — |
 | `ShowFolder` | Browse, group, and select microscopy session files | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/showfolder.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/showfolder.html) |
 
-Opt-in [experimental ANS sources](docs/developer/experimental-ans.md) use the
-shared `quantem.gpu` codec and include explicit usage and qualification limits.
-
 ## Documentation
+
+For a scalar map, import `Plot2D` from the same package:
+
+```python
+from quantem.widget import Plot2D
+
+# values.shape == (len(angle), len(radius)); coordinates are bin centers.
+plot = Plot2D(values, x=radius, y=angle,
+              x_label="Distance (Å)", y_label="Angle (°)")
+```
 
 Visit the **[quantem.widget documentation](https://electronmicroscopy.github.io/quantem.widget/)**
 for installation, tutorials, API references, command-line workflows, data I/O,
@@ -91,3 +100,6 @@ can all belong in
 
 Questions and bug reports belong in the
 [issue tracker](https://github.com/electronmicroscopy/quantem.widget/issues).
+
+Opt-in [experimental ANS sources](docs/developer/experimental-ans.md) support
+GPU-resident Show4DSTEM with documented format and performance limits.

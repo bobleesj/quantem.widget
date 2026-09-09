@@ -42,6 +42,8 @@ readers and test agents.
 
 | Widget | Class | Offline export |
 |---|---|---|
+| [Plot2D](plot2d) | `quantem.widget.Plot2D` | PNG from browser; Matplotlib figures via Python; no standalone HTML API |
+| [Show1D](show1d) | `quantem.widget.show1d.Show1D` | state JSON, CSV, PNG/PDF via Python, interactive HTML |
 | [Show2D](show2d) | `quantem.widget.show2d.Show2D` | state JSON, PNG, interactive HTML (`encoding="full"` / `encoding="uint8"`) |
 | [Mask2D](mask2d) | `quantem.widget.mask2d.Mask2D` | Boolean mask and optional selected geometry in Python |
 | [Show3D](show3d) | `quantem.widget.show3d.Show3D` | state JSON, PNG, interactive HTML (`encoding="full"` / `encoding="uint8"`) |

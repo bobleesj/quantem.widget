@@ -5,10 +5,11 @@ The codec, container validation, CUDA/WebGPU decoding, and scientific GPU math
 belong to **quantem.gpu**. Show4DSTEM provides the viewer and interaction policy.
 Ordinary HDF5 and packed/dense workflows do not select ANS implicitly.
 
-Use the matching experimental revisions of both packages. This widget
-integration was validated against backend commit `9d5c20fe`. This local integration
-is not a PyPI release and does not establish a stable container or private API
-compatibility promise. The backend's
+Use matching source revisions of both packages. The local-main integration
+uses backend commit `e5b3f81d`, with CPU codec/export, frontend and ownership
+checks. The earlier hardware evidence remains documented separately below.
+This is not a PyPI release and does not establish a stable container or private
+API compatibility promise. The backend's
 `docs/developer/experimental-resident-ans.md` is the canonical feature
 description. Read it in the matching local `quantem.gpu` checkout.
 
@@ -18,7 +19,7 @@ description. Read it in the matching local `quantem.gpu` checkout.
 from quantem.gpu import io
 from quantem.widget.show4dstem_webgpu_export import export_show4dstem_rans_viewer
 
-saved = io.save("acquisition.ans", counts, format="count-ans", backend="cpu")
+saved = io.save("acquisition.ans", counts, format="quantem", compression="ans", backend="cpu")
 html = export_show4dstem_rans_viewer([saved.path], "ans-viewer")
 ```
 

@@ -7,6 +7,7 @@ calibration details.
 
 ```python
 from quantem.widget.datasets import (
+    show1d_ducky,
     show2d_gold,
     show3d_gold,
     show4dstem_gold,
@@ -24,6 +25,32 @@ All size selectors use the same language:
 | `large` | Local workstation review |
 | `full` | Full available tutorial source where practical |
 
+For Show1D, the ducky ptychography example is a file-backed monitor run:
+
+```python
+from quantem.widget import Show1D
+from quantem.widget.datasets import show1d_ducky
+
+run = show1d_ducky(size="small")
+widget = Show1D.from_monitor_file(
+    run / "show1d_monitor.jsonl",
+    title="Real ducky joint iterative ptychography",
+    x_label="frame",
+    y_label="final loss",
+    log_scale=False,
+)
+widget
+```
+
+Use the one-line example API when you only need the viewer:
+
+```python
+from quantem.widget import Show1D
+
+widget = Show1D.from_example("ducky", size="small")
+widget
+```
+
 The public Hugging Face dataset
 ([bobleesj/quantem-data](https://huggingface.co/datasets/bobleesj/quantem-data))
 is organized under `widget-tutorials/`. Reused sources live once under
@@ -39,6 +66,8 @@ widget-tutorials/{widget-or-shared}/{example}/{size}/...
 Current tutorial payloads:
 
 ```text
+widget-tutorials/show1d/ducky/small/show1d_monitor.jsonl
+widget-tutorials/show1d/ducky/small/snapshots/*.npy
 widget-tutorials/shared/gold-haadf/full/data.npy
 widget-tutorials/show4dstem/gold-128-bin8/full/data.npy
 widget-tutorials/show4dstem/gold-512-bin4/full/data.npy
@@ -60,5 +89,4 @@ so the same HAADF source image is not duplicated per widget.
 ```{eval-rst}
 .. automodule:: quantem.widget.datasets
    :members:
-   :exclude-members: show1d_ducky
 ```

@@ -20,6 +20,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
     "ChooseLattice": ("quantem.widget.choose_lattice", "ChooseLattice"),
     "Mask2D": ("quantem.widget.mask2d", "Mask2D"),
     "Show1D": ("quantem.widget.show1d", "Show1D"),
+    "Plot2D": ("quantem.widget.plot2d", "Plot2D"),
     "Show2D": ("quantem.widget.show2d", "Show2D"),
     "Show3D": ("quantem.widget.show3d", "Show3D"),
     "Show3DSlices": ("quantem.widget.show3dslices", "Show3DSlices"),
@@ -164,6 +165,7 @@ def free_gpu(verbose: bool = True) -> float:
 __all__ = [
     "ChooseLattice",
     "Show1D",
+    "Plot2D",
     "Show2D",
     "Show3D",
     "Show3DSlices",

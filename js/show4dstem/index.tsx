@@ -2,7 +2,7 @@ import { useScanPositionState } from "./scanPositionState";
 import { captureGpuCanvas } from "./captureGpuCanvas";
 import { ResidentDpDisplay, type ResidentPatternSource, type DpDisplayOptions } from "./residentDp";
 import { createLatestFrameQueue } from "./latestFrameQueue";
-import { circularDragRadius, liveRoiGeometry } from "./roiRadiusDrag";
+import { liveRoiGeometry } from "./roiRadiusDrag";
 import { createDpPointerOwner } from "./dpPointerOwner";
 /// <reference types="@webgpu/types" />
 import { residentDisplayValues, residentRawValues, residentScalarType, residentDivisor, type ResidentBatchInfo, type ResidentValues } from "./batchValues";
@@ -84,6 +84,11 @@ import {
   type ComparePageMessage,
   type ProgressiveComparePage,
 } from "./progressiveCompare";
+import {
+  clampDetectorCenter,
+  resizeDetectorFromPointer,
+  type DetectorRoiMode,
+} from "./detectorInteraction";
 
 function normaliseViSource(value: unknown): string {
   const raw = String(value || "roi").trim();
@@ -1509,6 +1514,7 @@ interface CompareVirtualGridProps {
   // GPU-resident panels: frame -> engine colormap slot, painted with a GPU range
   // through each tile's visible WebGPU canvas; bytes stay the settle/export fallback.
   gpuSlots?: Map<number, number> | null;
+  gpuRanges?: Map<number, { min: number; max: number }> | null;
   gpuVersion?: number;
   gpuEngine?: GPUColormapEngine | null;
   progressivePage?: ProgressiveComparePage | null;
@@ -1563,6 +1569,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   count,
   indices,
   gpuSlots,
+  gpuRanges,
   gpuVersion,
   gpuEngine,
   progressivePage,
@@ -1613,7 +1620,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   const batchRendererRef = React.useRef<Awaited<ReturnType<typeof CompareBatchCanvas.create>> | null>(null);
   const [batchReady, setBatchReady] = React.useState(false);
   const [batchFailed, setBatchFailed] = React.useState(false);
-  const sharedGpuEnabled = Boolean(gpuEngine && gpuSlots?.size && !progressivePage && !reorderMode);
+  const residentSource = Boolean(batchModel.get("_rans_url"));
+  const sharedGpuEnabled = Boolean(residentSource && gpuEngine && gpuSlots?.size && !progressivePage && !reorderMode);
   const [sharedGpuReady, setSharedGpuReady] = React.useState(false);
   const sharedGpuReadyRef = React.useRef(false);
   const sharedContextRef = React.useRef<GPUCanvasContext | null>(null);
@@ -1626,6 +1634,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   const batchWorkRef = React.useRef({ busy: false, pending: null as (() => Promise<void>) | null });
   const canvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
   const gpuCanvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
+  const gpuRenderGenerationRef = React.useRef(0);
   const gpuCanvasContextsRef = React.useRef<(GPUCanvasContext | null)[]>([]);
   const canvasDrawCacheRef = React.useRef(new Map<number, {
     canvas: HTMLCanvasElement;
@@ -1741,11 +1750,11 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       .map((frame) => ({
         frame,
         panel: panelByFrame.get(frame),
-        gpuLoaded: Boolean((integerCounts && batchEnabled && !batchFailed) || (gpuSlots?.has(frame) && gpuEngine)),
+        gpuLoaded: Boolean((integerCounts && batchEnabled && !batchFailed) || (gpuSlots?.has(frame) && gpuEngine && (residentSource || gpuRanges?.has(frame)))),
       }))
       // Reserve loading tiles so a ready image does not move beneath a drag.
       .filter((entry) => sourceLoading || Boolean(progressivePage) || entry.panel !== undefined || entry.gpuLoaded);
-  }, [integerCounts, batchEnabled, batchFailed, gpuEngine, gpuSlots, gpuVersion, panelByFrame, progressivePage, sourceLoading, renderIndices, scaleMode]);
+  }, [integerCounts, batchEnabled, batchFailed, gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, progressivePage, residentSource, sourceLoading, renderIndices, scaleMode]);
 
   const countImagesRef = React.useRef<CompareCountImages | null>(null);
   const comparePaintScheduler = React.useMemo(() => createComparePaintScheduler(), []);
@@ -1846,6 +1855,83 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       }
       return painted;
     }
+    if (!residentSource) {
+    const generation = ++gpuRenderGenerationRef.current;
+    const panels: {
+      canvas: HTMLCanvasElement;
+      range: { vmin: number; vmax: number };
+      slot: number;
+    }[] = [];
+    renderEntries.forEach((entry, localIdx) => {
+      const slot = gpuSlots.get(entry.frame);
+      const rawRange = gpuRanges?.get(entry.frame);
+      const canvas = gpuCanvasRefs.current[localIdx];
+      if (slot === undefined || !rawRange || !canvas) return;
+      const transformRangeValue = (value: number) => scaleMode === "log"
+        ? (value >= 0 ? Math.log1p(value) : -Math.log1p(-value))
+        : value;
+      const rangeMin = transformRangeValue(rawRange.min);
+      const rangeMax = transformRangeValue(rawRange.max);
+      const span = Math.max(0, rangeMax - rangeMin);
+      const displayRange = {
+        vmin: rangeMin + span * Math.max(0, Math.min(100, vminPct)) / 100,
+        vmax: rangeMin + span * Math.max(0, Math.min(100, vmaxPct)) / 100,
+      };
+      panels.push({ canvas, range: displayRange, slot });
+    });
+    if (!panels.length) return 0;
+    void (async () => {
+      const bitmap = await gpuEngine.renderPanelSlotsToImageBitmapAsync(
+        panels.map((panel) => panel.slot),
+        panels.map((panel) => panel.range),
+        panels.map(() => scaleMode === "log"),
+        {
+          width: shapeCols * panels.length,
+          height: shapeRows,
+          panelCount: panels.length,
+          cols: panels.length,
+          rows: 1,
+          gap: 0,
+          bgRgb: 0,
+          transforms: panels.map(() => ({
+            zoom: compareZoom,
+            panX: comparePanX,
+            panY: comparePanY,
+          })),
+          smooth,
+        },
+      );
+      if (!bitmap || generation !== gpuRenderGenerationRef.current) {
+        bitmap?.close();
+        return;
+      }
+      let painted = 0;
+      panels.forEach((panel, index) => {
+        if (!panel.canvas.isConnected) return;
+        if (panel.canvas.width !== shapeCols) panel.canvas.width = shapeCols;
+        if (panel.canvas.height !== shapeRows) panel.canvas.height = shapeRows;
+        const context = panel.canvas.getContext("2d");
+        if (!context) return;
+        context.imageSmoothingEnabled = false;
+        context.clearRect(0, 0, shapeCols, shapeRows);
+        context.drawImage(
+          bitmap,
+          index * shapeCols,
+          0,
+          shapeCols,
+          shapeRows,
+          0,
+          0,
+          shapeCols,
+          shapeRows,
+        );
+        painted++;
+      });
+      bitmap.close();
+      if (painted > 0) onGpuPaint?.(painted);
+    })();
+    return panels.length;
+    }
     const slots: number[] = [];
     const contexts: GPUCanvasContext[] = [];
     renderEntries.forEach((entry, localIdx) => {
@@ -1872,7 +1958,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     );
     if (painted > 0) onGpuPaint?.(painted);
     return painted;
-  }, [colormap, comparePaintScheduler, comparePanX, comparePanY, compareZoom, gpuEngine, gpuSlots, onGpuPaint, onGpuRenderError, renderEntries, scaleMode, shapeCols, shapeRows, sharedGpuEnabled, smooth, vmaxPct, vminPct]);
+  }, [colormap, comparePaintScheduler, comparePanX, comparePanY, compareZoom, gpuEngine, gpuRanges, gpuSlots, onGpuPaint, onGpuRenderError, renderEntries, residentSource, scaleMode, shapeCols, shapeRows, sharedGpuEnabled, smooth, vmaxPct, vminPct]);
 
   React.useLayoutEffect(() => {
     latestComparePaintRef.current = () => { renderGpuSlotsNow(); };
@@ -2605,7 +2691,6 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
               <canvas
                 ref={(node) => {
                   gpuCanvasRefs.current[localIdx] = node;
-                  if (!node) gpuCanvasContextsRef.current[localIdx] = null;
                 }}
                 width={shapeCols}
                 height={shapeRows}
@@ -3569,6 +3654,7 @@ function Show4DSTEM() {
   // the interactive compare recompute (no readback), consumed by the grid painter.
   const [compareGpuVersion, setCompareGpuVersion] = React.useState(0);
   const compareGpuSlotsRef = React.useRef(new Map<number, number>());
+  const compareGpuRangesRef = React.useRef(new Map<number, { min: number; max: number }>());
   const compareGpuHistogramGenRef = React.useRef(0);
   const compareHistogramPendingSettleRef = React.useRef(false);
   const beginDpRoiInteraction = React.useCallback(() => {
@@ -3592,10 +3678,11 @@ function Show4DSTEM() {
     lastAdoptedPanels: 0,
     lastRequestedPanels: 0,
     lastPaintedPanels: 0,
+    lastRangeReadbackBytes: 0,
   });
   const publishLiveCompareViStats = React.useCallback((
     event: string,
-    detail: { ms?: number; adoptedPanels?: number; requestedPanels?: number; paintedPanels?: number; addedPixels?: number; removedPixels?: number },
+    detail: { ms?: number; adoptedPanels?: number; requestedPanels?: number; paintedPanels?: number; addedPixels?: number; removedPixels?: number; rangeReadbackBytes?: number },
   ) => {
     const now = performance.now();
     const stats = liveCompareViStatsRef.current;
@@ -3604,6 +3691,7 @@ function Show4DSTEM() {
       stats.lastComputeMs = detail.ms ?? 0;
       stats.lastAdoptedPanels = detail.adoptedPanels ?? 0;
       stats.lastRequestedPanels = detail.requestedPanels ?? 0;
+      stats.lastRangeReadbackBytes = detail.rangeReadbackBytes ?? 0;
     } else {
       stats.paintTimes.push(now);
       stats.lastPaintMs = now;
@@ -3616,7 +3704,8 @@ function Show4DSTEM() {
     const recentPaint = stats.paintTimes.length;
     const payload = {
       event,
-      gpuOnlyHotPath: true,
+      gpuOnlyHotPath: stats.lastRangeReadbackBytes === 0,
+      rangeReadbackBytes: stats.lastRangeReadbackBytes,
       computeFps: Math.round(recentCompute * 10) / 10,
       paintFps: Math.round(recentPaint * 10) / 10,
       lastComputeMs: Math.round(stats.lastComputeMs * 10) / 10,
@@ -5254,6 +5343,7 @@ function Show4DSTEM() {
         compareIncrementalRef.current = null;
         if (compareGpuSlotsRef.current.size) {
           compareGpuSlotsRef.current.clear();
+          compareGpuRangesRef.current.clear();
           setCompareGpuVersion(v => v + 1);
         }
       };
@@ -5308,6 +5398,7 @@ function Show4DSTEM() {
             compareGpuSlotsRef.current.set(idx, slot);
           }
           let adopted = 0;
+          let rangeReadbackBytes = 0;
           if (batchComputes.length) {
             const indicesKey = batchFrames.join(",");
             const previous = compareIncrementalRef.current;
@@ -5384,6 +5475,15 @@ function Show4DSTEM() {
               nextBuffers.set(batchFrames[i], buffers[i]);
               adopted++;
             }
+            const rangesReady = batchFrames.every((frame) => compareGpuRangesRef.current.has(frame));
+            if (!ransSet && (!interactiveDrag || !rangesReady)) {
+              const ranges = await engine0.computeRangeBatch(batchSlots);
+              rangeReadbackBytes = batchSlots.length * Math.ceil((scanRows * scanCols) / 256) * 2 * 4;
+              ranges.forEach((range, index) => {
+                const frame = batchFrames[index];
+                if (frame !== undefined) compareGpuRangesRef.current.set(frame, range);
+              });
+            }
             compareIncrementalRef.current = {
               // mask0 belongs to this update; source112 copies it internally.
               mask: normalizedSource112Delta ? mask0 : new Uint32Array(mask0),
@@ -5405,6 +5505,7 @@ function Show4DSTEM() {
                 addedPixels,
                 removedPixels,
                 paintedPanels: paintedNow,
+                rangeReadbackBytes,
               });
             };
             if (ransSet && interactiveDrag) {
@@ -5507,6 +5608,14 @@ function Show4DSTEM() {
         // fresh copy: reusing the persistent stack's ArrayBuffer identity makes this
         // model.set a silent no-op (no change event -> stats/export/save-state stale)
         publishDirectCompareStack(new DataView(stack.slice().buffer), indices.length, indices);
+      };
+      const recomputeVisibleVirtualImages = async () => {
+        const mode = String(model.get("view_mode") || "single");
+        if (mode === "multiple" || mode === "compare") {
+          await recomputeCompareVI();
+          return;
+        }
+        await recomputeVI();
       };
       (window as unknown as { __sh4d: unknown }).__sh4d = { model, recomputeVI, recomputeCompareVI,
         residentSource: () => ransSet,
@@ -6114,8 +6223,7 @@ function Show4DSTEM() {
               if (compareViLivePendingRef.current && dpRoiInteractiveRef.current && !disposed) requestCompareViLive();
             }).catch(error => { if (!disposed) setOfflineBackendError(String(error)); });
           } else {
-            await recomputeVI();
-            await recomputeCompareVI();
+            await recomputeVisibleVirtualImages();
           }
         })().catch(error => {
           if (!disposed) setOfflineBackendError(String(error));
@@ -6134,9 +6242,7 @@ function Show4DSTEM() {
         void (async () => {
           await compareGpuCompletion;
           if (disposed || dpRoiInteractiveRef.current) return;
-          await recomputeVI();
-          if (disposed || dpRoiInteractiveRef.current) return;
-          await recomputeCompareVI();
+          await recomputeVisibleVirtualImages();
         })().catch(error => { if (!disposed) setOfflineBackendError(String(error)); });
       };
       const recomputeDP = async () => {
@@ -9177,34 +9283,40 @@ function Show4DSTEM() {
 
   const resizeDpRoiFromImagePoint = React.useCallback((imgX: number, imgY: number, shiftKey: boolean = false): boolean => {
     if (isDraggingResizeInner) {
-      const dx = Math.abs(imgX - activeRoiCenterCol);
-      const dy = Math.abs(imgY - activeRoiCenterRow);
-      const newRadius = Math.sqrt(dx ** 2 + dy ** 2);
-      const outer = roiRadiusPendingRef.current ?? Number(model.get("roi_radius"));
-      sendRoiRadius(circularDragRadius(newRadius, "inner", outer), "inner");
+      const geometry = resizeDetectorFromPointer({
+        mode: roiMode as DetectorRoiMode,
+        centerRow: activeRoiCenterRow,
+        centerCol: activeRoiCenterCol,
+        pointerRow: imgY,
+        pointerCol: imgX,
+        radius: roiRadiusPendingRef.current ?? Number(model.get("roi_radius")),
+        radiusInner: roiRadiusInnerPendingRef.current ?? Number(model.get("roi_radius_inner") || 0),
+        resizeInner: true,
+      });
+      if (geometry?.radiusInner === undefined) return false;
+      sendRoiRadius(geometry.radiusInner, "inner");
       requestCompareViLive();
       return true;
     }
 
     if (isDraggingResize) {
-      const dx = Math.abs(imgX - activeRoiCenterCol);
-      const dy = Math.abs(imgY - activeRoiCenterRow);
+      const geometry = resizeDetectorFromPointer({
+        mode: roiMode as DetectorRoiMode,
+        centerRow: activeRoiCenterRow,
+        centerCol: activeRoiCenterCol,
+        pointerRow: imgY,
+        pointerCol: imgX,
+        radius: roiRadiusPendingRef.current ?? Number(model.get("roi_radius")),
+        radiusInner: roiRadiusInnerPendingRef.current ?? Number(model.get("roi_radius_inner") || 0),
+        aspectRatio: resizeAspectRef.current,
+        preserveAspect: shiftKey,
+      });
+      if (!geometry) return false;
       if (roiMode === "rect") {
-        let newW = Math.max(2, Math.round(dx * 2));
-        let newH = Math.max(2, Math.round(dy * 2));
-        if (shiftKey && resizeAspectRef.current != null) {
-          const aspect = resizeAspectRef.current;
-          if (newW / newH > aspect) newH = Math.max(2, Math.round(newW / aspect));
-          else newW = Math.max(2, Math.round(newH * aspect));
-        }
-        setRoiWidth(newW);
-        setRoiHeight(newH);
+        setRoiWidth(geometry.width!);
+        setRoiHeight(geometry.height!);
       } else {
-        const newRadius = roiMode === "square" ? Math.max(dx, dy) : Math.sqrt(dx ** 2 + dy ** 2);
-        const rad = roiMode === "square" ? Math.max(1, Math.round(newRadius))
-          : circularDragRadius(newRadius, "outer", roiMode === "annular"
-            ? roiRadiusInnerPendingRef.current ?? Number(model.get("roi_radius_inner") || 0) : 0);
-        sendRoiRadius(rad);
+        sendRoiRadius(geometry.radius!);
       }
       requestCompareViLive();
       return true;
@@ -9296,8 +9408,12 @@ function Show4DSTEM() {
     dpDragOffsetRef.current = { dRow: 0, dCol: 0 };
     setLocalKCol(imgX); setLocalKRow(imgY);
     // Use compound roi_center trait [row, col] - single observer fires in Python
-    const newCol = Math.round(Math.max(0, Math.min(detCols - 1, imgX)));
-    const newRow = Math.round(Math.max(0, Math.min(detRows - 1, imgY)));
+    const { row: newRow, col: newCol } = clampDetectorCenter(
+      imgY,
+      imgX,
+      detRows,
+      detCols,
+    );
     model.set("roi_active", true);
     writeRoiCenterModel(newRow, newCol);
     requestCompareViLive();
@@ -11388,6 +11504,7 @@ function Show4DSTEM() {
               count={comparePanelCount || 0}
               indices={comparePanelIndices || []}
               gpuSlots={compareGpuSlotsRef.current}
+              gpuRanges={compareGpuRangesRef.current}
               gpuVersion={compareGpuVersion}
               gpuEngine={viGpuColormapRef.current}
               progressivePage={progressiveComparePage}
