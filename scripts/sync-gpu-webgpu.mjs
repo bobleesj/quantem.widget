@@ -32,8 +32,11 @@ names = (
     "display/webgpu/stats.ts",
     "display/goldens/parity.json",
     "swift/Sources/MetalDisplayKernels/Resources/colormaps.json",
+    "parity/scan_rotation_v1.json",
+    "geometry/compute/webgpu/quarter-turn.ts",
     "io/backends/webgpu/bslz4.ts",
     "io/backends/webgpu/h5reader.ts",
+    "io/backends/webgpu/logical-pixel-hash.ts",
     "io/backends/webgpu/local-h5.ts",
     "detector/compute/webgpu/backend.ts",
     "detector/compute/webgpu/rans.ts",
@@ -51,6 +54,8 @@ names = (
     "detector/compute/webgpu/source112-huffman64.ts",
     "detector/compute/webgpu/source112-huffman-compact.ts",
     "detector/geometry.ts",
+    "detector/compute/webgpu/exact-com.ts",
+    "detector/compute/webgpu/backend.ts",
     "dpc/compute/webgpu/fft.ts",
     "dpc/compute/webgpu/kernels.ts",
     "ssb/compute/webgpu/backend.ts",
@@ -70,6 +75,21 @@ else:
     from importlib.resources import files
 
     root = files("quantem.gpu")
+# New GPU versions retain display/webgpu/* as compatibility re-exports.
+# Include the canonical owners when present; older wheels provide the complete
+# implementations at the original paths. Keep the exported file list explicit.
+for name in tuple(names):
+    if name.startswith("display/webgpu/"):
+        canonical = name.replace("display/webgpu/", "display/backends/webgpu/", 1)
+        if root.joinpath(*canonical.split("/")).is_file():
+            names += (canonical,)
+    elif "/compute/webgpu/" in name:
+        canonical = name.replace("/compute/webgpu/", "/backends/webgpu/", 1)
+        if root.joinpath(*canonical.split("/")).is_file():
+            names += (canonical,)
+declarations = "io/backends/webgpu/jsfive.d.ts"
+if root.joinpath(*declarations.split("/")).is_file():
+    names += (declarations,)
 print(json.dumps({
     name: root.joinpath(*name.split("/")).read_text(encoding="utf-8")
     for name in names

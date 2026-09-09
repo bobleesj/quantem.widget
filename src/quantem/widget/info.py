@@ -3,6 +3,7 @@
 import json
 import os
 import platform
+import re
 import subprocess
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, distribution, version
@@ -12,6 +13,13 @@ from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
 from packaging.version import Version
+
+
+def _concise_cuda_name(name: str) -> str:
+    """Return a stable, readable CUDA device label for notebook reports."""
+
+    match = re.match(r"^(NVIDIA RTX PRO \d+)", str(name).strip())
+    return match.group(1) if match else str(name).strip()
 
 
 def profile(*, check_updates: bool = False) -> None:
@@ -126,7 +134,7 @@ def profile(*, check_updates: bool = False) -> None:
         import torch
 
         if torch.cuda.is_available():
-            device = f"cuda ({torch.cuda.get_device_name(0)})"
+            device = f"cuda ({_concise_cuda_name(torch.cuda.get_device_name(0))})"
         elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
             device = "mps (Apple)"
         else:

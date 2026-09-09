@@ -73,6 +73,7 @@ wheel = wheels[0]
 required = {
     "quantem/widget/static/chooselattice.js",
     "quantem/widget/static/show1d.js",
+    "quantem/widget/static/plot2d.js",
     "quantem/widget/static/show2d.js",
     "quantem/widget/static/show3d.js",
     "quantem/widget/static/show3dslices.js",

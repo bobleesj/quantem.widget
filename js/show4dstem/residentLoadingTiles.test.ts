@@ -18,15 +18,20 @@ visit(tree);
 const code = ts.transpileModule(`const select = ${body};`, {
   compilerOptions: {target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.None},
 }).outputText;
-function tiles(ready: number, loading: boolean) {
+function tiles(ready: number, loading: boolean, residentSource = true, rangesReady = 0) {
   const bindings = {renderIndices: [0, 1, 2], panelByFrame: new Map(),
     gpuSlots: new Map(Array.from({length: ready}, (_, i) => [i, 60 + i])),
+    residentSource, gpuRanges: new Map(Array.from({length: rangesReady}, (_, i) => [i, {min: 0, max: 1}])),
     gpuEngine: {}, integerCounts: false, batchEnabled: false, batchFailed: false,
     sourceLoading: loading, progressivePage: null};
   return new Function(...Object.keys(bindings), `${code};return select();`)(...Object.values(bindings));
 }
 
 describe("progressive resident tile positions", () => {
+  it("keeps ordinary HDF5 tiles pending until their display range is ready", () => {
+    expect(tiles(1, false, false, 0)).toHaveLength(0);
+    expect(tiles(1, false, false, 1).map((entry: {frame: number}) => entry.frame)).toEqual([0]);
+  });
   it("keeps all requested positions while the first and next images become ready", () => {
     for (const ready of [1, 2, 3]) {
       const entries = tiles(ready, ready < 3);

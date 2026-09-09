@@ -73,7 +73,7 @@ def test_export_canonical_series_retains_order_geometry_and_local_grant(tmp_path
     counts = np.arange(4 * 5 * 2 * 3, dtype=dtype).reshape(4, 5, 2, 3)
     paths = [tmp_path / "first.ans", tmp_path / "second.ans"]
     for ordinal, path in enumerate(paths):
-        save(path, counts + ordinal, format="count-ans", backend="cpu")
+        save(path, counts + ordinal, format="quantem", compression="ans", backend="cpu")
 
     def no_count_decode(*args, **kwargs):
         raise AssertionError("Viewer export must not decode native count arrays.")
@@ -108,8 +108,8 @@ def test_export_single_canonical_file_requires_homogeneous_series(tmp_path):
     from quantem.gpu.io import save
 
     first, second = tmp_path / "first.ans", tmp_path / "second.ans"
-    save(first, np.zeros((3, 4, 2, 2), np.uint16), format="count-ans", backend="cpu")
-    save(second, np.zeros((3, 5, 2, 2), np.uint16), format="count-ans", backend="cpu")
+    save(first, np.zeros((3, 4, 2, 2), np.uint16), format="quantem", compression="ans", backend="cpu")
+    save(second, np.zeros((3, 5, 2, 2), np.uint16), format="quantem", compression="ans", backend="cpu")
     html = export_show4dstem_rans_viewer(first, tmp_path / "single")
     assert '"_rans_format": "count-ans-v1"' in html.read_text()
     with pytest.raises(ValueError, match="share native"):
