@@ -5,13 +5,19 @@ The codec, container validation, CUDA/WebGPU decoding, and scientific GPU math
 belong to **quantem.gpu**. Show4DSTEM provides the viewer and interaction policy.
 Ordinary HDF5 and packed/dense workflows do not select ANS implicitly.
 
-Use matching source revisions of both packages. The local-main integration
-uses backend commit `e5b3f81d`, with CPU codec/export, frontend and ownership
+Use matching source revisions of both packages. The source integration
+uses backend commit `dd88bc1e`, with CPU codec/export, frontend and ownership
 checks. The earlier hardware evidence remains documented separately below.
 This is not a PyPI release and does not establish a stable container or private
 API compatibility promise. The backend's
 `docs/developer/experimental-resident-ans.md` is the canonical feature
-description. Read it in the matching local `quantem.gpu` checkout.
+description. Read it in the matching `quantem.gpu` checkout.
+
+Encoding creates a new container atomically and refuses to overwrite an existing
+file. Original acquisitions remain intact. Source ownership and cancellation
+have regression coverage; hardware and performance qualification remains limited
+as described below. These safeguards do not make the experimental paths a new
+default or a blanket guarantee across all hardware.
 
 ## Canonical count-ANS files
 
