@@ -6168,9 +6168,12 @@ function Show4DSTEM() {
         }
         // bslz4 / chunked stacks have no CPU copy -> extract the frame on the GPU.
         if (!compute) return;
+        const frameIndex = Math.max(0, Math.min((volumeCount || volMetas.length || 1) - 1, model.get("frame_idx") | 0));
+        const frameSource = getVol ? await getVol(frameIndex) : compute;
+        if (!frameSource || !isCurrent()) return;
         const frame = cpuStack
           ? (() => { const f = new Float32Array(detSize); const base = scanIdx * detSize; for (let k = 0; k < detSize; k++) f[k] = sample(base + k); return f; })()
-          : await compute!.frameAt(scanIdx);
+          : await frameSource.frameAt(scanIdx);
         if (!isCurrent()) return;
         model.set("frame_bytes", new DataView(frame.buffer)); model.save_changes();
       };
@@ -6184,6 +6187,7 @@ function Show4DSTEM() {
       if (h5VolumePreload) {
         void h5VolumePreload.then(() => {
           if (disposed) return;
+          frameQueue.invalidate();
           void recomputeCompareVI();
           void recomputeFrame();
         }).catch((error) => {
@@ -6205,8 +6209,8 @@ function Show4DSTEM() {
         void recomputeDP();
       };
       const onPos = () => { void recomputeFrame(); };
-      const onCompareFrameSource = () => { void recomputeFrame(); };
-      const onCompareGridSource = () => { void recomputeCompareVI(); void recomputeFrame(); };
+      const onCompareFrameSource = () => { frameQueue.invalidate(); void recomputeFrame(); };
+      const onCompareGridSource = () => { frameQueue.invalidate(); void recomputeCompareVI(); void recomputeFrame(); };
       const activateCurrentVolume = async () => {
         if (!getVol) return true;
         const nVolumes = volumeCount || volMetas.length || 1;
@@ -6220,6 +6224,7 @@ function Show4DSTEM() {
       if (initialVolumeLoad) {
         void initialVolumeLoad.then((cc) => {
           if (!cc || disposed) return;
+          frameQueue.invalidate();
           compute = cc;
           publishComputeDpcReady(cc);
           void (async () => {
@@ -6242,6 +6247,7 @@ function Show4DSTEM() {
         });
       }
       const recomputeActiveView = async () => {
+        frameQueue.invalidate();
         const ready = await activateCurrentVolume();
         if (!ready || disposed) return;
         void recomputeVI();
@@ -6252,6 +6258,7 @@ function Show4DSTEM() {
       // 5D multi-volume: the slider picks the active dataset; decode-on-scrub (LRU).
       let frameGen = 0;
       const onFrame = async () => {
+        frameQueue.invalidate();
         const gen = ++frameGen;                  // ignore a stale decode if the user keeps scrubbing
         const ready = await activateCurrentVolume();
         if (gen !== frameGen || !ready) return;   // a newer scroll superseded this one
@@ -6361,6 +6368,7 @@ function Show4DSTEM() {
         inlineVolCache.forEach((c) => c.dispose()); inlineVolCache.clear();
       };
       refreshResidentProgress = () => {
+        if (model.get("compare_dp_mode") !== "selected") frameQueue.invalidate();
         void recomputeVI(); void recomputeCompareVI(); recomputeFrame();
       };
       await recomputeVI();  // initial virtual image, no interaction needed
