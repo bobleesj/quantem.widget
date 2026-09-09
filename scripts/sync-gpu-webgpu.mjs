@@ -40,6 +40,7 @@ names = (
     "detector/compute/webgpu/rans-source.ts",
     "detector/compute/webgpu/count-ans.ts",
     "detector/compute/webgpu/source112.ts",
+    "detector/compute/webgpu/source112-pipelines.ts",
     "detector/compute/webgpu/source112-prefetch.ts",
     "detector/compute/webgpu/source112-worker-reader.ts",
     "detector/compute/webgpu/source112-ingress.ts",
