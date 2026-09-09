@@ -10,8 +10,31 @@ describe('scan point queries',()=>{
   },error=>{throw error});
   queue.request();queue.request();await turn();expect(queried).toEqual([1]);
   position=2;queue.request();position=3;queue.request();release.shift()!();await turn();
-  expect(queried).toEqual([1,3]);expect(published).toEqual([]);release.shift()!();await turn();
-  expect(published).toEqual([3]);expect(peak).toBe(1);queue.close();
+  expect(queried).toEqual([1,3]);expect(published).toEqual([1]);release.shift()!();await turn();
+  expect(published).toEqual([1,3]);expect(peak).toBe(1);queue.close();
+ });
+ it('publishes during uninterrupted motion while retaining only the newest pending point',async()=>{
+  let point=0;const published:number[]=[],release:Array<()=>void>=[];
+  const queue=createLatestFrameQueue(async current=>{
+   const selected=point;await new Promise<void>(resolve=>release.push(resolve));
+   if(current())published.push(selected);
+  },error=>{throw error});
+  queue.request();await turn();
+  for(let i=1;i<=5;i++){
+   point=i;queue.request();release.shift()!();await turn();
+   expect(published).toHaveLength(i);
+  }
+  release.shift()!();await turn();expect(published).toEqual([0,1,2,3,4,5]);queue.close();
+ });
+ it('rejects a previous acquisition while allowing its replacement to publish',async()=>{
+  let source=0;const published:number[]=[],release:Array<()=>void>=[];
+  const queue=createLatestFrameQueue(async current=>{
+   const selected=source;await new Promise<void>(resolve=>release.push(resolve));
+   if(current())published.push(selected);
+  },error=>{throw error});
+  queue.request();await turn();source=1;queue.invalidate();queue.request();
+  release.shift()!();await turn();expect(published).toEqual([]);
+  release.shift()!();await turn();expect(published).toEqual([1]);queue.close();
  });
  it('ignores old-source completions after replacement',async()=>{
   let release!:()=>void;const published:number[]=[];
