@@ -1,4 +1,6 @@
+import { useScanPositionState } from "./scanPositionState";
 import { captureGpuCanvas } from "./captureGpuCanvas";
+import { ResidentDpDisplay, type ResidentPatternSource, type DpDisplayOptions } from "./residentDp";
 import { createLatestFrameQueue } from "./latestFrameQueue";
 import { circularDragRadius, liveRoiGeometry } from "./roiRadiusDrag";
 import { createDpPointerOwner } from "./dpPointerOwner";
@@ -2351,6 +2353,9 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   }, [gridCols, mobileGridCols, renderEntries.length]);
 
   React.useEffect(() => {
+    let raf = 0;
+    const paint = () => {
+    raf = 0;
     const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
     renderEntries.forEach(({ panel, gpuLoaded }, idx) => {
       const overlay = overlayRefs.current[idx];
@@ -2373,8 +2378,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       drawViPositionMarker(
         overlay,
         dpr,
-        cursorRow,
-        cursorCol,
+        Number(batchModel.get("pos_row")),
+        Number(batchModel.get("pos_col")),
         compareZoom,
         comparePanX,
         comparePanY,
@@ -2384,7 +2389,12 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         idx === 0 && cssWidth >= 96,
       );
     });
-  }, [comparePanX, comparePanY, compareZoom, cursorCol, cursorRow, isDraggingPosition, overlayVersion, pixelSize, pixelUnit, renderEntries, shapeCols, shapeRows, showScaleBar]);
+    };
+    const changed = () => { if (!raf) raf = requestAnimationFrame(paint); };
+    paint();
+    batchModel.on("change:pos_row", changed); batchModel.on("change:pos_col", changed);
+    return () => { if (raf) cancelAnimationFrame(raf); batchModel.off("change:pos_row", changed); batchModel.off("change:pos_col", changed); };
+  }, [batchModel, comparePanX, comparePanY, compareZoom, cursorCol, cursorRow, isDraggingPosition, overlayVersion, pixelSize, pixelUnit, renderEntries, shapeCols, shapeRows, showScaleBar]);
 
   useResidentChanges(batchEnabled, "panel_tile_dependency", {
     renderEntries, panels, panelByFrame, indices, progressivePage, sourceLoading, activeIdx, labels, starred, draggingFrame,
@@ -2892,8 +2902,9 @@ function Show4DSTEM() {
   const [detRows] = useModelState<number>("det_rows");
   const [detCols] = useModelState<number>("det_cols");
 
-  const [posRow, setPosRow] = useModelState<number>("pos_row");
-  const [posCol, setPosCol] = useModelState<number>("pos_col");
+  const liveScanDisplayRef = React.useRef(false);
+  const [[posRow, posCol], setPosRow, setPosCol] = useScanPositionState(model, liveScanDisplayRef);
+  const dpPositionLabelRef = React.useRef<HTMLSpanElement | null>(null);
   const [roiCenterCol, setRoiCenterCol] = useModelState<number>("roi_center_col");
   const [roiCenterRow, setRoiCenterRow] = useModelState<number>("roi_center_row");
   const [pixelSize] = useModelState<number>("pixel_size");
@@ -3304,8 +3315,12 @@ function Show4DSTEM() {
     const [row, col] = pending;
     scanPositionPendingRef.current = null;
     scanPositionCurrentRef.current = [row, col];
-    setLocalPosRow(row);
-    setLocalPosCol(col);
+    if (liveScanDisplayRef.current) {
+      if (dpPositionLabelRef.current) dpPositionLabelRef.current.textContent = `DP at (${row}, ${col})`;
+    } else {
+      setLocalPosRow(row);
+      setLocalPosCol(col);
+    }
     model.set("pos_row", row);
     model.set("pos_col", col);
     model.save_changes();
@@ -3538,6 +3553,18 @@ function Show4DSTEM() {
   const [viGpuVersion, setViGpuVersion] = React.useState(0);
   const [viGpuRetainedReady, setViGpuRetainedReady] = React.useState(false);
   const viGpuImageRef = React.useRef<ViGpuImage | null>(null);
+  const dpGpuCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const dpGpuDisplayRef = React.useRef<ResidentDpDisplay | null>(null);
+  const dpGpuOptionsRef = React.useRef<DpDisplayOptions | null>(null);
+  const [dpGpuReady, setDpGpuReady] = React.useState(false);
+  const [dpGpuPending, setDpGpuPending] = React.useState(false);
+  const clearDpGpuDisplay = () => {
+    liveScanDisplayRef.current = false;
+    dpGpuDisplayRef.current?.destroy();
+    dpGpuDisplayRef.current = null;
+    setDpGpuReady(false);
+  };
+
   // GPU-resident compare panels: frame index -> engine colormap slot. Written by
   // the interactive compare recompute (no readback), consumed by the grid painter.
   const [compareGpuVersion, setCompareGpuVersion] = React.useState(0);
@@ -6130,6 +6157,36 @@ function Show4DSTEM() {
         const scanIdx = pr * scanCols + pc;
         const mode = String(model.get("view_mode") || "single");
         const dpMode = String(model.get("compare_dp_mode") || "average");
+        if (ransSet instanceof Source112ResidentSet && dpGpuCanvasRef.current && dpGpuOptionsRef.current
+            && (!model.get("vi_roi_mode") || model.get("vi_roi_mode") === "off")) {
+          const average = (mode === "multiple" || mode === "compare") && dpMode !== "selected";
+          let indices = average ? compareAverageDpIndices() : [Math.max(0, Math.min(ransSet.acquisitionCount - 1, model.get("frame_idx") | 0))];
+          if (average && !h5VolumePreloadDone) {
+            indices = latestResidentVolumeIndex != null && volIsResident(latestResidentVolumeIndex)
+              ? [latestResidentVolumeIndex] : indices.filter(idx => volIsResident(idx));
+          }
+          if (indices.length && indices.every(idx => volIsResident(idx))) {
+            const sources = indices.map(idx => ransSet!.computes[idx]) as unknown as ResidentPatternSource[];
+            const device = sources[0].getDevice();
+            let display = dpGpuDisplayRef.current;
+            if (!display || display.device !== device) {
+              clearDpGpuDisplay();
+              display = new ResidentDpDisplay(dpGpuCanvasRef.current, device, dpGpuOptionsRef.current,
+                setDpGpuPending, error => { if (!disposed) setOfflineBackendError(String(error)); });
+              dpGpuDisplayRef.current = display;
+            }
+            liveScanDisplayRef.current = mode === "multiple" || mode === "compare";
+            display.show(sources, scanIdx, frame => {
+              if (!isCurrent() || model.get("pos_row") !== pr || model.get("pos_col") !== pc) return;
+              model.set("frame_bytes", new DataView(frame.buffer));
+              model.save_changes();
+            });
+            setDpGpuReady(true);
+            return;
+          }
+        }
+        if (dpGpuDisplayRef.current) clearDpGpuDisplay();
+
         if ((mode === "multiple" || mode === "compare") && dpMode !== "selected" && getVol) {
           const indices = compareAverageDpIndices();
           if (indices.length) {
@@ -6207,10 +6264,11 @@ function Show4DSTEM() {
       const onDP = () => {
         if (splittingViCenter) return;
         void recomputeDP();
+        void recomputeFrame();
       };
       const onPos = () => { void recomputeFrame(); };
-      const onCompareFrameSource = () => { frameQueue.invalidate(); void recomputeFrame(); };
-      const onCompareGridSource = () => { frameQueue.invalidate(); void recomputeCompareVI(); void recomputeFrame(); };
+      const onCompareFrameSource = () => { dpGpuDisplayRef.current?.invalidate(); frameQueue.invalidate(); void recomputeFrame(); };
+      const onCompareGridSource = () => { dpGpuDisplayRef.current?.invalidate(); frameQueue.invalidate(); void recomputeCompareVI(); void recomputeFrame(); };
       const activateCurrentVolume = async () => {
         if (!getVol) return true;
         const nVolumes = volumeCount || volMetas.length || 1;
@@ -6247,6 +6305,7 @@ function Show4DSTEM() {
         });
       }
       const recomputeActiveView = async () => {
+        dpGpuDisplayRef.current?.invalidate();
         frameQueue.invalidate();
         const ready = await activateCurrentVolume();
         if (!ready || disposed) return;
@@ -6258,6 +6317,7 @@ function Show4DSTEM() {
       // 5D multi-volume: the slider picks the active dataset; decode-on-scrub (LRU).
       let frameGen = 0;
       const onFrame = async () => {
+        dpGpuDisplayRef.current?.invalidate();
         frameQueue.invalidate();
         const gen = ++frameGen;                  // ignore a stale decode if the user keeps scrubbing
         const ready = await activateCurrentVolume();
@@ -6352,6 +6412,7 @@ function Show4DSTEM() {
         model.off("change:vi_roi_center", onViCenter);
         model.off("change:_preset_request", onPreset);
         frameQueue.close();
+        clearDpGpuDisplay();
         model.off("change:pos_row", onPos);
         model.off("change:pos_col", onPos);
         model.off("change:compare_dp_mode", onCompareFrameSource);
@@ -7504,6 +7565,13 @@ function Show4DSTEM() {
   const dpUiRef = React.useRef<HTMLCanvasElement>(null);  // High-DPI UI overlay for scale bar
   const dpOffscreenRef = React.useRef<HTMLCanvasElement | null>(null);
   const dpImageDataRef = React.useRef<ImageData | null>(null);
+  dpGpuOptionsRef.current = {width: detCols, height: detRows, colormap: dpColormap,
+    log: dpScaleMode === "log", minPct: dpVminPct, maxPct: dpVmaxPct,
+    min: traitDpVmin, max: traitDpVmax, zoom: dpZoom, panX: dpPanX, panY: dpPanY};
+  React.useLayoutEffect(() => {
+    if (dpGpuOptionsRef.current) dpGpuDisplayRef.current?.updateOptions(dpGpuOptionsRef.current);
+  }, [detRows, detCols, dpColormap, dpScaleMode, dpVminPct, dpVmaxPct, traitDpVmin, traitDpVmax, dpZoom, dpPanX, dpPanY]);
+
   const virtualGpuCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const virtualGpuCaptureRef = React.useRef<(() => Promise<HTMLCanvasElement>) | null>(null);
   const virtualGpuContextRef = React.useRef<{ engine: GPUColormapEngine; context: GPUCanvasContext } | null>(null);
@@ -9252,7 +9320,7 @@ function Show4DSTEM() {
     if (!anyDrag) {
       const pxCol = Math.floor(imgX);
       const pxRow = Math.floor(imgY);
-      if (pxCol >= 0 && pxCol < detCols && pxRow >= 0 && pxRow < detRows && frameBytes) {
+      if (pxCol >= 0 && pxCol < detCols && pxRow >= 0 && pxRow < detRows && frameBytes && !dpGpuPending) {
         const usesViRoiDp = viRoiMode && viRoiMode !== "off" && viRoiDpBytes && viRoiDpBytes.byteLength > 0;
         const sourceBytes = usesViRoiDp ? viRoiDpBytes : frameBytes;
         const raw = new Float32Array(sourceBytes.buffer, sourceBytes.byteOffset, sourceBytes.byteLength / 4);
@@ -10433,7 +10501,7 @@ function Show4DSTEM() {
       </Typography>
     </Box>
   ), [panelLoadingOverlaySx, panelLoadingTextSx]);
-  const dpPanelReady = Boolean(displayedDpBytes && displayedDpBytes.byteLength >= detRows * detCols * 4);
+  const dpPanelReady = dpGpuReady || Boolean(displayedDpBytes && displayedDpBytes.byteLength >= detRows * detCols * 4);
   const viPanelReady = Boolean(
     viGpuVisible
     || (displayedVirtualImageBytes && displayedVirtualImageBytes.byteLength >= shapeRows * shapeCols * 4),
@@ -10599,7 +10667,7 @@ function Show4DSTEM() {
           {/* DP Header */}
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={panelHeaderSx}>
             <Typography variant="caption" sx={{ ...typo.label }}>
-              DP at ({Math.round(localPosRow)}, {Math.round(localPosCol)})
+              <span ref={dpPositionLabelRef}>DP at ({Math.round(localPosRow)}, {Math.round(localPosCol)})</span>
               <span style={{ color: roiColors.textColor, marginLeft: SPACING.SM }}>k: ({Math.round(localKRow)}, {Math.round(localKCol)})</span>
             </Typography>
             {controlsVisible && <Stack
@@ -10624,11 +10692,14 @@ function Show4DSTEM() {
               <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={async () => {
                 if (!dpCanvasRef.current) return;
                 try {
-                  const blob = await new Promise<Blob | null>(resolve => dpCanvasRef.current!.toBlob(resolve, "image/png"));
+                  const canvas = dpGpuReady && !usesViRoiDp && dpGpuDisplayRef.current
+                    ? await dpGpuDisplayRef.current.capture() : dpCanvasRef.current;
+                  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
                   if (!blob) return;
-                  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-                } catch {
-                  dpCanvasRef.current.toBlob((b) => { if (b) downloadBlob(b, "show4dstem_dp.png"); }, "image/png");
+                  try { await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]); }
+                  catch { downloadBlob(blob, "show4dstem_dp.png"); }
+                } catch (error) {
+                  setOfflineBackendError(`Could not copy the DP image: ${String(error)}`);
                 }
               }}>Copy</Button>
               {offline && (h5SourceAvailable || ransSourceAvailable) && <Button
@@ -10873,7 +10944,11 @@ function Show4DSTEM() {
 
           {/* DP Canvas */}
           <Box sx={{ ...container.imageBox, width: "100%", maxWidth: canvasSize, aspectRatio: "1 / 1", height: "auto", touchAction: "none", ...mobileImageBoxSx }}>
-            <canvas data-quantem-scientific-output="show4dstem-diffraction-pattern" data-resident-detector={residentBatchInfo ? JSON.stringify({center:[activeRoiCenterRow,activeRoiCenterCol],inner:roiRadiusInner,outer:roiRadius,zoom:dpZoom,pan:[dpPanY,dpPanX]}) : undefined} ref={dpCanvasRef} width={detCols} height={detRows} style={{ position: "absolute", width: "100%", height: "100%", imageRendering: "pixelated" }} />
+            <canvas data-quantem-scientific-output={dpGpuReady && !usesViRoiDp ? undefined : "show4dstem-diffraction-pattern"} data-resident-detector={residentBatchInfo ? JSON.stringify({center:[activeRoiCenterRow,activeRoiCenterCol],inner:roiRadiusInner,outer:roiRadius,zoom:dpZoom,pan:[dpPanY,dpPanX]}) : undefined} ref={dpCanvasRef} width={detCols} height={detRows} style={{ position: "absolute", width: "100%", height: "100%", opacity: dpGpuReady && !usesViRoiDp ? 0 : 1, imageRendering: "pixelated" }} />
+            <canvas ref={dpGpuCanvasRef} width={detCols} height={detRows}
+              data-quantem-scientific-output={dpGpuReady && !usesViRoiDp ? "show4dstem-diffraction-pattern" : undefined}
+              style={{position: "absolute", width: "100%", height: "100%", pointerEvents: "none",
+                opacity: dpGpuReady && !usesViRoiDp ? 1 : 0, imageRendering: "pixelated"}} />
             <canvas
               ref={dpOverlayRef} width={detCols} height={detRows}
               onPointerDown={handleDpMouseDown} onPointerMove={handleDpMouseMove}
@@ -10902,7 +10977,7 @@ function Show4DSTEM() {
             {(dpPanelLoading || offlineBackendError) && renderPanelLoadingOverlay(
               offlineBackendError ? "Show4DSTEM load failed" : "Loading DP",
             )}
-            {panelChromeVisible && cursorInfo && cursorInfo.panel === "DP" && (
+            {panelChromeVisible && !dpGpuPending && cursorInfo && cursorInfo.panel === "DP" && (
               <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
                 <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
                   ({cursorInfo.row}, {cursorInfo.col}) {cursorInfo.exact ? String(cursorInfo.value) : formatNumber(cursorInfo.value)}
@@ -10915,10 +10990,10 @@ function Show4DSTEM() {
           {/* DP Stats Bar */}
           {showStats && !dpPanelLoading && dpStats && dpStats.length === 4 && (
             <Box sx={{ ...statsBarSx, ...hideBetweenPanelsOnMobileSx }}>
-              <Typography sx={statsTextSx}>Mean <Box component="span" sx={statsValueSx}>{formatStat(dpStats[0])}</Box></Typography>
-              <Typography sx={statsTextSx}>Min <Box component="span" sx={statsValueSx}>{formatStat(dpStats[1])}</Box></Typography>
-              <Typography sx={statsTextSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(dpStats[2])}</Box></Typography>
-              <Typography sx={statsTextSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(dpStats[3])}</Box></Typography>
+              <Typography sx={statsTextSx}>Mean <Box component="span" sx={statsValueSx}>{dpGpuPending ? "…" : formatStat(dpStats[0])}</Box></Typography>
+              <Typography sx={statsTextSx}>Min <Box component="span" sx={statsValueSx}>{dpGpuPending ? "…" : formatStat(dpStats[1])}</Box></Typography>
+              <Typography sx={statsTextSx}>Max <Box component="span" sx={statsValueSx}>{dpGpuPending ? "…" : formatStat(dpStats[2])}</Box></Typography>
+              <Typography sx={statsTextSx}>Std <Box component="span" sx={statsValueSx}>{dpGpuPending ? "…" : formatStat(dpStats[3])}</Box></Typography>
               {controlsVisible && <>
                 <Box sx={{ flex: 1, minWidth: 4, "@media (max-width: 700px)": { display: "none" } }} />
                 <Typography component="span" onClick={() => requestViPreset("bf")} sx={viSourceButtonSx("bf", activeViSource === "roi")}>BF</Typography>
@@ -10945,7 +11020,7 @@ function Show4DSTEM() {
 
           {/* Profile sparkline */}
           {profileActive && (
-            <Box sx={{ mt: `${SPACING.XS}px`, width: "100%", maxWidth: canvasSize, boxSizing: "border-box", ...mobileImageBoxSx }}>
+            <Box sx={{ visibility: dpGpuPending ? "hidden" : "visible", mt: `${SPACING.XS}px`, width: "100%", maxWidth: canvasSize, boxSizing: "border-box", ...mobileImageBoxSx }}>
               <canvas
                 ref={profileCanvasRef}
                 onMouseMove={handleProfileMouseMove}
@@ -11041,7 +11116,7 @@ function Show4DSTEM() {
                   </Box>
                   {/* Right: Histogram spanning both rows */}
                   <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", flex: "0 0 auto", maxWidth: "100%" }}>
-                    <Histogram data={dpHistogramData} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={(min, max) => { setDpVminPct(min); setDpVmaxPct(max); }} width={110} height={58} theme={themeInfo.theme} dataMin={dpGlobalMin} dataMax={dpGlobalMax} />
+                    <Histogram data={dpGpuPending ? null : dpHistogramData} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={(min, max) => { setDpVminPct(min); setDpVmaxPct(max); }} width={110} height={58} theme={themeInfo.theme} dataMin={dpGlobalMin} dataMax={dpGlobalMax} />
                   </Box>
                 </Box>
               </Box>

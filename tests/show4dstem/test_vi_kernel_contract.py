@@ -130,10 +130,9 @@ def test_show4dstem_webgpu_engine_has_selected_index_vi_kernel() -> None:
     assert "saveChangesIfLiveComm" in frontend
     assert "requestViPreset" in frontend
     assert '"launch_warm_cache"' in frontend
-    assert "renderPanelSlotsToImageBitmapAsync" in frontend
-    assert "renderSlotDirectWithGpuRangeToImageBitmapAsync" in frontend
-    assert "virtualGpuCanvasRef" not in frontend
-    assert "renderPanelSlotsDirectToCanvas" not in frontend
+    assert "virtualGpuCanvasRef" in frontend
+    assert "renderPanelSlotsDirectToCanvas" in frontend
+    assert "captureGpuCanvas" in frontend
     assert "renderSlotDirectWithGpuRangeToCanvas" in frontend
 
 

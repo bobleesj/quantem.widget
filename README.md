@@ -50,6 +50,9 @@ for backend setup, Colab instructions, and verification.
 | `ShowEDS` | Explore linked EDS/EELS maps and spectra | — |
 | `ShowFolder` | Browse, group, and select microscopy session files | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/showfolder.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/showfolder.html) |
 
+Opt-in [experimental ANS sources](docs/developer/experimental-ans.md) use the
+shared `quantem.gpu` codec and include explicit usage and qualification limits.
+
 ## Documentation
 
 Visit the **[quantem.widget documentation](https://electronmicroscopy.github.io/quantem.widget/)**
