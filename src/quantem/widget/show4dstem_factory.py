@@ -119,7 +119,14 @@ def Show4DSTEM(data: Any, **kwargs: Any) -> Any:
     if is_mps_show4dstem_payload(payload):
         return _build_mps_viewer(payload, **kwargs)
 
-    return _Show4DSTEMBase(payload, **kwargs)
+    viewer = _Show4DSTEMBase(payload, **kwargs)
+    if isinstance(data, LoadResult) and "precision" in data.metadata:
+        viewer.precision_report = {
+            **data.metadata["precision"],
+            "report_origin": data.metadata.get("conversion_report_origin", "saved"),
+            "resident_bytes": data.resident_bytes,
+        }
+    return viewer
 
 
 def _normalise_gpus(gpus) -> list[int] | None:

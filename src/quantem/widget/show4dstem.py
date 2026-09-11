@@ -645,6 +645,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     compare_page_panel_sequence = traitlets.Int(0).tag(sync=True)
     gpu_memory_label = traitlets.Unicode("").tag(sync=True)
     memory_warning = traitlets.Unicode("").tag(sync=True)
+    precision_report = traitlets.Dict(default_value={}).tag(sync=True)
 
     # Export (GIF)
     _gif_export_requested = traitlets.Bool(False).tag(sync=True)
@@ -2028,7 +2029,10 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             first_frame = self._data[0]
         else:
             first_frame = self._data
-        first_frame_sample = first_frame[0] if first_frame.ndim >= 3 else first_frame
+        if hasattr(first_frame, "frame_native"):
+            first_frame_sample = torch.from_dlpack(first_frame.frame_native(0))
+        else:
+            first_frame_sample = first_frame[0] if first_frame.ndim >= 3 else first_frame
         if isinstance(first_frame_sample, np.ndarray):
             first_frame_sample = torch.from_numpy(np.array(first_frame_sample, copy=True))
         if not torch.is_floating_point(first_frame_sample):
@@ -2378,6 +2382,13 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         (and warns + skips if too big); ``False`` does nothing. 5D is supported
         only for bslz4 companion directories.
         """
+        if getattr(self._data, "precision", None) is not None:
+            if offline or data_url:
+                raise NotImplementedError(
+                    "Packed precision sources need the live GPU kernel. "
+                    "Use offline=False and save data with quantem.gpu.io.save."
+                )
+            return
         if self._data.ndim not in (4, 5):
             return
         # Browser-source mode: the raw frames stay as files on disk and WebGPU

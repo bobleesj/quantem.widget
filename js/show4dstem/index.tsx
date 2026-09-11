@@ -3003,6 +3003,7 @@ function Show4DSTEM() {
   const [folderWatchDetail] = useModelState<string>("folder_watch_detail");
   const [gpuMemoryLabel] = useModelState<string>("gpu_memory_label");
   const [memoryWarning] = useModelState<string>("memory_warning");
+  const [precisionReport] = useModelState<Record<string, string | number>>("precision_report");
 
   const [frameBytes] = useModelState<DataView>("frame_bytes");
   const [virtualImageBytes, setVirtualImageBytes] = useModelState<DataView>("virtual_image_bytes");
@@ -10688,6 +10689,22 @@ function Show4DSTEM() {
           <KeyboardShortcuts items={keyboardShortcutItems} />
         </Box>} theme={themeInfo.theme} />}
       </Typography>}
+      {precisionReport?.storage && (
+        <Box component="details" sx={{ fontSize: 12, mb: 1 }} data-testid="show4dstem-precision">
+          <summary style={{ cursor: "pointer" }}>Data precision: {precisionReport.storage} (approximate)</summary>
+          <MetadataSection rows={[
+            ["Source precision", String(precisionReport.source_dtype)],
+            ["Packed GPU storage", `${(Number(precisionReport.resident_bytes) / 2 ** 30).toFixed(3)} GiB`],
+            ["Report", precisionReport.report_origin === "saved" ? "Saved conversion measurements; original not rechecked" : "Measured on GPU against loaded source values"],
+            ["RMS error", Number(precisionReport.rmse).toPrecision(6)],
+            ["Maximum absolute error", Number(precisionReport.max_abs_error).toPrecision(6)],
+            ["Positive values becoming zero", `${Number(precisionReport.positive_to_zero).toLocaleString()} / ${Number(precisionReport.values).toLocaleString()} measured values`],
+            ["Overflow / clipping", `${precisionReport.overflow} / ${precisionReport.clipped}`],
+            ...(precisionReport.storage === "scaled_uint16" ? [["Intensity step / offset", `${Number(precisionReport.scale).toPrecision(6)} / ${Number(precisionReport.offset).toPrecision(6)}`] as [string, string]] : []),
+          ]} />
+          <Typography sx={{ fontSize: 11 }}>Readouts use restored intensity units. Detector reductions use these approximate values.</Typography>
+        </Box>
+      )}
       {memoryWarning && (
         <Box role="status" data-testid="show4dstem-memory-warning" sx={memoryWarningSx}>
           {memoryWarning}
