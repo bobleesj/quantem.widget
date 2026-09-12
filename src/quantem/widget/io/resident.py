@@ -18,8 +18,9 @@ def load_resident(
 ) -> io.FourDSTEMData:
     """Keep a complete acquisition available for repeated detector queries.
 
-    The viewer retains original counts, including stored masked pixels.
-    Detector sessions apply the source validity mask to scientific sums.
+    Stored detector-mask pixels are replaced by their valid 3x3-neighbor
+    median on the GPU before resident encoding. The source HDF5 remains
+    unchanged, and correction provenance is retained in the load metadata.
     Memory pressure raises an error instead of binning or clipping counts.
 
     Parameters
@@ -53,7 +54,7 @@ def load_resident(
     return io.load(
         source, backend=backend, representation=representation,
         dtype="native", device=device, apply_mask=False,
-        hot_pixel_correction="none", verbose=False,
+        hot_pixel_correction="median", verbose=False,
     )
 
 
