@@ -162,11 +162,17 @@ def test_scrubbing_during_playback_keeps_advancing(page):
 
 def test_loop_endpoint_drags_keep_playing_inside_selected_range(page):
     """Range edits preserve playback and constrain subsequent frames."""
+    from playwright.sync_api import expect
+
     _drag(page, 1, .5)
     page.get_by_role("button", name="Play", exact=True).click()
     _drag(page, 0, .2)
     _drag(page, 2, .8)
     inputs = _sliders(page)
+    # React publishes range edits after the pointer release. Wait for that
+    # visible state, rather than racing a still-pending render on large exports.
+    expect(inputs.nth(0)).not_to_have_value("0")
+    expect(inputs.nth(2)).not_to_have_value(inputs.nth(2).get_attribute("max"))
     low, high = int(inputs.nth(0).input_value()), int(inputs.nth(2).input_value())
     assert low > 0 and high < int(inputs.nth(2).get_attribute("max"))
     _assert_advancing(page, bounds=(low + 1, high + 1))
@@ -191,4 +197,19 @@ def test_keyboard_seek_keeps_playback_running(page):
     page.get_by_role("button", name="Play", exact=True).click()
     _sliders(page).nth(1).focus()
     _sliders(page).nth(1).press("ArrowRight")
+    _assert_advancing(page)
+
+
+def test_clicking_timeline_keeps_playback_running(page):
+    """Clicking the track uses the same seek path as dragging the handle."""
+    page.get_by_role("button", name="Play", exact=True).click()
+    root = _sliders(page).nth(1).locator(
+        "xpath=ancestor::span[contains(@class, 'MuiSlider-root')]"
+    )
+    root.scroll_into_view_if_needed()
+    rail = root.bounding_box()
+    assert rail is not None
+    page.mouse.click(rail["x"] + rail["width"] * .3,
+                     rail["y"] + rail["height"] / 2)
+    page.mouse.move(1, 1)
     _assert_advancing(page)

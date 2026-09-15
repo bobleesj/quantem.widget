@@ -14161,17 +14161,6 @@ function Show3D() {
       debug.lastScrubCommitFrame = next;
     }
   };
-  const handleLoopSliderMouseDown = (e: React.MouseEvent<HTMLSpanElement>) => {
-    const target = e.target as HTMLElement;
-    if (target.closest(".MuiSlider-thumb")) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const pct = rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0;
-    const next = clampSlice(pct * Math.max(0, nSlices - 1));
-    e.preventDefault();
-    e.stopPropagation();
-    scrubToSlice(next);
-    commitSlice(next);
-  };
   const handleLoopSliderPointerDownCapture = (e: React.PointerEvent<HTMLSpanElement>) => {
     if (e.button !== 0) return;
     sliderGestureCleanupRef.current?.();
@@ -16333,7 +16322,7 @@ function Show3D() {
                       </IconButton>
                     </Stack>
                     {loop ? (
-                      <Slider ref={playbackSliderRef} value={[loopStart, activeIdx, effectiveLoopEnd]} onMouseDown={handleLoopSliderMouseDown} onPointerDownCapture={handleLoopSliderPointerDownCapture} onChange={(_, v) => { const vals = v as number[]; if (vals[0] !== loopStart) setLoopStart(vals[0]); scrubToSlice(vals[1]); if (vals[2] !== effectiveLoopEnd) setLoopEnd(vals[2]); }} onChangeCommitted={(_, v) => { const vals = v as number[]; if (vals[0] !== loopStart) setLoopStart(vals[0]); commitSlice(vals[1]); if (vals[2] !== effectiveLoopEnd) setLoopEnd(vals[2]); }} disableSwap min={0} max={nSlices - 1} size="small" valueLabelDisplay="auto" valueLabelFormat={(v) => formatFrameValueLabel(v)} marks={bookmarkedFrameMarks} aria-label={`Loop range and current ${dimLabel.toLowerCase()} (frame ${activeIdx + 1} of ${nSlices}, loop ${loopStart + 1} to ${effectiveLoopEnd + 1})`} sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 90, "& .MuiSlider-thumb[data-index='0']": { width: 8, height: 8, bgcolor: themeColors.textMuted }, "& .MuiSlider-thumb[data-index='1']": { width: 12, height: 12 }, "& .MuiSlider-thumb[data-index='2']": { width: 8, height: 8, bgcolor: themeColors.textMuted }, "& .MuiSlider-mark": { bgcolor: "#ffc107", width: 5, height: 5, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" }, "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }} />
+                      <Slider ref={playbackSliderRef} value={[loopStart, activeIdx, effectiveLoopEnd]} onPointerDownCapture={handleLoopSliderPointerDownCapture} onChange={(_, v) => { const vals = v as number[]; if (vals[0] !== loopStart) setLoopStart(vals[0]); scrubToSlice(vals[1]); if (vals[2] !== effectiveLoopEnd) setLoopEnd(vals[2]); }} onChangeCommitted={(_, v) => { const vals = v as number[]; if (vals[0] !== loopStart) setLoopStart(vals[0]); commitSlice(vals[1]); if (vals[2] !== effectiveLoopEnd) setLoopEnd(vals[2]); }} disableSwap min={0} max={nSlices - 1} size="small" valueLabelDisplay="auto" valueLabelFormat={(v) => formatFrameValueLabel(v)} marks={bookmarkedFrameMarks} aria-label={`Loop range and current ${dimLabel.toLowerCase()} (frame ${activeIdx + 1} of ${nSlices}, loop ${loopStart + 1} to ${effectiveLoopEnd + 1})`} sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 90, "& .MuiSlider-thumb[data-index='0']": { width: 8, height: 8, bgcolor: themeColors.textMuted }, "& .MuiSlider-thumb[data-index='1']": { width: 12, height: 12 }, "& .MuiSlider-thumb[data-index='2']": { width: 8, height: 8, bgcolor: themeColors.textMuted }, "& .MuiSlider-mark": { bgcolor: "#ffc107", width: 5, height: 5, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" }, "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }} />
                     ) : (
                       <Slider ref={playbackSliderRef} value={activeIdx} onPointerDownCapture={handleLoopSliderPointerDownCapture} onChange={(_, v) => scrubToSlice(v as number)} onChangeCommitted={(_, v) => commitSlice(v as number)} min={0} max={nSlices - 1} size="small" valueLabelDisplay="auto" valueLabelFormat={(v) => formatFrameValueLabel(v)} marks={bookmarkedFrameMarks} aria-label={`Current ${dimLabel.toLowerCase()} (${activeIdx + 1} of ${nSlices})`} sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 90, "& .MuiSlider-mark": { bgcolor: "#ffc107", width: 5, height: 5, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" }, "& .MuiSlider-valueLabel": { maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }} />
                     )}
