@@ -4,6 +4,32 @@ These notes capture interaction bugs that were easy to misread while building
 the widgets. Keep this page short and practical: it should explain what went
 wrong, how to recognize the pattern, and what to do instead.
 
+## Playback regression gate
+
+Play and scrub must be tested together: dragging the current-frame handle or
+either loop endpoint preserves playback intent. Seeking while paused stays
+paused. Keyboard seeks preserve the same behavior. A paused frame counter is
+not enough evidence; the displayed scientific pixels must keep advancing too.
+
+`scripts/widget_local_signoff.sh --quick --browser` runs
+`tests/show3d/test_playback_browser.py` against a generated moving-pattern HTML
+export. The tests use real pointer/keyboard input and interior image pixels;
+they do not assert implementation strings, exact frame timing, or FPS. WebGPU
+is required; CPU fallback is a failure of this gate. Ordinary Python unit-test
+runs skip this browser gate.
+
+To run just this check in the active conda environment after `npm run build`:
+
+```bash
+python -m playwright install chromium
+QUANTEM_TEST_PLAYBACK=1 PYTHONPATH=src python -m pytest -q tests/show3d/test_playback_browser.py
+```
+
+This opens headed Chromium, including from the signoff script. Use
+`QUANTEM_HEADLESS=1` only where headless Chromium exposes WebGPU, or set
+`QUANTEM_SHOW3D_PLAYBACK_HTML=/path/to/export.html` to test an existing looping
+multi-frame export. Keep screenshots, private exports and data outside Git.
+
 ## Current summary
 
 2026-07-05 Show4DSTEM loader work:

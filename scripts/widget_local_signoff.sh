@@ -177,6 +177,12 @@ if [[ "$browser" -eq 1 ]]; then
   fi
   PYTHONPATH="$signoff_pythonpath" python scripts/widget_browser_smoke.py "${browser_args[@]}"
 
+  echo "== Show3D playback and slider regression =="
+  QUANTEM_TEST_PLAYBACK=1 \
+    PYTHONPATH="$signoff_pythonpath" python -m pytest -q \
+    tests/show3d/test_playback_browser.py \
+    --basetemp="$artifact_dir/playback-regression"
+
   echo "== post-browser artifact cleanup =="
   python scripts/cleanup_browser_artifacts.py
 fi
