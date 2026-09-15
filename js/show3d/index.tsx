@@ -7871,6 +7871,10 @@ function Show3D() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [benchmarkRequest, nSlices, canvasW, canvasH, width, height]);
 
+  // Slider gestures temporarily own the displayed frame without changing Play.
+  const sliderScrubbingRef = React.useRef(false);
+  const sliderGestureCleanupRef = React.useRef<(() => void) | null>(null);
+  React.useEffect(() => () => sliderGestureCleanupRef.current?.(), []);
   const playbackHistogramCounterRef = React.useRef(0);
   const refreshHistogramRef = React.useRef<((idxArg?: number) => void | Promise<void>) | null>(null);
 
@@ -7913,6 +7917,11 @@ function Show3D() {
     if (startDbg) resetFramePacingDebug(startDbg, playbackIntervalMs(startFps));
 
     tick = (_now: number) => {
+      if (sliderScrubbingRef.current) {
+        lastFrameTime = 0;
+        scheduleTick();
+        return;
+      }
       const tickNow = performance.now();
       const c = playRef.current;
       const effectiveFps = clampPlaybackFps(benchmarkPlaybackFpsRef.current ?? c.fps);
@@ -14083,7 +14092,10 @@ function Show3D() {
     const inputAt = performance.now();
     const scrubDebug = show3dPerfDebug();
     if (scrubDebug) scrubDebug.lastScrubInputAt = inputAt;
-    if (playing) setPlaying(false);
+    // A seek changes position, not playback intent. Pointer gestures hold the
+    // frame loop until release; keyboard seeks keep the loop running.
+    playbackIdxRef.current = next;
+    scheduleIdleCommit = scheduleIdleCommit && !playing;
     if (renderGpuTemporalAverageSliceDirect(next, false)) {
       playbackIdxRef.current = next;
       updatePlaybackLiveControls(next);
@@ -14134,6 +14146,7 @@ function Show3D() {
   };
   const commitSlice = (idx: number) => {
     const next = clampSlice(idx);
+    playbackIdxRef.current = next;
     if (sliceCommitTimerRef.current !== null) {
       window.clearTimeout(sliceCommitTimerRef.current);
       sliceCommitTimerRef.current = null;
@@ -14161,6 +14174,30 @@ function Show3D() {
   };
   const handleLoopSliderPointerDownCapture = (e: React.PointerEvent<HTMLSpanElement>) => {
     if (e.button !== 0) return;
+    sliderGestureCleanupRef.current?.();
+    sliderScrubbingRef.current = true;
+    if (sliceCommitTimerRef.current !== null) {
+      window.clearTimeout(sliceCommitTimerRef.current);
+      sliceCommitTimerRef.current = null;
+    }
+    const controller = new AbortController();
+    let finish = (_event: Event) => {};
+    let cancelPaint = () => {};
+    const cleanup = () => {
+      cancelPaint();
+      controller.abort();
+      sliderScrubbingRef.current = false;
+      sliderGestureCleanupRef.current = null;
+    };
+    sliderGestureCleanupRef.current = cleanup;
+    const endGesture = (event: Event) => {
+      if (event instanceof PointerEvent && event.pointerId !== e.pointerId) return;
+      try { finish(event); } finally { cleanup(); }
+    };
+    const options = { capture: true, signal: controller.signal };
+    window.addEventListener("pointerup", endGesture, options);
+    window.addEventListener("pointercancel", endGesture, options);
+    window.addEventListener("blur", endGesture, options);
     const target = e.target as HTMLElement;
     const thumb = target.closest(".MuiSlider-thumb") as HTMLElement | null;
     // Loop sliders have start/current/end thumbs. Leave start/end to MUI so
@@ -14206,19 +14243,21 @@ function Show3D() {
     e.nativeEvent.stopImmediatePropagation();
     paintCurrent();
     const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== e.pointerId) return;
       ev.preventDefault();
       const debug = show3dPerfDebug();
       if (debug) debug.scrubPointerEvents = ((debug.scrubPointerEvents as number | undefined) ?? 0) + 1;
       scheduleCurrent(ev.clientX);
     };
-    const onUp = (ev: PointerEvent) => {
-      ev.preventDefault();
-      window.removeEventListener("pointermove", onMove, true);
-      window.removeEventListener("pointerup", onUp, true);
-      commitCurrent(ev.clientX);
+    cancelPaint = () => { if (scrubRaf) window.cancelAnimationFrame(scrubRaf); };
+    finish = (event: Event) => {
+      // Cancellation or leaving the window commits the last real position;
+      // neither can leave a dangling listener holding playback indefinitely.
+      const clientX = event.type === "pointerup" && event instanceof PointerEvent
+        ? event.clientX : pendingClientX;
+      commitCurrent(clientX);
     };
-    window.addEventListener("pointermove", onMove, true);
-    window.addEventListener("pointerup", onUp, true);
+    window.addEventListener("pointermove", onMove, options);
   };
   const overlayCanvasVisible = effectiveRoiActive || profileActive || (panelOverlays || []).some((items) => items && items.length > 0);
   const lensCanvasVisible = showLens && lensPos !== null;

@@ -4515,7 +4515,7 @@ function Show3DSlices() {
     });
   };
   commitSliceValuesRef.current = () => {
-    const [z, y, x] = sliceValuesRef.current;
+    const [z, y, x] = liveSliderRef.current;
     if (sliceZ !== z) setSliceZ(z);
     if (sliceY !== y) setSliceY(y);
     if (sliceX !== x) setSliceX(x);
@@ -5227,7 +5227,7 @@ function Show3DSlices() {
                   style={{ width: cw, height: dh, imageRendering: smooth ? "auto" : "pixelated" }}
                   role="img"
                   aria-label={a === 0
-                    ? `XY slice ${sliceZ + 1} of ${nz} along ${dl[0]} axis${title ? `: ${title}` : ""} (${cw} by ${ch} pixels)`
+                    ? `XY slice ${liveSlider[0] + 1} of ${nz} along ${dl[0]} axis${title ? `: ${title}` : ""} (${cw} by ${ch} pixels)`
                     : `Oblique vertical slice at ${obliqueAngle.toFixed(1)} degrees, position ${Math.round(obliqueCurrentOffset)}${title ? `: ${title}` : ""} (${cw} by ${ch} pixels)`}
                 />
                 <canvas
