@@ -51,3 +51,29 @@ of `show4dstem_bounded.py` without those two attributes. Against `main`:
 - Caching the `DetectorSession` on the wrapper would save another 2 to 3 ms per
   query and keep the incremental-mask state. 3 to 5 ms is below the comm
   round trip.
+
+## Follow-up the same evening: "virtual image stays black"
+
+Two unrelated causes, neither in the widget code:
+
+1. **Orphaned kernel.** The JupyterLab server behind the notebook tab was
+   restarted; the page kept showing widgets whose kernel no longer existed
+   (status bar: `Disconnected`). The diffraction panel still responded to
+   scan-point moves from the browser-side neighbor cache, while every virtual
+   image update needs Python, so only the VI looked frozen. Reloading the tab
+   and re-running the cells fixes it. A visible "kernel gone" cue on the widget
+   would make this obvious.
+2. **Headless Linux Chrome with `--use-angle=vulkan --disable-gpu-sandbox` on
+   Xvfb cannot display GPU-accelerated 2D canvases at all** (a plain
+   `fillRect` on a fresh canvas never shows up; readback returns zeros until
+   Chrome demotes the canvas to CPU after repeated `getImageData`). The DP
+   panel survives because it has a WebGPU display path; the VI panel is
+   Canvas2D. Add `--disable-accelerated-2d-canvas` when using that browser for
+   widget screenshots. WebGPU compute is unaffected.
+
+Verified on the Mac (Metal adapter) that the VI canvases are painted (4096 of
+4096 opaque pixels, ~250 colours in the compare panels).
+
+The widget's JS bundles under `src/quantem/widget/static/` are gitignored
+build artifacts; after switching checkouts run `npm run build` (needs the
+Linux `esbuild` binary: `npm install`) or the Python and JS drift apart.
