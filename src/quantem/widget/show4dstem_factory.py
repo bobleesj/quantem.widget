@@ -110,6 +110,14 @@ def Show4DSTEM(data: Any, **kwargs: Any) -> Any:
         reducers for BF/DF/ADF interaction.
       - Browser WebGPU performs detector reductions in the browser.
     """
+    if callable(getattr(data, 'read', None)) and 'scan_region' in kwargs:
+        from quantem.widget.show4dstem_bounded import show_bounded
+
+        return show_bounded([data], **kwargs)
+    if isinstance(data, (list, tuple)) and any(callable(getattr(item, 'read', None)) for item in data):
+        from quantem.widget.show4dstem_bounded import show_bounded
+
+        return show_bounded(data, **kwargs)
     payload = _payload(data)
     _apply_loadresult_defaults(data, payload, kwargs)
     if _is_cuda_resident(payload):

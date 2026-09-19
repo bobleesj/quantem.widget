@@ -9659,6 +9659,10 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         return out.reshape(self._scan_shape)
 
     def _masked_sum_tensor_for_frame_data(self, data, mask) -> torch.Tensor | None:
+        if getattr(data, '_bounded_detector_source', False):
+            from quantem.gpu.detector import prepare
+
+            return prepare(data).masked_sum(mask, output='native')
         sparse = self._sparse_masked_sum_tensor_for_frame_data(data, mask)
         if sparse is not None:
             return sparse
@@ -9796,6 +9800,10 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         else:
             row = int(max(0, min(round(cy), self._det_shape[0] - 1)))
             col = int(max(0, min(round(cx), self._det_shape[1] - 1)))
+            if getattr(data, '_bounded_detector_source', False):
+                mask = torch.zeros(self._det_shape, dtype=torch.bool, device=data.device)
+                mask[row, col] = True
+                return self._masked_sum_tensor_for_frame_data(data, mask).cpu().numpy()
             if data.ndim == 4:
                 vi = data[:, :, row, col]
             else:
