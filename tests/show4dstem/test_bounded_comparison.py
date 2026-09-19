@@ -43,3 +43,17 @@ def test_resident_before_after_uses_same_scan_and_aperture():
     finally:
         viewer.close()
     torch.testing.assert_close(read(scan_region=(0,1,0,1)), values_t[:1,:1], rtol=0, atol=0)
+
+
+def test_bounded_view_exposes_detector_source_for_native_reductions():
+    """quantem.gpu routes resident detector sums through ANS kernels only when
+    the wrapper names its owner and region; a missing name silently falls back
+    to decoding the region per query."""
+    from quantem.widget.show4dstem_bounded import _View
+
+    values_t = torch.zeros(8, 8, 4, 4)
+    source = SimpleNamespace(shape=values_t.shape, read=lambda *, scan_region: values_t, metadata={'device': 'cpu'})
+    view = _View(source, (2, 6, 1, 5))
+    assert view._detector_source is source
+    assert view._detector_region == (2, 6, 1, 5)
+    assert _View(source)._detector_region == (0, 8, 0, 8)
