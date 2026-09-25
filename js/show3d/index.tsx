@@ -7695,7 +7695,11 @@ function Show3D() {
     const adapterDebug = show3dPerfDebug();
     if (adapterDebug) adapterDebug.webgpuAdapter = adapterInfo || "unknown";
     if (!engine || !gpuCmapReadyRef.current || /swiftshader|software/i.test(adapterInfo)) {
-      setGpuResidency({ stage: "fallback", ready: 0, error: "WebGPU unavailable" });
+      // say why, so the reader knows what to change: an insecure page hides navigator.gpu entirely
+      const reason = typeof window !== "undefined" && !window.isSecureContext
+        ? "not a secure context: open this page over https, localhost, or as a local file"
+        : /swiftshader|software/i.test(adapterInfo) ? `software renderer (${adapterInfo})` : "no WebGPU adapter";
+      setGpuResidency({ stage: "fallback", ready: 0, error: reason });
       const dbg = show3dPerfDebug();
       if (dbg) {
         dbg.embeddedGpuResident = false;
@@ -14291,7 +14295,7 @@ function Show3D() {
     : gpuResidency.stage === "ready"
       ? `${resolvedDisplayBin}× mean-binned ${displayPayloadLabel} display · WebGPU resident · ${gpuResidency.ready}/${Math.max(1, nSlices)} frames`
       : gpuResidency.stage === "fallback"
-        ? `WebGPU unavailable · using CPU/canvas${gpuResidency.error ? ` (${gpuResidency.error})` : ""}`
+        ? `WebGPU unavailable · using CPU/canvas${gpuResidency.error ? `: ${gpuResidency.error}` : ""}`
         : "Loading one display-resolution stack into the browser";
   const gpuDetailText = `Original: ${Math.max(1, nSlices)} frames × ${Math.max(1, nPanels)} panels × ${Math.max(1, sourceHeight || height)}×${Math.max(1, nativeSourcePanelWidth || panelWidthPx || width)} · float32 · ${formatSavedBytes(sourceBytes || 0)}. ${resolvedDisplayBin === 1 ? "Native display requested" : `${resolvedDisplayBin}×${resolvedDisplayBin} mean bin`} → ${Math.max(1, height)}×${Math.max(1, panelWidthPx || Math.round(width / Math.max(1, nPanels)))} per panel · ${formatSavedBytes(displayStackBytes)}.`;
   const gpuStatusTitle = "One display-resolution stack is embedded in the widget and uploaded once to WebGPU when available; native source arrays are not duplicated in the browser.";
