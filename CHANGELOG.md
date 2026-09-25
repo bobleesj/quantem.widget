@@ -6,6 +6,12 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Add `PlanPtycho`: give a crystal (CIF, `ase.Atoms` or Materials Project id) and the microscope settings, and see
+  the beam through the specimen, the reconstruction's model window, the probe and the Bragg disks, with graded checks
+  (window, scan margin, overlap, detector reach, column lean from tilt, focus inside the specimen). Microscope
+  presets (Arina at 91, 115, 185 mm; EMPAD), a custom camera for a collaborator's reported values, and recommended
+  settings for 20-200 nm.
+
 - Add `Plot2D` for scalar maps with calibrated Cartesian axes, colormap
   selection, viewport controls, and editable Matplotlib figure export.
 
