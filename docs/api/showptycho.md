@@ -105,16 +105,19 @@ sample to the model:
   object frame (the scan frame rotated by the scan-detector rotation). The
   object-frame value seeds a quantem.thick reconstruction directly.
 
-Open with the fit already run:
+Open with the fit already run: the widget shows the session's latest fit.
 
 ```python
 from quantem.gpu import SSB
 from quantem.widget import ShowPtycho
 
-ssb = SSB.from_array(counts, backend="cuda", voltage_kV=300.0, semiangle_mrad=30.0,
-                     scan_sampling_A=0.495, det_sampling=0.5554, rotation_angle_deg=-8.6)
-ssb.fit(trials=200, refinement="nelder-mead", verbose=False)
-ShowPtycho(ssb, fit_tilt=True)          # add drag_bf=0.25 for 512 x 512 scans
+ssb = SSB.open(path, voltage_kV=300.0, semiangle_mrad=30.0, scan_sampling_A=0.495,
+               det_sampling=0.5554, rotation_angle_deg=-8.6)
+standard = ssb.fit()                 # defocus + astigmatism
+ShowPtycho(ssb)                      # standard SSB
+tilted = ssb.fit(tilt=True)          # + sample tilt and depth spread, jointly
+ShowPtycho(ssb)                      # opens on the fitted tilt
+pd.concat([standard.report(), tilted.report()])
 ```
 
 Saved calibrations store the sample (`sample`: scan-frame tilt, object-frame
