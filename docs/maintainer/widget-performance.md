@@ -1044,7 +1044,7 @@ Update from the 0016 Velox stream test:
 
 Date: 2026-07-02
 
-Symptom: the real DGGG 0039 EDS widget loaded and displayed the map/spectrum,
+Symptom: a real collaborator EDS widget loaded and displayed the map/spectrum,
 but changing the energy band or ROI felt slow on the full 1024 x 1024 x 4096
 file. The standalone export could still render, so it was easy to mistake this
 for a drawing problem instead of an interaction-backend problem.
