@@ -1133,9 +1133,10 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             # Scalar pins the coefficient; tuple keeps the production search
             # range from SSB.optimize defaults. Locking C12 pins phi12 too:
             # astigmatism is a magnitude+angle pair.
+            # nm: the SSB public API is nm (C10 +-40 nm, C12 0-10 nm = the backends' default physical span)
             optimize_aberrations = {
-                "C10_nm": locked_c10 if lock_c10 else (-400.0, 400.0),
-                "C12_nm": locked_c12 if lock_c12 else (0.0, 100.0),
+                "C10_nm": locked_c10 if lock_c10 else (-40.0, 40.0),
+                "C12_nm": locked_c12 if lock_c12 else (0.0, 10.0),
                 "phi12_deg": locked_phi12_deg if lock_c12 else (-90.0, 90.0),
             }
 
