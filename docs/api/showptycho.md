@@ -120,8 +120,8 @@ ShowPtycho(ssb)                      # opens on the fitted tilt
 pd.concat([standard.report(), tilted.report()])
 ```
 
-Saved calibrations store the sample (`sample`: scan-frame tilt, object-frame
-tilt, thickness) and reopening one restores the panel.
+Saved calibrations store the tilt (`tilt_mrad` scan frame, `tilt_object_mrad`,
+`depth_spread_nm`) and reopening one restores the panel.
 
 Where it runs: live notebooks with a CUDA or MPS SSB session (sliders and Fit
 tilt), and exported WebGPU folders (sliders; fitting needs Python). It does not

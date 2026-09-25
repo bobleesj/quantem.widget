@@ -544,18 +544,24 @@ def test_legacy_calibration_magnitudes_read_as_angstrom(tmp_path):
     assert calibration.higher_order == {"C32_mag": 40.0, "C32_angle": 14.0}
 
 
-def test_calibration_sample_round_trip(tmp_path):
-    """C3c: the Sample panel (tilt, thickness) is saved with the calibration and read back; files without it load empty."""
+def test_calibration_tilt_round_trip(tmp_path):
+    """C3c: the tilt panel is saved with the calibration and read back; files without it load as standard SSB, and
+    calibrations saved with the 2026-09-24 ``sample`` dict read as the same tilt."""
     from quantem.widget import PtychoCalibration
     from quantem.widget.showptycho import load_ptycho_calibration, save_ptycho_calibration
 
-    sample = {"tilt_row_mrad": -10.3, "tilt_col_mrad": 4.7, "tilt_object_mrad": [-10.89, 3.11], "thickness_nm": 22.0}
-    path = save_ptycho_calibration(PtychoCalibration(rotation_angle_deg=-8.6, aberrations={"C10": -2.6, "C12": 4.2, "phi12": -1.1},
-                                                     sample=sample), tmp_path / "cal.json")
-    assert load_ptycho_calibration(path).sample == sample
-    legacy = tmp_path / "legacy.json"
-    legacy.write_text(json.dumps({"rotation_angle_deg": 0.0, "aberrations": {"C10": 1.0, "C12": 0.0, "phi12": 0.0}}))
-    assert load_ptycho_calibration(legacy).sample == {}
+    cal = PtychoCalibration(rotation_angle_deg=-8.6, aberrations={"C10": -2.6, "C12": 4.2, "phi12": -1.1},
+                            tilt_mrad=(-10.3, 4.7), tilt_object_mrad=(-10.89, 3.11), depth_spread_nm=22.0)
+    loaded = load_ptycho_calibration(save_ptycho_calibration(cal, tmp_path / "cal.json"))
+    assert (loaded.tilt_mrad, loaded.tilt_object_mrad, loaded.depth_spread_nm) == ((-10.3, 4.7), (-10.89, 3.11), 22.0)
+    standard = tmp_path / "standard.json"
+    standard.write_text(json.dumps({"rotation_angle_deg": 0.0, "aberrations": {"C10": 1.0, "C12": 0.0, "phi12": 0.0}}))
+    assert load_ptycho_calibration(standard).tilt_mrad is None
+    dict_form = tmp_path / "sample_dict.json"
+    dict_form.write_text(json.dumps({"rotation_angle_deg": -8.6, "aberration_unit": "nm", "aberrations": {"C10": 1.0},
+                                     "sample": {"tilt_row_mrad": -10.3, "tilt_col_mrad": 4.7, "tilt_object_mrad": [-10.89, 3.11],
+                                                "thickness_nm": 22.0}}))
+    assert load_ptycho_calibration(dict_form).tilt_mrad == (-10.3, 4.7)
 
 
 def test_object_frame_tilt_matches_quantem_thick_convention():
@@ -572,18 +578,18 @@ def test_tilt_fit_on_the_session_opens_in_the_sample_panel(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
     class _TiltedSSB(_FakeSSB):
-        supports_sample = True
+        supports_tilt = True
         previewed_samples = []
 
-        def preview(self, aberrations, *, sample=None, **kwargs):
-            self.previewed_samples.append(sample)
+        def preview(self, aberrations, *, tilt_mrad=None, depth_spread_nm=None, **kwargs):
+            self.previewed_samples.append((tilt_mrad, depth_spread_nm))
             return super().preview(aberrations, **kwargs)
 
     ssb = _TiltedSSB()
-    ssb.sample = {"tilt_row_mrad": -0.1, "tilt_col_mrad": -5.07, "thickness_nm": 10.7, "gain": 1.3}
+    ssb.tilt_mrad, ssb.depth_spread_nm = (-0.1, -5.07), 10.7
     widget = ShowPtycho(ssb)
     assert json.loads(widget.sample_json) == {"tilt_row_mrad": -0.1, "tilt_col_mrad": -5.07, "thickness_nm": 10.7}
-    assert ssb.previewed_samples[-1] == {"tilt_row_mrad": -0.1, "tilt_col_mrad": -5.07, "thickness": 10.7}
+    assert ssb.previewed_samples[-1] == ((-0.1, -5.07), 10.7)
 
 
 def test_showptycho_calibration_seed_reuses_saved_loss(monkeypatch, tmp_path):
