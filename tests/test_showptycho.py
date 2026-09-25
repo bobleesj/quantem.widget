@@ -365,8 +365,8 @@ def test_showptycho_from_ssb_uses_widget_contract(monkeypatch):
     assert widget.initial_fft_on is True
     assert widget.total_bf == 8
     assert widget.drag_bf == 8
-    assert widget.c10_min == -300.0
-    assert widget.c10_max == 300.0
+    assert widget.c10_min == -30.0
+    assert widget.c10_max == 30.0
     result = json.loads(widget.result_json)
     assert result["loss"] == 0.125
     assert not hasattr(ssb, "_showptycho_widget")
@@ -437,7 +437,7 @@ def test_showptycho_default_c10_range_includes_outlier_auto(monkeypatch):
     ssb.aberrations["C10"] = 383.3
     widget = ShowPtycho(ssb)
 
-    assert widget.c10_min == -300.0
+    assert widget.c10_min == -30.0
     assert widget.c10_max == 383.3
 
 
@@ -524,6 +524,59 @@ def test_showptycho_calibration_seed_restores_higher_order(monkeypatch, tmp_path
     assert math.isclose(higher["C32_angle"], 45.0)
 
 
+def test_legacy_calibration_magnitudes_read_as_angstrom(tmp_path):
+    """C3a: a calibration written before the SSB unit fix (no aberration_unit) holds Angstrom under an nm label: read /10.
+
+    quantem.gpu's SSB engine evaluates chi with lambda in Angstrom and until 2026-09-24 reported that Angstrom number as nm
+    (abTEM C10 = -100 A came back as -100.26 "nm"). Angles are unit-free and must pass through unchanged.
+    """
+    from quantem.widget.showptycho import load_ptycho_calibration
+
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "rotation_angle_deg": 30.0,
+        "aberrations": {"C10": -100.0, "C12": 50.0, "phi12": 0.5, "C32": 400.0, "phi32": 0.25},
+        "higher_order": {"C32_mag": 400.0, "C32_angle": 14.0},
+    }))
+    calibration = load_ptycho_calibration(path)
+    assert calibration.aberrations == {"C10": -10.0, "C12": 5.0, "phi12": 0.5, "C32": 40.0, "phi32": 0.25}
+    assert calibration.higher_order == {"C32_mag": 40.0, "C32_angle": 14.0}
+
+
+def test_calibration_sample_round_trip(tmp_path):
+    """C3c: the Sample panel (tilt, thickness) is saved with the calibration and read back; files without it load empty."""
+    from quantem.widget import PtychoCalibration
+    from quantem.widget.showptycho import load_ptycho_calibration, save_ptycho_calibration
+
+    sample = {"tilt_row_mrad": -10.3, "tilt_col_mrad": 4.7, "tilt_object_mrad": [-10.89, 3.11], "thickness_nm": 22.0}
+    path = save_ptycho_calibration(PtychoCalibration(rotation_angle_deg=-8.6, aberrations={"C10": -2.6, "C12": 4.2, "phi12": -1.1},
+                                                     sample=sample), tmp_path / "cal.json")
+    assert load_ptycho_calibration(path).sample == sample
+    legacy = tmp_path / "legacy.json"
+    legacy.write_text(json.dumps({"rotation_angle_deg": 0.0, "aberrations": {"C10": 1.0, "C12": 0.0, "phi12": 0.0}}))
+    assert load_ptycho_calibration(legacy).sample == {}
+
+
+def test_object_frame_tilt_matches_quantem_thick_convention():
+    """SSB tilt (scan frame) -> ptychography object frame by the scan-detector rotation, verified on a logic-device dataset."""
+    from quantem.widget.showptycho import _object_frame_tilt
+
+    row, col = _object_frame_tilt(-10.3, 4.7, -8.6)
+    assert abs(row - -10.887) < 1e-3 and abs(col - 3.107) < 1e-3
+
+
+def test_fit_tilt_needs_a_session_with_the_thick_model(monkeypatch):
+    """C3d: fit_tilt on a session without thick-sample support says so instead of silently skipping."""
+    import pytest
+
+    from quantem.widget import ShowPtycho
+
+    monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
+    with pytest.raises(NotImplementedError, match="fit_tilt"):
+        ShowPtycho(_FakeSSB(), fit_tilt=True)
+
+
 def test_showptycho_calibration_seed_reuses_saved_loss(monkeypatch, tmp_path):
     """C3b: saved calibration loss, expect no duplicate full-loss pass at open."""
     from quantem.widget import PtychoCalibration, ShowPtycho
@@ -549,8 +602,9 @@ def test_showptycho_calibration_seed_reuses_saved_loss(monkeypatch, tmp_path):
 
     result = json.loads(widget.result_json)
     assert result["loss"] == 0.03125
+    # the calibration is nm; quantem.gpu's SSB boundary hands the engine Angstrom (x10)
     assert ssb._accel.reconstruct_calls == [
-        ("phase", 12.0, 5.0, math.radians(10.0)),
+        ("phase", 120.0, 50.0, math.radians(10.0)),
     ]
 
 
@@ -614,8 +668,9 @@ def test_showptycho_calibration_without_loss_still_skips_loss_pass(
 
     result = json.loads(widget.result_json)
     assert result["loss"] is None
+    # the calibration is nm; quantem.gpu's SSB boundary hands the engine Angstrom (x10)
     assert ssb._accel.reconstruct_calls == [
-        ("phase", 12.0, 5.0, math.radians(10.0)),
+        ("phase", 120.0, 50.0, math.radians(10.0)),
     ]
 
 
