@@ -30,6 +30,7 @@ names = (
     "display/webgpu/geometry.ts",
     "display/webgpu/quantization.ts",
     "display/webgpu/stats.ts",
+    "display/backends/webgpu/native-fft.ts",
     "display/goldens/parity.json",
     "swift/Sources/MetalDisplayKernels/Resources/colormaps.json",
     "parity/scan_rotation_v1.json",
