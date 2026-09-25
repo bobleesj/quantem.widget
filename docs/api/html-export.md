@@ -17,13 +17,15 @@ protocol, not a base class. Each widget keeps its own packing and performance
 logic, but the public shape is shared and easy for users, tests, and LLM agents
 to find.
 
-> **Opening an exported widget on a phone or tablet:** interactive widgets
-> recompute with WebGPU, and browsers expose WebGPU **only in a secure context
-> (HTTPS or localhost)**. An exported HTML served over plain `http://<ip>:<port>`
-> to a phone will render the first frame but ignore taps, because `navigator.gpu`
-> is withheld over insecure origins. Serve it over **HTTPS** (for example
-> `tailscale serve --bg --https=443 http://127.0.0.1:<port>`). Full explanation,
-> browser flags, and a debugging page: see
+> **Opening an exported widget on another machine (desktop, phone or tablet):** interactive widgets
+> recompute with WebGPU, and browsers expose WebGPU **only in a secure context: HTTPS, `localhost`, or a
+> local file (`file://`)**. An exported HTML served over plain `http://<ip>:<port>` falls back to CPU canvas
+> (Show3D reports "WebGPU unavailable: not a secure context"), and on a phone it renders the first frame but
+> ignores taps, because `navigator.gpu` is withheld over insecure origins. The simplest fix is to copy the file
+> to the viewing machine and open it from disk (for example `rsync report.html mac:Downloads/` then open it in
+> Chrome); a 20-frame 364 x 364 Show3D stack then reports "WebGPU resident" on an Apple M-series Mac. To serve
+> it instead, use **HTTPS** (for example `tailscale serve --bg --https=443 http://127.0.0.1:<port>`). Full
+> explanation, browser flags, and a debugging page: see
 > [Viewing exported HTML on mobile](../maintainer/viewing-html-on-mobile.md).
 
 ## Python contract
