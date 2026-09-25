@@ -22,6 +22,7 @@ const widgets = [
   { name: "showeds" },
   { name: "showptycho" },
   { name: "chooselattice" },
+  { name: "planptycho" },
 ];
 
 rmSync("src/quantem/widget/static", { recursive: true, force: true });
