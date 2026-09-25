@@ -439,7 +439,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
 
     # Thick-sample SSB (sample tilt + thickness). ``sample_json`` carries the Sample panel sliders
     # ({"tilt_row_mrad", "tilt_col_mrad", "thickness_nm"}); thickness 0 is standard SSB. ``sample_fit_request``
-    # (a counter) asks Python to fit aberrations, tilt and thickness together (``SSB.fit_sample``); the result
+    # (a counter) asks Python to fit aberrations, tilt and thickness together (``SSB.fit(tilt=True)``); the result
     # arrives in ``sample_fit_json`` and the frontend moves the sliders to it. CUDA sessions only.
     sample_json = traitlets.Unicode("{}").tag(sync=True)
     sample_available = traitlets.Bool(False).tag(sync=True)
@@ -710,7 +710,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         )
 
     def _on_sample_fit_request(self, change):
-        """Fit C10, C12, phi12, sample tilt and thickness together (``SSB.fit_sample``) and publish the result.
+        """Fit C10, C12, phi12, sample tilt and thickness together (``SSB.fit(tilt=True)``) and publish the result.
 
         The frontend applies ``sample_fit_json`` to the aberration sliders and the Sample panel, which triggers the
         reconstruction. C10 comes back as the defocus at mid-depth, not the standard-SSB optimum.
@@ -723,7 +723,8 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         try:
             self.sample_fit_status = "Fitting defocus, astigmatism, sample tilt and thickness..."
             t0 = time.perf_counter()
-            fit = self._accel.fit_sample(verbose=False)
+            result = self._accel.fit(tilt=True, verbose=False)
+            fit = {**result.aberrations, **result.sample}
             # SSB tilt is in the scan frame; quantem.thick's object frame is the scan rotated by the same scan-detector
             # rotation (positions p_obj = M p_scan, no sign change; verified on a logic-device dataset: SSB -> object (-10.9, +3.1) mrad
             # vs ptychography (-11.6, +2.8), 2.4 deg apart). The object-frame value seeds a reconstruction directly
@@ -736,7 +737,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
                 "tilt_row_mrad": tilt_r,
                 "tilt_col_mrad": tilt_c,
                 "tilt_object_mrad": _object_frame_tilt(tilt_r, tilt_c, self.rotation_deg),
-                "thickness_nm": float(fit["thickness"]),
+                "thickness_nm": float(fit["thickness_nm"]),
                 "gain": float(fit["gain"]),
                 "seconds": time.perf_counter() - t0,
             }
@@ -1476,7 +1477,6 @@ def _show_ptycho_from_ssb(
     size: int,
     fft_on: bool,
     calibration: object | None,
-    fit_tilt: bool = False,
 ) -> _ShowPtychoWidget:
     sample_from_cal: dict[str, Any] = {}
     flip_from_cal: bool | None = None
@@ -1528,16 +1528,11 @@ def _show_ptycho_from_ssb(
         initial_flip_phase=bool(flip_from_cal) if flip_from_cal is not None else False,
         initial_higher_order=ho_from_cal,
     )
-    if widget.sample_available and float(sample_from_cal.get("thickness_nm", 0.0)) > 0.0:
-        # restore the saved Sample panel; the frontend reads sample_json once on mount
-        widget.sample_json = json.dumps({key: float(sample_from_cal[key]) for key in ("tilt_row_mrad", "tilt_col_mrad", "thickness_nm")})
-    if fit_tilt:
-        if not widget.sample_available:
-            raise NotImplementedError("fit_tilt needs an SSB session whose backend supports the thick-sample model (CUDA or MPS).")
-        # same path as the Fit tilt button: the frontend applies sample_fit_json to the sliders when it mounts
-        widget.sample_fit_request = widget.sample_fit_request + 1
-        if widget.sample_fit_status.startswith("Tilt fit failed"):
-            raise RuntimeError(widget.sample_fit_status)
+    # the Sample panel opens on a saved calibration's tilt, else on the session's latest ssb.fit(tilt=True);
+    # the frontend reads sample_json once on mount
+    sample = sample_from_cal if float(sample_from_cal.get("thickness_nm", 0.0)) > 0.0 else dict(getattr(ssb, "sample", {}) or {})
+    if widget.sample_available and float(sample.get("thickness_nm", 0.0)) > 0.0:
+        widget.sample_json = json.dumps({key: float(sample[key]) for key in ("tilt_row_mrad", "tilt_col_mrad", "thickness_nm")})
 
     return widget
 
@@ -1565,7 +1560,6 @@ def ShowPtycho(
     size: int = 800,
     fft_on: bool = False,
     calibration: object | None = None,
-    fit_tilt: bool = False,
 ) -> _ShowPtychoWidget:
     """Open an interactive ptychography aberration explorer.
 
@@ -1594,13 +1588,6 @@ def ShowPtycho(
     calibration : path or object, optional
         Previously saved calibration used to seed aberrations, rotation, phase
         flip, higher-order controls and, when saved, the sample tilt panel.
-    fit_tilt : bool, default False
-        Fit defocus, astigmatism, sample tilt and thickness together when the
-        widget opens (the same as pressing Fit tilt, about 30-60 s) and show the
-        result in the Sample tilt panel. For thick, tilted crystals, where
-        standard SSB washes out the lattice along the tilt. The fitted C10 is
-        the mid-depth defocus; the tilt is reported in the scan frame and in the
-        ptychography object frame. CUDA and MPS sessions.
     Returns
     -------
     anywidget.AnyWidget
@@ -1660,5 +1647,4 @@ def ShowPtycho(
         size=size,
         fft_on=fft_on,
         calibration=calibration,
-        fit_tilt=fit_tilt,
     )

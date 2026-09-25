@@ -566,15 +566,24 @@ def test_object_frame_tilt_matches_quantem_thick_convention():
     assert abs(row - -10.887) < 1e-3 and abs(col - 3.107) < 1e-3
 
 
-def test_fit_tilt_needs_a_session_with_the_thick_model(monkeypatch):
-    """C3d: fit_tilt on a session without thick-sample support says so instead of silently skipping."""
-    import pytest
-
+def test_tilt_fit_on_the_session_opens_in_the_sample_panel(monkeypatch):
+    """C3d: after ssb.fit(tilt=True) the widget opens on that tilt (sample_json), with no widget-side fit call."""
     from quantem.widget import ShowPtycho
 
     monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
-    with pytest.raises(NotImplementedError, match="fit_tilt"):
-        ShowPtycho(_FakeSSB(), fit_tilt=True)
+    class _TiltedSSB(_FakeSSB):
+        supports_sample = True
+        previewed_samples = []
+
+        def preview(self, aberrations, *, sample=None, **kwargs):
+            self.previewed_samples.append(sample)
+            return super().preview(aberrations, **kwargs)
+
+    ssb = _TiltedSSB()
+    ssb.sample = {"tilt_row_mrad": -0.1, "tilt_col_mrad": -5.07, "thickness_nm": 10.7, "gain": 1.3}
+    widget = ShowPtycho(ssb)
+    assert json.loads(widget.sample_json) == {"tilt_row_mrad": -0.1, "tilt_col_mrad": -5.07, "thickness_nm": 10.7}
+    assert ssb.previewed_samples[-1] == {"tilt_row_mrad": -0.1, "tilt_col_mrad": -5.07, "thickness": 10.7}
 
 
 def test_showptycho_calibration_seed_reuses_saved_loss(monkeypatch, tmp_path):
