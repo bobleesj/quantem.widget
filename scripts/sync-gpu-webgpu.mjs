@@ -42,6 +42,8 @@ names = (
     "detector/compute/webgpu/rans.ts",
     "detector/compute/webgpu/rans-source.ts",
     "detector/compute/webgpu/count-ans.ts",
+    "detector/backends/webgpu/qem-source.ts",
+    "io/qem-rans-tables-v1.json",
     "detector/compute/webgpu/source112.ts",
     "detector/compute/webgpu/source112-pipelines.ts",
     "detector/compute/webgpu/source112-prefetch.ts",
