@@ -27,10 +27,27 @@ Widget tutorial fixtures live under `widget-tutorials/` on
 [bobleesj/quantem-data](https://huggingface.co/datasets/bobleesj/quantem-data).
 Upload and download commands are on that dataset card.
 
+## Crystal and volume demos
+
+Follow the [interactive demo route](tutorials/demo.md) for ShowCIF, PlanPtycho,
+Show3D, and Show3DSlices. Crystal inspection and planning require ASE, abTEM,
+and spglib through the `crystal` extra:
+
+```bash
+python -m pip install -i https://test.pypi.org/simple/ \
+    --extra-index-url https://pypi.org/simple/ 'quantem.widget[crystal]'
+```
+
+Check that the installed build includes the API you want to demonstrate; the
+new ShowCIF notebook requires a revision containing ShowCIF. For an unpublished
+source revision, use the [developer setup](https://github.com/electronmicroscopy/quantem.widget/blob/main/CONTRIBUTING.md)
+and install `'.[crystal]'`, then build the JavaScript with `npm run build`.
+Use the same Python environment for installation and the notebook kernel.
+
 ## Google Colab
 
-Each tutorial notebook can open directly in Colab from the badge at the top of
-the notebook. Colab uses the same files that build these docs, so there is no
+Tutorials with a Colab badge can open directly in Colab. The new crystal demo
+can also be run from a local source checkout as described above. Colab uses the same files that build these docs, so there is no
 separate Colab copy to maintain.
 
 Each Colab-ready tutorial has one collapsed **Install QuantEM** cell. Its two

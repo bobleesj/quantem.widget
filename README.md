@@ -35,6 +35,15 @@ pip install -i https://test.pypi.org/simple/ \
 See the [installation guide](https://electronmicroscopy.github.io/quantem.widget/install.html)
 for backend setup, Colab instructions, and verification.
 
+## Try the interactive demos
+
+Follow the [crystal-to-volume demo route](docs/tutorials/demo.md): inspect a
+crystal with **ShowCIF**, plan scan and simulation-cell coverage with
+**PlanPtycho**, then explore depth using **Show3D** and **Show3DSlices**.
+The notebooks include runnable models, physical units, and controls to try.
+Crystal examples need the `crystal` extra; new APIs require a source build
+containing them. The guide includes setup and browser requirements.
+
 ## Widgets
 
 | Widget | Use it for | Learn more |
@@ -44,11 +53,12 @@ for backend setup, Colab instructions, and verification.
 | `Show2D` | Images, contrast, FFTs, ROIs, profiles, and scale bars | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/show2d.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/show2d.html) |
 | `Mask2D` | Draw one rectangle, square, or circle and use its Boolean mask directly in Python | [guide and API](https://electronmicroscopy.github.io/quantem.widget/api/mask2d.html) |
 | `Show3D` | Scrub and play through image or volume stacks | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/show3d.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/show3d.html) |
-| `Show3DSlices` | Inspect orthogonal slices through a 3D volume | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/show3dslices.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/show3dslices.html) |
+| `Show3DSlices` | Inspect linked top and oblique cuts through a 3D volume | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/show3dslices.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/show3dslices.html) |
 | `Show4DSTEM` | Live virtual detectors, multi-dataset review, and WebGPU HTML export | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/show4dstem.html) · [export guide](https://electronmicroscopy.github.io/quantem.widget/tutorials/show4dstem_export.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/show4dstem.html) |
 | `ShowPtycho` | Interactive SSB phase and aberration review | [API](https://electronmicroscopy.github.io/quantem.widget/api/showptycho.html) |
 | `ShowDiffraction` | Measure diffraction spots, rings, spacing, and angles | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/showdiffraction.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/showdiffraction.html) |
 | `ChooseLattice` | Select an origin and lattice vectors | [API](https://electronmicroscopy.github.io/quantem.widget/api/choose-lattice.html) |
+| `ShowCIF` | Crystal repeats, columns, tilt, and projected potential/phase previews | [tutorial](docs/tutorials/showcif.ipynb) · [API](docs/api/showcif.md) |
 | `PlanPtycho` | Check multislice ptychography settings against a known crystal before the experiment | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/planptycho.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/planptycho.html) |
 | `ShowEDS` | Explore linked EDS/EELS maps and spectra | — |
 | `ShowFolder` | Browse, group, and select microscopy session files | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/showfolder.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/showfolder.html) |
