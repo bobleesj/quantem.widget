@@ -9,6 +9,7 @@
  * Show3DVolume.
  */
 import * as React from "react";
+import { sliderStyles } from "../controlStyles";
 import { createRender, useModel, useModelState } from "@anywidget/react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
@@ -56,6 +57,7 @@ const controlRow = {
   whiteSpace: "nowrap" as const,
 };
 const compactButton = {
+  borderRadius: 0,
   fontSize: 10,
   textTransform: "none" as const,
   letterSpacing: 0,
@@ -89,14 +91,7 @@ const switchStyles = {
     "& .MuiSwitch-switchBase": { padding: "4px" },
   },
 };
-const sliderStyles = {
-  small: {
-    py: 0,
-    "& .MuiSlider-thumb": { width: 10, height: 10 },
-    "& .MuiSlider-rail": { height: 2 },
-    "& .MuiSlider-track": { height: 2 },
-  },
-};
+
 const typographyLabel = {
   fontSize: 10,
   textTransform: "none" as const,
@@ -986,16 +981,17 @@ function Show3DSlices() {
 
   const themedSelect = {
     ...controlPanel.select,
+    borderRadius: 0,
     bgcolor: tc.controlBg,
     color: tc.text,
     "& .MuiSelect-select": { py: 0.5 },
-    "& .MuiOutlinedInput-notchedOutline": { borderColor: tc.border },
+    "& .MuiOutlinedInput-notchedOutline": { borderRadius: 0, borderColor: tc.border },
     "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: tc.accent },
   };
 
   const themedMenuProps = {
     ...upwardMenuProps,
-    PaperProps: { sx: { bgcolor: tc.controlBg, color: tc.text, border: `1px solid ${tc.border}` } },
+    PaperProps: { sx: { borderRadius: 0, bgcolor: tc.controlBg, color: tc.text, border: `1px solid ${tc.border}` } },
   };
 
   // Model state
