@@ -46,10 +46,10 @@
    "rows": [
     {
      "id": "window",
-     "label": "Beam fits the model window",
+     "label": "Beam fits the virtual window",
      "value": "57 Å beam in a 35 Å window",
      "rule": "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
-     "note": "The beam wraps around the model window. Simulated SrTiO3 still reconstructed with it (130 nm: 68 Å beam in a 35 Å window, picture 0.80). A longer camera length widens the window but lowers the detector reach; a 2x virtual window in the reconstruction removes the wrap without changing the acquisition.",
+     "note": "The beam wraps around the virtual window. Simulated SrTiO3 still reconstructed with it (130 nm: 68 Å beam in a 35 Å window, picture 0.80). A longer camera length widens the window but lowers the detector reach; a 2x virtual window in the reconstruction removes the wrap without changing the acquisition.",
      "status": "caution"
     },
     {
@@ -180,10 +180,10 @@
    "rows": [
     {
      "id": "window",
-     "label": "Beam fits the model window",
+     "label": "Beam fits the virtual window",
      "value": "57 Å beam in a 35 Å window",
      "rule": "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
-     "note": "The beam wraps around the model window. Simulated SrTiO3 still reconstructed with it (130 nm: 68 Å beam in a 35 Å window, picture 0.80). A longer camera length widens the window but lowers the detector reach; a 2x virtual window in the reconstruction removes the wrap without changing the acquisition.",
+     "note": "The beam wraps around the virtual window. Simulated SrTiO3 still reconstructed with it (130 nm: 68 Å beam in a 35 Å window, picture 0.80). A longer camera length widens the window but lowers the detector reach; a 2x virtual window in the reconstruction removes the wrap without changing the acquisition.",
      "status": "caution"
     },
     {
@@ -314,7 +314,7 @@
    "rows": [
     {
      "id": "window",
-     "label": "Beam fits the model window",
+     "label": "Beam fits the virtual window",
      "value": "4 Å beam in a 35 Å window",
      "rule": "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
      "note": "",
@@ -448,7 +448,7 @@
    "rows": [
     {
      "id": "window",
-     "label": "Beam fits the model window",
+     "label": "Beam fits the virtual window",
      "value": "11 Å beam in a 79 Å window",
      "rule": "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
      "note": "",
@@ -582,7 +582,7 @@
    "rows": [
     {
      "id": "window",
-     "label": "Beam fits the model window",
+     "label": "Beam fits the virtual window",
      "value": "4 Å beam in a 56 Å window",
      "rule": "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
      "note": "",
@@ -716,10 +716,10 @@
    "rows": [
     {
      "id": "window",
-     "label": "Beam fits the model window",
+     "label": "Beam fits the virtual window",
      "value": "57 Å beam in a 36 Å window",
      "rule": "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
-     "note": "The beam wraps around the model window. Simulated SrTiO3 still reconstructed with it (130 nm: 68 Å beam in a 35 Å window, picture 0.80). A longer camera length widens the window but lowers the detector reach; a 2x virtual window in the reconstruction removes the wrap without changing the acquisition.",
+     "note": "The beam wraps around the virtual window. Simulated SrTiO3 still reconstructed with it (130 nm: 68 Å beam in a 35 Å window, picture 0.80). A longer camera length widens the window but lowers the detector reach; a 2x virtual window in the reconstruction removes the wrap without changing the acquisition.",
      "status": "caution"
     },
     {
@@ -850,10 +850,10 @@
    "rows": [
     {
      "id": "window",
-     "label": "Beam fits the model window",
+     "label": "Beam fits the virtual window",
      "value": "57 Å beam in a 22 Å window",
      "rule": "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
-     "note": "The beam wraps around the model window. Simulated SrTiO3 still reconstructed with it (130 nm: 68 Å beam in a 35 Å window, picture 0.80). A longer camera length widens the window but lowers the detector reach; a 2x virtual window in the reconstruction removes the wrap without changing the acquisition.",
+     "note": "The beam wraps around the virtual window. Simulated SrTiO3 still reconstructed with it (130 nm: 68 Å beam in a 35 Å window, picture 0.80). A longer camera length widens the window but lowers the detector reach; a 2x virtual window in the reconstruction removes the wrap without changing the acquisition.",
      "status": "caution"
     },
     {
@@ -984,7 +984,7 @@
    "rows": [
     {
      "id": "window",
-     "label": "Beam fits the model window",
+     "label": "Beam fits the virtual window",
      "value": "13 Å beam in a 28 Å window",
      "rule": "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
      "note": "",
@@ -1118,7 +1118,7 @@
    "rows": [
     {
      "id": "window",
-     "label": "Beam fits the model window",
+     "label": "Beam fits the virtual window",
      "value": "14 Å beam in a 198 Å window",
      "rule": "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
      "note": "",
@@ -1244,7 +1244,7 @@
    "rows": [
     {
      "id": "window",
-     "label": "Beam fits the model window",
+     "label": "Beam fits the virtual window",
      "value": "25 Å beam in a 35 Å window",
      "rule": "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
      "note": "",
@@ -1378,7 +1378,7 @@
    "rows": [
     {
      "id": "window",
-     "label": "Beam fits the model window",
+     "label": "Beam fits the virtual window",
      "value": "9 Å beam in a 52 Å window",
      "rule": "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
      "note": "",
