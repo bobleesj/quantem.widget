@@ -12,6 +12,8 @@
  */
 
 import * as React from "react";
+import { sliderStyles } from "../controlStyles";
+import { PlayPauseButton } from "../PlayPauseButton";
 import { createRender, useModel, useModelState } from "@anywidget/react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
@@ -199,6 +201,7 @@ const controlRow = {
   boxSizing: "border-box",
 } as const;
 const compactButton = {
+  borderRadius: 0,
   fontSize: 10,
   fontFamily: "inherit",
   textTransform: "none" as const,
@@ -214,14 +217,7 @@ const switchStyles = {
     "& .MuiSwitch-switchBase": { padding: "4px" },
   },
 };
-const sliderStyles = {
-  small: {
-    py: 0,
-    "& .MuiSlider-thumb": { width: 10, height: 10 },
-    "& .MuiSlider-rail": { height: 2 },
-    "& .MuiSlider-track": { height: 2 },
-  },
-};
+
 const PAGE_PLAY_FPS_OPTIONS = [1, 2, 3, 4] as const;
 const CONTRAST_PRESETS = [
   { value: "custom", label: "Custom", low: 0, high: 100 },
@@ -1750,6 +1746,7 @@ import { computeFftQualityMetrics, formatFftQualityLabel, summarizeFftQualityMet
 import {
   browserFilterCacheKey,
   normalizedAverageWindow,
+  temporalAverageFrameIndices as sharedAverageFrameIndices,
   requiresClientFrameTransform,
   shouldApplyClientDifference,
   supportsClientAverage,
@@ -2637,18 +2634,19 @@ function Show3D() {
   // Theme-aware select style (matching Show4DSTEM)
   const themedSelect = {
     ...controlPanel.select,
+    borderRadius: 0,
     fontFamily: "inherit",
     flexShrink: 0,  // never compress a dropdown below its width -> no truncated label
     bgcolor: themeColors.controlBg,
     color: themeColors.text,
     "& .MuiSelect-select": { py: 0.5, fontFamily: "inherit", textOverflow: "clip", overflow: "visible" },
-    "& .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.border },
+    "& .MuiOutlinedInput-notchedOutline": { borderRadius: 0, borderColor: themeColors.border },
     "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.accent },
   };
 
   const themedMenuProps = {
     ...upwardMenuProps,
-    PaperProps: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}`, fontFamily: UI_FONT, "& .MuiMenuItem-root": { fontFamily: "inherit" } } },
+    PaperProps: { sx: { borderRadius: 0, bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}`, fontFamily: UI_FONT, "& .MuiMenuItem-root": { fontFamily: "inherit" } } },
   };
   const themedFastMenuProps = {
     ...themedMenuProps,
@@ -6963,18 +6961,8 @@ function Show3D() {
     const win = normalizedAverageWindow(playRef.current.avgWindow);
     if (win <= 1) return rawFrameForIndex(idx, currentIdx, currentFrame);
     const n = Math.max(1, nSlices || 1);
-    const center = Math.max(0, Math.min(n - 1, Math.round(idx)));
-    const half = Math.floor(win / 2);
-    let start = center - half;
-    let end = start + win - 1;
-    if (start < 0) {
-      end = Math.min(n - 1, end - start);
-      start = 0;
-    }
-    if (end >= n) {
-      start = Math.max(0, start - (end - n + 1));
-      end = n - 1;
-    }
+    const indices = sharedAverageFrameIndices(idx, n, win);
+    const start = indices[0], end = indices[indices.length - 1];
     if (offline && offlineFloatStack && offlineFloatStack.byteLength >= n * frameSize * 4) {
       const out = new Float32Array(frameSize);
       let count = 0;
@@ -7622,23 +7610,8 @@ function Show3D() {
     return true;
   };
 
-  const temporalAverageFrameIndices = (idx: number, windowSize: number): number[] => {
-    const n = Math.max(1, nSlices || 1);
-    const win = Math.max(1, Math.min(n, normalizedAverageWindow(windowSize)));
-    const center = Math.max(0, Math.min(n - 1, Math.round(idx)));
-    const half = Math.floor(win / 2);
-    let start = center - half;
-    let end = start + win - 1;
-    if (start < 0) {
-      end = Math.min(n - 1, end - start);
-      start = 0;
-    }
-    if (end >= n) {
-      start = Math.max(0, start - (end - n + 1));
-      end = n - 1;
-    }
-    return Array.from({ length: end - start + 1 }, (_, offset) => start + offset);
-  };
+  const temporalAverageFrameIndices = (idx: number, windowSize: number): number[] =>
+    sharedAverageFrameIndices(idx, nSlices, windowSize);
 
   const renderGpuTemporalAverageSliceDirect = (
     idx: number,
@@ -16315,9 +16288,8 @@ function Show3D() {
                       <IconButton size="small" onClick={() => playFromCurrentFrame(-1)} sx={{ color: reverse && playing ? themeColors.accent : themeColors.textMuted, p: 0.25 }} aria-label="Play in reverse" title="Play reverse">
                         <FastRewindIcon sx={{ fontSize: 18 }} />
                       </IconButton>
-                      <IconButton size="small" onClick={() => { if (playing) pausePlayback(); else playFromCurrentFrame(); }} sx={{ color: themeColors.accent, p: 0.25 }} aria-label={playing ? "Pause playback" : "Play"} title={playing ? "Pause (Space)" : "Play (Space)"}>
-                        {playing ? <PauseIcon sx={{ fontSize: 18 }} /> : <PlayArrowIcon sx={{ fontSize: 18 }} />}
-                      </IconButton>
+                      <PlayPauseButton playing={playing} color={themeColors.accent}
+                        onToggle={() => { if (playing) pausePlayback(); else playFromCurrentFrame(); }} />
                       <IconButton size="small" onClick={() => playFromCurrentFrame(1)} sx={{ color: !reverse && playing ? themeColors.accent : themeColors.textMuted, p: 0.25 }} aria-label="Play forward" title="Play forward">
                         <FastForwardIcon sx={{ fontSize: 18 }} />
                       </IconButton>
