@@ -1,5 +1,8 @@
 # ShowCIF
 
+Start with the [interactive ShowCIF notebook](../tutorials/showcif.ipynb) or the
+[demo route](../tutorials/demo.md).
+
 Inspect a CIF or ASE structure with linked WebGPU atom, column, and potential
 views. Start with the crystal and its orientation:
 

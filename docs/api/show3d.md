@@ -15,6 +15,7 @@ export. See the [Show3D tutorial](../tutorials/show3d).
 
 | Control | Trait | Expected effect |
 |---|---|---|
+| Moving average | `avg_window` | Mean of 1–15 neighbouring frames; centered window shifts inward at the edges without wrapping; source data unchanged |
 | Slice slider | `slice_idx` | Canvas shows that depth slice |
 | Arrow keys | `slice_idx` | Step one slice per press |
 | Play / pause | `playing` | Auto-advances slices at `fps` |

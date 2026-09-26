@@ -7,6 +7,8 @@ parts:
   - caption: Getting started
     chapters:
       - file: install
+      - file: tutorials/demo
+        title: Interactive demo route
       - file: cli
       - file: agent-prompts
         title: Agent-assisted development
@@ -32,6 +34,8 @@ parts:
       - file: tutorials/showdiffraction
       - file: tutorials/choose_lattice
         title: Choose Lattice
+      - file: tutorials/showcif
+        title: ShowCIF
       - file: tutorials/planptycho
         title: PlanPtycho
       - file: tutorials/io_gpu
@@ -89,8 +93,9 @@ parts:
       - file: developer/widget-creation
         title: Creating a widget
       - file: developer/ui-guide
-      - file: developer/experimental-ans
         title: UI Guide
+      - file: developer/experimental-ans
+        title: Experimental ANS sources
       - file: developer/save-state-and-notebook-size
         title: Save state & notebook size
   - chapters:

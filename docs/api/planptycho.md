@@ -75,7 +75,7 @@ and the browser arithmetic are pinned to the same `js/planptycho/goldens.json`, 
 
 ```{eval-rst}
 .. autoclass:: quantem.widget.planptycho.PlanPtycho
-   :members: report, geometry, apply_preset, apply_thickness, window_A, object_pixel_A
+   :members: report, geometry, simulation_plan, apply_preset, apply_thickness, window_A, wave_pixels, object_pixel_A
 
 .. autofunction:: quantem.widget.planptycho.plan_geometry
 
