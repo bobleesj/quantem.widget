@@ -26,7 +26,7 @@ import { extractFloat32 } from "../format";
 import { COLORMAPS, applyColormap } from "../colormaps";
 import {
   beamDiameterA, checkRows, detectorSamplingMrad, planGeometry, probeIntensity, recommendedSettings,
-  type DetectorPresets, type Grade, type PlanSettings,
+  simulationGeometry, type DetectorPresets, type Grade, type PlanSettings,
 } from "./geometry";
 
 // ============================================================================
@@ -258,17 +258,21 @@ function PlanPtycho() {
   const [focusNm] = useModelState<number>("focus_depth_nm");
   const [tilt] = useModelState<number[]>("tilt_mrad");
   const [cameraLength] = useModelState<number>("camera_length_mm");
+  const [waveFactor] = useModelState<number>("wave_window_factor");
   const [detectorPx] = useModelState<number>("detector_px");
   const [samplingMrad] = useModelState<number>("detector_mrad_per_px");
   const [stepA] = useModelState<number>("scan_step_A");
   const [scanPx] = useModelState<number>("scan_size_px");
+  const [simRepeats, setSimRepeats] = useModelState<number[]>("simulation_repeats");
+  const [simPixels, setSimPixels] = useModelState<number>("simulation_pixels_per_cell");
+  const [simGuard, setSimGuard] = useModelState<number>("simulation_guard_A");
   const [viewDepthNm] = useModelState<number>("view_depth_nm");
 
   const committed = React.useMemo(() => ({
     thickness_nm: thicknessNm, voltage_kV: voltageKV, semiangle_mrad: semiangle, focus_depth_nm: focusNm,
-    tilt_row: tilt?.[0] ?? 0, tilt_col: tilt?.[1] ?? 0, camera_length_mm: cameraLength, detector_px: detectorPx,
+    tilt_row: tilt?.[0] ?? 0, tilt_col: tilt?.[1] ?? 0, camera_length_mm: cameraLength, detector_px: detectorPx, wave_window_factor: waveFactor ?? 1,
     detector_mrad_per_px: samplingMrad, scan_step_A: stepA, scan_size_px: scanPx, view_depth_nm: viewDepthNm,
-  }), [thicknessNm, voltageKV, semiangle, focusNm, tilt, cameraLength, detectorPx, samplingMrad, stepA, scanPx, viewDepthNm]);
+  }), [thicknessNm, voltageKV, semiangle, focusNm, tilt, cameraLength, detectorPx, waveFactor, samplingMrad, stepA, scanPx, viewDepthNm]);
   type Name = keyof typeof committed;
   const [live, setLive] = React.useState(committed);
   React.useEffect(() => setLive(committed), [committed]);                    // Python-side changes (observers, scripts)
@@ -293,10 +297,11 @@ function PlanPtycho() {
 
   const settings: PlanSettings = {
     voltage_kV: live.voltage_kV, semiangle_mrad: live.semiangle_mrad, focus_depth_nm: live.focus_depth_nm, thickness_nm: live.thickness_nm,
-    detector_px: live.detector_px, detector_mrad_per_px: live.detector_mrad_per_px,
+    detector_px: live.detector_px, wave_window_factor: live.wave_window_factor, detector_mrad_per_px: live.detector_mrad_per_px,
     scan_step_A: live.scan_step_A, scan_size_px: live.scan_size_px, tilt_mrad: [live.tilt_row, live.tilt_col], holz_repeat_A: holzRepeat || null,
   };
   const g = planGeometry(settings);
+  const sim = simulationGeometry(settings, cellSize || [1, 1, 1], simRepeats || [24, 24], simPixels || 96, simGuard ?? 5);
   const rows = checkRows(g, live.detector_px, live.scan_step_A, columnPhase || 0);
   const thicknessA = live.thickness_nm * 10;
   const viewDepthA = Math.min(Math.max(live.view_depth_nm, 0), live.thickness_nm) * 10;
@@ -426,8 +431,8 @@ function PlanPtycho() {
   }, [sideVersion, fov, scanHalf, probeCol, g.window_A, g.wavelength_A, thicknessA, live.semiangle_mrad, focusA, viewDepthA, zTop, zBottom, sideView, dpr]);
 
   // ---- Probe: the model window at the view depth, the crystal at that depth under it
-  const probeImage = React.useMemo(() => probeIntensity(g.window_A, live.semiangle_mrad, g.wavelength_A, viewDepthA - focusA, live.detector_px),
-    [g.window_A, live.semiangle_mrad, g.wavelength_A, viewDepthA, focusA, live.detector_px]);
+  const probeImage = React.useMemo(() => probeIntensity(g.window_A, live.semiangle_mrad, g.wavelength_A, viewDepthA - focusA, live.detector_px * live.wave_window_factor),
+    [g.window_A, live.semiangle_mrad, g.wavelength_A, viewDepthA, focusA, live.detector_px, live.wave_window_factor]);
   React.useEffect(() => {
     const canvas = probeRef.current, ctx = sizeCanvas(canvas, dpr); if (!ctx || !canvas) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -589,12 +594,12 @@ function PlanPtycho() {
           </Box>}>
           <canvas ref={probeRef} style={canvasStyle("default")} onDoubleClick={() => setProbeView(HOME)} />
           {barCanvas(probeBarRef)}
-          {overlay(`model window ${g.window_A.toFixed(1)} Å\n${((viewDepthA - focusA) / 10).toFixed(1)} nm from focus`)}
+          {overlay(`${live.detector_px * live.wave_window_factor}² virtual · ${g.window_A.toFixed(1)} Å\n${((viewDepthA - focusA) / 10).toFixed(1)} nm from focus`)}
           {beamAtView > g.window_A && (
             <Box sx={{ ...monoOverlay, top: "auto", bottom: 4, right: 4, color: "#ff8a80" }}>{`beam ${beamAtView.toFixed(0)} Å > window: wraps`}</Box>
           )}
         </PanelFrame>
-        <PanelFrame title="Detector" colors={colors}>
+        <PanelFrame title="Detector (schematic)" colors={colors}>
           <canvas ref={detRef} style={canvasStyle("default")} onDoubleClick={() => setDetView(HOME)} />
           {barCanvas(detBarRef)}
           {overlay(`edge ${g.theta_max_mrad.toFixed(0)} mrad\n${live.detector_px} px`)}
@@ -669,6 +674,34 @@ function PlanPtycho() {
         </Box>
       </Box>
 
+      <Box sx={{ mt: 1.5, p: 1, border: `1px solid ${colors.border}`, borderRadius: 1 }} data-section="simulation-cell">
+        {sectionLabel("Simulation Cell · Geometry Only")}
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
+          <Box>
+            <NumberRow colors={colors} label="Cells row" value={simRepeats?.[0] || 24} digits={0} integer unit="cells" tip="Periodic simulation supercell; cover the entire scan and propagated probe"
+              onCommit={v => v >= 1 && setSimRepeats([Math.round(v), simRepeats?.[1] || 24])} />
+            <NumberRow colors={colors} label="Cells col" value={simRepeats?.[1] || 24} digits={0} integer unit="cells" tip="Lateral unit cells along columns"
+              onCommit={v => v >= 1 && setSimRepeats([simRepeats?.[0] || 24, Math.round(v)])} />
+          </Box>
+          <Box>
+            <NumberRow colors={colors} label="Grid / cell" value={simPixels || 96} digits={0} integer unit="px" tip="Potential pixels per unit cell; independent of detector pixel count"
+              onCommit={v => v >= 1 && setSimPixels(Math.round(v))} />
+            <NumberRow colors={colors} label="Guard" value={simGuard ?? 5} digits={1} unit="Å / side" tip="Extra geometric clearance; not proof that wave tails are negligible"
+              onCommit={v => v >= 0 && setSimGuard(v)} />
+          </Box>
+          <Typography sx={{ ...typography.value, lineHeight: 1.8 }}>
+            {sim.extent.map(v => v.toFixed(2)).join(" × ")} Å · {sim.gpts.join(" × ")} grid<br />
+            {sim.sampling.map(v => v.toFixed(5)).join(" × ")} Å/px · {sim.zRepeats} cells to cover depth<br />
+            Scan centers: {sim.span.toFixed(3)} Å · margins: {sim.margins.map(v => v.toFixed(2)).join(" / ")} Å<br />
+            {sim.fits ? "Geometric clearance passes" : "Enlarge cell: geometric clearance fails"} · boundary convergence untested
+          </Typography>
+        </Box>
+        <Typography sx={{ ...typography.labelSmall, color: colors.textMuted, mt: 0.5 }}>
+          CIF / ASE input is supplied in Python. Planning controls do not run multislice or update stored simulated diffraction.
+          Confirm wave tails and compare a larger cell before accepting the simulation.
+        </Typography>
+      </Box>
+
       <Box component="table" sx={{ mt: 1.5, borderCollapse: "collapse", width: "100%", maxWidth: 1100,
         "& td": { fontSize: 11, py: 0.4, pr: 1.5, verticalAlign: "top", borderTop: `1px solid ${colors.border}`, color: colors.text } }}>
         <tbody>
@@ -692,6 +725,16 @@ function PlanPtycho() {
         Recommended settings put the focus at mid-thickness and pass every check; they come from the checks, and reconstructions tested the checks only on 90-130 nm SrTiO3 (focus 17 nm). Values can be typed: click a number, enter, press Enter.
         Wheel zooms a panel, double-click resets it.
       </Typography>
+      <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1, mt: 1.5, mb: 0.5 }} data-section="virtual-window">
+        <Typography sx={typography.label}>Virtual Window</Typography>
+        <Typography sx={{ ...typography.labelSmall, color: colors.textMuted }}>Optional</Typography>
+        {[1, 2].map(factor => <Button key={factor} size="small" sx={{ textTransform: "none" }} variant={live.wave_window_factor === factor ? "contained" : "outlined"}
+          aria-pressed={live.wave_window_factor === factor} onClick={() => commit("wave_window_factor")(factor)}>
+          {factor === 1 ? "Native · Camera" : "Expanded · 2×"} · {live.detector_px * factor}²
+        </Button>)}
+        <Typography sx={typography.value}>{g.window_A.toFixed(2)} Å wide · {g.pixel_A.toFixed(5)} Å/px · measured {live.detector_px} × {live.detector_px} unchanged</Typography>
+      </Box>
+      <Typography sx={{ ...typography.labelSmall, mb: 1 }}>Camera sampling sets the native size: λ / Δθ = {(g.pixel_A * live.detector_px).toFixed(2)} Å. Optional expansion keeps pixel size and the measured detector unchanged. This adjusts the planning preview only.</Typography>
     </Box>
   );
 }

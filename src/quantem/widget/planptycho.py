@@ -65,28 +65,65 @@ def detector_sampling_mrad(detector: str, camera_length_mm: float) -> float:
     return arina * DETECTORS[detector]["pixel_pitch_um"] / DETECTORS["Arina"]["pixel_pitch_um"]
 
 
-def plan_geometry(*, voltage_kV: float, semiangle_mrad: float, focus_depth_nm: float, thickness_nm: float,
-                  detector_px: int, detector_mrad_per_px: float, scan_step_A: float,
-                  scan_size_px: int, tilt_mrad: Sequence[float] = (0.0, 0.0), holz_repeat_A: float | None = None) -> dict:
+def plan_geometry(
+    *,
+    voltage_kV: float,
+    semiangle_mrad: float,
+    focus_depth_nm: float,
+    thickness_nm: float,
+    detector_px: int,
+    detector_mrad_per_px: float,
+    scan_step_A: float,
+    scan_size_px: int,
+    tilt_mrad: Sequence[float] = (0.0, 0.0),
+    holz_repeat_A: float | None = None,
+    wave_window_factor: int = 1,
+) -> dict:
     """The numbers every check is built from (lengths in A, angles in mrad).
 
-    - model window ``W = lambda / dtheta``, object pixel ``W / N``, detector reach ``theta_max = N dtheta / 2`` (edge)
+    - model window ``W = factor * lambda / dtheta``, object pixel ``lambda / (N dtheta)``, detector reach ``theta_max = N dtheta / 2`` (edge)
     - beam diameter at depth z: ``D(z) = 2 alpha |z - f| + 1.22 lambda / alpha`` (f = focus depth below the entrance)
     - depth of field ``2 lambda / alpha^2``; probe overlap ``1 - step / D(0)``
     - column lean across the thickness ``t tan|theta|``; first HOLZ ring ``sqrt(2 lambda / H)`` (H = lattice period along
       the beam)
     """
-    lam = wavelength_A(voltage_kV); alpha = semiangle_mrad * 1e-3; dtheta = detector_mrad_per_px * 1e-3
+    if isinstance(wave_window_factor, bool) or wave_window_factor not in (1, 2):
+        raise ValueError(
+            "wave_window_factor must be 1 (native) or 2 (double width); measured detector sampling stays fixed."
+        )
+    lam = wavelength_A(voltage_kV)
+    alpha = semiangle_mrad * 1e-3
+    dtheta = detector_mrad_per_px * 1e-3
     thickness, focus = thickness_nm * 10.0, focus_depth_nm * 10.0
     airy = 1.22 * lam / alpha
-    entrance, exit_ = 2 * alpha * abs(focus) + airy, 2 * alpha * abs(thickness - focus) + airy
-    window = lam / dtheta; tilt = math.hypot(*tilt_mrad)
-    return {"wavelength_A": lam, "window_A": window, "pixel_A": window / detector_px, "theta_max_mrad": detector_px * detector_mrad_per_px / 2.0,
-            "airy_A": airy, "entrance_A": entrance, "exit_A": exit_, "widest_A": max(entrance, exit_),
-            "depth_of_field_A": 2.0 * lam / alpha**2, "scan_A": scan_size_px * scan_step_A, "overlap": 1.0 - scan_step_A / entrance,
-            "reach": detector_px * detector_mrad_per_px / 2.0 / semiangle_mrad, "tilt_mrad": tilt,
-            "lean_A": thickness * math.tan(tilt * 1e-3), "thickness_A": thickness, "focus_A": focus,
-            "holz_mrad": 1e3 * math.sqrt(2.0 * lam / holz_repeat_A) if holz_repeat_A else None}
+    entrance, exit_ = (
+        2 * alpha * abs(focus) + airy,
+        2 * alpha * abs(thickness - focus) + airy,
+    )
+    native_window = lam / dtheta
+    window = native_window * wave_window_factor
+    tilt = math.hypot(*tilt_mrad)
+    return {
+        "wavelength_A": lam,
+        "window_A": window,
+        "pixel_A": native_window / detector_px,
+        "theta_max_mrad": detector_px * detector_mrad_per_px / 2.0,
+        "airy_A": airy,
+        "entrance_A": entrance,
+        "exit_A": exit_,
+        "widest_A": max(entrance, exit_),
+        "depth_of_field_A": 2.0 * lam / alpha**2,
+        "scan_A": scan_size_px * scan_step_A,
+        "overlap": 1.0 - scan_step_A / entrance,
+        "reach": detector_px * detector_mrad_per_px / 2.0 / semiangle_mrad,
+        "tilt_mrad": tilt,
+        "lean_A": thickness * math.tan(tilt * 1e-3),
+        "thickness_A": thickness,
+        "focus_A": focus,
+        "holz_mrad": (
+            1e3 * math.sqrt(2.0 * lam / holz_repeat_A) if holz_repeat_A else None
+        ),
+    }
 
 
 def check_statuses(geometry: dict) -> dict:
@@ -122,10 +159,12 @@ def check_rows(geometry: dict, *, detector_px: int, scan_step_A: float, column_p
     """Every check as ``{id, label, status, value, rule, note}``, the text the widget shows (``checkRows`` in
     geometry.ts renders the same strings; both are pinned to the goldens). ``note`` is empty when a check passes."""
     g = geometry; status = check_statuses(g); radius = g["widest_A"] / 2.0; f = _fixed
+    wave_pixels = round(g['window_A'] / g['pixel_A'])
+    wide = wave_pixels != detector_px
     rows = [
-        {"id": "window", "label": "Beam fits the model window", "value": f"{f(g['widest_A'], 0)} Å beam in a {f(g['window_A'], 0)} Å window",
-         "rule": "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
-         "note": "The beam wraps around the model window. Simulated SrTiO3 still reconstructed with it (130 nm: 68 Å beam in a 35 Å "
+        {"id": "window", "label": "Beam fits the virtual window", "value": f"{f(g['widest_A'], 0)} Å beam in a {f(g['window_A'], 0)} Å window",
+         "rule": "widest beam (entrance or exit) ≤ window factor × wavelength / detector pixel angle" if wide else "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
+         "note": "The beam wraps around the virtual window. Simulated SrTiO3 still reconstructed with it (130 nm: 68 Å beam in a 35 Å "
                  "window, picture 0.80). A longer camera length widens the window but lowers the detector reach; a 2x virtual window "
                  "in the reconstruction removes the wrap without changing the acquisition."},
         {"id": "margin", "label": "Scan margin for the spread beam", "value": f"{f(g['scan_A'], 0)} Å scan, beam radius {f(radius, 0)} Å",
@@ -152,7 +191,7 @@ def check_rows(geometry: dict, *, detector_px: int, scan_step_A: float, column_p
         if row["status"] == "pass":
             row["note"] = ""
     rows += [
-        {"id": "pixel", "label": "Object pixel", "status": "info", "value": f"{f(g['pixel_A'], 3)} Å ({detector_px} px over {f(g['window_A'], 1)} Å)", "rule": "window / detector pixels", "note": ""},
+        {"id": "pixel", "label": "Object pixel", "status": "info", "value": f"{f(g['pixel_A'], 3)} Å ({wave_pixels} px over {f(g['window_A'], 1)} Å)", "rule": "model window / wave pixels; measured detector unchanged" if wide else "window / detector pixels", "note": ""},
         {"id": "depth", "label": "Depth of field", "status": "info", "value": f"{f(g['depth_of_field_A'] / 10, 1)} nm",
          "rule": "2 × wavelength / semiangle²: the depth the probe resolves", "note": ""},
         {"id": "beam", "label": "Beam diameter", "status": "info", "value": f"entrance {f(g['entrance_A'], 1)} Å, focus {f(g['airy_A'], 1)} Å, exit {f(g['exit_A'], 1)} Å",
@@ -345,6 +384,10 @@ class PlanPtycho(anywidget.AnyWidget):
         the Arina: same total angle, so the sampling per pixel doubles unless ``detector_mrad_per_px`` is given).
     detector_mrad_per_px : float, optional
         Angular sampling per pixel; overrides the calibration.
+    wave_window_factor : {1, 2}, default 1
+        Wave support relative to the measured detector grid. Factor 2 doubles
+        the physical width and model pixels without changing object sampling
+        or measured detector angles. Requires an intensity-integrating backend.
     scan_step_A : float, default 0.5
         Probe step.
     scan_size_px : int, default 128
@@ -373,6 +416,7 @@ class PlanPtycho(anywidget.AnyWidget):
     detector = traitlets.Unicode("Arina").tag(sync=True)
     camera_length_mm = traitlets.Float(91.0).tag(sync=True)
     detector_px = traitlets.Int(192).tag(sync=True)
+    wave_window_factor = traitlets.Int(1).tag(sync=True)
     detector_mrad_per_px = traitlets.Float(0.554).tag(sync=True)
     scan_step_A = traitlets.Float(0.5).tag(sync=True)
     scan_size_px = traitlets.Int(128).tag(sync=True)
@@ -384,6 +428,10 @@ class PlanPtycho(anywidget.AnyWidget):
     holz_repeat_A = traitlets.Float(0.0).tag(sync=True)
     bragg_inv_A = traitlets.List(traitlets.List(traitlets.Float()), default_value=[]).tag(sync=True)
     column_phase_rad_per_A = traitlets.Float(0.0).tag(sync=True)
+    simulation_repeats = traitlets.List(traitlets.Int(), default_value=[24, 24]).tag(sync=True)
+    simulation_pixels_per_cell = traitlets.Int(96).tag(sync=True)
+    simulation_guard_A = traitlets.Float(5.0).tag(sync=True)
+
     # tables the browser offers as menus (Python owns them)
     detector_presets = traitlets.Dict({}).tag(sync=True)
     microscope_presets = traitlets.Dict({}).tag(sync=True)
@@ -393,9 +441,12 @@ class PlanPtycho(anywidget.AnyWidget):
                  voltage_kV: float | None = None, semiangle_mrad: float | None = None, detector: str | None = None,
                  camera_length_mm: float | None = None, c10_nm: float | None = None, focus_depth_nm: float | None = None,
                  tilt_mrad: Sequence[float] = (0.0, 0.0), detector_px: int | None = None, detector_mrad_per_px: float | None = None,
-                 scan_step_A: float = 0.5, scan_size_px: int = 128, title: str = "") -> None:
+                 scan_step_A: float = 0.5, scan_size_px: int = 128, wave_window_factor: int = 1, title: str = "") -> None:
         super().__init__()
         self._ready = False
+        if isinstance(wave_window_factor, bool) or wave_window_factor not in (1, 2):
+            raise ValueError("wave_window_factor must be 1 or 2; keep the measured detector unchanged.")
+        self.wave_window_factor = wave_window_factor
         preset = preset or DEFAULT_PRESET
         if preset not in MICROSCOPE_PRESETS:
             raise ValueError(f"Unknown preset {preset!r}; choose one of {list(MICROSCOPE_PRESETS)}.")
@@ -446,6 +497,39 @@ class PlanPtycho(anywidget.AnyWidget):
         except PackageNotFoundError:
             pass
         self._ready = True
+
+    @traitlets.validate("wave_window_factor")
+    def _validate_wave_window(self, proposal):
+        if isinstance(proposal["value"], bool) or proposal["value"] not in (1, 2):
+            raise traitlets.TraitError("wave_window_factor must be 1 or 2.")
+        return proposal["value"]
+
+    @traitlets.validate("simulation_repeats")
+    def _validate_simulation_repeats(self, proposal):
+        value = proposal["value"]
+        if len(value) != 2 or any(isinstance(v, bool) or v < 1 for v in value):
+            raise traitlets.TraitError(
+                "simulation_repeats must contain two positive integers in (row, col) order."
+            )
+        return value
+
+    @traitlets.validate("simulation_pixels_per_cell")
+    def _validate_simulation_pixels(self, proposal):
+        value = proposal["value"]
+        if isinstance(value, bool) or value < 1:
+            raise traitlets.TraitError(
+                "simulation_pixels_per_cell must be a positive integer; try 96."
+            )
+        return value
+
+    @traitlets.validate("simulation_guard_A")
+    def _validate_simulation_guard(self, proposal):
+        value = proposal["value"]
+        if not np.isfinite(value) or value < 0:
+            raise traitlets.TraitError(
+                "simulation_guard_A must be finite and nonnegative; enlarge the cell to add margin."
+            )
+        return value
 
     # --- validation
     @staticmethod
@@ -562,7 +646,8 @@ class PlanPtycho(anywidget.AnyWidget):
         return plan_geometry(voltage_kV=self.voltage_kV, semiangle_mrad=self.semiangle_mrad, focus_depth_nm=self.focus_depth_nm,
                              thickness_nm=self.thickness_nm, detector_px=self.detector_px,
                              detector_mrad_per_px=self.detector_mrad_per_px, scan_step_A=self.scan_step_A, scan_size_px=self.scan_size_px,
-                             tilt_mrad=self.tilt_mrad, holz_repeat_A=self.holz_repeat_A or None)
+                             tilt_mrad=self.tilt_mrad, holz_repeat_A=self.holz_repeat_A or None,
+                             wave_window_factor=self.wave_window_factor)
 
     def report(self):
         """The checks for the current settings as a DataFrame (one row per check: status, value, rule, note)."""
@@ -570,12 +655,113 @@ class PlanPtycho(anywidget.AnyWidget):
         rows = check_rows(self.geometry(), detector_px=self.detector_px, scan_step_A=self.scan_step_A, column_phase_rad_per_A=self.column_phase_rad_per_A)
         return pd.DataFrame(rows).set_index("id")[["label", "status", "value", "rule", "note"]]
 
+    def simulation_plan(
+        self,
+        *,
+        repeats: Sequence[int] | None = None,
+        pixels_per_cell: int | None = None,
+        guard_A: float | None = None,
+    ) -> dict[str, object]:
+        """Size a periodic simulation cell around every planned probe position.
+
+        Parameters
+        ----------
+        repeats : (int, int), optional
+            Lateral unit-cell counts, in (row, col) order.
+        pixels_per_cell : int, optional
+            Potential pixels along each lateral unit-cell direction. This is
+            distinct from the measured detector pixels.
+        guard_A : float, optional
+            Extra margin outside the geometric probe envelope on each side.
+
+        Returns
+        -------
+        dict
+            Extents, actual sampling, scan-center span and geometric margins.
+            A passing margin is only a planning check: compare larger-cell
+            diffraction and propagated boundary power before accepting a run.
+            ``boundary_convergence_verified`` is always False.
+
+        Notes
+        -----
+        Omitted arguments use the live ``simulation_repeats``,
+        ``simulation_pixels_per_cell`` and ``simulation_guard_A`` traits,
+        initially (24, 24), 96 and 5 Å. Explicit method arguments do not change
+        those settings. This method plans geometry; it does not run abTEM.
+
+        Examples
+        --------
+        >>> planner = PlanPtycho("crystal.cif", thickness_nm=60)
+        >>> plan = planner.simulation_plan(repeats=(48, 48), guard_A=5)
+        >>> plan["boundary_convergence_verified"]
+        False
+        """
+        repeats = self.simulation_repeats if repeats is None else repeats
+        pixels = (
+            self.simulation_pixels_per_cell
+            if pixels_per_cell is None
+            else pixels_per_cell
+        )
+        guard = self.simulation_guard_A if guard_A is None else guard_A
+        if len(repeats) != 2 or any(
+            isinstance(x, bool) or not np.isfinite(x) or x < 1 or int(x) != x
+            for x in repeats
+        ):
+            raise ValueError(
+                "repeats must contain two positive integers in (row, col) order."
+            )
+        if (
+            isinstance(pixels, bool)
+            or not np.isfinite(pixels)
+            or pixels < 1
+            or int(pixels) != pixels
+        ):
+            raise ValueError(
+                "pixels_per_cell must be a positive integer; use 96 as a starting point."
+            )
+        if not np.isfinite(guard) or guard < 0:
+            raise ValueError(
+                "guard_A must be finite and nonnegative; enlarge the cell to add margin."
+            )
+        geometry = self.geometry()
+        span = (self.scan_size_px - 1) * self.scan_step_A
+        extent = [self.cell_size_A[i] * repeats[i] for i in range(2)]
+        lean = [
+            self.thickness_nm * 10 * abs(math.tan(t * 1e-3)) for t in self.tilt_mrad
+        ]
+        margins = [
+            (extent[i] - span - geometry["widest_A"]) / 2 - lean[i] for i in range(2)
+        ]
+        return dict(
+            repeats=list(repeats),
+            gpts=[int(n * pixels) for n in repeats],
+            potential_sampling_A=[x / pixels for x in self.cell_size_A[:2]],
+            extent_A=extent,
+            scan_center_span_A=span,
+            widest_probe_A=geometry["widest_A"],
+            geometric_margin_A=margins,
+            requested_guard_A=float(guard),
+            geometric_fit=all(x >= guard for x in margins),
+            z_repeats_to_cover=math.ceil(self.thickness_nm * 10 / self.cell_size_A[2]),
+            requested_depth_A=self.thickness_nm * 10,
+            boundary_convergence_verified=False,
+        )
+
     @property
     def window_A(self) -> float:
-        """Real-space window the reconstruction model holds: wavelength / detector pixel angle."""
-        return wavelength_A(self.voltage_kV) / (self.detector_mrad_per_px * 1e-3)
+        """Real-space wave window: factor times wavelength / measured detector angle."""
+        return (
+            self.wave_window_factor
+            * wavelength_A(self.voltage_kV)
+            / (self.detector_mrad_per_px * 1e-3)
+        )
 
     @property
     def object_pixel_A(self) -> float:
-        """Object pixel size: model window / detector pixels."""
-        return self.window_A / self.detector_px
+        """Object pixel size: model window / wave pixels, independent of window factor."""
+        return self.window_A / self.wave_pixels
+
+    @property
+    def wave_pixels(self) -> int:
+        """Model wave pixels per side, distinct from measured detector pixels."""
+        return self.detector_px * self.wave_window_factor

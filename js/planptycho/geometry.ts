@@ -16,6 +16,7 @@ export interface PlanSettings {
   focus_depth_nm: number;
   thickness_nm: number;
   detector_px: number;
+  wave_window_factor?: number;
   detector_mrad_per_px: number;
   scan_step_A: number;
   scan_size_px: number;
@@ -73,12 +74,14 @@ export function planGeometry(s: PlanSettings): PlanGeometry {
   const airy = (1.22 * lam) / alpha;
   const entrance = 2 * alpha * Math.abs(focus) + airy;
   const exit = 2 * alpha * Math.abs(thickness - focus) + airy;
-  const window = lam / dtheta;
+  const factor = s.wave_window_factor ?? 1;
+  if (factor !== 1 && factor !== 2) throw new Error("Wave window factor must be 1 or 2.");
+  const window = factor * lam / dtheta;
   const tilt = Math.hypot(...(s.tilt_mrad ?? [0, 0]));
   return {
     wavelength_A: lam,
     window_A: window,
-    pixel_A: window / s.detector_px,
+    pixel_A: window / factor / s.detector_px,
     theta_max_mrad: (s.detector_px * s.detector_mrad_per_px) / 2,
     airy_A: airy,
     entrance_A: entrance,
@@ -120,11 +123,13 @@ export function splitText(g: PlanGeometry): string {
 export function checkRows(g: PlanGeometry, detector_px: number, scan_step_A: number, column_phase_rad_per_A = 0): CheckRow[] {
   const status = checkStatuses(g);
   const radius = g.widest_A / 2;
+  const wavePixels = Math.round(g.window_A / g.pixel_A);
+  const wide = wavePixels !== detector_px;
   const f = (value: number, digits: number) => value.toFixed(digits);
   const graded: Omit<CheckRow, "status">[] = [
-    { id: "window", label: "Beam fits the model window", value: `${f(g.widest_A, 0)} Å beam in a ${f(g.window_A, 0)} Å window`,
-      rule: "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
-      note: "The beam wraps around the model window. Simulated SrTiO3 still reconstructed with it (130 nm: 68 Å beam in a 35 Å "
+    { id: "window", label: "Beam fits the virtual window", value: `${f(g.widest_A, 0)} Å beam in a ${f(g.window_A, 0)} Å window`,
+      rule: wide ? "widest beam (entrance or exit) ≤ window factor × wavelength / detector pixel angle" : "widest beam (entrance or exit) ≤ wavelength / detector pixel angle",
+      note: "The beam wraps around the virtual window. Simulated SrTiO3 still reconstructed with it (130 nm: 68 Å beam in a 35 Å "
         + "window, picture 0.80). A longer camera length widens the window but lowers the detector reach; a 2x virtual window "
         + "in the reconstruction removes the wrap without changing the acquisition." },
     { id: "margin", label: "Scan margin for the spread beam", value: `${f(g.scan_A, 0)} Å scan, beam radius ${f(radius, 0)} Å`,
@@ -150,7 +155,7 @@ export function checkRows(g: PlanGeometry, detector_px: number, scan_step_A: num
     return { ...row, status: grade, note: grade === "pass" ? "" : row.note };
   });
   rows.push(
-    { id: "pixel", label: "Object pixel", status: "info", value: `${f(g.pixel_A, 3)} Å (${detector_px} px over ${f(g.window_A, 1)} Å)`, rule: "window / detector pixels", note: "" },
+    { id: "pixel", label: "Object pixel", status: "info", value: `${f(g.pixel_A, 3)} Å (${wavePixels} px over ${f(g.window_A, 1)} Å)`, rule: wide ? "model window / wave pixels; measured detector unchanged" : "window / detector pixels", note: "" },
     { id: "depth", label: "Depth of field", status: "info", value: `${f(g.depth_of_field_A / 10, 1)} nm`,
       rule: "2 × wavelength / semiangle²: the depth the probe resolves", note: "" },
     { id: "beam", label: "Beam diameter", status: "info", value: `entrance ${f(g.entrance_A, 1)} Å, focus ${f(g.airy_A, 1)} Å, exit ${f(g.exit_A, 1)} Å`,
@@ -230,4 +235,22 @@ export function probeIntensity(window_A: number, semiangle_mrad: number, wavelen
     }
   }
   return { intensity, n };
+}
+
+/** Geometric simulation-cell planning only; not a multislice boundary-convergence test. */
+export function simulationGeometry(settings: PlanSettings, cell: number[], repeats: number[], pixels: number, guard: number) {
+  if (cell.length !== 3 || cell.some(a => !Number.isFinite(a) || a <= 0))
+    throw Error("Use three positive oriented cell lengths in Å.");
+  if (repeats.length !== 2 || repeats.some(n => !Number.isSafeInteger(n) || n < 1))
+    throw Error("Use two positive whole-number repeats in (row, col) order.");
+  if (!Number.isSafeInteger(pixels) || pixels < 1)
+    throw Error("Pixels per cell must be a positive integer; try 96.");
+  if (!Number.isFinite(guard) || guard < 0)
+    throw Error("Guard must be finite and nonnegative, in Å.");
+  const g = planGeometry(settings);
+  const span = (settings.scan_size_px - 1) * settings.scan_step_A;
+  const extent = cell.slice(0, 2).map((a, i) => a * repeats[i]);
+  const margins = extent.map((a, i) => (a - span - g.widest_A) / 2 - settings.thickness_nm * 10 * Math.abs(Math.tan((settings.tilt_mrad?.[i] || 0) * 1e-3)));
+  return { extent, span, margins, gpts: repeats.map(n => n * pixels), sampling: cell.slice(0, 2).map(a => a / pixels),
+    zRepeats: Math.ceil(settings.thickness_nm * 10 / cell[2]), fits: margins.every(m => m >= guard) };
 }

@@ -55,7 +55,7 @@ only 26 mrad: the widget shows that trade-off rather than choosing for you.
 
 | Check | Formula | Grade |
 |---|---|---|
-| Beam fits the model window | widest beam `2 alpha abs(z - f) + 1.22 lambda / alpha` vs `lambda / dtheta` | caution when wider |
+| Beam fits the virtual window | widest beam `2 alpha abs(z - f) + 1.22 lambda / alpha` vs `lambda / dtheta` | caution when wider |
 | Scan margin | scan side vs 4 x widest beam radius | caution when smaller |
 | Probe overlap | `1 - step / entrance beam diameter` | pass >= 60 %, fail < 30 % |
 | Detector reach | detector edge / semiangle | pass >= 1.5, fail < 1 |
@@ -103,3 +103,46 @@ and the browser arithmetic are pinned to the same `js/planptycho/goldens.json`, 
 | Scan: Step, Size | `scan_step_A`, `scan_size_px` | probe step (magnification) and positions per side (64 to 512); the field of view is read out |
 
 The widget has no `save_state` or HTML export; it is rebuilt from the crystal in one call.
+
+## Simulation-cell planning from a CIF
+
+A CIF path or ASE `Atoms` is accepted by the existing constructor. The
+**Simulation Cell** section checks unit-cell repeats, potential pixels per cell,
+and the clearance around the complete scan-center span `(N - 1) × step`.
+Potential sampling is separate from the detector-derived reconstruction sampling.
+
+```python
+plan = PlanPtycho(
+    "BaTiO3.cif", zone_axis=(0, 0, 1), thickness_nm=60,
+    focus_depth_nm=20, scan_step_A=0.373, scan_size_px=128,
+    detector_px=192, detector_mrad_per_px=0.5570968023269496,
+)
+plan.simulation_repeats = [48, 48]
+plan.simulation_pixels_per_cell = 96
+plan.simulation_plan()
+```
+
+`simulation_plan(repeats=(48, 48), pixels_per_cell=96, guard_A=5)` can also
+calculate a candidate without changing the controls. The returned depth repeat
+count covers the requested slab; the final repeat may need truncating to obtain
+an exact thickness. The geometric margin includes the full directional tilt
+excursion conservatively on each side.
+
+This section is a planning check, not a simulation launcher. The Detector panel
+is labelled **schematic**. Changing these controls does not update previously
+computed multislice diffraction. Validate propagated boundary power, a larger
+lateral cell, potential sampling and propagation slices with the simulation
+backend before accepting a dataset. A geometric pass deliberately leaves
+`boundary_convergence_verified=False`.
+
+## Optional Virtual Window
+
+`wave_window_factor=2` previews a 384 × 384 wave for a 192 × 192 measured detector. The **Virtual Window** controls at the bottom of the planner switch between native and doubled support. This is an optional adjustment; microscope, detector, scan, and specimen settings stay above it. This doubles the physical model width while retaining the real-space pixel size and measured angular reach; it does not change the acquired detector pixels.
+
+```python
+PlanPtycho("BaTiO3.cif", detector_px=192,
+           detector_mrad_per_px=0.5570968023269496,
+           wave_window_factor=2)
+```
+
+The reconstruction must support integrating its finer predicted diffraction intensities back onto the measured detector. The planning preview does not run or validate that reconstruction. Its free-space probe envelope is a geometric check, not a guarantee of multislice convergence. Use `ShowCIF` alongside the planner to inspect the same CIF and the atomic columns.
