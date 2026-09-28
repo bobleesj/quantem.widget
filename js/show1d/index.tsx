@@ -720,8 +720,8 @@ function formatRangeValue(value: number): string {
   return formatCompactValue(value, 2);
 }
 
-function axisPositionText(value: number, label: string, unit: string): string {
-  const formatted = formatAxisValue(value);
+function axisPositionText(value: number, label: string, unit: string, precise = false): string {
+  const formatted = precise && Number.isFinite(value) ? value.toPrecision(6) : formatAxisValue(value);
   if (!formatted) return "";
   const axis = label.trim() || "x";
   return `${axis} ${formatted}${unit.trim() ? ` ${unit.trim()}` : ""}`;
@@ -2450,6 +2450,53 @@ function SnapshotProfilePlot({
   );
 }
 
+function SnapshotHistogram({ data, imageIndex, packedHeight, packedWidth, imageWidth, imageHeight, label, range, preset, colors, width, height, preferWebgpu, onChange }: {
+  data: Float32Array; imageIndex: number; packedHeight: number; packedWidth: number;
+  imageWidth: number; imageHeight: number; label: string;
+  range: number[] | null; preset: string;
+  colors: { bgAlt: string; border: string; textMuted: string; accent: string };
+  width: number; height: number; preferWebgpu: boolean;
+  onChange: (range: [number, number] | []) => void;
+}) {
+  const image = React.useMemo(() => extractPackedImage(data, imageIndex, packedHeight, packedWidth, imageHeight, imageWidth),
+    [data, imageIndex, packedHeight, packedWidth, imageHeight, imageWidth]);
+  const slot = React.useRef(20000 + Math.floor(Math.random() * 1000000));
+  const [bins, setBins] = React.useState<number[]>([]);
+  const [backend, setBackend] = React.useState("");
+  const bounds = React.useMemo(() => findDataRange(image), [image]);
+  const dataMin = bounds.min;
+  const dataMax = bounds.max > dataMin ? bounds.max : dataMin + 1;
+  const clip = resolveSnapshotDisplayRange(image, preset, range && range.length === 2 ? range as [number, number] : null);
+  React.useEffect(() => {
+    let canceled = false;
+    const fallback = () => {
+      if (!canceled) { setBins(computeHistogramFromBytes(image, 256, dataMin, dataMax)); setBackend("CPU"); }
+    };
+    if (!preferWebgpu) { fallback(); return; }
+    void getGPUColormapEngine().then(async engine => {
+      if (canceled) return;
+      if (!engine) { fallback(); return; }
+      try {
+        engine.uploadData(slot.current, image, imageWidth, imageHeight);
+        const values = await engine.computeHistogramWithRange(slot.current, dataMin, dataMax, false);
+        if (!canceled) { setBins(values); setBackend("WebGPU"); }
+      } catch { fallback(); }
+    }).catch(fallback);
+    return () => { canceled = true; };
+  }, [image, imageWidth, imageHeight, dataMin, dataMax, preferWebgpu]);
+  return <Box data-testid="show1d-panel-histogram" aria-label={`${label} contrast`} sx={{ minWidth: 0, px: 0.5 }}>
+    <Typography sx={{ fontSize: 11, color: colors.textMuted }}>{label}</Typography>
+    <MiniHistogram bins={bins} dataMin={dataMin} dataMax={dataMax} clipMin={clip[0]} clipMax={clip[1]}
+      colors={colors} width={width} height={height} onClipRangeChange={onChange} />
+    <Box sx={{ display: "flex", gap: 0.5, alignItems: "center" }}>
+      <Button size="small" onClick={() => onChange([dataMin, dataMax])}>Full</Button>
+      <Button size="small" onClick={() => onChange(resolveSnapshotDisplayRange(image, "1-99", null))}>1–99%</Button>
+      <Button size="small" onClick={() => onChange([])}>Reset</Button>
+      {backend === "CPU" && <Typography sx={{ fontSize: 10 }}>CPU histogram</Typography>}
+    </Box>
+  </Box>;
+}
+
 function MiniHistogram({
   bins,
   dataMin,
@@ -2762,6 +2809,7 @@ function Show1DWidget() {
   const [snapshotFftWindow, setSnapshotFftWindow] = useModelState<boolean>("snapshot_fft_window");
   const [snapshotFftCmap, setSnapshotFftCmap] = useModelState<string>("snapshot_fft_cmap");
   const [snapshotContrastPreset, setSnapshotContrastPreset] = useModelState<string>("snapshot_contrast_preset");
+  const [panelContrastRanges, setPanelContrastRanges] = useModelState<Record<string, number[]>>("snapshot_panel_contrast_ranges");
   const [snapshotContrastRange, setSnapshotContrastRange] = useModelState<number[]>("snapshot_contrast_range");
   const [snapshotHistogramWidth] = useModelState<number>("snapshot_histogram_width");
   const [snapshotHistogramHeight] = useModelState<number>("snapshot_histogram_height");
@@ -2770,6 +2818,9 @@ function Show1DWidget() {
   const [snapshotColumns, setSnapshotColumns] = useModelState<number>("snapshot_columns");
   const [snapshotOverlayPosition, setSnapshotOverlayPosition] = useModelState<string>("snapshot_overlay_position");
   const [imageCmap, setImageCmap] = useModelState<string>("image_cmap");
+  const [snapshotLinkViews] = useModelState<boolean>("snapshot_link_views");
+  const [panelImageViews, setPanelImageViews] = React.useState<Record<string, ImageViewApiState>>({});
+  const [panelFftViews, setPanelFftViews] = React.useState<Record<string, ImageViewApiState>>({});
   const [snapshotRealSpaceZoom, setSnapshotRealSpaceZoom] = useModelState<number>("snapshot_real_space_zoom");
   const [snapshotRealSpaceCenter, setSnapshotRealSpaceCenter] = useModelState<number[]>("snapshot_real_space_center");
   const [snapshotFftZoom, setSnapshotFftZoom] = useModelState<number>("snapshot_fft_zoom");
@@ -3036,11 +3087,7 @@ function Show1DWidget() {
     tileAspect: number;
   } | null>(null);
   const snapshotViewportWidthRef = React.useRef(0);
-  const histogramSlotRef = React.useRef(9000 + Math.floor(Math.random() * 100000));
-  const [snapshotHistogramBins, setSnapshotHistogramBins] = React.useState<number[]>(new Array(256).fill(0));
-  const [snapshotHistogramRange, setSnapshotHistogramRange] = React.useState<[number, number]>([0, 1]);
-  const [snapshotHistogramClipRange, setSnapshotHistogramClipRange] = React.useState<[number, number]>([0, 1]);
-  const [, setSnapshotHistogramBackend] = React.useState("cpu");
+
   const snapshotFftCacheRef = React.useRef<Map<string, SnapshotFftCacheEntry>>(new Map());
   const snapshotFftPendingRef = React.useRef<Map<string, Promise<SnapshotFftCacheEntry>>>(new Map());
   const snapshotFftGpuRef = React.useRef<WebGPUFFT | null>(null);
@@ -3193,9 +3240,9 @@ function Show1DWidget() {
     ? 620
     : rawSidePanelWidth;
   const rawSnapshotPanelWidth = Number.isFinite(snapshotPanelWidthPx) ? Number(snapshotPanelWidthPx) : 0;
-  const requestedSidePanelWidth = rawSnapshotPanelWidth > 0
-    ? rawSnapshotPanelWidth
-    : autoSidePanelWidth;
+  const requestedSidePanelWidth = plotWidthPx > 0
+    ? Math.max(MIN_SIDE_PANEL_WIDTH, mainGridSize.width - plotWidthPx)
+    : rawSnapshotPanelWidth > 0 ? rawSnapshotPanelWidth : autoSidePanelWidth;
   const availableSidePanelWidth = Math.round(clampValue(
     Math.min(MAX_SIDE_PANEL_WIDTH, mainGridSize.width - MIN_PLOT_WIDTH),
     MIN_SIDE_PANEL_WIDTH,
@@ -3229,7 +3276,9 @@ function Show1DWidget() {
   const mainGridTemplateColumns = sidePanelVisible
     ? {
       xs: "1fr",
-      md: `minmax(${MIN_PLOT_WIDTH}px, 1fr) minmax(${MIN_SIDE_PANEL_WIDTH}px, ${sidePanelWidth}px)`,
+      md: plotWidthPx > 0
+        ? `${Math.max(MIN_PLOT_WIDTH, plotWidthPx)}px minmax(0, 1fr)`
+        : `minmax(${MIN_PLOT_WIDTH}px, 1fr) minmax(${MIN_SIDE_PANEL_WIDTH}px, ${sidePanelWidth}px)`,
     }
     : "1fr";
   const normalisedSnapshotContrastPreset = normaliseSnapshotContrastPreset(snapshotContrastPreset);
@@ -3955,85 +4004,6 @@ function Show1DWidget() {
   ]);
 
   React.useEffect(() => {
-    if (!showSnapshotHistogram || snapshotPlaying) return;
-    if (!hasSnapshots || selectedSnapshot < 0) {
-      setSnapshotHistogramBins(new Array(256).fill(0));
-      setSnapshotHistogramRange([0, 1]);
-      setSnapshotHistogramClipRange([0, 1]);
-      setSnapshotHistogramBackend("off");
-      return;
-    }
-    const imageHeight = snapshotHeights?.[selectedSnapshot] || snapshotHeight;
-    const imageWidth = snapshotWidths?.[selectedSnapshot] || snapshotWidth;
-    const image = extractPackedImage(snapshotData, selectedSnapshot, snapshotHeight, snapshotWidth, imageHeight, imageWidth);
-    const dataRange = findDataRange(image);
-    const dataMin = dataRange.min;
-    const dataMax = dataRange.max > dataRange.min ? dataRange.max : dataRange.min + 1;
-    setSnapshotHistogramRange([dataMin, dataMax]);
-    let canceled = false;
-    const useCpu = () => {
-      if (canceled) return;
-      setSnapshotHistogramBins(computeHistogramFromBytes(image, 256, dataMin, dataMax));
-      setSnapshotHistogramBackend("cpu");
-    };
-    if (!preferWebgpu) {
-      useCpu();
-      return () => { canceled = true; };
-    }
-    void getGPUColormapEngine().then(async (engine) => {
-      if (!engine || canceled) {
-        useCpu();
-        return;
-      }
-      try {
-        engine.uploadData(histogramSlotRef.current, image, imageWidth, imageHeight);
-        const bins = await engine.computeHistogramWithRange(histogramSlotRef.current, dataMin, dataMax, false);
-        if (canceled) return;
-        setSnapshotHistogramBins(bins);
-        setSnapshotHistogramBackend("webgpu");
-      } catch {
-        useCpu();
-      }
-    });
-    return () => { canceled = true; };
-  }, [
-    hasSnapshots,
-    preferWebgpu,
-    selectedSnapshot,
-    showSnapshotHistogram,
-    snapshotPlaying,
-    snapshotData,
-    snapshotHeight,
-    snapshotHeights,
-    snapshotWidth,
-    snapshotWidths,
-  ]);
-
-  React.useEffect(() => {
-    if (!showSnapshotHistogram || snapshotPlaying) return;
-    if (!hasSnapshots || selectedSnapshot < 0) {
-      setSnapshotHistogramClipRange([0, 1]);
-      return;
-    }
-    const imageHeight = snapshotHeights?.[selectedSnapshot] || snapshotHeight;
-    const imageWidth = snapshotWidths?.[selectedSnapshot] || snapshotWidth;
-    const image = extractPackedImage(snapshotData, selectedSnapshot, snapshotHeight, snapshotWidth, imageHeight, imageWidth);
-    setSnapshotHistogramClipRange(resolveSnapshotDisplayRange(image, normalisedSnapshotContrastPreset, customSnapshotContrastRange));
-  }, [
-    customSnapshotContrastRange,
-    hasSnapshots,
-    normalisedSnapshotContrastPreset,
-    selectedSnapshot,
-    showSnapshotHistogram,
-    snapshotPlaying,
-    snapshotData,
-    snapshotHeight,
-    snapshotHeights,
-    snapshotWidth,
-    snapshotWidths,
-  ]);
-
-  React.useEffect(() => {
     if (!snapshotPlaying || !hasSnapshots || groupCount <= 1) return;
     let raf = 0;
     let previous = 0;
@@ -4145,15 +4115,17 @@ function Show1DWidget() {
     });
   }, [hasProfileImage, imageLut, profileImageData, profileImageHeight, profileImageWidth, profileLine, themeColors]);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) {
       plotThumbnailHitAreasRef.current = [];
       return;
     }
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(plotSize.width * dpr);
-    canvas.height = Math.round(plotSize.height * dpr);
+    const pixelWidth = Math.round(plotSize.width * dpr);
+    const pixelHeight = Math.round(plotSize.height * dpr);
+    if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+    if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
     canvas.style.width = `${plotSize.width}px`;
     canvas.style.height = `${plotSize.height}px`;
     const ctx = canvas.getContext("2d");
@@ -4338,7 +4310,7 @@ function Show1DWidget() {
     for (const tick of yTickValues) {
       if (logScale && tick <= 0) continue;
       const y = dataToY(tick, geom);
-      ctx.fillText(formatRangeValue(tick), geom.left - 8, y + 4);
+      ctx.fillText(tick !== 0 && Math.abs(tick) < 0.1 ? tick.toExponential(2) : formatAxisValue(tick), geom.left - 8, y + 4);
     }
     ctx.textAlign = "center";
     const xlabel = xLabel ? `${xLabel}${xUnit ? ` (${xUnit})` : ""}` : xUnit;
@@ -4647,6 +4619,7 @@ function Show1DWidget() {
     setSnapshotFftCacheVersion((value) => value + 1);
     setSnapshotContrastPreset(initial.snapshotContrastPreset);
     setSnapshotContrastRange([...initial.snapshotContrastRange]);
+    setPanelContrastRanges({});
     setSnapshotThumbnailSize(initial.snapshotThumbnailSize);
     setSnapshotOverlayPosition(initial.snapshotOverlayPosition);
     setImageCmap(initial.imageCmap);
@@ -4959,7 +4932,7 @@ function Show1DWidget() {
     ? snapshotGridHeight
       + 58
       + (showSnapshotProfile ? snapshotProfilePlotHeight : 0)
-      + (showSnapshotHistogram && selectedSnapshot >= 0 ? snapshotHistogramDisplayHeight + 42 : 0)
+      + (showSnapshotHistogram && selectedSnapshot >= 0 ? snapshotHistogramDisplayHeight + 76 : 0)
       + (showStats ? 130 : 0)
     : 0;
   const plotNonCanvasHeightEstimate = showLegend && visibleTraceIndices.length > 0 ? 54 : 12;
@@ -5378,7 +5351,7 @@ function Show1DWidget() {
       ref={rootRef}
       data-testid="show1d-root"
       sx={{
-        width: (resizePreview?.width ?? plotWidthPx) > 0 ? `${resizePreview?.width ?? plotWidthPx}px` : "100%",
+        width: (resizePreview?.width ?? 0) > 0 ? `${resizePreview?.width}px` : "100%",
         maxWidth: maxWidth > 0 ? `min(100%, ${maxWidth}px)` : "100%",
         bgcolor: themeColors.bg,
         color: themeColors.text,
@@ -5542,7 +5515,7 @@ function Show1DWidget() {
                 {hover ? (methodLabels?.[hover.point] ? shortMethodLabel(methodLabels[hover.point]) : axisPositionText(hover.x, xLabel, xUnit)) : "\u00a0"}
               </Typography>
               <Typography sx={{ fontSize: 11, lineHeight: 1.25, minHeight: 14 }}>
-                {hover ? axisPositionText(hover.y, yLabel, yUnit) : "\u00a0"}
+                {hover ? axisPositionText(hover.y, yLabel, yUnit, true) : "\u00a0"}
               </Typography>
             </Box>
           </Box>
@@ -5740,17 +5713,17 @@ function Show1DWidget() {
                           preferWebgpu={Boolean(preferWebgpu)}
                           fftLayout={resolvedSnapshotFftLayout}
                           contrastPreset={normalisedSnapshotContrastPreset}
-                          contrastRange={customSnapshotContrastRange}
+                          contrastRange={panelContrastRanges?.[imageLabel]?.length === 2 ? panelContrastRanges[imageLabel] as [number, number] : customSnapshotContrastRange}
                           selected={selected}
                           label={compactScienceLabel(imageLabel)}
                           scaleBarVisible={Boolean(scaleBarVisible)}
                           overlayPosition={resolvedSnapshotOverlayPosition}
                           pixelSize={Number.isFinite(pixelSize) && pixelSize > 0 ? pixelSize : 1}
                           pixelUnit={pixelSize > 0 ? pixelUnit : "px"}
-                          imageViewZoom={snapshotRealSpaceZoom}
-                          imageViewCenter={snapshotRealSpaceCenter}
-                          fftViewZoom={snapshotFftZoom}
-                          fftViewCenter={snapshotFftCenter}
+                          imageViewZoom={snapshotLinkViews ? snapshotRealSpaceZoom : (panelImageViews[imageLabel]?.zoom ?? 1)}
+                          imageViewCenter={snapshotLinkViews ? snapshotRealSpaceCenter : (panelImageViews[imageLabel]?.center ?? [0.5, 0.5])}
+                          fftViewZoom={snapshotLinkViews ? snapshotFftZoom : (panelFftViews[imageLabel]?.zoom ?? 1)}
+                          fftViewCenter={snapshotLinkViews ? snapshotFftCenter : (panelFftViews[imageLabel]?.center ?? [0.5, 0.5])}
                           profileActive={Boolean(showSnapshotProfile)}
                           profileLine={snapshotProfileLine ?? []}
                           fftCacheRef={snapshotFftCacheRef}
@@ -5759,8 +5732,8 @@ function Show1DWidget() {
                           fftCacheVersion={snapshotFftCacheVersion}
                           fftGenerationRef={snapshotFftGenerationRef}
                           fftGeneration={snapshotFftGeneration}
-                          onImageViewChange={setSnapshotRealSpaceView}
-                          onFftViewChange={setSnapshotFftView}
+                          onImageViewChange={snapshotLinkViews ? setSnapshotRealSpaceView : (view) => setPanelImageViews((current) => ({ ...current, [imageLabel]: view }))}
+                          onFftViewChange={snapshotLinkViews ? setSnapshotFftView : (view) => setPanelFftViews((current) => ({ ...current, [imageLabel]: view }))}
                           onProfileLineChange={setSnapshotProfileLine}
                           onFftOverlayPositionChange={setSnapshotOverlayPosition}
                           onSelect={() => selectSnapshotImage(imageIdx)}
@@ -6002,67 +5975,20 @@ function Show1DWidget() {
                   </IconButton>
                 </Box>
                 {showSnapshotHistogram && selectedSnapshot >= 0 && (
-                  <Box sx={{ mb: 0.75, width: "fit-content", maxWidth: "100%", alignSelf: "flex-start" }}>
-                    <MiniHistogram
-                      bins={snapshotHistogramBins}
-                      dataMin={snapshotHistogramRange[0]}
-                      dataMax={snapshotHistogramRange[1]}
-                      clipMin={snapshotHistogramClipRange[0]}
-                      clipMax={snapshotHistogramClipRange[1]}
-                      colors={themeColors}
-                      onClipRangeChange={(range) => setSnapshotContrastRange([range[0], range[1]])}
-                      width={snapshotHistogramDisplayWidth}
-                      height={snapshotHistogramDisplayHeight}
-                    />
-                    <Box sx={{ ...controlRow, width: "fit-content", maxWidth: "100%", border: "none", bgcolor: "transparent", px: 0, py: 0.25, mt: 0.5 }}>
-                      <Typography sx={{ ...typography.label, color: themeColors.textMuted, flexShrink: 0 }}>cmap</Typography>
-                      <Select
-                        size="small"
-                        value={COLORMAPS[imageCmap] ? imageCmap : "viridis"}
-                        onChange={(event) => setImageCmap(event.target.value)}
-                        sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }}
-                        MenuProps={themedMenuProps}
-                        inputProps={{ "aria-label": "Snapshot image colormap" }}
-                      >
-                        {COLORMAP_NAMES.map((name) => (
-                          <MenuItem key={name} value={name}>{name}</MenuItem>
-                        ))}
-                      </Select>
-                      <Typography sx={{ ...typography.label, color: themeColors.textMuted, flexShrink: 0 }}>clip</Typography>
-                      {snapshotContrastPresets.map((preset) => {
-                        const active = preset.value === normalisedSnapshotContrastPreset;
-                        return (
-                          <Button
-                            key={preset.value}
-                            size="small"
-                            variant={active && !customSnapshotContrastRange ? "contained" : "outlined"}
-                            onClick={() => {
-                              setSnapshotContrastRange([]);
-                              setSnapshotContrastPreset(preset.value);
-                            }}
-                            sx={{
-                              minWidth: preset.value === "full" ? 38 : 48,
-                              height: 24,
-                              px: 0.75,
-                              py: 0,
-                              fontSize: 10,
-                              lineHeight: 1,
-                              textTransform: "none",
-                              color: active && !customSnapshotContrastRange ? "#fff" : themeColors.text,
-                              bgcolor: active && !customSnapshotContrastRange ? themeColors.accent : "transparent",
-                              borderColor: active && !customSnapshotContrastRange ? themeColors.accent : themeColors.border,
-                              "&:hover": {
-                                bgcolor: active && !customSnapshotContrastRange ? themeColors.accent : themeColors.bgAlt,
-                                borderColor: themeColors.accent,
-                              },
-                            }}
-                            aria-label={`Set snapshot contrast clip ${preset.label}`}
-                          >
-                            {preset.label}
-                          </Button>
-                        );
-                      })}
-                    </Box>
+                  <Box sx={{ display: "grid", gridTemplateColumns: `repeat(${selectedImageColumns}, minmax(0, 1fr))`, ...snapshotViewportSx }}>
+                    {selectedGroupImageIndices.map(imageIdx => {
+                      const label = imageLabelForIndex(imageIdx);
+                      const h = snapshotHeights?.[imageIdx] || snapshotHeight;
+                      const w = snapshotWidths?.[imageIdx] || snapshotWidth;
+                      return <SnapshotHistogram key={label}
+                        data={snapshotData} imageIndex={imageIdx} packedHeight={snapshotHeight} packedWidth={snapshotWidth}
+                        imageWidth={w} imageHeight={h} label={label}
+                        range={panelContrastRanges?.[label] ?? customSnapshotContrastRange}
+                        preset={normalisedSnapshotContrastPreset} colors={themeColors}
+                        width={Math.min(snapshotHistogramDisplayWidth, snapshotTileDisplayWidth - 8)}
+                        height={snapshotHistogramDisplayHeight} preferWebgpu={Boolean(preferWebgpu)}
+                        onChange={range => setPanelContrastRanges({ ...panelContrastRanges, [label]: range })} />;
+                    })}
                   </Box>
                 )}
               </Box>
