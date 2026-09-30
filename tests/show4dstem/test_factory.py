@@ -206,6 +206,25 @@ def test_show4dstem_routes_mps_gpu_frame_proxy_to_mps_builder(monkeypatch) -> No
     assert factory.is_mps_show4dstem_payload(payload)
 
 
+def test_mps_viewer_without_interaction_sidecar_shows_exact_images() -> None:
+    """Encoded residents have no binned sidecar: never show the startup preview."""
+    torch = pytest.importorskip("torch")
+    from quantem.widget.show4dstem_mps import Show4DSTEMMPS
+
+    values = _preset_region_data()
+    data = torch.from_numpy(values)
+    data.det_bin = 1
+    viewer = Show4DSTEMMPS(
+        data, scan_shape=(4, 5), fast_interaction=True, fast_interaction_async=True,
+        verbose=False,
+    )
+    mask = np.asarray(viewer._detector_mask_np()) > 0
+    image = np.frombuffer(viewer.virtual_image_bytes, np.float32).reshape(4, 5)
+
+    assert not viewer.fast_interaction
+    np.testing.assert_array_equal(image, values[..., mask].sum(axis=-1).astype(np.float32))
+
+
 def test_show4dstem_keeps_cuda_gpu_frame_proxy_on_base_viewer(monkeypatch) -> None:
     payload = SimpleNamespace(_is_gpu_frames=True, device="cuda:0", ndim=4)
 

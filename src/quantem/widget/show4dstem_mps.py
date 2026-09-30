@@ -102,6 +102,10 @@ class Show4DSTEMMPS(Show4DSTEM):
             self.fast_interaction_ready = True
         elif fused_fast:
             self.fast_interaction_ready = True
+        elif not session.supports_fast:
+            # Encoded residents (ANS counts, scaled results) answer every mask
+            # exactly; there is no binned sidecar to wait for or preview.
+            fast_interaction = False
         if initial_preset is not None:
             self._mps_initializing = True
             try:
@@ -123,7 +127,7 @@ class Show4DSTEMMPS(Show4DSTEM):
                 if det_bin > 1 else
                 f"fast bin{fb} ready" if fast_interaction and self.fast_interaction_ready else
                 f"fast bin{fb} async" if fast_interaction and fast_interaction_async else
-                f"fast bin{fb}" if fast_interaction else "full 192x192 exact"
+                f"fast bin{fb}" if fast_interaction else f"full {self.det_rows}x{self.det_cols} exact"
             )
             shape = f"{self.shape_rows}x{self.shape_cols}x{self.det_rows}x{self.det_cols}"
             print(
@@ -321,7 +325,7 @@ class Show4DSTEMMPS(Show4DSTEM):
             return
         b = self._compute
         if (self.fast_interaction and self._fast_interaction_async
-                and not self.fast_interaction_ready):
+                and not self.fast_interaction_ready and b.supports_fast):
             self._set_virtual_image_startup_preview()
             return
         if (self.fast_interaction and not self.fast_interaction_ready
