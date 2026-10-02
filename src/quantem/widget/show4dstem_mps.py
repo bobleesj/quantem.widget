@@ -264,6 +264,8 @@ class Show4DSTEMMPS(Show4DSTEM):
 
     # ----------------------------------------------------------------- auto_detect_center
     def auto_detect_center(self, update_roi: bool = True):
+        from quantem.gpu.detector import fit_probe
+
         sample = self.auto_detect_frames
         if (
             sample is not None
@@ -281,11 +283,8 @@ class Show4DSTEMMPS(Show4DSTEM):
         total = int(mask.sum())
         if total == 0:
             return self
-        rows = np.arange(mean_dp.shape[0], dtype=np.float32)[:, None]
-        cols = np.arange(mean_dp.shape[1], dtype=np.float32)[None, :]
-        cx = float((cols * mask).sum() / total)
-        cy = float((rows * mask).sum() / total)
-        radius = float(round(np.sqrt(total / np.pi)))
+        (cy, cx), radius = fit_probe(mean_dp)
+        radius = float(round(radius))
         self.center_col, self.center_row, self.bf_radius = cx, cy, radius
         if update_roi:
             self.roi_center_col = cx
