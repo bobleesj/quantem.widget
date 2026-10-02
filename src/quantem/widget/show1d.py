@@ -388,7 +388,7 @@ class Show1D(StaticFallbackMixin, anywidget.AnyWidget):
     show_controls = traitlets.Bool(True).tag(sync=True)
     controls_collapsed = traitlets.Bool(False).tag(sync=True)
     line_width = traitlets.Float(1.5).tag(sync=True)
-    plot_height_px = traitlets.Int(390).tag(sync=True)
+    plot_height_px = traitlets.Int(320).tag(sync=True)
     plot_width_px = traitlets.Int(0, min=0).tag(sync=True)
     max_width = traitlets.Int(0, min=0).tag(sync=True)
     side_panel_width_px = traitlets.Int(360).tag(sync=True)
@@ -435,6 +435,7 @@ class Show1D(StaticFallbackMixin, anywidget.AnyWidget):
     bookmarked_snapshot_groups = traitlets.List(traitlets.Int()).tag(sync=True)
     show_snapshots = traitlets.Bool(True).tag(sync=True)
     show_snapshot_thumbnails = traitlets.Bool(True).tag(sync=True)
+    snapshot_link_views = traitlets.Bool(False).tag(sync=True)
     show_snapshot_histogram = traitlets.Bool(True).tag(sync=True)
     show_snapshot_fft = traitlets.Bool(False).tag(sync=True)
     snapshot_fft_layout = traitlets.Unicode("overlay").tag(sync=True)
@@ -446,6 +447,7 @@ class Show1D(StaticFallbackMixin, anywidget.AnyWidget):
     snapshot_histogram_width = traitlets.Int(360).tag(sync=True)
     snapshot_histogram_height = traitlets.Int(52).tag(sync=True)
     snapshot_contrast_preset = traitlets.Unicode("full").tag(sync=True)
+    snapshot_panel_contrast_ranges = traitlets.Dict(default_value={}).tag(sync=True)
     snapshot_contrast_range = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
     snapshot_thumbnail_size = traitlets.Int(48).tag(sync=True)
     snapshot_panel_width_px = traitlets.Int(0).tag(sync=True)
@@ -612,8 +614,8 @@ class Show1D(StaticFallbackMixin, anywidget.AnyWidget):
         show_controls: bool | None = None,
         controls_collapsed: bool | None = None,
         line_width: float = 1.5,
-        plot_height_px: int = 390,
-        plot_width_px: int = 0,
+        plot_height_px: int = 320,
+        plot_width_px: int = 400,
         max_width: int = 0,
         side_panel_width_px: int = 360,
         profile_image: Any = None,
@@ -1372,33 +1374,34 @@ class Show1D(StaticFallbackMixin, anywidget.AnyWidget):
         earlier samples. Missing existing traces receive NaN at this x value.
         """
 
-        if not values:
-            raise ValueError("append requires at least one named value")
-        if x is None:
-            x = float(self.n_points if self._x is None or self._x.size == 0 else self._x[-1] + 1)
-        if self._data.size == 0 and self.n_traces == 0:
-            self.labels = [str(k) for k in values]
-            self.colors = self._default_colors(len(self.labels))
-            self._data = np.empty((len(self.labels), 0), dtype=np.float32)
-            self.n_traces = len(self.labels)
+        with self.hold_sync():
+            if not values:
+                raise ValueError("append requires at least one named value")
+            if x is None:
+                x = float(self.n_points if self._x is None or self._x.size == 0 else self._x[-1] + 1)
+            if self._data.size == 0 and self.n_traces == 0:
+                self.labels = [str(k) for k in values]
+                self.colors = self._default_colors(len(self.labels))
+                self._data = np.empty((len(self.labels), 0), dtype=np.float32)
+                self.n_traces = len(self.labels)
 
-        labels = list(self.labels)
-        for name in values:
-            if name not in labels:
-                labels.append(str(name))
-                filler = np.full((1, self.n_points), np.nan, dtype=np.float32)
-                self._data = np.vstack([self._data, filler]) if self._data.size else filler
-                self.colors = list(self.colors) + [_DEFAULT_COLORS[(len(labels) - 1) % len(_DEFAULT_COLORS)]]
-        column = np.asarray([_as_float(values.get(label)) for label in labels], dtype=np.float32)
-        self._data = np.column_stack([self._data, column]) if self._data.size else column[:, None]
-        self._x = np.asarray([x], dtype=np.float32) if self._x is None else np.append(self._x, np.float32(x))
-        self.labels = labels
-        self.n_traces = int(self._data.shape[0])
-        self.n_points = int(self._data.shape[1])
-        self._update_stats()
-        self._update_data_bytes()
-        self._update_trial_analysis()
-        return self
+            labels = list(self.labels)
+            for name in values:
+                if name not in labels:
+                    labels.append(str(name))
+                    filler = np.full((1, self.n_points), np.nan, dtype=np.float32)
+                    self._data = np.vstack([self._data, filler]) if self._data.size else filler
+                    self.colors = list(self.colors) + [_DEFAULT_COLORS[(len(labels) - 1) % len(_DEFAULT_COLORS)]]
+            column = np.asarray([_as_float(values.get(label)) for label in labels], dtype=np.float32)
+            self._data = np.column_stack([self._data, column]) if self._data.size else column[:, None]
+            self._x = np.asarray([x], dtype=np.float32) if self._x is None else np.append(self._x, np.float32(x))
+            self.labels = labels
+            self.n_traces = int(self._data.shape[0])
+            self.n_points = int(self._data.shape[1])
+            self._update_stats()
+            self._update_data_bytes()
+            self._update_trial_analysis()
+            return self
 
     def append_scalar(self, iteration: float | None = None, **values: Any) -> Self:
         """Alias for :meth:`append` with reconstruction-friendly naming."""
@@ -1450,34 +1453,35 @@ class Show1D(StaticFallbackMixin, anywidget.AnyWidget):
             if x_values.size != n_new:
                 raise ValueError(f"x must have length {n_new}, got {x_values.size}")
 
-        if self._data.size == 0 and self.n_traces == 0:
-            self.labels = list(arrays)
-            self.colors = self._default_colors(len(self.labels))
-            self._data = np.empty((len(self.labels), 0), dtype=np.float32)
-            self.n_traces = len(self.labels)
+        with self.hold_sync():
+            if self._data.size == 0 and self.n_traces == 0:
+                self.labels = list(arrays)
+                self.colors = self._default_colors(len(self.labels))
+                self._data = np.empty((len(self.labels), 0), dtype=np.float32)
+                self.n_traces = len(self.labels)
 
-        labels = list(self.labels)
-        for name in arrays:
-            if name not in labels:
-                labels.append(name)
-                filler = np.full((1, self.n_points), np.nan, dtype=np.float32)
-                self._data = np.vstack([self._data, filler]) if self._data.size else filler
-                self.colors = list(self.colors) + [_DEFAULT_COLORS[(len(labels) - 1) % len(_DEFAULT_COLORS)]]
+            labels = list(self.labels)
+            for name in arrays:
+                if name not in labels:
+                    labels.append(name)
+                    filler = np.full((1, self.n_points), np.nan, dtype=np.float32)
+                    self._data = np.vstack([self._data, filler]) if self._data.size else filler
+                    self.colors = list(self.colors) + [_DEFAULT_COLORS[(len(labels) - 1) % len(_DEFAULT_COLORS)]]
 
-        block = np.full((len(labels), n_new), np.nan, dtype=np.float32)
-        for row, label in enumerate(labels):
-            if label in arrays:
-                block[row, :] = arrays[label]
+            block = np.full((len(labels), n_new), np.nan, dtype=np.float32)
+            for row, label in enumerate(labels):
+                if label in arrays:
+                    block[row, :] = arrays[label]
 
-        self._data = np.column_stack([self._data, block]) if self._data.size else block
-        self._x = x_values if self._x is None else np.concatenate([self._x.astype(np.float32, copy=False), x_values])
-        self.labels = labels
-        self.n_traces = int(self._data.shape[0])
-        self.n_points = int(self._data.shape[1])
-        self._update_stats()
-        self._update_data_bytes()
-        self._update_trial_analysis()
-        return self
+            self._data = np.column_stack([self._data, block]) if self._data.size else block
+            self._x = x_values if self._x is None else np.concatenate([self._x.astype(np.float32, copy=False), x_values])
+            self.labels = labels
+            self.n_traces = int(self._data.shape[0])
+            self.n_points = int(self._data.shape[1])
+            self._update_stats()
+            self._update_data_bytes()
+            self._update_trial_analysis()
+            return self
 
     append_many = extend
 
@@ -2471,6 +2475,7 @@ class Show1D(StaticFallbackMixin, anywidget.AnyWidget):
             "bookmarked_snapshot_groups": list(self.bookmarked_snapshot_groups),
             "show_snapshots": self.show_snapshots,
             "show_snapshot_thumbnails": self.show_snapshot_thumbnails,
+            "snapshot_link_views": self.snapshot_link_views,
             "show_snapshot_histogram": self.show_snapshot_histogram,
             "show_snapshot_fft": self.show_snapshot_fft,
             "snapshot_fft_window": self.snapshot_fft_window,
@@ -2482,6 +2487,7 @@ class Show1D(StaticFallbackMixin, anywidget.AnyWidget):
             "snapshot_histogram_height": self.snapshot_histogram_height,
             "snapshot_contrast_preset": self.snapshot_contrast_preset,
             "snapshot_contrast_range": list(self.snapshot_contrast_range),
+            "snapshot_panel_contrast_ranges": dict(self.snapshot_panel_contrast_ranges),
             "snapshot_thumbnail_size": self.snapshot_thumbnail_size,
             "snapshot_panel_width_px": self.snapshot_panel_width_px,
             "snapshot_columns": self.snapshot_columns,
@@ -3875,6 +3881,7 @@ class Show1D(StaticFallbackMixin, anywidget.AnyWidget):
         clone.snapshot_fft_cmap = self.snapshot_fft_cmap
         clone.snapshot_contrast_preset = self.snapshot_contrast_preset
         clone.snapshot_contrast_range = list(self.snapshot_contrast_range)
+        clone.snapshot_panel_contrast_ranges = dict(self.snapshot_panel_contrast_ranges)
         clone.snapshot_thumbnail_size = self.snapshot_thumbnail_size
         clone.snapshot_panel_width_px = self.snapshot_panel_width_px
         clone.snapshot_columns = self.snapshot_columns
@@ -3914,6 +3921,7 @@ class Show1D(StaticFallbackMixin, anywidget.AnyWidget):
                 downsample,
             )
             clone.profile_width = max(1, math.ceil(self.profile_width / downsample))
+        clone._save_state = True
         clone._export_light = True
         clone.export_enabled = False
         clone.export_status = ""

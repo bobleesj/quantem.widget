@@ -1171,3 +1171,26 @@ def test_show1d_watch_run_polls_joint_ptycho_monitor_with_object_probe_snapshots
         assert any(alert["kind"] == "image_collapse" and alert["label"] == "lambda 30" for alert in widget.trial_alerts)
     finally:
         widget.stop_monitor()
+
+
+def test_live_samples_sync_values_and_dimensions_together(monkeypatch) -> None:
+    widget = Show1D.live(["loss"])
+    messages = []
+    monkeypatch.setattr(widget, "_send", lambda msg, buffers=None: messages.append(msg))
+    widget.append(1, loss=0.003193)
+    assert len(messages) == 1
+    assert messages[0]["state"]["n_points"] == 1
+    messages.clear()
+    widget.extend(x=[2, 3], loss=[0.003192, 0.003191])
+    assert len(messages) == 1
+    assert messages[0]["state"]["n_points"] == 3
+    np.testing.assert_allclose(widget._data[0], [0.003193, 0.003192, 0.003191])
+
+
+def test_snapshot_panel_contrast_survives_export() -> None:
+    widget = Show1D.live(["loss"])
+    widget.snapshot(1, object=np.arange(16).reshape(4, 4), probe=np.eye(4))
+    widget.snapshot_panel_contrast_ranges = {"object": [2.0, 12.0], "probe": [0.0, 0.5]}
+    clone = widget._clone_for_html_export(downsample=1)
+    assert clone.snapshot_panel_contrast_ranges == widget.snapshot_panel_contrast_ranges
+    assert widget.get_state()["snapshot_panel_contrast_ranges"]["probe"] == [0.0, 0.5]
