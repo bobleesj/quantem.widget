@@ -804,7 +804,7 @@ def test_showptycho_mps_accel_uses_phase_only_reconstruct(monkeypatch):
     assert [call["compute_loss"] for call in calls] == [True, False]
     assert [call["compute_object"] for call in calls] == [False, False]
     state = accel.browser_state()
-    from quantem.gpu.ssb.compute import SSBProtocol
+    from quantem.gpu.ssb.backends import SSBProtocol
 
     assert isinstance(accel, SSBProtocol)
     assert state.kx_bf.shape == (2,)

@@ -438,10 +438,12 @@ def test_folder_empty_launch_arrival_restart_and_close_lifecycle(
     tmp_path: Path,
     viewer,
     count_attr: str,
+    request,
 ) -> None:
     # C1: a watched acquisition starts empty, expect a mounted zero-record
     # model and a visible-status trait instead of a fake scientific frame.
     widget = viewer.from_folder(tmp_path, watch=True, watch_interval=0.02)
+    request.addfinalizer(widget.close)
     source = widget._folder_source
     first_thread = source._watch_thread
     model_id = widget.model_id
@@ -466,10 +468,12 @@ def test_folder_empty_launch_arrival_restart_and_close_lifecycle(
     assert widget.folder_watch_state == "waiting"
     assert "pending file" in widget.folder_watch_detail
     _save(first, 1, shape=(17, 23))
-    _wait_until(lambda: int(getattr(widget, count_attr)) == 1)
+    _wait_until(lambda: (
+        int(getattr(widget, count_attr)) == 1
+        and not widget.folder_waiting
+        and widget.folder_watch_state == "watching"
+    ))
     assert widget.model_id == model_id
-    assert widget.folder_waiting is False
-    assert widget.folder_watch_state == "watching"
     assert widget.labels == ["frame_1"]
     assert widget._data.shape == (1, 17, 23)
 
