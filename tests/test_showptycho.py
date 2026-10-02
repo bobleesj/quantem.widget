@@ -102,7 +102,7 @@ class _FakeAccel:
         return np.asarray(phase, dtype=np.float32)
 
     def browser_state(self):
-        from quantem.gpu.ssb.compute.protocol import SSBExportState
+        from quantem.gpu.ssb.backends.protocol import SSBExportState
         from quantem.gpu.ssb.bf_selector import BrightfieldDisk
 
         selection = BrightfieldDisk(
@@ -730,9 +730,9 @@ def test_showptycho_mps_accel_does_not_require_cupy(monkeypatch):
 
 def test_showptycho_mps_accel_uses_phase_only_reconstruct(monkeypatch):
     """MPS ShowPtycho should hit the fused phase/loss path, not object-wave work."""
-    import quantem.gpu.ssb.compute.mps.engine as mps
-    import quantem.gpu.ssb.compute.mps.backend as mps_engine
-    from quantem.gpu.ssb.compute.mps.backend import MpsSSBBackend
+    import quantem.gpu.ssb.backends.mps.engine as mps
+    import quantem.gpu.ssb.backends.mps.backend as mps_engine
+    from quantem.gpu.ssb.backends.mps.backend import MpsSSBBackend
 
     class FakePrepared:
         num_bf = 2
@@ -783,7 +783,7 @@ def test_showptycho_mps_accel_uses_phase_only_reconstruct(monkeypatch):
 
     monkeypatch.setattr(mps_engine, "_reconstruct_prepared", fake_reconstruct)
     monkeypatch.setattr(
-        "quantem.gpu.ssb.compute.mps.backend.mean_dp",
+        "quantem.gpu.ssb.backends.mps.backend.detector_mean",
         lambda _frames: np.ones((4, 4), dtype=np.float32),
     )
 
@@ -925,7 +925,7 @@ def test_showptycho_export_reuses_matching_exact_bf_companion(
 ):
     """C4: matching MPS BF source, expect a link without HDF5 re-extraction."""
     from quantem.gpu.ssb.bf_selector import BrightfieldDisk
-    from quantem.gpu.ssb.compute.mps.engine import MpsBfColumnFrames
+    from quantem.gpu.ssb.backends.mps.engine import MpsBfColumnFrames
 
     from quantem.widget.showptycho_webgpu_export import _reuse_bf_column_source
 
@@ -1053,7 +1053,7 @@ def test_showptycho_save_copy_is_project_agnostic() -> None:
     """C1: Save copy, expect the public project workflow, not a private notebook."""
     ui_source = pathlib.Path("js/showptycho/index.tsx").read_text(encoding="utf-8")
     webgpu_source = pathlib.Path(
-        "js/.generated/engine/ssb/compute/webgpu/backend.ts"
+        "js/.generated/engine/ssb/backends/webgpu/backend.ts"
     ).read_text(encoding="utf-8")
 
     assert "Save calibration.json in this ShowPtycho project" in ui_source
@@ -1193,11 +1193,11 @@ def test_showptycho_webgpu_folder_uses_mps_metadata_without_gqk_sync(
 
 def test_showptycho_webgpu_kernel_source_has_128_256_512_1024_specializations():
     """C6: frontend SSB code keeps explicit 128/256/512/1024 WGSL support."""
-    source = _webgpu_source("ssb/compute/webgpu/backend.ts")
-    source += _webgpu_source("ssb/compute/webgpu/protocol.ts")
+    source = _webgpu_source("ssb/backends/webgpu/backend.ts")
+    source += _webgpu_source("ssb/backends/webgpu/protocol.ts")
     ui_source = pathlib.Path("js/showptycho/index.tsx").read_text()
 
-    registry = _webgpu_source("ssb/compute/webgpu/kernels/index.ts")
+    registry = _webgpu_source("ssb/backends/webgpu/kernels/index.ts")
     assert "SUPPORTED_SSB_SIZES = [128, 256, 512, 1024]" in registry
     assert "const workgroupSize = Math.min(n, 256)" in source
     assert "@compute @workgroup_size(${workgroupSize})" in source
@@ -1322,7 +1322,7 @@ def test_showptycho_phase_contrast_coalesces_gpu_updates_without_thumb_swaps():
 
 def test_showptycho_webgpu_reuses_resident_bf_columns_after_prepare():
     """C7: prepared browser BF columns, expect sliders/FFT not to refetch them."""
-    source = _webgpu_source("ssb/compute/webgpu/backend.ts")
+    source = _webgpu_source("ssb/backends/webgpu/backend.ts")
     ui_source = pathlib.Path("js/showptycho/index.tsx").read_text()
 
     setup = source[
@@ -1380,7 +1380,7 @@ def test_showptycho_webgpu_reuses_resident_bf_columns_after_prepare():
 
 def test_showptycho_webgpu_folder_uses_full_logical_bf_total():
     """C7b: standalone BF slider, expect the complete coordinate prefix."""
-    source = _webgpu_source("ssb/compute/webgpu/backend.ts")
+    source = _webgpu_source("ssb/backends/webgpu/backend.ts")
     ui_source = pathlib.Path("js/showptycho/index.tsx").read_text()
 
     active_selector = source[
