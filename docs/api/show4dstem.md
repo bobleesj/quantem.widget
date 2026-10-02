@@ -72,6 +72,23 @@ CLI `--backend webgpu --html` folder export for large standalone HDF5 review.
 
 ## Backend ownership
 
+Fit the diffraction disk once and supply the same geometry to the viewer and
+virtual detectors. For example, inspect a bounded region as a GPU tensor:
+
+```python
+from quantem.gpu import detector
+
+data = load(path)
+patterns = data[100:164, 100:164]
+mean_dp = detector.mean(patterns)
+center, radius = detector.fit_probe(mean_dp)
+Show4DSTEM(patterns, center=center, bf_radius=radius)
+```
+
+The center is `(row, column)` and the radius is in detector pixels. Supplying
+both skips the viewer's automatic disk estimation. `fit_probe` estimates disk
+geometry, not the complex probe or its aberrations.
+
 Show4DSTEM has two different acceleration surfaces:
 
 - **Live Python-backed viewers** use the data object returned by ``load(...)``.
