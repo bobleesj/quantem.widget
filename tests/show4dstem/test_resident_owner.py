@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from quantem.gpu.io._resident import CudaResidentSource
-from quantem.gpu.io.models import create_dataset
+from quantem.gpu.io.models import Dataset4dstemGPU
 from quantem.widget import Show4DSTEM
 from quantem.widget.show4dstem_factory import show4dstem_backend_kind
 
@@ -54,7 +54,7 @@ def test_public_factory_all66_exact_batched_updates_and_export(no_gpu, tmp_path)
     source, owner = fixture_source()
     original = owner.counts.copy()
     assert show4dstem_backend_kind(source) == "resident"
-    widget = Show4DSTEM(create_dataset(source, {"file_names":[f"acq-{i}" for i in range(66)]}),
+    widget = Show4DSTEM(Dataset4dstemGPU(source, {"file_names":[f"acq-{i}" for i in range(66)]}),
                        center=(8.5, 8.5), bf_radius=30, verbose=False)
     assert widget._data is source
     assert str(widget._device) == "cpu" and source.device == "cuda:1"

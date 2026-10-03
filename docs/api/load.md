@@ -1,7 +1,7 @@
 # Load detector acquisitions
 
 Use `quantem.gpu.io.load` to keep the acquisition and its metadata together.
-It returns `quantem.core.datastructures.Dataset4dstem`, accepted directly by `Show4DSTEM`:
+It returns `quantem.gpu.io.Dataset4dstemGPU`, accepted directly by `Show4DSTEM`:
 
 ```python
 from quantem.gpu import io

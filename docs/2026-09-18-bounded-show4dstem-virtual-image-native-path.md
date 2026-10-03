@@ -33,7 +33,7 @@ Output on `main` is bit-identical to decode-then-reduce (max abs diff 0).
 
 `quantem.gpu.detector.backends.bounded.BoundedDetectorCompute` routes to the
 native kernels only when the wrapper exposes `_detector_source` (an encoded
-`FourDSTEMData`) and `_detector_region`. The stale wrapper exposed `source`
+`Dataset4dstemGPU`) and `_detector_region`. The stale wrapper exposed `source`
 and `region` only, so `_native` stayed `None` and every query decoded the region in
 32-column blocks (128 reads) and reduced in torch.
 
