@@ -3886,7 +3886,9 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
 
         panel_px = int(self.panel_width_px or max_px)
         panel_px = max(64, min(panel_px, int(max_px)))
-        gap = max(2, int(panel_px * 0.015))
+        # same gap as the live view (0 by default); a forced white stripe between
+        # the scan image and the pattern read as a rendering defect
+        gap = max(0, int(self.compare_panel_gap_px))
         title_h = 0
         title = str(self.title or "").strip()
         font = ImageFont.load_default()
@@ -5134,10 +5136,19 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             return
 
         draw = ImageDraw.Draw(image, mode="RGBA")
-        font = ImageFont.load_default()
+        # Show2D's static overlay geometry (16 px label, 5 px bar, 4 px label gap,
+        # 12 px margin) in the widget's sans family, so 4D and 2D renders match;
+        # PIL's default bitmap font is 10 px and does not scale with the panel
+        from matplotlib import font_manager
+
+        from quantem.widget.show2d import _static_overlay_font
+
+        font = ImageFont.truetype(
+            font_manager.findfont(font_manager.FontProperties(family=_static_overlay_font())), 16
+        )
         width, height = image.size
-        margin = max(8, int(min(width, height) * 0.04))
-        thickness = max(2, int(height * 0.01))
+        margin = 12
+        thickness = 5
         target_bar_px = max(36, int(width * 0.15))
         target_physical = float(target_bar_px) * float(pixel_size)
         nice_physical = self._round_to_nice_value(target_physical)
