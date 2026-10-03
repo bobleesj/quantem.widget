@@ -11,7 +11,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "quantem>=0.1.8",
-    "quantem.gpu[movie]>=0.0.1rc6",
+    "quantem.gpu[movie] @ git+https://github.com/bobleesj/quantem.gpu.git@aa0e3ea362fe6def0fc91b3bd055be5ac08d24c1",
     "anywidget>=0.11.0",
     # JupyterLab widget manager 5.0.10 restores saved metadata.widgets state on reopen.
     "jupyterlab_widgets>=3.0.10",
@@ -53,6 +53,9 @@ testpaths = ["tests"]
 
 [project.scripts]
 quantem = "quantem.widget.cli:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/quantem"]
