@@ -982,3 +982,17 @@ def test_loaded_metadata_preserves_scan_and_detector_calibration(monkeypatch):
     assert factory.Show4DSTEM(data) is values
     assert captured["sampling"] == (0.4, 0.6, 0.02, 0.03)
     assert captured["units"] == ["angstrom", "angstrom", "1/angstrom", "1/angstrom"]
+
+    # A calibrated scan does not imply an angularly calibrated detector.
+    data.metadata.pop("detector_sampling_unit")
+    captured.clear()
+    factory.Show4DSTEM(data)
+    assert captured["sampling"] == (0.4, 0.6, 1.0, 1.0)
+    assert captured["units"] == ["angstrom", "angstrom", "pixels", "pixels"]
+
+    captured.clear()
+    factory.Show4DSTEM(
+        data, sampling=(1, 1, 0.2, 0.2), units=["nm", "nm", "mrad", "mrad"],
+    )
+    assert captured["sampling"] == (1, 1, 0.2, 0.2)
+    assert captured["units"] == ["nm", "nm", "mrad", "mrad"]

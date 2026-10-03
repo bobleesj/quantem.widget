@@ -75,25 +75,17 @@ def _build_mps_viewer(data: Any, **kwargs: Any) -> Any:
 def _apply_dataset_defaults(data: Any, payload: Any, kwargs: dict[str, Any]) -> None:
     """Give a loaded multi-dataset stack its natural comparison view."""
     if isinstance(data, Dataset4dstemGPU) and data.ndim == 4:
-        import numpy as np
-
-        metadata = data.metadata
-        sampling = list(metadata.get("sampling", [1.0] * 4))
-        units = list(metadata.get("units", ["pixels"] * 4))
-        calibrated = "sampling" in metadata or "units" in metadata
-        if "sampling" not in metadata:
-            for start, key, unit in (
-                (0, "scan_sampling_A", "angstrom"),
-                (2, "detector_sampling", metadata.get("detector_sampling_unit", "1/angstrom")),
-            ):
-                value = metadata.get(key)
-                if value is not None:
-                    sampling[start:start + 2] = [float(value)] * 2 if np.isscalar(value) else list(value)
-                    units[start:start + 2] = [unit] * 2
-                    calibrated = True
-        if calibrated:
-            kwargs.setdefault("sampling", tuple(sampling))
-            kwargs.setdefault("units", units)
+        axes = tuple(zip(data.sampling, data.units))
+        if any(spacing is not None and unit is not None for spacing, unit in axes):
+            # Uncalibrated axes are displayed in pixels, not guessed physical units.
+            kwargs.setdefault("sampling", tuple(
+                spacing if spacing is not None and unit is not None else 1.0
+                for spacing, unit in axes
+            ))
+            kwargs.setdefault("units", [
+                unit if spacing is not None and unit is not None else "pixels"
+                for spacing, unit in axes
+            ])
     shape = getattr(payload, "shape", ())
     try:
         is_multi_dataset = int(getattr(payload, "ndim", len(shape))) == 5
