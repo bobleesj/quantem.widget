@@ -28,6 +28,7 @@ import matplotlib.patheffects
 import matplotlib.pyplot as plt
 import numpy as np
 import traitlets
+from quantem.core.datastructures import Dataset
 from quantem.widget.image_folder import (
     ImageFolderRecord,
     WatchedImageFolder,
@@ -2796,7 +2797,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             and isinstance(data, core_image_dataset_types)
         )
         has_image_dataset_shape = (
-            hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling")
+            isinstance(data, Dataset) or (hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling"))
         )
         if is_core_image_dataset or has_image_dataset_shape:
             if not title and data.name:
@@ -2805,7 +2806,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 sampling = tuple(float(s) for s in data.sampling[-2:])
             if units is None and hasattr(data, "units"):
                 units = list(data.units[-2:])
-            data = data.array
+            data = data.data if isinstance(data, Dataset) else data.array
         # Same auto-extract for list/tuple of Dataset2d (gallery from per-file load).
         elif isinstance(data, (list, tuple)) and len(data) > 0:
             first = data[0]
@@ -2814,14 +2815,14 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 and isinstance(first, core_image_dataset_types)
             )
             first_has_image_dataset_shape = (
-                hasattr(first, "array") and hasattr(first, "sampling")
+                isinstance(first, Dataset) or (hasattr(first, "array") and hasattr(first, "sampling"))
             )
             if first_is_core_image_dataset or first_has_image_dataset_shape:
                 if sampling is None:
                     sampling = tuple(float(s) for s in first.sampling[-2:])
                 if units is None and hasattr(first, "units"):
                     units = list(first.units[-2:])
-                data = [d.array for d in data]
+                data = [d.data if isinstance(d, Dataset) else d.array for d in data]
 
         # Convert NumPy / PyTorch / list inputs to a NumPy array.
         # RGB detection rule: per-ITEM in a list input, an item with ndim == 3
@@ -3970,7 +3971,7 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         """
         if isinstance(data, (list, tuple)):
             images = [
-                to_numpy(item.array if hasattr(item, "array") else item)
+                to_numpy(item if isinstance(item, Dataset) else item.array if hasattr(item, "array") else item)
                 for item in data
             ]
             rgb_panels = [idx for idx, image in enumerate(images) if _is_rgb_item(image)]
@@ -3984,8 +3985,8 @@ class Show2D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 panel_frame_indices,
             )
         else:
-            if hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling"):
-                data = data.array
+            if isinstance(data, Dataset) or (hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling")):
+                data = data.data if isinstance(data, Dataset) else data.array
             data = to_numpy(data)
             if data.ndim == 2:
                 data = data[np.newaxis, ...]

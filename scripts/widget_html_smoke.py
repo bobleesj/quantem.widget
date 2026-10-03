@@ -95,8 +95,8 @@ class _SmokePtychoAccel:
         return np.asarray(phase, dtype=np.float32)
 
     def browser_state(self):
-        from quantem.gpu.ssb.compute.protocol import SSBExportState
-        from quantem.gpu.ssb.bf_selector import BrightfieldDisk
+        from quantem.gpu.ssb.backends.contract import SSBExportState
+        from quantem.gpu.ssb.brightfield import BrightfieldDisk
 
         selection = BrightfieldDisk(
             rows=self.bf_inds_row,

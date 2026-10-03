@@ -1329,12 +1329,26 @@ def test_show4dstem_html_cli_threads_full_dtype_to_load_and_export() -> None:
     loader_source = inspect.getsource(cli._master_to_binned_numpy)
 
     assert "export_dtype = _show4dstem_export_dtype(args)" in source
-    assert "_master_to_binned_numpy(master, args.det_bin, args.dtype)" in source
+    assert "_master_to_binned_numpy(master, args.det_bin)" in source
     assert "widget.export_html(str(out), title=args.title or stem, dtype=export_dtype)" in source
-    assert "load(master, det_bin=det_bin, dtype=dtype)" in loader_source
+    assert "with load(master) as data:" in loader_source
     assert cli._show4dstem_export_dtype(SimpleNamespace(dtype="uint16")) == "uint16"
     assert cli._show4dstem_export_dtype(SimpleNamespace(dtype="u16")) == "uint16"
     assert cli._show4dstem_export_dtype(SimpleNamespace(dtype="uint8")) == "uint8"
+
+
+def test_show4dstem_html_export_bins_native_windows(monkeypatch):
+    import numpy as np
+    import torch
+
+    from quantem.core.datastructures import Dataset4dstem
+
+    counts_t = torch.arange(2 * 3 * 6 * 8).reshape(2, 3, 6, 8)
+    data = Dataset4dstem.from_tensor(counts_t)
+    monkeypatch.setattr("quantem.gpu.io.load", lambda source: data)
+    exported = cli._master_to_binned_numpy("scan_master.h5", 2)
+    expected = counts_t.float().reshape(2, 3, 3, 2, 4, 2).mean(dim=(3, 5)).round()
+    np.testing.assert_array_equal(exported, expected.numpy())
 
 
 def test_showptycho_cli_threads_explicit_dtype_to_ssb_open() -> None:

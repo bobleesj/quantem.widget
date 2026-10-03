@@ -297,14 +297,14 @@ def _run_master_live_smoke(artifact_dir: Path) -> dict[str, Any]:
             source_signature=str(path),
         )
 
-    class _LoadResult:
-        def __init__(self, path: str) -> None:
-            stem = Path(path).name.split("_master.h5", 1)[0]
-            idx = int(stem.rsplit("_", 1)[-1])
-            self.data = torch.full((4, 4, 8, 8), idx + 1, dtype=torch.uint8)
+    def fake_load(path: str, **kwargs):
+        from quantem.core.datastructures import Dataset4dstem
 
-    def fake_load(path: str, *, det_bin=4, dtype="u8", verbose: bool = False, **kwargs):
-        return _LoadResult(path)
+        stem = Path(path).name.split("_master.h5", 1)[0]
+        idx = int(stem.rsplit("_", 1)[-1])
+        return Dataset4dstem.from_tensor(
+            torch.full((4, 4, 8, 8), idx + 1, dtype=torch.uint8)
+        )
 
     gpu_io.load = fake_load
     gpu_io.discover = fake_discover

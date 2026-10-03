@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from quantem.gpu.io.load import LoadResult
+from quantem.gpu.io.models import create_dataset
 
 from quantem.widget import Show4DSTEM
 from quantem.widget.show4dstem import Show4DSTEM as Show4DSTEMBase
@@ -59,6 +59,12 @@ def _preset_region_data(
 def test_public_show4dstem_import_uses_factory() -> None:
 
     assert Show4DSTEM is factory.Show4DSTEM
+
+
+def test_mps_folder_watch_explains_fixed_native_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setattr("quantem.gpu.device.resolve", lambda backend: backend)
+    with pytest.raises(NotImplementedError, match="watch=False"):
+        Show4DSTEM.from_folder(tmp_path, backend="mps", watch=True)
 
 
 def test_frontend_ready_resends_initial_scientific_views() -> None:
@@ -132,7 +138,7 @@ def test_master_file_contract_rejects_missing_required_field(monkeypatch) -> Non
 
 
 def test_show4dstem_routes_chunked_payload_to_mps_builder(monkeypatch) -> None:
-    payload = SimpleNamespace(chunks=[object()], metadata={"scan_shape": (2, 2)})
+    payload = SimpleNamespace(chunks=[object()], shape=(2, 2, 8, 8), dtype="uint16", metadata={"scan_shape": (2, 2)})
     calls = []
 
     def _fake_mps_builder(data, **kwargs):
@@ -149,8 +155,8 @@ def test_show4dstem_routes_chunked_payload_to_mps_builder(monkeypatch) -> None:
 
 
 def test_show4dstem_routes_loadresult_chunked_payload_to_mps_builder(monkeypatch) -> None:
-    payload = SimpleNamespace(chunks=[object()], metadata={"scan_shape": (2, 2)})
-    load_result = LoadResult(payload, {"file_names": ["a"]})
+    payload = SimpleNamespace(chunks=[object()], shape=(2, 2, 8, 8), dtype="uint16", metadata={"scan_shape": (2, 2)})
+    load_result = create_dataset(payload, {"file_names": ["a"]})
     calls = []
 
     def _fake_mps_builder(data, **kwargs):
@@ -171,7 +177,7 @@ def test_show4dstem_opens_mps_5d_loadresult_as_dataset_comparison(monkeypatch) -
         shape=(2, 4, 4, 8, 8),
         metadata={"scan_shape": (4, 4)},
     )
-    load_result = LoadResult(payload, {"file_names": ["-2 deg", "+2 deg"]})
+    load_result = create_dataset(payload, {"file_names": ["-2 deg", "+2 deg"]})
 
     def _fake_mps_builder(data, **kwargs):
         return {"data": data, "kwargs": kwargs}
@@ -255,8 +261,8 @@ def test_show4dstem_base_route_does_not_import_mps_implementation(monkeypatch) -
 
 
 def test_show4dstem_opens_5d_loadresult_as_dataset_comparison(monkeypatch) -> None:
-    payload = SimpleNamespace(ndim=5)
-    load_result = LoadResult(payload, {"file_names": ("first.h5", "second.h5")})
+    payload = SimpleNamespace(ndim=5, shape=(2, 2, 2, 8, 8), dtype="uint16")
+    load_result = create_dataset(payload, {"file_names": ("first.h5", "second.h5")})
 
     def _fake_base(data, **kwargs):
         return {"kind": "base", "data": data, "kwargs": kwargs}
@@ -274,8 +280,8 @@ def test_show4dstem_opens_5d_loadresult_as_dataset_comparison(monkeypatch) -> No
 
 
 def test_show4dstem_preserves_explicit_5d_view_options(monkeypatch) -> None:
-    payload = SimpleNamespace(ndim=5)
-    load_result = LoadResult(payload, {"file_names": ("first.h5", "second.h5")})
+    payload = SimpleNamespace(ndim=5, shape=(2, 2, 2, 8, 8), dtype="uint16")
+    load_result = create_dataset(payload, {"file_names": ("first.h5", "second.h5")})
 
     def _fake_base(data, **kwargs):
         return {"data": data, "kwargs": kwargs}
@@ -296,7 +302,7 @@ def test_simple_5d_loadresult_keeps_selected_and_average_dp_working() -> None:
     data = np.zeros((2, 2, 2, 6, 6), dtype=np.uint16)
     data[0, :, :, 1:3, 1:3] = 8
     data[1, :, :, 3:5, 3:5] = 24
-    loaded = LoadResult(data, {"file_names": ("tilt -2 deg", "tilt +2 deg")})
+    loaded = create_dataset(data, {"file_names": ("tilt -2 deg", "tilt +2 deg")})
 
     widget = factory.Show4DSTEM(
         loaded,

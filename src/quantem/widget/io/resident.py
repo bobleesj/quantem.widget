@@ -13,9 +13,9 @@ def load_resident(
     source: str | Path,
     *,
     backend: str = "cuda",
-    representation: str = "packed",
+    representation: str = "encoded",
     device: int | None = None,
-) -> io.FourDSTEMData:
+) -> io.Dataset4dstem:
     """Keep a complete acquisition available for repeated detector queries.
 
     Stored detector-mask pixels are replaced by their valid 3x3-neighbor
@@ -30,13 +30,13 @@ def load_resident(
     backend : str
         Compute backend, normally ``cuda`` for remote Browse.
     representation : str
-        ``packed`` for bit packing or ``encoded`` for direct ANS queries.
+        ``encoded`` keeps exact native counts for bounded detector queries.
     device : int, optional
         Process-visible device index.
 
     Returns
     -------
-    quantem.gpu.io.FourDSTEMData
+    quantem.core.datastructures.Dataset4dstem
         Owned resident source. Close it after closing its detector sessions.
 
     Examples
@@ -58,12 +58,12 @@ def load_resident(
     )
 
 
-def prepare_resident(loaded: io.FourDSTEMData) -> "DetectorSession":
+def prepare_resident(loaded: io.Dataset4dstem) -> "DetectorSession":
     """Prepare exact indexed detector queries without expanding the acquisition.
 
     Parameters
     ----------
-    loaded : quantem.gpu.io.FourDSTEMData
+    loaded : quantem.core.datastructures.Dataset4dstem
         Owned source returned by :func:`load_resident`.
 
     Returns

@@ -20,7 +20,13 @@ class _View:
         if not (0 <= r0 < r1 <= source.shape[0] and 0 <= c0 < c1 <= source.shape[1]):
             raise ValueError(f'Scan region {self.region} is outside {source.shape[:2]}.')
         self.shape = (r1-r0, c1-c0, *source.shape[2:])
-        self.device = torch.device(getattr(source, 'device', None) or source.metadata['device'])
+        payload = getattr(source, 'data', source)
+        device = getattr(payload, 'device', None)
+        if device is None:
+            device = getattr(source, 'device', None)
+        if device is None:
+            device = source.metadata['device']
+        self.device = torch.device('cuda', device) if isinstance(device, int) else torch.device(device)
         self.device = torch.device(self.device.type, self.device.index or 0)
         self.nbytes = 0  # Borrowed; this wrapper allocates no measurement storage.
         # Preserve the native reduction owner through an optional scan-region view.
@@ -47,6 +53,18 @@ class _View:
 
     def numel(self):
         return math.prod(self.shape)
+
+    def nelement(self):
+        return self.numel()
+
+    def element_size(self):
+        return 4  # Bounded detector calculations return float32 working arrays.
+
+    def to(self, device):
+        target = torch.device(device)
+        if target.type == self.device.type and (target.index or 0) == (self.device.index or 0):
+            return self
+        raise ValueError("An encoded acquisition owns its device. Reload it on the selected GPU instead of copying a dense cube.")
 
     def __getitem__(self, row):
         if isinstance(row, tuple):

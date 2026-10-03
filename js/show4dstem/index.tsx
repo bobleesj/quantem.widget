@@ -3778,7 +3778,7 @@ function Show4DSTEM() {
     || model.get("_lazy_urls")
   );
   const ransSourceAvailable = Boolean(model.get("_rans_url"));
-  const countAnsSource = model.get("_rans_format") === "count-ans-v1";
+  const qemSource = model.get("_rans_format") === "qem-v1";
   const source112Source = model.get("_rans_format") === "source112-tans1024-pair-v1";
   const [ransLocalFiles, setRansLocalFiles] = React.useState<File[] | null>(null);
   const [ransLocalDirectory, setRansLocalDirectory] = React.useState<Parameters<typeof RansResidentSet.loadLocal>[1] | null>(null);
@@ -3812,7 +3812,7 @@ function Show4DSTEM() {
   }, [ransSourceAvailable]);
   const grantH5LocalFiles = React.useCallback(async () => {
     setH5LocalSourceStatus("");
-    if (countAnsSource || source112Source) {
+    if (qemSource || source112Source) {
       h5LocalInputRef.current?.click();
       return;
     }
@@ -3842,7 +3842,7 @@ function Show4DSTEM() {
       }
     }
     h5LocalInputRef.current?.click();
-  }, [countAnsSource, source112Source, ransSourceAvailable]);
+  }, [qemSource, source112Source, ransSourceAvailable]);
   React.useEffect(() => {
     if (!offline) {
       setWebgpuDpcReady(false);
@@ -3956,9 +3956,9 @@ function Show4DSTEM() {
       const h5ResidentLimit = h5UsesNativeU16 && !h5AllowU16MultiResident
         ? 1
         : h5RequestedResidentLimit;
-      if ((countAnsSource || source112Source) && !ransLocalFiles?.length) {
+      if ((qemSource || source112Source) && !ransLocalFiles?.length) {
         if (!disposed) {
-          setOfflineBackendStatus(source112Source ? "Select the complete encoded data folder to load all 66 acquisitions" : "Select the exported count-ANS files to load the lossless source");
+          setOfflineBackendStatus(source112Source ? "Select the complete encoded data folder to load all 66 acquisitions" : "Select the exported QEM files to load the lossless source");
           setOfflineBackendLoading(false);
         }
         return;
@@ -4336,14 +4336,14 @@ function Show4DSTEM() {
         window.addEventListener("pointerdown", noteInteraction, {passive: true, signal: sourceLoadAbort.signal});
         const status = (text: string) => { if (!disposed) setOfflineBackendStatus(text); };
         let canonicalFiles: File[] = [];
-        if (countAnsSource) {
+        if (qemSource) {
           const expected = JSON.parse(String(model.get("_rans_files") || "[]")) as string[];
           canonicalFiles = expected.map(name => {
             const file = ransLocalFiles?.find(candidate => candidate.name === name);
-            if (!file) throw new Error(`Missing ${name}. Select all exported count-ANS files together.`);
+            if (!file) throw new Error(`Missing ${name}. Select all exported QEM files together.`);
             return file;
           });
-          if (!canonicalFiles.length) throw new Error("This viewer has no count-ANS files configured. Export it again from the source files.");
+          if (!canonicalFiles.length) throw new Error("This viewer has no QEM files configured. Export it again from the source files.");
         }
         ransSet = model.get("_rans_format") === "source112-tans1024-pair-v1"
           ? await Source112ResidentSet.loadFiles(ransDevice, ransLocalFiles || [], status, sourceLoadAbort.signal, {
@@ -4359,7 +4359,7 @@ function Show4DSTEM() {
                 refreshResidentProgress?.();
               },
             })
-          : countAnsSource
+          : qemSource
           ? await RansResidentSet.loadCountANSFiles(ransDevice, canonicalFiles, status,
               JSON.parse(String(model.get("_offline_bad_px") || "[]")) as number[])
           : ransLocalDirectory
@@ -4370,7 +4370,7 @@ function Show4DSTEM() {
         if (disposed) { ransSet.dispose(); return; }
         const expectedShape = [scanRows, scanCols, detR, detC];
         if ((ransSet.shape && ransSet.shape.some((size, i) => size !== expectedShape[i]))
-            || (countAnsSource && ransSet.nativeDtype !== model.get("_rans_dtype"))) {
+            || (qemSource && ransSet.nativeDtype !== model.get("_rans_dtype"))) {
           ransSet.dispose();
           throw new Error("Selected source geometry or native dtype differs from this viewer. Select the files exported with this viewer.");
         }
@@ -6664,7 +6664,7 @@ function Show4DSTEM() {
       clearViGpuDisplay();
       detach?.();
     };
-  }, [beginDpRoiInteraction, clearViGpuDisplay, countAnsSource, source112Source, ensureViGpuColormap, h5LocalFilesGranted, h5SourceAvailable, offline, ransLocalDirectory, ransLocalFiles, requestCompareViLive, requestDpFrameLive, requireLocalH5Files]);
+  }, [beginDpRoiInteraction, clearViGpuDisplay, qemSource, source112Source, ensureViGpuColormap, h5LocalFilesGranted, h5SourceAvailable, offline, ransLocalDirectory, ransLocalFiles, requestCompareViLive, requestDpFrameLive, requireLocalH5Files]);
   // dp_stats are computed in JS from frameBytes (Python side no longer
   // syncs a dp_stats trait — saves 4 trait sync round-trips per click).
   const [viStats, setViStats] = React.useState<number[]>([0, 0, 0, 0]);
@@ -10649,10 +10649,10 @@ function Show4DSTEM() {
         ref={h5LocalInputRef}
         type="file"
         multiple
-        accept={countAnsSource ? ".ans" : ransSourceAvailable ? undefined : ".h5,.hdf5"}
+        accept={qemSource ? ".qem" : ransSourceAvailable ? undefined : ".h5,.hdf5"}
         onChange={onH5LocalInput}
         style={{ display: "none" }}
-        {...(countAnsSource ? {} : { webkitdirectory: "", directory: "" })}
+        {...(qemSource ? {} : { webkitdirectory: "", directory: "" })}
       />
       {/* HEADER */}
       {showTitle && <Typography variant="h6" sx={{ ...typo.title, mb: `${SPACING.SM}px` }}>
@@ -10824,7 +10824,7 @@ function Show4DSTEM() {
                 onClick={grantH5LocalFiles}
                 title={h5LocalSourceStatus || (ransSourceAvailable ? "Open the local lossless data folder" : "Grant local HDF5 master/data files for browser WebGPU load")}
               >
-                {countAnsSource ? "Open count-ANS files" : ransSourceAvailable ? "Open data folder" : "Local H5"}
+                {qemSource ? "Open QEM files" : ransSourceAvailable ? "Open data folder" : "Local H5"}
               </Button>}
               {exportEnabled && <Button
                 size="small"

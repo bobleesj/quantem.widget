@@ -68,17 +68,20 @@ def test_export_writes_range_manifest_and_bundle(tmp_path):
 @pytest.mark.parametrize("dtype", [np.uint8, np.uint16])
 def test_export_canonical_series_retains_order_geometry_and_local_grant(tmp_path, monkeypatch, dtype):
     from quantem.gpu.io import save
-    from quantem.gpu.io._ans import ANSFile
+    from quantem.gpu.io import _qem_reference
 
     counts = np.arange(4 * 5 * 2 * 3, dtype=dtype).reshape(4, 5, 2, 3)
-    paths = [tmp_path / "first.ans", tmp_path / "second.ans"]
+    paths = [tmp_path / "first.qem", tmp_path / "second.qem"]
     for ordinal, path in enumerate(paths):
-        save(path, counts + ordinal, format="quantem", compression="ans", backend="cpu")
+        save(path, counts + ordinal, format="quantem", compression="ans", backend="cpu",
+             metadata={"scan_sampling_A": [0.4, 0.6], "voltage_kV": 300.0})
+        restored, _ = _qem_reference.load_array(path)
+        np.testing.assert_array_equal(restored, counts + ordinal)
 
     def no_count_decode(*args, **kwargs):
         raise AssertionError("Viewer export must not decode native count arrays.")
 
-    monkeypatch.setattr(ANSFile, "decode_block_reference", no_count_decode)
+    monkeypatch.setattr(_qem_reference, "load_array", no_count_decode)
     valid = np.ones((2, 3), bool)
     valid[1, 2] = False
     html = export_show4dstem_rans_viewer(
@@ -86,18 +89,20 @@ def test_export_canonical_series_retains_order_geometry_and_local_grant(tmp_path
     )
     root = html.parent.parent / "rans"
     manifest = json.loads((root / "manifest.json").read_text())
-    assert manifest["schema"] == "quantem.show4dstem-count-ans-browser/v1"
+    assert manifest["schema"] == "quantem.show4dstem-qem-browser/v1"
     assert manifest["local_grant_required"] is True
     assert manifest["scan_shape"] == [4, 5] and manifest["detector_shape"] == [2, 3]
     assert manifest["dtype"] == np.dtype(dtype).name and manifest["bad_pixels"] == [5]
-    assert [item["url"] for item in manifest["sources"]] == ["t0-counts.ans", "t1-counts.ans"]
+    assert [item["url"] for item in manifest["sources"]] == ["t0-counts.qem", "t1-counts.qem"]
     for item, original in zip(manifest["sources"], paths[::-1]):
         assert (root / item["url"]).samefile(original)
         assert item["file_bytes"] == original.stat().st_size
+        assert item["scientific_metadata"]["axes"][0]["sampling"]["value"] == 0.4
+        assert item["scientific_metadata"]["axes"][1]["sampling"]["value"] == 0.6
     state = html.read_text()
-    assert '"_rans_format": "count-ans-v1"' in state
+    assert '"_rans_format": "qem-v1"' in state
     assert '"_rans_dtype": "' + np.dtype(dtype).name + '"' in state
-    filenames = json.dumps(json.dumps(["t0-counts.ans", "t1-counts.ans"]))
+    filenames = json.dumps(json.dumps(["t0-counts.qem", "t1-counts.qem"]))
     assert '"_rans_files": ' + filenames in state
     assert '"n_frames": 2' in state
     assert '"_offline_bad_px": "[5]"' in state
@@ -107,11 +112,11 @@ def test_export_canonical_series_retains_order_geometry_and_local_grant(tmp_path
 def test_export_single_canonical_file_requires_homogeneous_series(tmp_path):
     from quantem.gpu.io import save
 
-    first, second = tmp_path / "first.ans", tmp_path / "second.ans"
+    first, second = tmp_path / "first.qem", tmp_path / "second.qem"
     save(first, np.zeros((3, 4, 2, 2), np.uint16), format="quantem", compression="ans", backend="cpu")
     save(second, np.zeros((3, 5, 2, 2), np.uint16), format="quantem", compression="ans", backend="cpu")
     html = export_show4dstem_rans_viewer(first, tmp_path / "single")
-    assert '"_rans_format": "count-ans-v1"' in html.read_text()
+    assert '"_rans_format": "qem-v1"' in html.read_text()
     with pytest.raises(ValueError, match="share native"):
         export_show4dstem_rans_viewer([first, second], tmp_path / "invalid")
     assert not (tmp_path / "invalid").exists()

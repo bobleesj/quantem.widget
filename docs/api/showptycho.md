@@ -71,7 +71,7 @@ ssb = SSB.open(
     scan_sampling_A=0.276,
     voltage_kV=300.0,
 )
-result = ssb.fit(trials=200, refinement="nelder-mead")
+result = ssb.find_aberrations(trials=200, refinement="nelder-mead")
 w = ShowPtycho(
     ssb,
     source_file="reference_master.h5",
@@ -113,9 +113,9 @@ from quantem.widget import ShowPtycho
 
 ssb = SSB.open(path, voltage_kV=300.0, semiangle_mrad=30.0, scan_sampling_A=0.495,
                det_sampling=0.5554, rotation_angle_deg=-8.6)
-standard = ssb.fit()                 # defocus + astigmatism
+standard = ssb.find_aberrations()                 # defocus + astigmatism
 ShowPtycho(ssb)                      # standard SSB
-tilted = ssb.fit(tilt=True)          # + sample tilt and depth spread, jointly
+tilted = ssb.find_aberrations(tilt=True)          # + sample tilt and depth spread, jointly
 ShowPtycho(ssb)                      # opens on the fitted tilt
 pd.concat([standard.report(), tilted.report()])
 ```

@@ -602,7 +602,7 @@ def export_show4dstem_rans_viewer(
     copied. Decode tables (packed symbol entries, a 256-bucket slot lookup per column,
     column metadata) are derived once here and written next to the links.
 
-    A canonical count-ANS file, or an ordered sequence of those files, uses the
+    An integer QEM file, or an ordered sequence of those files, uses the
     same exporter. Geometry and native dtype are admitted from the validated
     container metadata without decoding counts. Each container is linked into
     the export; the browser requires an explicit local file grant instead of
@@ -612,8 +612,8 @@ def export_show4dstem_rans_viewer(
     Parameters
     ----------
     build_result
-        Legacy encoder JSON, one canonical count-ANS file, or an ordered
-        sequence of canonical files.
+        Legacy encoder JSON, one integer QEM file, or an ordered
+        sequence of QEM files.
     out_dir
         Destination bundle folder. Source containers are linked, never copied
         or modified.
@@ -631,7 +631,7 @@ def export_show4dstem_rans_viewer(
 
     Examples
     --------
-    >>> export_show4dstem_rans_viewer(["tilt-0.ans", "tilt-1.ans"], "viewer")
+    >>> export_show4dstem_rans_viewer(["tilt-0.qem", "tilt-1.qem"], "viewer")
     PosixPath('.../.viewer/Show4DSTEM.html')
     """
 
@@ -640,13 +640,13 @@ def export_show4dstem_rans_viewer(
     if isinstance(build_result, (str, pathlib.Path)):
         source_path = pathlib.Path(build_result).expanduser().resolve()
         with source_path.open("rb") as stream:
-            canonical = stream.read(8) == b"QGANS\0\1\0"
+            canonical = stream.read(8) == b"QEMDATA1"
         canonical_paths = [source_path] if canonical else None
         build_result = source_path
     else:
         canonical_paths = [pathlib.Path(path).expanduser().resolve() for path in build_result]
     if canonical_paths is not None:
-        return _export_count_ans_viewer(
+        return _export_qem_viewer(
             canonical_paths, out_dir, tilts=tilts, title=title,
             frame_labels=frame_labels, valid_pixels=valid_pixels, debug=debug,
         )
@@ -727,34 +727,39 @@ def export_show4dstem_rans_viewer(
     return root / ".viewer" / "Show4DSTEM.html"
 
 
-def _export_count_ans_viewer(
+def _export_qem_viewer(
     paths, out_dir, *, tilts, title, frame_labels, valid_pixels, debug,
 ):
     """Admit canonical containers and serialize a local-grant-only viewer."""
-    from quantem.gpu.io._ans import ANSFile
+    from quantem.gpu.io._qem_reference import read_envelope
+    from quantem.gpu.io.qem_validation import validate_qem
     from quantem.widget import Show4DSTEM
 
     chosen = list(tilts) if tilts is not None else list(range(len(paths)))
     if not chosen or any(type(index) is not int or not 0 <= index < len(paths) for index in chosen):
-        raise ValueError("Select at least one valid acquisition index from the count-ANS files.")
+        raise ValueError("Select at least one valid acquisition index from the QEM files.")
     if frame_labels is not None and len(frame_labels) != len(chosen):
-        raise ValueError("Provide one frame label per selected count-ANS acquisition.")
+        raise ValueError("Provide one frame label per selected QEM acquisition.")
     sources = []
     shape = dtype = None
     for ordinal, index in enumerate(chosen):
-        with ANSFile(paths[index]) as encoded:
-            if shape is None:
-                shape, dtype = encoded.shape, encoded.dtype.name
-            elif encoded.shape != shape or encoded.dtype.name != dtype:
-                raise ValueError("Count-ANS acquisitions must share native scan/detector geometry and dtype.")
-            sources.append({
-                "url": f"t{ordinal}-counts.ans",
-                "source_index": index,
-                "shape": list(encoded.shape),
-                "dtype": encoded.dtype.name,
-                "file_bytes": encoded.file_bytes,
-                "logical_sha256": encoded.manifest["logical_sha256"],
-            })
+        integrity = validate_qem(paths[index])
+        header, _ = read_envelope(paths[index])
+        if header["codec"] != "runtime-column-rans-spatial-v2" or header["dtype"] not in ("uint8", "uint16"):
+            raise ValueError("Browser QEM export needs exact uint8/uint16 QEM counts; use Python GPU for float32 or scaled data.")
+        current_shape, current_dtype = tuple(header["shape"]), header["dtype"]
+        if shape is None:
+            shape, dtype = current_shape, current_dtype
+        elif current_shape != shape or current_dtype != dtype:
+            raise ValueError("QEM acquisitions must share native scan/detector geometry and dtype.")
+        sources.append({
+            "url": f"t{ordinal}-counts.qem",
+            "source_index": index,
+            "shape": list(current_shape),
+            "dtype": current_dtype,
+            "file_bytes": integrity["file_bytes"],
+            "scientific_metadata": header["scientific_metadata"],
+        })
     bad_pixels = []
     if valid_pixels is not None:
         valid = np.asarray(valid_pixels, dtype=bool)
@@ -771,8 +776,8 @@ def _export_count_ans_viewer(
         else:
             record["link"] = _link_read_only(paths[index], target)
     manifest = {
-        "schema": "quantem.show4dstem-count-ans-browser/v1",
-        "source_format": "count-ans-v1",
+        "schema": "quantem.show4dstem-qem-browser/v1",
+        "source_format": "qem-v1",
         "local_grant_required": True,
         "sources": sources,
         "scan_shape": list(shape[:2]),
@@ -784,7 +789,7 @@ def _export_count_ans_viewer(
     widget = Show4DSTEM(
         np.zeros((1, 1, 1, 1), dtype=np.uint8),
         rans_url="../rans/", rans_count=len(chosen),
-        rans_format="count-ans-v1", rans_files=[record["url"] for record in sources],
+        rans_format="qem-v1", rans_files=[record["url"] for record in sources],
         rans_dtype=dtype, scan_shape=shape[:2], detector_shape=shape[2:],
         offline_dtype=dtype, frame_labels=list(frame_labels) if frame_labels else None,
         backend="webgpu", view_mode="multiple" if len(chosen) > 1 else "single",

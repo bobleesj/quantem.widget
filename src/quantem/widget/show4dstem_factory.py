@@ -15,17 +15,16 @@ import gc
 import math
 import os
 import pathlib
-import types
 import warnings
 from typing import Any
 
-from quantem.gpu.io.load import LoadResult
+from quantem.core.datastructures import Dataset, Dataset4dstem
 from quantem.widget.show4dstem import Show4DSTEM as _Show4DSTEMBase
 
 
 def _payload(value: Any) -> Any:
     """Unwrap ``io.load`` output to the object used for backend routing."""
-    return value.data if isinstance(value, LoadResult) else value
+    return value.data if isinstance(value, Dataset) else value
 
 
 def _is_cuda_resident(value: Any) -> bool:
@@ -73,14 +72,19 @@ def _build_mps_viewer(data: Any, **kwargs: Any) -> Any:
     return _show4dstem_mps(data, **kwargs)
 
 
-def _apply_loadresult_defaults(data: Any, payload: Any, kwargs: dict[str, Any]) -> None:
+def _apply_dataset_defaults(data: Any, payload: Any, kwargs: dict[str, Any]) -> None:
     """Give a loaded multi-dataset stack its natural comparison view."""
+    if isinstance(data, Dataset4dstem):
+        if any(value != 1 for value in data.sampling):
+            kwargs.setdefault("sampling", tuple(data.sampling))
+        if any(unit != "pixels" for unit in data.units):
+            kwargs.setdefault("units", list(data.units))
     shape = getattr(payload, "shape", ())
     try:
         is_multi_dataset = int(getattr(payload, "ndim", len(shape))) == 5
     except (TypeError, ValueError):
         is_multi_dataset = False
-    if not isinstance(data, LoadResult) or not is_multi_dataset:
+    if not isinstance(data, Dataset) or not is_multi_dataset:
         return
     meta = getattr(data, "metadata", {}) or {}
     kwargs.setdefault("frame_dim_label", "Dataset")
@@ -110,16 +114,17 @@ def Show4DSTEM(data: Any, **kwargs: Any) -> Any:
         reducers for BF/DF/ADF interaction.
       - Browser WebGPU performs detector reductions in the browser.
     """
-    if callable(getattr(data, 'read', None)) and 'scan_region' in kwargs:
+    payload = _payload(data)
+    _apply_dataset_defaults(data, payload, kwargs)
+    if isinstance(data, Dataset4dstem) and ('scan_region' in kwargs or data.representation == 'encoded'):
         from quantem.widget.show4dstem_bounded import show_bounded
 
         return show_bounded([data], **kwargs)
-    if isinstance(data, (list, tuple)) and any(callable(getattr(item, 'read', None)) for item in data):
+    if isinstance(data, (list, tuple)) and data and all(isinstance(item, Dataset4dstem) for item in data):
         from quantem.widget.show4dstem_bounded import show_bounded
 
+        _apply_dataset_defaults(data[0], data[0].data, kwargs)
         return show_bounded(data, **kwargs)
-    payload = _payload(data)
-    _apply_loadresult_defaults(data, payload, kwargs)
     if _is_cuda_resident(payload):
         from quantem.widget.show4dstem_resident import _ResidentShow4DSTEM
 
@@ -273,21 +278,6 @@ def _dtype_token(dtype: Any) -> str | None:
     return str(dtype).strip().lower().replace("_", "")
 
 
-def _mps_output_dtype(dtype: Any) -> str | None:
-    """Return the raw-Metal folder output dtype requested by the public API."""
-    token = _dtype_token(dtype)
-    if token in {None, "", "auto", "native", "full", "exact"}:
-        return None
-    if token in {"u8", "uint8"}:
-        return "u8"
-    if token in {"u16", "uint16"}:
-        return "u16"
-    raise ValueError(
-        "Show4DSTEM.from_folder(..., backend='mps') currently supports "
-        f"dtype='auto', 'u8', or 'u16'; got dtype={dtype!r}."
-    )
-
-
 def _is_recoverable_allocation_error(exc: BaseException) -> bool:
     """True when a loader failed from memory pressure, not bad input data."""
     if isinstance(exc, MemoryError):
@@ -396,104 +386,6 @@ def _memory_limited_folder_widget(
     return widget
 
 
-def _warn_mps_from_folder_limits(
-    *,
-    dtype: Any,
-    page_budget: int | str | None,
-    page_max_vram_fraction: float,
-    page_reserve_vram_bytes: int | None,
-    page_max_vram_bytes: int | dict | None,
-    preload_initial_page: bool | int,
-) -> None:
-    """Warn for public from_folder knobs the raw-Metal MPS path cannot honor."""
-    messages: list[str] = []
-    token = _dtype_token(dtype)
-    if token in {"u8", "uint8"}:
-        messages.append(
-            "MPS folder dtype='u8' uses browse clipping before raw-Metal "
-            "interaction. Use dtype='auto' for native detector counts."
-        )
-    else:
-        _mps_output_dtype(dtype)
-
-    page_options_changed = (
-        page_budget is not None
-        or float(page_max_vram_fraction) != 0.98
-        or page_reserve_vram_bytes is not None
-        or page_max_vram_bytes is not None
-        or preload_initial_page is not True
-    )
-    if page_options_changed:
-        messages.append(
-            "Dataset5dstem paging/preload options are ignored; the raw-Metal MPS "
-            "folder viewer uses LazyMacbookDatasets/MultiChunkedFrames rather "
-            "than Dataset5dstem.page()."
-        )
-    if messages:
-        warnings.warn(" ".join(messages), RuntimeWarning, stacklevel=3)
-
-
-def _attach_mps_folder_methods(
-    viewer: Any,
-    live: Any,
-    *,
-    folder: pathlib.Path,
-    pattern: str,
-    recursive: bool,
-    scan_size: int | None,
-    ready_only: bool,
-) -> Any:
-    """Expose the from_folder polling API on an MPS lazy viewer instance."""
-    from quantem.widget._folder_watch_status import set_folder_watch_status
-
-    viewer._mps_folder_live = live
-
-    def publish_status(state: str, detail: str = "") -> None:
-        publisher = getattr(viewer, "_publish_mps_folder_watch_status", None)
-        if callable(publisher):
-            publisher(state, detail)
-        else:
-            set_folder_watch_status(viewer, state, detail)
-
-    status_setter = getattr(live, "set_status_callback", None)
-    if callable(status_setter):
-        status_setter(publish_status)
-    else:
-        set_folder_watch_status(viewer, "hidden", "")
-
-    def poll_folder(self, *, async_: bool = False) -> list[int]:
-        scan_shape = (int(scan_size), int(scan_size)) if scan_size else None
-        return live.poll(
-            folder,
-            pattern=pattern,
-            recursive=recursive,
-            scan_shape=scan_shape,
-            ready_only=ready_only,
-            async_=async_,
-            require_stable=True,
-        )
-
-    def watch_folder(self, *, interval: float = 2.0) -> Any:
-        scan_shape = (int(scan_size), int(scan_size)) if scan_size else None
-        live.watch(
-            folder,
-            interval=interval,
-            pattern=pattern,
-            recursive=recursive,
-            scan_shape=scan_shape,
-            ready_only=ready_only,
-        )
-        return self
-
-    def stop_folder_watch(self) -> None:
-        live.stop()
-
-    viewer.poll_folder = types.MethodType(poll_folder, viewer)
-    viewer.watch_folder = types.MethodType(watch_folder, viewer)
-    viewer.stop_folder_watch = types.MethodType(stop_folder_watch, viewer)
-    return viewer
-
-
 def from_folder(
     folder,
     *,
@@ -505,7 +397,7 @@ def from_folder(
     ready_only: bool = True,
     gpus=None,
     page_budget: int | str | None = "auto",
-    det_bin: int = 4,
+    det_bin: int = 1,
     dtype: str = "auto",
     backend: str | None = None,
     load_kwargs: dict[str, Any] | None = None,
@@ -537,9 +429,8 @@ def from_folder(
     default. On the CUDA ``Dataset5dstem`` path, new ready masters are
     appended without rebuilding the widget, then join complete-series preload
     when the updated footprint still fits. Otherwise they remain cold until a
-    page needs them. The MPS backend keeps its separate live polling architecture
-    and does not share this reduced-page cache lifecycle. Set ``watch=False`` for
-    a fixed folder snapshot.
+    page needs them. MPS opens a fixed native acquisition list with ``watch=False``. Reopen
+    it after new files arrive.
 
     ``columns`` controls the grid width and ``page_size`` controls how many
     datasets are shown and preloaded together. Set
@@ -582,145 +473,39 @@ def from_folder(
         preload_initial_page = compare_max_panels
 
     if backend == "mps":
-        from quantem.gpu import io as gpu_io
-
+        if watch:
+            raise NotImplementedError(
+                "Watching encoded MPS folders is not implemented. Pass watch=False "
+                "to open a fixed native acquisition list, then reopen after new files arrive."
+            )
         if gpus is not None:
-            raise ValueError(
-                "Show4DSTEM.from_folder(..., backend='mps') does not accept gpus=. "
-                "gpus= selects CUDA devices; omit it for Apple MPS."
-            )
-        if load_kwargs:
-            raise ValueError(
-                "Show4DSTEM.from_folder(..., backend='mps') does not accept "
-                "load_kwargs; use the typed folder options directly."
-            )
-        _warn_mps_from_folder_limits(
-            dtype=dtype,
-            page_budget=page_budget,
-            page_max_vram_fraction=page_max_vram_fraction,
-            page_reserve_vram_bytes=page_reserve_vram_bytes,
-            page_max_vram_bytes=page_max_vram_bytes,
-            preload_initial_page=preload_initial_page,
-        )
+            raise ValueError("MPS uses the system device; omit gpus= for MPS folders.")
         folder_path = pathlib.Path(folder).expanduser().resolve()
-        scan_shape = (int(scan_size), int(scan_size)) if scan_size else None
         masters = gpu_io.discover(
-            str(folder_path),
-            pattern=pattern,
-            recursive=recursive,
-            scan_shape=scan_shape,
+            str(folder_path), pattern=pattern, recursive=recursive,
+            scan_shape=(int(scan_size), int(scan_size)) if scan_size else None,
             verbose=False,
         )
         if ready_only:
             masters = _filter_ready_masters(
-                list(masters),
-                lambda master: gpu_io.inspect(master).ready,
-                verbose=bool(verbose),
+                masters, lambda master: gpu_io.inspect(master).ready, verbose=verbose,
             )
-        if not masters:
-            state = "ready " if ready_only else ""
-            raise ValueError(
-                f"No {state}{pattern!r} files found in {folder_path}. "
-                "Wait for linked data files to finish writing, or pass "
-                "ready_only=False if you know the masters are complete."
-            )
-        masters = _largest_compatible_master_group(
-            list(masters),
-            verbose=bool(verbose),
-        )
+        masters = _largest_compatible_master_group(list(masters), verbose=verbose)
         if min_masters is not None and len(masters) < min_masters:
-            raise ValueError(
-                f"Show4DSTEM.from_folder requires at least {min_masters} "
-                f"compatible master(s), but found {len(masters)}."
-            )
+            raise ValueError(f"Expected at least {min_masters} ready acquisitions; found {len(masters)}.")
         if max_masters is not None:
             masters = masters[:max_masters]
-        expected_contract = _master_file_contract(masters[0])
-
-        def validate_mps_master(master: Any) -> None:
-            candidate = _master_file_contract(master)
-            # The MPS loader normalizes supported Arina browse dtypes to
-            # uint16 chunk-backed data, so a uint32/uint16 source mix is valid
-            # as long as the geometry and frame count match.
-            mismatches = [
-                name
-                for name in ("scan_shape", "detector_shape", "n_frames")
-                if candidate.get(name) != expected_contract.get(name)
-            ]
-            if mismatches:
-                observed = ", ".join(
-                    f"{name}={candidate.get(name)!r}" for name in mismatches
-                )
-                expected = ", ".join(
-                    f"{name}={expected_contract.get(name)!r}" for name in mismatches
-                )
-                raise ValueError(
-                    f"Incompatible 4D-STEM master {_master_label(master)!r}: "
-                    f"{observed}; expected {expected}. Use scan_size= or a "
-                    "narrower pattern= for a uniform folder."
-                )
-
-        compatible_masters: list[Any] = []
-        skipped_contracts: list[Any] = []
-        for master in masters:
-            try:
-                validate_mps_master(master)
-            except ValueError:
-                skipped_contracts.append(master)
-            else:
-                compatible_masters.append(master)
-        if skipped_contracts and verbose:
-            warnings.warn(
-                "Show4DSTEM.from_folder skipped "
-                f"{len(skipped_contracts)} MPS master file"
-                f"{'s' if len(skipped_contracts) != 1 else ''} whose scan, detector, "
-                "or frame-count contract differs from the first ready master.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-        masters = compatible_masters
-        if warm_cache:
-            viewer_kwargs.setdefault(
-                "compare_cache_pages",
-                max(1, math.ceil(len(masters) / compare_max_panels)) * 4,
-            )
-
+        if not masters:
+            raise ValueError(f"No ready {pattern!r} acquisitions found in {folder_path}.")
         loaded = gpu_io.load(
-            masters,
-            backend="mps",
-            det_bin=det_bin,
-            scan_shape=scan_shape,
-            dtype=_mps_output_dtype(dtype),
-            verbose=verbose,
+            masters, backend="mps", stack=False, detector_bin=det_bin,
+            dtype=None if _dtype_token(dtype) in {None, "auto", "native"} else dtype,
+            verbose=verbose, **dict(load_kwargs or {}),
         )
-        live = loaded.data
-        viewer = Show4DSTEM(
-            live,
-            view_mode=view_mode,
-            compare_cols=compare_cols,
-            compare_max_panels=compare_max_panels,
-            page_budget=page_budget,
-            page_device=None,
-            page_max_vram_fraction=page_max_vram_fraction,
-            page_reserve_vram_bytes=page_reserve_vram_bytes,
-            page_max_vram_bytes=page_max_vram_bytes,
-            verbose=verbose,
-            **viewer_kwargs,
+        return Show4DSTEM(
+            loaded, view_mode=view_mode, compare_cols=compare_cols,
+            compare_max_panels=compare_max_panels, verbose=verbose, **viewer_kwargs,
         )
-        viewer = _attach_mps_folder_methods(
-            viewer,
-            live,
-            folder=folder_path,
-            pattern=pattern,
-            recursive=recursive,
-            scan_size=scan_size,
-            ready_only=ready_only,
-        )
-        if watch:
-            viewer.watch_folder(interval=watch_interval)
-        if warm_cache and callable(getattr(viewer, "warm_compare_cache", None)):
-            viewer.warm_compare_cache(background=True)
-        return viewer
 
     gpu_ids = _normalise_gpus(gpus)
     folder_path = pathlib.Path(folder).expanduser().resolve()
@@ -775,7 +560,7 @@ def from_folder(
         backend = "cuda"
     if backend is not None:
         load_options.setdefault("backend", backend)
-    load_dtype = "u16" if _dtype_token(dtype) == "auto" else dtype
+    load_dtype = None if _dtype_token(dtype) in {None, "auto", "native"} else dtype
     from quantem.widget.show4dstem_preview_cache import Show4DSTEMPreviewCache
 
     loaded_source_signatures: dict[int, dict[str, Any]] = {}
@@ -810,15 +595,20 @@ def from_folder(
             single_options.setdefault("device", gpu)
         result = gpu_io.load(
             master,
-            det_bin=det_bin,
+            detector_bin=det_bin,
             dtype=load_dtype,
             verbose=False,
             **single_options,
         )
-        data = result.data
-        tensor = data if isinstance(data, torch.Tensor) else torch.from_dlpack(data)
-        if gpu is not None:
-            tensor = tensor.to(f"cuda:{gpu}")
+        if result.representation == "encoded":
+            from quantem.widget.show4dstem_bounded import _View
+
+            tensor = _View(result)
+        else:
+            data = result.data
+            tensor = data if isinstance(data, torch.Tensor) else torch.from_dlpack(data)
+            if gpu is not None:
+                tensor = tensor.to(f"cuda:{gpu}")
         signature_after = Show4DSTEMPreviewCache.source_signature(master)
         if signature_after != signature_before:
             raise RuntimeError(
