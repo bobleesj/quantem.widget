@@ -11,7 +11,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "quantem>=0.1.8",
-    "quantem.gpu[movie] @ git+https://github.com/bobleesj/quantem.gpu.git@aa0e3ea362fe6def0fc91b3bd055be5ac08d24c1",
+    "quantem.gpu[movie] @ git+https://github.com/bobleesj/quantem.gpu.git@d16907d5cda40fb436645a87ce6894f516d654b0",
     "anywidget>=0.11.0",
     # JupyterLab widget manager 5.0.10 restores saved metadata.widgets state on reopen.
     "jupyterlab_widgets>=3.0.10",
