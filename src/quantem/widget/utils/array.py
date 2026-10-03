@@ -3,7 +3,6 @@ from typing import Any
 
 import numpy as np
 import torch
-from quantem.core.datastructures import Dataset
 
 
 _DATASET4DSTEM_IMPORT_ATTEMPTED = False
@@ -48,7 +47,7 @@ def to_numpy(data, dtype: np.dtype | None = None) -> np.ndarray:
     Upcasts torch dtypes numpy can't represent (bfloat16, float8) to float32 first
     so the user sees their data instead of "Got unsupported ScalarType BFloat16".
     """
-    data = data.data if isinstance(data, Dataset) else data
+    data = unwrap_core_4dstem(data)
     if isinstance(data, torch.Tensor):
         if data.dtype in (torch.bfloat16,) or str(data.dtype).startswith("torch.float8"):
             data = data.to(torch.float32)

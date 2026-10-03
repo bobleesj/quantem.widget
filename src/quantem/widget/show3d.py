@@ -31,7 +31,6 @@ from quantem.widget.image_folder import (
     WatchedImageFolderMixin,
 )
 from quantem.widget._folder_watch_status import FOLDER_WATCH_STATE_VALUES
-from quantem.core.datastructures import Dataset
 from quantem.widget.utils.array import to_numpy
 from quantem.widget.utils.recon_config import (
     _config_float,
@@ -190,7 +189,7 @@ def _normalise_show3d_pages(
             else:
                 panels = []
                 for panel_idx, raw_panel in enumerate(raw_panels):
-                    arr = to_numpy(raw_panel if isinstance(raw_panel, Dataset) else raw_panel.array if hasattr(raw_panel, "array") else raw_panel)
+                    arr = to_numpy(raw_panel.array if hasattr(raw_panel, "array") else raw_panel)
                     if arr.ndim == 2:
                         arr = arr[np.newaxis, ...]
                     if arr.ndim != 3:
@@ -2882,7 +2881,7 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
         _extracted_pixel_unit = None
         _extracted_dim_sampling = None
         _extracted_dim_unit = None
-        if isinstance(data, Dataset) or (hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling")):
+        if hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling"):
             _extracted_title = data.name if data.name else None
             if hasattr(data, "sampling") and len(data.sampling) >= 3:
                 sampling_val = float(data.sampling[1])
@@ -2894,7 +2893,7 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                     if len(units) >= 2:
                         _extracted_pixel_unit = str(units[1])
                 _extracted_pixel_size = sampling_val
-            data = data.data if isinstance(data, Dataset) else data.array
+            data = data.array
 
         # Convert first panel to NumPy
         data = to_numpy(data)
@@ -2950,8 +2949,8 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             self.panel_order = []
             panels = [np.ascontiguousarray(data, dtype=np.float32)]  # panel 0, already color-processed
             for i, extra in enumerate(data_args[1:], 1):
-                if (isinstance(extra, Dataset) or hasattr(extra, "array")):
-                    extra = extra.data if isinstance(extra, Dataset) else extra.array
+                if hasattr(extra, "array"):
+                    extra = extra.array
                 arr = to_numpy(extra)
                 if arr.ndim == 2:
                     arr = arr[None, ...]
@@ -2990,7 +2989,7 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
             data = self._establish_rgb_luminance(concat_color, is_rgb=True)
         elif len(data_args) > 1:
             def _raw_array_obj(obj):
-                return obj.data if isinstance(obj, Dataset) else obj.array if hasattr(obj, "array") else obj
+                return obj.array if hasattr(obj, "array") else obj
 
             first_source_obj = _raw_array_obj(data_args[0])
             shared_source = all(_raw_array_obj(extra) is first_source_obj for extra in data_args[1:])
@@ -3035,8 +3034,8 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
                 # the user already passed float32 (the common case for ptycho recons).
                 panels = [_as_valid_panel(data, "Panel 0")]
                 for i, extra in enumerate(data_args[1:], 1):
-                    if (isinstance(extra, Dataset) or hasattr(extra, "array")):
-                        extra = extra.data if isinstance(extra, Dataset) else extra.array
+                    if hasattr(extra, "array"):
+                        extra = extra.array
                     arr = to_numpy(extra)
                     if arr.ndim == 2:
                         arr = arr[None, ...]
@@ -3774,8 +3773,8 @@ class Show3D(WatchedImageFolderMixin, StaticFallbackMixin, anywidget.AnyWidget):
           outside ``float32`` range, an error is raised (silent overflow to
           ``inf`` would corrupt stats).
         """
-        if isinstance(data, Dataset) or (hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling")):
-            data = data.data if isinstance(data, Dataset) else data.array
+        if hasattr(data, "array") and hasattr(data, "name") and hasattr(data, "sampling"):
+            data = data.array
         data = to_numpy(data)
         if data.ndim == 2:
             data = data[None, ...]

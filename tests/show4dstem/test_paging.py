@@ -20,7 +20,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from quantem.widget import Show4DSTEM  # noqa: E402
-from quantem.gpu.io.models import create_dataset  # noqa: E402
+from quantem.gpu.io.models import Dataset4dstemGPU  # noqa: E402
 from quantem.widget.data.dataset5dstem import Dataset5dstem  # noqa: E402
 
 cuda_required = pytest.mark.skipif(
@@ -1033,7 +1033,7 @@ def test_showfolder_open_show4dstem_preserves_loader_device_when_gpus_none(
             self.data = torch.full((4, 4, 6, 6), v, dtype=torch.uint8)
 
     def fake_load(path, *, det_bin=4, dtype="u8", verbose=False, **kw):
-        return create_dataset(_Result(path).data, {})
+        return Dataset4dstemGPU(_Result(path).data, {})
 
     monkeypatch.setattr(wio, "discover", fake_discover)
     monkeypatch.setattr(wio, "inspect", _inspection_from(fake_ready))
@@ -1073,7 +1073,7 @@ def test_showfolder_open_show4dstem_is_lazy_after_initial_frame(monkeypatch, tmp
 
     def fake_load(path, *, det_bin=4, dtype="u8", verbose=False, **kw):
         calls.append(path)
-        return create_dataset(_Result(path).data, {})
+        return Dataset4dstemGPU(_Result(path).data, {})
 
     monkeypatch.setattr(wio, "discover", fake_discover)
     monkeypatch.setattr(wio, "inspect", _inspection_from(fake_ready))
@@ -1123,7 +1123,7 @@ def test_show4dstem_from_folder_builds_lazy_widget_and_poll_appends(
     def fake_load(path, *, det_bin=4, dtype="u8", verbose=False, **kw):
         calls.append(path)
         value = int(path.split("scan_")[1][:2]) + 1
-        return create_dataset(torch.full((3, 3, 6, 6), value, dtype=torch.uint8), {})
+        return Dataset4dstemGPU(torch.full((3, 3, 6, 6), value, dtype=torch.uint8), {})
 
     monkeypatch.setattr(wio, "discover", fake_discover)
     monkeypatch.setattr(wio, "inspect", _inspection_from(fake_ready))
@@ -1184,7 +1184,7 @@ def test_show4dstem_from_folder_watches_by_default_and_appends_cold(
     def fake_load(path, *, det_bin=4, dtype="u8", verbose=False, **kwargs):
         calls.append(str(path))
         value = int(str(path).split("scan_")[1][:2]) + 1
-        return create_dataset(torch.full((3, 3, 6, 6), value, dtype=torch.uint8), {})
+        return Dataset4dstemGPU(torch.full((3, 3, 6, 6), value, dtype=torch.uint8), {})
 
     monkeypatch.setattr(wio, "load", fake_load)
     widget = Show4DSTEM.from_folder(
@@ -1274,7 +1274,7 @@ def test_show4dstem_watched_master_contract_retries_and_registers_batch_paths(
     def fake_load(path, *, det_bin=4, dtype="u8", verbose=False, **kwargs):
         calls.append(str(path))
         value = int(str(path).split("scan_")[1][:2]) + 1
-        return create_dataset(torch.full((3, 3, 6, 6), value, dtype=torch.uint8), {})
+        return Dataset4dstemGPU(torch.full((3, 3, 6, 6), value, dtype=torch.uint8), {})
 
     monkeypatch.setattr(wio, "load", fake_load)
     widget = Show4DSTEM.from_folder(
@@ -1351,7 +1351,7 @@ def test_show4dstem_watcher_warms_only_new_pages_without_blocking_cached_page(
             if not release_new_load.wait(timeout=3):
                 raise RuntimeError("test did not release watched master load")
         value = int(path.split("scan_")[1][:2]) + 1
-        return create_dataset(torch.full((3, 3, 6, 6), value, dtype=torch.uint8), {})
+        return Dataset4dstemGPU(torch.full((3, 3, 6, 6), value, dtype=torch.uint8), {})
 
     monkeypatch.setattr(wio, "load", fake_load)
     widget = Show4DSTEM.from_folder(
@@ -1440,7 +1440,7 @@ def test_show4dstem_from_folder_auto_dtype_preserves_native_counts(monkeypatch, 
     def fake_load(path, *, det_bin=4, dtype="u8", verbose=False, **kw):
         dtypes.append(dtype)
         value = int(path.split("scan_")[1][:2]) + 1
-        return create_dataset(torch.full((3, 3, 6, 6), value, dtype=torch.uint16), {})
+        return Dataset4dstemGPU(torch.full((3, 3, 6, 6), value, dtype=torch.uint16), {})
 
     monkeypatch.setattr(wio, "discover", fake_discover)
     monkeypatch.setattr(wio, "inspect", _inspection_from(fake_ready))
@@ -1492,7 +1492,7 @@ def test_show4dstem_from_folder_skips_unreadable_masters(monkeypatch, tmp_path):
     def fake_load(path, *, det_bin=4, dtype="u8", verbose=False, **kw):
         calls.append(path)
         value = int(path.split("scan_")[1][:2]) + 1
-        return create_dataset(torch.full((3, 3, 6, 6), value, dtype=torch.uint16), {})
+        return Dataset4dstemGPU(torch.full((3, 3, 6, 6), value, dtype=torch.uint16), {})
 
     monkeypatch.setattr(wio, "discover", fake_discover)
     monkeypatch.setattr(wio, "inspect", _inspection_from(fake_ready))
@@ -1536,7 +1536,7 @@ def test_show4dstem_from_folder_is_quiet_by_default(monkeypatch, tmp_path, capsy
     monkeypatch.setattr(
         wio,
         "load",
-        lambda *args, **kwargs: create_dataset(
+        lambda *args, **kwargs: Dataset4dstemGPU(
             torch.ones((3, 3, 6, 6), dtype=torch.uint16),
             {},
         ),
@@ -1571,7 +1571,7 @@ def test_show4dstem_from_folder_accepts_simple_grid_names(monkeypatch, tmp_path)
     monkeypatch.setattr(
         wio,
         "load",
-        lambda *args, **kwargs: create_dataset(
+        lambda *args, **kwargs: Dataset4dstemGPU(
             torch.ones((3, 3, 6, 6), dtype=torch.uint16),
             {},
         ),
@@ -1642,7 +1642,7 @@ def test_show4dstem_from_folder_uses_largest_compatible_metadata_group(
     def fake_load(path, *, det_bin=4, dtype="u8", verbose=False, **kw):
         calls.append(path)
         value = int(path.split("scan_")[1][:2]) + 1
-        return create_dataset(torch.full((3, 3, 6, 6), value, dtype=torch.uint16), {})
+        return Dataset4dstemGPU(torch.full((3, 3, 6, 6), value, dtype=torch.uint16), {})
 
     monkeypatch.setattr(wio, "discover", fake_discover)
     def fake_inspect(path, **kwargs):
@@ -1888,7 +1888,7 @@ def test_show4dstem_from_folder_preloads_complete_series_when_it_fits(
             for item in paths
         ]
         data = torch.stack(frames) if isinstance(path, list) else frames[0]
-        return create_dataset(data, {})
+        return Dataset4dstemGPU(data, {})
 
     monkeypatch.setattr(wio, "load", fake_load)
 
@@ -1931,7 +1931,7 @@ def test_show4dstem_from_folder_does_not_preload_series_over_budget(
     def fake_load(path, *, det_bin=4, dtype="u8", verbose=False, **kwargs):
         calls.append(path)
         value = int(path.split("scan_")[1][:2]) + 1
-        return create_dataset(
+        return Dataset4dstemGPU(
             torch.full(frame_shape, value, dtype=torch.uint8, device="cuda:0"),
             {},
         )
@@ -1984,7 +1984,7 @@ def test_show4dstem_from_folder_one_gpu_auto_pages_with_independent_loads(
             dtype=torch.uint8,
             device="cuda:0",
         )
-        return create_dataset(data, {})
+        return Dataset4dstemGPU(data, {})
 
     monkeypatch.setattr(wio, "load", fake_load)
 
@@ -2058,7 +2058,7 @@ def test_showfolder_open_show4dstem_builds_paged_multimaster_on_explicit_cuda(
 
     def fake_load(path, *, det_bin=4, dtype="u8", verbose=False, **kw):
         calls.append(path)
-        return create_dataset(_Result(path).data, {})
+        return Dataset4dstemGPU(_Result(path).data, {})
 
     monkeypatch.setattr(wio, "discover", fake_discover)
     monkeypatch.setattr(wio, "inspect", _inspection_from(fake_ready))
@@ -2105,7 +2105,7 @@ def test_showfolder_open_show4dstem_auto_uses_gpu_sized_cache(monkeypatch, tmp_p
             )
 
     def fake_load(path, *, det_bin=4, dtype="u8", verbose=False, **kw):
-        return create_dataset(_Result(path).data, {})
+        return Dataset4dstemGPU(_Result(path).data, {})
 
     monkeypatch.setattr(wio, "discover", fake_discover)
     monkeypatch.setattr(wio, "inspect", _inspection_from(fake_ready))
@@ -2161,7 +2161,7 @@ def test_showfolder_open_show4dstem_preloads_complete_series_when_it_fits(
 
     def fake_load(path, *, det_bin=4, dtype="u8", verbose=False, **kwargs):
         calls.append(path)
-        return create_dataset(_Result(path).data, {})
+        return Dataset4dstemGPU(_Result(path).data, {})
 
     monkeypatch.setattr(wio, "load", fake_load)
 
@@ -2284,7 +2284,7 @@ def test_showfolder_open_show4dstem_drops_staging_frames_on_second_gpu(
             )
 
     def fake_load(path, *, det_bin=4, dtype="u8", verbose=False, **kw):
-        return create_dataset(_Result(path).data, {})
+        return Dataset4dstemGPU(_Result(path).data, {})
 
     monkeypatch.setattr(wio, "discover", fake_discover)
     monkeypatch.setattr(wio, "inspect", _inspection_from(fake_ready))

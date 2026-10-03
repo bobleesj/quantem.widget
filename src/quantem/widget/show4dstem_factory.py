@@ -18,13 +18,13 @@ import pathlib
 import warnings
 from typing import Any
 
-from quantem.core.datastructures import Dataset, Dataset4dstem
+from quantem.gpu.io.models import Dataset4dstemGPU
 from quantem.widget.show4dstem import Show4DSTEM as _Show4DSTEMBase
 
 
 def _payload(value: Any) -> Any:
     """Unwrap ``io.load`` output to the object used for backend routing."""
-    return value.data if isinstance(value, Dataset) else value
+    return value.data if isinstance(value, Dataset4dstemGPU) else value
 
 
 def _is_cuda_resident(value: Any) -> bool:
@@ -74,17 +74,32 @@ def _build_mps_viewer(data: Any, **kwargs: Any) -> Any:
 
 def _apply_dataset_defaults(data: Any, payload: Any, kwargs: dict[str, Any]) -> None:
     """Give a loaded multi-dataset stack its natural comparison view."""
-    if isinstance(data, Dataset4dstem):
-        if any(value != 1 for value in data.sampling):
-            kwargs.setdefault("sampling", tuple(data.sampling))
-        if any(unit != "pixels" for unit in data.units):
-            kwargs.setdefault("units", list(data.units))
+    if isinstance(data, Dataset4dstemGPU) and data.ndim == 4:
+        import numpy as np
+
+        metadata = data.metadata
+        sampling = list(metadata.get("sampling", [1.0] * 4))
+        units = list(metadata.get("units", ["pixels"] * 4))
+        calibrated = "sampling" in metadata or "units" in metadata
+        if "sampling" not in metadata:
+            for start, key, unit in (
+                (0, "scan_sampling_A", "angstrom"),
+                (2, "detector_sampling", metadata.get("detector_sampling_unit", "1/angstrom")),
+            ):
+                value = metadata.get(key)
+                if value is not None:
+                    sampling[start:start + 2] = [float(value)] * 2 if np.isscalar(value) else list(value)
+                    units[start:start + 2] = [unit] * 2
+                    calibrated = True
+        if calibrated:
+            kwargs.setdefault("sampling", tuple(sampling))
+            kwargs.setdefault("units", units)
     shape = getattr(payload, "shape", ())
     try:
         is_multi_dataset = int(getattr(payload, "ndim", len(shape))) == 5
     except (TypeError, ValueError):
         is_multi_dataset = False
-    if not isinstance(data, Dataset) or not is_multi_dataset:
+    if not isinstance(data, Dataset4dstemGPU) or not is_multi_dataset:
         return
     meta = getattr(data, "metadata", {}) or {}
     kwargs.setdefault("frame_dim_label", "Dataset")
@@ -116,11 +131,11 @@ def Show4DSTEM(data: Any, **kwargs: Any) -> Any:
     """
     payload = _payload(data)
     _apply_dataset_defaults(data, payload, kwargs)
-    if isinstance(data, Dataset4dstem) and ('scan_region' in kwargs or data.representation == 'encoded'):
+    if isinstance(data, Dataset4dstemGPU) and ('scan_region' in kwargs or data.representation == 'encoded'):
         from quantem.widget.show4dstem_bounded import show_bounded
 
         return show_bounded([data], **kwargs)
-    if isinstance(data, (list, tuple)) and data and all(isinstance(item, Dataset4dstem) for item in data):
+    if isinstance(data, (list, tuple)) and data and all(isinstance(item, Dataset4dstemGPU) for item in data):
         from quantem.widget.show4dstem_bounded import show_bounded
 
         _apply_dataset_defaults(data[0], data[0].data, kwargs)

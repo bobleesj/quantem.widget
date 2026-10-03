@@ -21,7 +21,7 @@ from scipy import ndimage
 from scipy.optimize import linear_sum_assignment
 from scipy.signal.windows import tukey
 
-from quantem.core.datastructures import Dataset
+from quantem.gpu.io.models import Dataset4dstemGPU
 from quantem.widget.export import ensure_mobile_viewport
 from quantem.widget.utils.array import to_numpy
 from quantem.widget.utils.display_filter import apply_display_filter
@@ -1013,11 +1013,13 @@ def normalize_data_input(
 ):
     """Unwrap Dataset-like input into array, title, and calibrations."""
     k_calibrated = False
-    if isinstance(data, Dataset):
+    if isinstance(data, Dataset4dstemGPU):
         metadata = data.metadata or {}
         if pixel_size is None and metadata.get("pixel_size") is not None:
             pixel_size = float(metadata["pixel_size"])
-    if isinstance(data, Dataset) or (hasattr(data, "sampling") and hasattr(data, "array")):
+        data = data.data
+
+    if hasattr(data, "sampling") and hasattr(data, "array"):
         if (replace_title or not title) and getattr(data, "name", ""):
             title = str(data.name)
         units = list(getattr(data, "units", ["pixels"] * 4))
@@ -1025,12 +1027,10 @@ def normalize_data_input(
             pixel_size = float(data.sampling[0])
             if units[0] == "nm":
                 pixel_size *= 10
-        if k_pixel_size is None and len(units) >= 2 and units[-2] in ("1/Å", "1/A", "1/angstrom", "1/nm"):
-            k_pixel_size = float(data.sampling[-2])
-            if units[-2] == "1/nm":
-                k_pixel_size /= 10
+        if k_pixel_size is None and len(units) > 2 and units[2] in ("1/Å", "1/A"):
+            k_pixel_size = float(data.sampling[2])
             k_calibrated = True
-        data = data.data if isinstance(data, Dataset) else data.array
+        data = data.array
     return data, title, pixel_size, k_pixel_size, k_calibrated
 
 
@@ -1687,7 +1687,7 @@ class ShowDiffraction(anywidget.AnyWidget):
     data : np.ndarray or torch.Tensor
         2D ``(det_rows, det_cols)`` single pattern or 3D
         ``(n_frames, det_rows, det_cols)`` stack of patterns. A quantem dataset
-        is also accepted with its calibration. 4D input raises.
+        or io ``Dataset4dstemGPU`` is also accepted and unwrapped. 4D input raises.
     k_pixel_size : float, optional
         k-space sampling in 1/Å per pixel. Marks the pattern calibrated.
     pixel_size : float, optional
