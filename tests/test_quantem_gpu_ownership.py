@@ -36,7 +36,7 @@ def test_widget_has_no_duplicate_gpu_or_io_public_api() -> None:
     assert not hasattr(widget, "load")
     assert "load" not in widget.__all__
     for name in (
-        "LoadResult",
+        "Dataset4dstem",
         "MasterReadiness",
         "bin",
         "detect_backend",
@@ -379,6 +379,6 @@ def test_widget_webgpu_sources_are_generated_from_quantem_gpu() -> None:
     assert 'from "./lazy"' in show4dstem
     assert "Show4DSTEMCpuCompute" not in show4dstem
     assert "no CPU fallback is used" in show4dstem
-    assert "../.generated/engine/ssb/compute/webgpu/backend" in showptycho
+    assert "../.generated/engine/ssb/backends/webgpu/backend" in showptycho
     assert "../../../js/.generated/engine/io/backends/webgpu/h5reader" in web_store
     assert "../../js/.generated/engine/detector/compute/webgpu/backend" in web_app

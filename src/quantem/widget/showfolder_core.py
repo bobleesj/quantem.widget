@@ -717,8 +717,8 @@ class ShowFolderBrowser:
         *,
         gpus=None,
         page_budget="auto",
-        det_bin=4,
-        dtype="u8",
+        det_bin=1,
+        dtype="native",
         scan_size=None,
         page_max_vram_fraction=0.98,
         page_reserve_vram_bytes=None,
@@ -818,8 +818,8 @@ class ShowFolderBrowser:
                 raise ValueError(
                     "gpus must be None, 'all', an int, or a non-empty sequence of GPU ids."
                 )
-        det_bin = int(cfg.get("det_bin", 4))
-        dtype = cfg.get("dtype", "u8")
+        det_bin = int(cfg.get("det_bin", 1))
+        dtype = cfg.get("dtype", "native")
         scan_size = cfg.get("scan_size")
         page_budget = cfg.get("page_budget")
         page_max_vram_fraction = float(cfg.get("page_max_vram_fraction", 0.98))
@@ -842,10 +842,15 @@ class ShowFolderBrowser:
         def load_master(master, idx: int) -> torch.Tensor:
             try:
                 result = gpu_io.load(
-                    master, det_bin=det_bin, dtype=dtype, verbose=False
+                    master, detector_bin=det_bin, dtype=dtype, verbose=False,
+                    device=None if gpus is None else gpus[idx % len(gpus)]
                 )
             except (FileNotFoundError, ValueError, RuntimeError):
                 raise
+            if result.representation == "encoded":
+                from quantem.widget.show4dstem_bounded import _View
+
+                return _View(result)
             data = result.data
             tensor = data if isinstance(data, torch.Tensor) else torch.from_dlpack(data)
             if gpus is not None:
@@ -1046,7 +1051,7 @@ class ShowFolderBrowser:
             # budget is full, then LRU-evict. Config can be overridden by
             # calling open_show4dstem(...) directly.
             self._show4dstem_config = getattr(self, "_show4dstem_config", None) or dict(
-                gpus=None, page_budget="auto", det_bin=4, dtype="u8", scan_size=None,
+                gpus=None, page_budget="auto", det_bin=1, dtype="native", scan_size=None,
             )
             self._active_selected_modes = {"show4dstem"}
             _refresh()

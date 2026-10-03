@@ -9,7 +9,7 @@ Usage::
 
     from quantem.widget import ShowPtycho
 
-    ssb.fit()
+    ssb.find_aberrations()
     del data
     ShowPtycho(ssb)   # opens the widget
 """
@@ -456,7 +456,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
 
     # Thick-sample SSB (sample tilt + thickness). ``sample_json`` carries the Sample panel sliders
     # ({"tilt_row_mrad", "tilt_col_mrad", "thickness_nm"}); thickness 0 is standard SSB. ``sample_fit_request``
-    # (a counter) asks Python to fit aberrations, tilt and thickness together (``SSB.fit(tilt=True)``); the result
+    # (a counter) asks Python to fit aberrations, tilt and thickness together (``SSB.find_aberrations(tilt=True)``); the result
     # arrives in ``sample_fit_json`` and the frontend moves the sliders to it. CUDA sessions only.
     sample_json = traitlets.Unicode("{}").tag(sync=True)
     sample_available = traitlets.Bool(False).tag(sync=True)
@@ -726,7 +726,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         )
 
     def _on_sample_fit_request(self, change):
-        """Fit C10, C12, phi12, sample tilt and thickness together (``SSB.fit(tilt=True)``) and publish the result.
+        """Fit C10, C12, phi12, sample tilt and thickness together (``SSB.find_aberrations(tilt=True)``) and publish the result.
 
         The frontend applies ``sample_fit_json`` to the aberration sliders and the Sample panel, which triggers the
         reconstruction. C10 comes back as the defocus at mid-depth, not the standard-SSB optimum.
@@ -739,7 +739,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         try:
             self.sample_fit_status = "Fitting defocus, astigmatism, sample tilt and thickness..."
             t0 = time.perf_counter()
-            result = self._accel.fit(tilt=True, verbose=False)
+            result = self._accel.find_aberrations(tilt=True, verbose=False)
             fit = {**result.aberrations, "tilt_row_mrad": result.tilt_mrad[0], "tilt_col_mrad": result.tilt_mrad[1],
                    "depth_spread_nm": result.depth_spread_nm, "gain": result.tilt_fit_gain}
             # SSB tilt is in the scan frame; quantem.thick's object frame is the scan rotated by the same scan-detector
@@ -999,15 +999,16 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         from quantem.gpu.io import load
 
         previous = self._ssb_ref
-        loaded = load(
+        with load(
             self._source_file,
-            scan_region=scan_region,
             backend=self._accel.backend,
             scan_shape=self._source_scan_shape,
             verbose=False,
-        )
-        rebuilt = SSB.from_array(
-            loaded.data,
+        ) as loaded:
+            row_start, row_stop, col_start, col_stop = scan_region
+            selected = loaded[row_start:row_stop, col_start:col_stop]
+        rebuilt = SSB(
+            selected,
             backend=previous.backend,
             voltage_kV=previous.voltage_kV,
             semiangle_mrad=previous.semiangle_mrad,
@@ -1040,7 +1041,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             bf_radius=previous.bf_radius,
             source_path=previous.source_path,
         )
-        rebuilt.fit(
+        rebuilt.find_aberrations(
             trials=n_trials,
             refinement="nelder-mead",
             verbose=False,
@@ -1549,7 +1550,7 @@ def _show_ptycho_from_ssb(
         initial_flip_phase=bool(flip_from_cal) if flip_from_cal is not None else False,
         initial_higher_order=ho_from_cal,
     )
-    # the Sample panel opens on a saved calibration's tilt, else on the session's latest ssb.fit(tilt=True);
+    # the Sample panel opens on a saved calibration's tilt, else on the session's latest ssb.find_aberrations(tilt=True);
     # the frontend reads sample_json once on mount
     sample = sample_from_cal or _tilt_panel(getattr(ssb, "tilt_mrad", None), getattr(ssb, "depth_spread_nm", None))
     if widget.sample_available and float(sample.get("thickness_nm", 0.0)) > 0.0:
@@ -1642,7 +1643,7 @@ def ShowPtycho(
                 "and scan_sampling_A. Pass a prepared quantem.gpu.SSB object to reuse an "
                 "existing GPU-resident reconstruction."
             )
-        ssb = SSB.from_array(
+        ssb = SSB(
             data_or_ssb,
             backend=backend,
             voltage_kV=float(voltage_kV),

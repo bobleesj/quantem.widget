@@ -11,7 +11,7 @@ masters becomes a rendered, standalone HTML viewer in one command, no notebook.
     quantem html tutorial.ipynb           # run a notebook  -> standalone shareable HTML
 
 The CLI only orchestrates existing pieces: ``io.read_image`` / ``read_image_stack``
-for images, ``quantem.gpu.io.discover`` + ``quantem.gpu.io.load(det_bin=...)``
+for images, ``quantem.gpu.io.discover`` + ``quantem.gpu.io.load(...)``
 for 4D-STEM and
 ptychography review, the ``Show2D`` / ``Show3D`` / ``Show4DSTEM`` / ``ShowPtycho``
 widgets, and each widget's export helpers. Show4DSTEM WebGPU HTML keeps the
@@ -2120,7 +2120,7 @@ def _render_showptycho_master(
             f"  SSB fit: {trials} full-BF trials, "
             f"refine={refine or 'none'}, backend={workflow.backend.upper()}"
         )
-        fit = workflow.fit(
+        fit = workflow.find_aberrations(
             trials=trials,
             refinement=refine,
             verbose=args.verbose,
@@ -2188,7 +2188,7 @@ def _render_showptycho_master(
             "bf_center": list(fit.bf_center),
             "bf_radius": fit.bf_radius,
             "calibration": asdict(calibration),
-            "trials": list(fit.optuna_trials or ()),
+            "trials": list(fit.trial_records or ()),
         }
         if args.anonymize:
             fit_payload = _anonymize_showptycho_payload(fit_payload)
@@ -2743,34 +2743,31 @@ def _show4dstem_export_dtype(args: argparse.Namespace) -> str:
     )
 
 
-def _master_to_binned_numpy(master: str, det_bin: int, dtype: str = "u8"):
-    """Load one master with detector binning and return a mean-binned 4D numpy array
-    ``(scan_row, scan_col, det_row, det_col)``. Binning happens at LOAD time (so the
-    full 19 GB stack never materializes - fits a laptop), and since the loader
-    integer-SUMS over det_bin^2 we divide by that to get the MEAN, which keeps values
-    in the raw range so the uint8 pack never clips. Works on CUDA / MPS (zero-copy
-    ChunkedFrames, materialized via its chunks) / CPU."""
+def _master_to_binned_numpy(master: str, det_bin: int):
+    """Read bounded native windows into an explicitly requested HTML export."""
     import numpy as np
-    import torch
+
     from quantem.gpu.io import load
-    result = load(master, det_bin=det_bin, dtype=dtype)
-    data = result.data if hasattr(result, "data") else result
-    meta = getattr(result, "metadata", {}) or {}
-    if hasattr(data, "chunks"):
-        arr = np.concatenate([np.asarray(chunk) for chunk in data.chunks], axis=0)
-    elif hasattr(data, "get"):
-        arr = data.get()
-    elif isinstance(data, torch.Tensor):
-        arr = data.detach().to("cpu").numpy()
-    else:
-        arr = np.asarray(data)
-    if arr.ndim == 3:
-        scan = meta.get("scan_shape")
-        rows, cols = scan if scan else (int(round(arr.shape[0] ** 0.5)),) * 2
-        arr = arr.reshape(rows, cols, arr.shape[-2], arr.shape[-1])
-    if det_bin > 1:
-        arr = np.round(arr.astype(np.float32) / (det_bin * det_bin))  # loader summed -> mean
-    return np.ascontiguousarray(arr.astype(np.float32))
+
+    with load(master) as data:
+        rows, cols, det_rows, det_cols = data.shape
+        if det_bin < 1 or det_rows % det_bin or det_cols % det_bin:
+            raise ValueError(
+                f"Detector bin {det_bin} must divide detector shape {(det_rows, det_cols)}."
+            )
+        output = np.empty((rows, cols, det_rows // det_bin, det_cols // det_bin), np.float32)
+        columns_per_read = max(1, min(cols, (32 << 20) // (det_rows * det_cols * 4)))
+        for row in range(rows):
+            for col in range(0, cols, columns_per_read):
+                stop = min(col + columns_per_read, cols)
+                values_t = data.read(scan_region=(row, row + 1, col, stop)).float()
+                if det_bin > 1:
+                    values_t = values_t.reshape(
+                        1, stop - col, det_rows // det_bin, det_bin,
+                        det_cols // det_bin, det_bin,
+                    ).mean(dim=(3, 5)).round()
+                output[row:row + 1, col:stop] = values_t.cpu().numpy()
+    return output
 
 
 def _render_4dstem(masters: list[str], label: str, args: argparse.Namespace) -> list[pathlib.Path]:
@@ -2789,7 +2786,7 @@ def _render_4dstem(masters: list[str], label: str, args: argparse.Namespace) -> 
         # 5D array routes to the universal Show4DSTEM (which has the offline
         # multi-volume WebGPU frame-flip), not the MacBook live-Metal viewer (whose
         # offline export can't switch volumes kernel-lessly).
-        volumes = [_master_to_binned_numpy(m, args.det_bin, args.dtype) for m in masters]
+        volumes = [_master_to_binned_numpy(m, args.det_bin) for m in masters]
         stack = np.stack(volumes, axis=0)
         data_url = out_dir / "widget-data"
         widget = Show4DSTEM(
@@ -2814,7 +2811,7 @@ def _render_4dstem(masters: list[str], label: str, args: argparse.Namespace) -> 
             # Mean-bin at load (memory-safe: the full 19 GB stack never materializes)
             # so uint8 never clips the bright field. Data is already binned, so the
             # export does no further binning.
-            arr = _master_to_binned_numpy(master, args.det_bin, args.dtype)
+            arr = _master_to_binned_numpy(master, args.det_bin)
             widget = Show4DSTEM(arr, backend="webgpu")
             out = out_dir / f"{stem}.html"
             widget.export_html(str(out), title=args.title or stem, dtype=export_dtype)

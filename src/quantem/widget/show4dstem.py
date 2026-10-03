@@ -1541,8 +1541,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         # browser VRAM and create indistinguishable compare panels.
         if webgpu_h5_urls and webgpu_lazy_urls:
             raise ValueError("Use h5_urls= or lazy_urls=, not both.")
-        if rans_format not in {"detector-rans-v1", "count-ans-v1", "source112-tans1024-pair-v1"}:
-            raise ValueError("Select detector-rans-v1, count-ans-v1, or source112-tans1024-pair-v1.")
+        if rans_format not in {"detector-rans-v1", "qem-v1", "source112-tans1024-pair-v1"}:
+            raise ValueError("Select detector-rans-v1, qem-v1, or source112-tans1024-pair-v1.")
         if rans_format == "source112-tans1024-pair-v1":
             if (not rans_url or not isinstance(rans_count, (int, np.integer))
                     or not 1 <= rans_count <= 66
@@ -1553,11 +1553,11 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                     "Source112 requires 1 to 66 native uint16 acquisitions with "
                     "scan_shape=(512, 512) and detector_shape=(192, 192)."
                 )
-        if rans_format == "count-ans-v1":
+        if rans_format == "qem-v1":
             if not rans_url or not rans_files or len(rans_files) != int(rans_count):
-                raise ValueError("Count-ANS requires a folder hint and one local filename per acquisition.")
+                raise ValueError("QEM requires a folder hint and one local filename per acquisition.")
             if rans_dtype not in {"uint8", "uint16"}:
-                raise ValueError("Count-ANS requires its native uint8 or uint16 dtype.")
+                raise ValueError("QEM requires its native uint8 or uint16 dtype.")
         if rans_url and (webgpu_h5_urls or webgpu_lazy_urls):
             raise ValueError("Use rans_url= alone; it is a complete browser-resident source.")
         webgpu_source_count = len(webgpu_lazy_urls) or len(webgpu_h5_urls) or (int(rans_count) if rans_url else 0)
@@ -1684,7 +1684,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         self._path_points: list[tuple[int, int]] = []
         # Suppress per-trait recompute during apply_preset batch writes
         self._suppress_roi_recompute = False
-        # The public factory unwraps LoadResult explicitly. This implementation
+        # The public factory unwraps Dataset explicitly. This implementation
         # receives the typed GPU data payload.
         self._webgpu_h5_source = bool(webgpu_source_count)
         self._cuda_compute_data = None
@@ -3011,6 +3011,24 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                     self.shape_rows, self.shape_cols, self.det_rows, self.det_cols
                 )
             )
+            if getattr(frame4, "_bounded_detector_source", False):
+                # HTML export explicitly requests an output array. Read small
+                # device windows; do not expand the encoded acquisition on GPU.
+                arr = np.empty((self.shape_rows, self.shape_cols,
+                                self.det_rows // det_bin, self.det_cols // det_bin), np.float32)
+                frame_bytes = self.det_rows * self.det_cols * 4
+                columns_per_read = max(1, min(self.shape_cols, (32 << 20) // frame_bytes))
+                for row in range(self.shape_rows):
+                    for col in range(0, self.shape_cols, columns_per_read):
+                        stop = min(col + columns_per_read, self.shape_cols)
+                        slab = frame4.read(scan_region=(row, row + 1, col, stop)).float()
+                        if det_bin > 1:
+                            slab = slab.reshape(1, stop - col,
+                                self.det_rows // det_bin, det_bin,
+                                self.det_cols // det_bin, det_bin).mean(dim=(3, 5))
+                        arr[row:row + 1, col:stop] = slab.cpu().numpy()
+                arr = Show4DSTEM._mean_scan_bin_array(arr, scan_bin)
+                return _finish_export_chunk(arr, round_values=scan_bin > 1 or det_bin > 1)
             if det_bin <= 1:
                 arr = frame4.detach().to("cpu").numpy()
                 arr = Show4DSTEM._mean_scan_bin_array(arr, scan_bin)

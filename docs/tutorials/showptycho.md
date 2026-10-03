@@ -31,7 +31,7 @@ ssb = SSB.open(
 )
 
 # 2. Fit and refine the aberrations. THIS STEP IS REQUIRED.
-result = ssb.fit(trials=200, refinement="nelder-mead")
+result = ssb.find_aberrations(trials=200, refinement="nelder-mead")
 
 # 3. Open the interactive widget — it reuses the prepared GPU session.
 ShowPtycho(ssb)
@@ -86,14 +86,14 @@ Two ways to crop:
 
   data = load("scan_master.h5", dtype=None,
               scan_region=(128, 384, 128, 384)).data   # 256x256 center crop
-  ssb = SSB.from_array(
+  ssb = SSB(
       data,
       semiangle_mrad=30.0,
       scan_sampling_A=0.264,
       voltage_kV=300.0,
       rotation_angle_deg=158.9,
   )
-  result = ssb.fit(trials=200, refinement="nelder-mead")
+  result = ssb.find_aberrations(trials=200, refinement="nelder-mead")
   ShowPtycho(ssb)
   ```
 
@@ -153,7 +153,7 @@ def tilted_crystal(tilt_mrad=(3.0, -4.0), thickness_A=152.0):
     return np.asarray(measurement.array, dtype=np.float32), float(measurement.angular_sampling[0])
 
 data, det_mrad = tilted_crystal()
-ssb = SSB.from_array(data, backend="auto", voltage_kV=300.0, semiangle_mrad=30.0,
+ssb = SSB(data, backend="auto", voltage_kV=300.0, semiangle_mrad=30.0,
                      scan_sampling_A=0.25, det_sampling=det_mrad, rotation_angle_deg=0.0)
 ```
 
@@ -161,7 +161,7 @@ First the thin-sheet model. Look at the FFT: are the lattice spots equally
 sharp in every direction?
 
 ```python
-standard = ssb.fit(verbose=False)
+standard = ssb.find_aberrations(verbose=False)
 ShowPtycho(ssb, fft_on=True)
 ```
 
@@ -170,7 +170,7 @@ with a tilt and a depth spread. Compare: which spots sharpened, and did the
 defocus move?
 
 ```python
-tilted = ssb.fit(tilt=True, verbose=False)
+tilted = ssb.find_aberrations(tilt=True, verbose=False)
 ShowPtycho(ssb, fft_on=True)          # opens on the fitted tilt; drag the Sample tilt sliders
 ```
 
@@ -218,7 +218,7 @@ evidence behind the defaults.
 
 1. Leave `SSB.open(..., dtype=None)` at its default for native detector precision.
 2. Native detector, `det_bin=1` — do not bin.
-3. `ssb.fit(trials=200, refinement="nelder-mead")` — the fit is not optional.
+3. `ssb.find_aberrations(trials=200, refinement="nelder-mead")` — the fit is not optional.
 4. Pass the `ssb` object to `ShowPtycho`, not `data` + hand-typed aberrations.
 5. Confirm: stats bar `loss` is non-null and the trials panel is populated.
-6. Thick or possibly mistilted crystal: also run `ssb.fit(tilt=True)` and compare `report()` rows.
+6. Thick or possibly mistilted crystal: also run `ssb.find_aberrations(tilt=True)` and compare `report()` rows.

@@ -498,7 +498,7 @@ def test_show3d_many_panel_zoom_uses_the_resident_gpu_transform_path():
     """Many-panel zoom samples the packed resident stack without retransfers."""
     show3d = (ROOT / "js" / "show3d" / "index.tsx").read_text(encoding="utf-8")
     colormaps = (
-        ROOT / "js" / ".generated" / "engine" / "display" / "webgpu" / "colormaps.ts"
+        ROOT / "js" / ".generated" / "engine" / "display" / "backends" / "webgpu" / "colormaps.ts"
     ).read_text(encoding="utf-8")
 
     assert "const renderGpuPackedPanelTransformSlice" in show3d
