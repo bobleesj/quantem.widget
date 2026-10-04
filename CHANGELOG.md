@@ -6,6 +6,7 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Show4DSTEM static render uses the Show2D overlay font and no forced gap between panels; depends on quantem.gpu 0.0.1rc10 (GPU-owned `Dataset4dstemGPU`, `io.load(files)` returns a list).
 - Add `PlanPtycho`: give a crystal (CIF, `ase.Atoms` or Materials Project id) and the microscope settings, and see
   the beam through the specimen, the reconstruction's model window, the probe and the Bragg disks, with graded checks
   (window, scan margin, overlap, detector reach, column lean from tilt, focus inside the specimen). Microscope
