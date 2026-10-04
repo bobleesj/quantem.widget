@@ -92,6 +92,8 @@ def test_frontend_ready_resends_initial_scientific_views() -> None:
         "vi_preset_map_frames",
         "vi_preset_maps_bytes",
         "frame_bytes",
+        "compare_diffraction_bytes",
+        "compare_diffraction_indices",
         "compare_virtual_image_bytes",
     ]
     widget.close()

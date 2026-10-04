@@ -6,7 +6,11 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
-## rc38 - 2026-10-03
+## rc39 - 2026-10-03
+
+- Show4DSTEM compares native diffraction patterns side by side in live
+  Multiple view, with shared scan-region reductions and live detector dragging.
+  Playback controls are reserved for Single view.
 
 - Remove the ShowFolder session browser and `quantem showfolder` command. Open acquisitions directly with Show4DSTEM; image and acquisition `--watch` commands now use the viewers’ own `from_folder` methods.
 
