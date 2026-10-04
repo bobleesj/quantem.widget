@@ -199,6 +199,7 @@ class _SmokePtychoState:
         aberrations: dict[str, float],
         *,
         compute_loss: bool = True,
+        upsampling_factor: int = 1,
         higher_order_magnitudes=None,
         higher_order_angles=None,
     ):
