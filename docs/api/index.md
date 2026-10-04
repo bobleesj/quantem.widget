@@ -54,6 +54,5 @@ readers and test agents.
 | [ChooseLattice](choose-lattice) | `quantem.widget.choose_lattice.ChooseLattice` | state JSON (`save_state=True`) |
 | [ShowCIF](showcif) | `quantem.widget.ShowCIF` | Interactive HTML with embedded coordinates; CDN widget manager requires network |
 | [PlanPtycho](planptycho) | `quantem.widget.planptycho.PlanPtycho` | none (rebuilt from the crystal) |
-| [ShowFolder](showfolder) | `quantem.widget.showfolder.ShowFolder` | selection JSON for selected microscopy files and folders |
 
 All widget-level HTML exports follow the [HTML export](html-export) protocol.

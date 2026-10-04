@@ -205,8 +205,6 @@ def main(argv: list[str] | None = None) -> int:
     # widget-state, keep the auto-snapshot widget render (re-encoded JPEG) + print outputs.
     _add_github_args(sub.add_parser(
         "github", help="Make a widget notebook GitHub-displayable (strip offline state, snapshots to JPEG)."))
-    _add_showfolder_args(sub.add_parser(
-        "showfolder", help="Browse a microscopy folder with ShowFolder: inventory, thumbnails, and selection state."))
     _add_showdiffraction_args(sub.add_parser(
         "showdiffraction",
         help="Analyze a diffraction pattern with ShowDiffraction: auto rings, phase, standalone HTML."))
@@ -216,8 +214,6 @@ def main(argv: list[str] | None = None) -> int:
             return _render_html(args)
         if args.command == "github":
             return _prepare_github(args)
-        if args.command == "showfolder":
-            return _showfolder(args)
         if args.command == "showdiffraction":
             return _showdiffraction(args)
         if args.command not in forced:
@@ -242,22 +238,6 @@ def _add_html_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-open", action="store_true", help="Write the HTML but do not open it.")
 
 
-def _add_showfolder_args(parser: argparse.ArgumentParser) -> None:
-    """Attach options for the ``showfolder`` subcommand."""
-    parser.add_argument("folder", help="Folder of microscopy files to browse.")
-    parser.add_argument("--html", default=None, help="Execute the ShowFolder notebook and write this HTML file.")
-    parser.add_argument("--notebook", default=None, help="Write this ShowFolder notebook path.")
-    parser.add_argument("--thumb", type=int, default=512, help="Thumbnail size for the HAADF/STEM gallery.")
-    parser.add_argument("--glob", default="*.emd", help="Glob within the folder (default '*.emd').")
-    parser.add_argument("--title", default=None, help="ShowFolder title.")
-    parser.add_argument("--group-by", default="session", choices=("session", "fov", "none"),
-                        help="ShowFolder layout grouping mode (default 'session').")
-    parser.add_argument("--group-view", default="stack", choices=("stack", "gallery"),
-                        help="Grouped image display mode (default 'stack').")
-    parser.add_argument("--timeout", type=int, default=900, help="Notebook execution timeout in seconds.")
-    parser.add_argument("--no-open", action="store_true", help="Write outputs but do not launch/open them.")
-
-
 def _fmt_bytes(value: int) -> str:
     """Format a byte count for concise CLI status output."""
 
@@ -267,67 +247,6 @@ def _fmt_bytes(value: int) -> str:
             return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
         size /= 1000.0
     return f"{size:.1f} TB"
-
-
-def _showfolder(args: argparse.Namespace) -> int:
-    """Generate a microscopy folder browser notebook, optionally render it to HTML."""
-    import shutil
-    import subprocess
-    from quantem.widget.showfolder_core import write_showfolder_notebook
-
-    folder = pathlib.Path(args.folder).expanduser().resolve()
-    if not folder.is_dir():
-        raise FileNotFoundError(f"not a folder: {folder}")
-    if shutil.which("jupyter") is None and args.html:
-        raise ValueError("jupyter not found; install jupyter to render survey HTML")
-
-    html_out = pathlib.Path(args.html).expanduser().resolve() if args.html else None
-    if args.notebook:
-        notebook = pathlib.Path(args.notebook).expanduser().resolve()
-    elif html_out is not None:
-        notebook = html_out.with_suffix(".ipynb")
-    else:
-        notebook = _default_out_dir() / f"{folder.name}_showfolder.ipynb"
-
-    write_showfolder_notebook(
-        folder,
-        notebook,
-        glob=args.glob,
-        thumb=args.thumb,
-        title=args.title,
-        group_by=args.group_by,
-        group_view=args.group_view,
-    )
-    print(f"notebook: {notebook}")
-
-    if html_out is None:
-        _launch_notebook(notebook, no_open=args.no_open)
-        return 0
-
-    html_out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "jupyter",
-        "nbconvert",
-        "--to",
-        "html",
-        "--execute",
-        str(notebook),
-        "--output-dir",
-        str(html_out.parent),
-        "--output",
-        html_out.stem,
-        f"--ExecutePreprocessor.timeout={args.timeout}",
-        # explicit store_widget_state: ambient nbconvert config must not strip
-        # the ShowFolder hydration state out of the share artifact
-        "--ExecutePreprocessor.store_widget_state=True",
-    ]
-    print(f"executing + rendering ShowFolder -> {html_out}")
-    if subprocess.run(cmd).returncode != 0:
-        raise ValueError("ShowFolder nbconvert failed (see output above)")
-    size_mb = html_out.stat().st_size / 1e6
-    print(f"HTML: {size_mb:.1f} MB")
-    _open_html(html_out, serve=False, no_open=args.no_open)
-    return 0
 
 
 def _add_showdiffraction_args(parser: argparse.ArgumentParser) -> None:
@@ -1179,15 +1098,15 @@ def _add_show_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--html", action="store_true",
                         help="4D-STEM: export a standalone offline-WebGPU HTML instead of a live notebook.")
     parser.add_argument("--watch", action="store_true",
-                        help="Folder: write a live ShowFolder-watched notebook that appends new files.")
+                        help="Folder: write a live viewer notebook that appends new files.")
     parser.add_argument("--watch-interval", type=float, default=2.0,
                         help="Polling interval in seconds for --watch live folders (default 2).")
     parser.add_argument("--gpus", "--devices", dest="gpus", default=None,
                         help="4D-STEM CUDA devices, e.g. 0 or 0,1. Default preserves loader device.")
     parser.add_argument("--page-budget", default="auto",
                         help="4D-STEM --watch: resident dataset cache, e.g. auto, 1, 2, or none (default auto).")
-    parser.add_argument("--dtype", default="u8", choices=("u8", "uint8", "u16", "uint16", "float32"),
-                        help="4D-STEM browse dtype (default u8).")
+    parser.add_argument("--dtype", default=None, choices=("native", "u8", "uint8", "u16", "uint16", "float32"),
+                        help="4D-STEM browse dtype (native for --watch; otherwise u8).")
     parser.add_argument("--scan-size", type=int, default=None,
                         help="4D-STEM --watch: only include masters with this square scan size.")
     parser.add_argument("--backend", default="auto",
@@ -1281,6 +1200,8 @@ def _show(args: argparse.Namespace) -> int:
     large file); ``--html`` instead exports the self-contained offline-WebGPU HTML.
     One path can be a file or a folder; several paths are taken as a list of 4D-STEM
     masters and become one 5D multi-tilt viewer."""
+    if args.dtype is None:
+        args.dtype = "native" if args.watch else "u8"
     paths = [pathlib.Path(p).expanduser().resolve() for p in args.path]
     missing = [str(p) for p in paths if not p.exists()]
     if missing:
@@ -1524,8 +1445,6 @@ def _showptycho_decode_dtype(args: argparse.Namespace) -> str:
     if raw == "float32":
         return "float32"
     raise ValueError(f"ShowPtycho --dtype must be u8, u16, or float32; got {raw!r}")
-
-
 
 
 def _is_showptycho_master_name(name: str) -> bool:
@@ -2424,30 +2343,29 @@ def _python_gpus(value: str | None) -> str:
 
 
 def _render_4dstem_watch_notebook(folder: pathlib.Path, label: str, args: argparse.Namespace) -> pathlib.Path:
-    """Write a live ShowFolder-watched notebook for a 4D-STEM acquisition folder."""
+    """Write a live viewer notebook for a 4D-STEM acquisition folder."""
     import json
 
-    print(
-        f"{folder.name}: watched folder, bin {args.det_bin}, page_budget {args.page_budget} "
-        "-> ShowFolder + lazy Show4DSTEM"
-    )
+    if args.det_bin != 1 or args.dtype != "native":
+        raise ValueError(
+            "Live folder watching preserves native encoded detector counts. "
+            "Use --bin 1 --dtype native; use --html for a binned export."
+        )
+    print(f"{folder.name}: watched folder -> Show4DSTEM")
     gpus = _python_gpus(args.gpus)
     page_budget = _python_page_budget(args.page_budget)
     scan_size = "None" if args.scan_size is None else str(int(args.scan_size))
     source = (
-        "from quantem.widget import ShowFolder\n"
-        "\n"
-        f"folder = ShowFolder({str(folder)!r}, thumb=256, group_by='none')\n"
-        "folder.browser.attach_selection_panel()\n"
-        "folder.browser.open_show4dstem(\n"
+        "from quantem.widget import Show4DSTEM\n\n"
+        "viewer = Show4DSTEM.from_folder(\n"
+        f"    {str(folder)!r},\n"
         f"    gpus={gpus},\n"
         f"    page_budget={page_budget},\n"
         f"    det_bin={int(args.det_bin)},\n"
         f"    dtype={args.dtype!r},\n"
         f"    scan_size={scan_size},\n"
-        ")\n"
-        f"folder.watch(interval={float(args.watch_interval)!r})\n"
-        "folder\n"
+        f"    watch=True, watch_interval={float(args.watch_interval)!r},\n"
+        ")\nviewer\n"
     )
     nb = {
         "cells": [
@@ -2487,20 +2405,17 @@ def _render_image_watch_notebook(
     *,
     widget: str,
 ) -> pathlib.Path:
-    """Write a live ShowFolder-watched notebook for image folder previews."""
+    """Write a live viewer notebook for image folder previews."""
     import json
 
-    method = "open_show3d" if widget == "show3d" else "open_show2d"
     title = "Show3D" if widget == "show3d" else "Show2D"
-    print(f"{folder.name}: watched folder -> ShowFolder + live all-image {title}")
+    print(f"{folder.name}: watched folder -> {title}")
     source = (
-        "from quantem.widget import ShowFolder\n"
-        "\n"
-        f"folder = ShowFolder({str(folder)!r}, thumb=256, group_by='none')\n"
-        "folder.browser.attach_selection_panel()\n"
-        f"folder.browser.{method}(all_images=True)\n"
-        f"folder.watch(interval={float(args.watch_interval)!r})\n"
-        "folder\n"
+        f"from quantem.widget import {title}\n\n"
+        f"viewer = {title}.from_folder(\n"
+        f"    {str(folder)!r},\n"
+        f"    watch=True, watch_interval={float(args.watch_interval)!r},\n"
+        ")\nviewer\n"
     )
     nb = {
         "cells": [

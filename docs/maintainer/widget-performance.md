@@ -184,7 +184,6 @@ evidence.
 | Show4DSTEM | Inspect diffraction patterns and virtual images from real 4D-STEM datasets without loading unnecessary data. | Scan-position movement, detector drag, BF/ABF/ADF updates, compare pages, cache-backed folder reopen, lazy folder sessions, and export reopen. | `scripts/widget_show4dstem_heavy_signoff.py` covers direct backend/export interaction only. S4D-19 additionally requires a recorded fresh-process folder-paging/cache runner and browser report; do not infer that signoff from the heavy script. Lightweight CI checks only the protocol. |
 | ShowEDS | Explore spectral maps, ROIs, energy bands, element lines, and sparse/folder-backed EDS cubes. | Band dragging, map/spectrum sync, ROI changes, periodic table selection, sparse lookup/cache, and export reopen. | Browser story plus EDS-specific real-data smoke when backend or map/spectrum logic changes. |
 | ShowDiffraction | Inspect diffraction-like 2D patterns when a full 4D-STEM session is not needed. | Zoom/pan, histogram/contrast, peak/FFT-style overlays when present, and export reopen. | Lightweight export/browser smoke; use Show4DSTEM heavy signoff for full detector workflows. |
-| ShowFolder | Browse a session folder before loading heavy data, cache thumbnails, and open selected data in the right viewer. | Folder scan, thumbnail cache, live `watch_once()`, selected Show2D/Show3D refresh, lazy Show4DSTEM handoff, and compact saved state. | `scripts/widget_showfolder_live_smoke.py`; keep generated thumbnail/report artifacts outside git unless intentionally committed. |
 
 ## Folder-watching performance contract
 
@@ -258,7 +257,7 @@ on-demand CPU/canvas renderer is the functional fallback.
 
 | Viewer | Required append behavior | Work that must not repeat |
 |---|---|---|
-| Show2D | Add each new full-resolution image as one panel; automatically render folder pages of at most `page_size` panels (default 20) | Reread existing source files; rebuild the widget; replace full-resolution data with ShowFolder thumbnails; render every folder panel at once after paging activates |
+| Show2D | Add each new full-resolution image as one panel; automatically render folder pages of at most `page_size` panels (default 20) | Reread existing source files; rebuild the widget; replace full-resolution data with thumbnails; render every folder panel at once after paging activates |
 | Show3D | Add each new full-resolution image as a frame in one unpaged stack | Reread existing source files; rebuild the widget; infer Show2D-style pages from frame count |
 | Show4DSTEM | Add each ready master as a cold lazy dataset | Load every new master into VRAM immediately; clear unrelated reduced-page caches |
 

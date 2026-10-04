@@ -51,7 +51,6 @@ for backend setup, Colab instructions, and verification.
 | `ChooseLattice` | Select an origin and lattice vectors | [API](https://electronmicroscopy.github.io/quantem.widget/api/choose-lattice.html) |
 | `PlanPtycho` | Check multislice ptychography settings against a known crystal before the experiment | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/planptycho.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/planptycho.html) |
 | `ShowEDS` | Explore linked EDS/EELS maps and spectra | — |
-| `ShowFolder` | Browse, group, and select microscopy session files | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/showfolder.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/showfolder.html) |
 
 ## Documentation
 

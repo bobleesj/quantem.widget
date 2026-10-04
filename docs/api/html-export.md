@@ -140,7 +140,6 @@ The public Python calls are:
 | Show4DSTEM | `export_html(path=None, title=None, mode="single", encoding=None, downsample=None, dtype="uint8", det_bin=1, scan_bin=1, real_space_bin=None, export_kind="interactive", dataset_scope="unhidden")`; for compact screening use `export_kind="report"` |
 | ShowPtycho | `export_webgpu_folder(out_dir)` for browser-side SSB review from compressed HDF5 source files; transient BF-indexed reducers are built in WebGPU |
 | ShowEDS | `export_html(path=None, title=None, mode="single", encoding="full", downsample=None)` |
-| ShowFolder | `export_html(path=None, title=None)` |
 
 Existing compatibility aliases remain supported:
 

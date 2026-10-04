@@ -41,20 +41,18 @@ Call `data.close()` after the last use. Scripted jobs can use
 `Show4DSTEM(series[1])` opens one of them. See [load](load.md) for the function
 reference and the GPU guide for multi-device storage policies.
 
-## Explore a folder or download tutorial data
+## Discover acquisitions
 
 ```python
-from quantem.widget import ShowFolder
-from quantem.widget.datasets import showfolder_gold
+from quantem.gpu import io
+from quantem.widget import Show4DSTEM
 
-folder = showfolder_gold()
-ShowFolder(folder)
+files = io.discover("/data/session")
+Show4DSTEM(io.load(files[0]))
 ```
 
-`ShowFolder` previews files, records stars, and opens selected image files.
-For scripted acquisition discovery, use `io.discover("/data/session")`.
 `io.inspect(path)` reads readiness and calibration headers without decoding
-detector measurements; routine notebook loading can go straight to `io.load`.
+measurements. Use `Show4DSTEM.from_folder(path)` for a live acquisition viewer.
 
 For named sample data, see [Tutorial datasets](datasets.md). The [IO/GPU
 notebook](../tutorials/io_gpu.ipynb) demonstrates a real Gold image session.

@@ -1122,9 +1122,8 @@ def test_show2d_folder_watch_writes_live_notebook(tmp_path):
     import json
 
     code = "".join(json.loads(notebooks[0].read_text())["cells"][1]["source"])
-    assert "ShowFolder(" in code
-    assert "open_show2d(all_images=True)" in code
-    assert "folder.watch(interval=0.5)" in code
+    assert "Show2D.from_folder(" in code
+    assert "watch=True, watch_interval=0.5" in code
 
 
 def test_show3d_folder_watch_writes_live_notebook(tmp_path):
@@ -1140,9 +1139,8 @@ def test_show3d_folder_watch_writes_live_notebook(tmp_path):
     import json
 
     code = "".join(json.loads(notebooks[0].read_text())["cells"][1]["source"])
-    assert "ShowFolder(" in code
-    assert "open_show3d(all_images=True)" in code
-    assert "folder.watch(interval=2.0)" in code
+    assert "Show3D.from_folder(" in code
+    assert "watch=True, watch_interval=2.0" in code
 
 
 def test_show4dstem_subcommand_writes_notebook(tmp_path):
@@ -1163,7 +1161,7 @@ def test_show4dstem_folder_watch_writes_live_notebook(tmp_path):
         str(source),
         "--watch",
         "--bin",
-        "4",
+        "1",
         "--gpus",
         "0,1",
         "--page-budget",
@@ -1180,13 +1178,12 @@ def test_show4dstem_folder_watch_writes_live_notebook(tmp_path):
     import json
 
     code = "".join(json.loads(notebooks[0].read_text())["cells"][1]["source"])
-    assert "ShowFolder(" in code
-    assert "attach_selection_panel()" in code
-    assert "open_show4dstem(" in code
+    assert "Show4DSTEM.from_folder(" in code
     assert "gpus=[0, 1]" in code
     assert "page_budget=2" in code
-    assert "det_bin=4" in code
-    assert "folder.watch(interval=1.5)" in code
+    assert "det_bin=1" in code
+    assert "dtype='native'" in code
+    assert "watch=True, watch_interval=1.5" in code
 
 
 def test_show4dstem_watch_requires_live_folder_notebook(tmp_path):
@@ -1341,14 +1338,17 @@ def test_show4dstem_html_export_bins_native_windows(monkeypatch):
     import numpy as np
     import torch
 
-    from quantem.core.datastructures import Dataset4dstem
+    from quantem.gpu.io.models import Dataset4dstemGPU
 
-    counts_t = torch.arange(2 * 3 * 6 * 8).reshape(2, 3, 6, 8)
-    data = Dataset4dstem.from_tensor(counts_t)
+    device = "cuda" if torch.cuda.is_available() else "mps"
+    if device == "mps" and not torch.backends.mps.is_available():
+        pytest.skip("Native GPU dataset export requires CUDA or MPS")
+    counts_t = torch.arange(2 * 3 * 6 * 8, device=device).reshape(2, 3, 6, 8)
+    data = Dataset4dstemGPU(counts_t, {"representation": "dense"})
     monkeypatch.setattr("quantem.gpu.io.load", lambda source: data)
     exported = cli._master_to_binned_numpy("scan_master.h5", 2)
     expected = counts_t.float().reshape(2, 3, 3, 2, 4, 2).mean(dim=(3, 5)).round()
-    np.testing.assert_array_equal(exported, expected.numpy())
+    np.testing.assert_array_equal(exported, expected.cpu().numpy())
 
 
 def test_showptycho_cli_threads_explicit_dtype_to_ssb_open() -> None:

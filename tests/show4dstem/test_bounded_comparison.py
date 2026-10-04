@@ -6,9 +6,10 @@ import pytest
 import torch
 
 from quantem.widget import Show4DSTEM
+from quantem.gpu.io.models import Dataset4dstemGPU
 
 
-def test_resident_before_after_uses_same_scan_and_aperture():
+def test_resident_before_after_uses_same_scan_and_aperture(monkeypatch):
     device = 'cuda:0' if torch.cuda.is_available() else 'mps'
     if device == 'mps' and not torch.backends.mps.is_available():
         pytest.skip('Accelerator required')
@@ -20,8 +21,18 @@ def test_resident_before_after_uses_same_scan_and_aperture():
         reads.append((r1-r0)*(c1-c0))
         return values_t[r0:r1,c0:c1]
 
-    source = SimpleNamespace(shape=values_t.shape, read=read, metadata={'device':device})
-    viewer = Show4DSTEM([source, values_t / 2], center=(7.5,7.5), bf_radius=3)
+    source = Dataset4dstemGPU(values_t, {"device": device})
+    original_read = Dataset4dstemGPU.read
+
+    def tracked_read(self, **kwargs):
+        if self is source and kwargs.get("scan_region") is not None:
+            r0, r1, c0, c1 = kwargs["scan_region"]
+            reads.append((r1 - r0) * (c1 - c0))
+        return original_read(self, **kwargs)
+
+    monkeypatch.setattr(Dataset4dstemGPU, "read", tracked_read)
+    after = Dataset4dstemGPU(values_t / 2, {"device": device})
+    viewer = Show4DSTEM([source, after], center=(7.5,7.5), bf_radius=3)
     try:
         mask_t = torch.ones(16,16, dtype=torch.bool, device=device)
         image_t = torch.as_tensor(viewer._compute.masked_sum(mask_t.cpu().numpy()), device=device)
