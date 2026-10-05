@@ -1,12 +1,9 @@
 """Reuse fitted detector geometry in the interactive viewer."""
 
-from types import SimpleNamespace
-
 import numpy as np
 
 from quantem.gpu import detector
 from quantem.widget import Show4DSTEM
-from quantem.widget.show4dstem_mps import Show4DSTEMMPS
 
 
 def test_fitted_geometry_drives_viewer_bright_field():
@@ -27,20 +24,3 @@ def test_fitted_geometry_drives_viewer_bright_field():
     finally:
         widget.close()
 
-
-def test_mps_adapter_retains_radius_rounding_and_empty_pattern_geometry():
-    """The shared fit preserves the Metal viewer's existing display policy."""
-    rows, columns = np.indices((32, 40))
-    pattern = np.where((rows - 11) ** 2 + (columns - 23) ** 2 <= 25, 100, 1)
-    viewer = SimpleNamespace(
-        auto_detect_frames=None,
-        _compute=SimpleNamespace(mean_dp=lambda: pattern),
-    )
-    Show4DSTEMMPS.auto_detect_center(viewer, update_roi=False)
-    center, radius = detector.fit_probe(pattern)
-    assert (viewer.center_row, viewer.center_col) == center
-    assert viewer.bf_radius == round(radius)
-    viewer._compute.mean_dp = lambda: np.zeros_like(pattern)
-    Show4DSTEMMPS.auto_detect_center(viewer, update_roi=False)
-    assert (viewer.center_row, viewer.center_col) == center
-    assert viewer.bf_radius == round(radius)

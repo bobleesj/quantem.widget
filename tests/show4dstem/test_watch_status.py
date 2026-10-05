@@ -1,6 +1,4 @@
-"""Focused live-folder state tests for the Dataset5dstem viewer path."""
-
-from __future__ import annotations
+"""Live-folder watch states for Show4DSTEM.from_folder series."""
 
 import time
 from pathlib import Path
@@ -12,9 +10,9 @@ import numpy as np
 import pytest
 import torch
 import traitlets
+from quantem.gpu.io import Dataset4dstemGPU
 
-from quantem.widget.data import Dataset5dstem
-from quantem.widget.show4dstem import Show4DSTEM
+from quantem.widget.show4dstem_bounded import show_series
 
 
 def _wait_until(predicate, *, timeout: float = 2.0) -> None:
@@ -48,34 +46,32 @@ def _report(
     )
 
 
-def _folder_widget(tmp_path: Path, *, view_mode: str = "single"):
-    frame = torch.ones((1, 1, 2, 2), dtype=torch.uint16)
-    initial = tmp_path / "scan_00_master.h5"
-    materialized: list[str] = []
-    incompatible: set[str] = set()
+def _acquisition(path) -> Dataset4dstemGPU:
+    """A one-position acquisition on the accelerator, standing in for io.load(path)."""
+    if torch.cuda.is_available():
+        device = "cuda:0"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        pytest.skip("Encoded acquisitions need a CUDA or MPS device.")
+    values_t = torch.ones((1, 1, 2, 2), dtype=torch.uint16, device=device)
+    return Dataset4dstemGPU(values_t, {"source_path": str(path)})
 
-    data = Dataset5dstem.from_lazy_loaders(
-        [lambda: frame],
-        shape=(1, 1, 1, 2, 2),
-        dtype=torch.uint16,
-        initial_frames={0: frame},
-    )
-    widget = Show4DSTEM(
-        data,
+
+def _folder_widget(tmp_path: Path, *, view_mode: str = "single"):
+    """A watched one-dataset folder series whose loads are recorded, not read from disk."""
+    initial = tmp_path / "scan_00_master.h5"
+    loaded: list[str] = []
+    incompatible: set[str] = set()
+    widget = show_series(
+        [_acquisition(initial)],
         view_mode=view_mode,
         compare_max_panels=4,
-        precompute_virtual_images=False,
-        verbose=False,
     )
 
-    def make_loader(master, _idx: int):
-        path = str(master)
-
-        def load():
-            materialized.append(path)
-            return frame
-
-        return Path(path).stem.removesuffix("_master"), load
+    def load_master(master) -> Dataset4dstemGPU:
+        loaded.append(str(master))
+        return _acquisition(master)
 
     def validate(master) -> None:
         if str(master) in incompatible:
@@ -88,12 +84,10 @@ def _folder_widget(tmp_path: Path, *, view_mode: str = "single"):
         scan_shape=(1, 1),
         ready_only=True,
         known_masters=[initial],
-        make_loader=make_loader,
+        load_master=load_master,
         validate_master=validate,
-        preload_all_if_fits=False,
-        warm_cache=False,
     )
-    return widget, initial, materialized, incompatible
+    return widget, initial, loaded, incompatible
 
 
 def _write_external_master(folder: Path, index: int) -> Path:
@@ -127,7 +121,7 @@ def test_show4dstem_watch_requires_stable_ready_signature(
 ) -> None:
     import quantem.gpu.io as widget_io
 
-    widget, initial, materialized, _ = _folder_widget(tmp_path)
+    widget, initial, loaded, _ = _folder_widget(tmp_path)
     arriving = tmp_path / "scan_01_master.h5"
     discovered = [str(initial), str(arriving)]
     current = {
@@ -175,7 +169,7 @@ def test_show4dstem_watch_requires_stable_ready_signature(
             widget.folder_watch_state = "false-green"
 
         # C2: a discovered master is incomplete, expect an amber waiting state
-        # with corrective detail and no lazy slot append.
+        # with corrective detail and nothing loaded.
         assert widget.poll_folder() == []
         assert widget.folder_watch_state == "waiting"
         assert "stored frame count is 0" in widget.folder_watch_detail
@@ -189,13 +183,12 @@ def test_show4dstem_watch_requires_stable_ready_signature(
         assert widget.poll_folder() == []
         assert "unchanged follow-up" in widget.folder_watch_detail
 
-        # C4: the same complete signature appears again, expect exactly one cold
-        # lazy append and a green state only after the successful update.
+        # C4: the same complete signature appears again, expect exactly one
+        # load and append and a green state only after the successful update.
         assert widget.poll_folder() == [1]
         assert widget.poll_folder() == []
         assert widget.n_frames == 2
-        assert widget._data.loaded_indices() == [0]
-        assert materialized == []
+        assert loaded == [str(arriving)]
         assert widget.folder_watch_state == "watching"
         assert "updating" in transitions
         assert scan_shapes and set(scan_shapes) == {(1, 1)}
@@ -209,7 +202,7 @@ def test_show4dstem_bad_candidate_does_not_block_later_compatible(
 ) -> None:
     import quantem.gpu.io as widget_io
 
-    widget, initial, materialized, incompatible = _folder_widget(tmp_path)
+    widget, initial, loaded, incompatible = _folder_widget(tmp_path)
     bad = tmp_path / "scan_01_master.h5"
     good = tmp_path / "scan_02_master.h5"
     incompatible.add(str(bad))
@@ -236,13 +229,13 @@ def test_show4dstem_bad_candidate_does_not_block_later_compatible(
 
         # C2: the earlier candidate violates the established data contract,
         # expect a red corrective state while the later compatible master still
-        # appends as a cold slot in the same poll.
+        # appends in the same poll.
         assert widget.poll_folder() == [1]
         assert widget.n_frames == 2
         assert list(widget.frame_labels)[-1] == "scan_02"
         assert widget.folder_watch_state == "error"
         assert "detector shape" in widget.folder_watch_detail
-        assert materialized == []
+        assert loaded == [str(good)]
 
         # C3: correcting the contract makes the retained stable candidate
         # retryable, expect one append and a return to Watching.
@@ -251,7 +244,7 @@ def test_show4dstem_bad_candidate_does_not_block_later_compatible(
         assert widget.poll_folder() == []
         assert widget.n_frames == 3
         assert widget.folder_watch_state == "watching"
-        assert materialized == []
+        assert loaded == [str(good), str(bad)]
     finally:
         widget.close()
 
@@ -345,7 +338,7 @@ def test_show4dstem_live_append_paints_active_partial_page_before_green(
 ) -> None:
     import quantem.gpu.io as widget_io
 
-    widget, initial, materialized, _ = _folder_widget(
+    widget, initial, loaded, _ = _folder_widget(
         tmp_path,
         view_mode="multiple",
     )
@@ -373,188 +366,18 @@ def test_show4dstem_live_append_paints_active_partial_page_before_green(
         assert widget.folder_watch_state == "waiting"
         assert "updating" in transitions
         assert transitions[-1] == "waiting"
-        assert materialized == []
+        assert loaded == []
 
         # C2: the stable follow-up is accepted on the visible partial page,
-        # expect the progressive worker to materialize and publish both slots
-        # before the watcher returns to green.
+        # expect both panels published before the watcher returns to green.
         assert widget.poll_folder() == [1]
-        widget.wait_for_compare_page(timeout=2)
-        assert widget.compare_page_loading is False
         assert widget.compare_panel_indices == [0, 1]
         assert len(widget.compare_virtual_image_bytes) == 2 * 1 * 1 * 4
-        assert materialized == [str(arriving)]
+        assert loaded == [str(arriving)]
         assert widget.folder_watch_state == "watching"
         assert "updating" in transitions
         assert transitions.index("updating") < len(transitions) - 1
         assert transitions[-1] == "watching"
-    finally:
-        widget.close()
-
-
-def test_show4dstem_mounted_watch_waits_for_fresh_browser_paint_ack(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    import quantem.gpu.io as widget_io
-
-    widget, initial, materialized, _ = _folder_widget(
-        tmp_path,
-        view_mode="multiple",
-    )
-    arriving = tmp_path / "scan_01_master.h5"
-    monkeypatch.setattr(
-        widget_io,
-        "discover",
-        lambda *args, **kwargs: [str(initial), str(arriving)],
-    )
-    monkeypatch.setattr(
-        widget_io,
-        "inspect",
-        lambda master, **kwargs: _report(ready=True, revision="stable"),
-    )
-    widget.watch_folder(interval=60)
-    try:
-        widget._handle_compare_page_paint_msg(
-            widget,
-            {
-                "type": "compare_page_paint_capability",
-                "version": 1,
-                "active": True,
-            },
-            [],
-        )
-        assert widget._compare_page_paint_clients == set()
-        assert widget._compare_page_paint_ack_enabled is False
-
-        # C0: two notebook views can share one widget model, expect one view
-        # unmounting not to disable paint proof for the remaining mounted view.
-        for client_id in ("view-a", "view-b"):
-            widget._handle_compare_page_paint_msg(
-                widget,
-                {
-                    "type": "compare_page_paint_capability",
-                    "version": 1,
-                    "active": True,
-                    "client_id": client_id,
-                },
-                [],
-            )
-        widget._handle_compare_page_paint_msg(
-            widget,
-            {
-                "type": "compare_page_paint_capability",
-                "version": 1,
-                "active": False,
-                "client_id": "view-a",
-            },
-            [],
-        )
-        assert widget._compare_page_paint_clients == {"view-b"}
-        assert widget._compare_page_paint_ack_enabled is True
-
-        # C1: a mounted browser advertises paint acknowledgements, expect the
-        # successful backend publication to remain amber until fresh pixels
-        # have crossed the browser's double-animation-frame paint boundary.
-        assert widget.poll_folder() == []
-        assert widget.poll_folder() == [1]
-        widget.wait_for_compare_page(timeout=2)
-        assert materialized == [str(arriving)]
-        assert widget.compare_page_loading is False
-        assert widget.folder_watch_state == "updating"
-        assert widget._folder_update_pending is True
-        generation = int(widget.compare_page_generation)
-        page_idx = int(widget.compare_page_idx)
-        expected = list(widget.compare_page_expected_indices)
-        assert expected == [0, 1]
-
-        # C2: stale generation, wrong page, incomplete pixels, and non-fresh
-        # acknowledgements are not authoritative, expect all to be ignored.
-        invalid_messages = [
-            {
-                "generation": generation - 1,
-                "page_idx": page_idx,
-                "painted_indices": expected,
-                "paint_kind": "fresh",
-            },
-            {
-                "generation": generation,
-                "page_idx": page_idx + 1,
-                "painted_indices": expected,
-                "paint_kind": "fresh",
-            },
-            {
-                "generation": generation,
-                "page_idx": page_idx,
-                "painted_indices": expected[:-1],
-                "paint_kind": "fresh",
-            },
-            {
-                "generation": generation,
-                "page_idx": page_idx,
-                "painted_indices": expected,
-                "paint_kind": "cached",
-            },
-        ]
-        for message in invalid_messages:
-            widget._handle_compare_page_paint_msg(
-                widget,
-                {
-                    "type": "compare_page_paint_ack",
-                    "version": 1,
-                    **message,
-                },
-                [],
-            )
-            assert widget.folder_watch_state == "updating"
-            assert widget._folder_update_pending is True
-
-        # C3: the exact fresh-visible generation/page/slot set is acknowledged,
-        # expect the live badge to turn green exactly after that browser proof.
-        widget._handle_compare_page_paint_msg(
-            widget,
-            {
-                "type": "compare_page_paint_ack",
-                "version": 1,
-                "generation": str(generation),
-                "page_idx": page_idx,
-                "painted_indices": expected,
-                "paint_kind": "fresh",
-            },
-            [],
-        )
-        assert widget.folder_watch_state == "watching"
-        assert widget._folder_update_pending is False
-
-        # C4: a lost acknowledgement has a bounded failure state, expect an
-        # actionable Watch error instead of permanent Updating or false green.
-        timeout_generation = generation + 1
-        widget._folder_update_paint_timeout_seconds = 0.02
-        widget._folder_update_pending = True
-        widget._folder_update_generation = timeout_generation
-        widget._folder_update_page_idx = page_idx
-        widget._folder_update_expected_indices = tuple(expected)
-        widget._folder_update_painted_generation = 0
-        widget._folder_update_painted_page_idx = -1
-        widget._finish_folder_page_update(timeout_generation)
-        _wait_until(lambda: widget.folder_watch_state == "error")
-        assert "did not confirm fresh visible pixels" in widget.folder_watch_detail
-        assert widget._folder_update_pending is False
-        assert widget._folder_update_paint_timeout is None
-
-        # C5: worker failures remain terminal for the pending update even when
-        # a mounted frontend supports paint acknowledgements.
-        error_generation = timeout_generation + 1
-        widget._folder_update_pending = True
-        widget._folder_update_generation = error_generation
-        widget._folder_update_page_idx = page_idx
-        widget._folder_update_expected_indices = tuple(expected)
-        widget._finish_folder_page_update(
-            error_generation,
-            error="The visible page refresh failed.",
-        )
-        assert widget.folder_watch_state == "error"
-        assert widget._folder_update_pending is False
     finally:
         widget.close()
 
@@ -574,18 +397,11 @@ def test_public_show4dstem_from_folder_paints_real_external_arrival(
     widget = PublicShow4DSTEM.from_folder(
         tmp_path,
         scan_size=4,
-        det_bin=1,
-        dtype="u8",
-        page_budget=1,
         page_size=4,
         view_mode="multiple",
         watch=True,
         watch_interval=60,
-        preload_all_if_fits=False,
-        warm_cache=False,
-        preview_cache=False,
         precompute_virtual_images=False,
-        verbose=False,
     )
     model_id = widget.model_id
     transitions: list[str] = []
@@ -606,12 +422,10 @@ def test_public_show4dstem_from_folder_paints_real_external_arrival(
         # C2: the unchanged header contract is accepted, expect the same public
         # viewer to stream the new active-page tile before returning to green.
         assert widget.poll_folder() == [1]
-        widget.wait_for_compare_page(timeout=5)
         assert widget.model_id == model_id
         assert widget.n_frames == 2
         assert list(widget.frame_labels) == ["scan_000", "scan_001"]
         assert widget.compare_panel_indices == [0, 1]
-        assert widget.compare_page_loading is False
         assert len(widget.compare_virtual_image_bytes) == 2 * 4 * 4 * 4
         assert transitions[-1] == "watching"
         assert "updating" in transitions

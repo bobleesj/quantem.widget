@@ -1,10 +1,9 @@
-from __future__ import annotations
-
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from quantem.gpu.io.load import LoadResult
+import torch
+from quantem.gpu.io import Dataset4dstemGPU
 
 from quantem.widget import Show4DSTEM
 from quantem.widget.show4dstem import Show4DSTEM as Show4DSTEMBase
@@ -131,194 +130,74 @@ def test_master_file_contract_rejects_missing_required_field(monkeypatch) -> Non
     assert report.action in message
 
 
-def test_show4dstem_routes_chunked_payload_to_mps_builder(monkeypatch) -> None:
-    payload = SimpleNamespace(chunks=[object()], metadata={"scan_shape": (2, 2)})
-    calls = []
-
-    def _fake_mps_builder(data, **kwargs):
-        calls.append((data, kwargs))
-        return "mps-viewer"
-
-    monkeypatch.setattr(factory, "_build_mps_viewer", _fake_mps_builder)
-
-    result = factory.Show4DSTEM(payload, title="mps")
-
-    assert result == "mps-viewer"
-    assert calls == [(payload, {"title": "mps"})]
-    assert factory.show4dstem_backend_kind(payload) == "mps"
+def _accelerator() -> str:
+    """The GPU an acquisition from io.load lives on; bounded reads need CUDA or MPS."""
+    if torch.cuda.is_available():
+        return "cuda:0"
+    if torch.backends.mps.is_available():
+        return "mps"
+    pytest.skip("Encoded acquisitions need a CUDA or MPS device.")
 
 
-def test_show4dstem_routes_loadresult_chunked_payload_to_mps_builder(monkeypatch) -> None:
-    payload = SimpleNamespace(chunks=[object()], metadata={"scan_shape": (2, 2)})
-    load_result = LoadResult(payload, {"file_names": ["a"]})
-    calls = []
-
-    def _fake_mps_builder(data, **kwargs):
-        calls.append((data, kwargs))
-        return "mps-viewer"
-
-    monkeypatch.setattr(factory, "_build_mps_viewer", _fake_mps_builder)
-
-    result = factory.Show4DSTEM(load_result, verbose=False)
-
-    assert result == "mps-viewer"
-    assert calls == [(payload, {"verbose": False})]
+def _acquisition(values: np.ndarray, name: str) -> Dataset4dstemGPU:
+    """A loaded acquisition with the source_path metadata io.load records."""
+    values_t = torch.from_numpy(values).to(_accelerator())
+    return Dataset4dstemGPU(values_t, {"source_path": f"/data/{name}_master.h5"})
 
 
-def test_show4dstem_opens_mps_5d_loadresult_as_dataset_comparison(monkeypatch) -> None:
-    payload = SimpleNamespace(
-        chunks=[object()],
-        shape=(2, 4, 4, 8, 8),
-        metadata={"scan_shape": (4, 4)},
-    )
-    load_result = LoadResult(payload, {"file_names": ["-2 deg", "+2 deg"]})
-
-    def _fake_mps_builder(data, **kwargs):
-        return {"data": data, "kwargs": kwargs}
-
-    monkeypatch.setattr(factory, "_build_mps_viewer", _fake_mps_builder)
-
-    result = factory.Show4DSTEM(load_result)
-
-    assert result["kwargs"] == {
-        "frame_dim_label": "Dataset",
-        "frame_labels": ["-2 deg", "+2 deg"],
-        "view_mode": "multiple",
-        "compare_dp_mode": "selected",
-    }
-
-
-def test_show4dstem_routes_mps_gpu_frame_proxy_to_mps_builder(monkeypatch) -> None:
-    payload = SimpleNamespace(_is_gpu_frames=True, device="mps:0")
-
-    def _fake_mps_builder(data, **kwargs):
-        return {"kind": "mps", "data": data, "kwargs": kwargs}
-
-    monkeypatch.setattr(factory, "_build_mps_viewer", _fake_mps_builder)
-
-    result = factory.Show4DSTEM(payload, fast_interaction=True)
-
-    assert result == {
-        "kind": "mps",
-        "data": payload,
-        "kwargs": {"fast_interaction": True},
-    }
-    assert factory.is_mps_show4dstem_payload(payload)
-
-
-def test_mps_viewer_without_interaction_sidecar_shows_exact_images() -> None:
-    """Encoded residents have no binned sidecar: never show the startup preview."""
-    torch = pytest.importorskip("torch")
-    from quantem.widget.show4dstem_mps import Show4DSTEMMPS
-
+def test_show4dstem_opens_loaded_acquisition_as_bounded_view() -> None:
+    """C1: one io.load acquisition, expect a single view whose images match the dense reference."""
     values = _preset_region_data()
-    data = torch.from_numpy(values)
-    data.det_bin = 1
-    viewer = Show4DSTEMMPS(
-        data, scan_shape=(4, 5), fast_interaction=True, fast_interaction_async=True,
-        verbose=False,
-    )
-    mask = np.asarray(viewer._detector_mask_np()) > 0
-    image = np.frombuffer(viewer.virtual_image_bytes, np.float32).reshape(4, 5)
-
-    assert not viewer.fast_interaction
-    np.testing.assert_array_equal(image, values[..., mask].sum(axis=-1).astype(np.float32))
-
-
-def test_show4dstem_keeps_cuda_gpu_frame_proxy_on_base_viewer(monkeypatch) -> None:
-    payload = SimpleNamespace(_is_gpu_frames=True, device="cuda:0", ndim=4)
-
-    def _fake_base(data, **kwargs):
-        return {"kind": "base", "data": data, "kwargs": kwargs}
-
-    monkeypatch.setattr(factory, "_Show4DSTEMBase", _fake_base)
-
-    result = factory.Show4DSTEM(payload, verbose=False)
-
-    assert result == {"kind": "base", "data": payload, "kwargs": {"verbose": False}}
-    assert factory.show4dstem_backend_kind(payload) == "base"
+    widget = Show4DSTEM(_acquisition(values, "scan"), center=(8.0, 8.0), bf_radius=3.0)
+    try:
+        assert type(widget._data).__name__ == "_View"
+        assert widget.view_mode == "single"
+        widget.apply_preset("BF")
+        mask = widget._current_detector_mask().cpu().numpy().astype(bool)
+        image = np.frombuffer(widget.virtual_image_bytes, np.float32).reshape(4, 5)
+        np.testing.assert_array_equal(image, values[..., mask].sum(axis=-1).astype(np.float32))
+        widget.pos_row, widget.pos_col = 2, 3
+        pattern = np.frombuffer(widget.frame_bytes, np.float32).reshape(16, 16)
+        np.testing.assert_array_equal(pattern, values[2, 3].astype(np.float32))
+    finally:
+        widget.close()
 
 
-def test_show4dstem_base_route_does_not_import_mps_implementation(monkeypatch) -> None:
-    """C1: base payload, expect no MPS implementation import."""
-    payload = SimpleNamespace(ndim=4)
-
-    def _fake_base(data, **kwargs):
-        return {"kind": "base", "data": data, "kwargs": kwargs}
-
-    monkeypatch.setattr(factory, "_Show4DSTEMBase", _fake_base)
-
-    result = factory.Show4DSTEM(payload, verbose=False)
-
-    assert result == {"kind": "base", "data": payload, "kwargs": {"verbose": False}}
-    assert factory.show4dstem_backend_kind(payload) == "base"
-
-
-def test_show4dstem_opens_5d_loadresult_as_dataset_comparison(monkeypatch) -> None:
-    payload = SimpleNamespace(ndim=5)
-    load_result = LoadResult(payload, {"file_names": ("first.h5", "second.h5")})
-
-    def _fake_base(data, **kwargs):
-        return {"kind": "base", "data": data, "kwargs": kwargs}
-
-    monkeypatch.setattr(factory, "_Show4DSTEMBase", _fake_base)
-
-    result = factory.Show4DSTEM(load_result, verbose=False)
-
-    assert result["data"] is payload
-    assert result["kwargs"]["frame_dim_label"] == "Dataset"
-    assert result["kwargs"]["frame_labels"] == ["first.h5", "second.h5"]
-    assert result["kwargs"]["view_mode"] == "multiple"
-    assert result["kwargs"]["compare_dp_mode"] == "selected"
-    assert result["kwargs"]["verbose"] is False
-
-
-def test_show4dstem_preserves_explicit_5d_view_options(monkeypatch) -> None:
-    payload = SimpleNamespace(ndim=5)
-    load_result = LoadResult(payload, {"file_names": ("first.h5", "second.h5")})
-
-    def _fake_base(data, **kwargs):
-        return {"data": data, "kwargs": kwargs}
-
-    monkeypatch.setattr(factory, "_Show4DSTEMBase", _fake_base)
-
-    result = factory.Show4DSTEM(
-        load_result,
-        view_mode="single",
-        compare_dp_mode="average",
-    )
-
-    assert result["kwargs"]["view_mode"] == "single"
-    assert result["kwargs"]["compare_dp_mode"] == "average"
-
-
-def test_simple_5d_loadresult_keeps_selected_and_average_dp_working() -> None:
-    data = np.zeros((2, 2, 2, 6, 6), dtype=np.uint16)
-    data[0, :, :, 1:3, 1:3] = 8
-    data[1, :, :, 3:5, 3:5] = 24
-    loaded = LoadResult(data, {"file_names": ("tilt -2 deg", "tilt +2 deg")})
-
-    widget = factory.Show4DSTEM(
-        loaded,
-        precompute_virtual_images=False,
-        verbose=False,
-    )
+def test_show4dstem_opens_loaded_list_as_dataset_comparison() -> None:
+    """C2: a list from io.load, expect a comparison labelled by source file with selected/average DP."""
+    first = np.zeros((2, 2, 6, 6), dtype=np.uint16)
+    second = np.zeros((2, 2, 6, 6), dtype=np.uint16)
+    first[:, :, 1:3, 1:3] = 8
+    second[:, :, 3:5, 3:5] = 24
+    widget = Show4DSTEM([_acquisition(first, "tilt-2"), _acquisition(second, "tilt+2")])
     try:
         assert widget.view_mode == "multiple"
         assert widget.compare_dp_mode == "selected"
+        assert widget.frame_dim_label == "Dataset"
+        assert list(widget.frame_labels) == ["tilt-2", "tilt+2"]
         selected_first = widget.frame_bytes
-
         widget.frame_idx = 1
         selected_second = widget.frame_bytes
-        assert selected_second != selected_first
-
+        np.testing.assert_array_equal(np.frombuffer(selected_second, np.float32), second[0, 0].ravel())
         widget.compare_dp_mode = "average"
-        average = widget.frame_bytes
-        assert average != selected_first
-        assert average != selected_second
+        average = np.frombuffer(widget.frame_bytes, np.float32)
+        np.testing.assert_array_equal(average, (first[0, 0].ravel() + second[0, 0].ravel()) / 2)
+        assert widget.frame_bytes not in (selected_first, selected_second)
+    finally:
+        widget.close()
 
-        widget.compare_dp_mode = "selected"
-        assert widget.frame_bytes == selected_second
+
+def test_show4dstem_keeps_explicit_comparison_options() -> None:
+    """C3: explicit view options with a loaded list, expect them kept over the comparison defaults."""
+    values = np.ones((2, 2, 6, 6), dtype=np.uint16)
+    widget = Show4DSTEM(
+        [_acquisition(values, "a"), _acquisition(values, "b")],
+        view_mode="single",
+        compare_dp_mode="average",
+    )
+    try:
+        assert widget.view_mode == "single"
+        assert widget.compare_dp_mode == "average"
     finally:
         widget.close()
 

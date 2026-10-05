@@ -1670,8 +1670,6 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         self._path_points: list[tuple[int, int]] = []
         # Suppress per-trait recompute during apply_preset batch writes
         self._suppress_roi_recompute = False
-        # The public factory unwraps LoadResult explicitly. This implementation
-        # receives the typed GPU data payload.
         self._webgpu_h5_source = bool(webgpu_source_count)
         self._cuda_compute_data = None
         self._cuda_compare_compute_backends: OrderedDict[int, Any] = OrderedDict()
@@ -1698,7 +1696,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             is_dataset5dstem = type(data).__name__ == "Dataset5dstem" and hasattr(
                 data, "frame"
             )
-            # cupy array (io.load default on CUDA) -> ZERO-COPY torch tensor on the same
+            # cupy array -> ZERO-COPY torch tensor on the same
             # GPU via dlpack. Without this, the fallback cp.asnumpy round-trips the whole
             # block to CPU and re-uploads (a 19.3 GB no-bin load -> ~58 GB transient and
             # an OOM kernel crash). dlpack keeps it on-device, no copy.
@@ -1712,10 +1710,10 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 self._data_pre = data
                 data_np = None
             elif isinstance(data, torch.Tensor) or getattr(data, "_is_gpu_frames", False):
-                # `_is_gpu_frames` lets a duck-typed GPU array (e.g. a chunk-backed
-                # no-bin stack that can't be one tensor) take the GPU path without a
-                # numpy round-trip. It must expose .shape/.dtype/.ndim/.device and
-                # single-frame integer indexing.
+                # `_is_gpu_frames` marks the bounded views over encoded acquisitions
+                # (show4dstem_bounded), which cannot be one tensor; they take the GPU
+                # path without a numpy round-trip and expose .shape/.dtype/.ndim/.device
+                # and single-frame integer indexing.
                 self._device = data.device
                 self._data_pre = data
                 data_np = None
@@ -3031,33 +3029,6 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             else:
                 arr = _tensor_frame_to_export_array(data)
             return np.ascontiguousarray(arr)
-        elif hasattr(data, "datasets"):
-            datasets = list(data.datasets[: self.n_frames])
-            missing = [idx for idx, dataset in enumerate(datasets) if dataset is None]
-            if len(datasets) < self.n_frames or missing:
-                raise ValueError(
-                    "Cannot export lazy multi-dataset Show4DSTEM before the "
-                    f"first {self.n_frames} dataset(s) are ready"
-                )
-            volumes = []
-            for dataset in datasets:
-                if hasattr(dataset, "chunks"):
-                    flat = np.concatenate(
-                        [np.asarray(chunk) for chunk in dataset.chunks], axis=0
-                    )
-                else:
-                    flat = np.asarray(dataset)
-                volumes.append(
-                    flat.reshape(
-                        self.shape_rows, self.shape_cols, self.det_rows, self.det_cols
-                    )
-                )
-            arr = np.stack(volumes, axis=0)
-        elif hasattr(data, "chunks"):
-            # MacBook MPS path: data is a zero-copy ChunkedFrames (numpy views over
-            # Metal buffers), not a tensor. Materialize the flat stack by concatenating
-            # the chunks; the reshape below restores the scan grid.
-            arr = np.concatenate([np.asarray(chunk) for chunk in data.chunks], axis=0)
         else:
             arr = np.asarray(data)
         target_shape = (
@@ -4056,7 +4027,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         >>> w.free()          # release the full stack from VRAM
         >>> del result        # free the source array
         """
-        self.stop_folder_watch()
+        self._release_folder_acquisitions()
         self.stop_compare_page_load(wait=True)
         self.stop_compare_maintenance(wait=True)
         self.stop_dataset_preload(wait=True)
@@ -4088,9 +4059,11 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         if type(data).__name__ == "Dataset5dstem" and hasattr(data, "devices"):
             for dev in data.devices:
                 record_device(dev)
-        elif isinstance(data, torch.Tensor):
-            record_device(data)
-        record_device(getattr(self, "_compute_for", None))
+        elif isinstance(data, torch.Tensor) or getattr(data, "_is_gpu_frames", False):
+            record_device(data.device)
+        compute_for = getattr(self, "_compute_for", None)
+        if isinstance(compute_for, torch.Tensor):
+            record_device(compute_for)
         nbytes = (
             data.resident_nbytes
             if data is not None and hasattr(data, "resident_nbytes")
@@ -4235,7 +4208,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             # dataset into VRAM and evicts the least-recently-used one; when
             # paging is off it is identical to self._data[frame_idx].
             return self._data.frame(self.frame_idx)
-        if self.n_frames > 1:
+        # A watched folder series is 5D even while it holds one dataset.
+        if self._data.ndim == 5:
             return self._data[self.frame_idx]
         return self._data
 
@@ -5760,23 +5734,11 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     def _diffraction_frame_for_index(self, frame_idx: int):
         """Return one diffraction pattern at the current scan position."""
         data_source = getattr(self, "_data", None)
-        datasets = getattr(data_source, "datasets", None)
-        if datasets is not None:
-            idx = int(max(0, min(int(frame_idx), len(datasets) - 1)))
-            dataset = datasets[idx]
-            if dataset is None:
-                ready = [item for item in datasets if item is not None]
-                if not ready:
-                    raise ValueError("no ready compare datasets")
-                dataset = ready[0]
-            flat_idx = int(self.pos_row) * int(self.shape_cols) + int(self.pos_col)
-            return dataset.frame(flat_idx)
-
         if type(data_source).__name__ == "Dataset5dstem" and hasattr(
             data_source, "frame"
         ):
             data = data_source.frame(int(frame_idx))
-        elif self.n_frames > 1:
+        elif data_source.ndim == 5:
             data = data_source[int(frame_idx)]
         else:
             data = data_source
@@ -6645,46 +6607,36 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         scan_shape: tuple[int, int] | None,
         ready_only: bool,
         known_masters: Sequence,
-        make_loader,
-        validate_master=None,
-        register_master=None,
-        preload_all_if_fits: bool = True,
-        warm_cache: bool = False,
+        load_master,
+        validate_master,
     ) -> Self:
-        """Attach lazy-folder metadata used by poll_folder/watch_folder."""
+        """Remember the watched folder so poll_folder can append new acquisitions.
+
+        ``load_master(master)`` returns the encoded acquisition to append and
+        ``validate_master(master)`` raises when its geometry cannot join.
+        """
         self._folder_source = {
             "folder": pathlib.Path(folder).expanduser().resolve(),
             "pattern": str(pattern),
             "recursive": bool(recursive),
             "scan_shape": scan_shape,
             "ready_only": bool(ready_only),
-            "make_loader": make_loader,
+            "load_master": load_master,
             "validate_master": validate_master,
-            "register_master": register_master,
-            "preload_all_if_fits": bool(preload_all_if_fits),
-            "warm_cache": bool(warm_cache),
         }
-        data = getattr(self, "_data", None)
-        self.compare_page_progressive_enabled = bool(
-            type(data).__name__ == "Dataset5dstem"
-            and getattr(data, "is_lazy", False)
-        )
         self._folder_known_masters = {
             self._master_key(master) for master in known_masters
         }
+        # from_folder loaded these acquisitions itself, so free() must close them;
+        # sources a caller passes to Show4DSTEM stay owned by that caller.
+        self._folder_acquisitions = [frame.source for frame in self._data.frames]
+        self._folder_fill_stop = threading.Event()
+        self._folder_fill_thread = None
         self._folder_watch_stop = None
         self._folder_watch_thread = None
         self._folder_watch_started = False
         self._folder_ready_probation: dict[str, str] = {}
         self._folder_poll_lock = threading.Lock()
-        # Folder-backed lazy data starts paged until the optional complete-
-        # series preload proves every unhidden master fits. Publish that state
-        # synchronously so status/debug consumers never observe a missing
-        # residency value while the first progressive page is still loading.
-        self._raw_preload_status = "paged"
-        self._raw_residency_plan = {}
-        self._compare_folder_refresh_pending = False
-        self._reset_folder_page_update_tracking()
         self._folder_poll_waiting = ""
         self._folder_poll_error = ""
         set_folder_watch_status(self, "hidden", "")
@@ -6814,255 +6766,203 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         return self
 
     def poll_folder(self) -> list[int]:
-        """Append newly ready folder masters as lazy frames.
+        """Append newly completed folder masters to the comparison.
 
-        Only widgets created by ``Show4DSTEM.from_folder(...)`` have a folder
-        source attached. A newly discovered master must produce the same complete
-        header/source signature on two consecutive polls before it is appended.
-        New masters start as cold lazy slots, then join the complete series
-        preload when the updated shape/dtype footprint still fits.
+        Only widgets created by ``Show4DSTEM.from_folder(...)`` watch a folder.
+        A new master must report the same complete header signature on two
+        consecutive polls before it is loaded, so a file still being written is
+        never read. Returns the dataset indices this poll appended.
         """
         source = getattr(self, "_folder_source", None)
         if source is None:
             raise RuntimeError(
                 "poll_folder() is available only on Show4DSTEM.from_folder(...) widgets."
             )
-        if type(getattr(self, "_data", None)).__name__ != "Dataset5dstem":
-            raise RuntimeError("poll_folder() requires a lazy Dataset5dstem backing.")
         from quantem.gpu import io as gpu_io
 
-        poll_lock = getattr(self, "_folder_poll_lock", None)
-        if poll_lock is None:
-            poll_lock = threading.Lock()
-            self._folder_poll_lock = poll_lock
         watch_active = self._folder_watch_is_alive()
         waiting_issues: list[str] = []
         error_issues: list[str] = []
-        try:
-            with poll_lock:
-                if watch_active:
-                    set_folder_watch_status(
-                        self,
-                        "updating",
-                        "Checking the folder for new 4D-STEM data.",
-                    )
-                try:
-                    # Do not pre-filter on frame count: incomplete candidates must
-                    # stay visible to the readiness protocol so users see why a
-                    # matching master has not appeared yet.
-                    masters = gpu_io.discover(
-                        str(source["folder"]),
-                        pattern=source["pattern"],
-                        recursive=source["recursive"],
-                        scan_shape=None,
-                        verbose=False,
-                    )
-                except ValueError as exc:
-                    if "No files matching" not in str(exc):
-                        raise
-                    masters = []
-
-                known = set(getattr(self, "_folder_known_masters", set()))
-                probation = dict(
-                    getattr(self, "_folder_ready_probation", {})
-                )
-                discovered_keys = {self._master_key(master) for master in masters}
-                probation = {
-                    key: signature
-                    for key, signature in probation.items()
-                    if key in discovered_keys and key not in known
-                }
-                added: list[int] = []
-                labels = list(self.frame_labels)
-                old_n_frames = int(self.n_frames)
-                old_order = list(self.compare_panel_order or [])
-                custom_order = (
-                    len(old_order) == old_n_frames
-                    and sorted(int(idx) for idx in old_order)
-                    == list(range(old_n_frames))
-                )
-                candidates = []
-                for master in masters:
-                    key = self._master_key(master)
-                    if key in known:
-                        continue
-
-                    try:
-                        report = gpu_io.inspect(
-                            master,
-                            scan_shape=source["scan_shape"],
-                        )
-                    except Exception as exc:
-                        probation.pop(key, None)
-                        error_issues.append(
-                            self._folder_issue_detail(
-                                master,
-                                f"readiness inspection failed ({type(exc).__name__}: {exc})",
-                                "Check file permissions and HDF5 integrity, then retry.",
-                            )
-                        )
-                        continue
-
-                    if not bool(report.ready):
-                        probation.pop(key, None)
-                        detail = self._folder_issue_detail(
-                            master,
-                            report.reason,
-                            report.action,
-                        )
-                        if self._folder_readiness_is_waiting(report):
-                            waiting_issues.append(detail)
-                        else:
-                            error_issues.append(detail)
-                        continue
-
-                    signature = self._folder_readiness_signature(report)
-                    if probation.get(key) != signature:
-                        probation[key] = signature
-                        waiting_issues.append(
-                            self._folder_issue_detail(
-                                master,
-                                "complete headers found; waiting for one unchanged "
-                                "follow-up readiness poll",
-                                "Keep the master and linked detector files in place.",
-                            )
-                        )
-                        continue
-
-                    try:
-                        validator = source.get("validate_master")
-                        if callable(validator):
-                            validator(master)
-                        idx = len(self._data) + len(candidates)
-                        label, loader = source["make_loader"](master, idx)
-                    except Exception as exc:
-                        error_issues.append(
-                            self._folder_issue_detail(
-                                master,
-                                f"incompatible master ({type(exc).__name__}: {exc})",
-                                "Use a matching scan shape, detector shape, and "
-                                "dtype, or move this file out of the watched folder.",
-                            )
-                        )
-                        # Keep the confirmed signature so a corrected contract can
-                        # be retried immediately without hiding later valid files.
-                        continue
-                    candidates.append((master, key, idx, str(label), loader))
-
-                self._folder_ready_probation = probation
-                if candidates and watch_active:
-                    set_folder_watch_status(
-                        self,
-                        "updating",
-                        "Registering newly completed 4D-STEM data.",
-                    )
-                for master, key, idx, label, loader in candidates:
-                    self._data.append_lazy_frame(loader)
-                    labels.append(label)
-                if old_n_frames <= 1 < len(self._data):
-                    page_config = getattr(self, "_dataset_page_config", None)
-                    if page_config is not None:
-                        self._data.page(**page_config)
-                registrar = source.get("register_master")
-                if callable(registrar):
-                    for master, _, idx, _, _ in candidates:
-                        registrar(master, idx)
-                for _, key, idx, _, _ in candidates:
-                    known.add(key)
-                    probation.pop(key, None)
-                    added.append(idx)
-                self._folder_ready_probation = probation
-                self._folder_known_masters = known
-
-                if added:
-                    # n_frames normally triggers a compare-grid render. A watched
-                    # master must first remain a cold lazy slot, so publish only
-                    # lightweight metadata here. Page selection or cache warming
-                    # performs the first raw load explicitly.
-                    self._suppress_folder_append_refresh = True
-                    try:
-                        with self.hold_trait_notifications():
-                            self.n_frames = len(self._data)
-                            self.frame_labels = labels
-                            if custom_order:
-                                self.compare_panel_order = [*old_order, *added]
-                            if self.view_mode == "multiple":
-                                ordered = self._compare_ordered_ready_indices()
-                                self._compare_visible_total = len(ordered)
-                                self._update_compare_page_state(ordered)
-                                self.compare_status = (
-                                    self._compare_status_for_indices(
-                                        self.compare_panel_indices,
-                                        all_groups=(
-                                            self._normalise_compare_group_mode(
-                                                self.compare_group_mode
-                                            )
-                                            == "all"
-                                        ),
-                                    )
-                                )
-                    finally:
-                        self._suppress_folder_append_refresh = False
-
-                    self._raw_preload_status = "paged"
-                    self._update_gpu_memory_status()
-                    active = (
-                        self._compare_ready_indices()
-                        if self.view_mode == "multiple"
-                        else []
-                    )
-                    refresh_active_page = bool(set(added).intersection(active))
-                    if refresh_active_page:
-                        # The append observer above is deliberately suppressed so
-                        # a new master starts cold. Explicitly schedule only the
-                        # affected visible page, then keep the badge in Updating
-                        # until the progressive worker publishes authoritative
-                        # current pixels for that stable slot.
-                        self._folder_update_pending = True
-                        self._cancel_folder_page_paint_timeout()
-                        self._folder_update_generation = int(
-                            self._compare_page_generation_counter
-                        ) + 1
-                        self._folder_update_page_idx = int(self.compare_page_idx)
-                        self._folder_update_expected_indices = tuple(
-                            int(idx) for idx in active
-                        )
-                        self._folder_update_backend_complete_generation = 0
-                        self._folder_update_painted_generation = 0
-                        self._folder_update_painted_page_idx = -1
-                        self._refresh_compare_virtual_images()
-                    else:
-                        # Off-page arrivals remain cold. Optional maintenance can
-                        # warm them without blocking or repainting the page the
-                        # scientist is currently inspecting.
-                        if bool(source.get("preload_all_if_fits", False)):
-                            self.preload_all_datasets(background=True)
-                        if bool(source.get("warm_cache", False)):
-                            self.warm_compare_cache(background=True)
-
-                if not masters and not known:
-                    waiting_issues.append(
-                        "No matching 4D-STEM master has arrived yet. Keep the "
-                        "watcher running or check the folder and filename pattern."
-                    )
-                self._finish_folder_poll_status(
-                    waiting=waiting_issues,
-                    errors=error_issues,
-                )
-                return added
-        except Exception as exc:
-            self._reset_folder_page_update_tracking()
-            if self._folder_watch_is_alive():
+        with self._folder_poll_lock:
+            if watch_active:
                 set_folder_watch_status(
-                    self,
-                    "error",
-                    self._compact_folder_watch_detail(
-                        f"{type(exc).__name__}: {exc}. The watcher is still alive "
-                        "and will retry; check the folder, storage, and file "
-                        "permissions."
-                    ),
+                    self, "updating", "Checking the folder for new 4D-STEM data."
                 )
-            raise
+            try:
+                # Do not pre-filter on frame count: incomplete candidates must
+                # stay visible to the readiness protocol so users see why a
+                # matching master has not appeared yet.
+                masters = gpu_io.discover(
+                    str(source["folder"]),
+                    pattern=source["pattern"],
+                    recursive=source["recursive"],
+                    scan_shape=None,
+                    verbose=False,
+                )
+            except ValueError as exc:
+                if "No files matching" not in str(exc):
+                    raise
+                masters = []
+            known = self._folder_known_masters
+            discovered_keys = {self._master_key(master) for master in masters}
+            probation = {
+                key: signature
+                for key, signature in self._folder_ready_probation.items()
+                if key in discovered_keys and key not in known
+            }
+            accepted = []
+            for master in masters:
+                key = self._master_key(master)
+                if key in known:
+                    continue
+                try:
+                    report = gpu_io.inspect(master, scan_shape=source["scan_shape"])
+                except (OSError, ValueError, KeyError) as exc:
+                    probation.pop(key, None)
+                    error_issues.append(
+                        self._folder_issue_detail(
+                            master,
+                            f"readiness inspection failed ({type(exc).__name__}: {exc})",
+                            "Check file permissions and HDF5 integrity, then retry.",
+                        )
+                    )
+                    continue
+                if not bool(report.ready):
+                    probation.pop(key, None)
+                    detail = self._folder_issue_detail(master, report.reason, report.action)
+                    if self._folder_readiness_is_waiting(report):
+                        waiting_issues.append(detail)
+                    else:
+                        error_issues.append(detail)
+                    continue
+                signature = self._folder_readiness_signature(report)
+                if probation.get(key) != signature:
+                    probation[key] = signature
+                    waiting_issues.append(
+                        self._folder_issue_detail(
+                            master,
+                            "complete headers found; waiting for one unchanged "
+                            "follow-up readiness poll",
+                            "Keep the master and linked detector files in place.",
+                        )
+                    )
+                    continue
+                try:
+                    source["validate_master"](master)
+                except ValueError as exc:
+                    # Keep the confirmed signature so a corrected file can be
+                    # retried immediately without hiding later valid files.
+                    error_issues.append(
+                        self._folder_issue_detail(
+                            master,
+                            f"incompatible master ({exc})",
+                            "Use a matching scan and detector shape, or move this "
+                            "file out of the watched folder.",
+                        )
+                    )
+                    continue
+                probation.pop(key, None)
+                accepted.append(master)
+            self._folder_ready_probation = probation
+            added, load_errors = self._append_folder_masters(accepted)
+            error_issues.extend(load_errors)
+            if not masters and not known:
+                waiting_issues.append(
+                    "No matching 4D-STEM master has arrived yet. Keep the "
+                    "watcher running or check the folder and filename pattern."
+                )
+            self._finish_folder_poll_status(waiting=waiting_issues, errors=error_issues)
+            return added
+
+    def _append_folder_masters(self, masters) -> tuple[list[int], list[str]]:
+        """Load ready masters into the series, then publish them in one update.
+
+        Returns the appended dataset indices and, for each master that could not
+        be loaded, the corrective detail for the watch badge. A failed master is
+        forgotten so the next poll retries it. Callers hold the folder lock, so
+        the initial fill and the watcher never interleave appends.
+        """
+        from quantem.widget.show4dstem_bounded import acquisition_name
+
+        old_n_frames = int(self.n_frames)
+        old_order = list(self.compare_panel_order or [])
+        custom_order = (
+            len(old_order) == old_n_frames
+            and sorted(int(idx) for idx in old_order) == list(range(old_n_frames))
+        )
+        labels = list(self.frame_labels)
+        added: list[int] = []
+        errors: list[str] = []
+        for master in masters:
+            try:
+                acquisition = self._folder_source["load_master"](master)
+            except (OSError, ValueError, RuntimeError, MemoryError) as exc:
+                self._folder_known_masters.discard(self._master_key(master))
+                errors.append(
+                    self._folder_issue_detail(
+                        master,
+                        f"could not be loaded ({type(exc).__name__}: {exc})",
+                        "Check that the master and its linked detector files are "
+                        "complete, or move it out of the watched folder.",
+                    )
+                )
+                continue
+            self._data.append(acquisition)
+            self._folder_acquisitions.append(acquisition)
+            self._folder_known_masters.add(self._master_key(master))
+            added.append(len(self._data) - 1)
+            labels.append(acquisition_name(master))
+        if added:
+            # n_frames refreshes the comparison grid once the held changes land.
+            with self.hold_trait_notifications():
+                self.n_frames = len(self._data)
+                self.frame_labels = labels
+                if custom_order:
+                    self.compare_panel_order = [*old_order, *added]
+        return added, errors
+
+    def _fill_folder(self, masters) -> None:
+        """Load the rest of the opening folder in the background, one master at a time.
+
+        The viewer appears after the first acquisition loads instead of after the
+        whole folder (about a second per 512 x 512 master from a warm disk cache,
+        several from a cold one).
+        """
+        stop = self._folder_fill_stop
+
+        def worker() -> None:
+            errors: list[str] = []
+            for master in masters:
+                if stop.is_set():
+                    return
+                with self._folder_poll_lock:
+                    errors.extend(self._append_folder_masters([master])[1])
+            if errors:
+                set_folder_watch_status(self, "error", errors[0])
+
+        self._folder_fill_thread = threading.Thread(
+            target=worker, name="Show4DSTEM-folder-fill", daemon=True
+        )
+        self._folder_fill_thread.start()
+
+    def wait_for_folder(self, timeout: float | None = None) -> Self:
+        """Block until the masters found when ``from_folder`` opened are loaded."""
+        thread = getattr(self, "_folder_fill_thread", None)
+        if thread is not None:
+            thread.join(timeout)
+        return self
+
+    def _release_folder_acquisitions(self) -> None:
+        """Stop folder work and close the acquisitions from_folder loaded."""
+        self.stop_folder_watch()
+        stop = getattr(self, "_folder_fill_stop", None)
+        if stop is None:
+            return
+        stop.set()
+        self.wait_for_folder()
+        for acquisition in self._folder_acquisitions:
+            acquisition.close()
+        self._folder_acquisitions = []
 
     def watch_folder(self, *, interval: float = 2.0) -> Self:
         """Poll the attached folder in the background and append ready masters."""
@@ -7083,10 +6983,19 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 while not stop.wait(next_interval):
                     try:
                         self.poll_folder()
-                    except Exception:
-                        # poll_folder publishes a corrective error and the next
-                        # cycle retries without killing the mounted viewer.
-                        continue
+                    except (OSError, ValueError, RuntimeError) as exc:
+                        # A folder that briefly vanishes (network share, renamed
+                        # session) must not kill the mounted viewer: report and
+                        # retry on the next cycle.
+                        set_folder_watch_status(
+                            self,
+                            "error",
+                            self._compact_folder_watch_detail(
+                                f"{type(exc).__name__}: {exc}. The watcher is still "
+                                "alive and will retry; check the folder, storage, "
+                                "and file permissions."
+                            ),
+                        )
             finally:
                 current = threading.current_thread()
                 if getattr(self, "_folder_watch_stop", None) is stop:
@@ -7153,7 +7062,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     def close(self) -> None:
         """Stop background work and close the widget comm."""
         self._cancel_folder_page_paint_timeout()
-        self.stop_folder_watch()
+        self._release_folder_acquisitions()
         self.stop_compare_page_load(wait=True)
         self.stop_compare_maintenance(wait=True)
         self.stop_dataset_preload(wait=True)
@@ -7504,16 +7413,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             self.compare_page_count = 1
             self.compare_page_idx = 0
             return []
-        data = getattr(self, "_data", None)
-        datasets = getattr(data, "datasets", None)
-        if datasets is not None:
-            ready = [
-                idx for idx, dataset in enumerate(list(datasets)) if dataset is not None
-            ]
-        else:
-            ready = list(range(int(self.n_frames)))
-        ready_set = set(ready)
-        return [idx for idx in self.compare_ordered_panels if idx in ready_set]
+        ready = set(range(int(self.n_frames)))
+        return [idx for idx in self.compare_ordered_panels if idx in ready]
 
     def _compare_visible_ready_indices(self) -> list[int]:
         """Ready compare panels after ordering and hidden-panel filtering."""
@@ -7557,16 +7458,6 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             self._update_compare_page_state(self._compare_ordered_ready_indices())
             return list(visible)
         return self._compare_current_page_indices()
-
-    def _virtual_image_for_chunked_dataset(self, dataset, mask) -> np.ndarray:
-        """Compute one compare tile for a chunked MPS dataset slot."""
-        from quantem.gpu.detector import prepare
-
-        mask_np = (
-            mask.detach().cpu().numpy() if hasattr(mask, "detach") else np.asarray(mask)
-        )
-        backend = prepare(dataset)
-        return np.asarray(backend.masked_sum(mask_np), dtype=np.float32)
 
     def _cuda_compare_backend_for_index(self, idx: int):
         """Return a cached CUDA compute backend for one compare-grid panel."""
@@ -7617,15 +7508,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         # panels purely because the detector mask covers more pixels. The main
         # VI remains summed for quantitative count integration.
         mask_area = self._detector_mask_area(mask)
-        data = getattr(self, "_data", None)
-        datasets = getattr(data, "datasets", None)
-        if datasets is not None:
-            dataset = datasets[int(idx)]
-            if dataset is None:
-                raise ValueError(f"dataset {idx} is not ready")
-            vi = self._virtual_image_for_chunked_dataset(dataset, mask)
-        else:
-            vi = self._virtual_image_for_frame(int(idx))
+        vi = self._virtual_image_for_frame(int(idx))
         return np.asarray(vi, dtype=np.float32) / mask_area
 
     def _compare_status_for_indices(
@@ -9587,7 +9470,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     def _frame_data_for_index(self, frame_idx: int):
         if type(self._data).__name__ == "Dataset5dstem" and hasattr(self._data, "frame"):
             return self._data.frame(frame_idx)  # paging-aware (see _frame_data)
-        if self.n_frames > 1:
+        if self._data.ndim == 5:
             return self._data[frame_idx]
         return self._data
 
@@ -9680,9 +9563,6 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     def _compare_virtual_image_tensor_for_frame(
         self, idx: int, mask
     ) -> torch.Tensor | None:
-        data = getattr(self, "_data", None)
-        if getattr(data, "datasets", None) is not None:
-            return None
         frame = self._frame_data_for_index(int(idx))
         return self._masked_sum_tensor_for_frame_data(frame, mask)
 

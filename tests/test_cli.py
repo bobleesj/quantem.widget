@@ -860,16 +860,9 @@ def test_show4dstem_dataset_label_uses_coordinates_when_available():
     assert cli._show4dstem_dataset_label("unknown_master.h5", 2) == "Dataset 3"
 
 
-def test_render_show4dstem_folder_notebook_records_backend_count_and_devices(tmp_path):
+def test_render_show4dstem_folder_notebook_records_backend_and_count(tmp_path):
     """C7: generated CUDA folder notebooks preserve the seven-entry gate options."""
-    args = SimpleNamespace(
-        backend="cuda",
-        det_bin=1,
-        dtype="u8",
-        gpus="0,1",
-        page_budget="auto",
-        out=str(tmp_path),
-    )
+    args = SimpleNamespace(backend="cuda", det_bin=1, out=str(tmp_path))
 
     notebook = cli._render_4dstem_notebook(
         [str(tmp_path / f"tilt_{idx:02d}_master.h5") for idx in range(7)],
@@ -883,9 +876,8 @@ def test_render_show4dstem_folder_notebook_records_backend_count_and_devices(tmp
     assert "backend='cuda'" in text
     assert "max_masters=7" in text
     assert "min_masters=7" in text
-    assert "det_bin=1" in text
-    assert "dtype='u8'" in text
-    assert "gpus = [0, 1]" in text
+    assert "watch=False" in text
+    assert "det_bin" not in text and "dtype" not in text
 
 
 def test_showptycho_auto_calibration_selects_matching_source(tmp_path):
@@ -1051,11 +1043,10 @@ def test_4dstem_default_writes_notebook(tmp_path):
     nb = json.loads(notebooks[0].read_text())
     code = "".join(nb["cells"][1]["source"])
     assert "Show4DSTEM.from_folder(" in code
-    assert "det_bin=1" in code
     assert "max_masters=1" in code
 
 
-def test_multiple_masters_one_5d_notebook(tmp_path):
+def test_multiple_masters_one_comparison_notebook(tmp_path):
     m1 = tmp_path / "a_master.h5"
     m2 = tmp_path / "b_master.h5"
     m1.write_bytes(b"\x00")
@@ -1066,9 +1057,9 @@ def test_multiple_masters_one_5d_notebook(tmp_path):
     assert len(notebooks) == 1
     import json
     code = "".join(json.loads(notebooks[0].read_text())["cells"][1]["source"])
-    # Both explicit masters stay in one load call -> one 5D viewer.
+    # Both explicit masters stay in one load call -> one comparison viewer.
     assert "masters = [" in code and "a_master.h5" in code and "b_master.h5" in code
-    assert "det_bin=1" in code
+    assert "Show4DSTEM(data)" in code
 
 
 def test_multiple_images_one_gallery(tmp_path):
@@ -1162,12 +1153,8 @@ def test_show4dstem_folder_watch_writes_live_notebook(tmp_path):
         "show4dstem",
         str(source),
         "--watch",
-        "--bin",
-        "4",
-        "--gpus",
-        "0,1",
-        "--page-budget",
-        "2",
+        "--scan-size",
+        "512",
         "--watch-interval",
         "1.5",
         "--no-open",
@@ -1182,10 +1169,7 @@ def test_show4dstem_folder_watch_writes_live_notebook(tmp_path):
     code = "".join(json.loads(notebooks[0].read_text())["cells"][1]["source"])
     assert "ShowFolder(" in code
     assert "attach_selection_panel()" in code
-    assert "open_show4dstem(" in code
-    assert "gpus=[0, 1]" in code
-    assert "page_budget=2" in code
-    assert "det_bin=4" in code
+    assert "open_show4dstem(scan_size=512, backend='auto')" in code
     assert "folder.watch(interval=1.5)" in code
 
 
@@ -1321,29 +1305,61 @@ def test_showptycho_range_handler_writes_snapshots_only(tmp_path):
         thread.join(timeout=5)
 
 
-def test_show4dstem_html_cli_threads_full_dtype_to_load_and_export() -> None:
-    """C1: CLI full export docs, expect --dtype uint16 to reach load and export."""
+def test_show4dstem_html_cli_threads_export_dtype() -> None:
+    """C1: CLI full export docs, expect --dtype uint16 to reach the export."""
     import inspect
 
     source = inspect.getsource(cli._render_4dstem)
-    loader_source = inspect.getsource(cli._master_to_binned_numpy)
 
     assert "export_dtype = _show4dstem_export_dtype(args)" in source
-    assert "_master_to_binned_numpy(master, args.det_bin, args.dtype)" in source
     assert "widget.export_html(str(out), title=args.title or stem, dtype=export_dtype)" in source
-    assert "load(master, det_bin=det_bin, dtype=dtype)" in loader_source
     assert cli._show4dstem_export_dtype(SimpleNamespace(dtype="uint16")) == "uint16"
     assert cli._show4dstem_export_dtype(SimpleNamespace(dtype="u16")) == "uint16"
     assert cli._show4dstem_export_dtype(SimpleNamespace(dtype="uint8")) == "uint8"
 
 
-def test_showptycho_cli_threads_explicit_dtype_to_ssb_open() -> None:
-    """C1b: ShowPtycho optimization must honor its requested load dtype."""
+def test_show4dstem_html_bins_encoded_master_by_rounded_mean(tmp_path) -> None:
+    """C1a: a real 4x4x8x8 master, expect --bin 1 exact counts and --bin 2 rounded block means."""
+    import h5py
+    import hdf5plugin
+    from quantem.gpu.device import detect
+
+    try:
+        detect()
+    except RuntimeError as exc:
+        pytest.skip(f"encoded acquisitions need CUDA or MPS: {exc}")
+    counts = np.random.default_rng(5).integers(0, 1000, (4, 4, 8, 8), dtype=np.uint16)
+    with h5py.File(tmp_path / "scan_data_000001.h5", "w") as handle:
+        handle.create_dataset(
+            "entry/data/data", data=counts.reshape(16, 8, 8), chunks=(1, 8, 8),
+            **hdf5plugin.Bitshuffle(nelems=0, cname="lz4"),
+        )
+    master = tmp_path / "scan_master.h5"
+    with h5py.File(master, "w") as handle:
+        handle.require_group("entry/data")["data_000001"] = h5py.ExternalLink(
+            "scan_data_000001.h5", "entry/data/data"
+        )
+        specific = handle.require_group("entry/instrument/detector/detectorSpecific")
+        specific.create_dataset("ntrigger", data=16)
+        specific.create_dataset("nimages", data=1)
+
+    np.testing.assert_array_equal(cli._master_to_binned_numpy(str(master), 1), counts)
+    blocks = counts.reshape(4, 4, 4, 2, 4, 2).sum(axis=(3, 5), dtype=np.uint64)
+    np.testing.assert_array_equal(
+        cli._master_to_binned_numpy(str(master), 2),
+        np.round(blocks / 4).astype(np.float32),
+    )
+
+
+def test_showptycho_cli_opens_native_counts_for_ssb() -> None:
+    """C1b: ShowPtycho optimization reads the stored counts; dtype only selects browser decoding."""
     import inspect
 
     source = inspect.getsource(cli._render_showptycho_master)
+    open_call = source.split("SSB.open(", 1)[1].split(")\n", 1)[0]
 
-    assert "dtype=_showptycho_decode_dtype(args)" in source
+    assert "dtype" not in open_call
+    assert "decode_dtype=_showptycho_decode_dtype(args)" in source
 
 
 def test_showptycho_fit_records_compute_and_ui_provenance(monkeypatch) -> None:

@@ -56,7 +56,7 @@ cp -R web/dist/. src/quantem/widget/static/browser/
 test -s src/quantem/widget/static/browser/index.html
 
 echo "== Python compile smoke =="
-python -m compileall -q src/quantem/widget/show4dstem_mps.py src/quantem/widget/__init__.py
+python -m compileall -q src/quantem/widget
 
 if [[ "$skip_wheel" == "0" ]]; then
   echo "== local wheel build/content check =="

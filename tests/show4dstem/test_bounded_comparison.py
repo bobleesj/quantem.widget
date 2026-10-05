@@ -1,27 +1,30 @@
 """The live comparison borrows measurements and reads bounded scan regions."""
 
-from types import SimpleNamespace
-
 import pytest
 import torch
+from quantem.gpu.io import Dataset4dstemGPU
 
 from quantem.widget import Show4DSTEM
 
 
-def test_resident_before_after_uses_same_scan_and_aperture():
+def test_resident_before_after_uses_same_scan_and_aperture(monkeypatch):
+    """C1: two loaded acquisitions, expect exact sums and patterns from reads of at most 32 positions."""
     device = 'cuda:0' if torch.cuda.is_available() else 'mps'
     if device == 'mps' and not torch.backends.mps.is_available():
         pytest.skip('Accelerator required')
     values_t = torch.arange(48*48*16*16, device=device).reshape(48,48,16,16).float() % 32
     reads = []
+    read = Dataset4dstemGPU.read
 
-    def read(*, scan_region):
+    def counted_read(self, *, scan_region=None, detector_region=None):
         r0, r1, c0, c1 = scan_region
         reads.append((r1-r0)*(c1-c0))
-        return values_t[r0:r1,c0:c1]
+        return read(self, scan_region=scan_region, detector_region=detector_region)
 
-    source = SimpleNamespace(shape=values_t.shape, read=read, metadata={'device':device})
-    viewer = Show4DSTEM([source, values_t / 2], center=(7.5,7.5), bf_radius=3)
+    monkeypatch.setattr(Dataset4dstemGPU, 'read', counted_read)
+    before = Dataset4dstemGPU(values_t, {})
+    after = Dataset4dstemGPU(values_t / 2, {})
+    viewer = Show4DSTEM([before, after], center=(7.5,7.5), bf_radius=3)
     try:
         mask_t = torch.ones(16,16, dtype=torch.bool, device=device)
         image_t = torch.as_tensor(viewer._compute.masked_sum(mask_t.cpu().numpy()), device=device)
@@ -42,7 +45,6 @@ def test_resident_before_after_uses_same_scan_and_aperture():
         assert max(reads) <= 32
     finally:
         viewer.close()
-    torch.testing.assert_close(read(scan_region=(0,1,0,1)), values_t[:1,:1], rtol=0, atol=0)
 
 
 def test_bounded_view_exposes_detector_source_for_native_reductions():
@@ -51,8 +53,7 @@ def test_bounded_view_exposes_detector_source_for_native_reductions():
     to decoding the region per query."""
     from quantem.widget.show4dstem_bounded import _View
 
-    values_t = torch.zeros(8, 8, 4, 4)
-    source = SimpleNamespace(shape=values_t.shape, read=lambda *, scan_region: values_t, metadata={'device': 'cpu'})
+    source = Dataset4dstemGPU(torch.zeros(8, 8, 4, 4), {})
     view = _View(source, (2, 6, 1, 5))
     assert view._detector_source is source
     assert view._detector_region == (2, 6, 1, 5)

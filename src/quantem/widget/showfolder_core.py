@@ -712,51 +712,15 @@ class ShowFolderBrowser:
 
         return VBox(children)
 
-    def open_show4dstem(
-        self,
-        *,
-        gpus=None,
-        page_budget="auto",
-        det_bin=4,
-        dtype="u8",
-        scan_size=None,
-        page_max_vram_fraction=0.98,
-        page_reserve_vram_bytes=None,
-        page_max_vram_bytes=None,
-        preload_all_if_fits=True,
-    ):
-        """Browse this folder's 4D-STEM masters as ONE lazy Show4DSTEM.
+    def open_show4dstem(self, *, scan_size=None, backend="auto", device=None):
+        """Browse this folder's ready 4D-STEM masters as one Show4DSTEM comparison.
 
-        The masters are discovered in :attr:`folder`, but only the first usable
-        dataset is loaded to render the initial screen. With the default
-        ``preload_all_if_fits=True``, fixed-shape masters fill the selected GPUs
-        in the background when the complete series fits. Larger series retain
-        full-resolution lazy paging. ``page_budget=N`` keeps a fixed count hot;
-        ``None`` leaves datasets resident after they are visited.
-
-        Parameters
-        ----------
-        gpus : list[int], "all", or None
-            Cards to spread the datasets across (round-robin). ``"all"`` uses
-            every visible CUDA card; ``None`` keeps the loader's current device.
-        page_budget : "auto", int, or None
-            GPU cache policy. ``"auto"`` = memory-sized LRU cache; integer =
-            fixed resident count; ``None`` = no eviction after a dataset is
-            loaded.
-        det_bin, dtype, scan_size
-            Forwarded to :func:`quantem.gpu.io.load` and
-            :func:`quantem.gpu.io.discover` — bin the
-            detector, pick the browse dtype, and (optionally) keep only masters
-            of a given ``scan_size`` in a mixed folder.
+        Each master is loaded at full detector resolution into encoded GPU
+        storage, as :meth:`Show4DSTEM.from_folder` does; ``scan_size`` keeps
+        only masters of that square scan size in a mixed folder, and
+        ``backend``/``device`` select the GPU.
         """
-        self._show4dstem_config = dict(
-            gpus=gpus, page_budget=page_budget, det_bin=det_bin,
-            dtype=dtype, scan_size=scan_size,
-            page_max_vram_fraction=page_max_vram_fraction,
-            page_reserve_vram_bytes=page_reserve_vram_bytes,
-            page_max_vram_bytes=page_max_vram_bytes,
-            preload_all_if_fits=preload_all_if_fits,
-        )
+        self._show4dstem_config = dict(scan_size=scan_size, backend=backend, device=device)
         self._release_selected_viewer("_selected_show2d_widget")
         self._release_selected_viewer("_selected_show3d_widget")
         self._active_selected_modes = {"show4dstem"}
@@ -794,114 +758,30 @@ class ShowFolderBrowser:
         setattr(self, attribute, None)
 
     def _apply_selected_show4dstem(self):
-        """Build a lazy, paged multi-GPU Show4DSTEM over the folder's 4D masters."""
-        import torch
+        """Open the folder's ready 4D-STEM masters, or None when there are none yet."""
         from quantem.gpu import io as gpu_io
         from quantem.widget import Show4DSTEM
-        from quantem.widget.data import Dataset5dstem
 
-        cfg = getattr(self, "_show4dstem_config", None) or {}
-        gpus = cfg.get("gpus")
-        if isinstance(gpus, str):
-            if gpus.strip().lower() != "all":
-                raise ValueError(
-                    "gpus must be None, 'all', an int, or a non-empty sequence of GPU ids."
-                )
-            if not torch.cuda.is_available() or torch.cuda.device_count() < 1:
-                raise ValueError("gpus='all' requires at least one visible CUDA device.")
-            gpus = list(range(torch.cuda.device_count()))
-        elif isinstance(gpus, int):
-            gpus = [gpus]
-        elif gpus is not None:
-            gpus = list(gpus)
-            if not gpus:
-                raise ValueError(
-                    "gpus must be None, 'all', an int, or a non-empty sequence of GPU ids."
-                )
-        det_bin = int(cfg.get("det_bin", 4))
-        dtype = cfg.get("dtype", "u8")
-        scan_size = cfg.get("scan_size")
-        page_budget = cfg.get("page_budget")
-        page_max_vram_fraction = float(cfg.get("page_max_vram_fraction", 0.98))
-        page_reserve_vram_bytes = cfg.get("page_reserve_vram_bytes")
-        page_max_vram_bytes = cfg.get("page_max_vram_bytes")
-        preload_all_if_fits = bool(cfg.get("preload_all_if_fits", True))
-
+        config = getattr(self, "_show4dstem_config", None) or {}
+        scan_size = config.get("scan_size")
         scan_shape = (int(scan_size), int(scan_size)) if scan_size else None
-        masters = gpu_io.discover(
-            str(self.folder), scan_shape=scan_shape, verbose=False
-        )
-        ready_masters = [master for master in masters if gpu_io.inspect(master).ready]
         self._release_selected_show4dstem_widget()
-        page_devices = gpus if gpus is not None else None
-
-        if not ready_masters:
+        try:
+            masters = gpu_io.discover(str(self.folder), scan_shape=scan_shape, verbose=False)
+        except ValueError:
+            # discover raises when nothing matches; the panel then says so.
+            masters = []
+        if not any(gpu_io.inspect(master).ready for master in masters):
             self._selected_show4dstem_widget = None
             return None
-
-        def load_master(master, idx: int) -> torch.Tensor:
-            try:
-                result = gpu_io.load(
-                    master, det_bin=det_bin, dtype=dtype, verbose=False
-                )
-            except (FileNotFoundError, ValueError, RuntimeError):
-                raise
-            data = result.data
-            tensor = data if isinstance(data, torch.Tensor) else torch.from_dlpack(data)
-            if gpus is not None:
-                device = f"cuda:{gpus[idx % len(gpus)]}"
-                tensor = tensor.to(device)
-            return tensor
-
-        first_tensor = None
-        first_idx = None
-        kept_masters = []
-        for idx, master in enumerate(ready_masters):
-            try:
-                first_tensor = load_master(master, idx)
-            except (FileNotFoundError, ValueError, RuntimeError):
-                continue
-            first_idx = len(kept_masters)
-            kept_masters.append(master)
-            break
-        if first_tensor is None or first_idx is None:
-            self._selected_show4dstem_widget = None
-            return None
-        kept_masters.extend(ready_masters[ready_masters.index(kept_masters[0]) + 1:])
-
-        names = []
-        loaders = []
-        for idx, master in enumerate(kept_masters):
-            stem = str(master).split("/")[-1]
-            names.append(stem[:-len("_master.h5")] if stem.endswith("_master.h5") else stem)
-
-            def make_loader(path=master, load_idx=idx):
-                return lambda: load_master(path, load_idx)
-
-            loaders.append(make_loader())
-
-        series = Dataset5dstem.from_lazy_loaders(
-            loaders,
-            shape=(len(loaders), *tuple(first_tensor.shape)),
-            dtype=first_tensor.dtype,
-            initial_frames={first_idx: first_tensor},
-            name="ShowFolder lazy 4D-STEM masters",
+        # The folder browser refreshes itself, so this viewer does not watch.
+        widget = Show4DSTEM.from_folder(
+            self.folder,
+            scan_size=scan_size,
+            backend=config.get("backend", "auto"),
+            device=config.get("device"),
+            watch=False,
         )
-        if page_devices is None and first_tensor.device.type == "cuda":
-            page_devices = [first_tensor.device]
-        widget = Show4DSTEM(
-            series,
-            page_budget=page_budget,
-            page_device=page_devices,
-            page_max_vram_fraction=page_max_vram_fraction,
-            page_reserve_vram_bytes=page_reserve_vram_bytes,
-            page_max_vram_bytes=page_max_vram_bytes,
-            frame_dim_label="Dataset",
-            frame_labels=names,
-            verbose=False,
-        )
-        if preload_all_if_fits:
-            widget.preload_all_datasets(background=True)
         self._selected_show4dstem_widget = widget
         return widget
 
@@ -1042,12 +922,8 @@ class ShowFolderBrowser:
             self.open_both(all_images=True)
 
         def _open_show4dstem(_=None):
-            # Memory-sized residency: keep hot datasets until the GPU cache
-            # budget is full, then LRU-evict. Config can be overridden by
-            # calling open_show4dstem(...) directly.
-            self._show4dstem_config = getattr(self, "_show4dstem_config", None) or dict(
-                gpus=None, page_budget="auto", det_bin=4, dtype="u8", scan_size=None,
-            )
+            # Keep options chosen by an earlier open_show4dstem(...) call.
+            self._show4dstem_config = getattr(self, "_show4dstem_config", None) or {}
             self._active_selected_modes = {"show4dstem"}
             _refresh()
 
