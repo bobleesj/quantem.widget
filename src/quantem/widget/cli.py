@@ -2119,11 +2119,10 @@ def _render_showptycho_master(
             refinement=refine,
             verbose=args.verbose,
         )
-        fit_det_sampling = (
-            float(det_sampling)
-            if det_sampling is not None
-            else 2.0 * float(semiangle) / float(fit.detected_bf_radius)
-        )
+        # quantem.gpu reports the bright-field radius its calibration used on every
+        # backend and source (the session's det_sampling stays None for MPS
+        # bright-field column exports), and defines the sampling as semiangle / radius.
+        fit_det_sampling = float(semiangle) / float(fit.detected_bf_radius)
         aberrations = dict(fit.aberrations)
         rotation = float(fit.rotation_angle_deg)
         calibration = PtychoCalibration(
