@@ -609,10 +609,6 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         sync=True
     )
     compare_virtual_image_bytes = traitlets.Bytes(b"").tag(sync=True)
-    # Optional complete resident-batch metadata. Empty dictionaries retain the
-    # existing float32 comparison path; resident owners publish dtype explicitly.
-    resident_batch_info = traitlets.Dict(default_value={}).tag(sync=True)
-    resident_stream = traitlets.Dict(default_value={}).tag(sync=True)
     compare_panel_count = traitlets.Int(0).tag(sync=True)
     compare_panel_indices = traitlets.List(traitlets.Int(), default_value=[]).tag(
         sync=True
@@ -1541,23 +1537,13 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         # browser VRAM and create indistinguishable compare panels.
         if webgpu_h5_urls and webgpu_lazy_urls:
             raise ValueError("Use h5_urls= or lazy_urls=, not both.")
-        if rans_format not in {"detector-rans-v1", "count-ans-v1", "source112-tans1024-pair-v1"}:
-            raise ValueError("Select detector-rans-v1, count-ans-v1, or source112-tans1024-pair-v1.")
-        if rans_format == "source112-tans1024-pair-v1":
-            if (not rans_url or not isinstance(rans_count, (int, np.integer))
-                    or not 1 <= rans_count <= 66
-                    or (tuple(scan_shape) if scan_shape is not None else ()) != (512, 512)
-                    or (tuple(detector_shape) if detector_shape is not None else ()) != (192, 192)
-                    or rans_dtype != "uint16"):
-                raise ValueError(
-                    "Source112 requires 1 to 66 native uint16 acquisitions with "
-                    "scan_shape=(512, 512) and detector_shape=(192, 192)."
-                )
-        if rans_format == "count-ans-v1":
+        if rans_format not in {"detector-rans-v1", "qem-v1"}:
+            raise ValueError("Select rans_format='detector-rans-v1' or 'qem-v1'.")
+        if rans_format == "qem-v1":
             if not rans_url or not rans_files or len(rans_files) != int(rans_count):
-                raise ValueError("Count-ANS requires a folder hint and one local filename per acquisition.")
+                raise ValueError("QEM files need a folder hint and one local filename per acquisition.")
             if rans_dtype not in {"uint8", "uint16"}:
-                raise ValueError("Count-ANS requires its native uint8 or uint16 dtype.")
+                raise ValueError("The browser QEM decoder reads native uint8 or uint16 counts.")
         if rans_url and (webgpu_h5_urls or webgpu_lazy_urls):
             raise ValueError("Use rans_url= alone; it is a complete browser-resident source.")
         webgpu_source_count = len(webgpu_lazy_urls) or len(webgpu_h5_urls) or (int(rans_count) if rans_url else 0)
@@ -1721,14 +1707,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 data = torch.from_dlpack(data)
             # Torch tensor input keeps its device (lets user pin a specific GPU via
             # `data.cuda(1)`). NumPy / Dataset input gets default-validated device.
-            is_resident_data = getattr(self, "_resident_source", None) is data
-            if is_resident_data:
-                # Only small UI coordinates/display products use Torch CPU.
-                # Scientific operations stay on the explicitly owned CUDA executor.
-                self._device = torch.device("cpu")
-                self._data_pre = data
-                data_np = None
-            elif is_dataset5dstem:
+            if is_dataset5dstem:
                 self._device = data.device
                 self._data_pre = data
                 data_np = None
@@ -1793,7 +1772,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         elif self._data_pre is not None:
             self._data = (
                 self._data_pre
-                if is_dataset5dstem or is_resident_data or self._data_pre.device == self._device
+                if is_dataset5dstem or self._data_pre.device == self._device
                 else self._data_pre.to(self._device)
             )
             del self._data_pre

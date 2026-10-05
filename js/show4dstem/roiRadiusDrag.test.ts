@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildDetectorMask } from "../.generated/engine/detector/compute/webgpu/backend";
+import { buildDetectorMask } from "../.generated/engine/detector/webgpu/backend";
 import { circularDragRadius, liveRoiGeometry } from "./roiRadiusDrag";
-import { sameDetectorMaskSupport } from "./source112MeanDelta";
 
 function model(mode = "annular") {
   const traits: Record<string, string | number> = { roi_mode: mode, roi_center_row: 95.5,
@@ -28,7 +27,7 @@ describe("fractional circular detector handles", () => {
           if (mask[row * 192 + col] !== Number(distanceSquared <= outer ** 2 && distanceSquared >= inner ** 2)) mismatches++;
         }
         expect(mismatches).toBe(0);
-        if (previous && !sameDetectorMaskSupport(mask, previous)) changed++;
+        if (previous && previous.some((value, i) => value !== mask[i])) changed++;
         previous = mask;
       }
       expect(changed).toBeGreaterThan(6); // Integer rounding admits only six radius changes here.
@@ -54,11 +53,11 @@ describe("fractional circular detector handles", () => {
     const radius = 40.125;
     const pending = buildDetectorMask(liveRoiGeometry(state, null, null, radius), 192, 192);
     const repeated = buildDetectorMask(liveRoiGeometry(state, null, null, radius), 192, 192);
-    expect(sameDetectorMaskSupport(pending, repeated)).toBe(true);
+    expect(repeated).toEqual(pending);
     state.traits.roi_radius_inner = radius;
     expect(liveRoiGeometry(state, null, null, null)).toBe(state);
     const settled = buildDetectorMask(liveRoiGeometry(state, null, null, null), 192, 192);
-    expect(sameDetectorMaskSupport(pending, settled)).toBe(true);
+    expect(settled).toEqual(pending);
   });
 
   it("clamps rapid opposite-handle gestures against committed geometry before React catches up", () => {
