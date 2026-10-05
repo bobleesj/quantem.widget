@@ -8,7 +8,7 @@ you tune aberrations.
 
 If you just want the interactive widget inside a notebook, see
 [ShowPtycho in Jupyter](showptycho.md) instead. This page assumes you already
-have a **fitted** `ssb` (solved with `ssb.fit(trials=200,
+have a **fitted** `ssb` (solved with `ssb.find_aberrations(trials=200,
 refinement="nelder-mead")`; an unfitted export uses only the supplied starting
 aberrations).
 
@@ -17,7 +17,7 @@ aberrations).
 ```python
 from quantem.widget import ShowPtycho
 
-# ssb is already fitted: result = ssb.fit(trials=200, refinement="nelder-mead")
+# ssb is already fitted: result = ssb.find_aberrations(trials=200, refinement="nelder-mead")
 w = ShowPtycho(ssb, source_file="scan_master.h5", save_dir="out/")
 w.export("out/", title="my sample SSB")
 ```
@@ -39,15 +39,16 @@ the snapshot strip automatically.
 ### Export at native detector size
 
 The WebGPU browser export **cannot bin the detector**. If the `ssb` was built
-with `det_bin=2` (a 96x96 calibration) but the embedded HDF5 is native 192x192,
-the browser decodes 192x192, mismatches the calibration, and shows
+from a detector-binned array (a 96x96 calibration) but the embedded HDF5 is
+native 192x192, the browser decodes 192x192, mismatches the calibration, and
+shows
 
 ```
 detector shape mismatch; HDF5 has 192x192, calibration has 96x96
 ```
 
-with blank panels. Always build and export at native detector size
-(`det_bin=1`, the default).
+with blank panels. Always build and export at native detector size, as
+`SSB.open` and `quantem.gpu.io.load` do.
 
 ## Run it
 
@@ -104,8 +105,8 @@ launch the browser with GPU blocklisting ignored.
 
 ## Checklist
 
-1. The `ssb` was fitted with `fit(trials=200, refinement="nelder-mead")` before export.
-2. Native detector (`det_bin=1`) — the browser cannot bin.
+1. The `ssb` was fitted with `find_aberrations(trials=200, refinement="nelder-mead")` before export.
+2. Native detector size: the browser cannot bin.
 3. Export writes a clean root: `index.html`, `ShowPtycho.command`, `source/`,
    and `snapshots/`.
 4. Open by double-click + **Open data folder**, or `quantem showptycho out/`.

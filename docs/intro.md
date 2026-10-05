@@ -65,9 +65,10 @@ We serve two audiences first:
 tensors; we avoid NumPy on the hot path. Automatic scientific loading and
 compute never silently fall back to CPU: an unsupported machine fails with a
 corrective error. The explicit CPU reference exists for parity tests, while the
-viewers can still display ordinary NumPy arrays supplied by a user. For large
-datasets, bin the detector at load (`det_bin`) to cut memory and speed first
-paint - see [Load and I/O](api/io).
+viewers can still display ordinary NumPy arrays supplied by a user. 4D-STEM
+acquisitions stay encoded on the GPU at full detector resolution (about 0.1 to
+2 GiB for a 512 x 512 x 192 x 192 scan instead of 18 GiB) - see
+[Load and I/O](api/io).
 
 ## Widgets
 

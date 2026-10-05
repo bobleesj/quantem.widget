@@ -52,13 +52,14 @@ that FFT panel. It is not re-running the raw detector preprocessing.
 
 ## Real-Space Crop And SSB Refit
 
-For a region-specific probe/aberration fit, open the prepared CUDA SSB with the
-raw master path. ShowPtycho then exposes `Crop` in the top-right action group
+For a region-specific probe/aberration fit, open the prepared SSB session with
+the raw master path. ShowPtycho then exposes `Crop` in the top-right action group
 beside `Export` and `Reset`. Enable `Crop`, drag a rectangle on the phase panel,
 inspect the live row/column region readout, then use `Refit SSB`.
-The widget reloads only that scan region from the original HDF5 source, runs 200
-SSB optimization trials followed by refinement, and replaces the phase/FFT and
-their calibration with the result.
+The widget loads the original HDF5 source into encoded GPU storage, decodes
+only that scan region, runs 200 SSB optimization trials followed by refinement
+(`SSB(...).find_aberrations(...)`), and replaces the phase/FFT and their
+calibration with the result.
 
 ```python
 from quantem.gpu import SSB
@@ -71,7 +72,7 @@ ssb = SSB.open(
     scan_sampling_A=0.276,
     voltage_kV=300.0,
 )
-result = ssb.fit(trials=200, refinement="nelder-mead")
+result = ssb.find_aberrations(trials=200, refinement="nelder-mead")
 w = ShowPtycho(
     ssb,
     source_file="reference_master.h5",
@@ -83,10 +84,10 @@ The selection may be rectangular; each dimension must span at least `32` scan
 positions. `Crop Reset` clears the selection without changing the current
 reconstruction. This is a reconstruction operation, not a display crop.
 
-The refit control is absent from standalone HTML/WebGPU exports and MPS-only
-sessions. Those modes can inspect an existing result interactively, but only a
-source-backed CUDA session has the raw detector data and SSB optimizer needed
-to make a new scientific fit.
+The refit control is absent from standalone HTML/WebGPU exports and from
+sessions without a readable source master. Those modes can inspect an existing
+result interactively, but only a source-backed live session has the raw
+detector data and SSB optimizer needed to make a new scientific fit.
 
 ## Sample Tilt (Thick Crystals)
 
@@ -113,10 +114,10 @@ from quantem.widget import ShowPtycho
 
 ssb = SSB.open(path, voltage_kV=300.0, semiangle_mrad=30.0, scan_sampling_A=0.495,
                det_sampling=0.5554, rotation_angle_deg=-8.6)
-standard = ssb.fit()                 # defocus + astigmatism
-ShowPtycho(ssb)                      # standard SSB
-tilted = ssb.fit(tilt=True)          # + sample tilt and depth spread, jointly
-ShowPtycho(ssb)                      # opens on the fitted tilt
+standard = ssb.find_aberrations()               # defocus + astigmatism
+ShowPtycho(ssb)                                 # standard SSB
+tilted = ssb.find_aberrations(tilt=True)        # + sample tilt and depth spread, jointly
+ShowPtycho(ssb)                                 # opens on the fitted tilt
 pd.concat([standard.report(), tilted.report()])
 ```
 

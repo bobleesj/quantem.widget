@@ -28,17 +28,20 @@ movie.save_mp4(
 
 ## Choose a Backend
 
-MP4 export accepts three backend names:
+MP4 export accepts four backend names:
 
 | Backend | Use it when |
 | --- | --- |
 | `auto` | You want the fastest available path. This is the default. |
 | `cuda` | You are on an NVIDIA workstation and want CUDA/NVENC MP4 compression. |
-| `cpu` | You need the portable writer, or you are not in the CUDA environment. |
+| `mps` | You are on Apple Silicon and want the Metal encoder path. |
+| `cpu` | You need the portable writer, or you are not in a GPU environment. |
 
 `backend="auto"` selects the CUDA MP4 path only when CuPy, PyNvVideoCodec, and
-an NVIDIA CUDA device are available in the current Python process. Otherwise it
-uses the portable CPU writer.
+an NVIDIA CUDA device are available in the current Python process and the
+movie frame is large enough for NVENC; on macOS it then tries the Metal path.
+Otherwise it uses the portable CPU writer. The array encoders live in
+`quantem.gpu.movie`.
 
 ```python
 movie.save_mp4(

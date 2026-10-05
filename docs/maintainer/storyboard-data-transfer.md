@@ -98,14 +98,14 @@ and `Show4DSTEM(load(...))`.
 
 - Viewer opening is a separate explicit step, not a data-transfer control.
 - Transfer timing and viewer timing are measured separately.
-- Show4DSTEM still relies on its own lazy paging and GPU memory controls.
+- Show4DSTEM loads the target masters itself, encoded at full detector
+  resolution; data transfer does not choose GPU memory policy.
 - Data-transfer code does not import or construct viewer widgets.
 - `target_masters(plan)` returns only complete target master groups by default.
 - `target_masters(plan, existing_only=False, require_complete=False)` can list
   planned target paths before copy completion for lab-log review.
-- The Show4DSTEM handoff notebook generated from a transfer plan explicitly
-  uses `load(masters, devices=[0, 1], dtype="u8", det_bin=1)` and
-  `Show4DSTEM(...)`.
+- A Show4DSTEM handoff from a transfer plan passes `target_masters(plan)` to
+  `load(masters)` and opens the returned list with `Show4DSTEM(...)`.
 - The generated notebook reloads the manifest and prints warnings so saved
   outputs record whether the handoff was complete and multi-disk.
 

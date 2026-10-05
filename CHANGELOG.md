@@ -6,6 +6,18 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Show4DSTEM opens `quantem.gpu.io.load` acquisitions in their encoded GPU storage
+  (512 x 512 x 192 x 192 uint16 scans measured 0.1 to 2 GiB instead of 18 GiB):
+  `Show4DSTEM(load(path))` is a live bounded view, `scan_region=` shows part of
+  the scan, and `Show4DSTEM(load([a, b]))` a comparison grid labelled by file.
+  `Show4DSTEM.from_folder` and `ShowFolder.open_show4dstem` load every ready
+  master this way at full detector resolution; their binning, dtype, multi-GPU,
+  paging and preview-cache options, the MPS-specific viewer,
+  `quantem.widget.io.resident`, and the CLI `--gpus`/`--page-budget` options are
+  removed. Compute SSB runs on CUDA or MPS through `quantem.gpu.SSB` (voltage
+  only, every detected BF pixel), and the browser export reads integer `.qem`
+  files instead of count-ANS files.
+
 - Add `PlanPtycho`: give a crystal (CIF, `ase.Atoms` or Materials Project id) and the microscope settings, and see
   the beam through the specimen, the reconstruction's model window, the probe and the Bragg disks, with graded checks
   (window, scan margin, overlap, detector reach, column lean from tilt, focus inside the specimen). Microscope

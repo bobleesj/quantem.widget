@@ -4,7 +4,8 @@ Every question here comes from a real user session. Pick the one that matches
 what you're trying to do; each answer is a copy-pasteable snippet.
 
 For a beginner-friendly walkthrough of `uint8`/`uint16`, memory estimates,
-CUDA GPU selection, and cleanup, start with {doc}`IO/GPU <../tutorials/io_gpu>`.
+and the image readers, start with {doc}`IO/GPU <../tutorials/io_gpu>`; GPU
+selection and cleanup are in {doc}`Memory management <../tutorials/memory_management>`.
 
 For the full function reference, see `load` and the autodocs at the
 bottom of this page.
@@ -34,8 +35,8 @@ ShowFolder(path)
 
 # 4. Discover the master.h5 files + load the first + open the viewer
 masters = discover(path)             # sorted list of Path
-result = load(masters[0])            # native detector sampling when it fits
-Show4DSTEM(result)
+loaded = load(masters[0])            # encoded on the GPU at native detector sampling
+Show4DSTEM(loaded)
 ```
 
 **Gotcha**: `list_datasets()` returns `4dstem/gold_512` (with prefix) but
@@ -64,7 +65,7 @@ folder.paths("image")  # selected files after you star panels
 
 For 4D-STEM master files, use `quantem.gpu.io.discover` to return sorted master paths
 for a scripted load. Then inspect one file with `quantem.gpu.io.inspect` or load it with
-the memory-reduction options shown below.
+`quantem.gpu.io.load`.
 
 Prefer `discover` when you just want the sorted paths back for a
 scripted load:
@@ -87,34 +88,25 @@ print(report.scan_shape, report.detector_shape, report.dtype)
 # e.g. (512, 512) (192, 192)
 ```
 
-## How do I load only a scan ROI without loading the full frame first?
+## How do I read only a scan ROI?
 
-Use `load(..., scan_region=...)` for reconstruction or denoise workflows that
-need a scan patch plus halo instead of the full scan plane. It reads only the
-selected HDF5 detector-frame chunks and returns a local CuPy patch:
+`load` keeps the whole acquisition encoded on the GPU, so a reconstruction or
+denoise workflow reads only the scan patch it needs. `read` decodes that region
+into a Torch tensor on the acquisition's GPU:
 
 ```python
 from quantem.gpu.io import load
 
-result = load(
-    "/data/session/scan_00_master.h5",
-    scan_region=(160, 293, 234, 367),
-)
-patch = result.data
-print(patch.shape)  # (133, 133, 192, 192)
+with load("/data/session/scan_00_master.h5") as loaded:
+    patch_t = loaded.read(scan_region=(160, 293, 234, 367))  # row_start, row_stop, col_start, col_stop
+print(patch_t.shape)  # torch.Size([133, 133, 192, 192])
 ```
 
-This is for analysis pipelines, not first-pass full-field browsing. For a
-drift-corrected time series, derive `scan_region` from the shared specimen ROI,
-the frame shift, and a small scan halo, then sample the final ROI from the
-local patch. The detector counts remain raw; drift stays as scan-position
-metadata.
-
-On a native-detector ROI loader timing check, loading ten full frames
-before cropping took `9.66 s` and used an `18.0 GiB` temporary per frame.
-Loading the needed `133 x 133` patch took `2.44 s` and used a `1.215 GiB`
-temporary per frame. The current region loader is CUDA-only; use
-`load()` for Apple Metal/MPS until the region path is ported there.
+Stops are exclusive, and `detector_region=` bounds the detector pixels the same
+way. For a drift-corrected time series, derive `scan_region` from the shared
+specimen ROI, the frame shift, and a small scan halo, then sample the final ROI
+from the local patch. The detector counts remain raw; drift stays as
+scan-position metadata.
 
 ## Lightweight visual thumbnails
 
@@ -184,23 +176,18 @@ domain file format when you want data that another analysis step will consume.
 from quantem.gpu.io import load
 from quantem.widget import Show4DSTEM
 
-result = load("scan_master.h5")
-Show4DSTEM(result)
+loaded = load("scan_master.h5")
+Show4DSTEM(loaded)
 ```
 
-`load` auto-detects CUDA and decompresses straight onto the GPU (zero-copy
-`cupy` → torch via dlpack). No flag needed. Works on every common workstation
-GPU: RTX PRO 6000 Blackwell (96 GB), L40S / A100 (48 GB), RTX 4090 / A6000
-(24 GB), and anything else with a working cupy install.
-
-**Rough tier guidance for a 512×512×192×192 scan (~19 GB raw uint16):**
-
-| GPU tier | Full-res u16 no-bin | Best default |
-|---|---|---|
-| **96 GB** (Blackwell) | fits everything, 3x scans in flight | `load(path)` |
-| **48 GB** (L40S / A100) | fits with room for reconstruction | `load(path)` |
-| **24 GB** (RTX 4090 / A6000) | fits browse (~21 GB peak) but tight for recon | `load(path)` (browse) or `load(path, det_bin=2)` (recon) |
-| **16 GB** or less | bin at load | `load(path, det_bin=4, dtype="u8")` |
+`load` auto-detects CUDA and decodes the HDF5 chunks on the GPU into ANS
+encoded storage. No flag is needed; pass `device=1` to choose another visible
+CUDA device. A 512 x 512 x 192 x 192 uint16 scan (18 GiB as a dense array)
+occupies about 0.1 to 2 GiB depending on its counts, so full detector
+resolution fits on every common workstation GPU: RTX PRO 6000 Blackwell
+(96 GB), L40S / A100 (48 GB), RTX 4090 / A6000 (24 GB), and smaller cards.
+The memory budget is set by what you read or reconstruct from it, not by the
+loaded acquisition.
 
 ## I'm on a MacBook (Apple Silicon). How do I load a scan?
 
@@ -210,93 +197,25 @@ Same one-liner as CUDA:
 from quantem.gpu.io import load
 from quantem.widget import Show4DSTEM
 
-result = load("scan_master.h5")
-Show4DSTEM(result)
+loaded = load("scan_master.h5")
+Show4DSTEM(loaded)
 ```
 
-`load` auto-detects Apple Metal (MPS) and uses a zero-copy **raw-Metal**
-chunked-frames path. Unified memory means "VRAM" = "RAM" — the same 24 GB
-covers both. So a 24 GB M-series MacBook has to share load footprint with
-macOS + browser + everything else running.
+`load` auto-detects Apple Metal (MPS) and keeps the acquisition encoded in the
+same form as on CUDA. Unified memory means "VRAM" = "RAM": a 24 GB MacBook
+shares that memory with macOS, the browser, and everything else running, and
+an encoded 512 x 512 x 192 x 192 scan uses about 0.1 to 2 GiB of it.
 
-**Rough tier guidance for Mac unified memory:**
+For several scans on a Mac, `load([m1, m2, m3])` returns one acquisition per
+file, and `Show4DSTEM(load([m1, m2, m3]))` opens them as a comparison grid.
+`Show4DSTEM.from_folder(folder)` opens after the first master and loads the
+rest in the background.
 
-| MacBook Pro (unified) | Full-res u16 no-bin | Best default |
-|---|---|---|
-| **48-128 GB** (M2/M3/M4 Max, M3/M4 Ultra) | fits full-res comfortably | `load(path)` |
-| **24-36 GB** (M-series Pro) | fits browse via raw-Metal chunked path | `load(path)` (browse) or `load(path, det_bin=2)` |
-| **16-18 GB** (M-series base) | bin at load | `load(path, det_bin=4, dtype="u8")` |
+## I want to compare several scans in one viewer.
 
-The raw-Metal path streams frames from a chunked buffer rather than requiring
-the whole 4D stack in one contiguous allocation, so a 24 GB Mac can browse
-19 GB u16 no-bin without OOM even though the block wouldn't fit as a single
-torch tensor on MPS.
-
-For multi-scan on Mac, use `load([m1, m2, m3])` — dataset 0 shows in ~2 s,
-and datasets 1..N-1 decode in a background worker behind the `Dataset` slider
-(so a 5-file series streams in without freezing the UI).
-
-## My GPU is 24 GB (RTX 4090 / A6000) and the scan is 512×512×192×192 (~19 GB uint16). Does it fit?
-
-Yes, after the 2026-07-02 `mean_dp` fix. Full-res uint16 no-bin peak = ~21 GB
-(data + widget). Fits 24 GB with ~2.5 GB headroom.
-
-```python
-result = load("scan_master.h5")   # dtype defaults to uint16, no bin
-Show4DSTEM(result)                # ~21 GB VRAM peak
-```
-
-If you need more headroom for downstream compute (reconstruction, SSB), bin
-the detector on the way in:
-
-```python
-data = load("scan_master.h5", det_bin=2)   # 512x512x96x96, ~5 GB
-Show4DSTEM(data)
-```
-
-## My GPU is 48 GB (L40S / A100). Anything I need to know?
-
-No. Load full-res u16 no-bin — plenty of headroom for browse + downstream
-reconstruction in one process:
-
-```python
-data = load("scan_master.h5")   # ~21 GB peak, ~27 GB free after
-Show4DSTEM(data)
-```
-
-You can also load 2-3 scans simultaneously for cross-scan comparison
-without OOM. For time-series / tilt-series, `load([m1, m2, m3])` in one
-call keeps them behind a single `Dataset` slider.
-
-## My GPU is 96 GB (Blackwell). Anything I need to know?
-
-No. Full-res u16 no-bin peaks at ~21 GB per scan — you can hold 3-4 scans
-in VRAM at once, or one scan plus a full reconstruction workspace. Same
-one-liner:
-
-```python
-data = load("scan_master.h5")
-Show4DSTEM(data)
-```
-
-## I want a smaller preview and do not need full detector detail.
-
-Bin deliberately and drop to uint8. This is useful for scrolling through a
-session on constrained hardware; it is not a reconstruction or count-preserving
-path.
-
-```python
-data = load("scan_master.h5", det_bin=4, dtype="u8")
-Show4DSTEM(data)
-```
-
-Resident size drops to roughly 5% of the no-bin uint16 baseline. Peak brightness
-below 255 counts is fine (the loader warns if you'd saturate).
-
-## I want to browse many scans as one dataset.
-
-Pass a list. The result stacks them behind a `Dataset` slider inside
-`Show4DSTEM`, so scrubbing = switching files:
+Pass a list. `load` returns one encoded acquisition per master, and
+`Show4DSTEM` opens the list as a comparison grid with one shared detector ROI.
+File names become panel labels:
 
 ```python
 masters = [
@@ -304,31 +223,13 @@ masters = [
     "/data/session/file_002_master.h5",
     "/data/session/file_003_master.h5",
 ]
-data = load(masters, det_bin=1, dtype="u8")
-Show4DSTEM(data)
+acquisitions = load(masters)
+Show4DSTEM(acquisitions)
 ```
 
-Result shape: `(n_files, scan_row, scan_col, det_row, det_col)`. Filenames become
-slider labels.
-
-On a CUDA workstation with multiple GPUs, keep large browse series sharded
-instead of forcing every master into one allocation:
-
-```python
-data = load(masters, det_bin=1, dtype="u8", devices=[0, 1])
-Show4DSTEM(data)
-```
-
-`dtype="u8"` is the fast browse contract. It decodes directly into uint8 before
-stacking or sharding, so the loader does not build a full uint16 stack first.
-Values above 255 clip, so use uint16/no-bin when detector counts are the
-scientific result. Add `det_bin=2` or `4` only when you intentionally want a
-detector-reduced preview.
-
-The sharded path is disk-aware. If masters live on independent NVMe devices,
-`load(..., devices=[0, 1])` interleaves files by physical disk and GPU. If every
-file is on one disk, sharding still increases GPU capacity and keeps flipping
-bounded, but cold loading stays limited by that disk.
+The acquisitions must share scan shape, detector shape, and device. They are
+not stacked into one 5D array; each panel reads its own acquisition at full
+detector resolution and native count dtype.
 
 ## I want a viewer to follow a growing folder.
 
@@ -340,7 +241,7 @@ without constructing a replacement widget.
 |---|---|---|
 | `Show2D.from_folder(...)` | One new gallery panel; visible pages default to 20 panels | Reads only the new full-resolution source file; preserves the existing widget and per-file panel state |
 | `Show3D.from_folder(...)` | One new frame in a single unpaged stack | Reads only the new full-resolution source file; preserves the existing widget and frame state |
-| `Show4DSTEM.from_folder(...)` | One cold lazy 4D-STEM dataset | Loads raw data only when visible; a bounded GPU cache evicts older raw pages as needed |
+| `Show4DSTEM.from_folder(...)` | One new panel in the comparison grid | Loads the new master into encoded GPU storage at full detector resolution; existing acquisitions stay loaded |
 
 ```python
 from quantem.widget import Show2D, Show3D, Show4DSTEM
@@ -354,7 +255,6 @@ movie = Show3D.from_folder("/data/session/frames", pattern="frame_*.tif")
 scans = Show4DSTEM.from_folder(
     "/data/session/4dstem",
     pattern="*_master.h5",
-    det_bin=1,
     page_size=5,
 )
 ```
@@ -383,50 +283,45 @@ These APIs load source data for scientific display. `ShowFolder` serves a
 different purpose: it uses cached WebP thumbnails and metadata so a large
 session can be browsed and selected quickly. Thumbnail pixels must never be
 substituted for the full-resolution arrays opened by Show2D or Show3D, or for
-the lazy raw masters opened by Show4DSTEM.
+the source masters opened by Show4DSTEM.
 
 ## I want to load every master file in a folder.
 
-Use `Show4DSTEM.from_folder(...)` when the folder can grow or when you want a
-GPU-resident cache instead of loading every master immediately:
+Use `Show4DSTEM.from_folder(...)` when the folder can grow or when you want the
+viewer to open before every master has loaded:
 
 ```python
 from quantem.widget import Show4DSTEM
 
-w = Show4DSTEM.from_folder(
+viewer = Show4DSTEM.from_folder(
     "/data/session",
     backend="cuda",
-    gpus=[0, 1],
-    det_bin=1,
-    dtype="auto",       # keep real counts; use "u8" only for clipped fast preview
-    page_budget="auto",
-    view_mode="multiple",
-    compare_cols=3,
+    device=0,
+    columns=3,
 )
+viewer.wait_for_folder()   # optional: block until every opening master is loaded
 ```
 
-CUDA multi-GPU multiple views preload only the initial visible page with the
-optimized multi-file loader. Other masters stay as lazy slots, and new ready
-masters append through `poll_folder()` / `watch_folder()` without rebuilding the
-widget. Watching starts by default. Raw masters enter as cold lazy datasets;
-they use GPU memory only when selected or included in a visible page, and older
-raw pages are evicted when the resident budget requires it.
+Every ready master is loaded into encoded GPU storage at full detector
+resolution. The viewer opens after the first one; the rest join the comparison
+grid in the background, and new ready masters append through `poll_folder()` /
+`watch_folder()` without rebuilding the widget. Watching starts by default.
+`viewer.free()` closes the acquisitions `from_folder` loaded.
 
 Use explicit discovery plus `load(...)` when the file list is fixed and you want
-to control exactly what enters the stack:
+to control exactly which masters are compared:
 
 ```python
 from quantem.gpu.io import discover, load
 from quantem.widget import Show4DSTEM
 
 masters = discover("/data/session")   # sorted, filters to *_master.h5
-data = load(masters, det_bin=1)
-Show4DSTEM(data)
+acquisitions = load(masters)
+Show4DSTEM(acquisitions)
 ```
 
 `discover` also accepts a `scan_shape=(512, 512)` filter to keep only
-matching acquisitions when a folder mixes scan sizes. Add `det_bin=2` or `4`
-only when you intentionally want a detector-reduced preview.
+matching acquisitions when a folder mixes scan sizes.
 
 ## Before loading anything, how do I check what's in a folder?
 
@@ -477,58 +372,65 @@ path = download("gold_drift_0deg")   # returns local path
 data = load(path)
 ```
 
-## I want to save a `LoadResult` back to disk (e.g. after binning).
+## I want to save a loaded acquisition to disk.
 
 ```python
-from quantem.gpu.io import save
+from quantem.gpu import io
 
-save(data, "binned_out.h5")   # compressed, matches original chunk shape
+with io.load("scan_master.h5") as loaded:
+    io.save("scan.qem", loaded)   # one self-contained file; the encoded bytes are written as they are
+
+loaded = io.load("scan.qem")      # reopens encoded on CUDA or MPS
 ```
 
-## What's the difference between `det_bin`, `dtype`, and `no bin`?
+A `.qem` destination selects the standalone QuantEM format. `io.save` never
+replaces an existing file. Integer `.qem` files also open in the browser
+viewer described in [Experimental ANS sources](../developer/experimental-ans.md).
 
-- `det_bin=1` (default): full-detector resolution. Every diffraction pixel
-  preserved. CBED at full angular resolution.
-- `det_bin=N > 1`: mean-reduces N×N detector blocks at load. `det_bin=2` on a
-  192² detector → 96² output. Faster virtual-image compute; less angular detail.
-- `dtype="u16"` (default): raw counts (0-65535). Exact for reconstruction.
-- `dtype="u8"`: 0-255. Halves memory. Fine when max counts <255 (loader warns
-  if you'd saturate).
+## Does `load` bin the detector or change the dtype?
+
+No. `load` keeps every detector pixel and the native count dtype (`uint8` or
+`uint16` for counting detectors, uint32 counts that fit in `uint16` stored as
+`uint16`, and `float32` sources with their bits unchanged). The
+acquisition stays ANS encoded on the GPU, so full detector resolution is the
+only load mode. Reductions belong to explicit later steps:
+
+- `loaded.read(scan_region=..., detector_region=...)` decodes a bounded region.
+- `Show4DSTEM.export_html(det_bin=..., scan_bin=..., dtype=...)` mean-bins and
+  packs an exported browser payload.
+- `quantem show4dstem ... --html --bin N --dtype uint8` does the same from the
+  terminal.
 
 ## Memory rule of thumb for a 512×512×192×192 scan
 
-| mode | resident VRAM per file |
+| form | GPU memory |
 |---|---:|
-| no bin, uint16 | 18-20 GB |
-| `det_bin=2`, uint16 | 4.5-5 GB |
-| `det_bin=4`, uint16 | 1.1-1.3 GB |
-| `det_bin=4`, `dtype="u8"` | ~0.6 GB |
+| dense uint16 array (not created by `load`) | 18 GiB |
+| encoded acquisition from `load` | about 0.1 to 2 GiB, depending on counts |
+| one bounded `read` of 64 scan rows, uint16 | 2.25 GiB |
 
-`Show4DSTEM(data)` adds ~2-3 GB overhead (colormap, virtual-image cache, CBED
-buffer) on top of the load footprint. Budget accordingly.
+Check the encoded size of a loaded acquisition with `loaded.resident_bytes`
+and the dense size with `loaded.logical_bytes`. `Show4DSTEM(loaded)` adds the
+viewer's own buffers (colormap, virtual-image cache, diffraction buffer) on top
+of the encoded storage.
 
 Detector files are often integers, not floating-point images. If you are new to
 dtype choices: `uint16` (`u16`) stores exact raw detector counts from 0 to
 65535 in 2 bytes per pixel. `uint8` (`u8`) stores 0 to 255 in 1 byte per pixel,
 so it is smaller and faster for display, but it can saturate real count data.
-Use `uint16` for scientific loading and reconstruction; use `uint8` only for an
-explicit preview or browsing copy.
-
-Which mode + your GPU / Mac tier at a glance:
-
-| your box | full u16 no-bin | `det_bin=2` u16 | `det_bin=4` u8 |
-|---|:---:|:---:|:---:|
-| **NVIDIA 24 GB** (RTX 4090 / A6000) | browse ✓ · recon tight | recon ✓ | ✓ |
-| **NVIDIA 48 GB** (L40S / A100) | browse + recon ✓ | ✓ | ✓ |
-| **NVIDIA 96 GB** (Blackwell) | multi-scan + recon ✓ | ✓ | ✓ |
-| **Mac 48+ GB** (M-series Max/Ultra) | browse + recon ✓ | ✓ | ✓ |
-| **Mac 24-36 GB** (M-series Pro) | browse ✓ via raw-Metal chunked | ✓ | ✓ |
-| **Mac 16-18 GB** (M-series base) | bin at load | ✓ | ✓ |
+`load` keeps the detector's own dtype; choose `uint8` only for an explicitly
+labelled export.
 
 ## How do I choose a specific NVIDIA GPU?
 
-Set `CUDA_VISIBLE_DEVICES` before launching Jupyter. This controls which
-NVIDIA GPU the Python kernel can see:
+Pass `device=` to `load` to choose among the CUDA devices the kernel can see:
+
+```python
+loaded = load("scan_master.h5", device=1)
+```
+
+To restrict which physical GPUs the kernel sees at all, set
+`CUDA_VISIBLE_DEVICES` before launching Jupyter:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 jupyter lab --no-browser --ip=0.0.0.0
@@ -551,16 +453,12 @@ print(torch.cuda.get_device_name(0))
 print(torch.cuda.mem_get_info())
 ```
 
-To release memory from the current Python kernel:
+To release memory from the current Python kernel, close the viewer and then
+the acquisition it shows:
 
 ```python
-del data
-
-import gc
-import torch
-
-gc.collect()
-torch.cuda.empty_cache()
+viewer.close()
+loaded.close()
 ```
 
 If memory is still occupied, another object or another Jupyter kernel still

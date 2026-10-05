@@ -89,9 +89,10 @@ Common entry points:
   detector path uses CuPy. We do not pin a CuPy wheel (a fixed `cuda12x`/`cuda13x`
   would collide with one your environment already ships); a real CUDA workflow
   already has the matching CuPy installed.
-- **Apple Silicon (Metal / MPS)** - a dedicated raw-Metal viewer powers
-  `Show4DSTEM` on the MacBook, with full-resolution CBED and a fast virtual-image
-  path. The tiny `pyobjc-framework-Metal` wheel installs automatically on macOS.
+- **Apple Silicon (Metal / MPS)** - `quantem.gpu.io.load` keeps 4D-STEM
+  acquisitions encoded on the Apple GPU, and `Show4DSTEM` opens them with the
+  same viewer as on CUDA, at full detector resolution. The tiny
+  `pyobjc-framework-Metal` wheel installs automatically on macOS.
 - **CPU** - everything still runs, just slower. This is the path used to build
   these docs.
 

@@ -13,13 +13,17 @@ as the last expression:
 from quantem.gpu.io import load
 from quantem.widget import Show4DSTEM
 
-data = load("/data/session/scan_001_master.h5")
-viewer = Show4DSTEM(data)
+loaded = load("/data/session/scan_001_master.h5")
+viewer = Show4DSTEM(loaded)
 viewer
 ```
 
 The default keeps native detector sampling and the source count dtype. The
-loader selects CUDA on an NVIDIA workstation or Metal/MPS on Apple Silicon.
+loader selects CUDA on an NVIDIA workstation or Metal/MPS on Apple Silicon and
+keeps the acquisition encoded on the GPU: a 512 x 512 x 192 x 192 uint16 scan,
+18 GiB as a dense array, occupies about 0.1 to 2 GiB. Virtual images are summed
+on the encoded storage, and each diffraction pattern is decoded as you move the
+scan position.
 
 After the widget appears:
 

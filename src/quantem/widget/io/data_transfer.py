@@ -664,7 +664,7 @@ def target_masters(
     -------
     list[pathlib.Path]
         Target master paths, in manifest order, ready to pass to
-        ``load(masters, devices=[...])``.
+        ``quantem.gpu.io.load(masters)``.
     """
     if not existing_only:
         return [Path(entry.target_master) for entry in plan.entries]

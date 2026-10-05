@@ -31,10 +31,15 @@ rendering the widget view. They expose presentation controls such as
 `max_edge_px`, and `slides_preset=True` so slide-friendly GIFs can be made
 without changing the source stack.
 
-MP4 export accepts `backend="auto"`, `backend="cuda"`, or `backend="cpu"`.
-`auto` uses the NVIDIA CUDA MP4 path when available and otherwise uses the
-portable CPU writer. The CUDA path uses NVENC internally for compression. GIF
-export is CPU-only.
+Array stacks are written by `quantem.gpu.movie` (export module
+`quantem.gpu.movie.export`, CUDA encoder `quantem.gpu.movie.cuda`), which also
+applies the grid layout and contrast. Frames a widget has already rendered as
+PIL images are written directly as GIF or MP4.
+
+MP4 export accepts `backend="auto"`, `backend="cuda"`, `backend="mps"`, or
+`backend="cpu"`. `auto` uses the NVIDIA CUDA MP4 path when available, then the
+Apple Metal path on macOS, and otherwise the portable CPU writer. The CUDA path
+uses NVENC internally for compression. GIF export is CPU-only.
 
 ## MP4 Backend Benchmark
 

@@ -7,180 +7,160 @@ from quantem.gpu.io import load
 from quantem.widget import Show4DSTEM
 ```
 
-`Show4DSTEM` is a dispatcher/factory with one operator-facing API. It picks the
-viewer from what `load(...)` returns and from the requested widget backend:
-CUDA on Linux, Metal on Apple Silicon MPS loads, or explicit browser WebGPU.
+`Show4DSTEM` is one operator-facing factory. It chooses the viewer from its
+input:
 
-The MPS code is an implementation detail, not a separate public viewer. Use
-the single factory: `Show4DSTEM(load(path, backend="mps", det_bin=...))`.
+- an acquisition returned by `quantem.gpu.io.load` on CUDA or Apple Silicon
+  MPS opens as a live view over its encoded GPU storage;
+- a list of acquisitions with one scan and detector shape opens as a
+  comparison grid labelled by source file;
+- a NumPy array, Torch tensor, or `Dataset5dstem` series opens in the base
+  viewer, which also supports browser WebGPU compute and offline export.
 
 Canonical forms:
 
 ```python
-# Auto-pick CUDA or MPS from the loaded data.
-w = Show4DSTEM(load(path))
+# One acquisition; CUDA or MPS is selected automatically.
+viewer = Show4DSTEM(load(path))
 
-# Apple Silicon raw-Metal path, with sampling read from metadata when present.
-w = Show4DSTEM(load(path, backend="mps"))
+# Part of the scan: (row_start, row_stop, col_start, col_stop), exclusive stops.
+viewer = Show4DSTEM(load(path), scan_region=(128, 384, 128, 384))
 
-# Multi-dataset stack: one viewer, one Dataset slider.
-w = Show4DSTEM(load([path1, path2, path3], det_bin=1))
+# Several acquisitions: one shared diffraction ROI, one virtual image per file.
+viewer = Show4DSTEM(load([path1, path2, path3]), compare_cols=3)
 
-# Multi-dataset comparison: one shared diffraction ROI, many virtual images.
-w = Show4DSTEM(
-    load([path1, path2, path3], det_bin=1),
-    view_mode="multiple",
-    compare_cols=3,
-    compare_dp_mode="selected",
-)
+# Every ready master in a folder; masters completed later are appended.
+viewer = Show4DSTEM.from_folder("/data/session")
 
-# Dynamic folder browse: first page paints now; the rest preload if they fit.
-w = Show4DSTEM.from_folder(
-    "/data/session",
-    gpus=[0, 1],
-    det_bin=1,
-    columns=5,
-    page_size=5,
-    compare_dp_mode="selected",
-    preview_cache="auto",
-    preview_cache_max_bytes=4 << 30,
-    warm_cache=True,
-    watch=True,
-)
-
-# Apple Silicon live acquisition folder: dataset 0 appears first, then newly
-# completed *_master.h5 files append into the same Dataset slider.
-w = Show4DSTEM.from_folder(
-    "/data/live-scope-session",
-    backend="mps",
-    det_bin=1,
-    scan_size=512,
-    watch=True,
-)
-
-# Live-kernel WebGPU: the browser owns virtual-detector compute.
-w = Show4DSTEM(load(path), backend="webgpu")
-
-# Standalone backendless export for large data: HTML + companion data folder.
-w = Show4DSTEM(load(path), backend="webgpu", offline_codec="bslz4",
-               data_url="show4dstem-data")
-w.export_html("show4dstem.html")
+# An array in the Python session: browser-owned compute and standalone export.
+viewer = Show4DSTEM(array, backend="webgpu")
+viewer.export_html("show4dstem.html")
 ```
 
-Use `backend="webgpu"` for browser-owned compute in notebooks, and use the
-CLI `--backend webgpu --html` folder export for large standalone HDF5 review.
+Use the CLI `quantem show4dstem ... --backend webgpu --html` folder export for
+a standalone browser viewer over large HDF5 acquisitions.
+
+## Encoded acquisitions
+
+`load(path)` keeps the acquisition ANS encoded on the GPU at native detector
+sampling and count dtype. A 512 x 512 x 192 x 192 uint16 Arina scan, 18 GiB as
+a dense array, occupies about 0.1 to 2 GiB depending on its counts. The viewer
+never expands it: virtual images are summed on the encoded storage, and each
+diffraction pattern comes from a bounded read. CUDA and MPS acquisitions use
+the same viewer.
+
+These views need a live kernel. `offline=True` and `data_url=` raise for an
+encoded acquisition, and an interactive HTML export needs the 4D array in the
+Python session. A report export (`export_kind="report"`, static PNG pages)
+works from a live view; for a standalone browser viewer over the source files,
+use the CLI `--backend webgpu --html` folder export.
+
+The viewer borrows the acquisition. Keep a handle when you plan to release GPU
+memory, and close it after the viewer:
+
+```python
+loaded = load(path)
+viewer = Show4DSTEM(loaded)
+viewer
+
+# later, when you are done with this dataset
+viewer.close()
+loaded.close()
+```
 
 ## Backend ownership
 
 Fit the diffraction disk once and supply the same geometry to the viewer and
-virtual detectors. For example, inspect a bounded region as a GPU tensor:
+virtual detectors:
 
 ```python
 from quantem.gpu import detector
 
-data = load(path)
-patterns = data[100:164, 100:164]
-mean_dp = detector.mean(patterns)
-center, radius = detector.fit_probe(mean_dp)
-Show4DSTEM(patterns, center=center, bf_radius=radius)
+loaded = load(path)
+center, radius = detector.fit_probe(detector.mean(loaded))
+Show4DSTEM(loaded, center=center, bf_radius=radius)
 ```
 
-The center is `(row, column)` and the radius is in detector pixels. Supplying
+The center is `(row, col)` and the radius is in detector pixels. Supplying
 both skips the viewer's automatic disk estimation. `fit_probe` estimates disk
-geometry, not the complex probe or its aberrations.
+geometry, not the complex probe or its aberrations. `detector.mean` and the
+other `quantem.gpu.detector` products (`bf`, `adf`, `masked_sum`, or a
+`detector.prepare(loaded)` session for repeated queries) read the encoded
+storage directly.
 
-Show4DSTEM has two different acceleration surfaces:
+For a bounded Torch tensor on the same GPU, read a scan region:
 
-- **Live Python-backed viewers** use the data object returned by ``load(...)``.
-  Depending on hardware this may be CUDA/Torch, raw Metal/MPS on Apple Silicon,
-  native MPS sessions on Apple Silicon.
-- **Exported/offline browser viewers** use the packed HTML/folder payload and
-  browser WebGPU when available. After export, interaction should not depend on
-  Python, Torch, CUDA, or MPS.
+```python
+patterns_t = loaded.read(scan_region=(100, 164, 100, 164))  # (64, 64, det_row, det_col)
+Show4DSTEM(patterns_t, center=center, bf_radius=radius)
+```
 
-On Apple Silicon, prefer the raw Metal/MPS loading path for large first-pass
-browsing because it can control chunking, detector binning, and dtype more
-tightly than a generic Torch-MPS tensor path. Start at full detector sampling
-when memory allows; pass `det_bin` only as an explicit preview or memory
-policy. Torch-MPS remains useful for some tensor workflows, but reports should
-say which path was used.
+Show4DSTEM has two acceleration surfaces:
 
-MPS loading also has an automatic preflight memory guard. If a no-bin or large
-Metal allocation would exceed the Mac's conservative working-set budget,
-`load(..., backend="mps")` fails before allocating and recommends a safer
-`det_bin` value. This is intentional: it protects laptop sessions from
-unresponsive unified-memory pressure while keeping the MPS backend automatic.
+- **Live Python-backed viewers** compute in the kernel on CUDA or MPS, over an
+  encoded acquisition, a tensor, or an array.
+- **Exported browser viewers** use the packed HTML or folder payload and
+  browser WebGPU. After export, interaction does not depend on Python, Torch,
+  CUDA, or MPS.
 
-Routing lives in `quantem.widget.show4dstem_factory`: MPS payloads go to the
-Metal adapter, while CUDA arrays and CUDA 5D dataset wrappers stay on the base
-viewer. This
-keeps the user-facing API stable while backend-specific code stays isolated.
+Routing lives in `quantem.widget.show4dstem_factory`: acquisitions from
+`io.load` open through `quantem.widget.show4dstem_bounded`, and every other
+input opens in the base viewer.
 
 ## Live scope folders
 
-For real-time processing on a microscope or acquisition workstation, prefer the
-direct folder-backed API when you want ready masters to become available without
-materializing a full 5D stack:
+For real-time processing on a microscope or acquisition workstation, open the
+acquisition folder directly:
 
 ```python
 from quantem.widget import Show4DSTEM
 
 widget = Show4DSTEM.from_folder(
     "/data/live-scope-session",
-    gpus=[0, 1],             # selects CUDA and distributes lazy frames
-    det_bin=1,
-    columns=5,
-    page_size=5,
-    compare_dp_mode="selected",
-    preview_cache="auto",
-    preview_cache_max_bytes=4 << 30,
-    warm_cache=True,
-    watch_interval=2.0,
+    scan_size=512,          # keep only 512 x 512 scans in a mixed folder
+    columns=5,              # grid width
+    page_size=10,           # datasets per page
+    watch_interval=2.0,     # seconds between folder polls
 )
 widget
 ```
 
-`from_folder(...)` keeps the folder as lazy slots instead of materializing a full
-5D stack before first paint. The initial visible page is scheduled first; valid
-persistent previews may paint before its raw masters finish loading. The default
-`preload_all_if_fits=True` policy then calculates the complete raw footprint from
-the known frame shape and dtype. If that footprint fits the selected GPUs, every
-unhidden dataset loads in the background across those GPUs. If it does not fit,
-the viewer keeps full-resolution lazy paging; it does not silently detector-bin,
-real-space-bin, or narrow the dtype. Set `preload_all_if_fits=False` to keep the
-page-on-demand policy even when the series would fit.
+`from_folder(...)` loads every ready `*_master.h5` (`pattern=`, `recursive=`)
+with `quantem.gpu.io.load` into encoded storage on one CUDA device or the Apple
+GPU (`backend=`, `device=`), at full detector resolution. At about 0.1 to 2 GiB
+per 512 x 512 x 192 x 192 scan, the whole folder stays resident without
+detector binning or paging. The viewer opens once the first master is loaded;
+the others join the comparison grid in the background, and
+`widget.wait_for_folder()` blocks until they have.
 
-The title row reports both GPU allocation and raw residency, for example
-`raw 20/20 resident` or `raw 4/20 resident`. New ready masters can be appended
-manually with `widget.poll_folder()` or by the default folder watcher. Each
-append re-evaluates whether the complete unhidden series still fits. Use
-`watch=False` for a fixed folder or a script that calls `poll_folder()`
-explicitly. A compact title-area badge distinguishes a live `Watching` worker,
-`Updating`, incomplete/stability probation as `Waiting for file completion`, a
-corrective `Watch error`, and `Stopped`; a fixed snapshot has no badge. Hidden
-multiple-grid panels are released from the raw resident cache and skipped by
-compare computes until unhidden.
+Masters that are not completely written are skipped (`ready_only=True`). When
+the folder mixes geometries, the largest group sharing one scan and detector
+shape is shown; `verbose=True` reports the skipped count. Use `scan_size=` or a
+narrower `pattern=` to choose another group, and `max_masters=` or
+`min_masters=` to bound the count. Other keyword arguments, such as
+`compare_dp_mode="selected"` or `title=`, go to the viewer.
 
-Discovery and metadata do not copy raw 4D arrays to a GPU. A newly appended
-master starts lazy, then joins the background full-series preload only when the
-new total still fits. Otherwise, selecting it or including it in a visible page
-loads it on demand. `page_budget` bounds raw GPU residency and evicts older raw
-pages as needed; reduced virtual-image cache entries use separate host-memory
-limits. Appending a master invalidates or warms only affected comparison pages,
-so unrelated cached pages remain fast.
+With `watch=True` (default), a master that completes while the viewer is open
+is appended once its header signature is unchanged on two consecutive polls, so
+a file still being written is never read. A compact title-area badge
+distinguishes a live `Watching` worker, `Updating`, `Waiting for file
+completion`, a corrective `Watch error`, and `Stopped`; `watch=False` opens a
+fixed snapshot with no badge.
 
 The folder lifecycle matches Show2D and Show3D:
 
 ```python
-new_datasets = widget.poll_folder()       # append newly ready masters now
+widget.wait_for_folder()                  # block until the opening masters are loaded
+new_datasets = widget.poll_folder()       # append newly completed masters now
 widget.stop_folder_watch()                # pause background discovery
 widget.watch_folder(interval=1.0)         # resume discovery
-widget.close()                            # stop watchers/workers and close
+widget.free()                             # close the acquisitions from_folder loaded
+widget.close()                            # stop folder work, release them, close the widget
 ```
 
 Folder watching is append-only. Known masters are not duplicated, incomplete
 or externally linked masters wait until they are readable, and removing a file
-does not silently delete a dataset from an active scientific view.
+does not delete a dataset from an active scientific view.
 
 Maintainer real-time signoff follows
 [S4D-14](../maintainer/storyboard-show4dstem.md#s4d-14-watch-a-live-4d-stem-acquisition-folder-in-place):
@@ -188,208 +168,54 @@ introduce genuine master/chunk files while one Jupyter widget is mounted and
 measure both discovery/control paint and requested virtual-image/diffraction
 paint.
 
-`warm_cache=True` preserves the original detector data. It loads raw masters in
-memory-aware batches, computes the standard BF/ABF/ADF/HAADF virtual images,
-keeps only those small 2D results in host memory and the configured persistent
-preview cache, and releases raw pages as the worker advances when full residency
-is unavailable. Cold pages still pay real disk/decompression cost; warmed page,
-preset, and matching future-process opens reuse cached results.
-`compare_dp_mode="selected"` keeps scan-position movement responsive without
-loading every master just to average the diffraction panel.
+This path reads the original master data. It does not use ShowFolder's cached
+thumbnails.
 
-This path uses the original master data at the requested `det_bin` and `dtype`.
-It does not use ShowFolder's cached thumbnails. Set `det_bin=1` and keep the
-count-preserving dtype when full detector resolution is required.
-
-For folders with tens or hundreds of masters, `page_size` is the number of
-datasets shown together. It is deliberately independent from raw GPU residency:
-the loader divides a visible page into safe progressive waves. `columns`
-controls the grid width:
+On Apple Silicon the same call loads onto the Apple GPU; pass `backend="mps"`
+to require it:
 
 ```python
-widget = Show4DSTEM.from_folder(
-    "/data/session",
-    gpus=[0, 1],
-    det_bin=1,
-    columns=3,
-    page_size=12,
-    page_budget=4,          # resident lazy/GPU cache
-    compare_group_mode="paged",
-    compare_cache_pages=16, # reduced VI page cache, not raw 4D VRAM
-)
-
-widget.set_compare_page(1)       # second zero-based page
-widget.next_compare_page()
-widget.previous_compare_page()
-widget.show_compare_all_groups() # collapse pages into one dense grid
-widget.show_compare_paged_groups()
-widget.preload_all_datasets()    # re-run the fit check in the background
-widget.wait_for_dataset_preload(timeout=120)  # deterministic scripts/tests
-```
-
-The page control appears in the multiple-grid header whenever the visible
-dataset count exceeds `page_size`. `compare_group_mode="paged"` shows one group
-at a time with precise group buttons plus a compact play/pause control.
-`compare_group_mode="all"` collapses all visible groups into one dense grid for
-screening tens or hundreds of reduced virtual images.
-
-For a cold lazy page, the grid reserves every requested panel slot immediately.
-Each selected GPU loads at most one new master in a wave, different GPUs can make
-progress together, and each virtual image fades into its stable slot as soon as
-it is ready. A newer page request cancels obsolete work after its current safe
-wave; late results from an older page cannot overwrite the new page. Once the
-visible page is complete, the current detector preset is prefetched for the next
-and previous pages while foreground work is idle. Hidden panels remain hidden
-and are not recomputed.
-
-Use `page_budget` for the raw resident-cache policy and `page_size` for the
-display grouping. Existing code may continue to use `compare_cols` and
-`compare_max_panels`; new folder-browse code should use the shorter names.
-
-Automatic residency uses 98% as an upper data fraction. It then reserves one
-largest processed master plus bounded reduction/allocator workspace before
-deciding that the complete series fits. This prevents a nominally full resident
-set from consuming the transient memory needed to decode the next master. Pass
-`page_reserve_vram_bytes=` or `page_max_vram_bytes=` for an explicit policy.
-
-Pass `gpus=[0, 1]` to use specific cards, or `gpus="all"` to use every CUDA
-device visible to the process. Lazy masters are placed according to each card's
-safe byte budget, while already resident CUDA frames stay on their owning card.
-Equal budgets naturally alternate; a larger or freer card receives a larger
-share instead of leaving usable memory stranded behind fixed round-robin
-placement. Per-device decoding remains serialized, and separate cards may load
-and reduce their wave concurrently.
-
-The multiple-grid BF/ABF/ADF/HAADF previews are cached as reduced float32
-virtual-image pages. This lets page 1 -> page 2 -> page 1 return the already
-computed thumbnails without keeping page 1's raw 4D tensors in VRAM. Tune
-`compare_cache_pages` for how many reduced pages to keep and
-`compare_cache_max_bytes` for the host-memory cap. This cache is separate from
-`page_budget`: `page_budget` controls raw 4D GPU residency, while
-`compare_cache_pages` controls small rendered page previews.
-
-## Persistent folder preview cache
-
-The bounded host-memory cache above lasts only for the current widget. Folder
-viewers also keep a persistent cache of standard scientific previews so a new
-widget or Python process can show prior BF/ABF/ADF/HAADF results while raw data
-loads:
-
-```python
-widget = Show4DSTEM.from_folder(
-    "/data/session",
-    gpus=[0],
-    page_size=12,
-    preview_cache="auto",
-    preview_cache_dir=None,
-    preview_cache_max_bytes=4 << 30,
-    rebuild_preview_cache=False,
-)
-
-widget.preview_cache_info
-# {'enabled': True, 'hits': ..., 'misses': ..., 'current_bytes': ...,
-#  'max_bytes': ..., 'bytes_read': ..., 'bytes_written': ..., 'path': ...}
-```
-
-`preview_cache="auto"` uses the QuantEM user cache, honoring
-`QUANTEM_WIDGET_CACHE` when it is set. `True` is equivalent to automatic user
-caching, `"folder"` selects a project-local `.quantem` cache, and `False`
-disables persistent reads and writes. `preview_cache_dir="preview-cache"`
-overrides the location. Use `rebuild_preview_cache=True` to ignore entries from
-an earlier run and repopulate them. The default disk limit is 4 GiB; least
-recently used complete entries are evicted when `preview_cache_max_bytes` is
-exceeded.
-
-This cache contains reduced float32 virtual images for the recognized BF, ABF,
-ADF, and HAADF presets only. It never stores raw 4D tensors, CUDA allocations,
-or diffraction patterns. Standard presets computed during normal browsing are
-written on demand; `warm_cache=True` proactively computes them in memory-aware
-batches. The three relevant limits remain independent:
-
-- `page_budget` and the VRAM options bound authoritative raw 4D CUDA residency;
-- `compare_cache_max_bytes` bounds reduced pages in host memory for this widget;
-- `preview_cache_max_bytes` bounds persistent reduced previews on disk.
-
-Entries are keyed per source master rather than per display page, so page-size,
-order, star, and hidden-panel changes can reuse the same result. Validation
-includes the master and all linked detector chunks (path, size, nanosecond
-modification/change time, device, and inode), processing/cache version,
-requested dtype and detector bin, processed shape, scan override, detector
-center, and preset mask geometry. A changed or new master/chunk therefore
-invalidates only the affected master's previews.
-Unreadable source chunks and corrupt or partial cache files are misses, never
-unverified scientific hits.
-
-On a matching reopen, valid panels appear in their stable slots with an honest
-status such as `Cached preview · loading raw data`. The normal capacity-aware
-CUDA scheduler continues loading authoritative raw data, and fresh panels
-replace cached pixels in place. Partial pages mix immediate cache hits with
-loading placeholders. A failed refresh leaves the valid cached image visible
-with a refresh error; cached pixels are never silently called fresh. Custom
-detector ROIs and diffraction inspection wait for raw data and continue to use
-the requested source dtype and resolution.
-
-The current CUDA-first implementation still loads one raw master before the
-widget is ready so it can establish detector shape, calibration, and the
-selected diffraction pattern. Persistent previews remove the black wait for the
-rest of the page and accelerate later page/preset returns; they do not yet make
-initial construction metadata-only. Performance reports therefore split
-API-call-to-model-ready from model-ready-to-cached-canvas paint.
-
-Inspect or clear the persistent cache explicitly:
-
-```python
-info = widget.preview_cache_info  # read-only snapshot
-widget.clear_preview_cache()
-```
-
-`clear_preview_cache()` removes this folder/configuration's persistent preview
-namespace. It does not clear ShowFolder's thumbnail cache and does not free raw
-GPU memory. An active widget may repopulate the namespace when another standard
-preset or page is computed; construct it with `preview_cache=False` when the
-namespace must stay disabled. Maintainer verification follows
-[S4D-19](../maintainer/storyboard-show4dstem.md#s4d-19-reopen-a-folder-with-persistent-scientific-previews)
-and records cached-first, fresh-first, visible-page, complete-page, and prefetch
-timing separately.
-
-For folder-backed multi-master browsing, `dtype="auto"` is resolved to a stable
-`u16` load dtype. A lazy series needs every page to share shape and dtype; using
-per-master auto-narrowing could otherwise make one page `uint16` and a later
-page `uint8`. Pass `dtype="u8"` explicitly only when lossy clipping is acceptable
-for browsing.
-
-If a folder contains mixed scan shapes, `from_folder(...)` chooses the largest
-metadata-compatible group and warns with the skipped count. This prevents a
-mixed folder from failing halfway through page loading. Use `scan_size=` or a
-narrower `pattern=` when you intentionally want a smaller group.
-
-On Apple Silicon the same folder API selects the MPS loader:
-
-```python
-from quantem.widget import Show4DSTEM
-
 widget = Show4DSTEM.from_folder(
     "/data/live-scope-session",
     backend="mps",
-    det_bin=1,
     scan_size=512,
-    watch=True,
     title="Live 4D-STEM",
 )
 widget
 ```
 
-The folder watcher polls for `*_master.h5` files, ignores masters whose linked
-data files are not present yet, and appends only new acquisitions. The
-notebook cell and viewer stay stable; the dataset slider grows as files become
-ready. Use `widget.stop_folder_watch()` before switching folders.
+GPU memory belongs to the loaded acquisitions and the Python session, not to
+the visual widget alone. `free()` and `close()` release the acquisitions that
+`from_folder` loaded; acquisitions you pass to `Show4DSTEM(...)` stay open until
+you call their `close()`. The live widget shows a compact GPU memory label in
+its title row when CUDA or MPS memory is visible. Exported HTML has no live
+Python GPU allocation, so it does not expose a "free GPU memory" control.
 
-GPU memory is owned by the loaded data object and the Python session, not by the
-visual widget alone. The live widget shows a compact GPU memory label in its
-title row when CUDA or MPS memory is visible. To release all memory, remove or
-replace the backend data object, clear references, use backend-specific cleanup
-utilities when provided, or restart the kernel/session. Exported HTML has no
-live Python GPU allocation, so it should not expose a "free GPU memory" control.
+## Compute SSB
+
+With a live kernel on CUDA or MPS, the **Compute SSB** control, or
+`viewer.compute_ssb()`, runs `quantem.gpu.SSB(...).find_aberrations(...)` on the
+current 4D frame. It attaches the SSB phase and the aligned DPC row/col maps as
+virtual-image sources and switches the virtual image to the phase. Supply the
+microscope calibration when you open the viewer:
+
+```python
+loaded = load(path)
+viewer = Show4DSTEM(
+    loaded,
+    ssb_voltage_kV=300,
+    ssb_semiangle_mrad=30,
+    ssb_scan_sampling_A=0.5,
+)
+phase = viewer.compute_ssb()   # 200 trials plus Nelder-Mead refinement by default
+```
+
+The beam energy comes from `ssb_voltage_kV`, and the fit uses every detected
+bright-field pixel (`ssb_bf_intensity_threshold`, `ssb_bf_radius`).
+`ssb_n_trials`, `ssb_refine`, and `ssb_seed` control the search. Compute SSB
+needs one 4D frame on a square 128, 256, or 512 scan grid. An encoded
+acquisition goes to SSB without a dense copy; SSB decodes only the
+bright-field disk.
 
 ## Multiple grid
 
@@ -397,14 +223,16 @@ Use `view_mode="multiple"` when the extra frame axis represents multiple
 acquisitions that should be inspected side by side. The viewer keeps the
 standard diffraction-panel workflow: one shared detector ROI, one shared scan
 cursor, and one Dataset slider. The virtual-image side becomes a grid of ready
-frames or datasets. Use `view_mode="single"` for one-at-a-time browsing.
+frames or datasets. Use `view_mode="single"` for one-at-a-time browsing. A list
+of acquisitions from `load` and `Show4DSTEM.from_folder(...)` open in multiple
+mode by default.
 
 ```python
 from quantem.gpu.io import load
 from quantem.widget import Show4DSTEM
 
 widget = Show4DSTEM(
-    load([path1, path2, path3, path4], det_bin=1),
+    load([path1, path2, path3, path4]),
     view_mode="multiple",
     compare_cols=2,
     compare_panel_gap_px=0,
@@ -418,10 +246,9 @@ widget
 accepts `"side"` and `"top"` for placing the shared diffraction panel next to
 or above the multiple grid. Positive `compare_cols` values are treated as the
 maximum grid columns on desktop; narrow/mobile viewports cap the grid at two
-columns so the tiles remain touch-friendly. On lazy MPS multi-dataset loads, the
-grid starts with the first decoded dataset and appends tiles as the background
-loader marks additional datasets ready; it does not materialize a full 5D stack
-just to build the comparison.
+columns so the tiles remain touch-friendly. A comparison of encoded
+acquisitions never stacks them into one 5D array; each tile reads its own
+acquisition.
 
 When the visible set is larger than `compare_max_panels`, the multiple grid is
 paged like Show2D/Show3D galleries. `compare_page_idx` is zero-based and
@@ -473,7 +300,7 @@ Show4DSTEM has two HTML export modes with different goals:
 | Export kind | Use when | Data included | Memory behavior |
 |---|---|---|---|
 | `export_kind="report"` | Sharing a curated folder/multiple-grid result or saving a compact screening report | Static PNG virtual-image pages plus a representative diffraction pattern | Page-aware; folder data is rendered page by page and raw 4D tensors are not embedded |
-| `export_kind="interactive"` | The recipient must drive the actual 4D dataset offline in the browser | Raw 4D payload, explicitly encoded as `uint8` or `uint16` and optionally binned | Can be large; use dtype and binning deliberately before sending |
+| `export_kind="interactive"` | The recipient must drive the actual 4D dataset offline in the browser | Raw 4D payload, explicitly encoded as `uint8` or `uint16` and optionally binned | Can be large; use dtype and binning deliberately before sending. Needs the 4D array in the Python session, so it applies to viewers opened from an array or tensor |
 
 Quick decision rule:
 
@@ -502,9 +329,13 @@ widget.export_html(
 ```
 
 Interactive raw exports remain available when the exported HTML needs the
-backendless Show4DSTEM widget, not just a report:
+backendless Show4DSTEM widget, not just a report. They embed the viewer's 4D
+array, so open the viewer from an array or tensor (for example a bounded
+`loaded.read(scan_region=...)`); a viewer over `io.load` acquisitions exports
+reports only:
 
 ```python
+widget = Show4DSTEM(array)
 widget.export_html(
     "show4dstem_interactive.html",
     export_kind="interactive",
@@ -634,9 +465,13 @@ performance notes record the current seven-panel WebGPU compare-grid signoff.
 
 ```{note}
 The generated reference above is the universal base viewer. The public
-`quantem.widget.Show4DSTEM` factory accepts the same viewer options plus dispatch
-options such as `backend="webgpu"`, `offline_codec`, `data_url`, and
-`export_html(...)`.
+`quantem.widget.Show4DSTEM` factory accepts the same viewer options, plus
+`scan_region=` for an acquisition from `io.load`; `backend="webgpu"`,
+`offline_codec`, and `data_url` apply to array input.
+```
+
+```{eval-rst}
+.. autofunction:: quantem.widget.show4dstem_factory.from_folder
 ```
 
 ## Interactive controls

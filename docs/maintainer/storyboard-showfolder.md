@@ -112,7 +112,8 @@ backend; keep the raw files outside the widget repository.
 - Removing a file removes it from the browser, selection, and next cache
   manifest so stale files are not retained in memory or cache state.
 - New `*_master.h5` 4D-STEM files trigger the same watch path and refresh the
-  active lazy Show4DSTEM handoff without preloading every master. This
+  active Show4DSTEM handoff, which loads the ready masters encoded at full
+  detector resolution through ``Show4DSTEM.from_folder(..., watch=False)``. This
   ShowFolder handoff may rebuild its owned viewer; it does not replace the
   same-widget guarantee required of direct ``Show4DSTEM.from_folder(...)``.
 - When the all-image viewers are open (`open_show2d(all_images=True)` or

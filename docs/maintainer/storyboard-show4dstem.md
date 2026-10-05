@@ -3,10 +3,10 @@
 Use with [Storyboard](storyboard).
 
 MacBook support is a first-class Show4DSTEM target, not an afterthought. For
-large real 4D-STEM data, agents should explicitly test Apple Silicon
-raw-Metal/MPS loading and detector-binned U8 browse workflows, then separately
-test browser/WebGPU exported HTML and any CUDA/Torch workstation path relevant
-to the release.
+large real 4D-STEM data, agents should explicitly test Apple Silicon MPS
+loading of encoded acquisitions at full detector resolution, then separately
+test browser/WebGPU exported HTML and any CUDA workstation path relevant to the
+release.
 
 ## Stories
 
@@ -91,9 +91,9 @@ inspect diffraction features without losing the linked scan context.
 ### S4D-05: Use WebGPU And Fallback Paths Correctly
 
 **User story**: As a user on different hardware, I want the right compute path
-for the surface I am using: MPS/raw Metal or CUDA/Torch for live Python-backed
-work, WebGPU for browser/offline interaction, and a clear fallback when
-acceleration is not available.
+for the surface I am using: an encoded acquisition on MPS or CUDA for live
+Python-backed work, WebGPU for browser/offline interaction, and a clear error
+when acceleration is not available.
 
 **Primary widgets**: Show4DSTEM.
 
@@ -104,15 +104,15 @@ environment when possible.
 **Acceptance checks**:
 
 - Record WebGPU adapter availability in the report.
-- Record the GPU backend and loader path: CUDA, raw Metal/MPS, Torch-MPS, or
-  browser WebGPU.
+- Record the GPU backend and data path: encoded acquisition on CUDA or MPS,
+  an array or tensor, or browser WebGPU.
 - Verify accelerated detector/virtual-image updates when WebGPU is available.
-- Verify MacBook live-Jupyter browsing can use MPS/raw Metal loading and
-  computation for first-pass review.
+- Verify MacBook live-Jupyter browsing loads the acquisition encoded on MPS
+  and computes virtual images on it for first-pass review.
 - Verify `backend="webgpu"` exported/offline pages use browser WebGPU and do not
   need Python, Torch, or MPS after export.
 - Verify WebGPU unavailability produces a clear corrective error.
-- Do not claim MPS/raw-Metal performance from a Torch-MPS path.
+- Do not claim encoded-acquisition performance from an array or tensor input.
 
 ### S4D-06: Save, Export, And Reopen 4D-STEM Views
 
@@ -247,9 +247,9 @@ dataset for reference parity.
 ### S4D-11: Use MacBook MPS For Live Loading And U8 Export
 
 **User story**: As a MacBook user opening large 4D-STEM data, I want first-pass
-browsing to use the fast Apple Silicon path at native detector sampling when
-memory allows, and to use detector-binned U8 only when I explicitly choose a
-preview to avoid exhausting unified memory.
+browsing on the Apple GPU at native detector sampling without exhausting
+unified memory, and to use detector-binned U8 only when I explicitly choose a
+compact export.
 
 **Primary widgets**: Show4DSTEM.
 
@@ -258,11 +258,12 @@ Jupyter server, plus a smaller deterministic fixture for export parity.
 
 **Acceptance checks**:
 
-- Load first with ``load(path, backend="mps", det_bin=1)`` when the Mac memory
-  budget allows, then construct ``Show4DSTEM`` from that result. Run
-  ``det_bin=4`` or ``8`` only as an explicitly labeled preview/capacity check.
-- Record load time, first paint, detector bin, dtype, resident memory, and
-  whether the path is raw Metal/MPS, Torch-MPS, or CPU.
+- Load with ``load(path, backend="mps")`` and construct ``Show4DSTEM`` from
+  that acquisition. The acquisition stays encoded at full detector resolution;
+  there is no load-time detector bin or dtype cast.
+- Record load time, first paint, dtype, encoded bytes
+  (``resident_bytes``), dense bytes (``logical_bytes``), and unified-memory
+  pressure.
 - Export full-detector WebGPU/HDF5 HTML when the gate is native detector
   behavior; export compact HTML with ``encoding="uint8"`` only as an explicitly
   labeled preview.
@@ -276,29 +277,9 @@ Jupyter server, plus a smaller deterministic fixture for export parity.
 
 ### S4D-12: Explain Raw Metal MPS Versus Torch-MPS
 
-**User story**: As a developer or power user debugging MacBook performance, I
-want the report to say whether the viewer used raw Metal/MPS kernels or
-Torch-MPS, because those paths have different memory behavior and performance
-risks.
-
-**Primary widgets**: Show4DSTEM.
-
-**Data to use**: one MacBook MPS dataset large enough to expose memory pressure,
-plus a tiny deterministic comparison dataset.
-
-**Acceptance checks**:
-
-- State why the selected path is raw Metal/MPS or Torch-MPS for the test.
-- For the raw Metal/MPS path, verify loading and detector binning avoid
-  materializing an unnecessary full CPU copy.
-- For any Torch-MPS path, record tensor dtype, device, peak memory, and whether
-  the operation falls back to CPU for unsupported kernels.
-- Verify the same scientific operation is compared against a CPU/Python
-  reference: detector bin, BF/ADF virtual image, diffraction frame, and ROI
-  summed/mean diffraction when relevant.
-- Document in the signoff whether the raw Metal path is used because it offers
-  tighter control over chunking, dtype, and memory than generic Torch-MPS for
-  this workflow.
+Retired. The MPS-specific raw-Metal viewer was removed; MPS acquisitions from
+``quantem.gpu.io.load`` open in the same bounded Show4DSTEM view as CUDA. Use
+S4D-11 for MacBook signoff.
 
 ### S4D-13: Keep GPU Memory Lifecycle Outside The Viewer UI
 
@@ -316,7 +297,8 @@ dataset.
 
 - Verify closing/deleting a widget view does not imply the backend data object
   or GPU allocation is freed unless the owning Python object/session is also
-  released.
+  released. The exception is ``Show4DSTEM.from_folder(...)``, which owns the
+  acquisitions it loaded: verify ``free()`` and ``close()`` close them.
 - Verify the documented cleanup path is backend/session level: delete or replace
   the loaded data object, clear references, stop/restart the kernel, or use the
   backend-specific cache cleanup utility when one exists.
@@ -335,18 +317,18 @@ mounted Jupyter Show4DSTEM to discover every newly completed acquisition,
 expose it exactly once without rebuilding or silently changing precision, and
 remain interactive while incomplete detector files finish writing.
 
-**Primary widgets**: ``Show4DSTEM.from_folder(...)``. Test the CUDA
-``Dataset5dstem`` path and the public ``backend="mps"`` path separately because
-their paging and memory lifecycles differ. CPU is only a deterministic unit-test
-reference. Standalone HTML is a snapshot and does not continue watching a
-filesystem.
+**Primary widgets**: ``Show4DSTEM.from_folder(...)``. Test ``backend="cuda"``
+and ``backend="mps"`` separately; both load encoded acquisitions into the same
+bounded comparison view, but their decoders and memory differ. CPU is only a
+deterministic unit-test reference. Standalone HTML is a snapshot and does not
+continue watching a filesystem.
 
 **Data to use**: A temporary watched folder and at least three genuine 4D-STEM
 acquisition groups. Begin with one ready ``*_master.h5``. Introduce a second
 master before one linked detector-data file exists, then complete it; add a
 third compatible master atomically. Record master/chunk paths, scan and detector
-shape, source dtype, requested ``det_bin`` and dtype, native bytes, backend
-host, selected GPUs, and widget commit. Tiny generated HDF5 is a CI lifecycle
+shape, source and loaded dtype, encoded and dense bytes, backend host,
+selected GPU, and widget commit. Tiny generated HDF5 is a CI lifecycle
 control only and does not establish real-workflow signoff.
 
 **Acceptance checks**:
@@ -361,9 +343,7 @@ control only and does not establish real-workflow signoff.
   and keep it through real master/chunk validation and append. An idle poll may
   briefly show ``Updating`` but must return to ``Watching`` without decode,
   transfer, or repaint. If an arrival has a tile on the visible page, remain
-  ``Updating`` until the new tile's current-generation, raw-backed virtual
-  image is authoritatively painted; an older cached preview may remain visible
-  while it refreshes but does not satisfy this transition. Use amber ``Waiting
+  ``Updating`` until the new tile's virtual image is painted. Use amber ``Waiting
   for file completion`` while a master/chunk is incomplete or not yet stable,
   red ``Watch error`` with
   corrective detail for a bad contract, paint failure, or worker failure, and
@@ -381,24 +361,17 @@ control only and does not establish real-workflow signoff.
   count, page control, or reserved placeholder paint; then selecting/requesting
   the new dataset to first virtual-image **and** diffraction paint. Do not call
   a Python trait update alone “append-to-paint.”
-- On CUDA, append each master as a cold lazy ``Dataset5dstem`` slot. Do not
-  eagerly load every arrival, clear unrelated reduced pages, exceed
-  ``page_budget``, or silently change shape, dtype, detector bin, or scan bin.
-  Recompute fit and placement safely after each append; cross-check the paging
-  and generation rules in S4D-17 and S4D-18.
-- On multi-GPU CUDA, record per-card budget and residency, prove every selected
-  GPU receives work, serialize work within one device, and permit concurrent
-  waves only across independent devices. Hidden panels remain released and are
-  excluded from compare recompute.
+- Load each arrival into encoded GPU storage at full detector resolution and
+  append it to the comparison. Do not reload existing acquisitions or silently
+  change shape, dtype, detector bin, or scan bin. Record encoded bytes per
+  master and total GPU memory after each append. Hidden panels are excluded
+  from compare recompute.
 - Repeat through ``Show4DSTEM.from_folder(..., backend="mps")`` on Apple
-  Silicon. Identify the lazy MacBook/raw-Metal path explicitly, verify append
-  ordering and memory, and report unsupported dtype or page-budget options as
-  limitations rather than claiming CUDA ``Dataset5dstem`` behavior.
+  Silicon and verify append ordering and unified-memory use.
 - Run a small synthetic CPU reference only in tests for lifecycle correctness;
-  production must not route through it. On the same genuine source, verify a
-  count-preserving full path such as ``det_bin=1, dtype="u16"`` and an explicit
-  reduced preview path such as ``det_bin=4``; binned success is not proof of
-  full-resolution support.
+  production must not route through it. On the same genuine source, compare a
+  virtual image and a diffraction pattern against a reference computed from
+  bounded ``read(scan_region=...)`` tensors.
 - After append, verify ``compare_dp_mode="selected"`` follows the clicked new
   dataset. If the average-DP mode is part of the change, also verify
   ``compare_dp_mode="average"`` matches a CPU reference over the current visible
@@ -409,8 +382,9 @@ control only and does not establish real-workflow signoff.
   folder/page/cache/memory counters, detector drag, scan movement, diffraction
   pan/zoom, page flip/playback, and both latency stages.
 - Verify ``stop_folder_watch()`` is idempotent and restartable. ``close()`` or
-  ``free()`` must join watcher, page, preload, and cache workers; a file arriving
-  after cleanup must not mutate the widget.
+  ``free()`` must join the watcher and the background folder fill and close the
+  acquisitions ``from_folder`` loaded; a file arriving after cleanup must not
+  mutate the widget.
 
 ### S4D-15: Sign Off Real Heavy 4D-STEM Performance
 
@@ -420,8 +394,7 @@ large master quickly, chunks memory safely, appends new masters, and stays
 interactive in the browser.
 
 **Primary widgets**: Show4DSTEM with an NVIDIA/CUDA backend when available,
-plus standalone exported HTML. Use the lazy MPS multi-dataset handle only for
-MacBook fallback checks.
+plus standalone exported HTML. Use ``--backend mps`` for MacBook checks.
 
 **Data to use**: local real ``*_master.h5`` files from a lab workstation or
 HPC-backed acquisition folder. Do not commit these files or their generated
@@ -435,9 +408,8 @@ HTML reports to GitHub.
 - Verify first-master load time, widget build time, backend shape, dtype, device,
   resident memory, and GPU memory before/after are in
   ``show4dstem-heavy-signoff-report.json``.
-- Verify at least one additional ready master is measured through the current
-  backend's append strategy: CUDA records eager stack-growth/reload timing;
-  MPS records lazy live append timing.
+- Verify at least one additional ready master is measured through the folder
+  append path, with its load and append-to-paint timing.
 - After multiple masters are loaded, drive the Dataset/frame slider end to end
   and record flip latency/FPS. A report that only measures first load does not
   prove the real browsing workflow.
@@ -448,11 +420,12 @@ HTML reports to GitHub.
   recompute latency, and wheel-zoom FPS are recorded.
 - Treat ``--skip-browser`` as backend/export debugging only, not performance
   signoff.
-- For NVIDIA no-bin stress, run a separate capacity probe with 30-40 ready
-  masters and ``--det-bin 1``. Passing means either the data fit and browser
-  flip-around is measured, or the report fails clearly with the maximum loaded
-  master count, allocation error, and GPU cleanup evidence. Do not call a
-  30-40 file no-bin workflow supported just because a smaller stack is smooth.
+- For capacity, run a separate probe with 30-40 ready masters at full
+  detector resolution. Passing means either every encoded acquisition loads
+  and browser flip-around is measured, or the report fails clearly with the
+  maximum loaded master count, allocation error, and GPU cleanup evidence. Do
+  not call a 30-40 file workflow supported just because a smaller set is
+  smooth.
 
 ### S4D-16: Screen Many 4D-STEM Datasets In Multiple Mode
 
@@ -463,7 +436,7 @@ which datasets are useful, hide bad ones, star good ones, and preserve that
 curation for later notebook cells or shared HTML.
 
 **Primary widgets**: Show4DSTEM in ``view_mode="multiple"`` with 5D data or a
-lazy multi-dataset handle.
+list of encoded acquisitions.
 
 **Data to use**: 8-14 binned real or real-derived 4D-STEM datasets for routine
 browser smoke; 30-40 ready masters on CUDA or MPS for heavy signoff when the
@@ -472,8 +445,8 @@ backend and memory budget allow it.
 **Acceptance checks**:
 
 - Construct ``Show4DSTEM(..., view_mode="multiple", compare_cols=...)`` from
-  multiple datasets and verify the multiple grid renders all ready panels without
-  materializing an unsafe full stack on MPS.
+  multiple datasets and verify the multiple grid renders all ready panels
+  without stacking encoded acquisitions into one dense array.
 - Verify desktop ``compare_cols`` is a maximum column count and the phone or
   narrow viewport caps the grid at two columns with readable tiles.
 - Verify ``compare_panel_gap_px=0`` removes horizontal and vertical gutters
@@ -501,324 +474,65 @@ backend and memory budget allow it.
 
 ### S4D-17: Page A Folder Safely On One CUDA GPU
 
-**User story**: As a scientist with one CUDA GPU, I want to open a folder whose
-complete 4D-STEM series exceeds usable VRAM, see the first useful page quickly,
-and browse every dataset at the requested resolution without calculating a
-manual memory limit or encountering a raw CUDA failure.
-
-**Primary widgets**: ``Show4DSTEM.from_folder(...)`` in multiple mode.
-
-**Data to use**: enough compatible real masters to exceed one selected GPU's
-safe raw-residency budget after the requested detector bin and dtype. Include a
-deterministic small fixture with a forced two-frame budget for CI.
-
-**Acceptance checks**:
-
-- Open with ``gpus=[0]`` and ``page_budget="auto"``. Verify discovery and the
-  first useful page succeed whenever one processed master fits.
-- Keep the visible page size independent from the raw residency window. A page
-  may contain more panels than fit as raw tensors; the backend must process it
-  in bounded waves without silently changing dtype, detector bin, or shape.
-- Leave decoder/reduction headroom equal to at least one largest processed
-  master plus bounded workspace before declaring the complete series resident.
-- Verify foreground page loading cancels or safely waits for full-series preload
-  and cache warming. Concurrent decoders must not touch the same CUDA device.
-- Drive page 1, page 2, the last page, and page 1 again. Verify raw residency
-  remains bounded, evicted folder masters reload correctly, and a warmed reduced
-  page returns without reloading raw data.
-- Record click-to-first-panel, click-to-complete-page, warm-return latency,
-  resident bytes, evictions, reloads, cache hits, and GPU memory before/after.
-- Treat CUDA illegal-address, host-register, OOM, stale-panel, or stuck worker
-  errors as failures. Verify ``close()`` leaves no page/preload/cache worker.
+Retired. ``Show4DSTEM.from_folder(...)`` loads every compatible master into
+encoded GPU storage at full detector resolution, so there is no raw-residency
+paging, ``page_budget``, or eviction to sign off. Folder watching is covered by
+S4D-14.
 
 ### S4D-18: Pool Multiple GPUs And Stream Pages Progressively
 
-**User story**: As a scientist with multiple CUDA GPUs, I want every selected
-GPU to contribute its safe capacity and compute throughput while folders larger
-than the combined working set remain paged. When I flip pages, stable panel
-slots should appear immediately and fill progressively as datasets become
-ready, rather than waiting for the slowest panel before showing anything.
-
-**Primary widgets**: ``Show4DSTEM.from_folder(...)`` in multiple mode with
-``gpus=[...]`` or ``gpus="all"``.
-
-**Data to use**: real compatible masters on two or more CUDA GPUs, including
-equal cards, intentionally unequal free-memory budgets, and—when available—a
-folder distributed across independent physical disks. Use deterministic fake
-budgets and delayed loaders for CI cancellation/progress tests.
-
-**Acceptance checks**:
-
-- Use only the explicitly selected process-visible GPUs. Compute a safe budget
-  for each card and place cold masters according to available capacity; spare
-  memory on a larger/freer card must not be stranded by fixed round-robin
-  assignment. Every report must record ``CUDA_VISIBLE_DEVICES`` and map each
-  logical index to the physical GPU UUID, PCI bus ID, model name, total memory,
-  and free memory at the start of the run.
-- Load one independent master allocation per participating GPU in each
-  progressive wave. Different GPUs may load/compute concurrently, but work on
-  one GPU remains serialized and independently reclaimable by LRU eviction.
-- Keep the page grid stable from the click: reserve every expected slot, show a
-  quiet loading state, and replace each slot as its float32 virtual image arrives
-  without resizing or remounting the rest of the grid.
-- Give every page request a generation. Rapid page 1 -> 2 -> 3 changes cancel
-  obsolete work after its current safe wave, and late page-1/page-2 results must
-  never overwrite page 3.
-- Prioritize the visible page and selected diffraction source, then prefetch the
-  next and previous pages for the current detector preset. Full-series preload
-  and other detector-preset warming run only when foreground work is idle.
-- Preserve reduced virtual-image pages in the bounded host cache independently
-  of raw GPU residency. Verify a warm return does not require the old raw page
-  to remain on a GPU.
-- Record placeholder acknowledgement, first-panel, half-page, complete-page,
-  and warm-return latency; per-GPU budget/resident bytes; cache hits/misses;
-  evictions/reloads; stale-result drops; and browser paint/FPS evidence.
-- Compare one-GPU and multi-GPU cold-page timing with the same data. Verify all
-  selected GPUs receive work and that adding a useful GPU does not reduce safe
-  capacity or make first-panel latency worse without an explained I/O limit.
-- Repeat after a live folder append and after external memory pressure changes.
-  Verify placement is recalculated safely and existing warmed pages remain valid.
+Retired. Folder viewers load onto one CUDA device or the Apple GPU
+(``backend=``, ``device=``); the ``gpus=`` placement and progressive page
+loading were removed. Folder watching is covered by S4D-14.
 
 ### S4D-19: Reopen A Folder With Persistent Scientific Previews
 
-**User story**: As a scientist returning to a large 4D-STEM folder, I want the
-BF/ABF/ADF/HAADF images I already computed to appear immediately while the
-authoritative raw data loads in the background. I need the viewer to say when I
-am seeing a cached preview and when fresh raw-backed interaction is ready, so a
-second open is useful instead of showing black panels for another cold decode.
+Retired. The persistent folder preview cache was removed. A reopened folder
+loads its masters into encoded GPU storage again; S4D-14 covers the folder
+lifecycle.
 
-**Primary widgets**: ``Show4DSTEM.from_folder(...)`` in multiple mode, first on
-one NVIDIA CUDA GPU and then on multiple selected CUDA GPUs. The CPU path is a
-lifecycle control; MPS support is a follow-up and must not be inferred from the
-CUDA signoff.
-
-**Data to use**: the same real 82-or-more-master folder used for cold progressive
-paging, with linked detector chunks where present. Retain enough standard
-virtual images to exceed one visible page, reopen from a new widget instance,
-then change, replace, remove, and append individual masters/chunks. Use a tiny
-multi-master fixture for deterministic CI hit, miss, corruption, eviction, and
-cancellation cases.
-
-**Acceptance checks**:
-
-- Expose ``preview_cache="auto"``, ``preview_cache_dir=None``,
-  ``preview_cache_max_bytes=4 << 30``, and
-  ``rebuild_preview_cache=False`` on ``Show4DSTEM.from_folder(...)``. ``False``
-  disables persistent reads and writes; the automatic mode uses the user cache,
-  and an explicit directory supports a chosen local SSD. A shared or network
-  filesystem is unverified until its atomic-rename and multi-process
-  writer/rebuild/clear behavior pass explicitly; process-local locking alone is
-  not a shared-cache guarantee. Keep this disk budget independent from
-  ``compare_cache_max_bytes`` host memory and ``page_budget`` raw CUDA residency.
-- Persist only reduced float32 BF, ABF, ADF, and HAADF virtual images. Never
-  persist raw 4D detector tensors, diffraction patterns, arbitrary detector
-  masks, CUDA allocations, credentials, or private source data outside the
-  configured cache directory. ``warm_cache=True`` may fill the standard
-  presets proactively; normal use writes a standard preset after computing it.
-- Store previews per master, not per display page. Hiding, starring, reordering,
-  changing page size, or moving a master to another page must reuse that
-  master's valid preview without duplicating it.
-- Validate each entry against a versioned processing key and the current source
-  fingerprint: canonical master identity; master size, nanosecond mtime/ctime,
-  device, and inode; the ordered identities, sizes, nanosecond mtimes/ctimes,
-  devices, and inodes of every linked detector chunk; processed scan/detector
-  shape; source/load dtype; detector bin; scan override; center and preset
-  radii/mask geometry; and the cache schema/compute version. A change to one
-  master or chunk invalidates only that master's presets. An unchanged append
-  must not invalidate existing entries.
-- A missing, unreadable, incomplete, or changing required chunk is not a valid
-  cache hit. A corrupt, truncated, incompatible, or partially written cache
-  artifact becomes a counted miss and is rebuilt safely; it must not break
-  folder discovery or paint unverified pixels.
-- Publish cache files atomically and make concurrent readers safe. Enforce
-  ``preview_cache_max_bytes`` with deterministic whole-entry eviction while no
-  writer can leave a manifest pointing at an incomplete payload. Cache lookup
-  must not decode raw 4D data or allocate CUDA memory.
-- On a matching second open, reserve the normal stable grid slots and paint each
-  cached panel as soon as it is read. Show a quiet, explicit state such as
-  ``Cached preview · loading raw data``; never label cached pixels ``Fresh`` or
-  show an empty black panel where a valid preview is available.
-- Keep startup accounting honest: this CUDA-first phase still validates and
-  loads one raw master synchronously to establish detector shape, calibration,
-  and the selected diffraction pattern. Report API-call-to-model-ready
-  separately from model-ready-to-cached-paint, and do not claim a cache-only
-  mount. A future metadata/calibration bootstrap may remove that final raw
-  dependency without weakening provenance checks.
-- Continue raw loading and reduction through the normal capacity-aware CUDA
-  scheduler. Replace the cached pixels in the same panel slot when the current
-  generation's fresh result arrives, without remounting the grid, changing
-  contrast unexpectedly, or flashing black. Once raw data is ready, detector
-  changes and diffraction inspection use the authoritative requested dtype and
-  resolution.
-- When a persistent preview is shown for a newly arrived master on the visible
-  page, keep the folder-watch badge at ``Updating`` while the cached pixels stay
-  useful. Return to ``Watching`` only after the corresponding current-generation
-  raw-backed tile has reached authoritative browser paint; otherwise transition
-  to the truthful amber waiting or red corrective-error state.
-- Support partial hits. Paint cached panels first, show honest per-page progress,
-  and schedule raw work only as needed for misses and authoritative refresh.
-  Rapid page 1 -> 2 -> 3 changes must cancel obsolete refresh work after a safe
-  wave; late cached or fresh results must never overwrite page 3.
-- If refresh fails after a valid preview painted, keep the preview visible and
-  mark it ``Cached preview · refresh failed`` with a corrective error. Do not
-  silently relabel stale pixels as fresh, and do not discard a useful preview
-  merely to return to a black placeholder.
-- Expose a read-only ``preview_cache_info`` property with enabled state, path,
-  byte limit/current bytes, entry count, hits, misses, invalidations, evictions,
-  and errors. ``clear_preview_cache()`` deletes this widget's persistent preview
-  namespace and resets its accounting without clearing ShowFolder thumbnails or
-  pretending to free raw CUDA memory. ``rebuild_preview_cache=True`` ignores
-  old entries for the new run and repopulates them safely.
-- Measure browser paint, not only Python traits. Record click-to-cached-first
-  panel, click-to-cached-visible-page, click-to-fresh-first panel,
-  click-to-fresh-visible-page, click-to-complete-page, and neighbor-prefetch
-  completion separately, plus cache lookup/read/write bytes and time, hit/miss
-  counts, raw decode/reduction time, per-GPU residency, FPS, and console errors.
-  The browser probe exposes the receipt and after-paint proxy fields under
-  ``window.__quantemShow4DSTEMPerf.comparePage`` as
-  ``firstCachedPanelReceiptAtMs``, ``firstFreshPanelReceiptAtMs``,
-  ``firstCachedPanelPaintAtMs``, ``firstFreshPanelPaintAtMs``,
-  ``cachedVisiblePaintAtMs``, and ``freshVisiblePaintAtMs``; keep receipt and
-  double-animation-frame after-paint proxy evidence labeled separately.
-- Compare cold first open, matching second open, partial-hit reopen, forced
-  rebuild, and disabled-cache runs on one selected NVIDIA GPU. Cached-first
-  paint must be materially faster than the approximately one-second progressive
-  cold first panel. Keep the measured approximately 11.27-second visible-page
-  completion separate from the approximately 22.91-second worker/neighbor-
-  prefetch-idle time; cached previews must expose useful panels without waiting
-  for either. On the reference host, over five fresh-widget page opens, require
-  median
-  click-to-cached-first <= 500 ms and <= 50% of the matched cold median, plus
-  median cached-visible-page <= 2 s and <= 25% of matched cold visible-page
-  time. Report p95 as evidence rather than hiding a slow outlier.
-- Define storage conditions for every timing run. Distinguish a fresh
-  Python/widget process from an OS/filesystem-page-cache-cold run, and record
-  source/cache filesystem and locality, storage device class, HDF5 compression,
-  linked-chunk count, bytes read, and achieved throughput. Never attribute an
-  I/O-limited result to GPU scaling without that evidence.
-- Persistent lookup must not serialize the raw refresh. On the same host and
-  source, median click-to-fresh-visible-page and complete-page time may regress
-  by at most 10% versus ``preview_cache=False``; otherwise record the cache I/O
-  contention as a failed performance gate. Neighbor prefetch must start only
-  after the visible foreground request reaches its ready state.
-- Repeat on two or more selected NVIDIA GPUs. Persistent hits must remain
-  backend-independent, while misses and refreshes use all eligible cards under
-  S4D-18's per-device serialization and generation rules. Adding a GPU must not
-  duplicate disk entries, corrupt the cache, exceed either memory budget, or
-  make cached-first paint wait for the slowest raw wave.
-- Verify ``close()`` joins cache readers/writers and CUDA page workers. Reopen in
-  a fresh Python process to prove persistence, then clear the cache and prove the
-  next open is a true miss. Leave cache artifacts and real-data reports outside
-  git unless deliberately promoted into a maintainer fixture or runbook.
-
-### S4D-20: Prove Folder Paging And Cache Behavior Overnight
+### S4D-20: Prove Folder Endurance Overnight
 
 **User story**: As a scientist leaving a large acquisition folder open
-overnight, I want automatic paging, cached previews, live arrivals, and fresh
-raw-backed replacement to remain truthful and responsive on either one or two
-NVIDIA GPUs, so an ended runner or a green badge cannot hide a stalled,
+overnight, I want the folder viewer to stay truthful and responsive on one
+NVIDIA GPU, so an ended runner or a green badge cannot hide a stalled,
 memory-leaking, or stale scientific view.
 
-**Primary widgets**: ``Show4DSTEM.from_folder(...)`` in a real JupyterLab
-session and its browser frontend. This story is the endurance composition of
-S4D-14, S4D-17, S4D-18, and S4D-19; those stories remain the canonical source
-for watch-state, scheduler, generation, and cache correctness rather than being
-repeated here.
+**Primary widgets**: ``Show4DSTEM.from_folder(...)``, which loads every ready
+master into encoded GPU storage at full detector resolution, in fresh Python
+processes, plus its browser frontend in a real JupyterLab session. Watch-state
+correctness stays canonical in S4D-14 rather than being repeated here.
 
-**Data to use**: One compatible real acquisition series large enough to exceed
-the safe raw-residency budget of one selected GPU, with linked detector chunks
-when present. Use a staged watched-folder view of the real files for arrival
-tests so the source acquisition is never rewritten. Add a separate real
-full-detector control using ``det_bin=1`` and a count-preserving dtype, with at
-least seven masters and enough masters to exceed the selected raw budget when
-the source permits. Synthetic data is a CI control only.
+**Data to use**: One compatible real acquisition series with linked detector
+chunks when present (the runner defaults to at least 82 ready masters). Use a
+staged watched-folder view of the real files for arrival tests so the source
+acquisition is never rewritten. Synthetic data is a CI control only.
 
 **Acceptance checks**:
 
-- Run an explicit, serial matrix so the topologies do not contend: one selected
-  physical NVIDIA GPU, then the same workflow on two selected physical NVIDIA
-  GPUs. Give each topology at least four clock hours and 100 completed canonical
-  navigation cycles, for at least eight hours total. A canonical cycle requests
-  page 1, page 2, the last page, and page 1 again; performs a rapid page 1 -> 2
-  -> 3 cancellation check; and exercises selected/average diffraction, hide,
-  star, scan movement, detector movement, diffraction zoom, and pan. A partial
-  or restarted cycle does not count as completed.
-- Hold source, ready-master set, page size, ``page_budget="auto"``, detector
-  bin, dtype, detector preset, cache budget, and page sequence constant for the
-  matched one-GPU/two-GPU comparison. Run cold cache-disabled, cache-populating,
-  and matching cache-enabled phases in fresh Python processes. Reopen the
-  matching cache at least five times per topology, and include the partial-hit,
-  changed-master/chunk, corrupt-entry, forced-rebuild, disabled-cache, and clear
-  cases from S4D-19 without corrupting source data or the canonical cache copy.
-- During both topologies, introduce at least one real master with a required
-  chunk withheld, then make the complete acquisition visible atomically. Prove
-  it remains waiting while incomplete, appears exactly once when ready, keeps a
-  valid cached preview visible when one exists, and reaches green ``Watching``
-  only after a current-generation fresh tile receives the browser paint
-  acknowledgement required by S4D-14 and S4D-19. A Python trait publication,
-  cached paint, or backend worker completion is not fresh-paint proof.
-- Exercise the viewer in actual JupyterLab through a controlled browser for each
-  topology, not only through Python traits or an exported snapshot. Capture the
-  stable loading slots, cached-first paint, fresh replacement in the same slot,
-  every watch-badge state, page cancellation, and representative scientific
-  interactions. Preserve timestamped screenshots, browser console output, model
-  and kernel errors, and the receipt-versus-after-paint fields from
-  ``window.__quantemShow4DSTEMPerf.comparePage``.
-- Record a topology and provenance snapshot before every process: host, UTC
-  start time, widget commit and dirty-diff identity, Python/Torch/CUDA/driver
-  versions, ``CUDA_VISIBLE_DEVICES``, and each logical index's physical UUID,
-  PCI bus ID, model, total memory, and free memory. Record source/cache canonical
-  paths, filesystem and storage device, locality, compression, linked-chunk
-  count, source fingerprint, ready-master count, shapes, dtype, detector bin,
-  and cache schema/compute version. Repeat GPU memory and filesystem snapshots
-  after each phase and at cleanup.
-- Apply the cache latency and no-more-than-10-percent fresh-refresh regression
-  gates in S4D-19 to each topology, including median and p95 over the required
-  fresh-process reopens. For the matched GPU comparison, require two-GPU median
-  fresh-first latency to be no more than 110% of one-GPU latency and median
-  fresh-visible and complete-page latency to be no slower than one GPU. Prove
-  both GPUs receive work. If storage/decode saturation prevents scaling, retain
-  the measurements and mark the scaling gate limited or failed; do not convert
-  an explanation into a pass.
-- Divide each topology's completed endurance cycles into first and last
-  quartiles. Require no more than 20% regression in p95 fresh-visible and
-  complete-page latency, no monotonic resident host/GPU/cache growth after
-  warm-up, zero stale-generation paints, zero unhandled browser/kernel errors,
-  zero CUDA illegal-address/OOM errors, and zero stuck page, preload, watch, or
-  cache workers. Report cache hits/misses/invalidations/evictions, raw
-  evictions/reloads, stale drops, bytes read/written, throughput, per-GPU
-  residency, and memory high-water marks even when the gate fails.
-- Write an atomic run manifest after every phase and completed cycle. Include a
-  monotonically advancing checkpoint, active topology/phase, cache namespace,
-  owned process IDs, last successful page generation, and artifact paths. Emit
-  a timestamped heartbeat at least every five minutes with progress, worker
-  liveness, GPU memory/utilization, and the most recent error. A watchdog treats
-  three missed heartbeats or 15 minutes without forward progress as a failure,
-  captures stacks/logs/GPU state, stops only owned processes, and resumes from
-  the last complete checkpoint in a fresh process.
-- Prove resume behavior once with a controlled child-process interruption. The
-  resumed run must preserve valid cache entries, avoid duplicate live arrivals
-  and stale page paint, and distinguish pre-interruption, resumed, and fully
-  continuous time in the report. Automatic restart attempts are bounded and
-  visible; exhausting them fails the run instead of leaving it indefinitely
-  ``running`` or declaring success because the launcher exited.
-- Run the separate real no-bin leg on one GPU and then two GPUs with automatic
-  paging and the same provenance/cleanup capture. At minimum, browse first,
-  second, last, and warm-return pages and compare one virtual image and one
-  diffraction result with a CPU reference. If one processed master cannot fit,
-  or the available series cannot exceed the selected raw budget, record that
-  exact capacity boundary as an unmet gate rather than inferring support from a
-  detector-binned run.
+- Run ``scripts/widget_show4dstem_folder_overnight.py --source ... --device N``.
+  It waits for the selected physical GPU to become idle, then runs every case
+  in a fresh child process with ``CUDA_VISIBLE_DEVICES`` fixed before Torch
+  imports.
+- Repeat fresh-process opens (default five) and record the time to the first
+  viewer and to the complete folder (``wait_for_folder()``).
+- Run the endurance case until both its cycle count (default 100) and its clock
+  budget (default four hours) are met. A canonical cycle requests pages,
+  performs rapid page navigation, stars and hides panels and verifies the
+  state persists, and switches selected/average diffraction. A partial or
+  restarted cycle does not count as completed.
+- Fail when allocator memory grows by more than the configured limit (default
+  256 MiB) across the endurance case, on CUDA illegal-address or out-of-memory
+  errors, or on a stuck fill or watch worker. Report memory high-water marks
+  even when the gate fails.
+- Write an atomic live report and heartbeat throughout the run, record host,
+  widget commit and dirty-diff identity, GPU and filesystem snapshots, and never
+  mutate source data or terminate processes the run did not create.
+- The runner owns the backend gate (``S4D-20-backend``). The browser gates
+  (``S4D-14-live-arrival-browser`` and ``S4D-20-browser``) stay pending until a
+  live JupyterLab drive attaches screenshots, console output, watch-badge
+  states, and paint/FPS evidence; a Python trait publication or backend worker
+  completion is not paint proof.
 - On normal completion, interruption, and failure, call the public cleanup path
-  and prove the watcher, page, preload, cache, notebook, browser, tunnel, and
-  watchdog processes owned by the run are gone. Record final GPU memory against
-  baseline and preserve corrective evidence for any residual allocation. Never
-  delete the real source; clear or corrupt only a run-owned cache/staging copy.
-- Produce one durable top-level ``index.html`` plus machine-readable JSON
-  summary, atomic manifest, phase/cycle timing table, GPU samples, source/cache
-  provenance, browser screenshots and console log, kernel/worker logs, cache
-  inventory, parity results, failure/restart timeline, and exact commands. Keep
-  artifacts outside git, publish the exact report path and review URL, and mark
-  every gate pass, fail, limited, skipped, or unavailable. A run is complete
-  only when the report is readable and all required artifacts are present; an
-  old report, an ended task, or a missing heartbeat is not current signoff.
+  and prove the watcher, folder fill, notebook, browser, and tunnel processes
+  owned by the run are gone. Record final GPU memory against baseline.

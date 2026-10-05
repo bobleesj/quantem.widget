@@ -112,5 +112,6 @@ can all belong in
 Questions and bug reports belong in the
 [issue tracker](https://github.com/electronmicroscopy/quantem.widget/issues).
 
-Opt-in [experimental ANS sources](docs/developer/experimental-ans.md) support
-GPU-resident Show4DSTEM with documented format and performance limits.
+[Experimental ANS sources](docs/developer/experimental-ans.md) describes the
+encoded acquisitions that Show4DSTEM reads from `quantem.gpu.io.load` and the
+QEM browser viewer, with documented format and performance limits.

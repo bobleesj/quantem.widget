@@ -32,6 +32,11 @@ multi-frame export. Keep screenshots, private exports and data outside Git.
 
 ## Current summary
 
+The 2026-07 loader entries below are historical: the `dtype=`, `det_bin=`,
+`devices=`, stacked, and sharded load options they measure and both loader
+bench scripts are gone, and `quantem.gpu.io.load` keeps one encoded acquisition
+per master.
+
 2026-07-05 Show4DSTEM loader work:
 
 - Exact `uint16` no-bin loading is already on the same fast path as browse
@@ -181,10 +186,10 @@ evidence.
 | Show2D | Compare one image or many related images, often 4K microscopy outputs, with zoom, pan, histogram, FFT, profile, pages, and export. | Zoom/pan, histogram controls, page slider/play, hidden panels, FFT redraws after first compute, and HTML reopen. | `scripts/widget_browser_smoke.py` for exported HTML; `scripts/widget_heavy_perf_signoff.py` for 4K real-data panels. |
 | Show3D | Scrub or play time series, focal stacks, iterative reconstructions, and multi-panel comparisons without rebuilding the widget. | Frame scrub/play, remote-tunnel drag preview with native restoration, page slider/play, hidden panels, independent panel contrast, FFT return-scrub cache, FFT metric labels, GIF/MP4/HTML export. | `scripts/widget_heavy_perf_signoff.py`; [S3D-20](storyboard-show3d.md#s3d-20-scrub-full-resolution-movies-over-a-remote-jupyter-tunnel) live Jupyter tunnel proof; exported HTML profile for existing reports; animation smoke for GIF/MP4. |
 | Show3DSlices | Browse volume slices and orthogonal views with synchronized crosshair/plane controls. | Slice sliders, crosshair movement, oblique line endpoint/body drags, side-plane redraw, oblique FFT redraw during line drag, FFT return-scrub cache hits for slice/oblique sliders, histogram controls, FFT/log/smooth toggles, and export reopen. | Browser smoke plus focused visual story when slice/crosshair/oblique-line behavior changes. |
-| Show4DSTEM | Inspect diffraction patterns and virtual images from real 4D-STEM datasets without loading unnecessary data. | Scan-position movement, detector drag, BF/ABF/ADF updates, compare pages, cache-backed folder reopen, lazy folder sessions, and export reopen. | `scripts/widget_show4dstem_heavy_signoff.py` covers direct backend/export interaction only. S4D-19 additionally requires a recorded fresh-process folder-paging/cache runner and browser report; do not infer that signoff from the heavy script. Lightweight CI checks only the protocol. |
+| Show4DSTEM | Inspect diffraction patterns and virtual images from real 4D-STEM datasets without loading unnecessary data. | Scan-position movement, detector drag, BF/ABF/ADF updates, compare pages, folder sessions over encoded acquisitions, and export reopen. | `scripts/widget_show4dstem_heavy_signoff.py` covers direct backend/export interaction only. Folder watching additionally requires the S4D-14 live-arrival report; do not infer that signoff from the heavy script. Lightweight CI checks only the protocol. |
 | ShowEDS | Explore spectral maps, ROIs, energy bands, element lines, and sparse/folder-backed EDS cubes. | Band dragging, map/spectrum sync, ROI changes, periodic table selection, sparse lookup/cache, and export reopen. | Browser story plus EDS-specific real-data smoke when backend or map/spectrum logic changes. |
 | ShowDiffraction | Inspect diffraction-like 2D patterns when a full 4D-STEM session is not needed. | Zoom/pan, histogram/contrast, peak/FFT-style overlays when present, and export reopen. | Lightweight export/browser smoke; use Show4DSTEM heavy signoff for full detector workflows. |
-| ShowFolder | Browse a session folder before loading heavy data, cache thumbnails, and open selected data in the right viewer. | Folder scan, thumbnail cache, live `watch_once()`, selected Show2D/Show3D refresh, lazy Show4DSTEM handoff, and compact saved state. | `scripts/widget_showfolder_live_smoke.py`; keep generated thumbnail/report artifacts outside git unless intentionally committed. |
+| ShowFolder | Browse a session folder before loading heavy data, cache thumbnails, and open selected data in the right viewer. | Folder scan, thumbnail cache, live `watch_once()`, selected Show2D/Show3D refresh, Show4DSTEM folder handoff, and compact saved state. | `scripts/widget_showfolder_live_smoke.py`; keep generated thumbnail/report artifacts outside git unless intentionally committed. |
 
 ## Folder-watching performance contract
 
@@ -260,35 +265,17 @@ on-demand CPU/canvas renderer is the functional fallback.
 |---|---|---|
 | Show2D | Add each new full-resolution image as one panel; automatically render folder pages of at most `page_size` panels (default 20) | Reread existing source files; rebuild the widget; replace full-resolution data with ShowFolder thumbnails; render every folder panel at once after paging activates |
 | Show3D | Add each new full-resolution image as a frame in one unpaged stack | Reread existing source files; rebuild the widget; infer Show2D-style pages from frame count |
-| Show4DSTEM | Add each ready master as a cold lazy dataset | Load every new master into VRAM immediately; clear unrelated reduced-page caches |
-
-For Show4DSTEM, raw 4D residency and reduced virtual-image caching are separate
-budgets. A visible cold page may load and compute once. Returning to a warmed
-page should use its reduced BF/ABF/ADF/HAADF result, while `page_budget` remains
-free to evict raw masters that are no longer needed. A newly appended master
-should invalidate or warm only the comparison pages whose membership changed.
+| Show4DSTEM | Load each ready master into encoded GPU storage at full detector resolution and add one comparison panel | Reload existing acquisitions; rebuild the widget; bin or narrow the new master |
 
 The canonical folder-paging behaviors are
 [S2D-18](storyboard-show2d.md#s2d-18-watch-a-live-emd-folder-in-place),
 [S2D-20](storyboard-show2d.md#s2d-20-page-a-growing-folder-gallery-automatically),
 [S3D-17](storyboard-show3d.md#s3d-17-watch-a-live-emd-frame-series-in-place),
-[S4D-14](storyboard-show4dstem.md#s4d-14-watch-a-live-4d-stem-acquisition-folder-in-place),
-[S4D-17](storyboard-show4dstem.md#s4d-17-page-a-folder-safely-on-one-cuda-gpu)
 and
-[S4D-18](storyboard-show4dstem.md#s4d-18-pool-multiple-gpus-and-stream-pages-progressively),
-plus persistent stale-while-revalidate behavior in
-[S4D-19](storyboard-show4dstem.md#s4d-19-reopen-a-folder-with-persistent-scientific-previews).
+[S4D-14](storyboard-show4dstem.md#s4d-14-watch-a-live-4d-stem-acquisition-folder-in-place).
 For these stories, measure page acknowledgement, first panel, half page, full
 page, and warm return separately. A full-page number alone hides whether the UI
-waited unnecessarily for its slowest master. Multi-GPU reports must also record
-per-card budget/resident bytes and prove that obsolete page generations cannot
-paint after a rapid page change.
-
-Live progressive pages should keep a small sequence-tagged synced copy of the
-latest ready panel in addition to any custom binary-message fast path. Some
-notebook frontends deliver custom control messages but drop their binary buffer
-when it is sent by a background worker; the synced panel prevents those viewers
-from replacing a successfully computed page with `Unavailable` placeholders.
+waited unnecessarily for its slowest file.
 
 Folder-watching signoff must measure initial scan, idle poll, and
 return-to-warm-page latency. Split append latency into two stages instead of
@@ -306,72 +293,18 @@ It must also verify:
 - each stable file appends exactly once and in deterministic order
 - the Python widget identity and existing panel/frame state remain unchanged
 - Show2D and Show3D pixels match the full-resolution source, not thumbnails
-- Show4DSTEM raw residency stays within its GPU budget as masters accumulate
+- Show4DSTEM loads each arrival once, keeps existing acquisitions loaded, and
+  records encoded bytes per master as masters accumulate
 - `stop_folder_watch()` is idempotent and `close()` leaves no watcher or cache
   worker running
 - the mounted Jupyter widget and browser container remain the same, and a real
   browser canvas repaint—not only a Python trait change—is captured
 
 Keep test folders temporary and add files through an atomic rename when
-possible. Report source shape, dtype, append count, cache hits/misses, resident
-raw bytes, both append latency stages, and browser console errors. Use genuine
+possible. Report source shape, dtype, append count, cache hits/misses, encoded
+bytes, both append latency stages, and browser console errors. Use genuine
 microscope data in live JupyterLab for scientific signoff; CI can use small
 generated files only to prove lifecycle and cache invariants.
-
-### Show4DSTEM persistent-preview cache contract
-
-The folder preview cache is a scientific stale-while-revalidate path, not a raw
-data cache. It may paint a validated reduced float32 BF/ABF/ADF/HAADF image from
-disk immediately, but the UI must identify it as cached while the normal CUDA
-page scheduler prepares authoritative raw interaction. Raw GPU residency,
-current-widget host cache, and persistent disk cache have independent budgets.
-
-Cache records are per master, with an ordered fingerprint of every linked
-detector chunk, so reordering or repaging does not duplicate previews and a
-single changed chunk invalidates only its source master. Lookup must be metadata
-and reduced-array I/O only: reading the cache must not decode raw 4D detector
-data or allocate CUDA memory. Writes are atomic, corrupt or incomplete entries
-are misses, concurrent readers cannot observe partial payloads, and disk-limit
-eviction removes complete least-recently-used entries.
-
-For a matching page request, capture these browser-visible timestamps
-separately:
-
-1. click to the first cached panel paint;
-2. click to all cached panels on the visible page;
-3. click to the first fresh raw-backed panel replacement;
-4. click to all fresh panels on the visible page;
-5. click to the complete requested page, including misses; and
-6. foreground completion to next/previous neighbor-prefetch completion.
-
-Use ``window.__quantemShow4DSTEMPerf.comparePage`` to keep receipt evidence
-(``firstCachedPanelReceiptAtMs`` and ``firstFreshPanelReceiptAtMs``) separate
-from the double-animation-frame after-paint proxies
-(``firstCachedPanelPaintAtMs``, ``firstFreshPanelPaintAtMs``,
-``cachedVisiblePaintAtMs``, and ``freshVisiblePaintAtMs``). For a fresh widget,
-also split API-call-to-model-ready from model-ready-to-cached paint because the
-current implementation still loads one calibration/diffraction master before
-mounting.
-
-Also report cache lookup/read/write duration and bytes, entries and disk bytes,
-hits, misses, invalidations, evictions, corruptions, raw decode and reduction
-time, stale-generation drops, per-GPU resident bytes, Debug UI FPS, and browser
-console errors. A cache speed claim requires a fresh-process second open; a
-return to an in-memory page in the same widget is a different measurement.
-
-Run cold, full-hit, partial-hit, source/chunk-change, forced-rebuild,
-disabled-cache, and refresh-failure cases on one NVIDIA GPU first. Cached panels
-must remain visible with `Cached preview · loading raw data` (or an explicit
-refresh-failed state), preserve stable grid geometry, and never flash black or
-be relabeled fresh before raw-backed replacement. Repeat the hit/miss mix on
-multiple selected NVIDIA GPUs to prove cache I/O is not duplicated per device
-and S4D-18's capacity, serialization, cancellation, and generation rules still
-hold. On the reference host, use five fresh-widget opens and require median
-cached-first paint <= 500 ms and <= 50% of matched cold, median cached-visible
-page <= 2 s and <= 25% of matched cold completion, and no more than 10%
-regression in fresh-visible or complete-page time versus disabled persistence.
-Report p95 for each paint stage. CPU is a deterministic lifecycle control; MPS
-needs its own signoff.
 
 ### Show2D local-panel stack signoff (2026-07-09)
 
@@ -537,29 +470,27 @@ Required verification for future changes:
 
 For Show4DSTEM performance reports, always separate three surfaces:
 
-- **Python backend work**: file loading, detector binning, virtual detector
-  computation, export packing, and any live kernel-backed recompute. Record
-  whether this used CUDA/Torch, raw Metal/MPS, Torch-MPS, or CPU.
+- **Python backend work**: file loading, virtual detector computation on the
+  encoded storage, bounded reads, export packing, and any live kernel-backed
+  recompute. Record whether this used CUDA, MPS, or a CPU reference.
 - **Browser interaction**: canvas rendering, pointer events, layout, and WebGPU
   work in live Jupyter or exported HTML. Record the browser and WebGPU adapter.
 - **Saved/exported artifacts**: standalone HTML or HTML plus a data folder,
   which should not require Python, Torch, CUDA, or MPS after export.
 
-On MacBook/Apple Silicon, the raw Metal/MPS path is preferred for large
-first-pass 4D-STEM browsing because it gives tighter control over chunking,
-detector binning, dtype, and transient memory than a generic Torch-MPS tensor
-path. Torch-MPS can still be valid for specific tensor workflows, but reports
-path. Scientific detector compute must fail clearly instead of falling back to
-CPU.
+On CUDA and Apple Silicon alike, `quantem.gpu.io.load` keeps each acquisition
+ANS encoded on the GPU at full detector resolution, and Show4DSTEM opens it as
+a bounded view. Scientific detector compute must fail clearly instead of
+falling back to CPU.
 
-Multi-master `load([masters])` differs by backend: CUDA eager-stacks masters
-into one resident 5D array, while MPS decodes dataset 0
-synchronously, shows the viewer immediately, and fills datasets 1..N-1 from a
-single background GPU worker owned by `quantem.gpu.io`. Performance reports for
+Multi-master `load([masters])` returns one encoded acquisition per master after
+all of them have loaded; `Show4DSTEM.from_folder(...)` opens after the first
+master and appends the rest from a background thread. Performance reports for
 multi-master sessions must say which of the two paths ran.
 
 GPU memory belongs to the backend data object and Python session, not the
-visual widget alone. The viewer should avoid leaking buffers and should keep
+visual widget alone; a `from_folder` viewer owns and closes the acquisitions it
+loaded. The viewer should avoid leaking buffers and should keep
 saved state compact, but freeing GPU memory should be handled by backend/session
 lifecycle: delete or replace the loaded data object, clear references, use a
 backend-specific cache cleanup utility if one exists, or restart the kernel. Do
@@ -576,33 +507,23 @@ files and can generate private screenshots and HTML exports.
 The report must keep the same split as the policy above:
 
 - backend: real master discovery, first NVIDIA/CUDA load, widget build time,
-  backend shape/dtype/device, resident memory, append or stack-growth time for
-  new masters, and Python/GPU memory before/after;
+  backend shape/dtype/device, encoded memory, append time for new masters, and
+  Python/GPU memory before/after;
 - export: explicit ``uint8``/``uint16`` choice, detector bin factor, file size,
   and packing time;
 - browser: WebGPU adapter information, virtual-detector drag FPS, scan-position
   movement FPS, dataset/frame flip FPS for multi-master sessions, recompute
   latency, wheel-zoom FPS, console errors, and a screenshot.
 
-For persistent-preview changes, add two fresh-process NVIDIA/CUDA runs over the
-same source/configuration: one true cold population and one cache-backed reopen.
-The second report must include click-to-cached-first, cached-visible-page,
-fresh-first, fresh-visible-page, complete-page, and prefetch timing rather than
-only the backend wall time. Preserve the cold raw decode timing as a background
-I/O metric; a fast cached first paint does not make a 20-plus-second cold page
-complete time disappear.
-
 `--skip-browser` is allowed only to debug backend or export failures. It is not
 a performance signoff because the user-facing requirement is smooth browser
 interaction.
 
-Use `--devices 0,1 --max-masters 20` or `--max-masters 30 --det-bin 1
---skip-browser` for the no-bin two-GPU capacity stress. That run answers a
-different question from browser FPS: can the NVIDIA backend hold the requested
-real stack, and if not, does it fail with an auditable report and release GPU
-memory before the next run? A single 512 x 512 x 192 x 192 uint16 master is
-about 18 GiB resident, so 20-30 masters no-bin is a capacity stress, not a
-reasonable default expectation on every two-GPU machine.
+Use `--backend cuda --max-masters 30` for the capacity stress. That run answers
+a different question from browser FPS: can the backend hold the requested real
+masters, and if not, does it fail with an auditable report and release GPU
+memory before the next run? A 512 x 512 x 192 x 192 uint16 master is about
+0.1 to 2 GiB encoded, depending on counts.
 
 2026-07-05 CUDA no-bin result on a private NVIDIA lab workstation: two RTX PRO
 6000 GPUs (about 96 GiB each) loaded real experimental masters at `det_bin=1`. A
@@ -617,12 +538,9 @@ cleanly while appending the fifth master with an allocation request of about
 18 GiB; the script released GPU memory, reloaded the last successful
 four-master stack, and wrote the failure report. This is expected for
 eager-resident no-bin data: 30-40 files would be roughly 540-720 GiB of
-detector data before viewer overhead. For 30-40 no-bin files as a normal
-workflow, use the shipped paged path instead of eager residency:
-`Dataset5dstem` lazy loaders plus `Show4DSTEM(..., page_budget=...)` (CLI
-`--page-budget`, default `auto`) keep a bounded GPU-resident set and evict raw
-masters on demand. The no-bin capacity stress above still measures the
-eager-resident ceiling; a paged run answers the workflow question.
+detector data before viewer overhead. Encoded acquisitions from
+`quantem.gpu.io.load` replaced both that eager-resident path and the later
+paged path for this workflow.
 
 After the capacity stress, run a browser-enabled multi-master pass that fits in
 memory. That pass must prove the user workflow, not only the load path: the
@@ -635,48 +553,13 @@ NVIDIA/CUDA heavy signoff when that backend is available.
 
 ## Show4DSTEM loader benchmark matrix
 
-Use these local-only scripts when the claim is about raw loader speed, not the
-browser UI:
+Historical record (2026-07). The `dtype="u8"`, `det_bin=`, `devices=`, stacked,
+and sharded load options measured here, and the `widget_load_bench_matrix.py`
+and `widget_load_bench_sharded.py` scripts, are gone; `quantem.gpu.io.load`
+keeps one encoded acquisition per master, and loader timing claims belong in
+quantem.gpu. The tables are kept as measured.
 
-```bash
-PYTHONPATH=src:. python scripts/widget_load_bench_matrix.py \
-  --masters-glob "$QUANTEM_WIDGET_BENCH_MASTERS_GLOB"
-
-PYTHONPATH=src:. python scripts/widget_load_bench_sharded.py \
-  --masters-glob "$QUANTEM_WIDGET_BENCH_MASTERS_GLOB" \
-  --devices 0,1
-```
-
-`QUANTEM_WIDGET_BENCH_MASTERS_GLOB` may be one glob or several globs separated
-by `os.pathsep` (`:` on Linux/macOS). Use that form when a folder was split
-across multiple NVMe mounts, for example:
-
-```bash
-export QUANTEM_WIDGET_BENCH_MASTERS_GLOB='/path/to/disk0/*_master.h5:/path/to/disk1/*_master.h5'
-```
-
-The scripts write Markdown tables under `/tmp/quantem-widget-load-bench/` by
-default. Keep the generated reports local unless a release note intentionally
-summarizes the numbers. Do not commit raw data, generated benchmark payloads, or
-machine-specific private paths.
-
-Loader policy:
-
-- `dtype="u16"` is the exact-count browse/reconstruction path. Optimize it, but
-  do not replace it with `uint8` silently.
-- `dtype="u8"` is an explicit browse path that decodes directly into uint8 and
-  clips values above 255. It is useful for fast folder screening and memory
-  pressure, not for exact-count reconstruction.
-- `load(masters, devices=[0, 1])` is disk-aware. The loader interleaves files by
-  physical disk first, then assigns the interleaved stream to GPUs. If users
-  split masters across independent disks, both disk bandwidth and GPU capacity
-  can be used. If all masters are on one disk, sharding is still useful for
-  capacity but the cold load remains disk-bound.
-- Each benchmark case runs in a fresh subprocess. Do not time parity hashes
-  inside the load timer; a full uint64 sum over tens of GiB is a correctness
-  check, not load latency.
-
-Current private reference-workstation measurement, single real 512 x 512 x 192 x 192 Arina
+Private reference-workstation measurement (2026-07-05), single real 512 x 512 x 192 x 192 Arina
 master, no detector binning, parity checked against the full tensor:
 
 | path | first measured load | hot repeated load | resident size | note |
@@ -702,53 +585,13 @@ confirmed that the entrypoints run end to end. This smoke used
 | sharded, two masters, `dtype="u8"`, no-bin, `devices=[0, 1]` | 1.428 s | 0.641 s | 18.0 GiB total | one 9.0 GiB U8 master per GPU; close, not yet <0.5 s |
 | matrix, `dtype="u16"`, no-bin, single master | ERR | - | - | current GPU memory was not clean enough for the exact-count allocation |
 
-The current sample resolved to one physical NVMe disk for the
-available real masters, so the smoke validates sharded GPU placement and the
-benchmark harness, not a real multi-disk bandwidth gain. To prove the disk
-speedup, run `widget_load_bench_sharded.py` on a host where
-`group_by_disk(masters)` reports two or more real disks.
+The sample resolved to one physical NVMe disk for the available real masters,
+so the smoke validated sharded GPU placement and the benchmark harness, not a
+real multi-disk bandwidth gain.
 
-Interpretation: U16 is already on the same hot path as U8. Further U16 wins are
-more likely to come from first-use warmup, disk layout, or multi-file scheduling
-than from changing the single-master decode kernel. For 20-40 no-bin masters,
-use the sharded benchmark table to prove the real workflow: cold load, hot load,
-per-GPU resident GiB, disk groups, and whether the run failed cleanly at the
-expected capacity boundary.
-
-IO review and next optimization targets:
-
-- Keep `dtype="u8"` routed to `output_dtype=np.uint8` before any low-level load
-  path. This must hold for single masters, stacked `load(masters, dtype="u8")`,
-  `load(masters, devices=[...], dtype="u8")`, and legacy
-  `load(masters, gpus=[...], stack=False, dtype="u8")`. If the route regresses,
-  the public API can silently materialize uint16 first and lose the browse
-  memory/speed benefit.
-- The remaining <0.5 s gap for two no-bin U8 masters is not a single-file
-  decoder problem. Focus on sharded reload overhead: per-worker first-use
-  warmup, per-file group scheduling, thread startup, repeated HDF5 metadata
-  opens, and whether each device can reuse pinned/compressed scratch buffers
-  across files.
-- Multi-disk proof is still missing. The scheduler is disk-aware, but the
-  current real masters are all on `nvme2n1`. A valid multi-disk report must show
-  `group_by_disk(masters)` with at least two disks and then compare one-disk and
-  split-disk cold/warm timing with the same master count, dtype, and detector
-  binning. Use `quantem data-transfer plan/copy/masters/show4dstem` to create
-  and record that split layout; keep the manifest path and timing report local
-  when it contains private workstation paths.
-- Do not run two GPU-heavy loader benchmarks concurrently on the same GPUs.
-  Parallel benchmark processes create artificial OOMs and hide the true loader
-  behavior. Run U8/U16 and sharded/single cases serially unless the goal is an
-  explicit contention test.
-- Fix environment import blockers before claiming browser signoff. The direct
-  HDF5 benchmarks can bypass `import quantem.widget`, but the real
-  Show4DSTEM UI/export signoff cannot. A remote `quantem.core` circular import
-  blocks the full widget path and must be reported as `Not verified`, not
-  papered over with loader timings.
-- For 30-40 no-bin masters, use the shipped lazy/paged resident set
-  (`page_budget`, `Dataset5dstem` lazy loaders) instead of opening all masters
-  hot. The benchmark can prove per-file load speed and GPU placement; the user
-  workflow still needs fast dataset flipping with bounded resident memory and
-  clear eviction/cache status in the viewer/report.
+Interpretation at the time: U16 was already on the same hot path as U8, and
+further U16 wins were more likely to come from first-use warmup, disk layout,
+or multi-file scheduling than from changing the single-master decode kernel.
 
 ## Heavy Show2D / Show3D audit
 

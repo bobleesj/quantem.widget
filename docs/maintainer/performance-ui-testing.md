@@ -66,7 +66,7 @@ Preferred heavy datasets on the lab machines:
 | PUI-3D-EXPORT | Show3D | same as PUI-3D-MULTI | Full, uint8, and downsampled HTML export paths |
 | PUI-EDS | ShowEDS | native sparse EDS stream, no hidden crop/bin | a real Velox EDS stream |
 | PUI-4DSTEM | Show4DSTEM | real scan with diffraction and virtual images | 4D-STEM tutorial or paper data on an HPC/workstation or hosted dataset |
-| PUI-4DSTEM-NOBIN | Show4DSTEM | 30-40 ready real masters at `det_bin=1` as a capacity probe, plus a browser-enabled no-bin stack that fits | Private lab 4D-STEM masters on an NVIDIA workstation; never commit data or reports |
+| PUI-4DSTEM-NOBIN | Show4DSTEM | 30-40 ready real masters at full detector resolution as a capacity probe, plus a browser-enabled no-bin set that fits | Private lab 4D-STEM masters on an NVIDIA workstation; never commit data or reports |
 | PUI-FOLDER | ShowFolder | folder with many microscopy files | Real screening folder with cache reuse |
 
 If a preferred source is unavailable, use the closest local real source and
@@ -309,16 +309,11 @@ Show4DSTEM and ShowEDS:
   available. Reports must state the per-master bytes, maximum loaded count,
   devices used, append failure if any, and cleanup result. Do not replace this
   with MPS when the requested backend is NVIDIA/CUDA.
-- U8 no-bin browse timing and full Show4DSTEM UI signoff are different claims.
-  It is valid to benchmark the direct HDF5 loader with
-  `scripts/widget_load_bench_matrix.py` or
-  `scripts/widget_load_bench_sharded.py`, but a release claim still needs the
-  real Show4DSTEM widget/export/browser path. If `import quantem.widget` fails
-  in the workstation environment, report the UI gate as blocked even when the
-  direct HDF5 loader benchmarks pass.
-- Multi-disk loading must be proven on a real multi-disk layout. A report where
-  `group_by_disk(masters)` is `{'nvme2n1': N}` validates GPU sharding and
-  capacity, but it does not validate aggregate disk bandwidth.
+- Loader timing and full Show4DSTEM UI signoff are different claims. A
+  `quantem.gpu.io.load` measurement does not replace the real Show4DSTEM
+  widget/export/browser path. If `import quantem.widget` fails in the
+  workstation environment, report the UI gate as blocked even when loading
+  works.
 - Browser interaction should not require a Python round trip during drag unless
   the report calls out the limitation.
 - WebGPU/MPS/CUDA usage must be recorded by surface: browser WebGPU is not the
@@ -570,7 +565,7 @@ For the current FFT metric label, the accepted behavior is:
 
 ## Local Show4DSTEM Heavy Signoff
 
-Use this command when a change touches Show4DSTEM loading, chunking, lazy
+Use this command when a change touches Show4DSTEM loading, chunking,
 multi-master append, detector interaction, scan-position browsing, WebGPU
 browser drawing, or standalone HTML export:
 
@@ -578,10 +573,7 @@ browser drawing, or standalone HTML export:
 PYTHONPATH=src:. python scripts/widget_show4dstem_heavy_signoff.py \
   --search-root /path/to/local/real/4dstem/data \
   --backend cuda \
-  --max-masters 1 \
-  --det-bin 1 \
-  --export-det-bin 1 \
-  --min-fps 30
+  --max-masters 1
 ```
 
 By default it writes to:
@@ -593,45 +585,37 @@ By default it writes to:
 The Show4DSTEM signoff:
 
 - discovers local ready ``*_master.h5`` files without committing those paths,
-- measures CUDA first-master load time and widget build time on NVIDIA backends,
-- records backend shape, dtype, device, resident memory, and memory before/after,
-  and Python/GPU memory before and after each stage,
-- measures additional masters through the active backend's append strategy:
-  CUDA records eager stack-growth/reload timing, while MPS records live lazy
-  append timing,
-- exports standalone Show4DSTEM HTML with explicit ``uint8``/``uint16`` and
-  detector binning labels,
-- opens the export in Chromium, records browser WebGPU adapter information, and
-  measures virtual-detector drag FPS, scan-position movement FPS, wheel-zoom FPS,
-  and recompute latency,
+- with ``--backend cuda`` or ``mps``, loads every selected master into encoded
+  GPU storage at full detector resolution, records load time, shape, dtype,
+  device, encoded and dense bytes, and memory before/after, and builds single
+  and comparison viewers over the acquisitions,
+- with ``--backend webgpu``, exports the HDF5-backed Show4DSTEM folder with an
+  explicit ``uint8``/``uint16`` label (``--encoding``), opens it in Chromium,
+  records browser WebGPU adapter information, and measures virtual-detector
+  drag FPS, scan-position movement FPS, wheel-zoom FPS, and recompute latency,
 - writes `show4dstem-heavy-signoff-report.json` and `index.html`.
 
-Run the full-detector mode first when memory allows:
+Every pass runs at full detector resolution:
 
 ```bash
-# Full detector path: this is the signoff gate for native detector behavior.
+# Backend pass: encoded loads and viewer construction.
 PYTHONPATH=src:. python scripts/widget_show4dstem_heavy_signoff.py \
   --search-root /path/to/local/real/4dstem/data \
   --backend cuda \
-  --max-masters 1 \
-  --det-bin 1 \
-  --export-det-bin 1 \
-  --min-fps 30
+  --max-masters 2
 
-# Explicit preview path: only for a labeled capacity or automation diagnostic.
+# Browser pass: WebGPU export and interaction FPS.
 PYTHONPATH=src:. python scripts/widget_show4dstem_heavy_signoff.py \
   --search-root /path/to/local/real/4dstem/data \
-  --backend cuda \
+  --backend webgpu \
   --max-masters 2 \
-  --det-bin 4 \
-  --export-det-bin 4 \
+  --encoding uint16 \
   --min-fps 30
 ```
 
-The no-bin pass is important because it exposes real resident memory pressure,
-full-detector backend behavior, and virtual-detector latency. A detector-binned
-pass is useful only as a labeled preview or capacity diagnostic; it does not
-prove full-resolution Show4DSTEM behavior.
+The full-detector passes expose encoded memory, full-detector backend behavior,
+and virtual-detector latency. A detector-binned export is useful only as a
+labeled preview; it does not prove full-resolution Show4DSTEM behavior.
 
 ### Private Seven-Tilt Gate
 
@@ -645,9 +629,9 @@ export MAC_SHOW4DSTEM_7TILT_DIR=/private/path/on/mac/to/512x512x192x192-seven-ti
 export CUDA_SHOW4DSTEM_7TILT_DIR=/private/path/on/cuda-host/to/512x512x192x192-seven-tilt-folder
 ```
 
-Do not copy the raw H5 data into the repo or reports. Use the seven entry
-points below. They are full-detector gates: `--bin 1` means no detector
-binning. Do not substitute a detector-binned run unless the report is explicitly
+Do not copy the raw H5 data into the repo or reports. Use the six entry
+points below. They are full-detector gates: live notebooks always keep every
+detector pixel, and `--bin 1` means no detector binning in the WebGPU exports. Do not substitute a detector-binned run unless the report is explicitly
 labeled as a quick diagnostic instead of signoff.
 
 Before each machine's gate, build and install the checkout in the environment
@@ -661,10 +645,10 @@ python -c "import quantem.widget as w; print(w.__file__)"
 
 ```bash
 # 1. macOS: Apple MPS backend, one master.
-quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend mps --count 1 --bin 1 --dtype u8
+quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend mps --count 1
 
 # 2. macOS: Apple MPS backend, seven masters.
-quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend mps --count 7 --bin 1 --dtype u8
+quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend mps --count 7
 
 # 3. macOS: browser/WebGPU HDF5-backed lane, one master.
 quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend webgpu --html --count 1 --bin 1 --dtype u8
@@ -673,14 +657,14 @@ quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend webgpu --html --count 1
 quantem show4dstem "$MAC_SHOW4DSTEM_7TILT_DIR" --backend webgpu --html --count 7 --bin 1 --dtype u8
 
 # 5. CUDA host: CUDA backend, one master.
-quantem show4dstem "$CUDA_SHOW4DSTEM_7TILT_DIR" --backend cuda --count 1 --devices 0 --bin 1 --dtype u8
+quantem show4dstem "$CUDA_SHOW4DSTEM_7TILT_DIR" --backend cuda --count 1
 
 # 6. CUDA host: CUDA backend, seven masters.
-quantem show4dstem "$CUDA_SHOW4DSTEM_7TILT_DIR" --backend cuda --count 7 --devices 0 --bin 1 --dtype u8
-
-# 7. CUDA host: CUDA backend, seven masters split across two GPUs.
-quantem show4dstem "$CUDA_SHOW4DSTEM_7TILT_DIR" --backend cuda --count 7 --devices 0,1 --bin 1 --dtype u8
+quantem show4dstem "$CUDA_SHOW4DSTEM_7TILT_DIR" --backend cuda --count 7
 ```
+
+Select the CUDA card with `CUDA_VISIBLE_DEVICES` before launching; the live
+notebook loads every master onto that one device.
 
 The MPS and CUDA entries launch live notebook-backed widgets. The WebGPU
 entries create anonymous H5 symlinks inside the artifact folder, write an
@@ -701,20 +685,14 @@ stress first so a too-large request fails cleanly and releases memory:
 PYTHONPATH=src:. python scripts/widget_show4dstem_heavy_signoff.py \
   --search-root /path/to/local/real/4dstem/data \
   --backend cuda \
-  --devices 0,1 \
-  --max-masters 30 \
-  --det-bin 1 \
-  --export-det-bin 8 \
-  --skip-browser \
-  --min-fps 30
+  --max-masters 30
 ```
 
 This intentionally records CUDA memory before load, after load or OOM, and
-after `free_gpu()` cleanup. A 20-30 file no-bin stack can exceed even a
-two-GPU workstation because a single 512 x 512 x 192 x 192 uint16 master is
-about 18 GiB resident before transient decompression overhead. If this stress
-does not fit, the report should say where it failed and prove GPU memory was
-returned before the next run. After the capacity pass, run a smaller no-bin
+after `free_gpu()` cleanup. Each 512 x 512 x 192 x 192 uint16 master is about
+0.1 to 2 GiB encoded, depending on counts, plus transient decode workspace. If
+this stress does not fit, the report should say where it failed and prove GPU
+memory was returned before the next run. After the capacity pass, run a smaller no-bin
 browser pass without `--skip-browser` to verify user interaction remains smooth.
 
 Use `QUANTEM_WIDGET_4DSTEM_ROOTS` or `QUANTEM_WIDGET_REAL_DATA_ROOTS` to avoid

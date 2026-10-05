@@ -21,7 +21,7 @@ Each widget should be self-contained, meaning that its Python module and `js/<bu
 | Frontend helpers for several widgets | shared modules at the top of [`js/`](https://github.com/electronmicroscopy/quantem.widget/tree/main/js) |
 | WebGPU browser computation - FFT, reductions, histograms | [`quantem.gpu`](https://github.com/bobleesj/quantem.gpu) |
 
-The rule of thumb is that browser-GPU work that is not specific to one widget belongs in `quantem.gpu`, so that every widget reuses the same kernels. [`scripts/sync-gpu-webgpu.mjs`](https://github.com/electronmicroscopy/quantem.widget/blob/main/scripts/sync-gpu-webgpu.mjs) generates them into `js/.generated/engine/` before each frontend build:
+The rule of thumb is that browser-GPU work that is not specific to one widget belongs in `quantem.gpu`, so that every widget reuses the same kernels. [`scripts/sync-gpu-webgpu.mjs`](https://github.com/electronmicroscopy/quantem.widget/blob/main/scripts/sync-gpu-webgpu.mjs) generates them into `js/.generated/engine/` before each frontend build, copying the files that `quantem.gpu`'s `webgpu/sources.json` manifest lists:
 
 ```bash
 npm run sync:webgpu

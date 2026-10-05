@@ -12,7 +12,10 @@ React components, viewer state, interaction policy, caches, workflow
 orchestration, exports, and widget-specific scientific controls and defaults.
 
 The browser sources copied into `js/.generated/engine/` are generated build
-inputs. Edit their canonical source in `quantem.gpu`, then run:
+inputs. The file list comes from `quantem.gpu`'s `webgpu/sources.json` manifest,
+at paths such as `detector/webgpu/`, `io/hdf5/webgpu/`, `ssb/webgpu/`,
+`display/webgpu/`, and `dpc/webgpu/`. Edit their canonical source in
+`quantem.gpu`, then run:
 
 ```bash
 QUANTEM_GPU_SRC=/path/to/quantem.gpu/src npm run sync:webgpu

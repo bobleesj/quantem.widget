@@ -211,7 +211,10 @@ exported page.
 
 Use `export_kind="interactive"` when the reader must keep changing detector ROIs
 offline in the browser. It embeds or serves a binned raw-4D payload and runs the
-virtual-detector math in WebGPU. This can be much larger than a report.
+virtual-detector math in WebGPU. This can be much larger than a report. The
+payload is the viewer's 4D array, so the viewer must be opened from an array or
+tensor; a live viewer over `quantem.gpu.io.load` acquisitions, including
+`Show4DSTEM.from_folder(...)`, exports reports only.
 
 For raw HDF5 masters, prefer the CLI WebGPU folder route when the user wants
 native detector sampling without a notebook:

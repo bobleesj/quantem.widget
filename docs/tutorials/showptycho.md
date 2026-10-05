@@ -31,7 +31,7 @@ ssb = SSB.open(
 )
 
 # 2. Fit and refine the aberrations. THIS STEP IS REQUIRED.
-result = ssb.fit(trials=200, refinement="nelder-mead")
+result = ssb.find_aberrations(trials=200, refinement="nelder-mead")
 
 # 3. Open the interactive widget — it reuses the prepared GPU session.
 ShowPtycho(ssb)
@@ -49,7 +49,7 @@ ShowPtycho(data, semiangle_mrad=30.0, scan_sampling_A=0.264,
 
 `ShowPtycho(data, aberrations=...)` is a convenience constructor that trusts the
 aberrations you hand it. It does not fit them. If you want the solver to find
-the aberrations, build an `SSB`, call `fit(trials=200,
+the aberrations, build an `SSB`, call `find_aberrations(trials=200,
 refinement="nelder-mead")`, and pass that same prepared `ssb` object to
 `ShowPtycho(ssb)`. The returned `SSBResult` is also available as `result` for
 non-interactive analysis through `result.phase`, `result.amplitude`, and
@@ -60,10 +60,11 @@ You can confirm the solve ran: the stats bar shows a non-null `loss`, and the
 
 ## No detector binning
 
-Build the reconstruction at the **native detector size** (`det_bin=1`, the
-default). Native (e.g. 192x192) is what resolves light columns such as oxygen in
-a perovskite; binning throws that away. Binning also breaks the HTML export (the
-browser cannot bin), so keep the whole workflow un-binned.
+Build the reconstruction at the **native detector size**. `SSB.open` and
+`quantem.gpu.io.load` keep every detector pixel; do not bin an array before
+passing it to `SSB(...)`. Native (e.g. 192x192) is what resolves light columns
+such as oxygen in a perovskite; binning throws that away. Binning also breaks
+the HTML export (the browser cannot bin), so keep the whole workflow un-binned.
 
 ## Region-specific refit (crop)
 
@@ -75,25 +76,26 @@ Two ways to crop:
 
 - **Interactively.** Construct the widget with the raw master path so the `Crop`
   action appears next to `Export`/`Reset`. Enable `Crop`, drag a rectangle on the
-  phase, then `Refit SSB` — the widget reloads only that scan region from the
+  phase, then `Refit SSB`: the widget decodes only that scan region from the
   HDF5 source, runs 200 optimization trials plus refinement, and replaces the
   phase/FFT and calibration.
 
-- **In code.** Load only the region, then fit as usual:
+- **In code.** Read only the region from the encoded acquisition, then fit as
+  usual:
 
   ```python
   from quantem.gpu.io import load
 
-  data = load("scan_master.h5", dtype=None,
-              scan_region=(128, 384, 128, 384)).data   # 256x256 center crop
-  ssb = SSB.from_array(
-      data,
+  with load("scan_master.h5") as acquisition:
+      crop_t = acquisition.read(scan_region=(128, 384, 128, 384))   # 256x256 center crop
+  ssb = SSB(
+      crop_t,
       semiangle_mrad=30.0,
       scan_sampling_A=0.264,
       voltage_kV=300.0,
       rotation_angle_deg=158.9,
   )
-  result = ssb.fit(trials=200, refinement="nelder-mead")
+  result = ssb.find_aberrations(trials=200, refinement="nelder-mead")
   ShowPtycho(ssb)
   ```
 
@@ -153,24 +155,24 @@ def tilted_crystal(tilt_mrad=(3.0, -4.0), thickness_A=152.0):
     return np.asarray(measurement.array, dtype=np.float32), float(measurement.angular_sampling[0])
 
 data, det_mrad = tilted_crystal()
-ssb = SSB.from_array(data, backend="auto", voltage_kV=300.0, semiangle_mrad=30.0,
-                     scan_sampling_A=0.25, det_sampling=det_mrad, rotation_angle_deg=0.0)
+ssb = SSB(data, backend="auto", voltage_kV=300.0, semiangle_mrad=30.0,
+          scan_sampling_A=0.25, det_sampling=det_mrad, rotation_angle_deg=0.0)
 ```
 
 First the thin-sheet model. Look at the FFT: are the lattice spots equally
 sharp in every direction?
 
 ```python
-standard = ssb.fit(verbose=False)
+standard = ssb.find_aberrations(verbose=False)
 ShowPtycho(ssb, fft_on=True)
 ```
 
-Now let the sample lean. `fit(tilt=True)` fits the same aberrations together
+Now let the sample lean. `find_aberrations(tilt=True)` fits the same aberrations together
 with a tilt and a depth spread. Compare: which spots sharpened, and did the
 defocus move?
 
 ```python
-tilted = ssb.fit(tilt=True, verbose=False)
+tilted = ssb.find_aberrations(tilt=True, verbose=False)
 ShowPtycho(ssb, fft_on=True)          # opens on the fitted tilt; drag the Sample tilt sliders
 ```
 
@@ -211,14 +213,14 @@ and the model is standard SSB.
   update takes a few hundred ms on CUDA.
 
 See the [SSB API](https://bobleesj.github.io/quantem.gpu/api/ssb.html) for
-`fit(tilt=True)`, `preview(tilt_mrad=..., depth_spread_nm=...)` and the
+`find_aberrations(tilt=True)`, `preview(tilt_mrad=..., depth_spread_nm=...)` and the
 evidence behind the defaults.
 
 ## Checklist
 
 1. Leave `SSB.open(..., dtype=None)` at its default for native detector precision.
-2. Native detector, `det_bin=1` — do not bin.
-3. `ssb.fit(trials=200, refinement="nelder-mead")` — the fit is not optional.
+2. Native detector: do not bin.
+3. `ssb.find_aberrations(trials=200, refinement="nelder-mead")`: the fit is not optional.
 4. Pass the `ssb` object to `ShowPtycho`, not `data` + hand-typed aberrations.
 5. Confirm: stats bar `loss` is non-null and the trials panel is populated.
-6. Thick or possibly mistilted crystal: also run `ssb.fit(tilt=True)` and compare `report()` rows.
+6. Thick or possibly mistilted crystal: also run `ssb.find_aberrations(tilt=True)` and compare `report()` rows.

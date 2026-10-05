@@ -57,24 +57,23 @@ When a viewer should follow scientific source data directly, use
 `Show4DSTEM.from_folder(...)`; those APIs have their own default watcher and do
 not depend on ShowFolder. Image selections opened through ShowFolder still
 update its active Show2D/Show3D viewer in place. For 4D-STEM selections,
-ShowFolder tracks `*_master.h5` files and refreshes the active lazy Show4DSTEM
-view with the same paging options. The first dataset paints immediately; when
-the complete known shape/dtype footprint fits the selected GPUs, the remaining
-unhidden datasets preload in the background. Larger folders remain
-full-resolution and lazy.
+ShowFolder tracks `*_master.h5` files and opens the folder's ready masters as
+one Show4DSTEM comparison through `Show4DSTEM.from_folder(..., watch=False)`;
+ShowFolder's own watcher reopens that viewer when the folder changes. Each
+master is loaded into encoded GPU storage at full detector resolution, without
+detector binning or a dtype change. The first dataset paints after it loads,
+and the others join in the background.
 
 ```python
 stem = w.open_show4dstem(
-    gpus=[0, 1],
-    page_budget="auto",
-    preload_all_if_fits=True,
+    scan_size=512,     # optional: keep only 512 x 512 scans in a mixed folder
+    backend="auto",    # "cuda" or "mps" to require one
+    device=None,       # CUDA device index
 )
-stem.wait_for_dataset_preload(timeout=120)  # optional deterministic wait
+stem.wait_for_folder()  # optional deterministic wait
 ```
 
-Set `preload_all_if_fits=False` to force page-on-demand loading. The automatic
-fit check does not silently bin or narrow data; `det_bin=` and `dtype=` remain
-explicit scientific choices.
+`open_show4dstem` returns `None` while the folder has no ready master.
 
 For acquisition folders where every new image should appear immediately, open
 both all-image viewers before starting the watcher:

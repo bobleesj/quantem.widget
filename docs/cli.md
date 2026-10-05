@@ -10,7 +10,7 @@ quantem show2d scan.png                       # an image            -> Show2D
 quantem show3d ./frames/                       # a folder of frames -> Show3D scrub
 quantem show2d ./frames/ --watch               # live folder        -> append new images
 quantem show4dstem ./masters/                  # *_master.h5        -> live Show4DSTEM
-quantem show4dstem a_master.h5 b_master.h5     # several masters    -> one 5D multi-tilt viewer
+quantem show4dstem a_master.h5 b_master.h5     # several masters    -> one comparison viewer
 quantem show4dstem ./masters/ --html           # 4D-STEM            -> shareable offline HTML
 quantem showptycho scan_master.h5               # raw 4D-STEM master -> full-BF SSB review project
 quantem showptycho ./masters/                    # master folder     -> ShowPtycho project catalog
@@ -36,15 +36,18 @@ quantem github tutorial_github.ipynb --no-execute # optional static copy for Git
 | `quantem github <notebook.ipynb>` | an optional static copy of a notebook | strips widget state and embeds compressed pictures for GitHub's notebook preview |
 
 **Images** save a standalone HTML and open in your browser. **4D-STEM** opens a
-live, kernel-backed notebook by default (full real-time interaction); `--html`
+live, kernel-backed notebook by default (full real-time interaction; each master
+stays encoded on the GPU at full detector sampling); `--html`
 instead writes an **offline WebGPU browser folder** - drag detectors, switch
 BF/ABF/ADF, pan diffraction, all with no kernel. Full-detector WebGPU exports
 keep compressed HDF5 files beside the viewer. Open `index.html` and grant the
 data folder when prompted, or double-click `Show4DSTEM.command` to serve that
 same folder locally without a grant click.
 
-Several masters (a folder, or listed explicitly) stack into **one 5D viewer with a
-Dataset slider** to flip between scans. WebGPU HDF5 folders use anonymous local
+Several masters (a folder, or listed explicitly) open as **one comparison
+viewer**: a live notebook shows one virtual image per master with a shared
+detector ROI, and an HTML export adds a Dataset slider to flip between scans.
+WebGPU HDF5 folders use anonymous local
 links such as `tilt_00_master.h5` and `tilt_00_data_*.h5`; rerunning the CLI
 replaces the generated viewer folder so stale HTML and metadata do not survive.
 
@@ -88,9 +91,13 @@ quantem show4dstem ./session_masters --backend webgpu --html --count 7 --bin 1 -
 quantem show4dstem scan_001_master.h5 scan_002_master.h5 --backend webgpu --html --bin 1
 ```
 
-`--bin` is detector mean binning for the exported browser payload. The default
-is `--bin 1`, meaning full detector sampling. Use a larger value only for an
-explicit preview, and label that reduction in the report.
+`--bin N` replaces each N x N detector block by its mean, rounded to the
+nearest count, in an `--html` export packed in Python (`--backend auto`,
+`cuda`, or `mps`). The default is `--bin 1`, meaning full detector sampling.
+Use a larger value only for an explicit preview, and label that reduction in
+the report. The `--backend webgpu` folder reads the source HDF5 chunks in the
+browser and requires `--bin 1`; live notebooks always keep full detector
+sampling.
 
 Use `--backend webgpu --html --bin 1` when the user wants the full native
 detector sampling path without opening Jupyter:
@@ -115,14 +122,8 @@ open a live viewer and export a compact report from Python instead:
 ```python
 from quantem.widget import Show4DSTEM
 
-viewer = Show4DSTEM.from_folder(
-    "/data/session",
-    gpus=[0, 1],
-    det_bin=1,
-    dtype="u8",
-    view_mode="multiple",
-    page_size=12,
-)
+viewer = Show4DSTEM.from_folder("/data/session", page_size=12)
+viewer.wait_for_folder()
 
 viewer.export_html(
     "show4dstem_report.html",
@@ -136,9 +137,12 @@ viewer.export_html(
 
 Use `export_kind="interactive"` from Python when you want the same offline
 browser interaction as the CLI but need finer control over real-space binning,
-detector binning, or dtype:
+detector binning, or dtype. The interactive export embeds the viewer's 4D array,
+so open that viewer from an array or tensor; a viewer over encoded
+acquisitions, such as `from_folder`, exports reports only:
 
 ```python
+viewer = Show4DSTEM(array)
 viewer.export_html(
     "show4dstem_interactive.html",
     export_kind="interactive",
@@ -219,17 +223,16 @@ only `index.html` omits the HDF5 source files needed for WebGPU reconstruction.
 
 | Option | Effect |
 |---|---|
-| `--bin N` | detector mean-bin factor; Show4DSTEM defaults to 1 and ShowPtycho always uses native detector sampling |
+| `--bin N` | Show4DSTEM `--html` packed in Python: detector mean-bin factor (default 1). `--backend webgpu` and live notebooks require 1; ShowPtycho always uses native detector sampling |
 | `--backend auto/cuda/mps/webgpu` | Show4DSTEM backend; use `webgpu` with `--html` for a browser-owned full-detector HDF5-backed viewer. ShowPtycho accepts `auto/cuda/mps` |
 | `--count N` | Show4DSTEM: require and load exactly this many compatible masters from the input |
-| `--devices 0,1` | Show4DSTEM CUDA placement; alias of `--gpus` |
-| `--dtype uint8/uint16/float32` | browse/storage dtype; `uint8` is compact browse, `uint16` keeps the wider detector-count range |
+| `--dtype uint8/uint16` | Show4DSTEM `--html` packed or browser-decoded dtype, and ShowPtycho browser decode dtype; `uint8` is compact browse, `uint16` keeps the wider detector-count range |
 | `--serve` | open via a local HTTP server even for self-contained files (tunnelable URL) |
 | `--port N`, `--bind ADDR` | folder exports: local HTTP server port (default auto) and bind address (default 127.0.0.1) |
 | `--quantized` | image widgets: uint8 pack for a smaller file |
 | `--html` | 4D-STEM: write the offline-WebGPU HTML instead of a notebook |
-| `--watch` | folder: write a live ShowFolder-watched notebook; Show2D/Show3D append new image files, Show4DSTEM opens lazy masters |
-| `--gpus 0,1`, `--page-budget auto` | watched Show4DSTEM: pick CUDA cards and GPU-resident dataset cache policy |
+| `--watch` | folder: write a live ShowFolder-watched notebook; Show2D/Show3D append new image files, Show4DSTEM opens the ready masters encoded at full detector sampling |
+| `--scan-size N` | watched Show4DSTEM: keep only masters with this square scan size |
 | `--combined` | many masters -> one 5D HTML viewer (served locally) |
 | `--out PATH` | output file or directory (default `~/Downloads`) |
 | `--no-open` | write the file(s) without launching a browser or Jupyter |
@@ -251,6 +254,7 @@ quantem show4dstem ./masters/ --backend webgpu --html --count 1 --bin 1
 ```
 
 uses browser WebGPU and writes a double-clickable HDF5-backed folder without
-copying raw data. If you pass `--bin N` with `N > 1`, the detector is
-**mean-binned** (not summed) so the bright field never clips at uint8. See
-[Load and I/O](api/io) for the backend + binning details.
+copying raw data. Without `--backend webgpu`, `--html` packs the array in
+Python; `--bin N` with `N > 1` then **mean-bins** (not sums) the detector so the
+bright field never clips at uint8. See [Load and I/O](api/io) for the backend
+details.
