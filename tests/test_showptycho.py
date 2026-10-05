@@ -15,16 +15,19 @@ from quantem.gpu import SSB
 from quantem.gpu.device.cuda_runtime import cp
 
 
-@pytest.fixture(autouse=True, scope="module")
-def _resolve_cupy_before_fakes():
-    """quantem.gpu resolves CuPy attributes on first use and keeps them.
+@pytest.fixture(autouse=True)
+def _cupy_for_cuda_fakes(monkeypatch):
+    """Let the fake CUDA sessions below run through quantem.gpu's SSB on any host.
 
-    These tests install a fake ``cupy`` module; without resolving the real one
-    first, the fake's ``ndarray`` and ``asnumpy`` would stay in quantem.gpu for
-    every later test in the session that runs a real SSB.
+    quantem.gpu reads CuPy through ``quantem.gpu.device.cuda_runtime.cp``, which
+    keeps the first attributes it resolves. With CuPy installed they are resolved
+    against the real module before a test swaps in the fake, so the fake never
+    leaks into later tests; without CuPy (a Mac) the SSB module gets the fake.
     """
-    if cp is not None:
-        for name in ("ndarray", "asnumpy", "angle"):
+    if cp is None:
+        monkeypatch.setattr("quantem.gpu.ssb.workflow.cp", _FakeCuPy())
+    else:
+        for name in ("ndarray", "asnumpy", "angle", "exp"):
             getattr(cp, name)
 
 
