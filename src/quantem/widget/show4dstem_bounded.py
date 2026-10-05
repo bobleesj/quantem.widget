@@ -132,9 +132,10 @@ def acquisition_label(source) -> str | None:
 
 def _live_options(options: dict) -> dict:
     """Defaults shared by every bounded viewer; encoded storage cannot go offline."""
-    if options.get("offline") or options.get("data_url"):
+    if options.get("offline") or options.get("data_url") or options.get("backend") == "webgpu":
         raise ValueError(
-            "Encoded acquisitions need a live kernel; offline export is not supported."
+            "Encoded acquisitions need a live kernel: offline and browser WebGPU "
+            "viewers are not supported. Omit offline=, data_url= and backend='webgpu'."
         )
     options.setdefault("precompute_virtual_images", False)
     options.setdefault("verbose", False)

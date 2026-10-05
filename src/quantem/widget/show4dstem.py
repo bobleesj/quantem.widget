@@ -2759,6 +2759,17 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         data = self._data
         if dtype not in {"uint8", "uint16"}:
             raise ValueError(f"unknown export dtype {dtype!r}")
+        from quantem.widget.show4dstem_bounded import _View, _Views
+
+        if isinstance(data, (_View, _Views)):
+            # An interactive export embeds every diffraction pattern; an encoded
+            # acquisition would have to be expanded to its full dense size first.
+            raise ValueError(
+                "Interactive HTML export embeds the dense 4D array, which an encoded "
+                "acquisition from quantem.gpu.io.load never builds. Export a report "
+                "(export_kind='report'), or open Show4DSTEM on a bounded tensor such as "
+                "acquisition.read(scan_region=(row_start, row_stop, col_start, col_stop))."
+            )
 
         def _finish_export_chunk(
             chunk: np.ndarray, *, round_values: bool = True

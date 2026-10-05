@@ -835,3 +835,17 @@ def test_show4dstem_compare_grid_validates_api() -> None:
             assert message in str(exc)
         else:  # pragma: no cover - assertion helper
             raise AssertionError(f"Show4DSTEM accepted invalid kwargs {kwargs!r}")
+
+
+def test_encoded_view_refuses_offline_and_interactive_export(tmp_path) -> None:
+    """C4: an io.load acquisition, expect a corrective error for offline, WebGPU and interactive export."""
+    acquisition = _acquisition(np.ones((2, 2, 6, 6), dtype=np.uint16), "scan")
+    for options in ({"offline": True}, {"backend": "webgpu"}):
+        with pytest.raises(ValueError, match="live kernel"):
+            Show4DSTEM(acquisition, **options)
+    widget = Show4DSTEM(acquisition)
+    try:
+        with pytest.raises(ValueError, match="never builds"):
+            widget.export_html(tmp_path / "viewer.html")
+    finally:
+        widget.close()
