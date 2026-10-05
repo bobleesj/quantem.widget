@@ -10,7 +10,7 @@ data, how fast are they, and which features lose their backend?
 
 ## Setup
 
-- quantem.gpu: `gpu-refactor` worktree (5265b312 at the start, 0d955476 at the end).
+- quantem.gpu: `gpu-refactor` worktree (5265b312 at the start, 34949e69 final).
 - quantem.widget: branch `gpu-refactor-callers` from `main` f9cbccfc.
 - CUDA: cudahost GPU 0, RTX PRO 6000 Blackwell, shared with other jobs (load
   average about 20 during most runs, so timings are upper bounds).
@@ -37,10 +37,11 @@ data, how fast are they, and which features lose their backend?
 | DPC maps vs rotated `dpc.center_of_mass(acq)` | equal (atol 1e-5) | equal (atol 1e-5) |
 | `io.save("a.qem", acq)` then browser QEM viewer decode | 2.0 GiB file; Chrome WebGPU decode 15.9 s; DP stats equal to the live kernel | not run |
 
-Construction time is dominated by the mean diffraction pattern used to find
-the bright-field disk: quantem.gpu's `BoundedDetectorCompute.mean_dp` reads
-every scan position (1.5 s on CUDA) although the encoded session computes the
-same pattern natively in 0.07 s.
+Construction time was dominated by the mean diffraction pattern used to find
+the bright-field disk: `BoundedDetectorCompute.mean_dp` read every scan
+position (1.5 s on CUDA) although the encoded session computes the same pattern
+natively in 0.07 s. With the final quantem.gpu (34949e69), bounded views take
+the mean pattern from the native session and CUDA construction is 0.49 s.
 
 ## Conclusions
 

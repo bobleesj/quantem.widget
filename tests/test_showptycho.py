@@ -17,18 +17,14 @@ from quantem.gpu.device.cuda_runtime import cp
 
 @pytest.fixture(autouse=True)
 def _cupy_for_cuda_fakes(monkeypatch):
-    """Let the fake CUDA sessions below run through quantem.gpu's SSB on any host.
+    """Let the fake CUDA sessions below run through quantem.gpu's SSB on a Mac.
 
-    quantem.gpu reads CuPy through ``quantem.gpu.device.cuda_runtime.cp``, which
-    keeps the first attributes it resolves. With CuPy installed they are resolved
-    against the real module before a test swaps in the fake, so the fake never
-    leaks into later tests; without CuPy (a Mac) the SSB module gets the fake.
+    Where CuPy is installed, quantem.gpu looks each CuPy attribute up in
+    ``sys.modules["cupy"]``, which the tests swap for ``_FakeCuPy``. Without CuPy
+    the SSB module holds ``cp = None``, so it gets the fake directly.
     """
     if cp is None:
         monkeypatch.setattr("quantem.gpu.ssb.workflow.cp", _FakeCuPy())
-    else:
-        for name in ("ndarray", "asnumpy", "angle", "exp"):
-            getattr(cp, name)
 
 
 def _webgpu_source(name: str) -> str:
