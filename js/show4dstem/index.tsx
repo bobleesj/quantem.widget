@@ -3597,7 +3597,7 @@ function Show4DSTEM() {
           if (!canonicalFiles.length) throw new Error("This viewer has no QEM files configured. Export it again from the source files.");
         }
         ransSet = qemSource
-          ? await RansResidentSet.loadCountANSFiles(ransDevice, canonicalFiles, status,
+          ? await RansResidentSet.loadQemFiles(ransDevice, canonicalFiles, status,
               JSON.parse(String(model.get("_offline_bad_px") || "[]")) as number[])
           : ransLocalDirectory
           ? await RansResidentSet.loadLocal(ransDevice, ransLocalDirectory, status)
