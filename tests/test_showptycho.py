@@ -9,8 +9,23 @@ import types
 from dataclasses import replace
 
 import numpy as np
+import pytest
 
 from quantem.gpu import SSB
+from quantem.gpu.device.cuda_runtime import cp
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _resolve_cupy_before_fakes():
+    """quantem.gpu resolves CuPy attributes on first use and keeps them.
+
+    These tests install a fake ``cupy`` module; without resolving the real one
+    first, the fake's ``ndarray`` and ``asnumpy`` would stay in quantem.gpu for
+    every later test in the session that runs a real SSB.
+    """
+    if cp is not None:
+        for name in ("ndarray", "asnumpy", "angle"):
+            getattr(cp, name)
 
 
 def _webgpu_source(name: str) -> str:
@@ -860,7 +875,7 @@ def test_showptycho_export_reuses_matching_exact_bf_companion(
 ):
     """C4: matching MPS BF source, expect a link without HDF5 re-extraction."""
     from quantem.gpu.ssb.brightfield import BrightfieldDisk
-    from quantem.gpu.ssb.mps.engine import MpsBfColumnFrames
+    from quantem.gpu.ssb.mps.frames import MpsBfColumnFrames
 
     from quantem.widget.showptycho_webgpu_export import _reuse_bf_column_source
 
