@@ -393,6 +393,8 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
     # user can still resize via the corner handle and toggle FFT via the switch. --
     initial_panel_size = traitlets.Int(800).tag(sync=True)
     initial_fft_on = traitlets.Bool(False).tag(sync=True)
+    upsample = traitlets.Int(1).tag(sync=True)
+    upsampling_available = traitlets.Bool(False).tag(sync=True)
 
     # -- Save/Apply trigger (JS → Python) --
     save_trigger = traitlets.Int(0).tag(sync=True)
@@ -480,6 +482,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         source_file: "str | None" = None,
         size: int = 800,
         fft_on: bool = False,
+        upsample: int = 1,
         initial_compute_loss: bool = True,
         initial_loss_val: float | None = None,
         initial_flip_phase: bool = False,
@@ -489,6 +492,8 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
     ):
         super().__init__(**kwargs)
         self._accel = accel
+        self.upsampling_available = accel.backend == "cuda"
+        self.upsample = upsample
         self._rotation_rad = rotation_rad
         self._ssb_ref = ssb_ref
         self._save_dir = pathlib.Path(save_dir) if save_dir else None
@@ -551,7 +556,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         # microscope conventions that sometimes report negative values.
         start_deg = math.degrees(rotation_rad)
         if rotation_range is None:
-            rotation_range = (-180.0, 180.0)
+            rotation_range = (min(-180.0, start_deg), max(180.0, start_deg))
         self.rotation_min, self.rotation_max = rotation_range
         # Set current rotation without firing the observer (guard against premature reconstruct
         # before _inflight_id and accel state are initialized).
@@ -586,6 +591,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
 
         # Listen for events
         self.observe(self._on_request, names=["request_json"])
+        self.observe(self._on_upsample, names=["upsample"])
         self.observe(self._on_save, names=["save_trigger"])
         self.observe(self._on_pin, names=["pin_json"])
         self.observe(self._on_drag_bf_change, names=["drag_bf"])
@@ -929,6 +935,34 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             json.dump(payload, fh, indent=2, default=str)
         tmp.replace(self._stars_path)
 
+    @traitlets.validate("upsample")
+    def _validate_upsample(self, proposal):
+        factor = proposal["value"]
+        if factor not in (1, 2, 4, 8):
+            raise ValueError("ShowPtycho upsample must be 1, 2, 4, or 8.")
+        if factor > 1 and hasattr(self, "_accel") and self._accel.backend != "cuda":
+            raise ValueError("This session supports native sampling only; use upsample=1.")
+        if factor > 1 and any(
+            value != 0 for key, value in json.loads(self.higher_order_json).items()
+            if not key.endswith("_angle")
+        ):
+            raise ValueError("Higher-order aberrations require upsample=1; reset them before upsampling.")
+        return factor
+
+    @traitlets.validate("higher_order_json")
+    def _validate_higher_order_sampling(self, proposal):
+        values = json.loads(proposal["value"] or "{}")
+        if self.upsample > 1 and any(
+            value != 0 for key, value in values.items() if not key.endswith("_angle")
+        ):
+            raise ValueError("Set upsample=1 before changing higher-order aberrations.")
+        return proposal["value"]
+
+    def _on_upsample(self, change):
+        self._inflight_id += 1
+        self._do_reconstruct(self._inflight_id, self._current_c10(),
+                             self._current_c12(), self._current_phi12_deg(), compute_loss=False)
+
     def _on_request(self, change):
         """Handle reconstruction request from JS."""
         raw = change["new"]
@@ -1058,7 +1092,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         self.scan_region_json = json.dumps(scan_region)
         self.total_bf = self._accel.num_bf
         self.drag_bf = self.total_bf
-        self._rotation_rad = math.radians(rebuilt.rotation_angle_deg)
+        self._rotation_rad = math.radians(rebuilt.physical_rotation_deg)
         self.rotation_deg = math.degrees(self._rotation_rad)
         self.auto_rotation_deg = self.rotation_deg
         self.auto_c10 = float(rebuilt.aberrations["C10"])
@@ -1168,6 +1202,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             phase_np, loss = self._accel.preview(
                 {"C10": c10, "C12": c12, "phi12": phi12_rad},
                 compute_loss=compute_loss,
+                upsampling_factor=self.upsample,
                 higher_order_magnitudes=mags_m if any_ho else None,
                 higher_order_angles=angles_rad if any_ho else None,
                 **(tilt or {}),
@@ -1210,6 +1245,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             # frontend formats labels for readability; rounding the synced
             # state here would silently perturb saved/exported calibration.
             "C10": float(c10),
+            "upsample": self.upsample,
             "C12": float(c12),
             "phi12_deg": float(phi12_deg),
             "loss": loss,
@@ -1394,6 +1430,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
         overwrite: bool = True,
         decode_dtype: str = "uint16",
         webgpu_source: str = "bf_columns",
+        gpu_memory_gb: float = 4.5,
     ) -> pathlib.Path:
         """Export a shareable interactive viewer folder for the current state.
 
@@ -1418,6 +1455,9 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             ``"in-place"`` writes the viewer next to the existing source and
             serves it there, so nothing is copied at all (the viewer is tied to
             that data folder).
+        gpu_memory_gb : float, default 4.5
+            Maximum resident scan spectra in GiB for the browser. Increase
+            only when the viewing GPU has room for the spectra and scratch.
         webgpu_source : {"bf_columns", "hdf5"}, default "bf_columns"
             Browser source layout. ``"bf_columns"`` writes exact detector
             bright-field columns and uses them on open, avoiding compressed HDF5
@@ -1440,6 +1480,7 @@ class _ShowPtychoWidget(anywidget.AnyWidget):
             overwrite=overwrite,
             decode_dtype=decode_dtype,
             webgpu_source=webgpu_source,
+            gpu_memory_gb=gpu_memory_gb,
         )
 
 
@@ -1500,6 +1541,7 @@ def _show_ptycho_from_ssb(
     source_file: str | None,
     size: int,
     fft_on: bool,
+    upsample: int,
     calibration: object | None,
 ) -> _ShowPtychoWidget:
     sample_from_cal: dict[str, Any] = {}
@@ -1522,7 +1564,7 @@ def _show_ptycho_from_ssb(
         phi12_range = (-90.0, 90.0)
 
     accel = ssb
-    rotation_rad = math.radians(float(ssb.rotation_angle_deg))
+    rotation_rad = math.radians(float(ssb.physical_rotation_deg))
     accel.set_rotation(math.degrees(rotation_rad))
     auto_loss_val = (
         float(loss_from_cal)
@@ -1547,6 +1589,7 @@ def _show_ptycho_from_ssb(
         source_file=source_file,
         size=size,
         fft_on=fft_on,
+        upsample=upsample,
         initial_compute_loss=initial_compute_loss,
         initial_loss_val=auto_loss_val if math.isfinite(auto_loss_val) else None,
         initial_flip_phase=bool(flip_from_cal) if flip_from_cal is not None else False,
@@ -1583,6 +1626,7 @@ def ShowPtycho(
     source_file: str | None = None,
     size: int = 800,
     fft_on: bool = False,
+    upsample: int = 1,
     calibration: object | None = None,
 ) -> _ShowPtychoWidget:
     """Open an interactive ptychography aberration explorer.
@@ -1609,6 +1653,11 @@ def ShowPtycho(
         Path to the raw 4D-STEM master HDF5 file. When this path is available,
         the toolbar offers native square real-space crops and can rebuild/refit
         SSB from the selected detector data with 200 optimization trials.
+    upsample : {1, 2, 4, 8}, default 1
+        Output sampling factor. Reuses native detector evidence and fitted
+        coefficients. The field of view stays fixed; this is SSB alias-order
+        reconstruction, not image interpolation. CUDA sessions and standalone
+        WebGPU exports support the sampling control.
     calibration : path or object, optional
         Previously saved calibration used to seed aberrations, rotation, phase
         flip, higher-order controls and, when saved, the sample tilt panel.
@@ -1670,5 +1719,6 @@ def ShowPtycho(
         source_file=source_file,
         size=size,
         fft_on=fft_on,
+        upsample=upsample,
         calibration=calibration,
     )

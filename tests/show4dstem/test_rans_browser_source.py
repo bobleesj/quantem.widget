@@ -72,7 +72,10 @@ def test_export_qem_series_retains_order_geometry_and_local_grant(tmp_path, monk
     counts = np.arange(4 * 5 * 2 * 3, dtype=dtype).reshape(4, 5, 2, 3)
     paths = [tmp_path / "first.qem", tmp_path / "second.qem"]
     for ordinal, path in enumerate(paths):
-        save(path, counts + ordinal, backend="cpu")
+        save(path, counts + ordinal, backend="cpu",
+             metadata={"scan_sampling_A": [0.4, 0.6], "voltage_kV": 300.0})
+        restored, _ = reference.load_array(path)
+        np.testing.assert_array_equal(restored, counts + ordinal)
 
     def no_count_decode(*args, **kwargs):
         raise AssertionError("Viewer export must not decode native count arrays.")
@@ -93,6 +96,8 @@ def test_export_qem_series_retains_order_geometry_and_local_grant(tmp_path, monk
     for item, original in zip(manifest["sources"], paths[::-1]):
         assert (root / item["url"]).samefile(original)
         assert item["file_bytes"] == original.stat().st_size
+        assert item["scientific_metadata"]["axes"][0]["sampling"]["value"] == 0.4
+        assert item["scientific_metadata"]["axes"][1]["sampling"]["value"] == 0.6
     state = html.read_text()
     assert '"_rans_format": "qem-v1"' in state
     assert '"_rans_dtype": "' + np.dtype(dtype).name + '"' in state

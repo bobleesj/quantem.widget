@@ -10,14 +10,24 @@ new `rcN` heading when that rc is published to TestPyPI.
   (512 x 512 x 192 x 192 uint16 scans measured 0.1 to 2 GiB instead of 18 GiB):
   `Show4DSTEM(load(path))` is a live bounded view, `scan_region=` shows part of
   the scan, and `Show4DSTEM(load([a, b]))` a comparison grid labelled by file.
-  `Show4DSTEM.from_folder` and `ShowFolder.open_show4dstem` load every ready
-  master this way at full detector resolution; their binning, dtype, multi-GPU,
-  paging and preview-cache options, the MPS-specific viewer,
+  `Show4DSTEM.from_folder` loads every ready master this way at full detector
+  resolution, on CUDA or MPS, and keeps watching the folder; its binning, dtype,
+  multi-GPU, paging and preview-cache options, the MPS-specific viewer,
   `quantem.widget.io.resident`, and the CLI `--gpus`/`--page-budget` options are
   removed. Compute SSB runs on CUDA or MPS through `quantem.gpu.SSB` (voltage
   only, every detected BF pixel), and the browser export reads integer `.qem`
-  files.
+  files. Viewer axes take the acquisition's recorded calibration. Requires
+  quantem.gpu 0.0.1rc12, the restructured package.
 
+## rc39 - 2026-10-03
+
+- Show4DSTEM compares native diffraction patterns side by side in live
+  Multiple view, with shared scan-region reductions and live detector dragging.
+  Playback controls are reserved for Single view.
+
+- Remove the ShowFolder session browser and `quantem showfolder` command. Open acquisitions directly with Show4DSTEM; image and acquisition `--watch` commands now use the viewers’ own `from_folder` methods.
+
+- Show4DSTEM static render uses the Show2D overlay font and no forced gap between panels; depends on quantem.gpu 0.0.1rc11 (GPU-owned `Dataset4dstemGPU`, `io.load(files)` returns a list).
 - Add `PlanPtycho`: give a crystal (CIF, `ase.Atoms` or Materials Project id) and the microscope settings, and see
   the beam through the specimen, the reconstruction's model window, the probe and the Bragg disks, with graded checks
   (window, scan margin, overlap, detector reach, column lean from tilt, focus inside the specimen). Microscope

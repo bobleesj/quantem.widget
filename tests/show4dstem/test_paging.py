@@ -932,9 +932,6 @@ def test_show4dstem_compare_grid_oom_reports_gracefully_without_raw_trace():
         widget.close()
 
 
-# --- ShowFolder -> Show4DSTEM handoff -----------------------------------------
-
-
 def test_lazy_residency_plan_uses_known_shape_across_all_page_devices():
     frame_shape = (2, 3, 4, 5)
     frame_bytes = 2 * 3 * 4 * 5

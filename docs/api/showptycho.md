@@ -39,16 +39,52 @@ viewer.
 In a WebGPU folder export, the browser owns the interactive review. The default
 folder contains a small `index.html` viewer, calibration metadata under
 `snapshots/`, and exact microscopy payloads under `source/`. The default browser
-payload is a BF-column file (`source/bf_columns.u8` or `.u16`), so the browser
-range-reads only the bright-field evidence it needs on open. Moving
-C10, C12, phi12, or scan rotation makes the browser build BF-indexed `G(k)`
-reducers transiently in GPU memory and run the SSB phase reconstruction from
-those transient buffers. The export does not persist expanded float32 images or
+payload from a CUDA session is lossless ANS-encoded QEM
+(`source/bf_columns.qem`). The browser verifies the file checksums, decodes the
+integer counts on its GPU, and builds the native scan spectra once. MPS exports
+currently retain their exact integer BF companion. Moving
+C10, C12, phi12, or scan rotation reuses those resident spectra. It does not
+fetch the counts or repeat the scan FFT. The export does not persist expanded float32 images or
 complex64 BF reducers by default.
 
 FFT is a display analysis of the current reconstructed phase. When the FFT panel
 is visible, the widget computes the FFT from the latest phase image and redraws
 that FFT panel. It is not re-running the raw detector preprocessing.
+
+## Output sampling
+
+```python
+from quantem.widget import ShowPtycho
+
+viewer = ShowPtycho(ssb, upsample=2, fft_on=True)
+viewer
+```
+
+Use **Sampling** in the toolbar to switch between 1×, 2×, 4× and 8×. The field
+of view stays fixed; 2× halves the phase pixel spacing. The scale bar and crop
+coordinates follow the displayed sampling. The scan data and fitted coefficients
+stay unchanged, and the loss is evaluated on the native grid.
+
+This evaluates SSB on a finer output grid using the measured scan-frequency
+aliases. It is not interpolation of the displayed image and does not guarantee
+finer physical resolution. Larger factors cost more computation and memory.
+
+Upsampling is available in CUDA notebooks for defocus/astigmatism with optional
+tilt correction, and in WebGPU folder exports. A Python MPS session currently
+uses 1×. Turn off higher-order aberrations before upsampling in a CUDA notebook.
+Keep 1× while adjusting controls when a finer view is too slow. The widget uses
+all bright-field pixels by default; increasing output sampling does not reduce
+that evidence. Do not assume a 60 FPS reconstruction rate on a full scan.
+
+A large full scan can exceed the conservative 4.5 GiB browser spectra budget.
+On a GPU with enough memory, export with an explicit allowance:
+
+```python
+viewer.export("ssb-viewer", gpu_memory_gb=24)  # GiB for resident scan spectra
+```
+
+The browser also needs memory for encoded counts, decoder tables, and output
+buffers. This allowance never removes detector pixels to make the run fit.
 
 ## Real-Space Crop And SSB Refit
 
@@ -62,12 +98,12 @@ only that scan region, runs 200 SSB optimization trials followed by refinement
 calibration with the result.
 
 ```python
-from quantem.gpu import SSB
+from quantem.gpu import SSB, io
 from quantem.widget import ShowPtycho
 
-ssb = SSB.open(
-    "reference_master.h5",
-    backend="auto",
+data = io.load("acquisition_master.h5")
+ssb = SSB(
+    data,
     semiangle_mrad=20.0,
     scan_sampling_A=0.276,
     voltage_kV=300.0,
@@ -75,7 +111,7 @@ ssb = SSB.open(
 result = ssb.find_aberrations(trials=200, refinement="nelder-mead")
 w = ShowPtycho(
     ssb,
-    source_file="reference_master.h5",
+    source_file="acquisition_master.h5",
     fft_on=True,
 )
 ```

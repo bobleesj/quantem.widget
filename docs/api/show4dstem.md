@@ -1,5 +1,23 @@
 # Show4DSTEM
 
+## Compare diffraction patterns side by side
+
+For a live notebook with several datasets, use
+`Show4DSTEM(stack, view_mode="multiple", compare_dp_mode="all")`.
+Each visible dataset shows its native diffraction pattern at the same scan
+position. Circle, Square or Rect scan selection with Mean compares each
+dataset over identical scan positions, never an average across datasets.
+Dragging the detector in any diffraction tile updates the shared virtual
+detector and all virtual images before release.
+
+The diffraction grid shares the virtual-image grid's zoom, pan, reset,
+scale bars and column layout. Playback is available in Single view only.
+The `all` mode requires a live kernel; standalone export is not qualified for
+this layout. Existing `selected` and `average` modes remain available.
+Packed sources require their own reduction support and are not established
+by this dense-array feature. See the
+[interaction contract](../maintainer/all-diffraction-comparison.md).
+
 Public import:
 
 ```python
@@ -49,11 +67,14 @@ never expands it: virtual images are summed on the encoded storage, and each
 diffraction pattern comes from a bounded read. CUDA and MPS acquisitions use
 the same viewer.
 
-These views need a live kernel. `offline=True` and `data_url=` raise for an
-encoded acquisition, and an interactive HTML export needs the 4D array in the
-Python session. A report export (`export_kind="report"`, static PNG pages)
-works from a live view; for a standalone browser viewer over the source files,
-use the CLI `--backend webgpu --html` folder export.
+These views need a live kernel. `offline=True`, `data_url=` and
+`backend="webgpu"` raise for an encoded acquisition. `export_html` still works
+from a live view: an interactive export reads the acquisition in small scan
+windows into the embedded array (a host copy of the full data at the chosen
+`dtype` and binning; the GPU never holds the dense cube), and a report export
+(`export_kind="report"`, static PNG pages) embeds no raw 4D data. For a
+standalone browser viewer over the source files, use the CLI
+`--backend webgpu --html` folder export.
 
 The viewer borrows the acquisition. Keep a handle when you plan to release GPU
 memory, and close it after the viewer:
@@ -168,8 +189,7 @@ introduce genuine master/chunk files while one Jupyter widget is mounted and
 measure both discovery/control paint and requested virtual-image/diffraction
 paint.
 
-This path reads the original master data. It does not use ShowFolder's cached
-thumbnails.
+This path reads the original master data, not cached thumbnails.
 
 On Apple Silicon the same call loads onto the Apple GPU; pass `backend="mps"`
 to require it:
@@ -330,9 +350,9 @@ widget.export_html(
 
 Interactive raw exports remain available when the exported HTML needs the
 backendless Show4DSTEM widget, not just a report. They embed the viewer's 4D
-array, so open the viewer from an array or tensor (for example a bounded
-`loaded.read(scan_region=...)`); a viewer over `io.load` acquisitions exports
-reports only:
+array; a viewer over `io.load` acquisitions reads it in small scan windows, so
+the export copies the whole acquisition to host memory. Open the viewer on a
+bounded `loaded.read(scan_region=...)` to export part of a scan:
 
 ```python
 widget = Show4DSTEM(array)

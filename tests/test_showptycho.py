@@ -147,6 +147,8 @@ class _FakeAccel:
             ),
             sampling_A=tuple(float(value) for value in self.sampling),
             dc_value=complex(self._dc_value_host),
+            bf_source_path=getattr(self, "bf_source_path", None),
+            bf_source_dtype=getattr(self, "bf_source_dtype", None),
         )
 
     def cache_rotation(self, rotation_rad: float) -> None:
@@ -213,14 +215,16 @@ class _FakeAccel:
         thickness=0.0,
         phase_estimator="mean_phase",
     ):
-        # The CUDA session previews through this route (phase_of_mean); the fake
-        # keeps the native-grid image, so expected pixels match preview().
-        return self.preview(
+        # The CUDA session previews through this route (phase_of_mean) at every
+        # output factor; the fake repeats native pixels, so factor 1 matches preview().
+        self.last_upsampling_factor = upsampling_factor
+        phase, loss = self.preview(
             aberrations,
             compute_loss=compute_loss,
             higher_order_magnitudes=None,
             higher_order_angles=None,
         )
+        return np.repeat(np.repeat(phase, upsampling_factor, axis=0), upsampling_factor, axis=1), loss
 
 
 class _FakeMpsAccel(_FakeAccel):
@@ -297,6 +301,20 @@ class _FakeColumnWebGPUAccel(_FakeWebGPUAccel):
         self.gpts = (4, 4)
         self.bf_center = (1.5, 1.5)
 
+    def export_brightfield(self, data, path_stem):
+        from pathlib import Path
+        from quantem.gpu.formats.qem.reference import save_array
+
+        path = Path(path_stem).with_suffix(".qem")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        counts = np.empty((self._n, self._n, 1, 2), dtype=np.uint16)
+        counts[..., 0] = 3
+        counts[..., 1] = 7
+        save_array(path, counts)
+        self.bf_source_path = path
+        self.bf_source_dtype = counts.dtype
+        return str(path), 0.0
+
 
 class _FakeMetadataOnlyMpsAccel(_FakeColumnWebGPUAccel):
     backend = "mps"
@@ -320,6 +338,7 @@ class _FakeSSB(SSB):
     def __init__(self, accel=None):
         self.aberrations = {"C10": 1.0, "C12": 2.0, "phi12": 0.1}
         self.rotation_angle_deg = math.degrees(0.2)
+        self.com_reversed = False
         self.best_loss = float("inf")
         self.trial_history = []
         self.scan_sampling_A = (0.5, 0.5)
@@ -327,6 +346,7 @@ class _FakeSSB(SSB):
         self.bf_intensity_threshold = 0.5
         self.voltage_kV = 300.0
         self.semiangle_mrad = 21.9
+        self._data = None
         self._accel = _FakeAccel() if accel is None else accel
         self.backend = self._accel.backend
 
@@ -380,6 +400,22 @@ def test_showptycho_crop_request_uses_global_source_coordinates(monkeypatch, tmp
     assert received == {"region": (192, 320, 384, 512), "n_trials": 200}
 
 
+def test_showptycho_preserves_selected_rotation_branch(monkeypatch):
+    """Opening the explorer retains the branch selected from the SSB phase."""
+    from quantem.widget import ShowPtycho
+
+    monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
+    ssb = _FakeSSB()
+    ssb.set_rotation(345.0)
+    widget = ShowPtycho(ssb)
+
+    assert math.isclose(widget.rotation_deg, 345.0)
+    assert math.isclose(widget.auto_rotation_deg, 345.0)
+    assert math.isclose(ssb.physical_rotation_deg, 345.0)
+    assert widget.rotation_min <= widget.rotation_deg <= widget.rotation_max
+    assert widget.flip_phase is False
+
+
 def test_showptycho_from_ssb_uses_widget_contract(monkeypatch):
     """C1: prepared SSB input, expect a ready widget without quantem.gpu import."""
     from quantem.widget import ShowPtycho
@@ -425,7 +461,7 @@ def test_showptycho_python_uses_only_public_session_state() -> None:
     for private_name in (
         "_rotation_angle_rad",
         "_best_loss",
-        "_optuna_trials",
+        "_trial_records",
         "_showptycho_widget",
         "_get_accelerator",
     ):
@@ -606,7 +642,7 @@ def test_object_frame_tilt_matches_quantem_thick_convention():
 
 
 def test_tilt_fit_on_the_session_opens_in_the_sample_panel(monkeypatch):
-    """C3d: after ssb.fit(tilt=True) the widget opens on that tilt (sample_json), with no widget-side fit call."""
+    """C3d: after ssb.find_aberrations(tilt=True) the widget opens on that tilt (sample_json), with no widget-side fit call."""
     from quantem.widget import ShowPtycho
 
     monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
@@ -798,7 +834,9 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
         source_file=str(master),
     )
 
+    widget.crop_refit_available = True
     out_dir = widget.export(tmp_path / "folder")
+    assert widget.crop_refit_available is True
 
     assert (out_dir / "index.html").exists()
     assert not (out_dir / "g_bf.c64").exists()
@@ -807,7 +845,7 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
     assert not (out_dir / "ref_products.npz").exists()
     assert not (out_dir / "source" / master.name).exists()
     assert not (out_dir / "source" / data_file.name).exists()
-    assert (out_dir / "source" / "bf_columns.u8").exists()
+    assert (out_dir / "source" / "bf_columns.qem").exists()
     assert not (out_dir / "saves").exists()
     assert json.loads((out_dir / "snapshots" / "snapshots.json").read_text()) == []
     assert (out_dir / "snapshots" / "cal.json").exists()
@@ -821,7 +859,7 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
     assert cal["source_file"] == "redacted_local_source"
     assert cal["source_transport"] == "bf_columns"
     assert cal["bf_column_companion"] is True
-    assert cal["bf_column_companion_path"] == "source/bf_columns.u8"
+    assert cal["bf_column_companion_path"] == "source/bf_columns.qem"
     assert cal["persistent_bf_cache"] is False
     assert cal["source_calibration"] == "redacted_local_calibration"
     assert cal["num_bf"] == 2
@@ -836,8 +874,8 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
     assert manifest["source"]["kind"] == "bf_columns"
     assert manifest["calibration"] == "snapshots/cal.json"
     assert manifest["source"]["preferred_browser_source"] == "bf_columns"
-    assert manifest["source"]["bf_columns"]["path"] == "source/bf_columns.u8"
-    assert manifest["source"]["bf_columns"]["encoding"] == "uint8"
+    assert manifest["source"]["bf_columns"]["path"] == "source/bf_columns.qem"
+    assert manifest["source"]["bf_columns"]["encoding"] == "qem"
     assert manifest["source"]["bf_columns"]["num_bf"] == 2
     assert manifest["source"]["bf_columns"]["scan_shape"] == [128, 128]
     assert manifest["source"]["bf_columns"]["plane"] == 128 * 128
@@ -852,10 +890,19 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
     assert _showptycho_folder(out_dir) == out_dir
     assert _showptycho_manifest(out_dir)["calibration"] == "snapshots/cal.json"
     html = (out_dir / "index.html").read_text()
+    embedded = json.loads(re.search(
+        r'<script type="application/vnd.jupyter.widget-state\+json">(.*?)</script>',
+        html, re.S,
+    ).group(1))
+    exported_widget = next(
+        model["state"] for model in embedded["state"].values()
+        if "webgpu_standalone" in model["state"]
+    )
+    assert exported_widget["crop_refit_available"] is False
     assert "application/vnd.jupyter.widget-state+json" in html
     assert "webgpu_standalone" in html
     assert "webgpu_h5_source_json" in html
-    assert "bf_columns.u8" in html
+    assert "bf_columns.qem" in html
     assert "g_bf.c64" not in html
     assert "ShowPtycho WebGPU Sidecar" not in html
     exported_text = "\n".join(
@@ -866,6 +913,15 @@ def test_showptycho_exports_webgpu_folder_as_same_widget_ui(monkeypatch, tmp_pat
     assert master.name not in exported_text
     assert data_file.name not in exported_text
     assert str(tmp_path) not in exported_text
+
+    payload = out_dir / "source" / "bf_columns.qem"
+    before = payload.read_bytes()
+    def do_not_reencode(*args, **kwargs):
+        raise AssertionError("Re-export must reuse its own ANS companion")
+    monkeypatch.setattr(widget._accel._backend_protocol, "export_brightfield", do_not_reencode)
+    widget.export(out_dir, gpu_memory_gb=24)
+    assert payload.read_bytes() == before
+    assert json.loads((out_dir / "snapshots" / "cal.json").read_text())["gpu_memory_gb"] == 24
 
 
 def test_showptycho_export_reuses_matching_exact_bf_companion(
@@ -1347,3 +1403,53 @@ def test_showptycho_webgpu_folder_uses_full_logical_bf_total():
     assert "const seedStandaloneDefault = webgpuStandalone && !standaloneBfSeededRef.current && total > 0" in ui_source
     assert "raw <= 0 || seedStandaloneDefault" in ui_source
     assert "max={effectiveTotalBf > 0 ? effectiveTotalBf : 0}" in ui_source
+
+
+def test_showptycho_sampling_preserves_source_and_updates_result(monkeypatch):
+    from quantem.widget import ShowPtycho
+
+    monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
+    ssb = _FakeSSB()
+    widget = ShowPtycho(ssb)
+    native_shape = (widget.phase_height, widget.phase_width)
+    native_step = widget.pixel_size
+    rotation = widget.rotation_deg
+    for factor in (2, 4, 8, 1):
+        widget.upsample = factor
+        assert ssb._accel.last_upsampling_factor == factor
+        assert (widget.phase_height, widget.phase_width) == tuple(n * factor for n in native_shape)
+        assert widget.pixel_size == native_step  # frontend divides by the output/native ratio
+        assert widget.rotation_deg == rotation
+        assert json.loads(widget.result_json)["upsample"] == factor
+    widget.close()
+    with pytest.raises(ValueError, match="upsample"):
+        ShowPtycho(ssb, upsample=3)
+    with pytest.raises(ValueError, match="native sampling"):
+        ShowPtycho(_FakeSSB(_FakeMpsAccel()), upsample=2)
+
+
+def test_showptycho_rejects_incompatible_sampling_without_changing_state(monkeypatch):
+    from quantem.widget import ShowPtycho
+
+    monkeypatch.setitem(sys.modules, "cupy", _FakeCuPy())
+    widget = ShowPtycho(_FakeSSB())
+    widget.higher_order_json = '{"C21_mag": 1}'
+    old_phase = widget.phase_bytes
+    with pytest.raises(ValueError, match="Higher-order"):
+        widget.upsample = 2
+    assert widget.upsample == 1
+    assert widget.phase_bytes == old_phase
+
+    widget.higher_order_json = "{}"
+    widget.upsample = 4
+    old_phase = widget.phase_bytes
+    with pytest.raises(ValueError, match="upsample=1"):
+        widget.higher_order_json = '{"C30": 1}'
+    assert widget.higher_order_json == "{}"
+    assert widget.phase_bytes == old_phase
+    widget.upsample = 2
+    assert widget.phase_width == 8
+    widget.upsample = 1
+    widget.higher_order_json = '{"C30": 1}'
+    assert widget.phase_width == 4
+    widget.close()

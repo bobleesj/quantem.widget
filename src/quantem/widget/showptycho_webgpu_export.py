@@ -174,10 +174,12 @@ def _write_embedded_widget_html(
         widget.phase_height,
         widget.stars_path,
         widget.calibration_path,
+        widget.crop_refit_available,
     )
     try:
         widget.webgpu_preview_enabled = True
         widget.webgpu_standalone = True
+        widget.crop_refit_available = False  # refitting needs the live Python session
         widget.webgpu_cal_json = json.dumps(calibration)
         widget.webgpu_h5_source_json = json.dumps(h5_source or {})
         widget.stars_path = "snapshots/snapshots.json"
@@ -188,7 +190,7 @@ def _write_embedded_widget_html(
             widget.phase_height = 0
         if h5_source and h5_source.get("kind") == "bf_columns":
             widget.webgpu_preview_status = (
-                "WebGPU folder ready: browser range-reads exact BF columns "
+                "WebGPU folder ready: browser loads exact BF counts "
                 "and builds reducers transiently."
             )
         elif h5_source:
@@ -218,6 +220,7 @@ def _write_embedded_widget_html(
             widget.phase_height,
             widget.stars_path,
             widget.calibration_path,
+            widget.crop_refit_available,
         ) = old_state
     ensure_mobile_viewport(html_path)
 
@@ -578,7 +581,7 @@ def _reuse_bf_column_source(
     out_path: pathlib.Path,
     calibration: dict[str, Any],
 ) -> dict[str, Any]:
-    """Link an existing exact MPS BF companion when geometry is unchanged."""
+    """Link an existing exact BF companion when geometry is unchanged."""
 
     source_path = state.bf_source_path
     if source_path is None or state.bf_source_dtype is None:
@@ -607,7 +610,10 @@ def _reuse_bf_column_source(
             f"shape {state.scan_shape}."
         )
     dtype = state.bf_source_dtype
-    if dtype == np.dtype(np.uint8):
+    if source_path.suffix == ".qem":
+        encoding = "qem"
+        suffix = "qem"
+    elif dtype == np.dtype(np.uint8):
         encoding = "uint8"
         suffix = "u8"
     elif dtype == np.dtype(np.uint16):
@@ -617,23 +623,17 @@ def _reuse_bf_column_source(
         raise TypeError(f"Unsupported exact BF source dtype: {dtype}.")
     rel = pathlib.Path("source") / f"bf_columns.{suffix}"
     final_path = (out_path / rel).resolve()
-    try:
-        source_path.relative_to(out_path.resolve())
-    except ValueError:
-        pass
+    if source_path.resolve() == final_path:
+        link_mode = "encoded_here"
     else:
-        raise ValueError(
-            "Cannot overwrite a ShowPtycho folder while reusing its own BF "
-            "companion; choose a different --out folder."
-        )
-    link_mode = _link_or_copy(source_path, final_path)
+        link_mode = _link_or_copy(source_path, final_path)
     plane = int(np.prod(scan_shape))
     num_bf = int(bf_rows.size)
     return {
         "kind": "bf_columns",
         "path": rel.as_posix(),
         "url": rel.as_posix(),
-        "dtype": encoding,
+        "dtype": dtype.name,
         "encoding": encoding,
         "num_bf": num_bf,
         "scan_shape": list(scan_shape),
@@ -644,8 +644,9 @@ def _reuse_bf_column_source(
         "max_value": state.bf_source_max_value,
         "link": link_mode,
         "note": (
-            "Reused exact detector BF columns; browser range-reads only the "
-            "BF evidence needed on open."
+            "Lossless ANS counts decoded on the GPU; changing output sampling "
+            "reuses the resident native scan spectra." if encoding == "qem" else
+            "Exact detector BF columns, read once and retained on the GPU."
         ),
     }
 
@@ -659,9 +660,12 @@ def export_showptycho_webgpu_folder(
     source_master: str | pathlib.Path | None = None,
     decode_dtype: str = "uint16",
     webgpu_source: str = "bf_columns",
+    gpu_memory_gb: float = 4.5,
 ) -> pathlib.Path:
     """Export a ShowPtycho WebGPU folder backed by browser-ready source files."""
 
+    if not math.isfinite(gpu_memory_gb) or gpu_memory_gb <= 0:
+        raise ValueError("gpu_memory_gb must be positive and finite.")
     if decode_dtype not in {"uint8", "uint16", "float32"}:
         raise ValueError(
             "decode_dtype must be 'uint8', 'uint16', or 'float32'; "
@@ -698,7 +702,10 @@ def export_showptycho_webgpu_folder(
         ):
             (out_path / stale).unlink(missing_ok=True)
         source_dir = out_path / "source"
-        if source_dir.exists() or source_dir.is_symlink():
+        preserve_source = (state.bf_source_path is not None
+                           and state.bf_source_path.is_file()
+                           and state.bf_source_path.resolve().parent == source_dir.resolve())
+        if not preserve_source and (source_dir.exists() or source_dir.is_symlink()):
             if source_dir.is_dir() and not source_dir.is_symlink():
                 shutil.rmtree(source_dir)
             else:
@@ -723,7 +730,14 @@ def export_showptycho_webgpu_folder(
     master = pathlib.Path(raw_source).expanduser()
     master = master.resolve()
     cal = _folder_calibration(widget, state)
+    cal["gpu_memory_gb"] = float(gpu_memory_gb)
     if webgpu_source == "bf_columns":
+        if accel.backend == "cuda" and (
+            state.bf_source_path is None or state.bf_source_path.suffix != ".qem"
+            or not state.bf_source_path.exists()
+        ):
+            accel.export_brightfield(out_path / "source" / "bf_columns.qem")
+            state = accel.browser_state()
         if state.bf_source_path is not None:
             bf_columns = _reuse_bf_column_source(
                 state,
@@ -819,7 +833,7 @@ def export_showptycho_webgpu_folder(
     )
     if webgpu_source == "bf_columns":
         source_note = (
-            "The browser range-reads exact bright-field detector columns from "
+            "The browser loads exact bright-field detector counts from "
             "`source/bf_columns.*` by default, so opening the viewer does not "
             "decode the compressed HDF5 stack unless a fallback path is needed."
         )

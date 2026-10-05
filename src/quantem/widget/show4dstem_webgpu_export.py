@@ -766,6 +766,7 @@ def _export_qem_viewer(
             "shape": list(current_shape),
             "dtype": current_dtype,
             "file_bytes": integrity["file_bytes"],
+            "scientific_metadata": header["scientific_metadata"],
         })
     bad_pixels = []
     if valid_pixels is not None:

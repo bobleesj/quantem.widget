@@ -1,4 +1,4 @@
-"""Show4DSTEM.from_folder and ShowFolder over small real Arina-style masters on the GPU."""
+"""Show4DSTEM.from_folder over small real Arina-style masters on the GPU."""
 
 import warnings
 from pathlib import Path
@@ -128,26 +128,5 @@ def test_from_folder_free_releases_the_acquisitions_it_loaded(tmp_path):
         assert widget._folder_acquisitions == []
         with pytest.raises((RuntimeError, ValueError)):
             detector.prepare(acquisitions[0]).masked_sum(mask)
-    finally:
-        widget.close()
-
-
-def test_showfolder_open_show4dstem_uses_the_folder_viewer(tmp_path):
-    """C6: ShowFolder with and without masters, expect None, then a from_folder comparison."""
-    from quantem.widget.showfolder_core import ShowFolderBrowser
-
-    class _Browser(ShowFolderBrowser):
-        def __init__(self, folder):
-            self.folder = folder
-
-    browser = _Browser(tmp_path)
-    assert browser.open_show4dstem() is None
-    for index in range(2):
-        _write_master(tmp_path, f"scan_{index:02d}", _counts(index))
-    widget = browser.open_show4dstem(scan_size=4)
-    try:
-        widget.wait_for_folder()
-        assert list(widget.frame_labels) == ["scan_00", "scan_01"]
-        assert widget._folder_watch_thread is None
     finally:
         widget.close()

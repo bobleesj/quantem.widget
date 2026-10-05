@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "quantem.widget"
-version = "0.0.1rc30"
+version = "0.0.1rc39"
 description = "Interactive custom Python widgets for electron microscopy"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -53,6 +53,9 @@ testpaths = ["tests"]
 
 [project.scripts]
 quantem = "quantem.widget.cli:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/quantem"]

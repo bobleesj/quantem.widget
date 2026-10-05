@@ -1,4 +1,4 @@
-# load
+# Load detector acquisitions
 
 Reads a 4D-STEM acquisition onto CUDA or Apple Metal and returns an encoded
 `quantem.gpu.io.Dataset4dstemGPU`, accepted directly by
@@ -8,7 +8,12 @@ Reads a 4D-STEM acquisition onto CUDA or Apple Metal and returns an encoded
 from quantem.gpu.io import load
 ```
 
-## Reference
+The [QuantEM.GPU I/O guide](https://github.com/bobleesj/quantem.gpu/blob/main/docs/api/io.md) is the authoritative description of
+supported sources, exactness, metadata, storage, device selection, and saving.
+For image files rather than scanned detector acquisitions, see [Image and
+acquisition I/O](io.md).
+
+## Function reference
 
 ```{eval-rst}
 .. autofunction:: quantem.gpu.io.load

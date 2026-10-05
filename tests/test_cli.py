@@ -1113,9 +1113,8 @@ def test_show2d_folder_watch_writes_live_notebook(tmp_path):
     import json
 
     code = "".join(json.loads(notebooks[0].read_text())["cells"][1]["source"])
-    assert "ShowFolder(" in code
-    assert "open_show2d(all_images=True)" in code
-    assert "folder.watch(interval=0.5)" in code
+    assert "Show2D.from_folder(" in code
+    assert "watch=True, watch_interval=0.5" in code
 
 
 def test_show3d_folder_watch_writes_live_notebook(tmp_path):
@@ -1131,9 +1130,8 @@ def test_show3d_folder_watch_writes_live_notebook(tmp_path):
     import json
 
     code = "".join(json.loads(notebooks[0].read_text())["cells"][1]["source"])
-    assert "ShowFolder(" in code
-    assert "open_show3d(all_images=True)" in code
-    assert "folder.watch(interval=2.0)" in code
+    assert "Show3D.from_folder(" in code
+    assert "watch=True, watch_interval=2.0" in code
 
 
 def test_show4dstem_subcommand_writes_notebook(tmp_path):
@@ -1167,10 +1165,10 @@ def test_show4dstem_folder_watch_writes_live_notebook(tmp_path):
     import json
 
     code = "".join(json.loads(notebooks[0].read_text())["cells"][1]["source"])
-    assert "ShowFolder(" in code
-    assert "attach_selection_panel()" in code
-    assert "open_show4dstem(scan_size=512, backend='auto')" in code
-    assert "folder.watch(interval=1.5)" in code
+    assert "Show4DSTEM.from_folder(" in code
+    assert "scan_size=512" in code
+    assert "backend='auto'" in code
+    assert "watch=True, watch_interval=1.5" in code
 
 
 def test_show4dstem_watch_requires_live_folder_notebook(tmp_path):

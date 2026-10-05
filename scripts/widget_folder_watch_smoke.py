@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Exercise ShowFolder live-folder refresh and selected-viewer handoff.
+"""Exercise direct viewer folder watching and file arrival.
 
-The 4D-STEM steps write tiny bitshuffle-LZ4 Arina masters and load them for
+The Show4DSTEM step writes tiny bitshuffle-LZ4 Arina masters and loads them for
 real through ``quantem.gpu.io.load`` into encoded CUDA or MPS storage; on a
-CPU-only host those two steps are reported as skipped.
+CPU-only host that step is reported as skipped.
 """
 
 import argparse
@@ -20,29 +20,10 @@ import hdf5plugin
 import numpy as np
 from quantem.gpu.device import detect
 
-from quantem.widget import Show2D, Show3D, Show4DSTEM, ShowFolder
-from quantem.widget.render import save_thumbnail
+from quantem.widget import Show2D, Show3D, Show4DSTEM
 
 
 NO_GPU_REASON = "No native CUDA or MPS backend is available."
-
-
-def _metadata() -> np.ndarray:
-    payload = json.dumps({
-        "Scan": {"ScanRotation": "0"},
-        "BinaryResult": {"PixelSize": {"height": 1e-9, "width": 1e-9}},
-    }).encode()
-    arr = np.zeros((len(payload) + 1, 1), dtype=np.uint8)
-    arr[: len(payload), 0] = np.frombuffer(payload, dtype=np.uint8)
-    return arr
-
-
-def _image_emd(path: Path, *, offset: int) -> None:
-    data = np.arange(20 * 24, dtype=np.float32).reshape(20, 24) + float(offset)
-    with h5py.File(path, "w") as h5:
-        group = h5.create_group("Data/Image/uid")
-        group.create_dataset("Data", data=data)
-        group.create_dataset("Metadata", data=_metadata())
 
 
 def _image_npy(path: Path, *, value: float) -> None:
@@ -181,167 +162,6 @@ def _watch_snapshot(
             bytes(getattr(widget, "compare_virtual_image_bytes", b""))
         ),
     }
-
-
-def _write_thumbnail_previews(artifact_dir: Path, browser: Any, *, prefix: str) -> list[dict[str, Any]]:
-    preview_dir = artifact_dir / "previews"
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for gallery, image_items in browser.image_galleries:
-        data = np.asarray(getattr(gallery, "_data", np.empty((0, 0, 0))))
-        if data.ndim < 3:
-            continue
-        for idx, item in enumerate(image_items):
-            if idx >= data.shape[0] or item.file_id in seen:
-                continue
-            seen.add(item.file_id)
-            out = preview_dir / f"{prefix}-{item.file_id}.webp"
-            save_thumbnail(data[idx], out, size=96, cmap="inferno")
-            rows.append({
-                "id": item.file_id,
-                "file": item.path.name,
-                "webp": out.relative_to(artifact_dir).as_posix(),
-                "bytes": out.stat().st_size,
-            })
-    return rows
-
-
-def _run_image_live_smoke(artifact_dir: Path) -> dict[str, Any]:
-    folder = artifact_dir / "live-images"
-    folder.mkdir(parents=True, exist_ok=True)
-    _image_emd(folder / "0010 - HAADF live.emd", offset=0)
-    _image_emd(folder / "0011 - HAADF live.emd", offset=100)
-
-    widget = ShowFolder(
-        folder,
-        thumb=10,
-        group_by="none",
-        cache_dir=artifact_dir / "cache-images",
-    )
-    assert widget.browser is not None
-    assert widget.browser.gallery is not None
-    opened = widget.open_both(all_images=True)
-    all_2d, all_3d = opened.children
-    assert widget.browser._active_selected_modes == {"show2d_all", "show3d_all"}
-    assert all_2d._data.shape[0] == 2
-    assert all_3d.n_slices == 2
-    before_widget_id = id(widget.widget)
-    before_items = [item.file_id for item in widget.items]
-
-    widget.watch(start=False)
-    _image_emd(folder / "0012 - HAADF live.emd", offset=200)
-    changed = widget.watch_once()
-    after_items = [item.file_id for item in widget.items]
-
-    assert changed is True
-    assert id(widget.widget) == before_widget_id
-    assert after_items == ["0010", "0011", "0012"]
-    assert widget.browser._selected_show2d_widget is all_2d
-    assert widget.browser._selected_show3d_widget is all_3d
-    assert widget.browser._active_selected_modes == {"show2d_all", "show3d_all"}
-    assert all_2d._data.shape[0] == 3
-    assert all_3d.n_slices == 3
-    thumbnail_previews = _write_thumbnail_previews(artifact_dir, widget.browser, prefix="live-image")
-
-    exports = {
-        "showfolder": _export(
-            widget,
-            artifact_dir / "showfolder-live-images.html",
-            title="ShowFolder live images",
-        ),
-        "show2d": _export(
-            all_2d,
-            artifact_dir / "showfolder-live-show2d.html",
-            title="ShowFolder live all-image Show2D",
-        ),
-        "show3d": _export(
-            all_3d,
-            artifact_dir / "showfolder-live-show3d.html",
-            title="ShowFolder live all-image Show3D",
-        ),
-    }
-    export_rows = [
-        _browser_export_row(
-            path,
-            widget=widget_name,
-            variant=f"{widget_name}-showfolder-live",
-        )
-        for widget_name, path in exports.items()
-        if path is not None
-    ]
-    return {
-        "name": "ShowFolder live images -> all-image Show2D/Show3D",
-        "kind": "showfolder_orchestration",
-        "passed": True,
-        "before_items": before_items,
-        "after_items": after_items,
-        "watch_changed": changed,
-        "widget_id_preserved": id(widget.widget) == before_widget_id,
-        "all_path_names": [item.path.name for item in widget.browser.image_items],
-        "show2d_panels": int(all_2d._data.shape[0]),
-        "show3d_slices": int(all_3d.n_slices),
-        "thumbnail_previews": thumbnail_previews,
-        "exports": {key: None if value is None else value.name for key, value in exports.items()},
-        "export_rows": export_rows,
-    }
-
-
-def _run_master_live_smoke(artifact_dir: Path) -> dict[str, Any]:
-    """Hand a growing master folder from ShowFolder to Show4DSTEM through the real loader."""
-    folder = artifact_dir / "live-4dstem"
-    folder.mkdir(parents=True, exist_ok=True)
-    _write_external_master(folder, index=0)
-
-    widget = ShowFolder(
-        folder,
-        thumb=10,
-        group_by="none",
-        cache_dir=artifact_dir / "cache-4dstem",
-    )
-    first = widget.open_show4dstem(scan_size=4)
-    assert first is not None
-    first.wait_for_folder()
-    assert first.n_frames == 1
-    assert widget.master_qc_rows[0]["status"] == "ready"
-
-    widget.watch(start=False)
-    _write_external_master(folder, index=1)
-    changed = widget.watch_once()
-    second = widget.browser._selected_show4dstem_widget
-    try:
-        assert changed is True
-        assert second is not None
-        assert second is not first
-        # The browser rebuilds the viewer on refresh; the one it replaced must
-        # not keep its acquisitions on the GPU.
-        replaced_released = first._folder_acquisitions == []
-        assert replaced_released
-        second.wait_for_folder()
-        assert second.n_frames == 2
-        assert list(second.frame_labels) == ["scan_000", "scan_001"]
-        panel_means = _compare_panel_means(second)
-        assert panel_means == [1.0, 2.0]
-        return {
-            "name": "ShowFolder live 4D-STEM masters -> Show4DSTEM",
-            "kind": "showfolder_orchestration",
-            "loader_note": (
-                "Tiny bitshuffle-LZ4 external-link masters loaded by "
-                "quantem.gpu.io.load into encoded GPU storage; no fake loader."
-            ),
-            "passed": True,
-            "watch_changed": changed,
-            "first_frames": 1,
-            "after_frames": int(second.n_frames),
-            "replaced_viewer_released": replaced_released,
-            "frame_labels": list(second.frame_labels),
-            "panel_means": panel_means,
-            "master_qc": widget.master_qc_rows,
-            "exports": {},
-            "export_rows": [],
-        }
-    finally:
-        if second is not None:
-            second.close()
 
 
 def _run_direct_image_live_smoke(
@@ -538,8 +358,7 @@ def _run_direct_show4dstem_live_smoke(artifact_dir: Path) -> dict[str, Any]:
         widget.wait_for_folder()
         assert widget.n_frames == 1
         assert widget.folder_watch_state == "watching"
-        # Encoded acquisitions have no offline export; the saved notebook
-        # state is their only static form and must never claim Watching.
+        # Saved notebook state is a static form and must never claim Watching.
         saved_while_watching = widget.get_state()["folder_watch_state"]
         assert saved_while_watching == "stopped"
 
@@ -602,6 +421,29 @@ def _run_direct_show4dstem_live_smoke(artifact_dir: Path) -> dict[str, Any]:
         saved_after_stop = widget.get_state()["folder_watch_state"]
         assert saved_after_stop != "watching"
 
+        # The interactive export reads the encoded acquisitions in bounded
+        # windows; like the saved state it must not claim Watching.
+        export_options = {"encoding": "uint8", "downsample": 1}
+        export_started = time.perf_counter()
+        exported = Path(
+            widget.export_html(
+                artifact_dir / "show4dstem-from-folder-stopped.html",
+                title="Show4DSTEM from_folder stopped snapshot",
+                **export_options,
+            )
+        )
+        export_seconds = time.perf_counter() - export_started
+        static_contract = _embedded_watch_contract(exported)
+        assert static_contract["watching_embedded"] is False
+        assert static_contract["hidden_snapshot"] is True
+        export_row = _browser_export_row(
+            exported,
+            widget="show4dstem",
+            variant="show4dstem-folder-watch-static",
+            seconds=export_seconds,
+            options=export_options,
+        )
+
         same_model = (
             {int(item["python_id"]) for item in timeline} == {initial_python_id}
             and {str(item["model_id"]) for item in timeline} == {initial_model_id}
@@ -626,9 +468,10 @@ def _run_direct_show4dstem_live_smoke(artifact_dir: Path) -> dict[str, Any]:
                 "while_watching": saved_while_watching,
                 "after_stop": saved_after_stop,
             },
+            "static_watch_contract": static_contract,
             "timeline": timeline,
-            "exports": {},
-            "export_rows": [],
+            "exports": {"show4dstem": exported.name},
+            "export_rows": [export_row],
         }
     finally:
         widget.close()
@@ -689,34 +532,6 @@ def _write_report(artifact_dir: Path, report: dict[str, Any]) -> None:
         for name in (step.get("exports") or {}).values():
             if name:
                 links.append(f"<li><a href='{html.escape(name)}'>{html.escape(name)}</a></li>")
-    preview_cards = []
-    for step in report["steps"]:
-        for preview in step.get("thumbnail_previews") or []:
-            src = html.escape(str(preview["webp"]))
-            label = html.escape(f"{preview['id']} · {preview['file']}")
-            preview_cards.append(
-                "<figure>"
-                f"<img src='{src}' alt='{label}'>"
-                f"<figcaption>{label}</figcaption>"
-                "</figure>"
-            )
-    qc_rows = []
-    for step in report["steps"]:
-        for row in step.get("master_qc") or []:
-            scan = row.get("scan_shape")
-            det = row.get("detector_shape")
-            qc_rows.append(
-                "<tr>"
-                f"<td>{html.escape(str(row.get('file', '')))}</td>"
-                f"<td>{html.escape(str(row.get('status', '')))}</td>"
-                f"<td>{'' if scan is None else html.escape('x'.join(str(v) for v in scan))}</td>"
-                f"<td>{'' if det is None else html.escape('x'.join(str(v) for v in det))}</td>"
-                f"<td>{html.escape(str(row.get('n_frames') or ''))}</td>"
-                f"<td>{html.escape(str(row.get('dtype') or ''))}</td>"
-                f"<td>{html.escape(str(row.get('reason', '')))}</td>"
-                f"<td>{html.escape(str(row.get('action', '')))}</td>"
-                "</tr>"
-            )
     timeline_rows = []
     for step in report["steps"]:
         for point in step.get("timeline") or []:
@@ -745,19 +560,15 @@ def _write_report(artifact_dir: Path, report: dict[str, Any]) -> None:
     code, pre {{ background: #f5f7f9; border-radius: 4px; }}
     code {{ padding: 2px 4px; }}
     pre {{ overflow: auto; padding: 12px; max-width: 1180px; }}
-    .previews {{ display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; }}
-    figure {{ margin: 0; border: 1px solid #ccd3db; border-radius: 6px; padding: 8px; background: #f8fafc; }}
-    figure img {{ display: block; width: 96px; height: 96px; object-fit: contain; background: #111827; }}
-    figcaption {{ max-width: 160px; margin-top: 6px; font-size: 12px; color: #3b4654; overflow-wrap: anywhere; }}
   </style>
 </head>
 <body>
-  <h1>ShowFolder live-folder smoke: {'PASS' if report['passed'] else 'FAIL'}</h1>
-  <p>This lightweight report covers both ShowFolder orchestration and the direct
+  <h1>Direct viewer folder-watch smoke: {'PASS' if report['passed'] else 'FAIL'}</h1>
+  <p>This lightweight report covers the direct
   public <code>Show2D.from_folder</code>, <code>Show3D.from_folder</code>, and
   <code>Show4DSTEM.from_folder</code> lifecycles. Direct viewers retain one Python
   object and widget model through probation, stable arrival, update, and stop.
-  The Show4DSTEM steps load tiny Arina masters through
+  The Show4DSTEM step loads tiny Arina masters through
   <code>quantem.gpu.io.load</code> into encoded GPU storage
   (backend: {html.escape(report['gpu_backend'])}); a poll that appends a master
   has already refreshed the comparison panels when the badge returns to green
@@ -765,13 +576,6 @@ def _write_report(artifact_dir: Path, report: dict[str, Any]) -> None:
   signoffs.</p>
   <h2>Review Exports</h2>
   <ul>{''.join(links)}</ul>
-  <h2>Thumbnail Previews</h2>
-  <div class="previews">{''.join(preview_cards) if preview_cards else '<p>No thumbnail previews.</p>'}</div>
-  <h2>4D-STEM Master QC</h2>
-  <table>
-    <thead><tr><th>Master</th><th>Status</th><th>Scan</th><th>Detector</th><th>Frames</th><th>Dtype</th><th>Reason</th><th>Next step</th></tr></thead>
-    <tbody>{''.join(qc_rows) if qc_rows else '<tr><td colspan="8">No master QC rows.</td></tr>'}</tbody>
-  </table>
   <h2>Checks</h2>
   <table>
     <thead><tr><th>Scenario</th><th>Status</th><th>Evidence</th></tr></thead>
@@ -800,20 +604,13 @@ def main() -> int:
     parser.add_argument("--artifact-dir", type=Path, default=None)
     args = parser.parse_args()
 
-    artifact_dir = args.artifact_dir or Path(tempfile.mkdtemp(prefix="quantem-widget-showfolder-live-"))
+    artifact_dir = args.artifact_dir or Path(tempfile.mkdtemp(prefix="quantem-widget-folder-watch-"))
     artifact_dir.mkdir(parents=True, exist_ok=True)
     artifact_dir = artifact_dir.resolve()
 
     started = time.perf_counter()
     backend = _native_gpu_backend()
     steps = [
-        _run_image_live_smoke(artifact_dir),
-        _run_master_live_smoke(artifact_dir)
-        if backend
-        else _skipped_step(
-            "ShowFolder live 4D-STEM masters -> Show4DSTEM",
-            "showfolder_orchestration",
-        ),
         _run_direct_image_live_smoke(
             artifact_dir,
             viewer_class=Show2D,
@@ -854,7 +651,7 @@ def main() -> int:
     _write_browser_plan(artifact_dir, report)
     _write_report(artifact_dir, report)
     print(json.dumps(report, indent=2))
-    print(f"ShowFolder live-folder smoke report: {artifact_dir / 'index.html'}")
+    print(f"Direct viewer folder-watch smoke report: {artifact_dir / 'index.html'}")
     return 0 if report["passed"] else 1
 
 

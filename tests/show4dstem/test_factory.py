@@ -85,6 +85,8 @@ def test_frontend_ready_resends_initial_scientific_views() -> None:
         "vi_preset_map_frames",
         "vi_preset_maps_bytes",
         "frame_bytes",
+        "compare_diffraction_bytes",
+        "compare_diffraction_indices",
         "compare_virtual_image_bytes",
     ]
     widget.close()
@@ -837,15 +839,62 @@ def test_show4dstem_compare_grid_validates_api() -> None:
             raise AssertionError(f"Show4DSTEM accepted invalid kwargs {kwargs!r}")
 
 
-def test_encoded_view_refuses_offline_and_interactive_export(tmp_path) -> None:
-    """C4: an io.load acquisition, expect a corrective error for offline, WebGPU and interactive export."""
+def test_encoded_view_refuses_offline_and_webgpu_viewers() -> None:
+    """C4: an io.load acquisition, expect a corrective error for offline and WebGPU viewers."""
     acquisition = _acquisition(np.ones((2, 2, 6, 6), dtype=np.uint16), "scan")
     for options in ({"offline": True}, {"backend": "webgpu"}):
         with pytest.raises(ValueError, match="live kernel"):
             Show4DSTEM(acquisition, **options)
-    widget = Show4DSTEM(acquisition)
+
+
+def test_encoded_view_exports_every_pattern_from_bounded_reads() -> None:
+    """C1: one acquisition and a comparison, expect the export array to equal the counts, binned by mean."""
+    values = _preset_region_data()
+    widget = Show4DSTEM(_acquisition(values, "scan"))
     try:
-        with pytest.raises(ValueError, match="never builds"):
-            widget.export_html(tmp_path / "viewer.html")
+        exported = widget._export_data_array(dtype="uint16", det_bin=1)
+        np.testing.assert_array_equal(exported, values)
+        binned = widget._export_data_array(dtype="uint16", det_bin=2)
+        reference = values.reshape(4, 5, 8, 2, 8, 2).mean(axis=(3, 5))
+        np.testing.assert_array_equal(binned, np.round(reference).astype(np.uint16))
+    finally:
+        widget.close()
+    widget = Show4DSTEM([_acquisition(values, "first"), _acquisition(values // 2, "second")])
+    try:
+        exported = widget._export_data_array(dtype="uint16", det_bin=1)
+        np.testing.assert_array_equal(exported, np.stack([values, values // 2]))
+    finally:
+        widget.close()
+
+
+def test_loaded_calibration_sets_viewer_axes() -> None:
+    """C1: recorded scan and detector sampling, expect calibrated axes; unknown detector units fall back to pixels."""
+    values_t = torch.ones((2, 3, 4, 4), dtype=torch.float32, device=_accelerator())
+    metadata = {
+        "scan_sampling_A": [0.4, 0.6],
+        "detector_sampling": [0.02, 0.03],
+        "detector_sampling_unit": "1/angstrom",
+    }
+    widget = Show4DSTEM(Dataset4dstemGPU(values_t, dict(metadata)))
+    try:
+        assert widget._axis_units == ["angstrom", "angstrom", "1/angstrom", "1/angstrom"]
+        np.testing.assert_allclose(widget._axis_sampling, (0.4, 0.6, 0.02, 0.03))
+    finally:
+        widget.close()
+    # A calibrated scan does not imply an angularly calibrated detector.
+    metadata.pop("detector_sampling_unit")
+    widget = Show4DSTEM(Dataset4dstemGPU(values_t, dict(metadata)))
+    try:
+        assert widget._axis_units == ["angstrom", "angstrom", "pixels", "pixels"]
+        np.testing.assert_allclose(widget._axis_sampling, (0.4, 0.6, 1.0, 1.0))
+    finally:
+        widget.close()
+    widget = Show4DSTEM(
+        Dataset4dstemGPU(values_t, dict(metadata)),
+        sampling=(1, 1, 0.2, 0.2), units=["nm", "nm", "mrad", "mrad"],
+    )
+    try:
+        assert widget._axis_units == ["nm", "nm", "mrad", "mrad"]
+        np.testing.assert_allclose(widget._axis_sampling, (1, 1, 0.2, 0.2))
     finally:
         widget.close()

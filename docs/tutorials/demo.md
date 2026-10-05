@@ -66,7 +66,7 @@ export and browser with the network disconnected.
 | Diffraction spots and rings | [ShowDiffraction](showdiffraction.ipynb) |
 | Spectra and elemental maps | [ShowEDS](showeds.ipynb) |
 | Lattice basis selection | [ChooseLattice](choose_lattice.ipynb) |
-| Session files | [ShowFolder](showfolder.ipynb) |
+| Growing acquisition folders | [Watch a folder](watch_folder.ipynb) |
 
 These are separate workflows, not additional prerequisites for the four-step
 demo. ShowPtycho's linked page is a workflow guide, not a newly validated

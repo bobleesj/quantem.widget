@@ -1372,12 +1372,13 @@ function SamplePanel({
 }
 
 function HigherOrderPanel({
-  tc, open, onToggle, activeCount, values, setValues,
+  tc, open, onToggle, activeCount, values, setValues, disabled = false,
 }: {
   tc: ThemeColors;
   open: boolean;
   onToggle: () => void;
   activeCount: number;
+  disabled?: boolean;
   values: Record<string, number>;
   setValues: React.Dispatch<React.SetStateAction<Record<string, number>>>;
 }) {
@@ -1432,6 +1433,7 @@ function HigherOrderPanel({
         {/* Cap slider width so rows stay compact in the two-column panel. */}
         <Box sx={{ flex: 1, maxWidth: 140, minWidth: 80 }}>
           <Slider
+            disabled={disabled}
             value={mag} min={-e.mag_max} max={e.mag_max} step={e.step_nm}
             onChange={(_, v) => updateMag(magKey, v as number)}
             size="small" sx={{ py: 0.5 }}
@@ -1459,7 +1461,7 @@ function HigherOrderPanel({
                 value={ang} min={-180} max={180} step={1}
                 onChange={(_, v) => updateAngle(e.name, v as number)}
                 size="small" sx={{ py: 0.5 }}
-                disabled={!isActive}
+                disabled={disabled || !isActive}
               />
             </Box>
             <Typography sx={{
@@ -1486,7 +1488,7 @@ function HigherOrderPanel({
         )}
       </Box>
     );
-  }, [resetAngle, resetMag, tc, updateAngle, updateMag, values]);
+  }, [disabled, resetAngle, resetMag, tc, updateAngle, updateMag, values]);
 
   return (
     <Box sx={{
@@ -1598,7 +1600,10 @@ function Explore() {
   const [autoPhi12] = useModelState<number>("auto_phi12_deg");
   const [autoRotation] = useModelState<number>("auto_rotation_deg");
   const [autoLoss] = useModelState<number>("auto_loss");
-  const [pixelSize] = useModelState<number>("pixel_size");
+  const [nativePixelSize] = useModelState<number>("pixel_size");
+  const [upsample, setUpsample] = useModelState<number>("upsample");
+  const [upsamplingAvailable] = useModelState<boolean>("upsampling_available");
+  const upsampleRef = React.useRef(upsample || 1); upsampleRef.current = upsample || 1;
 
   const [, setRequestJson] = useModelState<string>("request_json");
   const [phaseBytes] = useModelState<DataView>("phase_bytes");
@@ -1762,6 +1767,8 @@ function Explore() {
   const pinPointerDragRef = React.useRef<{ id: number; x: number; y: number; active: boolean } | null>(null);
   const pinLayoutBeforeRef = React.useRef<Map<number, DOMRect> | null>(null);
 
+  const rawPhaseRef = React.useRef<{ data: Float32Array; w: number; h: number } | null>(null);
+  const pixelSize = nativePixelSize * (scanCols || phaseWidth || 1) / (rawPhaseRef.current?.w || phaseWidth || scanCols || 1);
   const [phaseZoom, setPhaseZoom] = React.useState(ZOOM_RESET);
   const [ampZoom, setAmpZoom] = React.useState(ZOOM_RESET);
   const [complexZoom, setComplexZoom] = React.useState(ZOOM_RESET);
@@ -1772,6 +1779,12 @@ function Explore() {
   const [fftOff, setFFTOff] = React.useState<HTMLCanvasElement | null>(null);
   const [cropSelecting, setCropSelecting] = React.useState(false);
   const [scanCrop, setScanCrop] = React.useState<[number, number, number, number] | null>(null);
+  const displayedScanCrop: [number, number, number, number] | null = scanCrop ? [
+    scanCrop[0] * (rawPhaseRef.current?.h || phaseHeight) / (scanRows || phaseHeight),
+    scanCrop[1] * (rawPhaseRef.current?.h || phaseHeight) / (scanRows || phaseHeight),
+    scanCrop[2] * (rawPhaseRef.current?.w || phaseWidth) / (scanCols || phaseWidth),
+    scanCrop[3] * (rawPhaseRef.current?.w || phaseWidth) / (scanCols || phaseWidth),
+  ] : null;
   const [cropRefitPending, setCropRefitPending] = React.useState(false);
   React.useEffect(() => {
     const rows = Math.round(scanRows || phaseHeight || 0);
@@ -1796,6 +1809,9 @@ function Explore() {
     const rows = Math.round(scanRows || phaseHeight || 0);
     const cols = Math.round(scanCols || phaseWidth || 0);
     if (!rows || !cols) return;
+    const scale = (rawPhaseRef.current?.w || cols) / cols;
+    startRow = Math.floor(startRow / scale); endRow = Math.floor(endRow / scale);
+    startCol = Math.floor(startCol / scale); endCol = Math.floor(endCol / scale);
     const minSpan = Math.min(32, rows, cols);
     let r0 = Math.max(0, Math.min(startRow, endRow));
     let r1 = Math.min(rows, Math.max(startRow, endRow) + 1);
@@ -1826,7 +1842,7 @@ function Explore() {
   }, [scanCrop]);
 
   // Cached data for re-rendering without recomputing FFT
-  const rawPhaseRef = React.useRef<{ data: Float32Array; w: number; h: number } | null>(null);
+
   const fftMagRef = React.useRef<{ mag: Float32Array; w: number; h: number; pw: number; ph: number } | null>(null);
 
   // UI toggles — FFT defaults OFF so the drag path is phase-render-only (fastest).
@@ -1840,7 +1856,7 @@ function Explore() {
   const toolbarMoreActiveCount =
     Number(extraRealViews.amp) + Number(extraRealViews.complex) + Number(cropSelecting || Boolean(scanCrop));
   const [smooth, setSmooth] = React.useState<boolean>(false);
-  const [cmap, setCmap] = React.useState("viridis");
+  const [cmap, setCmap] = React.useState("inferno");
   const [fftCmap, setFftCmap] = React.useState("inferno");
   const [contrastRange, setContrastRange] = React.useState<[number, number]>([1, 99]);
   const [fftContrastRange, setFftContrastRange] = React.useState<[number, number]>([1, 99]);
@@ -2746,6 +2762,7 @@ function Explore() {
       bfCount,
       computeLoss: false,
       rotationDeg: rotationVal,
+      upsample: upsampleRef.current,
       higherOrder: higherOrderRef.current,
       sample: sampleRef.current,
     }).then(result => {
@@ -2825,6 +2842,7 @@ function Explore() {
       bfCount,
       computeLoss: isFull,
       rotationDeg: rotationVal,
+      upsample: upsampleRef.current,
       higherOrder: higherOrderRef.current,
       sample: sampleRef.current,
     }).then(result => {
@@ -2870,6 +2888,12 @@ function Explore() {
   }, [effectiveTotalBf, renderAll, selectedDragBfCount, webgpuStandalone]);
 
   frontendFullRef.current = runFrontendFull;
+  const previousUpsampleRef = React.useRef(upsample);
+  React.useEffect(() => {
+    if (previousUpsampleRef.current === upsample) return;
+    previousUpsampleRef.current = upsample;
+    if (webgpuStandalone) frontendPreviewRef.current?.(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, rotationDegRef.current);
+  }, [upsample, webgpuStandalone]);
   shouldCommitOnReleaseRef.current = dragBfRef.current > 0 || !!webgpuSsbRef.current;
   const standaloneInitialRenderRef = React.useRef(false);
   React.useEffect(() => {
@@ -2882,14 +2906,14 @@ function Explore() {
     setWebgpuLoadProgress({
       stage: "device",
       message: "Starting browser-side ptychography",
-      detail: `Loading compressed HDF5 and preparing ${count}/${total} BF pixels`,
+      detail: `Loading detector counts and preparing ${count}/${total} BF pixels`,
       current: 0,
       total: count,
       percent: 0,
       activeBf: count,
       totalBf: total,
     });
-    setWebgpuRuntimeStatus("Preparing compressed HDF5 source on WebGPU");
+    setWebgpuRuntimeStatus("Preparing detector counts on WebGPU");
     frontendPreviewRef.current?.(autoC10, autoC12, autoPhi12, autoRotation ?? rotationDegRef.current);
   }, [autoC10, autoC12, autoPhi12, autoRotation, effectiveTotalBf, selectedDragBfCount, webgpuRuntimeStatus, webgpuStandalone]);
 
@@ -3283,6 +3307,7 @@ function Explore() {
       preview: bfCount < total,
       bfCount,
       computeLoss: false,
+      upsample: upsampleRef.current,
       rotationDeg: frame.rotation,
       higherOrder: frame.higherOrder,
       sample: sampleRef.current,
@@ -3705,6 +3730,18 @@ function Explore() {
           flexWrap: "wrap", rowGap: `${SPACING.XS}px`,
         }}
       >
+        <label style={{fontSize: 12}}>Sampling <select aria-label="SSB output sampling"
+          value={upsample || 1} disabled={busy || (!upsamplingAvailable && !webgpuStandalone)}
+          onChange={e => setUpsample(Number(e.target.value))}
+          title="Finer SSB output sampling; same measured data and field of view">
+          {[1, 2, 4, 8].map(factor => <option key={factor} value={factor}
+            disabled={factor > 1 && hoActive && !webgpuStandalone}>{factor}×</option>)}
+        </select></label>
+        {!webgpuStandalone && (hoActive || upsample > 1) && (
+          <Typography sx={{ ...typography.value, color: tc.textMuted }}>
+            Higher-order aberrations require 1× sampling in Python.
+          </Typography>
+        )}
         <Typography sx={{ ...typography.label, fontSize: 10, color: tc.textMuted }}>FFT</Typography>
         <Switch
           checked={showFFT}
@@ -3836,7 +3873,7 @@ function Explore() {
         <Box sx={{ flex: 1 }} />
         {phaseWidth > 0 && phaseHeight > 0 && (
           <Typography sx={{ ...typography.value, color: tc.textMuted, opacity: 0.7 }}>
-            {phaseWidth}×{phaseHeight}
+            {rawPhaseRef.current?.w || phaseWidth}×{rawPhaseRef.current?.h || phaseHeight}
           </Typography>
         )}
         {(cropSelecting || scanCrop) && (
@@ -3867,7 +3904,7 @@ function Explore() {
           pixelSize={pixelSize} imageWidth={rawPhaseRef.current?.w}
           rawData={activeRealDataRef.current?.data ?? rawPhaseRef.current?.data}
           smooth={smooth}
-          cropRegion={cropRefitAvailable ? scanCrop : null}
+          cropRegion={cropRefitAvailable ? displayedScanCrop : null}
           cropSelecting={cropRefitAvailable && cropSelecting}
           onCropChange={chooseCropRectangle}
           inset={fftAsInset ? (
@@ -4351,6 +4388,7 @@ function Explore() {
           open={hoOpen}
           onToggle={() => setHoOpen(v => !v)}
           activeCount={hoActiveCount}
+          disabled={!webgpuStandalone && upsample > 1}
           values={higherOrder}
           setValues={setHigherOrder}
         />

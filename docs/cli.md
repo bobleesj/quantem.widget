@@ -14,7 +14,6 @@ quantem show4dstem a_master.h5 b_master.h5     # several masters    -> one compa
 quantem show4dstem ./masters/ --html           # 4D-STEM            -> shareable offline HTML
 quantem showptycho scan_master.h5               # raw 4D-STEM master -> full-BF SSB review project
 quantem showptycho ./masters/                    # master folder     -> ShowPtycho project catalog
-quantem showfolder ./session/                  # microscopy folder  -> ShowFolder notebook/HTML
 quantem showdiffraction pattern.npy            # diffraction        -> analyzed ShowDiffraction HTML
 quantem showdiffraction --demo                 # Fe3O4 SAED from the public hub (when uploaded)
 quantem html tutorial.ipynb                    # a notebook         -> standalone interactive HTML
@@ -26,11 +25,10 @@ quantem github tutorial_github.ipynb --no-execute # optional static copy for Git
 | Command | Input | Output |
 |---|---|---|
 | `quantem show <path>` | anything | auto-detects and dispatches to one of the below |
-| `quantem show2d <image / folder>` | one image, or a folder | a Show2D HTML (a folder becomes a gallery); with `--watch`, a live ShowFolder notebook |
-| `quantem show3d <folder>` | a folder of same-size frames | a Show3D scrub HTML; with `--watch`, a live ShowFolder notebook |
+| `quantem show2d <image / folder>` | one image, or a folder | a Show2D HTML (a folder becomes a gallery); with `--watch`, a live viewer notebook |
+| `quantem show3d <folder>` | a folder of same-size frames | a Show3D scrub HTML; with `--watch`, a live viewer notebook |
 | `quantem show4dstem <master(s) / folder>` | one or more `*_master.h5` | a live Show4DSTEM notebook (or `--html`) |
 | `quantem showptycho <master.h5 / folder>` | raw `*_master.h5` files, a folder of masters, or an existing ShowPtycho project | runs full-BF SSB and builds one index with direct ShowPtycho and Show4DSTEM browser viewers |
-| `quantem showfolder <folder>` | microscopy session folder | a ShowFolder notebook (or `--html`) |
 | `quantem showdiffraction <pattern>` | a diffraction pattern (`.npy`, `.emd`, `.dm3`/`.dm4`, or a raster image), or `--demo` | an analyzed ShowDiffraction HTML: center, rings, and profile fits; with `--phase`, also calibration and hkl indexing |
 | `quantem html <notebook.ipynb>` | a notebook you wrote | runs it, or with `--no-execute` exports saved outputs/state, into one standalone interactive HTML |
 | `quantem github <notebook.ipynb>` | an optional static copy of a notebook | strips widget state and embeds compressed pictures for GitHub's notebook preview |
@@ -137,9 +135,10 @@ viewer.export_html(
 
 Use `export_kind="interactive"` from Python when you want the same offline
 browser interaction as the CLI but need finer control over real-space binning,
-detector binning, or dtype. The interactive export embeds the viewer's 4D array,
-so open that viewer from an array or tensor; a viewer over encoded
-acquisitions, such as `from_folder`, exports reports only:
+detector binning, or dtype. The interactive export embeds the viewer's 4D array;
+a viewer over encoded acquisitions, such as `from_folder`, reads it in small
+scan windows, so the whole acquisition is copied to host memory at the chosen
+dtype and binning:
 
 ```python
 viewer = Show4DSTEM(array)
@@ -231,7 +230,7 @@ only `index.html` omits the HDF5 source files needed for WebGPU reconstruction.
 | `--port N`, `--bind ADDR` | folder exports: local HTTP server port (default auto) and bind address (default 127.0.0.1) |
 | `--quantized` | image widgets: uint8 pack for a smaller file |
 | `--html` | 4D-STEM: write the offline-WebGPU HTML instead of a notebook |
-| `--watch` | folder: write a live ShowFolder-watched notebook; Show2D/Show3D append new image files, Show4DSTEM opens the ready masters encoded at full detector sampling |
+| `--watch` | folder: write a live viewer notebook; Show2D/Show3D append new image files, Show4DSTEM opens the ready masters encoded at full detector sampling and appends new ones |
 | `--scan-size N` | watched Show4DSTEM: keep only masters with this square scan size |
 | `--combined` | many masters -> one 5D HTML viewer (served locally) |
 | `--out PATH` | output file or directory (default `~/Downloads`) |

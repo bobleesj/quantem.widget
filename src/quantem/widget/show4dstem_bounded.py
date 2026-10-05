@@ -130,13 +130,29 @@ def acquisition_label(source) -> str | None:
     return acquisition_name(source.metadata["source_path"])
 
 
-def _live_options(options: dict) -> dict:
-    """Defaults shared by every bounded viewer; encoded storage cannot go offline."""
+def _live_options(source, options: dict) -> dict:
+    """Defaults shared by every bounded viewer; encoded storage cannot go offline.
+
+    The axes show the calibration ``source`` records (scan spacing in angstrom,
+    detector spacing in its recorded unit). An axis whose spacing or unit is
+    unknown shows in pixels rather than a guessed physical unit, and a tensor
+    carries no calibration.
+    """
     if options.get("offline") or options.get("data_url") or options.get("backend") == "webgpu":
         raise ValueError(
             "Encoded acquisitions need a live kernel: offline and browser WebGPU "
             "viewers are not supported. Omit offline=, data_url= and backend='webgpu'."
         )
+    if isinstance(source, Dataset4dstemGPU):
+        axes = list(zip(source.sampling, source.units))
+        calibrated = [spacing is not None and unit is not None for spacing, unit in axes]
+        if any(calibrated):
+            options.setdefault("sampling", tuple(
+                spacing if known else 1.0 for (spacing, _), known in zip(axes, calibrated)
+            ))
+            options.setdefault("units", [
+                unit if known else "pixels" for (_, unit), known in zip(axes, calibrated)
+            ])
     options.setdefault("precompute_virtual_images", False)
     options.setdefault("verbose", False)
     options.setdefault("offline", False)
@@ -151,7 +167,7 @@ def show_bounded(sources, *, scan_region=None, **options):
     of one geometry open as a dataset comparison labelled by source file.
     """
     if len(sources) == 1:
-        return Show4DSTEM(_View(sources[0], scan_region), **_live_options(options))
+        return Show4DSTEM(_View(sources[0], scan_region), **_live_options(sources[0], options))
     if scan_region is not None:
         raise ValueError("Select the same source regions before multi-source comparison.")
     return show_series(sources, **options)
@@ -165,4 +181,4 @@ def show_series(sources, **options):
     options.setdefault("frame_dim_label", "Dataset")
     if all(label is not None for label in labels):
         options.setdefault("frame_labels", labels)
-    return Show4DSTEM(_Views(sources), **_live_options(options))
+    return Show4DSTEM(_Views(sources), **_live_options(sources[0], options))

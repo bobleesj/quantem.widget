@@ -61,7 +61,6 @@ containing them. The guide includes setup and browser requirements.
 | `ShowCIF` | Crystal repeats, columns, tilt, and projected potential/phase previews | [tutorial](docs/tutorials/showcif.ipynb) · [API](docs/api/showcif.md) |
 | `PlanPtycho` | Check multislice ptychography settings against a known crystal before the experiment | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/planptycho.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/planptycho.html) |
 | `ShowEDS` | Explore linked EDS/EELS maps and spectra | — |
-| `ShowFolder` | Browse, group, and select microscopy session files | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/showfolder.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/showfolder.html) |
 
 ## Documentation
 
