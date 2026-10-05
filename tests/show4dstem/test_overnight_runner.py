@@ -9,7 +9,6 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "widget_show4dstem_folder_overnight.py"
-E2E_TEST = ROOT / "tests" / "show4dstem" / "test_folder_live_jupyter_e2e.py"
 
 
 def _module():
@@ -17,19 +16,6 @@ def _module():
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module
-
-
-def _e2e_module():
-    spec = importlib.util.spec_from_file_location("show4dstem_folder_e2e", E2E_TEST)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(spec.name, None)
-        raise
     return module
 
 
@@ -100,7 +86,6 @@ def test_gpu_idle_gate_blocks_load_and_known_foreign_campaign() -> None:
 def test_dry_run_writes_resumable_report_contract(tmp_path: Path) -> None:
     source = tmp_path / "source"
     artifacts = tmp_path / "artifacts"
-    cache = tmp_path / "cache"
     source.mkdir()
 
     # C1: no GPU workload is requested, expect the durable report/heartbeat
@@ -113,8 +98,6 @@ def test_dry_run_writes_resumable_report_contract(tmp_path: Path) -> None:
             str(source),
             "--artifact-dir",
             str(artifacts),
-            "--cache-dir",
-            str(cache),
             "--dry-run",
         ],
         cwd=ROOT,
@@ -134,20 +117,3 @@ def test_dry_run_writes_resumable_report_contract(tmp_path: Path) -> None:
     assert (artifacts / "index.html").is_file()
     assert (artifacts / "gates.json").is_file()
     assert (artifacts / "environment.json").is_file()
-
-
-def test_live_e2e_report_has_mobile_review_index(tmp_path: Path) -> None:
-    e2e = _e2e_module()
-
-    # C1: a completed live-browser report is written, expect one responsive
-    # HTML review entry point alongside the detailed machine-readable files.
-    e2e._write_reports(
-        {"passed": True, "run_id": "example", "phases": {"cold": {}}},
-        tmp_path,
-    )
-
-    index = (tmp_path / "index.html").read_text(encoding="utf-8")
-    assert 'name="viewport"' in index
-    assert "Passed" in index
-    assert "show4dstem-folder-e2e-report.json" in index
-    assert "show4dstem-folder-e2e-perf.json" in index

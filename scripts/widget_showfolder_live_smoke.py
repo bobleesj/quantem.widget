@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Exercise ShowFolder live-folder refresh and selected-viewer handoff."""
+"""Exercise ShowFolder live-folder refresh and selected-viewer handoff.
 
-from __future__ import annotations
+The 4D-STEM steps write tiny bitshuffle-LZ4 Arina masters and load them for
+real through ``quantem.gpu.io.load`` into encoded CUDA or MPS storage; on a
+CPU-only host those two steps are reported as skipped.
+"""
 
 import argparse
 import html
@@ -10,16 +13,18 @@ import re
 import tempfile
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import h5py
 import hdf5plugin
 import numpy as np
-import torch
+from quantem.gpu.device import detect
 
 from quantem.widget import Show2D, Show3D, Show4DSTEM, ShowFolder
 from quantem.widget.render import save_thumbnail
+
+
+NO_GPU_REASON = "No native CUDA or MPS backend is available."
 
 
 def _metadata() -> np.ndarray:
@@ -45,16 +50,14 @@ def _image_npy(path: Path, *, value: float) -> None:
     np.save(path, np.full((12, 16), float(value), dtype=np.float32))
 
 
-def _write_master(path: Path) -> None:
-    idx = int(path.name.split("_master.h5", 1)[0].rsplit("_", 1)[-1])
-    data = np.full((4, 4, 8, 8), idx + 1, dtype=np.uint16)
-    with h5py.File(path, "w") as h5:
-        entry = h5.create_group("entry/data")
-        entry.create_dataset("data", data=data)
-
-
 def _write_external_master(folder: Path, *, index: int) -> Path:
-    """Write one tiny external-link master accepted by the GPU loader."""
+    """Write one 4x4 scan of 4x4 frames holding the constant count ``index + 1``.
+
+    The master links its frames from an external data file, as an Arina
+    acquisition does, so the production readiness check and GPU loader apply.
+    Constant counts make every virtual image equal to ``index + 1`` exactly,
+    whatever detector mask the viewer chooses.
+    """
     data_path = folder / f"scan_{index:03d}_data_000001.h5"
     master_path = folder / f"scan_{index:03d}_master.h5"
     with h5py.File(data_path, "w") as h5:
@@ -74,6 +77,37 @@ def _write_external_master(folder: Path, *, index: int) -> Path:
         )
         detector.create_dataset("ntrigger", data=16)
     return master_path
+
+
+def _native_gpu_backend() -> str | None:
+    """Return the CUDA or MPS backend io.load encodes on, or None on a CPU-only host."""
+    try:
+        return detect()
+    except RuntimeError:
+        return None
+
+
+def _skipped_step(name: str, kind: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "kind": kind,
+        "passed": True,
+        "skipped": True,
+        "skip_reason": NO_GPU_REASON,
+        "exports": {},
+        "export_rows": [],
+    }
+
+
+def _compare_panel_means(widget: Any) -> list[float]:
+    """Mean of each comparison panel's virtual image, in panel order."""
+    panels = np.frombuffer(widget.compare_virtual_image_bytes, dtype=np.float32)
+    panels = panels.reshape(
+        len(widget.compare_panel_indices),
+        widget.shape_rows,
+        widget.shape_cols,
+    )
+    return [float(panel.mean()) for panel in panels]
 
 
 def _export(widget: Any, path: Path, *, title: str) -> Path | None:
@@ -127,7 +161,10 @@ def _watch_snapshot(
     started: float,
     count_attr: str,
 ) -> dict[str, Any]:
-    """Capture one JSON-safe direct-viewer lifecycle observation."""
+    """Capture one JSON-safe direct-viewer lifecycle observation.
+
+    Show2D and Show3D have no comparison grid, so their panel fields stay empty.
+    """
     return {
         "event": str(event),
         "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
@@ -136,20 +173,10 @@ def _watch_snapshot(
         "state": str(getattr(widget, "folder_watch_state", "")),
         "detail": str(getattr(widget, "folder_watch_detail", "")),
         "count": int(getattr(widget, count_attr)),
-        "compare_page_loading": bool(
-            getattr(widget, "compare_page_loading", False)
-        ),
-        "compare_page_loaded_count": int(
-            getattr(widget, "compare_page_loaded_count", 0)
-        ),
-        "compare_panel_count": int(getattr(widget, "compare_panel_count", 0)),
         "compare_panel_indices": [
             int(value)
             for value in getattr(widget, "compare_panel_indices", [])
         ],
-        "compare_cache_state": str(
-            getattr(widget, "compare_page_cache_state", "")
-        ),
         "virtual_image_bytes": len(
             bytes(getattr(widget, "compare_virtual_image_bytes", b""))
         ),
@@ -245,7 +272,6 @@ def _run_image_live_smoke(artifact_dir: Path) -> dict[str, Any]:
     return {
         "name": "ShowFolder live images -> all-image Show2D/Show3D",
         "kind": "showfolder_orchestration",
-        "uses_monkeypatch": False,
         "passed": True,
         "before_items": before_items,
         "after_items": after_items,
@@ -261,112 +287,61 @@ def _run_image_live_smoke(artifact_dir: Path) -> dict[str, Any]:
 
 
 def _run_master_live_smoke(artifact_dir: Path) -> dict[str, Any]:
-    from quantem.gpu import io as gpu_io
-
+    """Hand a growing master folder from ShowFolder to Show4DSTEM through the real loader."""
     folder = artifact_dir / "live-4dstem"
     folder.mkdir(parents=True, exist_ok=True)
-    _write_master(folder / "scan_000_master.h5")
+    _write_external_master(folder, index=0)
 
-    real_load = gpu_io.load
-    real_discover = gpu_io.discover
-    real_inspect = gpu_io.inspect
+    widget = ShowFolder(
+        folder,
+        thumb=10,
+        group_by="none",
+        cache_dir=artifact_dir / "cache-4dstem",
+    )
+    first = widget.open_show4dstem(scan_size=4)
+    assert first is not None
+    first.wait_for_folder()
+    assert first.n_frames == 1
+    assert widget.master_qc_rows[0]["status"] == "ready"
 
-    def fake_discover(
-        path: str,
-        *,
-        scan_shape=None,
-        verbose: bool = False,
-        **kwargs,
-    ):
-        return sorted(str(item) for item in Path(path).glob("*_master.h5"))
-
-    def fake_inspect(path: str, **kwargs):
-        ready = Path(path).exists()
-        return SimpleNamespace(
-            ready=ready,
-            reason="" if ready else "missing",
-            action="" if ready else "wait",
-            metadata={},
-            pixel_mask=None,
-            source_kind="hdf5",
-            actual_frames=16 if ready else 0,
-            expected_frames=16,
-            scan_shape=(4, 4),
-            detector_shape=(8, 8),
-            dtype="uint8",
-            source_signature=str(path),
-        )
-
-    class _LoadResult:
-        def __init__(self, path: str) -> None:
-            stem = Path(path).name.split("_master.h5", 1)[0]
-            idx = int(stem.rsplit("_", 1)[-1])
-            self.data = torch.full((4, 4, 8, 8), idx + 1, dtype=torch.uint8)
-
-    def fake_load(path: str, *, det_bin=4, dtype="u8", verbose: bool = False, **kwargs):
-        return _LoadResult(path)
-
-    gpu_io.load = fake_load
-    gpu_io.discover = fake_discover
-    gpu_io.inspect = fake_inspect
+    widget.watch(start=False)
+    _write_external_master(folder, index=1)
+    changed = widget.watch_once()
+    second = widget.browser._selected_show4dstem_widget
     try:
-        widget = ShowFolder(
-            folder,
-            thumb=10,
-            group_by="none",
-            cache_dir=artifact_dir / "cache-4dstem",
-        )
-        assert widget.browser is not None
-        first = widget.browser.open_show4dstem(gpus=None, page_budget=1, det_bin=4, dtype="u8")
-        assert first is not None
-        assert first.n_frames == 1
-        assert widget.master_qc_rows[0]["status"] == "ready"
-
-        widget.watch(start=False)
-        _write_master(folder / "scan_001_master.h5")
-        changed = widget.watch_once()
-        second = widget.browser._selected_show4dstem_widget
         assert changed is True
         assert second is not None
         assert second is not first
+        # The browser rebuilds the viewer on refresh; the one it replaced must
+        # not keep its acquisitions on the GPU.
+        replaced_released = first._folder_acquisitions == []
+        assert replaced_released
+        second.wait_for_folder()
         assert second.n_frames == 2
         assert list(second.frame_labels) == ["scan_000", "scan_001"]
-
-        export_path = _export(
-            second,
-            artifact_dir / "showfolder-live-show4dstem.html",
-            title="ShowFolder live Show4DSTEM",
-        )
-        export_rows = [] if export_path is None else [
-            _browser_export_row(
-                export_path,
-                widget="show4dstem",
-                variant="show4dstem-showfolder-live",
-            )
-        ]
+        panel_means = _compare_panel_means(second)
+        assert panel_means == [1.0, 2.0]
         return {
             "name": "ShowFolder live 4D-STEM masters -> Show4DSTEM",
             "kind": "showfolder_orchestration",
-            "uses_monkeypatch": True,
             "loader_note": (
-                "Synthetic handoff-only scenario: discovery, readiness, and the "
-                "tiny torch loader are explicitly monkeypatched. The separate "
-                "direct Show4DSTEM step uses the production GPU loader."
+                "Tiny bitshuffle-LZ4 external-link masters loaded by "
+                "quantem.gpu.io.load into encoded GPU storage; no fake loader."
             ),
             "passed": True,
             "watch_changed": changed,
             "first_frames": 1,
             "after_frames": int(second.n_frames),
-            "reused_old_widget": second is first,
+            "replaced_viewer_released": replaced_released,
             "frame_labels": list(second.frame_labels),
+            "panel_means": panel_means,
             "master_qc": widget.master_qc_rows,
-            "exports": {"show4dstem": None if export_path is None else export_path.name},
-            "export_rows": export_rows,
+            "exports": {},
+            "export_rows": [],
         }
     finally:
-        gpu_io.load = real_load
-        gpu_io.discover = real_discover
-        gpu_io.inspect = real_inspect
+        if second is not None:
+            second.close()
 
 
 def _run_direct_image_live_smoke(
@@ -503,7 +478,6 @@ def _run_direct_image_live_smoke(
         return {
             "name": f"Direct {widget_name}.from_folder live lifecycle",
             "kind": "direct_public_from_folder",
-            "uses_monkeypatch": False,
             "passed": True,
             "same_mounted_model": same_model,
             "initial_probation_added": initial_added,
@@ -521,47 +495,23 @@ def _run_direct_image_live_smoke(
         widget.close()
 
 
-def _run_direct_show4dstem_live_smoke(
-    artifact_dir: Path,
-) -> dict[str, Any]:
-    """Exercise the production public GPU Show4DSTEM folder watcher."""
+def _run_direct_show4dstem_live_smoke(artifact_dir: Path) -> dict[str, Any]:
+    """Exercise the public Show4DSTEM folder watcher over encoded acquisitions."""
     folder = artifact_dir / "direct-show4dstem"
     folder.mkdir(parents=True, exist_ok=True)
     _write_external_master(folder, index=0)
 
     started = time.perf_counter()
-    try:
-        widget = Show4DSTEM.from_folder(
-            folder,
-            gpus=None,
-            scan_size=4,
-            det_bin=1,
-            dtype="u16",
-            watch=True,
-            watch_interval=60,
-            view_mode="multiple",
-            columns=2,
-            page_size=4,
-            page_budget=1,
-            preload_all_if_fits=False,
-            warm_cache=False,
-            preview_cache=False,
-            precompute_virtual_images=False,
-            verbose=False,
-        )
-    except RuntimeError as exc:
-        if "No QuantEM GPU backend is available" not in str(exc):
-            raise
-        return {
-            "name": "Direct Show4DSTEM.from_folder live lifecycle",
-            "kind": "direct_public_from_folder",
-            "uses_monkeypatch": False,
-            "passed": True,
-            "skipped": True,
-            "skip_reason": "No native CUDA or MPS backend is available.",
-            "exports": {},
-            "export_rows": [],
-        }
+    widget = Show4DSTEM.from_folder(
+        folder,
+        scan_size=4,
+        watch=True,
+        watch_interval=60,
+        view_mode="multiple",
+        columns=2,
+        page_size=4,
+        verbose=False,
+    )
     timeline = [
         _watch_snapshot(
             widget,
@@ -585,11 +535,16 @@ def _run_direct_show4dstem_live_smoke(
     initial_python_id = id(widget)
     initial_model_id = str(widget.model_id)
     try:
+        widget.wait_for_folder()
         assert widget.n_frames == 1
         assert widget.folder_watch_state == "watching"
+        # Encoded acquisitions have no offline export; the saved notebook
+        # state is their only static form and must never claim Watching.
+        saved_while_watching = widget.get_state()["folder_watch_state"]
+        assert saved_while_watching == "stopped"
+
         arrival_start = len(timeline)
         _write_external_master(folder, index=1)
-
         probation_added = widget.poll_folder()
         assert probation_added == []
         assert widget.folder_watch_state == "waiting"
@@ -607,47 +562,17 @@ def _run_direct_show4dstem_live_smoke(
         timeline.append(
             _watch_snapshot(
                 widget,
-                event="arrival_registered_page_refresh_pending",
+                event="arrival_appended",
                 started=started,
                 count_attr="n_frames",
             )
         )
-        widget.wait_for_compare_page(timeout=10)
-        timeline.append(
-            _watch_snapshot(
-                widget,
-                event="active_page_authoritative",
-                started=started,
-                count_attr="n_frames",
-            )
-        )
-
         assert widget.n_frames == 2
         assert id(widget) == initial_python_id
         assert str(widget.model_id) == initial_model_id
-        assert widget.compare_page_loading is False
-        is_mps = hasattr(widget, "_mps_folder_live")
-        if is_mps:
-            widget.frame_idx = 1
-            virtual_image = np.frombuffer(
-                widget.virtual_image_bytes,
-                dtype=np.float32,
-            ).reshape(4, 4)
-            assert np.all(np.isfinite(virtual_image))
-            image_means = [float(np.mean(virtual_image))]
-            assert image_means[0] > 0
-        else:
-            assert widget.compare_page_loaded_count == 2
-            assert widget.compare_panel_count == 2
-            assert list(widget.compare_panel_indices) == [0, 1]
-            virtual_images = np.frombuffer(
-                widget.compare_virtual_image_bytes,
-                dtype=np.float32,
-            ).reshape(2, 4, 4)
-            image_means = [float(np.mean(image)) for image in virtual_images]
-            assert np.all(np.isfinite(virtual_images))
-            assert image_means[0] > 0
-            assert image_means[1] > image_means[0]
+        assert list(widget.compare_panel_indices) == [0, 1]
+        panel_means = _compare_panel_means(widget)
+        assert panel_means == [1.0, 2.0]
         assert widget.folder_watch_state == "watching"
 
         arrival_timeline = timeline[arrival_start:]
@@ -658,81 +583,52 @@ def _run_direct_show4dstem_live_smoke(
             item for item in arrival_timeline if item["state"] == "watching"
         ]
         assert green_points
-        authoritative_green = green_points[-1]
-        assert authoritative_green["compare_page_loading"] is False
-        if not is_mps:
-            assert authoritative_green["compare_page_loaded_count"] == 2
-            assert authoritative_green["compare_panel_indices"] == [0, 1]
-        assert authoritative_green["virtual_image_bytes"] > 0
+        # The badge turns green only once the appended dataset is in the panels.
+        green = green_points[-1]
+        assert green["count"] == 2
+        assert green["compare_panel_indices"] == [0, 1]
+        assert green["virtual_image_bytes"] > 0
 
         widget.stop_folder_watch()
         timeline.append(
             _watch_snapshot(
                 widget,
-                event="stopped_before_static_export",
+                event="stopped",
                 started=started,
                 count_attr="n_frames",
             )
         )
         assert widget.folder_watch_state == "stopped"
-        saved_watch_state = widget.state_dict().get(
-            "folder_watch_state",
-            "absent",
-        )
-        assert saved_watch_state != "watching"
-
-        export_path = artifact_dir / "show4dstem-from-folder-stopped.html"
-        export_started = time.perf_counter()
-        exported = Path(
-            widget.export_html(
-                export_path,
-                title="Show4DSTEM from_folder stopped snapshot",
-                encoding="uint8",
-                downsample=1,
-            )
-        )
-        export_seconds = time.perf_counter() - export_started
-        static_contract = _embedded_watch_contract(exported)
-        assert static_contract["watching_embedded"] is False
-        assert static_contract["hidden_snapshot"] is True
+        saved_after_stop = widget.get_state()["folder_watch_state"]
+        assert saved_after_stop != "watching"
 
         same_model = (
             {int(item["python_id"]) for item in timeline} == {initial_python_id}
             and {str(item["model_id"]) for item in timeline} == {initial_model_id}
         )
         assert same_model
-        export_options = {"encoding": "uint8", "downsample": 1}
-        export_row = _browser_export_row(
-            exported,
-            widget="show4dstem",
-            variant="show4dstem-folder-watch-static",
-            seconds=export_seconds,
-            options=export_options,
-        )
         return {
             "name": "Direct Show4DSTEM.from_folder live lifecycle",
             "kind": "direct_public_from_folder",
-            "backend": "mps" if is_mps else "cuda",
-            "uses_monkeypatch": False,
             "loader_note": (
-                "Production native-GPU path over tiny bitshuffle-LZ4 external-link "
-                "HDF5 masters; no fake loader."
+                "Tiny bitshuffle-LZ4 external-link masters loaded by "
+                "quantem.gpu.io.load into encoded GPU storage; no fake loader."
             ),
             "passed": True,
             "same_mounted_model": same_model,
             "arrival_probation_added": probation_added,
             "stable_arrival_added": stable_added,
-            "authoritative_before_green": True,
             "final_count": int(widget.n_frames),
             "frame_labels": list(widget.frame_labels),
-            "active_page_indices": list(widget.compare_panel_indices),
-            "active_page_loaded_count": int(widget.compare_page_loaded_count),
-            "virtual_image_means": image_means,
-            "saved_state_watch": saved_watch_state,
-            "static_watch_contract": static_contract,
+            "compare_panel_indices": list(widget.compare_panel_indices),
+            "panel_means": panel_means,
+            "saved_state_watch": {
+                "while_watching": saved_while_watching,
+                "after_stop": saved_after_stop,
+            },
             "timeline": timeline,
-            "exports": {"show4dstem": exported.name},
-            "export_rows": [export_row],
+            "exports": {},
+            "export_rows": [],
         }
     finally:
         widget.close()
@@ -783,7 +679,7 @@ def _write_report(artifact_dir: Path, report: dict[str, Any]) -> None:
     rows = "\n".join(
         "<tr>"
         f"<td>{html.escape(step['name'])}</td>"
-        f"<td>{'pass' if step['passed'] else 'fail'}</td>"
+        f"<td>{'skipped' if step.get('skipped') else 'pass' if step['passed'] else 'fail'}</td>"
         f"<td>{html.escape(json.dumps(step, sort_keys=True))}</td>"
         "</tr>"
         for step in report["steps"]
@@ -831,8 +727,6 @@ def _write_report(artifact_dir: Path, report: dict[str, Any]) -> None:
                 f"<td>{html.escape(str(point.get('elapsed_ms', '')))}</td>"
                 f"<td>{html.escape(str(point.get('state', '')))}</td>"
                 f"<td>{html.escape(str(point.get('count', '')))}</td>"
-                f"<td>{html.escape(str(point.get('compare_page_loading', '')))}</td>"
-                f"<td>{html.escape(str(point.get('compare_page_loaded_count', '')))}</td>"
                 f"<td>{html.escape(str(point.get('compare_panel_indices', '')))}</td>"
                 f"<td>{html.escape(str(point.get('detail', '')))}</td>"
                 "</tr>"
@@ -863,9 +757,12 @@ def _write_report(artifact_dir: Path, report: dict[str, Any]) -> None:
   public <code>Show2D.from_folder</code>, <code>Show3D.from_folder</code>, and
   <code>Show4DSTEM.from_folder</code> lifecycles. Direct viewers retain one Python
   object and widget model through probation, stable arrival, update, and stop.
-  The Show4DSTEM direct step uses the native GPU loader and waits for fresh
-  visible-page pixels before accepting green Watching. Heavy real-data and GPU
-  performance remain separate local-only signoffs.</p>
+  The Show4DSTEM steps load tiny Arina masters through
+  <code>quantem.gpu.io.load</code> into encoded GPU storage
+  (backend: {html.escape(report['gpu_backend'])}); a poll that appends a master
+  has already refreshed the comparison panels when the badge returns to green
+  Watching. Heavy real-data and GPU performance remain separate local-only
+  signoffs.</p>
   <h2>Review Exports</h2>
   <ul>{''.join(links)}</ul>
   <h2>Thumbnail Previews</h2>
@@ -881,12 +778,12 @@ def _write_report(artifact_dir: Path, report: dict[str, Any]) -> None:
     <tbody>{rows}</tbody>
   </table>
   <h2>Direct Viewer Lifecycle Timeline</h2>
-  <p>The state text—not color alone—is authoritative. Open
+  <p>The state text, not color alone, is authoritative. Open
   <a href="browser-plan.json">browser-plan.json</a> to drive the stopped static
   exports; they must not retain a green Watching claim.</p>
   <table>
-    <thead><tr><th>Viewer</th><th>Event</th><th>ms</th><th>State</th><th>Count</th><th>Page loading</th><th>Fresh panels</th><th>Panel indices</th><th>Detail</th></tr></thead>
-    <tbody>{''.join(timeline_rows) if timeline_rows else '<tr><td colspan="9">No direct-viewer timeline.</td></tr>'}</tbody>
+    <thead><tr><th>Viewer</th><th>Event</th><th>ms</th><th>State</th><th>Count</th><th>Panel indices</th><th>Detail</th></tr></thead>
+    <tbody>{''.join(timeline_rows) if timeline_rows else '<tr><td colspan="7">No direct-viewer timeline.</td></tr>'}</tbody>
   </table>
   <h2>Machine-readable report</h2>
   <p><a href="report.json">report.json</a> · <a href="browser-plan.json">browser-plan.json</a></p>
@@ -908,9 +805,15 @@ def main() -> int:
     artifact_dir = artifact_dir.resolve()
 
     started = time.perf_counter()
+    backend = _native_gpu_backend()
     steps = [
         _run_image_live_smoke(artifact_dir),
-        _run_master_live_smoke(artifact_dir),
+        _run_master_live_smoke(artifact_dir)
+        if backend
+        else _skipped_step(
+            "ShowFolder live 4D-STEM masters -> Show4DSTEM",
+            "showfolder_orchestration",
+        ),
         _run_direct_image_live_smoke(
             artifact_dir,
             viewer_class=Show2D,
@@ -923,7 +826,12 @@ def main() -> int:
             widget_name="show3d",
             count_attr="n_slices",
         ),
-        _run_direct_show4dstem_live_smoke(artifact_dir),
+        _run_direct_show4dstem_live_smoke(artifact_dir)
+        if backend
+        else _skipped_step(
+            "Direct Show4DSTEM.from_folder live lifecycle",
+            "direct_public_from_folder",
+        ),
     ]
     export_rows = [
         row
@@ -934,6 +842,7 @@ def main() -> int:
         "artifact_dir": str(artifact_dir),
         "created_at_unix": int(time.time()),
         "seconds": round(time.perf_counter() - started, 3),
+        "gpu_backend": backend or "none",
         "passed": all(step["passed"] for step in steps),
         "steps": steps,
         "exports": export_rows,

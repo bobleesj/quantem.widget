@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""Run resumable real-data Show4DSTEM folder paging/cache endurance.
+"""Run resumable real-data Show4DSTEM folder endurance on one GPU.
 
-This is an opt-in, local-only signoff runner.  The controller waits for the
-selected physical NVIDIA devices to become idle, then starts every case in a
+This is an opt-in, local-only signoff runner. The controller waits for the
+selected physical NVIDIA device to become idle, then starts every case in a
 fresh child process so ``CUDA_VISIBLE_DEVICES`` is fixed before Torch imports.
-It writes an atomic live report throughout the run and never mutates source
-data or terminates processes it did not create.
+Each child opens the source folder with ``Show4DSTEM.from_folder``, which keeps
+every ready master resident in encoded GPU storage at full detector
+resolution, and repeats the canonical page, curation, and diffraction-mode
+cycle. Fresh-process open cases record the time to the first viewer and to the
+complete folder; the endurance case repeats the cycle until both its cycle
+count and its clock budget are met and fails if allocator memory grows. It
+writes an atomic live report throughout the run and never mutates source data
+or terminates processes it did not create.
 
-Actual Jupyter/browser evidence is a separate required gate.  This runner owns
-the backend paging/cache/endurance matrix and records that browser gate as
-pending until the companion live-Jupyter drive attaches its artifacts.
+Actual Jupyter/browser evidence is a separate required gate. This runner owns
+the backend endurance cases and records that browser gate as pending until the
+companion live-Jupyter drive attaches its artifacts.
 """
-
-from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
@@ -32,7 +36,7 @@ import traceback
 from typing import Any, Sequence
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_BLOCK_PATTERNS = (
     "overnight_ml_calibration_campaign.py",
     "overnight_zoo_campaign.py",
@@ -40,6 +44,11 @@ DEFAULT_BLOCK_PATTERNS = (
     "run_framewise_block.py",
     "live ptycho",
     "quantem.live.cli.ptycho",
+)
+FATAL_TOKENS = (
+    "cudaerrorillegaladdress",
+    "illegal address",
+    "out of memory",
 )
 
 
@@ -56,16 +65,14 @@ def _json_ready(value: Any) -> Any:
         return str(value)
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
+    # NumPy and Torch scalars convert through item(); arrays through tolist().
     if hasattr(value, "item"):
         try:
             return _json_ready(value.item())
-        except Exception:
+        except (TypeError, ValueError):
             pass
     if hasattr(value, "tolist"):
-        try:
-            return _json_ready(value.tolist())
-        except Exception:
-            pass
+        return _json_ready(value.tolist())
     return str(value)
 
 
@@ -104,14 +111,14 @@ def _git_snapshot(repo: Path) -> dict[str, Any]:
             ["git", "-C", str(repo), "diff", "--binary"],
             stderr=subprocess.STDOUT,
         )
-        return {
-            "commit": commit,
-            "dirty": bool(status),
-            "status": status.splitlines(),
-            "diff_sha256": hashlib.sha256(diff).hexdigest(),
-        }
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "commit": commit,
+        "dirty": bool(status),
+        "status": status.splitlines(),
+        "diff_sha256": hashlib.sha256(diff).hexdigest(),
+    }
 
 
 def _filesystem_snapshot(path: Path) -> dict[str, Any]:
@@ -133,7 +140,7 @@ def _filesystem_snapshot(path: Path) -> dict[str, Any]:
         result["findmnt"] = _run_text(
             ["findmnt", "-T", str(resolved), "-no", "SOURCE,FSTYPE,TARGET"]
         )
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         result["findmnt_error"] = f"{type(exc).__name__}: {exc}"
     return result
 
@@ -152,26 +159,26 @@ def _gpu_snapshot() -> dict[str, Any]:
                 "--format=csv,noheader,nounits",
             ]
         )
-        for line in raw.splitlines():
-            parts = [part.strip() for part in line.split(",")]
-            if len(parts) != 9:
-                continue
-            result["gpus"].append(
-                {
-                    "index": int(parts[0]),
-                    "uuid": parts[1],
-                    "pci_bus_id": parts[2],
-                    "name": parts[3],
-                    "driver_version": parts[4],
-                    "total_mib": int(parts[5]),
-                    "used_mib": int(parts[6]),
-                    "free_mib": int(parts[7]),
-                    "utilization_pct": int(parts[8]),
-                }
-            )
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
         return result
+    for line in raw.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) != 9:
+            continue
+        result["gpus"].append(
+            {
+                "index": int(parts[0]),
+                "uuid": parts[1],
+                "pci_bus_id": parts[2],
+                "name": parts[3],
+                "driver_version": parts[4],
+                "total_mib": int(parts[5]),
+                "used_mib": int(parts[6]),
+                "free_mib": int(parts[7]),
+                "utilization_pct": int(parts[8]),
+            }
+        )
 
     try:
         raw = _run_text(
@@ -181,7 +188,7 @@ def _gpu_snapshot() -> dict[str, Any]:
                 "--format=csv,noheader,nounits",
             ]
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         raw = ""
     apps: list[dict[str, Any]] = []
     pids: list[int] = []
@@ -208,13 +215,14 @@ def _gpu_snapshot() -> dict[str, Any]:
             raw_ps = _run_text(
                 ["ps", "-ww", "-o", "pid=,command=", "-p", ",".join(map(str, pids))]
             )
-            for line in raw_ps.splitlines():
-                pieces = line.strip().split(maxsplit=1)
-                if not pieces:
-                    continue
-                commands[int(pieces[0])] = pieces[1] if len(pieces) > 1 else ""
-        except Exception:
-            pass
+        except (OSError, subprocess.SubprocessError):
+            # ps exits nonzero when every listed process has already ended.
+            raw_ps = ""
+        for line in raw_ps.splitlines():
+            pieces = line.strip().split(maxsplit=1)
+            if not pieces:
+                continue
+            commands[int(pieces[0])] = pieces[1] if len(pieces) > 1 else ""
     for app in apps:
         app["command"] = commands.get(int(app["pid"]), "")
     result["apps"] = apps
@@ -383,7 +391,7 @@ class LiveReport:
 <style>body{{font:14px system-ui;margin:24px;color:#17212b}}.status{{font-weight:700}}
 table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #ccd3da;padding:6px;text-align:left}}
 pre{{white-space:pre-wrap;background:#f5f7f9;padding:12px;border-radius:6px}}code{{font-size:12px}}</style></head>
-<body><h1>Show4DSTEM folder paging/cache overnight</h1>
+<body><h1>Show4DSTEM folder endurance overnight</h1>
 <p class="status">{status} · {phase}</p><p>Heartbeat: {heartbeat}</p>
 <p>This live backend report refreshes every 30 seconds. Browser/Jupyter evidence is a separate gate.</p>
 <table><thead><tr><th>Case</th><th>Status</th><th>Seconds</th><th>Error</th></tr></thead>
@@ -396,64 +404,104 @@ pre{{white-space:pre-wrap;background:#f5f7f9;padding:12px;border-radius:6px}}cod
         os.replace(temporary, self.artifact_dir / "index.html")
 
 
-def _parse_devices(value: str) -> list[int]:
-    devices = [int(token.strip()) for token in value.split(",") if token.strip()]
-    if not devices:
-        raise argparse.ArgumentTypeError("at least one GPU index is required")
-    if len(set(devices)) != len(devices) or any(device < 0 for device in devices):
-        raise argparse.ArgumentTypeError(f"invalid unique GPU list: {value!r}")
-    return devices
-
-
 def _child_state(widget: Any) -> dict[str, Any]:
-    data = getattr(widget, "_data", None)
-    if data is None:
-        return {"freed": True}
-    plan = data.residency_plan() if callable(getattr(data, "residency_plan", None)) else {}
-    page_devices = [str(item) for item in getattr(data, "_page_devices", [])]
-    return _json_ready(
-        {
-            "n_frames": int(widget.n_frames),
-            "page_idx": int(widget.compare_page_idx),
-            "page_count": int(widget.compare_page_count),
-            "page_generation": int(widget.compare_page_generation),
-            "expected_indices": list(widget.compare_page_expected_indices),
-            "panel_indices": list(widget.compare_panel_indices),
-            "loaded_count": int(widget.compare_page_loaded_count),
-            "cache_state": str(widget.compare_page_cache_state),
-            "first_panel_ms": float(widget.compare_page_first_panel_ms),
-            "first_fresh_ms": float(widget.compare_page_first_fresh_ms),
-            "total_ms": float(widget.compare_page_total_ms),
-            "watch_state": str(widget.folder_watch_state),
-            "watch_detail": str(widget.folder_watch_detail),
-            "page_error": str(getattr(widget, "_compare_page_last_error", "")),
-            "loaded_indices": data.loaded_indices(),
-            "vram_resident": data.vram_resident(),
-            "resident_nbytes": int(data.resident_nbytes),
-            "logical_nbytes": int(data.nbytes),
-            "residency_plan": plan,
-            "page_devices": page_devices,
-            "preview_cache": widget.preview_cache_info,
-            "warm_status": str(getattr(widget, "_compare_cache_warm_status", "")),
-        }
-    )
+    acquisitions = list(widget._folder_acquisitions)
+    return {
+        "n_frames": int(widget.n_frames),
+        "page_idx": int(widget.compare_page_idx),
+        "page_count": int(widget.compare_page_count),
+        "panel_indices": list(widget.compare_panel_indices),
+        "watch_state": str(widget.folder_watch_state),
+        "watch_detail": str(widget.folder_watch_detail),
+        "acquisitions": len(acquisitions),
+        "resident_bytes": sum(int(item.resident_bytes) for item in acquisitions),
+        "logical_bytes": sum(int(item.logical_bytes) for item in acquisitions),
+    }
 
 
-def _touch_page(widget: Any, page: int, timeout: float) -> dict[str, Any]:
+def _memory_sample() -> dict[str, Any]:
+    """Allocator and device memory after one cycle.
+
+    Viewer work (virtual images, diffraction reads) allocates through Torch, so
+    its counter is the leak signal. Encoded acquisitions allocate outside the
+    Torch pool; only the device total sees them, and it also counts other
+    processes.
+    """
+    import torch
+
+    free, total = torch.cuda.mem_get_info()
+    return {
+        "time": _utc_now(),
+        "torch_allocated_mib": round(torch.cuda.memory_allocated() / 2**20, 1),
+        "torch_reserved_mib": round(torch.cuda.memory_reserved() / 2**20, 1),
+        "device_used_mib": round((total - free) / 2**20, 1),
+    }
+
+
+def _touch_page(widget: Any, page: int) -> dict[str, Any]:
+    """Show one comparison page and check that every visible panel is a finite image."""
+    import numpy as np
+
     started = time.perf_counter()
     widget.set_compare_page(int(page))
-    widget.wait_for_compare_page(timeout=timeout)
-    error = str(getattr(widget, "_compare_page_last_error", ""))
-    if error:
-        raise RuntimeError(error)
-    state = _child_state(widget)
-    state["requested_page"] = int(page)
-    state["elapsed_seconds"] = round(time.perf_counter() - started, 6)
-    return state
+    indices = [int(value) for value in widget.compare_panel_indices]
+    panels = np.frombuffer(widget.compare_virtual_image_bytes, dtype=np.float32)
+    elapsed = time.perf_counter() - started
+    expected_values = len(indices) * int(widget.shape_rows) * int(widget.shape_cols)
+    if not indices or panels.size != expected_values or not np.isfinite(panels).all():
+        raise RuntimeError(
+            f"Page {page} published {len(indices)} panel(s) with {panels.size} "
+            f"virtual-image values; expected {expected_values} finite values."
+        )
+    return {
+        "requested_page": int(page),
+        "page_idx": int(widget.compare_page_idx),
+        "panel_indices": indices,
+        "elapsed_seconds": round(elapsed, 6),
+    }
+
+
+def _run_cycle(widget: Any, result: dict[str, Any], canonical: list[int], page_count: int) -> None:
+    """One canonical cycle: pages, rapid navigation, curation, diffraction modes."""
+    for page in canonical:
+        result["page_actions"].append(_touch_page(widget, page))
+
+    if page_count >= 3:
+        rapid_started = time.perf_counter()
+        widget.set_compare_page(0)
+        widget.set_compare_page(1)
+        landed = _touch_page(widget, 2)
+        if landed["page_idx"] != 2:
+            raise RuntimeError("Rapid page 1 -> 2 -> 3 navigation finished on the wrong page.")
+        result["rapid_navigation"] = {
+            **landed,
+            "elapsed_seconds": round(time.perf_counter() - rapid_started, 6),
+        }
+
+    if int(widget.n_frames) >= 3:
+        widget.star_compare_panel(2)
+        widget.hide_compare_panel(1)
+        hidden = list(widget.compare_hidden_panels)
+        starred = list(widget.compare_starred_panels)
+        widget.show_compare_panel(1)
+        widget.unstar_compare_panel(2)
+        result["curation"] = {
+            "hidden_during": hidden,
+            "starred": starred,
+            "hidden_after_restore": list(widget.compare_hidden_panels),
+            "passed": 1 in hidden and 2 in starred,
+        }
+        if not result["curation"]["passed"]:
+            raise RuntimeError("Hide/star state did not persist through the cycle.")
+
+    hashes: dict[str, str] = {}
+    for mode in ("selected", "average", "selected"):
+        widget.compare_dp_mode = mode
+        hashes[mode] = hashlib.sha256(bytes(widget.frame_bytes)).hexdigest()
+    result["diffraction_modes"] = hashes
 
 
 def _run_child(args: argparse.Namespace) -> int:
-    os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     result_path = args.result_path.resolve()
     result: dict[str, Any] = {
         "id": args.case_id,
@@ -463,6 +511,7 @@ def _run_child(args: argparse.Namespace) -> int:
         "pid": os.getpid(),
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
         "page_actions": [],
+        "cycle_memory": [],
         "cycles_completed": 0,
         "errors": [],
     }
@@ -474,65 +523,49 @@ def _run_child(args: argparse.Namespace) -> int:
 
         from quantem.widget import Show4DSTEM
 
-        logical_gpus = list(range(torch.cuda.device_count()))
-        if not logical_gpus:
+        if not torch.cuda.is_available():
             raise RuntimeError(
                 "No CUDA GPU is visible in the child; check CUDA_VISIBLE_DEVICES."
             )
         result["torch"] = {
             "version": torch.__version__,
             "cuda": torch.version.cuda,
-            "logical_devices": [
-                {
-                    "index": idx,
-                    "name": torch.cuda.get_device_name(idx),
-                    "total_bytes": int(
-                        torch.cuda.get_device_properties(idx).total_memory
-                    ),
-                }
-                for idx in logical_gpus
-            ],
+            "device": {
+                "name": torch.cuda.get_device_name(0),
+                "total_bytes": int(torch.cuda.get_device_properties(0).total_memory),
+            },
         }
-        preview_enabled = args.case_kind != "cold"
-        rebuild = args.case_kind == "populate"
-        warm_cache = args.case_kind == "populate"
-        build_started = time.perf_counter()
+        result["memory_before_open"] = _memory_sample()
+        open_started = time.perf_counter()
         widget = Show4DSTEM.from_folder(
             args.source,
             pattern=args.pattern,
             recursive=True,
             ready_only=True,
-            gpus=logical_gpus,
             backend="cuda",
-            page_budget="auto",
-            page_max_vram_fraction=args.max_vram_fraction,
-            det_bin=args.det_bin,
-            dtype=args.dtype,
+            device=0,
             view_mode="multiple",
             columns=args.columns,
             page_size=args.page_size,
-            preload_all_if_fits=False,
-            warm_cache=warm_cache,
-            preview_cache=preview_enabled,
-            preview_cache_dir=args.cache_dir,
-            preview_cache_max_bytes=args.cache_max_bytes,
-            rebuild_preview_cache=rebuild,
             watch=True,
             watch_interval=args.watch_interval,
-            preload_initial_page=False,
             precompute_virtual_images=False,
             compare_dp_mode="selected",
-            debug=True,
-            verbose=False,
             title=f"Show4DSTEM overnight · {args.case_id}",
         )
-        result["build_seconds"] = round(time.perf_counter() - build_started, 6)
+        result["first_viewer_seconds"] = round(time.perf_counter() - open_started, 6)
+        widget.wait_for_folder(timeout=args.fill_timeout)
+        if widget._folder_fill_thread.is_alive():
+            raise RuntimeError(
+                f"The folder did not finish loading within {args.fill_timeout} s."
+            )
+        result["folder_fill_seconds"] = round(time.perf_counter() - open_started, 6)
         if int(widget.n_frames) < int(args.min_ready):
             raise RuntimeError(
                 f"Only {widget.n_frames} ready masters; require {args.min_ready}."
             )
         result["initial_state"] = _child_state(widget)
-        widget.wait_for_compare_page(timeout=args.page_timeout)
+        result["memory_after_open"] = _memory_sample()
         page_count = max(1, int(widget.compare_page_count))
         canonical = [0, min(1, page_count - 1), page_count - 1, 0]
 
@@ -540,152 +573,67 @@ def _run_child(args: argparse.Namespace) -> int:
             result["cycles_completed"] < args.cycles
             or time.time() < args.deadline_epoch
         ):
-            for page in canonical:
-                result["page_actions"].append(
-                    _touch_page(widget, page, args.page_timeout)
-                )
-                _atomic_json(result_path, result)
-
-            if page_count >= 3:
-                rapid_started = time.perf_counter()
-                widget.set_compare_page(0)
-                widget.set_compare_page(1)
-                widget.set_compare_page(2)
-                widget.wait_for_compare_page(timeout=args.page_timeout)
-                if int(widget.compare_page_idx) != 2:
-                    raise RuntimeError(
-                        "Rapid 1→2→3 navigation finished on the wrong page."
-                    )
-                result["rapid_navigation"] = {
-                    **_child_state(widget),
-                    "elapsed_seconds": round(
-                        time.perf_counter() - rapid_started, 6
-                    ),
-                }
-
-            if int(widget.n_frames) >= 3:
-                widget.star_compare_panel(2)
-                widget.hide_compare_panel(1)
-                hidden = list(widget.compare_hidden_panels)
-                starred = list(widget.compare_starred_panels)
-                widget.show_compare_panel(1)
-                result["curation"] = {
-                    "hidden_during": hidden,
-                    "starred": starred,
-                    "hidden_after_restore": list(widget.compare_hidden_panels),
-                    "passed": 1 in hidden and 2 in starred,
-                }
-                if not result["curation"]["passed"]:
-                    raise RuntimeError("Hide/star state did not persist through the cycle.")
-
-            hashes: dict[str, str] = {}
-            for mode in ("selected", "average", "selected"):
-                widget.compare_dp_mode = mode
-                hashes[mode] = hashlib.sha256(bytes(widget.frame_bytes)).hexdigest()
-            result["diffraction_modes"] = hashes
+            _run_cycle(widget, result, canonical, page_count)
             result["cycles_completed"] += 1
+            result["cycle_memory"].append(_memory_sample())
             result["last_state"] = _child_state(widget)
             _atomic_json(result_path, result)
 
-        if warm_cache:
-            warm_deadline = time.monotonic() + args.maintenance_timeout
-            while (
-                str(getattr(widget, "_compare_cache_warm_status", ""))
-                not in {"ready", "failed", "stopped"}
-                and time.monotonic() < warm_deadline
-            ):
-                time.sleep(0.25)
-            result["warm_status"] = str(
-                getattr(widget, "_compare_cache_warm_status", "")
-            )
-            if result["warm_status"] == "failed":
-                raise RuntimeError("Persistent preview cache warming failed.")
-
-        cache = getattr(widget, "_compare_preview_cache", None)
-        if cache is not None:
-            cache.flush()
         result["final_state"] = _child_state(widget)
-        plan = result["final_state"].get("residency_plan", {})
-        budget_values = [
-            int(value) for value in plan.get("budget_bytes", {}).values()
-        ]
-        resident_nbytes = int(result["final_state"].get("resident_nbytes", 0))
-        cache_info = result["final_state"].get("preview_cache", {})
+        first, last = result["cycle_memory"][0], result["cycle_memory"][-1]
+        growth = last["torch_allocated_mib"] - first["torch_allocated_mib"]
         result["correctness"] = {
-            "bounded_residency": (
-                not budget_values or resident_nbytes <= sum(budget_values)
-            ),
-            "requested_dtype": args.dtype,
-            "det_bin": args.det_bin,
+            "all_pages_finite": True,
+            "torch_allocated_growth_mib": round(growth, 1),
+            "bounded_memory": growth <= args.max_memory_growth_mib,
             "watch_worker_alive": bool(
-                getattr(widget, "_folder_watch_thread", None)
+                widget._folder_watch_thread is not None
                 and widget._folder_watch_thread.is_alive()
             ),
-            "persistent_cache_hits": int(cache_info.get("hits", 0)),
-            "persistent_cache_entries": int(cache_info.get("entries", 0)),
-            "persistent_cache_writes": int(cache_info.get("writes", 0)),
         }
-        if not result["correctness"]["bounded_residency"]:
-            raise RuntimeError("Managed raw residency exceeded its CUDA byte budget.")
-        if args.case_kind == "populate" and (
-            result["correctness"]["persistent_cache_entries"] <= 0
-            or result["correctness"]["persistent_cache_writes"] <= 0
-        ):
-            raise RuntimeError("Cache population produced no persistent entries.")
-        if args.case_kind == "reopen" and (
-            result["correctness"]["persistent_cache_hits"] <= 0
-        ):
-            raise RuntimeError("Fresh-process cache reopen recorded no hits.")
-        fatal_text = json.dumps(result).lower()
-        fatal_tokens = (
-            "cudaerrorillegaladdress",
-            "illegal address",
-            "out of memory",
-            "host-register",
-        )
-        if any(token in fatal_text for token in fatal_tokens):
+        if not result["correctness"]["bounded_memory"]:
+            raise RuntimeError(
+                f"Torch allocated memory grew {growth:.1f} MiB over "
+                f"{result['cycles_completed']} cycles; limit {args.max_memory_growth_mib} MiB."
+            )
+        if not result["correctness"]["watch_worker_alive"]:
+            raise RuntimeError("The folder watcher stopped during the run.")
+        fatal_text = json.dumps(_json_ready(result)).lower()
+        if any(token in fatal_text for token in FATAL_TOKENS):
             raise RuntimeError("A fatal CUDA allocation/runtime token was recorded.")
         result["status"] = "pass"
     except BaseException as exc:
+        # Record every failure, interrupts included, so the controller sees a
+        # result file instead of an unexplained exit code.
         result["status"] = "fail"
         result["error"] = f"{type(exc).__name__}: {exc}"
         result["traceback"] = traceback.format_exc()
-        result.setdefault("errors", []).append(result["error"])
+        result["errors"].append(result["error"])
     finally:
         if widget is not None:
             try:
                 widget.close()
-                result["workers_alive_after_close"] = {
-                    name: bool(
-                        getattr(widget, name, None)
-                        and getattr(widget, name).is_alive()
-                    )
-                    for name in (
-                        "_folder_watch_thread",
-                        "_compare_page_thread",
-                        "_compare_cache_warm_thread",
-                        "_dataset_preload_thread",
-                    )
-                }
-                if any(result["workers_alive_after_close"].values()):
-                    result.setdefault("cleanup_errors", []).append(
-                        "one or more Show4DSTEM workers remained alive after close"
-                    )
-            except Exception as exc:
+            except (RuntimeError, OSError, ValueError) as exc:
                 result.setdefault("cleanup_errors", []).append(
                     f"close: {type(exc).__name__}: {exc}"
                 )
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                for idx in range(torch.cuda.device_count()):
-                    with torch.cuda.device(idx):
-                        torch.cuda.empty_cache()
-        except Exception as exc:
-            result.setdefault("cleanup_errors", []).append(
-                f"torch cleanup: {type(exc).__name__}: {exc}"
-            )
+            workers = {
+                name: bool(
+                    getattr(widget, name, None) is not None
+                    and getattr(widget, name).is_alive()
+                )
+                for name in ("_folder_watch_thread", "_folder_fill_thread")
+            }
+            result["workers_alive_after_close"] = workers
+            if any(workers.values()):
+                result.setdefault("cleanup_errors", []).append(
+                    "a Show4DSTEM folder worker remained alive after close"
+                )
+            if widget._folder_acquisitions:
+                result.setdefault("cleanup_errors", []).append(
+                    "close() left folder acquisitions open"
+                )
+            result["memory_after_close"] = _memory_sample()
         result["elapsed_seconds"] = round(time.perf_counter() - started, 6)
         result["ended_at"] = _utc_now()
         if result.get("cleanup_errors") and result.get("status") == "pass":
@@ -697,7 +645,6 @@ def _run_child(args: argparse.Namespace) -> int:
 
 def _wait_for_idle(
     report: LiveReport,
-    devices: Sequence[int],
     args: argparse.Namespace,
     *,
     phase: str,
@@ -708,7 +655,7 @@ def _wait_for_idle(
         snapshot = _gpu_snapshot()
         idle, reasons = _idle_decision(
             snapshot,
-            devices,
+            [args.device],
             max_utilization=args.max_idle_utilization,
             min_free_mib=args.min_free_mib,
             block_patterns=args.block_pattern,
@@ -718,7 +665,7 @@ def _wait_for_idle(
         report.update(
             status="waiting_for_gpu",
             current_phase=phase,
-            selected_physical_gpus=list(devices),
+            selected_physical_gpu=args.device,
             idle_consecutive_samples=consecutive,
             idle_required_samples=args.idle_samples,
             idle_block_reasons=reasons,
@@ -750,19 +697,13 @@ def _run_case(
     *,
     case_id: str,
     case_kind: str,
-    devices: Sequence[int],
     cycles: int,
     deadline_epoch: float,
 ) -> bool:
     if report.completed(case_id):
         report.event("case_resume_skip", case_id=case_id)
         return True
-    if not _wait_for_idle(
-        report,
-        devices,
-        args,
-        phase=f"wait:{case_id}",
-    ):
+    if not _wait_for_idle(report, args, phase=f"wait:{case_id}"):
         return False
     case_dir = report.artifact_dir / "cases" / case_id
     case_dir.mkdir(parents=True, exist_ok=True)
@@ -777,16 +718,10 @@ def _run_case(
         case_kind,
         "--source",
         str(args.source),
-        "--cache-dir",
-        str(args.cache_dir),
         "--result-path",
         str(result_path),
         "--pattern",
         args.pattern,
-        "--det-bin",
-        str(args.det_bin),
-        "--dtype",
-        args.dtype,
         "--columns",
         str(args.columns),
         "--page-size",
@@ -797,28 +732,28 @@ def _run_case(
         str(cycles),
         "--deadline-epoch",
         str(deadline_epoch),
-        "--page-timeout",
-        str(args.page_timeout),
-        "--maintenance-timeout",
-        str(args.maintenance_timeout),
+        "--fill-timeout",
+        str(args.fill_timeout),
         "--watch-interval",
         str(args.watch_interval),
-        "--cache-max-bytes",
-        str(args.cache_max_bytes),
-        "--max-vram-fraction",
-        str(args.max_vram_fraction),
+        "--max-memory-growth-mib",
+        str(args.max_memory_growth_mib),
     ]
     env = dict(os.environ)
+    tool_cache = report.artifact_dir / "cache"
+    # Keep any inherited source override (for example a quantem.gpu checkout)
+    # after this repository's src, so the child imports what the controller does.
+    python_path = [str(args.repo / "src"), *filter(None, [env.get("PYTHONPATH")])]
     env.update(
         {
             "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
-            "CUDA_VISIBLE_DEVICES": ",".join(map(str, devices)),
+            "CUDA_VISIBLE_DEVICES": str(args.device),
             "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHONPATH": str(args.repo / "src"),
+            "PYTHONPATH": os.pathsep.join(python_path),
             "TMPDIR": str(report.artifact_dir / "tmp"),
-            "XDG_CACHE_HOME": str(args.cache_dir / "xdg"),
-            "CUPY_CACHE_DIR": str(args.cache_dir / "cupy"),
-            "MPLCONFIGDIR": str(args.cache_dir / "matplotlib"),
+            "XDG_CACHE_HOME": str(tool_cache / "xdg"),
+            "CUPY_CACHE_DIR": str(tool_cache / "cupy"),
+            "MPLCONFIGDIR": str(tool_cache / "matplotlib"),
         }
     )
     for key in ("TMPDIR", "XDG_CACHE_HOME", "CUPY_CACHE_DIR", "MPLCONFIGDIR"):
@@ -830,7 +765,7 @@ def _run_case(
         "case_start",
         case_id=case_id,
         kind=case_kind,
-        physical_gpus=list(devices),
+        physical_gpu=args.device,
         command=command,
     )
     started = time.monotonic()
@@ -879,7 +814,7 @@ def _run_case(
         {
             "id": case_id,
             "kind": case_kind,
-            "physical_gpus": list(devices),
+            "physical_gpu": args.device,
             "child_exit_code": process.returncode,
             "timed_out": timed_out,
             "stdout": str(stdout_path),
@@ -904,32 +839,20 @@ def _run_case(
 
 def _run_controller(args: argparse.Namespace) -> int:
     args.source = args.source.expanduser().resolve()
-    args.cache_dir = args.cache_dir.expanduser().resolve()
     args.artifact_dir = args.artifact_dir.expanduser().resolve()
     args.repo = args.repo.expanduser().resolve()
     args.python = args.python.expanduser().resolve()
-    for output, label in (
-        (args.cache_dir, "cache"),
-        (args.artifact_dir, "artifact"),
-    ):
-        try:
-            output.relative_to(args.source)
-        except ValueError:
-            pass
-        else:
-            raise ValueError(
-                f"{label} directory must be outside the real-data source: {output}"
-            )
-    if args.cache_dir == args.artifact_dir:
-        raise ValueError("cache and artifact directories must be distinct")
-    args.cache_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        args.artifact_dir.relative_to(args.source)
+    except ValueError:
+        pass
+    else:
+        raise ValueError(
+            f"artifact directory must be outside the real-data source: {args.artifact_dir}"
+        )
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
     if not args.source.is_dir():
         raise FileNotFoundError(f"source folder not found: {args.source}")
-    if args.artifact_dir.stat().st_dev != args.cache_dir.stat().st_dev:
-        locality = "separate_filesystems"
-    else:
-        locality = "same_filesystem"
     initial = {
         "schema_version": SCHEMA_VERSION,
         "run_id": args.run_id,
@@ -950,23 +873,18 @@ def _run_controller(args: argparse.Namespace) -> int:
             "source": str(args.source),
             "pattern": args.pattern,
             "masters_discovered": len(list(args.source.rglob(args.pattern))),
-            "det_bin": args.det_bin,
-            "dtype": args.dtype,
             "min_ready": args.min_ready,
+            "physical_gpu": args.device,
         },
         "environment": {
             "source_filesystem": _filesystem_snapshot(args.source),
-            "cache_filesystem": _filesystem_snapshot(args.cache_dir),
             "report_filesystem": _filesystem_snapshot(args.artifact_dir),
-            "cache_report_locality": locality,
             "initial_gpu": _gpu_snapshot(),
         },
         "cases": [],
         "errors": [],
         "gates": [
-            {"id": "S4D-17-backend", "status": "pending"},
-            {"id": "S4D-18-backend", "status": "pending"},
-            {"id": "S4D-19-cache", "status": "pending"},
+            {"id": "S4D-20-backend", "status": "pending"},
             {
                 "id": "S4D-14-live-arrival-browser",
                 "status": "pending",
@@ -977,11 +895,6 @@ def _run_controller(args: argparse.Namespace) -> int:
                 "status": "pending",
                 "reason": "actual browser paint/FPS evidence required",
             },
-            {
-                "id": "S4D-20-no-bin",
-                "status": "pending",
-                "reason": "separate det_bin=1 capacity leg required",
-            },
         ],
     }
     report = LiveReport(args.artifact_dir, initial)
@@ -990,138 +903,68 @@ def _run_controller(args: argparse.Namespace) -> int:
         report.update(status="planned", current_phase="dry_run", ended_at=_utc_now())
         return 0
 
-    topologies = [
-        ("one_gpu", args.one_gpu),
-        ("two_gpu", args.two_gpus),
-    ]
+    run_started = time.time()
     all_passed = True
-    for topology, devices in topologies:
-        topology_started = time.time()
-        fixed_cases = [(f"{topology}-cold-disabled", "cold")]
-        if topology == "one_gpu":
-            fixed_cases.append((f"{topology}-cache-populate", "populate"))
-        else:
-            # Reuse the one-GPU entries without rebuilding them. This is the
-            # backend-independence check required before any two-GPU refresh.
-            fixed_cases.append((f"{topology}-cache-cross-topology", "reopen"))
-        fixed_cases.extend(
-            (f"{topology}-cache-reopen-{idx}", "reopen")
-            for idx in range(1, args.reopens + 1)
-        )
-        for case_id, kind in fixed_cases:
-            passed = _run_case(
-                report,
-                args,
-                case_id=case_id,
-                case_kind=kind,
-                devices=devices,
-                cycles=1,
-                deadline_epoch=0.0,
-            )
-            if not passed:
-                all_passed = False
-                if not args.continue_on_failure:
-                    break
-        if not all_passed and not args.continue_on_failure:
-            break
-        endurance_deadline = topology_started + args.topology_hours * 3600.0
+    open_ids = [f"open-{idx}" for idx in range(1, args.opens + 1)]
+    for case_id in open_ids:
         passed = _run_case(
             report,
             args,
-            case_id=f"{topology}-endurance",
-            case_kind="endurance",
-            devices=devices,
-            cycles=args.min_cycles,
-            deadline_epoch=endurance_deadline,
+            case_id=case_id,
+            case_kind="open",
+            cycles=1,
+            deadline_epoch=0.0,
         )
         all_passed = all_passed and passed
         if not passed and not args.continue_on_failure:
             break
-
-    gates = list(report.data.get("gates", []))
-    cases_by_id = {item.get("id"): item for item in report.data.get("cases", [])}
-    aggregates: dict[str, Any] = {}
-    for topology, _ in topologies:
-        cold = cases_by_id.get(f"{topology}-cold-disabled", {})
-        reopens = [
-            cases_by_id.get(f"{topology}-cache-reopen-{idx}", {})
-            for idx in range(1, args.reopens + 1)
-        ]
-        cold_times = [
-            float(item.get("elapsed_seconds", 0.0))
-            for item in cold.get("page_actions", [])
-            if item.get("elapsed_seconds") is not None
-        ]
-        reopen_times = [
-            float(action.get("elapsed_seconds", 0.0))
-            for case in reopens
-            for action in case.get("page_actions", [])
-            if action.get("elapsed_seconds") is not None
-        ]
-        cache_hits = sum(
-            int(case.get("final_state", {}).get("preview_cache", {}).get("hits", 0))
-            for case in reopens
+    if all_passed or args.continue_on_failure:
+        passed = _run_case(
+            report,
+            args,
+            case_id="endurance",
+            case_kind="endurance",
+            cycles=args.min_cycles,
+            deadline_epoch=run_started + args.hours * 3600.0,
         )
-        aggregates[topology] = {
-            "cold_page_seconds": cold_times,
-            "reopen_page_seconds": reopen_times,
-            "reopen_cache_hits": cache_hits,
-            "note": (
-                "backend completion timings only; browser cached/fresh paint "
-                "thresholds remain a separate pending gate"
-            ),
-        }
+        all_passed = all_passed and passed
+
+    cases_by_id = {item.get("id"): item for item in report.data.get("cases", [])}
+    opens = [cases_by_id.get(case_id, {}) for case_id in open_ids]
+    endurance = cases_by_id.get("endurance", {})
+    aggregates = {
+        "first_viewer_seconds": [case.get("first_viewer_seconds") for case in opens],
+        "folder_fill_seconds": [case.get("folder_fill_seconds") for case in opens],
+        "open_page_seconds": [
+            action.get("elapsed_seconds")
+            for case in opens
+            for action in case.get("page_actions", [])
+        ],
+        "endurance_cycles": endurance.get("cycles_completed"),
+        "endurance_memory_growth_mib": endurance.get("correctness", {}).get(
+            "torch_allocated_growth_mib"
+        ),
+        "note": (
+            "backend completion timings only; browser paint thresholds remain "
+            "a separate pending gate"
+        ),
+    }
+    gates = list(report.data.get("gates", []))
     for gate in gates:
-        if gate["id"] == "S4D-17-backend":
-            endurance = cases_by_id.get("one_gpu-endurance", {})
-            plan = endurance.get("final_state", {}).get("residency_plan", {})
+        if gate["id"] == "S4D-20-backend":
+            final_state = endurance.get("final_state", {})
             gate["status"] = (
                 "pass"
-                if report.completed("one_gpu-endurance")
-                and plan.get("fits") is False
-                and endurance.get("correctness", {}).get("bounded_residency") is True
+                if all(report.completed(case_id) for case_id in [*open_ids, "endurance"])
                 else "fail"
             )
             gate["observed"] = {
-                "full_series_fits_one_gpu": plan.get("fits"),
-                "resident_nbytes": endurance.get("final_state", {}).get(
-                    "resident_nbytes"
-                ),
-                "budget_bytes": plan.get("budget_bytes"),
+                "datasets": final_state.get("n_frames"),
+                "resident_bytes": final_state.get("resident_bytes"),
+                "logical_bytes": final_state.get("logical_bytes"),
+                "cycles": endurance.get("cycles_completed"),
+                "torch_allocated_growth_mib": aggregates["endurance_memory_growth_mib"],
             }
-        elif gate["id"] == "S4D-18-backend":
-            endurance = cases_by_id.get("two_gpu-endurance", {})
-            page_devices = endurance.get("final_state", {}).get("page_devices", [])
-            used = {str(device) for device in page_devices}
-            gate["status"] = (
-                "pass"
-                if report.completed("two_gpu-endurance")
-                and any("cuda:0" in device for device in used)
-                and any("cuda:1" in device for device in used)
-                else "fail"
-            )
-            gate["observed_page_devices"] = sorted(used)
-        elif gate["id"] == "S4D-19-cache":
-            required = [
-                f"{topology}-cache-reopen-{idx}"
-                for topology, _ in topologies
-                for idx in range(1, args.reopens + 1)
-            ]
-            backend_reopens_pass = all(report.completed(item) for item in required)
-            cache_hits = sum(
-                int(aggregates[topology]["reopen_cache_hits"])
-                for topology, _ in topologies
-            )
-            gate["status"] = (
-                "limited_backend_pass"
-                if backend_reopens_pass and cache_hits > 0
-                else "fail"
-            )
-            gate["reason"] = (
-                "Fresh-process disk-cache reuse passed in Python, but S4D-19 "
-                "is not fully passed until cached/fresh browser paint gates pass."
-            )
-            gate["observed_cache_hits"] = cache_hits
     final_status = "backend_pass_browser_pending" if all_passed else "fail"
     report.update(
         status=final_status,
@@ -1138,45 +981,39 @@ def _run_controller(args: argparse.Namespace) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "local-only real-data Show4DSTEM from_folder one-/two-GPU "
-            "paging and persistent-cache overnight signoff"
+            "local-only real-data Show4DSTEM from_folder one-GPU endurance "
+            "overnight signoff over encoded acquisitions"
         )
     )
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--artifact-dir", type=Path)
-    parser.add_argument("--cache-dir", type=Path, required=True)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--run-id", default=f"show4dstem-{datetime.now():%Y%m%d-%H%M%S}")
     parser.add_argument("--pattern", default="*_master.h5")
-    parser.add_argument("--one-gpu", type=_parse_devices, default=[0])
-    parser.add_argument("--two-gpus", type=_parse_devices, default=[0, 1])
-    parser.add_argument("--det-bin", type=int, default=4)
-    parser.add_argument("--dtype", default="u16")
+    parser.add_argument("--device", type=int, default=0, help="physical NVIDIA GPU index")
     parser.add_argument("--columns", type=int, default=4)
     parser.add_argument("--page-size", type=int, default=8)
     parser.add_argument("--min-ready", type=int, default=82)
-    parser.add_argument("--reopens", type=int, default=5)
-    parser.add_argument("--topology-hours", type=float, default=4.0)
+    parser.add_argument("--opens", type=int, default=5, help="fresh-process open cases before endurance")
+    parser.add_argument("--hours", type=float, default=4.0, help="clock budget for the whole run")
     parser.add_argument("--min-cycles", type=int, default=100)
+    parser.add_argument("--max-memory-growth-mib", type=float, default=256.0)
     parser.add_argument("--case-timeout-hours", type=float, default=8.0)
     parser.add_argument("--wait-hours", type=float, default=24.0)
     parser.add_argument("--heartbeat-seconds", type=float, default=30.0)
     parser.add_argument("--idle-sample-seconds", type=float, default=60.0)
     parser.add_argument("--idle-samples", type=int, default=5)
     parser.add_argument("--max-idle-utilization", type=int, default=15)
-    parser.add_argument("--min-free-mib", type=int, default=70000)
+    parser.add_argument("--min-free-mib", type=int, default=16384)
     parser.add_argument(
         "--block-pattern",
         action="append",
         default=list(DEFAULT_BLOCK_PATTERNS),
         help="case-insensitive foreign command substring that blocks launch",
     )
-    parser.add_argument("--page-timeout", type=float, default=900.0)
-    parser.add_argument("--maintenance-timeout", type=float, default=14400.0)
+    parser.add_argument("--fill-timeout", type=float, default=3600.0)
     parser.add_argument("--watch-interval", type=float, default=2.0)
-    parser.add_argument("--cache-max-bytes", type=int, default=4 << 30)
-    parser.add_argument("--max-vram-fraction", type=float, default=0.92)
     parser.add_argument("--continue-on-failure", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
 
@@ -1191,8 +1028,8 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.det_bin < 1 or args.page_size < 1 or args.columns < 1:
-        raise ValueError("det-bin, page-size, and columns must be positive")
+    if args.page_size < 1 or args.columns < 1 or args.device < 0:
+        raise ValueError("page-size and columns must be positive and device non-negative")
     if args.child:
         if args.result_path is None or not args.case_id or not args.case_kind:
             raise ValueError("child mode requires case id/kind and result path")
