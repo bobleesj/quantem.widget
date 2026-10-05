@@ -16,7 +16,7 @@ async function waitWhileDeferred(shouldDefer?: () => boolean): Promise<void> {
   }
 }
 
-import { FFT_2D_SHADER } from "../../../js/.generated/engine/dpc/compute/webgpu/fft";
+import { FFT_2D_SHADER } from "../../../js/.generated/engine/dpc/webgpu/fft";
 
 export class WebGPUFFT {
   private device: GPUDevice;

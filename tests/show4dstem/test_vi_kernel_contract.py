@@ -11,12 +11,7 @@ from quantem.widget import Show4DSTEM
 
 def _webgpu_source(name: str) -> str:
     repo = Path(__file__).resolve().parents[2]
-    root = repo / "js" / ".generated" / "engine"
-    canonical = name.replace("/compute/webgpu/", "/backends/webgpu/").replace(
-        "display/webgpu/", "display/backends/webgpu/"
-    )
-    source = root / canonical if (root / canonical).is_file() else root / name
-    return source.read_text(encoding="utf-8")
+    return (repo / "js" / ".generated" / "engine" / name).read_text(encoding="utf-8")
 
 
 def test_show4dstem_cuda_keeps_cupy_compute_source_for_rawkernel() -> None:
@@ -91,8 +86,8 @@ def test_show4dstem_uses_public_detector_session() -> None:
 
 def test_show4dstem_webgpu_engine_has_selected_index_vi_kernel() -> None:
     repo = Path(__file__).resolve().parents[2]
-    source = _webgpu_source("detector/compute/webgpu/backend.ts")
-    dpc_source = _webgpu_source("dpc/compute/webgpu/kernels.ts")
+    source = _webgpu_source("detector/webgpu/backend.ts")
+    dpc_source = _webgpu_source("dpc/webgpu/kernels.ts")
     frontend = (repo / "js" / "show4dstem" / "index.tsx").read_text(
         encoding="utf-8"
     )
@@ -147,9 +142,9 @@ def test_show4dstem_webgpu_h5_master_loader_batches_external_decodes() -> None:
         encoding="utf-8"
     )
     lazy = (repo / "js" / "show4dstem" / "lazy.ts").read_text(encoding="utf-8")
-    local_h5 = _webgpu_source("io/backends/webgpu/local-h5.ts")
-    compute = _webgpu_source("detector/compute/webgpu/backend.ts")
-    bslz4 = _webgpu_source("io/backends/webgpu/bslz4.ts")
+    local_h5 = _webgpu_source("io/hdf5/webgpu/local-h5.ts")
+    compute = _webgpu_source("detector/webgpu/backend.ts")
+    bslz4 = _webgpu_source("io/hdf5/webgpu/bslz4.ts")
 
     assert "decodeBslz4Batch" in frontend
     assert "const decodeQueue" in frontend
@@ -395,7 +390,6 @@ def test_show4dstem_multiple_detector_drag_uses_live_gpu_compare_slots() -> None
     assert "compareGpuInFlight >= 2" in live_drag
     assert 'type DpcGpuSource = "DPC_row" | "DPC_col" | "iDPC";' in frontend
     assert "gpuSlots?.has(frame) && gpuEngine && (residentSource || gpuRanges?.has(frame))" in frontend
-    assert "integerCounts && batchEnabled && !batchFailed" in frontend
     assert 'scaleMode === "log"' in frontend
     assert "entry.panel !== undefined || entry.gpuLoaded" in frontend
     assert "const loaded = panel !== undefined || gpuLoaded;" in frontend

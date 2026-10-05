@@ -5,7 +5,7 @@ import {
   type ScanQuarterTurns,
   scanQuarterTurnOutputShape,
   scanQuarterTurnSourceIndex,
-} from "./.generated/engine/geometry/compute/webgpu/quarter-turn";
+} from "./.generated/engine/geometry/webgpu/quarter-turn";
 
 describe("shared scan-rotation gold fixture", () => {
   it("maps every detector pattern with the canonical row-column convention", () => {

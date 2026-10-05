@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { annulusMask, diskMask } from "./detectorGeometry";
-import { buildDetectorMask } from "./.generated/engine/detector/compute/webgpu/backend";
+import { buildDetectorMask } from "./.generated/engine/detector/webgpu/backend";
 
 describe("shared detector mask reference", () => {
   it("rasterizes an inclusive disk in row/column order", () => {

@@ -216,7 +216,7 @@ def test_wgsl_display_histogram_colormap_and_fft_match_reference(wgsl_result):
     assert display["adapter"]
 
     from quantem.gpu.display import colormap_lut
-    from quantem.gpu.display.reference import colorize, histogram
+    from quantem.gpu.display.cpu import colorize, histogram
 
     values = np.asarray(display["values"], dtype=np.float32)
     for scale in ("linear", "log"):
@@ -410,7 +410,7 @@ def test_wgsl_quantization_and_rotation_match_qgpu_reference(wgsl_result):
     assert display["softwareAdapter"] is False
 
     from quantem.gpu.display.geometry import rotate_stack_inplane
-    from quantem.gpu.display.reference import dequantize_uint8
+    from quantem.gpu.display.cpu import dequantize_uint8
 
     quantized = np.asarray(display["quantizedInput"], dtype=np.uint8)
     np.testing.assert_allclose(

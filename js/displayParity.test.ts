@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import canonicalPoints from "./.generated/engine/swift/Sources/MetalDisplayKernels/Resources/colormaps.json";
+import canonicalPoints from "./.generated/engine/display/colormaps.json";
 import {
   COLORMAP_NAMES,
   COLORMAP_POINTS,

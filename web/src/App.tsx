@@ -87,7 +87,7 @@ export default function App() {
     // compute stays correct (the Python torch path already has test_dpc_virtual_parity.py).
     (window as unknown as { __wgslParity: (sc: number, dr: number, dc: number) => Promise<unknown> }).__wgslParity =
       async (scanCount: number, detRows: number, detCols: number) => {
-        const { DetectorCompute } = await import("../../js/.generated/engine/detector/compute/webgpu/backend");
+        const { DetectorCompute } = await import("../../js/.generated/engine/detector/webgpu/backend");
         const detSize = detRows * detCols;
         const stack = new Uint8Array(scanCount * detSize);
         for (let s = 0; s < scanCount; s++) for (let d = 0; d < detSize; d++) stack[s * detSize + d] = (s * 31 + d * 17) % 251;
@@ -117,7 +117,7 @@ export default function App() {
       };
     // Shared display parity probe: exercise the canonical quantem.gpu WebGPU
     // colormap and histogram pipelines on signed float32 evidence. The Python
-    // gate compares these buffers with quantem.gpu.display.reference and CUDA.
+    // gate compares these buffers with quantem.gpu.display.cpu and CUDA.
     (window as unknown as { __displayParity: () => Promise<unknown> }).__displayParity =
       async () => {
         const {
@@ -294,8 +294,8 @@ export default function App() {
     // bslz4 Strategy-D parity + kernel-time verify hook.
     (window as unknown as { __verifyD: (url: string) => Promise<unknown> }).__verifyD =
       async (url: string) => {
-        const { readH5Volume } = await import("../../js/.generated/engine/io/backends/webgpu/h5reader");
-        const { verifyFusedD } = await import("../../js/.generated/engine/io/backends/webgpu/bslz4");
+        const { readH5Volume } = await import("../../js/.generated/engine/io/hdf5/webgpu/h5reader");
+        const { verifyFusedD } = await import("../../js/.generated/engine/io/hdf5/webgpu/bslz4");
         const buf = await (await fetch(url)).arrayBuffer();
         const vol = readH5Volume(buf, url.split("/").pop()!);
         if (vol.srcDtype === "uint8") return { error: "uint8 source has no fused-D path" };

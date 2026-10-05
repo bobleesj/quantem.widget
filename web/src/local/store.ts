@@ -4,10 +4,10 @@
 // (virtual image, CBED frame, summed DP) is produced on the GPU by the generated
 // quantem.gpu WebGPU engine. No Python, no network.
 
-import { readH5Volume } from "../../../js/.generated/engine/io/backends/webgpu/h5reader";
-import { DetectorCompute } from "../../../js/.generated/engine/detector/compute/webgpu/backend";
-import { annulusMask, diskMask } from "../../../js/.generated/engine/detector/geometry";
-import { decodeBslz4Batch, type Bslz4Spec } from "../../../js/.generated/engine/io/backends/webgpu/bslz4";
+import { readH5Volume } from "../../../js/.generated/engine/io/hdf5/webgpu/h5reader";
+import { DetectorCompute } from "../../../js/.generated/engine/detector/webgpu/backend";
+import { annulusMask, diskMask } from "../../../js/.generated/engine/detector/webgpu/geometry";
+import { decodeBslz4Batch, type Bslz4Spec } from "../../../js/.generated/engine/io/hdf5/webgpu/bslz4";
 import type { Session, MasterFile, RawData, DetectorMode, DetShape, ShapeParams, DetBin, BrowseDtype } from "../pages/browse/types";
 
 // A picked file, uniform over File System Access handles and <input webkitdirectory>.

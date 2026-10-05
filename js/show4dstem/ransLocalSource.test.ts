@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ransHttpSource, ransLocalSource, type RansDirectoryHandle } from "../.generated/engine/detector/compute/webgpu/rans-source";
+import { ransHttpSource, ransLocalSource, type RansDirectoryHandle } from "../.generated/engine/detector/webgpu/rans-source";
 
 function folder(entries: Record<string, Blob | RansDirectoryHandle>): RansDirectoryHandle {
   const missing = () => new DOMException("Missing file", "NotFoundError");
@@ -63,7 +63,7 @@ describe("local rANS export acquisition", () => {
 
 // This tests byte staging, not the GPU decoder's numerical parity.
 it("stages unaligned blocks into exact packed buffers and reports complete readiness", async () => {
-  const { RansResidentSet } = await import("../.generated/engine/detector/compute/webgpu/rans");
+  const { RansResidentSet } = await import("../.generated/engine/detector/webgpu/rans");
   vi.stubGlobal("GPUBufferUsage", { STORAGE: 1, COPY_DST: 2, COPY_SRC: 4, MAP_READ: 8, UNIFORM: 16 });
   vi.stubGlobal("GPUShaderStage", { COMPUTE: 1 });
   vi.stubGlobal("GPUMapMode", { READ: 1 });
@@ -111,7 +111,7 @@ it("stages unaligned blocks into exact packed buffers and reports complete readi
 });
 
 it("accepts a browser directory-input FileList without collapsing relative paths", async () => {
-  const { ransLocalFilesSource } = await import("../.generated/engine/detector/compute/webgpu/rans-source");
+  const { ransLocalFilesSource } = await import("../.generated/engine/detector/webgpu/rans-source");
   const file = (path: string, bytes: number[]) => {
     const blob = new Blob([new Uint8Array(bytes)]);
     Object.defineProperties(blob, { name: { value: path.split("/").pop() }, webkitRelativePath: { value: path } });

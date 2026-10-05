@@ -2,7 +2,7 @@
 import source from "./index.tsx?raw";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
-import { buildDetectorMask } from "../.generated/engine/detector/compute/webgpu/backend";
+import { buildDetectorMask } from "../.generated/engine/detector/webgpu/backend";
 import { liveRoiGeometry } from "./roiRadiusDrag";
 
 // Execute the component's callbacks with a canvas spy, without mounting its GPU
