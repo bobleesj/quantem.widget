@@ -3833,6 +3833,8 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
 
         import gc
 
+        from quantem.widget.show4dstem_bounded import _View, _Views
+
         data = self._data
         self._cuda_compute_data = None
         self._cuda_compare_compute_backends.clear()
@@ -3854,7 +3856,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         if type(data).__name__ == "Dataset5dstem" and hasattr(data, "devices"):
             for dev in data.devices:
                 record_device(dev)
-        elif isinstance(data, torch.Tensor) or getattr(data, "_is_gpu_frames", False):
+        elif isinstance(data, (torch.Tensor, _View, _Views)):
             record_device(data.device)
         compute_for = getattr(self, "_compute_for", None)
         if isinstance(compute_for, torch.Tensor):
