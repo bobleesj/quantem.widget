@@ -189,6 +189,25 @@ class _FakeAccel:
         value = np.complex64(1.0 + 0.5j + np.float32(c10 + c12 + phi12) * 0j)
         return np.full((3, 4), value, dtype=np.complex64)
 
+    def preview_upsampled(
+        self,
+        aberrations,
+        *,
+        upsampling_factor,
+        compute_loss,
+        tilt_mrad=(0.0, 0.0),
+        thickness=0.0,
+        phase_estimator="mean_phase",
+    ):
+        # The CUDA session previews through this route (phase_of_mean); the fake
+        # keeps the native-grid image, so expected pixels match preview().
+        return self.preview(
+            aberrations,
+            compute_loss=compute_loss,
+            higher_order_magnitudes=None,
+            higher_order_angles=None,
+        )
+
 
 class _FakeMpsAccel(_FakeAccel):
     backend = "mps"
@@ -726,90 +745,6 @@ def test_showptycho_mps_accel_does_not_require_cupy(monkeypatch):
     assert widget.crop_refit_available is True
     assert "Ready to refit" in widget.crop_refit_status
     assert "cupy" not in sys.modules
-
-
-def test_showptycho_mps_accel_uses_phase_only_reconstruct(monkeypatch):
-    """MPS ShowPtycho should hit the fused phase/loss path, not object-wave work."""
-    import quantem.gpu.ssb.backends.mps.engine as mps
-    import quantem.gpu.ssb.backends.mps.backend as mps_engine
-    from quantem.gpu.ssb.backends.mps.backend import MpsSSBBackend
-
-    class FakePrepared:
-        num_bf = 2
-        scan_shape = (4, 4)
-        kx_np = np.array([-0.02], dtype=np.float32)
-        ky_np = np.array([0.02], dtype=np.float32)
-        bf_storage_indices_np = np.array([0], dtype=np.int32)
-        wavelength = 0.025
-        semiangle_rad = 0.02
-        ang_y_rad = 0.001
-        ang_x_rad = 0.001
-        dc_value = 1.0 + 0.0j
-        g_qk = np.ones((1, 4, 3), dtype=np.complex64)
-
-    calls: list[dict] = []
-    fake_prepared = FakePrepared()
-
-    monkeypatch.setattr(mps_engine, "_as_chunked_frames", lambda data: data)
-    monkeypatch.setattr(mps_engine, "_scan_shape", lambda frames: (4, 4))
-    monkeypatch.setattr(
-        mps_engine,
-        "_as_sampling",
-        lambda value: (float(value), float(value)),
-    )
-    monkeypatch.setattr(
-        mps_engine,
-        "_resolve_bf_selection",
-        lambda *_args, **_kwargs: mps.BrightfieldDisk(
-            rows=np.array([1, 2], dtype=np.int32),
-            cols=np.array([2, 1], dtype=np.int32),
-            center_row_col=(1.5, 1.5),
-            radius_px=2.0,
-            detected_radius_px=2.0,
-            detector_shape=(4, 4),
-        ),
-    )
-    monkeypatch.setattr(mps_engine, "_default_object_redraw_chunk_bf", lambda: 16)
-    monkeypatch.setattr(mps_engine, "_default_object_setup_chunk_bf", lambda: 16)
-    monkeypatch.setattr(
-        mps_engine,
-        "_prepare_selection",
-        lambda *_args, **_kwargs: fake_prepared,
-    )
-
-    def fake_reconstruct(_prepared, **kwargs):
-        calls.append(dict(kwargs))
-        return None, 0.25 if kwargs["compute_loss"] else None, np.zeros((4, 4), dtype=np.float32)
-
-    monkeypatch.setattr(mps_engine, "_reconstruct_prepared", fake_reconstruct)
-    monkeypatch.setattr(
-        "quantem.gpu.ssb.backends.mps.backend.detector_mean",
-        lambda _frames: np.ones((4, 4), dtype=np.float32),
-    )
-
-    accel = MpsSSBBackend(
-        types.SimpleNamespace(shape=(16, 4, 4), detector_sum=None),
-        voltage_kV=200.0,
-        semiangle_mrad=21.4,
-        scan_sampling=0.5,
-        det_sampling=None,
-        bf_intensity_threshold=0.5,
-        bf_center=None,
-        bf_radius=2,
-        rotation_angle_deg=0.0,
-    )
-    accel.reconstruct_with_loss(1.0, 2.0, 0.3)
-    accel.reconstruct(1.0, 2.0, 0.3)
-
-    assert [call["compute_loss"] for call in calls] == [True, False]
-    assert [call["compute_object"] for call in calls] == [False, False]
-    state = accel.browser_state()
-    from quantem.gpu.ssb.backends import SSBProtocol
-
-    assert isinstance(accel, SSBProtocol)
-    assert state.kx_bf.shape == (2,)
-    assert state.ky_bf.shape == (2,)
-    assert state.kx_bf[1] != 0.0
 
 
 def test_showssb_is_not_public_api():

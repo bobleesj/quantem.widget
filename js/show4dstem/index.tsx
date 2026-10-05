@@ -2746,9 +2746,7 @@ function Show4DSTEM() {
   const [ssbComputeRefine, setSsbComputeRefine] = useModelState<boolean>("ssb_compute_refine");
   const [ssbComputeLockC10, setSsbComputeLockC10] = useModelState<boolean>("ssb_compute_lock_c10");
   const [ssbComputeLockC12, setSsbComputeLockC12] = useModelState<boolean>("ssb_compute_lock_c12");
-  const [ssbComputeBfSubsample, setSsbComputeBfSubsample] = useModelState<number>("ssb_compute_bf_subsample");
   const [ssbComputeBfPixels] = useModelState<number>("ssb_compute_bf_pixels");
-  const [ssbComputeBfSelectedPixels] = useModelState<number>("ssb_compute_bf_selected_pixels");
   const [ssbComputeC10Nm, setSsbComputeC10Nm] = useModelState<number>("ssb_compute_c10_nm");
   const [ssbComputeC12Nm, setSsbComputeC12Nm] = useModelState<number>("ssb_compute_c12_nm");
   const [ssbComputePhi12Deg, setSsbComputePhi12Deg] = useModelState<number>("ssb_compute_phi12_deg");
@@ -6559,7 +6557,6 @@ function Show4DSTEM() {
     rotationDeg?: number;
   }) => {
     const nTrials = Math.max(0, Math.round(Number(ssbComputeNTrials ?? 200)));
-    const bfSubsample = Math.max(0.01, Math.min(1, Number(ssbComputeBfSubsample ?? 1)));
     const manualAberrations = Boolean(options?.manualAberrations);
     const c10Nm = Number(options?.c10Nm ?? ssbComputeC10Nm ?? 0);
     const c12Nm = Number(options?.c12Nm ?? ssbComputeC12Nm ?? 0);
@@ -6570,7 +6567,6 @@ function Show4DSTEM() {
       action: "compute_ssb",
       n_trials: nTrials,
       refine: Boolean(ssbComputeRefine),
-      bf_subsample: bfSubsample,
       lock_c10: Boolean(ssbComputeLockC10),
       lock_c12: Boolean(ssbComputeLockC12),
       manual_aberrations: manualAberrations,
@@ -6589,7 +6585,6 @@ function Show4DSTEM() {
   }, [
     model,
     setSsbComputeRequest,
-    ssbComputeBfSubsample,
     ssbComputeC10Nm,
     ssbComputeC12Nm,
     ssbComputeLockC10,
@@ -9982,9 +9977,8 @@ function Show4DSTEM() {
   const dpOptionSummary = `${optionLabel(roiMode)}${roiMode === "annular" ? ` ${Math.round(roiRadiusInner)}-${Math.round(roiRadius)}px` : roiMode !== "point" ? ` ${Math.round(roiRadius)}px` : ""} | ${optionLabel(dpColormap)} | ${dpScaleMode === "log" ? "Log" : "Lin"}`;
   const viOptionSummary = `${viSourceLabel(activeViSource)} | ${viRoiMode === "off" ? "ROI off" : `${optionLabel(viRoiMode)} ${Math.round(viRoiRadius || 5)}px`} | ${optionLabel(viColormap)} | ${viScaleMode === "log" ? "Log" : "Lin"}`;
   const fftOptionSummary = `${fftScaleMode === "log" ? "Log" : "Lin"} | ${optionLabel(fftColormap)}${fftAuto ? " | Auto" : ""}`;
-  const activeSsbBfSubsample = Math.max(0.01, Math.min(1, Number(ssbComputeBfSubsample ?? 1)));
   const ssbBfCountText = Number(ssbComputeBfPixels || 0) > 0
-    ? `${Math.max(0, Math.round(Number(ssbComputeBfSelectedPixels || 0)))} / ${Math.max(0, Math.round(Number(ssbComputeBfPixels || 0)))} BF px`
+    ? `${Math.max(0, Math.round(Number(ssbComputeBfPixels || 0)))} BF px`
     : "BF count appears after first run";
   const hasSsbCalibrationDownload = String(ssbComputeCalibrationJson || "").trim().length > 0;
   const ssbProgressText = String(ssbComputeStatus || "").trim()
@@ -10407,7 +10401,7 @@ function Show4DSTEM() {
                             Trials controls the aberration search; Refine runs a final local fit. Lock C10 or C12 to pin a coefficient at its slider value during the search.
                           </Typography>
                           <Typography sx={{ fontSize: 11, lineHeight: 1.35 }}>
-                            BF ratio uses a uniform subset of detected BF pixels for optimize/refine. Calibration sliders appear below the image after the phase is ready.
+                            Calibration sliders appear below the image after the phase is ready.
                           </Typography>
                         </Box>
                       }
@@ -10439,21 +10433,6 @@ function Show4DSTEM() {
                       size="small"
                       sx={switchStyles.small}
                     />
-                  </Stack>
-                  <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, gap: 1 }}>
-                    <Typography sx={typo.label}>BF ratio</Typography>
-                    <Select
-                      value={activeSsbBfSubsample}
-                      onChange={(e) => setSsbComputeBfSubsample(Number(e.target.value))}
-                      size="small"
-                      disabled={ssbComputeBusy}
-                      sx={{ ...themedSelect, minWidth: 82, fontSize: 10 }}
-                      MenuProps={themedMenuProps}
-                    >
-                      <MenuItem value={0.3}>0.3</MenuItem>
-                      <MenuItem value={0.5}>0.5</MenuItem>
-                      <MenuItem value={1}>1.0</MenuItem>
-                    </Select>
                   </Stack>
                   <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, gap: 1 }}>
                     <Typography sx={typo.label} title="Pin C10 at its slider value during the aberration search">
@@ -10501,7 +10480,7 @@ function Show4DSTEM() {
                     </Typography>
                   )}
                   <Typography sx={{ ...typo.label, color: themeColors.textMuted, whiteSpace: "normal", lineHeight: 1.35 }}>
-                    Default is 200 trials, refine on, BF ratio 1.0. Full 512 scans can take seconds to about a minute.
+                    Default is 200 trials with refinement on every detected BF pixel. Full 512 scans can take seconds to about a minute.
                   </Typography>
                 </Box>
                 <MenuItem onClick={() => requestSsbCompute()} disabled={ssbComputeBusy} sx={{ fontSize: 12 }}>

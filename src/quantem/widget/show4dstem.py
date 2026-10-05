@@ -462,9 +462,7 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
     ssb_compute_enabled = traitlets.Bool(True).tag(sync=True)
     ssb_compute_n_trials = traitlets.Int(200).tag(sync=True)
     ssb_compute_refine = traitlets.Bool(True).tag(sync=True)
-    ssb_compute_bf_subsample = traitlets.Float(1.0).tag(sync=True)
     ssb_compute_bf_pixels = traitlets.Int(0).tag(sync=True)
-    ssb_compute_bf_selected_pixels = traitlets.Int(0).tag(sync=True)
     ssb_compute_manual_aberrations = traitlets.Bool(False).tag(sync=True)
     ssb_compute_lock_c10 = traitlets.Bool(False).tag(sync=True)
     ssb_compute_lock_c12 = traitlets.Bool(False).tag(sync=True)
@@ -972,53 +970,22 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             raise ValueError(f"ssb_semiangle_mrad must be positive, got {semiangle}.")
         return semiangle
 
-    @staticmethod
-    def _ssb_selected_bf_count(full_num_bf: int, ratio: float | None) -> int:
-        """Return the BF subset count used by the quantem.gpu stride sampler."""
-        full = max(0, int(full_num_bf))
-        if full == 0 or ratio is None or float(ratio) >= 1.0:
-            return full
-        ratio_f = float(ratio)
-        if ratio_f <= 0.0:
-            raise ValueError(f"bf_subsample must be in (0, 1], got {ratio}.")
-        stride = max(1, int(round(1.0 / ratio_f)))
-        return int((full + stride - 1) // stride)
+    def _ssb_source(self):
+        """Return the current 4D frame in the form quantem.gpu SSB reads without a dense copy.
 
-    def _ssb_cupy_frame(self):
-        """Return the current 4D frame as a CuPy array plus an owner reference."""
-        try:
-            import cupy as cp
-        except ImportError as exc:
-            raise ImportError(
-                "Compute SSB requires CuPy and the CUDA quantem.gpu SSB engine."
-            ) from exc
+        An encoded acquisition goes to SSB as the loaded dataset, which decodes only
+        the bright-field disk; a scan region of it becomes a bounded tensor; dense
+        tensors and CuPy arrays pass through unchanged.
+        """
+        from quantem.widget.show4dstem_bounded import _View
 
-        frame = self._frame_data
-        if hasattr(frame, "chunks") or getattr(frame, "_is_gpu_frames", False):
-            raise ValueError(
-                "Compute SSB from Show4DSTEM currently requires a resident CUDA "
-                "or CuPy 4D frame. For MPS/chunked data, "
-                "precompute SSB separately and pass SSB=phase_map."
-            )
-        if isinstance(frame, torch.Tensor):
-            if frame.device.type == "cuda":
-                owner = frame.contiguous()
-                device_index = owner.device.index
-                if device_index is None:
-                    device_index = torch.cuda.current_device()
-                with cp.cuda.Device(int(device_index)):
-                    return cp.from_dlpack(owner), owner
-            raise ValueError(
-                f"Compute SSB requires CUDA/CuPy; got Torch device {frame.device}."
-            )
-
-        if type(frame).__module__.split(".", 1)[0] == "cupy":
-            return cp.asarray(frame), frame
-
-        raise ValueError(
-            "Compute SSB requires a CUDA tensor or CuPy array; CPU transfer is "
-            "not a scientific fallback."
-        )
+        frame = self._compute_frame_data
+        if not isinstance(frame, _View):
+            return frame
+        source = frame.source
+        if frame.region == (0, source.shape[0], 0, source.shape[1]):
+            return source
+        return frame.read(scan_region=(0, frame.shape[0], 0, frame.shape[1]))
 
     def _compute_ssb_phase(
         self,
@@ -1027,7 +994,6 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         scan_sampling_A: float | tuple[float, float] | None = None,
         det_sampling_mrad: float | tuple[float, float] | None = None,
         voltage_kV: float | None = None,
-        energy_eV: float | None = None,
         bf_radius: int | None = None,
         aberrations: dict[str, float] | None = None,
         rotation_angle_deg: float | None = None,
@@ -1038,14 +1004,13 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         lock_c10: bool = False,
         lock_c12: bool = False,
         seed: int | None = None,
-        bf_subsample: float | None = None,
         verbose: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Run the CUDA SSB solver for the current 4D frame.
+        """Run quantem.gpu SSB (CUDA or MPS) on the current 4D frame.
 
-        Returns ``(phase, dpc_row, dpc_col)``. The DPC center-of-mass maps come
-        for free: the 4D frame is already resident on the GPU for SSB, so CoM
-        is two cheap reductions, aligned with the solved scan rotation.
+        Returns ``(phase, dpc_row, dpc_col)``. The DPC centre-of-mass maps come
+        from the same data, rotated by the solved physical scan rotation so they
+        follow the shared aligned-DPC convention.
         """
         if self.n_frames != 1:
             raise ValueError(
@@ -1071,10 +1036,9 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             det_sampling,
         )
         voltage = voltage_kV if voltage_kV is not None else cfg.get("voltage_kV")
-        energy = energy_eV if energy_eV is not None else cfg.get("energy_eV")
-        if voltage is None and energy is None:
+        if voltage is None:
             raise ValueError(
-                "Compute SSB needs ssb_voltage_kV or ssb_energy_eV. "
+                "Compute SSB needs ssb_voltage_kV. "
                 "Example: Show4DSTEM(data, ssb_voltage_kV=300, ...)."
             )
         trials = cfg.get("n_trials", 200) if n_trials is None else n_trials
@@ -1083,11 +1047,6 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             raise ValueError(f"n_trials must be >= 0, got {trials}.")
         do_refine = bool(cfg.get("refine", True) if refine is None else refine)
         seed = int(cfg.get("seed", 42) if seed is None else seed)
-        bf_subsample = cfg.get("bf_subsample") if bf_subsample is None else bf_subsample
-        if bf_subsample is not None:
-            bf_subsample = float(bf_subsample)
-            if bf_subsample <= 0.0:
-                raise ValueError(f"bf_subsample must be in (0, 1], got {bf_subsample}.")
         bf_threshold = (
             cfg.get("bf_intensity_threshold", 0.5)
             if bf_intensity_threshold is None
@@ -1100,24 +1059,20 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             if rotation_angle_deg is None
             else rotation_angle_deg
         )
-        optimize_aberrations = None
         if aberrations is not None:
-            c10 = float(aberrations.get("C10", aberrations.get("C10_nm", 0.0)))
-            c12 = float(aberrations.get("C12", aberrations.get("C12_nm", 0.0)))
-            if "phi12_deg" in aberrations:
-                phi12_deg = float(aberrations["phi12_deg"])
-                phi12 = math.radians(phi12_deg)
-            else:
-                phi12 = float(aberrations.get("phi12", 0.0))
-                phi12_deg = math.degrees(phi12)
-            aberrations = {"C10": c10, "C12": c12, "phi12": phi12}
-            if lock_aberrations:
-                optimize_aberrations = {
-                    "C10_nm": c10,
-                    "C12_nm": c12,
-                    "phi12_deg": phi12_deg,
-                }
-        if optimize_aberrations is None and (lock_c10 or lock_c12):
+            phi12 = (
+                math.radians(float(aberrations["phi12_deg"]))
+                if "phi12_deg" in aberrations
+                else float(aberrations.get("phi12", 0.0))
+            )
+            aberrations = {
+                "C10": float(aberrations.get("C10", aberrations.get("C10_nm", 0.0))),
+                "C12": float(aberrations.get("C12", aberrations.get("C12_nm", 0.0))),
+                "phi12": phi12,
+            }
+        search_ranges = None
+        refine_lock = None
+        if lock_c10 or lock_c12:
             base = aberrations or {}
             locked_c10 = float(base.get("C10", self.ssb_compute_c10_nm))
             locked_c12 = float(base.get("C12", self.ssb_compute_c12_nm))
@@ -1126,178 +1081,117 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
                 if "phi12" in base
                 else float(self.ssb_compute_phi12_deg)
             )
-            # Scalar pins the coefficient; tuple keeps the production search
-            # range from SSB.optimize defaults. Locking C12 pins phi12 too:
-            # astigmatism is a magnitude+angle pair.
-            # nm: the SSB public API is nm (C10 +-40 nm, C12 0-10 nm = the backends' default physical span)
-            optimize_aberrations = {
+            # A scalar pins a coefficient in the trial search and refine_lock holds
+            # it through Nelder-Mead; free ones keep SSB's default physical span
+            # (C10 +-40 nm, C12 0-10 nm). Locking C12 pins phi12 too: astigmatism
+            # is a magnitude and angle pair.
+            search_ranges = {
                 "C10_nm": locked_c10 if lock_c10 else (-40.0, 40.0),
                 "C12_nm": locked_c12 if lock_c12 else (0.0, 10.0),
                 "phi12_deg": locked_phi12_deg if lock_c12 else (-90.0, 90.0),
             }
+            refine_lock = (["C10"] if lock_c10 else []) + (["C12", "phi12"] if lock_c12 else [])
 
-        try:
-            from quantem.gpu.ssb import SSB as QuantemSSB
-        except ImportError as exc:
-            raise ImportError(
-                "Compute SSB requires quantem.gpu with the CUDA SSB engine installed."
-            ) from exc
+        from quantem.gpu import SSB
+        from quantem.gpu.dpc import center_of_mass
 
         self.ssb_compute_status = "Preparing SSB data..."
-        data_gpu, owner = self._ssb_cupy_frame()
-        try:
-            self.ssb_compute_status = "Building SSB engine..."
-            ssb = QuantemSSB(
-                data_gpu,
-                semiangle=float(semiangle),
-                scan_sampling=scan_sampling,
-                det_sampling=det_sampling,
-                voltage_kV=None if voltage is None else float(voltage),
-                energy=None if energy is None else float(energy),
-                scan_shape=(self.shape_rows, self.shape_cols) if data_gpu.ndim == 3 else None,
-                bf_intensity_threshold=float(bf_threshold),
-                bf_radius=None if bf_radius is None else int(bf_radius),
-                aberrations=aberrations,
-                rotation_angle_deg=float(rotation),
-            )
-            full_bf = int(len(ssb.bf_inds_row))
-            selected_bf = self._ssb_selected_bf_count(full_bf, bf_subsample)
-            self.ssb_compute_bf_pixels = full_bf
-            self.ssb_compute_bf_selected_pixels = selected_bf
-            if lock_aberrations and aberrations is not None:
+        source = self._ssb_source()
+        manual = bool(lock_aberrations and aberrations is not None)
+        with SSB(
+            source,
+            voltage_kV=float(voltage),
+            semiangle_mrad=float(semiangle),
+            scan_sampling_A=scan_sampling,
+            det_sampling=det_sampling,
+            scan_shape=(self.shape_rows, self.shape_cols) if source.ndim == 3 else None,
+            aberrations=aberrations,
+            rotation_angle_deg=float(rotation),
+            bf_intensity_threshold=float(bf_threshold),
+            bf_radius=None if bf_radius is None else float(bf_radius),
+        ) as ssb:
+            num_bf = int(ssb.num_bf)
+            self.ssb_compute_bf_pixels = num_bf
+            if manual or (trials == 0 and not do_refine):
                 self.ssb_compute_status = (
-                    f"Using manual SSB coefficients "
-                    f"({selected_bf}/{full_bf} BF pixels)..."
+                    f"Reconstructing SSB with the given coefficients ({num_bf} BF pixels)..."
                 )
-            elif trials > 0:
+                result = ssb.reconstruct()
+            else:
+                refinement = "nelder-mead" if do_refine else None
                 self.ssb_compute_status = (
-                    f"Optimizing SSB ({trials} trials, "
-                    f"{selected_bf}/{full_bf} BF pixels)..."
+                    f"Fitting SSB aberrations ({trials} trials"
+                    f"{', Nelder-Mead' if refinement else ''}, {num_bf} BF pixels)..."
                 )
-                ssb.optimize(
-                    aberrations=optimize_aberrations,
-                    rotation_angle_deg=float(rotation),
-                    n_trials=trials,
+                result = ssb.find_aberrations(
+                    trials=trials,
+                    refinement=refinement,
+                    search_ranges=search_ranges,
+                    refine_lock=refine_lock if refinement else None,
                     seed=seed,
                     verbose=verbose,
-                    bf_subsample=bf_subsample,
                 )
-            # The GPU Nelder-Mead refiner has no locked mode yet; with a pinned
-            # coefficient the Optuna search already respects the lock, so skip
-            # refine rather than let it move the pinned value.
-            if do_refine and not (lock_aberrations and aberrations is not None) and not (lock_c10 or lock_c12):
-                self.ssb_compute_status = (
-                    f"Refining SSB ({selected_bf}/{full_bf} BF pixels)..."
-                )
-                ssb.refine(verbose=verbose, bf_subsample=bf_subsample)
-            self.ssb_compute_status = "Reconstructing SSB phase..."
-            result = ssb.result()
-            phase = result.phase
-            result_aberrations = dict(
-                getattr(result, "aberrations", None)
-                or getattr(ssb, "aberrations", {})
-                or {}
-            )
-            c10_nm = float(result_aberrations.get("C10", self.ssb_compute_c10_nm))
-            c12_nm = float(result_aberrations.get("C12", self.ssb_compute_c12_nm))
-            phi12_rad = float(
-                result_aberrations.get(
-                    "phi12",
-                    math.radians(float(self.ssb_compute_phi12_deg)),
-                )
-            )
-            rotation_final = float(
-                getattr(result, "rotation_angle_deg", float(rotation))
-            )
-            self.ssb_compute_c10_nm = c10_nm
-            self.ssb_compute_c12_nm = c12_nm
-            self.ssb_compute_phi12_deg = math.degrees(phi12_rad)
-            self.ssb_compute_rotation_angle_deg = rotation_final
-            self.ssb_compute_calibration_json = json.dumps(
-                {
-                    "schema": "quantem.ssb.calibration.v1",
-                    "created_utc": datetime.now(timezone.utc)
-                    .replace(microsecond=0)
-                    .isoformat()
-                    .replace("+00:00", "Z"),
-                    "source": {
-                        "widget": "Show4DSTEM",
-                        "title": self.title,
-                        "frame_idx": int(self.frame_idx),
-                        "scan_shape": [int(self.shape_rows), int(self.shape_cols)],
-                        "detector_shape": [int(self.det_rows), int(self.det_cols)],
-                    },
-                    "aberrations": {
-                        "C10": c10_nm,
-                        "C12": c12_nm,
-                        "phi12": phi12_rad,
-                    },
-                    "aberration_units": {
-                        "C10": "nm",
-                        "C12": "nm",
-                        "phi12": "rad",
-                    },
-                    "rotation_angle_deg": rotation_final,
-                    "calibration": {
-                        "voltage_kV": None if voltage is None else float(voltage),
-                        "energy_eV": None if energy is None else float(energy),
-                        "semiangle_mrad": float(semiangle),
-                        "scan_sampling_A": [float(x) for x in scan_sampling],
-                        "det_sampling_mrad": [float(x) for x in det_sampling],
-                        "bf_radius": None if bf_radius is None else int(bf_radius),
-                        "bf_intensity_threshold": float(bf_threshold),
-                        "bf_subsample": None if bf_subsample is None else float(bf_subsample),
-                        "bf_pixels": full_bf,
-                        "bf_selected_pixels": selected_bf,
-                    },
-                    "run": {
-                        "n_trials": trials,
-                        "refine": do_refine,
-                        "manual_locked": bool(lock_aberrations and aberrations is not None),
-                        "seed": seed,
-                        "loss": (
-                            None
-                            if getattr(result, "loss", None) is None
-                            else float(getattr(result, "loss"))
-                        ),
-                        "elapsed_s": (
-                            None
-                            if getattr(result, "elapsed", None) is None
-                            else float(getattr(result, "elapsed"))
-                        ),
-                        "refine_method": getattr(result, "refine_method", None),
-                        "refine_nfev": getattr(result, "refine_nfev", None),
-                        "refine_elapsed_s": (
-                            None
-                            if getattr(result, "refine_elapsed", None) is None
-                            else float(getattr(result, "refine_elapsed"))
-                        ),
-                    },
+            physical_rotation = ssb.physical_rotation_deg
+        phase_np = np.asarray(to_numpy(result.phase), dtype=np.float32)
+        c10_nm = float(result.aberrations["C10"])
+        c12_nm = float(result.aberrations["C12"])
+        phi12_rad = float(result.aberrations["phi12"])
+        self.ssb_compute_c10_nm = c10_nm
+        self.ssb_compute_c12_nm = c12_nm
+        self.ssb_compute_phi12_deg = math.degrees(phi12_rad)
+        self.ssb_compute_rotation_angle_deg = float(result.rotation_angle_deg)
+        self.ssb_compute_calibration_json = json.dumps(
+            {
+                "schema": "quantem.ssb.calibration.v1",
+                "created_utc": datetime.now(timezone.utc)
+                .replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "source": {
+                    "widget": "Show4DSTEM",
+                    "title": self.title,
+                    "frame_idx": int(self.frame_idx),
+                    "scan_shape": [int(self.shape_rows), int(self.shape_cols)],
+                    "detector_shape": [int(self.det_rows), int(self.det_cols)],
                 },
-                indent=2,
-            )
-            self.ssb_compute_calibration_filename = self._default_ssb_calibration_filename()
-            if hasattr(phase, "get"):
-                phase = phase.get()
-            phase_np = np.asarray(phase, dtype=np.float32)
-            # DPC comes for free here: the 4D frame is already resident on the
-            # GPU, so CoM row/col is two cheap reductions. Align with the SSB
-            # scan rotation so the maps follow the shared aligned-DPC convention.
-            from quantem.gpu.dpc import center_of_mass
-            com_k_row, com_k_col = center_of_mass(
-                data_gpu, scan_shape=(self.shape_rows, self.shape_cols)
-            )
-            theta = math.radians(rotation_final)
-            cos_t, sin_t = math.cos(theta), math.sin(theta)
-            dpc_row_np = np.ascontiguousarray(
-                cos_t * com_k_row - sin_t * com_k_col, dtype=np.float32
-            )
-            dpc_col_np = np.ascontiguousarray(
-                sin_t * com_k_row + cos_t * com_k_col, dtype=np.float32
-            )
-        finally:
-            del owner
-            gc.collect()
+                "aberrations": {"C10": c10_nm, "C12": c12_nm, "phi12": phi12_rad},
+                "aberration_units": {"C10": "nm", "C12": "nm", "phi12": "rad"},
+                "rotation_angle_deg": float(result.rotation_angle_deg),
+                "com_reversed": bool(result.com_reversed),
+                "calibration": {
+                    "voltage_kV": float(voltage),
+                    "semiangle_mrad": float(semiangle),
+                    "scan_sampling_A": [float(x) for x in scan_sampling],
+                    "det_sampling_mrad": (
+                        None if det_sampling is None else [float(x) for x in det_sampling]
+                    ),
+                    "bf_radius": None if bf_radius is None else float(bf_radius),
+                    "bf_intensity_threshold": float(bf_threshold),
+                    "bf_pixels": num_bf,
+                },
+                "run": {
+                    "n_trials": 0 if manual else trials,
+                    "refine": bool(do_refine and not manual),
+                    "manual_locked": manual,
+                    "seed": seed,
+                    "loss": None if result.loss is None else float(result.loss),
+                    "elapsed_s": None if result.elapsed is None else float(result.elapsed),
+                },
+            },
+            indent=2,
+        )
+        self.ssb_compute_calibration_filename = self._default_ssb_calibration_filename()
+        com_k_row, com_k_col = center_of_mass(
+            source, scan_shape=(self.shape_rows, self.shape_cols)
+        )
+        theta = math.radians(physical_rotation)
+        cos_t, sin_t = math.cos(theta), math.sin(theta)
+        dpc_row_np = np.ascontiguousarray(
+            cos_t * com_k_row - sin_t * com_k_col, dtype=np.float32
+        )
+        dpc_col_np = np.ascontiguousarray(
+            sin_t * com_k_row + cos_t * com_k_col, dtype=np.float32
+        )
 
         if phase_np.shape != (self.shape_rows, self.shape_cols):
             raise ValueError(
@@ -1350,7 +1244,6 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         ssb_scan_sampling_A: float | tuple[float, float] | None = None,
         ssb_det_sampling_mrad: float | tuple[float, float] | None = None,
         ssb_voltage_kV: float | None = None,
-        ssb_energy_eV: float | None = None,
         ssb_bf_radius: int | None = None,
         ssb_bf_intensity_threshold: float = 0.5,
         ssb_aberrations: dict[str, float] | None = None,
@@ -1358,7 +1251,6 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
         ssb_n_trials: int = 200,
         ssb_refine: bool = True,
         ssb_seed: int = 42,
-        ssb_bf_subsample: float | None = 1.0,
         ssb_manual_aberrations: bool = False,
         ssb_c10_nm: float = 0.0,
         ssb_c12_nm: float = 0.0,
@@ -1621,7 +1513,6 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             "scan_sampling_A": ssb_scan_sampling_A,
             "det_sampling_mrad": ssb_det_sampling_mrad,
             "voltage_kV": ssb_voltage_kV,
-            "energy_eV": ssb_energy_eV,
             "bf_radius": ssb_bf_radius,
             "bf_intensity_threshold": float(ssb_bf_intensity_threshold),
             "aberrations": ssb_aberrations,
@@ -1629,12 +1520,10 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             "n_trials": int(ssb_n_trials),
             "refine": bool(ssb_refine),
             "seed": int(ssb_seed),
-            "bf_subsample": ssb_bf_subsample,
         }
         self.ssb_compute_enabled = bool(ssb_compute_enabled)
         self.ssb_compute_n_trials = int(ssb_n_trials)
         self.ssb_compute_refine = bool(ssb_refine)
-        self.ssb_compute_bf_subsample = 1.0 if ssb_bf_subsample is None else float(ssb_bf_subsample)
         self.ssb_compute_manual_aberrations = bool(ssb_manual_aberrations)
         self.ssb_compute_c10_nm = float(
             ssb_aberrations.get("C10", ssb_c10_nm)
@@ -4427,14 +4316,12 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             "scan_sampling_A": "scan_sampling_A",
             "det_sampling_mrad": "det_sampling_mrad",
             "voltage_kV": "voltage_kV",
-            "energy_eV": "energy_eV",
             "bf_radius": "bf_radius",
             "bf_intensity_threshold": "bf_intensity_threshold",
             "rotation_angle_deg": "rotation_angle_deg",
             "n_trials": "n_trials",
             "refine": "refine",
             "seed": "seed",
-            "bf_subsample": "bf_subsample",
             "lock_aberrations": "lock_aberrations",
         }
         for src_key, dst_key in key_map.items():
@@ -4444,8 +4331,6 @@ class Show4DSTEM(StaticFallbackMixin, anywidget.AnyWidget):
             self.ssb_compute_n_trials = int(kwargs["n_trials"])
         if "refine" in kwargs:
             self.ssb_compute_refine = bool(kwargs["refine"])
-        if "bf_subsample" in kwargs:
-            self.ssb_compute_bf_subsample = float(kwargs["bf_subsample"])
 
         manual_aberrations = bool(payload.get("manual_aberrations", False))
         self.ssb_compute_manual_aberrations = manual_aberrations

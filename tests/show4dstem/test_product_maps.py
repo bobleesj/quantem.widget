@@ -2,9 +2,7 @@
 
 import json
 import pathlib
-import sys
 import time
-import types
 
 import numpy as np
 import pytest
@@ -182,14 +180,13 @@ def test_show4dstem_ssb_compute_request_runs_in_background(monkeypatch):
     def fake_compute(self, **kwargs):
         assert kwargs["n_trials"] == 0
         assert kwargs["refine"] is False
-        assert kwargs["bf_subsample"] == 0.3
         return phase, phase * 0.1, phase * 0.2
 
     monkeypatch.setattr(Show4DSTEMBase, "_compute_ssb_phase", fake_compute)
     widget = Show4DSTEM(_data(), verbose=False)
 
     widget.ssb_compute_request = json.dumps(
-        {"action": "compute_ssb", "n_trials": 0, "refine": False, "bf_subsample": 0.3}
+        {"action": "compute_ssb", "n_trials": 0, "refine": False}
     )
 
     for _ in range(100):
@@ -202,7 +199,6 @@ def test_show4dstem_ssb_compute_request_runs_in_background(monkeypatch):
     assert widget.ssb_compute_status.startswith("SSB ready")
     assert widget.ssb_compute_n_trials == 0
     assert widget.ssb_compute_refine is False
-    assert widget.ssb_compute_bf_subsample == 0.3
     assert widget.vi_source == "SSB"
     assert widget.vi_product_labels == ["DPC_row", "DPC_col", "SSB"]
     np.testing.assert_allclose(widget._get_virtual_image_array(), phase)
@@ -214,7 +210,6 @@ def test_show4dstem_ssb_advanced_defaults_are_synced():
 
     assert widget.ssb_compute_n_trials == 200
     assert widget.ssb_compute_refine is True
-    assert widget.ssb_compute_bf_subsample == 1.0
     assert widget.ssb_compute_manual_aberrations is False
 
 
@@ -224,13 +219,11 @@ def test_show4dstem_ssb_advanced_overrides_are_synced():
         _data(),
         ssb_n_trials=50,
         ssb_refine=False,
-        ssb_bf_subsample=0.5,
         verbose=False,
     )
 
     assert widget.ssb_compute_n_trials == 50
     assert widget.ssb_compute_refine is False
-    assert widget.ssb_compute_bf_subsample == 0.5
 
 
 def test_show4dstem_frontend_more_menu_direct_ptycho_contract():
@@ -256,20 +249,17 @@ def test_show4dstem_frontend_more_menu_direct_ptycho_contract():
     assert "Trials" in more_menu
     assert "<MenuItem value={200}>200</MenuItem>" in more_menu
     assert "Refine" in more_menu
-    assert "BF ratio" in more_menu
-    assert "<MenuItem value={0.3}>0.3</MenuItem>" in more_menu
-    assert "<MenuItem value={0.5}>0.5</MenuItem>" in more_menu
-    assert "<MenuItem value={1}>1.0</MenuItem>" in more_menu
+    assert "BF ratio" not in more_menu
     assert "Lock C10" in more_menu
     assert "Lock C12" in more_menu
-    assert "Default is 200 trials, refine on, BF ratio 1.0" in more_menu
+    assert "Default is 200 trials with refinement on every detected BF pixel" in more_menu
     assert "Download calibration JSON" in more_menu
     assert "Running SSB..." in source
 
     assert 'action: "compute_ssb"' in request
     assert "n_trials: nTrials" in request
     assert "refine: Boolean(ssbComputeRefine)" in request
-    assert "bf_subsample: bfSubsample" in request
+    assert "bf_subsample" not in request
     assert "manual_aberrations: manualAberrations" in request
     assert "model.set(\"ssb_compute_request\", payload);" in request
     assert "model.save_changes();" in request
@@ -301,7 +291,6 @@ def test_show4dstem_ssb_manual_coeff_request_passes_solver_kwargs(monkeypatch):
             "action": "compute_ssb",
             "n_trials": 0,
             "refine": False,
-            "bf_subsample": 1.0,
             "manual_aberrations": True,
             "c10_nm": 42.0,
             "c12_nm": 13.0,
@@ -320,7 +309,6 @@ def test_show4dstem_ssb_manual_coeff_request_passes_solver_kwargs(monkeypatch):
     assert widget.ssb_compute_c12_nm == 13.0
     assert widget.ssb_compute_phi12_deg == 30.0
     assert widget.ssb_compute_rotation_angle_deg == 73.5
-    assert seen["bf_subsample"] == 1.0
     assert seen["lock_aberrations"] is True
     assert seen["rotation_angle_deg"] == 73.5
     assert seen["aberrations"]["C10"] == 42.0
@@ -346,182 +334,90 @@ def test_show4dstem_html_export_clone_disables_live_ssb_compute():
         clone.close()
 
 
-def test_show4dstem_compute_ssb_phase_passes_solver_arguments(monkeypatch):
-    """C9: real SSB plumbing resolves metadata and calls quantem.gpu.ssb.SSB."""
-    phase = np.full((128, 128), 0.25, dtype=np.float32)
-    calls = {}
-
-    class FakeData:
-        ndim = 4
-
-    class FakeResult:
-        def __init__(self, phase):
-            self.phase = phase
-            self.aberrations = {"C10": 12.0, "C12": 4.0, "phi12": np.deg2rad(15.0)}
-            self.rotation_angle_deg = 2.5
-            self.loss = 0.125
-            self.elapsed = 1.5
-            self.refine_method = "fake-nmead"
-            self.refine_nfev = 7
-            self.refine_elapsed = 0.4
-
-    class FakeSSB:
-        def __init__(self, data, **kwargs):
-            calls["data"] = data
-            calls["init"] = kwargs
-            self.bf_inds_row = np.arange(120, dtype=np.int32)
-
-        def optimize(self, **kwargs):
-            calls["optimize"] = kwargs
-
-        def refine(self, **kwargs):
-            calls["refine"] = kwargs
-
-        def result(self):
-            calls["result"] = True
-            return FakeResult(phase)
-
+def _ssb_widget():
+    """A 128 x 128 scan with a 16 x 16 detector and a bright-field disk of radius 4, on the GPU."""
+    torch = pytest.importorskip("torch")
+    if torch.cuda.is_available():
+        device = "cuda:0"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        pytest.skip("quantem.gpu SSB needs a CUDA or MPS device.")
+    rows, cols = np.indices((16, 16))
+    disk = (rows - 7.5) ** 2 + (cols - 7.5) ** 2 <= 16
+    rng = np.random.default_rng(3)
+    counts = rng.poisson(np.where(disk, 50.0, 0.5), (128, 128, 16, 16)).astype(np.uint16)
+    data_t = torch.from_numpy(counts).to(device)
     widget = Show4DSTEM(
-        _data((128, 128, 4, 4)),
-        sampling=(0.5, 0.5, 0.25, 0.25),
+        data_t,
+        sampling=(0.5, 0.5, 1.0, 1.0),
         units=("A", "A", "mrad", "mrad"),
-        bf_radius=20,
+        bf_radius=4,
         ssb_voltage_kV=300,
+        precompute_virtual_images=False,
         verbose=False,
     )
-    fake_data = FakeData()
-    gpu_module = types.ModuleType("quantem.gpu")
-    ssb_module = types.ModuleType("quantem.gpu.ssb")
-    ssb_module.SSB = FakeSSB
-    dpc_module = types.ModuleType("quantem.gpu.dpc")
-    fake_com_row = np.linspace(-1.0, 1.0, 128 * 128).astype(np.float32).reshape(128, 128)
-    fake_com_col = np.linspace(1.0, -1.0, 128 * 128).astype(np.float32).reshape(128, 128)
-    dpc_module.center_of_mass = lambda data, **kw: (fake_com_row, fake_com_col)
-    monkeypatch.setitem(sys.modules, "quantem.gpu", gpu_module)
-    monkeypatch.setitem(sys.modules, "quantem.gpu.ssb", ssb_module)
-    monkeypatch.setitem(sys.modules, "quantem.gpu.dpc", dpc_module)
-    monkeypatch.setattr(widget, "_ssb_cupy_frame", lambda: (fake_data, object()))
+    return widget, data_t
 
-    out, dpc_row, dpc_col = widget._compute_ssb_phase(
-        n_trials=2, refine=True, seed=11, bf_subsample=0.5
+
+def _rotated_dpc(data_t, rotation_deg):
+    """Reference DPC: quantem.gpu centre of mass rotated into the scan frame."""
+    from quantem.gpu.dpc import center_of_mass
+
+    com_row, com_col = center_of_mass(data_t)
+    theta = np.deg2rad(rotation_deg)
+    return (
+        np.cos(theta) * com_row - np.sin(theta) * com_col,
+        np.sin(theta) * com_row + np.cos(theta) * com_col,
     )
 
-    np.testing.assert_allclose(out, phase)
-    theta = np.deg2rad(2.5)
-    expected_row = np.cos(theta) * fake_com_row - np.sin(theta) * fake_com_col
-    expected_col = np.sin(theta) * fake_com_row + np.cos(theta) * fake_com_col
-    np.testing.assert_allclose(dpc_row, expected_row, atol=1e-6)
-    np.testing.assert_allclose(dpc_col, expected_col, atol=1e-6)
-    assert calls["data"] is fake_data
-    assert calls["init"]["semiangle"] == pytest.approx(5.0)
-    assert calls["init"]["scan_sampling"] == (0.5, 0.5)
-    assert calls["init"]["det_sampling"] == (0.25, 0.25)
-    assert calls["init"]["voltage_kV"] == 300.0
-    assert calls["init"]["scan_shape"] is None
-    assert calls["init"]["bf_intensity_threshold"] == 0.5
-    assert widget.ssb_compute_bf_pixels == 120
-    assert widget.ssb_compute_bf_selected_pixels == 60
-    assert calls["optimize"]["n_trials"] == 2
-    assert calls["optimize"]["seed"] == 11
-    assert calls["optimize"]["bf_subsample"] == 0.5
-    assert calls["refine"]["bf_subsample"] == 0.5
-    assert calls["result"] is True
-    calibration = json.loads(widget.ssb_compute_calibration_json)
+
+def test_show4dstem_compute_ssb_phase_fits_on_the_current_frame():
+    """C9: a short SSB fit on GPU data, expect a scan-shaped phase, a full calibration record and rotated DPC."""
+    widget, data_t = _ssb_widget()
+    try:
+        phase, dpc_row, dpc_col = widget._compute_ssb_phase(n_trials=2, refine=False, seed=11)
+        calibration = json.loads(widget.ssb_compute_calibration_json)
+    finally:
+        widget.close()
+    assert phase.shape == (128, 128) and phase.dtype == np.float32
+    assert np.isfinite(phase).all()
+    assert widget.ssb_compute_bf_pixels > 0
     assert calibration["schema"] == "quantem.ssb.calibration.v1"
-    assert calibration["aberrations"]["C10"] == 12.0
-    assert calibration["aberrations"]["C12"] == 4.0
-    assert calibration["aberrations"]["phi12"] == pytest.approx(np.deg2rad(15.0))
-    assert calibration["rotation_angle_deg"] == 2.5
-    assert calibration["calibration"]["bf_pixels"] == 120
-    assert calibration["calibration"]["bf_selected_pixels"] == 60
-    assert calibration["run"]["n_trials"] == 2
-    assert calibration["run"]["loss"] == 0.125
+    assert calibration["calibration"]["semiangle_mrad"] == pytest.approx(4.0)
+    assert calibration["calibration"]["bf_pixels"] == widget.ssb_compute_bf_pixels
+    assert calibration["run"] == {
+        "n_trials": 2, "refine": False, "manual_locked": False, "seed": 11,
+        "loss": calibration["run"]["loss"], "elapsed_s": calibration["run"]["elapsed_s"],
+    }
+    rotation = calibration["rotation_angle_deg"] + (180.0 if calibration["com_reversed"] else 0.0)
+    expected_row, expected_col = _rotated_dpc(data_t, rotation)
+    np.testing.assert_allclose(dpc_row, expected_row, atol=1e-5)
+    np.testing.assert_allclose(dpc_col, expected_col, atol=1e-5)
     assert widget.ssb_compute_calibration_filename.endswith("_ssb_calibration.json")
 
 
-def test_show4dstem_compute_ssb_phase_locks_manual_coefficients(monkeypatch):
+def test_show4dstem_compute_ssb_phase_locks_manual_coefficients():
     """C10: manual coefficients reconstruct directly instead of drifting."""
-    phase = np.full((128, 128), -0.125, dtype=np.float32)
-    calls = {}
-
-    class FakeData:
-        ndim = 4
-
-    class FakeResult:
-        def __init__(self, phase, aberrations, rotation_angle_deg):
-            self.phase = phase
-            self.aberrations = dict(aberrations)
-            self.rotation_angle_deg = rotation_angle_deg
-            self.loss = None
-            self.elapsed = None
-
-    class FakeSSB:
-        def __init__(self, data, **kwargs):
-            calls["data"] = data
-            calls["init"] = kwargs
-            self.bf_inds_row = np.arange(120, dtype=np.int32)
-            self.aberrations = dict(kwargs.get("aberrations") or {})
-            self.rotation_angle_deg = float(kwargs.get("rotation_angle_deg", 0.0))
-
-        def optimize(self, **kwargs):
-            calls["optimize"] = kwargs
-
-        def refine(self, **kwargs):
-            calls["refine"] = kwargs
-
-        def result(self):
-            calls["result"] = True
-            return FakeResult(phase, self.aberrations, self.rotation_angle_deg)
-
-    widget = Show4DSTEM(
-        _data((128, 128, 4, 4)),
-        sampling=(0.5, 0.5, 0.25, 0.25),
-        units=("A", "A", "mrad", "mrad"),
-        bf_radius=20,
-        ssb_voltage_kV=300,
-        verbose=False,
-    )
-    fake_data = FakeData()
-    gpu_module = types.ModuleType("quantem.gpu")
-    ssb_module = types.ModuleType("quantem.gpu.ssb")
-    ssb_module.SSB = FakeSSB
-    dpc_module = types.ModuleType("quantem.gpu.dpc")
-    fake_com_row = np.linspace(-1.0, 1.0, 128 * 128).astype(np.float32).reshape(128, 128)
-    fake_com_col = np.linspace(1.0, -1.0, 128 * 128).astype(np.float32).reshape(128, 128)
-    dpc_module.center_of_mass = lambda data, **kw: (fake_com_row, fake_com_col)
-    monkeypatch.setitem(sys.modules, "quantem.gpu", gpu_module)
-    monkeypatch.setitem(sys.modules, "quantem.gpu.ssb", ssb_module)
-    monkeypatch.setitem(sys.modules, "quantem.gpu.dpc", dpc_module)
-    monkeypatch.setattr(widget, "_ssb_cupy_frame", lambda: (fake_data, object()))
-
-    out = widget._compute_ssb_phase(
-        n_trials=200,
-        refine=True,
-        seed=11,
-        bf_subsample=0.3,
-        aberrations={"C10": 42.0, "C12": 13.0, "phi12": np.deg2rad(30.0)},
-        rotation_angle_deg=73.5,
-        lock_aberrations=True,
-    )
-    out, dpc_row, dpc_col = out
-
-    np.testing.assert_allclose(out, phase)
-    theta = np.deg2rad(73.5)
-    expected_row = np.cos(theta) * fake_com_row - np.sin(theta) * fake_com_col
-    np.testing.assert_allclose(dpc_row, expected_row, atol=1e-6)
-    assert calls["init"]["aberrations"]["C10"] == 42.0
-    assert calls["init"]["aberrations"]["C12"] == 13.0
-    assert calls["init"]["aberrations"]["phi12"] == pytest.approx(np.deg2rad(30.0))
-    assert calls["init"]["rotation_angle_deg"] == 73.5
-    assert "optimize" not in calls
-    assert "refine" not in calls
-    assert widget.ssb_compute_bf_pixels == 120
-    assert widget.ssb_compute_bf_selected_pixels == 40
-    assert calls["result"] is True
-    calibration = json.loads(widget.ssb_compute_calibration_json)
-    assert calibration["aberrations"]["C10"] == 42.0
-    assert calibration["aberrations"]["C12"] == 13.0
+    widget, data_t = _ssb_widget()
+    try:
+        phase, dpc_row, _ = widget._compute_ssb_phase(
+            n_trials=200,
+            refine=True,
+            seed=11,
+            aberrations={"C10": 42.0, "C12": 13.0, "phi12": np.deg2rad(30.0)},
+            rotation_angle_deg=73.5,
+            lock_aberrations=True,
+        )
+        calibration = json.loads(widget.ssb_compute_calibration_json)
+    finally:
+        widget.close()
+    assert phase.shape == (128, 128)
+    assert calibration["aberrations"]["C10"] == pytest.approx(42.0)
+    assert calibration["aberrations"]["C12"] == pytest.approx(13.0)
     assert calibration["aberrations"]["phi12"] == pytest.approx(np.deg2rad(30.0))
-    assert calibration["rotation_angle_deg"] == 73.5
+    assert calibration["rotation_angle_deg"] == pytest.approx(73.5)
     assert calibration["run"]["manual_locked"] is True
-    assert calibration["calibration"]["bf_selected_pixels"] == 40
+    assert calibration["run"]["n_trials"] == 0
+    expected_row, _ = _rotated_dpc(data_t, 73.5)
+    np.testing.assert_allclose(dpc_row, expected_row, atol=1e-5)
