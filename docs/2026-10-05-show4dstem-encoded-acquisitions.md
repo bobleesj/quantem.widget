@@ -12,17 +12,17 @@ data, how fast are they, and which features lose their backend?
 
 - quantem.gpu: `gpu-refactor` worktree (5265b312 at the start, 34949e69 final).
 - quantem.widget: branch `gpu-refactor-callers` from `main` f9cbccfc.
-- CUDA: cudahost GPU 0, RTX PRO 6000 Blackwell, shared with other jobs (load
+- CUDA: RTX PRO 6000 Blackwell (Linux), shared with other jobs (load
   average about 20 during most runs, so timings are upper bounds).
-- MPS: maca (Apple M5).
+- MPS: Apple M5.
 - Data: Arina 512 x 512 x 192 x 192 uint16 masters (one BTO zone series of 41
-  ready masters; a MAPED tilt folder and an SSB acquisition on maca).
+  ready masters; a MAPED tilt folder and an SSB acquisition on the Mac).
 - Browser: headed Chrome on the NVIDIA Vulkan adapter (`adapter.info` reported
   `nvidia` / `blackwell`), private JupyterLab with its own settings.
 
 ## Results
 
-| Measurement | CUDA (cudahost) | MPS (maca) |
+| Measurement | CUDA | MPS |
 |---|---|---|
 | `io.load(master)`, warm disk | 1.0 s | 2.3 to 2.8 s |
 | Encoded size (18 GiB dense) | 1.98 GiB; 0.09 GiB for a blank scan | 1.93 GiB |
