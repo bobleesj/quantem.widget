@@ -56,27 +56,6 @@ import { useHideStaticFallback } from "../staticFallback";
 import { MetadataSection } from "../widgetInfo";
 import { FolderWatchBadge, useFolderWatchModelLive } from "../folderWatchStatus";
 import {
-  beginPendingProgressiveComparePage,
-  beginProgressiveComparePage,
-  compareMessageGeneration,
-  completeProgressiveComparePage,
-  mergeProgressiveComparePanel,
-  mergeProgressiveCompareCacheMetadata,
-  freshVisibleComparePagePaintAck,
-  progressiveCompareCacheBadge,
-  progressiveComparePanelPresentation,
-  recordComparePageClick,
-  recordComparePageFirstPanelPaint,
-  recordComparePageStaleDrop,
-  recordComparePageVisiblePaint,
-  reconcileCompletedCompareIndices,
-  reconcileProgressiveComparePanels,
-  retainCachedProgressiveComparePanels,
-  shouldClearProgressiveComparePage,
-  type ComparePageMessage,
-  type ProgressiveComparePage,
-} from "./progressiveCompare";
-import {
   clampDetectorCenter,
   resizeDetectorFromPointer,
   type DetectorRoiMode,
@@ -1506,7 +1485,6 @@ interface CompareVirtualGridProps {
   gpuRanges?: Map<number, { min: number; max: number }> | null;
   gpuVersion?: number;
   gpuEngine?: GPUColormapEngine | null;
-  progressivePage?: ProgressiveComparePage | null;
   labels: string[];
   activeIdx: number;
   shapeRows: number;
@@ -1542,10 +1520,6 @@ interface CompareVirtualGridProps {
   onDragFrameChange: (idx: number | null) => void;
   onPendingMoveFrameChange: (idx: number | null) => void;
   onPositionChange: (row: number, col: number, commit?: boolean) => void;
-  onFreshVisiblePaint?: (
-    page: ProgressiveComparePage,
-    paintedIndices: number[],
-  ) => void;
   onGpuPaint?: (panelCount: number) => void;
   onGpuRendererReady?: (renderNow: (() => number) | null) => void;
 }
@@ -1558,7 +1532,6 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   gpuRanges,
   gpuVersion,
   gpuEngine,
-  progressivePage,
   labels,
   activeIdx,
   shapeRows,
@@ -1594,7 +1567,6 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   onDragFrameChange,
   onPendingMoveFrameChange,
   onPositionChange,
-  onFreshVisiblePaint,
   onGpuPaint,
   onGpuRendererReady,
 }: CompareVirtualGridProps) {
@@ -1602,7 +1574,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   const batchCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const batchGridRef = React.useRef<HTMLDivElement | null>(null);
   const residentSource = Boolean(batchModel.get("_rans_url"));
-  const sharedGpuEnabled = Boolean(residentSource && gpuEngine && gpuSlots?.size && !progressivePage && !reorderMode);
+  const sharedGpuEnabled = Boolean(residentSource && gpuEngine && gpuSlots?.size && !reorderMode);
   const [sharedGpuReady, setSharedGpuReady] = React.useState(false);
   const sharedGpuReadyRef = React.useRef(false);
   const sharedContextRef = React.useRef<GPUCanvasContext | null>(null);
@@ -1616,9 +1588,6 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     panel: Float32Array;
     styleKey: string;
   }>());
-  const progressivePageForPaintRef = React.useRef<ProgressiveComparePage | null>(progressivePage ?? null);
-  const visiblePanelByFrameRef = React.useRef(new Map<number, Float32Array>());
-  const visiblePaintRafRef = React.useRef({ beforePaint: 0, afterPaint: 0 });
   const overlayRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
   const tileRefs = React.useRef<(HTMLDivElement | null)[]>([]);
   const isDraggingPositionRef = React.useRef(false);
@@ -1640,22 +1609,16 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       return raw.subarray(start, start + panelPixels);
     });
   }, [bytes, count, panelPixels]);
-  const sourceIndices = progressivePage ? progressivePage.expectedIndices : (indices || []);
+  const sourceIndices = indices || [];
   const [previewIndices, setPreviewIndices] = React.useState<number[] | null>(null);
-  const panelByFrame = React.useMemo(
-    () => reconcileProgressiveComparePanels(
-      progressivePage ?? null,
-      indices || [],
-      panels,
-    ),
-    [indices, panels, progressivePage],
-  );
-  progressivePageForPaintRef.current = progressivePage ?? null;
-  visiblePanelByFrameRef.current = panelByFrame;
-  const cacheBadge = React.useMemo(
-    () => progressiveCompareCacheBadge(progressivePage ?? null, panelByFrame),
-    [panelByFrame, progressivePage],
-  );
+  const panelByFrame = React.useMemo(() => {
+    const byFrame = new Map<number, Float32Array>();
+    (indices || []).forEach((frame, index) => {
+      const panel = panels[index];
+      if (panel) byFrame.set(frame, panel);
+    });
+    return byFrame;
+  }, [indices, panels]);
   const displayIndices = React.useMemo(() => {
     const available = new Set(sourceIndices);
     const hiddenSet = new Set((hidden || []).filter((idx) => Number.isInteger(idx) && available.has(idx)));
@@ -1690,8 +1653,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         panel: panelByFrame.get(frame),
         gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine && (residentSource || gpuRanges?.has(frame))),
       }))
-      .filter((entry) => Boolean(progressivePage) || entry.panel !== undefined || entry.gpuLoaded);
-  }, [gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, progressivePage, residentSource, renderIndices, scaleMode]);
+      .filter((entry) => entry.panel !== undefined || entry.gpuLoaded);
+  }, [gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, residentSource, renderIndices, scaleMode]);
 
   const renderGpuSlotsNow = React.useCallback((): number => {
     if (!gpuEngine || !gpuSlots) return 0;
@@ -1925,42 +1888,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       ctx.putImageData(imageData, 0, 0);
       canvasDrawCacheRef.current.set(frame, { canvas, panel, styleKey });
     });
-    const expected = progressivePage?.expectedIndices ?? [];
-    const drawnExpectedIndices = expected.filter((frame) => {
-      const currentPanel = panelByFrame.get(frame);
-      const drawn = canvasDrawCacheRef.current.get(frame);
-      return Boolean(
-        (currentPanel && drawn?.panel === currentPanel && drawn.canvas.isConnected)
-        || (gpuEngine && gpuSlots?.has(frame)),
-      );
-    });
-    const paintRaf = visiblePaintRafRef.current;
-    if (drawnExpectedIndices.length > 0 && paintRaf.beforePaint === 0 && paintRaf.afterPaint === 0) {
-      paintRaf.beforePaint = requestAnimationFrame(() => {
-        paintRaf.beforePaint = 0;
-        paintRaf.afterPaint = requestAnimationFrame(() => {
-          paintRaf.afterPaint = 0;
-          const currentPage = progressivePageForPaintRef.current;
-          if (!currentPage) return;
-          const currentPanels = visiblePanelByFrameRef.current;
-          const paintedIndices = currentPage.expectedIndices.filter((frame) => {
-            const currentPanel = currentPanels.get(frame);
-            const drawn = canvasDrawCacheRef.current.get(frame);
-            return Boolean(
-              (currentPanel && drawn?.panel === currentPanel && drawn.canvas.isConnected)
-              || (gpuEngine && gpuSlots?.has(frame)),
-            );
-          });
-          recordComparePageFirstPanelPaint(currentPage, paintedIndices);
-          // Performance telemetry is optional and may not be initialized when
-          // a notebook view reconnects from trait state. Scientific paint
-          // acknowledgement must therefore be validated independently.
-          recordComparePageVisiblePaint(currentPage, paintedIndices);
-          onFreshVisiblePaint?.(currentPage, paintedIndices);
-        });
-      });
-    }
-  }, [autoContrast, colormap, gpuEngine, gpuSlots, gpuVersion, onFreshVisiblePaint, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
+  }, [autoContrast, colormap, gpuEngine, gpuSlots, gpuVersion, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
 
   React.useEffect(() => {
     if (!gpuEngine || !gpuSlots) return;
@@ -2027,16 +1955,6 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     vmaxPct,
     vminPct,
   ]);
-
-  React.useEffect(() => {
-    return () => {
-      const paintRaf = visiblePaintRafRef.current;
-      if (paintRaf.beforePaint) cancelAnimationFrame(paintRaf.beforePaint);
-      if (paintRaf.afterPaint) cancelAnimationFrame(paintRaf.afterPaint);
-      paintRaf.beforePaint = 0;
-      paintRaf.afterPaint = 0;
-    };
-  }, []);
 
   const displayCount = Math.max(1, renderEntries.length);
   const autoCols = displayCount >= 8 ? 4 : displayCount >= 5 ? 3 : displayCount >= 2 ? 2 : 1;
@@ -2225,15 +2143,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     return () => { if (raf) cancelAnimationFrame(raf); batchModel.off("change:pos_row", changed); batchModel.off("change:pos_col", changed); };
   }, [batchModel, comparePanX, comparePanY, compareZoom, cursorCol, cursorRow, isDraggingPosition, overlayVersion, pixelSize, pixelUnit, renderEntries, shapeCols, shapeRows, showScaleBar]);
 
-  const panelTiles = React.useMemo(() => renderEntries.map(({ frame, panel, gpuLoaded }, localIdx) => {
-          const loaded = panel !== undefined || gpuLoaded;
-          const panelPresentation = progressiveComparePanelPresentation(
-            progressivePage ?? null,
-            frame,
-            loaded,
-          );
-          const waiting = !loaded && (progressivePage?.loading ?? false);
-          const placeholderText = waiting ? "Loading" : "Unavailable";
+  const panelTiles = React.useMemo(() => renderEntries.map(({ frame, gpuLoaded }, localIdx) => {
           const active = frame === activeIdx;
           const label = labels && labels.length > frame ? labels[frame] : `Dataset ${frame + 1}`;
           const isStarred = (starred || []).includes(frame);
@@ -2249,16 +2159,13 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
               key={`${frame}-${localIdx}`}
               ref={(node: HTMLDivElement | null) => { tileRefs.current[localIdx] = node; }}
               role="button"
-              aria-label={`Show4DSTEM multiple panel ${frame + 1}${panelPresentation.labelSuffix}`}
-              aria-busy={panelPresentation.busy}
-              aria-disabled={panelPresentation.disabled}
-              data-show4dstem-panel-cache={panelPresentation.cached ? "cached" : loaded ? "fresh" : "empty"}
+              aria-label={`Show4DSTEM multiple panel ${frame + 1}`}
               tabIndex={0}
-              draggable={loaded && reorderMode}
+              draggable={reorderMode}
               onDoubleClick={handleCompareDoubleClick}
               onPointerDown={(event) => {
                 const target = event.target instanceof Element ? event.target : null;
-                if (!loaded || reorderMode || target?.closest("button")) return;
+                if (reorderMode || target?.closest("button")) return;
                 try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
                 isDraggingPositionRef.current = true;
                 setIsDraggingPosition(true);
@@ -2283,7 +2190,6 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 setIsDraggingPosition(false);
               }}
               onClick={() => {
-                if (!loaded) return;
                 if (!reorderMode) {
                   onSelect(frame);
                   return;
@@ -2300,7 +2206,6 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 onPendingMoveFrameChange(null);
               }}
               onKeyDown={(event) => {
-                if (!loaded) return;
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
                   if (reorderMode) {
@@ -2318,24 +2223,24 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 }
               }}
               onDragStart={(event) => {
-                if (!loaded || !reorderMode) return;
+                if (!reorderMode) return;
                 event.dataTransfer.effectAllowed = "move";
                 event.dataTransfer.setData("text/plain", String(frame));
                 setPreviewIndices([...displayIndices]);
                 onDragFrameChange(frame);
               }}
               onDragEnter={(event) => {
-                if (!loaded || !reorderMode || draggingFrame == null || draggingFrame === frame) return;
+                if (!reorderMode || draggingFrame == null || draggingFrame === frame) return;
                 event.preventDefault();
                 movePreviewFrame(draggingFrame, frame);
               }}
               onDragOver={(event) => {
-                if (!loaded || !reorderMode) return;
+                if (!reorderMode) return;
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "move";
               }}
               onDrop={(event) => {
-                if (!loaded || !reorderMode) return;
+                if (!reorderMode) return;
                 event.preventDefault();
                 const rawFrame = event.dataTransfer.getData("text/plain");
                 const dragFrame = rawFrame ? Number(rawFrame) : draggingFrame;
@@ -2357,7 +2262,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 border: "none",
                 boxSizing: "border-box",
                 outline: "none",
-                cursor: loaded ? (reorderMode ? "grab" : "crosshair") : waiting ? "progress" : "default",
+                cursor: reorderMode ? "grab" : "crosshair",
                 overflow: "hidden",
                 touchAction: reorderMode ? "auto" : "none",
                 opacity: isDragging ? 0.45 : 1,
@@ -2412,7 +2317,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                   height: imageHeight,
                   imageRendering: smooth ? "auto" : "pixelated",
                   pointerEvents: "none",
-                  opacity: sharedGpuReady ? 0 : panel || gpuLoaded ? 1 : 0,
+                  opacity: sharedGpuReady ? 0 : 1,
                   transition: "opacity 160ms ease",
                 }}
               />
@@ -2434,27 +2339,6 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                   zIndex: 2,
                 }}
               />
-              <Box
-                aria-hidden="true"
-                data-show4dstem-panel-loading={loaded ? "false" : "true"}
-                sx={{
-                  position: "absolute",
-                  inset: 0,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  bgcolor: themeColors.bgAlt,
-                  color: themeColors.textMuted,
-                  fontSize: 10,
-                  letterSpacing: "0.02em",
-                  opacity: loaded ? 0 : 1,
-                  transition: "opacity 160ms ease",
-                  pointerEvents: "none",
-                  zIndex: 1,
-                }}
-              >
-                {loaded ? "" : placeholderText}
-              </Box>
               <canvas
                 ref={(node) => { overlayRefs.current[localIdx] = node; }}
                 style={{
@@ -2500,7 +2384,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 <span className="show4dstem-full-tile-label">{label}</span>
                 <span className="show4dstem-compact-tile-label">{frame + 1}</span>
               </Box>
-              {loaded && panelChromeVisible && reorderMode && (
+              {panelChromeVisible && reorderMode && (
                 <Box
                   sx={{
                     position: "absolute",
@@ -2522,7 +2406,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                   <DragIndicatorIcon sx={{ fontSize: 18 }} />
                 </Box>
               )}
-              {loaded && panelChromeVisible && (
+              {panelChromeVisible && (
                 <Tooltip title={(isStarred ? "Unstar " : "Star ") + label}>
                   <IconButton
                     size="small"
@@ -2567,7 +2451,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                   </IconButton>
                 </Tooltip>
               )}
-              {loaded && panelChromeVisible && (
+              {panelChromeVisible && (
                 <Tooltip title={renderEntries.length <= 1 ? "Cannot hide the last visible panel" : `Hide ${label}`}>
                   <IconButton
                     size="small"
@@ -2623,7 +2507,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
             </Box>
           );
         }), [
-    renderEntries, progressivePage, activeIdx, labels, starred, draggingFrame,
+    renderEntries, activeIdx, labels, starred, draggingFrame,
     pendingMoveFrame, themeColors, reorderMode, handleCompareDoubleClick,
     updatePositionFromPointer, onSelect, onPendingMoveFrameChange, onReorderFrame,
     displayIndices, onDragFrameChange, movePreviewFrame, sharedGpuReady, shapeCols, shapeRows,
@@ -2643,39 +2527,6 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
 
   return (
     <Box sx={{ width: "100%", maxWidth: maxWidthPx > 0 ? `${maxWidthPx}px` : "100%", position: "relative", "@media (max-width: 700px)": { maxWidth: "100%" } }}>
-      {cacheBadge && (
-        <Box
-          role="status"
-          aria-live="polite"
-          data-testid="show4dstem-compare-cache-status"
-          data-show4dstem-cache-tone={cacheBadge.tone}
-          sx={{
-            display: "inline-flex",
-            alignItems: "center",
-            minHeight: 20,
-            mb: 0.5,
-            px: 0.75,
-            py: 0.25,
-            border: `1px solid ${cacheBadge.tone === "warning" ? "#d97706" : cacheBadge.tone === "fresh" ? "#16a34a" : themeColors.border}`,
-            borderRadius: "10px",
-            bgcolor: cacheBadge.tone === "warning"
-              ? "rgba(217,119,6,0.12)"
-              : cacheBadge.tone === "fresh"
-                ? "rgba(22,163,74,0.1)"
-                : themeColors.controlBg,
-            color: cacheBadge.tone === "warning"
-              ? "#d97706"
-              : cacheBadge.tone === "fresh"
-                ? "#16a34a"
-                : themeColors.textMuted,
-            fontSize: 10,
-            fontWeight: 600,
-            lineHeight: 1.2,
-          }}
-        >
-          {cacheBadge.label}
-        </Box>
-      )}
       <Box
         ref={batchGridRef}
         sx={{
@@ -2807,25 +2658,6 @@ function Show4DSTEM() {
   const [comparePanelOrder, setComparePanelOrder] = useModelState<number[]>("compare_panel_order");
   const [compareHiddenPanels, setCompareHiddenPanels] = useModelState<number[]>("compare_hidden_panels");
   const [compareStarredPanels, setCompareStarredPanels] = useModelState<number[]>("compare_starred_panels");
-  const [comparePageProgressiveEnabled] = useModelState<boolean>("compare_page_progressive_enabled");
-  const [comparePageExpectedIndices] = useModelState<number[]>("compare_page_expected_indices");
-  const [comparePageLoading] = useModelState<boolean>("compare_page_loading");
-  const [comparePageGeneration] = useModelState<number>("compare_page_generation");
-  const [comparePagePanelBytes] = useModelState<DataView>("compare_page_panel_bytes");
-  const [comparePagePanelFrameIdx] = useModelState<number>("compare_page_panel_frame_idx");
-  const [comparePagePanelSlot] = useModelState<number>("compare_page_panel_slot");
-  const [comparePagePanelSequence] = useModelState<number>("compare_page_panel_sequence");
-  const [comparePagePanelCached] = useModelState<boolean>("compare_page_panel_cached");
-  const [comparePageCachedIndices] = useModelState<number[]>("compare_page_cached_indices");
-  const [comparePageCacheState] = useModelState<string>("compare_page_cache_state");
-  const [progressiveComparePage, setProgressiveComparePage] = React.useState<ProgressiveComparePage | null>(null);
-  const progressiveCompareGenerationRef = React.useRef<string | null>(null);
-  const progressiveCompareLastNumericGenerationRef = React.useRef<number | null>(null);
-  const progressiveComparePendingGenerationRef = React.useRef(0);
-  const comparePagePaintAckKeyRef = React.useRef<string | null>(null);
-  const comparePagePaintClientIdRef = React.useRef(
-    `show4dstem-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
-  );
 
   React.useEffect(() => {
     try {
@@ -2836,242 +2668,7 @@ function Show4DSTEM() {
     } catch {
       // A closing notebook comm has no mounted UI left to initialize.
     }
-    try {
-      model.send({
-        type: "compare_page_paint_capability",
-        version: 1,
-        active: true,
-        client_id: comparePagePaintClientIdRef.current,
-      });
-    } catch {
-      // A closing notebook comm has no mounted UI left to acknowledge.
-    }
-    return () => {
-      try {
-        model.send({
-          type: "compare_page_paint_capability",
-          version: 1,
-          active: false,
-          client_id: comparePagePaintClientIdRef.current,
-        });
-      } catch {
-        // The comm can already be gone during notebook teardown.
-      }
-    };
   }, [model]);
-
-  const acknowledgeFreshComparePagePaint = React.useCallback((
-    page: ProgressiveComparePage,
-    paintedIndices: number[],
-  ) => {
-    const acknowledgement = freshVisibleComparePagePaintAck(
-      page,
-      paintedIndices,
-      comparePagePaintAckKeyRef.current,
-    );
-    if (!acknowledgement) return;
-    try {
-      model.send(acknowledgement.message);
-      comparePagePaintAckKeyRef.current = acknowledgement.key;
-    } catch {
-      // The delayed after-paint callback may outlive a closing notebook comm.
-    }
-  }, [model]);
-
-  React.useEffect(() => {
-    const handler = (
-      content: ComparePageMessage,
-      buffers?: Array<DataView | ArrayBuffer | Uint8Array>,
-    ) => {
-      const type = String(content?.type || "");
-      if (type === "compare_page_start") {
-        const incomingGeneration = compareMessageGeneration(content);
-        if (incomingGeneration === null) return;
-        const incomingPageValue = content.page_idx ?? content.page;
-        const incomingPage = Number(incomingPageValue);
-        const currentPage = Math.max(0, Math.round(Number(model.get("compare_page_idx")) || 0));
-        if (incomingPageValue !== undefined && Number.isFinite(incomingPage) && Math.round(incomingPage) !== currentPage) {
-          recordComparePageStaleDrop();
-          return;
-        }
-        const nextNumber = Number(incomingGeneration);
-        const lastNumber = progressiveCompareLastNumericGenerationRef.current;
-        if (
-          Number.isFinite(nextNumber)
-          && lastNumber !== null
-          && nextNumber <= lastNumber
-        ) {
-          recordComparePageStaleDrop();
-          return;
-        }
-        const next = beginProgressiveComparePage(content);
-        if (!next) return;
-        progressiveCompareGenerationRef.current = next.generation;
-        if (Number.isFinite(nextNumber)) progressiveCompareLastNumericGenerationRef.current = nextNumber;
-        setProgressiveComparePage((current) => retainCachedProgressiveComparePanels(next, current));
-        return;
-      }
-
-      if (type !== "compare_panel" && type !== "compare_page_complete") return;
-      const generation = compareMessageGeneration(content);
-      if (generation === null || generation !== progressiveCompareGenerationRef.current) {
-        recordComparePageStaleDrop();
-        return;
-      }
-      setProgressiveComparePage((current) => {
-        if (!current || current.generation !== generation) return current;
-        if (type === "compare_panel") {
-          return mergeProgressiveComparePanel(
-            current,
-            content,
-            buffers,
-            Math.max(1, shapeRows * shapeCols),
-          ) ?? current;
-        }
-        return completeProgressiveComparePage(current, content) ?? current;
-      });
-    };
-    model.on("msg:custom", handler);
-    return () => model.off("msg:custom", handler);
-  }, [model, shapeCols, shapeRows]);
-
-  React.useEffect(() => {
-    const sequence = Math.max(0, Math.round(Number(comparePagePanelSequence) || 0));
-    const frame = Math.round(Number(comparePagePanelFrameIdx));
-    if (sequence <= 0 || frame < 0 || !comparePagePanelBytes || comparePagePanelBytes.byteLength === 0) return;
-    const generation = String(Math.round(Number(comparePageGeneration) || 0));
-    const page = Math.max(0, Math.round(Number(model.get("compare_page_idx")) || 0));
-    setProgressiveComparePage((current) => {
-      const expected = Array.isArray(comparePageExpectedIndices) ? comparePageExpectedIndices : [];
-      const base = current && current.generation === generation
-        ? current
-        : {
-            generation,
-            page,
-            expectedIndices: [...expected],
-            panels: new Map<number, Float32Array>(),
-            cachedIndices: new Set<number>(),
-            cacheState: "off" as const,
-            loading: true,
-            complete: false,
-          };
-      const withCacheMetadata = mergeProgressiveCompareCacheMetadata(
-        base,
-        comparePageCachedIndices,
-        comparePageCacheState,
-      );
-      return mergeProgressiveComparePanel(
-        withCacheMetadata,
-        {
-          type: "compare_panel",
-          generation,
-          page_idx: page,
-          frame_idx: frame,
-          slot: Math.round(Number(comparePagePanelSlot) || 0),
-          cached: Boolean(comparePagePanelCached),
-        },
-        [comparePagePanelBytes],
-        Math.max(1, shapeRows * shapeCols),
-      ) ?? withCacheMetadata;
-    });
-  }, [
-    comparePageCachedIndices,
-    comparePageCacheState,
-    comparePageExpectedIndices,
-    comparePageGeneration,
-    comparePagePanelBytes,
-    comparePagePanelCached,
-    comparePagePanelFrameIdx,
-    comparePagePanelSequence,
-    comparePagePanelSlot,
-    model,
-    shapeCols,
-    shapeRows,
-  ]);
-
-  React.useEffect(() => {
-    if (!comparePageProgressiveEnabled) {
-      progressiveCompareGenerationRef.current = null;
-      setProgressiveComparePage(null);
-    }
-  }, [comparePageProgressiveEnabled]);
-
-  React.useEffect(() => {
-    if (!comparePageProgressiveEnabled) return;
-    const generation = String(Math.round(Number(comparePageGeneration) || 0));
-    const expected = Array.isArray(comparePageExpectedIndices) ? comparePageExpectedIndices : [];
-    const page = Math.max(0, Math.round(Number(model.get("compare_page_idx")) || 0));
-    setProgressiveComparePage((current) => {
-      if (current?.generation.startsWith("pending:") && current.generation !== generation) {
-        return current;
-      }
-      if (!current && expected.length === 0) return current;
-      const base = current && current.generation === generation
-        ? {
-            ...current,
-            expectedIndices: expected.length > 0 ? [...expected] : current.expectedIndices,
-          }
-        : {
-            generation,
-            page,
-            expectedIndices: [...expected],
-            panels: new Map<number, Float32Array>(),
-            cachedIndices: new Set<number>(),
-            cacheState: "off" as const,
-            loading: Boolean(comparePageLoading),
-            complete: false,
-          };
-      progressiveCompareGenerationRef.current = generation;
-      return mergeProgressiveCompareCacheMetadata(
-        base,
-        comparePageCachedIndices,
-        comparePageCacheState,
-      );
-    });
-  }, [
-    comparePageCachedIndices,
-    comparePageCacheState,
-    comparePageExpectedIndices,
-    comparePageGeneration,
-    comparePageLoading,
-    comparePageProgressiveEnabled,
-    model,
-  ]);
-
-  React.useEffect(() => {
-    if (comparePageLoading) return;
-    const generation = String(Math.round(Number(comparePageGeneration) || 0));
-    const expected = Array.isArray(comparePageExpectedIndices) ? comparePageExpectedIndices : [];
-    const durable = Array.isArray(comparePanelIndices) ? comparePanelIndices : [];
-    if (shouldClearProgressiveComparePage(false, expected, durable)) {
-      progressiveCompareGenerationRef.current = null;
-      setProgressiveComparePage(null);
-      return;
-    }
-    setProgressiveComparePage((current) => {
-      if (!current || current.generation !== generation || current.complete) return current;
-      return {
-        ...mergeProgressiveCompareCacheMetadata(
-          current,
-          comparePageCachedIndices,
-          comparePageCacheState,
-        ),
-        expectedIndices: reconcileCompletedCompareIndices(
-          current.expectedIndices,
-          durable,
-        ),
-        loading: false,
-        complete: true,
-      };
-    });
-  }, [
-    comparePageCachedIndices,
-    comparePageCacheState,
-    comparePageExpectedIndices,
-    comparePageGeneration,
-    comparePageLoading,
-    comparePanelIndices,
-  ]);
 
   // Profile line state (synced with Python)
   const [profileLine, setProfileLine] = useModelState<{row: number; col: number}[]>("profile_line");
@@ -4979,8 +4576,6 @@ function Show4DSTEM() {
         count: number,
         indices: number[],
       ) => {
-        progressiveCompareGenerationRef.current = null;
-        setProgressiveComparePage(null);
         model.set("compare_virtual_image_bytes", bytes);
         model.set("compare_panel_count", count);
         model.set("compare_panel_indices", indices);
@@ -5119,8 +4714,6 @@ function Show4DSTEM() {
             bumpCompareGpuVersion();
           }
           if (batchFrames.length && !interactiveDrag) {
-            progressiveCompareGenerationRef.current = null;
-            setProgressiveComparePage(null);
             model.set("compare_panel_count", indices.length);
             model.set("compare_panel_indices", indices);
           }
@@ -6395,11 +5988,7 @@ function Show4DSTEM() {
     return [...order];
   }, [comparePanelOrder, nFrames]);
   const visibleCompareHistogramFrames = React.useMemo(() => {
-    const source = progressiveComparePage?.expectedIndices?.length
-      ? progressiveComparePage.expectedIndices
-      : Array.isArray(comparePanelIndices)
-        ? comparePanelIndices
-        : [];
+    const source = Array.isArray(comparePanelIndices) ? comparePanelIndices : [];
     if (!source.length) return [] as number[];
     const available = new Set(source);
     const hidden = new Set(
@@ -6417,40 +6006,12 @@ function Show4DSTEM() {
       if (!hidden.has(idx) && !seen.has(idx)) ordered.push(idx);
     });
     return ordered;
-  }, [compareHiddenPanels, comparePanelIndices, normalizedCompareOrder, progressiveComparePage]);
+  }, [compareHiddenPanels, comparePanelIndices, normalizedCompareOrder]);
   const requestComparePage = React.useCallback((page: number) => {
     const next = Math.max(0, Math.min(activeComparePageCount - 1, Math.round(Number(page) || 0)));
     if (next === activeComparePageIdx) return;
-    const hidden = new Set(
-      (compareHiddenPanels || []).filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < nFrames),
-    );
-    const ordered = normalizedCompareOrder();
-    const pageSize = Math.max(1, Math.round(Number(compareMaxPanels || ordered.length || 1)));
-    const pendingGeneration = comparePageProgressiveEnabled
-      ? `pending:${++progressiveComparePendingGenerationRef.current}`
-      : "";
-    const pending = beginPendingProgressiveComparePage(
-      Boolean(comparePageProgressiveEnabled),
-      pendingGeneration,
-      next,
-      ordered,
-      [...hidden],
-      pageSize,
-    );
-    progressiveCompareGenerationRef.current = pending?.generation ?? null;
-    setProgressiveComparePage(pending);
-    if (pending) recordComparePageClick(next);
     setComparePageIdx(next);
-  }, [
-    activeComparePageCount,
-    activeComparePageIdx,
-    compareHiddenPanels,
-    compareMaxPanels,
-    comparePageProgressiveEnabled,
-    nFrames,
-    normalizedCompareOrder,
-    setComparePageIdx,
-  ]);
+  }, [activeComparePageCount, activeComparePageIdx, setComparePageIdx]);
   const comparePanelLabel = React.useCallback((idx: number) => {
     return frameLabels && frameLabels.length > idx && frameLabels[idx]
       ? frameLabels[idx]
@@ -10990,7 +10551,6 @@ function Show4DSTEM() {
               gpuRanges={compareGpuRangesRef.current}
               gpuVersion={compareGpuVersion}
               gpuEngine={viGpuColormapRef.current}
-              progressivePage={progressiveComparePage}
               labels={frameLabels || []}
               activeIdx={frameIdx}
               shapeRows={shapeRows}
@@ -11026,7 +10586,6 @@ function Show4DSTEM() {
               onDragFrameChange={setCompareDraggingFrame}
               onPendingMoveFrameChange={setComparePendingMoveFrame}
               onPositionChange={updateScanPosition}
-              onFreshVisiblePaint={acknowledgeFreshComparePagePaint}
               onGpuPaint={recordCompareGpuPaint}
               onGpuRendererReady={setCompareGpuRenderer}
             />

@@ -392,7 +392,6 @@ def test_show4dstem_multiple_detector_drag_uses_live_gpu_compare_slots() -> None
     assert "gpuSlots?.has(frame) && gpuEngine && (residentSource || gpuRanges?.has(frame))" in frontend
     assert 'scaleMode === "log"' in frontend
     assert "entry.panel !== undefined || entry.gpuLoaded" in frontend
-    assert "const loaded = panel !== undefined || gpuLoaded;" in frontend
     assert "onChangeCommitted={finishDpRoiInteraction}" in frontend
     assert "__sh4dLiveViStats" in frontend
     assert "gpuOnlyHotPath: stats.lastRangeReadbackBytes === 0" in frontend

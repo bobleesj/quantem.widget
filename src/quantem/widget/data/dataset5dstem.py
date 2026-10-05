@@ -196,52 +196,6 @@ class Dataset5dstem:
             return list(range(len(self))) if self._tensor is not None else []
         return [i for i, frame in enumerate(self._frames) if frame is not None]
 
-    def append_lazy_frame(
-        self,
-        loader: Callable[[], torch.Tensor],
-        *,
-        frame: torch.Tensor | None = None,
-        series_value: float | None = None,
-    ) -> int:
-        """Append one lazy frame slot without loading it immediately.
-
-        This keeps a live folder-backed Show4DSTEM viewer stable while newly
-        completed masters become available. The frame is loaded only when the
-        viewer selects or computes that panel.
-        """
-        if self._lazy_loaders is None or self._lazy_shape is None or self._lazy_dtype is None:
-            raise RuntimeError("append_lazy_frame requires a lazy Dataset5dstem.")
-        if self._frames is None:
-            raise RuntimeError("Dataset5dstem has been freed; re-load to use it again.")
-        idx = len(self._lazy_loaders)
-        self._lazy_loaders.append(loader)
-        self._frames.append(None)
-        self._lazy_shape = (idx + 1, *self._lazy_shape[1:])
-        if frame is not None:
-            self._validate_lazy_frame(frame, idx)
-            self._frames[idx] = frame
-        if self._series is not None:
-            value = np.nan if series_value is None else float(series_value)
-            self._series = np.concatenate([self._series, np.asarray([value], dtype=float)])
-        if hasattr(self, "_page_devices"):
-            if frame is not None and frame.device.type == "cuda":
-                target = self._canonical_cuda_device(frame.device)
-            elif getattr(self, "_page_auto_config", None):
-                self._refresh_auto_vram_budgets()
-                target = self._next_capacity_aware_page_device(idx)
-            else:
-                page_devices = list(getattr(self, "_page_devices", []))
-                cycle = list(getattr(self, "_page_device_cycle", []) or [])
-                target = (
-                    cycle[idx % len(cycle)]
-                    if cycle
-                    else page_devices[idx % len(page_devices)]
-                    if page_devices
-                    else torch.device("cpu")
-                )
-            self._page_devices.append(target)
-        return idx
-
     def preload(self, indices: Sequence[int] | int) -> list[int]:
         """Load a group of lazy frames, using the batch loader when available.
 
@@ -375,48 +329,6 @@ class Dataset5dstem:
         if current:
             batches.append(current)
         return batches
-
-    def progressive_batches(
-        self, indices: Sequence[int] | int
-    ) -> list[list[int]]:
-        """Return load waves with at most one cold frame per target device.
-
-        Each target can therefore decode one new master concurrently without
-        competing with a second cold load on the same CUDA context. Requested
-        order is retained within every wave. Already-resident frames join the
-        first wave because they require no storage or device load.
-        """
-        if isinstance(indices, int):
-            values = [indices]
-        else:
-            values = list(indices)
-        wanted: list[int] = []
-        seen: set[int] = set()
-        for value in values:
-            idx = int(value) % len(self)
-            if idx not in seen:
-                wanted.append(idx)
-                seen.add(idx)
-        if not wanted:
-            return []
-
-        self._refresh_auto_vram_plan()
-        frames = self._materialize_frames()
-        waves: list[list[int]] = []
-        cold_count: dict[torch.device, int] = {}
-        for idx in wanted:
-            if frames[idx] is not None:
-                wave_idx = 0
-            else:
-                device = self._page_target_device(idx)
-                wave_idx = cold_count.get(device, 0)
-                cold_count[device] = wave_idx + 1
-            while len(waves) <= wave_idx:
-                waves.append([])
-            waves[wave_idx].append(idx)
-        return [wave for wave in waves if wave]
-
-    progressive_load_waves = progressive_batches
 
     def _validate_lazy_frame(self, frame: torch.Tensor, i: int) -> None:
         if self._lazy_shape is None or self._lazy_dtype is None:
@@ -984,25 +896,7 @@ class Dataset5dstem:
                 assigned_bytes.get(device, 0)
                 + frame_bytes
             )
-        self._page_device_cursor = cursor
         return [device for device in assignments if device is not None]
-
-    def _next_capacity_aware_page_device(self, idx: int) -> torch.device:
-        """Choose the capacity-aware target for one appended lazy frame."""
-        assigned_bytes: dict[torch.device, int] = {}
-        for frame_idx, value in enumerate(getattr(self, "_page_devices", []) or []):
-            device = self._canonical_cuda_device(self._as_device(value))
-            assigned_bytes[device] = (
-                assigned_bytes.get(device, 0)
-                + self._frame_nbytes_for_index(frame_idx)
-            )
-        device, cursor = self._select_capacity_aware_device(
-            assigned_bytes,
-            cursor=int(getattr(self, "_page_device_cursor", 0)),
-            required_bytes=self._frame_nbytes_for_index(idx),
-        )
-        self._page_device_cursor = cursor
-        return device
 
     def _place_newly_loaded_frame(
         self, frame: torch.Tensor, idx: int

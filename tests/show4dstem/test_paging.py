@@ -1014,25 +1014,6 @@ def test_auto_vram_budget_reserves_workspace_and_one_incoming_frame(
     assert budget > free - 4 * 1024**3
 
 
-def test_append_lazy_frame_preserves_round_robin_page_devices():
-    frame_shape = (2, 3, 4, 5)
-    data = Dataset5dstem.from_lazy_loaders(
-        [lambda: torch.zeros(frame_shape, dtype=torch.uint8) for _ in range(2)],
-        shape=(2, *frame_shape),
-        dtype=torch.uint8,
-    )
-    data.page(
-        "auto",
-        device=["cuda:0", "cuda:1"],
-        max_vram_bytes=10_000,
-    )
-
-    data.append_lazy_frame(lambda: torch.zeros(frame_shape, dtype=torch.uint8))
-    data.append_lazy_frame(lambda: torch.zeros(frame_shape, dtype=torch.uint8))
-
-    assert data.devices == ["cuda:0", "cuda:1", "cuda:0", "cuda:1"]
-
-
 @cuda_required
 def test_release_returns_independent_lazy_frame_vram_immediately():
     frame_shape = (64, 1024, 1024, 1)
@@ -1078,7 +1059,7 @@ def test_compare_accepts_one_owned_resident_batch():
             return batch
 
         widget._compare_virtual_images_for_display_indices = compute_batch
-        widget._refresh_compare_virtual_images_sync()
+        widget._refresh_compare_virtual_images()
         assert calls == [(0, 1, 2)]
         assert widget.compare_panel_indices == [0, 1, 2]
         assert widget.compare_panel_count == 3

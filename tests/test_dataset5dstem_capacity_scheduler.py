@@ -85,38 +85,6 @@ def test_auto_page_preserves_loaded_cuda_device_and_weights_new_slots():
     assert data.devices == ["cuda:0", "cuda:1", "cuda:1", "cuda:0"]
 
 
-def test_appended_lazy_frames_continue_capacity_aware_policy():
-    data = _lazy_series(8)
-    data.page(
-        "auto",
-        device=["cuda:0", "cuda:1"],
-        max_vram_bytes={"cuda:0": 72, "cuda:1": 24},
-    )
-
-    data.append_lazy_frame(lambda: torch.zeros((1, 2, 3, 4), dtype=torch.uint8))
-    data.append_lazy_frame(lambda: torch.zeros((1, 2, 3, 4), dtype=torch.uint8))
-
-    assert data.devices[-2:] == ["cuda:1", "cuda:0"]
-    assert data.devices.count("cuda:0") == 7
-    assert data.devices.count("cuda:1") == 3
-
-
-def test_progressive_batches_limit_each_cold_device_to_one_per_wave():
-    data = _lazy_series(6)
-    data.page(
-        "auto",
-        device=["cuda:0", "cuda:1"],
-        max_vram_bytes=1_000,
-    )
-
-    waves = data.progressive_batches([0, 2, 1, 3, 4])
-
-    assert waves == [[0, 1], [2, 3], [4]]
-    for wave in waves:
-        targets = [data.devices[idx] for idx in wave]
-        assert len(targets) == len(set(targets))
-
-
 def test_batch_preload_evicts_only_enough_lru_frames_for_incoming_data():
     observed_loaded: list[list[int]] = []
     data = None
@@ -251,7 +219,7 @@ def test_auto_page_excludes_devices_that_cannot_hold_one_frame():
 
 def test_foreground_work_refreshes_capacity_and_avoids_oversized_batch():
     # C1: free memory shifts from two GPUs to one single-frame budget, expect
-    # progressive placement to refresh and preload to serialize allocations.
+    # preload to refresh placement and serialize allocations.
     shape = (1, 2, 3, 4)
     frame_bytes = 1 * 2 * 3 * 4
     data = None
@@ -311,10 +279,8 @@ def test_foreground_work_refreshes_capacity_and_avoids_oversized_batch():
 
     data._auto_vram_budgets = constrained_budgets
 
-    assert data.progressive_batches([0, 1, 2]) == [[0], [1], [2]]
-    assert data.devices == ["cuda:1"] * 3
-
     assert data.preload([0, 1]) == [0, 1]
+    assert data.devices == ["cuda:1"] * 3
     assert batch_calls == []
     assert load_targets == ["cuda:1", "cuda:1"]
     assert data.loaded_indices() == [1]
