@@ -162,7 +162,7 @@ def test_colab_tutorials_use_one_short_latest_rc_setup() -> None:
         ), notebook_name
         assert "scripts/install_colab.py" in source, notebook_name
         setup_lines = [line for line in source.splitlines() if line.strip()]
-        expected_lines = 5 if notebook_name in {"showdiffraction.ipynb", "planptycho.ipynb"} else 4
+        expected_lines = 5 if notebook_name in {"showdiffraction.ipynb", "planptycho.ipynb", "showcif.ipynb"} else 4
         assert len(setup_lines) == expected_lines, notebook_name
         assert "from urllib.request import urlopen" not in source, notebook_name
         assert "__import__" not in source, notebook_name
