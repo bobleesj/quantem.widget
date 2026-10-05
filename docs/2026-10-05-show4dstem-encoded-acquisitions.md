@@ -4,8 +4,8 @@
 
 quantem.gpu's restructure makes `io.load` return only encoded acquisitions
 (`Dataset4dstemGPU`, ANS-encoded on CUDA or MPS) and removes detector binning,
-dtype casts, dense and packed residency, multi-GPU loading, source112, count-ANS
-and the CUDA resident owner. Which widget features keep working on the encoded
+dtype casts, dense and packed residency, multi-GPU loading, source112 and the
+CUDA resident owner. Which widget features keep working on the encoded
 data, how fast are they, and which features lose their backend?
 
 ## Setup

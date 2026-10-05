@@ -16,7 +16,7 @@ new `rcN` heading when that rc is published to TestPyPI.
   `quantem.widget.io.resident`, and the CLI `--gpus`/`--page-budget` options are
   removed. Compute SSB runs on CUDA or MPS through `quantem.gpu.SSB` (voltage
   only, every detected BF pixel), and the browser export reads integer `.qem`
-  files instead of count-ANS files.
+  files.
 
 - Add `PlanPtycho`: give a crystal (CIF, `ase.Atoms` or Materials Project id) and the microscope settings, and see
   the beam through the specimen, the reconstruction's model window, the probe and the Bragg disks, with graded checks
