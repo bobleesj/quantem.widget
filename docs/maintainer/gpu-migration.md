@@ -120,15 +120,15 @@ repositories. No branch was pushed and no PR or release was created.
 | quantem.widget | `de3dc3989561c767c36547298df2b6cc8ee9cd22` | `a830ea6d5bc22be3ad588227d936afcd5cf7505a` | `9211cac4dcd6fc7b87157246bbffda4bf725f173` |
 
 The final candidate was installed from tracked Git archives into a fresh,
-isolated environment on maca. This caught missing candidate-version, pandas,
+isolated environment on the macOS test machine. This caught missing candidate-version, pandas,
 ipykernel, macOS Chrome-launch, and test-fixture dependencies before signoff.
 
 ### Numerical and build gates
 
 - Linux quantem.gpu: `293 passed, 55 skipped`; real CUDA display parity:
   `4 passed`.
-- maca/macOS quantem.gpu: `262 passed, 77 skipped` with the MPS extra.
-- maca/macOS quantem.widget: `1134 passed, 33 skipped, 47 warnings`; no test
+- macOS quantem.gpu: `262 passed, 77 skipped` with the MPS extra.
+- macOS quantem.widget: `1134 passed, 33 skipped, 47 warnings`; no test
   failures. Warnings are recorded deprecations/runtime guidance, not numerical
   mismatches.
 - TypeScript/Vitest: `26` files and `154 passed`; TypeScript typecheck passed.
@@ -145,7 +145,7 @@ ipykernel, macOS Chrome-launch, and test-fixture dependencies before signoff.
 ### End-to-end browser gates
 
 The fresh standalone matrix generated 19 exports and passed `38/38` across
-desktop and 390x844 touch layouts in headed maca Chrome. This includes Show1D,
+desktop and 390x844 touch layouts in headed macOS Chrome. This includes Show1D,
 five Show2D layouts, six Show3D layouts, Show3DSlices, Show4DSTEM single and
 compare, a ShowPtycho WebGPU folder, ShowEDS and ShowDiffraction.
 Every page acquired `apple / metal-3`; all 38 adapter records reported

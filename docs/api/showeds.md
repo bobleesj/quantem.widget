@@ -27,7 +27,7 @@ Canonical forms:
 ```python
 # Native EDS/EELS file: parse metadata and keep exact no-bin EMD data lazy.
 # The returned SpectrumImage uses (row, col, energy) and feeds ShowEDS directly.
-eds = load_eds("0031-CaSIO3_...EDS_HAADF_Diffraction_Nano.emd")
+eds = load_eds("spectrum_image.emd")
 w = ShowEDS(
     eds,
     energy=8.04,
@@ -45,7 +45,7 @@ w = ShowEDS(cube, energy_keV, base_image=haadf)
 # Large EMD as a reusable data folder. The notebook stores startup state and a
 # data-folder URL, not the multi-GB cube.
 w = ShowEDS.from_emd(
-    "0031-CaSIO3_...EDS_HAADF_Diffraction_Nano.emd",
+    "spectrum_image.emd",
     sidecar_dir="sidecars/eds_real_0031",
     energy=8.04,
     width=0.24,
