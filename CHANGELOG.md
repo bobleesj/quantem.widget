@@ -6,6 +6,11 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Add `AGENTS.md` and `tests/test_public_repository.py`: the public-repository
+  rules (no private names, paths, data files, widget state or image outputs in
+  notebooks, no files over 5 MB except the gold demo gif) are enforced by a fast
+  offline test that runs with `pytest`.
+
 - Show4DSTEM opens `quantem.gpu.io.load` acquisitions in their encoded GPU storage
   (512 x 512 x 192 x 192 uint16 scans measured 0.1 to 2 GiB instead of 18 GiB):
   `Show4DSTEM(load(path))` is a live bounded view, `scan_region=` shows part of
@@ -17,7 +22,7 @@ new `rcN` heading when that rc is published to TestPyPI.
   removed. Compute SSB runs on CUDA or MPS through `quantem.gpu.SSB` (voltage
   only, every detected BF pixel), and the browser export reads integer `.qem`
   files. Viewer axes take the acquisition's recorded calibration. Requires
-  quantem.gpu 0.0.1rc12, the restructured package.
+  quantem.gpu 0.0.1rc13, the restructured package.
 
 ## rc39 - 2026-10-03
 
