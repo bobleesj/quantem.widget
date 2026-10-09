@@ -6,11 +6,12 @@
 //   npm run build -- show2d show3d    only the named bundles
 //
 // show4dstem and showptycho bundle WebGPU science kernels synced from
-// quantem.gpu (QUANTEM_GPU_SRC or an installed quantem.gpu). Every other bundle
-// is widget source only and builds without quantem.gpu.
+// quantem.gpu (QUANTEM_GPU_SRC or an installed quantem.gpu; CI checks out the
+// ref in gpu-ref.txt). Every other bundle is widget source only and builds
+// without quantem.gpu.
 
 import { build, context } from "esbuild";
-import { rmSync, mkdirSync } from "fs";
+import { copyFileSync, mkdirSync, rmSync } from "fs";
 import { syncGpuWebgpuSources } from "./sync-gpu-webgpu.mjs";
 
 const watch = process.argv.includes("--watch");
@@ -43,6 +44,10 @@ if (selected.some((widget) => widget.science)) {
 // A full build replaces the whole static tree so retired bundles cannot linger.
 if (!requested.length) rmSync("src/quantem/widget/static", { recursive: true, force: true });
 mkdirSync("src/quantem/widget/static", { recursive: true });
+// The wheel names the quantem.gpu kernels its science bundles carry; quantem.widget.profile() prints it.
+if (selected.some((widget) => widget.science) && !syncError) {
+  copyFileSync("js/.generated/engine/MANIFEST.json", "src/quantem/widget/static/engine-manifest.json");
+}
 
 const baseOpts = {
   bundle: true,

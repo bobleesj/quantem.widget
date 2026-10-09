@@ -1,8 +1,11 @@
 import ast
+import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path
 
+import pytest
 from IPython.core.inputtransformer2 import TransformerManager
 
 
@@ -207,3 +210,65 @@ def test_widget_owns_display_kernels_and_syncs_only_science() -> None:
     assert "../.generated/engine/io/hdf5/webgpu/bslz4" in show4dstem
     assert "../.generated/engine/io/hdf5/webgpu/local-h5" in show4dstem
     assert "../.generated/engine/ssb/webgpu/backend" in showptycho
+
+
+def test_every_build_bundles_the_quantem_gpu_ref_in_gpu_ref_txt() -> None:
+    """CI, docs and release check out one quantem.gpu ref, the one the [cuda]/[mps] floor names."""
+    repo = Path(__file__).resolve().parents[2]
+    workflows = {path.name: path.read_text(encoding="utf-8") for path in (repo / ".github" / "workflows").glob("*.yml")}
+    builds = sorted(name for name, text in workflows.items() if "npm run build" in text)
+    assert builds == ["widget-ci.yml", "widget-docs.yml", "widget-release.yml"]
+    for name in builds:
+        text = workflows[name]
+        assert re.findall(r"repository: bobleesj/quantem\.gpu\n\s+ref: (.+)\n", text) == ["${{ steps.gpu.outputs.ref }}"], name
+        assert 'echo "ref=$(cat gpu-ref.txt)"' in text, name
+        assert "QUANTEM_GPU_SRC: ${{ github.workspace }}/quantem-gpu-src/src" in text, name
+    pinned = (repo / "gpu-ref.txt").read_text(encoding="utf-8").strip()
+    floors = re.findall(r'"quantem\.gpu\[(?:cuda|mps)\]>=([^;"]+)', (repo / "pyproject.toml").read_text(encoding="utf-8"))
+    assert [f"gpu-v{floor}" for floor in floors] == [pinned, pinned]
+
+def test_sync_writes_a_manifest_of_the_pinned_ref_and_every_file(tmp_path) -> None:
+    """MANIFEST.json names the ref in gpu-ref.txt and the commit synced, and the sha256 of every file written."""
+    repo = Path(__file__).resolve().parents[2]
+    target = tmp_path / "engine"
+    script = (repo / "scripts" / "sync-gpu-webgpu.mjs").as_uri()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e",
+         f"import {{ syncGpuWebgpuSources }} from {json.dumps(script)}; "
+         f"syncGpuWebgpuSources({{ targetDir: {json.dumps(str(target))} }});"],
+        capture_output=True, text=True, cwd=repo, timeout=120,
+    )
+    if "no quantem.gpu source was found" in result.stderr:
+        pytest.skip("no quantem.gpu source: set QUANTEM_GPU_SRC (CI checks out gpu-ref.txt)")
+    assert result.returncode == 0, result.stderr
+    manifest = json.loads((target / "MANIFEST.json").read_text(encoding="utf-8"))
+    engine = manifest["quantem_gpu"]
+    assert engine["pinned_ref"] == (repo / "gpu-ref.txt").read_text(encoding="utf-8").strip()
+    on_disk = {path.relative_to(target).as_posix(): path for path in target.rglob("*") if path.is_file()}
+    on_disk.pop("MANIFEST.json")
+    recorded = {**manifest["files"], **manifest["generated"]}
+    assert sorted(recorded) == sorted(on_disk)
+    assert {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in on_disk.items()} == recorded
+    assert all(name.startswith(("detector/", "dpc/", "formats/", "io/", "ssb/")) for name in manifest["files"])
+    assert sorted(manifest["generated"]) == ["device/webgpu.ts", "display/webgpu/borrowed-image.ts"]
+    # one line names the source and the commit it synced from
+    (line,) = result.stdout.strip().splitlines()
+    assert line.startswith(f"synced {len(manifest['files'])} quantem.gpu science kernel files from ")
+    assert engine["git_sha"] is None or f"at {engine['ref']} ({engine['git_sha'][:12]})" in line
+
+
+def test_profile_prints_the_quantem_gpu_ref_the_bundles_carry(tmp_path, monkeypatch, capsys) -> None:
+    from quantem.widget import info
+
+    manifest = tmp_path / "engine-manifest.json"
+    monkeypatch.setattr(info, "ENGINE_MANIFEST", manifest)
+    info.profile()
+    assert "webgpu kernels  (frontend not built)" in capsys.readouterr().out
+    engine = {"ref": "gpu-v0.0.1rc15", "git_sha": "0123456789abcdef", "version": None, "pinned_ref": "gpu-v0.0.1rc15"}
+    manifest.write_text(json.dumps({"quantem_gpu": engine, "files": {}, "generated": {}}), encoding="utf-8")
+    info.profile()
+    assert "webgpu kernels  gpu-v0.0.1rc15 (0123456789ab)\n" in capsys.readouterr().out
+    engine.update(ref=None, git_sha=None, version="0.0.1rc14")
+    manifest.write_text(json.dumps({"quantem_gpu": engine, "files": {}, "generated": {}}), encoding="utf-8")
+    info.profile()
+    assert "webgpu kernels  quantem.gpu 0.0.1rc14, pinned gpu-v0.0.1rc15\n" in capsys.readouterr().out

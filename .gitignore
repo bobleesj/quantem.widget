@@ -15,6 +15,7 @@ node_modules/
 js/.generated/
 src/quantem/widget/static/*.js
 src/quantem/widget/static/*.css
+src/quantem/widget/static/engine-manifest.json
 
 # Docs build
 docs/_build/

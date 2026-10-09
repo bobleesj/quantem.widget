@@ -13,6 +13,9 @@ from urllib.parse import unquote, urlparse
 
 import torch
 
+# Written by the frontend build: the quantem.gpu ref and commit the bundled WebGPU science kernels came from.
+ENGINE_MANIFEST = Path(__file__).parent / "static" / "engine-manifest.json"
+
 
 def profile() -> None:
     """Print the installed QuantEM stack and active compute environment.
@@ -92,6 +95,15 @@ def profile() -> None:
             continue
         print(f"{name:<15} {installed}{'' if importable else '  (installed but not importable)'}")
         print_distribution_status(name)
+    # The bundles carry their own copy of the quantem.gpu WebGPU kernels, independent of the installed quantem.gpu.
+    if ENGINE_MANIFEST.is_file():
+        engine = json.loads(ENGINE_MANIFEST.read_text(encoding="utf-8"))["quantem_gpu"]
+        source = engine["ref"] or f"quantem.gpu {engine['version']}"
+        commit = f" ({engine['git_sha'][:12]})" if engine["git_sha"] else ""
+        pin = "" if source == engine["pinned_ref"] else f", pinned {engine['pinned_ref']}"
+        print(f"webgpu kernels  {source}{commit}{pin}")
+    else:
+        print("webgpu kernels  (frontend not built)")
     if torch.cuda.is_available():
         # the model family names the card; the edition suffix only lengthens the line
         cuda_name = torch.cuda.get_device_name(0).strip()

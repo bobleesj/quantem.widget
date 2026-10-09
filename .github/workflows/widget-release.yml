@@ -43,11 +43,16 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      # gpu-ref.txt is the one quantem.gpu ref every widget build bundles
+      - name: Read the pinned quantem.gpu ref
+        id: gpu
+        run: echo "ref=$(cat gpu-ref.txt)" >> "$GITHUB_OUTPUT"
+
       - name: Check out quantem.gpu browser-compute sources
         uses: actions/checkout@v7
         with:
           repository: bobleesj/quantem.gpu
-          ref: gpu-v0.0.1rc14
+          ref: ${{ steps.gpu.outputs.ref }}
           path: quantem-gpu-src
 
       - name: Resolve widget version from tag
@@ -119,6 +124,7 @@ jobs:
           wheel = wheels[0]
           required = {
               "quantem/widget/static/chooselattice.js",
+              "quantem/widget/static/engine-manifest.json",
               "quantem/widget/static/show1d.js",
               "quantem/widget/static/plot2d.js",
               "quantem/widget/static/show2d.js",

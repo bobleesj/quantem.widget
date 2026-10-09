@@ -12,6 +12,7 @@ on:
     paths:
       - "docs/**"
       - "CHANGELOG.md"
+      - "gpu-ref.txt"
       - ".github/workflows/widget-docs.yml"
   workflow_dispatch:
 
@@ -44,12 +45,17 @@ jobs:
       - run: pip install -r docs/requirements.txt
       - run: pip install --extra-index-url https://test.pypi.org/simple/ -e .
       # The TestPyPI quantem.gpu release can lag the webgpu module the sync
-      # script imports, so install quantem.gpu from its source tip instead
-      # (the installed quantem package is regular, not namespace, so a
-      # PYTHONPATH fallback cannot shadow a lagging site-packages release).
+      # script imports, so install quantem.gpu from the ref in gpu-ref.txt
+      # instead, the one CI and the release bundle (the installed quantem
+      # package is regular, not namespace, so a PYTHONPATH fallback cannot
+      # shadow a lagging site-packages release).
+      - name: Read the pinned quantem.gpu ref
+        id: gpu
+        run: echo "ref=$(cat gpu-ref.txt)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
         with:
           repository: bobleesj/quantem.gpu
+          ref: ${{ steps.gpu.outputs.ref }}
           path: quantem-gpu-src
       - run: pip install ./quantem-gpu-src
       # The executed widgets load their JS from src/quantem/widget/static/,
