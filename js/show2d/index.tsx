@@ -9700,4 +9700,4 @@ function Show2D() {
   );
 }
 
-export const render = createRender(Show2D);
+export default { render: createRender(Show2D) };

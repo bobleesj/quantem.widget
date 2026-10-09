@@ -9229,4 +9229,4 @@ function Show4DSTEM() {
   );
 }
 
-export const render = createRender(Show4DSTEM);
+export default { render: createRender(Show4DSTEM) };

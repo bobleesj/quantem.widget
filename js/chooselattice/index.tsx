@@ -449,4 +449,4 @@ function ChooseLattice() {
   );
 }
 
-export const render = createRender(ChooseLattice);
+export default { render: createRender(ChooseLattice) };

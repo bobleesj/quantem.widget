@@ -2117,4 +2117,4 @@ function ShowDiffraction() {
   );
 }
 
-export const render = createRender(ShowDiffraction);
+export default { render: createRender(ShowDiffraction) };

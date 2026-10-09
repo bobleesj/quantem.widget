@@ -48,7 +48,7 @@ vi.mock("../display/cpuColormap", async (importOriginal) => {
   };
 });
 
-const { render: renderShow2D } = await import("./index");
+const { default: { render: renderShow2D } } = await import("./index");
 
 class TestImageData {
   constructor(readonly data: Uint8ClampedArray, readonly width: number, readonly height: number) {}

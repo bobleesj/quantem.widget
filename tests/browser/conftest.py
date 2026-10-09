@@ -75,7 +75,7 @@ def chrome():
 
 @pytest.fixture
 def open_page(chrome):
-    """Open a page with WebGPU on or removed; returns the page and its error list."""
+    """Open a page with WebGPU on or removed; returns the page and its error list (and console messages)."""
     contexts = []
 
     def open_(url: str, *, webgpu: bool):
@@ -86,6 +86,8 @@ def open_page(chrome):
         page = context.new_page()
         page.errors = []
         page.on("pageerror", lambda error: page.errors.append(str(error)[:300]))
+        page.console = []
+        page.on("console", lambda message: page.console.append(f"{message.type}: {message.text}"))
         page.goto(url)
         page.adapter = lambda: page.evaluate(ADAPTER_INFO)
         page.render_paths = lambda: page.evaluate(RENDER_PATHS)

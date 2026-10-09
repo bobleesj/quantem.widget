@@ -139,6 +139,14 @@ def test_export_traits_come_from_the_mixin():
             assert not re.search(r"^    export_(request|status|enabled|payload|payload_id|filename) = traitlets", text, re.M), path.name
 
 
+
+def test_every_widget_bundle_is_an_anywidget_default_export():
+    # anywidget logs a deprecation warning for every view of a bundle that exports render by name
+    entries = sorted((WIDGETS.parents[2] / "js").glob("*/index.tsx"))
+    named = [entry.parent.name for entry in entries if re.search(r"^export (const|function) render\b", entry.read_text(), re.M)]
+    missing = [entry.parent.name for entry in entries if not re.search(r"^export default \{", entry.read_text(), re.M)]
+    assert len(entries) == 10 and named == [] and missing == [], (named, missing)
+
 RNG = np.random.default_rng(0)
 PREVIEW_WIDGETS = {
     "Show1D": lambda: Show1D(RNG.random(64)),
