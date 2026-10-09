@@ -6,6 +6,8 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+## rc40 - 2026-10-08
+
 - Fixes from the final cross-platform round. `quantem show4dstem --html` packs
   counts above 255 as uint16 by default (`--dtype auto`) instead of clipping
   them to uint8, and says so; `--out` is the output folder and a file name is

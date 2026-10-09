@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "quantem.widget"
-version = "0.0.1rc39"
+version = "0.0.1rc40"
 description = "Interactive custom Python widgets for electron microscopy"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -52,8 +52,8 @@ dependencies = [
 # loading. [cuda]: NVIDIA (CuPy). [mps]: Apple silicon (Metal, MLX). [cpu]: no GPU, or an Intel
 # Mac, which cannot install quantem.gpu (torch 2.3+). A wrong pick installs nothing harmful.
 cpu = []
-cuda = ["quantem.gpu[cuda]>=0.0.1rc13; sys_platform != 'darwin'"]
-mps = ["quantem.gpu[mps]>=0.0.1rc13; sys_platform == 'darwin' and platform_machine == 'arm64'"]
+cuda = ["quantem.gpu[cuda]>=0.0.1rc14; sys_platform != 'darwin'"]
+mps = ["quantem.gpu[mps]>=0.0.1rc14; sys_platform == 'darwin' and platform_machine == 'arm64'"]
 # Uploading new tutorial datasets to the shared Hugging Face hub (downloads need
 # only huggingface_hub). quantem.data is not on PyPI, so it stays an extra.
 hub = ["quantem.data>=0.0.1rc1"]
