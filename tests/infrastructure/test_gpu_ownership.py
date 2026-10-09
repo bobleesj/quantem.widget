@@ -193,6 +193,7 @@ def test_widget_owns_display_kernels_and_syncs_only_science() -> None:
     assert 'targetDir = "js/.generated/engine"' in sync_script
     assert 'SCIENCE_DOMAINS = ["detector/", "dpc/", "formats/", "io/", "ssb/"]' in sync_script
     assert 'export * from "../../../display/device"' in sync_script
+    assert 'export * from "../../../../display/borrowedImage"' in sync_script
     assert '{ name: "show4dstem", science: true }' in build_script
     assert '{ name: "showptycho", science: true }' in build_script
     offenders = [
