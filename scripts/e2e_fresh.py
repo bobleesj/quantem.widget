@@ -20,12 +20,13 @@ DATA = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("WIDGET_E2E_DATA", "
 
 
 def main():
+    """Load real masters through the installed wheel and construct every widget; any failure raises."""
     # The install must not resolve to an editable source tree.
-    import quantem.widget as w
-    src = os.path.dirname(w.__file__)
-    w.profile()
-    print(f"widget loaded from {src}")
-    assert "site-packages" in src, f"not a clean install: {src}"
+    import quantem.widget as widget_package
+    package_dir = os.path.dirname(widget_package.__file__)
+    widget_package.profile()
+    print(f"widget loaded from {package_dir}")
+    assert "site-packages" in package_dir, f"not a clean install: {package_dir}"
 
     from quantem.gpu.device import detect
     from quantem.gpu.io import inspect, load
@@ -64,17 +65,17 @@ def main():
         acquisition.close()
 
     # The public surface is exactly the unified API (no legacy name).
-    assert not hasattr(w, "load_4dstem_macbook"), "legacy load_4dstem_macbook still exported"
+    assert not hasattr(widget_package, "load_4dstem_macbook"), "legacy load_4dstem_macbook still exported"
 
     # Every other shipped widget constructs from the same clean install
     # (synthetic data: a packaging/import smoke, not a render check).
     import numpy as np
     from quantem.widget import Show2D, Show3D, Show3DSlices
-    s2 = Show2D(np.random.rand(64, 64), verbose=False)
-    s3 = Show3D(np.random.rand(8, 64, 64))
-    s3s = Show3DSlices(np.random.rand(8, 64, 64))
-    print(f"widgets: Show2D={type(s2).__name__} Show3D={type(s3).__name__} "
-          f"Show3DSlices={type(s3s).__name__}")
+    show2d = Show2D(np.random.rand(64, 64), verbose=False)
+    show3d = Show3D(np.random.rand(8, 64, 64))
+    show3dslices = Show3DSlices(np.random.rand(8, 64, 64))
+    print(f"widgets: Show2D={type(show2d).__name__} Show3D={type(show3d).__name__} "
+          f"Show3DSlices={type(show3dslices).__name__}")
 
     print("ALL PASS")
 
