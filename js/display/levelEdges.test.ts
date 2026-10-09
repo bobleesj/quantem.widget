@@ -10,9 +10,10 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { VOLUME_SLICE_MIN_ZOOM, displayNormalize } from "./display/colormaps";
+import { VOLUME_SLICE_MIN_ZOOM, displayNormalize } from "./colormaps";
 
-const COLORMAPS_SOURCE = readFileSync(path.join(__dirname, "display", "colormaps.ts"), "utf8");
+const SHADERS_SOURCE = readFileSync(path.join(__dirname, "displayShaders.ts"), "utf8");
+const VOLUME_SOURCE = readFileSync(path.join(__dirname, "volumeSlice.ts"), "utf8");
 const f32 = Math.fround;
 const bits = new DataView(new ArrayBuffer(4));
 const floatBits = (value: number) => { bits.setFloat32(0, value); return bits.getUint32(0); };
@@ -66,14 +67,14 @@ const level = (t: number) => Math.min(Math.trunc(f32(t * 255)), 255);
 
 describe("colormap level edges", () => {
   it("the WGSL normalization divides only through display_divide", () => {
-    const shader = /const DISPLAY_NORMALIZE_WGSL = [^`]*`([^`]*)`/.exec(COLORMAPS_SOURCE)![1];
+    const shader = /const DISPLAY_NORMALIZE_WGSL = [^`]*`([^`]*)`/.exec(SHADERS_SOURCE)![1];
     const normalize = shader.slice(shader.indexOf("fn display_normalize"));
     expect(normalize).toContain("display_divide(offset, span)");
     expect(normalize.replace(/\/\/.*$/gm, "")).not.toMatch(/[^/]\/[^/]/);
   });
 
   it("display_normalize divides once, since FXC fails to build a shader that inlines more divisions", () => {
-    const shader = /const DISPLAY_NORMALIZE_WGSL = [^`]*`([^`]*)`/.exec(COLORMAPS_SOURCE)![1];
+    const shader = /const DISPLAY_NORMALIZE_WGSL = [^`]*`([^`]*)`/.exec(SHADERS_SOURCE)![1];
     const normalize = shader.slice(shader.indexOf("fn display_normalize"));
     expect(normalize.match(/display_divide\(/g)).toHaveLength(1);
   });
@@ -140,7 +141,7 @@ describe("volume slice area average", () => {
   }
 
   it("clamps the zoom at the widget's minimum, so a zoom-out never averages more than that view", () => {
-    const shader = COLORMAPS_SOURCE.slice(COLORMAPS_SOURCE.indexOf("function volumeSliceShader"));
+    const shader = VOLUME_SOURCE.slice(VOLUME_SOURCE.indexOf("function volumeSliceShader"));
     expect(shader).toContain("let z = max(p.zoom, ${VOLUME_SLICE_MIN_ZOOM});");
     expect(shader).toContain("for (var xx = x0; xx < x1; xx++)");
     for (const column of [0, 37, 199, 300]) {

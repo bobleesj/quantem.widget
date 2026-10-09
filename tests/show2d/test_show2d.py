@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 import matplotlib.axes
+import matplotlib.colorbar
 import numpy as np
 import pytest
 from matplotlib import colormaps
@@ -15,6 +16,7 @@ from PIL import Image
 
 from quantem.widget import Show2D
 from quantem.widget.adapters.core import make_dataset
+from quantem.widget.colormap import display_window
 from quantem.widget.render.figure import format_scale_label
 
 
@@ -293,6 +295,33 @@ def test_save_image_scale_bar_labels_the_pixel_unit(tmp_path: Path, monkeypatch)
     assert drawn == ["2 nm"]  # 20% of 64 px x 0.2 nm = 2.56 nm -> nice 2 nm, never "2 Å"
 
 
+def test_save_image_log_colorbar_reads_log_values_marked_log(tmp_path: Path, monkeypatch):
+    # The browser's colorbar labels a log-scale window with its signed log1p ends and the word "log".
+    labels: dict[str, list[str]] = {"ticks": [], "label": []}
+    set_ticklabels = matplotlib.colorbar.Colorbar.set_ticklabels
+    set_label = matplotlib.colorbar.Colorbar.set_label
+
+    def record_ticklabels(self, ticklabels, *args, **kwargs):
+        labels["ticks"].extend(ticklabels)
+        return set_ticklabels(self, ticklabels, *args, **kwargs)
+
+    def record_label(self, label, *args, **kwargs):
+        labels["label"].append(label)
+        return set_label(self, label, *args, **kwargs)
+
+    monkeypatch.setattr(matplotlib.colorbar.Colorbar, "set_ticklabels", record_ticklabels)
+    monkeypatch.setattr(matplotlib.colorbar.Colorbar, "set_label", record_label)
+    frame = np.linspace(-100, 1000, 64 * 64, dtype=np.float32).reshape(64, 64)
+    Show2D(frame, log_scale=True, verbose=False).save_image(tmp_path / "log.png", colorbar=True)
+    low, high = display_window(-100, 1000, True)
+    assert labels["ticks"][0] == f"{low:.4g}" and labels["ticks"][-1] == f"{high:.4g}"
+    assert labels["label"][-1] == "log"
+    labels["ticks"].clear()
+    labels["label"].clear()
+    Show2D(frame, verbose=False).save_image(tmp_path / "linear.png", colorbar=True)
+    assert labels["ticks"][-1] == "1000" and "log" not in labels["label"]
+
+
 # --- static preview math (mirrors the browser) ------------------------------
 
 
@@ -301,11 +330,54 @@ def test_static_panel_rgb_is_the_matplotlib_lut():
     for cmap_name in ("gray", "inferno", "viridis"):
         widget = Show2D(frame, cmap=cmap_name, verbose=False)
         (vmin, vmax), = widget._resolve_panel_display_ranges([frame])
-        expected = (colormaps.get_cmap(cmap_name)(np.clip((frame - vmin) / (vmax - vmin), 0, 1))[..., :3] * 255).astype(np.uint8)
-        np.testing.assert_array_equal(widget._static_panel_rgb(frame, vmin, vmax, cmap_name), expected)
+        # the browser's applyColormap entry: trunc(normalized * 255), not matplotlib's own floor(normalized * 256)
+        entry = np.clip((frame - vmin) / (vmax - vmin) * 255, 0, 255).astype(np.uint8)
+        lut = (colormaps.get_cmap(cmap_name)(np.arange(256))[:, :3] * 255).astype(np.uint8)
+        np.testing.assert_array_equal(widget._static_panel_rgb(frame, vmin, vmax, cmap_name), lut[entry])
     gray_png = _decode_png(Show2D(frame, cmap="gray", verbose=False))
     spread = gray_png.max(axis=-1).astype(int) - gray_png.min(axis=-1).astype(int)
     assert (spread <= 3).mean() > 0.99
+
+
+@pytest.mark.parametrize("window", [{"vmin": -40, "vmax": 40}, {}, {"auto_contrast": True}])
+def test_save_image_log_scale_keeps_negative_values_like_the_preview(tmp_path: Path, window):
+    # A signed diff under log scale: the browser and the preview map v < 0 to -log1p(-v); save_image
+    # once clipped to log1p(max(v, 0)) and painted the whole negative half one flat level.
+    frame = np.linspace(-50, 50, 64 * 64, dtype=np.float32).reshape(64, 64)
+    widget = Show2D(frame, cmap="gray", log_scale=True, verbose=False, **window)
+    saved = np.asarray(Image.open(widget.save_image(tmp_path / "diff.png")).convert("RGB"))
+    (vmin, vmax), = widget._resolve_panel_display_ranges([widget._data[0]])
+    np.testing.assert_array_equal(saved, widget._static_panel_rgb(widget._data[0], vmin, vmax, "gray"))
+    assert len(np.unique(saved[:32, :, 0])) > 100
+
+
+def test_save_image_and_preview_share_the_log_window_of_the_data_range(tmp_path: Path):
+    # The window under log scale is signed_log1p of the data min/max (the browser's displayRange), not
+    # the min/max of the float32 log frame: those differ by a float32 step and move whole levels.
+    rng = np.random.default_rng(7)
+    frames = [(rng.standard_normal((16, 16)) * 10.0 ** rng.uniform(-2, 4)).astype(np.float32) for _ in range(300)]
+    widget = Show2D(frames, log_scale=True, link_contrast=False, verbose=False)
+    ranges = widget._resolve_panel_display_ranges(list(widget._data))
+    mismatched = []
+    for idx, (vmin, vmax) in enumerate(ranges):
+        saved = np.asarray(Image.open(widget.save_image(tmp_path / f"{idx}.png", idx=idx)).convert("RGB"))
+        if not np.array_equal(saved, widget._static_panel_rgb(widget._data[idx], vmin, vmax, widget.cmap)):
+            mismatched.append(idx)
+    assert mismatched == []
+
+
+@pytest.mark.parametrize("log_scale", [False, True])
+def test_save_image_auto_contrast_of_sparse_data_is_not_flat(tmp_path: Path, log_scale):
+    # A few bright spots on an empty field put both 2/98% percentiles on 0; the preview then
+    # windows the full data range, and save_image must too instead of saving one flat level.
+    frame = np.zeros((64, 64), np.float32)
+    rows, cols = np.random.default_rng(3).integers(0, 64, (2, 12))
+    frame[rows, cols] = np.linspace(5, 900, 12, dtype=np.float32)
+    widget = Show2D(frame, cmap="gray", auto_contrast=True, log_scale=log_scale, verbose=False)
+    saved = np.asarray(Image.open(widget.save_image(tmp_path / "sparse.png")).convert("RGB"))
+    (vmin, vmax), = widget._resolve_panel_display_ranges([widget._data[0]])
+    np.testing.assert_array_equal(saved, widget._static_panel_rgb(widget._data[0], vmin, vmax, "gray"))
+    assert saved.max() == 255
 
 
 def test_display_ranges_follow_contrast_rules():

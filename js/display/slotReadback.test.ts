@@ -3,7 +3,7 @@
 // whole mapped buffer into an image-sized array threw a RangeError; the
 // readbacks now take only the slot's own pixels.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { COLORMAPS, GPUColormapEngine } from "./display/colormaps";
+import { COLORMAPS, GPUColormapEngine } from "./colormaps";
 
 type MockBuffer = { bytes: Uint8Array; mapAsync: () => Promise<void>; getMappedRange: (offset?: number, size?: number) => ArrayBuffer; unmap: () => void; destroy: () => void };
 

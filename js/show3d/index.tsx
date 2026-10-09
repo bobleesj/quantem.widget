@@ -6051,7 +6051,6 @@ function Show3D() {
       viewportTransformActive();
     if (!keepDirectGpuVisible && !options.preserveGpuDisplay && !preserveActiveGpuTransform) {
       setGpuDisplayVisible(false);
-    } else if (preserveActiveGpuTransform) {
     }
     ctx.imageSmoothingEnabled = smooth;
     // Clear entire canvas to the configured inter-panel layer. Slot-level bg

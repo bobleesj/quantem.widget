@@ -2,6 +2,7 @@
 
 import base64
 import io
+import json
 import math
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from quantem.widget.colormap import colormap_lut, colormap_names
 from quantem.widget.fallback import StaticFallbackMixin
 from quantem.widget.state import SavedStateMixin
 from quantem.widget.utils.array import _b64_safe, to_numpy
+from quantem.widget.utils.state_io import unwrap_state_payload
 
 
 class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
@@ -47,6 +49,9 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
         Embed the full float64 map in saved widget state when True. By default,
         save a static PNG preview and omit the array from full state snapshots.
         Targeted live updates always retain the original values.
+    state : dict, str or pathlib.Path, optional
+        A view written by ``save`` (its file path or JSON payload) or a
+        ``state_dict``, restored after construction with ``load_state_dict``.
 
     Examples
     --------
@@ -73,6 +78,11 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
     view_bounds = traitlets.List(traitlets.Float()).tag(sync=True)
     plot_height_px = traitlets.Int(350).tag(sync=True)
     max_width = traitlets.Int(600, min=260).tag(sync=True)
+    # The grid and values come from the data, so only the view is saved.
+    _STATE_KEYS = (
+        "title", "x_label", "y_label", "colorbar_label", "cmap", "vmin", "vmax",
+        "horizontal_line", "view_bounds", "plot_height_px", "max_width",
+    )
 
     data: np.ndarray | None = None
 
@@ -91,6 +101,7 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
         width: int = 350,
         max_width: int = 600,
         save_state: bool = False,
+        state: dict | str | Path | None = None,
     ) -> None:
         self._save_state = bool(save_state)
         self._configure_static_fallback(notebook_preview_format="png")
@@ -110,17 +121,30 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
             edges.extend([float(centers[0] - steps[0] / 2), float(centers[-1] + steps[0] / 2)])
         self.grid = {"rows": len(self.y), "cols": len(self.x), "bounds": edges}
         self.title, self.x_label, self.y_label, self.colorbar_label = title, x_label, y_label, colorbar_label
+        self._width = width
         self.max_width = max_width
-        self.layout.width = f"{min(max_width, max(260, width))}px"
-        self.layout.max_width = f"min(100%, {max_width}px)"
+        self._fit_layout()
         self.set_data(data)
         self.vmin = float(self.data.min()) if vmin is None else float(vmin)
         self.vmax = float(self.data.max()) if vmax is None else float(vmax)
         if self.vmax == self.vmin and vmin is None and vmax is None:
             self.vmax = self.vmin + 1
-        if not np.isfinite([self.vmin, self.vmax]).all() or self.vmax <= self.vmin:
-            raise ValueError("Use finite color limits with vmax > vmin.")
+        self._check_limits(self.vmin, self.vmax)
         self.observe(self._invalidate_preview, names=["cmap", "vmin", "vmax", "title", "view_bounds", "horizontal_line"])
+        if state is not None:
+            self.load_state_dict(state)
+
+    @staticmethod
+    def _check_limits(vmin: float, vmax: float) -> None:
+        """Refuse color limits the renderer cannot map (non-finite, or vmax not above vmin), at construction and on a restored view."""
+        if not np.isfinite([vmin, vmax]).all() or vmax <= vmin:
+            raise ValueError("Use finite color limits with vmax > vmin.")
+
+    @traitlets.observe("max_width")
+    def _fit_layout(self, change: dict | None = None) -> None:
+        """Size the notebook box to ``max_width``; without it a restored or changed maximum would not show."""
+        self.layout.width = f"{min(self.max_width, max(260, self._width))}px"
+        self.layout.max_width = f"min(100%, {self.max_width}px)"
 
     def _invalidate_preview(self, change: dict | None = None) -> None:
         """Drop the cached preview so the next notebook save re-renders the current view."""
@@ -169,6 +193,31 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
         >>> plot.figure().savefig("correlation.svg")
         """
         return self._make_figure()
+
+    def state_dict(self) -> dict:
+        """JSON-safe view settings (no values or grid): what ``save`` writes and ``load_state_dict`` restores."""
+        return {key: list(getattr(self, key)) if key == "view_bounds" else getattr(self, key) for key in self._STATE_KEYS}
+
+    def load_state_dict(self, state: dict | str | Path) -> None:
+        """Restore a view onto this map: a ``save`` file, its JSON payload, or a bare ``state_dict``.
+
+        A file written by another widget is refused, and the color limits must
+        pass the constructor's check before anything is applied. Unknown keys
+        are skipped.
+
+        Examples
+        --------
+        >>> plot.save("g3_view.json")
+        >>> other.load_state_dict("g3_view.json")
+        """
+        if isinstance(state, (str, Path)):
+            state = unwrap_state_payload(json.loads(Path(state).read_text()), require_envelope=True, expected_widget="Plot2D")
+        else:
+            state = unwrap_state_payload(state, expected_widget="Plot2D")
+        self._check_limits(state.get("vmin", self.vmin), state.get("vmax", self.vmax))
+        for key, value in state.items():
+            if key in self._STATE_KEYS:
+                setattr(self, key, value)
 
     def _static_png_b64(self, max_px: int = 512) -> str | None:
         """Render a bounded saved preview without modifying scientific data."""

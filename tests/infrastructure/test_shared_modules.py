@@ -1,6 +1,7 @@
 """The shared widget modules: one copy each, matching the browser rules."""
 
 import re
+import warnings
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -10,7 +11,7 @@ from ipywidgets.widgets.widget import _instances
 from matplotlib import colormaps
 
 from quantem.widget import Plot2D, Show1D, Show2D, Show3D, Show4DSTEM
-from quantem.widget.colormap import VALID_CMAPS, Colormap, cmap_to_name, colorize, is_cmap_sequence
+from quantem.widget.colormap import VALID_CMAPS, Colormap, cmap_to_name, colorize, contrast_uint8, is_cmap_sequence
 from quantem.widget.export import export_slug
 from quantem.widget.pages import resolve_page_labels
 from quantem.widget.panels import normalize_panel_refs, resolve_panel_ref
@@ -49,6 +50,27 @@ def test_colormap_names_and_lut():
     expected = (colormaps.get_cmap("viridis")(normalized)[..., :3] * 255).astype(np.uint8)
     np.testing.assert_array_equal(colorize(normalized, "viridis"), expected)
     assert colorize(normalized, "viridis").shape == (1, 7, 3)
+
+
+def test_colorize_reads_the_level_position_of_256_and_510_entry_tables():
+    # twilight and twilight_shifted are 510-entry matplotlib tables: level k reads entry 2k (509 at
+    # the top), the same position along the colormap as entry k of a 256-entry table.
+    levels = np.arange(256)
+    for name, entries in (("inferno", levels), ("twilight", np.minimum(2 * levels, 509)), ("twilight_shifted", np.minimum(2 * levels, 509))):
+        colormap = colormaps.get_cmap(name)
+        table = (colormap(np.arange(colormap.N))[:, :3] * 255).astype(np.uint8)
+        np.testing.assert_array_equal(colorize(levels / 255.0, name), table[entries])
+
+
+def test_contrast_uint8_paints_nan_inf_and_an_empty_window_like_the_browser():
+    # displayNormalize sends NaN and -inf to 0, +inf to 1 and every value of an empty window to 0.5;
+    # applyColormap then reads entry trunc(n * 255). No platform-dependent NaN cast, no warning.
+    values = np.array([np.nan, -np.inf, np.inf, -2.0, 0.25, 9.0], dtype=np.float32)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        np.testing.assert_array_equal(contrast_uint8(values, 0.0, 1.0), [0, 0, 255, 0, 63, 255])
+        np.testing.assert_array_equal(contrast_uint8(values, 1.0, 1.0), [0, 0, 255, 127, 127, 127])
+        np.testing.assert_array_equal(contrast_uint8(values, float("nan"), 1.0), [0, 0, 255, 127, 127, 127])
 
 
 def test_panel_refs_and_order():

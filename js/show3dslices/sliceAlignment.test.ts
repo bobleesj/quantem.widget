@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { fft2d } from "./display/fft";
+import { fft2d } from "../display/fft";
 import { estimateSliceAlignment, median } from "./sliceAlignment";
 
 /**

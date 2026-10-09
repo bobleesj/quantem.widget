@@ -39,7 +39,7 @@ vi.mock("../display/colormaps", async (importOriginal) => {
 });
 
 const alignmentVolumes = vi.hoisted(() => [] as Float32Array[]);
-vi.mock("../sliceAlignment", () => ({
+vi.mock("./sliceAlignment", () => ({
   estimateSliceAlignment: async (volume: Float32Array) => {
     alignmentVolumes.push(volume.slice());
     return { rowShiftPxPerSlice: 0, colShiftPxPerSlice: 0, backend: "cpu" };

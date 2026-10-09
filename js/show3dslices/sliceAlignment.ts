@@ -24,7 +24,7 @@
  * WebGPU, and is what the parity tests exercise against the Python estimator.
  */
 
-import { WebGPUFFT, fft2d, nextPow2, type DisplayFFT } from "./display/fft";
+import { WebGPUFFT, fft2d, nextPow2, type DisplayFFT } from "../display/fft";
 
 // Matches src/quantem/widget/show3dslices/alignment.py. Changing one
 // side without the other makes the browser and the kernel disagree on the shift.

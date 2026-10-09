@@ -19,7 +19,7 @@ import matplotlib.patches
 import matplotlib.patheffects
 import numpy as np
 
-from quantem.widget.colormap import colorize
+from quantem.widget.colormap import auto_window, colorize, contrast_uint8, display_window, signed_log1p
 from quantem.widget.render.figure import format_scale_label, round_to_nice, static_overlay_font
 
 
@@ -50,16 +50,6 @@ class Show2DStaticPng:
             "panel_inner_border_px": max(0.0, float(self.panel_inner_border_px)),
             "panel_inner_border_color": str(self.panel_inner_border_color or "#d0d0d0"),
         }
-
-    @staticmethod
-    def _signed_log1p(values: np.ndarray | float) -> np.ndarray | float:
-        """Signed log1p, matching the frontend's ``applyLogScale``.
-
-        The widget maps negative intensities to ``-log1p(-v)`` so diff-like
-        data keeps its sign under log scale; a plain ``log1p(clip(v, 0))``
-        would collapse everything below zero and diverge from the live render.
-        """
-        return np.sign(values) * np.log1p(np.abs(values))
 
     @staticmethod
     def _format_stat(value: float) -> str:
@@ -96,10 +86,6 @@ class Show2DStaticPng:
         is_rgb = [i < len(self.is_rgb) and bool(self.is_rgb[i]) for i in range(n_frames)]
         gray = [i for i in range(n_frames) if not is_rgb[i]]
 
-        def to_display(value: float) -> float:
-            """A data-space limit in display space (signed log1p under ``log_scale``)."""
-            return float(self._signed_log1p(float(value))) if self.log_scale else float(value)
-
         has_absolute = self.vmin is not None and self.vmax is not None
         panel_vmins = list(self.vmins) if self.vmins else [None] * n_frames
         panel_vmaxs = list(self.vmaxs) if self.vmaxs else [None] * n_frames
@@ -109,11 +95,11 @@ class Show2DStaticPng:
             if is_rgb[i]:
                 base_ranges.append((0.0, 1.0))
             elif has_panel_range[i]:
-                base_ranges.append((to_display(panel_vmins[i]), to_display(panel_vmaxs[i])))
+                base_ranges.append(display_window(panel_vmins[i], panel_vmaxs[i], self.log_scale))
             elif has_absolute:
-                base_ranges.append((to_display(self.vmin), to_display(self.vmax)))
+                base_ranges.append(display_window(self.vmin, self.vmax, self.log_scale))
             else:
-                base_ranges.append((to_display(frame.min()), to_display(frame.max())))
+                base_ranges.append(display_window(frame.min(), frame.max(), self.log_scale))
         linked_shared = (
             self.link_contrast and len(gray) >= 2 and not has_absolute and not any(has_panel_range)
         )
@@ -127,14 +113,7 @@ class Show2DStaticPng:
                 if has_panel_range[i] or is_rgb[i]:
                     auto_ranges.append(base_ranges[i])
                     continue
-                processed = self._signed_log1p(frame) if self.log_scale else frame
-                low, high = (float(value) for value in np.percentile(processed, (2, 98)))
-                # Sparse/clustered data can collapse the 2-98% window to a
-                # point; fall back to full extrema like computeAutoRange does.
-                full_low, full_high = float(processed.min()), float(processed.max())
-                if high - low <= max(1e-12, abs(full_high - full_low) * 1e-6):
-                    low, high = full_low, full_high
-                auto_ranges.append((low, high))
+                auto_ranges.append(auto_window(frame, self.log_scale))
             if linked_shared:
                 shared_auto = (min(auto_ranges[i][0] for i in gray), max(auto_ranges[i][1] for i in gray))
         ranges: list[tuple[float, float]] = []
@@ -158,19 +137,16 @@ class Show2DStaticPng:
     ) -> np.ndarray:
         """Colormap one panel exactly as the live widget maps pixels to colors.
 
-        Pipeline: optional signed-log1p on the data, clip-normalize into the
-        display-space ``[vmin, vmax]`` window, then look up the matplotlib
-        colormap (the same LUT the JS mirrors). Returning explicit RGB uint8
-        keeps matplotlib's own norm machinery out of the loop, so the PNG's
-        pixel mapping is byte-identical to what tests can compute independently.
+        Pipeline: optional signed-log1p on the data, the browser's uint8 level
+        in the display-space ``[vmin, vmax]`` window (``contrast_uint8``, shared
+        with ``save_image``), then look up the matplotlib colormap (the same LUT
+        the JS mirrors). Returning explicit RGB uint8 keeps matplotlib's own
+        norm machinery out of the loop, so the PNG's pixel mapping is
+        byte-identical to what tests can compute independently.
         """
         apply_log = self.log_scale if apply_log is None else apply_log
-        processed = self._signed_log1p(frame) if apply_log else frame
-        if vmax > vmin:
-            normalized = np.clip((processed - vmin) / (vmax - vmin), 0.0, 1.0)
-        else:
-            normalized = np.zeros(processed.shape, dtype=np.float64)
-        return colorize(normalized, cmap_name)
+        processed = signed_log1p(frame) if apply_log else frame
+        return colorize(contrast_uint8(processed, vmin, vmax) / 255.0, cmap_name)
 
     def _static_panel_specs(self) -> list[dict]:
         """Panel plan for the static PNG, mirroring the live widget's layout.

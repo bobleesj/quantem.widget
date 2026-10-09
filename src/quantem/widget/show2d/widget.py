@@ -26,7 +26,7 @@ from PIL import Image
 
 from quantem.widget.adapters import core as core_adapter
 from quantem.widget.folder_watch_status import FOLDER_WATCH_STATE_VALUES
-from quantem.widget.colormap import Colormap, cmap_to_name, is_cmap_sequence
+from quantem.widget.colormap import Colormap, auto_window, cmap_to_name, contrast_uint8, display_window, is_cmap_sequence, signed_log1p
 from quantem.widget.export import HtmlExportMixin
 from quantem.widget.fallback import StaticFallbackMixin
 from quantem.widget.pages import PagesMixin
@@ -1896,20 +1896,15 @@ class Show2D(
         else:
             # Same contrast window as the browser: explicit vmin/vmax, else the
             # 2/98 percentiles under auto_contrast, else the frame extrema.
-            display_frame = np.log1p(np.maximum(frame, 0)) if self.log_scale else frame
+            display_frame = signed_log1p(frame) if self.log_scale else frame
             if self.vmin is not None and self.vmax is not None:
-                display_min, display_max = float(self.vmin), float(self.vmax)
-                if self.log_scale:
-                    display_min, display_max = float(np.log1p(max(display_min, 0))), float(np.log1p(max(display_max, 0)))
+                display_min, display_max = display_window(self.vmin, self.vmax, self.log_scale)
             elif self.auto_contrast:
-                display_min, display_max = (float(value) for value in np.percentile(display_frame, (2, 98)))
+                display_min, display_max = auto_window(frame, self.log_scale)
             else:
-                display_min, display_max = float(display_frame.min()), float(display_frame.max())
+                display_min, display_max = display_window(frame.min(), frame.max(), self.log_scale)
             # 8-bit levels: the colormap lookup and the PNG are both 256-level.
-            if display_max > display_min:
-                levels = np.clip((display_frame - display_min) / (display_max - display_min) * 255, 0, 255).astype(np.uint8)
-            else:
-                levels = np.zeros(frame.shape, dtype=np.uint8)
+            levels = contrast_uint8(display_frame, display_min, display_max)
             display_pixels = None
 
         use_figure = title or colorbar or scalebar
@@ -1940,12 +1935,15 @@ class Show2D(
                 ax.set_title(label, fontsize=14, fontweight="bold", pad=8)
 
         if colorbar:
-            # The image holds 0-255 levels; ticks read back in data values.
+            # The image holds 0-255 levels; ticks read back in display values, which under
+            # log scale are signed log1p values marked "log", as the browser's colorbar shows them.
             colorbar_artist = fig.colorbar(image_artist, ax=ax, fraction=0.046, pad=0.04)
             tick_positions = np.linspace(0, 255, 5)
             tick_labels = [f"{display_min + (display_max - display_min) * tick / 255:.4g}" for tick in tick_positions]
             colorbar_artist.set_ticks(tick_positions)
             colorbar_artist.set_ticklabels(tick_labels)
+            if self.log_scale:
+                colorbar_artist.set_label("log")
 
         if scalebar and self.pixel_size > 0:
             # A nice physical length near 20% of the image width.

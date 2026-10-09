@@ -62,6 +62,7 @@ required = {
     "quantem/widget/static/show3d.js",
     "quantem/widget/static/show3dslices.js",
     "quantem/widget/static/show4dstem.js",
+    "quantem/widget/static/showcif.js",
     "quantem/widget/static/showdiffraction.js",
     "quantem/widget/static/showptycho.js",
 }

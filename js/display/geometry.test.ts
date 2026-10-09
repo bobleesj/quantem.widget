@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { cropMaskedRegion, sampleLineProfile, sampleLineProfileUint8 } from "./display/geometry";
+import { cropMaskedRegion, sampleLineProfile, sampleLineProfileUint8 } from "./geometry";
 
 const image = Float32Array.from({ length: 30 }, (_, index) => index);
 

@@ -5,7 +5,7 @@ import {
   frequencyMaskValue,
   getFrequencyFilterBackend,
   normalizeFrequencyFilterMode,
-} from "./display/frequencyFilter";
+} from "./frequencyFilter";
 
 describe("frequency filter", () => {
   it("normalizes scientist-facing mode spellings", () => {

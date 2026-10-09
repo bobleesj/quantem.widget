@@ -11,8 +11,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GPUColormapEngine } from "./display/colormaps";
 
-const COLORMAPS_SOURCE = readFileSync(path.join(__dirname, "display", "colormaps.ts"), "utf8");
-const RANGE_MAX_STEPS = Number(/const RANGE_MAX_STEPS = (\d+)u;/.exec(COLORMAPS_SOURCE)![1]);
+// The grid-stride bounds live with the display shaders; the two reduce passes that use them, with the range code.
+const SHADERS_SOURCE = readFileSync(path.join(__dirname, "display", "displayShaders.ts"), "utf8");
+const RANGES_SOURCE = readFileSync(path.join(__dirname, "display", "gpuRange.ts"), "utf8");
+const RANGE_MAX_STEPS = Number(/const RANGE_MAX_STEPS = (\d+)u;/.exec(SHADERS_SOURCE)![1]);
 
 /** Every WGSL template literal (`/* wgsl *\/ \`...\``) in the widget's own source files. */
 function widgetShaders(): { file: string; code: string }[] {
@@ -126,9 +128,9 @@ describe("slot min/max reduction", () => {
     }
     // The bounds the replay below mirrors: a zero groups uniform still gives a
     // 256-wide stride, and no count or groups value gives more than the cap.
-    expect(COLORMAPS_SOURCE).toContain("fn range_stride() -> u32 { return max(params.groups, 1u) * 256u; }");
-    expect(COLORMAPS_SOURCE).toContain("fn range_steps(stride: u32) -> u32 { return min(params.count / stride + 1u, RANGE_MAX_STEPS); }");
-    expect(COLORMAPS_SOURCE.match(/for \(var step = 0u; step < steps; step = step \+ 1u\)/g)).toHaveLength(2);
+    expect(SHADERS_SOURCE).toContain("fn range_stride() -> u32 { return max(params.groups, 1u) * 256u; }");
+    expect(SHADERS_SOURCE).toContain("fn range_steps(stride: u32) -> u32 { return min(params.count / stride + 1u, RANGE_MAX_STEPS); }");
+    expect(RANGES_SOURCE.match(/for \(var step = 0u; step < steps; step = step \+ 1u\)/g)).toHaveLength(2);
     expect(RANGE_MAX_STEPS).toBe(1024);
   });
 

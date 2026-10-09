@@ -28,7 +28,7 @@ import PauseIcon from "@mui/icons-material/Pause";
 import FastRewindIcon from "@mui/icons-material/FastRewind";
 import StopIcon from "@mui/icons-material/Stop";
 import { useTheme } from "../theme";
-import { VolumeRenderer, CameraState, DEFAULT_CAMERA } from "../webgpu-volume";
+import { VolumeRenderer, CameraState, DEFAULT_CAMERA } from "./webgpu-volume";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawColorbar } from "../figure";
 import { downloadBlob, extractBytes, extractFloat32, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";
 import { findDataRange, applyLogScale, percentileClip, signedLog1p, sliderRange } from "../display/stats";
@@ -45,7 +45,7 @@ import { Histogram } from "../shared/Histogram";
 import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine, VOLUME_SLICE_MIN_ZOOM } from "../display/colormaps";
 import { DisplayFFT, getDisplayFFT, getGPUDevice, fft2d, fftshift, nextPow2, computeMagnitude, autoEnhanceFFT, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset } from "../display/fft";
 import { findFFTPeakBrowser } from "../display/geometry";
-import { estimateSliceAlignment } from "../sliceAlignment";
+import { estimateSliceAlignment } from "./sliceAlignment";
 
 const MAX_PLAYBACK_FPS = 30;
 const PAGE_PLAY_FPS_OPTIONS = [1, 2, 4, 8] as const;

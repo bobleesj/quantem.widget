@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { computeFftQualityMetrics } from "./display/fftMetrics";
+import { computeFftQualityMetrics } from "./fftMetrics";
 
 function numpyReferenceFixture() {
   const python = process.env.PYTHON || "python";
