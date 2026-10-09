@@ -3885,19 +3885,21 @@ function Show4DSTEM() {
             const rangesReady = batchFrames.every((frame) => compareGpuRangesRef.current.has(frame));
             if (!interactiveDrag || !rangesReady) {
               const ranges = await engine.computeRangeBatch(batchSlots);
-              // A newer pass has adopted its own buffers and retired these;
-              // recording them as the delta base would write destroyed buffers.
-              if (disposed || generation !== compareViGen) return false;
               ranges.forEach((range, index) => {
                 const frame = batchFrames[index];
                 if (frame !== undefined) compareGpuRangesRef.current.set(frame, range);
               });
             }
-            compareIncrementalRef.current = {
-              mask: new Uint32Array(detectorMask),
-              buffers: nextBuffers,
-              indicesKey,
-            };
+            // A newer pass may have adopted its own buffers during the range
+            // readback and retired these; only the latest pass records the
+            // buffers the next drag's delta starts from.
+            if (generation === compareViGen) {
+              compareIncrementalRef.current = {
+                mask: new Uint32Array(detectorMask),
+                buffers: nextBuffers,
+                indicesKey,
+              };
+            }
             if (interactiveDrag) compareGpuRenderNowRef.current?.();
             compareGpuCompletion = engine.getDevice().queue.onSubmittedWorkDone();
             if (interactiveDrag) await compareGpuCompletion;
