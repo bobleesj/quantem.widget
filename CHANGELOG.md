@@ -6,6 +6,18 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Show4DSTEM opens `.qem` acquisitions in the browser with no kernel:
+  `show4dstem.export.write_qem_bundle(paths, folder)` or `quantem show4dstem
+  a.qem b.qem --html` writes a WebGPU folder that streams each file by HTTP
+  range (or takes the files from the picker or a dropped folder when opened
+  from disk), keeps the counts encoded on the GPU and paints each panel as
+  soon as its acquisition is resident, with a loading tile and a status line
+  for the rest. Hovering a panel reads its exact count. A small rect or ring
+  detector now moves when pressed at its center, an HDF5 viewer folder can be
+  dropped on the offline viewer, and the viewer's range server keeps
+  connections alive, answers HEAD without a body and sends files with
+  `sendfile`.
+
 ## rc40 - 2026-10-08
 
 - Fixes from the final cross-platform round. `quantem show4dstem --html` packs

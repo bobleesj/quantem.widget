@@ -4,7 +4,8 @@ import ts from "typescript";
 import {describe, expect, it} from "vitest";
 
 // Exercise the mounted grid's actual tile-selection callback: a GPU tile is
-// admitted only once its image can be displayed.
+// admitted only once its image can be displayed, and while a series loads
+// every requested panel keeps its place.
 const tree = ts.createSourceFile("index.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let body = "";
 function visit(node: ts.Node) {
@@ -18,11 +19,11 @@ visit(tree);
 const code = ts.transpileModule(`const select = ${body};`, {
   compilerOptions: {target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.None},
 }).outputText;
-function tiles(ready: number, rangesReady = 0) {
+function tiles(ready: number, rangesReady = 0, sourceLoading = false) {
   const bindings = {renderIndices: [0, 1, 2], panelByFrame: new Map(),
     gpuSlots: new Map(Array.from({length: ready}, (_, i) => [i, 60 + i])),
     gpuRanges: new Map(Array.from({length: rangesReady}, (_, i) => [i, {min: 0, max: 1}])),
-    gpuEngine: {}, progressivePage: null};
+    gpuEngine: {}, progressivePage: null, sourceLoading};
   return new Function(...Object.keys(bindings), `${code};return select();`)(...Object.values(bindings));
 }
 
@@ -30,5 +31,13 @@ describe("compare tile admission", () => {
   it("keeps ordinary HDF5 tiles pending until their display range is ready", () => {
     expect(tiles(1, 0)).toHaveLength(0);
     expect(tiles(1, 1).map((entry: {frame: number}) => entry.frame)).toEqual([0]);
+  });
+  it("keeps every requested position while a .qem series is still loading", () => {
+    for (const ready of [0, 1, 2]) {
+      const entries = tiles(ready, ready, true);
+      expect(entries.map((entry: {frame: number}) => entry.frame)).toEqual([0, 1, 2]);
+      expect(entries.filter((entry: {gpuLoaded: boolean}) => entry.gpuLoaded)).toHaveLength(ready);
+    }
+    expect(tiles(3, 3, false)).toHaveLength(3);
   });
 });

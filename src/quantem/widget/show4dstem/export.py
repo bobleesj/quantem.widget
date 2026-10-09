@@ -10,18 +10,22 @@ Three artifacts leave the kernel:
 * WebGPU bundle (``quantem show4dstem --backend webgpu --html``): the page sits
   beside the linked ``*_master.h5`` family and range-reads the compressed
   detector chunks itself; a ``Show4DSTEM.command`` starts the local server.
+  ``write_qem_bundle`` does the same over ``.qem`` acquisitions, which the page
+  streams by HTTP range and keeps encoded on the GPU.
 """
 
 import gzip
 import html
 import json
 import math
+import os
 import pathlib
 import re
 
 import numpy as np
 import torch
 
+from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.command_launcher import write_command_launcher
 from quantem.widget.export import ensure_mobile_viewport, export_slug, write_widget_html
 from quantem.widget.show4dstem.detector import PRESET_RADII, preset_mask
@@ -300,10 +304,17 @@ def export_clone(widget, dtype: str, det_bin: int, scan_bin: int):
 
 
 def write_interactive_html(widget, path, *, dtype: str, det_bin: int, scan_bin: int, title: str | None) -> pathlib.Path:
-    """Write the kernel-less page: packed counts for arrays, linked HDF5 for a browser source."""
+    """Write the kernel-less page: packed counts for arrays, linked HDF5 or .qem files for a browser source."""
     out = pathlib.Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     page_title = title or widget.title or "Show4DSTEM"
+    if widget._qem_urls:
+        # The page has no kernel to export from, and its state must travel inside it.
+        previous = (widget.export_enabled, widget._save_state)
+        widget.export_enabled, widget._save_state = False, True
+        write_widget_html(out, widget, page_title)
+        widget.export_enabled, widget._save_state = previous
+        return out
     if widget._h5_urls:
         if det_bin != 1 or scan_bin != 1:
             raise ValueError(
@@ -604,15 +615,16 @@ def bundle_master_urls(folder, names=None, *, viewer_prefix: str = "..") -> list
 def write_webgpu_bundle(widget, out_dir, *, port: int = 8794, title: str | None = None, h5_decode_dtype: str = "uint16") -> pathlib.Path:
     """Write ``Show4DSTEM.command``, ``index.html`` and a vendored ``.viewer/`` page into the data folder.
 
-    ``out_dir`` holds the linked ``*_master.h5`` family the widget references.
-    The recipient double-clicks the command: a range-capable server starts over
-    this folder and Chrome opens the page, with no Python install and no CDN.
+    ``out_dir`` holds the linked ``*_master.h5`` family or ``.qem`` files the
+    widget references. The recipient double-clicks the command: a range-capable
+    server starts over this folder and Chrome opens the page, with no Python
+    install and no CDN.
     """
     root = pathlib.Path(out_dir)
     if not root.is_dir():
         raise ValueError(f"bundle out_dir must be an existing data folder: {root}")
-    if not sorted(root.rglob("*_master.h5")):
-        raise ValueError(f"no *_master.h5 files in {root}; the bundle serves the data folder itself")
+    if not (sorted(root.rglob("*_master.h5")) or sorted(root.rglob("*.qem"))):
+        raise ValueError(f"no *_master.h5 or .qem files in {root}; the bundle serves the data folder itself")
     viewer = root / ".viewer"
     viewer.mkdir(exist_ok=True)
     page = viewer / "Show4DSTEM.html"
@@ -637,3 +649,63 @@ def write_webgpu_bundle(widget, out_dir, *, port: int = 8794, title: str | None 
         encoding="utf-8",
     )
     return write_command_launcher(root, "Show4DSTEM", viewer_html="index.html", port=int(port))
+
+
+def write_qem_bundle(paths, out_dir, *, title: str | None = None, frame_labels=None, port: int = 8794) -> pathlib.Path:
+    """Write a Show4DSTEM WebGPU folder over ``.qem`` acquisitions and return its ``Show4DSTEM.command``.
+
+    ``out_dir/qem`` links each file by a relative path, so the folder and its
+    data move together; the page beside it streams every file by HTTP range,
+    checks each chunk against the header checksums and keeps the encoded counts
+    on the GPU. Each panel is the exact detector sum and appears as soon as its
+    acquisition is resident. Only the headers are read here, for the shared
+    scan and detector shape.
+
+    >>> write_qem_bundle(["tilt-0.qem", "tilt-1.qem"], "viewer")  # doctest: +SKIP
+    """
+    paths = [pathlib.Path(path).expanduser().resolve() for path in paths]
+    if len({path.name for path in paths}) != len(paths):
+        raise ValueError("The .qem files need distinct names: the viewer and a local grant find each file by name.")
+    reports = [gpu_adapter.inspect_master(path) for path in paths]
+    first = reports[0]
+    for path, report in zip(paths, reports, strict=True):
+        if (report.scan_shape, report.detector_shape, report.dtype) != (first.scan_shape, first.detector_shape, first.dtype):
+            raise ValueError(
+                f"{path.name} holds {report.scan_shape} scans of {report.detector_shape} {report.dtype} patterns, "
+                f"unlike {paths[0].name} ({first.scan_shape}, {first.detector_shape}, {first.dtype}); "
+                "one viewer compares acquisitions of one shape."
+            )
+    if frame_labels is not None and len(frame_labels) != len(paths):
+        raise ValueError(f"Pass one frame label per acquisition: {len(paths)} files, {len(frame_labels)} labels.")
+    root = pathlib.Path(out_dir).expanduser().resolve()
+    data_dir = root / "qem"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    for path in paths:
+        link = data_dir / path.name
+        if link.is_symlink():
+            link.unlink()
+        if link.exists():
+            raise ValueError(f"{link} is a real file; write the viewer into another folder.")
+        link.symlink_to(pathlib.Path(os.path.relpath(path, data_dir)))
+    from quantem.widget.show4dstem.widget import Show4DSTEM  # widget.py imports this module
+
+    widget = Show4DSTEM(
+        np.zeros((1, 1, 1, 1), dtype=np.uint8),
+        qem_urls=[f"../qem/{path.name}" for path in paths],
+        backend="webgpu",
+        scan_shape=first.scan_shape,
+        detector_shape=first.detector_shape,
+        frame_dim_label="Dataset",
+        frame_labels=list(frame_labels) if frame_labels else [path.stem for path in paths],
+        view_mode="multiple" if len(paths) > 1 else "single",
+        # Fixed columns: panels appear one acquisition at a time and must not reflow the grid.
+        compare_cols=min(4, len(paths)),
+        compare_max_panels=max(1, len(paths)),
+        compare_group_mode="all",
+        compare_dp_mode="selected" if len(paths) > 1 else "average",
+        title=title or "",
+        show_controls=True,
+    )
+    launcher = write_webgpu_bundle(widget, root, port=port, title=title)
+    widget.close()
+    return launcher

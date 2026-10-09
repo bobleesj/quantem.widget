@@ -35,6 +35,10 @@ import {
   buildScanMask,
   DetectorCompute,
 } from "../.generated/engine/detector/webgpu/backend";
+import { isRansBatch, type RansDetectorCompute } from "../.generated/engine/detector/webgpu/rans";
+import { RansResidentSeries } from "../.generated/engine/detector/webgpu/rans-series";
+import { qemHttpFiles, type QemByteFile } from "../.generated/engine/detector/webgpu/qem-source";
+import { getGPUDevice } from "../display/device";
 import { readH5MasterInfo, readH5Volume } from "../.generated/engine/io/hdf5/webgpu/h5reader";
 import { decodeBslz4Batch, type Bslz4Spec } from "../.generated/engine/io/hdf5/webgpu/bslz4";
 import {
@@ -45,6 +49,9 @@ import {
   show4DSTEMHasLocalFiles,
 } from "../.generated/engine/io/hdf5/webgpu/local-h5";
 import { AllDiffractionGrid } from "./AllDiffractionGrid";
+import { collectDroppedFiles, matchQemFiles } from "./localDrop";
+import { createResidentHoverReader } from "./residentHover";
+import type { Uint32ImageView } from "../display/borrowedImage";
 import { latestRegion } from "./latestRegion";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
 import { findDataRange, sliderRange, computeStats, percentileClip } from "../display/stats";
@@ -59,6 +66,7 @@ import { HTML_EXPORT_OVERHEAD_BYTES, exportTitleSlug, formatSavedBytes, isAbortL
 import { pointToSegmentDistance } from "../shared/geometry";
 import { Histogram } from "../shared/Histogram";
 import {
+  CIRCLE_HANDLE_ANGLE,
   canvasToMask,
   clampDetectorCenter,
   grabDetector,
@@ -68,6 +76,9 @@ import {
   type DetectorResizeStart,
   type DetectorRoiMode,
 } from "./detectorInteraction";
+
+// A .qem viewer URL ends in the exported file name, which also names a granted local file.
+const qemFileName = (url: string): string => url.slice(url.lastIndexOf("/") + 1);
 
 // The exported page reduces the 4D counts on WebGPU (no JavaScript reducer);
 // without an adapter the saved views stay visible and the page says why.
@@ -413,7 +424,6 @@ function viSourceDisplayColor(source: string, themeName: string): string | null 
 
 // Interaction constants
 const RESIZE_HIT_AREA_PX = 10;
-const CIRCLE_HANDLE_ANGLE = 0.707;  // cos(45°)
 // Compact button style for Reset/Export
 const compactButton = {
   fontSize: 10,
@@ -1217,6 +1227,12 @@ function restoreProfileBase(canvas: HTMLCanvasElement | null, base: ImageData | 
 
 interface CompareVirtualGridProps {
   kind?: "virtual" | "diffraction";
+  // The exact uint32 counts of a GPU-resident panel, for its hover readout;
+  // null while the panel's image is being recomputed.
+  residentCountView?: (frame: number) => { view: Uint32ImageView; isCurrent: () => boolean } | null;
+  // While a series loads, every requested panel keeps its tile, so a ready
+  // image never moves under the pointer and the others show they are coming.
+  sourceLoading?: boolean;
   scanRegion?: {mode: string; row: number; col: number; radius: number; width: number; height: number};
   bytes: DataView | null | undefined;
   count: number;
@@ -1311,6 +1327,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   onPendingMoveFrameChange,
   onPositionChange,
   onGpuRendererReady,
+  residentCountView,
+  sourceLoading = false,
 }: CompareVirtualGridProps) {
   const positionRafRef = React.useRef(0);
   const panDragRef = React.useRef<{clientX:number; clientY:number; panX:number; panY:number} | null>(null);
@@ -1390,8 +1408,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         panel: panelByFrame.get(frame),
         gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine && gpuRanges?.has(frame)),
       }))
-      .filter((entry) => entry.panel !== undefined || entry.gpuLoaded);
-  }, [gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, renderIndices, scaleMode]);
+      .filter((entry) => sourceLoading || entry.panel !== undefined || entry.gpuLoaded);
+  }, [gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, renderIndices, scaleMode, sourceLoading]);
 
   const renderGpuSlotsNow = React.useCallback((): number => {
     if (!gpuEngine || !gpuSlots) return 0;
@@ -1804,7 +1822,41 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     return () => { if (raf) cancelAnimationFrame(raf); batchModel.off("change:pos_row", changed); batchModel.off("change:pos_col", changed); };
   }, [batchModel, kind, comparePanX, comparePanY, compareZoom, cursorCol, cursorRow, isDraggingPosition, overlayVersion, pixelSize, pixelUnit, renderEntries, shapeCols, shapeRows, showScaleBar, scanRegion]);
 
-  const panelTiles = React.useMemo(() => renderEntries.map(({ frame, gpuLoaded }, localIdx) => {
+  // Hover readout: the value under the pointer, read from the panel's bytes or,
+  // for a GPU-only panel, four bytes of its resident counts.
+  const readoutRefs = React.useRef<(HTMLSpanElement | null)[]>([]);
+  const hoverReaderRef = React.useRef<ReturnType<typeof createResidentHoverReader> | null>(null);
+  React.useEffect(() => {
+    hoverReaderRef.current = createResidentHoverReader();
+    return () => { hoverReaderRef.current?.dispose(); hoverReaderRef.current = null; };
+  }, []);
+  React.useEffect(() => {
+    hoverReaderRef.current?.clear();
+    readoutRefs.current.forEach(node => { if (node) node.style.opacity = "0"; });
+  }, [gpuVersion, bytes]);
+  const updateReadout = React.useCallback((localIdx: number, frame: number, gpuLoaded: boolean, tile: HTMLDivElement, clientX: number, clientY: number) => {
+    const node = readoutRefs.current[localIdx];
+    const rect = tile.getBoundingClientRect();
+    if (!node || rect.width <= 0 || rect.height <= 0) return;
+    const col = Math.round(canvasToMask(((clientX - rect.left) / rect.width) * shapeCols, compareZoom, comparePanX));
+    const row = Math.round(canvasToMask(((clientY - rect.top) / rect.height) * shapeRows, compareZoom, comparePanY));
+    hoverReaderRef.current?.clear();
+    node.style.opacity = "0";
+    if (row < 0 || row >= shapeRows || col < 0 || col >= shapeCols) return;
+    const show = (text: string) => { node.textContent = `(${row}, ${col}) ${text}`; node.style.opacity = "1"; };
+    // A GPU tile is drawn over the bytes, which may be from another source.
+    const panel = panelByFrame.get(frame);
+    const resident = gpuLoaded ? residentCountView?.(frame) : null;
+    if (resident) hoverReaderRef.current?.request(resident.view, row * shapeCols + col, resident.isCurrent, count => show(String(count)));
+    else if (!gpuLoaded && panel) show(formatNumber(panel[row * shapeCols + col]));
+  }, [comparePanX, comparePanY, compareZoom, panelByFrame, residentCountView, shapeCols, shapeRows]);
+  const hideReadout = React.useCallback((localIdx: number) => {
+    hoverReaderRef.current?.clear();
+    const node = readoutRefs.current[localIdx];
+    if (node) node.style.opacity = "0";
+  }, []);
+  const panelTiles = React.useMemo(() => renderEntries.map(({ frame, panel, gpuLoaded }, localIdx) => {
+          const loaded = gpuLoaded || panel !== undefined;
           const active = frame === activeIdx;
           const label = labels && labels.length > frame ? labels[frame] : `Dataset ${frame + 1}`;
           const isStarred = (starred || []).includes(frame);
@@ -1828,7 +1880,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
               onDoubleClick={handleCompareDoubleClick}
               onPointerDown={(event) => {
                 const target = event.target instanceof Element ? event.target : null;
-                if (reorderMode || target?.closest("button")) return;
+                if (!loaded || reorderMode || target?.closest("button")) return;
                 try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
                 if (event.shiftKey) {
                   panDragRef.current={clientX:event.clientX,clientY:event.clientY,panX:comparePanX,panY:comparePanY};
@@ -1840,6 +1892,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 onSelect(frame);
               }}
               onPointerMove={(event) => {
+                if (kind !== "diffraction") updateReadout(localIdx, frame, gpuLoaded, event.currentTarget, event.clientX, event.clientY);
                 const pan = panDragRef.current;
                 if (pan) {
                   event.preventDefault();
@@ -1856,6 +1909,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 event.preventDefault();
                 updatePositionFromPointer(event.currentTarget, event.clientX, event.clientY);
               }}
+              onPointerLeave={() => hideReadout(localIdx)}
               onPointerUp={(event) => {
                 if (panDragRef.current) {panDragRef.current=null;return;}
                 if (!isDraggingPositionRef.current) return;
@@ -1985,6 +2039,20 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 } : {}),
               }}
             >
+              {!loaded && (
+                <Box data-show4dstem-panel-loading="true" sx={{
+                  position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                  bgcolor: themeColors.bgAlt, color: themeColors.textMuted, fontFamily: SHOW4DSTEM_UI_FONT, fontSize: 11, pointerEvents: "none",
+                }}>
+                  Loading
+                </Box>
+              )}
+              <span
+                ref={node => { readoutRefs.current[localIdx] = node; }}
+                data-show4dstem-panel-readout={frame}
+                style={{ position: "absolute", left: 4, bottom: 4, zIndex: 5, pointerEvents: "none", opacity: 0,
+                  color: "white", background: "rgba(0,0,0,0.6)", fontSize: 11, padding: "1px 3px", fontVariantNumeric: "tabular-nums" }}
+              />
               <canvas
                 data-quantem-scientific-output={`show4dstem-compare-${frame}`}
                 ref={(node) => { canvasRefs.current[localIdx] = node; }}
@@ -2190,7 +2258,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         }), [
     renderEntries, activeIdx, labels, starred, draggingFrame,
     pendingMoveFrame, themeColors, reorderMode, handleCompareDoubleClick,
-    updatePositionFromPointer, onSelect, onPendingMoveFrameChange, onReorderFrame,
+    updatePositionFromPointer, updateReadout, hideReadout, onSelect, onPendingMoveFrameChange, onReorderFrame,
     displayIndices, onDragFrameChange, movePreviewFrame, shapeCols, shapeRows,
     imageLeft, imageTop, imageWidth, imageHeight, smooth, panelChromeVisible,
     onToggleStar, onHide, onResizeStart, mobileGridCols, gridCols, resizeGripSx, kind, compareZoom, comparePanX, comparePanY,
@@ -2592,6 +2660,8 @@ function Show4DSTEM() {
     dpRoiInteractiveRef.current = true;
   }, []);
   const compareGpuRenderNowRef = React.useRef<(() => number) | null>(null);
+  const residentCountViewRef = React.useRef<CompareVirtualGridProps["residentCountView"]>(undefined);
+  const residentCountView = React.useCallback((frame: number) => residentCountViewRef.current?.(frame) ?? null, []);
   const compareIncrementalRef = React.useRef<{
     mask: Uint32Array;
     buffers: Map<number, GPUBuffer>;
@@ -2636,6 +2706,13 @@ function Show4DSTEM() {
   const [offlineBackendStatus, setOfflineBackendStatus] = React.useState("");
   const [offlineBackendError, setOfflineBackendError] = React.useState("");
   const h5SourceAvailable = Boolean(model.get("_h5_urls"));
+  // A .qem viewer lists its acquisitions as page-relative URLs; served, it streams
+  // them by HTTP range, and from a double-clicked file it needs the user's grant.
+  const qemUrls = React.useMemo(() => JSON.parse(String(model.get("_qem_urls") || "[]")) as string[], [model]);
+  const qemSourceAvailable = qemUrls.length > 0;
+  const qemNeedsLocalFiles = qemSourceAvailable && globalThis.location?.protocol === "file:";
+  const [qemLocalFiles, setQemLocalFiles] = React.useState<File[] | null>(null);
+  const [qemSeriesLoading, setQemSeriesLoading] = React.useState(false);
   const [h5LocalFilesGranted, setH5LocalFilesGranted] = React.useState(show4DSTEMHasLocalFiles());
   const [h5LocalSourceStatus, setH5LocalSourceStatus] = React.useState("");
   const h5LocalInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -2651,15 +2728,52 @@ function Show4DSTEM() {
       return "";
     }
   }, []);
-  const onH5LocalInput = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files ? Array.from(event.target.files) : [];
-    if (!files.length) return;
+  // The picker, the file input and a dropped folder grant files the same way;
+  // the loader then resolves each master's data files by name.
+  const adoptLocalFiles = React.useCallback((files: File[]) => {
+    if (qemSourceAvailable) {
+      const matched = matchQemFiles(qemUrls.map(qemFileName), files);
+      if ("missing" in matched) {
+        setH5LocalSourceStatus(`No complete QEM export: missing or duplicated ${matched.missing.join(", ")}`);
+        return;
+      }
+      setQemLocalFiles(matched.files);
+      setH5LocalSourceStatus(`${matched.files.length} local QEM file${matched.files.length === 1 ? "" : "s"} granted`);
+      return;
+    }
+    if (!files.some(file => /\.(h5|hdf5)$/i.test(file.name))) {
+      setH5LocalSourceStatus("No HDF5 files found in that folder");
+      return;
+    }
     setShow4DSTEMLocalFiles(files);
     setH5LocalFilesGranted(true);
     setH5LocalSourceStatus(`${files.length} local HDF5 file${files.length === 1 ? "" : "s"} granted`);
-  }, []);
+  }, [qemSourceAvailable, qemUrls]);
+  const onH5LocalInput = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files ? Array.from(event.target.files) : [];
+    if (files.length) adoptLocalFiles(files);
+  }, [adoptLocalFiles]);
+  // Dropping the acquisition folder on the viewer grants it like the picker.
+  // Without preventDefault the browser would open the dropped file instead.
+  const browserSourceAvailable = h5SourceAvailable || qemSourceAvailable;
+  const onLocalDragOver = React.useCallback((event: React.DragEvent) => {
+    if (!offline || !browserSourceAvailable || !event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }, [browserSourceAvailable, offline]);
+  const onLocalDrop = React.useCallback((event: React.DragEvent) => {
+    if (!offline || !browserSourceAvailable) return;
+    event.preventDefault();
+    void collectDroppedFiles(event.dataTransfer).then(adoptLocalFiles)
+      .catch(error => setH5LocalSourceStatus(String(error)));
+  }, [adoptLocalFiles, browserSourceAvailable, offline]);
   const grantH5LocalFiles = React.useCallback(async () => {
     setH5LocalSourceStatus("");
+    // .qem files are picked as files: the directory picker below collects HDF5 only.
+    if (qemSourceAvailable) {
+      h5LocalInputRef.current?.click();
+      return;
+    }
     const picker = (globalThis as Show4DSTEMWindow).showDirectoryPicker;
     if (picker) {
       try {
@@ -2668,9 +2782,7 @@ function Show4DSTEM() {
           handle as Parameters<typeof collectShow4DSTEMLocalH5Files>[0],
         );
         if (files.length) {
-          setShow4DSTEMLocalFiles(files);
-          setH5LocalFilesGranted(true);
-          setH5LocalSourceStatus(`${files.length} local HDF5 file${files.length === 1 ? "" : "s"} granted`);
+          adoptLocalFiles(files);
           return;
         }
         setH5LocalSourceStatus("No HDF5 files found in that folder");
@@ -2680,7 +2792,7 @@ function Show4DSTEM() {
       }
     }
     h5LocalInputRef.current?.click();
-  }, []);
+  }, [adoptLocalFiles, qemSourceAvailable]);
   React.useEffect(() => {
     if (!offline) {
       setWebgpuDpcReady(false);
@@ -2691,9 +2803,14 @@ function Show4DSTEM() {
     }
     let disposed = false;
     let detach: (() => void) | null = null;
+    // A reloaded source may share the old geometry but not its counts: the
+    // compare panels' mask history belongs to the source that built it.
+    compareIncrementalRef.current = null;
+    // Stops a .qem series between files when the viewer closes or reloads.
+    const qemLoadAbort = new AbortController();
     setOfflineBackendLoading(true);
     setOfflineBackendError("");
-    setOfflineBackendStatus(h5SourceAvailable ? "Loading WebGPU source" : "Loading offline 4D-STEM data");
+    setOfflineBackendStatus(h5SourceAvailable || qemSourceAvailable ? "Loading WebGPU source" : "Loading offline 4D-STEM data");
     (async () => {
       const scanRows = model.get("shape_rows"), scanCols = model.get("shape_cols");
       const detectorRows = model.get("det_rows"), detectorCols = model.get("det_cols");
@@ -2716,6 +2833,10 @@ function Show4DSTEM() {
       let initialVolumeLoad: Promise<DetectorCompute | null> | null = null;
       let h5VolumePreload: Promise<void> | null = null;
       let h5VolumePreloadDone = false;
+      let qemSeries: RansResidentSeries | null = null;
+      // Set once the compare grid can paint; acquisitions published before then
+      // are painted by the first compare pass.
+      let onQemPublished: (() => void) | null = null;
       // Browser HDF5 source: the CLI WebGPU export lists its linked masters here.
       const h5UrlsJson = model.get("_h5_urls") as string | undefined;
       const h5Urls = (() => {
@@ -2752,6 +2873,13 @@ function Show4DSTEM() {
       if (requireLocalH5Files && h5Urls.length && !show4DSTEMHasLocalFiles()) {
         if (!disposed) {
           setOfflineBackendStatus("Waiting for local HDF5 files");
+          setOfflineBackendLoading(false);
+        }
+        return;
+      }
+      if (qemNeedsLocalFiles && !qemLocalFiles) {
+        if (!disposed) {
+          setOfflineBackendStatus("Waiting for local QEM files");
           setOfflineBackendLoading(false);
         }
         return;
@@ -3022,7 +3150,42 @@ function Show4DSTEM() {
         if (!disposed) setOfflineBackendStatus(`${label} ready`);
         return created;
       };
-      if (h5Urls.length) {
+      if (qemUrls.length) {
+        // Exact .qem counts stay encoded on the GPU and every detector change
+        // decodes only the columns it adds or removes. Each acquisition is
+        // authenticated as it streams in and published in file order, so its
+        // panel paints as soon as it is resident, not after the whole series.
+        const device = await getGPUDevice();
+        if (!device) throw new Error(OFFLINE_NEEDS_WEBGPU);
+        const files: QemByteFile[] = qemLocalFiles ?? (await Promise.all(qemUrls.map(url =>
+          qemHttpFiles(new URL(".", new URL(url, location.href)).href, [qemFileName(url)], qemLoadAbort.signal)))).flat();
+        const totalGB = files.reduce((sum, file) => sum + file.size, 0) / 1e9;
+        if (!disposed) {
+          setOfflineBackendStatus(`Loading ${files.length} acquisitions, ${totalGB.toFixed(1)} GB`);
+          setQemSeriesLoading(files.length > 1);
+        }
+        let published = 0;
+        const series = await RansResidentSeries.load(device, files, text => {
+          if (!disposed) setOfflineBackendStatus(text && `Loading ${text}`);
+        }, loaded => {
+          for (let index = published; index < loaded.loadedAcquisitions; index++) {
+            volCache.set(index, loaded.computes[index] as unknown as DetectorCompute);
+          }
+          published = loaded.loadedAcquisitions;
+          latestResidentVolumeIndex = published - 1;
+          if (!disposed && published === loaded.acquisitionCount) setQemSeriesLoading(false);
+          onQemPublished?.();
+        }, qemLoadAbort.signal);
+        if (disposed) { series.dispose(); return; }
+        if (series.shape?.some((size, axis) => size !== [scanRows, scanCols, detectorRows, detectorCols][axis])) {
+          series.dispose();
+          throw new Error("These .qem files have another scan or detector shape than this viewer; select the files it was exported with.");
+        }
+        qemSeries = series;
+        volumeCount = files.length;
+        getVol = async (idx: number) => volCache.get(Math.max(0, Math.min(files.length - 1, idx))) ?? null;
+        compute = volCache.get(Math.max(0, Math.min(files.length - 1, model.get("frame_idx") | 0))) ?? volCache.get(0)!;
+      } else if (h5Urls.length) {
         volumeCount = h5Urls.length;
         getVol = async (idx: number) => {
           const clamped = Math.max(0, Math.min(h5Urls.length - 1, idx));
@@ -3423,6 +3586,11 @@ function Show4DSTEM() {
       const recomputeVI = async () => {
         const generation = ++viRecomputeGen;
         const source = normaliseViSource(model.get("vi_source"));
+        // In multiple view the grid owns each .qem acquisition's ROI image; the
+        // hidden single image would sum the same resident image under another
+        // mask and break the exact deltas of the visible panels.
+        if (qemSeries && source === "roi" && ["multiple", "compare"].includes(String(model.get("view_mode")))
+            && Number(model.get("n_frames")) > 1) return;
         const product = viProductFrameView(model, scanRows, scanCols, source);
         if (product) {
           if (disposed || generation !== viRecomputeGen) return;
@@ -3503,7 +3671,9 @@ function Show4DSTEM() {
         publishVirtualImageBytes(new DataView(virtualImage.buffer));
       };
       const warmStandardViCache = async () => {
-        if (viWarmupStarted || disposed || !compute) {
+        // A .qem panel keeps one resident image per acquisition; warming other
+        // masks on it would move the mask history its compare deltas build on.
+        if (viWarmupStarted || disposed || !compute || qemSeries) {
           return;
         }
         viWarmupStarted = true;
@@ -3672,7 +3842,7 @@ function Show4DSTEM() {
             if (interactiveDrag && getVol && !volIsResident(idx)) continue;
             const panelCompute = getVol ? await getVol(idx) : compute;
             if (disposed || generation !== compareViGen) return false;
-            if (!panelCompute || !(panelCompute instanceof DetectorCompute)) continue;
+            if (!panelCompute || !(panelCompute instanceof DetectorCompute || isRansBatch([panelCompute]))) continue;
             batchComputes.push(panelCompute);
             batchSlots.push(slot);
             batchFrames.push(idx);
@@ -3720,11 +3890,16 @@ function Show4DSTEM() {
                 if (frame !== undefined) compareGpuRangesRef.current.set(frame, range);
               });
             }
-            compareIncrementalRef.current = {
-              mask: new Uint32Array(detectorMask),
-              buffers: nextBuffers,
-              indicesKey,
-            };
+            // A newer pass may have adopted its own buffers during the range
+            // readback and retired these; only the latest pass records the
+            // buffers the next drag's delta starts from.
+            if (generation === compareViGen) {
+              compareIncrementalRef.current = {
+                mask: new Uint32Array(detectorMask),
+                buffers: nextBuffers,
+                indicesKey,
+              };
+            }
             if (interactiveDrag) compareGpuRenderNowRef.current?.();
             compareGpuCompletion = engine.getDevice().queue.onSubmittedWorkDone();
             if (interactiveDrag) await compareGpuCompletion;
@@ -3976,6 +4151,31 @@ function Show4DSTEM() {
         void recomputeDP();
         void recomputeFrame();
       };
+      if (qemSeries) {
+        // A newly resident acquisition adds its panel, and becomes the shown
+        // pattern when it is the selected dataset.
+        onQemPublished = () => {
+          if (disposed) return;
+          if (dpRoiInteractiveRef.current) requestCompareViLive();
+          else void recomputeActiveView();
+        };
+        void qemSeries.completion.catch(error => {
+          if (disposed) return;
+          setQemSeriesLoading(false);
+          setOfflineBackendError(`Loading stopped: ${String(error)}. The loaded acquisitions stay available.`);
+        });
+        // A panel's hover reads its acquisition's exact resident counts, which
+        // hold the panel's mask until the next compare pass starts.
+        residentCountViewRef.current = frame => {
+          const panel = volCache.get(frame) as unknown as RansDetectorCompute | undefined;
+          if (disposed || !panel || dpRoiInteractiveRef.current || normaliseViSource(model.get("vi_source")) !== "roi") return null;
+          const generation = compareViGen;
+          return {
+            view: panel.set.imageViewsU32([panel.tilt], 1)[0],
+            isCurrent: () => !disposed && generation === compareViGen && !dpRoiInteractiveRef.current,
+          };
+        };
+      }
       // 5D multi-volume: the slider picks the active dataset; decode-on-scrub (LRU).
       let frameGen = 0;
       const onFrame = async () => {
@@ -4084,12 +4284,14 @@ function Show4DSTEM() {
         model.off("change:frame_idx", onFrame);
         model.off("change:view_mode", recomputeActiveView);
         volCache.forEach((volume) => volume.dispose()); volCache.clear();  // every cached lazy volume
+        qemSeries?.dispose();
         inlineVolCache.forEach((volume) => volume.dispose()); inlineVolCache.clear();
       };
       await recomputeVI();  // initial virtual image, no interaction needed
       await recomputeCompareVI();
       if (!initialVolumeLoad && !disposed) {
-        setOfflineBackendStatus("");
+        // A .qem series keeps reporting the acquisitions still loading.
+        if (!qemSeries || qemSeries.loadedAcquisitions === qemSeries.acquisitionCount) setOfflineBackendStatus("");
         setOfflineBackendLoading(false);
       }
       // Fit the BF disk from the mean diffraction pattern before the presets warm.
@@ -4187,6 +4389,9 @@ function Show4DSTEM() {
     });
     return () => {
       disposed = true;
+      qemLoadAbort.abort();
+      residentCountViewRef.current = undefined;
+      setQemSeriesLoading(false);
       compareGpuHistogramGenRef.current++;
       compareHistogramPendingSettleRef.current = true;
       if (roiRadiusRafRef.current !== null) cancelAnimationFrame(roiRadiusRafRef.current);
@@ -4209,7 +4414,7 @@ function Show4DSTEM() {
       clearViGpuDisplay();
       detach?.();
     };
-  }, [beginDpRoiInteraction, clearViGpuDisplay, ensureViGpuColormap, h5LocalFilesGranted, h5SourceAvailable, offline, requestCompareViLive, requestDpFrameLive, requireLocalH5Files]);
+  }, [beginDpRoiInteraction, clearViGpuDisplay, ensureViGpuColormap, h5LocalFilesGranted, h5SourceAvailable, offline, qemLocalFiles, qemNeedsLocalFiles, qemSourceAvailable, qemUrls, requestCompareViLive, requestDpFrameLive, requireLocalH5Files]);
   const [viStats, setViStats] = React.useState<number[]>([0, 0, 0, 0]);
   const [viDataMin, setViDataMin] = React.useState<number>(0);
   const [viDataMax, setViDataMax] = React.useState<number>(1);
@@ -6211,8 +6416,10 @@ function Show4DSTEM() {
   const activeRoiCenterRow = Number.isFinite(localKRow) ? localKRow : roiCenterRow;
 
   // What a press grabs on the detector ROI: the inner half moves it, the outer
-  // half and a hit margin past the edge resize it (grabDetector). The drawn
-  // handle is a 6 px dot, too small to catch by hand on a binned detector.
+  // half and a hit margin past the edge resize it, a ring's inner handle
+  // resizes its hole, and the center of a small ROI still moves it
+  // (grabDetector). The drawn handle is a 6 px dot, too small to catch by hand
+  // on a binned detector.
   const grabDpRoi = (col: number, row: number): DetectorGrab => grabDetector({
     mode: roiMode as DetectorRoiMode,
     centerRow: activeRoiCenterRow,
@@ -6228,16 +6435,8 @@ function Show4DSTEM() {
   const isNearResizeHandle = (col: number, row: number): boolean =>
     roiVirtualDetectorActive && grabDpRoi(col, row).action === "resize";
 
-  // Helper: check if point is near the inner resize handle (annular mode only)
-  const isNearResizeHandleInner = (col: number, row: number): boolean => {
-    if (!roiVirtualDetectorActive) return false;
-    if (roiMode !== "annular" || !roiRadiusInner) return false;
-    const offset = roiRadiusInner * CIRCLE_HANDLE_ANGLE;
-    const handleCol = activeRoiCenterCol + offset;
-    const handleRow = activeRoiCenterRow + offset;
-    const distance = Math.sqrt((col - handleCol) ** 2 + (row - handleRow) ** 2);
-    return distance < dpHitRadius;
-  };
+  const isNearResizeHandleInner = (col: number, row: number): boolean =>
+    roiVirtualDetectorActive && grabDpRoi(col, row).action === "resizeInner";
 
   // What a press grabs on the scan ROI, with the detector's rules (grabDetector): the
   // inner half moves it, the outer half and a hit margin past the edge resize it.
@@ -6370,8 +6569,8 @@ function Show4DSTEM() {
 
     beginDpRoiInteraction();
 
-    // Inner handle first, then the outer resize band. A resize remembers the
-    // press so the edge follows the pointer from where it was grabbed.
+    // A resize remembers the press so the edge follows the pointer from where
+    // it was grabbed.
     const pressed = {
       pointerRow: maskRow,
       pointerCol: maskCol,
@@ -6380,12 +6579,12 @@ function Show4DSTEM() {
       width: Number(roiWidth) || 0,
       height: Number(roiHeight) || 0,
     };
-    if (isNearResizeHandleInner(maskCol, maskRow)) {
+    const grab = grabDpRoi(maskCol, maskRow);
+    if (grab.action === "resizeInner") {
       resizeStartRef.current = { ...pressed, rows: true, cols: true };
       setIsDraggingResizeInner(true);
       return;
     }
-    const grab = grabDpRoi(maskCol, maskRow);
     if (grab.action === "resize") {
       event.preventDefault();
       resizeStartRef.current = { ...pressed, rows: grab.rows, cols: grab.cols };
@@ -7561,7 +7760,8 @@ function Show4DSTEM() {
   const offlineStatusIsError = Boolean(offlineBackendError);
   const offlineStatusIsReady = !offlineStatusIsError && /\bready\b/i.test(offlineStatusText);
   const showOfflineStatus = offline && Boolean(offlineStatusText) && !offlineStatusIsReady;
-  const showLocalH5GrantBanner = offline && h5SourceAvailable && requireLocalH5Files && !h5LocalFilesGranted;
+  const showLocalH5GrantBanner = offline && ((h5SourceAvailable && requireLocalH5Files && !h5LocalFilesGranted)
+    || (qemNeedsLocalFiles && !qemLocalFiles));
 
   return (
     <Box
@@ -7570,6 +7770,8 @@ function Show4DSTEM() {
       tabIndex={0}
       onKeyDown={handleKeyDown}
       onMouseDownCapture={handleRootMouseDownCapture}
+      onDragOver={onLocalDragOver}
+      onDrop={onLocalDrop}
       sx={{ p: 2, bgcolor: themeColors.bg, color: themeColors.text, outline: "none", borderRadius: "2px", width: "100%", maxWidth: "100%", boxSizing: "border-box", "@media (max-width: 700px)": { p: 0, overflowX: "hidden", ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
     >
       <FolderWatchBadge
@@ -7581,10 +7783,10 @@ function Show4DSTEM() {
         ref={h5LocalInputRef}
         type="file"
         multiple
-        accept=".h5,.hdf5"
+        accept={qemSourceAvailable ? ".qem" : ".h5,.hdf5"}
         onChange={onH5LocalInput}
         style={{ display: "none" }}
-        {...{ webkitdirectory: "", directory: "" }}
+        {...(qemSourceAvailable ? {} : { webkitdirectory: "", directory: "" })}
       />
       {/* HEADER */}
       {showTitle && <Typography variant="h6" sx={{ ...themedTypography.title, mb: `${SPACING.SM}px` }}>
@@ -7660,8 +7862,10 @@ function Show4DSTEM() {
         >
           <Typography sx={{ ...themedTypography.label, color: themeColors.text }}>
             {localH5FolderName
-              ? `No server needed - click Open data folder, then select "${localH5FolderName}".`
-              : "No server needed - grant this page access to its exported HDF5 folder."}
+              ? qemSourceAvailable
+                ? `No server needed - click Open data folder and select the .qem files in "${localH5FolderName}/qem", or drop that folder here.`
+                : `No server needed - click Open data folder, then select "${localH5FolderName}".`
+              : `No server needed - grant this page access to its exported ${qemSourceAvailable ? "QEM" : "HDF5"} folder.`}
           </Typography>
           {h5LocalSourceStatus && (
             <Typography sx={{ ...themedTypography.label, color: h5LocalSourceStatus.includes("No ") ? "#d32f2f" : themeColors.textMuted }}>
@@ -7741,13 +7945,13 @@ function Show4DSTEM() {
                   setOfflineBackendError(`Could not copy the DP image: ${String(error)}`);
                 }
               }}>Copy</Button>
-              {offline && h5SourceAvailable && <Button
+              {offline && browserSourceAvailable && <Button
                 size="small"
-                sx={{ ...compactButton, color: h5LocalFilesGranted ? themeColors.accent : themeColors.textMuted }}
+                sx={{ ...compactButton, color: h5LocalFilesGranted || qemLocalFiles ? themeColors.accent : themeColors.textMuted }}
                 onClick={grantH5LocalFiles}
-                title={h5LocalSourceStatus || "Grant local HDF5 master/data files for browser WebGPU load"}
+                title={h5LocalSourceStatus || (qemSourceAvailable ? "Open this viewer's local .qem files" : "Grant local HDF5 master/data files for browser WebGPU load")}
               >
-                Local H5
+                {qemSourceAvailable ? "Local QEM" : "Local H5"}
               </Button>}
               {exportEnabled && <Button
                 size="small"
@@ -8421,6 +8625,8 @@ function Show4DSTEM() {
           />}
           {compareMode ? (
             <CompareVirtualGrid
+              residentCountView={residentCountView}
+              sourceLoading={qemSeriesLoading}
               scanRegion={{mode:viRoiMode, row:localViRoiCenterRow, col:localViRoiCenterCol,
                 radius:viRoiRadius || 5, width:viRoiWidth || 10, height:viRoiHeight || 10}}
               bytes={displayedCompareVirtualImageBytes}

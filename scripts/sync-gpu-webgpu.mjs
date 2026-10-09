@@ -86,6 +86,15 @@ print(json.dumps({
     'export * from "../../../display/device";\n',
     "utf8",
   );
+  // Resident sets lend count images to the colormap engine, so both sides
+  // must name the one borrowed-view contract the engine validates.
+  mkdirSync(path.join(outputDir, "display", "webgpu"), { recursive: true });
+  writeFileSync(
+    path.join(outputDir, "display", "webgpu", "borrowed-image.ts"),
+    "// Generated: science kernels lend count images in the widget's display contract.\n" +
+    'export * from "../../../../display/borrowedImage";\n',
+    "utf8",
+  );
   console.log(`synced ${Object.keys(sources).length} quantem.gpu science kernel files from ${root} -> ${targetDir}`);
 }
 
