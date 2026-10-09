@@ -301,11 +301,25 @@ def test_static_panel_rgb_is_the_matplotlib_lut():
     for cmap_name in ("gray", "inferno", "viridis"):
         widget = Show2D(frame, cmap=cmap_name, verbose=False)
         (vmin, vmax), = widget._resolve_panel_display_ranges([frame])
-        expected = (colormaps.get_cmap(cmap_name)(np.clip((frame - vmin) / (vmax - vmin), 0, 1))[..., :3] * 255).astype(np.uint8)
-        np.testing.assert_array_equal(widget._static_panel_rgb(frame, vmin, vmax, cmap_name), expected)
+        # the browser's applyColormap entry: trunc(normalized * 255), not matplotlib's own floor(normalized * 256)
+        entry = np.clip((frame - vmin) / (vmax - vmin) * 255, 0, 255).astype(np.uint8)
+        lut = (colormaps.get_cmap(cmap_name)(np.arange(256))[:, :3] * 255).astype(np.uint8)
+        np.testing.assert_array_equal(widget._static_panel_rgb(frame, vmin, vmax, cmap_name), lut[entry])
     gray_png = _decode_png(Show2D(frame, cmap="gray", verbose=False))
     spread = gray_png.max(axis=-1).astype(int) - gray_png.min(axis=-1).astype(int)
     assert (spread <= 3).mean() > 0.99
+
+
+@pytest.mark.parametrize("window", [{"vmin": -40, "vmax": 40}, {}, {"auto_contrast": True}])
+def test_save_image_log_scale_keeps_negative_values_like_the_preview(tmp_path: Path, window):
+    # A signed diff under log scale: the browser and the preview map v < 0 to -log1p(-v); save_image
+    # once clipped to log1p(max(v, 0)) and painted the whole negative half one flat level.
+    frame = np.linspace(-50, 50, 64 * 64, dtype=np.float32).reshape(64, 64)
+    widget = Show2D(frame, cmap="gray", log_scale=True, verbose=False, **window)
+    saved = np.asarray(Image.open(widget.save_image(tmp_path / "diff.png")).convert("RGB"))
+    (vmin, vmax), = widget._resolve_panel_display_ranges([widget._data[0]])
+    np.testing.assert_array_equal(saved, widget._static_panel_rgb(widget._data[0], vmin, vmax, "gray"))
+    assert len(np.unique(saved[:32, :, 0])) > 100
 
 
 def test_display_ranges_follow_contrast_rules():

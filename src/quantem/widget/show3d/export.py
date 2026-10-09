@@ -12,7 +12,7 @@ from typing import Self
 import numpy as np
 from PIL import Image
 
-from quantem.widget.colormap import colorize
+from quantem.widget.colormap import colorize, contrast_uint8, signed_log1p
 from quantem.widget.export import export_slug
 from quantem.widget.render import gif as gif_utils
 from quantem.widget.utils.array import bin2d
@@ -299,21 +299,18 @@ class Show3DExport:
         matching the browser's ``slog``.
         """
         if self.log_scale:
-            frame = np.sign(frame) * np.log1p(np.abs(frame))
+            frame = signed_log1p(frame)
         if self.vmin is not None or self.vmax is not None:
             vmin = float(self.vmin if self.vmin is not None else self.data_min)
             vmax = float(self.vmax if self.vmax is not None else self.data_max)
             if self.log_scale:
-                vmin = float(np.sign(vmin) * np.log1p(abs(vmin)))
-                vmax = float(np.sign(vmax) * np.log1p(abs(vmax)))
+                vmin, vmax = float(signed_log1p(vmin)), float(signed_log1p(vmax))
         elif self.auto_contrast:
             vmin = float(np.percentile(frame, self.percentile_low))
             vmax = float(np.percentile(frame, self.percentile_high))
         else:
             vmin, vmax = float(self.data_min), float(self.data_max)
-        if vmax > vmin:
-            return np.clip((frame - vmin) / (vmax - vmin) * 255, 0, 255).astype(np.uint8)
-        return np.zeros(frame.shape, dtype=np.uint8)
+        return contrast_uint8(frame, vmin, vmax)
 
     def save_image(self, path: str | pathlib.Path, *, frame_idx: int | None = None, format: str | None = None, dpi: int = 150) -> pathlib.Path:
         """Save one frame as PNG, PDF or TIFF with the current colormap and contrast."""

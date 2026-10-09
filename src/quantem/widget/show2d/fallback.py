@@ -19,7 +19,7 @@ import matplotlib.patches
 import matplotlib.patheffects
 import numpy as np
 
-from quantem.widget.colormap import colorize
+from quantem.widget.colormap import colorize, contrast_uint8, signed_log1p
 from quantem.widget.render.figure import format_scale_label, round_to_nice, static_overlay_font
 
 
@@ -50,16 +50,6 @@ class Show2DStaticPng:
             "panel_inner_border_px": max(0.0, float(self.panel_inner_border_px)),
             "panel_inner_border_color": str(self.panel_inner_border_color or "#d0d0d0"),
         }
-
-    @staticmethod
-    def _signed_log1p(values: np.ndarray | float) -> np.ndarray | float:
-        """Signed log1p, matching the frontend's ``applyLogScale``.
-
-        The widget maps negative intensities to ``-log1p(-v)`` so diff-like
-        data keeps its sign under log scale; a plain ``log1p(clip(v, 0))``
-        would collapse everything below zero and diverge from the live render.
-        """
-        return np.sign(values) * np.log1p(np.abs(values))
 
     @staticmethod
     def _format_stat(value: float) -> str:
@@ -98,7 +88,7 @@ class Show2DStaticPng:
 
         def to_display(value: float) -> float:
             """A data-space limit in display space (signed log1p under ``log_scale``)."""
-            return float(self._signed_log1p(float(value))) if self.log_scale else float(value)
+            return float(signed_log1p(float(value))) if self.log_scale else float(value)
 
         has_absolute = self.vmin is not None and self.vmax is not None
         panel_vmins = list(self.vmins) if self.vmins else [None] * n_frames
@@ -127,7 +117,7 @@ class Show2DStaticPng:
                 if has_panel_range[i] or is_rgb[i]:
                     auto_ranges.append(base_ranges[i])
                     continue
-                processed = self._signed_log1p(frame) if self.log_scale else frame
+                processed = signed_log1p(frame) if self.log_scale else frame
                 low, high = (float(value) for value in np.percentile(processed, (2, 98)))
                 # Sparse/clustered data can collapse the 2-98% window to a
                 # point; fall back to full extrema like computeAutoRange does.
@@ -158,19 +148,16 @@ class Show2DStaticPng:
     ) -> np.ndarray:
         """Colormap one panel exactly as the live widget maps pixels to colors.
 
-        Pipeline: optional signed-log1p on the data, clip-normalize into the
-        display-space ``[vmin, vmax]`` window, then look up the matplotlib
-        colormap (the same LUT the JS mirrors). Returning explicit RGB uint8
-        keeps matplotlib's own norm machinery out of the loop, so the PNG's
-        pixel mapping is byte-identical to what tests can compute independently.
+        Pipeline: optional signed-log1p on the data, the browser's uint8 level
+        in the display-space ``[vmin, vmax]`` window (``contrast_uint8``, shared
+        with ``save_image``), then look up the matplotlib colormap (the same LUT
+        the JS mirrors). Returning explicit RGB uint8 keeps matplotlib's own
+        norm machinery out of the loop, so the PNG's pixel mapping is
+        byte-identical to what tests can compute independently.
         """
         apply_log = self.log_scale if apply_log is None else apply_log
-        processed = self._signed_log1p(frame) if apply_log else frame
-        if vmax > vmin:
-            normalized = np.clip((processed - vmin) / (vmax - vmin), 0.0, 1.0)
-        else:
-            normalized = np.zeros(processed.shape, dtype=np.float64)
-        return colorize(normalized, cmap_name)
+        processed = signed_log1p(frame) if apply_log else frame
+        return colorize(contrast_uint8(processed, vmin, vmax) / 255.0, cmap_name)
 
     def _static_panel_specs(self) -> list[dict]:
         """Panel plan for the static PNG, mirroring the live widget's layout.

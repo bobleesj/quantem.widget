@@ -2,8 +2,10 @@
 
 The browser bundle's GPUColormapEngine knows the names in ``Colormap`` (keep
 in step with the js/display/colormaps.ts COLORMAPS table). Static renders (PNG
-fallback, save_image, GIF frames) colorize through ``colorize`` so a saved
-pixel matches what the live canvas paints for the same normalized value.
+fallback, save_image, GIF frames) map pixels to levels through
+``contrast_uint8`` (after ``signed_log1p`` under log scale) and colorize through
+``colorize`` so a saved pixel matches what the live canvas paints for the same
+normalized value.
 
 ``colormaps.json`` holds the control points of the display LUTs that Plot2D
 draws (the table quantem.gpu's display kernels use); ``colormap_lut`` expands
@@ -62,6 +64,31 @@ def colorize(normalized: np.ndarray, cmap: str) -> np.ndarray:
     """
     rgba = colormaps.get_cmap(cmap)(normalized)
     return (rgba[..., :3] * 255).astype(np.uint8)
+
+
+def signed_log1p(values):
+    """Signed log1p, the browser's log scale (``applyLogScale``): ``log1p(v)``, and ``-log1p(-v)`` below zero.
+
+    Diff and phase data keep their sign under log scale. ``log1p(clip(v, 0))``
+    would flatten every negative value onto the bottom of the colormap, so a
+    saved image would no longer match the canvas.
+    """
+    return np.sign(values) * np.log1p(np.abs(values))
+
+
+def contrast_uint8(values: np.ndarray, vmin: float, vmax: float) -> np.ndarray:
+    """Display values as the uint8 colormap levels the browser paints in the window ``[vmin, vmax]``.
+
+    ``level = trunc(clip((v - vmin) / (vmax - vmin) * 255, 0, 255))``, the
+    rule of the browser's ``applyColormap``; ``colorize(level / 255)`` reads
+    LUT entry ``level``. An empty window maps to level 0. Under log scale the
+    values and the window are both already in ``signed_log1p`` space. Every
+    static render (save_image, GIF frames, the saved-notebook preview) goes
+    through here so they pick the same LUT entry for the same pixel.
+    """
+    if vmax > vmin:
+        return np.clip((values - vmin) / (vmax - vmin) * 255, 0, 255).astype(np.uint8)
+    return np.zeros(values.shape, dtype=np.uint8)
 
 
 def colormap_names() -> tuple[str, ...]:
