@@ -138,12 +138,11 @@ new `rcN` heading when that rc is published to TestPyPI.
   model, so a refusal (a file above the memory ceiling, a bad argument) leaves
   no model in the frontend.
 - Windows on ARM: `pip install "quantem.widget[cpu]"` no longer builds
-  hdf5plugin from source. `hdf5plugin` and `imageio-ffmpeg` (no ARM64 wheels)
-  are skipped there and `ncempy` stays below 1.15, which requires hdf5plugin.
-  Show4DSTEM imports and reads `.npy` and gzip or uncompressed HDF5 without it;
-  a compressed master raises an error naming hdf5plugin and the x64 Python
-  route, and `save_mp4` names the missing ffmpeg. `read_image` registers
-  hdf5plugin's filters itself for EMD files. The `[cuda]` hint appears only with
+  hdf5plugin from source. `hdf5plugin` (no ARM64 wheel) is skipped there and
+  `ncempy` stays below 1.15, which requires hdf5plugin. Show4DSTEM imports and
+  reads `.npy` and gzip or uncompressed HDF5 without it; a compressed master
+  raises an error naming hdf5plugin and the x64 Python route. `read_image`
+  registers hdf5plugin's filters itself for EMD files. The `[cuda]` hint appears only with
   an NVIDIA GPU, `[mps]` only on an Apple silicon Mac. WebGPU adapter requests
   leave out `powerPreference` on Windows, where Chromium ignores it and logs a
   warning. Install notes: `docs/install.md#windows`.

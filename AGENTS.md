@@ -30,11 +30,11 @@ history, can be read by anyone. These rules apply to coding agents and humans.
 - Files over 5 MB, other than `docs/_static/show4dstem-serin-gold.gif`
   (`scripts/check_large_files.py` holds the same exception).
 
-`tests/test_public_repository.py` enforces these rules. It is fast and
+`tests/infrastructure/test_public_repository.py` enforces these rules. It is fast and
 offline, and it must pass before every push:
 
 ```bash
-PYTHONPATH=src python -m pytest -q tests/test_public_repository.py
+PYTHONPATH=src python -m pytest -q tests/infrastructure/test_public_repository.py
 ```
 
 If unsure whether something is private, leave it out and ask.

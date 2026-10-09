@@ -4,7 +4,7 @@
 
 1. **Widget-level HTML**: `widget.export_html(...)` writes one standalone widget
    viewer. Use this when a single Show1D / Show2D / Show3D / Show3DSlices /
-   Show4DSTEM view is the artifact.
+   Show4DSTEM / ShowDiffraction view is the artifact.
 2. **Notebook-level HTML**: `jupyter nbconvert --to html notebook.ipynb`
    exports a whole notebook with its saved widget state (add `--execute` to
    rerun it first). Use this for reports and
@@ -78,16 +78,19 @@ it writes the file by calling `export_html(...)`.
 | Show2D | `full`, `uint8` | `1`, `2`, `4`, `8` (uint8 only) | `uint8` stores display-scaled image data; downsample is a mean bin |
 | Show3D | `full`, `uint8` | `1`, `2`, `4`, `8` (uint8 only) | `uint8` stores display-scaled volume data; downsample is a mean bin |
 | Show3DSlices | `full`, `uint8` | none | `uint8` packs against the global range |
-| Show4DSTEM | `dtype="uint8"`, `"uint16"` | `det_bin`, `scan_bin`: `1`, `2`, `4`, `8` | mean bin; `uint8` clips counts above 255 and says how many; `export_kind="report"` writes static PNG virtual-image pages with no raw 4D; interactive exports write a local launcher beside the page |
+| Show4DSTEM | `dtype="uint8"`, `"uint16"` | `det_bin`, `scan_bin`: `1`, `2`, `4`, `8` | mean bin; `uint8` clips counts above 255 and says how many; `export_kind="interactive"` packs the counts into the page and refuses above 2 GiB, naming the least binning that fits; `export_kind="report"` writes static PNG virtual-image pages with no raw 4D |
+| ShowDiffraction | `full` (float32) | none | exact float32 frames |
 
 ## Single-file exports
 
 `export_html` writes one HTML file: easiest to email, upload, and move around.
 When the exact data is too large for one file, Show2D and Show3D refuse above
 `max_mb` and name the smaller options (`encoding="uint8"`, `downsample=2` or
-`4`); pass `max_mb=None` to force the size. Show4DSTEM interactive exports and
-the CLI WebGPU route keep their data beside the page and serve it with
-`Show4DSTEM.command`: `index.html`, `Show4DSTEM.command`, `.viewer/`, and
+`4`); pass `max_mb=None` to force the size. Show4DSTEM interactive exports
+also stay one file, with the packed counts inside the page. The CLI WebGPU
+route (`quantem show4dstem ... --backend webgpu --html`) instead keeps the data
+beside the page and serves it with `Show4DSTEM.command`: `index.html`,
+`Show4DSTEM.command`, `.viewer/`, and
 anonymous `dataset_NN_master.h5` / `dataset_NN_data_*.h5` links. Double-click
 `index.html` and grant the folder in Chromium, or run the command file to serve
 the same folder locally.
@@ -112,7 +115,7 @@ embed raw 4D detector data, so the reader cannot drag a new detector ROI in the
 exported page.
 
 Use `export_kind="interactive"` when the reader must keep changing detector ROIs
-offline in the browser. It embeds or serves a binned raw-4D payload and runs the
+offline in the browser. It embeds a binned raw-4D payload and runs the
 virtual-detector math in WebGPU. This can be much larger than a report. The
 payload is the viewer's 4D array. A live viewer over `quantem.gpu.io.load`
 acquisitions, including `Show4DSTEM.from_folder(...)`, reads that array in small

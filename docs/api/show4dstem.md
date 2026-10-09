@@ -262,8 +262,9 @@ phase = viewer.compute_ssb()   # 200 trials plus Nelder-Mead refinement by defau
 ```
 
 The beam energy comes from `ssb_voltage_kV`, and the fit uses every detected
-bright-field pixel (`ssb_bf_intensity_threshold`, `ssb_bf_radius`).
-`ssb_n_trials`, `ssb_refine`, and `ssb_seed` control the search. Compute SSB
+bright-field pixel (the `compute_ssb` keywords `bf_intensity_threshold` and
+`bf_radius`). The keywords `n_trials`, `refine` and `seed` control the search,
+for example `viewer.compute_ssb(n_trials=100, seed=0)`. Compute SSB
 needs one 4D frame on a square 128, 256, or 512 scan grid. An encoded
 acquisition goes to SSB without a dense copy; SSB decodes only the
 bright-field disk.
@@ -285,16 +286,14 @@ widget = Show4DSTEM(
     read_4dstem([path1, path2, path3, path4]),
     view_mode="multiple",
     compare_cols=2,
-    compare_panel_gap_px=0,
     compare_max_panels=4,
     compare_dp_mode="selected",
 )
 widget
 ```
 
-`compare_cols=0` lets the frontend pick a responsive layout. `compare_layout`
-accepts `"side"` and `"top"` for placing the shared diffraction panel next to
-or above the multiple grid. Positive `compare_cols` values are treated as the
+`compare_cols=0` lets the frontend pick a responsive layout. Positive
+`compare_cols` values are treated as the
 maximum grid columns on desktop; narrow/mobile viewports cap the grid at two
 columns so the tiles remain touch-friendly. A comparison of encoded
 acquisitions never stacks them into one 5D array; each tile reads its own
@@ -306,16 +305,14 @@ paged like Show2D/Show3D galleries. `compare_page_idx` is zero-based and
 programmatically or save/restore the current page with the rest of the widget
 state.
 
-Set `compare_group_mode="all"` or call `widget.show_compare_all_groups()` to
-collapse all visible pages into one dense comparison grid. Call
-`widget.show_compare_paged_groups()` to restore page-by-page browsing. The
+Set `compare_group_mode="all"` to collapse all visible pages into one dense
+comparison grid, and `compare_group_mode="paged"` to restore page-by-page
+browsing. The
 shared diffraction panel keeps using the active page for `compare_dp_mode="average"`
 so scan-position drags stay responsive even when the virtual-image grid is
 showing every reduced panel.
 
-`compare_panel_gap_px=0` renders the virtual-image grid edge-to-edge for dense
-screening. Increase it when a report or presentation needs visible gutters
-between panels. Mouse-wheel or trackpad scroll over a multiple tile zooms the
+Mouse-wheel or trackpad scroll over a multiple tile zooms the
 shared virtual-image grid instead of scrolling the page; double-click a tile to
 reset the compare zoom. The single-panel diffraction and virtual-image canvases
 use the same scroll-to-zoom behavior.
@@ -327,13 +324,13 @@ panels. For tilt-series and dataset-review demos, prefer
 active dataset. Use `"average"` only when the mean diffraction pattern across
 the current visible page is the intended measurement.
 
-Multiple panel curation is stored on the widget, so a notebook can reuse the
-same state in a later cell or saved HTML export:
+Multiple panel curation is stored on the widget as lists of panel indices, so
+a notebook can reuse the same state in a later cell or saved HTML export:
 
 ```python
-widget.set_compare_panel_order(["scan-3", "scan-0", "scan-1", "scan-2"])
-widget.hide_compare_panel("scan-4")
-widget.star_compare_panel("scan-3")
+widget.compare_panel_order = [3, 0, 1, 2, 4]  # display order
+widget.compare_hidden_panels = [4]
+widget.compare_starred_panels = [3]
 
 state = widget.state_dict()
 another_widget.load_state_dict(state)
@@ -531,13 +528,12 @@ Python round trip - see [Performance](../maintainer/widget-performance).
 | Virtual-image ROI | `vi_roi_mode`, `vi_roi_center_row`, `vi_roi_center_col` | Pick a real-space region to average its diffraction |
 | FFT toggle | `show_fft`, `fft_window` | Power spectrum of the virtual image, drawn with sharp pixels |
 | VI Smooth switch | `vi_smooth` | Off by default: sharp scan pixels; on: bilinear interpolation of the virtual image. The diffraction pattern is always drawn with sharp pixels |
-| Multiple grid | `view_mode="multiple"`, `compare_cols`, `compare_panel_gap_px`, `compare_max_panels`, `compare_group_mode`, `compare_layout` | Shows ready frames/datasets as synchronized virtual images sharing the detector ROI and scan cursor; `compare_group_mode="all"` collapses pages into one dense grid |
+| Multiple grid | `view_mode="multiple"`, `compare_cols`, `compare_grid_width_px`, `compare_max_panels`, `compare_group_mode` | Shows ready frames/datasets as synchronized virtual images sharing the detector ROI and scan cursor; `compare_group_mode="all"` collapses pages into one dense grid |
 | Multiple DP source | `compare_dp_mode` | Shows either the average DP across visible multiple panels or the selected panel's DP |
-| Multiple panel state | `compare_panel_order`, `compare_hidden_panels`, `compare_starred_panels`; `set_compare_panel_order()`, `hide_compare_panel()`, `show_all_compare_panels()`, `star_compare_panel()` | Saves/reuses panel order, hidden panels, and starred picks across cells, state files, and HTML export |
+| Multiple panel state | `compare_panel_order`, `compare_hidden_panels`, `compare_starred_panels` (lists of panel indices) | Saves/reuses panel order, hidden panels, and starred picks across cells, state files, and HTML export |
 | Viewer chrome preset | `ui_mode` plus explicit `show_*` kwargs | Applies shared display presets; see [Viewer UI controls](viewer-ui) |
 | Control visibility | `show_controls`, `controls_collapsed` | Permanently remove controls or programmatically collapse/expand them for clean exports |
 | Title visibility | `show_title` | Top title row shows/hides |
 | Stats visibility | `show_stats` | DP, virtual-image, and FFT stats bars show/hide |
 | Scale bar visibility | `show_scale_bar` | DP and virtual-image scale bars show/hide |
-| Scan-path playback | `path_playing`, `path_index`, `path_interval_ms` | Sweeps the probe across the scan |
 | k-space calibration | `k_pixel_size`, `k_calibrated` | Diffraction axes read in mrad when calibrated |

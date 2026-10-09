@@ -1,6 +1,6 @@
 # Docs-build dependencies. autodoc + napoleon import the package (installed in the
-# build step) to render the NumPy-style docstrings as proper field lists; heavy /
-# native deps (cupy, Mac Metal, lazy io extras) are mocked in _config.yml.
+# build step) to render the NumPy-style docstrings as proper field lists; CuPy and
+# the optional readers are mocked in _config.yml.
 jupyter-book>=1.0,<2
 # Theme versions float on purpose (no pins). pydata-sphinx-theme >= 0.17
 # ships a hidden .primary-toggle button that steals the mobile hamburger's

@@ -55,9 +55,9 @@ Six pieces, all in the widget class:
 
 | widget | `_UNSAVED_HEAVY_KEYS` | static PNG source |
 |---|---|---|
-| Show2D | `frame_bytes`, `export_payload` | the N panels in `_data` |
+| Show2D | `frame_bytes`, `panel_stack_bytes`, `export_payload`, `_detail_bytes` | the N panels in `_data` |
 | Show3D | `_offline_stack`, `_offline_float_stack`, `export_payload` | evenly-spaced slices of the z-stack |
-| Show4DSTEM | `_offline_stack`, `export_payload`, `_gif_data` | the virtual (BF/ADF) image |
+| Show4DSTEM | `_offline_stack`, `export_payload` | the virtual (BF/ADF) image |
 
 ## Executing notebooks small (the other half)
 
