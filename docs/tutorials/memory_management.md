@@ -62,17 +62,17 @@ The same call fits every common GPU size, because the encoded acquisition is a
 small fraction of the dense array. Memory pressure comes from what you read or
 reconstruct from it, such as large bounded reads or SSB workspaces.
 
-Check the GPU before and after a large load with `quantem.widget.io.memory()`:
+Check the GPU before and after a large load with `quantem.widget.profile()`:
 
 ```python
+import quantem.widget as qw
 from quantem.gpu.io import load
-from quantem.widget.io import memory
 
-memory()  # check VRAM before loading
+qw.profile()  # check VRAM before loading
 loaded = load("scan_001_master.h5", verbose=True)
 print(loaded.shape, loaded.dtype,
       f"{loaded.resident_bytes / 2**30:.2f} GiB encoded, {loaded.logical_bytes / 2**30:.1f} GiB dense")
-memory()  # confirm VRAM after loading
+qw.profile()  # confirm VRAM after loading
 ```
 
 For a real `256 x 256 x 192 x 192` Arina scan (uint32 counts on disk), the
@@ -84,7 +84,7 @@ print line reads:
 
 Read this as: every detector pixel and count is on the NVIDIA GPU in encoded
 form, 0.57 GiB instead of 4.5 GiB; the counts fit in `uint16`, so they are
-stored that way, and no copy has been binned or quantized. The `memory()` lines
+stored that way, and no copy has been binned or quantized. The `profile()` lines
 show the whole GPU, including other processes.
 
 ## Can I choose the NVIDIA GPU inside the notebook?

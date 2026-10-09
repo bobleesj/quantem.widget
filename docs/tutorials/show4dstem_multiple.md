@@ -11,8 +11,7 @@ List them explicitly when order matters, such as a known tilt-angle sequence.
 ## Jupyter notebook
 
 ```python
-from quantem.gpu.io import load
-from quantem.widget import Show4DSTEM
+from quantem.widget import Show4DSTEM, read_4dstem
 
 masters = [
     "/data/tilts/sample_m6deg_master.h5",
@@ -24,7 +23,7 @@ masters = [
     "/data/tilts/sample_p6deg_master.h5",
 ]
 
-acquisitions = load(masters)   # one encoded acquisition per master
+acquisitions = read_4dstem(masters)   # one dataset per master, encoded on the GPU when there is one
 viewer = Show4DSTEM(acquisitions)
 viewer
 ```
@@ -36,7 +35,7 @@ the Multiple view, uses the filenames as labels, and shows the selected
 dataset's diffraction pattern. Put the sample name and tilt angle in each
 filename so the viewer labels remain meaningful.
 
-`load(masters)` returns after every master has loaded. To see the first panel
+`read_4dstem(masters)` returns after every master has loaded. To see the first panel
 while the rest are still loading, open the folder instead:
 
 ```python
@@ -46,7 +45,7 @@ viewer = Show4DSTEM.from_folder("/data/tilts")
 The viewer opens after the first master, and each later panel joins the grid
 as its master loads. You can begin dragging the detector on the loaded panels
 while the remaining masters continue loading. `from_folder` orders masters by
-file name, so list them explicitly with `load` when the tilt order differs.
+file name, so list them explicitly with `read_4dstem` when the tilt order differs.
 
 Use **Selected** for ordinary tilt review: clicking a virtual-image tile makes
 its dataset the source of the diffraction pattern. Use **Average** only when

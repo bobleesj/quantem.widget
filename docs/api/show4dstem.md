@@ -15,37 +15,61 @@ scale bars and column layout. Playback is available in Single view only.
 The `all` mode requires a live kernel; standalone export is not qualified for
 this layout. Existing `selected` and `average` modes remain available.
 Packed sources require their own reduction support and are not established
-by this dense-array feature. See the
-[interaction contract](../maintainer/all-diffraction-comparison.md).
+by this dense-array feature.
 
 Public import:
 
 ```python
-from quantem.gpu.io import load
-from quantem.widget import Show4DSTEM
+from quantem.widget import Show4DSTEM, read_4dstem
 ```
 
 `Show4DSTEM` is one operator-facing factory. It chooses the viewer from its
 input:
 
-- an acquisition returned by `quantem.gpu.io.load` on CUDA or Apple Silicon
-  MPS opens as a live view over its encoded GPU storage;
-- a list of acquisitions with one scan and detector shape opens as a
-  comparison grid labelled by source file;
-- a NumPy array, Torch tensor, or `Dataset5dstem` series opens in the base
-  viewer, which also supports browser WebGPU compute and offline export.
+- a file path (`*_master.h5`, HDF5 or `.npy`) opens as `read_4dstem(path)`
+  does: a `quantem.gpu.io.Dataset4dstemGPU` when `quantem.widget[cuda]` or
+  `[mps]` is installed and a GPU is present, else a quantem core
+  `Dataset4dstem` read whole into host memory (one printed line with the time
+  taken; a file larger than 80% of the available memory is refused, never
+  binned or cropped) and reduced on `device=`;
+- a `Dataset4dstemGPU` (from `read_4dstem` on a GPU or `quantem.gpu.io.load`)
+  opens as a live view over its GPU storage;
+- a quantem core `Dataset4dstem` (numpy- or tensor-backed) or the widget's
+  stand-in opens as its array or tensor, with its name as the title and its
+  calibration on the scale bars;
+- a list of datasets with one scan and detector shape opens as a comparison
+  grid labelled by dataset name (the file name for `read_4dstem`);
+- a NumPy array or Torch tensor opens in the base viewer, which also supports
+  browser WebGPU compute and offline export.
+
+The viewer shows the same virtual images, patterns and fitted disk for each
+of these inputs. Counts are stored in
+  the narrowest integer type that holds the largest count, which is known only
+  after reading, so the refusal states the size for each type the file's dtype
+  and detector bit depth allow, for example `needs between 9.7 GB and 77.3 GB`
+  with `19.3 GB as uint16` for a 512 x 512 scan of 192 x 192 uint32 frames.
+
+`device=` places a NumPy array or a dense file read: `"auto"` (CUDA, then
+Apple MPS, then CPU, printed once), `"cuda"`, `"cuda:N"`, `"mps"` or `"cpu"`.
+A tensor stays on its device unless `device=` names another. Virtual images,
+the mean pattern and scan-ROI patterns of a dense tensor are integer sums in
+torch on that device, divided once in float64 for a mean; quantem.gpu's
+encoded path gives the same numbers.
 
 Canonical forms:
 
 ```python
-# One acquisition; CUDA or MPS is selected automatically.
-viewer = Show4DSTEM(load(path))
+# One acquisition: on the GPU with quantem.gpu (CUDA or MPS), else read densely.
+viewer = Show4DSTEM(read_4dstem(path))
 
 # Part of the scan: (row_start, row_stop, col_start, col_stop), exclusive stops.
-viewer = Show4DSTEM(load(path), scan_region=(128, 384, 128, 384))
+viewer = Show4DSTEM(read_4dstem(path), scan_region=(128, 384, 128, 384))
 
 # Several acquisitions: one shared diffraction ROI, one virtual image per file.
-viewer = Show4DSTEM(load([path1, path2, path3]), compare_cols=3)
+viewer = Show4DSTEM(read_4dstem([path1, path2, path3]), compare_cols=3)
+
+# A master by path: the same as Show4DSTEM(read_4dstem(path)).
+viewer = Show4DSTEM("/data/session/scan_master.h5")
 
 # Every ready master in a folder; masters completed later are appended.
 viewer = Show4DSTEM.from_folder("/data/session")
@@ -60,26 +84,32 @@ a standalone browser viewer over large HDF5 acquisitions.
 
 ## Encoded acquisitions
 
-`load(path)` keeps the acquisition ANS encoded on the GPU at native detector
+On a GPU, `read_4dstem(path)` (which calls `quantem.gpu.io.load(path)`) keeps
+the acquisition ANS encoded on the GPU at native detector
 sampling and count dtype. A 512 x 512 x 192 x 192 uint16 Arina scan, 18 GiB as
 a dense array, occupies about 0.1 to 2 GiB depending on its counts. The viewer
 never expands it: virtual images are summed on the encoded storage, and each
 diffraction pattern comes from a bounded read. CUDA and MPS acquisitions use
 the same viewer.
 
-These views need a live kernel. `offline=True`, `data_url=` and
-`backend="webgpu"` raise for an encoded acquisition. `export_html` still works
-from a live view: an interactive export reads the acquisition in small scan
-windows into the embedded array (a host copy of the full data at the chosen
-`dtype` and binning; the GPU never holds the dense cube), and a report export
-(`export_kind="report"`, static PNG pages) embeds no raw 4D data. For a
+`offline=True` packs a GPU acquisition for the browser as it packs an array:
+the acquisition is read in small scan windows into the packed host array, so
+the GPU never holds the dense cube, and a pack above the 2 GB budget is skipped
+with one printed line. `h5_urls=` (browser reads of the source files) raises
+for an acquisition. `export_html` works from a live view: an interactive
+export reads the acquisition in small scan windows into the embedded array (a
+host copy of the full data at the chosen `dtype` and binning), and a report
+export (`export_kind="report"`, static PNG pages) embeds no raw 4D data. For a
 standalone browser viewer over the source files, use the CLI
 `--backend webgpu --html` folder export.
 
 The viewer borrows the acquisition. Keep a handle when you plan to release GPU
-memory, and close it after the viewer:
+memory, and close it after the viewer (this and the next sections use
+quantem.gpu directly and need a GPU):
 
 ```python
+from quantem.gpu.io import load
+
 loaded = load(path)
 viewer = Show4DSTEM(loaded)
 viewer
@@ -96,6 +126,7 @@ virtual detectors:
 
 ```python
 from quantem.gpu import detector
+from quantem.gpu.io import load
 
 loaded = load(path)
 center, radius = detector.fit_probe(detector.mean(loaded))
@@ -124,9 +155,9 @@ Show4DSTEM has two acceleration surfaces:
   browser WebGPU. After export, interaction does not depend on Python, Torch,
   CUDA, or MPS.
 
-Routing lives in `quantem.widget.show4dstem_factory`: acquisitions from
-`io.load` open through `quantem.widget.show4dstem_bounded`, and every other
-input opens in the base viewer.
+`Show4DSTEM` is one class in `quantem.widget.show4dstem`: an acquisition from
+`io.load` becomes a bounded view inside the constructor, and every other input
+is a dense tensor on its device.
 
 ## Live scope folders
 
@@ -183,11 +214,9 @@ Folder watching is append-only. Known masters are not duplicated, incomplete
 or externally linked masters wait until they are readable, and removing a file
 does not delete a dataset from an active scientific view.
 
-Maintainer real-time signoff follows
-[S4D-14](../maintainer/storyboard-show4dstem.md#s4d-14-watch-a-live-4d-stem-acquisition-folder-in-place):
-introduce genuine master/chunk files while one Jupyter widget is mounted and
-measure both discovery/control paint and requested virtual-image/diffraction
-paint.
+To verify the live path, introduce genuine master/chunk files while one
+Jupyter widget is mounted and measure both discovery/control paint and the
+requested virtual-image/diffraction paint.
 
 This path reads the original master data, not cached thumbnails.
 
@@ -220,6 +249,8 @@ virtual-image sources and switches the virtual image to the phase. Supply the
 microscope calibration when you open the viewer:
 
 ```python
+from quantem.gpu.io import load
+
 loaded = load(path)
 viewer = Show4DSTEM(
     loaded,
@@ -244,15 +275,14 @@ acquisitions that should be inspected side by side. The viewer keeps the
 standard diffraction-panel workflow: one shared detector ROI, one shared scan
 cursor, and one Dataset slider. The virtual-image side becomes a grid of ready
 frames or datasets. Use `view_mode="single"` for one-at-a-time browsing. A list
-of acquisitions from `load` and `Show4DSTEM.from_folder(...)` open in multiple
-mode by default.
+of datasets from `read_4dstem` and `Show4DSTEM.from_folder(...)` open in
+multiple mode by default.
 
 ```python
-from quantem.gpu.io import load
-from quantem.widget import Show4DSTEM
+from quantem.widget import Show4DSTEM, read_4dstem
 
 widget = Show4DSTEM(
-    load([path1, path2, path3, path4]),
+    read_4dstem([path1, path2, path3, path4]),
     view_mode="multiple",
     compare_cols=2,
     compare_panel_gap_px=0,
@@ -454,10 +484,9 @@ with the File System Access API: click **Open data folder** and grant the
 export folder that contains `index.html`, `.viewer/`, and the anonymous H5
 links. Use `Show4DSTEM.command` when you want the no-prompt local-server path.
 
-Use `h5_uint8_lossless=True` only after auditing the detector counts. It enables
-the low8 WebGPU decode path and is lossless only when every corrected good-pixel
-count fits in 8 bits. Leave it off for exact native `uint16` browsing; the bundle
-then injects `__QT_H5_DECODE_DTYPE="u2"` and keeps the high bitplanes.
+`--dtype uint8` decodes the low byte of each count in the browser (compact
+browse); the default `uint16` keeps native counts, and the bundle injects
+`__QT_H5_DECODE_DTYPE="u2"` so the high bitplanes are kept.
 
 The browser loader also honors these optional globals when injected before the
 widget bundle:
@@ -471,27 +500,19 @@ widget bundle:
 | `__QT_H5_FETCH_WINDOW`, `__QT_H5_DECODE_QUEUE` | HTTP fetch/decode queue depth |
 | `__QT_H5_LOCAL_GROUP`, `__QT_H5_LOCAL_WORKERS` | Browser local-file read/decode grouping |
 
-For performance signoff, inspect `window.__loadprof` after load and
-`window.__sh4dLiveViStats` while dragging the virtual detector. The maintainer
-performance notes record the current seven-panel WebGPU compare-grid signoff.
+The maintainer performance notes record the current seven-panel WebGPU
+compare-grid signoff.
 
 ## Reference
 
 ```{eval-rst}
 .. autoclass:: quantem.widget.show4dstem.Show4DSTEM
-   :members:
-   :show-inheritance:
+   :members: from_folder, export_html, compute_ssb, apply_preset, state_dict, save, load_state_dict, free, close, poll_folder, wait_for_folder, watch_folder, stop_folder_watch, pattern, virtual_image
 ```
 
 ```{note}
-The generated reference above is the universal base viewer. The public
-`quantem.widget.Show4DSTEM` factory accepts the same viewer options, plus
-`scan_region=` for an acquisition from `io.load`; `backend="webgpu"`,
-`offline_codec`, and `data_url` apply to array input.
-```
-
-```{eval-rst}
-.. autofunction:: quantem.widget.show4dstem_factory.from_folder
+`scan_region=` applies to an acquisition from `io.load`; `backend="webgpu"`,
+`offline` and `offline_dtype` apply to array and tensor input.
 ```
 
 ## Interactive controls
@@ -508,12 +529,13 @@ Python round trip - see [Performance](../maintainer/widget-performance).
 | Detector ROI mode | `roi_mode`, `roi_active` | Switch BF / annular / rectangular detector |
 | Annular inner / outer | `roi_radius_inner`, `roi_radius` | ADF annulus geometry |
 | Virtual-image ROI | `vi_roi_mode`, `vi_roi_center_row`, `vi_roi_center_col` | Pick a real-space region to average its diffraction |
-| FFT toggle | `show_fft`, `fft_window` | Power spectrum of the virtual image |
+| FFT toggle | `show_fft`, `fft_window` | Power spectrum of the virtual image, drawn with sharp pixels |
+| VI Smooth switch | `vi_smooth` | Off by default: sharp scan pixels; on: bilinear interpolation of the virtual image. The diffraction pattern is always drawn with sharp pixels |
 | Multiple grid | `view_mode="multiple"`, `compare_cols`, `compare_panel_gap_px`, `compare_max_panels`, `compare_group_mode`, `compare_layout` | Shows ready frames/datasets as synchronized virtual images sharing the detector ROI and scan cursor; `compare_group_mode="all"` collapses pages into one dense grid |
 | Multiple DP source | `compare_dp_mode` | Shows either the average DP across visible multiple panels or the selected panel's DP |
 | Multiple panel state | `compare_panel_order`, `compare_hidden_panels`, `compare_starred_panels`; `set_compare_panel_order()`, `hide_compare_panel()`, `show_all_compare_panels()`, `star_compare_panel()` | Saves/reuses panel order, hidden panels, and starred picks across cells, state files, and HTML export |
 | Viewer chrome preset | `ui_mode` plus explicit `show_*` kwargs | Applies shared display presets; see [Viewer UI controls](viewer-ui) |
-| Control visibility | `show_controls`, `controls_collapsed`; `collapse_controls()`, `expand_controls()`, `toggle_controls()` | Permanently remove controls or programmatically collapse/expand them for clean exports |
+| Control visibility | `show_controls`, `controls_collapsed` | Permanently remove controls or programmatically collapse/expand them for clean exports |
 | Title visibility | `show_title` | Top title row shows/hides |
 | Stats visibility | `show_stats` | DP, virtual-image, and FFT stats bars show/hide |
 | Scale bar visibility | `show_scale_bar` | DP and virtual-image scale bars show/hide |

@@ -227,8 +227,9 @@ data files. Three ways to open the exported folder:
 - **Double-click `index.html`** and grant the export folder when Chrome shows
   **Open data folder** (File System Access; browsers without the folder picker
   fall back to a plain file chooser).
-- **`quantem show out/`** from a terminal serves the folder and opens the
-  viewer without the grant click — handy over remote connections.
+- **Serve `out/`** with any Range-capable static server (for example
+  `python -m http.server` inside the folder) and open `index.html` without the
+  grant click; handy over remote connections with the port tunnelled.
 
 Keep the HDF5 files next to the HTML; sending only `index.html` is not a
 complete interactive export.

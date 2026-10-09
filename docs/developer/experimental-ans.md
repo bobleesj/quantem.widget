@@ -25,46 +25,8 @@ Show4DSTEM(loaded)
 ```
 
 See [Show4DSTEM](../api/show4dstem.md#encoded-acquisitions) for the live
-behavior. These views need a kernel; the browser export below is the offline
-path for encoded counts.
-
-## QEM files in the browser
-
-```python
-from quantem.gpu import io
-from quantem.widget.show4dstem_webgpu_export import export_show4dstem_rans_viewer
-
-with io.load("acquisition_master.h5") as loaded:
-    saved = io.save("acquisition.qem", loaded)
-html = export_show4dstem_rans_viewer([saved.path], "qem-viewer")
-```
-
-`io.save` writes the encoded bytes of a loaded acquisition into one
-self-contained `.qem` file without re-encoding, and never replaces an existing
-file. A 4D NumPy uint8/uint16 array of shape
-`(scan_row, scan_col, detector_row, detector_col)` can be encoded with the CPU
-reference encoder instead: `io.save("acquisition.qem", counts, backend="cpu")`.
-That encoder is bounded and not qualified for real-time full-acquisition
-encoding.
-
-The exporter verifies each file's header and body checksums, reads geometry
-and native dtype from the header without decoding counts, and links the files
-into the export folder (format token `qem-v1`). The browser decoder reads
-uint8/uint16 counts only; a float32 or scaled file raises, and is viewed in a
-live kernel with `Show4DSTEM(io.load(path))`. Open the generated viewer and
-grant its linked `.qem` files with **Open QEM files**. For a series, pass an
-ordered list of paths with matching shape and dtype; `tilts=` selects a subset
-and `frame_labels=` names them. A detector-validity mask can be supplied
-through `valid_pixels`; it does not overwrite raw sentinels in the source file.
-
-The same exporter accepts a retained detector-rANS build manifest (the encoder
-JSON) through an explicit compatibility adapter. The two formats share
-implementation ownership, not an interchangeable bitstream.
-
-This feature does **not** guarantee 120 displayed frames/s, general WebGPU
-bitpacked-input support, or automatic multi-GPU placement. See the backend
-guide for measured limits; rAF and render-submission counters are not
-screen-presentation measurements.
+behavior. These views need a kernel; `quantem show4dstem --backend webgpu
+--html` is the offline path, reading the HDF5 family in the browser.
 
 ## Building the shared backend
 
@@ -79,9 +41,10 @@ QUANTEM_GPU_SRC=/path/to/quantem.gpu/src PYTHON=python npm run build
 ```
 
 `scripts/sync-gpu-webgpu.mjs` recreates the ignored generated engine tree
-`js/.generated/engine/` from the file list in `quantem.gpu`'s
-`webgpu/sources.json` manifest (for example `detector/webgpu/*`,
-`io/hdf5/webgpu/*`, `ssb/webgpu/*`, `display/webgpu/*`, and `dpc/webgpu/*`).
-Edit the package sources, not that generated tree. A widget built against an
+`js/.generated/engine/` from the science entries of `quantem.gpu`'s
+`webgpu/sources.json` manifest (`detector/`, `dpc/`, `formats/`, `io/` and
+`ssb/`); only the `show4dstem` and `showptycho` bundles use it. Display kernels
+are widget source under `js/display/`. Edit the package sources, not that
+generated tree. A widget built against an
 unrelated backend checkout is not the validated experimental pair. Regenerate
 exported HTML after rebuilding so an old viewer cannot retain old shader code.

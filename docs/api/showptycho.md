@@ -1,9 +1,28 @@
 # ShowPtycho
 
-Interactive ptychography aberration review for a prepared SSB reconstruction or
-raw 4D-STEM data. `ShowPtycho` lets a microscopist tune defocus, astigmatism,
+Interactive ptychography aberration review for a prepared `quantem.gpu.SSB`
+session. `ShowPtycho` lets a microscopist tune defocus, astigmatism,
 scan-detector rotation, phase flip, display contrast, and the FFT view while
 watching the reconstructed phase update.
+
+Given an array instead, `ShowPtycho` is a reconstruction viewer that runs on
+any computer, with no quantem.gpu:
+
+```python
+ShowPtycho(phase)                                  # real array: the phase (rad)
+ShowPtycho(object_wave, sampling=0.2, units="Å")   # complex array: phase and amplitude
+ShowPtycho(torch.from_numpy(object_wave).to("cuda"))   # torch tensors on any device
+```
+
+| Input | Shown | Hidden |
+|---|---|---|
+| 2D real array (NumPy or torch) | phase, FFT, histograms, scale bar (`sampling` in `units`: Å, nm or pm) | aberration sliders, Sampling, BF, Save, pins, sweeps (one line names the SSB session they need) |
+| 2D complex array | the above plus amplitude (Amp) and the complex HSV view | as above |
+| `quantem.gpu.SSB` session | phase, FFT, histograms, scale bar and everything below | Amp and Complex: SSB recovers the phase only, so there is no amplitude to show |
+
+The browser draws float32. A float32 or complex64 array is shown exactly; a
+float64 or complex128 array is rounded once and a printed line gives the
+largest change. `angle` and `abs` run on the tensor's own device.
 
 ## Workflow and ownership
 
@@ -16,7 +35,7 @@ returned result remains the compact analysis output.
 
 The canonical folder workflow is:
 
-1. `quantem showptycho SOURCE` discovers native HDF5 masters and resolves the
+1. `quantem.gpu.SSB.open(master)` opens the native HDF5 master with the
    microscope geometry.
 2. `quantem.gpu.SSB` performs the requested exact trials, Nelder-Mead
    refinement, and final reconstruction on the selected compute backend.
@@ -56,11 +75,12 @@ that FFT panel. It is not re-running the raw detector preprocessing.
 ```python
 from quantem.widget import ShowPtycho
 
-viewer = ShowPtycho(ssb, upsample=2, fft_on=True)
+viewer = ShowPtycho(ssb, fft_on=True)
+viewer.upsample = 2
 viewer
 ```
 
-Use **Sampling** in the toolbar to switch between 1×, 2×, 4× and 8×. The field
+Use **Sampling** in the toolbar (or the `upsample` trait) to switch between 1×, 2×, 4× and 8×. The field
 of view stays fixed; 2× halves the phase pixel spacing. The scale bar and crop
 coordinates follow the displayed sampling. The scan data and fitted coefficients
 stay unchanged, and the loss is evaluated on the native grid.
@@ -76,15 +96,10 @@ Keep 1× while adjusting controls when a finer view is too slow. The widget uses
 all bright-field pixels by default; increasing output sampling does not reduce
 that evidence. Do not assume a 60 FPS reconstruction rate on a full scan.
 
-A large full scan can exceed the conservative 4.5 GiB browser spectra budget.
-On a GPU with enough memory, export with an explicit allowance:
-
-```python
-viewer.export("ssb-viewer", gpu_memory_gb=24)  # GiB for resident scan spectra
-```
-
-The browser also needs memory for encoded counts, decoder tables, and output
-buffers. This allowance never removes detector pixels to make the run fit.
+The exported folder lets the browser keep 4.5 GiB of resident scan spectra
+(`gpu_memory_gb` in `snapshots/cal.json`); encoded counts, decoder tables and
+output buffers come on top. A 1024 x 1024 scan at 8x sampling can exceed that
+on a small GPU; the budget never removes detector pixels to make a run fit.
 
 ## Real-Space Crop And SSB Refit
 
@@ -157,8 +172,8 @@ ShowPtycho(ssb)                                 # opens on the fitted tilt
 pd.concat([standard.report(), tilted.report()])
 ```
 
-Saved calibrations store the tilt (`tilt_mrad` scan frame, `tilt_object_mrad`,
-`depth_spread_nm`) and reopening one restores the panel.
+**Save** writes the tilt into `calibration.json` (`tilt_mrad` scan frame,
+`tilt_object_mrad`, `depth_spread_nm`).
 
 Where it runs: live notebooks with a CUDA or MPS SSB session (sliders and Fit
 tilt), and exported WebGPU folders (sliders; fitting needs Python). It does not
@@ -203,10 +218,9 @@ Use fewer BF pixels explicitly for exploration:
 - The UI status reports the active count as `used/total BF`, so a scientist can
   tell whether they are looking at a drag preview or a full-BF result.
 
-For example, `drag_bf=0.3` is useful for rapidly finding the right defocus or
-astigmatism neighborhood on memory-constrained browsers. The default is
-`drag_bf=1.0`, so the first view and saved/signoff states use the full selected
-BF disk.
+Drag the BF slider left to find the right defocus or astigmatism neighborhood
+quickly on a memory-constrained browser. The widget opens on the full selected
+BF disk, so the first view and saved/signoff states use every bright-field pixel.
 
 ## WebGPU Signoff Checklist
 
@@ -217,7 +231,7 @@ interactive microscopy review:
   is not valid performance evidence.
 - [ ] Record the native scan size. The browser kernels support square
   `128 x 128`, `256 x 256`, `512 x 512`, and `1024 x 1024` phase grids.
-- [ ] Record the payload path: BF-column default or explicit compressed-HDF5 fallback.
+- [ ] Record the payload: the exact BF-column file under `source/`.
   Do not treat a saved `g_bf.c64`/float32 cache as the default sharing path.
 - [ ] Record the BF policy. Include both selected BF pixels and active aperture
   BF pixels, for example `542/1805 selected, 379 active`.
@@ -249,14 +263,7 @@ w = ShowPtycho(ssb, fft_on=True)  # starts at full selected BF
 w.export("logic013_512_review")
 ```
 
-To start the viewer directly in the authoritative full-BF mode, pass
-`drag_bf=1.0`:
-
-```python
-w = ShowPtycho(ssb, drag_bf=1.0, fft_on=True)
-```
-
-The default folder contains:
+The folder contains:
 
 ```text
 logic013_512_review/
@@ -268,15 +275,13 @@ logic013_512_review/
 │   ├── snapshots.json
 │   └── README.md
 └── source/
-    ├── bf_columns.u8
-    ├── scan_master.h5
-    ├── scan_data_000001.h5
-    └── ...
+    └── bf_columns.qem
 ```
 
-The BF-column file is exact detector evidence, not detector binning. The
-compressed HDF5 files remain in `source/` as provenance and fallback data, but
-the browser opens from BF columns by default.
+The BF-column file is exact detector evidence, not detector binning: lossless
+ANS-coded counts from a CUDA session, or the `bf_columns.u8` / `.u16`
+companion an MPS `SSB.open` session already holds. The raw HDF5 acquisition is
+not copied into the folder.
 
 The `snapshots/` folder is the persistent review state. `snapshots/cal.json`
 stores the active calibration, `snapshots/snapshots.json` stores saved
@@ -285,20 +290,12 @@ after the browser has a folder grant or the command/local server is serving the
 folder. Pressing **Save** updates the snapshot JSON in place; it should not
 prompt for a separate download in the normal local folder workflow.
 
-Open the folder with the `quantem` CLI:
-
-```bash
-quantem showptycho /path/to/logic013_512_review
-```
-
-The command validates the folder, prints the compressed HDF5 source summary, starts the required local
-HTTP server, reports the BF-column browser source when present, and opens
-`index.html` in the browser. It stays alive until Ctrl-C.
-Use `--port 8900` only when you need a stable URL, and use `--bind 0.0.0.0`
-only when the viewer should be reachable from another device. Double-clicking
-`index.html` is supported in Chromium browsers that expose the File System
-Access API: click **Open data folder** and grant the export folder. Use the CLI
-or `ShowPtycho.command` when you want the no-prompt local-server path.
+Open the folder by double-clicking `ShowPtycho.command`, which starts a
+range-capable local HTTP server and opens `index.html`. Double-clicking
+`index.html` directly is supported in Chromium browsers that expose the File
+System Access API: click **Open data folder** and grant the export folder. Any
+Range-capable static server (for example `python -m http.server` run inside the
+folder) also works, including from another device on the network.
 
 The HTML file should stay small because it is only the viewer. The microscopy
 payload is under `source/`; the export avoids writing `g_bf.c64`, `.f32`
@@ -307,10 +304,8 @@ reference images, or detector-binned copies by default.
 ## Reference
 
 ```{eval-rst}
-.. autofunction:: quantem.widget.showptycho.ShowPtycho
-
-.. autoclass:: quantem.widget.showptycho.PtychoCalibration
-   :members:
+.. autoclass:: quantem.widget.showptycho.ShowPtycho
+   :members: export
 ```
 
 ## Interactive Controls

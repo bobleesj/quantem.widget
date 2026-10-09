@@ -39,24 +39,41 @@ ShowPtycho(ssb)
 
 ### Do NOT skip step 2
 
-```python
-# WRONG — this NEVER fits. It uses whatever aberrations you pass verbatim,
-# so the phase and FFT are junk unless your numbers were already perfect.
-ShowPtycho(data, semiangle_mrad=30.0, scan_sampling_A=0.264,
-           voltage_kV=300.0,
-           aberrations={"C10": 78.0, "C12": 17.0, "phi12": 0.5})
-```
-
-`ShowPtycho(data, aberrations=...)` is a convenience constructor that trusts the
-aberrations you hand it. It does not fit them. If you want the solver to find
-the aberrations, build an `SSB`, call `find_aberrations(trials=200,
-refinement="nelder-mead")`, and pass that same prepared `ssb` object to
-`ShowPtycho(ssb)`. The returned `SSBResult` is also available as `result` for
-non-interactive analysis through `result.phase`, `result.amplitude`, and
-`result.object_wave`.
+For aberration tuning `ShowPtycho` takes a prepared `SSB` session; raw data and
+hand-typed aberrations are not accepted. An unfitted session shows whatever
+starting aberrations it was built with, so the phase and FFT are junk unless
+those numbers were already perfect. Build an `SSB`, call
+`find_aberrations(trials=200, refinement="nelder-mead")`, and pass that same
+`ssb` object to `ShowPtycho(ssb)`. The returned `SSBResult` is also available
+as `result` for non-interactive analysis through `result.phase`,
+`result.amplitude`, and `result.object_wave`.
 
 You can confirm the solve ran: the stats bar shows a non-null `loss`, and the
 `Optuna trials + Nelder-Mead` panel at the bottom is populated.
+
+## View a reconstruction on any computer
+
+To look at a reconstruction you already have, from SSB or any other method,
+pass the array. It needs no GPU and no quantem.gpu: a real array is the phase,
+a complex array is the object wave, shown as its phase and amplitude. NumPy
+arrays and torch tensors on any device work.
+
+```python
+import numpy as np
+from quantem.widget import ShowPtycho
+
+rows, cols = np.mgrid[0:256, 0:256]
+phase = 0.3 * np.cos(2 * np.pi * rows / 15.6) * np.cos(2 * np.pi * cols / 15.6)   # 3.9 A lattice
+amplitude = 1.0 - 0.05 * np.cos(2 * np.pi * rows / 15.6) ** 2
+object_wave = amplitude * np.exp(1j * phase)
+
+ShowPtycho(object_wave, sampling=0.25, units="Å", fft_on=True)
+```
+
+The phase, amplitude (Amp), FFT, histograms and the scale bar show the array's
+own numbers; a float64 or complex128 array is drawn in float32 and the widget
+prints the largest change that causes. The aberration sliders, Save, pins and
+sweeps need an SSB session, and the widget says so in one line.
 
 ## No detector binning
 

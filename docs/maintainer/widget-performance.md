@@ -11,24 +11,19 @@ either loop endpoint preserves playback intent. Seeking while paused stays
 paused. Keyboard seeks preserve the same behavior. A paused frame counter is
 not enough evidence; the displayed scientific pixels must keep advancing too.
 
-`scripts/widget_local_signoff.sh --quick --browser` runs
-`tests/show3d/test_playback_browser.py` against a generated moving-pattern HTML
-export. The tests use real pointer/keyboard input and interior image pixels;
-they do not assert implementation strings, exact frame timing, or FPS. WebGPU
-is required; CPU fallback is a failure of this gate. Ordinary Python unit-test
-runs skip this browser gate.
+Drive the exported HTML in a real browser: real pointer/keyboard input,
+interior image pixels, no implementation strings, exact frame timing, or FPS
+assertions. WebGPU is required; CPU fallback is a failure of this gate.
 
-To run just this check in the active conda environment after `npm run build`:
+The opt-in browser tier drives exported Show2D / Show3D pages and a live
+Show4DSTEM kernel in headed Chrome, with WebGPU on and forced off, after
+`npm run build`:
 
 ```bash
-python -m playwright install chromium
-QUANTEM_TEST_PLAYBACK=1 PYTHONPATH=src python -m pytest -q tests/show3d/test_playback_browser.py
+QUANTEM_WIDGET_BROWSER=1 DISPLAY=:0 python -m pytest tests/browser -s
 ```
 
-This opens headed Chromium, including from the signoff script. Use
-`QUANTEM_HEADLESS=1` only where headless Chromium exposes WebGPU, or set
-`QUANTEM_SHOW3D_PLAYBACK_HTML=/path/to/export.html` to test an existing looping
-multi-frame export. Keep screenshots, private exports and data outside Git.
+Keep screenshots, private exports and data outside Git.
 
 ## Current summary
 
@@ -47,13 +42,8 @@ per master.
   devices=[0, 1])` interleaves files by physical disk before assigning work to
   GPUs, so folders split across independent NVMe disks can use disk bandwidth
   and GPU capacity together.
-- Two local-only benchmark entrypoints own this proof:
-  `scripts/widget_load_bench_matrix.py` for U16/U8 single and stacked load
-  timing, and `scripts/widget_load_bench_sharded.py` for disk layout,
-  two-GPU placement, cold/warm timing, and capacity boundaries.
-- Keep real benchmark outputs under `/tmp/quantem-widget-load-bench/`. Do not
-  commit private paths, raw data, generated benchmark payloads, screenshots, or
-  large reports.
+- Keep real benchmark outputs outside the repository. Do not commit private
+  paths, raw data, generated benchmark payloads, screenshots, or large reports.
 - The sampled masters resolve to one physical NVMe disk, so
   the smoke validates the sharded code path and report harness, not an actual
   two-disk bandwidth gain. Prove the disk speedup on a host where
@@ -79,11 +69,15 @@ per master.
   showed `computeFps>0` but `paintFps=0`; the fix was to upload the colormap LUT
   before compare-grid GPU paints and render each live compare panel through a
   visible WebGPU canvas with `renderSlotDirectWithGpuRangeToCanvas`, matching
-  the single-tilt VI path. The browser-local proof object is
-  `window.__sh4dLiveViStats`; it intentionally does not sync high-frequency
-  samples to Python traits.
+  the single-tilt VI path.
 
 ## Timing protocol for every widget
+
+Do not time a large live-kernel load through Playwright: it enables the CDP
+Network domain, which copies every websocket frame to the driver as base64. A
+200 MB Show3D message then took about 467 s instead of about 3 s (2026-10-07).
+Drive the page over raw CDP with only the Runtime and Input domains for load
+timings; Playwright is fine for interaction checks on small data.
 
 Every widget report should separate loading speed from rendering speed. A fast
 loader can still produce a slow browser widget, and a smooth browser widget can
@@ -95,7 +89,7 @@ signoff report, or PR notes:
   format, backend, and whether the data were cropped, binned, downsampled,
   quantized, sparsely streamed, or exact.
 - **Load**: wall time for the public loader, for example
-  ``load(...)``, ``load_eds(...)``, ``read_image(...)``,
+  ``load(...)``, ``read_image(...)``,
   ``read_images(...)``, or the tutorial loader.
 - **Pack/build**: wall time for array stacking, display-bin generation,
   side-index construction, export packing, or other Python work before widget
@@ -165,8 +159,6 @@ one common metric plus widget-specific metrics:
   time, and panel/page state.
 - **Show4DSTEM**: diffraction-pattern fetch, virtual-detector compute, detector
   ROI drag latency, compare-grid cache, WebGPU/backend path, and GPU memory.
-- **ShowEDS**: map compute/draw, spectrum compute/draw, backend path, and sparse
-  stream lookup costs.
 
 Keep detailed debug counters browser-local, for example under an existing
 `window.__quantemShow*Perf` object. Do not sync high-frequency debug samples
@@ -183,11 +175,10 @@ evidence.
 | Widget | Primary user story | Must stay real-time | Performance proof |
 | --- | --- | --- | --- |
 | Show1D | Inspect scalar traces, losses, spectra, or per-iteration diagnostics while deciding which image view to open. | Cursor/readout movement, snapshot selection, and handoff to Show2D. | Lightweight state tests plus browser story when handoff or snapshot rendering changes. |
-| Show2D | Compare one image or many related images, often 4K microscopy outputs, with zoom, pan, histogram, FFT, profile, pages, and export. | Zoom/pan, histogram controls, page slider/play, hidden panels, FFT redraws after first compute, and HTML reopen. | `scripts/widget_browser_smoke.py` for exported HTML; `scripts/widget_heavy_perf_signoff.py` for 4K real-data panels. |
-| Show3D | Scrub or play time series, focal stacks, iterative reconstructions, and multi-panel comparisons without rebuilding the widget. | Frame scrub/play, remote-tunnel drag preview with native restoration, page slider/play, hidden panels, independent panel contrast, FFT return-scrub cache, FFT metric labels, GIF/MP4/HTML export. | `scripts/widget_heavy_perf_signoff.py`; [S3D-20](storyboard-show3d.md#s3d-20-scrub-full-resolution-movies-over-a-remote-jupyter-tunnel) live Jupyter tunnel proof; exported HTML profile for existing reports; animation smoke for GIF/MP4. |
+| Show2D | Compare one image or many related images, often 4K microscopy outputs, with zoom, pan, histogram, FFT, profile, pages, and export. | Zoom/pan, histogram controls, page slider/play, hidden panels, FFT redraws after first compute, and HTML reopen. | `tests/browser` tier for exported HTML; a real-data notebook run for 4K panels. |
+| Show3D | Scrub or play time series, focal stacks, iterative reconstructions, and multi-panel comparisons without rebuilding the widget. | Frame scrub/play, remote-tunnel drag preview with native restoration, page slider/play, hidden panels, independent panel contrast, FFT return-scrub cache, FFT metric labels, GIF/HTML export. | `tests/browser` tier; a live Jupyter tunnel run; exported HTML profile for existing reports; animation smoke for GIF. |
 | Show3DSlices | Browse volume slices and orthogonal views with synchronized crosshair/plane controls. | Slice sliders, crosshair movement, oblique line endpoint/body drags, side-plane redraw, oblique FFT redraw during line drag, FFT return-scrub cache hits for slice/oblique sliders, histogram controls, FFT/log/smooth toggles, and export reopen. | Browser smoke plus focused visual story when slice/crosshair/oblique-line behavior changes. |
-| Show4DSTEM | Inspect diffraction patterns and virtual images from real 4D-STEM datasets without loading unnecessary data. | Scan-position movement, detector drag, BF/ABF/ADF updates, compare pages, folder sessions over encoded acquisitions, and export reopen. | `scripts/widget_show4dstem_heavy_signoff.py` covers direct backend/export interaction only. Folder watching additionally requires the S4D-14 live-arrival report; do not infer that signoff from the heavy script. Lightweight CI checks only the protocol. |
-| ShowEDS | Explore spectral maps, ROIs, energy bands, element lines, and sparse/folder-backed EDS cubes. | Band dragging, map/spectrum sync, ROI changes, periodic table selection, sparse lookup/cache, and export reopen. | Browser story plus EDS-specific real-data smoke when backend or map/spectrum logic changes. |
+| Show4DSTEM | Inspect diffraction patterns and virtual images from real 4D-STEM datasets without loading unnecessary data. | Scan-position movement, detector drag, BF/ABF/ADF updates, compare pages, folder sessions over encoded acquisitions, and export reopen. | `tests/browser/test_show4dstem_live.py` drives a live kernel on the gold dataset; `scripts/e2e_fresh.py` checks a fresh wheel on a real master. Folder watching additionally needs a live-arrival run. Lightweight CI checks only the protocol. |
 | ShowDiffraction | Inspect diffraction-like 2D patterns when a full 4D-STEM session is not needed. | Zoom/pan, histogram/contrast, peak/FFT-style overlays when present, and export reopen. | Lightweight export/browser smoke; use Show4DSTEM heavy signoff for full detector workflows. |
 
 ## Folder-watching performance contract
@@ -245,12 +236,13 @@ page preparation, and independent contrast/zoom state. Under normal scientist
 actions it produced stale frames, blinking contrast, cross-panel edits, and
 blank canvases. Any proposal to reintroduce it requires a dedicated issue,
 one rendering owner, live-Jupyter plus fresh-export visual proof, and the
-independence/no-blank checks in S3D-05A.
+independence/no-blank checks of the `tests/browser` tier.
 
-Native source arrays remain unchanged in Python. `display_bin=4` is the default
-browser-display policy for large float32 stacks; `display_bin=2` and
-`display_bin=1` are explicit user choices with larger transfer and GPU-memory
-costs. The widget must report native shape/bytes, display bin, display
+Native source arrays remain unchanged in Python. `display_bin=1` (native pixels)
+is the default; `display_bin=2`, `4`, ... are explicit user choices that shrink
+the transfer and GPU memory, and each prints one line naming the factor and the
+way back to native pixels (see `docs/2026-10-07-widget-cleanup.md` for the open
+times). The widget must report native shape/bytes, display bin, display
 shape/bytes, upload progress, and whether hardware WebGPU residency succeeded.
 Do not silently crop or claim that a binned browser stack contains native
 pixels. Scientific export methods continue to use the native Python arrays.
@@ -266,13 +258,7 @@ on-demand CPU/canvas renderer is the functional fallback.
 | Show3D | Add each new full-resolution image as a frame in one unpaged stack | Reread existing source files; rebuild the widget; infer Show2D-style pages from frame count |
 | Show4DSTEM | Load each ready master into encoded GPU storage at full detector resolution and add one comparison panel | Reload existing acquisitions; rebuild the widget; bin or narrow the new master |
 
-The canonical folder-paging behaviors are
-[S2D-18](storyboard-show2d.md#s2d-18-watch-a-live-emd-folder-in-place),
-[S2D-20](storyboard-show2d.md#s2d-20-page-a-growing-folder-gallery-automatically),
-[S3D-17](storyboard-show3d.md#s3d-17-watch-a-live-emd-frame-series-in-place),
-and
-[S4D-14](storyboard-show4dstem.md#s4d-14-watch-a-live-4d-stem-acquisition-folder-in-place).
-For these stories, measure page acknowledgement, first panel, half page, full
+For the folder-watch workflows, measure page acknowledgement, first panel, half page, full
 page, and warm return separately. A full-page number alone hides whether the UI
 waited unnecessarily for its slowest file.
 
@@ -348,27 +334,9 @@ FFT, inset, and overlay canvas. Tab return must not advance playback, change a
 slice/frame index, or rerun an FFT. Verification should require the foreground
 repaint signal to advance while FFT miss and compute counters remain unchanged.
 
-Use ``quantem.widget.profile_widget`` in profiling notebooks to time the Python
-construction path in the same format:
-
-```python
-from quantem.widget import Show3D, profile_widget, widget_timing_report
-
-widget, profile = profile_widget(
-    "Show3D live",
-    lambda: Show3D(stack, verbose=True, save_state=False),
-    data=stack,
-    load_ms=read_ms,
-    pack_ms=stack_ms,
-    backend="NVIDIA CUDA workstation",
-)
-widget
-```
-
-After the widget paints in JupyterLab, ``widget_timing_report(widget)`` returns
-the first-paint timing table again. New widgets should provide equivalent
-timing hooks rather than inventing a private debug vocabulary. Existing widgets
-should be updated opportunistically when their load/render path changes.
+Show2D and Show3D print this table once after the browser's first paint when
+``verbose=True``. New widgets should provide the same timing hook rather than
+inventing a private debug vocabulary.
 
 ## Mistake log: Show3D cursor readout pop
 
@@ -498,10 +466,9 @@ reports backend ownership and delegates to a documented backend cleanup path.
 
 ## Show4DSTEM heavy signoff
 
-The repeatable heavy Show4DSTEM proof is
-`scripts/widget_show4dstem_heavy_signoff.py --backend cuda`. It is local-only
-and must stay out of normal CI because it depends on real lab ``*_master.h5``
-files and can generate private screenshots and HTML exports.
+The heavy Show4DSTEM proof is a local run over real lab ``*_master.h5``
+files (`scripts/e2e_fresh.py` against a fresh wheel). It must stay out of
+normal CI because it can generate private screenshots and HTML exports.
 
 The report must keep the same split as the policy above:
 
@@ -657,7 +624,8 @@ Show2D result:
 
 Show2D policy:
 
-- Keep ``display_bin="auto"`` as the default for large galleries.
+- ``display_bin="auto"`` is an explicit opt-in for large galleries; the default
+  is native pixels, and any active bin prints one line (2026-10-07).
 - The initial image may be a binned preview, but ``_data`` remains full
   resolution on the Python side.
 - Once zoomed past preview resolution, the frontend requests only the visible
@@ -718,11 +686,7 @@ Save/reopen audit:
   notebook still showed visible ``Show2D static render`` and ``Show3D static
   render`` image outputs with nonzero dimensions. This verifies the user-facing
   save/reopen path, not just the Python unit test path.
-- The regression tests that should stay green are
-  ``tests/test_save_state.py`` and
-  ``tests/test_widget_performance_contract.py``. The performance contract is
-  deliberately coarse: it verifies that lightweight save snapshots complete
-  under a generous budget and do not contain heavy frame/detail/export buffers.
+- The regression tests that should stay green are in ``tests/test_save_state.py``.
   Browser FPS needs browser-side instrumentation, not a normal pytest timing.
 
 Show3D policy:
@@ -759,53 +723,15 @@ FFT metric label policy:
   for the metric unless the user explicitly asks for a detailed readout.
 - Verify correctness with a deterministic NumPy parity test before trusting the
   browser label. The current test is ``js/fftMetrics.numpy.test.ts``.
-- Verify performance with browser counters. ``scripts/widget_heavy_perf_signoff.py``
-  must report zero FFT compute growth and zero FFT metric compute growth while
-  toggling the Stats UI.
+- Verify performance with browser counters: zero FFT compute growth and zero
+  FFT metric compute growth while toggling the Stats UI.
 
-## Agent Storyboards
+## Rule: high-FPS draggable selectors
 
-Performance notes should capture what we learned: measured timings, failure
-modes, payload tradeoffs, and implementation policy. UI behavior and recurring
-AI/browser drive plans live in [Storyboard](storyboard). Repeatable heavy
-browser performance gates live in
-[Performance UI Testing](performance-ui-testing).
-
-Use the storyboard for scientific user stories and release signoff. Link the
-story IDs from performance investigations when a speed or correctness issue maps
-to a recurring user workflow.
-
-## Mistake log: ShowEDS band center drag
-
-Date: 2026-06-27
-
-Symptom: the ShowEDS real-data widget could compute maps quickly, but dragging
-the center of the energy band still felt slightly delayed. The debug HUD showed
-acceptable map, spectrum, and draw times, so the lag was initially missed.
-
-What was wrong:
-
-- The center-drag preview used the same React state path as normal committed
-  widget state.
-- Every mousemove could trigger widget rerender work and spectrum canvas work,
-  even though the user only needed the visible band rectangle to translate.
-- The performance HUD measured compute and draw durations, not the full
-  pointer-to-preview latency that the user feels.
-- The bottom MUI range slider is a poor target for very narrow energy windows
-  because the two thumbs overlap. The spectrum band body is the reliable center
-  drag target for narrow windows.
-
-Fix:
-
-- During center drag, move lightweight DOM preview overlays with imperative
-  `transform` and `width` updates.
-- Store the pending band in refs while dragging.
-- Feed the pending band into the throttled map scheduler during drag, because
-  the element-map overlay is part of the expected live feedback.
-- Commit `band_start`, `band_end`, and notebook state once on mouseup.
-- Keep endpoint drags on the normal precise state path.
-
-Rule for future high-FPS widget selectors:
+Origin: an energy-band drag (2026-06-27) computed maps quickly, but the band
+still lagged behind the pointer because every mousemove went through committed
+React state and the performance HUD timed compute and draw, not
+pointer-to-preview latency.
 
 - Separate preview interaction from committed state.
 - Use refs and CSS transforms for per-pointer-frame visual feedback.
@@ -821,125 +747,5 @@ Rule for future high-FPS widget selectors:
   the plot band, bottom slider handles, text readout, and derived overlay should
   move as one interaction.
 
-This applies to ShowEDS energy bands and ROI drags, Show4DSTEM detector masks,
-Show2D contrast controls, and any future draggable selector that needs to feel
-attached to the pointer.
-
-## Mistake log: EDS is a query source, not a spreadsheet
-
-Date: 2026-06-28
-
-Symptom: a real Velox EDS EMD file opened quickly in vendor tools, but the
-prototype treated the spectrum image like a dense ``(row, col, energy)`` table
-that had to be expanded before interaction. That was the wrong model. The user
-usually asks for a current energy window, an ROI spectrum, or a visible preview,
-not every empty channel in every pixel.
-
-What was wrong:
-
-- Native EDS files should be treated as query backends. Keep the file/chunks as
-  the source and ask for only the data needed by the current view.
-- A ShowEDS data folder is a prefix-cache export format. It is useful for small
-  or deliberately spatial-binned portable demos, but it is not the default model
-  for native no-bin analysis.
-- Calling ``cube.compute()`` before a targeted query or explicit spatial binning
-  defeats lazy I/O.
-- Browser widget state is for small embedded demos, not native EMD storage.
-
-Rule for future EDS work:
-
-- Never expand a native EDS file just to prove a widget can open it.
-- Default no-bin EMD loading to native/lazy queries.
-- Build prefix-cache data folders only for existing caches, explicit sidecar
-  requests, or intentional binned sharing/export workflows.
-- Guard prefix-cache and widget-state sizes before reading data.
-- Use lazy chunked sum-binning only for explicit portable demos and exports.
-- Treat spatial binning as count-preserving; make energy binning explicit.
-- The best long-term path is a sparse/tiled frontend backend: energy-window
-  queries produce maps, spatial-window queries produce spectra, and WebGPU does
-  the visible accumulation/drawing without Python round trips during drag.
-
-Current ShowEDS policy:
-
-- Small embedded cubes stay browser/WebGPU backed.
-- ``ShowEDS.from_emd(..., backend="auto")`` uses an existing data folder when
-  present; otherwise exact no-bin EMD uses the native lazy query path.
-- Portable real-data demos can use an explicitly spatial-binned data folder.
-- Exact one-file HTML export is not available for native lazy EMD because the
-  exported page has no local query backend; use binned single-file export or a
-  data-folder export when sharing outside Jupyter.
-
-Update from the 0016 Velox stream test:
-
-- Velox EDS ``SpectrumStream`` data is sparse event data. The logical dense
-  shape can be tens of GB, but the actual useful stream can be a few hundred MB.
-- Do not materialize zeros. Index the stream directly by channel and by pixel.
-- A sparse stream data folder for the 2048 x 2048 x 4096 0016 file stores about
-  26.9 million events in about 186 MB and keeps the full field of view exact.
-- Full-field interaction should be validated with no crop and no binning before
-  offering binned/export presets.
-- If Jupyter ignores HTTP ``Range`` and returns ``200 OK`` with a whole file,
-  slice the returned buffer when it contains the requested byte window instead
-  of failing the sidecar worker.
-
-## Mistake log: ShowEDS real-time interaction regression
-
-Date: 2026-07-02
-
-Symptom: a real collaborator EDS widget loaded and displayed the map/spectrum,
-but changing the energy band or ROI felt slow on the full 1024 x 1024 x 4096
-file. The standalone export could still render, so it was easy to mistake this
-for a drawing problem instead of an interaction-backend problem.
-
-What was wrong:
-
-- ``backend="auto"`` could still fall back to the kernel-backed path for real
-  sparse EDS data. That made pointer interaction depend on Python callbacks and
-  notebook message traffic.
-- The survey notebook default did not force the stream path, so old notebook
-  outputs could make the widget look interactive while fresh runs were not.
-- Kernel-backed interaction tried to keep recomputing map and spectrum data
-  during drag. That is the wrong contract for pointer preview.
-- The spectrum defaulted to a linear y scale. For sparse EDS this makes the
-  high-count low-energy region dominate and hides useful peaks, so users have
-  to turn on log scale manually before the spectrum looks reasonable.
-
-Fix:
-
-- Make ``ShowEDS.from_emd(..., backend="auto")`` prefer the sparse stream index
-  whenever the native EMD stream can be indexed safely.
-- Make survey EDS widgets default to ``backend="stream"`` so real screening
-  notebooks do not silently take the slow kernel path.
-- Keep kernel mode as an explicit fallback/debug path, and avoid expensive
-  kernel recomputation during active pointer drags.
-- Set the EDS spectrum default to log scale. Users can still turn it off, but
-  the first view should expose peaks rather than only the total count wall.
-- Verify with real data, not only synthetic cubes: export/open the real 0039
-  stream widget, confirm ``1024x1024x4096 | Sparse stream | Cu K`` is visible,
-  then drag both the energy band and ROI and watch the labels/counts update.
-
-Low-pass and smoothing guidance:
-
-- Low-pass filtering can be useful for making noisy EDS maps look more
-  reasonable during exploration, especially when the selected band has low
-  counts or the ROI/map is sparse.
-- Treat it as a display/preview option, not a numerical correction. Saved
-  counts, exported spectra, ROI sums, and element quantification should remain
-  based on raw counts unless a workflow explicitly asks for filtered data.
-- Default log scale is higher value than default low-pass filtering for EDS:
-  log scale improves spectrum readability without changing the counts.
-- If adding a low-pass UI, label it as smoothing, keep it off by default for
-  quantitative readouts, and preserve an obvious raw view so users do not
-  confuse denoised display with measured signal.
-
-Rule for future real-time EDS work:
-
-- Sparse event data should stay sparse from disk to browser. Do not materialize
-  a dense cube or bounce through Python during drag.
-- The default path for real screening must be interactive. Slow exact paths can
-  exist, but they should be explicit.
-- Validate the default path by rerunning a fresh notebook or standalone export
-  from real EMD data, then drive the in-app browser. Do not accept stale notebook
-  output as proof.
-- Check the backend label, visible control state, and browser console before
-  claiming the widget is fixed.
+This applies to Show4DSTEM detector masks, Show2D contrast controls, and any
+future draggable selector that needs to feel attached to the pointer.

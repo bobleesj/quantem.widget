@@ -16,8 +16,7 @@ and the source data ([Zenodo](https://zenodo.org/records/18167694)).
 ## Start with an interactive demo
 
 The [crystal-to-volume demo route](tutorials/demo.md) connects **ShowCIF**,
-**PlanPtycho**, **Show3D**, and **Show3DSlices**. Inspect a model, check acquisition
-and simulation-cell geometry, then compare depth planes. Each notebook explains
+**Show3D**, and **Show3DSlices**. Inspect a model, then compare depth planes. Each notebook explains
 what to change in the widget and what the preview does, and does not, represent.
 
 ## Start with ARINA 4D-STEM in Jupyter
@@ -27,28 +26,29 @@ After [installing](install), open a Jupyter notebook, load a completed ARINA
 `*_master.h5` file, and pass the result directly to the widget:
 
 ```python
-from quantem.gpu.io import load
-from quantem.widget import Show4DSTEM
+from quantem.widget import Show4DSTEM, read_4dstem
 
-data = load("/data/session/scan_000_master.h5")
+data = read_4dstem("/data/session/scan_000_master.h5")
 viewer = Show4DSTEM(data)
 viewer
 ```
 
-`load(...)` selects CUDA or Apple Metal automatically. Leave `viewer` as the
+`read_4dstem(...)` keeps the counts encoded on CUDA or Apple Metal when
+quantem.gpu and a GPU are present (a `Dataset4dstemGPU`) and reads them into
+a quantem core `Dataset4dstem` elsewhere, so the cell runs on any machine.
+Leave `viewer` as the
 final line, then move through scan positions or drag the detector to update the
 virtual image. Continue with the [Show4DSTEM tutorial](tutorials/show4dstem) or
 [Load and I/O](api/io).
 
 ## Prefer the command line?
 
-Point the `quantem` command at a file or folder when you want the same viewers
-without writing a notebook:
+Point the `quantem` command at a 4D-STEM master or a folder of masters when
+you want the viewer without writing a notebook:
 
 ```bash
-quantem show2d image.tif         # an image            -> Show2D
-quantem show3d ./frames/         # a folder of frames  -> Show3D scrub
-quantem show4dstem ./masters/    # 4D-STEM master(s)   -> live viewer (or --html)
+quantem show4dstem ./masters/           # 4D-STEM master(s) -> live viewer notebook
+quantem show4dstem ./masters/ --html    # shareable offline WebGPU HTML
 ```
 
 It saves to `~/Downloads`, opens automatically, and picks the GPU for you. Full
@@ -82,7 +82,6 @@ acquisitions stay encoded on the GPU at full detector resolution (about 0.1 to
 | `ShowPtycho` | Ptychography aberration review: phase, FFT, BF-count tradeoffs, and WebGPU folder export | [API](api/showptycho) |
 | `ShowDiffraction` | 2D/3D diffraction d-spacing: Bragg spots, rings, center finding, k calibration | [tutorial](tutorials/showdiffraction) · [API](api/showdiffraction) |
 | `ShowCIF` | Unit cells, specimen tilt, and projected potential/phase previews | [tutorial](tutorials/showcif.ipynb) · [API](api/showcif.md) |
-| `PlanPtycho` | Acquisition geometry, simulation-cell coverage, and optional virtual support | [tutorial](tutorials/planptycho.ipynb) · [API](api/planptycho.md) |
 | `ChooseLattice` | Pick an origin and two lattice vectors on a 2D image | [tutorial](tutorials/choose_lattice) · [API](api/choose-lattice) |
 
 The [Tutorials](tutorials/download_data) walk through each widget on real public
@@ -116,12 +115,6 @@ For small datasets, Show4DSTEM can recompute virtual detectors in browser
 WebGPU. Its exports make dtype explicit: `uint8` is a compact browse payload,
 while `uint16` retains a wider detector-count range. See
 [Show4DSTEM export recipes](tutorials/show4dstem_export) for the tradeoffs.
-
-ShowEDS uses the same saved-widget model for synthetic and small cubes in single
-mode with exact data. For large native EDS/EELS files, the notebook keeps the
-interactive state while the exact count data stays in a data folder. Portable
-HTML demos can be exported with count-preserving sum downsampling when
-full-resolution data would be too large for public sharing.
 
 See [Installation](install) to get started.
 
