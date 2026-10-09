@@ -35,6 +35,8 @@ def install_latest_rc() -> None:
     from google.colab import output
 
     output.enable_custom_widget_manager()
+    # quantem.gpu requires numba; pinning the numpy and numba Colab already
+    # loaded keeps pip from replacing compiled modules in the running kernel.
     numba_version = version("numba")
     widget_wheel = _latest_testpypi_wheel_url("quantem.widget")
     gpu_wheel = _latest_testpypi_wheel_url("quantem.gpu")
@@ -47,7 +49,7 @@ def install_latest_rc() -> None:
             "-q",
             f"numpy=={np.__version__}",
             f"numba=={numba_version}",
-            f"quantem.gpu[movie] @ {gpu_wheel}",
+            f"quantem.gpu @ {gpu_wheel}",
             widget_wheel,
         ],
         check=True,
