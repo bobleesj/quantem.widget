@@ -9,7 +9,7 @@ import pytest
 from ipywidgets import Widget
 from ipywidgets.embed import embed_data
 
-from quantem.widget import Plot2D
+from quantem.widget import Plot2D, Show1D, Show2D
 
 
 def test_calibrated_map_export_and_saved_state(tmp_path):
@@ -133,13 +133,31 @@ def test_saved_view_loads_onto_a_new_map(tmp_path):
     plot.horizontal_line = 1.5
     path = tmp_path / "plot2d_view.json"
     plot.save(path)
-    envelope = json.loads(path.read_text())
-    assert envelope["widget_name"] == "Plot2D"
-    assert "data_bytes" not in envelope["state"]
+    assert json.loads(path.read_text())["widget_name"] == "Plot2D"
     restored = Plot2D(values, x=np.arange(6), y=np.arange(4))
-    restored.load_state_dict(envelope["state"])
+    restored.load_state_dict(path)
     assert restored.state_dict() == plot.state_dict()
+    assert Plot2D(values, x=np.arange(6), y=np.arange(4), state=path).state_dict() == plot.state_dict()
     axes = restored.figure().axes[0]
     assert axes.collections[0].cmap.name == "magma"
     assert axes.collections[0].get_clim() == (2.0, 20.0)
     np.testing.assert_array_equal(axes.get_xlim(), [1, 4])
+
+
+def test_restored_view_is_checked_like_a_new_one(tmp_path):
+    """Refuse another widget's file and unmappable color limits; a restored width shows in the notebook box."""
+    values = np.arange(24, dtype=float).reshape(4, 6)
+    plot = Plot2D(values, x=np.arange(6), y=np.arange(4), width=500, max_width=600)
+    Show1D(np.arange(8.0)).save(tmp_path / "show1d.json")
+    Show2D(np.ones((4, 4), np.float32), verbose=False).save(tmp_path / "show2d.json")
+    for path in (tmp_path / "show1d.json", tmp_path / "show2d.json"):
+        with pytest.raises(ValueError, match="cannot load into 'Plot2D'"):
+            plot.load_state_dict(path)
+        with pytest.raises(ValueError, match="cannot load into 'Plot2D'"):
+            plot.load_state_dict(json.loads(path.read_text()))
+    for limits in ({"vmin": 5.0, "vmax": 1.0}, {"vmin": float("nan")}, {"vmax": float("inf")}):
+        with pytest.raises(ValueError, match="finite color limits"):
+            plot.load_state_dict({**limits, "cmap": "magma"})
+    assert (plot.vmin, plot.vmax, plot.cmap) == (0.0, 23.0, "viridis")
+    plot.load_state_dict({"max_width": 300})
+    assert (plot.layout.width, plot.layout.max_width) == ("300px", "min(100%, 300px)")
