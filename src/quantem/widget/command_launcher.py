@@ -35,6 +35,10 @@ from pathlib import Path
 class RangeHandler(SimpleHTTPRequestHandler):
     """Static files with byte ranges, plus writes limited to the viewer's snapshot files."""
 
+    # A viewer reads its data as many byte ranges; keep-alive serves them on one
+    # connection instead of opening a new one per range.
+    protocol_version = "HTTP/1.1"
+
     def end_headers(self):
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -70,8 +74,7 @@ class RangeHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Type", self.guess_type(str(path)))
             self.send_header("Content-Length", str(size))
             self.end_headers()
-            with open(path, "rb") as handle:
-                self.wfile.write(handle.read())
+            self._send_body(path, 0, size)
             return
         start_text, _, end_text = range_header.replace("bytes=", "").partition("-")
         start = int(start_text)
@@ -82,15 +85,23 @@ class RangeHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.send_header("Content-Length", str(end - start + 1))
         self.end_headers()
+        self._send_body(path, start, end - start + 1)
+
+    def _send_body(self, path, start, length):
+        """Send ``length`` bytes of ``path`` from ``start``; a HEAD request gets the headers only.
+
+        sendfile copies file to socket in the kernel, so a gigabyte acquisition is
+        never read into Python memory. A body after a HEAD would be read as the
+        next response on a kept-alive connection.
+        """
+        if self.command == "HEAD":
+            return
         with open(path, "rb") as handle:
-            handle.seek(start)
-            remaining = end - start + 1
-            while remaining > 0:
-                chunk = handle.read(min(1 << 16, remaining))
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
-                remaining -= len(chunk)
+            try:
+                self.connection.sendfile(handle, offset=start, count=length)
+            except (BrokenPipeError, ConnectionResetError):
+                # The page cancelled a streamed read it no longer needs.
+                self.close_connection = True
 
     def do_GET(self):
         self._serve()
