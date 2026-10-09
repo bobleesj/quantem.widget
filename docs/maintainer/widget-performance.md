@@ -722,7 +722,7 @@ FFT metric label policy:
   compact white-on-image style as panel labels. Do not add a separate stats row
   for the metric unless the user explicitly asks for a detailed readout.
 - Verify correctness with a deterministic NumPy parity test before trusting the
-  browser label. The current test is ``js/fftMetrics.numpy.test.ts``.
+  browser label. The current test is ``js/display/fftMetrics.numpy.test.ts``.
 - Verify performance with browser counters: zero FFT compute growth and zero
   FFT metric compute growth while toggling the Stats UI.
 

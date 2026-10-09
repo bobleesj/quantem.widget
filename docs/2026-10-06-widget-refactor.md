@@ -398,7 +398,7 @@ refinement after Guizar-Sicairos 2008, cumulative trajectory, linear fit),
 shift) and the primitives `registration_image`, `estimate_adjacent_shift`,
 `upsampled_dft`. The registration image and the adjacent shifts were checked
 bit-identical against the old module on three synthetic drifts before the old
-code was deleted; `js/sliceAlignment.ts` still mirrors the same constants.
+code was deleted; `js/show3dslices/sliceAlignment.ts` still mirrors the same constants.
 
 What uses Show3DSlices outside the tutorials: quantem.live (`export.py`,
 `control/pipelines/ptycho_search_export.py`, `server/rendering/ptycho_html.py`,

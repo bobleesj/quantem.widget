@@ -154,9 +154,10 @@ key or signature changed.
 Update (later the same day): the per-widget round fixed four of these: Show3D stats, ROI stats,
 profile and FFT now read the unfiltered frame; `Show4DSTEM.free()` releases the offline pack;
 `poll_folder` lists the folder; the dead `CompareVirtualGrid` shared canvas is deleted.
-- `display/colormaps.ts` `applySlots`, `applySingleWithLut`, `renderSlots` copy the
+- `display/colormapEngine.ts` (then `display/colormaps.ts`) `applySingleWithLut`, `renderSlots` copy the
   whole mapped buffer into a `count * 4` array: a RangeError for any slot uploaded
-  with a capacity hint (no current caller does).
+  with a capacity hint (no current caller does). Both now map only the first
+  `count * 4` bytes.
 - `display/geometry.ts` CPU `sampleLineProfile` divides by a fractional width the
   WebGPU path rounds (traits are integers today).
 - ShowDiffraction copy-to-clipboard catches only synchronous errors, so a refused

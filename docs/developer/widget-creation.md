@@ -117,7 +117,7 @@ Use the existing frontend infrastructure:
 |---|---|
 | [`js/theme.ts`](https://github.com/electronmicroscopy/quantem.widget/blob/main/js/theme.ts) | widget themes and host environment |
 | [`js/format.ts`](https://github.com/electronmicroscopy/quantem.widget/blob/main/js/format.ts) | trait decoding and formatting |
-| [`js/display/colormaps.ts`](https://github.com/electronmicroscopy/quantem.widget/blob/main/js/display/colormaps.ts) | colormaps and image rendering |
+| [`js/display/colormaps.ts`](https://github.com/electronmicroscopy/quantem.widget/blob/main/js/display/colormaps.ts) | colormaps and image rendering; import from it, while the code lives in `luts.ts`, `displayMath.ts` (CPU path), `colormapEngine.ts` (WebGPU engine), `gpuRange.ts`, `directRender.ts`, `displayShaders.ts` and `volumeSlice.ts` |
 | [`js/display/stats.ts`](https://github.com/electronmicroscopy/quantem.widget/blob/main/js/display/stats.ts) | display ranges and image statistics |
 | [`js/figure.ts`](https://github.com/electronmicroscopy/quantem.widget/blob/main/js/figure.ts) | scale bars and figure formatting |
 | [`js/staticFallback.ts`](https://github.com/electronmicroscopy/quantem.widget/blob/main/js/staticFallback.ts) | saved-notebook fallback behavior |
