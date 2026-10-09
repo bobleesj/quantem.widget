@@ -15,10 +15,10 @@ interface DroppedEntry {
 const isAcquisitionFile = (file: File) => !file.name.startsWith("._") && /\.(qem|h5|hdf5|qh5idx|qbslz4)$/i.test(file.name);
 
 export async function collectDroppedFiles(data: DataTransfer, maxFiles = 10000): Promise<File[]> {
-  // Entries must be taken during the drop event: the browser protects the drag
-  // data store once the handler returns.
-  const entries = Array.from(data.items, item => item.webkitGetAsEntry() as DroppedEntry | null);
-  if (!entries.some(Boolean)) return Array.from(data.files).filter(isAcquisitionFile);
+  // Items must be read during the drop event: the browser protects the drag
+  // data store once the handler returns. A dropped file is taken as is; only a
+  // dropped folder is walked through its entry.
+  const dropped = Array.from(data.items, item => ({ entry: item.webkitGetAsEntry() as DroppedEntry | null, file: item.getAsFile() }));
   const files: File[] = [];
   const visit = async (entry: DroppedEntry): Promise<void> => {
     if (files.length >= maxFiles) throw new Error("Too many files. Drop only the acquisition folder.");
@@ -35,7 +35,10 @@ export async function collectDroppedFiles(data: DataTransfer, maxFiles = 10000):
       }
     }
   };
-  for (const entry of entries) if (entry) await visit(entry);
+  for (const { entry, file } of dropped) {
+    if (entry?.isDirectory) await visit(entry);
+    else if (file && isAcquisitionFile(file)) files.push(file);
+  }
   return files;
 }
 

@@ -34,7 +34,7 @@ test("a dropped acquisition folder grants every HDF5 file in it, nested folders 
     folderEntry([fileEntry(`${tilt}_data_000001.h5`), fileEntry(`${tilt}_data_000002.h5`)], 1),
     fileEntry(`${tilt}.qh5idx`),
   ], 2);
-  const drop = { items: [{ webkitGetAsEntry: () => folder }], files: [] } as unknown as DataTransfer;
+  const drop = { items: [{ webkitGetAsEntry: () => folder, getAsFile: () => null }] } as unknown as DataTransfer;
   expect(names(await collectDroppedFiles(drop))).toEqual([
     `${tilt}_master.h5`,
     `${tilt}_data_000001.h5`,
@@ -43,9 +43,11 @@ test("a dropped acquisition folder grants every HDF5 file in it, nested folders 
   ]);
 });
 
-test("files dropped without folder entries are filtered the same way", async () => {
+test("dropped files are taken as they are and filtered the same way", async () => {
   const files = ["a_master.h5", "a_data_000001.H5", "._a_master.h5", "notes.txt", "t0-counts.qem", "b.hdf5"].map(name => new File([name], name));
-  const drop = { items: files.map(() => ({ webkitGetAsEntry: () => null })), files } as unknown as DataTransfer;
+  // A dropped file's entry may not resolve (a synthesized drag has none on disk); its File is used directly.
+  const unreadable = { isFile: true, isDirectory: false, file: (_: unknown, reject: (error: Error) => void) => reject(new Error("NotFoundError")) };
+  const drop = { items: files.map(file => ({ webkitGetAsEntry: () => unreadable, getAsFile: () => file })) } as unknown as DataTransfer;
   expect(names(await collectDroppedFiles(drop))).toEqual(["a_master.h5", "a_data_000001.H5", "t0-counts.qem", "b.hdf5"]);
 });
 
