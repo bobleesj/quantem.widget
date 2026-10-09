@@ -76,6 +76,20 @@ def signed_log1p(values):
     return np.sign(values) * np.log1p(np.abs(values))
 
 
+def display_window(low: float, high: float, log_scale: bool) -> tuple[float, float]:
+    """A data-space window ``[low, high]`` in display space: ``signed_log1p`` of each end under log scale.
+
+    This is the browser's ``displayRange``: the window comes from the data's own
+    limits in float64, not from the min/max of the float32 log frame, which can
+    sit one float32 step away and move pixels to the neighbouring level.
+    save_image, the saved-notebook preview and the Show3D export all window
+    through here, so they agree with each other and with the canvas.
+    """
+    if log_scale:
+        return float(signed_log1p(float(low))), float(signed_log1p(float(high)))
+    return float(low), float(high)
+
+
 def contrast_uint8(values: np.ndarray, vmin: float, vmax: float) -> np.ndarray:
     """Display values as the uint8 colormap levels the browser paints in the window ``[vmin, vmax]``.
 

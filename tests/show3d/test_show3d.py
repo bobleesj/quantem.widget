@@ -12,6 +12,7 @@ from PIL import Image
 
 from quantem.widget import Show2D, Show3D, state
 from quantem.widget.adapters.core import make_dataset
+from quantem.widget.colormap import colorize, contrast_uint8, display_window, signed_log1p
 
 
 def _ramp(frames: int = 6, side: int = 64, offset: float = 0.0) -> np.ndarray:
@@ -154,6 +155,20 @@ def test_save_image_colorizes_the_current_frame(tmp_path: pathlib.Path):
     path = widget.save_image(tmp_path / "frame.png", frame_idx=5)
     image = np.asarray(Image.open(path).convert("RGB"))
     assert image.shape == (64, 64, 3) and image[-1, -1, 0] > image[0, 0, 0]
+    widget.free()
+
+
+def test_save_image_log_scale_windows_the_log_of_the_data_range(tmp_path: pathlib.Path):
+    # Auto contrast off and no vmin/vmax: the browser windows the log frame with signed_log1p of the
+    # stack min/max. A raw [data_min, data_max] window painted the log frame nearly black.
+    data = _ramp() * 1000
+    widget = Show3D(data, cmap="gray", auto_contrast=False, verbose=False)
+    widget.log_scale = True
+    image = np.asarray(Image.open(widget.save_image(tmp_path / "log.png", frame_idx=5)).convert("RGB"))
+    vmin, vmax = display_window(data.min(), data.max(), True)
+    levels = contrast_uint8(signed_log1p(data[5]), vmin, vmax)
+    np.testing.assert_array_equal(image, colorize(levels / 255.0, "gray"))
+    assert image[-1, -1, 0] == 255
     widget.free()
 
 

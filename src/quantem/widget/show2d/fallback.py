@@ -19,7 +19,7 @@ import matplotlib.patches
 import matplotlib.patheffects
 import numpy as np
 
-from quantem.widget.colormap import colorize, contrast_uint8, signed_log1p
+from quantem.widget.colormap import colorize, contrast_uint8, display_window, signed_log1p
 from quantem.widget.render.figure import format_scale_label, round_to_nice, static_overlay_font
 
 
@@ -86,10 +86,6 @@ class Show2DStaticPng:
         is_rgb = [i < len(self.is_rgb) and bool(self.is_rgb[i]) for i in range(n_frames)]
         gray = [i for i in range(n_frames) if not is_rgb[i]]
 
-        def to_display(value: float) -> float:
-            """A data-space limit in display space (signed log1p under ``log_scale``)."""
-            return float(signed_log1p(float(value))) if self.log_scale else float(value)
-
         has_absolute = self.vmin is not None and self.vmax is not None
         panel_vmins = list(self.vmins) if self.vmins else [None] * n_frames
         panel_vmaxs = list(self.vmaxs) if self.vmaxs else [None] * n_frames
@@ -99,11 +95,11 @@ class Show2DStaticPng:
             if is_rgb[i]:
                 base_ranges.append((0.0, 1.0))
             elif has_panel_range[i]:
-                base_ranges.append((to_display(panel_vmins[i]), to_display(panel_vmaxs[i])))
+                base_ranges.append(display_window(panel_vmins[i], panel_vmaxs[i], self.log_scale))
             elif has_absolute:
-                base_ranges.append((to_display(self.vmin), to_display(self.vmax)))
+                base_ranges.append(display_window(self.vmin, self.vmax, self.log_scale))
             else:
-                base_ranges.append((to_display(frame.min()), to_display(frame.max())))
+                base_ranges.append(display_window(frame.min(), frame.max(), self.log_scale))
         linked_shared = (
             self.link_contrast and len(gray) >= 2 and not has_absolute and not any(has_panel_range)
         )

@@ -12,7 +12,7 @@ from typing import Self
 import numpy as np
 from PIL import Image
 
-from quantem.widget.colormap import colorize, contrast_uint8, signed_log1p
+from quantem.widget.colormap import colorize, contrast_uint8, display_window, signed_log1p
 from quantem.widget.export import export_slug
 from quantem.widget.render import gif as gif_utils
 from quantem.widget.utils.array import bin2d
@@ -301,15 +301,16 @@ class Show3DExport:
         if self.log_scale:
             frame = signed_log1p(frame)
         if self.vmin is not None or self.vmax is not None:
-            vmin = float(self.vmin if self.vmin is not None else self.data_min)
-            vmax = float(self.vmax if self.vmax is not None else self.data_max)
-            if self.log_scale:
-                vmin, vmax = float(signed_log1p(vmin)), float(signed_log1p(vmax))
+            vmin, vmax = display_window(
+                self.vmin if self.vmin is not None else self.data_min,
+                self.vmax if self.vmax is not None else self.data_max,
+                self.log_scale,
+            )
         elif self.auto_contrast:
             vmin = float(np.percentile(frame, self.percentile_low))
             vmax = float(np.percentile(frame, self.percentile_high))
         else:
-            vmin, vmax = float(self.data_min), float(self.data_max)
+            vmin, vmax = display_window(self.data_min, self.data_max, self.log_scale)
         return contrast_uint8(frame, vmin, vmax)
 
     def save_image(self, path: str | pathlib.Path, *, frame_idx: int | None = None, format: str | None = None, dpi: int = 150) -> pathlib.Path:

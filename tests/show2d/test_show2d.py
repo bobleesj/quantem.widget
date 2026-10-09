@@ -322,6 +322,21 @@ def test_save_image_log_scale_keeps_negative_values_like_the_preview(tmp_path: P
     assert len(np.unique(saved[:32, :, 0])) > 100
 
 
+def test_save_image_and_preview_share_the_log_window_of_the_data_range(tmp_path: Path):
+    # The window under log scale is signed_log1p of the data min/max (the browser's displayRange), not
+    # the min/max of the float32 log frame: those differ by a float32 step and move whole levels.
+    rng = np.random.default_rng(7)
+    frames = [(rng.standard_normal((16, 16)) * 10.0 ** rng.uniform(-2, 4)).astype(np.float32) for _ in range(300)]
+    widget = Show2D(frames, log_scale=True, link_contrast=False, verbose=False)
+    ranges = widget._resolve_panel_display_ranges(list(widget._data))
+    mismatched = []
+    for idx, (vmin, vmax) in enumerate(ranges):
+        saved = np.asarray(Image.open(widget.save_image(tmp_path / f"{idx}.png", idx=idx)).convert("RGB"))
+        if not np.array_equal(saved, widget._static_panel_rgb(widget._data[idx], vmin, vmax, widget.cmap)):
+            mismatched.append(idx)
+    assert mismatched == []
+
+
 def test_display_ranges_follow_contrast_rules():
     dim, bright = np.linspace(0, 1, 64 * 64, dtype=np.float32).reshape(64, 64), None
     bright = dim * 100
