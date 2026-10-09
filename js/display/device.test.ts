@@ -5,7 +5,7 @@ async function adapterOptions(platform?: string): Promise<GPURequestAdapterOptio
   vi.resetModules();
   const requestAdapter = vi.fn().mockResolvedValue(null);
   vi.stubGlobal("navigator", { gpu: { requestAdapter }, userAgentData: platform ? { platform } : undefined });
-  const { getGPUDevice } = await import("./display/device");
+  const { getGPUDevice } = await import("./device");
   expect(await getGPUDevice()).toBeNull();
   return requestAdapter.mock.calls[0][0];
 }
@@ -31,7 +31,7 @@ async function deviceWithLoss() {
   const requestDevice = vi.fn(async () => ({ lost: new Promise(resolve => losses.push(resolve)) }));
   const requestAdapter = vi.fn(async () => ({ limits: {}, features: new Set(), info: { description: "Test GPU" }, requestDevice }));
   vi.stubGlobal("navigator", { gpu: { requestAdapter } });
-  const device = await import("./display/device");
+  const device = await import("./device");
   const lose = async (reason: string, message: string) => {
     losses[losses.length - 1]({ reason, message });
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -79,7 +79,7 @@ describe("WebGPU display shaders", () => {
     }));
     const requestAdapter = vi.fn(async () => ({ limits: {}, features: new Set(), info: { description: "Parallels Display Adapter" }, requestDevice }));
     vi.stubGlobal("navigator", { gpu: { requestAdapter } });
-    const { createGPUColormapEngine } = await import("./display/colormaps");
+    const { createGPUColormapEngine } = await import("./colormaps");
     expect(await createGPUColormapEngine()).toBeNull();
     expect(warn.mock.calls[0][0]).toMatch(/do not build on this adapter; drawing on the CPU/);
     warn.mockRestore();

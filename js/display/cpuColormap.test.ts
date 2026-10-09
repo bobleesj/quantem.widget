@@ -3,8 +3,8 @@
 // different colormaps; each paint must come out in the colormap it names,
 // whichever paint ran or started in between.
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { applyColormap, COLORMAPS, displayLog } from "./display/colormaps";
-import { colormapSampledPixels, createColormapEngine } from "./display/cpuColormap";
+import { applyColormap, COLORMAPS, displayLog } from "./colormaps";
+import { colormapSampledPixels, createColormapEngine } from "./cpuColormap";
 
 class TestImageData {
   constructor(readonly data: Uint8ClampedArray, readonly width: number, readonly height: number) {}

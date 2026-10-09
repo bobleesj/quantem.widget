@@ -6,10 +6,10 @@
 import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyColormap, COLORMAPS } from "./display/colormaps";
-import { histogramBins } from "./display/cpuColormap";
-import { computeMagnitude, CPUFFT, fftshift } from "./display/fft";
-import { percentileClip } from "./display/stats";
+import { applyColormap, COLORMAPS } from "./colormaps";
+import { histogramBins } from "./cpuColormap";
+import { computeMagnitude, CPUFFT, fftshift } from "./fft";
+import { percentileClip } from "./stats";
 
 const WIDTH = 48;
 const HEIGHT = 40;
@@ -82,7 +82,7 @@ print(json.dumps({
   const input = JSON.stringify({
     width: WIDTH, height: HEIGHT, low: LOW, high: HIGH,
     image: Array.from(IMAGE, value => Number.isFinite(value) ? value : null),
-    colormaps: path.resolve(__dirname, "..", "src", "quantem", "widget", "colormaps.json"),
+    colormaps: path.resolve(__dirname, "..", "..", "src", "quantem", "widget", "colormaps.json"),
   });
   return JSON.parse(execFileSync(python, ["-c", code], { input, encoding: "utf8" }));
 }

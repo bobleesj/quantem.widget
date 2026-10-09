@@ -12,7 +12,7 @@ Registration follows Guizar-Sicairos, Thurman and Fienup, Opt. Lett. 33, 156
 peak refined on a 20x local matrix-DFT grid. The Gaussian high-pass before
 registration suppresses the slowly varying background that would otherwise
 dominate the correlation of low-contrast phase slices; 12 px is an empirical
-preprocessing scale, not a microscope parameter. ``js/sliceAlignment.ts``
+preprocessing scale, not a microscope parameter. ``js/show3dslices/sliceAlignment.ts``
 mirrors every constant and step so an exported HTML page estimates the same
 shifts without a kernel.
 """

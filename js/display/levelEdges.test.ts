@@ -10,9 +10,9 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { VOLUME_SLICE_MIN_ZOOM, displayNormalize } from "./display/colormaps";
+import { VOLUME_SLICE_MIN_ZOOM, displayNormalize } from "./colormaps";
 
-const COLORMAPS_SOURCE = readFileSync(path.join(__dirname, "display", "colormaps.ts"), "utf8");
+const COLORMAPS_SOURCE = readFileSync(path.join(__dirname, "colormaps.ts"), "utf8");
 const f32 = Math.fround;
 const bits = new DataView(new ArrayBuffer(4));
 const floatBits = (value: number) => { bits.setFloat32(0, value); return bits.getUint32(0); };

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import goldens from "./display/goldens.json";
-import { reciprocalCoordinatesFromShiftedOffset } from "./display/fft";
-import { dequantizeUint8 } from "./display/quantization";
+import goldens from "./goldens.json";
+import { reciprocalCoordinatesFromShiftedOffset } from "./fft";
+import { dequantizeUint8 } from "./quantization";
 
 describe("display numerical goldens", () => {
   for (const testCase of goldens.quantized) {

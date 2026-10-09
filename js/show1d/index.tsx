@@ -29,7 +29,7 @@ import { computeHistogramFromBytes, findDataRange, percentileClip } from "../dis
 import { applyHannWindow2D, autoEnhanceFFT, computeMagnitude, fft2dAsync, fftshift, getDisplayFFT, nextPow2, DisplayFFT } from "../display/fft";
 import { formatScaleLabel, roundToNiceValue } from "../figure";
 import { useTheme } from "../theme";
-import { EmbeddedWidgetView } from "../embeddedWidget";
+import { EmbeddedWidgetView } from "./embeddedWidget";
 import { exportTitleSlug, formatEstimatedHtmlSize, formatSavedBytes, isAbortLikeError } from "../shared/exportFormat";
 import { RenderPathBadge } from "../shared/RenderPathBadge";
 import { pointToSegmentDistance } from "../shared/geometry";

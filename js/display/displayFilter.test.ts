@@ -12,7 +12,7 @@
 import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyDisplayFilterBrowser, applyDisplayFilterCPU, resolvePanelDenoiseKnobs } from "./display/filter";
+import { applyDisplayFilterBrowser, applyDisplayFilterCPU, resolvePanelDenoiseKnobs } from "./filter";
 
 describe("per-panel denoise knobs", () => {
   it("returns the selected panel's independent mode, sigma, and bin", () => {
@@ -114,7 +114,7 @@ print(json.dumps({
       maxBuffer: 128 * 1024 * 1024,
       env: {
         ...process.env,
-        PYTHONPATH: [path.resolve(__dirname, "..", "src"), process.env.PYTHONPATH || ""].join(path.delimiter),
+        PYTHONPATH: [path.resolve(__dirname, "..", "..", "src"), process.env.PYTHONPATH || ""].join(path.delimiter),
       },
     }));
   } catch {

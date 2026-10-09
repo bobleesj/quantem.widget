@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import canonicalPoints from "../src/quantem/widget/colormaps.json";
+import canonicalPoints from "../../src/quantem/widget/colormaps.json";
 import {
   COLORMAP_NAMES,
   COLORMAP_POINTS,
   COLORMAPS,
   applyColormap,
-} from "./display/colormaps";
+} from "./colormaps";
 import {
   applyHannWindow2D,
   computeMagnitude,
@@ -15,14 +15,14 @@ import {
   findFFTPeak,
   reciprocalCoordinatesFromShiftedOffset,
   shiftedMagnitude,
-} from "./display/fft";
+} from "./fft";
 import {
   applyLogScale,
   computeStats,
   computeHistogramFromBytes,
   percentileClip,
   signedLog1p,
-} from "./display/stats";
+} from "./stats";
 
 describe("display math parity", () => {
   it("uses the exact colormap control points shared with Metal and Python", () => {
