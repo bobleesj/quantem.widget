@@ -178,8 +178,10 @@ evidence in the three visible sections above.
 <details>
 <summary><b>Export and saved state</b> — HTML export, widget state, sharing</summary>
 
-- [ ] The widget exposes `export_html(path=None, title=None, mode="single",
-  encoding="full", downsample=None)` when it can be exported. Follow the
+- [ ] The widget exposes `export_html(path=None, *, title=None, ...) -> pathlib.Path`
+  when it can be exported, with the options its data needs (Show2D, Show3D:
+  `mode`, `encoding`, `downsample`; Show4DSTEM: `dtype`, `det_bin`, `scan_bin`,
+  `export_kind`; Show3DSlices: `encoding`; ShowDiffraction: none). Follow the
   [HTML export protocol](https://github.com/electronmicroscopy/quantem.widget/blob/main/docs/api/html-export.md).
 - [ ] If the widget has an in-widget **Export** button, it uses the standard
   export traits and reports filename, mode, encoding/downsample choice, and
