@@ -111,14 +111,21 @@ def contrast_uint8(values: np.ndarray, vmin: float, vmax: float) -> np.ndarray:
 
     ``level = trunc(clip((v - vmin) / (vmax - vmin) * 255, 0, 255))``, the
     rule of the browser's ``applyColormap``; ``colorize(level / 255)`` reads
-    LUT entry ``level``. An empty window maps to level 0. Under log scale the
-    values and the window are both already in ``signed_log1p`` space. Every
-    static render (save_image, GIF frames, the saved-notebook preview) goes
-    through here so they pick the same LUT entry for the same pixel.
+    LUT entry ``level``. Under log scale the values and the window are both
+    already in ``signed_log1p`` space. Every static render (save_image, GIF
+    frames, the saved-notebook preview) goes through here so they pick the
+    same LUT entry for the same pixel.
+
+    The edge cases follow the browser's ``displayNormalize``: NaN and -inf
+    paint level 0 and +inf level 255; an empty window (``vmax <= vmin``, as for
+    a constant frame) paints every finite value at 0.5, level 127. Casting NaN
+    to uint8 would warn and give a platform-dependent level.
     """
     if vmax > vmin:
-        return np.clip((values - vmin) / (vmax - vmin) * 255, 0, 255).astype(np.uint8)
-    return np.zeros(values.shape, dtype=np.uint8)
+        levels = np.clip((values - vmin) / (vmax - vmin) * 255, 0, 255)
+    else:
+        levels = np.where(np.isfinite(values), 127.5, np.where(values > 0, 255.0, 0.0))
+    return np.nan_to_num(levels, nan=0.0).astype(np.uint8)
 
 
 def colormap_names() -> tuple[str, ...]:
