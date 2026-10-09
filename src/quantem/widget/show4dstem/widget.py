@@ -154,8 +154,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         Compute the four preset images up front so preset clicks are instant.
     ssb_voltage_kV, ssb_semiangle_mrad, ssb_scan_sampling_A, ssb_det_sampling_mrad
         Physical calibration for ``compute_ssb`` when the dataset lacks it.
-    view_mode, compare_cols, compare_grid_width_px, compare_max_panels,
-    compare_group_mode, compare_dp_mode
+    view_mode, compare_cols, compare_grid_width_px, compare_max_panels, compare_group_mode, compare_dp_mode
         Comparison grid layout for several datasets: ``"multiple"`` shows one
         virtual image per dataset, ``compare_max_panels`` per page, with the
         diffraction pattern of the ``"selected"`` dataset or the ``"average"``.

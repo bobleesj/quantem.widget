@@ -480,9 +480,12 @@ class Show2D(
     inset_plots, panel_annotations, overlays, panel_overlays : optional
         Per-panel inset curves, text annotations and shape overlays; see
         ``show2d.annotations`` for the dict schema.
-    inter_panel_gap_px, inter_panel_gap_color, gallery_outer_border_px,
-    gallery_outer_border_color, panel_inner_border_px, panel_inner_border_color : optional
-        Gallery chrome.
+    inter_panel_gap_px, inter_panel_gap_color : optional
+        Gallery chrome: the gap between panels.
+    gallery_outer_border_px, gallery_outer_border_color : optional
+        Gallery chrome: the frame around the whole gallery.
+    panel_inner_border_px, panel_inner_border_color : optional
+        Gallery chrome: each panel's own inner stroke.
     gallery_gap_px : int, optional
         Older name of ``inter_panel_gap_px``; pass one of the two.
     denoise : {"none", "gaussian", "anscombe"} or list of str, default "none"
