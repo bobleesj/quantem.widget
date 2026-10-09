@@ -1935,12 +1935,15 @@ class Show2D(
                 ax.set_title(label, fontsize=14, fontweight="bold", pad=8)
 
         if colorbar:
-            # The image holds 0-255 levels; ticks read back in data values.
+            # The image holds 0-255 levels; ticks read back in display values, which under
+            # log scale are signed log1p values marked "log", as the browser's colorbar shows them.
             colorbar_artist = fig.colorbar(image_artist, ax=ax, fraction=0.046, pad=0.04)
             tick_positions = np.linspace(0, 255, 5)
             tick_labels = [f"{display_min + (display_max - display_min) * tick / 255:.4g}" for tick in tick_positions]
             colorbar_artist.set_ticks(tick_positions)
             colorbar_artist.set_ticklabels(tick_labels)
+            if self.log_scale:
+                colorbar_artist.set_label("log")
 
         if scalebar and self.pixel_size > 0:
             # A nice physical length near 20% of the image width.

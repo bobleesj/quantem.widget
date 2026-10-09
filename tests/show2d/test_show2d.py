@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 import matplotlib.axes
+import matplotlib.colorbar
 import numpy as np
 import pytest
 from matplotlib import colormaps
@@ -15,6 +16,7 @@ from PIL import Image
 
 from quantem.widget import Show2D
 from quantem.widget.adapters.core import make_dataset
+from quantem.widget.colormap import display_window
 from quantem.widget.render.figure import format_scale_label
 
 
@@ -291,6 +293,33 @@ def test_save_image_scale_bar_labels_the_pixel_unit(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(matplotlib.axes.Axes, "text", record_text)
     Show2D(_frame(), sampling=0.2, units="nm", verbose=False).save_image(tmp_path / "nm.png", scalebar=True)
     assert drawn == ["2 nm"]  # 20% of 64 px x 0.2 nm = 2.56 nm -> nice 2 nm, never "2 Å"
+
+
+def test_save_image_log_colorbar_reads_log_values_marked_log(tmp_path: Path, monkeypatch):
+    # The browser's colorbar labels a log-scale window with its signed log1p ends and the word "log".
+    labels: dict[str, list[str]] = {"ticks": [], "label": []}
+    set_ticklabels = matplotlib.colorbar.Colorbar.set_ticklabels
+    set_label = matplotlib.colorbar.Colorbar.set_label
+
+    def record_ticklabels(self, ticklabels, *args, **kwargs):
+        labels["ticks"].extend(ticklabels)
+        return set_ticklabels(self, ticklabels, *args, **kwargs)
+
+    def record_label(self, label, *args, **kwargs):
+        labels["label"].append(label)
+        return set_label(self, label, *args, **kwargs)
+
+    monkeypatch.setattr(matplotlib.colorbar.Colorbar, "set_ticklabels", record_ticklabels)
+    monkeypatch.setattr(matplotlib.colorbar.Colorbar, "set_label", record_label)
+    frame = np.linspace(-100, 1000, 64 * 64, dtype=np.float32).reshape(64, 64)
+    Show2D(frame, log_scale=True, verbose=False).save_image(tmp_path / "log.png", colorbar=True)
+    low, high = display_window(-100, 1000, True)
+    assert labels["ticks"][0] == f"{low:.4g}" and labels["ticks"][-1] == f"{high:.4g}"
+    assert labels["label"][-1] == "log"
+    labels["ticks"].clear()
+    labels["label"].clear()
+    Show2D(frame, verbose=False).save_image(tmp_path / "linear.png", colorbar=True)
+    assert labels["ticks"][-1] == "1000" and "log" not in labels["label"]
 
 
 # --- static preview math (mirrors the browser) ------------------------------
