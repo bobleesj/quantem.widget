@@ -87,6 +87,16 @@ Show4DSTEM(data)
 | Image (`read_image`, `read_images`, `datasets.show2d_gold`) | quantem core `Dataset2d` | quantem core `Dataset2d` | stand-in |
 | Image stack (`read_image_stack`, `datasets.show3d_gold`) | quantem core `Dataset3d` | quantem core `Dataset3d` | stand-in |
 
+On a GPU, a 4D-STEM file is a `Dataset4dstemGPU`, not a torch tensor:
+
+- counts are unsigned (uint16, uint32), and torch cannot add, multiply or
+  take the max of those;
+- the file stays compressed in GPU memory (the 512 x 512 x 192 x 192 gold
+  scan: 5.6 GiB, against 18 GiB as dense uint16);
+- quantem.gpu's CUDA and Metal kernels decode and sum it exactly in one pass.
+
+Indexing and `read(scan_region=...)` still return torch tensors.
+
 The stand-in, used where quantem core cannot install, has the same `array`,
 `name`, `sampling`, `units`, `metadata`, `shape`, `ndim` and `dtype`. A color
 PNG, JPEG or TIFF reads as an `RgbImage` with `array`, `name`, `sampling` and

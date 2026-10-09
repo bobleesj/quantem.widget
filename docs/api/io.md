@@ -44,6 +44,16 @@ dataset. A color PNG, JPEG or TIFF reads as an `RgbImage` with `array`,
 accepts each of these, NumPy arrays and torch tensors on any device, and shows
 the same numbers for each.
 
+On a GPU, a 4D-STEM file is a `Dataset4dstemGPU`, not a torch tensor:
+
+- counts are unsigned (uint16, uint32), and torch cannot add, multiply or
+  take the max of those;
+- the file stays compressed in GPU memory (the 512 x 512 x 192 x 192 gold
+  scan: 5.6 GiB, against 18 GiB as dense uint16);
+- quantem.gpu's CUDA and Metal kernels decode and sum it exactly in one pass.
+
+Indexing and `read(scan_region=...)` still return torch tensors.
+
 Every 4D dataset has `shape`, `dtype`, `ndim`, `sampling`, `units` and
 `metadata`, and `Show4DSTEM` takes any of them, with `scan_region=` for part of
 the scan. A `Dataset4dstemGPU` reports an uncalibrated axis as `None` in
