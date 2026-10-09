@@ -4,8 +4,9 @@ The browser bundle's GPUColormapEngine knows the names in ``Colormap`` (keep
 in step with the js/display/luts.ts COLORMAPS table). Static renders (PNG
 fallback, save_image, GIF frames) map pixels to levels through
 ``contrast_uint8`` (after ``signed_log1p`` under log scale) and colorize through
-``colorize`` so a saved pixel matches what the live canvas paints for the same
-normalized value.
+``colorize`` so a saved pixel sits at the LUT position the live canvas paints
+for the same value. The colors come from matplotlib's tables, which differ from
+the browser's ``colormaps.json`` LUTs (see ``colorize``).
 
 ``colormaps.json`` holds the control points of the display LUTs that Plot2D
 draws (the table quantem.gpu's display kernels use); ``colormap_lut`` expands
@@ -57,10 +58,15 @@ def is_cmap_sequence(value: object) -> bool:
 def colorize(normalized: np.ndarray, cmap: str) -> np.ndarray:
     """Map display values in [0, 1] through a matplotlib colormap to uint8 RGB.
 
-    The lookup is ``cmap(normalized)[..., :3] * 255`` truncated to uint8, the
-    same table the browser samples, so a saved frame and the canvas agree
-    pixel for pixel. The input keeps its dtype: the LUT index is computed in
-    that precision and a float32 caller must not be promoted behind its back.
+    The lookup is ``cmap(normalized)[..., :3] * 255`` truncated to uint8. For a
+    256-entry colormap ``colorize(level / 255)`` reads entry ``level``, as the
+    browser does; twilight and twilight_shifted have 510 entries, so it reads
+    entry ``2 * level`` (509 at the top), the same position along the colormap.
+    The tables are matplotlib's, not the control-point LUTs of ``colormaps.json``
+    that the browser paints with, so a saved pixel has the canvas's LUT position
+    but its color can differ. The input keeps its dtype: the LUT index is
+    computed in that precision and a float32 caller must not be promoted
+    behind its back.
     """
     rgba = colormaps.get_cmap(cmap)(normalized)
     return (rgba[..., :3] * 255).astype(np.uint8)
@@ -111,7 +117,7 @@ def contrast_uint8(values: np.ndarray, vmin: float, vmax: float) -> np.ndarray:
 
     ``level = trunc(clip((v - vmin) / (vmax - vmin) * 255, 0, 255))``, the
     rule of the browser's ``applyColormap``; ``colorize(level / 255)`` reads
-    LUT entry ``level``. Under log scale the values and the window are both
+    the LUT position of entry ``level`` (see ``colorize``). Under log scale the values and the window are both
     already in ``signed_log1p`` space. Every static render (save_image, GIF
     frames, the saved-notebook preview) goes through here so they pick the
     same LUT entry for the same pixel.

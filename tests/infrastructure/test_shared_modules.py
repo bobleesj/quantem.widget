@@ -52,6 +52,16 @@ def test_colormap_names_and_lut():
     assert colorize(normalized, "viridis").shape == (1, 7, 3)
 
 
+def test_colorize_reads_the_level_position_of_256_and_510_entry_tables():
+    # twilight and twilight_shifted are 510-entry matplotlib tables: level k reads entry 2k (509 at
+    # the top), the same position along the colormap as entry k of a 256-entry table.
+    levels = np.arange(256)
+    for name, entries in (("inferno", levels), ("twilight", np.minimum(2 * levels, 509)), ("twilight_shifted", np.minimum(2 * levels, 509))):
+        colormap = colormaps.get_cmap(name)
+        table = (colormap(np.arange(colormap.N))[:, :3] * 255).astype(np.uint8)
+        np.testing.assert_array_equal(colorize(levels / 255.0, name), table[entries])
+
+
 def test_contrast_uint8_paints_nan_inf_and_an_empty_window_like_the_browser():
     # displayNormalize sends NaN and -inf to 0, +inf to 1 and every value of an empty window to 0.5;
     # applyColormap then reads entry trunc(n * 255). No platform-dependent NaN cast, no warning.
