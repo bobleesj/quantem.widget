@@ -10,7 +10,7 @@
 // is widget source only and builds without quantem.gpu.
 
 import { build, context } from "esbuild";
-import { rmSync, copyFileSync, mkdirSync, existsSync } from "fs";
+import { rmSync, mkdirSync } from "fs";
 import { syncGpuWebgpuSources } from "./sync-gpu-webgpu.mjs";
 
 const watch = process.argv.includes("--watch");
@@ -50,7 +50,6 @@ const baseOpts = {
   jsx: "automatic",
   target: "es2022",
   define: { "process.env.NODE_ENV": '"production"' },
-  loader: { ".css": "text" },
   minify: true,
   sourcemap: false,
   legalComments: "none",
@@ -71,14 +70,6 @@ for (const widget of selected) {
     const start = Date.now();
     await build(opts);
     console.log(`built ${widget.name}.js (${Date.now() - start}ms)`);
-  }
-  // Copy CSS sibling if present (anywidget _css trait reads from static/).
-  for (const cssName of [`${widget.name}.css`, "styles.css"]) {
-    const cssSrc = `js/${widget.name}/${cssName}`;
-    if (existsSync(cssSrc)) {
-      copyFileSync(cssSrc, `src/quantem/widget/static/${widget.name}.css`);
-      break;
-    }
   }
 }
 

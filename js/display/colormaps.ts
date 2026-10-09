@@ -531,8 +531,7 @@ fn unpack_rgb(rgb: u32) -> vec4f {
 }
 `;
 
-function directSlotGpuRangeShader(integerCounts = false): string {
-  return DISPLAY_NORMALIZE_WGSL + /* wgsl */ `
+const DIRECT_SLOT_GPU_RANGE_SHADER = DISPLAY_NORMALIZE_WGSL + /* wgsl */ `
 struct Params {
   src_width: u32,
   src_height: u32,
@@ -554,12 +553,12 @@ struct Params {
 struct RangeOut { vmin: f32, vmax: f32, _p0: f32, _p1: f32 };
 
 @group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var<storage, read> data: array<${integerCounts ? "u32" : "f32"}>;
+@group(0) @binding(1) var<storage, read> data: array<f32>;
 @group(0) @binding(2) var<storage, read> lut: array<u32>;
 @group(0) @binding(3) var<storage, read> range_in: RangeOut;
 
 fn display_value(index: u32) -> f32 {
-  return ${integerCounts ? "f32(data[index]) / range_in._p0" : "data[index]"};
+  return data[index];
 }
 struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 
@@ -632,7 +631,6 @@ fn unpack_rgb(rgb: u32) -> vec4f {
   return unpack_rgb(lut[lut_idx]);
 }
 `;
-}
 
 function shouldSmoothDirectSample(
   smooth: boolean | undefined,
@@ -1023,7 +1021,6 @@ export class GPUColormapEngine {
   private scaledUint8Pipeline: GPUComputePipeline | null = null;
   private directGridPipeline: GPURenderPipeline | null = null;
   private directSlotPipeline: GPURenderPipeline | null = null;
-  private directSlotGpuRangeU32Pipeline: GPURenderPipeline | null = null;
   private directSlotGpuRangePipeline: GPURenderPipeline | null = null;
   private packedPanelTransformPipeline: GPUComputePipeline | null = null;
   private blitPipeline: GPURenderPipeline | null = null;
@@ -1280,9 +1277,9 @@ export class GPUColormapEngine {
     });
   }
 
-  private ensureDirectSlotGpuRangePipeline(format: GPUTextureFormat, integerCounts = false): void {
-    if (integerCounts ? this.directSlotGpuRangeU32Pipeline : this.directSlotGpuRangePipeline) return;
-    const module = this.device.createShaderModule({ code: directSlotGpuRangeShader(integerCounts) });
+  private ensureDirectSlotGpuRangePipeline(format: GPUTextureFormat): void {
+    if (this.directSlotGpuRangePipeline) return;
+    const module = this.device.createShaderModule({ code: DIRECT_SLOT_GPU_RANGE_SHADER });
     const pipeline = this.device.createRenderPipeline({
       layout: "auto",
       vertex: { module, entryPoint: "vs" },
@@ -1293,8 +1290,7 @@ export class GPUColormapEngine {
       },
       primitive: { topology: "triangle-list" },
     });
-    if (integerCounts) this.directSlotGpuRangeU32Pipeline = pipeline;
-    else this.directSlotGpuRangePipeline = pipeline;
+    this.directSlotGpuRangePipeline = pipeline;
   }
 
   private ensurePackedPanelTransformPipeline(): void {
@@ -2471,103 +2467,6 @@ export class GPUColormapEngine {
       });
       if (rendered) this.device.queue.submit([encoder.finish()]);
       return rendered;
-    } finally {
-      flushParamsBufQueue(paramsStart);
-    }
-  }
-
-  /**
-   * Draw distinct resident images into one canvas, retaining per-image GPU ranges.
-   * Rectangles use canvas pixels. Pan uses source pixels, as in scientific views.
-   * Source buffers remain unchanged; only display uniforms and ranges are written.
-   * Optional count views are borrowed for this submission, keyed by slot index.
-   * Their float32 means feed the same range/log/interpolation operations as float
-   * slots. They never replace owned slot buffers and must outlive queued work.
-   */
-  renderSlotsDirectWithGpuRangeToCanvas(
-    indices: number[],
-    rectangles: { x: number; y: number; width: number; height: number }[],
-    ctx: GPUCanvasContext,
-    vminPct: number,
-    vmaxPct: number,
-    logScale: boolean,
-    opts: { width: number; height: number; bgRgb: number;
-      transform?: { zoom: number; panX: number; panY: number }; smooth?: boolean; counts?: ReadonlyMap<number, Uint32ImageView> },
-  ): number {
-    if (indices.length !== rectangles.length || new Set(indices).size !== indices.length) {
-      throw new Error("Supply one rectangle for each distinct resident slot.");
-    }
-    if (!Number.isInteger(opts.width) || !Number.isInteger(opts.height) || opts.width < 1 || opts.height < 1) {
-      throw new Error("Canvas dimensions must be positive integer pixels.");
-    }
-    for (const rect of rectangles) {
-      if (![rect.x, rect.y, rect.width, rect.height].every(Number.isInteger)
-        || rect.x < 0 || rect.y < 0 || rect.width < 1 || rect.height < 1
-        || rect.x + rect.width > opts.width || rect.y + rect.height > opts.height) {
-        throw new Error("Image rectangles must be positive integer pixel regions inside the canvas.");
-      }
-    }
-    if (opts.counts) {
-      if (opts.counts.size !== indices.length) throw new Error('Supply one count image for every shared display slot.');
-      for (const idx of indices) {
-        const slot = this.slots[idx], view = opts.counts.get(idx);
-        if (!slot || !view) throw new Error('Every count image requires an initialized display slot.');
-        validateUint32ImageView(view, this.device, slot.count);
-      }
-    }
-    if (!this.lutBuffer || !indices.length) return 0;
-    this.ensureRangeRegionPipeline(Boolean(opts.counts));
-    this.ensureDirectSlotGpuRangePipeline(navigator.gpu.getPreferredCanvasFormat(), Boolean(opts.counts));
-    const pipeline = opts.counts ? this.directSlotGpuRangeU32Pipeline : this.directSlotGpuRangePipeline;
-    if (!pipeline) return 0;
-    const encoder = this.device.createCommandEncoder();
-    const paramsStart = paramsBufQueue.length;
-    const draws: { rect: typeof rectangles[number]; group: GPUBindGroup }[] = [];
-    try {
-      indices.forEach((idx, i) => {
-        const slot = this.slots[idx], counts = opts.counts?.get(idx);
-        if (!slot || !this.recordComputeRangeRegion(encoder, idx, undefined, logScale, counts)) return;
-        const rect = rectangles[i];
-        const paramsU32 = this.directGridParamsU32;
-        const paramsF32 = this.directGridParamsF32;
-        paramsU32[0] = slot.width; paramsU32[1] = slot.height; paramsU32[2] = 0; paramsU32[3] = slot.width;
-        paramsU32[4] = rect.height; paramsU32[5] = rect.width;
-        paramsF32[6] = rect.x; paramsF32[7] = rect.y;
-        paramsU32[8] = logScale ? 1 : 0; paramsU32[9] = opts.bgRgb & 0xFFFFFF;
-        const zoom = Math.max(1e-6, opts.transform?.zoom ?? 1);
-        paramsF32[10] = zoom;
-        paramsU32[11] = shouldSmoothDirectSample(opts.smooth, zoom, slot.width, slot.height, rect.width, rect.height) ? 1 : 0;
-        paramsF32[12] = vminPct; paramsF32[13] = vmaxPct;
-        paramsF32[14] = (opts.transform?.panX ?? 0) * rect.width / slot.width;
-        paramsF32[15] = (opts.transform?.panY ?? 0) * rect.height / slot.height;
-        this.device.queue.writeBuffer(slot.paramsBuffer, 0, this.directGridParams);
-        draws.push({ rect, group: this.device.createBindGroup({
-          layout: pipeline.getBindGroupLayout(0),
-          entries: [
-            { binding: 0, resource: { buffer: slot.paramsBuffer } },
-            { binding: 1, resource: counts
-              ? { buffer: counts.buffer, offset: counts.byteOffset, size: counts.count * 4 }
-              : { buffer: slot.dataBuffer } },
-            { binding: 2, resource: { buffer: this.lutBuffer! } },
-            { binding: 3, resource: { buffer: this.ensureSlotRangeBuffer(slot) } },
-          ],
-        }) });
-      });
-      if (!draws.length) return 0;
-      const pass = encoder.beginRenderPass({ colorAttachments: [{
-        view: ctx.getCurrentTexture().createView(), loadOp: "clear", storeOp: "store",
-        clearValue: clearColorFromRgb(opts.bgRgb),
-      }] });
-      pass.setPipeline(pipeline);
-      for (const { rect, group } of draws) {
-        pass.setViewport(rect.x, rect.y, rect.width, rect.height, 0, 1);
-        pass.setScissorRect(rect.x, rect.y, rect.width, rect.height);
-        pass.setBindGroup(0, group);
-        pass.draw(3);
-      }
-      pass.end();
-      this.device.queue.submit([encoder.finish()]);
-      return draws.length;
     } finally {
       flushParamsBufQueue(paramsStart);
     }

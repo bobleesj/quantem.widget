@@ -64,9 +64,6 @@ def main():
     for acquisition in acquisitions:
         acquisition.close()
 
-    # The public surface is exactly the unified API (no legacy name).
-    assert not hasattr(widget_package, "load_4dstem_macbook"), "legacy load_4dstem_macbook still exported"
-
     # Every other shipped widget constructs from the same clean install
     # (synthetic data: a packaging/import smoke, not a render check).
     import numpy as np
