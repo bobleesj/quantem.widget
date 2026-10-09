@@ -309,13 +309,12 @@ def write_interactive_html(widget, path, *, dtype: str, det_bin: int, scan_bin: 
     out.parent.mkdir(parents=True, exist_ok=True)
     page_title = title or widget.title or "Show4DSTEM"
     if widget._qem_urls:
+        # The page has no kernel to export from, and its state must travel inside it.
         previous = (widget.export_enabled, widget._save_state)
-        widget.export_enabled = False
-        widget._save_state = True
-        try:
-            return write_widget_html(out, widget, page_title)
-        finally:
-            widget.export_enabled, widget._save_state = previous
+        widget.export_enabled, widget._save_state = False, True
+        write_widget_html(out, widget, page_title)
+        widget.export_enabled, widget._save_state = previous
+        return out
     if widget._h5_urls:
         if det_bin != 1 or scan_bin != 1:
             raise ValueError(
@@ -707,7 +706,6 @@ def write_qem_bundle(paths, out_dir, *, title: str | None = None, frame_labels=N
         title=title or "",
         show_controls=True,
     )
-    try:
-        return write_webgpu_bundle(widget, root, port=port, title=title)
-    finally:
-        widget.close()
+    launcher = write_webgpu_bundle(widget, root, port=port, title=title)
+    widget.close()
+    return launcher
