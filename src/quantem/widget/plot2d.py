@@ -73,6 +73,11 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
     view_bounds = traitlets.List(traitlets.Float()).tag(sync=True)
     plot_height_px = traitlets.Int(350).tag(sync=True)
     max_width = traitlets.Int(600, min=260).tag(sync=True)
+    # The grid and values come from the data, so only the view is saved.
+    _STATE_KEYS = (
+        "title", "x_label", "y_label", "colorbar_label", "cmap", "vmin", "vmax",
+        "horizontal_line", "view_bounds", "plot_height_px", "max_width",
+    )
 
     data: np.ndarray | None = None
 
@@ -169,6 +174,22 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
         >>> plot.figure().savefig("correlation.svg")
         """
         return self._make_figure()
+
+    def state_dict(self) -> dict:
+        """JSON-safe view settings (no values or grid): what ``save`` writes and ``load_state_dict`` restores."""
+        return {key: list(getattr(self, key)) if key == "view_bounds" else getattr(self, key) for key in self._STATE_KEYS}
+
+    def load_state_dict(self, state: dict) -> None:
+        """Restore a ``state_dict`` onto this map; unknown keys are skipped.
+
+        Examples
+        --------
+        >>> plot.save("g3_view.json")
+        >>> other.load_state_dict(json.loads(Path("g3_view.json").read_text())["state"])
+        """
+        for key, value in state.items():
+            if key in self._STATE_KEYS:
+                setattr(self, key, value)
 
     def _static_png_b64(self, max_px: int = 512) -> str | None:
         """Render a bounded saved preview without modifying scientific data."""

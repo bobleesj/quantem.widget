@@ -1,6 +1,7 @@
 """Review a calibrated correlation map, change its window, and export it."""
 
 import base64
+import json
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -120,3 +121,25 @@ def test_lightweight_snapshot_preserves_live_values_and_current_preview():
         values[::-1].ravel(),
     )
     plot.close()
+
+
+def test_saved_view_loads_onto_a_new_map(tmp_path):
+    """Save the color window, labels and viewport, then restore them onto a fresh map of the same grid."""
+    values = np.arange(24, dtype=float).reshape(4, 6)
+    plot = Plot2D(values, x=np.arange(6), y=np.arange(4), title="G3", x_label="r02 (Å)")
+    plot.cmap = "magma"
+    plot.vmin, plot.vmax = 2.0, 20.0
+    plot.view_bounds = [1, 4, 0, 2]
+    plot.horizontal_line = 1.5
+    path = tmp_path / "plot2d_view.json"
+    plot.save(path)
+    envelope = json.loads(path.read_text())
+    assert envelope["widget_name"] == "Plot2D"
+    assert "data_bytes" not in envelope["state"]
+    restored = Plot2D(values, x=np.arange(6), y=np.arange(4))
+    restored.load_state_dict(envelope["state"])
+    assert restored.state_dict() == plot.state_dict()
+    axes = restored.figure().axes[0]
+    assert axes.collections[0].cmap.name == "magma"
+    assert axes.collections[0].get_clim() == (2.0, 20.0)
+    np.testing.assert_array_equal(axes.get_xlim(), [1, 4])
