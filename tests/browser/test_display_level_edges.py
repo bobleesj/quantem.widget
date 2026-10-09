@@ -3,7 +3,7 @@
 A value exactly on a level edge lands in the neighbouring level when the GPU's
 float32 division is one ULP off (WGSL allows 2.5 ULP; Apple Metal uses it).
 The shader's display_normalize therefore divides through an integer long
-division. This test compiles the shader source of ``js/display/colormaps.ts``
+division. This test compiles the shader source of ``js/display/displayShaders.ts``
 on the real adapter, normalizes every level edge of several windows (and one
 float32 step either side), and requires the float32 bits to equal NumPy's
 correctly rounded ``(value - low) / (high - low)``, the CPU path's arithmetic
@@ -21,7 +21,7 @@ import pytest
 
 pytestmark = pytest.mark.browser
 
-COLORMAPS = Path(__file__).resolve().parents[2] / "js" / "display" / "colormaps.ts"
+SHADERS = Path(__file__).resolve().parents[2] / "js" / "display" / "displayShaders.ts"
 WINDOWS = [(0, 6), (0, 1), (-1, 1), (0, 255), (3, 7), (1e-3, 2e-3), (-5000, 65535), (0.1, 0.7),
            (-3e38, 3e38), (-3.4e38, 2e38), (-1e38, 3.3e38)]
 PAGE = """<!doctype html><meta charset="utf-8"><script>
@@ -61,7 +61,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
 def shader_source() -> str:
     """ROUNDED_QUOTIENT_WGSL and DISPLAY_NORMALIZE_WGSL as the widget concatenates them."""
-    source = COLORMAPS.read_text()
+    source = SHADERS.read_text()
     templates = [re.search(rf"const {name} = [^`]*`([^`]*)`", source).group(1)
                  for name in ("ROUNDED_QUOTIENT_WGSL", "DISPLAY_NORMALIZE_WGSL")]
     return "".join(templates)

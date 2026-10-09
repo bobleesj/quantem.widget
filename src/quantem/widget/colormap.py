@@ -1,7 +1,7 @@
 """Colormap names and the one Python LUT application shared by every widget.
 
 The browser bundle's GPUColormapEngine knows the names in ``Colormap`` (keep
-in step with the js/display/colormaps.ts COLORMAPS table). Static renders (PNG
+in step with the js/display/luts.ts COLORMAPS table). Static renders (PNG
 fallback, save_image, GIF frames) map pixels to levels through
 ``contrast_uint8`` (after ``signed_log1p`` under log scale) and colorize through
 ``colorize`` so a saved pixel matches what the live canvas paints for the same
