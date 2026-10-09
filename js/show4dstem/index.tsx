@@ -45,6 +45,7 @@ import {
   show4DSTEMHasLocalFiles,
 } from "../.generated/engine/io/hdf5/webgpu/local-h5";
 import { AllDiffractionGrid } from "./AllDiffractionGrid";
+import { collectDroppedH5Files } from "./localDrop";
 import { latestRegion } from "./latestRegion";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
 import { findDataRange, sliderRange, computeStats, percentileClip } from "../display/stats";
@@ -2651,13 +2652,34 @@ function Show4DSTEM() {
       return "";
     }
   }, []);
-  const onH5LocalInput = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files ? Array.from(event.target.files) : [];
-    if (!files.length) return;
+  // The picker, the file input and a dropped folder grant files the same way;
+  // the loader then resolves each master's data files by name.
+  const adoptLocalH5Files = React.useCallback((files: File[]) => {
+    if (!files.some(file => /\.(h5|hdf5)$/i.test(file.name))) {
+      setH5LocalSourceStatus("No HDF5 files found in that folder");
+      return;
+    }
     setShow4DSTEMLocalFiles(files);
     setH5LocalFilesGranted(true);
     setH5LocalSourceStatus(`${files.length} local HDF5 file${files.length === 1 ? "" : "s"} granted`);
   }, []);
+  const onH5LocalInput = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files ? Array.from(event.target.files) : [];
+    if (files.length) adoptLocalH5Files(files);
+  }, [adoptLocalH5Files]);
+  // Dropping the acquisition folder on the viewer grants it like the picker.
+  // Without preventDefault the browser would open the dropped file instead.
+  const onLocalH5DragOver = React.useCallback((event: React.DragEvent) => {
+    if (!offline || !h5SourceAvailable || !event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }, [h5SourceAvailable, offline]);
+  const onLocalH5Drop = React.useCallback((event: React.DragEvent) => {
+    if (!offline || !h5SourceAvailable) return;
+    event.preventDefault();
+    void collectDroppedH5Files(event.dataTransfer).then(adoptLocalH5Files)
+      .catch(error => setH5LocalSourceStatus(String(error)));
+  }, [adoptLocalH5Files, h5SourceAvailable, offline]);
   const grantH5LocalFiles = React.useCallback(async () => {
     setH5LocalSourceStatus("");
     const picker = (globalThis as Show4DSTEMWindow).showDirectoryPicker;
@@ -2668,9 +2690,7 @@ function Show4DSTEM() {
           handle as Parameters<typeof collectShow4DSTEMLocalH5Files>[0],
         );
         if (files.length) {
-          setShow4DSTEMLocalFiles(files);
-          setH5LocalFilesGranted(true);
-          setH5LocalSourceStatus(`${files.length} local HDF5 file${files.length === 1 ? "" : "s"} granted`);
+          adoptLocalH5Files(files);
           return;
         }
         setH5LocalSourceStatus("No HDF5 files found in that folder");
@@ -2680,7 +2700,7 @@ function Show4DSTEM() {
       }
     }
     h5LocalInputRef.current?.click();
-  }, []);
+  }, [adoptLocalH5Files]);
   React.useEffect(() => {
     if (!offline) {
       setWebgpuDpcReady(false);
@@ -7564,6 +7584,8 @@ function Show4DSTEM() {
       tabIndex={0}
       onKeyDown={handleKeyDown}
       onMouseDownCapture={handleRootMouseDownCapture}
+      onDragOver={onLocalH5DragOver}
+      onDrop={onLocalH5Drop}
       sx={{ p: 2, bgcolor: themeColors.bg, color: themeColors.text, outline: "none", borderRadius: "2px", width: "100%", maxWidth: "100%", boxSizing: "border-box", "@media (max-width: 700px)": { p: 0, overflowX: "hidden", ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
     >
       <FolderWatchBadge
