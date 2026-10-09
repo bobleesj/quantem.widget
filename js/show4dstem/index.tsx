@@ -3818,6 +3818,9 @@ function Show4DSTEM() {
             const rangesReady = batchFrames.every((frame) => compareGpuRangesRef.current.has(frame));
             if (!interactiveDrag || !rangesReady) {
               const ranges = await engine.computeRangeBatch(batchSlots);
+              // A newer pass has adopted its own buffers and retired these;
+              // recording them as the delta base would write destroyed buffers.
+              if (disposed || generation !== compareViGen) return false;
               ranges.forEach((range, index) => {
                 const frame = batchFrames[index];
                 if (frame !== undefined) compareGpuRangesRef.current.set(frame, range);
