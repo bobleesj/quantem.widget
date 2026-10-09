@@ -7,11 +7,15 @@ type DetectorResizeGeometry = {
   height?: number;
 };
 
-/** What a press on a detector ROI grabs: the move zone, a resize band (and which axes it resizes), or nothing. */
+/** What a press on a detector ROI grabs: the move zone, a resize band (and which axes it resizes), a ring's inner handle, or nothing. */
 export type DetectorGrab =
   | { action: "move" }
   | { action: "resize"; rows: boolean; cols: boolean }
+  | { action: "resizeInner" }
   | { action: "outside" };
+
+/** cos(45 deg): circle and ring resize handles are drawn on the edge at 45 degrees. */
+export const CIRCLE_HANDLE_ANGLE = 0.707;
 
 /** The pointer and the ROI geometry at the press that starts a resize. */
 export type DetectorResizeStart = {
@@ -59,6 +63,12 @@ export function clampDetectorCenter(
  * within `hitMargin` of an edge resizes along that edge's axis (both at a
  * corner), anywhere else inside moves. `hitMargin` is the pointer's hit area in
  * detector pixels.
+ *
+ * A ring's inner handle (drawn at 45 degrees on the inner edge) resizes the
+ * hole when pressed within `hitMargin`. Near the center of a rect or ring a
+ * press always moves the ROI, out to the smaller of `hitMargin` and 0.45 of
+ * the distance to the nearest edge: on a detector only a few pixels wide the
+ * hit margins otherwise cover its center and the ROI can only be resized.
  */
 export function grabDetector({
   mode,
@@ -85,13 +95,19 @@ export function grabDetector({
 }): DetectorGrab {
   const rowOffset = Math.abs(pointerRow - centerRow);
   const colOffset = Math.abs(pointerCol - centerCol);
+  const centerGrab = (nearestEdge: number) => Math.hypot(rowOffset, colOffset) <= Math.min(hitMargin, 0.45 * nearestEdge);
   if (mode === "rect") {
+    if (centerGrab(Math.min(width, height) / 2)) return { action: "move" };
     const cols = Math.abs(colOffset - width / 2) <= hitMargin && rowOffset <= height / 2 + hitMargin;
     const rows = Math.abs(rowOffset - height / 2) <= hitMargin && colOffset <= width / 2 + hitMargin;
     if (rows || cols) return { action: "resize", rows, cols };
     return colOffset <= width / 2 && rowOffset <= height / 2 ? { action: "move" } : { action: "outside" };
   }
   if ((mode !== "circle" && mode !== "annular" && mode !== "square") || !(radius > 0)) return { action: "outside" };
+  if (mode === "annular" && radiusInner > 0 && !centerGrab(radiusInner)) {
+    const handleOffset = radiusInner * CIRCLE_HANDLE_ANGLE;
+    if (Math.hypot(pointerRow - centerRow - handleOffset, pointerCol - centerCol - handleOffset) < hitMargin) return { action: "resizeInner" };
+  }
   const distance = mode === "square" ? Math.max(rowOffset, colOffset) : Math.hypot(rowOffset, colOffset);
   const moveRadius = Math.max(radius / 2, mode === "annular" ? radiusInner : 0);
   if (distance < moveRadius) return { action: "move" };

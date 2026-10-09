@@ -59,6 +59,7 @@ import { HTML_EXPORT_OVERHEAD_BYTES, exportTitleSlug, formatSavedBytes, isAbortL
 import { pointToSegmentDistance } from "../shared/geometry";
 import { Histogram } from "../shared/Histogram";
 import {
+  CIRCLE_HANDLE_ANGLE,
   canvasToMask,
   clampDetectorCenter,
   grabDetector,
@@ -413,7 +414,6 @@ function viSourceDisplayColor(source: string, themeName: string): string | null 
 
 // Interaction constants
 const RESIZE_HIT_AREA_PX = 10;
-const CIRCLE_HANDLE_ANGLE = 0.707;  // cos(45°)
 // Compact button style for Reset/Export
 const compactButton = {
   fontSize: 10,
@@ -6211,8 +6211,10 @@ function Show4DSTEM() {
   const activeRoiCenterRow = Number.isFinite(localKRow) ? localKRow : roiCenterRow;
 
   // What a press grabs on the detector ROI: the inner half moves it, the outer
-  // half and a hit margin past the edge resize it (grabDetector). The drawn
-  // handle is a 6 px dot, too small to catch by hand on a binned detector.
+  // half and a hit margin past the edge resize it, a ring's inner handle
+  // resizes its hole, and the center of a small ROI still moves it
+  // (grabDetector). The drawn handle is a 6 px dot, too small to catch by hand
+  // on a binned detector.
   const grabDpRoi = (col: number, row: number): DetectorGrab => grabDetector({
     mode: roiMode as DetectorRoiMode,
     centerRow: activeRoiCenterRow,
@@ -6228,16 +6230,8 @@ function Show4DSTEM() {
   const isNearResizeHandle = (col: number, row: number): boolean =>
     roiVirtualDetectorActive && grabDpRoi(col, row).action === "resize";
 
-  // Helper: check if point is near the inner resize handle (annular mode only)
-  const isNearResizeHandleInner = (col: number, row: number): boolean => {
-    if (!roiVirtualDetectorActive) return false;
-    if (roiMode !== "annular" || !roiRadiusInner) return false;
-    const offset = roiRadiusInner * CIRCLE_HANDLE_ANGLE;
-    const handleCol = activeRoiCenterCol + offset;
-    const handleRow = activeRoiCenterRow + offset;
-    const distance = Math.sqrt((col - handleCol) ** 2 + (row - handleRow) ** 2);
-    return distance < dpHitRadius;
-  };
+  const isNearResizeHandleInner = (col: number, row: number): boolean =>
+    roiVirtualDetectorActive && grabDpRoi(col, row).action === "resizeInner";
 
   // What a press grabs on the scan ROI, with the detector's rules (grabDetector): the
   // inner half moves it, the outer half and a hit margin past the edge resize it.
@@ -6370,8 +6364,8 @@ function Show4DSTEM() {
 
     beginDpRoiInteraction();
 
-    // Inner handle first, then the outer resize band. A resize remembers the
-    // press so the edge follows the pointer from where it was grabbed.
+    // A resize remembers the press so the edge follows the pointer from where
+    // it was grabbed.
     const pressed = {
       pointerRow: maskRow,
       pointerCol: maskCol,
@@ -6380,12 +6374,12 @@ function Show4DSTEM() {
       width: Number(roiWidth) || 0,
       height: Number(roiHeight) || 0,
     };
-    if (isNearResizeHandleInner(maskCol, maskRow)) {
+    const grab = grabDpRoi(maskCol, maskRow);
+    if (grab.action === "resizeInner") {
       resizeStartRef.current = { ...pressed, rows: true, cols: true };
       setIsDraggingResizeInner(true);
       return;
     }
-    const grab = grabDpRoi(maskCol, maskRow);
     if (grab.action === "resize") {
       event.preventDefault();
       resizeStartRef.current = { ...pressed, rows: grab.rows, cols: grab.cols };

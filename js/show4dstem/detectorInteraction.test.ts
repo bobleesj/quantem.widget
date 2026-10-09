@@ -96,6 +96,27 @@ describe("Show4DSTEM detector interaction geometry", () => {
     expect(grabDetector({ ...rect, pointerRow: 10, pointerCol: 16 })).toEqual({ action: "outside" });
   });
 
+  it("moves a detector a few pixels wide from its center although the edge margins cover it", () => {
+    // a 4 x 4 px rect on a zoomed-out 192 px detector: the 10 CSS px hit area is 3 detector px
+    const rect = { mode: "rect" as const, centerRow: 96, centerCol: 96, radius: 0, radiusInner: 0, width: 4, height: 4, hitMargin: 3 };
+    expect(grabDetector({ ...rect, pointerRow: 96, pointerCol: 96 })).toEqual({ action: "move" });
+    expect(grabDetector({ ...rect, pointerRow: 96.5, pointerCol: 95.6 })).toEqual({ action: "move" });
+    expect(grabDetector({ ...rect, pointerRow: 96, pointerCol: 98 })).toEqual({ action: "resize", rows: true, cols: true });
+    // a ring with a 2 px hole: the inner handle sits 2 px from the center, inside the hit area
+    const ring = { mode: "annular" as const, centerRow: 96, centerCol: 96, radius: 6, radiusInner: 2, width: 0, height: 0, hitMargin: 3 };
+    expect(grabDetector({ ...ring, pointerRow: 96, pointerCol: 96 })).toEqual({ action: "move" });
+    expect(grabDetector({ ...ring, pointerRow: 96 + 2 * 0.707, pointerCol: 96 + 2 * 0.707 })).toEqual({ action: "resizeInner" });
+    expect(grabDetector({ ...ring, pointerRow: 96, pointerCol: 102 })).toEqual({ action: "resize", rows: true, cols: true });
+  });
+
+  it("resizes a wide ring's hole from the inner handle only", () => {
+    const ring = { mode: "annular" as const, centerRow: 11.5, centerCol: 11.36, radius: 12.16, radiusInner: 6.08, width: 0, height: 0, hitMargin: 0.5 };
+    const handle = 6.08 * 0.707;
+    expect(grabDetector({ ...ring, pointerRow: 11.5 + handle, pointerCol: 11.36 + handle + 0.3 })).toEqual({ action: "resizeInner" });
+    expect(grabDetector({ ...ring, pointerRow: 11.5 - 4, pointerCol: 11.36 - 4 })).toEqual({ action: "move" });
+    expect(grabDetector({ ...ring, pointerRow: 11.5, pointerCol: 11.36 })).toEqual({ action: "move" });
+  });
+
   it("changes the size by how far the pointer moved, so a grab inside the band never jumps", () => {
     const center = { centerRow: 10, centerCol: 10 };
     const start = { pointerRow: 10, pointerCol: 14, radius: 8, radiusInner: 3, width: 8, height: 4, rows: true, cols: true };
