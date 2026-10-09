@@ -35,7 +35,7 @@ import {
   buildScanMask,
   DetectorCompute,
 } from "../.generated/engine/detector/webgpu/backend";
-import { isRansBatch } from "../.generated/engine/detector/webgpu/rans";
+import { isRansBatch, type RansDetectorCompute } from "../.generated/engine/detector/webgpu/rans";
 import { RansResidentSeries } from "../.generated/engine/detector/webgpu/rans-series";
 import { qemHttpFiles, type QemByteFile } from "../.generated/engine/detector/webgpu/qem-source";
 import { getGPUDevice } from "../display/device";
@@ -50,6 +50,8 @@ import {
 } from "../.generated/engine/io/hdf5/webgpu/local-h5";
 import { AllDiffractionGrid } from "./AllDiffractionGrid";
 import { collectDroppedFiles, matchQemFiles } from "./localDrop";
+import { createResidentHoverReader } from "./residentHover";
+import type { Uint32ImageView } from "../display/borrowedImage";
 import { latestRegion } from "./latestRegion";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
 import { findDataRange, sliderRange, computeStats, percentileClip } from "../display/stats";
@@ -1225,6 +1227,9 @@ function restoreProfileBase(canvas: HTMLCanvasElement | null, base: ImageData | 
 
 interface CompareVirtualGridProps {
   kind?: "virtual" | "diffraction";
+  // The exact uint32 counts of a GPU-resident panel, for its hover readout;
+  // null while the panel's image is being recomputed.
+  residentCountView?: (frame: number) => { view: Uint32ImageView; isCurrent: () => boolean } | null;
   scanRegion?: {mode: string; row: number; col: number; radius: number; width: number; height: number};
   bytes: DataView | null | undefined;
   count: number;
@@ -1319,6 +1324,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   onPendingMoveFrameChange,
   onPositionChange,
   onGpuRendererReady,
+  residentCountView,
 }: CompareVirtualGridProps) {
   const positionRafRef = React.useRef(0);
   const panDragRef = React.useRef<{clientX:number; clientY:number; panX:number; panY:number} | null>(null);
@@ -1812,6 +1818,39 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     return () => { if (raf) cancelAnimationFrame(raf); batchModel.off("change:pos_row", changed); batchModel.off("change:pos_col", changed); };
   }, [batchModel, kind, comparePanX, comparePanY, compareZoom, cursorCol, cursorRow, isDraggingPosition, overlayVersion, pixelSize, pixelUnit, renderEntries, shapeCols, shapeRows, showScaleBar, scanRegion]);
 
+  // Hover readout: the value under the pointer, read from the panel's bytes or,
+  // for a GPU-only panel, four bytes of its resident counts.
+  const readoutRefs = React.useRef<(HTMLSpanElement | null)[]>([]);
+  const hoverReaderRef = React.useRef<ReturnType<typeof createResidentHoverReader> | null>(null);
+  React.useEffect(() => {
+    hoverReaderRef.current = createResidentHoverReader();
+    return () => { hoverReaderRef.current?.dispose(); hoverReaderRef.current = null; };
+  }, []);
+  React.useEffect(() => {
+    hoverReaderRef.current?.clear();
+    readoutRefs.current.forEach(node => { if (node) node.style.opacity = "0"; });
+  }, [gpuVersion, bytes]);
+  const updateReadout = React.useCallback((localIdx: number, frame: number, gpuLoaded: boolean, tile: HTMLDivElement, clientX: number, clientY: number) => {
+    const node = readoutRefs.current[localIdx];
+    const rect = tile.getBoundingClientRect();
+    if (!node || rect.width <= 0 || rect.height <= 0) return;
+    const col = Math.round(canvasToMask(((clientX - rect.left) / rect.width) * shapeCols, compareZoom, comparePanX));
+    const row = Math.round(canvasToMask(((clientY - rect.top) / rect.height) * shapeRows, compareZoom, comparePanY));
+    hoverReaderRef.current?.clear();
+    node.style.opacity = "0";
+    if (row < 0 || row >= shapeRows || col < 0 || col >= shapeCols) return;
+    const show = (text: string) => { node.textContent = `(${row}, ${col}) ${text}`; node.style.opacity = "1"; };
+    // A GPU tile is drawn over the bytes, which may be from another source.
+    const panel = panelByFrame.get(frame);
+    const resident = gpuLoaded ? residentCountView?.(frame) : null;
+    if (resident) hoverReaderRef.current?.request(resident.view, row * shapeCols + col, resident.isCurrent, count => show(String(count)));
+    else if (!gpuLoaded && panel) show(formatNumber(panel[row * shapeCols + col]));
+  }, [comparePanX, comparePanY, compareZoom, panelByFrame, residentCountView, shapeCols, shapeRows]);
+  const hideReadout = React.useCallback((localIdx: number) => {
+    hoverReaderRef.current?.clear();
+    const node = readoutRefs.current[localIdx];
+    if (node) node.style.opacity = "0";
+  }, []);
   const panelTiles = React.useMemo(() => renderEntries.map(({ frame, gpuLoaded }, localIdx) => {
           const active = frame === activeIdx;
           const label = labels && labels.length > frame ? labels[frame] : `Dataset ${frame + 1}`;
@@ -1848,6 +1887,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 onSelect(frame);
               }}
               onPointerMove={(event) => {
+                if (kind !== "diffraction") updateReadout(localIdx, frame, gpuLoaded, event.currentTarget, event.clientX, event.clientY);
                 const pan = panDragRef.current;
                 if (pan) {
                   event.preventDefault();
@@ -1864,6 +1904,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 event.preventDefault();
                 updatePositionFromPointer(event.currentTarget, event.clientX, event.clientY);
               }}
+              onPointerLeave={() => hideReadout(localIdx)}
               onPointerUp={(event) => {
                 if (panDragRef.current) {panDragRef.current=null;return;}
                 if (!isDraggingPositionRef.current) return;
@@ -1993,6 +2034,12 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 } : {}),
               }}
             >
+              <span
+                ref={node => { readoutRefs.current[localIdx] = node; }}
+                data-show4dstem-panel-readout={frame}
+                style={{ position: "absolute", left: 4, bottom: 4, zIndex: 5, pointerEvents: "none", opacity: 0,
+                  color: "white", background: "rgba(0,0,0,0.6)", fontSize: 11, padding: "1px 3px", fontVariantNumeric: "tabular-nums" }}
+              />
               <canvas
                 data-quantem-scientific-output={`show4dstem-compare-${frame}`}
                 ref={(node) => { canvasRefs.current[localIdx] = node; }}
@@ -2198,7 +2245,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         }), [
     renderEntries, activeIdx, labels, starred, draggingFrame,
     pendingMoveFrame, themeColors, reorderMode, handleCompareDoubleClick,
-    updatePositionFromPointer, onSelect, onPendingMoveFrameChange, onReorderFrame,
+    updatePositionFromPointer, updateReadout, hideReadout, onSelect, onPendingMoveFrameChange, onReorderFrame,
     displayIndices, onDragFrameChange, movePreviewFrame, shapeCols, shapeRows,
     imageLeft, imageTop, imageWidth, imageHeight, smooth, panelChromeVisible,
     onToggleStar, onHide, onResizeStart, mobileGridCols, gridCols, resizeGripSx, kind, compareZoom, comparePanX, comparePanY,
@@ -2600,6 +2647,8 @@ function Show4DSTEM() {
     dpRoiInteractiveRef.current = true;
   }, []);
   const compareGpuRenderNowRef = React.useRef<(() => number) | null>(null);
+  const residentCountViewRef = React.useRef<CompareVirtualGridProps["residentCountView"]>(undefined);
+  const residentCountView = React.useCallback((frame: number) => residentCountViewRef.current?.(frame) ?? null, []);
   const compareIncrementalRef = React.useRef<{
     mask: Uint32Array;
     buffers: Map<number, GPUBuffer>;
@@ -4093,6 +4142,17 @@ function Show4DSTEM() {
         void qemSeries.completion.catch(error => {
           if (!disposed) setOfflineBackendError(`Loading stopped: ${String(error)}. The loaded acquisitions stay available.`);
         });
+        // A panel's hover reads its acquisition's exact resident counts, which
+        // hold the panel's mask until the next compare pass starts.
+        residentCountViewRef.current = frame => {
+          const panel = volCache.get(frame) as unknown as RansDetectorCompute | undefined;
+          if (disposed || !panel || dpRoiInteractiveRef.current || normaliseViSource(model.get("vi_source")) !== "roi") return null;
+          const generation = compareViGen;
+          return {
+            view: panel.set.imageViewsU32([panel.tilt], 1)[0],
+            isCurrent: () => !disposed && generation === compareViGen && !dpRoiInteractiveRef.current,
+          };
+        };
       }
       // 5D multi-volume: the slider picks the active dataset; decode-on-scrub (LRU).
       let frameGen = 0;
@@ -4308,6 +4368,7 @@ function Show4DSTEM() {
     return () => {
       disposed = true;
       qemLoadAbort.abort();
+      residentCountViewRef.current = undefined;
       compareGpuHistogramGenRef.current++;
       compareHistogramPendingSettleRef.current = true;
       if (roiRadiusRafRef.current !== null) cancelAnimationFrame(roiRadiusRafRef.current);
@@ -8541,6 +8602,7 @@ function Show4DSTEM() {
           />}
           {compareMode ? (
             <CompareVirtualGrid
+              residentCountView={residentCountView}
               scanRegion={{mode:viRoiMode, row:localViRoiCenterRow, col:localViRoiCenterCol,
                 radius:viRoiRadius || 5, width:viRoiWidth || 10, height:viRoiHeight || 10}}
               bytes={displayedCompareVirtualImageBytes}
