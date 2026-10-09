@@ -1,4 +1,4 @@
-"""Shared viewer UI chrome presets."""
+"""Shared viewer UI chrome presets and constructor keyword checks."""
 
 from collections.abc import Mapping
 from typing import Literal
@@ -59,3 +59,19 @@ def resolve_ui_mode(
     )
     resolved.update({key: value for key, value in overrides.items() if value is not None})
     return resolved
+
+
+def reject_unknown_kwargs(widget_class: type, kwargs: Mapping[str, object]) -> None:
+    """Raise TypeError naming every keyword that is neither a parameter nor a trait of ``widget_class``.
+
+    Widgets pass leftover keywords to ``anywidget.AnyWidget.__init__`` so any
+    synced trait can be set at construction. traitlets only warns about a
+    keyword it does not know, so without this check a removed parameter
+    (``Show4DSTEM(..., compare_panel_gap_px=0)``) or a typo does nothing.
+    """
+    unknown = sorted(set(kwargs) - set(widget_class.class_trait_names()))
+    if len(unknown) == 1:
+        raise TypeError(f"{widget_class.__name__}() got an unexpected keyword argument {unknown[0]!r}")
+    if unknown:
+        names = ", ".join(repr(name) for name in unknown)
+        raise TypeError(f"{widget_class.__name__}() got unexpected keyword arguments {names}")

@@ -267,6 +267,17 @@ def test_scan_position_outside_the_scan_stops_at_its_edge():
         widget.close()
 
 
+def test_a_removed_keyword_raises_and_a_trait_keyword_still_sets():
+    # traitlets only warns about a keyword it does not know, so a removed one did nothing
+    with pytest.raises(TypeError, match="unexpected keyword argument 'compare_panel_gap_px'"):
+        Show4DSTEM(_counts(1), compare_panel_gap_px=0)
+    widget = Show4DSTEM(_counts(1), precompute_virtual_images=False, dp_scale_mode="linear")
+    try:
+        assert widget.dp_scale_mode == "linear"
+    finally:
+        widget.close()
+
+
 def test_mask_goldens_shared_with_the_browser_are_the_python_masks():
     # js/show4dstem/detectorInteraction.test.ts checks the drawn detector overlay against these pixels
     goldens = json.loads((Path(__file__).resolve().parents[2] / "js" / "show4dstem" / "maskGoldens.json").read_text())

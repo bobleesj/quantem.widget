@@ -34,6 +34,7 @@ from quantem.widget.state import StateFileMixin
 from quantem.widget.utils.array import to_numpy
 from quantem.widget.utils.display_filter import apply_display_filter
 from quantem.widget.utils.state_io import unwrap_state_payload
+from quantem.widget.utils.ui import reject_unknown_kwargs
 
 BF_RADIUS_FRACTION = 0.125
 # a significant peak this close to a reflection the calibrated phase predicts is recovered as a ring
@@ -274,6 +275,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         verbose: bool = True,
         **kwargs,
     ):
+        reject_unknown_kwargs(type(self), kwargs)
         super().__init__(**kwargs)
         self._remove_hot_pixels = remove_hot_pixels
         calibration_source = "manual"

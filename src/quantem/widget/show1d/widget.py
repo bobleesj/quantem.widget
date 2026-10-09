@@ -40,7 +40,7 @@ from quantem.widget.show1d.state import Show1DState
 from quantem.widget.state import SavedStateMixin
 from quantem.widget.utils.array import _b64_safe, to_numpy
 from quantem.widget.utils.state_io import unwrap_state_payload
-from quantem.widget.utils.ui import UiMode, resolve_ui_mode
+from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
 
 # Okabe-Ito palette: distinguishable for every common colour-vision deficiency
 _DEFAULT_COLORS = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#F0E442", "#999999"]
@@ -305,9 +305,7 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         save_state: bool = False,
         **kwargs,
     ) -> None:
-        unknown = sorted(set(kwargs) - set(self.class_trait_names()))
-        if unknown:
-            raise TypeError(f"Show1D() got unexpected keyword argument {unknown[0]!r}")
+        reject_unknown_kwargs(type(self), kwargs)
         overrides = {key: kwargs.pop(key, None) for key in _UI_DEFAULTS}
         overrides["show_review"] = show_review
         kwargs.update(resolve_ui_mode(ui_mode, defaults=_UI_DEFAULTS, overrides=overrides))

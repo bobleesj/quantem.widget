@@ -108,6 +108,13 @@ def numpy_radial_profile(frame, center, mask=None, angular_range=None, ellipse=N
 
 
 # --- Phases ---
+def test_an_unknown_keyword_raises_and_a_trait_keyword_still_sets():
+    # traitlets only warns about a keyword it does not know, so a typo did nothing
+    with pytest.raises(TypeError, match="unexpected keyword argument 'k_pixelsize'"):
+        ShowDiffraction(ring_pattern(), k_pixelsize=0.01, verbose=False)
+    assert ShowDiffraction(ring_pattern(), dp_scale_mode="linear", verbose=False).dp_scale_mode == "linear"
+
+
 def test_phase_geometry_matches_textbook_values():
     si = library_phase("Si")
     assert si.d_spacing((1, 1, 1)) == pytest.approx(5.4311 / np.sqrt(3), rel=1e-9)

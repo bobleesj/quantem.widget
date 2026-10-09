@@ -51,7 +51,7 @@ from quantem.widget.show4dstem.detector import PRESET_RADII, fit_disk, preset_ma
 from quantem.widget.show4dstem.preview import static_png_b64
 from quantem.widget.state import SavedStateMixin
 from quantem.widget.utils.state_io import unwrap_state_payload
-from quantem.widget.utils.ui import UiMode, resolve_ui_mode
+from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
 
 DEFAULT_BF_RATIO = 0.125  # bright-field radius as a fraction of the detector side before fitting
 MIN_LOG_VALUE = 1e-10  # keeps log scaling finite on an all-zero pattern
@@ -345,6 +345,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         **kwargs,
     ):
         """Validate the arguments, place the data on its compute device and set the traits (see the class docstring)."""
+        reject_unknown_kwargs(type(self), kwargs)
         # save_state=False keeps the packed 4D stack out of the notebook's saved
         # widget metadata; a static preview stands in for a cold reopen.
         self._save_state = bool(save_state)

@@ -52,7 +52,7 @@ from quantem.widget.show2d.fallback import Show2DStaticPng
 from quantem.widget.show2d.state import Show2DState
 from quantem.widget.utils.array import _b64_safe, _resize_image, bin2d, to_numpy
 from quantem.widget.utils.state_io import unwrap_state_payload
-from quantem.widget.utils.ui import UiMode, resolve_ui_mode
+from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
 
 _DEFAULT_FOLDER_PAGE_SIZE = 20
 _MAX_PANEL_PLAYBACK_FPS = 30.0
@@ -73,24 +73,6 @@ def _nonnegative_int(value: object, *, name: str) -> int:
     if result < 0:
         raise ValueError(f"{name} must be a nonnegative integer, got {value!r}")
     return result
-
-
-def _reject_unknown_kwargs(cls, kwargs: dict) -> None:
-    """Raise TypeError if kwargs contains any key that isn't a declared trait.
-
-    anywidget/traitlets silently accept unknown keys, which let stale notebooks
-    pass obsolete params like ``pixel_size_angstrom=0.5`` with no warning.  This
-    helper catches typos and renamed-trait references at construction time.
-    """
-    traits = set(cls.class_trait_names())
-    unknown = [key for key in kwargs if key not in traits]
-    if unknown:
-        first = sorted(unknown)[0]
-        raise TypeError(
-            f"{cls.__name__}() got unexpected keyword argument {first!r}. "
-            f"Check for typos or a renamed parameter (e.g. canvas_size → size, "
-            f"image_width_px → size, pixel_size_angstrom → pixel_size)."
-        )
 
 
 _BROWSER_DENOISE_MODES = ("none", "gaussian", "anscombe")
@@ -868,10 +850,7 @@ class Show2D(
         verbose: bool = True,
         **kwargs,
     ):
-        # Reject typos and stale kwargs (e.g. image_width_px, pixel_size_angstrom).
-        # anywidget/traitlets silently ignores unknown keys, which hid the
-        # pixel_size_angstrom bug in show2d_all_features.ipynb for months.
-        _reject_unknown_kwargs(type(self), kwargs)
+        reject_unknown_kwargs(type(self), kwargs)
         requested_panel_cmaps = (
             [cmap_to_name(item) for item in cmap]
             if is_cmap_sequence(cmap)
