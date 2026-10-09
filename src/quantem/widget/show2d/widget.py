@@ -26,7 +26,7 @@ from PIL import Image
 
 from quantem.widget.adapters import core as core_adapter
 from quantem.widget.folder_watch_status import FOLDER_WATCH_STATE_VALUES
-from quantem.widget.colormap import Colormap, cmap_to_name, contrast_uint8, display_window, is_cmap_sequence, signed_log1p
+from quantem.widget.colormap import Colormap, auto_window, cmap_to_name, contrast_uint8, display_window, is_cmap_sequence, signed_log1p
 from quantem.widget.export import HtmlExportMixin
 from quantem.widget.fallback import StaticFallbackMixin
 from quantem.widget.pages import PagesMixin
@@ -1900,7 +1900,7 @@ class Show2D(
             if self.vmin is not None and self.vmax is not None:
                 display_min, display_max = display_window(self.vmin, self.vmax, self.log_scale)
             elif self.auto_contrast:
-                display_min, display_max = (float(value) for value in np.percentile(display_frame, (2, 98)))
+                display_min, display_max = auto_window(frame, self.log_scale)
             else:
                 display_min, display_max = display_window(frame.min(), frame.max(), self.log_scale)
             # 8-bit levels: the colormap lookup and the PNG are both 256-level.

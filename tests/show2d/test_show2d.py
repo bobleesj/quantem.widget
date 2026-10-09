@@ -337,6 +337,20 @@ def test_save_image_and_preview_share_the_log_window_of_the_data_range(tmp_path:
     assert mismatched == []
 
 
+@pytest.mark.parametrize("log_scale", [False, True])
+def test_save_image_auto_contrast_of_sparse_data_is_not_flat(tmp_path: Path, log_scale):
+    # A few bright spots on an empty field put both 2/98% percentiles on 0; the preview then
+    # windows the full data range, and save_image must too instead of saving one flat level.
+    frame = np.zeros((64, 64), np.float32)
+    rows, cols = np.random.default_rng(3).integers(0, 64, (2, 12))
+    frame[rows, cols] = np.linspace(5, 900, 12, dtype=np.float32)
+    widget = Show2D(frame, cmap="gray", auto_contrast=True, log_scale=log_scale, verbose=False)
+    saved = np.asarray(Image.open(widget.save_image(tmp_path / "sparse.png")).convert("RGB"))
+    (vmin, vmax), = widget._resolve_panel_display_ranges([widget._data[0]])
+    np.testing.assert_array_equal(saved, widget._static_panel_rgb(widget._data[0], vmin, vmax, "gray"))
+    assert saved.max() == 255
+
+
 def test_display_ranges_follow_contrast_rules():
     dim, bright = np.linspace(0, 1, 64 * 64, dtype=np.float32).reshape(64, 64), None
     bright = dim * 100

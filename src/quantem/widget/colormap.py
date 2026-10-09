@@ -90,6 +90,22 @@ def display_window(low: float, high: float, log_scale: bool) -> tuple[float, flo
     return float(low), float(high)
 
 
+def auto_window(values: np.ndarray, log_scale: bool) -> tuple[float, float]:
+    """Show2D's Auto contrast: the 2-98% percentile window of the display values, or the data window when that collapses.
+
+    Sparse or clustered data (a few bright spots on an empty field) can put
+    both percentiles on one value, and that window paints a flat image. It
+    falls back to ``display_window`` of the data's own min/max. save_image and
+    the saved-notebook preview both take Auto through here.
+    """
+    display_values = signed_log1p(values) if log_scale else values
+    low, high = (float(value) for value in np.percentile(display_values, (2, 98)))
+    full_low, full_high = display_window(values.min(), values.max(), log_scale)
+    if high - low <= max(1e-12, abs(full_high - full_low) * 1e-6):
+        return full_low, full_high
+    return low, high
+
+
 def contrast_uint8(values: np.ndarray, vmin: float, vmax: float) -> np.ndarray:
     """Display values as the uint8 colormap levels the browser paints in the window ``[vmin, vmax]``.
 

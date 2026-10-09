@@ -19,7 +19,7 @@ import matplotlib.patches
 import matplotlib.patheffects
 import numpy as np
 
-from quantem.widget.colormap import colorize, contrast_uint8, display_window, signed_log1p
+from quantem.widget.colormap import auto_window, colorize, contrast_uint8, display_window, signed_log1p
 from quantem.widget.render.figure import format_scale_label, round_to_nice, static_overlay_font
 
 
@@ -113,14 +113,7 @@ class Show2DStaticPng:
                 if has_panel_range[i] or is_rgb[i]:
                     auto_ranges.append(base_ranges[i])
                     continue
-                processed = signed_log1p(frame) if self.log_scale else frame
-                low, high = (float(value) for value in np.percentile(processed, (2, 98)))
-                # Sparse/clustered data can collapse the 2-98% window to a
-                # point; fall back to full extrema like computeAutoRange does.
-                full_low, full_high = float(processed.min()), float(processed.max())
-                if high - low <= max(1e-12, abs(full_high - full_low) * 1e-6):
-                    low, high = full_low, full_high
-                auto_ranges.append((low, high))
+                auto_ranges.append(auto_window(frame, self.log_scale))
             if linked_shared:
                 shared_auto = (min(auto_ranges[i][0] for i in gray), max(auto_ranges[i][1] for i in gray))
         ranges: list[tuple[float, float]] = []
