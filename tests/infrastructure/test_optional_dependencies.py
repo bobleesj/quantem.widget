@@ -138,7 +138,7 @@ def test_every_widget_imports_and_constructs_without_quantem_or_quantem_gpu(tmp_
     script.write_text(BLOCKER + textwrap.dedent(WIDGETS), encoding="utf-8")
     result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=300,
                             env={"CUDA_VISIBLE_DEVICES": "", "PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
-                                 "MPLBACKEND": "Agg"})
+                                 "MPLBACKEND": "Agg", "TMPDIR": str(tmp_path)})
     assert result.returncode == 0, result.stdout + result.stderr
     assert "without quantem core or quantem.gpu" in result.stdout
 
