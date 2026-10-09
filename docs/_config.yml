@@ -30,33 +30,24 @@ sphinx:
     # Links such as show4dstem.md#live-scope-folders resolve to the heading,
     # the same anchor GitHub renders for the source file.
     myst_heading_anchors: 2
-    # napoleon parses the NumPy-style docstrings into proper Parameters / Returns
-    # field lists (autodoc2's raw render flattened them into a wall of text).
+    # napoleon parses the NumPy-style docstrings into Parameters / Returns field lists.
     napoleon_numpy_docstring: true
     napoleon_google_docstring: false
     napoleon_use_param: true
     napoleon_use_rtype: true
     autodoc_member_order: "bysource"
     autoclass_content: "both"
-    # autodoc imports the package; the CPU-only runner has no torch/cupy/numba, so
-    # mock the heavy + native deps. The pure-python deps (anywidget, traitlets,
-    # numpy, quantem core) are installed in the docs build step.
-
-    # quantem.data is optional (not on PyPI); only the hub extra uses it
+    # autodoc imports the package; CuPy is not on the runner, so it and the
+    # optional readers are mocked. torch, numpy and quantem core are installed
+    # in the docs build step.
     autodoc_mock_imports:
       - anywidget
-      - quantem.data
       - cupy
-      - cupyx
       - h5py
       - hdf5plugin
       - tifffile
       - ncempy
       - huggingface_hub
-      - Metal
-      - objc
-      - Foundation
-      - Quartz
     suppress_warnings:
       - "etoc.toctree"
     # No in-page Contents sidebar: the pages showcase wide interactive
