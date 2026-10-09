@@ -4,7 +4,10 @@
 // FFT, statistics, display geometry) are widget source under js/display and
 // are not synced. The science kernels share the widget's WebGPU device: the
 // generated device/webgpu.ts re-exports js/display/device.ts so detector
-// buffers borrowed by the colormap engine live on the same device.
+// buffers borrowed by the colormap engine live on the same device, and
+// js/display/borrowedImage.ts re-exports quantem.gpu's borrowed-image contract
+// (detector/webgpu/borrowed-image.ts), so every bundle that draws through
+// js/display needs this sync.
 //
 // gpu-ref.txt names the one quantem.gpu ref every CI, docs and release build
 // checks out. The sync writes MANIFEST.json beside the kernels (the ref and
@@ -75,11 +78,10 @@ print(json.dumps({
   if (result.status !== 0) {
     const detail = (result.stderr || result.stdout || "").trim().split("\n").pop();
     throw new Error(
-      "show4dstem and showptycho bundle WebGPU science kernels from quantem.gpu, " +
-      "and no quantem.gpu source was found. Set QUANTEM_GPU_SRC to the quantem.gpu " +
-      "src directory (QUANTEM_GPU_SRC=/path/to/quantem.gpu/src npm run build), or " +
-      "install quantem.gpu in the Python named by PYTHON. Build only the other " +
-      `bundles with: npm run build -- show2d show3d ... (${detail})`
+      "The widget bundles take quantem.gpu's borrowed-image contract and WebGPU science " +
+      "kernels, and no quantem.gpu source was found. Set QUANTEM_GPU_SRC to the quantem.gpu " +
+      "src directory (QUANTEM_GPU_SRC=/path/to/quantem.gpu/src npm run build) of a checkout " +
+      `at ${PINNED_GPU_REF} (gpu-ref.txt), or install quantem.gpu in the Python named by PYTHON. (${detail})`
     );
   }
 
@@ -88,11 +90,6 @@ print(json.dumps({
     "device/webgpu.ts":
       "// Generated: science kernels use the widget's one WebGPU device.\n" +
       'export * from "../../../display/device";\n',
-    // Resident sets lend count images to the colormap engine, so both sides
-    // must name the one borrowed-view contract the engine validates.
-    "display/webgpu/borrowed-image.ts":
-      "// Generated: science kernels lend count images in the widget's display contract.\n" +
-      'export * from "../../../../display/borrowedImage";\n',
   };
   // Recreate the tree so renamed or deleted quantem.gpu files cannot remain importable.
   rmSync(outputDir, { recursive: true, force: true });

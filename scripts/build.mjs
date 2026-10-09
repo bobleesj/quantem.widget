@@ -5,10 +5,10 @@
 //   npm run build                     all bundles
 //   npm run build -- show2d show3d    only the named bundles
 //
-// show4dstem and showptycho bundle WebGPU science kernels synced from
-// quantem.gpu (QUANTEM_GPU_SRC or an installed quantem.gpu; CI checks out the
-// ref in gpu-ref.txt). Every other bundle is widget source only and builds
-// without quantem.gpu.
+// Every build first syncs js/.generated/engine from quantem.gpu (QUANTEM_GPU_SRC
+// or an installed quantem.gpu; CI checks out the ref in gpu-ref.txt): show4dstem
+// and showptycho bundle its WebGPU science kernels, and every bundle that draws
+// through js/display validates borrowed count images with its contract.
 
 import { build, context } from "esbuild";
 import { copyFileSync, mkdirSync, rmSync } from "fs";
@@ -16,38 +16,34 @@ import { syncGpuWebgpuSources } from "./sync-gpu-webgpu.mjs";
 
 const watch = process.argv.includes("--watch");
 const widgets = [
-  { name: "plot2d" },
-  { name: "show1d" },
-  { name: "show2d" },
-  { name: "show3d" },
-  { name: "show3dslices" },
-  { name: "show4dstem", science: true },
-  { name: "showdiffraction" },
-  { name: "showptycho", science: true },
-  { name: "chooselattice" },
-  { name: "showcif" },
+  "plot2d",
+  "show1d",
+  "show2d",
+  "show3d",
+  "show3dslices",
+  "show4dstem",
+  "showdiffraction",
+  "showptycho",
+  "chooselattice",
+  "showcif",
 ];
 const requested = process.argv.slice(2).filter((arg) => !arg.startsWith("--"));
-const unknown = requested.filter((name) => !widgets.some((widget) => widget.name === name));
+const unknown = requested.filter((name) => !widgets.includes(name));
 if (unknown.length) throw new Error(`unknown bundle(s): ${unknown.join(", ")}`);
-const selected = requested.length ? widgets.filter((widget) => requested.includes(widget.name)) : widgets;
+const selected = requested.length ? widgets.filter((name) => requested.includes(name)) : widgets;
 
-let syncError = null;
-if (selected.some((widget) => widget.science)) {
-  try {
-    syncGpuWebgpuSources();
-  } catch (error) {
-    syncError = error;
-  }
+try {
+  syncGpuWebgpuSources();
+} catch (error) {
+  console.error(`\nNOT built: ${selected.join(", ")}\n${error.message}`);
+  process.exit(1);
 }
 
 // A full build replaces the whole static tree so retired bundles cannot linger.
 if (!requested.length) rmSync("src/quantem/widget/static", { recursive: true, force: true });
 mkdirSync("src/quantem/widget/static", { recursive: true });
-// The wheel names the quantem.gpu kernels its science bundles carry; quantem.widget.profile() prints it.
-if (selected.some((widget) => widget.science) && !syncError) {
-  copyFileSync("js/.generated/engine/MANIFEST.json", "src/quantem/widget/static/engine-manifest.json");
-}
+// The wheel names the quantem.gpu sources its bundles carry; quantem.widget.profile() prints it.
+copyFileSync("js/.generated/engine/MANIFEST.json", "src/quantem/widget/static/engine-manifest.json");
 
 const baseOpts = {
   bundle: true,
@@ -60,27 +56,21 @@ const baseOpts = {
   legalComments: "none",
 };
 
-for (const widget of selected) {
-  if (widget.science && syncError) continue;
+for (const name of selected) {
   const opts = {
     ...baseOpts,
-    entryPoints: [`js/${widget.name}/index.tsx`],
-    outfile: `src/quantem/widget/static/${widget.name}.js`,
+    entryPoints: [`js/${name}/index.tsx`],
+    outfile: `src/quantem/widget/static/${name}.js`,
   };
   if (watch) {
     const watcher = await context(opts);
     await watcher.watch();
-    console.log(`watching ${widget.name}...`);
+    console.log(`watching ${name}...`);
   } else {
     const start = Date.now();
     await build(opts);
-    console.log(`built ${widget.name}.js (${Date.now() - start}ms)`);
+    console.log(`built ${name}.js (${Date.now() - start}ms)`);
   }
 }
 
-if (syncError) {
-  const missing = selected.filter((widget) => widget.science).map((widget) => widget.name);
-  console.error(`\nNOT built: ${missing.join(", ")}\n${syncError.message}`);
-  process.exit(1);
-}
 if (!watch) console.log("done.");

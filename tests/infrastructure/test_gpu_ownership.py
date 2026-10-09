@@ -196,14 +196,18 @@ def test_widget_owns_display_kernels_and_syncs_only_science() -> None:
     assert 'targetDir = "js/.generated/engine"' in sync_script
     assert 'SCIENCE_DOMAINS = ["detector/", "dpc/", "formats/", "io/", "ssb/"]' in sync_script
     assert 'export * from "../../../display/device"' in sync_script
-    assert 'export * from "../../../../display/borrowedImage"' in sync_script
-    assert '{ name: "show4dstem", science: true }' in build_script
-    assert '{ name: "showptycho", science: true }' in build_script
+    assert "display/webgpu/borrowed-image" not in sync_script
+    # one borrowed-image contract: quantem.gpu's, which every bundle drawing through js/display needs
+    assert "\ntry {\n  syncGpuWebgpuSources();\n}" in build_script
+    assert (display / "borrowedImage.ts").read_text(encoding="utf-8").endswith(
+        'export { validateUint32ImageView, type Uint32ImageView } from "../.generated/engine/detector/webgpu/borrowed-image";\n'
+    )
     offenders = [
         path.relative_to(repo).as_posix()
         for path in (repo / "js").rglob("*.ts*")
         if ".generated" not in path.parts
         and path.parent.name not in ("show4dstem", "showptycho")
+        and path != display / "borrowedImage.ts"
         and ".generated/" in path.read_text(encoding="utf-8")
     ]
     assert offenders == []
@@ -250,7 +254,8 @@ def test_sync_writes_a_manifest_of_the_pinned_ref_and_every_file(tmp_path) -> No
     assert sorted(recorded) == sorted(on_disk)
     assert {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in on_disk.items()} == recorded
     assert all(name.startswith(("detector/", "dpc/", "formats/", "io/", "ssb/")) for name in manifest["files"])
-    assert sorted(manifest["generated"]) == ["device/webgpu.ts", "display/webgpu/borrowed-image.ts"]
+    assert sorted(manifest["generated"]) == ["device/webgpu.ts"]
+    assert "detector/webgpu/borrowed-image.ts" in manifest["files"]
     # one line names the source and the commit it synced from
     (line,) = result.stdout.strip().splitlines()
     assert line.startswith(f"synced {len(manifest['files'])} quantem.gpu science kernel files from ")

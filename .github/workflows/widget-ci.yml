@@ -60,9 +60,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --extra-index-url https://test.pypi.org/simple/ -e ".[test]"
 
-      # quantem.gpu is optional for the widget, but the show4dstem and showptycho
-      # bundles compile its WebGPU science kernels, so the build reads them from
-      # the ref in gpu-ref.txt (the same checkout widget-docs and widget-release use).
+      # quantem.gpu is optional for the widget at run time, but the bundles compile
+      # its WebGPU sources (science kernels, borrowed-image contract), so the build
+      # reads them from the ref in gpu-ref.txt (the same checkout widget-docs and
+      # widget-release use).
       - name: Read the pinned quantem.gpu ref
         id: gpu
         run: echo "ref=$(cat gpu-ref.txt)" >> "$GITHUB_OUTPUT"
