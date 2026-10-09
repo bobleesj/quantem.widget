@@ -1230,6 +1230,9 @@ interface CompareVirtualGridProps {
   // The exact uint32 counts of a GPU-resident panel, for its hover readout;
   // null while the panel's image is being recomputed.
   residentCountView?: (frame: number) => { view: Uint32ImageView; isCurrent: () => boolean } | null;
+  // While a series loads, every requested panel keeps its tile, so a ready
+  // image never moves under the pointer and the others show they are coming.
+  sourceLoading?: boolean;
   scanRegion?: {mode: string; row: number; col: number; radius: number; width: number; height: number};
   bytes: DataView | null | undefined;
   count: number;
@@ -1325,6 +1328,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   onPositionChange,
   onGpuRendererReady,
   residentCountView,
+  sourceLoading = false,
 }: CompareVirtualGridProps) {
   const positionRafRef = React.useRef(0);
   const panDragRef = React.useRef<{clientX:number; clientY:number; panX:number; panY:number} | null>(null);
@@ -1404,8 +1408,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         panel: panelByFrame.get(frame),
         gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine && gpuRanges?.has(frame)),
       }))
-      .filter((entry) => entry.panel !== undefined || entry.gpuLoaded);
-  }, [gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, renderIndices, scaleMode]);
+      .filter((entry) => sourceLoading || entry.panel !== undefined || entry.gpuLoaded);
+  }, [gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, renderIndices, scaleMode, sourceLoading]);
 
   const renderGpuSlotsNow = React.useCallback((): number => {
     if (!gpuEngine || !gpuSlots) return 0;
@@ -1851,7 +1855,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     const node = readoutRefs.current[localIdx];
     if (node) node.style.opacity = "0";
   }, []);
-  const panelTiles = React.useMemo(() => renderEntries.map(({ frame, gpuLoaded }, localIdx) => {
+  const panelTiles = React.useMemo(() => renderEntries.map(({ frame, panel, gpuLoaded }, localIdx) => {
+          const loaded = gpuLoaded || panel !== undefined;
           const active = frame === activeIdx;
           const label = labels && labels.length > frame ? labels[frame] : `Dataset ${frame + 1}`;
           const isStarred = (starred || []).includes(frame);
@@ -1875,7 +1880,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
               onDoubleClick={handleCompareDoubleClick}
               onPointerDown={(event) => {
                 const target = event.target instanceof Element ? event.target : null;
-                if (reorderMode || target?.closest("button")) return;
+                if (!loaded || reorderMode || target?.closest("button")) return;
                 try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
                 if (event.shiftKey) {
                   panDragRef.current={clientX:event.clientX,clientY:event.clientY,panX:comparePanX,panY:comparePanY};
@@ -2034,6 +2039,14 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 } : {}),
               }}
             >
+              {!loaded && (
+                <Box data-show4dstem-panel-loading="true" sx={{
+                  position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                  bgcolor: themeColors.bgAlt, color: themeColors.textMuted, fontFamily: SHOW4DSTEM_UI_FONT, fontSize: 11, pointerEvents: "none",
+                }}>
+                  Loading
+                </Box>
+              )}
               <span
                 ref={node => { readoutRefs.current[localIdx] = node; }}
                 data-show4dstem-panel-readout={frame}
@@ -2699,6 +2712,7 @@ function Show4DSTEM() {
   const qemSourceAvailable = qemUrls.length > 0;
   const qemNeedsLocalFiles = qemSourceAvailable && globalThis.location?.protocol === "file:";
   const [qemLocalFiles, setQemLocalFiles] = React.useState<File[] | null>(null);
+  const [qemSeriesLoading, setQemSeriesLoading] = React.useState(false);
   const [h5LocalFilesGranted, setH5LocalFilesGranted] = React.useState(show4DSTEMHasLocalFiles());
   const [h5LocalSourceStatus, setH5LocalSourceStatus] = React.useState("");
   const h5LocalInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -3146,7 +3160,10 @@ function Show4DSTEM() {
         const files: QemByteFile[] = qemLocalFiles ?? (await Promise.all(qemUrls.map(url =>
           qemHttpFiles(new URL(".", new URL(url, location.href)).href, [qemFileName(url)], qemLoadAbort.signal)))).flat();
         const totalGB = files.reduce((sum, file) => sum + file.size, 0) / 1e9;
-        if (!disposed) setOfflineBackendStatus(`Loading ${files.length} acquisitions, ${totalGB.toFixed(1)} GB`);
+        if (!disposed) {
+          setOfflineBackendStatus(`Loading ${files.length} acquisitions, ${totalGB.toFixed(1)} GB`);
+          setQemSeriesLoading(files.length > 1);
+        }
         let published = 0;
         const series = await RansResidentSeries.load(device, files, text => {
           if (!disposed) setOfflineBackendStatus(text && `Loading ${text}`);
@@ -3156,6 +3173,7 @@ function Show4DSTEM() {
           }
           published = loaded.loadedAcquisitions;
           latestResidentVolumeIndex = published - 1;
+          if (!disposed && published === loaded.acquisitionCount) setQemSeriesLoading(false);
           onQemPublished?.();
         }, qemLoadAbort.signal);
         if (disposed) { series.dispose(); return; }
@@ -4140,7 +4158,9 @@ function Show4DSTEM() {
           else void recomputeActiveView();
         };
         void qemSeries.completion.catch(error => {
-          if (!disposed) setOfflineBackendError(`Loading stopped: ${String(error)}. The loaded acquisitions stay available.`);
+          if (disposed) return;
+          setQemSeriesLoading(false);
+          setOfflineBackendError(`Loading stopped: ${String(error)}. The loaded acquisitions stay available.`);
         });
         // A panel's hover reads its acquisition's exact resident counts, which
         // hold the panel's mask until the next compare pass starts.
@@ -4369,6 +4389,7 @@ function Show4DSTEM() {
       disposed = true;
       qemLoadAbort.abort();
       residentCountViewRef.current = undefined;
+      setQemSeriesLoading(false);
       compareGpuHistogramGenRef.current++;
       compareHistogramPendingSettleRef.current = true;
       if (roiRadiusRafRef.current !== null) cancelAnimationFrame(roiRadiusRafRef.current);
@@ -8603,6 +8624,7 @@ function Show4DSTEM() {
           {compareMode ? (
             <CompareVirtualGrid
               residentCountView={residentCountView}
+              sourceLoading={qemSeriesLoading}
               scanRegion={{mode:viRoiMode, row:localViRoiCenterRow, col:localViRoiCenterCol,
                 radius:viRoiRadius || 5, width:viRoiWidth || 10, height:viRoiHeight || 10}}
               bytes={displayedCompareVirtualImageBytes}
