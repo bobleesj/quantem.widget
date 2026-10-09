@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { collectDroppedH5Files } from "./localDrop";
+import { collectDroppedFiles, matchQemFiles } from "./localDrop";
 
 /** A dropped file or folder as Chrome's webkitGetAsEntry exposes it; folders list children in batches. */
 function fileEntry(name: string) {
@@ -35,7 +35,7 @@ test("a dropped acquisition folder grants every HDF5 file in it, nested folders 
     fileEntry(`${tilt}.qh5idx`),
   ], 2);
   const drop = { items: [{ webkitGetAsEntry: () => folder }], files: [] } as unknown as DataTransfer;
-  expect(names(await collectDroppedH5Files(drop))).toEqual([
+  expect(names(await collectDroppedFiles(drop))).toEqual([
     `${tilt}_master.h5`,
     `${tilt}_data_000001.h5`,
     `${tilt}_data_000002.h5`,
@@ -44,7 +44,16 @@ test("a dropped acquisition folder grants every HDF5 file in it, nested folders 
 });
 
 test("files dropped without folder entries are filtered the same way", async () => {
-  const files = ["a_master.h5", "a_data_000001.H5", "._a_master.h5", "a.qem", "b.hdf5"].map(name => new File([name], name));
+  const files = ["a_master.h5", "a_data_000001.H5", "._a_master.h5", "notes.txt", "t0-counts.qem", "b.hdf5"].map(name => new File([name], name));
   const drop = { items: files.map(() => ({ webkitGetAsEntry: () => null })), files } as unknown as DataTransfer;
-  expect(names(await collectDroppedH5Files(drop))).toEqual(["a_master.h5", "a_data_000001.H5", "b.hdf5"]);
+  expect(names(await collectDroppedFiles(drop))).toEqual(["a_master.h5", "a_data_000001.H5", "t0-counts.qem", "b.hdf5"]);
+});
+
+test("a .qem viewer takes its granted files in export order and names any it lacks", () => {
+  const granted = ["t2-counts.qem", "t0-counts.qem", "notes.qem", "t1-counts.qem"].map(name => new File([name], name));
+  const expected = ["t0-counts.qem", "t1-counts.qem", "t2-counts.qem"];
+  const matched = matchQemFiles(expected, granted);
+  expect("files" in matched && names(matched.files)).toEqual(expected);
+  expect(matchQemFiles(expected, granted.slice(1))).toEqual({ missing: ["t2-counts.qem"] });
+  expect(matchQemFiles(expected, [...granted, new File(["copy"], "t1-counts.qem")])).toEqual({ missing: ["t1-counts.qem"] });
 });

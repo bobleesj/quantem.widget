@@ -539,6 +539,25 @@ def test_show4dstem_webgpu_cli_opens_generated_command(tmp_path, monkeypatch):
     assert seen["no_open"] is True
 
 
+def test_show4dstem_html_over_qem_files_writes_the_streaming_folder(tmp_path, monkeypatch):
+    """.qem files with --html become one WebGPU folder over all of them, with no master discovery."""
+    paths = [tmp_path / "tilt_a.qem", tmp_path / "tilt_b.qem"]
+    for path in paths:
+        path.write_bytes(b"\x00")
+    seen = {}
+
+    def fake_bundle(files, out_dir, *, title):
+        seen.update(files=files, out_dir=out_dir, title=title)
+        return out_dir / "Show4DSTEM.command"
+
+    monkeypatch.setattr("quantem.widget.show4dstem.export.write_qem_bundle", fake_bundle)
+    monkeypatch.setattr(cli, "_open_show4dstem_command", lambda command, *, no_open: seen.update(opened=command))
+    assert cli.main(["show4dstem", *map(str, paths), "--html", "--out", str(tmp_path / "out"), "--no-open"]) == 0
+    assert seen["files"] == paths
+    assert seen["out_dir"] == tmp_path / "out" / "2_datasets_show4dstem_webgpu" and seen["title"] == "2_datasets"
+    assert seen["opened"] == seen["out_dir"] / "Show4DSTEM.command"
+
+
 @pytest.mark.parametrize(
     ("count", "view_mode", "dp_mode"),
     [(1, "single", "average"), (2, "multiple", "selected"), (7, "multiple", "selected")],

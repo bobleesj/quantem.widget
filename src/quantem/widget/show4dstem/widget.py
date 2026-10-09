@@ -5,7 +5,8 @@ One class opens every input the tutorials use: a file path (read with
 in bounded windows), a quantem core ``Dataset4dstem``, a list of either (one
 virtual image per dataset under a shared detector) or ``from_folder``, a NumPy
 array or a Torch tensor (dense, on the tensor's device), or a folder of linked
-HDF5 masters read by the browser itself (``h5_urls``, the CLI WebGPU export).
+HDF5 masters or .qem acquisitions read by the browser itself (``h5_urls`` or
+``qem_urls``, the WebGPU folder exports).
 
 quantem.gpu and quantem core are reached only through
 ``quantem.widget.adapters``. A file becomes a ``Dataset4dstemGPU`` when
@@ -163,8 +164,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         Pack the counts for the browser so the widget works without a kernel
         (``None`` packs automatically under a 2 GB budget). A GPU acquisition
         is read into the pack in small scan windows.
-    h5_urls, scan_shape, detector_shape, backend
-        Browser WebGPU source over linked HDF5 masters, written by the CLI.
+    h5_urls, qem_urls, scan_shape, detector_shape, backend
+        Browser WebGPU source over linked HDF5 masters or .qem acquisitions,
+        written by the CLI and ``show4dstem.export.write_qem_bundle``.
     """
 
     _esm = pathlib.Path(__file__).parent.parent / "static" / "show4dstem.js"
@@ -202,6 +204,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     offline = traitlets.Bool(False).tag(sync=True)
     _offline_stack = traitlets.Bytes(b"").tag(sync=True)
     _h5_urls = traitlets.Unicode("").tag(sync=True)
+    _qem_urls = traitlets.Unicode("").tag(sync=True)
     _offline_bad_px = traitlets.Unicode("").tag(sync=True)
     ssb_compute_request = traitlets.Unicode("").tag(sync=True)
     ssb_compute_status = traitlets.Unicode("").tag(sync=True)
@@ -330,6 +333,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         offline: bool | None = False,
         offline_dtype: str = "uint8",
         h5_urls: Sequence[str] | None = None,
+        qem_urls: Sequence[str] | None = None,
         backend: str | None = None,
         show_fft: bool = False,
         panel_width_px: int = 0,
@@ -395,8 +399,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 raise ValueError(f"{name} must be >= 0, got {value}")
         if int(compare_max_panels) < 1:
             raise ValueError(f"compare_max_panels must be >= 1, got {compare_max_panels}")
-        if h5_urls and (scan_shape is None or detector_shape is None):
-            raise ValueError("Show4DSTEM(..., h5_urls=...) requires scan_shape=(rows, cols) and detector_shape=(rows, cols).")
+        if h5_urls and qem_urls:
+            raise ValueError("Pass h5_urls= or qem_urls=, not both: one viewer reads one kind of browser source.")
+        browser_urls = h5_urls or qem_urls
+        if browser_urls and (scan_shape is None or detector_shape is None):
+            raise ValueError("Show4DSTEM(..., h5_urls= or qem_urls=...) requires scan_shape=(rows, cols) and detector_shape=(rows, cols).")
 
         # Route the input to its storage: bounded views over GPU acquisitions,
         # a dense tensor on its device, or no data at all for a browser source.
@@ -413,8 +420,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         series = listed and any(gpu_adapter.is_acquisition(item) for item in data)
         bounded = gpu_adapter.is_acquisition(data) or series
         datasets = listed and all(core_adapter.is_dataset(item, ndim=4) for item in data)
-        if bounded and h5_urls:
-            raise ValueError("h5_urls= opens files in the browser; pass the acquisition without it, or the URLs alone.")
+        if bounded and browser_urls:
+            raise ValueError("h5_urls= and qem_urls= open files in the browser; pass the acquisition without them, or the URLs alone.")
         if bounded or datasets or core_adapter.is_dataset(data, ndim=4):
             # A dataset (or a list of them) carries its name and calibration.
             first = data[0] if listed else data
@@ -458,8 +465,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         view_mode = self._normalise_view_mode("single" if view_mode is None else view_mode)
         compare_dp_mode = self._normalise_compare_dp_mode("average" if compare_dp_mode is None else compare_dp_mode)
         compare_group_mode = self._normalise_compare_group_mode(compare_group_mode)
-        if h5_urls:
-            urls = list(dict.fromkeys(str(url) for url in h5_urls))
+        if browser_urls:
+            urls = list(dict.fromkeys(str(url) for url in browser_urls))
             data = None
             data_device = torch.device("cpu")
             shape = (len(urls), *scan_shape, *detector_shape) if len(urls) > 1 else (*scan_shape, *detector_shape)
@@ -556,8 +563,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.center_col = float(self.det_cols / 2) if center is None else float(center[1])
         self.bf_radius = min(self.det_rows, self.det_cols) * DEFAULT_BF_RATIO if bf_radius is None else float(bf_radius)
 
-        if h5_urls:
-            self._h5_urls = json.dumps(urls)
+        if browser_urls:
+            if h5_urls:
+                self._h5_urls = json.dumps(urls)
+            else:
+                self._qem_urls = json.dumps(urls)
             self.offline = True
             self.ssb_compute_enabled = False
             self.dp_global_min = MIN_LOG_VALUE
@@ -810,7 +820,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         in ``dataset_scope`` (``unhidden``, ``current_page``, ``starred`` or
         ``all``) with no raw 4D payload.
         """
-        if self._data is None and not self._h5_urls:
+        if self._data is None and not (self._h5_urls or self._qem_urls):
             raise ValueError("Cannot export HTML after free(); rebuild the widget first.")
         dtype, det_bin, scan_bin = html_export.export_options(self, dtype, det_bin, scan_bin)
         kind = html_export.export_kind(export_kind)

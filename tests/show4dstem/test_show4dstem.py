@@ -610,3 +610,29 @@ def test_webgpu_bundle_links_masters_and_writes_vendored_viewer(tmp_path):
     assert "__QT_REQUIRE_LOCAL_H5_FILES = true" in page
     assert "cdn.jsdelivr.net" not in page and (tmp_path / ".viewer" / "anywidget.min.js").exists()
     assert ".viewer/Show4DSTEM.html" in (tmp_path / "index.html").read_text()
+
+
+def test_qem_bundle_links_acquisitions_for_a_streaming_viewer(tmp_path):
+    """A .qem folder viewer: relative links beside the page, the files named in its state, no HDF5 tuning."""
+    reference = pytest.importorskip("quantem.gpu.formats.qem.reference")
+    from quantem.widget.show4dstem.export import write_qem_bundle
+
+    data = tmp_path / "data"
+    data.mkdir()
+    for name, seed in (("tilt_a.qem", 1), ("tilt_b.qem", 2)):
+        reference.save_array(data / name, _counts(seed, scan=(3, 4)))
+    launcher = write_qem_bundle([data / "tilt_a.qem", data / "tilt_b.qem"], tmp_path / "viewer",
+                                frame_labels=["-17 mrad", "+17 mrad"], port=8898)
+    viewer = tmp_path / "viewer"
+    assert launcher == viewer / "Show4DSTEM.command" and "8898" in launcher.read_text()
+    for name in ("tilt_a.qem", "tilt_b.qem"):
+        link = viewer / "qem" / name
+        assert link.is_symlink() and not Path(link.readlink()).is_absolute()
+        assert link.read_bytes() == (data / name).read_bytes()
+    page = (viewer / ".viewer" / "Show4DSTEM.html").read_text()
+    assert '\\"../qem/tilt_a.qem\\", \\"../qem/tilt_b.qem\\"' in page
+    assert "+17 mrad" in page and "__QT_H5_DECODE_DTYPE ??=" not in page
+    assert '\"compare_cols\": 2' in page
+    reference.save_array(data / "wide.qem", _counts(3, scan=(3, 5)))
+    with pytest.raises(ValueError, match="one viewer compares acquisitions of one shape"):
+        write_qem_bundle([data / "tilt_a.qem", data / "wide.qem"], tmp_path / "other")

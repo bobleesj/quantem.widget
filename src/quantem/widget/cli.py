@@ -747,6 +747,17 @@ def _show4dstem(args: argparse.Namespace) -> int:
     missing = [str(path) for path in paths if not path.exists()]
     if missing:
         raise FileNotFoundError("path does not exist: " + ", ".join(missing))
+    if args.html and all(path.suffix.lower() == ".qem" for path in paths):
+        # Encoded acquisitions reach the browser only as a WebGPU folder that streams them.
+        from quantem.widget.show4dstem.export import write_qem_bundle
+
+        label = paths[0].stem if len(paths) == 1 else f"{len(paths)}_datasets"
+        out_dir = _out_dir(args.out) / f"{label}_show4dstem_webgpu"
+        _prepare_show4dstem_webgpu_output_dir(out_dir)
+        launcher = write_qem_bundle(paths, out_dir, title=args.title or label)
+        print(f"{len(paths)} .qem file(s), backend webgpu -> {out_dir}")
+        _open_show4dstem_command(launcher, no_open=args.no_open)
+        return 0
     if len(paths) > 1:
         if args.watch:
             raise ValueError("--watch requires one folder path, not multiple explicit paths.")

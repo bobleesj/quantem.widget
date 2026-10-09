@@ -35,6 +35,10 @@ import {
   buildScanMask,
   DetectorCompute,
 } from "../.generated/engine/detector/webgpu/backend";
+import { isRansBatch } from "../.generated/engine/detector/webgpu/rans";
+import { RansResidentSeries } from "../.generated/engine/detector/webgpu/rans-series";
+import { qemHttpFiles, type QemByteFile } from "../.generated/engine/detector/webgpu/qem-source";
+import { getGPUDevice } from "../display/device";
 import { readH5MasterInfo, readH5Volume } from "../.generated/engine/io/hdf5/webgpu/h5reader";
 import { decodeBslz4Batch, type Bslz4Spec } from "../.generated/engine/io/hdf5/webgpu/bslz4";
 import {
@@ -45,7 +49,7 @@ import {
   show4DSTEMHasLocalFiles,
 } from "../.generated/engine/io/hdf5/webgpu/local-h5";
 import { AllDiffractionGrid } from "./AllDiffractionGrid";
-import { collectDroppedH5Files } from "./localDrop";
+import { collectDroppedFiles, matchQemFiles } from "./localDrop";
 import { latestRegion } from "./latestRegion";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
 import { findDataRange, sliderRange, computeStats, percentileClip } from "../display/stats";
@@ -70,6 +74,9 @@ import {
   type DetectorResizeStart,
   type DetectorRoiMode,
 } from "./detectorInteraction";
+
+// A .qem viewer URL ends in the exported file name, which also names a granted local file.
+const qemFileName = (url: string): string => url.slice(url.lastIndexOf("/") + 1);
 
 // The exported page reduces the 4D counts on WebGPU (no JavaScript reducer);
 // without an adapter the saved views stay visible and the page says why.
@@ -2637,6 +2644,12 @@ function Show4DSTEM() {
   const [offlineBackendStatus, setOfflineBackendStatus] = React.useState("");
   const [offlineBackendError, setOfflineBackendError] = React.useState("");
   const h5SourceAvailable = Boolean(model.get("_h5_urls"));
+  // A .qem viewer lists its acquisitions as page-relative URLs; served, it streams
+  // them by HTTP range, and from a double-clicked file it needs the user's grant.
+  const qemUrls = React.useMemo(() => JSON.parse(String(model.get("_qem_urls") || "[]")) as string[], [model]);
+  const qemSourceAvailable = qemUrls.length > 0;
+  const qemNeedsLocalFiles = qemSourceAvailable && globalThis.location?.protocol === "file:";
+  const [qemLocalFiles, setQemLocalFiles] = React.useState<File[] | null>(null);
   const [h5LocalFilesGranted, setH5LocalFilesGranted] = React.useState(show4DSTEMHasLocalFiles());
   const [h5LocalSourceStatus, setH5LocalSourceStatus] = React.useState("");
   const h5LocalInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -2654,7 +2667,17 @@ function Show4DSTEM() {
   }, []);
   // The picker, the file input and a dropped folder grant files the same way;
   // the loader then resolves each master's data files by name.
-  const adoptLocalH5Files = React.useCallback((files: File[]) => {
+  const adoptLocalFiles = React.useCallback((files: File[]) => {
+    if (qemSourceAvailable) {
+      const matched = matchQemFiles(qemUrls.map(qemFileName), files);
+      if ("missing" in matched) {
+        setH5LocalSourceStatus(`No complete QEM export: missing or duplicated ${matched.missing.join(", ")}`);
+        return;
+      }
+      setQemLocalFiles(matched.files);
+      setH5LocalSourceStatus(`${matched.files.length} local QEM file${matched.files.length === 1 ? "" : "s"} granted`);
+      return;
+    }
     if (!files.some(file => /\.(h5|hdf5)$/i.test(file.name))) {
       setH5LocalSourceStatus("No HDF5 files found in that folder");
       return;
@@ -2662,26 +2685,32 @@ function Show4DSTEM() {
     setShow4DSTEMLocalFiles(files);
     setH5LocalFilesGranted(true);
     setH5LocalSourceStatus(`${files.length} local HDF5 file${files.length === 1 ? "" : "s"} granted`);
-  }, []);
+  }, [qemSourceAvailable, qemUrls]);
   const onH5LocalInput = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files ? Array.from(event.target.files) : [];
-    if (files.length) adoptLocalH5Files(files);
-  }, [adoptLocalH5Files]);
+    if (files.length) adoptLocalFiles(files);
+  }, [adoptLocalFiles]);
   // Dropping the acquisition folder on the viewer grants it like the picker.
   // Without preventDefault the browser would open the dropped file instead.
-  const onLocalH5DragOver = React.useCallback((event: React.DragEvent) => {
-    if (!offline || !h5SourceAvailable || !event.dataTransfer.types.includes("Files")) return;
+  const browserSourceAvailable = h5SourceAvailable || qemSourceAvailable;
+  const onLocalDragOver = React.useCallback((event: React.DragEvent) => {
+    if (!offline || !browserSourceAvailable || !event.dataTransfer.types.includes("Files")) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
-  }, [h5SourceAvailable, offline]);
-  const onLocalH5Drop = React.useCallback((event: React.DragEvent) => {
-    if (!offline || !h5SourceAvailable) return;
+  }, [browserSourceAvailable, offline]);
+  const onLocalDrop = React.useCallback((event: React.DragEvent) => {
+    if (!offline || !browserSourceAvailable) return;
     event.preventDefault();
-    void collectDroppedH5Files(event.dataTransfer).then(adoptLocalH5Files)
+    void collectDroppedFiles(event.dataTransfer).then(adoptLocalFiles)
       .catch(error => setH5LocalSourceStatus(String(error)));
-  }, [adoptLocalH5Files, h5SourceAvailable, offline]);
+  }, [adoptLocalFiles, browserSourceAvailable, offline]);
   const grantH5LocalFiles = React.useCallback(async () => {
     setH5LocalSourceStatus("");
+    // .qem files are picked as files: the directory picker below collects HDF5 only.
+    if (qemSourceAvailable) {
+      h5LocalInputRef.current?.click();
+      return;
+    }
     const picker = (globalThis as Show4DSTEMWindow).showDirectoryPicker;
     if (picker) {
       try {
@@ -2690,7 +2719,7 @@ function Show4DSTEM() {
           handle as Parameters<typeof collectShow4DSTEMLocalH5Files>[0],
         );
         if (files.length) {
-          adoptLocalH5Files(files);
+          adoptLocalFiles(files);
           return;
         }
         setH5LocalSourceStatus("No HDF5 files found in that folder");
@@ -2700,7 +2729,7 @@ function Show4DSTEM() {
       }
     }
     h5LocalInputRef.current?.click();
-  }, [adoptLocalH5Files]);
+  }, [adoptLocalFiles, qemSourceAvailable]);
   React.useEffect(() => {
     if (!offline) {
       setWebgpuDpcReady(false);
@@ -2711,9 +2740,14 @@ function Show4DSTEM() {
     }
     let disposed = false;
     let detach: (() => void) | null = null;
+    // A reloaded source may share the old geometry but not its counts: the
+    // compare panels' mask history belongs to the source that built it.
+    compareIncrementalRef.current = null;
+    // Stops a .qem series between files when the viewer closes or reloads.
+    const qemLoadAbort = new AbortController();
     setOfflineBackendLoading(true);
     setOfflineBackendError("");
-    setOfflineBackendStatus(h5SourceAvailable ? "Loading WebGPU source" : "Loading offline 4D-STEM data");
+    setOfflineBackendStatus(h5SourceAvailable || qemSourceAvailable ? "Loading WebGPU source" : "Loading offline 4D-STEM data");
     (async () => {
       const scanRows = model.get("shape_rows"), scanCols = model.get("shape_cols");
       const detectorRows = model.get("det_rows"), detectorCols = model.get("det_cols");
@@ -2736,6 +2770,10 @@ function Show4DSTEM() {
       let initialVolumeLoad: Promise<DetectorCompute | null> | null = null;
       let h5VolumePreload: Promise<void> | null = null;
       let h5VolumePreloadDone = false;
+      let qemSeries: RansResidentSeries | null = null;
+      // Set once the compare grid can paint; acquisitions published before then
+      // are painted by the first compare pass.
+      let onQemPublished: (() => void) | null = null;
       // Browser HDF5 source: the CLI WebGPU export lists its linked masters here.
       const h5UrlsJson = model.get("_h5_urls") as string | undefined;
       const h5Urls = (() => {
@@ -2772,6 +2810,13 @@ function Show4DSTEM() {
       if (requireLocalH5Files && h5Urls.length && !show4DSTEMHasLocalFiles()) {
         if (!disposed) {
           setOfflineBackendStatus("Waiting for local HDF5 files");
+          setOfflineBackendLoading(false);
+        }
+        return;
+      }
+      if (qemNeedsLocalFiles && !qemLocalFiles) {
+        if (!disposed) {
+          setOfflineBackendStatus("Waiting for local QEM files");
           setOfflineBackendLoading(false);
         }
         return;
@@ -3042,7 +3087,38 @@ function Show4DSTEM() {
         if (!disposed) setOfflineBackendStatus(`${label} ready`);
         return created;
       };
-      if (h5Urls.length) {
+      if (qemUrls.length) {
+        // Exact .qem counts stay encoded on the GPU and every detector change
+        // decodes only the columns it adds or removes. Each acquisition is
+        // authenticated as it streams in and published in file order, so its
+        // panel paints as soon as it is resident, not after the whole series.
+        const device = await getGPUDevice();
+        if (!device) throw new Error(OFFLINE_NEEDS_WEBGPU);
+        const files: QemByteFile[] = qemLocalFiles ?? (await Promise.all(qemUrls.map(url =>
+          qemHttpFiles(new URL(".", new URL(url, location.href)).href, [qemFileName(url)], qemLoadAbort.signal)))).flat();
+        const totalGB = files.reduce((sum, file) => sum + file.size, 0) / 1e9;
+        if (!disposed) setOfflineBackendStatus(`Loading ${files.length} acquisitions, ${totalGB.toFixed(1)} GB`);
+        let published = 0;
+        const series = await RansResidentSeries.load(device, files, text => {
+          if (!disposed) setOfflineBackendStatus(text && `Loading ${text}`);
+        }, loaded => {
+          for (let index = published; index < loaded.loadedAcquisitions; index++) {
+            volCache.set(index, loaded.computes[index] as unknown as DetectorCompute);
+          }
+          published = loaded.loadedAcquisitions;
+          latestResidentVolumeIndex = published - 1;
+          onQemPublished?.();
+        }, qemLoadAbort.signal);
+        if (disposed) { series.dispose(); return; }
+        if (series.shape?.some((size, axis) => size !== [scanRows, scanCols, detectorRows, detectorCols][axis])) {
+          series.dispose();
+          throw new Error("These .qem files have another scan or detector shape than this viewer; select the files it was exported with.");
+        }
+        qemSeries = series;
+        volumeCount = files.length;
+        getVol = async (idx: number) => volCache.get(Math.max(0, Math.min(files.length - 1, idx))) ?? null;
+        compute = volCache.get(Math.max(0, Math.min(files.length - 1, model.get("frame_idx") | 0))) ?? volCache.get(0)!;
+      } else if (h5Urls.length) {
         volumeCount = h5Urls.length;
         getVol = async (idx: number) => {
           const clamped = Math.max(0, Math.min(h5Urls.length - 1, idx));
@@ -3443,6 +3519,11 @@ function Show4DSTEM() {
       const recomputeVI = async () => {
         const generation = ++viRecomputeGen;
         const source = normaliseViSource(model.get("vi_source"));
+        // In multiple view the grid owns each .qem acquisition's ROI image; the
+        // hidden single image would sum the same resident image under another
+        // mask and break the exact deltas of the visible panels.
+        if (qemSeries && source === "roi" && ["multiple", "compare"].includes(String(model.get("view_mode")))
+            && Number(model.get("n_frames")) > 1) return;
         const product = viProductFrameView(model, scanRows, scanCols, source);
         if (product) {
           if (disposed || generation !== viRecomputeGen) return;
@@ -3523,7 +3604,9 @@ function Show4DSTEM() {
         publishVirtualImageBytes(new DataView(virtualImage.buffer));
       };
       const warmStandardViCache = async () => {
-        if (viWarmupStarted || disposed || !compute) {
+        // A .qem panel keeps one resident image per acquisition; warming other
+        // masks on it would move the mask history its compare deltas build on.
+        if (viWarmupStarted || disposed || !compute || qemSeries) {
           return;
         }
         viWarmupStarted = true;
@@ -3692,7 +3775,7 @@ function Show4DSTEM() {
             if (interactiveDrag && getVol && !volIsResident(idx)) continue;
             const panelCompute = getVol ? await getVol(idx) : compute;
             if (disposed || generation !== compareViGen) return false;
-            if (!panelCompute || !(panelCompute instanceof DetectorCompute)) continue;
+            if (!panelCompute || !(panelCompute instanceof DetectorCompute || isRansBatch([panelCompute]))) continue;
             batchComputes.push(panelCompute);
             batchSlots.push(slot);
             batchFrames.push(idx);
@@ -3996,6 +4079,18 @@ function Show4DSTEM() {
         void recomputeDP();
         void recomputeFrame();
       };
+      if (qemSeries) {
+        // A newly resident acquisition adds its panel, and becomes the shown
+        // pattern when it is the selected dataset.
+        onQemPublished = () => {
+          if (disposed) return;
+          if (dpRoiInteractiveRef.current) requestCompareViLive();
+          else void recomputeActiveView();
+        };
+        void qemSeries.completion.catch(error => {
+          if (!disposed) setOfflineBackendError(`Loading stopped: ${String(error)}. The loaded acquisitions stay available.`);
+        });
+      }
       // 5D multi-volume: the slider picks the active dataset; decode-on-scrub (LRU).
       let frameGen = 0;
       const onFrame = async () => {
@@ -4104,12 +4199,14 @@ function Show4DSTEM() {
         model.off("change:frame_idx", onFrame);
         model.off("change:view_mode", recomputeActiveView);
         volCache.forEach((volume) => volume.dispose()); volCache.clear();  // every cached lazy volume
+        qemSeries?.dispose();
         inlineVolCache.forEach((volume) => volume.dispose()); inlineVolCache.clear();
       };
       await recomputeVI();  // initial virtual image, no interaction needed
       await recomputeCompareVI();
       if (!initialVolumeLoad && !disposed) {
-        setOfflineBackendStatus("");
+        // A .qem series keeps reporting the acquisitions still loading.
+        if (!qemSeries || qemSeries.loadedAcquisitions === qemSeries.acquisitionCount) setOfflineBackendStatus("");
         setOfflineBackendLoading(false);
       }
       // Fit the BF disk from the mean diffraction pattern before the presets warm.
@@ -4207,6 +4304,7 @@ function Show4DSTEM() {
     });
     return () => {
       disposed = true;
+      qemLoadAbort.abort();
       compareGpuHistogramGenRef.current++;
       compareHistogramPendingSettleRef.current = true;
       if (roiRadiusRafRef.current !== null) cancelAnimationFrame(roiRadiusRafRef.current);
@@ -4229,7 +4327,7 @@ function Show4DSTEM() {
       clearViGpuDisplay();
       detach?.();
     };
-  }, [beginDpRoiInteraction, clearViGpuDisplay, ensureViGpuColormap, h5LocalFilesGranted, h5SourceAvailable, offline, requestCompareViLive, requestDpFrameLive, requireLocalH5Files]);
+  }, [beginDpRoiInteraction, clearViGpuDisplay, ensureViGpuColormap, h5LocalFilesGranted, h5SourceAvailable, offline, qemLocalFiles, qemNeedsLocalFiles, qemSourceAvailable, qemUrls, requestCompareViLive, requestDpFrameLive, requireLocalH5Files]);
   const [viStats, setViStats] = React.useState<number[]>([0, 0, 0, 0]);
   const [viDataMin, setViDataMin] = React.useState<number>(0);
   const [viDataMax, setViDataMax] = React.useState<number>(1);
@@ -7575,7 +7673,8 @@ function Show4DSTEM() {
   const offlineStatusIsError = Boolean(offlineBackendError);
   const offlineStatusIsReady = !offlineStatusIsError && /\bready\b/i.test(offlineStatusText);
   const showOfflineStatus = offline && Boolean(offlineStatusText) && !offlineStatusIsReady;
-  const showLocalH5GrantBanner = offline && h5SourceAvailable && requireLocalH5Files && !h5LocalFilesGranted;
+  const showLocalH5GrantBanner = offline && ((h5SourceAvailable && requireLocalH5Files && !h5LocalFilesGranted)
+    || (qemNeedsLocalFiles && !qemLocalFiles));
 
   return (
     <Box
@@ -7584,8 +7683,8 @@ function Show4DSTEM() {
       tabIndex={0}
       onKeyDown={handleKeyDown}
       onMouseDownCapture={handleRootMouseDownCapture}
-      onDragOver={onLocalH5DragOver}
-      onDrop={onLocalH5Drop}
+      onDragOver={onLocalDragOver}
+      onDrop={onLocalDrop}
       sx={{ p: 2, bgcolor: themeColors.bg, color: themeColors.text, outline: "none", borderRadius: "2px", width: "100%", maxWidth: "100%", boxSizing: "border-box", "@media (max-width: 700px)": { p: 0, overflowX: "hidden", ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
     >
       <FolderWatchBadge
@@ -7597,10 +7696,10 @@ function Show4DSTEM() {
         ref={h5LocalInputRef}
         type="file"
         multiple
-        accept=".h5,.hdf5"
+        accept={qemSourceAvailable ? ".qem" : ".h5,.hdf5"}
         onChange={onH5LocalInput}
         style={{ display: "none" }}
-        {...{ webkitdirectory: "", directory: "" }}
+        {...(qemSourceAvailable ? {} : { webkitdirectory: "", directory: "" })}
       />
       {/* HEADER */}
       {showTitle && <Typography variant="h6" sx={{ ...themedTypography.title, mb: `${SPACING.SM}px` }}>
@@ -7676,8 +7775,10 @@ function Show4DSTEM() {
         >
           <Typography sx={{ ...themedTypography.label, color: themeColors.text }}>
             {localH5FolderName
-              ? `No server needed - click Open data folder, then select "${localH5FolderName}".`
-              : "No server needed - grant this page access to its exported HDF5 folder."}
+              ? qemSourceAvailable
+                ? `No server needed - click Open data folder and select the .qem files in "${localH5FolderName}/qem", or drop that folder here.`
+                : `No server needed - click Open data folder, then select "${localH5FolderName}".`
+              : `No server needed - grant this page access to its exported ${qemSourceAvailable ? "QEM" : "HDF5"} folder.`}
           </Typography>
           {h5LocalSourceStatus && (
             <Typography sx={{ ...themedTypography.label, color: h5LocalSourceStatus.includes("No ") ? "#d32f2f" : themeColors.textMuted }}>
@@ -7757,13 +7858,13 @@ function Show4DSTEM() {
                   setOfflineBackendError(`Could not copy the DP image: ${String(error)}`);
                 }
               }}>Copy</Button>
-              {offline && h5SourceAvailable && <Button
+              {offline && browserSourceAvailable && <Button
                 size="small"
-                sx={{ ...compactButton, color: h5LocalFilesGranted ? themeColors.accent : themeColors.textMuted }}
+                sx={{ ...compactButton, color: h5LocalFilesGranted || qemLocalFiles ? themeColors.accent : themeColors.textMuted }}
                 onClick={grantH5LocalFiles}
-                title={h5LocalSourceStatus || "Grant local HDF5 master/data files for browser WebGPU load"}
+                title={h5LocalSourceStatus || (qemSourceAvailable ? "Open this viewer's local .qem files" : "Grant local HDF5 master/data files for browser WebGPU load")}
               >
-                Local H5
+                {qemSourceAvailable ? "Local QEM" : "Local H5"}
               </Button>}
               {exportEnabled && <Button
                 size="small"
