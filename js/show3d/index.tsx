@@ -602,13 +602,13 @@ function Show3D() {
 
   const themedMenuProps = {
     ...upwardMenuProps,
-    PaperProps: { sx: { borderRadius: 0, bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}`, fontFamily: UI_FONT, "& .MuiMenuItem-root": { fontFamily: "inherit" } } },
+    slotProps: { paper: { sx: { borderRadius: 0, bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}`, fontFamily: UI_FONT, "& .MuiMenuItem-root": { fontFamily: "inherit" } } } },
   };
   const themedFastMenuProps = {
     ...themedMenuProps,
     keepMounted: true,
     transitionDuration: 0,
-    MenuListProps: { dense: true },
+    slotProps: { ...themedMenuProps.slotProps, list: { dense: true } },
   };
 
   // Model state (synced with Python)
@@ -2515,17 +2515,17 @@ function Show3D() {
         </Box>
         <Box sx={{ display: "grid", gridTemplateColumns: "auto 1fr auto 1fr", alignItems: "center", gap: 0.75 }}>
           <Typography sx={typography.label}>Frames</Typography>
-          <TextField size="small" type="number" value={exportFrameStart} onChange={(event) => { markGifPresetCustom(); setExportFrameStart(Number(event.target.value)); }} inputProps={{ min: 1, max: Math.max(1, nSlices || 1), "aria-label": "Export first frame" }} sx={exportNumberFieldSx} />
+          <TextField size="small" type="number" value={exportFrameStart} onChange={(event) => { markGifPresetCustom(); setExportFrameStart(Number(event.target.value)); }} slotProps={{ htmlInput: { min: 1, max: Math.max(1, nSlices || 1), "aria-label": "Export first frame" } }} sx={exportNumberFieldSx} />
           <Typography sx={typography.label}>to</Typography>
-          <TextField size="small" type="number" value={exportFrameEnd} onChange={(event) => { markGifPresetCustom(); setExportFrameEnd(Number(event.target.value)); }} inputProps={{ min: 1, max: Math.max(1, nSlices || 1), "aria-label": "Export last frame" }} sx={exportNumberFieldSx} />
+          <TextField size="small" type="number" value={exportFrameEnd} onChange={(event) => { markGifPresetCustom(); setExportFrameEnd(Number(event.target.value)); }} slotProps={{ htmlInput: { min: 1, max: Math.max(1, nSlices || 1), "aria-label": "Export last frame" } }} sx={exportNumberFieldSx} />
           <Typography sx={typography.label}>Every</Typography>
-          <TextField size="small" type="number" value={exportEveryN} onChange={(event) => { markGifPresetCustom(); setExportEveryN(Math.max(1, Number(event.target.value))); }} inputProps={{ min: 1, max: Math.max(1, nSlices || 1), "aria-label": "Export every Nth frame" }} sx={exportNumberFieldSx} />
+          <TextField size="small" type="number" value={exportEveryN} onChange={(event) => { markGifPresetCustom(); setExportEveryN(Math.max(1, Number(event.target.value))); }} slotProps={{ htmlInput: { min: 1, max: Math.max(1, nSlices || 1), "aria-label": "Export every Nth frame" } }} sx={exportNumberFieldSx} />
           <Typography sx={typography.label}>Max frames</Typography>
-          <TextField size="small" type="number" value={exportMaxFrames} onChange={(event) => { markGifPresetCustom(); setExportMaxFrames(Math.max(0, Number(event.target.value))); }} inputProps={{ min: 0, max: Math.max(1, nSlices || 1), "aria-label": "Maximum exported frames; zero means all" }} sx={exportNumberFieldSx} />
+          <TextField size="small" type="number" value={exportMaxFrames} onChange={(event) => { markGifPresetCustom(); setExportMaxFrames(Math.max(0, Number(event.target.value))); }} slotProps={{ htmlInput: { min: 0, max: Math.max(1, nSlices || 1), "aria-label": "Maximum exported frames; zero means all" } }} sx={exportNumberFieldSx} />
         </Box>
         <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 0.75 }}>
           <Typography sx={typography.label}>fps</Typography>
-          <TextField size="small" type="number" value={exportFps} onChange={(event) => { markGifPresetCustom(); setExportFps(Math.max(1, Number(event.target.value))); }} inputProps={{ min: 1, max: MAX_PLAYBACK_FPS, "aria-label": "Export animation frames per second" }} sx={exportNumberFieldSx} />
+          <TextField size="small" type="number" value={exportFps} onChange={(event) => { markGifPresetCustom(); setExportFps(Math.max(1, Number(event.target.value))); }} slotProps={{ htmlInput: { min: 1, max: MAX_PLAYBACK_FPS, "aria-label": "Export animation frames per second" } }} sx={exportNumberFieldSx} />
           <Typography sx={typography.label}>Quality</Typography>
           <Select size="small" value={exportQuality} onChange={(event) => { markGifPresetCustom(); setExportQuality(event.target.value as AnimationQuality); }} sx={{ ...themedSelect, minWidth: 86, fontSize: 11 }} MenuProps={themedMenuProps} inputProps={{ "aria-label": "Animation quality" }}>
             {ANIMATION_QUALITY_OPTIONS.map((quality) => <MenuItem key={quality} value={quality}>{quality}</MenuItem>)}
@@ -10590,8 +10590,8 @@ function Show3D() {
 	                  anchorEl={exportMenuAnchor}
 	                  open={Boolean(exportMenuAnchor)}
 	                  onClose={handleExportMenuClose}
-	                  MenuListProps={{ "aria-label": "Export options" }}
 	                  {...themedMenuProps}
+	                  slotProps={{ ...themedMenuProps.slotProps, list: { "aria-label": "Export options" } }}
 	                >
 	                  {renderExportMenuContent()}
 	                </Menu>
@@ -10812,8 +10812,8 @@ function Show3D() {
               anchorEl={moreMenuAnchor}
               open={Boolean(moreMenuAnchor)}
               onClose={() => setMoreMenuAnchor(null)}
-              MenuListProps={{ "aria-label": "More tools" }}
               {...themedMenuProps}
+              slotProps={{ ...themedMenuProps.slotProps, list: { "aria-label": "More tools" } }}
             >
               <Box sx={{ px: 1.5, pt: 0.75, pb: 0.35, minWidth: 260 }}>
                 <Typography sx={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", color: themeColors.textMuted, textTransform: "uppercase" }}>Readout</Typography>
@@ -10896,7 +10896,7 @@ function Show3D() {
                     size="small"
                     value={Math.max(0, Math.min(Math.max(0, nSlices - 1), Math.round(subpixelAlignReference || 0)))}
                     onChange={(e) => setSubpixelAlignReference(Number(e.target.value))}
-                    inputProps={{ min: 0, max: Math.max(0, nSlices - 1), "aria-label": "Sub-pixel alignment reference frame" }}
+                    slotProps={{ htmlInput: { min: 0, max: Math.max(0, nSlices - 1), "aria-label": "Sub-pixel alignment reference frame" } }}
                     sx={{
                       "& .MuiInputBase-input": { fontSize: 11, py: 0.5 },
                       "& .MuiInputLabel-root": { fontSize: 11 },
@@ -11073,7 +11073,7 @@ function Show3D() {
                   size="small"
                   value={Math.max(0, Math.min(Math.max(0, nSlices - 1), Math.round(comparePair?.[0] ?? 0)))}
                   onChange={(e) => setComparePair([Number(e.target.value) || 0, comparePair?.[1] ?? 1])}
-                  inputProps={{ min: 0, max: Math.max(0, nSlices - 1), "aria-label": "Compare frame A" }}
+                  slotProps={{ htmlInput: { min: 0, max: Math.max(0, nSlices - 1), "aria-label": "Compare frame A" } }}
                   sx={{ input: { color: themeColors.text, fontSize: 12, py: 0.5 }, "& .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.border } }}
                 />
                 <Typography sx={{ fontSize: 12, color: themeColors.text }}>B</Typography>
@@ -11082,7 +11082,7 @@ function Show3D() {
                   size="small"
                   value={Math.max(0, Math.min(Math.max(0, nSlices - 1), Math.round(comparePair?.[1] ?? 1)))}
                   onChange={(e) => setComparePair([comparePair?.[0] ?? 0, Number(e.target.value) || 0])}
-                  inputProps={{ min: 0, max: Math.max(0, nSlices - 1), "aria-label": "Compare frame B" }}
+                  slotProps={{ htmlInput: { min: 0, max: Math.max(0, nSlices - 1), "aria-label": "Compare frame B" } }}
                   sx={{ input: { color: themeColors.text, fontSize: 12, py: 0.5 }, "& .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.border } }}
                 />
                 <Typography sx={{ fontSize: 12, color: themeColors.text }}>Speed</Typography>
@@ -11255,8 +11255,8 @@ function Show3D() {
                     anchorEl={panelMenuAnchor}
                     open={Boolean(panelMenuAnchor)}
                     onClose={() => setPanelMenuAnchor(null)}
-                    MenuListProps={{ "aria-label": "Panel visibility options" }}
                     {...themedMenuProps}
+                    slotProps={{ ...themedMenuProps.slotProps, list: { "aria-label": "Panel visibility options" } }}
                   >
                     {orderedPanelIndices.map((panel) => {
                       const hidden = hiddenPanelSet.has(panel);
@@ -11343,8 +11343,8 @@ function Show3D() {
                     anchorEl={exportMenuAnchor}
                     open={Boolean(exportMenuAnchor)}
                     onClose={handleExportMenuClose}
-                    MenuListProps={{ "aria-label": "Export options" }}
                     {...themedMenuProps}
+                    slotProps={{ ...themedMenuProps.slotProps, list: { "aria-label": "Export options" } }}
                   >
                     {renderExportMenuContent()}
                   </Menu>
@@ -12257,8 +12257,8 @@ function Show3D() {
                     anchorEl={playbackStyleMenuAnchor}
                     open={Boolean(playbackStyleMenuAnchor)}
                     onClose={() => setPlaybackStyleMenuAnchor(null)}
-                    MenuListProps={{ "aria-label": "Playback style options" }}
                     {...themedMenuProps}
+                    slotProps={{ ...themedMenuProps.slotProps, list: { "aria-label": "Playback style options" } }}
                   >
                     <Box sx={{ px: 1.5, py: 0.75, minWidth: 240 }}>
                       <Typography sx={{ fontSize: 11, fontWeight: 700, color: themeColors.text, mb: 0.5 }}>Play Style</Typography>
