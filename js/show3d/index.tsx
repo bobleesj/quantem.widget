@@ -4000,6 +4000,22 @@ function Show3D() {
       state: stateFor(panelIdx),
     };
   };
+  /** Grid slot `slot`'s panel rectangle and its FFT overlay inset inside it, in canvas CSS pixels. */
+  const fftInsetRect = (slot: number) => {
+    const { cols, gap, slotW: panelW, slotH: panelH } = getPanelLayout();
+    const panelLeft = (slot % cols) * (panelW + gap);
+    const panelTop = Math.floor(slot / cols) * (panelH + gap);
+    const insetPad = Math.min(8, Math.max(3, panelW * 0.025));
+    const insetMaxW = Math.max(24, panelW - insetPad * 2);
+    const insetMaxH = Math.max(20, panelH - insetPad * 2);
+    const insetBase = Math.min(insetMaxW, insetMaxH);
+    const insetW = Math.max(24, Math.min(insetMaxW, insetBase * resolvedFftOverlaySize));
+    const insetH = Math.max(20, Math.min(insetMaxH, insetBase * resolvedFftOverlaySize));
+    const topInsetPad = fftOverlayTopInsetPad(insetPad, showPanelTitles, nPanels || 1, panelTitleFontSize);
+    const insetX = resolvedFftOverlayPosition.endsWith("right") ? panelLeft + panelW - insetW - insetPad : panelLeft + insetPad;
+    const insetY = resolvedFftOverlayPosition.startsWith("bottom") ? panelTop + panelH - insetH - insetPad : panelTop + topInsetPad;
+    return { panelLeft, panelTop, panelW, panelH, insetX, insetY, insetW, insetH };
+  };
   const getFftSlot = React.useCallback((slot: number, count: number, cols: number, rows: number) => {
     const gap = count > 1 ? (panelGapPx) : 0;
     const slotW = (canvasW - gap * (cols - 1)) / cols;
@@ -5921,19 +5937,14 @@ function Show3D() {
     // Clear entire canvas to the configured inter-panel layer. Slot-level bg
     // fill happens inside the per-panel loop.
     clearWithGridBackground(ctx, canvasW, canvasH);
-    const visibleCount = Math.max(1, visiblePanelCount || 1);
+    const { n: visibleCount, cols, gap, slotW: outPanelW, slotH: outPanelH } = getPanelLayout();
     const sourcePanelCount = Math.max(1, nPanels || 1);
-    const cols = panelColsForCount(visibleCount);
-    const rows = Math.ceil(visibleCount / cols);
     const srcPanelW = options.sourcePanelWidth
       ? Math.max(1, options.sourcePanelWidth)
       : sharedPanelSource
       ? offscreen.width
       : Math.max(1, panelWidthPx || offscreen.width / sourcePanelCount);
     const srcH = offscreen.height;
-    const gap = visibleCount > 1 ? (panelGapPx) : 0;
-    const outPanelW = (canvasW - gap * (cols - 1)) / cols;
-    const outPanelH = (canvasH - gap * (rows - 1)) / rows;
     for (let slot = 0; slot < visibleCount; slot++) {
       const i = visiblePanelIndices[slot] ?? slot;
       const panelState = stateFor(i);
@@ -7547,12 +7558,7 @@ function Show3D() {
     const offscreen = fftOffscreenRef.current;
     const grid = fftPanelGridRef.current;
     const count = grid ? grid.count : 1;
-    const visibleCount = Math.max(1, visiblePanelCount || 1);
-    const cols = panelColsForCount(visibleCount);
-    const rows = Math.ceil(visibleCount / cols);
-    const gap = visibleCount > 1 ? (panelGapPx) : 0;
-    const panelW = (canvasW - gap * (cols - 1)) / cols;
-    const panelH = (canvasH - gap * (rows - 1)) / rows;
+    const { slotW: panelW, slotH: panelH } = getPanelLayout();
     const fftW = fftCropDims?.fftWidth ?? width;
     const fftH = fftCropDims?.fftHeight ?? height;
     const ctx = canvas.getContext("2d");
@@ -7563,21 +7569,7 @@ function Show3D() {
     ctx.imageSmoothingEnabled = smooth && (srcW < panelW || srcH < panelH);
     visiblePanelIndices.forEach((_panel, slot) => {
       if (slot >= count) return;
-      const panelLeft = (slot % cols) * (panelW + gap);
-      const panelTop = Math.floor(slot / cols) * (panelH + gap);
-      const insetPad = Math.min(8, Math.max(3, panelW * 0.025));
-      const insetMaxW = Math.max(24, panelW - insetPad * 2);
-      const insetMaxH = Math.max(20, panelH - insetPad * 2);
-      const insetBase = Math.min(insetMaxW, insetMaxH);
-      const insetW = Math.max(24, Math.min(insetMaxW, insetBase * resolvedFftOverlaySize));
-      const insetH = Math.max(20, Math.min(insetMaxH, insetBase * resolvedFftOverlaySize));
-      const topInsetPad = fftOverlayTopInsetPad(insetPad, showPanelTitles, nPanels || 1, panelTitleFontSize);
-      const insetX = resolvedFftOverlayPosition.endsWith("right")
-        ? panelLeft + panelW - insetW - insetPad
-        : panelLeft + insetPad;
-      const insetY = resolvedFftOverlayPosition.startsWith("bottom")
-        ? panelTop + panelH - insetH - insetPad
-        : panelTop + topInsetPad;
+      const { panelLeft, panelTop, insetX, insetY, insetW, insetH } = fftInsetRect(slot);
       const dstX = fftOverlayDragPreview ? panelLeft + fftOverlayDragPreview.x : insetX;
       const dstY = fftOverlayDragPreview ? panelTop + fftOverlayDragPreview.y : insetY;
       const srcX = grid ? (slot % grid.cols) * grid.panelWidth : 0;
@@ -8175,17 +8167,16 @@ function Show3D() {
     const pt = canvasPointFromClient(clientX, clientY);
     return pt ? panelIdxFromXY(pt.x, pt.y) : -1;
   };
+  /** The view panel `panelIdx` draws with now, from the live playback state: the linked view while panels are linked. */
+  const liveViewOf = (panelIdx: number): PanelState => {
+    const live = playRef.current;
+    const base = live.panelStates[panelIdx] || stateFor(panelIdx);
+    return live.linkPanels ? { ...base, zoom: live.linkedState.zoom, panX: live.linkedState.panX, panY: live.linkedState.panY } : base;
+  };
   const beginPan = (e: React.MouseEvent) => {
     const idx = panelIdxFromEvent(e);
     if (idx < 0) return;
-    const live = playRef.current;
-    const base = live.panelStates[idx] || stateFor(idx);
-    const view = {
-      ...base,
-      zoom: live.linkPanels ? live.linkedState.zoom : base.zoom,
-      panX: live.linkPanels ? live.linkedState.panX : base.panX,
-      panY: live.linkPanels ? live.linkedState.panY : base.panY,
-    };
+    const view = liveViewOf(idx);
     panDragRef.current = {
       panelIdx: idx,
       x: e.clientX,
@@ -8204,14 +8195,7 @@ function Show3D() {
     const mouseY = (clientY - rect.top) * (canvas.height / rect.height);
     const panelIdx = panelIdxFromXY(mouseX, mouseY);
     if (panelIdx < 0) return false;
-    const live = playRef.current;
-    const base = live.panelStates[panelIdx] || stateFor(panelIdx);
-    const cur = {
-      ...base,
-      zoom: live.linkPanels ? live.linkedState.zoom : base.zoom,
-      panX: live.linkPanels ? live.linkedState.panX : base.panX,
-      panY: live.linkPanels ? live.linkedState.panY : base.panY,
-    };
+    const cur = liveViewOf(panelIdx);
     const zoomFactor = Math.max(0.75, Math.min(1.35, Math.exp(-deltaY * 0.002)));
     const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cur.zoom * zoomFactor));
     const zoomRatio = newZoom / cur.zoom;
@@ -8619,8 +8603,6 @@ function Show3D() {
       }
       lastTapRef.current = { time: now, panelIdx };
       if (showLens) return;
-      const live = playRef.current;
-      const base = live.panelStates[panelIdx] || stateFor(panelIdx);
       touchTransformRef.current = {
         panelIdx,
         mode: "pan",
@@ -8629,12 +8611,7 @@ function Show3D() {
         startDistance: 0,
         startMidX: touch.clientX,
         startMidY: touch.clientY,
-        startState: {
-          ...base,
-          zoom: live.linkPanels ? live.linkedState.zoom : base.zoom,
-          panX: live.linkPanels ? live.linkedState.panX : base.panX,
-          panY: live.linkPanels ? live.linkedState.panY : base.panY,
-        },
+        startState: liveViewOf(panelIdx),
       };
       e.preventDefault();
       return;
@@ -8645,8 +8622,6 @@ function Show3D() {
       const mid = touchMidpoint(firstTouch, secondTouch);
       const panelIdx = panelIdxFromClient(mid.x, mid.y);
       if (panelIdx < 0) return;
-      const live = playRef.current;
-      const base = live.panelStates[panelIdx] || stateFor(panelIdx);
       touchTransformRef.current = {
         panelIdx,
         mode: "pinch",
@@ -8655,12 +8630,7 @@ function Show3D() {
         startDistance: Math.max(1, touchDistance(firstTouch, secondTouch)),
         startMidX: mid.x,
         startMidY: mid.y,
-        startState: {
-          ...base,
-          zoom: live.linkPanels ? live.linkedState.zoom : base.zoom,
-          panX: live.linkPanels ? live.linkedState.panX : base.panX,
-          panY: live.linkPanels ? live.linkedState.panY : base.panY,
-        },
+        startState: liveViewOf(panelIdx),
       };
       e.preventDefault();
     }
@@ -8736,15 +8706,7 @@ function Show3D() {
       const dy = (e.clientY - panDrag.y) * scaleY;
       const newPanX = panDrag.pX + dx;
       const newPanY = panDrag.pY + dy;
-      const live = playRef.current;
-      const base = live.panelStates[panDrag.panelIdx] || stateFor(panDrag.panelIdx);
-      const current = {
-        ...base,
-        zoom: live.linkPanels ? live.linkedState.zoom : base.zoom,
-        panX: live.linkPanels ? live.linkedState.panX : base.panX,
-        panY: live.linkPanels ? live.linkedState.panY : base.panY,
-      };
-      syncPlaybackPanelTransform(panDrag.panelIdx, current.zoom, newPanX, newPanY);
+      syncPlaybackPanelTransform(panDrag.panelIdx, liveViewOf(panDrag.panelIdx).zoom, newPanX, newPanY);
       if (!scheduleTransformRender()) commitLivePanelTransforms();
       return;
     }
@@ -8897,6 +8859,27 @@ function Show3D() {
     }
   };
 
+  /** End every canvas drag (ROI move and resize, lens, pan, profile edit); a pan that moved the view is committed. */
+  const endCanvasDrags = () => {
+    clickStartRef.current = null;
+    pendingRoiAddRef.current = null;
+    if (panDragRef.current) commitLivePanelTransforms();
+    setIsDraggingROI(false);
+    setIsDraggingResize(false);
+    setIsDraggingResizeInner(false);
+    setIsDraggingLens(false);
+    lensDragStartRef.current = null;
+    setIsResizingLens(false);
+    lensResizeStartRef.current = null;
+    setIsDraggingPan(false);
+    panDragRef.current = null;
+    setHoveredProfileEndpoint(null);
+    setIsHoveringProfileLine(false);
+    setDraggingProfileEndpoint(null);
+    setIsDraggingProfileLine(false);
+    profileDragStartRef.current = null;
+  };
+
   const handleCanvasMouseUp = (e: React.MouseEvent) => {
     if (overlayDragRef.current) {
       overlayDragRef.current = null;
@@ -8904,22 +8887,7 @@ function Show3D() {
       return;
     }
     if (draggingProfileEndpoint !== null || isDraggingProfileLine) {
-      setDraggingProfileEndpoint(null);
-      setIsDraggingProfileLine(false);
-      profileDragStartRef.current = null;
-      clickStartRef.current = null;
-      pendingRoiAddRef.current = null;
-      setIsDraggingROI(false);
-      setIsDraggingResize(false);
-      setIsDraggingResizeInner(false);
-      setIsDraggingLens(false);
-      lensDragStartRef.current = null;
-      setIsResizingLens(false);
-      lensResizeStartRef.current = null;
-      setIsDraggingPan(false);
-      panDragRef.current = null;
-      setHoveredProfileEndpoint(null);
-      setIsHoveringProfileLine(false);
+      endCanvasDrags();
       return;
     }
 
@@ -8954,23 +8922,7 @@ function Show3D() {
         addROIAt(pendingRoiAddRef.current.row, pendingRoiAddRef.current.col);
       }
     }
-    clickStartRef.current = null;
-    pendingRoiAddRef.current = null;
-    if (panDragRef.current) commitLivePanelTransforms();
-    setIsDraggingROI(false);
-    setIsDraggingResize(false);
-    setIsDraggingResizeInner(false);
-    setIsDraggingLens(false);
-    lensDragStartRef.current = null;
-    setIsResizingLens(false);
-    lensResizeStartRef.current = null;
-    setIsDraggingPan(false);
-    panDragRef.current = null;
-    setHoveredProfileEndpoint(null);
-    setIsHoveringProfileLine(false);
-    setDraggingProfileEndpoint(null);
-    setIsDraggingProfileLine(false);
-    profileDragStartRef.current = null;
+    endCanvasDrags();
   };
 
   const handleCanvasMouseLeave = () => {
@@ -8979,28 +8931,13 @@ function Show3D() {
     // leave kills the inset whenever the user touches a slider, FFT panel, or any
     // sibling control - surprising "lens vanished" footgun. User explicitly turns
     // lens off via the Lens switch.
-    pendingRoiAddRef.current = null;
     overlayDragRef.current = null;
     setIsDraggingOverlay(false);
     setIsHoveringOverlay(false);
-    if (panDragRef.current) commitLivePanelTransforms();
-    setIsDraggingROI(false);
-    setIsDraggingResize(false);
-    setIsDraggingResizeInner(false);
-    setIsDraggingLens(false);
-    lensDragStartRef.current = null;
-    setIsResizingLens(false);
-    lensResizeStartRef.current = null;
     setIsHoveringLensEdge(false);
     setIsHoveringResize(false);
     setIsHoveringResizeInner(false);
-    setIsDraggingPan(false);
-    panDragRef.current = null;
-    setHoveredProfileEndpoint(null);
-    setIsHoveringProfileLine(false);
-    setDraggingProfileEndpoint(null);
-    setIsDraggingProfileLine(false);
-    profileDragStartRef.current = null;
+    endCanvasDrags();
   };
 
   // FFT mouse handlers
@@ -9077,6 +9014,17 @@ function Show3D() {
     return true;
   };
 
+  /** The FFT grid tile under canvas point (x, y), with its canvas rectangle, or null off the tiles or without a grid. */
+  const fftTileAt = (x: number, y: number) => {
+    const grid = fftPanelGridRef.current;
+    if (!grid) return null;
+    for (let slot = 0; slot < grid.count; slot++) {
+      const dst = getFftSlot(slot, grid.count, grid.cols, grid.rows);
+      if (x >= dst.x && x < dst.x + dst.w && y >= dst.y && y < dst.y + dst.h) return { slot, dst };
+    }
+    return null;
+  };
+
   const handleFftWheel = (e: React.WheelEvent) => {
     e.stopPropagation();
     const canvas = fftCanvasRef.current;
@@ -9084,17 +9032,10 @@ function Show3D() {
     const rect = canvas.getBoundingClientRect();
     const mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
     const mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
-    const panelGrid = fftPanelGridRef.current;
-    if (panelGrid) {
-      for (let slot = 0; slot < panelGrid.count; slot++) {
-        const dst = getFftSlot(slot, panelGrid.count, panelGrid.cols, panelGrid.rows);
-        if (mouseX < dst.x || mouseX >= dst.x + dst.w || mouseY < dst.y || mouseY >= dst.y + dst.h) continue;
-        const localX = mouseX - dst.x;
-        const localY = mouseY - dst.y;
-        const panel = visiblePanelIndices[slot] ?? slot;
-        zoomFftAtPoint(localX, localY, e.deltaY, dst.w, dst.h, panel);
-        return;
-      }
+    const tile = fftTileAt(mouseX, mouseY);
+    if (tile) {
+      zoomFftAtPoint(mouseX - tile.dst.x, mouseY - tile.dst.y, e.deltaY, tile.dst.w, tile.dst.h, visiblePanelIndices[tile.slot] ?? tile.slot);
+      return;
     }
     zoomFftAtPoint(mouseX, mouseY, e.deltaY, canvas.width, canvas.height);
   };
@@ -9336,23 +9277,9 @@ function Show3D() {
     const overlayCanvas = fftLayoutOverlay ? fftInsetLayerRef.current : null;
     const fftCanvas = fftCanvasRef.current;
     const panelGrid = fftPanelGridRef.current;
-    const viewport = overlayCanvas
-      ? (() => {
-        const visibleCount = Math.max(1, visiblePanelCount || 1);
-        const cols = panelColsForCount(visibleCount);
-        const rows = Math.ceil(visibleCount / cols);
-        const gap = visibleCount > 1 ? (panelGapPx) : 0;
-        const panelW = (canvasW - gap * (cols - 1)) / cols;
-        const panelH = (canvasH - gap * (rows - 1)) / rows;
-        const insetPad = Math.min(8, Math.max(3, panelW * 0.025));
-        const insetMaxW = Math.max(24, panelW - insetPad * 2);
-        const insetMaxH = Math.max(20, panelH - insetPad * 2);
-        const insetBase = Math.min(insetMaxW, insetMaxH);
-        return {
-          w: Math.max(24, Math.min(insetMaxW, insetBase * resolvedFftOverlaySize)),
-          h: Math.max(20, Math.min(insetMaxH, insetBase * resolvedFftOverlaySize)),
-        };
-      })()
+    const overlayInset = overlayCanvas ? fftInsetRect(0) : null;
+    const viewport = overlayInset
+      ? { w: overlayInset.insetW, h: overlayInset.insetH }
       : fftCanvas
         ? panelGrid
           ? getFftSlot(0, panelGrid.count, panelGrid.cols, panelGrid.rows)
@@ -9387,24 +9314,22 @@ function Show3D() {
     const fftH = fftCropDims?.fftHeight ?? height;
     const panelGrid = fftPanelGridRef.current;
     if (panelGrid) {
-      for (let slot = 0; slot < panelGrid.count; slot++) {
-        const dst = getFftSlot(slot, panelGrid.count, panelGrid.cols, panelGrid.rows);
-        if (mouseX < dst.x || mouseX >= dst.x + dst.w || mouseY < dst.y || mouseY >= dst.y + dst.h) continue;
-        const panel = visiblePanelIndices[slot] ?? slot;
-        const view = linkPanels ? { zoom: fftZoom, panX: fftPanX, panY: fftPanY } : getFftViewForPanel(panel);
-        const localX = (mouseX - dst.x - view.panX) / view.zoom;
-        const localY = (mouseY - dst.y - view.panY) / view.zoom;
-        if (localX < 0 || localX >= dst.w || localY < 0 || localY >= dst.h) return null;
-        const srcCol = slot % panelGrid.cols;
-        const srcRow = Math.floor(slot / panelGrid.cols);
-        const tileX = (localX / Math.max(1, dst.w)) * panelGrid.panelWidth;
-        const tileY = (localY / Math.max(1, dst.h)) * panelGrid.panelHeight;
-        return {
-          col: srcCol * panelGrid.panelWidth + Math.max(0, Math.min(panelGrid.panelWidth - 1, tileX)),
-          row: srcRow * panelGrid.panelHeight + Math.max(0, Math.min(panelGrid.panelHeight - 1, tileY)),
-        };
-      }
-      return null;
+      const tile = fftTileAt(mouseX, mouseY);
+      if (!tile) return null;
+      const { slot, dst } = tile;
+      const panel = visiblePanelIndices[slot] ?? slot;
+      const view = linkPanels ? { zoom: fftZoom, panX: fftPanX, panY: fftPanY } : getFftViewForPanel(panel);
+      const localX = (mouseX - dst.x - view.panX) / view.zoom;
+      const localY = (mouseY - dst.y - view.panY) / view.zoom;
+      if (localX < 0 || localX >= dst.w || localY < 0 || localY >= dst.h) return null;
+      const srcCol = slot % panelGrid.cols;
+      const srcRow = Math.floor(slot / panelGrid.cols);
+      const tileX = (localX / Math.max(1, dst.w)) * panelGrid.panelWidth;
+      const tileY = (localY / Math.max(1, dst.h)) * panelGrid.panelHeight;
+      return {
+        col: srcCol * panelGrid.panelWidth + Math.max(0, Math.min(panelGrid.panelWidth - 1, tileX)),
+        row: srcRow * panelGrid.panelHeight + Math.max(0, Math.min(panelGrid.panelHeight - 1, tileY)),
+      };
     }
     const localX = (mouseX - fftPanX) / fftZoom;
     const localY = (mouseY - fftPanY) / fftZoom;
@@ -9427,16 +9352,12 @@ function Show3D() {
     const rect = canvas.getBoundingClientRect();
     const mouseX = (e.clientX - rect.left) * (canvas.width / Math.max(1, rect.width));
     const mouseY = (e.clientY - rect.top) * (canvas.height / Math.max(1, rect.height));
-    const panelGrid = fftPanelGridRef.current;
-    if (panelGrid) {
-      for (let slot = 0; slot < panelGrid.count; slot++) {
-        const dst = getFftSlot(slot, panelGrid.count, panelGrid.cols, panelGrid.rows);
-        if (mouseX < dst.x || mouseX >= dst.x + dst.w || mouseY < dst.y || mouseY >= dst.y + dst.h) continue;
-        const panel = visiblePanelIndices[slot] ?? slot;
-        const view = getFftViewForPanel(panel);
-        setFftPanStart({ x: e.clientX, y: e.clientY, pX: view.panX, pY: view.panY, panelIdx: panel, viewportW: dst.w, viewportH: dst.h });
-        return;
-      }
+    const tile = fftTileAt(mouseX, mouseY);
+    if (tile) {
+      const panel = visiblePanelIndices[tile.slot] ?? tile.slot;
+      const view = getFftViewForPanel(panel);
+      setFftPanStart({ x: e.clientX, y: e.clientY, pX: view.panX, pY: view.panY, panelIdx: panel, viewportW: tile.dst.w, viewportH: tile.dst.h });
+      return;
     }
     setFftPanStart({ x: e.clientX, y: e.clientY, pX: fftPanX, pY: fftPanY, panelIdx: null, viewportW: canvas.width, viewportH: canvas.height });
   };
@@ -11423,12 +11344,7 @@ function Show3D() {
             )}
             {(nPanels || 1) > 1 && visiblePanelIndices.map((panel, slot) => {
               if (!selectedPanelSet.has(panel)) return null;
-              const visibleCount = Math.max(1, visiblePanelCount || 1);
-              const cols = panelColsForCount(visibleCount);
-              const rows = Math.ceil(visibleCount / cols);
-              const gap = visibleCount > 1 ? (panelGapPx) : 0;
-              const panelW = (canvasW - gap * (cols - 1)) / cols;
-              const panelH = (canvasH - gap * (rows - 1)) / rows;
+              const { cols, gap, slotW: panelW, slotH: panelH } = getPanelLayout();
               const panelLeft = (slot % cols) * (panelW + gap);
               const panelTop = Math.floor(slot / cols) * (panelH + gap);
               return (
@@ -11453,12 +11369,7 @@ function Show3D() {
             {visiblePanelIndices.flatMap((panel, slot) => {
               const annotations = panelAnnotations?.[panel] || [];
               if (!annotations.length) return [];
-              const visibleCount = Math.max(1, visiblePanelCount || 1);
-              const cols = panelColsForCount(visibleCount);
-              const rows = Math.ceil(visibleCount / cols);
-              const gap = visibleCount > 1 ? (panelGapPx) : 0;
-              const panelW = (canvasW - gap * (cols - 1)) / cols;
-              const panelH = (canvasH - gap * (rows - 1)) / rows;
+              const { cols, gap, slotW: panelW, slotH: panelH } = getPanelLayout();
               const panelLeft = (slot % cols) * (panelW + gap);
               const panelTop = Math.floor(slot / cols) * (panelH + gap);
               return annotations.map((annotation, annotationIdx) => (
@@ -11492,12 +11403,7 @@ function Show3D() {
             {showPanelTitles !== false && (nPanels || 1) > 1 && visiblePanelIndices.map((panel, slot) => {
               const titleText = panelTitleText(panel);
               if (!titleText) return null;
-              const visibleCount = Math.max(1, visiblePanelCount || 1);
-              const cols = panelColsForCount(visibleCount);
-              const rows = Math.ceil(visibleCount / cols);
-              const gap = visibleCount > 1 ? (panelGapPx) : 0;
-              const panelW = (canvasW - gap * (cols - 1)) / cols;
-              const panelH = (canvasH - gap * (rows - 1)) / rows;
+              const { cols, gap, slotW: panelW, slotH: panelH } = getPanelLayout();
               const panelLeft = (slot % cols) * (panelW + gap);
               const panelTop = Math.floor(slot / cols) * (panelH + gap);
               const shownIdx = visibleSliceIdx;
@@ -11543,11 +11449,7 @@ function Show3D() {
                 each panel. Click toggles the star on the currently displayed
                 slice for THAT panel. Programmatic API: widget.star_panel(i). */}
             {panelChromeVisible && hasPanelChoices && visiblePanelIndices.map((i, slot) => {
-              const visibleCount = Math.max(1, visiblePanelCount || 1);
-              const cols = panelColsForCount(visibleCount);
-              const gap = visibleCount > 1 ? (panelGapPx) : 0;
-              const panelW = (canvasW - gap * (cols - 1)) / cols;
-              const panelH = (canvasH - gap * (Math.ceil(visibleCount / cols) - 1)) / Math.ceil(visibleCount / cols);
+              const { cols, gap, slotW: panelW, slotH: panelH } = getPanelLayout();
               const panelLeft = (slot % cols) * (panelW + gap);
               const panelTop = Math.floor(slot / cols) * (panelH + gap);
               const starredFrame = starred?.[i] ?? -1;
@@ -11633,12 +11535,7 @@ function Show3D() {
               );
             })}
             {panelChromeVisible && reorderMode && (nPanels || 1) > 1 && visiblePanelIndices.map((panel, slot) => {
-              const visibleCount = Math.max(1, visiblePanelCount || 1);
-              const cols = panelColsForCount(visibleCount);
-              const rows = Math.ceil(visibleCount / cols);
-              const gap = visibleCount > 1 ? (panelGapPx) : 0;
-              const panelW = (canvasW - gap * (cols - 1)) / cols;
-              const panelH = (canvasH - gap * (rows - 1)) / rows;
+              const { cols, gap, slotW: panelW, slotH: panelH } = getPanelLayout();
               const panelLeft = (slot % cols) * (panelW + gap);
               const panelTop = Math.floor(slot / cols) * (panelH + gap);
               const active = dragOverPanel === panel;
@@ -11784,12 +11681,7 @@ function Show3D() {
             )}
             {/* Cursor readout overlay */}
             {panelChromeVisible && cursorInfo && (() => {
-              const visibleCount = Math.max(1, visiblePanelCount || 1);
-              const cols = panelColsForCount(visibleCount);
-              const rows = Math.ceil(visibleCount / cols);
-              const gap = visibleCount > 1 ? (panelGapPx) : 0;
-              const panelW = (canvasW - gap * (cols - 1)) / cols;
-              const panelH = (canvasH - gap * (rows - 1)) / rows;
+              const { cols, gap, slotW: panelW, slotH: panelH } = getPanelLayout();
               const slot = visiblePanelIndices.indexOf(cursorInfo.panelIdx);
               if (slot < 0) return null;
               const col = slot % cols;
@@ -11831,12 +11723,7 @@ function Show3D() {
                 (linked behavior). User trait `show_resize_handles` toggles
                 visibility. */}
             {showResizeControls && (() => {
-              const visibleCount = Math.max(1, visiblePanelCount || 1);
-              const cols = panelColsForCount(visibleCount);
-              const rows = Math.ceil(visibleCount / cols);
-              const gap = visibleCount > 1 ? (panelGapPx) : 0;
-              const outPanelW = (canvasW - gap * (cols - 1)) / cols;
-              const outPanelH = (canvasH - gap * (rows - 1)) / rows;
+              const { cols, gap, slotW: outPanelW, slotH: outPanelH } = getPanelLayout();
               return visiblePanelIndices.map((panel, slot) => {
                 const col = slot % cols;
                 const row = Math.floor(slot / cols);
@@ -11858,28 +11745,8 @@ function Show3D() {
               });
             })()}
             {showFft && fftLayoutOverlay && (() => {
-              const visibleCount = Math.max(1, visiblePanelCount || 1);
-              const cols = panelColsForCount(visibleCount);
-              const rows = Math.ceil(visibleCount / cols);
-              const gap = visibleCount > 1 ? (panelGapPx) : 0;
-              const panelW = (canvasW - gap * (cols - 1)) / cols;
-              const panelH = (canvasH - gap * (rows - 1)) / rows;
               return visiblePanelIndices.map((panel, slot) => {
-                const panelLeft = (slot % cols) * (panelW + gap);
-                const panelTop = Math.floor(slot / cols) * (panelH + gap);
-                const insetPad = Math.min(8, Math.max(3, panelW * 0.025));
-                const insetMaxW = Math.max(24, panelW - insetPad * 2);
-                const insetMaxH = Math.max(20, panelH - insetPad * 2);
-                const insetBase = Math.min(insetMaxW, insetMaxH);
-                const insetW = Math.max(24, Math.min(insetMaxW, insetBase * resolvedFftOverlaySize));
-                const insetH = Math.max(20, Math.min(insetMaxH, insetBase * resolvedFftOverlaySize));
-                const topInsetPad = fftOverlayTopInsetPad(insetPad, showPanelTitles, nPanels || 1, panelTitleFontSize);
-                const insetX = resolvedFftOverlayPosition.endsWith("right")
-                  ? panelLeft + panelW - insetW - insetPad
-                  : panelLeft + insetPad;
-                const insetY = resolvedFftOverlayPosition.startsWith("bottom")
-                  ? panelTop + panelH - insetH - insetPad
-                  : panelTop + topInsetPad;
+                const { panelLeft, panelTop, panelW, panelH, insetX, insetY, insetW, insetH } = fftInsetRect(slot);
                 const previewInsetX = fftOverlayDragPreview ? panelLeft + fftOverlayDragPreview.x : insetX;
                 const previewInsetY = fftOverlayDragPreview ? panelTop + fftOverlayDragPreview.y : insetY;
                 return (
@@ -11928,7 +11795,6 @@ function Show3D() {
                           setFftOverlayDragPreview(null);
                         }
                       }}
-                      onMouseDown={(e) => handleFftInsetMouseDown(e, panelLeft, panelTop, panelW, panelH, insetX, insetY, insetW, insetH)}
                       sx={{
                         position: "absolute",
                         top: 0,
@@ -12640,12 +12506,7 @@ function Show3D() {
               <canvas ref={fftOverlayRef} width={Math.round(canvasW * dpr)} height={Math.round(canvasH * dpr)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} aria-hidden="true" />
               {show3dFrequencyRing}
               {showZoomIndicator === true && panelChromeVisible && (() => {
-                const visibleCount = Math.max(1, visiblePanelCount || 1);
-                const cols = panelColsForCount(visibleCount);
-                const rows = Math.ceil(visibleCount / cols);
-                const gap = visibleCount > 1 ? (panelGapPx) : 0;
-                const outPanelW = (canvasW - gap * (cols - 1)) / cols;
-                const outPanelH = (canvasH - gap * (rows - 1)) / rows;
+                const { cols, gap, slotW: outPanelW, slotH: outPanelH } = getPanelLayout();
                 return visiblePanelIndices.map((panel, slot) => {
                   const col = slot % cols;
                   const row = Math.floor(slot / cols);
@@ -12709,12 +12570,7 @@ function Show3D() {
                 </Box>
               )}
               {showResizeControls && (() => {
-                const visibleCount = Math.max(1, visiblePanelCount || 1);
-                const cols = panelColsForCount(visibleCount);
-                const rows = Math.ceil(visibleCount / cols);
-                const gap = visibleCount > 1 ? (panelGapPx) : 0;
-                const outPanelW = (canvasW - gap * (cols - 1)) / cols;
-                const outPanelH = (canvasH - gap * (rows - 1)) / rows;
+                const { cols, gap, slotW: outPanelW, slotH: outPanelH } = getPanelLayout();
                 return visiblePanelIndices.map((panel, slot) => {
                   const col = slot % cols;
                   const row = Math.floor(slot / cols);
