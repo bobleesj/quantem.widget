@@ -258,7 +258,7 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
     profile_image_height = traitlets.Int(0).tag(sync=True)
     profile_image_width = traitlets.Int(0).tag(sync=True)
     profile_line = traitlets.List(traitlets.Dict()).tag(sync=True)
-    profile_width = traitlets.Int(1).tag(sync=True)
+    profile_width = traitlets.Int(1)  # read by the Python line sampler only, so it is not synced
 
     # View -> View selected as 2D: the browser asks, Python builds a Show2D below the plot
     handoff_request = traitlets.Unicode("").tag(sync=True)

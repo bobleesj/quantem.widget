@@ -298,7 +298,7 @@ def _image_widgets():
         ("Show3D", STACK, lambda data: Show3D(data, verbose=False), lambda widget: widget._offline_float_stack,
          {"title": "gold", "pixel_size": 2.0, "pixel_unit": "A"}),
         ("Show3DSlices", STACK, lambda data: Show3DSlices(data), lambda widget: widget.volume_bytes,
-         {"title": "gold", "pixel_size": 2.0}),
+         {"title": "gold", "pixel_size_axes": [2.0, 2.0, 2.0]}),
         ("ShowDiffraction", IMAGE, lambda data: ShowDiffraction(data, device="cpu", verbose=False),
          lambda widget: widget.frame_bytes, {"title": "gold"}),
         ("ChooseLattice", IMAGE, lambda data: ChooseLattice(data), lambda widget: widget.frame_bytes, {"title": "gold"}),
@@ -347,7 +347,7 @@ def test_image_widgets_show_the_same_numbers_for_every_input_type(name, monkeypa
             if label in ("quantem core", "stand-in"):
                 assert metadata == from_dataset, label
             else:  # an array carries no title or scale
-                assert metadata.get("title", "") == "" and metadata.get("pixel_size", 0.0) == 0.0, label
+                assert metadata.get("title", "") == "" and not np.any(metadata.get("pixel_size", metadata.get("pixel_size_axes", 0.0))), label
         finally:
             widget.close()
     reference = numbers.pop("numpy")

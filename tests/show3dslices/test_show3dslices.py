@@ -53,7 +53,8 @@ def test_browser_volume_matches_numpy_slices():
     np.testing.assert_array_equal(sent[0, :, widget.slice_y, :], volume[:, volume.shape[1] // 2, :])
     assert (widget.nz, widget.ny, widget.nx) == volume.shape
     assert widget.pixel_size_axes == pytest.approx([3.0, 1.8, 1.8])
-    assert widget.pixel_size == pytest.approx(1.8)
+    # the three-axis sampling is the one calibration the browser reads: no lateral-mean copy beside it
+    assert "pixel_size" not in widget.get_state() and "pixel_size" not in widget.state_dict()
     assert widget.title == "columns"
     assert widget.smooth is False  # each voxel drawn as a sharp block; bilinear Smooth is opt-in
 

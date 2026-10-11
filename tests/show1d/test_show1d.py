@@ -161,6 +161,8 @@ def test_from_image_embeds_profile_context_with_physical_distance():
     assert (widget.labels, widget.x_label, widget.x_unit, widget.title) == (["profile"], "distance", "nm", "profile")
     assert (widget.pixel_size, widget.pixel_unit, widget.image_cmap) == (0.5, "nm", "gray")
     assert (widget.profile_image_height, widget.profile_image_width, widget.profile_width) == (16, 24, 3)
+    # the line width is read by the Python sampler only: saved with the state, not sent to the browser
+    assert widget.state_dict()["profile_width"] == 3 and "profile_width" not in widget.get_state()
     assert widget.profile_line == [{"row": 2.0, "col": 1.0}, {"row": 2.0, "col": 9.0}]
     np.testing.assert_array_equal(_decode(widget.profile_image_bytes, image.shape), image)
     x = _decode(widget.x_bytes, (widget.n_points,))

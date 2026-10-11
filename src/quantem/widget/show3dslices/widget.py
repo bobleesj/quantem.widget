@@ -195,9 +195,7 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     auto_contrast = traitlets.Bool(True).tag(sync=True)
     vmin = traitlets.Float(None, allow_none=True).tag(sync=True)
     vmax = traitlets.Float(None, allow_none=True).tag(sync=True)
-    # pixel_size is the lateral mean the XY scale bar reads; pixel_size_axes is
-    # the full [pz, py, px] triple for the depth-axis bars.
-    pixel_size = traitlets.Float(0.0).tag(sync=True)
+    # the [pz, py, px] sampling every panel's scale bar reads
     pixel_size_axes = traitlets.List(traitlets.Float(), default_value=[0.0, 0.0, 0.0]).tag(sync=True)
     scale_bar_visible = traitlets.Bool(True).tag(sync=True)
     z_stretch = traitlets.Float(30.0).tag(sync=True)
@@ -242,7 +240,7 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         "fft_colormap", "fft_log_scale", "fft_auto", "orthographic", "smooth", "flip",
         "show_colorbar", "image_vmin_pct", "image_vmax_pct", "show_slice_planes",
         "plane_visibility", "slice_alignment", "row_shift_px_per_slice", "col_shift_px_per_slice",
-        "slice_alignment_cached", "volume_opacity", "slice_plane_opacity", "pixel_size",
+        "slice_alignment_cached", "volume_opacity", "slice_plane_opacity",
         "pixel_size_axes", "scale_bar_visible", "z_stretch", "panel_width_px", "view_state",
         "slice_x", "slice_y", "slice_z", "oblique_angle", "oblique_profile_line", "fps", "loop",
         "reverse", "boomerang", "play_axis", "dim_labels",
@@ -442,7 +440,6 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             self.show_title = bool(show_title)
             self.cmap = cmap
             self.pixel_size_axes = pixel_size_axes
-            self.pixel_size = (pixel_size_axes[1] + pixel_size_axes[2]) / 2.0
             self.scale_bar_visible = bool(show_scale_bar)
             self.z_stretch = float(z_stretch)
             self.panel_width_px = int(panel_width_px)
