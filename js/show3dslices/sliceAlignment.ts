@@ -25,6 +25,7 @@
  */
 
 import { WebGPUFFT, fft2d, nextPow2, requireWebGPUFFT } from "../display/fft";
+import { selectKth } from "../display/filter";
 
 // Matches src/quantem/widget/show3dslices/alignment.py. Changing one
 // side without the other makes the browser and the kernel disagree on the shift.
@@ -104,38 +105,6 @@ function blurAxis(length: number, sigma: number): BlurAxis {
 }
 
 /**
- * Partially reorder `values` so index `k` holds the value it would have after a
- * full sort, and everything before it is no larger. Quickselect only recurses
- * into the side containing `k`, so it is O(n) where a sort is O(n log n).
- */
-function selectInPlace(values: Float32Array, k: number): number {
-  let left = 0;
-  let right = values.length - 1;
-  while (left < right) {
-    // Median-of-three pivot keeps already-sorted input off the O(n^2) path.
-    const middle = (left + right) >> 1;
-    if (values[middle] < values[left]) { const swap = values[middle]; values[middle] = values[left]; values[left] = swap; }
-    if (values[right] < values[left]) { const swap = values[right]; values[right] = values[left]; values[left] = swap; }
-    if (values[right] < values[middle]) { const swap = values[right]; values[right] = values[middle]; values[middle] = swap; }
-    const pivot = values[middle];
-    let i = left;
-    let j = right;
-    while (i <= j) {
-      while (values[i] < pivot) i++;
-      while (values[j] > pivot) j--;
-      if (i <= j) {
-        const swap = values[i]; values[i] = values[j]; values[j] = swap;
-        i++; j--;
-      }
-    }
-    if (k <= j) right = j;
-    else if (k >= i) left = i;
-    else break;
-  }
-  return values[k];
-}
-
-/**
  * Median of a copy, used to center each slice before registration.
  *
  * Quickselect rather than a full sort: this runs once per slice on every pixel
@@ -145,7 +114,7 @@ function selectInPlace(values: Float32Array, k: number): number {
 export function median(values: Float32Array): number {
   const scratch = Float32Array.from(values);
   const mid = scratch.length >> 1;
-  const upper = selectInPlace(scratch, mid);
+  const upper = selectKth(scratch, mid);
   if (scratch.length % 2) return upper;
   // Even length averages the two central order statistics; everything below
   // `mid` is already <= upper after the select, so the lower one is their max.

@@ -87,21 +87,30 @@ function pythonRound(value: number): number {
   return floor % 2 === 0 ? floor : floor + 1;
 }
 
-/** In-place Hoare quickselect: exact k-th order statistic, O(n) average. */
-function selectKth(values: Float32Array, k: number): number {
-  let lo = 0;
-  let hi = values.length - 1;
-  while (lo < hi) {
-    const pivot = values[(lo + hi) >> 1];
-    let i = lo;
-    let j = hi;
+/**
+ * In-place Hoare quickselect: index `k` ends up holding the value it would have
+ * after a full sort (the exact k-th order statistic), in O(n) average where a
+ * sort is O(n log n). The median-of-three pivot keeps already-sorted input off
+ * the O(n^2) path.
+ */
+export function selectKth(values: Float32Array, k: number): number {
+  let left = 0;
+  let right = values.length - 1;
+  while (left < right) {
+    const middle = (left + right) >> 1;
+    if (values[middle] < values[left]) { const swap = values[middle]; values[middle] = values[left]; values[left] = swap; }
+    if (values[right] < values[left]) { const swap = values[right]; values[right] = values[left]; values[left] = swap; }
+    if (values[right] < values[middle]) { const swap = values[right]; values[right] = values[middle]; values[middle] = swap; }
+    const pivot = values[middle];
+    let i = left;
+    let j = right;
     while (i <= j) {
       while (values[i] < pivot) i++;
       while (values[j] > pivot) j--;
       if (i <= j) { const swap = values[i]; values[i] = values[j]; values[j] = swap; i++; j--; }
     }
-    if (k <= j) hi = j;
-    else if (k >= i) lo = i;
+    if (k <= j) right = j;
+    else if (k >= i) left = i;
     else break;
   }
   return values[k];
