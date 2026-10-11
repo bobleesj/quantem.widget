@@ -438,11 +438,11 @@ function niceTicks(lo: number, hi: number, target = 5): number[] {
 // way to whole decades when two or more are in range, else to 1, 2 and 5 times a
 // power of ten, else to the linear nice ticks of the range.
 function logTicks(lo: number, hi: number, target = 5): number[] {
-  const exponents = niceTicks(log10(lo), log10(hi), target);
+  const exponents = niceTicks(Math.log10(lo), Math.log10(hi), target);
   if (exponents.length > 1 && exponents[1] - exponents[0] >= 1) return exponents.map((value) => Math.pow(10, value));
   const decades: number[] = [];
   const mantissas: number[] = [];
-  for (let decade = Math.floor(log10(lo)); decade <= Math.ceil(log10(hi)); decade += 1) {
+  for (let decade = Math.floor(Math.log10(lo)); decade <= Math.ceil(Math.log10(hi)); decade += 1) {
     for (const mantissa of [1, 2, 5]) {
       const value = mantissa * Math.pow(10, decade);
       if (value < lo || value > hi) continue;
@@ -466,12 +466,8 @@ function integerTicks(lo: number, hi: number, target = 6): number[] {
   return ticks;
 }
 
-function log10(value: number): number {
-  return Math.log(value) / Math.LN10;
-}
-
 function transformY(value: number, logScale: boolean): number {
-  return logScale ? log10(Math.max(value, Number.MIN_VALUE)) : value;
+  return logScale ? Math.log10(Math.max(value, Number.MIN_VALUE)) : value;
 }
 
 function dataToX(x: number, geom: PlotGeometry): number {
@@ -623,16 +619,8 @@ function formatCompactValue(value: number, decimals = 3): string {
   return trimTrailingZeros(value.toFixed(decimals));
 }
 
-function formatAxisValue(value: number): string {
-  return formatCompactValue(value, 3);
-}
-
-function formatRangeValue(value: number): string {
-  return formatCompactValue(value, 2);
-}
-
 function axisPositionText(value: number, label: string, unit: string, precise = false): string {
-  const formatted = precise && Number.isFinite(value) ? value.toPrecision(6) : formatAxisValue(value);
+  const formatted = precise && Number.isFinite(value) ? value.toPrecision(6) : formatCompactValue(value);
   if (!formatted) return "";
   const axis = label.trim() || "x";
   return `${axis} ${formatted}${unit.trim() ? ` ${unit.trim()}` : ""}`;
@@ -2496,7 +2484,7 @@ function MiniHistogram({
             userSelect: "none",
           }}
         >
-          {formatRangeValue(clipMin)} - {formatRangeValue(clipMax)}
+          {formatCompactValue(clipMin, 2)} - {formatCompactValue(clipMax, 2)}
         </Typography>
         <canvas
           ref={canvasRef}
@@ -2941,12 +2929,12 @@ function Show1DWidget() {
     }
     return groups;
   }, [groupCount, nSnapshots, snapshotImageGroups]);
-  const legacySelectedSnapshot = nSnapshots > 0
+  const modelSelectedSnapshot = nSnapshots > 0
     ? clampValue(Math.round(selectedSnapshotIdx < 0 ? nSnapshots - 1 : selectedSnapshotIdx), 0, nSnapshots - 1)
     : -1;
   const modelSelectedSnapshotGroup = selectedSnapshotGroupIdx >= 0
     ? selectedSnapshotGroupIdx
-    : (snapshotImageGroups[legacySelectedSnapshot] ?? legacySelectedSnapshot);
+    : (snapshotImageGroups[modelSelectedSnapshot] ?? modelSelectedSnapshot);
   const activeSelectedSnapshotGroup = hoverSnapshotGroupIdx !== null
     ? hoverSnapshotGroupIdx
     : transientSnapshotGroupIdx !== null
@@ -2974,8 +2962,8 @@ function Show1DWidget() {
   const selectedGroupImageIndices = selectedGroupAllImageIndices
     .filter((imageIdx) => isSnapshotImageVisible(imageIdx))
     .sort((a, b) => compareSnapshotLabels(imageLabelForIndex(a), imageLabelForIndex(b), trialRowByKey));
-  const selectedSnapshot = selectedGroupImageIndices.includes(legacySelectedSnapshot)
-    ? legacySelectedSnapshot
+  const selectedSnapshot = selectedGroupImageIndices.includes(modelSelectedSnapshot)
+    ? modelSelectedSnapshot
     : selectedGroupImageIndices[0] ?? -1;
   const selectedSnapshotIteration = selectedGroup >= 0 && Number.isFinite(snapshotGroupIterations?.[selectedGroup])
     ? Number(snapshotGroupIterations[selectedGroup])
@@ -4010,13 +3998,13 @@ function Show1DWidget() {
     ctx.textAlign = "center";
     for (const tick of xTicks) {
       const x = dataToX(tick, geom);
-      ctx.fillText(formatAxisValue(tick), x, geom.top + geom.plotH + 18);
+      ctx.fillText(formatCompactValue(tick), x, geom.top + geom.plotH + 18);
     }
     ctx.textAlign = "right";
     for (const tick of yTickValues) {
       if (logScale && tick <= 0) continue;
       const y = dataToY(tick, geom);
-      ctx.fillText(tick !== 0 && Math.abs(tick) < 0.1 ? tick.toExponential(2) : formatAxisValue(tick), geom.left - 8, y + 4);
+      ctx.fillText(tick !== 0 && Math.abs(tick) < 0.1 ? tick.toExponential(2) : formatCompactValue(tick), geom.left - 8, y + 4);
     }
     ctx.textAlign = "center";
     const xAxisTitle = xLabel ? `${xLabel}${xUnit ? ` (${xUnit})` : ""}` : xUnit;
@@ -5342,11 +5330,7 @@ function Show1DWidget() {
                         key={imageIdx}
                         data-testid={`show1d-snapshot-panel-${imageIdx}`}
                         title={imageLabel}
-                        onMouseEnter={() => setHoverSnapshotImageIdx(imageIdx)}
-                        onMouseOver={() => setHoverSnapshotImageIdx(imageIdx)}
-                        onMouseLeave={() => setHoverSnapshotImageIdx((current) => (current === imageIdx ? null : current))}
                         onPointerEnter={() => setHoverSnapshotImageIdx(imageIdx)}
-                        onPointerOver={() => setHoverSnapshotImageIdx(imageIdx)}
                         onPointerLeave={() => setHoverSnapshotImageIdx((current) => (current === imageIdx ? null : current))}
                         onFocus={() => setHoverSnapshotImageIdx(imageIdx)}
                         onBlur={(event) => {
