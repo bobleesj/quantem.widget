@@ -64,6 +64,7 @@ import { RenderPathBadge } from "../shared/RenderPathBadge";
 import { KeyboardShortcuts } from "../shared/KeyboardShortcuts";
 import { HTML_EXPORT_OVERHEAD_BYTES, exportTitleSlug, formatSavedBytes, isAbortLikeError } from "../shared/exportFormat";
 import { pointToSegmentDistance } from "../shared/geometry";
+import { shouldIgnoreWidgetShortcut } from "../shared/widgetShortcuts";
 import { Histogram } from "../shared/Histogram";
 import {
   CIRCLE_HANDLE_ANGLE,
@@ -5141,19 +5142,13 @@ function Show4DSTEM() {
   } | null>(null);
   const fftClickStartRef = React.useRef<{ x: number; y: number } | null>(null);
 
-  const isTypingTarget = React.useCallback((target: EventTarget | null): boolean => {
-    if (!(target instanceof HTMLElement)) return false;
-    if (target.isContentEditable) return true;
-    return target.closest("input, textarea, select, [role='textbox'], [contenteditable='true']") !== null;
-  }, []);
-
   const handleRootMouseDownCapture = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest("canvas")) rootRef.current?.focus({ preventScroll: true });
   }, []);
 
   const handleKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (isTypingTarget(event.target)) return;
+    if (shouldIgnoreWidgetShortcut(event.target, event.key)) return;
 
     const step = event.shiftKey ? 10 : 1;
     let handled = false;
@@ -5194,6 +5189,13 @@ function Show4DSTEM() {
             handled = true;
           }
           break;
+        case " ":
+          // The multiple view shows every dataset at once and has no playback.
+          if (nFrames > 1 && !compareMode) {
+            setFramePlaying(!framePlaying);
+            handled = true;
+          }
+          break;
         case "Escape":
           rootRef.current?.blur();
           handled = true;
@@ -5205,8 +5207,8 @@ function Show4DSTEM() {
       event.stopPropagation();
     }
   }, [
-    compareMode, frameIdx, isTypingTarget, nFrames,
-    posCol, posRow, setFrameIdx, setPosCol, setPosRow, shapeCols, shapeRows,
+    compareMode, frameIdx, framePlaying, nFrames,
+    posCol, posRow, setFrameIdx, setFramePlaying, setPosCol, setPosRow, shapeCols, shapeRows,
   ]);
 
   // Sync local state
@@ -7446,7 +7448,7 @@ function Show4DSTEM() {
     ["← / →", "Move scan col"],
     ["Shift+Arrows", "Move ×10"],
     ...(nFrames > 1 ? [["[ / ]", `Prev / next ${frameDimLabel.toLowerCase()}`] as [string, string]] : []),
-    ["Space", "Play / pause"],
+    ...(nFrames > 1 && !compareMode ? [["Space", "Play / pause"] as [string, string]] : []),
     ["R", "Reset all zoom/pan"],
     ["Esc", "Release keyboard focus"],
     ["Scroll", "Zoom"],
