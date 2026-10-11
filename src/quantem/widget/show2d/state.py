@@ -78,7 +78,7 @@ class Show2DState:
         "page_labels", "page_starred", "hidden_panels", "hidden_page_slots", "panel_order",
         "panel_frame_indices", "panel_playback_fps",
         "show_panel_titles", "panel_title_font_size", "panel_title_style",
-        "inter_panel_gap_px", "inter_panel_gap_color",
+        "panel_gap_px", "inter_panel_gap_color",
         "gallery_outer_border_px", "gallery_outer_border_color",
         "panel_inner_border_px", "panel_inner_border_color",
         "show_stats", "show_fft", "fft_window", "fft_metrics",

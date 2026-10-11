@@ -55,7 +55,7 @@ class Show2DStaticPng:
         """
         gap_color = str(self.inter_panel_gap_color or "")
         return {
-            "inter_panel_gap_px": max(0, int(self.inter_panel_gap_px)),
+            "panel_gap_px": max(0, int(self.panel_gap_px)),
             "inter_panel_gap_color": gap_color,
             "gallery_outer_border_px": max(0, int(self.gallery_outer_border_px)),
             "gallery_outer_border_color": str(self.gallery_outer_border_color or gap_color),
@@ -713,7 +713,7 @@ class Show2DStaticPng:
         if not specs:
             return None
         chrome = self._gallery_export_chrome()
-        gap_px = chrome["inter_panel_gap_px"]
+        gap_px = chrome["panel_gap_px"]
         gap_color = chrome["inter_panel_gap_color"]
         outer_px = chrome["gallery_outer_border_px"]
         outer_color = chrome["gallery_outer_border_color"]

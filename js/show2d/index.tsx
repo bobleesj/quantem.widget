@@ -156,7 +156,6 @@ const SHOW2D_STANDALONE_VIEW_STATE_KEYS = [
   "image_rotations",
   "initial_zoom",
   "inter_panel_gap_color",
-  "inter_panel_gap_px",
   "inset_plots",
   "link_contrast",
   "link_pan",
@@ -169,6 +168,7 @@ const SHOW2D_STANDALONE_VIEW_STATE_KEYS = [
   "panel_annotations",
   "panel_cmaps",
   "panel_frame_indices",
+  "panel_gap_px",
   "panel_inner_border_color",
   "panel_inner_border_px",
   "panel_order",
@@ -937,7 +937,7 @@ function Show2D() {
   const [showPanelTitles] = useModelState<boolean>("show_panel_titles");
   const [panelTitleFontSize] = useModelState<number>("panel_title_font_size");
   const [panelTitleStyle] = useModelState<PanelTitleStyle>("panel_title_style");
-  const [interPanelGapPxState] = useModelState<number>("inter_panel_gap_px");
+  const [panelGapPxState] = useModelState<number>("panel_gap_px");
   const [interPanelGapColorState] = useModelState<string>("inter_panel_gap_color");
   const [galleryOuterBorderPxState] = useModelState<number>("gallery_outer_border_px");
   const [galleryOuterBorderColorState] = useModelState<string>("gallery_outer_border_color");
@@ -2602,7 +2602,7 @@ function Show2D() {
   const displayScale = canvasSize / Math.max(width, height);
   const canvasW = Math.round(width * displayScale);
   const canvasH = Math.round(height * displayScale);
-  const galleryGapPx = Math.max(0, Number.isFinite(interPanelGapPxState) ? interPanelGapPxState : 0);
+  const panelGapPx = Math.max(0, Number.isFinite(panelGapPxState) ? panelGapPxState : 0);
   const galleryGapColorResolved = String(interPanelGapColorState || "");
   const galleryOuterBorderPx = isGallery ? Math.max(0, Number.isFinite(galleryOuterBorderPxState) ? galleryOuterBorderPxState : 0) : 0;
   const galleryOuterBorderColor = String(galleryOuterBorderColorState || galleryGapColorResolved || "");
@@ -2610,7 +2610,7 @@ function Show2D() {
   const panelInnerBorderColor = String(panelInnerBorderColorState || themeColors.border);
   const histogramWidthPx = 110;
   const histogramGapPx = 15;
-  const galleryGridWidth = isGallery ? effectiveNcols * canvasW + (effectiveNcols - 1) * galleryGapPx + 2 * galleryOuterBorderPx : canvasW;
+  const galleryGridWidth = isGallery ? effectiveNcols * canvasW + (effectiveNcols - 1) * panelGapPx + 2 * galleryOuterBorderPx : canvasW;
   // Wrap against the actual notebook/container width. maxWidth below still
   // enforces the requested column count, while auto-fit avoids viewport-only
   // breakpoints that overflow narrow sidebars in a wide browser window.
@@ -2773,7 +2773,7 @@ function Show2D() {
   const groupMarkerOverlays = React.useMemo(() => {
     if (!isGallery || visibleImageIndices.length === 0 || canvasW <= 0 || canvasH <= 0) return [];
     const cols = Math.max(1, effectiveNcols);
-    const gap = Math.max(0, galleryGapPx);
+    const gap = Math.max(0, panelGapPx);
     const build = (markers: MarkerMap | undefined, axis: "row" | "col") => Object.entries(markers || {})
       .map(([rawKey, color]) => {
         const target = Number(rawKey);
@@ -2800,7 +2800,7 @@ function Show2D() {
       })
       .filter(Boolean) as Array<{ key: string; axis: "row" | "col"; color: string; left: number; top: number; width: number; height: number }>;
     return [...build(rowMarkers, "row"), ...build(colMarkers, "col")];
-  }, [canvasH, canvasW, colMarkers, effectiveNcols, galleryOuterBorderPx, galleryGapPx, isGallery, rowMarkers, visibleImageIndices]);
+  }, [canvasH, canvasW, colMarkers, effectiveNcols, galleryOuterBorderPx, panelGapPx, isGallery, rowMarkers, visibleImageIndices]);
 
   // ROI FFT active: both ROI and FFT on, with a selected ROI
   const roiFftActive = showFft && roiActive && roiSelectedIdx >= 0 && roiSelectedIdx < (roiList?.length ?? 0);
@@ -6712,7 +6712,7 @@ function Show2D() {
     }
     const cols = isGallery ? Math.max(1, Math.min(clampedNcols, panels.length)) : 1;
     const rows = Math.max(1, Math.ceil(panels.length / cols));
-    const gap = isGallery ? galleryGapPx : 0;
+    const gap = isGallery ? panelGapPx : 0;
     const frame = isGallery ? galleryOuterBorderPx : 0;
     const frameColor = galleryOuterBorderColor;
     const gapColor = galleryGapColorResolved;
@@ -6928,7 +6928,7 @@ function Show2D() {
     canvasW,
     clampedNcols,
     cmap,
-    galleryGapPx,
+    panelGapPx,
     galleryGapColorResolved,
     galleryOuterBorderColor,
     galleryOuterBorderPx,
@@ -8466,11 +8466,11 @@ function Show2D() {
             <Box sx={{
               display: "grid",
               gridTemplateColumns: galleryGridColumns,
-              gap: `${galleryGapPx}px`,
+              gap: `${panelGapPx}px`,
               width: "100%",
               boxSizing: "border-box",
               justifyContent: "start",
-              bgcolor: galleryGapPx > 0 ? galleryGapColorResolved : "transparent",
+              bgcolor: panelGapPx > 0 ? galleryGapColorResolved : "transparent",
             }}>
               {visibleImageIndices.map((i) => (
                 <Box

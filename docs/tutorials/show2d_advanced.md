@@ -502,7 +502,7 @@ w = Show2D(
     panels,
     labels=labels,
     ncols=3,
-    inter_panel_gap_px=2,
+    panel_gap_px=2,
     inter_panel_gap_color="#000000",
     gallery_outer_border_px=2,
     gallery_outer_border_color="#000000",
@@ -515,7 +515,7 @@ w
 With the settings above, `Show2D` places the first panel at `(2, 2)` in SVG
 coordinates, inserts 2 pixels between panels, adds a 2-pixel frame around the
 outside, and draws a 1-pixel inner stroke on each panel. To remove only the
-between-panel layer while keeping individual frames, set `inter_panel_gap_px=0`
+between-panel layer while keeping individual frames, set `panel_gap_px=0`
 and keep `panel_inner_border_px > 0`.
 
 ### Put the scale bar on only one panel

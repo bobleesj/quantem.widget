@@ -155,9 +155,9 @@ def test_ui_mode_presets_and_unknown_kwargs():
         Show2D(_frame(), pixel_size_angstrom=0.5, verbose=False)
 
 
-def test_drift_plot_keywords_center_and_gallery_gap_px(capsys):
+def test_drift_plot_keywords_center_and_panel_gap_px(capsys):
     # quantem's drift plots: plot_combined(interactive=True) passes center=,
-    # drift.show() passes gallery_gap_px=0 with pixel_size/pixel_unit traits.
+    # drift.show() passes the panel gap with pixel_size/pixel_unit traits.
     image = _frame(0, (256, 256))
     combined = Show2D([image, image], labels=["0 deg", "90 deg"], ncols=2, size=300, display_bin=1, zoom=4,
                       center=(40, 200), ui_mode="report")
@@ -166,12 +166,10 @@ def test_drift_plot_keywords_center_and_gallery_gap_px(capsys):
     binned = Show2D(image, zoom=4, center=(40, 200), display_bin=2, verbose=False)
     assert (binned.zoom_row, binned.zoom_col) == (20.0, 100.0)
     assert Show2D(image, center=None).zoom_row is None
-    shown = Show2D([image] * 3, ncols=3, gallery_gap_px=0, size=200, pixel_size=0.1, pixel_unit="nm",
+    shown = Show2D([image] * 3, ncols=3, panel_gap_px=0, size=200, pixel_size=0.1, pixel_unit="nm",
                    labels=["before", "affine", "nonrigid"], zoom=1, ui_mode="interactive")
-    assert (shown.inter_panel_gap_px, shown.pixel_size, shown.pixel_unit) == (0, 0.1, "nm")
-    assert Show2D([image] * 2, gallery_gap_px=6).inter_panel_gap_px == 6
-    with pytest.raises(ValueError, match="not both"):
-        Show2D(image, gallery_gap_px=1, inter_panel_gap_px=2)
+    assert (shown.panel_gap_px, shown.pixel_size, shown.pixel_unit) == (0, 0.1, "nm")
+    assert Show2D([image] * 2, panel_gap_px=6).panel_gap_px == 6
     capsys.readouterr()
 
 
@@ -656,3 +654,21 @@ def test_set_image_with_another_panel_count_resizes_every_per_panel_list():
     assert widget.panel_cmaps == [] and widget.marker_colors == [] and widget.panel_annotations == []
     assert widget.image_flips_horizontal == [False] * 3 and len(widget.denoise_modes) == 3
     assert len(widget.frequency_filter_cutoffs) == 3 and widget.denoise_modes == [widget.denoise] * 3
+
+
+# --- one name per value (earlier spellings are refused) -----------------------
+
+
+def test_the_panel_gap_has_one_name_in_both_gallery_widgets():
+    # the gap was inter_panel_gap_px (trait), gallery_gap_px (Show2D keyword) and panel_gap (Show3D keyword)
+    assert Show2D([_frame()] * 2, panel_gap_px=6, verbose=False).state_dict()["panel_gap_px"] == 6
+    for earlier in ("gallery_gap_px", "inter_panel_gap_px"):
+        with pytest.raises(TypeError, match=f"unexpected keyword argument '{earlier}'"):
+            Show2D([_frame()] * 2, **{earlier: 6}, verbose=False)
+    stack = np.zeros((2, 8, 8), dtype=np.float32)
+    stacked = Show3D(stack, stack, panel_gap_px=3, verbose=False)
+    assert stacked.state_dict()["panel_gap_px"] == 3
+    stacked.free()
+    for earlier in ("panel_gap", "inter_panel_gap_px"):
+        with pytest.raises(TypeError, match=f"unexpected keyword argument '{earlier}'"):
+            Show3D(stack, stack, **{earlier: 3}, verbose=False)

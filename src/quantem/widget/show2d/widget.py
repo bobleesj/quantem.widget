@@ -467,14 +467,12 @@ class Show2D(
     inset_plots, panel_annotations, panel_overlays : optional
         Per-panel inset curves, text annotations and shape overlays; the dict
         schema is in ``show2d.options`` and ``docs/api/show2d.md``.
-    inter_panel_gap_px, inter_panel_gap_color : optional
+    panel_gap_px, inter_panel_gap_color : optional
         Gallery chrome: the gap between panels.
     gallery_outer_border_px, gallery_outer_border_color : optional
         Gallery chrome: the frame around the whole gallery.
     panel_inner_border_px, panel_inner_border_color : optional
         Gallery chrome: each panel's own inner stroke.
-    gallery_gap_px : int, optional
-        Older name of ``inter_panel_gap_px``; pass one of the two.
     denoise : {"none", "gaussian", "anscombe"} or list of str, default "none"
         Display-only denoise run in the browser (the data and stats stay raw);
         a list gives each panel its own mode. Turns the denoise switch on and
@@ -641,7 +639,7 @@ class Show2D(
     show_panel_titles = traitlets.Bool(True).tag(sync=True)
     panel_title_font_size = traitlets.Int(11).tag(sync=True)
     panel_title_style = traitlets.Dict(default_value={}).tag(sync=True)
-    inter_panel_gap_px = traitlets.Int(0).tag(sync=True)
+    panel_gap_px = traitlets.Int(0).tag(sync=True)
     inter_panel_gap_color = traitlets.Unicode("").tag(sync=True)
     gallery_outer_border_px = traitlets.Int(0).tag(sync=True)
     gallery_outer_border_color = traitlets.Unicode("").tag(sync=True)
@@ -863,8 +861,7 @@ class Show2D(
         inset_plots: Sequence[dict[str, object] | None] | dict[str, object] | None = None,
         panel_annotations: object = None,
         panel_overlays: object = None,
-        inter_panel_gap_px: int | None = None,
-        gallery_gap_px: int | None = None,
+        panel_gap_px: int | None = None,
         inter_panel_gap_color: str | None = None,
         gallery_outer_border_px: int | None = None,
         gallery_outer_border_color: str | None = None,
@@ -916,11 +913,7 @@ class Show2D(
         ncols = int(ncols)
         if ncols < 1:
             raise ValueError(f"ncols must be >= 1, got {ncols}")
-        if gallery_gap_px is not None:
-            if inter_panel_gap_px is not None:
-                raise ValueError("Use either inter_panel_gap_px= or gallery_gap_px= (its older name), not both")
-            inter_panel_gap_px = gallery_gap_px
-        inter_panel_gap_px = 0 if inter_panel_gap_px is None else _nonnegative_int(inter_panel_gap_px, name="inter_panel_gap_px")
+        panel_gap_px = 0 if panel_gap_px is None else _nonnegative_int(panel_gap_px, name="panel_gap_px")
         inter_panel_gap_color = "" if inter_panel_gap_color is None else str(inter_panel_gap_color)
         gallery_outer_border_px = (
             0 if gallery_outer_border_px is None
@@ -1120,7 +1113,7 @@ class Show2D(
             self.show_panel_titles = bool(ui["show_panel_titles"])
             self.panel_title_font_size = int(panel_title_font_size)
             self.panel_title_style = dict(panel_title_style)
-            self.inter_panel_gap_px = inter_panel_gap_px
+            self.panel_gap_px = panel_gap_px
             self.inter_panel_gap_color = inter_panel_gap_color
             self.gallery_outer_border_px = gallery_outer_border_px
             self.gallery_outer_border_color = gallery_outer_border_color

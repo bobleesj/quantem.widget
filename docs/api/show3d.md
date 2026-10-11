@@ -24,7 +24,7 @@ panels, paged galleries and standalone HTML and GIF exports. See the
 | Colormap dropdown | `cmap`, `panel_cmaps` | Shared by default; More > Color shared unlocks per-panel colormaps |
 | Smooth toggle | `smooth` | Off by default: each data pixel is drawn as a sharp block (nearest neighbour). On: bilinear interpolation wherever the canvas enlarges a frame, its FFT or the kymograph. Display only; the data are unchanged |
 | Contrast | `auto_contrast`, `percentile_low`, `percentile_high`, `vmin`, `vmax`, `vmin_per_panel`, `vmax_per_panel`, `contrast_preset`, `log_scale` | Percentile or fixed ranges, per stack or per panel |
-| Panel layout (multi-panel) | `n_panels`, `link_panels`, `max_cols`, `inter_panel_gap_px` (keyword `panel_gap=`) | Panels arrange in rows; linked zoom and pan move all |
+| Panel layout (multi-panel) | `n_panels`, `link_panels`, `max_cols`, `panel_gap_px` | Panels arrange in rows; linked zoom and pan move all |
 | Panel visibility and order | `hidden_panels`, `selected_panels`, `panel_order` | Hover actions collapse or reorder panels without touching data |
 | Page controls (paged galleries) | `page_idx`, `n_pages`, `panels_per_page`, `page_starred`; `star_page()` | Shows and stars one page of panels at a time |
 | Local panel annotations | `panel_annotations` | In-image labels per panel, placed by corner, point or box |

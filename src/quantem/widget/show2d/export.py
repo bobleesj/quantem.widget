@@ -677,7 +677,7 @@ class Show2DExport:
         export_path.parent.mkdir(parents=True, exist_ok=True)
         export_scale = max(1.0, min(8.0, float(scale)))
         panel_w = int(round(self._static_canvas_css_px()))
-        gap = chrome["inter_panel_gap_px"]
+        gap = chrome["panel_gap_px"]
         gap_color = chrome["inter_panel_gap_color"]
         border = chrome["gallery_outer_border_px"]
         border_color = chrome["gallery_outer_border_color"]

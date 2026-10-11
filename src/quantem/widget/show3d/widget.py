@@ -184,7 +184,7 @@ class Show3D(
         Display width per panel in CSS pixels; 0 uses the frontend default.
     max_cols : int, optional
         Panels per row; 0 is one row.
-    panel_gap : int
+    panel_gap_px : int
         Gap between panels in CSS pixels.
     dim_label : str
         Name of the frame axis in the controls ("Frame", "Slice", ...).
@@ -296,7 +296,7 @@ class Show3D(
     show_resize_handles = traitlets.Bool(True).tag(sync=True)
     show_zoom_indicator = traitlets.Bool(False).tag(sync=True)
     show_panel_titles = traitlets.Bool(True).tag(sync=True)
-    inter_panel_gap_px = traitlets.Int(0).tag(sync=True)
+    panel_gap_px = traitlets.Int(0).tag(sync=True)
 
     playing = traitlets.Bool(False).tag(sync=True)
     reverse = traitlets.Bool(False).tag(sync=True)
@@ -720,7 +720,7 @@ class Show3D(
         fft_overlay_zoom: float = 1.0,
         panel_width_px: int = 0,
         max_cols: int | None = None,
-        panel_gap: int = 0,
+        panel_gap_px: int = 0,
         dim_label: str = "Frame",
         display_bin: int = 1,
         save_state: bool = False,
@@ -780,7 +780,7 @@ class Show3D(
             show_resize_handles=bool(ui["show_resize_handles"]),
             show_zoom_indicator=bool(ui["show_zoom_indicator"]),
             show_scale_bar=bool(ui["show_scale_bar"]),
-            inter_panel_gap_px=_nonnegative_int(panel_gap, name="panel_gap"),
+            panel_gap_px=_nonnegative_int(panel_gap_px, name="panel_gap_px"),
         )
         self._static_fallback_mime = self._static_fallback_mime_type()
         # hold_sync batches every trait assignment into one comm message; a
@@ -1207,7 +1207,7 @@ class Show3D(
         "percentile_high", "percentile_low", "image_vmin_pct", "image_vmax_pct", "contrast_preset",
         "vmin", "vmax", "link_contrast", "link_panels", "view_state", "vmin_per_panel", "vmax_per_panel",
         "show_title", "show_stats", "show_controls", "controls_collapsed", "max_cols",
-        "inter_panel_gap_px", "show_panel_titles", "show_zoom_indicator", "show_fft", "fft_layout",
+        "panel_gap_px", "show_panel_titles", "show_zoom_indicator", "show_fft", "fft_layout",
         "fft_overlay_position", "fft_overlay_size", "fft_overlay_zoom", "show_kymograph", "fft_window",
         "pixel_size", "pixel_unit", "smooth", "image_rotation", "rotation_scope", "frame_rotations",
         "flip_horizontal", "flip_vertical", "show_scale_bar", "size", "fps", "avg_window", "loop",

@@ -280,14 +280,14 @@ def test_saved_notebook_state_keeps_a_preview_instead_of_pixels():
 def test_static_preview_matches_a_show2d_gallery_pixel_for_pixel():
     rng = np.random.default_rng(18)
     stacks = [rng.random((4, 96, 112), dtype=np.float32) + panel * 0.1 for panel in range(4)]
-    widget = Show3D(*stacks, panel_titles=[f"P{p + 1}" for p in range(4)], max_cols=2, panel_gap=3, panel_width_px=180, sampling=0.12, units="nm", verbose=False)
+    widget = Show3D(*stacks, panel_titles=[f"P{p + 1}" for p in range(4)], max_cols=2, panel_gap_px=3, panel_width_px=180, sampling=0.12, units="nm", verbose=False)
     widget.slice_idx = 2
     widget.hidden_panels = [1]
     reference = Show2D(
         [widget._get_display_panel_frame(panel, 2) for panel in (0, 2, 3)],
         labels=[widget._static_panel_title(panel, 2) for panel in (0, 2, 3)],
         ncols=2,
-        inter_panel_gap_px=3,
+        panel_gap_px=3,
         size=180,
         sampling=widget.pixel_size,
         units="nm",
@@ -303,9 +303,9 @@ def test_static_preview_matches_a_show2d_gallery_pixel_for_pixel():
     )
     np.testing.assert_array_equal(_decode_png(widget._static_png_b64(max_px=220)), _decode_png(reference._static_png_b64(max_px=220)))
     # the gap is one trait, the one the browser draws: a later change reaches the preview too
-    widget.inter_panel_gap_px = reference.inter_panel_gap_px = 9
+    widget.panel_gap_px = reference.panel_gap_px = 9
     np.testing.assert_array_equal(_decode_png(widget._static_png_b64(max_px=220)), _decode_png(reference._static_png_b64(max_px=220)))
-    assert widget.state_dict()["inter_panel_gap_px"] == 9 and "panel_gap" not in widget.state_dict()
+    assert widget.state_dict()["panel_gap_px"] == 9
     widget.free()
 
 

@@ -181,7 +181,7 @@ const SHOW3D_STANDALONE_VIEW_STATE_KEYS = [
   "page_idx",
   "panel_annotations",
   "panel_cmaps",
-  "inter_panel_gap_px",
+  "panel_gap_px",
   "panel_order",
   "panel_overlays",
   "panel_title_spans",
@@ -1507,7 +1507,7 @@ function Show3D() {
   const [showZoomIndicator] = useModelState<boolean>("show_zoom_indicator");
   const [showPanelTitles] = useModelState<boolean>("show_panel_titles");
   const panelTitleFontSize = 11;
-  const [interPanelGapPxState] = useModelState<number>("inter_panel_gap_px");
+  const [panelGapPxState] = useModelState<number>("panel_gap_px");
   const [linkContrast, setLinkContrast] = useModelState<boolean>("link_contrast");
   const [cmap, setCmap] = useModelState<string>("cmap");
   // The model-backed setter can emit its React update after another synced
@@ -1520,7 +1520,7 @@ function Show3D() {
   const [panelCmaps, setPanelCmaps] = useModelState<string[]>("panel_cmaps");
   const [panelAnnotations] = useModelState<PanelAnnotationSpec[][]>("panel_annotations");
   const [panelOverlays, setPanelOverlays] = useModelState<PanelOverlaySpec[][]>("panel_overlays");
-  const panelGapPx = Math.max(0, interPanelGapPxState || 0);
+  const panelGapPx = Math.max(0, panelGapPxState || 0);
   const interPanelGapColor = String(themeColors.bg);
   const [flipRows, setFlipRows] = useModelState<boolean>("flip_vertical");
   const [flipCols, setFlipCols] = useModelState<boolean>("flip_horizontal");
