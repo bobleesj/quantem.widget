@@ -378,8 +378,8 @@ def in_wedge(theta_deg: np.ndarray, start_deg: float, end_deg: float) -> np.ndar
 
     Both ends are taken modulo 360 and the wedge runs through increasing angle from start to
     end, so a wedge across 0 degrees (start 350, end 10) wraps instead of selecting its
-    complement. The analysis mask and the sector profile share it so a wedge drawn in the
-    browser excludes exactly the pixels the profile leaves out.
+    complement. The analysis mask uses it, so a wedge drawn in the browser excludes exactly
+    the pixels between its two angles.
     """
     start, end = float(start_deg) % 360.0, float(end_deg) % 360.0
     if start <= end:
