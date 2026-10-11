@@ -9,6 +9,7 @@ where the two paths must agree exactly.
 
 import gzip
 import json
+import re
 from pathlib import Path
 
 import comm
@@ -632,6 +633,9 @@ def test_webgpu_bundle_links_masters_and_writes_vendored_viewer(tmp_path):
     assert '__QT_H5_DECODE_DTYPE ??= "uint8"' in page
     assert "__QT_REQUIRE_LOCAL_H5_FILES = true" in page
     assert "cdn.jsdelivr.net" not in page and (tmp_path / ".viewer" / "anywidget.min.js").exists()
+    # opened from disk the page has origin null: a crossorigin or integrity attribute blocks the local script
+    local_scripts = re.findall(r"<script\b[^>]*\bsrc=\"\./[^\"]*\"[^>]*>", page)
+    assert len(local_scripts) >= 2 and not [tag for tag in local_scripts if "crossorigin" in tag or "integrity" in tag]
     assert ".viewer/Show4DSTEM.html" in (tmp_path / "index.html").read_text()
 
 

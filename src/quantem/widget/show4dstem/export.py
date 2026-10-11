@@ -542,6 +542,10 @@ CDN_REWRITES = (
     (re.compile(r"https://cdn\.jsdelivr\.net/[^\"']*html-manager[^\"']*/embed-amd\.js"), "./embed-amd.js"),
     (re.compile(r"\"https://cdn\.jsdelivr\.net/npm/anywidget@[^\"]*\""), '"./anywidget.min"'),
 )
+# A file:// page has origin null, so a local script still marked crossorigin (or
+# carrying the CDN's integrity hash) fails the CORS check and the page stays blank.
+LOCAL_SCRIPT = re.compile(r"<script\b[^>]*\bsrc=\"\./[^\"]*\"[^>]*>")
+CDN_ATTRIBUTE = re.compile(r"\s(?:integrity=\"[^\"]*\"|crossorigin(?:=\"[^\"]*\")?)")
 
 
 def h5_tuning_script(dtype: str) -> str:
@@ -632,6 +636,7 @@ def write_webgpu_bundle(widget, out_dir, *, port: int = 8794, title: str | None 
     text = page.read_text(encoding="utf-8")
     for pattern, local in CDN_REWRITES:
         text = pattern.sub(local, text)
+    text = LOCAL_SCRIPT.sub(lambda tag: CDN_ATTRIBUTE.sub("", tag.group(0)), text)
     page.write_text(text, encoding="utf-8")
     for name in ("require.min.js", "embed-amd.js", "anywidget.min.js"):
         source = VENDOR / f"{name}.gz"
