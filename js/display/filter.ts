@@ -631,8 +631,8 @@ class GPUDisplayFilterEngine {
   ): Promise<Float32Array> {
     // The engine reuses a shared transient buffer list for stage outputs. A
     // real Show2D/Show3D widget may ask for another filter while an earlier
-    // readback is still mapping; serialize calls so one cleanup cannot destroy
-    // another call's staging buffer and force a slow CPU fallback.
+    // readback is still mapping; serialize calls so one call's cleanup cannot
+    // destroy another call's staging buffer mid-readback.
     const previous = this.filterQueue;
     let releaseQueue: () => void = () => {};
     this.filterQueue = new Promise<void>((resolve) => { releaseQueue = resolve; });

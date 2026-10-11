@@ -77,37 +77,30 @@ fn reduce(@builtin(local_invocation_index) lane: u32) {
     if (!slot.liveRange) {
       const groups = Math.min(Math.ceil(slot.count / this.RANGE_WG_SIZE), this.device.limits.maxComputeWorkgroupsPerDimension);
       const partials = this.device.createBuffer({ size: Math.max(8, groups * 8), usage: GPUBufferUsage.STORAGE });
-      let parameters: GPUBuffer | null = null;
-      try {
-        // One block for both passes: the partial pass reads it as RangeParams
-        // { count, groups } (its grid stride), the finish pass as Config.
-        parameters = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        const values = new Uint32Array([slot.count, groups, logScale ? 1 : 0, 0]);
-        this.device.queue.writeBuffer(parameters, 0, values);
-        slot.liveRange = {
-          groups, partials, parameters, values, renderGroup: null,
-          reduceGroup: this.device.createBindGroup({
-            layout: this.rangePipeline!.getBindGroupLayout(0),
-            entries: [
-              { binding: 0, resource: { buffer: slot.dataBuffer } },
-              { binding: 1, resource: { buffer: partials } },
-              { binding: 2, resource: { buffer: parameters } },
-            ],
-          }),
-          finishGroup: this.device.createBindGroup({
-            layout: this.rangeFinishPipeline.getBindGroupLayout(0),
-            entries: [
-              { binding: 0, resource: { buffer: partials } },
-              { binding: 1, resource: { buffer: parameters } },
-              { binding: 2, resource: { buffer: this.ensureSlotRangeBuffer(slot) } },
-            ],
-          }),
-        };
-      } catch (error) {
-        partials.destroy();
-        parameters?.destroy();
-        throw error;
-      }
+      // One block for both passes: the partial pass reads it as RangeParams
+      // { count, groups } (its grid stride), the finish pass as Config.
+      const parameters = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      const values = new Uint32Array([slot.count, groups, logScale ? 1 : 0, 0]);
+      this.device.queue.writeBuffer(parameters, 0, values);
+      slot.liveRange = {
+        groups, partials, parameters, values, renderGroup: null,
+        reduceGroup: this.device.createBindGroup({
+          layout: this.rangePipeline!.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: slot.dataBuffer } },
+            { binding: 1, resource: { buffer: partials } },
+            { binding: 2, resource: { buffer: parameters } },
+          ],
+        }),
+        finishGroup: this.device.createBindGroup({
+          layout: this.rangeFinishPipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: partials } },
+            { binding: 1, resource: { buffer: parameters } },
+            { binding: 2, resource: { buffer: this.ensureSlotRangeBuffer(slot) } },
+          ],
+        }),
+      };
     }
     const state = slot.liveRange;
     if (state.values[2] !== Number(logScale)) {
