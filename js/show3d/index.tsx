@@ -2817,16 +2817,16 @@ function Show3D() {
     const zoomValue = Math.max(MIN_IMAGE_ZOOM, Math.min(MAX_ZOOM, nextZoom));
     const panXValue = clampAxis(nextPanX, viewportW, zoomValue);
     const panYValue = clampAxis(nextPanY, viewportH, zoomValue);
-    const c = playRef.current;
-    if (c.linkPanels) {
-      const nextLinked = { ...c.linkedState, zoom: zoomValue, panX: panXValue, panY: panYValue };
-      c.linkedState = nextLinked;
+    const settings = playRef.current;
+    if (settings.linkPanels) {
+      const nextLinked = { ...settings.linkedState, zoom: zoomValue, panX: panXValue, panY: panYValue };
+      settings.linkedState = nextLinked;
       linkedStateLiveRef.current = nextLinked;
     } else {
-      const next = c.panelStates.slice();
+      const next = settings.panelStates.slice();
       const prev = next[panelIdx] || initialState;
       next[panelIdx] = { ...prev, zoom: zoomValue, panX: panXValue, panY: panYValue };
-      c.panelStates = next;
+      settings.panelStates = next;
       panelStatesLiveRef.current = next;
     }
   };
@@ -2856,10 +2856,9 @@ function Show3D() {
     const requestedCols = (maxCols && maxCols > 0)
       ? Math.min(maxCols, panelCount, MAX_PANEL_COLUMNS)
       : Math.min(panelCount, MAX_PANEL_COLUMNS);
-    // Honor the scientist's column choice by shrinking square panels to fit
-    // the current surface. Previously only galleries with 8+ panels did this,
-    // so a 3-panel stack could display `Cols 2` while retaining max_cols=3/4,
-    // then silently jump to three columns after an unrelated repaint.
+    // Honor the scientist's column choice by shrinking square panels to fit the current surface,
+    // for every panel count: otherwise a 3-panel stack shows `Cols 2` while keeping max_cols 3 or 4
+    // and jumps to three columns at an unrelated repaint.
     if (rootLayoutWidth > 0) {
       return Math.max(180, Math.min(500, Math.floor(rootLayoutWidth / requestedCols)));
     }
@@ -3914,30 +3913,30 @@ function Show3D() {
   // Calculate display scale. In multi-panel mode `width` may be either the
   // concatenated source width or one shared source frame drawn into N slots.
   // `panel_width_px` keeps the per-panel source geometry explicit.
-  const _nPanelsLocal = Math.max(1, visiblePanelCount || 1);
-  const _colsLocal = panelColsForCount(_nPanelsLocal);
-  const _rowsLocal = Math.ceil(_nPanelsLocal / _colsLocal);
+  const layoutPanelCount = Math.max(1, visiblePanelCount || 1);
+  const layoutCols = panelColsForCount(layoutPanelCount);
+  const layoutRows = Math.ceil(layoutPanelCount / layoutCols);
   const sourcePanelWidth = totalPanelCount > 1
     ? Math.max(1, panelWidthPx || Math.round(width / totalPanelCount))
     : Math.max(1, width);
   const sourcePanelHeight = Math.max(1, height);
   const isMultiPanelSource = totalPanelCount > 1;
   const requestedDisplayScale = isMultiPanelSource
-    ? mainCanvasSize / Math.max(1, sourcePanelWidth * _colsLocal)
+    ? mainCanvasSize / Math.max(1, sourcePanelWidth * layoutCols)
     : mainCanvasSize / Math.max(width, height);
   // For 90°/270° rotations, swap canvas dims so non-square images fit without clipping.
   const rotSwap = (imageRotation % 2) !== 0;
   const requestedCanvasW = isMultiPanelSource
-    ? Math.round(sourcePanelWidth * requestedDisplayScale * _colsLocal)
+    ? Math.round(sourcePanelWidth * requestedDisplayScale * layoutCols)
     : Math.round((rotSwap ? height : width) * requestedDisplayScale);
   // Grid layout: when max_cols wraps panels into multiple rows, canvasH grows to fit `rows` rows.
-  const _requestedCanvasHSingleRow = Math.round((rotSwap ? width : height) * requestedDisplayScale);
-  const _gapForLayout = _nPanelsLocal > 1 ? (panelGapPx) : 0;
-  const _requestedSlotWForLayout = (requestedCanvasW - _gapForLayout * (_colsLocal - 1)) / _colsLocal;
-  const _requestedSlotHForLayout = _requestedSlotWForLayout * (sourcePanelHeight / sourcePanelWidth);
+  const requestedSingleRowHeight = Math.round((rotSwap ? width : height) * requestedDisplayScale);
+  const layoutGap = layoutPanelCount > 1 ? (panelGapPx) : 0;
+  const requestedSlotWidth = (requestedCanvasW - layoutGap * (layoutCols - 1)) / layoutCols;
+  const requestedSlotHeight = requestedSlotWidth * (sourcePanelHeight / sourcePanelWidth);
   const requestedCanvasH = isMultiPanelSource
-    ? Math.round(_requestedSlotHForLayout * _rowsLocal + _gapForLayout * (_rowsLocal - 1))
-    : _requestedCanvasHSingleRow;
+    ? Math.round(requestedSlotHeight * layoutRows + layoutGap * (layoutRows - 1))
+    : requestedSingleRowHeight;
   const gridCanvasCap = isMultiPanelSource
     ? Math.min(
         1,
@@ -3947,14 +3946,14 @@ function Show3D() {
     : 1;
   const displayScale = requestedDisplayScale * gridCanvasCap;
   const canvasW = isMultiPanelSource
-    ? Math.round(sourcePanelWidth * displayScale * _colsLocal)
+    ? Math.round(sourcePanelWidth * displayScale * layoutCols)
     : Math.round((rotSwap ? height : width) * displayScale);
-  const _canvasHSingleRow = Math.round((rotSwap ? width : height) * displayScale);
-  const _slotWForLayout = (canvasW - _gapForLayout * (_colsLocal - 1)) / _colsLocal;
-  const _slotHForLayout = _slotWForLayout * (sourcePanelHeight / sourcePanelWidth);
+  const singleRowHeight = Math.round((rotSwap ? width : height) * displayScale);
+  const layoutSlotWidth = (canvasW - layoutGap * (layoutCols - 1)) / layoutCols;
+  const layoutSlotHeight = layoutSlotWidth * (sourcePanelHeight / sourcePanelWidth);
   const canvasH = isMultiPanelSource
-    ? Math.round(_slotHForLayout * _rowsLocal + _gapForLayout * (_rowsLocal - 1))
-    : _canvasHSingleRow;
+    ? Math.round(layoutSlotHeight * layoutRows + layoutGap * (layoutRows - 1))
+    : singleRowHeight;
   const mainPanelWidth = `min(100%, ${canvasW}px)`;
   const mainPanelAspectRatio = `${Math.max(canvasW, 1)} / ${Math.max(canvasH, 1)}`;
   const effectiveLoopEnd = loopEnd < 0 ? nSlices - 1 : loopEnd;
@@ -3974,9 +3973,9 @@ function Show3D() {
     state: PanelState;
   };
   const getPanelLayout = () => {
-    const n = _nPanelsLocal;
-    const cols = _colsLocal;
-    const rows = _rowsLocal;
+    const n = layoutPanelCount;
+    const cols = layoutCols;
+    const rows = layoutRows;
     const gap = n > 1 ? (panelGapPx) : 0;
     const slotW = (canvasW - gap * (cols - 1)) / cols;
     const slotH = (canvasH - gap * (rows - 1)) / rows;
@@ -4181,7 +4180,7 @@ function Show3D() {
   const pathIdxRef = React.useRef(0);
   const playRef = React.useRef({
     fps: playbackFps, reverse, boomerang, loop, loopStart, loopEnd: effectiveLoopEnd,
-    nSlices, width, height, displayScale, canvasW, canvasH, panelCols: _colsLocal,
+    nSlices, width, height, displayScale, canvasW, canvasH, panelCols: layoutCols,
     logScale, autoContrast, percentileLow, percentileHigh,
     dataMin, dataMax, cmap, imageVminPct, imageVmaxPct,
     autoVmins, autoVmaxs,
@@ -4207,7 +4206,7 @@ function Show3D() {
       : panelStates;
     playRef.current = {
       fps: playbackFps, reverse, boomerang, loop, loopStart, loopEnd: effectiveLoopEnd,
-      nSlices, width, height, displayScale, canvasW, canvasH, panelCols: _colsLocal,
+      nSlices, width, height, displayScale, canvasW, canvasH, panelCols: layoutCols,
       logScale, autoContrast, percentileLow, percentileHigh,
       dataMin, dataMax, cmap, imageVminPct, imageVmaxPct,
       autoVmins, autoVmaxs,
@@ -4221,7 +4220,7 @@ function Show3D() {
       diffMode, avgWindow,
     };
   }, [playbackFps, reverse, boomerang, loop, loopStart, effectiveLoopEnd,
-    nSlices, width, height, displayScale, canvasW, canvasH, _colsLocal,
+    nSlices, width, height, displayScale, canvasW, canvasH, layoutCols,
     logScale, autoContrast, percentileLow, percentileHigh,
     dataMin, dataMax, cmap, imageVminPct, imageVmaxPct,
     autoVmins, autoVmaxs, linkContrast, linkedState, linkPanels, panelStates, vminPerPanel, vmaxPerPanel, visiblePanelIndices,
@@ -4254,8 +4253,8 @@ function Show3D() {
   }, [logScale, setLogScale, setVmaxPerPanel, setVminPerPanel]);
 
   const updatePlaybackLiveControls = React.useCallback((idx: number) => {
-    const c = playRef.current;
-    writeLiveFrameControls(rootRef.current, playbackSliderRef.current, playbackLiveCountRef.current, idx, Math.max(1, c.nSlices || nSlices || 1), c.loop);
+    const settings = playRef.current;
+    writeLiveFrameControls(rootRef.current, playbackSliderRef.current, playbackLiveCountRef.current, idx, Math.max(1, settings.nSlices || nSlices || 1), settings.loop);
   }, [nSlices]);
 
   const viewportTransformActive = React.useCallback(() => {
@@ -4560,36 +4559,36 @@ function Show3D() {
 
   const sharedDirectDisplayRange = (
     normalized: number,
-    c: typeof playRef.current,
+    settings: typeof playRef.current,
   ): RenderRange => {
-    if (c.autoContrast) {
-      const cached = cachedAutoDisplayRange(c.autoVmins, c.autoVmaxs, normalized, c.logScale)
-        || cachedAutoDisplayRange(localAutoVminsRef.current, localAutoVmaxsRef.current, normalized, c.logScale);
+    if (settings.autoContrast) {
+      const cached = cachedAutoDisplayRange(settings.autoVmins, settings.autoVmaxs, normalized, settings.logScale)
+        || cachedAutoDisplayRange(localAutoVminsRef.current, localAutoVmaxsRef.current, normalized, settings.logScale);
       if (cached) return cached;
     }
     return resolveDisplayRange(
-      c.dataMin,
-      c.dataMax,
-      c.traitVmin,
-      c.traitVmax,
-      c.logScale,
-      c.imageVminPct,
-      c.imageVmaxPct,
+      settings.dataMin,
+      settings.dataMax,
+      settings.traitVmin,
+      settings.traitVmax,
+      settings.logScale,
+      settings.imageVminPct,
+      settings.imageVmaxPct,
     );
   };
 
   const directPanelRanges = (
     normalized: number,
     panels: number[],
-    c: typeof playRef.current,
+    settings: typeof playRef.current,
   ): RenderRange | RenderRange[] => {
     // A packed multi-panel source remains multi-panel even when the scientist
     // hides all but one panel. Basing this branch on `panels.length` decoded an
     // isolated phase panel against the global phase+BF+DF count range during
     // GPU scrubbing/playback, so the visible phase image became black.
     if (Math.max(1, nPanels || 1) > 1 && !sharedPanelSource) {
-      const sharedAutoRange = c.autoContrast ? sharedDirectDisplayRange(normalized, c) : null;
-      const stack = resolveDisplayBounds(c.dataMin, c.dataMax, c.traitVmin, c.traitVmax, c.logScale);
+      const sharedAutoRange = settings.autoContrast ? sharedDirectDisplayRange(normalized, settings) : null;
+      const stack = resolveDisplayBounds(settings.dataMin, settings.dataMax, settings.traitVmin, settings.traitVmax, settings.logScale);
       return panels.map((panel) => {
         const panelDataRange = panelDataRanges[panel];
         const bounds = (panelDataRange && panelDataRange.max > panelDataRange.min) ? panelDataRange : stack;
@@ -4598,24 +4597,24 @@ function Show3D() {
           bounds,
           sharedAutoRange,
           null,
-          c.autoContrast,
-          c.percentileLow,
-          c.percentileHigh,
+          settings.autoContrast,
+          settings.percentileLow,
+          settings.percentileHigh,
         );
       });
     }
-    return sharedDirectDisplayRange(normalized, c);
+    return sharedDirectDisplayRange(normalized, settings);
   };
 
   const directPanelTransforms = (
     panels: number[],
-    c: typeof playRef.current,
+    settings: typeof playRef.current,
   ): { zoom: number; panX: number; panY: number }[] => panels.map((panel) => {
-    const base = c.panelStates[panel] || initialState;
+    const base = settings.panelStates[panel] || initialState;
     return {
-      zoom: c.linkPanels ? c.linkedState.zoom : base.zoom,
-      panX: c.linkPanels ? c.linkedState.panX : base.panX,
-      panY: c.linkPanels ? c.linkedState.panY : base.panY,
+      zoom: settings.linkPanels ? settings.linkedState.zoom : base.zoom,
+      panX: settings.linkPanels ? settings.linkedState.panX : base.panX,
+      panY: settings.linkPanels ? settings.linkedState.panY : base.panY,
     };
   });
 
@@ -4638,20 +4637,20 @@ function Show3D() {
     const normalized = ((Math.round(idx) % Math.max(1, nSlices)) + Math.max(1, nSlices)) % Math.max(1, nSlices);
     const engine = gpuCmapRef.current;
     if (!engine || !gpuCmapReadyRef.current) return false;
-    const c = playRef.current;
-    if (c.imageRotation % 4 !== 0 || c.width <= 0 || c.height <= 0 || c.canvasW <= 0 || c.canvasH <= 0) return false;
-    const panels = (c.visiblePanelIndices.length ? c.visiblePanelIndices : visiblePanelIndices)
+    const settings = playRef.current;
+    if (settings.imageRotation % 4 !== 0 || settings.width <= 0 || settings.height <= 0 || settings.canvasW <= 0 || settings.canvasH <= 0) return false;
+    const panels = (settings.visiblePanelIndices.length ? settings.visiblePanelIndices : visiblePanelIndices)
       .filter((panel) => Number.isFinite(panel) && panel >= 0 && panel < panelSourceCount);
     if (panels.length === 0) return false;
-    const sourcePanelWidth = Math.max(1, panelWidthPx || Math.round(c.width / panelSourceCount));
-    if (sourcePanelWidth <= 0 || sourcePanelWidth > c.width) return false;
-    const gpuCtx = ensureGpuDisplayContext(engine, c.canvasW, c.canvasH);
+    const sourcePanelWidth = Math.max(1, panelWidthPx || Math.round(settings.width / panelSourceCount));
+    if (sourcePanelWidth <= 0 || sourcePanelWidth > settings.width) return false;
+    const gpuCtx = ensureGpuDisplayContext(engine, settings.canvasW, settings.canvasH);
     if (!gpuCtx) return false;
 
     if (gpuSlotMissesTheView(residentSlotIdx)) return false;
     const rawCurrentFrame = getOfflineFrame(normalized);
     let slotIdx: number | null = residentSlotIdx;
-    let renderLogScale = c.logScale;
+    let renderLogScale = settings.logScale;
     if (slotIdx !== null) {
       // A GPU transform such as temporal averaging already populated this
       // scratch slot. Do not upload or touch the raw resident frame.
@@ -4663,40 +4662,40 @@ function Show3D() {
         upload &&
         rawCurrentFrame &&
         upload.source === rawCurrentFrame &&
-        upload.width === c.width &&
-        upload.height === c.height
+        upload.width === settings.width &&
+        upload.height === settings.height
       ) {
         slotIdx = 0;
-        renderLogScale = upload.logScale ? false : c.logScale;
-      } else if (rawCurrentFrame && rawCurrentFrame.length >= c.width * c.height) {
-        const rgbaCapacity = Math.max(1, Math.round(c.canvasW * c.canvasH));
-        engine.uploadData(normalized, rawCurrentFrame, c.width, c.height, rgbaCapacity);
+        renderLogScale = upload.logScale ? false : settings.logScale;
+      } else if (rawCurrentFrame && rawCurrentFrame.length >= settings.width * settings.height) {
+        const rgbaCapacity = Math.max(1, Math.round(settings.canvasW * settings.canvasH));
+        engine.uploadData(normalized, rawCurrentFrame, settings.width, settings.height, rgbaCapacity);
         gpuFrameCacheUploadedRef.current.add(normalized);
         slotIdx = normalized;
       }
     }
     if (slotIdx === null) return false;
 
-    const liveCmap = cmapLiveRef.current || c.cmap;
+    const liveCmap = cmapLiveRef.current || settings.cmap;
     const lut = COLORMAPS[liveCmap] || COLORMAPS.inferno;
     engine.uploadLUT(liveCmap, lut);
     const panelCount = panels.length;
     // Playback continues in one long rAF effect while layout controls remain
     // live. Read columns from playRef with the other live canvas geometry;
     // panelColsForCount here would be the closure captured when Play started.
-    const cols = Math.max(1, Math.min(panelCount, Math.round(c.panelCols || 1)));
+    const cols = Math.max(1, Math.min(panelCount, Math.round(settings.panelCols || 1)));
     const rows = Math.ceil(panelCount / cols);
     const gap = panelCount > 1 ? panelGapPx : 0;
-    const ranges = directPanelRanges(normalized, panels, c);
-    const transforms = directPanelTransforms(panels, c);
+    const ranges = directPanelRanges(normalized, panels, settings);
+    const transforms = directPanelTransforms(panels, settings);
     // Sharp panels enlarged by a non-integer factor in the default view take the Canvas2D draw, as
     // in the single-panel path, so WebGPU and CPU pick the same texel at texel edges.
-    const slotW = (c.canvasW - gap * (cols - 1)) / cols;
-    const slotH = (c.canvasH - gap * (rows - 1)) / rows;
+    const slotW = (settings.canvasW - gap * (cols - 1)) / cols;
+    const slotH = (settings.canvasH - gap * (rows - 1)) / rows;
     if (
-      !c.smooth
-      && (slotW > sourcePanelWidth || slotH > c.height)
-      && (!Number.isInteger(slotW / sourcePanelWidth) || !Number.isInteger(slotH / c.height))
+      !settings.smooth
+      && (slotW > sourcePanelWidth || slotH > settings.height)
+      && (!Number.isInteger(slotW / sourcePanelWidth) || !Number.isInteger(slotH / settings.height))
       && transforms.every((t) => t.zoom === 1 && t.panX === 0 && t.panY === 0)
     ) {
       return false;
@@ -4716,8 +4715,8 @@ function Show3D() {
       renderLogScale,
       gpuCtx,
       {
-        width: c.canvasW,
-        height: c.canvasH,
+        width: settings.canvasW,
+        height: settings.canvasH,
         panelCount,
         cols,
         rows,
@@ -4727,7 +4726,7 @@ function Show3D() {
         transforms,
         sourcePanelIndices: panels,
         panelLuts,
-        smooth: c.smooth,
+        smooth: settings.smooth,
       },
     );
     if (!rendered) return false;
@@ -4739,8 +4738,8 @@ function Show3D() {
           ranges,
           renderLogScale,
           {
-            width: c.canvasW,
-            height: c.canvasH,
+            width: settings.canvasW,
+            height: settings.canvasH,
             panelCount,
             cols,
             rows,
@@ -4750,7 +4749,7 @@ function Show3D() {
             transforms,
             sourcePanelIndices: panels,
             panelLuts,
-            smooth: c.smooth,
+            smooth: settings.smooth,
           },
         ),
       );
@@ -4777,75 +4776,75 @@ function Show3D() {
     }
     const engine = gpuCmapRef.current;
     if (!engine || !gpuCmapReadyRef.current) return false;
-    const c = playRef.current;
-    if (c.imageRotation % 4 !== 0 || c.zoom !== 1 || c.panX !== 0 || c.panY !== 0) return false;
+    const settings = playRef.current;
+    if (settings.imageRotation % 4 !== 0 || settings.zoom !== 1 || settings.panX !== 0 || settings.panY !== 0) return false;
     const naturalVisibleOrder = visiblePanelIndices.length === Math.max(1, nPanels || 1)
       && visiblePanelIndices.every((panel, slot) => panel === slot);
     const panelViewsAreDefault = visiblePanelIndices.every(panel => {
-      const state = c.panelStates[panel] || initialState;
-      const view = c.linkPanels ? c.linkedState : state;
+      const state = settings.panelStates[panel] || initialState;
+      const view = settings.linkPanels ? settings.linkedState : state;
       return view.zoom === 1 && view.panX === 0 && view.panY === 0;
     });
     if (!naturalVisibleOrder || !panelViewsAreDefault) return false;
     // The grid fragment shader samples nearest. An enlarged view goes through the Canvas2D draw,
     // the same as the CPU path, when Smooth is on (bilinear) or the factor is not an integer: there
     // a pixel centre can land exactly on a texel edge, where the two samplers pick different texels.
-    const enlarged = c.width < c.canvasW || c.height < c.canvasH;
-    if (enlarged && (c.smooth || c.canvasW % c.width !== 0 || c.canvasH % c.height !== 0)) return false;
-    const gpuCtx = ensureGpuDisplayContext(engine, c.canvasW, c.canvasH);
+    const enlarged = settings.width < settings.canvasW || settings.height < settings.canvasH;
+    if (enlarged && (settings.smooth || settings.canvasW % settings.width !== 0 || settings.canvasH % settings.height !== 0)) return false;
+    const gpuCtx = ensureGpuDisplayContext(engine, settings.canvasW, settings.canvasH);
     if (!gpuCtx) return false;
 
-    const liveCmap = cmapLiveRef.current || c.cmap;
+    const liveCmap = cmapLiveRef.current || settings.cmap;
     const lut = COLORMAPS[liveCmap] || COLORMAPS.inferno;
     engine.uploadLUT(liveCmap, lut);
     let vmin: number, vmax: number;
-    if (c.autoContrast) {
-      const cached = cachedAutoDisplayRange(c.autoVmins, c.autoVmaxs, normalized, c.logScale)
-        || cachedAutoDisplayRange(localAutoVminsRef.current, localAutoVmaxsRef.current, normalized, c.logScale);
+    if (settings.autoContrast) {
+      const cached = cachedAutoDisplayRange(settings.autoVmins, settings.autoVmaxs, normalized, settings.logScale)
+        || cachedAutoDisplayRange(localAutoVminsRef.current, localAutoVmaxsRef.current, normalized, settings.logScale);
       if (cached) {
         ({ vmin, vmax } = cached);
       } else {
         ({ vmin, vmax } = resolveDisplayRange(
-          c.dataMin,
-          c.dataMax,
-          c.traitVmin,
-          c.traitVmax,
-          c.logScale,
-          c.imageVminPct,
-          c.imageVmaxPct,
+          settings.dataMin,
+          settings.dataMax,
+          settings.traitVmin,
+          settings.traitVmax,
+          settings.logScale,
+          settings.imageVminPct,
+          settings.imageVmaxPct,
         ));
       }
     } else {
       ({ vmin, vmax } = resolveDisplayRange(
-        c.dataMin,
-        c.dataMax,
-        c.traitVmin,
-        c.traitVmax,
-        c.logScale,
-        c.imageVminPct,
-        c.imageVmaxPct,
+        settings.dataMin,
+        settings.dataMax,
+        settings.traitVmin,
+        settings.traitVmax,
+        settings.logScale,
+        settings.imageVminPct,
+        settings.imageVmaxPct,
       ));
     }
 
     if (hiddenPanelSet.size > 0) return false;
     const panelCount = Math.max(1, nPanels || 1);
-    const cols = Math.max(1, Math.min(panelCount, Math.round(c.panelCols || 1)));
+    const cols = Math.max(1, Math.min(panelCount, Math.round(settings.panelCols || 1)));
     const rows = Math.ceil(panelCount / cols);
     const gap = panelCount > 1 ? (panelGapPx) : 0;
     if (panelCount > 1 && !sharedPanelSource) {
-      const panelW = Math.max(1, panelWidthPx || Math.round(c.width / panelCount));
+      const panelW = Math.max(1, panelWidthPx || Math.round(settings.width / panelCount));
       const regions = Array.from({ length: panelCount }, (_, panel) => ({
-        x: panel * panelW, y: 0, width: panelW, height: c.height,
+        x: panel * panelW, y: 0, width: panelW, height: settings.height,
       }));
-      const sharedAutoRange = c.autoContrast ? { vmin, vmax } : null;
+      const sharedAutoRange = settings.autoContrast ? { vmin, vmax } : null;
       // The ranges come from the frame's own pixels (gpuSlotMissesTheView declined every transformed view
       // without a GPU-filled scratch slot), read by index: the displayed frame may belong to another index.
       const frameForRanges = getOfflineFrame(normalized);
-      const stack = resolveDisplayBounds(c.dataMin, c.dataMax, c.traitVmin, c.traitVmax, c.logScale);
+      const stack = resolveDisplayBounds(settings.dataMin, settings.dataMax, settings.traitVmin, settings.traitVmax, settings.logScale);
       const ranges = Array.from({ length: panelCount }, (_, panel) => packedPanelRenderRange(
-        panel, frameForRanges, stack, sharedAutoRange, c.autoContrast, c.percentileLow, c.percentileHigh, c.logScale,
+        panel, frameForRanges, stack, sharedAutoRange, settings.autoContrast, settings.percentileLow, settings.percentileHigh, settings.logScale,
       ));
-      const logs = c.logScale;
+      const logs = settings.logScale;
       const bitmaps = engine.renderPerPanelGpuExplicit(renderSlotIdx, regions, ranges, logs);
       const offCtx = mainOffscreenRef.current?.getContext("2d");
       const canvas = canvasRef.current;
@@ -4853,7 +4852,7 @@ function Show3D() {
       if (!bitmaps) return false;
       try {
         if (!offCtx || !ctx || !mainOffscreenRef.current) return false;
-        offCtx.clearRect(0, 0, c.width, c.height);
+        offCtx.clearRect(0, 0, settings.width, settings.height);
         for (let panel = 0; panel < panelCount; panel++) {
           if (bitmaps[panel]) {
             offCtx.drawImage(bitmaps[panel], panel * panelW, 0);
@@ -4869,11 +4868,11 @@ function Show3D() {
       return true;
     }
     const sourcePanelWidthForGrid = sharedPanelSource
-      ? Math.max(1, panelWidthPx || c.width)
-      : Math.max(1, panelWidthPx || Math.round(c.width / panelCount));
+      ? Math.max(1, panelWidthPx || settings.width)
+      : Math.max(1, panelWidthPx || Math.round(settings.width / panelCount));
     const gridOpts = {
-      width: c.canvasW,
-      height: c.canvasH,
+      width: settings.canvasW,
+      height: settings.canvasH,
       panelCount,
       cols,
       rows,
@@ -4885,7 +4884,7 @@ function Show3D() {
     const rendered = engine.renderSharedGridDirectToCanvas(
       renderSlotIdx,
       { vmin, vmax },
-      c.logScale,
+      settings.logScale,
       gpuCtx,
       gridOpts,
     );
@@ -4896,10 +4895,10 @@ function Show3D() {
         engine.renderSharedGridToImageBitmapAsync(
           renderSlotIdx,
           { vmin, vmax },
-          c.logScale,
+          settings.logScale,
           {
-            width: c.canvasW,
-            height: c.canvasH,
+            width: settings.canvasW,
+            height: settings.canvasH,
             panelCount,
             cols,
             rows,
@@ -4922,12 +4921,12 @@ function Show3D() {
     idx: number,
     updateDisplayState = false,
   ): boolean => {
-    const c = playRef.current;
-    const win = normalizedAverageWindow(c.avgWindow);
+    const settings = playRef.current;
+    const win = normalizedAverageWindow(settings.avgWindow);
     if (
-      isRgb || win <= 1 || c.diffMode !== "off" ||
+      isRgb || win <= 1 || settings.diffMode !== "off" ||
       browserFilterOnRef.current || frequencyFilterIsActive || subpixelAlignEnabled ||
-      c.imageRotation % 4 !== 0
+      settings.imageRotation % 4 !== 0
     ) return false;
     const engine = gpuCmapRef.current;
     if (!engine || !gpuCmapReadyRef.current) return false;
@@ -5039,9 +5038,9 @@ function Show3D() {
     // Snap slice_idx into [loop_start, loop_end] before first tick, otherwise
     // playback walked outside the loop range on the first frame.
     {
-      const c0 = playRef.current;
-      const rs0 = c0.loop ? Math.max(0, Math.min(c0.loopStart, c0.nSlices - 1)) : 0;
-      const re0 = c0.loop ? Math.max(rs0, Math.min(c0.loopEnd, c0.nSlices - 1)) : c0.nSlices - 1;
+      const startSettings = playRef.current;
+      const rs0 = startSettings.loop ? Math.max(0, Math.min(startSettings.loopStart, startSettings.nSlices - 1)) : 0;
+      const re0 = startSettings.loop ? Math.max(rs0, Math.min(startSettings.loopEnd, startSettings.nSlices - 1)) : startSettings.nSlices - 1;
       const liveStart = Number.isFinite(playbackIdxRef.current)
         ? playbackIdxRef.current
         : (Number.isFinite(displaySliceIdx) ? displaySliceIdx : sliceIdx);
@@ -5065,8 +5064,8 @@ function Show3D() {
         return;
       }
       const tickNow = performance.now();
-      const c = playRef.current;
-      const effectiveFps = clampPlaybackFps(c.fps);
+      const settings = playRef.current;
+      const effectiveFps = clampPlaybackFps(settings.fps);
       const intervalMs = playbackIntervalMs(effectiveFps);
       const uiUpdateIntervalMs = effectiveFps >= 60 ? 250 : 100;
 
@@ -5092,57 +5091,56 @@ function Show3D() {
       lastFrameTime = tickNow - Math.max(0, elapsed - intervalMs);
 
       let next: number;
-      if (c.playbackPath && c.playbackPath.length > 0) {
-        const pp = c.playbackPath;
+      if (settings.playbackPath && settings.playbackPath.length > 0) {
+        const pp = settings.playbackPath;
         let pi = pathIdxRef.current;
-        if (c.boomerang) {
+        if (settings.boomerang) {
           // Loop remains the master repeat control. When a scientist turns
           // Loop off, Bounce should shape motion only until the path endpoint;
           // it must not keep ping-ponging forever.
-          // Visit endpoints once (matches grid-mode boomerang). Earlier code
-          // jumped to pp.length-2 / 1 on overshoot, skipping endpoints.
+          // Each endpoint is shown once, as in grid-mode boomerang, not skipped on the turn.
           pi += bounceDirRef.current;
           if (pi >= pp.length) {
-            if (!c.loop) { setPlaying(false); return; }
+            if (!settings.loop) { setPlaying(false); return; }
             bounceDirRef.current = -1;
             pi = pp.length - 1;
           } else if (pi < 0) {
-            if (!c.loop) { setPlaying(false); return; }
+            if (!settings.loop) { setPlaying(false); return; }
             bounceDirRef.current = 1;
             pi = 0;
           }
         } else {
-          pi += (c.reverse ? -1 : 1);
-          if (pi >= pp.length) { if (!c.loop) { setPlaying(false); return; } pi = 0; }
-          if (pi < 0) { if (!c.loop) { setPlaying(false); return; } pi = pp.length - 1; }
+          pi += (settings.reverse ? -1 : 1);
+          if (pi >= pp.length) { if (!settings.loop) { setPlaying(false); return; } pi = 0; }
+          if (pi < 0) { if (!settings.loop) { setPlaying(false); return; } pi = pp.length - 1; }
         }
         pi = Math.max(0, Math.min(pp.length - 1, pi));
         pathIdxRef.current = pi;
         next = pp[pi];
       } else {
-        const rangeStart = c.loop ? Math.max(0, Math.min(c.loopStart, c.nSlices - 1)) : 0;
-        const rangeEnd = c.loop ? Math.max(rangeStart, Math.min(c.loopEnd, c.nSlices - 1)) : c.nSlices - 1;
+        const rangeStart = settings.loop ? Math.max(0, Math.min(settings.loopStart, settings.nSlices - 1)) : 0;
+        const rangeEnd = settings.loop ? Math.max(rangeStart, Math.min(settings.loopEnd, settings.nSlices - 1)) : settings.nSlices - 1;
         const prev = Number.isFinite(playbackIdxRef.current)
           ? Math.round(playbackIdxRef.current)
           : Math.max(rangeStart, Math.min(rangeEnd, Math.round(displaySliceIdx || 0)));
 
-        if (c.boomerang) {
+        if (settings.boomerang) {
           next = prev + bounceDirRef.current;
           if (next > rangeEnd) {
-            if (!c.loop) { setPlaying(false); return; }
+            if (!settings.loop) { setPlaying(false); return; }
             bounceDirRef.current = -1;
             next = prev - 1 >= rangeStart ? prev - 1 : prev;
           } else if (next < rangeStart) {
-            if (!c.loop) { setPlaying(false); return; }
+            if (!settings.loop) { setPlaying(false); return; }
             bounceDirRef.current = 1;
             next = prev + 1 <= rangeEnd ? prev + 1 : prev;
           }
         } else {
-          next = prev + (c.reverse ? -1 : 1);
-          if (c.reverse) {
-            if (next < rangeStart) { if (!c.loop) { setPlaying(false); return; } next = rangeEnd; }
+          next = prev + (settings.reverse ? -1 : 1);
+          if (settings.reverse) {
+            if (next < rangeStart) { if (!settings.loop) { setPlaying(false); return; } next = rangeEnd; }
           } else {
-            if (next > rangeEnd) { if (!c.loop) { setPlaying(false); return; } next = rangeStart; }
+            if (next > rangeEnd) { if (!settings.loop) { setPlaying(false); return; } next = rangeStart; }
           }
         }
       }
@@ -5150,18 +5148,16 @@ function Show3D() {
       // The embedded stack owns playback. Select its resident GPU slot when
       // available; otherwise use the on-demand canvas fallback below.
       const transformActive = requiresClientFrameTransform({
-        diffMode: c.diffMode,
-        avgWindow: c.avgWindow,
+        diffMode: settings.diffMode,
+        avgWindow: settings.avgWindow,
       }) || browserFilterOnRef.current || frequencyFilterIsActive;
       let frame: Float32Array | null = null;
-      // The GPU-cache fast paths (renderGpuCachedSliceDirect and the resident
-      // average) only handle imageRotation%4===0 and return false on a 90/270
-      // rotation, which froze playback (renderedFrames + canvas stuck, playing
-      // true). When rotated, skip the GPU-cache path so the frame is fetched and
-      // drawMain applies the rotation. Verified bug 2026-05-29.
-      const rotationAllowsGpuCache = (c.imageRotation % 4) === 0;
+      // The GPU-cache fast paths (renderGpuCachedSliceDirect and the resident average) draw only
+      // unrotated views. A rotated view skips them, so the frame is fetched and drawMain rotates it;
+      // a declined fast path would otherwise leave playback running over a frozen canvas.
+      const rotationAllowsGpuCache = (settings.imageRotation % 4) === 0;
       let gpuResidentTransformReady = false;
-      if (rotationAllowsGpuCache && normalizedAverageWindow(c.avgWindow) > 1) {
+      if (rotationAllowsGpuCache && normalizedAverageWindow(settings.avgWindow) > 1) {
         gpuResidentTransformReady = renderGpuTemporalAverageSliceDirect(next, false);
       }
       const gpuCachedSlotReady = !transformActive
@@ -5191,10 +5187,10 @@ function Show3D() {
       }
       playbackIdxRef.current = next;
       updatePlaybackLiveControls(next);
-      if (frame && isRgb && frame.length >= c.width * c.height * 3) {
+      if (frame && isRgb && frame.length >= settings.width * settings.height * 3) {
         rgbFrameDataRef.current = frame;
         sourceFrameDataRef.current = sourceFrame;
-        displayFrameRef.current = rgbFrameToLuminance(frame, c.width * c.height);
+        displayFrameRef.current = rgbFrameToLuminance(frame, settings.width * settings.height);
       } else if (frame) {
         sourceFrameDataRef.current = sourceFrame;
         displayFrameRef.current = frame;
@@ -5210,11 +5206,9 @@ function Show3D() {
       // below so large 2k/4k stacks do not double-paint.
       const gpuDirectRender = gpuCachedFrameReady || gpuResidentTransformReady;
       if (!directRender && !gpuDirectRender) setLiveSliceIdx(next);
-      // Without a direct WebGPU paint, hand the frame to the React static paint
-      // pipeline (proven smooth on slider drag) and skip the rAF direct paint
-      // entirely. The two paths fought on Mac/retina (Linux didn't expose it),
-      // producing the "play is flaky while drag is smooth" symptom verified
-      // 2026-05-24 on sample_device_trial.html.
+      // Without a direct WebGPU paint, hand the frame to the React static paint pipeline (the one
+      // slider drags use) and skip the rAF direct paint: the two paths paint over each other on
+      // high-DPI displays, which makes playback flicker.
       if (!directRender) {
         setGpuDisplayVisible(false);
         if (tickNow - lastUIUpdate > uiUpdateIntervalMs) {
@@ -5243,53 +5237,53 @@ function Show3D() {
 
       // Render frame. The 4k playback hot path must stay off the JS CPU:
       // one 4096^2 colormap loop alone is ~37 ms, before auto-contrast/canvas.
-      const liveCmap = cmapLiveRef.current || c.cmap;
+      const liveCmap = cmapLiveRef.current || settings.cmap;
       const lut = COLORMAPS[liveCmap] || COLORMAPS.inferno;
       if (mainOffscreenRef.current && mainImgDataRef.current) {
         let vmin: number, vmax: number;
         let cpuData: Float32Array | null = frame;
         let cpuDataAlreadyLogged = false;
-        if (c.autoContrast) {
+        if (settings.autoContrast) {
           const cached = stackAutoRangeApplies() ? (
-            cachedAutoDisplayRange(c.autoVmins, c.autoVmaxs, next, c.logScale)
-            || cachedAutoDisplayRange(localAutoVminsRef.current, localAutoVmaxsRef.current, next, c.logScale)
+            cachedAutoDisplayRange(settings.autoVmins, settings.autoVmaxs, next, settings.logScale)
+            || cachedAutoDisplayRange(localAutoVminsRef.current, localAutoVmaxsRef.current, next, settings.logScale)
           ) : null;
           if (cached) {
             ({ vmin, vmax } = cached);
-          } else if (frame && c.logScale && logBufferRef.current) {
+          } else if (frame && settings.logScale && logBufferRef.current) {
             applyLogScaleInPlace(frame, logBufferRef.current);
-            ({ vmin, vmax } = percentileClip(logBufferRef.current, c.percentileLow, c.percentileHigh));
+            ({ vmin, vmax } = percentileClip(logBufferRef.current, settings.percentileLow, settings.percentileHigh));
             cpuData = logBufferRef.current;
             cpuDataAlreadyLogged = true;
           } else if (frame) {
-            ({ vmin, vmax } = percentileClip(frame, c.percentileLow, c.percentileHigh));
+            ({ vmin, vmax } = percentileClip(frame, settings.percentileLow, settings.percentileHigh));
           } else {
             ({ vmin, vmax } = resolveDisplayRange(
-              c.dataMin,
-              c.dataMax,
-              c.traitVmin,
-              c.traitVmax,
-              c.logScale,
-              c.imageVminPct,
-              c.imageVmaxPct,
+              settings.dataMin,
+              settings.dataMax,
+              settings.traitVmin,
+              settings.traitVmax,
+              settings.logScale,
+              settings.imageVminPct,
+              settings.imageVmaxPct,
             ));
           }
         } else {
           ({ vmin, vmax } = resolveDisplayRange(
-            c.dataMin,
-            c.dataMax,
-            c.traitVmin,
-            c.traitVmax,
-            c.logScale,
-            c.imageVminPct,
-            c.imageVmaxPct,
+            settings.dataMin,
+            settings.dataMax,
+            settings.traitVmin,
+            settings.traitVmax,
+            settings.logScale,
+            settings.imageVminPct,
+            settings.imageVmaxPct,
           ));
         }
 
         let rendered = false;
         let drewDisplayDirect = false;
-        const dw = Math.max(1, Math.round(c.width * c.displayScale));
-        const dh = Math.max(1, Math.round(c.height * c.displayScale));
+        const dw = Math.max(1, Math.round(settings.width * settings.displayScale));
+        const dh = Math.max(1, Math.round(settings.height * settings.displayScale));
         const panelCountForGrid = Math.max(1, nPanels || 1);
         // Playback stays on the stable 2D display canvas: direct WebGPU canvas
         // presentation can briefly win the opacity handoff before the next image
@@ -5297,12 +5291,12 @@ function Show3D() {
         // WebGPU path above still uses the direct GPU canvas.
         const canScaledDirect =
           nPanels === 1 &&
-          c.imageRotation % 4 === 0 &&
-          c.zoom === 1 &&
-          c.panX === 0 &&
-          c.panY === 0 &&
-          dw <= c.canvasW &&
-          dh <= c.canvasH;
+          settings.imageRotation % 4 === 0 &&
+          settings.zoom === 1 &&
+          settings.panX === 0 &&
+          settings.panY === 0 &&
+          dw <= settings.canvasW &&
+          dh <= settings.canvasH;
         const renderPackedPanels2D = (): boolean => {
           if (panelCountForGrid <= 1 || sharedPanelSource || !frame) return false;
           const offscreen = mainOffscreenRef.current;
@@ -5310,14 +5304,14 @@ function Show3D() {
           const offCtx = offscreen?.getContext("2d");
           const ctx = canvas?.getContext("2d");
           if (!offscreen || !offCtx || !ctx) return false;
-          const panelW = Math.max(1, Math.floor(c.width / panelCountForGrid));
-          const sourceW = frame.length === c.height * panelW ? panelW : c.width;
-          if (sourceW <= 0 || frame.length < c.height * sourceW) return false;
-          const panelImg = offCtx.createImageData(panelW, c.height);
-          const sharedAutoRange = c.autoContrast ? { vmin, vmax } : null;
+          const panelW = Math.max(1, Math.floor(settings.width / panelCountForGrid));
+          const sourceW = frame.length === settings.height * panelW ? panelW : settings.width;
+          if (sourceW <= 0 || frame.length < settings.height * sourceW) return false;
+          const panelImg = offCtx.createImageData(panelW, settings.height);
+          const sharedAutoRange = settings.autoContrast ? { vmin, vmax } : null;
           const livePanelCmaps = panelCmapsLiveRef.current;
           offCtx.clearRect(0, 0, offscreen.width, offscreen.height);
-          for (const panel of c.visiblePanelIndices) {
+          for (const panel of settings.visiblePanelIndices) {
             if (panel < 0 || panel >= panelCountForGrid) continue;
             const srcPanel = Math.min(Math.max(0, panel), panelCountForGrid - 1);
             const x0 = Math.min(Math.max(0, srcPanel * panelW), Math.max(0, sourceW - panelW));
@@ -5328,13 +5322,13 @@ function Show3D() {
             // stack range) so large real-data reports stay responsive.
             const panelRange = (panelDataRange && panelDataRange.max > panelDataRange.min)
               ? panelDataRange
-              : resolveDisplayBounds(c.dataMin, c.dataMax, c.traitVmin, c.traitVmax, c.logScale);
-            const range = resolvePanelRenderRange(panel, panelRange, sharedAutoRange, null, c.autoContrast, c.percentileLow, c.percentileHigh);
+              : resolveDisplayBounds(settings.dataMin, settings.dataMax, settings.traitVmin, settings.traitVmax, settings.logScale);
+            const range = resolvePanelRenderRange(panel, panelRange, sharedAutoRange, null, settings.autoContrast, settings.percentileLow, settings.percentileHigh);
             const panelCmap = livePanelCmaps.length === panelCountForGrid
               ? livePanelCmaps[panel]
               : liveCmap;
             const panelLut = COLORMAPS[panelCmap] || lut;
-            renderPackedPanelPlayback(frame, sourceW, x0, panelW, c.height, panelImg.data, panelLut, range.vmin, range.vmax, c.logScale);
+            renderPackedPanelPlayback(frame, sourceW, x0, panelW, settings.height, panelImg.data, panelLut, range.vmin, range.vmax, settings.logScale);
             offCtx.putImageData(panelImg, panel * panelW, 0);
           }
           drawMain(ctx, offscreen);
@@ -5347,7 +5341,7 @@ function Show3D() {
         }
         const engine = gpuCmapRef.current;
         const preferGpuScaledPlayback = !!engine && gpuCmapReadyRef.current;
-        if (frame && canScaledDirect && !c.smooth && !preferGpuScaledPlayback) {
+        if (frame && canScaledDirect && !settings.smooth && !preferGpuScaledPlayback) {
           const canvas = canvasRef.current;
           const ctx = canvas?.getContext("2d");
           if (ctx) {
@@ -5357,21 +5351,21 @@ function Show3D() {
               scaledPlaybackImgDataRef.current = cached;
             }
             let map = scaledPlaybackMapRef.current;
-            if (!map || map.srcW !== c.width || map.srcH !== c.height || map.outW !== dw || map.outH !== dh) {
+            if (!map || map.srcW !== settings.width || map.srcH !== settings.height || map.outW !== dw || map.outH !== dh) {
               const xMap = new Uint32Array(dw);
               const yMap = new Uint32Array(dh);
               for (let x = 0; x < dw; x++) {
-                xMap[x] = Math.min(c.width - 1, Math.floor(((x + 0.5) * c.width) / dw));
+                xMap[x] = Math.min(settings.width - 1, Math.floor(((x + 0.5) * settings.width) / dw));
               }
               for (let y = 0; y < dh; y++) {
-                yMap[y] = Math.min(c.height - 1, Math.floor(((y + 0.5) * c.height) / dh)) * c.width;
+                yMap[y] = Math.min(settings.height - 1, Math.floor(((y + 0.5) * settings.height) / dh)) * settings.width;
               }
-              map = { srcW: c.width, srcH: c.height, outW: dw, outH: dh, xMap, yMap };
+              map = { srcW: settings.width, srcH: settings.height, outW: dw, outH: dh, xMap, yMap };
               scaledPlaybackMapRef.current = map;
             }
-            renderFrameScaledPlayback(frame, cached.imageData.data, map.xMap, map.yMap, dw, dh, lut, vmin, vmax, c.logScale);
+            renderFrameScaledPlayback(frame, cached.imageData.data, map.xMap, map.yMap, dw, dh, lut, vmin, vmax, settings.logScale);
             ctx.imageSmoothingEnabled = false;
-            ctx.clearRect(0, 0, c.canvasW, c.canvasH);
+            ctx.clearRect(0, 0, settings.canvasW, settings.canvasH);
             ctx.putImageData(cached.imageData, 0, 0);
             setGpuDisplayVisible(false);
             rendered = true;
@@ -5388,24 +5382,24 @@ function Show3D() {
             if (canGpuFrameCache) {
               if (!gpuFrameCacheUploadedRef.current.has(slotIdx)) {
                 if (frame) {
-                  engine.uploadData(slotIdx, frame, c.width, c.height, gpuRgbaCapacityHint);
+                  engine.uploadData(slotIdx, frame, settings.width, settings.height, gpuRgbaCapacityHint);
                   gpuFrameCacheUploadedRef.current.add(slotIdx);
                 }
               }
             } else if (frame) {
-              engine.uploadData(0, frame, c.width, c.height, gpuRgbaCapacityHint);
+              engine.uploadData(0, frame, settings.width, settings.height, gpuRgbaCapacityHint);
             }
             if (canScaledDirect) {
               const bitmap = rendered
                 ? null
-                : engine.renderSlotScaledToImageBitmap(slotIdx, { vmin, vmax }, c.logScale, dw, dh);
+                : engine.renderSlotScaledToImageBitmap(slotIdx, { vmin, vmax }, settings.logScale, dw, dh);
               const canvas = canvasRef.current;
               const ctx = canvas?.getContext("2d");
               if (bitmap) {
                 try {
                   if (ctx) {
-                    ctx.imageSmoothingEnabled = c.smooth;
-                    ctx.clearRect(0, 0, c.canvasW, c.canvasH);
+                    ctx.imageSmoothingEnabled = settings.smooth;
+                    ctx.clearRect(0, 0, settings.canvasW, settings.canvasH);
                     ctx.drawImage(bitmap, 0, 0, dw, dh);
                     setGpuDisplayVisible(false);
                     rendered = true;
@@ -5417,7 +5411,7 @@ function Show3D() {
               }
             }
             if (!rendered && frame) {
-              const bitmaps = engine.renderSlotsToImageBitmap([slotIdx], [{ vmin, vmax }], c.logScale);
+              const bitmaps = engine.renderSlotsToImageBitmap([slotIdx], [{ vmin, vmax }], settings.logScale);
               if (bitmaps && bitmaps[0]) {
                 try {
                   const offCtx = mainOffscreenRef.current.getContext("2d");
@@ -5443,7 +5437,7 @@ function Show3D() {
           if (cpuDataAlreadyLogged && cpuData) {
             renderToOffscreenReuse(cpuData, lut, vmin, vmax, mainOffscreenRef.current, mainImgDataRef.current);
           } else if (frame) {
-            renderFramePlayback(frame, mainImgDataRef.current.data, lut, vmin, vmax, c.logScale);
+            renderFramePlayback(frame, mainImgDataRef.current.data, lut, vmin, vmax, settings.logScale);
             mainOffscreenRef.current.getContext("2d")!.putImageData(mainImgDataRef.current, 0, 0);
           }
         }
@@ -5458,16 +5452,16 @@ function Show3D() {
             if ((nPanels || 1) > 1) {
               drawMain(ctx, mainOffscreenRef.current);
             } else {
-              ctx.imageSmoothingEnabled = c.smooth;
-              ctx.clearRect(0, 0, c.canvasW, c.canvasH);
+              ctx.imageSmoothingEnabled = settings.smooth;
+              ctx.clearRect(0, 0, settings.canvasW, settings.canvasH);
               ctx.save();
-              ctx.translate(c.panX, c.panY);
-              ctx.scale(c.zoom, c.zoom);
-              const dw = c.width * c.displayScale, dh = c.height * c.displayScale;
-              if (c.imageRotation % 4 !== 0) {
-                const cx = c.canvasW / 2 / c.zoom, cy = c.canvasH / 2 / c.zoom;
+              ctx.translate(settings.panX, settings.panY);
+              ctx.scale(settings.zoom, settings.zoom);
+              const dw = settings.width * settings.displayScale, dh = settings.height * settings.displayScale;
+              if (settings.imageRotation % 4 !== 0) {
+                const cx = settings.canvasW / 2 / settings.zoom, cy = settings.canvasH / 2 / settings.zoom;
                 ctx.translate(cx, cy);
-                ctx.rotate((c.imageRotation * Math.PI) / 2);
+                ctx.rotate((settings.imageRotation * Math.PI) / 2);
                 ctx.translate(-dw / 2, -dh / 2);
                 ctx.drawImage(mainOffscreenRef.current, 0, 0, dw, dh);
               } else {
@@ -5503,7 +5497,7 @@ function Show3D() {
         }
       }
       if (!isRgb && transformActive) {
-        const warmDirection = c.reverse ? -1 : 1;
+        const warmDirection = settings.reverse ? -1 : 1;
         warmPlaybackDisplayFrame(next + warmDirection, next, frame);
         warmPlaybackDisplayFrame(next + warmDirection * 2, next, frame);
       }
@@ -6378,8 +6372,8 @@ function Show3D() {
     // Match the main image's rotation so ROIs / profile sit on the right pixels.
     // Image draw applies `translate(panX,panY) → scale(zoom) → rotate(around cx)`,
     // so the rotation pivot in screen pixels is (canvasW/2+panX, canvasH/2+panY).
-    // Overlay must use the SAME screen-space pivot - earlier bug used (canvasW/2,
-    // canvasH/2) without pan offset, drifting ROIs when user panned + rotated.
+    // The overlay uses the same screen-space pivot, pan included, so ROIs stay on their pixels
+    // when the view is panned and rotated.
     if (imageRotation % 4 !== 0) {
       const cx = canvasW / 2 + firstPanelPanX;
       const cy = canvasH / 2 + firstPanelPanY;
@@ -8449,6 +8443,25 @@ function Show3D() {
     });
   };
 
+  /**
+   * Where a pointer sits on the lens inset: on its 8 px rim (resize), inside it (move), or off it (null),
+   * with the inset's top-left corner in canvas CSS pixels.
+   */
+  const lensHitAt = (clientX: number, clientY: number): { part: "edge" | "inside"; left: number; top: number } | null => {
+    const rect = canvasContainerRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    const cssX = clientX - rect.left;
+    const cssY = clientY - rect.top;
+    const margin = 12;
+    const left = lensAnchor ? lensAnchor.x : margin;
+    const top = lensAnchor ? lensAnchor.y : canvasH - lensDisplaySize - margin - 20;
+    if (cssX < left || cssX > left + lensDisplaySize || cssY < top || cssY > top + lensDisplaySize) return null;
+    const edgeHit = 8;
+    const nearEdge = cssX - left < edgeHit || left + lensDisplaySize - cssX < edgeHit
+      || cssY - top < edgeHit || top + lensDisplaySize - cssY < edgeHit;
+    return { part: nearEdge ? "edge" : "inside", left, top };
+  };
+
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     // Ignore clicks in empty grid cells (partial last row when N isn't a
     // multiple of max_cols). Otherwise the click attributes to the last
@@ -8458,29 +8471,17 @@ function Show3D() {
     if (handlePanelSelectionMouseDown(e, panelForSelection)) return;
     clickStartRef.current = { x: e.clientX, y: e.clientY };
     pendingRoiAddRef.current = null;
-    // Check if clicking on lens inset for drag or resize
-    if (showLens) {
-      const rect = canvasContainerRef.current?.getBoundingClientRect();
-      if (rect) {
-        const cssX = e.clientX - rect.left;
-        const cssY = e.clientY - rect.top;
-        const margin = 12;
-        const lx = lensAnchor ? lensAnchor.x : margin;
-        const ly = lensAnchor ? lensAnchor.y : canvasH - lensDisplaySize - margin - 20;
-        if (cssX >= lx && cssX <= lx + lensDisplaySize && cssY >= ly && cssY <= ly + lensDisplaySize) {
-          const edgeHit = 8;
-          const nearEdge = cssX - lx < edgeHit || lx + lensDisplaySize - cssX < edgeHit ||
-                           cssY - ly < edgeHit || ly + lensDisplaySize - cssY < edgeHit;
-          if (nearEdge) {
-            setIsResizingLens(true);
-            lensResizeStartRef.current = { my: e.clientY, startSize: lensDisplaySize };
-          } else {
-            setIsDraggingLens(true);
-            lensDragStartRef.current = { mx: e.clientX, my: e.clientY, ax: lx, ay: ly };
-          }
-          return;
-        }
-      }
+    // A press on the lens inset resizes it at its rim and moves it elsewhere
+    const lensHit = showLens ? lensHitAt(e.clientX, e.clientY) : null;
+    if (lensHit?.part === "edge") {
+      setIsResizingLens(true);
+      lensResizeStartRef.current = { my: e.clientY, startSize: lensDisplaySize };
+      return;
+    }
+    if (lensHit?.part === "inside") {
+      setIsDraggingLens(true);
+      lensDragStartRef.current = { mx: e.clientX, my: e.clientY, ax: lensHit.left, ay: lensHit.top };
+      return;
     }
     if (overlayEditMode) {
       const { imgRow, panelIdx, panelCol } = screenToImg(e);
@@ -8782,23 +8783,7 @@ function Show3D() {
     }
 
     // Lens edge hover detection
-    if (showLens) {
-      const rect2 = canvasContainerRef.current?.getBoundingClientRect();
-      if (rect2) {
-        const cssX2 = e.clientX - rect2.left;
-        const cssY2 = e.clientY - rect2.top;
-        const margin = 12;
-        const lx = lensAnchor ? lensAnchor.x : margin;
-        const ly = lensAnchor ? lensAnchor.y : canvasH - lensDisplaySize - margin - 20;
-        const inside = cssX2 >= lx && cssX2 <= lx + lensDisplaySize && cssY2 >= ly && cssY2 <= ly + lensDisplaySize;
-        const edgeHit = 8;
-        const nearEdge = inside && (cssX2 - lx < edgeHit || lx + lensDisplaySize - cssX2 < edgeHit ||
-                                     cssY2 - ly < edgeHit || ly + lensDisplaySize - cssY2 < edgeHit);
-        setIsHoveringLensEdge(nearEdge);
-      }
-    } else {
-      setIsHoveringLensEdge(false);
-    }
+    setIsHoveringLensEdge(showLens && lensHitAt(e.clientX, e.clientY)?.part === "edge");
     if (overlayEditMode && !isDraggingPan) {
       const { imgRow, panelIdx, panelCol } = screenToImg(e);
       const hit = panelIdx >= 0
@@ -8899,9 +8884,9 @@ function Show3D() {
 
     // Hover state for resize handles
     if (effectiveRoiActive && !isDraggingROI && !isDraggingPan) {
-      const { imgCol: ic, imgRow: ir } = screenToImg(e);
-      const hoveringInner = isNearResizeHandleInner(ic, ir);
-      const hoveringOuter = isNearAnyEdge(ic, ir);
+      const { imgCol, imgRow } = screenToImg(e);
+      const hoveringInner = isNearResizeHandleInner(imgCol, imgRow);
+      const hoveringOuter = isNearAnyEdge(imgCol, imgRow);
       setIsHoveringResizeInner(hoveringInner);
       setIsHoveringResize(hoveringOuter);
       if (hoveringInner || hoveringOuter) setShowRoiResizeHint(false);
@@ -12949,6 +12934,5 @@ function Show3D() {
   );
 }
 
-// anywidget v0.9+ deprecates `export render` in favor of `export default { render }`.
 const render = createRender(Show3D);
 export default { render };
