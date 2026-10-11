@@ -903,7 +903,7 @@ function Show3DSlices() {
   React.useEffect(() => {
     let disposed = false;
     getDisplayFFT().then(fft => {
-      gpuFFTRef.current = fft;
+      displayFFTRef.current = fft;
       setFftPath(fft.path);
     });
     // Colormap engine: volume-resident GPU slice + colormap (no CPU per-scrub work).
@@ -956,7 +956,7 @@ function Show3DSlices() {
   const fftResultCacheBytesRef = React.useRef(0);
   const fftDataObjectRef = React.useRef<Float32Array | null>(null);
   const fftDataTokenRef = React.useRef(0);
-  const gpuFFTRef = React.useRef<DisplayFFT | null>(null);
+  const displayFFTRef = React.useRef<DisplayFFT | null>(null);
   const gpuCmapRef = React.useRef<GPUColormapEngine | null>(null);
   const [cmapReady, setCmapReady] = React.useState(false);
   const volUploadedKeyRef = React.useRef<Float32Array | null>(null);
@@ -1647,8 +1647,8 @@ function Show3DSlices() {
     const paddedH = nextPow2(sliceH);
     let real: Float32Array;
     let imag: Float32Array;
-    if (gpuFFTRef.current) {
-      const result = await gpuFFTRef.current.fft2D(zeroPadSlice(data, sliceW, sliceH, paddedW, paddedH), new Float32Array(paddedW * paddedH), paddedW, paddedH, false);
+    if (displayFFTRef.current) {
+      const result = await displayFFTRef.current.fft2D(zeroPadSlice(data, sliceW, sliceH, paddedW, paddedH), new Float32Array(paddedW * paddedH), paddedW, paddedH, false);
       real = result.real;
       imag = result.imag;
     } else {
@@ -2677,8 +2677,8 @@ function Show3DSlices() {
         const paddedH = nextPow2(sliceH);
         let real: Float32Array;
         let imag: Float32Array;
-        if (gpuFFTRef.current) {
-          const result = await gpuFFTRef.current.fft2D(zeroPadSlice(data, sliceW, sliceH, paddedW, paddedH), new Float32Array(paddedW * paddedH), paddedW, paddedH, false);
+        if (displayFFTRef.current) {
+          const result = await displayFFTRef.current.fft2D(zeroPadSlice(data, sliceW, sliceH, paddedW, paddedH), new Float32Array(paddedW * paddedH), paddedW, paddedH, false);
           real = result.real;
           imag = result.imag;
         } else {
