@@ -29,23 +29,25 @@ interactive widgets.
 
 ## Install
 
+The package is a pre-release on TestPyPI, so the command names two indexes:
+TestPyPI for quantem.widget and quantem.gpu, PyPI for their dependencies. Copy
+the line for your machine (Python 3.11 or newer):
+
 ```bash
-pip install "quantem.widget[cuda]"   # NVIDIA GPU (Linux tested; Windows: CPU tested, CUDA untested)
-pip install "quantem.widget[mps]"    # Apple silicon Mac (Metal)
-pip install "quantem.widget[cpu]"    # no GPU, or an Intel Mac (the same as plain pip install quantem.widget)
+# NVIDIA GPU
+pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "quantem.widget[cuda]"
+
+# Apple silicon Mac
+pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "quantem.widget[mps]"
+
+# no GPU, or an Intel Mac
+pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "quantem.widget[cpu]"
 ```
 
-While the package is on TestPyPI, add `-i https://test.pypi.org/simple/
---extra-index-url https://pypi.org/simple/` to the line.
-
-| Machine | Install | Widget compute (`device="auto"`) | `read_4dstem(path)`, `Show4DSTEM(path)` | Tested |
-|---|---|---|---|---|
-| Linux, NVIDIA GPU | `quantem.widget[cuda]` | CUDA | `Dataset4dstemGPU`, encoded on the GPU by quantem.gpu | yes |
-| Windows, NVIDIA GPU | `quantem.widget[cuda]` | CUDA | `Dataset4dstemGPU`, encoded on the GPU by quantem.gpu | CPU tested, CUDA untested |
-| Windows on ARM | torch from the PyTorch CPU index, then `quantem.widget[cpu]` (no quantem core) | CPU | the stand-in, dense read on the CPU; compressed masters need x64 Python | CPU tested |
-| Mac, Apple silicon | `quantem.widget[mps]` | Apple GPU (MPS) | `Dataset4dstemGPU`, encoded on the GPU by quantem.gpu (Metal) | yes |
-| Mac, Intel | `quantem.widget[cpu]` (torch 2.2, NumPy 1.26), no quantem.gpu, no quantem core | AMD GPU through torch MPS, else CPU | the stand-in, dense read on the CPU | yes |
-| No GPU | `quantem.widget[cpu]` | CPU | quantem core `Dataset4dstem`, dense read on the CPU | yes |
+Then run `import quantem.widget as qw; qw.profile()` to see what was installed
+and which device the widgets will use. What each machine gets and what was
+tested is on the
+[platform support page](https://electronmicroscopy.github.io/quantem.widget/developer/platforms.html).
 
 On Windows, torch needs the
 [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist) for the

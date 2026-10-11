@@ -1,16 +1,10 @@
 # Installation
 
-Pick the line for your machine:
+`quantem.widget` is a pre-release on **TestPyPI**. The install command therefore
+names two indexes: TestPyPI for quantem.widget and quantem.gpu, PyPI for
+everything they depend on. Copy the block for your machine. Python 3.11 or newer.
 
-```bash
-pip install "quantem.widget[cuda]"   # NVIDIA GPU (Linux tested; Windows: CPU tested, CUDA untested)
-pip install "quantem.widget[mps]"    # Apple silicon Mac (Metal)
-pip install "quantem.widget[cpu]"    # no GPU, or an Intel Mac (the same as plain pip install quantem.widget)
-```
-
-`quantem.widget` is currently published on **TestPyPI** (pre-release). Until it
-reaches PyPI, add TestPyPI as the index and PyPI as the extra index so its
-dependencies resolve normally:
+**NVIDIA GPU**
 
 ```bash
 pip install -i https://test.pypi.org/simple/ \
@@ -18,54 +12,38 @@ pip install -i https://test.pypi.org/simple/ \
     "quantem.widget[cuda]"
 ```
 
-Requires Python 3.11 or newer.
+**Apple silicon Mac**
 
-| Machine | Install | Widget compute (`device="auto"`) | `read_4dstem(path)`, `Show4DSTEM(path)` | Tested |
-|---|---|---|---|---|
-| Linux, NVIDIA GPU | `quantem.widget[cuda]` | CUDA | `Dataset4dstemGPU`, encoded on the GPU by quantem.gpu | yes |
-| Windows, NVIDIA GPU | `quantem.widget[cuda]` | CUDA | `Dataset4dstemGPU`, encoded on the GPU by quantem.gpu | CPU tested, CUDA untested |
-| Windows on ARM | torch from the PyTorch CPU index, then `quantem.widget[cpu]` (no quantem core) | CPU | the stand-in, dense read on the CPU; compressed masters need x64 Python | CPU tested |
-| Mac, Apple silicon | `quantem.widget[mps]` | Apple GPU (MPS) | `Dataset4dstemGPU`, encoded on the GPU by quantem.gpu (Metal) | yes |
-| Mac, Intel | `quantem.widget[cpu]` (torch 2.2, NumPy 1.26), no quantem.gpu, no quantem core | AMD GPU through torch MPS, else CPU | the stand-in, dense read on the CPU | yes |
-| No GPU | `quantem.widget[cpu]` | CPU | quantem core `Dataset4dstem`, dense read on the CPU | yes |
+```bash
+pip install -i https://test.pypi.org/simple/ \
+    --extra-index-url https://pypi.org/simple/ \
+    "quantem.widget[mps]"
+```
 
-- `[cpu]` (and a plain install) brings torch 2.2 or newer, NumPy, h5py,
-  hdf5plugin and [quantem](https://github.com/electronmicroscopy/quantem) core
-  (hdf5plugin and quantem core not on Windows on ARM, quantem core not on an
-  Intel Mac, see below): every widget, and `Show4DSTEM` on in-memory arrays,
-  tensors on any device and files read densely into memory.
-- `[cuda]` adds [quantem.gpu](https://github.com/bobleesj/quantem.gpu) with
-  CuPy; `[mps]` adds it with Metal and MLX. A 4D-STEM file then stays encoded on
-  the GPU and loads in seconds. A wrong pick installs nothing harmful (`[cuda]`
-  installs nothing extra on a Mac, `[mps]` nothing outside Apple silicon), and
-  the widget's one-line notice names the right extra.
-- Intel Macs are supported without quantem.gpu: PyTorch publishes no wheel newer
-  than torch 2.2 for them and quantem.gpu needs torch 2.3. The widgets compute
-  on the Mac's AMD GPU through torch MPS (else the CPU), and the first widget
-  prints one line saying so. torch 2.2 imports only with NumPy 1.x on these
-  Macs; the package pins `numpy<2` for them.
-- The readers return the dataset type of the machine, so the same code runs
-  everywhere: `read_4dstem` gives a `quantem.gpu.io.Dataset4dstemGPU` when
-  quantem.gpu is installed and a GPU is present, else a quantem core
-  `Dataset4dstem`; `read_image` and `read_images` give quantem core
-  `Dataset2d`, `read_image_stack` a `Dataset3d`. quantem core needs torch 2.7
-  and NumPy 2 (no Intel Mac wheels) and hdf5plugin 6 (no Windows on ARM
-  wheel), so on those two machines the readers return the widget's stand-in,
-  with the same `array`, `name`, `sampling`, `units`, `metadata`, `shape`,
-  `ndim` and `dtype`. Every widget accepts all of these, NumPy arrays and
-  torch tensors.
+**No GPU, or an Intel Mac**
 
-  ```python
-  from quantem.widget import io
+```bash
+pip install -i https://test.pypi.org/simple/ \
+    --extra-index-url https://pypi.org/simple/ \
+    "quantem.widget[cpu]"
+```
 
-  ds = io.read_image(path)
-  arr = ds.array
-  ```
+Then check what was installed and which device the widgets will use:
 
-A file opened without the GPU path is read whole into memory. `Show4DSTEM`
-prints one line with the shape, dtype, size and seconds taken, and refuses with
-a clear message when the array would not fit in 80% of the available memory. It
-never bins or crops to make the data fit.
+```python
+import quantem.widget as qw
+
+qw.profile()
+```
+
+- A wrong pick installs nothing harmful: `[cuda]` adds nothing extra on a Mac
+  and `[mps]` nothing outside Apple silicon, and the widget's one-line notice
+  names the right extra.
+- On Windows, read [Windows](#windows) first.
+- What each machine installs, which dataset type the readers return and what
+  was tested is in [Platform support](developer/platforms.md).
+- When quantem.widget reaches PyPI the command shortens to
+  `pip install "quantem.widget[cuda]"` (or `[mps]`, `[cpu]`).
 
 Tutorial data downloads (`quantem.widget.datasets`, `quantem.widget.io.download`)
 need only `huggingface_hub`, which installs with the package. To upload new
@@ -96,7 +74,9 @@ the widget:
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cpu
-pip install "quantem.widget[cpu]"
+pip install -i https://test.pypi.org/simple/ \
+    --extra-index-url https://pypi.org/simple/ \
+    "quantem.widget[cpu]"
 ```
 
 - hdf5plugin has no ARM64 wheel, so pip skips it on Windows on ARM. `.npy`
@@ -135,8 +115,8 @@ separate Colab copy to maintain.
 
 Each Colab-ready tutorial has one collapsed **Install QuantEM** cell. Its two
 plain steps download and run the shared `scripts/install_colab.py` installer, which
-resolves only the newest `quantem.widget` and `quantem.gpu` wheel URLs from
-TestPyPI. Normal dependencies still come from PyPI, and Colab's loaded NumPy
+takes the newest `quantem.widget` wheel on TestPyPI and the newest `quantem.gpu`
+wheel inside the range that widget release pins. Normal dependencies still come from PyPI, and Colab's loaded NumPy
 and Numba versions are preserved. After installation, the cell calls
 `quantem.widget.profile()` automatically so the notebook records the installed
 QuantEM versions and active compute environment. Do not use TestPyPI as
@@ -180,11 +160,3 @@ unless `device=` names another one, and that move is printed once.
 - **Intel Mac** (`[cpu]`): torch MPS on the AMD GPU for the widgets' own
   compute; files are read on the CPU. quantem.gpu is not available.
 - **CPU**: everything runs, more slowly.
-
-## Verify
-
-```python
-import quantem.widget as qw
-
-qw.profile()
-```
