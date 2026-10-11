@@ -7,6 +7,7 @@ import pathlib
 
 import numpy as np
 import pytest
+import traitlets
 from ipywidgets.widgets.widget import _instances
 from PIL import Image
 
@@ -132,6 +133,20 @@ def test_dataset3d_supplies_title_and_a_display_pixel_scale_bar():
 
 
 # --- exports --------------------------------------------------------------------
+
+
+def test_denoise_traits_take_only_the_names_the_browser_filter_runs():
+    # the browser compares the trait to its filter names as written: another spelling would show raw pixels under a filter banner
+    widget = Show3D(_ramp(), _ramp(offset=1.0), verbose=False)
+    widget.denoise = "gaussian"
+    widget.denoise_modes = ["anscombe", "none"]
+    for spelling in ("off", "raw", "Gaussian", ""):
+        with pytest.raises(traitlets.TraitError):
+            widget.denoise = spelling
+        with pytest.raises(traitlets.TraitError):
+            widget.denoise_modes = ["none", spelling]
+    assert (widget.denoise, widget.denoise_modes) == ("gaussian", ["anscombe", "none"])
+    widget.free()
 
 
 def test_gif_renders_are_byte_stable(tmp_path: pathlib.Path):

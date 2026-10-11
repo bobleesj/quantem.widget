@@ -103,7 +103,7 @@ def apply_display_filter(
     image
         2D map, shape ``(n_rows, n_cols)``. Any numeric dtype.
     mode
-        - ``"none"`` (also ``"off"``/``"raw"``): identity, the default.
+        - ``"none"``: identity, the default.
         - ``"gaussian"``: Gaussian smooth of width ``sigma``. With
           ``spatial_bin`` >= 2 it smooths on the binned grid with the lighter
           ``max(1, sigma/2.5)`` kernel.
@@ -150,7 +150,7 @@ def apply_display_filter(
         binned_sigma = max(2.0, sigma * 0.75) if spatial_bin >= 2 else sigma
         return _anscombe_gauss(_bin_passes(filtered, spatial_bin), binned_sigma)
     if mode not in ("none", "nlm"):
-        raise ValueError(f"mode must be one of {'|'.join(DISPLAY_FILTER_MODES)} (or 'off'/'raw'); got {requested!r}")
+        raise ValueError(f"mode must be one of {'|'.join(DISPLAY_FILTER_MODES)}; got {requested!r}")
     # none and nlm apply the bin knob as plain pre-passes before the method.
     filtered = _bin_passes(filtered, spatial_bin)
     return _nlm(filtered) if mode == "nlm" else filtered

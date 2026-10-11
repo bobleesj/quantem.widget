@@ -37,7 +37,7 @@ from quantem.widget.show2d.options import (
     _normalize_panel_annotations,
     _normalize_panel_overlays,
 )
-from quantem.widget.show2d.widget import _nonnegative_int
+from quantem.widget.show2d.widget import _BROWSER_DENOISE_MODES, _nonnegative_int
 from quantem.widget.show3d.export import Show3DExport
 from quantem.widget.show3d.fallback import Show3DFallback
 from quantem.widget.show3d.playback import Show3DPlayback
@@ -216,11 +216,12 @@ class Show3D(
     height = traitlets.Int(1).tag(sync=True)
     width = traitlets.Int(1).tag(sync=True)
     # Browser-owned display filters. Python only mirrors the state and
-    # announces an active reduction; the stored stack is never filtered.
-    denoise = traitlets.Unicode("none").tag(sync=True)
+    # announces an active reduction; the stored stack is never filtered. The
+    # browser compares a mode to its filter names as written, so the traits take only those.
+    denoise = traitlets.Enum(_BROWSER_DENOISE_MODES, default_value="none").tag(sync=True)
     denoise_sigma = traitlets.Float(4.0).tag(sync=True)
     denoise_bin = traitlets.Int(1).tag(sync=True)
-    denoise_modes = traitlets.List(traitlets.Unicode()).tag(sync=True)
+    denoise_modes = traitlets.List(traitlets.Enum(_BROWSER_DENOISE_MODES)).tag(sync=True)
     denoise_sigmas = traitlets.List(traitlets.Float()).tag(sync=True)
     denoise_bins = traitlets.List(traitlets.Int()).tag(sync=True)
     denoise_scope = traitlets.Enum(["all", "panel"], default_value="all").tag(sync=True)

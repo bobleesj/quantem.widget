@@ -58,7 +58,7 @@ import { createLatestFrameQueue } from "../show4dstem/latestFrameQueue";
 import { resizeDetectorFromPointer, type DetectorResizeStart, type DetectorRoiMode } from "../show4dstem/detectorInteraction";
 import { colormapSampledPixels, createColormapEngine, createCPUColormapEngine, type DisplayColormapEngine } from "../display/cpuColormap";
 import { onGPULost } from "../display/device";
-import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive, normalizeFilterMode, resolvePanelDenoiseKnobs } from "../display/filter";
+import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive, resolvePanelDenoiseKnobs } from "../display/filter";
 import { applyFrequencyFilterBrowser, frequencyFilterActive, getFrequencyFilterBackend, normalizeFrequencyFilterMode } from "../display/frequencyFilter";
 import { InfoTooltip } from "../shared/InfoTooltip";
 import { RenderPathBadge } from "../shared/RenderPathBadge";
@@ -998,7 +998,7 @@ function Show2D() {
     }
   }, []);
   // Canonical method for the UI menu.
-  const denoiseBaseMode = normalizeFilterMode(displayFilter || "none");
+  const denoiseBaseMode = displayFilter || "none";
   // Denoise controls row visibility (the editor; secondary to the on/off).
   const [showDenoise, setShowDenoise] = useModelState<boolean>("show_denoise");
   // Master ON/OFF of the denoise EFFECT. Off shows the RAW view (nothing of the
@@ -1012,7 +1012,7 @@ function Show2D() {
     setDenoiseEnabled(next);
     setShowDenoise(next); // reveal the editor while denoising; hide it when raw
     if (next) {
-      const hasConfig = (displayFilters && displayFilters.some((mode) => normalizeFilterMode(mode || "none") !== "none"))
+      const hasConfig = (displayFilters && displayFilters.some((mode) => (mode || "none") !== "none"))
         || (spatialBins && spatialBins.some((bin) => (bin || 1) > 1))
         || denoiseBaseMode !== "none";
       if (!hasConfig) setDisplayFilter("gaussian");
@@ -3250,17 +3250,17 @@ function Show2D() {
     if (activePanels.length === 0) return "";
     const suffix = " (set denoise='none' for raw counts)";
     const uniform = knobs.every(knob =>
-      normalizeFilterMode(knob.mode) === normalizeFilterMode(knobs[0].mode)
+      knob.mode === knobs[0].mode
       && knob.sigma === knobs[0].sigma && knob.bin === knobs[0].bin);
     if (uniform) {
-      const mode = normalizeFilterMode(knobs[0].mode);
+      const mode = knobs[0].mode;
       const parts = [mode === "none" ? "raw" : mode];
       if (mode !== "none") parts.push(`σ=${Number(knobs[0].sigma)}`);
       if (knobs[0].bin > 1) parts.push(`bin${knobs[0].bin}`);
       return `denoise: ${parts.join(" ")}${suffix}`;
     }
     const perPanel = activePanels.map(i =>
-      `p${i}:${normalizeFilterMode(knobs[i].mode)} σ=${Number(knobs[i].sigma)}`
+      `p${i}:${knobs[i].mode} σ=${Number(knobs[i].sigma)}`
       + (knobs[i].bin > 1 ? ` bin${knobs[i].bin}` : "")).join(", ");
     return `denoise: ${perPanel}${suffix}`;
   }, [browserFilterActive, nImages, panelFilterKnobs]);
@@ -3311,7 +3311,7 @@ function Show2D() {
       const denoise = panelFilterKnobs(panel);
       const frequency = panelFrequencyKnobs(panel);
       const denoiseSignature = browserFilterActive && filterKnobsActive(denoise.mode, denoise.bin)
-        ? `${normalizeFilterMode(denoise.mode)}:${denoise.sigma}:${denoise.bin}`
+        ? `${denoise.mode}:${denoise.sigma}:${denoise.bin}`
         : "off";
       const frequencySignature = frequencyFilterEnabled && frequencyFilterActive(frequency.mode)
         ? `${frequency.mode}:${frequency.cutoff}:${frequency.center}:${frequency.width}`
@@ -9165,7 +9165,7 @@ function Show2D() {
                     <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                       <Box sx={controlPairSx}>
                         <Typography sx={compactLabelSx} title="Poisson (Anscombe): count-respecting smoothing for sparse EDS/counting data - recommended with Bin 2, sigma 6-10. Gaussian: simple smooth for decent-dose images. None: raw counts (use for anything quantitative).">Denoise</Typography>
-                        <Select size="small" value={denoiseBaseMode} onChange={(e) => { const mode = e.target.value; setDisplayFilter(mode); mirrorFilterKnobEdit("mode", mode); if (normalizeFilterMode(mode) !== "none" || (spatialBin || 1) > 1) setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 88 }}>
+                        <Select size="small" value={denoiseBaseMode} onChange={(e) => { const mode = e.target.value; setDisplayFilter(mode); mirrorFilterKnobEdit("mode", mode); if (mode !== "none" || (spatialBin || 1) > 1) setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 88 }}>
                           {[["none", "None"], ["gaussian", "Gaussian"], ["anscombe", "Poisson (Anscombe)"]].map(([mode, label]) => (
                             <MenuItem key={mode} value={mode}>{label}</MenuItem>
                           ))}
@@ -9183,7 +9183,7 @@ function Show2D() {
                       </Box>
                       <Box sx={controlPairSx}>
                         <Typography sx={compactLabelSx} title="Display-side 2x bin passes for SNR, combined with the denoise method. 1 is lossless.">Bin</Typography>
-                        <Select size="small" value={String(spatialBin || 1)} onChange={(e) => { const bin = parseInt(e.target.value, 10); setSpatialBin(bin); mirrorFilterKnobEdit("bin", bin); if (bin > 1 || normalizeFilterMode(denoiseBaseMode) !== "none") setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 40 }}>
+                        <Select size="small" value={String(spatialBin || 1)} onChange={(e) => { const bin = parseInt(e.target.value, 10); setSpatialBin(bin); mirrorFilterKnobEdit("bin", bin); if (bin > 1 || denoiseBaseMode !== "none") setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 40 }}>
                           {[1, 2, 4].map((bin) => (<MenuItem key={bin} value={String(bin)}>{bin}</MenuItem>))}
                         </Select>
                       </Box>

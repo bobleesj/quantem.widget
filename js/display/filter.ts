@@ -32,19 +32,13 @@ import { computePipeline } from "./pipelines";
 /** Filter modes the browser can evaluate; the denoise menus offer exactly these. */
 const BROWSER_FILTER_MODES = new Set(["none", "gaussian", "anscombe"]);
 
-/** Lowercase mode name; the identity spellings off/raw/"" collapse to none. */
-export function normalizeFilterMode(mode: string): string {
-  const normalized = String(mode ?? "").trim().toLowerCase();
-  return normalized === "" || normalized === "off" || normalized === "raw" ? "none" : normalized;
-}
-
 export function browserFilterSupported(mode: string): boolean {
-  return BROWSER_FILTER_MODES.has(normalizeFilterMode(mode));
+  return BROWSER_FILTER_MODES.has(mode);
 }
 
 /** True when the (mode, spatialBin) knobs change pixels at all. */
 export function filterKnobsActive(mode: string, spatialBin: number): boolean {
-  return normalizeFilterMode(mode) !== "none" || (spatialBin | 0) > 1;
+  return mode !== "none" || (spatialBin | 0) > 1;
 }
 
 /** Resolve the denoise editor/render knobs owned by one gallery panel. */
@@ -255,7 +249,7 @@ export function applyDisplayFilterCPU(
   data: Float32Array, width: number, height: number,
   mode: string, sigma: number, spatialBin = 1,
 ): Float32Array {
-  const resolved = { mode: normalizeFilterMode(mode), bin: spatialBin | 0 || 1 };
+  const resolved = { mode, bin: spatialBin | 0 || 1 };
   let plane: Plane = { data: Float32Array.from(data), width, height };
   if (resolved.mode === "gaussian") {
     // Binned gaussian keeps the reference _bin2 semantics: smooth on the
@@ -638,7 +632,7 @@ class GPUDisplayFilterEngine {
     let releaseQueue: () => void = () => {};
     this.filterQueue = new Promise<void>((resolve) => { releaseQueue = resolve; });
     await previous;
-    const resolved = { mode: normalizeFilterMode(mode), bin: spatialBin | 0 || 1 };
+    const resolved = { mode, bin: spatialBin | 0 || 1 };
     if (!BROWSER_FILTER_MODES.has(resolved.mode)) {
       releaseQueue();
       throw new Error(`display filter mode not supported in the browser: ${mode}`);

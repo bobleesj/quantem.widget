@@ -574,11 +574,12 @@ class Show2D(
     # js/display/frequencyFilter.ts). The browser owns the view transform: it filters
     # raw frames client-side, mirrors the scalar editor traits to the per-panel
     # lists by scope, and writes the banner. Python only ships raw pixels and
-    # keeps the traits so saved state and exports carry the knobs.
-    denoise = traitlets.Unicode("none").tag(sync=True)
+    # keeps the traits so saved state and exports carry the knobs. The browser
+    # compares a mode to its filter names as written, so the traits take only those.
+    denoise = traitlets.Enum(_BROWSER_DENOISE_MODES, default_value="none").tag(sync=True)
     denoise_sigma = traitlets.Float(4.0).tag(sync=True)
     denoise_bin = traitlets.Int(1).tag(sync=True)
-    denoise_modes = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
+    denoise_modes = traitlets.List(traitlets.Enum(_BROWSER_DENOISE_MODES), default_value=[]).tag(sync=True)
     denoise_sigmas = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
     denoise_bins = traitlets.List(traitlets.Int(), default_value=[]).tag(sync=True)
     denoise_scope = traitlets.Enum(["all", "panel"], default_value="all").tag(sync=True)

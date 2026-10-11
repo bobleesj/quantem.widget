@@ -103,7 +103,7 @@ import { resolveDisplayBounds } from "../shared/displayRange";
 import { type RichTitleSpan, renderMathExpression, renderRichTitle, richTitlePlainText } from "../shared/latexTitle";
 import { type PanelAnnotationSpec, type PanelOverlaySpec, type OverlaySelection, type OverlayDragState, panelAnnotationSx, drawROI, drawPanelOverlays, panelOverlayHit, updateOverlayFromDrag, drawPanelOverlaySelection, normalizeHiddenPageSlots } from "../shared/panelOverlays";
 import { Histogram } from "../shared/Histogram";
-import { normalizeFilterMode, applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive } from "../display/filter";
+import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive } from "../display/filter";
 import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine } from "../display/colormaps";
 import { histogramBins } from "../display/cpuColormap";
 import { getGPUInfo } from "../display/device";
@@ -1767,7 +1767,7 @@ function Show3D() {
     const idx = Math.max(0, Math.min(Math.max(0, (nPanels || 1) - 1), panel));
     const mode = denoiseScopeAll ? displayFilter : (displayFilters?.[idx] ?? displayFilter);
     return {
-      mode: normalizeFilterMode(mode || "none"),
+      mode: mode || "none",
       sigma: denoiseScopeAll ? Number(displaySigma ?? 4) : Number(displaySigmas?.[idx] ?? displaySigma ?? 4),
       bin: denoiseScopeAll ? Number(spatialBin || 1) : Number(spatialBins?.[idx] ?? spatialBin ?? 1),
     };
@@ -1816,12 +1816,12 @@ function Show3D() {
   // Local slider value during drag; the model only updates on release so
   // scrubbing sigma stays smooth on large stacks.
   const [sigmaDraft, setSigmaDraft] = React.useState<number | null>(null);
-  const displayFilterOff = normalizeFilterMode(displayFilter || "none") === "none";
+  const displayFilterOff = (displayFilter || "none") === "none";
   // Python ships raw frames; the display filter (WGSL, or its CPU port without
   // WebGPU) applies gaussian/bin/anscombe here, so dragging sigma is live with
   // zero kernel round trips. True-color stacks are not filtered.
   const browserFilterActive = !isRgb && (denoiseEnabled ?? true);
-  const denoiseResolved = { mode: normalizeFilterMode(displayFilter || "none"), bin: spatialBin || 1 };
+  const denoiseResolved = { mode: displayFilter || "none", bin: spatialBin || 1 };
   const denoiseSigmaLive = sigmaDraft ?? Number(displaySigma ?? 4);
   const browserFilterKnobsOn = browserFilterActive
     && (denoiseScopeAll
@@ -11916,7 +11916,7 @@ function Show3D() {
                     </>
                   )}
                   <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }} title="Poisson (Anscombe): count-respecting smoothing for sparse EDS/counting data - recommended with Bin 2, sigma 6-10. Gaussian: simple smooth for decent-dose images. None: raw counts (use for anything quantitative).">Denoise</Typography>
-                  <Select size="small" value={denoiseKnobsForPanel(scopedPanelForEdit).mode} onChange={(e) => { const value = String(e.target.value); setDisplayFilter(value); syncDenoisePanelKnob("mode", value); if (normalizeFilterMode(value) !== "none" || (denoiseKnobsForPanel(scopedPanelForEdit).bin || 1) > 1) setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 88, fontSize: 10 }} inputProps={{ "aria-label": denoiseScopeAll ? "Display-only denoise method for all panels" : "Display-only denoise method for selected panel" }}>
+                  <Select size="small" value={denoiseKnobsForPanel(scopedPanelForEdit).mode} onChange={(e) => { const value = String(e.target.value); setDisplayFilter(value); syncDenoisePanelKnob("mode", value); if (value !== "none" || (denoiseKnobsForPanel(scopedPanelForEdit).bin || 1) > 1) setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 88, fontSize: 10 }} inputProps={{ "aria-label": denoiseScopeAll ? "Display-only denoise method for all panels" : "Display-only denoise method for selected panel" }}>
                     {[["none", "None"], ["gaussian", "Gaussian"], ["anscombe", "Poisson (Anscombe)"]].map(([mode, label]) => (
                       <MenuItem key={mode} value={mode}>{label}</MenuItem>
                     ))}
@@ -11931,7 +11931,7 @@ function Show3D() {
                     aria-label="Display filter sigma in pixels"
                   />
                   <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }} title="Display-side 2x bin passes for SNR, combined with the denoise method. 1 is lossless.">Bin</Typography>
-                  <Select size="small" value={String(denoiseKnobsForPanel(scopedPanelForEdit).bin || 1)} onChange={(e) => { const b = parseInt(e.target.value, 10); setSpatialBin(b); syncDenoisePanelKnob("bin", b); if (b > 1 || normalizeFilterMode(denoiseKnobsForPanel(scopedPanelForEdit).mode) !== "none") setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 40, fontSize: 10 }} inputProps={{ "aria-label": denoiseScopeAll ? "Display spatial bin factor for all panels" : "Display spatial bin factor for selected panel" }}>
+                  <Select size="small" value={String(denoiseKnobsForPanel(scopedPanelForEdit).bin || 1)} onChange={(e) => { const b = parseInt(e.target.value, 10); setSpatialBin(b); syncDenoisePanelKnob("bin", b); if (b > 1 || denoiseKnobsForPanel(scopedPanelForEdit).mode !== "none") setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 40, fontSize: 10 }} inputProps={{ "aria-label": denoiseScopeAll ? "Display spatial bin factor for all panels" : "Display spatial bin factor for selected panel" }}>
                     {[1, 2, 4].map((b) => (<MenuItem key={b} value={String(b)}>{b}</MenuItem>))}
                   </Select>
                 </Box>

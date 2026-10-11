@@ -12,6 +12,7 @@ import matplotlib.figure
 import matplotlib.colorbar
 import numpy as np
 import pytest
+import traitlets
 from matplotlib import colormaps
 from PIL import Image
 
@@ -190,6 +191,19 @@ def test_denoise_keywords_switch_on_the_browser_filter():
         Show2D([_frame(0), _frame(1)], denoise=["anscombe"])
     with pytest.raises(ValueError, match="denoise_scope='all'"):
         Show2D([_frame(0), _frame(1)], denoise=["none", "anscombe"], denoise_scope="all")
+
+
+def test_denoise_traits_take_only_the_names_the_browser_filter_runs():
+    # the browser compares the trait to its filter names as written: another spelling would show raw pixels under a filter banner
+    viewer = Show2D([_frame(0), _frame(1)])
+    viewer.denoise = "anscombe"
+    viewer.denoise_modes = ["gaussian", "none"]
+    for spelling in ("off", "raw", "Gaussian", ""):
+        with pytest.raises(traitlets.TraitError):
+            viewer.denoise = spelling
+        with pytest.raises(traitlets.TraitError):
+            viewer.denoise_modes = ["none", spelling]
+    assert (viewer.denoise, viewer.denoise_modes) == ("anscombe", ["gaussian", "none"])
 
 def test_display_bin_auto_bins_large_input_and_serves_full_resolution_tiles(capsys):
     frame = np.random.default_rng(0).random((2048, 2100)).astype(np.float32)
