@@ -34,6 +34,7 @@ import { useTheme, type ThemeColors } from "../theme";
 import { downloadBlob, extractFloat32, formatNumber } from "../format";
 import { computeHistogramFromBytes, percentileClip } from "../display/stats";
 import { RenderPathBadge } from "../shared/RenderPathBadge";
+import { shouldIgnoreWidgetShortcut } from "../shared/widgetShortcuts";
 import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen, GPUColormapEngine, getGPUColormapEngine } from "../display/colormaps";
 import { nextPow2, shiftedMagnitude, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset, getDisplayFFT, type DisplayFFT } from "../display/fft";
 import { findFFTPeakBrowser } from "../display/geometry";
@@ -1523,7 +1524,6 @@ function Explore() {
   // An array input has no SSB session: only the views, FFT and display controls apply.
   // Exports written before the trait existed are sessions, hence `!== false`.
   const tuning = ssbSession !== false;
-  const tuningRef = React.useRef(tuning); tuningRef.current = tuning;
   const objectAmplitude = React.useMemo(
     () => (amplitudeBytes && amplitudeBytes.byteLength > 0 ? extractFloat32(amplitudeBytes) : null),
     [amplitudeBytes],
@@ -3089,70 +3089,47 @@ function Explore() {
     renderAll(entry.phaseData, entry.w, entry.h);
   }, [renderAll]);
 
-  /* --- Keyboard: window-level so shortcuts work regardless of focus --- */
-  React.useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      if ((e.target as HTMLElement).closest?.(".MuiSlider-root")) return;
+  /* --- Keyboard: shortcuts act only while this widget has focus --- */
+  // Scoped to the root (as in Show2D/Show3D) so typing in notebook cells, CodeMirror
+  // editors and other widgets is never intercepted.
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (shouldIgnoreWidgetShortcut(e.target, e.key)) return;
+    let handled = true;
+    if (e.key === "r" || e.key === "R") resetZoom();
+    // pins, sweeps and trials belong to an SSB session
+    else if (!tuning) handled = false;
+    // P pins the current snapshot (the oldest is evicted once MAX_PINS is hit)
+    else if (e.key === "p" || e.key === "P") doPin();
+    else if (e.key === " ") setPlaying(wasPlaying => !wasPlaying);
+    else if (e.key === "Escape") { setViewPin(null); setActiveTrialRank(null); }
+    // S stars or unstars the viewed pin (Python persists it to disk)
+    else if ((e.key === "s" || e.key === "S") && viewPin != null) doToggleStar(viewPin);
+    else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && (trials.length > 0 || pinned.length > 0)) {
+      // arrows step through whichever browser was touched last: clicking a trial tile sets
+      // activeTrialRank, clicking a pin sets viewPin, and each clears the other
+      const step = e.key === "ArrowRight" ? 1 : -1;
+      if (activeTrialRank != null && trials.length > 0) {
+        const trialIndex = trials.findIndex(trial => trial.rank === activeTrialRank);
+        doViewTrial(trials[trialIndex < 0 ? (step > 0 ? 0 : trials.length - 1) : (trialIndex + step + trials.length) % trials.length]);
+        setTrialsExpanded(true);  // so the selected tile is visible
+      } else if (pinned.length > 0) {
+        const pinIndex = viewPin ? pinned.findIndex(pin => pin.id === viewPin) : -1;
+        doViewPin(pinned[pinIndex < 0 ? (step > 0 ? 0 : pinned.length - 1) : (pinIndex + step + pinned.length) % pinned.length]);
+      } else {
+        doViewTrial(trials[0]);
+        setTrialsExpanded(true);
+      }
+    } else handled = false;
+    if (handled) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
 
-      // R → reset zoom (works without pins)
-      if (e.key === "r" || e.key === "R") { resetZoom(); return; }
-      // pins, sweeps and trials belong to an SSB session
-      if (!tuningRef.current) return;
-      // P → pin current snapshot (oldest is evicted once MAX_PINS hit)
-      if (e.key === "p" || e.key === "P") { e.preventDefault(); doPin(); return; }
-      // Space → toggle play/pause of the aberration sweep
-      if (e.key === " " || e.code === "Space") { e.preventDefault(); setPlaying(wasPlaying => !wasPlaying); return; }
-
-      if (e.key === "Escape") {
-        setViewPin(null); setActiveTrialRank(null); return;
-      }
-      // S → star/unstar the currently-viewed pin (Python persists to disk)
-      if ((e.key === "s" || e.key === "S") && viewPin != null) {
-        e.preventDefault(); doToggleStar(viewPin); return;
-      }
-      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-        // Dispatch based on which browser was most recently touched.  Clicking
-        // a trial tile sets activeTrialRank; clicking a pin sets viewPin; they
-        // clear each other so only one is "active" at a time.
-        const hasActiveTrial = activeTrialRank != null && trials.length > 0;
-        const hasActivePin = pinned.length > 0;
-        if (!hasActiveTrial && !hasActivePin && trials.length === 0) return;
-        // Capture-phase + stopPropagation so JupyterLab's notebook cell nav
-        // can't steal our arrow keys.  Only do this when we're actually going
-        // to act on the arrow, otherwise leave arrows free for normal use.
-        e.preventDefault();
-        e.stopPropagation();
-        if (hasActiveTrial) {
-          const trialIndex = trials.findIndex(trial => trial.rank === activeTrialRank);
-          const next = e.key === "ArrowRight"
-            ? (trialIndex < 0 ? 0 : (trialIndex >= trials.length - 1 ? 0 : trialIndex + 1))
-            : (trialIndex < 0 ? trials.length - 1 : (trialIndex <= 0 ? trials.length - 1 : trialIndex - 1));
-          doViewTrial(trials[next]);
-          setTrialsExpanded(true);  // so the selected tile is visible
-          return;
-        }
-        if (hasActivePin) {
-          const pinIndex = viewPin ? pinned.findIndex(pin => pin.id === viewPin) : -1;
-          const next = e.key === "ArrowRight"
-            ? (pinIndex < 0 ? 0 : (pinIndex >= pinned.length - 1 ? 0 : pinIndex + 1))
-            : (pinIndex < 0 ? pinned.length - 1 : (pinIndex <= 0 ? pinned.length - 1 : pinIndex - 1));
-          doViewPin(pinned[next]);
-          return;
-        }
-        // Neither collection touched but trials exist → enter trials list at #1.
-        if (trials.length > 0) {
-          doViewTrial(trials[0]);
-          setTrialsExpanded(true);
-        }
-      }
-    };
-    // Capture phase so JupyterLab's notebook-level cell-navigation handler
-    // (also bound to keydown) doesn't consume the event before we see it.
-    window.addEventListener("keydown", handleKey, { capture: true });
-    return () => window.removeEventListener("keydown", handleKey, { capture: true });
-  }, [pinned, viewPin, doViewPin, doPin, doToggleStar, trials, activeTrialRank, doViewTrial]);
+  const handleRootMouseDownCapture = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (shouldIgnoreWidgetShortcut(e.target)) return;
+    rootRef.current?.focus({ preventScroll: true });
+  };
 
   /* --- Resize handle --- */
   React.useEffect(() => {
@@ -3307,7 +3284,14 @@ function Explore() {
   );
 
   return (
-    <Box ref={rootRef} sx={{ ...container.root, bgcolor: tc.bg, color: tc.text }}>
+    <Box
+      ref={rootRef}
+      className="showptycho-root"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      onMouseDownCapture={handleRootMouseDownCapture}
+      sx={{ ...container.root, bgcolor: tc.bg, color: tc.text, outline: "none" }}
+    >
       {/* ---- Top toolbar: FFT toggle + image dims + Reset view (matching Show2D) ---- */}
       <Stack
         direction="row"
