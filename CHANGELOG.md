@@ -6,6 +6,129 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+## rc42 - 2026-10-11
+
+Fixed:
+
+- Single-file `export_html` pages open without a network connection:
+  require.js, the widget manager and anywidget travel in the page, which is
+  about 1.2 MB larger. A packed Show4DSTEM export is one self-contained page
+  and writes no launcher.
+- Show2D counts the panels of list, torch and CuPy input (each counted as one
+  panel); a keyword for a trait the constructor sets itself raises, and labels
+  of the wrong length raise. `export_html` keeps the calibration under
+  `downsample` and rotates once; saved state is in native pixels.
+  `save_image`, the notebook preview and the SVG use each panel's colormap,
+  contrast window, view window and flips, and the scale bar uses the native
+  pixel size. `set_image` with a different panel count resets the per-panel
+  lists.
+- Show4DSTEM: one detector drag message reduces the virtual image once in the
+  kernel instead of once per changed trait (three times for a drag; 51 ms to
+  18 ms per drag step on a 256 x 256 encoded scan, measured on a shared GPU),
+  and the diffraction panel's Reset is one update. The scan-ROI sum and
+  maximum of signed integer data no longer wrap (a negative total read near
+  1.8e19). `compute_ssb` accepts 1024 x 1024 scans. `quantem show4dstem
+  --backend` takes `auto` or `webgpu`; `--dtype` takes `auto`, `uint8` or
+  `uint16`. Choosing Rect, Point or Square in an exported page shows that
+  detector's image. Overlays redraw after a pixel-ratio change, the
+  diffraction histogram axis reads the shown pattern, source buttons wrap
+  instead of clipping, log scale keeps negative values of signed images, Space
+  plays a frame series, and a scan click sends one region to the kernel.
+- Scale bar labels are the same in static renders and in the browser: an
+  uncalibrated axis is labelled px, and meter, millimeter and micrometer
+  spellings rescale. A 1e-7 mm bar in a static render and a 1e-4 um bar in the
+  browser read "1 Å" (each read "100 pm"). Show3D and ShowPtycho horizontal
+  scale bars use the column sampling.
+- Show3D: the saved-notebook preview and GIF export follow
+  `inter_panel_gap_px`, the gap the browser draws. Sub-pixel align runs on
+  WebGPU for frames of 512 x 512 padded pixels and larger, returns the CPU
+  path's shifts and transforms the reference frame once. The histogram bins
+  the frame the image shows (difference, average, log); the kymograph Log
+  range stays signed. Browser GIF export keeps 44 gray levels instead of 6.
+  ROI resize follows the pointer from the press, panel reorder stays within
+  its own widget, and band-pass width commits on release.
+- Show2D and Show3D: overlays written to the `panel_overlays` trait are
+  normalized as the keyword's are (a refused one raises TraitError), and a
+  rectangle overlay resized past the image border keeps one pixel instead of
+  closing. Show2D: a binned gallery FFT is labelled "FFT preview, binned Nx"
+  and its metrics use the binned pixel size; the frequency-filter ring marks
+  and sets the cut frequency at any FFT zoom, pan or binning; SVG export keeps
+  semi-transparent colors and draws the full inset plot.
+- ShowPtycho: keyboard shortcuts (P, Space, R, S, arrows) act only while the
+  widget has focus, so typing in notebook cells is no longer intercepted.
+  Starring a pinned snapshot records the state the pin shows.
+- Show3DSlices opens stacks with a `frame` axis and prints one line when it
+  packs uint8; browser slice alignment returns the shifts
+  `estimate_slice_alignment` returns; the slice counter counts from 1; the 3D
+  view states that it samples an 8-bit copy.
+- Reductions are announced: `read_image` prints one line when it keeps one
+  frame of a multi-frame file (GIF keeps colour), Show2D `offline=True` prints
+  one line stating the uint8 packing, and the gold tutorial loaders print the
+  stride they keep and how to load native data.
+- Show1D: snapshot histograms no longer allocate WebGPU buffers per panel;
+  zoom, pan and hover do not recolour snapshots; the zero tick reads "0";
+  histogram buttons stay inside their panel. Plot2D: ticks sit at round values
+  and labels do not overlap or leave the canvas after zooming. ShowCIF uses
+  the shared hardware WebGPU device and leaves it alive on close.
+  ChooseLattice draws the image and markers at device resolution.
+- The CPU frequency filter (no WebGPU) pads an image that is not a power of
+  two, as the WebGPU path does, and mismatched image dimensions raise instead
+  of being guessed. `notebook_preview_format="jpg"` is refused at construction
+  (it failed when the notebook was saved). `device_info` names the Intel Mac
+  GPU and prints its notice once.
+- `free_gpu()` on Apple silicon reports the Metal driver memory it returned.
+  rc41 read the tensor allocation counter, which excludes cached blocks, and
+  printed 0.0 GB.
+
+Changed:
+
+- `[cuda]` and `[mps]` require `quantem.gpu>=0.0.1rc16,<0.0.1rc17`;
+  `gpu-ref.txt` names `gpu-v0.0.1rc16`.
+- The default `pixel_unit` and `k_pixel_unit` (Show2D, Show4DSTEM) and the
+  `x_unit` default of `Show1D.from_image` are `"px"` (were `"pixels"`). A
+  dataset's own unit string is kept as given and labelled px.
+- Show2D, Show3D and Show4DSTEM line profiles take ceil(length) + 1 samples,
+  as Show1D and `sample_line_profile` do (one sample more than before on some
+  lines).
+- ShowPtycho and Show3D accept any array-like; tensors and CuPy arrays stay on
+  their device. `Show4DSTEM(None, h5_urls=...)` builds browser-source viewers
+  without a placeholder array. ShowDiffraction `radial_profile_px` is
+  `radial_profile`.
+- The Show2D and Show3D `denoise` and `denoise_modes` traits take `none`,
+  `gaussian` or `anscombe` as written; another spelling raises instead of
+  showing unfiltered pixels. The Show2D `denoise=` keyword still lower-cases
+  its value.
+- Speed and memory: `save_image` raw PNG peak memory at 2048 x 2048 is 112 MiB
+  (was 208 MiB). Show3D filters on multi-panel stacks run their panels
+  concurrently, and unlinked-contrast playback no longer copies and scans
+  every panel per frame. Hovering over a Show2D gallery with Link Contrast off
+  no longer re-bins every histogram, and panels view decoded frames instead of
+  copying them. Measurements are in `docs/2026-10-11-rc42-integration.md`.
+- Development: widget-ci typechecks and runs vitest; the ci and release builds
+  sync the quantem.gpu kernels once; `sync-gpu-webgpu` reads only
+  `QUANTEM_GPU_SRC` or the installed quantem.gpu.
+
+Removed:
+
+- `export_html(mode=)` and `export_html(quantized=)` (use `encoding=`); Show1D
+  `mode` and `encoding` export arguments; Show2D `overlays=` (use
+  `panel_overlays=`); Show3D `offline=`; Show3DSlices `pixel_size=` and its
+  `pixel_size` trait (`pixel_size_axes` holds the sampling).
+- Alias spellings: `u8`/`u16`, filter `off`/`raw`, preview `jpg`/`off`,
+  Show4DSTEM image-source, compare-mode, report-scope and SSB request aliases,
+  and aberration keys in radians.
+- ShowDiffraction sector profile, polynomial background and pseudo-Voigt ring
+  model.
+- The `size` argument of `datasets.show1d_ducky` and
+  `datasets.showdiffraction_fe3o4`, which accepted one value.
+- Traits the browser no longer reads: Show4DSTEM `dp_global_min` and
+  `dp_global_max`, Show3D `panel_gap` (the `panel_gap=` keyword stays and sets
+  `inter_panel_gap_px`), Show2D `pixel_sizes`. Show1D `profile_width` is no
+  longer sent to the browser. A Show3D or Show3DSlices state file saved by
+  rc41 loads with one warning that names `panel_gap` or `pixel_size`.
+- `__QT_H5_*` page options that nothing set. The documented options,
+  `__QT_H5_DECODE_BATCH` and `__QT_H5_PRELOAD_WINDOW` remain.
+
 ## rc41 - 2026-10-09
 
 - Show4DSTEM opens `.qem` acquisitions in the browser with no kernel:
