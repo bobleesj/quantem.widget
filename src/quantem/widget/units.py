@@ -19,7 +19,7 @@ UNIT_TABLE: dict[str, tuple[str, float, str]] = {
     "nm": ("length", 10.0, "nm"), "pm": ("length", 0.01, "pm"),
     "µm": ("length", 1e4, "µm"), "μm": ("length", 1e4, "µm"), "um": ("length", 1e4, "µm"), "mm": ("length", 1e7, "mm"), "m": ("length", 1e10, "m"),
     "1/angstrom": ("reciprocal_length", 1.0, "Å⁻¹"), "1/Å": ("reciprocal_length", 1.0, "Å⁻¹"),
-    "1/A": ("reciprocal_length", 1.0, "Å⁻¹"), "A^-1": ("reciprocal_length", 1.0, "Å⁻¹"),
+    "1/A": ("reciprocal_length", 1.0, "Å⁻¹"), "A^-1": ("reciprocal_length", 1.0, "Å⁻¹"), "Å^-1": ("reciprocal_length", 1.0, "Å⁻¹"),
     "1/nm": ("reciprocal_length", 0.1, "nm⁻¹"), "nm^-1": ("reciprocal_length", 0.1, "nm⁻¹"),
     "mrad": ("angle", 1.0, "mrad"), "rad": ("angle", 1e3, "rad"), "µrad": ("angle", 1e-3, "µrad"),
     "urad": ("angle", 1e-3, "µrad"), "deg": ("angle", 1e3 * math.pi / 180.0, "°"),

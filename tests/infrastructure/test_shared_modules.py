@@ -16,7 +16,7 @@ from quantem.widget.export import export_slug
 from quantem.widget.pages import resolve_page_labels
 from quantem.widget.panels import normalize_panel_refs, resolve_panel_ref
 from quantem.widget.render.figure import format_scale_label, round_to_nice
-from quantem.widget.units import axis_step
+from quantem.widget.units import UNIT_TABLE, axis_step
 
 WIDGETS = Path(__file__).resolve().parents[2] / "src" / "quantem" / "widget"
 
@@ -65,6 +65,19 @@ def test_uncalibrated_axes_carry_the_unit_px():
 
 def test_round_to_nice_thresholds():
     assert [round_to_nice(v) for v in (1.4, 1.5, 3.4, 3.5, 7.4, 7.5, 0)] == [1, 2, 2, 5, 5, 10, 1.0]
+
+
+def test_the_frontend_unit_table_holds_the_python_one():
+    # one table per language: js/units.ts lists the same unit strings with the same kind, size and symbol
+    source = (WIDGETS.parents[2] / "js" / "units.ts").read_text(encoding="utf-8")
+    table = source[source.index("const UNIT_TABLE"):source.index("};", source.index("const UNIT_TABLE"))]
+    entries = re.findall(r'(?:"([^"]+)"|\b(\w+)): \{ kind: "(\w+)", size: ([^,]+), symbol: "([^"]+)" \}', table)
+    frontend = {quoted or bare: (kind, size, symbol) for quoted, bare, kind, size, symbol in entries}
+    assert set(frontend) == set(UNIT_TABLE)
+    for unit, (kind, size, symbol) in UNIT_TABLE.items():
+        assert frontend[unit][0] == kind and frontend[unit][2] == symbol, unit
+        if unit != "deg":  # written as (1e3 * Math.PI) / 180 there
+            assert float(frontend[unit][1]) == size, unit
 
 
 def test_one_unit_table_reads_the_format_strings_and_refuses_unknown_text():

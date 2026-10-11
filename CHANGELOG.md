@@ -31,7 +31,7 @@ Changed:
   `state_dict()`.
 - One unit table (`quantem.widget.units`, `js/units.ts`) replaces six. It reads
   the strings a `.qem` file writes (`angstrom`, `1/angstrom`, `mrad`) and
-  `Å`, `A`, `nm`, `pm`, `µm`, `um`, `mm`, `m`, `1/Å`, `1/A`, `A^-1`, `1/nm`,
+  `Å`, `A`, `nm`, `pm`, `µm`, `um`, `mm`, `m`, `1/Å`, `1/A`, `A^-1`, `Å^-1`, `1/nm`,
   `nm^-1`, `rad`, `µrad`, `urad`, `deg` and the time units; `pixels`, `px`,
   `index`, `frame` and `slice` mean an uncalibrated axis. Any other string
   raises `ValueError`. Spelled-out forms (`nanometer`, `micron`, `angstroms`,

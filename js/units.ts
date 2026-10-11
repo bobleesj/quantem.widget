@@ -16,6 +16,7 @@ const UNIT_TABLE: Record<string, UnitEntry> = {
   mm: { kind: "length", size: 1e7, symbol: "mm" }, m: { kind: "length", size: 1e10, symbol: "m" },
   "1/angstrom": { kind: "reciprocal_length", size: 1, symbol: "Å⁻¹" }, "1/Å": { kind: "reciprocal_length", size: 1, symbol: "Å⁻¹" },
   "1/A": { kind: "reciprocal_length", size: 1, symbol: "Å⁻¹" }, "A^-1": { kind: "reciprocal_length", size: 1, symbol: "Å⁻¹" },
+  "Å^-1": { kind: "reciprocal_length", size: 1, symbol: "Å⁻¹" },
   "1/nm": { kind: "reciprocal_length", size: 0.1, symbol: "nm⁻¹" }, "nm^-1": { kind: "reciprocal_length", size: 0.1, symbol: "nm⁻¹" },
   mrad: { kind: "angle", size: 1, symbol: "mrad" }, rad: { kind: "angle", size: 1e3, symbol: "rad" },
   "µrad": { kind: "angle", size: 1e-3, symbol: "µrad" }, urad: { kind: "angle", size: 1e-3, symbol: "µrad" },
