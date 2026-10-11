@@ -24,8 +24,9 @@ import StopIcon from "@mui/icons-material/Stop";
 import TableChartIcon from "@mui/icons-material/TableChart";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { downloadBlob, extractBytes, extractFloat32, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";
-import { COLORMAPS, COLORMAP_NAMES, getGPUColormapEngine } from "../display/colormaps";
-import { computeHistogramFromBytes, findDataRange, percentileClip } from "../display/stats";
+import { COLORMAPS, COLORMAP_NAMES } from "../display/colormaps";
+import { histogramBins } from "../display/cpuColormap";
+import { findDataRange, percentileClip } from "../display/stats";
 import { applyHannWindow2D, autoEnhanceFFT, computeMagnitude, fft2dAsync, fftshift, getDisplayFFT, nextPow2, DisplayFFT } from "../display/fft";
 import { formatScaleLabel, roundToNiceValue } from "../figure";
 import { useTheme } from "../theme";
@@ -2314,29 +2315,13 @@ function SnapshotHistogram({ data, imageIndex, packedHeight, packedWidth, imageW
 }) {
   const image = React.useMemo(() => extractPackedImage(data, imageIndex, packedHeight, packedWidth, imageHeight, imageWidth),
     [data, imageIndex, packedHeight, packedWidth, imageHeight, imageWidth]);
-  const slot = React.useRef(20000 + Math.floor(Math.random() * 1000000));
-  const [bins, setBins] = React.useState<number[]>([]);
-  const [backend, setBackend] = React.useState("");
   const bounds = React.useMemo(() => findDataRange(image), [image]);
   const dataMin = bounds.min;
   const dataMax = bounds.max > dataMin ? bounds.max : dataMin + 1;
+  // The float32 twin of the WebGPU histogram shader gives the same 256 bins with
+  // no device buffers to allocate per panel and release on unmount.
+  const bins = React.useMemo(() => histogramBins(image, dataMin, dataMax), [image, dataMin, dataMax]);
   const clip = resolveSnapshotDisplayRange(image, preset, range && range.length === 2 ? range as [number, number] : null);
-  React.useEffect(() => {
-    let canceled = false;
-    const fallback = () => {
-      if (!canceled) { setBins(computeHistogramFromBytes(image, 256, dataMin, dataMax)); setBackend("CPU"); }
-    };
-    void getGPUColormapEngine().then(async engine => {
-      if (canceled) return;
-      if (!engine) { fallback(); return; }
-      try {
-        engine.uploadData(slot.current, image, imageWidth, imageHeight);
-        const values = await engine.computeHistogramWithRange(slot.current, dataMin, dataMax, false);
-        if (!canceled) { setBins(values); setBackend("WebGPU"); }
-      } catch { fallback(); }
-    }).catch(fallback);
-    return () => { canceled = true; };
-  }, [image, imageWidth, imageHeight, dataMin, dataMax]);
   return <Box data-testid="show1d-panel-histogram" aria-label={`${label} contrast`} sx={{ minWidth: 0, px: 0.5 }}>
     <Typography sx={{ fontSize: 11, color: colors.textMuted }}>{label}</Typography>
     <MiniHistogram bins={bins} dataMin={dataMin} dataMax={dataMax} clipMin={clip[0]} clipMax={clip[1]}
@@ -2345,7 +2330,6 @@ function SnapshotHistogram({ data, imageIndex, packedHeight, packedWidth, imageW
       <Button size="small" onClick={() => onChange([dataMin, dataMax])}>Full</Button>
       <Button size="small" onClick={() => onChange(resolveSnapshotDisplayRange(image, "1-99", null))}>1–99%</Button>
       <Button size="small" onClick={() => onChange([])}>Reset</Button>
-      {backend === "CPU" && <Typography sx={{ fontSize: 10 }}>CPU histogram</Typography>}
     </Box>
   </Box>;
 }
