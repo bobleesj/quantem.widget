@@ -7,7 +7,8 @@ most once per pointer move. The frequency-filter ring sits on the frequency
 the filter cuts at the FFT's zoom, and dragging it sets that frequency. A ROI
 edge moves by as much as the pointer moves after the press. Overlay editing
 lets pointers through the More menu's backdrop only, so every other menu still
-closes on an outside click. The SVG export draws what the screen shows.
+closes on an outside click. The SVG export draws what the screen shows. The
+lens shows the image's colors with Log on, signed data included.
 """
 
 import re
@@ -253,4 +254,35 @@ def test_svg_export_draws_what_the_screen_shows(serve, open_page, hardware_adapt
     # A single image has no panel title and, without marker_colors, no panel marker on screen.
     assert ">Image 1<" not in svg
     assert 'width="5"' not in svg
+    assert page.errors == [], page.errors
+
+
+def test_lens_shows_the_image_colors_of_signed_data_in_log_scale(serve, open_page, hardware_adapter, browser_out):
+    from quantem.widget import Show2D
+
+    # Columns ramp from -50 to 50: half the image is below -1, where an unsigned log1p has no value.
+    ramp = np.tile(np.linspace(-50, 50, 250, dtype=np.float32), (250, 1))
+    Show2D(ramp, log_scale=True, cmap="viridis").export_html(browser_out / "show2d_lens_log.html")
+    page = open_export("show2d_lens_log.html", serve, open_page, hardware_adapter, browser_out,
+                       'canvas[data-quantem-scientific-output="show2d-image-0"]')
+    page.evaluate("""() => Array.from(document.querySelectorAll('p, span')).find(element => element.textContent.trim() === 'Lens')
+      .nextElementSibling.querySelector('input').click()""")
+    image = page.locator('canvas[data-quantem-scientific-output="show2d-image-0"]')
+    box = image.bounding_box()
+    scale = box["width"] / 250
+    page.mouse.move(box["x"] + 50.5 * scale, box["y"] + 125.5 * scale)
+    page.wait_for_timeout(500)
+    page.screenshot(path=str(browser_out / "show2d_lens_log.png"))
+    # 4x lens, 128 px inset at its default bottom-left corner: 10 px right of and below
+    # its center (clear of the crosshair) is image pixel (127, 52).
+    lens, main = page.evaluate("""() => {
+      const image = document.querySelector('canvas[data-quantem-scientific-output="show2d-image-0"]');
+      const lens = image.parentElement.querySelectorAll('canvas')[image.parentElement.querySelectorAll('canvas').length - 1];
+      const cssHeight = image.getBoundingClientRect().height;
+      const lensPixel = lens.getContext('2d').getImageData(12 + 64 + 10, cssHeight - 128 - 12 - 20 + 64 + 10, 1, 1).data;
+      const scale = image.width / 250;
+      const mainPixel = image.getContext('2d').getImageData(Math.floor(52.5 * scale), Math.floor(127.5 * scale), 1, 1).data;
+      return [Array.from(lensPixel.slice(0, 3)), Array.from(mainPixel.slice(0, 3))];
+    }""")
+    assert np.abs(np.subtract(lens, main)).max() <= 2, (lens, main)
     assert page.errors == [], page.errors

@@ -53,7 +53,7 @@ import {
   findFFTPeakBrowser,
   sampleLineProfileBrowser,
 } from "../display/geometry";
-import { COLORMAPS, COLORMAP_NAMES, GPUColormapEngine, renderToOffscreen } from "../display/colormaps";
+import { COLORMAPS, COLORMAP_NAMES, displayLog, displayNormalize, GPUColormapEngine, renderToOffscreen } from "../display/colormaps";
 import { createLatestFrameQueue } from "../show4dstem/latestFrameQueue";
 import { resizeDetectorFromPointer, type DetectorResizeStart, type DetectorRoiMode } from "../show4dstem/detectorInteraction";
 import { colormapSampledPixels, createColormapEngine, createCPUColormapEngine, type DisplayColormapEngine } from "../display/cpuColormap";
@@ -4576,7 +4576,10 @@ function Show2D() {
     const regionCtx = regionCanvas.getContext("2d");
     if (!regionCtx) return;
     const imgData = regionCtx.createImageData(regionSize, regionSize);
-    const range = vmax - vmin || 1;
+    // The float32 signed log and normalize of the display shader, so the lens
+    // shows the main image's colors (signed data below -1 included).
+    const low = Math.fround(vmin);
+    const high = Math.fround(vmax);
     for (let rowOffset = 0; rowOffset < regionSize; rowOffset++) {
       for (let colOffset = 0; colOffset < regionSize; colOffset++) {
         const sourceRow = startRow + rowOffset;
@@ -4585,12 +4588,10 @@ function Show2D() {
         if (sourceRow < 0 || sourceRow >= height || sourceCol < 0 || sourceCol >= width) {
           imgData.data[pixelOffset] = 0; imgData.data[pixelOffset + 1] = 0; imgData.data[pixelOffset + 2] = 0; imgData.data[pixelOffset + 3] = 255;
         } else {
-          // Apply log scale inline per-pixel (only for the small region, not full image)
-          const rawVal = raw[sourceRow * width + sourceCol];
-          const val = logScale ? Math.log1p(rawVal) : rawVal;
-          const normalized = Math.max(0, Math.min(1, (val - vmin) / range));
-          const lutIndex = Math.round(normalized * 255);
-          imgData.data[pixelOffset] = lut[lutIndex * 3]; imgData.data[pixelOffset + 1] = lut[lutIndex * 3 + 1]; imgData.data[pixelOffset + 2] = lut[lutIndex * 3 + 2]; imgData.data[pixelOffset + 3] = 255;
+          const rawValue = raw[sourceRow * width + sourceCol];
+          const value = logScale ? displayLog(rawValue) : rawValue;
+          const entry = Math.min(255, Math.trunc(Math.fround(displayNormalize(value, low, high) * 255))) * 3;
+          imgData.data[pixelOffset] = lut[entry]; imgData.data[pixelOffset + 1] = lut[entry + 1]; imgData.data[pixelOffset + 2] = lut[entry + 2]; imgData.data[pixelOffset + 3] = 255;
         }
       }
     }
