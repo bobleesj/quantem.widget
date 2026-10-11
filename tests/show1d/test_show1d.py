@@ -301,7 +301,7 @@ def test_export_html_embeds_state_and_downsamples_only_linked_images(tmp_path):
     assert default_name == "export_me_1x8_4xdownsampled_single.html"
     with pytest.raises(ValueError, match="one of"):
         widget.export_html(tmp_path / "x.html", downsample=3)
-    widget.export_request = json.dumps({"mode": "single", "encoding": "full", "downsample": 2, "id": "req", "filename": "dl.html", "download": True})
+    widget.export_request = json.dumps({"downsample": 2, "id": "req", "filename": "dl.html", "download": True})
     assert widget.export_payload_id == "req" and widget.export_filename == "dl.html" and b"snapshot_heights" in widget.export_payload
     assert widget.export_status.startswith("Ready dl.html") and "2x downsampled images" in widget.export_status
 

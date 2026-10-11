@@ -4546,7 +4546,6 @@ function Show4DSTEM() {
   const pendingHtmlExportRef = React.useRef<{
     id: string;
     filename: string;
-    mode: string;
     handle: Show4DSTEMFileHandle | null;
   } | null>(null);
   React.useEffect(() => {
@@ -4658,7 +4657,6 @@ function Show4DSTEM() {
     setDpExportAnchor(null);
     if (!["uint8", "uint16"].includes(dtype) || ![1, 2, 4, 8].includes(detBin) || ![1, 2, 4, 8].includes(scanBin)) return;
     if (detRows % detBin !== 0 || detCols % detBin !== 0 || shapeRows % scanBin !== 0 || shapeCols % scanBin !== 0) return;
-    const mode = `${dtype}-bin${detBin}`;
     const filename = makeHtmlExportFilename(
       title,
       nFrames,
@@ -4694,11 +4692,10 @@ function Show4DSTEM() {
         return;
       }
     }
-    pendingHtmlExportRef.current = { id, filename, mode, handle };
+    pendingHtmlExportRef.current = { id, filename, handle };
     setLocalHtmlExportStatus(`Preparing ${filename}...`);
     setExportRequest(JSON.stringify({
       export_kind: exportKind,
-      mode,
       dtype,
       det_bin: detBin,
       scan_bin: scanBin,

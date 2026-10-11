@@ -73,14 +73,15 @@ def _showdiffraction() -> ShowDiffraction:
     return ShowDiffraction(data, title="Protocol ShowDiffraction", verbose=False)
 
 
-# The request payloads are the ones each toolbar sends (js/<widget>/index.tsx).
+# The request payloads are the ones each toolbar sends (js/<widget>/index.tsx), with the packing its status line names.
 EXPORT_WIDGET_CASES = (
-    pytest.param(_show1d, {"downsample": 2}, {"mode": "single", "encoding": "full"}, "Protocol Show1D", id="show1d"),
-    pytest.param(_show2d, {"encoding": "uint8"}, {"mode": "quantized"}, "Protocol Show2D", id="show2d"),
-    pytest.param(_show3d, {"encoding": "uint8", "downsample": 2}, {"mode": "quantized", "quality": "medium", "downsample": 2}, "Protocol Show3D", id="show3d"),
-    pytest.param(_show3dslices, {"encoding": "full"}, {"mode": "exact"}, "Protocol Show3DSlices", id="show3dslices"),
-    pytest.param(_show4dstem, {"dtype": "uint8"}, {"mode": "single", "dtype": "uint8"}, "Protocol Show4DSTEM", id="show4dstem"),
-    pytest.param(_showdiffraction, {}, {"mode": "single"}, "Protocol ShowDiffraction", id="showdiffraction"),
+    pytest.param(_show1d, {"downsample": 2}, {}, "full float32", "Protocol Show1D", id="show1d"),
+    pytest.param(_show2d, {"encoding": "uint8"}, {"encoding": "uint8"}, "uint8", "Protocol Show2D", id="show2d"),
+    pytest.param(_show3d, {"encoding": "uint8", "downsample": 2}, {"encoding": "uint8", "downsample": 2}, "uint8, 2x downsample", "Protocol Show3D", id="show3d"),
+    pytest.param(_show3dslices, {"encoding": "full"}, {"encoding": "uint8"}, "uint8", "Protocol Show3DSlices", id="show3dslices"),
+    pytest.param(_show4dstem, {"dtype": "uint8"}, {"export_kind": "interactive", "dtype": "uint8", "det_bin": 1, "scan_bin": 1, "dataset_scope": "unhidden"},
+                 "uint8", "Protocol Show4DSTEM", id="show4dstem"),
+    pytest.param(_showdiffraction, {}, {}, "full float32", "Protocol ShowDiffraction", id="showdiffraction"),
 )
 
 
@@ -111,24 +112,24 @@ def test_widgets_expose_standard_frontend_html_export_traits() -> None:
         assert set(HTML_EXPORT_TRAITS).issubset(trait_names)
 
 
-@pytest.mark.parametrize(("factory", "export_kwargs", "request_payload", "state_marker"), EXPORT_WIDGET_CASES)
+@pytest.mark.parametrize(("factory", "export_kwargs", "request_payload", "packing", "state_marker"), EXPORT_WIDGET_CASES)
 def test_widget_export_html_writes_standalone_state(
     tmp_path: pathlib.Path,
     factory,
     export_kwargs: dict,
     request_payload: dict,
+    packing: str,
     state_marker: str,
 ) -> None:
     widget = factory()
-    filename_stem = f"{request_payload['mode']}_{request_payload.get('encoding', 'full')}_{request_payload.get('downsample', 1)}"
 
     assert callable(widget.export_html)
     open_models = set(_instances)
-    out = widget.export_html(tmp_path / f"{filename_stem}.html", **export_kwargs)
+    out = widget.export_html(tmp_path / "page.html", **export_kwargs)
 
     # the page is written from a clone: it and its Layout must close, or every export leaves models open
     assert set(_instances) == open_models
-    assert out == tmp_path / f"{filename_stem}.html"
+    assert out == tmp_path / "page.html"
     assert out.exists()
     html = out.read_text()
     assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
@@ -138,23 +139,24 @@ def test_widget_export_html_writes_standalone_state(
     assert widget.export_status.startswith(f"Exported {out.name}")
 
 
-@pytest.mark.parametrize(("factory", "export_kwargs", "request_payload", "state_marker"), EXPORT_WIDGET_CASES)
+@pytest.mark.parametrize(("factory", "export_kwargs", "request_payload", "packing", "state_marker"), EXPORT_WIDGET_CASES)
 def test_widget_frontend_export_request_creates_payload_and_status(
     factory,
     export_kwargs: dict,
     request_payload: dict,
+    packing: str,
     state_marker: str,
 ) -> None:
     widget = factory()
-    filename = f"{request_payload['mode']}_{request_payload.get('encoding', 'full')}_{request_payload.get('downsample', 1)}.html"
-    payload = {"id": "req-protocol", "filename": filename, "download": True, **request_payload}
+    payload = {"id": "req-protocol", "filename": "toolbar.html", "download": True, **request_payload}
 
     widget.export_request = json.dumps(payload)
 
     assert widget.export_payload_id == "req-protocol"
-    assert widget.export_filename == filename
+    assert widget.export_filename == "toolbar.html"
     assert state_marker.encode() in widget.export_payload
-    assert widget.export_status.startswith(f"Ready {filename}")
+    # the status names the packing the request asked for
+    assert widget.export_status.startswith("Ready toolbar.html") and widget.export_status.endswith(f", {packing})")
     for expected_trait in HTML_EXPORT_TRAITS:
         assert widget.has_trait(expected_trait)
 

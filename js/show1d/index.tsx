@@ -4172,7 +4172,7 @@ function Show1DWidget() {
     }
     pendingExportRef.current = { id, filename, handle };
     setLocalExportStatus(`Preparing ${filename}...`);
-    setExportRequest(JSON.stringify({ mode: "single", encoding: "full", id, filename, download: true }));
+    setExportRequest(JSON.stringify({ id, filename, download: true }));
   }, [exportEnabled, labels, nPoints, nTraces, setExportRequest, title, xData, xLabel, xUnit, yData, yLabel, yUnit]);
 
   const handleHandoffToShow2D = React.useCallback(() => {

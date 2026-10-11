@@ -62,15 +62,17 @@ Widgets that expose an in-widget **Export** button share these synced traits
 | Trait | Direction | Purpose |
 |---|---|---|
 | `export_enabled` | Python -> JS | Show or disable the export UI |
-| `export_request` | JS -> Python | JSON request: mode, request id, filename, download flag |
+| `export_request` | JS -> Python | JSON request: packing, request id, filename, download flag |
 | `export_status` | Python -> JS | Human-readable progress, size, or error |
 | `export_payload` | Python -> JS | HTML bytes when the browser initiated a download |
 | `export_payload_id` | Python -> JS | Echoes the request id so JS downloads the right payload once |
 | `export_filename` | Python -> JS | Suggested download filename |
 
-The Show2D, Show3D and Show3DSlices menus send `{"mode": "exact" | "quantized", "id": ..., "filename": ..., "download": true}`
-(Show3D adds `downsample`); Show1D sends `{"mode": "single", "encoding": "full"}`. Python checks the
-packing as an `export_html` call is, builds the page bytes into `export_payload`, and the browser saves them.
+The Show2D, Show3D and Show3DSlices menus send `{"encoding": "full" | "uint8", "id": ..., "filename": ..., "download": true}`
+(Show3D adds `downsample`), the names `export_html(encoding=)` takes; Show1D and ShowDiffraction send only the id, the file name
+and the download flag. A Show3D GIF request carries `"mode": "gif"` and, once the browser has saved a payload, every widget sends
+`{"mode": "clear"}` to release it. Python checks the packing as an `export_html` call is, builds the page bytes into
+`export_payload`, and the browser saves them.
 
 ## Widget capability table
 

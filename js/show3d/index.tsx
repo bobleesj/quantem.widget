@@ -89,6 +89,7 @@ import {
   formatEstimatedAnimationWork,
   makeExportFilename,
   spatialOptionFor,
+  type ExportKind,
 } from "./exportOptions";
 import { formatLength, readableLength } from "./lengthLabel";
 import { InfoTooltip } from "../shared/InfoTooltip";
@@ -2051,8 +2052,7 @@ function Show3D() {
   const pendingExportRef = React.useRef<{
     id: string;
     filename: string;
-    mode: string;
-    downsample: number;
+    kind: ExportKind;
     handle: Show3DFileHandle | null;
   } | null>(null);
   React.useEffect(() => {
@@ -2127,10 +2127,9 @@ function Show3D() {
     showZoomIndicator,
   ]);
   const canDownloadCurrentHtml = !exportEnabled;
-  const standaloneHtmlMode = hasOfflineFloatStack ? "exact" : "quantized";
-  const standaloneHtmlLabel = standaloneHtmlMode === "quantized"
-    ? `HTML encoded uint8 (${quantizedExportSize})`
-    : `HTML exact float32 (${exactExportSize})`;
+  const standaloneHtmlLabel = hasOfflineFloatStack
+    ? `HTML exact float32 (${exactExportSize})`
+    : `HTML encoded uint8 (${quantizedExportSize})`;
   const canExportStandaloneGif = !exportEnabled && width > 0 && height > 0 && nSlices > 0 && (
     hasOfflineStack || hasOfflineFloatStack
   );
@@ -2159,14 +2158,13 @@ function Show3D() {
     setExportFrameEnd((current) => Math.max(1, Math.min(total, Math.round(current || total))));
   }, [nSlices]);
   const handleExportSelect = async (
-    mode: string,
+    kind: ExportKind,
     quality = "medium",
     downsample = 1,
     requestOptions: Record<string, unknown> = {},
   ) => {
     setExportMenuAnchor(null);
-    if (mode !== "exact" && mode !== "quantized" && mode !== "gif") return;
-    const filename = makeExportFilename(title, nSlices, height, width, mode, quality, downsample);
+    const filename = makeExportFilename(title, nSlices, height, width, kind, quality, downsample);
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setExportBusy(true);
     setLocalExportStatus("Choose export location...");
@@ -2176,7 +2174,7 @@ function Show3D() {
       try {
         handle = await picker({
           suggestedName: filename,
-          types: [exportPickerType(mode)],
+          types: [exportPickerType(kind)],
         });
       } catch (err) {
         if (isAbortLikeError(err)) {
@@ -2189,13 +2187,14 @@ function Show3D() {
         return;
       }
     }
-    pendingExportRef.current = { id, filename, mode, downsample, handle };
+    pendingExportRef.current = { id, filename, kind, handle };
     setLocalExportStatus(`Preparing ${filename}...`);
-    setExportRequest(JSON.stringify({ mode, quality, downsample, ...requestOptions, id, filename, download: true }));
+    const request = kind === "gif" ? { mode: "gif", quality, downsample, ...requestOptions } : { encoding: kind, downsample };
+    setExportRequest(JSON.stringify({ ...request, id, filename, download: true }));
   };
   const handleStandaloneHtmlDownload = () => {
     setExportMenuAnchor(null);
-    const filename = makeExportFilename(title, nSlices, height, width, standaloneHtmlMode);
+    const filename = makeExportFilename(title, nSlices, height, width, hasOfflineFloatStack ? "full" : "uint8");
     try {
       const html = `<!doctype html>\n${standaloneHtmlWithCurrentWidgetState(
         model,
@@ -2561,14 +2560,14 @@ function Show3D() {
       <Typography sx={{ fontSize: 11, color: themeColors.textMuted, lineHeight: 1.35 }}>
         HTML is the primary interactive sharing path. Exact keeps float32 data; encoded uint8 is smaller for visual reports.
       </Typography>
-      {exportEnabled && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("exact")}>HTML exact float32 ({exactExportSize})</Button>}
-      {exportEnabled && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("quantized")}>HTML encoded uint8 ({quantizedExportSize})</Button>}
-      {exportEnabled && height >= 2 && width >= 2 && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("quantized", "medium", 2)}>HTML encoded uint8, 2x downsample ({quantizedExportSize2})</Button>}
-      {exportEnabled && height >= 4 && width >= 4 && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("quantized", "medium", 4)}>HTML encoded uint8, 4x downsample ({quantizedExportSize4})</Button>}
-      {exportEnabled && height >= 8 && width >= 8 && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("quantized", "medium", 8)}>HTML encoded uint8, 8x downsample ({quantizedExportSize8})</Button>}
-      {canDownloadCurrentHtml && standaloneHtmlMode === "quantized" && <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Exact float32 is not embedded in this standalone page; open the live widget for exact export.</Typography>}
+      {exportEnabled && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("full")}>HTML exact float32 ({exactExportSize})</Button>}
+      {exportEnabled && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("uint8")}>HTML encoded uint8 ({quantizedExportSize})</Button>}
+      {exportEnabled && height >= 2 && width >= 2 && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("uint8", "medium", 2)}>HTML encoded uint8, 2x downsample ({quantizedExportSize2})</Button>}
+      {exportEnabled && height >= 4 && width >= 4 && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("uint8", "medium", 4)}>HTML encoded uint8, 4x downsample ({quantizedExportSize4})</Button>}
+      {exportEnabled && height >= 8 && width >= 8 && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("uint8", "medium", 8)}>HTML encoded uint8, 8x downsample ({quantizedExportSize8})</Button>}
+      {canDownloadCurrentHtml && !hasOfflineFloatStack && <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Exact float32 is not embedded in this standalone page; open the live widget for exact export.</Typography>}
       {canDownloadCurrentHtml && <Button size="small" sx={exportPanelButtonSx} onClick={handleStandaloneHtmlDownload}>{standaloneHtmlLabel}</Button>}
-      {canDownloadCurrentHtml && standaloneHtmlMode !== "quantized" && <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Encoded uint8 export requires the Python backend to repack the current float32 stack.</Typography>}
+      {canDownloadCurrentHtml && hasOfflineFloatStack && <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Encoded uint8 export requires the Python backend to repack the current float32 stack.</Typography>}
     </Box>
   );
   const renderExportMenuContent = () => {
@@ -2602,7 +2601,7 @@ function Show3D() {
         ? bytes
         : bytes.slice();
       const filename = exportPayloadFilename || pending.filename;
-      const blob = new Blob([payload as BlobPart], { type: exportBlobType(pending.mode) });
+      const blob = new Blob([payload as BlobPart], { type: exportBlobType(pending.kind) });
       try {
         if (pending.handle) {
           setLocalExportStatus(`Saving ${filename}...`);

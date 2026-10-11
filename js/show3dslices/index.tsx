@@ -376,9 +376,9 @@ function extractVolumeFloat32(
   return out;
 }
 
-function makeExportFilename(title: string, nz: number, ny: number, nx: number, mode: string): string {
+function makeExportFilename(title: string, nz: number, ny: number, nx: number, encoding: "full" | "uint8"): string {
   const slug = exportTitleSlug(title, "show3dslices");
-  const suffix = mode === "quantized" ? "quantized" : "exact";
+  const suffix = encoding === "uint8" ? "quantized" : "exact";
   return `${slug}_${nz}x${ny}x${nx}_${suffix}.html`;
 }
 
@@ -1127,7 +1127,6 @@ function Show3DSlices() {
   const pendingExportRef = React.useRef<{
     id: string;
     filename: string;
-    mode: string;
     handle: Show3DSlicesFileHandle | null;
   } | null>(null);
 
@@ -1276,10 +1275,9 @@ function Show3DSlices() {
   const handleExportMenuClose = () => {
     setExportMenuAnchor(null);
   };
-  const handleExportSelect = async (mode: string) => {
+  const handleExportSelect = async (encoding: "full" | "uint8") => {
     setExportMenuAnchor(null);
-    if (mode !== "exact" && mode !== "quantized") return;
-    const filename = makeExportFilename(title, nz, ny, nx, mode);
+    const filename = makeExportFilename(title, nz, ny, nx, encoding);
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setExportBusy(true);
     setLocalExportStatus("Choose export location...");
@@ -1302,9 +1300,9 @@ function Show3DSlices() {
         return;
       }
     }
-    pendingExportRef.current = { id, filename, mode, handle };
+    pendingExportRef.current = { id, filename, handle };
     setLocalExportStatus(`Preparing ${filename}...`);
-    setExportRequest(JSON.stringify({ mode, id, filename, download: true }));
+    setExportRequest(JSON.stringify({ encoding, id, filename, download: true }));
   };
   const requestSliceAlignmentEstimate = () => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -4183,8 +4181,8 @@ function Show3DSlices() {
           {...themedMenuProps}
           slotProps={{ ...themedMenuProps.slotProps, list: { "aria-label": "Export standalone HTML options" } }}
         >
-          <MenuItem onClick={() => handleExportSelect("exact")}>Exact float32 ({exactExportSize})</MenuItem>
-          <MenuItem onClick={() => handleExportSelect("quantized")}>Quantized uint8 ({quantizedExportSize})</MenuItem>
+          <MenuItem onClick={() => handleExportSelect("full")}>Exact float32 ({exactExportSize})</MenuItem>
+          <MenuItem onClick={() => handleExportSelect("uint8")}>Quantized uint8 ({quantizedExportSize})</MenuItem>
         </Menu>
         </>
       )}

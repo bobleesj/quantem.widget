@@ -448,10 +448,10 @@ type Show2DWindow = Window & typeof globalThis & {
   showSaveFilePicker?: (options?: Show2DSavePickerOptions) => Promise<Show2DFileHandle>;
 };
 
-function makeHtmlExportFilename(title: string, nImages: number, height: number, width: number, mode: string): string {
+function makeHtmlExportFilename(title: string, nImages: number, height: number, width: number, encoding: "full" | "uint8"): string {
   const slug = exportTitleSlug(title, "show2d");
   const shape = nImages > 1 ? `${nImages}x${height}x${width}` : `${height}x${width}`;
-  const suffix = mode === "quantized" ? "quantized" : mode === "current" ? "current" : "exact";
+  const suffix = encoding === "uint8" ? "quantized" : "exact";
   return `${slug}_${shape}_${suffix}.html`;
 }
 
@@ -1358,7 +1358,6 @@ function Show2D() {
   const pendingHtmlExportRef = React.useRef<{
     id: string;
     filename: string;
-    mode: string;
     handle: Show2DFileHandle | null;
   } | null>(null);
   const selectedRoi = roiSelectedIdx >= 0 && roiSelectedIdx < (roiList?.length ?? 0) ? roiList[roiSelectedIdx] : null;
@@ -1493,7 +1492,6 @@ function Show2D() {
   const exactHtmlSize = formatEstimatedHtmlSize(htmlPixelCount * 4);
   const quantizedHtmlSize = formatEstimatedHtmlSize(htmlPixelCount);
   const canDownloadCurrentHtml = !exportEnabled && offlineForTheme;
-  const standaloneHtmlMode = offline ? "quantized" : "exact";
   const standaloneHtmlLabel = offline
     ? `HTML quantized uint8 (${quantizedHtmlSize})`
     : `HTML exact float32 (${exactHtmlSize})`;
@@ -1503,7 +1501,7 @@ function Show2D() {
 
   const handleStandaloneHtmlDownload = () => {
     setExportAnchor(null);
-    const filename = makeHtmlExportFilename(title, nImages, height, width, standaloneHtmlMode);
+    const filename = makeHtmlExportFilename(title, nImages, height, width, offline ? "uint8" : "full");
     try {
       const html = `<!doctype html>\n${standaloneHtmlWithCurrentWidgetState(
         model,
@@ -1518,10 +1516,9 @@ function Show2D() {
     }
   };
 
-  const handleHtmlExportSelect = async (mode: string) => {
+  const handleHtmlExportSelect = async (encoding: "full" | "uint8") => {
     setExportAnchor(null);
-    if (mode !== "exact" && mode !== "quantized") return;
-    const filename = makeHtmlExportFilename(title, nImages, height, width, mode);
+    const filename = makeHtmlExportFilename(title, nImages, height, width, encoding);
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setExportBusy(true);
     setLocalExportStatus("Choose export location...");
@@ -1544,9 +1541,9 @@ function Show2D() {
         return;
       }
     }
-    pendingHtmlExportRef.current = { id, filename, mode, handle };
+    pendingHtmlExportRef.current = { id, filename, handle };
     setLocalExportStatus(`Preparing ${filename}...`);
-    setExportRequest(JSON.stringify({ mode, id, filename, download: true }));
+    setExportRequest(JSON.stringify({ encoding, id, filename, download: true }));
   };
 
   React.useEffect(() => {
@@ -7769,8 +7766,8 @@ function Show2D() {
                   {exportBusy ? "Exporting" : "Export"}
                 </Button>
                 <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "right" }} transformOrigin={{ vertical: "top", horizontal: "right" }} {...themedTopMenuProps}>
-                  {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("exact")} sx={{ fontSize: 12 }}>HTML exact float32 ({exactHtmlSize})</MenuItem>}
-                  {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("quantized")} sx={{ fontSize: 12 }}>HTML quantized uint8 ({quantizedHtmlSize})</MenuItem>}
+                  {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("full")} sx={{ fontSize: 12 }}>HTML exact float32 ({exactHtmlSize})</MenuItem>}
+                  {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("uint8")} sx={{ fontSize: 12 }}>HTML quantized uint8 ({quantizedHtmlSize})</MenuItem>}
                   {canDownloadCurrentHtml && offline && <MenuItem disabled sx={{ fontSize: 12 }} title="This standalone export contains quantized uint8 data, not the original float32 array. Open the live widget to export exact float32.">{unavailableStandaloneHtmlLabel}</MenuItem>}
                   {canDownloadCurrentHtml && <MenuItem onClick={handleStandaloneHtmlDownload} sx={{ fontSize: 12 }}>{standaloneHtmlLabel}</MenuItem>}
                   {canDownloadCurrentHtml && !offline && <MenuItem disabled sx={{ fontSize: 12 }} title="Quantized export requires the Python backend to repack the current float32 data.">{unavailableStandaloneHtmlLabel}</MenuItem>}
@@ -8377,8 +8374,8 @@ function Show2D() {
                 {svgExportAvailable && !svgPreview && <MenuItem onClick={() => handleSvgPreview(3)} sx={{ fontSize: 12 }}>Preview SVG</MenuItem>}
                 {svgPreview && <MenuItem onClick={() => { setExportAnchor(null); clearSvgPreview(); setLocalExportStatus("Exited SVG preview"); }} sx={{ fontSize: 12 }}>Exit SVG preview</MenuItem>}
                 {svgExportAvailable && <MenuItem onClick={() => handleSvgExport(3)} sx={{ fontSize: 12 }}>SVG</MenuItem>}
-                {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("exact")} sx={{ fontSize: 12 }}>HTML exact float32 ({exactHtmlSize})</MenuItem>}
-                {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("quantized")} sx={{ fontSize: 12 }}>HTML quantized uint8 ({quantizedHtmlSize})</MenuItem>}
+                {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("full")} sx={{ fontSize: 12 }}>HTML exact float32 ({exactHtmlSize})</MenuItem>}
+                {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("uint8")} sx={{ fontSize: 12 }}>HTML quantized uint8 ({quantizedHtmlSize})</MenuItem>}
                 {canDownloadCurrentHtml && offline && <MenuItem disabled sx={{ fontSize: 12 }} title="This standalone export contains quantized uint8 data, not the original float32 array. Open the live widget to export exact float32.">{unavailableStandaloneHtmlLabel}</MenuItem>}
                 {canDownloadCurrentHtml && <MenuItem onClick={handleStandaloneHtmlDownload} sx={{ fontSize: 12 }}>{standaloneHtmlLabel}</MenuItem>}
                 {canDownloadCurrentHtml && !offline && <MenuItem disabled sx={{ fontSize: 12 }} title="Quantized export requires the Python backend to repack the current float32 data.">{unavailableStandaloneHtmlLabel}</MenuItem>}

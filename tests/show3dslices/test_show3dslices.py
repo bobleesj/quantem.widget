@@ -197,8 +197,8 @@ def test_export_html_embeds_the_viewer_and_the_requested_packing(tmp_path):
     assert widget.export_status.startswith("Exported small.html")
     assert widget._default_html_export_path(False).name == "depth_comparison_3x16x16_exact.html"
     # the toolbar download path answers with the bytes and the file name
-    widget.export_request = json.dumps({"mode": "quantized", "id": "req-1", "filename": "volume.html", "download": True})
-    assert widget.export_filename == "volume.html" and widget.export_payload_id == "req-1"
+    widget.export_request = json.dumps({"encoding": "uint8", "id": "req-1", "filename": "volume.html", "download": True})
+    assert widget.export_filename == "volume.html" and widget.export_payload_id == "req-1" and widget.export_status.endswith(", uint8)")
     assert len(widget.export_payload) > 0
     with pytest.raises(ValueError, match="encoding"):
         widget.export_html(tmp_path / "bad.html", encoding="gzip")

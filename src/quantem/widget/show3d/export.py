@@ -160,10 +160,10 @@ class Show3DExport:
         clone.free()
         clone.close()
 
-    def _export_request(self, payload: dict, mode: str) -> None:
-        """GIF toolbar requests; HTML goes through the shared export handshake."""
-        if mode != "gif":
-            super()._export_request(payload, mode)
+    def _export_request(self, payload: dict) -> None:
+        """GIF toolbar requests (``mode: "gif"``); HTML goes through the shared export handshake."""
+        if payload.get("mode") != "gif":
+            super()._export_request(payload)
             return
         quality = self._normalize_animation_quality(payload.get("quality", "medium"))
 

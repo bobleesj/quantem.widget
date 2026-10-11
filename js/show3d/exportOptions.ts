@@ -1,29 +1,32 @@
 /** Show3D export options: file names and types, GIF presets, output scale and the frame list of an animation. */
 import { exportTitleSlug } from "../shared/exportFormat";
 
+/** What an export menu entry writes: a page in one of ``export_html``'s encodings, or a GIF. */
+export type ExportKind = "full" | "uint8" | "gif";
+
 export function makeExportFilename(
   title: string,
   nSlices: number,
   height: number,
   width: number,
-  mode: string,
+  kind: ExportKind,
   quality = "medium",
   downsample = 1,
 ): string {
   const slug = exportTitleSlug(title, "show3d");
-  if (mode === "gif") return `${slug}_${nSlices}x${height}x${width}_${quality}.gif`;
-  const binSuffix = mode === "quantized" && downsample > 1 ? `_${downsample}xbin` : "";
-  const suffix = mode === "quantized" ? `quantized${binSuffix}` : "exact";
+  if (kind === "gif") return `${slug}_${nSlices}x${height}x${width}_${quality}.gif`;
+  const binSuffix = kind === "uint8" && downsample > 1 ? `_${downsample}xbin` : "";
+  const suffix = kind === "uint8" ? `quantized${binSuffix}` : "exact";
   return `${slug}_${nSlices}x${height}x${width}_${suffix}.html`;
 }
 
-export function exportPickerType(mode: string): { description: string; accept: Record<string, string[]> } {
-  if (mode === "gif") return { description: "Animated GIF", accept: { "image/gif": [".gif"] } };
+export function exportPickerType(kind: ExportKind): { description: string; accept: Record<string, string[]> } {
+  if (kind === "gif") return { description: "Animated GIF", accept: { "image/gif": [".gif"] } };
   return { description: "Standalone HTML", accept: { "text/html": [".html"] } };
 }
 
-export function exportBlobType(mode: string): string {
-  if (mode === "gif") return "image/gif";
+export function exportBlobType(kind: ExportKind): string {
+  if (kind === "gif") return "image/gif";
   return "text/html;charset=utf-8";
 }
 

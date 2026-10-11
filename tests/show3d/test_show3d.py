@@ -213,7 +213,7 @@ def test_export_html_leaves_no_clone_model_open(tmp_path: pathlib.Path):
 
 def test_toolbar_export_request_returns_a_download_payload():
     widget = Show3D(_ramp(4, 32), title="Toolbar", verbose=False)
-    widget.export_request = json.dumps({"id": "req-1", "filename": "view.html", "download": True, "mode": "single", "encoding": "uint8"})
+    widget.export_request = json.dumps({"id": "req-1", "filename": "view.html", "download": True, "encoding": "uint8"})
     assert widget.export_payload_id == "req-1" and widget.export_filename == "view.html"
     assert b"Toolbar" in widget.export_payload and widget.export_status.startswith("Ready view.html")
     widget.export_request = json.dumps({"id": "req-2", "filename": "view.gif", "download": True, "mode": "gif", "quality": "low", "max_frames": 2})

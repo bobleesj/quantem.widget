@@ -838,7 +838,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.export_status = f"Exported {out.name} ({size_mb:.1f} MB, {html_export.mode_label(dtype, det_bin, scan_bin, kind)}) - {how}"
         return out
 
-    def _html_export_options(self, payload: dict, mode: str) -> dict:
+    def _html_export_options(self, payload: dict) -> dict:
         """The ``export_html`` keywords of a toolbar request, validated as a Python call is (``HtmlExportMixin`` hook)."""
         dtype, det_bin, scan_bin = html_export.export_options(
             self, payload.get("dtype", "uint8"), payload.get("det_bin", 1), payload.get("scan_bin", 1))

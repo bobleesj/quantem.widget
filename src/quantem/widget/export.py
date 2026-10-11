@@ -20,8 +20,6 @@ import tempfile
 import traitlets
 
 VENDOR = pathlib.Path(__file__).parent / "vendor"
-# The toolbar menus send mode "exact" or "quantized"; Python calls name the encoding.
-_TOOLBAR_ENCODINGS = {"exact": "full", "quantized": "uint8"}
 _RUNTIME_LOADER = """<script>
 (async () => {
   // require.js, anywidget and the jupyter-widgets manager travel gzipped in this page, so it opens offline
@@ -140,20 +138,19 @@ class HtmlExportMixin(traitlets.HasTraits):
             return
         try:
             payload = json.loads(raw)
-            mode = str(payload.get("mode", ""))
-            if mode == "clear":
+            if payload.get("mode") == "clear":
                 self.export_payload = b""
                 self.export_payload_id = ""
                 self.export_filename = ""
                 return
-            self._export_request(payload, mode)
+            self._export_request(payload)
         except (ValueError, TypeError, KeyError, OSError, RuntimeError, NotImplementedError, MemoryError) as exc:
             # the toolbar shows the failure; raising would only reach the kernel log
             self.export_status = f"Export failed: {exc}"
 
-    def _export_request(self, payload: dict, mode: str) -> None:
+    def _export_request(self, payload: dict) -> None:
         """Serve one toolbar request: the page as bytes for the browser to save."""
-        options = self._html_export_options(payload, mode)
+        options = self._html_export_options(payload)
         filename = str(payload.get("filename") or self._default_html_export_path(**options).name)
         self.export_status = f"Preparing {filename}..."
         with tempfile.TemporaryDirectory(prefix=f"{type(self).__name__.lower()}-export-") as tmp:
@@ -165,9 +162,9 @@ class HtmlExportMixin(traitlets.HasTraits):
         self.export_payload_id = str(payload.get("id") or "")
         self.export_status = f"Ready {filename} ({len(html) / (1024 * 1024):.1f} MB, {self._export_mode_label(**options)})"
 
-    def _html_export_options(self, payload: dict, mode: str) -> dict:
-        """The packing options of a toolbar request, checked as an ``export_html`` call is."""
-        return self._html_export_choice(_TOOLBAR_ENCODINGS.get(mode, payload.get("encoding", "full")), payload.get("downsample"))
+    def _html_export_options(self, payload: dict) -> dict:
+        """The packing options of a toolbar request (``encoding``, ``downsample``), checked as an ``export_html`` call is."""
+        return self._html_export_choice(payload.get("encoding", "full"), payload.get("downsample"))
 
     def _html_export_choice(self, encoding: str, downsample) -> dict:
         """The ``quantized`` / ``downsample`` options of an export, refusing a packing this widget's page cannot hold.

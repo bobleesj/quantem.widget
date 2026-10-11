@@ -1181,7 +1181,7 @@ function ShowDiffraction() {
     const id = `html-${exportCounterRef.current}`;
     const filename = `${exportTitleSlug(title, "showdiffraction")}_${nFrames}x${detRows}x${detCols}.html`;
     pendingExportRef.current = id;
-    setExportRequest(JSON.stringify({ mode: "single", download: true, id, filename }));
+    setExportRequest(JSON.stringify({ download: true, id, filename }));
   };
 
   // HTML payload
