@@ -3,7 +3,7 @@
 // combined-region layouts), so a repaint never reads pixels back to the CPU.
 import type { GPUColormapEngine, GPUSlot } from "./colormapEngine";
 import { DIRECT_GRID_COLORMAP_SHADER, DIRECT_SLOT_COLORMAP_SHADER, DIRECT_SLOT_GPU_RANGE_SHADER, PACKED_PANEL_TRANSFORM_SHADER } from "./displayShaders";
-import { flushParamsBufQueue, paramsBufQueue, type GPURanges } from "./gpuRange";
+import type { GPURanges } from "./gpuRange";
 import { computePipeline, renderPipeline } from "./pipelines";
 
 function shouldSmoothDirectSample(
@@ -25,6 +25,53 @@ function shouldSmoothDirectSample(
 /** Clear color for a 0xBBGGRR packed background, the byte order the shaders' unpack_rgb reads. */
 function clearColorFromRgb(bgRgb: number): GPUColorDict {
   return { r: (bgRgb & 0xFF) / 255, g: ((bgRgb >> 8) & 0xFF) / 255, b: ((bgRgb >> 16) & 0xFF) / 255, a: 1 };
+}
+
+type DisplayRange = { vmin: number; vmax: number };
+type ViewTransform = { zoom: number; panX: number; panY: number };
+/** One canvas view of a slot: its size, background and optional zoom/pan. */
+type CanvasViewOptions = { width: number; height: number; bgRgb: number; transform?: ViewTransform; smooth?: boolean };
+/** A cols x rows grid of equal panels with `gap` pixels between them in a width x height canvas. */
+type PanelGridOptions = {
+  width: number; height: number; panelCount: number; cols: number; rows: number; gap: number; bgRgb: number;
+  transforms?: ViewTransform[]; smooth?: boolean;
+};
+/** Panel grid of one slot drawn by the grid shader, which places the panels itself. */
+type SharedGridOptions = Omit<PanelGridOptions, "transforms" | "smooth"> & { sourcePanelWidth?: number; sharedSource?: boolean };
+/** Panel grid whose panels are column regions of one slot, each with its own range, view and LUT. */
+type PanelRegionOptions = PanelGridOptions & {
+  sourcePanelWidth: number; sourcePanelIndices?: number[]; panelLuts?: { name: string; lut: Uint8Array }[];
+};
+
+/** Canvas size, panel count and panel size of a panel grid, or null when the panels have no area. */
+function gridLayout(opts: PanelGridOptions) {
+  const outW = Math.max(1, Math.round(opts.width));
+  const outH = Math.max(1, Math.round(opts.height));
+  const cols = Math.max(1, Math.round(opts.cols));
+  const rows = Math.max(1, Math.round(opts.rows));
+  const gap = Math.max(0, opts.gap);
+  const panelW = (outW - gap * (cols - 1)) / cols;
+  const panelH = (outH - gap * (rows - 1)) / rows;
+  if (panelW <= 0 || panelH <= 0) return null;
+  return { outW, outH, n: Math.max(1, Math.round(opts.panelCount)), cols, rows, gap, panelW, panelH };
+}
+type GridLayout = NonNullable<ReturnType<typeof gridLayout>>;
+
+/** Top-left corner of grid panel `panel`, panels filled row by row. */
+function panelOrigin(layout: GridLayout, panel: number): { x: number; y: number } {
+  return {
+    x: (panel % layout.cols) * (layout.panelW + layout.gap),
+    y: Math.floor(panel / layout.cols) * (layout.panelH + layout.gap),
+  };
+}
+
+/** Restrict the next draw of `pass` to grid panel `panel`, its viewport clipped to the canvas. */
+function setPanelViewport(pass: GPURenderPassEncoder, layout: GridLayout, panel: number): void {
+  const { x, y } = panelOrigin(layout, panel);
+  const sx = Math.max(0, Math.floor(x));
+  const sy = Math.max(0, Math.floor(y));
+  pass.setViewport(x, y, layout.panelW, layout.panelH, 0, 1);
+  pass.setScissorRect(sx, sy, Math.max(1, Math.min(Math.ceil(layout.panelW), layout.outW - sx)), Math.max(1, Math.min(Math.ceil(layout.panelH), layout.outH - sy)));
 }
 
 /** Direct-to-canvas colormap passes over the engine's slots, with their pipelines and uniforms. */
@@ -50,6 +97,21 @@ export class DirectRenderer {
     this.engine = engine;
     this.ranges = ranges;
     this.device = engine.getDevice();
+  }
+
+  /**
+   * Draw through `draw` into a fresh width x height OffscreenCanvas and snapshot it after
+   * the queue has run the draw: presentation textures may be discarded after compositing,
+   * so callers that keep a frame (exports, compare tiles) need a durable copy.
+   */
+  private async durableFrame(width: number, height: number, draw: (context: GPUCanvasContext) => boolean): Promise<ImageBitmap | null> {
+    const canvas = new OffscreenCanvas(Math.max(1, Math.round(width)), Math.max(1, Math.round(height)));
+    const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
+    if (!context) return null;
+    context.configure({ device: this.device, format: navigator.gpu.getPreferredCanvasFormat(), alphaMode: "opaque" });
+    if (!draw(context)) return null;
+    await this.device.queue.onSubmittedWorkDone();
+    return canvas.transferToImageBitmap();
   }
 
   private ensureDirectGridPipeline(format: GPUTextureFormat): void {
@@ -190,17 +252,7 @@ export class DirectRenderer {
     range: { vmin: number; vmax: number },
     logScale: boolean,
     ctx: GPUCanvasContext,
-    opts: {
-      width: number;
-      height: number;
-      panelCount: number;
-      cols: number;
-      rows: number;
-      gap: number;
-      bgRgb: number;
-      sourcePanelWidth?: number;
-      sharedSource?: boolean;
-    },
+    opts: SharedGridOptions,
   ): boolean {
     if (!this.engine.lutBuffer) return false;
     const slot = this.engine.slots[idx];
@@ -265,54 +317,18 @@ export class DirectRenderer {
   }
 
   /** Queue-safe durable-frame twin of renderSharedGridDirectToCanvas. */
-  async renderSharedGridToImageBitmapAsync(
-    idx: number,
-    range: { vmin: number; vmax: number },
-    logScale: boolean,
-    opts: {
-      width: number;
-      height: number;
-      panelCount: number;
-      cols: number;
-      rows: number;
-      gap: number;
-      bgRgb: number;
-      sourcePanelWidth?: number;
-      sharedSource?: boolean;
-    },
+  renderSharedGridToImageBitmapAsync(
+    idx: number, range: DisplayRange, logScale: boolean, opts: SharedGridOptions,
   ): Promise<ImageBitmap | null> {
-    const canvas = new OffscreenCanvas(
-      Math.max(1, Math.round(opts.width)),
-      Math.max(1, Math.round(opts.height)),
-    );
-    const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
-    if (!context) return null;
-    context.configure({
-      device: this.device,
-      format: navigator.gpu.getPreferredCanvasFormat(),
-      alphaMode: "opaque",
-    });
-    if (!this.renderSharedGridDirectToCanvas(idx, range, logScale, context, opts)) return null;
-    await this.device.queue.onSubmittedWorkDone();
-    return canvas.transferToImageBitmap();
+    return this.durableFrame(opts.width, opts.height, (context) => this.renderSharedGridDirectToCanvas(idx, range, logScale, context, opts));
   }
 
   renderPanelSlotsDirectToCanvas(
     indices: number[],
-    range: { vmin: number; vmax: number } | { vmin: number; vmax: number }[],
+    range: DisplayRange | DisplayRange[],
     logScale: boolean | boolean[],
     ctx: GPUCanvasContext,
-    opts: {
-      width: number;
-      height: number;
-      panelCount: number;
-      cols: number;
-      rows: number;
-      gap: number;
-      bgRgb: number;
-      transforms?: { zoom: number; panX: number; panY: number }[];
-      smooth?: boolean;
-    },
+    opts: PanelGridOptions,
   ): boolean {
     const encoder = this.device.createCommandEncoder();
     const rendered = this.encodePanelSlotsDirectToCanvas(encoder, indices, range, logScale, ctx, opts);
@@ -322,21 +338,20 @@ export class DirectRenderer {
 
   private encodePanelSlotsDirectToCanvas(
     encoder: GPUCommandEncoder,
-    ...[indices, range, logScale, ctx, opts]: Parameters<GPUColormapEngine["renderPanelSlotsDirectToCanvas"]>
+    indices: number[],
+    range: DisplayRange | DisplayRange[],
+    logScale: boolean | boolean[],
+    ctx: GPUCanvasContext,
+    opts: PanelGridOptions,
   ): boolean {
     if (!this.engine.lutBuffer || indices.length === 0) return false;
     // Each panel's placement and range go through its slot's uniform, written before the one
     // render pass: a slot drawn twice would draw both panels with the last panel's values.
     if (new Set(indices).size !== indices.length) throw new Error("Supply one distinct resident slot for each panel.");
-    const outW = Math.max(1, Math.round(opts.width));
-    const outH = Math.max(1, Math.round(opts.height));
-    const n = Math.max(1, Math.min(indices.length, Math.round(opts.panelCount)));
-    const cols = Math.max(1, Math.round(opts.cols));
-    const rows = Math.max(1, Math.round(opts.rows));
-    const gap = Math.max(0, opts.gap);
-    const panelW = (outW - gap * (cols - 1)) / cols;
-    const panelH = (outH - gap * (rows - 1)) / rows;
-    if (panelW <= 0 || panelH <= 0) return false;
+    const layout = gridLayout(opts);
+    if (!layout) return false;
+    const { panelW, panelH } = layout;
+    const n = Math.min(indices.length, layout.n);
 
     const format = navigator.gpu.getPreferredCanvasFormat();
     this.ensureDirectSlotPipeline(format);
@@ -357,10 +372,9 @@ export class DirectRenderer {
       paramsU32[3] = slot.width;
       paramsU32[4] = Math.max(1, Math.round(panelH));
       paramsU32[5] = Math.max(1, Math.round(panelW));
-      const col = panel % cols;
-      const row = Math.floor(panel / cols);
-      paramsF32[6] = col * (panelW + gap);
-      paramsF32[7] = row * (panelH + gap);
+      const origin = panelOrigin(layout, panel);
+      paramsF32[6] = origin.x;
+      paramsF32[7] = origin.y;
       paramsU32[8] = panelLogScale ? 1 : 0;
       paramsU32[9] = opts.bgRgb & 0xFFFFFF;
       const transform = opts.transforms?.[panel];
@@ -397,16 +411,7 @@ export class DirectRenderer {
     for (let panel = 0; panel < n; panel++) {
       const slot = this.engine.slots[indices[panel]];
       if (!slot?.directSlotBindGroup) continue;
-      const col = panel % cols;
-      const row = Math.floor(panel / cols);
-      const x = col * (panelW + gap);
-      const y = row * (panelH + gap);
-      const sx = Math.max(0, Math.floor(x));
-      const sy = Math.max(0, Math.floor(y));
-      const sw = Math.max(1, Math.ceil(panelW));
-      const sh = Math.max(1, Math.ceil(panelH));
-      pass.setViewport(x, y, panelW, panelH, 0, 1);
-      pass.setScissorRect(sx, sy, Math.min(sw, outW - sx), Math.min(sh, outH - sy));
+      setPanelViewport(pass, layout, panel);
       pass.setBindGroup(0, slot.directSlotBindGroup);
       pass.draw(3);
     }
@@ -421,36 +426,10 @@ export class DirectRenderer {
    * to an OffscreenCanvas and transfer only after the GPU queue completes when
    * callers need a durable scientific frame.
    */
-  async renderPanelSlotsToImageBitmapAsync(
-    indices: number[],
-    range: { vmin: number; vmax: number } | { vmin: number; vmax: number }[],
-    logScale: boolean | boolean[],
-    opts: {
-      width: number;
-      height: number;
-      panelCount: number;
-      cols: number;
-      rows: number;
-      gap: number;
-      bgRgb: number;
-      transforms?: { zoom: number; panX: number; panY: number }[];
-      smooth?: boolean;
-    },
+  renderPanelSlotsToImageBitmapAsync(
+    indices: number[], range: DisplayRange | DisplayRange[], logScale: boolean | boolean[], opts: PanelGridOptions,
   ): Promise<ImageBitmap | null> {
-    const canvas = new OffscreenCanvas(
-      Math.max(1, Math.round(opts.width)),
-      Math.max(1, Math.round(opts.height)),
-    );
-    const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
-    if (!context) return null;
-    context.configure({
-      device: this.device,
-      format: navigator.gpu.getPreferredCanvasFormat(),
-      alphaMode: "opaque",
-    });
-    if (!this.renderPanelSlotsDirectToCanvas(indices, range, logScale, context, opts)) return null;
-    await this.device.queue.onSubmittedWorkDone();
-    return canvas.transferToImageBitmap();
+    return this.durableFrame(opts.width, opts.height, (context) => this.renderPanelSlotsDirectToCanvas(indices, range, logScale, context, opts));
   }
 
   renderSlotDirectWithGpuRangeToCanvas(
@@ -459,13 +438,7 @@ export class DirectRenderer {
     vmaxPct: number,
     logScale: boolean,
     ctx: GPUCanvasContext,
-    opts: {
-      width: number;
-      height: number;
-      bgRgb: number;
-      transform?: { zoom: number; panX: number; panY: number };
-      smooth?: boolean;
-    },
+    opts: CanvasViewOptions,
   ): boolean {
     return this.renderSlotsDirectWithGpuRangeToCanvases([idx], [ctx], vminPct, vmaxPct, logScale, opts) === 1;
   }
@@ -474,24 +447,15 @@ export class DirectRenderer {
   renderSlotsDirectWithGpuRangeToCanvases(
     indices: number[], contexts: GPUCanvasContext[], vminPct: number, vmaxPct: number,
     logScale: boolean,
-    opts: { width: number; height: number; bgRgb: number;
-      transform?: { zoom: number; panX: number; panY: number }; smooth?: boolean },
+    opts: CanvasViewOptions,
   ): number {
     if (indices.length !== contexts.length || new Set(indices).size !== indices.length) {
       throw new Error("Supply one distinct resident slot for each canvas context.");
     }
     const encoder = this.device.createCommandEncoder();
-    const paramsStart = paramsBufQueue.length;
-    let rendered = 0;
-    try {
-      indices.forEach((idx, i) => {
-        if (this.encodeSlotDirectWithGpuRangeToCanvas(encoder, idx, vminPct, vmaxPct, logScale, contexts[i], opts)) rendered++;
-      });
-      if (rendered) this.device.queue.submit([encoder.finish()]);
-      return rendered;
-    } finally {
-      flushParamsBufQueue(paramsStart);
-    }
+    const rendered = indices.filter((idx, i) => this.encodeSlotDirectWithGpuRangeToCanvas(encoder, idx, vminPct, vmaxPct, logScale, contexts[i], opts)).length;
+    if (rendered) this.device.queue.submit([encoder.finish()]);
+    return rendered;
   }
 
   private encodeSlotDirectWithGpuRangeToCanvas(
@@ -501,13 +465,7 @@ export class DirectRenderer {
     vmaxPct: number,
     logScale: boolean,
     ctx: GPUCanvasContext,
-    opts: {
-      width: number;
-      height: number;
-      bgRgb: number;
-      transform?: { zoom: number; panX: number; panY: number };
-      smooth?: boolean;
-    },
+    opts: CanvasViewOptions,
   ): boolean {
     if (!this.engine.lutBuffer) return false;
     const slot = this.engine.slots[idx];
@@ -575,33 +533,15 @@ export class DirectRenderer {
 
   private renderPackedPanelTransformComputeToCanvas(
     slot: GPUSlot,
-    range: { vmin: number; vmax: number } | { vmin: number; vmax: number }[],
+    range: DisplayRange | DisplayRange[],
     logScale: boolean | boolean[],
     ctx: GPUCanvasContext,
-    opts: {
-      width: number;
-      height: number;
-      panelCount: number;
-      cols: number;
-      rows: number;
-      gap: number;
-      bgRgb: number;
-      sourcePanelWidth: number;
-      transforms?: { zoom: number; panX: number; panY: number }[];
-      sourcePanelIndices?: number[];
-      smooth?: boolean;
-    },
+    opts: PanelRegionOptions,
   ): boolean {
     if (!this.engine.lutBuffer) return false;
-    const outW = Math.max(1, Math.round(opts.width));
-    const outH = Math.max(1, Math.round(opts.height));
-    const n = Math.max(1, Math.round(opts.panelCount));
-    const cols = Math.max(1, Math.round(opts.cols));
-    const rows = Math.max(1, Math.round(opts.rows));
-    const gap = Math.max(0, opts.gap);
-    const panelW = (outW - gap * (cols - 1)) / cols;
-    const panelH = (outH - gap * (rows - 1)) / rows;
-    if (panelW <= 0 || panelH <= 0) return false;
+    const layout = gridLayout(opts);
+    if (!layout) return false;
+    const { outW, outH, n, cols, rows, gap, panelW, panelH } = layout;
     if (slot.rgbaCapacity < outW * outH) return false;
 
     const format = navigator.gpu.getPreferredCanvasFormat();
@@ -735,23 +675,10 @@ export class DirectRenderer {
 
   renderCombinedPanelRegionsDirectToCanvas(
     slotIdx: number,
-    range: { vmin: number; vmax: number } | { vmin: number; vmax: number }[],
+    range: DisplayRange | DisplayRange[],
     logScale: boolean | boolean[],
     ctx: GPUCanvasContext,
-    opts: {
-      width: number;
-      height: number;
-      panelCount: number;
-      cols: number;
-      rows: number;
-      gap: number;
-      bgRgb: number;
-      sourcePanelWidth: number;
-      transforms?: { zoom: number; panX: number; panY: number }[];
-      sourcePanelIndices?: number[];
-      panelLuts?: { name: string; lut: Uint8Array }[];
-      smooth?: boolean;
-    },
+    opts: PanelRegionOptions,
   ): boolean {
     if (!this.engine.lutBuffer) return false;
     const slot = this.engine.slots[slotIdx];
@@ -768,15 +695,9 @@ export class DirectRenderer {
     if (!hasActiveTransform && !hasPanelLuts && this.renderPackedPanelTransformComputeToCanvas(slot, range, logScale, ctx, opts)) {
       return true;
     }
-    const outW = Math.max(1, Math.round(opts.width));
-    const outH = Math.max(1, Math.round(opts.height));
-    const n = Math.max(1, Math.round(opts.panelCount));
-    const cols = Math.max(1, Math.round(opts.cols));
-    const rows = Math.max(1, Math.round(opts.rows));
-    const gap = Math.max(0, opts.gap);
-    const panelW = (outW - gap * (cols - 1)) / cols;
-    const panelH = (outH - gap * (rows - 1)) / rows;
-    if (panelW <= 0 || panelH <= 0) return false;
+    const layout = gridLayout(opts);
+    if (!layout) return false;
+    const { n, panelW, panelH } = layout;
 
     const format = navigator.gpu.getPreferredCanvasFormat();
     this.ensureDirectSlotPipeline(format);
@@ -817,10 +738,9 @@ export class DirectRenderer {
       paramsU32[3] = sourceWidth;
       paramsU32[4] = Math.max(1, Math.round(panelH));
       paramsU32[5] = Math.max(1, Math.round(panelW));
-      const col = panel % cols;
-      const row = Math.floor(panel / cols);
-      paramsF32[6] = col * (panelW + gap);
-      paramsF32[7] = row * (panelH + gap);
+      const origin = panelOrigin(layout, panel);
+      paramsF32[6] = origin.x;
+      paramsF32[7] = origin.y;
       paramsU32[8] = panelLogScale ? 1 : 0;
       paramsU32[9] = opts.bgRgb & 0xFFFFFF;
       paramsU32[10] = 1;
@@ -863,16 +783,7 @@ export class DirectRenderer {
     for (let panel = 0; panel < n; panel++) {
       const bindGroup = slot.directRegionBindGroups[panel];
       if (!bindGroup) continue;
-      const col = panel % cols;
-      const row = Math.floor(panel / cols);
-      const x = col * (panelW + gap);
-      const y = row * (panelH + gap);
-      const sx = Math.max(0, Math.floor(x));
-      const sy = Math.max(0, Math.floor(y));
-      const sw = Math.max(1, Math.min(Math.ceil(panelW), outW - sx));
-      const sh = Math.max(1, Math.min(Math.ceil(panelH), outH - sy));
-      pass.setViewport(x, y, panelW, panelH, 0, 1);
-      pass.setScissorRect(sx, sy, sw, sh);
+      setPanelViewport(pass, layout, panel);
       pass.setBindGroup(0, bindGroup);
       pass.draw(3);
     }
@@ -882,44 +793,9 @@ export class DirectRenderer {
   }
 
   /** Queue-safe durable-frame twin of renderCombinedPanelRegionsDirectToCanvas. */
-  async renderCombinedPanelRegionsToImageBitmapAsync(
-    slotIdx: number,
-    range: { vmin: number; vmax: number } | { vmin: number; vmax: number }[],
-    logScale: boolean | boolean[],
-    opts: {
-      width: number;
-      height: number;
-      panelCount: number;
-      cols: number;
-      rows: number;
-      gap: number;
-      bgRgb: number;
-      sourcePanelWidth: number;
-      transforms?: { zoom: number; panX: number; panY: number }[];
-      sourcePanelIndices?: number[];
-      panelLuts?: { name: string; lut: Uint8Array }[];
-      smooth?: boolean;
-    },
+  renderCombinedPanelRegionsToImageBitmapAsync(
+    slotIdx: number, range: DisplayRange | DisplayRange[], logScale: boolean | boolean[], opts: PanelRegionOptions,
   ): Promise<ImageBitmap | null> {
-    const canvas = new OffscreenCanvas(
-      Math.max(1, Math.round(opts.width)),
-      Math.max(1, Math.round(opts.height)),
-    );
-    const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
-    if (!context) return null;
-    context.configure({
-      device: this.device,
-      format: navigator.gpu.getPreferredCanvasFormat(),
-      alphaMode: "opaque",
-    });
-    if (!this.renderCombinedPanelRegionsDirectToCanvas(
-      slotIdx,
-      range,
-      logScale,
-      context,
-      opts,
-    )) return null;
-    await this.device.queue.onSubmittedWorkDone();
-    return canvas.transferToImageBitmap();
+    return this.durableFrame(opts.width, opts.height, (context) => this.renderCombinedPanelRegionsDirectToCanvas(slotIdx, range, logScale, context, opts));
   }
 }
