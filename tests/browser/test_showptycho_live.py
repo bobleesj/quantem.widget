@@ -5,7 +5,7 @@ typed into the cell, with the letters and keys the widget binds (P, R, S,
 Space, arrows), must land in the cell editor untouched while the widget sits
 on the page. After a click on the widget the same keys must reach it: P pins
 the current phase and Space starts and stops the aberration sweep, and the
-cell text stays as it was.
+cell text stays as it was. Dragging one pin onto another reorders them.
 
 Starring a viewed pin with S, and again to unstar it, reaches the kernel as
 exactly what the pin shows.
@@ -66,6 +66,16 @@ def test_shortcuts_need_widget_focus_and_leave_cell_typing_alone(jupyter, open_p
     assert page.get_by_label("Play sweep").count() == 1
     page.screenshot(path=str(browser_out / "showptycho_keys_widget.png"))
     assert editor.inner_text() == "pp xrs"
+    # dragging the first pin onto the second swaps them
+    order = page.eval_on_selector_all(PINS, "pins => pins.map(pin => pin.dataset.showptychoPinId)")
+    page.locator(PINS).nth(1).scroll_into_view_if_needed()
+    first, second = page.locator(PINS).nth(0).bounding_box(), page.locator(PINS).nth(1).bounding_box()
+    page.mouse.move(first["x"] + first["width"] / 2, first["y"] + first["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(second["x"] + second["width"] / 2, second["y"] + second["height"] / 2, steps=8)
+    page.mouse.up()
+    page.wait_for_timeout(500)
+    assert page.eval_on_selector_all(PINS, "pins => pins.map(pin => pin.dataset.showptychoPinId)") == order[::-1]
     # JupyterLab's debugger panel reports "No active debugger session" on its own
     assert [error for error in page.errors if "debugger session" not in error] == [], page.errors
 

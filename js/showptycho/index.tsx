@@ -53,7 +53,6 @@ const typography = {
 };
 
 const SPACING = { XS: 4, SM: 8, MD: 12, LG: 16 };
-const DEFAULT_BF_FRACTION = 1.0;
 
 const container = {
   root: { p: 2, bgcolor: "transparent", color: "inherit", fontFamily: "monospace", overflow: "visible" },
@@ -374,20 +373,6 @@ function slugPart(value: string): string {
 
 function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
-    if (typeof canvas.toBlob !== "function") {
-      try {
-        const dataUrl = canvas.toDataURL("image/png");
-        const [meta, base64] = dataUrl.split(",");
-        const mime = meta.match(/data:([^;]+)/)?.[1] || "image/png";
-        const raw = atob(base64);
-        const bytes = new Uint8Array(raw.length);
-        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-        resolve(new Blob([bytes], { type: mime }));
-      } catch (err) {
-        reject(err);
-      }
-      return;
-    }
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
       else reject(new Error("Could not encode pinned image as PNG."));
@@ -1521,8 +1506,7 @@ function Explore() {
   const [sessionNote] = useModelState<string>("session_note");
   const [amplitudeBytes] = useModelState<DataView>("amplitude_bytes");
   // An array input has no SSB session: only the views, FFT and display controls apply.
-  // Exports written before the trait existed are sessions, hence `!== false`.
-  const tuning = ssbSession !== false;
+  const tuning = ssbSession;
   const objectAmplitude = React.useMemo(
     () => (amplitudeBytes && amplitudeBytes.byteLength > 0 ? extractFloat32(amplitudeBytes) : null),
     [amplitudeBytes],
@@ -1588,10 +1572,6 @@ function Explore() {
   // rebuilding BF state on every pixel; we only commit on release.
   const [localDragBf, setLocalDragBf] = React.useState(dragBfTrait ?? 0);
   const dragBfRef = React.useRef(dragBfTrait ?? 0);
-  const defaultBfCount = React.useCallback((total: number) => {
-    const roundedTotal = Math.max(1, Math.round(total || 1));
-    return Math.max(1, Math.min(roundedTotal, Math.round(roundedTotal * DEFAULT_BF_FRACTION)));
-  }, []);
   const webgpuCalLogicalBf = React.useMemo(() => {
     if (!webgpuCalJson) return 0;
     try {
@@ -1615,7 +1595,7 @@ function Explore() {
     const total = effectiveTotalBf;
     const raw = Math.round(dragBfTrait ?? 0);
     const seedStandaloneDefault = webgpuStandalone && !standaloneBfSeededRef.current && total > 0;
-    const nextRaw = total > 0 && (raw <= 0 || seedStandaloneDefault) ? defaultBfCount(total) : raw;
+    const nextRaw = total > 0 && (raw <= 0 || seedStandaloneDefault) ? total : raw;
     const next = total > 0 ? Math.max(1, Math.min(total, nextRaw)) : nextRaw;
     setLocalDragBf(next);
     dragBfRef.current = next;
@@ -1623,7 +1603,7 @@ function Explore() {
     if (total > 0 && (raw <= 0 || seedStandaloneDefault) && raw !== next) {
       setDragBfTrait(next);
     }
-  }, [defaultBfCount, dragBfTrait, effectiveTotalBf, setDragBfTrait, webgpuStandalone]);
+  }, [dragBfTrait, effectiveTotalBf, setDragBfTrait, webgpuStandalone]);
   const [pinned, setPinned] = React.useState<PinnedEntry[]>([]);
   const [viewPin, setViewPin] = React.useState<number | null>(null);
   const [exportStatus, setExportStatus] = React.useState("");
@@ -1632,7 +1612,6 @@ function Explore() {
   const [draggingPin, setDraggingPin] = React.useState<number | null>(null);
   const [newPinId, setNewPinId] = React.useState<number | null>(null);
   const [moreMenuAnchor, setMoreMenuAnchor] = React.useState<HTMLElement | null>(null);
-  const draggedPinRef = React.useRef<number | null>(null);
   const didDragPinRef = React.useRef(false);
   const pinPointerDragRef = React.useRef<{ id: number; x: number; y: number; active: boolean } | null>(null);
   const pinLayoutBeforeRef = React.useRef<Map<number, DOMRect> | null>(null);
@@ -1791,9 +1770,9 @@ function Explore() {
   const selectedDragBfCount = React.useCallback(() => {
     const total = Math.max(1, effectiveTotalBf || 1);
     const requested = Math.round(dragBfRef.current || 0);
-    if (requested <= 0) return defaultBfCount(total);
+    if (requested <= 0) return total;
     return Math.max(1, Math.min(total, requested));
-  }, [defaultBfCount, effectiveTotalBf]);
+  }, [effectiveTotalBf]);
 
   // No-server mode: on file:// the sibling data files cannot be fetch()ed, so
   // the folder must be granted once (picker or webkitdirectory input) before
@@ -2775,7 +2754,7 @@ function Explore() {
 
   const capturePinLayout = React.useCallback(() => {
     const rects = new Map<number, DOMRect>();
-    document.querySelectorAll<HTMLElement>("[data-showptycho-pin-id]").forEach(element => {
+    rootRef.current!.querySelectorAll<HTMLElement>("[data-showptycho-pin-id]").forEach(element => {
       const id = Number(element.getAttribute("data-showptycho-pin-id"));
       if (Number.isFinite(id)) rects.set(id, element.getBoundingClientRect());
     });
@@ -2787,7 +2766,7 @@ function Explore() {
     if (!before) return;
     pinLayoutBeforeRef.current = null;
     window.requestAnimationFrame(() => {
-      document.querySelectorAll<HTMLElement>("[data-showptycho-pin-id]").forEach(element => {
+      rootRef.current?.querySelectorAll<HTMLElement>("[data-showptycho-pin-id]").forEach(element => {
         const id = Number(element.getAttribute("data-showptycho-pin-id"));
         const previous = before.get(id);
         if (!previous && id === newPinId) {
@@ -2799,7 +2778,6 @@ function Explore() {
             ],
             { duration: 320, easing: "cubic-bezier(0.2, 0, 0, 1)" },
           );
-          document.documentElement.setAttribute("data-showptycho-last-pin-animation", `add:${id}`);
           return;
         }
         if (!previous) return;
@@ -2814,7 +2792,6 @@ function Explore() {
           ],
           { duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" },
         );
-        document.documentElement.setAttribute("data-showptycho-last-pin-animation", `move:${id}`);
       });
     });
   }, [newPinId, pinned]);
@@ -2969,17 +2946,9 @@ function Explore() {
         new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" }),
         manifestName,
       );
-      const message = `Exported ${exported} PNG + JSON`;
-      setExportStatus(message);
-      document.documentElement.setAttribute("data-showptycho-last-export", JSON.stringify({
-        count: exported,
-        manifest: manifestName,
-        colormap: cmapRef.current,
-      }));
+      setExportStatus(`Exported ${exported} PNG + JSON`);
     } catch (err) {
-      const message = `Export failed ${err instanceof Error ? err.message : String(err)}`;
-      setExportStatus(message);
-      document.documentElement.setAttribute("data-showptycho-last-export", JSON.stringify({ error: message }));
+      setExportStatus(`Export failed ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [pinned]);
 
@@ -3006,7 +2975,6 @@ function Explore() {
 
   const beginPinDrag = React.useCallback((id: number, clientX: number, clientY: number) => {
     pinPointerDragRef.current = { id, x: clientX, y: clientY, active: false };
-    draggedPinRef.current = id;
   }, []);
 
   const updatePinDrag = React.useCallback((id: number, clientX: number, clientY: number) => {
@@ -3028,7 +2996,6 @@ function Explore() {
     const overId = pinIdFromPoint(clientX, clientY);
     if (drag.active && overId != null) reorderPinned(drag.id, overId);
     pinPointerDragRef.current = null;
-    draggedPinRef.current = null;
     setDraggingPin(null);
     setDragOverPin(null);
     if (drag.active) window.setTimeout(() => { didDragPinRef.current = false; }, 0);
@@ -3036,28 +3003,10 @@ function Explore() {
 
   const cancelPinDrag = React.useCallback(() => {
     pinPointerDragRef.current = null;
-    draggedPinRef.current = null;
     setDraggingPin(null);
     setDragOverPin(null);
     window.setTimeout(() => { didDragPinRef.current = false; }, 0);
   }, []);
-
-  React.useEffect(() => {
-    const handleMouseMove = (event: MouseEvent) => {
-      const drag = pinPointerDragRef.current;
-      if (drag) updatePinDrag(drag.id, event.clientX, event.clientY);
-    };
-    const handleMouseUp = (event: MouseEvent) => {
-      const drag = pinPointerDragRef.current;
-      if (drag) finishPinDrag(drag.id, event.clientX, event.clientY);
-    };
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [finishPinDrag, updatePinDrag]);
 
   const doUnpin = React.useCallback((id: number) => {
     capturePinLayout();
@@ -4317,7 +4266,7 @@ function Explore() {
                     onPointerDown={(e) => {
                       if (e.button !== 0) return;
                       beginPinDrag(pin.id, e.clientX, e.clientY);
-                      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+                      e.currentTarget.setPointerCapture(e.pointerId);
                     }}
                     onPointerMove={(e) => {
                       if (updatePinDrag(pin.id, e.clientX, e.clientY)) e.preventDefault();
@@ -4325,48 +4274,7 @@ function Explore() {
                     onPointerUp={(e) => {
                       finishPinDrag(pin.id, e.clientX, e.clientY);
                     }}
-                    onPointerCancel={() => {
-                      cancelPinDrag();
-                    }}
-                    onMouseDown={(e) => {
-                      if (e.button !== 0) return;
-                      beginPinDrag(pin.id, e.clientX, e.clientY);
-                    }}
-                    onMouseMove={(e) => {
-                      if (updatePinDrag(pin.id, e.clientX, e.clientY)) e.preventDefault();
-                    }}
-                    onMouseUp={(e) => {
-                      finishPinDrag(pin.id, e.clientX, e.clientY);
-                    }}
-                    onMouseLeave={(e) => {
-                      if (pinPointerDragRef.current?.active) {
-                        updatePinDrag(pin.id, e.clientX, e.clientY);
-                      }
-                    }}
-                    onDragStart={(e) => {
-                      draggedPinRef.current = pin.id;
-                      didDragPinRef.current = true;
-                      setDragOverPin(pin.id);
-                      e.dataTransfer.effectAllowed = "move";
-                      e.dataTransfer.setData("text/plain", String(pin.id));
-                    }}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      e.dataTransfer.dropEffect = "move";
-                      setDragOverPin(pin.id);
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      const fromId = Number(e.dataTransfer.getData("text/plain") || draggedPinRef.current);
-                      if (Number.isFinite(fromId)) reorderPinned(fromId, pin.id);
-                      draggedPinRef.current = null;
-                      setDragOverPin(null);
-                    }}
-                    onDragEnd={() => {
-                      draggedPinRef.current = null;
-                      setDragOverPin(null);
-                      window.setTimeout(() => { didDragPinRef.current = false; }, 0);
-                    }}
+                    onPointerCancel={cancelPinDrag}
                     sx={{
                     position: "relative", cursor: "grab", flexShrink: 0,
                     border: viewPin === pin.id
