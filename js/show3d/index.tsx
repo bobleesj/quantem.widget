@@ -6493,7 +6493,7 @@ function Show3D() {
           ctx.arc(x, y, markerR, 0, Math.PI * 2);
           ctx.fill();
           ctx.fillStyle = "#001018";
-          ctx.font = `700 ${10 * inverseZoom}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
+          ctx.font = `700 ${10 * inverseZoom}px ${UI_FONT}`;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           ctx.fillText(label, x, y + 0.5 * inverseZoom);
@@ -6759,7 +6759,7 @@ function Show3D() {
     ctx.fillRect(0, 0, cssW, cssH);
 
     if (!profileData || profileData.length < 2) {
-      ctx.font = "10px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.font = `10px ${UI_FONT}`;
       ctx.fillStyle = isDark ? "#555" : "#999";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -6817,7 +6817,7 @@ function Show3D() {
     ctx.lineWidth = 0.5;
     const idealTicks = Math.max(2, Math.floor(plotW / 70));
     const tickStep = roundToNiceValue(totalDist / idealTicks);
-    ctx.font = "9px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.font = `9px ${UI_FONT}`;
     ctx.fillStyle = isDark ? "#888" : "#666";
     ctx.textBaseline = "top";
     const ticks: number[] = [];
@@ -6835,7 +6835,7 @@ function Show3D() {
       ctx.fillText(i === ticks.length - 1 ? `${valStr} ${xUnit}` : valStr, x, tickY + 4);
     }
 
-    ctx.font = "9px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.font = `9px ${UI_FONT}`;
     ctx.fillStyle = isDark ? "#888" : "#666";
     ctx.textAlign = "right";
     ctx.textBaseline = "top";
@@ -6901,7 +6901,7 @@ function Show3D() {
       const dist = frac * totalDist;
       const label = `${formatNumber(val)}  @  ${dist.toFixed(1)} ${xUnit}`;
       const isDark = themeInfo.theme === "dark";
-      ctx.font = "bold 9px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.font = `bold 9px ${UI_FONT}`;
       const textW = ctx.measureText(label).width;
       const labelX = Math.min(cssX + 6, padLeft + plotW - textW - 2);
       const labelY = padTop + 2;
@@ -7839,7 +7839,7 @@ function Show3D() {
       ctx.shadowOffsetY = 1;
       ctx.fillStyle = "white";
       ctx.fillRect(barX, barY, barThickness, barPx);
-      ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.font = `11px ${UI_FONT}`;
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
       const label = nicePhysical >= 1 ? `${nicePhysical} ${dimUnit}` : `${nicePhysical.toPrecision(2)} ${dimUnit}`;
@@ -7982,7 +7982,7 @@ function Show3D() {
       const label = fftClickInfo.dSpacing != null
         ? `d = ${formatLength(fftClickInfo.dSpacing, pixelUnit)}`
         : `dist = ${fftClickInfo.distPx.toFixed(1)} px`;
-      ctx.font = "bold 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.font = `bold 11px ${UI_FONT}`;
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
       const padX = 5;
@@ -11976,7 +11976,7 @@ function Show3D() {
                           left: Math.min(12, Math.max(5, insetW * 0.08)),
                           bottom: Math.min(7, Math.max(4, insetH * 0.06)),
                           color: "white",
-                          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+                          fontFamily: UI_FONT,
                           fontSize: Math.max(9, Math.min(14, insetW * 0.1)),
                           fontWeight: 400,
                           fontVariantNumeric: "tabular-nums",
@@ -12002,7 +12002,7 @@ function Show3D() {
                           left: 5,
                           right: 5,
                           color: "rgba(255,255,255,0.96)",
-                          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+                          fontFamily: UI_FONT,
                           fontSize: 10,
                           fontWeight: 700,
                           lineHeight: 1.15,
@@ -12684,7 +12684,7 @@ function Show3D() {
                         top: `calc(${((slotY + outPanelH) / Math.max(1, canvasH)) * 100}% - 23px)`,
                         maxWidth: `calc(${(outPanelW / Math.max(1, canvasW)) * 100}% - 24px)`,
                         color: "white",
-                        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+                        fontFamily: UI_FONT,
                         fontSize: 16,
                         fontWeight: 400,
                         fontVariantNumeric: "tabular-nums",
@@ -12710,7 +12710,7 @@ function Show3D() {
                     left: 8,
                     maxWidth: "calc(100% - 16px)",
                     color: "rgba(255,255,255,0.96)",
-                    fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+                    fontFamily: UI_FONT,
                     fontSize: 11,
                     fontWeight: 700,
                     lineHeight: 1.2,
