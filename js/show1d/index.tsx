@@ -2340,9 +2340,10 @@ function SnapshotHistogram({ data, imageIndex, packedHeight, packedWidth, imageW
     <Typography sx={{ fontSize: 11, color: colors.textMuted }}>{label}</Typography>
     <MiniHistogram bins={bins} dataMin={dataMin} dataMax={dataMax} clipMin={clip[0]} clipMax={clip[1]}
       colors={colors} width={width} height={height} onClipRangeChange={onChange} />
-    <Box sx={{ display: "flex", gap: 0.5, alignItems: "center" }}>
+    {/* Compact and wrapping: a narrow grid cell must hold its own buttons, not spill them onto the next panel's. */}
+    <Box sx={{ display: "flex", flexWrap: "wrap", columnGap: 0.5, alignItems: "center", "& .MuiButton-root": { ...compactButton, px: 0.5, py: 0 } }}>
       <Button size="small" onClick={() => onChange([dataMin, dataMax])}>Full</Button>
-      <Button size="small" onClick={() => onChange(resolveSnapshotDisplayRange(image, "1-99", null))}>1–99%</Button>
+      <Button size="small" onClick={() => onChange(resolveSnapshotDisplayRange(image, "1-99", null))}>1-99%</Button>
       <Button size="small" onClick={() => onChange([])}>Reset</Button>
     </Box>
   </Box>;

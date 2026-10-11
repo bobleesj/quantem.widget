@@ -4,7 +4,9 @@ Stepping through snapshot groups whose images carry different labels mounts a
 new contrast histogram for every group. The page counts the WebGPU buffers it
 holds, and stepping through every group must not leave one behind. Zooming a
 snapshot panel, or hovering the plot beside it, redraws the panel without
-colouring its pixels again (no putImageData).
+colouring its pixels again (no putImageData). With ten trials in a group the
+histogram cells are narrow, and each keeps its Full / 1-99% / Reset buttons
+inside its own cell without overlapping.
 """
 
 import numpy as np
@@ -103,4 +105,36 @@ def test_plot_hover_and_zoom_redraw_snapshots_without_recolouring(labelled_snaps
     assert len(hovered) > 2_000, "the plot hover marker was never drawn"
     assert zoomed != before, "the wheel did not zoom the snapshot panel"
     assert recoloured == 0, f"{recoloured} full-image recolours for 12 plot hover moves and 5 wheel steps"
+    assert page.errors == [], page.errors
+
+
+@pytest.fixture(scope="module")
+def ten_trials(browser_out) -> str:
+    from quantem.widget import Show1D
+
+    rng = np.random.default_rng(1)
+    widget = Show1D(rng.random((10, 8)).astype(np.float32), labels=[f"lambda {trial}" for trial in range(10)])
+    widget.snapshot(7, **{f"lambda {trial}": rng.random((64, 64)).astype(np.float32) for trial in range(10)})
+    widget.export_html(browser_out / "show1d_ten_trials.html")
+    return "show1d_ten_trials.html"
+
+
+def test_narrow_histograms_keep_their_buttons_inside(ten_trials, serve, open_page, hardware_adapter, browser_out):
+    page = open_page(f"{serve(browser_out)}/{ten_trials}", webgpu=True)
+    page.wait_for_function("document.querySelectorAll('[data-testid=\"show1d-panel-histogram\"]').length === 10", timeout=60_000)
+    page.wait_for_timeout(2_000)
+    hardware_adapter(page.adapter())
+    page.screenshot(path=str(browser_out / "show1d_ten_histograms.png"))
+    cells = page.evaluate("""() => Array.from(document.querySelectorAll('[data-testid="show1d-panel-histogram"]')).map(cell => ({
+      cell: cell.getBoundingClientRect().toJSON(),
+      buttons: Array.from(cell.querySelectorAll('button')).map(button => button.getBoundingClientRect().toJSON()),
+    }))""")
+    for index, cell in enumerate(cells):
+        assert len(cell["buttons"]) == 3
+        for button in cell["buttons"]:
+            assert cell["cell"]["left"] - 0.5 <= button["left"] and button["right"] <= cell["cell"]["right"] + 0.5, (index, cell)
+        for first, second in zip(cell["buttons"], cell["buttons"][1:]):
+            overlap_x = min(first["right"], second["right"]) - max(first["left"], second["left"])
+            overlap_y = min(first["bottom"], second["bottom"]) - max(first["top"], second["top"])
+            assert overlap_x <= 0 or overlap_y <= 0, (index, cell)
     assert page.errors == [], page.errors
