@@ -345,23 +345,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         **kwargs,
     ):
         """Validate the arguments, place the data on its compute device and set the traits (see the class docstring)."""
-        reject_unknown_kwargs(type(self), kwargs)
-        # save_state=False keeps the packed 4D stack out of the notebook's saved
-        # widget metadata; a static preview stands in for a cold reopen.
-        self._save_state = bool(save_state)
-        self._configure_static_fallback(
-            notebook_preview_format=notebook_preview_format,
-            notebook_preview_quality=notebook_preview_quality,
-            notebook_preview_max_px=notebook_preview_max_px,
-        )
-        ui = resolve_ui_mode(
-            ui_mode,
-            defaults={"show_title": True, "show_controls": True, "controls_collapsed": False,
-                      "show_stats": True, "show_scale_bar": True},
-            overrides={"show_title": show_title, "show_controls": show_controls,
-                       "controls_collapsed": controls_collapsed, "show_stats": show_stats,
-                       "show_scale_bar": show_scale_bar},
-        )
+        # close() runs even when a check below refuses the call (ipywidgets closes in __del__), so its state exists first
         self._data = None  # get_state runs inside open(); the data joins once the model exists
         self._verbose = bool(verbose)
         self._sessions: dict[int, object] = {}  # DenseSession or a quantem.gpu detector session per dataset
@@ -380,6 +364,23 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._folder_watch_started = False
         self._folder_poll_lock = threading.Lock()
         self._compare_lock = threading.RLock()
+        reject_unknown_kwargs(type(self), kwargs)
+        # save_state=False keeps the packed 4D stack out of the notebook's saved
+        # widget metadata; a static preview stands in for a cold reopen.
+        self._save_state = bool(save_state)
+        self._configure_static_fallback(
+            notebook_preview_format=notebook_preview_format,
+            notebook_preview_quality=notebook_preview_quality,
+            notebook_preview_max_px=notebook_preview_max_px,
+        )
+        ui = resolve_ui_mode(
+            ui_mode,
+            defaults={"show_title": True, "show_controls": True, "controls_collapsed": False,
+                      "show_stats": True, "show_scale_bar": True},
+            overrides={"show_title": show_title, "show_controls": show_controls,
+                       "controls_collapsed": controls_collapsed, "show_stats": show_stats,
+                       "show_scale_bar": show_scale_bar},
+        )
         # Every check and the file read run before super().__init__ opens the widget model, so a
         # refused input (a bad argument, a file above the memory ceiling) leaves no model behind.
         if backend not in (None, "webgpu"):
@@ -918,6 +919,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self.roi_center_row = float(self.center_row)
             self.roi_center_col = float(self.center_col)
             if preset == "bf":
+                self.roi_radius_inner = 0.0
                 self.roi_radius = float(max(1.0, bf_radius))
             elif preset == "abf":
                 self.roi_radius_inner = float(max(0.5, bf_radius * 0.5))

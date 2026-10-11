@@ -357,6 +357,39 @@ def test_state_round_trips_through_dict_and_file(tmp_path):
             restored.close()
 
 
+def test_annular_after_bf_is_the_bright_disk_not_a_zero_area_ring():
+    """ADF then BF then Annular: the BF disk must not keep ADF's inner radius."""
+    counts = _counts(4)
+    widget = Show4DSTEM(counts, precompute_virtual_images=False)
+    try:
+        widget.apply_preset("adf").apply_preset("bf")
+        assert widget.roi_radius_inner == 0.0
+        widget.roi_mode = "annular"
+        bright = widget.virtual_image()
+        assert bright.min() > 0
+        widget.roi_mode = "circle"
+        np.testing.assert_array_equal(widget.virtual_image(), bright)
+    finally:
+        widget.close()
+
+
+def test_refused_argument_raises_without_a_cleanup_traceback():
+    """ipywidgets closes the half-built widget in __del__; that close must not fail on missing state."""
+    import gc
+    import sys
+
+    unraisable = []
+    previous = sys.unraisablehook
+    sys.unraisablehook = unraisable.append
+    try:
+        with pytest.raises(TypeError):
+            Show4DSTEM(_counts(5), detector_radius=3)
+        gc.collect()
+    finally:
+        sys.unraisablehook = previous
+    assert [str(hook.exc_value) for hook in unraisable] == []
+
+
 def test_widget_calls_only_functions_its_export_module_defines():
     """compute_ssb replaces _ssb_phase in the tests below, so a stale export name there never ran in CI."""
     import inspect
