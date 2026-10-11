@@ -10097,56 +10097,56 @@ function Show3D() {
       handled = true;
     }
     switch (e.key) {
-        case " ":
-          if (playing) pausePlayback();
-          else playFromCurrentFrame();
+      case " ":
+        if (playing) pausePlayback();
+        else playFromCurrentFrame();
+        handled = true;
+        break;
+      case "r":
+      case "R":
+        handleDoubleClick();
+        handled = true;
+        break;
+      case "c":
+      case "C":
+        if (cursorInfo && cursorReadoutVisible) {
+          navigator.clipboard.writeText(`(${cursorInfo.row}, ${cursorInfo.col}, ${cursorInfo.value})`);
           handled = true;
-          break;
-        case "r":
-        case "R":
-          handleDoubleClick();
-          handled = true;
-          break;
-        case "c":
-        case "C":
-          if (cursorInfo && cursorReadoutVisible) {
-            navigator.clipboard.writeText(`(${cursorInfo.row}, ${cursorInfo.col}, ${cursorInfo.value})`);
-            handled = true;
-          }
-          break;
-        case "h":
-        case "H": {
-          if (hasPanelChoices && selectedVisiblePanels.length > 0) {
-            const hideable = selectedVisiblePanels.filter((panel) => visiblePanelIndices.includes(panel));
-            if (hideable.length > 0 && visiblePanelCount - hideable.length >= 1) {
-              setPanelsHidden(hideable, true);
-              handled = true;
-            }
-          }
-          break;
         }
-        case "Delete":
-        case "Backspace":
-          if (overlayEditMode && overlaySelection) {
-            deleteSelectedOverlay();
-            handled = true;
-          } else if (effectiveRoiActive && roiSelectedIdx >= 0) {
-            deleteSelectedROI();
-            handled = true;
-          }
-          break;
-        case "d":
-        case "D":
-          if (effectiveRoiActive && roiSelectedIdx >= 0 && (e.metaKey || e.ctrlKey || e.shiftKey)) {
-            duplicateSelectedROI();
+        break;
+      case "h":
+      case "H": {
+        if (hasPanelChoices && selectedVisiblePanels.length > 0) {
+          const hideable = selectedVisiblePanels.filter((panel) => visiblePanelIndices.includes(panel));
+          if (hideable.length > 0 && visiblePanelCount - hideable.length >= 1) {
+            setPanelsHidden(hideable, true);
             handled = true;
           }
-          break;
-        case "Escape":
-          rootRef.current?.blur();
-          handled = true;
-          break;
+        }
+        break;
       }
+      case "Delete":
+      case "Backspace":
+        if (overlayEditMode && overlaySelection) {
+          deleteSelectedOverlay();
+          handled = true;
+        } else if (effectiveRoiActive && roiSelectedIdx >= 0) {
+          deleteSelectedROI();
+          handled = true;
+        }
+        break;
+      case "d":
+      case "D":
+        if (effectiveRoiActive && roiSelectedIdx >= 0 && (e.metaKey || e.ctrlKey || e.shiftKey)) {
+          duplicateSelectedROI();
+          handled = true;
+        }
+        break;
+      case "Escape":
+        rootRef.current?.blur();
+        handled = true;
+        break;
+    }
     if (handled) {
       e.preventDefault();
       e.stopPropagation();
@@ -10500,7 +10500,7 @@ function Show3D() {
                 {diffMode === "previous" ? "\u0394-PREV" : "\u0394-FIRST"}
               </Typography>
             )}
-	            {showControls && <InfoTooltip maxWidth={360} text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            {showControls && <InfoTooltip maxWidth={360} text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
               <MetadataSection rows={[
                 ["Shape", `${nSlices} x ${height} x ${width}`],
                 ["Panels", nPanels > 1 ? `${nPanels} panels` : "single panel"],
@@ -10541,175 +10541,175 @@ function Show3D() {
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Export / Copy: Export HTML or GIF panel-only animations, or copy the current panel view from the toolbar.</Typography>
               <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
               <KeyboardShortcuts items={keyboardShortcutItems} />
-	            </Box>} theme={themeInfo.theme} />}
-	            {showControls && (
-	              <Button
-	                size="small"
-	                sx={{
-	                  ...compactButton,
-	                  ml: 0.75,
-	                  py: 0,
-	                  px: 0.5,
-	                  minHeight: 16,
-	                  lineHeight: "16px",
-	                  verticalAlign: "baseline",
-	                }}
-	                onClick={() => setControlsCollapsed(!controlsCollapsed)}
-	                aria-label={controlsCollapsed ? "Show controls" : "Hide controls"}
-	                aria-pressed={!controlsCollapsed}
-	                title={controlsCollapsed ? "Show controls" : "Hide controls"}
-	              >
-	                Controls
-	              </Button>
-	            )}
-	            {showControls && controlsCollapsed && (exportEnabled || canDownloadCurrentHtml) && (
-	              <>
-	                <Button
-	                  size="small"
-	                  sx={{
-	                    ...compactButton,
-	                    ml: 0.5,
-	                    py: 0,
-	                    px: 0.5,
-	                    minHeight: 16,
-	                    lineHeight: "16px",
-	                    verticalAlign: "baseline",
-	                  }}
+            </Box>} theme={themeInfo.theme} />}
+            {showControls && (
+              <Button
+                size="small"
+                sx={{
+                  ...compactButton,
+                  ml: 0.75,
+                  py: 0,
+                  px: 0.5,
+                  minHeight: 16,
+                  lineHeight: "16px",
+                  verticalAlign: "baseline",
+                }}
+                onClick={() => setControlsCollapsed(!controlsCollapsed)}
+                aria-label={controlsCollapsed ? "Show controls" : "Hide controls"}
+                aria-pressed={!controlsCollapsed}
+                title={controlsCollapsed ? "Show controls" : "Hide controls"}
+              >
+                Controls
+              </Button>
+            )}
+            {showControls && controlsCollapsed && (exportEnabled || canDownloadCurrentHtml) && (
+              <>
+                <Button
+                  size="small"
+                  sx={{
+                    ...compactButton,
+                    ml: 0.5,
+                    py: 0,
+                    px: 0.5,
+                    minHeight: 16,
+                    lineHeight: "16px",
+                    verticalAlign: "baseline",
+                  }}
                   disabled={exportBusy || (!exportEnabled && !canDownloadCurrentHtml && !canExportStandaloneGif)}
-	                  onClick={handleExportMenuOpen}
-	                  aria-label="Export widget or animation"
-	                  aria-controls={exportMenuAnchor ? "show3d-export-menu-collapsed" : undefined}
-	                  aria-expanded={exportMenuAnchor ? "true" : undefined}
-	                  aria-haspopup="menu"
-	                  title={localExportStatus || exportStatus || (exportEnabled ? "Export HTML or GIF with a save dialog" : "Export standalone HTML or GIF")}
-	                >
-	                  {exportBusy ? "Exporting" : "Export"}
-	                </Button>
-	                <Menu
-	                  id="show3d-export-menu-collapsed"
-	                  anchorEl={exportMenuAnchor}
-	                  open={Boolean(exportMenuAnchor)}
-	                  onClose={handleExportMenuClose}
-	                  {...themedMenuProps}
-	                  slotProps={{ ...themedMenuProps.slotProps, list: { "aria-label": "Export options" } }}
-	                >
-	                  {renderExportMenuContent()}
-	                </Menu>
-	              </>
-	            )}
-	          </Typography>}
-	          {/* Page navigation sits above the analysis toolbar so a long page
-	              label never competes with Profile / Stats / FFT controls. */}
-	          {controlsVisible && isPaged && (
-	            <Box
-	              data-show3d-page-controls="true"
-	              aria-label="Page navigation"
-	              sx={{
-	                display: "flex",
-	                alignItems: "center",
-	                flexWrap: "wrap",
-	                columnGap: "8px",
-	                rowGap: "3px",
-	                mb: "3px",
-	                minHeight: 26,
-	                pb: "3px",
-	                borderBottom: `1px solid ${themeColors.border}`,
-	              }}
-	            >
-	              <Box sx={{ display: "flex", alignItems: "baseline", gap: "5px", flex: "1 1 240px", minWidth: 0 }}>
-	                <Typography sx={{ ...typography.label, fontSize: 10, flexShrink: 0 }}>Page</Typography>
-	                <Typography
-	                  data-show3d-page-status="true"
-	                  title={pageControlStatus}
-	                  sx={{
-	                    ...typography.label,
-	                    fontSize: 10,
-	                    lineHeight: 1.25,
-	                    color: themeColors.accent,
-	                    minWidth: 0,
-	                    whiteSpace: "normal",
-	                    overflowWrap: "anywhere",
-	                    fontVariantNumeric: "tabular-nums",
-	                  }}
-	                >
-	                  {pageControlStatus}
-	                </Typography>
-	              </Box>
-	              <Box sx={{ display: "flex", alignItems: "center", gap: "4px", flex: "0 1 auto", minWidth: 0 }}>
-	                <Slider
-	                  value={pageControlIdx}
-	                  min={0}
-	                  max={Math.max(0, (nPages || 1) - 1)}
-	                  step={1}
-	                  onPointerDownCapture={() => {
-	                    stopPagePlayback();
-	                    setPageSliderPreviewIdx(currentPageIdx);
-	                  }}
-	                  onKeyDown={() => stopPagePlayback()}
-	                  onChange={(_, value) => {
-	                    const raw = Array.isArray(value) ? value[0] : value;
-	                    const next = clampPageIdx(Number(raw));
-	                    setPageSliderPreviewIdx(next);
-	                    commitPageIdx(next);
-	                  }}
-	                  onChangeCommitted={(_, value) => {
-	                    const raw = Array.isArray(value) ? value[0] : value;
-	                    const next = clampPageIdx(Number(raw));
-	                    stopPagePlayback();
-	                    setPageSliderPreviewIdx(next);
-	                    commitPageIdx(next, true);
-	                  }}
-	                  size="small"
-	                  sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 92, color: themeColors.accent }}
-	                  aria-label="Page"
-	                />
-	                <IconButton
-	                  size="small"
-	                  onClick={() => setPagePlaying((value) => !value)}
-	                  title={pagePlaying ? "Pause page playback" : "Play pages"}
-	                  aria-label={pagePlaying ? "Pause page playback" : "Play pages"}
-	                  sx={{ width: 24, height: 24, p: 0, color: themeColors.accent }}
-	                >
-	                  {pagePlaying ? <PauseIcon sx={{ fontSize: 16 }} /> : <PlayArrowIcon sx={{ fontSize: 16 }} />}
-	                </IconButton>
-	                <Select
-	                  value={String(pagePlayFps)}
-	                  onChange={(e) => setPagePlayFps(Number(e.target.value) || 2)}
-	                  size="small"
-	                  sx={{ ...themedSelect, minWidth: 48, fontSize: 10 }}
-	                  MenuProps={themedMenuProps}
-	                  inputProps={{ "aria-label": "Page playback frames per second" }}
-	                  title="Page playback speed"
-	                >
-	                  {PAGE_PLAY_FPS_OPTIONS.map((fps) => (
-	                    <MenuItem key={fps} value={String(fps)}>{fps} fps</MenuItem>
-	                  ))}
-	                </Select>
-	                <IconButton
-	                  size="small"
-	                  onClick={() => {
-	                    const next = Array.from({ length: Math.max(1, nPages || 1) }, (_, idx) => pageStarred?.[idx] ? 1 : 0);
-	                    next[pageControlIdx] = next[pageControlIdx] ? 0 : 1;
-	                    setPageStarred(next);
-	                  }}
-	                  title={(pageStarred?.[pageControlIdx] ? "Unstar " : "Star ") + pageControlLabel}
-	                  aria-label={(pageStarred?.[pageControlIdx] ? "Unstar " : "Star ") + pageControlLabel}
-	                  sx={{
-	                    width: 24,
-	                    height: 24,
-	                    p: 0,
-	                    color: pageStarred?.[pageControlIdx] ? "#ffc107" : themeColors.textMuted,
-	                    "&:hover": { color: pageStarred?.[pageControlIdx] ? "#ffc107" : themeColors.text },
-	                  }}
-	                >
-	                  {pageStarred?.[pageControlIdx] ? "★" : "☆"}
-	                </IconButton>
-	              </Box>
-	            </Box>
-	          )}
-	          {/* Analysis and display controls row. */}
-	          {controlsVisible && (
-	          <Box ref={toolControlsRef} data-show3d-tool-controls="true" sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "4px", mb: `${SPACING.XS}px`, minHeight: 28 }}>
+                  onClick={handleExportMenuOpen}
+                  aria-label="Export widget or animation"
+                  aria-controls={exportMenuAnchor ? "show3d-export-menu-collapsed" : undefined}
+                  aria-expanded={exportMenuAnchor ? "true" : undefined}
+                  aria-haspopup="menu"
+                  title={localExportStatus || exportStatus || (exportEnabled ? "Export HTML or GIF with a save dialog" : "Export standalone HTML or GIF")}
+                >
+                  {exportBusy ? "Exporting" : "Export"}
+                </Button>
+                <Menu
+                  id="show3d-export-menu-collapsed"
+                  anchorEl={exportMenuAnchor}
+                  open={Boolean(exportMenuAnchor)}
+                  onClose={handleExportMenuClose}
+                  {...themedMenuProps}
+                  slotProps={{ ...themedMenuProps.slotProps, list: { "aria-label": "Export options" } }}
+                >
+                  {renderExportMenuContent()}
+                </Menu>
+              </>
+            )}
+          </Typography>}
+          {/* Page navigation sits above the analysis toolbar so a long page
+              label never competes with Profile / Stats / FFT controls. */}
+          {controlsVisible && isPaged && (
+            <Box
+              data-show3d-page-controls="true"
+              aria-label="Page navigation"
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                flexWrap: "wrap",
+                columnGap: "8px",
+                rowGap: "3px",
+                mb: "3px",
+                minHeight: 26,
+                pb: "3px",
+                borderBottom: `1px solid ${themeColors.border}`,
+              }}
+            >
+              <Box sx={{ display: "flex", alignItems: "baseline", gap: "5px", flex: "1 1 240px", minWidth: 0 }}>
+                <Typography sx={{ ...typography.label, fontSize: 10, flexShrink: 0 }}>Page</Typography>
+                <Typography
+                  data-show3d-page-status="true"
+                  title={pageControlStatus}
+                  sx={{
+                    ...typography.label,
+                    fontSize: 10,
+                    lineHeight: 1.25,
+                    color: themeColors.accent,
+                    minWidth: 0,
+                    whiteSpace: "normal",
+                    overflowWrap: "anywhere",
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  {pageControlStatus}
+                </Typography>
+              </Box>
+              <Box sx={{ display: "flex", alignItems: "center", gap: "4px", flex: "0 1 auto", minWidth: 0 }}>
+                <Slider
+                  value={pageControlIdx}
+                  min={0}
+                  max={Math.max(0, (nPages || 1) - 1)}
+                  step={1}
+                  onPointerDownCapture={() => {
+                    stopPagePlayback();
+                    setPageSliderPreviewIdx(currentPageIdx);
+                  }}
+                  onKeyDown={() => stopPagePlayback()}
+                  onChange={(_, value) => {
+                    const raw = Array.isArray(value) ? value[0] : value;
+                    const next = clampPageIdx(Number(raw));
+                    setPageSliderPreviewIdx(next);
+                    commitPageIdx(next);
+                  }}
+                  onChangeCommitted={(_, value) => {
+                    const raw = Array.isArray(value) ? value[0] : value;
+                    const next = clampPageIdx(Number(raw));
+                    stopPagePlayback();
+                    setPageSliderPreviewIdx(next);
+                    commitPageIdx(next, true);
+                  }}
+                  size="small"
+                  sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 92, color: themeColors.accent }}
+                  aria-label="Page"
+                />
+                <IconButton
+                  size="small"
+                  onClick={() => setPagePlaying((value) => !value)}
+                  title={pagePlaying ? "Pause page playback" : "Play pages"}
+                  aria-label={pagePlaying ? "Pause page playback" : "Play pages"}
+                  sx={{ width: 24, height: 24, p: 0, color: themeColors.accent }}
+                >
+                  {pagePlaying ? <PauseIcon sx={{ fontSize: 16 }} /> : <PlayArrowIcon sx={{ fontSize: 16 }} />}
+                </IconButton>
+                <Select
+                  value={String(pagePlayFps)}
+                  onChange={(e) => setPagePlayFps(Number(e.target.value) || 2)}
+                  size="small"
+                  sx={{ ...themedSelect, minWidth: 48, fontSize: 10 }}
+                  MenuProps={themedMenuProps}
+                  inputProps={{ "aria-label": "Page playback frames per second" }}
+                  title="Page playback speed"
+                >
+                  {PAGE_PLAY_FPS_OPTIONS.map((fps) => (
+                    <MenuItem key={fps} value={String(fps)}>{fps} fps</MenuItem>
+                  ))}
+                </Select>
+                <IconButton
+                  size="small"
+                  onClick={() => {
+                    const next = Array.from({ length: Math.max(1, nPages || 1) }, (_, idx) => pageStarred?.[idx] ? 1 : 0);
+                    next[pageControlIdx] = next[pageControlIdx] ? 0 : 1;
+                    setPageStarred(next);
+                  }}
+                  title={(pageStarred?.[pageControlIdx] ? "Unstar " : "Star ") + pageControlLabel}
+                  aria-label={(pageStarred?.[pageControlIdx] ? "Unstar " : "Star ") + pageControlLabel}
+                  sx={{
+                    width: 24,
+                    height: 24,
+                    p: 0,
+                    color: pageStarred?.[pageControlIdx] ? "#ffc107" : themeColors.textMuted,
+                    "&:hover": { color: pageStarred?.[pageControlIdx] ? "#ffc107" : themeColors.text },
+                  }}
+                >
+                  {pageStarred?.[pageControlIdx] ? "★" : "☆"}
+                </IconButton>
+              </Box>
+            </Box>
+          )}
+          {/* Analysis and display controls row. */}
+          {controlsVisible && (
+          <Box ref={toolControlsRef} data-show3d-tool-controls="true" sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "4px", mb: `${SPACING.XS}px`, minHeight: 28 }}>
             {visiblePanelCount > 1 && (
               <>
                 <Typography sx={{ ...typography.label, fontSize: 10, ml: "2px" }}>Cols</Typography>
@@ -11067,63 +11067,63 @@ function Show3D() {
                     <MenuItem value="difference">Difference</MenuItem>
                     <MenuItem value="overlay">Overlay</MenuItem>
                   </Select>
-                <Typography sx={{ fontSize: 12, color: themeColors.text }}>A</Typography>
-                <TextField
-                  type="number"
-                  size="small"
-                  value={Math.max(0, Math.min(Math.max(0, nSlices - 1), Math.round(comparePair?.[0] ?? 0)))}
-                  onChange={(e) => setComparePair([Number(e.target.value) || 0, comparePair?.[1] ?? 1])}
-                  slotProps={{ htmlInput: { min: 0, max: Math.max(0, nSlices - 1), "aria-label": "Compare frame A" } }}
-                  sx={{ input: { color: themeColors.text, fontSize: 12, py: 0.5 }, "& .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.border } }}
-                />
-                <Typography sx={{ fontSize: 12, color: themeColors.text }}>B</Typography>
-                <TextField
-                  type="number"
-                  size="small"
-                  value={Math.max(0, Math.min(Math.max(0, nSlices - 1), Math.round(comparePair?.[1] ?? 1)))}
-                  onChange={(e) => setComparePair([comparePair?.[0] ?? 0, Number(e.target.value) || 0])}
-                  slotProps={{ htmlInput: { min: 0, max: Math.max(0, nSlices - 1), "aria-label": "Compare frame B" } }}
-                  sx={{ input: { color: themeColors.text, fontSize: 12, py: 0.5 }, "& .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.border } }}
-                />
-                <Typography sx={{ fontSize: 12, color: themeColors.text }}>Speed</Typography>
-                <Select
-                  value={String(blinkFps)}
-                  onChange={(e) => setBlinkFps(Number(e.target.value) || 2)}
-                  size="small"
-                  sx={{ ...themedSelect, minWidth: 92 }}
-                  MenuProps={themedMenuProps}
-                  inputProps={{ "aria-label": "Blink speed" }}
-                >
-                  <MenuItem value="0.5">0.5x</MenuItem>
-                  <MenuItem value="1">1x</MenuItem>
-                  <MenuItem value="2">2x</MenuItem>
-                  <MenuItem value="4">4x</MenuItem>
-                </Select>
-                <Typography sx={{ fontSize: 12, color: themeColors.text }}>Background</Typography>
-                <Select
-                  value={compareBackground || "dark"}
-                  onChange={(e) => setCompareBackground(String(e.target.value))}
-                  size="small"
-                  sx={{ ...themedSelect, minWidth: 92 }}
-                  MenuProps={themedMenuProps}
-                  inputProps={{ "aria-label": "Compare background" }}
-                >
-                  <MenuItem value="dark">Dark</MenuItem>
-                  <MenuItem value="light">Light</MenuItem>
-                </Select>
-                <Typography sx={{ fontSize: 12, color: themeColors.text }}>Diff</Typography>
-                <Select
-                  value={diffCmap || "magenta-green"}
-                  onChange={(e) => setDiffCmap(String(e.target.value))}
-                  size="small"
-                  sx={{ ...themedSelect, minWidth: 120 }}
-                  MenuProps={themedMenuProps}
-                  inputProps={{ "aria-label": "Difference colormap" }}
-                >
-                  <MenuItem value="magenta-green">Magenta/Green</MenuItem>
-                  <MenuItem value="red-blue">Red/Blue</MenuItem>
-                  <MenuItem value="gray">Gray</MenuItem>
-                </Select>
+                  <Typography sx={{ fontSize: 12, color: themeColors.text }}>A</Typography>
+                  <TextField
+                    type="number"
+                    size="small"
+                    value={Math.max(0, Math.min(Math.max(0, nSlices - 1), Math.round(comparePair?.[0] ?? 0)))}
+                    onChange={(e) => setComparePair([Number(e.target.value) || 0, comparePair?.[1] ?? 1])}
+                    slotProps={{ htmlInput: { min: 0, max: Math.max(0, nSlices - 1), "aria-label": "Compare frame A" } }}
+                    sx={{ input: { color: themeColors.text, fontSize: 12, py: 0.5 }, "& .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.border } }}
+                  />
+                  <Typography sx={{ fontSize: 12, color: themeColors.text }}>B</Typography>
+                  <TextField
+                    type="number"
+                    size="small"
+                    value={Math.max(0, Math.min(Math.max(0, nSlices - 1), Math.round(comparePair?.[1] ?? 1)))}
+                    onChange={(e) => setComparePair([comparePair?.[0] ?? 0, Number(e.target.value) || 0])}
+                    slotProps={{ htmlInput: { min: 0, max: Math.max(0, nSlices - 1), "aria-label": "Compare frame B" } }}
+                    sx={{ input: { color: themeColors.text, fontSize: 12, py: 0.5 }, "& .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.border } }}
+                  />
+                  <Typography sx={{ fontSize: 12, color: themeColors.text }}>Speed</Typography>
+                  <Select
+                    value={String(blinkFps)}
+                    onChange={(e) => setBlinkFps(Number(e.target.value) || 2)}
+                    size="small"
+                    sx={{ ...themedSelect, minWidth: 92 }}
+                    MenuProps={themedMenuProps}
+                    inputProps={{ "aria-label": "Blink speed" }}
+                  >
+                    <MenuItem value="0.5">0.5x</MenuItem>
+                    <MenuItem value="1">1x</MenuItem>
+                    <MenuItem value="2">2x</MenuItem>
+                    <MenuItem value="4">4x</MenuItem>
+                  </Select>
+                  <Typography sx={{ fontSize: 12, color: themeColors.text }}>Background</Typography>
+                  <Select
+                    value={compareBackground || "dark"}
+                    onChange={(e) => setCompareBackground(String(e.target.value))}
+                    size="small"
+                    sx={{ ...themedSelect, minWidth: 92 }}
+                    MenuProps={themedMenuProps}
+                    inputProps={{ "aria-label": "Compare background" }}
+                  >
+                    <MenuItem value="dark">Dark</MenuItem>
+                    <MenuItem value="light">Light</MenuItem>
+                  </Select>
+                  <Typography sx={{ fontSize: 12, color: themeColors.text }}>Diff</Typography>
+                  <Select
+                    value={diffCmap || "magenta-green"}
+                    onChange={(e) => setDiffCmap(String(e.target.value))}
+                    size="small"
+                    sx={{ ...themedSelect, minWidth: 120 }}
+                    MenuProps={themedMenuProps}
+                    inputProps={{ "aria-label": "Difference colormap" }}
+                  >
+                    <MenuItem value="magenta-green">Magenta/Green</MenuItem>
+                    <MenuItem value="red-blue">Red/Blue</MenuItem>
+                    <MenuItem value="gray">Gray</MenuItem>
+                  </Select>
                 </Box>
               )}
               {!isRgb && (
@@ -11367,9 +11367,9 @@ function Show3D() {
                 </Typography>
               )}
               <Button size="small" sx={compactButton} disabled={!needsReset} onClick={handleDoubleClick} aria-label="Reset zoom and pan">Reset</Button>
-	          </Box>
-	          </Box>
-	          )}
+            </Box>
+          </Box>
+          )}
           <Box
             ref={canvasContainerRef}
             sx={{
@@ -11547,19 +11547,17 @@ function Show3D() {
                     overflowWrap: "anywhere",
                   }}
                 >
-
                   {panelTitleContent(panel)}{frameLabel ? ` · ${frameLabel}` : ""}{" "}
                   <span data-show3d-panel-frame-count="true" data-real-frame-count={total}>
                     {shown}/{total}
                   </span>
-
                 </Box>
               );
             })}
             {/* Per-panel "best frame" stars. One gold ★ button top-right of
                 each panel. Click toggles the star on the currently displayed
                 slice for THAT panel. Programmatic API: widget.star_panel(i). */}
-	            {panelChromeVisible && hasPanelChoices && visiblePanelIndices.map((i, slot) => {
+            {panelChromeVisible && hasPanelChoices && visiblePanelIndices.map((i, slot) => {
               const visibleCount = Math.max(1, visiblePanelCount || 1);
               const cols = panelColsForCount(visibleCount);
               const gap = visibleCount > 1 ? (panelGapPx) : 0;
@@ -11800,7 +11798,7 @@ function Show3D() {
               </Box>
             )}
             {/* Cursor readout overlay */}
-	            {panelChromeVisible && cursorInfo && (() => {
+            {panelChromeVisible && cursorInfo && (() => {
               const visibleCount = Math.max(1, visiblePanelCount || 1);
               const cols = panelColsForCount(visibleCount);
               const rows = Math.ceil(visibleCount / cols);
@@ -11836,7 +11834,7 @@ function Show3D() {
                 </Box>
               );
             })()}
-	            {panelChromeVisible && effectiveRoiActive && roiItems.length > 0 && showRoiResizeHint && (
+            {panelChromeVisible && effectiveRoiActive && roiItems.length > 0 && showRoiResizeHint && (
               <Box sx={{ position: "absolute", left: 6, top: 6, px: 0.6, py: 0.25, bgcolor: "rgba(0,0,0,0.45)", pointerEvents: "none" }}>
                 <Typography sx={{ fontSize: 9, color: "rgba(255,255,255,0.8)", lineHeight: 1.1 }}>
                   Hover ROI edge to resize
@@ -12077,7 +12075,7 @@ function Show3D() {
           )}
           {/* Image controls stay content-sized so multi-panel stacks do not
               create a large empty gutter between display and playback rows. */}
-	          {controlsVisible && (
+          {controlsVisible && (
             <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", columnGap: `${SPACING.SM}px`, rowGap: `${SPACING.XS}px`, alignItems: "flex-start", justifyContent: "flex-start", width: "fit-content", maxWidth: "100%", boxSizing: "border-box", flexWrap: "wrap" }}>
               <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: isMobileViewport ? "1 1 100%" : "0 0 auto", width: isMobileViewport ? "100%" : "auto", maxWidth: "100%", minWidth: 0, justifyContent: "center" }}>
                 {/* True-color figure stacks: hide colormap / intensity / Smooth;
@@ -12775,7 +12773,7 @@ function Show3D() {
               </Box>
             )}
             {/* FFT Controls - two rows with histogram on right (like Show4DSTEM) */}
-	            {controlsVisible && <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: "100%", maxWidth: canvasW, boxSizing: "border-box", flexWrap: "wrap" }}>
+            {controlsVisible && <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: "100%", maxWidth: canvasW, boxSizing: "border-box", flexWrap: "wrap" }}>
               {/* Left: two rows of controls */}
               <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
                 {/* Row 1: Scale + Auto */}
@@ -12901,7 +12899,7 @@ function Show3D() {
               </Box>
             )}
             {/* Kymograph Controls - two rows with histogram on right (mirror FFT) */}
-	            {controlsVisible && <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: "100%", maxWidth: canvasW, boxSizing: "border-box", flexWrap: "wrap" }}>
+            {controlsVisible && <Box sx={{ mt: `${SPACING.SM}px`, display: "flex", gap: `${SPACING.SM}px`, width: "100%", maxWidth: canvasW, boxSizing: "border-box", flexWrap: "wrap" }}>
               {/* Left: two rows of controls */}
               <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
                 {/* Row 1: Scale + Auto */}
@@ -12947,7 +12945,6 @@ function Show3D() {
       </Stack>
       </>
       )}
-
     </Box>
   );
 }
