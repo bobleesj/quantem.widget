@@ -943,37 +943,31 @@ fn histogram(@builtin(global_invocation_id) gid: vec3u) {
     encoder.copyBufferToBuffer(binsBuffer, 0, binsReadBuffer, 0, binsBytes);
     this.device.queue.submit([encoder.finish()]);
 
-    try {
-      await Promise.all([
-        binsReadBuffer.mapAsync(GPUMapMode.READ),
-        rangesReadBuffer.mapAsync(GPUMapMode.READ),
-      ]);
-      const rawBins = new Uint32Array(binsReadBuffer.getMappedRange().slice(0));
-      const rawRanges = new Float32Array(rangesReadBuffer.getMappedRange().slice(0));
-      binsReadBuffer.unmap();
-      rangesReadBuffer.unmap();
-
-      return validRegions.map((_, k) => {
-        const offset = k * 256;
-        let maxCount = 0;
-        for (let bin = 0; bin < 256; bin++) {
-          maxCount = Math.max(maxCount, rawBins[offset + bin]);
-        }
-        const bins = new Array<number>(256);
-        for (let bin = 0; bin < 256; bin++) {
-          bins[bin] = maxCount > 0 ? rawBins[offset + bin] / maxCount : 0;
-        }
-        return {
-          range: { min: rawRanges[k * 4], max: rawRanges[k * 4 + 1] },
-          bins,
-        };
-      });
-    } finally {
-      for (const buffer of paramsBuffers) buffer.destroy();
-      binsBuffer.destroy();
-      binsReadBuffer.destroy();
-      rangesReadBuffer.destroy();
-    }
+    for (const buffer of paramsBuffers) buffer.destroy();
+    binsBuffer.destroy();
+    await Promise.all([
+      binsReadBuffer.mapAsync(GPUMapMode.READ),
+      rangesReadBuffer.mapAsync(GPUMapMode.READ),
+    ]);
+    const rawBins = new Uint32Array(binsReadBuffer.getMappedRange().slice(0));
+    const rawRanges = new Float32Array(rangesReadBuffer.getMappedRange().slice(0));
+    binsReadBuffer.destroy();
+    rangesReadBuffer.destroy();
+    return validRegions.map((_, k) => {
+      const offset = k * 256;
+      let maxCount = 0;
+      for (let bin = 0; bin < 256; bin++) {
+        maxCount = Math.max(maxCount, rawBins[offset + bin]);
+      }
+      const bins = new Array<number>(256);
+      for (let bin = 0; bin < 256; bin++) {
+        bins[bin] = maxCount > 0 ? rawBins[offset + bin] / maxCount : 0;
+      }
+      return {
+        range: { min: rawRanges[k * 4], max: rawRanges[k * 4 + 1] },
+        bins,
+      };
+    });
   }
 
   /**
@@ -1044,19 +1038,15 @@ fn histogram(@builtin(global_invocation_id) gid: vec3u) {
     this.device.queue.submit([encoder.finish()]);
 
     const results: number[][] = indices.map(() => new Array(256).fill(0));
-    try {
-      await Promise.all(activeSlots.map(active => active.readBuffer.mapAsync(GPUMapMode.READ)));
-      for (const active of activeSlots) {
-        const rawBins = new Uint32Array(active.readBuffer.getMappedRange().slice(0));
-        active.readBuffer.unmap();
-        let maxCount = 0;
-        for (let bin = 0; bin < 256; bin++) if (rawBins[bin] > maxCount) maxCount = rawBins[bin];
-        const norm = new Array(256);
-        for (let bin = 0; bin < 256; bin++) norm[bin] = maxCount > 0 ? rawBins[bin] / maxCount : 0;
-        results[active.k] = norm;
-      }
-    } finally {
-      for (const active of activeSlots) active.readBuffer.destroy();
+    await Promise.all(activeSlots.map(active => active.readBuffer.mapAsync(GPUMapMode.READ)));
+    for (const active of activeSlots) {
+      const rawBins = new Uint32Array(active.readBuffer.getMappedRange().slice(0));
+      active.readBuffer.destroy();
+      let maxCount = 0;
+      for (let bin = 0; bin < 256; bin++) if (rawBins[bin] > maxCount) maxCount = rawBins[bin];
+      const norm = new Array(256);
+      for (let bin = 0; bin < 256; bin++) norm[bin] = maxCount > 0 ? rawBins[bin] / maxCount : 0;
+      results[active.k] = norm;
     }
     return results;
   }
