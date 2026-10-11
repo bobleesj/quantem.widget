@@ -2712,10 +2712,7 @@ function Show4DSTEM() {
   const rawVirtualImageVersionRef = React.useRef(0);
   const viGpuColormapRef = React.useRef<GPUColormapEngine | null>(null);
   const viGpuColormapDeviceRef = React.useRef<GPUDevice | null>(null);
-  const ensureViGpuColormap = React.useCallback((
-    backend: DetectorCompute,
-  ): GPUColormapEngine => {
-    const device = backend.getDevice();
+  const ensureViGpuColormap = React.useCallback((device: GPUDevice): GPUColormapEngine => {
     if (!viGpuColormapRef.current || viGpuColormapDeviceRef.current !== device) {
       viGpuColormapRef.current?.destroy();
       viGpuColormapRef.current = new GPUColormapEngine(device);
@@ -3499,24 +3496,30 @@ function Show4DSTEM() {
         return true;
       };
       let dpcBufferQueue: Promise<void> = Promise.resolve();
+      // Show a DPC or iDPC image straight from its GPU buffer, and read that same
+      // buffer back for the stats, histogram and FFT: the kernels are
+      // deterministic, so a second reduction would repeat the work (iDPC reruns
+      // its three FFTs). Null when the detector mask selects no pixel.
       const computeDpcBufferImage = async (
         backend: DetectorCompute,
         source: DpcGpuSource,
-      ): Promise<boolean> => {
-        const run = async (): Promise<boolean> => {
-          const engine = ensureViGpuColormap(backend);
-          await engine.getDevice().queue.onSubmittedWorkDone().catch(() => {});
+      ): Promise<{ values: Promise<Float32Array> } | null> => {
+        const run = async (): Promise<{ values: Promise<Float32Array> } | null> => {
+          const engine = ensureViGpuColormap(backend.getDevice());
           const result: { buffer: GPUBuffer; n: number; cleanup?: () => void } = source === "iDPC"
             ? await backend.maskedIDpcBuffer(dpcMask, detectorCols, scanRows, scanCols, 0, false)
             : backend.maskedDpcBuffer(dpcMask, detectorCols, source === "DPC_row" ? "row" : "col");
           const { buffer, n, cleanup } = result;
-          await engine.getDevice().queue.onSubmittedWorkDone().catch(() => {});
+          // WebGPU keeps buffers alive for work already submitted, so the
+          // temporaries go without waiting for the queue to drain.
           cleanup?.();
           if (n === 0) {
             buffer.destroy();
-            return false;
+            return null;
           }
           engine.adoptBuffer(VI_GPU_SLOT, buffer, scanCols, scanRows);
+          // Record the copy before any later image can replace (and destroy) this buffer.
+          const values = readGpuFloatBuffer(engine.getDevice(), buffer, scanRows * scanCols);
           viGpuImageRef.current = {
             source,
             slot: VI_GPU_SLOT,
@@ -3526,7 +3529,7 @@ function Show4DSTEM() {
             rawVersionAfter: rawVirtualImageVersionRef.current + 1,
           };
           setViGpuVersion(version => version + 1);
-          return true;
+          return { values };
         };
         const queued = dpcBufferQueue.then(run, run);
         dpcBufferQueue = queued.then(() => undefined, () => undefined);
@@ -3536,7 +3539,7 @@ function Show4DSTEM() {
         backend: DetectorCompute,
         mask: Uint32Array,
       ): boolean => {
-        const engine = ensureViGpuColormap(backend);
+        const engine = ensureViGpuColormap(backend.getDevice());
         const { buffer, n } = backend.maskedSumBuffer(mask);
         if (n === 0) {
           buffer.destroy();
@@ -3580,42 +3583,31 @@ function Show4DSTEM() {
       const computeH5ProductFirstRoi = async (
         mask: Uint32Array,
         generation: number,
-      ): Promise<{ data: Float32Array; displayed: boolean } | null> => {
+      ): Promise<Float32Array | null> => {
         const sourceUrl = h5ProductFirstSourceUrl();
         if (!sourceUrl || !show4DSTEMHasLocalFiles()) return null;
-        const productBatch = show4DSTEMOptionalGlobalInt("__QT_H5_PRODUCT_BATCH", 1, 16);
         const product = await loadShow4DSTEMLocalH5MaskedSum(sourceUrl, {
           scanRows,
           scanCols,
           embeddedBadPixelsJson: model.get("_offline_bad_px") as string | undefined,
           mask,
-          productBatch,
         });
         if (!product) return null;
         if (disposed || generation !== viRecomputeGen) {
           product.buffer.destroy();
           return null;
         }
-        const engine = ensureViGpuColormap({
-          getDevice: () => product.device,
-        } as unknown as DetectorCompute);
-        let displayed = false;
-        if (engine) {
-          engine.adoptBuffer(VI_GPU_SLOT, product.buffer, product.scanCols, product.scanRows);
-          viGpuImageRef.current = {
-            source: "roi",
-            slot: VI_GPU_SLOT,
-            width: product.scanCols,
-            height: product.scanRows,
-            rangeMode: "gpu",
-            rawVersionAfter: rawVirtualImageVersionRef.current + 1,
-          };
-          setViGpuVersion(version => version + 1);
-          displayed = true;
-        }
-        const data = await readGpuFloatBuffer(product.device, product.buffer, product.scanRows * product.scanCols);
-        if (!displayed) product.buffer.destroy();
-        return { data, displayed };
+        ensureViGpuColormap(product.device).adoptBuffer(VI_GPU_SLOT, product.buffer, product.scanCols, product.scanRows);
+        viGpuImageRef.current = {
+          source: "roi",
+          slot: VI_GPU_SLOT,
+          width: product.scanCols,
+          height: product.scanRows,
+          rangeMode: "gpu",
+          rawVersionAfter: rawVirtualImageVersionRef.current + 1,
+        };
+        setViGpuVersion(version => version + 1);
+        return await readGpuFloatBuffer(product.device, product.buffer, product.scanRows * product.scanCols);
       };
       let viRecomputeGen = 0;
       const recomputeVI = async () => {
@@ -3638,34 +3630,13 @@ function Show4DSTEM() {
             return;
           }
           if (!compute) return;
-          const displayed = await computeDpcBufferImage(compute!, source);
+          const displayed = await computeDpcBufferImage(compute, source);
           if (disposed || generation !== viRecomputeGen) return;
-          if (!displayed) {
-            clearViGpuDisplay();
-          } else {
-            void (async () => {
-              const dpc = await computeDpcImage(compute!, source);
-              if (disposed || generation !== viRecomputeGen || !dpc) return;
-              setWarmCacheEntry({
-                source,
-                data: dpc,
-                key: dpcWarmCacheKey(source),
-              });
-              publishVirtualImageBytes(new DataView(dpc.buffer));
-            })();
-            return;
-          }
-          const dpc = await computeDpcImage(compute!, source);
+          if (!displayed) clearViGpuDisplay();
+          const dpc = displayed ? await displayed.values : await computeDpcImage(compute, source);
           if (disposed || generation !== viRecomputeGen) return;
-          if (dpc) {
-            setWarmCacheEntry({
-              source,
-              data: dpc,
-              key: dpcWarmCacheKey(source),
-            });
-            publishVirtualImageBytes(new DataView(dpc.buffer));
-            return;
-          }
+          setWarmCacheEntry({ source, data: dpc, key: dpcWarmCacheKey(source) });
+          publishVirtualImageBytes(new DataView(dpc.buffer));
           return;
         }
         const mask = buildDetectorMask(model, detectorRows, detectorCols);
@@ -3673,22 +3644,16 @@ function Show4DSTEM() {
         if (serveWarmCacheEntry(roiKey, "roi")) {
           return;
         }
-        const preferH5ProductFirst = (globalThis as { __QT_H5_PRODUCT_FIRST_VI?: unknown }).__QT_H5_PRODUCT_FIRST_VI === true;
-        if (preferH5ProductFirst || !compute) {
+        // While a single local HDF5 volume is still loading, its masked sum
+        // streams from the files.
+        if (!compute) {
           const h5Product = await computeH5ProductFirstRoi(mask, generation);
-          if (disposed || generation !== viRecomputeGen) return;
-          if (h5Product) {
-            setWarmCacheEntry({
-              source: "roi",
-              data: h5Product.data,
-              key: roiKey,
-            });
-            publishVirtualImageBytes(new DataView(h5Product.data.buffer));
-            return;
-          }
+          if (disposed || generation !== viRecomputeGen || !h5Product) return;
+          setWarmCacheEntry({ source: "roi", data: h5Product, key: roiKey });
+          publishVirtualImageBytes(new DataView(h5Product.buffer));
+          return;
         }
-        if (!compute) return;
-        const displayed = computeRoiBufferImage(compute!, mask);
+        const displayed = computeRoiBufferImage(compute, mask);
         if (!displayed) {
           clearViGpuDisplay();
         }
@@ -3858,7 +3823,7 @@ function Show4DSTEM() {
         // full exact masked sum; subsequent geometry changes use exact deltas.
         const updateRoiCompareGpuSlots = async (): Promise<boolean> => {
           if (source !== "roi") return false;
-          const engine = compute ? ensureViGpuColormap(compute) : null;
+          const engine = compute ? ensureViGpuColormap(compute.getDevice()) : null;
           if (!engine) return false;
           const detectorMask = buildDetectorMask(model, detectorRows, detectorCols);
           let slotCursor = 0;
