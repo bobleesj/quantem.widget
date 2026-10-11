@@ -1,4 +1,5 @@
 /** Show3D playback: the frame a key moves to, the prewarm order, the fps clamp and the CPU colormap fills of a frame. */
+import { packedLut } from "../display/displayMath";
 import { signedLog1p } from "../display/stats";
 
 /**
@@ -93,8 +94,43 @@ export const playbackIntervalMs = (value: number) => {
   return 1000 / fps;
 };
 
-/** Fused single-pass render: optional log scale + normalize + colormap → RGBA.
- *  Eliminates multiple data passes during playback for maximum frame rate. */
+/** The display window of a CPU playback colormap pass, with the LUT packed one RGBA word per entry. */
+type PlaybackWindow = { lut: Uint32Array; vmin: number; vmax: number; logScale: boolean };
+
+/**
+ * One row of the CPU playback colormap: output pixel k (0 to count - 1, written from pixel `targetStart`
+ * of `pixels`) shows `data[sourceStart + (columnMap ? columnMap[k] : k)]`. Log scale is the signed log1p,
+ * and the LUT entry the float64 floor of (v - vmin) * 255 / (vmax - vmin), clamped at both ends. Every
+ * CPU playback renderer draws with this one loop, so a scaled, packed or full frame colors alike; a
+ * pixel is one 32-bit store of the packed LUT entry.
+ */
+function colormapPlaybackRow(
+  data: Float32Array,
+  sourceStart: number,
+  columnMap: Uint32Array | null,
+  count: number,
+  pixels: Uint32Array,
+  targetStart: number,
+  { lut, vmin, vmax, logScale }: PlaybackWindow,
+): void {
+  const range = vmax - vmin;
+  const invRange = range > 0 ? 255 / range : 0;
+  const entry = (raw: number) => {
+    const value = logScale ? signedLog1p(raw) : raw;
+    return value <= vmin ? 0 : value >= vmax ? 255 : ((value - vmin) * invRange) | 0;
+  };
+  // Separate loops keep the contiguous rows free of a per-pixel column-map branch.
+  if (columnMap) {
+    for (let k = 0; k < count; k++) pixels[targetStart + k] = lut[entry(data[sourceStart + columnMap[k]])];
+  } else {
+    for (let k = 0; k < count; k++) pixels[targetStart + k] = lut[entry(data[sourceStart + k])];
+  }
+}
+
+/** The RGBA bytes of an ImageData as one 32-bit word per pixel. */
+const pixelWords = (rgba: Uint8ClampedArray) => new Uint32Array(rgba.buffer, rgba.byteOffset, rgba.length >> 2);
+
+/** Colormap a whole frame into RGBA in one pass: the CPU playback path, used without WebGPU. */
 export function renderFramePlayback(
   data: Float32Array,
   rgba: Uint8ClampedArray,
@@ -103,32 +139,7 @@ export function renderFramePlayback(
   vmax: number,
   logScale: boolean,
 ): void {
-  const range = vmax - vmin;
-  const invRange = range > 0 ? 255 / range : 0;
-  if (logScale) {
-    for (let i = 0; i < data.length; i++) {
-      const d = data[i];
-      const v = signedLog1p(d);
-      const idx = v <= vmin ? 0 : v >= vmax ? 255 : ((v - vmin) * invRange) | 0;
-      const j = i << 2;
-      const k = idx * 3;
-      rgba[j] = lut[k];
-      rgba[j + 1] = lut[k + 1];
-      rgba[j + 2] = lut[k + 2];
-      rgba[j + 3] = 255;
-    }
-  } else {
-    for (let i = 0; i < data.length; i++) {
-      const v = data[i];
-      const idx = v <= vmin ? 0 : v >= vmax ? 255 : ((v - vmin) * invRange) | 0;
-      const j = i << 2;
-      const k = idx * 3;
-      rgba[j] = lut[k];
-      rgba[j + 1] = lut[k + 1];
-      rgba[j + 2] = lut[k + 2];
-      rgba[j + 3] = 255;
-    }
-  }
+  colormapPlaybackRow(data, 0, null, data.length, pixelWords(rgba), 0, { lut: packedLut(lut), vmin, vmax, logScale });
 }
 
 /** Render one packed multi-panel slice into RGBA without allocating a panel copy.
@@ -151,28 +162,18 @@ export function renderPackedPanelPlayback(
   vmax: number,
   logScale: boolean,
 ): void {
-  const range = vmax - vmin;
-  const invRange = range > 0 ? 255 / range : 0;
-  let dst = 0;
+  const pixels = pixelWords(rgba);
+  const displayWindow = { lut: packedLut(lut), vmin, vmax, logScale };
   for (let row = 0; row < panelHeight; row++) {
-    let src = row * sourceWidth + sourceX0;
-    const end = src + panelWidth;
-    for (; src < end; src++) {
-      const raw = source[src];
-      const value = logScale
-        ? signedLog1p(raw)
-        : raw;
-      const idx = value <= vmin ? 0 : value >= vmax ? 255 : ((value - vmin) * invRange) | 0;
-      const lutIdx = idx * 3;
-      rgba[dst] = lut[lutIdx];
-      rgba[dst + 1] = lut[lutIdx + 1];
-      rgba[dst + 2] = lut[lutIdx + 2];
-      rgba[dst + 3] = 255;
-      dst += 4;
-    }
+    colormapPlaybackRow(source, row * sourceWidth + sourceX0, null, panelWidth, pixels, row * panelWidth, displayWindow);
   }
 }
 
+/**
+ * Colormap a frame straight into an outW x outH canvas image, nearest neighbour: output pixel (x, y)
+ * shows source pixel yMap[y] + xMap[x] (yMap holds row offsets). Skips the full-size pass a
+ * downscaled view would otherwise colormap and then shrink.
+ */
 export function renderFrameScaledPlayback(
   data: Float32Array,
   rgba: Uint8ClampedArray,
@@ -185,21 +186,7 @@ export function renderFrameScaledPlayback(
   vmax: number,
   logScale: boolean,
 ): void {
-  const range = vmax - vmin;
-  const invRange = range > 0 ? 255 / range : 0;
-  for (let y = 0; y < outH; y++) {
-    const srcRow = yMap[y];
-    const outRow = y * outW;
-    for (let x = 0; x < outW; x++) {
-      let v = data[srcRow + xMap[x]];
-      if (logScale) v = signedLog1p(v);
-      const idx = v <= vmin ? 0 : v >= vmax ? 255 : ((v - vmin) * invRange) | 0;
-      const j = (outRow + x) << 2;
-      const k = idx * 3;
-      rgba[j] = lut[k];
-      rgba[j + 1] = lut[k + 1];
-      rgba[j + 2] = lut[k + 2];
-      rgba[j + 3] = 255;
-    }
-  }
+  const pixels = pixelWords(rgba);
+  const displayWindow = { lut: packedLut(lut), vmin, vmax, logScale };
+  for (let y = 0; y < outH; y++) colormapPlaybackRow(data, yMap[y], xMap, outW, pixels, y * outW, displayWindow);
 }
