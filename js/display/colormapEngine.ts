@@ -3,7 +3,7 @@
 // live in their own modules; the engine is the one object widgets call.
 import { DirectRenderer } from "./directRender";
 import { AVERAGE_SHADER, BLIT_SHADER, COLORMAP_SHADER, RGB_PASSTHROUGH_SHADER, SCALED_COLORMAP_SHADER, SCALED_UINT8_COLORMAP_SHADER } from "./displayShaders";
-import { getHardwareGPUDevice, onGPULost } from "./device";
+import { getHardwareGPUDevice } from "./device";
 import { GPURanges } from "./gpuRange";
 import { computePipeline, renderPipeline } from "./pipelines";
 import { VolumeSlices } from "./volumeSlice";
@@ -729,16 +729,4 @@ export async function createGPUColormapEngine(): Promise<GPUColormapEngine | nul
     return null;
   }
   return new GPUColormapEngine(device);
-}
-
-let gpuColormapEngine: GPUColormapEngine | null = null;
-// An engine on a lost device can never paint again; the next caller rebuilds
-// one, or gets null and draws with the CPU path once WebGPU is off for the page.
-onGPULost(() => { gpuColormapEngine = null; });
-
-/** Get or create the singleton colormap engine, or null without hardware WebGPU. */
-export async function getGPUColormapEngine(): Promise<GPUColormapEngine | null> {
-  if (gpuColormapEngine) return gpuColormapEngine;
-  gpuColormapEngine = await createGPUColormapEngine();
-  return gpuColormapEngine;
 }
