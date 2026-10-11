@@ -735,6 +735,7 @@ def test_qem_bundle_links_acquisitions_for_a_streaming_viewer(tmp_path):
 
 def test_compute_ssb_accepts_a_1024_scan(monkeypatch):
     # B-1: the scan guard allowed 128, 256 and 512, although quantem.gpu reconstructs 1024 x 1024 scans.
+    pytest.importorskip("quantem.gpu", reason="the SSB phase also takes quantem.gpu's centre of mass")
     import types
 
     from quantem.widget.show4dstem import widget as widget_module

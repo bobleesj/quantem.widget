@@ -8,6 +8,7 @@ follow slider requests, write the calibration and star files, and export the bro
 exact bright-field counts.
 """
 
+import importlib.util
 import json
 import math
 import re
@@ -55,7 +56,9 @@ def test_a_phase_array_is_shown_as_given_with_the_session_controls_explained():
 
 
 @pytest.mark.parametrize("installed, hint, says, never", [
-    (True, INSTALL_CUDA, "quantem.gpu.SSB.open(", "pip install"),         # quantem.gpu here: open a session
+    # quantem.gpu here: open a session (the note inspects quantem.gpu's session type, so the package must be present)
+    pytest.param(True, INSTALL_CUDA, "quantem.gpu.SSB.open(", "pip install",
+                 marks=pytest.mark.skipif(importlib.util.find_spec("quantem.gpu") is None, reason="needs quantem.gpu installed")),
     (False, INSTALL_CUDA, INSTALL_CUDA, INSTALL_MPS),                      # NVIDIA machine without it
     (False, INSTALL_MPS, INSTALL_MPS, INSTALL_CUDA),                       # Apple silicon without it
     (False, None, NO_GPU_PATH, "pip install"),                             # no GPU route on this machine
