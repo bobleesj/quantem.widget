@@ -303,6 +303,10 @@ const MIN_PLOT_WIDTH = 220;
 const MIN_PLOT_HEIGHT = 220;
 const MAX_PLOT_HEIGHT = 960;
 const FFT_DISPLAY_RANGE: [number, number] = [0, 1];
+// A panel never zoomed shows the whole image, where the center is unused. One
+// shared array keeps its props equal across renders, so a hover elsewhere in
+// the widget does not redraw every panel.
+const UNZOOMED_VIEW_CENTER: number[] = [];
 let snapshotFftWebGpuUnavailable = false;
 let snapshotFftWebGpuInitPromise: Promise<DisplayFFT | null> | null = null;
 const typography = {
@@ -1013,19 +1017,24 @@ function extractPackedImage(
 }
 
 // Colours a float image through the LUT at its native size, so callers can
-// scale it with drawImage. The window is displayRange when it is a valid
-// interval, otherwise the finite extent; non-finite pixels stay transparent.
+// scale it with drawImage, or null when there are no pixels. The window is
+// displayRange when it is a valid interval, otherwise the finite extent;
+// non-finite pixels stay transparent.
 function floatImageBitmap(
-  ctx: CanvasRenderingContext2D,
   data: Float32Array,
   height: number,
   width: number,
   lut: Uint8Array,
   displayRange?: [number, number],
-): HTMLCanvasElement {
+): HTMLCanvasElement | null {
+  if (!data.length || height <= 0 || width <= 0) return null;
   const [vmin, vmax] = displayRange && Number.isFinite(displayRange[0]) && Number.isFinite(displayRange[1]) && displayRange[0] < displayRange[1]
     ? displayRange
     : finiteExtent(data, [0, 1]);
+  const bitmap = document.createElement("canvas");
+  bitmap.width = width;
+  bitmap.height = height;
+  const ctx = bitmap.getContext("2d")!;
   const imageData = ctx.createImageData(width, height);
   const scale = 255 / Math.max(vmax - vmin, 1e-12);
   for (let i = 0; i < width * height; i += 1) {
@@ -1038,40 +1047,37 @@ function floatImageBitmap(
     imageData.data[i * 4 + 2] = lut[lutIdx + 2];
     imageData.data[i * 4 + 3] = finite ? 255 : 0;
   }
-  const bitmap = document.createElement("canvas");
-  bitmap.width = width;
-  bitmap.height = height;
-  bitmap.getContext("2d")?.putImageData(imageData, 0, 0);
+  ctx.putImageData(imageData, 0, 0);
   return bitmap;
 }
 
+// Draws an already colormapped bitmap at the view's zoom and pan, so a view
+// change costs one drawImage instead of recolouring every pixel.
 function drawFloatImage(
   canvas: HTMLCanvasElement,
-  data: Float32Array,
-  height: number,
-  width: number,
+  bitmap: HTMLCanvasElement | null,
   line: ProfilePoint[],
-  lut: Uint8Array,
   colors: { bg: string; border: string; accent: string; text: string },
   view: ImageViewState = { zoom: 1, panX: 0, panY: 0 },
   drawSizeLabel = true,
-  displayRange?: [number, number],
   drawImageBorder = true,
 ): void {
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   const cssW = Math.max(1, Math.round(rect.width));
   const cssH = Math.max(1, Math.round(rect.height));
-  canvas.width = Math.round(cssW * dpr);
-  canvas.height = Math.round(cssH * dpr);
+  const pixelWidth = Math.round(cssW * dpr);
+  const pixelHeight = Math.round(cssH * dpr);
+  if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+  if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = colors.bg;
   ctx.fillRect(0, 0, cssW, cssH);
-  if (!data.length || height <= 0 || width <= 0) return;
+  if (!bitmap) return;
 
-  const bitmap = floatImageBitmap(ctx, data, height, width, lut, displayRange);
+  const { width, height } = bitmap;
   const fit = Math.min(cssW / width, cssH / height);
   const zoom = clampImageZoom(view.zoom);
   const drawW = Math.max(1, width * fit * zoom);
@@ -1123,14 +1129,14 @@ function drawFloatThumbnail(
   colors: { bgAlt: string; border: string; accent: string },
   displayRange?: [number, number],
 ): void {
-  if (!data.length || height <= 0 || width <= 0 || targetW <= 0 || targetH <= 0) return;
+  const bitmap = floatImageBitmap(data, height, width, lut, displayRange);
+  if (!bitmap || targetW <= 0 || targetH <= 0) return;
   ctx.save();
   ctx.fillStyle = colors.bgAlt;
   ctx.globalAlpha = 0.95;
   ctx.fillRect(x, y, targetW, targetH);
   ctx.globalAlpha = 1;
 
-  const bitmap = floatImageBitmap(ctx, data, height, width, lut, displayRange);
   const fit = Math.max(targetW / width, targetH / height);
   const drawW = Math.max(1, width * fit);
   const drawH = Math.max(1, height * fit);
@@ -1437,18 +1443,25 @@ function InteractiveFloatCanvas({
     if (viewRafRef.current !== null) window.cancelAnimationFrame(viewRafRef.current);
   }, []);
 
+  // Colormapping touches every pixel, so it runs once per image, window and LUT;
+  // a wheel or pan step only redraws this bitmap.
+  const bitmap = React.useMemo(
+    () => floatImageBitmap(data, height, width, lut, displayRange),
+    [data, displayRange, height, lut, width],
+  );
+
   React.useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const localView = cleanView(currentApiView());
     viewRef.current = localView;
-    drawFloatImage(canvas, data, height, width, [], lut, {
+    drawFloatImage(canvas, bitmap, [], {
       bg: colors.bgAlt,
       border: selected ? colors.accent : colors.border,
       accent: colors.accent,
       text: colors.text,
-    }, localView, false, displayRange, imageBorderVisible);
-  }, [cleanView, colors, currentApiView, data, displayRange, drawTick, height, imageBorderVisible, lut, selected, width]);
+    }, localView, false, imageBorderVisible);
+  }, [bitmap, cleanView, colors, currentApiView, drawTick, imageBorderVisible, selected]);
 
   React.useEffect(() => {
     const overlay = overlayRef.current;
@@ -3905,16 +3918,20 @@ function Show1DWidget() {
     return () => { canceled = true; };
   }, [exportPayload, exportPayloadId, exportPayloadFilename, setExportRequest]);
 
+  const profileBitmap = React.useMemo(
+    () => hasProfileImage ? floatImageBitmap(profileImageData, profileImageHeight, profileImageWidth, imageLut) : null,
+    [hasProfileImage, imageLut, profileImageData, profileImageHeight, profileImageWidth],
+  );
   React.useEffect(() => {
     const canvas = profileCanvasRef.current;
-    if (!canvas || !hasProfileImage) return;
-    drawFloatImage(canvas, profileImageData, profileImageHeight, profileImageWidth, profileLine ?? [], imageLut, {
+    if (!canvas || !profileBitmap) return;
+    drawFloatImage(canvas, profileBitmap, profileLine ?? [], {
       bg: themeColors.bgAlt,
       border: themeColors.border,
       accent: themeColors.accent,
       text: themeColors.text,
     });
-  }, [hasProfileImage, imageLut, profileImageData, profileImageHeight, profileImageWidth, profileLine, themeColors]);
+  }, [profileBitmap, profileLine, themeColors]);
 
   React.useLayoutEffect(() => {
     const canvas = canvasRef.current;
@@ -5443,9 +5460,9 @@ function Show1DWidget() {
                           pixelSize={Number.isFinite(pixelSize) && pixelSize > 0 ? pixelSize : 1}
                           pixelUnit={pixelSize > 0 ? pixelUnit : "px"}
                           imageViewZoom={snapshotLinkViews ? snapshotRealSpaceZoom : (panelImageViews[imageLabel]?.zoom ?? 1)}
-                          imageViewCenter={snapshotLinkViews ? snapshotRealSpaceCenter : (panelImageViews[imageLabel]?.center ?? [0.5, 0.5])}
+                          imageViewCenter={snapshotLinkViews ? snapshotRealSpaceCenter : (panelImageViews[imageLabel]?.center ?? UNZOOMED_VIEW_CENTER)}
                           fftViewZoom={snapshotLinkViews ? snapshotFftZoom : (panelFftViews[imageLabel]?.zoom ?? 1)}
-                          fftViewCenter={snapshotLinkViews ? snapshotFftCenter : (panelFftViews[imageLabel]?.center ?? [0.5, 0.5])}
+                          fftViewCenter={snapshotLinkViews ? snapshotFftCenter : (panelFftViews[imageLabel]?.center ?? UNZOOMED_VIEW_CENTER)}
                           profileActive={Boolean(showSnapshotProfile)}
                           profileLine={snapshotProfileLine ?? []}
                           fftCacheRef={snapshotFftCacheRef}
