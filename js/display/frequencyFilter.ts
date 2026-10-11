@@ -2,6 +2,7 @@
 
 import { getHardwareGPUDevice, requireHardwareGPUDevice } from "./device";
 import { fft2d, nextPow2, requireWebGPUFFT } from "./fft";
+import { computePipeline } from "./pipelines";
 
 type FrequencyFilterMode = "none" | "lowpass" | "highpass" | "bandpass";
 
@@ -168,7 +169,7 @@ async function applyFrequencyFilterWebGPUResident(
   device.queue.writeBuffer(paramsBuffer, 0, params);
   let pipeline = maskPipelines.get(device);
   if (!pipeline) {
-    pipeline = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: FREQUENCY_MASK_SHADER }), entryPoint: "main" } });
+    pipeline = computePipeline(device, FREQUENCY_MASK_SHADER);
     maskPipelines.set(device, pipeline);
   }
   const encoder = device.createCommandEncoder();

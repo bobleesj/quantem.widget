@@ -4,6 +4,7 @@
 import type { GPUColormapEngine, GPUSlot } from "./colormapEngine";
 import { DIRECT_GRID_COLORMAP_SHADER, DIRECT_SLOT_COLORMAP_SHADER, DIRECT_SLOT_GPU_RANGE_SHADER, PACKED_PANEL_TRANSFORM_SHADER } from "./displayShaders";
 import { flushParamsBufQueue, paramsBufQueue, type GPURanges } from "./gpuRange";
+import { computePipeline, renderPipeline } from "./pipelines";
 
 function shouldSmoothDirectSample(
   smooth: boolean | undefined,
@@ -52,58 +53,19 @@ export class DirectRenderer {
   }
 
   private ensureDirectGridPipeline(format: GPUTextureFormat): void {
-    if (this.directGridPipeline) return;
-    const module = this.device.createShaderModule({ code: DIRECT_GRID_COLORMAP_SHADER });
-    this.directGridPipeline = this.device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs" },
-      fragment: {
-        module,
-        entryPoint: "fs",
-        targets: [{ format }],
-      },
-      primitive: { topology: "triangle-list" },
-    });
+    this.directGridPipeline ??= renderPipeline(this.device, DIRECT_GRID_COLORMAP_SHADER, format);
   }
 
   private ensureDirectSlotPipeline(format: GPUTextureFormat): void {
-    if (this.directSlotPipeline) return;
-    const module = this.device.createShaderModule({ code: DIRECT_SLOT_COLORMAP_SHADER });
-    this.directSlotPipeline = this.device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs" },
-      fragment: {
-        module,
-        entryPoint: "fs",
-        targets: [{ format }],
-      },
-      primitive: { topology: "triangle-list" },
-    });
+    this.directSlotPipeline ??= renderPipeline(this.device, DIRECT_SLOT_COLORMAP_SHADER, format);
   }
 
   private ensureDirectSlotGpuRangePipeline(format: GPUTextureFormat): void {
-    if (this.directSlotGpuRangePipeline) return;
-    const module = this.device.createShaderModule({ code: DIRECT_SLOT_GPU_RANGE_SHADER });
-    const pipeline = this.device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs" },
-      fragment: {
-        module,
-        entryPoint: "fs",
-        targets: [{ format }],
-      },
-      primitive: { topology: "triangle-list" },
-    });
-    this.directSlotGpuRangePipeline = pipeline;
+    this.directSlotGpuRangePipeline ??= renderPipeline(this.device, DIRECT_SLOT_GPU_RANGE_SHADER, format);
   }
 
   private ensurePackedPanelTransformPipeline(): void {
-    if (this.packedPanelTransformPipeline) return;
-    const module = this.device.createShaderModule({ code: PACKED_PANEL_TRANSFORM_SHADER });
-    this.packedPanelTransformPipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
-    });
+    this.packedPanelTransformPipeline ??= computePipeline(this.device, PACKED_PANEL_TRANSFORM_SHADER);
   }
 
   /**

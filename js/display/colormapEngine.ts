@@ -5,6 +5,7 @@ import { DirectRenderer } from "./directRender";
 import { AVERAGE_SHADER, BLIT_SHADER, COLORMAP_SHADER, RGB_PASSTHROUGH_SHADER, SCALED_COLORMAP_SHADER, SCALED_UINT8_COLORMAP_SHADER } from "./displayShaders";
 import { getHardwareGPUDevice, onGPULost } from "./device";
 import { GPURanges } from "./gpuRange";
+import { computePipeline, renderPipeline } from "./pipelines";
 import { VolumeSlices } from "./volumeSlice";
 
 export type GPUBufferOwnership = "owned" | "borrowed";
@@ -148,39 +149,19 @@ export class GPUColormapEngine {
   }
 
   private ensurePipeline(): void {
-    if (this.pipeline) return;
-    const module = this.device.createShaderModule({ code: COLORMAP_SHADER });
-    this.pipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
-    });
+    this.pipeline ??= computePipeline(this.device, COLORMAP_SHADER);
   }
 
   ensureScaledPipeline(): void {
-    if (this.scaledPipeline) return;
-    const module = this.device.createShaderModule({ code: SCALED_COLORMAP_SHADER });
-    this.scaledPipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
-    });
+    this.scaledPipeline ??= computePipeline(this.device, SCALED_COLORMAP_SHADER);
   }
 
   ensureScaledUint8Pipeline(): void {
-    if (this.scaledUint8Pipeline) return;
-    const module = this.device.createShaderModule({ code: SCALED_UINT8_COLORMAP_SHADER });
-    this.scaledUint8Pipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
-    });
+    this.scaledUint8Pipeline ??= computePipeline(this.device, SCALED_UINT8_COLORMAP_SHADER);
   }
 
   private ensureAveragePipeline(): void {
-    if (this.avgPipeline) return;
-    const module = this.device.createShaderModule({ code: AVERAGE_SHADER });
-    this.avgPipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
-    });
+    this.avgPipeline ??= computePipeline(this.device, AVERAGE_SHADER);
   }
 
   /**
@@ -470,17 +451,7 @@ export class GPUColormapEngine {
   }
 
   ensureBlitPipeline(format: GPUTextureFormat): void {
-    if (this.blitPipeline) return;
-    const module = this.device.createShaderModule({ code: BLIT_SHADER });
-    this.blitPipeline = this.device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs" },
-      fragment: {
-        module, entryPoint: "fs",
-        targets: [{ format }],
-      },
-      primitive: { topology: "triangle-list" },
-    });
+    this.blitPipeline ??= renderPipeline(this.device, BLIT_SHADER, format);
   }
 
   /**
@@ -540,12 +511,7 @@ export class GPUColormapEngine {
   }
 
   private ensureRgbPipeline(): void {
-    if (this.rgbPipeline) return;
-    const module = this.device.createShaderModule({ code: RGB_PASSTHROUGH_SHADER });
-    this.rgbPipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
-    });
+    this.rgbPipeline ??= computePipeline(this.device, RGB_PASSTHROUGH_SHADER);
   }
 
   /**

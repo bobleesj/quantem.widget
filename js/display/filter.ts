@@ -27,6 +27,7 @@
 //                       max(1, sigma*0.85), inverse, * scale/30.
 
 import { getHardwareGPUDevice, onGPULost } from "./device";
+import { computePipeline } from "./pipelines";
 
 /** Filter modes the browser can evaluate; the denoise menus offer exactly these. */
 const BROWSER_FILTER_MODES = new Set(["none", "gaussian", "anscombe"]);
@@ -416,18 +417,9 @@ class GPUDisplayFilterEngine {
 
   constructor(device: GPUDevice) {
     this.device = device;
-    this.gaussPipeline = device.createComputePipeline({
-      layout: "auto",
-      compute: { module: device.createShaderModule({ code: GAUSS_SHADER }), entryPoint: "main" },
-    });
-    this.resamplePipeline = device.createComputePipeline({
-      layout: "auto",
-      compute: { module: device.createShaderModule({ code: RESAMPLE_SHADER }), entryPoint: "main" },
-    });
-    this.anscombePipeline = device.createComputePipeline({
-      layout: "auto",
-      compute: { module: device.createShaderModule({ code: ANSCOMBE_SHADER }), entryPoint: "main" },
-    });
+    this.gaussPipeline = computePipeline(device, GAUSS_SHADER);
+    this.resamplePipeline = computePipeline(device, RESAMPLE_SHADER);
+    this.anscombePipeline = computePipeline(device, ANSCOMBE_SHADER);
   }
 
   /** Transient float32 storage buffer for one stage output, destroyed by releasePlanes(). */

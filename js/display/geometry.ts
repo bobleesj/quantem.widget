@@ -3,6 +3,7 @@
 
 import { getHardwareGPUDevice, requireHardwareGPUDevice } from "./device";
 import { findFFTPeak } from "./fft";
+import { computePipeline } from "./pipelines";
 
 type MaskedCropRegion = {
   row: number;
@@ -492,7 +493,7 @@ async function runFloatKernel(
   if (!pipelines) kernelPipelines.set(device, pipelines = new Map());
   let pipeline = pipelines.get(shader);
   if (!pipeline) {
-    pipeline = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: shader }), entryPoint: "main" } });
+    pipeline = computePipeline(device, shader);
     pipelines.set(shader, pipeline);
   }
   const bindGroup = device.createBindGroup({

@@ -3,6 +3,7 @@
 import { validateUint32ImageView, type Uint32ImageView } from "./borrowedImage";
 import type { GPUColormapEngine, GPUSlot } from "./colormapEngine";
 import { DISPLAY_NORMALIZE_WGSL, RANGE_REDUCE_WGSL } from "./displayShaders";
+import { computePipeline } from "./pipelines";
 
 // Tiny per-pass GPU buffers (e.g. 32B region uniforms) that must live until
 // the GPU has consumed them. We push them here when recorded into an encoder
@@ -33,7 +34,7 @@ export class GPURanges {
   recordLiveRange(encoder: GPUCommandEncoder, slot: GPUSlot, logScale: boolean): void {
     this.ensureRangePipeline();
     if (!this.rangeFinishPipeline) {
-      const module = this.device.createShaderModule({ code: /* wgsl */ `
+      this.rangeFinishPipeline = computePipeline(this.device, /* wgsl */ `
 struct Config { count: u32, groups: u32, logScale: u32, _pad: u32 };
 @group(0) @binding(0) var<storage, read> partials: array<vec2<f32>>;
 @group(0) @binding(1) var<uniform> config: Config;
@@ -69,10 +70,7 @@ fn reduce(@builtin(local_invocation_index) lane: u32) {
     } else { output[0] = vec4<f32>(0.0); }
   }
 }
-` });
-      this.rangeFinishPipeline = this.device.createComputePipeline({
-        layout: "auto", compute: { module, entryPoint: "reduce" },
-      });
+`, "reduce");
     }
     if (!slot.liveRange) {
       const groups = Math.min(Math.ceil(slot.count / this.RANGE_WG_SIZE), this.device.limits.maxComputeWorkgroupsPerDimension);
@@ -166,11 +164,7 @@ fn reduce(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocation_i
   }
 }
 `;
-    const module = this.device.createShaderModule({ code });
-    this.rangePipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "reduce" },
-    });
+    this.rangePipeline = computePipeline(this.device, code, "reduce");
   }
 
   private ensureRangeUint8Pipeline(): void {
@@ -218,11 +212,7 @@ fn reduce(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocation_i
   }
 }
 `;
-    const module = this.device.createShaderModule({ code });
-    this.rangeUint8Pipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "reduce" },
-    });
+    this.rangeUint8Pipeline = computePipeline(this.device, code, "reduce");
   }
 
   /**
@@ -393,10 +383,7 @@ fn finalize(@builtin(local_invocation_index) lid: u32) {
   store_range(lid, reduce_pair(lid, low, high));
 }
 `;
-    const module = this.device.createShaderModule({ code });
-    const pipeline = (entryPoint: string) => this.device.createComputePipeline({
-      layout: "auto", compute: { module, entryPoint },
-    });
+    const pipeline = (entryPoint: string) => computePipeline(this.device, code, entryPoint);
     if (integerCounts) {
       this.rangeU32Pipelines = [pipeline("reduce"), pipeline("reduce_partials"), pipeline("finalize")];
       return;
@@ -451,11 +438,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   rgba[out_idx] = rgb | 0xFF000000u;
 }
 `;
-    const module = this.device.createShaderModule({ code });
-    this.colormapRangePipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
-    });
+    this.colormapRangePipeline = computePipeline(this.device, code);
   }
 
   ensureSlotRangeBuffer(slot: GPUSlot): GPUBuffer {
@@ -746,15 +729,8 @@ fn clear_bins(@builtin(global_invocation_id) gid: vec3u) {
   if (gid.x < 256u) { atomicStore(&bins[gid.x], 0u); }
 }
 `;
-    const module = this.device.createShaderModule({ code });
-    this.histPipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "histogram" },
-    });
-    this.histClearPipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "clear_bins" },
-    });
+    this.histPipeline = computePipeline(this.device, code, "histogram");
+    this.histClearPipeline = computePipeline(this.device, code, "clear_bins");
   }
 
   private ensureHistUint8Pipeline(): void {
@@ -789,11 +765,7 @@ fn histogram(@builtin(global_invocation_id) gid: vec3u) {
   atomicAdd(&bins[bin], 1u);
 }
 `;
-    const module = this.device.createShaderModule({ code });
-    this.histUint8Pipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "histogram" },
-    });
+    this.histUint8Pipeline = computePipeline(this.device, code, "histogram");
   }
 
   private ensureHistRegionPipeline(): void {
@@ -825,11 +797,7 @@ fn histogram(@builtin(global_invocation_id) gid: vec3u) {
   atomicAdd(&bins[bin], 1u);
 }
 `;
-    const module = this.device.createShaderModule({ code });
-    this.histRegionPipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "histogram" },
-    });
+    this.histRegionPipeline = computePipeline(this.device, code, "histogram");
   }
 
   /**

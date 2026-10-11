@@ -2,6 +2,7 @@
 // is uploaded once and each scrub runs one slice + colormap compute pass.
 import type { GPUColormapEngine } from "./colormapEngine";
 import { DISPLAY_NORMALIZE_WGSL } from "./displayShaders";
+import { computePipeline } from "./pipelines";
 
 // Smallest zoom of a volume slice view, Show3DSlices' MIN_ZOOM. The area
 // average reads every source pixel an output pixel covers, (fullW / canvasW /
@@ -198,31 +199,17 @@ export class VolumeSlices {
   }
 
   private ensureVolumePipeline(): void {
-    if (this.volumePipeline) return;
-    const module = this.device.createShaderModule({ code: volumeSliceShader("buffer") });
-    this.volumePipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
+    this.volumePipeline ??= computePipeline(this.device, volumeSliceShader("buffer"));
+    this.volParamsBuffer ??= this.device.createBuffer({
+      size: VOLUME_PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    if (!this.volParamsBuffer) {
-      this.volParamsBuffer = this.device.createBuffer({
-        size: VOLUME_PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-    }
   }
 
   private ensureVolumeTexturePipeline(): void {
-    if (this.volumeTexturePipeline) return;
-    const module = this.device.createShaderModule({ code: volumeSliceShader("texture") });
-    this.volumeTexturePipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
+    this.volumeTexturePipeline ??= computePipeline(this.device, volumeSliceShader("texture"));
+    this.volParamsBuffer ??= this.device.createBuffer({
+      size: VOLUME_PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    if (!this.volParamsBuffer) {
-      this.volParamsBuffer = this.device.createBuffer({
-        size: VOLUME_PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-    }
   }
 
   /**
