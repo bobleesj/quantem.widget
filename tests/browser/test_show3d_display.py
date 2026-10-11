@@ -417,9 +417,9 @@ def drifted_blobs(rows: int, cols: int, row_shift: float, col_shift: float) -> n
 def drifted(browser_out) -> str:
     from quantem.widget import Show3D
 
-    # non-square, and 100 x 160 pads to a 128 x 256 grid for the FFT
+    # non-square, and 400 x 600 pads to a 512 x 1024 grid for the FFT (smaller frames align on the CPU)
     shifts = [(0, 0), (3, -2), (-5, 4), (2.5, -1.5)]
-    viewer = Show3D(np.stack([drifted_blobs(100, 160, *shift) for shift in shifts]), panel_width_px=320)
+    viewer = Show3D(np.stack([drifted_blobs(400, 600, *shift) for shift in shifts]), panel_width_px=320)
     viewer.subpixel_align_enabled, viewer.slice_idx = True, 2
     viewer.export_html(browser_out / "show3d_drifted.html")
     return "show3d_drifted.html"

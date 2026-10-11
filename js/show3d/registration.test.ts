@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CPUFFT } from "../display/fft";
-import { estimateSubpixelShift } from "./registration";
+import { subpixelShiftEstimator } from "./registration";
 
 /** Two Gaussian blobs and a weak lattice, displaced by (rowShift, colShift) pixels. */
 function blobs(width: number, height: number, rowShift: number, colShift: number): Float32Array {
@@ -16,9 +16,9 @@ function blobs(width: number, height: number, rowShift: number, colShift: number
 describe("sub-pixel registration", () => {
   // power-of-two, non-square and padded (non-power-of-two) grids
   it.each([[128, 64], [64, 128], [100, 80]])("recovers integer and fractional drift on %ix%i", async (width, height) => {
-    const reference = blobs(width, height, 0, 0);
+    const estimator = subpixelShiftEstimator(blobs(width, height, 0, 0), width, height, new CPUFFT());
     for (const [rowShift, colShift] of [[3, -2], [-5, 0], [0, 4], [2.5, -1.5]]) {
-      const shift = await estimateSubpixelShift(reference, blobs(width, height, rowShift, colShift), width, height, new CPUFFT());
+      const shift = await estimator.estimate(blobs(width, height, rowShift, colShift));
       // the returned shift moves the frame back onto the reference
       expect(Math.abs(shift.row + rowShift)).toBeLessThan(0.35);
       expect(Math.abs(shift.col + colShift)).toBeLessThan(0.35);

@@ -2,7 +2,7 @@
  * Sub-pixel registration for the Sub-pixel align control: the shift between two frames from the peak of
  * their cross-correlation, refined per axis by a parabola, and the bilinear translation that applies it.
  */
-import { type DisplayFFT, applyHannWindow2D, nextPow2 } from "../display/fft";
+import { CPUFFT, type DisplayFFT, applyHannWindow2D, nextPow2 } from "../display/fft";
 
 export type SubpixelShift = {
   row: number;
@@ -96,61 +96,67 @@ function parabolicPeakDelta(prev: number, center: number, next: number): number 
   return Math.max(-0.5, Math.min(0.5, delta));
 }
 
+// Below this many padded pixels the GPU round trips cost more than the CPU transforms
+// (measured at 256^2 on Blackwell with three transforms per frame: 16 ms against 9 ms).
+const GPU_MIN_PADDED_PIXELS = 512 * 512;
+
 /**
- * Shift (row, col) that registers `moving` onto `reference`: the cross-
- * correlation IFFT(F_ref * conj(F_mov)), its integer peak, then a parabolic
- * refinement per axis. `quality` is the peak height over the mean correlation
- * magnitude away from the peak.
+ * Shift (row, col) that registers each moving frame onto `reference`: the
+ * cross-correlation IFFT(F_ref * conj(F_mov)), its integer peak, then a
+ * parabolic refinement per axis. `quality` is the peak height over the mean
+ * correlation magnitude away from the peak. The reference spectrum is computed
+ * once for all frames; `fftEngine` runs the transforms unless the frames are
+ * small enough that the CPU reference is faster.
  */
-export async function estimateSubpixelShift(
+export function subpixelShiftEstimator(
   reference: Float32Array,
-  moving: Float32Array,
   width: number,
   height: number,
   fftEngine: DisplayFFT,
-): Promise<SubpixelShift> {
+): { path: DisplayFFT["path"]; estimate: (moving: Float32Array) => Promise<SubpixelShift> } {
+  const engine = nextPow2(width) * nextPow2(height) < GPU_MIN_PADDED_PIXELS ? new CPUFFT() : fftEngine;
   const referenceImage = registrationImage(reference, width, height);
-  const movingImage = registrationImage(moving, width, height);
-  const referenceSpectrum = await fft2dComplex(referenceImage, new Float32Array(referenceImage.length), width, height, false, fftEngine);
-  const movingSpectrum = await fft2dComplex(movingImage, new Float32Array(movingImage.length), width, height, false, fftEngine);
-  const workW = referenceSpectrum.width;
-  const workH = referenceSpectrum.height;
-  const workSize = workW * workH;
-  const crossReal = new Float32Array(workSize);
-  const crossImag = new Float32Array(workSize);
-  for (let i = 0; i < workSize; i++) {
-    const real = referenceSpectrum.real[i] * movingSpectrum.real[i] + referenceSpectrum.imag[i] * movingSpectrum.imag[i];
-    const imag = referenceSpectrum.imag[i] * movingSpectrum.real[i] - referenceSpectrum.real[i] * movingSpectrum.imag[i];
-    crossReal[i] = real;
-    crossImag[i] = imag;
-  }
-  const correlation = await fft2dComplex(crossReal, crossImag, workW, workH, true, fftEngine);
-  let peakIdx = 0;
-  let peakValue = -Infinity;
-  let total = 0;
-  for (let i = 0; i < correlation.real.length; i++) {
-    const value = Math.hypot(correlation.real[i], correlation.imag[i]);
-    total += value;
-    if (value > peakValue) {
-      peakValue = value;
-      peakIdx = i;
+  const referenceSpectrum = fft2dComplex(referenceImage, new Float32Array(referenceImage.length), width, height, false, engine);
+  const estimate = async (moving: Float32Array): Promise<SubpixelShift> => {
+    const movingImage = registrationImage(moving, width, height);
+    const movingSpectrum = await fft2dComplex(movingImage, new Float32Array(movingImage.length), width, height, false, engine);
+    const { real: referenceReal, imag: referenceImag, width: workW, height: workH } = await referenceSpectrum;
+    const workSize = workW * workH;
+    const crossReal = new Float32Array(workSize);
+    const crossImag = new Float32Array(workSize);
+    for (let i = 0; i < workSize; i++) {
+      crossReal[i] = referenceReal[i] * movingSpectrum.real[i] + referenceImag[i] * movingSpectrum.imag[i];
+      crossImag[i] = referenceImag[i] * movingSpectrum.real[i] - referenceReal[i] * movingSpectrum.imag[i];
     }
-  }
-  const peakRow = Math.floor(peakIdx / correlation.width);
-  const peakCol = peakIdx % correlation.width;
-  const correlationMagnitudeAt = (row: number, col: number) => {
-    const wrappedRow = (row + correlation.height) % correlation.height;
-    const wrappedCol = (col + correlation.width) % correlation.width;
-    const idx = wrappedRow * correlation.width + wrappedCol;
-    return Math.hypot(correlation.real[idx], correlation.imag[idx]);
+    const correlation = await fft2dComplex(crossReal, crossImag, workW, workH, true, engine);
+    let peakIdx = 0;
+    let peakValue = -Infinity;
+    let total = 0;
+    for (let i = 0; i < correlation.real.length; i++) {
+      const value = Math.hypot(correlation.real[i], correlation.imag[i]);
+      total += value;
+      if (value > peakValue) {
+        peakValue = value;
+        peakIdx = i;
+      }
+    }
+    const peakRow = Math.floor(peakIdx / correlation.width);
+    const peakCol = peakIdx % correlation.width;
+    const correlationMagnitudeAt = (row: number, col: number) => {
+      const wrappedRow = (row + correlation.height) % correlation.height;
+      const wrappedCol = (col + correlation.width) % correlation.width;
+      const idx = wrappedRow * correlation.width + wrappedCol;
+      return Math.hypot(correlation.real[idx], correlation.imag[idx]);
+    };
+    const rowDelta = parabolicPeakDelta(correlationMagnitudeAt(peakRow - 1, peakCol), peakValue, correlationMagnitudeAt(peakRow + 1, peakCol));
+    const colDelta = parabolicPeakDelta(correlationMagnitudeAt(peakRow, peakCol - 1), peakValue, correlationMagnitudeAt(peakRow, peakCol + 1));
+    const row = wrappedPeakOffset(peakRow, correlation.height) + rowDelta;
+    const col = wrappedPeakOffset(peakCol, correlation.width) + colDelta;
+    const background = total > 0 ? (total - peakValue) / Math.max(1, correlation.real.length - 1) : 0;
+    const quality = background > 1e-12 ? peakValue / background : peakValue;
+    return { row, col, quality };
   };
-  const rowDelta = parabolicPeakDelta(correlationMagnitudeAt(peakRow - 1, peakCol), peakValue, correlationMagnitudeAt(peakRow + 1, peakCol));
-  const colDelta = parabolicPeakDelta(correlationMagnitudeAt(peakRow, peakCol - 1), peakValue, correlationMagnitudeAt(peakRow, peakCol + 1));
-  const row = wrappedPeakOffset(peakRow, correlation.height) + rowDelta;
-  const col = wrappedPeakOffset(peakCol, correlation.width) + colDelta;
-  const background = total > 0 ? (total - peakValue) / Math.max(1, correlation.real.length - 1) : 0;
-  const quality = background > 1e-12 ? peakValue / background : peakValue;
-  return { row, col, quality };
+  return { path: engine.path, estimate };
 }
 
 /**

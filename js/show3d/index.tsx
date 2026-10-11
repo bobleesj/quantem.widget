@@ -66,7 +66,7 @@ import {
   renderPackedPanelPlayback,
   writeLiveFrameControls,
 } from "./playback";
-import { type SubpixelShift, estimateSubpixelShift, finiteMedianSample, shiftFrameBilinear } from "./registration";
+import { type SubpixelShift, finiteMedianSample, shiftFrameBilinear, subpixelShiftEstimator } from "./registration";
 import { type ROIItem, ROI_COLORS, computeROIPixelStats, createROI, normalizeROI } from "./roi";
 import {
   ANIMATION_QUALITY_OPTIONS,
@@ -3124,7 +3124,7 @@ function Show3D() {
     setSubpixelAlignBusy(true);
     setSubpixelAlignStatus(`Aligning to frame ${refIdx + 1}…`);
     try {
-      const fft = await ensureFftGpu();
+      const estimator = subpixelShiftEstimator(reference, width, height, await ensureFftGpu());
       const shifts: SubpixelShift[] = [];
       for (let idx = 0; idx < frameCount; idx++) {
         if (serial !== subpixelAlignSerialRef.current) return;
@@ -3137,7 +3137,7 @@ function Show3D() {
           shifts.push({ row: 0, col: 0, quality: 0 });
           continue;
         }
-        shifts.push(await estimateSubpixelShift(reference, frame, width, height, fft));
+        shifts.push(await estimator.estimate(frame));
       }
       if (serial !== subpixelAlignSerialRef.current) return;
       subpixelAlignShiftsRef.current = shifts;
@@ -3147,7 +3147,7 @@ function Show3D() {
       const currentIdx = Math.max(0, Math.min(frameCount - 1, Math.round(liveSliceIdx || 0)));
       const currentShift = shifts[currentIdx] ?? { row: 0, col: 0, quality: 0 };
       setSubpixelAlignStatus(
-        `Aligned to frame ${refIdx + 1} · current row ${currentShift.row.toFixed(1)} px, col ${currentShift.col.toFixed(1)} px · max ${maxRow.toFixed(1)}/${maxCol.toFixed(1)} px · ${fft.path}`,
+        `Aligned to frame ${refIdx + 1} · current row ${currentShift.row.toFixed(1)} px, col ${currentShift.col.toFixed(1)} px · max ${maxRow.toFixed(1)}/${maxCol.toFixed(1)} px · ${estimator.path}`,
       );
       setSubpixelAlignVersion((value) => value + 1);
     } catch (error) {
