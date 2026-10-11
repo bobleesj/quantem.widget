@@ -18,7 +18,7 @@ aberrations).
 from quantem.widget import ShowPtycho
 
 # ssb is already fitted: result = ssb.find_aberrations(trials=200, refinement="nelder-mead")
-w = ShowPtycho(ssb, source_file="scan_master.h5", save_dir="out/")
+w = ShowPtycho(ssb, save_dir="out/")   # opened with SSB.open("scan_master.h5", ...), the session names its file
 w.export("out/", title="my sample SSB")
 ```
 

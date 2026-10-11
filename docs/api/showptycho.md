@@ -75,12 +75,12 @@ that FFT panel. It is not re-running the raw detector preprocessing.
 ```python
 from quantem.widget import ShowPtycho
 
-viewer = ShowPtycho(ssb, fft_on=True)
-viewer.upsample = 2
+viewer = ShowPtycho(ssb, show_fft=True)
+viewer.upsampling_factor = 2
 viewer
 ```
 
-Use **Sampling** in the toolbar (or the `upsample` trait) to switch between 1×, 2×, 4× and 8×. The field
+Use **Sampling** in the toolbar (or the `upsampling_factor` trait) to switch between 1×, 2×, 4× and 8×. The field
 of view stays fixed; 2× halves the phase pixel spacing. The scale bar and crop
 coordinates follow the displayed sampling. The scan data and fitted coefficients
 stay unchanged, and the loss is evaluated on the native grid.
@@ -124,11 +124,7 @@ ssb = SSB(
     voltage_kV=300.0,
 )
 result = ssb.find_aberrations(trials=200, refinement="nelder-mead")
-w = ShowPtycho(
-    ssb,
-    source_file="acquisition_master.h5",
-    fft_on=True,
-)
+w = ShowPtycho(ssb, show_fft=True)   # the session names its master (ssb.source_path)
 ```
 
 The selection may be rectangular; each dimension must span at least `32` scan
@@ -172,8 +168,9 @@ ShowPtycho(ssb)                                 # opens on the fitted tilt
 pd.concat([standard.report(), tilted.report()])
 ```
 
-**Save** writes the tilt into `calibration.json` (`tilt_mrad` scan frame,
-`tilt_object_mrad`, `depth_spread_nm`).
+**Save** writes the tilt into `calibration.json` (`sample_tilt_mrad` in the
+scan frame, `propagator_tilt_mrad` in the ptychography frame, and
+`depth_spread_nm`, the model's depth spread, which is not a sample thickness).
 
 Where it runs: live notebooks with a CUDA or MPS SSB session (sliders and Fit
 tilt), and exported WebGPU folders (sliders; fitting needs Python). It does not
@@ -187,11 +184,19 @@ crop, 128 x 128 scan): Fit tilt about 5 s on CUDA and 6 s on MPS; full
 
 ## Units
 
-C10, C12 and every higher-order magnitude are nm. quantem.gpu's SSB engines
-compute in Angstrom and, before 2026-09-24, reported that Angstrom number under
-the nm label (a -10 nm defocus showed as -100 "nm"). Calibrations written since
-carry `"aberration_unit": "nm"`; older files are read /10 automatically. Slider
-ranges are C10 +-40 nm and C12 0-10 nm, the same physical span as before.
+Every key carries its unit. Aberrations are `C10_nm`, `C12_nm` and `phi12_deg`,
+with higher orders as `C21_nm` and `phi21_deg` (and so on) in the same
+`aberrations` object; the rotation is `scan_detector_rotation_deg`, the physical
+angle in [0, 360), beside `detector_transposed`; `scan_sampling_A` and
+`detector_sampling_mrad` are `[row, col]`. `calibration.json`,
+`showptycho_stars.json`, the exported `snapshots/cal.json` and the widget's
+messages use these names, and each file names its layout in a `schema` string
+(`quantem.ssb-calibration/4`, `quantem.ssb-stars/1`,
+`quantem.ssb-browser-calibration/2`, `quantem.ssb-browser-folder/3`,
+`quantem.ssb-snapshots/1`). A file of another layout is not converted.
+quantem.gpu's SSB engines compute in Angstrom and radians; the widget converts
+once, in `quantem.widget.adapters.gpu`. Slider ranges are C10 +-40 nm and C12
+0-10 nm.
 
 ## Bright-Field Count
 
@@ -259,7 +264,7 @@ Use a WebGPU folder export when a colleague needs to open the same ptychography
 review without the notebook kernel:
 
 ```python
-w = ShowPtycho(ssb, fft_on=True)  # starts at full selected BF
+w = ShowPtycho(ssb, show_fft=True)  # starts at full selected BF
 w.export("logic013_512_review")
 ```
 

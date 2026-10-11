@@ -18,7 +18,7 @@ Usage::
 
     ssb = SSB.open("scan_master.h5", voltage_kV=300, semiangle_mrad=30, scan_sampling_A=0.264)
     ssb.find_aberrations()
-    ShowPtycho(ssb, fft_on=True)
+    ShowPtycho(ssb, show_fft=True)
 """
 
 import contextlib
@@ -42,18 +42,10 @@ from quantem.widget.utils.array import device_array
 
 STARS_FILENAME = "showptycho_stars.json"
 CALIBRATION_FILENAME = "calibration.json"
-CALIBRATION_SCHEMA_VERSION = 3
-# Saved magnitudes are nm (quantem.gpu SSB reported Angstrom under an nm label before 2026-09-24).
-ABERRATION_UNIT = "nm"
+# every stored record names its layout; a reader takes the current value only
+CALIBRATION_SCHEMA = "quantem.ssb-calibration/4"
+STARS_SCHEMA = "quantem.ssb-stars/1"
 MIN_CROP_SPAN = 32
-# (name, slot in the 14-coefficient Krivanek vector, carries an azimuth) for the higher-order panel;
-# slots 0 and 1 are C10 and C12 / phi12 from the main sliders.
-HIGHER_ORDER_LAYOUT = (
-    ("C21", 2, True), ("C23", 3, True),
-    ("C30", 4, False), ("C32", 5, True), ("C34", 6, True),
-    ("C41", 7, True), ("C43", 8, True), ("C45", 9, True),
-    ("C50", 10, False), ("C52", 11, True), ("C54", 12, True), ("C56", 13, True),
-)
 
 
 def session_note() -> str:
@@ -84,23 +76,23 @@ def finite_or_none(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def scan_sampling_scalar(ssb, axis: int = 0) -> float:
-    """The scan step in Angstrom along ``axis`` (0 rows, -1 columns); ``SSB.scan_sampling_A`` may be one number or (row, col)."""
-    sampling = ssb.scan_sampling_A
-    if isinstance(sampling, (tuple, list)):
-        return float(sampling[axis])
-    return float(sampling or 0.0)
+def utc_now() -> str:
+    """The present time as ISO 8601 UTC ending in Z: the ``generated_at_utc`` every file of this widget carries.
+
+    A local time without a zone, written before, could not be compared across machines.
+    """
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def object_frame_tilt(tilt_row_mrad: float, tilt_col_mrad: float, rotation_deg: float) -> list[float]:
-    """SSB tilt (scan frame) in the ptychography object frame: ``[[cos, sin], [-sin, cos]]`` of the scan-detector rotation.
+def propagator_frame_tilt(tilt_row_mrad: float, tilt_col_mrad: float, scan_detector_rotation_deg: float) -> list[float]:
+    """SSB sample tilt (scan frame) in the ptychography object frame: ``[[cos, sin], [-sin, cos]]`` of the scan-detector rotation.
 
     quantem.thick places scan positions in the object frame by the same rotation with no sign change, so this value
     seeds its reconstruction directly (swap the components only if that reconstruction transposed the scan axes).
     Verified on a logic-device dataset (rotation -8.6 deg): SSB (-10.3, +4.7) -> (-10.9, +3.1) mrad against
     ptychography's learned (-11.6, +2.8), 2.4 deg apart.
     """
-    rotation = math.radians(float(rotation_deg))
+    rotation = math.radians(float(scan_detector_rotation_deg))
     return [
         tilt_row_mrad * math.cos(rotation) + tilt_col_mrad * math.sin(rotation),
         -tilt_row_mrad * math.sin(rotation) + tilt_col_mrad * math.cos(rotation),
@@ -116,12 +108,12 @@ def write_json(path: pathlib.Path, payload: object) -> None:
 
 
 def has_higher_order(panel_json: str) -> bool:
-    """Whether the higher-order panel JSON holds a non-zero magnitude (its angles do not count).
+    """Whether the higher-order panel JSON holds a non-zero magnitude (``C21_nm``, ...; its azimuths do not count).
 
     Upsampled output carries C10/C12 only, so the two validators use it to refuse a
     higher-order term and upsampling together.
     """
-    return any(value != 0 for key, value in json.loads(panel_json or "{}").items() if not key.endswith("_angle"))
+    return any(value != 0 for key, value in json.loads(panel_json or "{}").items() if key.endswith("_nm"))
 
 
 class ShowPtycho(anywidget.AnyWidget):
@@ -144,44 +136,48 @@ class ShowPtycho(anywidget.AnyWidget):
     units : str, default "Å"
         Length unit of ``sampling``: any length of ``quantem.widget.units``
         (``"angstrom"``, ``"Å"``, ``"A"``, ``"nm"``, ``"pm"``, ...).
-    source_file : str, optional
-        SSB session: path of the raw ``*_master.h5``. With a readable master the toolbar offers
-        Crop and Refit SSB, which reloads only the selected scan region and fits it afresh; the
-        path is also recorded in every saved calibration and star.
     save_dir : str or Path, optional
         SSB session: where ``calibration.json`` and ``showptycho_stars.json`` are written; the
         working directory by default.
-    fft_on : bool, default False
+    show_fft : bool, default False
         Open with the FFT panel visible.
+
+    A session opened from its master (``SSB.open("scan_master.h5", ...)``) records the file as its
+    ``source_path``: the toolbar then offers Crop and Refit SSB, which reloads only the selected
+    scan region and fits it afresh, and every saved calibration and star names the file.
     """
 
     _esm = pathlib.Path(__file__).parent.parent / "static" / "showptycho.js"
 
-    # slider ranges (nm, nm, degrees, degrees): the physical span of the SSB fit's default search
-    c10_min = traitlets.Float(-40.0).tag(sync=True)
-    c10_max = traitlets.Float(40.0).tag(sync=True)
-    rotation_min = traitlets.Float(-180.0).tag(sync=True)
-    rotation_max = traitlets.Float(180.0).tag(sync=True)
-    rotation_deg = traitlets.Float(0.0).tag(sync=True)
+    # slider ranges: the physical span of the SSB fit's default search
+    C10_min_nm = traitlets.Float(-40.0).tag(sync=True)
+    C10_max_nm = traitlets.Float(40.0).tag(sync=True)
+    scan_detector_rotation_min_deg = traitlets.Float(-180.0).tag(sync=True)
+    scan_detector_rotation_max_deg = traitlets.Float(180.0).tag(sync=True)
+    # the physical scan-to-detector rotation as the slider holds it; files store it in [0, 360)
+    scan_detector_rotation_deg = traitlets.Float(0.0).tag(sync=True)
     # SSB phase is ambiguous by sign; the user picks the convention matching the expected contrast
     flip_phase = traitlets.Bool(False).tag(sync=True)
     # the fitted reference the Reset button returns to
-    auto_c10 = traitlets.Float(0.0).tag(sync=True)
-    auto_c12 = traitlets.Float(0.0).tag(sync=True)
-    auto_phi12_deg = traitlets.Float(0.0).tag(sync=True)
-    auto_loss = traitlets.Float(0.0).tag(sync=True)
-    auto_rotation_deg = traitlets.Float(0.0).tag(sync=True)
-    # browser -> Python reconstruction request {"id", "c10", "c12", "phi12_deg", "committed"}
+    fitted_C10_nm = traitlets.Float(0.0).tag(sync=True)
+    fitted_C12_nm = traitlets.Float(0.0).tag(sync=True)
+    fitted_phi12_deg = traitlets.Float(0.0).tag(sync=True)
+    fitted_loss = traitlets.Float(0.0).tag(sync=True)
+    fitted_scan_detector_rotation_deg = traitlets.Float(0.0).tag(sync=True)
+    # browser -> Python reconstruction request {"id", "C10_nm", "C12_nm", "phi12_deg", "committed"}
     request_json = traitlets.Unicode("").tag(sync=True)
     phase_bytes = traitlets.Bytes(b"").tag(sync=True)
     phase_width = traitlets.Int(0).tag(sync=True)
     phase_height = traitlets.Int(0).tag(sync=True)
     result_json = traitlets.Unicode("").tag(sync=True)
-    pixel_size = traitlets.Float(0.0).tag(sync=True)
+    # an array: the pixel size [row, col] of its image in angstrom. A session: the scan step [row, col] in angstrom,
+    # which the browser shares out over the output columns (upsampling_factor). [] when unknown or not that input.
+    object_sampling_A = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
+    scan_sampling_A = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
     # one-shot seed the browser reads at mount; the FFT switch takes over
     initial_fft_on = traitlets.Bool(False).tag(sync=True)
     # SSB alias-order output sampling (CUDA sessions), not image interpolation
-    upsample = traitlets.Int(1).tag(sync=True)
+    upsampling_factor = traitlets.Int(1).tag(sync=True)
     upsampling_available = traitlets.Bool(False).tag(sync=True)
     save_trigger = traitlets.Int(0).tag(sync=True)
     notes = traitlets.Unicode("").tag(sync=True)
@@ -189,13 +185,13 @@ class ShowPtycho(anywidget.AnyWidget):
     stars_path = traitlets.Unicode("").tag(sync=True)
     calibration_path = traitlets.Unicode("").tag(sync=True)
     calibration_saved_at = traitlets.Unicode("").tag(sync=True)
-    # fit history for the trials strip: JSON list of {rank, C10, C12, phi12_deg, loss}, best first
+    # fit history for the trials strip: JSON list of {rank, C10_nm, C12_nm, phi12_deg, loss}, best first
     trials_json = traitlets.Unicode("").tag(sync=True)
     # bright-field pixels used while dragging; the full count is the right edge of the slider
-    drag_bf = traitlets.Int(0).tag(sync=True)
-    total_bf = traitlets.Int(0).tag(sync=True)
-    # higher-order panel: {C21_mag, C21_angle, ..., C30, ..., C50, ...}, magnitudes nm, angles degrees
-    higher_order_json = traitlets.Unicode("{}").tag(sync=True)
+    num_drag_bright_field_pixels = traitlets.Int(0).tag(sync=True)
+    num_bright_field_pixels = traitlets.Int(0).tag(sync=True)
+    # higher-order panel: {C21_nm, phi21_deg, ..., C30_nm, ..., C50_nm, ...}
+    higher_order_aberrations_json = traitlets.Unicode("{}").tag(sync=True)
     # browser-side WebGPU SSB source, set by the folder export
     webgpu_preview_enabled = traitlets.Bool(False).tag(sync=True)
     webgpu_cal_json = traitlets.Unicode("").tag(sync=True)
@@ -209,7 +205,7 @@ class ShowPtycho(anywidget.AnyWidget):
     crop_refit_available = traitlets.Bool(False).tag(sync=True)
     crop_refit_status = traitlets.Unicode("").tag(sync=True)
     crop_refit_request_json = traitlets.Unicode("").tag(sync=True)
-    # thick-sample SSB: {"tilt_row_mrad", "tilt_col_mrad", "thickness_nm"}; thickness 0 is standard SSB
+    # thick-sample SSB: {"sample_tilt_mrad": [row, col], "depth_spread_nm"}; depth spread 0 is standard SSB
     sample_json = traitlets.Unicode("{}").tag(sync=True)
     sample_available = traitlets.Bool(False).tag(sync=True)
     sample_fit_request = traitlets.Int(0).tag(sync=True)
@@ -227,9 +223,8 @@ class ShowPtycho(anywidget.AnyWidget):
         *,
         sampling: float | tuple[float, float] | None = None,
         units: str = "Å",
-        source_file: str | None = None,
         save_dir: str | pathlib.Path | None = None,
-        fft_on: bool = False,
+        show_fft: bool = False,
     ) -> None:
         is_array = not gpu_adapter.is_ssb(data)
         # an array's pixel size [row, col] in angstrom, read through the one unit table (the widget draws in angstrom)
@@ -252,7 +247,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self._last_result: dict = {}
         self._inflight_id = -1
         self._drag_context = None
-        self.initial_fft_on = bool(fft_on)
+        self.initial_fft_on = bool(show_fft)
         self.observe(self._on_flip_change, names=["flip_phase"])
         if is_array:
             # angle and abs run where the data lives (a CUDA or MPS tensor stays there until the 2D
@@ -288,39 +283,40 @@ class ShowPtycho(anywidget.AnyWidget):
             if "amplitude" in drawn:
                 self.amplitude_bytes = drawn["amplitude"].tobytes()
             if given is not None:
-                self.pixel_size = float(given[-1])  # the horizontal scale bar measures columns
+                self.object_sampling_A = [float(step) for step in given]
             self.ssb_session = False
             self.session_note = session_note()
             return
-        ssb = data
-        self._source_file = str(source_file) if source_file else None
-        self._source_scan_shape = ssb.scan_shape
-        self._scan_region = (0, ssb.scan_shape[0], 0, ssb.scan_shape[1])
+        self._ssb = gpu_adapter.SsbSession(data)
+        state = self._ssb.state()
+        self._source_path = state["source_path"]
+        self._source_scan_shape = state["scan_shape"]
+        self._scan_region = (0, state["scan_shape"][0], 0, state["scan_shape"][1])
         save_root = pathlib.Path(save_dir) if save_dir else pathlib.Path.cwd()
         self._stars_path = save_root / STARS_FILENAME
         self._calibration_path = save_root / CALIBRATION_FILENAME
         self.stars_path = str(self._stars_path.resolve())
-        self.upsampling_available = ssb.backend == "cuda"
+        self.upsampling_available = state["backend"] == "cuda"
         self.sample_available = True  # CUDA and MPS, the SSB backends, both fit the thick-sample model
-        self.pixel_size = scan_sampling_scalar(ssb, axis=-1)  # the horizontal scale bar measures columns
-        self.crop_refit_available = bool(self._source_file and pathlib.Path(self._source_file).is_file())
+        self.scan_sampling_A = state["scan_sampling_A"]
+        self.crop_refit_available = bool(self._source_path and pathlib.Path(self._source_path).is_file())
         self.crop_refit_status = (
             "Ready to refit a native square scan crop." if self.crop_refit_available
             else "Crop refit needs a re-loadable master file."
         )
         self.observe(self._on_request, names=["request_json"])
-        self.observe(self._on_upsample, names=["upsample"])
+        self.observe(self._on_upsampling_factor, names=["upsampling_factor"])
         self.observe(self._on_save, names=["save_trigger"])
         self.observe(self._on_pin, names=["pin_json"])
-        self.observe(self._on_drag_bf_change, names=["drag_bf"])
-        self.observe(self._on_rotation_change, names=["rotation_deg"])
-        self.observe(self._on_panel_change, names=["higher_order_json", "sample_json"])
+        self.observe(self._on_drag_pixels_change, names=["num_drag_bright_field_pixels"])
+        self.observe(self._on_rotation_change, names=["scan_detector_rotation_deg"])
+        self.observe(self._on_panel_change, names=["higher_order_aberrations_json", "sample_json"])
         self.observe(self._on_crop_refit_request, names=["crop_refit_request_json"])
         self.observe(self._on_sample_fit_request, names=["sample_fit_request"])
         self._adopt_session(initial=True)
-        # the Sample panel opens on the session's latest find_aberrations(tilt=True)
-        if self.sample_available and ssb.tilt_mrad is not None and ssb.depth_spread_nm:
-            self.sample_json = json.dumps({"tilt_row_mrad": float(ssb.tilt_mrad[0]), "tilt_col_mrad": float(ssb.tilt_mrad[1]), "thickness_nm": float(ssb.depth_spread_nm)})
+        # the Sample panel opens on the session's latest sample-tilt fit
+        if self.sample_available and state["sample_tilt_mrad"] is not None and state["depth_spread_nm"]:
+            self.sample_json = json.dumps({"sample_tilt_mrad": state["sample_tilt_mrad"], "depth_spread_nm": float(state["depth_spread_nm"])})
 
     def _adopt_session(self, *, initial: bool) -> None:
         """Publish the session's geometry and fit as the widget's reference, then reconstruct at that fit.
@@ -329,58 +325,51 @@ class ShowPtycho(anywidget.AnyWidget):
         spans at least +-180 deg so negative microscope conventions need no mental +180; the C10 range
         widens to include an outlier fit so the reference is always reachable.
         """
-        ssb = self._ssb
-        self.scan_rows, self.scan_cols = ssb.scan_shape
-        rotation = float(ssb.physical_rotation_deg)
-        fitted_c10 = float(ssb.aberrations.get("C10", 0.0))
-        ssb.set_rotation(rotation)
+        state = self._ssb.state()
+        self.scan_rows, self.scan_cols = state["scan_shape"]
+        rotation = state["scan_detector_rotation_deg"]
+        fitted = state["aberrations"]
+        self._ssb.set_scan_detector_rotation(rotation)
         if initial:
-            self.c10_min, self.c10_max = min(-30.0, fitted_c10), max(30.0, fitted_c10)
-            self.rotation_min, self.rotation_max = min(-180.0, rotation), max(180.0, rotation)
+            self.C10_min_nm, self.C10_max_nm = min(-30.0, fitted["C10_nm"]), max(30.0, fitted["C10_nm"])
+            self.scan_detector_rotation_min_deg, self.scan_detector_rotation_max_deg = min(-180.0, rotation), max(180.0, rotation)
         # the session is already at this rotation: the observer must not rebuild and reconstruct
         self._adopting = True
-        self.rotation_deg = rotation
+        self.scan_detector_rotation_deg = rotation
         self._adopting = False
-        self.auto_rotation_deg = rotation
-        self.auto_c10 = fitted_c10
-        self.auto_c12 = float(ssb.aberrations.get("C12", 0.0))
-        self.auto_phi12_deg = math.degrees(float(ssb.aberrations.get("phi12", 0.0)))
-        self.auto_loss = finite_or_none(ssb.best_loss) or 0.0
-        self.higher_order_json = "{}"
+        self.fitted_scan_detector_rotation_deg = rotation
+        self.fitted_C10_nm, self.fitted_C12_nm, self.fitted_phi12_deg = fitted["C10_nm"], fitted["C12_nm"], fitted["phi12_deg"]
+        self.fitted_loss = state["loss"] or 0.0
+        self.higher_order_aberrations_json = "{}"
         self.trials_json = self._trials_payload()
-        self.total_bf = ssb.num_bf
+        self.num_bright_field_pixels = state["num_bright_field_pixels"]
         self._inflight_id += 1
-        self._reconstruct(self._inflight_id, self.auto_c10, self.auto_c12, self.auto_phi12_deg, compute_loss=True)
+        self._reconstruct(self._inflight_id, fitted, compute_loss=True)
         # drags start on the full disk; the slider's left side trades pixels for speed
         self._free_drag_context()
-        self.drag_bf = self.total_bf
-        self._drag_context = ssb.preview_context(self.total_bf)
+        self.num_drag_bright_field_pixels = self.num_bright_field_pixels
+        self._drag_context = self._ssb.preview_context(self.num_bright_field_pixels)
 
     def _trials_payload(self, max_trials: int = 50) -> str:
         """The session's fit trials for the browser strip, best loss first, capped so a 200-trial run stays light."""
-        finite = [(loss, trial) for trial in self._ssb.trial_history if (loss := finite_or_none(trial.get("loss"))) is not None]
-        payload = [
-            {"rank": rank, "C10": float(trial["params"].get("C10_nm", 0.0)), "C12": float(trial["params"].get("C12_nm", 0.0)),
-             "phi12_deg": float(trial["params"].get("phi12_deg", 0.0)), "loss": loss}
-            for rank, (loss, trial) in enumerate(sorted(finite, key=lambda item: item[0])[:max_trials])
-        ]
+        finite = [trial for trial in self._ssb.trials() if finite_or_none(trial["loss"]) is not None]
+        payload = [{"rank": rank, **trial, "loss": float(trial["loss"])}
+                   for rank, trial in enumerate(sorted(finite, key=lambda trial: float(trial["loss"]))[:max_trials])]
         return json.dumps(payload) if payload else ""
 
-    def _current(self) -> tuple[float, float, float]:
-        """(C10 nm, C12 nm, phi12 deg) of the displayed phase, the fitted reference before the first request."""
-        return (
-            float(self._last_result.get("C10", self.auto_c10)),
-            float(self._last_result.get("C12", self.auto_c12)),
-            float(self._last_result.get("phi12_deg", self.auto_phi12_deg)),
-        )
+    def _current(self) -> dict:
+        """``{C10_nm, C12_nm, phi12_deg}`` of the displayed phase, the fitted reference before the first request."""
+        fitted = {"C10_nm": self.fitted_C10_nm, "C12_nm": self.fitted_C12_nm, "phi12_deg": self.fitted_phi12_deg}
+        return {name: float(self._last_result.get(name, value)) for name, value in fitted.items()}
 
-    def _tilt(self) -> dict | None:
-        """The Sample panel as ``SSB.preview`` arguments, or None for standard SSB (depth spread 0)."""
+    def _sample(self) -> dict | None:
+        """The Sample panel as ``{sample_tilt_mrad, depth_spread_nm}``, or None for standard SSB (depth spread 0)."""
         values = json.loads(self.sample_json or "{}")
-        depth_spread_nm = float(values.get("thickness_nm", 0.0))
+        depth_spread_nm = float(values.get("depth_spread_nm", 0.0))
         if depth_spread_nm <= 0.0:
             return None
-        return {"tilt_mrad": (float(values.get("tilt_row_mrad", 0.0)), float(values.get("tilt_col_mrad", 0.0))), "depth_spread_nm": depth_spread_nm}
+        tilt_row, tilt_col = values.get("sample_tilt_mrad", (0.0, 0.0))
+        return {"sample_tilt_mrad": (float(tilt_row), float(tilt_col)), "depth_spread_nm": depth_spread_nm}
 
     def _free_drag_context(self) -> None:
         """Release the reduced bright-field subset the session built for drags before a new one
@@ -389,40 +378,25 @@ class ShowPtycho(anywidget.AnyWidget):
             self._drag_context.close()
         self._drag_context = None
 
-    def _reconstruct(self, request_id: int, c10: float, c12: float, phi12_deg: float, *, compute_loss: bool) -> None:
-        """Ask the session for the phase at these aberrations and push it to the browser.
+    def _reconstruct(self, request_id: int, aberrations: dict, *, compute_loss: bool) -> None:
+        """Ask the session for the phase at ``aberrations`` (C10_nm, C12_nm, phi12_deg) and push it to the browser.
 
-        The three main sliders fill slots 0 and 1 of the 14-coefficient Krivanek vector; a non-zero
-        higher-order panel switches the session to its full chi kernel. Drags (``compute_loss=False``)
-        run inside the reduced bright-field context and skip the variance loss so slider frames stay
-        under budget; a committed request computes the same phase-variance loss the optimizer minimised.
-        A stale request (another one was issued meanwhile) is dropped after the compute.
+        The higher-order panel joins them under its own keys (``C21_nm``, ``phi21_deg``, ...); a non-zero
+        one switches the session to its full chi kernel. Drags (``compute_loss=False``) run inside the
+        reduced bright-field context and skip the variance loss so slider frames stay under budget; a
+        committed request computes the same phase-variance loss the optimizer minimised. A stale request
+        (another one was issued meanwhile) is dropped after the compute.
         """
-        magnitudes = np.zeros(14, dtype=np.float32)
-        angles = np.zeros(14, dtype=np.float32)
-        magnitudes[0], magnitudes[1], angles[1] = c10, c12, math.radians(phi12_deg)
-        higher_order = json.loads(self.higher_order_json or "{}")
-        any_higher_order = False
-        for name, slot, has_angle in HIGHER_ORDER_LAYOUT:
-            magnitude = float(higher_order.get(f"{name}_mag" if has_angle else name, 0.0))
-            any_higher_order |= magnitude != 0.0
-            magnitudes[slot] = magnitude
-            angles[slot] = math.radians(float(higher_order.get(f"{name}_angle", 0.0))) if has_angle else 0.0
-        tilt = self._tilt() if self.sample_available else None
-        if tilt is not None and any_higher_order:
+        higher_order = json.loads(self.higher_order_aberrations_json or "{}")
+        sample = self._sample() if self.sample_available else None
+        if sample is not None and has_higher_order(self.higher_order_aberrations_json):
             # the thick-sample kernel carries C10/C12/phi12 only; higher-order wins and the panel says so
             self.sample_fit_status = "Sample tilt is ignored while higher-order aberrations are non-zero."
-            tilt = None
+            sample = None
         use_drag = not compute_loss and self._drag_context is not None
         with self._drag_context if use_drag else contextlib.nullcontext():
-            phase, loss = self._ssb.preview(
-                {"C10": c10, "C12": c12, "phi12": math.radians(phi12_deg)},
-                compute_loss=compute_loss,
-                upsampling_factor=self.upsample,
-                higher_order_magnitudes=magnitudes if any_higher_order else None,
-                higher_order_angles=angles if any_higher_order else None,
-                **(tilt or {}),
-            )
+            phase, loss = self._ssb.preview({**higher_order, **aberrations}, compute_loss=compute_loss,
+                                            upsampling_factor=self.upsampling_factor, **(sample or {}))
         if request_id != self._inflight_id:
             return
         if self.flip_phase:
@@ -431,14 +405,15 @@ class ShowPtycho(anywidget.AnyWidget):
         self.phase_height, self.phase_width = phase.shape
         self.phase_bytes = phase.tobytes()
         # optimizer precision: the browser formats labels, rounding here would perturb saved calibrations
-        self._last_result = {"id": request_id, "C10": float(c10), "upsample": self.upsample, "C12": float(c12), "phi12_deg": float(phi12_deg), "loss": loss}
+        self._last_result = {"id": request_id, "C10_nm": float(aberrations["C10_nm"]), "C12_nm": float(aberrations["C12_nm"]),
+                             "phi12_deg": float(aberrations["phi12_deg"]), "upsampling_factor": self.upsampling_factor, "loss": loss}
         self.result_json = json.dumps(self._last_result)
 
     def _reconstruct_displayed(self, *, compute_loss: bool) -> None:
         """Reconstruct the displayed aberrations again, under a new request id, after a setting
         outside the three sliders (rotation, sampling, a panel) changed the phase."""
         self._inflight_id += 1
-        self._reconstruct(self._inflight_id, *self._current(), compute_loss=compute_loss)
+        self._reconstruct(self._inflight_id, self._current(), compute_loss=compute_loss)
 
     def _on_request(self, change) -> None:
         """A slider request from the browser: reconstruct at its aberrations; committed requests add the loss."""
@@ -446,46 +421,47 @@ class ShowPtycho(anywidget.AnyWidget):
             return
         request = json.loads(change["new"])
         self._inflight_id = request["id"]
-        self._reconstruct(request["id"], request["c10"], request["c12"], request["phi12_deg"], compute_loss=request.get("committed", False))
+        self._reconstruct(request["id"], {name: request[name] for name in ("C10_nm", "C12_nm", "phi12_deg")},
+                          compute_loss=request.get("committed", False))
 
-    def _on_upsample(self, change) -> None:
+    def _on_upsampling_factor(self, change) -> None:
         """Output sampling changed: show the displayed aberrations at the new sampling."""
         self._reconstruct_displayed(compute_loss=False)
 
-    @traitlets.validate("upsample")
-    def _validate_upsample(self, proposal):
+    @traitlets.validate("upsampling_factor")
+    def _validate_upsampling_factor(self, proposal):
         """Refuse a factor the session cannot produce: 1, 2, 4 or 8, above 1 only on CUDA and
         only while every higher-order term is zero."""
         factor = proposal["value"]
         if factor not in (1, 2, 4, 8):
-            raise ValueError("ShowPtycho upsample must be 1, 2, 4, or 8.")
-        if factor > 1 and self._ssb.backend != "cuda":
-            raise ValueError("This session supports native sampling only; use upsample=1.")
-        if factor > 1 and has_higher_order(self.higher_order_json):
-            raise ValueError("Higher-order aberrations require upsample=1; reset them before upsampling.")
+            raise ValueError("ShowPtycho upsampling_factor must be 1, 2, 4, or 8.")
+        if factor > 1 and not self.upsampling_available:
+            raise ValueError("This session supports native sampling only; use upsampling_factor=1.")
+        if factor > 1 and has_higher_order(self.higher_order_aberrations_json):
+            raise ValueError("Higher-order aberrations require upsampling_factor=1; reset them before upsampling.")
         return factor
 
-    @traitlets.validate("higher_order_json")
+    @traitlets.validate("higher_order_aberrations_json")
     def _validate_higher_order_sampling(self, proposal):
         """Refuse a non-zero higher-order term while the output is upsampled."""
-        if self.upsample > 1 and has_higher_order(proposal["value"]):
-            raise ValueError("Set upsample=1 before changing higher-order aberrations.")
+        if self.upsampling_factor > 1 and has_higher_order(proposal["value"]):
+            raise ValueError("Set upsampling_factor=1 before changing higher-order aberrations.")
         return proposal["value"]
 
-    def _on_drag_bf_change(self, change) -> None:
+    def _on_drag_pixels_change(self, change) -> None:
         """Rebuild the reduced bright-field context the session uses while the user drags."""
         self._free_drag_context()
         if int(change["new"]) > 0:
-            self._drag_context = self._ssb.preview_context(min(int(change["new"]), self._ssb.num_bf))
+            self._drag_context = self._ssb.preview_context(min(int(change["new"]), self.num_bright_field_pixels))
 
     def _on_rotation_change(self, change) -> None:
         """A new scan-detector rotation re-indexes the bright-field geometry, so the drag context is rebuilt too."""
         if self._adopting:
             return
         self._free_drag_context()
-        self._ssb.set_rotation(float(change["new"]))
-        if self.drag_bf > 0:
-            self._drag_context = self._ssb.preview_context(int(self.drag_bf))
+        self._ssb.set_scan_detector_rotation(float(change["new"]))
+        if self.num_drag_bright_field_pixels > 0:
+            self._drag_context = self._ssb.preview_context(int(self.num_drag_bright_field_pixels))
         self._reconstruct_displayed(compute_loss=True)
 
     def _on_panel_change(self, change) -> None:
@@ -515,23 +491,21 @@ class ShowPtycho(anywidget.AnyWidget):
         if not self.sample_available:
             self.sample_fit_status = "Tilt fit failed: needs a CUDA or MPS SSB session."
             return
-        self.sample_fit_status = "Fitting defocus, astigmatism, sample tilt and thickness..."
+        self.sample_fit_status = "Fitting defocus, astigmatism, sample tilt and depth spread..."
         try:
-            result = self._ssb.find_aberrations(tilt=True, verbose=False)
+            result = self._ssb.find_aberrations(sample_tilt=True)
         except (RuntimeError, ValueError, NotImplementedError, MemoryError) as exc:
             self.sample_fit_status = f"Tilt fit failed: {exc}"
             return
-        tilt_row, tilt_col = (float(value) for value in result.tilt_mrad)
-        tilt_object = object_frame_tilt(tilt_row, tilt_col, self.rotation_deg)
+        tilt_row, tilt_col = result["sample_tilt_mrad"]
+        propagator_tilt = propagator_frame_tilt(tilt_row, tilt_col, self.scan_detector_rotation_deg)
         self.sample_fit_json = json.dumps({
-            "C10": float(result.aberrations["C10"]), "C12": float(result.aberrations["C12"]),
-            "phi12_deg": math.degrees(float(result.aberrations["phi12"])),
-            "tilt_row_mrad": tilt_row, "tilt_col_mrad": tilt_col, "tilt_object_mrad": tilt_object,
-            "thickness_nm": float(result.depth_spread_nm), "gain": float(result.tilt_fit_gain),
+            **result["aberrations"], "sample_tilt_mrad": [tilt_row, tilt_col], "propagator_tilt_mrad": propagator_tilt,
+            "depth_spread_nm": result["depth_spread_nm"], "sample_tilt_fit_gain": result["sample_tilt_fit_gain"],
         })
         self.sample_fit_status = (
-            f"Tilt fit: ({tilt_row:+.1f}, {tilt_col:+.1f}) mrad scan frame = ({tilt_object[0]:+.1f}, {tilt_object[1]:+.1f}) mrad "
-            f"ptychography frame, depth spread {float(result.depth_spread_nm):.1f} nm, fit x{float(result.tilt_fit_gain):.2f} over standard SSB."
+            f"Tilt fit: ({tilt_row:+.1f}, {tilt_col:+.1f}) mrad scan frame = ({propagator_tilt[0]:+.1f}, {propagator_tilt[1]:+.1f}) mrad "
+            f"ptychography frame, depth spread {result['depth_spread_nm']:.1f} nm, fit x{result['sample_tilt_fit_gain']:.2f} over standard SSB."
         )
 
     def _on_crop_refit_request(self, change) -> None:
@@ -550,11 +524,11 @@ class ShowPtycho(anywidget.AnyWidget):
             region = request.get("scan_region")
             if not isinstance(region, (tuple, list)) or len(region) != 4:
                 raise ValueError("scan_region must be (row_start, row_stop, col_start, col_stop)")
-            n_trials = int(request.get("n_trials", 200))
-            if n_trials < 1:
+            num_trials = int(request.get("num_trials", 200))
+            if num_trials < 1:
                 raise ValueError("SSB refit needs at least one optimization trial.")
-            if not self.crop_refit_available or not self._source_file:
-                raise RuntimeError("Crop refit is unavailable. Open ShowPtycho with source_file=<master.h5>.")
+            if not self.crop_refit_available or not self._source_path:
+                raise RuntimeError("Crop refit is unavailable: open the session from its master, SSB.open(<master.h5>, ...).")
             origin_row, _, origin_col, _ = self._scan_region
             row_start, row_stop, col_start, col_stop = (int(value) for value in region)
             region = (origin_row + row_start, origin_row + row_stop, origin_col + col_start, origin_col + col_stop)
@@ -565,19 +539,18 @@ class ShowPtycho(anywidget.AnyWidget):
                 raise ValueError(
                     f"SSB refit crops must be at least {MIN_CROP_SPAN}x{MIN_CROP_SPAN}; got {row_stop - row_start}x{col_stop - col_start}."
                 )
-            self.crop_refit_status = f"Loading [{region[0]}:{region[1]}, {region[2]}:{region[3]}] and fitting SSB ({n_trials} trials)..."
-            previous = self._ssb
-            with gpu_adapter.load_acquisition(self._source_file, backend=previous.backend, scan_shape=self._source_scan_shape) as acquisition:
+            self.crop_refit_status = f"Loading [{region[0]}:{region[1]}, {region[2]}:{region[3]}] and fitting SSB ({num_trials} trials)..."
+            previous = self._ssb.state()
+            with gpu_adapter.load_acquisition(self._source_path, backend=previous["backend"], scan_shape=self._source_scan_shape) as acquisition:
                 crop = acquisition.read(scan_region=region)
-            c10, c12, phi12_deg = self._current()
-            rebuilt = gpu_adapter.ssb_session(
-                crop, backend=previous.backend, voltage_kV=previous.voltage_kV, semiangle_mrad=previous.semiangle_mrad,
-                scan_sampling_A=previous.scan_sampling_A, det_sampling=previous.det_sampling,
-                aberrations={"C10": c10, "C12": c12, "phi12": math.radians(phi12_deg)},
-                rotation_angle_deg=self.rotation_deg, bf_intensity_threshold=previous.bf_intensity_threshold,
-                bf_radius=previous.bf_radius, source_path=previous.source_path,
+            rebuilt = gpu_adapter.SsbSession.open(
+                crop, backend=previous["backend"], voltage_kV=previous["voltage_kV"], semiangle_mrad=previous["semiangle_mrad"],
+                scan_sampling_A=previous["scan_sampling_A"], detector_sampling_mrad=previous["detector_sampling_mrad"],
+                aberrations=self._current(), scan_detector_rotation_deg=self.scan_detector_rotation_deg,
+                bright_field_intensity_threshold=previous["bright_field_intensity_threshold"],
+                bright_field_radius_px=previous["bright_field_radius_px"], source_path=previous["source_path"],
             )
-            rebuilt.find_aberrations(trials=n_trials, refinement="nelder-mead", verbose=False)
+            rebuilt.find_aberrations(num_trials=num_trials, refine=True)
         except (RuntimeError, ValueError, OSError, MemoryError) as exc:
             # a refused request, an unreadable file or a solver failure; a code bug still raises
             self.crop_refit_status = f"Crop refit failed: {exc}"
@@ -586,13 +559,13 @@ class ShowPtycho(anywidget.AnyWidget):
         self._ssb = rebuilt
         self._scan_region = region
         self._adopt_session(initial=False)
-        self.crop_refit_status = f"Refit complete: [{region[0]}:{region[1]}, {region[2]}:{region[3]}], {n_trials} trials."
+        self.crop_refit_status = f"Refit complete: [{region[0]}:{region[1]}, {region[2]}:{region[3]}], {num_trials} trials."
 
     def _on_pin(self, change) -> None:
         """Pin, star, view or unpin a snapshot of the displayed aberrations.
 
-        A pin captures the higher-order panel and the source file with it, so an old snapshot stays
-        reproducible when the panel or dataset changes later; starring writes the stars file.
+        A pin captures the higher-order panel with it, so an old snapshot stays reproducible when the
+        panel changes later; starring writes the stars file.
         """
         if not change["new"]:
             return
@@ -600,10 +573,12 @@ class ShowPtycho(anywidget.AnyWidget):
         action, pin_id = event.get("action"), event.get("id")
         if action == "pin":
             entry = {
-                "id": pin_id, "C10": event.get("C10"), "C12": event.get("C12"), "phi12_deg": event.get("phi12_deg"),
-                "rotation_deg": event.get("rotation_deg", self.rotation_deg), "flip_phase": bool(event.get("flip_phase", self.flip_phase)),
-                "loss": event.get("loss"), "timestamp": datetime.datetime.now().isoformat(timespec="seconds"), "starred": False,
-                "source_file": self._source_file, "higher_order": json.loads(self.higher_order_json or "{}"),
+                "id": pin_id,
+                "aberrations": {**json.loads(self.higher_order_aberrations_json or "{}"),
+                                **{name: float(event[name]) for name in ("C10_nm", "C12_nm", "phi12_deg")}},
+                "scan_detector_rotation_deg": float(event.get("scan_detector_rotation_deg", self.scan_detector_rotation_deg)),
+                "flip_phase": bool(event.get("flip_phase", self.flip_phase)), "loss": event.get("loss"),
+                "generated_at_utc": utc_now(), "starred": False,
             }
             if self._last_phase is not None:
                 entry["phase"] = self._last_phase.copy()
@@ -614,7 +589,7 @@ class ShowPtycho(anywidget.AnyWidget):
                     entry["starred"] = action == "star"
                     if action == "star":
                         # the star time, not the pin time, is when the user decided to keep it
-                        entry["timestamp"] = datetime.datetime.now().isoformat(timespec="seconds")
+                        entry["generated_at_utc"] = utc_now()
             self._write_stars()
         elif action == "view":
             for entry in self._pinned:
@@ -624,8 +599,8 @@ class ShowPtycho(anywidget.AnyWidget):
                         self.phase_height, self.phase_width = self._last_phase.shape
                         self.phase_bytes = self._last_phase.tobytes()
                     # the viewed snapshot becomes the displayed state, so Save and later slider moves start from it
-                    self._last_result = {"id": pin_id, "C10": float(entry.get("C10", 0.0)), "C12": float(entry.get("C12", 0.0)),
-                                         "phi12_deg": float(entry.get("phi12_deg", 0.0)), "loss": entry.get("loss")}
+                    self._last_result = {"id": pin_id, **{name: entry["aberrations"][name] for name in ("C10_nm", "C12_nm", "phi12_deg")},
+                                         "loss": entry.get("loss")}
                     self.result_json = json.dumps(self._last_result)
         elif action == "unpin":
             starred = any(entry["id"] == pin_id and entry["starred"] for entry in self._pinned)
@@ -633,69 +608,58 @@ class ShowPtycho(anywidget.AnyWidget):
             if starred:
                 self._write_stars()
 
-    def _write_stars(self) -> None:
-        """Write the starred snapshots as a list of calibrations (nested ``aberrations`` in nm and radians).
+    def _calibration(self, aberrations: dict, scan_detector_rotation_deg: float, flip_phase: bool, loss) -> dict:
+        """One SSB calibration under the vocabulary's names: what ``calibration.json`` and every star hold.
 
-        Higher-order coefficients are merged in under their canonical names (``C21`` with ``phi21`` in
-        radians) so ``SSB.reconstruct`` can consume an entry without translation; zero magnitudes are omitted.
+        Aberrations are nm and degrees (``C10_nm``, ``C12_nm``, ``phi12_deg`` and the non-zero higher
+        orders ``C21_nm`` / ``phi21_deg`` ...), the rotation is the physical angle in [0, 360) with
+        ``detector_transposed`` beside it, ``scan_sampling_A`` and ``detector_sampling_mrad`` are
+        ``[row, col]``, and the optics and ``source_path`` are the session's. Both files are built
+        here, so a reader of one reads the other.
         """
-        ssb = self._ssb
-        payload = []
-        for entry in self._pinned:
-            if not entry["starred"]:
-                continue
-            aberrations = {"C10": float(entry.get("C10", 0.0)), "C12": float(entry.get("C12", 0.0)), "phi12": math.radians(float(entry.get("phi12_deg", 0.0)))}
-            higher_order = entry["higher_order"]
-            for name, _, has_angle in HIGHER_ORDER_LAYOUT:
-                magnitude = float(higher_order.get(f"{name}_mag" if has_angle else name, 0.0))
-                if magnitude == 0.0:
-                    continue
-                aberrations[name] = magnitude
-                if has_angle:
-                    aberrations[f"phi{name[1:]}"] = math.radians(float(higher_order.get(f"{name}_angle", 0.0)))
-            payload.append({
-                "id": entry["id"], "timestamp": entry["timestamp"], "starred": True,
-                "rotation_angle_deg": float(entry["rotation_deg"]), "aberrations": aberrations, "aberration_unit": ABERRATION_UNIT,
-                "flip_phase": entry["flip_phase"], "voltage_kV": ssb.voltage_kV, "semiangle_mrad": ssb.semiangle_mrad,
-                "scan_sampling_A": scan_sampling_scalar(ssb), "loss": float(entry["loss"]) if entry.get("loss") is not None else None,
-                "source_file": entry["source_file"], "notes": None,
-            })
-        write_json(self._stars_path, payload)
+        state = self._ssb.state()
+        return {
+            "aberrations": {name: float(value) for name, value in aberrations.items()
+                            # a higher-order term is kept with its azimuth only while its magnitude is non-zero
+                            if name in ("C10_nm", "C12_nm", "phi12_deg")
+                            or float(aberrations.get(f"C{name[3:-4]}_nm" if name.startswith("phi") else name, 0.0)) != 0.0},
+            "scan_detector_rotation_deg": float(scan_detector_rotation_deg) % 360.0, "detector_transposed": False,
+            "flip_phase": bool(flip_phase), "voltage_kV": state["voltage_kV"], "semiangle_mrad": state["semiangle_mrad"],
+            "scan_sampling_A": state["scan_sampling_A"], "detector_sampling_mrad": state["detector_sampling_mrad"],
+            "loss": None if loss is None else float(loss), "source_path": self._source_path, "scan_region": list(self._scan_region),
+        }
+
+    def _write_stars(self) -> None:
+        """Write the starred snapshots: ``{"schema", "stars": [calibration, ...]}``, each as ``_calibration`` builds it."""
+        stars = [{"id": entry["id"], "generated_at_utc": entry["generated_at_utc"],
+                  **self._calibration(entry["aberrations"], entry["scan_detector_rotation_deg"], entry["flip_phase"], entry.get("loss"))}
+                 for entry in self._pinned if entry["starred"]]
+        write_json(self._stars_path, {"schema": STARS_SCHEMA, "stars": stars})
 
     def _on_save(self, change) -> None:
         """Write the displayed aberrations as ``calibration.json`` and mirror them onto the session.
 
-        Magnitudes are nm and panel angles degrees as the widget shows them; phi12 stays in radians,
-        the convention downstream readers of the file expect. The session's ``aberrations`` are updated
-        so Python code still holding it sees the user's choice.
+        The file is one ``_calibration`` record with the Sample panel beside it (``sample_tilt_mrad``
+        in the scan frame, ``propagator_tilt_mrad`` in the ptychography frame, ``depth_spread_nm``).
+        The session's aberrations are updated so Python code still holding it sees the user's choice.
         """
         if self._last_phase is None or not self.result_json:
             return
-        c10, c12, phi12_deg = self._current()
+        aberrations = self._current()
         loss = self._last_result.get("loss")
-        ssb = self._ssb
-        ssb.aberrations["C10"], ssb.aberrations["C12"], ssb.aberrations["phi12"] = c10, c12, math.radians(phi12_deg)
-        if loss is not None:
-            ssb.best_loss = float(loss)
-        aberrations = {"C10": c10, "C12": c12, "phi12": math.radians(phi12_deg)}
-        for key, value in json.loads(self.higher_order_json or "{}").items():
-            if key.endswith("_angle") or abs(float(value)) > 0:
-                aberrations[key] = float(value)
-        tilt = self._tilt() if self.sample_available else None
+        self._ssb.store(aberrations, loss)
+        sample = self._sample() if self.sample_available else None
         payload = {
-            "schema_version": CALIBRATION_SCHEMA_VERSION, "version": "2.0", "aberration_unit": ABERRATION_UNIT,
-            "rotation_angle_deg": float(self.rotation_deg), "aberrations": aberrations, "higher_order": {}, "flip_phase": bool(self.flip_phase),
-            "voltage_kV": ssb.voltage_kV, "semiangle_mrad": ssb.semiangle_mrad, "scan_sampling_A": scan_sampling_scalar(ssb),
-            "det_sampling_mrad_px": None, "loss": float(loss) if loss is not None else None, "source_file": self._source_file,
-            "scan_region": self._scan_region, "source_stem": None, "label": None, "notes": self.notes, "id": uuid.uuid4().hex[:12],
-            "tilt_mrad": tilt["tilt_mrad"] if tilt else None,
-            "tilt_object_mrad": tuple(object_frame_tilt(*tilt["tilt_mrad"], self.rotation_deg)) if tilt else None,
-            "depth_spread_nm": tilt["depth_spread_nm"] if tilt else None,
-            "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+            "schema": CALIBRATION_SCHEMA, "id": uuid.uuid4().hex[:12], "generated_at_utc": utc_now(), "notes": self.notes,
+            **self._calibration({**json.loads(self.higher_order_aberrations_json or "{}"), **aberrations},
+                                self.scan_detector_rotation_deg, self.flip_phase, loss),
+            "sample_tilt_mrad": list(sample["sample_tilt_mrad"]) if sample else None,
+            "propagator_tilt_mrad": propagator_frame_tilt(*sample["sample_tilt_mrad"], self.scan_detector_rotation_deg) if sample else None,
+            "depth_spread_nm": sample["depth_spread_nm"] if sample else None,
         }
         write_json(self._calibration_path, payload)
         self.calibration_path = str(self._calibration_path.resolve())
-        self.calibration_saved_at = payload["timestamp"]
+        self.calibration_saved_at = payload["generated_at_utc"]
 
     def export(self, path: str | pathlib.Path | None = None, *, title: str | None = None) -> pathlib.Path:
         """Write a browser folder that reviews this SSB with no kernel: ``index.html``, exact bright-field
@@ -713,7 +677,7 @@ class ShowPtycho(anywidget.AnyWidget):
         """What the widget shows (array kind, size, sampling) or, for a session, the pins and drag subset."""
         if self._ssb is None:
             kind = "object wave" if self.amplitude_bytes else "phase"
-            sampling = f"{self.pixel_size:g} Å/px" if self.pixel_size > 0 else "no sampling"
+            sampling = f"{self.object_sampling_A[-1]:g} Å/px" if self.object_sampling_A else "no sampling"
             return f"ShowPtycho({kind} {self.phase_height}x{self.phase_width}, {sampling})"
-        drag = f", drag_bf={self._drag_context.num_bf}" if self._drag_context is not None else ""
+        drag = f", {self.num_drag_bright_field_pixels} bright-field pixels while dragging" if self._drag_context is not None else ""
         return f"ShowPtycho({len(self._pinned)} pinned{drag})"

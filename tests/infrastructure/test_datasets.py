@@ -303,7 +303,7 @@ def _image_widgets():
         ("ShowDiffraction", IMAGE, lambda data: ShowDiffraction(data, device="cpu", verbose=False),
          lambda widget: widget.frame_bytes, {"title": "gold"}),
         ("ChooseLattice", IMAGE, lambda data: ChooseLattice(data), lambda widget: widget.frame_bytes, {"title": "gold"}),
-        ("ShowPtycho", IMAGE, lambda data: ShowPtycho(data), lambda widget: widget.phase_bytes, {"pixel_size": 2.0}),
+        ("ShowPtycho", IMAGE, lambda data: ShowPtycho(data), lambda widget: widget.phase_bytes, {"object_sampling_A": [2.0, 2.0]}),
         # Plot2D's axes are the x and y it is given
         ("Plot2D", IMAGE, lambda data: Plot2D(data, x=np.arange(32.0), y=np.arange(24.0)), lambda widget: widget.data_bytes, {}),
     ]

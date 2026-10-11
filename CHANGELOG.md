@@ -40,8 +40,89 @@ Changed:
   when `sampling`, `units` or `k_pixel_size` contradict the calibration of the
   dataset they are given. `Show3DSlices(units=)` defaults to `"angstrom"`.
 
+- SSB files and messages use one name per concept, with the unit in the name,
+  and each file names its layout in a `schema` string; a file of another
+  layout is not converted. `*_ssb_calibration.json`, `calibration.json`
+  (`quantem.ssb-calibration/4`), `showptycho_stars.json`
+  (`quantem.ssb-stars/1`, now `{"schema", "stars": [...]}`), `snapshots/cal.json`
+  (`quantem.ssb-browser-calibration/2`), `snapshots/manifest.json`
+  (`quantem.ssb-browser-folder/3`) and `snapshots/snapshots.json`
+  (`quantem.ssb-snapshots/1`, now `{"schema", "snapshots": [...]}`):
+  `rotation_angle_deg` with `com_reversed`, `rotation_deg` and
+  `rotation_angle_rad` to `scan_detector_rotation_deg` (the physical angle in
+  [0, 360)) with `detector_transposed`; `aberrations` `C10`, `C12` to `C10_nm`,
+  `C12_nm`, `phi12` (radians) to `phi12_deg`, higher orders `C21_mag`,
+  `C21_angle`, `C21`, `phi21` to `C21_nm`, `phi21_deg` (and so on);
+  `aberration_unit`, `aberration_units`, `version`, `schema_version`, `kind`
+  and `format` to `schema`; scalar `scan_sampling_A` and `sampling_A` to
+  `scan_sampling_A` `[row, col]`; `det_sampling_mrad`, `det_sampling_mrad_px`
+  and `angular_sampling_rad` to `detector_sampling_mrad` `[row, col]`;
+  `semiangle_rad` removed (`semiangle_mrad`); `tilt_mrad` to
+  `sample_tilt_mrad`, `tilt_object_mrad` to `propagator_tilt_mrad`;
+  `source_file` to `source_path`; `timestamp` and `created_utc` to
+  `generated_at_utc` (UTC); `bf_radius`, `bf_radius_px` to
+  `bright_field_radius_px`, `bf_center` to `bright_field_center_px`,
+  `bf_pixels`, `num_bf`, `numBf`, `bf` to `num_bright_field_pixels`, `bf_rows`,
+  `bf_cols` to `bright_field_rows`, `bright_field_cols`, `kx_bf`, `ky_bf` to
+  `bright_field_k_row`, `bright_field_k_col`, `qx_1d`, `qy_1d` to `scan_q_row`,
+  `scan_q_col`; `bf_intensity_threshold` to `bright_field_intensity_threshold`;
+  `n_trials` to `num_trials`; `source.frame_idx` to `source.acquisition_index`;
+  the `calibration` and `run` groups of `*_ssb_calibration.json` are flat
+  keys; `scanShape`, `bytesPerBf`, `bitsPerValue` to `scan_shape`,
+  `bytes_per_bright_field_pixel`, `bits_per_value`. Keys that were always
+  empty are gone (`higher_order`, `source_stem`, `label`, star `notes`).
+- `ShowPtycho`: keyword `fft_on` to `show_fft`; keyword `source_file` removed
+  (the session's `source_path` is the source). Traits `rotation_deg` to
+  `scan_detector_rotation_deg`, `rotation_min`, `rotation_max` to
+  `scan_detector_rotation_min_deg`, `scan_detector_rotation_max_deg`, `c10_min`,
+  `c10_max` to `C10_min_nm`, `C10_max_nm`, `auto_c10`, `auto_c12`,
+  `auto_phi12_deg`, `auto_loss`, `auto_rotation_deg` to `fitted_C10_nm`,
+  `fitted_C12_nm`, `fitted_phi12_deg`, `fitted_loss`,
+  `fitted_scan_detector_rotation_deg`, `pixel_size` to `object_sampling_A`
+  (an array) or `scan_sampling_A` (a session), both `[row, col]`, `upsample` to
+  `upsampling_factor`, `drag_bf`, `total_bf` to
+  `num_drag_bright_field_pixels`, `num_bright_field_pixels`,
+  `higher_order_json` to `higher_order_aberrations_json`. Messages:
+  `request_json` `c10`, `c12` and `result_json`, `trials_json`, `pin_json`
+  `C10`, `C12` to `C10_nm`, `C12_nm`; `result_json` `upsample` to
+  `upsampling_factor`; `pin_json` `rotation_deg` to
+  `scan_detector_rotation_deg`; `sample_json` and `sample_fit_json`
+  `tilt_row_mrad`, `tilt_col_mrad`, `thickness_nm` to `sample_tilt_mrad`
+  `[row, col]`, `depth_spread_nm` (the value was the model's depth spread, not
+  a thickness), `tilt_object_mrad` to `propagator_tilt_mrad`, `gain` to
+  `sample_tilt_fit_gain`; `crop_refit_request_json` `n_trials` to
+  `num_trials`.
+- `Show4DSTEM`: traits `ssb_compute_c10_nm`, `ssb_compute_c12_nm` to
+  `ssb_compute_C10_nm`, `ssb_compute_C12_nm`, `ssb_compute_lock_c10`,
+  `ssb_compute_lock_c12` to `ssb_compute_lock_C10`, `ssb_compute_lock_C12`,
+  `ssb_compute_rotation_angle_deg` to `ssb_compute_scan_detector_rotation_deg`,
+  `ssb_compute_bf_pixels` to `ssb_compute_num_bright_field_pixels`,
+  `ssb_compute_n_trials` to `ssb_compute_num_trials`. `compute_ssb` keywords
+  `n_trials` to `num_trials`, `rotation_angle_deg` to
+  `scan_detector_rotation_deg`, `bf_radius` to `bright_field_radius_px`,
+  `bf_intensity_threshold` to `bright_field_intensity_threshold`, `lock_c10`,
+  `lock_c12` to `lock_C10`, `lock_C12`. The `ssb_compute_request` message
+  carries `aberrations` (`C10_nm`, `C12_nm`, `phi12_deg`),
+  `scan_detector_rotation_deg`, `num_trials`, `lock_C10`, `lock_C12` and
+  `lock_aberrations`; `manual_aberrations` and the calibration keys it never
+  sent are gone.
+- quantem.gpu is reached through `quantem.widget.adapters.gpu.SsbSession`
+  (and `js/showptycho/engineAdapter.ts` for the browser engine), the one place
+  that holds quantem.gpu's own names; `adapters.gpu.ssb_session` is removed.
+
 Fixed:
 
+- A manual SSB recompute in `Show4DSTEM` sent the rotation below 180 degrees
+  back without the reversal of the centre of mass, 180 degrees off after a fit
+  that reversed it. The trait and the calibration file hold the physical
+  angle.
+- `rotation_angle_deg` meant the angle below 180 degrees in
+  `*_ssb_calibration.json` and the physical angle in the three ShowPtycho
+  files. Every file holds `scan_detector_rotation_deg`.
+- `calibration.json` held the scan row step and `snapshots/cal.json` the
+  column step under `scan_sampling_A`; `calibration.json` held `phi12` in
+  radians beside higher-order angles in degrees, and the stars file held them
+  in radians; `det_sampling_mrad_px` was always null in `calibration.json`.
 - Compute SSB raised "needs ssb_voltage_kV" for a dataset or file that records
   the voltage.
 - A `.qem` viewer (`write_qem_bundle`, `quantem show4dstem --html` on `.qem`

@@ -67,7 +67,7 @@ phase = 0.3 * np.cos(2 * np.pi * rows / 15.6) * np.cos(2 * np.pi * cols / 15.6) 
 amplitude = 1.0 - 0.05 * np.cos(2 * np.pi * rows / 15.6) ** 2
 object_wave = amplitude * np.exp(1j * phase)
 
-ShowPtycho(object_wave, sampling=0.25, units="Å", fft_on=True)
+ShowPtycho(object_wave, sampling=0.25, units="Å", show_fft=True)
 ```
 
 The phase, amplitude (Amp), FFT, histograms and the scale bar show the array's
@@ -181,7 +181,7 @@ sharp in every direction?
 
 ```python
 standard = ssb.find_aberrations(verbose=False)
-ShowPtycho(ssb, fft_on=True)
+ShowPtycho(ssb, show_fft=True)
 ```
 
 Now let the sample lean. `find_aberrations(tilt=True)` fits the same aberrations together
@@ -190,7 +190,7 @@ defocus move?
 
 ```python
 tilted = ssb.find_aberrations(tilt=True, verbose=False)
-ShowPtycho(ssb, fft_on=True)          # opens on the fitted tilt; drag the Sample tilt sliders
+ShowPtycho(ssb, show_fft=True)          # opens on the fitted tilt; drag the Sample tilt sliders
 ```
 
 **What the fit found.**

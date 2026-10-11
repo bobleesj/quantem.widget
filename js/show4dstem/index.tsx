@@ -2338,15 +2338,15 @@ function Show4DSTEM() {
   const [ssbComputeStatus] = useModelState<string>("ssb_compute_status");
   const [ssbComputeBusy] = useModelState<boolean>("ssb_compute_busy");
   const [ssbComputeEnabled] = useModelState<boolean>("ssb_compute_enabled");
-  const [ssbComputeNTrials, setSsbComputeNTrials] = useModelState<number>("ssb_compute_n_trials");
+  const [ssbComputeNTrials, setSsbComputeNTrials] = useModelState<number>("ssb_compute_num_trials");
   const [ssbComputeRefine, setSsbComputeRefine] = useModelState<boolean>("ssb_compute_refine");
-  const [ssbComputeLockC10, setSsbComputeLockC10] = useModelState<boolean>("ssb_compute_lock_c10");
-  const [ssbComputeLockC12, setSsbComputeLockC12] = useModelState<boolean>("ssb_compute_lock_c12");
-  const [ssbComputeBfPixels] = useModelState<number>("ssb_compute_bf_pixels");
-  const [ssbComputeC10Nm, setSsbComputeC10Nm] = useModelState<number>("ssb_compute_c10_nm");
-  const [ssbComputeC12Nm, setSsbComputeC12Nm] = useModelState<number>("ssb_compute_c12_nm");
+  const [ssbComputeLockC10, setSsbComputeLockC10] = useModelState<boolean>("ssb_compute_lock_C10");
+  const [ssbComputeLockC12, setSsbComputeLockC12] = useModelState<boolean>("ssb_compute_lock_C12");
+  const [ssbComputeBfPixels] = useModelState<number>("ssb_compute_num_bright_field_pixels");
+  const [ssbComputeC10Nm, setSsbComputeC10Nm] = useModelState<number>("ssb_compute_C10_nm");
+  const [ssbComputeC12Nm, setSsbComputeC12Nm] = useModelState<number>("ssb_compute_C12_nm");
   const [ssbComputePhi12Deg, setSsbComputePhi12Deg] = useModelState<number>("ssb_compute_phi12_deg");
-  const [ssbComputeRotationDeg, setSsbComputeRotationDeg] = useModelState<number>("ssb_compute_rotation_angle_deg");
+  const [ssbComputeRotationDeg, setSsbComputeRotationDeg] = useModelState<number>("ssb_compute_scan_detector_rotation_deg");
   const [ssbComputeCalibrationJson] = useModelState<string>("ssb_compute_calibration_json");
   const [ssbComputeCalibrationFilename] = useModelState<string>("ssb_compute_calibration_filename");
 
@@ -4591,17 +4591,14 @@ function Show4DSTEM() {
     const payload = JSON.stringify({
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       action: "compute_ssb",
-      n_trials: nTrials,
+      num_trials: nTrials,
       refine: Boolean(ssbComputeRefine),
-      lock_c10: Boolean(ssbComputeLockC10),
-      lock_c12: Boolean(ssbComputeLockC12),
-      manual_aberrations: manualAberrations,
+      lock_C10: Boolean(ssbComputeLockC10),
+      lock_C12: Boolean(ssbComputeLockC12),
       lock_aberrations: manualAberrations,
       ...(manualAberrations ? {
-        c10_nm: c10Nm,
-        c12_nm: c12Nm,
-        phi12_deg: phi12Deg,
-        rotation_angle_deg: rotationDeg,
+        aberrations: { C10_nm: c10Nm, C12_nm: c12Nm, phi12_deg: phi12Deg },
+        scan_detector_rotation_deg: rotationDeg,
       } : {}),
     });
     if (options?.closeMenu !== false) setDpMoreAnchor(null);
@@ -8652,8 +8649,9 @@ function Show4DSTEM() {
                         label: "Rotation",
                         unit: "°",
                         value: Number(ssbComputeRotationDeg ?? 0),
-                        min: -180,
-                        max: 180,
+                        // the physical scan-to-detector rotation: the whole turn, the 180-degree reversal included
+                        min: 0,
+                        max: 360,
                         step: 0.1,
                         precision: 1,
                         setValue: setSsbComputeRotationDeg,

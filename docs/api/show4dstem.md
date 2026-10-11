@@ -290,9 +290,14 @@ viewer = Show4DSTEM(counts, voltage_kV=300, semiangle_mrad=30, scan_sampling_A=(
 `(row, col)` in mrad or 1/angstrom per pixel. A keyword that contradicts a
 value the input records raises: the dataset or file is the source of its
 calibration. The fit uses every detected
-bright-field pixel (the `compute_ssb` keywords `bf_intensity_threshold` and
-`bf_radius`). The keywords `n_trials`, `refine` and `seed` control the search,
-for example `viewer.compute_ssb(n_trials=100, seed=0)`. Compute SSB
+bright-field pixel (the `compute_ssb` keywords
+`bright_field_intensity_threshold` and `bright_field_radius_px`). The keywords
+`num_trials`, `refine` and `seed` control the search, for example
+`viewer.compute_ssb(num_trials=100, seed=0)`. The fitted values are the traits
+`ssb_compute_C10_nm`, `ssb_compute_C12_nm`, `ssb_compute_phi12_deg` and
+`ssb_compute_scan_detector_rotation_deg` (the physical rotation in [0, 360)),
+and the downloadable `*_ssb_calibration.json` holds them under the same names
+with `"schema": "quantem.ssb-calibration/4"`. Compute SSB
 needs one 4D frame on a square 128, 256, or 512 scan grid. An encoded
 acquisition goes to SSB without a dense copy; SSB decodes only the
 bright-field disk.

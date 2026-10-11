@@ -193,7 +193,8 @@ def test_gpu_adapter_without_quantem_gpu_explains_the_install(monkeypatch):
     assert not adapter.is_acquisition(np.zeros(3)) and not adapter.is_ssb(object())
     _machine(monkeypatch, system="linux", machine="x86_64", nvidia=True)
     for call in (lambda: adapter.load_acquisition("scan_master.h5"), lambda: adapter.prepare_session(None),
-                 lambda: adapter.ssb_session(None), lambda: adapter.discover_masters(".")):
+                 lambda: adapter.SsbSession.open(None, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=0.5),
+                 lambda: adapter.discover_masters(".")):
         with pytest.raises(ImportError, match=r'pip install "quantem.widget\[cuda\]"'):
             call()
     _machine(monkeypatch, system="win32", machine="ARM64")

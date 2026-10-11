@@ -39,7 +39,7 @@ import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen, GPUColorma
 import { nextPow2, shiftedMagnitude, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset, getDisplayFFT, type DisplayFFT } from "../display/fft";
 import { findFFTPeakBrowser } from "../display/geometry";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI } from "../figure";
-import type { WebGPUReconstructionOptions } from "../.generated/engine/ssb/webgpu/protocol";
+import { type SampleValues, SNAPSHOTS_SCHEMA, engineCalibrationJson, engineSourceJson, higherOrderAzimuthKey, higherOrderMagnitudeKey, reconstruct } from "./engineAdapter";
 import { WebGPUSSBBackend, deleteSSBFolderFile, readSSBFolderBytes, readSSBFolderJson, setSSBLocalDirectory, setSSBLocalFiles, ssbFolderWritable, ssbNeedsLocalSource, writeSSBFolderFile, type WebGPULoadProgress, type WebGPUSSBResult } from "../.generated/engine/ssb/webgpu/backend";
 
 /* ================================================================
@@ -251,14 +251,14 @@ type GPUColormapSlot = 0 | 1 | 2;
 
 interface PinnedEntry {
   id: number;
-  C10: number;
-  C12: number;
+  C10_nm: number;
+  C12_nm: number;
   phi12_deg: number;
-  rotation_deg: number;
+  scan_detector_rotation_deg: number;
   flip_phase: boolean;
   loss: number;
   starred: boolean;
-  timestamp: string;
+  generated_at_utc: string;
   phaseData: Float32Array;
   w: number;
   h: number;
@@ -1119,35 +1119,11 @@ function formatHOValue(valueNm: number, maxNm: number, displayScale: number): st
   return value.toFixed(4);
 }
 
-/* Aberration units: ShowPtycho's sliders are nm; the SSB engines (Python backends and this browser WebGPU engine) evaluate
-   chi = (pi / lambda[A]) alpha^2 (C10 + ...), i.e. take Angstrom.  Python converts at quantem.gpu's SSB boundary; the browser
-   engine is called directly, so C10 / C12 and every higher-order magnitude go through this helper (angles unchanged). */
-const ENGINE_PER_NM = 10;
-function reconstructNm(
-  engine: WebGPUSSBBackend,
-  c10Nm: number, c12Nm: number, phi12Rad: number,
-  options: Omit<WebGPUReconstructionOptions, "upsample" | "sample"> & { upsample?: number; sample?: SampleValues | null },
-) {
-  const higherOrder: Record<string, number> = {};
-  for (const [key, value] of Object.entries(options.higherOrder ?? {})) {
-    higherOrder[key] = key.endsWith("_angle") ? value : value * ENGINE_PER_NM;
-  }
-  // Thick-sample SSB: thickness nm -> Angstrom like C10; tilt stays mrad. Thickness 0 sends no sample (standard SSB path).
-  const { sample: sampleNm, ...rest } = options;
-  const sample = sampleNm && sampleNm.thickness_nm > 0
-    ? { tiltRowMrad: sampleNm.tilt_row_mrad, tiltColMrad: sampleNm.tilt_col_mrad, thickness: sampleNm.thickness_nm * ENGINE_PER_NM }
-    : undefined;
-  // the engine itself rejects an upsample other than 1, 2, 4 or 8, so the narrowing cast is safe
-  return engine.reconstruct(c10Nm * ENGINE_PER_NM, c12Nm * ENGINE_PER_NM, phi12Rad,
-    { ...rest, higherOrder, ...(sample ? { sample } : {}) } as WebGPUReconstructionOptions);
-}
-
 /* Sample panel: thick-sample SSB.  A crystal of thickness t tilted by theta changes how strongly
    each bright-field pixel carries each spatial frequency; the kernel averages every pixel's
    correction over the depth with the columns leaning by the tilt.  Thickness 0 = standard SSB.
    "Fit tilt" fits C10, C12, phi12, tilt and thickness together in Python (CUDA session). */
-type SampleValues = { tilt_row_mrad: number; tilt_col_mrad: number; thickness_nm: number };
-const SAMPLE_ZERO: SampleValues = { tilt_row_mrad: 0, tilt_col_mrad: 0, thickness_nm: 0 };
+const SAMPLE_ZERO: SampleValues = { tiltRowMrad: 0, tiltColMrad: 0, depthSpreadNm: 0 };
 
 function SamplePanel({
   tc, open, onToggle, values, setValues, onCommit, onFit, fitBusy, fitStatus, fitAvailable = true,
@@ -1163,13 +1139,13 @@ function SamplePanel({
   fitStatus: string;
   fitAvailable?: boolean;
 }) {
-  const active = values.thickness_nm > 0;
+  const active = values.depthSpreadNm > 0;
   const sliders: { key: keyof SampleValues; label: string; unit: string; min: number; max: number; step: number; tip: string }[] = [
-    { key: "tilt_row_mrad", label: "tilt row", unit: "mrad", min: -25, max: 25, step: 0.1,
+    { key: "tiltRowMrad", label: "tilt row", unit: "mrad", min: -25, max: 25, step: 0.1,
       tip: "Sample tilt along the scan rows.  Only acts when thickness > 0." },
-    { key: "tilt_col_mrad", label: "tilt col", unit: "mrad", min: -25, max: 25, step: 0.1,
+    { key: "tiltColMrad", label: "tilt col", unit: "mrad", min: -25, max: 25, step: 0.1,
       tip: "Sample tilt along the scan columns.  Only acts when thickness > 0." },
-    { key: "thickness_nm", label: "thickness", unit: "nm", min: 0, max: 60, step: 0.5,
+    { key: "depthSpreadNm", label: "depth spread", unit: "nm", min: 0, max: 60, step: 0.5,
       tip: "Depth over which the correction is averaged.  0 = standard SSB.  A model depth spread, not a measured sample thickness." },
   ];
   return (
@@ -1189,13 +1165,13 @@ function SamplePanel({
         </Typography>
         {active && (
           <Box sx={{ fontSize: 10, px: 0.8, py: 0.1, borderRadius: 0, bgcolor: STATUS_GOOD, color: "#fff", fontFamily: "monospace" }}>
-            ({values.tilt_row_mrad.toFixed(1)}, {values.tilt_col_mrad.toFixed(1)}) mrad · {values.thickness_nm.toFixed(1)} nm
+            ({values.tiltRowMrad.toFixed(1)}, {values.tiltColMrad.toFixed(1)}) mrad · {values.depthSpreadNm.toFixed(1)} nm
           </Box>
         )}
         <Tooltip title="Back to standard SSB (tilt 0, thickness 0)." placement="top" arrow>
           <span>
             <IconButton
-              size="small" aria-label="Reset sample tilt and thickness" disabled={!active && values.tilt_row_mrad === 0 && values.tilt_col_mrad === 0}
+              size="small" aria-label="Reset sample tilt and thickness" disabled={!active && values.tiltRowMrad === 0 && values.tiltColMrad === 0}
               onClick={(e) => { e.stopPropagation(); onCommit?.(); setValues(SAMPLE_ZERO); }}
               sx={compactBareIconButton(tc)}
             >
@@ -1259,29 +1235,28 @@ function HigherOrderPanel({
     setValues(prev => ({ ...prev, [name]: value }));
   }, [setValues]);
   const updateAngle = React.useCallback((name: string, deg: number) => {
-    setValues(prev => ({ ...prev, [`${name}_angle`]: deg }));
+    setValues(prev => ({ ...prev, [higherOrderAzimuthKey(name)]: deg }));
   }, [setValues]);
   const resetAll = React.useCallback(() => setValues({}), [setValues]);
-  const resetMag = React.useCallback((name: string, hasAngle: boolean) => {
+  const resetMag = React.useCallback((name: string) => {
     setValues(prev => {
       const next = { ...prev };
-      const magKey = hasAngle ? `${name}_mag` : name;
-      delete next[magKey];
+      delete next[higherOrderMagnitudeKey(name)];
       return next;
     });
   }, [setValues]);
   const resetAngle = React.useCallback((name: string) => {
     setValues(prev => {
       const next = { ...prev };
-      delete next[`${name}_angle`];
+      delete next[higherOrderAzimuthKey(name)];
       return next;
     });
   }, [setValues]);
   const orderColumns = React.useMemo(() => [[2, 3], [4, 5]], []);
   const renderEntry = React.useCallback((entry: HOEntry) => {
-    const magKey = entry.hasAngle ? `${entry.name}_mag` : entry.name;
+    const magKey = higherOrderMagnitudeKey(entry.name);
     const mag = values[magKey] ?? 0;
-    const angle = entry.hasAngle ? (values[`${entry.name}_angle`] ?? 0) : 0;
+    const angle = entry.hasAngle ? (values[higherOrderAzimuthKey(entry.name)] ?? 0) : 0;
     const isActive = Math.abs(mag) > 0;
     const hasAngleOffset = entry.hasAngle && Math.abs(angle) > 0;
     return (
@@ -1322,7 +1297,7 @@ function HigherOrderPanel({
           size="small"
           aria-label={`Reset ${entry.name} magnitude`}
           disabled={!isActive}
-          onClick={() => resetMag(entry.name, entry.hasAngle)}
+          onClick={() => resetMag(entry.name)}
           sx={compactBareIconButton(tc)}
         >
           <RestartAltIcon sx={{ fontSize: 13 }} />
@@ -1457,20 +1432,22 @@ function Explore() {
   const { colors: tc } = useTheme();
 
   /* --- Model state (traitlets) --- */
-  const [c10Min] = useModelState<number>("c10_min");
-  const [c10Max] = useModelState<number>("c10_max");
-  const [rotationMin] = useModelState<number>("rotation_min");
-  const [rotationMax] = useModelState<number>("rotation_max");
-  const [rotationDeg, setRotationDeg] = useModelState<number>("rotation_deg");
+  const [c10Min] = useModelState<number>("C10_min_nm");
+  const [c10Max] = useModelState<number>("C10_max_nm");
+  const [rotationMin] = useModelState<number>("scan_detector_rotation_min_deg");
+  const [rotationMax] = useModelState<number>("scan_detector_rotation_max_deg");
+  const [rotationDeg, setRotationDeg] = useModelState<number>("scan_detector_rotation_deg");
   const [flipPhase, setFlipPhase] = useModelState<boolean>("flip_phase");
 
-  const [autoC10] = useModelState<number>("auto_c10");
-  const [autoC12] = useModelState<number>("auto_c12");
-  const [autoPhi12] = useModelState<number>("auto_phi12_deg");
-  const [autoRotation] = useModelState<number>("auto_rotation_deg");
-  const [autoLoss] = useModelState<number>("auto_loss");
-  const [nativePixelSize] = useModelState<number>("pixel_size");
-  const [upsample, setUpsample] = useModelState<number>("upsample");
+  const [autoC10] = useModelState<number>("fitted_C10_nm");
+  const [autoC12] = useModelState<number>("fitted_C12_nm");
+  const [autoPhi12] = useModelState<number>("fitted_phi12_deg");
+  const [autoRotation] = useModelState<number>("fitted_scan_detector_rotation_deg");
+  const [autoLoss] = useModelState<number>("fitted_loss");
+  // an array carries the pixel size of its image; a session the scan step, which the output sampling divides
+  const [objectSamplingA] = useModelState<number[]>("object_sampling_A");
+  const [scanSamplingA] = useModelState<number[]>("scan_sampling_A");
+  const [upsample, setUpsample] = useModelState<number>("upsampling_factor");
   const [upsamplingAvailable] = useModelState<boolean>("upsampling_available");
   const upsampleRef = React.useRef(upsample || 1); upsampleRef.current = upsample || 1;
 
@@ -1480,8 +1457,8 @@ function Explore() {
   const [phaseHeight] = useModelState<number>("phase_height");
   const [resultJson] = useModelState<string>("result_json");
   const [, setPinJson] = useModelState<string>("pin_json");
-  const [dragBfTrait, setDragBfTrait] = useModelState<number>("drag_bf");
-  const [totalBf] = useModelState<number>("total_bf");
+  const [dragBfTrait, setDragBfTrait] = useModelState<number>("num_drag_bright_field_pixels");
+  const [totalBf] = useModelState<number>("num_bright_field_pixels");
   const [starsPath] = useModelState<string>("stars_path");
   const [saveTrigger, setSaveTrigger] = useModelState<number>("save_trigger");
   const [notes, setNotes] = useModelState<string>("notes");
@@ -1489,7 +1466,7 @@ function Explore() {
   const [calibrationSavedAt] = useModelState<string>("calibration_saved_at");
   const [trialsJson] = useModelState<string>("trials_json");
   const [initialFftOn] = useModelState<boolean>("initial_fft_on");
-  const [, setHigherOrderJson] = useModelState<string>("higher_order_json");
+  const [, setHigherOrderJson] = useModelState<string>("higher_order_aberrations_json");
   const [webgpuPreviewEnabled] = useModelState<boolean>("webgpu_preview_enabled");
   const [webgpuCalJson] = useModelState<string>("webgpu_cal_json");
   const [webgpuH5SourceJson] = useModelState<string>("webgpu_h5_source_json");
@@ -1548,8 +1525,8 @@ function Explore() {
   const rotationUiMin = uiRanges.rot[0];
   const rotationUiMax = uiRanges.rot[1];
 
-  /* --- Higher-order aberration state.  Keys: C21_mag/C21_angle, ..., C56_mag/C56_angle,
-         plus C30/C50 as bare magnitudes (no angle).  All values default to 0. */
+  /* --- Higher-order aberration state.  Keys: C21_nm/phi21_deg, ..., C56_nm/phi56_deg,
+         with C30_nm/C50_nm alone (no azimuth).  All values default to 0. */
   const [higherOrder, setHigherOrder] = React.useState<Record<string, number>>({});
   const [hoOpen, setHoOpen] = React.useState(false);
   // Count non-zero magnitudes so the UI can show "active" + user knows when
@@ -1557,7 +1534,7 @@ function Explore() {
   const hoActiveCount = React.useMemo(() => {
     let count = 0;
     for (const key of Object.keys(higherOrder)) {
-      if (!key.endsWith("_angle") && Math.abs(higherOrder[key] || 0) > 0) count += 1;
+      if (key.endsWith("_nm") && Math.abs(higherOrder[key] || 0) > 0) count += 1;
     }
     return count;
   }, [higherOrder]);
@@ -1579,7 +1556,7 @@ function Explore() {
     if (!webgpuCalJson) return 0;
     try {
       const cal = JSON.parse(webgpuCalJson);
-      const numBf = Number(cal?.num_bf || 0);
+      const numBf = Number(cal?.num_bright_field_pixels || 0);
       return Number.isFinite(numBf) && numBf > 0 ? Math.round(numBf) : 0;
     } catch {
       return 0;
@@ -1620,7 +1597,10 @@ function Explore() {
   const pinLayoutBeforeRef = React.useRef<Map<number, DOMRect> | null>(null);
 
   const rawPhaseRef = React.useRef<{ data: Float32Array; w: number; h: number } | null>(null);
-  const pixelSize = nativePixelSize * (scanCols || phaseWidth || 1) / (rawPhaseRef.current?.w || phaseWidth || scanCols || 1);
+  // the horizontal scale bar measures columns: an array's own pixel, or the scan step shared out over the output columns
+  const pixelSize = objectSamplingA?.length === 2 ? objectSamplingA[1]
+    : scanSamplingA?.length === 2 ? scanSamplingA[1] * (scanCols || phaseWidth || 1) / (rawPhaseRef.current?.w || phaseWidth || scanCols || 1)
+    : 0;
   const [phaseZoom, setPhaseZoom] = React.useState(ZOOM_RESET);
   const [ampZoom, setAmpZoom] = React.useState(ZOOM_RESET);
   const [complexZoom, setComplexZoom] = React.useState(ZOOM_RESET);
@@ -1684,7 +1664,7 @@ function Explore() {
     setCropSelecting(false);
     setCropRefitPending(true);
     setCropRefitRequestJson(JSON.stringify({
-      id: Date.now(), scan_region: scanCrop, n_trials: 200,
+      id: Date.now(), scan_region: scanCrop, num_trials: 200,
     }));
   }, [cropRefitAvailable, scanCrop, setCropRefitRequestJson]);
   const cropSummary = React.useMemo(() => {
@@ -1800,21 +1780,16 @@ function Explore() {
     if (picker) {
       try {
         const handle = await picker.call(globalThis, { startIn: "downloads", mode: "readwrite" } as { startIn: string });
-        // Validate old exports with root cal.json and clean exports with
-        // snapshots/cal.json; calibration is embedded, this only catches a
+        // The calibration is embedded in the page; looking for snapshots/cal.json only catches a
         // wrong folder selection before source/saves reads fail later.
         try {
-          await handle.getFileHandle("cal.json");
+          const snapshots = await handle.getDirectoryHandle("snapshots");
+          await snapshots.getFileHandle("cal.json");
         } catch {
-          try {
-            const snapshots = await handle.getDirectoryHandle("snapshots");
-            await snapshots.getFileHandle("cal.json");
-          } catch {
-            setLocalSourceError(
-              `That folder has no calibration snapshot - select the folder named "${localFolderName || "the one containing this page"}" (the folder this index.html lives in).`,
-            );
-            return;
-          }
+          setLocalSourceError(
+            `That folder has no calibration snapshot - select the folder named "${localFolderName || "the one containing this page"}" (the folder this index.html lives in).`,
+          );
+          return;
         }
         setSSBLocalDirectory(handle);
         setLocalSourceError("");
@@ -1829,22 +1804,25 @@ function Explore() {
   // deletable, downloadable from the strip below the action row.
   type FolderSaveRecord = {
     id: string;
-    timestamp: string;
-    C10: number;
-    C12: number;
+    generated_at_utc: string;
+    C10_nm: number;
+    C12_nm: number;
     phi12_deg: number;
-    rotation_deg: number;
+    scan_detector_rotation_deg: number;
     flip_phase: boolean;
     loss: number | null;
-    bf: number;
+    num_bright_field_pixels: number;
     notes: string;
     image: string;
   };
   const [folderSaves, setFolderSaves] = React.useState<FolderSaveRecord[]>([]);
   const [folderSaveStatus, setFolderSaveStatus] = React.useState("");
   const refreshFolderSaves = React.useCallback(async () => {
-    const current = await readSSBFolderJson<FolderSaveRecord[]>("snapshots/snapshots.json");
-    setFolderSaves(Array.isArray(current) ? current : []);
+    const current = await readSSBFolderJson<{ schema?: string; snapshots?: FolderSaveRecord[] }>("snapshots/snapshots.json");
+    const readable = current?.schema === SNAPSHOTS_SCHEMA && Array.isArray(current.snapshots);
+    // a file of another layout (an earlier release) is not converted: it is left on disk and reported
+    if (current && !readable) setFolderSaveStatus(`snapshots/snapshots.json is not ${SNAPSHOTS_SCHEMA}; its snapshots are not listed`);
+    setFolderSaves(readable ? current.snapshots! : []);
   }, []);
   React.useEffect(() => {
     if (webgpuStandalone && localSourceGranted) void refreshFolderSaves();
@@ -1856,8 +1834,7 @@ function Explore() {
         file.name,
         (file as File & { webkitRelativePath?: string }).webkitRelativePath || "",
       ]));
-      const hasCalibration = names.has("cal.json")
-        || Array.from(names).some((name) => name.endsWith("snapshots/cal.json"));
+      const hasCalibration = Array.from(names).some((name) => name.endsWith("snapshots/cal.json"));
       if (!hasCalibration) {
         setLocalSourceError(
           `That folder has no calibration snapshot - select the folder named "${localFolderName || "the one containing this page"}".`,
@@ -1887,9 +1864,9 @@ function Explore() {
       const parsedSource = JSON.parse(webgpuH5SourceJson) as { kind?: string };
       const source = {
         kind: parsedSource.kind === "bf_columns" ? "bf_columns" as const : "hdf5" as const,
-        json: webgpuH5SourceJson,
+        json: engineSourceJson(webgpuH5SourceJson),
       };
-      const engine = new WebGPUSSBBackend(webgpuCalJson, source);
+      const engine = new WebGPUSSBBackend(engineCalibrationJson(webgpuCalJson), source);
       engine.setProgressHandler((progress) => {
         setWebgpuLoadProgress(progress.stage === "ready" ? null : progress);
         setWebgpuRuntimeStatus(webgpuProgressLabel(progress));
@@ -1971,8 +1948,8 @@ function Explore() {
   const [sample, setSample] = React.useState<SampleValues>(() => {
     try {
       const parsed = JSON.parse(sampleJsonModel || "{}");
-      return parsed && Number(parsed.thickness_nm) > 0
-        ? { tilt_row_mrad: Number(parsed.tilt_row_mrad) || 0, tilt_col_mrad: Number(parsed.tilt_col_mrad) || 0, thickness_nm: Number(parsed.thickness_nm) }
+      return parsed && Number(parsed.depth_spread_nm) > 0
+        ? { tiltRowMrad: Number(parsed.sample_tilt_mrad?.[0]) || 0, tiltColMrad: Number(parsed.sample_tilt_mrad?.[1]) || 0, depthSpreadNm: Number(parsed.depth_spread_nm) }
         : SAMPLE_ZERO;
     } catch { return SAMPLE_ZERO; }
   });
@@ -1982,7 +1959,10 @@ function Explore() {
   const [sampleFitBusy, setSampleFitBusy] = React.useState(false);
   // Debounced effects: each run's cleanup cancels the previous timer, so only the last change in 20 ms fires.
   React.useEffect(() => {
-    const timer = window.setTimeout(() => setSampleJson(JSON.stringify(sample)), 20);
+    // the wire holds the tilt as one [row, col] pair
+    const timer = window.setTimeout(() => setSampleJson(JSON.stringify({
+      sample_tilt_mrad: [sample.tiltRowMrad, sample.tiltColMrad], depth_spread_nm: sample.depthSpreadNm,
+    })), 20);
     return () => window.clearTimeout(timer);
   }, [sample, setSampleJson]);
   React.useEffect(() => {
@@ -2015,7 +1995,7 @@ function Explore() {
     const id = ++requestIdRef.current;
     setBusy(true);
     setViewPin(null);
-    setRequestJson(JSON.stringify({ id, c10: c10Val, c12: c12Val, phi12_deg: phi12Val, committed }));
+    setRequestJson(JSON.stringify({ id, C10_nm: c10Val, C12_nm: c12Val, phi12_deg: phi12Val, committed }));
   }, [setRequestJson]);
 
   const sendDrag = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal = rotationDegRef.current) => {
@@ -2113,8 +2093,8 @@ function Explore() {
      For 30 FPS responsiveness on very large full-BF disks, reduce BF subset via
      the existing drag_bf slider. */
   // SweepParam: one of the main-slider keys, or a higher-order key of the form
-  // "ho:<hoKey>" where <hoKey> is either a magnitude key (e.g. "C32_mag",
-  // "C30") or an angle key ("C32_angle").
+  // "ho:<hoKey>" where <hoKey> is either a magnitude key (e.g. "C32_nm",
+  // "C30_nm") or an azimuth key ("phi32_deg").
   type SweepParam = string;
   const [playing, setPlaying] = React.useState(false);
   const [playFps, setPlayFps] = React.useState(10);
@@ -2123,7 +2103,7 @@ function Explore() {
      a loss-ranked strip the user can click through to preview any trial.
      Collapsed by default when there are many trials so the widget doesn't
      dominate the notebook scroll. --- */
-  interface OptunaTrial { rank: number; C10: number; C12: number; phi12_deg: number; loss: number; }
+  interface OptunaTrial { rank: number; C10_nm: number; C12_nm: number; phi12_deg: number; loss: number; }
   const trials: OptunaTrial[] = React.useMemo(() => {
     if (!trialsJson) return [];
     try {
@@ -2137,8 +2117,8 @@ function Explore() {
   const doViewTrial = React.useCallback((trial: OptunaTrial) => {
     setActiveTrialRank(trial.rank);
     setViewPin(null);   // trials + pins are mutually exclusive selections
-    setC10(trial.C10); setC12(trial.C12); setPhi12(trial.phi12_deg);
-    sendCommit(trial.C10, trial.C12, trial.phi12_deg);
+    setC10(trial.C10_nm); setC12(trial.C12_nm); setPhi12(trial.phi12_deg);
+    sendCommit(trial.C10_nm, trial.C12_nm, trial.phi12_deg);
   }, [sendCommit]);
   const [sweepParam, setSweepParam] = React.useState<SweepParam>("c10");
   const sweepIdxRef = React.useRef(0);
@@ -2168,8 +2148,8 @@ function Explore() {
     if (param.startsWith("bundle:")) return [0, 1];
     if (param.startsWith("ho:")) {
       const hoKey = param.slice(3);
-      if (hoKey.endsWith("_angle")) return [-180, 180];
-      const baseName = hoKey.endsWith("_mag") ? hoKey.slice(0, -4) : hoKey;
+      if (hoKey.startsWith("phi")) return [-180, 180];
+      const baseName = hoKey.slice(0, -3);
       for (const order of [2, 3, 4, 5]) {
         const entry = HO_BY_ORDER[order].find(candidate => candidate.name === baseName);
         if (entry) return [-entry.mag_max, entry.mag_max];
@@ -2517,13 +2497,14 @@ function Explore() {
     const bfCount = selectedDragBfCount();
     const total = Math.max(1, effectiveTotalBf || bfCount);
     const isFull = bfCount >= total;
-    reconstructNm(engine, c10Val, c12Val, phi12Val * Math.PI / 180, {
-      preview: !isFull,
-      bfCount,
+    reconstruct(engine, {
+      aberrations: { C10_nm: c10Val, C12_nm: c12Val, phi12_deg: phi12Val },
+      higherOrderAberrations: higherOrderRef.current,
+      scanDetectorRotationDeg: rotationVal,
+      upsamplingFactor: upsampleRef.current,
+      numBrightFieldPixels: bfCount,
+      reducedBrightField: !isFull,
       computeLoss: false,
-      rotationDeg: rotationVal,
-      upsample: upsampleRef.current,
-      higherOrder: higherOrderRef.current,
       sample: sampleRef.current,
     }).then(result => {
       const phase = result.phase;
@@ -2579,13 +2560,14 @@ function Explore() {
     const bfCount = selectedDragBfCount();
     const total = Math.max(1, effectiveTotalBf || bfCount);
     const isFull = bfCount >= total;
-    reconstructNm(engine, c10Val, c12Val, phi12Val * Math.PI / 180, {
-      preview: !isFull,
-      bfCount,
+    reconstruct(engine, {
+      aberrations: { C10_nm: c10Val, C12_nm: c12Val, phi12_deg: phi12Val },
+      higherOrderAberrations: higherOrderRef.current,
+      scanDetectorRotationDeg: rotationVal,
+      upsamplingFactor: upsampleRef.current,
+      numBrightFieldPixels: bfCount,
+      reducedBrightField: !isFull,
       computeLoss: isFull,
-      rotationDeg: rotationVal,
-      upsample: upsampleRef.current,
-      higherOrder: higherOrderRef.current,
       sample: sampleRef.current,
     }).then(result => {
       const phase = result.phase;
@@ -2721,12 +2703,12 @@ function Explore() {
   React.useEffect(() => {
     if (!sampleFitJson || sampleFitJson === appliedSampleFitRef.current) return;
     appliedSampleFitRef.current = sampleFitJson;
-    let fit: { C10: number; C12: number; phi12_deg: number; tilt_row_mrad: number; tilt_col_mrad: number; thickness_nm: number };
+    let fit: { C10_nm: number; C12_nm: number; phi12_deg: number; sample_tilt_mrad: [number, number]; depth_spread_nm: number };
     try { fit = JSON.parse(sampleFitJson); } catch { return; }
-    setSample({ tilt_row_mrad: fit.tilt_row_mrad, tilt_col_mrad: fit.tilt_col_mrad, thickness_nm: fit.thickness_nm });
+    setSample({ tiltRowMrad: fit.sample_tilt_mrad[0], tiltColMrad: fit.sample_tilt_mrad[1], depthSpreadNm: fit.depth_spread_nm });
     setSampleOpen(true);
-    setC10(fit.C10); setC12(fit.C12); setPhi12(fit.phi12_deg);
-    sendCommit(fit.C10, fit.C12, fit.phi12_deg);
+    setC10(fit.C10_nm); setC12(fit.C12_nm); setPhi12(fit.phi12_deg);
+    sendCommit(fit.C10_nm, fit.C12_nm, fit.phi12_deg);
   }, [sampleFitJson, sendCommit]);
 
   const doReset = () => {
@@ -2812,14 +2794,14 @@ function Explore() {
     capturePinLayout();
     const entry: PinnedEntry = {
       id: Date.now(),
-      C10: sliderVals.current.c10,
-      C12: sliderVals.current.c12,
+      C10_nm: sliderVals.current.c10,
+      C12_nm: sliderVals.current.c12,
       phi12_deg: sliderVals.current.phi12,
-      rotation_deg: rotationDeg ?? 0,
+      scan_detector_rotation_deg: rotationDeg ?? 0,
       flip_phase: !!flipPhase,
       loss: loss ?? 0,
       starred: false,
-      timestamp: new Date().toISOString(),
+      generated_at_utc: new Date().toISOString(),
       phaseData: new Float32Array(phase.data),
       w: phase.w, h: phase.h,
       thumb: makeThumbnail(phase.data, phase.w, phase.h, cmapRef.current),
@@ -2833,9 +2815,9 @@ function Explore() {
     window.setTimeout(() => setNewPinId(current => current === entry.id ? null : current), 700);
     setPinJson(JSON.stringify({
       action: "pin", id: entry.id,
-      C10: entry.C10, C12: entry.C12, phi12_deg: entry.phi12_deg,
-      rotation_deg: entry.rotation_deg, flip_phase: entry.flip_phase,
-      loss: entry.loss, timestamp: entry.timestamp,
+      C10_nm: entry.C10_nm, C12_nm: entry.C12_nm, phi12_deg: entry.phi12_deg,
+      scan_detector_rotation_deg: entry.scan_detector_rotation_deg, flip_phase: entry.flip_phase,
+      loss: entry.loss, generated_at_utc: entry.generated_at_utc,
     }));
   }, [busy, capturePinLayout, loss, rotationDeg, flipPhase, setPinJson]);
 
@@ -2862,21 +2844,21 @@ function Explore() {
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const record: FolderSaveRecord = {
         id: stamp,
-        timestamp: new Date().toISOString(),
-        C10: sliderVals.current.c10,
-        C12: sliderVals.current.c12,
+        generated_at_utc: new Date().toISOString(),
+        C10_nm: sliderVals.current.c10,
+        C12_nm: sliderVals.current.c12,
         phi12_deg: sliderVals.current.phi12,
-        rotation_deg: rotationDeg ?? 0,
+        scan_detector_rotation_deg: rotationDeg ?? 0,
         flip_phase: !!flipPhase,
         loss: loss ?? null,
-        bf: Math.round(dragBfRef.current || 0),
+        num_bright_field_pixels: Math.round(dragBfRef.current || 0),
         notes: String(notes ?? ""),
         image: `snapshots/snapshot_${stamp}_C10_${slugPart(sliderVals.current.c10.toFixed(0))}.jpg`,
       };
       const next = [...folderSaves, record];
       if (ssbFolderWritable()) {
         await writeSSBFolderFile(record.image, jpeg);
-        await writeSSBFolderFile("snapshots/snapshots.json", JSON.stringify(next, null, 2));
+        await writeSSBFolderFile("snapshots/snapshots.json", JSON.stringify({ schema: SNAPSHOTS_SCHEMA, snapshots: next }, null, 2));
         setFolderSaves(next);
         setFolderSaveStatus(`Snapshot saved (${next.length})`);
       } else {
@@ -2887,13 +2869,13 @@ function Explore() {
     }
   }, [busy, folderSaves, loss, notes, rotationDeg, flipPhase]);
   const loadFolderSave = React.useCallback((record: FolderSaveRecord) => {
-    setC10(record.C10);
-    setC12(record.C12);
+    setC10(record.C10_nm);
+    setC12(record.C12_nm);
     setPhi12(record.phi12_deg);
-    setRotationDeg(record.rotation_deg);
+    setRotationDeg(record.scan_detector_rotation_deg);
     setFlipPhase(record.flip_phase);
-    sliderVals.current = { c10: record.C10, c12: record.C12, phi12: record.phi12_deg };
-    frontendFullRef.current?.(record.C10, record.C12, record.phi12_deg, record.rotation_deg);
+    sliderVals.current = { c10: record.C10_nm, c12: record.C12_nm, phi12: record.phi12_deg };
+    frontendFullRef.current?.(record.C10_nm, record.C12_nm, record.phi12_deg, record.scan_detector_rotation_deg);
   }, [setRotationDeg, setFlipPhase]);
   const downloadFolderSave = React.useCallback(async (record: FolderSaveRecord) => {
     try {
@@ -2906,7 +2888,7 @@ function Explore() {
   const deleteFolderSave = React.useCallback(async (record: FolderSaveRecord) => {
     try {
       const next = folderSaves.filter((save) => save.id !== record.id);
-      await writeSSBFolderFile("snapshots/snapshots.json", JSON.stringify(next, null, 2));
+      await writeSSBFolderFile("snapshots/snapshots.json", JSON.stringify({ schema: SNAPSHOTS_SCHEMA, snapshots: next }, null, 2));
       try { await deleteSSBFolderFile(record.image); } catch { /* image may already be gone */ }
       setFolderSaves(next);
       setFolderSaveStatus(`Deleted snapshot (${next.length} left)`);
@@ -2928,15 +2910,15 @@ function Explore() {
         count: pinned.length,
         pins: pinned.map((pin, i) => ({
           index: i + 1,
-          filename: `showptycho_pin_${String(i + 1).padStart(2, "0")}_C10_${slugPart(pin.C10.toFixed(0))}_C12_${slugPart(pin.C12.toFixed(0))}_phi_${slugPart(pin.phi12_deg.toFixed(0))}.png`,
-          C10: pin.C10,
-          C12: pin.C12,
+          filename: `showptycho_pin_${String(i + 1).padStart(2, "0")}_C10_${slugPart(pin.C10_nm.toFixed(0))}_C12_${slugPart(pin.C12_nm.toFixed(0))}_phi_${slugPart(pin.phi12_deg.toFixed(0))}.png`,
+          C10_nm: pin.C10_nm,
+          C12_nm: pin.C12_nm,
           phi12_deg: pin.phi12_deg,
-          rotation_deg: pin.rotation_deg,
+          scan_detector_rotation_deg: pin.scan_detector_rotation_deg,
           flip_phase: pin.flip_phase,
           loss: pin.loss,
           starred: pin.starred,
-          timestamp: pin.timestamp,
+          generated_at_utc: pin.generated_at_utc,
           shape: [pin.h, pin.w],
         })),
       };
@@ -3035,7 +3017,7 @@ function Explore() {
   const doViewPin = React.useCallback((entry: PinnedEntry) => {
     setViewPin(entry.id);
     setActiveTrialRank(null);  // pins + trials are mutually exclusive selections
-    setC10(entry.C10); setC12(entry.C12); setPhi12(entry.phi12_deg);
+    setC10(entry.C10_nm); setC12(entry.C12_nm); setPhi12(entry.phi12_deg);
     setLoss(entry.loss);
     renderAll(entry.phaseData, entry.w, entry.h);
   }, [renderAll]);
@@ -3503,10 +3485,9 @@ function Explore() {
               {[2, 3, 4, 5].flatMap(order =>
                 HO_BY_ORDER[order]
                   .map(entry => {
-                    const magKey = entry.hasAngle ? `${entry.name}_mag` : entry.name;
-                    const mag = higherOrder[magKey] ?? 0;
+                    const mag = higherOrder[higherOrderMagnitudeKey(entry.name)] ?? 0;
                     if (Math.abs(mag) === 0) return null;
-                    const angle = entry.hasAngle ? (higherOrder[`${entry.name}_angle`] ?? 0) : null;
+                    const angle = entry.hasAngle ? (higherOrder[higherOrderAzimuthKey(entry.name)] ?? 0) : null;
                     const label = `${formatHOValue(mag, entry.mag_max, entry.display_scale)} ${entry.unit_display}${angle != null ? ` / ${angle.toFixed(0)}°` : ""}`;
                     return (
                       <Tooltip key={entry.name} title={entry.tooltip} placement="top" arrow>
@@ -3905,15 +3886,13 @@ function Explore() {
             <MenuItem value="bundle:c10c12phi12">C10+C12+φ₁₂</MenuItem>
             <MenuItem value="bundle:c10c12phi12rot">C10+C12+φ₁₂+rot</MenuItem>
             {Object.keys(higherOrder)
-              .filter(hoKey => (hoKey.endsWith("_angle")
+              .filter(hoKey => (hoKey.startsWith("phi")
                 ? (higherOrder[hoKey] !== undefined)
                 : Math.abs(higherOrder[hoKey] || 0) > 0))
               .sort()
               .map(hoKey => (
                 <MenuItem key={`ho:${hoKey}`} value={`ho:${hoKey}`}>
-                  {hoKey.endsWith("_mag") ? `${hoKey.slice(0, -4)} m`
-                   : hoKey.endsWith("_angle") ? `${hoKey.slice(0, -6)} φ`
-                   : `${hoKey}`}
+                  {hoKey.startsWith("phi") ? `C${hoKey.slice(3, -4)} φ` : `${hoKey.slice(0, -3)} m`}
                 </MenuItem>
               ))}
           </Select>
@@ -4090,9 +4069,9 @@ function Explore() {
             {folderSaves.map((record) => (
               <Box key={record.id} sx={{ display: "flex", alignItems: "center", gap: 1, fontFamily: "monospace", fontSize: 11 }}>
                 <Typography sx={{ ...typography.value, color: tc.text, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                  C10 {record.C10.toFixed(1)} · C12 {record.C12.toFixed(1)} · φ12 {record.phi12_deg.toFixed(0)}° · rot {record.rotation_deg.toFixed(1)}°
+                  C10 {record.C10_nm.toFixed(1)} · C12 {record.C12_nm.toFixed(1)} · φ12 {record.phi12_deg.toFixed(0)}° · rot {record.scan_detector_rotation_deg.toFixed(1)}°
                   {record.loss != null ? ` · loss ${record.loss.toFixed(6)}` : ""}
-                  {` · ${record.timestamp.slice(0, 16).replace("T", " ")}`}
+                  {` · ${record.generated_at_utc.slice(0, 16).replace("T", " ")}`}
                   {record.notes ? ` · ${record.notes}` : ""}
                 </Typography>
                 <Button size="small" onClick={() => loadFolderSave(record)} sx={{ ...compactButton(tc), minWidth: 44 }}>Load</Button>
@@ -4192,7 +4171,7 @@ function Explore() {
                         </Typography>
                       </Stack>
                       <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: tc.textMuted, whiteSpace: "nowrap" }}>
-                        {trial.C10.toFixed(0)} / {trial.C12.toFixed(0)} / {trial.phi12_deg.toFixed(0)}°
+                        {trial.C10_nm.toFixed(0)} / {trial.C12_nm.toFixed(0)} / {trial.phi12_deg.toFixed(0)}°
                       </Typography>
                     </Box>
                   );
@@ -4325,7 +4304,7 @@ function Explore() {
                         lineHeight: 1.15, fontFamily: "monospace", color: "#e0e0e0",
                         whiteSpace: "nowrap",
                       }}>
-                        {pin.C10.toFixed(0)}/{pin.C12.toFixed(0)}/{pin.phi12_deg.toFixed(0)}°
+                        {pin.C10_nm.toFixed(0)}/{pin.C12_nm.toFixed(0)}/{pin.phi12_deg.toFixed(0)}°
                       </Typography>
                     </Box>
                     {/* Star toggle (top-left).  Gold when active, muted otherwise. */}
