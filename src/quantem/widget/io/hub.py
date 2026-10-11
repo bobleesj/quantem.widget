@@ -1,10 +1,29 @@
 """Download one shared dataset from the public Hugging Face hub."""
 
+import inspect
 import os
 import time
 from pathlib import Path
 
 DEFAULT_REPO = "bobleesj/quantem-data"
+_DATA_SUFFIXES = {
+    ".h5", ".hdf5", ".qem", ".emd", ".npy", ".npz", ".tif", ".tiff",
+    ".mrc", ".mrcs", ".dm3", ".dm4", ".raw", ".bin", ".png", ".jpg",
+    ".jpeg",
+}
+
+
+def _shared_download(name: str, **kwargs) -> Path | None:
+    """Use the shared resolver when the compatible optional package is installed."""
+    try:
+        from quantem.data.huggingface import download as shared_download
+    except ImportError:
+        return None
+    if not {"revision", "cache_dir", "force_download"}.issubset(
+        inspect.signature(shared_download).parameters
+    ):
+        return None
+    return Path(shared_download(name, **kwargs))
 
 
 def download(
@@ -13,24 +32,67 @@ def download(
     repo: str | None = None,
     out: str | Path | None = None,
     verbose: bool = True,
+    revision: str | None = None,
+    cache_dir: str | Path | None = None,
+    force_download: bool = False,
 ) -> Path:
     """Download the folder or file dataset called ``name`` and return its local path.
 
-    ``name`` is the flat dataset name (for example ``"gold_512_npy_bin4"``);
-    the hub layout ``<bucket>/<name>/...`` is resolved here so tutorials never
-    spell out repository paths. Files already in the Hugging Face cache are
-    not downloaded again.
+    Prefer a qualified name such as ``"4dstem/gold_512_npy_bin4"``. A short
+    name is accepted only when unique. Files already in the Hub cache are
+    reused. The compatible optional ``quantem.data`` package owns resolution;
+    this small fallback keeps widget-only installations working.
+
+    Parameters
+    ----------
+    name
+        Qualified dataset ID, exact data-file path, or unique short name.
+    repo
+        Dataset repository. Defaults to ``bobleesj/quantem-data``.
+    out
+        Optional local destination, retaining the repository-relative paths.
+    verbose
+        Print download and cache information.
+    revision
+        Optional immutable repository commit for reproducible retrieval.
+    cache_dir, force_download
+        Hub cache location and explicit refresh control.
+
+    Returns
+    -------
+    Path
+        Downloaded dataset file or folder, including its metadata companions.
+
+    Examples
+    --------
+    >>> folder = download("4dstem/gold_128_npy_bin8", revision="5925e4b49b2ca28ff82d6d5a6b9a8bfea9edfb20")
     """
     from huggingface_hub import list_repo_files, snapshot_download
 
     repo_id = repo or os.environ.get("QUANTEM_DATA_REPO") or DEFAULT_REPO
+    if repo_id == DEFAULT_REPO and name == "gold_haadf_session":
+        name = "widget/gold_session"
+    shared = _shared_download(
+        name, repo=repo_id, out=out, verbose=verbose, revision=revision,
+        cache_dir=cache_dir, force_download=force_download,
+    )
+    if shared is not None:
+        return shared
+    revision_options = {"revision": revision} if revision is not None else {}
+    files = list_repo_files(repo_id=repo_id, repo_type="dataset", **revision_options)
     candidates: dict[str, str] = {}
-    for path in list_repo_files(repo_id=repo_id, repo_type="dataset"):
+    for path in files:
         parts = path.split("/")
-        if len(parts) >= 3 and parts[1] == name:
-            candidates[f"{parts[0]}/{name}"] = "dir"
-        elif len(parts) == 2 and Path(parts[1]).stem == name and not path.endswith(".json"):
-            candidates[path] = "file"
+        if len(parts) < 2 or parts[0] not in {"4dstem", "haadf", "widget", "denoise", "survey"}:
+            continue
+        suffix = Path(path).suffix.lower()
+        is_monitor = parts[0] == "widget" and suffix == ".jsonl"
+        if suffix not in _DATA_SUFFIXES and not is_monitor:
+            continue
+        target = "/".join(parts[:2]) if len(parts) >= 3 else path
+        key = "/".join(parts[:2]) if len(parts) >= 3 else f"{parts[0]}/{Path(parts[1]).stem}"
+        if name in (key, target, path) or ("/" not in name and key.rsplit("/", 1)[1] == name):
+            candidates[target] = "dir" if len(parts) >= 3 else "file"
     if not candidates:
         raise FileNotFoundError(
             f"{name!r} not found in {repo_id}; browse https://huggingface.co/datasets/{repo_id}"
@@ -38,10 +100,13 @@ def download(
     if len(candidates) > 1:
         raise ValueError(
             f"{name!r} is ambiguous in {repo_id}: {sorted(candidates)}. "
-            "Rename one, or set repo= to a repo where it is unique."
+            "Use one of these qualified dataset paths."
         )
     target_rel, kind = next(iter(candidates.items()))
     pattern = f"{target_rel}/*" if kind == "dir" else target_rel
+    if kind == "file":
+        sidecars = {str(Path(target_rel).with_suffix(suffix)) for suffix in (".json", ".yaml", ".yml")}
+        pattern = [target_rel, *(path for path in files if path in sidecars)]
     if verbose:
         print(
             f"Downloading '{name}' from Hugging Face ({repo_id}) over the internet - "
@@ -54,6 +119,9 @@ def download(
         repo_type="dataset",
         allow_patterns=pattern,
         local_dir=str(out) if out is not None else None,
+        cache_dir=str(cache_dir) if cache_dir is not None else None,
+        force_download=force_download,
+        **revision_options,
     )
     result = Path(root) / target_rel
     if verbose:

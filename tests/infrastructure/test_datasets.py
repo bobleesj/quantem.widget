@@ -140,7 +140,7 @@ def test_the_4dstem_tutorial_loader_follows_the_machine(tmp_path, monkeypatch, g
         pytest.skip("the GPU branch needs quantem.gpu and a CUDA or MPS GPU")
     if not gpu:
         monkeypatch.setattr(gpu_adapter, "accelerator_ready", lambda: False)
-    folder = tmp_path / "widget-tutorials" / "show4dstem" / "gold-128-bin8" / "full"
+    folder = tmp_path / "4dstem" / "gold_128_npy_bin8"
     folder.mkdir(parents=True)
     counts = _counts(scan=(8, 8))
     np.save(folder / "data.npy", counts)

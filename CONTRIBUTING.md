@@ -21,13 +21,15 @@ an issue or a maintainer discussion. A bug fix or a feature that stays inside
 one existing widget can go straight to a pull request. The two classes are in
 the [pull request guide](docs/maintainer/pull-requests.md).
 
-Tutorial fixtures for notebooks belong under `widget-tutorials/` in the public
+Reuse existing tutorial inputs in the public
 [bobleesj/quantem-data](https://huggingface.co/datasets/bobleesj/quantem-data)
-dataset. Upload and download commands are on that dataset card. A coding
-agent can open the Hugging Face Community pull request with the prompt
-[Add tutorial data](https://huggingface.co/datasets/bobleesj/quantem-data#coding-agents)
-on the dataset card.
-The GitHub loader pull request is in
+dataset: viewer collections live under `widget/`, while shared image and
+diffraction inputs stay under `haadf/` and `4dstem/`. A new tutorial does not
+need another copy of an existing input. Keep scientific data, minimal data
+cards and numerical metadata on Hugging Face; notebooks, Python helpers,
+models and result reports belong in their owning source repositories.
+The dataset card records contribution requirements and provenance. The
+GitHub loader workflow is in
 [Contribute tutorial data](docs/tutorials/contribute_data.md).
 
 Once review begins, do not force-push. Add follow-up commits so GitHub preserves

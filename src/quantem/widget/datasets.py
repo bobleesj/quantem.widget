@@ -1,6 +1,6 @@
-"""Tutorial datasets: small real microscopy data downloaded once from Hugging Face.
+"""Tutorial inputs: real acquisitions and synthetic reconstruction examples.
 
-Every loader takes a friendly ``size`` name and returns a calibrated quantem
+Image and scan loaders take a friendly ``size`` name and return a calibrated quantem
 dataset (or a folder of files), so the tutorials never ship data in git: a
 quantem core ``Dataset2d``/``Dataset3d`` for images and stacks, and for the
 4D-STEM scan a ``quantem.gpu.io.Dataset4dstemGPU`` on a GPU or a quantem core
@@ -19,7 +19,7 @@ from quantem.widget.adapters.core import as_array, make_dataset
 from quantem.widget.show4dstem.reader import read_4dstem
 
 TUTORIAL_DATA_REPO_ID = "bobleesj/quantem-data"
-TUTORIAL_DATA_ROOT = "widget-tutorials"
+TUTORIAL_DATA_REVISION = "5925e4b49b2ca28ff82d6d5a6b9a8bfea9edfb20"
 TUTORIAL_SIZES = ("small", "medium", "large", "full")
 _SHOW2D_STRIDE_BY_SIZE = {
     "small": 8,
@@ -50,42 +50,36 @@ def _normalize_tutorial_size(size: str) -> str:
     return value
 
 
-def _download_widget_tutorial_folder(
-    viewer: str,
-    name: str,
+def _download_tutorial_folder(
+    path_in_repo: str,
     *,
-    size: str = "small",
     cache_dir: str | Path | None = None,
     revision: str | None = None,
     force_download: bool = False,
 ) -> Path:
-    """Download one ``widget-tutorials/<viewer>/<name>/<size>`` folder and return its local path.
-
-    Only that folder is fetched (``allow_patterns``), so a small tutorial
-    never pulls the full-size payloads stored next to it.
-    """
-    size = _normalize_tutorial_size(size)
-    path_in_repo = f"{TUTORIAL_DATA_ROOT}/{viewer}/{name}/{size}"
+    """Fetch a complete input family without mixing repository revisions."""
+    selected_revision = str(revision) if revision is not None else TUTORIAL_DATA_REVISION
     kwargs = {
         "repo_id": TUTORIAL_DATA_REPO_ID,
         "repo_type": "dataset",
-        "allow_patterns": [f"{path_in_repo}/*"],
         "force_download": bool(force_download),
+        "revision": selected_revision,
+        "allow_patterns": [f"{path_in_repo}/*"],
     }
     if cache_dir is not None:
         kwargs["cache_dir"] = str(cache_dir)
-    if revision is not None:
-        kwargs["revision"] = str(revision)
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-    from huggingface_hub import snapshot_download  # noqa: PLC0415  (imported on first download: importing the loaders stays light)
+    from huggingface_hub import snapshot_download  # imported only on download
 
     folder = Path(snapshot_download(**kwargs)) / path_in_repo
-    if not folder.is_dir():
-        raise FileNotFoundError(
-            f"downloaded tutorial folder is missing: {folder}. "
-            f"Expected Hugging Face path {TUTORIAL_DATA_REPO_ID}/{path_in_repo}"
-        )
-    return folder
+    if folder.is_dir():
+        return folder
+    raise FileNotFoundError(
+        f"Tutorial input {path_in_repo!r} is unavailable in "
+        f"{TUTORIAL_DATA_REPO_ID} at revision {selected_revision!r}. "
+        "Use the documented default revision or your own data. Historical "
+        "folder layouts require their matching software version."
+    )
 
 
 def show1d_ducky(
@@ -95,17 +89,22 @@ def show1d_ducky(
     force_download: bool = False,
     verbose: bool = True,
 ) -> Path:
-    """Download the real ducky joint-time ptychography Show1D tutorial run.
+    """Download reconstruction snapshots for the synthetic Ducky example.
 
     The returned folder contains ``show1d_monitor.jsonl`` and snapshot ``.npy``
     files. Open it with :meth:`quantem.widget.Show1D.from_monitor_file`.
+
+    The original ``Trademark ducky dataset`` simulation tutorial is by
+    Georgios Varnavides (October 23, 2025). These files contain subsequent
+    reconstruction results, not measured detector data.
 
     Parameters
     ----------
     cache_dir
         Optional Hugging Face cache directory.
     revision
-        Optional Hugging Face dataset revision.
+        Hugging Face dataset revision. The default pins the documented inputs;
+        an explicit revision is never mixed with files from another revision.
     force_download
         If ``True``, ask Hugging Face Hub to refresh the cached files.
     verbose
@@ -117,10 +116,8 @@ def show1d_ducky(
         Local folder containing the Show1D monitor run.
     """
 
-    folder = _download_widget_tutorial_folder(
-        "show1d",
-        "ducky",
-        size="small",
+    folder = _download_tutorial_folder(
+        "widget/ducky",
         cache_dir=cache_dir,
         revision=revision,
         force_download=force_download,
@@ -146,14 +143,15 @@ def show2d_gold(
     """Load the gold HAADF Show2D tutorial image by friendly size name.
 
     The source image is downloaded once from
-    ``widget-tutorials/shared/gold-haadf/full``; every size but ``"full"``
+    ``haadf/gold_haadf_npy``; every size but ``"full"``
     keeps every Nth pixel of it (stride 8, 4, 2) and says so in one line.
     The same source is reused by :func:`show3d_gold`.
     """
 
     size = _normalize_tutorial_size(size)
-    folder = _download_widget_tutorial_folder(
-        "shared", "gold-haadf", size="full", cache_dir=cache_dir, revision=revision, force_download=force_download,
+    folder = _download_tutorial_folder(
+        "haadf/gold_haadf_npy", cache_dir=cache_dir,
+        revision=revision, force_download=force_download,
     )
     metadata = json.loads((folder / "meta.json").read_text())
     full_image = np.load(folder / "data.npy", mmap_mode="r")
@@ -187,8 +185,9 @@ def show3d_gold(
     """
 
     size = _normalize_tutorial_size(size)
-    folder = _download_widget_tutorial_folder(
-        "shared", "gold-haadf", size="full", cache_dir=cache_dir, revision=revision, force_download=force_download,
+    folder = _download_tutorial_folder(
+        "haadf/gold_haadf_npy", cache_dir=cache_dir,
+        revision=revision, force_download=force_download,
     )
     n_frames, stride, crop_size = (_SHOW3D_PARAMS_BY_SIZE[size][key] for key in ("n_frames", "stride", "crop_size"))
     metadata = json.loads((folder / "meta.json").read_text())
@@ -229,7 +228,7 @@ def show4dstem_gold(
     """Load the gold 4D-STEM Show4DSTEM tutorial scan by friendly size name.
 
     The source scan is stored once under
-    ``widget-tutorials/show4dstem/gold-128-bin8/full``; ``"small"`` and
+    ``4dstem/gold_128_npy_bin8``; ``"small"`` and
     ``"medium"`` keep every 4th or 2nd scan position and say so in one line.
     The file is read as every 4D-STEM file is (``read_4dstem``): a
     ``quantem.gpu.io.Dataset4dstemGPU`` that stays on the GPU when quantem.gpu
@@ -237,8 +236,9 @@ def show4dstem_gold(
     """
 
     size = _normalize_tutorial_size(size)
-    folder = _download_widget_tutorial_folder(
-        "show4dstem", "gold-128-bin8", size="full", cache_dir=cache_dir, revision=revision, force_download=force_download,
+    folder = _download_tutorial_folder(
+        "4dstem/gold_128_npy_bin8", cache_dir=cache_dir,
+        revision=revision, force_download=force_download,
     )
     scan_stride = _SHOW4DSTEM_SCAN_STRIDE_BY_SIZE[size]
     metadata = json.loads((folder / "meta.json").read_text())
@@ -274,6 +274,9 @@ def gold_session(
 ) -> Path:
     """Download the public gold HAADF session for image-reader tutorials.
 
+    The pinned default uses ``widget/gold_session``. The one measured session
+    is downloaded intact; ``size`` is retained for existing notebook calls.
+
     Parameters
     ----------
     size
@@ -294,62 +297,15 @@ def gold_session(
     >>> images = sorted(folder.glob("*.emd"))
     """
     size = _normalize_tutorial_size(size)
-    folder = _download_widget_tutorial_folder(
-        "showfolder", "gold-haadf-session", size=size, cache_dir=cache_dir,
+    if size != "small":
+        raise ValueError(f"Only one gold session is available; use size='small', got {size!r}.")
+    folder = _download_tutorial_folder(
+        "widget/gold_session", cache_dir=cache_dir,
         revision=revision, force_download=force_download,
     )
     if verbose:
         print(f"Gold image session: {len(list(folder.glob('*.emd')))} EMD files")
     return folder
-
-
-def showdiffraction_fe3o4(
-    *,
-    cache_dir: str | Path | None = None,
-    revision: str | None = None,
-    force_download: bool = False,
-    verbose: bool = True,
-):
-    """Load the real Fe3O4 nanoparticle SAED pattern used by the ShowDiffraction tutorial.
-
-    The pattern is downloaded from
-    ``widget-tutorials/showdiffraction/fe3o4-saed``. It is uncalibrated by
-    design; the tutorial calibrates it against the Fe3O4 phase.
-
-    Parameters
-    ----------
-    cache_dir
-        Optional Hugging Face cache directory.
-    revision
-        Optional Hugging Face dataset revision.
-    force_download
-        If ``True``, ask Hugging Face Hub to refresh the cached files.
-    verbose
-        If ``True``, print a short dataset summary.
-
-    Returns
-    -------
-    Dataset2d
-        The 512 by 512 float32 diffraction pattern (``.array``), a quantem core
-        ``Dataset2d`` like every 2D tutorial loader returns.
-    """
-
-    folder = _download_widget_tutorial_folder(
-        "showdiffraction",
-        "fe3o4-saed",
-        size="small",
-        cache_dir=cache_dir,
-        revision=revision,
-        force_download=force_download,
-    )
-    source = folder / "data.npy"
-    if not source.is_file():
-        raise FileNotFoundError(f"tutorial pattern is missing: {source}")
-    pattern = np.asarray(np.load(source), dtype=np.float32)
-    if verbose:
-        print(f"Fe3O4 SAED tutorial pattern: {source}")
-        print(f"Pattern: {pattern.shape[0]} x {pattern.shape[1]} {pattern.dtype}")
-    return make_dataset(pattern, name="Fe3O4 SAED")
 
 
 __all__ = [
@@ -358,5 +314,4 @@ __all__ = [
     "show2d_gold",
     "show3d_gold",
     "show4dstem_gold",
-    "showdiffraction_fe3o4",
 ]

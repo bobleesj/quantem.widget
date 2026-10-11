@@ -55,9 +55,12 @@ pip install -i https://test.pypi.org/simple/ \
     "quantem.widget[hub]"
 ```
 
-Widget tutorial fixtures live under `widget-tutorials/` on
+Tutorial helpers reuse pinned shared acquisitions on
 [bobleesj/quantem-data](https://huggingface.co/datasets/bobleesj/quantem-data).
-Upload and download commands are on that dataset card.
+[Tutorial datasets](api/datasets.md) records the canonical inputs and immutable
+revision. Older folder layouts require their matching software version. The widget-only download path remains available;
+delegation to `quantem.data` requires its matching revision-aware API.
+No new shared-package or Colab release is implied by these source changes.
 
 ## Windows
 

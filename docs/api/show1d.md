@@ -112,8 +112,10 @@ sampling function on its own.
 
 ## Built-in ducky example
 
-The Show1D tutorial reads the real ducky joint-time ptychography sweep from the
-public QuantEM data repository:
+The Show1D tutorial reads reconstruction snapshots for the synthetic Ducky
+example from the public QuantEM data repository.
+
+Ducky simulation tutorial: Georgios Varnavides, [*Trademark ducky dataset* (October 23, 2025)](https://github.com/electronmicroscopy/quantem-tutorials/blob/dbadc111734641226ab0454ed988feaf018e65c4/simulation_notebooks/ducky-dataset.ipynb). The viewer files contain subsequent reconstruction results for the synthetic example.
 
 ```python
 from quantem.widget import Show1D
@@ -122,7 +124,7 @@ from quantem.widget.datasets import show1d_ducky
 run = show1d_ducky()
 widget = Show1D.from_monitor_file(
     run / "show1d_monitor.jsonl",
-    title="Real ducky joint iterative ptychography",
+    title="Synthetic Ducky reconstructions (tutorial: Georgios Varnavides)",
     x_label="frame",
     y_label="final loss",
     log_scale=False,
@@ -133,9 +135,12 @@ widget = Show1D.from_monitor_file(
 widget
 ```
 
-The dataset files live under `widget-tutorials/show1d/ducky/small/...` in
-`bobleesj/quantem-data`. See [Tutorial Datasets](./datasets.md) for the shared
-`small`, `medium`, `large`, and `full` size convention.
+The default pins `widget/ducky/` in `bobleesj/quantem-data`; all
+monitor-relative snapshot paths stay intact. See [Tutorial datasets](datasets.md)
+for the exact revision. This helper has one collection and no
+`size` argument. Retain the visible source credit when exporting a notebook,
+report or standalone widget. See [Tutorial datasets](./datasets.md) for the
+exact revisions and inputs.
 
 ## HTML export
 

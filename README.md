@@ -131,6 +131,9 @@ require a source build containing them. The guide includes setup and browser req
 
 ## Documentation
 
+[Tutorial datasets](docs/api/datasets.md) records the shared input and immutable
+revision for each example. Small synthetic teaching inputs are generated locally.
+
 For a scalar map, import `Plot2D` from the same package:
 
 ```python
