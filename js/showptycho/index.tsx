@@ -35,7 +35,7 @@ import { downloadBlob, extractFloat32, formatNumber } from "../format";
 import { computeHistogramFromBytes, percentileClip } from "../display/stats";
 import { RenderPathBadge } from "../shared/RenderPathBadge";
 import { shouldIgnoreWidgetShortcut } from "../shared/widgetShortcuts";
-import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen, GPUColormapEngine, getGPUColormapEngine } from "../display/colormaps";
+import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen, GPUColormapEngine, createGPUColormapEngine } from "../display/colormaps";
 import { nextPow2, shiftedMagnitude, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset, getDisplayFFT, type DisplayFFT } from "../display/fft";
 import { findFFTPeakBrowser } from "../display/geometry";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI } from "../figure";
@@ -1935,16 +1935,22 @@ function Explore() {
   const gpuCmapReadyRef = React.useRef(false);
   // Track the data uploaded to each slot so we only re-upload on real data change.
   const gpuSlotDataRef = React.useRef<Record<GPUColormapSlot, Float32Array | null>>({ 0: null, 1: null, 2: null });
+  // This view's own engine, so its slots 0-2 never hold another view's images; destroyed on unmount.
   React.useEffect(() => {
     let cancelled = false;
-    getGPUColormapEngine().then(engine => {
-      if (cancelled || !engine) return;
+    createGPUColormapEngine().then(engine => {
+      if (!engine) return;
+      if (cancelled) { engine.destroy(); return; }
       gpuCmapRef.current = engine;
       gpuCmapReadyRef.current = true;
-    }).catch(error => {
-      if (!cancelled) setWebgpuRuntimeStatus(error instanceof Error ? error.message : String(error));
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      gpuCmapRef.current?.destroy();
+      gpuCmapRef.current = null;
+      gpuCmapReadyRef.current = false;
+      gpuSlotDataRef.current = { 0: null, 1: null, 2: null };
+    };
   }, []);
 
   /* --- Init sliders from auto --- */
