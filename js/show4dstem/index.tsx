@@ -2320,10 +2320,6 @@ function Show4DSTEM() {
   const [roiWidth, setRoiWidth] = useModelState<number>("roi_width");
   const [roiHeight, setRoiHeight] = useModelState<number>("roi_height");
 
-  // Global min/max for DP normalization (from Python)
-  const [dpGlobalMin] = useModelState<number>("dp_global_min");
-  const [dpGlobalMax] = useModelState<number>("dp_global_max");
-
   // VI min/max (viDataMin/viDataMax) are derived JS-side from virtual_image_bytes below.
   // Keeping them out of Python traits avoids a comm-message ordering race where
   // bytes from click N arrive with min/max from click N-1.
@@ -8241,7 +8237,7 @@ function Show4DSTEM() {
                   </Box>
                   {/* Right: Histogram spanning both rows */}
                   <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", flex: "0 0 auto", maxWidth: "100%" }}>
-                    <Histogram data={dpHistogramData} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={(min, max) => { setDpVminPct(min); setDpVmaxPct(max); }} width={110} height={58} sliderInset={6} theme={themeInfo.theme} dataMin={dpGlobalMin} dataMax={dpGlobalMax} />
+                    <Histogram data={dpHistogramData} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={(min, max) => { setDpVminPct(min); setDpVmaxPct(max); }} width={110} height={58} sliderInset={6} theme={themeInfo.theme} dataMin={dpStats[1]} dataMax={dpStats[2]} />
                   </Box>
                 </Box>
               </Box>
