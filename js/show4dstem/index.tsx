@@ -26,9 +26,9 @@ import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { useTheme } from "../theme";
-import { COLORMAPS, GPUColormapEngine, applyColormap } from "../display/colormaps";
+import { COLORMAPS, COLORMAP_NAMES, GPUColormapEngine, applyColormap } from "../display/colormaps";
 import { DisplayFFT, getDisplayFFT, fft2dAsync, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset } from "../display/fft";
-import { findFFTPeakBrowser, sampleLineProfileBrowser } from "../display/geometry";
+import { cropMaskedRegion, findFFTPeakBrowser, sampleLineProfileBrowser } from "../display/geometry";
 import {
   buildDetectorMask,
   buildFullDetectorMask,
@@ -183,6 +183,11 @@ function viProductStackForIndices(
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 10;
+
+// Every colormap the display paths paint, as the other widgets offer them.
+const COLORMAP_OPTIONS = COLORMAP_NAMES.map((name) => (
+  <MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>
+));
 
 /**
  * The device pixel ratio, kept current across browser zoom and a move to
@@ -1021,55 +1026,6 @@ function drawProfileOverlay(
     ctx.fill();
   }
   ctx.restore();
-}
-
-/**
- * Crop the scan-ROI bounding box out of a float32 virtual image for the
- * ROI-scoped FFT. A circle ROI zeroes the pixels outside its radius so the
- * spectrum covers only the drawn region; square and rect keep the whole box.
- * Returns null when the crop is smaller than 2x2.
- */
-function cropSingleROI(
-  data: Float32Array, imageWidth: number, imageHeight: number,
-  mode: string, centerRow: number, centerCol: number,
-  radius: number, roiWidth: number, roiHeight: number,
-): { cropped: Float32Array; cropW: number; cropH: number } | null {
-  if (mode === "off") return null;
-  let colStart: number, rowStart: number, colEnd: number, rowEnd: number;
-
-  if (mode === "rect") {
-    const halfWidth = roiWidth / 2, halfHeight = roiHeight / 2;
-    colStart = Math.max(0, Math.floor(centerCol - halfWidth));
-    rowStart = Math.max(0, Math.floor(centerRow - halfHeight));
-    colEnd = Math.min(imageWidth, Math.ceil(centerCol + halfWidth));
-    rowEnd = Math.min(imageHeight, Math.ceil(centerRow + halfHeight));
-  } else {
-    colStart = Math.max(0, Math.floor(centerCol - radius));
-    rowStart = Math.max(0, Math.floor(centerRow - radius));
-    colEnd = Math.min(imageWidth, Math.ceil(centerCol + radius));
-    rowEnd = Math.min(imageHeight, Math.ceil(centerRow + radius));
-  }
-
-  const cropW = colEnd - colStart, cropH = rowEnd - rowStart;
-  if (cropW < 2 || cropH < 2) return null;
-
-  const cropped = new Float32Array(cropW * cropH);
-  if (mode === "circle") {
-    const radiusSq = radius * radius;
-    for (let cropRow = 0; cropRow < cropH; cropRow++) {
-      for (let cropCol = 0; cropCol < cropW; cropCol++) {
-        const col = colStart + cropCol, row = rowStart + cropRow;
-        const distSq = (col - centerCol) * (col - centerCol) + (row - centerRow) * (row - centerRow);
-        cropped[cropRow * cropW + cropCol] = distSq <= radiusSq ? data[row * imageWidth + col] : 0;
-      }
-    }
-  } else {
-    for (let cropRow = 0; cropRow < cropH; cropRow++) {
-      const sourceOffset = (rowStart + cropRow) * imageWidth + colStart;
-      cropped.set(data.subarray(sourceOffset, sourceOffset + cropW), cropRow * cropW);
-    }
-  }
-  return { cropped, cropW, cropH };
 }
 
 /**
@@ -4496,26 +4452,11 @@ function Show4DSTEM() {
     }
     return [...order];
   }, [comparePanelOrder, nFrames]);
+  // The merged histogram sums the bins of the shown panels, so it needs their set, not their order.
   const visibleCompareHistogramFrames = React.useMemo(() => {
-    const source = Array.isArray(comparePanelIndices) ? comparePanelIndices : [];
-    if (!source.length) return [] as number[];
-    const available = new Set(source);
-    const hidden = new Set(
-      (compareHiddenPanels || []).filter((idx) => Number.isInteger(idx) && available.has(idx)),
-    );
-    const ordered: number[] = [];
-    const seen = new Set<number>();
-    normalizedCompareOrder().forEach((idx) => {
-      if (available.has(idx) && !hidden.has(idx) && !seen.has(idx)) {
-        ordered.push(idx);
-        seen.add(idx);
-      }
-    });
-    source.forEach((idx) => {
-      if (!hidden.has(idx) && !seen.has(idx)) ordered.push(idx);
-    });
-    return ordered;
-  }, [compareHiddenPanels, comparePanelIndices, normalizedCompareOrder]);
+    const hidden = new Set(compareHiddenPanels || []);
+    return [...new Set(comparePanelIndices || [])].filter((idx) => !hidden.has(idx));
+  }, [compareHiddenPanels, comparePanelIndices]);
   const requestComparePage = React.useCallback((page: number) => {
     const next = Math.max(0, Math.min(activeComparePageCount - 1, Math.round(Number(page) || 0)));
     if (next === activeComparePageIdx) return;
@@ -5699,7 +5640,11 @@ function Show4DSTEM() {
     if (roiFftActive) {
       const cropCenterRow = localViRoiCenterRow ?? viRoiCenterRow;
       const cropCenterCol = localViRoiCenterCol ?? viRoiCenterCol;
-      const crop = cropSingleROI(sourceData, shapeCols, shapeRows, viRoiMode, cropCenterRow, cropCenterCol, viRoiRadius, viRoiWidth, viRoiHeight);
+      // A circle keeps only the pixels inside it; square and rect keep their whole box.
+      const crop = cropMaskedRegion(sourceData, shapeCols, shapeRows, {
+        row: cropCenterRow, col: cropCenterCol, shape: viRoiMode === "rect" ? "rectangle" : viRoiMode,
+        radius: viRoiRadius, width: viRoiWidth, height: viRoiHeight,
+      });
       if (crop) {
         origCropW = crop.cropW;
         origCropH = crop.cropH;
@@ -8055,14 +8000,7 @@ function Show4DSTEM() {
                     <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Color</Typography>
                       <Select value={dpColormap} onChange={(event) => setDpColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
-                        <MenuItem value="inferno">Inferno</MenuItem>
-                        <MenuItem value="viridis">Viridis</MenuItem>
-                        <MenuItem value="plasma">Plasma</MenuItem>
-                        <MenuItem value="magma">Magma</MenuItem>
-                        <MenuItem value="hot">Hot</MenuItem>
-                        <MenuItem value="RdBu_r">RdBu</MenuItem>
-                        <MenuItem value="twilight_shifted">Twilight</MenuItem>
-                        <MenuItem value="gray">Gray</MenuItem>
+                        {COLORMAP_OPTIONS}
                       </Select>
                       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Scale</Typography>
                       <Select value={dpScaleMode} onChange={(event) => setDpScaleMode(event.target.value as "linear" | "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
@@ -8562,14 +8500,7 @@ function Show4DSTEM() {
                     <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Color</Typography>
                       <Select value={viColormap} onChange={(event) => setViColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
-                        <MenuItem value="inferno">Inferno</MenuItem>
-                        <MenuItem value="viridis">Viridis</MenuItem>
-                        <MenuItem value="plasma">Plasma</MenuItem>
-                        <MenuItem value="magma">Magma</MenuItem>
-                        <MenuItem value="hot">Hot</MenuItem>
-                        <MenuItem value="RdBu_r">RdBu</MenuItem>
-                        <MenuItem value="twilight_shifted">Twilight</MenuItem>
-                        <MenuItem value="gray">Gray</MenuItem>
+                        {COLORMAP_OPTIONS}
                       </Select>
                       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Scale</Typography>
                       <Select value={viScaleMode} onChange={(event) => setViScaleMode(event.target.value as "linear" | "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
@@ -8844,12 +8775,7 @@ function Show4DSTEM() {
                       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                         <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Color</Typography>
                         <Select value={fftColormap} onChange={(event) => setFftColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
-                          <MenuItem value="inferno">Inferno</MenuItem>
-                          <MenuItem value="viridis">Viridis</MenuItem>
-                          <MenuItem value="plasma">Plasma</MenuItem>
-                          <MenuItem value="magma">Magma</MenuItem>
-                          <MenuItem value="hot">Hot</MenuItem>
-                          <MenuItem value="gray">Gray</MenuItem>
+                          {COLORMAP_OPTIONS}
                         </Select>
                       </Box>
                     </Box>
