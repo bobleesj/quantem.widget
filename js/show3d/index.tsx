@@ -9554,10 +9554,16 @@ function Show3D() {
   };
 
   const handleFftMouseUp = async (e: React.MouseEvent) => {
+    // The drag ends before the click's peak refinement: a refinement that fails (a lost GPU readback)
+    // would otherwise leave the drag open, and every later mouse move would pan the FFT.
+    const clickStart = fftClickStartRef.current;
+    fftClickStartRef.current = null;
+    setIsFftDragging(false);
+    setFftPanStart(null);
     // Click detection for d-spacing measurement
-    if (fftClickStartRef.current) {
-      const dx = e.clientX - fftClickStartRef.current.x;
-      const dy = e.clientY - fftClickStartRef.current.y;
+    if (clickStart) {
+      const dx = e.clientX - clickStart.x;
+      const dy = e.clientY - clickStart.y;
       if (Math.sqrt(dx * dx + dy * dy) < 3) {
         const pos = fftScreenToImg(e);
         if (pos) {
@@ -9620,10 +9626,7 @@ function Show3D() {
           }
         }
       }
-      fftClickStartRef.current = null;
     }
-    setIsFftDragging(false);
-    setFftPanStart(null);
   };
 
   const handleFftTouchStart = (e: React.TouchEvent) => {

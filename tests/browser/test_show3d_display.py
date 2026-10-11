@@ -525,3 +525,38 @@ def test_show3d_kymograph_log_scale_keeps_a_signed_range(serve, open_page, hardw
     low, high = (float(label) for label in page.evaluate(LAST_HISTOGRAM_LABELS, HISTOGRAM))
     assert -2.25 < low < -2.0 and 2.0 < high < 2.25, (low, high)  # signed log1p of about -8 and 8
     assert page.errors == [], page.errors
+
+
+FAIL_READBACKS = """() => { window.__mapAsync = GPUBuffer.prototype.mapAsync;
+  GPUBuffer.prototype.mapAsync = function () { return Promise.reject(new Error('injected readback failure')); }; }"""
+RESTORE_READBACKS = "() => { GPUBuffer.prototype.mapAsync = window.__mapAsync; }"
+
+
+def test_show3d_fft_click_that_fails_to_refine_ends_the_drag(serve, open_page, hardware_adapter, browser_out):
+    # A click on the zoomed FFT whose GPU peak refinement fails (a lost readback): moving the mouse afterwards
+    # with no button held must not pan the FFT. Before, the click awaited the refinement before it cleared
+    # the drag, so the error left the drag open and every later mouse move panned.
+    from quantem.widget import Show3D
+
+    rows, cols = np.indices((128, 128))
+    lattice = np.cos(2 * np.pi * cols / 8) + np.cos(2 * np.pi * rows / 8)
+    stack = np.stack([lattice * (1 + 0.1 * frame) for frame in range(3)]).astype(np.float32)
+    Show3D(stack, panel_width_px=256, show_fft=True, fft_layout="right", fft_overlay_zoom=2.0).export_html(
+        browser_out / "show3d_fft_click_failure.html")
+    page = open_ready(f"{serve(browser_out)}/show3d_fft_click_failure.html", True, open_page, hardware_adapter)
+    page.wait_for_timeout(1_000)
+    box = page.locator(FFT).bounding_box()
+    center_x, center_y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    before = screen(page, box)  # a screenshot ends any hover, so none is taken between the click and the move
+    page.evaluate(FAIL_READBACKS)
+    page.mouse.move(center_x + 20, center_y)
+    page.mouse.down()
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    page.evaluate(RESTORE_READBACKS)
+    page.mouse.move(center_x + 45, center_y + 25, steps=5)
+    page.wait_for_timeout(500)
+    after = screen(page, box)
+    Image.fromarray(np.concatenate([before, after], axis=1)).save(browser_out / "show3d_fft_click_failure.png")
+    assert page.errors and np.array_equal(before[:220, :220], after[:220, :220])  # clear of the resize grip
+    assert all("injected readback failure" in error for error in page.errors), page.errors
