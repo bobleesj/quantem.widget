@@ -159,14 +159,14 @@ def test_drift_plot_keywords_center_and_panel_gap_px(capsys):
     # quantem's drift plots: plot_combined(interactive=True) passes center=,
     # drift.show() passes the panel gap with pixel_size/pixel_unit traits.
     image = _frame(0, (256, 256))
-    combined = Show2D([image, image], labels=["0 deg", "90 deg"], ncols=2, size=300, display_bin=1, zoom=4,
+    combined = Show2D([image, image], labels=["0 deg", "90 deg"], ncols=2, panel_width_px=300, display_bin=1, zoom=4,
                       center=(40, 200), ui_mode="report")
     assert (combined.zoom_row, combined.zoom_col) == (40.0, 200.0)
     # center is in full-resolution pixels; the browser reads the binned preview's pixels
     binned = Show2D(image, zoom=4, center=(40, 200), display_bin=2, verbose=False)
     assert (binned.zoom_row, binned.zoom_col) == (20.0, 100.0)
     assert Show2D(image, center=None).zoom_row is None
-    shown = Show2D([image] * 3, ncols=3, panel_gap_px=0, size=200, pixel_size=0.1, pixel_unit="nm",
+    shown = Show2D([image] * 3, ncols=3, panel_gap_px=0, panel_width_px=200, pixel_size=0.1, pixel_unit="nm",
                    labels=["before", "affine", "nonrigid"], zoom=1, ui_mode="interactive")
     assert (shown.panel_gap_px, shown.pixel_size, shown.pixel_unit) == (0, 0.1, "nm")
     assert Show2D([image] * 2, panel_gap_px=6).panel_gap_px == 6
@@ -672,3 +672,10 @@ def test_the_panel_gap_has_one_name_in_both_gallery_widgets():
     for earlier in ("panel_gap", "inter_panel_gap_px"):
         with pytest.raises(TypeError, match=f"unexpected keyword argument '{earlier}'"):
             Show3D(stack, stack, **{earlier: 3}, verbose=False)
+
+
+def test_the_show2d_panel_width_has_one_name():
+    # Show2D took size and panel_width_px for one value and kept it in a trait called size
+    assert Show2D(_frame(), panel_width_px=300, verbose=False).state_dict()["panel_width_px"] == 300
+    with pytest.raises(TypeError, match="unexpected keyword argument 'size'"):
+        Show2D(_frame(), size=300, verbose=False)

@@ -86,7 +86,7 @@ class Show2DState:
         "pixel_size", "pixel_unit",
         "show_scale_bar", "scale_bar_position", "scale_bar_panels",
         "scale_bar_length", "scale_bar_label", "scale_bar_style", "show_zoom_indicator",
-        "size", "smooth", "initial_zoom", "zoom_row", "zoom_col", "view_box",
+        "panel_width_px", "smooth", "initial_zoom", "zoom_row", "zoom_col", "view_box",
         "link_zoom", "link_pan", "link_contrast",
         "diff_mode", "diff_reference", "ncols", "selected_idx", "selected_panels",
         "roi_active", "roi_list", "roi_selected_idx", "profile_line",

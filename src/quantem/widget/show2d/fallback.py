@@ -411,12 +411,12 @@ class Show2DStaticPng:
         """CSS width of the live panel canvas, the length every JS overlay
         constant (16px font, 12px margin, 60px bar target) is relative to.
 
-        Port of js/show2d/index.tsx: the ``size`` trait when set, else
+        Port of js/show2d/index.tsx: the ``panel_width_px`` trait when set, else
         SINGLE_IMAGE_TARGET (500) for one image / GALLERY_IMAGE_TARGET (300)
         for a gallery. Without this the static overlays would be drawn for a
         fictitious canvas size and read visibly smaller than the widget's."""
-        if self.size > 0:
-            return float(self.size)
+        if self.panel_width_px > 0:
+            return float(self.panel_width_px)
         return 300.0 if self.n_images > 1 else 500.0
 
     def _static_overlay_texts(self, specs: list[dict] | None = None,

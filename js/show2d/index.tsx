@@ -968,7 +968,7 @@ function Show2D() {
   const [diffMode, setDiffMode] = useModelState<boolean>("diff_mode");
   const [diffReference] = useModelState<number>("diff_reference");
 
-  const [canvasSizeTrait, setCanvasSizeTrait] = useModelState<number>("size");
+  const [panelWidthPxTrait, setPanelWidthPxTrait] = useModelState<number>("panel_width_px");
   const [smooth, setSmooth] = useModelState<boolean>("smooth");
   const imageRenderingStyle = smooth ? "auto" : "pixelated";
   // Display-only filter knobs for sparse maps (EDS, low dose). Python owns
@@ -2088,8 +2088,8 @@ function Show2D() {
 
   // Sync initial sizes from traits
   React.useEffect(() => {
-    if (canvasSizeTrait > 0) setCanvasSize(canvasSizeTrait);
-  }, [canvasSizeTrait]);
+    if (panelWidthPxTrait > 0) setCanvasSize(panelWidthPxTrait);
+  }, [panelWidthPxTrait]);
 
   const canvasResizeCleanupRef = React.useRef<(() => void) | null>(null);
 
@@ -7109,7 +7109,7 @@ function Show2D() {
       cancelAnimationFrame(rafId);
       applyResizeViewAnchor(latestSize);
       setCanvasSize(latestSize);
-      setCanvasSizeTrait(Math.round(latestSize));
+      setPanelWidthPxTrait(Math.round(latestSize));
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", finishResize);
       window.removeEventListener("blur", finishResize);

@@ -288,7 +288,7 @@ def test_static_preview_matches_a_show2d_gallery_pixel_for_pixel():
         labels=[widget._static_panel_title(panel, 2) for panel in (0, 2, 3)],
         ncols=2,
         panel_gap_px=3,
-        size=180,
+        panel_width_px=180,
         sampling=widget.pixel_size,
         units="nm",
         cmap=widget.cmap,

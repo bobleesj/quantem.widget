@@ -433,9 +433,8 @@ class Show2D(
         One shared contrast window across panels.
     ncols : int, default 3
         Gallery columns.
-    size, panel_width_px : int, default 0
-        Panel canvas width in CSS px (0 = frontend default). ``panel_width_px``
-        wins when both are given.
+    panel_width_px : int, default 0
+        Panel canvas width in CSS px (0 = frontend default).
     smooth : bool, default False
         Bilinear instead of nearest-neighbor magnification.
     zoom : float, default 1.0
@@ -676,7 +675,7 @@ class Show2D(
     scale_bar_label = traitlets.Unicode("").tag(sync=True)
     scale_bar_style = traitlets.Dict(default_value={}).tag(sync=True)
     show_zoom_indicator = traitlets.Bool(False).tag(sync=True)
-    size = traitlets.Int(0).tag(sync=True)  # Canvas rendering size in CSS pixels; 0 = frontend default
+    panel_width_px = traitlets.Int(0).tag(sync=True)  # Canvas rendering size in CSS pixels; 0 = frontend default
     smooth = traitlets.Bool(False).tag(sync=True)
     initial_zoom = traitlets.Float(1.0).tag(sync=True)
     zoom_row = traitlets.Float(None, allow_none=True).tag(sync=True)
@@ -844,7 +843,6 @@ class Show2D(
         link_pan: bool | None = None,
         link_contrast: bool = True,
         ncols: int = 3,
-        size: int = 0,
         panel_width_px: int = 0,
         smooth: bool = False,
         zoom: float = 1.0,
@@ -908,8 +906,6 @@ class Show2D(
         panel_width_px = int(panel_width_px)
         if panel_width_px < 0:
             raise ValueError(f"panel_width_px must be >= 0, got {panel_width_px}")
-        if panel_width_px > 0:
-            size = panel_width_px
         ncols = int(ncols)
         if ncols < 1:
             raise ValueError(f"ncols must be >= 1, got {ncols}")
@@ -1161,7 +1157,7 @@ class Show2D(
             self.scale_bar_label = "" if scale_bar_label is None else str(scale_bar_label)
             self.scale_bar_style = dict(scale_bar_style)
             self.show_zoom_indicator = bool(show_zoom_indicator)
-            self.size = size
+            self.panel_width_px = panel_width_px
             self.smooth = smooth
             colors = [] if marker_colors is None else [str(value) for value in marker_colors]
             if colors and len(colors) != self.n_images:
@@ -1825,7 +1821,7 @@ class Show2D(
         panel_bytes = height * width * 4
         if panel_bytes > self._WIRE_BUDGET_BYTES_PER_PANEL:
             preview_floor_px = 512.0 if int(n_images) >= 16 else 1024.0
-            canvas_css_px = float(self.size) if int(self.size) > 0 else 300.0 if int(n_images) > 1 else 500.0
+            canvas_css_px = float(self.panel_width_px) if int(self.panel_width_px) > 0 else 300.0 if int(n_images) > 1 else 500.0
             preview_px = max(preview_floor_px, 2.0 * canvas_css_px)
             wire_bin = max(2, math.ceil(max(height, width) / preview_px))
             while panel_bytes / (wire_bin * wire_bin) > self._WIRE_BUDGET_BYTES_PER_PANEL:

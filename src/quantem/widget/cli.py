@@ -688,7 +688,7 @@ def _prepare_github(args: argparse.Namespace) -> int:
     if rasters:
         print(f"  compressed {rasters} large raster output(s) for repository display")
     if after > 5e6:
-        print("  warning: still > 5 MB - GitHub may not render. Lower --quality or the widget's size=.")
+        print("  warning: still > 5 MB - GitHub may not render. Lower --quality or the widget's panel_width_px=.")
     return 0
 
 
