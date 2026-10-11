@@ -4353,9 +4353,9 @@ function Show3DSlices() {
               ] : []),
               ["Shape", `${nz} x ${ny} x ${nx}`] as [string, React.ReactNode],
               ["Axes", Array.isArray(dimLabels) && dimLabels.length ? dimLabels.join(", ") : "slice, row, col"] as [string, React.ReactNode],
-              ["Sampling", Array.isArray(pixelSizeAxes) && pixelSizeAxes.length >= 3
-                ? pixelSizeAxes.map((spacing) => formatNumber(spacing)).join(" x ")
-                : pixelSize > 0 ? `${formatNumber(pixelSize)} /px` : ""] as [string, React.ReactNode],
+              ["Sampling", pixelSizeAxes.some((spacing) => spacing > 0)
+                ? `${pixelSizeAxes.map((spacing) => formatNumber(spacing)).join(" x ")} Å/px`
+                : "not set, lengths in px"] as [string, React.ReactNode],
               ["Display", `z stretch ${formatNumber(zStretch)}, ${orthographic ? "orthographic" : "perspective"}`] as [string, React.ReactNode],
             ]} />
             <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
@@ -4537,8 +4537,8 @@ function Show3DSlices() {
                   style={{ width: canvasW, height: displayH, imageRendering: smooth ? "auto" : "pixelated" }}
                   role="img"
                   aria-label={axis === 0
-                    ? `XY slice ${liveSlider[0] + 1} of ${nz} along ${axisLabels[0]} axis${title ? `: ${title}` : ""} (${canvasW} by ${canvasH} pixels)`
-                    : `Oblique vertical slice at ${obliqueAngle.toFixed(1)} degrees, position ${Math.round(obliqueCurrentOffset)}${title ? `: ${title}` : ""} (${canvasW} by ${canvasH} pixels)`}
+                    ? `XY slice ${liveSlider[0] + 1} of ${nz} along ${axisLabels[0]} axis${title ? `: ${title}` : ""} (${canvasW} by ${canvasH} px)`
+                    : `Oblique vertical slice at ${obliqueAngle.toFixed(1)} degrees, position ${Math.round(obliqueCurrentOffset)}${title ? `: ${title}` : ""} (${canvasW} by ${canvasH} px)`}
                 />
                 <canvas
                   ref={(el) => { overlayRefs.current[axis] = el; }}
@@ -4608,7 +4608,7 @@ function Show3DSlices() {
                       height={canvasH}
                       style={{ width: canvasW, height: displayH, imageRendering: smooth ? "auto" : "pixelated" }}
                       role="img"
-                      aria-label={`FFT power spectrum of ${panelName} slice (reciprocal space, ${canvasW} by ${canvasH} pixels)`}
+                      aria-label={`FFT power spectrum of ${panelName} slice (reciprocal space, ${canvasW} by ${canvasH} px)`}
                     />
                     <canvas
                       ref={(el) => { fftOverlayRefs.current[axis] = el; }}
@@ -4677,7 +4677,7 @@ function Show3DSlices() {
                     <Box sx={{ display: "flex", alignItems: "center", gap: `${SPACING.SM}px`, minHeight: 14 }}>
                       <Typography
                         sx={{ ...controlLabel, color: themeColors.textMuted, flexShrink: 0, minWidth: 42 }}
-                        title="Plane center in image pixels. Steady under rotation unless the cut is clamped at an image edge."
+                        title="Plane center (row, col) in image px. Steady under rotation unless the cut is clamped at an image edge."
                       >
                         Center
                       </Typography>
@@ -4832,7 +4832,7 @@ function Show3DSlices() {
                     }}
                     onCommit={(value) => commitManualSliceAlignment(value, liveColShift)}
                     sx={{ ...sliderStyles.small, width: 58, flexShrink: 0 }}
-                    ariaLabel={`Row shift per slice ${liveRowShift.toFixed(3)} pixels`}
+                    ariaLabel={`Row shift per slice ${liveRowShift.toFixed(3)} px`}
                   />
                   <NumberCommitInput
                     value={liveRowShift}
@@ -4856,7 +4856,7 @@ function Show3DSlices() {
                     }}
                     onCommit={(value) => commitManualSliceAlignment(liveRowShift, value)}
                     sx={{ ...sliderStyles.small, width: 58, flexShrink: 0 }}
-                    ariaLabel={`Column shift per slice ${liveColShift.toFixed(3)} pixels`}
+                    ariaLabel={`Column shift per slice ${liveColShift.toFixed(3)} px`}
                   />
                   <NumberCommitInput
                     value={liveColShift}

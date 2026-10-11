@@ -2,7 +2,8 @@
 // slices paint on the Canvas2D path). A drag of the oblique cut's handle moves
 // the cut once per pointer move, from one document listener bound once; a
 // click on an FFT panel ends the pan even when the peak refinement after it
-// fails; the Top slice counter and its slider name count slices from 1.
+// fails; the Top slice counter and its slider name count slices from 1, and
+// every label spells the length unit px.
 import { act } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -156,4 +157,17 @@ it("counts Top slices from 1 in the counter and the slider name", async () => {
   act(() => { model.set("loop", true); model.set("slice_z", 0); });
   await settle();
   expect(el.querySelector("input[aria-label='Loop range and current top slice (1 of 4, loop 1 to 4)']")).not.toBeNull();
+});
+
+it("spells the length unit px in every label", async () => {
+  model.values.slice_alignment = "manual";
+  model.values.show_fft = true;
+  mount();
+  await settle();
+  const advanced = [...el.querySelectorAll("button")].find(button => button.textContent === "Advanced")!;
+  act(() => advanced.click());
+  await settle();
+  const labels = [...el.querySelectorAll("[aria-label], [title]")].flatMap(node => [node.getAttribute("aria-label"), node.getAttribute("title")]);
+  expect(labels.filter(label => label?.includes("Row shift per slice"))).toEqual(["Row shift per slice 0.000 px"]);
+  expect(labels.filter(label => label && /pixels/.test(label))).toEqual([]);
 });
