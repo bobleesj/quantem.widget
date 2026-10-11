@@ -8025,13 +8025,7 @@ function Show2D() {
               <Typography sx={compactLabelSx} title="Fourier transform view of the current image.">FFT</Typography>
               <Switch
                 checked={showFft}
-                onChange={(e) => {
-                  const on = e.target.checked;
-                  if (on && width * height > 2048 * 2048) {
-                    console.warn(`Show2D: FFT on ${width}×${height} image (${(width * height / 1e6).toFixed(1)}M pixels) may be slow`);
-                  }
-                  setShowFft(on);
-                }}
+                onChange={(e) => setShowFft(e.target.checked)}
                 size="small"
                 sx={switchStyles.small}
               />
