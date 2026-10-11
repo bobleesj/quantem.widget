@@ -444,6 +444,20 @@ function panelRasterSize([sliceH, sliceW]: [number, number], isDepth: boolean, t
   return { w: width, h: height, scaleX: width / Math.max(1, sliceW), scaleY: height / Math.max(1, sliceH) };
 }
 
+/**
+ * Real-space sampling (Å per px) along each slice panel's rows and columns,
+ * from the volume's [pz, py, px]; zero when uncalibrated. The oblique panel's
+ * rows are depth slices and its columns step along the cut at `angleDeg` in
+ * the XY plane, so their spacing mixes the y and x samplings.
+ */
+function panelSampling(axes: number[], angleDeg: number): { row: number; col: number }[] {
+  const theta = (angleDeg * Math.PI) / 180;
+  return [
+    { row: axes[1], col: axes[2] },
+    { row: axes[0], col: Math.hypot(Math.cos(theta) * axes[2], Math.sin(theta) * axes[1]) },
+  ];
+}
+
 function transformDisplaySample(data: Float32Array | null, logScale: boolean, flip: boolean): Float32Array | null {
   if (!data) return null;
   if (!logScale && !flip) return data;
@@ -668,7 +682,6 @@ const VOLUME_VIEW_PRESETS = [
   { value: "xy", label: "Top", description: "top (XY) view" },
   { value: "side", label: "Side", description: "oblique vertical plane view" },
 ] as const;
-const DPR = window.devicePixelRatio || 1;
 const SHOW3DSLICES_FFT_RESULT_CACHE_MAX_BYTES = 192 * 1024 * 1024;
 const SHOW3DSLICES_FFT_RESULT_CACHE_MAX_ENTRIES = 24;
 
@@ -836,8 +849,7 @@ function Show3DSlices() {
   const [smooth, setSmooth] = useModelState<boolean>("smooth");
   const [flip, setFlip] = useModelState<boolean>("flip");
   const [dimLabels] = useModelState<string[]>("dim_labels");
-  const [pixelSize] = useModelState<number>("pixel_size");
-  // Per-axis sampling [pz, py, px] for anisotropic data; falls back to [pixelSize]*3.
+  // Per-axis sampling [pz, py, px] in Angstrom (zeros when uncalibrated).
   const [pixelSizeAxes] = useModelState<number[]>("pixel_size_axes");
   const [scaleBarVisible] = useModelState<boolean>("scale_bar_visible");
   const [modelZStretch, setModelZStretch] = useModelState<number>("z_stretch");
@@ -2455,6 +2467,8 @@ function Show3DSlices() {
       [sliceX, sliceY],
       [(sliceDims[1]?.[1] ?? 1) / 2, sliceZ],
     ];
+    // Drawn in CSS pixels on a device-pixel backing store, so lines and handles stay sharp on HiDPI screens.
+    const dpr = window.devicePixelRatio || 1;
     for (let axis = 0; axis < sliceDims.length; axis++) {
       const overlay = overlayRefs.current[axis];
       if (!overlay) continue;
@@ -2462,6 +2476,12 @@ function Show3DSlices() {
       if (!ctx) continue;
       const { w: canvasW, h: canvasH, displayH, scaleX, scaleY } = canvasSizes[axis];
       const stretchY = displayH / canvasH;
+      const backingW = Math.round(canvasW * dpr), backingH = Math.round(displayH * dpr);
+      if (overlay.width !== backingW || overlay.height !== backingH) {
+        overlay.width = backingW;
+        overlay.height = backingH;
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, canvasW, displayH);
       if (axis === 0) {
         const { start, stop } = obliqueSegment;
@@ -2532,41 +2552,31 @@ function Show3DSlices() {
   // Scale bar (HiDPI UI overlay)
   // -------------------------------------------------------------------------
   React.useEffect(() => {
+    const dpr = window.devicePixelRatio || 1;
+    const sampling = panelSampling(pixelSizeAxes, obliqueAngle);
     for (let axis = 0; axis < sliceDims.length; axis++) {
       const uiCanvas = uiRefs.current[axis];
       if (!uiCanvas) continue;
       const { w: canvasW, displayH } = canvasSizes[axis];
-      uiCanvas.width = Math.round(canvasW * DPR);
-      uiCanvas.height = Math.round(displayH * DPR);
+      uiCanvas.width = Math.round(canvasW * dpr);
+      uiCanvas.height = Math.round(displayH * dpr);
       const uiCtx = uiCanvas.getContext("2d");
       if (!uiCtx) continue;
-      uiCtx.clearRect(0, 0, uiCanvas.width, uiCanvas.height);
       if (scaleBarVisible) {
-        const axes = pixelSizeAxes && pixelSizeAxes.length === 3 ? pixelSizeAxes : null;
-        const theta = (obliqueAngle * Math.PI) / 180;
-        const obliquePx = axes
-          ? Math.hypot(Math.cos(theta) * axes[2], Math.sin(theta) * axes[1])
-          : (pixelSize || 0);
-        const pxSize = axis === 0 ? (axes ? axes[2] : (pixelSize || 0)) : obliquePx;
-        const sliceW = sliceDims[axis][1];
-        const unit = pxSize > 0 ? "Å" : "px";
-        const size = pxSize > 0 ? pxSize : 1;
-        drawScaleBarHiDPI(uiCanvas, DPR, zooms[axis].zoom, size, unit, sliceW);
+        const spacing = sampling[axis].col;
+        drawScaleBarHiDPI(uiCanvas, dpr, zooms[axis].zoom, spacing > 0 ? spacing : 1, spacing > 0 ? "Å" : "px", sliceDims[axis][1]);
       }
-
       if (showColorbar) {
         const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
         // The window the slices are painted with, so the labels follow Flip.
         const { vmin, vmax } = volumeDisplayWindow(displayDataRange, imageVminPct, imageVmaxPct, flip);
-        const cssW = uiCanvas.width / DPR;
-        const cssH = uiCanvas.height / DPR;
         uiCtx.save();
-        uiCtx.scale(DPR, DPR);
-        drawColorbar(uiCtx, cssW, cssH, lut, vmin, vmax, logScale);
+        uiCtx.scale(dpr, dpr);
+        drawColorbar(uiCtx, canvasW, displayH, lut, vmin, vmax, logScale);
         uiCtx.restore();
       }
     }
-  }, [pixelSize, pixelSizeAxes, scaleBarVisible, zooms, canvasSizes, sliceDims, showColorbar, cmap, displayDataRange, imageVminPct, imageVmaxPct, flip, obliqueAngle, themeInfo.theme]);
+  }, [pixelSizeAxes, scaleBarVisible, zooms, canvasSizes, sliceDims, showColorbar, cmap, displayDataRange, imageVminPct, imageVmaxPct, flip, obliqueAngle, themeInfo.theme]);
 
   // -------------------------------------------------------------------------
   // FFT computation and caching (per-axis: only recompute changed axes)
@@ -2691,38 +2701,29 @@ function Show3DSlices() {
   // Render FFT overlays (reciprocal-space scale bars + d-spacing crosshair per axis)
   React.useEffect(() => {
     if (!showFft) return;
-    const dims = sliceDims;
+    const dpr = window.devicePixelRatio || 1;
+    const sampling = panelSampling(pixelSizeAxes, obliqueAngle);
     for (let axis = 0; axis < sliceDims.length; axis++) {
       const overlay = fftOverlayRefs.current[axis];
       if (!overlay) continue;
       const { w: canvasW, h: canvasH, displayH } = canvasSizes[axis];
       const stretchY = displayH / canvasH;
-      overlay.width = Math.round(canvasW * DPR);
-      overlay.height = Math.round(displayH * DPR);
+      overlay.width = Math.round(canvasW * dpr);
+      overlay.height = Math.round(displayH * dpr);
       const ctx = overlay.getContext("2d");
       if (!ctx) continue;
-      ctx.clearRect(0, 0, overlay.width, overlay.height);
-
-      const axes = pixelSizeAxes && pixelSizeAxes.length === 3 ? pixelSizeAxes : null;
-      const theta = (obliqueAngle * Math.PI) / 180;
-      const obliquePx = axes
-        ? Math.hypot(Math.cos(theta) * axes[2], Math.sin(theta) * axes[1])
-        : pixelSize;
-      const realPx = axis === 0 ? (axes ? axes[2] : pixelSize) : obliquePx;
-      if (realPx > 0) {
-        const [, sliceW] = dims[axis];
-        const paddedW = nextPow2(sliceW);
-        const fftPixelSize = 1 / (paddedW * realPx);
-        drawFFTScaleBarHiDPI(overlay, DPR, fftZooms[axis].zoom, fftPixelSize, paddedW, "Å⁻¹");
+      if (sampling[axis].col > 0) {
+        const paddedW = nextPow2(sliceDims[axis][1]);
+        drawFFTScaleBarHiDPI(overlay, dpr, fftZooms[axis].zoom, 1 / (paddedW * sampling[axis].col), paddedW, "Å⁻¹");
       }
 
       if (fftClickInfo && fftClickInfo.axis === axis) {
-        const [sliceH, sliceW] = dims[axis];
+        const [sliceH, sliceW] = sliceDims[axis];
         const fftW = nextPow2(sliceW);
         const fftH = nextPow2(sliceH);
 
         ctx.save();
-        ctx.scale(DPR, DPR);
+        ctx.scale(dpr, dpr);
         const view = fftZooms[axis];
         const centerX = canvasW / 2, centerY = displayH / 2;
         const rawX = fftClickInfo.col / fftW * canvasW;
@@ -2757,7 +2758,7 @@ function Show3DSlices() {
         ctx.restore();
       }
     }
-  }, [showFft, fftZooms, canvasSizes, pixelSize, pixelSizeAxes, nx, ny, nz, fftClickInfo]);
+  }, [showFft, fftZooms, canvasSizes, sliceDims, pixelSizeAxes, obliqueAngle, fftClickInfo]);
 
   // -------------------------------------------------------------------------
   // Playback logic (matching Show3D pattern)
@@ -3565,13 +3566,7 @@ function Show3DSlices() {
     }
     let spatialFreq: number | null = null;
     let dSpacing: number | null = null;
-    const axes = pixelSizeAxes && pixelSizeAxes.length === 3 ? pixelSizeAxes : null;
-    const theta = (obliqueAngle * Math.PI) / 180;
-    const obliqueSpacing = axes
-      ? Math.hypot(Math.cos(theta) * axes[2], Math.sin(theta) * axes[1])
-      : pixelSize;
-    const rowSpacing = axis === 0 ? (axes ? axes[1] : pixelSize) : (axes ? axes[0] : pixelSize);
-    const colSpacing = axis === 0 ? (axes ? axes[2] : pixelSize) : obliqueSpacing;
+    const { row: rowSpacing, col: colSpacing } = panelSampling(pixelSizeAxes, obliqueAngle)[axis];
     if (rowSpacing > 0 && colSpacing > 0) {
       ({ spatialFrequency: spatialFreq, dSpacing } = reciprocalCoordinatesFromShiftedOffset(dcRow, dcCol, fftH, fftW, rowSpacing, colSpacing));
     }
@@ -4481,15 +4476,11 @@ function Show3DSlices() {
                 />
                 <canvas
                   ref={(el) => { overlayRefs.current[axis] = el; }}
-                  width={canvasW}
-                  height={displayH}
                   style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: displayH, pointerEvents: "none" }}
                   aria-hidden="true"
                 />
                 <canvas
                   ref={(el) => { uiRefs.current[axis] = el; }}
-                  width={Math.round(canvasW * DPR)}
-                  height={Math.round(displayH * DPR)}
                   style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: displayH, pointerEvents: "none" }}
                   aria-hidden="true"
                 />
@@ -4551,8 +4542,6 @@ function Show3DSlices() {
                     />
                     <canvas
                       ref={(el) => { fftOverlayRefs.current[axis] = el; }}
-                      width={Math.round(canvasW * DPR)}
-                      height={Math.round(displayH * DPR)}
                       style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: displayH, pointerEvents: "none" }}
                       aria-hidden="true"
                     />
