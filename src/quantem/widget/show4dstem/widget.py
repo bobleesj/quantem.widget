@@ -41,7 +41,7 @@ from quantem.widget.adapters.gpu import AcquisitionSeries, AcquisitionView
 from quantem.widget.counts import counts_tensor, detector_bin_mean, host_dtype_for_torch, tensor_dtype
 from quantem.widget.device import gpu_notice, gpu_path_hint, no_gpu_path, print_once, resolve_device
 from quantem.widget.folder_watch_status import FOLDER_WATCH_STATE_VALUES, set_folder_watch_status
-from quantem.widget.export import HtmlExportMixin
+from quantem.widget.export import HtmlExportMixin, export_slug
 from quantem.widget.fallback import StaticFallbackMixin
 from quantem.widget.show4dstem import export as html_export
 from quantem.widget.show4dstem import reader
@@ -1680,7 +1680,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                     "elapsed_s": None if result.elapsed is None else float(result.elapsed)},
         }, indent=2)
         self.ssb_compute_calibration_filename = (
-            f"{html_export.slug(self.title)}_{self.shape_rows}x{self.shape_cols}x{self.det_rows}x{self.det_cols}_ssb_calibration.json"
+            f"{export_slug(self.title, 'show4dstem')}_{self.shape_rows}x{self.shape_cols}x{self.det_rows}x{self.det_cols}_ssb_calibration.json"
         )
         com_row, com_col = gpu_adapter.center_of_mass(source, scan_shape=(self.shape_rows, self.shape_cols))
         theta = math.radians(physical_rotation)

@@ -356,6 +356,18 @@ def test_state_round_trips_through_dict_and_file(tmp_path):
             restored.close()
 
 
+def test_widget_calls_only_functions_its_export_module_defines():
+    """compute_ssb replaces _ssb_phase in the tests below, so a stale export name there never ran in CI."""
+    import inspect
+    import re
+
+    from quantem.widget.show4dstem import export as html_export
+    from quantem.widget.show4dstem import widget as widget_module
+
+    called = set(re.findall(r"\bhtml_export\.(\w+)", inspect.getsource(widget_module)))
+    assert called and called <= set(dir(html_export)), sorted(called - set(dir(html_export)))
+
+
 def test_product_map_from_compute_ssb_becomes_the_image(monkeypatch):
     counts = _counts(3)
     phase = np.linspace(-1, 1, counts[..., 0, 0].size, dtype=np.float32).reshape(SCAN)
