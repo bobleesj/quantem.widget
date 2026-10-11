@@ -71,6 +71,9 @@ interface BlurAxis {
   sourceIndex: Uint32Array<ArrayBuffer>;
 }
 
+/** A BlurAxis with its taps and source lookup on the device. */
+type BlurAxisBuffers = { low: number; high: number; taps: GPUBuffer; sourceIndex: GPUBuffer };
+
 function blurAxis(length: number, sigma: number): BlurAxis {
   const pad = Math.max(1, Math.ceil(4 * sigma));
   const padded = length + 2 * pad;
@@ -488,7 +491,7 @@ class SliceAlignmentGPU {
   }
 
   /** Taps and source lookup of one blur axis, uploaded once per estimate. */
-  blurAxisBuffers(axis: BlurAxis): { low: number; high: number; taps: GPUBuffer; sourceIndex: GPUBuffer } {
+  blurAxisBuffers(axis: BlurAxis): BlurAxisBuffers {
     const taps = this.device.createBuffer({ size: axis.taps.length * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     this.device.queue.writeBuffer(taps, 0, Float32Array.from(axis.taps));
     const sourceIndex = this.device.createBuffer({ size: axis.sourceIndex.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
@@ -498,11 +501,9 @@ class SliceAlignmentGPU {
 
   /** Blur one real-valued plane in place: along columns (each row), then along rows. */
   blurResident(
-    src: GPUBuffer, scratch: GPUBuffer, width: number, height: number,
-    rowAxis: { low: number; high: number; taps: GPUBuffer; sourceIndex: GPUBuffer },
-    colAxis: { low: number; high: number; taps: GPUBuffer; sourceIndex: GPUBuffer },
+    src: GPUBuffer, scratch: GPUBuffer, width: number, height: number, rowAxis: BlurAxisBuffers, colAxis: BlurAxisBuffers,
   ): void {
-    const pass = (from: GPUBuffer, to: GPUBuffer, axis: typeof rowAxis, horizontal: boolean) => {
+    const pass = (from: GPUBuffer, to: GPUBuffer, axis: BlurAxisBuffers, horizontal: boolean) => {
       const params = this.device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
       const values = new ArrayBuffer(32);
       new Uint32Array(values).set([width, height, 0, 0, horizontal ? 1 : 0]);
