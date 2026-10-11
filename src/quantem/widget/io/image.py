@@ -122,7 +122,7 @@ def read_image(path: str | Path):
       **Color PNG/JPEG/TIFF keep RGB** (``RgbImage`` with shape ``(H, W, 3)``);
       they are not converted to a single gray channel. Pass the result to
       ``Show2D`` or ``Show3D`` to display true color.
-    - ``.dm3`` / ``.dm4`` - Gatan, via ncempy.
+    - ``.dm3`` / ``.dm4`` - Gatan, via ncempy, with the pixel size and unit the file records.
 
     Grayscale results are a quantem core ``Dataset2d`` (on an Intel Mac or
     Windows on ARM, which cannot install quantem core, the widget's stand-in
@@ -152,8 +152,12 @@ def read_image(path: str | Path):
         return _wrap_image_array(_normalize_image_array(arr, path.name), name=path.stem)
     if suffix in (".dm3", ".dm4"):
         from ncempy.io import dm  # noqa: PLC0415
-        arr = np.asarray(dm.dmReader(str(path))["data"])
-        return _wrap_image_array(_normalize_image_array(arr, path.name), name=path.stem)
+        gatan = dm.dmReader(str(path))
+        arr = np.asarray(gatan["data"])
+        # the last two axes are the image; an axis Gatan left uncalibrated has an empty unit
+        return _wrap_image_array(_normalize_image_array(arr, path.name), name=path.stem,
+                                 sampling=tuple(float(step) for step in gatan["pixelSize"][-2:]),
+                                 units=tuple(str(unit) or "pixels" for unit in gatan["pixelUnit"][-2:]))
     raise ValueError(
         f"read_image: unsupported extension {suffix!r} "
         "(use .npy, .emd, .tif/.tiff, .png, .jpg, .bmp, .gif, .dm3/.dm4)")

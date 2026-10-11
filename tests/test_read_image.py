@@ -211,3 +211,16 @@ def test_read_image_stack_mixed_default_scan_includes_metadata_formats(tmp_path)
     ds = read_image_stack(tmp_path, pattern="frame_*.npy", progress=False)
 
     assert ds.array.shape == (2, 4, 5)
+
+
+def test_gatan_image_keeps_the_calibration_the_file_records(tmp_path, monkeypatch):
+    # .dm3 / .dm4 images came back with sampling 1.0 "pixels" while the docstrings said the calibration is carried
+    from ncempy.io import dm
+
+    image = np.arange(12, dtype=np.float32).reshape(3, 4)
+    monkeypatch.setattr(dm, "dmReader", lambda path: {"data": image, "pixelSize": [0.02, 0.03], "pixelUnit": ["nm", "nm"]})
+    dataset = read_image(tmp_path / "survey.dm4")
+    np.testing.assert_array_equal(dataset.array, image)
+    assert tuple(dataset.sampling) == (0.02, 0.03) and list(dataset.units) == ["nm", "nm"]
+    monkeypatch.setattr(dm, "dmReader", lambda path: {"data": image, "pixelSize": [1.0, 1.0], "pixelUnit": ["", ""]})
+    assert list(read_image(tmp_path / "bare.dm3").units) == ["pixels", "pixels"]  # Gatan's empty unit is an uncalibrated axis
