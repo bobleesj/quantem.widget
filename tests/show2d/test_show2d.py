@@ -16,7 +16,7 @@ import traitlets
 from matplotlib import colormaps
 from PIL import Image
 
-from quantem.widget import Show2D, Show3D
+from quantem.widget import Show1D, Show2D, Show3D
 from quantem.widget.adapters.core import make_dataset
 from quantem.widget.colormap import display_window
 from quantem.widget.render.figure import format_scale_label
@@ -157,7 +157,7 @@ def test_ui_mode_presets_and_unknown_kwargs():
 
 def test_drift_plot_keywords_center_and_panel_gap_px(capsys):
     # quantem's drift plots: plot_combined(interactive=True) passes center=,
-    # drift.show() passes the panel gap with pixel_size/pixel_unit traits.
+    # drift.show() passes the panel gap with the calibration.
     image = _frame(0, (256, 256))
     combined = Show2D([image, image], labels=["0 deg", "90 deg"], ncols=2, panel_width_px=300, display_bin=1, zoom=4,
                       center=(40, 200), ui_mode="report")
@@ -166,7 +166,7 @@ def test_drift_plot_keywords_center_and_panel_gap_px(capsys):
     binned = Show2D(image, zoom=4, center=(40, 200), display_bin=2, verbose=False)
     assert (binned.zoom_row, binned.zoom_col) == (20.0, 100.0)
     assert Show2D(image, center=None).zoom_row is None
-    shown = Show2D([image] * 3, ncols=3, panel_gap_px=0, panel_width_px=200, pixel_size=0.1, pixel_unit="nm",
+    shown = Show2D([image] * 3, ncols=3, panel_gap_px=0, panel_width_px=200, sampling=0.1, units="nm",
                    labels=["before", "affine", "nonrigid"], zoom=1, ui_mode="interactive")
     assert (shown.panel_gap_px, shown.pixel_size, shown.pixel_unit) == (0, 0.1, "nm")
     assert Show2D([image] * 2, panel_gap_px=6).panel_gap_px == 6
@@ -679,3 +679,17 @@ def test_the_show2d_panel_width_has_one_name():
     assert Show2D(_frame(), panel_width_px=300, verbose=False).state_dict()["panel_width_px"] == 300
     with pytest.raises(TypeError, match="unexpected keyword argument 'size'"):
         Show2D(_frame(), size=300, verbose=False)
+
+
+def test_the_calibration_keywords_are_sampling_and_units_not_the_trait_names():
+    # every synced trait is a keyword, so pixel_size= and pixel_unit= worked beside sampling= and units=
+    stack = np.zeros((2, 8, 8), dtype=np.float32)
+    calibrated = Show2D(_frame(), sampling=0.1, units="nm", verbose=False)
+    assert (calibrated.pixel_size, calibrated.pixel_unit) == (0.1, "nm")
+    for build in (lambda **keywords: Show2D(_frame(), verbose=False, **keywords), lambda **keywords: Show1D(np.arange(8.0), **keywords)):
+        with pytest.raises(TypeError, match="sets pixel_size itself; pass sampling= instead"):
+            build(pixel_size=0.1)
+        with pytest.raises(TypeError, match="sets pixel_unit itself; pass units= instead"):
+            build(pixel_unit="nm")
+    with pytest.raises(TypeError, match="unexpected keyword argument 'pixel_size'"):
+        Show3D(stack, pixel_size=0.1, verbose=False)

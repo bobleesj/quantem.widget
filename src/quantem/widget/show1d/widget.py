@@ -154,6 +154,9 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
     # constructor body runs; the preview renderer reads these two.
     _data: np.ndarray = np.empty((0, 0), dtype=np.float32)
     _x: np.ndarray | None = None
+    # Synced traits the constructor sets itself, with the keyword that sets each one; a keyword
+    # for the trait would be a second spelling of that keyword (see reject_unknown_kwargs).
+    _CONSTRUCTOR_TRAITS = {"pixel_size": "sampling", "pixel_unit": "units"}
 
     y_bytes = traitlets.Bytes(b"").tag(sync=True)
     x_bytes = traitlets.Bytes(b"").tag(sync=True)
@@ -302,7 +305,7 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         save_state: bool = False,
         **kwargs,
     ) -> None:
-        reject_unknown_kwargs(type(self), kwargs)
+        reject_unknown_kwargs(type(self), kwargs, owned=self._CONSTRUCTOR_TRAITS)
         overrides = {key: kwargs.pop(key, None) for key in _UI_DEFAULTS}
         overrides["show_review"] = show_review
         kwargs.update(resolve_ui_mode(ui_mode, defaults=_UI_DEFAULTS, overrides=overrides))

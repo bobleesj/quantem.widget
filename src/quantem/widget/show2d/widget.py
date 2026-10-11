@@ -518,6 +518,8 @@ class Show2D(
         "denoise_sigmas": "denoise_sigma",
         "denoise_bins": "denoise_bin",
         "denoise_enabled": "denoise",
+        "pixel_size": "sampling",
+        "pixel_unit": "units",
         **dict.fromkeys(
             ("n_images", "height", "width", "is_rgb", "n_pages", "panels_per_page", "page_starred",
              "panel_frame_counts", "panel_stack_offsets", "frame_bytes", "panel_stack_bytes",
@@ -777,10 +779,7 @@ class Show2D(
             allow_empty=watch,
             require_unchanged_followup=watch,
         )
-        explicit_calibration = any(
-            key in kwargs
-            for key in ("sampling", "units", "pixel_size", "pixel_unit")
-        )
+        explicit_calibration = "sampling" in kwargs or "units" in kwargs
         kwargs.setdefault("title", source.folder.name)
         kwargs.setdefault("verbose", False)
         if arrays:
@@ -1139,7 +1138,7 @@ class Show2D(
                 self.panel_cmaps_memory = []
             # sampling / units resolve to the column-axis pixel_size + pixel_unit.
             # Scalar shorthand: sampling=0.5 -> (0.5, 0.5); units="nm" -> ["nm", "nm"].
-            # None keeps the trait: pixel_size= may have been set directly via kwargs.
+            # None leaves the traits at their uncalibrated defaults.
             if isinstance(sampling, (int, float)):
                 self.pixel_size = float(sampling)
             elif sampling is not None:
