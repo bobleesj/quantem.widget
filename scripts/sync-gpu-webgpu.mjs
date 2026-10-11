@@ -17,9 +17,9 @@
 
 import { spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -128,6 +128,9 @@ function sha256s(dir, names) {
   ]));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run directly (node scripts/sync-gpu-webgpu.mjs), not imported by build.mjs, quantem.live or
+// `node -e` (no script path). Node resolves symlinks and URL-encodes the module URL, so compare
+// like with like: a raw `file://${path}` misses paths with spaces and the sync silently did nothing.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   syncGpuWebgpuSources();
 }
