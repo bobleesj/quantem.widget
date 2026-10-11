@@ -2,7 +2,8 @@
 
 An unlinked gallery histogram is computed once per panel frame, not on every
 hover. A gallery FFT of a panel above 2048 px says it is binned and measures
-its lattice band at the binned sampling.
+its lattice band at the binned sampling. A profile drag samples each panel at
+most once per pointer move.
 """
 
 import re
@@ -18,6 +19,14 @@ const log1p = Math.log1p;
 Math.log1p = (value) => { window.__log1pCalls += 1; return log1p(value); };
 """
 # One entry per histogram (its range slider has two inputs): the min and max labels.
+COUNT_PROFILE_SAMPLES = """
+window.__profileSamples = 0;
+const createShaderModule = GPUDevice.prototype.createShaderModule;
+GPUDevice.prototype.createShaderModule = function (descriptor) {
+  if (descriptor.code.includes('profile_width: u32')) window.__profileSamples += 1;
+  return createShaderModule.call(this, descriptor);
+};
+"""
 HISTOGRAM_LABELS = """
 () => Array.from(new Set(Array.from(document.querySelectorAll('input[aria-label="Histogram intensity clip range"]'))
   .map(input => input.closest('.MuiBox-root').parentElement)))
@@ -81,4 +90,33 @@ def test_gallery_fft_of_a_binned_panel_says_so_and_measures_at_the_binned_sampli
     assert peaks == [4, 4], labels
     binning = page.locator(".quantem-fft-binning-label")
     assert binning.all_inner_texts() == ["FFT preview, binned 2x"] * 2
+    assert page.errors == [], page.errors
+
+
+def test_profile_drag_samples_each_panel_at_most_once_per_move(serve, open_page, hardware_adapter, browser_out):
+    from quantem.widget import Show2D
+
+    rows, cols = np.indices((1024, 1024))
+    ramp = (cols + 0.5 * rows).astype(np.float32)
+    widget = Show2D([ramp, ramp[::-1].copy()])
+    widget.profile_line = [{"row": 200.0, "col": 100.0}, {"row": 200.0, "col": 800.0}]
+    widget.export_html(browser_out / "show2d_profile_drag.html", max_mb=None)
+    page = open_export("show2d_profile_drag.html", serve, open_page, hardware_adapter, browser_out,
+                       'canvas[data-quantem-scientific-output="show2d-image-1"]', COUNT_PROFILE_SAMPLES)
+    box = page.locator('canvas[data-quantem-scientific-output="show2d-image-0"]').bounding_box()
+    scale = box["width"] / 1024
+    x, y = box["x"] + 800 * scale, box["y"] + 200 * scale
+    page.mouse.move(x, y)
+    page.evaluate("() => { window.__profileSamples = 0; }")
+    page.mouse.down()
+    moves = 20
+    for step in range(1, moves + 1):
+        page.mouse.move(x - 10 * step * scale, y + 8 * step * scale)
+        page.wait_for_timeout(16)
+    page.mouse.up()
+    page.wait_for_timeout(1_500)
+    page.screenshot(path=str(browser_out / "show2d_profile_drag.png"))
+    samples = page.evaluate("() => window.__profileSamples")
+    # Two panels: never more than one sample per panel per move, and the last line is sampled.
+    assert 2 <= samples <= 2 * moves, samples
     assert page.errors == [], page.errors

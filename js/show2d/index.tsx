@@ -54,6 +54,7 @@ import {
   sampleLineProfileBrowser,
 } from "../display/geometry";
 import { COLORMAPS, COLORMAP_NAMES, GPUColormapEngine, renderToOffscreen } from "../display/colormaps";
+import { createLatestFrameQueue } from "../show4dstem/latestFrameQueue";
 import { colormapSampledPixels, createColormapEngine, createCPUColormapEngine, type DisplayColormapEngine } from "../display/cpuColormap";
 import { onGPULost } from "../display/device";
 import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive, normalizeFilterMode, resolvePanelDenoiseKnobs } from "../display/filter";
@@ -4618,27 +4619,36 @@ function Show2D() {
   }, [showLens, lensPos, isGallery, cmap, logScale, offscreenVersion, width, height, canvasH, themeColors, lensMag, lensDisplaySize, lensAnchor, canvasRepaintSignal]);
 
   // -------------------------------------------------------------------------
-  // Auto-compute profile when profile_line is set (e.g. from Python)
+  // Profiles along profile_line (a drag, a click, or Python). Each sample
+  // uploads every visible panel to the GPU, and a drag moves the line on
+  // every pointer move: the queue runs one sample at a time and then only the
+  // latest line, so a fast drag neither piles up GPU work nor lets an older
+  // line's profile land after a newer one.
   // -------------------------------------------------------------------------
+  const profileRequestRef = React.useRef({ points: profilePoints, hidden: hiddenPanelSet, width, height });
+  profileRequestRef.current = { points: profilePoints, hidden: hiddenPanelSet, width, height };
+  const profileQueue = React.useMemo(() => createLatestFrameQueue(async (isCurrent) => {
+    const { points, hidden, width: imageWidth, height: imageHeight } = profileRequestRef.current;
+    const frames = rawDataRef.current;
+    if (points.length !== 2 || !frames) return;
+    const [start, end] = points;
+    const profiles = await Promise.all(frames.map((raw, index) => (
+      hidden.has(index) || !raw
+        ? Promise.resolve(null)
+        : sampleLineProfileBrowser(raw, imageWidth, imageHeight, start.row, start.col, end.row, end.col)
+    )));
+    if (isCurrent()) setProfileDataAll(profiles);
+  }, (error) => console.error("[Show2D] WebGPU line profile failed", error)), []);
+  React.useEffect(() => () => profileQueue.close(), [profileQueue]);
   React.useEffect(() => {
-    let cancelled = false;
-    if (profilePoints.length === 2 && rawDataRef.current) {
-      const p0 = profilePoints[0], p1 = profilePoints[1];
-      const frames = rawDataRef.current;
-      void Promise.all(frames.map((raw, index) => (
-        hiddenPanelSet.has(index) || !raw
-          ? Promise.resolve(null)
-          : sampleLineProfileBrowser(raw, width, height, p0.row, p0.col, p1.row, p1.col)
-      ))).then((allProfiles) => {
-        if (cancelled) return;
-        setProfileDataAll(allProfiles);
-        if (!profileActive) setProfileActive(true);
-      }).catch((error) => {
-        if (!cancelled) console.error("[Show2D] WebGPU line profile failed", error);
-      });
+    // A cleared or half-drawn line retires the profile still being sampled.
+    if (profilePoints.length !== 2) {
+      profileQueue.invalidate();
+      return;
     }
-    return () => { cancelled = true; };
-  }, [profilePoints, dataVersion, profileActive, hiddenPanelSet]);
+    if (!profileActive) setProfileActive(true);
+    profileQueue.request();
+  }, [profilePoints, dataVersion, profileActive, hiddenPanelSet, profileQueue]);
 
   // -------------------------------------------------------------------------
   // Render sparkline for line profile
@@ -6076,16 +6086,6 @@ function Show2D() {
     };
   };
 
-  const updateAllProfileData = async (p0: { row: number; col: number }, p1: { row: number; col: number }) => {
-    if (!rawDataRef.current) return;
-    const allProfiles = await Promise.all(rawDataRef.current.map((raw, index) => (
-      hiddenPanelSet.has(index) || !raw
-        ? Promise.resolve(null)
-        : sampleLineProfileBrowser(raw, width, height, p0.row, p0.col, p1.row, p1.col)
-    )));
-    setProfileDataAll(allProfiles);
-  };
-
   const updateROI = (e: React.MouseEvent, idx: number) => {
     const { imgCol, imgRow } = screenToImg(e, idx);
     updateSelectedRoi({ col: Math.max(0, Math.min(width - 1, Math.floor(imgCol))), row: Math.max(0, Math.min(height - 1, Math.floor(imgRow))) });
@@ -6513,7 +6513,6 @@ function Show2D() {
           draggingProfileEndpoint === 1 ? { row: clampedRow, col: clampedCol } : profilePoints[1],
         ];
         setProfilePoints(next);
-        updateAllProfileData(next[0], next[1]);
         return;
       }
       if (isDraggingProfileLine && profileDragStartRef.current) {
@@ -6533,7 +6532,6 @@ function Show2D() {
           { row: drag.p1.row + deltaRow, col: drag.p1.col + deltaCol },
         ];
         setProfilePoints(next);
-        updateAllProfileData(next[0], next[1]);
         return;
       }
       const nextHoveredEndpoint: 0 | 1 | null = distanceToStart <= hitRadius ? 0 : distanceToEnd <= hitRadius ? 1 : null;
@@ -6657,9 +6655,7 @@ function Show2D() {
               setProfileDataAll([]);
             } else {
               // Complete the line
-              const p0 = profilePoints[0];
-              setProfilePoints([p0, point]);
-              updateAllProfileData(p0, point);
+              setProfilePoints([profilePoints[0], point]);
             }
           }
         }
