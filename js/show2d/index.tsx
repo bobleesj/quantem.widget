@@ -2153,10 +2153,10 @@ function Show2D() {
   const [offscreenVersion, setOffscreenVersion] = React.useState(0);
   const mainCmapGenerationRef = React.useRef(0);
 
-  // Truthful first-render signal: flipped ONCE after the first colormap pass has
-  // actually painted.  Python side observes `_js_rendered` and prints the real
-  // end-to-end wall clock.  Two rAFs ensure the browser has composited before we
-  // fire, so the printed time reflects "user can see the widget," not "data arrived."
+  // First-paint signal, flipped once after the first colormap pass painted (two
+  // rAFs: the browser has composited it). Python then drops frame_bytes and
+  // panel_stack_bytes from the model, so a saved notebook keeps the static
+  // preview instead of the full arrays; the frames already decoded here stay.
   const [, setJsRendered] = useModelState<boolean>("_js_rendered");
   const firstRenderFiredRef = React.useRef(false);
   React.useEffect(() => {
