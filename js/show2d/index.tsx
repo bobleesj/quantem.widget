@@ -825,10 +825,10 @@ function Show2D() {
 
   const themedMenuProps = {
     ...upwardMenuProps,
-    PaperProps: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` } },
+    slotProps: { paper: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` } } },
   };
   const themedTopMenuProps = {
-    PaperProps: themedMenuProps.PaperProps,
+    slotProps: themedMenuProps.slotProps,
     sx: { zIndex: 9999 },
   };
 
@@ -8084,8 +8084,8 @@ function Show2D() {
                     anchorEl={panelMenuAnchor}
                     open={Boolean(panelMenuAnchor)}
                     onClose={() => setPanelMenuAnchor(null)}
-                    MenuListProps={{ "aria-label": "Panel visibility options" }}
-                    {...themedTopMenuProps}
+                    sx={themedTopMenuProps.sx}
+                    slotProps={{ ...themedTopMenuProps.slotProps, list: { "aria-label": "Panel visibility options" } }}
                   >
                     {orderedImageIndices.map((panel) => {
                       const hidden = hiddenPanelSet.has(panel);
@@ -8175,10 +8175,13 @@ function Show2D() {
                 anchorEl={moreMenuAnchor}
                 open={Boolean(moreMenuAnchor)}
                 onClose={() => setMoreMenuAnchor(null)}
-                MenuListProps={{ "aria-label": "More tools" }}
-                {...themedTopMenuProps}
-                BackdropProps={{
-                  sx: { pointerEvents: overlayEditMode ? "none" : "auto" },
+                sx={themedTopMenuProps.sx}
+                slotProps={{
+                  ...themedTopMenuProps.slotProps,
+                  list: { "aria-label": "More tools" },
+                  // While overlays are edited the menu stays open over the image
+                  // and its backdrop lets the pointer through to the canvas.
+                  backdrop: { sx: { pointerEvents: overlayEditMode ? "none" : "auto" } },
                 }}
               >
                 {hasEditablePanelDecorations && (
