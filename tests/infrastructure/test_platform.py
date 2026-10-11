@@ -374,18 +374,68 @@ def test_widgets_reduce_counts_exactly_on_mps():
     assert (on_mps.center_row, on_mps.center_col) == (on_cpu.center_row, on_cpu.center_col) == (24.5, 38.5)
 
 
-def test_free_gpu_on_mps_reports_the_metal_cache_it_returned(monkeypatch, capsys):
-    """rc41 on Apple silicon: free_gpu read torch's tensor counter, which excludes the cached blocks, so it printed 0.0 GB."""
+def test_free_gpu_is_quantem_gpu_release_cached_memory_when_quantem_gpu_is_installed(monkeypatch):
+    """One owner: free_gpu returns what quantem.gpu's function returns, passes ``verbose`` on and empties no cache itself."""
     import quantem.widget
 
-    driver = iter([5e9, 2e9])  # Metal driver total before and after empty_cache
+    calls = []
+    monkeypatch.setattr(gpu_adapter, "available", lambda: True)
+    monkeypatch.setattr(gpu_adapter, "gpu_release_cached_memory", lambda verbose: calls.append(verbose) or 38.6)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: pytest.fail("free_gpu emptied Torch's cache itself"))
+    monkeypatch.setattr(torch.mps, "empty_cache", lambda: pytest.fail("free_gpu emptied Torch's cache itself"))
+    assert quantem.widget.free_gpu() == 38.6
+    assert quantem.widget.free_gpu(verbose=False) == 38.6
+    assert calls == [True, False]
+
+
+@pytest.mark.skipif(not (gpu_adapter.available() and torch.cuda.is_available()), reason="needs quantem.gpu and a CUDA GPU")
+def test_free_gpu_returns_a_dropped_tensor_to_the_driver_through_quantem_gpu(capsys):
+    """Real GPU: a dropped 1 GiB tensor goes back to the driver, and free_gpu returns and prints quantem.gpu's number for it."""
+    import quantem.widget
+    from quantem.gpu.device import release_cached_memory
+
+    assert gpu_adapter.gpu_release_cached_memory is release_cached_memory
+    quantem.widget.free_gpu(verbose=False)  # blocks cached by earlier tests would be counted
+    reserved_start = torch.cuda.memory_reserved(0)
+    tensor_t = torch.empty(1 << 30, dtype=torch.uint8, device="cuda:0")
+    del tensor_t
+    cached_bytes = torch.cuda.memory_reserved(0) - reserved_start  # 1 GiB, or 16 MiB more with expandable segments
+    assert cached_bytes >= 1 << 30
+    assert quantem.widget.free_gpu() == cached_bytes / 1e9
+    assert torch.cuda.memory_reserved(0) == reserved_start
+    assert capsys.readouterr().out.startswith("GPU 0: released 1.1 GB, ")
+
+
+def test_free_gpu_without_quantem_gpu_returns_the_metal_cache_torch_held(monkeypatch, capsys):
+    """An install without quantem.gpu on a Mac: only Torch's cache is emptied, and the result is the Metal driver's drop.
+
+    rc41 read torch's tensor counter, which excludes the cached blocks, so it printed 0.0 GB.
+    """
+    import quantem.widget
+
+    driver_bytes = [5e9]  # the Metal driver's total; emptying Torch's cache returns 3 GB of it
+    monkeypatch.setattr(gpu_adapter, "available", lambda: False)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
-    monkeypatch.setattr(torch.mps, "empty_cache", lambda: None)
-    monkeypatch.setattr(torch.mps, "driver_allocated_memory", lambda: next(driver))
+    monkeypatch.setattr(torch.mps, "empty_cache", lambda: driver_bytes.__setitem__(0, 2e9))
+    monkeypatch.setattr(torch.mps, "driver_allocated_memory", lambda: driver_bytes[0])
     monkeypatch.setattr(torch.mps, "current_allocated_memory", lambda: 1e9)
-    assert quantem.widget.free_gpu() == pytest.approx(3.0)
-    assert capsys.readouterr().out == "freed 3.0 GB (MPS)\n"
+    assert quantem.widget.free_gpu() == 3.0
+    assert capsys.readouterr().out == "freed 3.0 GB (Torch cache)\n"
+
+
+def test_free_gpu_without_quantem_gpu_returns_what_torch_reserved_on_every_cuda_gpu(monkeypatch, capsys):
+    """An install without quantem.gpu on a machine with two CUDA GPUs: the result is the drop in Torch's reserved memory."""
+    import quantem.widget
+
+    reserved_bytes = {0: 6_000_000_000, 1: 1_500_000_000}
+    monkeypatch.setattr(gpu_adapter, "available", lambda: False)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
+    monkeypatch.setattr(torch.cuda, "memory_reserved", lambda index: reserved_bytes[index])
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: reserved_bytes.update({0: 1_000_000_000, 1: 0}))
+    assert quantem.widget.free_gpu() == 6.5
+    assert capsys.readouterr().out == "freed 6.5 GB (Torch cache)\n"
 
 
 def test_device_info_on_an_intel_mac_names_no_cpu_as_the_gpu_and_prints_the_notice_once(monkeypatch, capsys):
