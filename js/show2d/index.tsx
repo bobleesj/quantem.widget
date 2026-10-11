@@ -7686,11 +7686,6 @@ function Show2D() {
       data-frequency-filter-backend={frequencyFilterEnabled ? frequencyFilterBackend : "off"}
       sx={{ p: 2, bgcolor: themeColors.bg, color: themeColors.text, width: "100%", maxWidth: "100%", boxSizing: "border-box", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", "& canvas": { display: "block" }, "@media (max-width: 700px)": { p: 0, ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
     >
-      {overlayEditMode && (
-        <style>
-          {".MuiModal-backdrop.MuiBackdrop-invisible { pointer-events: none !important; }"}
-        </style>
-      )}
       <FolderWatchBadge
         state={folderWatchState}
         detail={folderWatchDetail}

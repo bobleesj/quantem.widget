@@ -5,7 +5,9 @@ hover. A gallery FFT of a panel above 2048 px says it is binned and measures
 its lattice band at the binned sampling. A profile drag samples each panel at
 most once per pointer move. The frequency-filter ring sits on the frequency
 the filter cuts at the FFT's zoom, and dragging it sets that frequency. A ROI
-edge moves by as much as the pointer moves after the press.
+edge moves by as much as the pointer moves after the press. Overlay editing
+lets pointers through the More menu's backdrop only, so every other menu still
+closes on an outside click.
 """
 
 import re
@@ -203,4 +205,28 @@ def test_roi_resize_follows_the_pointer_from_the_press(serve, open_page, hardwar
     page.screenshot(path=str(browser_out / "show2d_roi_resize.png"))
     assert page.evaluate(ROI_SLIDER, "W") == pytest.approx(120, abs=2)
     assert page.evaluate(ROI_SLIDER, "H") == 60
+    assert page.errors == [], page.errors
+
+
+def test_overlay_edit_leaves_other_menus_closable(serve, open_page, hardware_adapter, browser_out):
+    from quantem.widget import Show2D
+
+    image = np.random.default_rng(5).standard_normal((256, 256)).astype(np.float32)
+    Show2D(image, overlays=[{"shape": "circle", "center": (0.5, 0.5), "radius": 0.1, "coords": "relative"}]).export_html(
+        browser_out / "show2d_overlay_edit.html")
+    page = open_export("show2d_overlay_edit.html", serve, open_page, hardware_adapter, browser_out,
+                       'canvas[data-quantem-scientific-output="show2d-image-0"]')
+    page.get_by_role("button", name="More tools").click()
+    page.get_by_role("menuitem").filter(has_text="Overlay Edit").dispatch_event("mousedown")
+    page.wait_for_timeout(500)
+    page.get_by_role("combobox").filter(has_text="Inferno").click()
+    page.wait_for_selector('[role="listbox"]')
+    page.mouse.click(1500, 1000)
+    page.wait_for_timeout(500)
+    page.screenshot(path=str(browser_out / "show2d_overlay_edit.png"))
+    assert page.locator('[role="listbox"]').count() == 0, "the colormap menu stayed open after an outside click"
+    # The More menu itself keeps letting pointers through to the image while editing.
+    page.get_by_role("button", name="More tools").click()
+    backdrop = page.locator("#show2d-more-menu .MuiBackdrop-root")
+    assert backdrop.evaluate("element => getComputedStyle(element).pointerEvents") == "none"
     assert page.errors == [], page.errors
