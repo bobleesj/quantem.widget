@@ -451,6 +451,11 @@ fn main() {
 }
 `;
 
+// Compute pipelines of the kernels below, per device and shader source: a
+// line-profile or ROI drag runs the same kernel on every pointer move, and
+// rebuilding the pipeline each time recompiles the shader.
+const kernelPipelines = new WeakMap<GPUDevice, Map<string, GPUComputePipeline>>();
+
 /**
  * Run a one-input compute kernel and read back its float32 output: upload
  * `source` and `params`, dispatch `shader` once, copy the output to a mappable
@@ -481,46 +486,38 @@ async function runFloatKernel(
     size: outputCount * 4,
     usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
   });
-  try {
-    device.queue.writeBuffer(
-      sourceBuffer,
-      0,
-      source.buffer as ArrayBuffer,
-      source.byteOffset,
-      source.byteLength,
-    );
-    device.queue.writeBuffer(paramsBuffer, 0, params);
-    const module = device.createShaderModule({ code: shader });
-    const pipeline = device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
-    });
-    const bindGroup = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: sourceBuffer } },
-        { binding: 1, resource: { buffer: outputBuffer } },
-        { binding: 2, resource: { buffer: paramsBuffer } },
-      ],
-    });
-    const encoder = device.createCommandEncoder();
-    const pass = encoder.beginComputePass();
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(dispatch[0], dispatch[1], dispatch[2] ?? 1);
-    pass.end();
-    encoder.copyBufferToBuffer(outputBuffer, 0, readBuffer, 0, outputCount * 4);
-    device.queue.submit([encoder.finish()]);
-    await readBuffer.mapAsync(GPUMapMode.READ);
-    const output = new Float32Array(readBuffer.getMappedRange().slice(0));
-    readBuffer.unmap();
-    return output;
-  } finally {
-    sourceBuffer.destroy();
-    outputBuffer.destroy();
-    paramsBuffer.destroy();
-    readBuffer.destroy();
+  device.queue.writeBuffer(sourceBuffer, 0, source.buffer as ArrayBuffer, source.byteOffset, source.byteLength);
+  device.queue.writeBuffer(paramsBuffer, 0, params);
+  let pipelines = kernelPipelines.get(device);
+  if (!pipelines) kernelPipelines.set(device, pipelines = new Map());
+  let pipeline = pipelines.get(shader);
+  if (!pipeline) {
+    pipeline = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: shader }), entryPoint: "main" } });
+    pipelines.set(shader, pipeline);
   }
+  const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: sourceBuffer } },
+      { binding: 1, resource: { buffer: outputBuffer } },
+      { binding: 2, resource: { buffer: paramsBuffer } },
+    ],
+  });
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.dispatchWorkgroups(dispatch[0], dispatch[1], dispatch[2] ?? 1);
+  pass.end();
+  encoder.copyBufferToBuffer(outputBuffer, 0, readBuffer, 0, outputCount * 4);
+  device.queue.submit([encoder.finish()]);
+  await readBuffer.mapAsync(GPUMapMode.READ);
+  const output = new Float32Array(readBuffer.getMappedRange().slice(0));
+  sourceBuffer.destroy();
+  outputBuffer.destroy();
+  paramsBuffer.destroy();
+  readBuffer.destroy();
+  return output;
 }
 
 /** Crop/mask an FFT ROI: WebGPU on a hardware adapter, else the JS reference. */

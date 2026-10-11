@@ -218,12 +218,9 @@ export class DirectRenderer {
     const blit = this.engine.encodeBlitToOffscreen(encoder, slot.rgbaBuffer, canvasWidth, canvasHeight, format);
     if (!blit) return null;
     this.device.queue.submit([encoder.finish()]);
-    try {
-      await this.device.queue.onSubmittedWorkDone();
-      return blit.canvas.transferToImageBitmap();
-    } finally {
-      blit.blitParamsBuffer.destroy();
-    }
+    blit.blitParamsBuffer.destroy();
+    await this.device.queue.onSubmittedWorkDone();
+    return blit.canvas.transferToImageBitmap();
   }
 
   renderSharedGridDirectToCanvas(
