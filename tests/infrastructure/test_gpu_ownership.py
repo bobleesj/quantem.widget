@@ -228,8 +228,12 @@ def test_every_build_bundles_the_quantem_gpu_ref_in_gpu_ref_txt() -> None:
         assert 'echo "ref=$(cat gpu-ref.txt)"' in text, name
         assert "QUANTEM_GPU_SRC: ${{ github.workspace }}/quantem-gpu-src/src" in text, name
     pinned = (repo / "gpu-ref.txt").read_text(encoding="utf-8").strip()
-    floors = re.findall(r'"quantem\.gpu\[(?:cuda|mps)\]>=([^;"]+)', (repo / "pyproject.toml").read_text(encoding="utf-8"))
-    assert [f"gpu-v{floor}" for floor in floors] == [pinned, pinned]
+    bounds = re.findall(r'"quantem\.gpu\[(?:cuda|mps)\]>=([^,;"]+),<([^;"]+)', (repo / "pyproject.toml").read_text(encoding="utf-8"))
+    assert [f"gpu-v{floor}" for floor, _ in bounds] == [pinned, pinned]
+    # the next quantem.gpu rc may change the kernels and API this release bundles
+    for floor, ceiling in bounds:
+        prefix, number = floor.split("rc")
+        assert ceiling == f"{prefix}rc{int(number) + 1}"
 
 def test_sync_writes_a_manifest_of_the_pinned_ref_and_every_file(tmp_path) -> None:
     """MANIFEST.json names the ref in gpu-ref.txt and the commit synced, and the sha256 of every file written."""
