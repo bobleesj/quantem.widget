@@ -53,7 +53,7 @@ import { collectDroppedFiles, matchQemFiles } from "./localDrop";
 import { createResidentHoverReader } from "./residentHover";
 import type { Uint32ImageView } from "../display/borrowedImage";
 import { latestRegion } from "./latestRegion";
-import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
+import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue, unitSymbol } from "../figure";
 import { findDataRange, sliderRange, computeStats, percentileClip } from "../display/stats";
 import { displayLog } from "../display/displayMath";
 import { downloadBlob, extractBytes, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";
@@ -480,6 +480,24 @@ function formatStat(value: number): string {
   return value.toFixed(2);
 }
 
+
+// Scan units in Å per unit: a lattice spacing reads in Å, or in nm from 1 nm up.
+const ANGSTROMS_PER_SCAN_UNIT: Record<string, number> = { "Å": 1, nm: 10 };
+
+/** A d-spacing measured in the scan's unit, as a label in Å or nm, or in the scan's own unit (px) when it is not a length. */
+function formatDSpacing(dSpacing: number, unit: string): string {
+  const angstroms = ANGSTROMS_PER_SCAN_UNIT[unitSymbol(unit)];
+  if (angstroms === undefined) return `${dSpacing.toFixed(2)} ${unitSymbol(unit)}`;
+  const spacing = dSpacing * angstroms;
+  return spacing >= 10 ? `${(spacing / 10).toFixed(2)} nm` : `${spacing.toFixed(2)} \u00C5`;
+}
+
+/** A spatial frequency measured in inverse scan units, as a label in Å⁻¹ or in the scan's inverse unit. */
+function formatSpatialFrequency(frequency: number, unit: string): string {
+  const angstroms = ANGSTROMS_PER_SCAN_UNIT[unitSymbol(unit)];
+  if (angstroms === undefined) return `${frequency.toFixed(4)} ${unitSymbol(unit)}\u207B\u00B9`;
+  return `${(frequency / angstroms).toFixed(4)} \u00C5\u207B\u00B9`;
+}
 
 // Search radius (FFT pixels) that snaps a click to the nearest Bragg spot,
 // refined to a sub-pixel centroid.
@@ -1748,30 +1766,26 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       const ctx = overlay.getContext("2d");
       ctx?.clearRect(0, 0, overlay.width, overlay.height);
       if (!panel && !gpuLoaded) return;
-      if (showScaleBar && cssWidth >= 96) {
-        const unit = pixelSize > 0 ? pixelUnit || "px" : "px";
-        const pxSize = pixelSize > 0 ? pixelSize : 1;
-        drawScaleBarHiDPI(overlay, dpr, compareZoom, pxSize, unit, shapeCols);
-      }
-      drawViPositionMarker(
-        overlay,
-        dpr,
-        kind === "diffraction" ? cursorRow : Number(batchModel.get("pos_row")),
-        kind === "diffraction" ? cursorCol : Number(batchModel.get("pos_col")),
-        compareZoom,
-        comparePanX,
-        comparePanY,
-        shapeCols,
-        shapeRows,
-        isDraggingPosition,
-        idx === 0 && cssWidth >= 96,
-      );
+      if (showScaleBar && cssWidth >= 96) drawScaleBarHiDPI(overlay, dpr, compareZoom, pixelSize || 1, pixelUnit, shapeCols);
+      // A scan ROI replaces the scan-position crosshair, as on the single image.
       if (scanRegion && scanRegion.mode !== "off") {
-        ctx?.clearRect(0, 0, overlay.width, overlay.height);
-        if (showScaleBar) drawScaleBarHiDPI(overlay, dpr, compareZoom, pixelSize || 1, pixelUnit || "px", shapeCols);
         drawViRoiOverlayHiDPI(overlay, dpr, scanRegion.mode,
           scanRegion.row, scanRegion.col, scanRegion.radius, scanRegion.width, scanRegion.height,
           compareZoom, comparePanX, comparePanY, shapeCols, shapeRows, isDraggingPosition, false, false);
+      } else {
+        drawViPositionMarker(
+          overlay,
+          dpr,
+          kind === "diffraction" ? cursorRow : Number(batchModel.get("pos_row")),
+          kind === "diffraction" ? cursorCol : Number(batchModel.get("pos_col")),
+          compareZoom,
+          comparePanX,
+          comparePanY,
+          shapeCols,
+          shapeRows,
+          isDraggingPosition,
+          idx === 0 && cssWidth >= 96,
+        );
       }
     });
     };
@@ -2282,6 +2296,8 @@ function Show4DSTEM() {
   const [roiCenterRow, setRoiCenterRow] = useModelState<number>("roi_center_row");
   const [pixelSize] = useModelState<number>("pixel_size");
   const [pixelUnit] = useModelState<string>("pixel_unit");
+  // An uncalibrated scan carries the unit "pixels"; every label spells it "px".
+  const scanUnit = pixelUnit && pixelUnit !== "pixels" ? pixelUnit : "px";
   const [kPixelSize] = useModelState<number>("k_pixel_size");
   const [kPixelUnit] = useModelState<string>("k_pixel_unit");
   const [kCalibrated] = useModelState<boolean>("k_calibrated");
@@ -5933,8 +5949,7 @@ function Show4DSTEM() {
       ctx.arc(screenX, screenY, dotRadius, 0, Math.PI * 2);
       ctx.stroke();
       if (fftClickInfo.dSpacing != null) {
-        const dSpacing = fftClickInfo.dSpacing;
-        const label = dSpacing >= 10 ? `d = ${(dSpacing / 10).toFixed(2)} nm` : `d = ${dSpacing.toFixed(2)} \u00C5`;
+        const label = `d = ${formatDSpacing(fftClickInfo.dSpacing, scanUnit)}`;
         const fontSize = Math.max(10, Math.round(11 * Math.max(fftW, fftH) / 450));
         ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
         ctx.fillStyle = "white";
@@ -5944,7 +5959,7 @@ function Show4DSTEM() {
       }
       ctx.restore();
     }
-  }, [fftZoom, fftPanX, fftPanY, showFft, fftClickInfo, shapeCols, shapeRows, fftCropDims]);
+  }, [fftZoom, fftPanX, fftPanY, showFft, fftClickInfo, scanUnit, shapeCols, shapeRows, fftCropDims]);
 
   // Clear FFT click info when virtual image changes (scan position, VI ROI, etc.)
   React.useEffect(() => {
@@ -6076,7 +6091,7 @@ function Show4DSTEM() {
     const ctx = canvas.getContext("2d");
     ctx?.clearRect(0, 0, canvas.width, canvas.height);
     // Draw scale bar first when enabled.
-    if (showScaleBar) drawScaleBarHiDPI(canvas, DPR, viZoom, pixelSize || 1, pixelUnit || "px", shapeCols);
+    if (showScaleBar) drawScaleBarHiDPI(canvas, DPR, viZoom, pixelSize || 1, scanUnit, shapeCols);
     // Draw crosshair only when ROI is off (ROI replaces the crosshair)
     if (!viRoiMode || viRoiMode === "off") {
       drawViPositionMarker(viUiRef.current, DPR, localPosRow, localPosCol, viZoom, viPanX, viPanY, shapeCols, shapeRows, isDraggingVI);
@@ -6132,7 +6147,7 @@ function Show4DSTEM() {
         ctx.restore();
       }
     }
-  }, [compareMode, viZoom, viPanX, viPanY, pixelSize, pixelUnit, showScaleBar, shapeRows, shapeCols, localPosRow, localPosCol, isDraggingVI,
+  }, [compareMode, viZoom, viPanX, viPanY, pixelSize, scanUnit, showScaleBar, shapeRows, shapeCols, localPosRow, localPosCol, isDraggingVI,
       viRoiMode, localViRoiCenterRow, localViRoiCenterCol, viRoiRadius, viRoiWidth, viRoiHeight,
       isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize, canvasSize, viProfileActive, viProfilePoints, DPR]);
 
@@ -6230,13 +6245,13 @@ function Show4DSTEM() {
       const colDelta = viProfilePoints[1].col - viProfilePoints[0].col;
       const rowDelta = viProfilePoints[1].row - viProfilePoints[0].row;
       const lengthPx = Math.sqrt(colDelta * colDelta + rowDelta * rowDelta);
-      distance = { total: lengthPx * pixelSize, unit: pixelUnit };
+      distance = { total: lengthPx * pixelSize, unit: scanUnit };
     }
     const painted = drawProfileSparkline(canvas, ctx, viCanvasWidth, viProfileHeight, viProfileData, distance,
       "Click two points on the VI to draw a profile", themeInfo.theme === "dark", themeColors.accent);
     viProfileBaseImageRef.current = painted?.base ?? null;
     viProfileLayoutRef.current = painted?.layout ?? null;
-  }, [viProfileData, viProfilePoints, pixelSize, themeInfo.theme, themeColors.accent, viCanvasWidth, viProfileHeight]);
+  }, [viProfileData, viProfilePoints, pixelSize, scanUnit, themeInfo.theme, themeColors.accent, viCanvasWidth, viProfileHeight]);
 
   // VI Profile hover handlers
   const handleViProfileMouseMove = React.useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
@@ -7695,7 +7710,7 @@ function Show4DSTEM() {
             ["Scan", `${shapeRows} x ${shapeCols}`],
             ["Detector", `${detRows} x ${detCols}`],
             ["Frames", nFrames > 1 ? `${nFrames} ${frameDimLabel}` : "single frame"],
-            ["Real space", pixelSize > 0 ? `${formatNumber(pixelSize)} ${pixelUnit || "px"}/px` : ""],
+            ["Real space", pixelSize > 0 ? `${formatNumber(pixelSize)} ${scanUnit}/px` : ""],
             ["Diffraction", kCalibrated && kPixelSize > 0 ? `${formatNumber(kPixelSize)} ${kPixelUnit || "px"}/px` : "detector pixels"],
           ]} />
           <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
@@ -8552,7 +8567,7 @@ function Show4DSTEM() {
               panelChromeVisible={panelChromeVisible}
               showScaleBar={showScaleBar}
               pixelSize={pixelSize}
-              pixelUnit={pixelUnit}
+              pixelUnit={scanUnit}
               panelOrder={comparePanelOrder || []}
               hidden={compareHiddenPanels || []}
               starred={compareStarredPanels || []}
@@ -8957,12 +8972,12 @@ function Show4DSTEM() {
                 </Typography>
                 {fftClickInfo.dSpacing != null && (
                   <Typography sx={{ fontSize: 11, fontWeight: "bold", color: themeColors.accent }}>
-                    d = {fftClickInfo.dSpacing >= 10 ? `${(fftClickInfo.dSpacing / 10).toFixed(2)} nm` : `${fftClickInfo.dSpacing.toFixed(2)} \u00C5`}
+                    d = {formatDSpacing(fftClickInfo.dSpacing, scanUnit)}
                   </Typography>
                 )}
                 {fftClickInfo.spatialFreq != null && (
                   <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>
-                    q = <Box component="span" sx={{ color: themeColors.accent }}>{fftClickInfo.spatialFreq.toFixed(4)} {"\u00C5\u207B\u00B9"}</Box>
+                    q = <Box component="span" sx={{ color: themeColors.accent }}>{formatSpatialFrequency(fftClickInfo.spatialFreq, scanUnit)}</Box>
                   </Typography>
                 )}
               </Box>
