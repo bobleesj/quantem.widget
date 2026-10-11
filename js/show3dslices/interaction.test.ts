@@ -2,8 +2,9 @@
 // slices paint on the Canvas2D path). A drag of the oblique cut's handle moves
 // the cut once per pointer move, from one document listener bound once; a
 // click on an FFT panel ends the pan even when the peak refinement after it
-// fails; the Top slice counter and its slider name count slices from 1, and
-// every label spells the length unit px.
+// fails; the Top slice counter and its slider name count slices from 1, every
+// label spells the length unit px, and the FFT panels name the CPU FFT when
+// they use it.
 import { act } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -170,4 +171,12 @@ it("spells the length unit px in every label", async () => {
   const labels = [...el.querySelectorAll("[aria-label], [title]")].flatMap(node => [node.getAttribute("aria-label"), node.getAttribute("title")]);
   expect(labels.filter(label => label?.includes("Row shift per slice"))).toEqual(["Row shift per slice 0.000 px"]);
   expect(labels.filter(label => label && /pixels/.test(label))).toEqual([]);
+});
+
+it("names the CPU FFT on the FFT panels of a browser without WebGPU", async () => {
+  model.values.show_fft = true;
+  mount();
+  await settle();
+  const captions = [...el.querySelectorAll(".MuiTypography-caption")].map(node => node.textContent ?? "").filter(text => text.startsWith("FFT "));
+  expect(captions).toEqual(["FFT Top (CPU fallback)", "FFT oblique 0.0° (CPU fallback)"]);
 });

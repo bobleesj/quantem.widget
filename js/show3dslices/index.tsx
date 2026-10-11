@@ -42,7 +42,7 @@ import { shouldIgnoreWidgetShortcut } from "../shared/widgetShortcuts";
 import { resolveDisplayBounds } from "../shared/displayRange";
 import { Histogram } from "../shared/Histogram";
 import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine, VOLUME_SLICE_MIN_ZOOM } from "../display/colormaps";
-import { getHardwareGPUDevice } from "../display/device";
+import { getHardwareGPUDevice, type RenderPath } from "../display/device";
 import { DisplayFFT, getDisplayFFT, fft2d, fftshift, nextPow2, computeMagnitude, autoEnhanceFFT, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset } from "../display/fft";
 import { findFFTPeakBrowser } from "../display/geometry";
 import { estimateSliceAlignment } from "./sliceAlignment";
@@ -903,7 +903,8 @@ function Show3DSlices() {
   React.useEffect(() => {
     let disposed = false;
     getDisplayFFT().then(fft => {
-      if (fft) { gpuFFTRef.current = fft; setGpuReady(true); }
+      gpuFFTRef.current = fft;
+      setFftPath(fft.path);
     });
     // Colormap engine: volume-resident GPU slice + colormap (no CPU per-scrub work).
     createGPUColormapEngine().then(engine => {
@@ -969,7 +970,8 @@ function Show3DSlices() {
     alignment?: { rowShift: number; colShift: number; segment: { start: { x: number; y: number }; stop: { x: number; y: number } } };
   } | null>(null);
   const fftComputeGenerationRef = React.useRef(0);
-  const [gpuReady, setGpuReady] = React.useState(false);
+  // Which display FFT the panels use (WebGPU or the CPU reference), once it resolves.
+  const [fftPath, setFftPath] = React.useState<RenderPath | null>(null);
   // Counter to trigger FFT redraw after async compute finishes
   const [fftVersion, setFftVersion] = React.useState(0);
 
@@ -1645,7 +1647,7 @@ function Show3DSlices() {
     const paddedH = nextPow2(sliceH);
     let real: Float32Array;
     let imag: Float32Array;
-    if (gpuReady && gpuFFTRef.current) {
+    if (gpuFFTRef.current) {
       const result = await gpuFFTRef.current.fft2D(zeroPadSlice(data, sliceW, sliceH, paddedW, paddedH), new Float32Array(paddedW * paddedH), paddedW, paddedH, false);
       real = result.real;
       imag = result.imag;
@@ -2616,9 +2618,9 @@ function Show3DSlices() {
   const prevFFTCacheRef = React.useRef<{
     sliceZ: number;
     panelFloats: Float32Array | null;
-    fftColormap: string; fftLogScale: boolean; fftAuto: boolean; fftWindow: boolean; gpuReady: boolean;
+    fftColormap: string; fftLogScale: boolean; fftAuto: boolean; fftWindow: boolean; fftPath: RenderPath | null;
     showFft: boolean;
-  }>({ sliceZ: -1, panelFloats: null, fftColormap: "", fftLogScale: false, fftAuto: false, fftWindow: false, gpuReady: false, showFft: false });
+  }>({ sliceZ: -1, panelFloats: null, fftColormap: "", fftLogScale: false, fftAuto: false, fftWindow: false, fftPath: null, showFft: false });
 
   React.useEffect(() => {
     if (!showFft || !panelFloats || panelFloats.length === 0) {
@@ -2638,7 +2640,7 @@ function Show3DSlices() {
     const globalFFTChanged = panelFloats !== prevFFT.panelFloats || fftColormap !== prevFFT.fftColormap ||
       fftLogScale !== prevFFT.fftLogScale || fftAuto !== prevFFT.fftAuto ||
       fftWindow !== prevFFT.fftWindow ||
-      gpuReady !== prevFFT.gpuReady || !prevFFT.showFft;
+      fftPath !== prevFFT.fftPath || !prevFFT.showFft;
     const fftAxisChanged = [
       globalFFTChanged || sliceZ !== prevFFT.sliceZ,
       true,
@@ -2675,7 +2677,7 @@ function Show3DSlices() {
         const paddedH = nextPow2(sliceH);
         let real: Float32Array;
         let imag: Float32Array;
-        if (gpuReady && gpuFFTRef.current) {
+        if (gpuFFTRef.current) {
           const result = await gpuFFTRef.current.fft2D(zeroPadSlice(data, sliceW, sliceH, paddedW, paddedH), new Float32Array(paddedW * paddedH), paddedW, paddedH, false);
           real = result.real;
           imag = result.imag;
@@ -2699,7 +2701,7 @@ function Show3DSlices() {
       fftMagCacheRefs.current = localMagCache.current;
       fftOffscreenRefs.current = localOffscreenCache.current;
       fftImgDataRefs.current = localImgDataCache.current;
-      prevFFTCacheRef.current = { sliceZ, panelFloats, fftColormap, fftLogScale, fftAuto, fftWindow, gpuReady, showFft };
+      prevFFTCacheRef.current = { sliceZ, panelFloats, fftColormap, fftLogScale, fftAuto, fftWindow, fftPath, showFft };
       return true;
     };
 
@@ -2714,7 +2716,7 @@ function Show3DSlices() {
       computeAllFFTs().then((committed) => { if (committed) setFftVersion((version) => version + 1); });
     }, debounceMs);
     return () => { cancelled = true; clearTimeout(timeoutId); };
-  }, [showFft, panelFloats, sliceX, sliceY, sliceZ, obliqueAngle, obliqueSegment, nx, ny, nz, sliceDims, fftColormap, fftLogScale, fftAuto, fftWindow, gpuReady]);
+  }, [showFft, panelFloats, sliceX, sliceY, sliceZ, obliqueAngle, obliqueSegment, nx, ny, nz, sliceDims, fftColormap, fftLogScale, fftAuto, fftWindow, fftPath]);
 
   // Redraw cached FFT with zoom/pan (cheap -- no recomputation)
   React.useLayoutEffect(() => {
@@ -4464,7 +4466,7 @@ function Show3DSlices() {
                   <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: `${SPACING.XS}px`, height: 20 }}>
                     <Stack direction="row" alignItems="center" sx={{ overflow: "hidden" }}>
                       <Typography variant="caption" sx={{ ...typography.label, fontSize: 10, flexShrink: 0 }}>
-                        {`FFT ${axis === 0 ? `${axisLabels[1]}${axisLabels[2]}` : `oblique ${obliqueAngle.toFixed(1)}°`} ${gpuReady ? "" : " (CPU fallback)"}`}
+                        {`FFT ${axis === 0 ? "Top" : `oblique ${obliqueAngle.toFixed(1)}°`}${fftPath === "CPU" ? " (CPU fallback)" : ""}`}
                       </Typography>
                       {fftClickInfo && fftClickInfo.axis === axis && (
                         <Typography sx={{ fontSize: 10, fontFamily: "monospace", color: themeColors.textMuted, ml: 1, whiteSpace: "nowrap" }}>
