@@ -1,7 +1,8 @@
-// Show3DSlices pointer behavior, mounted in jsdom (no WebGPU, so the slices
-// paint on the Canvas2D path). A drag of the oblique cut's handle moves the cut
-// once per pointer move, from one document listener bound once; a click on an
-// FFT panel ends the pan even when the peak refinement after it fails.
+// Show3DSlices pointer and label behavior, mounted in jsdom (no WebGPU, so the
+// slices paint on the Canvas2D path). A drag of the oblique cut's handle moves
+// the cut once per pointer move, from one document listener bound once; a
+// click on an FFT panel ends the pan even when the peak refinement after it
+// fails; the Top slice counter and its slider name count slices from 1.
 import { act } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -143,4 +144,16 @@ it("ends the FFT pan on a click whose peak refinement fails", async () => {
   await settle();
   const fftZooms = (model.get("view_state") as { fft_zooms?: { panX: number }[] }).fft_zooms;
   expect(fftZooms?.[0].panX ?? 0).toBe(0);
+});
+
+it("counts Top slices from 1 in the counter and the slider name", async () => {
+  mount();
+  await settle();
+  const slider = el.querySelector<HTMLInputElement>("input[aria-label='Top slice 3 of 4']");
+  expect(slider).not.toBeNull();
+  const row = slider!.closest(".MuiSlider-root")!.parentElement!;
+  expect(row.textContent).toBe("slice3/4");
+  act(() => { model.set("loop", true); model.set("slice_z", 0); });
+  await settle();
+  expect(el.querySelector("input[aria-label='Loop range and current top slice (1 of 4, loop 1 to 4)']")).not.toBeNull();
 });

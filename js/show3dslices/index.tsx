@@ -4705,7 +4705,7 @@ function Show3DSlices() {
                     size="small"
                     valueLabelDisplay="off"
                     sx={rangeSliderSx}
-                    aria-label={`Loop range and current ${axisLabels[axis]} slice (${liveSlider[axis] + 1} of ${sliceMaxes[axis] + 1}, loop ${loopStarts[axis] + 1} to ${effectiveLoopEnds[axis] + 1})`}
+                    aria-label={`Loop range and current top slice (${liveSlider[axis] + 1} of ${sliceMaxes[axis] + 1}, loop ${loopStarts[axis] + 1} to ${effectiveLoopEnds[axis] + 1})`}
                     valueLabelFormat={(value) => `${value as number}`}
                   />
                 ) : (
@@ -4717,16 +4717,15 @@ function Show3DSlices() {
                     onChangeCommitted={sliceCommitters[axis]}
                     size="small"
                     sx={{ ...sliderStyles.small, flex: 1, minWidth: 40 }}
-                    aria-label={`${axisLabels[axis]} slice ${liveSlider[axis] + 1} of ${sliceMaxes[axis] + 1}`}
+                    aria-label={`Top slice ${liveSlider[axis] + 1} of ${sliceMaxes[axis] + 1}`}
                     valueLabelDisplay="off"
                     valueLabelFormat={(value) => `${value as number}`}
                   />
                 )}
-                {axis === 0 && (
-                  <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 28, textAlign: "right", flexShrink: 0 }}>
-                    {liveSlider[axis]}/{sliceMaxes[axis]}
-                  </Typography>
-                )}
+                {/* Slices count from 1 here, as in the slider's accessible name; the slice_z trait stays 0-based. */}
+                <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 28, textAlign: "right", flexShrink: 0 }}>
+                  {liveSlider[axis] + 1}/{sliceMaxes[axis] + 1}
+                </Typography>
                   </>
                 )}
               </Box>
