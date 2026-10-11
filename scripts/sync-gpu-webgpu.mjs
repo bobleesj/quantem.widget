@@ -17,7 +17,7 @@
 
 import { spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
@@ -59,22 +59,7 @@ print(json.dumps({
     },
 }))
 `;
-  const runExport = (env = process.env) => spawnSync(python, ["-c", code], {
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-    env,
-  });
-
-  let result = runExport();
-  if (result.status !== 0 && !process.env.QUANTEM_GPU_SRC) {
-    const home = process.env.HOME || "";
-    const srcDir = [
-      path.resolve(repoRoot, "../quantem.gpu/src"),
-      path.resolve(repoRoot, "../../quantem.gpu/src"),
-      home ? path.resolve(home, "repos/quantem.gpu/src") : "",
-    ].find((dir) => dir && existsSync(dir));
-    if (srcDir) result = runExport({ ...process.env, QUANTEM_GPU_SRC: srcDir });
-  }
+  const result = spawnSync(python, ["-c", code], { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
   if (result.status !== 0) {
     const detail = (result.stderr || result.stdout || "").trim().split("\n").pop();
     throw new Error(
