@@ -486,7 +486,6 @@ const upwardMenuProps = {
 
 const DPR = window.devicePixelRatio || 1;
 const RESIZE_HIT_AREA_PX = 10;
-const ENABLE_GPU_CANVAS_DISPLAY = true;
 
 /** 0xRRGGBB integer from "#rgb" or "#rrggbb"; the WebGPU grid shader takes the gap color packed. */
 function packedRgbFromHex(color: string): number {
@@ -1531,10 +1530,6 @@ function Show3D() {
   const [panelOverlays, setPanelOverlays] = useModelState<PanelOverlaySpec[][]>("panel_overlays");
   const panelGapPx = Math.max(0, Number.isFinite(interPanelGapPxState) ? interPanelGapPxState : (Number.isFinite(legacyPanelGapTrait) ? legacyPanelGapTrait : 0));
   const interPanelGapColor = String(themeColors.bg);
-  const galleryOuterBorderPx = 0;
-  const galleryOuterBorderColor = interPanelGapColor;
-  const panelInnerBorderPx = 0;
-  const panelInnerBorderColor = "#000000";
   const [flipRows, setFlipRows] = useModelState<boolean>("flip_vertical");
   const [flipCols, setFlipCols] = useModelState<boolean>("flip_horizontal");
   const [compareMode, setCompareMode] = useModelState<string>("compare_mode");
@@ -1976,7 +1971,6 @@ function Show3D() {
   const [fftOverlaySize, setFftOverlaySize] = useModelState<number>("fft_overlay_size");
   const [fftOverlayZoomTrait, setFftOverlayZoomTrait] = useModelState<number>("fft_overlay_zoom");
   const [fftWindow, setFftWindow] = useModelState<boolean>("fft_window");
-  const fftMetricsEnabled = true;
   const resolvedFftLayout = (["bottom", "right", "overlay"].includes(String(fftLayout)) ? String(fftLayout) : "bottom") as "bottom" | "right" | "overlay";
   const fftLayoutBottom = resolvedFftLayout === "bottom";
   const fftLayoutOverlay = resolvedFftLayout === "overlay";
@@ -2250,22 +2244,16 @@ function Show3D() {
     const panelOutW = Math.max(1, Math.round(panelW * scale));
     const panelOutH = Math.max(1, Math.round(panelH * scale));
     const gap = activePanels.length > 1 ? Math.max(0, Math.round((panelGapPx) * scale)) : 0;
-    const outer = Math.max(0, Math.round(galleryOuterBorderPx * scale));
-    const innerBorder = Math.max(0, Math.round(panelInnerBorderPx * scale));
-    const outW = cols * panelOutW + Math.max(0, cols - 1) * gap + 2 * outer;
-    const outH = rows * panelOutH + Math.max(0, rows - 1) * gap + 2 * outer;
+    const outW = cols * panelOutW + Math.max(0, cols - 1) * gap;
+    const outH = rows * panelOutH + Math.max(0, rows - 1) * gap;
     const out = document.createElement("canvas");
     out.width = outW;
     out.height = outH;
     const outCtx = out.getContext("2d");
     if (!outCtx) return null;
     outCtx.imageSmoothingEnabled = smooth;
-    outCtx.fillStyle = galleryOuterBorderPx > 0 ? galleryOuterBorderColor : interPanelGapColor;
+    outCtx.fillStyle = interPanelGapColor;
     outCtx.fillRect(0, 0, outW, outH);
-    if (gap > 0) {
-      outCtx.fillStyle = interPanelGapColor;
-      outCtx.fillRect(outer, outer, Math.max(0, outW - 2 * outer), Math.max(0, outH - 2 * outer));
-    }
 
     const panelCanvas = document.createElement("canvas");
     panelCanvas.width = panelW;
@@ -2323,8 +2311,8 @@ function Show3D() {
       panelCtx.putImageData(panelImage, 0, 0);
       const col = slot % cols;
       const row = Math.floor(slot / cols);
-      const x = outer + col * (panelOutW + gap);
-      const y = outer + row * (panelOutH + gap);
+      const x = col * (panelOutW + gap);
+      const y = row * (panelOutH + gap);
       outCtx.save();
       outCtx.beginPath();
       outCtx.rect(x, y, panelOutW, panelOutH);
@@ -2341,14 +2329,6 @@ function Show3D() {
       }
       outCtx.drawImage(panelCanvas, 0, 0, panelW, panelH, 0, 0, panelOutW, panelOutH);
       outCtx.restore();
-      if (innerBorder > 0) {
-        outCtx.save();
-        outCtx.strokeStyle = panelInnerBorderColor;
-        outCtx.lineWidth = innerBorder;
-        const inset = innerBorder / 2;
-        outCtx.strokeRect(x + inset, y + inset, Math.max(0, panelOutW - innerBorder), Math.max(0, panelOutH - innerBorder));
-        outCtx.restore();
-      }
       if (showPanelTitles !== false) {
         const label = panelTitleText(panel);
         if (label) {
@@ -3234,11 +3214,10 @@ function Show3D() {
     gpuDisplayVisibleRef.current = visible;
     const gpuCanvas = gpuCanvasRef.current;
     const canvas = canvasRef.current;
-    const gpuVisible = ENABLE_GPU_CANVAS_DISPLAY && visible;
-    setGpuDisplayVisibleState(gpuVisible);
-    if (gpuCanvas) gpuCanvas.style.opacity = gpuVisible ? "1" : "0";
+    setGpuDisplayVisibleState(visible);
+    if (gpuCanvas) gpuCanvas.style.opacity = visible ? "1" : "0";
     if (canvas) {
-      canvas.style.opacity = gpuVisible ? "0" : "1";
+      canvas.style.opacity = visible ? "0" : "1";
       canvas.style.display = "block";
     }
   }, []);
@@ -3945,8 +3924,6 @@ function Show3D() {
   const _nPanelsLocal = Math.max(1, visiblePanelCount || 1);
   const _colsLocal = panelColsForCount(_nPanelsLocal);
   const _rowsLocal = Math.ceil(_nPanelsLocal / _colsLocal);
-  const fftAllowed = true;
-  const effectiveShowFft = showFft && fftAllowed;
   const sourcePanelWidth = totalPanelCount > 1
     ? Math.max(1, panelWidthPx || Math.round(width / totalPanelCount))
     : Math.max(1, width);
@@ -3985,8 +3962,7 @@ function Show3D() {
   const canvasH = isMultiPanelSource
     ? Math.round(_slotHForLayout * _rowsLocal + _gapForLayout * (_rowsLocal - 1))
     : _canvasHSingleRow;
-  const mainPanelFrameWidth = canvasW + 2 * galleryOuterBorderPx;
-  const mainPanelWidth = `min(100%, ${mainPanelFrameWidth}px)`;
+  const mainPanelWidth = `min(100%, ${canvasW}px)`;
   const mainPanelAspectRatio = `${Math.max(canvasW, 1)} / ${Math.max(canvasH, 1)}`;
   const effectiveLoopEnd = loopEnd < 0 ? nSlices - 1 : loopEnd;
   // ROI hidden while the kymograph is shown - both are line/region analysis on
@@ -4049,15 +4025,6 @@ function Show3D() {
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = interPanelGapColor;
     ctx.fillRect(0, 0, w, h);
-  };
-  const strokePanelInnerBorder = (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) => {
-    if (panelInnerBorderPx <= 0) return;
-    ctx.save();
-    ctx.strokeStyle = panelInnerBorderColor;
-    ctx.lineWidth = panelInnerBorderPx;
-    const inset = panelInnerBorderPx / 2;
-    ctx.strokeRect(x + inset, y + inset, Math.max(0, w - panelInnerBorderPx), Math.max(0, h - panelInnerBorderPx));
-    ctx.restore();
   };
   const drawFftOffscreen = React.useCallback((ctx: CanvasRenderingContext2D, offscreen: HTMLCanvasElement) => {
     ctx.clearRect(0, 0, canvasW, canvasH);
@@ -4159,7 +4126,7 @@ function Show3D() {
   };
 
   // ROI FFT active: both ROI and FFT on, with a selected ROI
-  const roiFftActive = effectiveShowFft && effectiveRoiActive && roiSelectedIdx >= 0 && roiSelectedIdx < (roiList?.length ?? 0);
+  const roiFftActive = showFft && effectiveRoiActive && roiSelectedIdx >= 0 && roiSelectedIdx < (roiList?.length ?? 0);
 
   // Preview panel visible: auto-shows when ROI active with a selected ROI
   const previewVisible = effectiveRoiActive && roiSelectedIdx >= 0 && roiSelectedIdx < (roiList?.length ?? 0);
@@ -4211,7 +4178,7 @@ function Show3D() {
       el2?.removeEventListener("wheel", preventDefault);
       el3?.removeEventListener("wheel", preventDefault);
     };
-  }, [effectiveShowFft, fftLayoutOverlay, previewVisible, folderWaiting, canRenderLive, hasSavedStaticFallback]);
+  }, [showFft, fftLayoutOverlay, previewVisible, folderWaiting, canRenderLive, hasSavedStaticFallback]);
 
 
   React.useEffect(() => {
@@ -6031,7 +5998,6 @@ function Show3D() {
       const srcX = sharedPanelSource ? 0 : i * srcPanelW;
       ctx.drawImage(offscreen as CanvasImageSource, srcX, 0, srcPanelW, srcH, 0, 0, w, h);
       ctx.restore();
-      strokePanelInnerBorder(ctx, slotX, slotY, outPanelW, outPanelH);
     }
   };
 
@@ -6392,7 +6358,7 @@ function Show3D() {
       sourcePanelWidth: mainOffscreenSourcePanelWidthRef.current,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [smooth, canvasW, canvasH, nPanels, visiblePanelIndices, maxCols, imageRotation, flipRows, flipCols, panelStates, linkedState, linkPanels, themeColors.bg, interPanelGapColor, panelInnerBorderColor, panelInnerBorderPx, panelRealFrames, panelTitles, showPanelTitles, panelGapPx, panelTitleFontSize, panelWidthPx, sharedPanelSource, sliceIdx, displaySliceIdx, liveSliceIdx, playing, nSlices, canvasRepaintSignal, viewportTransformActive]);
+  }, [smooth, canvasW, canvasH, nPanels, visiblePanelIndices, maxCols, imageRotation, flipRows, flipCols, panelStates, linkedState, linkPanels, themeColors.bg, interPanelGapColor, panelRealFrames, panelTitles, showPanelTitles, panelGapPx, panelTitleFontSize, panelWidthPx, sharedPanelSource, sliceIdx, displaySliceIdx, liveSliceIdx, playing, nSlices, canvasRepaintSignal, viewportTransformActive]);
 
   // A presented WebGPU texture is not a durable cache. Re-present the current
   // cached frame when it owns the live display; otherwise re-blit the retained
@@ -7035,18 +7001,6 @@ function Show3D() {
         const row = Math.floor(slot / cols);
         const slotX = col * (slotW + gap);
         const slotY = row * (slotH + gap);
-        if (panelInnerBorderPx > 0) {
-          ctx.save();
-          ctx.shadowColor = "transparent";
-          ctx.shadowBlur = 0;
-          ctx.shadowOffsetX = 0;
-          ctx.shadowOffsetY = 0;
-          ctx.strokeStyle = panelInnerBorderColor;
-          ctx.lineWidth = panelInnerBorderPx;
-          const inset = panelInnerBorderPx / 2;
-          ctx.strokeRect(slotX + inset, slotY + inset, Math.max(0, slotW - panelInnerBorderPx), Math.max(0, slotH - panelInnerBorderPx));
-          ctx.restore();
-        }
         // Each slot is its own scale bar region: panels at different zoom levels
         // show their own length bar, capped at 25% of the slot so it never overflows.
         const slotRegion = { x: slotX, y: slotY, width: slotW, height: slotH };
@@ -7159,7 +7113,7 @@ function Show3D() {
   }, [frameSeq, width, height, nSlices, nPanels, sourcePanelWidth, sharedPanelSource]);
 
   React.useEffect(() => {
-    if (!effectiveShowFft) return;
+    if (!showFft) return;
     // FFT is useful context, but it must not own the playback budget. During
     // playback, recompute from the frame that was actually drawn at a bounded
     // cadence; outside playback, update immediately for the settled view.
@@ -7475,7 +7429,7 @@ function Show3D() {
     return () => {
       if (!playbackFft) cancelled = true;
     };
-  }, [effectiveShowFft, playing, frameBytes, frameSeq, liveSliceIdx, width, height, roiFftActive, roiList, roiSelectedIdx, fftWindow, nPanels, nSlices, visiblePanelIndices, sourcePanelWidth, sharedPanelSource, maxCols, panelColsForCount, fftLayoutOverlay, extractPanelSlice, ensureFftGpu, diffMode, avgWindow]);
+  }, [showFft, playing, frameBytes, frameSeq, liveSliceIdx, width, height, roiFftActive, roiList, roiSelectedIdx, fftWindow, nPanels, nSlices, visiblePanelIndices, sourcePanelWidth, sharedPanelSource, maxCols, panelColsForCount, fftLayoutOverlay, extractPanelSlice, ensureFftGpu, diffMode, avgWindow]);
 
   // Clear FFT measurement when ROI FFT state changes
   React.useEffect(() => { setFftClickInfo(null); }, [roiFftActive, roiSelectedIdx]);
@@ -7483,7 +7437,7 @@ function Show3D() {
   // Process FFT magnitude → histogram + colormap rendering (cheap, sync)
   React.useEffect(() => {
     const mag = fftMagRef.current;
-    if (!effectiveShowFft || !mag) return;
+    if (!showFft || !mag) return;
 
     // Use ref-backed dimensions so the magnitude and its layout metadata remain
     // consistent in the same render tick; React state may lag by one effect.
@@ -7491,34 +7445,29 @@ function Show3D() {
     const fftW = cropDimsForRender?.fftWidth ?? width;
     const fftH = cropDimsForRender?.fftHeight ?? height;
     const grid = fftPanelGridRef.current;
-    if (fftMetricsEnabled) {
-      const qualityKey = `${fftMagVersion}:${fftW}x${fftH}:${pixelSize || 0}:${pixelUnit || ""}:${grid ? `${grid.panelWidth}x${grid.panelHeight}x${grid.cols}x${grid.count}` : "single"}`;
-      if (fftQualityKeyRef.current !== qualityKey) {
-        fftQualityKeyRef.current = qualityKey;
-        let nextQuality: FftQualityMetrics | null;
-        if (grid) {
-          const panelMetrics: Array<FftQualityMetrics | null> = [];
-          for (let panel = 0; panel < grid.count; panel++) {
-            panelMetrics.push(computeFftQualityMetrics(mag, fftW, fftH, {
-              sampling: pixelSize,
-              unit: pixelUnit,
-              region: {
-                x: (panel % grid.cols) * grid.panelWidth,
-                y: Math.floor(panel / grid.cols) * grid.panelHeight,
-                width: grid.panelWidth,
-                height: grid.panelHeight,
-              },
-            }));
-          }
-          nextQuality = summarizeFftQualityMetrics(panelMetrics);
-        } else {
-          nextQuality = computeFftQualityMetrics(mag, fftW, fftH, { sampling: pixelSize, unit: pixelUnit });
+    const qualityKey = `${fftMagVersion}:${fftW}x${fftH}:${pixelSize || 0}:${pixelUnit || ""}:${grid ? `${grid.panelWidth}x${grid.panelHeight}x${grid.cols}x${grid.count}` : "single"}`;
+    if (fftQualityKeyRef.current !== qualityKey) {
+      fftQualityKeyRef.current = qualityKey;
+      let nextQuality: FftQualityMetrics | null;
+      if (grid) {
+        const panelMetrics: Array<FftQualityMetrics | null> = [];
+        for (let panel = 0; panel < grid.count; panel++) {
+          panelMetrics.push(computeFftQualityMetrics(mag, fftW, fftH, {
+            sampling: pixelSize,
+            unit: pixelUnit,
+            region: {
+              x: (panel % grid.cols) * grid.panelWidth,
+              y: Math.floor(panel / grid.cols) * grid.panelHeight,
+              width: grid.panelWidth,
+              height: grid.panelHeight,
+            },
+          }));
         }
-        setFftQuality(nextQuality);
+        nextQuality = summarizeFftQualityMetrics(panelMetrics);
+      } else {
+        nextQuality = computeFftQualityMetrics(mag, fftW, fftH, { sampling: pixelSize, unit: pixelUnit });
       }
-    } else if (fftQualityKeyRef.current) {
-      fftQualityKeyRef.current = "";
-      setFftQuality(null);
+      setFftQuality(nextQuality);
     }
 
     let displayMin: number, displayMax: number;
@@ -7614,25 +7563,25 @@ function Show3D() {
         drawFftOffscreen(ctx, offscreen);
       }
     }
-  }, [effectiveShowFft, fftMagVersion, fftLogScale, fftAuto, fftVminPct, fftVmaxPct, fftColormap, width, height, canvasW, canvasH, fftCropDims, drawFftOffscreen, pixelSize, pixelUnit, fftMetricsEnabled, canvasRepaintSignal]);
+  }, [showFft, fftMagVersion, fftLogScale, fftAuto, fftVminPct, fftVmaxPct, fftColormap, width, height, canvasW, canvasH, fftCropDims, drawFftOffscreen, pixelSize, pixelUnit, canvasRepaintSignal]);
 
   // Redraw cached FFT with zoom/pan/resize before paint. Changing a canvas
   // width/height attribute clears its bitmap, so a normal effect can expose a
   // one-frame blank flash during resize drags.
   React.useLayoutEffect(() => {
-    if (!effectiveShowFft || !fftCanvasRef.current || !fftOffscreenRef.current) return;
+    if (!showFft || !fftCanvasRef.current || !fftOffscreenRef.current) return;
     const canvas = fftCanvasRef.current;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
     drawFftOffscreen(ctx, fftOffscreenRef.current);
-  }, [effectiveShowFft, fftOffscreenVersion, fftZoom, fftPanX, fftPanY, canvasW, canvasH, drawFftOffscreen, canvasRepaintSignal]);
+  }, [showFft, fftOffscreenVersion, fftZoom, fftPanX, fftPanY, canvasW, canvasH, drawFftOffscreen, canvasRepaintSignal]);
 
   const drawFftInsetLayer = React.useCallback((
     view: { zoom: number; panX: number; panY: number } = fftViewLiveRef.current,
   ) => {
     const canvas = fftInsetLayerRef.current;
-    if (!canvas || !effectiveShowFft || !fftLayoutOverlay || !fftOffscreenRef.current) return;
+    if (!canvas || !showFft || !fftLayoutOverlay || !fftOffscreenRef.current) return;
     const offscreen = fftOffscreenRef.current;
     const grid = fftPanelGridRef.current;
     const count = grid ? grid.count : 1;
@@ -7691,11 +7640,11 @@ function Show3D() {
       ctx.lineWidth = 1;
       ctx.strokeRect(dstX + 0.5, dstY + 0.5, Math.max(0, insetW - 1), Math.max(0, insetH - 1));
     });
-  }, [effectiveShowFft, fftLayoutOverlay, fftCropDims, width, height, visiblePanelCount, visiblePanelIndices, panelColsForCount, panelGapPx, canvasW, canvasH, resolvedFftOverlaySize, resolvedFftOverlayPosition, fftOverlayDragPreview, showPanelTitles, panelTitleFontSize, nPanels, smooth]);
+  }, [showFft, fftLayoutOverlay, fftCropDims, width, height, visiblePanelCount, visiblePanelIndices, panelColsForCount, panelGapPx, canvasW, canvasH, resolvedFftOverlaySize, resolvedFftOverlayPosition, fftOverlayDragPreview, showPanelTitles, panelTitleFontSize, nPanels, smooth]);
 
   React.useEffect(() => {
     fftViewDirectRedrawRef.current = () => {
-      if (!effectiveShowFft || !fftLayoutOverlay || !fftOffscreenRef.current) return;
+      if (!showFft || !fftLayoutOverlay || !fftOffscreenRef.current) return;
       if (fftViewRafRef.current !== null) return;
       fftViewRafRef.current = window.requestAnimationFrame(() => {
         fftViewRafRef.current = null;
@@ -7705,12 +7654,12 @@ function Show3D() {
     return () => {
       fftViewDirectRedrawRef.current = null;
     };
-  }, [drawFftInsetLayer, effectiveShowFft, fftLayoutOverlay]);
+  }, [drawFftInsetLayer, showFft, fftLayoutOverlay]);
 
   React.useLayoutEffect(() => {
-    if (!effectiveShowFft || !fftLayoutOverlay || !fftOffscreenRef.current) return;
+    if (!showFft || !fftLayoutOverlay || !fftOffscreenRef.current) return;
     drawFftInsetLayer();
-  }, [effectiveShowFft, fftLayoutOverlay, fftOffscreenVersion, fftZoom, fftPanX, fftPanY, fftCropDims, width, height, drawFftInsetLayer, canvasRepaintSignal]);
+  }, [showFft, fftLayoutOverlay, fftOffscreenVersion, fftZoom, fftPanX, fftPanY, fftCropDims, width, height, drawFftInsetLayer, canvasRepaintSignal]);
 
   // === Kymograph (space-time) ===
   // A sub-feature of the line profile ("the profile feature created a 2D
@@ -7969,7 +7918,7 @@ function Show3D() {
   // Render FFT overlay (reciprocal-space scale bar + colorbar)
   React.useEffect(() => {
     const overlay = fftOverlayRef.current;
-    if (!overlay || !effectiveShowFft) return;
+    if (!overlay || !showFft) return;
     const ctx = overlay.getContext("2d");
     if (!ctx) return;
     overlay.width = Math.round(canvasW * DPR);
@@ -8086,7 +8035,7 @@ function Show3D() {
       ctx.fillText(label, labelX + padX, labelY);
       ctx.restore();
     }
-  }, [effectiveShowFft, fftZoom, fftPanX, fftPanY, canvasW, canvasH, pixelSize, pixelUnit, width, height, fftDataRange, fftVminPct, fftVmaxPct, fftColormap, fftLogScale, fftShowColorbar, fftClickInfo, fftCropDims, getFftSlot, canvasRepaintSignal]);
+  }, [showFft, fftZoom, fftPanX, fftPanY, canvasW, canvasH, pixelSize, pixelUnit, width, height, fftDataRange, fftVminPct, fftVmaxPct, fftColormap, fftLogScale, fftShowColorbar, fftClickInfo, fftCropDims, getFftSlot, canvasRepaintSignal]);
 
   // -------------------------------------------------------------------------
   // Preview panel - cache colormapped offscreen (only recomputes when ROI
@@ -9432,7 +9381,7 @@ function Show3D() {
   };
 
   React.useEffect(() => {
-    if (!effectiveShowFft) return;
+    if (!showFft) return;
     const overlayCanvas = fftLayoutOverlay ? fftInsetLayerRef.current : null;
     const fftCanvas = fftCanvasRef.current;
     const panelGrid = fftPanelGridRef.current;
@@ -9472,7 +9421,7 @@ function Show3D() {
       fftViewLiveRef.current = { zoom: current.zoom, panX: clamped.panX, panY: clamped.panY };
       commitFftViewReactState();
     }
-  }, [clampFftPan, commitFftViewReactState, effectiveShowFft, fftLayoutOverlay, fftZoom, fftPanX, fftPanY, canvasW, canvasH, resolvedFftOverlaySize, visiblePanelCount, panelColsForCount, panelGapPx, fftOffscreenVersion]);
+  }, [clampFftPan, commitFftViewReactState, showFft, fftLayoutOverlay, fftZoom, fftPanX, fftPanY, canvasW, canvasH, resolvedFftOverlaySize, visiblePanelCount, panelColsForCount, panelGapPx, fftOffscreenVersion]);
 
   // Convert FFT canvas mouse position to FFT image pixel coordinates
   const fftScreenToImg = (e: React.MouseEvent): { col: number; row: number } | null => {
@@ -10559,7 +10508,7 @@ function Show3D() {
         spacing={`${SPACING.SM}px`}
         alignItems="flex-start"
         sx={{
-          flexWrap: effectiveShowFft && fftLayoutBottom ? "wrap" : "nowrap",
+          flexWrap: showFft && fftLayoutBottom ? "wrap" : "nowrap",
           width: "100%",
           maxWidth: "100%",
           minWidth: 0,
@@ -10575,7 +10524,7 @@ function Show3D() {
           },
         }}
       >
-        <Box sx={{ width: mainPanelWidth, maxWidth: "100%", flexShrink: effectiveShowFft && fftLayoutBottom ? 0 : 1, boxSizing: "border-box" }}>
+        <Box sx={{ width: mainPanelWidth, maxWidth: "100%", flexShrink: showFft && fftLayoutBottom ? 0 : 1, boxSizing: "border-box" }}>
           {/* Title row */}
           {showTitle && <Typography variant="caption" sx={{ ...typography.label, color: themeColors.accent, mb: `${SPACING.XS}px`, display: "block", height: 16, lineHeight: "16px", overflow: "hidden" }}>
             {title || "Image"}
@@ -11257,46 +11206,42 @@ function Show3D() {
                 <Switch checked={linkContrast} onChange={(e) => setLinkContrast(e.target.checked)} size="small" sx={switchStyles.small} title="Link relative contrast adjustment; numerical ranges remain panel-local" slotProps={{ input: { "aria-label": "Link contrast across panels" } }} />
               </>
             )}
-            {fftAllowed && (
-              <Box aria-hidden="true" sx={{ width: "1px", height: 20, flex: "0 0 1px", alignSelf: "center", mx: "4px", bgcolor: themeColors.border, opacity: 0.8 }} />
-            )}
+            <Box aria-hidden="true" sx={{ width: "1px", height: 20, flex: "0 0 1px", alignSelf: "center", mx: "4px", bgcolor: themeColors.border, opacity: 0.8 }} />
             {/* FFT can be shown below, beside, or as an inset over the image grid. */}
-            {fftAllowed && <>
-              <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT</Typography>
-              <Switch checked={showFft} onChange={(e) => { const on = e.target.checked; setShowFft(on); if (on) setShowKymograph(false); }} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle FFT power spectrum panel" } }} />
-              {showFft && (
+            <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT</Typography>
+            <Switch checked={showFft} onChange={(e) => { const on = e.target.checked; setShowFft(on); if (on) setShowKymograph(false); }} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle FFT power spectrum panel" } }} />
+            {showFft && (
+              <Select
+                value={resolvedFftLayout}
+                onChange={(e) => setFftLayout(String(e.target.value))}
+                size="small"
+                sx={{ ...themedSelect, minWidth: 78, fontSize: 10, ml: "2px" }}
+                MenuProps={themedMenuProps}
+                inputProps={{ "aria-label": "FFT panel layout" }}
+              >
+                <MenuItem value="bottom">Bottom</MenuItem>
+                <MenuItem value="right">Right</MenuItem>
+                <MenuItem value="overlay">Overlay</MenuItem>
+              </Select>
+            )}
+            {showFft && fftLayoutOverlay && (
+              <>
+                <Typography sx={{ ...typography.label, fontSize: 10, ml: "2px" }}>Size</Typography>
                 <Select
-                  value={resolvedFftLayout}
-                  onChange={(e) => setFftLayout(String(e.target.value))}
+                  value={String(Math.round(resolvedFftOverlaySize * 100))}
+                  onChange={(e) => setFftOverlaySize(Number(e.target.value) / 100)}
                   size="small"
-                  sx={{ ...themedSelect, minWidth: 78, fontSize: 10, ml: "2px" }}
+                  sx={{ ...themedSelect, minWidth: 52, fontSize: 10, ml: "2px" }}
                   MenuProps={themedMenuProps}
-                  inputProps={{ "aria-label": "FFT panel layout" }}
+                  inputProps={{ "aria-label": "FFT overlay size" }}
                 >
-                  <MenuItem value="bottom">Bottom</MenuItem>
-                  <MenuItem value="right">Right</MenuItem>
-                  <MenuItem value="overlay">Overlay</MenuItem>
+                  <MenuItem value="25">25%</MenuItem>
+                  <MenuItem value="35">35%</MenuItem>
+                  <MenuItem value="50">50%</MenuItem>
+                  <MenuItem value="65">65%</MenuItem>
                 </Select>
-              )}
-              {showFft && fftLayoutOverlay && (
-                <>
-                  <Typography sx={{ ...typography.label, fontSize: 10, ml: "2px" }}>Size</Typography>
-                  <Select
-                    value={String(Math.round(resolvedFftOverlaySize * 100))}
-                    onChange={(e) => setFftOverlaySize(Number(e.target.value) / 100)}
-                    size="small"
-                    sx={{ ...themedSelect, minWidth: 52, fontSize: 10, ml: "2px" }}
-                    MenuProps={themedMenuProps}
-                    inputProps={{ "aria-label": "FFT overlay size" }}
-                  >
-                    <MenuItem value="25">25%</MenuItem>
-                    <MenuItem value="35">35%</MenuItem>
-                    <MenuItem value="50">50%</MenuItem>
-                    <MenuItem value="65">65%</MenuItem>
-                  </Select>
-                </>
-              )}
-            </>}
+              </>
+            )}
             <Box sx={{ flex: 1 }} />
             <Box sx={{ display: "flex", alignItems: "center", gap: "6px" }}>
               <Button size="small" sx={compactButton} onClick={handleCopy} aria-label="Copy current frame to clipboard as PNG">Copy</Button>
@@ -11470,7 +11415,6 @@ function Show3D() {
               width: "100%",
               maxWidth: canvasW,
               boxSizing: "content-box",
-              border: galleryOuterBorderPx > 0 ? `${galleryOuterBorderPx}px solid ${galleryOuterBorderColor}` : "none",
               aspectRatio: mainPanelAspectRatio,
               height: "auto",
               overscrollBehavior: "contain",
@@ -11520,7 +11464,7 @@ function Show3D() {
             <canvas ref={overlayRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none", display: overlayCanvasVisible ? "block" : "none" }} aria-hidden="true" />
             <canvas ref={uiRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} aria-hidden="true" />
             <canvas ref={lensCanvasRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none", display: lensCanvasVisible ? "block" : "none" }} aria-hidden="true" />
-            {effectiveShowFft && fftLayoutOverlay && (
+            {showFft && fftLayoutOverlay && (
               <canvas
                 ref={fftInsetLayerRef}
                 width={canvasW}
@@ -11967,7 +11911,7 @@ function Show3D() {
                 );
               });
             })()}
-            {effectiveShowFft && fftLayoutOverlay && (() => {
+            {showFft && fftLayoutOverlay && (() => {
               const visibleCount = Math.max(1, visiblePanelCount || 1);
               const cols = panelColsForCount(visibleCount);
               const rows = Math.ceil(visibleCount / cols);
@@ -12084,7 +12028,7 @@ function Show3D() {
                         );
                       })()
                     )}
-                    {slot === 0 && fftMetricsEnabled && fftQuality && (
+                    {slot === 0 && fftQuality && (
                       <Box
                         className="quantem-fft-quality-label"
                         aria-label={`FFT quality: ${formatFftQualityLabel(fftQuality)}`}
@@ -12686,7 +12630,7 @@ function Show3D() {
         )}
 
         {/* FFT Panel - same size as main image. Bottom stacks below; Right uses the side slot. */}
-        {effectiveShowFft && !fftLayoutOverlay && (
+        {showFft && !fftLayoutOverlay && (
           <Box sx={{
             width: "100%",
             maxWidth: fftLayoutBottom ? "100%" : canvasW,
@@ -12800,7 +12744,7 @@ function Show3D() {
                   );
                 });
               })()}
-              {fftMetricsEnabled && fftQuality && (
+              {fftQuality && (
                 <Box
                   className="quantem-fft-quality-label"
                   aria-label={`FFT quality: ${formatFftQualityLabel(fftQuality)}`}
