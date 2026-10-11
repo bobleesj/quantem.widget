@@ -425,11 +425,12 @@ function niceTicks(lo: number, hi: number, target = 5): number[] {
   const power = Math.pow(10, Math.floor(Math.log10(raw)));
   const unit = raw / power;
   const step = (unit >= 5 ? 5 : unit >= 2 ? 2 : 1) * power;
-  const start = Math.ceil(Math.min(lo, hi) / step) * step;
   const end = Math.max(lo, hi);
   const ticks: number[] = [];
-  for (let value = start; value <= end + step * 0.5; value += step) {
-    ticks.push(value);
+  // Whole multiples of the step: summing steps drifts, so the tick at zero
+  // would read -5.55e-17 instead of 0.
+  for (let multiple = Math.ceil(Math.min(lo, hi) / step); multiple * step <= end + step * 0.5; multiple += 1) {
+    ticks.push(multiple * step);
     if (ticks.length > 12) break;
   }
   return ticks.length ? ticks : [lo, hi];

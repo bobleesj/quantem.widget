@@ -171,3 +171,13 @@ it("labels a log axis zoomed inside one decade with round values", async () => {
   const yLabels = draws.slice(lastClear).filter(call => call.name === "fillText" && call.args[1] === 56).map(call => String(call.args[0]));
   expect(yLabels).toEqual(["5600", "5700", "5800", "5900", "6000", "6100", "6200", "6300", "6400"]);
 });
+
+it("labels the zero tick of a signed axis 0", async () => {
+  await mount();
+  act(() => model.set("y_range", [-1.05, 0.85]));
+  await settle();
+  const draws = logs.get(plotCanvas()) ?? [];
+  const lastClear = draws.map(call => call.name).lastIndexOf("fillRect");
+  const yLabels = draws.slice(lastClear).filter(call => call.name === "fillText" && call.args[1] === 56).map(call => String(call.args[0]));
+  expect(yLabels).toEqual(["-1", "-0.8", "-0.6", "-0.4", "-0.2", "0", "0.2", "0.4", "0.6", "0.8"]);
+});
