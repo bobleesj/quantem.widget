@@ -3690,7 +3690,7 @@ function Show3D() {
       if (showDenoise) setShowDenoise(false);
       if (smooth) setSmooth(false);
     }
-  }, [isRgb]); // eslint-disable-line react-hooks/exhaustive-deps -- one-shot mode switch
+  }, [isRgb]); // runs when the stack becomes true color, not on every control change
 
   // Histogram state for kymograph (mirrors FFT contrast/colormap controls)
   const [kymoVminPct, setKymoVminPct] = React.useState(0);
@@ -4134,7 +4134,6 @@ function Show3D() {
     if (!effectiveRoiActive || !roiItems.length || !raw || !width || !height) return [];
     return roiItems.map(roi => computeROIPixelStats(raw, width, height, roi));
     // frameBytes triggers recompute on frame change; displaySliceIdx triggers recompute during playback
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveRoiActive, roiItems, width, height, frameBytes, displaySliceIdx]);
 
   // Initialize reusable offscreen canvas + ImageData (resized when dimensions change)
@@ -5013,7 +5012,6 @@ function Show3D() {
     };
   // The embedded stack identity and geometry define GPU residency. Display
   // controls repaint resident slots and must never trigger another upload.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offlineFloatStack, offlineStack, width, height, nSlices, isRgb, displayBin, gpuCmapChecked, gpuCmapReady]);
 
 
@@ -5516,7 +5514,6 @@ function Show3D() {
     return () => {
       cancelAnimationFrame(animId);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing]);
 
   // The current frame's measured and display copies and its stats. The one place stats are derived, so it is
@@ -6130,7 +6127,6 @@ function Show3D() {
   };
   React.useEffect(() => {
     paintCompare();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compareMode, comparePair, blinkPhase, blinkFps, compareBackground, diffCmap, isRgb, canvasW, canvasH, width, height, nSlices, nPanels, panelWidthPx, sharedPanelSource, displaySliceIdx, frameBytes, frameSeq, avgWindow, subpixelAlignEnabled, subpixelAlignVersion, cmap, panelCmaps, percentileLow, percentileHigh, logScale, visiblePanelIndices, canvasRepaintSignal]);
 
   const ensureFullSizeMainOffscreen = React.useCallback((): boolean => {
@@ -6272,7 +6268,6 @@ function Show3D() {
     updatePlaybackLiveControls(idx);
   // renderGpuCachedSliceDirect intentionally reads the live refs updated by
   // these controls; listing the style inputs here is the repaint contract.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     gpuResidency.stage,
     gpuResidency.ready,
@@ -6338,7 +6333,6 @@ function Show3D() {
       preserveGpuDisplay,
       sourcePanelWidth: mainOffscreenSourcePanelWidthRef.current,
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [smooth, canvasW, canvasH, nPanels, visiblePanelIndices, maxCols, imageRotation, flipRows, flipCols, panelStates, linkedState, linkPanels, themeColors.bg, interPanelGapColor, panelRealFrames, panelTitles, showPanelTitles, panelGapPx, panelTitleFontSize, panelWidthPx, sharedPanelSource, sliceIdx, displaySliceIdx, liveSliceIdx, playing, nSlices, canvasRepaintSignal, viewportTransformActive]);
 
   // A presented WebGPU texture is not a durable cache. Re-present the current
@@ -6371,7 +6365,6 @@ function Show3D() {
     }
     // The foreground signal is the intentional invalidation boundary. The
     // render helpers read the latest state through refs/playRef.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasRepaintSignal]);
 
   // Render overlay (ROI only) - HiDPI aware
@@ -7725,7 +7718,6 @@ function Show3D() {
 
     kymoDataRef.current = null;
     return undefined;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kymoReady, kymoExactStackReady, kymoQuantizedStackReady, offlineStack, offlineFloatStack, offlineMin, offlineMax, width, height, nSlices,
       profileWidth, profilePoints[0]?.row, profilePoints[0]?.col,
       profilePoints[1]?.row, profilePoints[1]?.col, profilePanelIdx, activePageStart,
@@ -8087,7 +8079,6 @@ function Show3D() {
       if (!cancelled) console.error("[Show3D] WebGPU ROI preview crop failed", error);
     });
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewVisible, selectedRoiKey, cmap, logScale, autoContrast, imageVminPct, imageVmaxPct, dataMin, dataMax, traitVmin, traitVmax, percentileLow, percentileHigh, width, height, frameBytes, displaySliceIdx, autoVmins, autoVmaxs, nPanels, linkContrast, sharedPanelSource, panelStates, vminPerPanel, vmaxPerPanel, canvasRepaintSignal]);
 
   // -------------------------------------------------------------------------
