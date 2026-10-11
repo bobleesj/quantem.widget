@@ -42,7 +42,7 @@ import {
   standaloneWidgetStaticHtmlFromDocument,
 } from "../format";
 import { useHideStaticFallback } from "../staticFallback";
-import { findDataRange, applyLogScale, signedLog1p, sliderRange, computeStats } from "../display/stats";
+import { findDataRange, applyLogScale, signedLog1p, sliderRange, computeStats, computeHistogramFromBytes } from "../display/stats";
 import { dequantizeUint8 } from "../display/quantization";
 import { MetadataSection } from "../widgetInfo";
 import { FolderWatchBadge, useFolderWatchModelLive } from "../folderWatchStatus";
@@ -3673,6 +3673,11 @@ function Show2D() {
   }, [dataVersion, gpuCmapReadyVersion, width, height, uint8CanvasPixels, uint8FolderPreviewMode]);
   // Cached per-image data ranges: only recomputed when data or logScale changes, NOT on slider drag
   const dataRangesRef = React.useRef<{ min: number; max: number }[]>([]);
+  // Unlinked gallery histograms, one entry per displayed panel array: every
+  // hover and drag frame re-renders the widget, and re-scanning (and, with
+  // Log on, re-transforming) every visible panel per render stalled the
+  // pointer on large galleries. A new frame is a new array, so it misses.
+  const panelHistogramsRef = React.useRef(new WeakMap<Float32Array, { logScale: boolean; bins: number[]; range: { min: number; max: number } }>());
   // Ref mirrors for async GPU callbacks (avoid stale closures)
   const logScaleRef = React.useRef(logScale);
   logScaleRef.current = logScale;
@@ -9299,13 +9304,18 @@ function Show2D() {
                         {visibleImageIndices.map((i) => {
                           const contrast = contrastStates.get(i) || { vminPct: 0, vmaxPct: 100 };
                           const raw = rawDataRef.current?.[i] || null;
-                          const histData = raw && logScale ? applyLogScale(raw) : raw;
-                          const histRange = histData ? findDataRange(histData) : (dataRangesRef.current[i] || imageDataRange);
+                          let histogram = raw ? panelHistogramsRef.current.get(raw) : undefined;
+                          if (raw && histogram?.logScale !== logScale) {
+                            const values = logScale ? applyLogScale(raw) : raw;
+                            histogram = { logScale, bins: computeHistogramFromBytes(values), range: findDataRange(values) };
+                            panelHistogramsRef.current.set(raw, histogram);
+                          }
+                          const histRange = histogram ? histogram.range : (dataRangesRef.current[i] || imageDataRange);
                           return (
                             /* RGB panels bypass the contrast pipeline: grey out their histogram */
                             <Box key={i} sx={isRgbPanel(i) ? { opacity: 0.35, pointerEvents: "none" } : undefined}
                               title={isRgbPanel(i) ? "RGB panel: contrast controls do not apply" : undefined}>
-                              <Histogram data={histData} vminPct={contrast.vminPct} vmaxPct={contrast.vmaxPct}
+                              <Histogram bins={histogram?.bins} vminPct={contrast.vminPct} vmaxPct={contrast.vmaxPct}
                                 {...histogramRangeHandlers(i)}
                                 width={110} height={58} theme={themeInfo.theme === "dark" ? "dark" : "light"}
                                 dataMin={histRange?.min ?? imageDataRange.min}
