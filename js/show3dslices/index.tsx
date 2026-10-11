@@ -1908,7 +1908,7 @@ function Show3DSlices() {
     if (volumeDrag) return; // Skip during drag - rAF handles it directly
     const renderer = volumeRendererRef.current;
     if (!renderer || !panelFloats || panelFloats.length === 0) return;
-    renderer.render(volumeRenderParamsRef.current, camera, bgColorRef.current, undefined, undefined, zStretch, orthographic);
+    renderer.render(volumeRenderParamsRef.current, camera, bgColorRef.current, { zStretch, orthographic });
   }, [panelFloats, sliceX, sliceY, sliceZ, obliqueAngle, obliqueSegment, nx, ny, nz, cmap, camera, volumeCanvasSize, themeColors.bg, slicePlaneMask, slicePlaneOpacity, volumeDrag, rendererReady, volTexRange, opacityA, zStretch, orthographic, flip, gpuSliceParams]);
 
   // First-frame paint guard: the very first synchronous render after the renderer
@@ -1921,7 +1921,7 @@ function Show3DSlices() {
     const id = requestAnimationFrame(() => {
       const renderer = volumeRendererRef.current;
       if (renderer && panelFloats && panelFloats.length > 0) {
-        renderer.render(volumeRenderParamsRef.current, camera, bgColorRef.current, undefined, undefined, zStretch, orthographic);
+        renderer.render(volumeRenderParamsRef.current, camera, bgColorRef.current, { zStretch, orthographic });
       }
     });
     return () => cancelAnimationFrame(id);
@@ -1987,7 +1987,7 @@ function Show3DSlices() {
       applyDepthPanelHeight(next);
       const renderer = volumeRendererRef.current;
       if (renderer && panelFloats && panelFloats.length > 0) {
-        renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, undefined, undefined, next, orthographic);
+        renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { zStretch: next, orthographic });
       }
     });
   };
@@ -2016,15 +2016,7 @@ function Show3DSlices() {
       };
       const renderer = volumeRendererRef.current;
       if (renderer && panelFloats && panelFloats.length > 0) {
-        renderer.render(
-          volumeRenderParamsRef.current,
-          liveCameraRef.current,
-          bgColorRef.current,
-          undefined,
-          undefined,
-          zStretchRef.current,
-          orthographic,
-        );
+        renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { zStretch: zStretchRef.current, orthographic });
       }
     });
   };
@@ -2052,20 +2044,12 @@ function Show3DSlices() {
     };
     const renderer = volumeRendererRef.current;
     if (renderer && panelFloats && panelFloats.length > 0) {
-      renderer.render(
-        volumeRenderParamsRef.current,
-        liveCameraRef.current,
-        bgColorRef.current,
-        undefined,
-        undefined,
-        zStretchRef.current,
-        orthographic,
-      );
+      renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { zStretch: zStretchRef.current, orthographic });
     }
   };
 
-  const handleObliqueAngleChange = (_event: Event, value: number | number[]) => {
-    const nextAngle = Array.isArray(value) ? value[0] : value;
+  // Rotate the cut to `nextAngle` about its centre, keeping its length inside the image.
+  const applyObliqueAngle = (nextAngle: number) => {
     const center = {
       x: (obliqueSegment.start.x + obliqueSegment.stop.x) / 2,
       y: (obliqueSegment.start.y + obliqueSegment.stop.y) / 2,
@@ -2096,15 +2080,7 @@ function Show3DSlices() {
     };
     const renderer = volumeRendererRef.current;
     if (renderer && panelFloats && panelFloats.length > 0) {
-      renderer.render(
-        volumeRenderParamsRef.current,
-        liveCameraRef.current,
-        bgColorRef.current,
-        undefined,
-        undefined,
-        zStretchRef.current,
-        orthographic,
-      );
+      renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { zStretch: zStretchRef.current, orthographic });
     }
   };
   if (!volumeDrag) liveCameraRef.current = camera;
@@ -2151,7 +2127,7 @@ function Show3DSlices() {
           const background = bgColorRef.current;
           const renderer = volumeRendererRef.current;
           if (renderer) {
-            renderer.render(params, liveCamera, background, undefined, undefined, zStretchRef.current, orthographic);
+            renderer.render(params, liveCamera, background, { zStretch: zStretchRef.current, orthographic });
           }
         });
       }
@@ -2174,7 +2150,7 @@ function Show3DSlices() {
     liveCameraRef.current = next;
     const renderer = volumeRendererRef.current;
     if (renderer) {
-      renderer.render(volumeRenderParamsRef.current, next, bgColorRef.current, undefined, undefined, zStretchRef.current, orthographic);
+      renderer.render(volumeRenderParamsRef.current, next, bgColorRef.current, { zStretch: zStretchRef.current, orthographic });
     }
     setCamera(next);
     persistViewState(undefined, undefined, next);
@@ -2425,15 +2401,9 @@ function Show3DSlices() {
     if (!renderer || !panelFloats || panelFloats.length === 0) return;
     const params = { ...volumeRenderParamsRef.current, ...liveSliceParamsRef.current };
     volumeRenderParamsRef.current = params;
-    renderer.render(
-      params,
-      liveCameraRef.current,
-      bgColorRef.current,
-      1,
-      32,
-      zStretchRef.current,
-      orthographic,
-    );
+    renderer.render(params, liveCameraRef.current, bgColorRef.current, {
+      zStretch: zStretchRef.current, orthographic, draft: { dpr: 1, numSteps: 32 },
+    });
   }, [orthographic, panelFloats]);
 
   const previewSliceAlignment = React.useCallback((rowShift: number, colShift: number) => {
@@ -3097,15 +3067,7 @@ function Show3DSlices() {
     directPaintPlane(1, 0);
     const renderer = volumeRendererRef.current;
     if (renderer && panelFloats && panelFloats.length > 0) {
-      renderer.render(
-        volumeRenderParamsRef.current,
-        liveCameraRef.current,
-        bgColorRef.current,
-        undefined,
-        undefined,
-        zStretchRef.current,
-        orthographic,
-      );
+      renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { zStretch: zStretchRef.current, orthographic });
     }
   };
   const updateObliqueFromEndpoints = (moving: { x: number; y: number }, opposite: { x: number; y: number }) => {
@@ -3941,7 +3903,7 @@ function Show3DSlices() {
   ];
   const updateObliqueAngleWithinBounds = (angle: number, minBound = obliqueAngleMinBound, maxBound = obliqueAngleMaxBound) => {
     const nextAngle = clampNumber(angle, minBound, maxBound);
-    if (Math.round(nextAngle) !== Math.round(obliqueAngle)) handleObliqueAngleChange(new Event("change"), nextAngle);
+    if (Math.round(nextAngle) !== Math.round(obliqueAngle)) applyObliqueAngle(nextAngle);
   };
   const handleObliqueAngleSliderChange = (values: number[]) => {
     setObliqueAngleBounds([values[0], values[2]]);
@@ -4649,7 +4611,7 @@ function Show3DSlices() {
                         has not moved. The center reports the same plane in fixed
                         image pixels. It holds steady while a rotation leaves the
                         chord inside the image; near an edge the endpoint clamp in
-                        handleObliqueAngleChange shortens the segment and does move
+                        applyObliqueAngle shortens the segment and does move
                         the midpoint, so the center shifts there too. */}
                     <Box sx={{ display: "flex", alignItems: "center", gap: `${SPACING.SM}px`, minHeight: 14 }}>
                       <Typography

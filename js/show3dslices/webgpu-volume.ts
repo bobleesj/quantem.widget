@@ -29,6 +29,13 @@ interface VolumeRenderParams {
   vmax: number;  // 0..1 normalized
 }
 
+interface RenderOptions {
+  zStretch: number;           // depth axis display stretch
+  orthographic: boolean;
+  // While a slider drags: canvas pixels per CSS pixel and ray steps, traded for frame rate
+  draft?: { dpr: number; numSteps: number };
+}
+
 export interface CameraState {
   yaw: number;       // radians, horizontal rotation
   pitch: number;     // radians, vertical rotation (clamped ±89°)
@@ -657,12 +664,13 @@ export class VolumeRenderer {
     this.rebuildBindGroup();
   }
 
-  render(params: VolumeRenderParams, camera: CameraState, bgColor: [number, number, number], dprOverride?: number, numStepsOverride?: number, zStretch: number = 1, orthographicView: boolean = false): void {
+  render(params: VolumeRenderParams, camera: CameraState, bgColor: [number, number, number], options: RenderOptions): void {
     if (this.deviceLost) return;
     const canvas = this.canvas;
+    const { zStretch, orthographic: orthographicView, draft } = options;
 
-    // Handle high-DPI displays (dprOverride allows reduced resolution during drag)
-    const dpr = dprOverride ?? (window.devicePixelRatio || 1);
+    // HiDPI backing store, except while a slider drags (draft render)
+    const dpr = draft?.dpr ?? (window.devicePixelRatio || 1);
     const displayW = canvas.clientWidth;
     const displayH = canvas.clientHeight;
     if (displayW === 0 || displayH === 0) return;
@@ -716,7 +724,7 @@ export class VolumeRenderer {
 
     // Number of steps scales with volume size
     const maxDim = Math.max(params.nx, params.ny, params.nz);
-    const numSteps = numStepsOverride ?? Math.min(512, Math.max(128, maxDim * 2));
+    const numSteps = draft?.numSteps ?? Math.min(512, Math.max(128, maxDim * 2));
 
     const uniformData = new ArrayBuffer(UNIFORM_BUFFER_SIZE);
     const f32 = new Float32Array(uniformData);
