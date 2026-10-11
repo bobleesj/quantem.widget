@@ -4952,6 +4952,8 @@ function Show3D() {
     return true;
   };
 
+  // The slot after the resident frames holds the GPU moving average the canvas draws.
+  const averageScratchSlot = Math.max(1, nSlices);
   const renderGpuTemporalAverageSliceDirect = (
     idx: number,
     updateDisplayState = false,
@@ -4968,10 +4970,8 @@ function Show3D() {
     const normalized = ((Math.round(idx) % Math.max(1, nSlices)) + Math.max(1, nSlices)) % Math.max(1, nSlices);
     const sourceSlots = temporalAverageFrameIndices(normalized, nSlices, win);
     if (!sourceSlots.every(sourceIdx => gpuFrameCacheUploadedRef.current.has(sourceIdx))) return false;
-    const scratchSlot = Math.max(1, nSlices);
-    if (!engine.averageResidentSlotsInto(scratchSlot, sourceSlots)) return false;
-    if (!renderGpuCachedSliceDirect(normalized, updateDisplayState, scratchSlot)) return false;
-    return true;
+    return engine.averageResidentSlotsInto(averageScratchSlot, sourceSlots)
+      && renderGpuCachedSliceDirect(normalized, updateDisplayState, averageScratchSlot);
   };
 
   React.useEffect(() => {
@@ -5057,7 +5057,7 @@ function Show3D() {
   const sliderGestureCleanupRef = React.useRef<(() => void) | null>(null);
   React.useEffect(() => () => sliderGestureCleanupRef.current?.(), []);
   const playbackHistogramCounterRef = React.useRef(0);
-  const refreshHistogramRef = React.useRef<((idxArg?: number) => void | Promise<void>) | null>(null);
+  const refreshHistogramRef = React.useRef<((idxArg?: number, residentSlot?: number | null) => void | Promise<void>) | null>(null);
 
   // Playback logic - rAF-driven, zero React re-renders in hot path
   React.useEffect(() => {
@@ -5282,7 +5282,7 @@ function Show3D() {
           setDisplaySliceIdx(next);
           setPlaybackUiSliceIdx(next);
           playbackHistogramCounterRef.current = (playbackHistogramCounterRef.current + 1) % 2;
-          if (playbackHistogramCounterRef.current === 0) void refreshHistogramRef.current?.(next);
+          if (playbackHistogramCounterRef.current === 0) void refreshHistogramRef.current?.(next, gpuResidentTransformReady ? averageScratchSlot : null);
         }
         scheduleTick();
         return;
@@ -5613,175 +5613,77 @@ function Show3D() {
     }
   }, [frameBytes, frameSeq, nPanels, visiblePanelIndices, width, height, showStats, diffMode, avgWindow, liveSliceIdx, isRgb, frequencyFilterIsActive, frequencyOptions, browserFilterTick, subpixelAlignEnabled, subpixelAlignVersion, compareMode, comparePair, blinkPhase]);
 
-  // Histogram bins are computed on the GPU via `engine.computeHistogramWithRange`
-  // when the colormap engine is ready. CPU fallback (computeHistogramFromBytes
-  // inside the Histogram component) still runs if WebGPU isn't available.
-  // Debounce: 100 ms past the last scrub frame so drag doesn't fire bin scans
-  // on every tick. Playback uses the established 2-tick (5 Hz) throttle.
+  // The histogram bins the frame the canvas shows: the resident frame itself (on the GPU), a GPU moving
+  // average in its scratch slot, or the frame the browser transformed (difference, average, filters,
+  // alignment, compare). Bins span the display range in the display domain, log when log scale is on.
+  // Scrubs refresh it 32 ms after the last frame; playback every second throttled UI update.
   const histogramTimerRef = React.useRef<number | null>(null);
   const histogramRefreshInFlightRef = React.useRef(false);
-  const histogramRefreshPendingIdxRef = React.useRef<number | null>(null);
-  const histogramRefreshSerialRef = React.useRef(0);
-  const refreshHistogram = React.useCallback(async (idxArg?: number) => {
+  const histogramRefreshPendingRef = React.useRef<{ idx: number; residentSlot: number | null } | null>(null);
+  const refreshHistogram = React.useCallback(async (idxArg?: number, residentSlot: number | null = null) => {
     if (isRgb) return;
     const renderIdx = clampSlice(idxArg ?? displaySliceIdx);
     if (histogramRefreshInFlightRef.current) {
-      histogramRefreshPendingIdxRef.current = renderIdx;
+      histogramRefreshPendingRef.current = { idx: renderIdx, residentSlot };
       return;
     }
     histogramRefreshInFlightRef.current = true;
-    const serial = ++histogramRefreshSerialRef.current;
     try {
-      // Bin the requested frame of the embedded stack directly so the
-      // histogram tracks the playing frame (the stack has no
-      // native-resolution slots).
-      if (!perPanelHistogramEnabled) {
-        const offFrame = getOfflineFrame(renderIdx);
-        if (offFrame && offFrame.length) {
-          const engine = gpuCmapRef.current;
-          let bins: number[] | null = null;
-          if (
-            engine &&
-            gpuCmapReadyRef.current &&
-            gpuFrameCacheUploadedRef.current.has(renderIdx) &&
-            dataMax > dataMin
-          ) {
-            try {
-              bins = await engine.computeHistogramWithRange(renderIdx, dataMin, dataMax, logScale);
-            } catch {
-              bins = null;  // Histogram component CPU-bins from imageHistogramData below
-            }
-          }
-          setImageDataRange(resolveDisplayBounds(dataMin, dataMax, null, null, logScale));
-          setImageHistogramBins(bins ?? histogramBins(offFrame, dataMin, dataMax, logScale));
-          setImageHistogramData(null);
-          return;
-        }
-      }
-      if (!perPanelHistogramEnabled) {
-        const engine = gpuCmapRef.current;
-        if (
-          engine &&
-          gpuCmapReadyRef.current &&
-          gpuFrameCacheUploadedRef.current.has(renderIdx) &&
-          dataMax > dataMin
-        ) {
-          let bins: number[] | null = null;
-          try {
-            bins = await engine.computeHistogramWithRange(renderIdx, dataMin, dataMax, logScale);
-          } catch {
-            bins = null;
-          }
-          if (serial === histogramRefreshSerialRef.current && bins) {
-            setImageDataRange(resolveDisplayBounds(dataMin, dataMax, null, null, logScale));
-            setImageHistogramBins(bins);
-            setImageHistogramData(null);
-            setPanelHistogramBins([]);
-            return;
-          }
-        }
-      }
-
-      const raw = displayFrameRef.current;
-      if (!raw || raw.length === 0) return;
+      const transformed = frameTransformActive() || String(compareMode || "off") !== "off";
+      const gpuSlot = residentSlot ?? (!transformed && gpuFrameCacheUploadedRef.current.has(renderIdx) ? renderIdx : null);
+      const engine = gpuSlot !== null && gpuCmapReadyRef.current ? gpuCmapRef.current : null;
+      const frame = transformed && residentSlot === null ? displayFrameRef.current : getOfflineFrame(renderIdx);
+      if (!engine && (!frame || frame.length === 0)) return;
+      const stackBounds = resolveDisplayBounds(dataMin, dataMax, null, null, logScale);
       if (perPanelHistogramEnabled) {
         const panelCount = Math.max(1, nPanels || 1);
-        const engine = gpuCmapRef.current;
-        if (
-          engine &&
-          gpuCmapReadyRef.current &&
-          gpuFrameCacheUploadedRef.current.has(renderIdx) &&
-          !frameTransformActive()
-        ) {
-          const panelW = totalPanelCount > 1
-            ? Math.max(1, panelWidthPx || Math.round(width / totalPanelCount))
-            : Math.max(1, width);
+        const nextBins: (number[] | null)[] = Array.from({ length: panelCount }, () => null);
+        let nextRanges: { min: number; max: number }[];
+        if (engine && gpuSlot !== null) {
           const regions = visiblePanelIndices.map(panel => ({
-            x: sharedPanelSource ? 0 : panel * panelW,
+            x: sharedPanelSource ? 0 : panel * sourcePanelWidth,
             y: 0,
-            width: panelW,
+            width: sourcePanelWidth,
             height,
           }));
-          try {
-            const histograms = await engine.computeHistogramRegions(
-              renderIdx,
-              regions,
-              logScale,
-            );
-            if (
-              serial === histogramRefreshSerialRef.current &&
-              histograms.length === visiblePanelIndices.length
-            ) {
-              const nextBins: (number[] | null)[] = Array.from({ length: panelCount }, () => null);
-              const nextRanges: { min: number; max: number }[] = Array.from(
-                { length: panelCount },
-                (_, panel) => panelDataRanges[panel]
-                  ?? resolveDisplayBounds(dataMin, dataMax, null, null, logScale),
-              );
-              visiblePanelIndices.forEach((panel, k) => {
-                nextBins[panel] = histograms[k].bins;
-                nextRanges[panel] = histograms[k].range;
-              });
-              setPanelHistogramData(Array.from({ length: panelCount }, () => null));
-              setPanelHistogramBins(nextBins);
-              setPanelDataRanges(nextRanges);
-              setImageHistogramBins(null);
-              return;
-            }
-          } catch {
-            // Preserve the existing CPU fallback for browsers without a usable
-            // region compute path. Hardware WebGPU stays on the resident path.
+          const histograms = await engine.computeHistogramRegions(gpuSlot, regions, logScale);
+          nextRanges = Array.from({ length: panelCount }, (_, panel) => panelDataRanges[panel] ?? stackBounds);
+          visiblePanelIndices.forEach((panel, k) => {
+            nextBins[panel] = histograms[k].bins;
+            nextRanges[panel] = histograms[k].range;
+          });
+          setPanelHistogramData(Array.from({ length: panelCount }, () => null));
+        } else {
+          nextRanges = Array.from({ length: panelCount }, () => stackBounds);
+          const nextData: (Float32Array | null)[] = Array.from({ length: panelCount }, () => null);
+          for (const panel of visiblePanelIndices) {
+            const panelData = extractPanelSlice(frame!, panel, logScale);
+            nextData[panel] = panelData;
+            nextRanges[panel] = panelData && panelData.length > 0 ? findDataRange(panelData) : stackBounds;
+            if (panelData && panelData.length > 0) nextBins[panel] = histogramBins(panelData, nextRanges[panel].min, nextRanges[panel].max);
           }
+          setPanelHistogramData(nextData);
         }
-        const nextData: (Float32Array | null)[] = Array.from({ length: panelCount }, () => null);
-        const nextRanges: { min: number; max: number }[] = Array.from(
-          { length: panelCount },
-          () => resolveDisplayBounds(dataMin, dataMax, null, null, logScale),
-        );
-        const nextBins: (number[] | null)[] = Array.from({ length: panelCount }, () => null);
-        for (const panel of visiblePanelIndices) {
-          const panelData = extractPanelSlice(raw, panel, logScale);
-          nextData[panel] = panelData;
-          nextRanges[panel] = panelData && panelData.length > 0
-            ? findDataRange(panelData)
-            : resolveDisplayBounds(dataMin, dataMax, null, null, logScale);
-          if (panelData && panelData.length > 0) nextBins[panel] = histogramBins(panelData, nextRanges[panel].min, nextRanges[panel].max);
-        }
-        setPanelHistogramData(nextData);
         setPanelHistogramBins(nextBins);
         setPanelDataRanges(nextRanges);
         setImageHistogramBins(null);
         return;
       }
-      const data = logScale ? applyLogScale(raw) : raw;
-      setImageDataRange(resolveDisplayBounds(dataMin, dataMax, null, null, logScale));
-      // GPU bins: the colormap engine has the frame data uploaded to slot 0
-      // already (via the render effect). Reuse that slot's buffer for a
-      // 256-bin compute pass; fall back to CPU bins in the Histogram component
-      // when the engine isn't ready or returns null.
-      const engine = gpuCmapRef.current;
-      let bins: number[] | null = null;
-      if (engine && gpuCmapReadyRef.current && dataMax > dataMin) {
-        try {
-          // Use the requested frame's slot, not a hardcoded 0 (which is whatever
-          // the data effect last uploaded, not the playing frame).
-          const slot = gpuFrameCacheUploadedRef.current.has(renderIdx) ? renderIdx : 0;
-          bins = await engine.computeHistogramWithRange(slot, dataMin, dataMax, logScale);
-        } catch {
-          bins = null;  // fall through to CPU path
-        }
-      }
-      setImageHistogramBins(bins ?? histogramBins(raw, dataMin, dataMax, logScale));
-      setImageHistogramData(data);
+      const bins = engine && gpuSlot !== null && dataMax > dataMin
+        ? await engine.computeHistogramWithRange(gpuSlot, stackBounds.min, stackBounds.max, logScale)
+        : histogramBins(frame!, stackBounds.min, stackBounds.max, logScale);
+      setImageDataRange(stackBounds);
+      setImageHistogramBins(bins);
+      setImageHistogramData(null);
     } finally {
       histogramRefreshInFlightRef.current = false;
-      const pending = histogramRefreshPendingIdxRef.current;
-      histogramRefreshPendingIdxRef.current = null;
-      if (pending !== null && pending !== renderIdx) {
-        window.setTimeout(() => { void refreshHistogram(pending); }, 0);
+      const pending = histogramRefreshPendingRef.current;
+      histogramRefreshPendingRef.current = null;
+      if (pending !== null && pending.idx !== renderIdx) {
+        window.setTimeout(() => { void refreshHistogram(pending.idx, pending.residentSlot); }, 0);
       }
     }
-  }, [logScale, dataMin, dataMax, perPanelHistogramEnabled, nPanels, nSlices, visiblePanelIndices, extractPanelSlice, displaySliceIdx, isRgb, height, panelDataRanges, panelWidthPx, sharedPanelSource, totalPanelCount, width, diffMode, avgWindow, frequencyFilterIsActive, subpixelAlignEnabled]);
+  }, [logScale, dataMin, dataMax, perPanelHistogramEnabled, nPanels, nSlices, visiblePanelIndices, extractPanelSlice, displaySliceIdx, isRgb, height, panelDataRanges, sharedPanelSource, sourcePanelWidth, diffMode, avgWindow, frequencyFilterIsActive, subpixelAlignEnabled, compareMode, getOfflineFrame]);
   refreshHistogramRef.current = refreshHistogram;
   React.useEffect(() => {
     if (playing) {
@@ -5795,7 +5697,8 @@ function Show3D() {
       refreshHistogram(displaySliceIdx);
       histogramTimerRef.current = null;
     }, 32);
-  }, [frameBytes, frameSeq, playing, displaySliceIdx, refreshHistogram, gpuResidency.stage]);
+    // A filtered, aligned or compared frame lands after its inputs changed: bin it when it does.
+  }, [frameBytes, frameSeq, playing, displaySliceIdx, refreshHistogram, gpuResidency.stage, browserFilterTick, frequencyRenderVersion, subpixelAlignVersion, comparePair, blinkPhase]);
 
   // Auto-snap thumbs to percentile-clip values while Auto is on. Fires once at mount
   // (so the slider visually reflects the percentile-clipped contrast the canvas paints

@@ -444,3 +444,56 @@ def test_show3d_subpixel_alignment_runs_on_webgpu_with_the_cpu_shifts(drifted, s
     assert found[True][:4] == found[False][:4], found
     row, col, max_row, max_col = (float(value) for value in found[True][:4])
     assert abs(row - 5) < 0.3 and abs(col + 4) < 0.3 and abs(max_row - 5) < 0.3 and abs(max_col - 4) < 0.3, found
+
+
+HISTOGRAM = 'canvas[aria-label="Histogram of intensity values with min and max clip handles"]'
+# Display bars of the image histogram: columns whose bottom pixel differs from the background, which the
+# top row always shows (bars stop 2 px below it).
+HISTOGRAM_BARS = """
+(selector) => {
+  const canvas = [...document.querySelectorAll(selector)].pop();
+  const context = canvas.getContext('2d');
+  const pixels = context.getImageData(0, canvas.height - 2, canvas.width, 1).data;
+  const background = [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)];
+  let columns = 0;
+  for (let x = 1; x < canvas.width - 1; x++) {
+    if ([0, 1, 2].some(channel => pixels[4 * x + channel] !== background[channel])) columns++;
+  }
+  return columns;
+}
+"""
+
+
+@pytest.mark.parametrize("webgpu", [True, False], ids=["webgpu", "cpu"])
+def test_show3d_histogram_bins_the_difference_frame_it_shows(webgpu, serve, open_page, hardware_adapter, browser_out):
+    # Frame k is 100 + ramp * (1 + k / 2), so the previous-frame difference of frame 2 is ramp / 2, spread over
+    # the zero-centred difference range [0, 15]. Before, the histogram binned the raw frame (100 to 160), all
+    # of it past the range in one end bar, while the image showed the difference.
+    from quantem.widget import Show3D
+
+    rows, cols = np.indices((64, 64))
+    ramp = 30 * (rows + cols) / 126
+    viewer = Show3D(np.stack([100 + ramp * (1 + 0.5 * k) for k in range(4)]).astype(np.float32), panel_width_px=256, cmap="gray")
+    viewer.slice_idx, viewer.diff_mode = 2, "previous"
+    viewer.export_html(browser_out / "show3d_histogram_difference.html")
+    page = open_ready(f"{serve(browser_out)}/show3d_histogram_difference.html", webgpu, open_page, hardware_adapter)
+    page.locator(HISTOGRAM).last.screenshot(path=str(browser_out / f"show3d_histogram_difference_{'webgpu' if webgpu else 'cpu'}.png"))
+    assert page.evaluate(HISTOGRAM_BARS, HISTOGRAM) > 40
+    assert page.errors == [], page.errors
+
+
+@pytest.mark.parametrize("webgpu", [True, False], ids=["webgpu", "cpu"])
+def test_show3d_log_histogram_spans_the_log_range(webgpu, serve, open_page, hardware_adapter, browser_out):
+    # Values 0 to 10^4 in log scale: the bars span log1p over [0, 9.2], as the slider labels do. Before, the
+    # bins put log values against the linear range [0, 10^4], so every pixel fell in the first bar.
+    from quantem.widget import Show3D
+
+    rows, cols = np.indices((64, 64))
+    ramp = np.expm1(np.log1p(1e4) * (rows * 64 + cols) / 4095)
+    viewer = Show3D(np.stack([ramp, ramp]).astype(np.float32), panel_width_px=256, cmap="gray")
+    viewer.log_scale = True
+    viewer.export_html(browser_out / "show3d_histogram_log.html")
+    page = open_ready(f"{serve(browser_out)}/show3d_histogram_log.html", webgpu, open_page, hardware_adapter)
+    page.locator(HISTOGRAM).last.screenshot(path=str(browser_out / f"show3d_histogram_log_{'webgpu' if webgpu else 'cpu'}.png"))
+    assert page.evaluate(HISTOGRAM_BARS, HISTOGRAM) > 40
+    assert page.errors == [], page.errors
