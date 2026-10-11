@@ -1409,7 +1409,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine && gpuRanges?.has(frame)),
       }))
       .filter((entry) => sourceLoading || entry.panel !== undefined || entry.gpuLoaded);
-  }, [gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, renderIndices, scaleMode, sourceLoading]);
+  }, [gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, renderIndices, sourceLoading]);
 
   const renderGpuSlotsNow = React.useCallback((): number => {
     if (!gpuEngine || !gpuSlots) return 0;
@@ -1487,7 +1487,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       bitmap.close();
     })();
     return panels.length;
-  }, [colormap, comparePanX, comparePanY, compareZoom, gpuEngine, gpuRanges, gpuSlots, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
+  }, [colormap, gpuEngine, gpuRanges, gpuSlots, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
 
   React.useEffect(() => {
     onGpuRendererReady?.(renderGpuSlotsNow);
@@ -1573,69 +1573,6 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       canvasDrawCacheRef.current.set(frame, { canvas, panel, styleKey });
     });
   }, [autoContrast, colormap, gpuEngine, gpuSlots, gpuVersion, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
-
-  React.useEffect(() => {
-    if (!gpuEngine || !gpuSlots || kind === "diffraction") return;
-    const gpuEntries = renderEntries
-      .map((entry, localIdx) => ({
-        frame: entry.frame,
-        localIdx,
-        slot: gpuSlots.get(entry.frame),
-      }))
-      .filter((entry): entry is { frame: number; localIdx: number; slot: number } => entry.slot !== undefined);
-    if (gpuEntries.length === 0) return;
-
-    const lut = COLORMAPS[colormap] || COLORMAPS.inferno;
-    gpuEngine.uploadLUT(colormap, lut);
-
-    gpuEntries.forEach(({ localIdx }) => {
-      const canvas = canvasRefs.current[localIdx];
-      if (!canvas) return;
-      if (canvas.width !== shapeCols) canvas.width = shapeCols;
-      if (canvas.height !== shapeRows) canvas.height = shapeRows;
-    });
-
-    void (async () => {
-      const bitmaps = await gpuEngine.renderSlotsWithComputedGpuRangeAsync(
-        gpuEntries.map((entry) => entry.slot),
-        gpuEntries.map(() => vminPct),
-        gpuEntries.map(() => vmaxPct),
-        scaleMode === "log",
-      );
-      if (!bitmaps) return;
-
-      bitmaps.forEach((bitmap, i) => {
-        if (!bitmap) return;
-        const entry = gpuEntries[i];
-        const canvas = canvasRefs.current[entry.localIdx];
-        const ctx = canvas?.getContext("2d");
-        if (!canvas || !ctx) {
-          bitmap.close?.();
-          return;
-        }
-        if (canvas.width !== shapeCols) canvas.width = shapeCols;
-        if (canvas.height !== shapeRows) canvas.height = shapeRows;
-        ctx.clearRect(0, 0, shapeCols, shapeRows);
-        ctx.imageSmoothingEnabled = smooth;
-        if (smooth) ctx.imageSmoothingQuality = "high";
-        ctx.drawImage(bitmap, 0, 0, shapeCols, shapeRows);
-        bitmap.close?.();
-        canvasDrawCacheRef.current.delete(entry.frame);
-      });
-    })();
-  }, [
-    kind,
-    colormap,
-    gpuEngine,
-    gpuSlots,
-    renderEntries,
-    scaleMode,
-    shapeCols,
-    shapeRows,
-    smooth,
-    vmaxPct,
-    vminPct,
-  ]);
 
   const displayCount = Math.max(1, renderEntries.length);
   const autoCols = displayCount >= 8 ? 4 : displayCount >= 5 ? 3 : displayCount >= 2 ? 2 : 1;
@@ -1857,6 +1794,9 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   }, []);
   const panelTiles = React.useMemo(() => renderEntries.map(({ frame, panel, gpuLoaded }, localIdx) => {
           const loaded = gpuLoaded || panel !== undefined;
+          // Tests and screenshot tools read the canvas on screen: the WebGPU tile
+          // covers the bytes canvas whenever the panel is resident.
+          const outputName = kind === "diffraction" ? "show4dstem-comparison-diffraction" : `show4dstem-compare-${frame}`;
           const active = frame === activeIdx;
           const label = labels && labels.length > frame ? labels[frame] : `Dataset ${frame + 1}`;
           const isStarred = (starred || []).includes(frame);
@@ -2054,7 +1994,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                   color: "white", background: "rgba(0,0,0,0.6)", fontSize: 11, padding: "1px 3px", fontVariantNumeric: "tabular-nums" }}
               />
               <canvas
-                data-quantem-scientific-output={`show4dstem-compare-${frame}`}
+                data-quantem-scientific-output={gpuLoaded ? undefined : outputName}
                 ref={(node) => { canvasRefs.current[localIdx] = node; }}
                 width={shapeCols}
                 height={shapeRows}
@@ -2066,14 +2006,11 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                   height: imageHeight,
                   imageRendering: smooth ? "auto" : "pixelated",
                   pointerEvents: "none",
-                  transition: "opacity 160ms ease",
                 }}
               />
               <canvas
-                data-quantem-scientific-output={kind === "diffraction" ? "show4dstem-comparison-diffraction" : undefined}
-                ref={(node) => {
-                  gpuCanvasRefs.current[localIdx] = node;
-                }}
+                data-quantem-scientific-output={gpuLoaded ? outputName : undefined}
+                ref={(node) => { gpuCanvasRefs.current[localIdx] = node; }}
                 width={shapeCols}
                 height={shapeRows}
                 style={{
