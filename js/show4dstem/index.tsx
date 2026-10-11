@@ -3310,11 +3310,13 @@ function Show4DSTEM() {
       };
       type WarmRoiPresetName = "bf" | "abf" | "adf";
       type WarmRoiGeometry = {
-        mode: "circle" | "annular";
+        mode: string;
         centerRow: number;
         centerCol: number;
         radius: number;
         radiusInner: number;
+        width: number;
+        height: number;
       };
       type WarmViCacheEntry = {
         source: ViGpuSource;
@@ -3325,11 +3327,7 @@ function Show4DSTEM() {
       let viWarmupStarted = false;
       let viWarmupGeneration = 0;
       let suppressViTraitRecompute = false;
-      const roundedCacheValue = (value: unknown): string => {
-        const numeric = Number(value);
-        if (!Number.isFinite(numeric)) return "0";
-        return String(Math.round(numeric * 1000) / 1000);
-      };
+      const roundedCacheValue = (value: number): string => String(Math.round(value * 1000) / 1000);
       const activeVolumeCacheKey = () => `vol:${Math.max(0, Math.round(Number(model.get("frame_idx") || 0)))}`;
       const dpcWarmCacheKey = (source: DpcGpuSource) => [
         activeVolumeCacheKey(),
@@ -3338,70 +3336,53 @@ function Show4DSTEM() {
         `scan:${scanRows}x${scanCols}`,
         `det:${detectorRows}x${detectorCols}`,
       ].join("|");
-      const normalizedRadiusInner = (geometry: WarmRoiGeometry) =>
-        geometry.mode === "annular" ? Math.max(0, geometry.radiusInner) : 0;
-      const roiWarmCacheKey = (geometry: WarmRoiGeometry) => [
-        activeVolumeCacheKey(),
-        "roi",
-        geometry.mode,
-        `cr:${roundedCacheValue(geometry.centerRow)}`,
-        `cc:${roundedCacheValue(geometry.centerCol)}`,
-        `r:${roundedCacheValue(geometry.radius)}`,
-        `ri:${roundedCacheValue(normalizedRadiusInner(geometry))}`,
-        `scan:${scanRows}x${scanCols}`,
-        `det:${detectorRows}x${detectorCols}`,
-      ].join("|");
-      const currentRoiGeometry = (): WarmRoiGeometry => {
-        const mode = String(model.get("roi_mode") || "circle") === "annular" ? "annular" : "circle";
-        return {
-          mode,
-          centerRow: Number(model.get("roi_center_row") || model.get("center_row") || detectorRows / 2),
-          centerCol: Number(model.get("roi_center_col") || model.get("center_col") || detectorCols / 2),
-          radius: Math.max(1, Number(model.get("roi_radius") || model.get("bf_radius") || 1)),
-          radiusInner: mode === "annular" ? Math.max(0, Number(model.get("roi_radius_inner") || 0)) : 0,
-        };
+      // The key holds exactly what buildDetectorMask reads for the mode, so two
+      // detectors share a cached image only when they select the same pixels
+      // (a Rect, Point or Square on the BF disk is not the BF image).
+      const roiWarmCacheKey = (geometry: WarmRoiGeometry) => {
+        const { mode, centerRow, centerCol } = geometry;
+        const shape = mode === "point"
+          ? [`at:${Math.round(centerRow)},${Math.round(centerCol)}`]
+          : [
+            `cr:${roundedCacheValue(centerRow)}`,
+            `cc:${roundedCacheValue(centerCol)}`,
+            ...(mode === "rect"
+              ? [`w:${roundedCacheValue(geometry.width)}`, `h:${roundedCacheValue(geometry.height)}`]
+              : [`r:${roundedCacheValue(geometry.radius)}`]),
+            ...(mode === "annular" ? [`ri:${roundedCacheValue(geometry.radiusInner)}`] : []),
+          ];
+        return [activeVolumeCacheKey(), "roi", mode, ...shape, `scan:${scanRows}x${scanCols}`, `det:${detectorRows}x${detectorCols}`].join("|");
       };
+      const currentRoiGeometry = (): WarmRoiGeometry => ({
+        mode: String(model.get("roi_mode") || "circle"),
+        centerRow: Number(model.get("roi_center_row")),
+        centerCol: Number(model.get("roi_center_col")),
+        radius: Number(model.get("roi_radius") || 0),
+        radiusInner: Number(model.get("roi_radius_inner") || 0),
+        width: Number(model.get("roi_width") || 0),
+        height: Number(model.get("roi_height") || 0),
+      });
       const presetRoiGeometry = (name: WarmRoiPresetName): WarmRoiGeometry => {
         const bfRadius = Math.max(1, Number(model.get("bf_radius") || 1));
         const centerRow = Number(model.get("center_row") || model.get("roi_center_row") || detectorRows / 2);
         const centerCol = Number(model.get("center_col") || model.get("roi_center_col") || detectorCols / 2);
-        if (name === "abf") {
-          return {
-            mode: "annular",
-            centerRow,
-            centerCol,
-            radius: bfRadius,
-            radiusInner: Math.max(0.5, bfRadius * 0.5),
-          };
-        }
-        if (name === "adf") {
-          return {
-            mode: "annular",
-            centerRow,
-            centerCol,
-            radius: bfRadius * 2,
-            radiusInner: bfRadius,
-          };
-        }
-        return {
-          mode: "circle",
-          centerRow,
-          centerCol,
-          radius: bfRadius,
-          radiusInner: 0,
-        };
+        const disk = { centerRow, centerCol, width: 0, height: 0 };
+        if (name === "abf") return { ...disk, mode: "annular", radius: bfRadius, radiusInner: Math.max(0.5, bfRadius * 0.5) };
+        if (name === "adf") return { ...disk, mode: "annular", radius: bfRadius * 2, radiusInner: bfRadius };
+        return { ...disk, mode: "circle", radius: bfRadius, radiusInner: 0 };
       };
-      const maskForRoiGeometry = (geometry: WarmRoiGeometry): Uint32Array => buildDetectorMask({
-        get: (name: string) => {
-          if (name === "roi_center_row") return geometry.centerRow;
-          if (name === "roi_center_col") return geometry.centerCol;
-          if (name === "roi_mode") return geometry.mode;
-          if (name === "roi_radius") return geometry.radius;
-          if (name === "roi_radius_inner") return geometry.radiusInner;
-          if (name === "roi_width" || name === "roi_height") return 0;
-          return model.get(name);
-        },
-      }, detectorRows, detectorCols);
+      const maskForRoiGeometry = (geometry: WarmRoiGeometry): Uint32Array => {
+        const traits: Record<string, number | string> = {
+          roi_center_row: geometry.centerRow,
+          roi_center_col: geometry.centerCol,
+          roi_mode: geometry.mode,
+          roi_radius: geometry.radius,
+          roi_radius_inner: geometry.radiusInner,
+          roi_width: geometry.width,
+          roi_height: geometry.height,
+        };
+        return buildDetectorMask({ get: (name: string) => traits[name] }, detectorRows, detectorCols);
+      };
       const dataViewForFloat32 = (data: Float32Array): DataView => (
         new DataView(data.buffer as ArrayBuffer, data.byteOffset, data.byteLength)
       );
