@@ -315,7 +315,7 @@ function useElementSize(ref: React.RefObject<HTMLElement | null>, fallback: { wi
   const [size, setSize] = React.useState(fallback);
   React.useLayoutEffect(() => {
     const node = ref.current;
-    if (!node || typeof ResizeObserver === "undefined") return;
+    if (!node) return;
     const observer = new ResizeObserver(([entry]) => {
       const rect = entry.contentRect;
       setSize({
@@ -331,8 +331,8 @@ function useElementSize(ref: React.RefObject<HTMLElement | null>, fallback: { wi
 
 function useViewportSize() {
   const [size, setSize] = React.useState(() => ({
-    width: typeof window === "undefined" ? 1280 : window.innerWidth,
-    height: typeof window === "undefined" ? 800 : window.innerHeight,
+    width: window.innerWidth,
+    height: window.innerHeight,
   }));
   React.useEffect(() => {
     const update = () => setSize({ width: window.innerWidth, height: window.innerHeight });
@@ -1178,7 +1178,6 @@ function createSnapshotGroupThumbnailCanvas(
   colors: { bgAlt: string; border: string; accent: string; text: string },
   contrastPreset: string,
 ): { canvas: HTMLCanvasElement; width: number; height: number } | null {
-  if (typeof document === "undefined") return null;
   const valid = images.filter((image) => image.data.length && image.height > 0 && image.width > 0).slice(0, 9);
   if (!valid.length || size <= 0) return null;
   const metrics = snapshotGroupThumbnailMetrics(valid.length, size);
@@ -1388,7 +1387,7 @@ function InteractiveFloatCanvas({
 
   React.useLayoutEffect(() => {
     const node = hostRef.current;
-    if (!node || typeof ResizeObserver === "undefined") return;
+    if (!node) return;
     const observer = new ResizeObserver(() => setDrawTick((current) => current + 1));
     observer.observe(node);
     return () => observer.disconnect();
@@ -1892,10 +1891,6 @@ function SnapshotImageCanvas({
     : "top-right";
   const scheduleFftOverlayDragPreview = React.useCallback((preview: { left: number; top: number }) => {
     fftOverlayDragPreviewRef.current = preview;
-    if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
-      setFftOverlayDragPreview(preview);
-      return;
-    }
     if (fftOverlayDragFrameRef.current !== null) return;
     fftOverlayDragFrameRef.current = window.requestAnimationFrame(() => {
       fftOverlayDragFrameRef.current = null;
@@ -1903,9 +1898,7 @@ function SnapshotImageCanvas({
     });
   }, []);
   React.useEffect(() => () => {
-    if (fftOverlayDragFrameRef.current !== null && typeof window !== "undefined") {
-      window.cancelAnimationFrame(fftOverlayDragFrameRef.current);
-    }
+    if (fftOverlayDragFrameRef.current !== null) window.cancelAnimationFrame(fftOverlayDragFrameRef.current);
   }, []);
   const handleFftOverlayPointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -1930,11 +1923,7 @@ function SnapshotImageCanvas({
       containerH: containerRect.height,
       moved: false,
     };
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // Pointer capture is best-effort; global state still keeps the drag bounded.
-    }
+    event.currentTarget.setPointerCapture(event.pointerId);
   }, []);
   const handleFftOverlayPointerMove = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const drag = fftOverlayDragRef.current;
@@ -1956,18 +1945,14 @@ function SnapshotImageCanvas({
     event.preventDefault();
     event.stopPropagation();
     fftOverlayDragRef.current = null;
-    if (fftOverlayDragFrameRef.current !== null && typeof window !== "undefined") {
+    if (fftOverlayDragFrameRef.current !== null) {
       window.cancelAnimationFrame(fftOverlayDragFrameRef.current);
       fftOverlayDragFrameRef.current = null;
     }
     const preview = fftOverlayDragPreviewRef.current;
     fftOverlayDragPreviewRef.current = null;
+    // The browser releases the pointer capture itself after pointerup and pointercancel.
     setFftOverlayDragPreview(null);
-    try {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    } catch {
-      // Ignore stale pointer captures from browser-level pointer cancellation.
-    }
     if (!commit || !drag.moved || !preview) return;
     const centerX = preview.left + drag.overlayW / 2;
     const centerY = preview.top + drag.overlayH / 2;
@@ -2856,7 +2841,7 @@ function Show1DWidget() {
     height: Math.max(360, viewportSize.height),
   });
   const plotSize = useElementSize(plotHostRef, DEFAULT_SIZE);
-  const plotDpr = typeof window === "undefined" ? 1 : (window.devicePixelRatio || 1);
+  const plotDpr = window.devicePixelRatio || 1;
   const geomRef = React.useRef<PlotGeometry | null>(null);
   const plotThumbnailHitAreasRef = React.useRef<PlotThumbnailHitArea[]>([]);
   const [hover, setHover] = React.useState<HoverPoint | null>(null);
