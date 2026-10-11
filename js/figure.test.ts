@@ -27,6 +27,9 @@ describe("formatScaleLabel", () => {
     expect(formatScaleLabel(0.05, "micrometers")).toBe("50 nm");
     // the table is in Angstrom, so 1e-7 mm is exactly 1 Å (tests/infrastructure/test_shared_modules.py holds the same cases)
     expect(formatScaleLabel(1e-7, "mm")).toBe("1 Å");
+    // the power of ten is exact: Math.pow(10, -4) gave 0.9999999999999999 Å and the label "100 pm"
+    expect(formatScaleLabel(1e-4, "um")).toBe("1 Å");
+    expect(formatScaleLabel(1.2e-5, "micron")).toBe("10 pm");
   });
 
   it("keeps a unit that is not a length", () => {

@@ -8,7 +8,8 @@ import { formatNumber } from "./format";
 /** Round a physical value to a "nice" number (1, 2, 5, 10, 20, 50, ...) */
 export function roundToNiceValue(value: number): number {
   if (value <= 0) return 1;
-  const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
+  // parsed from its decimal text: Math.pow(10, -4) is one ulp below 1e-4, which printed a 1 Å bar as "100 pm"
+  const magnitude = Number(`1e${Math.floor(Math.log10(value))}`);
   const normalized = value / magnitude;
   if (normalized < 1.5) return magnitude;
   if (normalized < 3.5) return 2 * magnitude;

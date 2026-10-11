@@ -41,6 +41,8 @@ WIDGETS = Path(__file__).resolve().parents[2] / "src" / "quantem" / "widget"
         (0.002, "millimeter", "2 µm"),
         (0.05, "micrometers", "50 nm"),
         (1e-7, "mm", "1 Å"),  # 1e-7 * 1e7 Å is exactly 1; a table in nm gave 0.0999... nm and printed "100 pm"
+        (1e-4, "um", "1 Å"),  # the browser builds the power of ten from text, as exact as Python's 10 ** -4
+        (1.2e-5, "micron", "10 pm"),
     ],
 )
 def test_scale_label_matches_js_figure(value, unit, label):
