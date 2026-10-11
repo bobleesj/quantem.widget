@@ -609,9 +609,9 @@ const GALLERY_FFT_OVERVIEW_MAX_DIM = 2048;
 // LRU, rather than evicting the first page while the user is playing through
 // later pages. ROI FFTs remain native-resolution below.
 const PAGED_GALLERY_FFT_OVERVIEW_MAX_DIM = 1024;
-const PROFILE_COLORS = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"];
 type ROIItem = { row: number; col: number; shape: string; radius: number; radius_inner: number; width: number; height: number; color: string; line_width: number; highlight: boolean };
-const ROI_COLORS = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"];
+// ROI outlines and per-panel profile curves cycle through one palette.
+const SERIES_COLORS = ["#4fc3f7", "#81c784", "#ffb74d", "#ce93d8", "#ef5350", "#ffd54f", "#90a4ae", "#a1887f"];
 const RESIZE_HIT_AREA_PX = 10;
 
 function clonePanelOverlays(overlays: PanelOverlaySpec[][] | undefined): PanelOverlaySpec[][] {
@@ -4291,8 +4291,12 @@ function Show2D() {
       if (!ctx) continue;
 
       ctx.clearRect(0, 0, overlay.width, overlay.height);
+      const view = getZoomState(i);
+      const { zoom } = view;
+      // Image (row, col) to this overlay's CSS pixels at the panel's zoom and pan.
+      const toScreenX = (col: number) => (col * displayScale - canvasW / 2) * zoom + canvasW / 2 + view.panX;
+      const toScreenY = (row: number) => (row * displayScale - canvasH / 2) * zoom + canvasH / 2 + view.panY;
       if (panelHasScaleBar(i)) {
-        const view = getZoomState(i);
         const panelPixelSize = pixelSizeForPanel(i);
         const unit = panelPixelSize > 0 ? pixelUnit : "px";
         const barPixelSize = panelPixelSize > 0 ? panelPixelSize : 1;
@@ -4338,12 +4342,6 @@ function Show2D() {
 
       const panelOverlaySpecs = panelOverlays?.[i] || [];
       if (panelOverlaySpecs.length > 0) {
-        const view = getZoomState(i);
-        const { zoom, panX, panY } = view;
-        const cx = canvasW / 2;
-        const cy = canvasH / 2;
-        const toScreenX = (col: number) => (col * displayScale - cx) * zoom + cx + panX;
-        const toScreenY = (row: number) => (row * displayScale - cy) * zoom + cy + panY;
         ctx.save();
         ctx.scale(DPR, DPR);
         drawPanelOverlays(ctx, panelOverlaySpecs, toScreenX, toScreenY, width, height);
@@ -4355,11 +4353,6 @@ function Show2D() {
 
       // ROI overlay: every ROI plus the highlight mask
       if (roiActive && roiList && roiList.length > 0) {
-        const view = getZoomState(i);
-        const { zoom, panX, panY } = view;
-        const cx = canvasW / 2;
-        const cy = canvasH / 2;
-
         // Highlight mask: dim everything outside highlighted ROIs
         const highlightedRois = roiList.filter(roi => roi.highlight);
         if (highlightedRois.length > 0) {
@@ -4369,8 +4362,8 @@ function Show2D() {
           ctx.fillRect(0, 0, canvasW, canvasH);
           ctx.globalCompositeOperation = "destination-out";
           for (const roi of highlightedRois) {
-            const screenX = (roi.col * displayScale - cx) * zoom + cx + panX;
-            const screenY = (roi.row * displayScale - cy) * zoom + cy + panY;
+            const screenX = toScreenX(roi.col);
+            const screenY = toScreenY(roi.row);
             const screenRadius = roi.radius * displayScale * zoom;
             const shape = roi.shape || "circle";
             ctx.fillStyle = "rgba(0,0,0,1)";
@@ -4400,15 +4393,15 @@ function Show2D() {
         for (let roiIndex = 0; roiIndex < roiList.length; roiIndex++) {
           const roi = roiList[roiIndex];
           const isSelected = roiIndex === roiSelectedIdx;
-          const screenX = (roi.col * displayScale - cx) * zoom + cx + panX;
-          const screenY = (roi.row * displayScale - cy) * zoom + cy + panY;
+          const screenX = toScreenX(roi.col);
+          const screenY = toScreenY(roi.row);
           const screenRadius = roi.radius * displayScale * zoom;
           const screenW = roi.width * displayScale * zoom;
           const screenH = roi.height * displayScale * zoom;
           const screenRadiusInner = roi.radius_inner * displayScale * zoom;
           const shape = (roi.shape || "circle") as "circle" | "square" | "rectangle" | "annular";
           ctx.lineWidth = roi.line_width || 2;
-          drawROI(ctx, screenX, screenY, shape, screenRadius, screenW, screenH, roi.color || ROI_COLORS[roiIndex % ROI_COLORS.length], roi.color || ROI_COLORS[roiIndex % ROI_COLORS.length], isSelected && isDraggingROI, screenRadiusInner);
+          drawROI(ctx, screenX, screenY, shape, screenRadius, screenW, screenH, roi.color || SERIES_COLORS[roiIndex % SERIES_COLORS.length], roi.color || SERIES_COLORS[roiIndex % SERIES_COLORS.length], isSelected && isDraggingROI, screenRadiusInner);
           if (isSelected) {
             ctx.setLineDash([4, 3]);
             ctx.strokeStyle = "#fff";
@@ -4428,16 +4421,8 @@ function Show2D() {
 
       // Line profile overlay
       if (profileActive && profilePoints.length > 0) {
-        const view = getZoomState(i);
-        const { zoom, panX, panY } = view;
         ctx.save();
         ctx.scale(DPR, DPR);
-
-        const cx = canvasW / 2;
-        const cy = canvasH / 2;
-        const toScreenX = (col: number) => (col * displayScale - cx) * zoom + cx + panX;
-        const toScreenY = (row: number) => (row * displayScale - cy) * zoom + cy + panY;
-
         const ax = toScreenX(profilePoints[0].col);
         const ay = toScreenY(profilePoints[0].row);
         ctx.fillStyle = themeColors.accent;
@@ -4468,15 +4453,8 @@ function Show2D() {
 
       // Distance measurement overlay
       if (measureActive && measurePoints.length >= 1) {
-        const view = getZoomState(i);
-        const { zoom, panX, panY } = view;
         ctx.save();
         ctx.scale(DPR, DPR);
-        const cx = canvasW / 2;
-        const cy = canvasH / 2;
-        const toScreenX = (col: number) => (col * displayScale - cx) * zoom + cx + panX;
-        const toScreenY = (row: number) => (row * displayScale - cy) * zoom + cy + panY;
-
         ctx.shadowColor = "rgba(0,0,0,0.6)";
         ctx.shadowBlur = 3;
 
@@ -4685,7 +4663,7 @@ function Show2D() {
     }
     const range = globalMax - globalMin || 1;
 
-    const colors = profileDataAll.length === 1 ? [themeColors.accent] : PROFILE_COLORS;
+    const colors = profileDataAll.length === 1 ? [themeColors.accent] : SERIES_COLORS;
     for (let panel = 0; panel < profileDataAll.length; panel++) {
       const profile = profileDataAll[panel];
       if (!profile || profile.length < 2) continue;
@@ -4820,7 +4798,7 @@ function Show2D() {
     ctx.setLineDash([]);
 
     // Dot on each profile line + collect values
-    const colors = profileDataAll.length === 1 ? [themeColors.accent] : PROFILE_COLORS;
+    const colors = profileDataAll.length === 1 ? [themeColors.accent] : SERIES_COLORS;
     const activeIdx = isGallery ? selectedIdx : 0;
     let displayVal: number | null = null;
     for (let panel = 0; panel < profileDataAll.length; panel++) {
@@ -9332,7 +9310,7 @@ function Show2D() {
                     </Select>
                     <Button size="small" sx={compactButton} onClick={() => {
                       const defaultRadius = Math.max(10, Math.round(Math.min(width, height) * 0.05));
-                      const newRoi: ROIItem = { row: Math.floor(height / 2), col: Math.floor(width / 2), shape: newRoiShape, radius: defaultRadius, radius_inner: Math.max(5, Math.round(defaultRadius * 0.5)), width: defaultRadius * 2, height: defaultRadius * 2, color: ROI_COLORS[(roiList?.length ?? 0) % ROI_COLORS.length], line_width: 2, highlight: false };
+                      const newRoi: ROIItem = { row: Math.floor(height / 2), col: Math.floor(width / 2), shape: newRoiShape, radius: defaultRadius, radius_inner: Math.max(5, Math.round(defaultRadius * 0.5)), width: defaultRadius * 2, height: defaultRadius * 2, color: SERIES_COLORS[(roiList?.length ?? 0) % SERIES_COLORS.length], line_width: 2, highlight: false };
                       const newList = [...(roiList || []), newRoi];
                       setRoiList(newList);
                       setRoiSelectedIdx(newList.length - 1);
@@ -9375,7 +9353,7 @@ function Show2D() {
                         </>
                       )}
                       <Box sx={{ display: "flex", gap: "2px" }}>
-                        {ROI_COLORS.map(swatch => (
+                        {SERIES_COLORS.map(swatch => (
                           <Box key={swatch} onClick={() => updateSelectedRoi({ color: swatch })} sx={{ width: 12, height: 12, bgcolor: swatch, cursor: "pointer", border: swatch === selectedRoi.color ? `2px solid ${themeColors.text}` : "1px solid transparent", "&:hover": { opacity: 0.8 } }} />
                         ))}
                       </Box>
@@ -9397,7 +9375,7 @@ function Show2D() {
                   {roiList && roiList.length > 0 && (
                     <Box sx={{ display: "flex", flexDirection: "column", borderTop: `1px solid ${themeColors.border}`, pt: `${SPACING.XS}px` }}>
                       {roiList.map((roi, i) => {
-                        const roiColor = roi.color || ROI_COLORS[i % ROI_COLORS.length];
+                        const roiColor = roi.color || SERIES_COLORS[i % SERIES_COLORS.length];
                         const isSelected = i === roiSelectedIdx;
                         const shapeLabel = roi.shape === "rectangle" ? `${roi.width}×${roi.height}` : roi.shape === "annular" ? `r${roi.radius_inner}-${roi.radius}` : `r${roi.radius}`;
                         return (
