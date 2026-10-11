@@ -5,16 +5,9 @@ import {
   normalizedAverageWindow,
   temporalAverageFrameIndices,
   requiresClientFrameTransform,
-  shouldApplyClientDifference,
 } from "./frameTransform";
 
 describe("Show3D frame transform ownership", () => {
-  it("applies the difference in the browser, on the raw embedded frames", () => {
-    expect(shouldApplyClientDifference("previous")).toBe(true);
-    expect(shouldApplyClientDifference("first")).toBe(true);
-    expect(shouldApplyClientDifference("off")).toBe(false);
-  });
-
   it("keeps averaging as a client transform", () => {
     expect(requiresClientFrameTransform({ diffMode: "previous", avgWindow: 1 })).toBe(true);
     expect(requiresClientFrameTransform({ diffMode: "off", avgWindow: 1 })).toBe(false);

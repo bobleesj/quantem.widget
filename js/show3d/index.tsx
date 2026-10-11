@@ -120,7 +120,6 @@ import {
   normalizedAverageWindow,
   temporalAverageFrameIndices,
   requiresClientFrameTransform,
-  shouldApplyClientDifference,
 } from "./frameTransform";
 
 
@@ -4303,7 +4302,7 @@ function Show3D() {
   // or alignment filter puts values on another scale, so those frames take
   // their own percentiles.
   const stackAutoRangeApplies = () => !(
-    shouldApplyClientDifference(playRef.current.diffMode)
+    playRef.current.diffMode !== "off"
     || browserFilterOnRef.current || frequencyFilterIsActive || !!subpixelAlignEnabled
   );
 
@@ -4490,7 +4489,7 @@ function Show3D() {
     }
     const activeDiffMode = playRef.current.diffMode;
     let result: Float32Array | null = frame;
-    if (frame && shouldApplyClientDifference(activeDiffMode)) {
+    if (frame && activeDiffMode !== "off") {
       const refIdx = activeDiffMode === "first" ? 0 : Math.max(0, Math.round(idx) - 1);
       const ref = subpixelAlignFrameForIndex(refIdx, averagedFrameForIndex(refIdx, idx, currentFrame));
       if (ref) {

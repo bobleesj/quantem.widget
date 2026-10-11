@@ -37,7 +37,7 @@ export const MIN_ANIMATION_SCALE_BAR_THICKNESS_PX = 5;
 
 export const MIN_ANIMATION_OVERLAY_MARGIN_PX = 12;
 
-export const ANIMATION_QUALITY_SCALE: Record<string, number> = { low: 0.35, medium: 0.6, high: 1.0 };
+const ANIMATION_QUALITY_SCALE: Record<string, number> = { low: 0.35, medium: 0.6, high: 1.0 };
 
 export const ANIMATION_QUALITY_OPTIONS = ["low", "medium", "high"] as const;
 

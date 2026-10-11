@@ -10,14 +10,9 @@ export function normalizedAverageWindow(value: unknown): number {
 }
 
 /**
- * The embedded Show3D display stack holds raw frames, so the browser applies
- * the frame difference and the moving average.
+ * True when the shown frame is not the raw stack frame: the embedded stack holds
+ * raw frames, so the browser applies the frame difference and the moving average.
  */
-export function shouldApplyClientDifference(diffMode: string): boolean {
-  return diffMode !== "off";
-}
-
-/** True when the shown frame is not the raw stack frame (difference or average). */
 export function requiresClientFrameTransform({
   diffMode,
   avgWindow,
@@ -25,8 +20,7 @@ export function requiresClientFrameTransform({
   diffMode: string;
   avgWindow: unknown;
 }): boolean {
-  return normalizedAverageWindow(avgWindow) > 1
-    || shouldApplyClientDifference(diffMode);
+  return normalizedAverageWindow(avgWindow) > 1 || diffMode !== "off";
 }
 
 /** Cache identity for an asynchronously browser-filtered live frame. */
