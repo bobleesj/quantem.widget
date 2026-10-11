@@ -3123,13 +3123,7 @@ function Show3D() {
     setSubpixelAlignBusy(true);
     setSubpixelAlignStatus(`Aligning to frame ${refIdx + 1}…`);
     try {
-      // Use the shared CPU FFT for this first production path. The WebGPU FFT
-      // remains excellent for display FFTs, but registration needs stricter
-      // row/column parity: a browser drive caught the GPU path reporting
-      // near-zero row shifts on an intentionally drifted stack. Keep alignment
-      // correct and visibly trustworthy, then promote a GPU path after parity
-      // tests prove the same shifts.
-      const gpu: DisplayFFT | null = null;
+      const fft = await ensureFftGpu();
       const shifts: SubpixelShift[] = [];
       for (let idx = 0; idx < frameCount; idx++) {
         if (serial !== subpixelAlignSerialRef.current) return;
@@ -3142,7 +3136,7 @@ function Show3D() {
           shifts.push({ row: 0, col: 0, quality: 0 });
           continue;
         }
-        shifts.push(await estimateSubpixelShift(reference, frame, width, height, gpu));
+        shifts.push(await estimateSubpixelShift(reference, frame, width, height, fft));
       }
       if (serial !== subpixelAlignSerialRef.current) return;
       subpixelAlignShiftsRef.current = shifts;
@@ -3151,9 +3145,8 @@ function Show3D() {
       const maxCol = shifts.reduce((value, shift) => Math.max(value, Math.abs(shift.col)), 0);
       const currentIdx = Math.max(0, Math.min(frameCount - 1, Math.round(liveSliceIdx || 0)));
       const currentShift = shifts[currentIdx] ?? { row: 0, col: 0, quality: 0 };
-      const backend = gpu ? "WebGPU" : "CPU";
       setSubpixelAlignStatus(
-        `Aligned to frame ${refIdx + 1} · current row ${currentShift.row.toFixed(1)} px, col ${currentShift.col.toFixed(1)} px · max ${maxRow.toFixed(1)}/${maxCol.toFixed(1)} px · ${backend}`,
+        `Aligned to frame ${refIdx + 1} · current row ${currentShift.row.toFixed(1)} px, col ${currentShift.col.toFixed(1)} px · max ${maxRow.toFixed(1)}/${maxCol.toFixed(1)} px · ${fft.path}`,
       );
       setSubpixelAlignVersion((value) => value + 1);
     } catch (error) {

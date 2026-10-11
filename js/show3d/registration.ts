@@ -2,7 +2,7 @@
  * Sub-pixel registration for the Sub-pixel align control: the shift between two frames from the peak of
  * their cross-correlation, refined per axis by a parabola, and the bilinear translation that applies it.
  */
-import { DisplayFFT, applyHannWindow2D, fft2d, nextPow2 } from "../display/fft";
+import { type DisplayFFT, applyHannWindow2D, nextPow2 } from "../display/fft";
 
 export type SubpixelShift = {
   row: number;
@@ -51,10 +51,10 @@ function registrationImage(data: Float32Array, width: number, height: number): F
 }
 
 /**
- * 2D complex FFT (inverse when `inverse`) on a power-of-two grid: `fftEngine`
- * when given and the size is already a power of two, otherwise zero-padded and
- * run on the CPU fft2d. The padded size is returned because the correlation
- * peak is measured on that grid.
+ * 2D complex FFT (inverse when `inverse`) zero-padded to the next power-of-two
+ * grid, on the WebGPU FFT when the browser has one and the CPU reference
+ * otherwise. The padded size is returned because the correlation peak is
+ * measured on that grid.
  */
 async function fft2dComplex(
   real: Float32Array,
@@ -62,22 +62,20 @@ async function fft2dComplex(
   width: number,
   height: number,
   inverse: boolean,
-  fftEngine: DisplayFFT | null,
+  fftEngine: DisplayFFT,
 ): Promise<{ real: Float32Array; imag: Float32Array; width: number; height: number }> {
-  if (fftEngine && width === nextPow2(width) && height === nextPow2(height)) {
-    const out = await fftEngine.fft2D(real, imag, width, height, inverse);
-    return { ...out, width, height };
-  }
   const paddedW = nextPow2(width);
   const paddedH = nextPow2(height);
-  const realCopy = new Float32Array(paddedW * paddedH);
-  const imagCopy = new Float32Array(paddedW * paddedH);
-  for (let row = 0; row < height; row++) {
-    realCopy.set(real.subarray(row * width, row * width + width), row * paddedW);
-    imagCopy.set(imag.subarray(row * width, row * width + width), row * paddedW);
+  if (paddedW === width && paddedH === height) {
+    return { ...(await fftEngine.fft2D(real, imag, width, height, inverse)), width, height };
   }
-  fft2d(realCopy, imagCopy, paddedW, paddedH, inverse);
-  return { real: realCopy, imag: imagCopy, width: paddedW, height: paddedH };
+  const realPadded = new Float32Array(paddedW * paddedH);
+  const imagPadded = new Float32Array(paddedW * paddedH);
+  for (let row = 0; row < height; row++) {
+    realPadded.set(real.subarray(row * width, row * width + width), row * paddedW);
+    imagPadded.set(imag.subarray(row * width, row * width + width), row * paddedW);
+  }
+  return { ...(await fftEngine.fft2D(realPadded, imagPadded, paddedW, paddedH, inverse)), width: paddedW, height: paddedH };
 }
 
 /** Signed shift of a correlation peak on a periodic axis: indices past the midpoint are negative. */
@@ -109,7 +107,7 @@ export async function estimateSubpixelShift(
   moving: Float32Array,
   width: number,
   height: number,
-  fftEngine: DisplayFFT | null,
+  fftEngine: DisplayFFT,
 ): Promise<SubpixelShift> {
   const referenceImage = registrationImage(reference, width, height);
   const movingImage = registrationImage(moving, width, height);

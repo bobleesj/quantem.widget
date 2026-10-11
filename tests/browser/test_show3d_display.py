@@ -15,6 +15,7 @@ average during playback; a zoomed multi-panel difference view paints the differe
 """
 
 import io
+import re
 
 import numpy as np
 import pytest
@@ -401,3 +402,45 @@ def test_show3d_zoomed_fft_keeps_zero_frequency_at_the_centre(webgpu, layout, se
     offset = np.array([bright_rows.mean(), bright_cols.mean()]) - centre
     assert np.all(np.abs(offset) < 0.08 * shot.shape[0]), (offset, shot.shape)
     assert page.errors == [], page.errors
+
+
+def drifted_blobs(rows: int, cols: int, row_shift: float, col_shift: float) -> np.ndarray:
+    """Two Gaussian blobs and a weak lattice, displaced by (row_shift, col_shift) pixels."""
+    row, col = np.indices((rows, cols), dtype=np.float64)
+    row, col = row - row_shift, col - col_shift
+    return (100 * np.exp(-((row - rows * 0.4) ** 2 + (col - cols * 0.55) ** 2) / 40)
+            + 60 * np.exp(-((row - rows * 0.7) ** 2 + (col - cols * 0.3) ** 2) / 15)
+            + 20 * np.sin(col * 0.7) * np.cos(row * 0.45)).astype(np.float32)
+
+
+@pytest.fixture(scope="module")
+def drifted(browser_out) -> str:
+    from quantem.widget import Show3D
+
+    # non-square, and 100 x 160 pads to a 128 x 256 grid for the FFT
+    shifts = [(0, 0), (3, -2), (-5, 4), (2.5, -1.5)]
+    viewer = Show3D(np.stack([drifted_blobs(100, 160, *shift) for shift in shifts]), panel_width_px=320)
+    viewer.subpixel_align_enabled, viewer.slice_idx = True, 2
+    viewer.export_html(browser_out / "show3d_drifted.html")
+    return "show3d_drifted.html"
+
+
+ALIGNED = re.compile(r"current row (-?[\d.]+) px, col (-?[\d.]+) px · max ([\d.]+)/([\d.]+) px · (\w+)")
+
+
+def test_show3d_subpixel_alignment_runs_on_webgpu_with_the_cpu_shifts(drifted, serve, open_page, hardware_adapter, browser_out):
+    # Frame 2 is frame 0 moved by (-5, +4) px; the alignment shift moves it back by (+5, -4).
+    found = {}
+    for webgpu in (True, False):
+        page = open_ready(f"{serve(browser_out)}/{drifted}", webgpu, open_page, hardware_adapter)
+        page.get_by_label("More tools").click()
+        page.get_by_role("button", name="Align", exact=True).click()
+        status = page.get_by_text(ALIGNED)
+        status.wait_for(timeout=60_000)
+        page.screenshot(path=str(browser_out / f"show3d_aligned_{'webgpu' if webgpu else 'cpu'}.png"))
+        found[webgpu] = ALIGNED.search(status.inner_text()).groups()
+        assert page.errors == [], page.errors
+    assert found[True][4] == "WebGPU" and found[False][4] == "CPU", found
+    assert found[True][:4] == found[False][:4], found
+    row, col, max_row, max_col = (float(value) for value in found[True][:4])
+    assert abs(row - 5) < 0.3 and abs(col + 4) < 0.3 and abs(max_row - 5) < 0.3 and abs(max_col - 4) < 0.3, found
