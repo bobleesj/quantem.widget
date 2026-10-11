@@ -522,7 +522,7 @@ export const PACKED_PANEL_TRANSFORM_SHADER = DISPLAY_NORMALIZE_WGSL + /* wgsl */
 struct Params {
   dims0: vec4u,  // src_width, src_height, source_panel_width, out_width
   dims1: vec4u,  // out_height, panel_count, cols, rows
-  flags: vec4u,  // log_scale, bg_rgb, smooth, use_source_indices
+  flags: vec4u,  // unused (per-panel log is ranges.z), bg_rgb, smooth, use_source_indices
   geom: vec4f,   // gap, _pad0, _pad1, _pad2
 };
 
@@ -616,7 +616,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let region_w = max(1u, min(params.dims0.z, params.dims0.x - src_x0));
   var val = sample_value(src_x0, region_w, image_x, image_y, panel_w, panel_h);
   let range_info = ranges[panel_idx];
-  if (params.flags.x == 1u || range_info.z > 0.5) {
+  if (range_info.z > 0.5) {
     if (val >= 0.0) { val = log(1.0 + val); } else { val = -log(1.0 - val); }
   }
   let t = display_normalize(val, range_info.x, range_info.y);
