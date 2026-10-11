@@ -36,18 +36,28 @@ export function unitSymbol(unit: string): string {
   return trimmed;
 }
 
-// Length-unit ladder for the scale bar, each as its size in nm. Lets a sub-1 value
+// Size of one length unit in Angstrom, keyed by every lower-case spelling a widget's
+// unit trait accepts. Units that are not lengths (px, mrad, ps, ...) are absent.
+const ANGSTROMS_PER_UNIT: Record<string, number> = {
+  "å": 1, a: 1, ang: 1, angstrom: 1, angstroms: 1,
+  nm: 10, nanometer: 10, nanometers: 10,
+  pm: 0.01, picometer: 0.01, picometers: 0.01,
+  "µm": 1e4, "μm": 1e4, um: 1e4, micron: 1e4, microns: 1e4, micrometer: 1e4, micrometers: 1e4,
+  mm: 1e7, millimeter: 1e7, millimeters: 1e7,
+  m: 1e10, meter: 1e10, meters: 1e10,
+};
+
+/** One `unit` in Angstrom, or undefined when the unit is not a length (px, mrad, ps, ...). */
+export function angstromsPerUnit(unit: string | null | undefined): number | undefined {
+  return ANGSTROMS_PER_UNIT[(unit || "").trim().toLowerCase()];
+}
+
+// Length-unit ladder for the scale bar, each as its size in Angstrom. Lets a sub-1 value
 // in one unit (e.g. 0.5 nm) display as a clean integer in a smaller unit (500 pm /
 // 5 A) instead of a decimal - microscopists read "5 A", not "0.50 nm".
-const LENGTH_UNITS_NM: { sym: string; nm: number }[] = [
-  { sym: "mm", nm: 1e6 }, { sym: "µm", nm: 1e3 }, { sym: "nm", nm: 1 }, { sym: "Å", nm: 0.1 }, { sym: "pm", nm: 1e-3 },
+const LENGTH_LADDER: { sym: string; angstroms: number }[] = [
+  { sym: "mm", angstroms: 1e7 }, { sym: "µm", angstroms: 1e4 }, { sym: "nm", angstroms: 10 }, { sym: "Å", angstroms: 1 }, { sym: "pm", angstroms: 0.01 },
 ];
-// Base unit (the trait's unit) -> nm. Only length units rescale; anything else
-// (mrad, ps, px, ...) keeps its own unit and the old decimal fallback.
-const BASE_UNIT_NM: Record<string, number> = {
-  mm: 1e6, "µm": 1e3, "μm": 1e3, micron: 1e3, microns: 1e3, um: 1e3,
-  nm: 1, nanometer: 1, nanometers: 1, "å": 0.1, angstrom: 0.1, angstroms: 0.1, ang: 0.1, a: 0.1, pm: 1e-3, picometer: 1e-3, picometers: 1e-3,
-};
 
 /** Format scale bar label. Length values auto-pick the unit that reads as a clean
  *  integer (no decimals) - 0.5 nm -> "5 Å", 0.005 nm -> "5 pm". Non-length units
@@ -55,16 +65,16 @@ const BASE_UNIT_NM: Record<string, number> = {
  *  step is a power of 10, so the rescaled number is always exact. */
 export function formatScaleLabel(value: number, unit: string): string {
   const nice = roundToNiceValue(value);
-  const baseNm = BASE_UNIT_NM[(unit || "").trim().toLowerCase()];
-  if (baseNm === undefined) {
+  const unitAngstroms = angstromsPerUnit(unit);
+  if (unitAngstroms === undefined) {
     // not a length unit - keep the unit, fall back to integer-or-decimal
     const sym = unitSymbol(unit);
     return nice >= 1 ? `${Math.round(nice)} ${sym}` : `${nice.toFixed(2)} ${sym}`;
   }
-  const valueNm = nice * baseNm;
+  const angstroms = nice * unitAngstroms;
   // largest ladder unit where the value is >= 1 -> the cleanest (fewest-digit) integer
-  const pick = LENGTH_UNITS_NM.find((ladderUnit) => valueNm / ladderUnit.nm >= 1) ?? LENGTH_UNITS_NM[LENGTH_UNITS_NM.length - 1];
-  return `${Math.round(valueNm / pick.nm)} ${pick.sym}`;
+  const pick = LENGTH_LADDER.find((ladderUnit) => angstroms / ladderUnit.angstroms >= 1) ?? LENGTH_LADDER[LENGTH_LADDER.length - 1];
+  return `${Math.round(angstroms / pick.angstroms)} ${pick.sym}`;
 }
 
 const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
