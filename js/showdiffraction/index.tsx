@@ -181,14 +181,9 @@ function ShowDiffraction() {
     bgcolor: themeColors.controlBg,
     minWidth: 80,
   };
-  const themedMenuProps = {
-    ...upwardMenuProps,
-    PaperProps: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}`, maxHeight: 200, overflowY: "auto" } },
-  };
-  const topToolbarMenuProps = {
-    ...downwardMenuProps,
-    PaperProps: themedMenuProps.PaperProps,
-  };
+  const themedMenuSlots = { paper: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}`, maxHeight: 200, overflowY: "auto" } } };
+  const themedMenuProps = { ...upwardMenuProps, slotProps: themedMenuSlots };
+  const topToolbarMenuProps = { ...downwardMenuProps, slotProps: themedMenuSlots };
   const controlBox = { ...controlRow, border: `1px solid ${themeColors.border}`, borderRadius: "4px", bgcolor: themeColors.controlBg };
   const numInput = (width: number) => ({ width, fontSize: 10, padding: "2px 4px", background: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` });
   const statusColors = themeInfo.theme === "dark"

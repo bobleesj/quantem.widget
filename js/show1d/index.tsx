@@ -3038,17 +3038,16 @@ function Show1DWidget() {
     "& .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.border },
     "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.accent },
   };
-  const themedTopMenuProps = {
-    PaperProps: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` } },
-    sx: { zIndex: 9999 },
-  };
+  const themedTopMenuPaper = { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` } };
   const snapshotControlMenuProps = {
-    PaperProps: {
-      sx: {
-        bgcolor: themeColors.controlBg,
-        color: themeColors.text,
-        border: "none",
-        boxShadow: "0 8px 24px rgba(15, 23, 42, 0.14)",
+    slotProps: {
+      paper: {
+        sx: {
+          bgcolor: themeColors.controlBg,
+          color: themeColors.text,
+          border: "none",
+          boxShadow: "0 8px 24px rgba(15, 23, 42, 0.14)",
+        },
       },
     },
     sx: { zIndex: 9999 },
@@ -4359,7 +4358,7 @@ function Show1DWidget() {
           value={trialFilterText || ""}
           onChange={(event) => setTrialFilterText(event.target.value)}
           placeholder="Filter trials"
-          inputProps={{ "aria-label": "Filter review trials" }}
+          slotProps={{ htmlInput: { "aria-label": "Filter review trials" } }}
           sx={{ width: 112, "& .MuiInputBase-input": { py: 0.45, px: 0.75, fontSize: 10.5 } }}
         />
         {optimizationReview && <Select
@@ -4440,7 +4439,7 @@ function Show1DWidget() {
                     value={note}
                     onChange={(event) => updateTrialNote(label, event.target.value)}
                     placeholder="Review note"
-                    inputProps={{ "aria-label": `Review note for ${label}` }}
+                    slotProps={{ htmlInput: { "aria-label": `Review note for ${label}` } }}
                     sx={{ width: "100%", mt: 0.35, "& .MuiInputBase-input": { py: 0.4, px: 0.65, fontSize: 10 } }}
                   />
                   {optimizationReview && <Stack direction="row" spacing={0.35} useFlexGap sx={{ flexWrap: "wrap", mt: 0.35 }}>
@@ -4633,8 +4632,8 @@ function Show1DWidget() {
             anchorEl={viewMenuAnchor}
             open={Boolean(viewMenuAnchor)}
             onClose={() => setViewMenuAnchor(null)}
-            MenuListProps={{ "aria-label": "View options" }}
-            {...themedTopMenuProps}
+            slotProps={{ paper: themedTopMenuPaper, list: { "aria-label": "View options" } }}
+            sx={{ zIndex: 9999 }}
           >
             <MenuItem
               onClick={handleHandoffToShow2D}
@@ -4676,7 +4675,8 @@ function Show1DWidget() {
         onClose={() => setExportAnchor(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
         transformOrigin={{ vertical: "top", horizontal: "right" }}
-        {...themedTopMenuProps}
+        slotProps={{ paper: themedTopMenuPaper }}
+        sx={{ zIndex: 9999 }}
       >
         <MenuItem onClick={() => void handleExportSelect("html")} disabled={!exportEnabled} sx={{ fontSize: 12 }}>
           <DownloadIcon fontSize="small" sx={{ mr: 1 }} /> HTML full float32 ({htmlSize})
