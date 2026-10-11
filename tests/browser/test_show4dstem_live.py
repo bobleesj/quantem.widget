@@ -10,7 +10,8 @@ masked detector sum computed in the kernel, and the badge must name the path.
 A third notebook holds a 16 x 16 x 16 x 16 synthetic with large pixels: the
 scan ROI is resized from its rim and must grow by the distance dragged, and
 profile points clicked on pixel centers must be those pixels' indices (the
-convention the line sampler reads) and be drawn on those centers.
+convention the line sampler reads) and be drawn on those centers. A click
+that moves the scan ROI must reach the kernel as one reduction of the new region.
 """
 
 import json
@@ -222,8 +223,32 @@ def test_scan_roi_resize_follows_the_grab_and_profiles_sit_on_pixel_centers(jupy
     path = browser_out / "live_pixels_vi_profile.png"
     page.locator(VI).first.screenshot(path=str(path))
     rgb = np.asarray(Image.open(path).convert("RGB"), dtype=np.int16)
-    purple_cols = np.nonzero((rgb[..., 0] > 120) & (rgb[..., 2] > 200) & (rgb[..., 1] < 60))[1]
-    assert purple_cols.size, "no profile line drawn"
-    assert abs(np.median(purple_cols) / (rgb.shape[1] / 16) - 3.5) < 0.1, np.median(purple_cols) / (rgb.shape[1] / 16)
+    # drawn like the diffraction profile, in the theme accent (#0066cc in the light JupyterLab theme)
+    accent = np.abs(rgb - np.array([0, 102, 204])).max(axis=-1) <= 30
+    line_cols = np.nonzero(accent)[1]
+    assert line_cols.size, "no profile line drawn"
+    assert abs(np.median(line_cols) / (rgb.shape[1] / 16) - 3.5) < 0.1, np.median(line_cols) / (rgb.shape[1] / 16)
+    endpoints = [accent[int((row + 0.5) * rgb.shape[0] / 16), int(3.5 * rgb.shape[1] / 16)] for row in (3, 12)]
+    assert endpoints == [True, True], endpoints
     # JupyterLab's debugger panel reports "No active debugger session" on its own
     assert [error for error in page.errors if "debugger session" not in error] == [], page.errors
+
+
+def test_scan_roi_click_moves_the_region_with_one_kernel_reduction(jupyter, open_page, hardware_adapter, browser_out):
+    notebook = "show4dstem_pixels.ipynb"
+    page = jupyter.open(open_page, notebook, "pixels_click", webgpu=True, ready=DP, out=browser_out)
+    hardware_adapter(page.adapter())
+    page.locator(VI).first.scroll_into_view_if_needed()
+    # every scan-region reduction is counted with the region it reduced
+    jupyter.run_in_kernel(notebook, "_reductions = []\n_reduce = viewer._compute_vi_roi_dp\n"
+                                     "def _counted_reduce():\n    _reductions.append([viewer.vi_roi_center_row, viewer.vi_roi_center_col])\n    _reduce()\n"
+                                     "viewer._compute_vi_roi_dp = _counted_reduce\n"
+                                     "viewer.vi_roi_mode = 'circle'; viewer.vi_roi_radius = 2.0; viewer.vi_roi_center = [3.0, 3.0]")
+    page.wait_for_timeout(2000)
+    jupyter.run_in_kernel(notebook, "_reductions.clear()")
+    # a click outside the region moves its center there
+    page.mouse.click(*pixel_center(page, VI, 11, 12))
+    page.wait_for_timeout(3000)
+    reductions = json.loads(jupyter.run_in_kernel(notebook, "import json; print(json.dumps(_reductions))"))
+    # one reduction, of the new region: never a half-moved one (new row with the old column)
+    assert reductions == [[11.0, 12.0]], reductions
