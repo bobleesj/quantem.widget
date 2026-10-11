@@ -302,6 +302,10 @@ def test_static_preview_matches_a_show2d_gallery_pixel_for_pixel():
         save_state=False,
     )
     np.testing.assert_array_equal(_decode_png(widget._static_png_b64(max_px=220)), _decode_png(reference._static_png_b64(max_px=220)))
+    # the gap is one trait, the one the browser draws: a later change reaches the preview too
+    widget.inter_panel_gap_px = reference.inter_panel_gap_px = 9
+    np.testing.assert_array_equal(_decode_png(widget._static_png_b64(max_px=220)), _decode_png(reference._static_png_b64(max_px=220)))
+    assert widget.state_dict()["inter_panel_gap_px"] == 9 and "panel_gap" not in widget.state_dict()
     widget.free()
 
 

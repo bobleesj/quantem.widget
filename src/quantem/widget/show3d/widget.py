@@ -296,7 +296,6 @@ class Show3D(
     show_zoom_indicator = traitlets.Bool(False).tag(sync=True)
     show_panel_titles = traitlets.Bool(True).tag(sync=True)
     inter_panel_gap_px = traitlets.Int(0).tag(sync=True)
-    panel_gap = traitlets.Int(0).tag(sync=True)
 
     playing = traitlets.Bool(False).tag(sync=True)
     reverse = traitlets.Bool(False).tag(sync=True)
@@ -771,7 +770,6 @@ class Show3D(
             notebook_preview_quality=notebook_preview_quality,
             notebook_preview_max_px=notebook_preview_max_px,
         )
-        gap = _nonnegative_int(panel_gap, name="panel_gap")
         super().__init__(
             show_title=bool(ui["show_title"]),
             show_controls=bool(ui["show_controls"]),
@@ -781,8 +779,7 @@ class Show3D(
             show_resize_handles=bool(ui["show_resize_handles"]),
             show_zoom_indicator=bool(ui["show_zoom_indicator"]),
             scale_bar_visible=bool(ui["show_scale_bar"]),
-            inter_panel_gap_px=gap,
-            panel_gap=gap,
+            inter_panel_gap_px=_nonnegative_int(panel_gap, name="panel_gap"),
         )
         self._static_fallback_mime = self._static_fallback_mime_type()
         # hold_sync batches every trait assignment into one comm message; a
@@ -1204,7 +1201,7 @@ class Show3D(
         # the cross-validators accept a round trip in dict order.
         "percentile_high", "percentile_low", "image_vmin_pct", "image_vmax_pct", "contrast_preset",
         "vmin", "vmax", "link_contrast", "link_panels", "view_state", "vmin_per_panel", "vmax_per_panel",
-        "show_title", "show_stats", "show_controls", "controls_collapsed", "max_cols", "panel_gap",
+        "show_title", "show_stats", "show_controls", "controls_collapsed", "max_cols",
         "inter_panel_gap_px", "show_panel_titles", "show_zoom_indicator", "show_fft", "fft_layout",
         "fft_overlay_position", "fft_overlay_size", "fft_overlay_zoom", "show_kymograph", "fft_window",
         "pixel_size", "pixel_unit", "smooth", "image_rotation", "rotation_scope", "frame_rotations",

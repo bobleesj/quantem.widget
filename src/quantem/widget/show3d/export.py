@@ -125,7 +125,7 @@ class Show3DExport:
             dim_label=self.dim_label,
             display_bin=1,
             max_cols=self.max_cols,
-            panel_gap=self.panel_gap,
+            panel_gap=self.inter_panel_gap_px,
             show_scale_bar=self.scale_bar_visible,
             panel_annotations=list(self.panel_annotations),
             panel_overlays=list(self.panel_overlays),
@@ -314,7 +314,7 @@ class Show3DExport:
         source_w = max(1, int(self.source_panel_width or self.panel_width_px or self.width))
         source_h = max(1, int(self.source_height or self.height))
         scale = gif_utils.animation_output_scale(source_w, source_h, quality, downsample=downsample, max_edge_px=max_edge_px)
-        panel_gap = max(0, int(round(float(self.panel_gap) * scale)))
+        panel_gap = max(0, int(round(float(self.inter_panel_gap_px) * scale)))
         include_scale_bar = bool(self.scale_bar_visible) if show_scale_bar is None else bool(show_scale_bar)
         include_zoom = bool(self.show_zoom_indicator) if show_zoom is None else bool(show_zoom)
         include_panel_titles = bool(self.show_panel_titles) if show_panel_titles is None else bool(show_panel_titles)

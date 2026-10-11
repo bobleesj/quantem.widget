@@ -79,7 +79,7 @@ class Show3DFallback:
             show_panel_titles=self.show_panel_titles,
             panel_title_font_size=11,
             # Show2D draws a 1 px grey inner border by default; Show3D never did.
-            inter_panel_gap_px=int(self.panel_gap),
+            inter_panel_gap_px=self.inter_panel_gap_px,
             inter_panel_gap_color="",
             gallery_outer_border_px=0,
             gallery_outer_border_color="",
