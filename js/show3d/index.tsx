@@ -4328,55 +4328,21 @@ function Show3D() {
   // rather than shrinking - constant denoise strength, but the average is not
   // centered on `idx` near the ends. Even windows are front-biased.
   const averagedFrameForIndex = (idx: number, currentIdx: number, currentFrame: Float32Array | null): Float32Array | null => {
-    const frameSize = width * height;
     const win = normalizedAverageWindow(playRef.current.avgWindow);
     if (win <= 1) return rawFrameForIndex(idx, currentIdx, currentFrame);
-    const frameCount = Math.max(1, nSlices || 1);
-    const indices = temporalAverageFrameIndices(idx, frameCount, win);
-    const start = indices[0], end = indices[indices.length - 1];
-    if (offlineFloatStack && offlineFloatStack.byteLength >= frameCount * frameSize * 4) {
-      const out = new Float32Array(frameSize);
-      let count = 0;
-      for (let j = start; j <= end; j++) {
-        const frame = float32FrameFromDataView(offlineFloatStack, j, frameSize, false);
-        if (!frame || frame.length < frameSize) continue;
-        for (let k = 0; k < frameSize; k++) out[k] += frame[k];
-        count++;
-      }
-      if (count > 0) {
-        const inv = 1 / count;
-        for (let k = 0; k < frameSize; k++) out[k] *= inv;
-        return out;
-      }
-    }
-    if (offlineStack && offlineStack.byteLength >= frameCount * frameSize) {
-      const out = new Float32Array(frameSize);
-      let count = 0;
-      for (let j = start; j <= end; j++) {
-        const frame = getOfflineFrame(j);
-        if (!frame || frame.length < frameSize) continue;
-        for (let k = 0; k < frameSize; k++) out[k] += frame[k];
-        count++;
-      }
-      if (count > 0) {
-        const inv = 1 / count;
-        for (let k = 0; k < frameSize; k++) out[k] *= inv;
-        return out;
-      }
-    }
+    const frameSize = width * height;
     const out = new Float32Array(frameSize);
     let count = 0;
-    for (let j = start; j <= end; j++) {
-      const frame = rawFrameForIndex(j, currentIdx, currentFrame);
+    for (const frameIdx of temporalAverageFrameIndices(idx, Math.max(1, nSlices || 1), win)) {
+      // the embedded stack's frame, or the frame in hand while the stack has not arrived
+      const frame = getOfflineFrame(frameIdx) ?? rawFrameForIndex(frameIdx, currentIdx, currentFrame);
       if (!frame || frame.length < frameSize) continue;
       for (let k = 0; k < frameSize; k++) out[k] += frame[k];
       count++;
     }
     if (count === 0) return rawFrameForIndex(idx, currentIdx, currentFrame);
-    if (count > 1) {
-      const inv = 1 / count;
-      for (let k = 0; k < frameSize; k++) out[k] *= inv;
-    }
+    const inverse = 1 / count;
+    for (let k = 0; k < frameSize; k++) out[k] *= inverse;
     return out;
   };
 
@@ -4388,23 +4354,18 @@ function Show3D() {
     if (win <= 1) return fallback;
     const frameCount = Math.max(1, nSlices || 1);
     const center = Math.max(0, Math.min(frameCount - 1, Math.round(idx)));
-    const half = Math.floor(win / 2);
-    let start = center - half;
-    let end = start + win - 1;
-    if (start < 0) { end = Math.min(frameCount - 1, end - start); start = 0; }
-    if (end >= frameCount) { start = Math.max(0, start - (end - frameCount + 1)); end = frameCount - 1; }
     const size = width * height * 3;
     const out = new Float32Array(size);
     let count = 0;
-    for (let j = start; j <= end; j++) {
-      const frame = j === center ? fallback : getOfflineFrame(j);
+    for (const frameIdx of temporalAverageFrameIndices(center, frameCount, win)) {
+      const frame = frameIdx === center ? fallback : getOfflineFrame(frameIdx);
       if (!frame || frame.length < size) continue;
       for (let k = 0; k < size; k++) out[k] += frame[k];
       count++;
     }
     if (count === 0) return fallback;
-    const inv = 1 / count;
-    for (let k = 0; k < size; k++) out[k] *= inv;
+    const inverse = 1 / count;
+    for (let k = 0; k < size; k++) out[k] *= inverse;
     return out;
   };
 
@@ -9880,11 +9841,19 @@ function Show3D() {
       ? playbackIdxRef.current
       : (Number.isFinite(displaySliceIdx) ? displaySliceIdx : sliceIdx)
   );
-  const playFromCurrentFrame = (direction: 1 | -1 | null = null) => {
+  /** Show frame `idx` everywhere at once (canvas, slider, counter, the synced trait), replacing a pending scrub commit. */
+  const setAllSliceIdx = (idx: number) => {
     if (sliceCommitTimerRef.current !== null) {
       window.clearTimeout(sliceCommitTimerRef.current);
       sliceCommitTimerRef.current = null;
     }
+    playbackIdxRef.current = idx;
+    setDisplaySliceIdx(idx);
+    setPlaybackUiSliceIdx(idx);
+    setLiveSliceIdx(idx);
+    setSliceIdx(idx);
+  };
+  const playFromCurrentFrame = (direction: 1 | -1 | null = null) => {
     const nextReverse = direction === null ? reverse : direction < 0;
     const rangeStart = loop ? Math.max(0, Math.min(loopStart, nSlices - 1)) : 0;
     const rangeEnd = loop ? Math.max(rangeStart, Math.min(effectiveLoopEnd, nSlices - 1)) : nSlices - 1;
@@ -9893,46 +9862,20 @@ function Show3D() {
       if (!nextReverse && start >= rangeEnd) start = rangeStart;
       if (nextReverse && start <= rangeStart) start = rangeEnd;
     }
-    playbackIdxRef.current = start;
-    setDisplaySliceIdx(start);
-    setPlaybackUiSliceIdx(start);
-    setLiveSliceIdx(start);
-    setSliceIdx(start);
+    setAllSliceIdx(start);
     if (direction !== null) setReverse(nextReverse);
     setPlaying(true);
   };
   const pausePlayback = () => {
-    if (sliceCommitTimerRef.current !== null) {
-      window.clearTimeout(sliceCommitTimerRef.current);
-      sliceCommitTimerRef.current = null;
-    }
-    const current = clampSlice(currentPlaybackIndex());
-    playbackIdxRef.current = current;
-    setDisplaySliceIdx(current);
-    setPlaybackUiSliceIdx(current);
-    setLiveSliceIdx(current);
-    setSliceIdx(current);
+    setAllSliceIdx(clampSlice(currentPlaybackIndex()));
     setPlaying(false);
   };
   const stopPlayback = () => {
-    if (sliceCommitTimerRef.current !== null) {
-      window.clearTimeout(sliceCommitTimerRef.current);
-      sliceCommitTimerRef.current = null;
-    }
-    const home = loop ? Math.max(0, Math.min(loopStart, nSlices - 1)) : 0;
-    playbackIdxRef.current = home;
-    setDisplaySliceIdx(home);
-    setPlaybackUiSliceIdx(home);
-    setLiveSliceIdx(home);
-    setSliceIdx(home);
+    setAllSliceIdx(loop ? Math.max(0, Math.min(loopStart, nSlices - 1)) : 0);
     setPlaying(false);
   };
   const playbackPathLength = Array.isArray(playbackPath) ? playbackPath.length : 0;
   const playbackStyleSummary = playbackPathLength > 0 ? `Path ${playbackPathLength}` : "Linear";
-  const clampFrameIndex = React.useCallback(
-    (value: number) => Math.max(0, Math.min(Math.max(0, nSlices - 1), Math.round(value))),
-    [nSlices],
-  );
   const makePlaybackStylePath = React.useCallback((style: "power-in" | "power-out" | "ease-in-out") => {
     const start = loop ? Math.max(0, Math.min(loopStart, nSlices - 1)) : 0;
     const loopEndCandidate = loop ? Math.min(effectiveLoopEnd, nSlices - 1) : Math.max(0, nSlices - 1);
@@ -9950,12 +9893,12 @@ function Show3D() {
       if (style === "power-in") eased = t * t;
       else if (style === "power-out") eased = 1 - ((1 - t) * (1 - t));
       else eased = 0.5 - 0.5 * Math.cos(Math.PI * t);
-      path.push(clampFrameIndex(start + eased * span));
+      path.push(clampSlice(start + eased * span));
     }
     if (path[0] !== start) path.unshift(start);
     if (path[path.length - 1] !== end) path.push(end);
     return path;
-  }, [clampFrameIndex, effectiveLoopEnd, loop, loopStart, nSlices]);
+  }, [effectiveLoopEnd, loop, loopStart, nSlices]);
   const applyPlaybackStylePreset = React.useCallback((style: "linear" | "power-in" | "power-out" | "ease-in-out") => {
     if (style === "linear") {
       setPlaybackPath([]);
@@ -10065,13 +10008,7 @@ function Show3D() {
     if (sliceCommitTimerRef.current !== null) {
       window.clearTimeout(sliceCommitTimerRef.current);
     }
-    sliceCommitTimerRef.current = window.setTimeout(() => {
-      sliceCommitTimerRef.current = null;
-      setLiveSliceIdx(next);
-      setDisplaySliceIdx(next);
-      setPlaybackUiSliceIdx(next);
-      setSliceIdx(next);
-    }, delayMs);
+    sliceCommitTimerRef.current = window.setTimeout(() => setAllSliceIdx(next), delayMs);
   };
   const scrubToSlice = (idx: number, scheduleIdleCommit = true) => {
     const next = clampSlice(idx);
@@ -10096,18 +10033,7 @@ function Show3D() {
     if (transformActive || !renderGpuCachedSliceDirect(next)) setDisplaySliceIdx(next);
     if (commitLater) scheduleScrubModelCommit(next);
   };
-  const commitSlice = (idx: number) => {
-    const next = clampSlice(idx);
-    playbackIdxRef.current = next;
-    if (sliceCommitTimerRef.current !== null) {
-      window.clearTimeout(sliceCommitTimerRef.current);
-      sliceCommitTimerRef.current = null;
-    }
-    setLiveSliceIdx(next);
-    setDisplaySliceIdx(next);
-    setPlaybackUiSliceIdx(next);
-    setSliceIdx(next);
-  };
+  const commitSlice = (idx: number) => setAllSliceIdx(clampSlice(idx));
   const handleLoopSliderPointerDownCapture = (e: React.PointerEvent<HTMLSpanElement>) => {
     if (e.button !== 0) return;
     sliderGestureCleanupRef.current?.();
@@ -10256,6 +10182,15 @@ function Show3D() {
     const radius = Math.hypot(event.clientX - (rect.left + rect.width / 2), event.clientY - (rect.top + rect.height / 2));
     return Math.max(0, Math.min(1, radius / (Math.min(rect.width, rect.height) / 2)));
   };
+  /** The Mean, Min, Max and Std readouts of one set of statistics, the values in `color`. */
+  const statsReadouts = (stats: { mean: number; min: number; max: number; std: number }, color: string = themeColors.accent) => (
+    <>
+      <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color }}>{formatNumber(stats.mean)}</Box></Typography>
+      <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color }}>{formatNumber(stats.min)}</Box></Typography>
+      <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color }}>{formatNumber(stats.max)}</Box></Typography>
+      <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color }}>{formatNumber(stats.std)}</Box></Typography>
+    </>
+  );
   const show3dFrequencyRing = frequencyFilterIsActive ? (
     <Box
       className="quantem-frequency-filter-ring"
@@ -11878,19 +11813,13 @@ function Show3D() {
                 {localPanelStats.map((st) => (
                   <Box key={st.panel} sx={{ display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap", maxWidth: "100%" }}>
                     <Typography sx={{ fontSize: 11, color: themeColors.textMuted, minWidth: 80 }}>{panelTitleContent(st.panel)}</Typography>
-                    <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(st.mean)}</Box></Typography>
-                    <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(st.min)}</Box></Typography>
-                    <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(st.max)}</Box></Typography>
-                    <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(st.std)}</Box></Typography>
+                    {statsReadouts(st)}
                   </Box>
                 ))}
               </Box>
             ) : (
               <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap", width: "100%", maxWidth: canvasW, boxSizing: "border-box" }}>
-                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.mean : statsMean)}</Box></Typography>
-                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.min : statsMin)}</Box></Typography>
-                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.max : statsMax)}</Box></Typography>
-                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(localStats ? localStats.std : statsStd)}</Box></Typography>
+                {statsReadouts(localStats ?? { mean: statsMean, min: statsMin, max: statsMax, std: statsStd })}
               </Box>
             )
           )}
@@ -12421,10 +12350,7 @@ function Show3D() {
                   return (
                     <Box key={i} sx={{ px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap", border: isSelected ? `1px solid ${color}` : `1px solid transparent` }}>
                       <Box sx={{ width: 8, height: 8, bgcolor: color, borderRadius: "50%", flexShrink: 0 }} />
-                      <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color }}>{formatNumber(stats.mean)}</Box></Typography>
-                      <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color }}>{formatNumber(stats.min)}</Box></Typography>
-                      <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color }}>{formatNumber(stats.max)}</Box></Typography>
-                      <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color }}>{formatNumber(stats.std)}</Box></Typography>
+                      {statsReadouts(stats, color)}
                     </Box>
                   );
                 })}
@@ -12595,10 +12521,7 @@ function Show3D() {
             {/* FFT Statistics bar */}
             {showStats && (
               <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, flexWrap: "wrap" }}>
-                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(fftStats.mean)}</Box></Typography>
-                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(fftStats.min)}</Box></Typography>
-                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(fftStats.max)}</Box></Typography>
-                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(fftStats.std)}</Box></Typography>
+                {statsReadouts(fftStats)}
               </Box>
             )}
             {fftClickInfo && (
@@ -12725,10 +12648,7 @@ function Show3D() {
             {/* Kymograph Statistics bar */}
             {showStats && (
               <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, flexWrap: "wrap" }}>
-                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Mean <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(kymoStats.mean)}</Box></Typography>
-                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Min <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(kymoStats.min)}</Box></Typography>
-                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Max <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(kymoStats.max)}</Box></Typography>
-                <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Std <Box component="span" sx={{ color: themeColors.accent }}>{formatNumber(kymoStats.std)}</Box></Typography>
+                {statsReadouts(kymoStats)}
                 {kymoClickInfo && (
                   <>
                     <Box sx={{ borderLeft: `1px solid ${themeColors.border}`, height: 14 }} />
