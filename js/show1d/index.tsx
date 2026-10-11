@@ -2540,7 +2540,7 @@ function Show1DWidget() {
   const [, setHandoffRequest] = useModelState<string>("handoff_request");
   const [handoffStatus] = useModelState<string>("handoff_status");
   const [handoffEnabled] = useModelState<boolean>("handoff_enabled");
-  const [preparedViewWidget] = useModelState<unknown>("prepared_view_widget");
+  const [preparedViewWidget] = useModelState<string | null>("prepared_view_widget");
   const [transientSnapshotGroupIdx, setTransientSnapshotGroupIdx] = React.useState<number | null>(null);
   const resetBaselineRef = React.useRef<Map<string, unknown> | null>(null);
   const [resetBaselineReady, setResetBaselineReady] = React.useState(false);
@@ -5348,7 +5348,7 @@ function Show1DWidget() {
           </Stack>
         )}
       </Box>
-      {handoffEnabled && preparedViewWidget != null && (
+      {handoffEnabled && preparedViewWidget && (
         <EmbeddedWidgetView
           hostModel={model}
           widgetModel={preparedViewWidget}
