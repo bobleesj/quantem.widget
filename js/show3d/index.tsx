@@ -5049,6 +5049,7 @@ function Show3D() {
     return () => {
       cancelled = true;
       for (let idx = 0; idx < frameCount; idx++) engine.releaseSlot(idx);
+      engine.releaseSlot(averageScratchSlot);
       gpuFrameCacheUploadedRef.current.clear();
     };
   // The embedded stack identity and geometry define GPU residency. Display

@@ -3,6 +3,13 @@
 import { act } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+// jsdom has no WebGPU, so the colormap engine is null (the canvas path) unless a test supplies one.
+const gpuEngine = vi.hoisted(() => ({ current: null as unknown }));
+vi.mock("../display/colormaps", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../display/colormaps")>(),
+  createGPUColormapEngine: async () => gpuEngine.current,
+}));
+
 const { default: { render: renderShow3D } } = await import("./index");
 
 const SIZE = 16;
@@ -95,6 +102,7 @@ beforeEach(() => {
   document.body.append(el);
 });
 afterEach(async () => {
+  gpuEngine.current = null;
   act(() => cleanup?.());
   cleanup = undefined;
   await settle();
@@ -218,4 +226,31 @@ it("resizes a ROI by the distance the pointer moved from the press, not to the p
   await settle();
   const radii = model.written("roi_list").map((list) => (list as { radius: number }[])[0].radius);
   expect(radii).toEqual([40, 43]);
+});
+
+it("releases every GPU slot of a replaced stack, the moving-average slot included", async () => {
+  // A recording engine: the resident frames and the moving average fill slots, a new stack must free them.
+  const filled = new Set<number>();
+  const released = new Set<number>();
+  gpuEngine.current = new Proxy({
+    uploadData: (slot: number) => { filled.add(slot); },
+    averageResidentSlotsInto: (slot: number) => { filled.add(slot); return true; },
+    releaseSlot: (slot: number) => { released.add(slot); },
+    waitForSubmittedWork: async () => {},
+  } as Record<string, unknown>, {
+    // every other method is a no-op; "then" stays undefined so the engine is not taken for a promise
+    get: (target, prop: string) => prop === "then" ? undefined : target[prop] ?? (() => undefined),
+  });
+  const model = new Model({ avg_window: 2 });
+  await mount(model);
+  // the upload yields to the browser between frames
+  for (let i = 0; i < 4; i++) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+    await settle();
+  }
+  expect([...filled].sort()).toEqual([0, 1, 2, 3, FRAMES]);
+  const stack = Float32Array.from({ length: FRAMES * SIZE * SIZE }, (_, i) => Math.cos(i / 5));
+  act(() => model.set("_offline_float_stack", new DataView(stack.buffer)));
+  await settle();
+  expect([...released].sort()).toEqual([...filled].sort());
 });
