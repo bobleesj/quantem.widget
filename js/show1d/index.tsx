@@ -27,7 +27,7 @@ import { downloadBlob, extractBytes, extractFloat32, formatNumber, preserveResto
 import { COLORMAPS, COLORMAP_NAMES } from "../display/colormaps";
 import { histogramBins } from "../display/cpuColormap";
 import { findDataRange, percentileClip } from "../display/stats";
-import { applyHannWindow2D, autoEnhanceFFT, computeMagnitude, fft2dAsync, fftshift, getDisplayFFT, nextPow2, DisplayFFT } from "../display/fft";
+import { applyHannWindow2D, autoEnhanceFFT, getDisplayFFT, nextPow2, shiftedMagnitude } from "../display/fft";
 import { formatScaleLabel, roundToNiceValue } from "../figure";
 import { useTheme } from "../theme";
 import { EmbeddedWidgetView } from "./embeddedWidget";
@@ -96,7 +96,6 @@ type SnapshotFftCacheEntry = {
   data: Float32Array;
   width: number;
   height: number;
-  backend: string;
 };
 
 type SnapshotFftCacheRef = React.MutableRefObject<Map<string, SnapshotFftCacheEntry>>;
@@ -307,8 +306,6 @@ const FFT_DISPLAY_RANGE: [number, number] = [0, 1];
 // shared array keeps its props equal across renders, so a hover elsewhere in
 // the widget does not redraw every panel.
 const UNZOOMED_VIEW_CENTER: number[] = [];
-let snapshotFftWebGpuUnavailable = false;
-let snapshotFftWebGpuInitPromise: Promise<DisplayFFT | null> | null = null;
 const typography = {
   label: { fontSize: 11 },
   value: { fontSize: 10, fontVariantNumeric: "tabular-nums" as const },
@@ -859,7 +856,7 @@ function resolveSnapshotDisplayRange(data: Float32Array, presetValue: string, cu
 }
 
 function blankSnapshotFft(): SnapshotFftCacheEntry {
-  return { data: new Float32Array(0), width: 0, height: 0, backend: "empty" };
+  return { data: new Float32Array(0), width: 0, height: 0 };
 }
 
 function normaliseFftDisplay(data: Float32Array, width: number, height: number): Float32Array {
@@ -878,36 +875,14 @@ function normaliseFftDisplay(data: Float32Array, width: number, height: number):
   return out;
 }
 
-async function getSnapshotFftWebGpu(
-  gpuFftRef: React.MutableRefObject<DisplayFFT | null>,
-): Promise<DisplayFFT | null> {
-  if (gpuFftRef.current) return gpuFftRef.current;
-  if (snapshotFftWebGpuUnavailable) return null;
-  if (!snapshotFftWebGpuInitPromise) {
-    snapshotFftWebGpuInitPromise = getDisplayFFT()
-      .then((fft) => {
-        if (!fft) snapshotFftWebGpuUnavailable = true;
-        return fft;
-      })
-      .catch(() => {
-        snapshotFftWebGpuUnavailable = true;
-        return null;
-      })
-      .finally(() => {
-        snapshotFftWebGpuInitPromise = null;
-      });
-  }
-  const fft = await snapshotFftWebGpuInitPromise;
-  gpuFftRef.current = fft;
-  return fft;
-}
-
+// The page's display FFT: WebGPU on a hardware adapter, the scalar reference
+// otherwise. It is asked for per transform, so a lost device moves every Show1D
+// to the reference on its next FFT instead of failing on a dead pipeline.
 async function computeSnapshotFft(
   image: Float32Array,
   width: number,
   height: number,
   useWindow: boolean,
-  gpuFftRef: React.MutableRefObject<DisplayFFT | null>,
 ): Promise<SnapshotFftCacheEntry> {
   if (!image.length || width <= 0 || height <= 0) return blankSnapshotFft();
   const fftW = nextPow2(width);
@@ -918,32 +893,12 @@ async function computeSnapshotFft(
   for (let row = 0; row < height; row += 1) {
     real.set(source.subarray(row * width, row * width + width), row * fftW);
   }
-  const imag = new Float32Array(real.length);
-  if (!snapshotFftWebGpuUnavailable) {
-    try {
-      const fft = await getSnapshotFftWebGpu(gpuFftRef);
-      if (fft) {
-        const result = await fft.fft2D(real, imag, fftW, fftH, false);
-        fftshift(result.real, fftW, fftH);
-        fftshift(result.imag, fftW, fftH);
-        return {
-          data: normaliseFftDisplay(computeMagnitude(result.real, result.imag), fftW, fftH),
-          width: fftW,
-          height: fftH,
-          backend: "webgpu",
-        };
-      }
-    } catch {
-      gpuFftRef.current = null;
-      snapshotFftWebGpuUnavailable = true;
-    }
-  }
-  const result = await fft2dAsync(real, imag, fftW, fftH, false);
+  const fft = await getDisplayFFT();
+  const result = await fft.fft2D(real, new Float32Array(real.length), fftW, fftH, false);
   return {
-    data: normaliseFftDisplay(result.magnitude, fftW, fftH),
+    data: normaliseFftDisplay(shiftedMagnitude(result.real, result.imag, fftW, fftH), fftW, fftH),
     width: fftW,
     height: fftH,
-    backend: "cpu",
   };
 }
 
@@ -965,7 +920,6 @@ function computeSnapshotFftCached(
   useWindow: boolean,
   cacheRef: SnapshotFftCacheRef,
   pendingRef: SnapshotFftPendingRef,
-  gpuFftRef: React.MutableRefObject<DisplayFFT | null>,
   generationRef: SnapshotFftGenerationRef,
   generation: number,
 ): Promise<SnapshotFftCacheEntry> {
@@ -973,7 +927,7 @@ function computeSnapshotFftCached(
   if (cached) return Promise.resolve(cached);
   const pending = pendingRef.current.get(cacheKey);
   if (pending) return pending;
-  const promise = computeSnapshotFft(image, width, height, useWindow, gpuFftRef)
+  const promise = computeSnapshotFft(image, width, height, useWindow)
     .then((entry) => {
       if (generationRef.current !== generation) return entry;
       cacheRef.current.set(cacheKey, entry);
@@ -1768,7 +1722,6 @@ function SnapshotImageCanvas({
   profileLine,
   fftCacheRef,
   fftPendingRef,
-  fftGpuRef,
   fftCacheVersion,
   fftGenerationRef,
   fftGeneration,
@@ -1807,7 +1760,6 @@ function SnapshotImageCanvas({
   profileLine: ProfilePoint[];
   fftCacheRef: SnapshotFftCacheRef;
   fftPendingRef: SnapshotFftPendingRef;
-  fftGpuRef: React.MutableRefObject<DisplayFFT | null>;
   fftCacheVersion: number;
   fftGenerationRef: SnapshotFftGenerationRef;
   fftGeneration: number;
@@ -1885,7 +1837,6 @@ function SnapshotImageCanvas({
       fftWindow,
       fftCacheRef,
       fftPendingRef,
-      fftGpuRef,
       fftGenerationRef,
       fftGeneration,
     )
@@ -1897,7 +1848,7 @@ function SnapshotImageCanvas({
         if (!canceled) {
           setFftEntryState({
             key: fftCacheKey,
-            entry: { data: new Float32Array(0), width: imageWidth, height: imageHeight, backend: "error" },
+            entry: { data: new Float32Array(0), width: imageWidth, height: imageHeight },
           });
         }
       })
@@ -1909,7 +1860,6 @@ function SnapshotImageCanvas({
     deferFft,
     fftCacheKey,
     fftCacheRef,
-    fftGpuRef,
     fftGeneration,
     fftGenerationRef,
     fftPendingRef,
@@ -1924,7 +1874,6 @@ function SnapshotImageCanvas({
     data: new Float32Array(0),
     width: nextPow2(Math.max(1, imageWidth)),
     height: nextPow2(Math.max(1, imageHeight)),
-    backend: fftLoading ? "..." : "pending",
   };
   const fftReady = Boolean(fftEntry && fftEntry.data.length > 0 && fftEntry.width > 0 && fftEntry.height > 0);
   const fftLabel = "FFT";
@@ -2939,7 +2888,6 @@ function Show1DWidget() {
 
   const snapshotFftCacheRef = React.useRef<Map<string, SnapshotFftCacheEntry>>(new Map());
   const snapshotFftPendingRef = React.useRef<Map<string, Promise<SnapshotFftCacheEntry>>>(new Map());
-  const snapshotFftGpuRef = React.useRef<DisplayFFT | null>(null);
   const snapshotFftGenerationRef = React.useRef(0);
   const snapshotFftGeneration = React.useMemo(() => {
     snapshotFftGenerationRef.current += 1;
@@ -3748,7 +3696,6 @@ function Show1DWidget() {
               Boolean(snapshotFftWindow),
               snapshotFftCacheRef,
               snapshotFftPendingRef,
-              snapshotFftGpuRef,
               snapshotFftGenerationRef,
               generation,
             );
@@ -5469,7 +5416,6 @@ function Show1DWidget() {
                           profileLine={snapshotProfileLine ?? []}
                           fftCacheRef={snapshotFftCacheRef}
                           fftPendingRef={snapshotFftPendingRef}
-                          fftGpuRef={snapshotFftGpuRef}
                           fftCacheVersion={snapshotFftCacheVersion}
                           fftGenerationRef={snapshotFftGenerationRef}
                           fftGeneration={snapshotFftGeneration}
