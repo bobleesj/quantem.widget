@@ -1,4 +1,3 @@
-import * as React from "react";
 import Box from "@mui/material/Box";
 
 /** Two-column key/description table used inside the controls help tooltip. */
