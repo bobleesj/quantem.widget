@@ -298,7 +298,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self._calibration_path = save_root / CALIBRATION_FILENAME
         self.stars_path = str(self._stars_path.resolve())
         self.upsampling_available = ssb.backend == "cuda"
-        self.sample_available = ssb.supports_tilt
+        self.sample_available = True  # CUDA and MPS, the SSB backends, both fit the thick-sample model
         self.pixel_size = scan_sampling_scalar(ssb, axis=-1)  # the horizontal scale bar measures columns
         self.crop_refit_available = bool(self._source_file and pathlib.Path(self._source_file).is_file())
         self.crop_refit_status = (
@@ -582,7 +582,6 @@ class ShowPtycho(anywidget.AnyWidget):
         self._free_drag_context()
         self._ssb = rebuilt
         self._scan_region = region
-        self.sample_available = rebuilt.supports_tilt
         self._adopt_session(initial=False)
         self.crop_refit_status = f"Refit complete: [{region[0]}:{region[1]}, {region[2]}:{region[3]}], {n_trials} trials."
 

@@ -256,6 +256,7 @@ def test_export_writes_the_browser_folder_from_exact_bf_counts(widget, ssb, tmp_
     assert sorted(p.name for p in (out / "source").iterdir()) == [f"bf_columns.{suffix}"]
     cal = json.loads((out / "snapshots" / "cal.json").read_text())
     assert cal["kind"] == "showptycho_webgpu_folder" and cal["source_file"] == "redacted_local_source"
+    assert cal["precision"] == {"real_dtype": "float32", "complex_dtype": "complex64"}  # the browser kernels refuse any other
     assert (cal["num_bf"], cal["g_shape"], cal["phase_shape"], cal["detector_shape"]) == (ssb.num_bf, [ssb.num_bf, SCAN, SCAN], [SCAN, SCAN], [DET, DET])
     assert cal["aberrations"] == {"C10": 3.0, "C12": 1.0, "phi12": pytest.approx(0.2), "phi12_deg": pytest.approx(math.degrees(0.2))}
     assert (cal["rotation_angle_deg"], cal["scan_sampling_A"], cal["voltage_kV"], cal["gpu_memory_gb"]) == (10.0, 0.5, 300.0, 4.5)

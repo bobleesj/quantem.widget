@@ -72,7 +72,8 @@ def write_showptycho_folder(widget, path: str | pathlib.Path | None, title: str 
         "scan_region": {"row_start": row_start, "row_stop": row_stop, "col_start": col_start, "col_stop": col_stop,
                         "shape": [row_stop - row_start, col_stop - col_start], "source_shape": list(widget._source_scan_shape)},
         "backend_reference": "quantem.gpu SSBProtocol.reconstruct_with_loss",
-        "precision": {"real_dtype": state.precision.real_dtype, "complex_dtype": state.precision.complex_dtype},
+        # the storage the browser SSB kernels compute in; they refuse a calibration that names another
+        "precision": {"real_dtype": "float32", "complex_dtype": "complex64"},
         "bf_radius_px": state.brightfield.radius_px,
         "num_bf": state.num_bf,
         "g_shape": [state.num_bf, rows, cols],
