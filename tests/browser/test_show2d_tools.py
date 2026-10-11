@@ -1,8 +1,11 @@
 """Show2D tools driven like a user, on exported pages with WebGPU on.
 
 An unlinked gallery histogram is computed once per panel frame, not on every
-hover.
+hover. A gallery FFT of a panel above 2048 px says it is binned and measures
+its lattice band at the binned sampling.
 """
+
+import re
 
 import numpy as np
 import pytest
@@ -55,4 +58,27 @@ def test_unlinked_gallery_hover_reuses_each_panel_histogram(serve, open_page, ha
         logged = (np.sign(panel) * np.log1p(np.abs(panel).astype(np.float64))).astype(np.float32)
         expected.append([f"{float(logged.min()):.1f}", f"{float(logged.max()):.1f}"])
     assert page.evaluate(HISTOGRAM_LABELS) == expected
+    assert page.errors == [], page.errors
+
+
+def test_gallery_fft_of_a_binned_panel_says_so_and_measures_at_the_binned_sampling(serve, open_page, hardware_adapter, browser_out):
+    from quantem.widget import Show2D
+
+    rows, cols = np.indices((4096, 4096))
+    # A 6 px lattice at 0.25 A/px: a 1.5 A period, inside the 1-6 A band the
+    # FFT metrics count peaks in. On the 2x binned FFT (0.5 A/px) the band is
+    # only right if the metrics use the binned sampling.
+    lattice = (np.cos(2 * np.pi * cols / 6.0) + np.cos(2 * np.pi * rows / 6.0)).astype(np.float32)
+    Show2D([lattice, lattice], sampling=0.25, units="Å", show_fft=True).export_html(
+        browser_out / "show2d_fft_binned.html", encoding="uint8", max_mb=None)
+    page = open_export("show2d_fft_binned.html", serve, open_page, hardware_adapter, browser_out,
+                       '.quantem-fft-quality-label')
+    page.wait_for_timeout(3_000)
+    page.screenshot(path=str(browser_out / "show2d_fft_binned.png"))
+    labels = page.locator(".quantem-fft-quality-label").all_inner_texts()
+    peaks = [int(re.search(r"peaks (\d+)", label).group(1)) for label in labels]
+    # +-g along rows and columns: four reflections in the band.
+    assert peaks == [4, 4], labels
+    binning = page.locator(".quantem-fft-binning-label")
+    assert binning.all_inner_texts() == ["FFT preview, binned 2x"] * 2
     assert page.errors == [], page.errors

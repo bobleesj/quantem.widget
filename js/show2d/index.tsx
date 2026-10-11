@@ -2833,6 +2833,12 @@ function Show2D() {
 
   // ROI FFT active: both ROI and FFT on, with a selected ROI
   const roiFftActive = effectiveShowFft && roiActive && roiSelectedIdx >= 0 && roiSelectedIdx < (roiList?.length ?? 0);
+  // A gallery FFT of a panel larger than the overview limit runs on a
+  // mean-binned copy, so its metrics take the binned sampling and its tile
+  // announces the binning. ROI FFTs stay at native resolution.
+  const galleryFftBinning = roiFftActive
+    ? 1
+    : Math.max(1, Math.ceil(Math.max(width, height) / (isPaged ? PAGED_GALLERY_FFT_OVERVIEW_MAX_DIM : GALLERY_FFT_OVERVIEW_MAX_DIM)));
 
   // Stable key for ROI geometry: only changes when the selected ROI's geometry changes,
   // not when other ROIs move or roiList gets a new reference from unrelated edits.
@@ -5166,14 +5172,7 @@ function Show2D() {
         galleryFftPipelineRef.current = new Array(nImages).fill(null);
       }
 
-      const useRoiCrop = roiFftActive && roiList && roiSelectedIdx >= 0 && roiSelectedIdx < roiList.length;
-      const roi = useRoiCrop ? roiList[roiSelectedIdx] : null;
-      const overviewMaxDim = isPaged
-        ? PAGED_GALLERY_FFT_OVERVIEW_MAX_DIM
-        : GALLERY_FFT_OVERVIEW_MAX_DIM;
-      const overviewDownsample = roi
-        ? 1
-        : Math.max(1, Math.ceil(Math.max(width, height) / overviewMaxDim));
+      const roi = roiFftActive ? roiList[roiSelectedIdx] : null;
       const fftPanelIndices = visibleImageIndices;
       const visibleFftSet = new Set(fftPanelIndices);
       for (let idx = 0; idx < nImages; idx++) {
@@ -5196,7 +5195,7 @@ function Show2D() {
           height,
           roiKey: roiFftKey,
           fftWindow,
-          overviewDownsample,
+          overviewDownsample: galleryFftBinning,
         });
       }
       galleryFftTargetKeysRef.current = targetKeys;
@@ -5257,8 +5256,8 @@ function Show2D() {
             inputW = padW; inputH = padH;
           }
         } else {
-          if (overviewDownsample > 1) {
-            const down = meanDownsample2D(inputData, inputW, inputH, overviewDownsample);
+          if (galleryFftBinning > 1) {
+            const down = meanDownsample2D(inputData, inputW, inputH, galleryFftBinning);
             inputData = down.data;
             inputW = down.width;
             inputH = down.height;
@@ -5389,7 +5388,7 @@ function Show2D() {
       cancelled = true;
       if (serial === galleryFftComputeSerialRef.current) finishCurrentCompute();
     };
-  }, [effectiveShowFft, isGallery, nImages, width, height, dataVersion, roiFftKey, fftWindow, visibleImageIndices]);
+  }, [effectiveShowFft, isGallery, nImages, width, height, dataVersion, roiFftKey, fftWindow, visibleImageIndices, galleryFftBinning]);
 
   // Gallery FFT data effect: normalize + colormap → cached offscreen canvases
   // (does NOT depend on gallery zoom/pan states)
@@ -5547,12 +5546,12 @@ function Show2D() {
       const mag = fftMagCacheGalleryRef.current[idx];
       if (!mag) continue;
       next[idx] = computeFftQualityMetrics(mag, fftW, fftH, {
-        sampling: pixelSizeForPanel(idx),
+        sampling: pixelSizeForPanel(idx) * galleryFftBinning,
         unit: pixelUnit,
       });
     }
     setGalleryFftQuality(next);
-  }, [effectiveShowFft, isGallery, fftMetricsEnabled, galleryFftMagVersion, nImages, width, height, pixelSizeForPanel, pixelUnit, visibleImageIndices]);
+  }, [effectiveShowFft, isGallery, fftMetricsEnabled, galleryFftMagVersion, nImages, width, height, pixelSizeForPanel, pixelUnit, visibleImageIndices, galleryFftBinning]);
 
   // Gallery FFT draw effect: cheap drawImage from cached offscreens (zoom/pan changes)
   React.useLayoutEffect(() => {
@@ -7337,6 +7336,25 @@ function Show2D() {
   const statsIdx = isGallery ? (hoverStatsIdx ?? selectedIdx) : 0;
   const currentFrameStats = localPanelFrameStats.get(statsIdx);
   const svgExportAvailable = canvasW > 0 && canvasH > 0 && visibleImageIndices.length > 0;
+  const fftTileBadgeSx = {
+    px: 0.5,
+    py: 0.15,
+    minWidth: 0,
+    maxWidth: "100%",
+    boxSizing: "border-box",
+    color: "rgba(255,255,255,0.96)",
+    bgcolor: "rgba(0,0,0,0.58)",
+    borderRadius: "3px",
+    fontFamily: SYSTEM_FONT,
+    fontSize: Math.max(9, Math.min(12, panelTitleFontSize || 11)),
+    fontWeight: 700,
+    lineHeight: 1.2,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    textShadow: "1px 1px 0 rgba(0,0,0,0.9), 0 0 3px rgba(0,0,0,0.85)",
+    alignSelf: "flex-start",
+  } as const;
   const isDraggingEditableDecoration = isDraggingOverlay || isDraggingAnnotation;
 
   // Calibrated cursor position - unit is whatever the user passed via sampling/units.
@@ -8887,7 +8905,7 @@ function Show2D() {
                       >
                         {formatZoomLabel(getGalleryFftState(i).zoom)}
                       </Box>
-                      {(showPanelTitles !== false || (fftMetricsEnabled && galleryFftQuality[i])) && (
+                      {(showPanelTitles !== false || (fftMetricsEnabled && galleryFftQuality[i]) || galleryFftBinning > 1) && (
                         <Box
                           className="quantem-fft-panel-label-stack"
                           sx={{
@@ -8935,29 +8953,21 @@ function Show2D() {
                               FFT · {panelTitleContent(i)}
                             </Box>
                           )}
+                          {galleryFftBinning > 1 && (
+                            <Box
+                              className="quantem-fft-binning-label"
+                              data-show2d-fft-binning={galleryFftBinning}
+                              title={`This FFT is computed on a ${galleryFftBinning}x mean-binned copy of the panel. Show the panel on its own (Show2D of that image) for the full-resolution FFT.`}
+                              sx={fftTileBadgeSx}
+                            >
+                              FFT preview, binned {galleryFftBinning}x
+                            </Box>
+                          )}
                           {fftMetricsEnabled && galleryFftQuality[i] && (
                             <Box
                               className="quantem-fft-quality-label"
                               aria-label={`FFT quality for ${panelLabel(i)}: ${formatFftQualityLabel(galleryFftQuality[i])}`}
-                              sx={{
-                                px: 0.5,
-                                py: 0.15,
-                                minWidth: 0,
-                                maxWidth: "100%",
-                                boxSizing: "border-box",
-                                color: "rgba(255,255,255,0.96)",
-                                bgcolor: "rgba(0,0,0,0.58)",
-                                borderRadius: "3px",
-                                fontFamily: SYSTEM_FONT,
-                                fontSize: Math.max(9, Math.min(12, panelTitleFontSize || 11)),
-                                fontWeight: 700,
-                                lineHeight: 1.2,
-                                whiteSpace: "nowrap",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                textShadow: "1px 1px 0 rgba(0,0,0,0.9), 0 0 3px rgba(0,0,0,0.85)",
-                                alignSelf: "flex-start",
-                              }}
+                              sx={fftTileBadgeSx}
                             >
                               {formatFftQualityLabel(galleryFftQuality[i])}
                             </Box>
