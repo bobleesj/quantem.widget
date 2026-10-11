@@ -6,20 +6,6 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
-Changed:
-
-- `free_gpu()` is `quantem.gpu.device.release_cached_memory` when quantem.gpu
-  is installed (`[cuda]`, `[mps]`): it returns what the process handed back to
-  the driver and prints one line per GPU the process has opened with the
-  gigabytes released and in use (and free, on CUDA); rc42 opened every
-  visible GPU. On Apple silicon it now empties MLX's cache as
-  well: with a 1 GiB tensor and a 1 GiB MLX array dropped, rc42 returned
-  1.07 GB and left 1 GiB with the driver, and this returns 2.15 GB. CuPy's
-  current GPU stays what it was; rc42 set it to GPU 0. Without quantem.gpu
-  (`[cpu]`, an Intel Mac) it collects garbage, empties Torch's cache and
-  returns what Torch gave back; it no longer empties a CuPy pool there. It
-  needs the quantem.gpu release after 0.0.1rc16.
-
 ## rc42 - 2026-10-11
 
 Fixed:
@@ -96,6 +82,15 @@ Fixed:
 
 Changed:
 
+- `free_gpu()` is `quantem.gpu.device.release_cached_memory` when quantem.gpu
+  is installed (`[cuda]`, `[mps]`): it returns the gigabytes the process
+  handed back to the driver and prints one line per GPU the process has
+  opened with the gigabytes released and in use (and free, on CUDA). It opens
+  no GPU the process has not used and leaves CuPy's current GPU as it was;
+  rc41 made every visible GPU current. On Apple silicon it also empties
+  MLX's cache: with a 1 GiB tensor and a 1 GiB MLX array dropped it returns
+  2.15 GB. Without quantem.gpu (`[cpu]`, an Intel Mac) it collects garbage,
+  empties Torch's cache and returns what Torch gave back.
 - `[cuda]` and `[mps]` require `quantem.gpu>=0.0.1rc16,<0.0.1rc17`;
   `gpu-ref.txt` names `gpu-v0.0.1rc16`.
 - The default `pixel_unit` and `k_pixel_unit` (Show2D, Show4DSTEM) and the
