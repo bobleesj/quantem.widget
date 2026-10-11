@@ -189,6 +189,12 @@ def test_notebook_preview_format_controls_saved_fallback(format_name, mime, pil_
         assert img.format == pil_format
 
 
+def test_notebook_preview_format_refuses_another_spelling_at_construction():
+    # "jpg" passed the format check and then failed when the notebook was saved and the first preview was encoded
+    with pytest.raises(ValueError, match="notebook_preview_format must be 'jpeg', 'webp', 'png', or None"):
+        Show3D(_mos2_like_stack(3, 64, 64), notebook_preview_format="jpg", save_state=False)
+
+
 def test_show4dstem_notebook_preview_format_none_disables_static_preview():
     """A live-only Show4DSTEM notebook can suppress the static sibling."""
     widget = Show4DSTEM(

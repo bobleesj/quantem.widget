@@ -24,7 +24,6 @@ class StaticFallbackMixin:
 
     _NOTEBOOK_PREVIEW_FORMATS = {
         "jpeg": "image/jpeg",
-        "jpg": "image/jpeg",
         "webp": "image/webp",
         "png": "image/png",
     }
