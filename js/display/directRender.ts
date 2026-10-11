@@ -363,6 +363,9 @@ export class DirectRenderer {
     ...[indices, range, logScale, ctx, opts]: Parameters<GPUColormapEngine["renderPanelSlotsDirectToCanvas"]>
   ): boolean {
     if (!this.engine.lutBuffer || indices.length === 0) return false;
+    // Each panel's placement and range go through its slot's uniform, written before the one
+    // render pass: a slot drawn twice would draw both panels with the last panel's values.
+    if (new Set(indices).size !== indices.length) throw new Error("Supply one distinct resident slot for each panel.");
     const outW = Math.max(1, Math.round(opts.width));
     const outH = Math.max(1, Math.round(opts.height));
     const n = Math.max(1, Math.min(indices.length, Math.round(opts.panelCount)));
