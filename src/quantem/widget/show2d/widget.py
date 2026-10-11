@@ -619,8 +619,6 @@ class Show2D(
     _export_light = traitlets.Bool(False).tag(sync=True)
     _static_fallback_image = traitlets.Unicode("").tag(sync=True)
     _static_fallback_mime = traitlets.Unicode("image/jpeg").tag(sync=True)
-    _offline_min = traitlets.Float(0.0).tag(sync=True)
-    _offline_max = traitlets.Float(1.0).tag(sync=True)
     _offline_mins = traitlets.List(trait=traitlets.Float(), default_value=[]).tag(sync=True)
     _offline_maxs = traitlets.List(trait=traitlets.Float(), default_value=[]).tag(sync=True)
     # Maps-style detail streaming (active whenever the preview is binned, i.e.
@@ -2086,8 +2084,6 @@ class Show2D(
                 maxs.append(high)
             self._offline_mins = mins
             self._offline_maxs = maxs
-            self._offline_min = mins[0]  # back-compat scalars (single-image readers)
-            self._offline_max = maxs[0]
             self.frame_bytes = _b64_safe(codes.tobytes())
         else:
             self.frame_bytes = _b64_safe(data.tobytes())
