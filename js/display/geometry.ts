@@ -96,7 +96,7 @@ function sampleSingleLine(
   const columnDelta = column1 - column0;
   const rowDelta = row1 - row0;
   const length = Math.hypot(columnDelta, rowDelta);
-  const sampleCount = Math.max(2, Math.ceil(length));
+  const sampleCount = Math.max(2, Math.ceil(length) + 1);
   const output = new Float32Array(sampleCount);
   for (let index = 0; index < sampleCount; index++) {
     const fraction = index / (sampleCount - 1);
@@ -182,7 +182,7 @@ export function sampleLineProfileUint8(
   const sampleLine = (startRow: number, startColumn: number, endRow: number, endColumn: number) => {
     const columnDelta = endColumn - startColumn;
     const rowDelta = endRow - startRow;
-    const sampleCount = Math.max(2, Math.ceil(Math.hypot(columnDelta, rowDelta)));
+    const sampleCount = Math.max(2, Math.ceil(Math.hypot(columnDelta, rowDelta)) + 1);
     const output = new Float32Array(sampleCount);
     for (let index = 0; index < sampleCount; index++) {
       const fraction = index / (sampleCount - 1);
@@ -560,7 +560,7 @@ export async function sampleLineProfileBrowser(
   profileWidth = 1,
 ): Promise<Float32Array> {
   if (!(await getHardwareGPUDevice())) return sampleLineProfile(data, width, height, row0, column0, row1, column1, profileWidth);
-  const sampleCount = Math.max(2, Math.ceil(Math.hypot(column1 - column0, row1 - row0)));
+  const sampleCount = Math.max(2, Math.ceil(Math.hypot(column1 - column0, row1 - row0)) + 1);
   const integerWidth = Math.max(1, Math.round(profileWidth));
   const params = new ArrayBuffer(32);
   const u32 = new Uint32Array(params);
@@ -593,7 +593,7 @@ export async function sampleLineProfileUint8Browser(
   if (!(await getHardwareGPUDevice())) return sampleLineProfileUint8(data, low, high, width, height, row0, column0, row1, column1, profileWidth);
   if (data.length < width * height) throw new Error("Quantized line-profile image is shorter than width * height");
   const decoding = uint8Decoding(low, high);
-  const sampleCount = Math.max(2, Math.ceil(Math.hypot(column1 - column0, row1 - row0)));
+  const sampleCount = Math.max(2, Math.ceil(Math.hypot(column1 - column0, row1 - row0)) + 1);
   const params = new ArrayBuffer(48);
   const u32 = new Uint32Array(params);
   const f32 = new Float32Array(params);

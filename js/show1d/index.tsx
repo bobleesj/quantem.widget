@@ -26,6 +26,7 @@ import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { downloadBlob, extractBytes, extractFloat32, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";
 import { COLORMAPS, COLORMAP_NAMES } from "../display/colormaps";
 import { histogramBins } from "../display/cpuColormap";
+import { sampleLineProfile } from "../display/geometry";
 import { findDataRange, percentileClip } from "../display/stats";
 import { applyHannWindow2D, autoEnhanceFFT, getDisplayFFT, nextPow2, shiftedMagnitude } from "../display/fft";
 import { formatScaleLabel, roundToNiceValue } from "../figure";
@@ -682,32 +683,6 @@ function imageViewToApi(
     zoom: Number(cleanZoom.toFixed(4)),
     center: [Number(centerRow.toFixed(3)), Number(centerCol.toFixed(3))],
   };
-}
-
-function sampleLineProfile(data: Float32Array, width: number, height: number, row0: number, col0: number, row1: number, col1: number): Float32Array {
-  const deltaCol = col1 - col0;
-  const deltaRow = row1 - row0;
-  const length = Math.sqrt(deltaCol * deltaCol + deltaRow * deltaRow);
-  const sampleCount = Math.max(2, Math.ceil(length) + 1);
-  const out = new Float32Array(sampleCount);
-  for (let idx = 0; idx < sampleCount; idx += 1) {
-    const fraction = idx / Math.max(1, sampleCount - 1);
-    const col = col0 + fraction * deltaCol;
-    const row = row0 + fraction * deltaRow;
-    const colFloor = Math.floor(col);
-    const rowFloor = Math.floor(row);
-    const colWeight = col - colFloor;
-    const rowWeight = row - rowFloor;
-    const colLeft = clampValue(colFloor, 0, width - 1);
-    const colRight = clampValue(colFloor + 1, 0, width - 1);
-    const rowTop = clampValue(rowFloor, 0, height - 1);
-    const rowBottom = clampValue(rowFloor + 1, 0, height - 1);
-    out[idx] = data[rowTop * width + colLeft] * (1 - colWeight) * (1 - rowWeight)
-      + data[rowTop * width + colRight] * colWeight * (1 - rowWeight)
-      + data[rowBottom * width + colLeft] * (1 - colWeight) * rowWeight
-      + data[rowBottom * width + colRight] * colWeight * rowWeight;
-  }
-  return out;
 }
 
 function isFiniteProfilePoint(point: ProfilePoint | undefined): point is Required<ProfilePoint> {
