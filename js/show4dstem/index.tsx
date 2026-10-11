@@ -2559,8 +2559,8 @@ function Show4DSTEM() {
 
   // VI ROI state (real-space region selection for summed DP) - synced with Python
   const [viRoiMode, setViRoiMode] = useModelState<string>("vi_roi_mode");
-  const [viRoiCenterRow, setViRoiCenterRow] = useModelState<number>("vi_roi_center_row");
-  const [viRoiCenterCol, setViRoiCenterCol] = useModelState<number>("vi_roi_center_col");
+  const [viRoiCenterRow] = useModelState<number>("vi_roi_center_row");
+  const [viRoiCenterCol] = useModelState<number>("vi_roi_center_col");
   const [viRoiRadius, setViRoiRadius] = useModelState<number>("vi_roi_radius");
   const [viRoiWidth, setViRoiWidth] = useModelState<number>("vi_roi_width");
   const [viRoiHeight, setViRoiHeight] = useModelState<number>("vi_roi_height");
@@ -2639,6 +2639,18 @@ function Show4DSTEM() {
   // every existing render effect works unchanged. Detector counts are integers,
   // so the browser masked-sum (u32 accumulate) is bit-exact to the kernel.
   const [offline] = useModelState<boolean>("offline");
+  // The scan region moves in one compound message, so the kernel never reduces
+  // a half-moved region (new row, old column). A live kernel acknowledges each
+  // region through vi_roi_receipt and the local center holds until then; the
+  // offline backend has no receipt and reduces every move on WebGPU.
+  const requestScanRegion = React.useCallback((row: number, col: number) => {
+    if (offline) {
+      model.set("vi_roi_center", [row, col]);
+      model.save_changes();
+    } else {
+      regionRequests.request(row, col);
+    }
+  }, [model, offline, regionRequests]);
   const [offlineBackendLoading, setOfflineBackendLoading] = React.useState(false);
   const [offlineBackendStatus, setOfflineBackendStatus] = React.useState("");
   const [offlineBackendError, setOfflineBackendError] = React.useState("");
@@ -6835,8 +6847,10 @@ function Show4DSTEM() {
         viRoiDragOffsetRef.current = { dRow: 0, dCol: 0 };
         setLocalViRoiCenterRow(maskRow);
         setLocalViRoiCenterCol(maskCol);
-        setViRoiCenterRow(Math.round(Math.max(0, Math.min(shapeRows - 1, maskRow))));
-        setViRoiCenterCol(Math.round(Math.max(0, Math.min(shapeCols - 1, maskCol))));
+        requestScanRegion(
+          Math.round(Math.max(0, Math.min(shapeRows - 1, maskRow))),
+          Math.round(Math.max(0, Math.min(shapeCols - 1, maskCol))),
+        );
       }
       return;
     }
@@ -6942,10 +6956,10 @@ function Show4DSTEM() {
       setLocalViRoiCenterCol(centerCol);
       // Compound trait update: a single observer fires Python-side, so the reduced DP is
       // never computed against split-trait state (old col + new row, or vice versa).
-      const roiRow = Math.round(Math.max(0, Math.min(shapeRows - 1, centerRow)));
-      const roiCol = Math.round(Math.max(0, Math.min(shapeCols - 1, centerCol)));
-      model.set("vi_roi_center", [roiRow, roiCol]);
-      model.save_changes();
+      requestScanRegion(
+        Math.round(Math.max(0, Math.min(shapeRows - 1, centerRow))),
+        Math.round(Math.max(0, Math.min(shapeCols - 1, centerCol))),
+      );
       return;
     }
 
@@ -8609,9 +8623,9 @@ function Show4DSTEM() {
               onPendingMoveFrameChange={setComparePendingMoveFrame}
               onPositionChange={(row, col, commit) => {
                 if (viRoiMode === "off") { updateScanPosition(row, col, commit); return; }
-                setLocalViRoiCenterRow(row); setLocalViRoiCenterCol(col);
-                if (offline) {model.set("vi_roi_center", [row, col]);model.save_changes();}
-                else regionRequests.request(row, col);
+                setLocalViRoiCenterRow(row);
+                setLocalViRoiCenterCol(col);
+                requestScanRegion(row, col);
               }}
               onGpuRendererReady={setCompareGpuRenderer}
             />
