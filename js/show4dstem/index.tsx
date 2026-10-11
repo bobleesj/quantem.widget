@@ -8553,11 +8553,12 @@ function Show4DSTEM() {
               onReorderFrame={moveCompareFrame} onDragFrameChange={setCompareDraggingFrame}
               onPendingMoveFrameChange={setComparePendingMoveFrame}
               onPositionChange={(row, col, commit) => {
-                setLocalKRow(row); setLocalKCol(col);
+                setLocalKRow(row);
+                setLocalKCol(col);
                 // All diffraction panels edit the same live virtual detector.
                 // CompareVirtualGrid already coalesces pointer moves with rAF;
                 // use the primary detector's preview and finalization paths.
-                dpRoiInteractiveRef.current = true;
+                beginDpRoiInteraction();
                 model.set("roi_active", true);
                 queueRoiCenter(row, col);
                 if (commit) {
