@@ -7981,7 +7981,7 @@ function Show2D() {
                     setIsHoveringProfileLine(false);
                   }
                 }}
-                size="small"
+                slotProps={{ input: { "aria-label": "Line profile" } }} size="small"
                 sx={switchStyles.small}
               />
             </Box>
@@ -7999,7 +7999,7 @@ function Show2D() {
                       setLensPos(null);
                     }
                   }}
-                  size="small"
+                  slotProps={{ input: { "aria-label": "Magnifier lens" } }} size="small"
                   sx={switchStyles.small}
                 />
               </Box>
@@ -8009,7 +8009,7 @@ function Show2D() {
               <Switch
                 checked={showFft}
                 onChange={(e) => setShowFft(e.target.checked)}
-                size="small"
+                slotProps={{ input: { "aria-label": "Show FFT" } }} size="small"
                 sx={switchStyles.small}
               />
             </Box>
@@ -9144,7 +9144,7 @@ function Show2D() {
                     {!isGallery && (
                       <Box sx={controlPairSx}>
                         <Typography sx={compactLabelSx}>Colorbar</Typography>
-                        <Switch checked={showColorbar} onChange={() => { setShowColorbar(!showColorbar); }} size="small" sx={switchStyles.small} />
+                        <Switch checked={showColorbar} onChange={() => { setShowColorbar(!showColorbar); }} slotProps={{ input: { "aria-label": "Show colorbar" } }} size="small" sx={switchStyles.small} />
                       </Box>
                     )}
                   </Box>
@@ -9158,13 +9158,13 @@ function Show2D() {
                           setAutoContrast(event.target.checked);
                           if (event.target.checked) setContrastPreset("manual");
                         }}
-                        size="small"
+                        slotProps={{ input: { "aria-label": "Auto contrast" } }} size="small"
                         sx={switchStyles.small}
                       />
                     </Box>
                     <Box sx={controlPairSx}>
                       <Typography sx={compactLabelSx} title="CSS bilinear interpolation. Same data, the browser smooths visually, useful when upscaling small images on a large canvas.">Smooth</Typography>
-                      <Switch checked={smooth} onChange={() => { setSmooth(!smooth); }} size="small" sx={switchStyles.small} />
+                      <Switch checked={smooth} onChange={() => { setSmooth(!smooth); }} slotProps={{ input: { "aria-label": "Smooth image" } }} size="small" sx={switchStyles.small} />
                     </Box>
                     {!showDenoise && filterBannerText && (
                       /* House rule: an active reduction is never invisible,
@@ -9181,23 +9181,23 @@ function Show2D() {
                         <Typography sx={compactLabelSx}>Link</Typography>
                         <Box sx={controlPairSx}>
                           <Typography sx={compactLabelSx} title="Zoom together across panels.">Zoom</Typography>
-                          <Switch checked={linkedZoom} onChange={() => { setLinkedZoom(!linkedZoom); }} size="small" sx={switchStyles.small} />
+                          <Switch checked={linkedZoom} onChange={() => { setLinkedZoom(!linkedZoom); }} slotProps={{ input: { "aria-label": "Link zoom across panels" } }} size="small" sx={switchStyles.small} />
                         </Box>
                         <Box sx={controlPairSx}>
                           <Typography sx={compactLabelSx} title="Pan together (independent of zoom).">Pan</Typography>
-                          <Switch checked={linkPan} onChange={() => { setLinkPan(!linkPan); }} size="small" sx={switchStyles.small} />
+                          <Switch checked={linkPan} onChange={() => { setLinkPan(!linkPan); }} slotProps={{ input: { "aria-label": "Link pan across panels" } }} size="small" sx={switchStyles.small} />
                         </Box>
                         <Box sx={controlPairSx}>
                           <Typography sx={compactLabelSx} title="Share contrast slider across panels.">Contrast</Typography>
-                          <Switch checked={linkedContrast} onChange={() => { setLinkedContrast(!linkedContrast); }} size="small" sx={switchStyles.small} />
+                          <Switch checked={linkedContrast} onChange={() => { setLinkedContrast(!linkedContrast); }} slotProps={{ input: { "aria-label": "Link contrast across panels" } }} size="small" sx={switchStyles.small} />
                         </Box>
                         <Box sx={controlPairSx}>
                           <Typography sx={compactLabelSx} title="Linked: denoise edits apply to every panel. Unlinked: edits apply to the selected panel only.">Denoise</Typography>
-                          <Switch checked={denoiseScopeAll} onChange={() => setDenoiseScope(denoiseScopeAll ? "panel" : "all")} size="small" sx={switchStyles.small} />
+                          <Switch checked={denoiseScopeAll} onChange={() => setDenoiseScope(denoiseScopeAll ? "panel" : "all")} slotProps={{ input: { "aria-label": "Link denoise edits across panels" } }} size="small" sx={switchStyles.small} />
                         </Box>
                         <Box sx={controlPairSx}>
                           <Typography sx={compactLabelSx} title="Linked: frequency-filter edits apply to every panel. Unlinked: edits apply to the selected panel only.">Filter edits</Typography>
-                          <Switch checked={frequencyFilterScopeAll} onChange={() => setFrequencyFilterScope(frequencyFilterScopeAll ? "panel" : "all")} size="small" sx={switchStyles.small} />
+                          <Switch checked={frequencyFilterScopeAll} onChange={() => setFrequencyFilterScope(frequencyFilterScopeAll ? "panel" : "all")} slotProps={{ input: { "aria-label": "Link filter edits across panels" } }} size="small" sx={switchStyles.small} />
                         </Box>
                       </Box>
                     )}
@@ -9440,7 +9440,7 @@ function Show2D() {
                   {roiFftActive && fftCropDims && (
                     <>
                       <Typography sx={{ ...typography.label, fontSize: 10 }}>Win</Typography>
-                      <Switch checked={fftWindow} onChange={(e) => { setFftWindow(e.target.checked); }} size="small" sx={switchStyles.small} />
+                      <Switch checked={fftWindow} onChange={(e) => { setFftWindow(e.target.checked); }} slotProps={{ input: { "aria-label": "FFT Hann window" } }} size="small" sx={switchStyles.small} />
                     </>
                   )}
                   <Typography sx={{ ...typography.label, fontSize: 10 }}>Color</Typography>
@@ -9452,11 +9452,11 @@ function Show2D() {
                 <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                   <Box sx={controlPairSx}>
                     <Typography sx={{ ...typography.label, fontSize: 10 }}>Auto</Typography>
-                    <Switch checked={fftAuto} onChange={(e) => { setFftAuto(e.target.checked); }} size="small" sx={switchStyles.small} />
+                    <Switch checked={fftAuto} onChange={(e) => { setFftAuto(e.target.checked); }} slotProps={{ input: { "aria-label": "FFT auto contrast" } }} size="small" sx={switchStyles.small} />
                   </Box>
                   <Box sx={controlPairSx}>
                     <Typography sx={{ ...typography.label, fontSize: 10 }} title="CSS bilinear interpolation on the FFT canvas.">Smooth</Typography>
-                    <Switch checked={fftSmooth} onChange={(e) => { setFftSmooth(e.target.checked); }} size="small" sx={switchStyles.small} />
+                    <Switch checked={fftSmooth} onChange={(e) => { setFftSmooth(e.target.checked); }} slotProps={{ input: { "aria-label": "Smooth FFT" } }} size="small" sx={switchStyles.small} />
                   </Box>
                   {isGallery && (
                     <>
@@ -9657,18 +9657,18 @@ function Show2D() {
                       {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
                     </Select>
                     <Typography sx={{ ...typography.label, fontSize: 10 }}>Colorbar</Typography>
-                    <Switch checked={fftShowColorbar} onChange={(e) => { setFftShowColorbar(e.target.checked); }} size="small" sx={switchStyles.small} />
+                    <Switch checked={fftShowColorbar} onChange={(e) => { setFftShowColorbar(e.target.checked); }} slotProps={{ input: { "aria-label": "Show FFT colorbar" } }} size="small" sx={switchStyles.small} />
                   </Box>
                   {/* Row 2: Auto + window (ROI FFT) */}
                   <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                     <Box sx={controlPairSx}>
                       <Typography sx={{ ...typography.label, fontSize: 10 }}>Auto</Typography>
-                      <Switch checked={fftAuto} onChange={(e) => { setFftAuto(e.target.checked); }} size="small" sx={switchStyles.small} />
+                      <Switch checked={fftAuto} onChange={(e) => { setFftAuto(e.target.checked); }} slotProps={{ input: { "aria-label": "FFT auto contrast" } }} size="small" sx={switchStyles.small} />
                     </Box>
                     {fftCropDims && (
                       <Box sx={controlPairSx}>
                         <Typography sx={{ ...typography.label, fontSize: 10 }}>Win</Typography>
-                        <Switch checked={fftWindow} onChange={(e) => { setFftWindow(e.target.checked); }} size="small" sx={switchStyles.small} />
+                        <Switch checked={fftWindow} onChange={(e) => { setFftWindow(e.target.checked); }} slotProps={{ input: { "aria-label": "FFT Hann window" } }} size="small" sx={switchStyles.small} />
                       </Box>
                     )}
                   </Box>

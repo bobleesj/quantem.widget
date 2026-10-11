@@ -8,7 +8,8 @@ the filter cuts at the FFT's zoom, and dragging it sets that frequency. A ROI
 edge moves by as much as the pointer moves after the press. Overlay editing
 lets pointers through the More menu's backdrop only, so every other menu still
 closes on an outside click. The SVG export draws what the screen shows. The
-lens shows the image's colors with Log on, signed data included.
+lens shows the image's colors with Log on, signed data included. Every switch
+has an accessible name.
 """
 
 import re
@@ -286,3 +287,22 @@ def test_lens_shows_the_image_colors_of_signed_data_in_log_scale(serve, open_pag
     }""")
     assert np.abs(np.subtract(lens, main)).max() <= 2, (lens, main)
     assert page.errors == [], page.errors
+
+
+def test_every_switch_has_an_accessible_name(serve, open_page, hardware_adapter, browser_out):
+    from quantem.widget import Show2D
+
+    images = np.random.default_rng(6).standard_normal((2, 128, 128)).astype(np.float32)
+    Show2D(images, show_fft=True, link_contrast=False).export_html(browser_out / "show2d_switches.html")
+    Show2D(images[0], show_fft=True).export_html(browser_out / "show2d_switches_single.html")
+    unnamed = {}
+    for name in ("show2d_switches.html", "show2d_switches_single.html"):
+        page = open_export(name, serve, open_page, hardware_adapter, browser_out,
+                           'canvas[data-quantem-scientific-output="show2d-fft-0"]')
+        page.get_by_role("button", name="More tools").click()
+        page.wait_for_timeout(300)
+        switches = page.locator(".MuiSwitch-input")
+        assert switches.count() > 10
+        unnamed[name] = [index for index in range(switches.count()) if not switches.nth(index).get_attribute("aria-label")]
+        assert page.errors == [], page.errors
+    assert unnamed == {"show2d_switches.html": [], "show2d_switches_single.html": []}
