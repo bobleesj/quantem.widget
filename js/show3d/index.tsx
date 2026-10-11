@@ -482,7 +482,6 @@ const upwardMenuProps = {
   sx: { zIndex: 9999 },
 };
 
-const DPR = window.devicePixelRatio || 1;
 const RESIZE_HIT_AREA_PX = 10;
 
 /** 0xRRGGBB integer from "#rgb" or "#rrggbb"; the WebGPU grid shader takes the gap color packed. */
@@ -582,6 +581,8 @@ function Show3D() {
     accentGreen: themeInfo.theme === "dark" ? "#0f0" : "#1a7a1a",
     accentYellow: themeInfo.theme === "dark" ? "#ff0" : "#b08800",
   };
+  // Read on every render, so overlays follow a move to another monitor or a browser zoom.
+  const dpr = window.devicePixelRatio || 1;
   const mobileControlRowSx = isMobileViewport
     ? ({ columnGap: "8px", rowGap: "4px", px: 0.75, py: 0.25 } as const)
     : ({} as const);
@@ -6372,7 +6373,7 @@ function Show3D() {
     if (!overlayRef.current) return;
     const ctx = overlayRef.current.getContext("2d");
     if (!ctx) return;
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, canvasW, canvasH);
     // Match the main image's rotation so ROIs / profile sit on the right pixels.
     // Image draw applies `translate(panX,panY) → scale(zoom) → rotate(around cx)`,
@@ -6564,7 +6565,7 @@ function Show3D() {
         ctx.restore();
       }
     }
-  }, [activePageStart, effectiveRoiActive, roiItems, roiSelectedIdx, isDraggingROI, canvasW, canvasH, displayScale, firstPanelZoom, firstPanelPanX, firstPanelPanY, themeColors, profileActive, profilePoints, profileWidth, profilePanelIdx, nPanels, panelTitles, imageRotation, width, height, panelStates, linkedState, linkPanels, panelGapPx, sourcePanelWidth, sourcePanelHeight, sharedPanelSource, singlePanelPageProfile, totalPanelCount, canvasRepaintSignal, panelOverlays, overlaySelection, visiblePanelIndices]);
+  }, [activePageStart, effectiveRoiActive, roiItems, roiSelectedIdx, isDraggingROI, canvasW, canvasH, displayScale, firstPanelZoom, firstPanelPanX, firstPanelPanY, themeColors, profileActive, profilePoints, profileWidth, profilePanelIdx, nPanels, panelTitles, imageRotation, width, height, panelStates, linkedState, linkPanels, panelGapPx, sourcePanelWidth, sourcePanelHeight, sharedPanelSource, singlePanelPageProfile, totalPanelCount, canvasRepaintSignal, panelOverlays, overlaySelection, visiblePanelIndices, dpr]);
 
   // Lens inset rendering
   React.useEffect(() => {
@@ -6636,7 +6637,7 @@ function Show3D() {
     regionCtx.putImageData(imgData, 0, 0);
 
     ctx.save();
-    ctx.scale(DPR, DPR);
+    ctx.scale(dpr, dpr);
     // Clamp anchor + default position to canvas bounds. Without clamp a small canvas
     // (e.g. multi-panel 100 px tall) puts the inset off-screen (-60 px) because
     // default lensY = canvasH - lensSize - margin - 20 goes negative.
@@ -6663,7 +6664,7 @@ function Show3D() {
     ctx.font = "10px monospace";
     ctx.fillText(`${lensMag}×`, lensX + 4, lensY + lensSize - 4);
     ctx.restore();
-  }, [showLens, lensPos, cmap, logScale, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, dataMin, dataMax, traitVmin, traitVmax, width, height, canvasW, canvasH, themeColors, lensMag, lensDisplaySize, lensAnchor, percentileLow, percentileHigh, frameBytes, sliceIdx, displaySliceIdx, nPanels, canvasRepaintSignal]);
+  }, [showLens, lensPos, cmap, logScale, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, dataMin, dataMax, traitVmin, traitVmax, width, height, canvasW, canvasH, themeColors, lensMag, lensDisplaySize, lensAnchor, percentileLow, percentileHigh, frameBytes, sliceIdx, displaySliceIdx, nPanels, canvasRepaintSignal, dpr]);
 
   // ROI sparkline plot
   React.useEffect(() => {
@@ -6671,13 +6672,13 @@ function Show3D() {
     if (!canvas || !showRoiPlot || !effectiveRoiActive) return;
     const plotW = canvasW;
     const plotH = 76;
-    canvas.width = Math.round(plotW * DPR);
-    canvas.height = Math.round(plotH * DPR);
+    canvas.width = Math.round(plotW * dpr);
+    canvas.height = Math.round(plotH * dpr);
     canvas.style.width = `${plotW}px`;
     canvas.style.height = `${plotH}px`;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, plotW, plotH);
 
     if (!roiPlotData || roiPlotData.byteLength < 4) return;
@@ -6727,7 +6728,7 @@ function Show3D() {
     ctx.textAlign = "left";
     ctx.fillText(formatNumber(max), 2, padY - 2);
     ctx.fillText(formatNumber(min), 2, padY + drawH + 10);
-  }, [roiPlotData, effectiveRoiActive, showRoiPlot, canvasW, themeColors, sliceIdx, displaySliceIdx, playing, canvasRepaintSignal]);
+  }, [roiPlotData, effectiveRoiActive, showRoiPlot, canvasW, themeColors, sliceIdx, displaySliceIdx, playing, canvasRepaintSignal, dpr]);
 
   // Keep sampled profile data current, but do not reopen the profile UI after
   // the user has turned it off. The line stays cached so toggling Profile back
@@ -6747,7 +6748,6 @@ function Show3D() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
     const cssW = canvasW;
     const cssH = profileHeight;
     canvas.width = cssW * dpr;
@@ -6854,7 +6854,7 @@ function Show3D() {
     // Save base rendering + layout for hover overlay
     profileBaseImageRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
     profileLayoutRef.current = { padLeft, plotW, padTop, plotH, gMin, gMax, totalDist, xUnit };
-  }, [profileActive, profileData, profilePoints, pixelSize, pixelUnit, canvasW, themeInfo.theme, themeColors.accent, profileHeight, canvasRepaintSignal]);
+  }, [profileActive, profileData, profilePoints, pixelSize, pixelUnit, canvasW, themeInfo.theme, themeColors.accent, profileHeight, canvasRepaintSignal, dpr]);
 
   // Profile hover handler - draws crosshair + value readout
   const handleProfileMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -6874,7 +6874,6 @@ function Show3D() {
     if (cssX < padLeft || cssX > padLeft + plotW) return;
     const frac = (cssX - padLeft) / plotW;
 
-    const dpr = window.devicePixelRatio || 1;
     ctx.save();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
@@ -6961,12 +6960,12 @@ function Show3D() {
       const cols = panelColsForCount(visibleCount);
       const rows = Math.ceil(visibleCount / cols);
       const gap = visibleCount > 1 ? (panelGapPx) : 0;
-      const cssW = uiRef.current.width / DPR;
-      const cssH = uiRef.current.height / DPR;
+      const cssW = uiRef.current.width / dpr;
+      const cssH = uiRef.current.height / dpr;
       const slotW = (cssW - gap * (cols - 1)) / cols;
       const slotH = (cssH - gap * (rows - 1)) / rows;
       ctx.save();
-      ctx.scale(DPR, DPR);
+      ctx.scale(dpr, dpr);
       for (let slot = 0; slot < visibleCount; slot++) {
         const i = visiblePanelIndices[slot] ?? slot;
         const panelState = stateFor(i);
@@ -7009,13 +7008,13 @@ function Show3D() {
         ({ vmin, vmax } = sliderRange(imageDataRange.min, imageDataRange.max, imageVminPct, imageVmaxPct));
       }
       ctx.save();
-      ctx.scale(DPR, DPR);
+      ctx.scale(dpr, dpr);
       const visibleCount = Math.max(1, visiblePanelCount || 1);
       const cols = panelColsForCount(visibleCount);
       const rows = Math.ceil(visibleCount / cols);
       const gap = visibleCount > 1 ? (panelGapPx) : 0;
-      const cssW = uiRef.current.width / DPR;
-      const cssH = uiRef.current.height / DPR;
+      const cssW = uiRef.current.width / dpr;
+      const cssH = uiRef.current.height / dpr;
       const slotW = (cssW - gap * (cols - 1)) / cols;
       const slotH = (cssH - gap * (rows - 1)) / rows;
       const perPanelColorbar = visibleCount > 1 && !linkContrast && !sharedPanelSource;
@@ -7045,7 +7044,7 @@ function Show3D() {
       }
       ctx.restore();
     }
-  }, [pixelSize, pixelUnit, scaleBarVisible, width, sourcePanelWidth, canvasW, canvasH, displayScale, firstPanelZoom, nPanels, visiblePanelCount, visiblePanelIndices, maxCols, panelStates, linkedState, linkPanels, panelGapPx, showZoomIndicator, panelChromeVisible, showColorbar, cmap, imageDataRange, imageVminPct, imageVmaxPct, logScale, autoContrast, imageHistogramData, autoVmins, autoVmaxs, displaySliceIdx, percentileLow, percentileHigh, dataMin, dataMax, traitVmin, traitVmax, linkContrast, sharedPanelSource, panelDataRanges, vminPerPanel, vmaxPerPanel, canvasRepaintSignal]);
+  }, [pixelSize, pixelUnit, scaleBarVisible, width, sourcePanelWidth, canvasW, canvasH, displayScale, firstPanelZoom, nPanels, visiblePanelCount, visiblePanelIndices, maxCols, panelStates, linkedState, linkPanels, panelGapPx, showZoomIndicator, panelChromeVisible, showColorbar, cmap, imageDataRange, imageVminPct, imageVmaxPct, logScale, autoContrast, imageHistogramData, autoVmins, autoVmaxs, displaySliceIdx, percentileLow, percentileHigh, dataMin, dataMax, traitVmin, traitVmax, linkContrast, sharedPanelSource, panelDataRanges, vminPerPanel, vmaxPerPanel, canvasRepaintSignal, dpr]);
 
   // Compute FFT magnitude (expensive, async - only re-run on data/GPU changes)
   // Supports ROI-scoped FFT: when ROI is active with a selected ROI, compute
@@ -7797,14 +7796,14 @@ function Show3D() {
     if (!overlay || !kymoReady || !kymo) return;
     const ctx = overlay.getContext("2d");
     if (!ctx) return;
-    overlay.width = Math.round(canvasW * DPR);
-    overlay.height = Math.round(canvasH * DPR);
+    overlay.width = Math.round(canvasW * dpr);
+    overlay.height = Math.round(canvasH * dpr);
     ctx.clearRect(0, 0, overlay.width, overlay.height);
 
     // Playhead row marker - tracks the current frame in zoomed/panned space.
     const y = kymoPanY + kymoZoom * (((liveSliceIdx + 0.5) / kymo.nFrames) * canvasH);
     ctx.save();
-    ctx.scale(DPR, DPR);
+    ctx.scale(dpr, dpr);
     ctx.strokeStyle = themeColors.accent;
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -7815,14 +7814,14 @@ function Show3D() {
 
     // Distance scale bar along the bottom edge (distance axis, pixelUnit).
     if (pixelSize > 0) {
-      drawScaleBarHiDPI(overlay, DPR, kymoZoom, pixelSize, pixelUnit || "px", kymo.lineLen);
+      drawScaleBarHiDPI(overlay, dpr, kymoZoom, pixelSize, pixelUnit || "px", kymo.lineLen);
     }
 
     // Time scale bar along the left edge (time axis, dimUnit). Vertical bar +
     // label so the operator can read the temporal extent of the kymograph.
     if (dimSampling > 0 && dimUnit) {
       ctx.save();
-      ctx.scale(DPR, DPR);
+      ctx.scale(dpr, dpr);
       const targetBarPx = 60;
       const barThickness = 5;
       const margin = 12;
@@ -7852,15 +7851,15 @@ function Show3D() {
       const { vmin, vmax } = sliderRange(kymoDataRange.min, kymoDataRange.max, kymoVminPct, kymoVmaxPct);
       const lut = COLORMAPS[kymoColormap] || COLORMAPS.inferno;
       ctx.save();
-      ctx.scale(DPR, DPR);
-      drawColorbar(ctx, overlay.width / DPR, overlay.height / DPR, lut, vmin, vmax, kymoLogScale);
+      ctx.scale(dpr, dpr);
+      drawColorbar(ctx, overlay.width / dpr, overlay.height / dpr, lut, vmin, vmax, kymoLogScale);
       ctx.restore();
     }
 
     // Click crosshair marker - mirror FFT marker, coordinates in zoomed space.
     if (kymoClickInfo) {
       ctx.save();
-      ctx.scale(DPR, DPR);
+      ctx.scale(dpr, dpr);
       const screenX = kymoPanX + kymoZoom * (kymoClickInfo.col / kymo.lineLen * canvasW);
       const screenY = kymoPanY + kymoZoom * (kymoClickInfo.row / kymo.nFrames * canvasH);
       ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
@@ -7881,7 +7880,7 @@ function Show3D() {
     }
   }, [kymoReady, kymoVersion, liveSliceIdx, canvasW, canvasH, themeColors.accent, kymoZoom, kymoPanX, kymoPanY,
       pixelSize, pixelUnit, dimSampling, dimUnit, kymoShowColorbar, kymoDataRange, kymoVminPct, kymoVmaxPct,
-      kymoColormap, kymoLogScale, kymoClickInfo, canvasRepaintSignal]);
+      kymoColormap, kymoLogScale, kymoClickInfo, canvasRepaintSignal, dpr]);
 
   // Render FFT overlay (reciprocal-space scale bar + colorbar)
   React.useEffect(() => {
@@ -7889,8 +7888,8 @@ function Show3D() {
     if (!overlay || !showFft) return;
     const ctx = overlay.getContext("2d");
     if (!ctx) return;
-    overlay.width = Math.round(canvasW * DPR);
-    overlay.height = Math.round(canvasH * DPR);
+    overlay.width = Math.round(canvasW * dpr);
+    overlay.height = Math.round(canvasH * dpr);
     ctx.clearRect(0, 0, overlay.width, overlay.height);
 
     // Use crop dimensions for reciprocal-space calculations
@@ -7902,16 +7901,16 @@ function Show3D() {
       const panelGrid = fftPanelGridRef.current;
       const reciprocalWidth = panelGrid ? panelGrid.panelWidth : fftW;
       const fftPixelSize = 1 / (reciprocalWidth * pixelSize);
-      drawFFTScaleBarHiDPI(overlay, DPR, fftZoom, fftPixelSize, fftW, `${unitSymbol(pixelUnit || "px")}⁻¹`, false);
+      drawFFTScaleBarHiDPI(overlay, dpr, fftZoom, fftPixelSize, fftW, `${unitSymbol(pixelUnit || "px")}⁻¹`, false);
     }
 
     if (fftShowColorbar && fftDataRange.min !== fftDataRange.max) {
       const { vmin, vmax } = sliderRange(fftDataRange.min, fftDataRange.max, fftVminPct, fftVmaxPct);
       const lut = COLORMAPS[fftColormap] || COLORMAPS.inferno;
       ctx.save();
-      ctx.scale(DPR, DPR);
-      const cssW = overlay.width / DPR;
-      const cssH = overlay.height / DPR;
+      ctx.scale(dpr, dpr);
+      const cssW = overlay.width / dpr;
+      const cssH = overlay.height / dpr;
       drawColorbar(ctx, cssW, cssH, lut, vmin, vmax, fftLogScale);
       ctx.restore();
     }
@@ -7919,7 +7918,7 @@ function Show3D() {
     // D-spacing crosshair marker - use crop dims for coordinate mapping
     if (fftClickInfo) {
       ctx.save();
-      ctx.scale(DPR, DPR);
+      ctx.scale(dpr, dpr);
       let screenX = fftPanX + fftZoom * (fftClickInfo.col / fftW * canvasW);
       let screenY = fftPanY + fftZoom * (fftClickInfo.row / fftH * canvasH);
       let centerX = fftPanX + fftZoom * (canvasW / 2);
@@ -7988,8 +7987,8 @@ function Show3D() {
       const padX = 5;
       const labelW = Math.ceil(ctx.measureText(label).width + padX * 2);
       const labelH = 18;
-      const cssW = overlay.width / DPR;
-      const cssH = overlay.height / DPR;
+      const cssW = overlay.width / dpr;
+      const cssH = overlay.height / dpr;
       const labelX = Math.max(2, Math.min(cssW - labelW - 2, screenX + 10));
       const labelY = Math.max(labelH / 2 + 2, Math.min(cssH - labelH / 2 - 2, screenY - 10));
       ctx.fillStyle = "rgba(0, 0, 0, 0.74)";
@@ -8003,7 +8002,7 @@ function Show3D() {
       ctx.fillText(label, labelX + padX, labelY);
       ctx.restore();
     }
-  }, [showFft, fftZoom, fftPanX, fftPanY, canvasW, canvasH, pixelSize, pixelUnit, width, height, fftDataRange, fftVminPct, fftVmaxPct, fftColormap, fftLogScale, fftShowColorbar, fftClickInfo, fftCropDims, getFftSlot, canvasRepaintSignal]);
+  }, [showFft, fftZoom, fftPanX, fftPanY, canvasW, canvasH, pixelSize, pixelUnit, width, height, fftDataRange, fftVminPct, fftVmaxPct, fftColormap, fftLogScale, fftShowColorbar, fftClickInfo, fftCropDims, getFftSlot, canvasRepaintSignal, dpr]);
 
   // -------------------------------------------------------------------------
   // Preview panel - cache colormapped offscreen (only recomputes when ROI
@@ -8138,9 +8137,9 @@ function Show3D() {
     ctx.clearRect(0, 0, overlay.width, overlay.height);
 
     if (previewCropDims && pixelSize > 0) {
-      drawScaleBarHiDPI(overlay, DPR, previewZoom.zoom, pixelSize, pixelUnit, previewCropDims.w);
+      drawScaleBarHiDPI(overlay, dpr, previewZoom.zoom, pixelSize, pixelUnit, previewCropDims.w);
     }
-  }, [previewVisible, previewZoom, previewCropDims, previewCanvasDims, pixelSize, pixelUnit, canvasRepaintSignal]);
+  }, [previewVisible, previewZoom, previewCropDims, previewCanvasDims, pixelSize, pixelUnit, canvasRepaintSignal, dpr]);
 
   // Mouse handlers
   const panelIdxFromXY = (cssX: number, cssY: number): number => {
@@ -11425,9 +11424,9 @@ function Show3D() {
               aria-label={`Slice image ${visibleSliceIdx + 1} of ${nSlices}${title ? `: ${title}` : ""} (${width} by ${height} pixels). Use arrow keys to scrub frames.`}
             />
             <canvas ref={gpuCanvasRef} width={canvasW} height={canvasH} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", imageRendering: smooth ? "auto" : "pixelated", pointerEvents: "none", opacity: gpuDisplayVisible ? 1 : 0 }} aria-hidden="true" />
-            <canvas ref={overlayRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none", display: overlayCanvasVisible ? "block" : "none" }} aria-hidden="true" />
-            <canvas ref={uiRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} aria-hidden="true" />
-            <canvas ref={lensCanvasRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none", display: lensCanvasVisible ? "block" : "none" }} aria-hidden="true" />
+            <canvas ref={overlayRef} width={Math.round(canvasW * dpr)} height={Math.round(canvasH * dpr)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none", display: overlayCanvasVisible ? "block" : "none" }} aria-hidden="true" />
+            <canvas ref={uiRef} width={Math.round(canvasW * dpr)} height={Math.round(canvasH * dpr)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} aria-hidden="true" />
+            <canvas ref={lensCanvasRef} width={Math.round(canvasW * dpr)} height={Math.round(canvasH * dpr)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none", display: lensCanvasVisible ? "block" : "none" }} aria-hidden="true" />
             {showFft && fftLayoutOverlay && (
               <canvas
                 ref={fftInsetLayerRef}
@@ -12558,7 +12557,7 @@ function Show3D() {
               onMouseLeave={handlePreviewMouseUp}
             >
               <canvas ref={previewCanvasRef} width={previewCanvasDims.w} height={previewCanvasDims.h} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", imageRendering: "pixelated" }} role="img" aria-label={`ROI preview crop${previewCropDims ? ` (${previewCropDims.w} by ${previewCropDims.h} pixels)` : ""}`} />
-              <canvas ref={previewOverlayRef} width={Math.round(previewCanvasDims.w * DPR)} height={Math.round(previewCanvasDims.h * DPR)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} aria-hidden="true" />
+              <canvas ref={previewOverlayRef} width={Math.round(previewCanvasDims.w * dpr)} height={Math.round(previewCanvasDims.h * dpr)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} aria-hidden="true" />
               {showResizeControls && (
                 <Box onMouseDown={handleMainResizeStart} title="Resize image" sx={{ position: "absolute", bottom: 0, right: 0, ...resizeGripSx }} />
               )}
@@ -12655,7 +12654,7 @@ function Show3D() {
               onTouchCancel={handleFftTouchEnd}
             >
               <canvas data-quantem-scientific-output="show3d-fft" ref={fftCanvasRef} width={canvasW} height={canvasH} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", imageRendering: smooth ? "auto" : "pixelated", touchAction: "none" }} role="img" aria-label={roiFftActive && fftCropDims ? `FFT power spectrum of ROI crop (${fftCropDims.cropWidth} by ${fftCropDims.cropHeight} pixels)` : "FFT power spectrum of current frame"} />
-              <canvas ref={fftOverlayRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} aria-hidden="true" />
+              <canvas ref={fftOverlayRef} width={Math.round(canvasW * dpr)} height={Math.round(canvasH * dpr)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} aria-hidden="true" />
               {show3dFrequencyRing}
               {showZoomIndicator === true && panelChromeVisible && (() => {
                 const visibleCount = Math.max(1, visiblePanelCount || 1);
@@ -12875,7 +12874,7 @@ function Show3D() {
               onTouchCancel={handleKymoTouchEnd}
             >
               <canvas ref={kymoCanvasRef} width={canvasW} height={canvasH} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", imageRendering: "pixelated", touchAction: "none" }} role="img" aria-label={`Kymograph${singlePanelPageProfile ? ` for ${pageControlLabel}` : ""}: distance along profile line versus frame index`} />
-              <canvas ref={kymoOverlayRef} width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} aria-hidden="true" />
+              <canvas ref={kymoOverlayRef} width={Math.round(canvasW * dpr)} height={Math.round(canvasH * dpr)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} aria-hidden="true" />
             </Box>
             {/* Axis labels - kymograph-specific footer */}
             <Box sx={{ display: "flex", justifyContent: "space-between", mt: 0.5, px: 0.5 }}>
