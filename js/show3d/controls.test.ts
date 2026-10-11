@@ -43,7 +43,7 @@ class Model {
       frequency_filter_cutoffs: [], frequency_filter_centers: [], frequency_filter_widths: [], frequency_filter_scope: "all",
       show_frequency_filter: false, show_fft: false, fft_layout: "bottom", fft_overlay_size: 0.35, fft_overlay_zoom: 1,
       fft_window: true, pixel_size: 0, pixel_unit: "px", scale_bar_visible: true, show_panel_titles: true, size: 0,
-      max_cols: 4, panel_gap: 0, inter_panel_gap_px: 0, n_pages: 1, page_idx: 0, panels_per_page: 0, view_state: {},
+      max_cols: 4, inter_panel_gap_px: 0, n_pages: 1, page_idx: 0, panels_per_page: 0, view_state: {},
       ...overrides,
     };
   }
