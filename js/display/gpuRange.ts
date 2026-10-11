@@ -1058,73 +1058,8 @@ fn histogram(@builtin(global_invocation_id) gid: vec3u) {
   async computeHistogramWithRange(
     idx: number, dmin: number, dmax: number, logScale: boolean = false,
   ): Promise<number[]> {
-    this.ensureHistPipeline();
-    this.ensureHistUint8Pipeline();
-    const slot = this.engine.slots[idx];
-    if (!slot || !this.histPipeline || !this.histUint8Pipeline || !this.histClearPipeline) return new Array(256).fill(0);
-    const histogramPipeline = slot.dataKind === "u8" ? this.histUint8Pipeline : this.histPipeline;
-    const binsBuffer = this.device.createBuffer({
-      size: 256 * 4,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-    });
-    const readBuffer = this.device.createBuffer({
-      size: 256 * 4,
-      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-    });
-    const paramsBuf = this.device.createBuffer({
-      size: 24,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    const params = new ArrayBuffer(24);
-    this.engine.writeColormapParams(params, slot.width, slot.height, dmin, dmax, logScale);
-    this.device.queue.writeBuffer(paramsBuf, 0, params);
-
-    const encoder = this.device.createCommandEncoder();
-    const clearGroup = this.device.createBindGroup({
-      layout: this.histClearPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 2, resource: { buffer: binsBuffer } },
-      ],
-    });
-    const clearPass = encoder.beginComputePass();
-    clearPass.setPipeline(this.histClearPipeline);
-    clearPass.setBindGroup(0, clearGroup);
-    clearPass.dispatchWorkgroups(1);
-    clearPass.end();
-    const histGroup = this.device.createBindGroup({
-      layout: histogramPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: paramsBuf } },
-        { binding: 1, resource: { buffer: slot.dataBuffer } },
-        { binding: 2, resource: { buffer: binsBuffer } },
-      ],
-    });
-    const histPass = encoder.beginComputePass();
-    histPass.setPipeline(histogramPipeline);
-    histPass.setBindGroup(0, histGroup);
-    histPass.dispatchWorkgroups(Math.ceil(slot.width / 16), Math.ceil(slot.height / 16));
-    histPass.end();
-
-    encoder.copyBufferToBuffer(binsBuffer, 0, readBuffer, 0, 256 * 4);
-    this.device.queue.submit([encoder.finish()]);
-
-    await readBuffer.mapAsync(GPUMapMode.READ);
-    const rawBins = new Uint32Array(readBuffer.getMappedRange().slice(0));
-    readBuffer.unmap();
-    binsBuffer.destroy();
-    readBuffer.destroy();
-    paramsBuf.destroy();
-    // Scale like the CPU histogram: the tallest bin is 1.
-    let maxCount = 0;
-    for (let i = 0; i < 256; i++) if (rawBins[i] > maxCount) maxCount = rawBins[i];
-    const result = new Array(256);
-    if (maxCount > 0) {
-      for (let i = 0; i < 256; i++) result[i] = rawBins[i] / maxCount;
-    } else {
-      for (let i = 0; i < 256; i++) result[i] = 0;
-    }
-    return result;
+    const [bins] = await this.computeHistogramBatch([idx], [{ min: dmin, max: dmax }], logScale);
+    return bins ?? new Array(256).fill(0);
   }
 
   /** Release the per-panel scratch buffers; the engine's destroy calls this. */
