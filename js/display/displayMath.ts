@@ -26,6 +26,63 @@ export function displayLog(value: number): number {
   return value >= 0 ? f32(Math.log(f32(1 + value))) : f32(-Math.log(f32(1 - value)));
 }
 
+// Packed LUTs by LUT array: every paint of a colormap reuses one.
+const packedLuts = new WeakMap<Uint8Array, Uint32Array>();
+
+/**
+ * A 256-entry RGB LUT as one RGBA word per entry, so a pixel is one 32-bit
+ * store. The words are built from bytes, so they land in the right byte order
+ * on any platform.
+ */
+export function packedLut(lut: Uint8Array): Uint32Array {
+  const cached = packedLuts.get(lut);
+  if (cached) return cached;
+  const bytes = new Uint8Array(256 * 4);
+  for (let entry = 0; entry < 256; entry++) {
+    bytes[entry * 4] = lut[entry * 3];
+    bytes[entry * 4 + 1] = lut[entry * 3 + 1];
+    bytes[entry * 4 + 2] = lut[entry * 3 + 2];
+    bytes[entry * 4 + 3] = 255;
+  }
+  const packed = new Uint32Array(bytes.buffer);
+  packedLuts.set(lut, packed);
+  return packed;
+}
+
+/**
+ * Colormap `data` into `target`: target pixel k shows source pixel
+ * sourceIndex[k] (identity when sourceIndex is null; a negative index stays
+ * transparent). LUT entry = min(trunc(normalize(v) * 255), 255) in float32,
+ * the WGSL colormap pass. The common window (finite, non-empty float32 span)
+ * runs displayNormalize's own arithmetic inline: this loop touches every
+ * displayed pixel on every contrast tick.
+ */
+export function colormapPixels(
+  target: Uint32Array,
+  data: Float32Array | Uint8Array,
+  sourceIndex: Int32Array | null,
+  range: { vmin: number; vmax: number },
+  logScale: boolean,
+  packedLut: Uint32Array,
+): void {
+  const f32 = Math.fround;
+  const low = f32(range.vmin);
+  const high = f32(range.vmax);
+  const span = f32(high - low);
+  const plainWindow = high > low && Number.isFinite(span);
+  for (let k = 0; k < target.length; k++) {
+    const index = sourceIndex ? sourceIndex[k] : k;
+    if (index < 0) { target[k] = 0; continue; }
+    const raw = data[index];
+    const value = logScale ? displayLog(raw) : raw;
+    let normalized: number;
+    if (!plainWindow) normalized = displayNormalize(value, low, high);
+    else if (Number.isFinite(value)) normalized = Math.min(1, Math.max(0, f32(f32(value - low) / span)));
+    else normalized = value === Infinity ? 1 : 0;
+    target[k] = packedLut[Math.min(Math.trunc(f32(normalized * 255)), 255)];
+  }
+}
+
 /** Apply colormap LUT to float data, writing into an RGBA Uint8ClampedArray. */
 export function applyColormap(
   data: Float32Array,
@@ -34,16 +91,7 @@ export function applyColormap(
   vmin: number,
   vmax: number,
 ): void {
-  const low = Math.fround(vmin);
-  const high = Math.fround(vmax);
-  for (let i = 0; i < data.length; i++) {
-    const entry = Math.min(255, Math.trunc(Math.fround(displayNormalize(data[i], low, high) * 255))) * 3;
-    const pixel = i * 4;
-    rgba[pixel] = lut[entry];
-    rgba[pixel + 1] = lut[entry + 1];
-    rgba[pixel + 2] = lut[entry + 2];
-    rgba[pixel + 3] = 255;
-  }
+  colormapPixels(new Uint32Array(rgba.buffer, rgba.byteOffset, data.length), data, null, { vmin, vmax }, false, packedLut(lut));
 }
 
 /** Create an offscreen canvas with colormapped data. Returns null if context unavailable. */
