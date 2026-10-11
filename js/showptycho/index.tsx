@@ -3068,18 +3068,13 @@ function Explore() {
     setPinJson(JSON.stringify({ action: "unpin", id }));
   }, [capturePinLayout, setPinJson]);
 
-  // Toggle star on a pin; Python persists the new state to disk.
+  // Toggle star on a pin; Python persists the new state to disk. The new state comes from the
+  // rendered pins, not from inside a setPinned updater, which React may run later than this call.
   const doToggleStar = React.useCallback((id: number) => {
-    let nextStarred = false;
-    setPinned(prev => prev.map(pin => {
-      if (pin.id !== id) return pin;
-      nextStarred = !pin.starred;
-      return { ...pin, starred: nextStarred };
-    }));
-    // The map() runs synchronously in the setState callback, so the updated
-    // nextStarred flag is correct when we fire the trait below.
-    setPinJson(JSON.stringify({ action: nextStarred ? "star" : "unstar", id }));
-  }, [setPinJson]);
+    const starred = !pinned.find(entry => entry.id === id)?.starred;
+    setPinned(prev => prev.map(entry => entry.id === id ? { ...entry, starred } : entry));
+    setPinJson(JSON.stringify({ action: starred ? "star" : "unstar", id }));
+  }, [pinned, setPinJson]);
 
   const doViewPin = React.useCallback((entry: PinnedEntry) => {
     setViewPin(entry.id);
