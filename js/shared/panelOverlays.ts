@@ -33,7 +33,7 @@ export type PanelAnnotationSpec = {
   outline_width?: number;
 };
 export type PanelOverlaySpec = {
-  shape?: "circle" | "rect" | "rectangle" | "square";
+  shape?: "circle" | "rect" | "square";
   coords?: "data" | "relative";
   row?: number;
   col?: number;
@@ -297,7 +297,7 @@ export function drawPanelOverlays(
 /** Overlay in image pixels: a circle, or a rectangle with sorted corners (anything not a circle). */
 export function overlayGeometry(overlay: PanelOverlaySpec, imageW: number, imageH: number) {
   const { scaleRow, scaleCol, scaleRadius } = overlayScales(overlay, imageW, imageH);
-  const shape = overlay.shape === "rectangle" ? "rect" : (overlay.shape || "circle");
+  const shape = overlay.shape || "circle";
   if (shape === "circle") {
     return {
       shape,
@@ -408,10 +408,16 @@ export function updateOverlayFromDrag(
     if (Math.abs(row1 - row0) < 1) row1 = row0 + (row1 >= row0 ? 1 : -1);
     if (Math.abs(col1 - col0) < 1) col1 = col0 + (col1 >= col0 ? 1 : -1);
   }
-  next.row0 = toSpecRow(Math.max(0, Math.min(imageH, Math.min(row0, row1))));
-  next.row1 = toSpecRow(Math.max(0, Math.min(imageH, Math.max(row0, row1))));
-  next.col0 = toSpecCol(Math.max(0, Math.min(imageW, Math.min(col0, col1))));
-  next.col1 = toSpecCol(Math.max(0, Math.min(imageW, Math.max(col0, col1))));
+  // Clamped to the image. A resize also keeps one pixel: an edge dragged past the image border would
+  // otherwise close the rectangle, which can no longer be grabbed and which the kernel refuses. A move
+  // keeps the size it had, a hairline included.
+  const keep = mode === "resize" ? 1 : 0;
+  const top = Math.max(0, Math.min(imageH - keep, Math.min(row0, row1)));
+  const left = Math.max(0, Math.min(imageW - keep, Math.min(col0, col1)));
+  next.row0 = toSpecRow(top);
+  next.row1 = toSpecRow(Math.max(top + keep, Math.min(imageH, Math.max(row0, row1))));
+  next.col0 = toSpecCol(left);
+  next.col1 = toSpecCol(Math.max(left + keep, Math.min(imageW, Math.max(col0, col1))));
   return next;
 }
 

@@ -16,7 +16,7 @@ import traitlets
 from matplotlib import colormaps
 from PIL import Image
 
-from quantem.widget import Show2D
+from quantem.widget import Show2D, Show3D
 from quantem.widget.adapters.core import make_dataset
 from quantem.widget.colormap import display_window
 from quantem.widget.render.figure import format_scale_label
@@ -466,6 +466,26 @@ def test_from_folder_pages_and_remaps_state_by_path(tmp_path: Path):
 
 
 # --- review regressions (each failed on rc41) ---------------------------------
+
+
+def test_overlays_written_to_the_trait_are_normalized_like_the_keyword():
+    # the browser draws the normalized spec only ("rect", sorted corners): a direct trait write gets the same pass as panel_overlays=
+    stack = np.stack([_frame(0), _frame(1)])
+    for widget in (Show2D(_frame(0)), Show3D(stack, verbose=False)):
+        widget.panel_overlays = [[{"shape": "rectangle", "box": (10, 12, 2, 3), "color": "red"}]]
+        (overlay,) = widget.panel_overlays[0]
+        assert overlay["shape"] == "rect" and overlay["stroke"] == "red"
+        assert [overlay[key] for key in ("row0", "col0", "row1", "col1")] == [2.0, 3.0, 10.0, 12.0]
+        # what the browser writes back after a drag is already normalized and is kept as written
+        dragged = {**overlay, "row0": 4.0, "row1": 12.0}
+        widget.panel_overlays = [[dragged]]
+        assert widget.panel_overlays == [[dragged]]
+        with pytest.raises(traitlets.TraitError, match="shape must be one of"):
+            widget.panel_overlays = [[{"shape": "hexagon", "box": (0, 0, 4, 4)}]]
+        # a refused frontend message leaves the trait as it was
+        with pytest.raises(traitlets.TraitError, match="shape must be one of"):
+            widget.set_state({"panel_overlays": [[{"shape": "hexagon", "box": [0, 0, 4, 4]}]]})
+        assert widget.panel_overlays == [[dragged]]
 
 
 @pytest.mark.parametrize("convert", [list, lambda frames: __import__("torch").from_numpy(np.stack(frames))], ids=["list", "torch"])

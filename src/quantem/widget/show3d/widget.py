@@ -35,6 +35,7 @@ from quantem.widget.show2d.options import (
     _expand_title_spans_for_flattened_labels,
     _normalize_title_span_sequence,
     _normalize_panel_annotations,
+    _normalize_panel_overlay_spec,
     _normalize_panel_overlays,
 )
 from quantem.widget.show2d.widget import _BROWSER_DENOISE_MODES, _nonnegative_int
@@ -596,6 +597,22 @@ class Show3D(
         if value < 0:
             return -1
         return min(value, max(0, len(self.roi_list) - 1))
+
+    @traitlets.validate("panel_overlays")
+    def _validate_panel_overlays(self, proposal: dict) -> list[list[dict]]:
+        """Normalize every overlay written to the trait, as ``panel_overlays=`` does.
+
+        The browser draws the normalized spec only (``"rect"``, sorted corners,
+        one name per style key), so a spec written straight to the trait takes
+        the same pass; what the browser writes back after a drag is already
+        normalized and comes out unchanged. A refused spec raises ``TraitError``,
+        the one error traitlets rolls a held write (a frontend message) back on.
+        """
+        try:
+            return [[_normalize_panel_overlay_spec(spec, panel=panel) for spec in specs]
+                    for panel, specs in enumerate(proposal["value"])]
+        except (ValueError, TypeError) as error:
+            raise traitlets.TraitError(str(error)) from error
 
     @traitlets.validate("roi_list")
     def _validate_roi_list(self, proposal: dict) -> list:

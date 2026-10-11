@@ -40,6 +40,7 @@ from quantem.widget.show2d.options import (
     _normalize_marker_mapping,
     _normalize_panel_annotations,
     _normalize_panel_indices,
+    _normalize_panel_overlay_spec,
     _normalize_panel_overlays,
     _normalize_panel_title_style,
     _normalize_scale_bar_style,
@@ -1387,6 +1388,22 @@ class Show2D(
         if self._display_bin > 1:
             return [bin2d(stack, factor=self._display_bin, mode="mean") for stack in stacks]
         return stacks
+
+    @traitlets.validate("panel_overlays")
+    def _validate_panel_overlays(self, proposal: dict) -> list[list[dict]]:
+        """Normalize every overlay written to the trait, as ``panel_overlays=`` does.
+
+        The browser draws the normalized spec only (``"rect"``, sorted corners,
+        one name per style key), so a spec written straight to the trait takes
+        the same pass; what the browser writes back after a drag is already
+        normalized and comes out unchanged. A refused spec raises ``TraitError``,
+        the one error traitlets rolls a held write (a frontend message) back on.
+        """
+        try:
+            return [[_normalize_panel_overlay_spec(spec, panel=panel) for spec in specs]
+                    for panel, specs in enumerate(proposal["value"])]
+        except (ValueError, TypeError) as error:
+            raise traitlets.TraitError(str(error)) from error
 
     @traitlets.validate("hidden_panels")
     def _validate_hidden_panels(self, proposal: dict) -> list[int]:
