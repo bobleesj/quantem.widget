@@ -194,6 +194,22 @@ function viProductStackForIndices(
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 10;
 
+/**
+ * The device pixel ratio, kept current across browser zoom and a move to
+ * another monitor. The HiDPI overlays size their canvases from it, and
+ * resizing a canvas clears it, so every overlay must redraw when it changes.
+ */
+function useDevicePixelRatio(): number {
+  const [ratio, setRatio] = React.useState(() => window.devicePixelRatio || 1);
+  React.useEffect(() => {
+    const query = window.matchMedia(`(resolution: ${ratio}dppx)`);
+    const update = () => setRatio(window.devicePixelRatio || 1);
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, [ratio]);
+  return ratio;
+}
+
 // ============================================================================
 // UI Styles - component styling helpers
 // ============================================================================
@@ -1367,6 +1383,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   const [comparePanY, setComparePanY] = React.useState(0);
   const compareViewRef = React.useRef({ zoom: 1, panX: 0, panY: 0, raf: 0 });
   const panelPixels = Math.max(1, shapeRows * shapeCols);
+  const dpr = useDevicePixelRatio();
 
   const panels = React.useMemo(() => {
     if (!bytes || count <= 0 || bytes.byteLength < panelPixels * count * 4) {
@@ -1718,7 +1735,6 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     let raf = 0;
     const paint = () => {
     raf = 0;
-    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
     renderEntries.forEach(({ panel, gpuLoaded }, idx) => {
       const overlay = overlayRefs.current[idx];
       const tile = tileRefs.current[idx];
@@ -1763,7 +1779,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     paint();
     batchModel.on("change:pos_row", changed); batchModel.on("change:pos_col", changed);
     return () => { if (raf) cancelAnimationFrame(raf); batchModel.off("change:pos_row", changed); batchModel.off("change:pos_col", changed); };
-  }, [batchModel, kind, comparePanX, comparePanY, compareZoom, cursorCol, cursorRow, isDraggingPosition, overlayVersion, pixelSize, pixelUnit, renderEntries, shapeCols, shapeRows, showScaleBar, scanRegion]);
+  }, [batchModel, kind, comparePanX, comparePanY, compareZoom, cursorCol, cursorRow, dpr, isDraggingPosition, overlayVersion, pixelSize, pixelUnit, renderEntries, shapeCols, shapeRows, showScaleBar, scanRegion]);
 
   // Hover readout: the value under the pointer, read from the panel's bytes or,
   // for a GPU-only panel, four bytes of its resident counts.
@@ -5271,7 +5287,7 @@ function Show4DSTEM() {
   const dpColorbarVmaxRef = React.useRef(1);
 
   // Device pixel ratio for high-DPI UI overlays
-  const DPR = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+  const DPR = useDevicePixelRatio();
 
   // ─────────────────────────────────────────────────────────────────────────
   // Effects: Canvas Rendering & Animation
@@ -6054,7 +6070,7 @@ function Show4DSTEM() {
       }
     }
   }, [roiVirtualDetectorActive, dpZoom, dpPanX, dpPanY, kPixelSize, kPixelUnit, kCalibrated, detRows, detCols, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, localKCol, localKRow, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner,
-      profileActive, profilePoints, profileWidth, themeColors, showDpColorbar, showScaleBar, dpColormap, dpScaleMode, dpVminPct, dpVmaxPct, canvasSize, roiColors]);
+      profileActive, profilePoints, profileWidth, themeColors, showDpColorbar, showScaleBar, dpColormap, dpScaleMode, dpVminPct, dpVmaxPct, canvasSize, roiColors, DPR]);
   React.useEffect(() => drawDpUi(), [drawDpUi]);
   
   // VI scale bar + crosshair + ROI + profile lines (high-DPI)
@@ -6122,7 +6138,7 @@ function Show4DSTEM() {
     }
   }, [compareMode, viZoom, viPanX, viPanY, pixelSize, pixelUnit, showScaleBar, shapeRows, shapeCols, localPosRow, localPosCol, isDraggingVI,
       viRoiMode, localViRoiCenterRow, localViRoiCenterCol, viRoiRadius, viRoiWidth, viRoiHeight,
-      isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize, canvasSize, viProfileActive, viProfilePoints]);
+      isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize, canvasSize, viProfileActive, viProfilePoints, DPR]);
 
   // ── DP Profile computation ──
   React.useEffect(() => {
