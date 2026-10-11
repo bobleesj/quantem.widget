@@ -704,7 +704,7 @@ def _add_show4dstem_args(parser: argparse.ArgumentParser) -> None:
                         help="Open via a local HTTP server even for self-contained files (tunnelable URL).")
     parser.add_argument("--title", default=None, help="Viewer page title.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose progress.")
-    parser.add_argument("--bin", type=int, default=None, dest="det_bin",
+    parser.add_argument("--detector-bin", type=int, default=None,
                         help=(
                             "--html: detector binning factor (mean of each block). "
                             "Default 1, full detector sampling."
@@ -796,7 +796,7 @@ def _do_4dstem(
     """Dispatch 4D-STEM master(s) to either a live notebook (default) or an offline
     HTML (``--html``), then launch/open it. One master opens alone; many open as a
     dataset comparison (the multi-tilt case)."""
-    args.det_bin = _effective_det_bin(args)
+    args.detector_bin = _effective_detector_bin(args)
     if args.html:
         if args.backend == "webgpu":
             output = _render_4dstem_webgpu_h5(masters, label, args)
@@ -859,12 +859,12 @@ def _show4dstem_dataset_label(master: str, index: int) -> str:
     return f"Tilt ({format_coordinate(match['x'])}, {format_coordinate(match['y'])})"
 
 
-def _effective_det_bin(args: argparse.Namespace) -> int:
-    """``--bin`` (argparse already made it an int), 1 when omitted; zero or negative is refused."""
-    det_bin = 1 if args.det_bin is None else args.det_bin
-    if det_bin < 1:
-        raise ValueError(f"--bin must be a positive integer, got {det_bin}")
-    return det_bin
+def _effective_detector_bin(args: argparse.Namespace) -> int:
+    """``--detector-bin`` (argparse already made it an int), 1 when omitted; zero or negative is refused."""
+    detector_bin = 1 if args.detector_bin is None else args.detector_bin
+    if detector_bin < 1:
+        raise ValueError(f"--detector-bin must be a positive integer, got {detector_bin}")
+    return detector_bin
 
 
 def _render_4dstem_notebook(
@@ -879,10 +879,10 @@ def _render_4dstem_notebook(
     GPU at full detector sampling; many open as a dataset comparison (the
     multi-tilt case). The notebook is the editable, real-use surface; ``--html`` is
     the share artifact."""
-    if int(args.det_bin) != 1:
+    if int(args.detector_bin) != 1:
         raise ValueError(
             "A live Show4DSTEM notebook keeps full detector sampling in encoded GPU "
-            "storage; --bin applies to --html exports only."
+            "storage; --detector-bin applies to --html exports only."
         )
     print(f"{len(masters)} master(s) -> Show4DSTEM (live notebook)")
     if source_path is not None and source_path.is_dir():
@@ -921,10 +921,10 @@ def _render_4dstem_notebook(
 
 def _render_4dstem_watch_notebook(folder: pathlib.Path, label: str, args: argparse.Namespace) -> pathlib.Path:
     """Write a live viewer notebook for a 4D-STEM acquisition folder."""
-    if _effective_det_bin(args) != 1:
+    if _effective_detector_bin(args) != 1:
         raise ValueError(
             "A live folder viewer keeps full detector sampling in encoded GPU "
-            "storage; --bin applies to --html exports only."
+            "storage; --detector-bin applies to --html exports only."
         )
     print(f"{folder.name}: watched folder -> Show4DSTEM over encoded masters")
     scan_size = "None" if args.scan_size is None else str(int(args.scan_size))
@@ -1037,10 +1037,10 @@ def _render_4dstem_webgpu_h5(
     from quantem.widget.show4dstem.export import bundle_master_urls, write_webgpu_bundle
     from quantem.widget.show4dstem.widget import master_contract
 
-    if int(args.det_bin) != 1:
+    if int(args.detector_bin) != 1:
         raise ValueError(
             "Show4DSTEM --backend webgpu uses linked HDF5 files with browser "
-            "range reads; keep --bin 1."
+            "range reads; keep --detector-bin 1."
         )
     contracts = [master_contract(master) for master in masters]
     first = contracts[0]
@@ -1157,14 +1157,14 @@ def _lossless_pack_dtype(counts, stem: str) -> str:
 _HTML_PAYLOAD_LIMIT = 2 << 30  # packed counts one offline page can hold; 0.6 GB of uint8 made a 0.3 GB page
 
 
-def _check_html_payload(master: str, det_bin: int, dtype: str) -> None:
+def _check_html_payload(master: str, detector_bin: int, dtype: str) -> None:
     """Refuse a master whose packed counts cannot fit one offline page, before reading it.
 
-    The page embeds the gzip of ``frames x (det_rows / det_bin) x (det_cols / det_bin)``
+    The page embeds the gzip of ``frames x (det_rows / detector_bin) x (det_cols / detector_bin)``
     packed counts as one base64 string, and a browser string holds about 512 MiB, so a
     payload above ``_HTML_PAYLOAD_LIMIT`` cannot load. Without the check the export reads
     the whole acquisition for minutes and then fails on memory. The message names the
-    smallest ``--bin`` whose payload is at most 768 MiB.
+    smallest ``--detector-bin`` whose payload is at most 768 MiB.
     """
     from quantem.widget.show4dstem.reader import master_layout
 
@@ -1173,26 +1173,26 @@ def _check_html_payload(master: str, det_bin: int, dtype: str) -> None:
         return
     frames, (det_rows, det_cols), _ = layout
     itemsize = 1 if dtype == "uint8" else 2
-    payload = frames * (det_rows // det_bin) * (det_cols // det_bin) * itemsize
+    payload = frames * (det_rows // detector_bin) * (det_cols // detector_bin) * itemsize
     if payload <= _HTML_PAYLOAD_LIMIT:
         return
     fits = [
-        factor for factor in range(det_bin + 1, min(det_rows, det_cols) + 1)
+        factor for factor in range(detector_bin + 1, min(det_rows, det_cols) + 1)
         if det_rows % factor == 0 and det_cols % factor == 0
         and frames * (det_rows // factor) * (det_cols // factor) * itemsize <= 3 << 28
     ]
-    advice = f"pass --bin {fits[0]}, " if fits else ""
+    advice = f"pass --detector-bin {fits[0]}, " if fits else ""
     raise ValueError(
-        f"an offline HTML at --bin {det_bin} packs {payload / 1e9:.1f} GB of {dtype} counts, more than "
+        f"an offline HTML at --detector-bin {detector_bin} packs {payload / 1e9:.1f} GB of {dtype} counts, more than "
         f"one browser page can load; {advice}use --backend webgpu to read the HDF5 files in the browser, "
         "or omit --html for a live notebook. Nothing was binned."
     )
 
 
-def _master_to_binned_numpy(master: str, det_bin: int, max_bytes: int | None = None):
+def _master_to_binned_numpy(master: str, detector_bin: int, max_bytes: int | None = None):
     """Return one master as float32 ``(scan_row, scan_col, det_row, det_col)``.
 
-    ``det_bin > 1`` replaces each ``det_bin`` x ``det_bin`` detector block by its
+    ``detector_bin > 1`` replaces each ``detector_bin`` x ``detector_bin`` detector block by its
     mean (exact integer sum, one division), rounded to the nearest count: an offline
     HTML embeds the whole array, and the mean stays in the raw count range so
     uint8/uint16 packing never clips. The acquisition stays encoded on the GPU and
@@ -1206,18 +1206,18 @@ def _master_to_binned_numpy(master: str, det_bin: int, max_bytes: int | None = N
         with gpu_adapter.load_acquisition(master) as acquisition:
             cols = acquisition.shape[1]
             return _bin_scan_rows(
-                acquisition.shape, lambda start, stop: acquisition.read(scan_region=(start, stop, 0, cols)), det_bin)
+                acquisition.shape, lambda start, stop: acquisition.read(scan_region=(start, stop, 0, cols)), detector_bin)
     # no quantem.gpu or no GPU: read the master densely on the host, then bin it in the same
     # scan-row blocks, since the exact int64 block sum of the whole cube would need 4x its size
     values_t = read_dense(master, "cpu", max_bytes=max_bytes, verbose=False)
-    return _bin_scan_rows(values_t.shape, lambda start, stop: values_t[start:stop], det_bin)
+    return _bin_scan_rows(values_t.shape, lambda start, stop: values_t[start:stop], detector_bin)
 
 
-def _bin_scan_rows(shape, read_rows, det_bin: int):
+def _bin_scan_rows(shape, read_rows, detector_bin: int):
     """Detector-bin a ``(rows, cols, det_rows, det_cols)`` source about 256 MiB of scan rows at a time.
 
     ``read_rows(start, stop)`` returns the counts of scan rows ``start:stop``; each block is
-    mean-binned (``detector_bin_mean``) and rounded to the nearest count when ``det_bin > 1``,
+    mean-binned (``detector_bin_mean``) and rounded to the nearest count when ``detector_bin > 1``,
     so the transient memory is one block, not the whole cube.
     """
     import numpy as np
@@ -1225,24 +1225,24 @@ def _bin_scan_rows(shape, read_rows, det_bin: int):
     from quantem.widget.counts import CHUNK_BYTES, detector_bin_mean
 
     rows, cols, det_rows, det_cols = shape
-    if det_rows % det_bin or det_cols % det_bin:
+    if det_rows % detector_bin or det_cols % detector_bin:
         raise ValueError(
-            f"--bin {det_bin} does not divide the {det_rows} x {det_cols} detector; "
+            f"--detector-bin {detector_bin} does not divide the {det_rows} x {det_cols} detector; "
             "choose a factor of both sides."
         )
-    binned = np.empty((rows, cols, det_rows // det_bin, det_cols // det_bin), np.float32)
+    binned = np.empty((rows, cols, det_rows // detector_bin, det_cols // detector_bin), np.float32)
     block_rows = max(1, CHUNK_BYTES // (cols * det_rows * det_cols * 4))
     for row in range(0, rows, block_rows):
         stop = min(rows, row + block_rows)
-        block = detector_bin_mean(read_rows(row, stop), det_bin)
-        binned[row:stop] = np.round(block) if det_bin > 1 else block
+        block = detector_bin_mean(read_rows(row, stop), detector_bin)
+        binned[row:stop] = np.round(block) if detector_bin > 1 else block
     return binned
 
 
 def _render_4dstem(masters: list[str], args: argparse.Namespace) -> list[pathlib.Path]:
     """Render each 4D-STEM master as one offline WebGPU Show4DSTEM HTML.
 
-    Each master is loaded with the requested detector binning (``--bin``, default
+    Each master is loaded with the requested detector binning (``--detector-bin``, default
     1 for full detector sampling) and packed into its own page."""
     from quantem.widget import Show4DSTEM
     from quantem.widget.adapters import gpu as gpu_adapter
@@ -1262,21 +1262,21 @@ def _render_4dstem(masters: list[str], args: argparse.Namespace) -> list[pathlib
             # Mean-bin at load (memory-safe: the full 19 GB stack never materializes), so the
             # export does no further binning. "auto" packs at least one byte per count, so the
             # uint8 size is the bound to check before reading.
-            _check_html_payload(master, args.det_bin, "uint8" if export_dtype == "auto" else export_dtype)
+            _check_html_payload(master, args.detector_bin, "uint8" if export_dtype == "auto" else export_dtype)
             binned = _master_to_binned_numpy(
-                master, args.det_bin, None if args.max_gb is None else int(args.max_gb * 1e9))
-            if args.det_bin > 1:
+                master, args.detector_bin, None if args.max_gb is None else int(args.max_gb * 1e9))
+            if args.detector_bin > 1:
                 # no silent reduction: name the factor and how to keep the full detector
                 det_rows, det_cols = binned.shape[2:]
-                print(f"{stem}: detector binned {args.det_bin}x{args.det_bin} (mean of each block), "
-                      f"{det_rows * args.det_bin}x{det_cols * args.det_bin} -> {det_rows}x{det_cols}; "
-                      "pass --bin 1 for the full detector")
+                print(f"{stem}: detector binned {args.detector_bin}x{args.detector_bin} (mean of each block), "
+                      f"{det_rows * args.detector_bin}x{det_cols * args.detector_bin} -> {det_rows}x{det_cols}; "
+                      "pass --detector-bin 1 for the full detector")
             pack_dtype = _lossless_pack_dtype(binned, stem) if export_dtype == "auto" else export_dtype
             # the page carries the calibration the file's header records, with the detector step grown by the binning
             calibration = gpu_adapter.header_calibration(gpu_adapter.inspect_master(master).metadata) if gpu_adapter.available() else {}
             for name in ("detector_sampling_mrad", "detector_sampling_inv_A"):
                 if calibration.get(name) is not None:
-                    calibration[name] = [step * args.det_bin for step in calibration[name]]
+                    calibration[name] = [step * args.detector_bin for step in calibration[name]]
             widget = Show4DSTEM(binned, backend="webgpu", **calibration)
             out = out_dir / f"{stem}.html"
             widget.export_html(str(out), title=args.title or stem, dtype=pack_dtype)

@@ -388,7 +388,7 @@ Quick decision rule:
   curation, and collaborator screening.
 - Use `interactive` only when the exported browser page must still recompute new
   detector ROIs from raw 4D data.
-- Use the CLI `quantem show4dstem ... --backend webgpu --html --bin 1 --dtype uint8`
+- Use the CLI `quantem show4dstem ... --backend webgpu --html --detector-bin 1 --dtype uint8`
   for a terminal-made full-detector browser artifact that reads source H5 files.
 - Use `--dtype uint16` when a no-notebook user needs the wider detector-count
   range and accepts the larger browser/GPU memory footprint.
@@ -403,7 +403,7 @@ widget.export_html(
     export_kind="report",
     dataset_scope="unhidden",  # "current_page", "starred", or "all" also work
     scan_bin=2,                # mean-bin real space for smaller PNG pages
-    det_bin=8,                 # mean-bin the representative DP thumbnail
+    detector_bin=8,                 # mean-bin the representative DP thumbnail
     dtype="uint8",
 )
 ```
@@ -421,7 +421,7 @@ widget.export_html(
     export_kind="interactive",
     dtype="uint8",       # "uint16" keeps the exact integer range but is larger
     scan_bin=2,          # real-space mean bin before embedding raw 4D
-    det_bin=4,           # detector mean bin before embedding raw 4D
+    detector_bin=4,           # detector mean bin before embedding raw 4D
 )
 ```
 
@@ -433,17 +433,17 @@ widget.export_html(
     export_kind="interactive",
     dtype="uint16",
     scan_bin=1,
-    det_bin=1,
+    detector_bin=1,
 )
 ```
 
 Equivalent CLI for users who do not want a notebook:
 
 ```bash
-quantem show4dstem /data/session --backend webgpu --html --count 7 --bin 1 --dtype uint8 --out ~/Downloads
+quantem show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8 --out ~/Downloads
 ```
 
-Both `scan_bin` and `det_bin` use mean binning, not summing. This keeps display
+Both `scan_bin` and `detector_bin` use mean binning, not summing. This keeps display
 exports from saturating `uint8` and makes the file-size estimate in the GUI
 match the binned payload shape. The GUI export menu labels the same distinction
 as **HTML report: static PNG, no raw 4D** and **HTML interactive raw 4D**.
@@ -474,13 +474,13 @@ widget.export_html(
     dataset_scope="unhidden",
     dtype="uint8",
     scan_bin=2,
-    det_bin=8,
+    detector_bin=8,
 )
 ```
 
 Do not describe a report export as "raw" or "exact"; it is a rendered review
 artifact. Do not describe a `uint8` interactive export as exact unless the
-detector count range was audited. Always mention the `scan_bin` and `det_bin`
+detector count range was audited. Always mention the `scan_bin` and `detector_bin`
 values in a figure caption, notebook markdown cell, or handoff note.
 
 See the copyable [Show4DSTEM export recipes](../tutorials/show4dstem_export.md)
@@ -496,8 +496,8 @@ precomputed `profile.bin`/`com.bin` sidecars; those are generated products, not
 the fast click-to-open path.
 
 ```bash
-quantem show4dstem /path/to/h5_family --backend webgpu --html --bin 1 --count 1
-quantem show4dstem /path/to/h5_family --backend webgpu --html --bin 1 --count 7
+quantem show4dstem /path/to/h5_family --backend webgpu --html --detector-bin 1 --count 1
+quantem show4dstem /path/to/h5_family --backend webgpu --html --detector-bin 1 --count 7
 ```
 
 The folder writes `Show4DSTEM.command`, a hidden `.viewer/` server/viewer

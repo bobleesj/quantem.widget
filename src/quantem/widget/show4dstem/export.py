@@ -44,32 +44,32 @@ HTML_PAYLOAD_LIMIT = 2 << 30
 HTML_PAYLOAD_ADVISED = 3 << 28
 
 
-def export_options(widget, dtype: str, det_bin: int, scan_bin: int) -> tuple[str, int, int]:
+def export_options(widget, dtype: str, detector_bin: int, scan_bin: int) -> tuple[str, int, int]:
     """Validate the packing choices: integer dtype and bins that divide both shapes."""
     if dtype not in ("uint8", "uint16"):
         raise ValueError(f"dtype must be 'uint8' or 'uint16', got {dtype!r}")
-    det_bin, scan_bin = int(det_bin), int(scan_bin)
-    if det_bin not in VALID_BINS:
-        raise ValueError(f"det_bin must be 1, 2, 4, or 8, got {det_bin}")
+    detector_bin, scan_bin = int(detector_bin), int(scan_bin)
+    if detector_bin not in VALID_BINS:
+        raise ValueError(f"detector_bin must be 1, 2, 4, or 8, got {detector_bin}")
     if scan_bin not in VALID_BINS:
         raise ValueError(f"scan_bin must be 1, 2, 4, or 8, got {scan_bin}")
-    if widget.det_rows % det_bin or widget.det_cols % det_bin:
+    if widget.det_rows % detector_bin or widget.det_cols % detector_bin:
         raise ValueError(
-            f"Detector shape {widget.det_rows}x{widget.det_cols} is not divisible by det_bin={det_bin}"
+            f"Detector shape {widget.det_rows}x{widget.det_cols} is not divisible by detector_bin={detector_bin}"
         )
     if widget.shape_rows % scan_bin or widget.shape_cols % scan_bin:
         raise ValueError(
             f"Scan shape {widget.shape_rows}x{widget.shape_cols} is not divisible by scan_bin={scan_bin}"
         )
-    return dtype, det_bin, scan_bin
+    return dtype, detector_bin, scan_bin
 
 
 def check_html_payload(n_frames: int, scan_shape: tuple[int, int], det_shape: tuple[int, int], dtype: str,
-                       det_bin: int, scan_bin: int) -> None:
+                       detector_bin: int, scan_bin: int) -> None:
     """Refuse an interactive export whose packed counts no page can load, before any frame is read.
 
     The page packs ``n_frames x (scan_rows / scan_bin) x (scan_cols / scan_bin) x (det_rows /
-    det_bin) x (det_cols / det_bin)`` counts of ``dtype``. Without the check a 512 x 512 x 192 x 192
+    detector_bin) x (det_cols / detector_bin)`` counts of ``dtype``. Without the check a 512 x 512 x 192 x 192
     acquisition (9.7 GB of uint8) is read and packed in host memory first, which ran a shared
     machine into its out-of-memory killer, for a page that could not have loaded. The message
     names the least binning whose counts fit; nothing is binned unasked.
@@ -78,13 +78,13 @@ def check_html_payload(n_frames: int, scan_shape: tuple[int, int], det_shape: tu
         return (n_frames * (scan_shape[0] // scan) * (scan_shape[1] // scan)
                 * (det_shape[0] // det) * (det_shape[1] // det) * np.dtype(dtype).itemsize)
 
-    size = payload(det_bin, scan_bin)
+    size = payload(detector_bin, scan_bin)
     if size <= HTML_PAYLOAD_LIMIT:
         return
     fits = sorted(
         (
             (det, scan) for det in VALID_BINS for scan in VALID_BINS
-            if det >= det_bin and scan >= scan_bin
+            if det >= detector_bin and scan >= scan_bin
             and det_shape[0] % det == 0 and det_shape[1] % det == 0
             and scan_shape[0] % scan == 0 and scan_shape[1] % scan == 0
             and payload(det, scan) <= HTML_PAYLOAD_ADVISED
@@ -92,10 +92,10 @@ def check_html_payload(n_frames: int, scan_shape: tuple[int, int], det_shape: tu
         # least reduction first, then the most even split; at a tie the scan sampling is kept
         key=lambda bins: (bins[0] * bins[1], max(bins), bins[1]),
     )
-    advice = (f"pass det_bin={fits[0][0]}, scan_bin={fits[0][1]} ({payload(*fits[0]) / 1e9:.2f} GB), or "
+    advice = (f"pass detector_bin={fits[0][0]}, scan_bin={fits[0][1]} ({payload(*fits[0]) / 1e9:.2f} GB), or "
               if fits else "")
     raise ValueError(
-        f"An interactive HTML at det_bin={det_bin}, scan_bin={scan_bin} packs {size / 1e9:.1f} GB of {dtype} "
+        f"An interactive HTML at detector_bin={detector_bin}, scan_bin={scan_bin} packs {size / 1e9:.1f} GB of {dtype} "
         f"counts, more than one browser page can load ({HTML_PAYLOAD_LIMIT / 2**30:.0f} GiB); {advice}"
         "use export_kind='report' for virtual-image pages without the raw counts. Nothing was binned."
     )
@@ -109,23 +109,23 @@ def export_kind(value) -> str:
     return kind
 
 
-def mode_label(dtype: str, det_bin: int, scan_bin: int, kind: str) -> str:
+def mode_label(dtype: str, detector_bin: int, scan_bin: int, kind: str) -> str:
     """Packing summary for the export status line, naming every active bin so a reduction is never silent."""
     parts = ["report" if kind == "report" else "interactive raw 4D", dtype]
     if scan_bin > 1:
         parts.append(f"scan bin {scan_bin}x")
-    if det_bin > 1:
-        parts.append(f"detector bin {det_bin}x")
+    if detector_bin > 1:
+        parts.append(f"detector bin {detector_bin}x")
     return ", ".join(parts)
 
 
-def default_export_path(widget, dtype: str, det_bin: int, scan_bin: int, kind: str) -> pathlib.Path:
+def default_export_path(widget, dtype: str, detector_bin: int, scan_bin: int, kind: str) -> pathlib.Path:
     """File in the kernel cwd named after the title, the exported shape and the packing, so exports do not overwrite."""
-    shape = f"{widget.shape_rows // scan_bin}x{widget.shape_cols // scan_bin}x{widget.det_rows // det_bin}x{widget.det_cols // det_bin}"
+    shape = f"{widget.shape_rows // scan_bin}x{widget.shape_cols // scan_bin}x{widget.det_rows // detector_bin}x{widget.det_cols // detector_bin}"
     if widget.n_frames > 1:
         shape = f"{widget.n_frames}x{shape}"
     prefix = "report" if kind == "report" else dtype
-    return pathlib.Path.cwd() / f"{export_slug(widget.title, 'show4dstem')}_{shape}_{prefix}_rbin{scan_bin}_kbin{det_bin}.html"
+    return pathlib.Path.cwd() / f"{export_slug(widget.title, 'show4dstem')}_{shape}_{prefix}_scan_bin{scan_bin}_detector_bin{detector_bin}.html"
 
 
 # ---------------------------------------------------------------------------
@@ -149,13 +149,13 @@ def mean_scan_bin(arr: np.ndarray, scan_bin: int) -> np.ndarray:
     return binned.mean(axis=(len(lead) + 1, len(lead) + 3))
 
 
-def mean_detector_bin(arr: np.ndarray, det_bin: int) -> np.ndarray:
-    """Average ``det_bin x det_bin`` detector pixels of the two trailing axes."""
+def mean_detector_bin(arr: np.ndarray, detector_bin: int) -> np.ndarray:
+    """Average ``detector_bin x detector_bin`` detector pixels of the two trailing axes."""
     arr = np.asarray(arr)
-    if det_bin <= 1:
+    if detector_bin <= 1:
         return arr
     det_rows, det_cols = arr.shape[-2:]
-    binned = arr.reshape(*arr.shape[:-2], det_rows // det_bin, det_bin, det_cols // det_bin, det_bin)
+    binned = arr.reshape(*arr.shape[:-2], det_rows // detector_bin, detector_bin, det_cols // detector_bin, detector_bin)
     return binned.mean(axis=(-3, -1))
 
 
@@ -171,7 +171,7 @@ def pack_counts(arr: np.ndarray, dtype: str, *, rounded: bool) -> np.ndarray:
     return np.clip(arr, 0, limit).astype(dtype, copy=False)
 
 
-def export_data_array(widget, dtype: str, det_bin: int, scan_bin: int) -> np.ndarray:
+def export_data_array(widget, dtype: str, detector_bin: int, scan_bin: int) -> np.ndarray:
     """Every frame of the viewer as one packed host array, binned by mean.
 
     Frames are read one at a time (GPU acquisitions in small scan windows,
@@ -182,8 +182,8 @@ def export_data_array(widget, dtype: str, det_bin: int, scan_bin: int) -> np.nda
     limit = np.iinfo(dtype).max
     packed, clipped = None, 0
     for frame_idx in range(widget.n_frames):
-        values = mean_scan_bin(widget._frame_array(frame_idx, det_bin), scan_bin)
-        if det_bin > 1 or scan_bin > 1:
+        values = mean_scan_bin(widget._frame_array(frame_idx, detector_bin), scan_bin)
+        if detector_bin > 1 or scan_bin > 1:
             np.round(values, out=values)
         clipped += int(np.count_nonzero(values > limit)) + int(np.count_nonzero(values < 0))
         if packed is None:
@@ -202,18 +202,18 @@ def announce_clipped(clipped: int, total: int, dtype: str) -> None:
         print(f"Show4DSTEM {dtype} pack clipped {clipped} values outside 0..{limit} ({clipped / total:.3%}); {hint}")
 
 
-def export_state_for_bin(widget, det_bin: int, scan_bin: int) -> dict:
+def export_state_for_bin(widget, detector_bin: int, scan_bin: int) -> dict:
     """The widget's display state in the exported pixel grids.
 
-    Detector coordinates shrink by ``det_bin`` and scan coordinates by
+    Detector coordinates shrink by ``detector_bin`` and scan coordinates by
     ``scan_bin``; explicit count windows are dropped because binned means do
     not share the raw count scale.
     """
     state = widget.state_dict()
-    if det_bin > 1:
+    if detector_bin > 1:
         for key in ("center_row", "center_col", "bf_radius", "roi_center_row", "roi_center_col",
                     "roi_radius", "roi_radius_inner", "roi_width", "roi_height"):
-            state[key] = float(state[key]) / det_bin
+            state[key] = float(state[key]) / detector_bin
         state["dp_vmin"] = None
         state["dp_vmax"] = None
     if scan_bin > 1:
@@ -246,24 +246,24 @@ def pack_inline(widget, dtype: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def export_clone(widget, dtype: str, det_bin: int, scan_bin: int):
+def export_clone(widget, dtype: str, detector_bin: int, scan_bin: int):
     """A second viewer over the packed counts whose state is what the page embeds.
 
     The clone carries the binned geometry and the live display state, has its
     own export and SSB buttons disabled (there is no kernel behind the page),
     and keeps the heavy stack in its saved state.
     """
-    data = export_data_array(widget, dtype, det_bin, scan_bin)
+    data = export_data_array(widget, dtype, detector_bin, scan_bin)
     clone = type(widget)(
         data,
         # each axis keeps its own step, grown by the binning along it
         scan_sampling_A=[step * scan_bin for step in widget.scan_sampling_A] or None,
-        detector_sampling_mrad=[step * det_bin for step in widget.detector_sampling_mrad] or None,
-        detector_sampling_inv_A=[step * det_bin for step in widget.detector_sampling_inv_A] or None,
+        detector_sampling_mrad=[step * detector_bin for step in widget.detector_sampling_mrad] or None,
+        detector_sampling_inv_A=[step * detector_bin for step in widget.detector_sampling_inv_A] or None,
         voltage_kV=widget.voltage_kV,
         semiangle_mrad=widget.semiangle_mrad,
-        center=(widget.center_row / det_bin, widget.center_col / det_bin),
-        bf_radius=max(1.0, widget.bf_radius / det_bin),
+        center=(widget.center_row / detector_bin, widget.center_col / detector_bin),
+        bf_radius=max(1.0, widget.bf_radius / detector_bin),
         precompute_virtual_images=False,
         frame_dim_label=widget.frame_dim_label,
         frame_labels=list(widget.frame_labels),
@@ -284,7 +284,7 @@ def export_clone(widget, dtype: str, det_bin: int, scan_bin: int):
     )
     for label, product in widget._vi_product_maps.items():
         clone._set_vi_product_map(label, mean_scan_bin(product, scan_bin))
-    clone.load_state_dict(export_state_for_bin(widget, det_bin, scan_bin))
+    clone.load_state_dict(export_state_for_bin(widget, detector_bin, scan_bin))
     pack_inline(clone, dtype)
     clone.export_enabled = False
     clone.export_status = ""
@@ -301,7 +301,7 @@ def export_clone(widget, dtype: str, det_bin: int, scan_bin: int):
     return clone
 
 
-def write_interactive_html(widget, path, *, dtype: str, det_bin: int, scan_bin: int, title: str | None) -> pathlib.Path:
+def write_interactive_html(widget, path, *, dtype: str, detector_bin: int, scan_bin: int, title: str | None) -> pathlib.Path:
     """Write the kernel-less page: packed counts for arrays, linked HDF5 or .qem files for a browser source."""
     out = pathlib.Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -314,11 +314,11 @@ def write_interactive_html(widget, path, *, dtype: str, det_bin: int, scan_bin: 
         widget.export_enabled, widget._save_state = previous
         return out
     if widget._h5_urls:
-        if det_bin != 1 or scan_bin != 1:
+        if detector_bin != 1 or scan_bin != 1:
             raise ValueError(
                 "Binned interactive raw export is not available for browser-source "
                 "Show4DSTEM exports because the browser reads the real H5 data "
-                "directly. Use det_bin=1 and scan_bin=1 to preserve the full data."
+                "directly. Use detector_bin=1 and scan_bin=1 to preserve the full data."
             )
         urls = json.loads(widget._h5_urls)
         previous = (widget.export_enabled, widget._save_state, widget._offline_bad_px)
@@ -333,8 +333,8 @@ def write_interactive_html(widget, path, *, dtype: str, det_bin: int, scan_bin: 
         inject_h5_tuning(out, dtype)
         return out
     check_html_payload(widget.n_frames, (widget.shape_rows, widget.shape_cols), (widget.det_rows, widget.det_cols),
-                       dtype, det_bin, scan_bin)
-    clone = export_clone(widget, dtype, det_bin, scan_bin)
+                       dtype, detector_bin, scan_bin)
+    clone = export_clone(widget, dtype, detector_bin, scan_bin)
     try:
         return write_widget_html(out, clone, page_title)
     finally:
@@ -427,9 +427,9 @@ sync();
 """
 
 
-def report_html_bytes(widget, *, dtype: str, det_bin: int, scan_bin: int, dataset_scope: str, title: str | None) -> bytes:
+def report_html_bytes(widget, *, dtype: str, detector_bin: int, scan_bin: int, dataset_scope: str, title: str | None) -> bytes:
     """One self-contained HTML: BF/ABF/ADF/HAADF virtual-image pages and the cursor pattern as PNGs."""
-    dtype, det_bin, scan_bin = export_options(widget, dtype, det_bin, scan_bin)
+    dtype, detector_bin, scan_bin = export_options(widget, dtype, detector_bin, scan_bin)
     indices = report_indices(widget, dataset_scope)
     if not indices:
         raise ValueError("No datasets are available for the requested report export scope")
@@ -440,7 +440,7 @@ def report_html_bytes(widget, *, dtype: str, det_bin: int, scan_bin: int, datase
     cols = max(1, min(cols, page_size, len(indices)))
     det_shape = (widget.det_rows, widget.det_cols)
     center = (widget.center_row, widget.center_col)
-    pattern = scale_values(mean_detector_bin(widget.pattern(widget.pos_row, widget.pos_col), det_bin), widget.dp_scale_mode)
+    pattern = scale_values(mean_detector_bin(widget.pattern(widget.pos_row, widget.pos_col), detector_bin), widget.dp_scale_mode)
     dp_uri = png_data_uri(colormap_rgb(pattern, widget.dp_colormap, *display_range(pattern, widget.dp_vmin_pct, widget.dp_vmax_pct)))
     sections = []
     for page_idx, page in enumerate(pages):
@@ -462,11 +462,11 @@ def report_html_bytes(widget, *, dtype: str, det_bin: int, scan_bin: int, datase
             )
     metadata = {
         "scope": report_scope(dataset_scope), "datasets": len(indices), "pages": len(pages),
-        "page_size": page_size, "scan_bin": scan_bin, "det_bin": det_bin, "dtype": dtype,
+        "page_size": page_size, "scan_bin": scan_bin, "detector_bin": detector_bin, "dtype": dtype,
         "scan_shape": [widget.shape_rows, widget.shape_cols], "detector_shape": list(det_shape),
     }
     summary = (f"{len(indices)} dataset(s) · {len(pages)} page(s) · scope {metadata['scope']} · "
-               f"rbin {scan_bin} · kbin {det_bin}")
+               f"scan bin {scan_bin} · detector bin {detector_bin}")
     page_options = "\n".join(f'<option value="{idx}">Page {idx + 1} / {len(pages)}</option>' for idx in range(len(pages)))
     preset_options = "\n".join(f'<option value="{name}">{name.upper()}</option>' for name in PRESET_RADII)
     body = f"""<!doctype html>
@@ -494,7 +494,7 @@ def report_html_bytes(widget, *, dtype: str, det_bin: int, scan_bin: int, datase
     <div class="layout">
       <aside class="dp">
         <img alt="Representative diffraction pattern" src="{dp_uri}">
-        <div class="meta">DP at ({int(widget.pos_row)}, {int(widget.pos_col)}) · detector bin {det_bin}x</div>
+        <div class="meta">DP at ({int(widget.pos_row)}, {int(widget.pos_col)}) · detector bin {detector_bin}x</div>
         <div class="meta">{html.escape(summary)}</div>
         <details class="meta">
           <summary>Details</summary>
@@ -512,11 +512,11 @@ def report_html_bytes(widget, *, dtype: str, det_bin: int, scan_bin: int, datase
     return body.encode("utf-8")
 
 
-def write_report_html(widget, path, *, dtype: str, det_bin: int, scan_bin: int, dataset_scope: str, title: str | None) -> pathlib.Path:
+def write_report_html(widget, path, *, dtype: str, detector_bin: int, scan_bin: int, dataset_scope: str, title: str | None) -> pathlib.Path:
     """Write the static report page (it carries a mobile viewport, so it reads on a phone without zooming)."""
     out = pathlib.Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(report_html_bytes(widget, dtype=dtype, det_bin=det_bin, scan_bin=scan_bin,
+    out.write_bytes(report_html_bytes(widget, dtype=dtype, detector_bin=detector_bin, scan_bin=scan_bin,
                                       dataset_scope=dataset_scope, title=title))
     return out
 
@@ -609,7 +609,7 @@ def write_webgpu_bundle(widget, out_dir, *, port: int = 8794, title: str | None 
     viewer = root / ".viewer"
     viewer.mkdir(exist_ok=True)
     page = viewer / "Show4DSTEM.html"
-    write_interactive_html(widget, page, dtype=str(h5_decode_dtype).lower(), det_bin=1, scan_bin=1, title=title)
+    write_interactive_html(widget, page, dtype=str(h5_decode_dtype).lower(), detector_bin=1, scan_bin=1, title=title)
     (root / "index.html").write_text(
         '<!doctype html>\n<html><head><meta charset="utf-8"><title>Show4DSTEM</title></head>\n<body>\n<script>\n'
         'window.location.replace(".viewer/Show4DSTEM.html" + window.location.search + window.location.hash);\n'

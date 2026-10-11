@@ -49,24 +49,24 @@ writable folder.
 Use the CLI when you want a quick browser artifact from raw masters:
 
 ```bash
-quantem show4dstem scan_001_master.h5 --backend webgpu --html --bin 1
-quantem show4dstem ./session_masters --backend webgpu --html --count 7 --bin 1 --out ~/Downloads
-quantem show4dstem scan_001_master.h5 scan_002_master.h5 --backend webgpu --html --bin 1
+quantem show4dstem scan_001_master.h5 --backend webgpu --html --detector-bin 1
+quantem show4dstem ./session_masters --backend webgpu --html --count 7 --detector-bin 1 --out ~/Downloads
+quantem show4dstem scan_001_master.h5 scan_002_master.h5 --backend webgpu --html --detector-bin 1
 ```
 
-`--bin N` replaces each N x N detector block by its mean, rounded to the
+`--detector-bin N` replaces each N x N detector block by its mean, rounded to the
 nearest count, in an `--html` export packed in Python (`--backend auto`). The
-default is `--bin 1`, meaning full detector sampling.
+default is `--detector-bin 1`, meaning full detector sampling.
 Use a larger value only for an explicit preview, and label that reduction in
 the report. The `--backend webgpu` folder reads the source HDF5 chunks in the
-browser and requires `--bin 1`; live notebooks always keep full detector
+browser and requires `--detector-bin 1`; live notebooks always keep full detector
 sampling.
 
-Use `--backend webgpu --html --bin 1` when the user wants the full native
+Use `--backend webgpu --html --detector-bin 1` when the user wants the full native
 detector sampling path without opening Jupyter:
 
 ```bash
-quantem show4dstem /data/session --backend webgpu --html --count 7 --bin 1 --dtype uint8 --out ~/Downloads
+quantem show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8 --out ~/Downloads
 ```
 
 That command writes a browser folder with anonymous H5 symlinks plus
@@ -121,7 +121,7 @@ quantem github analysis_github.ipynb --no-execute
 
 | Option | Effect |
 |---|---|
-| `--bin N` | `--html` packed in Python: detector mean-bin factor (default 1). `--backend webgpu` and live notebooks require 1 |
+| `--detector-bin N` | `--html` packed in Python: detector mean-bin factor (default 1). `--backend webgpu` and live notebooks require 1 |
 | `--backend auto/webgpu` | `auto` (default) loads onto CUDA, Apple MPS or the CPU, whichever the machine has; `webgpu` with `--html` writes a browser-owned full-detector HDF5-backed viewer |
 | `--count N` | require and load exactly this many compatible masters from the input |
 | `--dtype auto/uint8/uint16` | HDF5 HTML dtype; Python packing defaults to `auto`, choosing uint8 when counts fit and uint16 otherwise. An explicit uint8 choice is for compact browsing. Native QEM keeps its stored dtype |
@@ -141,12 +141,12 @@ box and **Apple Metal (MPS)** on a Mac. `--backend webgpu` hands the compute to
 the browser instead of the Python process. On a MacBook:
 
 ```bash
-quantem show4dstem ./masters/ --backend webgpu --html --count 1 --bin 1
+quantem show4dstem ./masters/ --backend webgpu --html --count 1 --detector-bin 1
 ```
 
 uses browser WebGPU and writes a double-clickable HDF5-backed folder without
 copying raw data. Without `--backend webgpu`, an HDF5 `--html` export packs the
-array in Python. `--bin N` with `N > 1` mean-bins the detector as an explicit
+array in Python. `--detector-bin N` with `N > 1` mean-bins the detector as an explicit
 sampling reduction; the resulting values can still exceed 255. Keep the default
 `--dtype auto` for range-based Python packing, or choose `uint16` when the wider
 detector-count range is needed. Binning alone does not guarantee uint8 safety.

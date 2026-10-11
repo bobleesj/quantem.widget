@@ -116,11 +116,11 @@ identical limits are required.
 
 `export_html` writes one standalone file. The default embeds the exact float32
 display stack; `encoding="uint8"` writes a compact pack and accepts
-`downsample=2`, `4` or `8`. Exports above 80 MB are refused with the smaller
+`image_bin=2`, `4` or `8`. Exports above 80 MB are refused with the smaller
 options named; pass `max_mb=None` to force one.
 
 ```python
-w.export_html("review.html", encoding="uint8", downsample=2)
+w.export_html("review.html", encoding="uint8", image_bin=2)
 ```
 
 ## Animation exports

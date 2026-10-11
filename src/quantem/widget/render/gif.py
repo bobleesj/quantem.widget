@@ -88,14 +88,14 @@ def animation_output_scale(
     height: int,
     quality: str,
     *,
-    downsample: int = 1,
+    image_bin: int = 1,
     max_edge_px: int | None = None,
 ) -> float:
     """Return the explicit display scale for an exported animation frame."""
     width = max(1, int(width))
     height = max(1, int(height))
-    downsample = max(1, int(downsample))
-    scale = min(1.0, float(QUALITY_SCALE.get(quality, 1.0)) / float(downsample))
+    image_bin = max(1, int(image_bin))
+    scale = min(1.0, float(QUALITY_SCALE.get(quality, 1.0)) / float(image_bin))
     if max_edge_px is not None:
         max_edge_px = max(1, int(max_edge_px))
         scale = min(scale, max_edge_px / float(max(width, height)))
@@ -110,7 +110,7 @@ def finalize_frame(
     *,
     show_zoom_indicator: bool = False,
     zoom: float = 1.0,
-    downsample: int = 1,
+    image_bin: int = 1,
     max_edge_px: int | None = None,
 ):
     """Downscale explicitly, then draw the scale bar at output resolution."""
@@ -118,7 +118,7 @@ def finalize_frame(
         img.size[0],
         img.size[1],
         quality,
-        downsample=downsample,
+        image_bin=image_bin,
         max_edge_px=max_edge_px,
     )
     if scale < 1.0:

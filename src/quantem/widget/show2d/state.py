@@ -24,7 +24,7 @@ def _rescale_view(state: dict, factor: float) -> dict:
 
     The browser measures zoom center, view box, ROIs, profile points and
     data-coordinate overlays in the pixels it shows, which are native pixels
-    binned by the display bin (and, in an export clone, by ``downsample``).
+    binned by the display bin (and, in an export clone, by ``image_bin``).
     ``state_dict`` stores them in native pixels so a state moves between
     widgets with different bins; without the conversion the view and the
     scale bar of a binned widget land ``factor`` times off.

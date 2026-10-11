@@ -573,7 +573,7 @@ def test_folder_widget_append_preserves_display_bin_and_calibration(
         assert widget.pixel_size == pytest.approx(1.0)
         assert widget.scale_bar_visible is True
         if viewer is Show2D:
-            assert widget._display_bin_factor == 2
+            assert widget.display_bin == 2
         else:
             assert widget._display_bin == 2
     finally:
@@ -590,11 +590,11 @@ def test_show2d_empty_first_recomputes_auto_display_bin(
     widget = Show2D.from_folder(tmp_path, watch=True, watch_interval=60, display_bin="auto")
     try:
         assert widget.n_images == 0
-        assert widget._display_bin_factor == 1
+        assert widget.display_bin == 1
         _save(tmp_path / "frame_1.npy", 1, shape=(16, 16))
         assert widget.poll_folder() == []
         assert widget.poll_folder() == [0]
-        assert widget._display_bin_factor == 4
+        assert widget.display_bin == 4
         assert widget._data.shape == (1, 16, 16)
         assert widget._display_data.shape == (1, 4, 4)
     finally:

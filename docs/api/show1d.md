@@ -145,20 +145,20 @@ exact revisions and inputs.
 ## HTML export
 
 Show1D writes one page with exact float32 traces; its only packing choice is
-the image downsample:
+the image image_bin:
 
 ```python
-path = widget.export_html("defocus-review.html", downsample=4)
+path = widget.export_html("defocus-review.html", image_bin=4)
 ```
 
-`downsample` may be `None`, `1`, `2`, `4`, or `8`. It
+`image_bin` may be `None`, `1`, `2`, `4`, or `8`. It
 preserves every 1D trace sample and x coordinate while applying a NaN-aware
 area mean only to linked 2D snapshots and profile images. Calibrated pixel size,
 snapshot view centers, and profile coordinates are rescaled with the image, so
 the downsampled review remains physically calibrated.
 
 A full export can be large when hundreds of full-resolution snapshots are
-linked, so choose `downsample=2`, `4`, or `8` when one-file portability matters
+linked, so choose `image_bin=2`, `4`, or `8` when one-file portability matters
 more than preserving every image pixel.
 
 The generated file is kernel-free and needs no network: RequireJS, AnyWidget

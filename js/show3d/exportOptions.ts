@@ -11,11 +11,11 @@ export function makeExportFilename(
   width: number,
   kind: ExportKind,
   quality = "medium",
-  downsample = 1,
+  imageBin = 1,
 ): string {
   const slug = exportTitleSlug(title, "show3d");
   if (kind === "gif") return `${slug}_${nSlices}x${height}x${width}_${quality}.gif`;
-  const binSuffix = kind === "uint8" && downsample > 1 ? `_${downsample}xbin` : "";
+  const binSuffix = kind === "uint8" && imageBin > 1 ? `_image_bin${imageBin}` : "";
   const suffix = kind === "uint8" ? `quantized${binSuffix}` : "exact";
   return `${slug}_${nSlices}x${height}x${width}_${suffix}.html`;
 }
@@ -55,14 +55,14 @@ export type GifExportPreset = "slides" | "compact" | "full" | "custom";
 export const EXPORT_SPATIAL_OPTIONS: Array<{
   value: ExportSpatialPreset;
   label: string;
-  downsample: number;
+  imageBin: number;
   maxEdgePx: number | null;
 }> = [
-  { value: "full", label: "Full", downsample: 1, maxEdgePx: null },
-  { value: "down2", label: "2x downsample", downsample: 2, maxEdgePx: null },
-  { value: "down4", label: "4x downsample", downsample: 4, maxEdgePx: null },
-  { value: "edge512", label: "Max edge 512 px", downsample: 1, maxEdgePx: 512 },
-  { value: "edge1024", label: "Max edge 1024 px", downsample: 1, maxEdgePx: 1024 },
+  { value: "full", label: "Full", imageBin: 1, maxEdgePx: null },
+  { value: "down2", label: "image bin 2x", imageBin: 2, maxEdgePx: null },
+  { value: "down4", label: "image bin 4x", imageBin: 4, maxEdgePx: null },
+  { value: "edge512", label: "Max edge 512 px", imageBin: 1, maxEdgePx: 512 },
+  { value: "edge1024", label: "Max edge 1024 px", imageBin: 1, maxEdgePx: 1024 },
 ];
 
 export const GIF_EXPORT_PRESETS: Array<{ value: GifExportPreset; label: string }> = [
@@ -72,7 +72,7 @@ export const GIF_EXPORT_PRESETS: Array<{ value: GifExportPreset; label: string }
 ];
 
 /**
- * Source-to-GIF pixel scale: the quality preset divided by the downsample
+ * Source-to-GIF pixel scale: the quality preset divided by the image bin
  * factor (at most 1), shrunk further so the whole panel grid fits maxEdgePx,
  * and never so small that the frame drops below one output pixel.
  */
@@ -80,14 +80,14 @@ export function animationOutputScale(
   width: number,
   height: number,
   quality: string,
-  downsample = 1,
+  imageBin = 1,
   maxEdgePx: number | null = null,
   visiblePanels = 1,
   maxCols = 1,
   panelGap = 0,
 ): number {
   const base = ANIMATION_QUALITY_SCALE[quality] ?? ANIMATION_QUALITY_SCALE.medium;
-  const factor = Math.max(1, Math.round(downsample || 1));
+  const factor = Math.max(1, Math.round(imageBin || 1));
   let scale = Math.min(1, base / factor);
   if (maxEdgePx && maxEdgePx > 0) {
     const panels = Math.max(1, Math.round(visiblePanels || 1));
@@ -143,10 +143,10 @@ export function formatEstimatedAnimationWork(
   maxCols: number,
   panelGap: number,
   quality: string,
-  downsample = 1,
+  imageBin = 1,
   maxEdgePx: number | null = null,
 ): string {
-  const scale = animationOutputScale(width, height, quality, downsample, maxEdgePx, visiblePanels, maxCols, panelGap);
+  const scale = animationOutputScale(width, height, quality, imageBin, maxEdgePx, visiblePanels, maxCols, panelGap);
   const panelW = Math.max(1, Math.floor(Math.max(1, width) * scale));
   const panelH = Math.max(1, Math.floor(Math.max(1, height) * scale));
   const panels = Math.max(1, visiblePanels);

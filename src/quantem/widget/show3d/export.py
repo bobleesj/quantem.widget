@@ -26,7 +26,7 @@ class Show3DExport:
     """HTML, image and animation export for Show3D."""
 
     _HTML_ENCODINGS = ("full", "uint8")
-    _HTML_DOWNSAMPLES = (1, 2, 4, 8)
+    _HTML_IMAGE_BINS = (1, 2, 4, 8)
 
     def export_html(
         self,
@@ -34,53 +34,53 @@ class Show3DExport:
         *,
         title: str | None = None,
         encoding: str = "full",
-        downsample: int | None = None,
+        image_bin: int | None = None,
         max_mb: float | None = 80.0,
     ) -> pathlib.Path:
         """Write a standalone HTML viewer that opens with no kernel and no network.
 
         ``encoding="full"`` embeds the exact float32 display stack;
         ``encoding="uint8"`` writes a quantized pack with per-panel ranges and
-        accepts ``downsample`` 2, 4 or 8 for compact reports. Exports above
+        accepts ``image_bin`` 2, 4 or 8 for compact reports. Exports above
         ``max_mb`` are refused with the smaller options named; pass
         ``max_mb=None`` to force.
         """
         if self._data is None:
             raise ValueError("Cannot export HTML after free(); rebuild the widget first.")
-        return self._write_export_and_report(path, title=title, max_mb=max_mb, **self._html_export_choice(encoding, downsample))
+        return self._write_export_and_report(path, title=title, max_mb=max_mb, **self._html_export_choice(encoding, image_bin))
 
-    def _estimate_html_export_mb(self, *, quantized: bool, downsample: int) -> float:
+    def _estimate_html_export_mb(self, *, quantized: bool, image_bin: int) -> float:
         """Rough embedded size: base64 inflates the stack bytes by 4/3 plus a 2 MB runtime."""
-        elements = int(np.prod(self._offline_stack_source().shape)) // max(1, int(downsample) ** 2)
+        elements = int(np.prod(self._offline_stack_source().shape)) // max(1, int(image_bin) ** 2)
         return elements * (1 if quantized else 4) * (4.0 / 3.0) / (1024 * 1024) + 2.0
 
-    def _default_html_export_path(self, quantized: bool, *, downsample: int = 1) -> pathlib.Path:
+    def _default_html_export_path(self, quantized: bool, *, image_bin: int = 1) -> pathlib.Path:
         """File in the kernel cwd named after the title, stack shape and encoding (``HtmlExportMixin`` hook)."""
         slug = export_slug(self.title, "show3d")
-        suffix = f"_{int(downsample)}xbin" if quantized and int(downsample) > 1 else ""
+        suffix = f"_{int(image_bin)}xbin" if quantized and int(image_bin) > 1 else ""
         return pathlib.Path.cwd() / f"{slug}_{self.n_slices}x{self.height}x{self.width}_{'quantized' if quantized else 'exact'}{suffix}.html"
 
     def _default_gif_export_path(self, quality: str = "medium") -> pathlib.Path:
         """File in the kernel cwd for a toolbar GIF, named after the title, stack shape and quality."""
         return pathlib.Path.cwd() / f"{export_slug(self.title, 'show3d')}_{self.n_slices}x{self.height}x{self.width}_{quality}.gif"
 
-    def _export_data_args(self, *, downsample: int = 1) -> tuple[np.ndarray, ...]:
+    def _export_data_args(self, *, image_bin: int = 1) -> tuple[np.ndarray, ...]:
         """Display-shaped per-panel stacks so the export clone rebuilds the same panels."""
         if self._display_data is None:
             raise ValueError("Cannot export HTML after free(); rebuild the widget first.")
-        downsample = int(downsample)
+        image_bin = int(image_bin)
 
         def binned(panel: np.ndarray) -> np.ndarray:
-            """One gray panel stack mean-binned by ``downsample``, as contiguous float32."""
-            if downsample > 1:
-                return np.ascontiguousarray(bin2d(panel, factor=downsample, mode="mean"), dtype=np.float32)
+            """One gray panel stack mean-binned by ``image_bin``, as contiguous float32."""
+            if image_bin > 1:
+                return np.ascontiguousarray(bin2d(panel, factor=image_bin, mode="mean"), dtype=np.float32)
             return np.ascontiguousarray(panel, dtype=np.float32)
 
         def binned_rgb(stack: np.ndarray) -> np.ndarray:
-            """One ``(N, H, W, 3)`` color stack mean-binned per channel by ``downsample``."""
-            if downsample <= 1:
+            """One ``(N, H, W, 3)`` color stack mean-binned per channel by ``image_bin``."""
+            if image_bin <= 1:
                 return np.ascontiguousarray(stack, dtype=np.float32)
-            frames = [np.stack([bin2d(stack[frame, ..., channel], factor=downsample, mode="mean") for channel in range(3)], axis=-1)
+            frames = [np.stack([bin2d(stack[frame, ..., channel], factor=image_bin, mode="mean") for channel in range(3)], axis=-1)
                       for frame in range(stack.shape[0])]
             return np.ascontiguousarray(np.stack(frames, axis=0), dtype=np.float32)
 
@@ -99,18 +99,18 @@ class Show3DExport:
             return tuple(binned(self._display_data[:, :, i * panel_width : (i + 1) * panel_width]) for i in range(n_panels))
         return (binned(self._display_data),)
 
-    def _clone_for_html_export(self, *, quantized: bool, downsample: int = 1) -> Self:
+    def _clone_for_html_export(self, *, quantized: bool, image_bin: int = 1) -> Self:
         """An export-only widget carrying the current view state and requested packing."""
-        downsample = int(downsample)
+        image_bin = int(image_bin)
         clone = type(self)(
-            *self._export_data_args(downsample=downsample),
+            *self._export_data_args(image_bin=image_bin),
             labels=list(self.labels) if self.labels else None,
             panel_titles=list(self.panel_titles) if self.panel_titles else None,
             title=self.title,
             cmap=self.cmap,
             vmin=self.vmin,
             vmax=self.vmax,
-            sampling=self.pixel_size * downsample if self.pixel_size > 0 else None,
+            sampling=self.pixel_size * image_bin if self.pixel_size > 0 else None,
             units=self.pixel_unit,
             smooth=self.smooth,
             auto_contrast=self.auto_contrast,
@@ -142,7 +142,7 @@ class Show3DExport:
         # The saved state carries the live pixel size; a binned export needs it
         # scaled so the scale bar stays physically correct.
         if self.pixel_size > 0:
-            clone.pixel_size = self.pixel_size * downsample
+            clone.pixel_size = self.pixel_size * image_bin
         if quantized:
             clone._pack_offline_u8_stack()
         else:
@@ -182,7 +182,7 @@ class Show3DExport:
             "frame_stop": _optional_int(payload.get("frame_stop")),
             "every_n": max(1, int(payload.get("every_n", 1) or 1)),
             "max_frames": _optional_int(payload.get("max_frames")),
-            "downsample": self._normalize_animation_downsample(payload.get("downsample", 1)),
+            "image_bin": self._normalize_animation_image_bin(payload.get("image_bin", 1)),
             "max_edge_px": _optional_int(payload.get("max_edge_px")),
             "show_panel_titles": flag("show_panel_titles"),
             "show_scale_bar": flag("show_scale_bar"),
@@ -202,8 +202,8 @@ class Show3DExport:
             parts.append(f"every {kwargs['every_n']}")
         if kwargs["max_frames"]:
             parts.append(f"max {kwargs['max_frames']}")
-        if kwargs["downsample"] > 1:
-            parts.append(f"{kwargs['downsample']}x downsample")
+        if kwargs["image_bin"] > 1:
+            parts.append(f"image bin {kwargs['image_bin']}x")
         if kwargs["max_edge_px"] is not None:
             parts.append(f"max edge {kwargs['max_edge_px']} px")
         if kwargs["slides_preset"]:
@@ -289,7 +289,7 @@ class Show3DExport:
         frame_stop: int | None = None,
         every_n: int = 1,
         max_frames: int | None = None,
-        downsample: int = 1,
+        image_bin: int = 1,
         max_edge_px: int | None = None,
         show_panel_titles: bool | None = None,
         show_scale_bar: bool | None = None,
@@ -306,14 +306,14 @@ class Show3DExport:
         controls and hover or selection affordances are never rendered.
         """
         quality = self._normalize_animation_quality(quality)
-        downsample = self._normalize_animation_downsample(downsample)
+        image_bin = self._normalize_animation_image_bin(image_bin)
         if slides_preset:
             max_frames = 40 if max_frames is None else max_frames
-            max_edge_px = 512 if max_edge_px is None and downsample == 1 else max_edge_px
+            max_edge_px = 512 if max_edge_px is None and image_bin == 1 else max_edge_px
         max_edge_px = _optional_int(max_edge_px)
         source_w = max(1, int(self.source_panel_width or self.panel_width_px or self.width))
         source_h = max(1, int(self.source_height or self.height))
-        scale = gif_utils.animation_output_scale(source_w, source_h, quality, downsample=downsample, max_edge_px=max_edge_px)
+        scale = gif_utils.animation_output_scale(source_w, source_h, quality, image_bin=image_bin, max_edge_px=max_edge_px)
         panel_gap = max(0, int(round(float(self.inter_panel_gap_px) * scale)))
         include_scale_bar = bool(self.scale_bar_visible) if show_scale_bar is None else bool(show_scale_bar)
         include_zoom = bool(self.show_zoom_indicator) if show_zoom is None else bool(show_zoom)
@@ -333,7 +333,7 @@ class Show3DExport:
                     pixel_size,
                     unit,
                     show_zoom_indicator=include_zoom,
-                    downsample=downsample,
+                    image_bin=image_bin,
                     max_edge_px=max_edge_px,
                 )
                 for panel in panel_indices
@@ -384,10 +384,10 @@ class Show3DExport:
             raise ValueError(f"animation quality must be one of {list(gif_utils.QUALITY_SCALE)}, got {quality!r}")
         return value
 
-    def _normalize_animation_downsample(self, downsample: int | None) -> int:
-        """GIF downsample factor 1, 2, 4 or 8, with empty values meaning 1; a bool is refused as a factor."""
-        if downsample in (None, "", 0, "0"):
+    def _normalize_animation_image_bin(self, image_bin: int | None) -> int:
+        """GIF ``image_bin`` 1, 2, 4 or 8, with empty values meaning 1; a bool is refused as a factor."""
+        if image_bin in (None, "", 0, "0"):
             return 1
-        if isinstance(downsample, bool) or int(downsample) not in {1, 2, 4, 8}:
-            raise ValueError("animation export downsample must be one of 1, 2, 4, or 8")
-        return int(downsample)
+        if isinstance(image_bin, bool) or int(image_bin) not in {1, 2, 4, 8}:
+            raise ValueError("animation export image_bin must be one of 1, 2, 4, or 8")
+        return int(image_bin)

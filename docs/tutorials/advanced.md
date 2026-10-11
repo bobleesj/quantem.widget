@@ -38,8 +38,8 @@ Show3D exports one portable HTML file. Choose the display payload explicitly:
 
 | Review need | Recommended path | What it means |
 | --- | --- | --- |
-| Email or attach one browseable artifact | `export_html(..., encoding="uint8", downsample=2)` | Compact review copy with explicit spatial reduction. |
-| Preserve the current display shape | `export_html(..., encoding="uint8", downsample=1)` | One portable HTML using display-scaled uint8 data. |
+| Email or attach one browseable artifact | `export_html(..., encoding="uint8", image_bin=2)` | Compact review copy with explicit spatial reduction. |
+| Preserve the current display shape | `export_html(..., encoding="uint8", image_bin=1)` | One portable HTML using display-scaled uint8 data. |
 | Recompute, stream fresh frames, or inspect exact backend arrays | live Jupyter widget | Python owns the arrays and the browser remains interactive. |
 
 ```python
@@ -57,12 +57,12 @@ w = Show3D(
 w.export_html(
     "/data/reports/800C_1.3Mx_review.html",
     encoding="uint8",
-    downsample=1,
+    image_bin=1,
 )
 ```
 
 Large exact float32 files can exceed browser limits. Prefer uint8 for visual review,
-use an explicit `downsample` when needed, and keep exact multi-gigabyte analysis in
+use an explicit `image_bin` when needed, and keep exact multi-gigabyte analysis in
 the live widget rather than creating a companion sidecar folder.
 
 ## Label local regions inside panels

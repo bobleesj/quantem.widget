@@ -106,6 +106,15 @@ Changed:
   `scan_detector_rotation_deg`, `num_trials`, `lock_C10`, `lock_C12` and
   `lock_aberrations`; `manual_aberrations` and the calibration keys it never
   sent are gone.
+- Binning names are one family, `<what>_bin`. `Show4DSTEM.export_html` and its
+  export request: `det_bin` to `detector_bin` (`scan_bin` unchanged);
+  `quantem show4dstem --bin` to `--detector-bin`; default export file names
+  `rbin<N>_kbin<N>` to `scan_bin<N>_detector_bin<N>` and the menu labels to
+  "scan bin", "detector bin". `export_html` of `Show1D`, `Show2D` and `Show3D`,
+  their export request and the Show3D GIF request: `downsample` to
+  `image_bin`; default file-name suffixes `_Nxdownsample(d)` and `_Nxbin` to
+  `_image_binN`; status text "Nx downsample" to "image bin Nx". `Show2D` trait
+  `_display_bin_factor` to `display_bin`, the name `Show3D` uses.
 - quantem.gpu is reached through `quantem.widget.adapters.gpu.SsbSession`
   (and `js/showptycho/engineAdapter.ts` for the browser engine), the one place
   that holds quantem.gpu's own names; `adapters.gpu.ssb_session` is removed.

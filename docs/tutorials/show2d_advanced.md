@@ -608,7 +608,7 @@ Before sharing a Show2D report, check these items:
 - Keep local annotations and overlays reproducible through `panel_annotations`
   and `panel_overlays`.
 - Use `ui_mode="presentation"` when the exported first view should be clean.
-- State any `downsample` or `encoding="uint8"` choice in the surrounding report
+- State any `image_bin` or `encoding="uint8"` choice in the surrounding report
   when scientific interpretation depends on exact pixels.
 - For interactive proof, drive the exported HTML in a headed browser: zoom,
   pan, change contrast, switch pages or frames, and confirm overlays/labels

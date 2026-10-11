@@ -3,7 +3,7 @@
 ``HtmlExportMixin`` owns the toolbar handshake (the ``export_*`` traits and
 the request observer), the export options, the in-memory bytes path and the
 standalone write. A widget lists the packings its page can hold
-(``_HTML_ENCODINGS``, ``_HTML_DOWNSAMPLES``) and supplies
+(``_HTML_ENCODINGS``, ``_HTML_IMAGE_BINS``) and supplies
 ``_clone_for_html_export`` (an export-only copy of itself with that packing)
 and ``_default_html_export_path``. ``write_widget_html`` embeds any widget as a
 one-file page that opens with no network and on phones.
@@ -129,7 +129,7 @@ class HtmlExportMixin(traitlets.HasTraits):
     # The packings this widget's page can hold: exact float32 ("full"), uint8 per
     # panel, and the mean-bin factors of its embedded images.
     _HTML_ENCODINGS: tuple[str, ...] = ("full",)
-    _HTML_DOWNSAMPLES: tuple[int, ...] = (1,)
+    _HTML_IMAGE_BINS: tuple[int, ...] = (1,)
 
     def _on_export_request_change(self, change: dict) -> None:
         """React to a toolbar request on ``export_request``: clear the download payload or serve the export."""
@@ -163,30 +163,30 @@ class HtmlExportMixin(traitlets.HasTraits):
         self.export_status = f"Ready {filename} ({len(html) / (1024 * 1024):.1f} MB, {self._export_mode_label(**options)})"
 
     def _html_export_options(self, payload: dict) -> dict:
-        """The packing options of a toolbar request (``encoding``, ``downsample``), checked as an ``export_html`` call is."""
-        return self._html_export_choice(payload.get("encoding", "full"), payload.get("downsample"))
+        """The packing options of a toolbar request (``encoding``, ``image_bin``), checked as an ``export_html`` call is."""
+        return self._html_export_choice(payload.get("encoding", "full"), payload.get("image_bin"))
 
-    def _html_export_choice(self, encoding: str, downsample) -> dict:
-        """The ``quantized`` / ``downsample`` options of an export, refusing a packing this widget's page cannot hold.
+    def _html_export_choice(self, encoding: str, image_bin) -> dict:
+        """The ``quantized`` / ``image_bin`` options of an export, refusing a packing this widget's page cannot hold.
 
         Only the options a widget offers are returned (Show3DSlices takes no
-        downsample, Show1D no uint8), so each widget's export hooks take
-        exactly its own. A downsample of an exact float32 page is refused: that
+        image_bin, Show1D no uint8), so each widget's export hooks take
+        exactly its own. An ``image_bin`` above 1 for an exact float32 page is refused: that
         page promises every native pixel.
         """
         name = type(self).__name__
         if encoding not in self._HTML_ENCODINGS:
             raise ValueError(f"{name} export encoding must be one of {list(self._HTML_ENCODINGS)}, got {encoding!r}")
-        factor = 1 if downsample is None else downsample
-        if isinstance(factor, bool) or factor not in self._HTML_DOWNSAMPLES:
-            raise ValueError(f"{name} export downsample must be one of {list(self._HTML_DOWNSAMPLES)}, got {downsample!r}")
+        factor = 1 if image_bin is None else image_bin
+        if isinstance(factor, bool) or factor not in self._HTML_IMAGE_BINS:
+            raise ValueError(f"{name} export image_bin must be one of {list(self._HTML_IMAGE_BINS)}, got {image_bin!r}")
         if factor > 1 and encoding == "full" and "uint8" in self._HTML_ENCODINGS:
-            raise ValueError(f"{name} exact float32 export keeps every native pixel; downsample needs encoding='uint8'")
+            raise ValueError(f"{name} exact float32 export keeps every native pixel; image_bin needs encoding='uint8'")
         options = {}
         if len(self._HTML_ENCODINGS) > 1:
             options["quantized"] = encoding == "uint8"
-        if len(self._HTML_DOWNSAMPLES) > 1:
-            options["downsample"] = int(factor)
+        if len(self._HTML_IMAGE_BINS) > 1:
+            options["image_bin"] = int(factor)
         return options
 
     def _write_export_and_report(self, path, *, title: str | None, max_mb: float | None = None, **options) -> pathlib.Path:
@@ -199,12 +199,12 @@ class HtmlExportMixin(traitlets.HasTraits):
         if max_mb is not None:
             estimate_mb = self._estimate_html_export_mb(**options)
             if estimate_mb > float(max_mb):
-                uint8_mb = self._estimate_html_export_mb(quantized=True, downsample=options["downsample"])
+                uint8_mb = self._estimate_html_export_mb(quantized=True, image_bin=options["image_bin"])
                 raise ValueError(
                     f"This export would embed about {estimate_mb:.0f} MB into one HTML file, "
                     f"above the {float(max_mb):.0f} MB safe limit (large single-file exports often "
                     f"fail to open under Chrome file://). Options: encoding='uint8' "
-                    f"(about {uint8_mb:.0f} MB), downsample=2 or 4 to shrink spatially, or pass "
+                    f"(about {uint8_mb:.0f} MB), image_bin=2 or 4 to shrink spatially, or pass "
                     f"max_mb={estimate_mb:.0f} to force this size."
                 )
         export_path = pathlib.Path(path) if path is not None else self._default_html_export_path(**options)
@@ -213,12 +213,12 @@ class HtmlExportMixin(traitlets.HasTraits):
         self.export_status = f"Exported {export_path.name} ({size_mb:.1f} MB, {self._export_mode_label(**options)})"
         return export_path
 
-    def _export_mode_label(self, quantized: bool = False, downsample: int = 1) -> str:
+    def _export_mode_label(self, quantized: bool = False, image_bin: int = 1) -> str:
         """Packing named in the toolbar status, so the user sees whether the page holds float32 or uint8 pixels."""
         if not quantized:
             return "full float32"
-        if int(downsample) > 1:
-            return f"uint8, {int(downsample)}x downsample"
+        if int(image_bin) > 1:
+            return f"uint8, image bin {int(image_bin)}x"
         return "uint8"
 
     def _write_html_export(self, path: str | pathlib.Path, *, title: str | None = None, **options) -> pathlib.Path:

@@ -213,7 +213,7 @@ def test_display_bin_auto_bins_large_input_and_serves_full_resolution_tiles(caps
     # 17.2 MB float32 is over the 16 MiB wire budget: preview binned so the
     # long side is about 1024 px (2100 / 1024 -> 3), full-res tiles on zoom.
     assert "Show2D display bin 3x (auto, over the display budget): 2048x2100 -> 682x700" in capsys.readouterr().out
-    assert widget._display_bin_factor == 3 and (widget.height, widget.width) == (682, 700)
+    assert widget.display_bin == 3 and (widget.height, widget.width) == (682, 700)
     widget._detail_request = json.dumps({"id": "t1", "tiles": [{"panel": 0, "row0": 10, "row1": 20, "col0": 5, "col1": 15, "bin": 1}]})
     meta = json.loads(widget._detail_meta)
     tile = meta["tiles"][0]
@@ -514,7 +514,7 @@ def test_keywords_the_constructor_sets_itself_raise():
     with pytest.raises(TypeError, match="image_rotations"):
         Show2D(_frame(), image_rotations=[1], verbose=False)
     assert Show2D(_frame(), show_title=False, verbose=False).show_title is False
-    assert Show2D(_frame(), display_bin=np.int64(2), verbose=False)._display_bin_factor == 2
+    assert Show2D(_frame(), display_bin=np.int64(2), verbose=False).display_bin == 2
     for bad in ("2", 0, -3, 1.5):
         with pytest.raises(ValueError, match="display_bin"):
             Show2D(_frame(), display_bin=bad, verbose=False)
@@ -548,7 +548,7 @@ def test_export_clone_downsample_scales_calibration_and_view_coordinates():
     # A-3: the clone's state restored the native pixel size and coordinates after downsampling.
     widget = Show2D(_frame(0, (64, 64)), sampling=0.5, units="nm", zoom=2, center=(20, 40), verbose=False)
     widget.roi_list = [{"shape": "circle", "row": 10.0, "col": 30.0, "radius": 4.0}]
-    clone = widget._clone_for_html_export(quantized=True, downsample=2)
+    clone = widget._clone_for_html_export(quantized=True, image_bin=2)
     assert (clone.height, clone.width, clone.pixel_size) == (32, 32, 1.0)
     assert (clone.zoom_row, clone.zoom_col) == (10.0, 20.0)
     assert clone.roi_list[0]["row"] == 5.0 and clone.roi_list[0]["radius"] == 2.0

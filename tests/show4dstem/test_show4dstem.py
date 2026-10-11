@@ -607,7 +607,7 @@ def test_interactive_export_packs_binned_counts_in_one_self_contained_page(tmp_p
         binned = export_data_array(widget, "uint8", 2, 2)
         expected = counts.reshape(2, 2, 2, 2, 8, 2, 8, 2).mean(axis=(1, 3, 5, 7))
         np.testing.assert_array_equal(binned, np.clip(np.round(expected), 0, 255).astype(np.uint8))
-        out = widget.export_html(tmp_path / "viewer.html", dtype="uint16", det_bin=2, scan_bin=2)
+        out = widget.export_html(tmp_path / "viewer.html", dtype="uint16", detector_bin=2, scan_bin=2)
         html = out.read_text(errors="ignore")
         assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
         assert "_offline_stack" in html and "application/vnd.jupyter.widget-state+json" in html
@@ -615,9 +615,9 @@ def test_interactive_export_packs_binned_counts_in_one_self_contained_page(tmp_p
         assert not (tmp_path / "Show4DSTEM.command").exists()
         assert "interactive raw 4D, uint16, scan bin 2x, detector bin 2x" in widget.export_status
         assert widget.export_status.endswith("self-contained HTML - double-click to open, no server needed")
-        with pytest.raises(ValueError, match="det_bin"):
-            widget.export_html(tmp_path / "bad.html", det_bin=3)
-        widget.export_request = json.dumps({"export_kind": "report", "dtype": "uint8", "det_bin": 2, "scan_bin": 1,
+        with pytest.raises(ValueError, match="detector_bin"):
+            widget.export_html(tmp_path / "bad.html", detector_bin=3)
+        widget.export_request = json.dumps({"export_kind": "report", "dtype": "uint8", "detector_bin": 2, "scan_bin": 1,
                                             "dataset_scope": "all", "id": "r1", "filename": "report.html", "download": True})
         assert widget.export_payload_id == "r1"
         assert b"Static report export" in bytes(widget.export_payload)
@@ -629,7 +629,7 @@ def test_interactive_export_packs_binned_counts_in_one_self_contained_page(tmp_p
 
 def test_interactive_export_refuses_counts_no_page_can_load_before_reading(tmp_path, monkeypatch):
     # the shape alone decides: a gold-sized 512 x 512 x 192 x 192 scan is 9.7 GB of uint8 at bin 1
-    with pytest.raises(ValueError, match=r"9\.7 GB of uint8 .* pass det_bin=2, scan_bin=2 .*Nothing was binned"):
+    with pytest.raises(ValueError, match=r"9\.7 GB of uint8 .* pass detector_bin=2, scan_bin=2 .*Nothing was binned"):
         check_html_payload(1, (512, 512), (192, 192), "uint8", 1, 1)
     check_html_payload(1, (512, 512), (192, 192), "uint8", 4, 2)
     widget = Show4DSTEM(_counts(4, scan=(4, 4)), precompute_virtual_images=False)
@@ -637,7 +637,7 @@ def test_interactive_export_refuses_counts_no_page_can_load_before_reading(tmp_p
         monkeypatch.setattr(html_export, "HTML_PAYLOAD_LIMIT", 4 * 4 * 16 * 16 - 1)
         monkeypatch.setattr(html_export, "HTML_PAYLOAD_ADVISED", 4 * 4 * 16 * 16 // 4)
         monkeypatch.setattr(Show4DSTEM, "_frame_array", lambda *args: pytest.fail("the export read a frame"))
-        with pytest.raises(ValueError, match="pass det_bin=2, scan_bin=1"):
+        with pytest.raises(ValueError, match="pass detector_bin=2, scan_bin=1"):
             widget.export_html(tmp_path / "viewer.html")
         assert not (tmp_path / "viewer.html").exists()
     finally:

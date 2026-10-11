@@ -310,7 +310,7 @@ type HtmlExportDtype = "uint8" | "uint16";
 type HtmlInteractivePreset = {
   label: string;
   dtype: HtmlExportDtype;
-  detBin: number;
+  detectorBin: number;
   scanBin: number;
   estimatedBytes: number;
 };
@@ -323,7 +323,7 @@ function makeHtmlExportFilename(
   detRows: number,
   detCols: number,
   dtype: string,
-  detBin: number,
+  detectorBin: number,
   scanBin: number,
   exportKind: HtmlExportKind,
   datasetScope: HtmlDatasetScope,
@@ -331,13 +331,13 @@ function makeHtmlExportFilename(
   const slug = exportTitleSlug(title, "show4dstem");
   const binnedScanRows = Math.max(1, Math.floor(scanRows / scanBin));
   const binnedScanCols = Math.max(1, Math.floor(scanCols / scanBin));
-  const binnedRows = Math.max(1, Math.floor(detRows / detBin));
-  const binnedCols = Math.max(1, Math.floor(detCols / detBin));
+  const binnedRows = Math.max(1, Math.floor(detRows / detectorBin));
+  const binnedCols = Math.max(1, Math.floor(detCols / detectorBin));
   const shape = nFrames > 1
     ? `${nFrames}x${binnedScanRows}x${binnedScanCols}x${binnedRows}x${binnedCols}`
     : `${binnedScanRows}x${binnedScanCols}x${binnedRows}x${binnedCols}`;
   const prefix = exportKind === "report" ? `report_${datasetScope}` : dtype;
-  return `${slug}_${shape}_${prefix}_rbin${scanBin}_kbin${detBin}.html`;
+  return `${slug}_${shape}_${prefix}_scan_bin${scanBin}_detector_bin${detectorBin}.html`;
 }
 
 function formatEstimatedHtmlBytes(htmlBytes: number): string {
@@ -355,13 +355,13 @@ function estimateInteractiveHtmlBytes(
   detRows: number,
   detCols: number,
   dtype: HtmlExportDtype,
-  detBin: number,
+  detectorBin: number,
   scanBin: number,
 ): number {
   const binnedScanRows = Math.max(1, Math.floor(scanRows / scanBin));
   const binnedScanCols = Math.max(1, Math.floor(scanCols / scanBin));
-  const binnedRows = Math.max(1, Math.floor(detRows / detBin));
-  const binnedCols = Math.max(1, Math.floor(detCols / detBin));
+  const binnedRows = Math.max(1, Math.floor(detRows / detectorBin));
+  const binnedCols = Math.max(1, Math.floor(detCols / detectorBin));
   const bytesPerPixel = dtype === "uint16" ? 2 : 1;
   const payloadBytes = Math.max(0, nFrames) * binnedScanRows * binnedScanCols * binnedRows * binnedCols * bytesPerPixel;
   return Math.max(0, payloadBytes) * 4 / 3 + HTML_EXPORT_OVERHEAD_BYTES;
@@ -2922,6 +2922,7 @@ function Show4DSTEM() {
               decodeBatch: show4DSTEMOptionalGlobalInt("__QT_H5_DECODE_BATCH", 1, 16),
               groupSize: show4DSTEMOptionalGlobalInt("__QT_H5_LOCAL_GROUP", 1, 16),
               workerCount: show4DSTEMOptionalGlobalInt("__QT_H5_LOCAL_WORKERS", 0, 8),
+              // the vendored quantem.gpu loader's own option name for the detector bin
               detBin: show4DSTEMOptionalGlobalInt("__QT_H5_DET_BIN", 1, 16),
               // The loader reads the lossless __QT_H5_DECODE_DTYPE override itself.
             });
@@ -4664,13 +4665,13 @@ function Show4DSTEM() {
   const handleHtmlExportSelect = async (
     exportKind: HtmlExportKind,
     dtype: string,
-    detBin: number,
+    detectorBin: number,
     scanBin: number,
     datasetScope: HtmlDatasetScope = "unhidden",
   ) => {
     setDpExportAnchor(null);
-    if (!["uint8", "uint16"].includes(dtype) || ![1, 2, 4, 8].includes(detBin) || ![1, 2, 4, 8].includes(scanBin)) return;
-    if (detRows % detBin !== 0 || detCols % detBin !== 0 || shapeRows % scanBin !== 0 || shapeCols % scanBin !== 0) return;
+    if (!["uint8", "uint16"].includes(dtype) || ![1, 2, 4, 8].includes(detectorBin) || ![1, 2, 4, 8].includes(scanBin)) return;
+    if (detRows % detectorBin !== 0 || detCols % detectorBin !== 0 || shapeRows % scanBin !== 0 || shapeCols % scanBin !== 0) return;
     const filename = makeHtmlExportFilename(
       title,
       nFrames,
@@ -4679,7 +4680,7 @@ function Show4DSTEM() {
       detRows,
       detCols,
       dtype,
-      detBin,
+      detectorBin,
       scanBin,
       exportKind,
       datasetScope,
@@ -4711,7 +4712,7 @@ function Show4DSTEM() {
     setExportRequest(JSON.stringify({
       export_kind: exportKind,
       dtype,
-      det_bin: detBin,
+      detector_bin: detectorBin,
       scan_bin: scanBin,
       dataset_scope: datasetScope,
       id,
@@ -4726,28 +4727,28 @@ function Show4DSTEM() {
   const detailedReportScanBin = React.useMemo(() => (
     [2, 1].find((bin) => shapeRows % bin === 0 && shapeCols % bin === 0) || 1
   ), [shapeCols, shapeRows]);
-  const reportDetBin = React.useMemo(() => (
+  const reportDetectorBin = React.useMemo(() => (
     [8, 4, 2, 1].find((bin) => detRows % bin === 0 && detCols % bin === 0) || 1
   ), [detCols, detRows]);
   const interactiveHtmlPresets = React.useMemo<HtmlInteractivePreset[]>(() => {
     const desired: Array<Omit<HtmlInteractivePreset, "estimatedBytes">> = [
-      { label: "Tiny preview", dtype: "uint8", scanBin: 8, detBin: 8 },
-      { label: "Small preview", dtype: "uint8", scanBin: 4, detBin: 8 },
-      { label: "Compact", dtype: "uint8", scanBin: 4, detBin: 4 },
-      { label: "Balanced", dtype: "uint8", scanBin: 2, detBin: 4 },
-      { label: "Detector detail", dtype: "uint8", scanBin: 1, detBin: 8 },
-      { label: "Detailed", dtype: "uint8", scanBin: 2, detBin: 2 },
-      { label: "Fine detector", dtype: "uint8", scanBin: 1, detBin: 2 },
-      { label: "Full uint8", dtype: "uint8", scanBin: 1, detBin: 1 },
-      { label: "Exact raw", dtype: "uint16", scanBin: 1, detBin: 1 },
+      { label: "Tiny preview", dtype: "uint8", scanBin: 8, detectorBin: 8 },
+      { label: "Small preview", dtype: "uint8", scanBin: 4, detectorBin: 8 },
+      { label: "Compact", dtype: "uint8", scanBin: 4, detectorBin: 4 },
+      { label: "Balanced", dtype: "uint8", scanBin: 2, detectorBin: 4 },
+      { label: "Detector detail", dtype: "uint8", scanBin: 1, detectorBin: 8 },
+      { label: "Detailed", dtype: "uint8", scanBin: 2, detectorBin: 2 },
+      { label: "Fine detector", dtype: "uint8", scanBin: 1, detectorBin: 2 },
+      { label: "Full uint8", dtype: "uint8", scanBin: 1, detectorBin: 1 },
+      { label: "Exact raw", dtype: "uint16", scanBin: 1, detectorBin: 1 },
     ];
     const out: HtmlInteractivePreset[] = [];
     const seen = new Set<string>();
     const add = (preset: Omit<HtmlInteractivePreset, "estimatedBytes">) => {
-      if (![1, 2, 4, 8].includes(preset.scanBin) || ![1, 2, 4, 8].includes(preset.detBin)) return;
+      if (![1, 2, 4, 8].includes(preset.scanBin) || ![1, 2, 4, 8].includes(preset.detectorBin)) return;
       if (shapeRows % preset.scanBin !== 0 || shapeCols % preset.scanBin !== 0) return;
-      if (detRows % preset.detBin !== 0 || detCols % preset.detBin !== 0) return;
-      const key = `${preset.dtype}:${preset.scanBin}:${preset.detBin}`;
+      if (detRows % preset.detectorBin !== 0 || detCols % preset.detectorBin !== 0) return;
+      const key = `${preset.dtype}:${preset.scanBin}:${preset.detectorBin}`;
       if (seen.has(key)) return;
       seen.add(key);
       out.push({
@@ -4759,7 +4760,7 @@ function Show4DSTEM() {
           detRows,
           detCols,
           preset.dtype,
-          preset.detBin,
+          preset.detectorBin,
           preset.scanBin,
         ),
       });
@@ -4769,12 +4770,12 @@ function Show4DSTEM() {
       const fallback: Array<Omit<HtmlInteractivePreset, "estimatedBytes">> = [];
       (["uint8", "uint16"] as HtmlExportDtype[]).forEach((dtype) => {
         [8, 4, 2, 1].forEach((scanBin) => {
-          [8, 4, 2, 1].forEach((detBin) => {
+          [8, 4, 2, 1].forEach((detectorBin) => {
             fallback.push({
               label: dtype === "uint16" ? "16-bit option" : "8-bit option",
               dtype,
               scanBin,
-              detBin,
+              detectorBin,
             });
           });
         });
@@ -4789,7 +4790,7 @@ function Show4DSTEM() {
             detRows,
             detCols,
             preset.dtype,
-            preset.detBin,
+            preset.detectorBin,
             preset.scanBin,
           ),
         }))
@@ -7656,17 +7657,17 @@ function Show4DSTEM() {
                 <Box sx={{ px: 1.5, pt: 1, pb: 0.25, fontSize: 11, color: themeColors.textMuted, fontWeight: 700 }}>
                   HTML report: static PNG, no raw 4D
                 </Box>
-                <MenuItem onClick={() => handleHtmlExportSelect("report", "uint8", reportDetBin, reportScanBin, "unhidden")} sx={{ fontSize: 12 }}>
-                    Unhidden · rbin {reportScanBin} · DP kbin {reportDetBin} ({estimateReportHtmlSize(reportScanBin, "unhidden")})
+                <MenuItem onClick={() => handleHtmlExportSelect("report", "uint8", reportDetectorBin, reportScanBin, "unhidden")} sx={{ fontSize: 12 }}>
+                    Unhidden · scan bin {reportScanBin} · detector bin {reportDetectorBin} ({estimateReportHtmlSize(reportScanBin, "unhidden")})
                 </MenuItem>
                 {currentPageReportCount > 0 && (
-                  <MenuItem onClick={() => handleHtmlExportSelect("report", "uint8", reportDetBin, detailedReportScanBin, "current_page")} sx={{ fontSize: 12 }}>
-                    Current page · rbin {detailedReportScanBin} · DP kbin {reportDetBin} ({estimateReportHtmlSize(detailedReportScanBin, "current_page")})
+                  <MenuItem onClick={() => handleHtmlExportSelect("report", "uint8", reportDetectorBin, detailedReportScanBin, "current_page")} sx={{ fontSize: 12 }}>
+                    Current page · scan bin {detailedReportScanBin} · detector bin {reportDetectorBin} ({estimateReportHtmlSize(detailedReportScanBin, "current_page")})
                   </MenuItem>
                 )}
                 {starredReportCount > 0 && (
-                  <MenuItem onClick={() => handleHtmlExportSelect("report", "uint8", reportDetBin, detailedReportScanBin, "starred")} sx={{ fontSize: 12 }}>
-                    Starred · rbin {detailedReportScanBin} · DP kbin {reportDetBin} ({estimateReportHtmlSize(detailedReportScanBin, "starred")})
+                  <MenuItem onClick={() => handleHtmlExportSelect("report", "uint8", reportDetectorBin, detailedReportScanBin, "starred")} sx={{ fontSize: 12 }}>
+                    Starred · scan bin {detailedReportScanBin} · detector bin {reportDetectorBin} ({estimateReportHtmlSize(detailedReportScanBin, "starred")})
                   </MenuItem>
                 )}
                 <Box sx={{ px: 1.5, pt: 1, pb: 0.25, fontSize: 11, color: themeColors.textMuted, fontWeight: 700 }}>
@@ -7674,11 +7675,11 @@ function Show4DSTEM() {
                 </Box>
                 {interactiveHtmlPresets.map((preset) => (
                   <MenuItem
-                    key={`${preset.dtype}-${preset.scanBin}-${preset.detBin}`}
-                    onClick={() => handleHtmlExportSelect("interactive", preset.dtype, preset.detBin, preset.scanBin, "unhidden")}
+                    key={`${preset.dtype}-${preset.scanBin}-${preset.detectorBin}`}
+                    onClick={() => handleHtmlExportSelect("interactive", preset.dtype, preset.detectorBin, preset.scanBin, "unhidden")}
                     sx={{ fontSize: 12 }}
                   >
-                    {preset.label} · {preset.dtype} · rbin {preset.scanBin} · kbin {preset.detBin} ({formatEstimatedHtmlBytes(preset.estimatedBytes)})
+                    {preset.label} · {preset.dtype} · scan bin {preset.scanBin} · detector bin {preset.detectorBin} ({formatEstimatedHtmlBytes(preset.estimatedBytes)})
                   </MenuItem>
                 ))}
               </Menu>}

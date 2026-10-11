@@ -525,7 +525,7 @@ class Show2D(
         **dict.fromkeys(
             ("n_images", "height", "width", "is_rgb", "n_pages", "panels_per_page", "page_starred",
              "panel_frame_counts", "panel_stack_offsets", "frame_bytes", "panel_stack_bytes",
-             "stats_mean", "stats_min", "stats_max", "stats_std", "_display_bin_factor"),
+             "stats_mean", "stats_min", "stats_max", "stats_std"),
             "data",
         ),
         **dict.fromkeys(
@@ -571,7 +571,7 @@ class Show2D(
     page_starred = traitlets.List(traitlets.Int(), default_value=[]).tag(sync=True)
     height = traitlets.Int(1).tag(sync=True)
     width = traitlets.Int(1).tag(sync=True)
-    _display_bin_factor = traitlets.Int(1).tag(sync=True)  # 1 = full-res, 2/4/8 = binned
+    display_bin = traitlets.Int(1).tag(sync=True)  # 1 = full-res, 2/4/8 = binned
     # Browser-side display denoise and frequency filter (js/display/filter.ts,
     # js/display/frequencyFilter.ts). The browser owns the view transform: it filters
     # raw frames client-side, mirrors the scalar editor traits to the per-panel
@@ -625,7 +625,7 @@ class Show2D(
     _offline_mins = traitlets.List(trait=traitlets.Float(), default_value=[]).tag(sync=True)
     _offline_maxs = traitlets.List(trait=traitlets.Float(), default_value=[]).tag(sync=True)
     # Maps-style detail streaming (active whenever the preview is binned, i.e.
-    # _display_bin_factor > 1): JS writes a JSON request describing the visible
+    # display_bin > 1): JS writes a JSON request describing the visible
     # window per panel; Python replies with cropped + binned float32 tiles.
     _detail_request = traitlets.Unicode("").tag(sync=True)
     _detail_meta = traitlets.Unicode("").tag(sync=True)
@@ -1278,7 +1278,7 @@ class Show2D(
                                "zoom_col": self.zoom_col, "panel_overlays": self.panel_overlays}
                 for key, value in _rescale_view(native_view, 1 / self._display_bin).items():
                     setattr(self, key, value)
-                self._display_bin_factor = self._display_bin
+                self.display_bin = self._display_bin
                 # JS derives every panel's offset from one H x W.
                 self._display_rgb = _binned_rgb(self._rgb_frames, self._display_bin)
                 self._display_panel_stacks = self._binned_panel_stacks(self._panel_stacks)
@@ -1289,12 +1289,12 @@ class Show2D(
                       f"{preview_size}; full-res detail streams on zoom; pass display_bin=1 for native pixels")
             else:
                 self._display_data = self._data
-                self._display_bin_factor = 1
+                self.display_bin = 1
                 self._display_rgb = self._rgb_frames
                 self._display_panel_stacks = self._panel_stacks
             self._compute_all_stats()
             self._update_all_frames()
-            announce_browser_limit("Show2D", len(self.frame_bytes) + len(self.panel_stack_bytes), self._display_bin_factor)
+            announce_browser_limit("Show2D", len(self.frame_bytes) + len(self.panel_stack_bytes), self.display_bin)
             self.selected_idx = 0
             if state is not None:
                 self.load_state_dict(state)
@@ -1680,14 +1680,14 @@ class Show2D(
             self._display_data = _current_frames(self._display_panel_stacks, resolved_indices)
             self.height = int(self._display_data.shape[1])
             self.width = int(self._display_data.shape[2])
-            self._display_bin_factor = self._display_bin
+            self.display_bin = self._display_bin
             if (self.n_images, self.height, self.width) != previous_shape:
                 self.view_box = []
                 self.zoom_row = None
                 self.zoom_col = None
             self._compute_all_stats()
             self._update_all_frames()
-            announce_browser_limit("Show2D", len(self.frame_bytes) + len(self.panel_stack_bytes), self._display_bin_factor)
+            announce_browser_limit("Show2D", len(self.frame_bytes) + len(self.panel_stack_bytes), self.display_bin)
         self._updating_panel_frames = False
 
     def _apply_folder_image_records(
@@ -1983,7 +1983,7 @@ class Show2D(
         if not request_text:
             return
         request = json.loads(request_text)  # the browser writes one JSON tile request
-        factor = max(1, int(self._display_bin_factor))
+        factor = max(1, int(self.display_bin))
         full_h, full_w = int(self._data.shape[1]), int(self._data.shape[2])
         tiles: list[dict] = []
         blocks: list[bytes] = []

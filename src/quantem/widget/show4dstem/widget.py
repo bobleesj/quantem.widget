@@ -793,7 +793,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         *,
         title: str | None = None,
         dtype: str = "uint8",
-        det_bin: int = 1,
+        detector_bin: int = 1,
         scan_bin: int = 1,
         export_kind: str = "interactive",
         dataset_scope: str = "unhidden",
@@ -801,7 +801,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """Write a standalone HTML viewer.
 
         ``export_kind="interactive"`` packs the counts (``dtype`` ``uint8`` or
-        ``uint16``, mean-binned by ``det_bin`` on the detector and ``scan_bin``
+        ``uint16``, mean-binned by ``detector_bin`` on the detector and ``scan_bin``
         on the scan) into a page whose detector ROI runs on browser WebGPU.
         Packed counts above what one page can load (2 GiB) are refused before
         any frame is read; the error names the least binning that fits.
@@ -811,10 +811,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """
         if self._data is None and not (self._h5_urls or self._qem_urls):
             raise ValueError("Cannot export HTML after free(); rebuild the widget first.")
-        dtype, det_bin, scan_bin = html_export.export_options(self, dtype, det_bin, scan_bin)
+        dtype, detector_bin, scan_bin = html_export.export_options(self, dtype, detector_bin, scan_bin)
         kind = html_export.export_kind(export_kind)
-        out = pathlib.Path(path) if path is not None else html_export.default_export_path(self, dtype, det_bin, scan_bin, kind)
-        self._write_html_export(out, title=title, dtype=dtype, det_bin=det_bin, scan_bin=scan_bin,
+        out = pathlib.Path(path) if path is not None else html_export.default_export_path(self, dtype, detector_bin, scan_bin, kind)
+        self._write_html_export(out, title=title, dtype=dtype, detector_bin=detector_bin, scan_bin=scan_bin,
                                 export_kind=kind, dataset_scope=dataset_scope)
         if kind == "report" or not (self._h5_urls or self._qem_urls):
             how = "self-contained HTML - double-click to open, no server needed"
@@ -827,28 +827,28 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             how = (f"WebGPU folder - reads its data files over HTTP; double-click Show4DSTEM.command in "
                    f"{out.parent.name}/ to open (a bare double-click of the HTML will not load the data)")
         size_mb = out.stat().st_size / (1024 * 1024)
-        self.export_status = f"Exported {out.name} ({size_mb:.1f} MB, {html_export.mode_label(dtype, det_bin, scan_bin, kind)}) - {how}"
+        self.export_status = f"Exported {out.name} ({size_mb:.1f} MB, {html_export.mode_label(dtype, detector_bin, scan_bin, kind)}) - {how}"
         return out
 
     def _html_export_options(self, payload: dict) -> dict:
         """The ``export_html`` keywords of a toolbar request, validated as a Python call is (``HtmlExportMixin`` hook)."""
-        dtype, det_bin, scan_bin = html_export.export_options(
-            self, payload.get("dtype", "uint8"), payload.get("det_bin", 1), payload.get("scan_bin", 1))
-        return {"dtype": dtype, "det_bin": det_bin, "scan_bin": scan_bin,
+        dtype, detector_bin, scan_bin = html_export.export_options(
+            self, payload.get("dtype", "uint8"), payload.get("detector_bin", 1), payload.get("scan_bin", 1))
+        return {"dtype": dtype, "detector_bin": detector_bin, "scan_bin": scan_bin,
                 "export_kind": html_export.export_kind(payload.get("export_kind", "interactive")),
                 "dataset_scope": str(payload.get("dataset_scope", "unhidden"))}
 
-    def _default_html_export_path(self, *, dtype: str, det_bin: int, scan_bin: int, export_kind: str,
+    def _default_html_export_path(self, *, dtype: str, detector_bin: int, scan_bin: int, export_kind: str,
                                   dataset_scope: str = "unhidden") -> pathlib.Path:
         """File in the kernel cwd that a toolbar export writes, named after the packing (``HtmlExportMixin`` hook)."""
-        return html_export.default_export_path(self, dtype, det_bin, scan_bin, export_kind)
+        return html_export.default_export_path(self, dtype, detector_bin, scan_bin, export_kind)
 
-    def _export_mode_label(self, *, dtype: str, det_bin: int, scan_bin: int, export_kind: str,
+    def _export_mode_label(self, *, dtype: str, detector_bin: int, scan_bin: int, export_kind: str,
                            dataset_scope: str = "unhidden") -> str:
         """Packing summary for the export status line (``HtmlExportMixin`` hook)."""
-        return html_export.mode_label(dtype, det_bin, scan_bin, export_kind)
+        return html_export.mode_label(dtype, detector_bin, scan_bin, export_kind)
 
-    def _write_html_export(self, path, *, title: str | None = None, dtype: str, det_bin: int, scan_bin: int,
+    def _write_html_export(self, path, *, title: str | None = None, dtype: str, detector_bin: int, scan_bin: int,
                            export_kind: str, dataset_scope: str = "unhidden") -> pathlib.Path:
         """Write a report or an interactive page.
 
@@ -856,9 +856,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         export kinds, and a report needs no clone of the counts at all.
         """
         if export_kind == "report":
-            return html_export.write_report_html(self, path, dtype=dtype, det_bin=det_bin, scan_bin=scan_bin,
+            return html_export.write_report_html(self, path, dtype=dtype, detector_bin=detector_bin, scan_bin=scan_bin,
                                                  dataset_scope=dataset_scope, title=title)
-        return html_export.write_interactive_html(self, path, dtype=dtype, det_bin=det_bin, scan_bin=scan_bin, title=title)
+        return html_export.write_interactive_html(self, path, dtype=dtype, detector_bin=detector_bin, scan_bin=scan_bin, title=title)
 
     def compute_ssb(self, *, set_source: bool = True, verbose: bool = False, **kwargs) -> np.ndarray:
         """Reconstruct the SSB phase of the current dataset and show it as the image.
@@ -1309,25 +1309,25 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             return self.pattern(self.pos_row, self.pos_col)
         return np.frombuffer(self.vi_roi_dp_bytes, dtype=np.float32).reshape(self.det_rows, self.det_cols).copy()
 
-    def _frame_array(self, frame_idx: int, det_bin: int) -> np.ndarray:
+    def _frame_array(self, frame_idx: int, detector_bin: int) -> np.ndarray:
         """One dataset as a host float32 array, mean-binned on the detector (counts summed exactly).
 
         Tensors come back in scan-row chunks and bounded views in 32 MiB scan
         windows, so an export never materialises a dense cube on the GPU.
         """
         source = self._frame_source(frame_idx)
-        det_rows, det_cols = self.det_rows // det_bin, self.det_cols // det_bin
+        det_rows, det_cols = self.det_rows // detector_bin, self.det_cols // detector_bin
         out = np.empty((self.shape_rows, self.shape_cols, det_rows, det_cols), np.float32)
         if isinstance(source, AcquisitionView):
             window_cols = max(1, min(self.shape_cols, (32 << 20) // (self.det_rows * self.det_cols * 4)))
             for row in range(self.shape_rows):
                 for col in range(0, self.shape_cols, window_cols):
                     stop = min(col + window_cols, self.shape_cols)
-                    out[row : row + 1, col:stop] = detector_bin_mean(source.read(scan_region=(row, row + 1, col, stop)), det_bin)
+                    out[row : row + 1, col:stop] = detector_bin_mean(source.read(scan_region=(row, row + 1, col, stop)), detector_bin)
             return out
         chunk_rows = max(1, (600 << 20) // max(1, self.shape_cols * self.det_rows * self.det_cols * 4))
         for row in range(0, self.shape_rows, chunk_rows):
-            out[row : row + chunk_rows] = detector_bin_mean(source[row : row + chunk_rows], det_bin)
+            out[row : row + chunk_rows] = detector_bin_mean(source[row : row + chunk_rows], detector_bin)
         return out
 
     def _current_detector_mask(self) -> np.ndarray:

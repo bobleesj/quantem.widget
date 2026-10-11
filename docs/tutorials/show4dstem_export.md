@@ -12,7 +12,7 @@ recipe, and keep the reduction choices explicit.
 | Share a compact screening result | `export_html(export_kind="report")` | One HTML report | yes | no |
 | Share an offline detector-ROI browser | `Show4DSTEM(array).export_html(export_kind="interactive")` | WebGPU HTML/folder | yes | yes, binned/encoded |
 | Export quickly from a terminal | `quantem show4dstem ... --backend webgpu --html --count N` | WebGPU HDF5 folder | yes | yes, in source HDF5 files |
-| Export full native detector sampling from a terminal | `quantem show4dstem ... --backend webgpu --html --bin 1 --dtype uint8` | WebGPU HDF5 folder | yes | yes, native detector sampling |
+| Export full native detector sampling from a terminal | `quantem show4dstem ... --backend webgpu --html --detector-bin 1 --dtype uint8` | WebGPU HDF5 folder | yes | yes, native detector sampling |
 | Preserve compressed HDF5 beside the viewer | WebGPU HDF5 folder | `index.html` + `Show4DSTEM.command` + `.viewer/` + `tilt_NN_master.h5` + `tilt_NN_data_*.h5` | yes, via folder grant or local server | yes, in source HDF5 files |
 
 Default recommendation: use `export_kind="report"` for large folders, many
@@ -42,7 +42,7 @@ path = viewer.export_html(
     export_kind="report",
     dataset_scope="unhidden",  # "current_page", "starred", "unhidden", or "all"
     scan_bin=2,                # mean-bin real-space PNG pages
-    det_bin=8,                 # mean-bin representative diffraction thumbnail
+    detector_bin=8,                 # mean-bin representative diffraction thumbnail
     dtype="uint8",
 )
 print(path)
@@ -60,7 +60,7 @@ Use `dataset_scope` deliberately:
 ## Minimal Interactive Raw 4D Export
 
 Interactive export embeds a raw 4D payload, after the explicit `scan_bin`,
-`det_bin`, and `dtype` choices. The exported page can run virtual-detector
+`detector_bin`, and `dtype` choices. The exported page can run virtual-detector
 interaction in the browser without a Python kernel, but the file can be much
 larger than a report. The payload is the viewer's 4D array, so open the viewer
 from an array or tensor in the Python session, for example a bounded read of a
@@ -78,7 +78,7 @@ path = viewer.export_html(
     export_kind="interactive",
     dtype="uint8",  # "uint16" keeps the wider integer range and makes a larger file
     scan_bin=2,     # mean-bin scan rows/cols before embedding raw 4D
-    det_bin=4,      # mean-bin detector rows/cols before embedding raw 4D
+    detector_bin=4,      # mean-bin detector rows/cols before embedding raw 4D
 )
 print(path)
 ```
@@ -106,36 +106,36 @@ Useful variants:
 
 ```bash
 # One master, full detector sampling, browser WebGPU HDF5 folder.
-quantem show4dstem scan_001_master.h5 --backend webgpu --html --bin 1
+quantem show4dstem scan_001_master.h5 --backend webgpu --html --detector-bin 1
 
 # Seven compatible masters in one comparison viewer.
-quantem show4dstem /data/session --backend webgpu --html --count 7 --bin 1
+quantem show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1
 
 # Write without opening a browser.
 quantem show4dstem /data/session --backend webgpu --html --count 7 --no-open
 ```
 
 The `--backend webgpu` folder keeps full detector sampling and requires
-`--bin 1`. Without `--backend webgpu`, `--html` packs the counts in Python and
-`--bin N` mean-bins each N x N detector block for that export. The default is
-`--bin 1`, meaning full detector sampling. Use a larger value only when making
+`--detector-bin 1`. Without `--backend webgpu`, `--html` packs the counts in Python and
+`--detector-bin N` mean-bins each N x N detector block for that export. The default is
+`--detector-bin 1`, meaning full detector sampling. Use a larger value only when making
 an explicit preview, and state that reduction in the report.
 
 ## Full Native Export Without A Notebook
 
 Some users do not want Jupyter at all, and sometimes they want native detector
-sampling. Use the CLI with `--html --bin 1`:
+sampling. Use the CLI with `--html --detector-bin 1`:
 
 ```bash
 # Native detector sampling, browser WebGPU HDF5 folder.
-quantem show4dstem scan_001_master.h5 --backend webgpu --html --bin 1 --dtype uint8 --out ~/Downloads
+quantem show4dstem scan_001_master.h5 --backend webgpu --html --detector-bin 1 --dtype uint8 --out ~/Downloads
 
 # Native detector sampling for every master in a folder.
-quantem show4dstem /data/session --backend webgpu --html --count 7 --bin 1 --dtype uint8 --out ~/Downloads
+quantem show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8 --out ~/Downloads
 
 # Several native-sampling masters in one Dataset-slider viewer.
 quantem show4dstem scan_001_master.h5 scan_002_master.h5 \
-  --backend webgpu --html --bin 1 --dtype uint8 --out ~/Downloads
+  --backend webgpu --html --detector-bin 1 --dtype uint8 --out ~/Downloads
 ```
 
 This is the no-notebook path for a full interactive browser artifact. It keeps
@@ -152,7 +152,7 @@ viewer.export_html(
     export_kind="interactive",
     dtype="uint16",
     scan_bin=1,
-    det_bin=1,
+    detector_bin=1,
 )
 ```
 
@@ -167,9 +167,9 @@ Use these rules when choosing export settings:
 | `dtype="uint8"` | Compact browse payload; use when count clipping/narrowing is acceptable or already audited. |
 | `dtype="uint16"` | Larger payload; keeps the wider integer range for interactive export. |
 | `scan_bin=2/4/8` | Mean-bin real-space scan pixels before export. |
-| `det_bin=2/4/8` | Mean-bin detector pixels before export. |
+| `detector_bin=2/4/8` | Mean-bin detector pixels before export. |
 
-Both `scan_bin` and `det_bin` use mean binning in Show4DSTEM export. They reduce
+Both `scan_bin` and `detector_bin` use mean binning in Show4DSTEM export. They reduce
 display/review payload size; they are not a hidden scientific reconstruction
 step. Put the exact settings in notebooks, captions, and handoff notes.
 
@@ -185,13 +185,13 @@ The dtype choice is separate from the binning choice:
 Use `uint8` for the common full-detector WebGPU browse path:
 
 ```bash
-quantem show4dstem /data/session --backend webgpu --html --count 7 --bin 1 --dtype uint8
+quantem show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8
 ```
 
 Use `uint16` when the browser artifact must preserve the wider integer range:
 
 ```bash
-quantem show4dstem /data/session --backend webgpu --html --count 7 --bin 1 --dtype uint16
+quantem show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint16
 ```
 
 Use `uint16` from Python when the exported browser must preserve the wider
@@ -203,7 +203,7 @@ viewer.export_html(
     export_kind="interactive",
     dtype="uint16",
     scan_bin=1,
-    det_bin=1,
+    detector_bin=1,
 )
 ```
 
@@ -243,10 +243,10 @@ When generating or reviewing Show4DSTEM export code, verify these points:
 
 - State the goal: live notebook, report, interactive raw 4D, CLI export, or HDF5 bundle.
 - Use `export_kind="report"` for large folders unless raw 4D browser interaction is required.
-- Use `export_kind="interactive"` only with explicit `dtype`, `scan_bin`, and `det_bin`.
+- Use `export_kind="interactive"` only with explicit `dtype`, `scan_bin`, and `detector_bin`.
 - Do not call a report export "raw" or "exact"; it contains rendered PNG virtual images.
 - Do not call `dtype="uint8"` exact unless detector counts were audited to fit.
-- Mention that `scan_bin` and `det_bin` are mean-binning choices.
+- Mention that `scan_bin` and `detector_bin` are mean-binning choices.
 - For multi-master or tilt-series review demos, use `view_mode="multiple"` and
   `compare_dp_mode="selected"` unless an average diffraction pattern is the
   actual measurement being shown.

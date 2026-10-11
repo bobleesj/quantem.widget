@@ -637,7 +637,7 @@ class Show2DExport:
     """Mixin: SVG figure export and standalone HTML export."""
 
     _HTML_ENCODINGS = ("full", "uint8")
-    _HTML_DOWNSAMPLES = (1, 2, 4, 8)
+    _HTML_IMAGE_BINS = (1, 2, 4, 8)
 
     def export_svg(
         self,
@@ -816,11 +816,11 @@ class Show2DExport:
         export_path.write_text("\n".join(elements), encoding="utf-8")
         return export_path
 
-    def _estimate_html_export_mb(self, *, quantized: bool, downsample: int) -> float:
+    def _estimate_html_export_mb(self, *, quantized: bool, image_bin: int) -> float:
         """Rough MB an embedded single-file Show2D HTML would occupy.
 
         ``export_html`` checks this before writing so an oversized page fails
-        fast with the uint8 and downsample alternatives, instead of producing
+        fast with the uint8 and image_bin alternatives, instead of producing
         a file Chrome cannot open from disk. The pixels are base64 (4/3 of the
         raw bytes) plus about 2 MB of bundle and page.
         """
@@ -829,7 +829,7 @@ class Show2DExport:
             n_values = sum(stack.size for stack in self._display_panel_stacks)
         else:
             n_values = self._display_data.size
-        n_values //= downsample**2
+        n_values //= image_bin**2
         bytes_per_value = 1 if quantized else 4
         payload_mb = n_values * bytes_per_value * (4.0 / 3.0) / (1024 * 1024)
         return payload_mb + 2.0
@@ -840,7 +840,7 @@ class Show2DExport:
         *,
         title: str | None = None,
         encoding: str = "full",
-        downsample: int | None = None,
+        image_bin: int | None = None,
         max_mb: float | None = 80.0,
     ) -> pathlib.Path:
         """Write a standalone HTML viewer for this widget.
@@ -859,7 +859,7 @@ class Show2DExport:
         encoding : {"full", "uint8"}, default "full"
             Exact float32 display values, or uint8 per panel over its own range
             (smaller, and the same after colormapping).
-        downsample : {None, 1, 2, 4, 8}, optional
+        image_bin : {None, 1, 2, 4, 8}, optional
             Mean-bin factor for the embedded pixels; above 1 needs
             ``encoding="uint8"``. The scale bar calibration follows.
         max_mb : float or None, default 80
@@ -871,7 +871,7 @@ class Show2DExport:
             The written file path.
         """
         self._require_grayscale_gallery("export_html")
-        return self._write_export_and_report(path, title=title, max_mb=max_mb, **self._html_export_choice(encoding, downsample))
+        return self._write_export_and_report(path, title=title, max_mb=max_mb, **self._html_export_choice(encoding, image_bin))
 
     def _require_grayscale_gallery(self, action: str) -> None:
         """Refuse an HTML export of a gallery with RGB panels.
@@ -891,14 +891,14 @@ class Show2DExport:
         shape = f"{self.n_images}x{self.height}x{self.width}" if self.n_images > 1 else f"{self.height}x{self.width}"
         return f"{export_slug(self.title, 'show2d')}_{shape}"
 
-    def _default_html_export_path(self, quantized: bool, *, downsample: int = 1) -> pathlib.Path:
-        """``<stem>_<exact|quantized>[_Nxdownsample].html`` in the working directory, naming how the pixels were packed."""
+    def _default_html_export_path(self, quantized: bool, *, image_bin: int = 1) -> pathlib.Path:
+        """``<stem>_<exact|quantized>[_image_binN].html`` in the working directory, naming how the pixels were packed."""
         encoding_label = "quantized" if quantized else "exact"
-        suffix = f"_{downsample}xdownsample" if quantized and downsample > 1 else ""
+        suffix = f"_image_bin{image_bin}" if quantized and image_bin > 1 else ""
         return pathlib.Path.cwd() / f"{self._export_stem()}_{encoding_label}{suffix}.html"
 
-    def _clone_for_html_export(self, *, quantized: bool, downsample: int = 1) -> Self:
-        """An export-only Show2D: the displayed pixels mean-binned by ``downsample``, every view setting, no export menu.
+    def _clone_for_html_export(self, *, quantized: bool, image_bin: int = 1) -> Self:
+        """An export-only Show2D: the displayed pixels mean-binned by ``image_bin``, every view setting, no export menu.
 
         The standalone page has no kernel behind it, so the clone carries its
         own copy of what is on screen, paints on a light background, and with
@@ -907,10 +907,10 @@ class Show2DExport:
         self._require_grayscale_gallery("HTML export")
 
         def binned_frames(stack: np.ndarray) -> np.ndarray:
-            """A ``(F, H, W)`` stack mean-binned frame by frame by ``downsample``; the pixel size below scales to match."""
-            if downsample <= 1:
+            """A ``(F, H, W)`` stack mean-binned frame by frame by ``image_bin``; the pixel size below scales to match."""
+            if image_bin <= 1:
                 return stack
-            return np.stack([bin2d(frame, factor=downsample, mode="mean") for frame in stack])
+            return np.stack([bin2d(frame, factor=image_bin, mode="mean") for frame in stack])
 
         has_local_stacks = any(count > 1 for count in self.panel_frame_counts)
         if has_local_stacks:
@@ -924,9 +924,9 @@ class Show2DExport:
         clone = type(self)(export_data, labels=list(self.labels), panel_frame_indices=list(self.panel_frame_indices),
                            display_bin=1, verbose=False)
         # The clone's pixels are this view's display pixels (already binned by display_bin and
-        # rotated) binned by downsample, so its view is this one's in that coarser grid with no
+        # rotated) binned by image_bin, so its view is this one's in that coarser grid with no
         # rotation left to apply: the standalone page turns the canvas by image_rotations itself.
-        state = _rescale_view(self.state_dict(), 1 / (self._display_bin * downsample))
+        state = _rescale_view(self.state_dict(), 1 / (self._display_bin * image_bin))
         state["image_rotations"] = [0] * self.n_images
         clone.load_state_dict(state)
         clone.offline = quantized

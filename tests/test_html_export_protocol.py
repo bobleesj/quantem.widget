@@ -75,11 +75,11 @@ def _showdiffraction() -> ShowDiffraction:
 
 # The request payloads are the ones each toolbar sends (js/<widget>/index.tsx), with the packing its status line names.
 EXPORT_WIDGET_CASES = (
-    pytest.param(_show1d, {"downsample": 2}, {}, "full float32", "Protocol Show1D", id="show1d"),
+    pytest.param(_show1d, {"image_bin": 2}, {}, "full float32", "Protocol Show1D", id="show1d"),
     pytest.param(_show2d, {"encoding": "uint8"}, {"encoding": "uint8"}, "uint8", "Protocol Show2D", id="show2d"),
-    pytest.param(_show3d, {"encoding": "uint8", "downsample": 2}, {"encoding": "uint8", "downsample": 2}, "uint8, 2x downsample", "Protocol Show3D", id="show3d"),
+    pytest.param(_show3d, {"encoding": "uint8", "image_bin": 2}, {"encoding": "uint8", "image_bin": 2}, "uint8, image bin 2x", "Protocol Show3D", id="show3d"),
     pytest.param(_show3dslices, {"encoding": "full"}, {"encoding": "uint8"}, "uint8", "Protocol Show3DSlices", id="show3dslices"),
-    pytest.param(_show4dstem, {"dtype": "uint8"}, {"export_kind": "interactive", "dtype": "uint8", "det_bin": 1, "scan_bin": 1, "dataset_scope": "unhidden"},
+    pytest.param(_show4dstem, {"dtype": "uint8"}, {"export_kind": "interactive", "dtype": "uint8", "detector_bin": 1, "scan_bin": 1, "dataset_scope": "unhidden"},
                  "uint8", "Protocol Show4DSTEM", id="show4dstem"),
     pytest.param(_showdiffraction, {}, {}, "full float32", "Protocol ShowDiffraction", id="showdiffraction"),
 )

@@ -195,10 +195,10 @@ def test_export_html_writes_a_standalone_page_with_the_display_stack(tmp_path: p
     assert 'id="quantem-widget-export-layout"' in html and "application/vnd.jupyter.widget-state+json" in html
     assert "Protocol Show3D" in html and "_offline_float_stack" in html
     assert widget.export_status.startswith("Exported exact.html")
-    compact = widget.export_html(tmp_path / "compact.html", encoding="uint8", downsample=4)
+    compact = widget.export_html(tmp_path / "compact.html", encoding="uint8", image_bin=4)
     assert compact.stat().st_size < exact.stat().st_size
-    with pytest.raises(ValueError, match="downsample"):
-        widget.export_html(tmp_path / "bad.html", encoding="full", downsample=2)
+    with pytest.raises(ValueError, match="image_bin"):
+        widget.export_html(tmp_path / "bad.html", encoding="full", image_bin=2)
     widget.free()
 
 
@@ -206,7 +206,7 @@ def test_export_clone_carries_view_state_and_embeds_pixels():
     widget = Show3D(_ramp(6, 128), sampling=0.2, units="nm", display_bin=4, verbose=False)
     widget.playing = True
     widget.cmap = "inferno"
-    clone = widget._clone_for_html_export(quantized=True, downsample=4)
+    clone = widget._clone_for_html_export(quantized=True, image_bin=4)
     assert (clone.n_slices, clone.height, clone.width) == (6, 8, 8)
     assert clone.pixel_size == pytest.approx(widget.pixel_size * 4)
     assert clone.playing is True and clone.cmap == "inferno" and clone._save_state is True

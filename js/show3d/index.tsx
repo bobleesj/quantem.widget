@@ -2096,7 +2096,7 @@ function Show3D() {
     maxCols,
     panelGapPx,
     exportQuality,
-    selectedSpatialOption.downsample,
+    selectedSpatialOption.imageBin,
     selectedSpatialOption.maxEdgePx,
   );
   const exportFpsValue = Math.max(1, Math.round(exportFps || DEFAULT_ANIMATION_EXPORT_FPS));
@@ -2108,7 +2108,7 @@ function Show3D() {
     frame_stop: (exportFrameIndices[exportFrameIndices.length - 1] ?? 0) + 1,
     every_n: Math.max(1, Math.round(exportEveryN || 1)),
     max_frames: Math.max(0, Math.round(exportMaxFrames || 0)),
-    downsample: selectedSpatialOption.downsample,
+    image_bin: selectedSpatialOption.imageBin,
     max_edge_px: selectedSpatialOption.maxEdgePx || null,
     preset: exportGifPreset === "custom" ? "custom" : exportGifPreset,
     slides_preset: exportGifPreset === "slides",
@@ -2120,7 +2120,7 @@ function Show3D() {
     exportFrameIndices,
     exportEveryN,
     exportMaxFrames,
-    selectedSpatialOption.downsample,
+    selectedSpatialOption.imageBin,
     selectedSpatialOption.maxEdgePx,
     exportGifPreset,
     showPanelTitles,
@@ -2161,11 +2161,11 @@ function Show3D() {
   const handleExportSelect = async (
     kind: ExportKind,
     quality = "medium",
-    downsample = 1,
+    imageBin = 1,
     requestOptions: Record<string, unknown> = {},
   ) => {
     setExportMenuAnchor(null);
-    const filename = makeExportFilename(title, nSlices, height, width, kind, quality, downsample);
+    const filename = makeExportFilename(title, nSlices, height, width, kind, quality, imageBin);
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setExportBusy(true);
     setLocalExportStatus("Choose export location...");
@@ -2190,7 +2190,7 @@ function Show3D() {
     }
     pendingExportRef.current = { id, filename, kind, handle };
     setLocalExportStatus(`Preparing ${filename}...`);
-    const request = kind === "gif" ? { mode: "gif", quality, downsample, ...requestOptions } : { encoding: kind, downsample };
+    const request = kind === "gif" ? { mode: "gif", quality, image_bin: imageBin, ...requestOptions } : { encoding: kind, image_bin: imageBin };
     setExportRequest(JSON.stringify({ ...request, id, filename, download: true }));
   };
   const handleStandaloneHtmlDownload = () => {
@@ -2212,7 +2212,7 @@ function Show3D() {
   const renderStandaloneAnimationCanvas = (
     frameIdx: number,
     quality: string,
-    options: { downsample: number; maxEdgePx: number | null },
+    options: { imageBin: number; maxEdgePx: number | null },
   ): { width: number; height: number; canvas: HTMLCanvasElement } | null => {
     const frame = getOfflineFrame(frameIdx);
     if (!frame) return null;
@@ -2228,7 +2228,7 @@ function Show3D() {
       panelW,
       panelH,
       quality,
-      options.downsample,
+      options.imageBin,
       options.maxEdgePx,
       activePanels.length,
       cols,
@@ -2357,7 +2357,7 @@ function Show3D() {
   const renderStandaloneGifFrame = (
     frameIdx: number,
     quality: string,
-    options: { downsample: number; maxEdgePx: number | null },
+    options: { imageBin: number; maxEdgePx: number | null },
   ): { width: number; height: number; indices: Uint8Array } | null => {
     const rendered = renderStandaloneAnimationCanvas(frameIdx, quality, options);
     if (!rendered) return null;
@@ -2384,7 +2384,7 @@ function Show3D() {
       let outH = 0;
       const frameIndices = exportFrameIndices.length ? exportFrameIndices : [Math.max(0, Math.min(Math.max(1, nSlices || 1) - 1, sliceIdx || 0))];
       const spatialOption = {
-        downsample: Number(requestOptions.downsample ?? selectedSpatialOption.downsample),
+        imageBin: Number(requestOptions.image_bin ?? selectedSpatialOption.imageBin),
         maxEdgePx: requestOptions.max_edge_px == null ? null : Number(requestOptions.max_edge_px),
       };
       const total = frameIndices.length;
@@ -2537,7 +2537,7 @@ function Show3D() {
         </Box>
         <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>
           {exportFrameSummary} · {animationWorkEstimate}
-          {selectedSpatialOption.downsample > 1 ? ` · ${selectedSpatialOption.downsample}x downsample` : ""}
+          {selectedSpatialOption.imageBin > 1 ? ` · image bin ${selectedSpatialOption.imageBin}x` : ""}
           {selectedSpatialOption.maxEdgePx ? ` · max edge ${selectedSpatialOption.maxEdgePx}px` : ""}
         </Typography>
         <Button
@@ -2563,9 +2563,9 @@ function Show3D() {
       </Typography>
       {exportEnabled && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("full")}>HTML exact float32 ({exactExportSize})</Button>}
       {exportEnabled && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("uint8")}>HTML encoded uint8 ({quantizedExportSize})</Button>}
-      {exportEnabled && height >= 2 && width >= 2 && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("uint8", "medium", 2)}>HTML encoded uint8, 2x downsample ({quantizedExportSize2})</Button>}
-      {exportEnabled && height >= 4 && width >= 4 && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("uint8", "medium", 4)}>HTML encoded uint8, 4x downsample ({quantizedExportSize4})</Button>}
-      {exportEnabled && height >= 8 && width >= 8 && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("uint8", "medium", 8)}>HTML encoded uint8, 8x downsample ({quantizedExportSize8})</Button>}
+      {exportEnabled && height >= 2 && width >= 2 && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("uint8", "medium", 2)}>HTML encoded uint8, image bin 2x ({quantizedExportSize2})</Button>}
+      {exportEnabled && height >= 4 && width >= 4 && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("uint8", "medium", 4)}>HTML encoded uint8, image bin 4x ({quantizedExportSize4})</Button>}
+      {exportEnabled && height >= 8 && width >= 8 && <Button size="small" sx={exportPanelButtonSx} onClick={() => handleExportSelect("uint8", "medium", 8)}>HTML encoded uint8, image bin 8x ({quantizedExportSize8})</Button>}
       {canDownloadCurrentHtml && !hasOfflineFloatStack && <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Exact float32 is not embedded in this standalone page; open the live widget for exact export.</Typography>}
       {canDownloadCurrentHtml && <Button size="small" sx={exportPanelButtonSx} onClick={handleStandaloneHtmlDownload}>{standaloneHtmlLabel}</Button>}
       {canDownloadCurrentHtml && hasOfflineFloatStack && <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>Encoded uint8 export requires the Python backend to repack the current float32 stack.</Typography>}

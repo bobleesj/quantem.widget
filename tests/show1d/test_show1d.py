@@ -293,19 +293,19 @@ def test_export_html_embeds_state_and_downsamples_only_linked_images(tmp_path):
     assert full["_anywidget_id"] == "quantem.widget.show1d.widget.Show1D" and full["_export_light"] and not full["export_enabled"]
     assert (full["n_snapshots"], full["snapshot_height"], full["pixel_size"], full["labels"]) == (2, 8, 0.5, ["profile"])
     assert widget.export_status.startswith("Exported full.html") and widget.export_status.endswith("full float32)")
-    small = _embedded_state(widget.export_html(tmp_path / "small.html", downsample=2))
+    small = _embedded_state(widget.export_html(tmp_path / "small.html", image_bin=2))
     assert (small["snapshot_height"], small["snapshot_width"], small["snapshot_heights"], small["snapshot_widths"]) == (4, 4, [4, 2], [4, 3])
     assert (small["pixel_size"], small["profile_image_height"], small["snapshot_real_space_center"]) == (1.0, 4, [2.0, 2.0])
     assert small["profile_line"] == [{"row": 0.0, "col": 0.0}, {"row": 0.0, "col": 3.5}] and small["snapshot_profile_line"][1] == {"row": 3.5, "col": 3.5}
     assert small["n_points"] == full["n_points"]  # trace samples are never binned
     assert small["x_unit"] == "nm" and small["title"] == "Export me"
-    default_name = widget._default_html_export_path(downsample=4).name
-    assert default_name == "export_me_1x8_4xdownsampled_single.html"
+    default_name = widget._default_html_export_path(image_bin=4).name
+    assert default_name == "export_me_1x8_image_bin4_single.html"
     with pytest.raises(ValueError, match="one of"):
-        widget.export_html(tmp_path / "x.html", downsample=3)
-    widget.export_request = json.dumps({"downsample": 2, "id": "req", "filename": "dl.html", "download": True})
+        widget.export_html(tmp_path / "x.html", image_bin=3)
+    widget.export_request = json.dumps({"image_bin": 2, "id": "req", "filename": "dl.html", "download": True})
     assert widget.export_payload_id == "req" and widget.export_filename == "dl.html" and b"snapshot_heights" in widget.export_payload
-    assert widget.export_status.startswith("Ready dl.html") and "2x downsampled images" in widget.export_status
+    assert widget.export_status.startswith("Ready dl.html") and "image bin 2x" in widget.export_status
 
 
 def test_static_preview_and_save_image(tmp_path):

@@ -42,15 +42,15 @@ not write back to the `.ipynb` or `.html` file.
 
 | Widget | Python API |
 |---|---|
-| Show1D | `export_html(path=None, *, title=None, downsample=None)` |
-| Show2D | `export_html(path=None, *, title=None, encoding="full", downsample=None, max_mb=80)` |
-| Show3D | `export_html(path=None, *, title=None, encoding="full", downsample=None, max_mb=80)` |
+| Show1D | `export_html(path=None, *, title=None, image_bin=None)` |
+| Show2D | `export_html(path=None, *, title=None, encoding="full", image_bin=None, max_mb=80)` |
+| Show3D | `export_html(path=None, *, title=None, encoding="full", image_bin=None, max_mb=80)` |
 | Show3DSlices | `export_html(path=None, *, title=None, encoding="full")` |
-| Show4DSTEM | `export_html(path=None, *, title=None, dtype="uint8", det_bin=1, scan_bin=1, export_kind="interactive", dataset_scope="unhidden")` |
+| Show4DSTEM | `export_html(path=None, *, title=None, dtype="uint8", detector_bin=1, scan_bin=1, export_kind="interactive", dataset_scope="unhidden")` |
 | ShowDiffraction | `export_html(path=None, *, title=None)` |
 | ShowPtycho | `export(path)` writes a folder: the widget page over exact bright-field counts; the browser builds transient BF-indexed reducers in WebGPU |
 
-`encoding="uint8"` stores display-scaled data; `downsample`
+`encoding="uint8"` stores display-scaled data; `image_bin`
 reduces the shape before export. Each reduction is explicit: nothing is binned
 or quantized unless the call asks for it.
 
@@ -69,7 +69,7 @@ Widgets that expose an in-widget **Export** button share these synced traits
 | `export_filename` | Python -> JS | Suggested download filename |
 
 The Show2D, Show3D and Show3DSlices menus send `{"encoding": "full" | "uint8", "id": ..., "filename": ..., "download": true}`
-(Show3D adds `downsample`), the names `export_html(encoding=)` takes; Show1D and ShowDiffraction send only the id, the file name
+(Show3D adds `image_bin`), the names `export_html(encoding=)` takes; Show1D and ShowDiffraction send only the id, the file name
 and the download flag. A Show3D GIF request carries `"mode": "gif"` and, once the browser has saved a payload, every widget sends
 `{"mode": "clear"}` to release it. Python checks the packing as an `export_html` call is, builds the page bytes into
 `export_payload`, and the browser saves them.
@@ -79,17 +79,17 @@ and the download flag. A Show3D GIF request carries `"mode": "gif"` and, once th
 | Widget | Encoding | Downsample | Reducer / notes |
 |---|---|---|---|
 | Show1D | `full` | `1`, `2`, `4`, `8` | preserves every trace/x sample; linked 2D snapshot and profile panels use a NaN-aware area mean, with pixel size and panel/profile coordinates rescaled |
-| Show2D | `full`, `uint8` | `1`, `2`, `4`, `8` (uint8 only) | `uint8` stores display-scaled image data; downsample is a mean bin |
-| Show3D | `full`, `uint8` | `1`, `2`, `4`, `8` (uint8 only) | `uint8` stores display-scaled volume data; downsample is a mean bin |
+| Show2D | `full`, `uint8` | `1`, `2`, `4`, `8` (uint8 only) | `uint8` stores display-scaled image data; image_bin is a mean bin |
+| Show3D | `full`, `uint8` | `1`, `2`, `4`, `8` (uint8 only) | `uint8` stores display-scaled volume data; image_bin is a mean bin |
 | Show3DSlices | `full`, `uint8` | none | `uint8` packs against the global range |
-| Show4DSTEM | `dtype="uint8"`, `"uint16"` | `det_bin`, `scan_bin`: `1`, `2`, `4`, `8` | mean bin; `uint8` clips counts above 255 and says how many; `export_kind="interactive"` packs the counts into the page and refuses above 2 GiB, naming the least binning that fits; `export_kind="report"` writes static PNG virtual-image pages with no raw 4D |
+| Show4DSTEM | `dtype="uint8"`, `"uint16"` | `detector_bin`, `scan_bin`: `1`, `2`, `4`, `8` | mean bin; `uint8` clips counts above 255 and says how many; `export_kind="interactive"` packs the counts into the page and refuses above 2 GiB, naming the least binning that fits; `export_kind="report"` writes static PNG virtual-image pages with no raw 4D |
 | ShowDiffraction | `full` (float32) | none | exact float32 frames |
 
 ## Single-file exports
 
 `export_html` writes one HTML file: easiest to email, upload, and move around.
 When the exact data is too large for one file, Show2D and Show3D refuse above
-`max_mb` and name the smaller options (`encoding="uint8"`, `downsample=2` or
+`max_mb` and name the smaller options (`encoding="uint8"`, `image_bin=2` or
 `4`); pass `max_mb=None` to force the size. Show4DSTEM interactive exports
 also stay one file, with the packed counts inside the page. The CLI WebGPU
 route (`quantem show4dstem ... --backend webgpu --html`) instead keeps the data
@@ -100,10 +100,10 @@ anonymous `dataset_NN_master.h5` / `dataset_NN_data_*.h5` links. Double-click
 the same folder locally.
 
 Reducer choice is part of the scientific contract. Compact `uint8` 4D-STEM
-exports should avoid immediate clipping, so detector downsample may use a
+exports should avoid immediate clipping, so detector binning may use a
 mean/average reducer and should be labeled as browse-quality. Count-preserving
 exports such as `full`/uint16 should preserve detector counts; if they
-downsample, sum is usually the scientifically expected reducer when the stored
+image_bin, sum is usually the scientifically expected reducer when the stored
 dtype can hold the result. If a widget chooses mean for a full export, the UI
 and docs must say so.
 
@@ -130,7 +130,7 @@ For raw HDF5 masters, prefer the CLI WebGPU folder route when the user wants
 native detector sampling without a notebook:
 
 ```bash
-quantem show4dstem /data/session --backend webgpu --html --count 7 --bin 1 --dtype uint8
+quantem show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8
 ```
 
 Choose `dtype="uint8"` for compact browse payloads and `dtype="uint16"` when
@@ -145,7 +145,7 @@ viewer.export_html(
     export_kind="interactive",
     dtype="uint16",
     scan_bin=1,
-    det_bin=1,
+    detector_bin=1,
 )
 ```
 
@@ -158,7 +158,7 @@ viewer.export_html(
     export_kind="report",
     dataset_scope="unhidden",
     scan_bin=2,
-    det_bin=8,
+    detector_bin=8,
     dtype="uint8",
 )
 
@@ -168,7 +168,7 @@ viewer.export_html(
     export_kind="interactive",
     dtype="uint8",
     scan_bin=2,
-    det_bin=4,
+    detector_bin=4,
 )
 ```
 

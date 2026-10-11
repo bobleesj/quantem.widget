@@ -945,7 +945,7 @@ function Show2D() {
   const [panelInnerBorderColorState] = useModelState<string>("panel_inner_border_color");
   const [title] = useModelState<string>("title");
   const [showTitle] = useModelState<boolean>("show_title");
-  const [displayBinFactor] = useModelState<number>("_display_bin_factor");
+  const [displayBin] = useModelState<number>("display_bin");
   const [cmap, setCmap] = useModelState<string>("cmap");
   const [panelCmaps, setPanelCmaps] = useModelState<string[]>("panel_cmaps");
   const [panelCmapsMemory, setPanelCmapsMemory] = useModelState<string[]>("panel_cmaps_memory");
@@ -1336,7 +1336,7 @@ function Show2D() {
   const draggedPanelRef = React.useRef<number | null>(null);
   const pointerReorderPanelRef = React.useRef<number | null>(null);
   // Maps-style detail streaming: when the preview is binned
-  // (_display_bin_factor > 1), zooming past the preview's resolution requests
+  // (display_bin > 1), zooming past the preview's resolution requests
   // a full-res crop of the visible window from Python instead of ever
   // shipping the whole image over the wire.
   const [, setDetailRequest] = useModelState<string>("_detail_request");
@@ -4006,13 +4006,13 @@ function Show2D() {
   }, [dataVersion, gpuCmapVersion, rangeVersion, autoContrastVersion, nImages, width, height, canvasW, canvasH, cmap, panelCmaps, panelCmapFor, logScale, autoContrast, linkedContrast, linkedContrastState, contrastStates, traitVmin, traitVmax, traitVmins, traitVmaxs, diffMode, isRgbFlags, canvasRepaintSignal, visibleImageIndices, uint8FolderPreviewMode]);
 
   // -------------------------------------------------------------------------
-  // Maps-style detail fetch (preview binned only, _display_bin_factor > 1).
+  // Maps-style detail fetch (preview binned only, display_bin > 1).
   // Request: when the user zooms past the preview's resolution, ask Python for
   // the VISIBLE window cropped from full-res and binned to ~canvas size.
   // Debounced so wheel/drag streams settle into one request per gesture.
   // -------------------------------------------------------------------------
   const currentDetailWindow = React.useCallback((panel: number) => {
-    if (!displayBinFactor || displayBinFactor <= 1) return null;
+    if (!displayBin || displayBin <= 1) return null;
     if (canvasW <= 0 || canvasH <= 0 || width <= 0 || height <= 0) return null;
     if (isRgbFlags && isRgbFlags[panel]) return null;
     if (hiddenPanelSet.has(panel)) return null;
@@ -4027,22 +4027,22 @@ function Show2D() {
     const col0 = Math.max(0, ((0 - cx - view.panX) / view.zoom + cx) / displayScale);
     const col1 = Math.min(width, ((canvasW - cx - view.panX) / view.zoom + cx) / displayScale);
     if (row1 <= row0 || col1 <= col0) return null;
-    const visFullW = (col1 - col0) * displayBinFactor;
-    const visFullH = (row1 - row0) * displayBinFactor;
+    const visFullW = (col1 - col0) * displayBin;
+    const visFullH = (row1 - row0) * displayBin;
     let bin = Math.max(1, Math.floor(Math.min(visFullW / canvasW, visFullH / canvasH)));
     while ((visFullW / bin) * (visFullH / bin) * 4 > DETAIL_BUDGET_BYTES) bin++;
-    if (bin >= displayBinFactor) return null;
+    if (bin >= displayBin) return null;
     return {
       row0, row1, col0, col1, bin,
-      fullRow0: row0 * displayBinFactor,
-      fullRow1: row1 * displayBinFactor,
-      fullCol0: col0 * displayBinFactor,
-      fullCol1: col1 * displayBinFactor,
+      fullRow0: row0 * displayBin,
+      fullRow1: row1 * displayBin,
+      fullCol0: col0 * displayBin,
+      fullCol1: col1 * displayBin,
     };
-  }, [displayBinFactor, canvasW, canvasH, width, height, isRgbFlags, hiddenPanelSet, getZoomState, displayScale]);
+  }, [displayBin, canvasW, canvasH, width, height, isRgbFlags, hiddenPanelSet, getZoomState, displayScale]);
 
   React.useEffect(() => {
-    if (!displayBinFactor || displayBinFactor <= 1) return;
+    if (!displayBin || displayBin <= 1) return;
     const signature = visibleImageIndices.map((i) => {
       const detailWindow = currentDetailWindow(i);
       if (!detailWindow) return `${i}:preview`;
@@ -4054,10 +4054,10 @@ function Show2D() {
     // a sharp rectangular tile over the new preview.
     detailRequestIdRef.current++;
     detailSentKeysRef.current.clear();
-  }, [displayBinFactor, visibleImageIndices, currentDetailWindow, linkedZoomState, zoomStates, dataVersion]);
+  }, [displayBin, visibleImageIndices, currentDetailWindow, linkedZoomState, zoomStates, dataVersion]);
 
   React.useEffect(() => {
-    if (!displayBinFactor || displayBinFactor <= 1 || detailTilesRef.current.size === 0) return;
+    if (!displayBin || displayBin <= 1 || detailTilesRef.current.size === 0) return;
     let removed = false;
     detailTilesRef.current.forEach((tile, panel) => {
       if (!detailTileCoversWindow(tile, currentDetailWindow(panel))) removed = clearDetailTile(panel) || removed;
@@ -4070,10 +4070,10 @@ function Show2D() {
       setDetailStreamStatus(detailTilesRef.current.size > 0 ? "ready" : "preview");
       setDetailPaintVersion(version => version + 1);
     }
-  }, [displayBinFactor, currentDetailWindow, clearDetailTile, linkedZoomState, zoomStates, dataVersion]);
+  }, [displayBin, currentDetailWindow, clearDetailTile, linkedZoomState, zoomStates, dataVersion]);
 
   React.useEffect(() => {
-    if (!displayBinFactor || displayBinFactor <= 1) return;
+    if (!displayBin || displayBin <= 1) return;
     if (canvasW <= 0 || canvasH <= 0 || width <= 0 || height <= 0) return;
     const timer = window.setTimeout(() => {
       const tiles: { panel: number; row0: number; row1: number; col0: number; col1: number; bin: number }[] = [];
@@ -4094,7 +4094,7 @@ function Show2D() {
       setDetailRequest(JSON.stringify({ id: String(id), tiles }));
     }, 150);
     return () => window.clearTimeout(timer);
-  }, [displayBinFactor, canvasW, canvasH, width, height, visibleImageIndices,
+  }, [displayBin, canvasW, canvasH, width, height, visibleImageIndices,
       currentDetailWindow, dataVersion, setDetailRequest]);
 
   // Detail reply: decode the float32 tiles and stash per panel. Replies for
@@ -4177,12 +4177,12 @@ function Show2D() {
       // coordinates are full-res pixels, so divide by the preview bin factor
       // to land in the preview's coordinate space. Outside the tile the
       // preview remains visible as the pan-away fallback.
-      const tile = displayBinFactor > 1 ? detailTilesRef.current.get(i) : undefined;
+      const tile = displayBin > 1 ? detailTilesRef.current.get(i) : undefined;
       if (tile && tile.canvas) {
         if (detailTileCoversWindow(tile, currentDetailWindow(i))) {
           const scaleX = drawW / width;
           const scaleY = drawH / height;
-          const binFactor = displayBinFactor;
+          const binFactor = displayBin;
           ctx.drawImage(tile.canvas, 0, 0, tile.cols, tile.rows,
             (tile.col0 / binFactor) * scaleX, (tile.row0 / binFactor) * scaleY,
             (tile.cols * tile.bin / binFactor) * scaleX, (tile.rows * tile.bin / binFactor) * scaleY);
@@ -4195,12 +4195,12 @@ function Show2D() {
     if (mainOffscreensRef.current.length === 0) return;
     const activePanel = activeViewInteractionPanelRef.current;
     paintMainPanels(isGallery && !linkedZoom && !linkPan && activePanel !== null ? [activePanel] : viewportPaintImageIndices);
-  }, [offscreenVersion, detailPaintVersion, displayBinFactor, nImages, width, height, displayScale, canvasW, canvasH, canvasReady, isGallery, linkedZoom, linkPan, linkedZoomState, zoomStates, smooth, currentDetailWindow, canvasRepaintSignal, imageFlipsHorizontal, imageFlipsVertical, offlineForTheme, rotationForPanel, viewportPaintImageIndices, settledViewPaintVersion]);
+  }, [offscreenVersion, detailPaintVersion, displayBin, nImages, width, height, displayScale, canvasW, canvasH, canvasReady, isGallery, linkedZoom, linkPan, linkedZoomState, zoomStates, smooth, currentDetailWindow, canvasRepaintSignal, imageFlipsHorizontal, imageFlipsVertical, offlineForTheme, rotationForPanel, viewportPaintImageIndices, settledViewPaintVersion]);
   // The live contrast preview: the offscreens of `panels` hold the dragged
   // window, so redraw just those canvases. A detail tile is recolored by its
   // own effect on offscreenVersion, so a binned preview still goes through it.
   const paintPreviewPanels = (panels: number[]) => {
-    if (displayBinFactor > 1) setOffscreenVersion(version => version + 1);
+    if (displayBin > 1) setOffscreenVersion(version => version + 1);
     else paintMainPanels(panels);
   };
   const paintPreviewPanelsRef = React.useRef(paintPreviewPanels);
@@ -4219,7 +4219,7 @@ function Show2D() {
     logScale: boolean,
     cmapNames: string[],
   ): boolean => {
-    if (smooth || displayBinFactor > 1 || uint8FolderPreviewMode) return false;
+    if (smooth || displayBin > 1 || uint8FolderPreviewMode) return false;
     const targets = panels.map(panel => {
       const canvas = canvasRefs.current[panel];
       const data = rawDataRef.current?.[panel];
@@ -6404,7 +6404,7 @@ function Show2D() {
       if (imgCol >= 0 && imgCol < width && imgRow >= 0 && imgRow < height) {
         const rawData = rawDataRef.current[idx];
         if (rawData) {
-          const binFactor = Math.max(1, displayBinFactor || 1);
+          const binFactor = Math.max(1, displayBin || 1);
           const nativeRow = Math.floor(imgRow * binFactor);
           const nativeCol = Math.floor(imgCol * binFactor);
           let value = rawData[imgRow * width + imgCol];
@@ -7290,12 +7290,12 @@ function Show2D() {
 
   // Calibrated cursor position - unit is whatever the user passed via sampling/units.
   const calibratedUnit = pixelSize > 0 ? pixelUnit : "";
-  const nativePixelSize = pixelSize > 0 ? pixelSize / Math.max(1, displayBinFactor || 1) : 0;
+  const nativePixelSize = pixelSize > 0 ? pixelSize / Math.max(1, displayBin || 1) : 0;
   const cursorValueSuffix = cursorInfo?.valueSource === "native"
     ? " native"
     : cursorInfo?.valueSource === "detail"
       ? " detail"
-      : displayBinFactor > 1
+      : displayBin > 1
         ? " preview"
         : "";
 
@@ -7677,9 +7677,9 @@ function Show2D() {
           {(showTitle || showControls) && <Typography variant="caption" sx={{ ...typography.label, color: themeColors.accent, mb: `${SPACING.XS}px`, display: "block", minHeight: 16, lineHeight: "16px", overflow: "visible" }}>
             {showTitle && <>{title || (isGallery ? "Gallery" : "Image")}</>}
             {showTitle && <RenderPathBadge colors={themeColors} />}
-            {showTitle && displayBinFactor > 1 && (
+            {showTitle && displayBin > 1 && (
               <Box component="span" sx={{ ml: 0.5, px: 0.5, py: 0, fontSize: 9, fontWeight: 600, borderRadius: "3px", backgroundColor: themeColors.accent + "22", color: themeColors.accent, border: `1px solid ${themeColors.accent}44` }}>
-                {displayBinFactor}× binned
+                {displayBin}× binned
               </Box>
             )}
             {controlsCollapsed && collapsedBannerLabel && (
@@ -7690,7 +7690,7 @@ function Show2D() {
                 {collapsedBannerLabel}
               </Box>
             )}
-            {showTitle && displayBinFactor > 1 && (
+            {showTitle && displayBin > 1 && (
               <Box component="span" sx={{ ml: 0.4, px: 0.5, py: 0, fontSize: 9, fontWeight: 500, borderRadius: "3px", backgroundColor: detailStreamStatus === "streaming" ? "rgba(255,193,7,0.18)" : themeColors.controlBg, color: detailStreamStatus === "streaming" ? "#b26a00" : themeColors.textMuted, border: `1px solid ${detailStreamStatus === "streaming" ? "rgba(255,193,7,0.45)" : themeColors.border}` }}>
                 {detailStreamStatus === "streaming" ? "streaming detail..." : detailStreamStatus === "ready" ? "detail ready" : "preview; streams on zoom"}
               </Box>
@@ -7700,7 +7700,7 @@ function Show2D() {
                 ["Shape", isGallery ? `${nImages} x ${height} x ${width}` : `${height} x ${width}`],
                 ["Panels", isGallery ? `${nImages} images, ${clampedNcols} columns` : "single image"],
                 ["Sampling", pixelSize > 0 ? `${formatNumber(pixelSize)} ${pixelUnit || "px"}/px` : ""],
-                ["Display", displayBinFactor > 1 ? `${displayBinFactor}x preview, detail streams on zoom` : "full resolution"],
+                ["Display", displayBin > 1 ? `${displayBin}x preview, detail streams on zoom` : "full resolution"],
               ]} />
               <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>FFT: Show power spectrum (Fourier transform) alongside image.</Typography>
