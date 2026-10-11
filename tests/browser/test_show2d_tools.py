@@ -25,12 +25,26 @@ const log1p = Math.log1p;
 Math.log1p = (value) => { window.__log1pCalls += 1; return log1p(value); };
 """
 # One entry per histogram (its range slider has two inputs): the min and max labels.
+# One profile sample is one compute pass of the line-profile kernel (its pipeline is built once and reused).
 COUNT_PROFILE_SAMPLES = """
 window.__profileSamples = 0;
+const profileModules = new WeakSet(), profilePipelines = new WeakSet();
 const createShaderModule = GPUDevice.prototype.createShaderModule;
 GPUDevice.prototype.createShaderModule = function (descriptor) {
-  if (descriptor.code.includes('profile_width: u32')) window.__profileSamples += 1;
-  return createShaderModule.call(this, descriptor);
+  const module = createShaderModule.call(this, descriptor);
+  if (descriptor.code.includes('profile_width: u32')) profileModules.add(module);
+  return module;
+};
+const createComputePipeline = GPUDevice.prototype.createComputePipeline;
+GPUDevice.prototype.createComputePipeline = function (descriptor) {
+  const pipeline = createComputePipeline.call(this, descriptor);
+  if (profileModules.has(descriptor.compute.module)) profilePipelines.add(pipeline);
+  return pipeline;
+};
+const setPipeline = GPUComputePassEncoder.prototype.setPipeline;
+GPUComputePassEncoder.prototype.setPipeline = function (pipeline) {
+  if (profilePipelines.has(pipeline)) window.__profileSamples += 1;
+  return setPipeline.call(this, pipeline);
 };
 """
 # The value of the ROI slider that follows a label ("Size", "W", "H") in the selected-ROI row.
