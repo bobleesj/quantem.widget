@@ -104,7 +104,8 @@ import { Histogram } from "../shared/Histogram";
 import { normalizeFilterMode, applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive } from "../display/filter";
 import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine } from "../display/colormaps";
 import { histogramBins } from "../display/cpuColormap";
-import { DisplayFFT, getDisplayFFT, getGPUInfo, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset } from "../display/fft";
+import { getGPUInfo } from "../display/device";
+import { DisplayFFT, getDisplayFFT, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset } from "../display/fft";
 import {
   cropMaskedRegionBrowser,
   findFFTPeakBrowser,

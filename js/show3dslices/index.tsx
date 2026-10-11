@@ -43,7 +43,8 @@ import { shouldIgnoreWidgetShortcut } from "../shared/widgetShortcuts";
 import { resolveDisplayBounds } from "../shared/displayRange";
 import { Histogram } from "../shared/Histogram";
 import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine, VOLUME_SLICE_MIN_ZOOM } from "../display/colormaps";
-import { DisplayFFT, getDisplayFFT, getGPUDevice, fft2d, fftshift, nextPow2, computeMagnitude, autoEnhanceFFT, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset } from "../display/fft";
+import { getGPUDevice } from "../display/device";
+import { DisplayFFT, getDisplayFFT, fft2d, fftshift, nextPow2, computeMagnitude, autoEnhanceFFT, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset } from "../display/fft";
 import { findFFTPeakBrowser } from "../display/geometry";
 import { estimateSliceAlignment } from "./sliceAlignment";
 

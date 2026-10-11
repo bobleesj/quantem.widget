@@ -1,7 +1,7 @@
 /// <reference types="@webgpu/types" />
 /** WebGPU volume renderer: ray casting with slice-plane indicators. */
 
-import { getGPUDevice } from "../display/fft";
+import { getGPUDevice } from "../display/device";
 
 // ============================================================================
 // Types
