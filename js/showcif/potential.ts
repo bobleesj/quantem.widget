@@ -443,28 +443,6 @@ export class PotentialGPU {
     pass.end();
     this.device.queue.submit([encoder.finish()]);
   }
-  /** Explicit numerical readback for exports/tests, never the interactive render path. */
-  async readback(slices: number, filtered = false): Promise<Float32Array> {
-    const bytes = (slices + 2) * this.pixels * this.pixels * 4;
-    const staging = this.device.createBuffer({
-      size: bytes,
-      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-    });
-    const encoder = this.device.createCommandEncoder();
-    encoder.copyBufferToBuffer(
-      filtered ? this.filtered : this.volume,
-      0,
-      staging,
-      0,
-      bytes,
-    );
-    this.device.queue.submit([encoder.finish()]);
-    await staging.mapAsync(GPUMapMode.READ);
-    const result = new Float32Array(staging.getMappedRange().slice(0));
-    staging.unmap();
-    staging.destroy();
-    return result;
-  }
   clearViews() {
     for (const view of this.views.values()) {
       view.context.unconfigure();
