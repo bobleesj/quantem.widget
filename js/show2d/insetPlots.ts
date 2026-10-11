@@ -73,7 +73,7 @@ function expandFlatRange([lo, hi]: [number, number]): [number, number] {
   return [lo - pad, hi + pad];
 }
 
-function formatInsetTick(value: number): string {
+export function formatInsetTick(value: number): string {
   const abs = Math.abs(value);
   if (abs > 0 && (abs < 0.01 || abs >= 1000)) return value.toExponential(1);
   if (abs >= 100) return value.toFixed(0);

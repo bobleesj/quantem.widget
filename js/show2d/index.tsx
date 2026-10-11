@@ -108,10 +108,10 @@ import {
 import {
   escapeXmlAttr,
   escapeXmlText,
-  svgColor,
   svgColorbarElements,
   svgInsetPlotElement,
   svgPanelAnnotationElement,
+  svgPaint,
   svgPanelOverlayElement,
   svgTextFromRichSpans,
   wrapSvgTextLines,
@@ -6797,23 +6797,22 @@ function Show2D() {
       const defs: string[] = [];
       const body: string[] = [];
       if (frame > 0 && frameColor) {
-        body.push(`<rect x="0" y="${titleHeight}" width="${svgWidth}" height="${Math.max(0, svgHeight - titleHeight)}" fill="${escapeXmlAttr(svgColor(frameColor))}"/>`);
+        body.push(`<rect x="0" y="${titleHeight}" width="${svgWidth}" height="${Math.max(0, svgHeight - titleHeight)}" ${svgPaint("fill", frameColor)}/>`);
       }
       if (gap > 0 && gapColor) {
-        body.push(`<rect x="${frame}" y="${titleHeight + frame}" width="${Math.max(0, svgWidth - 2 * frame)}" height="${Math.max(0, svgHeight - titleHeight - 2 * frame)}" fill="${escapeXmlAttr(svgColor(gapColor))}"/>`);
+        body.push(`<rect x="${frame}" y="${titleHeight + frame}" width="${Math.max(0, svgWidth - 2 * frame)}" height="${Math.max(0, svgHeight - titleHeight - 2 * frame)}" ${svgPaint("fill", gapColor)}/>`);
       }
       if (titleHeight > 0) {
         body.push(
-          `<text x="${svgWidth / 2}" y="19" text-anchor="middle" font-family="${SYSTEM_FONT}" font-size="14" font-weight="700" fill="${escapeXmlAttr(svgColor(themeColors.text))}">${escapeXmlText(title)}</text>`
+          `<text x="${svgWidth / 2}" y="19" text-anchor="middle" font-family="${SYSTEM_FONT}" font-size="14" font-weight="700" ${svgPaint("fill", themeColors.text)}>${escapeXmlText(title)}</text>`
         );
       }
 
       const titleFontFamily = styleString(panelTitleStyle?.font_family, SYSTEM_FONT);
-      const titleFg = svgColor(panelTitleStyle?.fg, "#fff");
       const titleWeight = panelTitleStyle?.font_weight ?? 700;
       const titleOpacity = Math.max(0, Math.min(1, styleNumber(panelTitleStyle?.opacity, 0.95)));
       const titleOutlineWidth = Math.max(0, styleNumber(panelTitleStyle?.outline_width, 0));
-      const titleOutlineColor = svgColor(panelTitleStyle?.outline_color, "rgba(0,0,0,0.85)");
+      const titleFill = svgPaint("fill", panelTitleStyle?.fg, "#fff", titleOpacity);
       const titleTextAnchor = (anchor: string): string => {
         if (anchor.includes("right")) return "end";
         if (anchor.includes("center")) return "middle";
@@ -6842,11 +6841,11 @@ function Show2D() {
         return { x: panelX + canvasW / 2, y: panelY + 6 + fontSize, anchor: "middle" };
       };
       const titleOutlineText = (xPos: number, yPos: number, anchor: string, fontSize: number, text: string): string =>
-        `<text x="${xPos}" y="${yPos}" text-anchor="${anchor}" font-family="${escapeXmlAttr(titleFontFamily)}" font-size="${fontSize}" font-weight="${escapeXmlAttr(titleWeight)}" fill="none" stroke="${escapeXmlAttr(titleOutlineColor)}" stroke-width="${titleOutlineWidth}" stroke-linejoin="round">${escapeXmlText(text)}</text>`;
+        `<text x="${xPos}" y="${yPos}" text-anchor="${anchor}" font-family="${escapeXmlAttr(titleFontFamily)}" font-size="${fontSize}" font-weight="${escapeXmlAttr(titleWeight)}" fill="none" ${svgPaint("stroke", panelTitleStyle?.outline_color, "rgba(0,0,0,0.85)")} stroke-width="${titleOutlineWidth}" stroke-linejoin="round">${escapeXmlText(text)}</text>`;
 
       groupMarkerOverlays.forEach((marker) => {
         body.push(
-          `<rect x="${marker.left}" y="${titleHeight + marker.top}" width="${marker.width}" height="${marker.height}" fill="none" stroke="${escapeXmlAttr(marker.color)}" stroke-width="3"/>`,
+          `<rect x="${marker.left}" y="${titleHeight + marker.top}" width="${marker.width}" height="${marker.height}" fill="none" ${svgPaint("stroke", marker.color)} stroke-width="3"/>`,
           `<rect x="${marker.left + 3}" y="${titleHeight + marker.top + 3}" width="${Math.max(0, marker.width - 6)}" height="${Math.max(0, marker.height - 6)}" fill="none" stroke="#000" stroke-opacity="0.9" stroke-width="2"/>`
         );
       });
@@ -6862,26 +6861,26 @@ function Show2D() {
         const clipId = `show2d-svg-clip-${slot}`;
         defs.push(`<clipPath id="${clipId}"><rect x="${x}" y="${y}" width="${canvasW}" height="${canvasH}"/></clipPath>`);
         const dataUrl = scaledCanvasPngDataUrl(canvas, exportScale, smooth);
-        const panelStroke = svgColor(panelInnerBorderColor, themeColors.border);
         body.push(
           `<g id="show2d-panel-${panel}">`,
           `<rect x="${x}" y="${y}" width="${canvasW}" height="${canvasH}" fill="#000"/>`,
           `<image x="${x}" y="${y}" width="${canvasW}" height="${canvasH}" xlink:href="${escapeXmlAttr(dataUrl)}" preserveAspectRatio="none"/>`
         );
         if (panelInnerBorderPx > 0) {
-          body.push(`<rect x="${x}" y="${y}" width="${canvasW}" height="${canvasH}" fill="none" stroke="${escapeXmlAttr(panelStroke)}" stroke-width="${panelInnerBorderPx}"/>`);
+          body.push(`<rect x="${x}" y="${y}" width="${canvasW}" height="${canvasH}" fill="none" ${svgPaint("stroke", panelInnerBorderColor, themeColors.border)} stroke-width="${panelInnerBorderPx}"/>`);
         }
         const markerColor = panelMarkerColor(panel);
-        if (markerAround) {
+        // As on screen: a marker only when marker_colors are set, a title only on gallery panels.
+        if (hasPanelMarkers && markerAround) {
           body.push(
-            `<rect x="${x + 1.5}" y="${y + 1.5}" width="${Math.max(0, canvasW - 3)}" height="${Math.max(0, canvasH - 3)}" fill="none" stroke="${escapeXmlAttr(markerColor)}" stroke-width="3"/>`,
+            `<rect x="${x + 1.5}" y="${y + 1.5}" width="${Math.max(0, canvasW - 3)}" height="${Math.max(0, canvasH - 3)}" fill="none" ${svgPaint("stroke", markerColor)} stroke-width="3"/>`,
             `<rect x="${x + 4}" y="${y + 4}" width="${Math.max(0, canvasW - 8)}" height="${Math.max(0, canvasH - 8)}" fill="none" stroke="#000" stroke-opacity="0.9" stroke-width="2"/>`
           );
-        } else {
-          body.push(`<rect x="${x}" y="${y}" width="5" height="${canvasH}" fill="${escapeXmlAttr(markerColor)}"/>`);
+        } else if (hasPanelMarkers) {
+          body.push(`<rect x="${x}" y="${y}" width="5" height="${canvasH}" ${svgPaint("fill", markerColor)}/>`);
         }
 
-        if (showPanelTitles !== false) {
+        if (isGallery && showPanelTitles !== false) {
           const label = panelTitleText(panel);
           if (label) {
             const fontSize = Math.max(8, panelTitleFontSize || 11);
@@ -6898,8 +6897,8 @@ function Show2D() {
               } else {
                 body.push(titleOutlineText(titlePos.x, lineY, titlePos.anchor, fontSize, rich.text));
               }
-              body.push(`<text x="${titlePos.x}" y="${lineY}" text-anchor="${titlePos.anchor}" font-family="${escapeXmlAttr(titleFontFamily)}" font-size="${fontSize}" font-weight="${escapeXmlAttr(titleWeight)}" fill="${escapeXmlAttr(titleFg)}" fill-opacity="${titleOpacity}">`);
-              rich.spans.forEach((span) => body.push(`<tspan${span.color ? ` fill="${escapeXmlAttr(svgColor(span.color))}"` : ""}>${escapeXmlText(span.text)}</tspan>`));
+              body.push(`<text x="${titlePos.x}" y="${lineY}" text-anchor="${titlePos.anchor}" font-family="${escapeXmlAttr(titleFontFamily)}" font-size="${fontSize}" font-weight="${escapeXmlAttr(titleWeight)}" ${titleFill}>`);
+              rich.spans.forEach((span) => body.push(`<tspan${span.color ? ` ${svgPaint("fill", span.color)}` : ""}>${escapeXmlText(span.text)}</tspan>`));
               body.push("</text>");
             } else {
               const titleLines = wrapSvgTextLines(label, fontSize, Math.max(24, canvasW - 56), 3);
@@ -6911,7 +6910,7 @@ function Show2D() {
                 } else {
                   body.push(titleOutlineText(titlePos.x, lineY, titlePos.anchor, fontSize, line));
                 }
-                body.push(`<text x="${titlePos.x}" y="${lineY}" text-anchor="${titlePos.anchor}" font-family="${escapeXmlAttr(titleFontFamily)}" font-size="${fontSize}" font-weight="${escapeXmlAttr(titleWeight)}" fill="${escapeXmlAttr(titleFg)}" fill-opacity="${titleOpacity}">${escapeXmlText(line)}</text>`);
+                body.push(`<text x="${titlePos.x}" y="${lineY}" text-anchor="${titlePos.anchor}" font-family="${escapeXmlAttr(titleFontFamily)}" font-size="${fontSize}" font-weight="${escapeXmlAttr(titleWeight)}" ${titleFill}>${escapeXmlText(line)}</text>`);
               });
             }
             body.push(`</g>`);
@@ -6920,7 +6919,7 @@ function Show2D() {
 
         const vectorLayer: string[] = [];
         if (showInsetPlots !== false) {
-          vectorLayer.push(svgInsetPlotElement(insetPlotSpecFor(panel), x, y, canvasW, canvasH, markerColor, panelHasScaleBar(panel)));
+          vectorLayer.push(svgInsetPlotElement(insetPlotSpecFor(panel), x, y, canvasW, canvasH, markerColor, panelHasScaleBar(panel), panel, `show2d-svg-inset-${slot}`));
         }
         const panelOverlaySpecs = panelOverlays?.[panel] || [];
         if (panelOverlaySpecs.length > 0) {
@@ -6954,28 +6953,26 @@ function Show2D() {
           if (scaleBar) {
             const barY = y + scaleBar.barY;
             const barX = x + scaleBar.barX;
-            const barColor = svgColor(scaleBarStyle?.color, "#fff");
-            const shadowColor = svgColor(scaleBarStyle?.shadow_color, "#000");
-            const barShadowColor = scaleBarStyle?.shadow_color == null ? "" : shadowColor;
-            const outlineColor = svgColor(scaleBarStyle?.outline_color, "#000");
+            const barFill = svgPaint("fill", scaleBarStyle?.color, "#fff");
+            const shadowFill = svgPaint("fill", scaleBarStyle?.shadow_color, "rgba(0,0,0,0.85)");
             const outlineWidth = Math.max(0, styleNumber(scaleBarStyle?.outline_width, 0));
             const labelGap = styleNumber(scaleBarStyle?.label_gap, 4);
             const fontAttrs = scaleBarSvgFontAttrs(scaleBarStyle);
             const labelX = barX + scaleBar.barPx / 2;
             const labelY = barY - labelGap;
-            if (barShadowColor) {
-              body.push(`<rect x="${barX + 1}" y="${barY + 1}" width="${scaleBar.barPx}" height="${scaleBar.barHeight}" fill="${escapeXmlAttr(barShadowColor)}" fill-opacity="0.5"/>`);
+            if (scaleBarStyle?.shadow_color != null) {
+              body.push(`<rect x="${barX + 1}" y="${barY + 1}" width="${scaleBar.barPx}" height="${scaleBar.barHeight}" ${svgPaint("fill", scaleBarStyle.shadow_color, "#000", 0.5)}/>`);
             }
-            body.push(`<rect x="${barX}" y="${barY}" width="${scaleBar.barPx}" height="${scaleBar.barHeight}" fill="${escapeXmlAttr(barColor)}"/>`);
+            body.push(`<rect x="${barX}" y="${barY}" width="${scaleBar.barPx}" height="${scaleBar.barHeight}" ${barFill}/>`);
             if (outlineWidth > 0) {
               body.push(
-                `<text x="${labelX}" y="${labelY}" text-anchor="middle" ${fontAttrs} fill="none" stroke="${escapeXmlAttr(outlineColor)}" stroke-width="${outlineWidth}" stroke-linejoin="round">${escapeXmlText(scaleBar.label)}</text>`,
-                `<text x="${labelX}" y="${labelY}" text-anchor="middle" ${fontAttrs} fill="${escapeXmlAttr(barColor)}">${escapeXmlText(scaleBar.label)}</text>`
+                `<text x="${labelX}" y="${labelY}" text-anchor="middle" ${fontAttrs} fill="none" ${svgPaint("stroke", scaleBarStyle?.outline_color, "#000")} stroke-width="${outlineWidth}" stroke-linejoin="round">${escapeXmlText(scaleBar.label)}</text>`,
+                `<text x="${labelX}" y="${labelY}" text-anchor="middle" ${fontAttrs} ${barFill}>${escapeXmlText(scaleBar.label)}</text>`
               );
             } else {
               body.push(
-                `<text x="${labelX + 1}" y="${labelY + 1}" text-anchor="middle" ${fontAttrs} fill="${escapeXmlAttr(shadowColor)}" fill-opacity="0.85">${escapeXmlText(scaleBar.label)}</text>`,
-                `<text x="${labelX}" y="${labelY}" text-anchor="middle" ${fontAttrs} fill="${escapeXmlAttr(barColor)}">${escapeXmlText(scaleBar.label)}</text>`
+                `<text x="${labelX + 1}" y="${labelY + 1}" text-anchor="middle" ${fontAttrs} ${shadowFill}>${escapeXmlText(scaleBar.label)}</text>`,
+                `<text x="${labelX}" y="${labelY}" text-anchor="middle" ${fontAttrs} ${barFill}>${escapeXmlText(scaleBar.label)}</text>`
               );
             }
             if (showZoomIndicator) {
@@ -6983,8 +6980,8 @@ function Show2D() {
               const anchor = scaleBar.scaleLeft ? "end" : "start";
               const zoomText = formatZoomLabel(view.zoom);
               body.push(
-                `<text x="${zoomX + 1}" y="${y + canvasH - 12 + 5 + 1}" text-anchor="${anchor}" ${fontAttrs} fill="${escapeXmlAttr(shadowColor)}" fill-opacity="0.85">${escapeXmlText(zoomText)}</text>`,
-                `<text x="${zoomX}" y="${y + canvasH - 12 + 5}" text-anchor="${anchor}" ${fontAttrs} fill="${escapeXmlAttr(barColor)}">${escapeXmlText(zoomText)}</text>`
+                `<text x="${zoomX + 1}" y="${y + canvasH - 12 + 5 + 1}" text-anchor="${anchor}" ${fontAttrs} ${shadowFill}>${escapeXmlText(zoomText)}</text>`,
+                `<text x="${zoomX}" y="${y + canvasH - 12 + 5}" text-anchor="${anchor}" ${fontAttrs} ${barFill}>${escapeXmlText(zoomText)}</text>`
               );
             }
           }
@@ -7012,6 +7009,7 @@ function Show2D() {
     galleryOuterBorderPx,
     getZoomState,
     groupMarkerOverlays,
+    hasPanelMarkers,
     height,
     displayScale,
     insetPlotSpecFor,

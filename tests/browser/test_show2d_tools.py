@@ -7,7 +7,7 @@ most once per pointer move. The frequency-filter ring sits on the frequency
 the filter cuts at the FFT's zoom, and dragging it sets that frequency. A ROI
 edge moves by as much as the pointer moves after the press. Overlay editing
 lets pointers through the More menu's backdrop only, so every other menu still
-closes on an outside click.
+closes on an outside click. The SVG export draws what the screen shows.
 """
 
 import re
@@ -229,4 +229,28 @@ def test_overlay_edit_leaves_other_menus_closable(serve, open_page, hardware_ada
     page.get_by_role("button", name="More tools").click()
     backdrop = page.locator("#show2d-more-menu .MuiBackdrop-root")
     assert backdrop.evaluate("element => getComputedStyle(element).pointerEvents") == "none"
+    assert page.errors == [], page.errors
+
+
+def test_svg_export_draws_what_the_screen_shows(serve, open_page, hardware_adapter, browser_out):
+    from quantem.widget import Show2D
+
+    rows, cols = np.indices((256, 256))
+    image = (np.sin(cols / 9.0) * np.cos(rows / 13.0)).astype(np.float32)
+    inset = {"x": [0, 2, 4, 6, 8, 10], "y": [0, 0.4, 0.9, 1, 0.6, 0.2], "show_ticks": True, "xticks": [0, 5, 10],
+             "xlabel": "q (1/nm)", "annotation": "fit", "position": "top-right"}
+    Show2D(image, panel_annotations=[[{"text": "scan 3"}]], inset_plots=[inset]).export_html(browser_out / "show2d_svg.html")
+    page = open_export("show2d_svg.html", serve, open_page, hardware_adapter, browser_out,
+                       'canvas[data-quantem-scientific-output="show2d-image-0"]', "delete window.showSaveFilePicker;")
+    page.get_by_role("button", name="Export").first.click()
+    with page.expect_download() as download:
+        page.get_by_role("menuitem", name="SVG", exact=True).click()
+    svg = open(download.value.path()).read()
+    (browser_out / "show2d_export.svg").write_text(svg)
+    # The annotation badge keeps its 0.72 alpha; the inset keeps its ticks, axis label and annotation.
+    assert 'fill="rgb(0, 0, 0)" fill-opacity="0.72"' in svg
+    assert all(f">{text}</text>" in svg for text in ("0", "5", "10", "q (1/nm)", "fit"))
+    # A single image has no panel title and, without marker_colors, no panel marker on screen.
+    assert ">Image 1<" not in svg
+    assert 'width="5"' not in svg
     assert page.errors == [], page.errors
