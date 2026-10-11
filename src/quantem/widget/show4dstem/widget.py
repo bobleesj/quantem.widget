@@ -230,9 +230,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     vi_roi_dp_bytes = traitlets.Bytes(b"").tag(sync=True)
     vi_roi_receipt = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
     pixel_size = traitlets.Float(1.0).tag(sync=True)
-    pixel_unit = traitlets.Unicode("pixels").tag(sync=True)
+    pixel_unit = traitlets.Unicode("px").tag(sync=True)
     k_pixel_size = traitlets.Float(1.0).tag(sync=True)
-    k_pixel_unit = traitlets.Unicode("pixels").tag(sync=True)
+    k_pixel_unit = traitlets.Unicode("px").tag(sync=True)
     k_calibrated = traitlets.Bool(False).tag(sync=True)
     _static_fallback_image = traitlets.Unicode("").tag(sync=True)
     _static_fallback_mime = traitlets.Unicode("image/jpeg").tag(sync=True)
@@ -438,7 +438,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             axes = list(zip(first.sampling, first.units))
             if sampling is None and units is None and any(spacing is not None and unit is not None for spacing, unit in axes):
                 sampling = tuple(1.0 if spacing is None or unit is None else float(spacing) for spacing, unit in axes)
-                units = ["pixels" if spacing is None or unit is None else str(unit) for spacing, unit in axes]
+                units = ["px" if spacing is None or unit is None else str(unit) for spacing, unit in axes]
         if bounded:
             if series:
                 if scan_region is not None:
@@ -519,7 +519,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         elif isinstance(sampling, (int, float)):
             sampling = (float(sampling),) * 4
         if units is None:
-            units = ["pixels"] * 4
+            units = ["px"] * 4
         elif isinstance(units, str):
             units = [units] * 4
         self._axis_sampling = tuple(float(spacing) for spacing in sampling)
@@ -533,8 +533,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.pixel_size = self._axis_sampling[1]  # scan column axis sets the horizontal scale bar
         self.pixel_unit = self._axis_units[1]
         self.k_pixel_size = self._axis_sampling[3] if len(self._axis_sampling) > 3 else 1.0
-        self.k_pixel_unit = self._axis_units[3] if len(self._axis_units) > 3 else "pixels"
-        self.k_calibrated = self.k_pixel_unit not in ("pixels", "")
+        self.k_pixel_unit = self._axis_units[3] if len(self._axis_units) > 3 else "px"
+        self.k_calibrated = self.k_pixel_unit not in ("px", "pixels", "")  # a quantem dataset spells an uncalibrated axis "pixels"
         self._ssb_calibration = {
             "voltage_kV": ssb_voltage_kV,
             "semiangle_mrad": ssb_semiangle_mrad,

@@ -202,7 +202,7 @@ def test_show4dstem_shows_the_same_numbers_for_every_input_type(tmp_path, monkey
                 assert widget.title == ("" if label in ("numpy", "torch cpu", "torch cuda") else "gold"), label
                 calibrated = label not in ("numpy", "torch cpu", "torch cuda", "Dataset4dstemGPU, encoded from a file")
                 scales = (widget.pixel_size, widget.pixel_unit, widget.k_pixel_size, widget.k_pixel_unit)
-                assert scales == ((2.0, "A", 3.68, "mrad") if calibrated else (1.0, "pixels", 1.0, "pixels")), label
+                assert scales == ((2.0, "A", 3.68, "mrad") if calibrated else (1.0, "px", 1.0, "px")), label
             finally:
                 widget.close()
     finally:

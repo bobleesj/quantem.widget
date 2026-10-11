@@ -49,6 +49,17 @@ def test_scale_label_matches_js_figure(value, unit, label):
     assert format_scale_label(value, unit) == label
 
 
+def test_uncalibrated_axes_carry_the_unit_px():
+    # the browser labels an uncalibrated axis px; the traits, and so a saved state, say the same
+    image = np.zeros((8, 8), dtype=np.float32)
+    assert Show2D(image).pixel_unit == "px"
+    viewer = Show4DSTEM(np.ones((2, 2, 4, 4), dtype=np.uint16), precompute_virtual_images=False, verbose=False)
+    assert (viewer.pixel_unit, viewer.k_pixel_unit, viewer.k_calibrated) == ("px", "px", False)
+    viewer.close()
+    profile = Show1D.from_image(image, line=((1, 1), (1, 6)))
+    assert (profile.x_unit, profile.pixel_unit) == ("px", "px")
+
+
 def test_round_to_nice_thresholds():
     assert [round_to_nice(v) for v in (1.4, 1.5, 3.4, 3.5, 7.4, 7.5, 0)] == [1, 2, 2, 5, 5, 10, 1.0]
     assert unit_symbol("angstrom") == "Å" and unit_symbol("micron") == "µm" and unit_symbol("px") == "px"

@@ -497,7 +497,7 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         line: Sequence[Sequence[float]],
         profile_width: int = 1,
         sampling: float = 1.0,
-        x_unit: str = "pixels",
+        x_unit: str = "px",
         **kwargs,
     ) -> Self:
         """A line-profile viewer: the trace sampled along ``line`` with the 2D image beside it.

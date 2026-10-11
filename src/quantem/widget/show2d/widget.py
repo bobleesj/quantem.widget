@@ -669,7 +669,7 @@ class Show2D(
     panel_annotations = traitlets.List(traitlets.List(traitlets.Dict()), default_value=[]).tag(sync=True)
     panel_overlays = traitlets.List(traitlets.List(traitlets.Dict()), default_value=[]).tag(sync=True)
     pixel_size = traitlets.Float(0.0).tag(sync=True)
-    pixel_unit = traitlets.Unicode("pixels").tag(sync=True)
+    pixel_unit = traitlets.Unicode("px").tag(sync=True)
     scale_bar_visible = traitlets.Bool(True).tag(sync=True)
     scale_bar_position = traitlets.Unicode("bottom-right").tag(sync=True)
     scale_bar_panels = traitlets.List(trait=traitlets.Int(), default_value=[]).tag(sync=True)
