@@ -3,7 +3,8 @@
 The overlays drawn over the slice panels (oblique cut and crosshair, scale bar,
 colorbar) keep a backing store at the screen's device pixel ratio, so they stay
 sharp on HiDPI screens. Align fits the drift of the volume on WebGPU and
-reports the slopes alignment.py computes for the same volume.
+reports the slopes alignment.py computes for the same volume. The 3D view
+says that it samples an 8-bit copy of the volume.
 """
 
 import re
@@ -76,6 +77,8 @@ def test_align_fits_the_drift_alignment_py_fits(exported, drifting_volume, serve
     text = status.inner_text()
     page.screenshot(path=str(browser_out / "show3dslices_aligned.png"))
     assert text.endswith("(WebGPU)"), text
+    # the 3D view's 8-bit copy of the volume is stated where the view is
+    assert page.get_by_text("3D view samples an 8-bit copy; the slice panels show the float32 values.").is_visible()
     row, col = (float(value) for value in re.findall(r"[-+]\d+\.\d{3}", text))
     assert row == pytest.approx(expected["row_shift_px_per_slice"], abs=5e-4)
     assert col == pytest.approx(expected["col_shift_px_per_slice"], abs=5e-4)

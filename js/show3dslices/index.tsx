@@ -4410,6 +4410,10 @@ function Show3DSlices() {
                   ↻90
                 </Button>
               </Box>
+              {/* The ray caster samples an 8-bit texture of the volume (r8unorm filters on every adapter). */}
+              <Typography sx={{ ...controlLabel, color: themeColors.textMuted }}>
+                3D view samples an 8-bit copy; the slice panels show the float32 values.
+              </Typography>
             </Box>
           </Stack>
         ) : (
