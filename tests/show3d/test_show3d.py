@@ -332,3 +332,21 @@ def test_watched_folder_is_created_and_fills_on_the_first_stable_frame(tmp_path:
         assert widget.n_slices == 1 and widget.labels == ["frame_001"]
     finally:
         widget.close()
+
+
+def test_horizontal_scale_bar_uses_the_column_sampling():
+    # D-1: Show3D labelled the horizontal bar with the row step of anisotropic sampling.
+    stack = np.zeros((2, 8, 12), dtype=np.float32)
+    assert Show3D(stack, sampling=(0.5, 0.25), units=("nm", "A")).pixel_size == 0.25
+    assert Show3D(stack, sampling=(0.5, 0.25), units=("nm", "A")).pixel_unit == "A"
+    dataset = make_dataset(stack, sampling=(1.0, 0.5, 0.25), units=("s", "A", "A"), name="stack")
+    assert Show3D(dataset).pixel_size == 0.25
+
+
+def test_paged_input_of_any_array_type_opens_as_pages():
+    # D-2: 5D paging was detected only for NumPy and torch, so a 5D CuPy array fell to the shape error.
+    cupy = pytest.importorskip("cupy")
+    pages = np.random.default_rng(0).random((2, 3, 4, 8, 8)).astype(np.float32)
+    widget = Show3D(cupy.asarray(pages))
+    assert (widget.n_pages, widget.panels_per_page, widget.n_panels) == (2, 3, 6)
+    widget.free()

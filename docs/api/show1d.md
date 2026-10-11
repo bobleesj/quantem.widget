@@ -119,7 +119,7 @@ public QuantEM data repository:
 from quantem.widget import Show1D
 from quantem.widget.datasets import show1d_ducky
 
-run = show1d_ducky(size="small")
+run = show1d_ducky()
 widget = Show1D.from_monitor_file(
     run / "show1d_monitor.jsonl",
     title="Real ducky joint iterative ptychography",
@@ -139,34 +139,25 @@ The dataset files live under `widget-tutorials/show1d/ducky/small/...` in
 
 ## HTML export
 
-Show1D follows the package export signature, with a deliberately narrower set
-of supported values:
+Show1D writes one page with exact float32 traces; its only packing choice is
+the image downsample:
 
 ```python
-path = widget.export_html(
-    "defocus-review.html",
-    mode="single",
-    encoding="full",
-    downsample=4,
-)
+path = widget.export_html("defocus-review.html", downsample=4)
 ```
 
-`mode="single"` and `encoding="full"` are the only supported packaging and
-encoding choices. `downsample` may be `None`, `1`, `2`, `4`, or `8`. It
+`downsample` may be `None`, `1`, `2`, `4`, or `8`. It
 preserves every 1D trace sample and x coordinate while applying a NaN-aware
 area mean only to linked 2D snapshots and profile images. Calibrated pixel size,
 snapshot view centers, and profile coordinates are rescaled with the image, so
 the downsampled review remains physically calibrated.
 
-Show1D does not provide `mode="folder"` or `encoding="uint8"`. Those values
-raise `NotImplementedError` with guidance to use a full single export and an
-image downsample factor. A full export can be large when hundreds of
-full-resolution snapshots are linked, so choose `downsample=2`, `4`, or `8`
-when one-file portability matters more than preserving every image pixel.
+A full export can be large when hundreds of full-resolution snapshots are
+linked, so choose `downsample=2`, `4`, or `8` when one-file portability matters
+more than preserving every image pixel.
 
-The generated file is kernel-free, but the embed loads RequireJS, AnyWidget,
-and the Jupyter HTML manager from public CDNs. Treat it as a standalone review
-file with a network dependency, not as proof of network-offline operation.
+The generated file is kernel-free and needs no network: RequireJS, AnyWidget
+and the Jupyter HTML manager travel inside the page (about 1.2 MB).
 
 `save_image("traces.png")` writes a matplotlib figure of the traces (`.pdf`
 also works); `save("view.json")` writes the display state that

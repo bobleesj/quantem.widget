@@ -94,11 +94,15 @@ def test_page_labels_and_export_slug():
 
 SHARED_DEFINITIONS = (
     "def _with_initial_live_mount_state(",
-    "def _round_to_nice",
-    "def _format_scale_label(",
+    "def round_to_nice(",
+    "def format_scale_label(",
     "class Colormap(",
     "def _on_export_request_change(",
-    "def _html_export_bytes(",
+    "def _html_export_choice(",
+    "def _write_export_and_report(",
+    "def widget_runtime_html(",
+    "def read_state(",
+    "def device_array(",
     "def _resolve_panel_ref(",
     "def _normalize_panel_refs(",
     "def _store_static_fallback_preview(",
@@ -120,16 +124,18 @@ def widget_sources(name: str) -> list[Path]:
 def test_widget_modules_do_not_redefine_shared_helpers():
     """Every helper that was copy-pasted across widgets now has one home; this keeps it that way."""
     shared = {"colormap.py", "counts.py", "export.py", "fallback.py", "pages.py", "panels.py", "state.py"}
-    offenders = []
+    offenders, homes = [], set()
     for path in sorted(WIDGETS.rglob("*.py")):
         relative = path.relative_to(WIDGETS).as_posix()
-        if relative in shared or relative.startswith(("render/", "utils/")):
-            continue
         text = path.read_text()
-        for needle in SHARED_DEFINITIONS:
-            if needle in text:
-                offenders.append(f"{relative}: {needle}")
+        found = {needle for needle in SHARED_DEFINITIONS if needle in text}
+        if relative in shared or relative.startswith(("render/", "utils/")):
+            homes |= found
+        else:
+            offenders += [f"{relative}: {needle}" for needle in sorted(found)]
     assert offenders == []
+    # a needle with no home is stale (renamed helper) and would let a copy slip back in
+    assert sorted(set(SHARED_DEFINITIONS) - homes) == []
 
 
 def test_export_traits_come_from_the_mixin():

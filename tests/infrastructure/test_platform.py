@@ -108,7 +108,8 @@ def test_notice_names_the_missing_gpu_runtime_and_the_pip_command(monkeypatch):
         'Show4DSTEM file loading runs on CPU. For the GPU path: pip install "quantem.widget[cuda]"'
     )
     _machine(monkeypatch, system="linux", machine="x86_64", nvidia=True, installed=("quantem.gpu", "cupy"))
-    monkeypatch.setattr(gpu_adapter, "gpu_runtime_notice", None)
+    monkeypatch.setattr(gpu_adapter, "available", lambda: True)
+    monkeypatch.setattr(gpu_adapter, "gpu_runtime_notice", lambda: None)
     assert device.gpu_notice_text() is None
     monkeypatch.setattr(gpu_adapter, "gpu_runtime_notice", lambda: "quantem.gpu: an NVIDIA GPU is present but CuPy is not installed")
     assert device.gpu_notice_text().startswith("quantem.gpu:")  # quantem.gpu names its own runtime when installed
@@ -371,3 +372,34 @@ def test_widgets_reduce_counts_exactly_on_mps():
     on_mps = ShowDiffraction(pattern, device="mps", verbose=False)
     on_cpu = ShowDiffraction(pattern, device="cpu", verbose=False)
     assert (on_mps.center_row, on_mps.center_col) == (on_cpu.center_row, on_cpu.center_col) == (24.5, 38.5)
+
+
+def test_free_gpu_on_mps_reports_the_metal_cache_it_returned(monkeypatch, capsys):
+    """rc41 on Apple silicon: free_gpu read torch's tensor counter, which excludes the cached blocks, so it printed 0.0 GB."""
+    import quantem.widget
+
+    driver = iter([5e9, 2e9])  # Metal driver total before and after empty_cache
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(torch.mps, "empty_cache", lambda: None)
+    monkeypatch.setattr(torch.mps, "driver_allocated_memory", lambda: next(driver))
+    monkeypatch.setattr(torch.mps, "current_allocated_memory", lambda: 1e9)
+    assert quantem.widget.free_gpu() == pytest.approx(3.0)
+    assert capsys.readouterr().out == "freed 3.0 GB (MPS)\n"
+
+
+def test_device_info_on_an_intel_mac_names_no_cpu_as_the_gpu_and_prints_the_notice_once(monkeypatch, capsys):
+    """rc41 on an Intel Mac: device_info called the i7 CPU the MPS device and printed the Intel Mac notice twice."""
+    import subprocess
+
+    from quantem.widget import device, info
+
+    monkeypatch.setattr(device, "_printed", set())
+    monkeypatch.setattr(device, "host_platform", lambda: ("darwin", "x86_64"))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, "Intel(R) Core(TM) i7-7820HQ CPU\n", ""))
+    report = info.device_info()
+    assert report["device"] == "Apple Metal (MPS) - the GPU of this Intel Mac"
+    assert device.resolve_device("auto") == "mps"
+    assert capsys.readouterr().out.count("on this Intel Mac the widgets compute") == 1

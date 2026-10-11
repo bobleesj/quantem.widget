@@ -121,7 +121,7 @@ route = device.gpu_path_hint() or device.no_gpu_path()  # this machine's way to 
 assert route in ptycho.session_note
 try:
     qw.ShowPtycho(object())
-except TypeError as exc:
+except ValueError as exc:
     assert route in str(exc)
 else:
     raise AssertionError("ShowPtycho must name what it takes and that a session needs quantem.gpu")

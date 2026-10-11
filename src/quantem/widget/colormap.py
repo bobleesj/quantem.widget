@@ -66,10 +66,12 @@ def colorize(normalized: np.ndarray, cmap: str) -> np.ndarray:
     that the browser paints with, so a saved pixel has the canvas's LUT position
     but its color can differ. The input keeps its dtype: the LUT index is
     computed in that precision and a float32 caller must not be promoted
-    behind its back.
+    behind its back. matplotlib does the ``* 255`` truncation on the LUT
+    (``bytes=True``) and gathers uint8, the same value per pixel without a
+    float64 RGBA image eight times the size of the result.
     """
-    rgba = colormaps.get_cmap(cmap)(normalized)
-    return (rgba[..., :3] * 255).astype(np.uint8)
+    rgba = colormaps.get_cmap(cmap)(normalized, bytes=True)
+    return np.ascontiguousarray(rgba[..., :3])
 
 
 def signed_log1p(values):

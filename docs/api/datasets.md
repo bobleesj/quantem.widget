@@ -40,7 +40,7 @@ For Show1D, the ducky ptychography example is a file-backed monitor run:
 from quantem.widget import Show1D
 from quantem.widget.datasets import show1d_ducky
 
-run = show1d_ducky(size="small")
+run = show1d_ducky()
 widget = Show1D.from_monitor_file(
     run / "show1d_monitor.jsonl",
     title="Real ducky joint iterative ptychography",

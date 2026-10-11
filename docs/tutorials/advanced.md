@@ -317,8 +317,8 @@ Show3D(
 )
 ```
 
-For a guide that should appear on every panel, use `overlays=[...]` instead of
-`panel_overlays`. For overlays generated in a loop, a flat list can target
+For a guide that should appear on every panel, pass a flat list of shapes
+without `panel=`. For overlays generated in a loop, a flat list can target
 panels with `panel=0` or `panel="raw"`:
 
 ```python
@@ -331,7 +331,7 @@ shared_defect_circle = {
     "stroke_width": 2,
 }
 
-Show2D([raw, denoised], labels=["raw", "denoised"], overlays=[shared_defect_circle])
+Show2D([raw, denoised], labels=["raw", "denoised"], panel_overlays=[shared_defect_circle])
 
 Show2D(
     [raw, denoised],

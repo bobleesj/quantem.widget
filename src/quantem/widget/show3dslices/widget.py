@@ -29,12 +29,14 @@ from quantem.widget.state import StateFileMixin
 from quantem.widget.utils.array import to_numpy
 
 _SLICE_ALIGNMENT_MODES = frozenset({"off", "auto", "manual"})
-# The scale bar reads Angstrom; a Dataset3d or ``sampling`` in nm is converted.
-_ANGSTROM_PER_UNIT = {"": 1.0, "a": 1.0, "å": 1.0, "angstrom": 1.0, "angstroms": 1.0, "nm": 10.0}
+# The scale bar reads Angstrom; a Dataset3d or ``sampling`` in nm or pm is converted.
+_ANGSTROM_PER_UNIT = {"": 1.0, "a": 1.0, "å": 1.0, "angstrom": 1.0, "angstroms": 1.0, "nm": 10.0, "pm": 0.01}
+# Units of an axis with no length (read_image_stack labels its frame axis "frame"): no scale bar on that axis.
+_UNCALIBRATED_UNITS = frozenset({"frame", "frames", "slice", "slices", "px", "pixel", "pixels"})
 
 
 def _pixel_size_axes(sampling: float | Sequence[float], units: str | Sequence[str] | None) -> list[float]:
-    """Voxel sampling as ``[pz, py, px]`` in Angstrom; a scalar applies to every axis."""
+    """Voxel sampling as ``[pz, py, px]`` in Angstrom; a scalar applies to every axis, an axis in frames or pixels gets 0 (no bar)."""
     samples = list(sampling) if isinstance(sampling, (tuple, list, np.ndarray)) else [sampling] * 3
     if len(samples) != 3:
         raise ValueError(f"sampling must be a scalar or 3 values (pz, py, px), got {len(samples)}")
@@ -44,8 +46,14 @@ def _pixel_size_axes(sampling: float | Sequence[float], units: str | Sequence[st
     axes = []
     for sample, unit in zip(samples, unit_list):
         key = str(unit or "").strip().lower()
+        if key in _UNCALIBRATED_UNITS:
+            axes.append(0.0)
+            continue
         if key not in _ANGSTROM_PER_UNIT:
-            raise ValueError(f"unsupported unit: {unit!r}")
+            raise ValueError(
+                f"Show3DSlices sampling unit {unit!r} is not a length it can draw a scale bar in; "
+                "use 'A', 'nm' or 'pm', or 'frame'/'pixels' for an axis without one."
+            )
         axes.append(float(sample) * _ANGSTROM_PER_UNIT[key])
     if any(not math.isfinite(axis) or axis < 0 for axis in axes):
         raise ValueError(f"sampling must be finite and >= 0, got {axes}")
@@ -121,8 +129,6 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         Voxel sampling for the scale bars, paired with ``units``.
     units : str or sequence of str, optional
         Unit of ``sampling`` (``"A"`` or ``"nm"``); one value applies to every axis.
-    pixel_size : float or (pz, py, px), optional
-        Scale-bar sampling directly in Angstrom; ``sampling`` is preferred.
     show_scale_bar : bool
         Draw calibrated scale bars when a sampling is known.
     z_stretch : float
@@ -153,8 +159,9 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     dim_labels : list of str, optional
         Names of axes 0, 1, 2; default ``["slice", "row", "col"]``.
     offline : bool
-        Pack the volume as uint8 against its global range for small standalone
-        HTML; ``False`` keeps exact float32 in the browser.
+        Pack the volume as uint8 against its global range (256 levels) for
+        small standalone HTML, and print one line saying so; ``False`` keeps
+        exact float32 in the browser.
     """
 
     _esm = pathlib.Path(__file__).parent.parent / "static" / "show3dslices.js"
@@ -383,7 +390,6 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         cmap: str = "plasma",
         sampling: float | Sequence[float] | None = None,
         units: str | Sequence[str] | None = None,
-        pixel_size: float | Sequence[float] | None = None,
         show_scale_bar: bool = True,
         z_stretch: float = 30.0,
         panel_width_px: int = 0,
@@ -408,15 +414,10 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         self._syncing_pages = False
         if core_adapter.is_dataset(data, ndim=3):
             title = title or data.name
-            if sampling is None and pixel_size is None:
+            if sampling is None:
                 sampling, units = list(data.sampling)[-3:], list(data.units)[-3:]
             data = core_adapter.as_array(data)
-        if sampling is not None:
-            pixel_size_axes = _pixel_size_axes(sampling, units)
-        elif pixel_size is not None:
-            pixel_size_axes = _pixel_size_axes(pixel_size, "A")
-        else:
-            pixel_size_axes = [0.0, 0.0, 0.0]
+        pixel_size_axes = [0.0, 0.0, 0.0] if sampling is None else _pixel_size_axes(sampling, units)
         data = to_numpy(data)
         if 0 in data.shape:
             raise ValueError(f"Empty volume: shape {data.shape}. All dims must be >= 1.")
@@ -460,6 +461,8 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             self.offline = bool(offline)
             if self.offline:
                 # uint8 against the global range: the browser rescales with _offline_min/_max
+                print(f"Show3DSlices packs the {'x'.join(map(str, volume.shape[1:]))} volume as uint8 over its range "
+                      "(256 levels); offline=False, or export_html(encoding='full'), keeps float32.")
                 low, high = float(volume.min()), float(volume.max())
                 self._offline_min, self._offline_max = low, high
                 if high > low:
@@ -564,8 +567,7 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         Page topology comes from the data, so ``n_pages`` / ``panels_per_page``
         are ignored and labels of the wrong length are dropped. ``vmin`` /
         ``vmax`` are cleared first so either bound can land regardless of the
-        current limits. A state saved with only the scalar ``pixel_size``
-        mirrors it across the three axes. Unknown keys warn and are dropped.
+        current limits. Unknown keys warn and are dropped.
         """
         state = dict(state)
         marker = state.pop("_widget", None)
@@ -580,10 +582,6 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             state.pop("page_labels")
         if "panel_titles" in state and len(state["panel_titles"]) not in (0, int(self.panel_count)):
             state.pop("panel_titles")
-        if "plane_visibility" in state:
-            state["show_slice_planes"] = any(bool(visible) for visible in state["plane_visibility"])
-        elif "show_slice_planes" in state:
-            state["plane_visibility"] = [bool(state["show_slice_planes"])] * 2
         if "vmin" in state or "vmax" in state:
             new_vmin = state.pop("vmin", self.vmin)
             new_vmax = state.pop("vmax", self.vmax)
@@ -593,8 +591,6 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             self.vmax = None if new_vmax is None else float(new_vmax)
         for key, value in state.items():
             setattr(self, key, value)
-        if "pixel_size" in state and "pixel_size_axes" not in state:
-            self.pixel_size_axes = [float(state["pixel_size"])] * 3
         if unknown:
             warnings.warn(f"load_state_dict ignored unknown keys: {unknown}.", stacklevel=2)
 
@@ -661,8 +657,10 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
 
     # --- HTML export ----------------------------------------------------------------
 
+    _HTML_ENCODINGS = ("full", "uint8")
+
     def export_html(self, path: str | pathlib.Path | None = None, *, title: str | None = None, encoding: str = "full") -> pathlib.Path:
-        """Write a standalone HTML viewer.
+        """Write a standalone HTML viewer that opens with no kernel and no network.
 
         ``encoding="full"`` embeds the exact float32 volume; ``"uint8"`` packs
         it against the global range for a file about a quarter the size. The
@@ -671,28 +669,7 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         """
         if self._data is None:
             raise ValueError("Cannot export HTML after free(); rebuild the widget first.")
-        quantized = self._quantized(encoding)
-        export_path = pathlib.Path(path) if path is not None else self._default_html_export_path(quantized)
-        self._write_html_export(export_path, quantized=quantized, title=title)
-        size_mb = export_path.stat().st_size / (1024 * 1024)
-        self.export_status = f"Exported {export_path.name} ({size_mb:.1f} MB, {self._export_mode_label(quantized)})"
-        return export_path
-
-    def _quantized(self, encoding: str) -> bool:
-        """Whether an export ``encoding`` asks for the uint8 pack; unknown encodings are refused."""
-        key = str(encoding or "full").strip().lower()
-        if key in {"full", "exact", "float32"}:
-            return False
-        if key in {"uint8", "quantized"}:
-            return True
-        raise ValueError(f"unknown Show3DSlices export encoding {encoding!r}; expected 'full' or 'uint8'")
-
-    def _html_export_options(self, payload: dict, mode: str) -> dict:
-        """The ``export_html`` keywords of a toolbar request (``HtmlExportMixin`` hook).
-
-        The toolbar menu sends ``mode`` ``"exact"`` or ``"quantized"``; Python callers send ``encoding``.
-        """
-        return {"quantized": self._quantized(payload.get("encoding", mode))}
+        return self._write_export_and_report(path, title=title, **self._html_export_choice(encoding, None))
 
     def _default_html_export_path(self, quantized: bool) -> pathlib.Path:
         """File in the kernel cwd named after the title, volume shape and encoding (``HtmlExportMixin`` hook)."""
@@ -710,7 +687,8 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             title=self.title,
             panel_titles=list(self.panel_titles) or None,
             page_labels=list(self.page_labels) if int(self.n_pages) > 1 else None,
-            pixel_size=list(self.pixel_size_axes),
+            sampling=list(self.pixel_size_axes),
+            units="A",
             dim_labels=list(self.dim_labels),
             offline=quantized,
         )

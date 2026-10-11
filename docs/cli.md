@@ -52,8 +52,8 @@ quantem show4dstem scan_001_master.h5 scan_002_master.h5 --backend webgpu --html
 ```
 
 `--bin N` replaces each N x N detector block by its mean, rounded to the
-nearest count, in an `--html` export packed in Python (`--backend auto`,
-`cuda`, or `mps`). The default is `--bin 1`, meaning full detector sampling.
+nearest count, in an `--html` export packed in Python (`--backend auto`). The
+default is `--bin 1`, meaning full detector sampling.
 Use a larger value only for an explicit preview, and label that reduction in
 the report. The `--backend webgpu` folder reads the source HDF5 chunks in the
 browser and requires `--bin 1`; live notebooks always keep full detector
@@ -103,9 +103,9 @@ quantem github analysis_github.ipynb --no-execute
 | Option | Effect |
 |---|---|
 | `--bin N` | `--html` packed in Python: detector mean-bin factor (default 1). `--backend webgpu` and live notebooks require 1 |
-| `--backend auto/cuda/mps/webgpu` | Show4DSTEM backend; use `webgpu` with `--html` for a browser-owned full-detector HDF5-backed viewer |
+| `--backend auto/webgpu` | `auto` (default) loads onto CUDA, Apple MPS or the CPU, whichever the machine has; `webgpu` with `--html` writes a browser-owned full-detector HDF5-backed viewer |
 | `--count N` | require and load exactly this many compatible masters from the input |
-| `--dtype uint8/uint16` | `--html` packed or browser-decoded dtype; `uint8` is compact browse, `uint16` keeps the wider detector-count range |
+| `--dtype auto/uint8/uint16` | `--html` packed or browser-decoded dtype; `uint8` is compact browse, `uint16` keeps the wider detector-count range |
 | `--serve` | open via a local HTTP server even for self-contained files (tunnelable URL) |
 | `--html` | write the offline-WebGPU HTML instead of a notebook |
 | `--watch`, `--watch-interval S` | folder: write a live viewer notebook that opens the ready masters and appends new ones |

@@ -35,20 +35,22 @@ Every export-capable widget exposes `export_html(path=None, *, title=None, ...)`
 It returns the written `pathlib.Path`, creates parent directories, and updates
 `widget.export_status` with the filename, size, and selected encoding. The
 exported page hydrates with the ipywidgets HTML manager and runs without a live
-Python kernel. Browser-side changes in the HTML are local; they do not write
-back to the `.ipynb` or `.html` file.
+Python kernel or a network: RequireJS, AnyWidget and the HTML manager are
+vendored in the wheel and travel gzipped inside the page (about 1.2 MB), so it
+opens on an offline machine. Browser-side changes in the HTML are local; they do
+not write back to the `.ipynb` or `.html` file.
 
 | Widget | Python API |
 |---|---|
-| Show1D | `export_html(path=None, *, title=None, mode="single", encoding="full", downsample=None)` |
-| Show2D | `export_html(path=None, *, title=None, mode="single", encoding="full", downsample=None, quantized=None, max_mb=...)` |
-| Show3D | `export_html(path=None, *, title=None, mode="single", encoding="full", downsample=None, quantized=None, max_mb=...)` |
+| Show1D | `export_html(path=None, *, title=None, downsample=None)` |
+| Show2D | `export_html(path=None, *, title=None, encoding="full", downsample=None, max_mb=80)` |
+| Show3D | `export_html(path=None, *, title=None, encoding="full", downsample=None, max_mb=80)` |
 | Show3DSlices | `export_html(path=None, *, title=None, encoding="full")` |
 | Show4DSTEM | `export_html(path=None, *, title=None, dtype="uint8", det_bin=1, scan_bin=1, export_kind="interactive", dataset_scope="unhidden")` |
 | ShowDiffraction | `export_html(path=None, *, title=None)` |
 | ShowPtycho | `export(path)` writes a folder: the widget page over exact bright-field counts; the browser builds transient BF-indexed reducers in WebGPU |
 
-`encoding="uint8"` (or `quantized=True`) stores display-scaled data; `downsample`
+`encoding="uint8"` stores display-scaled data; `downsample`
 reduces the shape before export. Each reduction is explicit: nothing is binned
 or quantized unless the call asks for it.
 
@@ -66,9 +68,9 @@ Widgets that expose an in-widget **Export** button share these synced traits
 | `export_payload_id` | Python -> JS | Echoes the request id so JS downloads the right payload once |
 | `export_filename` | Python -> JS | Suggested download filename |
 
-The Show2D and Show3D menus send `{"mode": "exact" | "quantized", "id": ..., "filename": ..., "download": true}`;
-`download=true` means Python builds HTML bytes into `export_payload`, otherwise
-it writes the file by calling `export_html(...)`.
+The Show2D, Show3D and Show3DSlices menus send `{"mode": "exact" | "quantized", "id": ..., "filename": ..., "download": true}`
+(Show3D adds `downsample`); Show1D sends `{"mode": "single", "encoding": "full"}`. Python checks the
+packing as an `export_html` call is, builds the page bytes into `export_payload`, and the browser saves them.
 
 ## Widget capability table
 

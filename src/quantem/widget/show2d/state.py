@@ -1,7 +1,9 @@
 """Show2D view state: the JSON-safe dict behind ``save`` / ``state=``."""
 
 import math
+import pathlib
 
+from quantem.widget.utils.state_io import read_state
 from quantem.widget.show2d.options import (
     _normalize_inset_plot_specs,
     _normalize_marker_mapping,
@@ -11,6 +13,48 @@ from quantem.widget.show2d.options import (
     _normalize_panel_title_style,
     _normalize_scale_bar_style,
 )
+
+
+_ROI_LENGTH_KEYS = ("row", "col", "radius", "radius_inner", "width", "height")
+_OVERLAY_LENGTH_KEYS = ("row", "col", "radius", "row0", "col0", "row1", "col1")
+
+
+def _rescale_view(state: dict, factor: float) -> dict:
+    """``state`` with every image-pixel length multiplied by ``factor`` and the pixel size divided by it.
+
+    The browser measures zoom center, view box, ROIs, profile points and
+    data-coordinate overlays in the pixels it shows, which are native pixels
+    binned by the display bin (and, in an export clone, by ``downsample``).
+    ``state_dict`` stores them in native pixels so a state moves between
+    widgets with different bins; without the conversion the view and the
+    scale bar of a binned widget land ``factor`` times off.
+    """
+    if factor == 1:
+        return state
+    scaled = dict(state)
+    if scaled.get("pixel_size"):
+        scaled["pixel_size"] = scaled["pixel_size"] / factor
+    for key in ("zoom_row", "zoom_col"):
+        if scaled.get(key) is not None:
+            scaled[key] = scaled[key] * factor
+    if "view_box" in scaled:
+        scaled["view_box"] = [value * factor for value in scaled["view_box"]]
+    if "roi_list" in scaled:
+        scaled["roi_list"] = [
+            {**roi, **{key: roi[key] * factor for key in _ROI_LENGTH_KEYS if key in roi}} for roi in scaled["roi_list"]
+        ]
+    if "profile_line" in scaled:
+        scaled["profile_line"] = [{**point, "row": point["row"] * factor, "col": point["col"] * factor} for point in scaled["profile_line"]]
+    if "panel_overlays" in scaled:
+        scaled["panel_overlays"] = [
+            [
+                {**overlay, **{key: overlay[key] * factor for key in _OVERLAY_LENGTH_KEYS if key in overlay}}
+                if overlay.get("coords") == "data" else overlay
+                for overlay in panel
+            ]
+            for panel in scaled["panel_overlays"]
+        ]
+    return scaled
 
 
 class Show2DState:
@@ -39,7 +83,7 @@ class Show2DState:
         "panel_inner_border_px", "panel_inner_border_color",
         "show_stats", "show_fft", "fft_window", "fft_metrics",
         "show_controls", "controls_collapsed",
-        "pixel_size", "pixel_sizes", "pixel_unit",
+        "pixel_size", "pixel_unit",
         "scale_bar_visible", "scale_bar_position", "scale_bar_panels",
         "scale_bar_length", "scale_bar_label", "scale_bar_style", "show_zoom_indicator",
         "size", "smooth", "initial_zoom", "zoom_row", "zoom_col", "view_box",
@@ -57,19 +101,20 @@ class Show2DState:
 
     def state_dict(self) -> dict:
         """JSON-safe view settings (no pixels): what ``save`` writes and
-        ``Show2D(data, state=...)`` restores."""
+        ``Show2D(data, state=...)`` restores. Pixel sizes and image
+        coordinates are in native pixels, whatever the display bin."""
         state = {key: getattr(self, key) for key in self._STATE_KEYS}
         for key, value in state.items():
             if isinstance(value, (list, dict)):
                 state[key] = type(value)(value)
         state["folder_page_size"] = self._folder_page_size
-        state["display_bin"] = self._display_bin
-        return state
+        return _rescale_view(state, self._display_bin)
 
-    def load_state_dict(self, state: dict) -> None:
-        """Restore a ``state_dict``; entries that do not fit this widget's panel
-        count or page layout are skipped rather than raising."""
-        state = dict(state)
+    def load_state_dict(self, state: dict | str | pathlib.Path) -> None:
+        """Restore a ``state_dict``, its envelope or a ``save`` file; entries that
+        do not fit this widget's panel count or page layout are skipped rather
+        than raising."""
+        state = _rescale_view(dict(read_state(state, "Show2D")), 1 / self._display_bin)
         n_images = int(self.n_images)
         page_kind = str(state.get("page_kind", self.page_kind))
         if page_kind not in {"comparison", "items"}:
@@ -164,7 +209,5 @@ class Show2DState:
             ):
                 state.pop("panel_frame_indices")
         for key, value in state.items():
-            if key == "display_bin":
-                self._display_bin = value
-            elif self.has_trait(key):
+            if self.has_trait(key):
                 setattr(self, key, value)

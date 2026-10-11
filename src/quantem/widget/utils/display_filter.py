@@ -17,13 +17,11 @@ active reduction is announced once through :func:`format_display_filter_banner`.
 import numpy as np
 
 DISPLAY_FILTER_MODES = ("none", "gaussian", "anscombe", "nlm")
-_IDENTITY_MODES = {"none", "off", "raw", ""}
 
 
 def _normalize_mode(mode: str) -> str:
-    """Canonical lowercase mode name; identity spellings collapse to none."""
-    mode = str(mode).strip().lower()
-    return "none" if mode in _IDENTITY_MODES else mode
+    """The mode name in lowercase, as the browser filter spells it (``"none"``, ``"gaussian"``, ...)."""
+    return str(mode).strip().lower()
 
 
 def _anscombe_gauss(image: np.ndarray, sigma: float) -> np.ndarray:

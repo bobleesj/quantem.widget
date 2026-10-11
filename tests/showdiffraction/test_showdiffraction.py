@@ -80,7 +80,7 @@ def saed():
     return widget
 
 
-def numpy_radial_profile(frame, center, mask=None, angular_range=None, ellipse=None):
+def numpy_radial_profile(frame, center, mask=None, ellipse=None):
     """The float64 NumPy radial profile the widget used before it moved to torch (np.hypot,
     np.digitize, np.bincount): the reference the device profile must reproduce."""
     n_rows, n_cols = frame.shape
@@ -90,8 +90,6 @@ def numpy_radial_profile(frame, center, mask=None, angular_range=None, ellipse=N
     d_col = np.arange(n_cols, dtype=np.float64)[None, :] - center[1]
     radii = np.hypot(*lattice.ellipse_to_circle(d_row, d_col, *ellipse)) if ellipse else np.hypot(d_row, d_col)
     keep = np.ones(frame.shape, bool) if mask is None else ~mask
-    if angular_range is not None:
-        keep &= lattice.in_wedge(np.degrees(np.arctan2(d_row, d_col)) % 360.0, *angular_range)
     values = frame.astype(np.float64)[keep]
     edges = np.linspace(0.0, max_radius, n_bins + 1)
     indices = np.digitize(radii[keep], edges) - 1
@@ -377,15 +375,14 @@ def test_radial_profile_matches_the_float64_numpy_reference(device):
     mask[:100, :170] = True
     # an integer center puts exact radii (hypot(54, 240) = 246) on the integer bin edges
     for center in [(256.0, 256.0), (255.5, 255.5), (243.37, 261.81)]:
-        for options in [{}, {"mask": mask}, {"angular_range": (350.0, 10.0), "mask": mask}, {"angular_range": (45.0, 225.0)}, {"ellipse": (1.07, 23.0)}]:
+        for options in [{}, {"mask": mask}, {"ellipse": (1.07, 23.0)}]:
             for frame in (counts, smooth):
                 radii, intensity, standard_error = numpy_radial_profile(frame, center, **options)
                 ellipse = options.get("ellipse")
-                got = lattice.radial_profile_px(
+                got = lattice.radial_profile(
                     frame if device == "numpy" else torch.from_numpy(frame).to(device),
                     center=center,
                     mask=options.get("mask"),
-                    angular_range=options.get("angular_range"),
                     ellipse_ratio=ellipse[0] if ellipse else 1.0,
                     ellipse_angle=ellipse[1] if ellipse else 0.0,
                     ellipse_corrected=ellipse is not None,
@@ -427,8 +424,8 @@ def test_a_center_click_profiles_each_ring_frame_once(monkeypatch):
     widget.frame_idx = 0
     widget.show_profile = True
     calls = []
-    profile = lattice.radial_profile_px
-    monkeypatch.setattr(lattice, "radial_profile_px", lambda frame, **kwargs: calls.append(1) or profile(frame, **kwargs))
+    profile = lattice.radial_profile
+    monkeypatch.setattr(lattice, "radial_profile", lambda frame, **kwargs: calls.append(1) or profile(frame, **kwargs))
     # the page sends a click as one message holding both coordinates
     widget.set_state({"center_row": 254.0, "center_col": 257.5})
     assert len(calls) == 2  # frame 0 (its rings and the profile panel) and frame 1 (one ring)

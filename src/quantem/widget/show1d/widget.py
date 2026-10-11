@@ -21,6 +21,7 @@ import numpy as np
 import traitlets
 
 from quantem.widget.adapters import core as core_adapter
+from quantem.widget.colormap import VALID_CMAPS
 from quantem.widget.export import HtmlExportMixin
 from quantem.widget.fallback import StaticFallbackMixin
 from quantem.widget.show1d.export import Show1DExport
@@ -39,15 +40,10 @@ from quantem.widget.show1d.review import (
 from quantem.widget.show1d.state import Show1DState
 from quantem.widget.state import SavedStateMixin
 from quantem.widget.utils.array import _b64_safe, to_numpy
-from quantem.widget.utils.state_io import unwrap_state_payload
 from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
 
 # Okabe-Ito palette: distinguishable for every common colour-vision deficiency
 _DEFAULT_COLORS = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#F0E442", "#999999"]
-_VALID_IMAGE_CMAPS = {
-    "inferno", "viridis", "plasma", "magma", "hot", "gray", "hsv", "turbo",
-    "RdBu", "cividis", "seismic", "RdBu_r", "twilight", "twilight_shifted",
-}
 _VALID_SNAPSHOT_CONTRAST_PRESETS = {"full", "0.5-99.5", "1-99", "2-98", "5-95"}
 _VALID_OVERLAY_POSITIONS = {"top-left", "top-right", "bottom-left", "bottom-right"}
 _UI_DEFAULTS = {
@@ -314,8 +310,8 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         self._configure_static_fallback()
         super().__init__(**kwargs)
         self._static_fallback_mime = self._static_fallback_mime_type()
-        self._data, inferred_labels, inferred_title = _normalise_data(data)
-        self._x = _normalise_x(x, self._data.shape[1])
+        self._data, inferred_labels, inferred_title = _normalize_data(data)
+        self._x = _normalize_x(x, self._data.shape[1])
         self._snapshots: list[np.ndarray] = []
         self._profile_image: np.ndarray | None = None
         self._trial_metrics: dict[str, dict] = {}
@@ -350,10 +346,6 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         self._update_trial_analysis()
         if profile_image is not None:
             self._set_profile_image(profile_image, line=profile_line)
-        if isinstance(state, (str, pathlib.Path)):
-            state = unwrap_state_payload(json.loads(pathlib.Path(state).read_text()), require_envelope=True, expected_widget="Show1D")
-        elif state is not None:
-            state = unwrap_state_payload(state, expected_widget="Show1D")
         if state is not None:
             self.load_state_dict(state)
         self.observe(self._on_export_request_change, names=["export_request"])
@@ -365,8 +357,8 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
     def _validate_cmap(self, proposal: dict) -> str:
         """Reject a colormap the browser has no lookup table for, instead of painting with a silent fallback."""
         name = str(proposal["value"])
-        if name not in _VALID_IMAGE_CMAPS:
-            raise ValueError(f"Unknown {proposal['trait'].name} {name!r}. Valid: {sorted(_VALID_IMAGE_CMAPS)}")
+        if name not in VALID_CMAPS:
+            raise ValueError(f"Unknown {proposal['trait'].name} {name!r}. Valid: {sorted(VALID_CMAPS)}")
         return name
 
     @traitlets.validate("snapshot_contrast_preset")
@@ -667,8 +659,8 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
 
     def set_data(self, data, *, x=None, labels: Sequence[str] | None = None) -> Self:
         """Replace the traces while keeping every display setting."""
-        self._data, inferred_labels, _ = _normalise_data(data)
-        self._x = _normalise_x(x, self._data.shape[1])
+        self._data, inferred_labels, _ = _normalize_data(data)
+        self._x = _normalize_x(x, self._data.shape[1])
         self.n_traces = int(self._data.shape[0])
         self.n_points = int(self._data.shape[1])
         self.labels = [str(label) for label in (labels or inferred_labels)]
@@ -915,7 +907,7 @@ def _default_colors(n_traces: int) -> list[str]:
     return [_DEFAULT_COLORS[idx % len(_DEFAULT_COLORS)] for idx in range(n_traces)]
 
 
-def _normalise_data(data) -> tuple[np.ndarray, list[str], str]:
+def _normalize_data(data) -> tuple[np.ndarray, list[str], str]:
     """Traces as a float32 ``(n_traces, n_points)`` block with inferred labels and title."""
     title = ""
     if core_adapter.is_dataset(data):
@@ -946,7 +938,7 @@ def _stack_equal_length(arrays: list[np.ndarray]) -> np.ndarray:
     return np.ascontiguousarray(np.stack(arrays), dtype=np.float32)
 
 
-def _normalise_x(x, n_points: int) -> np.ndarray | None:
+def _normalize_x(x, n_points: int) -> np.ndarray | None:
     """x positions as float32 with one value per point; point indices when ``x`` is None, nothing for an empty trace."""
     if x is None:
         return None if n_points == 0 else np.arange(n_points, dtype=np.float32)

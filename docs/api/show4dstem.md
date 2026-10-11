@@ -470,8 +470,8 @@ quantem show4dstem /path/to/h5_family --backend webgpu --html --bin 1 --count 7
 The folder writes `Show4DSTEM.command`, a hidden `.viewer/` server/viewer
 folder, and linked `tilt_NN_master.h5`/`tilt_NN_data_*.h5` files. On macOS,
 double-clicking the command starts a local range-capable server and opens the
-vendored viewer page in Chrome. The exported page ships the required browser
-widget-manager assets, so the handoff does not depend on public CDNs. Rerunning
+viewer page in Chrome. The page carries the browser widget-manager runtime, so
+the handoff does not depend on public CDNs or any network. Rerunning
 the same CLI into the same `--out` replaces the generated
 `*_show4dstem_webgpu` viewer folder, which prevents stale HTML or stale links
 from surviving a regeneration.

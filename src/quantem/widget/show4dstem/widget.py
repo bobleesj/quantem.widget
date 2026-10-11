@@ -50,7 +50,8 @@ from quantem.widget.show4dstem.dense import DenseSession
 from quantem.widget.show4dstem.detector import PRESET_RADII, fit_disk, preset_mask, roi_mask, scan_indices
 from quantem.widget.show4dstem.preview import static_png_b64
 from quantem.widget.state import SavedStateMixin
-from quantem.widget.utils.state_io import unwrap_state_payload
+from quantem.widget.utils.array import device_array
+from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
 
 DEFAULT_BF_RATIO = 0.125  # bright-field radius as a fraction of the detector side before fitting
@@ -136,7 +137,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         path opens as ``read_4dstem(path, device)`` reads it: on the GPU
         through quantem.gpu when it is installed and a GPU is present, else
         densely, block by block onto ``device`` (one printed line; refused
-        above a memory ceiling, never reduced).
+        above a memory ceiling, never reduced). None with ``h5_urls`` or
+        ``qem_urls``, whose data the browser reads.
     device
         Where a NumPy array or a file is placed and reduced: ``"auto"`` (CUDA,
         then MPS, then CPU; printed once), ``"cuda"``, ``"cuda:N"``, ``"mps"``
@@ -388,7 +390,6 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 f"backend must be 'webgpu' or None, got {backend!r}. "
                 "Native CUDA or MPS compute is selected from the data payload."
             )
-        offline_dtype = {"u8": "uint8", "u16": "uint16"}.get(str(offline_dtype).lower(), str(offline_dtype).lower())
         if offline_dtype not in ("uint8", "uint16"):
             raise ValueError(
                 f"offline_dtype must be 'uint8' or 'uint16', got {offline_dtype!r}. "
@@ -463,17 +464,17 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                                  f"{tuple(data.shape)}.")
             data = data[row_start:row_stop, col_start:col_stop]
         precompute_virtual_images = True if precompute_virtual_images is None else bool(precompute_virtual_images)
-        view_mode = self._normalise_view_mode("single" if view_mode is None else view_mode)
-        compare_dp_mode = self._normalise_compare_dp_mode("average" if compare_dp_mode is None else compare_dp_mode)
-        compare_group_mode = self._normalise_compare_group_mode(compare_group_mode)
+        view_mode = self._normalize_view_mode("single" if view_mode is None else view_mode)
+        compare_dp_mode = self._normalize_compare_dp_mode("average" if compare_dp_mode is None else compare_dp_mode)
+        compare_group_mode = self._normalize_compare_group_mode(compare_group_mode)
         if browser_urls:
             urls = list(dict.fromkeys(str(url) for url in browser_urls))
             data = None
             data_device = torch.device("cpu")
             shape = (len(urls), *scan_shape, *detector_shape) if len(urls) > 1 else (*scan_shape, *detector_shape)
         else:
-            if type(data).__module__.split(".")[0] == "cupy":
-                data = torch.from_dlpack(data)  # zero-copy: the array stays on its GPU
+            if not isinstance(data, (AcquisitionView, AcquisitionSeries)):
+                data = device_array(data)  # a CuPy array becomes a tensor on its GPU, zero-copy
             if isinstance(data, (AcquisitionView, AcquisitionSeries)):
                 data_device = data.device
             elif isinstance(data, torch.Tensor):
@@ -481,7 +482,6 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 data = data.to(data_device)
             else:
                 data_device = torch.device(resolve_device(device, data))
-                data = np.asarray(data)
                 # a copy on a GPU, or a wider copy on the host (uint16 on torch 2.2), is refused rather than reduced
                 needed = data.size * host_dtype_for_torch(data.dtype).itemsize
                 limit = reader.ceiling(data_device)
@@ -619,10 +619,6 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._schedule_initial_view_sync()
         self._pack_offline(offline)
         if state is not None:
-            if isinstance(state, (str, pathlib.Path)):
-                state = unwrap_state_payload(json.loads(pathlib.Path(state).read_text()), require_envelope=True)
-            else:
-                state = unwrap_state_payload(state)
             self.load_state_dict(state)
         if self._verbose:
             print(f"Show4DSTEM {'x'.join(str(s) for s in shape)} on {self._device}")
@@ -828,15 +824,15 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         out = pathlib.Path(path) if path is not None else html_export.default_export_path(self, dtype, det_bin, scan_bin, kind)
         self._write_html_export(out, title=title, dtype=dtype, det_bin=det_bin, scan_bin=scan_bin,
                                 export_kind=kind, dataset_scope=dataset_scope)
-        if kind == "report":
+        if kind == "report" or not (self._h5_urls or self._qem_urls):
             how = "self-contained HTML - double-click to open, no server needed"
         else:
-            # The page fetches its packed data over HTTP (file:// blocks it), so a
+            # A browser source reads its HDF5 or .qem files over HTTP (file:// blocks it), so a
             # double-click launcher serves the folder and opens the page.
             from quantem.widget.command_launcher import write_command_launcher
 
             write_command_launcher(out.parent, "Show4DSTEM", viewer_html=out.name)
-            how = (f"WebGPU folder - reads its data file over HTTP; double-click Show4DSTEM.command in "
+            how = (f"WebGPU folder - reads its data files over HTTP; double-click Show4DSTEM.command in "
                    f"{out.parent.name}/ to open (a bare double-click of the HTML will not load the data)")
         size_mb = out.stat().st_size / (1024 * 1024)
         self.export_status = f"Exported {out.name} ({size_mb:.1f} MB, {html_export.mode_label(dtype, det_bin, scan_bin, kind)}) - {how}"
@@ -876,7 +872,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """Reconstruct the SSB phase of the current dataset and show it as the image.
 
         ``kwargs`` go to the solver: ``n_trials``, ``refine``, ``seed``,
-        ``aberrations``, ``rotation_angle_deg``, ``bf_radius``,
+        ``aberrations`` (a dict of ``C10_nm``, ``C12_nm`` and ``phi12_deg``; a
+        missing key is 0), ``rotation_angle_deg``, ``bf_radius``,
         ``bf_intensity_threshold``, ``lock_c10``, ``lock_c12`` and the
         calibration overrides ``voltage_kV``, ``semiangle_mrad``,
         ``scan_sampling_A``, ``det_sampling_mrad``. The aligned DPC maps from
@@ -958,13 +955,13 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         return state
 
     def load_state_dict(self, state) -> None:
-        """Restore a ``state_dict``; positions and the dataset index are clamped to this data."""
+        """Restore a ``state_dict``, its envelope or a ``save`` file; positions and the dataset index are clamped to this data."""
+        state = read_state(state, "Show4DSTEM")
         allowed = set(self.state_dict())
         normalisers = {
-            "view_mode": self._normalise_view_mode,
-            "compare_dp_mode": self._normalise_compare_dp_mode,
-            "compare_group_mode": self._normalise_compare_group_mode,
-            "vi_source": self._normalise_vi_source,
+            "view_mode": self._normalize_view_mode,
+            "compare_dp_mode": self._normalize_compare_dp_mode,
+            "compare_group_mode": self._normalize_compare_group_mode,
         }
         for key, value in state.items():
             if key in {"pos_row", "pos_col", "frame_idx"} or key not in allowed:
@@ -1459,18 +1456,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     # Product maps (DPC and SSB phase)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _normalise_vi_source(value: str | None) -> str:
-        """Canonical image source (``roi``, ``DPC_row``, ``DPC_col``, ``SSB``) from the aliases callers and states send."""
-        source = str(value or "roi").strip()
-        key = source.lower().replace("-", "_").replace(" ", "_")
-        aliases = {"": "roi", "roi": "roi", "virtual": "roi", "virtual_image": "roi", "bf": "roi",
-                   "dpc_row": "DPC_row", "dpc_col": "DPC_col", "ssb": "SSB", "ssb_phase": "SSB", "phase": "SSB"}
-        return aliases.get(key, source)
-
     def _set_vi_product_map(self, label: str, value) -> None:
         """Attach or replace one static map (2D, or 3D with one frame per dataset) and resend the stack."""
-        label = self._normalise_vi_source(label)
         if label not in PRODUCT_LABELS:
             raise ValueError(f"Unsupported virtual-image product {label!r}. Use one of {PRODUCT_LABELS}.")
         product = np.asarray(value)
@@ -1496,7 +1483,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     def _on_vi_source_change(self, change=None) -> None:
         """React to an image-source switch: fall back to the ROI image when that product map does not exist, then repaint."""
-        source = self._normalise_vi_source(self.vi_source)
+        source = self.vi_source
         if source != "roi" and source not in self._vi_product_maps:
             source = "roi"
         if source != self.vi_source:
@@ -1595,8 +1582,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """
         if self.n_frames != 1:
             raise ValueError("Compute SSB runs on a single 4D dataset. For a series, open the target dataset as a 4D widget.")
-        if (self.shape_rows, self.shape_cols) not in ((128, 128), (256, 256), (512, 512)):
-            raise ValueError(f"Compute SSB supports square 128x128, 256x256, or 512x512 scan grids; got {self.shape_rows}x{self.shape_cols}.")
+        # quantem.gpu pads any other scan to the next of these sizes, and a padded phase would not fit this scan
+        if (self.shape_rows, self.shape_cols) not in ((128, 128), (256, 256), (512, 512), (1024, 1024)):
+            raise ValueError(f"Compute SSB supports square 128, 256, 512 or 1024 scan grids; got {self.shape_rows}x{self.shape_cols}.")
         calibration = self._ssb_calibration
         scan_sampling = self._ssb_scan_sampling_A(scan_sampling_A if scan_sampling_A is not None else calibration["scan_sampling_A"])
         det_sampling = self._ssb_det_sampling_mrad(det_sampling_mrad if det_sampling_mrad is not None else calibration["det_sampling_mrad"])
@@ -1615,9 +1603,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             raise ValueError(f"n_trials must be >= 0, got {trials}.")
         do_refine = bool(self.ssb_compute_refine if refine is None else refine)
         if aberrations is not None:
-            phi12 = math.radians(float(aberrations["phi12_deg"])) if "phi12_deg" in aberrations else float(aberrations.get("phi12", 0.0))
-            aberrations = {"C10": float(aberrations.get("C10", aberrations.get("C10_nm", 0.0))),
-                           "C12": float(aberrations.get("C12", aberrations.get("C12_nm", 0.0))), "phi12": phi12}
+            # quantem.gpu takes C10 and C12 in nm and phi12 in radians
+            aberrations = {"C10": float(aberrations.get("C10_nm", 0.0)), "C12": float(aberrations.get("C12_nm", 0.0)),
+                           "phi12": math.radians(float(aberrations.get("phi12_deg", 0.0)))}
         search_ranges = refine_lock = None
         if lock_c10 or lock_c12:
             base = aberrations or {}
@@ -1695,17 +1683,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         raw = str(change.get("new") or "")
         if not raw:
             return
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            payload = {"action": raw}
-        action = str(payload.get("action", "compute_ssb")).strip().lower()
+        payload = json.loads(raw)  # the frontend sends {"action": "compute_ssb", ...}
         self.ssb_compute_request = ""  # consume the trigger before any long work
-        if action in {"clear", "reset"}:
-            self.ssb_compute_status = ""
-            return
-        if action not in {"compute_ssb", "ssb", "compute"}:
-            self.ssb_compute_status = f"SSB failed: unknown request {action!r}"
+        if payload.get("action") != "compute_ssb":
+            self.ssb_compute_status = f"SSB failed: unknown request {payload.get('action')!r}"
             return
         if not self.ssb_compute_enabled:
             self.ssb_compute_status = "Compute SSB is available only in a live Python kernel. Precompute SSB before exporting standalone HTML."
@@ -1726,8 +1707,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self.ssb_compute_c12_nm = float(payload.get("c12_nm", self.ssb_compute_c12_nm))
             self.ssb_compute_phi12_deg = float(payload.get("phi12_deg", self.ssb_compute_phi12_deg))
             self.ssb_compute_rotation_angle_deg = float(payload.get("rotation_angle_deg", self.ssb_compute_rotation_angle_deg))
-            kwargs["aberrations"] = {"C10": self.ssb_compute_c10_nm, "C12": self.ssb_compute_c12_nm,
-                                     "phi12": math.radians(self.ssb_compute_phi12_deg)}
+            kwargs["aberrations"] = {"C10_nm": self.ssb_compute_c10_nm, "C12_nm": self.ssb_compute_c12_nm,
+                                     "phi12_deg": self.ssb_compute_phi12_deg}
             kwargs["rotation_angle_deg"] = self.ssb_compute_rotation_angle_deg
             kwargs["lock_aberrations"] = True
         self.ssb_compute_lock_c10 = bool(payload.get("lock_c10", self.ssb_compute_lock_c10))
@@ -1888,9 +1869,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     def _on_compare_config_change(self, change=None) -> None:
         """React to a grid layout change: normalise it, keep one panel visible, rebuild the grid, keep the dataset in view."""
         if change and change.get("name") == "view_mode":
-            self.view_mode = self._normalise_view_mode(change.get("new", "single"))
+            self.view_mode = self._normalize_view_mode(change.get("new", "single"))
         if change and change.get("name") == "compare_group_mode":
-            self.compare_group_mode = self._normalise_compare_group_mode(change.get("new", "paged"))
+            self.compare_group_mode = self._normalize_compare_group_mode(change.get("new", "paged"))
         if change and change.get("name") == "compare_hidden_panels":
             hidden = self._panel_set(change.get("new", []))
             if len(hidden) >= self.n_frames:
@@ -1910,7 +1891,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     def _on_compare_dp_mode_change(self, change=None) -> None:
         """React to the comparison pattern mode (average, selected, all): normalise it and resend the pattern."""
         if change:
-            self.compare_dp_mode = self._normalise_compare_dp_mode(change.get("new", "average"))
+            self.compare_dp_mode = self._normalize_compare_dp_mode(change.get("new", "average"))
         if self._multiple_view_active():
             self._update_frame()
 
@@ -1919,31 +1900,25 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _normalise_view_mode(value: str) -> str:
-        """``"single"`` or ``"multiple"`` from a caller, frontend or saved-state value; anything else is refused."""
-        mode = str(value or "single").strip().lower().replace("-", "_")
-        if mode not in {"single", "multiple"}:
+    def _normalize_view_mode(value: str) -> str:
+        """``"single"`` or ``"multiple"`` from a caller, frontend or saved state; anything else is refused."""
+        if value not in ("single", "multiple"):
             raise ValueError(f"view_mode must be 'single' or 'multiple', got {value!r}")
-        return mode
+        return value
 
     @staticmethod
-    def _normalise_compare_dp_mode(value: str) -> str:
-        """``"average"``, ``"selected"`` or ``"all"``, accepting short aliases; anything else is refused."""
-        mode = str(value or "average").strip().lower().replace("-", "_")
-        mode = {"avg": "average", "mean": "average", "current": "selected"}.get(mode, mode)
-        if mode not in {"average", "selected", "all"}:
+    def _normalize_compare_dp_mode(value: str) -> str:
+        """``"average"``, ``"selected"`` or ``"all"``; anything else is refused."""
+        if value not in ("average", "selected", "all"):
             raise ValueError(f"compare_dp_mode must be 'average', 'selected', or 'all', got {value!r}")
-        return mode
+        return value
 
     @staticmethod
-    def _normalise_compare_group_mode(value: str) -> str:
-        """``"paged"`` or ``"all"``, accepting aliases; anything else is refused."""
-        mode = str(value or "paged").strip().lower().replace("-", "_")
-        mode = {"page": "paged", "pages": "paged", "group": "paged", "groups": "paged",
-                "collapse": "all", "collapsed": "all", "single": "all"}.get(mode, mode)
-        if mode not in {"paged", "all"}:
+    def _normalize_compare_group_mode(value: str) -> str:
+        """``"paged"`` or ``"all"``; anything else is refused."""
+        if value not in ("paged", "all"):
             raise ValueError(f"compare_group_mode must be 'paged' or 'all', got {value!r}")
-        return mode
+        return value
 
     def _multiple_view_active(self) -> bool:
         """Whether the comparison grid shows: multiple view requested and more than one dataset to compare."""

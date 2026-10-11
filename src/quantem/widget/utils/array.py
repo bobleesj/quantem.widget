@@ -6,34 +6,40 @@ import torch
 from quantem.widget.adapters import core as core_adapter
 
 
+def device_array(data) -> np.ndarray | torch.Tensor:
+    """The one input conversion of the widgets, keeping GPU data on its GPU.
+
+    A torch tensor (any device) comes back as given, a CuPy array as a torch
+    tensor on the same GPU (zero-copy DLPack), a quantem dataset as its array,
+    and anything else ``np.asarray`` takes (lists, h5py datasets, xarray) as a
+    NumPy array. Widgets that compute on the device take this; widgets that
+    draw on the host take ``to_numpy``. CuPy is recognised by its module so it
+    is never imported here.
+    """
+    if core_adapter.is_dataset(data):
+        data = core_adapter.as_array(data)
+    if isinstance(data, (np.ndarray, torch.Tensor)):
+        return data
+    if type(data).__module__.split(".", 1)[0] == "cupy":
+        return torch.from_dlpack(data)
+    try:
+        return np.asarray(data)
+    except (TypeError, ValueError, RuntimeError) as error:
+        raise TypeError(f"expected a NumPy, PyTorch or CuPy array or an array-like, got {type(data).__name__}.") from error
+
+
 def to_numpy(data, dtype: np.dtype | None = None) -> np.ndarray:
-    """Convert NumPy / PyTorch / a quantem dataset (numpy- or tensor-backed) to NumPy.
+    """``device_array(data)`` on the host as NumPy, optionally cast to ``dtype``.
 
     Upcasts torch dtypes numpy can't represent (bfloat16, float8) to float32 first
     so the user sees their data instead of "Got unsupported ScalarType BFloat16".
     """
-    if core_adapter.is_dataset(data):
-        data = core_adapter.as_array(data)
+    data = device_array(data)
     if isinstance(data, torch.Tensor):
         if data.dtype == torch.bfloat16 or str(data.dtype).startswith("torch.float8"):
             data = data.to(torch.float32)
-        result = data.detach().cpu().numpy()
-    elif isinstance(data, np.ndarray):
-        result = data
-    elif hasattr(data, "get") and type(data).__module__.split(".", 1)[0] == "cupy":
-        # a CuPy array, recognised by its module so cupy is never imported here
-        result = data.get()
-    else:
-        # Last-resort fallback covers RgbImage.__array__, dlpack-compatible objects, etc.
-        try:
-            result = np.asarray(data)
-        except (TypeError, ValueError, RuntimeError) as error:
-            raise TypeError(
-                f"to_numpy expected a NumPy, PyTorch, or CuPy array, got {type(data).__name__}."
-            ) from error
-    if dtype is not None:
-        result = np.asarray(result, dtype=dtype)
-    return result
+        data = data.detach().cpu().numpy()
+    return data if dtype is None else np.asarray(data, dtype=dtype)
 
 
 def _resize_image(image: np.ndarray, target_rows: int, target_cols: int) -> np.ndarray:

@@ -37,6 +37,7 @@ from quantem.widget.adapters import core as core_adapter
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.device import gpu_path_hint, no_gpu_path
 from quantem.widget.showptycho.export import write_showptycho_folder
+from quantem.widget.utils.array import device_array
 
 STARS_FILENAME = "showptycho_stars.json"
 CALIBRATION_FILENAME = "calibration.json"
@@ -84,11 +85,11 @@ def finite_or_none(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def scan_sampling_scalar(ssb) -> float:
-    """The row scan step in Angstrom; ``SSB.scan_sampling_A`` may be one number or (row, col)."""
+def scan_sampling_scalar(ssb, axis: int = 0) -> float:
+    """The scan step in Angstrom along ``axis`` (0 rows, -1 columns); ``SSB.scan_sampling_A`` may be one number or (row, col)."""
     sampling = ssb.scan_sampling_A
     if isinstance(sampling, (tuple, list)):
-        return float(sampling[0])
+        return float(sampling[axis])
     return float(sampling or 0.0)
 
 
@@ -129,11 +130,12 @@ class ShowPtycho(anywidget.AnyWidget):
 
     Parameters
     ----------
-    data : numpy.ndarray, torch.Tensor, quantem Dataset2d or quantem.gpu.SSB
-        A 2D reconstruction or a prepared SSB session. A ``Dataset2d`` gives its array, and its
-        sampling when its units are a length. A real array is the phase (rad); a complex
-        array is the object wave, shown as its phase (``angle``) and amplitude (``abs``). Tensors
-        may live on any device. Arrays need no quantem.gpu; the aberration controls then stay
+    data : array_like, quantem Dataset2d or quantem.gpu.SSB
+        A 2D reconstruction (NumPy, torch, CuPy or anything ``np.asarray`` takes) or a prepared
+        SSB session. A ``Dataset2d`` gives its array, and its sampling when its units are a
+        length. A real array is the phase (rad); a complex array is the object wave, shown as
+        its phase (``angle``) and amplitude (``abs``). Tensors and CuPy arrays stay on their
+        device until the 2D result is drawn. Arrays need no quantem.gpu; the aberration controls then stay
         hidden and one line says what they need. An SSB session, normally after
         ``ssb.find_aberrations()``, is reused for its resident bright-field evidence and
         exclusively driven while the widget is open.
@@ -229,18 +231,12 @@ class ShowPtycho(anywidget.AnyWidget):
         save_dir: str | pathlib.Path | None = None,
         fft_on: bool = False,
     ) -> None:
-        if core_adapter.is_dataset(data, ndim=2):
+        if core_adapter.is_dataset(data, ndim=2) and sampling is None and str(data.units[-1]) in ANGSTROM_PER_UNIT:
             # a calibrated reconstruction: a length unit on its axes draws the scale bar
-            if sampling is None and str(data.units[-1]) in ANGSTROM_PER_UNIT:
-                sampling, units = tuple(float(value) for value in data.sampling), str(data.units[-1])
-            data = core_adapter.as_array(data)
-        is_array = isinstance(data, (np.ndarray, torch.Tensor))
-        if not is_array and not gpu_adapter.is_ssb(data):
-            needs = "" if gpu_adapter.available() else f"; a session needs quantem.gpu ({gpu_path_hint() or no_gpu_path()})"
-            raise TypeError(
-                "ShowPtycho takes a 2D phase or complex object-wave array (NumPy, torch or a quantem Dataset2d) or a prepared "
-                f"quantem.gpu.SSB session{needs}; got {type(data).__name__}."
-            )
+            sampling, units = tuple(float(value) for value in data.sampling), str(data.units[-1])
+        is_array = not gpu_adapter.is_ssb(data)
+        if is_array:
+            data = device_array(data)  # a tensor or CuPy array stays on its GPU until the 2D result is drawn
         if not is_array and sampling is not None:
             raise ValueError("sampling describes an array; an SSB session carries its own scan_sampling_A.")
         super().__init__()
@@ -257,7 +253,9 @@ class ShowPtycho(anywidget.AnyWidget):
             # result is copied for the browser), in the input's precision; the browser draws float32,
             # so wider input is rounded once and the largest change is printed, never silently
             if data.ndim != 2:
-                raise ValueError(f"ShowPtycho shows one 2D reconstruction; got shape {tuple(data.shape)}. Pass one slice.")
+                needs = "" if gpu_adapter.available() else f" (a session needs quantem.gpu: {gpu_path_hint() or no_gpu_path()})"
+                raise ValueError(f"ShowPtycho shows one 2D reconstruction or a quantem.gpu SSB session{needs}; "
+                                 f"got an array of shape {tuple(data.shape)}. Pass one 2D slice.")
             if units not in ANGSTROM_PER_UNIT:
                 raise ValueError(f"units must be one of {sorted(ANGSTROM_PER_UNIT)}; got {units!r}")
             is_tensor = isinstance(data, torch.Tensor)
@@ -301,7 +299,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self.stars_path = str(self._stars_path.resolve())
         self.upsampling_available = ssb.backend == "cuda"
         self.sample_available = ssb.supports_tilt
-        self.pixel_size = scan_sampling_scalar(ssb)
+        self.pixel_size = scan_sampling_scalar(ssb, axis=-1)  # the horizontal scale bar measures columns
         self.crop_refit_available = bool(self._source_file and pathlib.Path(self._source_file).is_file())
         self.crop_refit_status = (
             "Ready to refit a native square scan crop." if self.crop_refit_available
@@ -546,9 +544,9 @@ class ShowPtycho(anywidget.AnyWidget):
             return
         try:
             request = json.loads(change["new"])
-            region = request["scan_region"]
+            region = request.get("scan_region")
             if not isinstance(region, (tuple, list)) or len(region) != 4:
-                raise TypeError("scan_region must be (row_start, row_stop, col_start, col_stop)")
+                raise ValueError("scan_region must be (row_start, row_stop, col_start, col_stop)")
             n_trials = int(request.get("n_trials", 200))
             if n_trials < 1:
                 raise ValueError("SSB refit needs at least one optimization trial.")
@@ -577,7 +575,8 @@ class ShowPtycho(anywidget.AnyWidget):
                 bf_radius=previous.bf_radius, source_path=previous.source_path,
             )
             rebuilt.find_aberrations(trials=n_trials, refinement="nelder-mead", verbose=False)
-        except (RuntimeError, ValueError, TypeError, KeyError, OSError, MemoryError) as exc:
+        except (RuntimeError, ValueError, OSError, MemoryError) as exc:
+            # a refused request, an unreadable file or a solver failure; a code bug still raises
             self.crop_refit_status = f"Crop refit failed: {exc}"
             return
         self._free_drag_context()

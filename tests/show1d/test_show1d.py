@@ -299,10 +299,6 @@ def test_export_html_embeds_state_and_downsamples_only_linked_images(tmp_path):
     assert small["x_unit"] == "nm" and small["title"] == "Export me"
     default_name = widget._default_html_export_path(downsample=4).name
     assert default_name == "export_me_1x8_4xdownsampled_single.html"
-    with pytest.raises(NotImplementedError, match="folder"):
-        widget.export_html(tmp_path / "x.html", mode="folder")
-    with pytest.raises(NotImplementedError, match="uint8"):
-        widget.export_html(tmp_path / "x.html", encoding="uint8")
     with pytest.raises(ValueError, match="one of"):
         widget.export_html(tmp_path / "x.html", downsample=3)
     widget.export_request = json.dumps({"mode": "single", "encoding": "full", "downsample": 2, "id": "req", "filename": "dl.html", "download": True})

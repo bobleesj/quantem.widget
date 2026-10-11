@@ -248,14 +248,14 @@ Overlay strokes are solid by default. Use `line_style="dashed"`,
 `line_style="dotted"`, or `line_style="dashdot"` for common figure styles, or
 pass `dash=[on, off, ...]` for a custom pattern.
 
-Use `overlays=[...]` for one shared guide on every panel, or include `panel=`
-inside a flat list when overlays are generated in a loop:
+A flat `panel_overlays=[...]` list without `panel=` draws one shared guide on
+every panel; include `panel=` in each entry when overlays are generated in a loop:
 
 ```{code-cell} python
 Show2D(
     [raw, denoised],
     labels=["raw", "denoised"],
-    overlays=[
+    panel_overlays=[
         {
             "shape": "circle",
             "center": (0.5, 0.5),
@@ -546,7 +546,7 @@ for example `"500 pm"` instead of an automatically formatted label.
 
 ```python
 svg_path = w.export_svg("figure2_show2d.svg")
-html_path = w.export_html("figure2_show2d.html", mode="single", encoding="uint8")
+html_path = w.export_html("figure2_show2d.html", encoding="uint8")
 ```
 
 In the live widget, use `Export -> Preview SVG` before saving the SVG. This

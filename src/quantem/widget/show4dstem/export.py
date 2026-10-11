@@ -20,14 +20,13 @@ import json
 import math
 import os
 import pathlib
-import re
 
 import numpy as np
 import torch
 
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.command_launcher import write_command_launcher
-from quantem.widget.export import ensure_mobile_viewport, export_slug, write_widget_html
+from quantem.widget.export import STANDALONE_EXPORT_STYLE, export_slug, write_widget_html
 from quantem.widget.show4dstem.detector import PRESET_RADII, preset_mask
 from quantem.widget.show4dstem.preview import (
     colormap_rgb,
@@ -47,8 +46,6 @@ HTML_PAYLOAD_ADVISED = 3 << 28
 
 def export_options(widget, dtype: str, det_bin: int, scan_bin: int) -> tuple[str, int, int]:
     """Validate the packing choices: integer dtype and bins that divide both shapes."""
-    dtype = str(dtype).strip().lower()
-    dtype = {"u8": "uint8", "u16": "uint16"}.get(dtype, dtype)
     if dtype not in ("uint8", "uint16"):
         raise ValueError(f"dtype must be 'uint8' or 'uint16', got {dtype!r}")
     det_bin, scan_bin = int(det_bin), int(scan_bin)
@@ -200,7 +197,7 @@ def announce_clipped(clipped: int, total: int, dtype: str) -> None:
     """Print how many of ``total`` values a ``dtype`` pack clipped, and how to keep them."""
     if clipped:
         limit = np.iinfo(dtype).max
-        hint = ("pass dtype='uint16' (--dtype u16 or auto on the command line) to keep counts up to 65535"
+        hint = ("pass dtype='uint16' (--dtype uint16 or auto on the command line) to keep counts up to 65535"
                 if dtype == "uint8" else "the data exceed the uint16 count range")
         print(f"Show4DSTEM {dtype} pack clipped {clipped} values outside 0..{limit} ({clipped / total:.3%}); {hint}")
 
@@ -348,20 +345,14 @@ def write_interactive_html(widget, path, *, dtype: str, det_bin: int, scan_bin: 
 # Static report
 # ---------------------------------------------------------------------------
 
-REPORT_SCOPES = {
-    "unhidden": "unhidden", "visible": "unhidden",
-    "current_page": "current-page", "current-page": "current-page", "current": "current-page", "page": "current-page",
-    "starred": "starred", "star": "starred", "stars": "starred",
-    "all": "all",
-}
+REPORT_SCOPES = ("unhidden", "current_page", "starred", "all")
 
 
 def report_scope(value) -> str:
-    """Canonical report scope (``unhidden``, ``current-page``, ``starred``, ``all``) from any accepted spelling."""
-    key = str(value or "unhidden").strip().lower()
-    if key not in REPORT_SCOPES:
+    """The report scope, one of ``REPORT_SCOPES``; anything else is refused."""
+    if value not in REPORT_SCOPES:
         raise ValueError("dataset_scope must be 'unhidden', 'current_page', 'starred', or 'all'")
-    return REPORT_SCOPES[key]
+    return value
 
 
 def report_indices(widget, dataset_scope: str) -> list[int]:
@@ -376,7 +367,7 @@ def report_indices(widget, dataset_scope: str) -> list[int]:
         starred = widget._panel_set(widget.compare_starred_panels)
         return [idx for idx in ordered if idx in starred]
     hidden = widget._panel_set(widget.compare_hidden_panels)
-    if scope == "current-page":
+    if scope == "current_page":
         start = max(0, int(widget.compare_page_idx)) * max(1, int(widget.compare_max_panels))
         ordered = ordered[start : start + max(1, int(widget.compare_max_panels))]
     return [idx for idx in ordered if idx not in hidden]
@@ -483,6 +474,7 @@ def report_html_bytes(widget, *, dtype: str, det_bin: int, scan_bin: int, datase
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html.escape(report_title)}</title>
+  {STANDALONE_EXPORT_STYLE}
   <style>{REPORT_CSS.format(cols=cols)}</style>
 </head>
 <body>
@@ -520,33 +512,17 @@ def report_html_bytes(widget, *, dtype: str, det_bin: int, scan_bin: int, datase
 
 
 def write_report_html(widget, path, *, dtype: str, det_bin: int, scan_bin: int, dataset_scope: str, title: str | None) -> pathlib.Path:
-    """Write the static report page with a mobile viewport, so it reads on a phone without zooming."""
+    """Write the static report page (it carries a mobile viewport, so it reads on a phone without zooming)."""
     out = pathlib.Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(report_html_bytes(widget, dtype=dtype, det_bin=det_bin, scan_bin=scan_bin,
                                       dataset_scope=dataset_scope, title=title))
-    ensure_mobile_viewport(out)
     return out
 
 
 # ---------------------------------------------------------------------------
 # Browser WebGPU bundle over linked HDF5
 # ---------------------------------------------------------------------------
-
-VENDOR = pathlib.Path(__file__).parent.parent / "vendor"
-# embed_minimal_html references CDNs; each is replaced by a vendored copy so the
-# bundle opens with no network. Patterns, not exact URLs: the version specifiers
-# drift across ipywidgets/anywidget releases.
-CDN_REWRITES = (
-    (re.compile(r"https://cdnjs\.cloudflare\.com/[^\"']*/require(\.min)?\.js"), "./require.min.js"),
-    (re.compile(r"https://cdn\.jsdelivr\.net/[^\"']*html-manager[^\"']*/embed-amd\.js"), "./embed-amd.js"),
-    (re.compile(r"\"https://cdn\.jsdelivr\.net/npm/anywidget@[^\"]*\""), '"./anywidget.min"'),
-)
-# A file:// page has origin null, so a local script still marked crossorigin (or
-# carrying the CDN's integrity hash) fails the CORS check and the page stays blank.
-LOCAL_SCRIPT = re.compile(r"<script\b[^>]*\bsrc=\"\./[^\"]*\"[^>]*>")
-CDN_ATTRIBUTE = re.compile(r"\s(?:integrity=\"[^\"]*\"|crossorigin(?:=\"[^\"]*\")?)")
-
 
 def h5_tuning_script(dtype: str) -> str:
     """Runtime settings the browser HDF5 loader reads before the widget bundle.
@@ -617,12 +593,12 @@ def bundle_master_urls(folder, names=None, *, viewer_prefix: str = "..") -> list
 
 
 def write_webgpu_bundle(widget, out_dir, *, port: int = 8794, title: str | None = None, h5_decode_dtype: str = "uint16") -> pathlib.Path:
-    """Write ``Show4DSTEM.command``, ``index.html`` and a vendored ``.viewer/`` page into the data folder.
+    """Write ``Show4DSTEM.command``, ``index.html`` and the ``.viewer/`` page into the data folder.
 
     ``out_dir`` holds the linked ``*_master.h5`` family or ``.qem`` files the
     widget references. The recipient double-clicks the command: a range-capable
     server starts over this folder and Chrome opens the page, with no Python
-    install and no CDN.
+    install and no network (the page carries the vendored widget runtime).
     """
     root = pathlib.Path(out_dir)
     if not root.is_dir():
@@ -633,20 +609,6 @@ def write_webgpu_bundle(widget, out_dir, *, port: int = 8794, title: str | None 
     viewer.mkdir(exist_ok=True)
     page = viewer / "Show4DSTEM.html"
     write_interactive_html(widget, page, dtype=str(h5_decode_dtype).lower(), det_bin=1, scan_bin=1, title=title)
-    text = page.read_text(encoding="utf-8")
-    for pattern, local in CDN_REWRITES:
-        text = pattern.sub(local, text)
-    text = LOCAL_SCRIPT.sub(lambda tag: CDN_ATTRIBUTE.sub("", tag.group(0)), text)
-    page.write_text(text, encoding="utf-8")
-    for name in ("require.min.js", "embed-amd.js", "anywidget.min.js"):
-        source = VENDOR / f"{name}.gz"
-        if not source.is_file():
-            raise FileNotFoundError(
-                f"missing vendored Show4DSTEM browser asset: {source}; "
-                "rebuild the package with src/quantem/widget/vendor included"
-            )
-        with gzip.open(source, "rb") as compressed, (viewer / name).open("wb") as unpacked:
-            unpacked.write(compressed.read())
     (root / "index.html").write_text(
         '<!doctype html>\n<html><head><meta charset="utf-8"><title>Show4DSTEM</title></head>\n<body>\n<script>\n'
         'window.location.replace(".viewer/Show4DSTEM.html" + window.location.search + window.location.hash);\n'
@@ -695,7 +657,7 @@ def write_qem_bundle(paths, out_dir, *, title: str | None = None, frame_labels=N
     from quantem.widget.show4dstem.widget import Show4DSTEM  # widget.py imports this module
 
     widget = Show4DSTEM(
-        np.zeros((1, 1, 1, 1), dtype=np.uint8),
+        None,
         qem_urls=[f"../qem/{path.name}" for path in paths],
         backend="webgpu",
         scan_shape=first.scan_shape,

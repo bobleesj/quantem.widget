@@ -26,7 +26,7 @@ no console error, no NaN frame).
 | More menu: Color shared | `panel_cmaps`, `panel_cmaps_memory` | Shared by default. Turn off to let the Color dropdown edit only the selected gallery panel; turn on for one shared colormap, then turn off again to restore the previous individual panel colormaps |
 | Panel identity markers | `marker_colors`, `marker_style`, `row_markers`, `col_markers` | Optional panel colors plus row/column group frames make panels easy to reference in notebooks, reports, and agent instructions |
 | Local panel annotations | `panel_annotations` | Optional multiple in-image labels per panel, placed by corner, normalized point, or normalized region box |
-| Geometric panel overlays | `panel_overlays` (`overlays` shorthand) | Optional circle, rectangle, and square overlays in data or relative coordinates, with stroke/fill opacity, dashed/dotted line styles, and z-order; More -> Overlay Edit allows live select, move, resize, delete, and reset |
+| Geometric panel overlays | `panel_overlays` | Optional circle, rectangle, and square overlays in data or relative coordinates, with stroke/fill opacity, dashed/dotted line styles, and z-order; More -> Overlay Edit allows live select, move, resize, delete, and reset |
 | Contrast min / max sliders | `vmin`, `vmax` | Display clamp changes; histogram markers move |
 | Auto-contrast toggle | `auto_contrast` | Re-fits `vmin`/`vmax` to the percentile range |
 | More menu: Contrast | `contrast_preset` | Applies scientist-friendly percentile ranges such as `1-99`, `2-98`, and `3-97`; the histogram stays visible below the image |
@@ -60,7 +60,7 @@ no console error, no NaN frame).
 | Filter master | `frequency_filter_enabled` | Turns frequency filtering on/off without discarding cutoff or band settings |
 | Filter Settings | `show_frequency_filter` | Chooses None, Low-pass, High-pass, or Band-pass and exposes the FFT-ring parameters |
 | More menu: Flip | `image_flips_horizontal`, `image_flips_vertical` | Display-only horizontal/vertical flips help compare orientations and point-defect neighborhoods without changing stored arrays |
-| More menu: Rotate | `image_rotations`, `rotation_scope`; `rotation=`, `rotations=` | Display-only 0/90/180/270° rotation for every panel or the selected panel; raw data and `(row, col)` coordinates stay unchanged |
+| More menu: Rotate | `image_rotations`, `rotation_scope` | Display-only 0/90/180/270° rotation for every panel or the selected panel; raw data and `(row, col)` coordinates stay unchanged |
 | Panel inset plots | `inset_plots` | Optional per-panel mini line plots for calibration curves, ACF/R sweeps, or other scientific context; hover reports the nearest plotted coordinate |
 | Scale bar placement | `scale_bar_position`, `show_zoom_indicator` | Move the scale bar between bottom corners and opt into a zoom badge when a workflow needs a live magnification readout |
 
@@ -179,15 +179,15 @@ Overlay strokes are solid by default. Set `line_style="dashed"`,
 `line_style="dotted"`, or `line_style="dashdot"` for common scientific
 callouts, or pass `dash=[on, off, ...]` for an exact canvas dash pattern.
 
-For a shared overlay on every panel, pass `overlays=[...]` instead of
-`panel_overlays`. Use `coords="relative"` when the geometry should follow
-normalized panel coordinates from 0 to 1:
+A flat list of shapes without `panel=` draws each shape on every panel. Use
+`coords="relative"` when the geometry should follow normalized panel
+coordinates from 0 to 1:
 
 ```python
 Show2D(
     [raw, denoised],
     labels=["raw", "denoised"],
-    overlays=[
+    panel_overlays=[
         {
             "shape": "circle",
             "center": (0.5, 0.5),
@@ -586,7 +586,7 @@ replace the image or gallery data through that method:
 import numpy as np
 from quantem.widget import Show2D
 
-w = Show2D(first_image, labels=["initial"], offline=False)
+w = Show2D(first_image, labels=["initial"])
 w
 
 for step, next_image in enumerate(image_stream, start=1):
@@ -819,5 +819,5 @@ transport can avoid sending every page to the browser at once.
 place does not notify the frontend. The method sends fresh synced `frame_bytes`
 and resets state tied to the old image count or dimensions, including stale
 hidden panels, stars, view box, ROIs, line profiles, detail tiles, and panel
-order. Use `offline=False` for acquisition-style updates so the live Jupyter
-Comm path carries each new frame instead of the saved/offline notebook path.
+order. Each new frame reaches the browser over the live Jupyter connection;
+`offline=True` would only quantize the panels to uint8.

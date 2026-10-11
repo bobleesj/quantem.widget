@@ -156,7 +156,7 @@ def gpu_notice_text() -> str | None:
     if module_installed("quantem.gpu"):
         from quantem.widget.adapters import gpu as gpu_adapter
 
-        if gpu_adapter.gpu_runtime_notice is not None:
+        if gpu_adapter.available():
             # quantem.gpu names its own missing runtime (CuPy, Metal, MLX)
             return gpu_adapter.gpu_runtime_notice()
     if system == "darwin":

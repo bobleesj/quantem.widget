@@ -557,7 +557,7 @@ def test_dense_and_encoded_paths_agree(tmp_path, accelerator, device):
 # ---------------------------------------------------------------------------
 
 
-def test_interactive_export_packs_binned_counts_and_a_launcher(tmp_path):
+def test_interactive_export_packs_binned_counts_in_one_self_contained_page(tmp_path):
     counts = _counts(4, scan=(4, 4))
     widget = Show4DSTEM(counts, title="export", sampling=(0.5, 0.5, 0.1, 0.1), center=(8, 8), bf_radius=2,
                         precompute_virtual_images=False)
@@ -569,8 +569,10 @@ def test_interactive_export_packs_binned_counts_and_a_launcher(tmp_path):
         html = out.read_text(errors="ignore")
         assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
         assert "_offline_stack" in html and "application/vnd.jupyter.widget-state+json" in html
-        assert (tmp_path / "Show4DSTEM.command").exists()
+        # rc41: a packed page holds its counts, yet a launcher was written and the status said it read a data file over HTTP
+        assert not (tmp_path / "Show4DSTEM.command").exists()
         assert "interactive raw 4D, uint16, scan bin 2x, detector bin 2x" in widget.export_status
+        assert widget.export_status.endswith("self-contained HTML - double-click to open, no server needed")
         with pytest.raises(ValueError, match="det_bin"):
             widget.export_html(tmp_path / "bad.html", det_bin=3)
         widget.export_request = json.dumps({"export_kind": "report", "dtype": "uint8", "det_bin": 2, "scan_bin": 1,
@@ -648,12 +650,12 @@ def test_uint8_pack_announces_the_counts_it_clips(capsys):
         widget.close()
 
 
-def test_webgpu_bundle_links_masters_and_writes_vendored_viewer(tmp_path):
+def test_webgpu_bundle_links_masters_and_writes_an_offline_viewer(tmp_path):
     for stem in ("tilt_a", "tilt_b"):
         _write_master(tmp_path, stem, _counts(5, scan=(2, 2)))
     urls = bundle_master_urls(tmp_path)
     assert urls == ["../tilt_a_master.h5", "../tilt_b_master.h5"]
-    widget = Show4DSTEM(np.zeros((1, 1, 1, 1), np.uint8), h5_urls=urls, scan_shape=(2, 2), detector_shape=DET,
+    widget = Show4DSTEM(None, h5_urls=urls, scan_shape=(2, 2), detector_shape=DET,
                         backend="webgpu", view_mode="multiple", compare_group_mode="all")
     try:
         assert widget.n_frames == 2 and widget.offline
@@ -665,10 +667,8 @@ def test_webgpu_bundle_links_masters_and_writes_vendored_viewer(tmp_path):
     page = (tmp_path / ".viewer" / "Show4DSTEM.html").read_text()
     assert '__QT_H5_DECODE_DTYPE ??= "uint8"' in page
     assert "__QT_REQUIRE_LOCAL_H5_FILES = true" in page
-    assert "cdn.jsdelivr.net" not in page and (tmp_path / ".viewer" / "anywidget.min.js").exists()
-    # opened from disk the page has origin null: a crossorigin or integrity attribute blocks the local script
-    local_scripts = re.findall(r"<script\b[^>]*\bsrc=\"\./[^\"]*\"[^>]*>", page)
-    assert len(local_scripts) >= 2 and not [tag for tag in local_scripts if "crossorigin" in tag or "integrity" in tag]
+    # the widget runtime travels inside the page: no CDN and no script file to fetch from disk
+    assert "<script src=" not in page and 'id="quantem-widget-runtime-2"' in page
     assert ".viewer/Show4DSTEM.html" in (tmp_path / "index.html").read_text()
 
 
@@ -696,3 +696,36 @@ def test_qem_bundle_links_acquisitions_for_a_streaming_viewer(tmp_path):
     reference.save_array(data / "wide.qem", _counts(3, scan=(3, 5)))
     with pytest.raises(ValueError, match="one viewer compares acquisitions of one shape"):
         write_qem_bundle([data / "tilt_a.qem", data / "wide.qem"], tmp_path / "other")
+
+
+def test_compute_ssb_accepts_a_1024_scan(monkeypatch):
+    # B-1: the scan guard allowed 128, 256 and 512, although quantem.gpu reconstructs 1024 x 1024 scans.
+    import types
+
+    from quantem.widget.show4dstem import widget as widget_module
+
+    class Session:
+        num_bf = 4
+        physical_rotation_deg = 0.0
+
+        def __init__(self, source, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def reconstruct(self):
+            return types.SimpleNamespace(phase=np.ones((1024, 1024), np.float32), aberrations={"C10": 0.0, "C12": 0.0, "phi12": 0.0},
+                                         rotation_angle_deg=0.0, com_reversed=False, loss=None, elapsed=None)
+
+    monkeypatch.setattr(widget_module.gpu_adapter, "ssb_session", Session)
+    widget = Show4DSTEM(np.ones((1024, 1024, 4, 4), np.uint16), precompute_virtual_images=False, ssb_voltage_kV=300,
+                        ssb_semiangle_mrad=20, ssb_scan_sampling_A=0.5, ssb_det_sampling_mrad=1.0)
+    try:
+        phase, dpc_row, _ = widget._ssb_phase(aberrations={"C10_nm": 0.0}, lock_aberrations=True)
+        assert phase.shape == dpc_row.shape == (1024, 1024)
+    finally:
+        widget.close()

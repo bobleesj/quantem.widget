@@ -82,8 +82,6 @@ parts:
           - file: api/load
       - file: developer/widget-creation
         title: Creating a widget
-      - file: developer/ui-guide
-        title: UI Guide
       - file: developer/experimental-ans
         title: Experimental ANS sources
       - file: developer/save-state-and-notebook-size

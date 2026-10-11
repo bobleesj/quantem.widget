@@ -161,3 +161,14 @@ def test_restored_view_is_checked_like_a_new_one(tmp_path):
     assert (plot.vmin, plot.vmax, plot.cmap) == (0.0, 23.0, "viridis")
     plot.load_state_dict({"max_width": 300})
     assert (plot.layout.width, plot.layout.max_width) == ("300px", "min(100%, 300px)")
+
+
+def test_device_tensor_bin_centers_are_accepted():
+    # A-16: x and y went through np.array, which refuses a CUDA tensor.
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("needs a CUDA device")
+    centers = torch.arange(4, dtype=torch.float32, device="cuda")
+    plot = Plot2D(np.ones((4, 4)), x=centers, y=centers * 2)
+    np.testing.assert_array_equal(plot.x, [0.0, 1.0, 2.0, 3.0])
+    np.testing.assert_array_equal(plot.y, [0.0, 2.0, 4.0, 6.0])

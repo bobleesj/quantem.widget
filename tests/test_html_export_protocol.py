@@ -73,11 +73,12 @@ def _showdiffraction() -> ShowDiffraction:
     return ShowDiffraction(data, title="Protocol ShowDiffraction", verbose=False)
 
 
+# The request payloads are the ones each toolbar sends (js/<widget>/index.tsx).
 EXPORT_WIDGET_CASES = (
-    pytest.param(_show1d, {"encoding": "full"}, {"mode": "single", "encoding": "full"}, "Protocol Show1D", id="show1d"),
-    pytest.param(_show2d, {"encoding": "full"}, {"mode": "single", "encoding": "full"}, "Protocol Show2D", id="show2d"),
-    pytest.param(_show3d, {"encoding": "full"}, {"mode": "single", "encoding": "full"}, "Protocol Show3D", id="show3d"),
-    pytest.param(_show3dslices, {"encoding": "full"}, {"mode": "single", "encoding": "full"}, "Protocol Show3DSlices", id="show3dslices"),
+    pytest.param(_show1d, {"downsample": 2}, {"mode": "single", "encoding": "full"}, "Protocol Show1D", id="show1d"),
+    pytest.param(_show2d, {"encoding": "uint8"}, {"mode": "quantized"}, "Protocol Show2D", id="show2d"),
+    pytest.param(_show3d, {"encoding": "uint8", "downsample": 2}, {"mode": "quantized", "quality": "medium", "downsample": 2}, "Protocol Show3D", id="show3d"),
+    pytest.param(_show3dslices, {"encoding": "full"}, {"mode": "exact"}, "Protocol Show3DSlices", id="show3dslices"),
     pytest.param(_show4dstem, {"dtype": "uint8"}, {"mode": "single", "dtype": "uint8"}, "Protocol Show4DSTEM", id="show4dstem"),
     pytest.param(_showdiffraction, {}, {"mode": "single"}, "Protocol ShowDiffraction", id="showdiffraction"),
 )
@@ -156,3 +157,17 @@ def test_widget_frontend_export_request_creates_payload_and_status(
     assert widget.export_status.startswith(f"Ready {filename}")
     for expected_trait in HTML_EXPORT_TRAITS:
         assert widget.has_trait(expected_trait)
+
+
+def test_a_single_file_export_opens_without_a_network(tmp_path) -> None:
+    """rc41: the page loaded require.js, html-manager and anywidget from CDNs and stayed blank offline."""
+    import base64
+    import gzip
+    import re
+
+    page = Show2D(np.zeros((4, 4), np.float32)).export_html(tmp_path / "offline.html").read_text()
+    assert "https://" not in "".join(re.findall(r"<script[^>]*>", page))
+    runtime = [gzip.decompress(base64.b64decode(blob)).decode() for blob in
+               re.findall(r'<script type="application/gzip" id="quantem-widget-runtime-\d">([^<]+)</script>', page)]
+    assert len(runtime) == 3 and "requirejs" in runtime[0] and 'define("anywidget",["@jupyter-widgets/base"]' in runtime[1]
+    assert 'define("@jupyter-widgets/base"' in runtime[2]

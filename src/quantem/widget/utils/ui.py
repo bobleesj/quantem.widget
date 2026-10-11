@@ -61,13 +61,16 @@ def resolve_ui_mode(
     return resolved
 
 
-def reject_unknown_kwargs(widget_class: type, kwargs: Mapping[str, object]) -> None:
+def reject_unknown_kwargs(widget_class: type, kwargs: Mapping[str, object], owned: Mapping[str, str] | None = None) -> None:
     """Raise TypeError naming every keyword that is neither a parameter nor a trait of ``widget_class``.
 
     Widgets pass leftover keywords to ``anywidget.AnyWidget.__init__`` so any
     synced trait can be set at construction. traitlets only warns about a
     keyword it does not know, so without this check a removed parameter
     (``Show4DSTEM(..., compare_panel_gap_px=0)``) or a typo does nothing.
+    ``owned`` maps the traits the constructor sets itself to what sets them (a
+    parameter name, ``"data"`` or ``"state"``): a keyword for one of those would
+    be overwritten without a word, so it raises and names the way in.
     """
     unknown = sorted(set(kwargs) - set(widget_class.class_trait_names()))
     if len(unknown) == 1:
@@ -75,3 +78,12 @@ def reject_unknown_kwargs(widget_class: type, kwargs: Mapping[str, object]) -> N
     if unknown:
         names = ", ".join(repr(name) for name in unknown)
         raise TypeError(f"{widget_class.__name__}() got unexpected keyword arguments {names}")
+    for name in sorted(set(kwargs) & set(owned or {})):
+        owner = owned[name]
+        if owner == "data":
+            hint = "it follows the data"
+        elif owner == "state":
+            hint = f"pass state={{{name!r}: ...}} or set widget.{name} after construction"
+        else:
+            hint = f"pass {owner}= instead"
+        raise TypeError(f"{widget_class.__name__}() sets {name} itself; {hint}")

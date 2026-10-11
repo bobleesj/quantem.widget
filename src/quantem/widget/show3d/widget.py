@@ -33,7 +33,7 @@ from quantem.widget.pages import PagesMixin
 from quantem.widget.panels import PanelsMixin
 from quantem.widget.show2d.options import (
     _expand_title_spans_for_flattened_labels,
-    _normalise_title_span_sequence,
+    _normalize_title_span_sequence,
     _normalize_panel_annotations,
     _normalize_panel_overlays,
 )
@@ -157,9 +157,10 @@ class Show3D(
         defaults to ``False`` because panels may be different physical
         quantities.
     sampling : float or sequence of float, optional
-        Pixel size for the scale bar. A sequence uses its first entry.
+        Pixel size for the scale bar. A ``(row, col)`` sequence uses its last
+        (column) entry, the axis the horizontal bar measures.
     units : str or sequence of str, optional
-        Unit of ``sampling`` (``"A"``, ``"nm"``, ...).
+        Unit of ``sampling`` (``"A"``, ``"nm"``, ...); a sequence uses its last entry.
     smooth : bool
         Bilinear interpolation when the canvas enlarges a frame. Default False
         paints every data pixel as a sharp block (nearest neighbour).
@@ -190,9 +191,6 @@ class Show3D(
         native pixels; a larger factor shrinks the payload of a large stack
         and prints one line naming the reduction. GIF exports always
         render the native arrays.
-    offline : bool, optional
-        Accepted and ignored, for callers that distinguish live from exported
-        widgets: the browser always plays from the one embedded display stack.
     save_state : bool
         Persist the pixel traits into the saved notebook so it reopens
         interactively without a kernel. Default False keeps a static preview.
@@ -707,7 +705,6 @@ class Show3D(
         panel_gap: int = 0,
         dim_label: str = "Frame",
         display_bin: int = 1,
-        offline: bool | None = None,
         save_state: bool = False,
         notebook_preview_format: str | None = "jpeg",
         notebook_preview_quality: int = 88,
@@ -842,14 +839,17 @@ class Show3D(
             raise TypeError("Show3D requires at least one data argument")
         if len(data_args) == 1 and isinstance(data_args[0], (list, tuple)) and len(data_args[0]) > 0:
             data_args = tuple(data_args[0])
-        plain_titles, spans_from_titles = _normalise_title_span_sequence(panel_titles)
+        plain_titles, spans_from_titles = _normalize_title_span_sequence(panel_titles)
         span_count = len(plain_titles or []) if spans_from_titles else 0
         # A 5D (pages, panels, N, H, W) array is a paged gallery: every page
         # shows ``panels`` stacks and the browser scrubs pages with one control,
         # so it flattens into the ordinary multi-panel path.
         n_pages, panels_per_page, resolved_page_labels = 1, 0, []
-        if len(data_args) == 1 and isinstance(data_args[0], (np.ndarray, torch.Tensor)) and to_numpy(data_args[0]).ndim == 5:
-            paged = to_numpy(data_args[0])
+        if len(data_args) == 1 and not core_adapter.is_dataset(data_args[0]):
+            # one array argument (NumPy, torch, CuPy, ...) is converted here once; a dataset keeps its calibration below
+            data_args = (to_numpy(data_args[0]),)
+        if len(data_args) == 1 and data_args[0].ndim == 5:
+            paged = data_args[0]
             n_pages, panels_per_page = int(paged.shape[0]), int(paged.shape[1])
             resolved_page_labels = [
                 "" if label is None else str(label)
@@ -874,9 +874,10 @@ class Show3D(
         dim_unit = None
         if core_adapter.is_dataset(first, ndim=2) or core_adapter.is_dataset(first, ndim=3):
             title = title or (first.name or "")
-            # the image axes are the last two; a stack's first axis is its frames
-            dataset_sampling = float(first.sampling[-2])
-            dataset_unit = str(first.units[-2])
+            # the image axes are the last two; a stack's first axis is its frames. The
+            # horizontal scale bar measures columns, the last axis.
+            dataset_sampling = float(first.sampling[-1])
+            dataset_unit = str(first.units[-1])
             if len(first.sampling) >= 3:
                 dim_sampling = float(first.sampling[0])
                 dim_unit = str(first.units[0])
@@ -988,8 +989,8 @@ class Show3D(
             self.panel_width_px = self.width
         # Explicit sampling/units win; a Dataset3d in nm is shown in Angstrom
         # so the scale bar matches the other quantem viewers.
-        pixel_size = 0.0 if sampling is None else float(sampling[0] if isinstance(sampling, (tuple, list)) else sampling)
-        pixel_unit = None if units is None else str(units[0] if isinstance(units, (tuple, list)) else units)
+        pixel_size = 0.0 if sampling is None else float(sampling[-1] if isinstance(sampling, (tuple, list)) else sampling)
+        pixel_unit = None if units is None else str(units[-1] if isinstance(units, (tuple, list)) else units)
         dataset_in_nm = dataset_unit in ("nm", "nanometer")
         if pixel_size == 0.0 and dataset_sampling is not None:
             pixel_size = dataset_sampling * (10 if dataset_in_nm and pixel_unit in (None, "A", "Å", "angstrom", "Angstrom") else 1)

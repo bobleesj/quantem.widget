@@ -33,7 +33,7 @@ from quantem.widget.showdiffraction.phases import (
 from quantem.widget.state import StateFileMixin
 from quantem.widget.utils.array import to_numpy
 from quantem.widget.utils.display_filter import apply_display_filter
-from quantem.widget.utils.state_io import unwrap_state_payload
+from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import reject_unknown_kwargs
 
 BF_RADIUS_FRACTION = 0.125
@@ -159,8 +159,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         "ellipse_ratio", "ellipse_angle", "ellipse_corrected", "dp_colormap", "dp_scale_mode",
         "dp_invert", "dp_vmin_pct", "dp_vmax_pct", "show_title", "show_stats", "show_controls",
         "controls_collapsed", "show_profile", "profile_log", "profile_subtract_background",
-        "phase_name", "custom_phases", "mask_regions", "show_mask", "profile_theta_min",
-        "profile_theta_max", "show_azimuthal", "refine_method", "center_method",
+        "phase_name", "custom_phases", "mask_regions", "show_mask", "show_azimuthal", "refine_method", "center_method",
         "identify_elements", "identify_custom_only",
     )
     _GEOMETRY_TRAITS = (
@@ -168,7 +167,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         "ellipse_angle", "ellipse_corrected", "mask_regions",
     )
     _PROFILE_TRAITS = (
-        "show_profile", "profile_subtract_background", "profile_theta_min", "profile_theta_max",
+        "show_profile", "profile_subtract_background",
         "frame_idx",
     )
 
@@ -191,7 +190,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     calibration_source = traitlets.Unicode("none").tag(sync=True)
     calibration_ref_d = traitlets.Float(0.0).tag(sync=True)
     calibration_ref_radius = traitlets.Float(0.0).tag(sync=True)
-    calibration_rms_px = traitlets.Float(0.0).tag(sync=True)
+    calibration_rms_px = traitlets.Float(0.0)  # Python and the tutorial read it; the browser does not
     refine_method = traitlets.Unicode("auto").tag(sync=True)
     center_method = traitlets.Unicode("").tag(sync=True)
     ellipse_ratio = traitlets.Float(1.0).tag(sync=True)
@@ -204,7 +203,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     snap_enabled = traitlets.Bool(False).tag(sync=True)
     snap_radius = traitlets.Int(5).tag(sync=True)
     spot_refine = traitlets.Bool(True).tag(sync=True)
-    detect_denoise = traitlets.Enum(("auto", "none", "gaussian", "anscombe"), default_value="auto").tag(sync=True)
+    detect_denoise = traitlets.Enum(("auto", "none", "gaussian", "anscombe"), default_value="auto")  # Python only
     denoise = traitlets.Enum(("none", "gaussian", "anscombe", "nlm"), default_value="none").tag(sync=True)
     zone_axis = traitlets.Unicode("").tag(sync=True)
     phase_match = traitlets.Unicode("").tag(sync=True)
@@ -241,8 +240,6 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     show_profile = traitlets.Bool(False).tag(sync=True)
     profile_log = traitlets.Bool(True).tag(sync=True)
     profile_subtract_background = traitlets.Bool(False).tag(sync=True)
-    profile_theta_min = traitlets.Float(0.0).tag(sync=True)
-    profile_theta_max = traitlets.Float(360.0).tag(sync=True)
     _profile_data = traitlets.Bytes(b"").tag(sync=True)  # float32 radii then intensities
     show_azimuthal = traitlets.Bool(False).tag(sync=True)
     _azimuthal_data = traitlets.Bytes(b"").tag(sync=True)  # float32 angles then intensities
@@ -513,14 +510,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     def measurements_from_state(cls, state, path: str | pathlib.Path | None = None):
         """Measurement rows (:data:`MEASUREMENT_COLUMNS`) from a saved state file or dict;
         with ``path`` they are written as CSV (or JSON with the calibration metadata)."""
-        if isinstance(state, (str, pathlib.Path)):
-            state = unwrap_state_payload(
-                json.loads(pathlib.Path(state).read_text()),
-                require_envelope=True,
-                expected_widget="ShowDiffraction",
-            )
-        else:
-            state = unwrap_state_payload(state, expected_widget="ShowDiffraction")
+        state = read_state(state, "ShowDiffraction")
         records = [measurement_record("spot", spot) for spot in state.get("spots", [])]
         records += [measurement_record("ring", ring) for ring in state.get("rings", [])]
         if path is None:
@@ -551,13 +541,8 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     def export_html(
         self, path: str | pathlib.Path | None = None, *, title: str | None = None
     ) -> pathlib.Path:
-        """Write a standalone HTML viewer with exact float32 frames."""
-        export_path = pathlib.Path(path) if path is not None else self._default_html_export_path()
-        # write_widget_html already adds the standalone viewport and module paths
-        self._write_html_export(export_path, title=title)
-        size_mb = export_path.stat().st_size / (1024 * 1024)
-        self.export_status = f"Exported {export_path.name} ({size_mb:.1f} MB, full float32)"
-        return export_path
+        """Write a standalone HTML viewer with exact float32 frames that opens with no kernel and no network."""
+        return self._write_export_and_report(path, title=title)
 
     def state_dict(self) -> dict:
         """The persistable widget state (calibration, picks, display) as a plain dict."""
@@ -735,17 +720,15 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         *,
         frame: np.ndarray | None = None,
         frame_idx: int | None = None,
-        angular_range: tuple[float, float] | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Radii, azimuthal mean and its standard error of ``frame`` (default: frame
         ``frame_idx``, else the displayed one) about the widget's center, with its mask and
         ellipse correction, so every ring measurement sees the same geometry. A stored frame
         is reduced where the stack lives, without a copy back."""
-        return lattice.radial_profile_px(
+        return lattice.radial_profile(
             self._data[self._frame_index(frame_idx)] if frame is None else frame,
             center=(self.center_row, self.center_col),
             mask=self._analysis_mask(),
-            angular_range=angular_range,
             ellipse_ratio=self.ellipse_ratio,
             ellipse_angle=self.ellipse_angle,
             ellipse_corrected=self.ellipse_corrected,
@@ -764,21 +747,17 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         )
 
     def _update_profile(self, change=None, profile: tuple | None = None) -> None:
-        """Profile panel, sector, background switch or frame changed: send the radial profile.
+        """Profile panel, background switch or frame changed: send the radial profile.
 
-        ``profile`` is the displayed frame's full-circle profile when the caller (a geometry
-        change) already measured it, so a center click profiles each frame once."""
+        ``profile`` is the displayed frame's profile when the caller (a geometry change)
+        already measured it, so a center click profiles each frame once."""
         if not self.show_profile:
             self._profile_data = b""
             return
-        sector = (self.profile_theta_min, self.profile_theta_max)
-        if profile is None and (sector == (0.0, 360.0) or self.profile_subtract_background):
-            profile = self._radial_profile()
-        radii, intensity, _ = profile if sector == (0.0, 360.0) else self._radial_profile(angular_range=sector)
+        radii, intensity, _ = self._radial_profile() if profile is None else profile
         if self.profile_subtract_background:
             try:
-                # the background is fitted under the full-circle profile, also for a sector
-                intensity = intensity - self._radial_background(*profile[:2])
+                intensity = intensity - self._radial_background(radii, intensity)
             except ValueError as exc:
                 self.analysis_status = f"Background subtract failed: {exc}"
         # the browser reads float32
@@ -1133,9 +1112,10 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         profile = intensity.astype(np.float64)
         try:
             profile = profile - self._radial_background(radii_px, intensity)
+            fitted_on = ""
         except ValueError:
-            # too few background bins (rings fill the profile): fit the raw profile
-            pass
+            # too few background bins (rings fill the profile): the raw profile is fitted, and the status says so
+            fitted_on = " on the raw profile (too few background bins for a background fit)"
         calibrated = self.k_calibrated and self.k_pixel_size > 0
         rings = []
         for ring, update in zip(self.rings, lattice.fit_ring_peaks(radii_px, profile, self.rings)):
@@ -1153,7 +1133,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             rings.append(ring)
         self.rings = rings
         n_fitted = sum(1 for ring in self.rings if ring.get("fit_quality") is not None)
-        status = f"Fitted {n_fitted}/{len(self.rings)} rings"
+        status = f"Fitted {n_fitted}/{len(self.rings)} rings{fitted_on}"
         texture = lattice.texture_from_profile(*self._azimuthal_profile())
         return status + f", texture {texture['strength']:.2f} at {texture['angle_deg']:.0f}°"
 

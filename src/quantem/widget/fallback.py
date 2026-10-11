@@ -62,20 +62,13 @@ class StaticFallbackMixin:
 
     @classmethod
     def _normalize_notebook_preview_format(cls, value: str | None) -> str | None:
-        """Canonical preview format name (``jpg`` is ``jpeg``); None, "" and "off" turn the preview off."""
-        if value is None:
-            return None
-        fmt = str(value).strip().lower()
-        if fmt in {"", "none", "off", "false"}:
-            return None
-        if fmt == "jpg":
-            fmt = "jpeg"
-        if fmt not in cls._NOTEBOOK_PREVIEW_FORMATS:
+        """The preview format, ``"jpeg"``, ``"webp"`` or ``"png"``, or None for no preview; anything else is refused."""
+        if value is not None and value not in cls._NOTEBOOK_PREVIEW_FORMATS:
             raise ValueError(
                 "notebook_preview_format must be 'jpeg', 'webp', 'png', or None; "
                 f"got {value!r}"
             )
-        return fmt
+        return value
 
     def _static_fallback_enabled(self) -> bool:
         """Whether this display emits a saved-notebook preview.
@@ -85,10 +78,7 @@ class StaticFallbackMixin:
         image under the live widget. QUANTEM_WIDGET_STATIC_FALLBACK=0 lets
         those builds emit the interactive output alone.
         """
-        setting = os.environ.get("QUANTEM_WIDGET_STATIC_FALLBACK", "").strip().lower()
-        if setting in {"0", "off", "false", "none"}:
-            return False
-        return self._notebook_preview_format is not None
+        return os.environ.get("QUANTEM_WIDGET_STATIC_FALLBACK") != "0" and self._notebook_preview_format is not None
 
     def _static_fallback_mime_type(self) -> str:
         """MIME type of the preview format, "" when the preview is off; the frontend reads it from a trait."""

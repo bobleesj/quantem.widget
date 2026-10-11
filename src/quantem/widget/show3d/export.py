@@ -17,11 +17,6 @@ from quantem.widget.export import export_slug
 from quantem.widget.render import gif as gif_utils
 from quantem.widget.utils.array import bin2d
 
-# A single HTML much larger than this often fails to open under Chrome
-# file://; export_html refuses past it and names the smaller encodings.
-_HTML_EXPORT_SAFE_MB = 80.0
-
-
 def _optional_int(value) -> int | None:
     """An integer option from a toolbar payload or a caller, where empty, 0 and None all mean unset."""
     return None if value in (None, "", 0, "0") else int(value)
@@ -30,81 +25,29 @@ def _optional_int(value) -> int | None:
 class Show3DExport:
     """HTML, image and animation export for Show3D."""
 
+    _HTML_ENCODINGS = ("full", "uint8")
+    _HTML_DOWNSAMPLES = (1, 2, 4, 8)
+
     def export_html(
         self,
         path: str | pathlib.Path | None = None,
         *,
         title: str | None = None,
-        mode: str = "single",
         encoding: str = "full",
         downsample: int | None = None,
-        quantized: bool | None = None,
-        max_mb: float | None = _HTML_EXPORT_SAFE_MB,
+        max_mb: float | None = 80.0,
     ) -> pathlib.Path:
-        """Write a standalone HTML viewer.
+        """Write a standalone HTML viewer that opens with no kernel and no network.
 
         ``encoding="full"`` embeds the exact float32 display stack;
         ``encoding="uint8"`` writes a quantized pack with per-panel ranges and
-        accepts ``downsample`` 2, 4 or 8 for compact reports. ``quantized`` is
-        an alias for ``encoding="uint8"``. Exports above ``max_mb`` are refused
-        with the smaller options named; pass ``max_mb=None`` to force.
+        accepts ``downsample`` 2, 4 or 8 for compact reports. Exports above
+        ``max_mb`` are refused with the smaller options named; pass
+        ``max_mb=None`` to force.
         """
         if self._data is None:
             raise ValueError("Cannot export HTML after free(); rebuild the widget first.")
-        quantized, downsample_factor = self._normalise_html_export_options(
-            mode=mode, encoding=encoding, downsample=downsample, quantized=quantized
-        )
-        if max_mb is not None:
-            estimate_mb = self._estimate_html_export_mb(quantized=quantized, downsample=downsample_factor)
-            if estimate_mb > float(max_mb):
-                uint8_mb = self._estimate_html_export_mb(quantized=True, downsample=downsample_factor)
-                raise ValueError(
-                    f"This export would embed about {estimate_mb:.0f} MB into one HTML file, "
-                    f"above the {float(max_mb):.0f} MB safe limit (large single-file exports often "
-                    f"fail to open under Chrome file://). Options: encoding='uint8' "
-                    f"(about {uint8_mb:.0f} MB), downsample=2 or 4 to shrink spatially, or pass "
-                    f"max_mb={estimate_mb:.0f} to force this size."
-                )
-        export_path = pathlib.Path(path) if path is not None else self._default_html_export_path(quantized, downsample=downsample_factor)
-        self._write_html_export(export_path, quantized=quantized, downsample=downsample_factor, title=title)
-        size_mb = export_path.stat().st_size / (1024 * 1024)
-        self.export_status = f"Exported {export_path.name} ({size_mb:.1f} MB, {self._export_mode_label(quantized, downsample=downsample_factor)})"
-        return export_path
-
-    def _normalise_html_export_options(
-        self,
-        *,
-        mode: str = "single",
-        encoding: str = "full",
-        downsample: int | None = None,
-        quantized: bool | None = None,
-    ) -> tuple[bool, int]:
-        """``(quantized, downsample)`` from the export arguments; downsampling is refused for exact float32."""
-        raw_mode = str(mode or "single").strip().lower().replace("_", "-")
-        if raw_mode in {"exact", "full"}:
-            raw_mode, encoding = "single", "full"
-        elif raw_mode in {"quantized", "uint8", "u8"}:
-            raw_mode, encoding = "single", "uint8"
-        if raw_mode != "single":
-            raise ValueError("Show3D HTML export supports only mode='single'. Use encoding='uint8' and downsample=2, 4, or 8 for a smaller report.")
-        if downsample in (None, "", 0, "0"):
-            downsample_factor = 1
-        else:
-            if isinstance(downsample, bool):
-                raise ValueError("Show3D HTML export downsample must be an integer factor, not bool")
-            downsample_factor = int(downsample)
-        if downsample_factor not in {1, 2, 4, 8}:
-            raise ValueError("Show3D HTML export downsample must be one of 1, 2, 4, or 8")
-        raw_encoding = str(encoding or "full").strip().lower().replace("_", "-")
-        if quantized is True:
-            raw_encoding = "uint8"
-        if raw_encoding in {"full", "exact", "float32", "f32"}:
-            if downsample_factor != 1:
-                raise ValueError("Show3D exact float32 HTML export does not support downsample; use encoding='uint8'")
-            return False, 1
-        if raw_encoding in {"uint8", "u8", "quantized"}:
-            return True, downsample_factor
-        raise ValueError(f"unknown Show3D export encoding {encoding!r}; expected 'full' or 'uint8'")
+        return self._write_export_and_report(path, title=title, max_mb=max_mb, **self._html_export_choice(encoding, downsample))
 
     def _estimate_html_export_mb(self, *, quantized: bool, downsample: int) -> float:
         """Rough embedded size: base64 inflates the stack bytes by 4/3 plus a 2 MB runtime."""
@@ -217,19 +160,12 @@ class Show3DExport:
         clone.free()
         clone.close()
 
-    def _html_export_options(self, payload: dict, mode: str) -> dict:
-        """The ``export_html`` keywords of a toolbar request (``HtmlExportMixin`` hook)."""
-        quantized, downsample = self._normalise_html_export_options(
-            mode=mode, encoding=str(payload.get("encoding", "full")), downsample=payload.get("downsample")
-        )
-        return {"quantized": quantized, "downsample": downsample}
-
     def _export_request(self, payload: dict, mode: str) -> None:
         """GIF toolbar requests; HTML goes through the shared export handshake."""
         if mode != "gif":
             super()._export_request(payload, mode)
             return
-        quality = self._normalise_animation_quality(payload.get("quality", "medium"))
+        quality = self._normalize_animation_quality(payload.get("quality", "medium"))
 
         def flag(key: str) -> bool | None:
             """A payload switch as a bool (the strings ``"1"``, ``"true"``, ``"yes"``, ``"on"`` count), None when absent."""
@@ -246,7 +182,7 @@ class Show3DExport:
             "frame_stop": _optional_int(payload.get("frame_stop")),
             "every_n": max(1, int(payload.get("every_n", 1) or 1)),
             "max_frames": _optional_int(payload.get("max_frames")),
-            "downsample": self._normalise_animation_downsample(payload.get("downsample", 1)),
+            "downsample": self._normalize_animation_downsample(payload.get("downsample", 1)),
             "max_edge_px": _optional_int(payload.get("max_edge_px")),
             "show_panel_titles": flag("show_panel_titles"),
             "show_scale_bar": flag("show_scale_bar"),
@@ -369,8 +305,8 @@ class Show3DExport:
         view (titles, scale bars, zoom labels, gaps) is kept; FFT, profiles,
         controls and hover or selection affordances are never rendered.
         """
-        quality = self._normalise_animation_quality(quality)
-        downsample = self._normalise_animation_downsample(downsample)
+        quality = self._normalize_animation_quality(quality)
+        downsample = self._normalize_animation_downsample(downsample)
         if slides_preset:
             max_frames = 40 if max_frames is None else max_frames
             max_edge_px = 512 if max_edge_px is None and downsample == 1 else max_edge_px
@@ -406,16 +342,11 @@ class Show3DExport:
                 gif_utils.compose_panel_grid(
                     panel_images,
                     panel_titles=[self._static_panel_title(panel, frame_idx) for panel in panel_indices] if show_frame_labels else panel_titles,
-                    frame_labels=None,
                     show_panel_titles=include_panel_titles,
                     title_font_size=max(gif_utils.MIN_TITLE_FONT_SIZE, int(round(11 * scale))),
                     max_cols=int(self.max_cols),
                     panel_gap=panel_gap,
                     background=background,
-                    outer_border=0,
-                    outer_border_color=background,
-                    panel_inner_border=0,
-                    panel_inner_border_color="black",
                 )
             )
         return gif_utils.write_gif(frames, path, fps=float(self.fps) if fps is None else float(fps))
@@ -446,14 +377,14 @@ class Show3DExport:
             return frames + frames[-2:0:-1] if len(frames) > 1 else frames
         raise ValueError("playback must be 'forward' or 'bounce'")
 
-    def _normalise_animation_quality(self, quality: object) -> str:
+    def _normalize_animation_quality(self, quality: object) -> str:
         """A GIF quality tier name (``gif_utils.QUALITY_SCALE``); unknown tiers are refused."""
         value = str(quality or "medium").lower()
         if value not in gif_utils.QUALITY_SCALE:
             raise ValueError(f"animation quality must be one of {list(gif_utils.QUALITY_SCALE)}, got {quality!r}")
         return value
 
-    def _normalise_animation_downsample(self, downsample: int | None) -> int:
+    def _normalize_animation_downsample(self, downsample: int | None) -> int:
         """GIF downsample factor 1, 2, 4 or 8, with empty values meaning 1; a bool is refused as a factor."""
         if downsample in (None, "", 0, "0"):
             return 1

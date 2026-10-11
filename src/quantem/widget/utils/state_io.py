@@ -1,80 +1,57 @@
 """The versioned JSON envelope around a widget's ``state_dict``: ``save`` writes it, ``load_state_dict`` reads it."""
 
-import importlib.metadata
 import json
 import pathlib
+
+import numpy as np
+
+from quantem.widget import __version__
 
 JSON_METADATA_VERSION = "1.0"
 
 
-def resolve_widget_version() -> str:
-    """Installed quantem.widget version for the envelope; a source checkout without metadata is ``0.0.0+local``."""
-    try:
-        return importlib.metadata.version("quantem.widget")
-    except importlib.metadata.PackageNotFoundError:
-        return "0.0.0+local"
+def read_state(state: dict | str | pathlib.Path, widget_name: str) -> dict:
+    """The state dict to restore from a ``save`` file, its envelope, or a bare ``state_dict``.
 
-
-def build_json_header(widget_name: str) -> dict[str, str]:
-    """Envelope fields that name the format version and the widget that wrote the file."""
-    return {
-        "metadata_version": JSON_METADATA_VERSION,
-        "widget_name": widget_name,
-        "widget_version": resolve_widget_version(),
-    }
-
-
-def wrap_state_dict(widget_name: str, state: dict) -> dict:
-    """``state`` inside the versioned envelope, so a reader can refuse another widget's file."""
-    envelope = build_json_header(widget_name)
-    envelope["state"] = state
-    return envelope
-
-
-def unwrap_state_payload(
-    payload: dict,
-    *,
-    require_envelope: bool = False,
-    expected_widget: str | None = None,
-) -> dict:
-    """The state dict inside an envelope, or a bare state dict as given.
-
-    ``require_envelope`` is for files, which ``save`` always wraps; a dict
-    passed in Python may be bare. ``expected_widget`` refuses an envelope
-    written by another widget class.
+    A file must be an envelope (``save`` always wraps). An envelope written by
+    another widget class is refused: Show3D keys loaded into Show2D would set
+    a wrong subset of traits without a word.
     """
-    if not isinstance(payload, dict):
+    if isinstance(state, (str, pathlib.Path)):
+        state = json.loads(pathlib.Path(state).read_text())
+        if not isinstance(state, dict) or "state" not in state:
+            raise ValueError("State JSON file must be a versioned envelope with top-level 'state'.")
+    if not isinstance(state, dict):
         raise ValueError("State payload must be a dict.")
-    if "state" in payload:
-        state = payload["state"]
-        if not isinstance(state, dict):
-            raise ValueError("State envelope field 'state' must be a dict.")
-        # If caller passed the widget name, refuse cross-widget loads
-        # (Show2D state into Show3D would silently load wrong subset of traits).
-        written_by = payload.get("widget_name")
-        if expected_widget is not None and written_by is not None and written_by != expected_widget:
-            raise ValueError(
-                f"State envelope is for {written_by!r}, cannot load into {expected_widget!r}"
-            )
+    if "state" not in state:
         return state
-    if require_envelope:
-        raise ValueError("State JSON file must be a versioned envelope with top-level 'state'.")
-    return payload
+    written_by = state.get("widget_name")
+    if written_by is not None and written_by != widget_name:
+        raise ValueError(f"State envelope is for {written_by!r}, cannot load into {widget_name!r}")
+    if not isinstance(state["state"], dict):
+        raise ValueError("State envelope field 'state' must be a dict.")
+    return state["state"]
 
 
 def _numpy_safe(value):
-    """JSON fallback for values ``json.dumps`` rejects: a scalar's ``.item()``, anything else as text.
+    """JSON fallback for values ``json.dumps`` rejects: a NumPy scalar's Python value, anything else as text.
 
     NumPy scalars in ROI dicts (np.int64 from ``shape[0] // 2``) would
     otherwise raise TypeError in ``json.dumps``.
     """
-    if hasattr(value, "item"):
+    if isinstance(value, np.generic):
         return value.item()
     return str(value)
 
 
 def save_state_file(path: str | pathlib.Path, widget_name: str, state: dict) -> None:
-    """Write ``state`` in its envelope as indented JSON, creating the parent folder."""
+    """Write ``state`` in its versioned envelope as indented JSON, creating the parent folder.
+
+    The envelope names the format version and the widget that wrote the file,
+    so ``read_state`` can refuse another widget's file.
+    """
     path = pathlib.Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(wrap_state_dict(widget_name, state), indent=2, default=_numpy_safe))
+    envelope = {"metadata_version": JSON_METADATA_VERSION, "widget_name": widget_name,
+                "widget_version": __version__, "state": state}
+    path.write_text(json.dumps(envelope, indent=2, default=_numpy_safe))

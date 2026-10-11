@@ -35,9 +35,8 @@ unavailable, check the browser's graphics support and secure origin before the
 demo. An ordinary HTTP LAN/IP URL is not equivalent to localhost.
 
 Run the notebooks once before presenting. Show3D's public example needs network
-access on the first run; standalone widget HTML can also need a CDN widget
-manager. Do not advertise the demo as fully offline without testing the intended
-export and browser with the network disconnected.
+access on the first run to download its data. Standalone widget HTML carries
+its widget-manager runtime and opens with the network disconnected.
 
 ## What the audience should take away
 

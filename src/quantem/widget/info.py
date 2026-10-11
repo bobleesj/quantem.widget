@@ -145,7 +145,7 @@ def device_info(verbose: bool = True) -> dict[str, str]:
     import quantem.widget as qw
     from quantem.widget.adapters import core as core_adapter
     from quantem.widget.adapters import gpu as gpu_adapter
-    from quantem.widget.device import gpu_notice_text, mps_available
+    from quantem.widget.device import gpu_notice, host_platform, mps_available
 
     backend = "cuda" if torch.cuda.is_available() else "mps" if mps_available() else "cpu"
     report = {
@@ -173,17 +173,20 @@ def device_info(verbose: bool = True) -> dict[str, str]:
                 return ""
             return result.stdout.strip()
 
-        chip = sysctl("machdep.cpu.brand_string") or "Apple"
-        memory = sysctl("hw.memsize")
-        memory_gb = f"{int(memory) // (1024**3)} GB" if memory.isdigit() else "?"
-        report["device"] = f"Apple Metal (MPS) - {chip}, {memory_gb} memory"
+        if host_platform()[1] == "arm64":
+            # Apple silicon: the chip is the GPU and its memory is shared with it
+            chip = sysctl("machdep.cpu.brand_string") or "Apple"
+            memory = sysctl("hw.memsize")
+            memory_gb = f"{int(memory) // (1024**3)} GB" if memory.isdigit() else "?"
+            report["device"] = f"Apple Metal (MPS) - {chip}, {memory_gb} unified memory"
+        else:
+            # an Intel Mac's sysctl names its CPU, not the GPU MPS runs on
+            report["device"] = "Apple Metal (MPS) - the GPU of this Intel Mac"
     elif backend == "cuda":
         report["device"] = f"CUDA - {torch.cuda.get_device_name(0)}"
     if verbose:
         print(f"quantem.widget {report['widget_version']}   |   {report['date']}")
         print(f"compute: {report['device']} (torch {report['torch']})")
         print(f"GPU path: {report['gpu_path']}   |   quantem core: {report['quantem_core']}")
-        notice = gpu_notice_text()
-        if notice is not None:
-            print(notice)
+        gpu_notice()  # once per process: a later device="auto" choice does not print it again
     return report

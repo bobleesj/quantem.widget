@@ -1,4 +1,4 @@
-"""Show2D constructor option normalisers: panel title spans and style, row and
+"""Show2D constructor option normalizers: panel title spans and style, row and
 column markers, inset plots, text annotations and shape overlays.
 
 Each ``_normalize_*`` function turns the loosely typed constructor value (a
@@ -168,14 +168,14 @@ def _is_one_rich_title(values: object) -> bool:
     """Whether a title input is ONE rich title (a span dict or a list of span dicts), not a per-panel list.
 
     ``labels=[{"text": "a"}, {"text": "b"}]`` is one two-span title, so the
-    per-panel normalisers must wrap it instead of reading two panels.
+    per-panel normalizers must wrap it instead of reading two panels.
     """
     return isinstance(values, Mapping) or (
         isinstance(values, (list, tuple)) and bool(values) and all(isinstance(item, Mapping) for item in values)
     )
 
 
-def _normalise_title_spans(value: object) -> tuple[str, list[dict[str, str]] | None]:
+def _normalize_title_spans(value: object) -> tuple[str, list[dict[str, str]] | None]:
     """Return plain fallback text plus optional safe colored text spans.
 
     Panel-title spans are structured dictionaries, not HTML. The plain text
@@ -207,7 +207,7 @@ def _normalise_title_spans(value: object) -> tuple[str, list[dict[str, str]] | N
     return str(value), None
 
 
-def _normalise_title_span_sequence(
+def _normalize_title_span_sequence(
     values: Sequence[object] | Mapping[str, object] | None,
 ) -> tuple[list[str] | None, list[list[dict[str, str]]]]:
     """Normalize a per-panel title sequence into plain labels plus spans."""
@@ -219,7 +219,7 @@ def _normalise_title_span_sequence(
     rich: list[list[dict[str, str]]] = []
     has_rich = False
     for value in values:
-        text, spans = _normalise_title_spans(value)
+        text, spans = _normalize_title_spans(value)
         plain.append(text)
         rich.append(spans or [])
         has_rich = has_rich or bool(spans)
@@ -417,7 +417,6 @@ _ANNOTATION_POSITIONS = {
     "bottom-right",
 }
 _ANNOTATION_VARIANTS = {"badge", "pill", "plain", "outline", "callout"}
-_ANNOTATION_ANCHORS = _ANNOTATION_POSITIONS
 
 
 def _is_annotation_spec(value: object) -> bool:
@@ -425,22 +424,22 @@ def _is_annotation_spec(value: object) -> bool:
     return isinstance(value, Mapping) and any(str(key) in _ANNOTATION_STYLE_KEYS for key in value)
 
 
-def _panel_target_index(panel: object, *, labels: Sequence[str] | None, n_items: int, kind: str) -> int:
-    """Resolve an annotation or overlay target from an integer index or a panel label.
+def _panel_target_index(panel: object, *, labels: Sequence[str] | None, n_items: int, option: str) -> int:
+    """Resolve an annotation, overlay or scale-bar target from an integer index or a panel label.
 
-    ``kind`` (``"annotation"`` / ``"overlay"``) names the option in the error,
-    so a bad target points the user at the argument that carried it.
+    ``option`` names the argument that carried the target, so a bad one
+    points the user at the right keyword.
     """
     if isinstance(panel, bool):
-        raise ValueError(f"panel {kind} panel must be an index or label, got {panel!r}")
+        raise ValueError(f"{option}: a panel must be an index or label, got {panel!r}")
     if isinstance(panel, str) and labels is not None and panel in labels:
         return list(labels).index(panel)
     try:
         index = int(panel)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"panel {kind} panel must be an index or label, got {panel!r}") from exc
+        raise ValueError(f"{option}: a panel must be an index or label, got {panel!r}") from exc
     if index < 0 or index >= int(n_items):
-        raise ValueError(f"panel {kind} panel index {index} is outside 0..{int(n_items) - 1}")
+        raise ValueError(f"{option}: panel index {index} is outside 0..{int(n_items) - 1}")
     return index
 
 
@@ -450,14 +449,14 @@ def _normalize_panel_indices(
     labels: Sequence[str] | None,
     n_items: int,
 ) -> list[int]:
-    """Resolve optional panel index/label selectors to unique panel indices."""
+    """Resolve the ``scale_bar_panels`` selectors (indices or labels) to unique panel indices."""
     if panels is None:
         return []
     if isinstance(panels, (str, bytes)) or not isinstance(panels, Sequence):
         raw_values = [panels]
     else:
         raw_values = list(panels)
-    indices = [_panel_target_index(raw, labels=labels, n_items=n_items, kind="annotation") for raw in raw_values]
+    indices = [_panel_target_index(raw, labels=labels, n_items=n_items, option="scale_bar_panels") for raw in raw_values]
     return list(dict.fromkeys(indices))
 
 
@@ -481,12 +480,12 @@ def _normalize_panel_annotation_spec(spec: object, *, panel: int) -> dict[str, o
     raw_math = spec.get("math")
     raw_spans = spec.get("spans")
     if raw_spans is not None:
-        text, spans = _normalise_title_spans(raw_spans)
+        text, spans = _normalize_title_spans(raw_spans)
     elif raw_math not in (None, ""):
         text = str(raw_math)
         spans = [{"math": text}]
     else:
-        text, spans = _normalise_title_spans(raw_text)
+        text, spans = _normalize_title_spans(raw_text)
     out: dict[str, object] = {"text": text}
     if raw_math not in (None, ""):
         out["math"] = str(raw_math)
@@ -514,8 +513,8 @@ def _normalize_panel_annotation_spec(spec: object, *, panel: int) -> dict[str, o
     if position not in _ANNOTATION_POSITIONS:
         raise ValueError(f"panel annotation position must be one of {sorted(_ANNOTATION_POSITIONS)}, got {position!r}")
     out["position"] = position
-    if "anchor" in out and out["anchor"] not in _ANNOTATION_ANCHORS:
-        raise ValueError(f"panel annotation anchor must be one of {sorted(_ANNOTATION_ANCHORS)}, got {out['anchor']!r}")
+    if "anchor" in out and out["anchor"] not in _ANNOTATION_POSITIONS:
+        raise ValueError(f"panel annotation anchor must be one of {sorted(_ANNOTATION_POSITIONS)}, got {out['anchor']!r}")
     if "variant" in out and out["variant"] not in _ANNOTATION_VARIANTS:
         raise ValueError(f"panel annotation variant must be one of {sorted(_ANNOTATION_VARIANTS)}, got {out['variant']!r}")
     out.setdefault("variant", "badge")
@@ -570,7 +569,10 @@ def _normalize_panel_annotations(
 
     if isinstance(panel_annotations, Mapping) and not _is_annotation_spec(panel_annotations):
         for raw_panel, value in panel_annotations.items():
-            add(_panel_target_index(raw_panel, labels=labels, n_items=n_items, kind="annotation"), value)
+            add(_panel_target_index(raw_panel, labels=labels, n_items=n_items, option="panel_annotations"), value)
+        return grouped
+    if isinstance(panel_annotations, Mapping) and "panel" in panel_annotations:
+        add(_panel_target_index(panel_annotations["panel"], labels=labels, n_items=n_items, option="panel_annotations"), panel_annotations)
         return grouped
     if isinstance(panel_annotations, (str, Mapping)):
         for panel in range(int(n_items)):
@@ -580,7 +582,7 @@ def _normalize_panel_annotations(
     raw = list(panel_annotations)
     if not raw:
         return []
-    _route_panel_list(raw, add, n_items=n_items, labels=labels, kind="annotation", option="panel_annotations")
+    _route_panel_list(raw, add, n_items=n_items, labels=labels, option="panel_annotations")
     return grouped
 
 
@@ -590,7 +592,6 @@ def _route_panel_list(
     *,
     n_items: int,
     labels: Sequence[str] | None,
-    kind: str,
     option: str,
 ) -> None:
     """Send each entry of a list-valued annotation or overlay option to its panel through ``add``.
@@ -614,7 +615,7 @@ def _route_panel_list(
                 f"{option} as a flat list must include panel=... on every entry, "
                 "or pass a per-panel list/dict"
             )
-        add(_panel_target_index(item["panel"], labels=labels, n_items=n_items, kind=kind), item)
+        add(_panel_target_index(item["panel"], labels=labels, n_items=n_items, option=option), item)
 
 
 _OVERLAY_SHAPES = {"circle", "rect", "rectangle", "square"}
@@ -839,11 +840,11 @@ def _normalize_panel_overlays(
 
     if isinstance(panel_overlays, Mapping) and not _is_overlay_spec(panel_overlays):
         for raw_panel, value in panel_overlays.items():
-            add(_panel_target_index(raw_panel, labels=labels, n_items=n_items, kind="overlay"), value)
+            add(_panel_target_index(raw_panel, labels=labels, n_items=n_items, option="panel_overlays"), value)
         return grouped
     if isinstance(panel_overlays, Mapping):
         if "panel" in panel_overlays:
-            add(_panel_target_index(panel_overlays["panel"], labels=labels, n_items=n_items, kind="overlay"), panel_overlays)
+            add(_panel_target_index(panel_overlays["panel"], labels=labels, n_items=n_items, option="panel_overlays"), panel_overlays)
         else:
             for panel in range(int(n_items)):
                 add(panel, panel_overlays)
@@ -859,5 +860,5 @@ def _normalize_panel_overlays(
             for item in raw:
                 add(panel, item)
         return grouped
-    _route_panel_list(raw, add, n_items=n_items, labels=labels, kind="overlay", option="panel_overlays")
+    _route_panel_list(raw, add, n_items=n_items, labels=labels, option="panel_overlays")
     return grouped

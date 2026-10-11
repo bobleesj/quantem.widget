@@ -18,15 +18,11 @@ try:
     from quantem.gpu import SSB
     from quantem.gpu import io as gpu_io
     from quantem.gpu.detector import prepare
+    from quantem.gpu.device import runtime_notice as gpu_runtime_notice
     from quantem.gpu.dpc import center_of_mass as gpu_center_of_mass
     from quantem.gpu.io import Dataset4dstemGPU
 except ImportError:
-    SSB = gpu_io = prepare = gpu_center_of_mass = Dataset4dstemGPU = None
-try:
-    # quantem.gpu 0.0.1rc13 has no runtime notice; later releases name their missing runtime
-    from quantem.gpu.device import runtime_notice as gpu_runtime_notice
-except ImportError:
-    gpu_runtime_notice = None
+    SSB = gpu_io = prepare = gpu_runtime_notice = gpu_center_of_mass = Dataset4dstemGPU = None
 
 
 def available() -> bool:

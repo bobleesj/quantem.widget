@@ -8,6 +8,7 @@ is monkeypatched (no GPU route, no quantem core) so every branch runs here; the 
 for real when quantem.gpu and a GPU are present.
 """
 
+import importlib.util
 import json
 
 import h5py
@@ -145,7 +146,7 @@ def test_the_4dstem_tutorial_loader_follows_the_machine(tmp_path, monkeypatch, g
     np.save(folder / "data.npy", counts)
     (folder / "meta.json").write_text(json.dumps({"name": "gold", "sampling": [2.0, 2.0, 3.68, 3.68],
                                                   "units": ["A", "A", "mrad", "mrad"]}))
-    monkeypatch.setattr(datasets, "snapshot_download", lambda **kwargs: tmp_path, raising=False)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", lambda **kwargs: tmp_path)
     dataset = datasets.show4dstem_gold(size="small", verbose=False)
     assert type(dataset).__name__ == ("Dataset4dstemGPU" if gpu else "Dataset4dstem")
     values = dataset[:, :].cpu().numpy() if gpu else dataset.array
@@ -307,6 +308,16 @@ def _image_widgets():
     ]
 
 
+class _ArrayLike:
+    """An object NumPy reads through ``__array__`` only, as it reads an xarray or an h5py dataset."""
+
+    def __init__(self, values):
+        self._values = values
+
+    def __array__(self, dtype=None, copy=None):
+        return np.asarray(self._values, dtype=dtype)
+
+
 @pytest.mark.parametrize("name", [entry[0] for entry in _image_widgets()])
 def test_image_widgets_show_the_same_numbers_for_every_input_type(name, monkeypatch):
     _, values, construct, shown, from_dataset = next(entry for entry in _image_widgets() if entry[0] == name)
@@ -320,6 +331,13 @@ def test_image_widgets_show_the_same_numbers_for_every_input_type(name, monkeypa
     }
     if CUDA:
         inputs["torch cuda"] = torch.from_numpy(values).cuda()
+    # G-12: any array-like opens (an xarray or h5py dataset hands NumPy its values through __array__),
+    # not only the array types the widgets know by name
+    inputs["array-like"] = _ArrayLike(values)
+    if importlib.util.find_spec("cupy") is not None and CUDA:
+        import cupy
+
+        inputs["cupy"] = cupy.asarray(values)
     numbers = {}
     for label, data in inputs.items():
         widget = construct(data)

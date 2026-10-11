@@ -24,10 +24,9 @@ def _sparse_eds_map(seed: int = 7, shape: tuple[int, int] = (256, 256)) -> np.nd
 def test_default_filter_is_lossless_identity():
     """The default view shows exactly the stored counts (house rule 2)."""
     counts = _sparse_eds_map()
-    for mode in ("none", "off", "raw"):
-        view = apply_display_filter(counts, mode=mode)
-        np.testing.assert_allclose(view, counts)
-        assert view.dtype == np.float32
+    view = apply_display_filter(counts, mode="none")
+    np.testing.assert_array_equal(view, counts)
+    assert view.dtype == np.float32
     assert counts.base is None and counts.dtype == np.float32  # input untouched
 
 

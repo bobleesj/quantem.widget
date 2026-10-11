@@ -2,12 +2,10 @@
 
 import base64
 import io
-import json
 import math
 from pathlib import Path
 
 import anywidget
-import matplotlib.pyplot as plt
 import numpy as np
 import traitlets
 from matplotlib.colors import ListedColormap
@@ -17,7 +15,7 @@ from quantem.widget.colormap import colormap_lut, colormap_names
 from quantem.widget.fallback import StaticFallbackMixin
 from quantem.widget.state import SavedStateMixin
 from quantem.widget.utils.array import _b64_safe, to_numpy
-from quantem.widget.utils.state_io import unwrap_state_payload
+from quantem.widget.utils.state_io import read_state
 
 
 class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
@@ -106,7 +104,7 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
         self._save_state = bool(save_state)
         self._configure_static_fallback(notebook_preview_format="png")
         super().__init__()
-        self.x, self.y = np.array(x, dtype=float, copy=True), np.array(y, dtype=float, copy=True)
+        self.x, self.y = to_numpy(x).astype(float), to_numpy(y).astype(float)  # own float64 copies, from any array-like
         edges = []
         for name, centers in (("x", self.x), ("y", self.y)):
             if centers.ndim != 1 or len(centers) < 2 or not np.isfinite(centers).all():
@@ -210,10 +208,7 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
         >>> plot.save("g3_view.json")
         >>> other.load_state_dict("g3_view.json")
         """
-        if isinstance(state, (str, Path)):
-            state = unwrap_state_payload(json.loads(Path(state).read_text()), require_envelope=True, expected_widget="Plot2D")
-        else:
-            state = unwrap_state_payload(state, expected_widget="Plot2D")
+        state = read_state(state, "Plot2D")
         self._check_limits(state.get("vmin", self.vmin), state.get("vmax", self.vmax))
         for key, value in state.items():
             if key in self._STATE_KEYS:
@@ -230,7 +225,9 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
     def _make_figure(self, max_bins: int | None = None) -> Figure:
         """Draw exact data for export or a strided, bounded notebook preview."""
         size = (5, 4) if max_bins is None else (max_bins / 100, max_bins * 0.8 / 100)
-        figure, axes = plt.subplots(figsize=size, layout="constrained")
+        # an unmanaged Figure: no pyplot backend, nothing to close, nothing the inline backend redraws
+        figure = Figure(figsize=size, layout="constrained")
+        axes = figure.add_subplot()
         values = self.data
         x, y = self.x, self.y
         shading = "nearest"
@@ -256,5 +253,4 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
         if self.horizontal_line is not None:
             axes.axhline(self.horizontal_line, color="#e649a0", linestyle=":")
         figure.colorbar(mesh, ax=axes, label=self.colorbar_label)
-        plt.close(figure)
         return figure

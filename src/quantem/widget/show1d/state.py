@@ -1,5 +1,9 @@
 """Show1D view state: the JSON-safe dict behind ``save`` / ``state=``."""
 
+import pathlib
+
+from quantem.widget.utils.state_io import read_state
+
 
 class Show1DState:
     """Mixin: state dict round trip; the saved-notebook trim is ``SavedStateMixin``."""
@@ -43,9 +47,9 @@ class Show1DState:
                 state[key] = type(value)(value)
         return state
 
-    def load_state_dict(self, state: dict) -> None:
-        """Restore a ``state_dict``; the trait validators clamp and normalise every value, unknown keys are skipped."""
-        for key, value in state.items():
+    def load_state_dict(self, state: dict | str | pathlib.Path) -> None:
+        """Restore a ``state_dict``, its envelope or a ``save`` file; the trait validators clamp and normalise every value, unknown keys are skipped."""
+        for key, value in read_state(state, "Show1D").items():
             if key in self._STATE_KEYS:
                 setattr(self, key, value)
         self._update_trial_analysis()

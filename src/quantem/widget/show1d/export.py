@@ -17,38 +17,19 @@ from matplotlib.figure import Figure
 
 from quantem.widget.export import export_slug
 
-HTML_EXPORT_DOWNSAMPLES = (1, 2, 4, 8)
-
-
 class Show1DExport:
     """Mixin over ``HtmlExportMixin``: Show1D's export options, clone, figure and preview."""
 
-    def export_html(
-        self,
-        path: str | pathlib.Path | None = None,
-        *,
-        title: str | None = None,
-        mode: str = "single",
-        encoding: str = "full",
-        downsample: int | None = None,
-    ) -> pathlib.Path:
-        """Write a kernel-free interactive HTML viewer.
+    _HTML_DOWNSAMPLES = (1, 2, 4, 8)
 
-        Only ``mode="single"`` with ``encoding="full"`` exists for Show1D: the
-        traces are float32 and small, so there is nothing to quantise.
-        ``downsample`` of 2, 4 or 8 mean-bins the linked snapshot and profile
-        images; trace samples and x coordinates stay exact.
+    def export_html(self, path: str | pathlib.Path | None = None, *, title: str | None = None,
+                    downsample: int | None = None) -> pathlib.Path:
+        """Write a kernel-free interactive HTML viewer that opens with no network.
+
+        The traces are float32 and small, so they stay exact: ``downsample`` of
+        2, 4 or 8 mean-bins only the linked snapshot and profile images.
         """
-        factor = _export_downsample(mode, encoding, downsample)
-        export_path = pathlib.Path(path) if path is not None else self._default_html_export_path(downsample=factor)
-        self._write_html_export(export_path, title=title, downsample=factor)
-        size_mb = export_path.stat().st_size / (1024 * 1024)
-        self.export_status = f"Exported {export_path.name} ({size_mb:.1f} MB, {self._export_mode_label(factor)})"
-        return export_path
-
-    def _html_export_options(self, payload: dict, mode: str) -> dict:
-        """``export_html`` keywords from a toolbar request; only the image downsample is a choice."""
-        return {"downsample": _export_downsample(mode, str(payload.get("encoding", "full")), payload.get("downsample"))}
+        return self._write_export_and_report(path, title=title, **self._html_export_choice("full", downsample))
 
     def _export_mode_label(self, downsample: int = 1) -> str:
         """How the export packed the data, for the toolbar status line."""
@@ -161,23 +142,6 @@ class Show1DExport:
         buffer = io.BytesIO()
         fig.savefig(buffer, format="png")
         return base64.b64encode(buffer.getvalue()).decode("ascii")
-
-
-def _export_downsample(mode: str, encoding: str, downsample) -> int:
-    """The validated image downsample factor; the only packing Show1D offers is single-file float32."""
-    if mode == "folder":
-        raise NotImplementedError("Show1D folder export is not available. Use mode='single' with downsample=2, 4, or 8 to reduce linked image panels.")
-    if mode != "single":
-        raise ValueError("Show1D HTML export supports mode='single'")
-    if encoding == "uint8":
-        raise NotImplementedError("Show1D encoding='uint8' is not available. Use encoding='full' with downsample=2, 4, or 8.")
-    if encoding != "full":
-        raise ValueError(f"unknown Show1D export encoding {encoding!r}; expected 'full'")
-    if downsample in (None, 0):
-        return 1
-    if isinstance(downsample, bool) or int(downsample) != downsample or int(downsample) not in HTML_EXPORT_DOWNSAMPLES:
-        raise ValueError(f"Show1D HTML export downsample must be one of {HTML_EXPORT_DOWNSAMPLES}, got {downsample!r}")
-    return int(downsample)
 
 
 def _downsample_image(image: np.ndarray, factor: int) -> np.ndarray:

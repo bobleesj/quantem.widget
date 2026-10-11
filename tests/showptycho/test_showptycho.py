@@ -93,13 +93,17 @@ def test_a_torch_tensor_on_any_device_shows_the_same_numbers(device):
     np.testing.assert_array_equal(_shown(ShowPtycho(phase)), np.angle(wave))
 
 
-def test_only_a_2d_array_or_an_ssb_session_opens():
+def test_any_2d_array_like_opens_and_other_shapes_are_refused():
     with pytest.raises(ValueError, match="one 2D reconstruction"):
         ShowPtycho(np.zeros((3, 16, 16), np.float32))
     with pytest.raises(ValueError, match="units must be one of"):
         ShowPtycho(np.zeros((16, 16), np.float32), sampling=1.0, units="inch")
-    with pytest.raises(TypeError, match="2D phase or complex object-wave array"):
-        ShowPtycho([[0.0, 1.0]])
+    # C-1: a list (or a CuPy array) raised TypeError although the widgets accept any array-like
+    widget = ShowPtycho([[0.0, 1.0], [2.0, 3.0]])
+    np.testing.assert_array_equal(np.frombuffer(widget.phase_bytes, np.float32), [0.0, 1.0, 2.0, 3.0])
+    cupy = pytest.importorskip("cupy")
+    phase = np.linspace(-1, 1, 64, dtype=np.float32).reshape(8, 8)
+    np.testing.assert_array_equal(np.frombuffer(ShowPtycho(cupy.asarray(phase)).phase_bytes, np.float32).reshape(8, 8), phase)
 
 
 # --- SSB session: quantem.gpu with CUDA or Metal ---
@@ -280,3 +284,15 @@ def test_crop_refit_validates_the_region_and_a_session_keeps_its_own_sampling(wi
     assert widget.ssb_session and widget.session_note == "" and widget.amplitude_bytes == b""
     with pytest.raises(ValueError, match="scan_sampling_A"):
         ShowPtycho(ssb, sampling=1.0)
+
+
+def test_session_scale_bar_uses_the_column_scan_step():
+    # D-1 (ShowPtycho): an SSB session gave the scale bar its row step; the array path uses the column.
+    gpu = pytest.importorskip("quantem.gpu")
+    try:
+        pytest.importorskip("quantem.gpu.device").detect()
+    except RuntimeError as exc:
+        pytest.skip(f"SSB needs CUDA or MPS: {exc}")
+    session = gpu.SSB(_counts(SCAN), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(0.5, 0.25), det_sampling=5.0,
+                      aberrations=dict(START), rotation_angle_deg=10.0)
+    assert ShowPtycho(session).pixel_size == 0.25

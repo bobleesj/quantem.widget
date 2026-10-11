@@ -120,12 +120,14 @@ def free_gpu(verbose: bool = True) -> float:
                 print(f"GPU{index}: {(total - free) / 1e9:5.1f} GB used  ({free / 1e9:.0f} GB free)")
         return before - after
     if torch.backends.mps.is_available():
-        allocated_before = torch.mps.current_allocated_memory()
+        # the Metal driver's total holds the cached blocks empty_cache returns; the tensor
+        # allocation counter never includes them, so it always read 0 GB freed
+        before = torch.mps.driver_allocated_memory()
         torch.mps.empty_cache()
-        allocated_after = torch.mps.current_allocated_memory()
+        freed = (before - torch.mps.driver_allocated_memory()) / 1e9
         if verbose:
-            print(f"freed {(allocated_before - allocated_after) / 1e9:.1f} GB (MPS)")
-        return (allocated_before - allocated_after) / 1e9
+            print(f"freed {freed:.1f} GB (MPS)")
+        return freed
     if verbose:
         print("no GPU - nothing to free")
     return 0.0

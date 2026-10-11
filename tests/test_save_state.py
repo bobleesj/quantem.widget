@@ -81,26 +81,22 @@ def _mos2_like_stack(frames: int, rows: int, cols: int) -> np.ndarray:
     return np.stack(out, axis=0)
 
 
-def _make(widget, *, save_state):
+def _make(widget, **options):
     """Construct a small instance of each widget plus the trait key that carries
     its live-render pixels (the one that must survive the targeted send path)."""
     if widget is Plot2D:
         data = np.arange(24, dtype=float).reshape(4, 6)
-        return Plot2D(data, x=np.arange(6), y=np.arange(4),
-                      save_state=save_state), "data_bytes"
+        return Plot2D(data, x=np.arange(6), y=np.arange(4), **options), "data_bytes"
     if widget is Show1D:
         # snapshot_bytes is empty on a plain trace widget but the KEY must
         # still survive the targeted path (it streams when a monitor attaches).
-        return Show1D(np.random.rand(64).astype("float32"),
-                      save_state=save_state), "snapshot_bytes"
+        return Show1D(np.random.rand(64).astype("float32"), **options), "snapshot_bytes"
     if widget is Show2D:
         data = [np.random.rand(128, 128).astype("float32") for _ in range(2)]
-        return Show2D(data, save_state=save_state), "frame_bytes"
+        return Show2D(data, **options), "frame_bytes"
     if widget is Show3D:
-        return Show3D(np.random.rand(4, 128, 128).astype("float32"),
-                      save_state=save_state), "_offline_float_stack"
-    return Show4DSTEM(np.random.rand(8, 8, 16, 16).astype("float32"),
-                      save_state=save_state), "virtual_image_bytes"
+        return Show3D(np.random.rand(4, 128, 128).astype("float32"), **options), "_offline_float_stack"
+    return Show4DSTEM(np.random.rand(8, 8, 16, 16).astype("float32"), **options), "virtual_image_bytes"
 
 
 WIDGETS = [Plot2D, Show1D, Show2D, Show3D, Show4DSTEM]
@@ -160,7 +156,7 @@ def test_save_state_true_does_not_force_png(widget):
 def test_default_is_save_state_false(widget):
     """The whole point: persistence is opt-in. A plain construction must behave
     as save_state=False (static preview present)."""
-    w, _ = _make(widget, save_state=False)
+    w, _ = _make(widget)  # G-1: passing save_state=False here could not catch a flipped default
     assert w._save_state is False
 
 
@@ -172,29 +168,10 @@ def test_default_is_save_state_false(widget):
         ("png", "image/png", "PNG"),
     ],
 )
-@pytest.mark.parametrize("widget_cls", [Show3D])
-def test_notebook_preview_format_controls_saved_fallback(widget_cls, format_name, mime, pil_format):
-    """Show2D/Show3D should expose the saved-notebook preview format directly.
-
-    The compatibility trait name stays ``_static_fallback_jpeg`` for old
-    frontends, but the MIME trait tells the frontend how to interpret the bytes.
-    """
-    lattice = _mos2_like_stack(3, 64, 64)
-    if widget_cls is Show2D:
-        widget = Show2D(
-            lattice[0],
-            notebook_preview_format=format_name,
-            notebook_preview_quality=85,
-            save_state=False,
-            verbose=False,
-        )
-    else:
-        widget = Show3D(
-            lattice,
-            notebook_preview_format=format_name,
-            notebook_preview_quality=85,
-            save_state=False,
-        )
+def test_notebook_preview_format_controls_saved_fallback(format_name, mime, pil_format):
+    """Show3D exposes the saved-notebook preview format directly; the MIME trait
+    tells the frontend how to read the bytes of ``_static_fallback_jpeg``."""
+    widget = Show3D(_mos2_like_stack(3, 64, 64), notebook_preview_format=format_name, notebook_preview_quality=85, save_state=False)
 
     bundle = widget._repr_mimebundle_()
     data = bundle[0] if isinstance(bundle, tuple) else bundle

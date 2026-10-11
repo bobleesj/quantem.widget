@@ -4,7 +4,7 @@ indexing.
 
 Every function takes plain numpy arrays and :class:`~quantem.widget.showdiffraction.phases.Phase`
 objects and returns numbers, arrays or dicts; the widget supplies its frame, center and
-ellipse state and stores the results in traits. :func:`radial_profile_px` also takes a
+ellipse state and stores the results in traits. :func:`radial_profile` also takes a
 tensor and reduces it where it lives, because the widget re-measures it on every center
 change.
 """
@@ -27,7 +27,6 @@ from quantem.widget.showdiffraction.phases import (
     label_preference,
 )
 
-RING_FIT_MODELS = ("gaussian", "pseudo_voigt")
 # a ring peak must stand this many standard errors of the azimuthal mean above the profile envelope
 RING_MIN_SNR = 5.0
 # relative tolerance of the scale-free ratio test that verifies a phase calibration
@@ -442,14 +441,13 @@ def ellipse_to_circle(d_row, d_col, ellipse_ratio: float, ellipse_angle: float):
     return major / root_ratio, minor * root_ratio
 
 
-def radial_profile_px(
+def radial_profile(
     frame,
     *,
     center: tuple[float, float],
     n_bins: int | None = None,
     max_radius: float | None = None,
     mask: np.ndarray | None = None,
-    angular_range: tuple[float, float] | None = None,
     ellipse_ratio: float = 1.0,
     ellipse_angle: float = 0.0,
     ellipse_corrected: bool = False,
@@ -457,8 +455,8 @@ def radial_profile_px(
     """Azimuthally averaged intensity vs radius in detector pixels, with its standard error.
 
     Returns ``(radii, intensity, standard_error)``. Bins are one pixel wide out to the
-    nearest detector edge unless ``n_bins`` / ``max_radius`` say otherwise;
-    ``angular_range`` restricts the average to a wedge. The standard error of a bin is
+    nearest detector edge unless ``n_bins`` / ``max_radius`` say otherwise. The
+    standard error of a bin is
     ``sqrt(s^2 / n)`` with ``s^2`` the sample variance of its ``n`` pixels (infinite
     below two pixels): the uncertainty of the azimuthal mean, which ring detection
     needs to tell a ring from a fluctuation. Azimuthal texture and the radial slope
@@ -484,7 +482,7 @@ def radial_profile_px(
     n_bins = max(1, round(max_radius)) if n_bins is None else int(max(1, n_bins))
     d_row = torch.arange(n_rows, dtype=torch.float64, device=device)[:, None] - center_row
     d_col = torch.arange(n_cols, dtype=torch.float64, device=device)[None, :] - center_col
-    # the mean-preserving ellipse correction of corrected_radius; the wedge stays in detector angles
+    # the mean-preserving ellipse correction of corrected_radius
     radial_row, radial_col = (
         ellipse_to_circle(d_row, d_col, ellipse_ratio, ellipse_angle)
         if ellipse_corrected and ellipse_ratio != 1.0
@@ -496,16 +494,9 @@ def radial_profile_px(
     edges = np.linspace(0.0, max_radius, n_bins + 1)
     # np.digitize(radii, edges) - 1: bin n_bins collects everything at or past the last edge
     bins = torch.bucketize(radii, torch.from_numpy(edges).to(device), right=True) - 1
-    keep = None if mask is None else ~torch.as_tensor(mask, device=device)
-    if angular_range is not None:
-        start_deg, end_deg = (float(angle) for angle in angular_range)
-        # a full-circle span, or one whose ends coincide modulo 360, is no angular restriction
-        if abs(end_deg - start_deg) < 360.0 and start_deg % 360.0 != end_deg % 360.0:
-            wedge = in_wedge(torch.rad2deg(torch.atan2(d_row, d_col)) % 360.0, start_deg, end_deg)
-            keep = wedge if keep is None else keep & wedge
-    if keep is not None:
-        # excluded pixels join the overflow bin instead of being compacted out: same sums, no gather
-        bins = torch.where(keep, bins, n_bins)
+    if mask is not None:
+        # masked pixels join the overflow bin instead of being compacted out: same sums, no gather
+        bins = torch.where(torch.as_tensor(mask, device=device), n_bins, bins)
     bins = bins.flatten()
     # float64 sums of squares: in float32 the variance of a bright bin cancels to noise
     values = frame.to(torch.float64).flatten()
@@ -697,36 +688,22 @@ def fit_radial_background(
     *,
     peak_windows: list[tuple[float, float]],
     exclude_radius: float,
-    method: str = "power",
-    poly_order: int = 3,
 ) -> np.ndarray:
-    """Smooth background under a radial profile (power law or polynomial) fitted to the
-    bins outside the central beam and the ``peak_windows``."""
-    if method not in ("power", "poly"):
-        raise ValueError(f"method must be 'power' or 'poly', got {method!r}")
-    if poly_order < 0:
-        raise ValueError(f"poly_order must be non-negative, got {poly_order}")
+    """Power-law background ``a r^b`` under a radial profile, fitted in log-log to the
+    positive bins outside the central beam and the ``peak_windows``."""
     radii = radii_px.astype(np.float64)
     values = intensity.astype(np.float64)
-    keep = radii > float(exclude_radius)
+    keep = (radii > float(exclude_radius)) & (values > 0)
     for lo, hi in peak_windows:
         keep &= ~((radii >= lo) & (radii <= hi))
-    if method == "power":
-        keep &= values > 0
-    min_points = 2 if method == "power" else max(2, poly_order + 1)
-    if keep.sum() < min_points:
+    if keep.sum() < 2:
         raise ValueError(
             "not enough background bins to fit; widen the profile or narrow peak_windows"
         )
-    if method == "power":
-        coefficients = np.polyfit(np.log(radii[keep]), np.log(values[keep]), 1)
-        positive_radii = radii[radii > 0]
-        eval_radii = np.maximum(radii, positive_radii.min())
-        background = np.exp(np.polyval(coefficients, np.log(eval_radii)))
-    else:
-        coefficients = np.polyfit(radii[keep], values[keep], poly_order)
-        background = np.polyval(coefficients, radii)
-    return background.astype(np.float32)
+    coefficients = np.polyfit(np.log(radii[keep]), np.log(values[keep]), 1)
+    positive_radii = radii[radii > 0]
+    eval_radii = np.maximum(radii, positive_radii.min())
+    return np.exp(np.polyval(coefficients, np.log(eval_radii))).astype(np.float32)
 
 
 # --- Peak fitting ---
@@ -790,52 +767,23 @@ def fit_gaussian_spot(frame: np.ndarray, row: float, col: float, *, half_window:
 
 
 def gaussian_peak(radius, amplitude, center, sigma, offset):
-    """Radial ring peak ``A exp(-(r - r0)^2 / (2 sigma^2)) + offset``, the default
-    :func:`fit_ring_peaks` model."""
+    """Radial ring peak ``A exp(-(r - r0)^2 / (2 sigma^2)) + offset``, the :func:`fit_ring_peaks` model."""
     return amplitude * np.exp(-0.5 * ((radius - center) / sigma) ** 2) + offset
 
 
-def pseudo_voigt_peak(radius, amplitude, center, sigma, offset, eta):
-    """Pseudo-Voigt ring peak ``A (eta L + (1 - eta) G) + offset`` with a Lorentzian ``L`` and
-    a Gaussian ``G`` of the same FWHM (``gamma`` is the Lorentzian half width).
-
-    Size and strain broadening give ring profiles longer tails than a Gaussian; the mixing
-    fraction ``eta`` lets :func:`fit_ring_peaks` follow them.
-    """
-    gamma = sigma * FWHM_PER_SIGMA / 2.0
-    lorentzian = 1.0 / (1.0 + ((radius - center) / gamma) ** 2)
-    gaussian_part = np.exp(-0.5 * ((radius - center) / sigma) ** 2)
-    return amplitude * (eta * lorentzian + (1.0 - eta) * gaussian_part) + offset
-
-
-def fit_ring_peaks(
-    radii_px: np.ndarray,
-    intensity: np.ndarray,
-    rings,
-    *,
-    model: str = "gaussian",
-    window: float | None = None,
-) -> list[dict | None]:
-    """Fit one radial peak per ring record (``radius_px``) and return the refined radius,
+def fit_ring_peaks(radii_px: np.ndarray, intensity: np.ndarray, rings) -> list[dict | None]:
+    """Fit one Gaussian radial peak per ring record (``radius_px``) and return the refined radius,
     amplitude, FWHM, integrated intensity and R^2, or None where the fit fails.
 
-    The fit window defaults to half the gap to the nearest other ring so neighbouring
-    rings do not pull the peak.
+    The fit window is half the gap to the nearest other ring so neighbouring rings do not
+    pull the peak.
     """
-    if model not in RING_FIT_MODELS:
-        raise ValueError(f"model must be one of {RING_FIT_MODELS}, got {model!r}")
-    if window is not None and window <= 0:
-        raise ValueError(f"window must be positive, got {window}")
-    peak_model = gaussian_peak if model == "gaussian" else pseudo_voigt_peak
     centers = sorted(float(ring["radius_px"]) for ring in rings)
     updates = []
     for ring in rings:
         radius_guess = float(ring["radius_px"])
-        if window is not None:
-            half_width = float(window)
-        else:
-            gaps = [abs(radius_guess - center) for center in centers if center != radius_guess]
-            half_width = max(3.0, min(gaps) / 2.0) if gaps else max(6.0, 0.2 * radius_guess)
+        gaps = [abs(radius_guess - center) for center in centers if center != radius_guess]
+        half_width = max(3.0, min(gaps) / 2.0) if gaps else max(6.0, 0.2 * radius_guess)
         in_window = (radii_px >= radius_guess - half_width) & (radii_px <= radius_guess + half_width)
         radius_window = radii_px[in_window].astype(np.float64)
         intensity_window = intensity[in_window].astype(np.float64)
@@ -852,31 +800,21 @@ def fit_ring_peaks(
             [0.0, radius_guess - half_width, 0.1, -np.inf],
             [np.inf, radius_guess + half_width, half_width, np.inf],
         )
-        if model == "pseudo_voigt":
-            initial = initial + [0.5]
-            bounds = (bounds[0] + [0.0], bounds[1] + [1.0])
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", OptimizeWarning)
                 fit_params, _ = curve_fit(
-                    peak_model, radius_window, intensity_window, p0=initial, bounds=bounds, maxfev=5000
+                    gaussian_peak, radius_window, intensity_window, p0=initial, bounds=bounds, maxfev=5000
                 )
         except (RuntimeError, ValueError):
             updates.append(None)
             continue
-        residual = intensity_window - peak_model(radius_window, *fit_params)
+        residual = intensity_window - gaussian_peak(radius_window, *fit_params)
         ss_tot = float(np.sum((intensity_window - intensity_window.mean()) ** 2))
         r_squared = 1.0 - float(np.sum(residual**2)) / ss_tot if ss_tot > 0 else 0.0
         amplitude = float(fit_params[0])
         sigma = float(abs(fit_params[2]))
-        if model == "pseudo_voigt":
-            eta = float(fit_params[4])
-            gamma = sigma * FWHM_PER_SIGMA / 2.0
-            integrated = amplitude * (
-                eta * math.pi * gamma + (1.0 - eta) * sigma * math.sqrt(2.0 * math.pi)
-            )
-        else:
-            integrated = amplitude * sigma * math.sqrt(2.0 * math.pi)
+        integrated = amplitude * sigma * math.sqrt(2.0 * math.pi)
         updates.append(
             {
                 "raw_radius_px": float(radius_guess),
@@ -1160,7 +1098,7 @@ def match_candidate(observed_d: Sequence[float], lines: Sequence[dict], tol: flo
         if spacing and math.isfinite(float(spacing)) and float(spacing) > 0
     ]
     references = [
-        (float(line["d"]), float(line.get("i_rel", line.get("intensity")) or 0.0))
+        (float(line["d"]), float(line["i_rel"] or 0.0))
         for line in lines
         if math.isfinite(float(line["d"])) and float(line["d"]) > 0
     ]

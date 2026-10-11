@@ -22,7 +22,7 @@ def _write_rgb_png(path: Path, h=24, w=32) -> np.ndarray:
 def test_normalize_preserves_hw3_rgb():
     rgb = np.zeros((10, 12, 3), dtype=np.uint8)
     rgb[..., 0] = 255
-    out = _normalize_image_array(rgb)
+    out = _normalize_image_array(rgb, "rgb.png")
     assert out.shape == (10, 12, 3)
     assert out[..., 0].max() == 255
 

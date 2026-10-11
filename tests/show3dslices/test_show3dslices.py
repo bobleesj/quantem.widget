@@ -58,9 +58,12 @@ def test_browser_volume_matches_numpy_slices():
     assert widget.smooth is False  # each voxel drawn as a sharp block; bilinear Smooth is opt-in
 
 
-def test_offline_pack_is_uint8_against_the_global_range():
+def test_offline_pack_is_uint8_against_the_global_range(capsys):
     volume = column_volume()
     widget = Show3DSlices(volume, offline=True)
+    # D-R1: the uint8 pack was silent
+    printed = capsys.readouterr().out
+    assert "Show3DSlices packs the 6x48x48 volume as uint8" in printed and "keeps float32" in printed
     packed = np.frombuffer(widget.volume_bytes, dtype=np.uint8).reshape(volume.shape)
     restored = widget._offline_min + packed * (widget._offline_max - widget._offline_min) / 255.0
     assert widget._offline_min == pytest.approx(float(volume.min()))
@@ -73,6 +76,14 @@ def test_dataset3d_supplies_title_and_sampling_in_angstrom():
     widget = Show3DSlices(dataset)
     assert widget.title == "phase"
     assert widget.pixel_size_axes == pytest.approx([3.0, 1.8, 1.8])
+
+
+def test_a_frame_axis_from_read_image_stack_opens_without_a_depth_bar():
+    # rc41: read_image_stack labels its first axis "frame", which Show3DSlices refused.
+    dataset = make_dataset(column_volume(), name="stack", sampling=[1.0, 0.18, 0.18], units=["frame", "nm", "nm"])
+    assert Show3DSlices(dataset).pixel_size_axes == pytest.approx([0.0, 1.8, 1.8])
+    with pytest.raises(ValueError, match="'furlong'"):
+        Show3DSlices(column_volume(), sampling=1.0, units="furlong")
 
 
 def test_rejects_data_the_browser_cannot_show():

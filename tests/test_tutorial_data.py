@@ -6,7 +6,7 @@ import numpy as np
 from quantem.widget import datasets
 
 
-def test_show2d_gold_size_maps_to_preview_stride(tmp_path, monkeypatch):
+def test_show2d_gold_size_maps_to_preview_stride(tmp_path, monkeypatch, capsys):
     root = tmp_path / "hf-cache"
     data_dir = root / "widget-tutorials" / "shared" / "gold-haadf" / "full"
     data_dir.mkdir(parents=True)
@@ -20,7 +20,7 @@ def test_show2d_gold_size_maps_to_preview_stride(tmp_path, monkeypatch):
         calls.append(kwargs)
         return root
 
-    monkeypatch.setattr(datasets, "snapshot_download", fake_snapshot_download, raising=False)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
 
     dataset = datasets.show2d_gold(size="medium", verbose=False)
 
@@ -34,6 +34,11 @@ def test_show2d_gold_size_maps_to_preview_stride(tmp_path, monkeypatch):
             "force_download": False,
         }
     ]
+    # E-R3: the stride was printed only with verbose=True and never named the way back to native pixels
+    assert capsys.readouterr().out == (
+        "show2d_gold(size='medium') keeps every 4th pixel of the 8x8 image (2x2); size='full' loads native pixels.\n")
+    datasets.show2d_gold(size="full", verbose=False)
+    assert capsys.readouterr().out == ""
 
 
 def test_show3d_gold_reuses_shared_haadf_source(tmp_path, monkeypatch):
@@ -51,7 +56,7 @@ def test_show3d_gold_reuses_shared_haadf_source(tmp_path, monkeypatch):
         calls.append(kwargs)
         return root
 
-    monkeypatch.setattr(datasets, "snapshot_download", fake_snapshot_download, raising=False)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
 
     dataset = datasets.show3d_gold(size="small", verbose=False)
 
@@ -60,16 +65,16 @@ def test_show3d_gold_reuses_shared_haadf_source(tmp_path, monkeypatch):
 
 
 def test_tutorial_size_names_are_strict():
-    assert datasets._normalise_tutorial_size("Small") == "small"
+    assert datasets._normalize_tutorial_size("Small") == "small"
     try:
-        datasets._normalise_tutorial_size("mini")
+        datasets._normalize_tutorial_size("mini")
     except ValueError as exc:
         assert "small, medium, large, full" in str(exc)
     else:
         raise AssertionError("expected invalid tutorial size to raise")
 
 
-def test_show4dstem_gold_uses_widget_tutorial_source(tmp_path, monkeypatch):
+def test_show4dstem_gold_uses_widget_tutorial_source(tmp_path, monkeypatch, capsys):
     root = tmp_path / "hf-cache"
     data_dir = root / "widget-tutorials" / "show4dstem" / "gold-128-bin8" / "full"
     data_dir.mkdir(parents=True)
@@ -90,12 +95,13 @@ def test_show4dstem_gold_uses_widget_tutorial_source(tmp_path, monkeypatch):
         calls.append(kwargs)
         return root
 
-    monkeypatch.setattr(datasets, "snapshot_download", fake_snapshot_download, raising=False)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
 
     dataset = datasets.show4dstem_gold(size="small", verbose=False)
 
     assert dataset.shape == (2, 2, 2, 2)  # a Dataset4dstemGPU on a GPU, a core Dataset4dstem elsewhere
     assert tuple(dataset.sampling) == (8.0, 8.0, 3.68, 3.68)
+    assert "keeps every 4th scan position of the 8x8 scan" in capsys.readouterr().out
     assert calls[0]["allow_patterns"] == ["widget-tutorials/show4dstem/gold-128-bin8/full/*"]
 
 
@@ -110,9 +116,9 @@ def test_show1d_ducky_downloads_scoped_widget_tutorial_folder(tmp_path, monkeypa
         calls.append(kwargs)
         return root
 
-    monkeypatch.setattr(datasets, "snapshot_download", fake_snapshot_download, raising=False)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
 
-    result = datasets.show1d_ducky(size="small", cache_dir=Path("/tmp/qw-cache"), verbose=False)
+    result = datasets.show1d_ducky(cache_dir=Path("/tmp/qw-cache"), verbose=False)
 
     assert result == folder
     assert calls == [
@@ -138,7 +144,7 @@ def test_showdiffraction_fe3o4_uses_widget_tutorial_source(tmp_path, monkeypatch
         calls.append(kwargs)
         return root
 
-    monkeypatch.setattr(datasets, "snapshot_download", fake_snapshot_download, raising=False)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
 
     pattern = datasets.showdiffraction_fe3o4(verbose=False)
 
@@ -158,7 +164,7 @@ def test_showdiffraction_fe3o4_raises_without_usable_source(tmp_path, monkeypatc
     def fail_download(*args, **kwargs):
         raise OSError("offline")
 
-    monkeypatch.setattr(datasets, "snapshot_download", fail_download, raising=False)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fail_download)
 
     try:
         datasets.showdiffraction_fe3o4(verbose=False)
@@ -179,7 +185,7 @@ def test_gold_session_uses_widget_tutorial_folder(tmp_path, monkeypatch):
         calls.append(kwargs)
         return root
 
-    monkeypatch.setattr(datasets, "snapshot_download", fake_snapshot_download, raising=False)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
 
     result = datasets.gold_session(size="small", cache_dir=Path("/tmp/qw-cache"), verbose=False)
 

@@ -139,38 +139,9 @@ def _calibration_matches(
     return bool(np.allclose(first.sampling, other.sampling, rtol=1e-7, atol=0.0))
 
 
-def _safe_set_widget_status(widget, name: str, value: object) -> None:
-    """Publish optional folder status without requiring a widget trait."""
-    try:
-        setattr(widget, name, value)
-    except (AttributeError, TypeError, ValueError):
-        # Status is advisory. Strict/slotted test or downstream widgets may not
-        # expose these optional attributes, which must not break data updates.
-        pass
-
-
-def _display_bin_factor(widget) -> int:
-    """Return the active display-space bin factor for either image viewer.
-
-    Show2D syncs it as ``_display_bin_factor``, Show3D keeps ``_display_bin``;
-    the scale bar is drawn on binned display pixels, so the pixel size scales by it.
-    """
-    for name in ("_display_bin_factor", "_display_bin"):
-        try:
-            return max(1, int(getattr(widget, name)))
-        except (AttributeError, TypeError, ValueError):
-            continue
-    return 1
-
-
 def _clear_pixel_size(widget, *, scale_bar_visible: bool) -> None:
-    """Drop the widget's pixel size so no scale bar claims a calibration the files do not give.
-
-    Show2D also carries per-panel ``pixel_sizes``; Show3D has one ``pixel_size``.
-    """
+    """Drop the widget's pixel size so no scale bar claims a calibration the files do not give."""
     widget.pixel_size = 0.0
-    if hasattr(widget, "pixel_sizes"):
-        widget.pixel_sizes = []
     widget.scale_bar_visible = scale_bar_visible
 
 
@@ -348,7 +319,7 @@ class WatchedImageFolder:
         """Attach this source to an already constructed widget."""
         self._widget_ref = weakref.ref(widget)
         self._explicit_calibration = bool(explicit_calibration)
-        self._scale_bar_requested = bool(getattr(widget, "scale_bar_visible", True))
+        self._scale_bar_requested = bool(widget.scale_bar_visible)
         widget._folder_source = self
         self._apply_calibration(widget, self.records)
         self._sync_widget_status(widget)
@@ -451,8 +422,7 @@ class WatchedImageFolder:
         # array. ``set_image`` exposes its new frame count partway through the
         # update, so a concurrent notebook/UI reader must never observe
         # ``n_slices > 0`` while ``folder_waiting`` is still true.
-        _safe_set_widget_status(widget, "_folder_waiting", False)
-        _safe_set_widget_status(widget, "folder_waiting", False)
+        widget.folder_waiting = False
         widget._apply_folder_image_records(
             old_records,
             new_records,
@@ -485,15 +455,10 @@ class WatchedImageFolder:
             )
         elif records[0].sampling is not None and records[0].units is not None:
             first = records[0]
-            # The scale bar is horizontal, so it uses the final (column) axis.
-            display_bin = _display_bin_factor(widget)
-            widget.pixel_size = float(first.sampling[-1]) * display_bin
+            # The scale bar is horizontal, so it uses the final (column) axis; it is
+            # drawn on display pixels, so the pixel size scales by the display bin.
+            widget.pixel_size = float(first.sampling[-1]) * max(1, int(widget._display_bin))
             widget.pixel_unit = str(first.units[-1])
-            if hasattr(widget, "pixel_sizes"):
-                widget.pixel_sizes = [
-                    float(record.sampling[-1]) * display_bin
-                    for record in records
-                ]
             widget.scale_bar_visible = self._scale_bar_requested
             self.calibration_status = (
                 f"uniform: {first.sampling[-1]:g} {first.units[-1]}/pixel"
@@ -501,11 +466,6 @@ class WatchedImageFolder:
         else:
             _clear_pixel_size(widget, scale_bar_visible=self._scale_bar_requested)
             self.calibration_status = "files do not provide spatial calibration"
-        _safe_set_widget_status(
-            widget,
-            "_folder_calibration_status",
-            self.calibration_status,
-        )
 
     def _sync_widget_status(
         self,
@@ -514,7 +474,7 @@ class WatchedImageFolder:
         watch_error: str | None = None,
         worker_failed: bool = False,
     ) -> None:
-        """Publish advisory source state without requiring synced traits."""
+        """Publish the source state to the widget's folder traits: waiting flag, status line and watch badge."""
         waiting = not self.records
         unexpected_error = bool(watch_error)
         if watch_error is None:
@@ -552,15 +512,8 @@ class WatchedImageFolder:
             )
             if watch_error:
                 folder_status = f"{folder_status}; {watch_error}"
-        _safe_set_widget_status(widget, "_folder_waiting", waiting)
-        _safe_set_widget_status(widget, "folder_waiting", waiting)
-        _safe_set_widget_status(widget, "folder_status", folder_status)
-        _safe_set_widget_status(widget, "_folder_watch_error", watch_error)
-        _safe_set_widget_status(
-            widget,
-            "_folder_calibration_status",
-            self.calibration_status,
-        )
+        widget.folder_waiting = waiting
+        widget.folder_status = folder_status
         if not self._watch_enabled:
             state = "stopped" if self._watch_started else "hidden"
             detail = "Folder watcher stopped" if self._watch_started else ""
@@ -640,8 +593,8 @@ class WatchedImageFolder:
         widget_ref = weakref.ref(widget)
 
         def worker() -> None:
-            """Poll every ``interval`` until stopped or the widget is gone; a fatal error turns the badge red."""
-            fatal_error: str | None = None
+            """Poll every ``interval`` until stopped or the widget is gone; an unexpected error turns the badge red."""
+            fatal_error = "an unexpected error (traceback in the kernel log)"
             try:
                 while not stop.wait(self.interval):
                     current_widget = widget_ref()
@@ -657,16 +610,18 @@ class WatchedImageFolder:
                             current_widget,
                             watch_error=f"{type(exc).__name__}: {exc}",
                         )
-            except BaseException as exc:
+            except Exception as exc:
+                # name it on the badge, then let the thread print its traceback
                 fatal_error = f"{type(exc).__name__}: {exc}"
+                raise
             finally:
                 current = threading.current_thread()
                 if self._watch_stop is stop:
                     self._watch_stop = None
                 if self._watch_thread is current:
                     self._watch_thread = None
-                if fatal_error is not None and not stop.is_set():
-                    current_widget = widget_ref()
+                if not stop.is_set():
+                    current_widget = widget_ref()  # None when the loop ended because the widget is gone
                     if current_widget is not None:
                         self._sync_widget_status(
                             current_widget,
@@ -680,20 +635,7 @@ class WatchedImageFolder:
             daemon=True,
         )
         self._watch_thread = thread
-        try:
-            thread.start()
-        except RuntimeError:
-            self._watch_enabled = False
-            if self._watch_stop is stop:
-                self._watch_stop = None
-            if self._watch_thread is thread:
-                self._watch_thread = None
-            set_folder_watch_status(
-                widget,
-                "error",
-                "Watch worker could not start. Check the notebook kernel and retry.",
-            )
-            raise
+        thread.start()
         self._sync_widget_status(widget)
         return self
 

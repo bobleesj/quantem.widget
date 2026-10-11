@@ -123,10 +123,7 @@ def test_show4dstem_state_dict_roundtrip_mutated(show4dstem_widget):
     for k, v in mutated.items():
         if k in skip:
             continue
-        if isinstance(v, float):
-            assert abs(out[k] - v) < 1e-3, f"{k}: expected {v}, got {out[k]}"
-        else:
-            assert out[k] == v, f"{k}: expected {v!r}, got {out[k]!r}"
+        assert out[k] == v, f"{k}: expected {v!r}, got {out[k]!r}"  # a float round trip is exact
 
 
 def test_show4dstem_save_and_load(tmp_path, show4dstem_widget):
@@ -255,10 +252,7 @@ def test_show2d_state_dict_roundtrip_defaults(show2d_widget):
                    state=original, verbose=False)
     restored = fresh.state_dict()
     for k in original:
-        if isinstance(original[k], float):
-            assert abs(restored[k] - original[k]) < 1e-3, f"{k}: {original[k]} -> {restored[k]}"
-        else:
-            assert restored[k] == original[k], f"{k}: {original[k]!r} -> {restored[k]!r}"
+        assert restored[k] == original[k], f"{k}: {original[k]!r} -> {restored[k]!r}"  # a float round trip is exact
 
 
 def test_show2d_save_and_load(tmp_path, show2d_widget):

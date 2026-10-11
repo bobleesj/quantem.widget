@@ -125,7 +125,6 @@ def read_dense(
     device=None,
     *,
     scan_shape: tuple[int, int] | None = None,
-    hot_pixel_correction: str = "median",
     max_bytes: int | None = None,
     verbose: bool = True,
 ):
@@ -144,9 +143,6 @@ def read_dense(
     scan_shape
         ``(rows, cols)`` of a flat ``(positions, det_row, det_col)`` file; a
         square scan is inferred when omitted.
-    hot_pixel_correction
-        ``"median"`` (default, as quantem.gpu), ``"zero"`` or ``"none"`` for the
-        pixels the master's ``pixel_mask`` flags.
     max_bytes
         Largest dense array to allocate. Default: ``MEMORY_FRACTION`` of the
         available host memory, and of the free memory of a CUDA ``device``.
@@ -210,7 +206,7 @@ def read_dense(
         data = None
         for start, block in frame_blocks(datasets):
             if integer and valid is not None:
-                block = correct_flagged_pixels(block, valid, hot_pixel_correction)
+                block = correct_flagged_pixels(block, valid)
             peak = int(block.max()) if integer and block.size else 0
             # negative counts skip the unsigned rungs
             negative = integer and block.size and int(block.min()) < 0
@@ -283,17 +279,15 @@ def ceiling(device=None) -> int:
     return int(limit * MEMORY_FRACTION)
 
 
-def correct_flagged_pixels(block: np.ndarray, valid: np.ndarray, method: str) -> np.ndarray:
-    """Replace flagged detector pixels in a ``(frames, det_row, det_col)`` block of counts.
+def correct_flagged_pixels(block: np.ndarray, valid: np.ndarray) -> np.ndarray:
+    """Replace the flagged detector pixels of a ``(frames, det_row, det_col)`` block of counts.
 
-    ``"median"``: the median of the unflagged pixels of the 3x3 neighbourhood,
+    Each takes the median of the unflagged pixels of its 3x3 neighbourhood,
     the mean of the two middle values rounded down when their count is even,
-    0 when no neighbour is valid; quantem.gpu's hot-pixel kernel computes the
-    same. ``"zero"`` writes 0; ``"none"`` keeps the stored values.
+    or 0 when no neighbour is valid, as quantem.gpu's hot-pixel kernel does,
+    so a dense read shows the counts an encoded load shows.
     """
-    if method not in ("median", "zero", "none"):
-        raise ValueError("hot_pixel_correction must be 'median', 'zero', or 'none'.")
-    if method == "none" or valid.all():
+    if valid.all():
         return block
     block = np.array(block, copy=True)
     rows, cols = valid.shape
@@ -304,7 +298,7 @@ def correct_flagged_pixels(block: np.ndarray, valid: np.ndarray, method: str) ->
             for d_col in (-1, 0, 1)
             if (d_row or d_col) and 0 <= row + d_row < rows and 0 <= col + d_col < cols and valid[row + d_row, col + d_col]
         ]
-        if method == "zero" or not neighbours:
+        if not neighbours:
             block[:, row, col] = 0
             continue
         neighbour_counts = np.stack([block[:, near_row, near_col] for near_row, near_col in neighbours], axis=1)
