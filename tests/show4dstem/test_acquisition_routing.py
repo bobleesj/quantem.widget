@@ -134,3 +134,20 @@ def test_host_data_stays_on_the_cpu(tmp_path, dtype, kind):
         np.testing.assert_array_equal(widget.pattern(6, 8), values[6, 8])
     finally:
         widget.close()
+
+
+@pytest.mark.parametrize("reduce", ["sum", "max", "mean"])
+def test_scan_roi_of_signed_integer_data_keeps_its_sign(reduce):
+    """Dark-subtracted int16 patterns have negative totals: as uint64 the scan-ROI sum showed about 1.8e19."""
+    values = (_values(np.uint16).astype(np.int32) - 300).astype(np.int16)
+    widget = Show4DSTEM(values, device="cpu", precompute_virtual_images=False)
+    try:
+        widget.vi_roi_mode, widget.vi_roi_reduce = "square", reduce
+        inside = (np.abs(np.arange(SCAN[0])[:, None] - widget.vi_roi_center_row) <= widget.vi_roi_radius) & (
+            np.abs(np.arange(SCAN[1])[None, :] - widget.vi_roi_center_col) <= widget.vi_roi_radius)
+        selected = values[inside].astype(np.int64)
+        expected = {"sum": selected.sum(axis=0), "max": selected.max(axis=0), "mean": selected.sum(axis=0) / len(selected)}[reduce]
+        assert expected.min() < 0
+        np.testing.assert_array_equal(widget.vi_roi_pattern(), expected.astype(np.float32))
+    finally:
+        widget.close()
