@@ -112,8 +112,8 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
           "& .MuiSelect-icon": { color: colors.text },
           "& .MuiOutlinedInput-notchedOutline": { borderColor: colors.border },
           "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: colors.accent } }}
-        MenuProps={{ PaperProps: { sx: { maxHeight: 320, bgcolor: colors.controlBg,
-          color: colors.text, border: `1px solid ${colors.border}` } } }}
+        MenuProps={{ slotProps: { paper: { sx: { maxHeight: 320, bgcolor: colors.controlBg,
+          color: colors.text, border: `1px solid ${colors.border}` } } } }}
         onChange={(event) => {
           model.set("cmap", event.target.value);
           model.save_changes();

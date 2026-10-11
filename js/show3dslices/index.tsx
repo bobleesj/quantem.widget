@@ -712,7 +712,7 @@ function Show3DSlices() {
 
   const themedMenuProps = {
     ...upwardMenuProps,
-    PaperProps: { sx: { borderRadius: 0, bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` } },
+    slotProps: { paper: { sx: { borderRadius: 0, bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` } } },
   };
 
   const [nx] = useModelState<number>("nx");
@@ -4226,8 +4226,8 @@ function Show3DSlices() {
           anchorEl={exportMenuAnchor}
           open={Boolean(exportMenuAnchor)}
           onClose={handleExportMenuClose}
-          MenuListProps={{ "aria-label": "Export standalone HTML options" }}
           {...themedMenuProps}
+          slotProps={{ ...themedMenuProps.slotProps, list: { "aria-label": "Export standalone HTML options" } }}
         >
           <MenuItem onClick={() => handleExportSelect("exact")}>Exact float32 ({exactExportSize})</MenuItem>
           <MenuItem onClick={() => handleExportSelect("quantized")}>Quantized uint8 ({quantizedExportSize})</MenuItem>
