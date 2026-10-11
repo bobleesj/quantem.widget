@@ -572,8 +572,11 @@ export function autoEnhanceFFT(
 // Singleton
 // ============================================================================
 
-let gpuFFT: WebGPUFFT | null = null;
-// A WebGPUFFT on a lost device can never dispatch again; the next caller rebuilds it.
+// One WebGPUFFT per page, memoized while it is being built: concurrent first
+// callers (every panel of a widget asks at once) share it instead of each
+// compiling the pipelines again. A WebGPUFFT on a lost device can never
+// dispatch again; the next caller rebuilds it.
+let gpuFFT: Promise<WebGPUFFT> | null = null;
 onGPULost(() => { gpuFFT = null; });
 
 let cpuFFT: CPUFFT | null = null;
@@ -586,7 +589,7 @@ export async function getDisplayFFT(): Promise<DisplayFFT> {
 }
 
 /** Return the shared hardware FFT or fail without running a CPU/Worker FFT. */
-export async function requireWebGPUFFT(operation = "Browser FFT"): Promise<WebGPUFFT> {
-  gpuFFT ??= new WebGPUFFT(await requireHardwareGPUDevice(operation));
+export function requireWebGPUFFT(operation = "Browser FFT"): Promise<WebGPUFFT> {
+  gpuFFT ??= requireHardwareGPUDevice(operation).then((device) => new WebGPUFFT(device));
   return gpuFFT;
 }
