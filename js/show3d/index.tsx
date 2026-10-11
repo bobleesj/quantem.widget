@@ -1741,7 +1741,9 @@ function Show3D() {
   const subpixelAlignShiftsRef = React.useRef<SubpixelShift[] | null>(null);
   const subpixelAlignCacheRef = React.useRef<Map<string, Float32Array>>(new Map());
   const subpixelAlignSerialRef = React.useRef(0);
+  // Slider values while a drag is in progress: the image previews them, the traits take the release value.
   const [frequencyDraft, setFrequencyDraft] = React.useState<number | null>(null);
+  const [frequencyWidthDraft, setFrequencyWidthDraft] = React.useState<number | null>(null);
   const [frequencyRenderVersion, setFrequencyRenderVersion] = React.useState(0);
   const [frequencyFilterBackend, setFrequencyFilterBackend] = React.useState("off");
   const frequencyFilterCacheRef = React.useRef<Map<string, Float32Array>>(new Map());
@@ -1752,9 +1754,9 @@ function Show3D() {
       mode,
       cutoff: frequencyDraft ?? frequencyFilterCutoff,
       center: mode === "bandpass" ? (frequencyDraft ?? frequencyFilterCenter) : frequencyFilterCenter,
-      width: frequencyFilterWidth,
+      width: frequencyWidthDraft ?? frequencyFilterWidth,
     };
-  }, [frequencyFilter, frequencyDraft, frequencyFilterCutoff, frequencyFilterCenter, frequencyFilterWidth]);
+  }, [frequencyFilter, frequencyDraft, frequencyWidthDraft, frequencyFilterCutoff, frequencyFilterCenter, frequencyFilterWidth]);
   const scopedPanelForEdit = React.useMemo(() => {
     const fallback = visiblePanelIndices[0] ?? 0;
     const selected = selectedVisiblePanels[selectedVisiblePanels.length - 1] ?? fallback;
@@ -10412,6 +10414,12 @@ function Show3D() {
   const frequencyRingValue = normalizeFrequencyFilterMode(frequencyFilter) === "bandpass"
     ? (frequencyDraft ?? frequencyFilterCenter)
     : (frequencyDraft ?? frequencyFilterCutoff);
+  // Tools under More that change the view: the badge counts them and the button lights up while any is on,
+  // so a hidden settings row never hides an active effect such as denoise.
+  const moreToolsActive = [
+    showStats, overlayEditMode, denoiseEnabled, !isRgb && frequencyFilterIsActive, subpixelAlignEnabled,
+    !isRgb && hasPanelChoices && !colorShared, flipRows, flipCols, compareMode !== "off", rotationActive,
+  ].filter(Boolean).length;
   /** Ring radius under the pointer as a fraction of Nyquist: the distance from the FFT centre over its half side. */
   const frequencyRingValueAt = (event: React.PointerEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.parentElement!.getBoundingClientRect();
@@ -10447,8 +10455,8 @@ function Show3D() {
       sx={{ position: "absolute", left: "50%", top: "50%", width: `${frequencyRingValue * 100}%`, height: `${frequencyRingValue * 100}%`, transform: "translate(-50%, -50%)", borderRadius: "50%", border: "2px solid rgba(0,229,255,0.95)", bgcolor: normalizeFrequencyFilterMode(frequencyFilter) === "highpass" ? "rgba(0,0,0,0.55)" : "transparent", boxShadow: normalizeFrequencyFilterMode(frequencyFilter) === "lowpass" ? "0 0 0 1px rgba(0,0,0,0.75), 0 0 0 9999px rgba(0,0,0,0.55)" : "0 0 0 1px rgba(0,0,0,0.75)", cursor: "crosshair", touchAction: "none", zIndex: 6 }}
     >
       {normalizeFrequencyFilterMode(frequencyFilter) === "bandpass" && [
-        Math.max(0, frequencyFilterCenter - frequencyFilterWidth / 2),
-        Math.min(1, frequencyFilterCenter + frequencyFilterWidth / 2),
+        Math.max(0, frequencyRingValue - frequencyOptions.width / 2),
+        Math.min(1, frequencyRingValue + frequencyOptions.width / 2),
       ].map((radius, index) => <Box key={index} sx={{ position: "absolute", left: "50%", top: "50%", width: `${radius / Math.max(0.001, frequencyRingValue) * 100}%`, height: `${radius / Math.max(0.001, frequencyRingValue) * 100}%`, transform: "translate(-50%, -50%)", borderRadius: "50%", border: "1px dashed rgba(255,255,255,0.95)", bgcolor: index === 0 ? "rgba(0,0,0,0.55)" : "transparent", boxShadow: index === 1 ? "0 0 0 9999px rgba(0,0,0,0.55)" : "none", pointerEvents: "none" }} />)}
       <Box sx={{ position: "absolute", left: "50%", top: -24, transform: "translateX(-50%)", px: 0.75, py: 0.25, borderRadius: 0.75, bgcolor: "rgba(0,0,0,0.78)", color: "rgba(200,250,255,0.98)", fontSize: 9, lineHeight: 1.2, fontWeight: 700, whiteSpace: "nowrap", pointerEvents: "none", textShadow: "0 1px 1px #000" }}>
         {normalizeFrequencyFilterMode(frequencyFilter) === "lowpass" ? "Inside kept" : normalizeFrequencyFilterMode(frequencyFilter) === "highpass" ? "Outside kept" : "Band kept"}
@@ -10861,13 +10869,13 @@ function Show3D() {
             {/* "More" overflow: Stats + Denoise + Filter live here (mirrors Show2D) to
                 keep the top toolbar calm. */}
             <Badge
-              badgeContent={(showStats ? 1 : 0) + (overlayEditMode ? 1 : 0) + (denoiseEnabled ? 1 : 0) + (!isRgb && frequencyFilterIsActive ? 1 : 0) + (subpixelAlignEnabled ? 1 : 0) + (!isRgb && hasPanelChoices && !colorShared ? 1 : 0) + (flipRows ? 1 : 0) + (flipCols ? 1 : 0) + (compareMode !== "off" ? 1 : 0) + (rotationActive ? 1 : 0)}
-              invisible={!showStats && !overlayEditMode && !showDenoise && !(!isRgb && frequencyFilterIsActive) && !subpixelAlignEnabled && !(!isRgb && hasPanelChoices && !colorShared) && !flipRows && !flipCols && compareMode === "off" && !rotationActive}
+              badgeContent={moreToolsActive}
+              invisible={moreToolsActive === 0}
               sx={{ "& .MuiBadge-badge": { bgcolor: themeColors.accent, color: "#fff", fontSize: 9, fontWeight: 600, minWidth: 14, height: 14, px: 0.25 } }}
             >
               <Button
                 size="small"
-                sx={{ minWidth: 0, px: 0.75, fontSize: 10, textTransform: "none", color: (showStats || overlayEditMode || showDenoise || (!isRgb && frequencyFilterIsActive) || subpixelAlignEnabled || (!isRgb && hasPanelChoices && !colorShared) || flipRows || flipCols || compareMode !== "off" || rotationActive) ? themeColors.accent : themeColors.text }}
+                sx={{ minWidth: 0, px: 0.75, fontSize: 10, textTransform: "none", color: moreToolsActive > 0 ? themeColors.accent : themeColors.text }}
                 onClick={(e) => setMoreMenuAnchor(e.currentTarget)}
                 aria-label="More tools"
                 aria-haspopup="menu"
@@ -12258,8 +12266,8 @@ function Show3D() {
                       <Slider value={frequencyDraft ?? frequencyKnobsForPanel(scopedPanelForEdit).center} min={0} max={1} step={0.005} onChange={(_, value) => setFrequencyDraft(value as number)} onChangeCommitted={(_, value) => { setFrequencyFilterCenter(value as number); syncFrequencyPanelKnob("center", value as number); setFrequencyDraft(null); }} size="small" sx={{ ...sliderStyles.small, width: 72 }} aria-label="Band-pass center as fraction of Nyquist" />
                     </Box>
                     <Box sx={{ display: "inline-flex", alignItems: "center", gap: `${SPACING.XS}px`, flexWrap: "nowrap" }}>
-                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 80, display: "inline-block" }}>Width {frequencyValueLabel(frequencyKnobsForPanel(scopedPanelForEdit).width)}</Typography>
-                      <Slider value={frequencyKnobsForPanel(scopedPanelForEdit).width} min={0.01} max={1} step={0.005} onChange={(_, value) => { setFrequencyFilterWidth(value as number); syncFrequencyPanelKnob("width", value as number); }} size="small" sx={{ ...sliderStyles.small, width: 72 }} aria-label="Band-pass width as fraction of Nyquist" />
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 80, display: "inline-block" }}>Width {frequencyValueLabel(frequencyWidthDraft ?? frequencyKnobsForPanel(scopedPanelForEdit).width)}</Typography>
+                      <Slider value={frequencyWidthDraft ?? frequencyKnobsForPanel(scopedPanelForEdit).width} min={0.01} max={1} step={0.005} onChange={(_, value) => setFrequencyWidthDraft(value as number)} onChangeCommitted={(_, value) => { setFrequencyFilterWidth(value as number); syncFrequencyPanelKnob("width", value as number); setFrequencyWidthDraft(null); }} size="small" sx={{ ...sliderStyles.small, width: 72 }} aria-label="Band-pass width as fraction of Nyquist" />
                     </Box>
                   </>) : (<>
                     <Box sx={{ display: "inline-flex", alignItems: "center", gap: `${SPACING.XS}px`, flexWrap: "nowrap" }}>
@@ -12289,7 +12297,7 @@ function Show3D() {
                       </IconButton>
                     </Stack>
                     {loop ? (
-                      <Slider ref={playbackSliderRef} value={[loopStart, activeIdx, effectiveLoopEnd]} onPointerDownCapture={handleLoopSliderPointerDownCapture} onChange={(_, v) => { const vals = v as number[]; if (vals[0] !== loopStart) setLoopStart(vals[0]); scrubToSlice(vals[1]); if (vals[2] !== effectiveLoopEnd) setLoopEnd(vals[2]); }} onChangeCommitted={(_, v) => { const vals = v as number[]; if (vals[0] !== loopStart) setLoopStart(vals[0]); commitSlice(vals[1]); if (vals[2] !== effectiveLoopEnd) setLoopEnd(vals[2]); }} disableSwap min={0} max={nSlices - 1} size="small" valueLabelDisplay="auto" valueLabelFormat={(v) => formatFrameValueLabel(v)} marks={bookmarkedFrameMarks} aria-label={`Loop range and current ${dimLabel.toLowerCase()} (frame ${activeIdx + 1} of ${nSlices}, loop ${loopStart + 1} to ${effectiveLoopEnd + 1})`} sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 90, "& .MuiSlider-thumb[data-index='0']": { width: 8, height: 8, bgcolor: themeColors.textMuted }, "& .MuiSlider-thumb[data-index='1']": { width: 12, height: 12 }, "& .MuiSlider-thumb[data-index='2']": { width: 8, height: 8, bgcolor: themeColors.textMuted }, "& .MuiSlider-mark": { bgcolor: "#ffc107", width: 5, height: 5, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" }, "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }} />
+                      <Slider ref={playbackSliderRef} value={[loopStart, activeIdx, effectiveLoopEnd]} onPointerDownCapture={handleLoopSliderPointerDownCapture} onChange={(_, v) => { const vals = v as number[]; if (vals[0] !== loopStart) setLoopStart(vals[0]); if (vals[1] !== activeIdx) scrubToSlice(vals[1]); if (vals[2] !== effectiveLoopEnd) setLoopEnd(vals[2]); }} onChangeCommitted={(_, v) => { const vals = v as number[]; if (vals[0] !== loopStart) setLoopStart(vals[0]); commitSlice(vals[1]); if (vals[2] !== effectiveLoopEnd) setLoopEnd(vals[2]); }} disableSwap min={0} max={nSlices - 1} size="small" valueLabelDisplay="auto" valueLabelFormat={(v) => formatFrameValueLabel(v)} marks={bookmarkedFrameMarks} aria-label={`Loop range and current ${dimLabel.toLowerCase()} (frame ${activeIdx + 1} of ${nSlices}, loop ${loopStart + 1} to ${effectiveLoopEnd + 1})`} sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 90, "& .MuiSlider-thumb[data-index='0']": { width: 8, height: 8, bgcolor: themeColors.textMuted }, "& .MuiSlider-thumb[data-index='1']": { width: 12, height: 12 }, "& .MuiSlider-thumb[data-index='2']": { width: 8, height: 8, bgcolor: themeColors.textMuted }, "& .MuiSlider-mark": { bgcolor: "#ffc107", width: 5, height: 5, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" }, "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }} />
                     ) : (
                       <Slider ref={playbackSliderRef} value={activeIdx} onPointerDownCapture={handleLoopSliderPointerDownCapture} onChange={(_, v) => scrubToSlice(v as number)} onChangeCommitted={(_, v) => commitSlice(v as number)} min={0} max={nSlices - 1} size="small" valueLabelDisplay="auto" valueLabelFormat={(v) => formatFrameValueLabel(v)} marks={bookmarkedFrameMarks} aria-label={`Current ${dimLabel.toLowerCase()} (${activeIdx + 1} of ${nSlices})`} sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 90, "& .MuiSlider-mark": { bgcolor: "#ffc107", width: 5, height: 5, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" }, "& .MuiSlider-valueLabel": { maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }} />
                     )}

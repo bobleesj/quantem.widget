@@ -139,3 +139,56 @@ it("commits one frequency cutoff, where the ring is released, for a mouse drag o
   await settle();
   expect(model.written("frequency_filter_cutoff")).toEqual([0.7]);
 });
+
+/** A mouse drag of the MUI slider whose hidden input has `label`, on a track 0 to 100 px wide. */
+function dragSlider(label: string, positions: number[], betweenMoves: () => void = () => {}) {
+  const root = el.querySelector(`input[aria-label="${label}"]`)!.closest(".MuiSlider-root")!;
+  vi.spyOn(root, "getBoundingClientRect").mockReturnValue({ left: 0, width: 100, top: 0, height: 10, bottom: 10, right: 100 } as DOMRect);
+  const mouse = (type: string, clientX: number, target: EventTarget) => act(() => {
+    target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX, clientY: 5, button: 0, buttons: type === "mouseup" ? 0 : 1 }));
+  });
+  mouse("mousedown", positions[0], root);
+  for (const position of positions.slice(1)) {
+    mouse("mousemove", position, document);
+    betweenMoves();
+  }
+  mouse("mouseup", positions[positions.length - 1], document);
+}
+
+it("commits the band-pass width once, on release, not at every drag step", async () => {
+  const model = new Model({ frequency_filter: "bandpass", frequency_filter_enabled: true, show_frequency_filter: true });
+  await mount(model);
+  model.writes = [];
+  dragSlider("Band-pass width as fraction of Nyquist", [20, 30, 40, 60]);
+  await settle();
+  // 60 % of the 0.01 to 1 track, on the 0.005 step
+  expect(model.written("frequency_filter_width")).toEqual([0.605]);
+});
+
+it("keeps the current frame while a loop end is dragged", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const model = new Model({ n_slices: FRAMES, loop: true, loop_start: 0, loop_end: 3, slice_idx: 2 });
+  await mount(model);
+  model.writes = [];
+  // the start thumb (frame 0) moves to frame 1; the current frame (2) must not be re-sent mid-drag
+  const root = el.querySelector('input[data-index="0"]')!.closest(".MuiSlider-root")!;
+  vi.spyOn(root, "getBoundingClientRect").mockReturnValue({ left: 0, width: 90, top: 0, height: 10, bottom: 10, right: 90 } as DOMRect);
+  const mouse = (type: string, clientX: number, target: EventTarget) => act(() => {
+    target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX, clientY: 5, button: 0, buttons: 1 }));
+  });
+  mouse("mousedown", 1, root);
+  mouse("mousemove", 32, document);
+  act(() => { vi.advanceTimersByTime(1000); });
+  expect(model.written("loop_start")).toEqual([1]);
+  expect(model.written("slice_idx")).toEqual([]);
+  vi.useRealTimers();
+});
+
+it("marks More as active while denoise is on with its settings row closed", async () => {
+  const model = new Model({ denoise: "gaussian", denoise_enabled: true, show_denoise: false });
+  await mount(model);
+  const more = el.querySelector('button[aria-label="More tools"]')!;
+  const badge = more.parentElement!.querySelector(".MuiBadge-badge")!;
+  expect(badge.textContent).toBe("1");
+  expect(badge.classList.contains("MuiBadge-invisible")).toBe(false);
+});
