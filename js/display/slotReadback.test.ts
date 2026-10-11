@@ -64,4 +64,8 @@ describe("colormap readback of a slot with spare capacity", () => {
     expect(rgba).toHaveLength(16 * 8 * 4);
     expect(rgba!.every(value => value === 7)).toBe(true);
   });
+  it("refuses dimensions that do not match the pixel count", () => {
+    const engine = new GPUColormapEngine(mockDevice());
+    expect(() => engine.uploadData(0, new Float32Array(12), 4, 2)).toThrow("display dimensions 4x2 do not match 12 pixels");
+  });
 });

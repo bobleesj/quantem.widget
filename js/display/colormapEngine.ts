@@ -283,19 +283,18 @@ export class GPUColormapEngine {
     };
   }
 
-  /** Upload float32 image data for slot `idx`. Only call when data changes. */
-  uploadData(idx: number, data: Float32Array, width?: number, height?: number, rgbaCapacityHint?: number, directOnly: boolean = false): void {
+  /** Upload a width x height float32 image for slot `idx`. Only call when data changes. */
+  uploadData(idx: number, data: Float32Array, width: number, height: number, rgbaCapacityHint?: number, directOnly: boolean = false): void {
+    // a guessed near-square shape would paint a non-square image as noise, so a mismatch is refused
+    if (width < 1 || height < 1 || width * height !== data.length) {
+      throw new Error(`display dimensions ${width}x${height} do not match ${data.length} pixels`);
+    }
     this.ensurePipeline();
     while (this.slots.length <= idx) this.slots.push(null as never);
-    // Stale mount-time dims (e.g. width=1 from a closure) do not match the data
-    // length; derive near-square dims from the length instead.
-    const validDims = width && height && width > 1 && height > 1 && width * height === data.length;
-    const slotWidth = validDims ? width : Math.round(Math.sqrt(data.length));
-    const slotHeight = validDims ? height : Math.round(data.length / slotWidth);
     const byteSize = data.byteLength;
     const rgbaCapacity = directOnly ? 1 : Math.max(1, Math.round(rgbaCapacityHint ?? data.length));
     const existing = this.slots[idx];
-    if (existing && existing.dataOwnership === "owned" && existing.dataKind === "f32" && existing.directOnly === directOnly && existing.count === data.length && existing.width === slotWidth && existing.height === slotHeight && existing.rgbaCapacity >= rgbaCapacity) {
+    if (existing && existing.dataOwnership === "owned" && existing.dataKind === "f32" && existing.directOnly === directOnly && existing.count === data.length && existing.width === width && existing.height === height && existing.rgbaCapacity >= rgbaCapacity) {
       this.device.queue.writeBuffer(existing.dataBuffer, 0, data.buffer as ArrayBuffer, data.byteOffset, data.byteLength);
       return;
     }
@@ -307,7 +306,7 @@ export class GPUColormapEngine {
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
     this.device.queue.writeBuffer(dataBuffer, 0, data.buffer as ArrayBuffer, data.byteOffset, data.byteLength);
-    this.slots[idx] = this.createSlot(dataBuffer, "owned", "f32", data.length, slotWidth, slotHeight, rgbaCapacity, rgbaCapacity * 4, directOnly);
+    this.slots[idx] = this.createSlot(dataBuffer, "owned", "f32", data.length, width, height, rgbaCapacity, rgbaCapacity * 4, directOnly);
   }
 
   /** Upload one native uint8 image without expanding it to float32. */

@@ -95,3 +95,9 @@ it("paints only the sampled source pixels of a canvas, and leaves uncovered pixe
   const expected = Array.from(sourceIndex).flatMap(index => index < 0 ? [0, 0, 0, 0] : full.slice(4 * index, 4 * index + 4));
   expect(Array.from(target.data)).toEqual(expected);
 });
+
+it("refuses an image whose dimensions do not match its pixel count", async () => {
+  // a guessed near-square shape painted a non-square image as noise
+  const engine = await createColormapEngine();
+  expect(() => engine.uploadData(0, new Float32Array(12), 4, 2)).toThrow("display dimensions 4x2 do not match 12 pixels");
+});

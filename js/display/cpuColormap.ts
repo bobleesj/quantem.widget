@@ -15,7 +15,7 @@ import { type RenderPath } from "./device";
 export interface DisplayColormapEngine {
   readonly path: RenderPath;
   readonly slotCount: number;
-  uploadData(idx: number, data: Float32Array, width?: number, height?: number): void;
+  uploadData(idx: number, data: Float32Array, width: number, height: number): void;
   uploadUint8Data(idx: number, data: Uint8Array | Uint8ClampedArray, width: number, height: number, rgbaCapacityHint: number): void;
   computeRangeBatch(indices: number[]): Promise<{ min: number; max: number }[]>;
   computeHistogramBatch(indices: number[], ranges: { min: number; max: number }[], logScale?: boolean): Promise<number[][]>;
@@ -109,14 +109,13 @@ class CPUColormapEngine implements DisplayColormapEngine {
 
   get slotCount(): number { return this.slots.filter(slot => slot).length; }
 
-  uploadData(idx: number, data: Float32Array, width?: number, height?: number): void {
-    // Same dimension repair as GPUColormapEngine.uploadData (stale mount-time dims).
-    const validDims = width && height && width > 1 && height > 1 && width * height === data.length;
-    const slotWidth = validDims ? width : Math.round(Math.sqrt(data.length));
-    const slotHeight = validDims ? height : Math.round(data.length / slotWidth);
+  uploadData(idx: number, data: Float32Array, width: number, height: number): void {
+    if (width < 1 || height < 1 || width * height !== data.length) {
+      throw new Error(`display dimensions ${width}x${height} do not match ${data.length} pixels`);
+    }
     while (this.slots.length <= idx) this.slots.push(null);
     // Copy, as the GPU upload does: later edits to the caller's array must not repaint.
-    this.slots[idx] = { data: Float32Array.from(data), width: slotWidth, height: slotHeight, finite: false };
+    this.slots[idx] = { data: Float32Array.from(data), width, height, finite: false };
   }
 
   uploadUint8Data(idx: number, data: Uint8Array | Uint8ClampedArray, width: number, height: number): void {
