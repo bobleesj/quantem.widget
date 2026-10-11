@@ -469,6 +469,38 @@ function transformDisplaySample(data: Float32Array | null, logScale: boolean, fl
   return out;
 }
 
+/**
+ * A press on a slider's track (not a thumb) moves the current value to the
+ * pointer and follows it until release. MUI would instead move the nearest
+ * thumb, which on the range sliders here is a loop or angle bound.
+ * `apply(value, released)` receives every value, `released` on the last.
+ */
+function trackSliderPress(
+  event: React.PointerEvent<HTMLSpanElement>,
+  valueAt: (fraction: number) => number,
+  apply: (value: number, released: boolean) => void,
+): void {
+  if ((event.target as HTMLElement).closest(".MuiSlider-thumb")) return;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const valueFromClientX = (clientX: number) => valueAt(rect.width > 0 ? (clientX - rect.left) / rect.width : 0);
+  event.preventDefault();
+  event.stopPropagation();
+  event.nativeEvent.stopImmediatePropagation();
+  apply(valueFromClientX(event.clientX), false);
+  const onMove = (moveEvent: PointerEvent) => {
+    moveEvent.preventDefault();
+    apply(valueFromClientX(moveEvent.clientX), false);
+  };
+  const onUp = (upEvent: PointerEvent) => {
+    upEvent.preventDefault();
+    window.removeEventListener("pointermove", onMove, true);
+    window.removeEventListener("pointerup", onUp, true);
+    apply(valueFromClientX(upEvent.clientX), true);
+  };
+  window.addEventListener("pointermove", onMove, true);
+  window.addEventListener("pointerup", onUp, true);
+}
+
 interface LiveNumberSliderProps {
   value: number;
   min: number;
@@ -3239,24 +3271,10 @@ function Show3DSlices() {
       }
       return;
     }
-    const cursorCanvas = canvasRefs.current?.[axis];
-    if (!cursorCanvas || !panelFloats || panelFloats.length === 0) return;
-    const rect = cursorCanvas.getBoundingClientRect();
-    const canvasX = (event.clientX - rect.left) * (cursorCanvas.width / rect.width);
-    const canvasY = (event.clientY - rect.top) * (cursorCanvas.height / rect.height);
-    const { w: canvasW, h: canvasH, scaleX, scaleY } = canvasSizes[axis];
-    const view = liveZoomsRef.current[axis];
-    const centerX = canvasW / 2, centerY = canvasH / 2;
-    let imgCol: number, imgRow: number;
-    if (view.zoom !== 1 || view.panX !== 0 || view.panY !== 0) {
-      imgCol = ((canvasX - centerX - view.panX) / view.zoom + centerX) / scaleX;
-      imgRow = ((canvasY - centerY - view.panY) / view.zoom + centerY) / scaleY;
-    } else {
-      imgCol = canvasX / scaleX;
-      imgRow = canvasY / scaleY;
-    }
-    const pixelCol = Math.floor(imgCol);
-    const pixelRow = Math.floor(imgRow);
+    const point = imagePointFromEvent(event, axis);
+    if (!point || !panelFloats || panelFloats.length === 0) return;
+    const pixelCol = Math.floor(point.col);
+    const pixelRow = Math.floor(point.row);
     const [sliceH, sliceW] = sliceDims[axis];
     if (pixelCol < 0 || pixelCol >= sliceW || pixelRow < 0 || pixelRow >= sliceH) {
       setCursorInfoThrottled(null);
@@ -3829,35 +3847,11 @@ function Show3DSlices() {
   };
   const handleLoopSliderPointerDownCapture = (axis: number, event: React.PointerEvent<HTMLSpanElement>) => {
     if (event.button !== 0) return;
-    const target = event.target as HTMLElement;
-    if (target.closest(".MuiSlider-thumb")) return;
-    const rect = event.currentTarget.getBoundingClientRect();
     const max = sliceMaxes[axis];
-    const valueFromClientX = (clientX: number) => {
-      const pct = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
-      return Math.max(0, Math.min(max, Math.round(pct * max)));
-    };
-    const moveCurrent = (clientX: number, commit: boolean) => {
-      const next = valueFromClientX(clientX);
-      paintAndTrackRef.current?.(axis, next);
-      if (commit) [setSliceZ, setSliceY, setSliceX][axis](next);
-    };
-    event.preventDefault();
-    event.stopPropagation();
-    event.nativeEvent.stopImmediatePropagation();
-    moveCurrent(event.clientX, false);
-    const onMove = (ev: PointerEvent) => {
-      ev.preventDefault();
-      moveCurrent(ev.clientX, false);
-    };
-    const onUp = (ev: PointerEvent) => {
-      ev.preventDefault();
-      window.removeEventListener("pointermove", onMove, true);
-      window.removeEventListener("pointerup", onUp, true);
-      moveCurrent(ev.clientX, true);
-    };
-    window.addEventListener("pointermove", onMove, true);
-    window.addEventListener("pointerup", onUp, true);
+    trackSliderPress(event, (fraction) => Math.max(0, Math.min(max, Math.round(fraction * max))), (value, released) => {
+      paintAndTrackRef.current?.(axis, value);
+      if (released) [setSliceZ, setSliceY, setSliceX][axis](value);
+    });
   };
   // Over-clip detection: user dragged hist thumbs past data peak → image goes black.
   // Compute effective vmin/vmax in data units, compare against 1st/99th percentile of histogram.
@@ -3907,30 +3901,9 @@ function Show3DSlices() {
   const handleObliqueAnglePointerDownCapture = (event: React.PointerEvent<HTMLSpanElement>) => {
     if (event.button !== 0) return;
     pausePlaybackForEdit();
-    const target = event.target as HTMLElement;
-    if (target.closest(".MuiSlider-thumb")) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const valueFromClientX = (clientX: number) => {
-      const pct = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
-      const full = obliqueAngleSliderMin + pct * (obliqueAngleSliderMax - obliqueAngleSliderMin);
-      return Math.round(clampNumber(full, obliqueAngleMinBound, obliqueAngleMaxBound));
-    };
-    const moveCurrent = (clientX: number) => updateObliqueAngleWithinBounds(valueFromClientX(clientX));
-    event.preventDefault();
-    event.stopPropagation();
-    event.nativeEvent.stopImmediatePropagation();
-    moveCurrent(event.clientX);
-    const onMove = (ev: PointerEvent) => {
-      ev.preventDefault();
-      moveCurrent(ev.clientX);
-    };
-    const onUp = (ev: PointerEvent) => {
-      window.removeEventListener("pointermove", onMove, true);
-      window.removeEventListener("pointerup", onUp, true);
-      moveCurrent(ev.clientX);
-    };
-    window.addEventListener("pointermove", onMove, true);
-    window.addEventListener("pointerup", onUp, true);
+    trackSliderPress(event, (fraction) => Math.round(clampNumber(
+      obliqueAngleSliderMin + fraction * (obliqueAngleSliderMax - obliqueAngleSliderMin), obliqueAngleMinBound, obliqueAngleMaxBound,
+    )), (value) => updateObliqueAngleWithinBounds(value));
   };
   const obliqueCurrentOffset = obliqueCenterOffset(nx, ny, obliqueAngle, obliqueSegment.start, obliqueSegment.stop);
   // Plane center in image coordinates. Position measures along the plane normal,
@@ -4013,33 +3986,12 @@ function Show3DSlices() {
   const handleObliquePositionPointerDownCapture = (event: React.PointerEvent<HTMLSpanElement>) => {
     beginObliquePositionDrag();
     if (event.button !== 0) return;
-    const target = event.target as HTMLElement;
-    if (target.closest(".MuiSlider-thumb")) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const valueFromClientX = (clientX: number) => {
-      const pct = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
-      const full = obliquePositionSliderMin + pct * (obliquePositionSliderMax - obliquePositionSliderMin);
-      return Math.round(clampNumber(full, obliquePositionMinBound, obliquePositionMaxBound));
-    };
-    const moveCurrent = (clientX: number, commit: boolean) => {
-      updateObliqueFromNormalOffset(valueFromClientX(clientX));
-      if (commit) endObliquePositionDrag();
-    };
-    event.preventDefault();
-    event.stopPropagation();
-    event.nativeEvent.stopImmediatePropagation();
-    moveCurrent(event.clientX, false);
-    const onMove = (ev: PointerEvent) => {
-      ev.preventDefault();
-      moveCurrent(ev.clientX, false);
-    };
-    const onUp = (ev: PointerEvent) => {
-      window.removeEventListener("pointermove", onMove, true);
-      window.removeEventListener("pointerup", onUp, true);
-      moveCurrent(ev.clientX, true);
-    };
-    window.addEventListener("pointermove", onMove, true);
-    window.addEventListener("pointerup", onUp, true);
+    trackSliderPress(event, (fraction) => Math.round(clampNumber(
+      obliquePositionSliderMin + fraction * (obliquePositionSliderMax - obliquePositionSliderMin), obliquePositionMinBound, obliquePositionMaxBound,
+    )), (value, released) => {
+      updateObliqueFromNormalOffset(value);
+      if (released) endObliquePositionDrag();
+    });
   };
   const controlRowHeight = 28;
   const denseControlRow = {
