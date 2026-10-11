@@ -1446,11 +1446,7 @@ function Show3D() {
     setReorderPreviewOrderValue(orderedPanelIndices);
     setDragOverPanel(panel);
     beginReorderDragVisual(event, panel);
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // Some browser automation paths do not expose pointer capture.
-    }
+    event.currentTarget.setPointerCapture(event.pointerId);
     event.preventDefault();
     event.stopPropagation();
   }, [beginReorderDragVisual, orderedPanelIndices, reorderMode, setReorderPreviewOrderValue]);
@@ -1480,11 +1476,7 @@ function Show3D() {
     } else {
       cancelPanelReorderPreview();
     }
-    try {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    } catch {
-      // Ignore capture release failures from synthetic pointer streams.
-    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     event.preventDefault();
     event.stopPropagation();
   }, [cancelPanelReorderPreview, commitPanelReorderPreview, previewPanelReorderFromPoint, reorderDragHasPassedThreshold, reorderMode, updateReorderGhostPosition]);
@@ -1921,7 +1913,10 @@ function Show3D() {
         if (cache.size > 48) cache.delete(cache.keys().next().value as string);
         setBrowserFilterTick((t) => t + 1);
       })
-      .catch(() => { browserFilterPendingRef.current.delete(key); });
+      .catch((error) => {
+        browserFilterPendingRef.current.delete(key);
+        console.warn("[Show3D] denoise failed; showing the unfiltered frame", error);
+      });
     return allowRawOnMiss ? frame : null;
   }, [applyPackedPanelTransform, browserFilterCacheKeyForIndex, browserFilterKnobsOn, denoiseKnobsForPanel, denoiseResolved.mode, denoiseResolved.bin, denoiseScopeAll, denoiseSigmaLive, height, width]);
   // The "Denoise" toggle is the master ON/OFF of the EFFECT: ON shows the
@@ -2411,9 +2406,8 @@ function Show3D() {
       setLocalExportStatus(`Downloaded ${filename} to browser Downloads (${formatSavedBytes(blob.size)})`);
     } catch (err) {
       setLocalExportStatus(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setExportBusy(false);
     }
+    setExportBusy(false);
   };
   const handleGifExportSelect = (quality: string, requestOptions = animationExportRequest) => {
     if (canExportStandaloneGif) {
@@ -3300,7 +3294,8 @@ function Show3D() {
         setGpuCmapReady(true);
       }
       setGpuCmapChecked(true);
-    }).catch(() => {
+    }).catch((error) => {
+      console.warn("[Show3D] WebGPU colormap engine unavailable; drawing on the canvas", error);
       if (!disposed) setGpuCmapChecked(true);
     });
     return () => {
@@ -5168,11 +5163,7 @@ function Show3D() {
       const rotationAllowsGpuCache = (c.imageRotation % 4) === 0;
       let gpuResidentTransformReady = false;
       if (rotationAllowsGpuCache && normalizedAverageWindow(c.avgWindow) > 1) {
-        try {
-          gpuResidentTransformReady = renderGpuTemporalAverageSliceDirect(next, false);
-        } catch {
-          // a failed GPU draw falls back to the embedded frame below
-        }
+        gpuResidentTransformReady = renderGpuTemporalAverageSliceDirect(next, false);
       }
       const gpuCachedSlotReady = !transformActive
         && rotationAllowsGpuCache
@@ -5181,14 +5172,7 @@ function Show3D() {
       // and non-default transforms can make the direct path decline. Probe the
       // actual renderer; on a miss we still acquire a CPU frame instead
       // of advancing the slider over a frozen canvas.
-      let gpuCachedFrameReady = false;
-      if (gpuCachedSlotReady) {
-        try {
-          gpuCachedFrameReady = renderGpuCachedSliceDirect(next, false);
-        } catch {
-          // a failed GPU draw falls back to the embedded frame below
-        }
-      }
+      const gpuCachedFrameReady = gpuCachedSlotReady && renderGpuCachedSliceDirect(next, false);
       frame = getOfflineFrame(next);
       if (!frame && !gpuCachedFrameReady && !gpuResidentTransformReady) {
         // The embedded frame is not available yet; retry on the next tick.
@@ -10248,7 +10232,9 @@ function Show3D() {
     sliderGestureCleanupRef.current = cleanup;
     const endGesture = (event: Event) => {
       if (event instanceof PointerEvent && event.pointerId !== e.pointerId) return;
-      try { finish(event); } finally { cleanup(); }
+      // The listeners and the playback hold go first, so a failing commit cannot leave the gesture open.
+      cleanup();
+      finish(event);
     };
     const options = { capture: true, signal: controller.signal };
     window.addEventListener("pointerup", endGesture, options);
