@@ -1,6 +1,7 @@
 // Show3DSlices pointer behavior, mounted in jsdom (no WebGPU, so the slices
 // paint on the Canvas2D path). A drag of the oblique cut's handle moves the cut
-// once per pointer move, from one document listener bound once.
+// once per pointer move, from one document listener bound once; a click on an
+// FFT panel ends the pan even when the peak refinement after it fails.
 import { act } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -13,6 +14,11 @@ vi.mock("../display/colormaps", async (importOriginal) => {
     renderToOffscreenReuse: () => {},
   };
 });
+const peakRefinement = vi.hoisted(() => ({ findFFTPeakBrowser: vi.fn() }));
+vi.mock("../display/geometry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../display/geometry")>()),
+  findFFTPeakBrowser: peakRefinement.findFFTPeakBrowser,
+}));
 
 const { default: show3dslices } = await import("./index");
 
@@ -114,4 +120,27 @@ it("binds the oblique drag listeners once, not on every render", async () => {
     await settle();
   }
   expect(added.mock.calls.filter(([type]) => type === "mousemove")).toHaveLength(0);
+});
+
+it("ends the FFT pan on a click whose peak refinement fails", async () => {
+  model.values.show_fft = true;
+  peakRefinement.findFFTPeakBrowser.mockRejectedValue(new Error("device lost"));
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  mount();
+  // The FFT panels compute after an 80 ms debounce; the click snaps to a peak of the cached magnitude.
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 250)); });
+  const fft = el.querySelector<HTMLCanvasElement>('canvas[data-quantem-scientific-output="show3dslices-fft-0"]')!;
+  // Pressed and released before React commits, as automation and fast clicks deliver them.
+  act(() => {
+    mouse(fft, "mousedown", 100, 100);
+    mouse(fft, "mouseup", 100, 100, 0);
+  });
+  await settle();
+  expect(peakRefinement.findFFTPeakBrowser).toHaveBeenCalledOnce();
+  // With no button held, moving over the FFT must not pan it.
+  act(() => mouse(fft, "mousemove", 160, 100, 0));
+  act(() => mouse(document, "mouseup", 160, 100, 0));
+  await settle();
+  const fftZooms = (model.get("view_state") as { fft_zooms?: { panX: number }[] }).fft_zooms;
+  expect(fftZooms?.[0].panX ?? 0).toBe(0);
 });

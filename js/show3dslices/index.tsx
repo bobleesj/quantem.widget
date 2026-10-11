@@ -3567,82 +3567,63 @@ function Show3DSlices() {
     }
   };
 
+  // A stationary click measures the d-spacing at the nearest FFT peak. The drag
+  // ends before the async peak refinement, so a failed refinement cannot leave
+  // the panel panning under a released button.
   const handleFftMouseUp = async (event: React.MouseEvent, axis: number) => {
-    // Click detection for d-spacing measurement
-    if (fftClickStartRef.current && fftClickStartRef.current.axis === axis) {
-      const deltaX = event.clientX - fftClickStartRef.current.x;
-      const deltaY = event.clientY - fftClickStartRef.current.y;
-      if (Math.sqrt(deltaX * deltaX + deltaY * deltaY) < 3) {
-        const canvas = fftCanvasRefs.current[axis];
-        if (canvas) {
-          const rect = canvas.getBoundingClientRect();
-          const { w: canvasW, h: canvasH } = canvasSizes[axis];
-          const view = liveFftZoomsRef.current[axis];
-
-          const [sliceH, sliceW] = sliceDims[axis];
-          const fftW = nextPow2(sliceW);
-          const fftH = nextPow2(sliceH);
-
-          const mouseX = (event.clientX - rect.left) * (canvasW / rect.width);
-          const mouseY = (event.clientY - rect.top) * (canvasH / rect.height);
-          const centerX = canvasW / 2, centerY = canvasH / 2;
-          const imgX = (mouseX - centerX - view.panX) / view.zoom + centerX;
-          const imgY = (mouseY - centerY - view.panY) / view.zoom + centerY;
-          let imgCol = imgX / canvasW * fftW;
-          let imgRow = imgY / canvasH * fftH;
-
-          const cachedMag = fftMagCacheRefs.current[axis];
-          if (cachedMag && imgCol >= 0 && imgCol < fftW && imgRow >= 0 && imgRow < fftH) {
-            let snapped: { row: number; col: number };
-            try {
-              snapped = await findFFTPeakBrowser(cachedMag, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
-            } catch (error) {
-              console.error("[Show3DSlices] WebGPU FFT peak refinement failed", error);
-              return;
-            }
-            imgCol = snapped.col;
-            imgRow = snapped.row;
-          }
-
-          if (imgCol >= 0 && imgCol < fftW && imgRow >= 0 && imgRow < fftH) {
-            const dcCol = imgCol - fftW / 2;
-            const dcRow = imgRow - fftH / 2;
-            const distPx = Math.sqrt(dcCol * dcCol + dcRow * dcRow);
-            if (distPx < 1) {
-              setFftClickInfo(null);
-            } else {
-              let spatialFreq: number | null = null;
-              let dSpacing: number | null = null;
-              const axes = pixelSizeAxes && pixelSizeAxes.length === 3 ? pixelSizeAxes : null;
-              const theta = (obliqueAngle * Math.PI) / 180;
-              const obliqueSpacing = axes
-                ? Math.hypot(Math.cos(theta) * axes[2], Math.sin(theta) * axes[1])
-                : pixelSize;
-              const rowSpacing = axis === 0 ? (axes ? axes[1] : pixelSize) : (axes ? axes[0] : pixelSize);
-              const colSpacing = axis === 0 ? (axes ? axes[2] : pixelSize) : obliqueSpacing;
-              if (rowSpacing > 0 && colSpacing > 0) {
-                const paddedW = fftW;
-                const paddedH = fftH;
-                ({ spatialFrequency: spatialFreq, dSpacing } = reciprocalCoordinatesFromShiftedOffset(
-                  dcRow,
-                  dcCol,
-                  paddedH,
-                  paddedW,
-                  rowSpacing,
-                  colSpacing,
-                ));
-              }
-              setFftClickInfo({ axis, row: imgRow, col: imgCol, distPx, spatialFreq, dSpacing });
-            }
-          }
-        }
-      }
-    }
+    const click = fftClickStartRef.current;
     fftClickStartRef.current = null;
     if (fftZoomRafRef.current) { cancelAnimationFrame(fftZoomRafRef.current); fftZoomRafRef.current = 0; }
     commitLiveFftZoomsNow();
     setFftDragAxis(null);
     setFftDragStart(null);
+    if (!click || click.axis !== axis || Math.hypot(event.clientX - click.x, event.clientY - click.y) >= 3) return;
+    const canvas = fftCanvasRefs.current[axis];
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const { w: canvasW, h: canvasH } = canvasSizes[axis];
+    const view = liveFftZoomsRef.current[axis];
+    const [sliceH, sliceW] = sliceDims[axis];
+    const fftW = nextPow2(sliceW);
+    const fftH = nextPow2(sliceH);
+    const mouseX = (event.clientX - rect.left) * (canvasW / rect.width);
+    const mouseY = (event.clientY - rect.top) * (canvasH / rect.height);
+    const centerX = canvasW / 2, centerY = canvasH / 2;
+    let imgCol = ((mouseX - centerX - view.panX) / view.zoom + centerX) / canvasW * fftW;
+    let imgRow = ((mouseY - centerY - view.panY) / view.zoom + centerY) / canvasH * fftH;
+    if (imgCol < 0 || imgCol >= fftW || imgRow < 0 || imgRow >= fftH) return;
+    const cachedMag = fftMagCacheRefs.current[axis];
+    if (cachedMag) {
+      let snapped: { row: number; col: number };
+      try {
+        snapped = await findFFTPeakBrowser(cachedMag, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
+      } catch (error) {
+        console.error("[Show3DSlices] WebGPU FFT peak refinement failed", error);
+        return;
+      }
+      imgCol = snapped.col;
+      imgRow = snapped.row;
+    }
+    const dcCol = imgCol - fftW / 2;
+    const dcRow = imgRow - fftH / 2;
+    const distPx = Math.sqrt(dcCol * dcCol + dcRow * dcRow);
+    if (distPx < 1) {
+      setFftClickInfo(null);
+      return;
+    }
+    let spatialFreq: number | null = null;
+    let dSpacing: number | null = null;
+    const axes = pixelSizeAxes && pixelSizeAxes.length === 3 ? pixelSizeAxes : null;
+    const theta = (obliqueAngle * Math.PI) / 180;
+    const obliqueSpacing = axes
+      ? Math.hypot(Math.cos(theta) * axes[2], Math.sin(theta) * axes[1])
+      : pixelSize;
+    const rowSpacing = axis === 0 ? (axes ? axes[1] : pixelSize) : (axes ? axes[0] : pixelSize);
+    const colSpacing = axis === 0 ? (axes ? axes[2] : pixelSize) : obliqueSpacing;
+    if (rowSpacing > 0 && colSpacing > 0) {
+      ({ spatialFrequency: spatialFreq, dSpacing } = reciprocalCoordinatesFromShiftedOffset(dcRow, dcCol, fftH, fftW, rowSpacing, colSpacing));
+    }
+    setFftClickInfo({ axis, row: imgRow, col: imgCol, distPx, spatialFreq, dSpacing });
   };
 
   const handleFftResetAxis = (axis: number) => {
