@@ -14,15 +14,8 @@ convention the line sampler reads) and be drawn on those centers.
 """
 
 import json
-import os
-import socket
-import subprocess
-import sys
-import time
-import urllib.request
 from pathlib import Path
 
-import nbformat
 import numpy as np
 import pytest
 from PIL import Image
@@ -47,16 +40,8 @@ print(_json.dumps({
 """
 
 
-@pytest.fixture(scope="module")
-def jupyter(tmp_path_factory):
-    """A private JupyterLab with a kernel running this interpreter and its sys.path."""
-    root = tmp_path_factory.mktemp("live")
-    kernel_dir = root / "jupyter" / "kernels" / "quantem-browser-test"
-    kernel_dir.mkdir(parents=True)
-    (kernel_dir / "kernel.json").write_text(json.dumps({
-        "argv": [sys.executable, "-m", "ipykernel_launcher", "-f", "{connection_file}"],
-        "display_name": "quantem-browser-test", "language": "python",
-    }))
+@pytest.fixture(scope="module", autouse=True)
+def notebooks(jupyter):
     source = ("from quantem.widget import Show4DSTEM\nfrom quantem.widget.datasets import show4dstem_gold\n\n"
               "viewer = Show4DSTEM(show4dstem_gold(size=\"medium\"), show_fft=True)\nviewer")
     synthetic = ("import numpy as np\nfrom quantem.widget import Show4DSTEM\n\n"
@@ -64,54 +49,11 @@ def jupyter(tmp_path_factory):
                  "data[:, :, 5, 9] = 1000\ndata += (rows * 16 + cols)[:, :, None, None].astype(np.uint16)\n"
                  "viewer = Show4DSTEM(data)\nviewer")
     for name, cell in (("show4dstem_webgpu", source), ("show4dstem_cpu", source), ("show4dstem_pixels", synthetic)):
-        notebook = nbformat.v4.new_notebook(cells=[nbformat.v4.new_code_cell(cell)])
-        notebook.metadata["kernelspec"] = {"name": "quantem-browser-test", "display_name": "quantem-browser-test", "language": "python"}
-        nbformat.write(notebook, root / f"{name}.ipynb")
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    runtime = root / "runtime"
-    # An empty config dir keeps the user's Jupyter config (save hooks, extensions) out of the run.
-    env = {**os.environ, "JUPYTER_PATH": str(root / "jupyter"), "JUPYTER_RUNTIME_DIR": str(runtime),
-           "JUPYTER_CONFIG_DIR": str(root / "config")}
-    server = subprocess.Popen(
-        [sys.executable, "-m", "jupyterlab", "--no-browser", f"--port={port}", "--ip=127.0.0.1",
-         "--ServerApp.token=", "--ServerApp.password=", "--ServerApp.disable_check_xsrf=True",
-         f"--ServerApp.root_dir={root}", "--ServerApp.port_retries=0"],
-        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    url = f"http://127.0.0.1:{port}"
-    for _ in range(120):
-        try:
-            urllib.request.urlopen(f"{url}/api/status")
-            break
-        except OSError:
-            time.sleep(0.5)
-    yield {"url": url, "runtime": runtime}
-    for session in json.load(urllib.request.urlopen(f"{url}/api/sessions")):
-        urllib.request.urlopen(urllib.request.Request(f"{url}/api/sessions/{session['id']}", method="DELETE"))
-    server.terminate()
-    server.wait(timeout=30)
-
-
-def run_in_kernel(jupyter, notebook: str, code: str) -> str:
-    """Run ``code`` in the notebook's kernel and return what it printed."""
-    from jupyter_client import BlockingKernelClient
-
-    sessions = json.load(urllib.request.urlopen(f"{jupyter['url']}/api/sessions"))
-    kernel_id = next(session["kernel"]["id"] for session in sessions if session["path"].endswith(notebook))
-    client = BlockingKernelClient(connection_file=str(jupyter["runtime"] / f"kernel-{kernel_id}.json"))
-    client.load_connection_file()
-    client.start_channels()
-    chunks = []
-    client.execute_interactive(code, timeout=120, output_hook=lambda message: chunks.append(
-        message["content"].get("text", "")) if message["msg_type"] == "stream" else None)
-    client.stop_channels()
-    return "".join(chunks).strip()
+        jupyter.write_notebook(f"{name}.ipynb", cell)
 
 
 def kernel_report(jupyter, notebook: str) -> dict:
-    return json.loads(run_in_kernel(jupyter, notebook, REPORT).splitlines()[-1])
+    return json.loads(jupyter.run_in_kernel(notebook, REPORT).splitlines()[-1])
 
 
 def detector_on_screen(page, out: Path):
@@ -134,23 +76,9 @@ def drag(page, start, end):
     page.mouse.up()
 
 
-def run_notebook(open_page, jupyter, notebook: str, workspace: str, *, webgpu: bool, out: Path):
-    """Open the notebook in JupyterLab, run its cell and wait for the viewer."""
-    page = open_page(f"{jupyter['url']}/lab/workspaces/{workspace}/tree/{notebook}", webgpu=webgpu)
-    page.wait_for_selector(".jp-Notebook .jp-Cell", timeout=120_000)
-    page.wait_for_timeout(3000)
-    page.locator(".jp-Cell .cm-content").first.click()
-    page.keyboard.press("Shift+Enter")
-    page.mouse.move(5, 300)
-    page.screenshot(path=str(out / f"live_{workspace}_running.png"))
-    page.wait_for_selector(DP, timeout=300_000)
-    page.wait_for_timeout(6000)
-    return page
-
-
 def drive(open_page, jupyter, mode: str, out: Path) -> dict:
     notebook = f"show4dstem_{mode}.ipynb"
-    page = run_notebook(open_page, jupyter, notebook, mode, webgpu=mode == "webgpu", out=out)
+    page = jupyter.open(open_page, notebook, mode, webgpu=mode == "webgpu", ready=DP, out=out)
     steps = {"adapter": page.adapter(), "paths": page.render_paths()}
 
     def record(name: str) -> None:
@@ -248,11 +176,11 @@ def switch_profile(page, panel: int) -> None:
 
 def test_scan_roi_resize_follows_the_grab_and_profiles_sit_on_pixel_centers(jupyter, open_page, hardware_adapter, browser_out):
     notebook = "show4dstem_pixels.ipynb"
-    page = run_notebook(open_page, jupyter, notebook, "pixels", webgpu=True, out=browser_out)
+    page = jupyter.open(open_page, notebook, "pixels", webgpu=True, ready=DP, out=browser_out)
     hardware_adapter(page.adapter())
     page.locator(VI).first.scroll_into_view_if_needed()
     # A radius-4 scan ROI at (7, 7), pressed on its rim band 3 px right of the center and dragged 3 px further out
-    run_in_kernel(jupyter, notebook, "viewer.vi_roi_mode = 'circle'; viewer.vi_roi_radius = 4.0; "
+    jupyter.run_in_kernel(notebook, "viewer.vi_roi_mode = 'circle'; viewer.vi_roi_radius = 4.0; "
                                      "viewer.vi_roi_center_row = 7.0; viewer.vi_roi_center_col = 7.0; viewer.vi_roi_center = [7.0, 7.0]")
     page.wait_for_timeout(2000)
     start, end = pixel_center(page, VI, 7, 10), pixel_center(page, VI, 7, 13)
@@ -262,14 +190,14 @@ def test_scan_roi_resize_follows_the_grab_and_profiles_sit_on_pixel_centers(jupy
     for step in range(1, 7):
         page.mouse.move(start[0] + (end[0] - start[0]) * step / 6, start[1])
         page.wait_for_timeout(150)
-        radii.append(float(run_in_kernel(jupyter, notebook, "print(viewer.vi_roi_radius)")))
+        radii.append(float(jupyter.run_in_kernel(notebook, "print(viewer.vi_roi_radius)")))
     page.mouse.up()
     page.wait_for_timeout(1500)
     page.locator(VI).first.screenshot(path=str(browser_out / "live_pixels_scan_roi.png"))
-    roi = json.loads(run_in_kernel(jupyter, notebook, "import json; print(json.dumps([viewer.vi_roi_radius, viewer.vi_roi_center_row, viewer.vi_roi_center_col]))"))
+    roi = json.loads(jupyter.run_in_kernel(notebook, "import json; print(json.dumps([viewer.vi_roi_radius, viewer.vi_roi_center_row, viewer.vi_roi_center_col]))"))
     # the edge follows the pointer from the press: never below the starting radius, 4 + 3 at the end, center kept
     assert min(radii) >= 4 and roi == [7.0, 7.0, 7.0], (radii, roi)
-    run_in_kernel(jupyter, notebook, "viewer.vi_roi_mode = 'off'")
+    jupyter.run_in_kernel(notebook, "viewer.vi_roi_mode = 'off'")
     page.wait_for_timeout(1500)
     # Diffraction profile clicked on the centers of pixels (5, 2) and (5, 13) stores those indices
     page.locator(DP).first.scroll_into_view_if_needed()
@@ -279,7 +207,7 @@ def test_scan_roi_resize_follows_the_grab_and_profiles_sit_on_pixel_centers(jupy
         page.mouse.click(*pixel_center(page, DP, 5, col))
         page.wait_for_timeout(800)
     page.wait_for_timeout(1000)
-    line = json.loads(run_in_kernel(jupyter, notebook, "import json; print(json.dumps(viewer.profile_line))"))
+    line = json.loads(jupyter.run_in_kernel(notebook, "import json; print(json.dumps(viewer.profile_line))"))
     page.locator(DP).first.screenshot(path=str(browser_out / "live_pixels_dp_profile.png"))
     assert np.allclose([[point["row"], point["col"]] for point in line], [[5, 2], [5, 13]], atol=0.05), line
     # Virtual-image profile clicked on the centers of (3, 3) and (12, 3) is drawn through column 3's center
