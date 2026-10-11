@@ -86,7 +86,7 @@ class Model {
     image_flips_vertical: [false, false], panel_frame_counts: [1, 1], panel_frame_indices: [0, 0],
     panel_stack_offsets: [-1, -1], selected_idx: 0, stats_mean: [0, 0], stats_min: [0, 0], stats_max: [0, 0],
     stats_std: [0, 0], fft_window: true, fft_metrics: true, pixel_size: 0, pixel_unit: "pixels",
-    scale_bar_visible: true, show_panel_titles: true, title: "", n_pages: 1, page_idx: 0,
+    show_scale_bar: true, show_panel_titles: true, title: "", n_pages: 1, page_idx: 0,
   };
   listeners = new Map<string, Set<() => void>>();
   get(key: string) { return this.values[key]; }

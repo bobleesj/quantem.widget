@@ -195,7 +195,7 @@ const SHOW3D_STANDALONE_VIEW_STATE_KEYS = [
   "roi_list",
   "roi_selected_idx",
   "rotation_scope",
-  "scale_bar_visible",
+  "show_scale_bar",
   "selected_panels",
   "show_controls",
   "show_denoise",
@@ -1695,7 +1695,7 @@ function Show3D() {
   // Scale bar
   const [pixelSize] = useModelState<number>("pixel_size");
   const [pixelUnit] = useModelState<string>("pixel_unit");
-  const [scaleBarVisible] = useModelState<boolean>("scale_bar_visible");
+  const [showScaleBar] = useModelState<boolean>("show_scale_bar");
   const [smooth, setSmooth] = useModelState<boolean>("smooth");
   // Display-only filter knobs for sparse map stacks (EDS, low dose). The
   // browser filters the displayed frame; raw data is never modified.
@@ -2113,7 +2113,7 @@ function Show3D() {
     preset: exportGifPreset === "custom" ? "custom" : exportGifPreset,
     slides_preset: exportGifPreset === "slides",
     show_panel_titles: showPanelTitles !== false,
-    show_scale_bar: Boolean(scaleBarVisible),
+    show_scale_bar: Boolean(showScaleBar),
     show_zoom: showZoomIndicator === true,
   }), [
     exportFpsValue,
@@ -2124,7 +2124,7 @@ function Show3D() {
     selectedSpatialOption.maxEdgePx,
     exportGifPreset,
     showPanelTitles,
-    scaleBarVisible,
+    showScaleBar,
     showZoomIndicator,
   ]);
   const canDownloadCurrentHtml = !exportEnabled;
@@ -2338,7 +2338,7 @@ function Show3D() {
           outCtx.restore();
         }
       }
-      if (scaleBarVisible && pixelSize > 0) {
+      if (showScaleBar && pixelSize > 0) {
         // Bar, font and margins scale with the export size but never drop below
         // the animation minimums so small GIF frames stay legible.
         drawScaleBarInRegion(outCtx, { x, y, width: panelOutW, height: panelOutH }, 1, Math.max(1e-6, scale), pixelSize, pixelUnit || "px", {
@@ -6917,7 +6917,7 @@ function Show3D() {
     if (!ctx) return;
     ctx.clearRect(0, 0, uiRef.current.width, uiRef.current.height);
     const showImageZoomIndicator = showZoomIndicator === true && panelChromeVisible;
-    if (scaleBarVisible || showImageZoomIndicator) {
+    if (showScaleBar || showImageZoomIndicator) {
       const unit = pixelSize > 0 ? pixelUnit : "px";
       const pxSize = pixelSize > 0 ? pixelSize : 1;
       // Each slot draws its own bar from its own zoom so panels at different
@@ -6942,7 +6942,7 @@ function Show3D() {
         // Each slot is its own scale bar region: panels at different zoom levels
         // show their own length bar, capped at 25% of the slot so it never overflows.
         const slotRegion = { x: slotX, y: slotY, width: slotW, height: slotH };
-        if (scaleBarVisible) {
+        if (showScaleBar) {
           drawScaleBarInRegion(ctx, slotRegion, panelState.zoom, panelState.zoom * (slotW / sourcePanelWidth), pxSize, unit, { showZoomIndicator: showImageZoomIndicator, maxBarFraction: 0.25 });
         } else if (showImageZoomIndicator) {
           drawZoomIndicatorInRegion(ctx, slotRegion, panelState.zoom);
@@ -7010,7 +7010,7 @@ function Show3D() {
       }
       ctx.restore();
     }
-  }, [pixelSize, pixelUnit, scaleBarVisible, width, sourcePanelWidth, canvasW, canvasH, displayScale, firstPanelZoom, nPanels, visiblePanelCount, visiblePanelIndices, maxCols, panelStates, linkedState, linkPanels, panelGapPx, showZoomIndicator, panelChromeVisible, showColorbar, cmap, imageDataRange, imageVminPct, imageVmaxPct, logScale, autoContrast, imageHistogramData, autoVmins, autoVmaxs, displaySliceIdx, percentileLow, percentileHigh, dataMin, dataMax, traitVmin, traitVmax, linkContrast, sharedPanelSource, panelDataRanges, vminPerPanel, vmaxPerPanel, canvasRepaintSignal, dpr]);
+  }, [pixelSize, pixelUnit, showScaleBar, width, sourcePanelWidth, canvasW, canvasH, displayScale, firstPanelZoom, nPanels, visiblePanelCount, visiblePanelIndices, maxCols, panelStates, linkedState, linkPanels, panelGapPx, showZoomIndicator, panelChromeVisible, showColorbar, cmap, imageDataRange, imageVminPct, imageVmaxPct, logScale, autoContrast, imageHistogramData, autoVmins, autoVmaxs, displaySliceIdx, percentileLow, percentileHigh, dataMin, dataMax, traitVmin, traitVmax, linkContrast, sharedPanelSource, panelDataRanges, vminPerPanel, vmaxPerPanel, canvasRepaintSignal, dpr]);
 
   // Compute FFT magnitude (expensive, async - only re-run on data/GPU changes)
   // Supports ROI-scoped FFT: when ROI is active with a selected ROI, compute

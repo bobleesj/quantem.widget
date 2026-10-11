@@ -31,7 +31,7 @@ panels, paged galleries and standalone HTML and GIF exports. See the
 | Geometric panel overlays | `panel_overlays` | Circle, rectangle and square overlays in data or relative coordinates; More > Overlay Edit moves them live |
 | Rich panel titles | `panel_titles`, `panel_title_spans` | Titles may carry `text` / `math` / `color` spans such as `λ` and `χ²` |
 | Viewer chrome preset | `ui_mode` plus `show_title`, `show_stats`, `show_scale_bar` | Shared display presets; see [Viewer UI controls](viewer-ui) |
-| Scale bar | `pixel_size`, `pixel_unit`, `scale_bar_visible` | Physical scale bar from `sampling` / `units` or a `Dataset3d`; the ROI preview scale bar, line-profile axis and FFT d-spacing use the same unit |
+| Scale bar | `pixel_size`, `pixel_unit`, `show_scale_bar` | Physical scale bar from `sampling` / `units` or a `Dataset3d`; the ROI preview scale bar, line-profile axis and FFT d-spacing use the same unit |
 | Statistics | `show_stats` | Optional mean/min/max/std readout. Like the ROI statistics, line profile, FFT and cursor value it describes the frame as analysed (moving average, alignment, compare and difference applied), never the denoised or frequency-filtered image |
 | FFT | `show_fft`, `fft_layout`, `fft_overlay_position`, `fft_overlay_size`, `fft_overlay_zoom`, `fft_window` | FFT of the current frame below, beside or inside every panel |
 | Denoise | `denoise_enabled`, `denoise`, `denoise_sigma`, `denoise_bin`, `show_denoise` | Browser-side display filter; an active reduction prints a one-line banner. Changes the image only: the measurements read the unfiltered frame |

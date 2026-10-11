@@ -338,7 +338,7 @@ class Show3D(
 
     pixel_size = traitlets.Float(0.0).tag(sync=True)
     pixel_unit = traitlets.Unicode("A").tag(sync=True)
-    scale_bar_visible = traitlets.Bool(True).tag(sync=True)
+    show_scale_bar = traitlets.Bool(True).tag(sync=True)
     smooth = traitlets.Bool(False).tag(sync=True)
     image_rotation = traitlets.Int(0).tag(sync=True)
     rotation_scope = traitlets.Enum(["all", "frame"], default_value="all").tag(sync=True)
@@ -779,7 +779,7 @@ class Show3D(
             show_panel_titles=bool(ui["show_panel_titles"]),
             show_resize_handles=bool(ui["show_resize_handles"]),
             show_zoom_indicator=bool(ui["show_zoom_indicator"]),
-            scale_bar_visible=bool(ui["show_scale_bar"]),
+            show_scale_bar=bool(ui["show_scale_bar"]),
             inter_panel_gap_px=_nonnegative_int(panel_gap, name="panel_gap"),
         )
         self._static_fallback_mime = self._static_fallback_mime_type()
@@ -1210,7 +1210,7 @@ class Show3D(
         "inter_panel_gap_px", "show_panel_titles", "show_zoom_indicator", "show_fft", "fft_layout",
         "fft_overlay_position", "fft_overlay_size", "fft_overlay_zoom", "show_kymograph", "fft_window",
         "pixel_size", "pixel_unit", "smooth", "image_rotation", "rotation_scope", "frame_rotations",
-        "flip_horizontal", "flip_vertical", "scale_bar_visible", "size", "fps", "avg_window", "loop",
+        "flip_horizontal", "flip_vertical", "show_scale_bar", "size", "fps", "avg_window", "loop",
         "reverse", "boomerang", "loop_end", "loop_start", "bookmarked_frames", "starred", "hidden_panels",
         "selected_panels", "panel_order", "n_pages", "page_idx", "panels_per_page", "page_labels",
         "page_starred", "hidden_page_slots", "playback_path", "slice_idx", "roi_active", "roi_list",

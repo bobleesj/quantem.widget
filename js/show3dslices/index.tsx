@@ -883,7 +883,7 @@ function Show3DSlices() {
   const [dimLabels] = useModelState<string[]>("dim_labels");
   // Per-axis sampling [pz, py, px] in Angstrom (zeros when uncalibrated).
   const [pixelSizeAxes] = useModelState<number[]>("pixel_size_axes");
-  const [scaleBarVisible] = useModelState<boolean>("scale_bar_visible");
+  const [showScaleBar] = useModelState<boolean>("show_scale_bar");
   const [modelZStretch, setModelZStretch] = useModelState<number>("z_stretch");
   const [zStretch, setZStretch] = React.useState(modelZStretch);
   const pendingZStretchRef = React.useRef(modelZStretch);
@@ -2594,7 +2594,7 @@ function Show3DSlices() {
       uiCanvas.height = Math.round(displayH * dpr);
       const uiCtx = uiCanvas.getContext("2d");
       if (!uiCtx) continue;
-      if (scaleBarVisible) {
+      if (showScaleBar) {
         const spacing = sampling[axis].col;
         drawScaleBarHiDPI(uiCanvas, dpr, zooms[axis].zoom, spacing > 0 ? spacing : 1, spacing > 0 ? "Å" : "px", sliceDims[axis][1]);
       }
@@ -2608,7 +2608,7 @@ function Show3DSlices() {
         uiCtx.restore();
       }
     }
-  }, [pixelSizeAxes, scaleBarVisible, zooms, canvasSizes, sliceDims, showColorbar, cmap, displayDataRange, imageVminPct, imageVmaxPct, flip, obliqueAngle, themeInfo.theme]);
+  }, [pixelSizeAxes, showScaleBar, zooms, canvasSizes, sliceDims, showColorbar, cmap, displayDataRange, imageVminPct, imageVmaxPct, flip, obliqueAngle, themeInfo.theme]);
 
   // -------------------------------------------------------------------------
   // FFT computation and caching (per-axis: only recompute changed axes)

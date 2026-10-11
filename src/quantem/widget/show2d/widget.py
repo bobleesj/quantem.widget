@@ -403,7 +403,7 @@ class Show2D(
     units : str, optional
         Length unit of ``sampling`` (``"A"``, ``"nm"``, ...).
     show_scale_bar : bool, optional
-        Draw the scale bar (kept in the ``scale_bar_visible`` trait).
+        Draw the scale bar.
     scale_bar_position : {"bottom-right", "bottom-left"}
     scale_bar_panels : list of int or str, optional
         Panels (index or label) that draw a scale bar; default all.
@@ -514,7 +514,6 @@ class Show2D(
     # Synced traits the constructor sets itself, with what sets each one; a keyword
     # for one of them would be overwritten without a word (see reject_unknown_kwargs).
     _CONSTRUCTOR_TRAITS = {
-        "scale_bar_visible": "show_scale_bar",
         "initial_zoom": "zoom",
         "panel_cmaps": "cmap",
         "panel_cmaps_memory": "cmap",
@@ -672,7 +671,7 @@ class Show2D(
     panel_overlays = traitlets.List(traitlets.List(traitlets.Dict()), default_value=[]).tag(sync=True)
     pixel_size = traitlets.Float(0.0).tag(sync=True)
     pixel_unit = traitlets.Unicode("px").tag(sync=True)
-    scale_bar_visible = traitlets.Bool(True).tag(sync=True)
+    show_scale_bar = traitlets.Bool(True).tag(sync=True)
     scale_bar_position = traitlets.Unicode("bottom-right").tag(sync=True)
     scale_bar_panels = traitlets.List(trait=traitlets.Int(), default_value=[]).tag(sync=True)
     scale_bar_length = traitlets.Float(None, allow_none=True).tag(sync=True)
@@ -1163,7 +1162,7 @@ class Show2D(
             # one unit table for every widget: an unknown string raises, an uncalibrated axis is absent
             if unit_entry(self.pixel_unit)[0] == "pixels":
                 self.pixel_size, self.pixel_unit = 0.0, "px"
-            self.scale_bar_visible = bool(ui["show_scale_bar"])
+            self.show_scale_bar = bool(ui["show_scale_bar"])
             self.scale_bar_position = scale_bar_position
             self.scale_bar_length = None if scale_bar_length is None else float(scale_bar_length)
             self.scale_bar_label = "" if scale_bar_label is None else str(scale_bar_label)
@@ -1857,11 +1856,11 @@ class Show2D(
         dpi: int = 150,
         title: bool | str = False,
         colorbar: bool = False,
-        scalebar: bool = False,
+        show_scale_bar: bool = False,
     ) -> pathlib.Path:
         """Save current image as PNG, PDF, or TIFF.
 
-        When ``title``, ``colorbar``, or ``scalebar`` are enabled, the output
+        When ``title``, ``colorbar``, or ``show_scale_bar`` are enabled, the output
         is a publication-quality figure rendered via matplotlib. Otherwise a
         raw colormapped image is saved directly (faster, exact pixel output).
 
@@ -1879,7 +1878,7 @@ class Show2D(
             ``True`` uses the widget title, a string sets a custom title.
         colorbar : bool, default False
             Include a colorbar showing the intensity mapping.
-        scalebar : bool, default False
+        show_scale_bar : bool, default False
             Include a scale bar (requires ``pixel_size > 0``).
 
         Returns
@@ -1914,7 +1913,7 @@ class Show2D(
             # 8-bit levels: the colormap lookup and the PNG are both 256-level.
             levels = contrast_uint8(signed_log1p(frame) if self.log_scale else frame, display_min, display_max)
 
-        use_figure = title or colorbar or scalebar
+        use_figure = title or colorbar or show_scale_bar
         if not use_figure:
             pixels = display_pixels if panel_rgb is not None else colorize(levels / 255.0, cmap_name)
             Image.fromarray(pixels, mode="RGB").save(str(path), dpi=(dpi, dpi))
@@ -1947,7 +1946,7 @@ class Show2D(
             if self.log_scale:
                 colorbar_artist.set_label("log")
 
-        if scalebar and pixel_size > 0:
+        if show_scale_bar and pixel_size > 0:
             # A nice physical length near 20% of the image width.
             nice = round_to_nice(0.2 * width * pixel_size)
             bar_px = nice / pixel_size

@@ -193,7 +193,7 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     vmax = traitlets.Float(None, allow_none=True).tag(sync=True)
     # the [pz, py, px] sampling every panel's scale bar reads
     pixel_size_axes = traitlets.List(traitlets.Float(), default_value=[0.0, 0.0, 0.0]).tag(sync=True)
-    scale_bar_visible = traitlets.Bool(True).tag(sync=True)
+    show_scale_bar = traitlets.Bool(True).tag(sync=True)
     z_stretch = traitlets.Float(30.0).tag(sync=True)
     panel_width_px = traitlets.Int(0).tag(sync=True)
     view_state = traitlets.Dict(default_value={}).tag(sync=True)
@@ -237,7 +237,7 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         "show_colorbar", "image_vmin_pct", "image_vmax_pct", "show_slice_planes",
         "plane_visibility", "slice_alignment", "row_shift_px_per_slice", "col_shift_px_per_slice",
         "slice_alignment_cached", "volume_opacity", "slice_plane_opacity",
-        "pixel_size_axes", "scale_bar_visible", "z_stretch", "panel_width_px", "view_state",
+        "pixel_size_axes", "show_scale_bar", "z_stretch", "panel_width_px", "view_state",
         "slice_x", "slice_y", "slice_z", "oblique_angle", "oblique_profile_line", "fps", "loop",
         "reverse", "boomerang", "play_axis", "dim_labels",
     )
@@ -437,7 +437,7 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             self.show_title = bool(show_title)
             self.cmap = cmap
             self.pixel_size_axes = pixel_size_axes
-            self.scale_bar_visible = bool(show_scale_bar)
+            self.show_scale_bar = bool(show_scale_bar)
             self.z_stretch = float(z_stretch)
             self.panel_width_px = int(panel_width_px)
             self.show_fft = bool(show_fft)

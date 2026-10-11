@@ -292,7 +292,7 @@ def test_export_svg_writes_vector_chrome_around_png_panels(tmp_path: Path):
     assert ">raw</text>" in svg and ">A</text>" in svg and "<circle " in svg
     assert svg.count("<linearGradient") == 2 and 'fill="#ff0000"' in svg
     assert ">2 Å</text>" in svg  # 60 css px on a 300 px gallery panel of 64 px -> 2.9 A -> nice 2 A
-    assert Image.open(widget.save_image(tmp_path / "raw.png", scalebar=True, colorbar=True, title=True)).size[0] > 64
+    assert Image.open(widget.save_image(tmp_path / "raw.png", show_scale_bar=True, colorbar=True, title=True)).size[0] > 64
 
 
 def test_save_image_scale_bar_labels_the_pixel_unit(tmp_path: Path, monkeypatch):
@@ -304,7 +304,7 @@ def test_save_image_scale_bar_labels_the_pixel_unit(tmp_path: Path, monkeypatch)
         return draw_text(self, x, y, text, *args, **kwargs)
 
     monkeypatch.setattr(matplotlib.axes.Axes, "text", record_text)
-    Show2D(_frame(), sampling=0.2, units="nm", verbose=False).save_image(tmp_path / "nm.png", scalebar=True)
+    Show2D(_frame(), sampling=0.2, units="nm", verbose=False).save_image(tmp_path / "nm.png", show_scale_bar=True)
     assert drawn == ["2 nm"]  # 20% of 64 px x 0.2 nm = 2.56 nm -> nice 2 nm, never "2 Å"
 
 
@@ -509,7 +509,9 @@ def test_one_annotation_with_panel_targets_only_that_panel():
 
 def test_keywords_the_constructor_sets_itself_raise():
     # A-2: these traits were accepted and then silently overwritten in __init__.
-    with pytest.raises(TypeError, match="show_scale_bar"):
+    # the scale bar has one name, keyword and trait; the earlier trait name is refused
+    assert Show2D(_frame(), show_scale_bar=False, verbose=False).show_scale_bar is False
+    with pytest.raises(TypeError, match="scale_bar_visible"):
         Show2D(_frame(), scale_bar_visible=False, verbose=False)
     with pytest.raises(TypeError, match="image_rotations"):
         Show2D(_frame(), image_rotations=[1], verbose=False)
@@ -584,7 +586,7 @@ def test_save_image_uses_the_panel_colormap_window_and_native_pixel_size(tmp_pat
     drawn: list[str] = []
     draw_text = matplotlib.axes.Axes.text
     monkeypatch.setattr(matplotlib.axes.Axes, "text", lambda self, x, y, text, *a, **k: drawn.append(text) or draw_text(self, x, y, text, *a, **k))
-    Show2D(_frame(0, (64, 64)), sampling=0.2, units="nm", display_bin=2, verbose=False).save_image(tmp_path / "bar.png", scalebar=True)
+    Show2D(_frame(0, (64, 64)), sampling=0.2, units="nm", display_bin=2, verbose=False).save_image(tmp_path / "bar.png", show_scale_bar=True)
     assert drawn == ["2 nm"]  # 20% of 64 native px x 0.2 nm = 2.56 nm -> 2 nm; the binned 0.4 nm drew "5 nm"
 
 

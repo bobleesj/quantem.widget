@@ -249,7 +249,7 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
     image_cmap = traitlets.Unicode("viridis").tag(sync=True)
     pixel_size = traitlets.Float(0.0).tag(sync=True)
     pixel_unit = traitlets.Unicode("px").tag(sync=True)
-    scale_bar_visible = traitlets.Bool(True).tag(sync=True)
+    show_scale_bar = traitlets.Bool(True).tag(sync=True)
     snapshot_playing = traitlets.Bool(False).tag(sync=True)
     snapshot_fps = traitlets.Int(2).tag(sync=True)
     snapshot_loop = traitlets.Bool(True).tag(sync=True)
@@ -725,7 +725,7 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
             cmap=self.image_cmap,
             sampling=self.pixel_size if self.pixel_size > 0 else None,
             units=self.pixel_unit,
-            show_scale_bar=self.scale_bar_visible,
+            show_scale_bar=self.show_scale_bar,
             show_fft=self.show_snapshot_fft,
             show_controls=True,
             controls_collapsed=False,

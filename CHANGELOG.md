@@ -115,6 +115,10 @@ Changed:
   `image_bin`; default file-name suffixes `_Nxdownsample(d)` and `_Nxbin` to
   `_image_binN`; status text "Nx downsample" to "image bin Nx". `Show2D` trait
   `_display_bin_factor` to `display_bin`, the name `Show3D` uses.
+- The scale bar has one name: trait `scale_bar_visible` of `Show1D`, `Show2D`,
+  `Show3D` and `Show3DSlices` to `show_scale_bar` (the constructor keyword and
+  the `Show4DSTEM` trait), and `Show2D.save_image(scalebar=)` to
+  `show_scale_bar=`.
 - quantem.gpu is reached through `quantem.widget.adapters.gpu.SsbSession`
   (and `js/showptycho/engineAdapter.ts` for the browser engine), the one place
   that holds quantem.gpu's own names; `adapters.gpu.ssb_session` is removed.

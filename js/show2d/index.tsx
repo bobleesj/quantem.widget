@@ -188,7 +188,7 @@ const SHOW2D_STANDALONE_VIEW_STATE_KEYS = [
   "scale_bar_panels",
   "scale_bar_position",
   "scale_bar_style",
-  "scale_bar_visible",
+  "show_scale_bar",
   "selected_idx",
   "selected_panels",
   "show_controls",
@@ -1047,7 +1047,7 @@ function Show2D() {
 
   const [pixelSize] = useModelState<number>("pixel_size");
   const [pixelUnit] = useModelState<string>("pixel_unit");
-  const [scaleBarVisible] = useModelState<boolean>("scale_bar_visible");
+  const [showScaleBar] = useModelState<boolean>("show_scale_bar");
   const [scaleBarPosition] = useModelState<string>("scale_bar_position");
   const [scaleBarPanels] = useModelState<number[]>("scale_bar_panels");
   const [scaleBarLength] = useModelState<number | null>("scale_bar_length");
@@ -1366,7 +1366,7 @@ function Show2D() {
   const hasPanelAnnotations = React.useMemo(() => (panelAnnotations || []).some((items) => items && items.length > 0), [panelAnnotations]);
   const hasEditablePanelDecorations = hasPanelOverlays || hasPanelAnnotations;
   const scaleBarPanelSet = React.useMemo(() => new Set((scaleBarPanels || []).map((value) => Number(value)).filter((value) => Number.isFinite(value))), [scaleBarPanels]);
-  const panelHasScaleBar = React.useCallback((panel: number) => scaleBarVisible && (scaleBarPanelSet.size === 0 || scaleBarPanelSet.has(panel)), [scaleBarPanelSet, scaleBarVisible]);
+  const panelHasScaleBar = React.useCallback((panel: number) => showScaleBar && (scaleBarPanelSet.size === 0 || scaleBarPanelSet.has(panel)), [scaleBarPanelSet, showScaleBar]);
   React.useEffect(() => {
     if (!overlayBaselineRef.current && hasPanelOverlays) {
       overlayBaselineRef.current = clonePanelOverlays(panelOverlays);
@@ -6107,7 +6107,7 @@ function Show2D() {
     const rect = canvas.getBoundingClientRect();
     const cssX = (e.clientX - rect.left) * (canvas.width / Math.max(1, rect.width));
     const cssY = (e.clientY - rect.top) * (canvas.height / Math.max(1, rect.height));
-    const inset = insetPlotGeometry(spec, canvas.width, canvas.height, scaleBarVisible);
+    const inset = insetPlotGeometry(spec, canvas.width, canvas.height, showScaleBar);
     if (!inset) return false;
     const grabPad = 10;
     if (
@@ -6135,7 +6135,7 @@ function Show2D() {
     e.preventDefault();
     e.stopPropagation();
     return true;
-  }, [hasInsetPlots, insetPlotSpecFor, scaleBarVisible, scheduleInsetDragPaint, showInsetPlots]);
+  }, [hasInsetPlots, insetPlotSpecFor, showScaleBar, scheduleInsetDragPaint, showInsetPlots]);
 
   const updateInsetPlotDrag = React.useCallback((e: React.MouseEvent, idx: number): boolean => {
     const drag = insetDragStateRef.current;
@@ -6165,13 +6165,13 @@ function Show2D() {
     const canvas = canvasRefs.current[idx];
     const draft = insetDragDraftRef.current.get(idx);
     if (canvas && draft) {
-      const inset = insetPlotGeometry(draft, canvas.width, canvas.height, scaleBarVisible);
+      const inset = insetPlotGeometry(draft, canvas.width, canvas.height, showScaleBar);
       if (inset) {
         const right = inset.x0 + inset.boxW / 2 >= canvas.width / 2;
         const bottom = inset.y0 + inset.boxH / 2 >= canvas.height / 2;
         const position = `${bottom ? "bottom" : "top"}-${right ? "right" : "left"}` as InsetPlotSpec["position"];
         const marginX = right ? canvas.width - inset.x0 - inset.boxW : inset.x0;
-        const bottomScaleBarOffset = scaleBarVisible && position === "bottom-right" ? 34 : 0;
+        const bottomScaleBarOffset = showScaleBar && position === "bottom-right" ? 34 : 0;
         const marginY = bottom ? canvas.height - inset.y0 - inset.boxH - bottomScaleBarOffset : inset.y0 - 18;
         const { box: _box, ...rest } = draft;
         const nextSpec: InsetPlotSpec = {
@@ -6195,7 +6195,7 @@ function Show2D() {
       e.stopPropagation();
     }
     return true;
-  }, [insetPlots, scaleBarVisible, scheduleInsetDragPaint, setInsetPlots]);
+  }, [insetPlots, showScaleBar, scheduleInsetDragPaint, setInsetPlots]);
 
   const handleMouseDown = (e: React.MouseEvent, idx: number) => {
     if (e.detail >= 2) {
@@ -6385,7 +6385,7 @@ function Show2D() {
         canvas.height,
         mouseCanvasX,
         mouseCanvasY,
-        scaleBarVisible,
+        showScaleBar,
       ) : null;
       const insetHoverKey = insetHover
         ? `${insetHover.idx}:${insetHover.text}:${insetHover.leftPct.toFixed(1)}:${insetHover.topPct.toFixed(1)}`

@@ -31,7 +31,7 @@ class Show1DState:
         "snapshot_contrast_preset", "snapshot_contrast_range", "snapshot_panel_contrast_ranges",
         "snapshot_thumbnail_size", "snapshot_panel_width_px", "snapshot_columns", "snapshot_overlay_position",
         "snapshot_real_space_zoom", "snapshot_real_space_center", "snapshot_fft_zoom", "snapshot_fft_center",
-        "image_cmap", "pixel_size", "pixel_unit", "scale_bar_visible",
+        "image_cmap", "pixel_size", "pixel_unit", "show_scale_bar",
         "snapshot_playing", "snapshot_fps", "snapshot_loop", "snapshot_bounce",
         "starred_snapshot_image_labels", "hidden_snapshot_image_labels", "trial_notes", "trial_tags",
         "show_trial_notes", "show_starred_only", "review_mode", "trial_sort_key", "trial_sort_descending",

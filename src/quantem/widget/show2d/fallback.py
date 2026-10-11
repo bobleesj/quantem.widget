@@ -448,7 +448,7 @@ class Show2DStaticPng:
         texts: list[tuple[str, str, str, float]] = []
         for spec in specs:
             panel_index = int(spec.get("panel_index", len(texts)))
-            if not self.scale_bar_visible or (bar_panels and panel_index not in bar_panels):
+            if not self.show_scale_bar or (bar_panels and panel_index not in bar_panels):
                 texts.append((spec["label"], zoom_text, "", 0.0))
                 continue
             full_w = spec["frame"].shape[1]
@@ -595,7 +595,7 @@ class Show2DStaticPng:
                 box_y = 0.5 - box_h / 2
             else:
                 box_y = 1.0 - box_h - margin_y
-            if self.scale_bar_visible and position == "bottom-right":
+            if self.show_scale_bar and position == "bottom-right":
                 box_y += 0.10
         inset = ax.inset_axes([box_x, box_y, box_w, box_h])
         background_alpha = max(0.0, min(1.0, float(spec.get("background_alpha", 0.68))))
@@ -841,7 +841,7 @@ class Show2DStaticPng:
                         fontsize=title_px * points_per_css_px, fontweight="bold",
                         fontfamily=font_family, ha="center", va="top",
                         path_effects=stroke)
-            if self.scale_bar_visible:
+            if self.show_scale_bar:
                 # drawScaleBarHiDPI (js/figure.ts): margin 12, bar 5 px thick,
                 # 16px label centered 4px above the bar, optional zoom badge
                 # on the opposite corner sharing the bar's bottom edge.

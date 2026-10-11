@@ -47,7 +47,7 @@ const SHOW1D_TO_SHOW2D_LINKED_TRAITS = [
   { source: "show_stats" },
   { source: "show_controls" },
   { source: "controls_collapsed" },
-  { source: "scale_bar_visible" },
+  { source: "show_scale_bar" },
 ];
 
 type ProfilePoint = {
@@ -1129,7 +1129,7 @@ function InteractiveFloatCanvas({
   selected = false,
   loading = false,
   displayRange,
-  scaleBarVisible,
+  showScaleBar,
   overlayPosition,
   pixelSize,
   pixelUnit,
@@ -1153,7 +1153,7 @@ function InteractiveFloatCanvas({
   selected?: boolean;
   loading?: boolean;
   displayRange?: [number, number];
-  scaleBarVisible: boolean;
+  showScaleBar: boolean;
   overlayPosition: string;
   pixelSize: number;
   pixelUnit: string;
@@ -1353,11 +1353,11 @@ function InteractiveFloatCanvas({
       ctx.fill();
       ctx.restore();
     }
-    if (!scaleBarVisible) return;
+    if (!showScaleBar) return;
     const pxSize = pixelSize > 0 ? pixelSize : 1;
     const unit = pixelSize > 0 ? pixelUnit : "px";
     drawPanelScaleBarHiDPI(overlay, dpr, localView.zoom, pxSize, unit, width);
-  }, [cleanView, colors.accent, currentApiView, drawTick, height, pixelSize, pixelUnit, profileActive, profileLine, scaleBarVisible, width]);
+  }, [cleanView, colors.accent, currentApiView, drawTick, height, pixelSize, pixelUnit, profileActive, profileLine, showScaleBar, width]);
 
   const handleWheel = React.useCallback((event: WheelEvent) => {
     const target = canvasRef.current ?? hostRef.current;
@@ -1532,7 +1532,7 @@ function InteractiveFloatCanvas({
             position: "absolute",
             zIndex: 2,
             top: overlayOnBottom ? "auto" : 6,
-            bottom: overlayOnBottom ? (scaleBarVisible && overlayOnRight ? 34 : 6) : "auto",
+            bottom: overlayOnBottom ? (showScaleBar && overlayOnRight ? 34 : 6) : "auto",
             left: overlayOnRight ? "auto" : 6,
             right: overlayOnRight ? 6 : "auto",
             maxWidth: "calc(100% - 12px)",
@@ -1592,7 +1592,7 @@ function SnapshotImageCanvas({
   contrastRange,
   selected,
   label,
-  scaleBarVisible,
+  showScaleBar,
   overlayPosition,
   pixelSize,
   pixelUnit,
@@ -1630,7 +1630,7 @@ function SnapshotImageCanvas({
   contrastRange: [number, number] | null;
   selected: boolean;
   label: string;
-  scaleBarVisible: boolean;
+  showScaleBar: boolean;
   overlayPosition: string;
   pixelSize: number;
   pixelUnit: string;
@@ -1859,7 +1859,7 @@ function SnapshotImageCanvas({
           label={label}
           selected={selected}
           displayRange={imageDisplayRange}
-          scaleBarVisible={scaleBarVisible}
+          showScaleBar={showScaleBar}
           overlayPosition={mainLabelPosition}
           pixelSize={pixelSize}
           pixelUnit={pixelUnit}
@@ -1911,7 +1911,7 @@ function SnapshotImageCanvas({
               label={fftLabel}
               selected={false}
               displayRange={FFT_DISPLAY_RANGE}
-              scaleBarVisible={false}
+              showScaleBar={false}
               overlayPosition="top-right"
               pixelSize={1}
               pixelUnit="px"
@@ -1945,7 +1945,7 @@ function SnapshotImageCanvas({
             label={fftLabel}
             selected={false}
             displayRange={FFT_DISPLAY_RANGE}
-            scaleBarVisible={false}
+            showScaleBar={false}
             overlayPosition={overlayPosition}
             pixelSize={1}
             pixelUnit="px"
@@ -2495,7 +2495,7 @@ function Show1DWidget() {
   const [showSnapshotProfile, setShowSnapshotProfile] = useModelState<boolean>("show_snapshot_profile");
   const [snapshotProfileLine, setSnapshotProfileLine] = useModelState<ProfilePoint[]>("snapshot_profile_line");
   const [snapshotProfileHeight] = useModelState<number>("snapshot_profile_height");
-  const [scaleBarVisible] = useModelState<boolean>("scale_bar_visible");
+  const [showScaleBar] = useModelState<boolean>("show_scale_bar");
   const [pixelSize] = useModelState<number>("pixel_size");
   const [pixelUnit] = useModelState<string>("pixel_unit");
   const [snapshotPlaying, setSnapshotPlaying] = useModelState<boolean>("snapshot_playing");
@@ -5043,7 +5043,7 @@ function Show1DWidget() {
                           contrastRange={panelContrastRanges?.[imageLabel]?.length === 2 ? panelContrastRanges[imageLabel] as [number, number] : customSnapshotContrastRange}
                           selected={selected}
                           label={compactScienceLabel(imageLabel)}
-                          scaleBarVisible={Boolean(scaleBarVisible)}
+                          showScaleBar={Boolean(showScaleBar)}
                           overlayPosition={resolvedSnapshotOverlayPosition}
                           pixelSize={Number.isFinite(pixelSize) && pixelSize > 0 ? pixelSize : 1}
                           pixelUnit={pixelSize > 0 ? pixelUnit : "px"}

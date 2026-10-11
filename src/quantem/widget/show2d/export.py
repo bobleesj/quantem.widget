@@ -309,7 +309,7 @@ def _inset_svg(
     panel_h: float,
     fallback_color: str,
     *,
-    scale_bar_visible: bool,
+    show_scale_bar: bool,
 ) -> str:
     """One inset curve (e.g. a calibration plot) drawn as a vector polyline."""
     if not spec:
@@ -341,7 +341,7 @@ def _inset_svg(
         position = str(spec.get("position", "bottom-right"))
         box_x = x + (panel_w - box_w - margin_x if "right" in position else panel_w / 2 - box_w / 2 if "center" in position else margin_x)
         # A bottom-right inset lifts above the scale bar so the two never overlap.
-        box_y = y + (panel_h - box_h - margin_y - (34.0 if scale_bar_visible and position == "bottom-right" else 0.0) if "bottom" in position else panel_h / 2 - box_h / 2 if "center" in position else margin_y + 18.0)
+        box_y = y + (panel_h - box_h - margin_y - (34.0 if show_scale_bar and position == "bottom-right" else 0.0) if "bottom" in position else panel_h / 2 - box_h / 2 if "center" in position else margin_y + 18.0)
     show_ticks = bool(spec.get("show_ticks", False))
     tick_font = max(5.0, min(14.0, float(spec.get("tick_font_size", 7.0))))
     label_font = max(6.0, min(16.0, float(spec.get("label_font_size", 8.0))))
@@ -686,7 +686,7 @@ class Show2DExport:
         ncols = max(1, min(int(self.ncols), len(specs)))
         title_text = self.title if title is None else str(title)
         title_h = 30 if title_text and self.show_title else 0
-        draw_scale = bool(include_scale_bar and self.scale_bar_visible)
+        draw_scale = bool(include_scale_bar and self.show_scale_bar)
         resample = Image.Resampling.BILINEAR if self.smooth else Image.Resampling.NEAREST
         panels: list[dict[str, object]] = []
         overlays = self._static_overlay_texts(specs, css_px=panel_w)
@@ -790,7 +790,7 @@ class Show2DExport:
                 if bool(self.show_inset_plots) and panel_index < len(self.inset_plots):
                     elements.append(_inset_svg(
                         self.inset_plots[panel_index], x, y, panel_w, panel_h, _panel_line_color(self, panel_index),
-                        scale_bar_visible=bool(self.scale_bar_visible),
+                        show_scale_bar=bool(self.show_scale_bar),
                     ))
                 if panel_index < len(self.panel_overlays):
                     for overlay_spec in self.panel_overlays[panel_index]:

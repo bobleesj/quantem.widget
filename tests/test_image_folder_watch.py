@@ -461,7 +461,7 @@ def test_watched_folder_empty_opt_in_anchors_shape_and_prunes_errors(
     try:
         assert widget.folder_waiting is True
         assert widget.pixel_size == 0.0
-        assert widget.scale_bar_visible is False
+        assert widget.show_scale_bar is False
         assert "waiting" in source.calibration_status
 
         # C2: the first poll sees compatible files around one mismatch, expect
@@ -476,7 +476,7 @@ def test_watched_folder_empty_opt_in_anchors_shape_and_prunes_errors(
         assert [path.name for path in source.paths] == ["frame_1.npy", "frame_3.npy"]
         assert mismatch.resolve() in source.errors
         assert widget.folder_waiting is False
-        assert widget.scale_bar_visible is True
+        assert widget.show_scale_bar is True
 
         # C3: a rejected file disappears, expect its stale diagnostic to be pruned
         # without changing represented records.
@@ -571,7 +571,7 @@ def test_folder_widget_append_preserves_display_bin_and_calibration(
         np.testing.assert_array_equal(widget._data[:, 0, 0], [1, 2])
         assert widget._display_data.shape == (2, 4, 5)
         assert widget.pixel_size == pytest.approx(1.0)
-        assert widget.scale_bar_visible is True
+        assert widget.show_scale_bar is True
         if viewer is Show2D:
             assert widget.display_bin == 2
         else:
@@ -626,7 +626,7 @@ def test_folder_calibration_is_preserved_until_files_disagree(
     try:
         assert widget.pixel_size == pytest.approx(0.2)
         assert widget.pixel_unit == "nm"
-        assert widget.scale_bar_visible is True
+        assert widget.show_scale_bar is True
 
         sampling_by_name["frame_3.fake.npy"] = 0.3
         (tmp_path / "frame_3.fake.npy").write_bytes(b"new mixed calibration")
@@ -634,7 +634,7 @@ def test_folder_calibration_is_preserved_until_files_disagree(
         assert widget.poll_folder() == [2]
 
         assert widget.pixel_size == 0.0
-        assert widget.scale_bar_visible is False
+        assert widget.show_scale_bar is False
         assert "different sampling or units" in widget._folder_source.calibration_status
     finally:
         widget.close()

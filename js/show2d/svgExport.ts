@@ -267,11 +267,11 @@ export function svgInsetPlotElement(
   panelW: number,
   panelH: number,
   fallbackColor: string,
-  scaleBarVisible: boolean,
+  showScaleBar: boolean,
   panel: number,
   clipId: string,
 ): string {
-  const inset = insetPlotGeometry(spec, panelW, panelH, scaleBarVisible);
+  const inset = insetPlotGeometry(spec, panelW, panelH, showScaleBar);
   if (!inset || !spec) return "";
   const { finite, xlim, ylim, x0, y0, boxW, boxH, plotX0, plotY0, plotW, plotH, showTicks, tickFont, labelFont, legendFont } = inset;
   const left = x + x0;

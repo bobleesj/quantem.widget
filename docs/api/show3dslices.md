@@ -8,7 +8,7 @@ Linked top and arbitrary-angle side cuts through a 3D volume. See the
 `Show3DSlices` takes the shared `show_title` and `show_scale_bar` names at
 construction; `show_controls`, `controls_collapsed` and `show_crosshair` are
 synced traits set after construction, as the browser controls do. The
-saved-state scale-bar trait is `scale_bar_visible`. See
+saved-state scale-bar trait is `show_scale_bar`. See
 [Viewer UI controls](viewer-ui).
 
 ## Reference
@@ -36,7 +36,7 @@ saved-state scale-bar trait is `scale_bar_visible`. See
 | Slice alignment | `slice_alignment`, `row_shift_px_per_slice`, `col_shift_px_per_slice` | Open **Advanced** and enable **Slice alignment**. The first enable estimates one global row/col shift per slice automatically; later raw/aligned toggles reuse the cached estimate and aligned display volume. The sliders refine the cached result without modifying the raw volume. |
 | FFT toggle | `show_fft`, `fft_window` | Panels show power spectra |
 | Z-stretch | `z_stretch` | Depth axis scaled for anisotropic voxels |
-| Scale bar toggle | `scale_bar_visible` | Calibrated bar shows/hides |
+| Scale bar toggle | `show_scale_bar` | Calibrated bar shows/hides |
 | Export button | `export_request`, `export_status` | Writes a standalone HTML viewer (exact / quantized) |
 
 Automatic slice alignment (`quantem.widget.show3dslices.alignment`) high-pass

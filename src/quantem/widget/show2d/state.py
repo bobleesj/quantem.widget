@@ -84,7 +84,7 @@ class Show2DState:
         "show_stats", "show_fft", "fft_window", "fft_metrics",
         "show_controls", "controls_collapsed",
         "pixel_size", "pixel_unit",
-        "scale_bar_visible", "scale_bar_position", "scale_bar_panels",
+        "show_scale_bar", "scale_bar_position", "scale_bar_panels",
         "scale_bar_length", "scale_bar_label", "scale_bar_style", "show_zoom_indicator",
         "size", "smooth", "initial_zoom", "zoom_row", "zoom_col", "view_box",
         "link_zoom", "link_pan", "link_contrast",

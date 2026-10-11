@@ -139,10 +139,10 @@ def _calibration_matches(
     return bool(np.allclose(first.sampling, other.sampling, rtol=1e-7, atol=0.0))
 
 
-def _clear_pixel_size(widget, *, scale_bar_visible: bool) -> None:
+def _clear_pixel_size(widget, *, show_scale_bar: bool) -> None:
     """Drop the widget's pixel size so no scale bar claims a calibration the files do not give."""
     widget.pixel_size = 0.0
-    widget.scale_bar_visible = scale_bar_visible
+    widget.show_scale_bar = show_scale_bar
 
 
 class WatchedImageFolder:
@@ -319,7 +319,7 @@ class WatchedImageFolder:
         """Attach this source to an already constructed widget."""
         self._widget_ref = weakref.ref(widget)
         self._explicit_calibration = bool(explicit_calibration)
-        self._scale_bar_requested = bool(widget.scale_bar_visible)
+        self._scale_bar_requested = bool(widget.show_scale_bar)
         widget._folder_source = self
         self._apply_calibration(widget, self.records)
         self._sync_widget_status(widget)
@@ -446,10 +446,10 @@ class WatchedImageFolder:
         if self._explicit_calibration:
             self.calibration_status = "explicit sampling/units override"
         elif not records:
-            _clear_pixel_size(widget, scale_bar_visible=False)
+            _clear_pixel_size(widget, show_scale_bar=False)
             self.calibration_status = "waiting for the first readable image"
         elif not all(_calibration_matches(records[0], record) for record in records[1:]):
-            _clear_pixel_size(widget, scale_bar_visible=False)
+            _clear_pixel_size(widget, show_scale_bar=False)
             self.calibration_status = (
                 "Scale bar disabled because watched files have different sampling or units."
             )
@@ -459,12 +459,12 @@ class WatchedImageFolder:
             # drawn on display pixels, so the pixel size scales by the display bin.
             widget.pixel_size = float(first.sampling[-1]) * max(1, int(widget._display_bin))
             widget.pixel_unit = str(first.units[-1])
-            widget.scale_bar_visible = self._scale_bar_requested
+            widget.show_scale_bar = self._scale_bar_requested
             self.calibration_status = (
                 f"uniform: {first.sampling[-1]:g} {first.units[-1]}/pixel"
             )
         else:
-            _clear_pixel_size(widget, scale_bar_visible=self._scale_bar_requested)
+            _clear_pixel_size(widget, show_scale_bar=self._scale_bar_requested)
             self.calibration_status = "files do not provide spatial calibration"
 
     def _sync_widget_status(

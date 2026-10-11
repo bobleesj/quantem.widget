@@ -100,7 +100,7 @@ bar units, and stars carry over.
 
 Snapshot panels use the same scale-bar convention as `Show3D`: pass
 `sampling=...` and `units=...` for calibrated physical units, or omit them for
-a pixel scale bar. Set `scale_bar_visible=False` for a clean export.
+a pixel scale bar. Set `show_scale_bar=False` for a clean export.
 
 ## Line profiles
 
@@ -222,7 +222,7 @@ no console error, no NaN frame).
 | Trial tag buttons | `trial_tags` | In Review mode, stores quick tags such as best, bad start, probe drift, and object issue |
 | Review table | `trial_rankings`, `trial_alerts`, `best_trial_label` | In Review mode, shows candidate ranking, alerts, and the best trial |
 | View -> View selected as 2D | `handoff_request`, `prepared_view_widget`, `handoff_status` | Builds an embedded Show2D gallery from the selected snapshot group for deeper image analysis |
-| Snapshot scale bar API | `pixel_size`, `pixel_unit`, `scale_bar_visible` | Snapshot panels show a Show3D-style scale bar and zoom readout |
+| Snapshot scale bar API | `pixel_size`, `pixel_unit`, `show_scale_bar` | Snapshot panels show a Show3D-style scale bar and zoom readout |
 | Snapshot real-space view API | `snapshot_real_space_zoom`, `snapshot_real_space_center` | Starts or restores real-space snapshot panels at a given zoom and `(row, col)` center |
 | Snapshot FFT view API | `snapshot_fft_zoom`, `snapshot_fft_center` | Starts or restores FFT panels at a given zoom and `(row, col)` FFT center |
 | Snapshot histogram | computed automatically | Selected snapshot histogram stays visible with draggable contrast knots and a numeric range readout; histogram and snapshot FFT use WebGPU when the browser has it, with a CPU fallback |

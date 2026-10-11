@@ -41,7 +41,7 @@ no console error, no NaN frame).
 | Stats visibility | `show_stats` | Mean/min/max/std readout shows/hides |
 | Panel title visibility | `show_panel_titles`, `panel_title_font_size`, `panel_title_style` | Per-panel labels show/hide, resize, and optionally get title chrome such as background, border, and padding |
 | Rich panel title spans | `panel_title_spans` | Optional structured `text` / `math` / `color` spans for symbols such as `λ` and `χ²` in panel titles, panel menus, stats, saved state, and exported HTML |
-| Scale bar toggle | `show_scale_bar` (`scale_bar_visible` in saved state) | Calibrated bar shows/hides (needs `pixel_size > 0`) |
+| Scale bar toggle | `show_scale_bar` (`show_scale_bar` in saved state) | Calibrated bar shows/hides (needs `pixel_size > 0`) |
 | Scale bar style | `scale_bar_panels`, `scale_bar_length`, `scale_bar_label`, `scale_bar_style` | Restrict scale bars to selected panels and control exact publication text, font, outline, label spacing, offset, and bar thickness |
 | Gallery gap and borders | `inter_panel_gap_px` (older name `gallery_gap_px`), `inter_panel_gap_color`, `gallery_outer_border_px`, `gallery_outer_border_color`, `panel_inner_border_px`, `panel_inner_border_color` | Separately controls the layer between panels, the outside gallery frame, and each panel's own inner stroke for browser, SVG, and static previews |
 | Pan (drag) | per-image pan | Image translates; with `link_pan` all panels move together |
