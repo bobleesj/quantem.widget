@@ -3570,6 +3570,19 @@ function Show3D() {
     setImageVmaxPct(Math.max(0, Math.min(100, ((range.vmax - bounds.min) / span) * 100)));
   };
 
+  /**
+   * The stack-wide Auto range of one packed panel (auto_vmins_per_panel), or null when it does not apply:
+   * a view transform puts the frame on another scale, or the percentiles moved since Python computed it.
+   */
+  const stablePanelAutoRange = (panel: number, low: number, high: number): { vmin: number; vmax: number } | null => {
+    const initialPercentiles = initialAutoPercentilesRef.current;
+    return stackAutoRangeApplies()
+      && Math.abs(low - initialPercentiles.low) < 1e-6
+      && Math.abs(high - initialPercentiles.high) < 1e-6
+      ? cachedAutoDisplayRange(autoVminsPerPanel, autoVmaxsPerPanel, panel, logScale)
+      : null;
+  };
+
   const resolvePanelRenderRange = (
     panel: number,
     range: { min: number; max: number },
@@ -3579,17 +3592,7 @@ function Show3D() {
     low: number,
     high: number,
   ): { vmin: number; vmax: number; logScale: boolean } => {
-    const initialPercentiles = initialAutoPercentilesRef.current;
-    const stablePanelRange = stackAutoRangeApplies()
-      && Math.abs(low - initialPercentiles.low) < 1e-6
-      && Math.abs(high - initialPercentiles.high) < 1e-6
-      ? cachedAutoDisplayRange(
-          autoVminsPerPanel,
-          autoVmaxsPerPanel,
-          panel,
-          logScale,
-        )
-      : null;
+    const stablePanelRange = stablePanelAutoRange(panel, low, high);
     if (autoOn && stablePanelRange) {
       return { ...stablePanelRange, logScale };
     }
@@ -3598,6 +3601,30 @@ function Show3D() {
       if (autoRange) return autoRange;
     }
     return resolvePanelRange(panel, range, sharedAutoRange);
+  };
+
+  /**
+   * Display range of packed panel `panel` of `frame` for a direct draw or its colorbar. The panel's pixels
+   * are copied out and scanned only when the range depends on them: the per-frame Auto clip (Auto on
+   * without the stack-wide panel range) or a panel whose histogram range has not arrived yet. Otherwise
+   * every played frame would copy and scan each panel for a range that is then discarded.
+   */
+  const packedPanelRenderRange = (
+    panel: number,
+    frame: Float32Array | null,
+    stackBounds: { min: number; max: number },
+    sharedAutoRange: { vmin: number; vmax: number } | null,
+    autoOn: boolean,
+    low: number,
+    high: number,
+    panelLogScale: boolean,
+  ): { vmin: number; vmax: number; logScale: boolean } => {
+    const known = panelDataRanges[panel];
+    const knownRange = known && known.max > known.min ? known : null;
+    const needsFrame = !knownRange || (autoOn && perPanelHistogramEnabled && !stablePanelAutoRange(panel, low, high));
+    const panelData = needsFrame && frame ? extractPanelSlice(frame, panel, panelLogScale) : null;
+    const bounds = panelData && panelData.length > 0 ? findDataRange(panelData) : (knownRange ?? stackBounds);
+    return resolvePanelRenderRange(panel, bounds, sharedAutoRange, panelData, autoOn, low, high);
   };
 
   const handleAutoContrastChange = (on: boolean) => {
@@ -4850,15 +4877,10 @@ function Show3D() {
       // The ranges come from the frame's own pixels (gpuSlotMissesTheView declined every transformed view
       // without a GPU-filled scratch slot), read by index: the displayed frame may belong to another index.
       const frameForRanges = getOfflineFrame(normalized);
-      const ranges = Array.from({ length: panelCount }, (_, panel) => {
-        const stack = resolveDisplayBounds(c.dataMin, c.dataMax, c.traitVmin, c.traitVmax, c.logScale);
-        const panelData = frameForRanges ? extractPanelSlice(frameForRanges, panel, c.logScale) : null;
-        const panelDataRange = panelDataRanges[panel];
-        const bounds = (panelData && panelData.length > 0)
-          ? findDataRange(panelData)
-          : ((perPanelHistogramEnabled && panelDataRange && panelDataRange.max > panelDataRange.min) ? panelDataRange : stack);
-        return resolvePanelRenderRange(panel, bounds, sharedAutoRange, panelData, c.autoContrast, c.percentileLow, c.percentileHigh);
-      });
+      const stack = resolveDisplayBounds(c.dataMin, c.dataMax, c.traitVmin, c.traitVmax, c.logScale);
+      const ranges = Array.from({ length: panelCount }, (_, panel) => packedPanelRenderRange(
+        panel, frameForRanges, stack, sharedAutoRange, c.autoContrast, c.percentileLow, c.percentileHigh, c.logScale,
+      ));
       const logs = c.logScale;
       const bitmaps = engine.renderPerPanelGpuExplicit(renderSlotIdx, regions, ranges, logs);
       const offCtx = mainOffscreenRef.current?.getContext("2d");
@@ -7163,19 +7185,13 @@ function Show3D() {
       const perPanelColorbar = visibleCount > 1 && !linkContrast && !sharedPanelSource;
       const currentFrame = displayFrameRef.current;
       const sharedAutoRange = autoContrast ? { vmin, vmax } : null;
+      const stackBounds = resolveDisplayBounds(dataMin, dataMax, traitVmin, traitVmax, logScale);
       for (let slot = 0; slot < visibleCount; slot++) {
         const panel = visiblePanelIndices[slot] ?? slot;
         let panelVmin = vmin;
         let panelVmax = vmax;
         if (perPanelColorbar) {
-          const panelData = currentFrame ? extractPanelSlice(currentFrame, panel, logScale) : null;
-          const panelDataRange = panelDataRanges[panel];
-          const panelRange = panelData && panelData.length > 0
-            ? findDataRange(panelData)
-            : ((perPanelHistogramEnabled && panelDataRange && panelDataRange.max > panelDataRange.min)
-                ? panelDataRange
-                : resolveDisplayBounds(dataMin, dataMax, traitVmin, traitVmax, logScale));
-          const resolved = resolvePanelRenderRange(panel, panelRange, sharedAutoRange, panelData, autoContrast, percentileLow, percentileHigh);
+          const resolved = packedPanelRenderRange(panel, currentFrame, stackBounds, sharedAutoRange, autoContrast, percentileLow, percentileHigh, logScale);
           panelVmin = resolved.vmin;
           panelVmax = resolved.vmax;
         }
@@ -8206,10 +8222,10 @@ function Show3D() {
           imageVmaxPct,
         ));
       } else if (autoContrast) {
+        // The full-frame log and percentile pass runs only for a frame without a precomputed range.
         const cached = cachedAutoDisplayRange(autoVmins, autoVmaxs, displaySliceIdx, logScale)
           || cachedAutoDisplayRange(localAutoVminsRef.current, localAutoVmaxsRef.current, displaySliceIdx, logScale);
-        const mainProcessed = logScale ? applyLogScale(raw) : raw;
-        ({ vmin, vmax } = cached ?? percentileClip(mainProcessed, percentileLow, percentileHigh));
+        ({ vmin, vmax } = cached ?? percentileClip(logScale ? applyLogScale(raw) : raw, percentileLow, percentileHigh));
       } else if (perPanelContrast) {
         const panelW = width / panelCount;
         const panel = Math.max(0, Math.min(panelCount - 1, Math.floor((Number(roi.col) || 0) / panelW)));
@@ -8242,16 +8258,15 @@ function Show3D() {
   // -------------------------------------------------------------------------
   // Preview panel - compute aspect-ratio-aware canvas dimensions
   // -------------------------------------------------------------------------
-  const previewCanvasDims = (() => {
+  // Memoized: the preview draw and overlay effects depend on this object, and a fresh one per render
+  // re-ran both on every played frame and every hover readout.
+  const previewCanvasDims = React.useMemo(() => {
     if (!previewCropDims) return { w: canvasW, h: canvasH };
-    const { w: cropW, h: cropH } = previewCropDims;
-    const aspect = cropW / cropH;
-    if (aspect >= 1) {
-      return { w: canvasW, h: Math.max(20, Math.round(canvasW / aspect)) };
-    } else {
-      return { w: Math.max(20, Math.round(canvasH * aspect)), h: canvasH };
-    }
-  })();
+    const aspect = previewCropDims.w / previewCropDims.h;
+    return aspect >= 1
+      ? { w: canvasW, h: Math.max(20, Math.round(canvasW / aspect)) }
+      : { w: Math.max(20, Math.round(canvasH * aspect)), h: canvasH };
+  }, [previewCropDims, canvasW, canvasH]);
 
   // -------------------------------------------------------------------------
   // Preview panel - draw cached offscreen with zoom/pan (fast, no recompute)
