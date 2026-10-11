@@ -354,6 +354,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._vi_product_maps: dict[str, np.ndarray] = {}
         self._preset_images: dict[str, bytes] = {}
         self._suppress_roi_recompute = False
+        self._roi_seen: tuple | None = None  # the detector ROI at the last ROI notification
         self._suppress_compare_recompute = False
         self._folder_source = None
         self._owned_acquisitions = []
@@ -1812,7 +1813,20 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self._preset_request = ""
 
     def _on_roi_change(self, change=None) -> None:
-        """React to a detector ROI edit: recompute the image in view unless a batched update or a product map is showing."""
+        """React to a detector ROI edit: recompute the image in view unless a batched update or a product map is showing.
+
+        One frontend message can change several ROI traits (a drag writes the
+        row, the column and the ``[row, col]`` pair; an annulus edit writes both
+        radii). traitlets applies them all and then calls this once per changed
+        trait, so every call of one message sees the same detector: the first
+        reduces the image and the rest return here, one reduction per message
+        instead of one per trait.
+        """
+        roi = (self.roi_active, self.roi_mode, self.roi_center_row, self.roi_center_col, self.roi_radius,
+               self.roi_radius_inner, self.roi_width, self.roi_height)
+        if roi == self._roi_seen:
+            return
+        self._roi_seen = roi
         if not self.roi_active or self._suppress_roi_recompute or self.vi_source != "roi":
             return
         if not self._multiple_view_active():
@@ -1820,16 +1834,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._refresh_compare_virtual_images()
 
     def _on_roi_center_change(self, change=None) -> None:
-        """Drag fast path: the frontend sends ``[row, col]`` as one trait per mouse move."""
-        if not self.roi_active or self._suppress_roi_recompute:
-            return
-        if change and "new" in change:
-            row, col = change["new"]
-            self.unobserve(self._on_roi_change, names=["roi_center_col", "roi_center_row"])
-            self.roi_center_row = row
-            self.roi_center_col = col
-            self.observe(self._on_roi_change, names=["roi_center_col", "roi_center_row"])
-        self._on_roi_change()
+        """Split the ``[row, col]`` pair of a detector move into the row and column traits, whose observer reduces the image."""
+        with self.hold_trait_notifications():  # both halves land first: never the new row with the old column
+            self.roi_center_row, self.roi_center_col = self.roi_center
 
     def _on_calibration_change(self, change=None) -> None:
         """Drop the cached preset images when the disk centre or radius moves: they were summed over the old masks."""

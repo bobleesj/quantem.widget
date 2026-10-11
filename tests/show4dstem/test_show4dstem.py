@@ -251,6 +251,41 @@ def test_numpy_viewer_matches_detector_and_pattern_selection():
         widget.close()
 
 
+def test_one_detector_message_reduces_the_image_once():
+    # traitlets calls an observer once per changed trait, so a drag message (row, column and the pair) used to reduce three times
+    counts = _counts(3)
+    widget = Show4DSTEM(counts, center=(7.5, 7.5), bf_radius=3.0, precompute_virtual_images=False)
+    try:
+        reduced = []
+        reduce_image = widget._compute_virtual_image_from_roi
+
+        def counted() -> None:
+            reduced.append((widget.roi_mode, widget.roi_center_row, widget.roi_center_col, widget.roi_radius))
+            reduce_image()
+
+        widget._compute_virtual_image_from_roi = counted
+        # set_state is what the comm handler calls with one frontend message
+        widget.set_state({"roi_center_row": 6.0, "roi_center_col": 9.0, "roi_center": [6.0, 9.0]})  # a drag step
+        assert reduced == [("circle", 6.0, 9.0, 3.0)]
+        np.testing.assert_array_equal(_image(widget), _bf(counts, (6.0, 9.0), 3.0))
+        reduced.clear()
+        widget.set_state({"roi_center_row": 7.5, "roi_center_col": 7.5, "roi_center": [7.5, 7.5]})  # the DP Reset button
+        assert reduced == [("circle", 7.5, 7.5, 3.0)]
+        reduced.clear()
+        widget.set_state({"roi_mode": "annular", "roi_radius_inner": 2.0, "roi_radius": 5.0})  # an annulus edit of both radii
+        assert reduced == [("annular", 7.5, 7.5, 5.0)]
+        np.testing.assert_array_equal(_image(widget), _bf(counts, (7.5, 7.5), 5.0, 2.0))
+        reduced.clear()
+        widget.roi_center = [8.0, 6.0]  # the pair alone moves both halves, never the row with the old column
+        assert reduced == [("annular", 8.0, 6.0, 5.0)] and (widget.roi_center_row, widget.roi_center_col) == (8.0, 6.0)
+        reduced.clear()
+        widget.roi_center_row = 5.0  # one trait from Python is still one reduction
+        assert reduced == [("annular", 5.0, 6.0, 5.0)]
+        np.testing.assert_array_equal(_image(widget), _bf(counts, (5.0, 6.0), 5.0, 2.0))
+    finally:
+        widget.close()
+
+
 def test_scan_position_outside_the_scan_stops_at_its_edge():
     counts = _counts(4)
     widget = Show4DSTEM(counts, precompute_virtual_images=False)

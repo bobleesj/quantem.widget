@@ -2298,8 +2298,8 @@ function Show4DSTEM() {
 
   const [posRow, setPosRow] = useModelState<number>("pos_row");
   const [posCol, setPosCol] = useModelState<number>("pos_col");
-  const [roiCenterCol, setRoiCenterCol] = useModelState<number>("roi_center_col");
-  const [roiCenterRow, setRoiCenterRow] = useModelState<number>("roi_center_row");
+  const [roiCenterCol] = useModelState<number>("roi_center_col");
+  const [roiCenterRow] = useModelState<number>("roi_center_row");
   const [pixelSize] = useModelState<number>("pixel_size");
   const [pixelUnit] = useModelState<string>("pixel_unit");
   // An uncalibrated scan carries the unit "pixels"; every label spells it "px".
@@ -2410,6 +2410,7 @@ function Show4DSTEM() {
     model.set("pos_col", col);
     model.save_changes();
   }, [model]);
+  // One save for the row, the column and the pair: the kernel reduces the image once per message.
   const writeRoiCenterModel = React.useCallback((row: number, col: number) => {
     model.set("roi_center_row", row);
     model.set("roi_center_col", col);
@@ -7607,7 +7608,7 @@ function Show4DSTEM() {
                   setIsHoveringDpProfileLine(false);
                 }
               }} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Diffraction profile" } }} />
-              <Button size="small" sx={compactButton} disabled={dpZoom === 1 && dpPanX === 0 && dpPanY === 0 && roiCenterCol === centerCol && roiCenterRow === centerRow} onClick={() => { setDpZoom(1); setDpPanX(0); setDpPanY(0); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }}>Reset</Button>
+              <Button size="small" sx={compactButton} disabled={dpZoom === 1 && dpPanX === 0 && dpPanY === 0 && roiCenterCol === centerCol && roiCenterRow === centerRow} onClick={() => { setDpZoom(1); setDpPanX(0); setDpPanY(0); writeRoiCenterModel(centerRow, centerCol); }}>Reset</Button>
               <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={async () => {
                 const canvas = dpCanvasRef.current;
                 if (!canvas) return;

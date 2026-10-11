@@ -11,7 +11,8 @@ A third notebook holds a 16 x 16 x 16 x 16 synthetic with large pixels: the
 scan ROI is resized from its rim and must grow by the distance dragged, and
 profile points clicked on pixel centers must be those pixels' indices (the
 convention the line sampler reads) and be drawn on those centers. A click
-that moves the scan ROI must reach the kernel as one reduction of the new region.
+that moves the scan ROI must reach the kernel as one reduction of the new region,
+and a click that moves the detector, or its Reset, as one reduction of the image.
 """
 
 import json
@@ -252,3 +253,27 @@ def test_scan_roi_click_moves_the_region_with_one_kernel_reduction(jupyter, open
     reductions = json.loads(jupyter.run_in_kernel(notebook, "import json; print(json.dumps(_reductions))"))
     # one reduction, of the new region: never a half-moved one (new row with the old column)
     assert reductions == [[11.0, 12.0]], reductions
+
+
+def test_detector_click_and_reset_each_reach_the_kernel_as_one_reduction(jupyter, open_page, hardware_adapter, browser_out):
+    notebook = "show4dstem_pixels.ipynb"
+    page = jupyter.open(open_page, notebook, "pixels_detector", webgpu=True, ready=DP, out=browser_out)
+    hardware_adapter(page.adapter())
+    page.locator(DP).first.scroll_into_view_if_needed()
+    # every virtual-image reduction is counted with the detector center it reduced
+    jupyter.run_in_kernel(notebook, "_reduced = []\n_reduce_image = viewer._compute_virtual_image_from_roi\n"
+                                     "def _counted_image():\n    _reduced.append([viewer.roi_center_row, viewer.roi_center_col])\n    _reduce_image()\n"
+                                     "viewer._compute_virtual_image_from_roi = _counted_image")
+    fitted = json.loads(jupyter.run_in_kernel(notebook, "import json; print(json.dumps([viewer.center_row, viewer.center_col]))"))
+    # a click outside the detector moves it there: one message carrying the row, the column and the pair
+    page.mouse.click(*pixel_center(page, DP, 12, 3))
+    page.wait_for_timeout(3000)
+    reduced = json.loads(jupyter.run_in_kernel(notebook, "import json; print(json.dumps(_reduced))"))
+    assert len(reduced) == 1 and np.allclose(reduced[0], [12, 3], atol=0.6), reduced
+    jupyter.run_in_kernel(notebook, "_reduced.clear()")
+    # the diffraction panel's Reset returns the detector to the fitted disk in one message
+    page.locator('.jp-OutputArea-output button:not([disabled])', has_text="Reset").first.click()
+    page.wait_for_timeout(3000)
+    reduced = json.loads(jupyter.run_in_kernel(notebook, "import json; print(json.dumps(_reduced))"))
+    assert reduced == [fitted], (reduced, fitted)
+    assert [error for error in page.errors if "debugger session" not in error] == [], page.errors
