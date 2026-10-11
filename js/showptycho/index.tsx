@@ -1003,7 +1003,6 @@ function FFTInset({
         height: size,
         bgcolor: "rgba(0,0,0,0.82)",
         border: `1px solid ${tc.border}`,
-        boxShadow: `0 2px 10px ${tc.shadow}`,
         cursor: "move",
         pointerEvents: "auto",
         userSelect: "none",
@@ -2320,10 +2319,9 @@ function Explore() {
     tick();  // fire once immediately so user sees motion without a delay
     const interval = window.setInterval(tick, Math.max(33, 1000 / playFps));
     return () => window.clearInterval(interval);
-    // sendDrag, setRotationDeg, and the slider setters are stable callbacks;
-    // c10Min etc. come from traits that only change at init, so their
-    // dependency is safe to include implicitly via the closure.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // sendDrag, setRotationDeg and the slider setters are stable callbacks, and
+    // c10Min etc. come from traits that only change at init, so only the play
+    // state restarts the sweep timer.
   }, [playing, playFps, sweepParam]);
 
   /* --- Process result from Python --- */
@@ -3204,7 +3202,6 @@ function Explore() {
         bgcolor: tc.bgAlt,
         color: tc.text,
         border: `1px solid ${tc.border}`,
-        boxShadow: `0 8px 24px ${tc.shadow}`,
         "& .MuiMenuItem-root": {
           fontFamily: "monospace",
           fontSize: 11,
@@ -4111,7 +4108,7 @@ function Explore() {
             }}
           />
           {calibrationPath && (
-            <Tooltip title={`Last saved at ${calibrationSavedAt || "—"}`} placement="top" arrow>
+            <Tooltip title={`Last saved at ${calibrationSavedAt || "-"}`} placement="top" arrow>
               <Typography sx={{
                 ...typography.value, color: STATUS_GOOD,
                 maxWidth: 260, overflowWrap: "anywhere",
@@ -4166,9 +4163,9 @@ function Explore() {
               </Box>
               <Box sx={{ flex: 1 }} />
               {trials.length > 0 && (
-                <Tooltip title={`Optuna explored ${trials.length} trials. Nelder-Mead then refined the best one. Auto loss = ${autoLoss?.toFixed(8) ?? '—'}; best Optuna loss = ${formatNumber(trials[0].loss, 8)}.`} placement="top" arrow>
+                <Tooltip title={`Optuna explored ${trials.length} trials. Nelder-Mead then refined the best one. Auto loss = ${autoLoss?.toFixed(8) ?? '-'}; best Optuna loss = ${formatNumber(trials[0].loss, 8)}.`} placement="top" arrow>
                   <Typography sx={{ ...typography.value, color: tc.textMuted, cursor: "help" }}>
-                    Nelder-Mead {autoLoss?.toFixed(8) ?? '—'}  ·  best Optuna {formatNumber(trials[0].loss, 8)}
+                    Nelder-Mead {autoLoss?.toFixed(8) ?? '-'}  ·  best Optuna {formatNumber(trials[0].loss, 8)}
                   </Typography>
                 </Tooltip>
               )}
@@ -4203,7 +4200,7 @@ function Explore() {
                           Nelder-Mead
                         </Typography>
                         <Typography sx={{ fontSize: 11, color: STATUS_GOOD, fontFamily: "monospace", fontWeight: "bold" }}>
-                          {autoLoss?.toFixed(8) ?? '—'}
+                          {autoLoss?.toFixed(8) ?? '-'}
                         </Typography>
                       </Stack>
                       <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: tc.textMuted, whiteSpace: "nowrap" }}>
@@ -4253,7 +4250,7 @@ function Explore() {
         {/* Pin viewing indicator */}
         {viewPin && (
           <Typography sx={{ ...typography.labelSmall, color: tc.accent, textAlign: "center" }}>
-            Viewing pinned — drag slider or Esc to return
+            Viewing pinned: drag a slider or press Esc to return
           </Typography>
         )}
 
@@ -4377,9 +4374,8 @@ function Explore() {
                       : pin.starred ? `2px solid ${STATUS_GOOD}` : "2px solid transparent",
                     outline: dragOverPin === pin.id ? `2px solid ${tc.accent}` : "none",
                     outlineOffset: 1,
-                    boxShadow: isDraggingPin ? `0 6px 16px ${tc.shadow}` : "none",
                     transform: isDraggingPin ? "scale(1.045)" : "scale(1)",
-                    transition: "border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease, outline-color 120ms ease",
+                    transition: "border-color 120ms ease, transform 120ms ease, outline-color 120ms ease",
                     animation: isNewPin ? "showptycho-pin-add 320ms cubic-bezier(0.2, 0, 0, 1)" : "none",
                     overflow: "hidden",
                     userSelect: "none",

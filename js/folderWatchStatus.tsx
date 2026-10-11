@@ -198,7 +198,7 @@ export function FolderWatchBadge({
           opacity: visibleDetail ? 0.9 : 0,
         }}
       >
-        {visibleDetail ? `— ${normalizedDetail}` : ""}
+        {visibleDetail ? `: ${normalizedDetail}` : ""}
       </Typography>
     </Box>
   );
