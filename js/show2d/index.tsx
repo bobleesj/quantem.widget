@@ -7771,7 +7771,7 @@ function Show2D() {
                 {detailStreamStatus === "streaming" ? "streaming detail..." : detailStreamStatus === "ready" ? "detail ready" : "preview; streams on zoom"}
               </Box>
             )}
-	            {showControls && <InfoTooltip toggleOnClick text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            {showControls && <InfoTooltip toggleOnClick text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
               <MetadataSection rows={[
                 ["Shape", isGallery ? `${nImages} x ${height} x ${width}` : `${height} x ${width}`],
                 ["Panels", isGallery ? `${nImages} images, ${clampedNcols} columns` : "single image"],
@@ -7798,173 +7798,173 @@ function Show2D() {
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Gaussian: a simple blur of width &sigma;, fine for decent-dose images. None: raw counts, for any quantitative measurement.</Typography>
               <Typography sx={{ fontSize: 11, fontWeight: "bold", mt: 0.5 }}>Keyboard</Typography>
               <KeyboardShortcuts items={isGallery ? [["← / →", hasLocalPanelStacks ? "Prev / Next frame in a selected stack; otherwise select panel" : "Prev / Next image"], ["1 – 9", "Select image"], ["Shift-click", "Select panel range"], ["Ctrl/⌘-click", "Toggle panel selection"], ["H", "Hide selected panels"], ["] / [", "Rotate CW / CCW 90°"], ["Del / ⌫", "Delete selected ROI"], ["M", "Measure distance"], ["Esc", "Exit measure"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]] : [["← / →", hasLocalPanelStacks ? "Prev / Next frame" : "No action"], ["] / [", "Rotate CW / CCW 90°"], ["Del / ⌫", "Delete selected ROI"], ["M", "Measure distance"], ["Esc", "Exit measure"], ["R", "Reset zoom"], ["Scroll", "Zoom"], ["Dbl-click", "Reset view"]]} />
-	            </Box>} theme={themeInfo.theme} />}
-	            {showControls && (
-	              <Button
-	                size="small"
-	                sx={{
-	                  ...compactButton,
-	                  ml: showTitle ? 0.75 : 0,
-	                  py: 0,
-	                  px: 0.5,
-	                  minHeight: 16,
-	                  lineHeight: "16px",
-	                  verticalAlign: "baseline",
-	                  "& .MuiButton-endIcon": { ml: 0.25 },
-	                }}
-	                onClick={() => setControlsCollapsed(!controlsCollapsed)}
-	                aria-label={controlsCollapsed ? "Show controls" : "Hide controls"}
-	                aria-pressed={!controlsCollapsed}
-	                aria-expanded={!controlsCollapsed}
-	                title={controlsCollapsed ? "Show controls" : "Hide controls"}
-	                endIcon={<ExpandMoreIcon sx={{ fontSize: 14, transform: controlsCollapsed ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s ease" }} />}
-	              >
-	                Controls
-	              </Button>
-	            )}
-	            {showControls && controlsCollapsed && (exportEnabled || canDownloadCurrentHtml) && (
-	              <>
-	                <Button
-	                  size="small"
-	                  sx={{
-	                    ...compactButton,
-	                    ml: 0.5,
-	                    py: 0,
-	                    px: 0.5,
-	                    minHeight: 16,
-	                    lineHeight: "16px",
-	                    verticalAlign: "baseline",
-	                    color: themeColors.accent,
-	                  }}
-	                  disabled={exportBusy || (!exportEnabled && !canDownloadCurrentHtml)}
-	                  onClick={(e) => { setExportAnchor(e.currentTarget); }}
-	                  title={localExportStatus || exportStatus || (exportEnabled ? "Export standalone HTML" : canDownloadCurrentHtml ? "Export this standalone HTML" : "Export unavailable for this data")}
-	                >
-	                  {exportBusy ? "Exporting" : "Export"}
-	                </Button>
-	                <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "right" }} transformOrigin={{ vertical: "top", horizontal: "right" }} {...themedTopMenuProps}>
-	                  {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("exact")} sx={{ fontSize: 12 }}>HTML exact float32 ({exactHtmlSize})</MenuItem>}
-	                  {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("quantized")} sx={{ fontSize: 12 }}>HTML quantized uint8 ({quantizedHtmlSize})</MenuItem>}
-	                  {canDownloadCurrentHtml && offline && <MenuItem disabled sx={{ fontSize: 12 }} title="This standalone export contains quantized uint8 data, not the original float32 array. Open the live widget to export exact float32.">{unavailableStandaloneHtmlLabel}</MenuItem>}
-	                  {canDownloadCurrentHtml && <MenuItem onClick={handleStandaloneHtmlDownload} sx={{ fontSize: 12 }}>{standaloneHtmlLabel}</MenuItem>}
-	                  {canDownloadCurrentHtml && !offline && <MenuItem disabled sx={{ fontSize: 12 }} title="Quantized export requires the Python backend to repack the current float32 data.">{unavailableStandaloneHtmlLabel}</MenuItem>}
-	                </Menu>
-	              </>
-	            )}
-	          </Typography>}
-	          {/* Page navigation sits above the analysis toolbar, matching Show3D. */}
-	          {controlsVisible && isPaged && (
-	            <Box
-	              data-show2d-page-controls={pageKind || "comparison"}
-	              aria-label="Page navigation"
-	              sx={{
-	                display: "flex",
-	                alignItems: "center",
-	                flexWrap: "wrap",
-	                columnGap: "8px",
-	                rowGap: "3px",
-	                mb: "3px",
-	                minHeight: 26,
-	                pb: "3px",
-	                borderBottom: `1px solid ${themeColors.border}`,
-	              }}
-	            >
-	              <Box sx={{ display: "flex", alignItems: "baseline", gap: "5px", flex: "1 1 240px", minWidth: 0 }}>
-	                <Typography sx={{ ...typography.label, fontSize: 10, flexShrink: 0 }}>Page</Typography>
-	                <Typography
-	                  data-show2d-page-status="true"
-	                  title={pageControlStatus}
-	                  sx={{
-	                    ...typography.label,
-	                    fontSize: 10,
-	                    lineHeight: 1.25,
-	                    color: themeColors.accent,
-	                    minWidth: 0,
-	                    whiteSpace: "normal",
-	                    overflowWrap: "anywhere",
-	                    fontVariantNumeric: "tabular-nums",
-	                  }}
-	                >
-	                  {pageControlStatus}
-	                </Typography>
-	              </Box>
-	              <Box sx={{ display: "flex", alignItems: "center", gap: "4px", flex: "0 1 auto", minWidth: 0 }}>
-	                <Slider
-	                  value={pageControlIdx}
-	                  min={0}
-	                  max={Math.max(0, (nPages || 1) - 1)}
-	                  step={1}
-	                  onPointerDownCapture={() => {
-	                    stopPagePlayback();
-	                    setPageSliderPreviewIdx(currentPageIdx);
-	                  }}
-	                  onKeyDown={() => stopPagePlayback()}
-	                  onChange={(_, value) => {
-	                    const raw = Array.isArray(value) ? value[0] : value;
-	                    const next = clampPageIdx(Number(raw));
-	                    setPageSliderPreviewIdx(next);
-	                    commitPageIdx(next);
-	                  }}
-	                  onChangeCommitted={(_, value) => {
-	                    const raw = Array.isArray(value) ? value[0] : value;
-	                    const next = clampPageIdx(Number(raw));
-	                    stopPagePlayback();
-	                    setPageSliderPreviewIdx(next);
-	                    commitPageIdx(next, true);
-	                  }}
-	                  size="small"
-	                  sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 92, color: themeColors.accent }}
-	                  aria-label="Page"
-	                />
-	                <IconButton
-	                  size="small"
-	                  onClick={() => setPagePlaying((value) => !value)}
-	                  title={pagePlaying ? "Pause page playback" : "Play pages"}
-	                  aria-label={pagePlaying ? "Pause page playback" : "Play pages"}
-	                  sx={{ width: 24, height: 24, p: 0, color: themeColors.accent }}
-	                >
-	                  {pagePlaying ? <PauseIcon sx={{ fontSize: 16 }} /> : <PlayArrowIcon sx={{ fontSize: 16 }} />}
-	                </IconButton>
-	                <Select
-	                  value={String(pagePlayFps)}
-	                  onChange={(e) => setPagePlayFps(Number(e.target.value) || 8)}
-	                  size="small"
-	                  sx={{ ...themedSelect, minWidth: 48, fontSize: 10 }}
-	                  MenuProps={themedTopMenuProps}
-	                  inputProps={{ "aria-label": "Page playback frames per second" }}
-	                  title="Page playback speed"
-	                >
-	                  {PAGE_PLAY_FPS_OPTIONS.map((fps) => (
-	                    <MenuItem key={fps} value={String(fps)}>{fps} fps</MenuItem>
-	                  ))}
-	                </Select>
-	                {pageKind !== "items" && (
-	                  <IconButton
-	                    size="small"
-	                    onClick={() => {
-	                      const next = Array.from({ length: Math.max(1, nPages || 1) }, (_, idx) => pageStarred?.[idx] ? 1 : 0);
-	                      next[pageControlIdx] = next[pageControlIdx] ? 0 : 1;
-	                      setPageStarred(next);
-	                    }}
-	                    title={(pageStarred?.[pageControlIdx] ? "Unstar " : "Star ") + pageControlLabel}
-	                    aria-label={(pageStarred?.[pageControlIdx] ? "Unstar " : "Star ") + pageControlLabel}
-	                    sx={{
-	                      width: 24,
-	                      height: 24,
-	                      p: 0,
-	                      color: pageStarred?.[pageControlIdx] ? "#ffc107" : themeColors.textMuted,
-	                      "&:hover": { color: pageStarred?.[pageControlIdx] ? "#ffc107" : themeColors.text },
-	                    }}
-	                  >
-	                    {pageStarred?.[pageControlIdx] ? "★" : "☆"}
-	                  </IconButton>
-	                )}
-	              </Box>
-	            </Box>
-	          )}
-	          {/* Analysis and display controls row. */}
-	          {controlsVisible && (
-	          <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} useFlexGap sx={{ mb: `${SPACING.XS}px`, minHeight: 28, flexWrap: "wrap", rowGap: `${SPACING.XS}px`, width: "100%", maxWidth: "100%", boxSizing: "border-box" }}>
+            </Box>} theme={themeInfo.theme} />}
+            {showControls && (
+              <Button
+                size="small"
+                sx={{
+                  ...compactButton,
+                  ml: showTitle ? 0.75 : 0,
+                  py: 0,
+                  px: 0.5,
+                  minHeight: 16,
+                  lineHeight: "16px",
+                  verticalAlign: "baseline",
+                  "& .MuiButton-endIcon": { ml: 0.25 },
+                }}
+                onClick={() => setControlsCollapsed(!controlsCollapsed)}
+                aria-label={controlsCollapsed ? "Show controls" : "Hide controls"}
+                aria-pressed={!controlsCollapsed}
+                aria-expanded={!controlsCollapsed}
+                title={controlsCollapsed ? "Show controls" : "Hide controls"}
+                endIcon={<ExpandMoreIcon sx={{ fontSize: 14, transform: controlsCollapsed ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s ease" }} />}
+              >
+                Controls
+              </Button>
+            )}
+            {showControls && controlsCollapsed && (exportEnabled || canDownloadCurrentHtml) && (
+              <>
+                <Button
+                  size="small"
+                  sx={{
+                    ...compactButton,
+                    ml: 0.5,
+                    py: 0,
+                    px: 0.5,
+                    minHeight: 16,
+                    lineHeight: "16px",
+                    verticalAlign: "baseline",
+                    color: themeColors.accent,
+                  }}
+                  disabled={exportBusy || (!exportEnabled && !canDownloadCurrentHtml)}
+                  onClick={(e) => { setExportAnchor(e.currentTarget); }}
+                  title={localExportStatus || exportStatus || (exportEnabled ? "Export standalone HTML" : canDownloadCurrentHtml ? "Export this standalone HTML" : "Export unavailable for this data")}
+                >
+                  {exportBusy ? "Exporting" : "Export"}
+                </Button>
+                <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "right" }} transformOrigin={{ vertical: "top", horizontal: "right" }} {...themedTopMenuProps}>
+                  {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("exact")} sx={{ fontSize: 12 }}>HTML exact float32 ({exactHtmlSize})</MenuItem>}
+                  {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("quantized")} sx={{ fontSize: 12 }}>HTML quantized uint8 ({quantizedHtmlSize})</MenuItem>}
+                  {canDownloadCurrentHtml && offline && <MenuItem disabled sx={{ fontSize: 12 }} title="This standalone export contains quantized uint8 data, not the original float32 array. Open the live widget to export exact float32.">{unavailableStandaloneHtmlLabel}</MenuItem>}
+                  {canDownloadCurrentHtml && <MenuItem onClick={handleStandaloneHtmlDownload} sx={{ fontSize: 12 }}>{standaloneHtmlLabel}</MenuItem>}
+                  {canDownloadCurrentHtml && !offline && <MenuItem disabled sx={{ fontSize: 12 }} title="Quantized export requires the Python backend to repack the current float32 data.">{unavailableStandaloneHtmlLabel}</MenuItem>}
+                </Menu>
+              </>
+            )}
+          </Typography>}
+          {/* Page navigation sits above the analysis toolbar, matching Show3D. */}
+          {controlsVisible && isPaged && (
+            <Box
+              data-show2d-page-controls={pageKind || "comparison"}
+              aria-label="Page navigation"
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                flexWrap: "wrap",
+                columnGap: "8px",
+                rowGap: "3px",
+                mb: "3px",
+                minHeight: 26,
+                pb: "3px",
+                borderBottom: `1px solid ${themeColors.border}`,
+              }}
+            >
+              <Box sx={{ display: "flex", alignItems: "baseline", gap: "5px", flex: "1 1 240px", minWidth: 0 }}>
+                <Typography sx={{ ...typography.label, fontSize: 10, flexShrink: 0 }}>Page</Typography>
+                <Typography
+                  data-show2d-page-status="true"
+                  title={pageControlStatus}
+                  sx={{
+                    ...typography.label,
+                    fontSize: 10,
+                    lineHeight: 1.25,
+                    color: themeColors.accent,
+                    minWidth: 0,
+                    whiteSpace: "normal",
+                    overflowWrap: "anywhere",
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  {pageControlStatus}
+                </Typography>
+              </Box>
+              <Box sx={{ display: "flex", alignItems: "center", gap: "4px", flex: "0 1 auto", minWidth: 0 }}>
+                <Slider
+                  value={pageControlIdx}
+                  min={0}
+                  max={Math.max(0, (nPages || 1) - 1)}
+                  step={1}
+                  onPointerDownCapture={() => {
+                    stopPagePlayback();
+                    setPageSliderPreviewIdx(currentPageIdx);
+                  }}
+                  onKeyDown={() => stopPagePlayback()}
+                  onChange={(_, value) => {
+                    const raw = Array.isArray(value) ? value[0] : value;
+                    const next = clampPageIdx(Number(raw));
+                    setPageSliderPreviewIdx(next);
+                    commitPageIdx(next);
+                  }}
+                  onChangeCommitted={(_, value) => {
+                    const raw = Array.isArray(value) ? value[0] : value;
+                    const next = clampPageIdx(Number(raw));
+                    stopPagePlayback();
+                    setPageSliderPreviewIdx(next);
+                    commitPageIdx(next, true);
+                  }}
+                  size="small"
+                  sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 92, color: themeColors.accent }}
+                  aria-label="Page"
+                />
+                <IconButton
+                  size="small"
+                  onClick={() => setPagePlaying((value) => !value)}
+                  title={pagePlaying ? "Pause page playback" : "Play pages"}
+                  aria-label={pagePlaying ? "Pause page playback" : "Play pages"}
+                  sx={{ width: 24, height: 24, p: 0, color: themeColors.accent }}
+                >
+                  {pagePlaying ? <PauseIcon sx={{ fontSize: 16 }} /> : <PlayArrowIcon sx={{ fontSize: 16 }} />}
+                </IconButton>
+                <Select
+                  value={String(pagePlayFps)}
+                  onChange={(e) => setPagePlayFps(Number(e.target.value) || 8)}
+                  size="small"
+                  sx={{ ...themedSelect, minWidth: 48, fontSize: 10 }}
+                  MenuProps={themedTopMenuProps}
+                  inputProps={{ "aria-label": "Page playback frames per second" }}
+                  title="Page playback speed"
+                >
+                  {PAGE_PLAY_FPS_OPTIONS.map((fps) => (
+                    <MenuItem key={fps} value={String(fps)}>{fps} fps</MenuItem>
+                  ))}
+                </Select>
+                {pageKind !== "items" && (
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      const next = Array.from({ length: Math.max(1, nPages || 1) }, (_, idx) => pageStarred?.[idx] ? 1 : 0);
+                      next[pageControlIdx] = next[pageControlIdx] ? 0 : 1;
+                      setPageStarred(next);
+                    }}
+                    title={(pageStarred?.[pageControlIdx] ? "Unstar " : "Star ") + pageControlLabel}
+                    aria-label={(pageStarred?.[pageControlIdx] ? "Unstar " : "Star ") + pageControlLabel}
+                    sx={{
+                      width: 24,
+                      height: 24,
+                      p: 0,
+                      color: pageStarred?.[pageControlIdx] ? "#ffc107" : themeColors.textMuted,
+                      "&:hover": { color: pageStarred?.[pageControlIdx] ? "#ffc107" : themeColors.text },
+                    }}
+                  >
+                    {pageStarred?.[pageControlIdx] ? "★" : "☆"}
+                  </IconButton>
+                )}
+              </Box>
+            </Box>
+          )}
+          {/* Analysis and display controls row. */}
+          {controlsVisible && (
+          <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} useFlexGap sx={{ mb: `${SPACING.XS}px`, minHeight: 28, flexWrap: "wrap", rowGap: `${SPACING.XS}px`, width: "100%", maxWidth: "100%", boxSizing: "border-box" }}>
             {isGallery && (
               <Box sx={controlPairSx}>
                 <Typography sx={compactLabelSx}>Cols</Typography>
@@ -8475,8 +8475,8 @@ function Show2D() {
               <Button size="small" sx={compactButton} disabled={!needsReset} onClick={handleResetAll}>Reset</Button>
               <Button size="small" sx={compactButton} onClick={handleCopy}>Copy</Button>
             </Box>
-	          </Stack>
-	          )}
+          </Stack>
+          )}
 
           {svgPreview ? (
             <Box
@@ -8579,14 +8579,14 @@ function Show2D() {
                     ref={(el: HTMLDivElement | null) => { imageContainerRefs.current[i] = el; }}
                     sx={{
                       ...responsivePanelSx,
-	                      "&::after": {
-	                        content: '""',
-	                        position: "absolute",
+                      "&::after": {
+                        content: '""',
+                        position: "absolute",
                         inset: 0,
                         pointerEvents: "none",
-	                        zIndex: 5,
-	                        boxShadow: `inset 0 0 0 ${selectedPanelSet.has(i) ? 3 : 2}px ${reorderMode && dragOverPanel === i ? themeColors.accent : panelChromeVisible && (i === selectedIdx || selectedPanelSet.has(i)) ? themeColors.accent : "transparent"}`,
-	                      },
+                        zIndex: 5,
+                        boxShadow: `inset 0 0 0 ${selectedPanelSet.has(i) ? 3 : 2}px ${reorderMode && dragOverPanel === i ? themeColors.accent : panelChromeVisible && (i === selectedIdx || selectedPanelSet.has(i)) ? themeColors.accent : "transparent"}`,
+                      },
                       "&::before": {
                         content: '""',
                         position: "absolute",
@@ -8666,7 +8666,7 @@ function Show2D() {
                       width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)}
                       style={responsiveOverlayStyle}
                     />
-	                    {panelChromeVisible && cursorInfo && cursorInfo.idx === i && (
+                    {panelChromeVisible && cursorInfo && cursorInfo.idx === i && (
                       /* Show4DSTEM readout spec; top-right, dropped 25px below the star button row */
                       <Box sx={{ position: "absolute", top: 28, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right", zIndex: 2 }}>
                         <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
@@ -8729,8 +8729,8 @@ function Show2D() {
                         <DragIndicatorIcon sx={{ fontSize: 18 }} />
                       </Box>
                     )}
-	                    {panelChromeVisible && (
-	                    <IconButton
+                    {panelChromeVisible && (
+                    <IconButton
                       className="show2d-panel-star-button"
                       size="small"
                       onPointerDown={(event) => event.stopPropagation()}
@@ -8771,10 +8771,10 @@ function Show2D() {
                       }}
                     >
                       {starred?.[i] ? "★" : "☆"}
-	                    </IconButton>
-	                    )}
-	                    {panelChromeVisible && (
-	                    <IconButton
+                    </IconButton>
+                    )}
+                    {panelChromeVisible && (
+                    <IconButton
                       className="show2d-panel-hide-button"
                       size="small"
                       disabled={visibleImageCount <= 1}
@@ -8806,8 +8806,8 @@ function Show2D() {
                       }}
                     >
                       <VisibilityOffIcon sx={{ fontSize: 15 }} />
-	                    </IconButton>
-	                    )}
+                    </IconButton>
+                    )}
                     {showResizeControls && (
                       <Box
                         onMouseDown={handleCanvasResizeStart}
@@ -8852,14 +8852,14 @@ function Show2D() {
                       data-show2d-fft-panel={i}
                       sx={{
                         ...responsivePanelSx,
-	                        "&::after": {
-	                          content: '""',
-	                          position: "absolute",
-	                          inset: 0,
-	                          pointerEvents: "none",
-	                          zIndex: 5,
-	                          boxShadow: `inset 0 0 0 2px ${panelChromeVisible && i === selectedIdx ? themeColors.accent : "transparent"}`,
-	                        },
+                        "&::after": {
+                          content: '""',
+                          position: "absolute",
+                          inset: 0,
+                          pointerEvents: "none",
+                          zIndex: 5,
+                          boxShadow: `inset 0 0 0 2px ${panelChromeVisible && i === selectedIdx ? themeColors.accent : "transparent"}`,
+                        },
                         cursor: "grab",
                       }}
                       onWheel={(i === selectedIdx || effectiveFftLinkedZoom) ? (e) => handleGalleryFftWheel(e, i) : undefined}
@@ -9073,14 +9073,14 @@ function Show2D() {
                 width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)}
                 style={responsiveOverlayStyle}
               />
-	              {panelChromeVisible && cursorInfo && (
+              {panelChromeVisible && cursorInfo && (
                 /* Show4DSTEM readout spec verbatim (single-image mode has no star button) */
                 <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
                   <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
                     ({cursorInfo.row}, {cursorInfo.col}){nativePixelSize > 0 ? ` = (${(cursorInfo.row * nativePixelSize).toFixed(1)}, ${(cursorInfo.col * nativePixelSize).toFixed(1)} ${calibratedUnit})` : ""} {cursorInfo.rgb ? `(${cursorInfo.rgb[0].toFixed(2)}, ${cursorInfo.rgb[1].toFixed(2)}, ${cursorInfo.rgb[2].toFixed(2)})` : `${formatNumber(cursorInfo.value)}${cursorValueSuffix}`}
                   </Typography>
-	                </Box>
-	              )}
+                </Box>
+              )}
               {renderInsetHoverReadout(0)}
               {renderPanelAnnotations(0)}
               {renderPanelFrameControls(0)}
@@ -9132,7 +9132,7 @@ function Show2D() {
           )}
 
           {/* Controls: two rows left + histogram right, ROI below */}
-	          {controlsVisible && (
+          {controlsVisible && (
             <Box sx={{ mt: (effectiveShowFft && isGallery) ? `${SPACING.XS}px` : `${SPACING.SM}px`, display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, boxSizing: "border-box" }}>
               {/* Top: control rows + histogram side by side */}
               <Box sx={{ display: "flex", flexWrap: "wrap", gap: `${SPACING.SM}px`, width: "100%", maxWidth: galleryGridWidth, minWidth: 0, boxSizing: "border-box" }}>
@@ -9450,7 +9450,7 @@ function Show2D() {
           )}
 
           {/* Gallery FFT Controls - below regular image controls */}
-	          {controlsVisible && effectiveShowFft && isGallery && (
+          {controlsVisible && effectiveShowFft && isGallery && (
             <Box sx={{ mt: `${SPACING.XS}px`, display: "flex", flexWrap: "wrap", gap: `${SPACING.SM}px`, width: "100%", maxWidth: galleryGridWidth, minWidth: 0, boxSizing: "border-box" }}>
               <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: "1 1 260px", minWidth: 0, justifyContent: "flex-start" }}>
                 <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, opacity: 1, pointerEvents: "auto" }}>
