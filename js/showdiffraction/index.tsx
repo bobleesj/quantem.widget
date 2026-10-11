@@ -32,13 +32,14 @@ import { copyPngOrDownload } from "./copyImage";
 import { InfoTooltip } from "../shared/InfoTooltip";
 import { KeyboardShortcuts } from "../shared/KeyboardShortcuts";
 import { useMobileViewport } from "../shared/useMobileViewport";
+import { exportTitleSlug } from "../shared/exportFormat";
+import { shouldIgnoreWidgetShortcut } from "../shared/widgetShortcuts";
 import { Histogram } from "../shared/Histogram";
 
 // Style tokens
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 10;
-const DPR = window.devicePixelRatio || 1;
 const CANVAS_MIN = 384;
 const PROFILE_H = 140;
 const PROFILE_PAD = { left: 54, right: 14, top: 16, bottom: 34 };
@@ -443,9 +444,11 @@ function ShowDiffraction() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    canvas.width = canvasSize * DPR;
-    canvas.height = PROFILE_H * DPR;
-    ctx.scale(DPR, DPR);
+    // Read per draw: moving the window to another screen or zooming the page changes it.
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvasSize * dpr;
+    canvas.height = PROFILE_H * dpr;
+    ctx.scale(dpr, dpr);
     const isDark = themeInfo.theme === "dark";
     ctx.fillStyle = isDark ? "#050505" : "#ffffff";
     ctx.fillRect(0, 0, canvasSize, PROFILE_H);
@@ -748,9 +751,10 @@ function ShowDiffraction() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const cssW = canvasSize;
-    canvas.width = cssW * DPR;
-    canvas.height = cssW * DPR;
-    ctx.scale(DPR, DPR);
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = cssW * dpr;
+    canvas.height = cssW * dpr;
+    ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, cssW, cssW);
 
     // per-axis transform for non-square detectors
@@ -906,11 +910,12 @@ function ShowDiffraction() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    canvas.width = canvasSize * DPR;
-    canvas.height = canvasSize * DPR;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvasSize * dpr;
+    canvas.height = canvasSize * dpr;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (kCalibrated && kPixelSize > 0) {
-      drawScaleBarHiDPI(canvas, DPR, dpZoom, kPixelSize, "1/Å", detCols);
+      drawScaleBarHiDPI(canvas, dpr, dpZoom, kPixelSize, "1/Å", detCols);
     }
   }, [canvasSize, dpZoom, kCalibrated, kPixelSize, detCols]);
 
@@ -996,7 +1001,7 @@ function ShowDiffraction() {
   };
 
   const handleDpPointerDown = (e: React.PointerEvent) => {
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* unsupported host */ }
+    e.currentTarget.setPointerCapture(e.pointerId);
     activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (activePointersRef.current.size === 2) {
       // second finger: switch to pinch, cancel any single-pointer gesture
@@ -1221,11 +1226,7 @@ function ShowDiffraction() {
     setDpExportAnchor(null);
     exportCounterRef.current += 1;
     const id = `html-${exportCounterRef.current}`;
-    const slug = (title || "showdiffraction")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "") || "showdiffraction";
-    const filename = `${slug}_${nFrames}x${detRows}x${detCols}.html`;
+    const filename = `${exportTitleSlug(title, "showdiffraction")}_${nFrames}x${detRows}x${detCols}.html`;
     pendingExportRef.current = id;
     setExportRequest(JSON.stringify({ mode: "single", download: true, id, filename }));
   };
@@ -1244,20 +1245,13 @@ function ShowDiffraction() {
     setExportRequest(JSON.stringify({ mode: "clear" }));
   }, [exportPayload, exportPayloadId, exportPayloadFilename, setExportRequest]);
 
-  // Keyboard shortcuts stay off while the user types in an input.
-  const isTypingTarget = React.useCallback((target: EventTarget | null): boolean => {
-    if (!(target instanceof HTMLElement)) return false;
-    if (target.isContentEditable) return true;
-    return target.closest("input, textarea, select, [role='textbox'], [contenteditable='true']") !== null;
-  }, []);
-
   const handleRootMouseDownCapture = React.useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement | null;
     if (target?.closest("canvas")) rootRef.current?.focus();
   }, []);
 
   const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (isTypingTarget(e.target)) return;
+    if (shouldIgnoreWidgetShortcut(e.target, e.key)) return;
 
     const step = e.shiftKey ? 10 : 1;
     let handled = false;
@@ -1290,7 +1284,7 @@ function ShowDiffraction() {
       e.preventDefault();
       e.stopPropagation();
     }
-  }, [isTypingTarget, frameIdx, nFrames, setFrameIdx, request]);
+  }, [frameIdx, nFrames, setFrameIdx, request]);
 
   const canvasBox = {
     position: "relative" as const,
