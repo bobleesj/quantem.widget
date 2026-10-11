@@ -6727,8 +6727,7 @@ function Show3D() {
     }
     ctx.stroke();
 
-    const activeIdx = displaySliceIdx;
-    const markerIdx = Math.max(0, Math.min(values.length - 1, activeIdx));
+    const markerIdx = Math.max(0, Math.min(values.length - 1, displaySliceIdx));
     const markerX = (markerIdx / denom) * plotW;
     ctx.strokeStyle = themeColors.textMuted;
     ctx.lineWidth = 1;
@@ -7369,20 +7368,16 @@ function Show3D() {
         }
       }
 
-      let real: Float32Array, imag: Float32Array;
-
       const fftGpu = await ensureFftGpu();
       if (cancelled || fftGeneration !== fftDataGenerationRef.current) return;
       const fftSource = fftGpu.path === "WebGPU" ? "webgpu" : "cpu";
-      const result = await fftGpu.fft2D(
+      const { real, imag } = await fftGpu.fft2D(
         inputData.slice(),
         new Float32Array(inputData.length),
         fftW,
         fftH,
         false,
       );
-      real = result.real;
-      imag = result.imag;
 
       if (cancelled || fftGeneration !== fftDataGenerationRef.current) return;
       fftshift(real, fftW, fftH);
@@ -9972,7 +9967,6 @@ function Show3D() {
     if (!text || text === String(idx) || text === String(idx + 1)) return "";
     return text;
   }, [labels]);
-  const panelFrameLabelForIndex = React.useCallback((_panel: number, idx: number): string => frameLabelForIndex(idx), [frameLabelForIndex]);
   const formatFrameValueLabel = React.useCallback((idx: number) => {
     const rounded = clampSlice(idx);
     const label = frameLabelForIndex(rounded);
@@ -10344,7 +10338,6 @@ function Show3D() {
       : fftSourceBase.startsWith("webgpu") ? "WebGPU"
         : fftSourceBase ? "CPU"
         : "not run yet";
-  const fftSourceDetail = fftSourceBase;
   const resolvedDisplayBin = Math.max(1, displayBin || 1);
   const displayStackBytes = offlineFloatStack?.byteLength || offlineStack?.byteLength || 0;
   const displayPayloadLabel = offlineFloatStack?.byteLength
@@ -10550,7 +10543,7 @@ function Show3D() {
                 WebGPU: {webgpuStatusLabel}{fftBackendInfo.adapter ? ` (${fftBackendInfo.adapter})` : ""}.
               </Typography>
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>
-                FFT compute: {fftSourceLabel}{fftSourceDetail && fftSourceDetail !== fftSourceLabel ? ` (${fftSourceDetail})` : ""}
+                FFT compute: {fftSourceLabel}{fftSourceBase && fftSourceBase !== fftSourceLabel ? ` (${fftSourceBase})` : ""}
                 {fftBackendInfo.ms != null ? `, ${fftBackendInfo.ms.toFixed(1)} ms` : ""}.
               </Typography>
               {fftBackendInfo.panels != null && (
@@ -11036,10 +11029,7 @@ function Show3D() {
                   </Box>
                   <MenuItem
                     dense
-                    onClick={() => setColorShared(
-                      colorShared ? false : true,
-                      colorTargetPanel,
-                    )}
+                    onClick={() => setColorShared(!colorShared, colorTargetPanel)}
                     sx={{ fontSize: 12, gap: 1, color: !colorShared ? themeColors.accent : themeColors.text }}
                   >
                     <Typography sx={{ flex: 1, fontSize: 12, color: "inherit" }} title="Shared keeps one colormap for every panel. Turn off to let the Color dropdown edit only the selected panel.">Color shared</Typography>
@@ -11554,7 +11544,7 @@ function Show3D() {
               const realN = panelRealFrames?.[panel];
               const shown = realN ? Math.min(shownIdx + 1, realN) : shownIdx + 1;
               const total = realN || nSlices;
-              const frameLabel = panelFrameLabelForIndex(panel, shownIdx);
+              const frameLabel = frameLabelForIndex(shownIdx);
               return (
                 <Box
                   key={`panel-title-${panel}`}
@@ -12231,120 +12221,118 @@ function Show3D() {
                 </>)}
               </Box>
               {/* Playback: 2 rows side-by-side with Display + Histogram. */}
-              {(() => { const activeIdx = visibleSliceIdx; return (
-                <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: `${SPACING.XS}px`, flex: "0 1 auto", minWidth: 0, maxWidth: "100%", justifyContent: "center" }}>
-                  <Box sx={{ ...controlRow, ...mobileControlRowSx, width: "fit-content", maxWidth: "100%", flexWrap: "nowrap", border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, boxSizing: "border-box" }}>
-                    <Stack direction="row" spacing={0} sx={{ flexShrink: 0, mr: 0.5 }}>
-                      <IconButton size="small" onClick={() => playFromCurrentFrame(-1)} sx={{ color: reverse && playing ? themeColors.accent : themeColors.textMuted, p: 0.25 }} aria-label="Play in reverse" title="Play reverse">
-                        <FastRewindIcon sx={{ fontSize: 18 }} />
-                      </IconButton>
-                      <PlayPauseButton playing={playing} color={themeColors.accent}
-                        onToggle={() => { if (playing) pausePlayback(); else playFromCurrentFrame(); }} />
-                      <IconButton size="small" onClick={() => playFromCurrentFrame(1)} sx={{ color: !reverse && playing ? themeColors.accent : themeColors.textMuted, p: 0.25 }} aria-label="Play forward" title="Play forward">
-                        <FastForwardIcon sx={{ fontSize: 18 }} />
-                      </IconButton>
-                      <IconButton size="small" onClick={stopPlayback} sx={{ color: themeColors.textMuted, p: 0.25 }} aria-label="Stop and rewind to start" title="Stop">
-                        <StopIcon sx={{ fontSize: 16 }} />
-                      </IconButton>
-                    </Stack>
-                    {loop ? (
-                      <Slider ref={playbackSliderRef} value={[loopStart, activeIdx, effectiveLoopEnd]} onPointerDownCapture={handleLoopSliderPointerDownCapture} onChange={(_, v) => { const vals = v as number[]; if (vals[0] !== loopStart) setLoopStart(vals[0]); if (vals[1] !== activeIdx) scrubToSlice(vals[1]); if (vals[2] !== effectiveLoopEnd) setLoopEnd(vals[2]); }} onChangeCommitted={(_, v) => { const vals = v as number[]; if (vals[0] !== loopStart) setLoopStart(vals[0]); commitSlice(vals[1]); if (vals[2] !== effectiveLoopEnd) setLoopEnd(vals[2]); }} disableSwap min={0} max={nSlices - 1} size="small" valueLabelDisplay="auto" valueLabelFormat={(v) => formatFrameValueLabel(v)} marks={bookmarkedFrameMarks} aria-label={`Loop range and current ${dimLabel.toLowerCase()} (frame ${activeIdx + 1} of ${nSlices}, loop ${loopStart + 1} to ${effectiveLoopEnd + 1})`} sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 90, "& .MuiSlider-thumb[data-index='0']": { width: 8, height: 8, bgcolor: themeColors.textMuted }, "& .MuiSlider-thumb[data-index='1']": { width: 12, height: 12 }, "& .MuiSlider-thumb[data-index='2']": { width: 8, height: 8, bgcolor: themeColors.textMuted }, "& .MuiSlider-mark": { bgcolor: "#ffc107", width: 5, height: 5, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" }, "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }} />
-                    ) : (
-                      <Slider ref={playbackSliderRef} value={activeIdx} onPointerDownCapture={handleLoopSliderPointerDownCapture} onChange={(_, v) => scrubToSlice(v as number)} onChangeCommitted={(_, v) => commitSlice(v as number)} min={0} max={nSlices - 1} size="small" valueLabelDisplay="auto" valueLabelFormat={(v) => formatFrameValueLabel(v)} marks={bookmarkedFrameMarks} aria-label={`Current ${dimLabel.toLowerCase()} (${activeIdx + 1} of ${nSlices})`} sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 90, "& .MuiSlider-mark": { bgcolor: "#ffc107", width: 5, height: 5, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" }, "& .MuiSlider-valueLabel": { maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }} />
-                    )}
-                    <span
-                      ref={playbackLiveCountRef}
-                      data-show3d-playback-count="true"
-                      style={{
-                        fontSize: 10,
-                        fontFamily: UI_FONT,
-                        color: themeColors.textMuted,
-                        minWidth: `${String(nSlices).length * 2 + 1}ch`,
-                        fontVariantNumeric: "tabular-nums",
-                        textAlign: "right",
-                        flexShrink: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {`${activeIdx + 1}/${nSlices}`}
-                    </span>
-                    <IconButton size="small" onClick={toggleCurrentFrameBookmark} aria-pressed={currentFrameBookmarked} aria-label={`${currentFrameBookmarked ? "Unstar" : "Star"} frame ${activeIdx + 1}`} title={`${currentFrameBookmarked ? "Unstar" : "Star"} frame ${activeIdx + 1}`} sx={{ color: currentFrameBookmarked ? "#ffc107" : themeColors.textMuted, p: 0.25, width: 22, height: 22, flexShrink: 0, "&:hover": { color: currentFrameBookmarked ? "#ffc107" : themeColors.text } }}>
-                      <Box component="span" sx={{ fontSize: 18, lineHeight: "18px" }}>{currentFrameBookmarked ? "★" : "☆"}</Box>
+              <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: `${SPACING.XS}px`, flex: "0 1 auto", minWidth: 0, maxWidth: "100%", justifyContent: "center" }}>
+                <Box sx={{ ...controlRow, ...mobileControlRowSx, width: "fit-content", maxWidth: "100%", flexWrap: "nowrap", border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, boxSizing: "border-box" }}>
+                  <Stack direction="row" spacing={0} sx={{ flexShrink: 0, mr: 0.5 }}>
+                    <IconButton size="small" onClick={() => playFromCurrentFrame(-1)} sx={{ color: reverse && playing ? themeColors.accent : themeColors.textMuted, p: 0.25 }} aria-label="Play in reverse" title="Play reverse">
+                      <FastRewindIcon sx={{ fontSize: 18 }} />
                     </IconButton>
-                    <Badge
-                      badgeContent={playbackPathLength > 0 ? 1 : 0}
-                      invisible={playbackPathLength === 0}
-                      sx={{ "& .MuiBadge-badge": { bgcolor: themeColors.accent, color: "#fff", fontSize: 9, fontWeight: 600, minWidth: 12, height: 12, px: 0.25 } }}
+                    <PlayPauseButton playing={playing} color={themeColors.accent}
+                      onToggle={() => { if (playing) pausePlayback(); else playFromCurrentFrame(); }} />
+                    <IconButton size="small" onClick={() => playFromCurrentFrame(1)} sx={{ color: !reverse && playing ? themeColors.accent : themeColors.textMuted, p: 0.25 }} aria-label="Play forward" title="Play forward">
+                      <FastForwardIcon sx={{ fontSize: 18 }} />
+                    </IconButton>
+                    <IconButton size="small" onClick={stopPlayback} sx={{ color: themeColors.textMuted, p: 0.25 }} aria-label="Stop and rewind to start" title="Stop">
+                      <StopIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Stack>
+                  {loop ? (
+                    <Slider ref={playbackSliderRef} value={[loopStart, visibleSliceIdx, effectiveLoopEnd]} onPointerDownCapture={handleLoopSliderPointerDownCapture} onChange={(_, v) => { const vals = v as number[]; if (vals[0] !== loopStart) setLoopStart(vals[0]); if (vals[1] !== visibleSliceIdx) scrubToSlice(vals[1]); if (vals[2] !== effectiveLoopEnd) setLoopEnd(vals[2]); }} onChangeCommitted={(_, v) => { const vals = v as number[]; if (vals[0] !== loopStart) setLoopStart(vals[0]); commitSlice(vals[1]); if (vals[2] !== effectiveLoopEnd) setLoopEnd(vals[2]); }} disableSwap min={0} max={nSlices - 1} size="small" valueLabelDisplay="auto" valueLabelFormat={(v) => formatFrameValueLabel(v)} marks={bookmarkedFrameMarks} aria-label={`Loop range and current ${dimLabel.toLowerCase()} (frame ${visibleSliceIdx + 1} of ${nSlices}, loop ${loopStart + 1} to ${effectiveLoopEnd + 1})`} sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 90, "& .MuiSlider-thumb[data-index='0']": { width: 8, height: 8, bgcolor: themeColors.textMuted }, "& .MuiSlider-thumb[data-index='1']": { width: 12, height: 12 }, "& .MuiSlider-thumb[data-index='2']": { width: 8, height: 8, bgcolor: themeColors.textMuted }, "& .MuiSlider-mark": { bgcolor: "#ffc107", width: 5, height: 5, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" }, "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }} />
+                  ) : (
+                    <Slider ref={playbackSliderRef} value={visibleSliceIdx} onPointerDownCapture={handleLoopSliderPointerDownCapture} onChange={(_, v) => scrubToSlice(v as number)} onChangeCommitted={(_, v) => commitSlice(v as number)} min={0} max={nSlices - 1} size="small" valueLabelDisplay="auto" valueLabelFormat={(v) => formatFrameValueLabel(v)} marks={bookmarkedFrameMarks} aria-label={`Current ${dimLabel.toLowerCase()} (${visibleSliceIdx + 1} of ${nSlices})`} sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 90, "& .MuiSlider-mark": { bgcolor: "#ffc107", width: 5, height: 5, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" }, "& .MuiSlider-valueLabel": { maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }} />
+                  )}
+                  <span
+                    ref={playbackLiveCountRef}
+                    data-show3d-playback-count="true"
+                    style={{
+                      fontSize: 10,
+                      fontFamily: UI_FONT,
+                      color: themeColors.textMuted,
+                      minWidth: `${String(nSlices).length * 2 + 1}ch`,
+                      fontVariantNumeric: "tabular-nums",
+                      textAlign: "right",
+                      flexShrink: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {`${visibleSliceIdx + 1}/${nSlices}`}
+                  </span>
+                  <IconButton size="small" onClick={toggleCurrentFrameBookmark} aria-pressed={currentFrameBookmarked} aria-label={`${currentFrameBookmarked ? "Unstar" : "Star"} frame ${visibleSliceIdx + 1}`} title={`${currentFrameBookmarked ? "Unstar" : "Star"} frame ${visibleSliceIdx + 1}`} sx={{ color: currentFrameBookmarked ? "#ffc107" : themeColors.textMuted, p: 0.25, width: 22, height: 22, flexShrink: 0, "&:hover": { color: currentFrameBookmarked ? "#ffc107" : themeColors.text } }}>
+                    <Box component="span" sx={{ fontSize: 18, lineHeight: "18px" }}>{currentFrameBookmarked ? "★" : "☆"}</Box>
+                  </IconButton>
+                  <Badge
+                    badgeContent={playbackPathLength > 0 ? 1 : 0}
+                    invisible={playbackPathLength === 0}
+                    sx={{ "& .MuiBadge-badge": { bgcolor: themeColors.accent, color: "#fff", fontSize: 9, fontWeight: 600, minWidth: 12, height: 12, px: 0.25 } }}
+                  >
+                    <Button
+                      size="small"
+                      sx={{ minWidth: 0, px: 0.6, py: 0.1, fontSize: 10, lineHeight: 1.2, textTransform: "none", color: playbackPathLength > 0 ? themeColors.accent : themeColors.textMuted, flexShrink: 0 }}
+                      onClick={(e) => setPlaybackStyleMenuAnchor(e.currentTarget)}
+                      aria-label="More playback style options"
+                      aria-haspopup="menu"
+                      title={`Playback style: ${playbackStyleSummary}`}
                     >
-                      <Button
-                        size="small"
-                        sx={{ minWidth: 0, px: 0.6, py: 0.1, fontSize: 10, lineHeight: 1.2, textTransform: "none", color: playbackPathLength > 0 ? themeColors.accent : themeColors.textMuted, flexShrink: 0 }}
-                        onClick={(e) => setPlaybackStyleMenuAnchor(e.currentTarget)}
-                        aria-label="More playback style options"
-                        aria-haspopup="menu"
-                        title={`Playback style: ${playbackStyleSummary}`}
-                      >
-                        More
-                      </Button>
-                    </Badge>
-                    <Menu
-                      anchorEl={playbackStyleMenuAnchor}
-                      open={Boolean(playbackStyleMenuAnchor)}
-                      onClose={() => setPlaybackStyleMenuAnchor(null)}
-                      MenuListProps={{ "aria-label": "Playback style options" }}
-                      {...themedMenuProps}
-                    >
-                      <Box sx={{ px: 1.5, py: 0.75, minWidth: 240 }}>
-                        <Typography sx={{ fontSize: 11, fontWeight: 700, color: themeColors.text, mb: 0.5 }}>Play Style</Typography>
-                        <Typography sx={{ fontSize: 10, color: themeColors.textMuted, mb: 0.75 }} title="Changes only playback_path. Loop, Bounce, fps, and range stay user-controlled in the playback row.">
-                          {playbackStyleSummary} · uses current range
-                        </Typography>
-                        <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 0.5 }}>
-                          <Button size="small" sx={playbackStyleButtonSx("linear")} aria-pressed={playbackStyleActive === "linear"} onClick={() => applyPlaybackStylePreset("linear")} title="Use the current loop range at constant frame spacing.">Linear</Button>
-                          <Button size="small" sx={playbackStyleButtonSx("power-in")} aria-pressed={playbackStyleActive === "power-in"} onClick={() => applyPlaybackStylePreset("power-in")} title="Start slowly, then accelerate through the current range.">Power In</Button>
-                          <Button size="small" sx={playbackStyleButtonSx("power-out")} aria-pressed={playbackStyleActive === "power-out"} onClick={() => applyPlaybackStylePreset("power-out")} title="Move quickly at first, then settle near the end of the current range.">Power Out</Button>
-                          <Button size="small" sx={playbackStyleButtonSx("ease-in-out")} aria-pressed={playbackStyleActive === "ease-in-out"} onClick={() => applyPlaybackStylePreset("ease-in-out")} title="Smoothly accelerate, then decelerate through the current range.">Ease In/Out</Button>
-                        </Box>
+                      More
+                    </Button>
+                  </Badge>
+                  <Menu
+                    anchorEl={playbackStyleMenuAnchor}
+                    open={Boolean(playbackStyleMenuAnchor)}
+                    onClose={() => setPlaybackStyleMenuAnchor(null)}
+                    MenuListProps={{ "aria-label": "Playback style options" }}
+                    {...themedMenuProps}
+                  >
+                    <Box sx={{ px: 1.5, py: 0.75, minWidth: 240 }}>
+                      <Typography sx={{ fontSize: 11, fontWeight: 700, color: themeColors.text, mb: 0.5 }}>Play Style</Typography>
+                      <Typography sx={{ fontSize: 10, color: themeColors.textMuted, mb: 0.75 }} title="Changes only playback_path. Loop, Bounce, fps, and range stay user-controlled in the playback row.">
+                        {playbackStyleSummary} · uses current range
+                      </Typography>
+                      <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 0.5 }}>
+                        <Button size="small" sx={playbackStyleButtonSx("linear")} aria-pressed={playbackStyleActive === "linear"} onClick={() => applyPlaybackStylePreset("linear")} title="Use the current loop range at constant frame spacing.">Linear</Button>
+                        <Button size="small" sx={playbackStyleButtonSx("power-in")} aria-pressed={playbackStyleActive === "power-in"} onClick={() => applyPlaybackStylePreset("power-in")} title="Start slowly, then accelerate through the current range.">Power In</Button>
+                        <Button size="small" sx={playbackStyleButtonSx("power-out")} aria-pressed={playbackStyleActive === "power-out"} onClick={() => applyPlaybackStylePreset("power-out")} title="Move quickly at first, then settle near the end of the current range.">Power Out</Button>
+                        <Button size="small" sx={playbackStyleButtonSx("ease-in-out")} aria-pressed={playbackStyleActive === "ease-in-out"} onClick={() => applyPlaybackStylePreset("ease-in-out")} title="Smoothly accelerate, then decelerate through the current range.">Ease In/Out</Button>
                       </Box>
-                    </Menu>
+                    </Box>
+                  </Menu>
+                </Box>
+                <Box sx={{ ...controlRow, ...mobileControlRowSx, width: "fit-content", maxWidth: "100%", flexWrap: "wrap", border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, boxSizing: "border-box" }}>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: isMobileViewport ? "4px" : `${SPACING.SM}px`, flexShrink: 0 }}>
+                    <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, flexShrink: 0 }}>fps</Typography>
+                    <Slider value={playbackFps} min={1} max={MAX_PLAYBACK_FPS} step={1} onChange={(_, v) => setPlaybackFps(v as number)} size="small" sx={{ ...sliderStyles.small, width: isMobileViewport ? 40 : 44, mx: isMobileViewport ? "3px" : 0, flexShrink: 0 }} aria-label="Playback frames per second" valueLabelDisplay="auto" />
+                    <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, minWidth: isMobileViewport ? 16 : 20, flexShrink: 0 }}>{Math.round(playbackFps)}</Typography>
                   </Box>
-                  <Box sx={{ ...controlRow, ...mobileControlRowSx, width: "fit-content", maxWidth: "100%", flexWrap: "wrap", border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg, boxSizing: "border-box" }}>
-                    <Box sx={{ display: "flex", alignItems: "center", gap: isMobileViewport ? "4px" : `${SPACING.SM}px`, flexShrink: 0 }}>
-                      <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, flexShrink: 0 }}>fps</Typography>
-                      <Slider value={playbackFps} min={1} max={MAX_PLAYBACK_FPS} step={1} onChange={(_, v) => setPlaybackFps(v as number)} size="small" sx={{ ...sliderStyles.small, width: isMobileViewport ? 40 : 44, mx: isMobileViewport ? "3px" : 0, flexShrink: 0 }} aria-label="Playback frames per second" valueLabelDisplay="auto" />
-                      <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, minWidth: isMobileViewport ? 16 : 20, flexShrink: 0 }}>{Math.round(playbackFps)}</Typography>
-                    </Box>
-                    <Box
-                      title="Moving average window"
-                      sx={{ display: "flex", alignItems: "center", gap: isMobileViewport ? "4px" : `${SPACING.SM}px`, flexShrink: 0 }}
-                    >
-                      <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, flexShrink: 0 }}>avg</Typography>
-                      <Slider
-                        value={avgWindow}
-                        min={1}
-                        max={15}
-                        step={1}
-                        onChange={(_, v) => setAvgWindow(v as number)}
-                        size="small"
-                        sx={{ ...sliderStyles.small, width: isMobileViewport ? 40 : 44, mx: isMobileViewport ? "3px" : 0, flexShrink: 0 }}
-                        aria-label="Moving average window"
-                        valueLabelDisplay="auto"
-                      />
-                      <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, minWidth: 16, flexShrink: 0 }}>{Math.round(avgWindow || 1)}</Typography>
-                    </Box>
-                    <Box sx={{ display: "flex", alignItems: "center", gap: isMobileViewport ? "4px" : `${SPACING.SM}px`, flexShrink: 0 }}>
-                      <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, flexShrink: 0 }}>Loop</Typography>
-                      <Switch size="small" checked={loop} onChange={() => setLoop(!loop)} sx={{ ...switchStyles.small, flexShrink: 0 }} slotProps={{ input: { "aria-label": "Toggle loop playback" } }} />
-                    </Box>
-                    <Box sx={{ display: "flex", alignItems: "center", gap: isMobileViewport ? "4px" : `${SPACING.SM}px`, flexShrink: 0 }}>
-                      <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, flexShrink: 0 }}>Bounce</Typography>
-                      <Switch size="small" checked={boomerang} onChange={() => setBoomerang(!boomerang)} sx={{ ...switchStyles.small, flexShrink: 0 }} slotProps={{ input: { "aria-label": "Toggle bounce playback" } }} />
-                    </Box>
+                  <Box
+                    title="Moving average window"
+                    sx={{ display: "flex", alignItems: "center", gap: isMobileViewport ? "4px" : `${SPACING.SM}px`, flexShrink: 0 }}
+                  >
+                    <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, flexShrink: 0 }}>avg</Typography>
+                    <Slider
+                      value={avgWindow}
+                      min={1}
+                      max={15}
+                      step={1}
+                      onChange={(_, v) => setAvgWindow(v as number)}
+                      size="small"
+                      sx={{ ...sliderStyles.small, width: isMobileViewport ? 40 : 44, mx: isMobileViewport ? "3px" : 0, flexShrink: 0 }}
+                      aria-label="Moving average window"
+                      valueLabelDisplay="auto"
+                    />
+                    <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, minWidth: 16, flexShrink: 0 }}>{Math.round(avgWindow || 1)}</Typography>
+                  </Box>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: isMobileViewport ? "4px" : `${SPACING.SM}px`, flexShrink: 0 }}>
+                    <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, flexShrink: 0 }}>Loop</Typography>
+                    <Switch size="small" checked={loop} onChange={() => setLoop(!loop)} sx={{ ...switchStyles.small, flexShrink: 0 }} slotProps={{ input: { "aria-label": "Toggle loop playback" } }} />
+                  </Box>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: isMobileViewport ? "4px" : `${SPACING.SM}px`, flexShrink: 0 }}>
+                    <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, flexShrink: 0 }}>Bounce</Typography>
+                    <Switch size="small" checked={boomerang} onChange={() => setBoomerang(!boomerang)} sx={{ ...switchStyles.small, flexShrink: 0 }} slotProps={{ input: { "aria-label": "Toggle bounce playback" } }} />
                   </Box>
                 </Box>
-              ); })()}
+              </Box>
               {/* Intensity histogram + clip sliders are gray-only (colormap window). */}
               {!isRgb && (() => {
                 // Global stack range from Python (data_min/data_max trait), not per-frame.
@@ -12380,20 +12368,17 @@ function Show3D() {
                             vmaxPct={vmaxPct}
                             onRangeChange={(min, max) => {
                               panelHistogramPreviewPctRef.current.set(panel, [min, max]);
-                              const commitPanelRange = () => {
-                                setPanelRangePercentages(panel, min, max, linkContrast);
-                                if (autoContrast) {
-                                  manualImageRangeBeforeAutoRef.current = null;
-                                  setAutoContrast(false);
-                                }
-                                const live = playRef.current;
-                                live.autoContrast = false;
-                                live.panelStates = panelStatesLiveRef.current;
-                                live.vminPerPanel = vminPerPanelLiveRef.current;
-                                live.vmaxPerPanel = vmaxPerPanelLiveRef.current;
-                                scheduleHistogramPreviewPaint();
-                              };
-                              commitPanelRange();
+                              setPanelRangePercentages(panel, min, max, linkContrast);
+                              if (autoContrast) {
+                                manualImageRangeBeforeAutoRef.current = null;
+                                setAutoContrast(false);
+                              }
+                              const live = playRef.current;
+                              live.autoContrast = false;
+                              live.panelStates = panelStatesLiveRef.current;
+                              live.vminPerPanel = vminPerPanelLiveRef.current;
+                              live.vmaxPerPanel = vmaxPerPanelLiveRef.current;
+                              scheduleHistogramPreviewPaint();
                             }}
                             width={110}
                             height={58}
@@ -12423,20 +12408,17 @@ function Show3D() {
                     vmaxPct={imageVmaxPct}
                     onRangeChange={(min, max) => {
                       imageHistogramPreviewPctRef.current = [min, max];
-                      const commitSharedRange = () => {
-                        const live = playRef.current;
-                        live.imageVminPct = min;
-                        live.imageVmaxPct = max;
-                        live.autoContrast = false;
-                        setImageVminPct(min);
-                        setImageVmaxPct(max);
-                        if (autoContrast) {
-                          manualImageRangeBeforeAutoRef.current = null;
-                          setAutoContrast(false);
-                        }
-                        scheduleHistogramPreviewPaint();
-                      };
-                      commitSharedRange();
+                      const live = playRef.current;
+                      live.imageVminPct = min;
+                      live.imageVmaxPct = max;
+                      live.autoContrast = false;
+                      setImageVminPct(min);
+                      setImageVmaxPct(max);
+                      if (autoContrast) {
+                        manualImageRangeBeforeAutoRef.current = null;
+                        setAutoContrast(false);
+                      }
+                      scheduleHistogramPreviewPaint();
                     }}
                     width={110}
                     height={58}
