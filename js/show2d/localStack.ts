@@ -79,7 +79,7 @@ export function makeGalleryFftCacheKey({
   ].join("|");
 }
 
-export function galleryFftCacheStats(
+function galleryFftCacheStats(
   cache: Map<string, GalleryFftCacheEntry>,
   evictions = 0,
 ): GalleryFftCacheStats {
