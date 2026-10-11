@@ -1327,18 +1327,18 @@ function Show3D() {
     return next;
   }, [orderedPanelIndices, totalPanelCount]);
   const panelReorderTargetFromPoint = React.useCallback((clientX: number, clientY: number): { panel: number; placement: ReorderPlacement } | null => {
-    if (typeof document === "undefined") return null;
-    const elements = document.elementsFromPoint(clientX, clientY);
+    // Only this widget's panels are targets: another Show3D on the page may be reordering its own.
+    const container = canvasContainerRef.current;
+    if (!container) return null;
     let targetEl: HTMLElement | null = null;
-    for (const element of elements) {
-      if (!(element instanceof HTMLElement)) continue;
+    for (const element of document.elementsFromPoint(clientX, clientY)) {
       const candidate = element.closest("[data-show3d-reorder-panel]");
-      if (candidate instanceof HTMLElement) {
+      if (candidate instanceof HTMLElement && container.contains(candidate)) {
         targetEl = candidate;
         break;
       }
     }
-    const allTargets = Array.from(document.querySelectorAll<HTMLElement>("[data-show3d-reorder-panel]"))
+    const allTargets = Array.from(container.querySelectorAll<HTMLElement>("[data-show3d-reorder-panel]"))
       .map((element) => {
         const rect = element.getBoundingClientRect();
         const raw = element.dataset.show3dReorderPanel;

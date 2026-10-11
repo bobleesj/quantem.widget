@@ -12,6 +12,9 @@ vi.mock("../display/colormaps", async (importOriginal) => ({
 
 const { default: { render: renderShow3D } } = await import("./index");
 
+// Mounting the whole widget in jsdom takes seconds on a loaded machine.
+vi.setConfig({ testTimeout: 30_000 });
+
 const SIZE = 16;
 const FRAMES = 4;
 
@@ -67,6 +70,7 @@ class Model {
 
 let el: HTMLDivElement;
 let cleanup: (() => void) | undefined;
+let unmountOthers: (() => void)[] = [];
 // jsdom has no pointer capture; the ring's pointer path needs it.
 const captured = new Set<number>();
 const pointerCapture = {
@@ -103,10 +107,13 @@ beforeEach(() => {
 });
 afterEach(async () => {
   gpuEngine.current = null;
+  act(() => { for (const unmount of unmountOthers) unmount(); });
+  unmountOthers = [];
   act(() => cleanup?.());
   cleanup = undefined;
   await settle();
   el.remove();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   for (const name of Object.keys(pointerCapture)) delete (Element.prototype as unknown as Record<string, unknown>)[name];
@@ -189,7 +196,6 @@ it("keeps the current frame while a loop end is dragged", async () => {
   act(() => { vi.advanceTimersByTime(1000); });
   expect(model.written("loop_start")).toEqual([1]);
   expect(model.written("slice_idx")).toEqual([]);
-  vi.useRealTimers();
 });
 
 it("marks More as active while denoise is on with its settings row closed", async () => {
@@ -253,4 +259,40 @@ it("releases every GPU slot of a replaced stack, the moving-average slot include
   act(() => model.set("_offline_float_stack", new DataView(stack.buffer)));
   await settle();
   expect([...released].sort()).toEqual([...filled].sort());
+});
+
+it("reorders a panel among its own widget's panels when another Show3D on the page is also reordering", async () => {
+  // Two three-panel widgets, both in reorder mode. Panel 1 of the first is dropped in a gap below its row,
+  // nearest its own panel 3 but nearer still the second widget's panel 1.
+  const packed = (frames: number) => new DataView(new Float32Array(frames * SIZE * 3 * SIZE).fill(1).buffer);
+  const options = { n_panels: 3, width: 3 * SIZE, panel_width_px: SIZE, _offline_float_stack: packed(FRAMES), max_cols: 3 };
+  const first = new Model(options);
+  const second = new Model(options);
+  const secondEl = document.createElement("div");
+  document.body.append(secondEl);
+  await mount(first);
+  act(() => {
+    const unmount = renderShow3D({ model: second, el: secondEl } as never) as () => void;
+    unmountOthers.push(() => { unmount(); secondEl.remove(); delete (document as unknown as Record<string, unknown>).elementsFromPoint; });
+  });
+  await settle();
+  for (const root of [el, secondEl]) act(() => (root.querySelector('button[aria-label="Reorder panels"]') as HTMLElement).click());
+  await settle();
+  const panels = (root: Element) => [...root.querySelectorAll<HTMLElement>("[data-show3d-reorder-panel]")];
+  const place = (panel: HTMLElement, left: number, top: number) => vi.spyOn(panel, "getBoundingClientRect")
+    .mockReturnValue({ left, top, width: 100, height: 100, right: left + 100, bottom: top + 100 } as DOMRect);
+  panels(el).forEach((panel, slot) => place(panel, 110 * slot, 0));
+  panels(secondEl).forEach((panel, slot) => place(panel, 330 + 110 * slot, 300));
+  // the pointer is over neither widget's panels (jsdom has no hit testing)
+  Object.assign(document, { elementsFromPoint: () => [] });
+  const dragged = panels(el)[0];
+  const pointer = (type: string, clientX: number, clientY: number) => act(() => {
+    dragged.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX, clientY, pointerId: 1, button: 0 }));
+  });
+  first.writes = [];
+  pointer("pointerdown", 50, 50);
+  pointer("pointermove", 330, 290);
+  pointer("pointerup", 330, 290);
+  await settle();
+  expect(first.written("panel_order")).toEqual([[1, 2, 0]]);
 });
