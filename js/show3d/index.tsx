@@ -2759,10 +2759,10 @@ function Show3D() {
   );
   const normalizePanelState = (value: Partial<PanelState> | undefined, fallback: PanelState): PanelState => ({
     zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, readNumber(value?.zoom, fallback.zoom))),
-    panX: readNumber(value?.panX, readNumber((value as { pan_x?: unknown } | undefined)?.pan_x, fallback.panX)),
-    panY: readNumber(value?.panY, readNumber((value as { pan_y?: unknown } | undefined)?.pan_y, fallback.panY)),
-    imageVminPct: readNumber(value?.imageVminPct, readNumber((value as { image_vmin_pct?: unknown } | undefined)?.image_vmin_pct, fallback.imageVminPct)),
-    imageVmaxPct: readNumber(value?.imageVmaxPct, readNumber((value as { image_vmax_pct?: unknown } | undefined)?.image_vmax_pct, fallback.imageVmaxPct)),
+    panX: readNumber(value?.panX, fallback.panX),
+    panY: readNumber(value?.panY, fallback.panY),
+    imageVminPct: readNumber(value?.imageVminPct, fallback.imageVminPct),
+    imageVmaxPct: readNumber(value?.imageVmaxPct, fallback.imageVmaxPct),
   });
   const savedPanelStates = Array.isArray(viewState?.panel_states)
     ? viewState.panel_states.map(v => normalizePanelState(v, initialState))
@@ -2836,11 +2836,11 @@ function Show3D() {
       panelStatesLiveRef.current = next;
     }
   };
-  // Back-compat aliases for the single-panel code paths (ROI, profile, etc.)
-  // which still expect plain zoom/panX/panY. Use panel 0's state.
-  const zoom = stateFor(0).zoom;
-  const panX = stateFor(0).panX;
-  const panY = stateFor(0).panY;
+  // Panel 0's view, the linked view while panels are linked: the single-panel tools (ROI, lens, hit areas)
+  // and the single-panel playback draw in it.
+  const firstPanelZoom = stateFor(0).zoom;
+  const firstPanelPanX = stateFor(0).panX;
+  const firstPanelPanY = stateFor(0).panY;
   const [isDraggingPan, setIsDraggingPan] = React.useState(false);
   const panDragRef = React.useRef<{ panelIdx: number, x: number, y: number, pX: number, pY: number } | null>(null);
   const [mainCanvasSize, setMainCanvasSize] = React.useState(CANVAS_TARGET_SIZE);
@@ -4109,7 +4109,7 @@ function Show3D() {
   }, [profileWidth, sampleProfileForActivePage]);
   const getImageHitRadius = (panelIdx: number) => {
     const geom = getPanelGeometry(panelIdx);
-    if (!geom) return RESIZE_HIT_AREA_PX / Math.max(1e-6, displayScale * zoom);
+    if (!geom) return RESIZE_HIT_AREA_PX / Math.max(1e-6, displayScale * firstPanelZoom);
     const scale = Math.max(1e-6, Math.min(geom.scaleX, geom.scaleY) * geom.state.zoom);
     return RESIZE_HIT_AREA_PX / scale;
   };
@@ -4195,7 +4195,7 @@ function Show3D() {
     linkedState, linkPanels,
     panelStates, vminPerPanel, vmaxPerPanel,
     visiblePanelIndices,
-    zoom, panX, panY, playbackPath,
+    zoom: firstPanelZoom, panX: firstPanelPanX, panY: firstPanelPanY, playbackPath,
     profileActive, profilePoints, profileWidth, profileColOffset: profileSampleColOffset,
     traitVmin, traitVmax, smooth, imageRotation, showStats,
     diffMode, avgWindow,
@@ -4221,7 +4221,7 @@ function Show3D() {
       linkedState: liveLinkedState, linkPanels,
       panelStates: livePanelStates, vminPerPanel, vmaxPerPanel,
       visiblePanelIndices,
-      zoom, panX, panY, playbackPath,
+      zoom: firstPanelZoom, panX: firstPanelPanX, panY: firstPanelPanY, playbackPath,
       profileActive, profilePoints, profileWidth, profileColOffset: profileSampleColOffset,
       traitVmin, traitVmax, smooth, imageRotation, showStats,
       diffMode, avgWindow,
@@ -4231,7 +4231,7 @@ function Show3D() {
     logScale, autoContrast, percentileLow, percentileHigh,
     dataMin, dataMax, cmap, imageVminPct, imageVmaxPct,
     autoVmins, autoVmaxs, linkContrast, linkedState, linkPanels, panelStates, vminPerPanel, vmaxPerPanel, visiblePanelIndices,
-    zoom, panX, panY, playbackPath,
+    firstPanelZoom, firstPanelPanX, firstPanelPanY, playbackPath,
     profileActive, profilePoints, profileWidth, profileSampleColOffset,
     traitVmin, traitVmax, smooth, imageRotation, showStats, diffMode, avgWindow]);
 
@@ -6404,8 +6404,8 @@ function Show3D() {
     // Overlay must use the SAME screen-space pivot - earlier bug used (canvasW/2,
     // canvasH/2) without pan offset, drifting ROIs when user panned + rotated.
     if (imageRotation % 4 !== 0) {
-      const cx = canvasW / 2 + panX;
-      const cy = canvasH / 2 + panY;
+      const cx = canvasW / 2 + firstPanelPanX;
+      const cy = canvasH / 2 + firstPanelPanY;
       ctx.translate(cx, cy);
       ctx.rotate((imageRotation * Math.PI) / 2);
       ctx.translate(-cx, -cy);
@@ -6436,9 +6436,9 @@ function Show3D() {
         ctx.fillRect(0, 0, canvasW, canvasH);
         ctx.globalCompositeOperation = "destination-out";
         for (const roi of highlightedRois) {
-          const screenX = roi.col * displayScale * zoom + panX;
-          const screenY = roi.row * displayScale * zoom + panY;
-          const screenRadius = roi.radius * displayScale * zoom;
+          const screenX = roi.col * displayScale * firstPanelZoom + firstPanelPanX;
+          const screenY = roi.row * displayScale * firstPanelZoom + firstPanelPanY;
+          const screenRadius = roi.radius * displayScale * firstPanelZoom;
           const shape = roi.shape || "circle";
           ctx.fillStyle = "rgba(0,0,0,1)";
           if (shape === "circle") {
@@ -6446,14 +6446,14 @@ function Show3D() {
           } else if (shape === "square") {
             ctx.fillRect(screenX - screenRadius, screenY - screenRadius, screenRadius * 2, screenRadius * 2);
           } else if (shape === "rectangle") {
-            const screenWidth = roi.width * displayScale * zoom;
-            const screenHeight = roi.height * displayScale * zoom;
+            const screenWidth = roi.width * displayScale * firstPanelZoom;
+            const screenHeight = roi.height * displayScale * firstPanelZoom;
             ctx.fillRect(screenX - screenWidth / 2, screenY - screenHeight / 2, screenWidth, screenHeight);
           } else if (shape === "annular") {
             ctx.beginPath(); ctx.arc(screenX, screenY, screenRadius, 0, Math.PI * 2); ctx.fill();
             ctx.globalCompositeOperation = "source-over";
             ctx.fillStyle = "rgba(0,0,0,0.6)";
-            const screenRadiusInner = roi.radius_inner * displayScale * zoom;
+            const screenRadiusInner = roi.radius_inner * displayScale * firstPanelZoom;
             ctx.beginPath(); ctx.arc(screenX, screenY, screenRadiusInner, 0, Math.PI * 2); ctx.fill();
             ctx.globalCompositeOperation = "destination-out";
           }
@@ -6464,12 +6464,12 @@ function Show3D() {
       for (let roiIdx = 0; roiIdx < roiItems.length; roiIdx++) {
         const roi = roiItems[roiIdx];
         const isSelected = roiIdx === roiSelectedIdx;
-        const screenX = roi.col * displayScale * zoom + panX;
-        const screenY = roi.row * displayScale * zoom + panY;
-        const screenRadius = roi.radius * displayScale * zoom;
-        const screenWidth = roi.width * displayScale * zoom;
-        const screenHeight = roi.height * displayScale * zoom;
-        const screenRadiusInner = roi.radius_inner * displayScale * zoom;
+        const screenX = roi.col * displayScale * firstPanelZoom + firstPanelPanX;
+        const screenY = roi.row * displayScale * firstPanelZoom + firstPanelPanY;
+        const screenRadius = roi.radius * displayScale * firstPanelZoom;
+        const screenWidth = roi.width * displayScale * firstPanelZoom;
+        const screenHeight = roi.height * displayScale * firstPanelZoom;
+        const screenRadiusInner = roi.radius_inner * displayScale * firstPanelZoom;
         const shape = (roi.shape || "circle") as "circle" | "square" | "rectangle" | "annular";
         ctx.lineWidth = roi.line_width || 2;
         const color = roi.color || ROI_COLORS[roiIdx % ROI_COLORS.length];
@@ -6588,7 +6588,7 @@ function Show3D() {
         ctx.restore();
       }
     }
-  }, [activePageStart, effectiveRoiActive, roiItems, roiSelectedIdx, isDraggingROI, canvasW, canvasH, displayScale, zoom, panX, panY, themeColors, profileActive, profilePoints, profileWidth, profilePanelIdx, nPanels, panelTitles, imageRotation, width, height, panelStates, linkedState, linkPanels, panelGapPx, sourcePanelWidth, sourcePanelHeight, sharedPanelSource, singlePanelPageProfile, totalPanelCount, canvasRepaintSignal, panelOverlays, overlaySelection, visiblePanelIndices]);
+  }, [activePageStart, effectiveRoiActive, roiItems, roiSelectedIdx, isDraggingROI, canvasW, canvasH, displayScale, firstPanelZoom, firstPanelPanX, firstPanelPanY, themeColors, profileActive, profilePoints, profileWidth, profilePanelIdx, nPanels, panelTitles, imageRotation, width, height, panelStates, linkedState, linkPanels, panelGapPx, sourcePanelWidth, sourcePanelHeight, sharedPanelSource, singlePanelPageProfile, totalPanelCount, canvasRepaintSignal, panelOverlays, overlaySelection, visiblePanelIndices]);
 
   // Lens inset rendering
   React.useEffect(() => {
@@ -7070,7 +7070,7 @@ function Show3D() {
       }
       ctx.restore();
     }
-  }, [pixelSize, pixelUnit, scaleBarVisible, width, sourcePanelWidth, canvasW, canvasH, displayScale, zoom, nPanels, visiblePanelCount, visiblePanelIndices, maxCols, panelStates, linkedState, linkPanels, panelGapPx, showZoomIndicator, panelChromeVisible, showColorbar, cmap, imageDataRange, imageVminPct, imageVmaxPct, logScale, autoContrast, imageHistogramData, autoVmins, autoVmaxs, displaySliceIdx, percentileLow, percentileHigh, dataMin, dataMax, traitVmin, traitVmax, linkContrast, sharedPanelSource, panelDataRanges, vminPerPanel, vmaxPerPanel, canvasRepaintSignal]);
+  }, [pixelSize, pixelUnit, scaleBarVisible, width, sourcePanelWidth, canvasW, canvasH, displayScale, firstPanelZoom, nPanels, visiblePanelCount, visiblePanelIndices, maxCols, panelStates, linkedState, linkPanels, panelGapPx, showZoomIndicator, panelChromeVisible, showColorbar, cmap, imageDataRange, imageVminPct, imageVmaxPct, logScale, autoContrast, imageHistogramData, autoVmins, autoVmaxs, displaySliceIdx, percentileLow, percentileHigh, dataMin, dataMax, traitVmin, traitVmax, linkContrast, sharedPanelSource, panelDataRanges, vminPerPanel, vmaxPerPanel, canvasRepaintSignal]);
 
   // Compute FFT magnitude (expensive, async - only re-run on data/GPU changes)
   // Supports ROI-scoped FFT: when ROI is active with a selected ROI, compute
@@ -8430,7 +8430,7 @@ function Show3D() {
     return -1;
   };
 
-  const getHitArea = () => RESIZE_HIT_AREA_PX / (displayScale * zoom);
+  const getHitArea = () => RESIZE_HIT_AREA_PX / (displayScale * firstPanelZoom);
 
   const isNearEdge = (imgCol: number, imgRow: number, roi: ROIItem): boolean => {
     const hitArea = getHitArea();
@@ -10186,7 +10186,7 @@ function Show3D() {
     }
   };
 
-  const needsReset = zoom !== 1 || panX !== 0 || panY !== 0;
+  const needsReset = firstPanelZoom !== 1 || firstPanelPanX !== 0 || firstPanelPanY !== 0;
   const scheduleScrubModelCommit = (idx: number, delayMs = 350) => {
     const next = clampSlice(idx);
     if (sliceCommitTimerRef.current !== null) {
