@@ -10,6 +10,9 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 Fixed:
 
+- The Colab install cell installs the quantem.gpu release the widget pins. It
+  took the newest quantem.gpu on TestPyPI, which pairs a widget with a
+  quantem.gpu it was not run against whenever quantem.gpu is published first.
 - Single-file `export_html` pages open without a network connection:
   require.js, the widget manager and anywidget travel in the page, which is
   about 1.2 MB larger. A packed Show4DSTEM export is one self-contained page
