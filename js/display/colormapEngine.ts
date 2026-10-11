@@ -469,47 +469,6 @@ export class GPUColormapEngine {
     return rgba;
   }
 
-  /**
-   * GPU colormap → offscreen canvas in one pass (zero intermediate allocation).
-   * Writes from GPU mapped memory directly into ImageData, then putImageData,
-   * so no intermediate RGBA array is allocated per frame.
-   */
-  async renderSlots(
-    indices: number[],
-    ranges: { vmin: number; vmax: number }[],
-    offscreens: (HTMLCanvasElement | null)[],
-    imgDatas: (ImageData | null)[],
-    logScale: boolean = false,
-  ): Promise<number> {
-    if (!this.pipeline || !this.lutBuffer || indices.length === 0) return 0;
-
-    const activeSlots: { k: number; slot: GPUSlot }[] = [];
-    const encoder = this.device.createCommandEncoder();
-    for (let k = 0; k < indices.length; k++) {
-      const slot = this.slots[indices[k]];
-      if (!slot || slot.directOnly || slot.rgbaCapacity < slot.count || !offscreens[k] || !imgDatas[k]) continue;
-      const range = ranges[k] || { vmin: 0, vmax: 1 };
-      this.encodeColormapPass(encoder, slot, range.vmin, range.vmax, logScale, this.lutBuffer);
-      encoder.copyBufferToBuffer(slot.rgbaBuffer, 0, slot.readBuffer, 0, slot.count * 4);
-      activeSlots.push({ k, slot });
-    }
-    this.device.queue.submit([encoder.finish()]);
-    await Promise.all(activeSlots.map(active => active.slot.readBuffer.mapAsync(GPUMapMode.READ)));
-
-    // Copy straight from the mapped range into each ImageData, then onto its
-    // canvas; a slot's read buffer can hold more pixels than its image.
-    let rendered = 0;
-    for (const active of activeSlots) {
-      const mapped = active.slot.readBuffer.getMappedRange(0, active.slot.count * 4);
-      const imgData = imgDatas[active.k]!;
-      imgData.data.set(new Uint8ClampedArray(mapped));
-      active.slot.readBuffer.unmap();
-      offscreens[active.k]!.getContext("2d")!.putImageData(imgData, 0, 0);
-      rendered++;
-    }
-    return rendered;
-  }
-
   ensureBlitPipeline(format: GPUTextureFormat): void {
     if (this.blitPipeline) return;
     const module = this.device.createShaderModule({ code: BLIT_SHADER });
