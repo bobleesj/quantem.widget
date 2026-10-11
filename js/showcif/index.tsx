@@ -594,14 +594,10 @@ function App() {
                         ).toPrecision(8),
                       )}
                       onChange={(e) => {
-                        try {
-                          setFov(
-                            calibratedFov(
-                              Number(e.target.value) * 1e6,
-                              calibration,
-                            ),
-                          );
-                        } catch {}
+                        // An empty or non-positive field while typing leaves the view as it is.
+                        const magnification = Number(e.target.value) * 1e6;
+                        if (Number.isFinite(magnification) && magnification > 0)
+                          setFov(calibratedFov(magnification, calibration));
                       }}
                     />
                     M×
