@@ -1304,6 +1304,8 @@ interface CompareVirtualGridProps {
   vminPct: number;
   vmaxPct: number;
   autoContrast: boolean;
+  absoluteMin?: number | null;
+  absoluteMax?: number | null;
   smooth: boolean;
   cursorRow: number;
   cursorCol: number;
@@ -1352,6 +1354,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   vminPct,
   vmaxPct,
   autoContrast,
+  absoluteMin,
+  absoluteMax,
   smooth,
   cursorRow,
   cursorCol,
@@ -1482,10 +1486,12 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       const rangeMin = transformRangeValue(rawRange.min);
       const rangeMax = transformRangeValue(rawRange.max);
       const span = Math.max(0, rangeMax - rangeMin);
-      const displayRange = {
-        vmin: rangeMin + span * Math.max(0, Math.min(100, vminPct)) / 100,
-        vmax: rangeMin + span * Math.max(0, Math.min(100, vmaxPct)) / 100,
-      };
+      const displayRange = absoluteMin != null && absoluteMax != null
+        ? {vmin: transformRangeValue(absoluteMin), vmax: transformRangeValue(absoluteMax)}
+        : {
+          vmin: rangeMin + span * Math.max(0, Math.min(100, vminPct)) / 100,
+          vmax: rangeMin + span * Math.max(0, Math.min(100, vmaxPct)) / 100,
+        };
       panels.push({ canvas, range: displayRange, slot });
     });
     if (!panels.length) return 0;
@@ -1537,7 +1543,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       bitmap.close();
     })();
     return panels.length;
-  }, [colormap, gpuEngine, gpuRanges, gpuSlots, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
+  }, [absoluteMin, absoluteMax, colormap, gpuEngine, gpuRanges, gpuSlots, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
 
   React.useEffect(() => {
     onGpuRendererReady?.(renderGpuSlotsNow);
@@ -1569,6 +1575,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       vminPct,
       vmaxPct,
       autoContrast ? 1 : 0,
+      absoluteMin,
+      absoluteMax,
       smooth ? 1 : 0,
       shapeRows,
       shapeCols,
@@ -1606,7 +1614,10 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       const { min, max } = findDataRange(scaled);
       let vmin: number;
       let vmax: number;
-      if (autoContrast) {
+      if (absoluteMin != null && absoluteMax != null) {
+        vmin = scaleMode === "log" ? displayLog(absoluteMin) : absoluteMin;
+        vmax = scaleMode === "log" ? displayLog(absoluteMax) : absoluteMax;
+      } else if (autoContrast) {
         ({ vmin, vmax } = percentileClip(scaled, 1, 99));
       } else {
         ({ vmin, vmax } = sliderRange(min, max, vminPct, vmaxPct));
@@ -1616,7 +1627,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       ctx.putImageData(imageData, 0, 0);
       canvasDrawCacheRef.current.set(frame, { canvas, panel, styleKey });
     });
-  }, [autoContrast, colormap, gpuEngine, gpuSlots, gpuVersion, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
+  }, [absoluteMin, absoluteMax, autoContrast, colormap, gpuEngine, gpuSlots, gpuVersion, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
 
   const displayCount = Math.max(1, renderEntries.length);
   const autoCols = displayCount >= 8 ? 4 : displayCount >= 5 ? 3 : displayCount >= 2 ? 2 : 1;
@@ -4113,6 +4124,9 @@ function Show4DSTEM() {
         } finally {
           suppressViTraitRecompute = false;
         }
+        // Commit the complete geometry before the request setter finishes.
+        // A live notebook must read back the same detector the browser displays.
+        model.save_changes();
         void recomputeVI(); void recomputeCompareVI();
       };
       // Dragging the aperture sets the COMPOUND roi_center [row, col]; the kernel
@@ -5893,7 +5907,8 @@ function Show4DSTEM() {
     }
   }, [roiVirtualDetectorActive, dpZoom, dpPanX, dpPanY, kPixelSize, kPixelUnit, kCalibrated, detRows, detCols, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, localKCol, localKRow, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner,
       profileActive, profilePoints, profileWidth, themeColors, showDpColorbar, showScaleBar, dpColormap, dpScaleMode, dpVminPct, dpVmaxPct, canvasSize, roiColors, DPR]);
-  React.useEffect(() => drawDpUi(), [drawDpUi]);
+  // A new DP render also updates cached colorbar limits, without an ROI edit.
+  React.useEffect(() => drawDpUi(), [drawDpUi, dpOffscreenVersion]);
   
   // VI scale bar + crosshair + ROI + profile lines (high-DPI)
   React.useEffect(() => {
@@ -8012,7 +8027,8 @@ function Show4DSTEM() {
                   </Box>
                   {/* Right: Histogram spanning both rows */}
                   <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", flex: "0 0 auto", maxWidth: "100%" }}>
-                    <Histogram data={dpHistogramData} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={(min, max) => { setDpVminPct(min); setDpVmaxPct(max); }} width={110} height={58} sliderInset={6} theme={themeInfo.theme} dataMin={dpStats[1]} dataMax={dpStats[2]} />
+                    <Histogram data={dpHistogramData} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={(min, max) => { setDpVminPct(min); setDpVmaxPct(max); }} width={110} height={58} sliderInset={6} theme={themeInfo.theme} dataMin={dpStats[1]} dataMax={dpStats[2]}
+                      fixedRange={traitDpVmin != null && traitDpVmax != null ? [traitDpVmin, traitDpVmax] : undefined} />
                   </Box>
                 </Box>
               </Box>
@@ -8267,6 +8283,7 @@ function Show4DSTEM() {
               shapeRows={detRows} shapeCols={detCols} cols={compareCols || 0}
               colormap={dpColormap} scaleMode={dpScaleMode} vminPct={dpVminPct}
               vmaxPct={dpVmaxPct} autoContrast={false} smooth={false}
+              absoluteMin={traitDpVmin} absoluteMax={traitDpVmax}
               cursorRow={localKRow} cursorCol={localKCol} status=""
               themeColors={themeColors} panelChromeVisible={panelChromeVisible}
               showScaleBar={showScaleBar} pixelSize={kCalibrated ? kPixelSize : 1}
@@ -8319,6 +8336,8 @@ function Show4DSTEM() {
               vminPct={viVminPct}
               vmaxPct={viVmaxPct}
               autoContrast={viAutoContrast}
+              absoluteMin={traitViVmin}
+              absoluteMax={traitViVmax}
               smooth={viSmooth}
               cursorRow={localPosRow}
               cursorCol={localPosCol}
@@ -8509,7 +8528,8 @@ function Show4DSTEM() {
                   </Box>
                   {/* Right: Histogram spanning both rows */}
                   <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", flex: "0 0 auto", maxWidth: "100%" }}>
-                    <Histogram data={viHistogramData} bins={viHistogramBins} vminPct={viVminPct} vmaxPct={viVmaxPct} onRangeChange={(min, max) => { if (viAutoContrast) { viPreAutoPctRef.current = null; setViAutoContrast(false); } setViVminPct(min); setViVmaxPct(max); }} width={110} height={58} sliderInset={6} theme={themeInfo.theme} dataMin={viDataMin} dataMax={viDataMax} />
+                    <Histogram data={viHistogramData} bins={viHistogramBins} vminPct={viVminPct} vmaxPct={viVmaxPct} onRangeChange={(min, max) => { if (viAutoContrast) { viPreAutoPctRef.current = null; setViAutoContrast(false); } setViVminPct(min); setViVmaxPct(max); }} width={110} height={58} sliderInset={6} theme={themeInfo.theme} dataMin={viDataMin} dataMax={viDataMax}
+                      fixedRange={traitViVmin != null && traitViVmax != null ? [traitViVmin, traitViVmax] : undefined} />
                   </Box>
                 </Box>
               </Box>

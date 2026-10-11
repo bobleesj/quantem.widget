@@ -3,6 +3,7 @@ import Box from "@mui/material/Box";
 import Slider from "@mui/material/Slider";
 import Typography from "@mui/material/Typography";
 import { computeHistogramFromBytes } from "../display/stats";
+import { formatNumber } from "../format";
 
 export interface HistogramProps {
   /** Pre-computed 256-element bin array (GPU histogram). Wins over `data`. */
@@ -25,6 +26,8 @@ export interface HistogramProps {
   theme?: "light" | "dark";
   dataMin?: number;
   dataMax?: number;
+  /** Absolute color limits replace the inactive percentile controls. */
+  fixedRange?: readonly [number, number];
   ariaHidden?: boolean;
   /** Decimal places for the min/max labels and slider tooltips. */
   valueDecimals?: number;
@@ -49,6 +52,7 @@ export const Histogram = React.memo(function Histogram({
   vminPct, vmaxPct, onRangeChange, onRangePreview, onRangeCommit,
   width = 110, height = 40, theme = "dark",
   dataMin = 0, dataMax = 1, ariaHidden = false,
+  fixedRange,
   valueDecimals = 1,
   labelFontFamily = "monospace",
   sliderInset = 4,
@@ -131,7 +135,7 @@ export const Histogram = React.memo(function Histogram({
   }, [drawHistogram, formatValue]);
   React.useEffect(() => {
     drawHistogram(liveVminPct, liveVmaxPct);
-  }, [drawHistogram, liveVmaxPct, liveVminPct]);
+  }, [drawHistogram, fixedRange, liveVmaxPct, liveVminPct]);
   React.useEffect(() => {
     onRangeChangeRef.current = onRangeChange;
     onRangePreviewRef.current = onRangePreview;
@@ -201,6 +205,27 @@ export const Histogram = React.memo(function Histogram({
   }, [applyRangePreview, emitRangePreview, flushRangePreview]);
 
   const sliderWidth = Math.max(1, width - sliderInset * 2);
+
+  if (fixedRange) {
+    return (
+      <Box
+        role="group"
+        aria-label="Fixed color limits"
+        title={`Color limits: ${fixedRange[0]} to ${fixedRange[1]}. Set absolute limits in Python; percentile controls are inactive.`}
+        sx={{ width, minHeight: height + 14, display: "flex", flexDirection: "column", justifyContent: "center", gap: 0.5 }}
+      >
+        <Typography sx={{ fontSize: 9, opacity: 0.7 }}>Fixed color limits</Typography>
+        <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1 }}>
+          {fixedRange.map((value, index) => (
+            <Typography key={index} sx={{ fontSize: 10, fontFamily: labelFontFamily }}>
+              {formatNumber(value, 3)}
+            </Typography>
+          ))}
+        </Box>
+        <Typography sx={{ fontSize: 8, opacity: 0.6 }}>Set in Python</Typography>
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 0, width, overflow: "visible" }}>

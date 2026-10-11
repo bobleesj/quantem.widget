@@ -1378,6 +1378,56 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         area = max(1.0, float(np.count_nonzero(mask)))
         return [np.ascontiguousarray(self._session(int(idx)).masked_sum(mask), dtype=np.float32) / area for idx in indices]
 
+    def selected_scan_region(self) -> tuple[int, int, int, int]:
+        """Return the scan rectangle selected in the virtual image.
+
+        Choose **Rect** in the virtual-image ROI controls, then call this
+        method to use the same integer scan positions in an analysis. With
+        the ROI off, the complete displayed scan is returned. Detector ROI
+        controls do not affect this selection.
+
+        Returns
+        -------
+        tuple[int, int, int, int]
+            ``(row_start, row_stop, col_start, col_stop)`` with exclusive stop
+            indices, clipped to the displayed scan. Integer pixel centers on
+            the rectangle boundary are included, matching the viewer's ROI.
+            Coordinates belong to the input shown by this viewer: a cropped
+            input starts at zero and a strided preview uses preview indices.
+            No acquisition crop origin or stride is added automatically.
+
+        Raises
+        ------
+        ValueError
+            If a nonrectangular ROI is active or the rectangle contains no
+            scan positions. Select **Rect**, or turn the ROI off.
+
+        Examples
+        --------
+        After selecting a rectangle in a live widget:
+
+        >>> row_start, row_stop, col_start, col_stop = viewer.selected_scan_region()
+        >>> region = data[row_start:row_stop, col_start:col_stop]
+        """
+        if self.vi_roi_mode == "off":
+            return (0, self.shape_rows, 0, self.shape_cols)
+        if self.vi_roi_mode != "rect":
+            raise ValueError(
+                f"The active scan ROI is {self.vi_roi_mode!r}. Select Rect "
+                "for rectangular analysis bounds, or turn the scan ROI off "
+                "to use the full displayed scan."
+            )
+        row_start = max(0, math.ceil(self.vi_roi_center_row - self.vi_roi_height / 2))
+        row_stop = min(self.shape_rows, math.floor(self.vi_roi_center_row + self.vi_roi_height / 2) + 1)
+        col_start = max(0, math.ceil(self.vi_roi_center_col - self.vi_roi_width / 2))
+        col_stop = min(self.shape_cols, math.floor(self.vi_roi_center_col + self.vi_roi_width / 2) + 1)
+        if row_start >= row_stop or col_start >= col_stop:
+            raise ValueError(
+                "The scan rectangle contains no displayed scan positions. "
+                "Move or enlarge Rect inside the virtual image."
+            )
+        return (row_start, row_stop, col_start, col_stop)
+
     def _compute_vi_roi_dp(self) -> None:
         """Reduce the patterns inside the scan ROI (mean, sum or max) into ``vi_roi_dp_bytes``."""
         if self._data is None or self.vi_roi_mode not in ("circle", "square", "rect"):

@@ -82,6 +82,28 @@ viewer.export_html("show4dstem.html")
 Use the CLI `quantem show4dstem ... --backend webgpu --html` folder export for
 a standalone browser viewer over large HDF5 acquisitions.
 
+## Use the selected scan region in analysis
+
+Choose **Rect** in the virtual-image ROI controls, drag the region, then read
+its bounds from the same live widget:
+
+```python
+region = viewer.selected_scan_region()
+row_start, row_stop, col_start, col_stop = region
+patch = data[row_start:row_stop, col_start:col_stop]
+```
+
+The tuple uses exclusive stops and includes integer pixel centers on the
+rectangle boundary, exactly as the viewer does. With ROI off it returns the
+whole displayed scan. A circle cannot be represented by one rectangular crop;
+select Rect or turn ROI off before requesting bounds.
+
+Coordinates are relative to the input displayed by the viewer. For
+`scan_region=(100, 164, 200, 264)`, add row origin 100 and column origin 200
+before reading the original acquisition. A strided preview likewise returns
+preview indices, not original scan indices. No implicit origin/stride conversion
+is performed. Detector-region controls do not change this scan selection.
+
 ## Encoded acquisitions
 
 On a GPU, `read_4dstem(path)` (which calls `quantem.gpu.io.load(path)`) keeps
@@ -504,7 +526,7 @@ compare-grid signoff.
 
 ```{eval-rst}
 .. autoclass:: quantem.widget.show4dstem.Show4DSTEM
-   :members: from_folder, export_html, compute_ssb, apply_preset, state_dict, save, load_state_dict, free, close, poll_folder, wait_for_folder, watch_folder, stop_folder_watch, pattern, virtual_image
+   :members: selected_scan_region, from_folder, export_html, compute_ssb, apply_preset, state_dict, save, load_state_dict, free, close, poll_folder, wait_for_folder, watch_folder, stop_folder_watch, pattern, virtual_image
 ```
 
 ```{note}
@@ -513,6 +535,28 @@ compare-grid signoff.
 ```
 
 ## Interactive controls
+
+For signed differences, use linear scaling and one symmetric absolute range
+for each image type. These limits also apply to every comparison tile:
+
+```python
+viewer.dp_scale_mode = viewer.vi_scale_mode = "linear"
+viewer.dp_colormap = viewer.vi_colormap = "RdBu_r"
+viewer.dp_vmin, viewer.dp_vmax = -10.0, 10.0
+viewer.vi_vmin, viewer.vi_vmax = -10.0, 10.0
+```
+
+With both absolute bounds set, the control shows **Fixed color limits** and
+their values instead of inactive percentile handles. Update the bounds from
+Python, or set both to `None` to restore the histogram controls. The primary
+DP colorbar updates with the active display limits.
+
+Choose the limits in your data's units. In multiple view, a virtual image is
+the **mean over the selected detector pixels**; in single view it is their
+sum. A bound on absolute DP values also bounds the detector mean, though a
+narrower independently chosen VI range can reveal smaller variations. Use linear
+display when comparing residual magnitudes directly. This describes the
+live comparison; do not use an integer count export to store signed errors.
 
 With a running kernel these recompute on the GPU backend (CUDA or MPS). In
 `backend="webgpu"` mode, the same controls run in the browser with no
