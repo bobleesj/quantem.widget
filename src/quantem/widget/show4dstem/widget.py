@@ -55,7 +55,6 @@ from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
 
 DEFAULT_BF_RATIO = 0.125  # bright-field radius as a fraction of the detector side before fitting
-MIN_LOG_VALUE = 1e-10  # keeps log scaling finite on an all-zero pattern
 DEFAULT_VI_ROI_RATIO = 0.15  # scan ROI radius as a fraction of the scan side
 PRODUCT_LABELS = ("DPC_row", "DPC_col", "SSB")
 # Soft guide for the inline offline pack: the browser's JSON parse of the embedded
@@ -183,8 +182,6 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     det_rows = traitlets.Int(1).tag(sync=True)
     det_cols = traitlets.Int(1).tag(sync=True)
     frame_bytes = traitlets.Bytes(b"").tag(sync=True)
-    dp_global_min = traitlets.Float(0.0).tag(sync=True)
-    dp_global_max = traitlets.Float(1.0).tag(sync=True)
     center_col = traitlets.Float(0.0).tag(sync=True)
     center_row = traitlets.Float(0.0).tag(sync=True)
     bf_radius = traitlets.Float(0.0).tag(sync=True)
@@ -572,8 +569,6 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 self._qem_urls = json.dumps(urls)
             self.offline = True
             self.ssb_compute_enabled = False
-            self.dp_global_min = MIN_LOG_VALUE
-            self.dp_global_max = 1.0
             self._set_roi_to_disk()
             self.virtual_image_bytes = np.zeros(self.shape_rows * self.shape_cols, dtype=np.float32).tobytes()
             self.frame_bytes = np.zeros(self.det_rows * self.det_cols, dtype=np.float32).tobytes()
@@ -583,11 +578,6 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self.compare_page_count = max(1, math.ceil(self.n_frames / self.compare_max_panels))
             return
 
-        # The first pattern bounds the histogram axis; the browser clips percentiles per frame. The
-        # bounds are taken in float32 because that is the precision frame_bytes sends the browser.
-        first_pattern = np.asarray(self._session(0).frame(0), dtype=np.float32)
-        self.dp_global_min = max(float(first_pattern.min()), MIN_LOG_VALUE)
-        self.dp_global_max = float(first_pattern.max())
         if center is None and bf_radius is None:
             self.center_row, self.center_col, self.bf_radius = fit_disk(
                 self._session(0).mean_dp(), (self.det_rows, self.det_cols), DEFAULT_BF_RATIO
