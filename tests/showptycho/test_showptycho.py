@@ -12,6 +12,8 @@ import importlib.util
 import json
 import math
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -344,3 +346,46 @@ def test_a_dataset_in_the_format_unit_draws_its_scale_bar():
     assert ShowPtycho(make_dataset(phase, sampling=(0.2, 0.2), units=("angstrom", "angstrom")), sampling=0.02, units="nm").object_sampling_A == pytest.approx([0.2, 0.2])
     with pytest.raises(ValueError, match="contradicts the value the input records"):
         ShowPtycho(make_dataset(phase, sampling=(0.2, 0.2), units=("angstrom", "angstrom")), sampling=0.3)
+
+
+def test_the_rewrite_script_carries_earlier_calibration_files_over(tmp_path):
+    # the package reads one layout; a calibration a person chose is carried over once by scripts/rewrite_ssb_calibration.py
+    script = Path(__file__).resolve().parents[2] / "scripts" / "rewrite_ssb_calibration.py"
+    saved = tmp_path / "calibration.json"
+    saved.write_text(json.dumps({
+        "schema_version": 3, "version": "2.0", "aberration_unit": "nm", "rotation_angle_deg": 345.5,
+        "aberrations": {"C10": -4.0, "C12": 0.25, "phi12": math.radians(12.0), "C21_mag": 5.0, "C21_angle": 45.0, "C30": 2.0},
+        "flip_phase": True, "voltage_kV": 300.0, "semiangle_mrad": 20.0, "scan_sampling_A": 0.5, "loss": 0.1,
+        "source_file": "scan_master.h5", "scan_region": [0, 128, 0, 128], "notes": "lamella A", "id": "abc",
+        "tilt_mrad": [3.0, -4.0], "tilt_object_mrad": [2.3, -4.5], "depth_spread_nm": 12.0, "timestamp": "2026-10-01T10:00:00",
+    }))
+    fitted = tmp_path / "scan_128x128x16x16_ssb_calibration.json"
+    fitted.write_text(json.dumps({
+        "schema": "quantem.ssb.calibration.v1", "created_utc": "2026-10-01T10:00:00Z",
+        "source": {"widget": "Show4DSTEM", "title": "scan", "frame_idx": 0, "scan_shape": [128, 128], "detector_shape": [16, 16]},
+        "aberrations": {"C10": 12.0, "C12": 3.0, "phi12": math.pi / 6}, "aberration_units": {"C10": "nm", "C12": "nm", "phi12": "rad"},
+        "rotation_angle_deg": 165.5, "com_reversed": True,
+        "calibration": {"voltage_kV": 300.0, "semiangle_mrad": 20.0, "scan_sampling_A": [0.4, 0.6], "det_sampling_mrad": [1.5, 1.5],
+                        "bf_radius": None, "bf_intensity_threshold": 0.5, "bf_pixels": 52},
+        "run": {"n_trials": 200, "refine": True, "manual_locked": False, "seed": 42, "loss": 0.25, "elapsed_s": 1.5},
+    }))
+    before = saved.read_text()
+    dry = subprocess.run([sys.executable, str(script), "--dry-run", str(saved)], capture_output=True, text=True, check=True)
+    assert saved.read_text() == before and "would be rewritten" in dry.stdout and "row step 0.5" in dry.stdout
+    subprocess.run([sys.executable, str(script), str(saved), str(fitted)], capture_output=True, text=True, check=True)
+    current = json.loads(saved.read_text())
+    assert current["schema"] == "quantem.ssb-calibration/4" and (tmp_path / "calibration.json.before").read_text() == before
+    assert current["aberrations"] == pytest.approx({"C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0, "C21_nm": 5.0, "phi21_deg": 45.0, "C30_nm": 2.0})
+    assert (current["scan_detector_rotation_deg"], current["scan_sampling_A"], current["source_path"]) == (345.5, [0.5, 0.5], "scan_master.h5")
+    assert (current["sample_tilt_mrad"], current["propagator_tilt_mrad"], current["depth_spread_nm"]) == ([3.0, -4.0], [2.3, -4.5], 12.0)
+    current = json.loads(fitted.read_text())
+    # the angle below 180 degrees and its reversal flag become the one physical angle
+    assert (current["scan_detector_rotation_deg"], current["detector_sampling_mrad"], current["num_bright_field_pixels"]) == (345.5, [1.5, 1.5], 52)
+    assert current["aberrations"] == pytest.approx({"C10_nm": 12.0, "C12_nm": 3.0, "phi12_deg": 30.0}) and current["source"]["acquisition_index"] == 0
+    again = subprocess.run([sys.executable, str(script), str(saved)], capture_output=True, text=True, check=True)
+    assert "already in the current layout" in again.stdout
+    # before the nm marker the numbers were Angstrom under an nm label: such a file is refused, not guessed
+    unmarked = tmp_path / "older.json"
+    unmarked.write_text(json.dumps({"schema_version": 3, "rotation_angle_deg": 10.0, "aberrations": {"C10": -40.0}}))
+    refused = subprocess.run([sys.executable, str(script), str(unmarked)], capture_output=True, text=True)
+    assert refused.returncode != 0 and "unit of C10 and C12 in this file is not known" in refused.stderr

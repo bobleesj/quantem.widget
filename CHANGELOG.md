@@ -71,6 +71,10 @@ Changed:
   keys; `scanShape`, `bytesPerBf`, `bitsPerValue` to `scan_shape`,
   `bytes_per_bright_field_pixel`, `bits_per_value`. Keys that were always
   empty are gone (`higher_order`, `source_stem`, `label`, star `notes`).
+- `scripts/rewrite_ssb_calibration.py` (outside the package, with `--dry-run`)
+  rewrites a `calibration.json`, `showptycho_stars.json` or
+  `*_ssb_calibration.json` of the earlier release into the current layout
+  once and keeps the earlier file as `<name>.before`.
 - `ShowPtycho`: keyword `fft_on` to `show_fft`; keyword `source_file` removed
   (the session's `source_path` is the source). Traits `rotation_deg` to
   `scan_detector_rotation_deg`, `rotation_min`, `rotation_max` to
