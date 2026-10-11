@@ -55,6 +55,7 @@ import type { Uint32ImageView } from "../display/borrowedImage";
 import { latestRegion } from "./latestRegion";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
 import { findDataRange, sliderRange, computeStats, percentileClip } from "../display/stats";
+import { displayLog } from "../display/displayMath";
 import { downloadBlob, extractBytes, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";
 import { useHideStaticFallback } from "../staticFallback";
 import { MetadataSection } from "../widgetInfo";
@@ -991,6 +992,18 @@ function cropSingleROI(
 }
 
 /**
+ * Signed float32 log1p of every value, as the WGSL display shaders apply it
+ * (displayLog). The histogram, the contrast range and the Canvas2D image use
+ * it so they agree with the WebGPU image on signed data (DPC, phase); a log of
+ * the clamped value would map every negative pixel to zero.
+ */
+function displayLogScale(values: Float32Array): Float32Array {
+  const scaled = new Float32Array(values.length);
+  for (let i = 0; i < values.length; i++) scaled[i] = displayLog(values[i]);
+  return scaled;
+}
+
+/**
  * Copy a rows x cols image into the top-left corner of a zeroed padRows x
  * padCols buffer. fft2d needs power-of-two sides and would otherwise truncate
  * the frequency content of the image.
@@ -1427,9 +1440,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       const rawRange = gpuRanges?.get(entry.frame);
       const canvas = gpuCanvasRefs.current[localIdx];
       if (slot === undefined || !rawRange || !canvas) return;
-      const transformRangeValue = (value: number) => scaleMode === "log"
-        ? (value >= 0 ? Math.log1p(value) : -Math.log1p(-value))
-        : value;
+      const transformRangeValue = (value: number) => scaleMode === "log" ? displayLog(value) : value;
       const rangeMin = transformRangeValue(rawRange.min);
       const rangeMax = transformRangeValue(rawRange.max);
       const span = Math.max(0, rangeMax - rangeMin);
@@ -1553,13 +1564,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       ctx.imageSmoothingEnabled = smooth;
       if (smooth) ctx.imageSmoothingQuality = "high";
 
-      let scaled = panel;
-      if (scaleMode === "log") {
-        scaled = new Float32Array(panel.length);
-        for (let i = 0; i < panel.length; i++) {
-          scaled[i] = Math.log1p(Math.max(0, panel[i]));
-        }
-      }
+      const scaled = scaleMode === "log" ? displayLogScale(panel) : panel;
       const { min, max } = findDataRange(scaled);
       let vmin: number;
       let vmax: number;
@@ -5022,16 +5027,7 @@ function Show4DSTEM() {
     rawDpDataRef.current.set(rawData);
     const stats = computeStats(rawData);
     setDpStats([stats.mean, stats.min, stats.max, stats.std]);
-    // Apply scale transformation for histogram display
-    const scaledData = new Float32Array(rawData.length);
-    if (dpScaleMode === "log") {
-      for (let i = 0; i < rawData.length; i++) {
-        scaledData[i] = Math.log1p(Math.max(0, rawData[i]));
-      }
-    } else {
-      scaledData.set(rawData);
-    }
-    setDpHistogramData(scaledData);
+    setDpHistogramData(dpScaleMode === "log" ? displayLogScale(rawData) : rawData.slice());
   }, [displayedDpBytes, dpScaleMode]);
 
   // GPU FFT state
@@ -5354,18 +5350,9 @@ function Show4DSTEM() {
       }
     }
 
-    // Apply scale transformation for histogram display
     if (!compareMode) {
-      const scaledData = new Float32Array(numFloats);
-      if (viScaleMode === "log") {
-        for (let i = 0; i < numFloats; i++) {
-          scaledData[i] = Math.log1p(Math.max(0, rawData[i]));
-        }
-      } else {
-        scaledData.set(rawData);
-      }
       setViHistogramBins(null);
-      setViHistogramData(scaledData);
+      setViHistogramData(viScaleMode === "log" ? displayLogScale(rawData) : rawData.slice());
     }
   }, [activeViSource, compareMode, displayedVirtualImageBytes, viScaleMode]);
 
@@ -5391,16 +5378,8 @@ function Show4DSTEM() {
       setViDataMax(stats.max);
     }
 
-    const scaledData = new Float32Array(expectedFloats);
-    if (viScaleMode === "log") {
-      for (let i = 0; i < expectedFloats; i++) {
-        scaledData[i] = Math.log1p(Math.max(0, rawData[i]));
-      }
-    } else {
-      scaledData.set(rawData);
-    }
     setViHistogramBins(null);
-    setViHistogramData(scaledData);
+    setViHistogramData(viScaleMode === "log" ? displayLogScale(rawData) : rawData.slice());
   }, [activeViSource, compareMode, comparePanelCount, displayedCompareVirtualImageBytes, shapeCols, shapeRows, viScaleMode]);
 
   React.useEffect(() => {
@@ -5448,23 +5427,15 @@ function Show4DSTEM() {
 
     // Parse raw float32 data and apply scale transformation
     const rawData = new Float32Array(sourceBytes.buffer, sourceBytes.byteOffset, sourceBytes.byteLength / 4);
-    let scaled: Float32Array;
-    if (dpScaleMode === "log") {
-      scaled = new Float32Array(rawData.length);
-      for (let i = 0; i < rawData.length; i++) {
-        scaled[i] = Math.log1p(Math.max(0, rawData[i]));
-      }
-    } else {
-      scaled = rawData;
-    }
+    const scaled = dpScaleMode === "log" ? displayLogScale(rawData) : rawData;
 
     const { min: dataMin, max: dataMax } = findDataRange(scaled);
 
     let vmin: number, vmax: number;
     if (traitDpVmin != null && traitDpVmax != null) {
       if (dpScaleMode === "log") {
-        vmin = Math.log1p(Math.max(traitDpVmin, 0));
-        vmax = Math.log1p(Math.max(traitDpVmax, 0));
+        vmin = displayLog(traitDpVmin);
+        vmax = displayLog(traitDpVmax);
       } else {
         vmin = traitDpVmin;
         vmax = traitDpVmax;
@@ -5552,13 +5523,7 @@ function Show4DSTEM() {
     const height = shapeRows;
     const filtered = rawVirtualImageRef.current;
 
-    let scaled = filtered;
-    if (viScaleMode === "log") {
-      scaled = new Float32Array(filtered.length);
-      for (let i = 0; i < filtered.length; i++) {
-        scaled[i] = Math.log1p(Math.max(0, filtered[i]));
-      }
-    }
+    const scaled = viScaleMode === "log" ? displayLogScale(filtered) : filtered;
 
     // Compute min/max from the data we just received. Do NOT use Python's
     // viDataMin/viDataMax traits here: they arrive as separate comm messages
@@ -5579,8 +5544,8 @@ function Show4DSTEM() {
     let vmin: number, vmax: number;
     if (traitViVmin != null && traitViVmax != null) {
       if (viScaleMode === "log") {
-        vmin = Math.log1p(Math.max(traitViVmin, 0));
-        vmax = Math.log1p(Math.max(traitViVmax, 0));
+        vmin = displayLog(traitViVmin);
+        vmax = displayLog(traitViVmax);
       } else {
         vmin = traitViVmin;
         vmax = traitViVmax;
@@ -5650,13 +5615,7 @@ function Show4DSTEM() {
       && rawVirtualImageVersionRef.current >= gpuImage.rawVersionAfter,
     );
     if (rawReady && raw) {
-      let scaled = raw;
-      if (viScaleMode === "log") {
-        scaled = new Float32Array(raw.length);
-        for (let i = 0; i < raw.length; i++) {
-          scaled[i] = Math.log1p(Math.max(0, raw[i]));
-        }
-      }
+      const scaled = viScaleMode === "log" ? displayLogScale(raw) : raw;
 
       const range = findDataRange(scaled);
       let dataMin = range.min;
@@ -5669,8 +5628,8 @@ function Show4DSTEM() {
 
       if (traitViVmin != null && traitViVmax != null) {
         if (viScaleMode === "log") {
-          vmin = Math.log1p(Math.max(traitViVmin, 0));
-          vmax = Math.log1p(Math.max(traitViVmax, 0));
+          vmin = displayLog(traitViVmin);
+          vmax = displayLog(traitViVmax);
         } else {
           vmin = traitViVmin;
           vmax = traitViVmax;
