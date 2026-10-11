@@ -4,7 +4,8 @@ An unlinked gallery histogram is computed once per panel frame, not on every
 hover. A gallery FFT of a panel above 2048 px says it is binned and measures
 its lattice band at the binned sampling. A profile drag samples each panel at
 most once per pointer move. The frequency-filter ring sits on the frequency
-the filter cuts at the FFT's zoom, and dragging it sets that frequency.
+the filter cuts at the FFT's zoom, and dragging it sets that frequency. A ROI
+edge moves by as much as the pointer moves after the press.
 """
 
 import re
@@ -27,6 +28,13 @@ GPUDevice.prototype.createShaderModule = function (descriptor) {
   if (descriptor.code.includes('profile_width: u32')) window.__profileSamples += 1;
   return createShaderModule.call(this, descriptor);
 };
+"""
+# The value of the ROI slider that follows a label ("Size", "W", "H") in the selected-ROI row.
+ROI_SLIDER = """
+(label) => {
+  const text = Array.from(document.querySelectorAll('p, span')).find(element => element.textContent.trim() === label);
+  return Number(text.nextElementSibling.querySelector('input[type="range"]').value);
+}
 """
 HISTOGRAM_LABELS = """
 () => Array.from(new Set(Array.from(document.querySelectorAll('input[aria-label="Histogram intensity clip range"]'))
@@ -155,4 +163,44 @@ def test_frequency_ring_marks_and_sets_the_cutoff_on_the_zoomed_fft(serve, open_
     # Released 0.3 panel widths from the center at 2x zoom: 0.3 Nyquist.
     assert cutoff == pytest.approx(0.3, abs=0.005), label
     assert ring.bounding_box()["width"] == pytest.approx(0.6 * fft["width"], abs=2)
+    assert page.errors == [], page.errors
+
+
+def test_roi_resize_follows_the_pointer_from_the_press(serve, open_page, hardware_adapter, browser_out):
+    from quantem.widget import Show2D
+
+    widget = Show2D(np.random.default_rng(4).standard_normal((512, 512)).astype(np.float32))
+    widget.roi_active = True
+    roi = {"radius_inner": 20, "color": "#4fc3f7", "line_width": 2, "highlight": False}
+    widget.roi_list = [
+        {**roi, "row": 256, "col": 150, "shape": "circle", "radius": 50, "width": 100, "height": 100},
+        {**roi, "row": 256, "col": 380, "shape": "rectangle", "radius": 50, "width": 100, "height": 60},
+    ]
+    widget.roi_selected_idx = 0
+    widget.export_html(browser_out / "show2d_roi_resize.html")
+    page = open_export("show2d_roi_resize.html", serve, open_page, hardware_adapter, browser_out,
+                       'canvas[data-quantem-scientific-output="show2d-image-0"]')
+    box = page.locator('canvas[data-quantem-scientific-output="show2d-image-0"]').bounding_box()
+    scale = box["width"] / 512
+
+    def drag(row, cols):
+        page.mouse.move(box["x"] + cols[0] * scale, box["y"] + row * scale)
+        page.mouse.down()
+        for col in cols[1:]:
+            page.mouse.move(box["x"] + col * scale, box["y"] + row * scale)
+            page.wait_for_timeout(60)
+        page.mouse.up()
+        page.wait_for_timeout(300)
+
+    # Press 8 px outside the circle's edge, then move 1 px and 20 px outward:
+    # the radius grows by 20, it does not jump to the press distance first.
+    drag(256, [208, 209, 228])
+    # (the pointer lands on whole screen pixels, about 1 image pixel each)
+    assert page.evaluate(ROI_SLIDER, "Size") == pytest.approx(70, abs=1)
+    # The rectangle's right edge, pressed at mid height and moved 10 px right:
+    # the width grows by 20 and the height stays.
+    drag(256, [433, 438, 443])
+    page.screenshot(path=str(browser_out / "show2d_roi_resize.png"))
+    assert page.evaluate(ROI_SLIDER, "W") == pytest.approx(120, abs=2)
+    assert page.evaluate(ROI_SLIDER, "H") == 60
     assert page.errors == [], page.errors

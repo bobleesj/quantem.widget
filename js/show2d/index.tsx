@@ -55,6 +55,7 @@ import {
 } from "../display/geometry";
 import { COLORMAPS, COLORMAP_NAMES, GPUColormapEngine, renderToOffscreen } from "../display/colormaps";
 import { createLatestFrameQueue } from "../show4dstem/latestFrameQueue";
+import { resizeDetectorFromPointer, type DetectorResizeStart, type DetectorRoiMode } from "../show4dstem/detectorInteraction";
 import { colormapSampledPixels, createColormapEngine, createCPUColormapEngine, type DisplayColormapEngine } from "../display/cpuColormap";
 import { onGPULost } from "../display/device";
 import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive, normalizeFilterMode, resolvePanelDenoiseKnobs } from "../display/filter";
@@ -1335,7 +1336,7 @@ function Show2D() {
   const [isDraggingResizeInner, setIsDraggingResizeInner] = React.useState(false);
   const [isHoveringResize, setIsHoveringResize] = React.useState(false);
   const [isHoveringResizeInner, setIsHoveringResizeInner] = React.useState(false);
-  const resizeAspectRef = React.useRef<number | null>(null);
+  const roiResizeStartRef = React.useRef<DetectorResizeStart | null>(null);
   const [newRoiShape, setNewRoiShape] = React.useState<"circle" | "square" | "rectangle" | "annular">("square");
   const [overlayEditMode, setOverlayEditMode] = React.useState(false);
   const [overlaySelection, setOverlaySelection] = React.useState<OverlaySelection | null>(null);
@@ -6145,6 +6146,24 @@ function Show2D() {
     return roiList.some(roi => isNearEdge(imgCol, imgRow, roi));
   };
 
+  // The press that starts a ROI resize: the size then follows the pointer's
+  // movement from here, so a press anywhere on the edge band never jumps it.
+  // A rectangle resizes along the edges the press is on (both at a corner).
+  const beginRoiResize = (roi: ROIItem, imgCol: number, imgRow: number) => {
+    const hitArea = getHitArea();
+    const rectangle = roi.shape === "rectangle";
+    roiResizeStartRef.current = {
+      pointerRow: imgRow,
+      pointerCol: imgCol,
+      radius: roi.radius,
+      radiusInner: roi.radius_inner,
+      width: roi.width,
+      height: roi.height,
+      rows: !rectangle || Math.abs(Math.abs(imgRow - roi.row) - roi.height / 2) < hitArea,
+      cols: !rectangle || Math.abs(Math.abs(imgCol - roi.col) - roi.width / 2) < hitArea,
+    };
+  };
+
   const isNearResizeHandleInner = (imgCol: number, imgRow: number): boolean => {
     if (!roiActive || !selectedRoi || selectedRoi.shape !== "annular") return false;
     const hitArea = getHitArea();
@@ -6351,13 +6370,14 @@ function Show2D() {
     if (roiActive) {
       const { imgCol, imgRow } = screenToImg(e, idx);
       // Check resize handles on selected ROI first
-      if (isNearResizeHandleInner(imgCol, imgRow)) {
+      if (selectedRoi && isNearResizeHandleInner(imgCol, imgRow)) {
+        beginRoiResize(selectedRoi, imgCol, imgRow);
         setIsDraggingResizeInner(true);
         return;
       }
-      if (isNearResizeHandle(imgCol, imgRow)) {
+      if (selectedRoi && isNearResizeHandle(imgCol, imgRow)) {
         e.preventDefault();
-        resizeAspectRef.current = selectedRoi && (selectedRoi.shape === "rectangle") && selectedRoi.width > 0 && selectedRoi.height > 0 ? selectedRoi.width / selectedRoi.height : null;
+        beginRoiResize(selectedRoi, imgCol, imgRow);
         setIsDraggingResize(true);
         return;
       }
@@ -6366,8 +6386,7 @@ function Show2D() {
         for (let roiIndex = 0; roiIndex < roiList.length; roiIndex++) {
           if (isNearEdge(imgCol, imgRow, roiList[roiIndex])) {
             e.preventDefault();
-            const roi = roiList[roiIndex];
-            resizeAspectRef.current = roi && (roi.shape === "rectangle") && roi.width > 0 && roi.height > 0 ? roi.width / roi.height : null;
+            beginRoiResize(roiList[roiIndex], imgCol, imgRow);
             setRoiSelectedIdx(roiIndex);
             setIsDraggingResize(true);
             return;
@@ -6543,31 +6562,24 @@ function Show2D() {
       if (isHoveringProfileLine) setIsHoveringProfileLine(false);
     }
 
-    // ROI resize drag (inner annular ring)
-    if (isDraggingResizeInner && selectedRoi) {
-      const { imgCol, imgRow } = screenToImg(e, idx);
-      const newRadius = Math.sqrt((imgCol - selectedRoi.col) ** 2 + (imgRow - selectedRoi.row) ** 2);
-      updateSelectedRoi({ radius_inner: Math.max(1, Math.min(selectedRoi.radius - 1, Math.round(newRadius))) });
-      return;
-    }
-    // ROI resize drag (outer)
-    if (isDraggingResize && selectedRoi) {
+    // ROI resize drag: the edge moves by as much as the pointer moved since
+    // the press (Shift keeps a rectangle's aspect ratio).
+    if ((isDraggingResize || isDraggingResizeInner) && selectedRoi && roiResizeStartRef.current) {
       const { imgCol, imgRow } = screenToImg(e, idx);
       const shape = selectedRoi.shape || "circle";
-      if (shape === "rectangle") {
-        let newWidth = Math.max(2, Math.round(Math.abs(imgCol - selectedRoi.col) * 2));
-        let newHeight = Math.max(2, Math.round(Math.abs(imgRow - selectedRoi.row) * 2));
-        if (e.shiftKey && resizeAspectRef.current != null) {
-          const aspect = resizeAspectRef.current;
-          if (newWidth / newHeight > aspect) newHeight = Math.max(2, Math.round(newWidth / aspect));
-          else newWidth = Math.max(2, Math.round(newHeight * aspect));
-        }
-        updateSelectedRoi({ width: newWidth, height: newHeight });
-      } else {
-        const newRadius = shape === "square" ? Math.max(Math.abs(imgCol - selectedRoi.col), Math.abs(imgRow - selectedRoi.row)) : Math.sqrt((imgCol - selectedRoi.col) ** 2 + (imgRow - selectedRoi.row) ** 2);
-        const minRadius = shape === "annular" ? selectedRoi.radius_inner + 1 : 1;
-        updateSelectedRoi({ radius: Math.max(minRadius, Math.round(newRadius)) });
-      }
+      const size = resizeDetectorFromPointer({
+        mode: (shape === "rectangle" ? "rect" : shape) as DetectorRoiMode,
+        centerRow: selectedRoi.row,
+        centerCol: selectedRoi.col,
+        pointerRow: imgRow,
+        pointerCol: imgCol,
+        start: roiResizeStartRef.current,
+        resizeInner: isDraggingResizeInner,
+        preserveAspect: e.shiftKey,
+      });
+      if (size?.radiusInner !== undefined) updateSelectedRoi({ radius_inner: Math.round(size.radiusInner) });
+      else if (size?.radius !== undefined) updateSelectedRoi({ radius: Math.round(size.radius) });
+      else if (size?.width !== undefined && size.height !== undefined) updateSelectedRoi({ width: Math.round(size.width), height: Math.round(size.height) });
       return;
     }
     // ROI drag (move center)
