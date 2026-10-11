@@ -3302,38 +3302,37 @@ function Show2D() {
   }, [browserFilterActive, nImages, panelFilterKnobs]);
   const filterBannerText = browserFilterActive ? (browserFilterBanner ?? "") : (displayFilterBanner || "");
 
+  // Every panel's frame as a view into the decoded buffer (an RGB panel: its
+  // interleaved pixels, plus their luminance for the grayscale analysis
+  // paths). No reader or filter writes into a frame, so a view replaces the
+  // copy that doubled a large gallery's memory, and the arrays stay the same
+  // across knob edits: a sigma drag no longer copies every panel per tick, and
+  // the GPU filter reuses its uploaded source frame.
+  const panelBaseFrames = React.useMemo(() => Array.from({ length: nImages }, (_, i) => {
+    const perImage = width * height;
+    const start = panelFloatOffsets[i];
+    if (!isRgbFlags?.[i]) return { data: allFloats.subarray(start, start + perImage), rgb: null };
+    const rgb = allFloats.subarray(start, start + 3 * perImage);
+    const luminance = new Float32Array(perImage);
+    for (let k = 0; k < perImage; k++) {
+      luminance[k] = 0.2126 * rgb[3 * k] + 0.7152 * rgb[3 * k + 1] + 0.0722 * rgb[3 * k + 2];
+    }
+    return { data: luminance, rgb };
+  }), [allFloats, nImages, width, height, panelFloatOffsets, isRgbFlags]);
+
   React.useEffect(() => {
     if (!allFloats || allFloats.length === 0) return;
-    const dataArrays: Float32Array[] = [];
-    const rgbArrays: (Float32Array | null)[] = [];
     const perImage = width * height;
-    for (let i = 0; i < nImages; i++) {
-      const start = panelFloatOffsets[i];
-      if (isRgbFlags && isRgbFlags[i]) {
-        // RGB panel: keep the interleaved color pixels for direct painting and
-        // reduce to luminance so the grayscale analysis paths stay valid.
-        const rgb = new Float32Array(allFloats.subarray(start, start + 3 * perImage));
-        rgbArrays.push(rgb);
-        const luminance = new Float32Array(perImage);
-        for (let k = 0; k < perImage; k++) {
-          luminance[k] = 0.2126 * rgb[3 * k] + 0.7152 * rgb[3 * k + 1] + 0.0722 * rgb[3 * k + 2];
-        }
-        dataArrays.push(luminance);
-      } else {
-        rgbArrays.push(null);
-        const frameCount = panelFrameCounts?.[i] || 1;
-        const stackOffset = panelStackOffsets?.[i] ?? -1;
-        const requestedFrame = normalizedPanelFrameIndices[i] || 0;
-        const frameIndex = Math.max(0, Math.min(frameCount - 1, requestedFrame));
-        if (frameCount > 1 && stackOffset >= 0 && allPanelStackFloats.length >= stackOffset + (frameIndex + 1) * perImage) {
-          const frameStart = stackOffset + frameIndex * perImage;
-          dataArrays.push(new Float32Array(allPanelStackFloats.subarray(frameStart, frameStart + perImage)));
-        } else {
-          const frame = allFloats.subarray(start, start + perImage);
-          dataArrays.push(uint8FolderPreviewMode ? frame : new Float32Array(frame));
-        }
-      }
-    }
+    const rgbArrays = panelBaseFrames.map(frame => frame.rgb);
+    const dataArrays = panelBaseFrames.map((frame, i) => {
+      const frameCount = panelFrameCounts?.[i] || 1;
+      const stackOffset = panelStackOffsets?.[i] ?? -1;
+      const frameIndex = Math.max(0, Math.min(frameCount - 1, normalizedPanelFrameIndices[i] || 0));
+      const frameStart = stackOffset + frameIndex * perImage;
+      return frame.rgb === null && frameCount > 1 && stackOffset >= 0 && allPanelStackFloats.length >= frameStart + perImage
+        ? allPanelStackFloats.subarray(frameStart, frameStart + perImage)
+        : frame.data;
+    });
     const generation = ++browserFilterGenerationRef.current;
     const previousSource = filterInputSourceRef.current;
     const sourceChanged = !previousSource
@@ -3425,10 +3424,10 @@ function Show2D() {
   }, [
     allFloats,
     allPanelStackFloats,
+    panelBaseFrames,
     nImages,
     width,
     height,
-    panelFloatOffsets,
     isRgbFlags,
     frameSourceKey,
     offlineMin,
@@ -3443,7 +3442,6 @@ function Show2D() {
     frequencyFilterEnabled,
     panelFrequencyKnobs,
     uint8FolderIdentityEncoding,
-    uint8FolderPreviewMode,
   ]);
 
   React.useEffect(() => {
@@ -3459,10 +3457,7 @@ function Show2D() {
       if (frameCount <= 1 || stackOffset < 0 || previous[panel] === frameIndex) continue;
       const frameStart = stackOffset + frameIndex * perImage;
       if (allPanelStackFloats.length < frameStart + perImage) continue;
-      changedFrames.push({
-        panel,
-        frame: new Float32Array(allPanelStackFloats.subarray(frameStart, frameStart + perImage)),
-      });
+      changedFrames.push({ panel, frame: allPanelStackFloats.subarray(frameStart, frameStart + perImage) });
     }
     lastAppliedPanelFrameIndicesRef.current = [...normalizedPanelFrameIndices];
     if (changedFrames.length === 0) return;
