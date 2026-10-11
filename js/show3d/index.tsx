@@ -7815,10 +7815,11 @@ function Show3D() {
       ({ min: displayMin, max: displayMax } = findDataRange(data));
     }
 
+    // The range takes the same signed log1p as the data: signed stacks (phase, differences) go below -1.
     const displayData = kymoLogScale ? applyLogScale(data) : data;
     if (kymoLogScale) {
-      displayMin = Math.log1p(displayMin);
-      displayMax = Math.log1p(displayMax);
+      displayMin = signedLog1p(displayMin);
+      displayMax = signedLog1p(displayMax);
     }
 
     setKymoHistogramData(displayData);

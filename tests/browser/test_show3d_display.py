@@ -497,3 +497,31 @@ def test_show3d_log_histogram_spans_the_log_range(webgpu, serve, open_page, hard
     page.locator(HISTOGRAM).last.screenshot(path=str(browser_out / f"show3d_histogram_log_{'webgpu' if webgpu else 'cpu'}.png"))
     assert page.evaluate(HISTOGRAM_BARS, HISTOGRAM) > 40
     assert page.errors == [], page.errors
+
+
+# The min and max labels under the last histogram on the page (the kymograph's, right of the image).
+LAST_HISTOGRAM_LABELS = """
+(selector) => [...[...document.querySelectorAll(selector)].pop().parentElement.parentElement.lastElementChild.children]
+  .map(label => label.textContent)
+"""
+
+
+def test_show3d_kymograph_log_scale_keeps_a_signed_range(serve, open_page, hardware_adapter, browser_out):
+    # A signed stack (-8 to 8) in kymograph Log: the range goes through the signed log1p, as the data does.
+    # Before, Math.log1p of the negative bound was NaN, so the slider labels and the colormap broke.
+    from quantem.widget import Show3D
+
+    columns = np.arange(64)
+    stack = np.stack([np.tile(8 * np.sin(2 * np.pi * (columns + 3 * k) / 16), (64, 1)) for k in range(6)]).astype(np.float32)
+    viewer = Show3D(stack, panel_width_px=256, cmap="gray")
+    viewer.profile_line, viewer.show_kymograph = [{"row": 32.0, "col": 4.0}, {"row": 32.0, "col": 60.0}], True
+    viewer.export_html(browser_out / "show3d_kymograph_log.html")
+    page = open_ready(f"{serve(browser_out)}/show3d_kymograph_log.html", True, open_page, hardware_adapter)
+    page.get_by_label("Toggle line intensity profile tool").click()
+    page.get_by_label("Kymograph intensity scale (linear or logarithmic)").click()
+    page.get_by_role("option", name="Log").click()
+    page.wait_for_timeout(1_000)
+    page.screenshot(path=str(browser_out / "show3d_kymograph_log.png"))
+    low, high = (float(label) for label in page.evaluate(LAST_HISTOGRAM_LABELS, HISTOGRAM))
+    assert -2.25 < low < -2.0 and 2.0 < high < 2.25, (low, high)  # signed log1p of about -8 and 8
+    assert page.errors == [], page.errors
