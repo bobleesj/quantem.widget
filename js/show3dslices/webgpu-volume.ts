@@ -321,7 +321,7 @@ fn sampleVolume(texCoord: vec3<f32>) -> f32 {
 
 @fragment
 fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-  // Reconstruct ray from clip space — OpenGL convention z in [-1, 1]
+  // Reconstruct ray from clip space: OpenGL convention z in [-1, 1]
   let ndc = uv * 2.0 - 1.0;
   var worldNear = u.invViewProj * vec4<f32>(ndc, -1.0, 1.0);
   var worldFar = u.invViewProj * vec4<f32>(ndc, 1.0, 1.0);
@@ -393,7 +393,7 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
       tSliceOblique = -1.0;
     }
 
-    // Sample volume — remap from [vmin, vmax] to [0, 1]
+    // Sample volume, remap from [vmin, vmax] to [0, 1]
     var intensity = sampleVolume(texCoord);
     intensity = applyWindow(intensity);
     intensity = clamp(intensity * u.brightness, 0.0, 1.0);
@@ -541,12 +541,6 @@ export class VolumeRenderer {
 
     // No MSAA: the pipeline renders straight into the canvas texture.
     const shaderModule = device.createShaderModule({ code: VOLUME_SHADER });
-    shaderModule.getCompilationInfo().then(info => {
-      for (const msg of info.messages) {
-        const level = msg.type === "error" ? "error" : msg.type === "warning" ? "warn" : "info";
-        console[level](`WGSL ${msg.type} [${msg.lineNum}:${msg.linePos}]: ${msg.message}`);
-      }
-    });
     const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [this.bindGroupLayout] });
     this.pipeline = device.createRenderPipeline({
       layout: pipelineLayout,
