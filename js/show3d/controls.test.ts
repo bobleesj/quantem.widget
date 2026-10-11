@@ -13,7 +13,9 @@ vi.mock("../display/colormaps", async (importOriginal) => ({
 const { default: { render: renderShow3D } } = await import("./index");
 
 // Mounting the whole widget in jsdom takes seconds on a loaded machine.
-vi.setConfig({ testTimeout: 30_000 });
+// GitHub's two-core runner ran these mounts up to 17 times slower than a workstation core (248 ms here, 4.4 s there),
+// and the two-widget reorder test (1.2 s on one core here) passed 30 s there
+vi.setConfig({ testTimeout: 120_000 });
 
 const SIZE = 16;
 const FRAMES = 4;
