@@ -3261,21 +3261,8 @@ function Show3DSlices() {
   }, []);
 
   const handleMouseMove = (event: React.MouseEvent, axis: number) => {
-    if (axis === 0 && obliqueHandleDragRef.current) {
-      setObliqueHoverTarget(obliqueHandleDragRef.current.mode === "endpoint" ? "endpoint" : "line");
-      const point = imagePointFromEvent(event, axis);
-      if (!point) return;
-      const drag = obliqueHandleDragRef.current;
-      if (drag.mode === "endpoint") {
-        updateObliqueFromEndpoints(
-          clampPointToImage({ x: point.col, y: point.row }, nx, ny, OBLIQUE_PROFILE_EDGE_INSET),
-          drag.opposite,
-        );
-      } else {
-        updateObliqueFromLineDrag(drag, point);
-      }
-      return;
-    }
+    // The document listener below moves the cut during a handle drag.
+    if (axis === 0 && obliqueHandleDragRef.current) return;
     if (axis === 0) {
       const target = obliqueHitTest(event, axis)?.target ?? null;
       setObliqueHoverTarget(target === "start" || target === "stop" ? "endpoint" : target);
@@ -3342,25 +3329,31 @@ function Show3DSlices() {
     });
   };
 
+  // A handle drag moves the cut from this document listener only, so it keeps
+  // going past the panel edge and each pointer move updates the cut once. The
+  // listener is bound once; the ref hands it this render's geometry.
+  const dragObliqueHandleRef = React.useRef<(event: MouseEvent) => void>(() => {});
+  dragObliqueHandleRef.current = (event: MouseEvent) => {
+    const drag = obliqueHandleDragRef.current;
+    if (!drag) return;
+    const point = imagePointFromEvent(event, 0);
+    if (!point) return;
+    if (drag.mode === "endpoint") {
+      updateObliqueFromEndpoints(
+        clampPointToImage({ x: point.col, y: point.row }, nx, ny, OBLIQUE_PROFILE_EDGE_INSET),
+        drag.opposite,
+      );
+    } else {
+      updateObliqueFromLineDrag(drag, point);
+    }
+  };
   React.useEffect(() => {
-    const handleDocumentMove = (event: MouseEvent) => {
-      const drag = obliqueHandleDragRef.current;
-      if (!drag) return;
-      const point = imagePointFromEvent(event, 0);
-      if (!point) return;
-      if (drag.mode === "endpoint") {
-        updateObliqueFromEndpoints(
-          clampPointToImage({ x: point.col, y: point.row }, nx, ny, OBLIQUE_PROFILE_EDGE_INSET),
-          drag.opposite,
-        );
-      } else {
-        updateObliqueFromLineDrag(drag, point);
-      }
-    };
+    const handleDocumentMove = (event: MouseEvent) => dragObliqueHandleRef.current(event);
     const handleDocumentUp = () => {
       obliqueHandleDragRef.current = null;
+      obliquePositionDragRef.current = null;
       setObliqueHoverTarget(null);
-      endObliquePositionDrag();
+      setLiveObliqueOffset(null);
     };
     document.addEventListener("mousemove", handleDocumentMove);
     document.addEventListener("mouseup", handleDocumentUp);
@@ -3368,7 +3361,7 @@ function Show3DSlices() {
       document.removeEventListener("mousemove", handleDocumentMove);
       document.removeEventListener("mouseup", handleDocumentUp);
     };
-  });
+  }, []);
 
   // Stationary click on a slice panel = jump-to-voxel: the image pixel under
   // the click sets the matching volume indices.
