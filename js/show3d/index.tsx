@@ -10412,47 +10412,36 @@ function Show3D() {
   const frequencyRingValue = normalizeFrequencyFilterMode(frequencyFilter) === "bandpass"
     ? (frequencyDraft ?? frequencyFilterCenter)
     : (frequencyDraft ?? frequencyFilterCutoff);
+  /** Ring radius under the pointer as a fraction of Nyquist: the distance from the FFT centre over its half side. */
+  const frequencyRingValueAt = (event: React.PointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.parentElement!.getBoundingClientRect();
+    const radius = Math.hypot(event.clientX - (rect.left + rect.width / 2), event.clientY - (rect.top + rect.height / 2));
+    return Math.max(0, Math.min(1, radius / (Math.min(rect.width, rect.height) / 2)));
+  };
   const show3dFrequencyRing = frequencyFilterIsActive ? (
     <Box
       className="quantem-frequency-filter-ring"
       data-frequency-filter={normalizeFrequencyFilterMode(frequencyFilter)}
       aria-label={`Draggable ${normalizeFrequencyFilterMode(frequencyFilter)} frequency ring at ${frequencyValueLabel(frequencyRingValue)}`}
       title="Drag the ring to choose a frequency from the FFT"
-      onMouseDown={(event: React.MouseEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const parent = event.currentTarget.parentElement;
-        if (!parent) return;
-        const rect = parent.getBoundingClientRect();
-        const valueAt = (clientX: number, clientY: number) => Math.max(0, Math.min(1, Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2)) / (Math.min(rect.width, rect.height) / 2)));
-        const onMove = (moveEvent: MouseEvent) => setFrequencyDraft(valueAt(moveEvent.clientX, moveEvent.clientY));
-        const onUp = (upEvent: MouseEvent) => {
-          document.removeEventListener("mousemove", onMove);
-          document.removeEventListener("mouseup", onUp);
-          const value = valueAt(upEvent.clientX, upEvent.clientY);
-          if (normalizeFrequencyFilterMode(frequencyFilter) === "bandpass") setFrequencyFilterCenter(value);
-          else setFrequencyFilterCutoff(value);
-          setFrequencyDraft(null);
-        };
-        document.addEventListener("mousemove", onMove);
-        document.addEventListener("mouseup", onUp);
-      }}
+      // One pointer path with capture; cancelling pointerdown stops the compatibility mouse events, so the
+      // FFT below does not start a pan and the release commits once.
       onPointerDown={(event: React.PointerEvent<HTMLDivElement>) => {
+        event.preventDefault();
         event.stopPropagation();
         event.currentTarget.setPointerCapture(event.pointerId);
       }}
       onPointerMove={(event: React.PointerEvent<HTMLDivElement>) => {
         if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-        const parent = event.currentTarget.parentElement;
-        if (!parent) return;
-        const rect = parent.getBoundingClientRect();
-        setFrequencyDraft(Math.max(0, Math.min(1, Math.hypot(event.clientX - (rect.left + rect.width / 2), event.clientY - (rect.top + rect.height / 2)) / (Math.min(rect.width, rect.height) / 2))));
+        setFrequencyDraft(frequencyRingValueAt(event));
       }}
       onPointerUp={(event: React.PointerEvent<HTMLDivElement>) => {
         event.stopPropagation();
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-        if (normalizeFrequencyFilterMode(frequencyFilter) === "bandpass") setFrequencyFilterCenter(frequencyRingValue);
-        else setFrequencyFilterCutoff(frequencyRingValue);
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+        event.currentTarget.releasePointerCapture(event.pointerId);
+        const value = frequencyRingValueAt(event);
+        if (normalizeFrequencyFilterMode(frequencyFilter) === "bandpass") setFrequencyFilterCenter(value);
+        else setFrequencyFilterCutoff(value);
         setFrequencyDraft(null);
       }}
       sx={{ position: "absolute", left: "50%", top: "50%", width: `${frequencyRingValue * 100}%`, height: `${frequencyRingValue * 100}%`, transform: "translate(-50%, -50%)", borderRadius: "50%", border: "2px solid rgba(0,229,255,0.95)", bgcolor: normalizeFrequencyFilterMode(frequencyFilter) === "highpass" ? "rgba(0,0,0,0.55)" : "transparent", boxShadow: normalizeFrequencyFilterMode(frequencyFilter) === "lowpass" ? "0 0 0 1px rgba(0,0,0,0.75), 0 0 0 9999px rgba(0,0,0,0.55)" : "0 0 0 1px rgba(0,0,0,0.75)", cursor: "crosshair", touchAction: "none", zIndex: 6 }}
