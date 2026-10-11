@@ -977,6 +977,77 @@ function drawRoiOverlayHiDPI(
 }
 
 /**
+ * Draw a profile line on a HiDPI overlay: both endpoints, the line between
+ * them and, for a profile wider than one pixel, the dashed band it averages.
+ * Points use the sampler's convention (pixel i centered at i), so they are
+ * drawn on the centers of the pixels the profile reads. The DP and VI panels
+ * share it so both profiles look the same.
+ */
+function drawProfileOverlay(
+  canvas: HTMLCanvasElement,
+  dpr: number,
+  points: { row: number; col: number }[],
+  width: number,
+  zoom: number,
+  panX: number,
+  panY: number,
+  imageWidth: number,
+  imageHeight: number,
+  color: string,
+) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.save();
+  ctx.scale(dpr, dpr);
+  const scaleX = canvas.width / dpr / imageWidth;
+  const scaleY = canvas.height / dpr / imageHeight;
+  const toScreenX = (col: number) => maskToCanvas(col, zoom, panX) * scaleX;
+  const toScreenY = (row: number) => maskToCanvas(row, zoom, panY) * scaleY;
+  const [first, second] = points;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(toScreenX(first.col), toScreenY(first.row), 4, 0, Math.PI * 2);
+  ctx.fill();
+  if (second) {
+    const colDelta = second.col - first.col;
+    const rowDelta = second.row - first.row;
+    const lineLength = Math.sqrt(colDelta * colDelta + rowDelta * rowDelta);
+    if (width > 1 && lineLength > 0) {
+      const halfWidth = (width - 1) / 2;
+      const perpRow = -colDelta / lineLength * halfWidth;
+      const perpCol = rowDelta / lineLength * halfWidth;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(toScreenX(first.col + perpCol), toScreenY(first.row + perpRow));
+      ctx.lineTo(toScreenX(second.col + perpCol), toScreenY(second.row + perpRow));
+      ctx.lineTo(toScreenX(second.col - perpCol), toScreenY(second.row - perpRow));
+      ctx.lineTo(toScreenX(first.col - perpCol), toScreenY(first.row - perpRow));
+      ctx.closePath();
+      // A translucent fill through globalAlpha: appending an alpha byte to a
+      // 3-digit color such as "#5af" makes an invalid color, which fills opaque.
+      ctx.globalAlpha = 0.125;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(toScreenX(first.col), toScreenY(first.row));
+    ctx.lineTo(toScreenX(second.col), toScreenY(second.row));
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(toScreenX(second.col), toScreenY(second.row), 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/**
  * Crop the scan-ROI bounding box out of a float32 virtual image for the
  * ROI-scoped FFT. A circle ROI zeroes the pixels outside its radius so the
  * spectrum covers only the drawn region; square and rect keep the whole box.
@@ -6001,70 +6072,8 @@ function Show4DSTEM() {
       }
     }
 
-    // Profile line overlay
     if (profileActive && profilePoints.length > 0) {
-        const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.save();
-        ctx.scale(DPR, DPR);
-        const cssW = canvas.width / DPR;
-        const cssH = canvas.height / DPR;
-        const scaleX = cssW / detCols;
-        const scaleY = cssH / detRows;
-        // profile points center pixel i at i (the sampler's convention); draw them on that pixel's center
-        const toScreenX = (col: number) => maskToCanvas(col, dpZoom, dpPanX) * scaleX;
-        const toScreenY = (row: number) => maskToCanvas(row, dpZoom, dpPanY) * scaleY;
-
-        const ax = toScreenX(profilePoints[0].col);
-        const ay = toScreenY(profilePoints[0].row);
-        ctx.fillStyle = themeColors.accent;
-        ctx.beginPath();
-        ctx.arc(ax, ay, 4, 0, Math.PI * 2);
-        ctx.fill();
-
-        if (profilePoints.length === 2) {
-          const bx = toScreenX(profilePoints[1].col);
-          const by = toScreenY(profilePoints[1].row);
-
-          // A profile wider than one pixel averages a band; outline the averaged area.
-          if (profileWidth > 1) {
-            const colDelta = profilePoints[1].col - profilePoints[0].col;
-            const rowDelta = profilePoints[1].row - profilePoints[0].row;
-            const lineLength = Math.sqrt(colDelta * colDelta + rowDelta * rowDelta);
-            if (lineLength > 0) {
-              const halfWidth = (profileWidth - 1) / 2;
-              const perpRow = -colDelta / lineLength * halfWidth;
-              const perpCol = rowDelta / lineLength * halfWidth;
-              ctx.fillStyle = themeColors.accent + "20";
-              ctx.strokeStyle = themeColors.accent;
-              ctx.lineWidth = 1;
-              ctx.setLineDash([3, 3]);
-              ctx.beginPath();
-              ctx.moveTo(toScreenX(profilePoints[0].col + perpCol), toScreenY(profilePoints[0].row + perpRow));
-              ctx.lineTo(toScreenX(profilePoints[1].col + perpCol), toScreenY(profilePoints[1].row + perpRow));
-              ctx.lineTo(toScreenX(profilePoints[1].col - perpCol), toScreenY(profilePoints[1].row - perpRow));
-              ctx.lineTo(toScreenX(profilePoints[0].col - perpCol), toScreenY(profilePoints[0].row - perpRow));
-              ctx.closePath();
-              ctx.fill();
-              ctx.stroke();
-              ctx.setLineDash([]);
-            }
-          }
-
-          ctx.strokeStyle = themeColors.accent;
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.moveTo(ax, ay);
-          ctx.lineTo(bx, by);
-          ctx.stroke();
-
-          ctx.fillStyle = themeColors.accent;
-          ctx.beginPath();
-          ctx.arc(bx, by, 4, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.restore();
-      }
+      drawProfileOverlay(canvas, DPR, profilePoints, profileWidth, dpZoom, dpPanX, dpPanY, detCols, detRows, themeColors.accent);
     }
 
     // Colorbar overlay: uses cached vmin/vmax from the expensive DP offscreen effect
@@ -6103,53 +6112,12 @@ function Show4DSTEM() {
         isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize
       );
     }
-    // Draw VI profile lines
     if (viProfileActive && viProfilePoints.length > 0) {
-      const canvas = viUiRef.current;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        const cssW = canvas.width / DPR;
-        const cssH = canvas.height / DPR;
-        const scaleX = cssW / shapeCols;
-        const scaleY = cssH / shapeRows;
-        ctx.save();
-        ctx.scale(DPR, DPR);
-        ctx.strokeStyle = "#a0f";
-        ctx.lineWidth = 2;
-        ctx.shadowColor = "rgba(0,0,0,0.5)";
-        ctx.shadowBlur = 2;
-        if (viProfilePoints.length >= 1) {
-          const p0 = viProfilePoints[0];
-          const x0 = maskToCanvas(p0.col, viZoom, viPanX) * scaleX;
-          const y0 = maskToCanvas(p0.row, viZoom, viPanY) * scaleY;
-          ctx.beginPath();
-          ctx.arc(x0, y0, 4, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = "#fff";
-          ctx.fillText("1", x0 + 6, y0 - 6);
-        }
-        if (viProfilePoints.length === 2) {
-          const p0 = viProfilePoints[0], p1 = viProfilePoints[1];
-          const x0 = maskToCanvas(p0.col, viZoom, viPanX) * scaleX;
-          const y0 = maskToCanvas(p0.row, viZoom, viPanY) * scaleY;
-          const x1 = maskToCanvas(p1.col, viZoom, viPanX) * scaleX;
-          const y1 = maskToCanvas(p1.row, viZoom, viPanY) * scaleY;
-          ctx.beginPath();
-          ctx.moveTo(x0, y0);
-          ctx.lineTo(x1, y1);
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.arc(x1, y1, 4, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = "#fff";
-          ctx.fillText("2", x1 + 6, y1 - 6);
-        }
-        ctx.restore();
-      }
+      drawProfileOverlay(canvas, DPR, viProfilePoints, 1, viZoom, viPanX, viPanY, shapeCols, shapeRows, themeColors.accent);
     }
   }, [compareMode, viZoom, viPanX, viPanY, pixelSize, scanUnit, showScaleBar, shapeRows, shapeCols, localPosRow, localPosCol, isDraggingVI,
       viRoiMode, localViRoiCenterRow, localViRoiCenterCol, viRoiRadius, viRoiWidth, viRoiHeight,
-      isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize, canvasSize, viProfileActive, viProfilePoints, DPR]);
+      isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize, canvasSize, viProfileActive, viProfilePoints, themeColors.accent, DPR]);
 
   // ── DP Profile computation ──
   React.useEffect(() => {
