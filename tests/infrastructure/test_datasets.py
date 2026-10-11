@@ -155,7 +155,8 @@ def test_the_4dstem_tutorial_loader_follows_the_machine(tmp_path, monkeypatch, g
     assert list(dataset.units) == ["A", "A", "mrad", "mrad"]
     viewer = Show4DSTEM(dataset, precompute_virtual_images=False, verbose=False)
     try:
-        assert viewer.title == "Gold 4D-STEM bin8 preview" and viewer.pixel_size == 8.0 and viewer.k_pixel_size == 3.68
+        assert viewer.title == "Gold 4D-STEM bin8 preview"
+        assert (viewer.scan_sampling_A, viewer.detector_sampling_mrad) == ([8.0, 8.0], [3.68, 3.68])
     finally:
         viewer.close()
 
@@ -201,8 +202,8 @@ def test_show4dstem_shows_the_same_numbers_for_every_input_type(tmp_path, monkey
                 # every dataset names itself (a file by its name); an .npy file carries no calibration
                 assert widget.title == ("" if label in ("numpy", "torch cpu", "torch cuda") else "gold"), label
                 calibrated = label not in ("numpy", "torch cpu", "torch cuda", "Dataset4dstemGPU, encoded from a file")
-                scales = (widget.pixel_size, widget.pixel_unit, widget.k_pixel_size, widget.k_pixel_unit)
-                assert scales == ((2.0, "A", 3.68, "mrad") if calibrated else (1.0, "px", 1.0, "px")), label
+                scales = (widget.scan_sampling_A, widget.detector_sampling_mrad, widget.detector_sampling_inv_A)
+                assert scales == (([2.0, 2.0], [3.68, 3.68], []) if calibrated else ([], [], [])), label
             finally:
                 widget.close()
     finally:

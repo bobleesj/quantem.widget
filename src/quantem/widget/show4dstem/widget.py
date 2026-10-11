@@ -50,6 +50,7 @@ from quantem.widget.show4dstem.dense import DenseSession
 from quantem.widget.show4dstem.detector import PRESET_RADII, fit_disk, preset_mask, roi_mask, scan_indices
 from quantem.widget.show4dstem.preview import static_png_b64
 from quantem.widget.state import SavedStateMixin
+from quantem.widget.units import acquisition_calibration, stated
 from quantem.widget.utils.array import device_array
 from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
@@ -57,6 +58,8 @@ from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mo
 DEFAULT_BF_RATIO = 0.125  # bright-field radius as a fraction of the detector side before fitting
 DEFAULT_VI_ROI_RATIO = 0.15  # scan ROI radius as a fraction of the scan side
 PRODUCT_LABELS = ("DPC_row", "DPC_col", "SSB")
+# the calibration a 4D acquisition carries, under the .qem format's flat names
+CALIBRATION_KEYS = ("scan_sampling_A", "detector_sampling_mrad", "detector_sampling_inv_A", "voltage_kV", "semiangle_mrad")
 # Soft guide for the inline offline pack: the browser's JSON parse of the embedded
 # base64 is the real ceiling, and gzip keeps a 2 GB uint8 stack under it.
 OFFLINE_BUDGET_BYTES = 2000 * 1024 * 1024
@@ -146,16 +149,18 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         ``(row_start, row_stop, col_start, col_stop)`` of one 4D scan to view,
         exclusive stops: a GPU acquisition is read only there, a dense scan is
         cut before it moves to its device.
-    sampling, units
-        Pixel sizes and units for the four axes; taken from the dataset when it
-        carries a calibration.
+    scan_sampling_A, detector_sampling_mrad, detector_sampling_inv_A, voltage_kV, semiangle_mrad
+        Calibration of an input that records none (an array, an uncalibrated
+        file): the scan step ``(row, col)`` in angstrom, the detector step
+        ``(row, col)`` in mrad or in 1/angstrom per pixel (one of the two),
+        the accelerating voltage in kV and the convergence semiangle in mrad.
+        A dataset or file is the source of its own calibration: these are read
+        from it, and a keyword that contradicts a recorded value raises.
     center, bf_radius
         Bright-field disk geometry in detector pixels; fitted from the mean
         pattern when omitted.
     precompute_virtual_images
         Compute the four preset images up front so preset clicks are instant.
-    ssb_voltage_kV, ssb_semiangle_mrad, ssb_scan_sampling_A, ssb_det_sampling_mrad
-        Physical calibration for ``compute_ssb`` when the dataset lacks it.
     view_mode, compare_cols, compare_grid_width_px, compare_max_panels, compare_group_mode, compare_dp_mode
         Comparison grid layout for several datasets: ``"multiple"`` shows one
         virtual image per dataset, ``compare_max_panels`` per page, with the
@@ -229,11 +234,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     vi_roi_reduce = traitlets.Unicode("mean").tag(sync=True)
     vi_roi_dp_bytes = traitlets.Bytes(b"").tag(sync=True)
     vi_roi_receipt = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
-    pixel_size = traitlets.Float(1.0).tag(sync=True)
-    pixel_unit = traitlets.Unicode("px").tag(sync=True)
-    k_pixel_size = traitlets.Float(1.0).tag(sync=True)
-    k_pixel_unit = traitlets.Unicode("px").tag(sync=True)
-    k_calibrated = traitlets.Bool(False).tag(sync=True)
+    # calibration under the .qem flat names, each [row, col]; an empty list is an uncalibrated axis pair,
+    # and at most one of the two detector lists is filled
+    scan_sampling_A = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
+    detector_sampling_mrad = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
+    detector_sampling_inv_A = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
     _static_fallback_image = traitlets.Unicode("").tag(sync=True)
     _static_fallback_mime = traitlets.Unicode("image/jpeg").tag(sync=True)
     dp_colormap = traitlets.Unicode("inferno").tag(sync=True)
@@ -304,15 +309,14 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         scan_region: tuple[int, int, int, int] | None = None,
         scan_shape: tuple[int, int] | None = None,
         detector_shape: tuple[int, int] | None = None,
-        sampling: tuple[float, ...] | list[float] | float | None = None,
-        units: list[str] | tuple[str, ...] | str | None = None,
+        scan_sampling_A: float | tuple[float, float] | None = None,
+        detector_sampling_mrad: float | tuple[float, float] | None = None,
+        detector_sampling_inv_A: float | tuple[float, float] | None = None,
+        voltage_kV: float | None = None,
+        semiangle_mrad: float | None = None,
         center: tuple[float, float] | None = None,
         bf_radius: float | None = None,
         precompute_virtual_images: bool | None = None,
-        ssb_voltage_kV: float | None = None,
-        ssb_semiangle_mrad: float | None = None,
-        ssb_scan_sampling_A: float | tuple[float, float] | None = None,
-        ssb_det_sampling_mrad: float | tuple[float, float] | None = None,
         frame_dim_label: str | None = None,
         frame_labels: list[str] | None = None,
         view_mode: str | None = None,
@@ -420,6 +424,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         series = listed and any(gpu_adapter.is_acquisition(item) for item in data)
         bounded = gpu_adapter.is_acquisition(data) or series
         datasets = listed and all(core_adapter.is_dataset(item, ndim=4) for item in data)
+        recorded = dict.fromkeys(CALIBRATION_KEYS)
         if bounded and browser_urls:
             raise ValueError("h5_urls= and qem_urls= open files in the browser; pass the acquisition without them, or the URLs alone.")
         if bounded or datasets or core_adapter.is_dataset(data, ndim=4):
@@ -434,11 +439,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 compare_dp_mode = "selected" if compare_dp_mode is None else compare_dp_mode
             elif not title:
                 title = dataset_name(first)
-            # the dataset's calibration, unless the caller gives one; an acquisition reports an unknown axis as None
-            axes = list(zip(first.sampling, first.units))
-            if sampling is None and units is None and any(spacing is not None and unit is not None for spacing, unit in axes):
-                sampling = tuple(1.0 if spacing is None or unit is None else float(spacing) for spacing, unit in axes)
-                units = ["px" if spacing is None or unit is None else str(unit) for spacing, unit in axes]
+            # the dataset is the source of its calibration, read the same way for a GPU acquisition
+            # (an unknown axis is None) and a quantem core dataset (an unknown axis is 1.0 "pixels")
+            recorded = acquisition_calibration(first.sampling, first.units, first.metadata)
         if bounded:
             if series:
                 if scan_region is not None:
@@ -465,6 +468,18 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         view_mode = self._normalize_view_mode("single" if view_mode is None else view_mode)
         compare_dp_mode = self._normalize_compare_dp_mode("average" if compare_dp_mode is None else compare_dp_mode)
         compare_group_mode = self._normalize_compare_group_mode(compare_group_mode)
+        if detector_sampling_mrad is not None and detector_sampling_inv_A is not None:
+            raise ValueError("Pass detector_sampling_mrad= or detector_sampling_inv_A=, not both: converting one into "
+                             "the other needs the voltage, and one detector has one calibration.")
+        keywords = {"scan_sampling_A": scan_sampling_A, "detector_sampling_mrad": detector_sampling_mrad,
+                    "detector_sampling_inv_A": detector_sampling_inv_A, "voltage_kV": voltage_kV,
+                    "semiangle_mrad": semiangle_mrad}
+        calibration = {name: stated(name, keywords[name], recorded[name]) for name in CALIBRATION_KEYS}
+        if calibration["detector_sampling_mrad"] is not None and calibration["detector_sampling_inv_A"] is not None:
+            raise ValueError("The input records its detector step in one unit and the keyword gives the other; "
+                             "leave the keyword out.")
+        for name in ("scan_sampling_A", "detector_sampling_mrad", "detector_sampling_inv_A"):
+            calibration[name] = [] if calibration[name] is None else list(self._positive_pair(calibration[name], name))
         if browser_urls:
             urls = list(dict.fromkeys(str(url) for url in browser_urls))
             data = None
@@ -514,33 +529,17 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.panel_width_px, self.compare_cols = int(panel_width_px), int(compare_cols)
         self.compare_grid_width_px, self.compare_max_panels = int(compare_grid_width_px), int(compare_max_panels)
 
-        if sampling is None:
-            sampling = (1.0, 1.0, 1.0, 1.0)
-        elif isinstance(sampling, (int, float)):
-            sampling = (float(sampling),) * 4
-        if units is None:
-            units = ["px"] * 4
-        elif isinstance(units, str):
-            units = [units] * 4
-        self._axis_sampling = tuple(float(spacing) for spacing in sampling)
-        self._axis_units = [str(unit) for unit in units]
+        self.scan_sampling_A = calibration["scan_sampling_A"]
+        self.detector_sampling_mrad = calibration["detector_sampling_mrad"]
+        self.detector_sampling_inv_A = calibration["detector_sampling_inv_A"]
+        self.voltage_kV = None if calibration["voltage_kV"] is None else float(calibration["voltage_kV"])
+        self.semiangle_mrad = None if calibration["semiangle_mrad"] is None else float(calibration["semiangle_mrad"])
         self.title = title
         self.show_title = bool(ui["show_title"])
         self.show_controls = bool(ui["show_controls"])
         self.controls_collapsed = bool(ui["controls_collapsed"])
         self.show_stats = bool(ui["show_stats"])
         self.show_scale_bar = bool(ui["show_scale_bar"])
-        self.pixel_size = self._axis_sampling[1]  # scan column axis sets the horizontal scale bar
-        self.pixel_unit = self._axis_units[1]
-        self.k_pixel_size = self._axis_sampling[3] if len(self._axis_sampling) > 3 else 1.0
-        self.k_pixel_unit = self._axis_units[3] if len(self._axis_units) > 3 else "px"
-        self.k_calibrated = self.k_pixel_unit not in ("px", "pixels", "")  # a quantem dataset spells an uncalibrated axis "pixels"
-        self._ssb_calibration = {
-            "voltage_kV": ssb_voltage_kV,
-            "semiangle_mrad": ssb_semiangle_mrad,
-            "scan_sampling_A": ssb_scan_sampling_A,
-            "det_sampling_mrad": ssb_det_sampling_mrad,
-        }
         self.show_fft = bool(show_fft)
         self.frame_dim_label = "Frame" if frame_dim_label is None else str(frame_dim_label)
 
@@ -865,10 +864,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         ``kwargs`` go to the solver: ``n_trials``, ``refine``, ``seed``,
         ``aberrations`` (a dict of ``C10_nm``, ``C12_nm`` and ``phi12_deg``; a
         missing key is 0), ``rotation_angle_deg``, ``bf_radius``,
-        ``bf_intensity_threshold``, ``lock_c10``, ``lock_c12`` and the
-        calibration overrides ``voltage_kV``, ``semiangle_mrad``,
-        ``scan_sampling_A``, ``det_sampling_mrad``. The aligned DPC maps from
-        the same data are attached beside the phase.
+        ``bf_intensity_threshold``, ``lock_c10`` and ``lock_c12``. The voltage,
+        semiangle and sampling are the widget's calibration: what the dataset
+        or file records, or the constructor keywords for an input that records
+        none. The aligned DPC maps from the same data are attached beside the
+        phase.
         """
         if self.ssb_compute_busy:
             raise RuntimeError("Compute SSB is already running.")
@@ -927,8 +927,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     def state_dict(self) -> dict:
         """The display state (cursor, ROI, colormaps, layout); no pixel data."""
         keys = (
-            "title", "show_title", "pos_row", "pos_col", "pixel_size", "pixel_unit", "k_pixel_size", "k_pixel_unit",
-            "k_calibrated", "center_row", "center_col", "bf_radius", "roi_active", "roi_mode", "roi_center_row",
+            "title", "show_title", "pos_row", "pos_col", "center_row", "center_col", "bf_radius", "roi_active", "roi_mode", "roi_center_row",
             "roi_center_col", "roi_radius", "roi_radius_inner", "roi_width", "roi_height", "vi_roi_mode",
             "vi_roi_center_row", "vi_roi_center_col", "vi_roi_radius", "vi_roi_width", "vi_roi_height",
             "vi_roi_reduce", "vi_source", "dp_colormap", "vi_colormap", "fft_colormap", "dp_scale_mode",
@@ -1547,48 +1546,6 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             return frame.source
         return frame.read(scan_region=(0, frame.shape[0], 0, frame.shape[1]))
 
-    def _ssb_scan_sampling_A(self, value) -> tuple[float, float]:
-        """Scan sampling ``(row, col)`` in Angstrom: ``value``, else the scan axes' calibration converted from A, nm or pm.
-
-        SSB needs the physical real-space step; a scan calibrated only in pixels
-        is refused with the two ways to supply it.
-        """
-        if value is not None:
-            return self._positive_pair(value, "scan_sampling_A")
-        factors = {"a": 1.0, "ang": 1.0, "nm": 10.0, "pm": 0.01}
-        pair = []
-        for axis in (0, 1):
-            key = self._unit_key(self._axis_units[axis])
-            if key not in factors or self._axis_sampling[axis] <= 0:
-                raise ValueError(
-                    "Compute SSB needs real-space scan sampling in Angstroms. Pass ssb_scan_sampling_A=(row_A, col_A), "
-                    "or construct Show4DSTEM with sampling=(scan_row, scan_col, ..., ...) and units=('A', 'A', ..., ...)."
-                )
-            pair.append(self._axis_sampling[axis] * factors[key])
-        return (pair[0], pair[1])
-
-    def _ssb_det_sampling_mrad(self, value) -> tuple[float, float] | None:
-        """Detector sampling ``(row, col)`` in mrad per pixel: ``value``, else the detector axes' calibration, else None.
-
-        None (detector axes without an angular unit) is allowed: the semiangle
-        is then required explicitly.
-        """
-        if value is not None:
-            return self._positive_pair(value, "det_sampling_mrad")
-        factors = {"mrad": 1.0, "rad": 1000.0, "urad": 0.001}
-        keys = [self._unit_key(unit) for unit in self._axis_units[2:4]]
-        if len(keys) < 2 or any(key not in factors for key in keys) or any(s <= 0 for s in self._axis_sampling[2:4]):
-            return None
-        return (self._axis_sampling[2] * factors[keys[0]], self._axis_sampling[3] * factors[keys[1]])
-
-    @staticmethod
-    def _unit_key(unit: str) -> str:
-        """Unit spelling as a lookup key (``"Å/pixel"`` -> ``"a"``, ``"µrad"`` -> ``"urad"``), so any spelling converts."""
-        key = str(unit or "").strip().lower().replace("µ", "u").replace("μ", "u").replace("å", "a")
-        key = key.replace("angstroms", "angstrom").replace("angstrom", "a")
-        key = key.replace(" per pixel", "").replace("/pixel", "").replace("/px", "")
-        return key.replace(" ", "").replace("_", "")
-
     @staticmethod
     def _positive_pair(value, name: str) -> tuple[float, float]:
         """A positive ``(row, col)`` pair from a scalar or a length-2 sequence; zero or negative sampling has no SSB geometry."""
@@ -1600,10 +1557,6 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     def _ssb_phase(
         self,
         *,
-        voltage_kV: float | None = None,
-        semiangle_mrad: float | None = None,
-        scan_sampling_A=None,
-        det_sampling_mrad=None,
         bf_radius: float | None = None,
         aberrations: dict[str, float] | None = None,
         rotation_angle_deg: float = 0.0,
@@ -1626,19 +1579,25 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         # quantem.gpu pads any other scan to the next of these sizes, and a padded phase would not fit this scan
         if (self.shape_rows, self.shape_cols) not in ((128, 128), (256, 256), (512, 512), (1024, 1024)):
             raise ValueError(f"Compute SSB supports square 128, 256, 512 or 1024 scan grids; got {self.shape_rows}x{self.shape_cols}.")
-        calibration = self._ssb_calibration
-        scan_sampling = self._ssb_scan_sampling_A(scan_sampling_A if scan_sampling_A is not None else calibration["scan_sampling_A"])
-        det_sampling = self._ssb_det_sampling_mrad(det_sampling_mrad if det_sampling_mrad is not None else calibration["det_sampling_mrad"])
-        semiangle = semiangle_mrad if semiangle_mrad is not None else calibration["semiangle_mrad"]
+        # the calibration the dataset or file records (or, for an input that records none, the constructor keywords)
+        if not self.scan_sampling_A:
+            raise ValueError("Compute SSB needs the scan step in angstrom and the data record none. For an array or an "
+                             "uncalibrated file, construct Show4DSTEM(data, scan_sampling_A=(row_A, col_A)).")
+        scan_sampling = tuple(self.scan_sampling_A)
+        det_sampling = tuple(self.detector_sampling_mrad) or None
+        semiangle = self.semiangle_mrad
         if semiangle is None:
             if det_sampling is None or self.bf_radius <= 0:
-                raise ValueError("Compute SSB needs ssb_semiangle_mrad, or calibrated detector sampling in mrad/pixel plus a detected BF radius.")
+                raise ValueError("Compute SSB needs the convergence semiangle and the data record none. Construct "
+                                 "Show4DSTEM(data, semiangle_mrad=...), or give the detector step in mrad per pixel "
+                                 "(detector_sampling_mrad=) so it follows from the bright-field radius.")
             semiangle = self.bf_radius * det_sampling[1]
         if semiangle <= 0:
             raise ValueError(f"semiangle_mrad must be positive, got {semiangle}.")
-        voltage = voltage_kV if voltage_kV is not None else calibration["voltage_kV"]
+        voltage = self.voltage_kV
         if voltage is None:
-            raise ValueError("Compute SSB needs ssb_voltage_kV. Example: Show4DSTEM(data, ssb_voltage_kV=300).")
+            raise ValueError("Compute SSB needs the accelerating voltage and the data record none. For an array or an "
+                             "uncalibrated file, construct Show4DSTEM(data, voltage_kV=300).")
         trials = int(self.ssb_compute_n_trials if n_trials is None else n_trials)
         if trials < 0:
             raise ValueError(f"n_trials must be >= 0, got {trials}.")
@@ -1735,9 +1694,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if self.ssb_compute_busy:
             self.ssb_compute_status = "SSB compute is already running."
             return
-        kwargs = {key: payload[key] for key in ("semiangle_mrad", "scan_sampling_A", "det_sampling_mrad", "voltage_kV",
-                                                "bf_radius", "bf_intensity_threshold", "rotation_angle_deg", "n_trials",
-                                                "refine", "seed", "lock_aberrations") if key in payload}
+        kwargs = {key: payload[key] for key in ("rotation_angle_deg", "n_trials", "refine", "lock_aberrations") if key in payload}
         if "n_trials" in kwargs:
             self.ssb_compute_n_trials = int(kwargs["n_trials"])
         if "refine" in kwargs:
@@ -1824,8 +1781,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                  if self.n_frames > 1 else f"({self.shape_rows}, {self.shape_cols}, {self.det_rows}, {self.det_cols})")
         frame = f", {self.frame_dim_label.lower()}={self.frame_idx}" if self.n_frames > 1 else ""
         title = f", title='{self.title}'" if self.title else ""
-        return (f"Show4DSTEM(shape={shape}, sampling=({self.pixel_size} {self.pixel_unit}, "
-                f"{self.k_pixel_size} {self.k_pixel_unit}), pos=({self.pos_row}, {self.pos_col}){frame}{title})")
+        scan = f"scan_sampling_A={self.scan_sampling_A}" if self.scan_sampling_A else "scan uncalibrated"
+        detector = (f"detector_sampling_mrad={self.detector_sampling_mrad}" if self.detector_sampling_mrad else
+                    f"detector_sampling_inv_A={self.detector_sampling_inv_A}" if self.detector_sampling_inv_A else "detector uncalibrated")
+        return f"Show4DSTEM(shape={shape}, {scan}, {detector}, pos=({self.pos_row}, {self.pos_col}){frame}{title})"
 
     _static_png_b64 = static_png_b64  # the saved-notebook preview StaticFallbackMixin renders
 

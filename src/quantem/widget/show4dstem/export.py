@@ -214,14 +214,12 @@ def export_state_for_bin(widget, det_bin: int, scan_bin: int) -> dict:
         for key in ("center_row", "center_col", "bf_radius", "roi_center_row", "roi_center_col",
                     "roi_radius", "roi_radius_inner", "roi_width", "roi_height"):
             state[key] = float(state[key]) / det_bin
-        state["k_pixel_size"] = float(state["k_pixel_size"]) * det_bin
         state["dp_vmin"] = None
         state["dp_vmax"] = None
     if scan_bin > 1:
         for key in ("pos_row", "pos_col", "vi_roi_center_row", "vi_roi_center_col",
                     "vi_roi_radius", "vi_roi_width", "vi_roi_height"):
             state[key] = float(state[key]) / scan_bin
-        state["pixel_size"] = float(state["pixel_size"]) * scan_bin
         state["vi_vmin"] = None
         state["vi_vmax"] = None
     return state
@@ -258,9 +256,12 @@ def export_clone(widget, dtype: str, det_bin: int, scan_bin: int):
     data = export_data_array(widget, dtype, det_bin, scan_bin)
     clone = type(widget)(
         data,
-        sampling=(widget.pixel_size * scan_bin, widget.pixel_size * scan_bin,
-                  widget.k_pixel_size * det_bin, widget.k_pixel_size * det_bin),
-        units=[widget.pixel_unit, widget.pixel_unit, widget.k_pixel_unit, widget.k_pixel_unit],
+        # each axis keeps its own step, grown by the binning along it
+        scan_sampling_A=[step * scan_bin for step in widget.scan_sampling_A] or None,
+        detector_sampling_mrad=[step * det_bin for step in widget.detector_sampling_mrad] or None,
+        detector_sampling_inv_A=[step * det_bin for step in widget.detector_sampling_inv_A] or None,
+        voltage_kV=widget.voltage_kV,
+        semiangle_mrad=widget.semiangle_mrad,
         center=(widget.center_row / det_bin, widget.center_col / det_bin),
         bf_radius=max(1.0, widget.bf_radius / det_bin),
         precompute_virtual_images=False,
@@ -644,6 +645,12 @@ def write_qem_bundle(paths, out_dir, *, title: str | None = None, frame_labels=N
             )
     if frame_labels is not None and len(frame_labels) != len(paths):
         raise ValueError(f"Pass one frame label per acquisition: {len(paths)} files, {len(frame_labels)} labels.")
+    # the headers are the source of the page's calibration; one viewer draws one set of scale bars
+    calibrations = [gpu_adapter.header_calibration(report.metadata) for report in reports]
+    differing = [path.name for path, calibration in zip(paths, calibrations, strict=True) if calibration != calibrations[0]]
+    if differing:
+        print(f"write_qem_bundle: {', '.join(differing)} record another calibration than {paths[0].name}; "
+              f"the viewer's scale bars use {paths[0].name}.")
     root = pathlib.Path(out_dir).expanduser().resolve()
     data_dir = root / "qem"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -662,6 +669,7 @@ def write_qem_bundle(paths, out_dir, *, title: str | None = None, frame_labels=N
         backend="webgpu",
         scan_shape=first.scan_shape,
         detector_shape=first.detector_shape,
+        **calibrations[0],
         frame_dim_label="Dataset",
         frame_labels=list(frame_labels) if frame_labels else [path.stem for path in paths],
         view_mode="multiple" if len(paths) > 1 else "single",

@@ -6,6 +6,63 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+Vocabulary migration. Old names raise; nothing is accepted under two spellings.
+Widget state saved by an earlier release (a `save()` file, the state embedded
+in an exported HTML page or a notebook) names traits that no longer exist and
+cannot be read back: export the page again.
+
+Changed:
+
+- The dataset or file is the source of optics and calibration. `Show4DSTEM`
+  reads the scan step, the detector step, the voltage and the semiangle from a
+  `Dataset4dstemGPU`, a quantem core `Dataset4dstem` or a `.qem` header.
+  Constructor keywords `ssb_voltage_kV` to `voltage_kV`, `ssb_semiangle_mrad`
+  to `semiangle_mrad`, `ssb_scan_sampling_A` to `scan_sampling_A`,
+  `ssb_det_sampling_mrad` to `detector_sampling_mrad`; `sampling` and `units`
+  of `Show4DSTEM` to `scan_sampling_A`, `detector_sampling_mrad` and
+  `detector_sampling_inv_A`. A keyword is taken when the input records no
+  value and raises when it contradicts a recorded one. `compute_ssb` no longer
+  takes `voltage_kV`, `semiangle_mrad`, `scan_sampling_A` or
+  `det_sampling_mrad`.
+- `Show4DSTEM` traits `pixel_size`, `pixel_unit` to `scan_sampling_A`
+  (`[row, col]` in angstrom); `k_pixel_size`, `k_pixel_unit`, `k_calibrated` to
+  `detector_sampling_mrad` or `detector_sampling_inv_A` (`[row, col]`; an empty
+  list is an uncalibrated axis pair). They are no longer part of
+  `state_dict()`.
+- One unit table (`quantem.widget.units`, `js/units.ts`) replaces six. It reads
+  the strings a `.qem` file writes (`angstrom`, `1/angstrom`, `mrad`) and
+  `Å`, `A`, `nm`, `pm`, `µm`, `um`, `mm`, `m`, `1/Å`, `1/A`, `A^-1`, `1/nm`,
+  `nm^-1`, `rad`, `µrad`, `urad`, `deg` and the time units; `pixels`, `px`,
+  `index`, `frame` and `slice` mean an uncalibrated axis. Any other string
+  raises `ValueError`. Spelled-out forms (`nanometer`, `micron`, `angstroms`,
+  `Pixel`) are no longer accepted.
+- `Show2D`, `Show3D`, `Show3DSlices`, `ShowPtycho` and `ShowDiffraction` raise
+  when `sampling`, `units` or `k_pixel_size` contradict the calibration of the
+  dataset they are given. `Show3DSlices(units=)` defaults to `"angstrom"`.
+
+Fixed:
+
+- Compute SSB raised "needs ssb_voltage_kV" for a dataset or file that records
+  the voltage.
+- A `.qem` viewer (`write_qem_bundle`, `quantem show4dstem --html` on `.qem`
+  files) showed `1.0 px` scale bars; `quantem show4dstem --html` on a master
+  dropped the calibration. Both carry the calibration of the file header.
+- An exported Show4DSTEM page used the scan column step for both scan axes.
+- The static Show4DSTEM preview labelled every calibrated diffraction scale
+  bar "mrad", also one calibrated in 1/angstrom.
+- `ShowPtycho` showed a dataset in `angstrom` with no scale bar and
+  `ShowDiffraction` left a pattern in `1/angstrom` or `1/nm` uncalibrated,
+  both without a message. A pattern in mrad opens uncalibrated with one
+  printed line.
+- `read_4dstem` without quantem.gpu or a GPU replaced the detector pixels a
+  master flags and recorded nothing; the dataset's `metadata` holds
+  `source_path` and `hot_pixel_correction`. An uncalibrated axis is read the
+  same on both routes (`1.0 "pixels"` and `None` are both absent).
+- `read_image` returned `.dm3` and `.dm4` images with sampling `1.0 "pixels"`;
+  it keeps the pixel size and unit the file records.
+- `show4dstem_gold` carries the voltage and the semiangle of the hosted
+  sidecar in the dataset metadata.
+
 ## rc42 - 2026-10-11
 
 Fixed:

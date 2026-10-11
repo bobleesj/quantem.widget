@@ -53,7 +53,8 @@ import { collectDroppedFiles, matchQemFiles } from "./localDrop";
 import { createResidentHoverReader } from "./residentHover";
 import type { Uint32ImageView } from "../display/borrowedImage";
 import { latestRegion } from "./latestRegion";
-import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue, unitSymbol } from "../figure";
+import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
+import { angstromsPerUnit, unitSymbol } from "../units";
 import { findDataRange, sliderRange, computeStats, percentileClip } from "../display/stats";
 import { displayLog } from "../display/displayMath";
 import { downloadBlob, extractBytes, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";
@@ -462,12 +463,9 @@ function formatStat(value: number): string {
 }
 
 
-// Scan units in Å per unit: a lattice spacing reads in Å, or in nm from 1 nm up.
-const ANGSTROMS_PER_SCAN_UNIT: Record<string, number> = { "Å": 1, nm: 10 };
-
 /** A d-spacing measured in the scan's unit, as a label in Å or nm, or in the scan's own unit (px) when it is not a length. */
 function formatDSpacing(dSpacing: number, unit: string): string {
-  const angstroms = ANGSTROMS_PER_SCAN_UNIT[unitSymbol(unit)];
+  const angstroms = angstromsPerUnit(unit);
   if (angstroms === undefined) return `${dSpacing.toFixed(2)} ${unitSymbol(unit)}`;
   const spacing = dSpacing * angstroms;
   return spacing >= 10 ? `${(spacing / 10).toFixed(2)} nm` : `${spacing.toFixed(2)} \u00C5`;
@@ -475,7 +473,7 @@ function formatDSpacing(dSpacing: number, unit: string): string {
 
 /** A spatial frequency measured in inverse scan units, as a label in Å⁻¹ or in the scan's inverse unit. */
 function formatSpatialFrequency(frequency: number, unit: string): string {
-  const angstroms = ANGSTROMS_PER_SCAN_UNIT[unitSymbol(unit)];
+  const angstroms = angstromsPerUnit(unit);
   if (angstroms === undefined) return `${frequency.toFixed(4)} ${unitSymbol(unit)}\u207B\u00B9`;
   return `${(frequency / angstroms).toFixed(4)} \u00C5\u207B\u00B9`;
 }
@@ -2311,13 +2309,17 @@ function Show4DSTEM() {
   const [posCol, setPosCol] = useModelState<number>("pos_col");
   const [roiCenterCol] = useModelState<number>("roi_center_col");
   const [roiCenterRow] = useModelState<number>("roi_center_row");
-  const [pixelSize] = useModelState<number>("pixel_size");
-  const [pixelUnit] = useModelState<string>("pixel_unit");
-  // An uncalibrated scan carries the unit "pixels"; every label spells it "px".
-  const scanUnit = pixelUnit && pixelUnit !== "pixels" ? pixelUnit : "px";
-  const [kPixelSize] = useModelState<number>("k_pixel_size");
-  const [kPixelUnit] = useModelState<string>("k_pixel_unit");
-  const [kCalibrated] = useModelState<boolean>("k_calibrated");
+  // Calibration under the .qem flat names, each [row, col]; an empty list is an uncalibrated axis pair.
+  // The scale bars are horizontal, so they measure the column step, and an uncalibrated axis is drawn in pixels.
+  const [scanSamplingA] = useModelState<number[]>("scan_sampling_A");
+  const [detectorSamplingMrad] = useModelState<number[]>("detector_sampling_mrad");
+  const [detectorSamplingInvA] = useModelState<number[]>("detector_sampling_inv_A");
+  const scanCalibrated = scanSamplingA?.length === 2;
+  const pixelSize = scanCalibrated ? scanSamplingA[1] : 1;
+  const scanUnit = scanCalibrated ? "angstrom" : "px";
+  const kCalibrated = detectorSamplingMrad?.length === 2 || detectorSamplingInvA?.length === 2;
+  const kPixelSize = detectorSamplingMrad?.length === 2 ? detectorSamplingMrad[1] : detectorSamplingInvA?.length === 2 ? detectorSamplingInvA[1] : 1;
+  const kPixelUnit = detectorSamplingMrad?.length === 2 ? "mrad" : detectorSamplingInvA?.length === 2 ? "1/angstrom" : "px";
   const [title] = useModelState<string>("title");
   const [showTitle] = useModelState<boolean>("show_title");
   const [folderWatchState] = useModelState<string>("folder_watch_state");
@@ -5973,7 +5975,7 @@ function Show4DSTEM() {
       const rowDelta = profilePoints[1].row - profilePoints[0].row;
       const lengthPx = Math.sqrt(colDelta * colDelta + rowDelta * rowDelta);
       distance = kCalibrated && kPixelSize > 0
-        ? { total: lengthPx * kPixelSize, unit: kPixelUnit }
+        ? { total: lengthPx * kPixelSize, unit: unitSymbol(kPixelUnit) }
         : { total: lengthPx, unit: "px" };
     }
     const painted = drawProfileSparkline(canvas, ctx, canvasSize, profileHeight, profileData, distance,
@@ -6030,7 +6032,7 @@ function Show4DSTEM() {
       const colDelta = viProfilePoints[1].col - viProfilePoints[0].col;
       const rowDelta = viProfilePoints[1].row - viProfilePoints[0].row;
       const lengthPx = Math.sqrt(colDelta * colDelta + rowDelta * rowDelta);
-      distance = { total: lengthPx * pixelSize, unit: scanUnit };
+      distance = { total: lengthPx * pixelSize, unit: unitSymbol(scanUnit) };
     }
     const painted = drawProfileSparkline(canvas, ctx, viCanvasWidth, viProfileHeight, viProfileData, distance,
       "Click two points on the VI to draw a profile", themeInfo.theme === "dark", themeColors.accent);
@@ -7489,8 +7491,8 @@ function Show4DSTEM() {
             ["Scan", `${shapeRows} x ${shapeCols}`],
             ["Detector", `${detRows} x ${detCols}`],
             ["Frames", nFrames > 1 ? `${nFrames} ${frameDimLabel}` : "single frame"],
-            ["Real space", pixelSize > 0 ? `${formatNumber(pixelSize)} ${scanUnit}/px` : ""],
-            ["Diffraction", kCalibrated && kPixelSize > 0 ? `${formatNumber(kPixelSize)} ${kPixelUnit || "px"}/px` : "detector pixels"],
+            ["Real space", pixelSize > 0 ? `${formatNumber(pixelSize)} ${unitSymbol(scanUnit)}/px` : ""],
+            ["Diffraction", kCalibrated && kPixelSize > 0 ? `${formatNumber(kPixelSize)} ${unitSymbol(kPixelUnit)}/px` : "detector pixels"],
           ]} />
           <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
           <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>DP: Diffraction pattern I(kx,ky) at scan position. Drag to move ROI center.</Typography>

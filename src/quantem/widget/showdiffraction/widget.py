@@ -31,6 +31,7 @@ from quantem.widget.showdiffraction.phases import (
     phase_from_entry,
 )
 from quantem.widget.state import StateFileMixin
+from quantem.widget.units import axis_step, stated
 from quantem.widget.utils.array import to_numpy
 from quantem.widget.utils.display_filter import apply_display_filter
 from quantem.widget.utils.state_io import read_state
@@ -112,9 +113,12 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     data : np.ndarray, torch.Tensor, Dataset2d or Dataset3d
         2D ``(det_rows, det_cols)`` single pattern or 3D
         ``(n_frames, det_rows, det_cols)`` stack of patterns. A dataset supplies the
-        title and, when its last axis is in ``1/Å``, the k calibration.
+        title and, when its detector axes are a reciprocal length (``1/angstrom``,
+        ``1/Å``, ``1/nm``), the k calibration.
     k_pixel_size : float, optional
-        k-space sampling in 1/Å per pixel. Marks the pattern calibrated.
+        k-space sampling in 1/Å per pixel. Marks the pattern calibrated. A
+        dataset is the source of its own calibration: a value that contradicts
+        it raises.
     center : tuple[float, float], optional
         (row, col) of the diffraction center in pixels. Defaults to the detector
         center, then auto-detected from the bright-field disk if also no radius.
@@ -279,9 +283,16 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         if core_adapter.is_dataset(data, ndim=2) or core_adapter.is_dataset(data, ndim=3):
             if not title and data.name:
                 title = str(data.name)
-            if k_pixel_size is None and data.units[-1] in ("1/Å", "1/A"):
-                k_pixel_size = float(data.sampling[-1])
+            # the dataset is the source of the k calibration: read through the one unit table, so the
+            # .qem string "1/angstrom" (and 1/nm) calibrates the pattern as "1/Å" does
+            recorded = axis_step(data.sampling[-1], data.units[-1])
+            if recorded is not None and recorded[0] == "reciprocal_length":
+                k_pixel_size = stated("k_pixel_size", k_pixel_size, recorded[1])
                 calibration_source = "metadata"
+            elif recorded is not None:
+                print(f"ShowDiffraction: the dataset's detector axes are in {data.units[-1]}; d-spacings need 1/angstrom "
+                      "per pixel (from mrad that takes the voltage). The pattern opens uncalibrated: calibrate it from a "
+                      "known ring (calibrate_from_ring) or pass k_pixel_size=.")
             data = core_adapter.as_array(data)
         self._device = torch.device(resolve_device(device, data))
         # frame count before a merge appended the combined pattern

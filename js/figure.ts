@@ -4,6 +4,7 @@
  */
 
 import { formatNumber } from "./format";
+import { LENGTH_LADDER, angstromsPerUnit, unitSymbol } from "./units";
 
 /** Round a physical value to a "nice" number (1, 2, 5, 10, 20, 50, ...) */
 export function roundToNiceValue(value: number): number {
@@ -17,54 +18,9 @@ export function roundToNiceValue(value: number): number {
   return 10 * magnitude;
 }
 
-/**
- * Normalize a unit string to its scientific symbol for DISPLAY only. Users pass
- * units like "micron"/"um" on a Dataset; we keep the trait verbatim but render
- * the conventional glyph (µm, Å) so labels read like a journal figure. Unknown
- * strings pass through unchanged. Case-insensitive on the spelled-out forms.
- */
-export function unitSymbol(unit: string): string {
-  const trimmed = (unit || "").trim();
-  const lower = trimmed.toLowerCase();
-  if (lower === "micron" || lower === "microns" || lower === "um" || trimmed === "μm" || trimmed === "µm") return "µm";
-  if (lower === "angstrom" || lower === "angstroms" || lower === "ang" || trimmed === "Å" || lower === "a") return "Å";
-  if (lower === "nanometer" || lower === "nanometers" || lower === "nm") return "nm";
-  if (lower === "picometer" || lower === "picometers" || lower === "pm") return "pm";
-  if (lower === "millimeter" || lower === "millimeters" || lower === "mm") return "mm";
-  if (lower === "picosecond" || lower === "picoseconds" || lower === "ps") return "ps";
-  if (lower === "femtosecond" || lower === "femtoseconds" || lower === "fs") return "fs";
-  if (lower === "nanosecond" || lower === "nanoseconds" || lower === "ns") return "ns";
-  // uncalibrated axes carry the unit "pixels"; every widget labels them px
-  if (lower === "pixel" || lower === "pixels") return "px";
-  return trimmed;
-}
-
-// Size of one length unit in Angstrom, keyed by every lower-case spelling a widget's
-// unit trait accepts. Units that are not lengths (px, mrad, ps, ...) are absent.
-const ANGSTROMS_PER_UNIT: Record<string, number> = {
-  "å": 1, a: 1, ang: 1, angstrom: 1, angstroms: 1,
-  nm: 10, nanometer: 10, nanometers: 10,
-  pm: 0.01, picometer: 0.01, picometers: 0.01,
-  "µm": 1e4, "μm": 1e4, um: 1e4, micron: 1e4, microns: 1e4, micrometer: 1e4, micrometers: 1e4,
-  mm: 1e7, millimeter: 1e7, millimeters: 1e7,
-  m: 1e10, meter: 1e10, meters: 1e10,
-};
-
-/** One `unit` in Angstrom, or undefined when the unit is not a length (px, mrad, ps, ...). */
-export function angstromsPerUnit(unit: string | null | undefined): number | undefined {
-  return ANGSTROMS_PER_UNIT[(unit || "").trim().toLowerCase()];
-}
-
-// Length-unit ladder for the scale bar, each as its size in Angstrom. Lets a sub-1 value
-// in one unit (e.g. 0.5 nm) display as a clean integer in a smaller unit (500 pm /
-// 5 A) instead of a decimal - microscopists read "5 A", not "0.50 nm".
-const LENGTH_LADDER: { sym: string; angstroms: number }[] = [
-  { sym: "mm", angstroms: 1e7 }, { sym: "µm", angstroms: 1e4 }, { sym: "nm", angstroms: 10 }, { sym: "Å", angstroms: 1 }, { sym: "pm", angstroms: 0.01 },
-];
-
 /** Format scale bar label. Length values auto-pick the unit that reads as a clean
  *  integer (no decimals) - 0.5 nm -> "5 Å", 0.005 nm -> "5 pm". Non-length units
- *  (mrad, ps, px) keep their unit. roundToNiceValue gives n×10^k, and every ladder
+ *  (mrad, 1/angstrom, ps, px) keep their unit; js/units.ts is the unit table. roundToNiceValue gives n×10^k, and every ladder
  *  step is a power of 10, so the rescaled number is always exact. */
 export function formatScaleLabel(value: number, unit: string): string {
   const nice = roundToNiceValue(value);
@@ -77,7 +33,7 @@ export function formatScaleLabel(value: number, unit: string): string {
   const angstroms = nice * unitAngstroms;
   // largest ladder unit where the value is >= 1 -> the cleanest (fewest-digit) integer
   const pick = LENGTH_LADDER.find((ladderUnit) => angstroms / ladderUnit.angstroms >= 1) ?? LENGTH_LADDER[LENGTH_LADDER.length - 1];
-  return `${Math.round(angstroms / pick.angstroms)} ${pick.sym}`;
+  return `${Math.round(angstroms / pick.angstroms)} ${pick.symbol}`;
 }
 
 const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";

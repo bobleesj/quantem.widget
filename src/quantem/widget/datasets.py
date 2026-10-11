@@ -247,14 +247,17 @@ def show4dstem_gold(
     name = "Gold 4D-STEM bin8 preview"
     sampling = [float(value) * scan_stride if axis < 2 else float(value) for axis, value in enumerate(metadata["sampling"])]
     units = [str(unit) for unit in metadata["units"]]
+    # the sidecar's optics travel with the dataset under the .qem flat names, so Compute SSB reads them from it
+    optics = {"voltage_kV": metadata.get("voltage_kV"), "semiangle_mrad": metadata.get("probe_semiangle_mrad")}
     if gpu_adapter.is_acquisition(loaded):
         with loaded:
             preview_t = loaded[::scan_stride, ::scan_stride].contiguous()
         dataset = gpu_adapter.acquisition_from_tensor(
-            preview_t, {"name": name, "sampling": sampling, "units": units, "source_path": str(source)})
+            preview_t, {"name": name, "sampling": sampling, "units": units, "source_path": str(source), **optics})
     else:
         stack = np.ascontiguousarray(as_array(loaded)[::scan_stride, ::scan_stride])
         dataset = make_dataset(stack, sampling=sampling, units=units, name=name)
+        dataset.metadata.update(optics)
     if scan_stride > 1:
         print(f"show4dstem_gold(size={size!r}) keeps every {scan_stride}th scan position of the "
               f"{loaded.shape[0]}x{loaded.shape[1]} scan; size='large' or 'full' loads every position.")

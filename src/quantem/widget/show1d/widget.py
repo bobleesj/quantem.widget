@@ -20,6 +20,7 @@ import ipywidgets
 import numpy as np
 import traitlets
 
+from quantem.widget.units import unit_entry
 from quantem.widget.adapters import core as core_adapter
 from quantem.widget.colormap import VALID_CMAPS
 from quantem.widget.export import HtmlExportMixin
@@ -341,6 +342,9 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
             self.pixel_size = float(sampling[-1]) if isinstance(sampling, Sequence) else float(sampling)
         if units is not None:
             self.pixel_unit = units if isinstance(units, str) else str(units[-1])
+        # one unit table for every widget: an unknown string raises, an uncalibrated axis is absent
+        if unit_entry(self.pixel_unit)[0] == "pixels":
+            self.pixel_size, self.pixel_unit = 0.0, "px"
         self._update_stats()
         self._update_data_bytes()
         self._update_trial_analysis()

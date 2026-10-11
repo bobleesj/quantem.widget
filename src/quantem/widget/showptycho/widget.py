@@ -37,6 +37,7 @@ from quantem.widget.adapters import core as core_adapter
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.device import gpu_path_hint, no_gpu_path
 from quantem.widget.showptycho.export import write_showptycho_folder
+from quantem.widget.units import axis_pair, stated
 from quantem.widget.utils.array import device_array
 
 STARS_FILENAME = "showptycho_stars.json"
@@ -45,8 +46,6 @@ CALIBRATION_SCHEMA_VERSION = 3
 # Saved magnitudes are nm (quantem.gpu SSB reported Angstrom under an nm label before 2026-09-24).
 ABERRATION_UNIT = "nm"
 MIN_CROP_SPAN = 32
-# length units an array's sampling may be given in, as Angstrom per unit (the widget draws in Angstrom)
-ANGSTROM_PER_UNIT = {"Å": 1.0, "A": 1.0, "nm": 10.0, "pm": 0.01}
 # (name, slot in the 14-coefficient Krivanek vector, carries an azimuth) for the higher-order panel;
 # slots 0 and 1 are C10 and C12 / phi12 from the main sliders.
 HIGHER_ORDER_LAYOUT = (
@@ -132,8 +131,8 @@ class ShowPtycho(anywidget.AnyWidget):
     ----------
     data : array_like, quantem Dataset2d or quantem.gpu.SSB
         A 2D reconstruction (NumPy, torch, CuPy or anything ``np.asarray`` takes) or a prepared
-        SSB session. A ``Dataset2d`` gives its array, and its sampling when its units are a
-        length. A real array is the phase (rad); a complex array is the object wave, shown as
+        SSB session. A ``Dataset2d`` gives its array and its sampling (a keyword that
+        contradicts it raises). A real array is the phase (rad); a complex array is the object wave, shown as
         its phase (``angle``) and amplitude (``abs``). Tensors and CuPy arrays stay on their
         device until the 2D result is drawn. Arrays need no quantem.gpu; the aberration controls then stay
         hidden and one line says what they need. An SSB session, normally after
@@ -143,7 +142,8 @@ class ShowPtycho(anywidget.AnyWidget):
         Pixel size of an array in ``units``; it draws the scale bar and calibrates the FFT. An SSB
         session carries its own scan sampling.
     units : str, default "Å"
-        Length unit of ``sampling``: ``"Å"``, ``"nm"`` or ``"pm"``.
+        Length unit of ``sampling``: any length of ``quantem.widget.units``
+        (``"angstrom"``, ``"Å"``, ``"A"``, ``"nm"``, ``"pm"``, ...).
     source_file : str, optional
         SSB session: path of the raw ``*_master.h5``. With a readable master the toolbar offers
         Crop and Refit SSB, which reloads only the selected scan region and fits it afresh; the
@@ -231,10 +231,16 @@ class ShowPtycho(anywidget.AnyWidget):
         save_dir: str | pathlib.Path | None = None,
         fft_on: bool = False,
     ) -> None:
-        if core_adapter.is_dataset(data, ndim=2) and sampling is None and str(data.units[-1]) in ANGSTROM_PER_UNIT:
-            # a calibrated reconstruction: a length unit on its axes draws the scale bar
-            sampling, units = tuple(float(value) for value in data.sampling), str(data.units[-1])
         is_array = not gpu_adapter.is_ssb(data)
+        # an array's pixel size [row, col] in angstrom, read through the one unit table (the widget draws in angstrom)
+        given = None if sampling is None or not is_array else axis_pair(
+            (sampling, sampling) if isinstance(sampling, (int, float)) else sampling, (units, units), ("length",), "image")
+        if core_adapter.is_dataset(data, ndim=2):
+            # a calibrated reconstruction is the source of its pixel size; the keyword may repeat it
+            recorded = axis_pair(data.sampling, data.units, ("length",), "image")
+            given = stated("sampling", None if given is None else given[1], None if recorded is None else recorded[1])
+        elif given is not None:
+            given = given[1]
         if is_array:
             data = device_array(data)  # a tensor or CuPy array stays on its GPU until the 2D result is drawn
         if not is_array and sampling is not None:
@@ -256,8 +262,6 @@ class ShowPtycho(anywidget.AnyWidget):
                 needs = "" if gpu_adapter.available() else f" (a session needs quantem.gpu: {gpu_path_hint() or no_gpu_path()})"
                 raise ValueError(f"ShowPtycho shows one 2D reconstruction or a quantem.gpu SSB session{needs}; "
                                  f"got an array of shape {tuple(data.shape)}. Pass one 2D slice.")
-            if units not in ANGSTROM_PER_UNIT:
-                raise ValueError(f"units must be one of {sorted(ANGSTROM_PER_UNIT)}; got {units!r}")
             is_tensor = isinstance(data, torch.Tensor)
             data = data.detach() if is_tensor else data
             if data.is_complex() if is_tensor else np.iscomplexobj(data):
@@ -283,9 +287,8 @@ class ShowPtycho(anywidget.AnyWidget):
             self.phase_bytes = self._last_phase.tobytes()
             if "amplitude" in drawn:
                 self.amplitude_bytes = drawn["amplitude"].tobytes()
-            if sampling is not None:
-                column_sampling = float(sampling) if isinstance(sampling, (int, float)) else float(sampling[-1])
-                self.pixel_size = column_sampling * ANGSTROM_PER_UNIT[units]
+            if given is not None:
+                self.pixel_size = float(given[-1])  # the horizontal scale bar measures columns
             self.ssb_session = False
             self.session_note = session_note()
             return

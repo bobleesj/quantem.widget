@@ -1,0 +1,50 @@
+/**
+ * The one unit table of the frontends: what the unit string of a calibrated axis means.
+ * Mirrors src/quantem/widget/units.py, which validates every unit before it reaches a trait;
+ * keep the two in step. Reference units: angstrom (length), 1/angstrom (reciprocal_length),
+ * mrad (angle), second (time).
+ */
+
+export type UnitKind = "length" | "reciprocal_length" | "angle" | "time";
+
+interface UnitEntry { kind: UnitKind; size: number; symbol: string }
+
+const UNIT_TABLE: Record<string, UnitEntry> = {
+  angstrom: { kind: "length", size: 1, symbol: "Å" }, "Å": { kind: "length", size: 1, symbol: "Å" }, A: { kind: "length", size: 1, symbol: "Å" },
+  nm: { kind: "length", size: 10, symbol: "nm" }, pm: { kind: "length", size: 0.01, symbol: "pm" },
+  "µm": { kind: "length", size: 1e4, symbol: "µm" }, "μm": { kind: "length", size: 1e4, symbol: "µm" }, um: { kind: "length", size: 1e4, symbol: "µm" },
+  mm: { kind: "length", size: 1e7, symbol: "mm" }, m: { kind: "length", size: 1e10, symbol: "m" },
+  "1/angstrom": { kind: "reciprocal_length", size: 1, symbol: "Å⁻¹" }, "1/Å": { kind: "reciprocal_length", size: 1, symbol: "Å⁻¹" },
+  "1/A": { kind: "reciprocal_length", size: 1, symbol: "Å⁻¹" }, "A^-1": { kind: "reciprocal_length", size: 1, symbol: "Å⁻¹" },
+  "1/nm": { kind: "reciprocal_length", size: 0.1, symbol: "nm⁻¹" }, "nm^-1": { kind: "reciprocal_length", size: 0.1, symbol: "nm⁻¹" },
+  mrad: { kind: "angle", size: 1, symbol: "mrad" }, rad: { kind: "angle", size: 1e3, symbol: "rad" },
+  "µrad": { kind: "angle", size: 1e-3, symbol: "µrad" }, urad: { kind: "angle", size: 1e-3, symbol: "µrad" },
+  deg: { kind: "angle", size: (1e3 * Math.PI) / 180, symbol: "°" },
+  s: { kind: "time", size: 1, symbol: "s" }, ms: { kind: "time", size: 1e-3, symbol: "ms" },
+  "µs": { kind: "time", size: 1e-6, symbol: "µs" }, us: { kind: "time", size: 1e-6, symbol: "µs" },
+  ns: { kind: "time", size: 1e-9, symbol: "ns" }, ps: { kind: "time", size: 1e-12, symbol: "ps" }, fs: { kind: "time", size: 1e-15, symbol: "fs" },
+};
+
+// Length units a label may switch to, largest first, each as its size in Angstrom: a value
+// below 1 in one unit (0.5 nm) reads as a whole number in a smaller one (5 Å).
+export const LENGTH_LADDER: { symbol: string; angstroms: number }[] = [
+  { symbol: "mm", angstroms: 1e7 }, { symbol: "µm", angstroms: 1e4 }, { symbol: "nm", angstroms: 10 },
+  { symbol: "Å", angstroms: 1 }, { symbol: "pm", angstroms: 0.01 },
+];
+
+/**
+ * The symbol a label prints for a unit string: the table's symbol (Å, nm, Å⁻¹, mrad), "px" for
+ * an uncalibrated image axis, and any other text unchanged (the frame axis of a stack is labelled
+ * with whatever its author wrote, such as "frame" or "K").
+ */
+export function unitSymbol(unit: string | null | undefined): string {
+  const text = unit ?? "";
+  if (text === "" || text === "pixels" || text === "pixel" || text === "px") return "px";
+  return UNIT_TABLE[text]?.symbol ?? text;
+}
+
+/** One `unit` in Angstrom, or undefined when the unit is not a length (px, mrad, 1/angstrom, ps). */
+export function angstromsPerUnit(unit: string | null | undefined): number | undefined {
+  const entry = UNIT_TABLE[unit ?? ""];
+  return entry?.kind === "length" ? entry.size : undefined;
+}

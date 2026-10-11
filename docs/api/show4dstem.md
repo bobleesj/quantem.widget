@@ -267,23 +267,29 @@ Python GPU allocation, so it does not expose a "free GPU memory" control.
 With a live kernel on CUDA or MPS, the **Compute SSB** control, or
 `viewer.compute_ssb()`, runs `quantem.gpu.SSB(...).find_aberrations(...)` on the
 current 4D frame. It attaches the SSB phase and the aligned DPC row/col maps as
-virtual-image sources and switches the virtual image to the phase. Supply the
-microscope calibration when you open the viewer:
+virtual-image sources and switches the virtual image to the phase. The
+voltage, the convergence semiangle and the scan step are read from the dataset
+or `.qem` file:
 
 ```python
 from quantem.gpu.io import load
 
-loaded = load(path)
-viewer = Show4DSTEM(
-    loaded,
-    ssb_voltage_kV=300,
-    ssb_semiangle_mrad=30,
-    ssb_scan_sampling_A=0.5,
-)
+viewer = Show4DSTEM(load("scan.qem"))
 phase = viewer.compute_ssb()   # 200 trials plus Nelder-Mead refinement by default
 ```
 
-The beam energy comes from `ssb_voltage_kV`, and the fit uses every detected
+An input that records no calibration (an array, an HDF5 master) takes it from
+the constructor, under the `.qem` format's names:
+
+```python
+viewer = Show4DSTEM(counts, voltage_kV=300, semiangle_mrad=30, scan_sampling_A=(0.5, 0.5))
+```
+
+`scan_sampling_A` is the scan step `(row, col)` in angstrom,
+`detector_sampling_mrad` or `detector_sampling_inv_A` the detector step
+`(row, col)` in mrad or 1/angstrom per pixel. A keyword that contradicts a
+value the input records raises: the dataset or file is the source of its
+calibration. The fit uses every detected
 bright-field pixel (the `compute_ssb` keywords `bf_intensity_threshold` and
 `bf_radius`). The keywords `n_trials`, `refine` and `seed` control the search,
 for example `viewer.compute_ssb(n_trials=100, seed=0)`. Compute SSB
@@ -580,4 +586,4 @@ Python round trip - see [Performance](../maintainer/widget-performance).
 | Title visibility | `show_title` | Top title row shows/hides |
 | Stats visibility | `show_stats` | DP, virtual-image, and FFT stats bars show/hide |
 | Scale bar visibility | `show_scale_bar` | DP and virtual-image scale bars show/hide |
-| k-space calibration | `k_pixel_size`, `k_calibrated` | Diffraction axes read in mrad when calibrated |
+| Calibration | `scan_sampling_A`, `detector_sampling_mrad`, `detector_sampling_inv_A` (each `[row, col]`; empty when the axes are uncalibrated) | Scan scale bars read in a length; the diffraction scale bar reads in mrad or in 1/angstrom, whichever the data record |

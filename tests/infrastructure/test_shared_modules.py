@@ -15,7 +15,8 @@ from quantem.widget.colormap import VALID_CMAPS, Colormap, cmap_to_name, coloriz
 from quantem.widget.export import export_slug
 from quantem.widget.pages import resolve_page_labels
 from quantem.widget.panels import normalize_panel_refs, resolve_panel_ref
-from quantem.widget.render.figure import format_scale_label, round_to_nice, unit_symbol
+from quantem.widget.render.figure import format_scale_label, round_to_nice
+from quantem.widget.units import axis_step
 
 WIDGETS = Path(__file__).resolve().parents[2] / "src" / "quantem" / "widget"
 
@@ -30,19 +31,20 @@ WIDGETS = Path(__file__).resolve().parents[2] / "src" / "quantem" / "widget"
         (20, "mrad", "20 mrad"),  # non-length units keep their unit
         (0.25, "mrad", "0.20 mrad"),
         (57, "pixels", "50 px"),  # an uncalibrated axis reads px
-        (57, "furlong", "50 furlong"),  # unknown units pass through unchanged
         (2.5, "ps", "2 ps"),
-        # the cases of js/figure.test.ts: every spelling of a length unit rescales, meters included
+        # the cases of js/figure.test.ts: every length unit of the table rescales, meters included
         (20, "Å", "2 nm"),
-        (5, "angstroms", "5 Å"),
+        (5, "angstrom", "5 Å"),
+        (12, "angstrom", "1 nm"),  # the unit strings a .qem file writes
+        (0.2, "1/angstrom", "0.20 Å⁻¹"),
         (1500, "um", "2 mm"),
         (0.2, "μm", "200 nm"),
         (1e-9, "m", "1 nm"),
-        (0.002, "millimeter", "2 µm"),
-        (0.05, "micrometers", "50 nm"),
+        (0.002, "mm", "2 µm"),
+        (0.05, "µm", "50 nm"),
         (1e-7, "mm", "1 Å"),  # 1e-7 * 1e7 Å is exactly 1; a table in nm gave 0.0999... nm and printed "100 pm"
         (1e-4, "um", "1 Å"),  # the browser builds the power of ten from text, as exact as Python's 10 ** -4
-        (1.2e-5, "micron", "10 pm"),
+        (1.2e-5, "um", "10 pm"),
     ],
 )
 def test_scale_label_matches_js_figure(value, unit, label):
@@ -54,7 +56,8 @@ def test_uncalibrated_axes_carry_the_unit_px():
     image = np.zeros((8, 8), dtype=np.float32)
     assert Show2D(image).pixel_unit == "px"
     viewer = Show4DSTEM(np.ones((2, 2, 4, 4), dtype=np.uint16), precompute_virtual_images=False, verbose=False)
-    assert (viewer.pixel_unit, viewer.k_pixel_unit, viewer.k_calibrated) == ("px", "px", False)
+    # a 4D scan without a calibration has empty sampling lists: unknown is absent, not 1.0 px
+    assert (viewer.scan_sampling_A, viewer.detector_sampling_mrad, viewer.detector_sampling_inv_A) == ([], [], [])
     viewer.close()
     profile = Show1D.from_image(image, line=((1, 1), (1, 6)))
     assert (profile.x_unit, profile.pixel_unit) == ("px", "px")
@@ -62,8 +65,20 @@ def test_uncalibrated_axes_carry_the_unit_px():
 
 def test_round_to_nice_thresholds():
     assert [round_to_nice(v) for v in (1.4, 1.5, 3.4, 3.5, 7.4, 7.5, 0)] == [1, 2, 2, 5, 5, 10, 1.0]
-    assert unit_symbol("angstrom") == "Å" and unit_symbol("micron") == "µm" and unit_symbol("px") == "px"
-    assert unit_symbol("pixels") == "px" and unit_symbol("Pixel") == "px"
+
+
+def test_one_unit_table_reads_the_format_strings_and_refuses_unknown_text():
+    # the three strings a .qem file writes, in the reference unit of their kind
+    assert axis_step(0.4, "angstrom") == ("length", 0.4)
+    assert axis_step(0.02, "1/angstrom") == ("reciprocal_length", 0.02)
+    assert axis_step(0.5, "mrad") == ("angle", 0.5)
+    assert axis_step(0.2, "nm") == ("length", 2.0)
+    # an uncalibrated axis is absent whichever dataset type names it: None (quantem.gpu) or 1.0 "pixels" (quantem core)
+    assert axis_step(None, None) is None and axis_step(1.0, "pixels") is None
+    with pytest.raises(ValueError, match="Unknown unit 'furlong'"):
+        axis_step(1.0, "furlong")
+    with pytest.raises(ValueError, match="Unknown unit 'furlong'"):
+        format_scale_label(57, "furlong")
 
 
 def test_colormap_names_and_lut():

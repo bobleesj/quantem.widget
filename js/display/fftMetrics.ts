@@ -1,4 +1,4 @@
-import { angstromsPerUnit } from "../figure";
+import { angstromsPerUnit } from "../units";
 
 export type FftQualityMetrics = {
   sharp: number | null;

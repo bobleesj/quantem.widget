@@ -507,3 +507,20 @@ def test_hot_pixels_are_kept_unless_removal_is_asked_for(capsys):
     removed = ShowDiffraction(frame, device="cpu", remove_hot_pixels=True, verbose=False)
     assert removed._frame(0)[5, 7] == 0 and removed._frame(0)[40, 41] == 0
     assert "zeroed 2 hot pixels" in capsys.readouterr().out
+
+
+def test_a_dataset_in_the_format_unit_calibrates_the_pattern(capsys):
+    # only "1/Å" and "1/A" were read: "1/angstrom" (what a .qem file writes) left the pattern uncalibrated without a message
+    from quantem.widget.adapters.core import make_dataset
+
+    pattern = lattice_pattern()
+    for unit, step in (("1/angstrom", K_SAED), ("1/nm", K_SAED * 10)):
+        widget = ShowDiffraction(make_dataset(pattern, sampling=(step, step), units=(unit, unit)), verbose=False)
+        assert widget.k_calibrated and widget.k_pixel_size == pytest.approx(K_SAED) and widget.calibration_source == "metadata"
+    assert not ShowDiffraction(make_dataset(pattern), verbose=False).k_calibrated
+    # mrad cannot become 1/angstrom without the voltage: the pattern opens uncalibrated and one line says why
+    capsys.readouterr()
+    assert not ShowDiffraction(make_dataset(pattern, sampling=(0.5, 0.5), units=("mrad", "mrad")), verbose=False).k_calibrated
+    assert "detector axes are in mrad" in capsys.readouterr().out
+    with pytest.raises(ValueError, match="k_pixel_size=0.5 contradicts"):
+        ShowDiffraction(make_dataset(pattern, sampling=(K_SAED, K_SAED), units=("1/angstrom", "1/angstrom")), k_pixel_size=0.5, verbose=False)

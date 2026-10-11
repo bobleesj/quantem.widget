@@ -545,8 +545,8 @@ def test_show4dstem_cmd_s_snapshot_keeps_two_panel_static_preview():
     data = rng.integers(0, 1000, (10, 12, 24, 24), dtype=np.uint16)
     widget = Show4DSTEM(
         data,
-        sampling=(0.2, 0.2, 0.8, 0.8),
-        units=["nm", "nm", "mrad", "mrad"],
+        scan_sampling_A=(2.0, 2.0),
+        detector_sampling_mrad=(0.8, 0.8),
         panel_width_px=128,
         save_state=False,
         verbose=False,

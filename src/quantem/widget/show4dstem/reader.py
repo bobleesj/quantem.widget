@@ -47,6 +47,7 @@ from quantem.widget.io.hdf5_family import open_hdf5
 MEMORY_FRACTION = 0.8  # share of the available host memory a dense read may take
 BLOCK_BYTES = 256 << 20  # raw bytes read from the file per step
 PIXEL_MASK_KEY = "entry/instrument/detector/detectorSpecific/pixel_mask"
+HOT_PIXEL_SCHEMA = "quantem.hot-pixel-correction/2"  # the record read_4dstem leaves in metadata["hot_pixel_correction"]
 BIT_DEPTH_KEY = "entry/instrument/detector/bit_depth_image"  # Dectris: the largest count is 2**bits - 1
 # (largest count, stored dtype) from narrow to wide
 INTEGER_LADDER = ((255, np.uint8), (65535, np.uint16), (2**63 - 1, np.int64))
@@ -64,7 +65,10 @@ def read_4dstem(path, device: str = "auto", *, scan_shape: tuple[int, int] | Non
     on an Intel Mac or Windows on ARM, which cannot install quantem core, as
     the widget's stand-in with the same ``array``, ``name``, ``sampling``,
     ``units``, ``metadata``, ``shape`` and ``dtype``. ``Show4DSTEM`` and the
-    detector math give the same numbers for either.
+    detector math give the same numbers for either. The dense dataset's
+    ``metadata`` names the file (``source_path``) and, when the master flags
+    detector pixels, records their replacement (``hot_pixel_correction``:
+    method, pixel count and coordinates).
 
     Parameters
     ----------
@@ -112,7 +116,18 @@ def read_4dstem(path, device: str = "auto", *, scan_shape: tuple[int, int] | Non
     else:
         gpu_notice()
     values = read_dense(path, scan_shape=scan_shape, max_bytes=max_bytes, verbose=verbose)
-    return make_dataset(values, name=acquisition_name(path))
+    dataset = make_dataset(values, name=acquisition_name(path))
+    dataset.metadata["source_path"] = str(path)
+    pixel_mask = None if path.suffix == ".npy" else read_pixel_mask(path)
+    if pixel_mask is not None and values.dtype.kind in "ui":
+        # read_dense replaced these pixels; the record says so, as a GPU load's metadata does
+        flagged = np.argwhere(np.asarray(pixel_mask) != 0)
+        dataset.metadata["hot_pixel_correction"] = {
+            "schema": HOT_PIXEL_SCHEMA, "method": "median", "kernel_size": 3, "source": "stored_pixel_mask",
+            "pixel_count": len(flagged), "coordinates_row_col": flagged.tolist(), "applied": len(flagged) > 0,
+            "stage": "host_read", "backend": "cpu",
+        }
+    return dataset
 
 
 def gpu_route(device) -> bool:

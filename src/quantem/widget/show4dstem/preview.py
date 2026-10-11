@@ -114,12 +114,19 @@ def _panel(widget, panel_key: str, panel_px: int) -> Image.Image:
         else:
             resample = Image.Resampling.NEAREST
         panel = panel.resize((panel_px, panel_px), resample=resample)
+    # the bar is horizontal, so it measures the column step; an uncalibrated axis is drawn in pixels
     if panel_key == "virtual":
         _draw_virtual_overlays(widget, panel)
-        _draw_scalebar(panel, float(widget.pixel_size), widget.pixel_unit or "px")
+        step, unit = (widget.scan_sampling_A[1], "angstrom") if widget.scan_sampling_A else (1.0, "px")
     else:
         _draw_diffraction_overlays(widget, panel)
-        _draw_scalebar(panel, float(widget.k_pixel_size), "mrad" if widget.k_calibrated else "px")
+        if widget.detector_sampling_mrad:
+            step, unit = widget.detector_sampling_mrad[1], "mrad"
+        elif widget.detector_sampling_inv_A:
+            step, unit = widget.detector_sampling_inv_A[1], "1/angstrom"
+        else:
+            step, unit = 1.0, "px"
+    _draw_scalebar(panel, float(step), unit)
     return panel
 
 

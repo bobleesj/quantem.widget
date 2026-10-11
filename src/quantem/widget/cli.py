@@ -1245,6 +1245,7 @@ def _render_4dstem(masters: list[str], args: argparse.Namespace) -> list[pathlib
     Each master is loaded with the requested detector binning (``--bin``, default
     1 for full detector sampling) and packed into its own page."""
     from quantem.widget import Show4DSTEM
+    from quantem.widget.adapters import gpu as gpu_adapter
     out_dir = _out_dir(args.out)
     export_dtype = args.dtype  # "auto" resolves per master once its counts are known (_lossless_pack_dtype)
     outputs = []
@@ -1271,7 +1272,12 @@ def _render_4dstem(masters: list[str], args: argparse.Namespace) -> list[pathlib
                       f"{det_rows * args.det_bin}x{det_cols * args.det_bin} -> {det_rows}x{det_cols}; "
                       "pass --bin 1 for the full detector")
             pack_dtype = _lossless_pack_dtype(binned, stem) if export_dtype == "auto" else export_dtype
-            widget = Show4DSTEM(binned, backend="webgpu")
+            # the page carries the calibration the file's header records, with the detector step grown by the binning
+            calibration = gpu_adapter.header_calibration(gpu_adapter.inspect_master(master).metadata) if gpu_adapter.available() else {}
+            for name in ("detector_sampling_mrad", "detector_sampling_inv_A"):
+                if calibration.get(name) is not None:
+                    calibration[name] = [step * args.det_bin for step in calibration[name]]
+            widget = Show4DSTEM(binned, backend="webgpu", **calibration)
             out = out_dir / f"{stem}.html"
             widget.export_html(str(out), title=args.title or stem, dtype=pack_dtype)
             outputs.append(out)

@@ -22,6 +22,7 @@ from PIL import Image
 
 from quantem.widget import Show4DSTEM, device
 from quantem.widget.adapters import gpu as gpu_adapter
+from quantem.widget.adapters.core import make_dataset
 from quantem.widget.show4dstem import preview, reader
 from quantem.widget.show4dstem.detector import detector_mask, fit_probe, roi_mask
 from quantem.widget.counts import tensor_dtype
@@ -594,9 +595,14 @@ def test_dense_and_encoded_paths_agree(tmp_path, accelerator, device):
 
 def test_interactive_export_packs_binned_counts_in_one_self_contained_page(tmp_path):
     counts = _counts(4, scan=(4, 4))
-    widget = Show4DSTEM(counts, title="export", sampling=(0.5, 0.5, 0.1, 0.1), center=(8, 8), bf_radius=2,
-                        precompute_virtual_images=False)
+    widget = Show4DSTEM(counts, title="export", scan_sampling_A=(0.4, 0.6), detector_sampling_mrad=(0.1, 0.2),
+                        center=(8, 8), bf_radius=2, precompute_virtual_images=False)
     try:
+        # the page's clone keeps each axis its own step, grown by the binning along it (the row step was
+        # replaced by the column step before)
+        clone = html_export.export_clone(widget, "uint8", 2, 2)
+        assert (clone.scan_sampling_A, clone.detector_sampling_mrad) == ([0.8, 1.2], [0.2, 0.4])
+        clone.close()
         binned = export_data_array(widget, "uint8", 2, 2)
         expected = counts.reshape(2, 2, 2, 2, 8, 2, 8, 2).mean(axis=(1, 3, 5, 7))
         np.testing.assert_array_equal(binned, np.clip(np.round(expected), 0, 255).astype(np.uint8))
@@ -715,7 +721,7 @@ def test_qem_bundle_links_acquisitions_for_a_streaming_viewer(tmp_path):
     data = tmp_path / "data"
     data.mkdir()
     for name, seed in (("tilt_a.qem", 1), ("tilt_b.qem", 2)):
-        reference.save_array(data / name, _counts(seed, scan=(3, 4)))
+        reference.save_array(data / name, _counts(seed, scan=(3, 4)), {"voltage_kV": 300.0, "scan_sampling_A": [0.4, 0.6]})
     launcher = write_qem_bundle([data / "tilt_a.qem", data / "tilt_b.qem"], tmp_path / "viewer",
                                 frame_labels=["-17 mrad", "+17 mrad"], port=8898)
     viewer = tmp_path / "viewer"
@@ -728,6 +734,8 @@ def test_qem_bundle_links_acquisitions_for_a_streaming_viewer(tmp_path):
     assert '\\"../qem/tilt_a.qem\\", \\"../qem/tilt_b.qem\\"' in page
     assert "+17 mrad" in page and "__QT_H5_DECODE_DTYPE ??=" not in page
     assert '\"compare_cols\": 2' in page
+    # the page draws the calibration the headers record (it showed 1.0 px scale bars before)
+    assert re.search(r'"scan_sampling_A": \[\s*0\.4,\s*0\.6\s*\]', page)
     reference.save_array(data / "wide.qem", _counts(3, scan=(3, 5)))
     with pytest.raises(ValueError, match="one viewer compares acquisitions of one shape"):
         write_qem_bundle([data / "tilt_a.qem", data / "wide.qem"], tmp_path / "other")
@@ -758,10 +766,110 @@ def test_compute_ssb_accepts_a_1024_scan(monkeypatch):
                                          rotation_angle_deg=0.0, com_reversed=False, loss=None, elapsed=None)
 
     monkeypatch.setattr(widget_module.gpu_adapter, "ssb_session", Session)
-    widget = Show4DSTEM(np.ones((1024, 1024, 4, 4), np.uint16), precompute_virtual_images=False, ssb_voltage_kV=300,
-                        ssb_semiangle_mrad=20, ssb_scan_sampling_A=0.5, ssb_det_sampling_mrad=1.0)
+    widget = Show4DSTEM(np.ones((1024, 1024, 4, 4), np.uint16), precompute_virtual_images=False, voltage_kV=300,
+                        semiangle_mrad=20, scan_sampling_A=0.5, detector_sampling_mrad=1.0)
     try:
         phase, dpc_row, _ = widget._ssb_phase(aberrations={"C10_nm": 0.0}, lock_aberrations=True)
         assert phase.shape == dpc_row.shape == (1024, 1024)
     finally:
         widget.close()
+
+
+# ---------------------------------------------------------------------------
+# Calibration: the dataset or file is the source
+# ---------------------------------------------------------------------------
+
+
+def test_a_dataset_is_the_source_of_the_calibration():
+    counts = _counts(1, scan=(4, 4))
+    dataset = make_dataset(counts, sampling=(0.04, 0.06, 0.02, 0.03), units=("nm", "nm", "1/angstrom", "1/angstrom"))
+    dataset.metadata.update(voltage_kV=300.0, semiangle_mrad=20.0)
+    widget = Show4DSTEM(dataset, precompute_virtual_images=False)
+    # the .qem unit strings and quantem core's are read through one table, under the format's flat names
+    assert widget.scan_sampling_A == pytest.approx([0.4, 0.6])
+    assert (widget.detector_sampling_inv_A, widget.detector_sampling_mrad) == ([0.02, 0.03], [])
+    assert (widget.voltage_kV, widget.semiangle_mrad) == (300.0, 20.0)
+    widget.close()
+    # a keyword may repeat what the dataset records, never contradict it
+    Show4DSTEM(dataset, voltage_kV=300, precompute_virtual_images=False).close()
+    with pytest.raises(ValueError, match="voltage_kV=200 contradicts the value the input records"):
+        Show4DSTEM(dataset, voltage_kV=200)
+    with pytest.raises(ValueError, match="scan_sampling_A"):
+        Show4DSTEM(dataset, scan_sampling_A=(0.5, 0.5))
+    # an uncalibrated dataset is absent, not 1.0 "pixels"; an array takes its calibration from the keywords
+    plain = Show4DSTEM(make_dataset(counts), precompute_virtual_images=False)
+    stated = Show4DSTEM(counts, scan_sampling_A=0.5, detector_sampling_mrad=(1.0, 2.0), precompute_virtual_images=False)
+    assert (plain.scan_sampling_A, plain.detector_sampling_mrad, plain.detector_sampling_inv_A) == ([], [], [])
+    assert (stated.scan_sampling_A, stated.detector_sampling_mrad) == ([0.5, 0.5], [1.0, 2.0])
+    plain.close()
+    stated.close()
+    with pytest.raises(ValueError, match="Unknown unit 'furlong'"):
+        Show4DSTEM(make_dataset(counts, sampling=(1, 1, 1, 1), units=("furlong",) * 4))
+    # the removed spellings are refused by name
+    for removed in ("ssb_voltage_kV", "ssb_semiangle_mrad", "ssb_scan_sampling_A", "ssb_det_sampling_mrad", "sampling", "units"):
+        with pytest.raises(TypeError, match=removed):
+            Show4DSTEM(counts, **{removed: 1.0})
+
+
+def test_compute_ssb_reads_the_optics_the_dataset_records(monkeypatch):
+    # Compute SSB raised "needs ssb_voltage_kV" for a dataset that records the voltage
+    pytest.importorskip("quantem.gpu", reason="the SSB phase also takes quantem.gpu's centre of mass")
+    import types
+
+    from quantem.widget.show4dstem import widget as widget_module
+
+    seen = {}
+
+    class Session:
+        num_bf = 4
+        physical_rotation_deg = 0.0
+
+        def __init__(self, source, **kwargs):
+            seen.update(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def reconstruct(self):
+            return types.SimpleNamespace(phase=np.ones((128, 128), np.float32), aberrations={"C10": 0.0, "C12": 0.0, "phi12": 0.0},
+                                         rotation_angle_deg=0.0, com_reversed=False, loss=None, elapsed=None)
+
+    monkeypatch.setattr(widget_module.gpu_adapter, "ssb_session", Session)
+    dataset = make_dataset(np.ones((128, 128, 4, 4), np.uint16), sampling=(0.4, 0.6, 1.5, 1.5), units=("angstrom", "angstrom", "mrad", "mrad"))
+    dataset.metadata.update(voltage_kV=300.0, semiangle_mrad=20.0)
+    widget = Show4DSTEM(dataset, precompute_virtual_images=False)
+    widget._ssb_phase(aberrations={"C10_nm": 0.0}, lock_aberrations=True)
+    assert (seen["voltage_kV"], seen["semiangle_mrad"], seen["scan_sampling_A"]) == (300.0, 20.0, (0.4, 0.6))
+    widget.close()
+    bare = Show4DSTEM(np.ones((128, 128, 4, 4), np.uint16), precompute_virtual_images=False)
+    with pytest.raises(ValueError, match="needs the scan step in angstrom and the data record none"):
+        bare._ssb_phase()
+    bare.close()
+
+
+def test_static_preview_labels_the_detector_bar_in_its_own_unit(monkeypatch):
+    # the bar read "mrad" for every calibrated detector, also one calibrated in 1/angstrom
+    dataset = make_dataset(_counts(2, scan=(4, 4)), sampling=(0.4, 0.6, 0.02, 0.03), units=("angstrom", "angstrom", "1/angstrom", "1/angstrom"))
+    widget = Show4DSTEM(dataset, precompute_virtual_images=False)
+    drawn = []
+    monkeypatch.setattr(preview, "_draw_scalebar", lambda image, step, unit: drawn.append((step, unit)))
+    preview.static_png_b64(widget)
+    widget.close()
+    assert drawn == [(0.6, "angstrom"), (0.03, "1/angstrom")]
+
+
+def test_a_dense_read_records_the_file_and_the_flagged_pixels(tmp_path):
+    # the CPU route replaced flagged pixels and left no record of it
+    master = _write_flagged_master(tmp_path, "flagged", _counts(5), FLAGGED)
+    dataset = reader.read_4dstem(master, device="cpu", verbose=False)
+    record = dataset.metadata["hot_pixel_correction"]
+    assert dataset.metadata["source_path"] == str(master)
+    assert (record["applied"], record["method"], record["pixel_count"]) == (True, "median", len(FLAGGED))
+    assert [tuple(point) for point in record["coordinates_row_col"]] == sorted(FLAGGED)
+    # no calibration in the file: every axis is absent, as on the GPU route
+    widget = Show4DSTEM(dataset, precompute_virtual_images=False)
+    assert (widget.scan_sampling_A, widget.detector_sampling_mrad, widget.detector_sampling_inv_A) == ([], [], [])
+    widget.close()

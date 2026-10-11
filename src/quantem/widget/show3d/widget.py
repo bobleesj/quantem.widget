@@ -45,6 +45,7 @@ from quantem.widget.show3d.playback import Show3DPlayback
 from quantem.widget.utils.array import bin2d, to_numpy
 from quantem.widget.utils.display_filter import format_display_filter_banner
 from quantem.widget.state import SavedStateMixin, announce_browser_limit
+from quantem.widget.units import image_axes, unit_entry
 from quantem.widget.utils.ui import UiMode, resolve_ui_mode
 
 
@@ -891,6 +892,7 @@ class Show3D(
             title = title or (first.name or "")
             # the image axes are the last two; a stack's first axis is its frames. The
             # horizontal scale bar measures columns, the last axis.
+            image_axes(sampling, units, first)  # raises when the keywords contradict the dataset
             dataset_sampling = float(first.sampling[-1])
             dataset_unit = str(first.units[-1])
             if len(first.sampling) >= 3:
@@ -1006,13 +1008,16 @@ class Show3D(
         # so the scale bar matches the other quantem viewers.
         pixel_size = 0.0 if sampling is None else float(sampling[-1] if isinstance(sampling, (tuple, list)) else sampling)
         pixel_unit = None if units is None else str(units[-1] if isinstance(units, (tuple, list)) else units)
-        dataset_in_nm = dataset_unit in ("nm", "nanometer")
+        dataset_in_nm = dataset_unit == "nm"
         if pixel_size == 0.0 and dataset_sampling is not None:
-            pixel_size = dataset_sampling * (10 if dataset_in_nm and pixel_unit in (None, "A", "Å", "angstrom", "Angstrom") else 1)
+            pixel_size = dataset_sampling * (10 if dataset_in_nm and pixel_unit in (None, "A", "Å", "angstrom") else 1)
         if pixel_unit is None:
             pixel_unit = "A" if dataset_in_nm else (dataset_unit or "A")
+        # one unit table for every widget: an unknown string raises, an uncalibrated axis is absent
+        if unit_entry(pixel_unit)[0] == "pixels":
+            pixel_size, pixel_unit = 0.0, "px"
         self.pixel_size = pixel_size * max(1, int(self.display_bin))
-        self.pixel_unit = pixel_unit or "A"
+        self.pixel_unit = pixel_unit
         self.dim_sampling = dim_sampling or 1.0
         self.dim_unit = dim_unit or ""
         self.title = title

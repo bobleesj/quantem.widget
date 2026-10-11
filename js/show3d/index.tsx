@@ -37,7 +37,8 @@ import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import { useTheme } from "../theme";
 import { useCanvasRepaintSignal } from "../canvasLifecycle";
-import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawScaleBarInRegion, drawZoomIndicatorInRegion, drawColorbar, formatZoomLabel, roundToNiceValue, unitSymbol } from "../figure";
+import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawScaleBarInRegion, drawZoomIndicatorInRegion, drawColorbar, formatZoomLabel, roundToNiceValue } from "../figure";
+import { angstromsPerUnit, unitSymbol } from "../units";
 import {
   applyStandaloneWidgetViewState,
   downloadBlob,
@@ -1800,9 +1801,9 @@ function Show3D() {
           .some((knobs) => frequencyFilterActive(knobs.mode))
   );
   const frequencyValueLabel = React.useCallback((value: number) => {
-    const unit = String(pixelUnit || "").trim().toLowerCase();
-    if (pixelSize > 0 && (unit === "nm" || unit.includes("nanometer"))) return `${(value / (2 * pixelSize)).toFixed(3)} nm⁻¹`;
-    if (pixelSize > 0 && (unit === "a" || unit === "å" || unit.includes("angstrom"))) return `${(value * 10 / (2 * pixelSize)).toFixed(3)} nm⁻¹`;
+    // a fraction of Nyquist as a spatial frequency: 1 / (2 pixels), with the pixel in nm (10 Å)
+    const unitAngstroms = angstromsPerUnit(pixelUnit);
+    if (pixelSize > 0 && unitAngstroms !== undefined) return `${(value * 10 / (2 * pixelSize * unitAngstroms)).toFixed(3)} nm⁻¹`;
     return `${value.toFixed(3)} Nyq`;
   }, [pixelSize, pixelUnit]);
   const setFrequencyMaster = (enabled: boolean) => {

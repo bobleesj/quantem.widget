@@ -1,13 +1,4 @@
-import { unitSymbol } from "../figure";
-
-// Size of one unit in Angstrom, keyed by the lower-case spellings `pixel_unit` accepts.
-const ANGSTROMS_PER_UNIT: Record<string, number> = {
-  "å": 1, a: 1, ang: 1, angstrom: 1, angstroms: 1,
-  nm: 10, nanometer: 10, nanometers: 10,
-  pm: 0.01, picometer: 0.01, picometers: 0.01,
-  "µm": 1e4, "μm": 1e4, um: 1e4, micron: 1e4, microns: 1e4,
-  mm: 1e7, millimeter: 1e7, millimeters: 1e7,
-};
+import { angstromsPerUnit, unitSymbol } from "../units";
 
 /**
  * A length given in `unit` (the widget's `pixel_unit`) as the number and symbol to print.
@@ -17,9 +8,9 @@ const ANGSTROMS_PER_UNIT: Record<string, number> = {
  * Angstrom. A unit that is not a length (px, mrad, ...) keeps its own symbol.
  */
 export function readableLength(value: number, unit: string): { value: number; unit: string } {
-  const angstromsPerUnit = ANGSTROMS_PER_UNIT[(unit || "").trim().toLowerCase()];
-  if (angstromsPerUnit === undefined) return { value, unit: unitSymbol(unit || "px") };
-  const angstroms = value * angstromsPerUnit;
+  const unitAngstroms = angstromsPerUnit(unit);
+  if (unitAngstroms === undefined) return { value, unit: unitSymbol(unit) };
+  const angstroms = value * unitAngstroms;
   if (angstroms >= 1e7) return { value: angstroms / 1e7, unit: "mm" };
   if (angstroms >= 1e4) return { value: angstroms / 1e4, unit: "µm" };
   if (angstroms >= 10) return { value: angstroms / 10, unit: "nm" };

@@ -99,7 +99,7 @@ def test_a_torch_tensor_on_any_device_shows_the_same_numbers(device):
 def test_any_2d_array_like_opens_and_other_shapes_are_refused():
     with pytest.raises(ValueError, match="one 2D reconstruction"):
         ShowPtycho(np.zeros((3, 16, 16), np.float32))
-    with pytest.raises(ValueError, match="units must be one of"):
+    with pytest.raises(ValueError, match="Unknown unit 'inch'"):
         ShowPtycho(np.zeros((16, 16), np.float32), sampling=1.0, units="inch")
     # C-1: a list (or a CuPy array) raised TypeError although the widgets accept any array-like
     widget = ShowPtycho([[0.0, 1.0], [2.0, 3.0]])
@@ -300,3 +300,17 @@ def test_session_scale_bar_uses_the_column_scan_step():
     session = gpu.SSB(_counts(SCAN), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(0.5, 0.25), det_sampling=5.0,
                       aberrations=dict(START), rotation_angle_deg=10.0)
     assert ShowPtycho(session).pixel_size == 0.25
+
+
+def test_a_dataset_in_the_format_unit_draws_its_scale_bar():
+    # a Dataset2d whose unit is "angstrom" (what a .qem file writes) opened with no scale bar and no message
+    from quantem.widget.adapters.core import make_dataset
+
+    phase = np.zeros((16, 16), np.float32)
+    assert ShowPtycho(make_dataset(phase, sampling=(0.2, 0.2), units=("angstrom", "angstrom"))).pixel_size == pytest.approx(0.2)
+    assert ShowPtycho(make_dataset(phase, sampling=(0.05, 0.05), units=("nm", "nm"))).pixel_size == pytest.approx(0.5)
+    assert ShowPtycho(make_dataset(phase)).pixel_size == 0.0  # an uncalibrated dataset is absent
+    # the dataset is the source: a keyword may repeat its pixel size, never contradict it
+    assert ShowPtycho(make_dataset(phase, sampling=(0.2, 0.2), units=("angstrom", "angstrom")), sampling=0.02, units="nm").pixel_size == pytest.approx(0.2)
+    with pytest.raises(ValueError, match="contradicts the value the input records"):
+        ShowPtycho(make_dataset(phase, sampling=(0.2, 0.2), units=("angstrom", "angstrom")), sampling=0.3)

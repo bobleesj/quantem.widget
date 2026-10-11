@@ -57,7 +57,11 @@ Indexing and `read(scan_region=...)` still return torch tensors.
 Every 4D dataset has `shape`, `dtype`, `ndim`, `sampling`, `units` and
 `metadata`, and `Show4DSTEM` takes any of them, with `scan_region=` for part of
 the scan. A `Dataset4dstemGPU` reports an uncalibrated axis as `None` in
-`sampling` and `units` where a dense dataset has `1.0` and `"pixels"`, and a
+`sampling` and `units` where a dense dataset has `1.0` and `"pixels"`; the
+widgets read both as an axis without a calibration. A dense dataset's
+`metadata` names the file (`source_path`) and records the replacement of the
+detector pixels the master flags (`hot_pixel_correction`). A `Dataset4dstemGPU`
+holds a
 float64 file that float32 holds exactly as float32. A dense `Dataset4dstem`
 also has `array` (a NumPy array) and `name`; a `Dataset4dstemGPU` keeps its
 counts on the GPU, returns them as torch tensors from indexing

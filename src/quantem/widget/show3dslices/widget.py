@@ -26,37 +26,33 @@ from quantem.widget.export import HtmlExportMixin, export_slug
 from quantem.widget.pages import resolve_page_labels
 from quantem.widget.show3dslices.alignment import estimate_global_slice_alignment
 from quantem.widget.state import StateFileMixin
+from quantem.widget.units import axis_step, stated
 from quantem.widget.utils.array import to_numpy
 
 _SLICE_ALIGNMENT_MODES = frozenset({"off", "auto", "manual"})
-# The scale bar reads Angstrom; a Dataset3d or ``sampling`` in nm or pm is converted.
-_ANGSTROM_PER_UNIT = {"": 1.0, "a": 1.0, "å": 1.0, "angstrom": 1.0, "angstroms": 1.0, "nm": 10.0, "pm": 0.01}
-# Units of an axis with no length (read_image_stack labels its frame axis "frame"): no scale bar on that axis.
-_UNCALIBRATED_UNITS = frozenset({"frame", "frames", "slice", "slices", "px", "pixel", "pixels"})
 
 
-def _pixel_size_axes(sampling: float | Sequence[float], units: str | Sequence[str] | None) -> list[float]:
-    """Voxel sampling as ``[pz, py, px]`` in Angstrom; a scalar applies to every axis, an axis in frames or pixels gets 0 (no bar)."""
+def _pixel_size_axes(sampling: float | Sequence[float], units: str | Sequence[str]) -> list[float]:
+    """Voxel sampling as ``[pz, py, px]`` in Angstrom; a scalar applies to every axis, an axis in frames or pixels gets 0 (no bar).
+
+    The scale bar reads Angstrom: a length in another unit of ``quantem.widget.units`` is converted,
+    and an axis calibrated in something that is not a length (mrad, 1/angstrom) raises.
+    """
     samples = list(sampling) if isinstance(sampling, (tuple, list, np.ndarray)) else [sampling] * 3
     if len(samples) != 3:
         raise ValueError(f"sampling must be a scalar or 3 values (pz, py, px), got {len(samples)}")
     unit_list = list(units) if isinstance(units, (tuple, list)) else [units]
     if len(unit_list) == 1:
         unit_list = unit_list * 3
+    if any(not math.isfinite(float(sample)) or float(sample) < 0 for sample in samples):
+        raise ValueError(f"sampling must be finite and >= 0, got {samples}")
     axes = []
     for sample, unit in zip(samples, unit_list):
-        key = str(unit or "").strip().lower()
-        if key in _UNCALIBRATED_UNITS:
-            axes.append(0.0)
-            continue
-        if key not in _ANGSTROM_PER_UNIT:
-            raise ValueError(
-                f"Show3DSlices sampling unit {unit!r} is not a length it can draw a scale bar in; "
-                "use 'A', 'nm' or 'pm', or 'frame'/'pixels' for an axis without one."
-            )
-        axes.append(float(sample) * _ANGSTROM_PER_UNIT[key])
-    if any(not math.isfinite(axis) or axis < 0 for axis in axes):
-        raise ValueError(f"sampling must be finite and >= 0, got {axes}")
+        step = axis_step(sample, unit)
+        if step is not None and step[0] != "length":
+            raise ValueError(f"Show3DSlices draws its scale bar in a length; the axis unit {unit!r} is a {step[0]}. "
+                             "Use 'angstrom', 'nm' or 'pm', or 'frame' / 'pixels' for an axis without a length.")
+        axes.append(0.0 if step is None else step[1])
     return axes
 
 
@@ -387,7 +383,7 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         show_title: bool = True,
         cmap: str = "plasma",
         sampling: float | Sequence[float] | None = None,
-        units: str | Sequence[str] | None = None,
+        units: str | Sequence[str] = "angstrom",
         show_scale_bar: bool = True,
         z_stretch: float = 30.0,
         panel_width_px: int = 0,
@@ -410,12 +406,13 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         self._slice_alignment_estimates: dict[int, dict] = {}
         self._syncing_plane_visibility = False
         self._syncing_pages = False
+        pixel_size_axes = [0.0, 0.0, 0.0] if sampling is None else _pixel_size_axes(sampling, units)
         if core_adapter.is_dataset(data, ndim=3):
             title = title or data.name
-            if sampling is None:
-                sampling, units = list(data.sampling)[-3:], list(data.units)[-3:]
+            # the dataset is the source of its voxel size; a keyword may repeat it, never replace it
+            recorded = _pixel_size_axes(list(data.sampling)[-3:], list(data.units)[-3:])
+            pixel_size_axes = stated("sampling", pixel_size_axes if sampling is not None else None, recorded if any(recorded) else None) or pixel_size_axes
             data = core_adapter.as_array(data)
-        pixel_size_axes = [0.0, 0.0, 0.0] if sampling is None else _pixel_size_axes(sampling, units)
         data = to_numpy(data)
         if 0 in data.shape:
             raise ValueError(f"Empty volume: shape {data.shape}. All dims must be >= 1.")

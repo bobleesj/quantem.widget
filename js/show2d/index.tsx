@@ -30,7 +30,8 @@ import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { useTheme } from "../theme";
 import { useCanvasRepaintSignal } from "../canvasLifecycle";
-import { type ScaleBarOptions, drawColorbar, drawScaleBarInRegion, formatZoomLabel, roundToNiceValue, scaleBarGeometry, unitSymbol } from "../figure";
+import { type ScaleBarOptions, drawColorbar, drawScaleBarInRegion, formatZoomLabel, roundToNiceValue, scaleBarGeometry } from "../figure";
+import { angstromsPerUnit, unitSymbol } from "../units";
 import {
   applyStandaloneWidgetViewState,
   downloadBlob,
@@ -7319,9 +7320,9 @@ function Show2D() {
   }, [nImages, setImageRotations]);
   const frequencyUiKnobs = panelFrequencyKnobs(Math.min(Math.max(0, selectedIdx || 0), Math.max(0, nImages - 1)));
   const frequencyValueLabel = (value: number) => {
-    const unit = String(pixelUnit || "").trim().toLowerCase();
-    if (pixelSize > 0 && (unit === "nm" || unit.includes("nanometer"))) return `${(value / (2 * pixelSize)).toFixed(3)} nm⁻¹`;
-    if (pixelSize > 0 && (unit === "a" || unit === "å" || unit.includes("angstrom"))) return `${(value * 10 / (2 * pixelSize)).toFixed(3)} nm⁻¹`;
+    // a fraction of Nyquist as a spatial frequency: 1 / (2 pixels), with the pixel in nm (10 Å)
+    const unitAngstroms = angstromsPerUnit(pixelUnit);
+    if (pixelSize > 0 && unitAngstroms !== undefined) return `${(value * 10 / (2 * pixelSize * unitAngstroms)).toFixed(3)} nm⁻¹`;
     return `${value.toFixed(3)} Nyq`;
   };
   const frequencyBannerText = frequencyFilterEnabled

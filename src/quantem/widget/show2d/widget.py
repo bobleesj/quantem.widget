@@ -31,6 +31,7 @@ from quantem.widget.pages import PagesMixin
 from quantem.widget.panels import PanelsMixin
 from quantem.widget.render.figure import format_scale_label, round_to_nice
 from quantem.widget.state import SavedStateMixin, announce_browser_limit
+from quantem.widget.units import image_axes, unit_entry
 from quantem.widget.image_folder import ImageFolderRecord, WatchedImageFolder, WatchedImageFolderMixin
 from quantem.widget.io.image import RgbImage
 from quantem.widget.show2d.options import (
@@ -985,16 +986,9 @@ class Show2D(
             if _is_image_dataset(data):
                 if not title and data.name:
                     title = data.name
-                if sampling is None:
-                    sampling = tuple(float(value) for value in data.sampling[-2:])
-                if units is None:
-                    units = list(data.units[-2:])
+                sampling, units = image_axes(sampling, units, data)
             elif isinstance(data, (list, tuple)) and len(data) > 0 and _is_image_dataset(data[0]):
-                first = data[0]
-                if sampling is None:
-                    sampling = tuple(float(value) for value in first.sampling[-2:])
-                if units is None:
-                    units = list(first.units[-2:])
+                sampling, units = image_axes(sampling, units, data[0])
             # RGB detection rule: per-ITEM in a list input, an item with ndim == 3
             # and shape[-1] in (3, 4) is an RGB(A) image. A single non-list ndim==3
             # input is RGB only when shape[-1] in (3, 4) AND shape[0] > 4;
@@ -1166,6 +1160,9 @@ class Show2D(
                 self.pixel_unit = units
             elif units is not None:
                 self.pixel_unit = str(units[-1])
+            # one unit table for every widget: an unknown string raises, an uncalibrated axis is absent
+            if unit_entry(self.pixel_unit)[0] == "pixels":
+                self.pixel_size, self.pixel_unit = 0.0, "px"
             self.scale_bar_visible = bool(ui["show_scale_bar"])
             self.scale_bar_position = scale_bar_position
             self.scale_bar_length = None if scale_bar_length is None else float(scale_bar_length)
