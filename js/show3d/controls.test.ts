@@ -192,3 +192,30 @@ it("marks More as active while denoise is on with its settings row closed", asyn
   expect(badge.textContent).toBe("1");
   expect(badge.classList.contains("MuiBadge-invisible")).toBe(false);
 });
+
+it("resizes a ROI by the distance the pointer moved from the press, not to the press point", async () => {
+  const size = 256;
+  const stack = new Float32Array(FRAMES * size * size).fill(1);
+  const model = new Model({
+    width: size, height: size, _offline_float_stack: new DataView(stack.buffer), roi_active: true, roi_selected_idx: 0,
+    roi_list: [{ row: 128, col: 128, shape: "square", radius: 40, radius_inner: 5, width: 80, height: 80 }],
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLCanvasElement) {
+    return { left: 0, top: 0, width: this.width, height: this.height, right: this.width, bottom: this.height } as DOMRect;
+  });
+  await mount(model);
+  const canvas = el.querySelector('canvas[data-quantem-scientific-output="show3d-image"]') as HTMLCanvasElement;
+  const pixel = canvas.width / size;  // canvas pixels per image pixel
+  const mouse = (type: string, col: number) => act(() => {
+    canvas.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: col * pixel, clientY: 128 * pixel, button: 0, buttons: 1 }));
+  });
+  model.writes = [];
+  // press 3 px inside the right edge of the square (half side 40), inside the resize band
+  mouse("mousedown", 165);
+  mouse("mousemove", 165);
+  mouse("mousemove", 168);
+  mouse("mouseup", 168);
+  await settle();
+  const radii = model.written("roi_list").map((list) => (list as { radius: number }[])[0].radius);
+  expect(radii).toEqual([40, 43]);
+});

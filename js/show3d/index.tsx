@@ -68,6 +68,7 @@ import {
 } from "./playback";
 import { type SubpixelShift, finiteMedianSample, shiftFrameBilinear, subpixelShiftEstimator } from "./registration";
 import { type ROIItem, ROI_COLORS, computeROIPixelStats, createROI, normalizeROI } from "./roi";
+import { type DetectorResizeStart, type DetectorRoiMode, resizeDetectorFromPointer } from "../show4dstem/detectorInteraction";
 import {
   ANIMATION_QUALITY_OPTIONS,
   type AnimationQuality,
@@ -2666,7 +2667,9 @@ function Show3D() {
   const [isDraggingResizeInner, setIsDraggingResizeInner] = React.useState(false);
   const [isHoveringResize, setIsHoveringResize] = React.useState(false);
   const [isHoveringResizeInner, setIsHoveringResizeInner] = React.useState(false);
-  const resizeAspectRef = React.useRef<number | null>(null);
+  // The pointer and the ROI geometry at the press that started a resize: the edge then follows the pointer by
+  // the distance it moved, so grabbing anywhere in the hit band never jumps the size to the press point.
+  const roiResizeStartRef = React.useRef<DetectorResizeStart | null>(null);
   const roiItems = (roiList || []).map((roi, i) => normalizeROI(roi, i));
   const selectedRoi = roiSelectedIdx >= 0 && roiSelectedIdx < roiItems.length ? roiItems[roiSelectedIdx] : null;
   const [showRoiResizeHint, setShowRoiResizeHint] = React.useState(true);
@@ -8626,26 +8629,40 @@ function Show3D() {
     }
     if (effectiveRoiActive) {
       const { imgCol, imgRow } = screenToImg(e);
-      if (isNearResizeHandleInner(imgCol, imgRow)) {
+      // A rectangle resizes along the axes of the edges under the press; the other shapes radially.
+      const startResize = (roi: ROIItem) => {
+        const hitArea = getHitArea();
+        const rectangle = roi.shape === "rectangle";
+        roiResizeStartRef.current = {
+          pointerRow: imgRow,
+          pointerCol: imgCol,
+          radius: roi.radius,
+          radiusInner: roi.radius_inner,
+          width: roi.width,
+          height: roi.height,
+          rows: !rectangle || Math.abs(Math.abs(imgRow - roi.row) - roi.height / 2) < hitArea,
+          cols: !rectangle || Math.abs(Math.abs(imgCol - roi.col) - roi.width / 2) < hitArea,
+        };
+      };
+      if (selectedRoi && isNearResizeHandleInner(imgCol, imgRow)) {
+        startResize(selectedRoi);
         setIsDraggingResizeInner(true);
         return;
       }
-      if (isNearResizeHandle(imgCol, imgRow)) {
+      if (selectedRoi && isNearResizeHandle(imgCol, imgRow)) {
         e.preventDefault();
-        resizeAspectRef.current = selectedRoi && (selectedRoi.shape === "rectangle") && selectedRoi.width > 0 && selectedRoi.height > 0 ? selectedRoi.width / selectedRoi.height : null;
+        startResize(selectedRoi);
         setIsDraggingResize(true);
         return;
       }
-      if (roiItems.length > 0) {
-        for (let roiIdx = roiItems.length - 1; roiIdx >= 0; roiIdx--) {
-          const roi = roiItems[roiIdx];
-          if (isNearEdge(imgCol, imgRow, roi)) {
-            e.preventDefault();
-            resizeAspectRef.current = roi && (roi.shape === "rectangle") && roi.width > 0 && roi.height > 0 ? roi.width / roi.height : null;
-            setRoiSelectedIdx(roiIdx);
-            setIsDraggingResize(true);
-            return;
-          }
+      for (let roiIdx = roiItems.length - 1; roiIdx >= 0; roiIdx--) {
+        const roi = roiItems[roiIdx];
+        if (isNearEdge(imgCol, imgRow, roi)) {
+          e.preventDefault();
+          startResize(roi);
+          setRoiSelectedIdx(roiIdx);
+          setIsDraggingResize(true);
+          return;
         }
       }
       const hitIdx = hitTestROI(imgCol, imgRow);
@@ -8943,32 +8960,23 @@ function Show3D() {
     }
 
     // Resize handle dragging
-    if (isDraggingResizeInner && selectedRoi) {
-      const { imgCol: ic, imgRow: ir } = screenToImg(e);
-      const newR = Math.sqrt((ic - selectedRoi.col) ** 2 + (ir - selectedRoi.row) ** 2);
-      updateSelectedRoi({ radius_inner: Math.max(1, Math.min(selectedRoi.radius - 1, Math.round(newR))) });
-      setShowRoiResizeHint(false);
-      return;
-    }
-    if (isDraggingResize && selectedRoi) {
-      const { imgCol: ic, imgRow: ir } = screenToImg(e);
-      const shape = selectedRoi.shape || "circle";
-      if (shape === "rectangle") {
-        let newW = Math.max(2, Math.round(Math.abs(ic - selectedRoi.col) * 2));
-        let newH = Math.max(2, Math.round(Math.abs(ir - selectedRoi.row) * 2));
-        if (e.shiftKey && resizeAspectRef.current != null) {
-          const aspect = resizeAspectRef.current;
-          if (newW / newH > aspect) newH = Math.max(2, Math.round(newW / aspect));
-          else newW = Math.max(2, Math.round(newH * aspect));
-        }
-        updateSelectedRoi({ width: newW, height: newH });
-      } else {
-        const newR = shape === "square"
-          ? Math.max(Math.abs(ic - selectedRoi.col), Math.abs(ir - selectedRoi.row))
-          : Math.sqrt((ic - selectedRoi.col) ** 2 + (ir - selectedRoi.row) ** 2);
-        const minR = shape === "annular" ? selectedRoi.radius_inner + 1 : 1;
-        updateSelectedRoi({ radius: Math.max(minR, Math.round(newR)) });
-      }
+    if ((isDraggingResizeInner || isDraggingResize) && selectedRoi && roiResizeStartRef.current) {
+      const { imgCol, imgRow } = screenToImg(e);
+      const shape = selectedRoi.shape;
+      const mode: DetectorRoiMode = shape === "rectangle" ? "rect" : shape === "square" || shape === "annular" ? shape : "circle";
+      const geometry = resizeDetectorFromPointer({
+        mode,
+        centerRow: selectedRoi.row,
+        centerCol: selectedRoi.col,
+        pointerRow: imgRow,
+        pointerCol: imgCol,
+        start: roiResizeStartRef.current,
+        resizeInner: isDraggingResizeInner,
+        preserveAspect: e.shiftKey,
+      });
+      if (geometry?.radiusInner !== undefined) updateSelectedRoi({ radius_inner: Math.round(geometry.radiusInner) });
+      else if (geometry?.width !== undefined && geometry.height !== undefined) updateSelectedRoi({ width: Math.round(geometry.width), height: Math.round(geometry.height) });
+      else if (geometry?.radius !== undefined) updateSelectedRoi({ radius: Math.round(geometry.radius) });
       setShowRoiResizeHint(false);
       return;
     }
