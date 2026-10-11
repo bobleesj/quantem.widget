@@ -216,7 +216,7 @@ it("previews a histogram drag of a packed uint8 frame through the scaled pass at
   const frame = Uint8Array.from({ length: SIZE * SIZE }, (_, i) => Math.round((255 * i) / (SIZE * SIZE - 1)));
   Object.assign(model.values, {
     n_images: 1, labels: ["uint8"], is_rgb: [false], frame_bytes: new DataView(frame.buffer), offline: true,
-    _offline_min: 0, _offline_max: 255, _offline_mins: [0], _offline_maxs: [255], image_rotations: [0],
+    _offline_mins: [0], _offline_maxs: [255], image_rotations: [0],
     image_flips_horizontal: [false], image_flips_vertical: [false], panel_frame_counts: [1], panel_frame_indices: [0],
     panel_stack_offsets: [-1], stats_mean: [0], stats_min: [0], stats_max: [0], stats_std: [0], ncols: 1,
   });

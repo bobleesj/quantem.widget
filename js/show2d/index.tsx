@@ -715,24 +715,9 @@ function zeroPadTopLeft(source: Float32Array, width: number, height: number, pad
   return padded;
 }
 
-/**
- * The (lo, hi) range one panel's offline uint8 bytes were quantized with: the
- * per-panel lists when present, else the legacy global scalars. Dequantizing
- * each panel with its own range keeps differently scaled panels exact.
- */
-function offlineQuantRange(panel: number, mins: number[] | undefined, maxs: number[] | undefined, min: number, max: number): [number, number] {
-  return [
-    (mins && mins.length > panel) ? mins[panel] : min,
-    (maxs && maxs.length > panel) ? maxs[panel] : max,
-  ];
-}
-
 /** True when every panel's offline range is exactly [0, 255], so the bytes are the raw values and need no dequantization. */
-function offlineRangesAreIdentity(count: number, mins: number[] | undefined, maxs: number[] | undefined, min: number, max: number): boolean {
-  return Array.from({ length: count }).every((_, panel) => {
-    const [lo, hi] = offlineQuantRange(panel, mins, maxs, min, max);
-    return lo === 0 && hi === 255;
-  });
+function offlineRangesAreIdentity(mins: number[], maxs: number[]): boolean {
+  return mins.length > 0 && mins.every((low, panel) => low === 0 && maxs[panel] === 255);
 }
 
 // UI constants shared in style with Show4DSTEM.
@@ -2839,8 +2824,6 @@ function Show2D() {
   const roiFftKey = roiFftActive ? selectedRoiKey : "";
 
   // Extract raw float32 bytes and parse into Float32Arrays
-  const [offlineMin] = useModelState<number>("_offline_min");
-  const [offlineMax] = useModelState<number>("_offline_max");
   const [offlineMins] = useModelState<number[]>("_offline_mins");
   const [offlineMaxs] = useModelState<number[]>("_offline_maxs");
   const expectedFrameValueCount = panelFloatOffsets[panelFloatOffsets.length - 1];
@@ -2848,8 +2831,8 @@ function Show2D() {
     if (!offline) return false;
     if ((isRgbFlags || []).some(Boolean)) return false;
     if (hasLocalPanelStacks) return false;
-    return offlineRangesAreIdentity(Math.max(1, nImages || 1), offlineMins, offlineMaxs, offlineMin, offlineMax);
-  }, [hasLocalPanelStacks, isRgbFlags, nImages, offline, offlineMin, offlineMax, offlineMins, offlineMaxs]);
+    return offlineRangesAreIdentity(offlineMins, offlineMaxs);
+  }, [hasLocalPanelStacks, isRgbFlags, offline, offlineMins, offlineMaxs]);
   const uint8FolderFrameBytes = React.useMemo(() => {
     if (!uint8FolderIdentityEncoding || !frameBytes || frameBytes.byteLength === 0) return null;
     if (frameBytes.byteLength !== expectedFrameValueCount) return null;
@@ -2874,18 +2857,16 @@ function Show2D() {
       // exact - a single global scale combs the narrow panels' histograms.
       const quantized = new Uint8Array(frameBytes.buffer, frameBytes.byteOffset, frameBytes.byteLength);
       const perImage = width * height;
-      const rangeCount = (offlineMins && offlineMins.length > 0) ? offlineMins.length : 1;
-      if (offlineRangesAreIdentity(rangeCount, offlineMins, offlineMaxs, offlineMin, offlineMax)) {
+      if (offlineRangesAreIdentity(offlineMins, offlineMaxs)) {
         decoded = new Float32Array(quantized);
         decodedFramesRef.current = decoded;
         return decoded;
       }
       const dequantized = new Float32Array(quantized.length);
-      for (let panel = 0; panel < rangeCount; panel++) {
-        const [lo, hi] = offlineQuantRange(panel, offlineMins, offlineMaxs, offlineMin, offlineMax);
+      for (let panel = 0; panel < offlineMins.length; panel++) {
         const base = panel * perImage;
         const end = Math.min(quantized.length, base + perImage);
-        if (end > base) dequantizeUint8(quantized.subarray(base, end), lo, hi, dequantized.subarray(base, end));
+        if (end > base) dequantizeUint8(quantized.subarray(base, end), offlineMins[panel], offlineMaxs[panel], dequantized.subarray(base, end));
       }
       decoded = dequantized;
     } else {
@@ -2893,7 +2874,7 @@ function Show2D() {
     }
     decodedFramesRef.current = decoded;
     return decoded;
-  }, [frameBytes, expectedFrameValueCount, offline, offlineMin, offlineMax, offlineMins, offlineMaxs, nImages, width, height, panelFloatOffsets, uint8FolderFrameBytes]);
+  }, [frameBytes, expectedFrameValueCount, offline, offlineMins, offlineMaxs, nImages, width, height, panelFloatOffsets, uint8FolderFrameBytes]);
 
   const panelStackFloatCount = React.useMemo(() => {
     const perImage = width * height;
@@ -3416,8 +3397,6 @@ function Show2D() {
     height,
     isRgbFlags,
     frameSourceKey,
-    offlineMin,
-    offlineMax,
     offlineMins,
     offlineMaxs,
     panelFrameCounts,
