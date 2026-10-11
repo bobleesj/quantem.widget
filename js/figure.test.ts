@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatScaleLabel, formatZoomLabel } from "./figure";
+import { formatScaleLabel, formatZoomLabel, unitSymbol } from "./figure";
 
 describe("formatZoomLabel", () => {
   it("uses one decimal and the multiplication sign", () => {
@@ -31,5 +31,13 @@ describe("formatScaleLabel", () => {
     expect(formatScaleLabel(5, "mrad")).toBe("5 mrad");
     expect(formatScaleLabel(0.2, "ps")).toBe("0.20 ps");
     expect(formatScaleLabel(50, "px")).toBe("50 px");
+  });
+});
+
+describe("unitSymbol", () => {
+  it("labels uncalibrated axes px, as every widget does", () => {
+    expect(unitSymbol("pixels")).toBe("px");
+    expect(unitSymbol("Pixel")).toBe("px");
+    expect(formatScaleLabel(20, "pixels")).toBe("20 px");
   });
 });

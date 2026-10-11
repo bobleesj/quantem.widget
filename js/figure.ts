@@ -33,6 +33,8 @@ export function unitSymbol(unit: string): string {
   if (lower === "picosecond" || lower === "picoseconds" || lower === "ps") return "ps";
   if (lower === "femtosecond" || lower === "femtoseconds" || lower === "fs") return "fs";
   if (lower === "nanosecond" || lower === "nanoseconds" || lower === "ns") return "ns";
+  // uncalibrated axes carry the unit "pixels"; every widget labels them px
+  if (lower === "pixel" || lower === "pixels") return "px";
   return trimmed;
 }
 
