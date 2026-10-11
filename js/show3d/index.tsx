@@ -623,7 +623,7 @@ function Show3D() {
   const [height] = useModelState<number>("height");
   // True-color PNG/JPEG stacks: each frame is (H*W*3) float32 RGB in [0, 1].
   const [isRgb] = useModelState<boolean>("is_rgb");
-  const [staticFallbackJpeg] = useModelState<string>("_static_fallback_jpeg");
+  const [staticFallbackImage] = useModelState<string>("_static_fallback_image");
   const [staticFallbackMime] = useModelState<string>("_static_fallback_mime");
   const rgbFrameDataRef = React.useRef<Float32Array | null>(null);
   // Defensive: traitlets.Bytes can identity-suppress trait events when content
@@ -2001,8 +2001,8 @@ function Show3D() {
   const hasOfflineStack = !!offlineStack && offlineStack.byteLength > 0;
   const hasOfflineFloatStack = !!offlineFloatStack && offlineFloatStack.byteLength > 0;
   const canRenderLive = hasOfflineStack || hasOfflineFloatStack;
-  const staticFallbackUrl = staticFallbackJpeg
-    ? `data:${staticFallbackMime || "image/jpeg"};base64,${staticFallbackJpeg}`
+  const staticFallbackUrl = staticFallbackImage
+    ? `data:${staticFallbackMime || "image/jpeg"};base64,${staticFallbackImage}`
     : "";
   const hasSavedStaticFallback = staticFallbackUrl.length > 0;
   useHideStaticFallback(

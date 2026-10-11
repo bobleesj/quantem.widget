@@ -325,7 +325,7 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
     const current = ++generation;
     const bytes = extractBytes(model.get("data_bytes"));
     if (!bytes.length) {
-      const saved = model.get("_static_fallback_jpeg");
+      const saved = model.get("_static_fallback_image");
       if (saved) preview.src = `data:${model.get("_static_fallback_mime") || "image/png"};base64,${saved}`;
       else preview.removeAttribute("src");
       preview.style.display = saved ? "block" : "none";

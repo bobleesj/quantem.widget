@@ -106,12 +106,12 @@ def test_lightweight_snapshot_preserves_live_values_and_current_preview():
     first = plot.get_state()
     assert "data_bytes" not in first
     assert first["_static_fallback_mime"] == "image/png"
-    assert base64.b64decode(first["_static_fallback_jpeg"]).startswith(b"\x89PNG")
+    assert base64.b64decode(first["_static_fallback_image"]).startswith(b"\x89PNG")
     plot.view_bounds = [1, 4, 0, 2]
     plot.horizontal_line = 1.5
     plot.set_data(values[::-1])
     saved = plot.get_state()
-    assert saved["_static_fallback_jpeg"] != first["_static_fallback_jpeg"]
+    assert saved["_static_fallback_image"] != first["_static_fallback_image"]
     assert saved["view_bounds"] == [1, 4, 0, 2]
     assert saved["horizontal_line"] == 1.5
     assert "data_bytes" not in saved

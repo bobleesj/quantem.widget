@@ -253,7 +253,7 @@ def test_saved_notebook_state_keeps_a_preview_instead_of_pixels():
     widget = Show3D(_ramp(), title="save", verbose=False)
     state = widget.get_state()
     assert "_offline_float_stack" not in state
-    assert state["_static_fallback_mime"] == "image/jpeg" and len(state["_static_fallback_jpeg"]) > 1000
+    assert state["_static_fallback_mime"] == "image/jpeg" and len(state["_static_fallback_image"]) > 1000
     mount = widget._repr_mimebundle_()
     assert "application/vnd.jupyter.widget-view+json" in (mount[0] if isinstance(mount, tuple) else mount)
     persistent = Show3D(_ramp(), save_state=True, verbose=False)

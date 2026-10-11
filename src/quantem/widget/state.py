@@ -120,13 +120,13 @@ class SavedStateMixin(StateFileMixin, LiveMountMixin):
         state = super().get_state(key=key, drop_defaults=drop_defaults)
         if key is None and not self._save_state and not self._initial_live_mount_state:
             if not self._static_fallback_enabled():
-                state.pop("_static_fallback_jpeg", None)
+                state.pop("_static_fallback_image", None)
                 state.pop("_static_fallback_mime", None)
-            elif not self._static_fallback_jpeg:
+            elif not self._static_fallback_image:
                 png = self._static_fallback_png_b64()
                 if png:
                     self._store_static_fallback_preview(png)
-                    state["_static_fallback_jpeg"] = self._static_fallback_jpeg
+                    state["_static_fallback_image"] = self._static_fallback_image
                     state["_static_fallback_mime"] = self._static_fallback_mime
             for heavy_key in self._UNSAVED_HEAVY_KEYS:
                 state.pop(heavy_key, None)

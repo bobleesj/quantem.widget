@@ -235,7 +235,7 @@ def test_state_dict_round_trips_through_memory_and_file(tmp_path: Path):
 def test_saved_notebook_state_drops_pixels_unless_save_state():
     widget = Show2D(_frame(), verbose=False)
     state = widget.get_state()
-    assert "frame_bytes" not in state and state["_static_fallback_jpeg"]
+    assert "frame_bytes" not in state and state["_static_fallback_image"]
     assert widget.get_state(key="frame_bytes")["frame_bytes"]
     assert "frame_bytes" in Show2D(_frame(), save_state=True, verbose=False).get_state()
 

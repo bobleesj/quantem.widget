@@ -96,7 +96,7 @@ class StaticFallbackMixin:
         if self._save_state:
             return
         encoded = self._encode_static_fallback_b64(png_b64)
-        self._static_fallback_mime, self._static_fallback_jpeg = encoded if encoded else ("", "")
+        self._static_fallback_mime, self._static_fallback_image = encoded if encoded else ("", "")
 
     def _static_fallback_png_b64(self) -> str | None:
         """The widget's static PNG render at the configured preview size, base64-encoded."""

@@ -910,12 +910,12 @@ function Show2D() {
   const [panelStackBytes] = useModelState<DataView>("panel_stack_bytes");
   const [panelStackMins] = useModelState<number[]>("_panel_stack_mins");
   const [panelStackMaxs] = useModelState<number[]>("_panel_stack_maxs");
-  const [staticFallbackJpeg] = useModelState<string>("_static_fallback_jpeg");
+  const [staticFallbackImage] = useModelState<string>("_static_fallback_image");
   const [staticFallbackMime] = useModelState<string>("_static_fallback_mime");
   const hasLiveFrameBytes = !!frameBytes && frameBytes.byteLength > 0;
   const frameSourceKey = `single-buffer:${frameBytes?.byteLength ?? 0}`;
-  const staticFallbackUrl = staticFallbackJpeg
-    ? `data:${staticFallbackMime || "image/jpeg"};base64,${staticFallbackJpeg}`
+  const staticFallbackUrl = staticFallbackImage
+    ? `data:${staticFallbackMime || "image/jpeg"};base64,${staticFallbackImage}`
     : "";
   const hasSavedStaticFallback = staticFallbackUrl.length > 0;
   // Per-panel RGB flags: RGB panels carry display-ready (H, W, 3) float pixels

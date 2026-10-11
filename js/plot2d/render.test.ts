@@ -181,7 +181,7 @@ it("keeps a failed replacement from changing the displayed source", async () => 
 
 it("shows a lightweight saved preview until live data arrives", async () => {
   model.values.data_bytes = new Uint8Array();
-  model.values._static_fallback_jpeg = "iVBORw0KGgo=";
+  model.values._static_fallback_image = "iVBORw0KGgo=";
   model.values._static_fallback_mime = "image/png";
   await mount();
   expect(el.querySelector("img")?.style.display).toBe("block");

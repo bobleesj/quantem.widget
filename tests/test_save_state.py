@@ -170,7 +170,7 @@ def test_default_is_save_state_false(widget):
 )
 def test_notebook_preview_format_controls_saved_fallback(format_name, mime, pil_format):
     """Show3D exposes the saved-notebook preview format directly; the MIME trait
-    tells the frontend how to read the bytes of ``_static_fallback_jpeg``."""
+    tells the frontend how to read the bytes of ``_static_fallback_image``."""
     widget = Show3D(_mos2_like_stack(3, 64, 64), notebook_preview_format=format_name, notebook_preview_quality=85, save_state=False)
 
     bundle = widget._repr_mimebundle_()
@@ -184,8 +184,8 @@ def test_notebook_preview_format_controls_saved_fallback(format_name, mime, pil_
 
     state = widget.get_state()
     assert state["_static_fallback_mime"] == mime
-    assert "_static_fallback_jpeg" in state
-    with Image.open(io.BytesIO(base64.b64decode(state["_static_fallback_jpeg"]))) as img:
+    assert "_static_fallback_image" in state
+    with Image.open(io.BytesIO(base64.b64decode(state["_static_fallback_image"]))) as img:
         assert img.format == pil_format
 
 
@@ -204,7 +204,7 @@ def test_show4dstem_notebook_preview_format_none_disables_static_preview():
 
         assert not [key for key in IMAGE_MIME_KEYS if key in (data or {})]
         state = widget.get_state()
-        assert "_static_fallback_jpeg" not in state
+        assert "_static_fallback_image" not in state
         assert "_static_fallback_mime" not in state
     finally:
         widget.close()
@@ -497,7 +497,7 @@ def test_show2d_sibling_static_output_via_nbconvert(tmp_path):
     anymodel = next(s for s in widget_states.values() if s.get("model_name") == "AnyModel")
     body = dict(anymodel["state"])
     body.pop("_esm", None)
-    body.pop("_static_fallback_jpeg", None)
+    body.pop("_static_fallback_image", None)
     body.pop("_static_fallback_mime", None)
     buffer_bytes = sum(len(b["data"]) for b in anymodel.get("buffers", []))
     assert buffer_bytes < 20_000
@@ -520,9 +520,9 @@ def test_show2d_cmd_s_snapshot_keeps_static_preview_without_heavy_pixels():
     )
     state = widget.get_state()
 
-    assert "_static_fallback_jpeg" in state
+    assert "_static_fallback_image" in state
     assert state["_static_fallback_mime"] == "image/jpeg"
-    assert len(state["_static_fallback_jpeg"]) > 1000
+    assert len(state["_static_fallback_image"]) > 1000
     assert "frame_bytes" not in state
     assert "_detail_bytes" not in state
     assert "export_payload" not in state
@@ -554,8 +554,8 @@ def test_show4dstem_cmd_s_snapshot_keeps_two_panel_static_preview():
 
     assert decoded.width > decoded.height
     assert decoded.width >= (decoded.height - 24) * 2 - 8
-    assert "_static_fallback_jpeg" in state
-    assert len(state["_static_fallback_jpeg"]) > 1000
+    assert "_static_fallback_image" in state
+    assert len(state["_static_fallback_image"]) > 1000
     assert "_offline_stack" not in state
     assert "export_payload" not in state
     assert "_gif_data" not in state

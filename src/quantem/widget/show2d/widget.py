@@ -617,7 +617,7 @@ class Show2D(
     # True only on a clone written by export_html: forces the standalone HTML to
     # render on a light/white background regardless of the viewer's OS theme.
     _export_light = traitlets.Bool(False).tag(sync=True)
-    _static_fallback_jpeg = traitlets.Unicode("").tag(sync=True)
+    _static_fallback_image = traitlets.Unicode("").tag(sync=True)
     _static_fallback_mime = traitlets.Unicode("image/jpeg").tag(sync=True)
     _offline_min = traitlets.Float(0.0).tag(sync=True)
     _offline_max = traitlets.Float(1.0).tag(sync=True)
@@ -1540,7 +1540,7 @@ class Show2D(
             self.stats_std = []
             self._offline_mins = []
             self._offline_maxs = []
-            self._static_fallback_jpeg = ""
+            self._static_fallback_image = ""
             self.selected_idx = 0
             self.n_pages = 1
             self.page_idx = 0

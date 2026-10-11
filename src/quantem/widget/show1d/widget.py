@@ -269,7 +269,7 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
     _export_light = traitlets.Bool(False).tag(sync=True)
     # Compact saved-notebook preview (see fallback.py) so a cold rehydrate
     # shows the plot even though the heavy buffers are trimmed.
-    _static_fallback_jpeg = traitlets.Unicode("").tag(sync=True)
+    _static_fallback_image = traitlets.Unicode("").tag(sync=True)
     _static_fallback_mime = traitlets.Unicode("image/jpeg").tag(sync=True)
 
     def __init__(

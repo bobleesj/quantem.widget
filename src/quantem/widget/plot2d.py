@@ -60,7 +60,7 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
     """
 
     _esm = Path(__file__).parent / "static" / "plot2d.js"
-    _static_fallback_jpeg = traitlets.Unicode("").tag(sync=True)
+    _static_fallback_image = traitlets.Unicode("").tag(sync=True)
     _static_fallback_mime = traitlets.Unicode("image/png").tag(sync=True)
     _UNSAVED_HEAVY_KEYS = ("data_bytes",)
     data_bytes = traitlets.Bytes().tag(sync=True)
@@ -146,7 +146,7 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
 
     def _invalidate_preview(self, change: dict | None = None) -> None:
         """Drop the cached preview so the next notebook save re-renders the current view."""
-        self._static_fallback_jpeg = ""
+        self._static_fallback_image = ""
 
     @traitlets.validate("cmap")
     def _validate_cmap(self, proposal: dict) -> str:

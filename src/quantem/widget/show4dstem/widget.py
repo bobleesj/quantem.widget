@@ -237,7 +237,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     k_pixel_size = traitlets.Float(1.0).tag(sync=True)
     k_pixel_unit = traitlets.Unicode("pixels").tag(sync=True)
     k_calibrated = traitlets.Bool(False).tag(sync=True)
-    _static_fallback_jpeg = traitlets.Unicode("").tag(sync=True)
+    _static_fallback_image = traitlets.Unicode("").tag(sync=True)
     _static_fallback_mime = traitlets.Unicode("image/jpeg").tag(sync=True)
     dp_colormap = traitlets.Unicode("inferno").tag(sync=True)
     vi_colormap = traitlets.Unicode("inferno").tag(sync=True)

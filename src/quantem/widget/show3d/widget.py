@@ -245,7 +245,7 @@ class Show3D(
     # effects even when a Bytes trait compares identical.
     frame_seq = traitlets.Int(0).tag(sync=True)
     _export_light = traitlets.Bool(False).tag(sync=True)
-    _static_fallback_jpeg = traitlets.Unicode("").tag(sync=True)
+    _static_fallback_image = traitlets.Unicode("").tag(sync=True)
     _static_fallback_mime = traitlets.Unicode("image/jpeg").tag(sync=True)
     # Transport: the browser slices every frame from this one embedded display
     # stack, exact float32 (live widget, full export) or uint8 (quantized export).
@@ -1113,7 +1113,7 @@ class Show3D(
             self._offline_float_stack = b""
             self._offline_mins = []
             self._offline_maxs = []
-            self._static_fallback_jpeg = ""
+            self._static_fallback_image = ""
             self.slice_idx = 0
             self.bookmarked_frames = []
             self.loop_start = 0

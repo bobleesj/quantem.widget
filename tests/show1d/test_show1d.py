@@ -276,7 +276,7 @@ def test_state_round_trip_through_save_file_and_state_kwarg(tmp_path):
         Show1D(_traces(), state={"widget_name": "Show2D", "state": {}})
     # a plain widget keeps the trace bytes but not the image buffers in the saved notebook
     saved = widget.get_state()
-    assert "y_bytes" in saved and "snapshot_bytes" not in saved and saved["_static_fallback_jpeg"]
+    assert "y_bytes" in saved and "snapshot_bytes" not in saved and saved["_static_fallback_image"]
     assert "snapshot_bytes" in Show1D(_traces(), save_state=True).get_state()
 
 
