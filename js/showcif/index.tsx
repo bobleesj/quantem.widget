@@ -15,6 +15,7 @@ import {
   normalizedAverageWindow,
 } from "../show3d/frameTransform";
 import { extractFloat32 } from "../format";
+import { getGPUInfo, getHardwareGPUDevice, isSoftwareGPUAdapter, webGPULostReason } from "../display/device";
 import { ScaleBar } from "./ScaleBar";
 import { PotentialPanel } from "./PotentialPanel";
 import { AtomRenderer, SCENE_CLEAR } from "./render";
@@ -286,46 +287,47 @@ function App() {
   };
   React.useEffect(() => {
     let cancelled = false;
-    let device: GPUDevice | undefined;
+    let device: GPUDevice | null = null;
     const observer = new ResizeObserver(schedule);
-    (async () => {
-      if (!navigator.gpu) {
+    const reportError = (event: GPUUncapturedErrorEvent) => setStatus("WebGPU error: " + event.error.message);
+    // The page's one hardware device, shared with every other widget: this view
+    // never destroys it, only the buffers and pipelines it made.
+    void getHardwareGPUDevice().then((shared) => {
+      if (cancelled) return;
+      if (!shared) {
         // Say what the reader can change: only a page that is not a secure context
         // needs HTTPS or localhost; on a secure page WebGPU is off or unsupported.
-        const reason = window.isSecureContext
-          ? "navigator.gpu is missing, so WebGPU is turned off or not supported in this browser"
-          : "this page is not a secure context, so the browser hides WebGPU; open it over HTTPS or localhost";
+        const lost = webGPULostReason();
+        let reason = "the browser found no WebGPU adapter";
+        if (!navigator.gpu) {
+          reason = window.isSecureContext
+            ? "navigator.gpu is missing, so WebGPU is turned off or not supported in this browser"
+            : "this page is not a secure context, so the browser hides WebGPU; open it over HTTPS or localhost";
+        } else if (lost !== null) {
+          reason = `the WebGPU device was lost (${lost}); reload the page to try WebGPU again`;
+        } else if (isSoftwareGPUAdapter()) {
+          reason = `the only WebGPU adapter is a software renderer (${getGPUInfo()})`;
+        }
         setGpuMissing(reason);
-        throw Error(reason);
-      }
-      const adapter = await navigator.gpu.requestAdapter();
-      if (!adapter) {
-        const reason = "the browser found no WebGPU adapter";
-        setGpuMissing(reason);
-        throw Error(reason);
-      }
-      device = await adapter.requestDevice();
-      if (cancelled) {
-        device.destroy();
+        setStatus(reason);
         return;
       }
-      device.addEventListener("uncapturederror", (error) =>
-        setStatus("WebGPU error: " + error.error.message),
-      );
+      device = shared;
+      device.addEventListener("uncapturederror", reportError);
       renderers.current = canvasRefs.map(
         (canvasRef) =>
           new AtomRenderer(
             canvasRef.current!,
-            device!,
+            shared,
             atoms,
             species.map((entry) => entry.color),
           ),
       );
       canvasRefs.forEach((canvasRef) => observer.observe(canvasRef.current!));
-      setGpuDevice(device);
+      setGpuDevice(shared);
       setStatus("WebGPU · exact atomic positions · display filters only");
       schedule();
-    })().catch((error) => setStatus(String(error)));
+    });
     return () => {
       cancelled = true;
       observer.disconnect();
@@ -333,7 +335,7 @@ function App() {
       renderers.current.forEach((renderer) => renderer.destroy());
       renderers.current = [];
       setGpuDevice(undefined);
-      device?.destroy();
+      device?.removeEventListener("uncapturederror", reportError);
     };
   }, [atoms]);
   React.useEffect(schedule, [
