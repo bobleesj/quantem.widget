@@ -1331,7 +1331,7 @@ function ShowDiffraction() {
                   <MetadataSection rows={[
                     ["Detector", `${detRows} x ${detCols}`],
                     ["Frames", nFrames > 1 ? `${nFrames}` : "single frame"],
-                    ["Calibration", kCalibrated && kPixelSize > 0 ? `${formatNumber(kPixelSize)} 1/Å/px` : "pixel units"],
+                    ["Calibration", kCalibrated && kPixelSize > 0 ? `${formatNumber(kPixelSize)} 1/Å/px` : "uncalibrated (px)"],
                     ["Center", `${formatNumber(centerRow)}, ${formatNumber(centerCol)}`],
                     ["Annotations", `${spots.length} spots, ${rings.length} rings`],
                   ]} />
@@ -1726,7 +1726,7 @@ function ShowDiffraction() {
                           >
                             <td style={{ padding: "2px 6px", color: themeColors.accent }}>{candidate.name}</td>
                             <td style={{ padding: "2px 6px" }}>{candidate.matched}/{candidate.n_obs}</td>
-                            <td style={{ padding: "2px 6px" }}>{candidate.mean_err != null ? (candidate.mean_err * 100).toFixed(2) : "—"}</td>
+                            <td style={{ padding: "2px 6px" }}>{candidate.mean_err != null ? (candidate.mean_err * 100).toFixed(2) : "-"}</td>
                             <td style={{ padding: "2px 6px" }}>{candidate.n_missing_strong ?? "-"}</td>
                           </tr>
                           {expandedPhaseId === candidate.phase_id && (
@@ -1748,11 +1748,11 @@ function ShowDiffraction() {
                                       const lineColor = line.ref_d == null ? statusColors.bad : line.obs_d == null ? themeColors.textMuted : undefined;
                                       return (
                                         <tr key={lineIndex} style={{ color: lineColor }}>
-                                          <td style={{ padding: "1px 6px" }}>{line.obs_d != null ? line.obs_d.toFixed(3) : "—"}</td>
-                                          <td style={{ padding: "1px 6px" }}>{line.ref_d != null ? line.ref_d.toFixed(3) : "—"}</td>
-                                          <td style={{ padding: "1px 6px" }}>{line.hkl || "—"}</td>
-                                          <td style={{ padding: "1px 6px" }}>{line.err != null ? (line.err * 100).toFixed(2) : "—"}</td>
-                                          <td style={{ padding: "1px 6px" }}>{line.i_rel != null ? line.i_rel.toFixed(0) : "—"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.obs_d != null ? line.obs_d.toFixed(3) : "-"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.ref_d != null ? line.ref_d.toFixed(3) : "-"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.hkl || "-"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.err != null ? (line.err * 100).toFixed(2) : "-"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.i_rel != null ? line.i_rel.toFixed(0) : "-"}</td>
                                           <td style={{ padding: "1px 6px" }}>{line.ref_d == null ? "unexplained" : line.obs_d == null ? "missing" : ""}</td>
                                         </tr>
                                       );
@@ -1900,24 +1900,24 @@ function ShowDiffraction() {
                     const color = spotColorAt(i);
                     const dSpacingText = spot.d_spacing != null
                       ? (spot.d_spacing_err ? `${spot.d_spacing.toFixed(3)}±${spot.d_spacing_err.toFixed(3)}` : spot.d_spacing.toFixed(3))
-                      : "—";
+                      : "-";
                     const gText = spot.g_magnitude != null
                       ? `${spot.g_magnitude.toFixed(4)} / ${(spot.g_magnitude * 10).toFixed(3)}`
                       : `${spot.r_pixels.toFixed(1)} px`;
                     const angleText = spot.angle_deg != null
                       ? (spot.angle_deg_err ? `${spot.angle_deg.toFixed(1)}±${spot.angle_deg_err.toFixed(1)}` : spot.angle_deg.toFixed(1))
-                      : "—";
+                      : "-";
                     return (
                       <tr key={spot.id} style={{ borderBottom: `1px solid ${themeColors.border}22` }}>
                         <td style={{ padding: "2px 4px", color, fontWeight: "bold" }}>{spot.id}</td>
                         <td style={{ padding: "2px 6px" }}>{dSpacingText}</td>
-                        <td style={{ padding: "2px 6px" }}>{spot.hkl || "—"}</td>
+                        <td style={{ padding: "2px 6px" }}>{spot.hkl || "-"}</td>
                         {spotsHaveReference && (
-                          <td style={{ padding: "2px 6px" }}>{spot.d_error != null ? (spot.d_error * 100).toFixed(2) : "—"}</td>
+                          <td style={{ padding: "2px 6px" }}>{spot.d_error != null ? (spot.d_error * 100).toFixed(2) : "-"}</td>
                         )}
                         <td style={{ padding: "2px 6px" }}>{gText}</td>
                         <td style={{ padding: "2px 6px" }}>{angleText}</td>
-                        <td style={{ padding: "2px 6px" }}>{spot.fit_quality != null ? spot.fit_quality.toFixed(2) : "—"}</td>
+                        <td style={{ padding: "2px 6px" }}>{spot.fit_quality != null ? spot.fit_quality.toFixed(2) : "-"}</td>
                         <td style={{ padding: "2px 6px" }}>{formatNumber(spot.intensity)}</td>
                         <td style={{ padding: "1px 4px", textAlign: "center" }}>
                           <span
@@ -1981,21 +1981,21 @@ function ShowDiffraction() {
                   >
                     <td style={{ padding: "2px 6px", color: themeColors.accent }}>{ring.id}</td>
                     <td style={{ padding: "2px 6px" }}>{ring.radius_px.toFixed(1)}</td>
-                    <td style={{ padding: "2px 6px" }}>{ring.d_spacing != null ? ring.d_spacing.toFixed(3) : "—"}</td>
+                    <td style={{ padding: "2px 6px" }}>{ring.d_spacing != null ? ring.d_spacing.toFixed(3) : "-"}</td>
                     <td style={{ padding: "2px 6px" }}>
                       {ring.hkl ? ring.hkl : ring.hkl_candidates && ring.hkl_candidates.length > 0 ? (
                         // a d-only candidate the ring-radius ratios did not verify
                         <span style={{ color: themeColors.textMuted }} title={`d within tolerance of ${ring.hkl_candidates.join(", ")}; not verified by ring ratios`}>
                           {ring.hkl_candidates[0]}?
                         </span>
-                      ) : "—"}
+                      ) : "-"}
                     </td>
                     {ringsHaveReference && (
-                      <td style={{ padding: "2px 6px" }}>{ring.d_error != null ? (ring.d_error * 100).toFixed(2) : "—"}</td>
+                      <td style={{ padding: "2px 6px" }}>{ring.d_error != null ? (ring.d_error * 100).toFixed(2) : "-"}</td>
                     )}
-                    <td style={{ padding: "2px 6px" }}>{ring.g_magnitude != null ? ring.g_magnitude.toFixed(4) : "—"}</td>
+                    <td style={{ padding: "2px 6px" }}>{ring.g_magnitude != null ? ring.g_magnitude.toFixed(4) : "-"}</td>
                     {ringsHaveWidth && (
-                      <td style={{ padding: "2px 6px" }}>{ring.fwhm_px != null ? ring.fwhm_px.toFixed(2) : "—"}</td>
+                      <td style={{ padding: "2px 6px" }}>{ring.fwhm_px != null ? ring.fwhm_px.toFixed(2) : "-"}</td>
                     )}
                     <td style={{ padding: "2px 6px" }}>{formatNumber(ring.intensity)}</td>
                     <td style={{ padding: "1px 4px", textAlign: "center" }}>
