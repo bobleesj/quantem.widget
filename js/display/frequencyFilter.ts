@@ -207,7 +207,11 @@ async function applyFrequencyFilterWebGPUResident(
   }
 }
 
-/** Scalar reference: forward FFT, radial mask, inverse FFT. Runs without WebGPU. */
+/**
+ * Scalar reference: zero-pad to powers of two, forward FFT, radial mask on the
+ * padded grid, inverse FFT, crop. The same steps as the WebGPU path; runs
+ * without WebGPU.
+ */
 export function applyFrequencyFilterCPU(
   data: Float32Array,
   width: number,
@@ -215,12 +219,17 @@ export function applyFrequencyFilterCPU(
   options: FrequencyFilterOptions,
 ): Float32Array {
   if (!frequencyFilterActive(options.mode)) return Float32Array.from(data);
-  const real = Float32Array.from(data);
+  const paddedWidth = nextPow2(width);
+  const paddedHeight = nextPow2(height);
+  const real = new Float32Array(paddedWidth * paddedHeight);
+  for (let row = 0; row < height; row++) real.set(data.subarray(row * width, (row + 1) * width), row * paddedWidth);
   const imag = new Float32Array(real.length);
-  fft2d(real, imag, width, height, false);
-  applyMask(real, imag, width, height, options);
-  fft2d(real, imag, width, height, true);
-  return real;
+  fft2d(real, imag, paddedWidth, paddedHeight, false);
+  applyMask(real, imag, paddedWidth, paddedHeight, options);
+  fft2d(real, imag, paddedWidth, paddedHeight, true);
+  const output = new Float32Array(width * height);
+  for (let row = 0; row < height; row++) output.set(real.subarray(row * paddedWidth, row * paddedWidth + width), row * width);
+  return output;
 }
 
 /**
