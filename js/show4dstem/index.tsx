@@ -89,17 +89,6 @@ const OFFLINE_NEEDS_WEBGPU =
   "which this browser does not provide. The images shown were saved at export and do not follow the detector. " +
   "Open the page in a browser with WebGPU (Chrome, Edge or Safari 26) to explore.";
 
-function normaliseViSource(value: unknown): string {
-  const raw = String(value || "roi").trim();
-  const key = raw.toLowerCase().replace(/[-\s]+/g, "_");
-  if (["", "roi", "virtual", "virtual_image", "bf"].includes(key)) return "roi";
-  if (["dpc_row", "dpc_com_row", "dpc_r", "dpcr"].includes(key)) return "DPC_row";
-  if (["dpc_col", "dpc_com_col", "dpc_c", "dpcc"].includes(key)) return "DPC_col";
-  if (["idpc", "integrated_dpc", "integrated_differential_phase_contrast"].includes(key)) return "iDPC";
-  if (["ssb", "ssb_phase", "phase"].includes(key)) return "SSB";
-  return raw;
-}
-
 function viSourceLabel(source: string): string {
   if (source === "roi") return "ROI";
   if (source === "DPC_row") return "DPC row";
@@ -162,7 +151,8 @@ function viProductFrameView(
   scanCols: number,
   sourceOverride?: string,
 ): DataView | null {
-  const source = normaliseViSource(sourceOverride ?? model.get("vi_source"));
+  // Python writes the canonical source names (roi, DPC_row, DPC_col, iDPC, SSB) back to the model.
+  const source = sourceOverride ?? model.get("vi_source");
   if (source === "roi") return null;
   const maps = viProductMaps(model, source, scanRows, scanCols);
   if (!maps) return null;
@@ -178,7 +168,7 @@ function viProductStackForIndices(
   scanRows: number,
   scanCols: number,
 ): DataView | null {
-  const source = normaliseViSource(model.get("vi_source"));
+  const source = model.get("vi_source");
   if (source === "roi" || indices.length === 0) return null;
   const maps = viProductMaps(model, source, scanRows, scanCols);
   if (!maps) return null;
@@ -410,7 +400,8 @@ const LIGHT_ROI_COLORS: RoiColors = {
   textColor: "#0a0",
 };
 
-const VI_SOURCE_COLORS = {
+// Button colors of the image sources: the detector presets and the product maps.
+const VI_SOURCE_COLORS: Record<string, { dark: string; light: string }> = {
   bf: { dark: DARK_ROI_COLORS.textColor, light: LIGHT_ROI_COLORS.textColor },
   abf: { dark: "#44aaff", light: "#1769aa" },
   adf: { dark: "#ffaa44", light: "#9a5a00" },
@@ -418,25 +409,10 @@ const VI_SOURCE_COLORS = {
   DPC_col: { dark: "#a78bfa", light: "#6d28d9" },
   iDPC: { dark: "#2dd4bf", light: "#0f766e" },
   SSB: { dark: "#f472b6", light: "#be185d" },
-} as const;
+};
 
-function viSourceColorKey(source: string): keyof typeof VI_SOURCE_COLORS | null {
-  const normalised = normaliseViSource(source);
-  if (normalised === "DPC_row" || normalised === "DPC_col" || normalised === "iDPC" || normalised === "SSB") {
-    return normalised;
-  }
-
-  const key = String(source || "").trim().toLowerCase().replace(/[-\s]+/g, "_");
-  if (key === "bf" || key === "roi") return "bf";
-  if (key === "abf") return "abf";
-  if (key === "adf") return "adf";
-  return null;
-}
-
-function viSourceDisplayColor(source: string, themeName: string): string | null {
-  const key = viSourceColorKey(source);
-  if (!key) return null;
-  const palette = VI_SOURCE_COLORS[key];
+function viSourceDisplayColor(source: string, themeName: string): string {
+  const palette = VI_SOURCE_COLORS[source];
   return themeName === "light" ? palette.light : palette.dark;
 }
 
@@ -2380,11 +2356,13 @@ function Show4DSTEM() {
   const [frameBytes] = useModelState<DataView>("frame_bytes");
   const [virtualImageBytes, setVirtualImageBytes] = useModelState<DataView>("virtual_image_bytes");
   const [frontendVirtualImageBytes, setFrontendVirtualImageBytes] = React.useState<DataView | null>(null);
-  const [viSource, setViSourceModel] = useModelState<string>("vi_source");
+  const [viSource, setViSource] = useModelState<string>("vi_source");
   const [viProductLabels] = useModelState<string[]>("vi_product_labels");
   const [viProductMapFrames] = useModelState<number>("vi_product_map_frames");
   const [viProductMapsBytes] = useModelState<DataView>("vi_product_maps_bytes");
   const [, setSsbComputeRequest] = useModelState<string>("ssb_compute_request");
+  // A preset button asks the kernel (or, offline, the browser backend) to place the detector.
+  const [, requestViPreset] = useModelState<string>("_preset_request");
   const [ssbComputeStatus] = useModelState<string>("ssb_compute_status");
   const [ssbComputeBusy] = useModelState<boolean>("ssb_compute_busy");
   const [ssbComputeEnabled] = useModelState<boolean>("ssb_compute_enabled");
@@ -3612,11 +3590,11 @@ function Show4DSTEM() {
       let viRecomputeGen = 0;
       const recomputeVI = async () => {
         const generation = ++viRecomputeGen;
-        const source = normaliseViSource(model.get("vi_source"));
+        const source = model.get("vi_source");
         // In multiple view the grid owns each .qem acquisition's ROI image; the
         // hidden single image would sum the same resident image under another
         // mask and break the exact deltas of the visible panels.
-        if (qemSeries && source === "roi" && ["multiple", "compare"].includes(String(model.get("view_mode")))
+        if (qemSeries && source === "roi" && model.get("view_mode") === "multiple"
             && Number(model.get("n_frames")) > 1) return;
         const product = viProductFrameView(model, scanRows, scanCols, source);
         if (product) {
@@ -3738,7 +3716,7 @@ function Show4DSTEM() {
       const comparePageState = () => {
         const total = Math.max(0, Number(model.get("n_frames") || 0));
         const mode = String(model.get("view_mode") || "single");
-        if (total <= 1 || (mode !== "multiple" && mode !== "compare")) {
+        if (total <= 1 || mode !== "multiple") {
           return { visible: [] as number[], page: [] as number[] };
         }
         const maxPanels = Math.max(1, Number(model.get("compare_max_panels") || total));
@@ -3816,7 +3794,7 @@ function Show4DSTEM() {
         const generation = ++compareViGen;
         const indices = compareVisibleIndices();
         if (!indices.length) return;
-        const source = normaliseViSource(model.get("vi_source"));
+        const source = model.get("vi_source");
         const interactiveDrag = dpRoiInteractiveRef.current;
         // ROI compare panels render through GPU-resident slots both for the
         // initial/settled image and for drag updates. The initial frame uses a
@@ -3976,7 +3954,7 @@ function Show4DSTEM() {
       };
       const recomputeVisibleVirtualImages = async () => {
         const mode = String(model.get("view_mode") || "single");
-        if (mode === "multiple" || mode === "compare") {
+        if (mode === "multiple") {
           await recomputeCompareVI();
           return;
         }
@@ -4032,7 +4010,7 @@ function Show4DSTEM() {
         const scanIdx = scanRow * scanCols + scanCol;
         const mode = String(model.get("view_mode") || "single");
         const dpMode = String(model.get("compare_dp_mode") || "average");
-        if ((mode === "multiple" || mode === "compare") && dpMode !== "selected" && getVol) {
+        if (mode === "multiple" && dpMode !== "selected" && getVol) {
           const indices = comparePageState().page;
           if (indices.length) {
             const latestLoaded = latestResidentVolumeIndex != null && volIsResident(latestResidentVolumeIndex)
@@ -4168,7 +4146,7 @@ function Show4DSTEM() {
         // hold the panel's mask until the next compare pass starts.
         residentCountViewRef.current = frame => {
           const panel = volCache.get(frame) as unknown as RansDetectorCompute | undefined;
-          if (disposed || !panel || dpRoiInteractiveRef.current || normaliseViSource(model.get("vi_source")) !== "roi") return null;
+          if (disposed || !panel || dpRoiInteractiveRef.current || model.get("vi_source") !== "roi") return null;
           const generation = compareViGen;
           return {
             view: panel.set.imageViewsU32([panel.tilt], 1)[0],
@@ -4438,8 +4416,7 @@ function Show4DSTEM() {
   const compareGridResizeCleanupRef = React.useRef<(() => void) | null>(null);
   const [compareHiddenMenuAnchor, setCompareHiddenMenuAnchor] = React.useState<HTMLElement | null>(null);
 
-  const displayViewMode = viewMode === "compare" ? "multiple" : viewMode === "temporal" ? "single" : (viewMode || "single");
-  const compareMode = (displayViewMode === "multiple" || viewMode === "compare") && nFrames > 1;
+  const compareMode = viewMode === "multiple" && nFrames > 1;
   const viProductSourceOptions = React.useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -4449,7 +4426,7 @@ function Show4DSTEM() {
       out.push(source);
     };
     (Array.isArray(viProductLabels) ? viProductLabels : []).forEach((label) => {
-      add(normaliseViSource(label));
+      add(label);
     });
     if (webgpuDpcReady) {
       add("DPC_row");
@@ -4459,24 +4436,10 @@ function Show4DSTEM() {
     return out;
   }, [viProductLabels, webgpuDpcReady]);
   const activeViSource = React.useMemo(() => {
-    const source = normaliseViSource(viSource);
-    return source === "roi" || viProductSourceOptions.includes(source) ? source : "roi";
+    return viSource === "roi" || viProductSourceOptions.includes(viSource) ? viSource : "roi";
   }, [viProductSourceOptions, viSource]);
   const hasViProductSources = viProductSourceOptions.length > 0;
   const roiVirtualDetectorActive = activeViSource === "roi";
-  const saveChangesIfLiveComm = React.useCallback(() => {
-    const liveModel = model as unknown as { save_changes?: () => void };
-    if (typeof liveModel.save_changes !== "function") return;
-    requestAnimationFrame(() => {
-      window.setTimeout(() => {
-        try {
-          liveModel.save_changes?.();
-        } catch (error) {
-          console.warn("Show4DSTEM could not sync virtual detector state", error);
-        }
-      }, 0);
-    });
-  }, [model]);
   const publishVirtualImageBytes = React.useCallback((bytes: DataView) => {
     setFrontendVirtualImageBytes(bytes);
     setVirtualImageBytes(bytes);
@@ -4484,16 +4447,6 @@ function Show4DSTEM() {
   React.useEffect(() => {
     if (virtualImageBytes) setFrontendVirtualImageBytes(virtualImageBytes);
   }, [virtualImageBytes]);
-  const requestViPreset = React.useCallback((preset: "bf" | "abf" | "adf") => {
-    model.set("_preset_request", preset);
-    saveChangesIfLiveComm();
-  }, [model, saveChangesIfLiveComm]);
-  const setViSource = React.useCallback((nextSource: string) => {
-    const source = normaliseViSource(nextSource);
-    setViSourceModel(source);
-    model.set("vi_source", source);
-    saveChangesIfLiveComm();
-  }, [model, saveChangesIfLiveComm, setViSourceModel]);
   const displayedVirtualImageBytes = React.useMemo(() => {
     const roiBytes = frontendVirtualImageBytes ?? virtualImageBytes;
     if (activeViSource === "roi") return roiBytes;
@@ -4729,10 +4682,7 @@ function Show4DSTEM() {
     });
     if (options?.closeMenu !== false) setDpMoreAnchor(null);
     setSsbComputeRequest(payload);
-    model.set("ssb_compute_request", payload);
-    model.save_changes();
   }, [
-    model,
     setSsbComputeRequest,
     ssbComputeC10Nm,
     ssbComputeC12Nm,
@@ -5641,7 +5591,7 @@ function Show4DSTEM() {
     const gpuImage = viGpuImageRef.current;
     const engine = viGpuColormapRef.current;
     const raw = rawVirtualImageRef.current;
-    const currentSource = normaliseViSource(model.get("vi_source"));
+    const currentSource = model.get("vi_source");
     if (
       !gpuImage
       || !engine
@@ -7328,7 +7278,7 @@ function Show4DSTEM() {
     flexShrink: 0,
   };
   const viSourceButtonSx = (source: string, active = false) => {
-    const color = viSourceDisplayColor(source, themeInfo.theme) ?? themeColors.textMuted;
+    const color = viSourceDisplayColor(source, themeInfo.theme);
     return {
       ...statsTextSx,
       color,
@@ -7538,7 +7488,7 @@ function Show4DSTEM() {
       ssbTuneDebounceRef.current = null;
     }
   }, []);
-  const currentViSource = normaliseViSource(model.get("vi_source"));
+  const currentViSource = model.get("vi_source");
   const viGpuVisible = Boolean(
     viGpuRetainedReady
     &&
@@ -8983,7 +8933,7 @@ function Show4DSTEM() {
         <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
           <Typography sx={{ ...themedTypography.label, fontSize: 10, flexShrink: 0 }}>View</Typography>
           <Select
-            value={displayViewMode}
+            value={viewMode}
             onChange={(event) => setViewMode(String(event.target.value))}
             size="small"
             inputProps={{ "aria-label": "Show4DSTEM view mode" }}
