@@ -4,6 +4,7 @@
 import { getHardwareGPUDevice, requireHardwareGPUDevice } from "./device";
 import { findFFTPeak } from "./fft";
 import { computePipeline } from "./pipelines";
+import { uint8Decoding } from "./quantization";
 
 type MaskedCropRegion = {
   row: number;
@@ -177,9 +178,7 @@ export function sampleLineProfileUint8(
   column1: number,
   profileWidth = 1,
 ): Float32Array {
-  const finiteLow = Number.isFinite(low) ? low : 0;
-  const finiteHigh = Number.isFinite(high) ? high : finiteLow;
-  const scale = finiteHigh > finiteLow ? (finiteHigh - finiteLow) / 255 : 0;
+  const decoding = uint8Decoding(low, high);
   const sampleLine = (startRow: number, startColumn: number, endRow: number, endColumn: number) => {
     const columnDelta = endColumn - startColumn;
     const rowDelta = endRow - startRow;
@@ -197,7 +196,7 @@ export function sampleLineProfileUint8(
       const right = Math.max(0, Math.min(width - 1, baseColumn + 1));
       const top = Math.max(0, Math.min(height - 1, baseRow));
       const bottom = Math.max(0, Math.min(height - 1, baseRow + 1));
-      const decode = (position: number) => data[position] * scale + finiteLow;
+      const decode = (position: number) => data[position] * decoding.scale + decoding.low;
       output[index] =
         decode(top * width + left) * (1 - columnFraction) * (1 - rowFraction) +
         decode(top * width + right) * columnFraction * (1 - rowFraction) +
@@ -593,14 +592,13 @@ export async function sampleLineProfileUint8Browser(
 ): Promise<Float32Array> {
   if (!(await getHardwareGPUDevice())) return sampleLineProfileUint8(data, low, high, width, height, row0, column0, row1, column1, profileWidth);
   if (data.length < width * height) throw new Error("Quantized line-profile image is shorter than width * height");
-  const finiteLow = Number.isFinite(low) ? low : 0;
-  const finiteHigh = Number.isFinite(high) ? high : finiteLow;
+  const decoding = uint8Decoding(low, high);
   const sampleCount = Math.max(2, Math.ceil(Math.hypot(column1 - column0, row1 - row0)));
   const params = new ArrayBuffer(48);
   const u32 = new Uint32Array(params);
   const f32 = new Float32Array(params);
   u32[0] = width; u32[1] = height; u32[2] = sampleCount; u32[3] = Math.max(1, Math.round(profileWidth));
-  f32[4] = finiteLow; f32[5] = finiteHigh > finiteLow ? (finiteHigh - finiteLow) / 255 : 0;
+  f32[4] = decoding.low; f32[5] = decoding.scale;
   f32[6] = row0; f32[7] = column0; f32[8] = row1; f32[9] = column1;
   const source = data.subarray(0, width * height);
   // Four samples per storage word: WGSL storage buffers have no 8-bit type.
