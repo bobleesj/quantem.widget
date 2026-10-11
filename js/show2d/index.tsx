@@ -1060,7 +1060,6 @@ function Show2D() {
   const browserFilterActive = denoiseEnabled ?? true;
 
   const [pixelSize] = useModelState<number>("pixel_size");
-  const [pixelSizes] = useModelState<number[]>("pixel_sizes");
   const [pixelUnit] = useModelState<string>("pixel_unit");
   const [scaleBarVisible] = useModelState<boolean>("scale_bar_visible");
   const [scaleBarPosition] = useModelState<string>("scale_bar_position");
@@ -2407,10 +2406,6 @@ function Show2D() {
   const panelTitleText = React.useCallback((idx: number) => (
     richTitlePlainText(panelTitleSpans?.[idx], panelLabel(idx))
   ), [panelLabel, panelTitleSpans]);
-  const pixelSizeForPanel = React.useCallback((idx: number) => {
-    const perPanel = pixelSizes?.[idx];
-    return perPanel && perPanel > 0 ? perPanel : pixelSize;
-  }, [pixelSize, pixelSizes]);
   const setPanelHidden = React.useCallback((panel: number, hidden: boolean) => {
     if (isPaged && !isItemPaged) {
       if (panel < activePageStart || panel >= activePageEnd) return;
@@ -4297,9 +4292,8 @@ function Show2D() {
       const toScreenX = (col: number) => (col * displayScale - canvasW / 2) * zoom + canvasW / 2 + view.panX;
       const toScreenY = (row: number) => (row * displayScale - canvasH / 2) * zoom + canvasH / 2 + view.panY;
       if (panelHasScaleBar(i)) {
-        const panelPixelSize = pixelSizeForPanel(i);
-        const unit = panelPixelSize > 0 ? pixelUnit : "px";
-        const barPixelSize = panelPixelSize > 0 ? panelPixelSize : 1;
+        const unit = pixelSize > 0 ? pixelUnit : "px";
+        const barPixelSize = pixelSize > 0 ? pixelSize : 1;
         const region = { x: 0, y: 0, width: overlay.width / DPR, height: overlay.height / DPR };
         const effectiveZoom = view.zoom * (region.width / width);
         const scaleBarOptions = show2dScaleBarOptions(scaleBarPosition, scaleBarLength, scaleBarLabel, scaleBarStyle, Boolean(showZoomIndicator));
@@ -4484,10 +4478,9 @@ function Show2D() {
           const deltaCol = measurePoints[1].col - measurePoints[0].col;
           const deltaRow = measurePoints[1].row - measurePoints[0].row;
           const distPx = Math.sqrt(deltaCol * deltaCol + deltaRow * deltaRow);
-          const measurePixelSize = pixelSizeForPanel(selectedIdx);
           let label: string;
-          if (measurePixelSize > 0) {
-            label = formatLength(distPx * measurePixelSize, pixelUnit);
+          if (pixelSize > 0) {
+            label = formatLength(distPx * pixelSize, pixelUnit);
           } else {
             label = `${distPx.toFixed(1)} px`;
           }
@@ -4505,7 +4498,7 @@ function Show2D() {
         ctx.restore();
       }
     }
-  }, [nImages, pixelSizeForPanel, pixelUnit, panelHasScaleBar, scaleBarPosition, scaleBarLength, scaleBarLabel, scaleBarStyle, showZoomIndicator, selectedIdx, isGallery, canvasW, canvasH, width, height, displayScale, linkedZoom, linkPan, linkedZoomState, zoomStates, dataVersion, showColorbar, cmap, offscreenVersion, logScale, profileActive, profilePoints, roiActive, roiList, roiSelectedIdx, isDraggingROI, themeColors, measureActive, measurePoints, canvasRepaintSignal, insetPlots, insetPlotSpecFor, insetDragVersion, showInsetPlots, panelMarkerColor, viewportPaintImageIndices, panelOverlays, overlaySelection, settledViewPaintVersion]);
+  }, [nImages, pixelSize, pixelUnit, panelHasScaleBar, scaleBarPosition, scaleBarLength, scaleBarLabel, scaleBarStyle, showZoomIndicator, selectedIdx, isGallery, canvasW, canvasH, width, height, displayScale, linkedZoom, linkPan, linkedZoomState, zoomStates, dataVersion, showColorbar, cmap, offscreenVersion, logScale, profileActive, profilePoints, roiActive, roiList, roiSelectedIdx, isDraggingROI, themeColors, measureActive, measurePoints, canvasRepaintSignal, insetPlots, insetPlotSpecFor, insetDragVersion, showInsetPlots, panelMarkerColor, viewportPaintImageIndices, panelOverlays, overlaySelection, settledViewPaintVersion]);
 
   // -------------------------------------------------------------------------
   // Inset magnifier (lens): magnified region at the cursor, bottom-left unless dragged
@@ -5515,12 +5508,12 @@ function Show2D() {
       const mag = fftMagCacheGalleryRef.current[idx];
       if (!mag) continue;
       next[idx] = computeFftQualityMetrics(mag, fftW, fftH, {
-        sampling: pixelSizeForPanel(idx) * galleryFftBinning,
+        sampling: pixelSize * galleryFftBinning,
         unit: pixelUnit,
       });
     }
     setGalleryFftQuality(next);
-  }, [showFft, isGallery, fftMetricsEnabled, galleryFftMagVersion, nImages, width, height, pixelSizeForPanel, pixelUnit, visibleImageIndices, galleryFftBinning]);
+  }, [showFft, isGallery, fftMetricsEnabled, galleryFftMagVersion, nImages, width, height, pixelSize, pixelUnit, visibleImageIndices, galleryFftBinning]);
 
   // Gallery FFT draw effect: cheap drawImage from cached offscreens (zoom/pan changes)
   React.useLayoutEffect(() => {
@@ -6903,9 +6896,8 @@ function Show2D() {
 
       if (panelHasScaleBar(panel)) {
         const view = getZoomState(panel);
-        const panelPixelSize = pixelSizeForPanel(panel);
-        const barPixelSize = panelPixelSize > 0 ? panelPixelSize : 1;
-        const unit = panelPixelSize > 0 ? pixelUnit : "px";
+        const barPixelSize = pixelSize > 0 ? pixelSize : 1;
+        const unit = pixelSize > 0 ? pixelUnit : "px";
         const scaleBar = scaleBarGeometry({ x: 0, y: 0, width: canvasW, height: canvasH }, view.zoom * (canvasW / width), barPixelSize, unit, show2dScaleBarOptions(scaleBarPosition, scaleBarLength, scaleBarLabel, scaleBarStyle, Boolean(showZoomIndicator)));
         if (scaleBar) {
           const barY = y + scaleBar.barY;
@@ -6981,7 +6973,7 @@ function Show2D() {
     panelTitleStyle,
     panelTitleSpans,
     panelTitleText,
-    pixelSizeForPanel,
+    pixelSize,
     pixelUnit,
     scaleBarPosition,
     scaleBarLength,
@@ -7321,10 +7313,6 @@ function Show2D() {
 
   // Calibrated cursor position - unit is whatever the user passed via sampling/units.
   const calibratedUnit = pixelSize > 0 ? pixelUnit : "";
-  const nativePixelSizeForPanel = (idx: number) => {
-    const panelPixelSize = pixelSizeForPanel(idx);
-    return panelPixelSize > 0 ? panelPixelSize / Math.max(1, displayBinFactor || 1) : 0;
-  };
   const nativePixelSize = pixelSize > 0 ? pixelSize / Math.max(1, displayBinFactor || 1) : 0;
   const cursorValueSuffix = cursorInfo?.valueSource === "native"
     ? " native"
@@ -7354,11 +7342,10 @@ function Show2D() {
     setShowRotationSettings(false);
   }, [nImages, setImageRotations]);
   const frequencyUiKnobs = panelFrequencyKnobs(Math.min(Math.max(0, selectedIdx || 0), Math.max(0, nImages - 1)));
-  const frequencyValueLabel = (value: number, panel = selectedIdx) => {
-    const sampling = pixelSizeForPanel(Math.min(Math.max(0, panel || 0), Math.max(0, nImages - 1)));
+  const frequencyValueLabel = (value: number) => {
     const unit = String(pixelUnit || "").trim().toLowerCase();
-    if (sampling > 0 && (unit === "nm" || unit.includes("nanometer"))) return `${(value / (2 * sampling)).toFixed(3)} nm⁻¹`;
-    if (sampling > 0 && (unit === "a" || unit === "å" || unit.includes("angstrom"))) return `${(value * 10 / (2 * sampling)).toFixed(3)} nm⁻¹`;
+    if (pixelSize > 0 && (unit === "nm" || unit.includes("nanometer"))) return `${(value / (2 * pixelSize)).toFixed(3)} nm⁻¹`;
+    if (pixelSize > 0 && (unit === "a" || unit === "å" || unit.includes("angstrom"))) return `${(value * 10 / (2 * pixelSize)).toFixed(3)} nm⁻¹`;
     return `${value.toFixed(3)} Nyq`;
   };
   const frequencyBannerText = frequencyFilterEnabled
@@ -7429,7 +7416,7 @@ function Show2D() {
     <Box
       className="quantem-frequency-filter-ring"
       data-frequency-filter={knobs.mode}
-      aria-label={`Draggable ${knobs.mode} frequency ring at ${frequencyValueLabel(ringValue, panel)}`}
+      aria-label={`Draggable ${knobs.mode} frequency ring at ${frequencyValueLabel(ringValue)}`}
       title="Drag the ring to choose a frequency from the FFT"
       onPointerDown={(event: React.PointerEvent<HTMLDivElement>) => {
         // Cancelling pointerdown also withholds the mouse events, so the FFT
@@ -8630,7 +8617,7 @@ function Show2D() {
                       /* Show4DSTEM readout spec; top-right, dropped 25px below the star button row */
                       <Box sx={{ position: "absolute", top: 28, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right", zIndex: 2 }}>
                         <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
-                          ({cursorInfo.row}, {cursorInfo.col}){nativePixelSizeForPanel(i) > 0 ? ` = (${(cursorInfo.row * nativePixelSizeForPanel(i)).toFixed(1)}, ${(cursorInfo.col * nativePixelSizeForPanel(i)).toFixed(1)} ${pixelUnit})` : ""} {cursorInfo.rgb ? `(${cursorInfo.rgb[0].toFixed(2)}, ${cursorInfo.rgb[1].toFixed(2)}, ${cursorInfo.rgb[2].toFixed(2)})` : `${formatNumber(cursorInfo.value)}${cursorValueSuffix}`}
+                          ({cursorInfo.row}, {cursorInfo.col}){nativePixelSize > 0 ? ` = (${(cursorInfo.row * nativePixelSize).toFixed(1)}, ${(cursorInfo.col * nativePixelSize).toFixed(1)} ${pixelUnit})` : ""} {cursorInfo.rgb ? `(${cursorInfo.rgb[0].toFixed(2)}, ${cursorInfo.rgb[1].toFixed(2)}, ${cursorInfo.rgb[2].toFixed(2)})` : `${formatNumber(cursorInfo.value)}${cursorValueSuffix}`}
                         </Typography>
                       </Box>
                     )}
