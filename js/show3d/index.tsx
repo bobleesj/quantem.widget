@@ -1854,22 +1854,22 @@ function Show3D() {
       return transform(frame, width, height, 0);
     }
     const panelWidth = width / panelCount;
-    const output = new Float32Array(frame.length);
-    for (let panel = 0; panel < panelCount; panel++) {
+    // All panels go to the filter at once, so their GPU work and readbacks overlap instead of
+    // each panel waiting for the previous one's round trip.
+    const filtered = await Promise.all(Array.from({ length: panelCount }, (_, panel) => {
       const panelFrame = new Float32Array(panelWidth * height);
-      const srcColStart = panel * panelWidth;
       for (let row = 0; row < height; row++) {
-        const srcOffset = row * width + srcColStart;
-        const dstOffset = row * panelWidth;
-        panelFrame.set(frame.subarray(srcOffset, srcOffset + panelWidth), dstOffset);
+        const srcOffset = row * width + panel * panelWidth;
+        panelFrame.set(frame.subarray(srcOffset, srcOffset + panelWidth), row * panelWidth);
       }
-      const filtered = await transform(panelFrame, panelWidth, height, panel);
+      return transform(panelFrame, panelWidth, height, panel);
+    }));
+    const output = new Float32Array(frame.length);
+    filtered.forEach((panelFrame, panel) => {
       for (let row = 0; row < height; row++) {
-        const srcOffset = row * panelWidth;
-        const dstOffset = row * width + srcColStart;
-        output.set(filtered.subarray(srcOffset, srcOffset + panelWidth), dstOffset);
+        output.set(panelFrame.subarray(row * panelWidth, (row + 1) * panelWidth), row * width + panel * panelWidth);
       }
-    }
+    });
     return output;
   }, [height, nPanels, sharedPanelSource, width]);
   // Live gate read inside memoized render ticks (avoids stale closures): when on,
