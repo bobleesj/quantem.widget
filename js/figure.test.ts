@@ -25,6 +25,8 @@ describe("formatScaleLabel", () => {
     expect(formatScaleLabel(1e-9, "m")).toBe("1 nm");
     expect(formatScaleLabel(0.002, "millimeter")).toBe("2 µm");
     expect(formatScaleLabel(0.05, "micrometers")).toBe("50 nm");
+    // the table is in Angstrom, so 1e-7 mm is exactly 1 Å (tests/infrastructure/test_shared_modules.py holds the same cases)
+    expect(formatScaleLabel(1e-7, "mm")).toBe("1 Å");
   });
 
   it("keeps a unit that is not a length", () => {

@@ -29,8 +29,18 @@ WIDGETS = Path(__file__).resolve().parents[2] / "src" / "quantem" / "widget"
         (23.0, "um", "20 µm"),
         (20, "mrad", "20 mrad"),  # non-length units keep their unit
         (0.25, "mrad", "0.20 mrad"),
-        (57, "pixels", "50 pixels"),  # unknown units pass through unchanged
+        (57, "pixels", "50 px"),  # an uncalibrated axis reads px
+        (57, "furlong", "50 furlong"),  # unknown units pass through unchanged
         (2.5, "ps", "2 ps"),
+        # the cases of js/figure.test.ts: every spelling of a length unit rescales, meters included
+        (20, "Å", "2 nm"),
+        (5, "angstroms", "5 Å"),
+        (1500, "um", "2 mm"),
+        (0.2, "μm", "200 nm"),
+        (1e-9, "m", "1 nm"),
+        (0.002, "millimeter", "2 µm"),
+        (0.05, "micrometers", "50 nm"),
+        (1e-7, "mm", "1 Å"),  # 1e-7 * 1e7 Å is exactly 1; a table in nm gave 0.0999... nm and printed "100 pm"
     ],
 )
 def test_scale_label_matches_js_figure(value, unit, label):
@@ -40,6 +50,7 @@ def test_scale_label_matches_js_figure(value, unit, label):
 def test_round_to_nice_thresholds():
     assert [round_to_nice(v) for v in (1.4, 1.5, 3.4, 3.5, 7.4, 7.5, 0)] == [1, 2, 2, 5, 5, 10, 1.0]
     assert unit_symbol("angstrom") == "Å" and unit_symbol("micron") == "µm" and unit_symbol("px") == "px"
+    assert unit_symbol("pixels") == "px" and unit_symbol("Pixel") == "px"
 
 
 def test_colormap_names_and_lut():

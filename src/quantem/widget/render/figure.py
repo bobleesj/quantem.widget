@@ -10,19 +10,22 @@ import math
 
 from matplotlib import font_manager
 
-# Length-unit ladder, each as its size in nm: a sub-1 value in one unit
-# (e.g. 0.5 nm) displays as a clean integer in a smaller unit (5 Å), because
-# microscopists read "5 Å", not "0.50 nm".
-LENGTH_UNITS_NM: tuple[tuple[str, float], ...] = (
-    ("mm", 1e6), ("µm", 1e3), ("nm", 1.0), ("Å", 0.1), ("pm", 1e-3),
+# Length-unit ladder, each as its size in Angstrom (js/figure.ts LENGTH_LADDER):
+# a sub-1 value in one unit (e.g. 0.5 nm) displays as a clean integer in a
+# smaller unit (5 Å), because microscopists read "5 Å", not "0.50 nm".
+LENGTH_LADDER: tuple[tuple[str, float], ...] = (
+    ("mm", 1e7), ("µm", 1e4), ("nm", 10.0), ("Å", 1.0), ("pm", 0.01),
 )
-# Base unit (the trait's unit) -> nm. Only length units rescale; anything else
-# (mrad, ps, px, ...) keeps its own unit and the decimal fallback.
-BASE_UNIT_NM: dict[str, float] = {
-    "mm": 1e6, "µm": 1e3, "μm": 1e3, "micron": 1e3, "microns": 1e3, "um": 1e3,
-    "nm": 1.0, "nanometer": 1.0, "nanometers": 1.0,
-    "å": 0.1, "angstrom": 0.1, "angstroms": 0.1, "ang": 0.1, "a": 0.1,
-    "pm": 1e-3, "picometer": 1e-3, "picometers": 1e-3,
+# Size of one length unit in Angstrom, by every lower-case spelling a unit trait
+# accepts (js/figure.ts ANGSTROMS_PER_UNIT, the same numbers so both round alike).
+# Units that are not lengths (px, mrad, ps, ...) are absent and keep their own unit.
+ANGSTROMS_PER_UNIT: dict[str, float] = {
+    "å": 1.0, "a": 1.0, "ang": 1.0, "angstrom": 1.0, "angstroms": 1.0,
+    "nm": 10.0, "nanometer": 10.0, "nanometers": 10.0,
+    "pm": 0.01, "picometer": 0.01, "picometers": 0.01,
+    "µm": 1e4, "μm": 1e4, "um": 1e4, "micron": 1e4, "microns": 1e4, "micrometer": 1e4, "micrometers": 1e4,
+    "mm": 1e7, "millimeter": 1e7, "millimeters": 1e7,
+    "m": 1e10, "meter": 1e10, "meters": 1e10,
 }
 
 
@@ -71,6 +74,8 @@ def unit_symbol(unit: str) -> str:
         return "fs"
     if lowered in ("nanosecond", "nanoseconds", "ns"):
         return "ns"
+    if lowered in ("pixel", "pixels"):  # the unit quantem datasets give an uncalibrated axis
+        return "px"
     return stripped
 
 
@@ -85,17 +90,17 @@ def format_scale_label(value: float, unit: str) -> str:
     would format 2.5 as "2" where the widget shows "3".
     """
     nice = round_to_nice(value)
-    base_nm = BASE_UNIT_NM.get((unit or "").strip().lower())
-    if base_nm is None:
+    unit_angstroms = ANGSTROMS_PER_UNIT.get((unit or "").strip().lower())
+    if unit_angstroms is None:
         symbol = unit_symbol(unit)
         return f"{math.floor(nice + 0.5)} {symbol}" if nice >= 1 else f"{nice:.2f} {symbol}"
-    value_nm = nice * base_nm
+    angstroms = nice * unit_angstroms
     # largest ladder unit where the value is >= 1 -> the fewest-digit integer
-    for symbol, unit_nm in LENGTH_UNITS_NM:
-        if value_nm / unit_nm >= 1:
-            return f"{math.floor(value_nm / unit_nm + 0.5)} {symbol}"
-    symbol, unit_nm = LENGTH_UNITS_NM[-1]
-    return f"{math.floor(value_nm / unit_nm + 0.5)} {symbol}"
+    for symbol, ladder_angstroms in LENGTH_LADDER:
+        if angstroms / ladder_angstroms >= 1:
+            return f"{math.floor(angstroms / ladder_angstroms + 0.5)} {symbol}"
+    symbol, ladder_angstroms = LENGTH_LADDER[-1]
+    return f"{math.floor(angstroms / ladder_angstroms + 0.5)} {symbol}"
 
 
 OVERLAY_FONT: list[str] | None = None
