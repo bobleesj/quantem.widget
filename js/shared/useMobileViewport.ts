@@ -3,9 +3,8 @@ import * as React from "react";
 const COARSE_POINTER = "(pointer: coarse)";
 const NARROW_VIEWPORT = "(max-width: 768px)";
 
-/** Whether the viewport is touch-first or narrow; false where matchMedia is missing (jsdom in tests). */
+/** Whether the viewport is touch-first or narrow. */
 function isMobileViewport(): boolean {
-  if (typeof window.matchMedia !== "function") return false;
   return window.matchMedia(COARSE_POINTER).matches || window.matchMedia(NARROW_VIEWPORT).matches;
 }
 
@@ -14,7 +13,6 @@ function isMobileViewport(): boolean {
 export function useMobileViewport(): boolean {
   const [isMobile, setIsMobile] = React.useState(isMobileViewport);
   React.useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
     const queries = [window.matchMedia(COARSE_POINTER), window.matchMedia(NARROW_VIEWPORT)];
     const update = () => setIsMobile(isMobileViewport());
     update();
