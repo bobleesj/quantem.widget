@@ -17,9 +17,9 @@
 
 import { spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -59,22 +59,7 @@ print(json.dumps({
     },
 }))
 `;
-  const runExport = (env = process.env) => spawnSync(python, ["-c", code], {
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-    env,
-  });
-
-  let result = runExport();
-  if (result.status !== 0 && !process.env.QUANTEM_GPU_SRC) {
-    const home = process.env.HOME || "";
-    const srcDir = [
-      path.resolve(repoRoot, "../quantem.gpu/src"),
-      path.resolve(repoRoot, "../../quantem.gpu/src"),
-      home ? path.resolve(home, "repos/quantem.gpu/src") : "",
-    ].find((dir) => dir && existsSync(dir));
-    if (srcDir) result = runExport({ ...process.env, QUANTEM_GPU_SRC: srcDir });
-  }
+  const result = spawnSync(python, ["-c", code], { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
   if (result.status !== 0) {
     const detail = (result.stderr || result.stdout || "").trim().split("\n").pop();
     throw new Error(
@@ -128,6 +113,9 @@ function sha256s(dir, names) {
   ]));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run directly (node scripts/sync-gpu-webgpu.mjs), not imported by build.mjs, quantem.live or
+// `node -e` (no script path). Node resolves symlinks and URL-encodes the module URL, so compare
+// like with like: a raw `file://${path}` misses paths with spaces and the sync silently did nothing.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   syncGpuWebgpuSources();
 }

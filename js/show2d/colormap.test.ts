@@ -154,6 +154,9 @@ afterEach(async () => {
 
 it("keeps the image panels in their colormap while FFT panels repaint in another", async () => {
   const model = new Model();
+  // Without the control rows each jsdom render is about 5x cheaper; the panels
+  // paint and the engine is called in exactly the same sequence.
+  model.values.show_controls = false;
   act(() => { cleanup = renderShow2D({ model, el } as never) as (() => void) | undefined; });
   await settle();
   for (const [key, value] of [["cmap", "viridis"], ["show_fft", true]] as const) {

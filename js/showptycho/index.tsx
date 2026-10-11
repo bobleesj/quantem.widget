@@ -34,7 +34,8 @@ import { useTheme, type ThemeColors } from "../theme";
 import { downloadBlob, extractFloat32, formatNumber } from "../format";
 import { computeHistogramFromBytes, percentileClip } from "../display/stats";
 import { RenderPathBadge } from "../shared/RenderPathBadge";
-import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen, GPUColormapEngine, getGPUColormapEngine } from "../display/colormaps";
+import { shouldIgnoreWidgetShortcut } from "../shared/widgetShortcuts";
+import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen, GPUColormapEngine, createGPUColormapEngine } from "../display/colormaps";
 import { nextPow2, shiftedMagnitude, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset, getDisplayFFT, type DisplayFFT } from "../display/fft";
 import { findFFTPeakBrowser } from "../display/geometry";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI } from "../figure";
@@ -52,7 +53,6 @@ const typography = {
 };
 
 const SPACING = { XS: 4, SM: 8, MD: 12, LG: 16 };
-const DEFAULT_BF_FRACTION = 1.0;
 
 const container = {
   root: { p: 2, bgcolor: "transparent", color: "inherit", fontFamily: "monospace", overflow: "visible" },
@@ -218,7 +218,6 @@ function formatStat(value: number): string {
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 20;
 const ZOOM_FACTOR = 1.15;
-const DPR = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
 const MIN_PANEL = 200;
 const DEFAULT_PANEL = 800;
 // C12 (nm) and phi12 (degrees) slider spans: the SSB fit's default search range
@@ -373,20 +372,6 @@ function slugPart(value: string): string {
 
 function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
-    if (typeof canvas.toBlob !== "function") {
-      try {
-        const dataUrl = canvas.toDataURL("image/png");
-        const [meta, base64] = dataUrl.split(",");
-        const mime = meta.match(/data:([^;]+)/)?.[1] || "image/png";
-        const raw = atob(base64);
-        const bytes = new Uint8Array(raw.length);
-        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-        resolve(new Blob([bytes], { type: mime }));
-      } catch (err) {
-        reject(err);
-      }
-      return;
-    }
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
       else reject(new Error("Could not encode pinned image as PNG."));
@@ -415,13 +400,15 @@ function drawCanvas(
   // clears the canvas to transparent, so doing it every draw (e.g. on every
   // histogram-drag tick) wipes the visible image before the redraw lands, which
   // reads as flicker. When the size is unchanged, repaint in place instead.
-  const targetW = Math.round(size * DPR);
-  const targetH = Math.round(size * DPR);
+  // read at draw time: moving the notebook to another monitor or zooming the page changes it
+  const dpr = window.devicePixelRatio || 1;
+  const targetW = Math.round(size * dpr);
+  const targetH = Math.round(size * dpr);
   if (canvas.width !== targetW || canvas.height !== targetH) {
     canvas.width = targetW;
     canvas.height = targetH;
   }
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = bgColor;
   ctx.fillRect(0, 0, size, size);
 
@@ -643,13 +630,14 @@ function ImagePanel({
   React.useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay || !pixelSize || pixelSize <= 0 || !imageWidth || imageWidth <= 0) return;
-    overlay.width = size * DPR;
-    overlay.height = size * DPR;
+    const dpr = window.devicePixelRatio || 1;
+    overlay.width = size * dpr;
+    overlay.height = size * dpr;
     const ctx = overlay.getContext("2d");
     if (!ctx) return;
     ctx.clearRect(0, 0, overlay.width, overlay.height);
     if (isFFT) {
-      drawFFTScaleBarHiDPI(overlay, DPR, zoom.zoom, pixelSize, imageWidth, "Å⁻¹");
+      drawFFTScaleBarHiDPI(overlay, dpr, zoom.zoom, pixelSize, imageWidth, "Å⁻¹");
       // d-spacing marker, Show3D style: open circle + gap-cross, white with
       // shadow so it reads on any background. Label flips Å → nm at ≥10 Å.
       if (fftClickInfo && offscreen) {
@@ -661,7 +649,7 @@ function ImagePanel({
         const cssX = xOff + fftClickInfo.col * scale;
         const cssY = yOff + fftClickInfo.row * scale;
         ctx.save();
-        ctx.scale(DPR, DPR);
+        ctx.scale(dpr, dpr);
         ctx.strokeStyle = "rgba(255,255,255,0.9)";
         ctx.shadowColor = "rgba(0,0,0,0.6)";
         ctx.shadowBlur = 2;
@@ -679,7 +667,7 @@ function ImagePanel({
         ctx.restore();
       }
     } else {
-      drawScaleBarHiDPI(overlay, DPR, zoom.zoom, pixelSize, "Å", imageWidth);
+      drawScaleBarHiDPI(overlay, dpr, zoom.zoom, pixelSize, "Å", imageWidth);
     }
   }, [zoom, size, pixelSize, imageWidth, isFFT, fftClickInfo, offscreen]);
 
@@ -913,8 +901,9 @@ function FFTInset({
   React.useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay) return;
-    overlay.width = size * DPR;
-    overlay.height = size * DPR;
+    const dpr = window.devicePixelRatio || 1;
+    overlay.width = size * dpr;
+    overlay.height = size * dpr;
     const ctx = overlay.getContext("2d");
     if (!ctx) return;
     ctx.clearRect(0, 0, overlay.width, overlay.height);
@@ -923,7 +912,7 @@ function FFTInset({
     const cssX = (size - offscreen.width * scale) / 2 + fftClickInfo.col * scale;
     const cssY = (size - offscreen.height * scale) / 2 + fftClickInfo.row * scale;
     ctx.save();
-    ctx.scale(DPR, DPR);
+    ctx.scale(dpr, dpr);
     ctx.strokeStyle = "rgba(255,255,255,0.95)";
     ctx.shadowColor = "rgba(0,0,0,0.7)";
     ctx.shadowBlur = 2;
@@ -1002,7 +991,6 @@ function FFTInset({
         height: size,
         bgcolor: "rgba(0,0,0,0.82)",
         border: `1px solid ${tc.border}`,
-        boxShadow: `0 2px 10px ${tc.shadow}`,
         cursor: "move",
         pointerEvents: "auto",
         userSelect: "none",
@@ -1521,9 +1509,7 @@ function Explore() {
   const [sessionNote] = useModelState<string>("session_note");
   const [amplitudeBytes] = useModelState<DataView>("amplitude_bytes");
   // An array input has no SSB session: only the views, FFT and display controls apply.
-  // Exports written before the trait existed are sessions, hence `!== false`.
-  const tuning = ssbSession !== false;
-  const tuningRef = React.useRef(tuning); tuningRef.current = tuning;
+  const tuning = ssbSession;
   const objectAmplitude = React.useMemo(
     () => (amplitudeBytes && amplitudeBytes.byteLength > 0 ? extractFloat32(amplitudeBytes) : null),
     [amplitudeBytes],
@@ -1589,10 +1575,6 @@ function Explore() {
   // rebuilding BF state on every pixel; we only commit on release.
   const [localDragBf, setLocalDragBf] = React.useState(dragBfTrait ?? 0);
   const dragBfRef = React.useRef(dragBfTrait ?? 0);
-  const defaultBfCount = React.useCallback((total: number) => {
-    const roundedTotal = Math.max(1, Math.round(total || 1));
-    return Math.max(1, Math.min(roundedTotal, Math.round(roundedTotal * DEFAULT_BF_FRACTION)));
-  }, []);
   const webgpuCalLogicalBf = React.useMemo(() => {
     if (!webgpuCalJson) return 0;
     try {
@@ -1616,7 +1598,7 @@ function Explore() {
     const total = effectiveTotalBf;
     const raw = Math.round(dragBfTrait ?? 0);
     const seedStandaloneDefault = webgpuStandalone && !standaloneBfSeededRef.current && total > 0;
-    const nextRaw = total > 0 && (raw <= 0 || seedStandaloneDefault) ? defaultBfCount(total) : raw;
+    const nextRaw = total > 0 && (raw <= 0 || seedStandaloneDefault) ? total : raw;
     const next = total > 0 ? Math.max(1, Math.min(total, nextRaw)) : nextRaw;
     setLocalDragBf(next);
     dragBfRef.current = next;
@@ -1624,7 +1606,7 @@ function Explore() {
     if (total > 0 && (raw <= 0 || seedStandaloneDefault) && raw !== next) {
       setDragBfTrait(next);
     }
-  }, [defaultBfCount, dragBfTrait, effectiveTotalBf, setDragBfTrait, webgpuStandalone]);
+  }, [dragBfTrait, effectiveTotalBf, setDragBfTrait, webgpuStandalone]);
   const [pinned, setPinned] = React.useState<PinnedEntry[]>([]);
   const [viewPin, setViewPin] = React.useState<number | null>(null);
   const [exportStatus, setExportStatus] = React.useState("");
@@ -1633,7 +1615,6 @@ function Explore() {
   const [draggingPin, setDraggingPin] = React.useState<number | null>(null);
   const [newPinId, setNewPinId] = React.useState<number | null>(null);
   const [moreMenuAnchor, setMoreMenuAnchor] = React.useState<HTMLElement | null>(null);
-  const draggedPinRef = React.useRef<number | null>(null);
   const didDragPinRef = React.useRef(false);
   const pinPointerDragRef = React.useRef<{ id: number; x: number; y: number; active: boolean } | null>(null);
   const pinLayoutBeforeRef = React.useRef<Map<number, DOMRect> | null>(null);
@@ -1792,9 +1773,9 @@ function Explore() {
   const selectedDragBfCount = React.useCallback(() => {
     const total = Math.max(1, effectiveTotalBf || 1);
     const requested = Math.round(dragBfRef.current || 0);
-    if (requested <= 0) return defaultBfCount(total);
+    if (requested <= 0) return total;
     return Math.max(1, Math.min(total, requested));
-  }, [defaultBfCount, effectiveTotalBf]);
+  }, [effectiveTotalBf]);
 
   // No-server mode: on file:// the sibling data files cannot be fetch()ed, so
   // the folder must be granted once (picker or webkitdirectory input) before
@@ -1957,16 +1938,22 @@ function Explore() {
   const gpuCmapReadyRef = React.useRef(false);
   // Track the data uploaded to each slot so we only re-upload on real data change.
   const gpuSlotDataRef = React.useRef<Record<GPUColormapSlot, Float32Array | null>>({ 0: null, 1: null, 2: null });
+  // This view's own engine, so its slots 0-2 never hold another view's images; destroyed on unmount.
   React.useEffect(() => {
     let cancelled = false;
-    getGPUColormapEngine().then(engine => {
-      if (cancelled || !engine) return;
+    createGPUColormapEngine().then(engine => {
+      if (!engine) return;
+      if (cancelled) { engine.destroy(); return; }
       gpuCmapRef.current = engine;
       gpuCmapReadyRef.current = true;
-    }).catch(error => {
-      if (!cancelled) setWebgpuRuntimeStatus(error instanceof Error ? error.message : String(error));
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      gpuCmapRef.current?.destroy();
+      gpuCmapRef.current = null;
+      gpuCmapReadyRef.current = false;
+      gpuSlotDataRef.current = { 0: null, 1: null, 2: null };
+    };
   }, []);
 
   /* --- Init sliders from auto --- */
@@ -2320,10 +2307,9 @@ function Explore() {
     tick();  // fire once immediately so user sees motion without a delay
     const interval = window.setInterval(tick, Math.max(33, 1000 / playFps));
     return () => window.clearInterval(interval);
-    // sendDrag, setRotationDeg, and the slider setters are stable callbacks;
-    // c10Min etc. come from traits that only change at init, so their
-    // dependency is safe to include implicitly via the closure.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // sendDrag, setRotationDeg and the slider setters are stable callbacks, and
+    // c10Min etc. come from traits that only change at init, so only the play
+    // state restarts the sweep timer.
   }, [playing, playFps, sweepParam]);
 
   /* --- Process result from Python --- */
@@ -2777,7 +2763,7 @@ function Explore() {
 
   const capturePinLayout = React.useCallback(() => {
     const rects = new Map<number, DOMRect>();
-    document.querySelectorAll<HTMLElement>("[data-showptycho-pin-id]").forEach(element => {
+    rootRef.current!.querySelectorAll<HTMLElement>("[data-showptycho-pin-id]").forEach(element => {
       const id = Number(element.getAttribute("data-showptycho-pin-id"));
       if (Number.isFinite(id)) rects.set(id, element.getBoundingClientRect());
     });
@@ -2789,7 +2775,7 @@ function Explore() {
     if (!before) return;
     pinLayoutBeforeRef.current = null;
     window.requestAnimationFrame(() => {
-      document.querySelectorAll<HTMLElement>("[data-showptycho-pin-id]").forEach(element => {
+      rootRef.current?.querySelectorAll<HTMLElement>("[data-showptycho-pin-id]").forEach(element => {
         const id = Number(element.getAttribute("data-showptycho-pin-id"));
         const previous = before.get(id);
         if (!previous && id === newPinId) {
@@ -2801,7 +2787,6 @@ function Explore() {
             ],
             { duration: 320, easing: "cubic-bezier(0.2, 0, 0, 1)" },
           );
-          document.documentElement.setAttribute("data-showptycho-last-pin-animation", `add:${id}`);
           return;
         }
         if (!previous) return;
@@ -2816,7 +2801,6 @@ function Explore() {
           ],
           { duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" },
         );
-        document.documentElement.setAttribute("data-showptycho-last-pin-animation", `move:${id}`);
       });
     });
   }, [newPinId, pinned]);
@@ -2971,17 +2955,9 @@ function Explore() {
         new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" }),
         manifestName,
       );
-      const message = `Exported ${exported} PNG + JSON`;
-      setExportStatus(message);
-      document.documentElement.setAttribute("data-showptycho-last-export", JSON.stringify({
-        count: exported,
-        manifest: manifestName,
-        colormap: cmapRef.current,
-      }));
+      setExportStatus(`Exported ${exported} PNG + JSON`);
     } catch (err) {
-      const message = `Export failed ${err instanceof Error ? err.message : String(err)}`;
-      setExportStatus(message);
-      document.documentElement.setAttribute("data-showptycho-last-export", JSON.stringify({ error: message }));
+      setExportStatus(`Export failed ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [pinned]);
 
@@ -3008,7 +2984,6 @@ function Explore() {
 
   const beginPinDrag = React.useCallback((id: number, clientX: number, clientY: number) => {
     pinPointerDragRef.current = { id, x: clientX, y: clientY, active: false };
-    draggedPinRef.current = id;
   }, []);
 
   const updatePinDrag = React.useCallback((id: number, clientX: number, clientY: number) => {
@@ -3030,7 +3005,6 @@ function Explore() {
     const overId = pinIdFromPoint(clientX, clientY);
     if (drag.active && overId != null) reorderPinned(drag.id, overId);
     pinPointerDragRef.current = null;
-    draggedPinRef.current = null;
     setDraggingPin(null);
     setDragOverPin(null);
     if (drag.active) window.setTimeout(() => { didDragPinRef.current = false; }, 0);
@@ -3038,28 +3012,10 @@ function Explore() {
 
   const cancelPinDrag = React.useCallback(() => {
     pinPointerDragRef.current = null;
-    draggedPinRef.current = null;
     setDraggingPin(null);
     setDragOverPin(null);
     window.setTimeout(() => { didDragPinRef.current = false; }, 0);
   }, []);
-
-  React.useEffect(() => {
-    const handleMouseMove = (event: MouseEvent) => {
-      const drag = pinPointerDragRef.current;
-      if (drag) updatePinDrag(drag.id, event.clientX, event.clientY);
-    };
-    const handleMouseUp = (event: MouseEvent) => {
-      const drag = pinPointerDragRef.current;
-      if (drag) finishPinDrag(drag.id, event.clientX, event.clientY);
-    };
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [finishPinDrag, updatePinDrag]);
 
   const doUnpin = React.useCallback((id: number) => {
     capturePinLayout();
@@ -3068,18 +3024,13 @@ function Explore() {
     setPinJson(JSON.stringify({ action: "unpin", id }));
   }, [capturePinLayout, setPinJson]);
 
-  // Toggle star on a pin; Python persists the new state to disk.
+  // Toggle star on a pin; Python persists the new state to disk. The new state comes from the
+  // rendered pins, not from inside a setPinned updater, which React may run later than this call.
   const doToggleStar = React.useCallback((id: number) => {
-    let nextStarred = false;
-    setPinned(prev => prev.map(pin => {
-      if (pin.id !== id) return pin;
-      nextStarred = !pin.starred;
-      return { ...pin, starred: nextStarred };
-    }));
-    // The map() runs synchronously in the setState callback, so the updated
-    // nextStarred flag is correct when we fire the trait below.
-    setPinJson(JSON.stringify({ action: nextStarred ? "star" : "unstar", id }));
-  }, [setPinJson]);
+    const starred = !pinned.find(entry => entry.id === id)?.starred;
+    setPinned(prev => prev.map(entry => entry.id === id ? { ...entry, starred } : entry));
+    setPinJson(JSON.stringify({ action: starred ? "star" : "unstar", id }));
+  }, [pinned, setPinJson]);
 
   const doViewPin = React.useCallback((entry: PinnedEntry) => {
     setViewPin(entry.id);
@@ -3089,70 +3040,47 @@ function Explore() {
     renderAll(entry.phaseData, entry.w, entry.h);
   }, [renderAll]);
 
-  /* --- Keyboard: window-level so shortcuts work regardless of focus --- */
-  React.useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      if ((e.target as HTMLElement).closest?.(".MuiSlider-root")) return;
+  /* --- Keyboard: shortcuts act only while this widget has focus --- */
+  // Scoped to the root (as in Show2D/Show3D) so typing in notebook cells, CodeMirror
+  // editors and other widgets is never intercepted.
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (shouldIgnoreWidgetShortcut(e.target, e.key)) return;
+    let handled = true;
+    if (e.key === "r" || e.key === "R") resetZoom();
+    // pins, sweeps and trials belong to an SSB session
+    else if (!tuning) handled = false;
+    // P pins the current snapshot (the oldest is evicted once MAX_PINS is hit)
+    else if (e.key === "p" || e.key === "P") doPin();
+    else if (e.key === " ") setPlaying(wasPlaying => !wasPlaying);
+    else if (e.key === "Escape") { setViewPin(null); setActiveTrialRank(null); }
+    // S stars or unstars the viewed pin (Python persists it to disk)
+    else if ((e.key === "s" || e.key === "S") && viewPin != null) doToggleStar(viewPin);
+    else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && (trials.length > 0 || pinned.length > 0)) {
+      // arrows step through whichever browser was touched last: clicking a trial tile sets
+      // activeTrialRank, clicking a pin sets viewPin, and each clears the other
+      const step = e.key === "ArrowRight" ? 1 : -1;
+      if (activeTrialRank != null && trials.length > 0) {
+        const trialIndex = trials.findIndex(trial => trial.rank === activeTrialRank);
+        doViewTrial(trials[trialIndex < 0 ? (step > 0 ? 0 : trials.length - 1) : (trialIndex + step + trials.length) % trials.length]);
+        setTrialsExpanded(true);  // so the selected tile is visible
+      } else if (pinned.length > 0) {
+        const pinIndex = viewPin ? pinned.findIndex(pin => pin.id === viewPin) : -1;
+        doViewPin(pinned[pinIndex < 0 ? (step > 0 ? 0 : pinned.length - 1) : (pinIndex + step + pinned.length) % pinned.length]);
+      } else {
+        doViewTrial(trials[0]);
+        setTrialsExpanded(true);
+      }
+    } else handled = false;
+    if (handled) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
 
-      // R → reset zoom (works without pins)
-      if (e.key === "r" || e.key === "R") { resetZoom(); return; }
-      // pins, sweeps and trials belong to an SSB session
-      if (!tuningRef.current) return;
-      // P → pin current snapshot (oldest is evicted once MAX_PINS hit)
-      if (e.key === "p" || e.key === "P") { e.preventDefault(); doPin(); return; }
-      // Space → toggle play/pause of the aberration sweep
-      if (e.key === " " || e.code === "Space") { e.preventDefault(); setPlaying(wasPlaying => !wasPlaying); return; }
-
-      if (e.key === "Escape") {
-        setViewPin(null); setActiveTrialRank(null); return;
-      }
-      // S → star/unstar the currently-viewed pin (Python persists to disk)
-      if ((e.key === "s" || e.key === "S") && viewPin != null) {
-        e.preventDefault(); doToggleStar(viewPin); return;
-      }
-      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-        // Dispatch based on which browser was most recently touched.  Clicking
-        // a trial tile sets activeTrialRank; clicking a pin sets viewPin; they
-        // clear each other so only one is "active" at a time.
-        const hasActiveTrial = activeTrialRank != null && trials.length > 0;
-        const hasActivePin = pinned.length > 0;
-        if (!hasActiveTrial && !hasActivePin && trials.length === 0) return;
-        // Capture-phase + stopPropagation so JupyterLab's notebook cell nav
-        // can't steal our arrow keys.  Only do this when we're actually going
-        // to act on the arrow, otherwise leave arrows free for normal use.
-        e.preventDefault();
-        e.stopPropagation();
-        if (hasActiveTrial) {
-          const trialIndex = trials.findIndex(trial => trial.rank === activeTrialRank);
-          const next = e.key === "ArrowRight"
-            ? (trialIndex < 0 ? 0 : (trialIndex >= trials.length - 1 ? 0 : trialIndex + 1))
-            : (trialIndex < 0 ? trials.length - 1 : (trialIndex <= 0 ? trials.length - 1 : trialIndex - 1));
-          doViewTrial(trials[next]);
-          setTrialsExpanded(true);  // so the selected tile is visible
-          return;
-        }
-        if (hasActivePin) {
-          const pinIndex = viewPin ? pinned.findIndex(pin => pin.id === viewPin) : -1;
-          const next = e.key === "ArrowRight"
-            ? (pinIndex < 0 ? 0 : (pinIndex >= pinned.length - 1 ? 0 : pinIndex + 1))
-            : (pinIndex < 0 ? pinned.length - 1 : (pinIndex <= 0 ? pinned.length - 1 : pinIndex - 1));
-          doViewPin(pinned[next]);
-          return;
-        }
-        // Neither collection touched but trials exist → enter trials list at #1.
-        if (trials.length > 0) {
-          doViewTrial(trials[0]);
-          setTrialsExpanded(true);
-        }
-      }
-    };
-    // Capture phase so JupyterLab's notebook-level cell-navigation handler
-    // (also bound to keydown) doesn't consume the event before we see it.
-    window.addEventListener("keydown", handleKey, { capture: true });
-    return () => window.removeEventListener("keydown", handleKey, { capture: true });
-  }, [pinned, viewPin, doViewPin, doPin, doToggleStar, trials, activeTrialRank, doViewTrial]);
+  const handleRootMouseDownCapture = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (shouldIgnoreWidgetShortcut(e.target)) return;
+    rootRef.current?.focus({ preventScroll: true });
+  };
 
   /* --- Resize handle --- */
   React.useEffect(() => {
@@ -3226,21 +3154,19 @@ function Explore() {
       alignItems: "center",
     },
   };
-  const themedMenuProps = {
-    PaperProps: {
-      sx: {
-        bgcolor: tc.bgAlt,
-        color: tc.text,
-        border: `1px solid ${tc.border}`,
-        boxShadow: `0 8px 24px ${tc.shadow}`,
-        "& .MuiMenuItem-root": {
-          fontFamily: "monospace",
-          fontSize: 11,
-          minHeight: 28,
-        },
+  const themedMenuPaper = {
+    sx: {
+      bgcolor: tc.bgAlt,
+      color: tc.text,
+      border: `1px solid ${tc.border}`,
+      "& .MuiMenuItem-root": {
+        fontFamily: "monospace",
+        fontSize: 11,
+        minHeight: 28,
       },
     },
   };
+  const themedMenuProps = { slotProps: { paper: themedMenuPaper } };
   const rangeInputSx = {
     width: 66,
     height: 22,
@@ -3307,7 +3233,14 @@ function Explore() {
   );
 
   return (
-    <Box ref={rootRef} sx={{ ...container.root, bgcolor: tc.bg, color: tc.text }}>
+    <Box
+      ref={rootRef}
+      className="showptycho-root"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      onMouseDownCapture={handleRootMouseDownCapture}
+      sx={{ ...container.root, bgcolor: tc.bg, color: tc.text, outline: "none" }}
+    >
       {/* ---- Top toolbar: FFT toggle + image dims + Reset view (matching Show2D) ---- */}
       <Stack
         direction="row"
@@ -3413,8 +3346,7 @@ function Explore() {
           anchorEl={toolbarMoreAnchor}
           open={Boolean(toolbarMoreAnchor)}
           onClose={() => setToolbarMoreAnchor(null)}
-          MenuListProps={{ "aria-label": "More tools" }}
-          {...themedMenuProps}
+          slotProps={{ paper: themedMenuPaper, list: { "aria-label": "More tools" } }}
         >
           {cropRefitAvailable && <>
             <Box sx={{ px: 1.5, pt: 0.75, pb: 0.35, minWidth: 260 }}>
@@ -4017,8 +3949,7 @@ function Explore() {
             anchorEl={moreMenuAnchor}
             open={Boolean(moreMenuAnchor)}
             onClose={() => setMoreMenuAnchor(null)}
-            MenuListProps={{ "aria-label": "More sweep controls" }}
-            {...themedMenuProps}
+            slotProps={{ paper: themedMenuPaper, list: { "aria-label": "More sweep controls" } }}
           >
             <Box
               onClick={(event) => event.stopPropagation()}
@@ -4132,7 +4063,7 @@ function Explore() {
             }}
           />
           {calibrationPath && (
-            <Tooltip title={`Last saved at ${calibrationSavedAt || "—"}`} placement="top" arrow>
+            <Tooltip title={`Last saved at ${calibrationSavedAt || "-"}`} placement="top" arrow>
               <Typography sx={{
                 ...typography.value, color: STATUS_GOOD,
                 maxWidth: 260, overflowWrap: "anywhere",
@@ -4187,9 +4118,9 @@ function Explore() {
               </Box>
               <Box sx={{ flex: 1 }} />
               {trials.length > 0 && (
-                <Tooltip title={`Optuna explored ${trials.length} trials. Nelder-Mead then refined the best one. Auto loss = ${autoLoss?.toFixed(8) ?? '—'}; best Optuna loss = ${formatNumber(trials[0].loss, 8)}.`} placement="top" arrow>
+                <Tooltip title={`Optuna explored ${trials.length} trials. Nelder-Mead then refined the best one. Auto loss = ${autoLoss?.toFixed(8) ?? '-'}; best Optuna loss = ${formatNumber(trials[0].loss, 8)}.`} placement="top" arrow>
                   <Typography sx={{ ...typography.value, color: tc.textMuted, cursor: "help" }}>
-                    Nelder-Mead {autoLoss?.toFixed(8) ?? '—'}  ·  best Optuna {formatNumber(trials[0].loss, 8)}
+                    Nelder-Mead {autoLoss?.toFixed(8) ?? '-'}  ·  best Optuna {formatNumber(trials[0].loss, 8)}
                   </Typography>
                 </Tooltip>
               )}
@@ -4224,7 +4155,7 @@ function Explore() {
                           Nelder-Mead
                         </Typography>
                         <Typography sx={{ fontSize: 11, color: STATUS_GOOD, fontFamily: "monospace", fontWeight: "bold" }}>
-                          {autoLoss?.toFixed(8) ?? '—'}
+                          {autoLoss?.toFixed(8) ?? '-'}
                         </Typography>
                       </Stack>
                       <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: tc.textMuted, whiteSpace: "nowrap" }}>
@@ -4274,7 +4205,7 @@ function Explore() {
         {/* Pin viewing indicator */}
         {viewPin && (
           <Typography sx={{ ...typography.labelSmall, color: tc.accent, textAlign: "center" }}>
-            Viewing pinned — drag slider or Esc to return
+            Viewing pinned: drag a slider or press Esc to return
           </Typography>
         )}
 
@@ -4341,7 +4272,7 @@ function Explore() {
                     onPointerDown={(e) => {
                       if (e.button !== 0) return;
                       beginPinDrag(pin.id, e.clientX, e.clientY);
-                      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+                      e.currentTarget.setPointerCapture(e.pointerId);
                     }}
                     onPointerMove={(e) => {
                       if (updatePinDrag(pin.id, e.clientX, e.clientY)) e.preventDefault();
@@ -4349,48 +4280,7 @@ function Explore() {
                     onPointerUp={(e) => {
                       finishPinDrag(pin.id, e.clientX, e.clientY);
                     }}
-                    onPointerCancel={() => {
-                      cancelPinDrag();
-                    }}
-                    onMouseDown={(e) => {
-                      if (e.button !== 0) return;
-                      beginPinDrag(pin.id, e.clientX, e.clientY);
-                    }}
-                    onMouseMove={(e) => {
-                      if (updatePinDrag(pin.id, e.clientX, e.clientY)) e.preventDefault();
-                    }}
-                    onMouseUp={(e) => {
-                      finishPinDrag(pin.id, e.clientX, e.clientY);
-                    }}
-                    onMouseLeave={(e) => {
-                      if (pinPointerDragRef.current?.active) {
-                        updatePinDrag(pin.id, e.clientX, e.clientY);
-                      }
-                    }}
-                    onDragStart={(e) => {
-                      draggedPinRef.current = pin.id;
-                      didDragPinRef.current = true;
-                      setDragOverPin(pin.id);
-                      e.dataTransfer.effectAllowed = "move";
-                      e.dataTransfer.setData("text/plain", String(pin.id));
-                    }}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      e.dataTransfer.dropEffect = "move";
-                      setDragOverPin(pin.id);
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      const fromId = Number(e.dataTransfer.getData("text/plain") || draggedPinRef.current);
-                      if (Number.isFinite(fromId)) reorderPinned(fromId, pin.id);
-                      draggedPinRef.current = null;
-                      setDragOverPin(null);
-                    }}
-                    onDragEnd={() => {
-                      draggedPinRef.current = null;
-                      setDragOverPin(null);
-                      window.setTimeout(() => { didDragPinRef.current = false; }, 0);
-                    }}
+                    onPointerCancel={cancelPinDrag}
                     sx={{
                     position: "relative", cursor: "grab", flexShrink: 0,
                     border: viewPin === pin.id
@@ -4398,9 +4288,8 @@ function Explore() {
                       : pin.starred ? `2px solid ${STATUS_GOOD}` : "2px solid transparent",
                     outline: dragOverPin === pin.id ? `2px solid ${tc.accent}` : "none",
                     outlineOffset: 1,
-                    boxShadow: isDraggingPin ? `0 6px 16px ${tc.shadow}` : "none",
                     transform: isDraggingPin ? "scale(1.045)" : "scale(1)",
-                    transition: "border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease, outline-color 120ms ease",
+                    transition: "border-color 120ms ease, transform 120ms ease, outline-color 120ms ease",
                     animation: isNewPin ? "showptycho-pin-add 320ms cubic-bezier(0.2, 0, 0, 1)" : "none",
                     overflow: "hidden",
                     userSelect: "none",

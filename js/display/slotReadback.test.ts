@@ -63,11 +63,9 @@ describe("colormap readback of a slot with spare capacity", () => {
     const rgba = await engine.applySingleWithLut(0, 0, 1, "gray", COLORMAPS.gray);
     expect(rgba).toHaveLength(16 * 8 * 4);
     expect(rgba!.every(value => value === 7)).toBe(true);
-    const putImageData = vi.fn();
-    const imageData = { data: new Uint8ClampedArray(16 * 8 * 4) } as ImageData;
-    const offscreen = { getContext: () => ({ putImageData }) } as unknown as HTMLCanvasElement;
-    expect(await engine.renderSlots([0], [{ vmin: 0, vmax: 1 }], [offscreen], [imageData])).toBe(1);
-    expect(imageData.data.every(value => value === 7)).toBe(true);
-    expect(putImageData).toHaveBeenCalledWith(imageData, 0, 0);
+  });
+  it("refuses dimensions that do not match the pixel count", () => {
+    const engine = new GPUColormapEngine(mockDevice());
+    expect(() => engine.uploadData(0, new Float32Array(12), 4, 2)).toThrow("display dimensions 4x2 do not match 12 pixels");
   });
 });

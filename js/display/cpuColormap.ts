@@ -8,13 +8,14 @@
 // pipeline repaint the other's panels in its colormap.
 
 import { createGPUColormapEngine, displayLog, displayNormalize } from "./colormaps";
+import { colormapPixels, packedLut } from "./displayMath";
 import { type RenderPath } from "./device";
 
 /** The slot calls Show2D makes; GPUColormapEngine and CPUColormapEngine provide them. */
 export interface DisplayColormapEngine {
   readonly path: RenderPath;
   readonly slotCount: number;
-  uploadData(idx: number, data: Float32Array, width?: number, height?: number): void;
+  uploadData(idx: number, data: Float32Array, width: number, height: number): void;
   uploadUint8Data(idx: number, data: Uint8Array | Uint8ClampedArray, width: number, height: number, rgbaCapacityHint: number): void;
   computeRangeBatch(indices: number[]): Promise<{ min: number; max: number }[]>;
   computeHistogramBatch(indices: number[], ranges: { min: number; max: number }[], logScale?: boolean): Promise<number[][]>;
@@ -65,56 +66,6 @@ export function createCPUColormapEngine(): DisplayColormapEngine {
 }
 
 /**
- * Pack a 256-entry RGB LUT as one RGBA word per entry, so a pixel is one 32-bit
- * store. The words are built from bytes, so they land in the right byte order
- * on any platform.
- */
-function packLut(lut: Uint8Array): Uint32Array {
-  const bytes = new Uint8Array(256 * 4);
-  for (let entry = 0; entry < 256; entry++) {
-    bytes[entry * 4] = lut[entry * 3];
-    bytes[entry * 4 + 1] = lut[entry * 3 + 1];
-    bytes[entry * 4 + 2] = lut[entry * 3 + 2];
-    bytes[entry * 4 + 3] = 255;
-  }
-  return new Uint32Array(bytes.buffer);
-}
-
-/**
- * Colormap `data` into `target`: target pixel k shows source pixel
- * sourceIndex[k] (identity when sourceIndex is null; a negative index stays
- * transparent). LUT entry = min(trunc(normalize(v) * 255), 255) in float32,
- * the WGSL colormap pass. The common window (finite, non-empty float32 span)
- * runs displayNormalize's own arithmetic inline: this loop touches every
- * displayed pixel on every contrast tick.
- */
-function colormapPixels(
-  target: Uint32Array,
-  data: Float32Array | Uint8Array,
-  sourceIndex: Int32Array | null,
-  range: { vmin: number; vmax: number },
-  logScale: boolean,
-  packedLut: Uint32Array,
-): void {
-  const f32 = Math.fround;
-  const low = f32(range.vmin);
-  const high = f32(range.vmax);
-  const span = f32(high - low);
-  const plainWindow = high > low && Number.isFinite(span);
-  for (let k = 0; k < target.length; k++) {
-    const index = sourceIndex ? sourceIndex[k] : k;
-    if (index < 0) { target[k] = 0; continue; }
-    const raw = data[index];
-    const value = logScale ? displayLog(raw) : raw;
-    let normalized: number;
-    if (!plainWindow) normalized = displayNormalize(value, low, high);
-    else if (Number.isFinite(value)) normalized = Math.min(1, Math.max(0, f32(f32(value - low) / span)));
-    else normalized = value === Infinity ? 1 : 0;
-    target[k] = packedLut[Math.min(Math.trunc(f32(normalized * 255)), 255)];
-  }
-}
-
-/**
  * Source pixel of every output pixel of an outW x outH nearest resample, the
  * WGSL scaled-colormap sampling: column min(trunc((outCol + 0.5) * srcW / outW), srcW - 1),
  * rows alike, each step rounded to float32. Null for an equal-size render (the identity).
@@ -146,7 +97,7 @@ export function colormapSampledPixels(
   lut: Uint8Array,
   target: ImageData,
 ): void {
-  colormapPixels(new Uint32Array(target.data.buffer), data, sourceIndex, range, logScale, packLut(lut));
+  colormapPixels(new Uint32Array(target.data.buffer), data, sourceIndex, range, logScale, packedLut(lut));
 }
 
 class CPUColormapEngine implements DisplayColormapEngine {
@@ -155,18 +106,16 @@ class CPUColormapEngine implements DisplayColormapEngine {
   // One output image per size, reused: createImageBitmap copies the pixels
   // when it is called, and a 4096^2 panel would otherwise allocate 64 MB per paint.
   private outputs = new Map<string, ImageData>();
-  private packedLuts = new Map<Uint8Array, Uint32Array>();
 
   get slotCount(): number { return this.slots.filter(slot => slot).length; }
 
-  uploadData(idx: number, data: Float32Array, width?: number, height?: number): void {
-    // Same dimension repair as GPUColormapEngine.uploadData (stale mount-time dims).
-    const validDims = width && height && width > 1 && height > 1 && width * height === data.length;
-    const slotWidth = validDims ? width : Math.round(Math.sqrt(data.length));
-    const slotHeight = validDims ? height : Math.round(data.length / slotWidth);
+  uploadData(idx: number, data: Float32Array, width: number, height: number): void {
+    if (width < 1 || height < 1 || width * height !== data.length) {
+      throw new Error(`display dimensions ${width}x${height} do not match ${data.length} pixels`);
+    }
     while (this.slots.length <= idx) this.slots.push(null);
     // Copy, as the GPU upload does: later edits to the caller's array must not repaint.
-    this.slots[idx] = { data: Float32Array.from(data), width: slotWidth, height: slotHeight, finite: false };
+    this.slots[idx] = { data: Float32Array.from(data), width, height, finite: false };
   }
 
   uploadUint8Data(idx: number, data: Uint8Array | Uint8ClampedArray, width: number, height: number): void {
@@ -239,16 +188,6 @@ class CPUColormapEngine implements DisplayColormapEngine {
   destroy(): void {
     this.slots = [];
     this.outputs.clear();
-    this.packedLuts.clear();
-  }
-
-  private packedLut(lut: Uint8Array): Uint32Array {
-    let packed = this.packedLuts.get(lut);
-    if (!packed) {
-      packed = packLut(lut);
-      this.packedLuts.set(lut, packed);
-    }
-    return packed;
   }
 
   /** Colormap one slot into an outW x outH bitmap (nearestSourceIndex sampling). */
@@ -269,7 +208,7 @@ class CPUColormapEngine implements DisplayColormapEngine {
       this.outputs.set(key, image);
     }
     const sourceIndex = nearestSourceIndex(slot.width, slot.height, outW, outH);
-    colormapPixels(new Uint32Array(image.data.buffer), slot.data, sourceIndex, range, logScale, this.packedLut(lut));
+    colormapPixels(new Uint32Array(image.data.buffer), slot.data, sourceIndex, range, logScale, packedLut(lut));
     return createImageBitmap(image);
   }
 }

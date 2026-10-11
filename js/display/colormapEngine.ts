@@ -3,8 +3,9 @@
 // live in their own modules; the engine is the one object widgets call.
 import { DirectRenderer } from "./directRender";
 import { AVERAGE_SHADER, BLIT_SHADER, COLORMAP_SHADER, RGB_PASSTHROUGH_SHADER, SCALED_COLORMAP_SHADER, SCALED_UINT8_COLORMAP_SHADER } from "./displayShaders";
-import { getHardwareGPUDevice, onGPULost } from "./device";
+import { getHardwareGPUDevice } from "./device";
 import { GPURanges } from "./gpuRange";
+import { computePipeline, renderPipeline } from "./pipelines";
 import { VolumeSlices } from "./volumeSlice";
 
 export type GPUBufferOwnership = "owned" | "borrowed";
@@ -21,7 +22,6 @@ export type GPUSlot = {
   // Populated by computeRange* on GPU and consumed directly by the range-aware
   // colormap shader (no CPU readback between passes).
   rangeBuffer: GPUBuffer | null;
-  rangePartialsBuffer: GPUBuffer | null;
   liveRange?: {
     groups: number;
     partials: GPUBuffer;
@@ -101,7 +101,6 @@ export class GPUColormapEngine {
     slot.blitParamsBuffer.destroy();
     slot.histBinsBuffer.destroy();
     slot.rangeBuffer?.destroy();
-    slot.rangePartialsBuffer?.destroy();
     slot.liveRange?.partials.destroy();
     slot.liveRange?.parameters.destroy();
     for (const buf of slot.directRegionParamsBuffers) buf?.destroy();
@@ -148,39 +147,19 @@ export class GPUColormapEngine {
   }
 
   private ensurePipeline(): void {
-    if (this.pipeline) return;
-    const module = this.device.createShaderModule({ code: COLORMAP_SHADER });
-    this.pipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
-    });
+    this.pipeline ??= computePipeline(this.device, COLORMAP_SHADER);
   }
 
   ensureScaledPipeline(): void {
-    if (this.scaledPipeline) return;
-    const module = this.device.createShaderModule({ code: SCALED_COLORMAP_SHADER });
-    this.scaledPipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
-    });
+    this.scaledPipeline ??= computePipeline(this.device, SCALED_COLORMAP_SHADER);
   }
 
   ensureScaledUint8Pipeline(): void {
-    if (this.scaledUint8Pipeline) return;
-    const module = this.device.createShaderModule({ code: SCALED_UINT8_COLORMAP_SHADER });
-    this.scaledUint8Pipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
-    });
+    this.scaledUint8Pipeline ??= computePipeline(this.device, SCALED_UINT8_COLORMAP_SHADER);
   }
 
   private ensureAveragePipeline(): void {
-    if (this.avgPipeline) return;
-    const module = this.device.createShaderModule({ code: AVERAGE_SHADER });
-    this.avgPipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
-    });
+    this.avgPipeline ??= computePipeline(this.device, AVERAGE_SHADER);
   }
 
   /**
@@ -290,7 +269,6 @@ export class GPUColormapEngine {
       blitParamsBuffer: this.device.createBuffer({ size: 8, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
       histBinsBuffer: this.device.createBuffer({ size: 256 * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC }),
       rangeBuffer: null,
-      rangePartialsBuffer: null,
       directGridBindGroup: null,
       directSlotBindGroup: null,
       directRegionParamsBuffers: [],
@@ -305,19 +283,18 @@ export class GPUColormapEngine {
     };
   }
 
-  /** Upload float32 image data for slot `idx`. Only call when data changes. */
-  uploadData(idx: number, data: Float32Array, width?: number, height?: number, rgbaCapacityHint?: number, directOnly: boolean = false): void {
+  /** Upload a width x height float32 image for slot `idx`. Only call when data changes. */
+  uploadData(idx: number, data: Float32Array, width: number, height: number, rgbaCapacityHint?: number, directOnly: boolean = false): void {
+    // a guessed near-square shape would paint a non-square image as noise, so a mismatch is refused
+    if (width < 1 || height < 1 || width * height !== data.length) {
+      throw new Error(`display dimensions ${width}x${height} do not match ${data.length} pixels`);
+    }
     this.ensurePipeline();
     while (this.slots.length <= idx) this.slots.push(null as never);
-    // Stale mount-time dims (e.g. width=1 from a closure) do not match the data
-    // length; derive near-square dims from the length instead.
-    const validDims = width && height && width > 1 && height > 1 && width * height === data.length;
-    const slotWidth = validDims ? width : Math.round(Math.sqrt(data.length));
-    const slotHeight = validDims ? height : Math.round(data.length / slotWidth);
     const byteSize = data.byteLength;
     const rgbaCapacity = directOnly ? 1 : Math.max(1, Math.round(rgbaCapacityHint ?? data.length));
     const existing = this.slots[idx];
-    if (existing && existing.dataOwnership === "owned" && existing.dataKind === "f32" && existing.directOnly === directOnly && existing.count === data.length && existing.width === slotWidth && existing.height === slotHeight && existing.rgbaCapacity >= rgbaCapacity) {
+    if (existing && existing.dataOwnership === "owned" && existing.dataKind === "f32" && existing.directOnly === directOnly && existing.count === data.length && existing.width === width && existing.height === height && existing.rgbaCapacity >= rgbaCapacity) {
       this.device.queue.writeBuffer(existing.dataBuffer, 0, data.buffer as ArrayBuffer, data.byteOffset, data.byteLength);
       return;
     }
@@ -329,7 +306,7 @@ export class GPUColormapEngine {
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
     this.device.queue.writeBuffer(dataBuffer, 0, data.buffer as ArrayBuffer, data.byteOffset, data.byteLength);
-    this.slots[idx] = this.createSlot(dataBuffer, "owned", "f32", data.length, slotWidth, slotHeight, rgbaCapacity, rgbaCapacity * 4, directOnly);
+    this.slots[idx] = this.createSlot(dataBuffer, "owned", "f32", data.length, width, height, rgbaCapacity, rgbaCapacity * 4, directOnly);
   }
 
   /** Upload one native uint8 image without expanding it to float32. */
@@ -469,59 +446,8 @@ export class GPUColormapEngine {
     return rgba;
   }
 
-  /**
-   * GPU colormap → offscreen canvas in one pass (zero intermediate allocation).
-   * Writes from GPU mapped memory directly into ImageData, then putImageData,
-   * so no intermediate RGBA array is allocated per frame.
-   */
-  async renderSlots(
-    indices: number[],
-    ranges: { vmin: number; vmax: number }[],
-    offscreens: (HTMLCanvasElement | null)[],
-    imgDatas: (ImageData | null)[],
-    logScale: boolean = false,
-  ): Promise<number> {
-    if (!this.pipeline || !this.lutBuffer || indices.length === 0) return 0;
-
-    const activeSlots: { k: number; slot: GPUSlot }[] = [];
-    const encoder = this.device.createCommandEncoder();
-    for (let k = 0; k < indices.length; k++) {
-      const slot = this.slots[indices[k]];
-      if (!slot || slot.directOnly || slot.rgbaCapacity < slot.count || !offscreens[k] || !imgDatas[k]) continue;
-      const range = ranges[k] || { vmin: 0, vmax: 1 };
-      this.encodeColormapPass(encoder, slot, range.vmin, range.vmax, logScale, this.lutBuffer);
-      encoder.copyBufferToBuffer(slot.rgbaBuffer, 0, slot.readBuffer, 0, slot.count * 4);
-      activeSlots.push({ k, slot });
-    }
-    this.device.queue.submit([encoder.finish()]);
-    await Promise.all(activeSlots.map(active => active.slot.readBuffer.mapAsync(GPUMapMode.READ)));
-
-    // Copy straight from the mapped range into each ImageData, then onto its
-    // canvas; a slot's read buffer can hold more pixels than its image.
-    let rendered = 0;
-    for (const active of activeSlots) {
-      const mapped = active.slot.readBuffer.getMappedRange(0, active.slot.count * 4);
-      const imgData = imgDatas[active.k]!;
-      imgData.data.set(new Uint8ClampedArray(mapped));
-      active.slot.readBuffer.unmap();
-      offscreens[active.k]!.getContext("2d")!.putImageData(imgData, 0, 0);
-      rendered++;
-    }
-    return rendered;
-  }
-
   ensureBlitPipeline(format: GPUTextureFormat): void {
-    if (this.blitPipeline) return;
-    const module = this.device.createShaderModule({ code: BLIT_SHADER });
-    this.blitPipeline = this.device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs" },
-      fragment: {
-        module, entryPoint: "fs",
-        targets: [{ format }],
-      },
-      primitive: { topology: "triangle-list" },
-    });
+    this.blitPipeline ??= renderPipeline(this.device, BLIT_SHADER, format);
   }
 
   /**
@@ -581,12 +507,7 @@ export class GPUColormapEngine {
   }
 
   private ensureRgbPipeline(): void {
-    if (this.rgbPipeline) return;
-    const module = this.device.createShaderModule({ code: RGB_PASSTHROUGH_SHADER });
-    this.rgbPipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
-    });
+    this.rgbPipeline ??= computePipeline(this.device, RGB_PASSTHROUGH_SHADER);
   }
 
   /**
@@ -782,7 +703,6 @@ export class GPUColormapEngine {
 
   // GPU ranges and histograms (gpuRange.ts).
   computeRangeBatch(...args: Parameters<GPURanges["computeRangeBatch"]>) { return this.ranges.computeRangeBatch(...args); }
-  renderSlotsWithComputedGpuRangeAsync(...args: Parameters<GPURanges["renderSlotsWithComputedGpuRangeAsync"]>) { return this.ranges.renderSlotsWithComputedGpuRangeAsync(...args); }
   renderPerPanelGpuExplicit(...args: Parameters<GPURanges["renderPerPanelGpuExplicit"]>) { return this.ranges.renderPerPanelGpuExplicit(...args); }
   computeHistogramRegions(...args: Parameters<GPURanges["computeHistogramRegions"]>) { return this.ranges.computeHistogramRegions(...args); }
   computeHistogramBatch(...args: Parameters<GPURanges["computeHistogramBatch"]>) { return this.ranges.computeHistogramBatch(...args); }
@@ -809,16 +729,4 @@ export async function createGPUColormapEngine(): Promise<GPUColormapEngine | nul
     return null;
   }
   return new GPUColormapEngine(device);
-}
-
-let gpuColormapEngine: GPUColormapEngine | null = null;
-// An engine on a lost device can never paint again; the next caller rebuilds
-// one, or gets null and draws with the CPU path once WebGPU is off for the page.
-onGPULost(() => { gpuColormapEngine = null; });
-
-/** Get or create the singleton colormap engine, or null without hardware WebGPU. */
-export async function getGPUColormapEngine(): Promise<GPUColormapEngine | null> {
-  if (gpuColormapEngine) return gpuColormapEngine;
-  gpuColormapEngine = await createGPUColormapEngine();
-  return gpuColormapEngine;
 }

@@ -58,7 +58,7 @@ function ChooseLattice() {
   const [points, setPoints] = useModelState<Point[]>("points");
 
   // Decode the PNG payload once per change into a drawable bitmap.
-  const [image, setImage] = React.useState<ImageBitmap | HTMLImageElement | null>(null);
+  const [image, setImage] = React.useState<ImageBitmap | null>(null);
   React.useEffect(() => {
     const bytes = extractBytes(frameBytes);
     if (bytes.length === 0) {
@@ -66,15 +66,8 @@ function ChooseLattice() {
       return;
     }
     let cancelled = false;
-    const blob = new Blob([bytes as unknown as BlobPart], { type: "image/png" });
-    if (typeof createImageBitmap === "function") {
-      createImageBitmap(blob).then((bitmap) => { if (!cancelled) setImage(bitmap); });
-    } else {
-      const url = URL.createObjectURL(blob);
-      const imageElement = new Image();
-      imageElement.onload = () => { if (!cancelled) setImage(imageElement); URL.revokeObjectURL(url); };
-      imageElement.src = url;
-    }
+    createImageBitmap(new Blob([bytes as unknown as BlobPart], { type: "image/png" }))
+      .then((bitmap) => { if (!cancelled) setImage(bitmap); });
     return () => { cancelled = true; };
   }, [frameBytes]);
 
@@ -87,8 +80,6 @@ function ChooseLattice() {
   const displayScale = height > 0 && width > 0
     ? CANVAS_SIZE / Math.max(height, width)
     : 1;
-  const canvasW = CANVAS_SIZE;
-  const canvasH = CANVAS_SIZE;
 
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const uiRef = React.useRef<HTMLCanvasElement>(null);
@@ -105,20 +96,24 @@ function ChooseLattice() {
     return () => container.removeEventListener("wheel", prevent);
   }, []);
 
-  // Draw the base image with pan/zoom applied.
+  // Draw the base image with pan/zoom applied, on a backing store of device
+  // pixels so a HiDPI screen shows the image pixels sharp; all view math stays
+  // in CSS pixels. The ratio is read per draw: it changes with browser zoom.
   React.useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    canvas.width = canvasW;
-    canvas.height = canvasH;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(CANVAS_SIZE * dpr);
+    canvas.height = Math.round(CANVAS_SIZE * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = themeColors.bg;
-    ctx.fillRect(0, 0, canvasW, canvasH);
+    ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
     if (!image || !width || !height) return;
-    const cx = canvasW / 2;
-    const cy = canvasH / 2;
+    const cx = CANVAS_SIZE / 2;
+    const cy = CANVAS_SIZE / 2;
     const drawW = width * displayScale * zoom;
     const drawH = height * displayScale * zoom;
     const x = cx - drawW / 2 + panX;
@@ -132,61 +127,53 @@ function ChooseLattice() {
       const currentCtx = current?.getContext("2d");
       if (!current || !currentCtx) return;
       currentCtx.fillStyle = themeColors.bg;
-      currentCtx.fillRect(0, 0, canvasW, canvasH);
+      currentCtx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
       currentCtx.drawImage(image, x, y, drawW, drawH);
     });
     return () => window.cancelAnimationFrame(confirmFrame);
-  }, [image, width, height, displayScale, zoom, panX, panY, canvasW, canvasH, themeColors.bg]);
+  }, [image, width, height, displayScale, zoom, panX, panY, themeColors.bg]);
+
+  // A pointer position in the canvas's CSS pixels (the box may be scaled by a host stylesheet).
+  const pointerInCanvas = (e: { clientX: number; clientY: number }): [number, number] => {
+    const rect = canvasRef.current!.getBoundingClientRect();
+    return [(e.clientX - rect.left) * (CANVAS_SIZE / rect.width), (e.clientY - rect.top) * (CANVAS_SIZE / rect.height)];
+  };
 
   // Convert a mouse event to original-image (row, col) coordinates.
-  const screenToImage = React.useCallback((e: { clientX: number; clientY: number }): Point => {
-    const canvas = canvasRef.current;
-    if (!canvas) return [0, 0];
-    const rect = canvas.getBoundingClientRect();
-    const mouseCanvasX = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const mouseCanvasY = (e.clientY - rect.top) * (canvas.height / rect.height);
-    const cx = canvasW / 2;
-    const cy = canvasH / 2;
-    const col = (mouseCanvasX - cx - panX) / (displayScale * zoom) + width / 2;
-    const row = (mouseCanvasY - cy - panY) / (displayScale * zoom) + height / 2;
+  const screenToImage = (e: { clientX: number; clientY: number }): Point => {
+    const [mouseX, mouseY] = pointerInCanvas(e);
+    const col = (mouseX - CANVAS_SIZE / 2 - panX) / (displayScale * zoom) + width / 2;
+    const row = (mouseY - CANVAS_SIZE / 2 - panY) / (displayScale * zoom) + height / 2;
     return [row, col];
-  }, [canvasW, canvasH, panX, panY, displayScale, zoom, width, height]);
+  };
 
   const imageToScreen = React.useCallback((row: number, col: number): [number, number] => {
-    const cx = canvasW / 2;
-    const cy = canvasH / 2;
-    const x = cx + (col - width / 2) * displayScale * zoom + panX;
-    const y = cy + (row - height / 2) * displayScale * zoom + panY;
+    const x = CANVAS_SIZE / 2 + (col - width / 2) * displayScale * zoom + panX;
+    const y = CANVAS_SIZE / 2 + (row - height / 2) * displayScale * zoom + panY;
     return [x, y];
-  }, [canvasW, canvasH, panX, panY, displayScale, zoom, width, height]);
+  }, [panX, panY, displayScale, zoom, width, height]);
 
-  const hitTestPoint = React.useCallback((row: number, col: number): number => {
+  const hitTestPoint = (row: number, col: number): number => {
     const hitArea = HIT_PX / (displayScale * zoom);
-    const list = points || [];
-    for (let i = list.length - 1; i >= 0; i--) {
-      const [pointRow, pointCol] = list[i];
+    for (let i = points.length - 1; i >= 0; i--) {
+      const [pointRow, pointCol] = points[i];
       if (Math.hypot(row - pointRow, col - pointCol) <= hitArea) return i;
     }
     return -1;
-  }, [points, displayScale, zoom]);
+  };
 
   // Wheel: cursor-anchored zoom. Page-scroll prevention is the native
   // non-passive listener above (React's synthetic onWheel is passive, so
   // calling preventDefault directly here would only log a console warning).
   const handleWheel = (e: React.WheelEvent) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const mouseCanvasX = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const mouseCanvasY = (e.clientY - rect.top) * (canvas.height / rect.height);
-    const cx = canvasW / 2;
-    const cy = canvasH / 2;
-    const mouseImageX = (mouseCanvasX - cx - panX) / zoom + cx;
-    const mouseImageY = (mouseCanvasY - cy - panY) / zoom + cy;
+    const [mouseX, mouseY] = pointerInCanvas(e);
+    const center = CANVAS_SIZE / 2;
+    const mouseImageX = (mouseX - center - panX) / zoom + center;
+    const mouseImageY = (mouseY - center - panY) / zoom + center;
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
     const newZoom = clamp(zoom * zoomFactor, MIN_ZOOM, MAX_ZOOM);
-    setPanX(mouseCanvasX - (mouseImageX - cx) * newZoom - cx);
-    setPanY(mouseCanvasY - (mouseImageY - cy) * newZoom - cy);
+    setPanX(mouseX - (mouseImageX - center) * newZoom - center);
+    setPanY(mouseY - (mouseImageY - center) * newZoom - center);
     setZoom(newZoom);
   };
 
@@ -252,7 +239,7 @@ function ChooseLattice() {
     if (!drag) return;
     if (drag.mode === "point") {
       const [row, col] = screenToImage(e);
-      const next = (points || []).slice();
+      const next = points.slice();
       next[drag.pointIndex] = [clamp(row, 0, Math.max(0, height - 1)), clamp(col, 0, Math.max(0, width - 1))];
       setPoints(next);
       return;
@@ -274,8 +261,7 @@ function ChooseLattice() {
     if (drag.mode === "none") {
       // Plain click (no drag past the threshold): place the next point,
       // after a short grace period a following double-click can cancel.
-      const list = pointsRef.current || [];
-      if (list.length < 3) {
+      if (pointsRef.current.length < 3) {
         const [row, col] = screenToImage(e);
         const clamped: Point = [
           clamp(row, 0, Math.max(0, height - 1)),
@@ -284,7 +270,7 @@ function ChooseLattice() {
         cancelPendingPoint();
         pendingPointTimeoutRef.current = window.setTimeout(() => {
           pendingPointTimeoutRef.current = null;
-          setPoints([...(pointsRef.current || []), clamped]);
+          setPoints([...pointsRef.current, clamped]);
         }, DOUBLE_CLICK_GRACE_MS);
       }
     }
@@ -305,23 +291,25 @@ function ChooseLattice() {
     }
   };
 
-  // Overlay: point markers + guide lines from Origin -> u and Origin -> v.
+  // Overlay: point markers + guide lines from Origin -> u and Origin -> v,
+  // drawn at device resolution like the image.
   React.useLayoutEffect(() => {
     const canvas = uiRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    canvas.width = canvasW;
-    canvas.height = canvasH;
-    ctx.clearRect(0, 0, canvasW, canvasH);
-    const list = points || [];
-    if (list.length > 1) {
-      const [originX, originY] = imageToScreen(list[0][0], list[0][1]);
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(CANVAS_SIZE * dpr);
+    canvas.height = Math.round(CANVAS_SIZE * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+    if (points.length > 1) {
+      const [originX, originY] = imageToScreen(points[0][0], points[0][1]);
       ctx.strokeStyle = "rgba(255,255,255,0.6)";
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
-      for (let i = 1; i < list.length; i++) {
-        const [x, y] = imageToScreen(list[i][0], list[i][1]);
+      for (let i = 1; i < points.length; i++) {
+        const [x, y] = imageToScreen(points[i][0], points[i][1]);
         ctx.beginPath();
         ctx.moveTo(originX, originY);
         ctx.lineTo(x, y);
@@ -329,7 +317,7 @@ function ChooseLattice() {
       }
       ctx.setLineDash([]);
     }
-    list.forEach(([row, col], i) => {
+    points.forEach(([row, col], i) => {
       const [x, y] = imageToScreen(row, col);
       const color = POINT_COLORS[i % POINT_COLORS.length];
       ctx.beginPath();
@@ -349,14 +337,14 @@ function ChooseLattice() {
       ctx.strokeText(label, x + 9, y - 6);
       ctx.fillText(label, x + 9, y - 6);
     });
-  }, [points, imageToScreen, canvasW, canvasH]);
+  }, [points, imageToScreen]);
 
   const canvasBox = {
     position: "relative" as const,
     border: `${CANVAS_BORDER_PX}px solid ${themeColors.border}`,
     overflow: "hidden",
-    width: canvasW,
-    height: canvasH,
+    width: CANVAS_SIZE,
+    height: CANVAS_SIZE,
   };
   // The bordered canvas is a fixed pixel width, so the CONTENT column (title
   // row, canvas, footer, readout) is capped to that width and everything
@@ -364,7 +352,7 @@ function ChooseLattice() {
   // full-width wrapper: capping IT to the content width would leave the
   // notebook/page background exposed beside the widget whenever the output
   // cell is wider than the canvas.
-  const contentMaxWidth = canvasW + 2 * CANVAS_BORDER_PX;
+  const contentMaxWidth = CANVAS_SIZE + 2 * CANVAS_BORDER_PX;
 
   return (
     <Box
@@ -384,7 +372,7 @@ function ChooseLattice() {
             <Button
               size="small"
               sx={{ ...compactButton, color: themeColors.accent }}
-              disabled={!points || points.length === 0}
+              disabled={points.length === 0}
               onClick={() => setPoints([])}
             >
               Clear Points
@@ -396,16 +384,16 @@ function ChooseLattice() {
           <canvas
             data-quantem-scientific-output={image ? "choose-lattice-image" : undefined}
             ref={canvasRef}
-            style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: canvasH, imageRendering: "pixelated" }}
+            style={{ position: "absolute", top: 0, left: 0, width: CANVAS_SIZE, height: CANVAS_SIZE, imageRendering: "pixelated" }}
           />
           <canvas
             ref={uiRef}
-            style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: canvasH, pointerEvents: "none" }}
+            style={{ position: "absolute", top: 0, left: 0, width: CANVAS_SIZE, height: CANVAS_SIZE, pointerEvents: "none" }}
           />
           <canvas
-            width={canvasW}
-            height={canvasH}
-            style={{ position: "absolute", top: 0, left: 0, width: canvasW, height: canvasH, cursor: "crosshair", opacity: 0 }}
+            width={CANVAS_SIZE}
+            height={CANVAS_SIZE}
+            style={{ position: "absolute", top: 0, left: 0, width: CANVAS_SIZE, height: CANVAS_SIZE, cursor: "crosshair", opacity: 0 }}
             onWheel={handleWheel}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMoveReadout}
@@ -416,7 +404,7 @@ function ChooseLattice() {
         </Box>
 
         <Typography sx={{ fontSize: 10, color: themeColors.textMuted, mt: `${SPACING.XS}px` }}>
-          {(points || []).length < 3
+          {points.length < 3
             ? "Click to place the next point. Scroll to zoom, drag to pan."
             : "Drag a point to adjust it. Scroll to zoom, drag to pan."}
           {cursorPos && (
@@ -428,8 +416,8 @@ function ChooseLattice() {
 
         <Box sx={{ mt: `${SPACING.SM}px` }}>
           {POINT_LABELS.map((label, i) => {
-            const point = (points || [])[i];
-            const origin = (points || [])[0];
+            const point = points[i];
+            const origin = points[0];
             // Origin is reported as its raw pixel position; the other two
             // points are reported as lattice vectors relative to the origin
             // (u = a1 - origin, v = a2 - origin), not raw pixel positions.

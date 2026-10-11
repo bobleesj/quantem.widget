@@ -6,4 +6,4 @@ export type { Uint32ImageView } from "./borrowedImage";
 export { COLORMAP_NAMES, COLORMAP_POINTS, COLORMAPS } from "./luts";
 export { applyColormap, displayLog, displayNormalize, renderToOffscreen, renderToOffscreenReuse } from "./displayMath";
 export { VOLUME_SLICE_MIN_ZOOM } from "./volumeSlice";
-export { createGPUColormapEngine, getGPUColormapEngine, GPUColormapEngine } from "./colormapEngine";
+export { createGPUColormapEngine, GPUColormapEngine } from "./colormapEngine";

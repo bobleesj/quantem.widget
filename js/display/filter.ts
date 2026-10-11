@@ -27,6 +27,7 @@
 //                       max(1, sigma*0.85), inverse, * scale/30.
 
 import { getHardwareGPUDevice, onGPULost } from "./device";
+import { computePipeline } from "./pipelines";
 
 /** Filter modes the browser can evaluate; the denoise menus offer exactly these. */
 const BROWSER_FILTER_MODES = new Set(["none", "gaussian", "anscombe"]);
@@ -86,21 +87,30 @@ function pythonRound(value: number): number {
   return floor % 2 === 0 ? floor : floor + 1;
 }
 
-/** In-place Hoare quickselect: exact k-th order statistic, O(n) average. */
-function selectKth(values: Float32Array, k: number): number {
-  let lo = 0;
-  let hi = values.length - 1;
-  while (lo < hi) {
-    const pivot = values[(lo + hi) >> 1];
-    let i = lo;
-    let j = hi;
+/**
+ * In-place Hoare quickselect: index `k` ends up holding the value it would have
+ * after a full sort (the exact k-th order statistic), in O(n) average where a
+ * sort is O(n log n). The median-of-three pivot keeps already-sorted input off
+ * the O(n^2) path.
+ */
+export function selectKth(values: Float32Array, k: number): number {
+  let left = 0;
+  let right = values.length - 1;
+  while (left < right) {
+    const middle = (left + right) >> 1;
+    if (values[middle] < values[left]) { const swap = values[middle]; values[middle] = values[left]; values[left] = swap; }
+    if (values[right] < values[left]) { const swap = values[right]; values[right] = values[left]; values[left] = swap; }
+    if (values[right] < values[middle]) { const swap = values[right]; values[right] = values[middle]; values[middle] = swap; }
+    const pivot = values[middle];
+    let i = left;
+    let j = right;
     while (i <= j) {
       while (values[i] < pivot) i++;
       while (values[j] > pivot) j--;
       if (i <= j) { const swap = values[i]; values[i] = values[j]; values[j] = swap; i++; j--; }
     }
-    if (k <= j) hi = j;
-    else if (k >= i) lo = i;
+    if (k <= j) right = j;
+    else if (k >= i) left = i;
     else break;
   }
   return values[k];
@@ -416,18 +426,9 @@ class GPUDisplayFilterEngine {
 
   constructor(device: GPUDevice) {
     this.device = device;
-    this.gaussPipeline = device.createComputePipeline({
-      layout: "auto",
-      compute: { module: device.createShaderModule({ code: GAUSS_SHADER }), entryPoint: "main" },
-    });
-    this.resamplePipeline = device.createComputePipeline({
-      layout: "auto",
-      compute: { module: device.createShaderModule({ code: RESAMPLE_SHADER }), entryPoint: "main" },
-    });
-    this.anscombePipeline = device.createComputePipeline({
-      layout: "auto",
-      compute: { module: device.createShaderModule({ code: ANSCOMBE_SHADER }), entryPoint: "main" },
-    });
+    this.gaussPipeline = computePipeline(device, GAUSS_SHADER);
+    this.resamplePipeline = computePipeline(device, RESAMPLE_SHADER);
+    this.anscombePipeline = computePipeline(device, ANSCOMBE_SHADER);
   }
 
   /** Transient float32 storage buffer for one stage output, destroyed by releasePlanes(). */
@@ -631,8 +632,8 @@ class GPUDisplayFilterEngine {
   ): Promise<Float32Array> {
     // The engine reuses a shared transient buffer list for stage outputs. A
     // real Show2D/Show3D widget may ask for another filter while an earlier
-    // readback is still mapping; serialize calls so one cleanup cannot destroy
-    // another call's staging buffer and force a slow CPU fallback.
+    // readback is still mapping; serialize calls so one call's cleanup cannot
+    // destroy another call's staging buffer mid-readback.
     const previous = this.filterQueue;
     let releaseQueue: () => void = () => {};
     this.filterQueue = new Promise<void>((resolve) => { releaseQueue = resolve; });

@@ -2,6 +2,7 @@
 
 import { getHardwareGPUDevice, requireHardwareGPUDevice } from "./device";
 import { fft2d, nextPow2, requireWebGPUFFT } from "./fft";
+import { computePipeline } from "./pipelines";
 
 type FrequencyFilterMode = "none" | "lowpass" | "highpass" | "bandpass";
 
@@ -116,6 +117,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 `;
 
+// The mask pipeline per device: a cutoff drag refilters on every step, and
+// building the pipeline each time recompiles the shader.
+const maskPipelines = new WeakMap<GPUDevice, GPUComputePipeline>();
+
 /**
  * WebGPU filter: zero-pad to powers of two, forward FFT, radial mask, inverse
  * FFT, all in one device buffer, then read back the unpadded real part.
@@ -126,17 +131,11 @@ async function applyFrequencyFilterWebGPUResident(
   height: number,
   options: FrequencyFilterOptions,
 ): Promise<Float32Array> {
-  if (width < 1 || height < 1 || data.length !== width * height) {
-    throw new Error(
-      `Frequency filtering expects width*height values; got ${width}x${height} and ${data.length}.`,
-    );
-  }
   const device = await requireHardwareGPUDevice("Frequency filtering");
   const fft = await requireWebGPUFFT("Frequency filtering");
   const paddedWidth = nextPow2(width);
   const paddedHeight = nextPow2(height);
-  const paddedCount = paddedWidth * paddedHeight;
-  const complex = new Float32Array(paddedCount * 2);
+  const complex = new Float32Array(paddedWidth * paddedHeight * 2);
   for (let row = 0; row < height; row++) {
     for (let column = 0; column < width; column++) {
       complex[2 * (row * paddedWidth + column)] = data[row * width + column];
@@ -150,64 +149,65 @@ async function applyFrequencyFilterWebGPUResident(
     size: 32,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
-  try {
-    device.queue.writeBuffer(dataBuffer, 0, complex);
-    await fft.fft2DResident(dataBuffer, paddedWidth, paddedHeight, false);
-    const params = new ArrayBuffer(32);
-    const paramsU32 = new Uint32Array(params);
-    const paramsF32 = new Float32Array(params);
-    const mode = normalizeFrequencyFilterMode(options.mode);
-    paramsU32[0] = paddedWidth;
-    paramsU32[1] = paddedHeight;
-    paramsU32[2] = mode === "lowpass" ? 1 : mode === "highpass" ? 2 : mode === "bandpass" ? 3 : 0;
-    paramsF32[4] = clamp01(Number(options.cutoff), mode === "lowpass" ? 0.25 : 0.08);
-    paramsF32[5] = clamp01(Number(options.center), 0.3);
-    paramsF32[6] = clamp01(Number(options.width), 0.12);
-    paramsF32[7] = Math.max(0.002, clamp01(Number(options.edge), 0.035));
-    device.queue.writeBuffer(paramsBuffer, 0, params);
-    const module = device.createShaderModule({ code: FREQUENCY_MASK_SHADER });
-    const pipeline = device.createComputePipeline({ layout: "auto", compute: { module, entryPoint: "main" } });
-    const bindGroup = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: dataBuffer } },
-        { binding: 1, resource: { buffer: paramsBuffer } },
-      ],
-    });
-    const encoder = device.createCommandEncoder();
-    const pass = encoder.beginComputePass();
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(Math.ceil(paddedWidth / 16), Math.ceil(paddedHeight / 16));
-    pass.end();
-    device.queue.submit([encoder.finish()]);
-    await fft.fft2DResident(dataBuffer, paddedWidth, paddedHeight, true);
-
-    const readBuffer = device.createBuffer({
-      size: complex.byteLength,
-      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-    });
-    const readEncoder = device.createCommandEncoder();
-    readEncoder.copyBufferToBuffer(dataBuffer, 0, readBuffer, 0, complex.byteLength);
-    device.queue.submit([readEncoder.finish()]);
-    await readBuffer.mapAsync(GPUMapMode.READ);
-    const result = new Float32Array(readBuffer.getMappedRange().slice(0));
-    readBuffer.unmap();
-    readBuffer.destroy();
-    const output = new Float32Array(width * height);
-    for (let row = 0; row < height; row++) {
-      for (let column = 0; column < width; column++) {
-        output[row * width + column] = result[2 * (row * paddedWidth + column)];
-      }
-    }
-    return output;
-  } finally {
-    dataBuffer.destroy();
-    paramsBuffer.destroy();
+  const readBuffer = device.createBuffer({
+    size: complex.byteLength,
+    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(dataBuffer, 0, complex);
+  await fft.fft2DResident(dataBuffer, paddedWidth, paddedHeight, false);
+  const params = new ArrayBuffer(32);
+  const paramsU32 = new Uint32Array(params);
+  const paramsF32 = new Float32Array(params);
+  const mode = normalizeFrequencyFilterMode(options.mode);
+  paramsU32[0] = paddedWidth;
+  paramsU32[1] = paddedHeight;
+  paramsU32[2] = mode === "lowpass" ? 1 : mode === "highpass" ? 2 : mode === "bandpass" ? 3 : 0;
+  paramsF32[4] = clamp01(Number(options.cutoff), mode === "lowpass" ? 0.25 : 0.08);
+  paramsF32[5] = clamp01(Number(options.center), 0.3);
+  paramsF32[6] = clamp01(Number(options.width), 0.12);
+  paramsF32[7] = Math.max(0.002, clamp01(Number(options.edge), 0.035));
+  device.queue.writeBuffer(paramsBuffer, 0, params);
+  let pipeline = maskPipelines.get(device);
+  if (!pipeline) {
+    pipeline = computePipeline(device, FREQUENCY_MASK_SHADER);
+    maskPipelines.set(device, pipeline);
   }
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: dataBuffer } },
+      { binding: 1, resource: { buffer: paramsBuffer } },
+    ],
+  }));
+  pass.dispatchWorkgroups(Math.ceil(paddedWidth / 16), Math.ceil(paddedHeight / 16));
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  await fft.fft2DResident(dataBuffer, paddedWidth, paddedHeight, true);
+  const readEncoder = device.createCommandEncoder();
+  readEncoder.copyBufferToBuffer(dataBuffer, 0, readBuffer, 0, complex.byteLength);
+  device.queue.submit([readEncoder.finish()]);
+  dataBuffer.destroy();
+  paramsBuffer.destroy();
+  await readBuffer.mapAsync(GPUMapMode.READ);
+  const result = new Float32Array(readBuffer.getMappedRange());
+  const output = new Float32Array(width * height);
+  for (let row = 0; row < height; row++) {
+    for (let column = 0; column < width; column++) {
+      output[row * width + column] = result[2 * (row * paddedWidth + column)];
+    }
+  }
+  readBuffer.destroy();
+  return output;
 }
 
-/** Scalar reference: forward FFT, radial mask, inverse FFT. Runs without WebGPU. */
+/**
+ * Scalar reference: zero-pad to powers of two, forward FFT, radial mask on the
+ * padded grid, inverse FFT, crop. The same steps as the WebGPU path; runs
+ * without WebGPU.
+ */
 export function applyFrequencyFilterCPU(
   data: Float32Array,
   width: number,
@@ -215,12 +215,17 @@ export function applyFrequencyFilterCPU(
   options: FrequencyFilterOptions,
 ): Float32Array {
   if (!frequencyFilterActive(options.mode)) return Float32Array.from(data);
-  const real = Float32Array.from(data);
+  const paddedWidth = nextPow2(width);
+  const paddedHeight = nextPow2(height);
+  const real = new Float32Array(paddedWidth * paddedHeight);
+  for (let row = 0; row < height; row++) real.set(data.subarray(row * width, (row + 1) * width), row * paddedWidth);
   const imag = new Float32Array(real.length);
-  fft2d(real, imag, width, height, false);
-  applyMask(real, imag, width, height, options);
-  fft2d(real, imag, width, height, true);
-  return real;
+  fft2d(real, imag, paddedWidth, paddedHeight, false);
+  applyMask(real, imag, paddedWidth, paddedHeight, options);
+  fft2d(real, imag, paddedWidth, paddedHeight, true);
+  const output = new Float32Array(width * height);
+  for (let row = 0; row < height; row++) output.set(real.subarray(row * paddedWidth, row * paddedWidth + width), row * width);
+  return output;
 }
 
 /**

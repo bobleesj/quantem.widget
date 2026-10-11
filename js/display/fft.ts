@@ -2,18 +2,12 @@
 
 /**
  * Display 2D FFT. WebGPUFFT runs on a hardware adapter; CPUFFT runs the scalar
- * reference (same radix-2 algorithm and zero padding) when the browser has no
- * WebGPU. Handles non-power-of-2 dimensions via zero-padding.
+ * reference (the same radix-2 algorithm) when the browser has no WebGPU. Both
+ * take power-of-two sizes: callers zero-pad an image first, because a padded
+ * spectrum cropped back to the image size is not the image's DFT.
  */
 import { getHardwareGPUDevice, onGPULost, requireHardwareGPUDevice, type RenderPath } from "./device";
 import { FFT_2D_SHADER } from "./fftShader";
-
-// The GPU device is owned by device.ts. Every widget and the compute engine must
-// share ONE device: a bind group built on one device and submitted on another
-// throws "BindGroupLayout is associated with [Device], cannot be used with
-// [Device]" and crashes the tab's GPU process. These re-exports keep the FFT
-// module's public device accessors pointing at that one device.
-export { getGPUDevice, getGPUInfo } from "./device";
 
 // ============================================================================
 // CPU FFT reference
@@ -52,33 +46,28 @@ function fft1d(real: Float32Array, imag: Float32Array, inverse: boolean = false)
   if (inverse) { for (let i = 0; i < n; i++) { real[i] /= n; imag[i] /= n; } }
 }
 
+/** Throw unless both sizes are powers of two, the only sizes the radix-2 FFT transforms. */
+export function requirePow2(width: number, height: number): void {
+  if (width !== nextPow2(width) || height !== nextPow2(height)) {
+    throw new Error(`The display FFT needs power-of-two sizes; got ${width}x${height}. Zero-pad the image first.`);
+  }
+}
+
+/** In-place 2D FFT (inverse when `inverse`, scaled by 1/N) of a power-of-two width x height image. */
 export function fft2d(real: Float32Array, imag: Float32Array, width: number, height: number, inverse: boolean = false) {
-  const paddedW = nextPow2(width), paddedH = nextPow2(height);
-  const needsPadding = paddedW !== width || paddedH !== height;
-  let workReal: Float32Array, workImag: Float32Array;
-  if (needsPadding) {
-    workReal = new Float32Array(paddedW * paddedH); workImag = new Float32Array(paddedW * paddedH);
-    for (let row = 0; row < height; row++) for (let col = 0; col < width; col++) {
-      workReal[row * paddedW + col] = real[row * width + col]; workImag[row * paddedW + col] = imag[row * width + col];
-    }
-  } else { workReal = real; workImag = imag; }
-  const rowReal = new Float32Array(paddedW), rowImag = new Float32Array(paddedW);
-  for (let row = 0; row < paddedH; row++) {
-    const offset = row * paddedW;
-    for (let col = 0; col < paddedW; col++) { rowReal[col] = workReal[offset + col]; rowImag[col] = workImag[offset + col]; }
+  requirePow2(width, height);
+  const rowReal = new Float32Array(width), rowImag = new Float32Array(width);
+  for (let row = 0; row < height; row++) {
+    const offset = row * width;
+    for (let col = 0; col < width; col++) { rowReal[col] = real[offset + col]; rowImag[col] = imag[offset + col]; }
     fft1d(rowReal, rowImag, inverse);
-    for (let col = 0; col < paddedW; col++) { workReal[offset + col] = rowReal[col]; workImag[offset + col] = rowImag[col]; }
+    for (let col = 0; col < width; col++) { real[offset + col] = rowReal[col]; imag[offset + col] = rowImag[col]; }
   }
-  const colReal = new Float32Array(paddedH), colImag = new Float32Array(paddedH);
-  for (let col = 0; col < paddedW; col++) {
-    for (let row = 0; row < paddedH; row++) { colReal[row] = workReal[row * paddedW + col]; colImag[row] = workImag[row * paddedW + col]; }
+  const colReal = new Float32Array(height), colImag = new Float32Array(height);
+  for (let col = 0; col < width; col++) {
+    for (let row = 0; row < height; row++) { colReal[row] = real[row * width + col]; colImag[row] = imag[row * width + col]; }
     fft1d(colReal, colImag, inverse);
-    for (let row = 0; row < paddedH; row++) { workReal[row * paddedW + col] = colReal[row]; workImag[row * paddedW + col] = colImag[row]; }
-  }
-  if (needsPadding) {
-    for (let row = 0; row < height; row++) for (let col = 0; col < width; col++) {
-      real[row * width + col] = workReal[row * paddedW + col]; imag[row * width + col] = workImag[row * paddedW + col];
-    }
+    for (let row = 0; row < height; row++) { real[row * width + col] = colReal[row]; imag[row * width + col] = colImag[row]; }
   }
 }
 
@@ -102,6 +91,7 @@ export function fftshift(data: Float32Array, width: number, height: number): voi
 // match (esbuild may rename `fft2d` -> `a`; the .name property tracks rename).
 const FFT_WORKER_CODE = `
 ${nextPow2.toString()}
+${requirePow2.toString()}
 ${fft1d.toString()}
 ${fft2d.toString()}
 ${fftshift.toString()}
@@ -181,36 +171,23 @@ export class CPUFFT implements DisplayFFT {
   }
 }
 
-/**
- * Zero-pad a width x height complex image into a paddedWidth x paddedHeight frame
- * of interleaved (real, imag) floats, the layout the FFT shader reads.
- */
-function interleaveComplex(
-  real: Float32Array, imag: Float32Array,
-  width: number, height: number, paddedWidth: number, paddedHeight: number,
-): Float32Array<ArrayBuffer> {
-  const complexData = new Float32Array(paddedWidth * paddedHeight * 2);
-  for (let row = 0; row < height; row++) {
-    for (let col = 0; col < width; col++) {
-      const target = (row * paddedWidth + col) * 2;
-      complexData[target] = real[row * width + col];
-      complexData[target + 1] = imag[row * width + col];
-    }
+/** Interleaved (real, imag) floats, the layout the FFT shader reads. */
+function interleaveComplex(real: Float32Array, imag: Float32Array, count: number): Float32Array<ArrayBuffer> {
+  const complexData = new Float32Array(count * 2);
+  for (let index = 0; index < count; index++) {
+    complexData[2 * index] = real[index];
+    complexData[2 * index + 1] = imag[index];
   }
   return complexData;
 }
 
-/** Crop the width x height corner of a padded interleaved spectrum back into real and imag planes. */
-function deinterleaveComplex(
-  complexData: Float32Array, width: number, height: number, paddedWidth: number,
-): { real: Float32Array; imag: Float32Array } {
-  const real = new Float32Array(width * height), imag = new Float32Array(width * height);
-  for (let row = 0; row < height; row++) {
-    for (let col = 0; col < width; col++) {
-      const source = (row * paddedWidth + col) * 2;
-      real[row * width + col] = complexData[source];
-      imag[row * width + col] = complexData[source + 1];
-    }
+/** Real and imag planes of an interleaved spectrum. */
+function deinterleaveComplex(complexData: Float32Array): { real: Float32Array; imag: Float32Array } {
+  const count = complexData.length / 2;
+  const real = new Float32Array(count), imag = new Float32Array(count);
+  for (let index = 0; index < count; index++) {
+    real[index] = complexData[2 * index];
+    imag[index] = complexData[2 * index + 1];
   }
   return { real, imag };
 }
@@ -218,76 +195,82 @@ function deinterleaveComplex(
 export class WebGPUFFT implements DisplayFFT {
   readonly path = "WebGPU" as const;
   private device: GPUDevice;
-  private pipelines2D: { bitReverseRows: GPUComputePipeline; bitReverseCols: GPUComputePipeline; butterflyRows: GPUComputePipeline; butterflyCols: GPUComputePipeline; normalize: GPUComputePipeline } | null = null;
-  private initialized = false;
-  constructor(device: GPUDevice) { this.device = device; }
-  async init(): Promise<void> {
-    if (this.initialized) return;
-    const module2D = this.device.createShaderModule({ code: FFT_2D_SHADER });
+  private pipelines2D: { bitReverseRows: GPUComputePipeline; bitReverseCols: GPUComputePipeline; butterflyRows: GPUComputePipeline; butterflyCols: GPUComputePipeline; normalize: GPUComputePipeline };
+  constructor(device: GPUDevice) {
+    this.device = device;
+    const module2D = device.createShaderModule({ code: FFT_2D_SHADER });
+    const pipeline = (entryPoint: string) => device.createComputePipeline({ layout: 'auto', compute: { module: module2D, entryPoint } });
     this.pipelines2D = {
-      bitReverseRows: this.device.createComputePipeline({ layout: 'auto', compute: { module: module2D, entryPoint: 'bitReverseRows' } }),
-      bitReverseCols: this.device.createComputePipeline({ layout: 'auto', compute: { module: module2D, entryPoint: 'bitReverseCols' } }),
-      butterflyRows: this.device.createComputePipeline({ layout: 'auto', compute: { module: module2D, entryPoint: 'butterflyRows' } }),
-      butterflyCols: this.device.createComputePipeline({ layout: 'auto', compute: { module: module2D, entryPoint: 'butterflyCols' } }),
-      normalize: this.device.createComputePipeline({ layout: 'auto', compute: { module: module2D, entryPoint: 'normalize2D' } })
+      bitReverseRows: pipeline('bitReverseRows'), bitReverseCols: pipeline('bitReverseCols'),
+      butterflyRows: pipeline('butterflyRows'), butterflyCols: pipeline('butterflyCols'), normalize: pipeline('normalize2D'),
     };
-    this.initialized = true;
   }
 
   /**
-   * Dispatch every pass of one in-place 2D FFT on `dataBuffer`: bit reversal and
-   * log2(width) butterfly stages along rows, the same along columns, then the 1/N
-   * normalization for an inverse transform. Each pass is its own submit because
-   * the shared params uniform changes between passes.
+   * Uniform parameters of every pass of one 2D FFT, one aligned slot per pass:
+   * bit reversal and log2(width) butterfly stages along rows, the same along
+   * columns, then the 1/N normalization of an inverse transform. Images of one
+   * size share it, so a batch writes it once.
    */
-  private dispatchFFT2D(
-    dataBuffer: GPUBuffer, paramsBuffer: GPUBuffer, width: number, height: number, inverse: boolean,
-  ): void {
+  private fftPassParams(width: number, height: number, inverse: boolean): { buffer: GPUBuffer; passes: { pipeline: GPUComputePipeline; offset: number }[] } {
+    const pipelines = this.pipelines2D;
     const log2Width = Math.log2(width), log2Height = Math.log2(height);
-    const workgroupsX = Math.ceil(width / 16), workgroupsY = Math.ceil(height / 16);
-    const pipelines = this.pipelines2D!;
-    const runPass = (pipeline: GPUComputePipeline) => {
-      const bindGroup = this.device.createBindGroup({
+    const passes: { pipeline: GPUComputePipeline; rows: boolean; stage: number }[] = [
+      { pipeline: pipelines.bitReverseRows, rows: true, stage: 0 },
+      ...Array.from({ length: log2Width }, (_, stage) => ({ pipeline: pipelines.butterflyRows, rows: true, stage })),
+      { pipeline: pipelines.bitReverseCols, rows: false, stage: 0 },
+      ...Array.from({ length: log2Height }, (_, stage) => ({ pipeline: pipelines.butterflyCols, rows: false, stage })),
+      ...(inverse ? [{ pipeline: pipelines.normalize, rows: false, stage: 0 }] : []),
+    ];
+    const slot = Math.max(24, this.device.limits.minUniformBufferOffsetAlignment);
+    const params = new ArrayBuffer(slot * passes.length);
+    passes.forEach(({ rows, stage }, index) => {
+      const paramsU32 = new Uint32Array(params, index * slot, 6), paramsF32 = new Float32Array(params, index * slot, 6);
+      paramsU32[0] = width; paramsU32[1] = height; paramsU32[2] = rows ? log2Width : log2Height; paramsU32[3] = stage;
+      paramsF32[4] = inverse ? 1.0 : -1.0; paramsU32[5] = rows ? 1 : 0;
+    });
+    const buffer = this.device.createBuffer({ size: params.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.device.queue.writeBuffer(buffer, 0, params);
+    return { buffer, passes: passes.map(({ pipeline }, index) => ({ pipeline, offset: index * slot })) };
+  }
+
+  /**
+   * Record every pass of one in-place 2D FFT on `dataBuffer` into one compute
+   * pass. Dispatches in a pass run in order and each sees the previous one's
+   * writes, so the whole transform is one submit instead of one per stage.
+   */
+  private encodeFFT2D(
+    encoder: GPUCommandEncoder, dataBuffer: GPUBuffer, width: number, height: number,
+    params: { buffer: GPUBuffer; passes: { pipeline: GPUComputePipeline; offset: number }[] },
+  ): void {
+    const pass = encoder.beginComputePass();
+    for (const { pipeline, offset } of params.passes) {
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, this.device.createBindGroup({
         layout: pipeline.getBindGroupLayout(0),
-        entries: [{ binding: 0, resource: { buffer: paramsBuffer } }, { binding: 1, resource: { buffer: dataBuffer } }],
-      });
-      const encoder = this.device.createCommandEncoder(); const pass = encoder.beginComputePass();
-      pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup);
-      pass.dispatchWorkgroups(workgroupsX, workgroupsY); pass.end();
-      this.device.queue.submit([encoder.finish()]);
-    };
-    const params = new ArrayBuffer(24);
-    const paramsU32 = new Uint32Array(params); const paramsF32 = new Float32Array(params);
-    paramsU32[0] = width; paramsU32[1] = height; paramsU32[2] = log2Width; paramsU32[3] = 0;
-    paramsF32[4] = inverse ? 1.0 : -1.0; paramsU32[5] = 1;
-    this.device.queue.writeBuffer(paramsBuffer, 0, params); runPass(pipelines.bitReverseRows);
-    for (let stage = 0; stage < log2Width; stage++) {
-      paramsU32[3] = stage; this.device.queue.writeBuffer(paramsBuffer, 0, params);
-      runPass(pipelines.butterflyRows);
+        entries: [{ binding: 0, resource: { buffer: params.buffer, offset, size: 24 } }, { binding: 1, resource: { buffer: dataBuffer } }],
+      }));
+      pass.dispatchWorkgroups(Math.ceil(width / 16), Math.ceil(height / 16));
     }
-    paramsU32[2] = log2Height; paramsU32[3] = 0; paramsU32[5] = 0;
-    this.device.queue.writeBuffer(paramsBuffer, 0, params); runPass(pipelines.bitReverseCols);
-    for (let stage = 0; stage < log2Height; stage++) {
-      paramsU32[3] = stage; this.device.queue.writeBuffer(paramsBuffer, 0, params);
-      runPass(pipelines.butterflyCols);
-    }
-    if (inverse) runPass(pipelines.normalize);
+    pass.end();
   }
 
   async fft2D(realData: Float32Array, imagData: Float32Array, width: number, height: number, inverse: boolean = false): Promise<{ real: Float32Array, imag: Float32Array }> {
-    await this.init();
-    const paddedWidth = nextPow2(width), paddedHeight = nextPow2(height);
-    const complexData = interleaveComplex(realData, imagData, width, height, paddedWidth, paddedHeight);
+    requirePow2(width, height);
+    const complexData = interleaveComplex(realData, imagData, width * height);
     const dataBuffer = this.device.createBuffer({ size: complexData.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
     this.device.queue.writeBuffer(dataBuffer, 0, complexData);
-    const paramsBuffer = this.device.createBuffer({ size: 24, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const readBuffer = this.device.createBuffer({ size: complexData.byteLength, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-    this.dispatchFFT2D(dataBuffer, paramsBuffer, paddedWidth, paddedHeight, inverse);
-    const encoder = this.device.createCommandEncoder(); encoder.copyBufferToBuffer(dataBuffer, 0, readBuffer, 0, complexData.byteLength);
-    this.device.queue.submit([encoder.finish()]); await readBuffer.mapAsync(GPUMapMode.READ);
-    const result = new Float32Array(readBuffer.getMappedRange().slice(0)); readBuffer.unmap();
-    dataBuffer.destroy(); paramsBuffer.destroy(); readBuffer.destroy();
-    return deinterleaveComplex(result, width, height, paddedWidth);
+    const params = this.fftPassParams(width, height, inverse);
+    const encoder = this.device.createCommandEncoder();
+    this.encodeFFT2D(encoder, dataBuffer, width, height, params);
+    encoder.copyBufferToBuffer(dataBuffer, 0, readBuffer, 0, complexData.byteLength);
+    this.device.queue.submit([encoder.finish()]);
+    dataBuffer.destroy(); params.buffer.destroy();
+    await readBuffer.mapAsync(GPUMapMode.READ);
+    const spectrum = deinterleaveComplex(new Float32Array(readBuffer.getMappedRange()));
+    readBuffer.unmap(); readBuffer.destroy();
+    return spectrum;
   }
 
   /**
@@ -303,61 +286,48 @@ export class WebGPUFFT implements DisplayFFT {
   async fft2DResident(
     buffer: GPUBuffer, width: number, height: number, inverse: boolean = false,
   ): Promise<void> {
-    await this.init();
-    if (width !== nextPow2(width) || height !== nextPow2(height)) {
-      throw new Error(`fft2DResident needs power-of-two dims, got ${width}x${height}`);
-    }
-    const paramsBuffer = this.device.createBuffer({
-      size: 24, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    this.dispatchFFT2D(buffer, paramsBuffer, width, height, inverse);
-    paramsBuffer.destroy();
+    requirePow2(width, height);
+    const params = this.fftPassParams(width, height, inverse);
+    const encoder = this.device.createCommandEncoder();
+    this.encodeFFT2D(encoder, buffer, width, height, params);
+    this.device.queue.submit([encoder.finish()]);
+    params.buffer.destroy();
   }
 
   /**
-   * Batched 2D FFT: compute N forward FFTs with pipelined GPU submissions.
-   * All images must have the same dimensions. Each image gets its own
-   * submit (required because the params uniform changes per-pass), but
-   * all readbacks are batched into a single Promise.all at the end.
+   * Batched 2D FFT: N forward FFTs of one size with one readback wait for all.
+   * Each image is its own submit so the next upload overlaps this transform.
    */
   async fft2DBatch(
     images: { real: Float32Array; imag: Float32Array }[],
     width: number, height: number,
   ): Promise<{ real: Float32Array; imag: Float32Array }[]> {
-    await this.init();
     if (images.length === 0) return [];
-    const paddedWidth = nextPow2(width), paddedHeight = nextPow2(height);
-    const byteSize = paddedWidth * paddedHeight * 2 * 4;
-    // One params buffer serves every image: each pass is submitted before the next write.
-    const paramsBuffer = this.device.createBuffer({ size: 24, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const readBuffers: GPUBuffer[] = [];
-    const dataBuffers: GPUBuffer[] = [];
-    for (const image of images) {
-      const complexData = interleaveComplex(image.real, image.imag, width, height, paddedWidth, paddedHeight);
+    requirePow2(width, height);
+    const byteSize = width * height * 2 * 4;
+    const params = this.fftPassParams(width, height, false);
+    // one submit per image lets the next upload overlap this image's transform
+    const readBuffers = images.map(image => {
       const dataBuffer = this.device.createBuffer({ size: byteSize, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
-      this.device.queue.writeBuffer(dataBuffer, 0, complexData);
-      dataBuffers.push(dataBuffer);
+      this.device.queue.writeBuffer(dataBuffer, 0, interleaveComplex(image.real, image.imag, width * height));
       const readBuffer = this.device.createBuffer({ size: byteSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-      readBuffers.push(readBuffer);
-      this.dispatchFFT2D(dataBuffer, paramsBuffer, paddedWidth, paddedHeight, false);
-      const copyEncoder = this.device.createCommandEncoder();
-      copyEncoder.copyBufferToBuffer(dataBuffer, 0, readBuffer, 0, byteSize);
-      this.device.queue.submit([copyEncoder.finish()]);
-    }
-    // One sync point for all images.
-    await Promise.all(readBuffers.map(buffer => buffer.mapAsync(GPUMapMode.READ)));
-    const results = readBuffers.map((readBuffer, i) => {
-      const result = new Float32Array(readBuffer.getMappedRange().slice(0));
-      readBuffer.unmap();
-      dataBuffers[i].destroy();
-      readBuffer.destroy();
-      return deinterleaveComplex(result, width, height, paddedWidth);
+      const encoder = this.device.createCommandEncoder();
+      this.encodeFFT2D(encoder, dataBuffer, width, height, params);
+      encoder.copyBufferToBuffer(dataBuffer, 0, readBuffer, 0, byteSize);
+      this.device.queue.submit([encoder.finish()]);
+      dataBuffer.destroy();
+      return readBuffer;
     });
-    paramsBuffer.destroy();
-    return results;
+    params.buffer.destroy();
+    await Promise.all(readBuffers.map(buffer => buffer.mapAsync(GPUMapMode.READ)));
+    return readBuffers.map(readBuffer => {
+      const spectrum = deinterleaveComplex(new Float32Array(readBuffer.getMappedRange()));
+      readBuffer.unmap();
+      readBuffer.destroy();
+      return spectrum;
+    });
   }
 
-  destroy(): void { this.initialized = false; }
 }
 
 // ============================================================================
@@ -602,8 +572,11 @@ export function autoEnhanceFFT(
 // Singleton
 // ============================================================================
 
-let gpuFFT: WebGPUFFT | null = null;
-// A WebGPUFFT on a lost device can never dispatch again; the next caller rebuilds it.
+// One WebGPUFFT per page, memoized while it is being built: concurrent first
+// callers (every panel of a widget asks at once) share it instead of each
+// compiling the pipelines again. A WebGPUFFT on a lost device can never
+// dispatch again; the next caller rebuilds it.
+let gpuFFT: Promise<WebGPUFFT> | null = null;
 onGPULost(() => { gpuFFT = null; });
 
 let cpuFFT: CPUFFT | null = null;
@@ -616,16 +589,7 @@ export async function getDisplayFFT(): Promise<DisplayFFT> {
 }
 
 /** Return the shared hardware FFT or fail without running a CPU/Worker FFT. */
-export async function requireWebGPUFFT(operation = "Browser FFT"): Promise<WebGPUFFT> {
-  if (gpuFFT) return gpuFFT;
-  const device = await requireHardwareGPUDevice(operation);
-  try {
-    gpuFFT = new WebGPUFFT(device);
-    await gpuFFT.init();
-    return gpuFFT;
-  } catch (error) {
-    gpuFFT = null;
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`${operation} could not initialize WebGPU FFT: ${detail}`);
-  }
+export function requireWebGPUFFT(operation = "Browser FFT"): Promise<WebGPUFFT> {
+  gpuFFT ??= requireHardwareGPUDevice(operation).then((device) => new WebGPUFFT(device));
+  return gpuFFT;
 }

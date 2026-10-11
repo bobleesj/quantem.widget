@@ -52,7 +52,7 @@ export function InfoTooltip({
       title={content}
       {...openProps}
       arrow placement="bottom"
-      componentsProps={{
+      slotProps={{
         tooltip: { sx: { bgcolor: isDark ? "#333" : "#fff", color: isDark ? "#ddd" : "#333", border: `1px solid ${isDark ? "#555" : "#ccc"}`, maxWidth, p: 1 } },
         arrow: { sx: { color: isDark ? "#333" : "#fff", "&::before": { border: `1px solid ${isDark ? "#555" : "#ccc"}` } } },
       }}

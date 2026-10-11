@@ -1,7 +1,7 @@
 /// <reference types="@webgpu/types" />
 /** WebGPU volume renderer: ray casting with slice-plane indicators. */
 
-import { getGPUDevice } from "../display/fft";
+import { getGPUDevice } from "../display/device";
 
 // ============================================================================
 // Types
@@ -27,6 +27,13 @@ interface VolumeRenderParams {
   colShiftPxPerSlice?: number;
   vmin: number;  // 0..1 normalized (maps to texture's [0,1] range)
   vmax: number;  // 0..1 normalized
+}
+
+interface RenderOptions {
+  zStretch: number;           // depth axis display stretch
+  orthographic: boolean;
+  // While a slider drags: canvas pixels per CSS pixel and ray steps, traded for frame rate
+  draft?: { dpr: number; numSteps: number };
 }
 
 export interface CameraState {
@@ -237,31 +244,13 @@ fn worldToTex(p: vec3<f32>, bmin: vec3<f32>, bmax: vec3<f32>) -> vec3<f32> {
   return (p - bmin) / (bmax - bmin);
 }
 
-fn intersectSlicePlane(origin: vec3<f32>, dir: vec3<f32>, axis: i32, pos: f32,
-                       bmin: vec3<f32>, bmax: vec3<f32>) -> f32 {
-  var worldPos: f32;
-  var dirComponent: f32;
-  var originComponent: f32;
-  if (axis == 0) {
-    worldPos = bmin.x + pos * (bmax.x - bmin.x);
-    dirComponent = dir.x;
-    originComponent = origin.x;
-  } else if (axis == 1) {
-    worldPos = bmin.y + pos * (bmax.y - bmin.y);
-    dirComponent = dir.y;
-    originComponent = origin.y;
-  } else {
-    worldPos = bmin.z + pos * (bmax.z - bmin.z);
-    dirComponent = dir.z;
-    originComponent = origin.z;
-  }
-  if (abs(dirComponent) < 1e-8) { return -1.0; }
-  let t = (worldPos - originComponent) / dirComponent;
+// Ray distance to the Top (XY) slice plane at normalized depth pos, or -1 when it is behind the ray or outside the box.
+fn intersectTopPlane(origin: vec3<f32>, dir: vec3<f32>, pos: f32, bmin: vec3<f32>, bmax: vec3<f32>) -> f32 {
+  if (abs(dir.z) < 1e-8) { return -1.0; }
+  let t = (bmin.z + pos * (bmax.z - bmin.z) - origin.z) / dir.z;
   if (t < 0.0) { return -1.0; }
   let p = origin + t * dir;
-  if (axis != 0 && (p.x < bmin.x || p.x > bmax.x)) { return -1.0; }
-  if (axis != 1 && (p.y < bmin.y || p.y > bmax.y)) { return -1.0; }
-  if (axis != 2 && (p.z < bmin.z || p.z > bmax.z)) { return -1.0; }
+  if (p.x < bmin.x || p.x > bmax.x || p.y < bmin.y || p.y > bmax.y) { return -1.0; }
   return t;
 }
 
@@ -314,7 +303,7 @@ fn sampleVolume(texCoord: vec3<f32>) -> f32 {
 
 @fragment
 fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-  // Reconstruct ray from clip space — OpenGL convention z in [-1, 1]
+  // Reconstruct ray from clip space: OpenGL convention z in [-1, 1]
   let ndc = uv * 2.0 - 1.0;
   var worldNear = u.invViewProj * vec4<f32>(ndc, -1.0, 1.0);
   var worldFar = u.invViewProj * vec4<f32>(ndc, 1.0, 1.0);
@@ -344,7 +333,7 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   var tSliceXY: f32 = -1.0;
   var tSliceOblique: f32 = -1.0;
   if (showXY) {
-    tSliceXY = intersectSlicePlane(rayOrigin, rayDir, 2, u.sliceZ, bmin, bmax);
+    tSliceXY = intersectTopPlane(rayOrigin, rayDir, u.sliceZ, bmin, bmax);
   }
   if (showOblique) {
     tSliceOblique = intersectObliquePlane(rayOrigin, rayDir, bmin, bmax);
@@ -386,7 +375,7 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
       tSliceOblique = -1.0;
     }
 
-    // Sample volume — remap from [vmin, vmax] to [0, 1]
+    // Sample volume, remap from [vmin, vmax] to [0, 1]
     var intensity = sampleVolume(texCoord);
     intensity = applyWindow(intensity);
     intensity = clamp(intensity * u.brightness, 0.0, 1.0);
@@ -534,12 +523,6 @@ export class VolumeRenderer {
 
     // No MSAA: the pipeline renders straight into the canvas texture.
     const shaderModule = device.createShaderModule({ code: VOLUME_SHADER });
-    shaderModule.getCompilationInfo().then(info => {
-      for (const msg of info.messages) {
-        const level = msg.type === "error" ? "error" : msg.type === "warning" ? "warn" : "info";
-        console[level](`WGSL ${msg.type} [${msg.lineNum}:${msg.linePos}]: ${msg.message}`);
-      }
-    });
     const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [this.bindGroupLayout] });
     this.pipeline = device.createRenderPipeline({
       layout: pipelineLayout,
@@ -657,12 +640,13 @@ export class VolumeRenderer {
     this.rebuildBindGroup();
   }
 
-  render(params: VolumeRenderParams, camera: CameraState, bgColor: [number, number, number], dprOverride?: number, numStepsOverride?: number, zStretch: number = 1, orthographicView: boolean = false): void {
+  render(params: VolumeRenderParams, camera: CameraState, bgColor: [number, number, number], options: RenderOptions): void {
     if (this.deviceLost) return;
     const canvas = this.canvas;
+    const { zStretch, orthographic: orthographicView, draft } = options;
 
-    // Handle high-DPI displays (dprOverride allows reduced resolution during drag)
-    const dpr = dprOverride ?? (window.devicePixelRatio || 1);
+    // HiDPI backing store, except while a slider drags (draft render)
+    const dpr = draft?.dpr ?? (window.devicePixelRatio || 1);
     const displayW = canvas.clientWidth;
     const displayH = canvas.clientHeight;
     if (displayW === 0 || displayH === 0) return;
@@ -716,7 +700,7 @@ export class VolumeRenderer {
 
     // Number of steps scales with volume size
     const maxDim = Math.max(params.nx, params.ny, params.nz);
-    const numSteps = numStepsOverride ?? Math.min(512, Math.max(128, maxDim * 2));
+    const numSteps = draft?.numSteps ?? Math.min(512, Math.max(128, maxDim * 2));
 
     const uniformData = new ArrayBuffer(UNIFORM_BUFFER_SIZE);
     const f32 = new Float32Array(uniformData);
@@ -745,7 +729,7 @@ export class VolumeRenderer {
     // numSteps at offset 132/4=33
     u32[33] = numSteps;
     // slicePlaneMask at offset 136/4=34
-    u32[34] = params.slicePlaneMask & 7;
+    u32[34] = params.slicePlaneMask;
     // vmin at offset 140/4=35
     f32[35] = params.vmin;
     // vmax at offset 144/4=36

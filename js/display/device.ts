@@ -48,15 +48,8 @@ async function createGPUDevice(): Promise<GPUDevice | null> {
     const platform = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform;
     const adapter = await navigator.gpu.requestAdapter(platform === "Windows" ? {} : { powerPreference: "high-performance" });
     if (!adapter) return null;
-    try {
-      // Newer Chrome exposes the sync `adapter.info`; older builds used the async
-      // requestAdapterInfo(). Prefer the sync one, fall back to async.
-      // @ts-ignore - info / requestAdapterInfo are not in all type definitions
-      const info = adapter.info || (await adapter.requestAdapterInfo?.());
-      if (info) {
-        gpuInfo = info.description || `${info.vendor || ""} ${info.architecture || ""} ${info.device || ""}`.trim() || "Generic WebGPU Adapter";
-      }
-    } catch { /* adapter info not available */ }
+    const info = adapter.info;
+    gpuInfo = info.description || `${info.vendor} ${info.architecture} ${info.device}`.trim() || "Generic WebGPU Adapter";
     // Raise device limits to the adapter max. Defaults are conservative
     // (maxStorageBufferBindingSize 128 MB, maxTextureDimension2D 8192); without
     // this, buffers > 128 MB silently invalidate bind groups and wide panels fail.
@@ -71,9 +64,8 @@ async function createGPUDevice(): Promise<GPUDevice | null> {
       const limit = adapter.limits[key] || 0;
       if (limit > 0) requiredLimits[key] = limit;
     }
-    const features: GPUFeatureName[] = [];
-    if (adapter.features.has("timestamp-query")) features.push("timestamp-query");   // for kernel profiling
-    if (adapter.features.has("subgroups")) features.push("subgroups" as GPUFeatureName);   // warp reduction in maskedSum/CoM
+    // subgroups: warp reductions in the detector kernels' maskedSum/CoM
+    const features: GPUFeatureName[] = adapter.features.has("subgroups") ? ["subgroups"] : [];
     const device = await adapter.requestDevice({ requiredFeatures: features, requiredLimits });
     gpuDevice = device;
     // On loss, drop BOTH the device and the memoized promise, then let consumers drop

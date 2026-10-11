@@ -27,18 +27,19 @@ import {
   staggerLabelRows,
   viewTransform,
 } from "./overlayGeometry";
-import { buildMeasurementRecords, measurementCsv, measurementMetadata } from "./measurements";
+import { buildMeasurementRecords, measurementCsv, measurementMetadata, type RingDict, type SpotDict } from "./measurements";
 import { copyPngOrDownload } from "./copyImage";
 import { InfoTooltip } from "../shared/InfoTooltip";
 import { KeyboardShortcuts } from "../shared/KeyboardShortcuts";
 import { useMobileViewport } from "../shared/useMobileViewport";
+import { exportTitleSlug } from "../shared/exportFormat";
+import { shouldIgnoreWidgetShortcut } from "../shared/widgetShortcuts";
 import { Histogram } from "../shared/Histogram";
 
 // Style tokens
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 10;
-const DPR = window.devicePixelRatio || 1;
 const CANVAS_MIN = 384;
 const PROFILE_H = 140;
 const PROFILE_PAD = { left: 54, right: 14, top: 16, bottom: 34 };
@@ -107,31 +108,6 @@ function formatStat(value: number): string {
 
 // Model types
 
-interface SpotDict {
-  id: number;
-  row: number;
-  col: number;
-  raw_row?: number | null;
-  raw_col?: number | null;
-  row_err?: number | null;
-  col_err?: number | null;
-  d_spacing: number | null;
-  d_spacing_err?: number | null;
-  g_magnitude: number | null;
-  g_magnitude_err?: number | null;
-  r_pixels: number;
-  r_pixels_err?: number;
-  angle_deg?: number | null;
-  angle_deg_err?: number | null;
-  fit_quality?: number | null;
-  intensity: number;
-  hkl?: string;
-  hkl_candidates?: string[];
-  d_ref?: number | null;
-  d_error?: number | null;
-  note?: string;
-}
-
 interface PhaseEntry {
   name: string;
   a: number;
@@ -150,23 +126,6 @@ interface MaskRegion {
   row?: number;
   col?: number;
   radius?: number;
-}
-
-interface RingDict {
-  id: number;
-  radius_px: number;
-  g_magnitude: number | null;
-  d_spacing: number | null;
-  intensity: number;
-  hkl?: string;
-  hkl_candidates?: string[];
-  d_ref?: number | null;
-  d_error?: number | null;
-  fwhm_px?: number | null;
-  fwhm_inv_angstrom?: number | null;
-  intensity_integrated?: number | null;
-  fit_quality?: number | null;
-  note?: string;
 }
 
 interface IdentifyLine {
@@ -222,14 +181,9 @@ function ShowDiffraction() {
     bgcolor: themeColors.controlBg,
     minWidth: 80,
   };
-  const themedMenuProps = {
-    ...upwardMenuProps,
-    PaperProps: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}`, maxHeight: 200, overflowY: "auto" } },
-  };
-  const topToolbarMenuProps = {
-    ...downwardMenuProps,
-    PaperProps: themedMenuProps.PaperProps,
-  };
+  const themedMenuSlots = { paper: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}`, maxHeight: 200, overflowY: "auto" } } };
+  const themedMenuProps = { ...upwardMenuProps, slotProps: themedMenuSlots };
+  const topToolbarMenuProps = { ...downwardMenuProps, slotProps: themedMenuSlots };
   const controlBox = { ...controlRow, border: `1px solid ${themeColors.border}`, borderRadius: "4px", bgcolor: themeColors.controlBg };
   const numInput = (width: number) => ({ width, fontSize: 10, padding: "2px 4px", background: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` });
   const statusColors = themeInfo.theme === "dark"
@@ -443,9 +397,11 @@ function ShowDiffraction() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    canvas.width = canvasSize * DPR;
-    canvas.height = PROFILE_H * DPR;
-    ctx.scale(DPR, DPR);
+    // Read per draw: moving the window to another screen or zooming the page changes it.
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvasSize * dpr;
+    canvas.height = PROFILE_H * dpr;
+    ctx.scale(dpr, dpr);
     const isDark = themeInfo.theme === "dark";
     ctx.fillStyle = isDark ? "#050505" : "#ffffff";
     ctx.fillRect(0, 0, canvasSize, PROFILE_H);
@@ -748,9 +704,10 @@ function ShowDiffraction() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const cssW = canvasSize;
-    canvas.width = cssW * DPR;
-    canvas.height = cssW * DPR;
-    ctx.scale(DPR, DPR);
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = cssW * dpr;
+    canvas.height = cssW * dpr;
+    ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, cssW, cssW);
 
     // per-axis transform for non-square detectors
@@ -906,11 +863,12 @@ function ShowDiffraction() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    canvas.width = canvasSize * DPR;
-    canvas.height = canvasSize * DPR;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvasSize * dpr;
+    canvas.height = canvasSize * dpr;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (kCalibrated && kPixelSize > 0) {
-      drawScaleBarHiDPI(canvas, DPR, dpZoom, kPixelSize, "1/Å", detCols);
+      drawScaleBarHiDPI(canvas, dpr, dpZoom, kPixelSize, "1/Å", detCols);
     }
   }, [canvasSize, dpZoom, kCalibrated, kPixelSize, detCols]);
 
@@ -996,7 +954,7 @@ function ShowDiffraction() {
   };
 
   const handleDpPointerDown = (e: React.PointerEvent) => {
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* unsupported host */ }
+    e.currentTarget.setPointerCapture(e.pointerId);
     activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (activePointersRef.current.size === 2) {
       // second finger: switch to pinch, cancel any single-pointer gesture
@@ -1221,11 +1179,7 @@ function ShowDiffraction() {
     setDpExportAnchor(null);
     exportCounterRef.current += 1;
     const id = `html-${exportCounterRef.current}`;
-    const slug = (title || "showdiffraction")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "") || "showdiffraction";
-    const filename = `${slug}_${nFrames}x${detRows}x${detCols}.html`;
+    const filename = `${exportTitleSlug(title, "showdiffraction")}_${nFrames}x${detRows}x${detCols}.html`;
     pendingExportRef.current = id;
     setExportRequest(JSON.stringify({ mode: "single", download: true, id, filename }));
   };
@@ -1244,20 +1198,13 @@ function ShowDiffraction() {
     setExportRequest(JSON.stringify({ mode: "clear" }));
   }, [exportPayload, exportPayloadId, exportPayloadFilename, setExportRequest]);
 
-  // Keyboard shortcuts stay off while the user types in an input.
-  const isTypingTarget = React.useCallback((target: EventTarget | null): boolean => {
-    if (!(target instanceof HTMLElement)) return false;
-    if (target.isContentEditable) return true;
-    return target.closest("input, textarea, select, [role='textbox'], [contenteditable='true']") !== null;
-  }, []);
-
   const handleRootMouseDownCapture = React.useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement | null;
     if (target?.closest("canvas")) rootRef.current?.focus();
   }, []);
 
   const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (isTypingTarget(e.target)) return;
+    if (shouldIgnoreWidgetShortcut(e.target, e.key)) return;
 
     const step = e.shiftKey ? 10 : 1;
     let handled = false;
@@ -1290,7 +1237,7 @@ function ShowDiffraction() {
       e.preventDefault();
       e.stopPropagation();
     }
-  }, [isTypingTarget, frameIdx, nFrames, setFrameIdx, request]);
+  }, [frameIdx, nFrames, setFrameIdx, request]);
 
   const canvasBox = {
     position: "relative" as const,
@@ -1331,7 +1278,7 @@ function ShowDiffraction() {
                   <MetadataSection rows={[
                     ["Detector", `${detRows} x ${detCols}`],
                     ["Frames", nFrames > 1 ? `${nFrames}` : "single frame"],
-                    ["Calibration", kCalibrated && kPixelSize > 0 ? `${formatNumber(kPixelSize)} 1/Å/px` : "pixel units"],
+                    ["Calibration", kCalibrated && kPixelSize > 0 ? `${formatNumber(kPixelSize)} 1/Å/px` : "uncalibrated (px)"],
                     ["Center", `${formatNumber(centerRow)}, ${formatNumber(centerCol)}`],
                     ["Annotations", `${spots.length} spots, ${rings.length} rings`],
                   ]} />
@@ -1726,7 +1673,7 @@ function ShowDiffraction() {
                           >
                             <td style={{ padding: "2px 6px", color: themeColors.accent }}>{candidate.name}</td>
                             <td style={{ padding: "2px 6px" }}>{candidate.matched}/{candidate.n_obs}</td>
-                            <td style={{ padding: "2px 6px" }}>{candidate.mean_err != null ? (candidate.mean_err * 100).toFixed(2) : "—"}</td>
+                            <td style={{ padding: "2px 6px" }}>{candidate.mean_err != null ? (candidate.mean_err * 100).toFixed(2) : "-"}</td>
                             <td style={{ padding: "2px 6px" }}>{candidate.n_missing_strong ?? "-"}</td>
                           </tr>
                           {expandedPhaseId === candidate.phase_id && (
@@ -1748,11 +1695,11 @@ function ShowDiffraction() {
                                       const lineColor = line.ref_d == null ? statusColors.bad : line.obs_d == null ? themeColors.textMuted : undefined;
                                       return (
                                         <tr key={lineIndex} style={{ color: lineColor }}>
-                                          <td style={{ padding: "1px 6px" }}>{line.obs_d != null ? line.obs_d.toFixed(3) : "—"}</td>
-                                          <td style={{ padding: "1px 6px" }}>{line.ref_d != null ? line.ref_d.toFixed(3) : "—"}</td>
-                                          <td style={{ padding: "1px 6px" }}>{line.hkl || "—"}</td>
-                                          <td style={{ padding: "1px 6px" }}>{line.err != null ? (line.err * 100).toFixed(2) : "—"}</td>
-                                          <td style={{ padding: "1px 6px" }}>{line.i_rel != null ? line.i_rel.toFixed(0) : "—"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.obs_d != null ? line.obs_d.toFixed(3) : "-"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.ref_d != null ? line.ref_d.toFixed(3) : "-"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.hkl || "-"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.err != null ? (line.err * 100).toFixed(2) : "-"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.i_rel != null ? line.i_rel.toFixed(0) : "-"}</td>
                                           <td style={{ padding: "1px 6px" }}>{line.ref_d == null ? "unexplained" : line.obs_d == null ? "missing" : ""}</td>
                                         </tr>
                                       );
@@ -1900,24 +1847,24 @@ function ShowDiffraction() {
                     const color = spotColorAt(i);
                     const dSpacingText = spot.d_spacing != null
                       ? (spot.d_spacing_err ? `${spot.d_spacing.toFixed(3)}±${spot.d_spacing_err.toFixed(3)}` : spot.d_spacing.toFixed(3))
-                      : "—";
+                      : "-";
                     const gText = spot.g_magnitude != null
                       ? `${spot.g_magnitude.toFixed(4)} / ${(spot.g_magnitude * 10).toFixed(3)}`
                       : `${spot.r_pixels.toFixed(1)} px`;
                     const angleText = spot.angle_deg != null
                       ? (spot.angle_deg_err ? `${spot.angle_deg.toFixed(1)}±${spot.angle_deg_err.toFixed(1)}` : spot.angle_deg.toFixed(1))
-                      : "—";
+                      : "-";
                     return (
                       <tr key={spot.id} style={{ borderBottom: `1px solid ${themeColors.border}22` }}>
                         <td style={{ padding: "2px 4px", color, fontWeight: "bold" }}>{spot.id}</td>
                         <td style={{ padding: "2px 6px" }}>{dSpacingText}</td>
-                        <td style={{ padding: "2px 6px" }}>{spot.hkl || "—"}</td>
+                        <td style={{ padding: "2px 6px" }}>{spot.hkl || "-"}</td>
                         {spotsHaveReference && (
-                          <td style={{ padding: "2px 6px" }}>{spot.d_error != null ? (spot.d_error * 100).toFixed(2) : "—"}</td>
+                          <td style={{ padding: "2px 6px" }}>{spot.d_error != null ? (spot.d_error * 100).toFixed(2) : "-"}</td>
                         )}
                         <td style={{ padding: "2px 6px" }}>{gText}</td>
                         <td style={{ padding: "2px 6px" }}>{angleText}</td>
-                        <td style={{ padding: "2px 6px" }}>{spot.fit_quality != null ? spot.fit_quality.toFixed(2) : "—"}</td>
+                        <td style={{ padding: "2px 6px" }}>{spot.fit_quality != null ? spot.fit_quality.toFixed(2) : "-"}</td>
                         <td style={{ padding: "2px 6px" }}>{formatNumber(spot.intensity)}</td>
                         <td style={{ padding: "1px 4px", textAlign: "center" }}>
                           <span
@@ -1981,21 +1928,21 @@ function ShowDiffraction() {
                   >
                     <td style={{ padding: "2px 6px", color: themeColors.accent }}>{ring.id}</td>
                     <td style={{ padding: "2px 6px" }}>{ring.radius_px.toFixed(1)}</td>
-                    <td style={{ padding: "2px 6px" }}>{ring.d_spacing != null ? ring.d_spacing.toFixed(3) : "—"}</td>
+                    <td style={{ padding: "2px 6px" }}>{ring.d_spacing != null ? ring.d_spacing.toFixed(3) : "-"}</td>
                     <td style={{ padding: "2px 6px" }}>
                       {ring.hkl ? ring.hkl : ring.hkl_candidates && ring.hkl_candidates.length > 0 ? (
                         // a d-only candidate the ring-radius ratios did not verify
                         <span style={{ color: themeColors.textMuted }} title={`d within tolerance of ${ring.hkl_candidates.join(", ")}; not verified by ring ratios`}>
                           {ring.hkl_candidates[0]}?
                         </span>
-                      ) : "—"}
+                      ) : "-"}
                     </td>
                     {ringsHaveReference && (
-                      <td style={{ padding: "2px 6px" }}>{ring.d_error != null ? (ring.d_error * 100).toFixed(2) : "—"}</td>
+                      <td style={{ padding: "2px 6px" }}>{ring.d_error != null ? (ring.d_error * 100).toFixed(2) : "-"}</td>
                     )}
-                    <td style={{ padding: "2px 6px" }}>{ring.g_magnitude != null ? ring.g_magnitude.toFixed(4) : "—"}</td>
+                    <td style={{ padding: "2px 6px" }}>{ring.g_magnitude != null ? ring.g_magnitude.toFixed(4) : "-"}</td>
                     {ringsHaveWidth && (
-                      <td style={{ padding: "2px 6px" }}>{ring.fwhm_px != null ? ring.fwhm_px.toFixed(2) : "—"}</td>
+                      <td style={{ padding: "2px 6px" }}>{ring.fwhm_px != null ? ring.fwhm_px.toFixed(2) : "-"}</td>
                     )}
                     <td style={{ padding: "2px 6px" }}>{formatNumber(ring.intensity)}</td>
                     <td style={{ padding: "1px 4px", textAlign: "center" }}>

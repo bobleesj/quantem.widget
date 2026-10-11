@@ -26,9 +26,9 @@ import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { useTheme } from "../theme";
-import { COLORMAPS, GPUColormapEngine, applyColormap } from "../display/colormaps";
+import { COLORMAPS, COLORMAP_NAMES, GPUColormapEngine, applyColormap } from "../display/colormaps";
 import { DisplayFFT, getDisplayFFT, fft2dAsync, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset } from "../display/fft";
-import { findFFTPeakBrowser, sampleLineProfileBrowser } from "../display/geometry";
+import { cropMaskedRegion, findFFTPeakBrowser, sampleLineProfileBrowser } from "../display/geometry";
 import {
   buildDetectorMask,
   buildFullDetectorMask,
@@ -53,8 +53,9 @@ import { collectDroppedFiles, matchQemFiles } from "./localDrop";
 import { createResidentHoverReader } from "./residentHover";
 import type { Uint32ImageView } from "../display/borrowedImage";
 import { latestRegion } from "./latestRegion";
-import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
+import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue, unitSymbol } from "../figure";
 import { findDataRange, sliderRange, computeStats, percentileClip } from "../display/stats";
+import { displayLog } from "../display/displayMath";
 import { downloadBlob, extractBytes, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";
 import { useHideStaticFallback } from "../staticFallback";
 import { MetadataSection } from "../widgetInfo";
@@ -64,6 +65,7 @@ import { RenderPathBadge } from "../shared/RenderPathBadge";
 import { KeyboardShortcuts } from "../shared/KeyboardShortcuts";
 import { HTML_EXPORT_OVERHEAD_BYTES, exportTitleSlug, formatSavedBytes, isAbortLikeError } from "../shared/exportFormat";
 import { pointToSegmentDistance } from "../shared/geometry";
+import { shouldIgnoreWidgetShortcut } from "../shared/widgetShortcuts";
 import { Histogram } from "../shared/Histogram";
 import {
   CIRCLE_HANDLE_ANGLE,
@@ -86,17 +88,6 @@ const OFFLINE_NEEDS_WEBGPU =
   "Needs WebGPU: this page computes virtual images and diffraction patterns from the 4D data on WebGPU, " +
   "which this browser does not provide. The images shown were saved at export and do not follow the detector. " +
   "Open the page in a browser with WebGPU (Chrome, Edge or Safari 26) to explore.";
-
-function normaliseViSource(value: unknown): string {
-  const raw = String(value || "roi").trim();
-  const key = raw.toLowerCase().replace(/[-\s]+/g, "_");
-  if (["", "roi", "virtual", "virtual_image", "bf"].includes(key)) return "roi";
-  if (["dpc_row", "dpc_com_row", "dpc_r", "dpcr"].includes(key)) return "DPC_row";
-  if (["dpc_col", "dpc_com_col", "dpc_c", "dpcc"].includes(key)) return "DPC_col";
-  if (["idpc", "integrated_dpc", "integrated_differential_phase_contrast"].includes(key)) return "iDPC";
-  if (["ssb", "ssb_phase", "phase"].includes(key)) return "SSB";
-  return raw;
-}
 
 function viSourceLabel(source: string): string {
   if (source === "roi") return "ROI";
@@ -160,7 +151,8 @@ function viProductFrameView(
   scanCols: number,
   sourceOverride?: string,
 ): DataView | null {
-  const source = normaliseViSource(sourceOverride ?? model.get("vi_source"));
+  // Python writes the canonical source names (roi, DPC_row, DPC_col, iDPC, SSB) back to the model.
+  const source = sourceOverride ?? model.get("vi_source");
   if (source === "roi") return null;
   const maps = viProductMaps(model, source, scanRows, scanCols);
   if (!maps) return null;
@@ -176,7 +168,7 @@ function viProductStackForIndices(
   scanRows: number,
   scanCols: number,
 ): DataView | null {
-  const source = normaliseViSource(model.get("vi_source"));
+  const source = model.get("vi_source");
   if (source === "roi" || indices.length === 0) return null;
   const maps = viProductMaps(model, source, scanRows, scanCols);
   if (!maps) return null;
@@ -191,6 +183,27 @@ function viProductStackForIndices(
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 10;
+
+// Every colormap the display paths paint, as the other widgets offer them.
+const COLORMAP_OPTIONS = COLORMAP_NAMES.map((name) => (
+  <MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>
+));
+
+/**
+ * The device pixel ratio, kept current across browser zoom and a move to
+ * another monitor. The HiDPI overlays size their canvases from it, and
+ * resizing a canvas clears it, so every overlay must redraw when it changes.
+ */
+function useDevicePixelRatio(): number {
+  const [ratio, setRatio] = React.useState(() => window.devicePixelRatio || 1);
+  React.useEffect(() => {
+    const query = window.matchMedia(`(resolution: ${ratio}dppx)`);
+    const update = () => setRatio(window.devicePixelRatio || 1);
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, [ratio]);
+  return ratio;
+}
 
 // ============================================================================
 // UI Styles - component styling helpers
@@ -392,7 +405,8 @@ const LIGHT_ROI_COLORS: RoiColors = {
   textColor: "#0a0",
 };
 
-const VI_SOURCE_COLORS = {
+// Button colors of the image sources: the detector presets and the product maps.
+const VI_SOURCE_COLORS: Record<string, { dark: string; light: string }> = {
   bf: { dark: DARK_ROI_COLORS.textColor, light: LIGHT_ROI_COLORS.textColor },
   abf: { dark: "#44aaff", light: "#1769aa" },
   adf: { dark: "#ffaa44", light: "#9a5a00" },
@@ -400,25 +414,10 @@ const VI_SOURCE_COLORS = {
   DPC_col: { dark: "#a78bfa", light: "#6d28d9" },
   iDPC: { dark: "#2dd4bf", light: "#0f766e" },
   SSB: { dark: "#f472b6", light: "#be185d" },
-} as const;
+};
 
-function viSourceColorKey(source: string): keyof typeof VI_SOURCE_COLORS | null {
-  const normalised = normaliseViSource(source);
-  if (normalised === "DPC_row" || normalised === "DPC_col" || normalised === "iDPC" || normalised === "SSB") {
-    return normalised;
-  }
-
-  const key = String(source || "").trim().toLowerCase().replace(/[-\s]+/g, "_");
-  if (key === "bf" || key === "roi") return "bf";
-  if (key === "abf") return "abf";
-  if (key === "adf") return "adf";
-  return null;
-}
-
-function viSourceDisplayColor(source: string, themeName: string): string | null {
-  const key = viSourceColorKey(source);
-  if (!key) return null;
-  const palette = VI_SOURCE_COLORS[key];
+function viSourceDisplayColor(source: string, themeName: string): string {
+  const palette = VI_SOURCE_COLORS[source];
   return themeName === "light" ? palette.light : palette.dark;
 }
 
@@ -462,6 +461,24 @@ function formatStat(value: number): string {
   return value.toFixed(2);
 }
 
+
+// Scan units in Å per unit: a lattice spacing reads in Å, or in nm from 1 nm up.
+const ANGSTROMS_PER_SCAN_UNIT: Record<string, number> = { "Å": 1, nm: 10 };
+
+/** A d-spacing measured in the scan's unit, as a label in Å or nm, or in the scan's own unit (px) when it is not a length. */
+function formatDSpacing(dSpacing: number, unit: string): string {
+  const angstroms = ANGSTROMS_PER_SCAN_UNIT[unitSymbol(unit)];
+  if (angstroms === undefined) return `${dSpacing.toFixed(2)} ${unitSymbol(unit)}`;
+  const spacing = dSpacing * angstroms;
+  return spacing >= 10 ? `${(spacing / 10).toFixed(2)} nm` : `${spacing.toFixed(2)} \u00C5`;
+}
+
+/** A spatial frequency measured in inverse scan units, as a label in Å⁻¹ or in the scan's inverse unit. */
+function formatSpatialFrequency(frequency: number, unit: string): string {
+  const angstroms = ANGSTROMS_PER_SCAN_UNIT[unitSymbol(unit)];
+  if (angstroms === undefined) return `${frequency.toFixed(4)} ${unitSymbol(unit)}\u207B\u00B9`;
+  return `${(frequency / angstroms).toFixed(4)} \u00C5\u207B\u00B9`;
+}
 
 // Search radius (FFT pixels) that snaps a click to the nearest Bragg spot,
 // refined to a sub-pixel centroid.
@@ -941,52 +958,86 @@ function drawRoiOverlayHiDPI(
 }
 
 /**
- * Crop the scan-ROI bounding box out of a float32 virtual image for the
- * ROI-scoped FFT. A circle ROI zeroes the pixels outside its radius so the
- * spectrum covers only the drawn region; square and rect keep the whole box.
- * Returns null when the crop is smaller than 2x2.
+ * Draw a profile line on a HiDPI overlay: both endpoints, the line between
+ * them and, for a profile wider than one pixel, the dashed band it averages.
+ * Points use the sampler's convention (pixel i centered at i), so they are
+ * drawn on the centers of the pixels the profile reads. The DP and VI panels
+ * share it so both profiles look the same.
  */
-function cropSingleROI(
-  data: Float32Array, imageWidth: number, imageHeight: number,
-  mode: string, centerRow: number, centerCol: number,
-  radius: number, roiWidth: number, roiHeight: number,
-): { cropped: Float32Array; cropW: number; cropH: number } | null {
-  if (mode === "off") return null;
-  let colStart: number, rowStart: number, colEnd: number, rowEnd: number;
-
-  if (mode === "rect") {
-    const halfWidth = roiWidth / 2, halfHeight = roiHeight / 2;
-    colStart = Math.max(0, Math.floor(centerCol - halfWidth));
-    rowStart = Math.max(0, Math.floor(centerRow - halfHeight));
-    colEnd = Math.min(imageWidth, Math.ceil(centerCol + halfWidth));
-    rowEnd = Math.min(imageHeight, Math.ceil(centerRow + halfHeight));
-  } else {
-    colStart = Math.max(0, Math.floor(centerCol - radius));
-    rowStart = Math.max(0, Math.floor(centerRow - radius));
-    colEnd = Math.min(imageWidth, Math.ceil(centerCol + radius));
-    rowEnd = Math.min(imageHeight, Math.ceil(centerRow + radius));
-  }
-
-  const cropW = colEnd - colStart, cropH = rowEnd - rowStart;
-  if (cropW < 2 || cropH < 2) return null;
-
-  const cropped = new Float32Array(cropW * cropH);
-  if (mode === "circle") {
-    const radiusSq = radius * radius;
-    for (let cropRow = 0; cropRow < cropH; cropRow++) {
-      for (let cropCol = 0; cropCol < cropW; cropCol++) {
-        const col = colStart + cropCol, row = rowStart + cropRow;
-        const distSq = (col - centerCol) * (col - centerCol) + (row - centerRow) * (row - centerRow);
-        cropped[cropRow * cropW + cropCol] = distSq <= radiusSq ? data[row * imageWidth + col] : 0;
-      }
+function drawProfileOverlay(
+  canvas: HTMLCanvasElement,
+  dpr: number,
+  points: { row: number; col: number }[],
+  width: number,
+  zoom: number,
+  panX: number,
+  panY: number,
+  imageWidth: number,
+  imageHeight: number,
+  color: string,
+) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.save();
+  ctx.scale(dpr, dpr);
+  const scaleX = canvas.width / dpr / imageWidth;
+  const scaleY = canvas.height / dpr / imageHeight;
+  const toScreenX = (col: number) => maskToCanvas(col, zoom, panX) * scaleX;
+  const toScreenY = (row: number) => maskToCanvas(row, zoom, panY) * scaleY;
+  const [first, second] = points;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(toScreenX(first.col), toScreenY(first.row), 4, 0, Math.PI * 2);
+  ctx.fill();
+  if (second) {
+    const colDelta = second.col - first.col;
+    const rowDelta = second.row - first.row;
+    const lineLength = Math.sqrt(colDelta * colDelta + rowDelta * rowDelta);
+    if (width > 1 && lineLength > 0) {
+      const halfWidth = (width - 1) / 2;
+      const perpRow = -colDelta / lineLength * halfWidth;
+      const perpCol = rowDelta / lineLength * halfWidth;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(toScreenX(first.col + perpCol), toScreenY(first.row + perpRow));
+      ctx.lineTo(toScreenX(second.col + perpCol), toScreenY(second.row + perpRow));
+      ctx.lineTo(toScreenX(second.col - perpCol), toScreenY(second.row - perpRow));
+      ctx.lineTo(toScreenX(first.col - perpCol), toScreenY(first.row - perpRow));
+      ctx.closePath();
+      // A translucent fill through globalAlpha: appending an alpha byte to a
+      // 3-digit color such as "#5af" makes an invalid color, which fills opaque.
+      ctx.globalAlpha = 0.125;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
-  } else {
-    for (let cropRow = 0; cropRow < cropH; cropRow++) {
-      const sourceOffset = (rowStart + cropRow) * imageWidth + colStart;
-      cropped.set(data.subarray(sourceOffset, sourceOffset + cropW), cropRow * cropW);
-    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(toScreenX(first.col), toScreenY(first.row));
+    ctx.lineTo(toScreenX(second.col), toScreenY(second.row));
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(toScreenX(second.col), toScreenY(second.row), 4, 0, Math.PI * 2);
+    ctx.fill();
   }
-  return { cropped, cropW, cropH };
+  ctx.restore();
+}
+
+/**
+ * Signed float32 log1p of every value, as the WGSL display shaders apply it
+ * (displayLog). The histogram, the contrast range and the Canvas2D image use
+ * it so they agree with the WebGPU image on signed data (DPC, phase); a log of
+ * the clamped value would map every negative pixel to zero.
+ */
+function displayLogScale(values: Float32Array): Float32Array {
+  const scaled = new Float32Array(values.length);
+  for (let i = 0; i < values.length; i++) scaled[i] = displayLog(values[i]);
+  return scaled;
 }
 
 /**
@@ -1331,7 +1382,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   sourceLoading = false,
 }: CompareVirtualGridProps) {
   const positionRafRef = React.useRef(0);
-  const panDragRef = React.useRef<{clientX:number; clientY:number; panX:number; panY:number} | null>(null);
+  const panDragRef = React.useRef<{ clientX: number; clientY: number; panX: number; panY: number } | null>(null);
   const pendingPositionRef = React.useRef<[number, number]>([0, 0]);
   React.useEffect(() => () => cancelAnimationFrame(positionRafRef.current), []);
   const batchModel = useModel();
@@ -1353,6 +1404,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   const [comparePanY, setComparePanY] = React.useState(0);
   const compareViewRef = React.useRef({ zoom: 1, panX: 0, panY: 0, raf: 0 });
   const panelPixels = Math.max(1, shapeRows * shapeCols);
+  const dpr = useDevicePixelRatio();
 
   const panels = React.useMemo(() => {
     if (!bytes || count <= 0 || bytes.byteLength < panelPixels * count * 4) {
@@ -1409,7 +1461,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine && gpuRanges?.has(frame)),
       }))
       .filter((entry) => sourceLoading || entry.panel !== undefined || entry.gpuLoaded);
-  }, [gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, renderIndices, scaleMode, sourceLoading]);
+  }, [gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, renderIndices, sourceLoading]);
 
   const renderGpuSlotsNow = React.useCallback((): number => {
     if (!gpuEngine || !gpuSlots) return 0;
@@ -1426,9 +1478,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       const rawRange = gpuRanges?.get(entry.frame);
       const canvas = gpuCanvasRefs.current[localIdx];
       if (slot === undefined || !rawRange || !canvas) return;
-      const transformRangeValue = (value: number) => scaleMode === "log"
-        ? (value >= 0 ? Math.log1p(value) : -Math.log1p(-value))
-        : value;
+      const transformRangeValue = (value: number) => scaleMode === "log" ? displayLog(value) : value;
       const rangeMin = transformRangeValue(rawRange.min);
       const rangeMax = transformRangeValue(rawRange.max);
       const span = Math.max(0, rangeMax - rangeMin);
@@ -1487,7 +1537,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       bitmap.close();
     })();
     return panels.length;
-  }, [colormap, comparePanX, comparePanY, compareZoom, gpuEngine, gpuRanges, gpuSlots, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
+  }, [colormap, gpuEngine, gpuRanges, gpuSlots, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
 
   React.useEffect(() => {
     onGpuRendererReady?.(renderGpuSlotsNow);
@@ -1552,13 +1602,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       ctx.imageSmoothingEnabled = smooth;
       if (smooth) ctx.imageSmoothingQuality = "high";
 
-      let scaled = panel;
-      if (scaleMode === "log") {
-        scaled = new Float32Array(panel.length);
-        for (let i = 0; i < panel.length; i++) {
-          scaled[i] = Math.log1p(Math.max(0, panel[i]));
-        }
-      }
+      const scaled = scaleMode === "log" ? displayLogScale(panel) : panel;
       const { min, max } = findDataRange(scaled);
       let vmin: number;
       let vmax: number;
@@ -1573,69 +1617,6 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       canvasDrawCacheRef.current.set(frame, { canvas, panel, styleKey });
     });
   }, [autoContrast, colormap, gpuEngine, gpuSlots, gpuVersion, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
-
-  React.useEffect(() => {
-    if (!gpuEngine || !gpuSlots || kind === "diffraction") return;
-    const gpuEntries = renderEntries
-      .map((entry, localIdx) => ({
-        frame: entry.frame,
-        localIdx,
-        slot: gpuSlots.get(entry.frame),
-      }))
-      .filter((entry): entry is { frame: number; localIdx: number; slot: number } => entry.slot !== undefined);
-    if (gpuEntries.length === 0) return;
-
-    const lut = COLORMAPS[colormap] || COLORMAPS.inferno;
-    gpuEngine.uploadLUT(colormap, lut);
-
-    gpuEntries.forEach(({ localIdx }) => {
-      const canvas = canvasRefs.current[localIdx];
-      if (!canvas) return;
-      if (canvas.width !== shapeCols) canvas.width = shapeCols;
-      if (canvas.height !== shapeRows) canvas.height = shapeRows;
-    });
-
-    void (async () => {
-      const bitmaps = await gpuEngine.renderSlotsWithComputedGpuRangeAsync(
-        gpuEntries.map((entry) => entry.slot),
-        gpuEntries.map(() => vminPct),
-        gpuEntries.map(() => vmaxPct),
-        scaleMode === "log",
-      );
-      if (!bitmaps) return;
-
-      bitmaps.forEach((bitmap, i) => {
-        if (!bitmap) return;
-        const entry = gpuEntries[i];
-        const canvas = canvasRefs.current[entry.localIdx];
-        const ctx = canvas?.getContext("2d");
-        if (!canvas || !ctx) {
-          bitmap.close?.();
-          return;
-        }
-        if (canvas.width !== shapeCols) canvas.width = shapeCols;
-        if (canvas.height !== shapeRows) canvas.height = shapeRows;
-        ctx.clearRect(0, 0, shapeCols, shapeRows);
-        ctx.imageSmoothingEnabled = smooth;
-        if (smooth) ctx.imageSmoothingQuality = "high";
-        ctx.drawImage(bitmap, 0, 0, shapeCols, shapeRows);
-        bitmap.close?.();
-        canvasDrawCacheRef.current.delete(entry.frame);
-      });
-    })();
-  }, [
-    kind,
-    colormap,
-    gpuEngine,
-    gpuSlots,
-    renderEntries,
-    scaleMode,
-    shapeCols,
-    shapeRows,
-    smooth,
-    vmaxPct,
-    vminPct,
-  ]);
 
   const displayCount = Math.max(1, renderEntries.length);
   const autoCols = displayCount >= 8 ? 4 : displayCount >= 5 ? 3 : displayCount >= 2 ? 2 : 1;
@@ -1775,7 +1756,6 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     let raf = 0;
     const paint = () => {
     raf = 0;
-    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
     renderEntries.forEach(({ panel, gpuLoaded }, idx) => {
       const overlay = overlayRefs.current[idx];
       const tile = tileRefs.current[idx];
@@ -1789,30 +1769,26 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       const ctx = overlay.getContext("2d");
       ctx?.clearRect(0, 0, overlay.width, overlay.height);
       if (!panel && !gpuLoaded) return;
-      if (showScaleBar && cssWidth >= 96) {
-        const unit = pixelSize > 0 ? pixelUnit || "px" : "px";
-        const pxSize = pixelSize > 0 ? pixelSize : 1;
-        drawScaleBarHiDPI(overlay, dpr, compareZoom, pxSize, unit, shapeCols);
-      }
-      drawViPositionMarker(
-        overlay,
-        dpr,
-        kind === "diffraction" ? cursorRow : Number(batchModel.get("pos_row")),
-        kind === "diffraction" ? cursorCol : Number(batchModel.get("pos_col")),
-        compareZoom,
-        comparePanX,
-        comparePanY,
-        shapeCols,
-        shapeRows,
-        isDraggingPosition,
-        idx === 0 && cssWidth >= 96,
-      );
+      if (showScaleBar && cssWidth >= 96) drawScaleBarHiDPI(overlay, dpr, compareZoom, pixelSize || 1, pixelUnit, shapeCols);
+      // A scan ROI replaces the scan-position crosshair, as on the single image.
       if (scanRegion && scanRegion.mode !== "off") {
-        ctx?.clearRect(0, 0, overlay.width, overlay.height);
-        if (showScaleBar) drawScaleBarHiDPI(overlay, dpr, compareZoom, pixelSize || 1, pixelUnit || "px", shapeCols);
         drawViRoiOverlayHiDPI(overlay, dpr, scanRegion.mode,
           scanRegion.row, scanRegion.col, scanRegion.radius, scanRegion.width, scanRegion.height,
           compareZoom, comparePanX, comparePanY, shapeCols, shapeRows, isDraggingPosition, false, false);
+      } else {
+        drawViPositionMarker(
+          overlay,
+          dpr,
+          kind === "diffraction" ? cursorRow : Number(batchModel.get("pos_row")),
+          kind === "diffraction" ? cursorCol : Number(batchModel.get("pos_col")),
+          compareZoom,
+          comparePanX,
+          comparePanY,
+          shapeCols,
+          shapeRows,
+          isDraggingPosition,
+          idx === 0 && cssWidth >= 96,
+        );
       }
     });
     };
@@ -1820,7 +1796,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     paint();
     batchModel.on("change:pos_row", changed); batchModel.on("change:pos_col", changed);
     return () => { if (raf) cancelAnimationFrame(raf); batchModel.off("change:pos_row", changed); batchModel.off("change:pos_col", changed); };
-  }, [batchModel, kind, comparePanX, comparePanY, compareZoom, cursorCol, cursorRow, isDraggingPosition, overlayVersion, pixelSize, pixelUnit, renderEntries, shapeCols, shapeRows, showScaleBar, scanRegion]);
+  }, [batchModel, kind, comparePanX, comparePanY, compareZoom, cursorCol, cursorRow, dpr, isDraggingPosition, overlayVersion, pixelSize, pixelUnit, renderEntries, shapeCols, shapeRows, showScaleBar, scanRegion]);
 
   // Hover readout: the value under the pointer, read from the panel's bytes or,
   // for a GPU-only panel, four bytes of its resident counts.
@@ -1857,11 +1833,25 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   }, []);
   const panelTiles = React.useMemo(() => renderEntries.map(({ frame, panel, gpuLoaded }, localIdx) => {
           const loaded = gpuLoaded || panel !== undefined;
+          // Tests and screenshot tools read the canvas on screen: the WebGPU tile
+          // covers the bytes canvas whenever the panel is resident.
+          const outputName = kind === "diffraction" ? "show4dstem-comparison-diffraction" : `show4dstem-compare-${frame}`;
           const active = frame === activeIdx;
           const label = labels && labels.length > frame ? labels[frame] : `Dataset ${frame + 1}`;
           const isStarred = (starred || []).includes(frame);
           const isDragging = draggingFrame === frame;
           const isPendingMove = pendingMoveFrame === frame;
+          // A release (or a cancelled pointer) ends a pan, or commits the dragged position.
+          const finishPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+            if (panDragRef.current) {
+              panDragRef.current = null;
+              return;
+            }
+            if (!isDraggingPositionRef.current) return;
+            updatePositionFromPointer(event.currentTarget, event.clientX, event.clientY, true);
+            isDraggingPositionRef.current = false;
+            setIsDraggingPosition(false);
+          };
           const tileRing = isPendingMove
             ? "inset 0 0 0 2px #facc15, inset 0 0 0 3px rgba(0,0,0,0.75)"
             : active
@@ -1881,9 +1871,9 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
               onPointerDown={(event) => {
                 const target = event.target instanceof Element ? event.target : null;
                 if (!loaded || reorderMode || target?.closest("button")) return;
-                try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
+                event.currentTarget.setPointerCapture(event.pointerId);
                 if (event.shiftKey) {
-                  panDragRef.current={clientX:event.clientX,clientY:event.clientY,panX:comparePanX,panY:comparePanY};
+                  panDragRef.current = { clientX: event.clientX, clientY: event.clientY, panX: comparePanX, panY: comparePanY };
                   return;
                 }
                 isDraggingPositionRef.current = true;
@@ -1896,13 +1886,17 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 const pan = panDragRef.current;
                 if (pan) {
                   event.preventDefault();
-                  const rect=event.currentTarget.getBoundingClientRect();
-                  const view=compareViewRef.current;
-                  view.panX=pan.panX+(event.clientX-pan.clientX)*shapeCols/rect.width;
-                  view.panY=pan.panY+(event.clientY-pan.clientY)*shapeRows/rect.height;
-                  if (!view.raf) view.raf=requestAnimationFrame(() => {
-                    view.raf=0;setComparePanX(view.panX);setComparePanY(view.panY);
-                  });
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const view = compareViewRef.current;
+                  view.panX = pan.panX + (event.clientX - pan.clientX) * shapeCols / rect.width;
+                  view.panY = pan.panY + (event.clientY - pan.clientY) * shapeRows / rect.height;
+                  if (!view.raf) {
+                    view.raf = requestAnimationFrame(() => {
+                      view.raf = 0;
+                      setComparePanX(view.panX);
+                      setComparePanY(view.panY);
+                    });
+                  }
                   return;
                 }
                 if (!isDraggingPositionRef.current || reorderMode) return;
@@ -1910,20 +1904,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 updatePositionFromPointer(event.currentTarget, event.clientX, event.clientY);
               }}
               onPointerLeave={() => hideReadout(localIdx)}
-              onPointerUp={(event) => {
-                if (panDragRef.current) {panDragRef.current=null;return;}
-                if (!isDraggingPositionRef.current) return;
-                updatePositionFromPointer(event.currentTarget, event.clientX, event.clientY, true);
-                isDraggingPositionRef.current = false;
-                setIsDraggingPosition(false);
-              }}
-              onPointerCancel={(event) => {
-                if (panDragRef.current) {panDragRef.current=null;return;}
-                if (!isDraggingPositionRef.current) return;
-                updatePositionFromPointer(event.currentTarget, event.clientX, event.clientY, true);
-                isDraggingPositionRef.current = false;
-                setIsDraggingPosition(false);
-              }}
+              onPointerUp={finishPointer}
+              onPointerCancel={finishPointer}
               onClick={() => {
                 if (!reorderMode) {
                   onSelect(frame);
@@ -2054,7 +2036,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                   color: "white", background: "rgba(0,0,0,0.6)", fontSize: 11, padding: "1px 3px", fontVariantNumeric: "tabular-nums" }}
               />
               <canvas
-                data-quantem-scientific-output={`show4dstem-compare-${frame}`}
+                data-quantem-scientific-output={gpuLoaded ? undefined : outputName}
                 ref={(node) => { canvasRefs.current[localIdx] = node; }}
                 width={shapeCols}
                 height={shapeRows}
@@ -2066,14 +2048,11 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                   height: imageHeight,
                   imageRendering: smooth ? "auto" : "pixelated",
                   pointerEvents: "none",
-                  transition: "opacity 160ms ease",
                 }}
               />
               <canvas
-                data-quantem-scientific-output={kind === "diffraction" ? "show4dstem-comparison-diffraction" : undefined}
-                ref={(node) => {
-                  gpuCanvasRefs.current[localIdx] = node;
-                }}
+                data-quantem-scientific-output={gpuLoaded ? outputName : undefined}
+                ref={(node) => { gpuCanvasRefs.current[localIdx] = node; }}
                 width={shapeCols}
                 height={shapeRows}
                 style={{
@@ -2323,6 +2302,8 @@ function Show4DSTEM() {
   const [roiCenterRow, setRoiCenterRow] = useModelState<number>("roi_center_row");
   const [pixelSize] = useModelState<number>("pixel_size");
   const [pixelUnit] = useModelState<string>("pixel_unit");
+  // An uncalibrated scan carries the unit "pixels"; every label spells it "px".
+  const scanUnit = pixelUnit && pixelUnit !== "pixels" ? pixelUnit : "px";
   const [kPixelSize] = useModelState<number>("k_pixel_size");
   const [kPixelUnit] = useModelState<string>("k_pixel_unit");
   const [kCalibrated] = useModelState<boolean>("k_calibrated");
@@ -2334,11 +2315,13 @@ function Show4DSTEM() {
   const [frameBytes] = useModelState<DataView>("frame_bytes");
   const [virtualImageBytes, setVirtualImageBytes] = useModelState<DataView>("virtual_image_bytes");
   const [frontendVirtualImageBytes, setFrontendVirtualImageBytes] = React.useState<DataView | null>(null);
-  const [viSource, setViSourceModel] = useModelState<string>("vi_source");
+  const [viSource, setViSource] = useModelState<string>("vi_source");
   const [viProductLabels] = useModelState<string[]>("vi_product_labels");
   const [viProductMapFrames] = useModelState<number>("vi_product_map_frames");
   const [viProductMapsBytes] = useModelState<DataView>("vi_product_maps_bytes");
   const [, setSsbComputeRequest] = useModelState<string>("ssb_compute_request");
+  // A preset button asks the kernel (or, offline, the browser backend) to place the detector.
+  const [, requestViPreset] = useModelState<string>("_preset_request");
   const [ssbComputeStatus] = useModelState<string>("ssb_compute_status");
   const [ssbComputeBusy] = useModelState<boolean>("ssb_compute_busy");
   const [ssbComputeEnabled] = useModelState<boolean>("ssb_compute_enabled");
@@ -2360,10 +2343,6 @@ function Show4DSTEM() {
   const [roiMode, setRoiMode] = useModelState<string>("roi_mode");
   const [roiWidth, setRoiWidth] = useModelState<number>("roi_width");
   const [roiHeight, setRoiHeight] = useModelState<number>("roi_height");
-
-  // Global min/max for DP normalization (from Python)
-  const [dpGlobalMin] = useModelState<number>("dp_global_min");
-  const [dpGlobalMax] = useModelState<number>("dp_global_max");
 
   // VI min/max (viDataMin/viDataMax) are derived JS-side from virtual_image_bytes below.
   // Keeping them out of Python traits avoids a comm-message ordering race where
@@ -2401,14 +2380,7 @@ function Show4DSTEM() {
   const [compareStarredPanels, setCompareStarredPanels] = useModelState<number[]>("compare_starred_panels");
 
   React.useEffect(() => {
-    try {
-      model.send({
-        type: "show4dstem_frontend_ready",
-        version: 1,
-      });
-    } catch {
-      // A closing notebook comm has no mounted UI left to initialize.
-    }
+    model.send({ type: "show4dstem_frontend_ready", version: 1 });
   }, [model]);
 
   // Profile line state (synced with Python)
@@ -2622,8 +2594,8 @@ function Show4DSTEM() {
 
   // VI ROI state (real-space region selection for summed DP) - synced with Python
   const [viRoiMode, setViRoiMode] = useModelState<string>("vi_roi_mode");
-  const [viRoiCenterRow, setViRoiCenterRow] = useModelState<number>("vi_roi_center_row");
-  const [viRoiCenterCol, setViRoiCenterCol] = useModelState<number>("vi_roi_center_col");
+  const [viRoiCenterRow] = useModelState<number>("vi_roi_center_row");
+  const [viRoiCenterCol] = useModelState<number>("vi_roi_center_col");
   const [viRoiRadius, setViRoiRadius] = useModelState<number>("vi_roi_radius");
   const [viRoiWidth, setViRoiWidth] = useModelState<number>("vi_roi_width");
   const [viRoiHeight, setViRoiHeight] = useModelState<number>("vi_roi_height");
@@ -2670,10 +2642,7 @@ function Show4DSTEM() {
   const rawVirtualImageVersionRef = React.useRef(0);
   const viGpuColormapRef = React.useRef<GPUColormapEngine | null>(null);
   const viGpuColormapDeviceRef = React.useRef<GPUDevice | null>(null);
-  const ensureViGpuColormap = React.useCallback((
-    backend: DetectorCompute,
-  ): GPUColormapEngine => {
-    const device = backend.getDevice();
+  const ensureViGpuColormap = React.useCallback((device: GPUDevice): GPUColormapEngine => {
     if (!viGpuColormapRef.current || viGpuColormapDeviceRef.current !== device) {
       viGpuColormapRef.current?.destroy();
       viGpuColormapRef.current = new GPUColormapEngine(device);
@@ -2702,6 +2671,18 @@ function Show4DSTEM() {
   // every existing render effect works unchanged. Detector counts are integers,
   // so the browser masked-sum (u32 accumulate) is bit-exact to the kernel.
   const [offline] = useModelState<boolean>("offline");
+  // The scan region moves in one compound message, so the kernel never reduces
+  // a half-moved region (new row, old column). A live kernel acknowledges each
+  // region through vi_roi_receipt and the local center holds until then; the
+  // offline backend has no receipt and reduces every move on WebGPU.
+  const requestScanRegion = React.useCallback((row: number, col: number) => {
+    if (offline) {
+      model.set("vi_roi_center", [row, col]);
+      model.save_changes();
+    } else {
+      regionRequests.request(row, col);
+    }
+  }, [model, offline, regionRequests]);
   const [offlineBackendLoading, setOfflineBackendLoading] = React.useState(false);
   const [offlineBackendStatus, setOfflineBackendStatus] = React.useState("");
   const [offlineBackendError, setOfflineBackendError] = React.useState("");
@@ -2848,28 +2829,19 @@ function Show4DSTEM() {
           return [] as string[];
         }
       })();
-      // Native uint16 HDF5 datasets are intentionally decoded one at a time so
-      // the viewer never holds the full collection in VRAM. That is a
-      // residency limit, not a preload target: the background loader still
-      // visits every visible dataset sequentially and publishes each BF/DF panel
-      // as soon as its volume is ready.
+      // The lossless decode override (u2/uint16/native) keeps counts above 255
+      // on the URL path as the local-file loader does. Native uint16 datasets
+      // are decoded one at a time so the viewer never holds the full
+      // collection in VRAM. That is a residency limit, not a preload target:
+      // the background loader still visits every visible dataset sequentially
+      // and publishes each BF/DF panel as soon as its volume is ready.
       const h5DecodeDtype = String(
         (globalThis as { __QT_H5_DECODE_DTYPE?: unknown }).__QT_H5_DECODE_DTYPE || "",
       ).toLowerCase();
       const h5UsesNativeU16 = h5DecodeDtype === "u2"
         || h5DecodeDtype === "uint16"
         || h5DecodeDtype === "native";
-      const h5AllowU16MultiResident = (globalThis as { __QT_H5_ALLOW_U16_MULTI_PRELOAD?: boolean })
-        .__QT_H5_ALLOW_U16_MULTI_PRELOAD === true;
-      const h5RequestedResidentLimit = show4DSTEMGlobalInt(
-        "__QT_H5_MAX_RESIDENT",
-        compareResidentTarget,
-        1,
-        compareResidentTarget,
-      );
-      const h5ResidentLimit = h5UsesNativeU16 && !h5AllowU16MultiResident
-        ? 1
-        : h5RequestedResidentLimit;
+      const h5ResidentLimit = h5UsesNativeU16 ? 1 : compareResidentTarget;
       if (requireLocalH5Files && h5Urls.length && !show4DSTEMHasLocalFiles()) {
         if (!disposed) {
           setOfflineBackendStatus("Waiting for local HDF5 files");
@@ -2912,12 +2884,6 @@ function Show4DSTEM() {
         if (!disposed) setOfflineBackendStatus(`Loading ${label}`);
         let h5BadPx = new Uint32Array(0);
         const embeddedBadPxJson = model.get("_offline_bad_px") as string | undefined;
-        const low8Only = (globalThis as { __QT_H5_FORCE_LOW8?: boolean }).__QT_H5_FORCE_LOW8 === true;
-        if (low8Only) {
-          (globalThis as { __BSLZ4_LOW8_ONLY?: boolean }).__BSLZ4_LOW8_ONLY = true;
-        } else {
-          (globalThis as { __BSLZ4_LOW8_ONLY?: boolean }).__BSLZ4_LOW8_ONLY = false;
-        }
         let hasEmbeddedBadPx = false;
         if (embeddedBadPxJson) {
           try {
@@ -2943,12 +2909,7 @@ function Show4DSTEM() {
               groupSize: show4DSTEMOptionalGlobalInt("__QT_H5_LOCAL_GROUP", 1, 16),
               workerCount: show4DSTEMOptionalGlobalInt("__QT_H5_LOCAL_WORKERS", 0, 8),
               detBin: show4DSTEMOptionalGlobalInt("__QT_H5_DET_BIN", 1, 16),
-              // Lossless decode override ("u2"/"uint16"/"native"): routes to the fused
-              // native-uint16 kernel so counts above 255 survive (the u8 default wraps).
-              decodeDtype: (globalThis as { __QT_H5_DECODE_DTYPE?: unknown }).__QT_H5_DECODE_DTYPE as
-                Parameters<typeof loadShow4DSTEMLocalH5Master>[1] extends infer O
-                  ? O extends { decodeDtype?: infer D } ? D : undefined
-                  : undefined,
+              // The loader reads the lossless __QT_H5_DECODE_DTYPE override itself.
             });
             if (local) {
               if (!disposed) setH5LocalSourceStatus(`Local HDF5 ${local.profile.totalMs} ms`);
@@ -2987,10 +2948,6 @@ function Show4DSTEM() {
           let maxDataFiles = Number.POSITIVE_INFINITY;
           let h5TotalFrames = hasEmbeddedBadPx ? scanRows * scanCols : 0;
           let device: GPUDevice | null = null;
-          // Honor the lossless decode override on the HTTP/streamed path too, so a
-          // served bundle can request native uint16 exactly like the local-file path.
-          const httpDecodeOverride = String((globalThis as { __QT_H5_DECODE_DTYPE?: unknown }).__QT_H5_DECODE_DTYPE || "").toLowerCase();
-          const wantU16 = httpDecodeOverride === "u2" || httpDecodeOverride === "uint16" || httpDecodeOverride === "native";
           let decodeDtype: "uint8" | "uint16" | "float32" = "uint8";
           let sourceDtype: "unknown" | "uint8" | "uint16" | "uint32" | "float32" = "unknown";
           type QueuedBslz4Spec = Bslz4Spec & {
@@ -3087,7 +3044,7 @@ function Show4DSTEM() {
                 throw new Error(`Mixed HDF5 source dtypes are not supported in one browser load: ${sourceDtype} and ${fileVolume.srcDtype}.`);
               }
               sourceDtype = fileVolume.srcDtype;
-              decodeDtype = fileVolume.srcDtype === "float32" ? "float32" : (wantU16 && fileVolume.srcDtype === "uint16") ? "uint16" : "uint8";
+              decodeDtype = fileVolume.srcDtype === "float32" ? "float32" : (h5UsesNativeU16 && fileVolume.srcDtype === "uint16") ? "uint16" : "uint8";
               {
                 // Every chunk of this file, each at its own scan offset. Taking only
                 // chunks[0] silently dropped all later chunks of multi-chunk files,
@@ -3211,22 +3168,17 @@ function Show4DSTEM() {
           // Visit every dataset in the background. For uint16 this remains
           // serial (preloadWindow=1) and only one detector volume is resident,
           // but its BF/DF result is retained in a display slot before moving on.
-          const maxPreload = Math.max(1, h5Urls.length);
-          const preloadCount = show4DSTEMGlobalInt("__QT_H5_PRELOAD_VOLUMES", h5Urls.length, 1, maxPreload);
-          const preloadWindow = show4DSTEMGlobalInt(
-            "__QT_H5_PRELOAD_WINDOW",
-            1,
-            1,
-            Math.min(4, preloadCount),
-          );
-          const prefetchNext = !h5UsesNativeU16 &&
-            (globalThis as { __QT_H5_PREFETCH_NEXT?: boolean }).__QT_H5_PREFETCH_NEXT !== false;
-          const prefetchWindow = show4DSTEMGlobalInt("__QT_H5_PREFETCH_WINDOW", 2, 1, 8);
-          const maxPrefetchFiles = show4DSTEMGlobalInt("__QT_H5_PREFETCH_FILES", 32, 1, 64);
+          const preloadWindow = show4DSTEMGlobalInt("__QT_H5_PRELOAD_WINDOW", 1, 1, Math.min(4, h5Urls.length));
+          // Fetch the next dataset's compressed files while this one decodes,
+          // two files ahead and at most 32; native uint16 keeps one volume
+          // resident and skips it.
+          const prefetchNext = !h5UsesNativeU16;
+          const prefetchWindow = 2;
+          const maxPrefetchFiles = 32;
           const order = [
             initialIdx,
             ...Array.from({ length: h5Urls.length }, (_v, i) => i).filter((i) => i !== initialIdx),
-          ].slice(0, preloadCount);
+          ];
           const prefetchStarted = new Set<number>();
           const prefetchVolume = async (index: number): Promise<void> => {
             if (!prefetchNext || prefetchStarted.has(index) || !/_master\.h5(?:[?#].*)?$/.test(h5Urls[index])) return;
@@ -3355,11 +3307,13 @@ function Show4DSTEM() {
       };
       type WarmRoiPresetName = "bf" | "abf" | "adf";
       type WarmRoiGeometry = {
-        mode: "circle" | "annular";
+        mode: string;
         centerRow: number;
         centerCol: number;
         radius: number;
         radiusInner: number;
+        width: number;
+        height: number;
       };
       type WarmViCacheEntry = {
         source: ViGpuSource;
@@ -3370,11 +3324,7 @@ function Show4DSTEM() {
       let viWarmupStarted = false;
       let viWarmupGeneration = 0;
       let suppressViTraitRecompute = false;
-      const roundedCacheValue = (value: unknown): string => {
-        const numeric = Number(value);
-        if (!Number.isFinite(numeric)) return "0";
-        return String(Math.round(numeric * 1000) / 1000);
-      };
+      const roundedCacheValue = (value: number): string => String(Math.round(value * 1000) / 1000);
       const activeVolumeCacheKey = () => `vol:${Math.max(0, Math.round(Number(model.get("frame_idx") || 0)))}`;
       const dpcWarmCacheKey = (source: DpcGpuSource) => [
         activeVolumeCacheKey(),
@@ -3383,70 +3333,53 @@ function Show4DSTEM() {
         `scan:${scanRows}x${scanCols}`,
         `det:${detectorRows}x${detectorCols}`,
       ].join("|");
-      const normalizedRadiusInner = (geometry: WarmRoiGeometry) =>
-        geometry.mode === "annular" ? Math.max(0, geometry.radiusInner) : 0;
-      const roiWarmCacheKey = (geometry: WarmRoiGeometry) => [
-        activeVolumeCacheKey(),
-        "roi",
-        geometry.mode,
-        `cr:${roundedCacheValue(geometry.centerRow)}`,
-        `cc:${roundedCacheValue(geometry.centerCol)}`,
-        `r:${roundedCacheValue(geometry.radius)}`,
-        `ri:${roundedCacheValue(normalizedRadiusInner(geometry))}`,
-        `scan:${scanRows}x${scanCols}`,
-        `det:${detectorRows}x${detectorCols}`,
-      ].join("|");
-      const currentRoiGeometry = (): WarmRoiGeometry => {
-        const mode = String(model.get("roi_mode") || "circle") === "annular" ? "annular" : "circle";
-        return {
-          mode,
-          centerRow: Number(model.get("roi_center_row") || model.get("center_row") || detectorRows / 2),
-          centerCol: Number(model.get("roi_center_col") || model.get("center_col") || detectorCols / 2),
-          radius: Math.max(1, Number(model.get("roi_radius") || model.get("bf_radius") || 1)),
-          radiusInner: mode === "annular" ? Math.max(0, Number(model.get("roi_radius_inner") || 0)) : 0,
-        };
+      // The key holds exactly what buildDetectorMask reads for the mode, so two
+      // detectors share a cached image only when they select the same pixels
+      // (a Rect, Point or Square on the BF disk is not the BF image).
+      const roiWarmCacheKey = (geometry: WarmRoiGeometry) => {
+        const { mode, centerRow, centerCol } = geometry;
+        const shape = mode === "point"
+          ? [`at:${Math.round(centerRow)},${Math.round(centerCol)}`]
+          : [
+            `cr:${roundedCacheValue(centerRow)}`,
+            `cc:${roundedCacheValue(centerCol)}`,
+            ...(mode === "rect"
+              ? [`w:${roundedCacheValue(geometry.width)}`, `h:${roundedCacheValue(geometry.height)}`]
+              : [`r:${roundedCacheValue(geometry.radius)}`]),
+            ...(mode === "annular" ? [`ri:${roundedCacheValue(geometry.radiusInner)}`] : []),
+          ];
+        return [activeVolumeCacheKey(), "roi", mode, ...shape, `scan:${scanRows}x${scanCols}`, `det:${detectorRows}x${detectorCols}`].join("|");
       };
+      const currentRoiGeometry = (): WarmRoiGeometry => ({
+        mode: String(model.get("roi_mode") || "circle"),
+        centerRow: Number(model.get("roi_center_row")),
+        centerCol: Number(model.get("roi_center_col")),
+        radius: Number(model.get("roi_radius") || 0),
+        radiusInner: Number(model.get("roi_radius_inner") || 0),
+        width: Number(model.get("roi_width") || 0),
+        height: Number(model.get("roi_height") || 0),
+      });
       const presetRoiGeometry = (name: WarmRoiPresetName): WarmRoiGeometry => {
         const bfRadius = Math.max(1, Number(model.get("bf_radius") || 1));
         const centerRow = Number(model.get("center_row") || model.get("roi_center_row") || detectorRows / 2);
         const centerCol = Number(model.get("center_col") || model.get("roi_center_col") || detectorCols / 2);
-        if (name === "abf") {
-          return {
-            mode: "annular",
-            centerRow,
-            centerCol,
-            radius: bfRadius,
-            radiusInner: Math.max(0.5, bfRadius * 0.5),
-          };
-        }
-        if (name === "adf") {
-          return {
-            mode: "annular",
-            centerRow,
-            centerCol,
-            radius: bfRadius * 2,
-            radiusInner: bfRadius,
-          };
-        }
-        return {
-          mode: "circle",
-          centerRow,
-          centerCol,
-          radius: bfRadius,
-          radiusInner: 0,
-        };
+        const disk = { centerRow, centerCol, width: 0, height: 0 };
+        if (name === "abf") return { ...disk, mode: "annular", radius: bfRadius, radiusInner: Math.max(0.5, bfRadius * 0.5) };
+        if (name === "adf") return { ...disk, mode: "annular", radius: bfRadius * 2, radiusInner: bfRadius };
+        return { ...disk, mode: "circle", radius: bfRadius, radiusInner: 0 };
       };
-      const maskForRoiGeometry = (geometry: WarmRoiGeometry): Uint32Array => buildDetectorMask({
-        get: (name: string) => {
-          if (name === "roi_center_row") return geometry.centerRow;
-          if (name === "roi_center_col") return geometry.centerCol;
-          if (name === "roi_mode") return geometry.mode;
-          if (name === "roi_radius") return geometry.radius;
-          if (name === "roi_radius_inner") return geometry.radiusInner;
-          if (name === "roi_width" || name === "roi_height") return 0;
-          return model.get(name);
-        },
-      }, detectorRows, detectorCols);
+      const maskForRoiGeometry = (geometry: WarmRoiGeometry): Uint32Array => {
+        const traits: Record<string, number | string> = {
+          roi_center_row: geometry.centerRow,
+          roi_center_col: geometry.centerCol,
+          roi_mode: geometry.mode,
+          roi_radius: geometry.radius,
+          roi_radius_inner: geometry.radiusInner,
+          roi_width: geometry.width,
+          roi_height: geometry.height,
+        };
+        return buildDetectorMask({ get: (name: string) => traits[name] }, detectorRows, detectorCols);
+      };
       const dataViewForFloat32 = (data: Float32Array): DataView => (
         new DataView(data.buffer as ArrayBuffer, data.byteOffset, data.byteLength)
       );
@@ -3464,24 +3397,30 @@ function Show4DSTEM() {
         return true;
       };
       let dpcBufferQueue: Promise<void> = Promise.resolve();
+      // Show a DPC or iDPC image straight from its GPU buffer, and read that same
+      // buffer back for the stats, histogram and FFT: the kernels are
+      // deterministic, so a second reduction would repeat the work (iDPC reruns
+      // its three FFTs). Null when the detector mask selects no pixel.
       const computeDpcBufferImage = async (
         backend: DetectorCompute,
         source: DpcGpuSource,
-      ): Promise<boolean> => {
-        const run = async (): Promise<boolean> => {
-          const engine = ensureViGpuColormap(backend);
-          await engine.getDevice().queue.onSubmittedWorkDone().catch(() => {});
+      ): Promise<{ values: Promise<Float32Array> } | null> => {
+        const run = async (): Promise<{ values: Promise<Float32Array> } | null> => {
+          const engine = ensureViGpuColormap(backend.getDevice());
           const result: { buffer: GPUBuffer; n: number; cleanup?: () => void } = source === "iDPC"
             ? await backend.maskedIDpcBuffer(dpcMask, detectorCols, scanRows, scanCols, 0, false)
             : backend.maskedDpcBuffer(dpcMask, detectorCols, source === "DPC_row" ? "row" : "col");
           const { buffer, n, cleanup } = result;
-          await engine.getDevice().queue.onSubmittedWorkDone().catch(() => {});
+          // WebGPU keeps buffers alive for work already submitted, so the
+          // temporaries go without waiting for the queue to drain.
           cleanup?.();
           if (n === 0) {
             buffer.destroy();
-            return false;
+            return null;
           }
           engine.adoptBuffer(VI_GPU_SLOT, buffer, scanCols, scanRows);
+          // Record the copy before any later image can replace (and destroy) this buffer.
+          const values = readGpuFloatBuffer(engine.getDevice(), buffer, scanRows * scanCols);
           viGpuImageRef.current = {
             source,
             slot: VI_GPU_SLOT,
@@ -3491,7 +3430,7 @@ function Show4DSTEM() {
             rawVersionAfter: rawVirtualImageVersionRef.current + 1,
           };
           setViGpuVersion(version => version + 1);
-          return true;
+          return { values };
         };
         const queued = dpcBufferQueue.then(run, run);
         dpcBufferQueue = queued.then(() => undefined, () => undefined);
@@ -3501,7 +3440,7 @@ function Show4DSTEM() {
         backend: DetectorCompute,
         mask: Uint32Array,
       ): boolean => {
-        const engine = ensureViGpuColormap(backend);
+        const engine = ensureViGpuColormap(backend.getDevice());
         const { buffer, n } = backend.maskedSumBuffer(mask);
         if (n === 0) {
           buffer.destroy();
@@ -3545,51 +3484,40 @@ function Show4DSTEM() {
       const computeH5ProductFirstRoi = async (
         mask: Uint32Array,
         generation: number,
-      ): Promise<{ data: Float32Array; displayed: boolean } | null> => {
+      ): Promise<Float32Array | null> => {
         const sourceUrl = h5ProductFirstSourceUrl();
         if (!sourceUrl || !show4DSTEMHasLocalFiles()) return null;
-        const productBatch = show4DSTEMOptionalGlobalInt("__QT_H5_PRODUCT_BATCH", 1, 16);
         const product = await loadShow4DSTEMLocalH5MaskedSum(sourceUrl, {
           scanRows,
           scanCols,
           embeddedBadPixelsJson: model.get("_offline_bad_px") as string | undefined,
           mask,
-          productBatch,
         });
         if (!product) return null;
         if (disposed || generation !== viRecomputeGen) {
           product.buffer.destroy();
           return null;
         }
-        const engine = ensureViGpuColormap({
-          getDevice: () => product.device,
-        } as unknown as DetectorCompute);
-        let displayed = false;
-        if (engine) {
-          engine.adoptBuffer(VI_GPU_SLOT, product.buffer, product.scanCols, product.scanRows);
-          viGpuImageRef.current = {
-            source: "roi",
-            slot: VI_GPU_SLOT,
-            width: product.scanCols,
-            height: product.scanRows,
-            rangeMode: "gpu",
-            rawVersionAfter: rawVirtualImageVersionRef.current + 1,
-          };
-          setViGpuVersion(version => version + 1);
-          displayed = true;
-        }
-        const data = await readGpuFloatBuffer(product.device, product.buffer, product.scanRows * product.scanCols);
-        if (!displayed) product.buffer.destroy();
-        return { data, displayed };
+        ensureViGpuColormap(product.device).adoptBuffer(VI_GPU_SLOT, product.buffer, product.scanCols, product.scanRows);
+        viGpuImageRef.current = {
+          source: "roi",
+          slot: VI_GPU_SLOT,
+          width: product.scanCols,
+          height: product.scanRows,
+          rangeMode: "gpu",
+          rawVersionAfter: rawVirtualImageVersionRef.current + 1,
+        };
+        setViGpuVersion(version => version + 1);
+        return await readGpuFloatBuffer(product.device, product.buffer, product.scanRows * product.scanCols);
       };
       let viRecomputeGen = 0;
       const recomputeVI = async () => {
         const generation = ++viRecomputeGen;
-        const source = normaliseViSource(model.get("vi_source"));
+        const source = model.get("vi_source");
         // In multiple view the grid owns each .qem acquisition's ROI image; the
         // hidden single image would sum the same resident image under another
         // mask and break the exact deltas of the visible panels.
-        if (qemSeries && source === "roi" && ["multiple", "compare"].includes(String(model.get("view_mode")))
+        if (qemSeries && source === "roi" && model.get("view_mode") === "multiple"
             && Number(model.get("n_frames")) > 1) return;
         const product = viProductFrameView(model, scanRows, scanCols, source);
         if (product) {
@@ -3603,34 +3531,13 @@ function Show4DSTEM() {
             return;
           }
           if (!compute) return;
-          const displayed = await computeDpcBufferImage(compute!, source);
+          const displayed = await computeDpcBufferImage(compute, source);
           if (disposed || generation !== viRecomputeGen) return;
-          if (!displayed) {
-            clearViGpuDisplay();
-          } else {
-            void (async () => {
-              const dpc = await computeDpcImage(compute!, source);
-              if (disposed || generation !== viRecomputeGen || !dpc) return;
-              setWarmCacheEntry({
-                source,
-                data: dpc,
-                key: dpcWarmCacheKey(source),
-              });
-              publishVirtualImageBytes(new DataView(dpc.buffer));
-            })();
-            return;
-          }
-          const dpc = await computeDpcImage(compute!, source);
+          if (!displayed) clearViGpuDisplay();
+          const dpc = displayed ? await displayed.values : await computeDpcImage(compute, source);
           if (disposed || generation !== viRecomputeGen) return;
-          if (dpc) {
-            setWarmCacheEntry({
-              source,
-              data: dpc,
-              key: dpcWarmCacheKey(source),
-            });
-            publishVirtualImageBytes(new DataView(dpc.buffer));
-            return;
-          }
+          setWarmCacheEntry({ source, data: dpc, key: dpcWarmCacheKey(source) });
+          publishVirtualImageBytes(new DataView(dpc.buffer));
           return;
         }
         const mask = buildDetectorMask(model, detectorRows, detectorCols);
@@ -3638,22 +3545,16 @@ function Show4DSTEM() {
         if (serveWarmCacheEntry(roiKey, "roi")) {
           return;
         }
-        const preferH5ProductFirst = (globalThis as { __QT_H5_PRODUCT_FIRST_VI?: unknown }).__QT_H5_PRODUCT_FIRST_VI === true;
-        if (preferH5ProductFirst || !compute) {
+        // While a single local HDF5 volume is still loading, its masked sum
+        // streams from the files.
+        if (!compute) {
           const h5Product = await computeH5ProductFirstRoi(mask, generation);
-          if (disposed || generation !== viRecomputeGen) return;
-          if (h5Product) {
-            setWarmCacheEntry({
-              source: "roi",
-              data: h5Product.data,
-              key: roiKey,
-            });
-            publishVirtualImageBytes(new DataView(h5Product.data.buffer));
-            return;
-          }
+          if (disposed || generation !== viRecomputeGen || !h5Product) return;
+          setWarmCacheEntry({ source: "roi", data: h5Product, key: roiKey });
+          publishVirtualImageBytes(new DataView(h5Product.buffer));
+          return;
         }
-        if (!compute) return;
-        const displayed = computeRoiBufferImage(compute!, mask);
+        const displayed = computeRoiBufferImage(compute, mask);
         if (!displayed) {
           clearViGpuDisplay();
         }
@@ -3738,7 +3639,7 @@ function Show4DSTEM() {
       const comparePageState = () => {
         const total = Math.max(0, Number(model.get("n_frames") || 0));
         const mode = String(model.get("view_mode") || "single");
-        if (total <= 1 || (mode !== "multiple" && mode !== "compare")) {
+        if (total <= 1 || mode !== "multiple") {
           return { visible: [] as number[], page: [] as number[] };
         }
         const maxPanels = Math.max(1, Number(model.get("compare_max_panels") || total));
@@ -3816,14 +3717,14 @@ function Show4DSTEM() {
         const generation = ++compareViGen;
         const indices = compareVisibleIndices();
         if (!indices.length) return;
-        const source = normaliseViSource(model.get("vi_source"));
+        const source = model.get("vi_source");
         const interactiveDrag = dpRoiInteractiveRef.current;
         // ROI compare panels render through GPU-resident slots both for the
         // initial/settled image and for drag updates. The initial frame uses a
         // full exact masked sum; subsequent geometry changes use exact deltas.
         const updateRoiCompareGpuSlots = async (): Promise<boolean> => {
           if (source !== "roi") return false;
-          const engine = compute ? ensureViGpuColormap(compute) : null;
+          const engine = compute ? ensureViGpuColormap(compute.getDevice()) : null;
           if (!engine) return false;
           const detectorMask = buildDetectorMask(model, detectorRows, detectorCols);
           let slotCursor = 0;
@@ -3976,7 +3877,7 @@ function Show4DSTEM() {
       };
       const recomputeVisibleVirtualImages = async () => {
         const mode = String(model.get("view_mode") || "single");
-        if (mode === "multiple" || mode === "compare") {
+        if (mode === "multiple") {
           await recomputeCompareVI();
           return;
         }
@@ -4032,7 +3933,7 @@ function Show4DSTEM() {
         const scanIdx = scanRow * scanCols + scanCol;
         const mode = String(model.get("view_mode") || "single");
         const dpMode = String(model.get("compare_dp_mode") || "average");
-        if ((mode === "multiple" || mode === "compare") && dpMode !== "selected" && getVol) {
+        if (mode === "multiple" && dpMode !== "selected" && getVol) {
           const indices = comparePageState().page;
           if (indices.length) {
             const latestLoaded = latestResidentVolumeIndex != null && volIsResident(latestResidentVolumeIndex)
@@ -4168,7 +4069,7 @@ function Show4DSTEM() {
         // hold the panel's mask until the next compare pass starts.
         residentCountViewRef.current = frame => {
           const panel = volCache.get(frame) as unknown as RansDetectorCompute | undefined;
-          if (disposed || !panel || dpRoiInteractiveRef.current || normaliseViSource(model.get("vi_source")) !== "roi") return null;
+          if (disposed || !panel || dpRoiInteractiveRef.current || model.get("vi_source") !== "roi") return null;
           const generation = compareViGen;
           return {
             view: panel.set.imageViewsU32([panel.tilt], 1)[0],
@@ -4438,8 +4339,7 @@ function Show4DSTEM() {
   const compareGridResizeCleanupRef = React.useRef<(() => void) | null>(null);
   const [compareHiddenMenuAnchor, setCompareHiddenMenuAnchor] = React.useState<HTMLElement | null>(null);
 
-  const displayViewMode = viewMode === "compare" ? "multiple" : viewMode === "temporal" ? "single" : (viewMode || "single");
-  const compareMode = (displayViewMode === "multiple" || viewMode === "compare") && nFrames > 1;
+  const compareMode = viewMode === "multiple" && nFrames > 1;
   const viProductSourceOptions = React.useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -4449,7 +4349,7 @@ function Show4DSTEM() {
       out.push(source);
     };
     (Array.isArray(viProductLabels) ? viProductLabels : []).forEach((label) => {
-      add(normaliseViSource(label));
+      add(label);
     });
     if (webgpuDpcReady) {
       add("DPC_row");
@@ -4459,24 +4359,10 @@ function Show4DSTEM() {
     return out;
   }, [viProductLabels, webgpuDpcReady]);
   const activeViSource = React.useMemo(() => {
-    const source = normaliseViSource(viSource);
-    return source === "roi" || viProductSourceOptions.includes(source) ? source : "roi";
+    return viSource === "roi" || viProductSourceOptions.includes(viSource) ? viSource : "roi";
   }, [viProductSourceOptions, viSource]);
   const hasViProductSources = viProductSourceOptions.length > 0;
   const roiVirtualDetectorActive = activeViSource === "roi";
-  const saveChangesIfLiveComm = React.useCallback(() => {
-    const liveModel = model as unknown as { save_changes?: () => void };
-    if (typeof liveModel.save_changes !== "function") return;
-    requestAnimationFrame(() => {
-      window.setTimeout(() => {
-        try {
-          liveModel.save_changes?.();
-        } catch (error) {
-          console.warn("Show4DSTEM could not sync virtual detector state", error);
-        }
-      }, 0);
-    });
-  }, [model]);
   const publishVirtualImageBytes = React.useCallback((bytes: DataView) => {
     setFrontendVirtualImageBytes(bytes);
     setVirtualImageBytes(bytes);
@@ -4484,16 +4370,6 @@ function Show4DSTEM() {
   React.useEffect(() => {
     if (virtualImageBytes) setFrontendVirtualImageBytes(virtualImageBytes);
   }, [virtualImageBytes]);
-  const requestViPreset = React.useCallback((preset: "bf" | "abf" | "adf") => {
-    model.set("_preset_request", preset);
-    saveChangesIfLiveComm();
-  }, [model, saveChangesIfLiveComm]);
-  const setViSource = React.useCallback((nextSource: string) => {
-    const source = normaliseViSource(nextSource);
-    setViSourceModel(source);
-    model.set("vi_source", source);
-    saveChangesIfLiveComm();
-  }, [model, saveChangesIfLiveComm, setViSourceModel]);
   const displayedVirtualImageBytes = React.useMemo(() => {
     const roiBytes = frontendVirtualImageBytes ?? virtualImageBytes;
     if (activeViSource === "roi") return roiBytes;
@@ -4576,26 +4452,11 @@ function Show4DSTEM() {
     }
     return [...order];
   }, [comparePanelOrder, nFrames]);
+  // The merged histogram sums the bins of the shown panels, so it needs their set, not their order.
   const visibleCompareHistogramFrames = React.useMemo(() => {
-    const source = Array.isArray(comparePanelIndices) ? comparePanelIndices : [];
-    if (!source.length) return [] as number[];
-    const available = new Set(source);
-    const hidden = new Set(
-      (compareHiddenPanels || []).filter((idx) => Number.isInteger(idx) && available.has(idx)),
-    );
-    const ordered: number[] = [];
-    const seen = new Set<number>();
-    normalizedCompareOrder().forEach((idx) => {
-      if (available.has(idx) && !hidden.has(idx) && !seen.has(idx)) {
-        ordered.push(idx);
-        seen.add(idx);
-      }
-    });
-    source.forEach((idx) => {
-      if (!hidden.has(idx) && !seen.has(idx)) ordered.push(idx);
-    });
-    return ordered;
-  }, [compareHiddenPanels, comparePanelIndices, normalizedCompareOrder]);
+    const hidden = new Set(compareHiddenPanels || []);
+    return [...new Set(comparePanelIndices || [])].filter((idx) => !hidden.has(idx));
+  }, [compareHiddenPanels, comparePanelIndices]);
   const requestComparePage = React.useCallback((page: number) => {
     const next = Math.max(0, Math.min(activeComparePageCount - 1, Math.round(Number(page) || 0)));
     if (next === activeComparePageIdx) return;
@@ -4729,10 +4590,7 @@ function Show4DSTEM() {
     });
     if (options?.closeMenu !== false) setDpMoreAnchor(null);
     setSsbComputeRequest(payload);
-    model.set("ssb_compute_request", payload);
-    model.save_changes();
   }, [
-    model,
     setSsbComputeRequest,
     ssbComputeC10Nm,
     ssbComputeC12Nm,
@@ -5072,16 +4930,7 @@ function Show4DSTEM() {
     rawDpDataRef.current.set(rawData);
     const stats = computeStats(rawData);
     setDpStats([stats.mean, stats.min, stats.max, stats.std]);
-    // Apply scale transformation for histogram display
-    const scaledData = new Float32Array(rawData.length);
-    if (dpScaleMode === "log") {
-      for (let i = 0; i < rawData.length; i++) {
-        scaledData[i] = Math.log1p(Math.max(0, rawData[i]));
-      }
-    } else {
-      scaledData.set(rawData);
-    }
-    setDpHistogramData(scaledData);
+    setDpHistogramData(dpScaleMode === "log" ? displayLogScale(rawData) : rawData.slice());
   }, [displayedDpBytes, dpScaleMode]);
 
   // GPU FFT state
@@ -5192,19 +5041,13 @@ function Show4DSTEM() {
   } | null>(null);
   const fftClickStartRef = React.useRef<{ x: number; y: number } | null>(null);
 
-  const isTypingTarget = React.useCallback((target: EventTarget | null): boolean => {
-    if (!(target instanceof HTMLElement)) return false;
-    if (target.isContentEditable) return true;
-    return target.closest("input, textarea, select, [role='textbox'], [contenteditable='true']") !== null;
-  }, []);
-
   const handleRootMouseDownCapture = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest("canvas")) rootRef.current?.focus({ preventScroll: true });
   }, []);
 
   const handleKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (isTypingTarget(event.target)) return;
+    if (shouldIgnoreWidgetShortcut(event.target, event.key)) return;
 
     const step = event.shiftKey ? 10 : 1;
     let handled = false;
@@ -5245,6 +5088,13 @@ function Show4DSTEM() {
             handled = true;
           }
           break;
+        case " ":
+          // The multiple view shows every dataset at once and has no playback.
+          if (nFrames > 1 && !compareMode) {
+            setFramePlaying(!framePlaying);
+            handled = true;
+          }
+          break;
         case "Escape":
           rootRef.current?.blur();
           handled = true;
@@ -5256,8 +5106,8 @@ function Show4DSTEM() {
       event.stopPropagation();
     }
   }, [
-    compareMode, frameIdx, isTypingTarget, nFrames,
-    posCol, posRow, setFrameIdx, setPosCol, setPosRow, shapeCols, shapeRows,
+    compareMode, frameIdx, framePlaying, nFrames,
+    posCol, posRow, setFrameIdx, setFramePlaying, setPosCol, setPosRow, shapeCols, shapeRows,
   ]);
 
   // Sync local state
@@ -5343,7 +5193,7 @@ function Show4DSTEM() {
   const dpColorbarVmaxRef = React.useRef(1);
 
   // Device pixel ratio for high-DPI UI overlays
-  const DPR = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+  const DPR = useDevicePixelRatio();
 
   // ─────────────────────────────────────────────────────────────────────────
   // Effects: Canvas Rendering & Animation
@@ -5403,18 +5253,9 @@ function Show4DSTEM() {
       }
     }
 
-    // Apply scale transformation for histogram display
     if (!compareMode) {
-      const scaledData = new Float32Array(numFloats);
-      if (viScaleMode === "log") {
-        for (let i = 0; i < numFloats; i++) {
-          scaledData[i] = Math.log1p(Math.max(0, rawData[i]));
-        }
-      } else {
-        scaledData.set(rawData);
-      }
       setViHistogramBins(null);
-      setViHistogramData(scaledData);
+      setViHistogramData(viScaleMode === "log" ? displayLogScale(rawData) : rawData.slice());
     }
   }, [activeViSource, compareMode, displayedVirtualImageBytes, viScaleMode]);
 
@@ -5440,16 +5281,8 @@ function Show4DSTEM() {
       setViDataMax(stats.max);
     }
 
-    const scaledData = new Float32Array(expectedFloats);
-    if (viScaleMode === "log") {
-      for (let i = 0; i < expectedFloats; i++) {
-        scaledData[i] = Math.log1p(Math.max(0, rawData[i]));
-      }
-    } else {
-      scaledData.set(rawData);
-    }
     setViHistogramBins(null);
-    setViHistogramData(scaledData);
+    setViHistogramData(viScaleMode === "log" ? displayLogScale(rawData) : rawData.slice());
   }, [activeViSource, compareMode, comparePanelCount, displayedCompareVirtualImageBytes, shapeCols, shapeRows, viScaleMode]);
 
   React.useEffect(() => {
@@ -5497,23 +5330,15 @@ function Show4DSTEM() {
 
     // Parse raw float32 data and apply scale transformation
     const rawData = new Float32Array(sourceBytes.buffer, sourceBytes.byteOffset, sourceBytes.byteLength / 4);
-    let scaled: Float32Array;
-    if (dpScaleMode === "log") {
-      scaled = new Float32Array(rawData.length);
-      for (let i = 0; i < rawData.length; i++) {
-        scaled[i] = Math.log1p(Math.max(0, rawData[i]));
-      }
-    } else {
-      scaled = rawData;
-    }
+    const scaled = dpScaleMode === "log" ? displayLogScale(rawData) : rawData;
 
     const { min: dataMin, max: dataMax } = findDataRange(scaled);
 
     let vmin: number, vmax: number;
     if (traitDpVmin != null && traitDpVmax != null) {
       if (dpScaleMode === "log") {
-        vmin = Math.log1p(Math.max(traitDpVmin, 0));
-        vmax = Math.log1p(Math.max(traitDpVmax, 0));
+        vmin = displayLog(traitDpVmin);
+        vmax = displayLog(traitDpVmax);
       } else {
         vmin = traitDpVmin;
         vmax = traitDpVmax;
@@ -5576,16 +5401,6 @@ function Show4DSTEM() {
     }
   }, [dpOffscreenVersion, dpZoom, dpPanX, dpPanY]);
 
-  // The DP overlay canvas only takes pointer events: crosshair, ROI shapes and
-  // scale bar draw on the HiDPI dpUiRef canvas for crisp rendering.
-  React.useEffect(() => {
-    if (!dpOverlayRef.current) return;
-    const canvas = dpOverlayRef.current;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-  }, [localKCol, localKRow, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner, dpZoom, dpPanX, dpPanY, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, detRows, detCols]);
-
   // Expensive: VI colormap + data processing → cached offscreen canvas
   React.useEffect(() => {
     if (!rawVirtualImageRef.current) return;
@@ -5601,13 +5416,7 @@ function Show4DSTEM() {
     const height = shapeRows;
     const filtered = rawVirtualImageRef.current;
 
-    let scaled = filtered;
-    if (viScaleMode === "log") {
-      scaled = new Float32Array(filtered.length);
-      for (let i = 0; i < filtered.length; i++) {
-        scaled[i] = Math.log1p(Math.max(0, filtered[i]));
-      }
-    }
+    const scaled = viScaleMode === "log" ? displayLogScale(filtered) : filtered;
 
     // Compute min/max from the data we just received. Do NOT use Python's
     // viDataMin/viDataMax traits here: they arrive as separate comm messages
@@ -5628,8 +5437,8 @@ function Show4DSTEM() {
     let vmin: number, vmax: number;
     if (traitViVmin != null && traitViVmax != null) {
       if (viScaleMode === "log") {
-        vmin = Math.log1p(Math.max(traitViVmin, 0));
-        vmax = Math.log1p(Math.max(traitViVmax, 0));
+        vmin = displayLog(traitViVmin);
+        vmax = displayLog(traitViVmax);
       } else {
         vmin = traitViVmin;
         vmax = traitViVmax;
@@ -5680,7 +5489,7 @@ function Show4DSTEM() {
     const gpuImage = viGpuImageRef.current;
     const engine = viGpuColormapRef.current;
     const raw = rawVirtualImageRef.current;
-    const currentSource = normaliseViSource(model.get("vi_source"));
+    const currentSource = model.get("vi_source");
     if (
       !gpuImage
       || !engine
@@ -5699,13 +5508,7 @@ function Show4DSTEM() {
       && rawVirtualImageVersionRef.current >= gpuImage.rawVersionAfter,
     );
     if (rawReady && raw) {
-      let scaled = raw;
-      if (viScaleMode === "log") {
-        scaled = new Float32Array(raw.length);
-        for (let i = 0; i < raw.length; i++) {
-          scaled[i] = Math.log1p(Math.max(0, raw[i]));
-        }
-      }
+      const scaled = viScaleMode === "log" ? displayLogScale(raw) : raw;
 
       const range = findDataRange(scaled);
       let dataMin = range.min;
@@ -5718,8 +5521,8 @@ function Show4DSTEM() {
 
       if (traitViVmin != null && traitViVmax != null) {
         if (viScaleMode === "log") {
-          vmin = Math.log1p(Math.max(traitViVmin, 0));
-          vmax = Math.log1p(Math.max(traitViVmax, 0));
+          vmin = displayLog(traitViVmin);
+          vmax = displayLog(traitViVmax);
         } else {
           vmin = traitViVmin;
           vmax = traitViVmax;
@@ -5774,10 +5577,7 @@ function Show4DSTEM() {
       return rendered;
     };
     virtualGpuCaptureRef.current = () => captureGpuCanvas(engine.getDevice(), target.context, render);
-    const rendered = render();
-    setViGpuRetainedReady(rendered);
-    if (rendered) {
-    }
+    setViGpuRetainedReady(render());
   }, [
     activeViSource,
     compareMode,
@@ -5818,16 +5618,6 @@ function Show4DSTEM() {
     ctx.restore();
   }, [compareMode, viOffscreenVersion, viZoom, viPanX, viPanY, viSmooth]);
 
-  // The VI overlay canvas only takes pointer events: crosshair and scale bar
-  // draw on the HiDPI viUiRef canvas.
-  React.useEffect(() => {
-    if (!virtualOverlayRef.current) return;
-    const canvas = virtualOverlayRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-  }, [localPosRow, localPosCol, isDraggingVI, viZoom, viPanX, viPanY, pixelSize, shapeRows, shapeCols]);
-
   // Compute FFT (expensive and async: only re-run on data/GPU changes)
   const fftRealRef = React.useRef<Float32Array | null>(null);
   const fftImagRef = React.useRef<Float32Array | null>(null);
@@ -5850,7 +5640,11 @@ function Show4DSTEM() {
     if (roiFftActive) {
       const cropCenterRow = localViRoiCenterRow ?? viRoiCenterRow;
       const cropCenterCol = localViRoiCenterCol ?? viRoiCenterCol;
-      const crop = cropSingleROI(sourceData, shapeCols, shapeRows, viRoiMode, cropCenterRow, cropCenterCol, viRoiRadius, viRoiWidth, viRoiHeight);
+      // A circle keeps only the pixels inside it; square and rect keep their whole box.
+      const crop = cropMaskedRegion(sourceData, shapeCols, shapeRows, {
+        row: cropCenterRow, col: cropCenterCol, shape: viRoiMode === "rect" ? "rectangle" : viRoiMode,
+        radius: viRoiRadius, width: viRoiWidth, height: viRoiHeight,
+      });
       if (crop) {
         origCropW = crop.cropW;
         origCropH = crop.cropH;
@@ -5889,27 +5683,25 @@ function Show4DSTEM() {
       }
       setFftVersion(version => version + 1);
     };
-    const timer = window.setTimeout(() => {
-      if (gpuFFTRef.current && gpuReady) {
-        const runGpuFFT = async () => {
-          const real = sourceData.slice();
-          const imag = new Float32Array(real.length);
-          const { real: spectrumReal, imag: spectrumImag } = await gpuFFTRef.current!.fft2D(real, imag, fftW, fftH, false);
-          if (cancelled || runSeq !== fftRunSeqRef.current) return;
-          fftshift(spectrumReal, fftW, fftH);
-          fftshift(spectrumImag, fftW, fftH);
-          commitFft(spectrumReal, spectrumImag);
-        };
-        runGpuFFT();
-      } else {
-        const runWorkerFFT = async () => {
-          const real = sourceData.slice();
-          const imag = new Float32Array(real.length);
-          const result = await fft2dAsync(real, imag, fftW, fftH, false);
-          commitFft(result.real, result.imag);
-        };
-        runWorkerFFT();
+    // The worker shifts its spectrum itself; the WebGPU spectrum is shifted here.
+    const transform = async () => {
+      const real = sourceData.slice();
+      const imag = new Float32Array(real.length);
+      const gpuFft = gpuReady ? gpuFFTRef.current : null;
+      if (!gpuFft) {
+        const result = await fft2dAsync(real, imag, fftW, fftH, false);
+        commitFft(result.real, result.imag);
+        return;
       }
+      const spectrum = await gpuFft.fft2D(real, imag, fftW, fftH, false);
+      if (cancelled || runSeq !== fftRunSeqRef.current) return;
+      fftshift(spectrum.real, fftW, fftH);
+      fftshift(spectrum.imag, fftW, fftH);
+      commitFft(spectrum.real, spectrum.imag);
+    };
+    // A failed transform (a lost device) keeps the last spectrum on screen.
+    const timer = window.setTimeout(() => {
+      transform().catch(error => console.error("[Show4DSTEM] FFT failed", error));
     }, 16);
     return () => {
       cancelled = true;
@@ -6032,8 +5824,7 @@ function Show4DSTEM() {
       ctx.arc(screenX, screenY, dotRadius, 0, Math.PI * 2);
       ctx.stroke();
       if (fftClickInfo.dSpacing != null) {
-        const dSpacing = fftClickInfo.dSpacing;
-        const label = dSpacing >= 10 ? `d = ${(dSpacing / 10).toFixed(2)} nm` : `d = ${dSpacing.toFixed(2)} \u00C5`;
+        const label = `d = ${formatDSpacing(fftClickInfo.dSpacing, scanUnit)}`;
         const fontSize = Math.max(10, Math.round(11 * Math.max(fftW, fftH) / 450));
         ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
         ctx.fillStyle = "white";
@@ -6043,7 +5834,7 @@ function Show4DSTEM() {
       }
       ctx.restore();
     }
-  }, [fftZoom, fftPanX, fftPanY, showFft, fftClickInfo, shapeCols, shapeRows, fftCropDims]);
+  }, [fftZoom, fftPanX, fftPanY, showFft, fftClickInfo, scanUnit, shapeCols, shapeRows, fftCropDims]);
 
   // Clear FFT click info when virtual image changes (scan position, VI ROI, etc.)
   React.useEffect(() => {
@@ -6085,70 +5876,8 @@ function Show4DSTEM() {
       }
     }
 
-    // Profile line overlay
     if (profileActive && profilePoints.length > 0) {
-        const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.save();
-        ctx.scale(DPR, DPR);
-        const cssW = canvas.width / DPR;
-        const cssH = canvas.height / DPR;
-        const scaleX = cssW / detCols;
-        const scaleY = cssH / detRows;
-        // profile points center pixel i at i (the sampler's convention); draw them on that pixel's center
-        const toScreenX = (col: number) => maskToCanvas(col, dpZoom, dpPanX) * scaleX;
-        const toScreenY = (row: number) => maskToCanvas(row, dpZoom, dpPanY) * scaleY;
-
-        const ax = toScreenX(profilePoints[0].col);
-        const ay = toScreenY(profilePoints[0].row);
-        ctx.fillStyle = themeColors.accent;
-        ctx.beginPath();
-        ctx.arc(ax, ay, 4, 0, Math.PI * 2);
-        ctx.fill();
-
-        if (profilePoints.length === 2) {
-          const bx = toScreenX(profilePoints[1].col);
-          const by = toScreenY(profilePoints[1].row);
-
-          // A profile wider than one pixel averages a band; outline the averaged area.
-          if (profileWidth > 1) {
-            const colDelta = profilePoints[1].col - profilePoints[0].col;
-            const rowDelta = profilePoints[1].row - profilePoints[0].row;
-            const lineLength = Math.sqrt(colDelta * colDelta + rowDelta * rowDelta);
-            if (lineLength > 0) {
-              const halfWidth = (profileWidth - 1) / 2;
-              const perpRow = -colDelta / lineLength * halfWidth;
-              const perpCol = rowDelta / lineLength * halfWidth;
-              ctx.fillStyle = themeColors.accent + "20";
-              ctx.strokeStyle = themeColors.accent;
-              ctx.lineWidth = 1;
-              ctx.setLineDash([3, 3]);
-              ctx.beginPath();
-              ctx.moveTo(toScreenX(profilePoints[0].col + perpCol), toScreenY(profilePoints[0].row + perpRow));
-              ctx.lineTo(toScreenX(profilePoints[1].col + perpCol), toScreenY(profilePoints[1].row + perpRow));
-              ctx.lineTo(toScreenX(profilePoints[1].col - perpCol), toScreenY(profilePoints[1].row - perpRow));
-              ctx.lineTo(toScreenX(profilePoints[0].col - perpCol), toScreenY(profilePoints[0].row - perpRow));
-              ctx.closePath();
-              ctx.fill();
-              ctx.stroke();
-              ctx.setLineDash([]);
-            }
-          }
-
-          ctx.strokeStyle = themeColors.accent;
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.moveTo(ax, ay);
-          ctx.lineTo(bx, by);
-          ctx.stroke();
-
-          ctx.fillStyle = themeColors.accent;
-          ctx.beginPath();
-          ctx.arc(bx, by, 4, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.restore();
-      }
+      drawProfileOverlay(canvas, DPR, profilePoints, profileWidth, dpZoom, dpPanX, dpPanY, detCols, detRows, themeColors.accent);
     }
 
     // Colorbar overlay: uses cached vmin/vmax from the expensive DP offscreen effect
@@ -6165,7 +5894,7 @@ function Show4DSTEM() {
       }
     }
   }, [roiVirtualDetectorActive, dpZoom, dpPanX, dpPanY, kPixelSize, kPixelUnit, kCalibrated, detRows, detCols, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, localKCol, localKRow, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner,
-      profileActive, profilePoints, profileWidth, themeColors, showDpColorbar, showScaleBar, dpColormap, dpScaleMode, dpVminPct, dpVmaxPct, canvasSize, roiColors]);
+      profileActive, profilePoints, profileWidth, themeColors, showDpColorbar, showScaleBar, dpColormap, dpScaleMode, dpVminPct, dpVmaxPct, canvasSize, roiColors, DPR]);
   React.useEffect(() => drawDpUi(), [drawDpUi]);
   
   // VI scale bar + crosshair + ROI + profile lines (high-DPI)
@@ -6175,7 +5904,7 @@ function Show4DSTEM() {
     const ctx = canvas.getContext("2d");
     ctx?.clearRect(0, 0, canvas.width, canvas.height);
     // Draw scale bar first when enabled.
-    if (showScaleBar) drawScaleBarHiDPI(canvas, DPR, viZoom, pixelSize || 1, pixelUnit || "px", shapeCols);
+    if (showScaleBar) drawScaleBarHiDPI(canvas, DPR, viZoom, pixelSize || 1, scanUnit, shapeCols);
     // Draw crosshair only when ROI is off (ROI replaces the crosshair)
     if (!viRoiMode || viRoiMode === "off") {
       drawViPositionMarker(viUiRef.current, DPR, localPosRow, localPosCol, viZoom, viPanX, viPanY, shapeCols, shapeRows, isDraggingVI);
@@ -6187,53 +5916,12 @@ function Show4DSTEM() {
         isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize
       );
     }
-    // Draw VI profile lines
     if (viProfileActive && viProfilePoints.length > 0) {
-      const canvas = viUiRef.current;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        const cssW = canvas.width / DPR;
-        const cssH = canvas.height / DPR;
-        const scaleX = cssW / shapeCols;
-        const scaleY = cssH / shapeRows;
-        ctx.save();
-        ctx.scale(DPR, DPR);
-        ctx.strokeStyle = "#a0f";
-        ctx.lineWidth = 2;
-        ctx.shadowColor = "rgba(0,0,0,0.5)";
-        ctx.shadowBlur = 2;
-        if (viProfilePoints.length >= 1) {
-          const p0 = viProfilePoints[0];
-          const x0 = maskToCanvas(p0.col, viZoom, viPanX) * scaleX;
-          const y0 = maskToCanvas(p0.row, viZoom, viPanY) * scaleY;
-          ctx.beginPath();
-          ctx.arc(x0, y0, 4, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = "#fff";
-          ctx.fillText("1", x0 + 6, y0 - 6);
-        }
-        if (viProfilePoints.length === 2) {
-          const p0 = viProfilePoints[0], p1 = viProfilePoints[1];
-          const x0 = maskToCanvas(p0.col, viZoom, viPanX) * scaleX;
-          const y0 = maskToCanvas(p0.row, viZoom, viPanY) * scaleY;
-          const x1 = maskToCanvas(p1.col, viZoom, viPanX) * scaleX;
-          const y1 = maskToCanvas(p1.row, viZoom, viPanY) * scaleY;
-          ctx.beginPath();
-          ctx.moveTo(x0, y0);
-          ctx.lineTo(x1, y1);
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.arc(x1, y1, 4, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = "#fff";
-          ctx.fillText("2", x1 + 6, y1 - 6);
-        }
-        ctx.restore();
-      }
+      drawProfileOverlay(canvas, DPR, viProfilePoints, 1, viZoom, viPanX, viPanY, shapeCols, shapeRows, themeColors.accent);
     }
-  }, [compareMode, viZoom, viPanX, viPanY, pixelSize, pixelUnit, showScaleBar, shapeRows, shapeCols, localPosRow, localPosCol, isDraggingVI,
+  }, [compareMode, viZoom, viPanX, viPanY, pixelSize, scanUnit, showScaleBar, shapeRows, shapeCols, localPosRow, localPosCol, isDraggingVI,
       viRoiMode, localViRoiCenterRow, localViRoiCenterCol, viRoiRadius, viRoiWidth, viRoiHeight,
-      isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize, canvasSize, viProfileActive, viProfilePoints]);
+      isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize, canvasSize, viProfileActive, viProfilePoints, themeColors.accent, DPR]);
 
   // ── DP Profile computation ──
   React.useEffect(() => {
@@ -6329,13 +6017,13 @@ function Show4DSTEM() {
       const colDelta = viProfilePoints[1].col - viProfilePoints[0].col;
       const rowDelta = viProfilePoints[1].row - viProfilePoints[0].row;
       const lengthPx = Math.sqrt(colDelta * colDelta + rowDelta * rowDelta);
-      distance = { total: lengthPx * pixelSize, unit: pixelUnit };
+      distance = { total: lengthPx * pixelSize, unit: scanUnit };
     }
     const painted = drawProfileSparkline(canvas, ctx, viCanvasWidth, viProfileHeight, viProfileData, distance,
       "Click two points on the VI to draw a profile", themeInfo.theme === "dark", themeColors.accent);
     viProfileBaseImageRef.current = painted?.base ?? null;
     viProfileLayoutRef.current = painted?.layout ?? null;
-  }, [viProfileData, viProfilePoints, pixelSize, themeInfo.theme, themeColors.accent, viCanvasWidth, viProfileHeight]);
+  }, [viProfileData, viProfilePoints, pixelSize, scanUnit, themeInfo.theme, themeColors.accent, viCanvasWidth, viProfileHeight]);
 
   // VI Profile hover handlers
   const handleViProfileMouseMove = React.useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
@@ -6524,9 +6212,7 @@ function Show4DSTEM() {
     // Capture the pointer so a fast edge-drag resize keeps receiving move/up
     // events even when the cursor leaves the canvas (#751). Without capture the
     // window listener can miss events and the radius never updates.
-    if ("pointerId" in event) {
-      try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
-    }
+    event.currentTarget.setPointerCapture(event.pointerId);
     dpClickStartRef.current = { x: event.clientX, y: event.clientY };
 
     // When profile mode is active, use profile interactions only
@@ -6828,13 +6514,11 @@ function Show4DSTEM() {
 
   const handleDpDoubleClick = () => setPanelView(dpViewRef, setDpZoom, setDpPanX, setDpPanY, 1, 0, 0);
 
-  const handleViMouseDown = (event: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
+  const handleViMouseDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     // Capture the pointer so a touch/mouse probe-drag keeps receiving move/up
     // events even when the finger leaves the small canvas. Needed for mobile
     // parity: touchscreens deliver these as pointer events (mirrors DP #751).
-    if ("pointerId" in event) {
-      try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
-    }
+    event.currentTarget.setPointerCapture(event.pointerId);
     const canvas = virtualOverlayRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -6898,8 +6582,10 @@ function Show4DSTEM() {
         viRoiDragOffsetRef.current = { dRow: 0, dCol: 0 };
         setLocalViRoiCenterRow(maskRow);
         setLocalViRoiCenterCol(maskCol);
-        setViRoiCenterRow(Math.round(Math.max(0, Math.min(shapeRows - 1, maskRow))));
-        setViRoiCenterCol(Math.round(Math.max(0, Math.min(shapeCols - 1, maskCol))));
+        requestScanRegion(
+          Math.round(Math.max(0, Math.min(shapeRows - 1, maskRow))),
+          Math.round(Math.max(0, Math.min(shapeCols - 1, maskCol))),
+        );
       }
       return;
     }
@@ -6913,7 +6599,7 @@ function Show4DSTEM() {
     updateScanPosition(scanRow, scanCol);
   };
 
-  const handleViMouseMove = (event: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
+  const handleViMouseMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = virtualOverlayRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -7005,10 +6691,10 @@ function Show4DSTEM() {
       setLocalViRoiCenterCol(centerCol);
       // Compound trait update: a single observer fires Python-side, so the reduced DP is
       // never computed against split-trait state (old col + new row, or vice versa).
-      const roiRow = Math.round(Math.max(0, Math.min(shapeRows - 1, centerRow)));
-      const roiCol = Math.round(Math.max(0, Math.min(shapeCols - 1, centerCol)));
-      model.set("vi_roi_center", [roiRow, roiCol]);
-      model.save_changes();
+      requestScanRegion(
+        Math.round(Math.max(0, Math.min(shapeRows - 1, centerRow))),
+        Math.round(Math.max(0, Math.min(shapeCols - 1, centerCol))),
+      );
       return;
     }
 
@@ -7021,7 +6707,7 @@ function Show4DSTEM() {
     updateScanPosition(scanRow, scanCol);
   };
 
-  const handleViMouseUp = (event: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
+  const handleViMouseUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
     flushScanPosition();
     if (draggingViProfileEndpoint !== null || isDraggingViProfileLine) {
       setDraggingViProfileEndpoint(null);
@@ -7277,71 +6963,65 @@ function Show4DSTEM() {
   };
 
   const handleFftMouseUp = async (event: React.MouseEvent<HTMLCanvasElement>) => {
-    // Click detection for d-spacing measurement
-    if (fftClickStartRef.current) {
-      const dx = event.clientX - fftClickStartRef.current.x;
-      const dy = event.clientY - fftClickStartRef.current.y;
-      if (Math.sqrt(dx * dx + dy * dy) < 3) {
-        // Convert screen coords to FFT image coords
-        const canvas = fftOverlayRef.current;
-        if (canvas) {
-          const rect = canvas.getBoundingClientRect();
-          const scaleX = canvas.width / rect.width;
-          const scaleY = canvas.height / rect.height;
-          const canvasX = (event.clientX - rect.left) * scaleX;
-          const canvasY = (event.clientY - rect.top) * scaleY;
-          const fftW = fftCropDims?.fftWidth ?? shapeCols;
-          const fftH = fftCropDims?.fftHeight ?? shapeRows;
-          // Reverse the render transform: canvas coords -> image coords.
-          // Render: translate(panX, panY); scale(zoom); drawImage(offscreen, 0,0,fftW,fftH, 0,0,canvasW,canvasH)
-          // So: canvasX = panX + zoom * (imgCol * canvasW / fftW)  →  imgCol = (canvasX - panX) / zoom * fftW / canvasW
-          let imgCol = ((canvasX - fftPanX) / fftZoom) * (fftW / canvas.width);
-          let imgRow = ((canvasY - fftPanY) / fftZoom) * (fftH / canvas.height);
-          // Bounds check
-          if (imgCol >= 0 && imgCol < fftW && imgRow >= 0 && imgRow < fftH) {
-            // Snap to nearest peak in FFT magnitude
-            if (fftMagCacheRef.current) {
-              let snapped: { row: number; col: number };
-              try {
-                snapped = await findFFTPeakBrowser(fftMagCacheRef.current, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
-              } catch (error) {
-                console.error("[Show4DSTEM] WebGPU FFT peak refinement failed", error);
-                return;
-              }
-              imgCol = snapped.col;
-              imgRow = snapped.row;
-            }
-            const halfW = Math.floor(fftW / 2);
-            const halfH = Math.floor(fftH / 2);
-            const dcol = imgCol - halfW;
-            const drow = imgRow - halfH;
-            const distPx = Math.sqrt(dcol * dcol + drow * drow);
-            if (distPx < 1) {
-              setFftClickInfo(null); // Clicked on DC center
-            } else {
-              let spatialFreq: number | null = null;
-              let dSpacing: number | null = null;
-              if (pixelSize > 0) {
-                const paddedW = nextPow2(fftW);
-                const paddedH = nextPow2(fftH);
-                ({ spatialFrequency: spatialFreq, dSpacing } = reciprocalCoordinatesFromShiftedOffset(
-                  Math.round(imgRow) - halfH,
-                  Math.round(imgCol) - halfW,
-                  paddedH,
-                  paddedW,
-                  pixelSize,
-                  pixelSize,
-                ));
-              }
-              setFftClickInfo({ row: imgRow, col: imgCol, distPx, spatialFreq, dSpacing });
-            }
-          }
-        }
-      }
-      fftClickStartRef.current = null;
-    }
+    // End the drag before the asynchronous peak refine: a refine that fails
+    // must not leave the panel panning with no button held.
+    const clickStart = fftClickStartRef.current;
+    fftClickStartRef.current = null;
     setIsDraggingFFT(false);
     setFftDragStart(null);
+    // A press that moved less than 3 px is a click that measures a d-spacing.
+    if (!clickStart || Math.hypot(event.clientX - clickStart.x, event.clientY - clickStart.y) >= 3) return;
+    const canvas = fftOverlayRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const canvasX = (event.clientX - rect.left) * scaleX;
+    const canvasY = (event.clientY - rect.top) * scaleY;
+    const fftW = fftCropDims?.fftWidth ?? shapeCols;
+    const fftH = fftCropDims?.fftHeight ?? shapeRows;
+    // Reverse the render transform: canvas coords -> image coords.
+    // Render: translate(panX, panY); scale(zoom); drawImage(offscreen, 0,0,fftW,fftH, 0,0,canvasW,canvasH)
+    // So: canvasX = panX + zoom * (imgCol * canvasW / fftW)  →  imgCol = (canvasX - panX) / zoom * fftW / canvasW
+    let imgCol = ((canvasX - fftPanX) / fftZoom) * (fftW / canvas.width);
+    let imgRow = ((canvasY - fftPanY) / fftZoom) * (fftH / canvas.height);
+    if (imgCol < 0 || imgCol >= fftW || imgRow < 0 || imgRow >= fftH) return;
+    // Snap to nearest peak in FFT magnitude
+    if (fftMagCacheRef.current) {
+      let snapped: { row: number; col: number };
+      try {
+        snapped = await findFFTPeakBrowser(fftMagCacheRef.current, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
+      } catch (error) {
+        console.error("[Show4DSTEM] WebGPU FFT peak refinement failed", error);
+        return;
+      }
+      imgCol = snapped.col;
+      imgRow = snapped.row;
+    }
+    const halfW = Math.floor(fftW / 2);
+    const halfH = Math.floor(fftH / 2);
+    const dcol = imgCol - halfW;
+    const drow = imgRow - halfH;
+    const distPx = Math.sqrt(dcol * dcol + drow * drow);
+    if (distPx < 1) {
+      setFftClickInfo(null); // Clicked on DC center
+      return;
+    }
+    let spatialFreq: number | null = null;
+    let dSpacing: number | null = null;
+    if (pixelSize > 0) {
+      const paddedW = nextPow2(fftW);
+      const paddedH = nextPow2(fftH);
+      ({ spatialFrequency: spatialFreq, dSpacing } = reciprocalCoordinatesFromShiftedOffset(
+        Math.round(imgRow) - halfH,
+        Math.round(imgCol) - halfW,
+        paddedH,
+        paddedW,
+        pixelSize,
+        pixelSize,
+      ));
+    }
+    setFftClickInfo({ row: imgRow, col: imgCol, distPx, spatialFreq, dSpacing });
   };
   const handleFftMouseLeave = () => { fftClickStartRef.current = null; setIsDraggingFFT(false); setFftDragStart(null); };
 
@@ -7387,7 +7067,7 @@ function Show4DSTEM() {
   const handleCompareGridResizeStart = React.useCallback((event: React.PointerEvent<HTMLElement>, panelScale = 1) => {
     event.stopPropagation();
     event.preventDefault();
-    try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
+    event.currentTarget.setPointerCapture(event.pointerId);
     compareGridResizeCleanupRef.current?.();
     const startX = event.clientX;
     const startY = event.clientY;
@@ -7450,19 +7130,20 @@ function Show4DSTEM() {
 
   const themedMenuProps = {
     ...upwardMenuProps,
-    PaperProps: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` } },
+    slotProps: { paper: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` } } },
   };
   const statsBarSx = {
     mt: `${SPACING.XS}px`,
     px: 1,
     py: 0.5,
-    height: 28,
     minHeight: 28,
     bgcolor: themeColors.bgAlt,
     display: "flex",
     columnGap: 1.25,
     alignItems: "center",
-    flexWrap: "nowrap",
+    // Source buttons that do not fit beside the stats wrap to a second row
+    // rather than being clipped (DPC row, DPC col, iDPC on a narrow panel).
+    flexWrap: "wrap",
     maxWidth: "100%",
     overflow: "hidden",
     boxSizing: "border-box",
@@ -7470,7 +7151,6 @@ function Show4DSTEM() {
       mt: 0,
       px: 0.5,
       py: 0.25,
-      height: 24,
       minHeight: 24,
       columnGap: "6px",
     },
@@ -7483,7 +7163,7 @@ function Show4DSTEM() {
     flexShrink: 0,
   };
   const viSourceButtonSx = (source: string, active = false) => {
-    const color = viSourceDisplayColor(source, themeInfo.theme) ?? themeColors.textMuted;
+    const color = viSourceDisplayColor(source, themeInfo.theme);
     return {
       ...statsTextSx,
       color,
@@ -7503,7 +7183,7 @@ function Show4DSTEM() {
     ["← / →", "Move scan col"],
     ["Shift+Arrows", "Move ×10"],
     ...(nFrames > 1 ? [["[ / ]", `Prev / next ${frameDimLabel.toLowerCase()}`] as [string, string]] : []),
-    ["Space", "Play / pause"],
+    ...(nFrames > 1 && !compareMode ? [["Space", "Play / pause"] as [string, string]] : []),
     ["R", "Reset all zoom/pan"],
     ["Esc", "Release keyboard focus"],
     ["Scroll", "Zoom"],
@@ -7693,11 +7373,9 @@ function Show4DSTEM() {
       ssbTuneDebounceRef.current = null;
     }
   }, []);
-  const currentViSource = normaliseViSource(model.get("vi_source"));
+  const currentViSource = model.get("vi_source");
   const viGpuVisible = Boolean(
     viGpuRetainedReady
-    &&
-    viGpuVersion >= 0
     && !compareMode
     && viGpuImageRef.current
     && (
@@ -7798,7 +7476,7 @@ function Show4DSTEM() {
             ["Scan", `${shapeRows} x ${shapeCols}`],
             ["Detector", `${detRows} x ${detCols}`],
             ["Frames", nFrames > 1 ? `${nFrames} ${frameDimLabel}` : "single frame"],
-            ["Real space", pixelSize > 0 ? `${formatNumber(pixelSize)} ${pixelUnit || "px"}/px` : ""],
+            ["Real space", pixelSize > 0 ? `${formatNumber(pixelSize)} ${scanUnit}/px` : ""],
             ["Diffraction", kCalibrated && kPixelSize > 0 ? `${formatNumber(kPixelSize)} ${kPixelUnit || "px"}/px` : "detector pixels"],
           ]} />
           <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
@@ -7931,7 +7609,7 @@ function Show4DSTEM() {
                   setHoveredDpProfileEndpoint(null);
                   setIsHoveringDpProfileLine(false);
                 }
-              }} size="small" sx={switchStyles.small} />
+              }} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Diffraction profile" } }} />
               <Button size="small" sx={compactButton} disabled={dpZoom === 1 && dpPanX === 0 && dpPanY === 0 && roiCenterCol === centerCol && roiCenterRow === centerRow} onClick={() => { setDpZoom(1); setDpPanX(0); setDpPanY(0); setRoiCenterCol(centerCol); setRoiCenterRow(centerRow); }}>Reset</Button>
               <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={async () => {
                 const canvas = dpCanvasRef.current;
@@ -8007,7 +7685,7 @@ function Show4DSTEM() {
                 anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
                 transformOrigin={{ vertical: "top", horizontal: "left" }}
                 sx={{ zIndex: 9999 }}
-                PaperProps={{ sx: { bgcolor: themeColors.bgAlt, backgroundImage: "none", color: themeColors.text, border: `1px solid ${themeColors.border}` } }}
+                slotProps={{ paper: { sx: { bgcolor: themeColors.bgAlt, backgroundImage: "none", color: themeColors.text, border: `1px solid ${themeColors.border}` } } }}
               >
                 <Box sx={{ px: 1.5, py: 1, width: 242, boxSizing: "border-box" }}>
                   <Stack direction="row" alignItems="center" sx={{ mb: 0.75, gap: 0.25 }}>
@@ -8052,6 +7730,7 @@ function Show4DSTEM() {
                     <Typography sx={themedTypography.label}>Refine</Typography>
                     <Switch
                       checked={Boolean(ssbComputeRefine)}
+                      slotProps={{ input: { "aria-label": "SSB refine" } }}
                       onChange={(event) => setSsbComputeRefine(event.target.checked)}
                       disabled={ssbComputeBusy}
                       size="small"
@@ -8064,6 +7743,7 @@ function Show4DSTEM() {
                     </Typography>
                     <Switch
                       checked={Boolean(ssbComputeLockC10)}
+                      slotProps={{ input: { "aria-label": "SSB lock C10" } }}
                       onChange={(event) => setSsbComputeLockC10(event.target.checked)}
                       disabled={ssbComputeBusy}
                       size="small"
@@ -8076,6 +7756,7 @@ function Show4DSTEM() {
                     </Typography>
                     <Switch
                       checked={Boolean(ssbComputeLockC12)}
+                      slotProps={{ input: { "aria-label": "SSB lock C12" } }}
                       onChange={(event) => setSsbComputeLockC12(event.target.checked)}
                       disabled={ssbComputeBusy}
                       size="small"
@@ -8319,14 +8000,7 @@ function Show4DSTEM() {
                     <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Color</Typography>
                       <Select value={dpColormap} onChange={(event) => setDpColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
-                        <MenuItem value="inferno">Inferno</MenuItem>
-                        <MenuItem value="viridis">Viridis</MenuItem>
-                        <MenuItem value="plasma">Plasma</MenuItem>
-                        <MenuItem value="magma">Magma</MenuItem>
-                        <MenuItem value="hot">Hot</MenuItem>
-                        <MenuItem value="RdBu_r">RdBu</MenuItem>
-                        <MenuItem value="twilight_shifted">Twilight</MenuItem>
-                        <MenuItem value="gray">Gray</MenuItem>
+                        {COLORMAP_OPTIONS}
                       </Select>
                       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Scale</Typography>
                       <Select value={dpScaleMode} onChange={(event) => setDpScaleMode(event.target.value as "linear" | "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
@@ -8335,12 +8009,12 @@ function Show4DSTEM() {
 
                       </Select>
                       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Colorbar</Typography>
-                      <Switch checked={showDpColorbar} onChange={(event) => setShowDpColorbar(event.target.checked)} size="small" sx={switchStyles.small} />
+                      <Switch checked={showDpColorbar} onChange={(event) => setShowDpColorbar(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Diffraction colorbar" } }} />
                     </Box>
                   </Box>
                   {/* Right: Histogram spanning both rows */}
                   <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", flex: "0 0 auto", maxWidth: "100%" }}>
-                    <Histogram data={dpHistogramData} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={(min, max) => { setDpVminPct(min); setDpVmaxPct(max); }} width={110} height={58} sliderInset={6} theme={themeInfo.theme} dataMin={dpGlobalMin} dataMax={dpGlobalMax} />
+                    <Histogram data={dpHistogramData} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={(min, max) => { setDpVminPct(min); setDpVmaxPct(max); }} width={110} height={58} sliderInset={6} theme={themeInfo.theme} dataMin={dpStats[1]} dataMax={dpStats[2]} />
                   </Box>
                 </Box>
               </Box>
@@ -8523,8 +8197,8 @@ function Show4DSTEM() {
                   anchorEl={compareHiddenMenuAnchor}
                   open={Boolean(compareHiddenMenuAnchor)}
                   onClose={() => setCompareHiddenMenuAnchor(null)}
-                  MenuListProps={{ "aria-label": "Show4DSTEM hidden multiple panels menu" }}
                   {...themedMenuProps}
+                  slotProps={{ ...themedMenuProps.slotProps, list: { "aria-label": "Show4DSTEM hidden multiple panels menu" } }}
                 >
                   {compareHiddenPanelItems.length === 0 ? (
                     <MenuItem disabled>No hidden panels</MenuItem>
@@ -8553,7 +8227,7 @@ function Show4DSTEM() {
                 </Menu>
               </>}
               <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>FFT</Typography>
-              <Switch checked={showFft} onChange={(event) => setShowFft(event.target.checked)} size="small" sx={switchStyles.small} />
+              <Switch checked={showFft} onChange={(event) => setShowFft(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Image FFT" } }} />
               {!compareMode && <>
                 <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Profile</Typography>
                 <Switch checked={viProfileActive} onChange={(event) => {
@@ -8564,7 +8238,7 @@ function Show4DSTEM() {
                     setHoveredViProfileEndpoint(null);
                     setIsHoveringViProfileLine(false);
                   }
-                }} size="small" sx={switchStyles.small} />
+                }} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Image profile" } }} />
                 <Button size="small" sx={compactButton} disabled={viZoom === 1 && viPanX === 0 && viPanY === 0} onClick={() => { setViZoom(1); setViPanX(0); setViPanY(0); }}>Reset</Button>
                 <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={async () => {
                   let canvas: HTMLCanvasElement | null = null;
@@ -8608,11 +8282,12 @@ function Show4DSTEM() {
               onReorderFrame={moveCompareFrame} onDragFrameChange={setCompareDraggingFrame}
               onPendingMoveFrameChange={setComparePendingMoveFrame}
               onPositionChange={(row, col, commit) => {
-                setLocalKRow(row); setLocalKCol(col);
+                setLocalKRow(row);
+                setLocalKCol(col);
                 // All diffraction panels edit the same live virtual detector.
                 // CompareVirtualGrid already coalesces pointer moves with rAF;
                 // use the primary detector's preview and finalization paths.
-                dpRoiInteractiveRef.current = true;
+                beginDpRoiInteraction();
                 model.set("roi_active", true);
                 queueRoiCenter(row, col);
                 if (commit) {
@@ -8654,7 +8329,7 @@ function Show4DSTEM() {
               panelChromeVisible={panelChromeVisible}
               showScaleBar={showScaleBar}
               pixelSize={pixelSize}
-              pixelUnit={pixelUnit}
+              pixelUnit={scanUnit}
               panelOrder={comparePanelOrder || []}
               hidden={compareHiddenPanels || []}
               starred={compareStarredPanels || []}
@@ -8672,9 +8347,9 @@ function Show4DSTEM() {
               onPendingMoveFrameChange={setComparePendingMoveFrame}
               onPositionChange={(row, col, commit) => {
                 if (viRoiMode === "off") { updateScanPosition(row, col, commit); return; }
-                setLocalViRoiCenterRow(row); setLocalViRoiCenterCol(col);
-                if (offline) {model.set("vi_roi_center", [row, col]);model.save_changes();}
-                else regionRequests.request(row, col);
+                setLocalViRoiCenterRow(row);
+                setLocalViRoiCenterCol(col);
+                requestScanRegion(row, col);
               }}
               onGpuRendererReady={setCompareGpuRenderer}
             />
@@ -8745,9 +8420,9 @@ function Show4DSTEM() {
               <Typography sx={statsTextSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(viStats[3])}</Box></Typography>
               {controlsVisible && <Box sx={{ ml: "auto", display: "flex", alignItems: "center", gap: "2px", flexWrap: "nowrap", whiteSpace: "nowrap", flexShrink: 0 }}>
                 <Typography sx={{ ...themedTypography.label, fontSize: 10, lineHeight: "20px" }}>Auto</Typography>
-                <Switch checked={viAutoContrast} onChange={(event) => toggleViAutoContrast(event.target.checked)} size="small" sx={switchStyles.small} />
+                <Switch checked={viAutoContrast} onChange={(event) => toggleViAutoContrast(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Image auto contrast" } }} />
                 <Typography sx={{ ...themedTypography.label, fontSize: 10, lineHeight: "20px" }} title="CSS bilinear interpolation. Same data, browser smooths visually.">Smooth</Typography>
-                <Switch checked={viSmooth} onChange={(event) => setViSmooth(event.target.checked)} size="small" sx={switchStyles.small} />
+                <Switch checked={viSmooth} onChange={(event) => setViSmooth(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Image smoothing" } }} />
               </Box>}
             </Box>
           )}
@@ -8790,7 +8465,7 @@ function Show4DSTEM() {
                     {/* Row 1: ROI selector */}
                     <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>ROI</Typography>
-                      <Select inputProps={{"aria-label":"Scan region"}} value={viRoiMode || "off"} onChange={(event) => setViRoiMode(event.target.value)} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={themedMenuProps}>
+                      <Select inputProps={{ "aria-label": "Scan region" }} value={viRoiMode || "off"} onChange={(event) => setViRoiMode(event.target.value)} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={themedMenuProps}>
                         <MenuItem value="off">Off</MenuItem>
                         <MenuItem value="circle">Circle</MenuItem>
                         <MenuItem value="square">Square</MenuItem>
@@ -8813,7 +8488,7 @@ function Show4DSTEM() {
                               </Typography>
                             </>
                           )}
-                          <Select inputProps={{"aria-label":"Scan region reduction"}} value={viRoiReduce || "mean"} onChange={(event) => setViRoiReduce(event.target.value)} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={themedMenuProps}>
+                          <Select inputProps={{ "aria-label": "Scan region reduction" }} value={viRoiReduce || "mean"} onChange={(event) => setViRoiReduce(event.target.value)} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={themedMenuProps}>
                             <MenuItem value="mean">Mean</MenuItem>
                             <MenuItem value="sum">Sum</MenuItem>
                             <MenuItem value="max">Max</MenuItem>
@@ -8825,14 +8500,7 @@ function Show4DSTEM() {
                     <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Color</Typography>
                       <Select value={viColormap} onChange={(event) => setViColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
-                        <MenuItem value="inferno">Inferno</MenuItem>
-                        <MenuItem value="viridis">Viridis</MenuItem>
-                        <MenuItem value="plasma">Plasma</MenuItem>
-                        <MenuItem value="magma">Magma</MenuItem>
-                        <MenuItem value="hot">Hot</MenuItem>
-                        <MenuItem value="RdBu_r">RdBu</MenuItem>
-                        <MenuItem value="twilight_shifted">Twilight</MenuItem>
-                        <MenuItem value="gray">Gray</MenuItem>
+                        {COLORMAP_OPTIONS}
                       </Select>
                       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Scale</Typography>
                       <Select value={viScaleMode} onChange={(event) => setViScaleMode(event.target.value as "linear" | "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
@@ -9059,12 +8727,12 @@ function Show4DSTEM() {
                 </Typography>
                 {fftClickInfo.dSpacing != null && (
                   <Typography sx={{ fontSize: 11, fontWeight: "bold", color: themeColors.accent }}>
-                    d = {fftClickInfo.dSpacing >= 10 ? `${(fftClickInfo.dSpacing / 10).toFixed(2)} nm` : `${fftClickInfo.dSpacing.toFixed(2)} \u00C5`}
+                    d = {formatDSpacing(fftClickInfo.dSpacing, scanUnit)}
                   </Typography>
                 )}
                 {fftClickInfo.spatialFreq != null && (
                   <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>
-                    q = <Box component="span" sx={{ color: themeColors.accent }}>{fftClickInfo.spatialFreq.toFixed(4)} {"\u00C5\u207B\u00B9"}</Box>
+                    q = <Box component="span" sx={{ color: themeColors.accent }}>{formatSpatialFrequency(fftClickInfo.spatialFreq, scanUnit)}</Box>
                   </Typography>
                 )}
               </Box>
@@ -9095,11 +8763,11 @@ function Show4DSTEM() {
 
                         </Select>
                         <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Auto</Typography>
-                        <Switch checked={fftAuto} onChange={(event) => toggleFftAuto(event.target.checked)} size="small" sx={switchStyles.small} />
+                        <Switch checked={fftAuto} onChange={(event) => toggleFftAuto(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "FFT auto contrast" } }} />
                         {fftCropDims && (
                           <>
                             <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Win</Typography>
-                            <Switch checked={fftWindow} onChange={(event) => setFftWindow(event.target.checked)} size="small" sx={switchStyles.small} />
+                            <Switch checked={fftWindow} onChange={(event) => setFftWindow(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "FFT window" } }} />
                           </>
                         )}
                       </Box>
@@ -9107,12 +8775,7 @@ function Show4DSTEM() {
                       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                         <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Color</Typography>
                         <Select value={fftColormap} onChange={(event) => setFftColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
-                          <MenuItem value="inferno">Inferno</MenuItem>
-                          <MenuItem value="viridis">Viridis</MenuItem>
-                          <MenuItem value="plasma">Plasma</MenuItem>
-                          <MenuItem value="magma">Magma</MenuItem>
-                          <MenuItem value="hot">Hot</MenuItem>
-                          <MenuItem value="gray">Gray</MenuItem>
+                          {COLORMAP_OPTIONS}
                         </Select>
                       </Box>
                     </Box>
@@ -9137,7 +8800,7 @@ function Show4DSTEM() {
         <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
           <Typography sx={{ ...themedTypography.label, fontSize: 10, flexShrink: 0 }}>View</Typography>
           <Select
-            value={displayViewMode}
+            value={viewMode}
             onChange={(event) => setViewMode(String(event.target.value))}
             size="small"
             inputProps={{ "aria-label": "Show4DSTEM view mode" }}
@@ -9220,9 +8883,9 @@ function Show4DSTEM() {
           <Slider value={frameFps} min={1} max={30} step={1} onChange={(_, value) => setFrameFps(value as number)} size="small" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
           <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 14, flexShrink: 0 }}>{Math.round(frameFps)}</Typography>
           <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>Loop</Typography>
-          <Switch size="small" checked={frameLoop} onChange={() => setFrameLoop(!frameLoop)} sx={{ ...switchStyles.small, flexShrink: 0 }} />
+          <Switch size="small" checked={frameLoop} onChange={() => setFrameLoop(!frameLoop)} sx={{ ...switchStyles.small, flexShrink: 0 }} slotProps={{ input: { "aria-label": "Loop frames" } }} />
           <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>Bounce</Typography>
-          <Switch size="small" checked={frameBoomerang} onChange={() => setFrameBoomerang(!frameBoomerang)} sx={{ ...switchStyles.small, flexShrink: 0 }} />
+          <Switch size="small" checked={frameBoomerang} onChange={() => setFrameBoomerang(!frameBoomerang)} sx={{ ...switchStyles.small, flexShrink: 0 }} slotProps={{ input: { "aria-label": "Bounce frames" } }} />
         </Box>}
       </>)}
     </Box>

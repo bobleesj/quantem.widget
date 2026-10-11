@@ -2,6 +2,7 @@
 // is uploaded once and each scrub runs one slice + colormap compute pass.
 import type { GPUColormapEngine } from "./colormapEngine";
 import { DISPLAY_NORMALIZE_WGSL } from "./displayShaders";
+import { computePipeline } from "./pipelines";
 
 // Smallest zoom of a volume slice view, Show3DSlices' MIN_ZOOM. The area
 // average reads every source pixel an output pixel covers, (fullW / canvasW /
@@ -198,31 +199,17 @@ export class VolumeSlices {
   }
 
   private ensureVolumePipeline(): void {
-    if (this.volumePipeline) return;
-    const module = this.device.createShaderModule({ code: volumeSliceShader("buffer") });
-    this.volumePipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
+    this.volumePipeline ??= computePipeline(this.device, volumeSliceShader("buffer"));
+    this.volParamsBuffer ??= this.device.createBuffer({
+      size: VOLUME_PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    if (!this.volParamsBuffer) {
-      this.volParamsBuffer = this.device.createBuffer({
-        size: VOLUME_PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-    }
   }
 
   private ensureVolumeTexturePipeline(): void {
-    if (this.volumeTexturePipeline) return;
-    const module = this.device.createShaderModule({ code: volumeSliceShader("texture") });
-    this.volumeTexturePipeline = this.device.createComputePipeline({
-      layout: "auto",
-      compute: { module, entryPoint: "main" },
+    this.volumeTexturePipeline ??= computePipeline(this.device, volumeSliceShader("texture"));
+    this.volParamsBuffer ??= this.device.createBuffer({
+      size: VOLUME_PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    if (!this.volParamsBuffer) {
-      this.volParamsBuffer = this.device.createBuffer({
-        size: VOLUME_PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-    }
   }
 
   /**
@@ -240,63 +227,53 @@ export class VolumeSlices {
       ny <= this.device.limits.maxTextureDimension2D &&
       nz <= this.device.limits.maxTextureArrayLayers;
     if (canTexture) {
-      try {
-        this.ensureVolumeTexturePipeline();
-        const needsTexture = !this.volumeTexture || this.volCount !== vol.length ||
-          this.volNx !== nx || this.volNy !== ny || this.volNz !== nz ||
-          this.volTextureWidth !== textureWidth;
-        if (needsTexture) {
-          this.volumeTexture?.destroy();
-          this.volumeTexture = this.device.createTexture({
-            size: { width: textureWidth, height: ny, depthOrArrayLayers: nz },
-            format: "r32float",
-            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-          });
-          this.volTextureView = this.volumeTexture.createView({ dimension: "2d-array" });
-          this.volTextureBindGroup = null;
-          this.volCount = vol.length;
-        }
-        const texture = this.volumeTexture;
-        if (!texture) return false;
-        if (paddedRowBytes === rowBytes) {
-          this.device.queue.writeTexture(
-            { texture },
-            vol.buffer as ArrayBuffer,
-            { offset: vol.byteOffset, bytesPerRow: rowBytes, rowsPerImage: ny },
-            { width: nx, height: ny, depthOrArrayLayers: nz },
-          );
-        } else {
-          const layer = new Float32Array(textureWidth * ny);
-          const sliceStride = nx * ny;
-          for (let z = 0; z < nz; z++) {
-            const sliceStart = z * sliceStride;
-            for (let row = 0; row < ny; row++) {
-              const rowStart = sliceStart + row * nx;
-              layer.set(vol.subarray(rowStart, rowStart + nx), row * textureWidth);
-            }
-            this.device.queue.writeTexture(
-              { texture, origin: { x: 0, y: 0, z } },
-              layer.buffer,
-              { bytesPerRow: paddedRowBytes, rowsPerImage: ny },
-              { width: nx, height: ny, depthOrArrayLayers: 1 },
-            );
-          }
-        }
-        this.volUseTexture = true;
-        this.volumeBuffer?.destroy();
-        this.volumeBuffer = null;
-        this.volComputeBindGroup = null;
-        this.volTextureWidth = textureWidth;
-        this.volNx = nx; this.volNy = ny; this.volNz = nz;
-        return true;
-      } catch {
+      this.ensureVolumeTexturePipeline();
+      const needsTexture = !this.volumeTexture || this.volCount !== vol.length ||
+        this.volNx !== nx || this.volNy !== ny || this.volNz !== nz ||
+        this.volTextureWidth !== textureWidth;
+      if (needsTexture) {
         this.volumeTexture?.destroy();
-        this.volumeTexture = null;
-        this.volTextureView = null;
+        this.volumeTexture = this.device.createTexture({
+          size: { width: textureWidth, height: ny, depthOrArrayLayers: nz },
+          format: "r32float",
+          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+        });
+        this.volTextureView = this.volumeTexture.createView({ dimension: "2d-array" });
         this.volTextureBindGroup = null;
-        this.volUseTexture = false;
-        this.volTextureWidth = 0;
+        this.volCount = vol.length;
       }
+      const texture = this.volumeTexture!;
+      if (paddedRowBytes === rowBytes) {
+        this.device.queue.writeTexture(
+          { texture },
+          vol.buffer as ArrayBuffer,
+          { offset: vol.byteOffset, bytesPerRow: rowBytes, rowsPerImage: ny },
+          { width: nx, height: ny, depthOrArrayLayers: nz },
+        );
+      } else {
+        const layer = new Float32Array(textureWidth * ny);
+        const sliceStride = nx * ny;
+        for (let z = 0; z < nz; z++) {
+          const sliceStart = z * sliceStride;
+          for (let row = 0; row < ny; row++) {
+            const rowStart = sliceStart + row * nx;
+            layer.set(vol.subarray(rowStart, rowStart + nx), row * textureWidth);
+          }
+          this.device.queue.writeTexture(
+            { texture, origin: { x: 0, y: 0, z } },
+            layer.buffer,
+            { bytesPerRow: paddedRowBytes, rowsPerImage: ny },
+            { width: nx, height: ny, depthOrArrayLayers: 1 },
+          );
+        }
+      }
+      this.volUseTexture = true;
+      this.volumeBuffer?.destroy();
+      this.volumeBuffer = null;
+      this.volComputeBindGroup = null;
+      this.volTextureWidth = textureWidth;
+      this.volNx = nx; this.volNy = ny; this.volNz = nz;
+      return true;
     }
     this.ensureVolumePipeline();
     this.volumeTexture?.destroy();

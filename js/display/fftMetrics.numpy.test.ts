@@ -166,16 +166,12 @@ print(json.dumps({
     "expected": compute_reference_metrics(mag, n, n, sampling, unit),
 }))
 `;
-  try {
-    return JSON.parse(execFileSync(python, ["-c", code], { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 }));
-  } catch {
-    return null;
-  }
+  return JSON.parse(execFileSync(python, ["-c", code], { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 }));
 }
 
 const fixture = numpyReferenceFixture();
 
-(fixture ? describe : describe.skip)("FFT quality metrics NumPy parity", () => {
+describe("FFT quality metrics NumPy parity", () => {
   it("matches a NumPy FFT/reference implementation on a deterministic lattice image", () => {
     const actual = computeFftQualityMetrics(
       new Float32Array(fixture.mag),

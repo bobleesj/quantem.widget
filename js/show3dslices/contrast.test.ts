@@ -217,7 +217,7 @@ it("paints the dragged depth slice before release without WebGPU", async () => {
   model.values.slice_z = 1;
   act(() => { cleanup = show3dslices.render({ model, el } as never) as (() => void) | undefined; });
   await settle();
-  const slider = el.querySelector("input[aria-label^='slice slice']")!.closest(".MuiSlider-root")!;
+  const slider = el.querySelector("input[aria-label^='Top slice']")!.closest(".MuiSlider-root")!;
   painted.length = 0;
   act(() => {
     slider.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, clientX: 100, clientY: 5 }));
