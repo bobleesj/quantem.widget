@@ -3,7 +3,8 @@
 An unlinked gallery histogram is computed once per panel frame, not on every
 hover. A gallery FFT of a panel above 2048 px says it is binned and measures
 its lattice band at the binned sampling. A profile drag samples each panel at
-most once per pointer move.
+most once per pointer move. The frequency-filter ring sits on the frequency
+the filter cuts at the FFT's zoom, and dragging it sets that frequency.
 """
 
 import re
@@ -119,4 +120,39 @@ def test_profile_drag_samples_each_panel_at_most_once_per_move(serve, open_page,
     samples = page.evaluate("() => window.__profileSamples")
     # Two panels: never more than one sample per panel per move, and the last line is sampled.
     assert 2 <= samples <= 2 * moves, samples
+    assert page.errors == [], page.errors
+
+
+def test_frequency_ring_marks_and_sets_the_cutoff_on_the_zoomed_fft(serve, open_page, hardware_adapter, browser_out):
+    from quantem.widget import Show2D
+
+    noise = np.random.default_rng(3).standard_normal((512, 512)).astype(np.float32)
+    widget = Show2D(noise, show_fft=True)
+    widget.frequency_filter_enabled = True
+    widget.frequency_filter_modes = ["lowpass"]
+    widget.frequency_filter_cutoffs = [0.25]
+    widget.export_html(browser_out / "show2d_frequency_ring.html")
+    page = open_export("show2d_frequency_ring.html", serve, open_page, hardware_adapter, browser_out,
+                       ".quantem-frequency-filter-ring")
+    fft = page.locator('canvas[data-quantem-scientific-output="show2d-fft-0"]').bounding_box()
+    ring = page.locator(".quantem-frequency-filter-ring")
+    box = ring.bounding_box()
+    center_x, center_y = fft["x"] + fft["width"] / 2, fft["y"] + fft["height"] / 2
+    # The FFT opens at 2x zoom: Nyquist is a full panel width from the center,
+    # so a 0.25 Nyquist cutoff is a ring half the panel wide.
+    assert box["width"] == pytest.approx(0.5 * fft["width"], abs=2)
+    assert box["x"] + box["width"] / 2 == pytest.approx(center_x, abs=1)
+    page.mouse.move(box["x"] + box["width"] - 1, center_y)
+    page.mouse.down()
+    for step in range(1, 6):
+        page.mouse.move(box["x"] + box["width"] - 1 + step * (center_x + 0.3 * fft["width"] - box["x"] - box["width"] + 1) / 5, center_y)
+        page.wait_for_timeout(60)
+    page.mouse.up()
+    page.wait_for_timeout(1_500)
+    page.screenshot(path=str(browser_out / "show2d_frequency_ring.png"))
+    label = ring.get_attribute("aria-label")
+    cutoff = float(re.search(r"at ([\d.]+) Nyq", label).group(1))
+    # Released 0.3 panel widths from the center at 2x zoom: 0.3 Nyquist.
+    assert cutoff == pytest.approx(0.3, abs=0.005), label
+    assert ring.bounding_box()["width"] == pytest.approx(0.6 * fft["width"], abs=2)
     assert page.errors == [], page.errors

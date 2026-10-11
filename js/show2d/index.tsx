@@ -7435,52 +7435,56 @@ function Show2D() {
     }
     setFrequencyDraft(null);
   };
+  // Where a fraction of Nyquist sits on a panel's FFT: the spectrum is drawn
+  // centered at the panel center plus the FFT pan, Nyquist at half the panel
+  // times the FFT zoom, and a binned gallery FFT reaches only 1 / binning of
+  // the image's Nyquist. The ring and its drag use this one mapping so the
+  // ring marks the frequency the filter cuts.
+  const fftRingGeometry = (panel: number) => {
+    const view = isGallery ? getGalleryFftState(panel) : { zoom: fftZoom, panX: fftPanX, panY: fftPanY };
+    return {
+      scale: view.zoom * (isGallery ? galleryFftBinning : 1),
+      centerX: 0.5 + view.panX / canvasW,
+      centerY: 0.5 + view.panY / canvasH,
+    };
+  };
+  const ringValueAt = (event: React.PointerEvent<HTMLDivElement>, panel: number) => {
+    const rect = event.currentTarget.parentElement!.getBoundingClientRect();
+    const { scale, centerX, centerY } = fftRingGeometry(panel);
+    const offsetX = (event.clientX - rect.left - centerX * rect.width) / (rect.width / 2);
+    const offsetY = (event.clientY - rect.top - centerY * rect.height) / (rect.height / 2);
+    return Math.max(0, Math.min(1, Math.hypot(offsetX, offsetY) / scale));
+  };
   const frequencyRingOverlayForPanel = (panel: number) => {
     const knobs = panelFrequencyKnobs(panel);
     const ringValue = knobs.mode === "bandpass" ? knobs.center : knobs.cutoff;
+    const ring = fftRingGeometry(panel);
     return frequencyFilterEnabled && frequencyFilterActive(knobs.mode) ? (
     <Box
       className="quantem-frequency-filter-ring"
       data-frequency-filter={knobs.mode}
       aria-label={`Draggable ${knobs.mode} frequency ring at ${frequencyValueLabel(ringValue, panel)}`}
       title="Drag the ring to choose a frequency from the FFT"
-      onMouseDown={(event: React.MouseEvent<HTMLDivElement>) => {
+      onPointerDown={(event: React.PointerEvent<HTMLDivElement>) => {
+        // Cancelling pointerdown also withholds the mouse events, so the FFT
+        // pan underneath never sees a ring drag.
         event.preventDefault();
         event.stopPropagation();
-        const parent = event.currentTarget.parentElement;
-        if (!parent) return;
-        const rect = parent.getBoundingClientRect();
-        const valueAt = (clientX: number, clientY: number) => Math.max(0, Math.min(1, Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2)) / (Math.min(rect.width, rect.height) / 2)));
-        setSelectedIdx(panel);
-        const onMove = (moveEvent: MouseEvent) => setFrequencyDraft(valueAt(moveEvent.clientX, moveEvent.clientY));
-        const onUp = (upEvent: MouseEvent) => {
-          document.removeEventListener("mousemove", onMove);
-          document.removeEventListener("mouseup", onUp);
-          commitFrequencyRing(panel, knobs.mode, valueAt(upEvent.clientX, upEvent.clientY));
-        };
-        document.addEventListener("mousemove", onMove);
-        document.addEventListener("mouseup", onUp);
-      }}
-      onPointerDown={(event: React.PointerEvent<HTMLDivElement>) => {
-        event.stopPropagation();
         event.currentTarget.setPointerCapture(event.pointerId);
+        setSelectedIdx(panel);
       }}
       onPointerMove={(event: React.PointerEvent<HTMLDivElement>) => {
-        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-        const parent = event.currentTarget.parentElement;
-        if (!parent) return;
-        const rect = parent.getBoundingClientRect();
-        const value = Math.max(0, Math.min(1, Math.hypot(event.clientX - (rect.left + rect.width / 2), event.clientY - (rect.top + rect.height / 2)) / (Math.min(rect.width, rect.height) / 2)));
-        setFrequencyDraft(value);
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) setFrequencyDraft(ringValueAt(event, panel));
       }}
       onPointerUp={(event: React.PointerEvent<HTMLDivElement>) => {
         event.stopPropagation();
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-        commitFrequencyRing(panel, knobs.mode, ringValue);
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+        event.currentTarget.releasePointerCapture(event.pointerId);
+        commitFrequencyRing(panel, knobs.mode, ringValueAt(event, panel));
       }}
       sx={{
-        position: "absolute", left: "50%", top: "50%",
-        width: `${ringValue * 100}%`, height: `${ringValue * 100}%`,
+        position: "absolute", left: `${ring.centerX * 100}%`, top: `${ring.centerY * 100}%`,
+        width: `${ringValue * ring.scale * 100}%`, height: `${ringValue * ring.scale * 100}%`,
         transform: "translate(-50%, -50%)", borderRadius: "50%",
         border: "2px solid rgba(0, 229, 255, 0.95)",
         bgcolor: knobs.mode === "highpass" ? "rgba(0,0,0,0.55)" : "transparent",
