@@ -218,7 +218,6 @@ function formatStat(value: number): string {
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 20;
 const ZOOM_FACTOR = 1.15;
-const DPR = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
 const MIN_PANEL = 200;
 const DEFAULT_PANEL = 800;
 // C12 (nm) and phi12 (degrees) slider spans: the SSB fit's default search range
@@ -401,13 +400,15 @@ function drawCanvas(
   // clears the canvas to transparent, so doing it every draw (e.g. on every
   // histogram-drag tick) wipes the visible image before the redraw lands, which
   // reads as flicker. When the size is unchanged, repaint in place instead.
-  const targetW = Math.round(size * DPR);
-  const targetH = Math.round(size * DPR);
+  // read at draw time: moving the notebook to another monitor or zooming the page changes it
+  const dpr = window.devicePixelRatio || 1;
+  const targetW = Math.round(size * dpr);
+  const targetH = Math.round(size * dpr);
   if (canvas.width !== targetW || canvas.height !== targetH) {
     canvas.width = targetW;
     canvas.height = targetH;
   }
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = bgColor;
   ctx.fillRect(0, 0, size, size);
 
@@ -629,13 +630,14 @@ function ImagePanel({
   React.useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay || !pixelSize || pixelSize <= 0 || !imageWidth || imageWidth <= 0) return;
-    overlay.width = size * DPR;
-    overlay.height = size * DPR;
+    const dpr = window.devicePixelRatio || 1;
+    overlay.width = size * dpr;
+    overlay.height = size * dpr;
     const ctx = overlay.getContext("2d");
     if (!ctx) return;
     ctx.clearRect(0, 0, overlay.width, overlay.height);
     if (isFFT) {
-      drawFFTScaleBarHiDPI(overlay, DPR, zoom.zoom, pixelSize, imageWidth, "Å⁻¹");
+      drawFFTScaleBarHiDPI(overlay, dpr, zoom.zoom, pixelSize, imageWidth, "Å⁻¹");
       // d-spacing marker, Show3D style: open circle + gap-cross, white with
       // shadow so it reads on any background. Label flips Å → nm at ≥10 Å.
       if (fftClickInfo && offscreen) {
@@ -647,7 +649,7 @@ function ImagePanel({
         const cssX = xOff + fftClickInfo.col * scale;
         const cssY = yOff + fftClickInfo.row * scale;
         ctx.save();
-        ctx.scale(DPR, DPR);
+        ctx.scale(dpr, dpr);
         ctx.strokeStyle = "rgba(255,255,255,0.9)";
         ctx.shadowColor = "rgba(0,0,0,0.6)";
         ctx.shadowBlur = 2;
@@ -665,7 +667,7 @@ function ImagePanel({
         ctx.restore();
       }
     } else {
-      drawScaleBarHiDPI(overlay, DPR, zoom.zoom, pixelSize, "Å", imageWidth);
+      drawScaleBarHiDPI(overlay, dpr, zoom.zoom, pixelSize, "Å", imageWidth);
     }
   }, [zoom, size, pixelSize, imageWidth, isFFT, fftClickInfo, offscreen]);
 
@@ -899,8 +901,9 @@ function FFTInset({
   React.useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay) return;
-    overlay.width = size * DPR;
-    overlay.height = size * DPR;
+    const dpr = window.devicePixelRatio || 1;
+    overlay.width = size * dpr;
+    overlay.height = size * dpr;
     const ctx = overlay.getContext("2d");
     if (!ctx) return;
     ctx.clearRect(0, 0, overlay.width, overlay.height);
@@ -909,7 +912,7 @@ function FFTInset({
     const cssX = (size - offscreen.width * scale) / 2 + fftClickInfo.col * scale;
     const cssY = (size - offscreen.height * scale) / 2 + fftClickInfo.row * scale;
     ctx.save();
-    ctx.scale(DPR, DPR);
+    ctx.scale(dpr, dpr);
     ctx.strokeStyle = "rgba(255,255,255,0.95)";
     ctx.shadowColor = "rgba(0,0,0,0.7)";
     ctx.shadowBlur = 2;
@@ -3151,20 +3154,19 @@ function Explore() {
       alignItems: "center",
     },
   };
-  const themedMenuProps = {
-    PaperProps: {
-      sx: {
-        bgcolor: tc.bgAlt,
-        color: tc.text,
-        border: `1px solid ${tc.border}`,
-        "& .MuiMenuItem-root": {
-          fontFamily: "monospace",
-          fontSize: 11,
-          minHeight: 28,
-        },
+  const themedMenuPaper = {
+    sx: {
+      bgcolor: tc.bgAlt,
+      color: tc.text,
+      border: `1px solid ${tc.border}`,
+      "& .MuiMenuItem-root": {
+        fontFamily: "monospace",
+        fontSize: 11,
+        minHeight: 28,
       },
     },
   };
+  const themedMenuProps = { slotProps: { paper: themedMenuPaper } };
   const rangeInputSx = {
     width: 66,
     height: 22,
@@ -3344,8 +3346,7 @@ function Explore() {
           anchorEl={toolbarMoreAnchor}
           open={Boolean(toolbarMoreAnchor)}
           onClose={() => setToolbarMoreAnchor(null)}
-          MenuListProps={{ "aria-label": "More tools" }}
-          {...themedMenuProps}
+          slotProps={{ paper: themedMenuPaper, list: { "aria-label": "More tools" } }}
         >
           {cropRefitAvailable && <>
             <Box sx={{ px: 1.5, pt: 0.75, pb: 0.35, minWidth: 260 }}>
@@ -3948,8 +3949,7 @@ function Explore() {
             anchorEl={moreMenuAnchor}
             open={Boolean(moreMenuAnchor)}
             onClose={() => setMoreMenuAnchor(null)}
-            MenuListProps={{ "aria-label": "More sweep controls" }}
-            {...themedMenuProps}
+            slotProps={{ paper: themedMenuPaper, list: { "aria-label": "More sweep controls" } }}
           >
             <Box
               onClick={(event) => event.stopPropagation()}
