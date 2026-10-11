@@ -27,7 +27,7 @@ import {
   staggerLabelRows,
   viewTransform,
 } from "./overlayGeometry";
-import { buildMeasurementRecords, measurementCsv, measurementMetadata } from "./measurements";
+import { buildMeasurementRecords, measurementCsv, measurementMetadata, type RingDict, type SpotDict } from "./measurements";
 import { copyPngOrDownload } from "./copyImage";
 import { InfoTooltip } from "../shared/InfoTooltip";
 import { KeyboardShortcuts } from "../shared/KeyboardShortcuts";
@@ -108,31 +108,6 @@ function formatStat(value: number): string {
 
 // Model types
 
-interface SpotDict {
-  id: number;
-  row: number;
-  col: number;
-  raw_row?: number | null;
-  raw_col?: number | null;
-  row_err?: number | null;
-  col_err?: number | null;
-  d_spacing: number | null;
-  d_spacing_err?: number | null;
-  g_magnitude: number | null;
-  g_magnitude_err?: number | null;
-  r_pixels: number;
-  r_pixels_err?: number;
-  angle_deg?: number | null;
-  angle_deg_err?: number | null;
-  fit_quality?: number | null;
-  intensity: number;
-  hkl?: string;
-  hkl_candidates?: string[];
-  d_ref?: number | null;
-  d_error?: number | null;
-  note?: string;
-}
-
 interface PhaseEntry {
   name: string;
   a: number;
@@ -151,23 +126,6 @@ interface MaskRegion {
   row?: number;
   col?: number;
   radius?: number;
-}
-
-interface RingDict {
-  id: number;
-  radius_px: number;
-  g_magnitude: number | null;
-  d_spacing: number | null;
-  intensity: number;
-  hkl?: string;
-  hkl_candidates?: string[];
-  d_ref?: number | null;
-  d_error?: number | null;
-  fwhm_px?: number | null;
-  fwhm_inv_angstrom?: number | null;
-  intensity_integrated?: number | null;
-  fit_quality?: number | null;
-  note?: string;
 }
 
 interface IdentifyLine {

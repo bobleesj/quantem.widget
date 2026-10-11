@@ -77,8 +77,8 @@ describe("buildMeasurementRecords", () => {
     }
   });
 
-  it("tolerates missing optional fields", () => {
-    const [spot] = buildMeasurementRecords([{ id: 3, row: 1, col: 2, r_pixels: 5, intensity: 7 }], []);
+  it("tolerates missing optional fields and an uncalibrated spot", () => {
+    const [spot] = buildMeasurementRecords([{ id: 3, row: 1, col: 2, r_pixels: 5, intensity: 7, d_spacing: null, g_magnitude: null }], []);
     expect(spot.hkl_candidates).toBe("");
     expect(spot.d_angstrom).toBeNull();
     expect(spot.note).toBe("");

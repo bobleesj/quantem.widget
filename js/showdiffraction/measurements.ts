@@ -36,7 +36,8 @@ type MeasurementRecord = Record<
   string | number | null
 >;
 
-interface SpotLike {
+/** One spot as the Python widget syncs it in ``spots``. */
+export interface SpotDict {
   id: number;
   row: number;
   col: number;
@@ -44,38 +45,43 @@ interface SpotLike {
   raw_col?: number | null;
   row_err?: number | null;
   col_err?: number | null;
+  d_spacing: number | null;
+  d_spacing_err?: number | null;
+  g_magnitude: number | null;
+  g_magnitude_err?: number | null;
   r_pixels: number;
   r_pixels_err?: number | null;
-  g_magnitude?: number | null;
-  g_magnitude_err?: number | null;
-  d_spacing?: number | null;
-  d_spacing_err?: number | null;
   angle_deg?: number | null;
   angle_deg_err?: number | null;
-  intensity: number;
   fit_quality?: number | null;
+  intensity: number;
   hkl?: string;
   hkl_candidates?: string[];
+  d_ref?: number | null;
+  d_error?: number | null;
   note?: string;
 }
 
-interface RingLike {
+/** One ring as the Python widget syncs it in ``rings``. */
+export interface RingDict {
   id: number;
   radius_px: number;
-  g_magnitude?: number | null;
-  d_spacing?: number | null;
+  g_magnitude: number | null;
+  d_spacing: number | null;
   intensity: number;
-  fit_quality?: number | null;
+  hkl?: string;
+  hkl_candidates?: string[];
+  d_ref?: number | null;
+  d_error?: number | null;
   fwhm_px?: number | null;
   fwhm_inv_angstrom?: number | null;
   intensity_integrated?: number | null;
-  hkl?: string;
-  hkl_candidates?: string[];
+  fit_quality?: number | null;
   note?: string;
 }
 
 /** Export row for one spot record. */
-function spotMeasurementRecord(spot: SpotLike): MeasurementRecord {
+function spotMeasurementRecord(spot: SpotDict): MeasurementRecord {
   return {
     id: spot.id,
     kind: "spot",
@@ -105,7 +111,7 @@ function spotMeasurementRecord(spot: SpotLike): MeasurementRecord {
 }
 
 /** Export row for one ring record. */
-function ringMeasurementRecord(ring: RingLike): MeasurementRecord {
+function ringMeasurementRecord(ring: RingDict): MeasurementRecord {
   return {
     id: ring.id,
     kind: "ring",
@@ -135,7 +141,7 @@ function ringMeasurementRecord(ring: RingLike): MeasurementRecord {
 }
 
 /** Export rows for all spots and rings. */
-export function buildMeasurementRecords(spots: SpotLike[], rings: RingLike[]): MeasurementRecord[] {
+export function buildMeasurementRecords(spots: SpotDict[], rings: RingDict[]): MeasurementRecord[] {
   return [...spots.map(spotMeasurementRecord), ...rings.map(ringMeasurementRecord)];
 }
 
