@@ -149,9 +149,14 @@ class JupyterLab:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         self.runtime = root / "runtime"
+        # JupyterLab's first-run news prompt is a toast over the lower right of the page: it lands on a panel
+        # screenshot at a position that differs between two runs, so the private settings answer it.
+        settings = root / "settings"
+        (settings / "@jupyterlab" / "apputils-extension").mkdir(parents=True)
+        (settings / "@jupyterlab" / "apputils-extension" / "notification.jupyterlab-settings").write_text(json.dumps({"fetchNews": "false"}))
         # An empty config dir keeps the user's Jupyter config (save hooks, extensions) out of the run.
         env = {**os.environ, "JUPYTER_PATH": str(root / "jupyter"), "JUPYTER_RUNTIME_DIR": str(self.runtime),
-               "JUPYTER_CONFIG_DIR": str(root / "config")}
+               "JUPYTER_CONFIG_DIR": str(root / "config"), "JUPYTERLAB_SETTINGS_DIR": str(settings)}
         self.server = subprocess.Popen(
             [sys.executable, "-m", "jupyterlab", "--no-browser", f"--port={port}", "--ip=127.0.0.1",
              "--ServerApp.token=", "--ServerApp.password=", "--ServerApp.disable_check_xsrf=True",

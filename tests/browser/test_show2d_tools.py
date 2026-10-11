@@ -228,7 +228,7 @@ def test_overlay_edit_leaves_other_menus_closable(serve, open_page, hardware_ada
     from quantem.widget import Show2D
 
     image = np.random.default_rng(5).standard_normal((256, 256)).astype(np.float32)
-    Show2D(image, overlays=[{"shape": "circle", "center": (0.5, 0.5), "radius": 0.1, "coords": "relative"}]).export_html(
+    Show2D(image, panel_overlays=[{"shape": "circle", "center": (0.5, 0.5), "radius": 0.1, "coords": "relative"}]).export_html(
         browser_out / "show2d_overlay_edit.html")
     page = open_export("show2d_overlay_edit.html", serve, open_page, hardware_adapter, browser_out,
                        'canvas[data-quantem-scientific-output="show2d-image-0"]')
