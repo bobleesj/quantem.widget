@@ -22,7 +22,6 @@ export type GPUSlot = {
   // Populated by computeRange* on GPU and consumed directly by the range-aware
   // colormap shader (no CPU readback between passes).
   rangeBuffer: GPUBuffer | null;
-  rangePartialsBuffer: GPUBuffer | null;
   liveRange?: {
     groups: number;
     partials: GPUBuffer;
@@ -102,7 +101,6 @@ export class GPUColormapEngine {
     slot.blitParamsBuffer.destroy();
     slot.histBinsBuffer.destroy();
     slot.rangeBuffer?.destroy();
-    slot.rangePartialsBuffer?.destroy();
     slot.liveRange?.partials.destroy();
     slot.liveRange?.parameters.destroy();
     for (const buf of slot.directRegionParamsBuffers) buf?.destroy();
@@ -271,7 +269,6 @@ export class GPUColormapEngine {
       blitParamsBuffer: this.device.createBuffer({ size: 8, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
       histBinsBuffer: this.device.createBuffer({ size: 256 * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC }),
       rangeBuffer: null,
-      rangePartialsBuffer: null,
       directGridBindGroup: null,
       directSlotBindGroup: null,
       directRegionParamsBuffers: [],
@@ -707,7 +704,6 @@ export class GPUColormapEngine {
 
   // GPU ranges and histograms (gpuRange.ts).
   computeRangeBatch(...args: Parameters<GPURanges["computeRangeBatch"]>) { return this.ranges.computeRangeBatch(...args); }
-  renderSlotsWithComputedGpuRangeAsync(...args: Parameters<GPURanges["renderSlotsWithComputedGpuRangeAsync"]>) { return this.ranges.renderSlotsWithComputedGpuRangeAsync(...args); }
   renderPerPanelGpuExplicit(...args: Parameters<GPURanges["renderPerPanelGpuExplicit"]>) { return this.ranges.renderPerPanelGpuExplicit(...args); }
   computeHistogramRegions(...args: Parameters<GPURanges["computeHistogramRegions"]>) { return this.ranges.computeHistogramRegions(...args); }
   computeHistogramBatch(...args: Parameters<GPURanges["computeHistogramBatch"]>) { return this.ranges.computeHistogramBatch(...args); }

@@ -1,17 +1,8 @@
 // GPU min/max reductions and 256-bin histograms of the engine's slots, and the
 // range-aware colormap passes that consume a reduced range without a readback.
-import { validateUint32ImageView, type Uint32ImageView } from "./borrowedImage";
 import type { GPUColormapEngine, GPUSlot } from "./colormapEngine";
 import { DISPLAY_NORMALIZE_WGSL, RANGE_REDUCE_WGSL } from "./displayShaders";
 import { computePipeline } from "./pipelines";
-
-// Tiny per-pass GPU buffers (e.g. 32B region uniforms) that must live until
-// the GPU has consumed them. We push them here when recorded into an encoder
-// and destroy them once the caller has submitted the work.
-export const paramsBufQueue: GPUBuffer[] = [];
-export function flushParamsBufQueue(start = 0): void {
-  for (const buffer of paramsBufQueue.splice(start)) buffer.destroy();
-}
 
 /** Range and histogram passes over the engine's slots, with their pipelines and scratch buffers. */
 export class GPURanges {
@@ -285,10 +276,7 @@ fn reduce(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocation_i
   // by reducing on GPU and feeding the result straight into the colormap pass
   // via a small storage buffer (no mapAsync between the two passes).
 
-  private rangeU32Pipelines: [GPUComputePipeline, GPUComputePipeline, GPUComputePipeline] | null = null;
   private rangeRegionPipeline: GPUComputePipeline | null = null;
-  private rangePartialsPipeline: GPUComputePipeline | null = null;
-  private rangeFinalizePipeline: GPUComputePipeline | null = null;
   private colormapRangePipeline: GPUComputePipeline | null = null;
   // Per-panel scratch state for renderPerPanelGpuExplicit and
   // computeHistogramRegions when N panels share ONE GPU slot (full frame).
@@ -314,21 +302,31 @@ fn reduce(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocation_i
     return entry;
   }
 
-  private ensureRangeRegionPipeline(integerCounts = false): void {
-    if (integerCounts ? this.rangeU32Pipelines : this.rangeRegionPipeline) return;
-    // Keep the single-workgroup entry point for existing direct callers. Large
-    // slot ranges use the same finite/log transform and tree reduction in two
-    // stages, distributing the image reads across many workgroups.
-    const code = DISPLAY_NORMALIZE_WGSL + /* wgsl */ `
+  /** One workgroup reduces a rectangular region of a slot to its finite (optionally log) min/max. */
+  private ensureRangeRegionPipeline(): void {
+    this.rangeRegionPipeline ??= computePipeline(this.device, DISPLAY_NORMALIZE_WGSL + /* wgsl */ `
 struct RangeOut { vmin: f32, vmax: f32, _p0: f32, _p1: f32 };
-struct RegionParams { region: vec4u, fullWidth: u32, log_scale: u32, partial_count: u32, _pad2: u32 };
-@group(0) @binding(0) var<storage, read> data: array<${integerCounts ? "u32" : "f32"}>;
+struct RegionParams { region: vec4u, fullWidth: u32, log_scale: u32, _pad1: u32, _pad2: u32 };
+@group(0) @binding(0) var<storage, read> data: array<f32>;
 @group(0) @binding(1) var<uniform> params: RegionParams;
 @group(0) @binding(2) var<storage, read_write> out: RangeOut;
-@group(0) @binding(3) var<storage, read_write> partials: array<vec2f>;
 var<workgroup> sMin: array<f32, 256>;
 var<workgroup> sMax: array<f32, 256>;
-fn reduce_pair(lid: u32, low: f32, high: f32) -> vec2f {
+@compute @workgroup_size(256)
+fn reduce(@builtin(local_invocation_index) lid: u32) {
+  var low = 1.0e38; var high = -1.0e38;
+  let width = params.region.z;
+  let count = width * params.region.w;
+  for (var index = lid; index < count; index += 256u) {
+    let row = index / width; let col = index - row * width;
+    var value = data[(params.region.y + row) * params.fullWidth + params.region.x + col];
+    if (!display_is_finite(value)) { continue; }
+    if (params.log_scale == 1u) {
+      if (value >= 0.0) { value = log(1.0 + value); } else { value = -log(1.0 - value); }
+    }
+    if (value < low) { low = value; }
+    if (value > high) { high = value; }
+  }
   sMin[lid] = low; sMax[lid] = high;
   workgroupBarrier();
   for (var stride = 128u; stride > 0u; stride >>= 1u) {
@@ -338,66 +336,20 @@ fn reduce_pair(lid: u32, low: f32, high: f32) -> vec2f {
     }
     workgroupBarrier();
   }
-  return vec2f(sMin[0], sMax[0]);
-}
-fn region_range(lid: u32, first: u32, step: u32) -> vec2f {
-  var low = 1.0e38; var high = -1.0e38;
-  let width = params.region.z;
-  let count = width * params.region.w;
-  for (var index = first; index < count; index += step) {
-    let row = index / width; let col = index - row * width;
-    let at = (params.region.y + row) * params.fullWidth + params.region.x + col;
-    var value = ${integerCounts ? "f32(data[at]) / bitcast<f32>(params._pad2)" : "data[at]"};
-    if (!display_is_finite(value)) { continue; }
-    if (params.log_scale == 1u) {
-      if (value >= 0.0) { value = log(1.0 + value); } else { value = -log(1.0 - value); }
-    }
-    if (value < low) { low = value; }
-    if (value > high) { high = value; }
-  }
-  return reduce_pair(lid, low, high);
-}
-fn store_range(lid: u32, result: vec2f) {
   if (lid == 0u) {
-    if (result.y >= result.x) { out.vmin = result.x; out.vmax = result.y; }
+    if (sMax[0] >= sMin[0]) { out.vmin = sMin[0]; out.vmax = sMax[0]; }
     else { out.vmin = 0.0; out.vmax = 0.0; }
-    out._p0 = ${integerCounts ? "bitcast<f32>(params._pad2)" : "0.0"}; out._p1 = 0.0;
+    out._p0 = 0.0; out._p1 = 0.0;
   }
 }
-@compute @workgroup_size(256)
-fn reduce(@builtin(local_invocation_index) lid: u32) {
-  store_range(lid, region_range(lid, lid, 256u));
-}
-@compute @workgroup_size(256)
-fn reduce_partials(@builtin(local_invocation_index) lid: u32, @builtin(workgroup_id) group: vec3u) {
-  // A zero step would never leave the region loop; the host writes >= 1.
-  let result = region_range(lid, group.x * 256u + lid, max(params.partial_count, 1u) * 256u);
-  if (lid == 0u) { partials[group.x] = result; }
-}
-@compute @workgroup_size(256)
-fn finalize(@builtin(local_invocation_index) lid: u32) {
-  var low = 1.0e38; var high = -1.0e38;
-  for (var index = lid; index < params.partial_count; index += 256u) {
-    low = min(low, partials[index].x); high = max(high, partials[index].y);
-  }
-  store_range(lid, reduce_pair(lid, low, high));
-}
-`;
-    const pipeline = (entryPoint: string) => computePipeline(this.device, code, entryPoint);
-    if (integerCounts) {
-      this.rangeU32Pipelines = [pipeline("reduce"), pipeline("reduce_partials"), pipeline("finalize")];
-      return;
-    }
-    this.rangeRegionPipeline = pipeline("reduce");
-    this.rangePartialsPipeline = pipeline("reduce_partials");
-    this.rangeFinalizePipeline = pipeline("finalize");
+`, "reduce");
   }
 
   private ensureColormapRangePipeline(): void {
     if (this.colormapRangePipeline) return;
     // Same as COLORMAP_SHADER but reads vmin/vmax from a storage buffer
-    // (filled by recordComputeRangeRegion) and applies the user slider
-    // percentages on GPU so those scalars never round-trip through JS.
+    // and applies the user slider percentages on GPU so those scalars never
+    // round-trip through JS.
     // Also accepts a region (offset + size into the full data buffer) and a
     // stride so the colormap output is the panel sub-image, sourced from
     // the full frame in place, with no slab extraction in JS.
@@ -450,173 +402,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       });
     }
     return slot.rangeBuffer;
-  }
-
-  /**
-   * Reduce a rectangular region of slot `idx`'s data buffer to (vmin, vmax)
-   * on GPU and stash the result in `slot.rangeBuffer`. The caller chains a
-   * range-aware colormap pass that reads it directly, with no CPU sync.
-   *
-   * `region` is { x, y, width, height } in pixels into the slot's full frame
-   * (which has stride `slot.width`). Omit `region` to scan the whole slot.
-   *
-   * Records into the supplied encoder so callers can fuse multiple panels
-   * into a single submit.
-   */
-  recordComputeRangeRegion(
-    encoder: GPUCommandEncoder,
-    idx: number,
-    region?: { x: number; y: number; width: number; height: number },
-    logScale: boolean = false,
-    counts?: Uint32ImageView,
-  ): boolean {
-    const slot = this.engine.slots[idx];
-    if (!slot) return false;
-    if (counts) validateUint32ImageView(counts, this.device, slot.count);
-    this.ensureRangeRegionPipeline(Boolean(counts));
-    const [rangePipeline, partialsPipeline, finalizePipeline] = counts ? this.rangeU32Pipelines!
-      : [this.rangeRegionPipeline!, this.rangePartialsPipeline!, this.rangeFinalizePipeline!];
-    const input: GPUBufferBinding = counts
-      ? { buffer: counts.buffer, offset: counts.byteOffset, size: counts.count * 4 }
-      : { buffer: slot.dataBuffer };
-    const scanRegion = region ?? { x: 0, y: 0, width: slot.width, height: slot.height };
-    const rangeBuf = this.ensureSlotRangeBuffer(slot);
-    const partialCount = Math.max(1, Math.min(1024, Math.ceil(scanRegion.width * scanRegion.height / 1024)));
-    // These parameters belong to this recorded region. They are never rewritten
-    // while another region or an earlier queued frame still references them.
-    const paramsBuf = this.device.createBuffer({
-      size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    const params = new Uint32Array([scanRegion.x, scanRegion.y, scanRegion.width, scanRegion.height, slot.width, logScale ? 1 : 0, partialCount, 0]);
-    if (counts) new Float32Array(params.buffer)[7] = counts.divisor;
-    this.device.queue.writeBuffer(paramsBuf, 0, params);
-    const pass = encoder.beginComputePass();
-    if (partialCount === 1) {
-      pass.setPipeline(rangePipeline);
-      pass.setBindGroup(0, this.device.createBindGroup({
-        layout: rangePipeline.getBindGroupLayout(0), entries: [
-          { binding: 0, resource: input },
-          { binding: 1, resource: { buffer: paramsBuf } },
-          { binding: 2, resource: { buffer: rangeBuf } },
-        ],
-      }));
-      pass.dispatchWorkgroups(1);
-    } else {
-      if (!slot.rangePartialsBuffer) {
-        slot.rangePartialsBuffer = this.device.createBuffer({
-          size: Math.max(1, Math.min(1024, Math.ceil(slot.count / 1024))) * 8,
-          usage: GPUBufferUsage.STORAGE,
-        });
-      }
-      const partials = slot.rangePartialsBuffer;
-      pass.setPipeline(partialsPipeline!);
-      pass.setBindGroup(0, this.device.createBindGroup({
-        layout: partialsPipeline!.getBindGroupLayout(0), entries: [
-          { binding: 0, resource: input },
-          { binding: 1, resource: { buffer: paramsBuf } },
-          { binding: 3, resource: { buffer: partials } },
-        ],
-      }));
-      pass.dispatchWorkgroups(partialCount);
-      pass.setPipeline(finalizePipeline!);
-      pass.setBindGroup(0, this.device.createBindGroup({
-        layout: finalizePipeline!.getBindGroupLayout(0), entries: [
-          { binding: 1, resource: { buffer: paramsBuf } },
-          { binding: 2, resource: { buffer: rangeBuf } },
-          { binding: 3, resource: { buffer: partials } },
-        ],
-      }));
-      pass.dispatchWorkgroups(1);
-    }
-    pass.end();
-    // The encoder still references paramsBuf; the caller destroys it through
-    // flushParamsBufQueue once the encoder is submitted.
-    paramsBufQueue.push(paramsBuf);
-    return true;
-  }
-
-  /**
-   * Async range-aware slot rendering that keeps the min/max range on the GPU.
-   * This is the no-readback variant used by GPU-resident Show4DSTEM compare
-   * panels: range reduction, colormap, and blit are submitted together, then
-   * the OffscreenCanvas is snapshotted only after the queue drains.
-   */
-  async renderSlotsWithComputedGpuRangeAsync(
-    indices: number[],
-    vminPct: number[],
-    vmaxPct: number[],
-    logScale: boolean = false,
-  ): Promise<ImageBitmap[] | null> {
-    this.ensureColormapRangePipeline();
-    if (!this.colormapRangePipeline || !this.engine.lutBuffer || indices.length === 0) return null;
-    const format = navigator.gpu.getPreferredCanvasFormat();
-    this.engine.ensureBlitPipeline(format);
-    if (!this.engine.blitPipeline) return null;
-
-    const encoder = this.device.createCommandEncoder();
-    const params = new ArrayBuffer(32);
-    const canvases: (OffscreenCanvas | null)[] = [];
-    const tempBuffers: GPUBuffer[] = [];
-    let encoded = 0;
-
-    for (const idx of indices) {
-      if (this.recordComputeRangeRegion(encoder, idx, undefined, logScale)) encoded++;
-    }
-    if (encoded === 0) {
-      flushParamsBufQueue();
-      return null;
-    }
-
-    for (let k = 0; k < indices.length; k++) {
-      const slot = this.engine.slots[indices[k]];
-      if (!slot || slot.directOnly || slot.rgbaCapacity < slot.count || !slot.rangeBuffer) {
-        canvases.push(null);
-        continue;
-      }
-      const lowPct = vminPct[k] ?? 0;
-      const highPct = vmaxPct[k] ?? 100;
-
-      const paramsU32 = new Uint32Array(params);
-      const paramsF32 = new Float32Array(params);
-      paramsU32[0] = slot.width;
-      paramsU32[1] = slot.height;
-      paramsF32[2] = lowPct;
-      paramsF32[3] = highPct;
-      paramsU32[4] = logScale ? 1 : 0;
-      paramsU32[5] = 0;
-      paramsU32[6] = 0;
-      paramsU32[7] = slot.width;
-      this.device.queue.writeBuffer(slot.paramsBuffer, 0, params);
-
-      const computeGroup = this.device.createBindGroup({
-        layout: this.colormapRangePipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: slot.paramsBuffer } },
-          { binding: 1, resource: { buffer: slot.dataBuffer } },
-          { binding: 2, resource: { buffer: this.engine.lutBuffer } },
-          { binding: 3, resource: { buffer: slot.rgbaBuffer } },
-          { binding: 4, resource: { buffer: slot.rangeBuffer } },
-        ],
-      });
-      const computePass = encoder.beginComputePass();
-      computePass.setPipeline(this.colormapRangePipeline);
-      computePass.setBindGroup(0, computeGroup);
-      computePass.dispatchWorkgroups(Math.ceil(slot.width / 16), Math.ceil(slot.height / 16));
-      computePass.end();
-      const blit = this.engine.encodeBlitToOffscreen(encoder, slot.rgbaBuffer, slot.width, slot.height, format);
-      if (!blit) {
-        canvases.push(null);
-        continue;
-      }
-      tempBuffers.push(blit.blitParamsBuffer);
-      canvases.push(blit.canvas);
-    }
-
-    this.device.queue.submit([encoder.finish()]);
-    await this.device.queue.onSubmittedWorkDone();
-    for (const buffer of tempBuffers) buffer.destroy();
-    flushParamsBufQueue();
-    return this.engine.transferOffscreens(canvases);
   }
 
   /**
