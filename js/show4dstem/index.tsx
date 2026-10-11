@@ -5838,27 +5838,25 @@ function Show4DSTEM() {
       }
       setFftVersion(version => version + 1);
     };
-    const timer = window.setTimeout(() => {
-      if (gpuFFTRef.current && gpuReady) {
-        const runGpuFFT = async () => {
-          const real = sourceData.slice();
-          const imag = new Float32Array(real.length);
-          const { real: spectrumReal, imag: spectrumImag } = await gpuFFTRef.current!.fft2D(real, imag, fftW, fftH, false);
-          if (cancelled || runSeq !== fftRunSeqRef.current) return;
-          fftshift(spectrumReal, fftW, fftH);
-          fftshift(spectrumImag, fftW, fftH);
-          commitFft(spectrumReal, spectrumImag);
-        };
-        runGpuFFT();
-      } else {
-        const runWorkerFFT = async () => {
-          const real = sourceData.slice();
-          const imag = new Float32Array(real.length);
-          const result = await fft2dAsync(real, imag, fftW, fftH, false);
-          commitFft(result.real, result.imag);
-        };
-        runWorkerFFT();
+    // The worker shifts its spectrum itself; the WebGPU spectrum is shifted here.
+    const transform = async () => {
+      const real = sourceData.slice();
+      const imag = new Float32Array(real.length);
+      const gpuFft = gpuReady ? gpuFFTRef.current : null;
+      if (!gpuFft) {
+        const result = await fft2dAsync(real, imag, fftW, fftH, false);
+        commitFft(result.real, result.imag);
+        return;
       }
+      const spectrum = await gpuFft.fft2D(real, imag, fftW, fftH, false);
+      if (cancelled || runSeq !== fftRunSeqRef.current) return;
+      fftshift(spectrum.real, fftW, fftH);
+      fftshift(spectrum.imag, fftW, fftH);
+      commitFft(spectrum.real, spectrum.imag);
+    };
+    // A failed transform (a lost device) keeps the last spectrum on screen.
+    const timer = window.setTimeout(() => {
+      transform().catch(error => console.error("[Show4DSTEM] FFT failed", error));
     }, 16);
     return () => {
       cancelled = true;
@@ -7228,71 +7226,65 @@ function Show4DSTEM() {
   };
 
   const handleFftMouseUp = async (event: React.MouseEvent<HTMLCanvasElement>) => {
-    // Click detection for d-spacing measurement
-    if (fftClickStartRef.current) {
-      const dx = event.clientX - fftClickStartRef.current.x;
-      const dy = event.clientY - fftClickStartRef.current.y;
-      if (Math.sqrt(dx * dx + dy * dy) < 3) {
-        // Convert screen coords to FFT image coords
-        const canvas = fftOverlayRef.current;
-        if (canvas) {
-          const rect = canvas.getBoundingClientRect();
-          const scaleX = canvas.width / rect.width;
-          const scaleY = canvas.height / rect.height;
-          const canvasX = (event.clientX - rect.left) * scaleX;
-          const canvasY = (event.clientY - rect.top) * scaleY;
-          const fftW = fftCropDims?.fftWidth ?? shapeCols;
-          const fftH = fftCropDims?.fftHeight ?? shapeRows;
-          // Reverse the render transform: canvas coords -> image coords.
-          // Render: translate(panX, panY); scale(zoom); drawImage(offscreen, 0,0,fftW,fftH, 0,0,canvasW,canvasH)
-          // So: canvasX = panX + zoom * (imgCol * canvasW / fftW)  →  imgCol = (canvasX - panX) / zoom * fftW / canvasW
-          let imgCol = ((canvasX - fftPanX) / fftZoom) * (fftW / canvas.width);
-          let imgRow = ((canvasY - fftPanY) / fftZoom) * (fftH / canvas.height);
-          // Bounds check
-          if (imgCol >= 0 && imgCol < fftW && imgRow >= 0 && imgRow < fftH) {
-            // Snap to nearest peak in FFT magnitude
-            if (fftMagCacheRef.current) {
-              let snapped: { row: number; col: number };
-              try {
-                snapped = await findFFTPeakBrowser(fftMagCacheRef.current, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
-              } catch (error) {
-                console.error("[Show4DSTEM] WebGPU FFT peak refinement failed", error);
-                return;
-              }
-              imgCol = snapped.col;
-              imgRow = snapped.row;
-            }
-            const halfW = Math.floor(fftW / 2);
-            const halfH = Math.floor(fftH / 2);
-            const dcol = imgCol - halfW;
-            const drow = imgRow - halfH;
-            const distPx = Math.sqrt(dcol * dcol + drow * drow);
-            if (distPx < 1) {
-              setFftClickInfo(null); // Clicked on DC center
-            } else {
-              let spatialFreq: number | null = null;
-              let dSpacing: number | null = null;
-              if (pixelSize > 0) {
-                const paddedW = nextPow2(fftW);
-                const paddedH = nextPow2(fftH);
-                ({ spatialFrequency: spatialFreq, dSpacing } = reciprocalCoordinatesFromShiftedOffset(
-                  Math.round(imgRow) - halfH,
-                  Math.round(imgCol) - halfW,
-                  paddedH,
-                  paddedW,
-                  pixelSize,
-                  pixelSize,
-                ));
-              }
-              setFftClickInfo({ row: imgRow, col: imgCol, distPx, spatialFreq, dSpacing });
-            }
-          }
-        }
-      }
-      fftClickStartRef.current = null;
-    }
+    // End the drag before the asynchronous peak refine: a refine that fails
+    // must not leave the panel panning with no button held.
+    const clickStart = fftClickStartRef.current;
+    fftClickStartRef.current = null;
     setIsDraggingFFT(false);
     setFftDragStart(null);
+    // A press that moved less than 3 px is a click that measures a d-spacing.
+    if (!clickStart || Math.hypot(event.clientX - clickStart.x, event.clientY - clickStart.y) >= 3) return;
+    const canvas = fftOverlayRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const canvasX = (event.clientX - rect.left) * scaleX;
+    const canvasY = (event.clientY - rect.top) * scaleY;
+    const fftW = fftCropDims?.fftWidth ?? shapeCols;
+    const fftH = fftCropDims?.fftHeight ?? shapeRows;
+    // Reverse the render transform: canvas coords -> image coords.
+    // Render: translate(panX, panY); scale(zoom); drawImage(offscreen, 0,0,fftW,fftH, 0,0,canvasW,canvasH)
+    // So: canvasX = panX + zoom * (imgCol * canvasW / fftW)  →  imgCol = (canvasX - panX) / zoom * fftW / canvasW
+    let imgCol = ((canvasX - fftPanX) / fftZoom) * (fftW / canvas.width);
+    let imgRow = ((canvasY - fftPanY) / fftZoom) * (fftH / canvas.height);
+    if (imgCol < 0 || imgCol >= fftW || imgRow < 0 || imgRow >= fftH) return;
+    // Snap to nearest peak in FFT magnitude
+    if (fftMagCacheRef.current) {
+      let snapped: { row: number; col: number };
+      try {
+        snapped = await findFFTPeakBrowser(fftMagCacheRef.current, fftW, fftH, imgCol, imgRow, FFT_SNAP_RADIUS);
+      } catch (error) {
+        console.error("[Show4DSTEM] WebGPU FFT peak refinement failed", error);
+        return;
+      }
+      imgCol = snapped.col;
+      imgRow = snapped.row;
+    }
+    const halfW = Math.floor(fftW / 2);
+    const halfH = Math.floor(fftH / 2);
+    const dcol = imgCol - halfW;
+    const drow = imgRow - halfH;
+    const distPx = Math.sqrt(dcol * dcol + drow * drow);
+    if (distPx < 1) {
+      setFftClickInfo(null); // Clicked on DC center
+      return;
+    }
+    let spatialFreq: number | null = null;
+    let dSpacing: number | null = null;
+    if (pixelSize > 0) {
+      const paddedW = nextPow2(fftW);
+      const paddedH = nextPow2(fftH);
+      ({ spatialFrequency: spatialFreq, dSpacing } = reciprocalCoordinatesFromShiftedOffset(
+        Math.round(imgRow) - halfH,
+        Math.round(imgCol) - halfW,
+        paddedH,
+        paddedW,
+        pixelSize,
+        pixelSize,
+      ));
+    }
+    setFftClickInfo({ row: imgRow, col: imgCol, distPx, spatialFreq, dSpacing });
   };
   const handleFftMouseLeave = () => { fftClickStartRef.current = null; setIsDraggingFFT(false); setFftDragStart(null); };
 
