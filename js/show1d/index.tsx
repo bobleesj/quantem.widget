@@ -160,53 +160,20 @@ type Show1DWindow = Window & typeof globalThis & {
   showSaveFilePicker?: (options?: Show1DSavePickerOptions) => Promise<Show1DFileHandle>;
 };
 
-type Show1DInitialInteractiveState = {
-  controlsCollapsed: boolean;
-  logScale: boolean;
-  showStats: boolean;
-  showReview: boolean;
-  showLegend: boolean;
-  starredSnapshotImageLabels: string[];
-  trialNotes: Record<string, string>;
-  trialTags: Record<string, string[]>;
-  showTrialNotes: boolean;
-  showStarredOnly: boolean;
-  trialSortKey: string;
-  trialSortDescending: boolean;
-  trialFilterText: string;
-  topTrialCount: number;
-  plotHeightPx: number;
-  plotWidthPx: number;
-  sidePanelWidthPx: number;
-  snapshotPanelWidthPx: number;
-  focusedTrace: number;
-  xRange: number[];
-  yRange: number[];
-  selectedSnapshotIdx: number;
-  selectedSnapshotGroupIdx: number;
-  bookmarkedSnapshotGroups: number[];
-  hiddenSnapshotImageLabels: string[];
-  showSnapshotHistogram: boolean;
-  showSnapshotFft: boolean;
-  snapshotFftLayout: string;
-  snapshotFftWindow: boolean;
-  snapshotFftCmap: string;
-  snapshotContrastPreset: string;
-  snapshotContrastRange: number[];
-  snapshotThumbnailSize: number;
-  snapshotOverlayPosition: string;
-  imageCmap: string;
-  snapshotRealSpaceZoom: number;
-  snapshotRealSpaceCenter: number[];
-  snapshotFftZoom: number;
-  snapshotFftCenter: number[];
-  showSnapshotProfile: boolean;
-  snapshotProfileLine: ProfilePoint[];
-  snapshotPlaying: boolean;
-  snapshotFps: number;
-  snapshotLoop: boolean;
-  snapshotBounce: boolean;
-};
+// The interactive traits Reset puts back to their values when the widget first settled.
+const RESET_TRAITS = [
+  "controls_collapsed", "log_scale", "show_stats", "show_review", "show_legend",
+  "starred_snapshot_image_labels", "trial_notes", "trial_tags", "show_trial_notes", "show_starred_only",
+  "trial_sort_key", "trial_sort_descending", "trial_filter_text", "top_trial_count",
+  "plot_height_px", "plot_width_px", "side_panel_width_px", "snapshot_panel_width_px", "focused_trace",
+  "x_range", "y_range", "selected_snapshot_idx", "selected_snapshot_group_idx", "bookmarked_snapshot_groups",
+  "hidden_snapshot_image_labels", "show_snapshot_histogram", "show_snapshot_fft", "snapshot_fft_layout",
+  "snapshot_fft_window", "snapshot_fft_cmap", "snapshot_contrast_preset", "snapshot_panel_contrast_ranges",
+  "snapshot_contrast_range", "snapshot_thumbnail_size", "snapshot_overlay_position", "image_cmap",
+  "snapshot_real_space_zoom", "snapshot_real_space_center", "snapshot_fft_zoom", "snapshot_fft_center",
+  "show_snapshot_profile", "snapshot_profile_line", "snapshot_playing", "snapshot_fps", "snapshot_loop",
+  "snapshot_bounce",
+];
 
 const EMPTY_BYTES = new Uint8Array(0);
 const DEFAULT_SIZE = { width: 820, height: 380 };
@@ -340,53 +307,6 @@ function useViewportSize() {
     return () => window.removeEventListener("resize", update);
   }, []);
   return size;
-}
-
-function copyNumberArray(value: number[] | null | undefined): number[] {
-  return Array.isArray(value) ? value.map(Number).filter((item) => Number.isFinite(item)) : [];
-}
-
-function copyStringArray(value: string[] | null | undefined): string[] {
-  return Array.isArray(value) ? value.map(String) : [];
-}
-
-function copyProfileLine(value: ProfilePoint[] | null | undefined): ProfilePoint[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((point) => ({ row: Number(point?.row), col: Number(point?.col) }))
-    .filter((point) => Number.isFinite(point.row) && Number.isFinite(point.col));
-}
-
-function copyStringRecord(value: Record<string, string> | null | undefined): Record<string, string> {
-  return { ...(value ?? {}) };
-}
-
-function copyStringArrayRecord(value: Record<string, string[]> | null | undefined): Record<string, string[]> {
-  return Object.fromEntries(Object.entries(value ?? {}).map(([key, items]) => [key, [...items]]));
-}
-
-function jsonValuesEqual(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a ?? {}) === JSON.stringify(b ?? {});
-}
-
-function arraysEqual<T extends number | string>(a: T[] | null | undefined, b: T[] | null | undefined): boolean {
-  const left = Array.isArray(a) ? a : [];
-  const right = Array.isArray(b) ? b : [];
-  if (left.length !== right.length) return false;
-  for (let idx = 0; idx < left.length; idx += 1) {
-    if (left[idx] !== right[idx]) return false;
-  }
-  return true;
-}
-
-function profileLinesEqual(a: ProfilePoint[] | null | undefined, b: ProfilePoint[] | null | undefined): boolean {
-  const left = copyProfileLine(a);
-  const right = copyProfileLine(b);
-  if (left.length !== right.length) return false;
-  for (let idx = 0; idx < left.length; idx += 1) {
-    if (left[idx].row !== right[idx].row || left[idx].col !== right[idx].col) return false;
-  }
-  return true;
 }
 
 function safeFloat32(data: DataView | ArrayBuffer | Uint8Array | null | undefined, expectedFloats: number): Float32Array {
@@ -2575,14 +2495,14 @@ function Show1DWidget() {
   const [bookmarkedSnapshotGroups, setBookmarkedSnapshotGroups] = useModelState<number[]>("bookmarked_snapshot_groups");
   const [showSnapshots] = useModelState<boolean>("show_snapshots");
   const [showSnapshotThumbnails] = useModelState<boolean>("show_snapshot_thumbnails");
-  const [showSnapshotHistogram, setShowSnapshotHistogram] = useModelState<boolean>("show_snapshot_histogram");
+  const [showSnapshotHistogram] = useModelState<boolean>("show_snapshot_histogram");
   const [showSnapshotFft, setShowSnapshotFft] = useModelState<boolean>("show_snapshot_fft");
-  const [snapshotFftLayout, setSnapshotFftLayout] = useModelState<string>("snapshot_fft_layout");
+  const [snapshotFftLayout] = useModelState<string>("snapshot_fft_layout");
   const [snapshotFftWindow, setSnapshotFftWindow] = useModelState<boolean>("snapshot_fft_window");
   const [snapshotFftCmap, setSnapshotFftCmap] = useModelState<string>("snapshot_fft_cmap");
   const [snapshotContrastPreset, setSnapshotContrastPreset] = useModelState<string>("snapshot_contrast_preset");
   const [panelContrastRanges, setPanelContrastRanges] = useModelState<Record<string, number[]>>("snapshot_panel_contrast_ranges");
-  const [snapshotContrastRange, setSnapshotContrastRange] = useModelState<number[]>("snapshot_contrast_range");
+  const [snapshotContrastRange] = useModelState<number[]>("snapshot_contrast_range");
   const [snapshotHistogramWidth] = useModelState<number>("snapshot_histogram_width");
   const [snapshotHistogramHeight] = useModelState<number>("snapshot_histogram_height");
   const [snapshotThumbnailSize, setSnapshotThumbnailSize] = useModelState<number>("snapshot_thumbnail_size");
@@ -2622,7 +2542,7 @@ function Show1DWidget() {
   const [handoffEnabled] = useModelState<boolean>("handoff_enabled");
   const [preparedViewWidget] = useModelState<unknown>("prepared_view_widget");
   const [transientSnapshotGroupIdx, setTransientSnapshotGroupIdx] = React.useState<number | null>(null);
-  const initialInteractiveStateRef = React.useRef<Show1DInitialInteractiveState | null>(null);
+  const resetBaselineRef = React.useRef<Map<string, unknown> | null>(null);
   const [resetBaselineReady, setResetBaselineReady] = React.useState(false);
 
   const { colors: themeColors } = useTheme(Boolean(offlineForTheme));
@@ -3484,95 +3404,30 @@ function Show1DWidget() {
     }
   }, [normalisedSnapshotContrastPreset, setSnapshotContrastPreset, snapshotContrastPreset]);
 
+  // The baseline is read once the mount's own normalising writes (clamped
+  // sizes, valid colormaps) have settled: a change to any reset trait before
+  // then restarts the zero-delay timer.
   React.useEffect(() => {
-    if (initialInteractiveStateRef.current !== null) return;
-    const timeout = window.setTimeout(() => {
-      if (initialInteractiveStateRef.current !== null) return;
-      initialInteractiveStateRef.current = {
-        controlsCollapsed: Boolean(controlsCollapsed),
-        logScale: Boolean(logScale),
-        showStats: Boolean(showStats),
-        showReview: Boolean(showReview),
-        showLegend: Boolean(showLegend),
-        starredSnapshotImageLabels: copyStringArray(starredSnapshotImageLabels),
-        trialNotes: copyStringRecord(trialNotes),
-        trialTags: copyStringArrayRecord(trialTags),
-        showTrialNotes: Boolean(showTrialNotes),
-        showStarredOnly: Boolean(showStarredOnly),
-        trialSortKey: String(trialSortKey || (optimizationReview ? "final_loss" : "label")),
-        trialSortDescending: Boolean(trialSortDescending),
-        trialFilterText: String(trialFilterText || ""),
-        topTrialCount: Math.max(0, Math.round(optionalFiniteNumber(topTrialCount) || 0)),
-        plotHeightPx: Number.isFinite(plotHeightPx) ? plotHeightPx : DEFAULT_PLOT_HEIGHT,
-        plotWidthPx: Number.isFinite(plotWidthPx) ? plotWidthPx : 0,
-        sidePanelWidthPx: Number.isFinite(sidePanelWidthPx) ? sidePanelWidthPx : 360,
-        snapshotPanelWidthPx: Number.isFinite(snapshotPanelWidthPx) ? snapshotPanelWidthPx : 0,
-        focusedTrace: Number.isFinite(focusedTrace) ? focusedTrace : -1,
-        xRange: copyNumberArray(xRange),
-        yRange: copyNumberArray(yRange),
-        selectedSnapshotIdx: Number.isFinite(selectedSnapshotIdx) ? selectedSnapshotIdx : -1,
-        selectedSnapshotGroupIdx: Number.isFinite(selectedSnapshotGroupIdx) ? selectedSnapshotGroupIdx : -1,
-        bookmarkedSnapshotGroups: copyNumberArray(bookmarkedSnapshotGroups),
-        hiddenSnapshotImageLabels: copyStringArray(hiddenSnapshotImageLabels),
-        showSnapshotHistogram: Boolean(showSnapshotHistogram),
-        showSnapshotFft: Boolean(showSnapshotFft),
-        snapshotFftLayout: String(snapshotFftLayout || "overlay"),
-        snapshotFftWindow: Boolean(snapshotFftWindow),
-        snapshotFftCmap: String(snapshotFftCmap || "magma"),
-        snapshotContrastPreset: String(snapshotContrastPreset || "full"),
-        snapshotContrastRange: copyNumberArray(snapshotContrastRange),
-        snapshotThumbnailSize: Number.isFinite(snapshotThumbnailSize) ? snapshotThumbnailSize : 48,
-        snapshotOverlayPosition: String(snapshotOverlayPosition || "top-right"),
-        imageCmap: String(imageCmap || "viridis"),
-        snapshotRealSpaceZoom: Number.isFinite(snapshotRealSpaceZoom) ? snapshotRealSpaceZoom : 1,
-        snapshotRealSpaceCenter: copyNumberArray(snapshotRealSpaceCenter),
-        snapshotFftZoom: Number.isFinite(snapshotFftZoom) ? snapshotFftZoom : 1,
-        snapshotFftCenter: copyNumberArray(snapshotFftCenter),
-        showSnapshotProfile: Boolean(showSnapshotProfile),
-        snapshotProfileLine: copyProfileLine(snapshotProfileLine),
-        snapshotPlaying: Boolean(snapshotPlaying),
-        snapshotFps: Number.isFinite(snapshotFps) ? snapshotFps : 2,
-        snapshotLoop: Boolean(snapshotLoop),
-        snapshotBounce: Boolean(snapshotBounce),
-      };
+    let timer = 0;
+    const restart = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(capture, 0);
+    };
+    const stopListening = () => {
+      for (const key of RESET_TRAITS) model.off(`change:${key}`, restart);
+    };
+    const capture = () => {
+      resetBaselineRef.current = new Map(RESET_TRAITS.map((key) => [key, structuredClone(model.get(key))]));
+      stopListening();
       setResetBaselineReady(true);
-    }, 0);
-    return () => window.clearTimeout(timeout);
-  }, [
-    focusedTrace,
-    bookmarkedSnapshotGroups,
-    hiddenSnapshotImageLabels,
-    imageCmap,
-    logScale,
-    plotHeightPx,
-    plotWidthPx,
-    selectedSnapshotGroupIdx,
-    selectedSnapshotIdx,
-    showLegend,
-    showSnapshotFft,
-    showSnapshotProfile,
-    showStats,
-    sidePanelWidthPx,
-    snapshotBounce,
-    snapshotContrastPreset,
-    snapshotContrastRange,
-    snapshotFftCenter,
-    snapshotFftCmap,
-    snapshotFftLayout,
-    snapshotFftWindow,
-    snapshotFftZoom,
-    snapshotFps,
-    snapshotLoop,
-    snapshotOverlayPosition,
-    snapshotPanelWidthPx,
-    snapshotProfileLine,
-    snapshotRealSpaceCenter,
-    snapshotRealSpaceZoom,
-    snapshotThumbnailSize,
-    snapshotPlaying,
-    xRange,
-    yRange,
-  ]);
+    };
+    for (const key of RESET_TRAITS) model.on(`change:${key}`, restart);
+    restart();
+    return () => {
+      window.clearTimeout(timer);
+      stopListening();
+    };
+  }, [model]);
 
   React.useEffect(() => {
     hoverSnapshotGroupRef.current = hoverSnapshotGroupIdx;
@@ -4230,191 +4085,31 @@ function Show1DWidget() {
   }, [setFocusedTrace, setSnapshotFftCenter, setSnapshotFftZoom, setSnapshotRealSpaceCenter, setSnapshotRealSpaceZoom, setXRange, setYRange]);
 
   const resetToInitialState = React.useCallback(() => {
-    const initial = initialInteractiveStateRef.current;
-    if (!initial) return;
-    setControlsCollapsed(initial.controlsCollapsed);
-    setLogScale(initial.logScale);
-    setShowStats(initial.showStats);
-    setShowReview(initial.showReview);
-    setShowLegend(initial.showLegend);
-    setStarredSnapshotImageLabels([...initial.starredSnapshotImageLabels]);
-    setTrialNotes(copyStringRecord(initial.trialNotes));
-    setTrialTags(copyStringArrayRecord(initial.trialTags));
-    setShowTrialNotes(initial.showTrialNotes);
-    setShowStarredOnly(initial.showStarredOnly);
-    setTrialSortKey(initial.trialSortKey);
-    setTrialSortDescending(initial.trialSortDescending);
-    setTrialFilterText(initial.trialFilterText);
-    setTopTrialCount(initial.topTrialCount);
-    setPlotHeightPx(initial.plotHeightPx);
-    setPlotWidthPx(initial.plotWidthPx);
-    setSidePanelWidthPx(initial.sidePanelWidthPx);
-    setSnapshotPanelWidthPx(initial.snapshotPanelWidthPx);
+    for (const [key, value] of resetBaselineRef.current!) model.set(key, structuredClone(value));
+    model.save_changes();
     setSidePanelWidthUserAdjusted(false);
-    setXRange([...initial.xRange]);
-    setYRange([...initial.yRange]);
-    setFocusedTrace(initial.focusedTrace);
-    setSelectedSnapshotIdx(initial.selectedSnapshotIdx);
-    setSelectedSnapshotGroupIdx(initial.selectedSnapshotGroupIdx);
-    setBookmarkedSnapshotGroups([...initial.bookmarkedSnapshotGroups]);
     setTransientSnapshotGroupIdx(null);
     setHoverSnapshotGroupIdx(null);
     setHoverSnapshotImageIdx(null);
     hoverSnapshotGroupRef.current = null;
     if (canvasRef.current) canvasRef.current.style.cursor = "crosshair";
-    setHiddenSnapshotImageLabels([...initial.hiddenSnapshotImageLabels]);
-    setShowSnapshotHistogram(initial.showSnapshotHistogram);
-    setShowSnapshotFft(initial.showSnapshotFft);
-    setSnapshotFftLayout(initial.snapshotFftLayout);
-    setSnapshotFftWindow(initial.snapshotFftWindow);
-    setSnapshotFftCmap(initial.snapshotFftCmap);
     snapshotFftCacheRef.current.clear();
     snapshotFftPendingRef.current.clear();
     setSnapshotFftCacheVersion((value) => value + 1);
-    setSnapshotContrastPreset(initial.snapshotContrastPreset);
-    setSnapshotContrastRange([...initial.snapshotContrastRange]);
-    setPanelContrastRanges({});
-    setSnapshotThumbnailSize(initial.snapshotThumbnailSize);
-    setSnapshotOverlayPosition(initial.snapshotOverlayPosition);
-    setImageCmap(initial.imageCmap);
-    setSnapshotRealSpaceZoom(initial.snapshotRealSpaceZoom);
-    setSnapshotRealSpaceCenter([...initial.snapshotRealSpaceCenter]);
-    setSnapshotFftZoom(initial.snapshotFftZoom);
-    setSnapshotFftCenter([...initial.snapshotFftCenter]);
-    setShowSnapshotProfile(initial.showSnapshotProfile);
-    setSnapshotProfileLine(initial.snapshotProfileLine.map((point) => ({ ...point })));
-    setSnapshotPlaying(initial.snapshotPlaying);
-    setSnapshotFps(initial.snapshotFps);
-    setSnapshotLoop(initial.snapshotLoop);
-    setSnapshotBounce(initial.snapshotBounce);
     snapshotBounceDirectionRef.current = 1;
     setLocalExportStatus("");
     setViewMenuAnchor(null);
     setExportAnchor(null);
-  }, [
-    setFocusedTrace,
-    setBookmarkedSnapshotGroups,
-    setHiddenSnapshotImageLabels,
-    setImageCmap,
-    setLogScale,
-    setPlotHeightPx,
-    setSelectedSnapshotGroupIdx,
-    setSelectedSnapshotIdx,
-    setShowLegend,
-    setShowSnapshotFft,
-    setShowSnapshotProfile,
-    setShowStats,
-    setSidePanelWidthPx,
-    setSnapshotBounce,
-    setSnapshotContrastPreset,
-    setSnapshotContrastRange,
-    setSnapshotFftCenter,
-    setSnapshotFftCmap,
-    setSnapshotFftLayout,
-    setSnapshotFftWindow,
-    setSnapshotFftZoom,
-    setSnapshotFps,
-    setSnapshotLoop,
-    setSnapshotOverlayPosition,
-    setSnapshotPanelWidthPx,
-    setSnapshotProfileLine,
-    setSnapshotRealSpaceCenter,
-    setSnapshotRealSpaceZoom,
-    setSnapshotThumbnailSize,
-    setSnapshotPlaying,
-    setXRange,
-    setYRange,
-  ]);
+  }, [model]);
 
+  const resetTraitValues = RESET_TRAITS.map((key) => model.get(key));
   const needsReset = React.useMemo(() => {
-    if (!resetBaselineReady) return false;
-    const initial = initialInteractiveStateRef.current;
-    if (!initial) return false;
-    return (
-      logScale !== initial.logScale
-      || controlsCollapsed !== initial.controlsCollapsed
-      || showStats !== initial.showStats
-      || showReview !== initial.showReview
-      || showLegend !== initial.showLegend
-      || !arraysEqual(starredSnapshotImageLabels, initial.starredSnapshotImageLabels)
-      || !jsonValuesEqual(trialNotes, initial.trialNotes)
-      || !jsonValuesEqual(trialTags, initial.trialTags)
-      || showTrialNotes !== initial.showTrialNotes
-      || showStarredOnly !== initial.showStarredOnly
-      || trialSortKey !== initial.trialSortKey
-      || trialSortDescending !== initial.trialSortDescending
-      || trialFilterText !== initial.trialFilterText
-      || topTrialCount !== initial.topTrialCount
-      || plotHeightPx !== initial.plotHeightPx
-      || (plotWidthPx || 0) !== initial.plotWidthPx
-      || sidePanelWidthPx !== initial.sidePanelWidthPx
-      || snapshotPanelWidthPx !== initial.snapshotPanelWidthPx
-      || sidePanelWidthUserAdjusted
-      || focusedTrace !== initial.focusedTrace
-      || !arraysEqual(xRange, initial.xRange)
-      || !arraysEqual(yRange, initial.yRange)
-      || selectedSnapshotIdx !== initial.selectedSnapshotIdx
-      || selectedSnapshotGroupIdx !== initial.selectedSnapshotGroupIdx
-      || !arraysEqual(bookmarkedSnapshotGroups, initial.bookmarkedSnapshotGroups)
-      || !arraysEqual(hiddenSnapshotImageLabels, initial.hiddenSnapshotImageLabels)
-      || showSnapshotHistogram !== initial.showSnapshotHistogram
-      || showSnapshotFft !== initial.showSnapshotFft
-      || snapshotFftLayout !== initial.snapshotFftLayout
-      || snapshotFftWindow !== initial.snapshotFftWindow
-      || snapshotFftCmap !== initial.snapshotFftCmap
-      || snapshotContrastPreset !== initial.snapshotContrastPreset
-      || !arraysEqual(snapshotContrastRange, initial.snapshotContrastRange)
-      || snapshotThumbnailSize !== initial.snapshotThumbnailSize
-      || snapshotOverlayPosition !== initial.snapshotOverlayPosition
-      || imageCmap !== initial.imageCmap
-      || snapshotRealSpaceZoom !== initial.snapshotRealSpaceZoom
-      || !arraysEqual(snapshotRealSpaceCenter, initial.snapshotRealSpaceCenter)
-      || snapshotFftZoom !== initial.snapshotFftZoom
-      || !arraysEqual(snapshotFftCenter, initial.snapshotFftCenter)
-      || showSnapshotProfile !== initial.showSnapshotProfile
-      || !profileLinesEqual(snapshotProfileLine, initial.snapshotProfileLine)
-      || snapshotPlaying !== initial.snapshotPlaying
-      || snapshotFps !== initial.snapshotFps
-      || snapshotLoop !== initial.snapshotLoop
-      || snapshotBounce !== initial.snapshotBounce
-    );
-  }, [
-    focusedTrace,
-    bookmarkedSnapshotGroups,
-    hiddenSnapshotImageLabels,
-    imageCmap,
-    logScale,
-    plotHeightPx,
-    plotWidthPx,
-    resetBaselineReady,
-    selectedSnapshotGroupIdx,
-    selectedSnapshotIdx,
-    showLegend,
-    showSnapshotFft,
-    showSnapshotProfile,
-    showStats,
-    sidePanelWidthPx,
-    sidePanelWidthUserAdjusted,
-    snapshotBounce,
-    snapshotContrastPreset,
-    snapshotContrastRange,
-    snapshotFftCenter,
-    snapshotFftCmap,
-    snapshotFftLayout,
-    snapshotFftWindow,
-    snapshotFftZoom,
-    snapshotFps,
-    snapshotLoop,
-    snapshotOverlayPosition,
-    snapshotPanelWidthPx,
-    snapshotProfileLine,
-    snapshotRealSpaceCenter,
-    snapshotRealSpaceZoom,
-    snapshotThumbnailSize,
-    snapshotPlaying,
-    xRange,
-    yRange,
-  ]);
+    const baseline = resetBaselineRef.current;
+    if (!resetBaselineReady || !baseline) return false;
+    return sidePanelWidthUserAdjusted
+      || RESET_TRAITS.some((key, index) => JSON.stringify(resetTraitValues[index]) !== JSON.stringify(baseline.get(key)));
+    // One dependency per reset trait: the model hands back the same value until the trait changes.
+  }, [resetBaselineReady, sidePanelWidthUserAdjusted, ...resetTraitValues]);
 
   // Wheel zoom must not scroll the notebook. React registers onWheel as a
   // passive listener, where preventDefault is ignored, so the plot canvas takes
