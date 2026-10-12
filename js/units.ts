@@ -54,11 +54,16 @@ export function angstromsPerUnit(unit: string | null | undefined): number | unde
 
 /**
  * An angle in degrees as the files hold it: the same direction in [0, 360). A slider may run
- * below 0 or past 360 (-10 and 350 are one rotation); the Python writers wrap the same way, so
- * a page that wrote the raw slider value put a negative angle beside theirs.
+ * below 0 or past 360 (-10 and 350 are one rotation); the Python writers wrap the same way
+ * (quantem.widget.units.wrap_degrees), so a page that wrote the raw slider value put a negative
+ * angle beside theirs. An angle already in the range is returned bit for bit: adding 360 before a
+ * second remainder would write 0.1 as 0.10000000000002274.
  */
 export function wrapDegrees(value: number): number {
-  return ((value % 360) + 360) % 360;
+  const remainder = value % 360;
+  const wrapped = remainder < 0 ? remainder + 360 : remainder;
+  // a tiny negative angle rounds up to 360 itself
+  return wrapped === 360 ? 0 : wrapped;
 }
 
 /**
@@ -66,6 +71,7 @@ export function wrapDegrees(value: number): number {
  * whose range starts below 0 shows a stored 350 at -10 instead of pinned at its upper end.
  */
 export function degreesWithin(value: number, min: number, max: number): number {
+  if (value >= min && value <= max) return value;
   const turned = value - 360 * Math.ceil((value - max) / 360);
   return turned >= min ? turned : value;
 }

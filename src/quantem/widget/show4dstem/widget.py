@@ -50,7 +50,7 @@ from quantem.widget.show4dstem.dense import DenseSession
 from quantem.widget.show4dstem.detector import PRESET_RADII, fit_disk, preset_mask, roi_mask, scan_indices
 from quantem.widget.show4dstem.preview import static_png_b64
 from quantem.widget.state import SavedStateMixin
-from quantem.widget.units import acquisition_calibration, per_axis, stated
+from quantem.widget.units import acquisition_calibration, per_axis, stated, wrap_degrees
 from quantem.widget.utils.array import device_array
 from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
@@ -1721,8 +1721,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self.ssb_compute_C10_nm = float(aberrations.get("C10_nm", self.ssb_compute_C10_nm))
             self.ssb_compute_C12_nm = float(aberrations.get("C12_nm", self.ssb_compute_C12_nm))
             self.ssb_compute_phi12_deg = float(aberrations.get("phi12_deg", self.ssb_compute_phi12_deg))
-            self.ssb_compute_scan_detector_rotation_deg = float(
-                payload.get("scan_detector_rotation_deg", self.ssb_compute_scan_detector_rotation_deg)) % 360.0
+            self.ssb_compute_scan_detector_rotation_deg = wrap_degrees(
+                payload.get("scan_detector_rotation_deg", self.ssb_compute_scan_detector_rotation_deg))
             kwargs["aberrations"] = {"C10_nm": self.ssb_compute_C10_nm, "C12_nm": self.ssb_compute_C12_nm,
                                      "phi12_deg": self.ssb_compute_phi12_deg}
             kwargs["scan_detector_rotation_deg"] = self.ssb_compute_scan_detector_rotation_deg

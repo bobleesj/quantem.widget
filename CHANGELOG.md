@@ -313,6 +313,11 @@ Fixed:
   without a message; it is applied. `Show2D.from_folder(..., state=...)` lost
   the saved page size and page, which the folder layout overwrote; the state
   is applied after the folder pages exist, as `load_state_dict` does.
+- The Python writers of `scan_detector_rotation_deg` wrapped with
+  `value % 360.0`, which answers 360.0 for a tiny negative angle (-1e-15);
+  they write 0.0 (`quantem.widget.units.wrap_degrees`). The page keeps an
+  angle already in [0, 360) bit for bit, and loading a snapshot leaves an
+  angle already inside the slider's range where it is.
 
 ## rc42 - 2026-10-11
 

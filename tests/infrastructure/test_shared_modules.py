@@ -17,7 +17,7 @@ from quantem.widget.export import export_slug
 from quantem.widget.pages import resolve_page_labels
 from quantem.widget.panels import normalize_panel_refs, resolve_panel_ref
 from quantem.widget.render.figure import format_scale_label, round_to_nice
-from quantem.widget.units import UNIT_TABLE, axis_step
+from quantem.widget.units import UNIT_TABLE, axis_step, wrap_degrees
 
 WIDGETS = Path(__file__).resolve().parents[2] / "src" / "quantem" / "widget"
 
@@ -141,6 +141,14 @@ def test_a_half_calibrated_pair_takes_the_keyword_on_its_open_axis_only():
     bare.close()
     with pytest.raises(ValueError, match="scan_sampling_A=.* contradicts the value the input records"):
         Show4DSTEM(scan, scan_sampling_A=(0.4, 0.7), precompute_virtual_images=False)
+
+
+def test_an_angle_written_to_a_file_is_in_0_to_360():
+    # value % 360.0 answers 360.0 for a tiny negative angle, outside the range the files state
+    assert [wrap_degrees(value) for value in (-1e-15, -10.0, 360.0, 725.5, 21.3, 0.1)] == [0.0, 350.0, 0.0, 5.5, 21.3, 0.1]
+    # js/units.ts wrapDegrees is the same computation: the remainder, shifted when negative, 360 itself taken as 0
+    source = (WIDGETS.parents[2] / "js" / "units.ts").read_text(encoding="utf-8")
+    assert "remainder < 0 ? remainder + 360 : remainder" in source and "wrapped === 360 ? 0 : wrapped" in source
 
 
 def test_one_unit_table_reads_the_format_strings_and_refuses_unknown_text():

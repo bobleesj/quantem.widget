@@ -37,7 +37,7 @@ from quantem.widget.adapters import core as core_adapter
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.device import gpu_path_hint, no_gpu_path
 from quantem.widget.showptycho.export import write_showptycho_folder
-from quantem.widget.units import axis_pair, image_axes, per_axis, stated
+from quantem.widget.units import axis_pair, image_axes, per_axis, stated, wrap_degrees
 from quantem.widget.utils.array import device_array
 
 STARS_FILENAME = "showptycho_stars.json"
@@ -627,7 +627,7 @@ class ShowPtycho(anywidget.AnyWidget):
                             # a higher-order term is kept with its azimuth only while its magnitude is non-zero
                             if name in ("C10_nm", "C12_nm", "phi12_deg")
                             or float(aberrations.get(f"C{name[3:-4]}_nm" if name.startswith("phi") else name, 0.0)) != 0.0},
-            "scan_detector_rotation_deg": float(scan_detector_rotation_deg) % 360.0, "detector_transposed": False,
+            "scan_detector_rotation_deg": wrap_degrees(scan_detector_rotation_deg), "detector_transposed": False,
             "flip_phase": bool(flip_phase), "voltage_kV": state["voltage_kV"], "semiangle_mrad": state["semiangle_mrad"],
             "scan_sampling_A": state["scan_sampling_A"], "detector_sampling_mrad": state["detector_sampling_mrad"],
             "loss": None if loss is None else float(loss), "source_path": self._source_path, "scan_region": list(self._scan_region),

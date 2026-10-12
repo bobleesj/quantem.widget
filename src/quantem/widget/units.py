@@ -53,6 +53,17 @@ def per_axis(value, count: int) -> list:
     return entries * count if len(entries) == 1 else entries
 
 
+def wrap_degrees(value) -> float:
+    """``value`` degrees as the same direction in [0, 360), the range every file holds an angle in.
+
+    ``value % 360.0`` alone answers 360.0 for a tiny negative angle (-1e-15),
+    outside the range. An angle already in the range is returned bit for bit.
+    ``wrapDegrees`` of ``js/units.ts`` gives the same number for the page.
+    """
+    wrapped = float(value) % 360.0
+    return 0.0 if wrapped == 360.0 else wrapped
+
+
 def unit_entry(unit) -> tuple[str, float, str]:
     """``(kind, size in the reference unit, symbol)`` of a unit string; an uncalibrated one is ``("pixels", 1.0, "px")``.
 

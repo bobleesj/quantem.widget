@@ -17,6 +17,7 @@ import numpy as np
 
 from quantem.widget.command_launcher import write_command_launcher
 from quantem.widget.export import write_widget_html
+from quantem.widget.units import wrap_degrees
 
 # the browser kernels are specialised per native scan size
 BROWSER_SCAN_SIZES = (128, 256, 512, 1024)
@@ -95,7 +96,7 @@ def write_showptycho_folder(widget, path: str | pathlib.Path | None, title: str 
         "semiangle_mrad": session["semiangle_mrad"],
         "scan_sampling_A": session["scan_sampling_A"],
         "detector_sampling_mrad": state["detector_sampling_mrad"],
-        "scan_detector_rotation_deg": float(widget.scan_detector_rotation_deg) % 360.0,
+        "scan_detector_rotation_deg": wrap_degrees(widget.scan_detector_rotation_deg),
         "detector_transposed": False,
         "aberrations": widget._current(),
         "flip_phase": bool(widget.flip_phase),
