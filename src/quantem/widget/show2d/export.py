@@ -156,10 +156,10 @@ def _overlay_svg(
             return radius * min(panel_w, panel_h)
         return radius / max(view_w, view_h) * max(panel_w, panel_h)
 
-    stroke = _svg_color(spec.get("stroke"), "#00e5ff")
-    stroke_width = max(0.0, float(spec.get("stroke_width", 2.0)))
-    # Dash pattern: an explicit "dash" list wins, else a named line_style.
-    raw_dash = spec.get("dash")
+    stroke = _svg_color(spec.get("color"), "#00e5ff")
+    stroke_width = max(0.0, float(spec.get("line_width", 2.0)))
+    # Dash pattern: an explicit "line_dash" list wins, else a named line_style.
+    raw_dash = spec.get("line_dash")
     dash_values = (
         [float(step) for step in raw_dash if float(step) >= 0]
         if isinstance(raw_dash, Sequence) and not isinstance(raw_dash, (str, bytes, bytearray))
@@ -179,7 +179,7 @@ def _overlay_svg(
     )
     opacity = max(0.0, min(1.0, float(spec.get("opacity", 1.0))))
     stroke_opacity = opacity * max(0.0, min(1.0, float(spec.get("stroke_opacity", 1.0))))
-    fill_value = spec.get("fill", "none")
+    fill_value = spec.get("fill_color", "none")
     fill = "none" if fill_value in (None, "", "none", "None") else _svg_color(fill_value)
     fill_opacity = opacity * max(0.0, min(1.0, float(spec.get("fill_opacity", 1.0 if fill != "none" else 0.0))))
     common = (
@@ -188,18 +188,12 @@ def _overlay_svg(
         f' stroke-opacity="{stroke_opacity:g}"{dash_attr}'
     )
     if shape == "circle":
-        center_x = to_x(float(spec.get("col", 0.0)))
-        center_y = to_y(float(spec.get("row", 0.0)))
-        radius = to_radius(max(0.0, float(spec.get("radius", 0.0))))
-        return f'<circle cx="{center_x:g}" cy="{center_y:g}" r="{radius:g}"{common}/>'
-    spec_row0 = float(spec.get("row0", 0.0))
-    spec_col0 = float(spec.get("col0", 0.0))
-    spec_row1 = float(spec.get("row1", spec_row0))
-    spec_col1 = float(spec.get("col1", spec_col0))
-    left = to_x(min(spec_col0, spec_col1))
-    right = to_x(max(spec_col0, spec_col1))
-    top = to_y(min(spec_row0, spec_row1))
-    bottom = to_y(max(spec_row0, spec_row1))
+        center_row, center_col = spec["center"]  # two finite floats after the overlay normalizer
+        radius = to_radius(max(0.0, float(spec["radius"])))
+        return f'<circle cx="{to_x(center_col):g}" cy="{to_y(center_row):g}" r="{radius:g}"{common}/>'
+    spec_row0, spec_col0, spec_row1, spec_col1 = spec["box"]  # sorted corners after the overlay normalizer
+    left, right = to_x(spec_col0), to_x(spec_col1)
+    top, bottom = to_y(spec_row0), to_y(spec_row1)
     return f'<rect x="{left:g}" y="{top:g}" width="{max(0, right - left):g}" height="{max(0, bottom - top):g}"{common}/>'
 
 
@@ -261,7 +255,7 @@ def _annotation_svg(spec: Mapping[str, object], x: float, y: float, panel_w: flo
     text_len = max(len(text), sum(len(_span_text(span)) for span in spans) if isinstance(spans, Sequence) else 0)
     box_w = text_len * font_size * 0.62 + 2 * pad_x
     box_h = font_size * 1.25 + 2 * pad_y
-    fg = _svg_color(spec.get("fg", spec.get("color", "#fff")))
+    fg = _svg_color(spec.get("color", "#fff"))
     outline_width = max(0.0, float(spec.get("outline_width", 0.0)))
     outline_color = _svg_color(spec.get("outline_color"), "rgba(0,0,0,0.85)")
     parts = [f'<g opacity="{opacity:g}">']

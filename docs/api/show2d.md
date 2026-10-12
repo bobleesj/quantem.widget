@@ -26,7 +26,7 @@ no console error, no NaN frame).
 | More menu: Color shared | `panel_cmaps`, `panel_cmaps_memory` | Shared by default. Turn off to let the Color dropdown edit only the selected gallery panel; turn on for one shared colormap, then turn off again to restore the previous individual panel colormaps |
 | Panel identity markers | `marker_colors`, `marker_style`, `row_markers`, `col_markers` | Optional panel colors plus row/column group frames make panels easy to reference in notebooks, reports, and agent instructions |
 | Local panel annotations | `panel_annotations` | Optional multiple in-image labels per panel, placed by corner, normalized point, or normalized region box |
-| Geometric panel overlays | `panel_overlays` | Optional circle, rectangle, and square overlays in data or relative coordinates, with stroke/fill opacity, dashed/dotted line styles, and z-order; More -> Overlay Edit allows live select, move, resize, delete, and reset |
+| Geometric panel overlays | `panel_overlays` | Optional circle and rectangle overlays in data or relative coordinates, with stroke/fill opacity, dashed/dotted line styles, and z-order; More -> Overlay Edit allows live select, move, resize, delete, and reset |
 | Contrast min / max sliders | `vmin`, `vmax` | Display clamp changes; histogram markers move |
 | Auto-contrast toggle | `auto_contrast` | Re-fits `vmin`/`vmax` to the percentile range |
 | More menu: Contrast | `contrast_preset` | Applies scientist-friendly percentile ranges such as `1-99`, `2-98`, and `3-97`; the histogram stays visible below the image |
@@ -149,26 +149,25 @@ Show2D(
                 "shape": "circle",
                 "center": (96, 88),
                 "radius": 14,
-                "stroke": "#60a5fa",
-                "stroke_width": 3,
+                "color": "#60a5fa",
+                "line_width": 3,
                 "line_style": "dashed",
             },
             {
                 "shape": "rect",
                 "box": (48, 58, 126, 146),
-                "stroke": "#facc15",
-                "fill": "#facc15",
+                "color": "#facc15",
+                "fill_color": "#facc15",
                 "fill_opacity": 0.12,
-                "dash": [6, 2, 1, 2],
+                "line_dash": [6, 2, 1, 2],
                 "z_order": 1,
             },
         ],
         "denoised": {
-            "shape": "square",
-            "center": (96, 88),
-            "size": 42,
-            "stroke": "#34d399",
-            "stroke_width": 2,
+            "shape": "rect",
+            "box": (75, 67, 117, 109),
+            "color": "#34d399",
+            "line_width": 2,
             "line_style": "dotted",
         },
     },
@@ -177,7 +176,7 @@ Show2D(
 
 Overlay strokes are solid by default. Set `line_style="dashed"`,
 `line_style="dotted"`, or `line_style="dashdot"` for common scientific
-callouts, or pass `dash=[on, off, ...]` for an exact canvas dash pattern.
+callouts, or pass `line_dash=[on, off, ...]` for an exact canvas dash pattern.
 
 A flat list of shapes without `panel=` draws each shape on every panel. Use
 `coords="relative"` when the geometry should follow normalized panel
@@ -193,7 +192,7 @@ Show2D(
             "center": (0.5, 0.5),
             "radius": 0.08,
             "coords": "relative",
-            "stroke": "#f87171",
+            "color": "#f87171",
         }
     ],
 )
@@ -312,7 +311,7 @@ Show2D(
                 "font_family": PUBLICATION_FONT,
                 "font_size": 15,
                 "font_weight": 800,
-                "fg": "#ff4dff",
+                "color": "#ff4dff",
                 "outline_color": "#000000",
                 "outline_width": 1.8,
                 "variant": "plain",
@@ -326,7 +325,7 @@ Show2D(
                 "font_family": PUBLICATION_FONT,
                 "font_size": 15,
                 "font_weight": 800,
-                "fg": "#58ff58",
+                "color": "#58ff58",
                 "outline_color": "#000000",
                 "outline_width": 1.8,
                 "variant": "plain",

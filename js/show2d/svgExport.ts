@@ -164,10 +164,10 @@ export function svgPanelOverlayElement(
   const geometry = overlayGeometry(overlay, imageW, imageH);
   const opacity = styleNumber(overlay.opacity, 1);
   const strokeOpacity = opacity * styleNumber(overlay.stroke_opacity, 1);
-  const fillOpacity = opacity * styleNumber(overlay.fill_opacity, overlay.fill ? 1 : 0);
-  const fill = overlay.fill ? svgPaint("fill", overlay.fill, "none", fillOpacity) : `fill="none"`;
-  const lineWidth = Math.max(0, styleNumber(overlay.stroke_width, 2));
-  const common = `${fill} ${svgPaint("stroke", overlay.stroke, "#00e5ff", strokeOpacity)} stroke-width="${lineWidth}"${svgDashAttributes(overlay, lineWidth)}`;
+  const fillOpacity = opacity * styleNumber(overlay.fill_opacity, overlay.fill_color ? 1 : 0);
+  const fill = overlay.fill_color ? svgPaint("fill", overlay.fill_color, "none", fillOpacity) : `fill="none"`;
+  const lineWidth = Math.max(0, styleNumber(overlay.line_width, 2));
+  const common = `${fill} ${svgPaint("stroke", overlay.color, "#00e5ff", strokeOpacity)} stroke-width="${lineWidth}"${svgDashAttributes(overlay, lineWidth)}`;
   if (geometry.shape === "circle") {
     const cx = toScreenX(geometry.col);
     const cy = toScreenY(geometry.row);
@@ -249,7 +249,7 @@ export function svgPanelAnnotationElement(spec: PanelAnnotationSpec, x: number, 
   if (outlineWidth > 0) {
     chunks.push(`<text ${textAttrs} fill="none" ${svgPaint("stroke", spec.outline_color, "rgba(0,0,0,0.85)")} stroke-width="${outlineWidth}" stroke-linejoin="round">${escapeXmlText(rich.text)}</text>`);
   }
-  chunks.push(`<text ${textAttrs} ${svgPaint("fill", spec.fg ?? spec.color, "#fff")}>`);
+  chunks.push(`<text ${textAttrs} ${svgPaint("fill", spec.color, "#fff")}>`);
   rich.spans.forEach((span) => chunks.push(`<tspan${span.color ? ` ${svgPaint("fill", span.color)}` : ""}>${escapeXmlText(span.text)}</tspan>`));
   chunks.push("</text></g>");
   return chunks.join("");

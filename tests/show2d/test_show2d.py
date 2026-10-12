@@ -280,7 +280,7 @@ def test_export_svg_writes_vector_chrome_around_png_panels(tmp_path: Path):
         title="figure",
         marker_colors=["#ff0000", "#00ff00"],
         panel_annotations={"denoised": {"text": "A", "position": "top-left"}},
-        panel_overlays={"raw": {"shape": "circle", "row": 32, "col": 32, "radius": 8}},
+        panel_overlays={"raw": {"shape": "circle", "center": (32, 32), "radius": 8}},
         verbose=False,
     )
     path = widget.export_svg(tmp_path / "figure.svg", include_colorbar=True)
@@ -470,12 +470,12 @@ def test_overlays_written_to_the_trait_are_normalized_like_the_keyword():
     # the browser draws the normalized spec only ("rect", sorted corners): a direct trait write gets the same pass as panel_overlays=
     stack = np.stack([_frame(0), _frame(1)])
     for widget in (Show2D(_frame(0)), Show3D(stack, verbose=False)):
-        widget.panel_overlays = [[{"shape": "rectangle", "box": (10, 12, 2, 3), "color": "red"}]]
+        widget.panel_overlays = [[{"shape": "rect", "box": (10, 12, 2, 3), "color": "red"}]]
         (overlay,) = widget.panel_overlays[0]
-        assert overlay["shape"] == "rect" and overlay["stroke"] == "red"
-        assert [overlay[key] for key in ("row0", "col0", "row1", "col1")] == [2.0, 3.0, 10.0, 12.0]
+        assert overlay["shape"] == "rect" and overlay["color"] == "red"
+        assert overlay["box"] == [2.0, 3.0, 10.0, 12.0]
         # what the browser writes back after a drag is already normalized and is kept as written
-        dragged = {**overlay, "row0": 4.0, "row1": 12.0}
+        dragged = {**overlay, "box": [4.0, 3.0, 12.0, 12.0]}
         widget.panel_overlays = [[dragged]]
         assert widget.panel_overlays == [[dragged]]
         with pytest.raises(traitlets.TraitError, match="shape must be one of"):
@@ -491,7 +491,7 @@ def test_annotations_overlays_and_scale_bar_panels_reach_every_panel(convert):
     # A-1: the panel count came from the unconverted input, so a list or tensor counted as one panel.
     frames = [_frame(1), _frame(2), _frame(3)]
     widget = Show2D(convert(frames), panel_annotations=["A", "B", "C"], scale_bar_panels=[2],
-                    panel_overlays=[None, None, {"shape": "circle", "row": 8, "col": 8, "radius": 2}], verbose=False)
+                    panel_overlays=[None, None, {"shape": "circle", "center": (8, 8), "radius": 2}], verbose=False)
     assert [[item["text"] for item in panel] for panel in widget.panel_annotations] == [["A"], ["B"], ["C"]]
     assert [len(panel) for panel in widget.panel_overlays] == [0, 0, 1]
     assert widget.scale_bar_panels == [2]
@@ -704,3 +704,48 @@ def test_a_page_dict_carries_its_panels_under_images():
     for earlier in ("data", "array"):
         with pytest.raises(ValueError, match=rf"page 0 only accepts keys \['images', 'label', 'labels', 'title'\], got '{earlier}'"):
             Show2D([{"title": "iteration 10", earlier: [_frame(1), _frame(2)]}], verbose=False)
+
+
+def test_overlay_keys_have_one_spelling(tmp_path: Path):
+    # an overlay took up to seven spellings per value (stroke, stroke_color, border_color or color; xyxy, xywh, region,
+    # row0..col1 or box; ...) and nine line styles for four; the kept keys reach the state and the SVG export
+    circle = {"shape": "circle", "center": (20, 30), "radius": 5, "color": "#123456", "line_width": 3, "line_dash": [6, 2]}
+    rect = {"shape": "rect", "box": (40, 50, 10, 12), "fill_color": "#abcdef", "opacity": 0.5, "line_style": "dotted", "z_order": 1}
+    widget = Show2D(_frame(0), display_bin=2, panel_overlays=[circle, rect], verbose=False)
+    # the browser draws on the binned preview; the saved state keeps native pixels
+    assert widget.panel_overlays[0][0]["center"] == [10.0, 15.0] and widget.panel_overlays[0][1]["box"] == [5.0, 6.0, 20.0, 25.0]
+    native_circle, native_rect = widget.state_dict()["panel_overlays"][0]
+    assert (native_circle["center"], native_circle["radius"], native_rect["box"]) == ([20.0, 30.0], 5.0, [10.0, 12.0, 40.0, 50.0])
+    svg = widget.export_svg(tmp_path / "overlays.svg").read_text()
+    assert 'stroke="#123456" stroke-width="3"' in svg and 'stroke-dasharray="6 2"' in svg and 'fill="#abcdef"' in svg
+    removed = {"type": "rect", "kind": "rect", "coordinate_system": "data", "row": 1, "col": 1, "y": 1, "x": 1, "r": 2,
+               "size": 4, "region": (0, 0, 4, 4), "xyxy": (0, 0, 4, 4), "xywh": (0, 0, 4, 4), "row0": 0, "col0": 0, "row1": 4,
+               "col1": 4, "stroke": "red", "stroke_color": "red", "border_color": "red", "fill": "red", "stroke_width": 2,
+               "border_width": 2, "stroke_style": "dashed", "dash": [2, 2], "alpha": 0.5, "order": 1}
+    for key, value in removed.items():
+        with pytest.raises(ValueError, match=f"panel_overlays entries only accept keys .*, got '{key}'"):
+            Show2D(_frame(0), panel_overlays={"shape": "circle", "center": (8, 8), "radius": 2, key: value}, verbose=False)
+    for shape in ("rectangle", "square", "Circle"):
+        with pytest.raises(ValueError, match="shape must be one of"):
+            Show2D(_frame(0), panel_overlays={"shape": shape, "box": (0, 0, 4, 4)}, verbose=False)
+    for style in ("none", "dash", "dot", "dash-dot", "dash_dot", "dash-dot-dot", "Dashed"):
+        with pytest.raises(ValueError, match=r"line_style must be one of \['solid', 'dashed', 'dotted', 'dashdot'\]"):
+            Show2D(_frame(0), panel_overlays={"shape": "circle", "center": (8, 8), "radius": 2, "line_style": style}, verbose=False)
+    # a spec spelled only in removed keys reads as a panel mapping; the error still names an entry's keys
+    with pytest.raises(ValueError, match="one panel_overlays entry takes the keys"):
+        Show2D(_frame(0), panel_overlays={"row": 8, "col": 8, "r": 2}, verbose=False)
+
+
+def test_annotation_keys_have_one_spelling(tmp_path: Path):
+    # annotation text came from text, label or title, the text color from fg or color, class from class or class_name,
+    # the region from box or region
+    widget = Show2D(_frame(0), panel_annotations={"text": "A", "color": "#ff4dff", "box": (0.1, 0.2, 0.3, 0.1), "class_name": "tag"}, verbose=False)
+    (annotation,) = widget.panel_annotations[0]
+    assert (annotation["text"], annotation["color"], annotation["class_name"], annotation["box"]) == ("A", "#ff4dff", "tag", [0.1, 0.2, 0.3, 0.1])
+    svg = widget.export_svg(tmp_path / "annotations.svg").read_text()
+    assert 'fill="#ff4dff">A</text>' in svg
+    for key, value in {"label": "A", "title": "A", "fg": "#fff", "class": "tag", "region": (0.1, 0.2, 0.3, 0.1)}.items():
+        with pytest.raises(ValueError, match=f"panel_annotations entries only accept keys .*, got '{key}'"):
+            Show2D(_frame(0), panel_annotations={"text": "A", key: value}, verbose=False)
+    with pytest.raises(ValueError, match="one panel_annotations entry takes the keys"):
+        Show2D(_frame(0), panel_annotations={"label": "A"}, verbose=False)

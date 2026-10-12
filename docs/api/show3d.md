@@ -28,7 +28,7 @@ panels, paged galleries and standalone HTML and GIF exports. See the
 | Panel visibility and order | `hidden_panels`, `selected_panels`, `panel_order` | Hover actions collapse or reorder panels without touching data |
 | Page controls (paged galleries) | `page_idx`, `n_pages`, `panels_per_page`, `page_starred`; `star_page()` | Shows and stars one page of panels at a time |
 | Local panel annotations | `panel_annotations` | In-image labels per panel, placed by corner, point or box |
-| Geometric panel overlays | `panel_overlays` | Circle, rectangle and square overlays in data or relative coordinates; More > Overlay Edit moves them live |
+| Geometric panel overlays | `panel_overlays` | Circle and rectangle overlays in data or relative coordinates; More > Overlay Edit moves them live |
 | Rich panel titles | `panel_titles`, `panel_title_spans` | Titles may carry `text` / `math` / `color` spans such as `λ` and `χ²` |
 | Viewer chrome preset | `ui_mode` plus `show_title`, `show_stats`, `show_scale_bar` | Shared display presets; see [Viewer UI controls](viewer-ui) |
 | Scale bar | `pixel_size`, `pixel_unit`, `show_scale_bar` | Physical scale bar from `sampling` / `units` or a `Dataset3d`; the ROI preview scale bar, line-profile axis and FFT d-spacing use the same unit |

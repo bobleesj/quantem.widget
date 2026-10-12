@@ -205,7 +205,7 @@ region labels:
 
 ## Geometric overlays
 
-Use `panel_overlays` when a circle, rectangle, or square is part of a
+Use `panel_overlays` when a circle or rectangle is part of a
 reproducible figure specification. Coordinates use data pixels by default with
 QuantEM's user-facing `(row, col)` convention.
 
@@ -219,25 +219,24 @@ Show2D(
                 "shape": "circle",
                 "center": (96, 88),
                 "radius": 14,
-                "stroke": "#60a5fa",
-                "stroke_width": 3,
+                "color": "#60a5fa",
+                "line_width": 3,
                 "line_style": "dashed",
             },
             {
                 "shape": "rect",
                 "box": (48, 58, 126, 146),
-                "stroke": "#facc15",
-                "fill": "#facc15",
+                "color": "#facc15",
+                "fill_color": "#facc15",
                 "fill_opacity": 0.12,
-                "dash": [6, 2, 1, 2],
+                "line_dash": [6, 2, 1, 2],
             },
         ],
         "denoised": {
-            "shape": "square",
-            "center": (96, 88),
-            "size": 42,
-            "stroke": "#34d399",
-            "stroke_width": 2,
+            "shape": "rect",
+            "box": (75, 67, 117, 109),
+            "color": "#34d399",
+            "line_width": 2,
             "line_style": "dotted",
         },
     },
@@ -246,7 +245,7 @@ Show2D(
 
 Overlay strokes are solid by default. Use `line_style="dashed"`,
 `line_style="dotted"`, or `line_style="dashdot"` for common figure styles, or
-pass `dash=[on, off, ...]` for a custom pattern.
+pass `line_dash=[on, off, ...]` for a custom pattern.
 
 A flat `panel_overlays=[...]` list without `panel=` draws one shared guide on
 every panel; include `panel=` in each entry when overlays are generated in a loop:
@@ -261,7 +260,7 @@ Show2D(
             "center": (0.5, 0.5),
             "radius": 0.08,
             "coords": "relative",
-            "stroke": "#f87171",
+            "color": "#f87171",
         }
     ],
 )
@@ -461,7 +460,7 @@ w = Show2D(
                 "font_family": PUBLICATION_FONT,
                 "font_size": 15,
                 "font_weight": 800,
-                "fg": "#ff4dff",
+                "color": "#ff4dff",
                 "outline_color": "#000000",
                 "outline_width": 1.8,
                 "variant": "plain",
@@ -475,7 +474,7 @@ w = Show2D(
                 "font_family": PUBLICATION_FONT,
                 "font_size": 15,
                 "font_weight": 800,
-                "fg": "#58ff58",
+                "color": "#58ff58",
                 "outline_color": "#000000",
                 "outline_width": 1.8,
                 "variant": "plain",

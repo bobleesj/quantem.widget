@@ -16,7 +16,6 @@ from quantem.widget.show2d.options import (
 
 
 _ROI_LENGTH_KEYS = ("row", "col", "radius", "radius_inner", "width", "height")
-_OVERLAY_LENGTH_KEYS = ("row", "col", "radius", "row0", "col0", "row1", "col1")
 
 
 def _rescale_view(state: dict, factor: float) -> dict:
@@ -48,7 +47,11 @@ def _rescale_view(state: dict, factor: float) -> dict:
     if "panel_overlays" in scaled:
         scaled["panel_overlays"] = [
             [
-                {**overlay, **{key: overlay[key] * factor for key in _OVERLAY_LENGTH_KEYS if key in overlay}}
+                {
+                    **overlay,
+                    **{key: [value * factor for value in overlay[key]] for key in ("center", "box") if key in overlay},
+                    **({"radius": overlay["radius"] * factor} if "radius" in overlay else {}),
+                }
                 if overlay.get("coords") == "data" else overlay
                 for overlay in panel
             ]

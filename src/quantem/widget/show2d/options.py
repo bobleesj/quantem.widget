@@ -8,7 +8,7 @@ misspelled key never silently drops an annotation from a figure. Show3D
 imports several of these for its own gallery options.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 
 import numpy as np
 
@@ -374,8 +374,6 @@ def _normalize_inset_plot_specs(
 _ANNOTATION_STYLE_KEYS = {
     "text",
     "math",
-    "label",
-    "title",
     "spans",
     "panel",
     "position",
@@ -383,12 +381,9 @@ _ANNOTATION_STYLE_KEYS = {
     "x",
     "y",
     "box",
-    "region",
     "variant",
     "class_name",
-    "class",
     "bg",
-    "fg",
     "color",
     "border_color",
     "border_width",
@@ -424,11 +419,21 @@ def _is_annotation_spec(value: object) -> bool:
     return isinstance(value, Mapping) and any(str(key) in _ANNOTATION_STYLE_KEYS for key in value)
 
 
-def _panel_target_index(panel: object, *, labels: Sequence[str] | None, n_items: int, option: str) -> int:
+def _panel_target_index(
+    panel: object,
+    *,
+    labels: Sequence[str] | None,
+    n_items: int,
+    option: str,
+    entry_keys: Collection[str] = (),
+) -> int:
     """Resolve an annotation, overlay or scale-bar target from an integer index or a panel label.
 
     ``option`` names the argument that carried the target, so a bad one
-    points the user at the right keyword.
+    points the user at the right keyword. ``entry_keys`` are the keys of one
+    entry of that argument: a mapping with none of them is read as
+    panel -> entry, so a misspelled entry key arrives here as a panel and the
+    error names the keys an entry takes.
     """
     if isinstance(panel, bool):
         raise ValueError(f"{option}: a panel must be an index or label, got {panel!r}")
@@ -437,7 +442,8 @@ def _panel_target_index(panel: object, *, labels: Sequence[str] | None, n_items:
     try:
         index = int(panel)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"{option}: a panel must be an index or label, got {panel!r}") from exc
+        hint = f"; one {option} entry takes the keys {sorted(entry_keys)}" if entry_keys else ""
+        raise ValueError(f"{option}: a panel must be an index or label, got {panel!r}{hint}") from exc
     if index < 0 or index >= int(n_items):
         raise ValueError(f"{option}: panel index {index} is outside 0..{int(n_items) - 1}")
     return index
@@ -476,7 +482,7 @@ def _normalize_panel_annotation_spec(spec: object, *, panel: int) -> dict[str, o
             "panel_annotations entries only accept keys "
             f"{sorted(_ANNOTATION_STYLE_KEYS)}, got {unknown[0]!r}"
         )
-    raw_text = spec.get("text", spec.get("label", spec.get("title", "")))
+    raw_text = spec.get("text", "")
     raw_math = spec.get("math")
     raw_spans = spec.get("spans")
     if raw_spans is not None:
@@ -497,7 +503,6 @@ def _normalize_panel_annotation_spec(spec: object, *, panel: int) -> dict[str, o
         "variant",
         "class_name",
         "bg",
-        "fg",
         "color",
         "border_color",
         "font_weight",
@@ -506,9 +511,8 @@ def _normalize_panel_annotation_spec(spec: object, *, panel: int) -> dict[str, o
         "max_width",
         "outline_color",
     ):
-        source_key = "class" if key == "class_name" and "class_name" not in spec else key
-        if source_key in spec and spec[source_key] not in (None, ""):
-            out[key] = str(spec[source_key])
+        if key in spec and spec[key] not in (None, ""):
+            out[key] = str(spec[key])
     position = str(out.get("position", "top-left"))
     if position not in _ANNOTATION_POSITIONS:
         raise ValueError(f"panel annotation position must be one of {sorted(_ANNOTATION_POSITIONS)}, got {position!r}")
@@ -526,9 +530,9 @@ def _normalize_panel_annotation_spec(spec: object, *, panel: int) -> dict[str, o
             if key in {"x", "y", "opacity"}:
                 value = max(0.0, min(1.0, value))
             out[key] = value
-    raw_box = spec.get("box", spec.get("region"))
+    raw_box = spec.get("box")
     if raw_box is not None:
-        left, top, width, height = _finite_values(raw_box, count=4, message="panel annotation box/region must contain four finite values")
+        left, top, width, height = _finite_values(raw_box, count=4, message="panel annotation box must contain four finite values")
         out["box"] = [
             max(0.0, min(1.0, left)),
             max(0.0, min(1.0, top)),
@@ -569,7 +573,7 @@ def _normalize_panel_annotations(
 
     if isinstance(panel_annotations, Mapping) and not _is_annotation_spec(panel_annotations):
         for raw_panel, value in panel_annotations.items():
-            add(_panel_target_index(raw_panel, labels=labels, n_items=n_items, option="panel_annotations"), value)
+            add(_panel_target_index(raw_panel, labels=labels, n_items=n_items, option="panel_annotations", entry_keys=_ANNOTATION_STYLE_KEYS), value)
         return grouped
     if isinstance(panel_annotations, Mapping) and "panel" in panel_annotations:
         add(_panel_target_index(panel_annotations["panel"], labels=labels, n_items=n_items, option="panel_annotations"), panel_annotations)
@@ -618,63 +622,27 @@ def _route_panel_list(
         add(_panel_target_index(item["panel"], labels=labels, n_items=n_items, option=option), item)
 
 
-_OVERLAY_SHAPES = {"circle", "rect", "rectangle", "square"}
+_OVERLAY_SHAPES = {"circle", "rect"}
 _OVERLAY_COORDS = {"data", "relative"}
+# The four stroke patterns the browser draws; any other pattern is a line_dash list.
+_OVERLAY_LINE_STYLES = ["solid", "dashed", "dotted", "dashdot"]
 _OVERLAY_STYLE_KEYS = {
     "shape",
-    "type",
-    "kind",
     "coords",
-    "coordinate_system",
     "panel",
     "center",
     "radius",
-    "r",
-    "size",
-    "row",
-    "col",
-    "x",
-    "y",
-    "row0",
-    "col0",
-    "row1",
-    "col1",
-    "xyxy",
-    "xywh",
     "box",
-    "region",
-    "stroke",
-    "stroke_color",
-    "border_color",
     "color",
-    "stroke_width",
-    "border_width",
     "line_width",
     "line_style",
-    "stroke_style",
-    "dash",
     "line_dash",
-    "fill",
     "fill_color",
     "opacity",
-    "alpha",
     "fill_opacity",
     "stroke_opacity",
     "z_order",
-    "order",
     "class_name",
-}
-# Spellings users type for a stroke pattern, mapped to the four the browser draws.
-_LINE_STYLE_ALIASES = {
-    "solid": "solid",
-    "none": "solid",
-    "dash": "dashed",
-    "dashed": "dashed",
-    "dot": "dotted",
-    "dotted": "dotted",
-    "dash-dot": "dashdot",
-    "dashdot": "dashdot",
-    "dash-dot-dot": "dashdot",
 }
 
 
@@ -725,81 +693,48 @@ def _normalize_panel_overlay_spec(spec: object, *, panel: int) -> dict[str, obje
             "panel_overlays entries only accept keys "
             f"{sorted(_OVERLAY_STYLE_KEYS)}, got {unknown[0]!r}"
         )
-    shape = str(spec.get("shape", spec.get("type", spec.get("kind", "circle")))).lower()
+    shape = str(spec.get("shape", "circle"))
     if shape not in _OVERLAY_SHAPES:
         raise ValueError(f"panel overlay shape must be one of {sorted(_OVERLAY_SHAPES)}, got {shape!r}")
-    if shape == "rectangle":
-        shape = "rect"
-    coords = str(spec.get("coords", spec.get("coordinate_system", "data"))).lower()
+    coords = str(spec.get("coords", "data"))
     if coords not in _OVERLAY_COORDS:
         raise ValueError(f"panel overlay coords must be one of {sorted(_OVERLAY_COORDS)}, got {coords!r}")
 
     out: dict[str, object] = {"shape": shape, "coords": coords}
     if shape == "circle":
-        if "center" in spec and spec["center"] is not None:
-            row, col = _finite_float_array(spec["center"], name="center", count=2)
-        elif all(key in spec for key in ("row", "col")):
-            row = _finite_float(spec["row"], name="row")
-            col = _finite_float(spec["col"], name="col")
-        elif all(key in spec for key in ("y", "x")):
-            row = _finite_float(spec["y"], name="y")
-            col = _finite_float(spec["x"], name="x")
-        else:
-            raise ValueError("circle overlays require center=(row, col) or row=... and col=...")
-        radius = _finite_float(spec.get("radius", spec.get("r")), name="radius")
+        if spec.get("center") is None or spec.get("radius") is None:
+            raise ValueError("circle overlays require center=(row, col) and radius")
+        radius = _finite_float(spec["radius"], name="radius")
         if radius <= 0:
             raise ValueError(f"circle overlay radius must be > 0, got {radius}")
-        out.update({"row": row, "col": col, "radius": radius})
+        out.update({"center": _finite_float_array(spec["center"], name="center", count=2), "radius": radius})
     else:
-        if "box" in spec or "region" in spec:
-            row0, col0, row1, col1 = _finite_float_array(spec.get("box", spec.get("region")), name="box", count=4)
-        elif "xyxy" in spec:
-            col0, row0, col1, row1 = _finite_float_array(spec["xyxy"], name="xyxy", count=4)
-        elif "xywh" in spec:
-            col0, row0, width, height = _finite_float_array(spec["xywh"], name="xywh", count=4)
-            row1 = row0 + height
-            col1 = col0 + width
-        elif all(key in spec for key in ("row0", "col0", "row1", "col1")):
-            row0 = _finite_float(spec["row0"], name="row0")
-            col0 = _finite_float(spec["col0"], name="col0")
-            row1 = _finite_float(spec["row1"], name="row1")
-            col1 = _finite_float(spec["col1"], name="col1")
-        elif shape == "square" and "center" in spec and "size" in spec:
-            row, col = _finite_float_array(spec["center"], name="center", count=2)
-            half = _finite_float(spec["size"], name="size") / 2.0
-            row0, col0, row1, col1 = row - half, col - half, row + half, col + half
-        else:
-            raise ValueError("rect/square overlays require box=(row0, col0, row1, col1), xyxy=..., or xywh=...")
+        if spec.get("box") is None:
+            raise ValueError("rect overlays require box=(row0, col0, row1, col1)")
+        row0, col0, row1, col1 = _finite_float_array(spec["box"], name="box", count=4)
         if row1 < row0:
             row0, row1 = row1, row0
         if col1 < col0:
             col0, col1 = col1, col0
         if row1 == row0 or col1 == col0:
-            raise ValueError("rect/square overlays must have non-zero width and height")
-        out.update({"row0": row0, "col0": col0, "row1": row1, "col1": col1})
+            raise ValueError("rect overlays must have non-zero width and height")
+        out["box"] = [row0, col0, row1, col1]
 
-    stroke = spec.get("stroke", spec.get("stroke_color", spec.get("border_color", spec.get("color", "#00e5ff"))))
-    fill = spec.get("fill", spec.get("fill_color", None))
-    out["stroke"] = str(stroke)
-    has_fill = fill not in (None, "", "none", "None")
+    out["color"] = str(spec.get("color", "#00e5ff"))
+    fill_color = spec.get("fill_color")
+    has_fill = fill_color not in (None, "", "none", "None")
     if has_fill:
-        out["fill"] = str(fill)
-    out["stroke_width"] = _finite_float(
-        spec.get("stroke_width", spec.get("border_width", spec.get("line_width", 2.0))),
-        name="stroke_width",
-    )
-    if out["stroke_width"] < 0:
-        raise ValueError(f"panel overlay stroke_width must be >= 0, got {out['stroke_width']}")
-    line_style = str(spec.get("line_style", spec.get("stroke_style", "solid"))).lower().replace("_", "-")
-    if line_style not in _LINE_STYLE_ALIASES:
-        raise ValueError(
-            "panel overlay line_style must be one of "
-            "['solid', 'dashed', 'dotted', 'dashdot'] or use dash=[...]"
-        )
-    out["line_style"] = _LINE_STYLE_ALIASES[line_style]
-    if "dash" in spec or "line_dash" in spec:
-        out["dash"] = _finite_float_sequence(spec.get("dash", spec.get("line_dash")), name="dash")
-    opacity = max(0.0, min(1.0, _finite_float(spec.get("opacity", spec.get("alpha", 1.0)), name="opacity")))
+        out["fill_color"] = str(fill_color)
+    out["line_width"] = _finite_float(spec.get("line_width", 2.0), name="line_width")
+    if out["line_width"] < 0:
+        raise ValueError(f"panel overlay line_width must be >= 0, got {out['line_width']}")
+    line_style = str(spec.get("line_style", "solid"))
+    if line_style not in _OVERLAY_LINE_STYLES:
+        raise ValueError(f"panel overlay line_style must be one of {_OVERLAY_LINE_STYLES} or use line_dash=[...], got {line_style!r}")
+    out["line_style"] = line_style
+    if "line_dash" in spec:
+        out["line_dash"] = _finite_float_sequence(spec["line_dash"], name="line_dash")
+    opacity = max(0.0, min(1.0, _finite_float(spec.get("opacity", 1.0), name="opacity")))
     out["opacity"] = opacity
     default_fill_opacity = 1.0 if has_fill else 0.0
     out["fill_opacity"] = max(
@@ -807,7 +742,7 @@ def _normalize_panel_overlay_spec(spec: object, *, panel: int) -> dict[str, obje
         min(1.0, _finite_float(spec.get("fill_opacity", default_fill_opacity), name="fill_opacity")),
     )
     out["stroke_opacity"] = max(0.0, min(1.0, _finite_float(spec.get("stroke_opacity", 1.0), name="stroke_opacity")))
-    out["z_order"] = _finite_float(spec.get("z_order", spec.get("order", 0.0)), name="z_order")
+    out["z_order"] = _finite_float(spec.get("z_order", 0.0), name="z_order")
     if "class_name" in spec and spec["class_name"] not in (None, ""):
         out["class_name"] = str(spec["class_name"])
     return out
@@ -840,7 +775,7 @@ def _normalize_panel_overlays(
 
     if isinstance(panel_overlays, Mapping) and not _is_overlay_spec(panel_overlays):
         for raw_panel, value in panel_overlays.items():
-            add(_panel_target_index(raw_panel, labels=labels, n_items=n_items, option="panel_overlays"), value)
+            add(_panel_target_index(raw_panel, labels=labels, n_items=n_items, option="panel_overlays", entry_keys=_OVERLAY_STYLE_KEYS), value)
         return grouped
     if isinstance(panel_overlays, Mapping):
         if "panel" in panel_overlays:
