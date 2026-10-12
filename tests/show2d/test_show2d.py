@@ -48,6 +48,22 @@ def test_dataset_supplies_calibration_and_title():
     assert widget.n_images == 1 and widget.labels == ["Image 1"]
 
 
+def test_sampling_stated_without_units_is_in_angstrom():
+    # units defaulted to "px", which the unit table reads as uncalibrated, so a stated step was dropped without a message
+    stated, anisotropic = Show2D(_frame(), sampling=2.0, verbose=False), Show2D(_frame(), sampling=(0.5, 0.25), verbose=False)
+    assert (stated.pixel_size, stated.pixel_unit) == (2.0, "A")
+    assert (anisotropic.pixel_size, anisotropic.pixel_unit) == (0.25, "A")  # the column step sets the horizontal bar
+    plain, pixels = Show2D(_frame(), verbose=False), Show2D(_frame(), sampling=2.0, units="px", verbose=False)
+    assert (plain.pixel_size, plain.pixel_unit) == (pixels.pixel_size, pixels.pixel_unit) == (0.0, "px")
+    # an uncalibrated dataset takes the keyword the same way, and a calibrated one checks it in angstrom
+    bare = Show2D(make_dataset(_frame(), sampling=(1.0, 1.0), units=("pixels", "pixels")), sampling=2.0, verbose=False)
+    assert (bare.pixel_size, bare.pixel_unit) == (2.0, "A")
+    nanometre = make_dataset(_frame(), sampling=(0.2, 0.2), units=("nm", "nm"))
+    assert Show2D(nanometre, sampling=2.0, verbose=False).pixel_size == 2.0
+    with pytest.raises(ValueError, match="contradict the calibration the dataset records"):
+        Show2D(nanometre, sampling=0.2, verbose=False)
+
+
 def test_gallery_stats_match_numpy_per_panel():
     frames = [_frame(1), 10 * _frame(2), _frame(3) - 5]
     widget = Show2D(frames, labels=["a", "b", "c"], verbose=False)

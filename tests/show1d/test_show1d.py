@@ -179,6 +179,21 @@ def test_from_image_takes_units_for_the_distance_axis():
         Show1D.from_image(image, line=((1, 1), (1, 6)), sampling=0.5, x_unit="nm")
 
 
+def test_from_image_sampling_without_units_is_in_angstrom():
+    # from_image defaulted to sampling=1.0, units="px"; "px" reads as uncalibrated, so sampling=0.5 left the distance in pixels
+    image = np.zeros((8, 16), dtype=np.float32)
+    stated = Show1D.from_image(image, line=((2, 1), (2, 9)), sampling=0.5)
+    assert (stated.pixel_size, stated.pixel_unit, stated.x_unit) == (0.5, "A", "A")
+    assert _decode(stated.x_bytes, (stated.n_points,))[-1] == pytest.approx(8 * 0.5)
+    for uncalibrated in (Show1D.from_image(image, line=((2, 1), (2, 9))), Show1D.from_image(image, line=((2, 1), (2, 9)), sampling=0.5, units="px")):
+        assert (uncalibrated.pixel_size, uncalibrated.pixel_unit, uncalibrated.x_unit) == (0.0, "px", "px")
+        assert _decode(uncalibrated.x_bytes, (uncalibrated.n_points,))[-1] == pytest.approx(8.0)
+    # a unit with no step does not calibrate the distance axis
+    assert Show1D.from_image(image, line=((2, 1), (2, 9)), units="nm").x_unit == "px"
+    series = Show1D([1.0, 2.0, 3.0], sampling=0.5)
+    assert (series.pixel_size, series.pixel_unit) == (0.5, "A")
+
+
 # --- snapshots, monitor file -------------------------------------------------
 
 

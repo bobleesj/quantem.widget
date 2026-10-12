@@ -103,7 +103,7 @@ def acquisition_calibration(sampling, units, metadata) -> dict:
     }
 
 
-def image_axes(sampling, units, dataset) -> tuple:
+def image_axes(sampling, units, dataset=None) -> tuple:
     """``(sampling, units)`` of an image widget opened on ``dataset``: the dataset's, which the keywords may repeat.
 
     ``sampling`` and ``units`` are the constructor keywords, each None when
@@ -111,7 +111,16 @@ def image_axes(sampling, units, dataset) -> tuple:
     dataset records a calibrated column step and the keywords give another one,
     ValueError says so: the dataset is the source of its calibration, and
     before this check the keyword replaced it without a message.
+
+    A ``sampling`` stated with no ``units`` is in angstrom, for an array
+    (``dataset`` None) as for a dataset. Show3D, Show3DSlices and ShowPtycho
+    read that call so; Show2D and Show1D read the missing unit as "px" and
+    dropped the stated step without a message.
     """
+    if sampling is not None and units is None:
+        units = "A"
+    if dataset is None:
+        return sampling, units
     held_sampling, held_units = tuple(float(step) for step in dataset.sampling[-2:]), [str(unit) for unit in dataset.units[-2:]]
     sampling = held_sampling if sampling is None else sampling
     units = held_units if units is None else units

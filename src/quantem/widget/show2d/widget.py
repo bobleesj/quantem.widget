@@ -399,7 +399,8 @@ class Show2D(
     sampling : float or (row, col), optional
         Pixel size in ``units``; drives the scale bar and calibrated readouts.
     units : str, optional
-        Length unit of ``sampling`` (``"A"``, ``"nm"``, ...).
+        Length unit of ``sampling`` (``"A"``, ``"nm"``, ...); angstrom when
+        ``sampling`` is given without it.
     show_scale_bar : bool, optional
         Draw the scale bar.
     scale_bar_position : {"bottom-right", "bottom-left"}
@@ -974,6 +975,8 @@ class Show2D(
                 sampling, units = image_axes(sampling, units, data)
             elif isinstance(data, (list, tuple)) and len(data) > 0 and _is_image_dataset(data[0]):
                 sampling, units = image_axes(sampling, units, data[0])
+            else:
+                sampling, units = image_axes(sampling, units)
             # RGB detection rule: per-ITEM in a list input, an item with ndim == 3
             # and shape[-1] in (3, 4) is an RGB(A) image. A single non-list ndim==3
             # input is RGB only when shape[-1] in (3, 4) AND shape[0] > 4;

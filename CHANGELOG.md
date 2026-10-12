@@ -219,6 +219,16 @@ Fixed:
   it keeps the pixel size and unit the file records.
 - `show4dstem_gold` carries the voltage and the semiangle of the hosted
   sidecar in the dataset metadata.
+- `Show2D(image, sampling=2.0)`, `Show1D(..., sampling=0.5)` and
+  `Show1D.from_image(image, line=..., sampling=0.5)` dropped the stated step
+  without a message: with `units` omitted the unit was `"px"`, which reads as
+  uncalibrated. A `sampling` stated with no `units` is in angstrom in every
+  image widget, as `Show3D`, `Show3DSlices` and `ShowPtycho` read it;
+  `units="px"` is still uncalibrated. `Show1D.from_image` defaults are
+  `sampling=None`, `units=None` (were `1.0`, `"px"`), so `units` with no
+  `sampling` leaves the distance axis in pixels. With a calibrated dataset a
+  `sampling` with no `units` is compared in angstrom, not in the dataset's
+  unit.
 
 ## rc42 - 2026-10-11
 

@@ -20,7 +20,7 @@ import ipywidgets
 import numpy as np
 import traitlets
 
-from quantem.widget.units import unit_entry
+from quantem.widget.units import axis_step, image_axes, unit_entry
 from quantem.widget.adapters import core as core_adapter
 from quantem.widget.colormap import VALID_CMAPS
 from quantem.widget.export import HtmlExportMixin
@@ -133,7 +133,8 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         line that the trace was sampled along; see :meth:`from_image`.
     sampling, units
         Pixel size and unit for the snapshot and profile scale bar. A sequence
-        uses its last value, matching ``Show2D`` / ``Show3D``.
+        uses its last value, matching ``Show2D`` / ``Show3D``. A ``sampling``
+        given without ``units`` is in angstrom.
     state : dict or path, optional
         Restore display state saved with :meth:`save`.
     save_state : bool, default False
@@ -341,6 +342,7 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         self.snapshot_histogram_width = snapshot_histogram_width
         self.snapshot_histogram_height = snapshot_histogram_height
         self.profile_width = max(1, int(profile_width))
+        sampling, units = image_axes(sampling, units)
         if sampling is not None:
             self.pixel_size = float(sampling[-1]) if isinstance(sampling, Sequence) else float(sampling)
         if units is not None:
@@ -503,25 +505,28 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         *,
         line: Sequence[Sequence[float]],
         profile_width: int = 1,
-        sampling: float = 1.0,
-        units: str = "px",
+        sampling: float | None = None,
+        units: str | None = None,
         **kwargs,
     ) -> Self:
         """A line-profile viewer: the trace sampled along ``line`` with the 2D image beside it.
 
         ``line`` is ``((row0, col0), (row1, col1))`` in image pixels; ``sampling``
-        turns the pixel distance along the line into ``units``.
+        turns the pixel distance along the line into ``units`` (angstrom when
+        ``units`` is omitted). Without a ``sampling`` the distance is in pixels.
         """
         # the distance axis is in the image's unit, so the x_unit trait follows units= here
         reject_unknown_kwargs(cls, kwargs, owned={"x_unit": "units"})
         kwargs.setdefault("title", "Line Profile")
         kwargs.setdefault("y_label", "value")
+        sampling, units = image_axes(sampling, units)
         return cls(
             profile_image=image,
             profile_line=line,
             profile_width=profile_width,
             x_label="distance",
-            x_unit=units,
+            # a unit with no step, or an uncalibrated unit, leaves the distance in pixels
+            x_unit="px" if axis_step(sampling, units) is None else units,
             sampling=sampling,
             units=units,
             **kwargs,
