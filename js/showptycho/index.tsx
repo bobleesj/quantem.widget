@@ -39,6 +39,7 @@ import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen, GPUColorma
 import { nextPow2, shiftedMagnitude, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset, getDisplayFFT, type DisplayFFT } from "../display/fft";
 import { findFFTPeakBrowser } from "../display/geometry";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI } from "../figure";
+import { degreesWithin, wrapDegrees } from "../units";
 import { type SampleValues, SNAPSHOTS_SCHEMA, higherOrderAzimuthKey, higherOrderMagnitudeKey, reconstruct } from "./engineAdapter";
 import { WebGPUSSBBackend, deleteSSBFolderFile, readSSBFolderBytes, readSSBFolderJson, setSSBLocalDirectory, setSSBLocalFiles, ssbFolderWritable, ssbNeedsLocalSource, writeSSBFolderFile, type WebGPULoadProgress, type WebGPUSSBResult } from "../.generated/engine/ssb/webgpu/backend";
 
@@ -2793,7 +2794,8 @@ function Explore() {
       C10_nm: sliderVals.current.c10,
       C12_nm: sliderVals.current.c12,
       phi12_deg: sliderVals.current.phi12,
-      scan_detector_rotation_deg: rotationDeg ?? 0,
+      // the pin message and the manifest hold the physical angle in [0, 360); the slider may run below 0
+      scan_detector_rotation_deg: wrapDegrees(rotationDeg ?? 0),
       flip_phase: !!flipPhase,
       loss: loss ?? 0,
       starred: false,
@@ -2844,7 +2846,7 @@ function Explore() {
         C10_nm: sliderVals.current.c10,
         C12_nm: sliderVals.current.c12,
         phi12_deg: sliderVals.current.phi12,
-        scan_detector_rotation_deg: rotationDeg ?? 0,
+        scan_detector_rotation_deg: wrapDegrees(rotationDeg ?? 0),
         flip_phase: !!flipPhase,
         loss: loss ?? null,
         num_bright_field_pixels: Math.round(dragBfRef.current || 0),
@@ -2868,11 +2870,13 @@ function Explore() {
     setC10(record.C10_nm);
     setC12(record.C12_nm);
     setPhi12(record.phi12_deg);
-    setRotationDeg(record.scan_detector_rotation_deg);
+    // the file holds the angle in [0, 360); the slider takes the turn of it inside its own range
+    const rotation = degreesWithin(record.scan_detector_rotation_deg, rotationUiMin, rotationUiMax);
+    setRotationDeg(rotation);
     setFlipPhase(record.flip_phase);
     sliderVals.current = { c10: record.C10_nm, c12: record.C12_nm, phi12: record.phi12_deg };
-    frontendFullRef.current?.(record.C10_nm, record.C12_nm, record.phi12_deg, record.scan_detector_rotation_deg);
-  }, [setRotationDeg, setFlipPhase]);
+    frontendFullRef.current?.(record.C10_nm, record.C12_nm, record.phi12_deg, rotation);
+  }, [setRotationDeg, setFlipPhase, rotationUiMin, rotationUiMax]);
   const downloadFolderSave = React.useCallback(async (record: FolderSaveRecord) => {
     try {
       const bytes = await readSSBFolderBytes(record.image);
@@ -2910,7 +2914,7 @@ function Explore() {
           C10_nm: pin.C10_nm,
           C12_nm: pin.C12_nm,
           phi12_deg: pin.phi12_deg,
-          scan_detector_rotation_deg: pin.scan_detector_rotation_deg,
+          scan_detector_rotation_deg: wrapDegrees(pin.scan_detector_rotation_deg),
           flip_phase: pin.flip_phase,
           loss: pin.loss,
           starred: pin.starred,

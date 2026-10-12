@@ -49,3 +49,21 @@ export function angstromsPerUnit(unit: string | null | undefined): number | unde
   const entry = UNIT_TABLE[unit ?? ""];
   return entry?.kind === "length" ? entry.size : undefined;
 }
+
+/**
+ * An angle in degrees as the files hold it: the same direction in [0, 360). A slider may run
+ * below 0 or past 360 (-10 and 350 are one rotation); the Python writers wrap the same way, so
+ * a page that wrote the raw slider value put a negative angle beside theirs.
+ */
+export function wrapDegrees(value: number): number {
+  return ((value % 360) + 360) % 360;
+}
+
+/**
+ * The turn of `value` (degrees) that lies in [min, max], or `value` when none does: a control
+ * whose range starts below 0 shows a stored 350 at -10 instead of pinned at its upper end.
+ */
+export function degreesWithin(value: number, min: number, max: number): number {
+  const turned = value - 360 * Math.ceil((value - max) / 360);
+  return turned >= min ? turned : value;
+}

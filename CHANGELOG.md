@@ -258,6 +258,12 @@ Fixed:
   do. `state_dict()` of `Show3D` and `Show3DSlices` no longer holds `n_pages`
   and `panels_per_page`, which loading never applied (the page layout comes
   from the data).
+- The ShowPtycho page wrote `scan_detector_rotation_deg` as the raw slider
+  value, which can be negative, into `snapshots/snapshots.json`, the pin
+  manifest download and the pin message, where every Python writer holds the
+  angle in [0, 360). The page wraps at the write (-10 is written as 350), and
+  loading a snapshot puts the slider at the turn of the stored angle inside
+  its own range.
 
 ## rc42 - 2026-10-11
 
