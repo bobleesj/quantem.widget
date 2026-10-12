@@ -249,13 +249,13 @@ class Show3DExport:
             vmin, vmax = display_window(self.data_min, self.data_max, self.log_scale)
         return contrast_uint8(frame, vmin, vmax)
 
-    def save_image(self, path: str | pathlib.Path, *, frame_idx: int | None = None, format: str | None = None, dpi: int = 150) -> pathlib.Path:
+    def save_image(self, path: str | pathlib.Path, *, slice_idx: int | None = None, format: str | None = None, dpi: int = 150) -> pathlib.Path:
         """Save one frame as PNG, PDF or TIFF with the current colormap and contrast."""
         path = pathlib.Path(path)
         fmt = (format or path.suffix.lstrip(".").lower() or "png").lower()
         if fmt not in ("png", "pdf", "tiff", "tif"):
             raise ValueError(f"Unsupported format: {fmt!r}. Use 'png', 'pdf', or 'tiff'.")
-        idx = self.slice_idx if frame_idx is None else frame_idx
+        idx = self.slice_idx if slice_idx is None else slice_idx
         if not 0 <= idx < self.n_slices:
             raise IndexError(f"Frame index {idx} out of range [0, {self.n_slices})")
         if self.is_rgb and self._rgb_data is not None:
