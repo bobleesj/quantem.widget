@@ -39,7 +39,7 @@ import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen, GPUColorma
 import { nextPow2, shiftedMagnitude, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset, getDisplayFFT, type DisplayFFT } from "../display/fft";
 import { findFFTPeakBrowser } from "../display/geometry";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI } from "../figure";
-import { type SampleValues, SNAPSHOTS_SCHEMA, engineCalibrationJson, engineSourceJson, higherOrderAzimuthKey, higherOrderMagnitudeKey, reconstruct } from "./engineAdapter";
+import { type SampleValues, SNAPSHOTS_SCHEMA, higherOrderAzimuthKey, higherOrderMagnitudeKey, reconstruct } from "./engineAdapter";
 import { WebGPUSSBBackend, deleteSSBFolderFile, readSSBFolderBytes, readSSBFolderJson, setSSBLocalDirectory, setSSBLocalFiles, ssbFolderWritable, ssbNeedsLocalSource, writeSSBFolderFile, type WebGPULoadProgress, type WebGPUSSBResult } from "../.generated/engine/ssb/webgpu/backend";
 
 /* ================================================================
@@ -185,7 +185,7 @@ function compactRuntimeStatus(status: string): string {
 /** Status line after a browser WebGPU reconstruction, naming the adapter (and whether it is software), the path, the BF
  *  count and the aberrations it ran with, so a slow or wrong frame can be traced to its configuration. */
 function webgpuRunStatus(result: WebGPUSSBResult, modeLabel: string, totalBf: number, c10Nm: number, hoLabel: string): string {
-  return `${result.adapterInfo}${result.softwareAdapter ? " software" : ""} WebGPU folder ${modeLabel} (${result.bfCount}/${totalBf} BF, C10=${c10Nm.toFixed(1)} nm, rot=${result.rotationDeg.toFixed(1)}°${hoLabel})`;
+  return `${result.adapterInfo}${result.softwareAdapter ? " software" : ""} WebGPU folder ${modeLabel} (${result.numBrightFieldPixels}/${totalBf} BF, C10=${c10Nm.toFixed(1)} nm, rot=${result.scanDetectorRotationDeg.toFixed(1)}°${hoLabel})`;
 }
 
 function compactPathLabel(path: string, depth = 2): string {
@@ -1861,12 +1861,8 @@ function Explore() {
       return;
     }
     try {
-      const parsedSource = JSON.parse(webgpuH5SourceJson) as { kind?: string };
-      const source = {
-        kind: parsedSource.kind === "bf_columns" ? "bf_columns" as const : "hdf5" as const,
-        json: engineSourceJson(webgpuH5SourceJson),
-      };
-      const engine = new WebGPUSSBBackend(engineCalibrationJson(webgpuCalJson), source);
+      // the engine reads the calibration and the bright-field source as ShowPtycho.export wrote them
+      const engine = new WebGPUSSBBackend(webgpuCalJson, { json: webgpuH5SourceJson });
       engine.setProgressHandler((progress) => {
         setWebgpuLoadProgress(progress.stage === "ready" ? null : progress);
         setWebgpuRuntimeStatus(webgpuProgressLabel(progress));
