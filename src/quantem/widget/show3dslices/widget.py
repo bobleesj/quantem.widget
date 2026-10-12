@@ -25,7 +25,7 @@ from quantem.widget.export import HtmlExportMixin, export_slug
 from quantem.widget.pages import resolve_page_labels
 from quantem.widget.show3dslices.alignment import estimate_global_slice_alignment
 from quantem.widget.state import StateFileMixin
-from quantem.widget.units import axis_step, stated
+from quantem.widget.units import axis_step, per_axis, stated
 from quantem.widget.utils.array import to_numpy
 from quantem.widget.utils.state_io import read_state
 
@@ -38,10 +38,10 @@ def _voxel_size_A(sampling: float | Sequence[float], units: str | Sequence[str])
     The scale bar reads Angstrom: a length in another unit of ``quantem.widget.units`` is converted,
     and an axis calibrated in something that is not a length (mrad, 1/angstrom) raises.
     """
-    samples = list(sampling) if isinstance(sampling, (tuple, list, np.ndarray)) else [sampling] * 3
+    samples = per_axis(sampling, 3)
     if len(samples) != 3:
         raise ValueError(f"sampling must be a scalar or 3 values (slice, row, col), got {len(samples)}")
-    unit_list = list(units) if isinstance(units, (tuple, list)) else [units]
+    unit_list = per_axis(units, 3)
     if len(unit_list) == 1:
         unit_list = unit_list * 3
     if any(not math.isfinite(float(sample)) or float(sample) < 0 for sample in samples):

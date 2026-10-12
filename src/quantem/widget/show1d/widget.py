@@ -20,7 +20,7 @@ import ipywidgets
 import numpy as np
 import traitlets
 
-from quantem.widget.units import axis_step, image_axes, unit_entry
+from quantem.widget.units import axis_step, image_axes, per_axis, unit_entry
 from quantem.widget.adapters import core as core_adapter
 from quantem.widget.colormap import VALID_CMAPS
 from quantem.widget.export import HtmlExportMixin
@@ -344,9 +344,9 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         self.profile_width = max(1, int(profile_width))
         sampling, units = image_axes(sampling, units)
         if sampling is not None:
-            self.pixel_size = float(sampling[-1]) if isinstance(sampling, Sequence) else float(sampling)
+            self.pixel_size = float(per_axis(sampling, 2)[-1])
         if units is not None:
-            self.pixel_unit = units if isinstance(units, str) else str(units[-1])
+            self.pixel_unit = str(per_axis(units, 2)[-1])
         # one unit table for every widget: an unknown string raises, an uncalibrated axis is absent
         if unit_entry(self.pixel_unit)[0] == "pixels":
             self.pixel_size, self.pixel_unit = 0.0, "px"
@@ -526,7 +526,7 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
             profile_width=profile_width,
             x_label="distance",
             # a unit with no step, or an uncalibrated unit, leaves the distance in pixels
-            x_unit="px" if axis_step(sampling, units) is None else units,
+            x_unit="px" if axis_step(per_axis(sampling, 2)[-1], per_axis(units, 2)[-1]) is None else per_axis(units, 2)[-1],
             sampling=sampling,
             units=units,
             **kwargs,

@@ -10,7 +10,8 @@ import pytest
 from ipywidgets.widgets.widget import _instances
 from matplotlib import colormaps
 
-from quantem.widget import Plot2D, Show1D, Show2D, Show3D, Show4DSTEM
+from quantem.widget import Plot2D, Show1D, Show2D, Show3D, Show3DSlices, Show4DSTEM, ShowPtycho
+from quantem.widget.adapters.core import make_dataset
 from quantem.widget.colormap import VALID_CMAPS, Colormap, cmap_to_name, colorize, contrast_uint8, is_cmap_sequence
 from quantem.widget.export import export_slug
 from quantem.widget.pages import resolve_page_labels
@@ -78,6 +79,24 @@ def test_the_frontend_unit_table_holds_the_python_one():
         assert frontend[unit][0] == kind and frontend[unit][2] == symbol, unit
         if unit != "deg":  # written as (1e3 * Math.PI) / 180 there
             assert float(frontend[unit][1]) == size, unit
+
+
+@pytest.mark.parametrize("sampling", [0.5, 1, np.float32(0.5), np.float64(0.5), np.array(0.5), (0.25, 0.5), [0.25, 0.5], np.array([0.25, 0.5])],
+                         ids=["float", "int", "float32", "float64", "0-d array", "tuple", "list", "1-d array"])
+def test_every_sampling_keyword_reads_a_numpy_scalar_as_one_step(sampling):
+    # isinstance(sampling, (int, float)) sent np.float32(0.5) and a 0-d array down the sequence branch, which indexed a scalar
+    row, col = (float(step) for step in np.broadcast_to(np.asarray(sampling, dtype=float), (2,)))
+    image, stack = np.zeros((8, 8), np.float32), np.zeros((2, 8, 8), np.float32)
+    for shown in (Show2D(image, sampling=sampling, units="nm", verbose=False), Show3D(stack, sampling=sampling, units="nm", verbose=False),
+                  Show1D([1.0, 2.0], sampling=sampling, units="nm"), Show2D(make_dataset(image, sampling=(row / 10, col / 10), units=("nm", "nm")), sampling=sampling, verbose=False)):
+        assert shown.pixel_size == col  # the column step, of the pair or of the one scalar
+    assert ShowPtycho(image, sampling=sampling).object_sampling_A == [row, col]
+    viewer = Show4DSTEM(np.ones((4, 4, 8, 8), np.uint16), scan_sampling_A=sampling, precompute_virtual_images=False)
+    assert viewer.scan_sampling_A == [row, col]
+    viewer.close()
+    # three axes: the scalar is every axis, the pair grows a depth step in front, in the type it came in
+    voxel = sampling if np.ndim(sampling) == 0 else type(sampling)([0.3, *sampling]) if not isinstance(sampling, np.ndarray) else np.array([0.3, *sampling])
+    assert Show3DSlices(stack, sampling=voxel).voxel_size_A == [float(step) for step in np.broadcast_to(np.asarray(voxel, dtype=float), (3,))]
 
 
 def test_one_unit_table_reads_the_format_strings_and_refuses_unknown_text():

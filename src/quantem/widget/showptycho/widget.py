@@ -37,7 +37,7 @@ from quantem.widget.adapters import core as core_adapter
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.device import gpu_path_hint, no_gpu_path
 from quantem.widget.showptycho.export import write_showptycho_folder
-from quantem.widget.units import axis_pair, stated
+from quantem.widget.units import axis_pair, per_axis, stated
 from quantem.widget.utils.array import device_array
 
 STARS_FILENAME = "showptycho_stars.json"
@@ -229,7 +229,7 @@ class ShowPtycho(anywidget.AnyWidget):
         is_array = not gpu_adapter.is_ssb(data)
         # an array's pixel size [row, col] in angstrom, read through the one unit table (the widget draws in angstrom)
         given = None if sampling is None or not is_array else axis_pair(
-            (sampling, sampling) if isinstance(sampling, (int, float)) else sampling, (units, units), ("length",), "image")
+            per_axis(sampling, 2), (units, units), ("length",), "image")
         if core_adapter.is_dataset(data, ndim=2):
             # a calibrated reconstruction is the source of its pixel size; the keyword may repeat it
             recorded = axis_pair(data.sampling, data.units, ("length",), "image")

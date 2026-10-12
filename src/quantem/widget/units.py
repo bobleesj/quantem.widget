@@ -12,6 +12,8 @@ string raises, so an axis is never drawn in a unit the widget only guessed.
 
 import math
 
+import numpy as np
+
 # unit string -> (kind, size of one unit in the kind's reference unit, symbol a label prints).
 # Reference units: angstrom (length), 1/angstrom (reciprocal_length), mrad (angle), second (time).
 UNIT_TABLE: dict[str, tuple[str, float, str]] = {
@@ -34,6 +36,19 @@ UNCALIBRATED_UNITS = frozenset({"", "pixels", "pixel", "px", "index", "frame", "
 # Length units a label may switch to, largest first, each as its size in angstrom: a value
 # below 1 in one unit (0.5 nm) reads as a whole number in a smaller one (5 Å).
 LENGTH_LADDER: tuple[tuple[str, float], ...] = (("mm", 1e7), ("µm", 1e4), ("nm", 10.0), ("Å", 1.0), ("pm", 0.01))
+
+
+def per_axis(value, count: int) -> list:
+    """``value`` once per axis: one scalar repeated ``count`` times, or the entries of a sequence.
+
+    A scalar is anything with no axis of its own (``np.ndim(value) == 0``): a
+    Python or NumPy number, a 0-d array, a string, None. A tuple, a list and a
+    1-d array give their entries. Every ``sampling=`` and ``units=`` keyword
+    is read here. Tested with ``isinstance(value, (int, float))``, a step
+    that came out of NumPy (``np.float32(0.5)``, ``array.mean()``) fell to the
+    sequence branch and raised on indexing.
+    """
+    return [value] * count if np.ndim(value) == 0 else list(value)
 
 
 def unit_entry(unit) -> tuple[str, float, str]:
@@ -134,7 +149,7 @@ def image_axes(sampling, units, dataset=None) -> tuple:
     held_sampling, held_units = tuple(float(step) for step in dataset.sampling[-2:]), [str(unit) for unit in dataset.units[-2:]]
     recorded = axis_step(held_sampling[-1], held_units[-1])
     if sampling is None and units is not None and recorded is not None:
-        wanted = [units] * 2 if isinstance(units, str) else [str(unit) for unit in units[-2:]]
+        wanted = [str(unit) for unit in per_axis(units, 2)[-2:]]
         if unit_entry(wanted[-1])[0] != recorded[0]:
             raise ValueError(f"units={units!r} cannot show a dataset calibrated in {held_units[-1]!r} ({held_sampling[-1]:g} {held_units[-1]} per pixel): "
                              f"{held_units[-1]!r} is a {recorded[0].replace('_', ' ')} and {wanted[-1]!r} is not. "
@@ -146,7 +161,7 @@ def image_axes(sampling, units, dataset=None) -> tuple:
                      for step, (held, shown) in zip(held_sampling, entries)), units
     sampling = held_sampling if sampling is None else sampling
     units = held_units if units is None else units
-    given = axis_step(sampling if isinstance(sampling, (int, float)) else sampling[-1], units if isinstance(units, str) else units[-1])
+    given = axis_step(per_axis(sampling, 2)[-1], per_axis(units, 2)[-1])
     if recorded is not None and (given is None or given[0] != recorded[0] or not math.isclose(given[1], recorded[1], rel_tol=1e-6)):
         raise ValueError(f"sampling={sampling!r}, units={units!r} contradict the calibration the dataset records "
                          f"({held_sampling[-1]:g} {held_units[-1]} per pixel). Leave them out: the dataset is the source of its calibration.")
@@ -167,9 +182,9 @@ def stated(name: str, keyword, recorded):
     """
     if keyword is None or recorded is None:
         return recorded if keyword is None else keyword
-    given = list(keyword) if isinstance(keyword, (list, tuple)) else [keyword] * (len(recorded) if isinstance(recorded, (list, tuple)) else 1)
-    held = list(recorded) if isinstance(recorded, (list, tuple)) else [recorded]
+    held = per_axis(recorded, 1)
+    given = per_axis(keyword, len(held))
     if len(given) != len(held) or any(None not in (passed, kept) and not math.isclose(passed, kept, rel_tol=1e-6) for passed, kept in zip(given, held)):
         raise ValueError(f"{name}={keyword!r} contradicts the value the input records ({recorded!r}). "
                          f"Leave {name} out: the dataset or file is the source of its calibration.")
-    return [passed if kept is None else kept for passed, kept in zip(given, held)] if isinstance(recorded, (list, tuple)) else recorded
+    return [passed if kept is None else kept for passed, kept in zip(given, held)] if None in held else recorded

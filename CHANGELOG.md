@@ -280,6 +280,13 @@ Fixed:
   `Path`, which uses `\` on Windows and left the sidecars behind. It resolves
   a name as quantem.data does for the same listing: buckets `4dstem`, `haadf`,
   `denoise` and `widget`, no `placeholder_` entry, POSIX sidecar paths.
+- A `sampling` that came out of NumPy (`np.float32(0.5)`, a 0-d array, a 1-d
+  array of two) raised `IndexError` or `TypeError` in one widget or another:
+  each asked "one number or one per axis" with its own `isinstance` test
+  (`Show2D(image, sampling=np.float32(0.5))` raised "invalid index to scalar
+  variable"). One helper (`quantem.widget.units.per_axis`) reads every
+  `sampling` and `units` keyword: a Python or NumPy scalar or a 0-d array is
+  one step for every axis, a tuple, a list or a 1-d array one per axis.
 
 ## rc42 - 2026-10-11
 

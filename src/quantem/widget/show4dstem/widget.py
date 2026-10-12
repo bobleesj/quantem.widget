@@ -50,7 +50,7 @@ from quantem.widget.show4dstem.dense import DenseSession
 from quantem.widget.show4dstem.detector import PRESET_RADII, fit_disk, preset_mask, roi_mask, scan_indices
 from quantem.widget.show4dstem.preview import static_png_b64
 from quantem.widget.state import SavedStateMixin
-from quantem.widget.units import acquisition_calibration, stated
+from quantem.widget.units import acquisition_calibration, per_axis, stated
 from quantem.widget.utils.array import device_array
 from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
@@ -1556,7 +1556,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     @staticmethod
     def _positive_pair(value, name: str) -> tuple[float, float]:
         """A positive ``(row, col)`` pair from a scalar or a length-2 sequence; zero or negative sampling has no SSB geometry."""
-        pair = (float(value), float(value)) if np.isscalar(value) else tuple(float(component) for component in value)
+        pair = tuple(float(component) for component in per_axis(value, 2))
         if len(pair) != 2 or pair[0] <= 0 or pair[1] <= 0:
             raise ValueError(f"{name} must be a positive scalar or length-2 pair, got {value!r}.")
         return pair

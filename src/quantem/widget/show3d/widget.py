@@ -45,7 +45,7 @@ from quantem.widget.utils.array import bin2d, to_numpy
 from quantem.widget.utils.display_filter import format_display_filter_banner
 from quantem.widget.utils.state_io import read_state
 from quantem.widget.state import SavedStateMixin, announce_browser_limit
-from quantem.widget.units import image_axes, unit_entry
+from quantem.widget.units import image_axes, per_axis, unit_entry
 from quantem.widget.utils.ui import UiMode, resolve_ui_mode
 
 
@@ -1008,8 +1008,8 @@ class Show3D(
         if shared:
             self.num_panel_cols = self.width
         # the column step and its unit, resolved with the dataset by image_axes above
-        pixel_size = 0.0 if sampling is None else float(sampling[-1] if isinstance(sampling, (tuple, list)) else sampling)
-        pixel_unit = "A" if units is None else str(units[-1] if isinstance(units, (tuple, list)) else units)
+        pixel_size = 0.0 if sampling is None else float(per_axis(sampling, 2)[-1])
+        pixel_unit = "A" if units is None else str(per_axis(units, 2)[-1])
         # one unit table for every widget: an unknown string raises, an uncalibrated axis is absent
         if unit_entry(pixel_unit)[0] == "pixels":
             pixel_size, pixel_unit = 0.0, "px"

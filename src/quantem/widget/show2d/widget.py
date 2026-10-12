@@ -31,7 +31,7 @@ from quantem.widget.pages import PagesMixin
 from quantem.widget.panels import PanelsMixin
 from quantem.widget.render.figure import format_scale_label, round_to_nice
 from quantem.widget.state import SavedStateMixin, announce_browser_limit
-from quantem.widget.units import image_axes, unit_entry
+from quantem.widget.units import image_axes, per_axis, unit_entry
 from quantem.widget.image_folder import ImageFolderRecord, WatchedImageFolder, WatchedImageFolderMixin
 from quantem.widget.io.image import RgbImage
 from quantem.widget.show2d.options import (
@@ -1141,14 +1141,10 @@ class Show2D(
             # sampling / units resolve to the column-axis pixel_size + pixel_unit.
             # Scalar shorthand: sampling=0.5 -> (0.5, 0.5); units="nm" -> ["nm", "nm"].
             # None leaves the traits at their uncalibrated defaults.
-            if isinstance(sampling, (int, float)):
-                self.pixel_size = float(sampling)
-            elif sampling is not None:
-                self.pixel_size = float(sampling[-1])
-            if isinstance(units, str):
-                self.pixel_unit = units
-            elif units is not None:
-                self.pixel_unit = str(units[-1])
+            if sampling is not None:
+                self.pixel_size = float(per_axis(sampling, 2)[-1])
+            if units is not None:
+                self.pixel_unit = str(per_axis(units, 2)[-1])
             # one unit table for every widget: an unknown string raises, an uncalibrated axis is absent
             if unit_entry(self.pixel_unit)[0] == "pixels":
                 self.pixel_size, self.pixel_unit = 0.0, "px"
