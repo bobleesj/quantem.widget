@@ -120,10 +120,10 @@ data = io.load("acquisition_master.h5")
 ssb = SSB(
     data,
     semiangle_mrad=20.0,
-    scan_sampling_A=0.276,
+    scan_sampling_A=(0.276, 0.276),
     voltage_kV=300.0,
 )
-result = ssb.find_aberrations(trials=200, refinement="nelder-mead")
+result = ssb.find_aberrations(num_trials=200, refinement="nelder-mead")
 w = ShowPtycho(ssb, show_fft=True)   # the session names its master (ssb.source_path)
 ```
 
@@ -159,8 +159,8 @@ Open with the fit already run: the widget shows the session's latest fit.
 from quantem.gpu import SSB
 from quantem.widget import ShowPtycho
 
-ssb = SSB.open(path, voltage_kV=300.0, semiangle_mrad=30.0, scan_sampling_A=0.495,
-               det_sampling=0.5554, rotation_angle_deg=-8.6)
+ssb = SSB.open(path, voltage_kV=300.0, semiangle_mrad=30.0, scan_sampling_A=(0.495, 0.495),
+               detector_sampling_mrad=(0.5554, 0.5554), scan_detector_rotation_deg=-8.6)
 standard = ssb.find_aberrations()               # defocus + astigmatism
 ShowPtycho(ssb)                                 # standard SSB
 tilted = ssb.find_aberrations(tilt=True)        # + sample tilt and depth spread, jointly

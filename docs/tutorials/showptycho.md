@@ -25,13 +25,13 @@ ssb = SSB.open(
     "scan_master.h5",
     backend="auto",
     semiangle_mrad=30.0,        # convergence semiangle, mrad
-    scan_sampling_A=0.264,      # real-space scan step, Angstrom
+    scan_sampling_A=(0.264, 0.264),     # real-space scan step [row, col], Angstrom
     voltage_kV=300.0,
-    rotation_angle_deg=158.9,   # scan-detector rotation (run find_rotation if unknown)
+    scan_detector_rotation_deg=158.9,   # scan-detector rotation (run find_rotation if unknown)
 )
 
 # 2. Fit and refine the aberrations. THIS STEP IS REQUIRED.
-result = ssb.find_aberrations(trials=200, refinement="nelder-mead")
+result = ssb.find_aberrations(num_trials=200, refinement="nelder-mead")
 
 # 3. Open the interactive widget — it reuses the prepared GPU session.
 ShowPtycho(ssb)
@@ -43,7 +43,7 @@ For aberration tuning `ShowPtycho` takes a prepared `SSB` session; raw data and
 hand-typed aberrations are not accepted. An unfitted session shows whatever
 starting aberrations it was built with, so the phase and FFT are junk unless
 those numbers were already perfect. Build an `SSB`, call
-`find_aberrations(trials=200, refinement="nelder-mead")`, and pass that same
+`find_aberrations(num_trials=200, refinement="nelder-mead")`, and pass that same
 `ssb` object to `ShowPtycho(ssb)`. The returned `SSBResult` is also available
 as `result` for non-interactive analysis through `result.phase`,
 `result.amplitude`, and `result.object_wave`.
@@ -108,11 +108,11 @@ Two ways to crop:
   ssb = SSB(
       crop_t,
       semiangle_mrad=30.0,
-      scan_sampling_A=0.264,
+      scan_sampling_A=(0.264, 0.264),
       voltage_kV=300.0,
-      rotation_angle_deg=158.9,
+      scan_detector_rotation_deg=158.9,
   )
-  result = ssb.find_aberrations(trials=200, refinement="nelder-mead")
+  result = ssb.find_aberrations(num_trials=200, refinement="nelder-mead")
   ShowPtycho(ssb)
   ```
 
@@ -173,7 +173,7 @@ def tilted_crystal(tilt_mrad=(3.0, -4.0), thickness_A=152.0):
 
 data, det_mrad = tilted_crystal()
 ssb = SSB(data, backend="auto", voltage_kV=300.0, semiangle_mrad=30.0,
-          scan_sampling_A=0.25, det_sampling=det_mrad, rotation_angle_deg=0.0)
+          scan_sampling_A=(0.25, 0.25), detector_sampling_mrad=(det_mrad, det_mrad), scan_detector_rotation_deg=0.0)
 ```
 
 First the thin-sheet model. Look at the FFT: are the lattice spots equally
@@ -230,14 +230,14 @@ and the model is standard SSB.
   update takes a few hundred ms on CUDA.
 
 See the [SSB API](https://bobleesj.github.io/quantem.gpu/api/ssb.html) for
-`find_aberrations(tilt=True)`, `preview(tilt_mrad=..., depth_spread_nm=...)` and the
+`find_aberrations(tilt=True)`, `preview(sample_tilt_mrad=..., depth_spread_nm=...)` and the
 evidence behind the defaults.
 
 ## Checklist
 
 1. Leave `SSB.open(..., dtype=None)` at its default for native detector precision.
 2. Native detector: do not bin.
-3. `ssb.find_aberrations(trials=200, refinement="nelder-mead")`: the fit is not optional.
+3. `ssb.find_aberrations(num_trials=200, refinement="nelder-mead")`: the fit is not optional.
 4. Pass the `ssb` object to `ShowPtycho`, not `data` + hand-typed aberrations.
 5. Confirm: stats bar `loss` is non-null and the trials panel is populated.
 6. Thick or possibly mistilted crystal: also run `ssb.find_aberrations(tilt=True)` and compare `report()` rows.
