@@ -865,6 +865,20 @@ def test_compute_ssb_reads_the_optics_the_dataset_records(monkeypatch):
     bare.close()
 
 
+def test_compute_ssb_refuses_an_unknown_aberration_key():
+    # an aberration under another name ({"C10": 5.0}) was dropped without a message and the phase reconstructed at C10 0
+    pytest.importorskip("quantem.gpu", reason="the session that refuses the key is quantem.gpu's")
+    try:
+        pytest.importorskip("quantem.gpu.device").detect()
+    except RuntimeError as exc:
+        pytest.skip(f"SSB needs CUDA or MPS: {exc}")
+    widget = Show4DSTEM(np.ones((128, 128, 4, 4), np.uint16), precompute_virtual_images=False, voltage_kV=300,
+                        semiangle_mrad=20, scan_sampling_A=0.5, detector_sampling_mrad=1.0)
+    with pytest.raises(ValueError, match=r"unknown \['C10'\]"):
+        widget.compute_ssb(aberrations={"C10": 5.0}, lock_aberrations=True)
+    widget.close()
+
+
 def test_static_preview_labels_the_detector_bar_in_its_own_unit(monkeypatch):
     # the bar read "mrad" for every calibrated detector, also one calibrated in 1/angstrom
     dataset = make_dataset(_counts(2, scan=(4, 4)), sampling=(0.4, 0.6, 0.02, 0.03), units=("angstrom", "angstrom", "1/angstrom", "1/angstrom"))
