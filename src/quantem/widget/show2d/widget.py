@@ -57,6 +57,8 @@ _DEFAULT_FOLDER_PAGE_SIZE = 20
 _MAX_PANEL_PLAYBACK_FPS = 30.0
 # Rec. 709 luma weights: the standard perceptual grayscale reduction of RGB.
 _RGB_LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+# Keys of one explicit page dict: the page title (title, or label), its panels, their labels.
+_PAGE_KEYS = {"title", "label", "images", "labels"}
 
 
 def _nonnegative_int(value: object, *, name: str) -> int:
@@ -130,24 +132,20 @@ def _normalize_show2d_pages(
     constructor counts panels on the converted data; lists and quantem datasets
     come back unchanged for the per-item path.
     """
-    explicit_page_dicts = (
-        isinstance(data, (list, tuple))
-        and len(data) > 0
-        and all(isinstance(item, dict) and any(key in item for key in ("images", "data", "array")) for item in data)
-    )
+    explicit_page_dicts = isinstance(data, (list, tuple)) and len(data) > 0 and all(isinstance(item, dict) for item in data)
     if explicit_page_dicts:
         page_arrays: list[np.ndarray] = []
         flattened_labels: list[str | None] = []
         inferred_page_labels: list[str] = []
         panels_per_page: int | None = None
         for page_idx, page in enumerate(data):
-            raw_images = page.get("images", page.get("data", page.get("array")))
-            if raw_images is None:
-                raise ValueError(
-                    f"Show2D page {page_idx} is missing images/data/array. "
-                    "Use {'title': '...', 'images': [...]}"
-                )
-            page_panels = to_numpy(raw_images)
+            # a key the page does not read would drop its panels or its title without a word
+            unknown = sorted(str(key) for key in page if key not in _PAGE_KEYS)
+            if unknown:
+                raise ValueError(f"Show2D page {page_idx} only accepts keys {sorted(_PAGE_KEYS)}, got {unknown[0]!r}")
+            if page.get("images") is None:
+                raise ValueError(f"Show2D page {page_idx} is missing images. Use {{'title': '...', 'images': [...]}}")
+            page_panels = to_numpy(page["images"])
             if page_panels.ndim == 2:
                 page_panels = page_panels[np.newaxis, ...]
             if page_panels.ndim != 3:

@@ -693,3 +693,14 @@ def test_the_calibration_keywords_are_sampling_and_units_not_the_trait_names():
             build(pixel_unit="nm")
     with pytest.raises(TypeError, match="unexpected keyword argument 'pixel_size'"):
         Show3D(stack, pixel_size=0.1, verbose=False)
+
+
+def test_a_page_dict_carries_its_panels_under_images():
+    # a page dict gave its panels as images, data or array; a key the page did not read was dropped without a word
+    pages = [{"title": "iteration 10", "images": [_frame(1), _frame(2)]}, {"title": "iteration 20", "images": [_frame(3), _frame(4)]}]
+    widget = Show2D(pages, verbose=False)
+    assert (widget.n_pages, widget.panels_per_page, widget.page_labels) == (2, 2, ["iteration 10", "iteration 20"])
+    np.testing.assert_array_equal(widget._data[3], _frame(4))
+    for earlier in ("data", "array"):
+        with pytest.raises(ValueError, match=rf"page 0 only accepts keys \['images', 'label', 'labels', 'title'\], got '{earlier}'"):
+            Show2D([{"title": "iteration 10", earlier: [_frame(1), _frame(2)]}], verbose=False)
