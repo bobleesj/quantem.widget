@@ -1626,10 +1626,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             scan_sampling_A=tuple(self.scan_sampling_A),
             detector_sampling_mrad=detector_sampling_mrad,
             scan_shape=(self.shape_rows, self.shape_cols) if source.ndim == 3 else None,
-            aberrations=aberrations,
+            # a missing coefficient is 0, as compute_ssb documents; quantem.gpu takes all three and refuses any other key
+            aberrations=None if aberrations is None else {"C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0, **aberrations},
             scan_detector_rotation_deg=float(scan_detector_rotation_deg),
             bright_field_intensity_threshold=float(bright_field_intensity_threshold),
-            bright_field_radius_px=bright_field_radius_px,
+            bright_field_radius_px=None if bright_field_radius_px is None else float(bright_field_radius_px),
         ) as ssb:
             num_bright_field_pixels = ssb.num_bright_field_pixels
             self.ssb_compute_num_bright_field_pixels = num_bright_field_pixels
@@ -1639,8 +1640,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             else:
                 self.ssb_compute_status = (f"Fitting SSB aberrations ({trials} trials{', Nelder-Mead' if do_refine else ''}, "
                                            f"{num_bright_field_pixels} BF pixels)...")
-                result = ssb.find_aberrations(num_trials=trials, refine=do_refine, search_ranges=search_ranges,
-                                              locked=locked, seed=int(seed), verbose=verbose)
+                # Nelder-Mead holds the locked coefficients; without it there is nothing to lock
+                result = ssb.find_aberrations(num_trials=trials, refinement="nelder-mead" if do_refine else None,
+                                              search_ranges=search_ranges, refine_lock=locked if do_refine and locked else None,
+                                              seed=int(seed), verbose=verbose)
         phase = np.ascontiguousarray(torch.as_tensor(result["phase"]).cpu().numpy(), dtype=np.float32)
         if phase.shape != (self.shape_rows, self.shape_cols):
             raise ValueError(f"SSB result shape {phase.shape} does not match the widget scan shape {self.shape_rows}x{self.shape_cols}.")

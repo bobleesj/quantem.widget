@@ -26,7 +26,7 @@ from quantem.widget.device import INSTALL_CUDA, INSTALL_MPS, NO_GPU_PATH
 from quantem.widget.showptycho import widget as showptycho_module
 
 SCAN, DET = 128, 16
-START = {"C10": 3.0, "C12": 1.0, "phi12": 0.2}
+START = {"C10_nm": 3.0, "C12_nm": 1.0, "phi12_deg": math.degrees(0.2)}
 DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else []) + (["mps"] if torch.backends.mps.is_available() else [])
 
 
@@ -135,7 +135,8 @@ def _session(scan: int = SCAN):
         pytest.importorskip("quantem.gpu.device").detect()
     except RuntimeError as exc:
         pytest.skip(f"SSB needs CUDA or MPS: {exc}")
-    return gpu.SSB(_counts(scan), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=0.5, det_sampling=5.0, aberrations=dict(START), rotation_angle_deg=10.0)
+    return gpu.SSB(_counts(scan), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5.0, 5.0),
+                   aberrations=dict(START), scan_detector_rotation_deg=10.0)
 
 
 @pytest.fixture(scope="module")
@@ -159,29 +160,29 @@ def test_opens_on_the_session_fit_and_shows_its_preview(widget, ssb):
     assert (widget.fitted_C10_nm, widget.fitted_C12_nm, widget.fitted_phi12_deg) == (3.0, 1.0, pytest.approx(math.degrees(0.2)))
     assert widget.scan_detector_rotation_deg == widget.fitted_scan_detector_rotation_deg == 10.0
     assert (widget.scan_sampling_A, widget.object_sampling_A, widget.scan_rows, widget.scan_cols) == ([0.5, 0.5], [], SCAN, SCAN)
-    assert widget.num_bright_field_pixels == widget.num_drag_bright_field_pixels == ssb.num_bf
+    assert widget.num_bright_field_pixels == widget.num_drag_bright_field_pixels == ssb.num_bright_field_pixels
     assert widget.initial_fft_on and widget.crop_refit_available and widget.trials_json == ""
     # Python reconstructs every live frame: no browser SSB runs, so there is no browser status to show
     assert widget.webgpu_preview_status == "" and not widget.webgpu_preview_enabled
-    expected, loss = ssb.preview({"C10": 3.0, "C12": 1.0, "phi12": 0.2}, compute_loss=True)
+    expected, loss = ssb.preview(dict(START), compute_loss=True)
     np.testing.assert_array_equal(_shown(widget), expected)
     result = json.loads(widget.result_json)
     assert result == {"id": 0, "C10_nm": 3.0, "upsampling_factor": 1, "C12_nm": 1.0, "phi12_deg": pytest.approx(math.degrees(0.2)), "loss": pytest.approx(loss)}
-    assert repr(widget) == f"ShowPtycho(0 pinned, {ssb.num_bf} bright-field pixels while dragging)"
+    assert repr(widget) == f"ShowPtycho(0 pinned, {ssb.num_bright_field_pixels} bright-field pixels while dragging)"
 
 
 def test_requests_flip_and_rotation_follow_the_session(widget, ssb):
     widget.request_json = json.dumps({"id": 7, "C10_nm": 2.0, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": True})
-    expected, loss = ssb.preview({"C10": 2.0, "C12": 0.5, "phi12": math.radians(30.0)}, compute_loss=True)
+    expected, loss = ssb.preview({"C10_nm": 2.0, "C12_nm": 0.5, "phi12_deg": 30.0}, compute_loss=True)
     np.testing.assert_array_equal(_shown(widget), expected)
     assert json.loads(widget.result_json)["loss"] == pytest.approx(loss)
     widget.request_json = json.dumps({"id": 8, "C10_nm": 2.5, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": False})
     assert json.loads(widget.result_json)["loss"] is None                     # drags skip the variance pass
     widget.flip_phase = True
-    np.testing.assert_array_equal(_shown(widget), -ssb.preview({"C10": 2.5, "C12": 0.5, "phi12": math.radians(30.0)}, compute_loss=False)[0])
+    np.testing.assert_array_equal(_shown(widget), -ssb.preview({"C10_nm": 2.5, "C12_nm": 0.5, "phi12_deg": 30.0}, compute_loss=False)[0])
     widget.scan_detector_rotation_deg = 25.0
-    assert ssb.rotation_angle_deg == 25.0
-    expected, _ = ssb.preview({"C10": 2.5, "C12": 0.5, "phi12": math.radians(30.0)}, compute_loss=True)
+    assert ssb.scan_detector_rotation_deg == 25.0
+    expected, _ = ssb.preview({"C10_nm": 2.5, "C12_nm": 0.5, "phi12_deg": 30.0}, compute_loss=True)
     np.testing.assert_array_equal(_shown(widget), -expected)
     assert json.loads(widget.result_json)["C10_nm"] == 2.5                 # the rotation keeps the displayed aberrations
     # the request keys of the earlier release are not read under a second spelling
@@ -194,15 +195,17 @@ def test_higher_order_panel_switches_to_the_full_kernel():
     ssb = _session(256)
     widget = ShowPtycho(ssb)
     widget.higher_order_aberrations_json = json.dumps({"C21_nm": 5.0, "phi21_deg": 45.0, "C30_nm": 2.0})
-    mags = np.zeros(14, dtype=np.float32)
-    angles = np.zeros(14, dtype=np.float32)
-    mags[0], mags[1], angles[1] = 3.0, 1.0, 0.2
-    mags[2], angles[2], mags[4] = 5.0, math.radians(45.0), 2.0
-    expected, _ = ssb.preview({"C10": 3.0, "C12": 1.0, "phi12": 0.2}, compute_loss=True, higher_order_magnitudes=mags, higher_order_angles=angles)
+    expected, _ = ssb.preview({**START, "C21_nm": 5.0, "phi21_deg": 45.0, "C30_nm": 2.0}, compute_loss=True)
     np.testing.assert_array_equal(_shown(widget), expected)
     with pytest.raises(ValueError, match="upsampling_factor=1"):
         widget.upsampling_factor = 2
     widget.higher_order_aberrations_json = "{}"
+    # a panel left at zero keeps the two-term phase: a named term, even at zero, makes quantem.gpu hold C10, C12 and
+    # phi12 in float32, which changed the last bits of most pixels for coefficients float32 cannot hold exactly
+    widget.higher_order_aberrations_json = json.dumps({"C21_nm": 0.0, "phi21_deg": 45.0})
+    displayed = {"C10_nm": -26.259025251007465, "C12_nm": 6.41328169139375, "phi12_deg": 63.473910926518215}
+    widget.request_json = json.dumps({"id": 3, **displayed, "committed": True})
+    np.testing.assert_array_equal(_shown(widget), ssb.preview(displayed, compute_loss=True)[0])
     if ssb.backend == "cuda":
         widget.upsampling_factor = 2
         assert _shown(widget).shape == (512, 512)
@@ -215,7 +218,7 @@ def test_higher_order_panel_switches_to_the_full_kernel():
 def test_sample_tilt_panel_uses_the_thick_sample_model(widget, ssb):
     assert widget.sample_available
     widget.sample_json = json.dumps({"sample_tilt_mrad": [3.0, -4.0], "depth_spread_nm": 12.0})
-    expected, _ = ssb.preview({"C10": 3.0, "C12": 1.0, "phi12": 0.2}, compute_loss=True, tilt_mrad=(3.0, -4.0), depth_spread_nm=12.0)
+    expected, _ = ssb.preview(dict(START), compute_loss=True, sample_tilt_mrad=(3.0, -4.0), depth_spread_nm=12.0)
     np.testing.assert_array_equal(_shown(widget), expected)
     widget.save_trigger += 1
     saved = json.loads(Path(widget.calibration_path).read_text())
@@ -243,7 +246,7 @@ def test_save_writes_the_calibration_and_mirrors_it_onto_the_session(widget, ssb
     retired = {"schema_version", "version", "aberration_unit", "rotation_angle_deg", "higher_order", "det_sampling_mrad_px",
                "source_file", "source_stem", "label", "timestamp", "tilt_mrad", "tilt_object_mrad"}
     assert not retired & set(saved)
-    assert ssb.aberrations == {"C10": -4.0, "C12": 0.25, "phi12": pytest.approx(math.radians(12.0))} and ssb.best_loss == saved["loss"]
+    assert ssb.aberrations == {"C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0} and ssb.best_loss == saved["loss"]
 
 
 def test_pins_star_view_and_unpin(widget, tmp_path):
@@ -276,7 +279,7 @@ def test_export_writes_the_browser_folder_from_exact_bf_counts(widget, ssb, tmp_
     cal = json.loads((out / "snapshots" / "cal.json").read_text())
     assert cal["schema"] == "quantem.ssb-browser-calibration/2" and cal["source_path"] == "redacted_local_source"
     assert cal["precision"] == {"real_dtype": "float32", "complex_dtype": "complex64"}  # the browser kernels refuse any other
-    assert (cal["num_bright_field_pixels"], cal["g_shape"], cal["phase_shape"], cal["detector_shape"]) == (ssb.num_bf, [ssb.num_bf, SCAN, SCAN], [SCAN, SCAN], [DET, DET])
+    assert (cal["num_bright_field_pixels"], cal["g_shape"], cal["phase_shape"], cal["detector_shape"]) == (ssb.num_bright_field_pixels, [ssb.num_bright_field_pixels, SCAN, SCAN], [SCAN, SCAN], [DET, DET])
     # each value once, in the vocabulary's unit: no second copy in radians, no folded angle
     assert cal["aberrations"] == {"C10_nm": 3.0, "C12_nm": 1.0, "phi12_deg": pytest.approx(math.degrees(0.2))}
     assert (cal["scan_detector_rotation_deg"], cal["detector_transposed"], cal["scan_sampling_A"], cal["voltage_kV"], cal["gpu_memory_gb"]) == (10.0, False, [0.5, 0.5], 300.0, 4.5)
@@ -300,7 +303,7 @@ def test_export_writes_the_browser_folder_from_exact_bf_counts(widget, ssb, tmp_
     assert exported["webgpu_preview_status"].startswith("WebGPU folder ready") and widget.webgpu_preview_status == ""
     source = json.loads(exported["webgpu_h5_source_json"])
     assert source["kind"] == "bf_columns" and exported["stars_path"] == "snapshots/snapshots.json"
-    assert (source["num_bright_field_pixels"], source["scan_shape"]) == (ssb.num_bf, [SCAN, SCAN]) and "numBf" not in source
+    assert (source["num_bright_field_pixels"], source["scan_shape"]) == (ssb.num_bright_field_pixels, [SCAN, SCAN]) and "numBf" not in source
     assert str(tmp_path) not in html and "scan_master.h5" not in html
     assert widget.crop_refit_available and not widget.webgpu_standalone and len(widget.phase_bytes) == 4 * SCAN * SCAN
     counts_file = (out / "source" / f"bf_columns.{suffix}").read_bytes()
@@ -328,8 +331,8 @@ def test_session_scale_bar_uses_the_column_scan_step():
         pytest.importorskip("quantem.gpu.device").detect()
     except RuntimeError as exc:
         pytest.skip(f"SSB needs CUDA or MPS: {exc}")
-    session = gpu.SSB(_counts(SCAN), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(0.5, 0.25), det_sampling=5.0,
-                      aberrations=dict(START), rotation_angle_deg=10.0)
+    session = gpu.SSB(_counts(SCAN), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(0.5, 0.25), detector_sampling_mrad=(5.0, 5.0),
+                      aberrations=dict(START), scan_detector_rotation_deg=10.0)
     # the trait holds both steps; the browser's horizontal bar reads the column one
     assert ShowPtycho(session).scan_sampling_A == [0.5, 0.25]
 

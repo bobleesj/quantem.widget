@@ -16,7 +16,7 @@ Usage::
 
     from quantem.gpu import SSB
 
-    ssb = SSB.open("scan_master.h5", voltage_kV=300, semiangle_mrad=30, scan_sampling_A=0.264)
+    ssb = SSB.open("scan_master.h5", voltage_kV=300, semiangle_mrad=30, scan_sampling_A=(0.264, 0.264))
     ssb.find_aberrations()
     ShowPtycho(ssb, show_fft=True)
 """
@@ -58,7 +58,7 @@ def session_note() -> str:
     if gpu_adapter.available():
         return (
             "Aberration tuning (C10, C12, rotation, Save) needs an SSB session: "
-            'ssb = quantem.gpu.SSB.open("scan_master.h5", voltage_kV=..., semiangle_mrad=..., scan_sampling_A=...), '
+            'ssb = quantem.gpu.SSB.open("scan_master.h5", voltage_kV=..., semiangle_mrad=..., scan_sampling_A=(row_A, col_A)), '
             "ssb.find_aberrations(), then ShowPtycho(ssb)."
         )
     hint = gpu_path_hint()
@@ -493,7 +493,7 @@ class ShowPtycho(anywidget.AnyWidget):
             return
         self.sample_fit_status = "Fitting defocus, astigmatism, sample tilt and depth spread..."
         try:
-            result = self._ssb.find_aberrations(sample_tilt=True)
+            result = self._ssb.find_aberrations(tilt=True, verbose=False)
         except (RuntimeError, ValueError, NotImplementedError, MemoryError) as exc:
             self.sample_fit_status = f"Tilt fit failed: {exc}"
             return
@@ -550,7 +550,7 @@ class ShowPtycho(anywidget.AnyWidget):
                 bright_field_intensity_threshold=previous["bright_field_intensity_threshold"],
                 bright_field_radius_px=previous["bright_field_radius_px"], source_path=previous["source_path"],
             )
-            rebuilt.find_aberrations(num_trials=num_trials, refine=True)
+            rebuilt.find_aberrations(num_trials=num_trials, verbose=False)
         except (RuntimeError, ValueError, OSError, MemoryError) as exc:
             # a refused request, an unreadable file or a solver failure; a code bug still raises
             self.crop_refit_status = f"Crop refit failed: {exc}"

@@ -32,7 +32,7 @@ rows, cols = np.mgrid[0:32, 0:32]
 disk = (np.hypot(rows - 16, cols - 16) < 6).astype(np.float32)
 scan = np.random.default_rng(0).normal(size=(24, 24, 1, 1)).astype(np.float32)
 data = disk * (100 + scan) * (1 + 0.02 * np.cos(rows / 3.0))
-viewer = ShowPtycho(SSB(data, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=0.5, det_sampling=20 / 6))
+viewer = ShowPtycho(SSB(data, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(20 / 6, 20 / 6)))
 viewer"""
 
 

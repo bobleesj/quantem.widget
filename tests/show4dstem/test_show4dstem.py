@@ -9,7 +9,6 @@ where the two paths must agree exactly.
 
 import gzip
 import json
-import math
 import re
 from pathlib import Path
 
@@ -750,8 +749,7 @@ def test_compute_ssb_accepts_a_1024_scan(monkeypatch):
     from quantem.widget.show4dstem import widget as widget_module
 
     class Session:
-        num_bf = 4
-        physical_rotation_deg = 0.0
+        num_bright_field_pixels = 4
 
         def __init__(self, source, **kwargs):
             pass
@@ -763,8 +761,8 @@ def test_compute_ssb_accepts_a_1024_scan(monkeypatch):
             return False
 
         def reconstruct(self):
-            return types.SimpleNamespace(phase=np.ones((1024, 1024), np.float32), aberrations={"C10": 0.0, "C12": 0.0, "phi12": 0.0},
-                                         rotation_angle_deg=0.0, com_reversed=False, loss=None, elapsed=None, tilt_mrad=None)
+            return types.SimpleNamespace(phase=np.ones((1024, 1024), np.float32), aberrations={"C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0},
+                                         scan_detector_rotation_deg=0.0, loss=None, elapsed_s=None, sample_tilt_mrad=None)
 
     monkeypatch.setattr(widget_module.gpu_adapter, "SSB", Session)  # stands in for quantem.gpu's class behind the adapter
     widget = Show4DSTEM(np.ones((1024, 1024, 4, 4), np.uint16), precompute_virtual_images=False, voltage_kV=300,
@@ -822,8 +820,7 @@ def test_compute_ssb_reads_the_optics_the_dataset_records(monkeypatch):
     seen = {}
 
     class Session:
-        num_bf = 4
-        physical_rotation_deg = 0.0
+        num_bright_field_pixels = 4
 
         def __init__(self, source, **kwargs):
             seen.update(kwargs)
@@ -835,9 +832,9 @@ def test_compute_ssb_reads_the_optics_the_dataset_records(monkeypatch):
             return False
 
         def reconstruct(self):
-            # a fit that reversed the centre of mass: quantem.gpu reports the angle below 180 and a flag
-            return types.SimpleNamespace(phase=np.ones((128, 128), np.float32), aberrations={"C10": 12.0, "C12": 3.0, "phi12": math.pi / 6},
-                                         rotation_angle_deg=165.5, com_reversed=True, loss=0.25, elapsed=1.5, tilt_mrad=None)
+            # a fit on the reversed branch: quantem.gpu reports the physical angle, here above 180
+            return types.SimpleNamespace(phase=np.ones((128, 128), np.float32), aberrations={"C10_nm": 12.0, "C12_nm": 3.0, "phi12_deg": 30.0},
+                                         scan_detector_rotation_deg=345.5, loss=0.25, elapsed_s=1.5, sample_tilt_mrad=None)
 
     monkeypatch.setattr(widget_module.gpu_adapter, "SSB", Session)  # stands in for quantem.gpu's class behind the adapter
     dataset = make_dataset(np.ones((128, 128, 4, 4), np.uint16), sampling=(0.4, 0.6, 1.5, 1.5), units=("angstrom", "angstrom", "mrad", "mrad"))
@@ -845,18 +842,20 @@ def test_compute_ssb_reads_the_optics_the_dataset_records(monkeypatch):
     widget = Show4DSTEM(dataset, precompute_virtual_images=False)
     widget._ssb_phase(aberrations={"C10_nm": 0.0}, lock_aberrations=True)
     assert (seen["voltage_kV"], seen["semiangle_mrad"], seen["scan_sampling_A"]) == (300.0, 20.0, (0.4, 0.6))
+    # a missing coefficient is 0, as compute_ssb documents: quantem.gpu refuses a mapping without all three
+    assert seen["aberrations"] == {"C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0}
     # the trait and the calibration file hold the physical angle, so the reversal survives: a manual
     # recompute sent the angle below 180 back without the flag, 180 degrees off
     assert widget.ssb_compute_scan_detector_rotation_deg == 345.5
     saved = json.loads(widget.ssb_compute_calibration_json)
     assert saved["schema"] == "quantem.ssb-calibration/4"
     assert (saved["scan_detector_rotation_deg"], saved["detector_transposed"]) == (345.5, False)
-    assert saved["aberrations"] == pytest.approx({"C10_nm": 12.0, "C12_nm": 3.0, "phi12_deg": 30.0})
+    assert saved["aberrations"] == {"C10_nm": 12.0, "C12_nm": 3.0, "phi12_deg": 30.0}
     assert (saved["scan_sampling_A"], saved["detector_sampling_mrad"], saved["voltage_kV"]) == ([0.4, 0.6], [1.5, 1.5], 300.0)
     assert (saved["num_bright_field_pixels"], saved["loss"], saved["elapsed_s"]) == (4, 0.25, 1.5)
     assert not {"rotation_angle_deg", "com_reversed", "aberration_units", "calibration", "run"} & set(saved)
     widget._ssb_phase(aberrations=saved["aberrations"], scan_detector_rotation_deg=saved["scan_detector_rotation_deg"], lock_aberrations=True)
-    assert seen["rotation_angle_deg"] == 345.5 and seen["aberrations"] == pytest.approx({"C10": 12.0, "C12": 3.0, "phi12": math.pi / 6})
+    assert seen["scan_detector_rotation_deg"] == 345.5 and seen["aberrations"] == {"C10_nm": 12.0, "C12_nm": 3.0, "phi12_deg": 30.0}
     widget.close()
     bare = Show4DSTEM(np.ones((128, 128, 4, 4), np.uint16), precompute_virtual_images=False)
     with pytest.raises(ValueError, match="needs the scan step in angstrom and the data record none"):
