@@ -87,6 +87,19 @@ def test_a_frame_axis_from_read_image_stack_opens_without_a_depth_bar():
         Show3DSlices(column_volume(), sampling=1.0, units="furlong")
 
 
+def test_sampling_keyword_fills_the_axis_a_dataset_does_not_calibrate():
+    # the keyword was compared with the whole recorded vector, where the frame axis is 0, so a depth step raised "contradicts"
+    stack = make_dataset(column_volume(), name="stack", sampling=[1.0, 0.186, 0.186], units=["frame", "nm", "nm"])
+    assert Show3DSlices(stack, sampling=(3.0, 0.186, 0.186), units="nm").voxel_size_A == pytest.approx([30.0, 1.86, 1.86])
+    assert Show3DSlices(stack, sampling=(3.0, 1.86, 1.86)).voxel_size_A == pytest.approx([3.0, 1.86, 1.86])  # no units: angstrom
+    assert Show3DSlices(stack, sampling=(3.0, 0.0, 0.0)).voxel_size_A == pytest.approx([3.0, 1.86, 1.86])  # 0 states no step
+    # an axis the dataset calibrates still has one answer
+    with pytest.raises(ValueError, match="contradicts the value the input records"):
+        Show3DSlices(stack, sampling=(3.0, 0.2, 0.186), units="nm")
+    with pytest.raises(ValueError, match="contradicts the value the input records"):
+        Show3DSlices(stack, sampling=(3.0, 0.186, 0.186))  # 0.186 angstrom is not the recorded 0.186 nm
+
+
 def test_rejects_data_the_browser_cannot_show():
     with pytest.raises(TypeError, match="complex"):
         Show3DSlices(np.ones((2, 3, 3), dtype=np.complex64))

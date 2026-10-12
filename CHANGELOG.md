@@ -229,6 +229,12 @@ Fixed:
   `sampling` leaves the distance axis in pixels. With a calibrated dataset a
   `sampling` with no `units` is compared in angstrom, not in the dataset's
   unit.
+- `Show3DSlices(dataset, sampling=...)` raised "contradicts" for a
+  `Dataset3d` whose slice axis records no step (units `("frame", "nm", "nm")`):
+  the keyword was compared with the whole recorded vector, in which that axis
+  is 0. The comparison is per axis: the keyword gives the step of an axis the
+  dataset does not calibrate and must equal the step of one it does; a keyword
+  step of 0 takes the dataset's.
 
 ## rc42 - 2026-10-11
 

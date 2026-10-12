@@ -408,9 +408,10 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         voxel_size_A = [0.0, 0.0, 0.0] if sampling is None else _voxel_size_A(sampling, units)
         if core_adapter.is_dataset(data, ndim=3):
             title = title or data.name
-            # the dataset is the source of its voxel size; a keyword may repeat it, never replace it
+            # the dataset is the source of its voxel size, axis by axis: a keyword gives the step of an
+            # axis the dataset does not calibrate (the frame axis of a stack) and may repeat one it does
             recorded = _voxel_size_A(list(data.sampling)[-3:], list(data.units)[-3:])
-            voxel_size_A = stated("sampling", voxel_size_A if sampling is not None else None, recorded if any(recorded) else None) or voxel_size_A
+            voxel_size_A = [step or 0.0 for step in stated("sampling", [step or None for step in voxel_size_A], [step or None for step in recorded])]
             data = core_adapter.as_array(data)
         data = to_numpy(data)
         if 0 in data.shape:

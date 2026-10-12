@@ -138,12 +138,17 @@ def stated(name: str, keyword, recorded):
     A keyword equal to the recorded value is accepted. One that differs raises
     ValueError naming both: the dataset or file is the source of its own
     calibration, and a second value would leave two answers for one quantity.
+
+    A calibration of several axes is read per axis: None inside ``recorded``
+    or ``keyword`` is an axis without a value there and takes the other's, and
+    only an axis both give is compared. Compared as whole vectors, a depth
+    step was refused for a stack whose slice axis records none.
     """
     if keyword is None or recorded is None:
         return recorded if keyword is None else keyword
     given = list(keyword) if isinstance(keyword, (list, tuple)) else [keyword] * (len(recorded) if isinstance(recorded, (list, tuple)) else 1)
     held = list(recorded) if isinstance(recorded, (list, tuple)) else [recorded]
-    if len(given) != len(held) or not all(math.isclose(passed, kept, rel_tol=1e-6) for passed, kept in zip(given, held)):
+    if len(given) != len(held) or any(None not in (passed, kept) and not math.isclose(passed, kept, rel_tol=1e-6) for passed, kept in zip(given, held)):
         raise ValueError(f"{name}={keyword!r} contradicts the value the input records ({recorded!r}). "
                          f"Leave {name} out: the dataset or file is the source of its calibration.")
-    return recorded
+    return [passed if kept is None else kept for passed, kept in zip(given, held)] if isinstance(recorded, (list, tuple)) else recorded
