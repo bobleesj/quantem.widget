@@ -264,7 +264,7 @@ def test_detector_click_and_reset_each_reach_the_kernel_as_one_reduction(jupyter
     jupyter.run_in_kernel(notebook, "_reduced = []\n_reduce_image = viewer._compute_virtual_image_from_roi\n"
                                      "def _counted_image():\n    _reduced.append([viewer.roi_center_row, viewer.roi_center_col])\n    _reduce_image()\n"
                                      "viewer._compute_virtual_image_from_roi = _counted_image")
-    fitted = json.loads(jupyter.run_in_kernel(notebook, "import json; print(json.dumps([viewer.center_row, viewer.center_col]))"))
+    fitted = json.loads(jupyter.run_in_kernel(notebook, "import json; print(json.dumps([viewer.bright_field_center_row_px, viewer.bright_field_center_col_px]))"))
     # a click outside the detector moves it there: one message carrying the row, the column and the pair
     page.mouse.click(*pixel_center(page, DP, 12, 3))
     page.wait_for_timeout(3000)

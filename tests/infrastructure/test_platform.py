@@ -372,7 +372,7 @@ def test_widgets_reduce_counts_exactly_on_mps():
     pattern[20:30, 34:44] = 60000
     on_mps = ShowDiffraction(pattern, device="mps", verbose=False)
     on_cpu = ShowDiffraction(pattern, device="cpu", verbose=False)
-    assert (on_mps.center_row, on_mps.center_col) == (on_cpu.center_row, on_cpu.center_col) == (24.5, 38.5)
+    assert (on_mps.bright_field_center_row_px, on_mps.bright_field_center_col_px) == (on_cpu.bright_field_center_row_px, on_cpu.bright_field_center_col_px) == (24.5, 38.5)
 
 
 def test_free_gpu_is_quantem_gpu_release_cached_memory_when_quantem_gpu_is_installed(monkeypatch):

@@ -170,7 +170,7 @@ def _show4dstem_numbers(widget) -> list[bytes]:
     widget.pos_row, widget.pos_col = 4, 1
     mean = np.asarray(widget._session(0).mean_dp(), np.float32)
     return [bytes(widget.virtual_image_bytes), bytes(widget.frame_bytes), mean.tobytes(),
-            np.float64([widget.center_row, widget.center_col, widget.bright_field_radius_px]).tobytes()]
+            np.float64([widget.bright_field_center_row_px, widget.bright_field_center_col_px, widget.bright_field_radius_px]).tobytes()]
 
 
 def test_show4dstem_shows_the_same_numbers_for_every_input_type(tmp_path, monkeypatch):

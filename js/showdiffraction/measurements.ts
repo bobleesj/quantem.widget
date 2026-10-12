@@ -156,8 +156,8 @@ export function measurementCsv(records: MeasurementRecord[]): string {
 }
 
 interface MetadataState {
-  centerRow: number;
-  centerCol: number;
+  brightFieldCenterRowPx: number;
+  brightFieldCenterColPx: number;
   centerMethod: string;
   detectorSamplingInvA: number;
   kCalibrated: boolean;
@@ -172,8 +172,8 @@ interface MetadataState {
 export function measurementMetadata(state: MetadataState): object {
   return {
     widget_name: "ShowDiffraction",
-    center_row: state.centerRow,
-    center_col: state.centerCol,
+    bright_field_center_row_px: state.brightFieldCenterRowPx,
+    bright_field_center_col_px: state.brightFieldCenterColPx,
     center_method: state.centerMethod ?? "",
     detector_sampling_inv_A: state.detectorSamplingInvA,
     calibrated: Boolean(state.kCalibrated),

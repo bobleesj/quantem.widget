@@ -56,7 +56,7 @@ no console error, no NaN frame).
 | Invert toggle | `dp_invert` | Colormap reversed |
 | Contrast histogram (dual-thumb slider) | `dp_vmin_pct`, `dp_vmax_pct` | Drag either thumb (mouse or touch) for a live preview; traits update once on release |
 | Center mode dropdown | `center_mode` | `auto` re-detects the BF disk; `manual` enables click-to-set |
-| Click to set center (manual) | `center_row`, `center_col` | Crosshair moves; spot d-spacings recompute |
+| Click to set center (manual) | `bright_field_center_row_px`, `bright_field_center_col_px` | Crosshair moves; spot d-spacings recompute |
 | Detect spots | `_request`, `spots` | Auto-finds every isolated peak with contrast at least 10% of the strongest (`min_relative`); candidates come from the `detect_denoise` view, positions are refined on raw data; no count cap |
 | Add / remove spot (click) | `_request`, `spots` | Marker placed/removed; d-spacing updates |
 | Move spot (Move + drag) | `_request`, `spots` | Re-picks the spot at the drop position; stale hkl clears |

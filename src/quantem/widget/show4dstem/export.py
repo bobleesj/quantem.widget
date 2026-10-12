@@ -211,7 +211,7 @@ def export_state_for_bin(widget, detector_bin: int, scan_bin: int) -> dict:
     """
     state = widget.state_dict()
     if detector_bin > 1:
-        for key in ("center_row", "center_col", "bright_field_radius_px", "roi_center_row", "roi_center_col",
+        for key in ("bright_field_center_row_px", "bright_field_center_col_px", "bright_field_radius_px", "roi_center_row", "roi_center_col",
                     "roi_radius", "roi_radius_inner", "roi_width", "roi_height"):
             state[key] = float(state[key]) / detector_bin
         state["dp_vmin"] = None
@@ -262,7 +262,7 @@ def export_clone(widget, dtype: str, detector_bin: int, scan_bin: int):
         detector_sampling_inv_A=[step * detector_bin for step in widget.detector_sampling_inv_A] or None,
         voltage_kV=widget.voltage_kV,
         semiangle_mrad=widget.semiangle_mrad,
-        center=(widget.center_row / detector_bin, widget.center_col / detector_bin),
+        bright_field_center_px=(widget.bright_field_center_row_px / detector_bin, widget.bright_field_center_col_px / detector_bin),
         bright_field_radius_px=max(1.0, widget.bright_field_radius_px / detector_bin),
         precompute_virtual_images=False,
         frame_dim_label=widget.frame_dim_label,
@@ -439,7 +439,7 @@ def report_html_bytes(widget, *, dtype: str, detector_bin: int, scan_bin: int, d
     cols = int(widget.compare_cols) or math.ceil(math.sqrt(min(page_size, len(indices))))
     cols = max(1, min(cols, page_size, len(indices)))
     det_shape = (widget.det_rows, widget.det_cols)
-    center = (widget.center_row, widget.center_col)
+    center = (widget.bright_field_center_row_px, widget.bright_field_center_col_px)
     pattern = scale_values(mean_detector_bin(widget.pattern(widget.pos_row, widget.pos_col), detector_bin), widget.dp_scale_mode)
     dp_uri = png_data_uri(colormap_rgb(pattern, widget.dp_colormap, *display_range(pattern, widget.dp_vmin_pct, widget.dp_vmax_pct)))
     sections = []

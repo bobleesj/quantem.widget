@@ -74,7 +74,7 @@ def magnetite():
 def saed():
     """Detected and indexed spots of the synthetic [001] primitive-cubic pattern, run once per module."""
     center = (255 / 2, 255 / 2)
-    widget = ShowDiffraction(lattice_pattern(), center=center, bright_field_radius_px=14, detector_sampling_inv_A=K_SAED, verbose=False)
+    widget = ShowDiffraction(lattice_pattern(), bright_field_center_px=center, bright_field_radius_px=14, detector_sampling_inv_A=K_SAED, verbose=False)
     widget.detect_spots(max_spots=12)
     widget.index_spots(Phase.from_cubic("Cubic", 1.984, absences="none"))
     return widget
@@ -255,12 +255,12 @@ def test_center_detection_recovers_known_center():
     pattern = ring_pattern(center=center)
     widget = ShowDiffraction(pattern, verbose=False)
     # bright-field disk centroid, then the two symmetry estimators
-    assert (widget.center_row, widget.center_col) == pytest.approx(center, abs=1.0)
+    assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px) == pytest.approx(center, abs=1.0)
     for method in ("symmetry", "phase_corr", "auto"):
-        picked = lattice.pick_center(pattern, method=method, guess=(widget.center_row, widget.center_col))
+        picked = lattice.pick_center(pattern, method=method, guess=(widget.bright_field_center_row_px, widget.bright_field_center_col_px))
         assert (picked["row"], picked["col"]) == pytest.approx(center, abs=0.3), method
     widget._request = {"action": "refine_center", "args": [], "seq": 1}
-    assert (widget.center_row, widget.center_col) == pytest.approx(center, abs=0.3)
+    assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px) == pytest.approx(center, abs=0.3)
     assert widget.analysis_status.startswith("Center (")
     assert widget._request == {}
 
@@ -342,7 +342,7 @@ def test_detection_denoise_picks_anscombe_and_display_denoise_is_view_only():
 def test_fit_ellipse_recovers_distortion():
     # one ring, so the annulus around it holds no neighbour
     pattern = ring_pattern(ratio=1.06, angle_deg=30.0, lines={"220": FE3O4_D["220"]})
-    widget = ShowDiffraction(pattern, center=(255.5, 255.5), bright_field_radius_px=10, verbose=False)
+    widget = ShowDiffraction(pattern, bright_field_center_px=(255.5, 255.5), bright_field_radius_px=10, verbose=False)
     widget._request = {"action": "add_ring", "args": [1.0 / (FE3O4_D["220"] * K_SYNTH)], "seq": 1}
     widget._request = {"action": "fit_ellipse", "args": [], "seq": 2}
     assert widget.ellipse_ratio == pytest.approx(1.06, abs=0.01)
@@ -430,7 +430,7 @@ def test_a_center_click_profiles_each_ring_frame_once(monkeypatch):
     profile = lattice.radial_profile
     monkeypatch.setattr(lattice, "radial_profile", lambda frame, **kwargs: calls.append(1) or profile(frame, **kwargs))
     # the page sends a click as one message holding both coordinates
-    widget.set_state({"center_row": 254.0, "center_col": 257.5})
+    widget.set_state({"bright_field_center_row_px": 254.0, "bright_field_center_col_px": 257.5})
     assert len(calls) == 2  # frame 0 (its rings and the profile panel) and frame 1 (one ring)
     radii, intensity, _ = numpy_radial_profile(stack[1], (254.0, 257.5))
     assert widget.rings[-1]["intensity"] == float(intensity[np.argmin(np.abs(radii - 60.0))])
@@ -440,7 +440,7 @@ def test_a_center_click_profiles_each_ring_frame_once(monkeypatch):
 
 # --- Widget state ---
 def test_request_channel_edits_spots_and_reports_failures():
-    widget = ShowDiffraction(lattice_pattern(), center=(127.5, 127.5), bright_field_radius_px=14, verbose=False)
+    widget = ShowDiffraction(lattice_pattern(), bright_field_center_px=(127.5, 127.5), bright_field_radius_px=14, verbose=False)
     widget._request = {"action": "add_spot", "args": [127.5 + SAED_SPACING_PX, 127.5], "seq": 1}
     widget._request = {"action": "add_spot", "args": [127.5, 127.5 + SAED_SPACING_PX], "seq": 2}
     assert [s["id"] for s in widget.spots] == [1, 2]
@@ -465,7 +465,7 @@ def test_state_round_trip_and_measurements(saed, tmp_path):
     saed.save(path)
     envelope = json.loads(path.read_text())
     assert envelope["widget_name"] == "ShowDiffraction"
-    restored = ShowDiffraction(lattice_pattern(), center=(0.0, 0.0), bright_field_radius_px=1.0, verbose=False)
+    restored = ShowDiffraction(lattice_pattern(), bright_field_center_px=(0.0, 0.0), bright_field_radius_px=1.0, verbose=False)
     restored.load_state_dict(envelope["state"])
     assert restored.state_dict() == saed.state_dict()
     assert restored.zone_axis == "[001]"

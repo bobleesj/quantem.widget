@@ -100,8 +100,8 @@ describe("measurementCsv", () => {
 describe("measurementMetadata", () => {
   it("mirrors the Python metadata block", () => {
     const metadata = measurementMetadata({
-      centerRow: 64.5,
-      centerCol: 63.5,
+      brightFieldCenterRowPx: 64.5,
+      brightFieldCenterColPx: 63.5,
       centerMethod: "symmetry",
       detectorSamplingInvA: 0.01,
       kCalibrated: true,
@@ -113,8 +113,8 @@ describe("measurementMetadata", () => {
     });
     expect(metadata).toEqual({
       widget_name: "ShowDiffraction",
-      center_row: 64.5,
-      center_col: 63.5,
+      bright_field_center_row_px: 64.5,
+      bright_field_center_col_px: 63.5,
       center_method: "symmetry",
       detector_sampling_inv_A: 0.01,
       calibrated: true,

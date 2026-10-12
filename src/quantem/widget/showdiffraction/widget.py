@@ -37,7 +37,7 @@ from quantem.widget.utils.display_filter import apply_display_filter
 from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import reject_unknown_kwargs
 
-BF_RADIUS_FRACTION = 0.125
+BRIGHT_FIELD_RADIUS_FRACTION = 0.125
 # a significant peak this close to a reflection the calibrated phase predicts is recovered as a ring
 RECOVERY_TOL_PX = 4.0
 CALIBRATION_TRAITS = (
@@ -119,7 +119,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         k-space sampling in 1/Å per pixel. Marks the pattern calibrated. A
         dataset is the source of its own calibration: a value that contradicts
         it raises.
-    center : tuple[float, float], optional
+    bright_field_center_px : tuple[float, float], optional
         (row, col) of the diffraction center in pixels. Defaults to the detector
         center, then auto-detected from the bright-field disk if also no radius.
     bright_field_radius_px : float, optional
@@ -156,8 +156,8 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     _esm = pathlib.Path(__file__).parent.parent / "static" / "showdiffraction.js"
     _LIST_STATE_FIELDS = {"spots", "rings", "custom_phases", "mask_regions"}
     _STATE_FIELDS = (
-        "title", "frame_idx", "panel_width_px", "detector_sampling_inv_A", "k_calibrated", "center_row",
-        "center_col", "bright_field_radius_px", "spots", "rings", "zone_axis", "phase_match", "show_hkl",
+        "title", "frame_idx", "panel_width_px", "detector_sampling_inv_A", "k_calibrated", "bright_field_center_row_px",
+        "bright_field_center_col_px", "bright_field_radius_px", "spots", "rings", "zone_axis", "phase_match", "show_hkl",
         "snap_enabled", "snap_radius", "spot_refine", "detect_denoise", "denoise", "center_mode",
         "calibration_source", "calibration_ref_d", "calibration_ref_radius", "calibration_rms_px",
         "ellipse_ratio", "ellipse_angle", "ellipse_corrected", "dp_colormap", "dp_scale_mode",
@@ -167,7 +167,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         "identify_elements", "identify_custom_only",
     )
     _GEOMETRY_TRAITS = (
-        "center_row", "center_col", "detector_sampling_inv_A", "k_calibrated", "ellipse_ratio",
+        "bright_field_center_row_px", "bright_field_center_col_px", "detector_sampling_inv_A", "k_calibrated", "ellipse_ratio",
         "ellipse_angle", "ellipse_corrected", "mask_regions",
     )
     _PROFILE_TRAITS = (
@@ -185,8 +185,8 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     offline = traitlets.Bool(False).tag(sync=True)
 
     # Center and calibration
-    center_row = traitlets.Float(0.0).tag(sync=True)
-    center_col = traitlets.Float(0.0).tag(sync=True)
+    bright_field_center_row_px = traitlets.Float(0.0).tag(sync=True)
+    bright_field_center_col_px = traitlets.Float(0.0).tag(sync=True)
     bright_field_radius_px = traitlets.Float(0.0).tag(sync=True)
     # 1/angstrom per detector pixel, the step along both detector axes: ring radii measure one isotropic value
     detector_sampling_inv_A = traitlets.Float(0.0).tag(sync=True)
@@ -267,7 +267,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         data,
         *,
         detector_sampling_inv_A: float | None = None,
-        center: tuple[float, float] | None = None,
+        bright_field_center_px: tuple[float, float] | None = None,
         bright_field_radius_px: float | None = None,
         title: str = "",
         panel_width_px: int | None = None,
@@ -309,12 +309,12 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         if panel_width_px is not None:
             self.panel_width_px = int(panel_width_px)
         self.offline = offline
-        self.center_row = float(center[0]) if center is not None else self.det_rows / 2
-        self.center_col = float(center[1]) if center is not None else self.det_cols / 2
+        self.bright_field_center_row_px = float(bright_field_center_px[0]) if bright_field_center_px is not None else self.det_rows / 2
+        self.bright_field_center_col_px = float(bright_field_center_px[1]) if bright_field_center_px is not None else self.det_cols / 2
         self.bright_field_radius_px = (
-            float(bright_field_radius_px) if bright_field_radius_px is not None else min(self.det_rows, self.det_cols) * BF_RADIUS_FRACTION
+            float(bright_field_radius_px) if bright_field_radius_px is not None else min(self.det_rows, self.det_cols) * BRIGHT_FIELD_RADIUS_FRACTION
         )
-        if center is None and bright_field_radius_px is None:
+        if bright_field_center_px is None and bright_field_radius_px is None:
             self._auto_detect_center()
         self._update_frame()
         self._bake_offline_frames()
@@ -354,7 +354,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             exclude_radius = max(self.bright_field_radius_px, 2.0 * min_distance)
         coords = lattice.detect_spot_coords(
             self._detection_frame(),
-            center=(self.center_row, self.center_col),
+            center=(self.bright_field_center_row_px, self.bright_field_center_col_px),
             exclude_radius=exclude_radius,
             min_distance=min_distance,
             min_relative=min_relative,
@@ -531,8 +531,8 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         if path.suffix.lower() == ".json":
             metadata = {
                 "widget_name": "ShowDiffraction",
-                "center_row": state.get("center_row"),
-                "center_col": state.get("center_col"),
+                "bright_field_center_row_px": state.get("bright_field_center_row_px"),
+                "bright_field_center_col_px": state.get("bright_field_center_col_px"),
                 "center_method": state.get("center_method", ""),
                 "detector_sampling_inv_A": state.get("detector_sampling_inv_A"),
                 "calibrated": bool(state.get("k_calibrated")),
@@ -601,7 +601,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         if self.ellipse_ratio != 1.0:
             state = "corrected" if self.ellipse_corrected else "not corrected"
             lines.append(f"Ellipse:  a/b={self.ellipse_ratio:.3f} at {self.ellipse_angle:.1f}° ({state})")
-        lines.append(f"Center:   ({self.center_row:.1f}, {self.center_col:.1f})  BF r={self.bright_field_radius_px:.1f} px")
+        lines.append(f"Center:   ({self.bright_field_center_row_px:.1f}, {self.bright_field_center_col_px:.1f})  BF r={self.bright_field_radius_px:.1f} px")
         lines.append(f"Spots:    {len(self.spots)}")
         for spot in self.spots[:5]:
             if spot.get("d_spacing"):
@@ -725,7 +725,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         """Excluded pixels from ``mask_regions`` (beam stop, detector gaps), or None; every
         profile, fit and detection skips them so the hardware does not read as a ring or spot."""
         return lattice.build_analysis_mask(
-            (self.det_rows, self.det_cols), self.mask_regions, (self.center_row, self.center_col)
+            (self.det_rows, self.det_cols), self.mask_regions, (self.bright_field_center_row_px, self.bright_field_center_col_px)
         )
 
     def _radial_profile(
@@ -740,7 +740,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         is reduced where the stack lives, without a copy back."""
         return lattice.radial_profile(
             self._data[self._frame_index(frame_idx)] if frame is None else frame,
-            center=(self.center_row, self.center_col),
+            center=(self.bright_field_center_row_px, self.bright_field_center_col_px),
             mask=self._analysis_mask(),
             ellipse_ratio=self.ellipse_ratio,
             ellipse_angle=self.ellipse_angle,
@@ -797,7 +797,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         radius = self._outer_ring_radius()
         return lattice.azimuthal_profile_from_frame(
             self._frame(),
-            center=(self.center_row, self.center_col),
+            center=(self.bright_field_center_row_px, self.bright_field_center_col_px),
             radius_px=radius,
             half_width=self._ring_half_width(radius),
             n_theta=180,
@@ -831,9 +831,9 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         row_coords = torch.arange(self.det_rows, device=self._device, dtype=torch.float32)[:, None]
         col_coords = torch.arange(self.det_cols, device=self._device, dtype=torch.float32)[None, :]
         with self.hold_trait_notifications():
-            self.center_row = float((row_coords * bright).sum() / bright_count)
-            self.center_col = float((col_coords * bright).sum() / bright_count)
-        self.bright_field_radius_px = lattice.central_beam_radius(bright.cpu().numpy(), self.center_row, self.center_col)
+            self.bright_field_center_row_px = float((row_coords * bright).sum() / bright_count)
+            self.bright_field_center_col_px = float((col_coords * bright).sum() / bright_count)
+        self.bright_field_radius_px = lattice.central_beam_radius(bright.cpu().numpy(), self.bright_field_center_row_px, self.bright_field_center_col_px)
         self.center_mode = "auto"
         if refine:
             self._refine_center("symmetry")
@@ -845,18 +845,18 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             self._detection_frame(),
             method=method or self.refine_method,
             mask=self._analysis_mask(),
-            guess=(self.center_row, self.center_col),
+            guess=(self.bright_field_center_row_px, self.bright_field_center_col_px),
         )
         with self.hold_trait_notifications():
-            self.center_row, self.center_col = picked["row"], picked["col"]
+            self.bright_field_center_row_px, self.bright_field_center_col_px = picked["row"], picked["col"]
         self.center_mode = "auto"
         self.center_method = picked["method"]
-        return f"Center ({self.center_row:.1f}, {self.center_col:.1f}) via {self.center_method}"
+        return f"Center ({self.bright_field_center_row_px:.1f}, {self.bright_field_center_col_px:.1f}) via {self.center_method}"
 
     def _on_geometry_change(self, change=None) -> None:
         """Center, calibration, ellipse or mask changed: re-derive every measurement.
 
-        The page sends a center click as ``center_row`` and ``center_col`` in one message, and
+        The page sends a center click as ``bright_field_center_row_px`` and ``bright_field_center_col_px`` in one message, and
         the analysis steps set related traits under ``hold_trait_notifications``; traitlets
         then notifies once per trait with every value already set, so the first notification
         derives the final geometry and the others find it derived. Each source frame's radial
@@ -903,8 +903,8 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         """Spot g-vector in pixels from the center, ellipse-corrected like its radius, so the
         inter-spot angles and the zone-axis solve see undistorted geometry."""
         return lattice.corrected_vector(
-            spot["row"] - self.center_row,
-            spot["col"] - self.center_col,
+            spot["row"] - self.bright_field_center_row_px,
+            spot["col"] - self.bright_field_center_col_px,
             ellipse_ratio=self.ellipse_ratio,
             ellipse_angle=self.ellipse_angle,
             ellipse_corrected=self.ellipse_corrected,
@@ -919,8 +919,8 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         ``hypot(d_row / r * row_err, d_col / r * col_err)``; g = r k and d = 1 / g carry the
         same relative error.
         """
-        d_row = row - self.center_row
-        d_col = col - self.center_col
+        d_row = row - self.bright_field_center_row_px
+        d_col = col - self.bright_field_center_col_px
         r_pixels = self._radius_px(row, col)
         if r_pixels > 0:
             r_pixels_err = math.hypot((d_row / r_pixels) * row_err, (d_col / r_pixels) * col_err)
@@ -952,8 +952,8 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         ``ellipse_corrected``; spot measurements and calibrate-from-spot must measure alike."""
         return float(
             lattice.corrected_radius(
-                row - self.center_row,
-                col - self.center_col,
+                row - self.bright_field_center_row_px,
+                col - self.bright_field_center_col_px,
                 ellipse_ratio=self.ellipse_ratio,
                 ellipse_angle=self.ellipse_angle,
                 ellipse_corrected=self.ellipse_corrected,
@@ -1155,7 +1155,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         radius = self._outer_ring_radius()
         theta_centers, counts, _, weight_sum, weighted_radius_sum = lattice.ring_sectors(
             self._frame(),
-            center=(self.center_row, self.center_col),
+            center=(self.bright_field_center_row_px, self.bright_field_center_col_px),
             radius_px=radius,
             half_width=self._ring_half_width(radius),
             n_theta=180,
@@ -1184,7 +1184,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         status = f"Merged {sum(used)}/{len(frames)} frames"
         if self.rings:
             outer_radius = self._outer_ring_radius()
-            center = (self.center_row, self.center_col)
+            center = (self.bright_field_center_row_px, self.bright_field_center_col_px)
             mask = self._analysis_mask()
             before = lattice.ring_uniformity(frames[min(self.frame_idx, len(frames) - 1)], center, outer_radius, mask=mask)
             after = lattice.ring_uniformity(merged, center, outer_radius, mask=mask)
@@ -1399,7 +1399,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             # SNR on the frame the ring was measured on
             frame = self._frame(outermost.get("frame_idx")).astype(np.float64)
             report["ring_snr"] = lattice.ring_uniformity(
-                frame, (self.center_row, self.center_col), float(outermost["radius_px"]), mask=mask
+                frame, (self.bright_field_center_row_px, self.bright_field_center_col_px), float(outermost["radius_px"]), mask=mask
             )
         self._quality = report
         return "Quality updated"
@@ -1470,7 +1470,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             raise ValueError("Cannot export HTML after free(); rebuild the widget first.")
         clone = type(self)(
             to_numpy(self._data),
-            center=(self.center_row, self.center_col),
+            bright_field_center_px=(self.bright_field_center_row_px, self.bright_field_center_col_px),
             bright_field_radius_px=self.bright_field_radius_px,
             title=self.title,
             offline=True,

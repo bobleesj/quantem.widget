@@ -199,8 +199,8 @@ function ShowDiffraction() {
   const [offlineFrames] = useModelState<DataView>("offline_frames");
   const [frameIdx, setFrameIdx] = useModelState<number>("frame_idx");
   const [nFrames] = useModelState<number>("n_frames");
-  const [centerRow] = useModelState<number>("center_row");
-  const [centerCol] = useModelState<number>("center_col");
+  const [brightFieldCenterRowPx] = useModelState<number>("bright_field_center_row_px");
+  const [brightFieldCenterColPx] = useModelState<number>("bright_field_center_col_px");
   const [brightFieldRadiusPx] = useModelState<number>("bright_field_radius_px");
   const [detectorSamplingInvA] = useModelState<number>("detector_sampling_inv_A");
   const [kCalibrated] = useModelState<boolean>("k_calibrated");
@@ -278,7 +278,7 @@ function ShowDiffraction() {
     const basename = kind === "all" ? "measurements" : kind;
     if (format === "json") {
       const metadata = measurementMetadata({
-        centerRow, centerCol, centerMethod, detectorSamplingInvA, kCalibrated,
+        brightFieldCenterRowPx, brightFieldCenterColPx, centerMethod, detectorSamplingInvA, kCalibrated,
         calibrationSource, calibrationRefD, calibrationRefRadius,
         maskRegions: maskRegions || [], backgroundSubtracted: profileSubtract,
       });
@@ -287,7 +287,7 @@ function ShowDiffraction() {
     } else {
       downloadBlob(new Blob([measurementCsv(records)], { type: "text/csv" }), `${basename}.csv`);
     }
-  }, [spots, rings, centerRow, centerCol, centerMethod, detectorSamplingInvA, kCalibrated,
+  }, [spots, rings, brightFieldCenterRowPx, brightFieldCenterColPx, centerMethod, detectorSamplingInvA, kCalibrated,
     calibrationSource, calibrationRefD, calibrationRefRadius, maskRegions, profileSubtract]);
 
   // Local UI state
@@ -365,9 +365,9 @@ function ShowDiffraction() {
   const zoomToCenter = React.useCallback(() => {
     const zoom = 2.5;
     setDpZoom(zoom);
-    setDpPanX(canvasSize * zoom * (0.5 - (centerCol + 0.5) / Math.max(detCols, 1)));
-    setDpPanY(canvasSize * zoom * (0.5 - (centerRow + 0.5) / Math.max(detRows, 1)));
-  }, [canvasSize, centerRow, centerCol, detRows, detCols]);
+    setDpPanX(canvasSize * zoom * (0.5 - (brightFieldCenterColPx + 0.5) / Math.max(detCols, 1)));
+    setDpPanY(canvasSize * zoom * (0.5 - (brightFieldCenterRowPx + 0.5) / Math.max(detRows, 1)));
+  }, [canvasSize, brightFieldCenterRowPx, brightFieldCenterColPx, detRows, detCols]);
 
   const dpCanvasRef = React.useRef<HTMLCanvasElement>(null);
   const dpUiRef = React.useRef<HTMLCanvasElement>(null);
@@ -715,8 +715,8 @@ function ShowDiffraction() {
     const { scX, scY } = view;
 
     // Center crosshair
-    const cx = dataColToScreenX(centerCol, view);
-    const cy = dataRowToScreenY(centerRow, view);
+    const cx = dataColToScreenX(brightFieldCenterColPx, view);
+    const cy = dataRowToScreenY(brightFieldCenterRowPx, view);
     ctx.strokeStyle = "rgba(255,255,255,0.3)";
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
@@ -855,7 +855,7 @@ function ShowDiffraction() {
     }
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }, [dpVersion, dpZoom, dpPanX, dpPanY, canvasSize, detRows, detCols, centerRow, centerCol, brightFieldRadiusPx, spots, rings, showHkl, selectedRingId, ellipseRatio, ellipseAngle, maskRegions, showMask, dragPreview, dpLut, dpScaleMode, themeInfo.theme, themeColors.accent]);
+  }, [dpVersion, dpZoom, dpPanX, dpPanY, canvasSize, detRows, detCols, brightFieldCenterRowPx, brightFieldCenterColPx, brightFieldRadiusPx, spots, rings, showHkl, selectedRingId, ellipseRatio, ellipseAngle, maskRegions, showMask, dragPreview, dpLut, dpScaleMode, themeInfo.theme, themeColors.accent]);
 
   // Scale bar
   React.useLayoutEffect(() => {
@@ -896,7 +896,7 @@ function ShowDiffraction() {
   };
 
   const angleOf = (row: number, col: number) =>
-    (Math.atan2(row - centerRow, col - centerCol) * 180 / Math.PI + 360) % 360;
+    (Math.atan2(row - brightFieldCenterRowPx, col - brightFieldCenterColPx) * 180 / Math.PI + 360) % 360;
 
   // Two-finger pinch (zoom + pan) via tracked pointers
   const activePointersRef = React.useRef(new Map<number, { x: number; y: number }>());
@@ -1012,8 +1012,8 @@ function ShowDiffraction() {
   const commitTapAction = (row: number, col: number) => {
     if (centerMode === "manual") {
       // one message for both coordinates: Python re-measures every ring once per click
-      model.set("center_row", row);
-      model.set("center_col", col);
+      model.set("bright_field_center_row_px", row);
+      model.set("bright_field_center_col_px", col);
       model.save_changes();
       return;
     }
@@ -1279,7 +1279,7 @@ function ShowDiffraction() {
                     ["Detector", `${detRows} x ${detCols}`],
                     ["Frames", nFrames > 1 ? `${nFrames}` : "single frame"],
                     ["Calibration", kCalibrated && detectorSamplingInvA > 0 ? `${formatNumber(detectorSamplingInvA)} 1/Å/px` : "uncalibrated (px)"],
-                    ["Center", `${formatNumber(centerRow)}, ${formatNumber(centerCol)}`],
+                    ["Center", `${formatNumber(brightFieldCenterRowPx)}, ${formatNumber(brightFieldCenterColPx)}`],
                     ["Annotations", `${spots.length} spots, ${rings.length} rings`],
                   ]} />
                   <KeyboardShortcuts items={[
@@ -2046,7 +2046,7 @@ function ShowDiffraction() {
 
           <Box sx={{ ...controlRow, mt: `${SPACING.XS}px` }}>
             <Typography sx={{ ...typography.value, color: themeColors.textMuted }}>
-              Center: ({centerRow.toFixed(1)}, {centerCol.toFixed(1)})  BF r={brightFieldRadiusPx.toFixed(1)}
+              Center: ({brightFieldCenterRowPx.toFixed(1)}, {brightFieldCenterColPx.toFixed(1)})  BF r={brightFieldRadiusPx.toFixed(1)}
               {kCalibrated && <span style={{ marginLeft: 8 }}>k={detectorSamplingInvA.toFixed(4)} 1/Å/px</span>}
             </Typography>
           </Box>

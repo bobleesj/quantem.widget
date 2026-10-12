@@ -37,7 +37,7 @@ def test_signed_comparison_preserves_patterns_and_detector_means():
     data = np.linspace(-10, 10, 2 * 4 * 5 * 6 * 6, dtype=np.float32).reshape(2, 4, 5, 6, 6)
     viewer = Show4DSTEM(
         data, device="cpu", verbose=False, view_mode="multiple",
-        compare_dp_mode="all", center=(3, 3), bright_field_radius_px=2,
+        compare_dp_mode="all", bright_field_center_px=(3, 3), bright_field_radius_px=2,
         dp_scale_mode="linear", vi_scale_mode="linear",
         dp_vmin=-10, dp_vmax=10, vi_vmin=-10, vi_vmax=10,
     )

@@ -135,7 +135,7 @@ def test_encoded_master_opens_with_detector_products(tmp_path, accelerator):
         widget = Show4DSTEM(loaded)
         try:
             center, radius = fit_probe(_mean_dp(counts))
-            assert (widget.center_row, widget.center_col) == pytest.approx(center)
+            assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px) == pytest.approx(center)
             assert widget.bright_field_radius_px == pytest.approx(radius)
             np.testing.assert_array_equal(_image(widget), _bf(counts, center, radius))
             widget.apply_preset("adf")
@@ -233,7 +233,7 @@ def test_a_watched_folder_emptied_of_masters_polls_without_error(tmp_path, accel
 
 def test_numpy_viewer_matches_detector_and_pattern_selection():
     counts = _counts(1)
-    widget = Show4DSTEM(counts, center=(7.5, 7.5), bright_field_radius_px=3.0, precompute_virtual_images=False)
+    widget = Show4DSTEM(counts, bright_field_center_px=(7.5, 7.5), bright_field_radius_px=3.0, precompute_virtual_images=False)
     try:
         assert widget.roi_mode == "circle" and widget.roi_radius == 3.0
         np.testing.assert_array_equal(_image(widget), _bf(counts, (7.5, 7.5), 3.0))
@@ -255,7 +255,7 @@ def test_numpy_viewer_matches_detector_and_pattern_selection():
 def test_one_detector_message_reduces_the_image_once():
     # traitlets calls an observer once per changed trait, so a drag message (row, column and the pair) used to reduce three times
     counts = _counts(3)
-    widget = Show4DSTEM(counts, center=(7.5, 7.5), bright_field_radius_px=3.0, precompute_virtual_images=False)
+    widget = Show4DSTEM(counts, bright_field_center_px=(7.5, 7.5), bright_field_radius_px=3.0, precompute_virtual_images=False)
     try:
         reduced = []
         reduce_image = widget._compute_virtual_image_from_roi
@@ -327,7 +327,7 @@ def test_mask_goldens_shared_with_the_browser_are_the_python_masks():
 def test_detector_near_a_preset_radius_sums_its_own_pixels():
     # A radius within a pixel of the BF preset selects fewer pixels; the cached BF image must not stand in for it.
     counts = _counts(2)
-    widget = Show4DSTEM(counts, center=(7.5, 7.5), bright_field_radius_px=3.0)
+    widget = Show4DSTEM(counts, bright_field_center_px=(7.5, 7.5), bright_field_radius_px=3.0)
     try:
         np.testing.assert_array_equal(_image(widget), _bf(counts, (7.5, 7.5), 3.0))
         widget.roi_radius = 2.2
@@ -452,7 +452,7 @@ def test_product_map_from_compute_ssb_becomes_the_image(monkeypatch):
         np.testing.assert_array_equal(stack[2], phase)
         assert widget.ssb_compute_status.startswith("SSB ready")
         widget.vi_source = "roi"
-        np.testing.assert_array_equal(_image(widget), _bf(counts, (widget.center_row, widget.center_col), widget.bright_field_radius_px))
+        np.testing.assert_array_equal(_image(widget), _bf(counts, (widget.bright_field_center_row_px, widget.bright_field_center_col_px), widget.bright_field_radius_px))
     finally:
         widget.close()
 
@@ -477,7 +477,7 @@ def test_master_read_densely_matches_numpy(tmp_path, monkeypatch, capsys):
         assert widget.title == "flagged" and widget._device.type == "cpu"
         np.testing.assert_array_equal(widget._session(0).mean_dp(), _mean_dp(expected))
         center, radius = fit_probe(_mean_dp(expected))
-        assert (widget.center_row, widget.center_col, widget.bright_field_radius_px) == pytest.approx((*center, radius))
+        assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px, widget.bright_field_radius_px) == pytest.approx((*center, radius))
         np.testing.assert_array_equal(_image(widget), _bf(expected, center, radius))
         widget.apply_preset("adf")
         np.testing.assert_array_equal(_image(widget), _bf(expected, center, 2 * radius, inner=radius))
@@ -596,7 +596,7 @@ def test_dense_and_encoded_paths_agree(tmp_path, accelerator, device):
 def test_interactive_export_packs_binned_counts_in_one_self_contained_page(tmp_path):
     counts = _counts(4, scan=(4, 4))
     widget = Show4DSTEM(counts, title="export", scan_sampling_A=(0.4, 0.6), detector_sampling_mrad=(0.1, 0.2),
-                        center=(8, 8), bright_field_radius_px=2, precompute_virtual_images=False)
+                        bright_field_center_px=(8, 8), bright_field_radius_px=2, precompute_virtual_images=False)
     try:
         # the page's clone keeps each axis its own step, grown by the binning along it (the row step was
         # replaced by the column step before)
@@ -882,8 +882,8 @@ def test_compute_ssb_refuses_an_unknown_aberration_key():
 def test_the_bright_field_radius_has_one_name_in_keyword_trait_and_state():
     # keyword, trait and state key were bf_radius; the name every package uses is bright_field_radius_px (detector pixels)
     counts = _counts(3, scan=(4, 4))
-    viewer = Show4DSTEM(counts, center=(7.5, 7.5), bright_field_radius_px=3.0, precompute_virtual_images=False)
-    pattern = ShowDiffraction(counts[0, 0].astype(np.float32), center=(7.5, 7.5), bright_field_radius_px=3.0, verbose=False)
+    viewer = Show4DSTEM(counts, bright_field_center_px=(7.5, 7.5), bright_field_radius_px=3.0, precompute_virtual_images=False)
+    pattern = ShowDiffraction(counts[0, 0].astype(np.float32), bright_field_center_px=(7.5, 7.5), bright_field_radius_px=3.0, verbose=False)
     for widget in (viewer, pattern):
         assert widget.bright_field_radius_px == 3.0 and widget.state_dict()["bright_field_radius_px"] == 3.0
         assert "bright_field_radius_px" in widget.get_state() and not widget.has_trait("bf_radius")
@@ -893,6 +893,29 @@ def test_the_bright_field_radius_has_one_name_in_keyword_trait_and_state():
     for Widget, data in ((Show4DSTEM, counts), (ShowDiffraction, counts[0, 0].astype(np.float32))):
         with pytest.raises(TypeError, match="unexpected keyword argument 'bf_radius'"):
             Widget(data, bf_radius=3.0)
+
+
+def test_the_bright_field_centre_has_one_name_in_keyword_traits_and_state(tmp_path):
+    # keyword center=(row, col) with traits and state keys center_row, center_col; the vocabulary name is bright_field_center_px
+    counts = _counts(3, scan=(4, 4))
+    viewer = Show4DSTEM(counts, bright_field_center_px=(6.5, 8.5), bright_field_radius_px=3.0, precompute_virtual_images=False)
+    pattern = ShowDiffraction(counts[0, 0].astype(np.float32), bright_field_center_px=(6.5, 8.5), bright_field_radius_px=3.0, verbose=False)
+    for widget in (viewer, pattern):
+        assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px) == (6.5, 8.5)
+        state = widget.state_dict()
+        assert (state["bright_field_center_row_px"], state["bright_field_center_col_px"]) == (6.5, 8.5)
+        assert {"bright_field_center_row_px", "bright_field_center_col_px"} <= set(widget.get_state())
+        assert not widget.has_trait("center_row") and not widget.has_trait("center_col")
+        with pytest.raises(ValueError, match=r"does not save: \['center_row', 'center_col'\]"):
+            widget.load_state_dict({"center_row": 2.0, "center_col": 2.0})
+    viewer.close()
+    for Widget, data in ((Show4DSTEM, counts), (ShowDiffraction, counts[0, 0].astype(np.float32))):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'center'"):
+            Widget(data, center=(6.5, 8.5))
+    # the measurements file names the two coordinates the same way
+    pattern.save(tmp_path / "state.json")
+    metadata = json.loads(ShowDiffraction.measurements_from_state(tmp_path / "state.json", tmp_path / "measurements.json").read_text())["metadata"]
+    assert (metadata["bright_field_center_row_px"], metadata["bright_field_center_col_px"]) == (6.5, 8.5) and "center_row" not in metadata
 
 
 def test_static_preview_labels_the_detector_bar_in_its_own_unit(monkeypatch):

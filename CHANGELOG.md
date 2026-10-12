@@ -134,7 +134,13 @@ Changed:
   the measurements JSON key `k_pixel_size_inv_angstrom_per_px` and the
   `calibration` key `k_pixel_size` to `detector_sampling_inv_A`.
 - `Show4DSTEM` and `ShowDiffraction`: keyword, trait and state key
-  `bf_radius` to `bright_field_radius_px` (detector pixels).
+  `bf_radius` to `bright_field_radius_px` (detector pixels); keyword
+  `center=(row, col)` to `bright_field_center_px=(row, col)`, traits and state
+  keys `center_row`, `center_col` to `bright_field_center_row_px`,
+  `bright_field_center_col_px` (pixels of the detector frame the widget
+  holds). The ShowDiffraction measurements JSON keys `center_row`,
+  `center_col` take the same names. `center_mode` and `center_method` are
+  unchanged.
 - One spelling per value in `Show1D`, `Show2D` and `Show3D`: keyword
   `gallery_gap_px` (Show2D), keyword `panel_gap` (Show3D) and trait
   `inter_panel_gap_px` to `panel_gap_px`; Show2D keyword and trait `size` to

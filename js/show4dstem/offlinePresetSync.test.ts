@@ -20,7 +20,7 @@ const code = ts.transpileModule(`const onPreset = ${callback};`, {
 
 it("saves the displayed ADF then BF detector geometry for Python readback", () => {
   const state: Record<string, unknown> = {
-    bright_field_radius_px: 6, center_row: 11.5, center_col: 12.5, roi_mode: "circle",
+    bright_field_radius_px: 6, bright_field_center_row_px: 11.5, bright_field_center_col_px: 12.5, roi_mode: "circle",
     roi_radius: 6, roi_radius_inner: 0, vi_source: "roi",
   };
   const saved: Record<string, unknown>[] = [];

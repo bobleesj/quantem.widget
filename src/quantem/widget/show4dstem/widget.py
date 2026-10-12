@@ -55,7 +55,7 @@ from quantem.widget.utils.array import device_array
 from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
 
-DEFAULT_BF_RATIO = 0.125  # bright-field radius as a fraction of the detector side before fitting
+BRIGHT_FIELD_RADIUS_FRACTION = 0.125  # bright-field radius as a fraction of the detector side before fitting
 DEFAULT_VI_ROI_RATIO = 0.15  # scan ROI radius as a fraction of the scan side
 PRODUCT_LABELS = ("DPC_row", "DPC_col", "SSB")
 # the calibration a 4D acquisition carries, under the .qem format's flat names
@@ -157,8 +157,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         the accelerating voltage in kV and the convergence semiangle in mrad.
         A dataset or file is the source of its own calibration: these are read
         from it, and a keyword that contradicts a recorded value raises.
-    center, bright_field_radius_px
-        Bright-field disk geometry in detector pixels; fitted from the mean
+    bright_field_center_px, bright_field_radius_px
+        Bright-field disk centre ``(row, col)`` and radius in detector pixels; fitted from the mean
         pattern when omitted.
     precompute_virtual_images
         Compute the four preset images up front so preset clicks are instant.
@@ -188,8 +188,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     det_rows = traitlets.Int(1).tag(sync=True)
     det_cols = traitlets.Int(1).tag(sync=True)
     frame_bytes = traitlets.Bytes(b"").tag(sync=True)
-    center_col = traitlets.Float(0.0).tag(sync=True)
-    center_row = traitlets.Float(0.0).tag(sync=True)
+    bright_field_center_col_px = traitlets.Float(0.0).tag(sync=True)
+    bright_field_center_row_px = traitlets.Float(0.0).tag(sync=True)
     bright_field_radius_px = traitlets.Float(0.0).tag(sync=True)
     roi_active = traitlets.Bool(False).tag(sync=True)
     roi_mode = traitlets.Unicode("point").tag(sync=True)
@@ -316,7 +316,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         detector_sampling_inv_A: float | tuple[float, float] | None = None,
         voltage_kV: float | None = None,
         semiangle_mrad: float | None = None,
-        center: tuple[float, float] | None = None,
+        bright_field_center_px: tuple[float, float] | None = None,
         bright_field_radius_px: float | None = None,
         precompute_virtual_images: bool | None = None,
         frame_dim_label: str | None = None,
@@ -563,9 +563,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.vi_roi_radius = float(roi_size)
         self.vi_roi_width = float(roi_size * 2)
         self.vi_roi_height = float(roi_size)
-        self.center_row = float(self.det_rows / 2) if center is None else float(center[0])
-        self.center_col = float(self.det_cols / 2) if center is None else float(center[1])
-        self.bright_field_radius_px = min(self.det_rows, self.det_cols) * DEFAULT_BF_RATIO if bright_field_radius_px is None else float(bright_field_radius_px)
+        self.bright_field_center_row_px = float(self.det_rows / 2) if bright_field_center_px is None else float(bright_field_center_px[0])
+        self.bright_field_center_col_px = float(self.det_cols / 2) if bright_field_center_px is None else float(bright_field_center_px[1])
+        self.bright_field_radius_px = min(self.det_rows, self.det_cols) * BRIGHT_FIELD_RADIUS_FRACTION if bright_field_radius_px is None else float(bright_field_radius_px)
 
         if browser_urls:
             if h5_urls:
@@ -585,9 +585,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 self.load_state_dict(state)
             return
 
-        if center is None and bright_field_radius_px is None:
-            self.center_row, self.center_col, self.bright_field_radius_px = fit_disk(
-                self._session(0).mean_dp(), (self.det_rows, self.det_cols), DEFAULT_BF_RATIO
+        if bright_field_center_px is None and bright_field_radius_px is None:
+            self.bright_field_center_row_px, self.bright_field_center_col_px, self.bright_field_radius_px = fit_disk(
+                self._session(0).mean_dp(), (self.det_rows, self.det_cols), BRIGHT_FIELD_RADIUS_FRACTION
             )
         if precompute_virtual_images and self.n_frames == 1:
             self._precompute_presets()
@@ -597,7 +597,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                                                  "roi_active", "roi_mode", "roi_width", "roi_height"])
         self.observe(self._on_roi_center_change, names=["roi_center"])
         self.observe(self._on_vi_source_change, names=["vi_source"])
-        self.observe(self._on_calibration_change, names=["center_row", "center_col", "bright_field_radius_px"])
+        self.observe(self._on_calibration_change, names=["bright_field_center_row_px", "bright_field_center_col_px", "bright_field_radius_px"])
         # The first render shows the bright-field image: a point detector paints near black.
         self._set_roi_to_disk()
         self._compute_virtual_image_from_roi()
@@ -917,8 +917,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self.vi_source = "roi"
             self.roi_active = True
             self.roi_mode = "circle" if preset == "bf" else "annular"
-            self.roi_center_row = float(self.center_row)
-            self.roi_center_col = float(self.center_col)
+            self.roi_center_row = float(self.bright_field_center_row_px)
+            self.roi_center_col = float(self.bright_field_center_col_px)
             if preset == "bf":
                 self.roi_radius_inner = 0.0
                 self.roi_radius = float(max(1.0, bright_field_radius_px))
@@ -939,7 +939,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     # The traits of the display state: scalars, then the lists state_dict copies.
     _STATE_KEYS = (
-        "title", "show_title", "pos_row", "pos_col", "center_row", "center_col", "bright_field_radius_px", "roi_active", "roi_mode", "roi_center_row",
+        "title", "show_title", "pos_row", "pos_col", "bright_field_center_row_px", "bright_field_center_col_px", "bright_field_radius_px", "roi_active", "roi_mode", "roi_center_row",
         "roi_center_col", "roi_radius", "roi_radius_inner", "roi_width", "roi_height", "vi_roi_mode",
         "vi_roi_center_row", "vi_roi_center_col", "vi_roi_radius", "vi_roi_width", "vi_roi_height",
         "vi_roi_reduce", "vi_source", "dp_colormap", "vi_colormap", "fft_colormap", "dp_scale_mode",
@@ -1365,7 +1365,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     def _precompute_presets(self) -> None:
         """Cache the four preset images so a preset click paints without a reduction."""
-        center = (self.center_row, self.center_col)
+        center = (self.bright_field_center_row_px, self.bright_field_center_col_px)
         self._preset_images = {
             name: np.ascontiguousarray(
                 self._compute.masked_sum(preset_mask(name, (self.det_rows, self.det_cols), center, self.bright_field_radius_px)),
@@ -1380,7 +1380,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         stand in for an ROI that selects the same detector pixels; a radius within a
         pixel of the preset can still select a different set and a different image.
         """
-        center = (self.center_row, self.center_col)
+        center = (self.bright_field_center_row_px, self.bright_field_center_col_px)
         for name in PRESET_RADII:
             if np.array_equal(mask, preset_mask(name, (self.det_rows, self.det_cols), center, self.bright_field_radius_px)):
                 return name
@@ -1814,9 +1814,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._suppress_roi_recompute = True
         with self.hold_trait_notifications():
             self.roi_mode = "circle"
-            self.roi_center_col = self.center_col
-            self.roi_center_row = self.center_row
-            self.roi_center = [self.center_row, self.center_col]
+            self.roi_center_col = self.bright_field_center_col_px
+            self.roi_center_row = self.bright_field_center_row_px
+            self.roi_center = [self.bright_field_center_row_px, self.bright_field_center_col_px]
             self.roi_radius = float(max(1.0, self.bright_field_radius_px))
             self.roi_active = True
         self._suppress_roi_recompute = False

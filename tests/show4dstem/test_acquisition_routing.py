@@ -72,7 +72,7 @@ def test_gpu_acquisition_reduces_in_quantem_gpu_without_reading_the_scan(tmp_pat
         assert isinstance(widget._data, AcquisitionView) and widget._device.type in ("cuda", "mps")
         assert not isinstance(widget._session(0), DenseSession)
         center, radius = fit_probe(_mean_dp(values))
-        assert (widget.center_row, widget.center_col, widget.bright_field_radius_px) == (*center, radius)
+        assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px, widget.bright_field_radius_px) == (*center, radius)
         np.testing.assert_allclose(widget.virtual_image(), _image(values, center, 0.0, radius), rtol=0 if dtype == np.uint16 else 1e-6)
         widget.apply_preset("adf")
         np.testing.assert_allclose(widget.virtual_image(), _image(values, center, radius, 2 * radius), rtol=0 if dtype == np.uint16 else 1e-6)
@@ -101,7 +101,7 @@ def test_scan_region_of_an_acquisition_keeps_its_own_coordinates(tmp_path, read_
         try:
             assert (widget.shape_rows, widget.shape_cols) == viewed.shape[:2]
             center, radius = fit_probe(_mean_dp(viewed))
-            assert (widget.center_row, widget.center_col, widget.bright_field_radius_px) == (*center, radius)
+            assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px, widget.bright_field_radius_px) == (*center, radius)
             np.testing.assert_allclose(widget.virtual_image(), _image(viewed, center, 0.0, radius), rtol=0 if dtype == np.uint16 else 1e-6)
             widget.pos_row, widget.pos_col = 0, 5
             np.testing.assert_array_equal(widget.pattern(0, 5), viewed[0, 5])
@@ -128,7 +128,7 @@ def test_host_data_stays_on_the_cpu(tmp_path, dtype, kind):
         # only a load result is an acquisition; arrays and tensors reduce in the widget's own torch code
         assert isinstance(widget._session(0), DenseSession) == (kind != "cpu acquisition")
         center, radius = fit_probe(_mean_dp(values))
-        assert (widget.center_row, widget.center_col, widget.bright_field_radius_px) == (*center, radius)
+        assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px, widget.bright_field_radius_px) == (*center, radius)
         np.testing.assert_array_equal(widget.virtual_image(), _image(values, center, 0.0, radius))
         widget.pos_row, widget.pos_col = 6, 8
         np.testing.assert_array_equal(widget.pattern(6, 8), values[6, 8])
