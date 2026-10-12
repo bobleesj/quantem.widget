@@ -43,12 +43,14 @@ def per_axis(value, count: int) -> list:
 
     A scalar is anything with no axis of its own (``np.ndim(value) == 0``): a
     Python or NumPy number, a 0-d array, a string, None. A tuple, a list and a
-    1-d array give their entries. Every ``sampling=`` and ``units=`` keyword
-    is read here. Tested with ``isinstance(value, (int, float))``, a step
-    that came out of NumPy (``np.float32(0.5)``, ``array.mean()``) fell to the
-    sequence branch and raised on indexing.
+    1-d array give their entries, and a sequence of one entry is that entry
+    for every axis (``units=["nm"]``). Every ``sampling=`` and ``units=``
+    keyword is read here. Tested with ``isinstance(value, (int, float))``, a
+    step that came out of NumPy (``np.float32(0.5)``, ``array.mean()``) fell
+    to the sequence branch and raised on indexing.
     """
-    return [value] * count if np.ndim(value) == 0 else list(value)
+    entries = [value] if np.ndim(value) == 0 else list(value)
+    return entries * count if len(entries) == 1 else entries
 
 
 def unit_entry(unit) -> tuple[str, float, str]:

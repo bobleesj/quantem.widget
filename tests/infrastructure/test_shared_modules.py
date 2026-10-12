@@ -116,6 +116,13 @@ def test_a_unit_stated_for_an_input_without_a_step_raises():
     # a viewer without a step still builds its preview and its export clone (they pass the unit only with a step)
     plain = Show3D(stack, verbose=False)
     assert (plain.pixel_size, plain.pixel_unit) == (0.0, "A") and plain._static_fallback_png_b64()
+    # no keyword is no stated unit: an nm dataset with a zero step opens uncalibrated, and a depth step is a step
+    assert Show3D(make_dataset(stack, sampling=(1.0, 0.0, 0.0), units=("frame", "nm", "nm")), verbose=False).pixel_size == 0.0
+    depth_only = make_dataset(stack, sampling=(0.5, 1.0, 1.0), units=("nm", "pixels", "pixels"))
+    assert Show3DSlices(depth_only, units="nm").voxel_size_A == [5.0, 0.0, 0.0]
+    # a sequence of one unit is the unit of both axes: the column step, not the row step, sets the bar
+    anisotropic = make_dataset(image, sampling=(0.5, 0.25), units=("nm", "nm"))
+    assert [Show2D(anisotropic, units=units, verbose=False).pixel_size for units in (["nm"], ("A",), "A")] == [0.25, 2.5, 2.5]
 
 
 def test_a_half_calibrated_pair_takes_the_keyword_on_its_open_axis_only():

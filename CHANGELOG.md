@@ -301,6 +301,9 @@ Fixed:
   replaced the recorded step without a comparison. The keyword is read per
   axis, as in `Show3DSlices`: it gives the step of the axis the input leaves
   open and must equal the step of the axis it records.
+- `units=["A"]` (a sequence of one unit) on a dataset with two different image
+  steps set the scale bar from the row step: `(0.5, 0.25)` nm showed 5 A, not
+  2.5 A. A sequence of one entry is that entry for every axis.
 
 ## rc42 - 2026-10-11
 

@@ -891,7 +891,7 @@ class Show3D(
         if core_adapter.is_dataset(first, ndim=2) or core_adapter.is_dataset(first, ndim=3):
             title = title or (first.name or "")
             # a Dataset3d in nm is shown in Angstrom so the scale bar matches the other quantem viewers
-            if sampling is None and units is None and str(first.units[-1]) == "nm":
+            if sampling is None and units is None and str(first.units[-1]) == "nm" and float(first.sampling[-1]) > 0:
                 units = "A"
             # the image axes are the last two; a stack's first axis is its frames. The
             # horizontal scale bar measures columns, the last axis.

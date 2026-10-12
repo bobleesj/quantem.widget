@@ -42,8 +42,6 @@ def _voxel_size_A(sampling: float | Sequence[float], units: str | Sequence[str])
     if len(samples) != 3:
         raise ValueError(f"sampling must be a scalar or 3 values (slice, row, col), got {len(samples)}")
     unit_list = per_axis(units, 3)
-    if len(unit_list) == 1:
-        unit_list = unit_list * 3
     if any(not math.isfinite(float(sample)) or float(sample) < 0 for sample in samples):
         raise ValueError(f"sampling must be finite and >= 0, got {samples}")
     axes = []
@@ -406,15 +404,16 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         self._slice_alignment_estimates: dict[int, dict] = {}
         self._syncing_plane_visibility = False
         self._syncing_pages = False
-        if sampling is None:
-            # a unit stated with no step, for a volume that records none, raises as in every image widget
-            image_axes(None, units, data if core_adapter.is_dataset(data, ndim=3) else None)
+        is_dataset = core_adapter.is_dataset(data, ndim=3)
+        recorded = _voxel_size_A(list(data.sampling)[-3:], list(data.units)[-3:]) if is_dataset else [0.0, 0.0, 0.0]
+        if sampling is None and not any(recorded):
+            # a unit stated with no step, for a volume that records none on any axis, raises as in every image widget
+            image_axes(None, units)
         voxel_size_A = [0.0, 0.0, 0.0] if sampling is None else _voxel_size_A(sampling, "angstrom" if units is None else units)
-        if core_adapter.is_dataset(data, ndim=3):
+        if is_dataset:
             title = title or data.name
             # the dataset is the source of its voxel size, axis by axis: a keyword gives the step of an
             # axis the dataset does not calibrate (the frame axis of a stack) and may repeat one it does
-            recorded = _voxel_size_A(list(data.sampling)[-3:], list(data.units)[-3:])
             voxel_size_A = [step or 0.0 for step in stated("sampling", [step or None for step in voxel_size_A], [step or None for step in recorded])]
             data = core_adapter.as_array(data)
         data = to_numpy(data)
