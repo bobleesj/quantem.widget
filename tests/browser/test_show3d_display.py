@@ -558,5 +558,7 @@ def test_show3d_fft_click_that_fails_to_refine_ends_the_drag(serve, open_page, h
     page.wait_for_timeout(500)
     after = screen(page, box)
     Image.fromarray(np.concatenate([before, after], axis=1)).save(browser_out / "show3d_fft_click_failure.png")
-    assert page.errors and np.array_equal(before[:220, :220], after[:220, :220])  # clear of the resize grip
+    # Compare scientific pixels, clear of the status text and resize grip.
+    # Compositing the status text after pointer input can change font antialiasing.
+    assert page.errors and np.array_equal(before[32:220, :220], after[32:220, :220])
     assert all("injected readback failure" in error for error in page.errors), page.errors
