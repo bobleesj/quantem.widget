@@ -48,24 +48,24 @@ vi.mock("./sliceAlignment", () => ({
 
 const { default: show3dslices } = await import("./index");
 
-const NZ = 4, NY = 12, NX = 16;
-// Each depth sits in its own band (slice z spans 100 z to 100 z + 50), so a
+const NUM_SLICES = 4, NUM_ROWS = 12, NUM_COLS = 16;
+// Each depth sits in its own band (from 100 times the slice index, 50 wide), so a
 // slice's own 2/98 percentiles are far from the stack's.
-const VOLUME = Float32Array.from({ length: NZ * NY * NX }, (_, index) => {
-  const z = Math.floor(index / (NY * NX));
-  const within = index % (NY * NX);
-  return 100 * z + (50 * within) / (NY * NX - 1);
+const VOLUME = Float32Array.from({ length: NUM_SLICES * NUM_ROWS * NUM_COLS }, (_, index) => {
+  const slice = Math.floor(index / (NUM_ROWS * NUM_COLS));
+  const within = index % (NUM_ROWS * NUM_COLS);
+  return 100 * slice + (50 * within) / (NUM_ROWS * NUM_COLS - 1);
 });
 
 class Model {
   values: Record<string, unknown> = {
-    volume_bytes: new DataView(VOLUME.buffer), nx: NX, ny: NY, nz: NZ,
-    slice_x: 8, slice_y: 6, slice_z: 2, cmap: "plasma", auto_contrast: true,
+    volume_bytes: new DataView(VOLUME.buffer), volume_shape: [NUM_SLICES, NUM_ROWS, NUM_COLS],
+    col_index: 8, row_index: 6, slice_index: 2, cmap: "plasma", auto_contrast: true,
     image_vmin_pct: 0, image_vmax_pct: 100, vmin: null, vmax: null, log_scale: false, flip: false,
     dim_labels: ["slice", "row", "col"], panel_count: 1, panel_titles: [], plane_visibility: [true, true],
-    pixel_size_axes: [0, 0, 0], slice_alignment: "off", show_controls: true, show_title: true,
+    voxel_size_A: [0, 0, 0], slice_alignment: "off", show_controls: true, show_title: true,
     show_crosshair: true, view_state: {}, oblique_angle: 0, oblique_profile_line: [], page_labels: [],
-    n_pages: 1, page_idx: 0, panels_per_page: 0, active_panel: 0, z_stretch: 30, fps: 30,
+    n_pages: 1, page_idx: 0, panels_per_page: 0, active_panel: 0, slice_stretch: 30, fps: 30,
   };
   listeners = new Map<string, Set<() => void>>();
   get(key: string) { return this.values[key]; }
@@ -115,7 +115,7 @@ afterEach(async () => {
 it("paints every slice with one stack-wide window, as the WebGPU path does", async () => {
   act(() => { cleanup = show3dslices.render({ model, el } as never) as (() => void) | undefined; });
   await settle();
-  act(() => model.set("slice_z", 1));
+  act(() => model.set("slice_index", 1));
   await settle();
   const vminPct = model.get("image_vmin_pct") as number;
   const vmaxPct = model.get("image_vmax_pct") as number;
@@ -123,8 +123,8 @@ it("paints every slice with one stack-wide window, as the WebGPU path does", asy
   expect(vminPct).toBeGreaterThan(0);
   expect(vmaxPct).toBeLessThan(100);
   const stackWindow = sliderRange(0, 350, vminPct, vmaxPct);
-  const top = painted.filter(paint => paint.length === NY * NX);
-  const side = painted.filter(paint => paint.length !== NY * NX);
+  const top = painted.filter(paint => paint.length === NUM_ROWS * NUM_COLS);
+  const side = painted.filter(paint => paint.length !== NUM_ROWS * NUM_COLS);
   expect(top.length).toBeGreaterThanOrEqual(2);
   expect(side.length).toBeGreaterThanOrEqual(1);
   const last = (paints: typeof painted) => paints[paints.length - 1];
@@ -141,8 +141,8 @@ it("keeps Auto on the displayed values after a log toggle", async () => {
   // Auto's window is the 2/98 percentile of the log-scaled volume, on every slice.
   const logVolume = Float32Array.from(VOLUME, signedLog1p);
   const { vmin, vmax } = percentileClip(logVolume, 2, 98);
-  const top = painted.filter(paint => paint.length === NY * NX);
-  const side = painted.filter(paint => paint.length !== NY * NX);
+  const top = painted.filter(paint => paint.length === NUM_ROWS * NUM_COLS);
+  const side = painted.filter(paint => paint.length !== NUM_ROWS * NUM_COLS);
   for (const paint of [top[top.length - 1], side[side.length - 1]]) {
     expect(paint.vmin).toBeCloseTo(vmin, 9);
     expect(paint.vmax).toBeCloseTo(vmax, 9);
@@ -155,11 +155,11 @@ it("paints explicit vmin/vmax as given while Auto is on", async () => {
   model.values.vmax = 500;
   act(() => { cleanup = show3dslices.render({ model, el } as never) as (() => void) | undefined; });
   await settle();
-  act(() => model.set("slice_z", 1));
+  act(() => model.set("slice_index", 1));
   await settle();
   expect([model.get("image_vmin_pct"), model.get("image_vmax_pct")]).toEqual([0, 100]);
-  const top = painted.filter(paint => paint.length === NY * NX);
-  const side = painted.filter(paint => paint.length !== NY * NX);
+  const top = painted.filter(paint => paint.length === NUM_ROWS * NUM_COLS);
+  const side = painted.filter(paint => paint.length !== NUM_ROWS * NUM_COLS);
   for (const paint of [top[top.length - 1], top[top.length - 2], side[side.length - 1]]) {
     expect({ vmin: paint.vmin, vmax: paint.vmax }).toEqual({ vmin: -100, vmax: 500 });
   }
@@ -170,7 +170,7 @@ it("labels the colorbar with the flipped window the slices are painted with", as
   model.values.flip = true;
   act(() => { cleanup = show3dslices.render({ model, el } as never) as (() => void) | undefined; });
   await settle();
-  const top = painted.filter(paint => paint.length === NY * NX);
+  const top = painted.filter(paint => paint.length === NUM_ROWS * NUM_COLS);
   const last = top[top.length - 1];
   // Flip negates the displayed values: the window runs from -vmax to -vmin.
   expect(last.vmax).toBeLessThan(0);
@@ -214,7 +214,7 @@ it("paints the dragged depth slice before release without WebGPU", async () => {
   const frames: FrameRequestCallback[] = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 300, height: 10, right: 300, bottom: 10, x: 0, y: 0, toJSON: () => ({}) });
-  model.values.slice_z = 1;
+  model.values.slice_index = 1;
   act(() => { cleanup = show3dslices.render({ model, el } as never) as (() => void) | undefined; });
   await settle();
   const slider = el.querySelector("input[aria-label^='Top slice']")!.closest(".MuiSlider-root")!;
@@ -224,13 +224,13 @@ it("paints the dragged depth slice before release without WebGPU", async () => {
     document.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, buttons: 1, clientX: 200, clientY: 5 }));
   });
   act(() => frames.splice(0).forEach(callback => callback(0)));
-  expect(model.get("slice_z")).toBe(1);
-  const top = painted.filter(paint => paint.length === NY * NX);
+  expect(model.get("slice_index")).toBe(1);
+  const top = painted.filter(paint => paint.length === NUM_ROWS * NUM_COLS);
   expect(top).toHaveLength(1);
   const vminPct = model.get("image_vmin_pct") as number;
   const vmaxPct = model.get("image_vmax_pct") as number;
   expect({ vmin: top[0].vmin, vmax: top[0].vmax }).toEqual(sliderRange(0, 350, vminPct, vmaxPct));
   act(() => { document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, clientX: 200, clientY: 5 })); });
   await settle();
-  expect(model.get("slice_z")).toBe(2);
+  expect(model.get("slice_index")).toBe(2);
 });

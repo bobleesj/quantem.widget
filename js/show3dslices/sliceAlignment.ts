@@ -733,25 +733,25 @@ function padToPow2(
   return { data, width: paddedWidth, height: paddedHeight };
 }
 
-/** Least-squares slope/intercept of y versus z, plus the fit R^2. */
-function linearFit(z: number[], y: number[]): { slope: number; intercept: number; r2: number } {
-  const n = z.length;
-  const meanZ = z.reduce((a, b) => a + b, 0) / n;
-  const meanY = y.reduce((a, b) => a + b, 0) / n;
+/** Least-squares slope/intercept of shift versus slice index, plus the fit R^2. */
+function linearFit(sliceIndices: number[], shifts: number[]): { slope: number; intercept: number; r2: number } {
+  const n = sliceIndices.length;
+  const meanSlice = sliceIndices.reduce((a, b) => a + b, 0) / n;
+  const meanShift = shifts.reduce((a, b) => a + b, 0) / n;
   let num = 0;
   let den = 0;
   for (let i = 0; i < n; i++) {
-    num += (z[i] - meanZ) * (y[i] - meanY);
-    den += (z[i] - meanZ) * (z[i] - meanZ);
+    num += (sliceIndices[i] - meanSlice) * (shifts[i] - meanShift);
+    den += (sliceIndices[i] - meanSlice) * (sliceIndices[i] - meanSlice);
   }
   const slope = den > 0 ? num / den : 0;
-  const intercept = meanY - slope * meanZ;
+  const intercept = meanShift - slope * meanSlice;
   let ssRes = 0;
   let ssTot = 0;
   for (let i = 0; i < n; i++) {
-    const predicted = slope * z[i] + intercept;
-    ssRes += (y[i] - predicted) * (y[i] - predicted);
-    ssTot += (y[i] - meanY) * (y[i] - meanY);
+    const predicted = slope * sliceIndices[i] + intercept;
+    ssRes += (shifts[i] - predicted) * (shifts[i] - predicted);
+    ssTot += (shifts[i] - meanShift) * (shifts[i] - meanShift);
   }
   return { slope, intercept, r2: ssTot > 0 ? 1 - ssRes / ssTot : 0 };
 }
@@ -791,15 +791,15 @@ function subpixelOffset(refined: Float32Array, region: number, dftShift: number)
 }
 
 /** Accumulate the per-pair shifts and fit each axis's shift per slice by least squares. */
-function fitFromAdjacent(adjacent: number[][], nz: number, backend: "webgpu" | "cpu", quality: number[]) {
+function fitFromAdjacent(adjacent: number[][], numSlices: number, backend: "webgpu" | "cpu", quality: number[]) {
   const cumulative: number[][] = [[0, 0]];
   for (let i = 0; i < adjacent.length; i++) {
     const previous = cumulative[i];
     cumulative.push([previous[0] + adjacent[i][0], previous[1] + adjacent[i][1]]);
   }
-  const z = Array.from({ length: nz }, (_, i) => i);
-  const rowFit = linearFit(z, cumulative.map((entry) => entry[0]));
-  const colFit = linearFit(z, cumulative.map((entry) => entry[1]));
+  const sliceIndices = Array.from({ length: numSlices }, (_, i) => i);
+  const rowFit = linearFit(sliceIndices, cumulative.map((entry) => entry[0]));
+  const colFit = linearFit(sliceIndices, cumulative.map((entry) => entry[1]));
   return {
     rowShiftPxPerSlice: rowFit.slope,
     colShiftPxPerSlice: colFit.slope,
@@ -823,20 +823,20 @@ function fitFromAdjacent(adjacent: number[][], nz: number, backend: "webgpu" | "
  */
 async function estimateResident(
   volume: Float32Array,
-  nx: number,
-  ny: number,
-  nz: number,
+  numCols: number,
+  numRows: number,
+  numSlices: number,
   fft: WebGPUFFT,
   gpu: SliceAlignmentGPU,
 ): Promise<SliceAlignmentEstimate> {
-  const planeSize = nx * ny;
-  const paddedWidth = nextPow2(nx);
-  const paddedHeight = nextPow2(ny);
+  const planeSize = numCols * numRows;
+  const paddedWidth = nextPow2(numCols);
+  const paddedHeight = nextPow2(numRows);
   const complexCount = paddedWidth * paddedHeight;
-  const sigma = highPassSigma(nx, ny);
-  const highPass = nx >= 3 && ny >= 3;
-  const rowAxis = gpu.blurAxisBuffers(blurAxis(ny, sigma));
-  const colAxis = gpu.blurAxisBuffers(blurAxis(nx, sigma));
+  const sigma = highPassSigma(numCols, numRows);
+  const highPass = numCols >= 3 && numRows >= 3;
+  const rowAxis = gpu.blurAxisBuffers(blurAxis(numRows, sigma));
+  const colAxis = gpu.blurAxisBuffers(blurAxis(numCols, sigma));
 
   // Stays zero when the plane is too small to high-pass, as in alignment.py.
   const planeBuffer = gpu.buffer(planeSize * 4);
@@ -850,8 +850,8 @@ async function estimateResident(
 
   const centeredBuffer = gpu.buffer(planeSize * 4);
   const centered = new Float32Array(planeSize);
-  const buildSpectrum = async (z: number, target: GPUBuffer): Promise<number> => {
-    const slice = volume.subarray(z * planeSize, (z + 1) * planeSize);
+  const buildSpectrum = async (sliceIndex: number, target: GPUBuffer): Promise<number> => {
+    const slice = volume.subarray(sliceIndex * planeSize, (sliceIndex + 1) * planeSize);
     for (let i = 0; i < planeSize; i++) centered[i] = Number.isFinite(slice[i]) ? slice[i] : 0;
     const medianValue = median(centered);
     for (let i = 0; i < planeSize; i++) centered[i] -= medianValue;
@@ -861,9 +861,9 @@ async function estimateResident(
     // the centered plane intact for the subtraction.
     if (highPass) {
       gpu.copyBuffer(centeredBuffer, planeBuffer, planeSize * 4);
-      gpu.blurResident(planeBuffer, scratchBuffer, nx, ny, rowAxis, colAxis);
+      gpu.blurResident(planeBuffer, scratchBuffer, numCols, numRows, rowAxis, colAxis);
     }
-    gpu.prepareResident(centeredBuffer, planeBuffer, target, nx, ny, paddedWidth, paddedHeight);
+    gpu.prepareResident(centeredBuffer, planeBuffer, target, numCols, numRows, paddedWidth, paddedHeight);
     const energy = await gpu.energyResident(target, complexCount);
     await fft.fft2DResident(target, paddedWidth, paddedHeight, false);
     return energy;
@@ -874,10 +874,10 @@ async function estimateResident(
   const adjacent: number[][] = [];
   const quality: number[] = [];
   let previousEnergy = await buildSpectrum(0, spectra[0]);
-  for (let z = 0; z < nz - 1; z++) {
-    const refBuffer = spectra[z % 2];
-    const movBuffer = spectra[(z + 1) % 2];
-    const movEnergy = await buildSpectrum(z + 1, movBuffer);
+  for (let sliceIndex = 0; sliceIndex < numSlices - 1; sliceIndex++) {
+    const refBuffer = spectra[sliceIndex % 2];
+    const movBuffer = spectra[(sliceIndex + 1) % 2];
+    const movEnergy = await buildSpectrum(sliceIndex + 1, movBuffer);
     if (previousEnergy === 0 || movEnergy === 0) {
       adjacent.push([0, 0]);
       quality.push(0);
@@ -910,37 +910,37 @@ async function estimateResident(
   for (const buffer of [rowAxis.taps, rowAxis.sourceIndex, colAxis.taps, colAxis.sourceIndex, planeBuffer, scratchBuffer, centeredBuffer, productBuffer, correlationBuffer, conjugateBuffer, ...spectra]) {
     buffer.destroy();
   }
-  return fitFromAdjacent(adjacent, nz, "webgpu", quality);
+  return fitFromAdjacent(adjacent, numSlices, "webgpu", quality);
 }
 
 /**
  * Estimate the global row/col shift per slice for one volume.
  *
- * @param volume Contiguous z-major float volume (nz planes of ny x nx).
+ * @param volume Contiguous slice-major float volume (numSlices planes of numRows x numCols).
  * @param device The page's hardware WebGPU device (getHardwareGPUDevice) for the
  *   GPU-resident estimate, or null for the CPU path.
  */
 export async function estimateSliceAlignment(
   volume: Float32Array,
-  nx: number,
-  ny: number,
-  nz: number,
+  numCols: number,
+  numRows: number,
+  numSlices: number,
   device: GPUDevice | null,
 ): Promise<SliceAlignmentEstimate> {
-  if (nz < 2) throw new Error("slice alignment requires at least 2 slices");
-  if (device) return estimateResident(volume, nx, ny, nz, await requireWebGPUFFT("Slice alignment"), new SliceAlignmentGPU(device));
-  const planeSize = nx * ny;
+  if (numSlices < 2) throw new Error("slice alignment requires at least 2 slices");
+  if (device) return estimateResident(volume, numCols, numRows, numSlices, await requireWebGPUFFT("Slice alignment"), new SliceAlignmentGPU(device));
+  const planeSize = numCols * numRows;
 
   const spectra: { real: Float32Array; imag: Float32Array }[] = [];
   const energies: number[] = [];
-  let paddedWidth = nx;
-  let paddedHeight = ny;
-  for (let z = 0; z < nz; z++) {
-    const prepared = registrationImage(volume.subarray(z * planeSize, (z + 1) * planeSize), nx, ny);
+  let paddedWidth = numCols;
+  let paddedHeight = numRows;
+  for (let sliceIndex = 0; sliceIndex < numSlices; sliceIndex++) {
+    const prepared = registrationImage(volume.subarray(sliceIndex * planeSize, (sliceIndex + 1) * planeSize), numCols, numRows);
     let energy = 0;
     for (let i = 0; i < prepared.length; i++) energy += prepared[i] * prepared[i];
     energies.push(energy);
-    const padded = padToPow2(prepared, nx, ny);
+    const padded = padToPow2(prepared, numCols, numRows);
     paddedWidth = padded.width;
     paddedHeight = padded.height;
     const real = Float32Array.from(padded.data);
@@ -953,10 +953,10 @@ export async function estimateSliceAlignment(
   const dftShift = Math.trunc(region / 2.0);
   const adjacent: number[][] = [];
   const quality: number[] = [];
-  for (let z = 0; z < nz - 1; z++) {
-    const ref = spectra[z];
-    const mov = spectra[z + 1];
-    if (energies[z] === 0 || energies[z + 1] === 0) {
+  for (let sliceIndex = 0; sliceIndex < numSlices - 1; sliceIndex++) {
+    const ref = spectra[sliceIndex];
+    const mov = spectra[sliceIndex + 1];
+    if (energies[sliceIndex] === 0 || energies[sliceIndex + 1] === 0) {
       adjacent.push([0, 0]);
       quality.push(0);
       continue;
@@ -994,8 +994,8 @@ export async function estimateSliceAlignment(
     );
     const [rowCorrection, colCorrection] = subpixelOffset(refined, region, dftShift);
     adjacent.push([refinedRow + rowCorrection, refinedCol + colCorrection]);
-    const norm = Math.sqrt(energies[z] * energies[z + 1]);
+    const norm = Math.sqrt(energies[sliceIndex] * energies[sliceIndex + 1]);
     quality.push(norm > 0 ? Math.sqrt(peakValue) / norm : 0);
   }
-  return fitFromAdjacent(adjacent, nz, "cpu", quality);
+  return fitFromAdjacent(adjacent, numSlices, "cpu", quality);
 }

@@ -25,8 +25,8 @@ saved-state scale-bar trait is `show_scale_bar`. See
 |---|---|---|
 | Page slider / play | `page_idx`, `n_pages`, `page_labels` | Switches or plays comparable volumes while preserving the same slice geometry and view state |
 | Panel menu | `active_panel`, `panels_per_page`, `panel_titles` | Selects one panel slot within the active page |
-| Crosshair drag | `slice_x`, `slice_y`, `slice_z` | Moves the cut position; all panels update together |
-| Oblique line drag | `oblique_profile_line`, `oblique_angle`, `slice_x`, `slice_y` | Drag either endpoint to rotate/resize the side cut, or drag the line body to translate the whole cut freely in row/col while staying inside the top slice |
+| Crosshair drag | `col_index`, `row_index`, `slice_index` | Moves the cut position; all panels update together |
+| Oblique line drag | `oblique_profile_line`, `oblique_angle`, `col_index`, `row_index` | Drag either endpoint to rotate/resize the side cut, or drag the line body to translate the whole cut freely in row/col while staying inside the top slice |
 | Oblique angle | `oblique_angle` | Rotates the oblique cut plane |
 | Colormap dropdown | `cmap` | Recolors all panels |
 | Contrast min / max | `vmin`, `vmax` | The display window, used exactly as given; while either is set, Auto is off and its switch is disabled |
@@ -35,7 +35,7 @@ saved-state scale-bar trait is `show_scale_bar`. See
 | Smooth toggle | `smooth` | Off by default: each voxel of a slice is drawn as a sharp block (nearest neighbour). On: bilinear interpolation where the canvas enlarges a slice. Display only |
 | Slice alignment | `slice_alignment`, `row_shift_px_per_slice`, `col_shift_px_per_slice` | Open **Advanced** and enable **Slice alignment**. The first enable estimates one global row/col shift per slice automatically; later raw/aligned toggles reuse the cached estimate and aligned display volume. The sliders refine the cached result without modifying the raw volume. |
 | FFT toggle | `show_fft`, `fft_window` | Panels show power spectra |
-| Z-stretch | `z_stretch` | Depth axis scaled for anisotropic voxels |
+| Z-stretch | `slice_stretch` | Depth axis scaled for anisotropic voxels |
 | Scale bar toggle | `show_scale_bar` | Calibrated bar shows/hides |
 | Export button | `export_request`, `export_status` | Writes a standalone HTML viewer (exact / quantized) |
 

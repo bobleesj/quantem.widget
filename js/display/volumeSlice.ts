@@ -13,65 +13,65 @@ export const VOLUME_SLICE_MIN_ZOOM = 0.5;
 // volume lives on the GPU (uploaded once), in a storage buffer or, for 4k and
 // row-padded stacks, a 2D texture array; per scrub only a tiny uniform (axis +
 // slice index + vmin/vmax) changes, so there is NO per-frame CPU slice
-// extraction and NO per-frame volume re-upload. axis: 0=XY(z fixed), 1=XZ(y
-// fixed), 2=YZ(x fixed), 3=oblique cut along the alignment segment. Order
+// extraction and NO per-frame volume re-upload. axis: 0=top (slice fixed),
+// 1=row fixed, 2=col fixed, 3=oblique cut along the alignment segment. Order
 // matches the CPU path: log THEN flip.
 function volumeSliceShader(source: "buffer" | "texture"): string {
   const volumeBinding = source === "buffer"
     ? "var<storage, read> vol: array<f32>"
     : "var volTex: texture_2d_array<f32>";
   const volumeLoad = source === "buffer"
-    ? "vol[z * p.ny * p.nx + y * p.nx + x]"
-    : "textureLoad(volTex, vec2<i32>(i32(x), i32(y)), i32(z), 0).r";
+    ? "vol[slice * p.numRows * p.numCols + row * p.numCols + col]"
+    : "textureLoad(volTex, vec2<i32>(i32(col), i32(row)), i32(slice), 0).r";
   return DISPLAY_NORMALIZE_WGSL + /* wgsl */ `
 struct VParams {
-  nx: u32, ny: u32, nz: u32, axis: u32,
+  numCols: u32, numRows: u32, numSlices: u32, axis: u32,
   index: u32, outW: u32, outH: u32, logScale: u32,
   flip: u32, viewMode: u32, canvasW: u32, canvasH: u32,
   vmin: f32, vmax: f32, zoom: f32, panX: f32,
-  panY: f32, rowShift: f32, colShift: f32, segStartX: f32,
-  segStartY: f32, segStopX: f32, segStopY: f32, _p0: f32,
+  panY: f32, rowShift: f32, colShift: f32, segStartCol: f32,
+  segStartRow: f32, segStopCol: f32, segStopRow: f32, _p0: f32,
 };
 @group(0) @binding(0) var<uniform> p: VParams;
 @group(0) @binding(1) ${volumeBinding};
 @group(0) @binding(2) var<storage, read> lut: array<u32>;
 @group(0) @binding(3) var<storage, read_write> rgba: array<u32>;
 
-fn loadVolume(z: u32, x: u32, y: u32) -> f32 {
+fn loadVolume(slice: u32, col: u32, row: u32) -> f32 {
   return ${volumeLoad};
 }
 
-fn sampleAligned(zRaw: f32, xRaw: f32, yRaw: f32) -> f32 {
-  let z = u32(clamp(round(zRaw), 0.0, f32(p.nz - 1u)));
-  let center = (f32(max(p.nz, 1u)) - 1.0) * 0.5;
-  let x = clamp(xRaw - (f32(z) - center) * p.colShift, 0.0, f32(p.nx - 1u));
-  let y = clamp(yRaw - (f32(z) - center) * p.rowShift, 0.0, f32(p.ny - 1u));
-  let x0 = u32(floor(x));
-  let y0 = u32(floor(y));
-  let x1 = min(p.nx - 1u, x0 + 1u);
-  let y1 = min(p.ny - 1u, y0 + 1u);
-  let tx = x - f32(x0);
-  let ty = y - f32(y0);
-  let v00 = loadVolume(z, x0, y0);
-  let v10 = loadVolume(z, x1, y0);
-  let v01 = loadVolume(z, x0, y1);
-  let v11 = loadVolume(z, x1, y1);
-  return mix(mix(v00, v10, tx), mix(v01, v11, tx), ty);
+fn sampleAligned(sliceRaw: f32, colRaw: f32, rowRaw: f32) -> f32 {
+  let slice = u32(clamp(round(sliceRaw), 0.0, f32(p.numSlices - 1u)));
+  let center = (f32(max(p.numSlices, 1u)) - 1.0) * 0.5;
+  let col = clamp(colRaw - (f32(slice) - center) * p.colShift, 0.0, f32(p.numCols - 1u));
+  let row = clamp(rowRaw - (f32(slice) - center) * p.rowShift, 0.0, f32(p.numRows - 1u));
+  let col0 = u32(floor(col));
+  let row0 = u32(floor(row));
+  let col1 = min(p.numCols - 1u, col0 + 1u);
+  let row1 = min(p.numRows - 1u, row0 + 1u);
+  let colFrac = col - f32(col0);
+  let rowFrac = row - f32(row0);
+  let v00 = loadVolume(slice, col0, row0);
+  let v10 = loadVolume(slice, col1, row0);
+  let v01 = loadVolume(slice, col0, row1);
+  let v11 = loadVolume(slice, col1, row1);
+  return mix(mix(v00, v10, colFrac), mix(v01, v11, colFrac), rowFrac);
 }
 
-fn sampleSlice(p_axis: u32, p_index: u32, sliceX: u32, sliceY: u32) -> f32 {
-  var x: f32; var y: f32; var z: f32;
-  if (p_axis == 0u) { x = f32(sliceX); y = f32(sliceY); z = f32(p_index); }          // XY
-  else if (p_axis == 1u) { x = f32(sliceX); y = f32(p_index); z = f32(sliceY); }     // XZ
-  else if (p_axis == 2u) { x = f32(p_index); y = f32(sliceX); z = f32(sliceY); }     // YZ
+fn sampleSlice(p_axis: u32, p_index: u32, planeCol: u32, planeRow: u32) -> f32 {
+  var col: f32; var row: f32; var slice: f32;
+  if (p_axis == 0u) { col = f32(planeCol); row = f32(planeRow); slice = f32(p_index); }          // top
+  else if (p_axis == 1u) { col = f32(planeCol); row = f32(p_index); slice = f32(planeRow); }     // row fixed
+  else if (p_axis == 2u) { col = f32(p_index); row = f32(planeCol); slice = f32(planeRow); }     // col fixed
   else {
     let denom = max(f32(p.canvasW - 1u), 1.0);
-    let t = f32(sliceX) / denom;
-    x = mix(p.segStartX, p.segStopX, t);
-    y = mix(p.segStartY, p.segStopY, t);
-    z = f32(sliceY);
+    let t = f32(planeCol) / denom;
+    col = mix(p.segStartCol, p.segStopCol, t);
+    row = mix(p.segStartRow, p.segStopRow, t);
+    slice = f32(planeRow);
   }
-  return sampleAligned(z, x, y);
+  return sampleAligned(slice, col, row);
 }
 
 fn signedLog1p(v: f32) -> f32 {
@@ -84,10 +84,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (gid.x >= p.outW || gid.y >= p.outH) { return; }
   // Full slice dims for this axis (source resolution).
   var fullW: u32; var fullH: u32;
-  if (p.axis == 0u) { fullW = p.nx; fullH = p.ny; }        // XY
-  else if (p.axis == 1u) { fullW = p.nx; fullH = p.nz; }   // XZ
-  else if (p.axis == 2u) { fullW = p.ny; fullH = p.nz; }    // YZ
-  else { fullW = max(1u, p.canvasW); fullH = p.nz; }        // oblique
+  if (p.axis == 0u) { fullW = p.numCols; fullH = p.numRows; }          // top
+  else if (p.axis == 1u) { fullW = p.numCols; fullH = p.numSlices; }   // row fixed
+  else if (p.axis == 2u) { fullW = p.numRows; fullH = p.numSlices; }   // col fixed
+  else { fullW = max(1u, p.canvasW); fullH = p.numSlices; }            // oblique
   var x0: u32; var y0: u32; var x1: u32; var y1: u32;
   if (p.viewMode == 0u) {
     // AREA AVERAGE downsample: this output pixel covers the source block
@@ -152,8 +152,8 @@ interface VolumeSliceAlignment {
   rowShift: number;
   colShift: number;
   segment?: {
-    start: { x: number; y: number };
-    stop: { x: number; y: number };
+    start: { row: number; col: number };
+    stop: { row: number; col: number };
   };
 }
 
@@ -172,9 +172,9 @@ export class VolumeSlices {
   private volTextureView: GPUTextureView | null = null;
   private volUseTexture = false;
   private volTextureWidth = 0;
-  private volNx = 0;
-  private volNy = 0;
-  private volNz = 0;
+  private volCols = 0;
+  private volRows = 0;
+  private volSlices = 0;
   private volCount = 0;
   private volParamsBuffer: GPUBuffer | null = null;
   private volRgbaBuffer: GPUBuffer | null = null;
@@ -213,28 +213,28 @@ export class VolumeSlices {
   }
 
   /**
-   * Upload a 3D volume (nz, ny, nx) row-major float32 into GPU memory once.
+   * Upload a 3D volume (slices, rows, cols) row-major float32 into GPU memory once.
    * 4k and row-padded large stacks use a 2D texture array to avoid
    * storage-buffer binding limits. The texture path keeps original float32
    * values; unaligned rows are padded only in the upload stride and never
    * sampled. Other shapes use the storage-buffer path.
    */
-  uploadVolume(vol: Float32Array, nx: number, ny: number, nz: number): boolean {
-    const rowBytes = nx * 4;
+  uploadVolume(vol: Float32Array, numCols: number, numRows: number, numSlices: number): boolean {
+    const rowBytes = numCols * 4;
     const paddedRowBytes = Math.ceil(rowBytes / 256) * 256;
     const textureWidth = paddedRowBytes / 4;
     const canTexture = textureWidth <= this.device.limits.maxTextureDimension2D &&
-      ny <= this.device.limits.maxTextureDimension2D &&
-      nz <= this.device.limits.maxTextureArrayLayers;
+      numRows <= this.device.limits.maxTextureDimension2D &&
+      numSlices <= this.device.limits.maxTextureArrayLayers;
     if (canTexture) {
       this.ensureVolumeTexturePipeline();
       const needsTexture = !this.volumeTexture || this.volCount !== vol.length ||
-        this.volNx !== nx || this.volNy !== ny || this.volNz !== nz ||
+        this.volCols !== numCols || this.volRows !== numRows || this.volSlices !== numSlices ||
         this.volTextureWidth !== textureWidth;
       if (needsTexture) {
         this.volumeTexture?.destroy();
         this.volumeTexture = this.device.createTexture({
-          size: { width: textureWidth, height: ny, depthOrArrayLayers: nz },
+          size: { width: textureWidth, height: numRows, depthOrArrayLayers: numSlices },
           format: "r32float",
           usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
         });
@@ -247,23 +247,23 @@ export class VolumeSlices {
         this.device.queue.writeTexture(
           { texture },
           vol.buffer as ArrayBuffer,
-          { offset: vol.byteOffset, bytesPerRow: rowBytes, rowsPerImage: ny },
-          { width: nx, height: ny, depthOrArrayLayers: nz },
+          { offset: vol.byteOffset, bytesPerRow: rowBytes, rowsPerImage: numRows },
+          { width: numCols, height: numRows, depthOrArrayLayers: numSlices },
         );
       } else {
-        const layer = new Float32Array(textureWidth * ny);
-        const sliceStride = nx * ny;
-        for (let z = 0; z < nz; z++) {
-          const sliceStart = z * sliceStride;
-          for (let row = 0; row < ny; row++) {
-            const rowStart = sliceStart + row * nx;
-            layer.set(vol.subarray(rowStart, rowStart + nx), row * textureWidth);
+        const layer = new Float32Array(textureWidth * numRows);
+        const sliceStride = numCols * numRows;
+        for (let slice = 0; slice < numSlices; slice++) {
+          const sliceStart = slice * sliceStride;
+          for (let row = 0; row < numRows; row++) {
+            const rowStart = sliceStart + row * numCols;
+            layer.set(vol.subarray(rowStart, rowStart + numCols), row * textureWidth);
           }
           this.device.queue.writeTexture(
-            { texture, origin: { x: 0, y: 0, z } },
+            { texture, origin: { x: 0, y: 0, z: slice } },
             layer.buffer,
-            { bytesPerRow: paddedRowBytes, rowsPerImage: ny },
-            { width: nx, height: ny, depthOrArrayLayers: 1 },
+            { bytesPerRow: paddedRowBytes, rowsPerImage: numRows },
+            { width: numCols, height: numRows, depthOrArrayLayers: 1 },
           );
         }
       }
@@ -272,7 +272,7 @@ export class VolumeSlices {
       this.volumeBuffer = null;
       this.volComputeBindGroup = null;
       this.volTextureWidth = textureWidth;
-      this.volNx = nx; this.volNy = ny; this.volNz = nz;
+      this.volCols = numCols; this.volRows = numRows; this.volSlices = numSlices;
       return true;
     }
     this.ensureVolumePipeline();
@@ -294,12 +294,12 @@ export class VolumeSlices {
     }
     this.device.queue.writeBuffer(this.volumeBuffer, 0, vol.buffer as ArrayBuffer, vol.byteOffset, vol.byteLength);
     this.volUseTexture = false;
-    this.volNx = nx; this.volNy = ny; this.volNz = nz;
+    this.volCols = numCols; this.volRows = numRows; this.volSlices = numSlices;
     return true;
   }
 
   /**
-   * Slice the resident volume along `axis` (0=XY, 1=XZ, 2=YZ) at `index`,
+   * Slice the resident volume along `axis` (0=top, 1=row fixed, 2=col fixed) at `index`,
    * colormap with the current LUT + vmin/vmax (logScale/flip applied in-shader to
    * match the CPU path), and blit to an ImageBitmap. Returns null if the volume
    * isn't uploaded or the LUT/pipeline isn't ready (caller falls back to CPU).
@@ -321,15 +321,15 @@ export class VolumeSlices {
     const format = navigator.gpu.getPreferredCanvasFormat();
     this.engine.ensureBlitPipeline(format);
     if (!this.engine.blitPipeline) return null;
-    const nx = this.volNx, ny = this.volNy, nz = this.volNz;
+    const numCols = this.volCols, numRows = this.volRows, numSlices = this.volSlices;
     const segmentWidth = alignment?.segment
       ? Math.max(1, Math.ceil(Math.hypot(
-        alignment.segment.stop.x - alignment.segment.start.x,
-        alignment.segment.stop.y - alignment.segment.start.y,
+        alignment.segment.stop.col - alignment.segment.start.col,
+        alignment.segment.stop.row - alignment.segment.start.row,
       )) + 1)
       : 1;
-    const fullW = axis === 0 ? nx : axis === 1 ? nx : axis === 2 ? ny : segmentWidth;
-    const fullH = axis === 0 ? ny : nz;
+    const fullW = axis === 0 ? numCols : axis === 1 ? numCols : axis === 2 ? numRows : segmentWidth;
+    const fullH = axis === 0 ? numRows : numSlices;
     // If maxOut is supplied, cap the output raster while still sampling from
     // the full-resolution source. Callers that need native-pixel zoom leave it
     // undefined, so outW/outH stay at the full slice dimensions.
@@ -337,7 +337,7 @@ export class VolumeSlices {
     const scale = Math.min(1, cap / Math.max(fullW, fullH));
     const outW = view ? Math.max(1, Math.round(view.canvasW)) : Math.max(1, Math.round(fullW * scale));
     const outH = view ? Math.max(1, Math.round(view.canvasH)) : Math.max(1, Math.round(fullH * scale));
-    const sliceIndex = Math.max(0, Math.min((axis === 2 ? nx : axis === 1 ? ny : nz) - 1, Math.round(index)));
+    const sliceIndex = Math.max(0, Math.min((axis === 2 ? numCols : axis === 1 ? numRows : numSlices) - 1, Math.round(index)));
     const rgbaCount = outW * outH;
     if (!this.volRgbaBuffer || this.volRgbaCapacity < rgbaCount) {
       this.volRgbaBuffer?.destroy();
@@ -355,7 +355,7 @@ export class VolumeSlices {
     if (!paramsBuffer || !lutBuffer || !rgbaBuffer) return null;
     // VParams: u32 control block + float contrast / viewport block.
     const paramsU32 = this.volParamsU32; const paramsF32 = this.volParamsF32;
-    paramsU32[0] = nx; paramsU32[1] = ny; paramsU32[2] = nz; paramsU32[3] = axis;
+    paramsU32[0] = numCols; paramsU32[1] = numRows; paramsU32[2] = numSlices; paramsU32[3] = axis;
     paramsU32[4] = sliceIndex; paramsU32[5] = outW; paramsU32[6] = outH; paramsU32[7] = logScale ? 1 : 0;
     paramsU32[8] = flip ? 1 : 0;
     paramsU32[9] = view ? 1 : 0;
@@ -367,10 +367,10 @@ export class VolumeSlices {
     paramsF32[16] = view ? view.panY : 0;
     paramsF32[17] = alignment && Number.isFinite(alignment.rowShift) ? alignment.rowShift : 0;
     paramsF32[18] = alignment && Number.isFinite(alignment.colShift) ? alignment.colShift : 0;
-    paramsF32[19] = alignment?.segment ? alignment.segment.start.x : 0;
-    paramsF32[20] = alignment?.segment ? alignment.segment.start.y : 0;
-    paramsF32[21] = alignment?.segment ? alignment.segment.stop.x : 0;
-    paramsF32[22] = alignment?.segment ? alignment.segment.stop.y : 0;
+    paramsF32[19] = alignment?.segment ? alignment.segment.start.col : 0;
+    paramsF32[20] = alignment?.segment ? alignment.segment.start.row : 0;
+    paramsF32[21] = alignment?.segment ? alignment.segment.stop.col : 0;
+    paramsF32[22] = alignment?.segment ? alignment.segment.stop.row : 0;
     paramsF32[23] = 0;
     this.device.queue.writeBuffer(paramsBuffer, 0, this.volParams);
     const encoder = this.device.createCommandEncoder();

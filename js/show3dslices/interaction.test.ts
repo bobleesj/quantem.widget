@@ -25,18 +25,18 @@ vi.mock("../display/geometry", async (importOriginal) => ({
 
 const { default: show3dslices } = await import("./index");
 
-const NZ = 4, NY = 12, NX = 16;
-const VOLUME = Float32Array.from({ length: NZ * NY * NX }, (_, index) => Math.sin(index / 7) + (index % NX) / NX);
+const NUM_SLICES = 4, NUM_ROWS = 12, NUM_COLS = 16;
+const VOLUME = Float32Array.from({ length: NUM_SLICES * NUM_ROWS * NUM_COLS }, (_, index) => Math.sin(index / 7) + (index % NUM_COLS) / NUM_COLS);
 
 class Model {
   values: Record<string, unknown> = {
-    volume_bytes: new DataView(VOLUME.buffer), nx: NX, ny: NY, nz: NZ,
-    slice_x: 8, slice_y: 6, slice_z: 2, cmap: "plasma", auto_contrast: true,
+    volume_bytes: new DataView(VOLUME.buffer), volume_shape: [NUM_SLICES, NUM_ROWS, NUM_COLS],
+    col_index: 8, row_index: 6, slice_index: 2, cmap: "plasma", auto_contrast: true,
     image_vmin_pct: 0, image_vmax_pct: 100, vmin: null, vmax: null, log_scale: false, flip: false,
     dim_labels: ["slice", "row", "col"], panel_count: 1, panel_titles: [], plane_visibility: [true, true],
-    pixel_size_axes: [0, 0, 0], slice_alignment: "off", show_controls: true, show_title: true,
+    voxel_size_A: [0, 0, 0], slice_alignment: "off", show_controls: true, show_title: true,
     show_crosshair: true, view_state: {}, oblique_angle: 0, oblique_profile_line: [], page_labels: [],
-    n_pages: 1, page_idx: 0, panels_per_page: 0, active_panel: 0, z_stretch: 30, fps: 30, loop: false,
+    n_pages: 1, page_idx: 0, panels_per_page: 0, active_panel: 0, slice_stretch: 30, fps: 30, loop: false,
   };
   writes: string[] = [];
   listeners = new Map<string, Set<() => void>>();
@@ -155,7 +155,7 @@ it("counts Top slices from 1 in the counter and the slider name", async () => {
   expect(slider).not.toBeNull();
   const row = slider!.closest(".MuiSlider-root")!.parentElement!;
   expect(row.textContent).toBe("slice3/4");
-  act(() => { model.set("loop", true); model.set("slice_z", 0); });
+  act(() => { model.set("loop", true); model.set("slice_index", 0); });
   await settle();
   expect(el.querySelector("input[aria-label='Loop range and current top slice (1 of 4, loop 1 to 4)']")).not.toBeNull();
 });

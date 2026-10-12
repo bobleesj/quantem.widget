@@ -2,7 +2,7 @@
 /**
  * Show3DSlices - slice viewer for 3D volumetric data.
  *
- * A Top (XY) slice and an arbitrary-angle vertical (oblique) slice with
+ * A Top (row, col) slice and an arbitrary-angle vertical (oblique) slice with
  * synchronized sliders, beside a ray-cast 3D view of the volume. Slices are
  * cut from the float32 volume resident on WebGPU; without WebGPU they are cut
  * and colormapped in JavaScript.
@@ -51,7 +51,7 @@ const MAX_PLAYBACK_FPS = 30;
 const PAGE_PLAY_FPS_OPTIONS = [1, 2, 4, 8] as const;
 
 const SPACING = { XS: 4, SM: 8, MD: 12, LG: 16 } as const;
-const PLANE_KEYS = ["xy", "oblique"] as const;
+const PLANE_KEYS = ["top", "oblique"] as const;
 const PLANE_LABELS = ["Top", "Side"] as const;
 const PLANE_COLORS = ["#4d80ff", "#4dff66"] as const;
 const OBLIQUE_PROFILE_EDGE_INSET = 1;
@@ -136,10 +136,13 @@ type Show3DSlicesWindow = Window & typeof globalThis & {
   showSaveFilePicker?: (options?: Show3DSlicesSavePickerOptions) => Promise<Show3DSlicesFileHandle>;
 };
 
-function extractXY(volume: Float32Array, nx: number, ny: number, nz: number, z: number): Float32Array {
-  if (z < 0 || z >= nz) return new Float32Array(ny * nx);
-  const start = z * ny * nx;
-  return volume.subarray(start, start + ny * nx);
+// A position in the volume is (row, col) in voxels; x and y are kept for canvas and pointer positions.
+type ImagePoint = { row: number; col: number };
+
+function extractTopSlice(volume: Float32Array, numCols: number, numRows: number, numSlices: number, sliceIndex: number): Float32Array {
+  if (sliceIndex < 0 || sliceIndex >= numSlices) return new Float32Array(numRows * numCols);
+  const start = sliceIndex * numRows * numCols;
+  return volume.subarray(start, start + numRows * numCols);
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -147,79 +150,79 @@ function clampNumber(value: number, min: number, max: number): number {
 }
 
 function obliqueLineEndpoints(
-  nx: number,
-  ny: number,
-  cx: number,
-  cy: number,
+  numCols: number,
+  numRows: number,
+  centerCol: number,
+  centerRow: number,
   angleDeg: number,
-): [{ x: number; y: number }, { x: number; y: number }] {
+): [ImagePoint, ImagePoint] {
   const theta = (angleDeg * Math.PI) / 180;
-  const dx = Math.cos(theta);
-  const dy = Math.sin(theta);
+  const dirCol = Math.cos(theta);
+  const dirRow = Math.sin(theta);
   const candidates: number[] = [];
-  const maxX = Math.max(0, nx - 1);
-  const maxY = Math.max(0, ny - 1);
-  if (Math.abs(dx) > 1e-8) {
-    const t0 = (0 - cx) / dx;
-    const y0 = cy + t0 * dy;
-    if (y0 >= 0 && y0 <= maxY) candidates.push(t0);
-    const t1 = (maxX - cx) / dx;
-    const y1 = cy + t1 * dy;
-    if (y1 >= 0 && y1 <= maxY) candidates.push(t1);
+  const maxCol = Math.max(0, numCols - 1);
+  const maxRow = Math.max(0, numRows - 1);
+  if (Math.abs(dirCol) > 1e-8) {
+    const t0 = (0 - centerCol) / dirCol;
+    const row0 = centerRow + t0 * dirRow;
+    if (row0 >= 0 && row0 <= maxRow) candidates.push(t0);
+    const t1 = (maxCol - centerCol) / dirCol;
+    const row1 = centerRow + t1 * dirRow;
+    if (row1 >= 0 && row1 <= maxRow) candidates.push(t1);
   }
-  if (Math.abs(dy) > 1e-8) {
-    const t0 = (0 - cy) / dy;
-    const x0 = cx + t0 * dx;
-    if (x0 >= 0 && x0 <= maxX) candidates.push(t0);
-    const t1 = (maxY - cy) / dy;
-    const x1 = cx + t1 * dx;
-    if (x1 >= 0 && x1 <= maxX) candidates.push(t1);
+  if (Math.abs(dirRow) > 1e-8) {
+    const t0 = (0 - centerRow) / dirRow;
+    const col0 = centerCol + t0 * dirCol;
+    if (col0 >= 0 && col0 <= maxCol) candidates.push(t0);
+    const t1 = (maxRow - centerRow) / dirRow;
+    const col1 = centerCol + t1 * dirCol;
+    if (col1 >= 0 && col1 <= maxCol) candidates.push(t1);
   }
   if (candidates.length < 2) {
     return [
-      { x: clampNumber(cx, 0, maxX), y: clampNumber(cy, 0, maxY) },
-      { x: clampNumber(cx, 0, maxX), y: clampNumber(cy, 0, maxY) },
+      { row: clampNumber(centerRow, 0, maxRow), col: clampNumber(centerCol, 0, maxCol) },
+      { row: clampNumber(centerRow, 0, maxRow), col: clampNumber(centerCol, 0, maxCol) },
     ];
   }
   const minT = Math.min(...candidates);
   const maxT = Math.max(...candidates);
   return [
-    { x: clampNumber(cx + minT * dx, 0, maxX), y: clampNumber(cy + minT * dy, 0, maxY) },
-    { x: clampNumber(cx + maxT * dx, 0, maxX), y: clampNumber(cy + maxT * dy, 0, maxY) },
+    { row: clampNumber(centerRow + minT * dirRow, 0, maxRow), col: clampNumber(centerCol + minT * dirCol, 0, maxCol) },
+    { row: clampNumber(centerRow + maxT * dirRow, 0, maxRow), col: clampNumber(centerCol + maxT * dirCol, 0, maxCol) },
   ];
 }
 
-function obliqueNormal(angleDeg: number): { x: number; y: number } {
+function obliqueNormal(angleDeg: number): ImagePoint {
   const theta = (angleDeg * Math.PI) / 180;
-  return { x: -Math.sin(theta), y: Math.cos(theta) };
+  return { row: Math.cos(theta), col: -Math.sin(theta) };
 }
 
 function obliqueSegmentOffsetBounds(
-  nx: number,
-  ny: number,
+  numCols: number,
+  numRows: number,
   angleDeg: number,
-  start: { x: number; y: number },
-  stop: { x: number; y: number },
+  start: ImagePoint,
+  stop: ImagePoint,
   inset: number = 0,
 ): [number, number] {
   const normal = obliqueNormal(angleDeg);
   const points = [start, stop];
-  const xMin = Math.min(inset, Math.max(0, nx - 1));
-  const yMin = Math.min(inset, Math.max(0, ny - 1));
-  const xMax = Math.max(xMin, Math.max(1, nx) - 1 - inset);
-  const yMax = Math.max(yMin, Math.max(1, ny) - 1 - inset);
+  const colMin = Math.min(inset, Math.max(0, numCols - 1));
+  const rowMin = Math.min(inset, Math.max(0, numRows - 1));
+  const colMax = Math.max(colMin, Math.max(1, numCols) - 1 - inset);
+  const rowMax = Math.max(rowMin, Math.max(1, numRows) - 1 - inset);
   let minDelta = -Infinity;
   let maxDelta = Infinity;
   for (const point of points) {
-    if (Math.abs(normal.x) > 1e-8) {
-      const d0 = (xMin - point.x) / normal.x;
-      const d1 = (xMax - point.x) / normal.x;
+    if (Math.abs(normal.col) > 1e-8) {
+      const d0 = (colMin - point.col) / normal.col;
+      const d1 = (colMax - point.col) / normal.col;
       minDelta = Math.max(minDelta, Math.min(d0, d1));
       maxDelta = Math.min(maxDelta, Math.max(d0, d1));
     }
-    if (Math.abs(normal.y) > 1e-8) {
-      const d0 = (yMin - point.y) / normal.y;
-      const d1 = (yMax - point.y) / normal.y;
+    if (Math.abs(normal.row) > 1e-8) {
+      const d0 = (rowMin - point.row) / normal.row;
+      const d1 = (rowMax - point.row) / normal.row;
       minDelta = Math.max(minDelta, Math.min(d0, d1));
       maxDelta = Math.min(maxDelta, Math.max(d0, d1));
     }
@@ -229,116 +232,116 @@ function obliqueSegmentOffsetBounds(
 }
 
 function obliqueCenterOffset(
-  nx: number,
-  ny: number,
+  numCols: number,
+  numRows: number,
   angleDeg: number,
-  start: { x: number; y: number },
-  stop: { x: number; y: number },
+  start: ImagePoint,
+  stop: ImagePoint,
 ): number {
   const normal = obliqueNormal(angleDeg);
-  const ox = (Math.max(1, nx) - 1) / 2;
-  const oy = (Math.max(1, ny) - 1) / 2;
-  const cx = (start.x + stop.x) / 2;
-  const cy = (start.y + stop.y) / 2;
-  return (cx - ox) * normal.x + (cy - oy) * normal.y;
+  const originCol = (Math.max(1, numCols) - 1) / 2;
+  const originRow = (Math.max(1, numRows) - 1) / 2;
+  const centerCol = (start.col + stop.col) / 2;
+  const centerRow = (start.row + stop.row) / 2;
+  return (centerCol - originCol) * normal.col + (centerRow - originRow) * normal.row;
 }
 
-function profilePointFromAny(value: unknown): { x: number; y: number } | null {
+function profilePointFromAny(value: unknown): ImagePoint | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
   const row = Number(record.row);
   const col = Number(record.col);
   if (!Number.isFinite(row) || !Number.isFinite(col)) return null;
-  return { x: col, y: row };
+  return { row, col };
 }
 
-function profileLinePayload(start: { x: number; y: number }, stop: { x: number; y: number }): { row: number; col: number }[] {
+function profileLinePayload(start: ImagePoint, stop: ImagePoint): ImagePoint[] {
   return [
-    { row: start.y, col: start.x },
-    { row: stop.y, col: stop.x },
+    { row: start.row, col: start.col },
+    { row: stop.row, col: stop.col },
   ];
 }
 
-function clampPointToImage(point: { x: number; y: number }, nx: number, ny: number, inset: number = 0): { x: number; y: number } {
-  const xInset = Math.min(inset, Math.max(0, nx - 1) / 2);
-  const yInset = Math.min(inset, Math.max(0, ny - 1) / 2);
+function clampPointToImage(point: ImagePoint, numCols: number, numRows: number, inset: number = 0): ImagePoint {
+  const colInset = Math.min(inset, Math.max(0, numCols - 1) / 2);
+  const rowInset = Math.min(inset, Math.max(0, numRows - 1) / 2);
   return {
-    x: clampNumber(point.x, xInset, Math.max(xInset, Math.max(0, nx - 1) - xInset)),
-    y: clampNumber(point.y, yInset, Math.max(yInset, Math.max(0, ny - 1) - yInset)),
+    row: clampNumber(point.row, rowInset, Math.max(rowInset, Math.max(0, numRows - 1) - rowInset)),
+    col: clampNumber(point.col, colInset, Math.max(colInset, Math.max(0, numCols - 1) - colInset)),
   };
 }
 
 function translateSegmentInsideImage(
-  start: { x: number; y: number },
-  stop: { x: number; y: number },
-  dxRaw: number,
-  dyRaw: number,
-  nx: number,
-  ny: number,
+  start: ImagePoint,
+  stop: ImagePoint,
+  colDeltaRaw: number,
+  rowDeltaRaw: number,
+  numCols: number,
+  numRows: number,
   inset: number = 0,
-): { start: { x: number; y: number }; stop: { x: number; y: number } } {
-  const xMin = Math.min(inset, Math.max(0, nx - 1));
-  const yMin = Math.min(inset, Math.max(0, ny - 1));
-  const xMax = Math.max(xMin, Math.max(1, nx) - 1 - inset);
-  const yMax = Math.max(yMin, Math.max(1, ny) - 1 - inset);
-  const dxMin = Math.max(xMin - start.x, xMin - stop.x);
-  const dxMax = Math.min(xMax - start.x, xMax - stop.x);
-  const dyMin = Math.max(yMin - start.y, yMin - stop.y);
-  const dyMax = Math.min(yMax - start.y, yMax - stop.y);
-  const dx = clampNumber(dxRaw, dxMin, dxMax);
-  const dy = clampNumber(dyRaw, dyMin, dyMax);
+): { start: ImagePoint; stop: ImagePoint } {
+  const colMin = Math.min(inset, Math.max(0, numCols - 1));
+  const rowMin = Math.min(inset, Math.max(0, numRows - 1));
+  const colMax = Math.max(colMin, Math.max(1, numCols) - 1 - inset);
+  const rowMax = Math.max(rowMin, Math.max(1, numRows) - 1 - inset);
+  const colDeltaMin = Math.max(colMin - start.col, colMin - stop.col);
+  const colDeltaMax = Math.min(colMax - start.col, colMax - stop.col);
+  const rowDeltaMin = Math.max(rowMin - start.row, rowMin - stop.row);
+  const rowDeltaMax = Math.min(rowMax - start.row, rowMax - stop.row);
+  const colDelta = clampNumber(colDeltaRaw, colDeltaMin, colDeltaMax);
+  const rowDelta = clampNumber(rowDeltaRaw, rowDeltaMin, rowDeltaMax);
   return {
-    start: { x: start.x + dx, y: start.y + dy },
-    stop: { x: stop.x + dx, y: stop.y + dy },
+    start: { row: start.row + rowDelta, col: start.col + colDelta },
+    stop: { row: stop.row + rowDelta, col: stop.col + colDelta },
   };
 }
 
-function segmentWidth(start: { x: number; y: number }, stop: { x: number; y: number }): number {
-  return Math.max(1, Math.ceil(Math.hypot(stop.x - start.x, stop.y - start.y)) + 1);
+function segmentWidth(start: ImagePoint, stop: ImagePoint): number {
+  return Math.max(1, Math.ceil(Math.hypot(stop.col - start.col, stop.row - start.row)) + 1);
 }
 
 function sampleVolumeBilinear(
   volume: Float32Array,
-  nx: number,
-  ny: number,
-  nz: number,
-  z: number,
-  x: number,
-  y: number,
+  numCols: number,
+  numRows: number,
+  numSlices: number,
+  sliceIndex: number,
+  col: number,
+  row: number,
 ): number {
-  if (z < 0 || z >= nz || x < 0 || y < 0 || x > nx - 1 || y > ny - 1) return Number.NaN;
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const x1 = Math.min(nx - 1, x0 + 1);
-  const y1 = Math.min(ny - 1, y0 + 1);
-  const tx = x - x0;
-  const ty = y - y0;
-  const base = z * ny * nx;
-  const v00 = volume[base + y0 * nx + x0];
-  const v10 = volume[base + y0 * nx + x1];
-  const v01 = volume[base + y1 * nx + x0];
-  const v11 = volume[base + y1 * nx + x1];
-  return (v00 * (1 - tx) + v10 * tx) * (1 - ty) + (v01 * (1 - tx) + v11 * tx) * ty;
+  if (sliceIndex < 0 || sliceIndex >= numSlices || col < 0 || row < 0 || col > numCols - 1 || row > numRows - 1) return Number.NaN;
+  const col0 = Math.floor(col);
+  const row0 = Math.floor(row);
+  const col1 = Math.min(numCols - 1, col0 + 1);
+  const row1 = Math.min(numRows - 1, row0 + 1);
+  const colFrac = col - col0;
+  const rowFrac = row - row0;
+  const base = sliceIndex * numRows * numCols;
+  const v00 = volume[base + row0 * numCols + col0];
+  const v10 = volume[base + row0 * numCols + col1];
+  const v01 = volume[base + row1 * numCols + col0];
+  const v11 = volume[base + row1 * numCols + col1];
+  return (v00 * (1 - colFrac) + v10 * colFrac) * (1 - rowFrac) + (v01 * (1 - colFrac) + v11 * colFrac) * rowFrac;
 }
 
 function extractOblique(
   volume: Float32Array,
-  nx: number,
-  ny: number,
-  nz: number,
-  start: { x: number; y: number },
-  stop: { x: number; y: number },
+  numCols: number,
+  numRows: number,
+  numSlices: number,
+  start: ImagePoint,
+  stop: ImagePoint,
 ): Float32Array {
   const width = segmentWidth(start, stop);
-  const out = new Float32Array(nz * width);
+  const out = new Float32Array(numSlices * width);
   const denom = Math.max(1, width - 1);
-  for (let z = 0; z < nz; z++) {
-    for (let col = 0; col < width; col++) {
-      const t = col / denom;
-      const x = start.x + (stop.x - start.x) * t;
-      const y = start.y + (stop.y - start.y) * t;
-      const value = sampleVolumeBilinear(volume, nx, ny, nz, z, x, y);
-      out[z * width + col] = Number.isFinite(value) ? value : 0;
+  for (let sliceIndex = 0; sliceIndex < numSlices; sliceIndex++) {
+    for (let panelCol = 0; panelCol < width; panelCol++) {
+      const t = panelCol / denom;
+      const col = start.col + (stop.col - start.col) * t;
+      const row = start.row + (stop.row - start.row) * t;
+      const value = sampleVolumeBilinear(volume, numCols, numRows, numSlices, sliceIndex, col, row);
+      out[sliceIndex * width + panelCol] = Number.isFinite(value) ? value : 0;
     }
   }
   return out;
@@ -357,13 +360,13 @@ function extractVolumeFloat32(
   offline: boolean,
   offlineMin: number,
   offlineMax: number,
-  nx: number,
-  ny: number,
-  nz: number,
+  numCols: number,
+  numRows: number,
+  numSlices: number,
   panelCount = 1,
 ): Float32Array | null {
   const panels = Math.max(1, Math.floor(panelCount || 1));
-  const count = Math.max(0, Math.floor(nx) * Math.floor(ny) * Math.floor(nz) * panels);
+  const count = Math.max(0, Math.floor(numCols) * Math.floor(numRows) * Math.floor(numSlices) * panels);
   if (!offline) return extractFloat32(dataView, count);
   const bytes = extractBytes(dataView);
   if (bytes.length === 0 || count === 0) return null;
@@ -376,10 +379,10 @@ function extractVolumeFloat32(
   return out;
 }
 
-function makeExportFilename(title: string, nz: number, ny: number, nx: number, encoding: "full" | "uint8"): string {
+function makeExportFilename(title: string, numSlices: number, numRows: number, numCols: number, encoding: "full" | "uint8"): string {
   const slug = exportTitleSlug(title, "show3dslices");
   const suffix = encoding === "uint8" ? "quantized" : "exact";
-  return `${slug}_${nz}x${ny}x${nx}_${suffix}.html`;
+  return `${slug}_${numSlices}x${numRows}x${numCols}_${suffix}.html`;
 }
 
 function reverseLut(lut: Uint8Array): Uint8Array {
@@ -435,7 +438,7 @@ function clampCanvasTarget(value: number): number {
   return Math.max(MIN_CANVAS_TARGET, Math.min(MAX_CANVAS_TARGET, Math.round(value)));
 }
 
-// Raster size of one slice panel before z stretch: the top panel fits its longer
+// Raster size of one slice panel before slice stretch: the top panel fits its longer
 // side to the target, a depth panel takes the full target width and one canvas
 // row per slice so its height does not follow the oblique profile length.
 function panelRasterSize([sliceH, sliceW]: [number, number], isDepth: boolean, target: number) {
@@ -446,9 +449,9 @@ function panelRasterSize([sliceH, sliceW]: [number, number], isDepth: boolean, t
 
 /**
  * Real-space sampling (Å per px) along each slice panel's rows and columns,
- * from the volume's [pz, py, px]; zero when uncalibrated. The oblique panel's
+ * from the volume's [slice, row, col]; zero when uncalibrated. The oblique panel's
  * rows are depth slices and its columns step along the cut at `angleDeg` in
- * the XY plane, so their spacing mixes the y and x samplings.
+ * the row/col plane, so their spacing mixes the row and col samplings.
  */
 function panelSampling(axes: number[], angleDeg: number): { row: number; col: number }[] {
   const theta = (angleDeg * Math.PI) / 180;
@@ -700,10 +703,10 @@ const CANVAS_TARGET = 480;
 const MIN_CANVAS_TARGET = 300;
 const MAX_CANVAS_TARGET = 800;
 const SLICE_PANEL_TOP_ALIGN_PX = 20;
-const AXES = ["xy", "oblique"] as const;
+const AXES = ["top", "oblique"] as const;
 const PANEL_NAMES = ["XY", "Oblique"] as const;
 // Show3DSlices opens in the same orientation as the main top slice panel:
-// x/columns left-to-right and y/rows top-to-bottom.
+// columns left-to-right and rows top-to-bottom.
 const SHOW3DSLICES_DEFAULT_CAMERA: CameraState = {
   ...DEFAULT_CAMERA,
   yaw: Math.PI,
@@ -711,7 +714,7 @@ const SHOW3DSLICES_DEFAULT_CAMERA: CameraState = {
   roll: Math.PI,
 };
 const VOLUME_VIEW_PRESETS = [
-  { value: "xy", label: "Top", description: "top (XY) view" },
+  { value: "top", label: "Top", description: "top (XY) view" },
   { value: "side", label: "Side", description: "oblique vertical plane view" },
 ] as const;
 const SHOW3DSLICES_FFT_RESULT_CACHE_MAX_BYTES = 192 * 1024 * 1024;
@@ -747,9 +750,8 @@ function Show3DSlices() {
     slotProps: { paper: { sx: { borderRadius: 0, bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` } } },
   };
 
-  const [nx] = useModelState<number>("nx");
-  const [ny] = useModelState<number>("ny");
-  const [nz] = useModelState<number>("nz");
+  const [volumeShape] = useModelState<number[]>("volume_shape");
+  const [numSlices, numRows, numCols] = volumeShape;
   const [panelCount] = useModelState<number>("panel_count");
   const [activePanel, setActivePanel] = useModelState<number>("active_panel");
   const [panelTitles] = useModelState<string[]>("panel_titles");
@@ -769,9 +771,9 @@ function Show3DSlices() {
   const [exportPayload] = useModelState<DataView>("export_payload");
   const [exportPayloadId] = useModelState<string>("export_payload_id");
   const [exportPayloadFilename] = useModelState<string>("export_filename");
-  const [sliceX, setSliceX] = useModelState<number>("slice_x");
-  const [sliceY, setSliceY] = useModelState<number>("slice_y");
-  const [sliceZ, setSliceZ] = useModelState<number>("slice_z");
+  const [colIndex, setColIndex] = useModelState<number>("col_index");
+  const [rowIndex, setRowIndex] = useModelState<number>("row_index");
+  const [sliceIndex, setSliceIndex] = useModelState<number>("slice_index");
   const [obliqueAngle, setObliqueAngle] = useModelState<number>("oblique_angle");
   const [obliqueProfileLine, setObliqueProfileLine] = useModelState<{ row: number; col: number }[]>("oblique_profile_line");
   const [title] = useModelState<string>("title");
@@ -881,22 +883,22 @@ function Show3DSlices() {
   const [smooth, setSmooth] = useModelState<boolean>("smooth");
   const [flip, setFlip] = useModelState<boolean>("flip");
   const [dimLabels] = useModelState<string[]>("dim_labels");
-  // Per-axis sampling [pz, py, px] in Angstrom (zeros when uncalibrated).
-  const [pixelSizeAxes] = useModelState<number[]>("pixel_size_axes");
+  // Per-axis sampling [slice, row, col] in Angstrom (zeros when uncalibrated).
+  const [voxelSizeA] = useModelState<number[]>("voxel_size_A");
   const [showScaleBar] = useModelState<boolean>("show_scale_bar");
-  const [modelZStretch, setModelZStretch] = useModelState<number>("z_stretch");
-  const [zStretch, setZStretch] = React.useState(modelZStretch);
-  const pendingZStretchRef = React.useRef(modelZStretch);
-  const zStretchLiveDirtyRef = React.useRef(false);
-  const zStretchRafRef = React.useRef<number | null>(null);
+  const [modelSliceStretch, setModelSliceStretch] = useModelState<number>("slice_stretch");
+  const [sliceStretch, setSliceStretch] = React.useState(modelSliceStretch);
+  const pendingSliceStretchRef = React.useRef(modelSliceStretch);
+  const sliceStretchLiveDirtyRef = React.useRef(false);
+  const sliceStretchRafRef = React.useRef<number | null>(null);
   React.useEffect(() => {
-    zStretchLiveDirtyRef.current = false;
-    pendingZStretchRef.current = modelZStretch;
-    setZStretch(modelZStretch);
-  }, [modelZStretch]);
+    sliceStretchLiveDirtyRef.current = false;
+    pendingSliceStretchRef.current = modelSliceStretch;
+    setSliceStretch(modelSliceStretch);
+  }, [modelSliceStretch]);
   React.useEffect(() => {
     return () => {
-      if (zStretchRafRef.current != null) cancelAnimationFrame(zStretchRafRef.current);
+      if (sliceStretchRafRef.current != null) cancelAnimationFrame(sliceStretchRafRef.current);
     };
   }, []);
 
@@ -967,7 +969,7 @@ function Show3DSlices() {
     imageVminPct: number; imageVmaxPct: number; imageDataRange: { min: number; max: number };
     traitVmin: number | null; traitVmax: number | null;
     zooms: { zoom: number; panX: number; panY: number }[]; canvasSizes: { w: number; h: number }[]; smooth: boolean;
-    alignment?: { rowShift: number; colShift: number; segment: { start: { x: number; y: number }; stop: { x: number; y: number } } };
+    alignment?: { rowShift: number; colShift: number; segment: { start: ImagePoint; stop: ImagePoint } };
   } | null>(null);
   const fftComputeGenerationRef = React.useRef(0);
   // Which display FFT the panels use (WebGPU or the CPU reference), once it resolves.
@@ -1199,19 +1201,19 @@ function Show3DSlices() {
   // Parse volume data. Live notebooks receive exact float32 bytes; offline
   // reports receive uint8 bytes plus global min/max metadata to reduce HTML size.
   const allPanelFloats = React.useMemo(
-    () => extractVolumeFloat32(volumeBytes, offline, offlineMin, offlineMax, nx, ny, nz, safePanelCount),
-    [volumeBytes, offline, offlineMin, offlineMax, nx, ny, nz, safePanelCount],
+    () => extractVolumeFloat32(volumeBytes, offline, offlineMin, offlineMax, numCols, numRows, numSlices, safePanelCount),
+    [volumeBytes, offline, offlineMin, offlineMax, numCols, numRows, numSlices, safePanelCount],
   );
   const panelFloats = React.useMemo(() => {
     if (!allPanelFloats || allPanelFloats.length === 0) return null;
-    const onePanelCount = Math.max(0, Math.floor(nx) * Math.floor(ny) * Math.floor(nz));
+    const onePanelCount = Math.max(0, Math.floor(numCols) * Math.floor(numRows) * Math.floor(numSlices));
     if (onePanelCount === 0) return null;
     if (safePanelCount <= 1) return allPanelFloats;
     const start = Math.min(safeActivePanel * onePanelCount, allPanelFloats.length);
     const stop = Math.min(start + onePanelCount, allPanelFloats.length);
     if (stop <= start) return null;
     return allPanelFloats.subarray(start, stop);
-  }, [allPanelFloats, safePanelCount, safeActivePanel, nx, ny, nz]);
+  }, [allPanelFloats, safePanelCount, safeActivePanel, numCols, numRows, numSlices]);
   const alignmentMode = (sliceAlignment || "off").toLowerCase();
   const alignmentActive = alignmentMode !== "off";
   React.useEffect(() => {
@@ -1232,21 +1234,21 @@ function Show3DSlices() {
     const stopFromState = profilePointFromAny(obliqueProfileLine?.[1]);
     if (startFromState && stopFromState) {
       return {
-        start: clampPointToImage(startFromState, nx, ny, OBLIQUE_PROFILE_EDGE_INSET),
-        stop: clampPointToImage(stopFromState, nx, ny, OBLIQUE_PROFILE_EDGE_INSET),
+        start: clampPointToImage(startFromState, numCols, numRows, OBLIQUE_PROFILE_EDGE_INSET),
+        stop: clampPointToImage(stopFromState, numCols, numRows, OBLIQUE_PROFILE_EDGE_INSET),
         explicit: true,
       };
     }
-    const [start, stop] = obliqueLineEndpoints(nx, ny, sliceX, sliceY, obliqueAngle);
+    const [start, stop] = obliqueLineEndpoints(numCols, numRows, colIndex, rowIndex, obliqueAngle);
     return {
-      start: clampPointToImage(start, nx, ny, OBLIQUE_PROFILE_EDGE_INSET),
-      stop: clampPointToImage(stop, nx, ny, OBLIQUE_PROFILE_EDGE_INSET),
+      start: clampPointToImage(start, numCols, numRows, OBLIQUE_PROFILE_EDGE_INSET),
+      stop: clampPointToImage(stop, numCols, numRows, OBLIQUE_PROFILE_EDGE_INSET),
       explicit: false,
     };
-  }, [obliqueProfileLine, nx, ny, sliceX, sliceY, obliqueAngle]);
+  }, [obliqueProfileLine, numCols, numRows, colIndex, rowIndex, obliqueAngle]);
   // The oblique panel's geometry must reach the GPU slice shader on EVERY render,
   // not only while alignment is on: the axis-3 shader walks from segment start to
-  // stop, so a missing segment collapses every output column onto voxel (0, 0, z)
+  // stop, so a missing segment collapses every output column onto voxel (slice, 0, 0)
   // and the panel paints flat bands that ignore the angle and position sliders.
   // Depth shifts stay zero unless alignment is active.
   const gpuSliceParams = React.useMemo(
@@ -1265,7 +1267,7 @@ function Show3DSlices() {
     () => (panelFloats && panelFloats.length > 0 ? findDataRange(panelFloats) : { min: 0, max: 1 }),
     [panelFloats],
   );
-  const voxelCount = Math.max(0, Math.floor(nx) * Math.floor(ny) * Math.floor(nz));
+  const voxelCount = Math.max(0, Math.floor(numCols) * Math.floor(numRows) * Math.floor(numSlices));
   const syncedVoxelCount = voxelCount * safePanelCount;
   const exactExportSize = formatEstimatedHtmlSize(syncedVoxelCount * 4);
   const quantizedExportSize = formatEstimatedHtmlSize(syncedVoxelCount);
@@ -1277,7 +1279,7 @@ function Show3DSlices() {
   };
   const handleExportSelect = async (encoding: "full" | "uint8") => {
     setExportMenuAnchor(null);
-    const filename = makeExportFilename(title, nz, ny, nx, encoding);
+    const filename = makeExportFilename(title, numSlices, numRows, numCols, encoding);
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setExportBusy(true);
     setLocalExportStatus("Choose export location...");
@@ -1318,14 +1320,14 @@ function Show3DSlices() {
    */
   const runBrowserSliceAlignmentEstimate = async () => {
     if (alignmentEstimateBusyRef.current) return;
-    if (!panelFloats || panelFloats.length === 0 || nz < 2) {
+    if (!panelFloats || panelFloats.length === 0 || numSlices < 2) {
       if (!offline) requestSliceAlignmentEstimate();
       return;
     }
     alignmentEstimateBusyRef.current = true;
     setLocalAlignmentStatus("Estimating slice alignment...");
     try {
-      const estimate = await estimateSliceAlignment(panelFloats, nx, ny, nz, await getHardwareGPUDevice());
+      const estimate = await estimateSliceAlignment(panelFloats, numCols, numRows, numSlices, await getHardwareGPUDevice());
       autoAlignmentRef.current = {
         cached: true,
         rowShift: estimate.rowShiftPxPerSlice,
@@ -1483,14 +1485,14 @@ function Show3DSlices() {
     return () => { canceled = true; };
   }, [exportPayload, exportPayloadId, exportPayloadFilename, setExportRequest]);
 
-  // Slice dimensions: [xy: ny x nx], [oblique: nz x diagonal]
+  // Slice dimensions: [top: numRows x numCols], [oblique: numSlices x diagonal]
   const sliceDims = React.useMemo<[number, number][]>(
-    () => [[ny, nx], [nz, segmentWidth(obliqueSegment.start, obliqueSegment.stop)]],
-    [ny, nx, nz, obliqueSegment],
+    () => [[numRows, numCols], [numSlices, segmentWidth(obliqueSegment.start, obliqueSegment.stop)]],
+    [numRows, numCols, numSlices, obliqueSegment],
   );
-  type LiveFftSegment = { start: { x: number; y: number }; stop: { x: number; y: number } };
+  type LiveFftSegment = { start: ImagePoint; stop: ImagePoint };
   const liveFftSchedulerRef = React.useRef<{
-    pending: { axes: number[]; sliceZ: number; segment: LiveFftSegment } | null;
+    pending: { axes: number[]; sliceIndex: number; segment: LiveFftSegment } | null;
     inFlight: boolean;
     timer: number | null;
     lastStartMs: number;
@@ -1498,14 +1500,14 @@ function Show3DSlices() {
 
   const makeFftResultCacheKey = (
     axis: number,
-    sliceZValue: number,
+    sliceIndexValue: number,
     segment: LiveFftSegment,
     sliceW: number,
     sliceH: number,
   ) => {
     const geometry = axis === 0
-      ? `z=${Math.round(sliceZValue)}`
-      : `line=${segment.start.x.toFixed(2)},${segment.start.y.toFixed(2)}:${segment.stop.x.toFixed(2)},${segment.stop.y.toFixed(2)}`;
+      ? `slice=${Math.round(sliceIndexValue)}`
+      : `line=${segment.start.col.toFixed(2)},${segment.start.row.toFixed(2)}:${segment.stop.col.toFixed(2)},${segment.stop.row.toFixed(2)}`;
     return [
       `data=${fftDataTokenRef.current}`,
       `axis=${axis}`,
@@ -1619,12 +1621,12 @@ function Show3DSlices() {
 
   const computeLiveFftAxis = async (
     axis: number,
-    sliceZValue: number,
+    sliceIndexValue: number,
     segment: LiveFftSegment,
   ): Promise<boolean> => {
     if (!showFft || !panelFloats || panelFloats.length === 0) return false;
-    const [sliceH, sliceW] = axis === 0 ? [ny, nx] : [nz, segmentWidth(segment.start, segment.stop)];
-    const cacheKey = makeFftResultCacheKey(axis, sliceZValue, segment, sliceW, sliceH);
+    const [sliceH, sliceW] = axis === 0 ? [numRows, numCols] : [numSlices, segmentWidth(segment.start, segment.stop)];
+    const cacheKey = makeFftResultCacheKey(axis, sliceIndexValue, segment, sliceW, sliceH);
     const cached = fftResultCacheRef.current.get(cacheKey);
     if (cached) {
       cached.lastUsed = ++fftResultCacheSeqRef.current;
@@ -1637,8 +1639,8 @@ function Show3DSlices() {
       );
     }
     const extracted = axis === 0
-      ? extractXY(panelFloats, nx, ny, nz, sliceZValue)
-      : extractOblique(panelFloats, nx, ny, nz, segment.start, segment.stop);
+      ? extractTopSlice(panelFloats, numCols, numRows, numSlices, sliceIndexValue)
+      : extractOblique(panelFloats, numCols, numRows, numSlices, segment.start, segment.stop);
     const data = fftWindow ? new Float32Array(extracted) : extracted;
     if (fftWindow) applyHannWindow2D(data, sliceW, sliceH);
     const paddedW = nextPow2(sliceW);
@@ -1673,7 +1675,7 @@ function Show3DSlices() {
     state.pending = null;
     state.inFlight = true;
     state.lastStartMs = now;
-    Promise.all(pending.axes.map(axis => computeLiveFftAxis(axis, pending.sliceZ, pending.segment)))
+    Promise.all(pending.axes.map(axis => computeLiveFftAxis(axis, pending.sliceIndex, pending.segment)))
       .then(results => {
         if (results.some(Boolean)) setFftVersion((version) => version + 1);
       })
@@ -1685,7 +1687,7 @@ function Show3DSlices() {
 
   const scheduleLiveFft = (
     axes: number[],
-    options: { sliceZ?: number; segment?: LiveFftSegment } = {},
+    options: { sliceIndex?: number; segment?: LiveFftSegment } = {},
   ) => {
     if (!showFft || !panelFloats || panelFloats.length === 0) return;
     const state = liveFftSchedulerRef.current;
@@ -1694,7 +1696,7 @@ function Show3DSlices() {
     if (mergedAxes.length === 0) return;
     state.pending = {
       axes: mergedAxes,
-      sliceZ: options.sliceZ ?? sliceZ,
+      sliceIndex: options.sliceIndex ?? sliceIndex,
       segment: options.segment ?? { start: { ...obliqueSegment.start }, stop: { ...obliqueSegment.stop } },
     };
     if (!state.inFlight && state.timer == null) runLiveFftScheduler();
@@ -1718,9 +1720,9 @@ function Show3DSlices() {
     setFftVersion((version) => version + 1);
   }, [safeActivePanel, volumeBytes]);
 
-  // Canvas sizes. For depth panels, keep the Z scale independent from the
+  // Canvas sizes. For depth panels, keep the slice-axis scale independent from the
   // oblique profile length; otherwise shortening the profile would secretly
-  // magnify Z before the explicit z_stretch slider is applied.
+  // magnify the slice axis before the explicit slice_stretch slider is applied.
   // smooth=true → CSS bilinear (auto); smooth=false → nearest-neighbor (pixelated).
   // Overlay canvases (crosshair, scale bar, colorbar, FFT scale bar) use displayH
   // for their pixel buffer to avoid distortion under CSS stretch.
@@ -1728,16 +1730,16 @@ function Show3DSlices() {
     const isDepth = axis > 0;
     const target = isDepth ? sideCanvasTarget : canvasTarget;
     const raster = panelRasterSize(dims, isDepth, target);
-    const displayH = isDepth ? Math.min(target, Math.round(raster.h * Math.max(1, zStretch))) : raster.h;
+    const displayH = isDepth ? Math.min(target, Math.round(raster.h * Math.max(1, sliceStretch))) : raster.h;
     return { ...raster, displayH };
-  }), [sliceDims, sideCanvasTarget, canvasTarget, zStretch]);
-  const dataPointToCanvas = React.useCallback((axis: number, x: number, y: number): { x: number; y: number } => {
+  }), [sliceDims, sideCanvasTarget, canvasTarget, sliceStretch]);
+  const dataPointToCanvas = React.useCallback((axis: number, col: number, row: number): { x: number; y: number } => {
     const { w: canvasW, h: canvasH, displayH, scaleX, scaleY } = canvasSizes[axis];
     const stretchY = displayH / canvasH;
     const view = liveZoomsRef.current[axis];
     const centerX = canvasW / 2, centerY = displayH / 2;
-    let canvasX = x * scaleX;
-    let canvasY = y * scaleY * stretchY;
+    let canvasX = col * scaleX;
+    let canvasY = row * scaleY * stretchY;
     if (view.zoom !== 1 || view.panX !== 0 || view.panY !== 0) {
       canvasX = (canvasX - centerX) * view.zoom + centerX + view.panX;
       canvasY = (canvasY - centerY) * view.zoom + centerY + view.panY * stretchY;
@@ -1881,8 +1883,8 @@ function Show3DSlices() {
   React.useEffect(() => {
     const renderer = volumeRendererRef.current;
     if (!renderer || !panelFloats || panelFloats.length === 0) return;
-    renderer.uploadVolume(panelFloats, nx, ny, nz);
-  }, [panelFloats, nx, ny, nz, rendererReady]);
+    renderer.uploadVolume(panelFloats, numCols, numRows, numSlices);
+  }, [panelFloats, numCols, numRows, numSlices, rendererReady]);
 
   // Upload colormap. When flip, reverse the LUT entry order so the 3D volume
   // inverts contrast the same way slice panels do (slices negate the data and
@@ -1911,28 +1913,28 @@ function Show3DSlices() {
   const volTexRange = volumeTextureRangeForPercent(imageVminPct, imageVmaxPct);
   // Keep live slice positions separate from committed model traits. Slider drag
   // updates these refs every frame; model traits sync only on release.
-  const liveSliceParamsRef = React.useRef({ sliceX, sliceY, sliceZ });
-  const committedSliceParamsRef = React.useRef({ sliceX, sliceY, sliceZ });
+  const liveSliceParamsRef = React.useRef({ colIndex, rowIndex, sliceIndex });
+  const committedSliceParamsRef = React.useRef({ colIndex, rowIndex, sliceIndex });
   const committedSliceParams = committedSliceParamsRef.current;
   if (
-    committedSliceParams.sliceX !== sliceX ||
-    committedSliceParams.sliceY !== sliceY ||
-    committedSliceParams.sliceZ !== sliceZ
+    committedSliceParams.colIndex !== colIndex ||
+    committedSliceParams.rowIndex !== rowIndex ||
+    committedSliceParams.sliceIndex !== sliceIndex
   ) {
-    const next = { sliceX, sliceY, sliceZ };
+    const next = { colIndex, rowIndex, sliceIndex };
     committedSliceParamsRef.current = next;
     liveSliceParamsRef.current = next;
   }
 
   // Keep render params in ref for direct rAF rendering (bypasses React during drag)
   const volumeRenderParams = {
-    ...liveSliceParamsRef.current, nx, ny, nz,
+    ...liveSliceParamsRef.current, numCols, numRows, numSlices,
     opacity: opacityA, brightness: 1.0, slicePlaneMask, slicePlaneOpacity,
     obliqueAngleDeg: obliqueAngle,
-    obliqueStartX: obliqueSegment.start.x,
-    obliqueStartY: obliqueSegment.start.y,
-    obliqueEndX: obliqueSegment.stop.x,
-    obliqueEndY: obliqueSegment.stop.y,
+    obliqueStartCol: obliqueSegment.start.col,
+    obliqueStartRow: obliqueSegment.start.row,
+    obliqueEndCol: obliqueSegment.stop.col,
+    obliqueEndRow: obliqueSegment.stop.row,
     rowShiftPxPerSlice: gpuSliceParams.rowShift,
     colShiftPxPerSlice: gpuSliceParams.colShift,
     vmin: volTexRange.vmin, vmax: volTexRange.vmax,
@@ -1952,8 +1954,8 @@ function Show3DSlices() {
     if (volumeDrag) return; // Skip during drag - rAF handles it directly
     const renderer = volumeRendererRef.current;
     if (!renderer || !panelFloats || panelFloats.length === 0) return;
-    renderer.render(volumeRenderParamsRef.current, camera, bgColorRef.current, { zStretch, orthographic });
-  }, [panelFloats, sliceX, sliceY, sliceZ, obliqueAngle, obliqueSegment, nx, ny, nz, cmap, camera, volumeCanvasSize, themeColors.bg, slicePlaneMask, slicePlaneOpacity, volumeDrag, rendererReady, volTexRange, opacityA, zStretch, orthographic, flip, gpuSliceParams]);
+    renderer.render(volumeRenderParamsRef.current, camera, bgColorRef.current, { sliceStretch, orthographic });
+  }, [panelFloats, colIndex, rowIndex, sliceIndex, obliqueAngle, obliqueSegment, numCols, numRows, numSlices, cmap, camera, volumeCanvasSize, themeColors.bg, slicePlaneMask, slicePlaneOpacity, volumeDrag, rendererReady, volTexRange, opacityA, sliceStretch, orthographic, flip, gpuSliceParams]);
 
   // First-frame paint guard: the very first synchronous render after the renderer
   // mounts can land before the canvas swapchain is ready (flush race) and commit a
@@ -1965,7 +1967,7 @@ function Show3DSlices() {
     const id = requestAnimationFrame(() => {
       const renderer = volumeRendererRef.current;
       if (renderer && panelFloats && panelFloats.length > 0) {
-        renderer.render(volumeRenderParamsRef.current, camera, bgColorRef.current, { zStretch, orthographic });
+        renderer.render(volumeRenderParamsRef.current, camera, bgColorRef.current, { sliceStretch, orthographic });
       }
     });
     return () => cancelAnimationFrame(id);
@@ -2000,9 +2002,9 @@ function Show3DSlices() {
       volume_canvas_size: clampCanvasTarget(nextSizes.volumeCanvasSize ?? volumeCanvasSizeRef.current),
     });
   }, [setViewState]);
-  // Live z_stretch ref for rAF drag path - keeps latest value without re-binding closure.
-  const zStretchRef = React.useRef(zStretch);
-  if (!zStretchLiveDirtyRef.current) zStretchRef.current = zStretch;
+  // Live slice_stretch ref for rAF drag path - keeps latest value without re-binding closure.
+  const sliceStretchRef = React.useRef(sliceStretch);
+  if (!sliceStretchLiveDirtyRef.current) sliceStretchRef.current = sliceStretch;
   const applyDepthPanelHeight = (value: number) => {
     for (let axis = 1; axis < sliceDims.length; axis++) {
       const base = rasterCanvasSizes[axis];
@@ -2019,33 +2021,33 @@ function Show3DSlices() {
       if (ui) ui.style.height = height;
     }
   };
-  React.useEffect(() => { applyDepthPanelHeight(zStretch); }, [zStretch, rasterCanvasSizes, sideCanvasTarget]);
-  const handleZStretchChange = (value: number) => {
-    zStretchLiveDirtyRef.current = true;
-    pendingZStretchRef.current = value;
-    zStretchRef.current = value;
-    if (zStretchRafRef.current != null) return;
-    zStretchRafRef.current = requestAnimationFrame(() => {
-      zStretchRafRef.current = null;
-      const next = pendingZStretchRef.current;
+  React.useEffect(() => { applyDepthPanelHeight(sliceStretch); }, [sliceStretch, rasterCanvasSizes, sideCanvasTarget]);
+  const handleSliceStretchChange = (value: number) => {
+    sliceStretchLiveDirtyRef.current = true;
+    pendingSliceStretchRef.current = value;
+    sliceStretchRef.current = value;
+    if (sliceStretchRafRef.current != null) return;
+    sliceStretchRafRef.current = requestAnimationFrame(() => {
+      sliceStretchRafRef.current = null;
+      const next = pendingSliceStretchRef.current;
       applyDepthPanelHeight(next);
       const renderer = volumeRendererRef.current;
       if (renderer && panelFloats && panelFloats.length > 0) {
-        renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { zStretch: next, orthographic });
+        renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { sliceStretch: next, orthographic });
       }
     });
   };
-  const handleZStretchCommit = (value: number) => {
-    if (zStretchRafRef.current != null) {
-      cancelAnimationFrame(zStretchRafRef.current);
-      zStretchRafRef.current = null;
+  const handleSliceStretchCommit = (value: number) => {
+    if (sliceStretchRafRef.current != null) {
+      cancelAnimationFrame(sliceStretchRafRef.current);
+      sliceStretchRafRef.current = null;
     }
-    pendingZStretchRef.current = value;
-    zStretchRef.current = value;
+    pendingSliceStretchRef.current = value;
+    sliceStretchRef.current = value;
     applyDepthPanelHeight(value);
-    zStretchLiveDirtyRef.current = false;
-    setZStretch(value);
-    setModelZStretch(value);
+    sliceStretchLiveDirtyRef.current = false;
+    setSliceStretch(value);
+    setModelSliceStretch(value);
   };
   const handleVolumeControlChange = (key: "opacity" | "slicePlaneOpacity", value: number) => {
     pendingVolumeControlsRef.current = { ...pendingVolumeControlsRef.current, [key]: value };
@@ -2060,7 +2062,7 @@ function Show3DSlices() {
       };
       const renderer = volumeRendererRef.current;
       if (renderer && panelFloats && panelFloats.length > 0) {
-        renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { zStretch: zStretchRef.current, orthographic });
+        renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { sliceStretch: sliceStretchRef.current, orthographic });
       }
     });
   };
@@ -2088,43 +2090,43 @@ function Show3DSlices() {
     };
     const renderer = volumeRendererRef.current;
     if (renderer && panelFloats && panelFloats.length > 0) {
-      renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { zStretch: zStretchRef.current, orthographic });
+      renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { sliceStretch: sliceStretchRef.current, orthographic });
     }
   };
 
   // Rotate the cut to `nextAngle` about its centre, keeping its length inside the image.
   const applyObliqueAngle = (nextAngle: number) => {
     const center = {
-      x: (obliqueSegment.start.x + obliqueSegment.stop.x) / 2,
-      y: (obliqueSegment.start.y + obliqueSegment.stop.y) / 2,
+      row: (obliqueSegment.start.row + obliqueSegment.stop.row) / 2,
+      col: (obliqueSegment.start.col + obliqueSegment.stop.col) / 2,
     };
     const length = Math.max(1, Math.hypot(
-      obliqueSegment.stop.x - obliqueSegment.start.x,
-      obliqueSegment.stop.y - obliqueSegment.start.y,
+      obliqueSegment.stop.col - obliqueSegment.start.col,
+      obliqueSegment.stop.row - obliqueSegment.start.row,
     ));
     const theta = (nextAngle * Math.PI) / 180;
-    const halfDx = Math.cos(theta) * length / 2;
-    const halfDy = Math.sin(theta) * length / 2;
-    const start = clampPointToImage({ x: center.x - halfDx, y: center.y - halfDy }, nx, ny, OBLIQUE_PROFILE_EDGE_INSET);
-    const stop = clampPointToImage({ x: center.x + halfDx, y: center.y + halfDy }, nx, ny, OBLIQUE_PROFILE_EDGE_INSET);
+    const halfColSpan = Math.cos(theta) * length / 2;
+    const halfRowSpan = Math.sin(theta) * length / 2;
+    const start = clampPointToImage({ row: center.row - halfRowSpan, col: center.col - halfColSpan }, numCols, numRows, OBLIQUE_PROFILE_EDGE_INSET);
+    const stop = clampPointToImage({ row: center.row + halfRowSpan, col: center.col + halfColSpan }, numCols, numRows, OBLIQUE_PROFILE_EDGE_INSET);
     setObliqueAngle(nextAngle);
     setObliqueProfileLine(profileLinePayload(start, stop));
     setObliquePositionBounds(null);
     // Pass the freshly computed segment: the `obliqueSegment` default is a
     // trait-derived memo that still holds the pre-drag geometry on this tick.
-    updateObliqueCenter((start.x + stop.x) / 2, (start.y + stop.y) / 2, nextAngle, { start, stop });
+    updateObliqueCenter((start.col + stop.col) / 2, (start.row + stop.row) / 2, nextAngle, { start, stop });
     scheduleLiveFft([1], { segment: { start, stop } });
     volumeRenderParamsRef.current = {
       ...volumeRenderParamsRef.current,
       obliqueAngleDeg: nextAngle,
-      obliqueStartX: start.x,
-      obliqueStartY: start.y,
-      obliqueEndX: stop.x,
-      obliqueEndY: stop.y,
+      obliqueStartCol: start.col,
+      obliqueStartRow: start.row,
+      obliqueEndCol: stop.col,
+      obliqueEndRow: stop.row,
     };
     const renderer = volumeRendererRef.current;
     if (renderer && panelFloats && panelFloats.length > 0) {
-      renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { zStretch: zStretchRef.current, orthographic });
+      renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { sliceStretch: sliceStretchRef.current, orthographic });
     }
   };
   if (!volumeDrag) liveCameraRef.current = camera;
@@ -2171,7 +2173,7 @@ function Show3DSlices() {
           const background = bgColorRef.current;
           const renderer = volumeRendererRef.current;
           if (renderer) {
-            renderer.render(params, liveCamera, background, { zStretch: zStretchRef.current, orthographic });
+            renderer.render(params, liveCamera, background, { sliceStretch: sliceStretchRef.current, orthographic });
           }
         });
       }
@@ -2194,7 +2196,7 @@ function Show3DSlices() {
     liveCameraRef.current = next;
     const renderer = volumeRendererRef.current;
     if (renderer) {
-      renderer.render(volumeRenderParamsRef.current, next, bgColorRef.current, { zStretch: zStretchRef.current, orthographic });
+      renderer.render(volumeRenderParamsRef.current, next, bgColorRef.current, { sliceStretch: sliceStretchRef.current, orthographic });
     }
     setCamera(next);
     persistViewState(undefined, undefined, next);
@@ -2206,12 +2208,12 @@ function Show3DSlices() {
     persistViewState(undefined, undefined, SHOW3DSLICES_DEFAULT_CAMERA);
   };
 
-  const setVolumeView = (view: "xy" | "side") => {
+  const setVolumeView = (view: "top" | "side") => {
     const distance = liveCameraRef.current.distance || camera.distance || SHOW3DSLICES_DEFAULT_CAMERA.distance;
     // Match the 2D slice panels rather than mathematical world-up:
-    // Top: x right, row/y down. Side: x right, z down.
-    const presets: Record<"xy" | "side", Pick<CameraState, "yaw" | "pitch" | "roll">> = {
-      xy: { yaw: Math.PI, pitch: 0, roll: Math.PI },
+    // Top: col right, row down. Side: col right, slice down.
+    const presets: Record<"top" | "side", Pick<CameraState, "yaw" | "pitch" | "roll">> = {
+      top: { yaw: Math.PI, pitch: 0, roll: Math.PI },
       side: { yaw: 0, pitch: Math.PI * 0.49, roll: 0 },
     };
     const next = { ...SHOW3DSLICES_DEFAULT_CAMERA, ...presets[view], distance, panX: 0, panY: 0 };
@@ -2281,22 +2283,22 @@ function Show3DSlices() {
 
   // -------------------------------------------------------------------------
   // Build colormapped offscreen canvases (expensive: log scale, percentile, colormap LUT)
-  // Per-panel: XY depends on sliceZ; oblique depends on the XY center and angle.
+  // Per-panel: Top depends on sliceIndex; oblique depends on the (row, col) center and angle.
   // Excludes zoom/pan so dragging only triggers the cheap redraw below.
   // useLayoutEffect so offscreens are ready before the draw useLayoutEffect runs.
   // -------------------------------------------------------------------------
   const prevCacheRef = React.useRef<{
-    sliceZ: number;
+    sliceIndex: number;
     cmap: string; logScale: boolean;
     imageVminPct: number; imageVmaxPct: number;
     imageRangeMin: number; imageRangeMax: number;
     panelFloats: Float32Array | null;
-    nx: number; ny: number; nz: number;
+    numCols: number; numRows: number; numSlices: number;
     traitVmin: number | null; traitVmax: number | null;
     flip: boolean;
     alignRowShift: number; alignColShift: number;
-    alignStartX: number; alignStartY: number; alignStopX: number; alignStopY: number;
-  }>({ sliceZ: -1, cmap: "", logScale: false, imageVminPct: -1, imageVmaxPct: -1, imageRangeMin: Number.NaN, imageRangeMax: Number.NaN, panelFloats: null, nx: 0, ny: 0, nz: 0, traitVmin: null, traitVmax: null, flip: false, alignRowShift: Number.NaN, alignColShift: Number.NaN, alignStartX: Number.NaN, alignStartY: Number.NaN, alignStopX: Number.NaN, alignStopY: Number.NaN });
+    alignStartCol: number; alignStartRow: number; alignStopCol: number; alignStopRow: number;
+  }>({ sliceIndex: -1, cmap: "", logScale: false, imageVminPct: -1, imageVmaxPct: -1, imageRangeMin: Number.NaN, imageRangeMax: Number.NaN, panelFloats: null, numCols: 0, numRows: 0, numSlices: 0, traitVmin: null, traitVmax: null, flip: false, alignRowShift: Number.NaN, alignColShift: Number.NaN, alignStartCol: Number.NaN, alignStartRow: Number.NaN, alignStopCol: Number.NaN, alignStopRow: Number.NaN });
 
   React.useLayoutEffect(() => {
     if (!panelFloats || panelFloats.length === 0) return;
@@ -2304,10 +2306,10 @@ function Show3DSlices() {
     const prev = prevCacheRef.current;
     const alignRowShift = gpuSliceParams.rowShift;
     const alignColShift = gpuSliceParams.colShift;
-    const alignStartX = gpuSliceParams.segment.start.x;
-    const alignStartY = gpuSliceParams.segment.start.y;
-    const alignStopX = gpuSliceParams.segment.stop.x;
-    const alignStopY = gpuSliceParams.segment.stop.y;
+    const alignStartCol = gpuSliceParams.segment.start.col;
+    const alignStartRow = gpuSliceParams.segment.start.row;
+    const alignStopCol = gpuSliceParams.segment.stop.col;
+    const alignStopRow = gpuSliceParams.segment.stop.row;
     const globalChanged = panelFloats !== prev.panelFloats || cmap !== prev.cmap ||
       logScale !== prev.logScale ||
       imageVminPct !== prev.imageVminPct || imageVmaxPct !== prev.imageVmaxPct ||
@@ -2315,18 +2317,18 @@ function Show3DSlices() {
       traitVmin !== prev.traitVmin || traitVmax !== prev.traitVmax ||
       flip !== prev.flip ||
       alignRowShift !== prev.alignRowShift || alignColShift !== prev.alignColShift ||
-      alignStartX !== prev.alignStartX || alignStartY !== prev.alignStartY ||
-      alignStopX !== prev.alignStopX || alignStopY !== prev.alignStopY ||
-      nx !== prev.nx || ny !== prev.ny || nz !== prev.nz;
+      alignStartCol !== prev.alignStartCol || alignStartRow !== prev.alignStartRow ||
+      alignStopCol !== prev.alignStopCol || alignStopRow !== prev.alignStopRow ||
+      numCols !== prev.numCols || numRows !== prev.numRows || numSlices !== prev.numSlices;
     const axisChanged = [
-      globalChanged || sliceZ !== prev.sliceZ,
+      globalChanged || sliceIndex !== prev.sliceIndex,
       true,
     ];
 
     const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
     const extractors = [
-      () => extractXY(panelFloats, nx, ny, nz, sliceZ),
-      () => extractOblique(panelFloats, nx, ny, nz, obliqueSegment.start, obliqueSegment.stop),
+      () => extractTopSlice(panelFloats, numCols, numRows, numSlices, sliceIndex),
+      () => extractOblique(panelFloats, numCols, numRows, numSlices, obliqueSegment.start, obliqueSegment.stop),
     ];
     // GPU path: upload the whole volume ONCE; each scrub only slices + colormaps on
     // the GPU (no CPU extract / re-upload), so scrubbing stays buffer-smooth even on
@@ -2335,7 +2337,7 @@ function Show3DSlices() {
     let gpuVolReady = false;
     if (cmapReady && engine && panelFloats) {
       if (volUploadedKeyRef.current !== panelFloats) {
-        gpuVolReady = engine.uploadVolume(panelFloats, nx, ny, nz);
+        gpuVolReady = engine.uploadVolume(panelFloats, numCols, numRows, numSlices);
         volUploadedKeyRef.current = gpuVolReady ? panelFloats : null;
       } else {
         gpuVolReady = true;
@@ -2354,7 +2356,7 @@ function Show3DSlices() {
         const gpuAxis = axis === 0 ? 0 : 3;
         const bitmap = engine.renderVolumeSliceToImageBitmap(
           gpuAxis,
-          axis === 0 ? sliceZ : 0,
+          axis === 0 ? sliceIndex : 0,
           { vmin, vmax },
           logScale,
           flip,
@@ -2386,8 +2388,8 @@ function Show3DSlices() {
         sliceOffscreenRefs.current[axis] = renderToOffscreen(processed, sliceW, sliceH, lut, vmin, vmax);
       }
     }
-    prevCacheRef.current = { sliceZ, cmap, logScale, imageVminPct, imageVmaxPct, imageRangeMin: displayDataRange.min, imageRangeMax: displayDataRange.max, panelFloats, nx, ny, nz, traitVmin, traitVmax, flip, alignRowShift, alignColShift, alignStartX, alignStartY, alignStopX, alignStopY };
-  }, [panelFloats, sliceX, sliceY, sliceZ, obliqueAngle, obliqueSegment, nx, ny, nz, cmap, logScale, sliceDims, imageVminPct, imageVmaxPct, displayDataRange, traitVmin, traitVmax, flip, cmapReady, gpuSliceParams]);
+    prevCacheRef.current = { sliceIndex, cmap, logScale, imageVminPct, imageVmaxPct, imageRangeMin: displayDataRange.min, imageRangeMax: displayDataRange.max, panelFloats, numCols, numRows, numSlices, traitVmin, traitVmax, flip, alignRowShift, alignColShift, alignStartCol, alignStartRow, alignStopCol, alignStopRow };
+  }, [panelFloats, colIndex, rowIndex, sliceIndex, obliqueAngle, obliqueSegment, numCols, numRows, numSlices, cmap, logScale, sliceDims, imageVminPct, imageVmaxPct, displayDataRange, traitVmin, traitVmax, flip, cmapReady, gpuSliceParams]);
 
   // Snapshot of everything direct-paint needs, refreshed every render so the
   // slider handler (which fires faster than React commits) reads current values.
@@ -2400,7 +2402,7 @@ function Show3DSlices() {
 
   // DIRECT PAINT (Show3D's 60fps-at-4k trick): paint ONE plane straight to its
   // visible canvas via the resident-volume GPU slice path, bypassing React. The
-  // slice sliders are anywidget model traits (slice_x/y/z) whose setter does a
+  // slice sliders are anywidget model traits (col_index, row_index, slice_index) whose setter does a
   // comm round-trip (model.set + save_changes) that React BATCHES during a drag,
   // so the render effect keyed on them doesn't fire per drag-frame -> the lag.
   // The slider onChange calls this for an INSTANT image, then sets the trait for
@@ -2446,7 +2448,7 @@ function Show3DSlices() {
     const params = { ...volumeRenderParamsRef.current, ...liveSliceParamsRef.current };
     volumeRenderParamsRef.current = params;
     renderer.render(params, liveCameraRef.current, bgColorRef.current, {
-      zStretch: zStretchRef.current, orthographic, draft: { dpr: 1, numSteps: 32 },
+      sliceStretch: sliceStretchRef.current, orthographic, draft: { dpr: 1, numSteps: 32 },
     });
   }, [orthographic, panelFloats]);
 
@@ -2488,7 +2490,7 @@ function Show3DSlices() {
     // gpuSliceParams belongs here: toggling Align re-renders the offscreens with
     // new depth shifts, but without this dependency the blit never re-runs and
     // the visible canvases keep the previous alignment.
-  }, [panelFloats, sliceX, sliceY, sliceZ, obliqueAngle, nx, ny, nz, cmap, logScale, autoContrast, zooms, sliceDims, canvasSizes, imageVminPct, imageVmaxPct, smooth, flip, gpuSliceParams]);
+  }, [panelFloats, colIndex, rowIndex, sliceIndex, obliqueAngle, numCols, numRows, numSlices, cmap, logScale, autoContrast, zooms, sliceDims, canvasSizes, imageVminPct, imageVmaxPct, smooth, flip, gpuSliceParams]);
 
   // -------------------------------------------------------------------------
   // Render crosshair lines for the orthogonal slice intersections.
@@ -2496,8 +2498,8 @@ function Show3DSlices() {
   React.useEffect(() => {
     if (!panelFloats) return;
     const crossPositions: [number, number][] = [
-      [sliceX, sliceY],
-      [(sliceDims[1]?.[1] ?? 1) / 2, sliceZ],
+      [colIndex, rowIndex],
+      [(sliceDims[1]?.[1] ?? 1) / 2, sliceIndex],
     ];
     // Drawn in CSS pixels on a device-pixel backing store, so lines and handles stay sharp on HiDPI screens.
     const dpr = window.devicePixelRatio || 1;
@@ -2517,8 +2519,8 @@ function Show3DSlices() {
       ctx.clearRect(0, 0, canvasW, displayH);
       if (axis === 0) {
         const { start, stop } = obliqueSegment;
-        const startCanvas = dataPointToCanvas(axis, start.x, start.y);
-        const stopCanvas = dataPointToCanvas(axis, stop.x, stop.y);
+        const startCanvas = dataPointToCanvas(axis, start.col, start.row);
+        const stopCanvas = dataPointToCanvas(axis, stop.col, stop.row);
         ctx.save();
         ctx.strokeStyle = themeColors.accent;
         ctx.fillStyle = themeColors.accent;
@@ -2563,10 +2565,10 @@ function Show3DSlices() {
       }
       if (!showCrosshair) continue;
       const view = zooms[axis];
-      const [dataX, dataY] = crossPositions[axis];
+      const [panelCol, panelRow] = crossPositions[axis];
       const centerX = canvasW / 2, centerY = displayH / 2;
-      let canvasX = dataX * scaleX;
-      let canvasY = dataY * scaleY * stretchY;
+      let canvasX = panelCol * scaleX;
+      let canvasY = panelRow * scaleY * stretchY;
       if (view.zoom !== 1 || view.panX !== 0 || view.panY !== 0) {
         canvasX = (canvasX - centerX) * view.zoom + centerX + view.panX;
         canvasY = (canvasY - centerY) * view.zoom + centerY + view.panY * stretchY;
@@ -2578,14 +2580,14 @@ function Show3DSlices() {
       ctx.beginPath(); ctx.moveTo(0, canvasY); ctx.lineTo(canvasW, canvasY); ctx.stroke();
       ctx.setLineDash([]);
     }
-  }, [panelFloats, sliceX, sliceY, sliceZ, obliqueAngle, obliqueSegment, obliqueHoverTarget, zooms, showCrosshair, themeColors, canvasSizes, sliceDims, nx, ny, dataPointToCanvas]);
+  }, [panelFloats, colIndex, rowIndex, sliceIndex, obliqueAngle, obliqueSegment, obliqueHoverTarget, zooms, showCrosshair, themeColors, canvasSizes, sliceDims, numCols, numRows, dataPointToCanvas]);
 
   // -------------------------------------------------------------------------
   // Scale bar (HiDPI UI overlay)
   // -------------------------------------------------------------------------
   React.useEffect(() => {
     const dpr = window.devicePixelRatio || 1;
-    const sampling = panelSampling(pixelSizeAxes, obliqueAngle);
+    const sampling = panelSampling(voxelSizeA, obliqueAngle);
     for (let axis = 0; axis < sliceDims.length; axis++) {
       const uiCanvas = uiRefs.current[axis];
       if (!uiCanvas) continue;
@@ -2608,17 +2610,17 @@ function Show3DSlices() {
         uiCtx.restore();
       }
     }
-  }, [pixelSizeAxes, showScaleBar, zooms, canvasSizes, sliceDims, showColorbar, cmap, displayDataRange, imageVminPct, imageVmaxPct, flip, obliqueAngle, themeInfo.theme]);
+  }, [voxelSizeA, showScaleBar, zooms, canvasSizes, sliceDims, showColorbar, cmap, displayDataRange, imageVminPct, imageVmaxPct, flip, obliqueAngle, themeInfo.theme]);
 
   // -------------------------------------------------------------------------
   // FFT computation and caching (per-axis: only recompute changed axes)
   // -------------------------------------------------------------------------
   const prevFFTCacheRef = React.useRef<{
-    sliceZ: number;
+    sliceIndex: number;
     panelFloats: Float32Array | null;
     fftColormap: string; fftLogScale: boolean; fftAuto: boolean; fftWindow: boolean; fftPath: RenderPath | null;
     showFft: boolean;
-  }>({ sliceZ: -1, panelFloats: null, fftColormap: "", fftLogScale: false, fftAuto: false, fftWindow: false, fftPath: null, showFft: false });
+  }>({ sliceIndex: -1, panelFloats: null, fftColormap: "", fftLogScale: false, fftAuto: false, fftWindow: false, fftPath: null, showFft: false });
 
   React.useEffect(() => {
     if (!showFft || !panelFloats || panelFloats.length === 0) {
@@ -2640,7 +2642,7 @@ function Show3DSlices() {
       fftWindow !== prevFFT.fftWindow ||
       fftPath !== prevFFT.fftPath || !prevFFT.showFft;
     const fftAxisChanged = [
-      globalFFTChanged || sliceZ !== prevFFT.sliceZ,
+      globalFFTChanged || sliceIndex !== prevFFT.sliceIndex,
       true,
     ];
 
@@ -2655,13 +2657,13 @@ function Show3DSlices() {
       forceAll: boolean,
     ) => {
       const extractors = [
-        () => extractXY(floats, nx, ny, nz, sliceZ),
-        () => extractOblique(floats, nx, ny, nz, obliqueSegment.start, obliqueSegment.stop),
+        () => extractTopSlice(floats, numCols, numRows, numSlices, sliceIndex),
+        () => extractOblique(floats, numCols, numRows, numSlices, obliqueSegment.start, obliqueSegment.stop),
       ];
       for (let axis = 0; axis < sliceDims.length; axis++) {
         if (!forceAll && !fftAxisChanged[axis]) continue;
         const [sliceH, sliceW] = sliceDims[axis];
-        const cacheKey = makeFftResultCacheKey(axis, sliceZ, obliqueSegment, sliceW, sliceH);
+        const cacheKey = makeFftResultCacheKey(axis, sliceIndex, obliqueSegment, sliceW, sliceH);
         const cached = fftResultCacheRef.current.get(cacheKey);
         if (cached) {
           cached.lastUsed = ++fftResultCacheSeqRef.current;
@@ -2699,7 +2701,7 @@ function Show3DSlices() {
       fftMagCacheRefs.current = localMagCache.current;
       fftOffscreenRefs.current = localOffscreenCache.current;
       fftImgDataRefs.current = localImgDataCache.current;
-      prevFFTCacheRef.current = { sliceZ, panelFloats, fftColormap, fftLogScale, fftAuto, fftWindow, fftPath, showFft };
+      prevFFTCacheRef.current = { sliceIndex, panelFloats, fftColormap, fftLogScale, fftAuto, fftWindow, fftPath, showFft };
       return true;
     };
 
@@ -2714,7 +2716,7 @@ function Show3DSlices() {
       computeAllFFTs().then((committed) => { if (committed) setFftVersion((version) => version + 1); });
     }, debounceMs);
     return () => { cancelled = true; clearTimeout(timeoutId); };
-  }, [showFft, panelFloats, sliceX, sliceY, sliceZ, obliqueAngle, obliqueSegment, nx, ny, nz, sliceDims, fftColormap, fftLogScale, fftAuto, fftWindow, fftPath]);
+  }, [showFft, panelFloats, colIndex, rowIndex, sliceIndex, obliqueAngle, obliqueSegment, numCols, numRows, numSlices, sliceDims, fftColormap, fftLogScale, fftAuto, fftWindow, fftPath]);
 
   // Redraw cached FFT with zoom/pan (cheap -- no recomputation)
   React.useLayoutEffect(() => {
@@ -2734,7 +2736,7 @@ function Show3DSlices() {
   React.useEffect(() => {
     if (!showFft) return;
     const dpr = window.devicePixelRatio || 1;
-    const sampling = panelSampling(pixelSizeAxes, obliqueAngle);
+    const sampling = panelSampling(voxelSizeA, obliqueAngle);
     for (let axis = 0; axis < sliceDims.length; axis++) {
       const overlay = fftOverlayRefs.current[axis];
       if (!overlay) continue;
@@ -2790,16 +2792,16 @@ function Show3DSlices() {
         ctx.restore();
       }
     }
-  }, [showFft, fftZooms, canvasSizes, sliceDims, pixelSizeAxes, obliqueAngle, fftClickInfo]);
+  }, [showFft, fftZooms, canvasSizes, sliceDims, voxelSizeA, obliqueAngle, fftClickInfo]);
 
   // -------------------------------------------------------------------------
   // Playback logic (matching Show3D pattern)
   // -------------------------------------------------------------------------
   const obliquePlaybackStateRef = React.useRef({ current: 0, start: 0, end: 0 });
   const effectiveLoopEnds = React.useMemo(() => loopEnds.map((end, i) => {
-    const max = [nz - 1, ny - 1, nx - 1][i];
+    const max = [numSlices - 1, numRows - 1, numCols - 1][i];
     return end < 0 ? max : Math.min(end, max);
-  }), [loopEnds, nz, ny, nx]);
+  }), [loopEnds, numSlices, numRows, numCols]);
   React.useEffect(() => {
     if (!playing) return;
     let cancelled = false;
@@ -3033,26 +3035,26 @@ function Show3DSlices() {
   const obliqueHandleDragRef = React.useRef<{
     mode: "endpoint";
     handle: "start" | "stop";
-    opposite: { x: number; y: number };
+    opposite: ImagePoint;
   } | {
     mode: "line";
     angleDeg: number;
-    origin: { x: number; y: number };
-    start: { x: number; y: number };
-    stop: { x: number; y: number };
+    origin: ImagePoint;
+    start: ImagePoint;
+    stop: ImagePoint;
   } | null>(null);
   const obliquePositionDragRef = React.useRef<{
     angleDeg: number;
     currentOffset: number;
     minOffset: number;
     maxOffset: number;
-    start: { x: number; y: number };
-    stop: { x: number; y: number };
+    start: ImagePoint;
+    stop: ImagePoint;
   } | null>(null);
   const [liveObliqueOffset, setLiveObliqueOffset] = React.useState<number | null>(null);
   const [obliqueAngleBounds, setObliqueAngleBounds] = React.useState<[number, number] | null>(null);
   const [obliquePositionBounds, setObliquePositionBounds] = React.useState<[number, number] | null>(null);
-  const imagePointFromEvent = (event: React.MouseEvent | MouseEvent, axis: number): { col: number; row: number } | null => {
+  const imagePointFromEvent = (event: React.MouseEvent | MouseEvent, axis: number): ImagePoint | null => {
     const canvas = canvasRefs.current?.[axis];
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
@@ -3063,27 +3065,27 @@ function Show3DSlices() {
     const centerX = canvasW / 2, centerY = canvasH / 2;
     const col = ((canvasX - centerX - view.panX) / view.zoom + centerX) / scaleX;
     const row = ((canvasY - centerY - view.panY) / view.zoom + centerY) / scaleY;
-    return { col, row };
+    return { row, col };
   };
   const updateObliqueCenter = (
-    cx: number,
-    cy: number,
+    centerCol: number,
+    centerRow: number,
     angleDeg = obliqueAngle,
-    segment: { start: { x: number; y: number }; stop: { x: number; y: number } } = obliqueSegment,
+    segment: { start: ImagePoint; stop: ImagePoint } = obliqueSegment,
   ) => {
-    const x = clampNumber(Math.round(cx), 0, nx - 1);
-    const y = clampNumber(Math.round(cy), 0, ny - 1);
-    setSliceX(x);
-    setSliceY(y);
+    const nextCol = clampNumber(Math.round(centerCol), 0, numCols - 1);
+    const nextRow = clampNumber(Math.round(centerRow), 0, numRows - 1);
+    setColIndex(nextCol);
+    setRowIndex(nextRow);
     volumeRenderParamsRef.current = {
       ...volumeRenderParamsRef.current,
-      sliceX: x,
-      sliceY: y,
+      colIndex: nextCol,
+      rowIndex: nextRow,
       obliqueAngleDeg: angleDeg,
-      obliqueStartX: segment.start.x,
-      obliqueStartY: segment.start.y,
-      obliqueEndX: segment.stop.x,
-      obliqueEndY: segment.stop.y,
+      obliqueStartCol: segment.start.col,
+      obliqueStartRow: segment.start.row,
+      obliqueEndCol: segment.stop.col,
+      obliqueEndRow: segment.stop.row,
     };
     // Repaint the oblique panel straight from the resident GPU volume. The
     // segment lives in anywidget model traits whose setters round-trip through
@@ -3100,20 +3102,20 @@ function Show3DSlices() {
     directPaintPlane(1, 0);
     const renderer = volumeRendererRef.current;
     if (renderer && panelFloats && panelFloats.length > 0) {
-      renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { zStretch: zStretchRef.current, orthographic });
+      renderer.render(volumeRenderParamsRef.current, liveCameraRef.current, bgColorRef.current, { sliceStretch: sliceStretchRef.current, orthographic });
     }
   };
-  const updateObliqueFromEndpoints = (moving: { x: number; y: number }, opposite: { x: number; y: number }) => {
-    const start = clampPointToImage(moving, nx, ny, OBLIQUE_PROFILE_EDGE_INSET);
-    const stop = clampPointToImage(opposite, nx, ny, OBLIQUE_PROFILE_EDGE_INSET);
-    const cx = clampNumber(Math.round((start.x + stop.x) / 2), 0, nx - 1);
-    const cy = clampNumber(Math.round((start.y + stop.y) / 2), 0, ny - 1);
-    const rawAngle = (Math.atan2(start.y - stop.y, start.x - stop.x) * 180) / Math.PI;
+  const updateObliqueFromEndpoints = (moving: ImagePoint, opposite: ImagePoint) => {
+    const start = clampPointToImage(moving, numCols, numRows, OBLIQUE_PROFILE_EDGE_INSET);
+    const stop = clampPointToImage(opposite, numCols, numRows, OBLIQUE_PROFILE_EDGE_INSET);
+    const centerCol = clampNumber(Math.round((start.col + stop.col) / 2), 0, numCols - 1);
+    const centerRow = clampNumber(Math.round((start.row + stop.row) / 2), 0, numRows - 1);
+    const rawAngle = (Math.atan2(start.row - stop.row, start.col - stop.col) * 180) / Math.PI;
     const nextAngle = ((rawAngle % 180) + 180) % 180;
     setObliqueAngle(nextAngle);
     setObliqueProfileLine(profileLinePayload(start, stop));
     setObliquePositionBounds(null);
-    updateObliqueCenter(cx, cy, nextAngle, { start, stop });
+    updateObliqueCenter(centerCol, centerRow, nextAngle, { start, stop });
     scheduleLiveFft([1], { segment: { start, stop } });
   };
   const updateObliqueFromNormalOffset = (offset: number) => {
@@ -3121,56 +3123,56 @@ function Show3DSlices() {
     const angleDeg = dragBasis?.angleDeg ?? obliqueAngle;
     const baseStart = dragBasis?.start ?? obliqueSegment.start;
     const baseStop = dragBasis?.stop ?? obliqueSegment.stop;
-    const currentOffset = dragBasis?.currentOffset ?? obliqueCenterOffset(nx, ny, angleDeg, baseStart, baseStop);
+    const currentOffset = dragBasis?.currentOffset ?? obliqueCenterOffset(numCols, numRows, angleDeg, baseStart, baseStop);
     const [minDelta, maxDelta] = dragBasis
       ? [dragBasis.minOffset - dragBasis.currentOffset, dragBasis.maxOffset - dragBasis.currentOffset]
-      : obliqueSegmentOffsetBounds(nx, ny, angleDeg, baseStart, baseStop, OBLIQUE_PROFILE_EDGE_INSET);
+      : obliqueSegmentOffsetBounds(numCols, numRows, angleDeg, baseStart, baseStop, OBLIQUE_PROFILE_EDGE_INSET);
     const normal = obliqueNormal(angleDeg);
     const nextOffset = clampNumber(offset, currentOffset + minDelta, currentOffset + maxDelta);
     const delta = nextOffset - currentOffset;
-    const dx = normal.x * delta;
-    const dy = normal.y * delta;
-    const start = clampPointToImage({ x: baseStart.x + dx, y: baseStart.y + dy }, nx, ny, OBLIQUE_PROFILE_EDGE_INSET);
-    const stop = clampPointToImage({ x: baseStop.x + dx, y: baseStop.y + dy }, nx, ny, OBLIQUE_PROFILE_EDGE_INSET);
+    const colDelta = normal.col * delta;
+    const rowDelta = normal.row * delta;
+    const start = clampPointToImage({ row: baseStart.row + rowDelta, col: baseStart.col + colDelta }, numCols, numRows, OBLIQUE_PROFILE_EDGE_INSET);
+    const stop = clampPointToImage({ row: baseStop.row + rowDelta, col: baseStop.col + colDelta }, numCols, numRows, OBLIQUE_PROFILE_EDGE_INSET);
     obliquePlaybackStateRef.current = {
       ...obliquePlaybackStateRef.current,
       current: Math.round(nextOffset),
     };
     setLiveObliqueOffset(Math.round(nextOffset));
     setObliqueProfileLine(profileLinePayload(start, stop));
-    updateObliqueCenter((start.x + stop.x) / 2, (start.y + stop.y) / 2, angleDeg, { start, stop });
+    updateObliqueCenter((start.col + stop.col) / 2, (start.row + stop.row) / 2, angleDeg, { start, stop });
     scheduleLiveFft([1], { segment: { start, stop } });
   };
   const updateObliqueFromLineDrag = (
     drag: {
       angleDeg: number;
-      origin: { x: number; y: number };
-      start: { x: number; y: number };
-      stop: { x: number; y: number };
+      origin: ImagePoint;
+      start: ImagePoint;
+      stop: ImagePoint;
     },
-    point: { col: number; row: number },
+    point: ImagePoint,
   ) => {
-    const dxRaw = point.col - drag.origin.x;
-    const dyRaw = point.row - drag.origin.y;
+    const colDeltaRaw = point.col - drag.origin.col;
+    const rowDeltaRaw = point.row - drag.origin.row;
     const { start, stop } = translateSegmentInsideImage(
       drag.start,
       drag.stop,
-      dxRaw,
-      dyRaw,
-      nx,
-      ny,
+      colDeltaRaw,
+      rowDeltaRaw,
+      numCols,
+      numRows,
       OBLIQUE_PROFILE_EDGE_INSET,
     );
     setLiveObliqueOffset(null);
     setObliquePositionBounds(null);
     setObliqueProfileLine(profileLinePayload(start, stop));
-    updateObliqueCenter((start.x + stop.x) / 2, (start.y + stop.y) / 2, drag.angleDeg, { start, stop });
+    updateObliqueCenter((start.col + stop.col) / 2, (start.row + stop.row) / 2, drag.angleDeg, { start, stop });
     scheduleLiveFft([1], { segment: { start, stop } });
   };
   // What the pointer is over on the Top panel's oblique line: the nearer
   // endpoint handle (screen-space radius around the drawn, edge-clamped handle)
   // or the line body (image-space distance). Null off the Top panel or image.
-  const obliqueHitTest = (event: React.MouseEvent, axis: number): { target: "start" | "stop" | "line" | null; point: { col: number; row: number } } | null => {
+  const obliqueHitTest = (event: React.MouseEvent, axis: number): { target: "start" | "stop" | "line" | null; point: ImagePoint } | null => {
     if (axis !== 0) return null;
     const canvas = canvasRefs.current?.[axis];
     const point = imagePointFromEvent(event, axis);
@@ -3183,8 +3185,8 @@ function Show3DSlices() {
     const view = liveZoomsRef.current[axis];
     const imageHitRadius = (screenPx: number) => screenPx / Math.max(1e-6, Math.min(scaleX, scaleY) * view.zoom);
     const visualRadius = 8;
-    const startCanvas = dataPointToCanvas(axis, start.x, start.y);
-    const stopCanvas = dataPointToCanvas(axis, stop.x, stop.y);
+    const startCanvas = dataPointToCanvas(axis, start.col, start.row);
+    const stopCanvas = dataPointToCanvas(axis, stop.col, stop.row);
     const hitStart = {
       x: clampNumber(startCanvas.x, visualRadius + 2, hitW - visualRadius - 2),
       y: clampNumber(startCanvas.y, visualRadius + 2, hitH - visualRadius - 2),
@@ -3197,7 +3199,7 @@ function Show3DSlices() {
     const stopDist = Math.hypot(mouseX - hitStop.x, mouseY - hitStop.y);
     const handleRadius = 20 * (window.devicePixelRatio || 1);
     if (startDist <= handleRadius || stopDist <= handleRadius) return { target: startDist <= stopDist ? "start" : "stop", point };
-    const lineDist = pointToSegmentDistance(point.col, point.row, start.x, start.y, stop.x, stop.y);
+    const lineDist = pointToSegmentDistance(point.col, point.row, start.col, start.row, stop.col, stop.row);
     return { target: lineDist <= imageHitRadius(32 * (window.devicePixelRatio || 1)) ? "line" : null, point };
   };
   const handleMouseDown = (event: React.MouseEvent, axis: number) => {
@@ -3221,7 +3223,7 @@ function Show3DSlices() {
         obliqueHandleDragRef.current = {
           mode: "line",
           angleDeg: obliqueAngle,
-          origin: { x: hit.point.col, y: hit.point.row },
+          origin: hit.point,
           start,
           stop,
         };
@@ -3280,17 +3282,17 @@ function Show3DSlices() {
       setCursorInfoThrottled(null);
       return;
     }
-    // 3D voxel lookup. XY is a Z slice; oblique is a vertical plane through
-    // the current XY center, rotated about Z.
+    // 3D voxel lookup. Top is one slice; oblique is a vertical plane through
+    // the current (row, col) center, rotated about the slice axis.
     let value: number;
     if (axis === 0) {
-      value = panelFloats[sliceZ * ny * nx + pixelRow * nx + pixelCol];
+      value = panelFloats[sliceIndex * numRows * numCols + pixelRow * numCols + pixelCol];
     } else {
       const denom = Math.max(1, sliceW - 1);
       const t = pixelCol / denom;
-      const x = obliqueSegment.start.x + (obliqueSegment.stop.x - obliqueSegment.start.x) * t;
-      const y = obliqueSegment.start.y + (obliqueSegment.stop.y - obliqueSegment.start.y) * t;
-      value = sampleVolumeBilinear(panelFloats, nx, ny, nz, pixelRow, x, y);
+      const sampleCol = obliqueSegment.start.col + (obliqueSegment.stop.col - obliqueSegment.start.col) * t;
+      const sampleRow = obliqueSegment.start.row + (obliqueSegment.stop.row - obliqueSegment.start.row) * t;
+      value = sampleVolumeBilinear(panelFloats, numCols, numRows, numSlices, pixelRow, sampleCol, sampleRow);
     }
     setCursorInfoThrottled({
       row: pixelRow,
@@ -3311,7 +3313,7 @@ function Show3DSlices() {
     if (!point) return;
     if (drag.mode === "endpoint") {
       updateObliqueFromEndpoints(
-        clampPointToImage({ x: point.col, y: point.row }, nx, ny, OBLIQUE_PROFILE_EDGE_INSET),
+        clampPointToImage(point, numCols, numRows, OBLIQUE_PROFILE_EDGE_INSET),
         drag.opposite,
       );
     } else {
@@ -3357,19 +3359,19 @@ function Show3DSlices() {
             }
             clickJumpTimerRef.current = window.setTimeout(() => {
               if (axis === 0) {
-                setSliceY(pixelRow);
-                setSliceX(pixelCol);
+                setRowIndex(pixelRow);
+                setColIndex(pixelCol);
               } else {
                 const denom = Math.max(1, sliceW - 1);
                 const t = pixelCol / denom;
-                const x = obliqueSegment.start.x + (obliqueSegment.stop.x - obliqueSegment.start.x) * t;
-                const y = obliqueSegment.start.y + (obliqueSegment.stop.y - obliqueSegment.start.y) * t;
-                const nextX = Math.round(x);
-                const nextY = Math.round(y);
-                if (nextX >= 0 && nextX < nx && nextY >= 0 && nextY < ny) {
-                  setSliceZ(pixelRow);
-                  setSliceX(nextX);
-                  setSliceY(nextY);
+                const sampleCol = obliqueSegment.start.col + (obliqueSegment.stop.col - obliqueSegment.start.col) * t;
+                const sampleRow = obliqueSegment.start.row + (obliqueSegment.stop.row - obliqueSegment.start.row) * t;
+                const nextCol = Math.round(sampleCol);
+                const nextRow = Math.round(sampleRow);
+                if (nextCol >= 0 && nextCol < numCols && nextRow >= 0 && nextRow < numRows) {
+                  setSliceIndex(pixelRow);
+                  setColIndex(nextCol);
+                  setRowIndex(nextRow);
                 }
               }
               clickJumpTimerRef.current = null;
@@ -3435,7 +3437,7 @@ function Show3DSlices() {
     const advanceTransportAxis = (axis: number, delta: number) => {
       event.preventDefault();
       if (axis === 0) {
-        setSliceZ(Math.max(0, Math.min(nz - 1, sliceZ + delta)));
+        setSliceIndex(Math.max(0, Math.min(numSlices - 1, sliceIndex + delta)));
         return;
       }
       const state = obliquePlaybackStateRef.current;
@@ -3444,7 +3446,7 @@ function Show3DSlices() {
     const jumpTransportAxis = (axis: number, toEnd: boolean) => {
       event.preventDefault();
       if (axis === 0) {
-        setSliceZ(toEnd ? nz - 1 : 0);
+        setSliceIndex(toEnd ? numSlices - 1 : 0);
         return;
       }
       const state = obliquePlaybackStateRef.current;
@@ -3584,7 +3586,7 @@ function Show3DSlices() {
     }
     let spatialFreq: number | null = null;
     let dSpacing: number | null = null;
-    const { row: rowSpacing, col: colSpacing } = panelSampling(pixelSizeAxes, obliqueAngle)[axis];
+    const { row: rowSpacing, col: colSpacing } = panelSampling(voxelSizeA, obliqueAngle)[axis];
     if (rowSpacing > 0 && colSpacing > 0) {
       ({ spatialFrequency: spatialFreq, dSpacing } = reciprocalCoordinatesFromShiftedOffset(dcRow, dcCol, fftH, fftW, rowSpacing, colSpacing));
     }
@@ -3659,31 +3661,31 @@ function Show3DSlices() {
   // 0 is the slice (multislice depth), axis 1 is row, axis 2 is col. Fallback
   // fires only when the trait is briefly undefined (initial mount race).
   const axisLabels = dimLabels || ["slice", "row", "col"];
-  const sliceValues = [sliceZ, sliceY, sliceX];
+  const sliceValues = [sliceIndex, rowIndex, colIndex];
   // Mirror of slice values for the playback loop to read between renders.
   // The loop's `sliceValuesRef.current[0] = value` writes are load-bearing
-  // at high fps (>~20): React batches setSliceZ/Y/X so two ticks can fire
-  // before the next render reassigns this ref to the new [sliceZ,sliceY,sliceX].
+  // at high fps (>~20): React batches the three index setters so two ticks can fire
+  // before the next render reassigns this ref to the new [sliceIndex,rowIndex,colIndex].
   // Without the mutation the second tick reads the stale value and computes the
   // same `next`, freezing playback.
   const sliceValuesRef = React.useRef(sliceValues);
   if (!playing) sliceValuesRef.current = sliceValues;
-  const sliceMaxes = [nz - 1, ny - 1, nx - 1];
+  const sliceMaxes = [numSlices - 1, numRows - 1, numCols - 1];
   // Live thumb mirror: updates per drag-frame so the thumb tracks, WITHOUT touching
   // the model traits (whose change re-runs the heavy render/layout/crosshair effects).
-  // Those effects key on sliceX/Y/Z, so during a drag (traits unchanged) they don't
+  // Those effects key on the three indices, so during a drag (traits unchanged) they don't
   // run - only the slider JSX re-renders + directPaintPlane paints the GPU image.
-  const [liveSlider, setLiveSlider] = React.useState<number[]>([sliceZ, sliceY, sliceX]);
-  const liveSliderRef = React.useRef<number[]>([sliceZ, sliceY, sliceX]);
+  const [liveSlider, setLiveSlider] = React.useState<number[]>([sliceIndex, rowIndex, colIndex]);
+  const liveSliderRef = React.useRef<number[]>([sliceIndex, rowIndex, colIndex]);
   const pendingPaintRef = React.useRef<Map<number, number>>(new Map());
   const sliderPaintRafRef = React.useRef<number | null>(null);
   const pendingContrastRangeRef = React.useRef<[number, number] | null>(null);
   const contrastPaintRafRef = React.useRef<number | null>(null);
   React.useEffect(() => {
-    const next = [sliceZ, sliceY, sliceX];
+    const next = [sliceIndex, rowIndex, colIndex];
     liveSliderRef.current = next;
     setLiveSlider(next);
-  }, [sliceZ, sliceY, sliceX]);
+  }, [sliceIndex, rowIndex, colIndex]);
   React.useEffect(() => {
     return () => {
       if (sliderPaintRafRef.current != null) cancelAnimationFrame(sliderPaintRafRef.current);
@@ -3695,7 +3697,7 @@ function Show3DSlices() {
   // the slice follows the thumb instead of appearing on release. Its own
   // offscreen keeps the committed one a cache of the committed slice.
   const previewOffscreenRef = React.useRef<{ canvas: HTMLCanvasElement; image: ImageData } | null>(null);
-  const previewTopPlane = (sliceIndex: number) => {
+  const previewTopPlane = (topSliceIndex: number) => {
     const canvas = canvasRefs.current[0];
     const ctx = canvas?.getContext("2d");
     const paint = paintParamsRef.current;
@@ -3708,7 +3710,7 @@ function Show3DSlices() {
       preview = { canvas: offscreen, image: new ImageData(sliceW, sliceH) };
       previewOffscreenRef.current = preview;
     }
-    const slice = extractXY(panelFloats, nx, ny, nz, sliceIndex);
+    const slice = extractTopSlice(panelFloats, numCols, numRows, numSlices, topSliceIndex);
     const { vmin, vmax } = volumeDisplayWindow(paint.imageDataRange, paint.imageVminPct, paint.imageVmaxPct, paint.flip);
     renderToOffscreenReuse(maybeFlip(paint.logScale ? applyLogScale(slice) : slice, paint.flip), COLORMAPS[paint.cmap] || COLORMAPS.inferno, vmin, vmax, preview.canvas, preview.image);
     const { w: canvasW, h: canvasH } = paint.canvasSizes[0];
@@ -3724,14 +3726,14 @@ function Show3DSlices() {
     next[axis] = value;
     liveSliderRef.current = next;
     sliceValuesRef.current = next;
-    liveSliceParamsRef.current = { sliceZ: next[0], sliceY: next[1], sliceX: next[2] };
+    liveSliceParamsRef.current = { sliceIndex: next[0], rowIndex: next[1], colIndex: next[2] };
     volumeRenderParamsRef.current = { ...volumeRenderParamsRef.current, ...liveSliceParamsRef.current };
     if (axis === 0) {
-      scheduleLiveFft([0], { sliceZ: next[0] });
+      scheduleLiveFft([0], { sliceIndex: next[0] });
     } else if (!obliqueSegment.explicit) {
-      const [rawStart, rawStop] = obliqueLineEndpoints(nx, ny, next[2], next[1], obliqueAngle);
-      const start = clampPointToImage(rawStart, nx, ny, OBLIQUE_PROFILE_EDGE_INSET);
-      const stop = clampPointToImage(rawStop, nx, ny, OBLIQUE_PROFILE_EDGE_INSET);
+      const [rawStart, rawStop] = obliqueLineEndpoints(numCols, numRows, next[2], next[1], obliqueAngle);
+      const start = clampPointToImage(rawStart, numCols, numRows, OBLIQUE_PROFILE_EDGE_INSET);
+      const stop = clampPointToImage(rawStop, numCols, numRows, OBLIQUE_PROFILE_EDGE_INSET);
       scheduleLiveFft([1], { segment: { start, stop } });
     }
     pendingPaintRef.current.set(axis, value);
@@ -3778,10 +3780,10 @@ function Show3DSlices() {
     });
   };
   commitSliceValuesRef.current = () => {
-    const [liveSliceZ, liveSliceY, liveSliceX] = liveSliderRef.current;
-    if (sliceZ !== liveSliceZ) setSliceZ(liveSliceZ);
-    if (sliceY !== liveSliceY) setSliceY(liveSliceY);
-    if (sliceX !== liveSliceX) setSliceX(liveSliceX);
+    const [liveSliceIndex, liveRowIndex, liveColIndex] = liveSliderRef.current;
+    if (sliceIndex !== liveSliceIndex) setSliceIndex(liveSliceIndex);
+    if (rowIndex !== liveRowIndex) setRowIndex(liveRowIndex);
+    if (colIndex !== liveColIndex) setColIndex(liveColIndex);
   };
   const stopPlaybackAndRewind = () => {
     setPlaying(false);
@@ -3792,7 +3794,7 @@ function Show3DSlices() {
         const start = Math.max(0, Math.min(loopStarts[0], sliceMaxes[0]));
         next[0] = start;
         paintAndTrackRef.current?.(0, start);
-        setSliceZ(start);
+        setSliceIndex(start);
       } else {
         const start = obliquePlaybackStateRef.current.start;
         obliquePlaybackStateRef.current = { ...obliquePlaybackStateRef.current, current: start };
@@ -3843,14 +3845,14 @@ function Show3DSlices() {
       setLoopStarts(nextStarts);
       setLoopEnds(nextEnds);
     }
-    [setSliceZ, setSliceY, setSliceX][axis](values[1]);
+    [setSliceIndex, setRowIndex, setColIndex][axis](values[1]);
   };
   const handleLoopSliderPointerDownCapture = (axis: number, event: React.PointerEvent<HTMLSpanElement>) => {
     if (event.button !== 0) return;
     const max = sliceMaxes[axis];
     trackSliderPress(event, (fraction) => Math.max(0, Math.min(max, Math.round(fraction * max))), (value, released) => {
       paintAndTrackRef.current?.(axis, value);
-      if (released) [setSliceZ, setSliceY, setSliceX][axis](value);
+      if (released) [setSliceIndex, setRowIndex, setColIndex][axis](value);
     });
   };
   // Over-clip detection: user dragged hist thumbs past data peak → image goes black.
@@ -3871,7 +3873,7 @@ function Show3DSlices() {
     return vmin >= imageClipBounds.vmax || vmax <= imageClipBounds.vmin;
   })();
 
-  // Thin-Z layout: depth axis much smaller than lateral. Show the top panel
+  // Few-slice layout: depth axis much smaller than lateral. Show the top panel
   // beside the single oblique depth panel.
   const panelTotalW = (canvasSizes[0]?.w ?? CANVAS_TARGET) + (canvasSizes[1]?.w ?? 0) + SPACING.SM;
   const sliceColumnOffsetPx = (webgpuSupported ? volumeCanvasSize : 220) + SPACING.SM;
@@ -3905,15 +3907,15 @@ function Show3DSlices() {
       obliqueAngleSliderMin + fraction * (obliqueAngleSliderMax - obliqueAngleSliderMin), obliqueAngleMinBound, obliqueAngleMaxBound,
     )), (value) => updateObliqueAngleWithinBounds(value));
   };
-  const obliqueCurrentOffset = obliqueCenterOffset(nx, ny, obliqueAngle, obliqueSegment.start, obliqueSegment.stop);
+  const obliqueCurrentOffset = obliqueCenterOffset(numCols, numRows, obliqueAngle, obliqueSegment.start, obliqueSegment.stop);
   // Plane center in image coordinates. Position measures along the plane normal,
   // which turns with Angle, so its number moves on rotation even when the cut
   // does not; the center is stated in fixed image pixels instead.
-  const obliqueCenterCol = (obliqueSegment.start.x + obliqueSegment.stop.x) / 2;
-  const obliqueCenterRow = (obliqueSegment.start.y + obliqueSegment.stop.y) / 2;
+  const obliqueCenterCol = (obliqueSegment.start.col + obliqueSegment.stop.col) / 2;
+  const obliqueCenterRow = (obliqueSegment.start.row + obliqueSegment.stop.row) / 2;
   const [obliqueDeltaMin, obliqueDeltaMax] = obliqueSegmentOffsetBounds(
-    nx,
-    ny,
+    numCols,
+    numRows,
     obliqueAngle,
     obliqueSegment.start,
     obliqueSegment.stop,
@@ -3924,8 +3926,8 @@ function Show3DSlices() {
   const obliqueOffset = liveObliqueOffset ?? clampNumber(Math.round(obliqueCurrentOffset), obliqueOffsetMin, obliqueOffsetMax);
   const beginObliquePositionDrag = () => {
     pausePlaybackForEdit();
-    const currentOffset = obliqueCenterOffset(nx, ny, obliqueAngle, obliqueSegment.start, obliqueSegment.stop);
-    const [minDelta, maxDelta] = obliqueSegmentOffsetBounds(nx, ny, obliqueAngle, obliqueSegment.start, obliqueSegment.stop, OBLIQUE_PROFILE_EDGE_INSET);
+    const currentOffset = obliqueCenterOffset(numCols, numRows, obliqueAngle, obliqueSegment.start, obliqueSegment.stop);
+    const [minDelta, maxDelta] = obliqueSegmentOffsetBounds(numCols, numRows, obliqueAngle, obliqueSegment.start, obliqueSegment.stop, OBLIQUE_PROFILE_EDGE_INSET);
     obliquePositionDragRef.current = {
       angleDeg: obliqueAngle,
       currentOffset,
@@ -4050,7 +4052,7 @@ function Show3DSlices() {
   };
   const alignmentShiftLimit = Math.max(
     2,
-    Math.ceil(Math.max(nx, ny) / Math.max(1, nz - 1)),
+    Math.ceil(Math.max(numCols, numRows) / Math.max(1, numSlices - 1)),
   );
   const alignmentStatusText = localAlignmentStatus || (
     !sliceAlignmentCached && alignmentActive ? "Estimating..." : ""
@@ -4237,12 +4239,12 @@ function Show3DSlices() {
                 ["Panels per page", String(pagePanelIndices.length)] as [string, React.ReactNode],
                 ["Active panel", `${activePanelSlot + 1}: ${activePanelTitle}`] as [string, React.ReactNode],
               ] : []),
-              ["Shape", `${nz} x ${ny} x ${nx}`] as [string, React.ReactNode],
+              ["Shape", `${numSlices} x ${numRows} x ${numCols}`] as [string, React.ReactNode],
               ["Axes", Array.isArray(dimLabels) && dimLabels.length ? dimLabels.join(", ") : "slice, row, col"] as [string, React.ReactNode],
-              ["Sampling", pixelSizeAxes.some((spacing) => spacing > 0)
-                ? `${pixelSizeAxes.map((spacing) => formatNumber(spacing)).join(" x ")} Å/px`
+              ["Sampling", voxelSizeA.some((spacing) => spacing > 0)
+                ? `${voxelSizeA.map((spacing) => formatNumber(spacing)).join(" x ")} Å/px`
                 : "not set, lengths in px"] as [string, React.ReactNode],
-              ["Display", `z stretch ${formatNumber(zStretch)}, ${orthographic ? "orthographic" : "perspective"}`] as [string, React.ReactNode],
+              ["Display", `z stretch ${formatNumber(sliceStretch)}, ${orthographic ? "orthographic" : "perspective"}`] as [string, React.ReactNode],
             ]} />
             <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
             {isPaged && <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Page switches comparable volumes while preserving the same top slice, side cut, zoom, and display settings.</Typography>}
@@ -4311,7 +4313,7 @@ function Show3DSlices() {
                   ref={volumeCanvasRef}
                   style={{ width: volumeCanvasSize, height: volumeCanvasSize, display: "block" }}
                   role="img"
-                  aria-label={`3D volume rendering: ${displayTitle} (${nx} by ${ny} by ${nz} voxels). Drag to rotate, wheel to zoom.`}
+                  aria-label={`3D volume rendering: ${displayTitle} (${numCols} by ${numRows} by ${numSlices} voxels). Drag to rotate, wheel to zoom.`}
                 />
                 {cameraChanged && (
                   <Button
@@ -4408,7 +4410,7 @@ function Show3DSlices() {
               key={axis}
               sx={{ minWidth: canvasW, gridArea: `a${axis}`, display: normalizedPlaneVisibility[axis] ? undefined : "none" }}
             >
-              {/* displayH is the z-stretched height on depth panels. */}
+              {/* displayH is the slice-stretched height on depth panels. */}
               <Box
                 ref={(el: HTMLDivElement | null) => { imageBoxRefs.current[axis] = el; }}
                 sx={{ ...container.imageBox, width: canvasW, height: displayH, cursor: slicePanelCursor(axis), borderColor: PLANE_COLORS[axis] }}
@@ -4427,7 +4429,7 @@ function Show3DSlices() {
                   style={{ width: canvasW, height: displayH, imageRendering: smooth ? "auto" : "pixelated" }}
                   role="img"
                   aria-label={axis === 0
-                    ? `XY slice ${liveSlider[0] + 1} of ${nz} along ${axisLabels[0]} axis${title ? `: ${title}` : ""} (${canvasW} by ${canvasH} px)`
+                    ? `XY slice ${liveSlider[0] + 1} of ${numSlices} along ${axisLabels[0]} axis${title ? `: ${title}` : ""} (${canvasW} by ${canvasH} px)`
                     : `Oblique vertical slice at ${obliqueAngle.toFixed(1)} degrees, position ${Math.round(obliqueCurrentOffset)}${title ? `: ${title}` : ""} (${canvasW} by ${canvasH} px)`}
                 />
                 <canvas
@@ -4598,7 +4600,7 @@ function Show3DSlices() {
                     min={0}
                     max={sliceMaxes[axis]}
                     onChange={(_, value) => paintAndTrackRef.current!(0, value as number)}
-                    onChangeCommitted={(_, value) => setSliceZ(value as number)}
+                    onChangeCommitted={(_, value) => setSliceIndex(value as number)}
                     size="small"
                     sx={{ ...sliderStyles.small, flex: 1, minWidth: 40 }}
                     aria-label={`Top slice ${liveSlider[axis] + 1} of ${sliceMaxes[axis] + 1}`}
@@ -4606,7 +4608,7 @@ function Show3DSlices() {
                     valueLabelFormat={(value) => `${value as number}`}
                   />
                 )}
-                {/* Slices count from 1 here, as in the slider's accessible name; the slice_z trait stays 0-based. */}
+                {/* Slices count from 1 here, as in the slider's accessible name; the slice_index trait stays 0-based. */}
                 <Typography sx={{ ...typography.value, color: themeColors.textMuted, minWidth: 28, textAlign: "right", flexShrink: 0 }}>
                   {liveSlider[axis] + 1}/{sliceMaxes[axis] + 1}
                 </Typography>
@@ -4677,7 +4679,7 @@ function Show3DSlices() {
             </Box>
             <Box sx={contentControlRow}>
               <Typography sx={{ ...controlLabel }} title="Depth-axis display height multiplier (1-50x). CSS-only stretch; data unchanged. Useful when nz << nxy (e.g. multislice ptycho).">Z stretch</Typography>
-              <LiveNumberSlider value={zStretch} min={1} max={50} step={0.5} onLiveChange={handleZStretchChange} onCommit={handleZStretchCommit} sx={{ ...sliderStyles.small, width: 80, mr: 1, "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px" } }} ariaLabel="Depth axis display stretch multiplier" />
+              <LiveNumberSlider value={sliceStretch} min={1} max={50} step={0.5} onLiveChange={handleSliceStretchChange} onCommit={handleSliceStretchCommit} sx={{ ...sliderStyles.small, width: 80, mr: 1, "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px" } }} ariaLabel="Depth axis display stretch multiplier" />
               <Typography sx={clickableControlLabel} title="Negate displayed values. Useful when phase sign is inverted." onClick={() => setFlip(!flip)}>Flip</Typography>
               <Switch checked={flip} onChange={(event) => setFlip(event.target.checked)} size="small" sx={switchStyles.small} slotProps={switchInputSlot("Flip (negate) displayed values")} />
               <Typography sx={{ ...controlLabel }} title="Log scale (signed log1p). Useful for high-dynamic-range volumes.">Log</Typography>

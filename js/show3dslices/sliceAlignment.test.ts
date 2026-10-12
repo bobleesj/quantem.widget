@@ -41,21 +41,21 @@ function shiftedStack(size: number, slices: number, rowDrift: number, colDrift: 
   const imag = new Float32Array(size * size);
   fft2d(real, imag, size, size, false);
   const stack = new Float32Array(slices * size * size);
-  for (let z = 0; z < slices; z++) {
+  for (let sliceIndex = 0; sliceIndex < slices; sliceIndex++) {
     const shiftedReal = new Float32Array(size * size);
     const shiftedImag = new Float32Array(size * size);
     for (let row = 0; row < size; row++) {
       const rowFreq = (row >= (size + 1) >> 1 ? row - size : row) / size;
       for (let col = 0; col < size; col++) {
         const colFreq = (col >= (size + 1) >> 1 ? col - size : col) / size;
-        const angle = -2 * Math.PI * (rowFreq * z * rowDrift + colFreq * z * colDrift);
+        const angle = -2 * Math.PI * (rowFreq * sliceIndex * rowDrift + colFreq * sliceIndex * colDrift);
         const i = row * size + col;
         shiftedReal[i] = real[i] * Math.cos(angle) - imag[i] * Math.sin(angle);
         shiftedImag[i] = real[i] * Math.sin(angle) + imag[i] * Math.cos(angle);
       }
     }
     fft2d(shiftedReal, shiftedImag, size, size, true);
-    stack.set(shiftedReal, z * size * size);
+    stack.set(shiftedReal, sliceIndex * size * size);
   }
   return stack;
 }
