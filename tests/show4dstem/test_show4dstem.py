@@ -721,7 +721,8 @@ def test_qem_bundle_links_acquisitions_for_a_streaming_viewer(tmp_path):
     data = tmp_path / "data"
     data.mkdir()
     for name, seed in (("tilt_a.qem", 1), ("tilt_b.qem", 2)):
-        reference.save_array(data / name, _counts(seed, scan=(3, 4)), {"voltage_kV": 300.0, "scan_sampling_A": [0.4, 0.6]})
+        reference.save_array(data / name, _counts(seed, scan=(3, 4)),
+                             {"voltage_kV": 300.0, "scan_sampling_A": [0.4, 0.6], "detector_sampling_mrad": [1.5, 2.0]})
     launcher = write_qem_bundle([data / "tilt_a.qem", data / "tilt_b.qem"], tmp_path / "viewer",
                                 frame_labels=["-17 mrad", "+17 mrad"], port=8898)
     viewer = tmp_path / "viewer"
@@ -736,6 +737,7 @@ def test_qem_bundle_links_acquisitions_for_a_streaming_viewer(tmp_path):
     assert '\"compare_cols\": 2' in page
     # the page draws the calibration the headers record (it showed 1.0 px scale bars before)
     assert re.search(r'"scan_sampling_A": \[\s*0\.4,\s*0\.6\s*\]', page)
+    assert re.search(r'"detector_sampling_mrad": \[\s*1\.5,\s*2(\.0)?\s*\]', page)
     reference.save_array(data / "wide.qem", _counts(3, scan=(3, 5)))
     with pytest.raises(ValueError, match="one viewer compares acquisitions of one shape"):
         write_qem_bundle([data / "tilt_a.qem", data / "wide.qem"], tmp_path / "other")

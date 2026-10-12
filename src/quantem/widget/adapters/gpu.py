@@ -16,7 +16,6 @@ import numpy as np
 import torch
 
 from quantem.widget.device import device_name, gpu_path_hint, no_gpu_path, print_once
-from quantem.widget.units import acquisition_calibration
 
 try:
     from quantem.gpu import SSB
@@ -104,19 +103,17 @@ def inspect_master(path, *, scan_shape=None):
 
 
 def header_calibration(metadata: dict) -> dict:
-    """The calibration in the header metadata ``inspect_master`` returns, under the vocabulary's flat names.
+    """The calibration in the header metadata ``inspect_master`` returns, under the ``.qem`` flat names.
 
-    quantem.gpu's flat pair ``detector_sampling`` with ``detector_sampling_unit``
-    becomes ``detector_sampling_mrad`` or ``detector_sampling_inv_A`` here, as
-    the axes of a loaded dataset do in ``units.acquisition_calibration``. A
-    ``.qem`` viewer and the command-line export read the header this way, so
-    their scale bars carry the file's calibration and not ``1.0 px``.
+    quantem.gpu's header metadata holds the format's flat keys
+    ``scan_sampling_A``, one of ``detector_sampling_mrad`` and
+    ``detector_sampling_inv_A`` (each ``[row, col]``), ``voltage_kV`` and
+    ``semiangle_mrad``; an absent one is None here. A ``.qem`` viewer and the
+    command-line export read the header this way, so their scale bars carry
+    the file's calibration and not ``1.0 px``.
     """
-    # quantem.gpu name -> vocabulary name: detector_sampling + detector_sampling_unit ->
-    # detector_sampling_mrad | detector_sampling_inv_A; scan_sampling_A, voltage_kV, semiangle_mrad unchanged
-    steps = [metadata.get("scan_sampling_A"), metadata.get("detector_sampling")]
-    sampling = [step for pair in steps for step in ([pair] * 2 if pair is None or np.isscalar(pair) else pair)]
-    return acquisition_calibration(sampling, ["angstrom"] * 2 + [metadata.get("detector_sampling_unit")] * 2, metadata)
+    return {name: metadata.get(name)
+            for name in ("scan_sampling_A", "detector_sampling_mrad", "detector_sampling_inv_A", "voltage_kV", "semiangle_mrad")}
 
 
 def prepare_session(source):
