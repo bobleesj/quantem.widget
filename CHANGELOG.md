@@ -272,6 +272,14 @@ Fixed:
   The unit table (`quantem.widget.units`, `js/units.ts`) reads `1/µm`, `1/μm`
   and `1/um`. A string still outside it raises, and the message names the
   unit and says the image opens uncalibrated as `dataset.array`.
+- `quantem.widget.io.download` without the quantem.data package resolved names
+  by other rules than quantem.data: it took a `survey` bucket (absent from the
+  repository and from quantem.data), listed `placeholder_` entries, took the
+  path of a file inside a folder dataset, called a folder and a file of one
+  name ambiguous when the exact path was given, and built sidecar names with
+  `Path`, which uses `\` on Windows and left the sidecars behind. It resolves
+  a name as quantem.data does for the same listing: buckets `4dstem`, `haadf`,
+  `denoise` and `widget`, no `placeholder_` entry, POSIX sidecar paths.
 
 ## rc42 - 2026-10-11
 

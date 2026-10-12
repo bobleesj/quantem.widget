@@ -3,14 +3,18 @@
 import inspect
 import os
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 DEFAULT_REPO = "bobleesj/quantem-data"
+# The buckets, data suffixes and sidecar suffixes of quantem.data's resolver
+# (quantem.data.huggingface): for one listing the fallback names the same datasets.
+_DATA_BUCKETS = ("4dstem", "haadf", "denoise", "widget")
 _DATA_SUFFIXES = {
     ".h5", ".hdf5", ".qem", ".emd", ".npy", ".npz", ".tif", ".tiff",
     ".mrc", ".mrcs", ".dm3", ".dm4", ".raw", ".bin", ".png", ".jpg",
     ".jpeg",
 }
+_SIDECAR_SUFFIXES = (".yaml", ".yml", ".json")
 
 
 def _shared_download(name: str, **kwargs) -> Path | None:
@@ -41,12 +45,15 @@ def download(
     Prefer a qualified name such as ``"4dstem/gold_512_npy_bin4"``. A short
     name is accepted only when unique. Files already in the Hub cache are
     reused. The compatible optional ``quantem.data`` package owns resolution;
-    this small fallback keeps widget-only installations working.
+    this small fallback keeps widget-only installations working and resolves
+    a name as ``quantem.data`` does: a dataset is a folder or a data file in
+    the ``4dstem``, ``haadf``, ``denoise`` or ``widget`` bucket whose name
+    does not start with ``placeholder_``.
 
     Parameters
     ----------
     name
-        Qualified dataset ID, exact data-file path, or unique short name.
+        Qualified dataset ID, the path of a single-file dataset, or unique short name.
     repo
         Dataset repository. Defaults to ``bobleesj/quantem-data``.
     out
@@ -83,30 +90,35 @@ def download(
     candidates: dict[str, str] = {}
     for path in files:
         parts = path.split("/")
-        if len(parts) < 2 or parts[0] not in {"4dstem", "haadf", "widget", "denoise", "survey"}:
+        if len(parts) < 2 or parts[0] not in _DATA_BUCKETS or parts[1].startswith("placeholder_"):
             continue
-        suffix = Path(path).suffix.lower()
+        # repository paths always use "/": Path answers haadf\gold.yaml on Windows, which matches nothing in a listing
+        suffix = PurePosixPath(path).suffix.lower()
         is_monitor = parts[0] == "widget" and suffix == ".jsonl"
         if suffix not in _DATA_SUFFIXES and not is_monitor:
             continue
-        target = "/".join(parts[:2]) if len(parts) >= 3 else path
-        key = "/".join(parts[:2]) if len(parts) >= 3 else f"{parts[0]}/{Path(parts[1]).stem}"
-        if name in (key, target, path) or ("/" not in name and key.rsplit("/", 1)[1] == name):
+        # a payload under <bucket>/<name>/ declares a folder dataset; a file in a bucket is one, shown by its stem
+        target = "/".join(parts[:2])
+        key = target if len(parts) >= 3 else f"{parts[0]}/{PurePosixPath(parts[1]).stem}"
+        if name in (key, target, key.split("/", 1)[1]):
             candidates[target] = "dir" if len(parts) >= 3 else "file"
     if not candidates:
         raise FileNotFoundError(
             f"{name!r} not found in {repo_id}; browse https://huggingface.co/datasets/{repo_id}"
         )
-    if len(candidates) > 1:
+    # a folder and a file can share a name without the extension; the exact repository path still names one
+    if name not in candidates and len(candidates) > 1:
         raise ValueError(
             f"{name!r} is ambiguous in {repo_id}: {sorted(candidates)}. "
             "Use one of these qualified dataset paths."
         )
-    target_rel, kind = next(iter(candidates.items()))
+    target_rel = name if name in candidates else next(iter(candidates))
+    kind = candidates[target_rel]
     pattern = f"{target_rel}/*" if kind == "dir" else target_rel
     if kind == "file":
-        sidecars = {str(Path(target_rel).with_suffix(suffix)) for suffix in (".json", ".yaml", ".yml")}
-        pattern = [target_rel, *(path for path in files if path in sidecars)]
+        sidecars = [str(PurePosixPath(target_rel).with_suffix(suffix)) for suffix in _SIDECAR_SUFFIXES]
+        selected = [path for path in files if path == target_rel or path in sidecars]
+        pattern = selected if len(selected) > 1 else target_rel
     if verbose:
         print(
             f"Downloading '{name}' from Hugging Face ({repo_id}) over the internet - "
