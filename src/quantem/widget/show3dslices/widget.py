@@ -25,7 +25,7 @@ from quantem.widget.export import HtmlExportMixin, export_slug
 from quantem.widget.pages import resolve_page_labels
 from quantem.widget.show3dslices.alignment import estimate_global_slice_alignment
 from quantem.widget.state import StateFileMixin
-from quantem.widget.units import axis_step, per_axis, stated
+from quantem.widget.units import axis_step, image_axes, per_axis, stated
 from quantem.widget.utils.array import to_numpy
 from quantem.widget.utils.state_io import read_state
 
@@ -125,6 +125,7 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         Voxel sampling for the scale bars, paired with ``units``.
     units : str or sequence of str, optional
         Unit of ``sampling`` (``"A"`` or ``"nm"``); one value applies to every axis.
+        Angstrom when omitted.
     show_scale_bar : bool
         Draw calibrated scale bars when a sampling is known.
     slice_stretch : float
@@ -382,7 +383,7 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         show_title: bool = True,
         cmap: str = "plasma",
         sampling: float | Sequence[float] | None = None,
-        units: str | Sequence[str] = "angstrom",
+        units: str | Sequence[str] | None = None,
         show_scale_bar: bool = True,
         slice_stretch: float = 30.0,
         panel_width_px: int = 0,
@@ -405,7 +406,10 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         self._slice_alignment_estimates: dict[int, dict] = {}
         self._syncing_plane_visibility = False
         self._syncing_pages = False
-        voxel_size_A = [0.0, 0.0, 0.0] if sampling is None else _voxel_size_A(sampling, units)
+        if sampling is None:
+            # a unit stated with no step, for a volume that records none, raises as in every image widget
+            image_axes(None, units, data if core_adapter.is_dataset(data, ndim=3) else None)
+        voxel_size_A = [0.0, 0.0, 0.0] if sampling is None else _voxel_size_A(sampling, "angstrom" if units is None else units)
         if core_adapter.is_dataset(data, ndim=3):
             title = title or data.name
             # the dataset is the source of its voxel size, axis by axis: a keyword gives the step of an

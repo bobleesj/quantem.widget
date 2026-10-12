@@ -99,6 +99,25 @@ def test_every_sampling_keyword_reads_a_numpy_scalar_as_one_step(sampling):
     assert Show3DSlices(stack, sampling=voxel).voxel_size_A == [float(step) for step in np.broadcast_to(np.asarray(voxel, dtype=float), (3,))]
 
 
+def test_a_unit_stated_for_an_input_without_a_step_raises():
+    # units= with no sampling= vanished for an array (no bar, no message) and made the 1.0 of an uncalibrated dataset 1 nm
+    image, stack = np.zeros((8, 8), np.float32), np.zeros((2, 8, 8), np.float32)
+    bare = make_dataset(image, sampling=(1.0, 1.0), units=("pixels", "pixels"))
+    for build in (lambda: Show1D.from_image(image, line=((2, 1), (2, 6)), units="nm"), lambda: Show2D(bare, units="nm", verbose=False),
+                  lambda: Show2D(image, units="nm", verbose=False), lambda: Show1D([1.0, 2.0], units="nm"), lambda: Show3D(stack, units="nm", verbose=False),
+                  lambda: Show3DSlices(stack, units="nm"), lambda: ShowPtycho(image, units="nm"), lambda: ShowPtycho(bare, units="nm")):
+        with pytest.raises(ValueError, match="units='nm' names a unit and the input has no step to give it: a unit needs a step"):
+            build()
+    # an uncalibrated unit states no step, and a calibrated input has one
+    for shown in (Show2D(image, units="px", verbose=False), Show2D(bare, units="px", verbose=False), Show3D(stack, units="px", verbose=False)):
+        assert (shown.pixel_size, shown.pixel_unit) == (0.0, "px")
+    calibrated = make_dataset(image, sampling=(0.2, 0.2), units=("nm", "nm"))
+    assert Show2D(calibrated, units="nm", verbose=False).pixel_size == 0.2 and ShowPtycho(calibrated, units="nm").object_sampling_A == pytest.approx([2.0, 2.0])
+    # a viewer without a step still builds its preview and its export clone (they pass the unit only with a step)
+    plain = Show3D(stack, verbose=False)
+    assert (plain.pixel_size, plain.pixel_unit) == (0.0, "A") and plain._static_fallback_png_b64()
+
+
 def test_one_unit_table_reads_the_format_strings_and_refuses_unknown_text():
     # the three strings a .qem file writes, in the reference unit of their kind
     assert axis_step(0.4, "angstrom") == ("length", 0.4)

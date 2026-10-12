@@ -287,6 +287,15 @@ Fixed:
   variable"). One helper (`quantem.widget.units.per_axis`) reads every
   `sampling` and `units` keyword: a Python or NumPy scalar or a 0-d array is
   one step for every axis, a tuple, a list or a 1-d array one per axis.
+- A `units=` keyword with no `sampling=`, for an input that records no step,
+  vanished: `Show2D(image, units="nm")` and
+  `Show1D.from_image(image, line=..., units="nm")` drew no calibration and
+  said nothing, and `Show2D(uncalibrated_dataset, units="nm")` showed the
+  dataset's `1.0` as 1 nm. It raises `ValueError` ("a unit needs a step") in
+  `Show1D`, `Show2D`, `Show3D`, `Show3DSlices` and `ShowPtycho`, through
+  `quantem.widget.units.image_axes`. `units="px"` and a calibrated dataset
+  are unchanged. The `units` keyword of `Show3DSlices` and `ShowPtycho`
+  defaults to None, which reads a `sampling` in angstrom as before.
 
 ## rc42 - 2026-10-11
 

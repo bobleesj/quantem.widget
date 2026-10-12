@@ -188,8 +188,9 @@ def test_from_image_sampling_without_units_is_in_angstrom():
     for uncalibrated in (Show1D.from_image(image, line=((2, 1), (2, 9))), Show1D.from_image(image, line=((2, 1), (2, 9)), sampling=0.5, units="px")):
         assert (uncalibrated.pixel_size, uncalibrated.pixel_unit, uncalibrated.x_unit) == (0.0, "px", "px")
         assert _decode(uncalibrated.x_bytes, (uncalibrated.n_points,))[-1] == pytest.approx(8.0)
-    # a unit with no step does not calibrate the distance axis
-    assert Show1D.from_image(image, line=((2, 1), (2, 9)), units="nm").x_unit == "px"
+    # a unit with no step calibrates nothing and is refused
+    with pytest.raises(ValueError, match="a unit needs a step"):
+        Show1D.from_image(image, line=((2, 1), (2, 9)), units="nm")
     series = Show1D([1.0, 2.0, 3.0], sampling=0.5)
     assert (series.pixel_size, series.pixel_unit) == (0.5, "A")
 

@@ -111,7 +111,7 @@ class Show3DExport:
             vmin=self.vmin,
             vmax=self.vmax,
             sampling=self.pixel_size * image_bin if self.pixel_size > 0 else None,
-            units=self.pixel_unit,
+            units=self.pixel_unit if self.pixel_size > 0 else None,  # a unit needs a step
             smooth=self.smooth,
             auto_contrast=self.auto_contrast,
             fps=self.fps,

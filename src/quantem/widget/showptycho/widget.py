@@ -37,7 +37,7 @@ from quantem.widget.adapters import core as core_adapter
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.device import gpu_path_hint, no_gpu_path
 from quantem.widget.showptycho.export import write_showptycho_folder
-from quantem.widget.units import axis_pair, per_axis, stated
+from quantem.widget.units import axis_pair, image_axes, per_axis, stated
 from quantem.widget.utils.array import device_array
 
 STARS_FILENAME = "showptycho_stars.json"
@@ -133,9 +133,9 @@ class ShowPtycho(anywidget.AnyWidget):
     sampling : float or (row, col), optional
         Pixel size of an array in ``units``; it draws the scale bar and calibrates the FFT. An SSB
         session carries its own scan sampling.
-    units : str, default "Å"
+    units : str, optional
         Length unit of ``sampling``: any length of ``quantem.widget.units``
-        (``"angstrom"``, ``"Å"``, ``"A"``, ``"nm"``, ``"pm"``, ...).
+        (``"angstrom"``, ``"Å"``, ``"A"``, ``"nm"``, ``"pm"``, ...); angstrom when omitted.
     save_dir : str or Path, optional
         SSB session: where ``calibration.json`` and ``showptycho_stars.json`` are written; the
         working directory by default.
@@ -222,14 +222,17 @@ class ShowPtycho(anywidget.AnyWidget):
         data,
         *,
         sampling: float | tuple[float, float] | None = None,
-        units: str = "Å",
+        units: str | None = None,
         save_dir: str | pathlib.Path | None = None,
         show_fft: bool = False,
     ) -> None:
         is_array = not gpu_adapter.is_ssb(data)
         # an array's pixel size [row, col] in angstrom, read through the one unit table (the widget draws in angstrom)
+        if is_array and sampling is None:
+            # a unit stated with no step, for an image that records none, raises as in every image widget
+            image_axes(None, units, data if core_adapter.is_dataset(data, ndim=2) else None)
         given = None if sampling is None or not is_array else axis_pair(
-            per_axis(sampling, 2), (units, units), ("length",), "image")
+            per_axis(sampling, 2), per_axis("Å" if units is None else units, 2), ("length",), "image")
         if core_adapter.is_dataset(data, ndim=2):
             # a calibrated reconstruction is the source of its pixel size; the keyword may repeat it
             recorded = axis_pair(data.sampling, data.units, ("length",), "image")

@@ -734,7 +734,7 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
             title=title if title is not None else f"{self.title or 'Show1D'} · {self.snapshot_group_labels[group_idx]}",
             cmap=self.image_cmap,
             sampling=self.pixel_size if self.pixel_size > 0 else None,
-            units=self.pixel_unit,
+            units=self.pixel_unit if self.pixel_size > 0 else None,  # a unit needs a step
             show_scale_bar=self.show_scale_bar,
             show_fft=self.show_snapshot_fft,
             show_controls=True,

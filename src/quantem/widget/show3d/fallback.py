@@ -60,7 +60,7 @@ class Show3DFallback:
             title=self.title,
             cmap=[self.panel_cmaps[panel] for panel in panels] if self.panel_cmaps else self.cmap,
             sampling=self.pixel_size if self.pixel_size > 0 else None,
-            units=self.pixel_unit,
+            units=self.pixel_unit if self.pixel_size > 0 else None,  # a unit needs a step
             show_scale_bar=self.show_scale_bar,
             show_fft=False,
             show_controls=False,

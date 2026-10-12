@@ -141,13 +141,22 @@ def image_axes(sampling, units, dataset=None) -> tuple:
     and a unit of another kind raises ValueError naming both. Without the
     conversion the call raised "contradict", and before that check Show2D
     relabelled the step unconverted.
+
+    A calibrated unit stated for an input that has no step, with no
+    ``sampling``, raises ValueError: a unit needs a step. Taken as it was, the
+    unit vanished for an array (no bar, no message) and turned the ``1.0`` of
+    an uncalibrated dataset into a step of 1 nm.
     """
     if sampling is not None and units is None:
         units = "A"
+    held_sampling = None if dataset is None else tuple(float(step) for step in dataset.sampling[-2:])
+    held_units = None if dataset is None else [str(unit) for unit in dataset.units[-2:]]
+    recorded = None if dataset is None else axis_step(held_sampling[-1], held_units[-1])
+    if sampling is None and units is not None and recorded is None and unit_entry(per_axis(units, 2)[-1])[0] != "pixels":
+        raise ValueError(f"units={units!r} names a unit and the input has no step to give it: a unit needs a step. "
+                         f"Pass sampling= (the step per pixel in {per_axis(units, 2)[-1]}), or leave units out for an uncalibrated axis.")
     if dataset is None:
         return sampling, units
-    held_sampling, held_units = tuple(float(step) for step in dataset.sampling[-2:]), [str(unit) for unit in dataset.units[-2:]]
-    recorded = axis_step(held_sampling[-1], held_units[-1])
     if sampling is None and units is not None and recorded is not None:
         wanted = [str(unit) for unit in per_axis(units, 2)[-2:]]
         if unit_entry(wanted[-1])[0] != recorded[0]:
