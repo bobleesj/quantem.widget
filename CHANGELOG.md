@@ -304,6 +304,15 @@ Fixed:
 - `units=["A"]` (a sequence of one unit) on a dataset with two different image
   steps set the scale bar from the row step: `(0.5, 0.25)` nm showed 5 A, not
   2.5 A. A sequence of one entry is that entry for every axis.
+- A `state=` the widget refuses was checked at the end of the constructor of
+  `Plot2D`, `Show1D`, `Show2D` and `Show4DSTEM`: the widget was already
+  registered with ipywidgets and stayed alive with its data. The state is
+  checked before the widget model opens (in `Show4DSTEM.from_folder` before
+  the first acquisition is loaded).
+- `Show4DSTEM(None, h5_urls=..., state=...)` and `qem_urls=` dropped the state
+  without a message; it is applied. `Show2D.from_folder(..., state=...)` lost
+  the saved page size and page, which the folder layout overwrote; the state
+  is applied after the folder pages exist, as `load_state_dict` does.
 
 ## rc42 - 2026-10-11
 

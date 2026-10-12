@@ -51,6 +51,7 @@ from quantem.widget.show2d.export import Show2DExport
 from quantem.widget.show2d.fallback import Show2DStaticPng
 from quantem.widget.show2d.state import Show2DState, _rescale_view
 from quantem.widget.utils.array import _b64_safe, _resize_image, bin2d, to_numpy
+from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
 
 _DEFAULT_FOLDER_PAGE_SIZE = 20
@@ -768,6 +769,10 @@ class Show2D(
                 "use None to display the folder as one unpaged gallery"
             )
         resolved_page_size = None if page_size is None else int(page_size)
+        # The saved view is applied once the folder pages exist: loaded inside the constructor it lost
+        # its page size and its page, which the folder layout below then overwrote. It is checked first.
+        state = kwargs.pop("state", None)
+        state = None if state is None else read_state(state, "Show2D", cls._LOADABLE_KEYS)
         source = WatchedImageFolder(
             path,
             pattern=pattern,
@@ -803,6 +808,8 @@ class Show2D(
                 widget._set_folder_waiting_empty_state()
             widget._sync_folder_pages(anchor_panel=0)
         source.attach(widget, explicit_calibration=explicit_calibration)
+        if state is not None:
+            widget.load_state_dict(state)
         if watch:
             widget.watch_folder(interval=watch_interval)
         return widget
@@ -949,6 +956,8 @@ class Show2D(
         # the notebook's metadata.widgets on save. Default False: a plain display
         # embeds only light traits + a static image preview, so a 5-panel 4k
         # gallery does not bake ~1 GB into the .ipynb.
+        # a state this widget cannot load is refused before the model opens: a registered widget stays alive, holding its data
+        state = None if state is None else read_state(state, "Show2D", self._LOADABLE_KEYS)
         self._save_state = bool(save_state)
         self._configure_static_fallback()
         super().__init__(**kwargs)

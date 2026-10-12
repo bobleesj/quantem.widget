@@ -388,7 +388,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                        "show_scale_bar": show_scale_bar},
         )
         # Every check and the file read run before super().__init__ opens the widget model, so a
-        # refused input (a bad argument, a file above the memory ceiling) leaves no model behind.
+        # refused input (a bad argument, a file above the memory ceiling, a state of another schema)
+        # leaves no model behind.
+        state = None if state is None else read_state(state, "Show4DSTEM", (*self._STATE_KEYS, *self._LIST_STATE_KEYS))
         if backend not in (None, "webgpu"):
             raise ValueError(
                 f"backend must be 'webgpu' or None, got {backend!r}. "
@@ -579,6 +581,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 visible = min(self.n_frames, self.compare_max_panels)
                 self.compare_status = f"Loading {visible}/{self.n_frames} browser WebGPU panels"
             self.compare_page_count = max(1, math.ceil(self.n_frames / self.compare_max_panels))
+            if state is not None:  # the browser computes; the display state still applies
+                self.load_state_dict(state)
             return
 
         if center is None and bright_field_radius_px is None:
@@ -662,6 +666,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         --------
         >>> viewer = Show4DSTEM.from_folder("/data/session", scan_size=512)  # doctest: +SKIP
         """
+        if viewer_kwargs.get("state") is not None:
+            # refused before any acquisition is loaded: the constructor would refuse it with the first one already resident
+            viewer_kwargs["state"] = read_state(viewer_kwargs["state"], "Show4DSTEM", (*cls._STATE_KEYS, *cls._LIST_STATE_KEYS))
         folder_path = pathlib.Path(folder).expanduser().resolve()
         scan_shape = (int(scan_size), int(scan_size)) if scan_size else None
         if not gpu_adapter.accelerator_ready() or str(device).strip().lower() == "cpu":
@@ -930,23 +937,26 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._refresh_compare_virtual_images()
         return self
 
+    # The traits of the display state: scalars, then the lists state_dict copies.
+    _STATE_KEYS = (
+        "title", "show_title", "pos_row", "pos_col", "center_row", "center_col", "bright_field_radius_px", "roi_active", "roi_mode", "roi_center_row",
+        "roi_center_col", "roi_radius", "roi_radius_inner", "roi_width", "roi_height", "vi_roi_mode",
+        "vi_roi_center_row", "vi_roi_center_col", "vi_roi_radius", "vi_roi_width", "vi_roi_height",
+        "vi_roi_reduce", "vi_source", "dp_colormap", "vi_colormap", "fft_colormap", "dp_scale_mode",
+        "vi_scale_mode", "fft_scale_mode", "dp_vmin_pct", "dp_vmax_pct", "vi_vmin_pct", "vi_vmax_pct",
+        "fft_vmin_pct", "fft_vmax_pct", "dp_vmin", "dp_vmax", "vi_vmin", "vi_vmax", "fft_auto", "show_fft",
+        "fft_window", "show_controls", "controls_collapsed", "show_stats", "show_scale_bar", "panel_width_px",
+        "dp_show_colorbar", "vi_auto_contrast", "vi_smooth", "view_mode", "compare_cols",
+        "compare_grid_width_px", "compare_max_panels", "compare_group_mode", "compare_page_idx",
+        "compare_dp_mode", "profile_width", "frame_idx", "frame_dim_label", "frame_loop", "frame_fps",
+        "frame_reverse", "frame_boomerang",
+    )
+    _LIST_STATE_KEYS = ("compare_panel_order", "compare_hidden_panels", "compare_starred_panels", "profile_line", "frame_labels")
+
     def state_dict(self) -> dict:
         """The display state (cursor, ROI, colormaps, layout); no pixel data."""
-        keys = (
-            "title", "show_title", "pos_row", "pos_col", "center_row", "center_col", "bright_field_radius_px", "roi_active", "roi_mode", "roi_center_row",
-            "roi_center_col", "roi_radius", "roi_radius_inner", "roi_width", "roi_height", "vi_roi_mode",
-            "vi_roi_center_row", "vi_roi_center_col", "vi_roi_radius", "vi_roi_width", "vi_roi_height",
-            "vi_roi_reduce", "vi_source", "dp_colormap", "vi_colormap", "fft_colormap", "dp_scale_mode",
-            "vi_scale_mode", "fft_scale_mode", "dp_vmin_pct", "dp_vmax_pct", "vi_vmin_pct", "vi_vmax_pct",
-            "fft_vmin_pct", "fft_vmax_pct", "dp_vmin", "dp_vmax", "vi_vmin", "vi_vmax", "fft_auto", "show_fft",
-            "fft_window", "show_controls", "controls_collapsed", "show_stats", "show_scale_bar", "panel_width_px",
-            "dp_show_colorbar", "vi_auto_contrast", "vi_smooth", "view_mode", "compare_cols",
-            "compare_grid_width_px", "compare_max_panels", "compare_group_mode", "compare_page_idx",
-            "compare_dp_mode", "profile_width", "frame_idx", "frame_dim_label", "frame_loop", "frame_fps",
-            "frame_reverse", "frame_boomerang",
-        )
-        state = {key: getattr(self, key) for key in keys}
-        for key in ("compare_panel_order", "compare_hidden_panels", "compare_starred_panels", "profile_line", "frame_labels"):
+        state = {key: getattr(self, key) for key in self._STATE_KEYS}
+        for key in self._LIST_STATE_KEYS:
             state[key] = list(getattr(self, key))
         return state
 
@@ -956,7 +966,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         A file of another ``schema`` or a key ``state_dict`` does not write
         raises before anything is applied.
         """
-        state = read_state(state, "Show4DSTEM", self.state_dict())
+        state = read_state(state, "Show4DSTEM", (*self._STATE_KEYS, *self._LIST_STATE_KEYS))
         normalisers = {
             "view_mode": self._normalize_view_mode,
             "compare_dp_mode": self._normalize_compare_dp_mode,

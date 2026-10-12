@@ -475,8 +475,8 @@ def test_state_round_trip_and_measurements(saed, tmp_path):
     csv_path = ShowDiffraction.measurements_from_state(envelope["state"], tmp_path / "m.csv")
     header = csv_path.read_text().splitlines()[0]
     assert header.startswith("id,kind,raw_row,raw_col,row,col") and header.endswith("hkl,hkl_candidates,note")
-    with pytest.raises(ValueError):
-        ShowDiffraction.measurements_from_state({"widget_name": "Show2D", "state": {}})
+    with pytest.raises(ValueError, match="cannot load into 'ShowDiffraction'"):
+        ShowDiffraction.measurements_from_state({"schema": "quantem.widget-state/2", "widget_name": "Show2D", "state": {}})
 
 
 def test_export_html_structure(saed, tmp_path):

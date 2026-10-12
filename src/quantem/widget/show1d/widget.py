@@ -41,6 +41,7 @@ from quantem.widget.show1d.review import (
 from quantem.widget.show1d.state import Show1DState
 from quantem.widget.state import SavedStateMixin
 from quantem.widget.utils.array import _b64_safe, to_numpy
+from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
 
 # Okabe-Ito palette: distinguishable for every common colour-vision deficiency
@@ -310,6 +311,8 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         overrides = {key: kwargs.pop(key, None) for key in _UI_DEFAULTS}
         overrides["show_review"] = show_review
         kwargs.update(resolve_ui_mode(ui_mode, defaults=_UI_DEFAULTS, overrides=overrides))
+        # a state this widget cannot load is refused before the model opens: a registered widget stays alive, holding its data
+        state = None if state is None else read_state(state, "Show1D", self._STATE_KEYS)
         # Before super().__init__ so any get_state during comm-open sees it.
         self._save_state = bool(save_state)
         self._configure_static_fallback()

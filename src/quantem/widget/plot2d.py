@@ -101,6 +101,8 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
         save_state: bool = False,
         state: dict | str | Path | None = None,
     ) -> None:
+        # a state this widget cannot load is refused before the model opens: a registered widget stays alive, holding its data
+        state = None if state is None else read_state(state, "Plot2D", self._STATE_KEYS)
         self._save_state = bool(save_state)
         self._configure_static_fallback(notebook_preview_format="png")
         super().__init__()

@@ -101,6 +101,8 @@ class Show2DState:
         "frequency_filter_cutoffs", "frequency_filter_centers", "frequency_filter_widths",
         "frequency_filter_scope", "show_frequency_filter",
     )
+    # state_dict also writes the page size of a watched folder, which is not a trait
+    _LOADABLE_KEYS = (*_STATE_KEYS, "folder_page_size")
 
     def state_dict(self) -> dict:
         """JSON-safe view settings (no pixels): what ``save`` writes and
@@ -118,7 +120,7 @@ class Show2DState:
         do not fit this widget's panel count or page layout are skipped rather
         than raising. A key ``state_dict`` does not write raises before
         anything is applied."""
-        state = _rescale_view(dict(read_state(state, "Show2D", (*self._STATE_KEYS, "folder_page_size"))), 1 / self._display_bin)
+        state = _rescale_view(dict(read_state(state, "Show2D", self._LOADABLE_KEYS)), 1 / self._display_bin)
         n_images = int(self.n_images)
         page_kind = str(state.get("page_kind", self.page_kind))
         if page_kind not in {"comparison", "items"}:

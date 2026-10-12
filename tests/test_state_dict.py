@@ -97,6 +97,39 @@ def test_save_file_round_trips_and_only_the_current_schema_loads(tmp_path, name)
     assert untouched.state_dict() == before
 
 
+def test_a_refused_state_keyword_leaves_no_widget_behind(tmp_path):
+    # state= was checked at the end of the constructor: the refused widget was already registered with
+    # ipywidgets, so it stayed alive holding its data (a 4D stack on the GPU) with no handle to free it
+    from ipywidgets.widgets.widget import _instances
+
+    earlier = {"metadata_version": "1.0", "widget_name": "Show2D", "state": {"cmap": "viridis"}}
+    builders = {
+        "Plot2D": lambda state: Plot2D(np.arange(24, dtype=float).reshape(4, 6), x=np.arange(6), y=np.arange(4), state=state),
+        "Show1D": lambda state: Show1D(np.arange(8.0), state=state),
+        "Show2D": lambda state: Show2D(np.arange(64, dtype=np.float32).reshape(8, 8), state=state, verbose=False),
+        "Show4DSTEM": lambda state: Show4DSTEM(np.ones((4, 4, 8, 8), dtype=np.uint16), state=state, verbose=False),
+    }
+    for name, build in builders.items():
+        alive = set(_instances)
+        for state in ({**earlier, "widget_name": name}, {"not_a_key": 1}):
+            with pytest.raises(ValueError, match="has schema None|does not save"):
+                build(state)
+        assert set(_instances) == alive, name
+    # a viewer whose pixels the browser reads applies the state too: it returned before the state was read
+    browser = Show4DSTEM(None, h5_urls=["scan_master.h5"], scan_shape=(4, 4), detector_shape=(8, 8), state={"dp_colormap": "viridis"}, verbose=False)
+    assert browser.dp_colormap == "viridis"
+    with pytest.raises(ValueError, match="does not save"):
+        Show4DSTEM(None, h5_urls=["scan_master.h5"], scan_shape=(4, 4), detector_shape=(8, 8), state={"not_a_key": 1}, verbose=False)
+    # a folder gallery restores its page: the state was loaded before the folder pages existed
+    for index in range(5):
+        np.save(tmp_path / f"frame_{index}.npy", np.full((6, 8), index, dtype=np.float32))
+    paged = Show2D.from_folder(tmp_path, page_size=2, watch=False)
+    paged.page_idx = 2
+    restored = Show2D.from_folder(tmp_path, page_size=2, watch=False, state=paged.state_dict())
+    assert (restored.n_pages, restored.page_idx) == (3, 2)
+    assert Show2D.from_folder(tmp_path, watch=False, state=paged.state_dict()).state_dict() == paged.state_dict()
+
+
 # ---------------------------------------------------------------------------
 # Show4DSTEM
 # ---------------------------------------------------------------------------
