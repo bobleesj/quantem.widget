@@ -3912,7 +3912,7 @@ function Show3D() {
 
   // Calculate display scale. In multi-panel mode `width` may be either the
   // concatenated source width or one shared source frame drawn into N slots.
-  // `panel_width_px` keeps the per-panel source geometry explicit.
+  // `num_panel_cols` keeps the per-panel source geometry explicit.
   const layoutPanelCount = Math.max(1, visiblePanelCount || 1);
   const layoutCols = panelColsForCount(layoutPanelCount);
   const layoutRows = Math.ceil(layoutPanelCount / layoutCols);

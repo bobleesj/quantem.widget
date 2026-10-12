@@ -263,16 +263,27 @@ it("releases every GPU slot of a replaced stack, the moving-average slot include
   expect([...released].sort()).toEqual([...filled].sort());
 });
 
+it("lays out panels that share one source frame by num_panel_cols, not by width / n_panels", async () => {
+  // Show3D(stack, stack, stack) sends one frame of `width` columns for three slots. width / n_panels, the
+  // fallback for a concatenated frame, is a third of a panel there, so only num_panel_cols gives the layout.
+  await mount(new Model({ n_panels: 3, shared_panel_source: true, num_panel_cols: SIZE, max_cols: 3 }));
+  const image = el.querySelector<HTMLCanvasElement>('canvas[data-quantem-scientific-output="show3d-image"]')!;
+  expect(image.width / image.height).toBeCloseTo(3, 1);
+});
+
 it("reorders a panel among its own widget's panels when another Show3D on the page is also reordering", async () => {
   // Two three-panel widgets, both in reorder mode. Panel 1 of the first is dropped in a gap below its row,
   // nearest its own panel 3 but nearer still the second widget's panel 1.
   const packed = (frames: number) => new DataView(new Float32Array(frames * SIZE * 3 * SIZE).fill(1).buffer);
-  const options = { n_panels: 3, width: 3 * SIZE, panel_width_px: SIZE, _offline_float_stack: packed(FRAMES), max_cols: 3 };
+  const options = { n_panels: 3, width: 3 * SIZE, num_panel_cols: SIZE, _offline_float_stack: packed(FRAMES), max_cols: 3 };
   const first = new Model(options);
   const second = new Model(options);
   const secondEl = document.createElement("div");
   document.body.append(secondEl);
   await mount(first);
+  // num_panel_cols is the image columns of one panel: three square panels in one row
+  const image = el.querySelector<HTMLCanvasElement>('canvas[data-quantem-scientific-output="show3d-image"]')!;
+  expect(image.width / image.height).toBeCloseTo(3, 1);
   act(() => {
     const unmount = renderShow3D({ model: second, el: secondEl } as never) as () => void;
     unmountOthers.push(() => { unmount(); secondEl.remove(); delete (document as unknown as Record<string, unknown>).elementsFromPoint; });
