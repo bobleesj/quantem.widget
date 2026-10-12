@@ -157,7 +157,7 @@ def test_sample_line_profile_is_exact_on_a_bilinear_plane():
 
 def test_from_image_embeds_profile_context_with_physical_distance():
     image = np.random.default_rng(3).random((16, 24)).astype(np.float32)
-    widget = Show1D.from_image(image, line=((2, 1), (2, 9)), profile_width=3, sampling=0.5, x_unit="nm", title="profile", image_cmap="gray")
+    widget = Show1D.from_image(image, line=((2, 1), (2, 9)), profile_width=3, sampling=0.5, units="nm", title="profile", image_cmap="gray")
     assert (widget.labels, widget.x_label, widget.x_unit, widget.title) == (["profile"], "distance", "nm", "profile")
     assert (widget.pixel_size, widget.pixel_unit, widget.image_cmap) == (0.5, "nm", "gray")
     assert (widget.profile_image_height, widget.profile_image_width, widget.profile_width) == (16, 24, 3)
@@ -168,6 +168,15 @@ def test_from_image_embeds_profile_context_with_physical_distance():
     x = _decode(widget.x_bytes, (widget.n_points,))
     assert x[0] == 0 and x[-1] == pytest.approx(8 * 0.5) and widget.n_points == 9
     np.testing.assert_allclose(_decode(widget.y_bytes, (9,)), image[1:4, 1:10].mean(axis=0), atol=1e-6)
+
+
+def test_from_image_takes_units_for_the_distance_axis():
+    # from_image took x_unit= and forwarded it as units=; the keyword is units, as in the constructor
+    image = np.zeros((8, 8), dtype=np.float32)
+    profile = Show1D.from_image(image, line=((1, 1), (1, 6)), sampling=0.5, units="nm")
+    assert (profile.x_unit, profile.pixel_unit) == ("nm", "nm")
+    with pytest.raises(TypeError, match="sets x_unit itself; pass units= instead"):
+        Show1D.from_image(image, line=((1, 1), (1, 6)), sampling=0.5, x_unit="nm")
 
 
 # --- snapshots, monitor file -------------------------------------------------
@@ -284,7 +293,7 @@ def test_state_round_trip_through_save_file_and_state_kwarg(tmp_path):
 
 def test_export_html_embeds_state_and_downsamples_only_linked_images(tmp_path):
     image = np.arange(64, dtype=np.float32).reshape(8, 8)
-    widget = Show1D.from_image(image, line=((0, 0), (0, 7)), sampling=0.5, x_unit="nm", title="Export me")
+    widget = Show1D.from_image(image, line=((0, 0), (0, 7)), sampling=0.5, units="nm", title="Export me")
     widget.snapshot(0, object=image, probe=image[:4, :6])
     widget.snapshot_real_space_center = [4, 4]
     widget.snapshot_profile_line = [{"row": 1, "col": 1}, {"row": 7, "col": 7}]

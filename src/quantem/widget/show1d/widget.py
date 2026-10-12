@@ -504,24 +504,26 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         line: Sequence[Sequence[float]],
         profile_width: int = 1,
         sampling: float = 1.0,
-        x_unit: str = "px",
+        units: str = "px",
         **kwargs,
     ) -> Self:
         """A line-profile viewer: the trace sampled along ``line`` with the 2D image beside it.
 
         ``line`` is ``((row0, col0), (row1, col1))`` in image pixels; ``sampling``
-        turns the pixel distance along the line into ``x_unit``.
+        turns the pixel distance along the line into ``units``.
         """
+        # the distance axis is in the image's unit, so the x_unit trait follows units= here
+        reject_unknown_kwargs(cls, kwargs, owned={"x_unit": "units"})
         kwargs.setdefault("title", "Line Profile")
         kwargs.setdefault("y_label", "value")
-        kwargs.setdefault("units", x_unit)
         return cls(
             profile_image=image,
             profile_line=line,
             profile_width=profile_width,
             x_label="distance",
-            x_unit=x_unit,
+            x_unit=units,
             sampling=sampling,
+            units=units,
             **kwargs,
         )
 

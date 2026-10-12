@@ -106,7 +106,7 @@ a pixel scale bar. Set `show_scale_bar=False` for a clean export.
 
 `Show1D.from_image(image, line=((row0, col0), (row1, col1)))` samples a profile
 in `(row, col)` image coordinates and keeps the image beside the trace.
-`profile_width` averages that many parallel lines; `sampling` and `x_unit`
+`profile_width` averages that many parallel lines; `sampling` and `units`
 calibrate the distance axis. `quantem.widget.show1d.sample_line_profile` is the
 sampling function on its own.
 
