@@ -273,7 +273,8 @@ class Show3D(
     n_panels = traitlets.Int(1).tag(sync=True)
     panel_titles = traitlets.List(traitlets.Unicode()).tag(sync=True)
     panel_title_spans = traitlets.List(default_value=[]).tag(sync=True)
-    panel_width_px = traitlets.Int(0).tag(sync=True)
+    # image columns of one panel in the concatenated display stack (0: one panel spans the frame)
+    num_panel_cols = traitlets.Int(0).tag(sync=True)
     shared_panel_source = traitlets.Bool(False).tag(sync=True)
     # One starred frame per panel; -1 = unset.
     starred = traitlets.List(traitlets.Int()).tag(sync=True)
@@ -350,7 +351,7 @@ class Show3D(
     roi_list = traitlets.List([]).tag(sync=True)
     roi_selected_idx = traitlets.Int(-1).tag(sync=True)
     roi_plot_data = traitlets.Bytes(b"").tag(sync=True)
-    size = traitlets.Int(0).tag(sync=True)
+    panel_width_px = traitlets.Int(0).tag(sync=True)  # canvas width per panel in CSS pixels; 0 = frontend default
 
     diff_mode = traitlets.Enum(["off", "previous", "first"], default_value="off").tag(sync=True)
     compare_mode = traitlets.Enum(["off", "blink", "difference", "overlay"], default_value="off").tag(sync=True)
@@ -810,7 +811,7 @@ class Show3D(
             self.show_fft = bool(show_fft)
             self.fft_layout = fft_layout
             self.fft_overlay_zoom = fft_overlay_zoom
-            self.size = panel_width_px
+            self.panel_width_px = panel_width_px
             self.dim_label = str(dim_label)
             n_panels = int(self.n_panels)
             self.denoise_scope = "all" if n_panels <= 1 else "panel"
@@ -847,7 +848,7 @@ class Show3D(
         """Validate the input stacks and set every data-derived trait.
 
         Panels are concatenated along the column axis into one wide frame so the
-        browser receives a single display stack; ``panel_width_px`` tells it
+        browser receives a single display stack; ``num_panel_cols`` tells it
         where each panel starts. Stacks of unequal length are padded with their
         last frame and ``panel_real_frames`` records the true counts.
         """
@@ -979,7 +980,7 @@ class Show3D(
             self._multi_panel_bin = 0
             data = np.concatenate(arrays, axis=2) if len(arrays) > 1 else arrays[0]
         self._panel_width = int(arrays[0].shape[2])
-        self.panel_width_px = self._panel_width if len(arrays) > 1 else 0
+        self.num_panel_cols = self._panel_width if len(arrays) > 1 else 0
         self.is_rgb = bool(is_rgb)
         self._data = self._establish_rgb_luminance(data, is_rgb=is_rgb)
         self.n_slices = int(self._data.shape[0])
@@ -1003,7 +1004,7 @@ class Show3D(
             self.source_height = int(self._data.shape[1])
             self.source_panel_width = native_width if shared else max(1, int(self._data.shape[2]) // len(arrays))
         if shared:
-            self.panel_width_px = self.width
+            self.num_panel_cols = self.width
         # Explicit sampling/units win; a Dataset3d in nm is shown in Angstrom
         # so the scale bar matches the other quantem viewers.
         pixel_size = 0.0 if sampling is None else float(sampling[-1] if isinstance(sampling, (tuple, list)) else sampling)
@@ -1210,7 +1211,7 @@ class Show3D(
         "panel_gap_px", "show_panel_titles", "show_zoom_indicator", "show_fft", "fft_layout",
         "fft_overlay_position", "fft_overlay_size", "fft_overlay_zoom", "show_kymograph", "fft_window",
         "pixel_size", "pixel_unit", "smooth", "image_rotation", "rotation_scope", "frame_rotations",
-        "flip_horizontal", "flip_vertical", "show_scale_bar", "size", "fps", "avg_window", "loop",
+        "flip_horizontal", "flip_vertical", "show_scale_bar", "panel_width_px", "fps", "avg_window", "loop",
         "reverse", "boomerang", "loop_end", "loop_start", "bookmarked_frames", "starred", "hidden_panels",
         "selected_panels", "panel_order", "n_pages", "page_idx", "panels_per_page", "page_labels",
         "page_starred", "hidden_page_slots", "playback_path", "slice_idx", "roi_active", "roi_list",

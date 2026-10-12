@@ -141,6 +141,24 @@ Changed:
   to `units=`; a Show2D page dict holds its panels under `images` only (`data`
   and `array` raise, as does any other unknown key); `Show3D.save_image(frame_idx=)`
   to `slice_idx=`, the trait's name.
+- `Show2D` overlay (`panel_overlays`, also `Show3D`) and annotation
+  (`panel_annotations`) dicts take one key per value: `type`, `kind` to
+  `shape`; shape `rectangle`, `square` to `rect`; `coordinate_system` to
+  `coords`; `row` / `col` and `y` / `x` to `center` `(row, col)`; `r` to
+  `radius`; `region`, `xyxy`, `xywh`, `row0` .. `col1` and `center` with
+  `size` to `box` `(row0, col0, row1, col1)`; `stroke`, `stroke_color`,
+  `border_color`, `fg` to `color`; `fill` to `fill_color`; `stroke_width`,
+  `border_width` to `line_width`; `stroke_style` to `line_style` (`solid`,
+  `dashed`, `dotted`, `dashdot` only, case kept); `dash` to `line_dash`;
+  `alpha` to `opacity`; `order` to `z_order`; annotation `label`, `title` to
+  `text`, `class` to `class_name`, `region` to `box`. A removed key raises
+  `ValueError` naming the accepted keys. A notebook saved with
+  `save_state=True` by the earlier release stores overlays in the earlier form
+  and draws them at the origin until the cell runs again.
+- `Show3D`: the trait `panel_width_px` held the image columns of one panel
+  while the keyword `panel_width_px` set the trait `size`; trait `size` to
+  `panel_width_px` (canvas width in CSS pixels, as in `Show2D`) and the image
+  column count to `num_panel_cols`.
 - quantem.gpu is reached through `quantem.widget.adapters.gpu.SsbSession`
   (and `js/showptycho/engineAdapter.ts` for the browser engine), the one place
   that holds quantem.gpu's own names; `adapters.gpu.ssb_session` is removed.

@@ -71,7 +71,7 @@ class Show3DFallback:
             vmin=vmin,
             vmax=vmax,
             ncols=max(1, min(ncols, len(frames))),
-            panel_width_px=int(self.size or 0),
+            panel_width_px=int(self.panel_width_px or 0),
             smooth=self.smooth,
             zoom=1.0,
             link_contrast=self.link_contrast,

@@ -48,7 +48,13 @@ def test_frames_are_indexed_at_display_resolution_with_diff_modes(capsys):
 def test_panels_slice_the_concatenated_frame_and_keep_native_sources():
     left, right = _ramp(), _ramp(offset=10.0)
     widget = Show3D(left, right, panel_titles=["a", "b"], display_bin=4, verbose=False)
-    assert (widget.n_panels, widget.panel_width_px, widget.width) == (2, 16, 32)
+    assert (widget.n_panels, widget.num_panel_cols, widget.width) == (2, 16, 32)
+    # panel_width_px is the canvas width the keyword sets; it named the image columns per panel before
+    sized = Show3D(left, right, panel_width_px=180, verbose=False)
+    assert (sized.panel_width_px, sized.num_panel_cols) == (180, 64) and sized.state_dict()["panel_width_px"] == 180
+    with pytest.raises(TypeError, match="size"):
+        Show3D(left, size=180, verbose=False)
+    sized.free()
     np.testing.assert_allclose(widget._get_display_panel_frame(1, 2), right[2].reshape(16, 4, 16, 4).mean(axis=(1, 3)), atol=1e-5)
     np.testing.assert_array_equal(widget._get_source_panel_frame(1, 2), right[2])
     assert widget.link_contrast is False

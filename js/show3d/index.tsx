@@ -642,7 +642,7 @@ function Show3D() {
   const [offlineMins] = useModelState<number[]>("_offline_mins");
   const [offlineMaxs] = useModelState<number[]>("_offline_maxs");
   const [nPanels] = useModelState<number>("n_panels");
-  const [panelWidthPx] = useModelState<number>("panel_width_px");
+  const [numPanelCols] = useModelState<number>("num_panel_cols");
   const [sharedPanelSource] = useModelState<boolean>("shared_panel_source");
   const [displayBin] = useModelState<number>("display_bin");
   const [sourceHeight] = useModelState<number>("source_height");
@@ -697,7 +697,7 @@ function Show3D() {
     width,
     height,
     nPanels,
-    panelWidthPx,
+    numPanelCols,
     nSlices,
     isRgb,
     offlineFrameCacheLimit,
@@ -738,7 +738,7 @@ function Show3D() {
         // physical units with a panel-tiled loop (not per-pixel panel index).
         const panelCount = Math.max(1, nPanels || 1);
         const panelRanges = panelCount > 1 && offlineMins?.length >= panelCount && offlineMaxs?.length >= panelCount;
-        const panelW = Math.max(1, panelWidthPx || Math.floor(width / panelCount) || width);
+        const panelW = Math.max(1, numPanelCols || Math.floor(width / panelCount) || width);
         if (panelRanges) {
           for (let panel = 0; panel < panelCount; panel++) {
             const panelMin = offlineMins[panel] ?? offlineMin;
@@ -768,7 +768,7 @@ function Show3D() {
       }
     }
     return EMPTY_FRAME;
-  }, [offlineStack, offlineFloatStack, offlineMin, offlineMax, offlineMins, offlineMaxs, liveSliceIdx, width, height, nPanels, panelWidthPx, isRgb]);
+  }, [offlineStack, offlineFloatStack, offlineMin, offlineMax, offlineMins, offlineMaxs, liveSliceIdx, width, height, nPanels, numPanelCols, isRgb]);
   const getOfflineFrame = React.useCallback((idx: number): Float32Array | null => {
     // Cache per-frame Float32Array objects by frame index. The previous single
     // scratch buffer was unsafe because pointer-equality upload guards could skip
@@ -799,7 +799,7 @@ function Show3D() {
       }
       const panelCount = Math.max(1, nPanels || 1);
       const panelRanges = panelCount > 1 && offlineMins?.length >= panelCount && offlineMaxs?.length >= panelCount;
-      const panelW = Math.max(1, panelWidthPx || Math.floor(width / panelCount) || width);
+      const panelW = Math.max(1, numPanelCols || Math.floor(width / panelCount) || width);
       if (panelRanges) {
         for (let panel = 0; panel < panelCount; panel++) {
           const panelMin = offlineMins[panel] ?? offlineMin;
@@ -835,7 +835,7 @@ function Show3D() {
     offlineMin,
     offlineMax,
     nPanels,
-    panelWidthPx,
+    numPanelCols,
     putOfflineFrameCache,
     isRgb,
   ]);
@@ -1946,7 +1946,7 @@ function Show3D() {
   }, []);
 
   // Customization
-  const [canvasSizeTrait, setCanvasSizeTrait] = useModelState<number>("size");
+  const [canvasSizeTrait, setCanvasSizeTrait] = useModelState<number>("panel_width_px");
 
   // ROI
   const [roiActive, setRoiActive] = useModelState<boolean>("roi_active");
@@ -2082,7 +2082,7 @@ function Show3D() {
   const selectedSpatialOption = spatialOptionFor(exportSpatialPreset);
   const animationPanelWidth = sharedPanelSource
     ? Math.max(1, width)
-    : Math.max(1, panelWidthPx || Math.floor(width / Math.max(1, nPanels || 1)) || width);
+    : Math.max(1, numPanelCols || Math.floor(width / Math.max(1, nPanels || 1)) || width);
   const animationPanelHeight = Math.max(1, height);
   const exportFrameIndices = React.useMemo(
     () => buildAnimationFrameIndices(nSlices, exportFrameStart, exportFrameEnd, exportEveryN, exportMaxFrames),
@@ -2217,7 +2217,7 @@ function Show3D() {
     const frame = getOfflineFrame(frameIdx);
     if (!frame) return null;
     const sourcePanelCount = Math.max(1, nPanels || 1);
-    const panelW = sharedPanelSource ? Math.max(1, width) : Math.max(1, panelWidthPx || Math.floor(width / sourcePanelCount) || width);
+    const panelW = sharedPanelSource ? Math.max(1, width) : Math.max(1, numPanelCols || Math.floor(width / sourcePanelCount) || width);
     const panelH = Math.max(1, height);
     const panels = (visiblePanelIndices.length ? visiblePanelIndices : [0])
       .filter((panel) => panel >= 0 && panel < sourcePanelCount);
@@ -3378,7 +3378,7 @@ function Show3D() {
     const panelCount = Math.max(1, nPanels || 1);
     if (height <= 0 || raw.length === 0) return null;
     const panelW = totalPanelCount > 1
-      ? Math.max(1, panelWidthPx || Math.round(width / totalPanelCount))
+      ? Math.max(1, numPanelCols || Math.round(width / totalPanelCount))
       : Math.max(1, width);
     const fullW = raw.length === height * panelW ? panelW : width;
     const srcPanel = sharedPanelSource ? 0 : panel;
@@ -3389,7 +3389,7 @@ function Show3D() {
       out.set(raw.subarray(row * fullW + colStart, row * fullW + colStart + panelW), row * panelW);
     }
     return panelLogScale ? applyLogScale(out) : out;
-  }, [height, nPanels, panelWidthPx, sharedPanelSource, totalPanelCount, width]);
+  }, [height, nPanels, numPanelCols, sharedPanelSource, totalPanelCount, width]);
 
   const resolvePanelRange = (
     panel: number,
@@ -3917,7 +3917,7 @@ function Show3D() {
   const layoutCols = panelColsForCount(layoutPanelCount);
   const layoutRows = Math.ceil(layoutPanelCount / layoutCols);
   const sourcePanelWidth = totalPanelCount > 1
-    ? Math.max(1, panelWidthPx || Math.round(width / totalPanelCount))
+    ? Math.max(1, numPanelCols || Math.round(width / totalPanelCount))
     : Math.max(1, width);
   const sourcePanelHeight = Math.max(1, height);
   const isMultiPanelSource = totalPanelCount > 1;
@@ -4619,7 +4619,7 @@ function Show3D() {
     const panels = (settings.visiblePanelIndices.length ? settings.visiblePanelIndices : visiblePanelIndices)
       .filter((panel) => Number.isFinite(panel) && panel >= 0 && panel < panelSourceCount);
     if (panels.length === 0) return false;
-    const sourcePanelWidth = Math.max(1, panelWidthPx || Math.round(settings.width / panelSourceCount));
+    const sourcePanelWidth = Math.max(1, numPanelCols || Math.round(settings.width / panelSourceCount));
     if (sourcePanelWidth <= 0 || sourcePanelWidth > settings.width) return false;
     const gpuCtx = ensureGpuDisplayContext(engine, settings.canvasW, settings.canvasH);
     if (!gpuCtx) return false;
@@ -4809,7 +4809,7 @@ function Show3D() {
     const rows = Math.ceil(panelCount / cols);
     const gap = panelCount > 1 ? (panelGapPx) : 0;
     if (panelCount > 1 && !sharedPanelSource) {
-      const panelW = Math.max(1, panelWidthPx || Math.round(settings.width / panelCount));
+      const panelW = Math.max(1, numPanelCols || Math.round(settings.width / panelCount));
       const regions = Array.from({ length: panelCount }, (_, panel) => ({
         x: panel * panelW, y: 0, width: panelW, height: settings.height,
       }));
@@ -4845,8 +4845,8 @@ function Show3D() {
       return true;
     }
     const sourcePanelWidthForGrid = sharedPanelSource
-      ? Math.max(1, panelWidthPx || settings.width)
-      : Math.max(1, panelWidthPx || Math.round(settings.width / panelCount));
+      ? Math.max(1, numPanelCols || settings.width)
+      : Math.max(1, numPanelCols || Math.round(settings.width / panelCount));
     const gridOpts = {
       width: settings.canvasW,
       height: settings.canvasH,
@@ -5904,7 +5904,7 @@ function Show3D() {
       ? Math.max(1, options.sourcePanelWidth)
       : sharedPanelSource
       ? offscreen.width
-      : Math.max(1, panelWidthPx || offscreen.width / sourcePanelCount);
+      : Math.max(1, numPanelCols || offscreen.width / sourcePanelCount);
     const srcH = offscreen.height;
     for (let slot = 0; slot < visibleCount; slot++) {
       const i = visiblePanelIndices[slot] ?? slot;
@@ -6033,7 +6033,7 @@ function Show3D() {
     const active = activeIdx === aIdx ? frameA : frameB;
     if (!frameA || !frameB || !active) return;
     const panelCount = Math.max(1, nPanels || 1);
-    const panelW = sharedPanelSource ? width : Math.max(1, panelWidthPx || Math.floor(width / panelCount) || width);
+    const panelW = sharedPanelSource ? width : Math.max(1, numPanelCols || Math.floor(width / panelCount) || width);
     const out = document.createElement("canvas");
     out.width = width;
     out.height = height;
@@ -6094,7 +6094,7 @@ function Show3D() {
   };
   React.useEffect(() => {
     paintCompare();
-  }, [compareMode, comparePair, blinkPhase, blinkFps, compareBackground, diffCmap, isRgb, canvasW, canvasH, width, height, nSlices, nPanels, panelWidthPx, sharedPanelSource, displaySliceIdx, frameBytes, frameSeq, avgWindow, subpixelAlignEnabled, subpixelAlignVersion, cmap, panelCmaps, percentileLow, percentileHigh, logScale, visiblePanelIndices, canvasRepaintSignal]);
+  }, [compareMode, comparePair, blinkPhase, blinkFps, compareBackground, diffCmap, isRgb, canvasW, canvasH, width, height, nSlices, nPanels, numPanelCols, sharedPanelSource, displaySliceIdx, frameBytes, frameSeq, avgWindow, subpixelAlignEnabled, subpixelAlignVersion, cmap, panelCmaps, percentileLow, percentileHigh, logScale, visiblePanelIndices, canvasRepaintSignal]);
 
   const ensureFullSizeMainOffscreen = React.useCallback((): boolean => {
     if (width <= 0 || height <= 0) return false;
@@ -6300,7 +6300,7 @@ function Show3D() {
       preserveGpuDisplay,
       sourcePanelWidth: mainOffscreenSourcePanelWidthRef.current,
     });
-  }, [smooth, canvasW, canvasH, nPanels, visiblePanelIndices, maxCols, imageRotation, flipRows, flipCols, panelStates, linkedState, linkPanels, themeColors.bg, interPanelGapColor, panelRealFrames, panelTitles, showPanelTitles, panelGapPx, panelTitleFontSize, panelWidthPx, sharedPanelSource, sliceIdx, displaySliceIdx, liveSliceIdx, playing, nSlices, canvasRepaintSignal, viewportTransformActive]);
+  }, [smooth, canvasW, canvasH, nPanels, visiblePanelIndices, maxCols, imageRotation, flipRows, flipCols, panelStates, linkedState, linkPanels, themeColors.bg, interPanelGapColor, panelRealFrames, panelTitles, showPanelTitles, panelGapPx, panelTitleFontSize, numPanelCols, sharedPanelSource, sliceIdx, displaySliceIdx, liveSliceIdx, playing, nSlices, canvasRepaintSignal, viewportTransformActive]);
 
   // A presented WebGPU texture is not a durable cache. Re-present the current
   // cached frame when it owns the live display; otherwise re-blit the retained
@@ -10164,8 +10164,8 @@ function Show3D() {
           : gpuResidency.stage === "rgb"
             ? `${displayBinLabel} true-color display · drawn on the CPU canvas`
             : "Loading one display-resolution stack into the browser";
-  const sourceBytes = Math.max(1, nSlices) * (sharedPanelSource ? 1 : Math.max(1, nPanels)) * Math.max(1, sourceHeight || height) * Math.max(1, nativeSourcePanelWidth || panelWidthPx || width) * 4;
-  const gpuDetailText = `Original: ${Math.max(1, nSlices)} frames × ${Math.max(1, nPanels)} panels × ${Math.max(1, sourceHeight || height)}×${Math.max(1, nativeSourcePanelWidth || panelWidthPx || width)} · float32 · ${formatSavedBytes(sourceBytes || 0)}. ${resolvedDisplayBin === 1 ? "Native display requested" : `${resolvedDisplayBin}×${resolvedDisplayBin} mean bin`} → ${Math.max(1, height)}×${Math.max(1, panelWidthPx || Math.round(width / Math.max(1, nPanels)))} per panel · ${displayStackBytes > 0 ? formatSavedBytes(displayStackBytes) : "not received"}.`;
+  const sourceBytes = Math.max(1, nSlices) * (sharedPanelSource ? 1 : Math.max(1, nPanels)) * Math.max(1, sourceHeight || height) * Math.max(1, nativeSourcePanelWidth || numPanelCols || width) * 4;
+  const gpuDetailText = `Original: ${Math.max(1, nSlices)} frames × ${Math.max(1, nPanels)} panels × ${Math.max(1, sourceHeight || height)}×${Math.max(1, nativeSourcePanelWidth || numPanelCols || width)} · float32 · ${formatSavedBytes(sourceBytes || 0)}. ${resolvedDisplayBin === 1 ? "Native display requested" : `${resolvedDisplayBin}×${resolvedDisplayBin} mean bin`} → ${Math.max(1, height)}×${Math.max(1, numPanelCols || Math.round(width / Math.max(1, nPanels)))} per panel · ${displayStackBytes > 0 ? formatSavedBytes(displayStackBytes) : "not received"}.`;
   const gpuStatusTitle = "One display-resolution stack is embedded in the widget and uploaded once to WebGPU when available; native source arrays are not duplicated in the browser.";
   const frequencyRingValue = normalizeFrequencyFilterMode(frequencyFilter) === "bandpass"
     ? (frequencyDraft ?? frequencyFilterCenter)

@@ -87,14 +87,14 @@ class Show3DExport:
         n_panels = int(self.n_panels)
         if self.is_rgb and self._rgb_data is not None:
             if n_panels > 1:
-                panel_width = int(self.panel_width_px) or self._rgb_data.shape[2] // n_panels
+                panel_width = int(self.num_panel_cols) or self._rgb_data.shape[2] // n_panels
                 return tuple(binned_rgb(self._rgb_data[:, :, i * panel_width : (i + 1) * panel_width]) for i in range(n_panels))
             return (binned_rgb(self._rgb_data),)
         if self.shared_panel_source and n_panels > 1:
             # one stack object repeated, so the clone sends it once too
             shared = binned(self._display_data)
             return tuple(shared for _ in range(n_panels))
-        panel_width = int(self.panel_width_px)
+        panel_width = int(self.num_panel_cols)
         if n_panels > 1 and panel_width > 0 and int(self.width) == panel_width * n_panels:
             return tuple(binned(self._display_data[:, :, i * panel_width : (i + 1) * panel_width]) for i in range(n_panels))
         return (binned(self._display_data),)
@@ -121,7 +121,7 @@ class Show3DExport:
             fft_layout=self.fft_layout,
             fft_overlay_zoom=self.fft_overlay_zoom,
             show_stats=self.show_stats,
-            panel_width_px=self.size,
+            panel_width_px=self.panel_width_px,
             dim_label=self.dim_label,
             display_bin=1,
             max_cols=self.max_cols,
@@ -311,7 +311,7 @@ class Show3DExport:
             max_frames = 40 if max_frames is None else max_frames
             max_edge_px = 512 if max_edge_px is None and image_bin == 1 else max_edge_px
         max_edge_px = _optional_int(max_edge_px)
-        source_w = max(1, int(self.source_panel_width or self.panel_width_px or self.width))
+        source_w = max(1, int(self.source_panel_width or self.num_panel_cols or self.width))
         source_h = max(1, int(self.source_height or self.height))
         scale = gif_utils.animation_output_scale(source_w, source_h, quality, image_bin=image_bin, max_edge_px=max_edge_px)
         panel_gap = max(0, int(round(float(self.panel_gap_px) * scale)))
