@@ -3375,13 +3375,13 @@ function Show4DSTEM() {
         height: Number(model.get("roi_height") || 0),
       });
       const presetRoiGeometry = (name: WarmRoiPresetName): WarmRoiGeometry => {
-        const bfRadius = Math.max(1, Number(model.get("bf_radius") || 1));
+        const brightFieldRadiusPx = Math.max(1, Number(model.get("bright_field_radius_px") || 1));
         const centerRow = Number(model.get("center_row") || model.get("roi_center_row") || detectorRows / 2);
         const centerCol = Number(model.get("center_col") || model.get("roi_center_col") || detectorCols / 2);
         const disk = { centerRow, centerCol, width: 0, height: 0 };
-        if (name === "abf") return { ...disk, mode: "annular", radius: bfRadius, radiusInner: Math.max(0.5, bfRadius * 0.5) };
-        if (name === "adf") return { ...disk, mode: "annular", radius: bfRadius * 2, radiusInner: bfRadius };
-        return { ...disk, mode: "circle", radius: bfRadius, radiusInner: 0 };
+        if (name === "abf") return { ...disk, mode: "annular", radius: brightFieldRadiusPx, radiusInner: Math.max(0.5, brightFieldRadiusPx * 0.5) };
+        if (name === "adf") return { ...disk, mode: "annular", radius: brightFieldRadiusPx * 2, radiusInner: brightFieldRadiusPx };
+        return { ...disk, mode: "circle", radius: brightFieldRadiusPx, radiusInner: 0 };
       };
       const maskForRoiGeometry = (geometry: WarmRoiGeometry): Uint32Array => {
         const traits: Record<string, number | string> = {
@@ -4112,17 +4112,17 @@ function Show4DSTEM() {
       const onPreset = () => {
         const name = String(model.get("_preset_request") || "").toLowerCase();
         if (!name) return;
-        const bfRadius = model.get("bf_radius") || 1;
+        const brightFieldRadiusPx = model.get("bright_field_radius_px") || 1;
         suppressViTraitRecompute = true;
         try {
           model.set("roi_active", true);
           model.set("vi_source", "roi");
           model.set("roi_center_row", model.get("center_row"));
           model.set("roi_center_col", model.get("center_col"));
-          if (name === "bf") { model.set("roi_mode", "circle"); model.set("roi_radius_inner", 0); model.set("roi_radius", Math.max(1, bfRadius)); }
-          else if (name === "abf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", Math.max(0.5, bfRadius * 0.5)); model.set("roi_radius", Math.max(1, bfRadius)); }
-          else if (name === "adf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", bfRadius); model.set("roi_radius", bfRadius * 2); }
-          else if (name === "haadf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", bfRadius * 2); model.set("roi_radius", bfRadius * 4); }
+          if (name === "bf") { model.set("roi_mode", "circle"); model.set("roi_radius_inner", 0); model.set("roi_radius", Math.max(1, brightFieldRadiusPx)); }
+          else if (name === "abf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", Math.max(0.5, brightFieldRadiusPx * 0.5)); model.set("roi_radius", Math.max(1, brightFieldRadiusPx)); }
+          else if (name === "adf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", brightFieldRadiusPx); model.set("roi_radius", brightFieldRadiusPx * 2); }
+          else if (name === "haadf") { model.set("roi_mode", "annular"); model.set("roi_radius_inner", brightFieldRadiusPx * 2); model.set("roi_radius", brightFieldRadiusPx * 4); }
           model.set("_preset_request", "");  // consume so the same preset can fire again
         } finally {
           suppressViTraitRecompute = false;
@@ -4214,15 +4214,15 @@ function Show4DSTEM() {
         setOfflineBackendLoading(false);
       }
       // Fit the BF disk from the mean diffraction pattern before the presets warm.
-      // On the H5/WebGPU path Python never holds the pixels, so bf_radius keeps the
+      // On the H5/WebGPU path Python never holds the pixels, so bright_field_radius_px keeps the
       // det_size/8 guess and every BF/ABF/ADF preset samples the wrong disk: on real
       // Arina data the true radius was 54 px against a 24 px guess, so "ADF" at twice
-      // bf_radius still sat inside the bright field. The pixels only exist in the
+      // bright_field_radius_px still sat inside the bright field. The pixels only exist in the
       // browser, so the fit has to happen here.
       const fitBfDiskFromMeanDp = async (): Promise<void> => {
         if (!compute || disposed) return;
-        // Only override the ratio guess; an explicit user bf_radius must win.
-        const current = Number(model.get("bf_radius") || 0);
+        // Only override the ratio guess; an explicit user bright_field_radius_px must win.
+        const current = Number(model.get("bright_field_radius_px") || 0);
         const ratioGuess = Math.min(detectorRows, detectorCols) * 0.125;
         if (Math.abs(current - ratioGuess) > 0.51) return;
         // A few thousand scan positions fix the disk edge; reducing all of them would
@@ -4279,8 +4279,8 @@ function Show4DSTEM() {
         const previousBf = current;
         model.set("center_row", centerRow);
         model.set("center_col", centerCol);
-        model.set("bf_radius", edge);
-        // roi_radius mirrors bf_radius at construction; keep it on the fitted disk
+        model.set("bright_field_radius_px", edge);
+        // roi_radius mirrors bright_field_radius_px at construction; keep it on the fitted disk
         // unless the user has already moved it.
         if (Math.abs(Number(model.get("roi_radius") || 0) - previousBf) < 0.51) {
           model.set("roi_radius", edge);
@@ -4289,7 +4289,7 @@ function Show4DSTEM() {
         }
       };
       await fitBfDiskFromMeanDp().catch((error) => {
-        console.warn("Show4DSTEM BF disk fit failed; keeping the default bf_radius", error);
+        console.warn("Show4DSTEM BF disk fit failed; keeping the default bright_field_radius_px", error);
       });
       scheduleWarmStandardViCache();
       // Safety re-run: at first mount the offline stack / roi-detector traits can

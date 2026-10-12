@@ -211,7 +211,7 @@ def export_state_for_bin(widget, detector_bin: int, scan_bin: int) -> dict:
     """
     state = widget.state_dict()
     if detector_bin > 1:
-        for key in ("center_row", "center_col", "bf_radius", "roi_center_row", "roi_center_col",
+        for key in ("center_row", "center_col", "bright_field_radius_px", "roi_center_row", "roi_center_col",
                     "roi_radius", "roi_radius_inner", "roi_width", "roi_height"):
             state[key] = float(state[key]) / detector_bin
         state["dp_vmin"] = None
@@ -263,7 +263,7 @@ def export_clone(widget, dtype: str, detector_bin: int, scan_bin: int):
         voltage_kV=widget.voltage_kV,
         semiangle_mrad=widget.semiangle_mrad,
         center=(widget.center_row / detector_bin, widget.center_col / detector_bin),
-        bf_radius=max(1.0, widget.bf_radius / detector_bin),
+        bright_field_radius_px=max(1.0, widget.bright_field_radius_px / detector_bin),
         precompute_virtual_images=False,
         frame_dim_label=widget.frame_dim_label,
         frame_labels=list(widget.frame_labels),
@@ -445,7 +445,7 @@ def report_html_bytes(widget, *, dtype: str, detector_bin: int, scan_bin: int, d
     sections = []
     for page_idx, page in enumerate(pages):
         for name in PRESET_RADII:
-            mask = preset_mask(name, det_shape, center, widget.bf_radius)
+            mask = preset_mask(name, det_shape, center, widget.bright_field_radius_px)
             tiles = []
             for panel_idx, image in zip(page, widget._compare_images(page, mask), strict=True):
                 scaled = scale_values(mean_scan_bin(image, scan_bin), widget.vi_scale_mode)

@@ -152,7 +152,7 @@ from quantem.gpu.io import load
 
 loaded = load(path)
 center, radius = detector.fit_probe(detector.mean(loaded))
-Show4DSTEM(loaded, center=center, bf_radius=radius)
+Show4DSTEM(loaded, center=center, bright_field_radius_px=radius)
 ```
 
 The center is `(row, col)` and the radius is in detector pixels. Supplying
@@ -166,7 +166,7 @@ For a bounded Torch tensor on the same GPU, read a scan region:
 
 ```python
 patterns_t = loaded.read(scan_region=(100, 164, 100, 164))  # (64, 64, det_row, det_col)
-Show4DSTEM(patterns_t, center=center, bf_radius=radius)
+Show4DSTEM(patterns_t, center=center, bright_field_radius_px=radius)
 ```
 
 Show4DSTEM has two acceleration surfaces:
@@ -576,7 +576,7 @@ Python round trip - see [Performance](../maintainer/widget-performance).
 | Control | Trait | Expected effect |
 |---|---|---|
 | Detector position (drag on diffraction) | `pos_row`, `pos_col` | Virtual image recomputes for that probe position |
-| BF aperture radius | `bf_radius` | Bright-field disk grows/shrinks; virtual image updates |
+| BF aperture radius | `bright_field_radius_px` | Bright-field disk grows/shrinks; virtual image updates |
 | Aperture center | `center_row`, `center_col` | Recenters the detector on the unscattered beam |
 | Detector ROI mode | `roi_mode`, `roi_active` | Switch BF / annular / rectangular detector |
 | Annular inner / outer | `roi_radius_inner`, `roi_radius` | ADF annulus geometry |

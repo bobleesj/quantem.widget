@@ -133,6 +133,8 @@ Changed:
   `detector_sampling_inv_A` (1/angstrom per detector pixel, along both axes);
   the measurements JSON key `k_pixel_size_inv_angstrom_per_px` and the
   `calibration` key `k_pixel_size` to `detector_sampling_inv_A`.
+- `Show4DSTEM` and `ShowDiffraction`: keyword, trait and state key
+  `bf_radius` to `bright_field_radius_px` (detector pixels).
 - One spelling per value in `Show1D`, `Show2D` and `Show3D`: keyword
   `gallery_gap_px` (Show2D), keyword `panel_gap` (Show3D) and trait
   `inter_panel_gap_px` to `panel_gap_px`; Show2D keyword and trait `size` to

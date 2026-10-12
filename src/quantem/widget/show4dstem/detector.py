@@ -49,7 +49,7 @@ def roi_mask(
     return point
 
 
-def preset_mask(name: str, det_shape: tuple[int, int], center: tuple[float, float], bf_radius: float) -> np.ndarray:
+def preset_mask(name: str, det_shape: tuple[int, int], center: tuple[float, float], bright_field_radius_px: float) -> np.ndarray:
     """Detector mask of a named preset (BF, ABF, ADF, HAADF) around the fitted disk.
 
     The annuli are multiples of the bright-field radius: ABF covers the outer
@@ -58,7 +58,7 @@ def preset_mask(name: str, det_shape: tuple[int, int], center: tuple[float, floa
     preset click and its precomputed image use the same pixels.
     """
     inner, outer = PRESET_RADII[name]
-    radius = max(1.0, float(bf_radius))
+    radius = max(1.0, float(bright_field_radius_px))
     return detector_mask(center, inner * radius, outer * radius, det_shape)
 
 

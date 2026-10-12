@@ -122,7 +122,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     center : tuple[float, float], optional
         (row, col) of the diffraction center in pixels. Defaults to the detector
         center, then auto-detected from the bright-field disk if also no radius.
-    bf_radius : float, optional
+    bright_field_radius_px : float, optional
         Bright-field disk radius in pixels. Defaults to 1/8 of the detector size.
     title : str, default ""
         Title displayed above the widget.
@@ -157,7 +157,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     _LIST_STATE_FIELDS = {"spots", "rings", "custom_phases", "mask_regions"}
     _STATE_FIELDS = (
         "title", "frame_idx", "panel_width_px", "detector_sampling_inv_A", "k_calibrated", "center_row",
-        "center_col", "bf_radius", "spots", "rings", "zone_axis", "phase_match", "show_hkl",
+        "center_col", "bright_field_radius_px", "spots", "rings", "zone_axis", "phase_match", "show_hkl",
         "snap_enabled", "snap_radius", "spot_refine", "detect_denoise", "denoise", "center_mode",
         "calibration_source", "calibration_ref_d", "calibration_ref_radius", "calibration_rms_px",
         "ellipse_ratio", "ellipse_angle", "ellipse_corrected", "dp_colormap", "dp_scale_mode",
@@ -187,7 +187,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     # Center and calibration
     center_row = traitlets.Float(0.0).tag(sync=True)
     center_col = traitlets.Float(0.0).tag(sync=True)
-    bf_radius = traitlets.Float(0.0).tag(sync=True)
+    bright_field_radius_px = traitlets.Float(0.0).tag(sync=True)
     # 1/angstrom per detector pixel, the step along both detector axes: ring radii measure one isotropic value
     detector_sampling_inv_A = traitlets.Float(0.0).tag(sync=True)
     k_calibrated = traitlets.Bool(False).tag(sync=True)
@@ -268,7 +268,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         *,
         detector_sampling_inv_A: float | None = None,
         center: tuple[float, float] | None = None,
-        bf_radius: float | None = None,
+        bright_field_radius_px: float | None = None,
         title: str = "",
         panel_width_px: int | None = None,
         offline: bool = False,
@@ -311,10 +311,10 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         self.offline = offline
         self.center_row = float(center[0]) if center is not None else self.det_rows / 2
         self.center_col = float(center[1]) if center is not None else self.det_cols / 2
-        self.bf_radius = (
-            float(bf_radius) if bf_radius is not None else min(self.det_rows, self.det_cols) * BF_RADIUS_FRACTION
+        self.bright_field_radius_px = (
+            float(bright_field_radius_px) if bright_field_radius_px is not None else min(self.det_rows, self.det_cols) * BF_RADIUS_FRACTION
         )
-        if center is None and bf_radius is None:
+        if center is None and bright_field_radius_px is None:
             self._auto_detect_center()
         self._update_frame()
         self._bake_offline_frames()
@@ -351,7 +351,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         inflates the estimate.
         """
         if exclude_radius is None:
-            exclude_radius = max(self.bf_radius, 2.0 * min_distance)
+            exclude_radius = max(self.bright_field_radius_px, 2.0 * min_distance)
         coords = lattice.detect_spot_coords(
             self._detection_frame(),
             center=(self.center_row, self.center_col),
@@ -601,7 +601,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         if self.ellipse_ratio != 1.0:
             state = "corrected" if self.ellipse_corrected else "not corrected"
             lines.append(f"Ellipse:  a/b={self.ellipse_ratio:.3f} at {self.ellipse_angle:.1f}° ({state})")
-        lines.append(f"Center:   ({self.center_row:.1f}, {self.center_col:.1f})  BF r={self.bf_radius:.1f} px")
+        lines.append(f"Center:   ({self.center_row:.1f}, {self.center_col:.1f})  BF r={self.bright_field_radius_px:.1f} px")
         lines.append(f"Spots:    {len(self.spots)}")
         for spot in self.spots[:5]:
             if spot.get("d_spacing"):
@@ -756,7 +756,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             for ring in self.rings
         ]
         return lattice.fit_radial_background(
-            radii_px, intensity, peak_windows=peak_windows, exclude_radius=self.bf_radius
+            radii_px, intensity, peak_windows=peak_windows, exclude_radius=self.bright_field_radius_px
         )
 
     def _update_profile(self, change=None, profile: tuple | None = None) -> None:
@@ -833,7 +833,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         with self.hold_trait_notifications():
             self.center_row = float((row_coords * bright).sum() / bright_count)
             self.center_col = float((col_coords * bright).sum() / bright_count)
-        self.bf_radius = lattice.central_beam_radius(bright.cpu().numpy(), self.center_row, self.center_col)
+        self.bright_field_radius_px = lattice.central_beam_radius(bright.cpu().numpy(), self.center_row, self.center_col)
         self.center_mode = "auto"
         if refine:
             self._refine_center("symmetry")
@@ -1107,7 +1107,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             radii_px,
             intensity,
             raw_profile[2],
-            exclude_radius=self.bf_radius if exclude_radius is None else exclude_radius,
+            exclude_radius=self.bright_field_radius_px if exclude_radius is None else exclude_radius,
         )
         self.rings = []
         for radius in sorted(candidates[:max_rings]):
@@ -1471,7 +1471,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         clone = type(self)(
             to_numpy(self._data),
             center=(self.center_row, self.center_col),
-            bf_radius=self.bf_radius,
+            bright_field_radius_px=self.bright_field_radius_px,
             title=self.title,
             offline=True,
             verbose=False,

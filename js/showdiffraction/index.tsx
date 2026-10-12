@@ -201,7 +201,7 @@ function ShowDiffraction() {
   const [nFrames] = useModelState<number>("n_frames");
   const [centerRow] = useModelState<number>("center_row");
   const [centerCol] = useModelState<number>("center_col");
-  const [bfRadius] = useModelState<number>("bf_radius");
+  const [brightFieldRadiusPx] = useModelState<number>("bright_field_radius_px");
   const [detectorSamplingInvA] = useModelState<number>("detector_sampling_inv_A");
   const [kCalibrated] = useModelState<boolean>("k_calibrated");
   const [spots] = useModelState<SpotDict[]>("spots");
@@ -392,7 +392,7 @@ function ShowDiffraction() {
     canvas: HTMLCanvasElement | null,
     data: { x: Float32Array; y: Float32Array } | null,
     xLabel: string, yLabel: string, zeroLine: boolean,
-    opts?: { logY?: boolean; rings?: RingDict[]; bfRadius?: number; selectedRingId?: number },
+    opts?: { logY?: boolean; rings?: RingDict[]; brightFieldRadiusPx?: number; selectedRingId?: number },
   ) => {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -453,11 +453,11 @@ function ShowDiffraction() {
       ctx.setLineDash([]);
       ctx.lineWidth = 1;
     }
-    if (opts?.bfRadius && opts.bfRadius > 0 && opts.bfRadius <= xMax) {
+    if (opts?.brightFieldRadiusPx && opts.brightFieldRadiusPx > 0 && opts.brightFieldRadiusPx <= xMax) {
       ctx.strokeStyle = isDark ? "#333333" : "#d8d8d8";
       ctx.beginPath();
-      ctx.moveTo(xOf(opts.bfRadius), PROFILE_PAD.top + plotH - 6);
-      ctx.lineTo(xOf(opts.bfRadius), PROFILE_PAD.top + plotH);
+      ctx.moveTo(xOf(opts.brightFieldRadiusPx), PROFILE_PAD.top + plotH - 6);
+      ctx.lineTo(xOf(opts.brightFieldRadiusPx), PROFILE_PAD.top + plotH);
       ctx.stroke();
     }
     ctx.strokeStyle = themeColors.accent;
@@ -529,9 +529,9 @@ function ShowDiffraction() {
   React.useLayoutEffect(() => {
     if (showProfile) {
       drawCurvePanel(profileCanvasRef.current, profileArrays, "r (px)", profileLog ? "log I" : "I",
-        false, { logY: profileLog, rings, bfRadius, selectedRingId });
+        false, { logY: profileLog, rings, brightFieldRadiusPx, selectedRingId });
     }
-  }, [profileArrays, profileLog, rings, bfRadius, showProfile, selectedRingId, drawCurvePanel]);
+  }, [profileArrays, profileLog, rings, brightFieldRadiusPx, showProfile, selectedRingId, drawCurvePanel]);
 
   // Canvas resize
   const handleCanvasResizeStart = (e: React.PointerEvent) => {
@@ -726,7 +726,7 @@ function ShowDiffraction() {
     ctx.stroke();
     // BF disk circle
     ctx.beginPath();
-    ctx.ellipse(cx, cy, bfRadius * scX, bfRadius * scY, 0, 0, 2 * Math.PI);
+    ctx.ellipse(cx, cy, brightFieldRadiusPx * scX, brightFieldRadiusPx * scY, 0, 0, 2 * Math.PI);
     ctx.stroke();
     ctx.setLineDash([]);
 
@@ -855,7 +855,7 @@ function ShowDiffraction() {
     }
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }, [dpVersion, dpZoom, dpPanX, dpPanY, canvasSize, detRows, detCols, centerRow, centerCol, bfRadius, spots, rings, showHkl, selectedRingId, ellipseRatio, ellipseAngle, maskRegions, showMask, dragPreview, dpLut, dpScaleMode, themeInfo.theme, themeColors.accent]);
+  }, [dpVersion, dpZoom, dpPanX, dpPanY, canvasSize, detRows, detCols, centerRow, centerCol, brightFieldRadiusPx, spots, rings, showHkl, selectedRingId, ellipseRatio, ellipseAngle, maskRegions, showMask, dragPreview, dpLut, dpScaleMode, themeInfo.theme, themeColors.accent]);
 
   // Scale bar
   React.useLayoutEffect(() => {
@@ -2046,7 +2046,7 @@ function ShowDiffraction() {
 
           <Box sx={{ ...controlRow, mt: `${SPACING.XS}px` }}>
             <Typography sx={{ ...typography.value, color: themeColors.textMuted }}>
-              Center: ({centerRow.toFixed(1)}, {centerCol.toFixed(1)})  BF r={bfRadius.toFixed(1)}
+              Center: ({centerRow.toFixed(1)}, {centerCol.toFixed(1)})  BF r={brightFieldRadiusPx.toFixed(1)}
               {kCalibrated && <span style={{ marginLeft: 8 }}>k={detectorSamplingInvA.toFixed(4)} 1/Å/px</span>}
             </Typography>
           </Box>

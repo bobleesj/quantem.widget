@@ -157,7 +157,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         the accelerating voltage in kV and the convergence semiangle in mrad.
         A dataset or file is the source of its own calibration: these are read
         from it, and a keyword that contradicts a recorded value raises.
-    center, bf_radius
+    center, bright_field_radius_px
         Bright-field disk geometry in detector pixels; fitted from the mean
         pattern when omitted.
     precompute_virtual_images
@@ -190,7 +190,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     frame_bytes = traitlets.Bytes(b"").tag(sync=True)
     center_col = traitlets.Float(0.0).tag(sync=True)
     center_row = traitlets.Float(0.0).tag(sync=True)
-    bf_radius = traitlets.Float(0.0).tag(sync=True)
+    bright_field_radius_px = traitlets.Float(0.0).tag(sync=True)
     roi_active = traitlets.Bool(False).tag(sync=True)
     roi_mode = traitlets.Unicode("point").tag(sync=True)
     roi_center_col = traitlets.Float(0.0).tag(sync=True)
@@ -317,7 +317,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         voltage_kV: float | None = None,
         semiangle_mrad: float | None = None,
         center: tuple[float, float] | None = None,
-        bf_radius: float | None = None,
+        bright_field_radius_px: float | None = None,
         precompute_virtual_images: bool | None = None,
         frame_dim_label: str | None = None,
         frame_labels: list[str] | None = None,
@@ -561,7 +561,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.vi_roi_height = float(roi_size)
         self.center_row = float(self.det_rows / 2) if center is None else float(center[0])
         self.center_col = float(self.det_cols / 2) if center is None else float(center[1])
-        self.bf_radius = min(self.det_rows, self.det_cols) * DEFAULT_BF_RATIO if bf_radius is None else float(bf_radius)
+        self.bright_field_radius_px = min(self.det_rows, self.det_cols) * DEFAULT_BF_RATIO if bright_field_radius_px is None else float(bright_field_radius_px)
 
         if browser_urls:
             if h5_urls:
@@ -579,8 +579,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self.compare_page_count = max(1, math.ceil(self.n_frames / self.compare_max_panels))
             return
 
-        if center is None and bf_radius is None:
-            self.center_row, self.center_col, self.bf_radius = fit_disk(
+        if center is None and bright_field_radius_px is None:
+            self.center_row, self.center_col, self.bright_field_radius_px = fit_disk(
                 self._session(0).mean_dp(), (self.det_rows, self.det_cols), DEFAULT_BF_RATIO
             )
         if precompute_virtual_images and self.n_frames == 1:
@@ -591,7 +591,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                                                  "roi_active", "roi_mode", "roi_width", "roi_height"])
         self.observe(self._on_roi_center_change, names=["roi_center"])
         self.observe(self._on_vi_source_change, names=["vi_source"])
-        self.observe(self._on_calibration_change, names=["center_row", "center_col", "bf_radius"])
+        self.observe(self._on_calibration_change, names=["center_row", "center_col", "bright_field_radius_px"])
         # The first render shows the bright-field image: a point detector paints near black.
         self._set_roi_to_disk()
         self._compute_virtual_image_from_roi()
@@ -900,7 +900,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         preset = str(name).strip().lower()
         if preset not in PRESET_RADII:
             raise ValueError(f"Unknown preset {name!r}. Choices: 'bf', 'abf', 'adf', 'haadf'.")
-        bf_radius = self.bf_radius
+        bright_field_radius_px = self.bright_field_radius_px
         # Every ROI trait commits before one recompute; an intermediate state (mode
         # switched, radii stale) would paint a wrong image first.
         self._suppress_roi_recompute = True
@@ -912,16 +912,16 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self.roi_center_col = float(self.center_col)
             if preset == "bf":
                 self.roi_radius_inner = 0.0
-                self.roi_radius = float(max(1.0, bf_radius))
+                self.roi_radius = float(max(1.0, bright_field_radius_px))
             elif preset == "abf":
-                self.roi_radius_inner = float(max(0.5, bf_radius * 0.5))
-                self.roi_radius = float(max(1.0, bf_radius))
+                self.roi_radius_inner = float(max(0.5, bright_field_radius_px * 0.5))
+                self.roi_radius = float(max(1.0, bright_field_radius_px))
             elif preset == "adf":
-                self.roi_radius_inner = float(max(1.0, bf_radius))
-                self.roi_radius = float(max(bf_radius + 1.0, bf_radius * 2.0))
+                self.roi_radius_inner = float(max(1.0, bright_field_radius_px))
+                self.roi_radius = float(max(bright_field_radius_px + 1.0, bright_field_radius_px * 2.0))
             else:
-                self.roi_radius_inner = float(max(1.0, bf_radius * 2.0))
-                self.roi_radius = float(max(bf_radius * 2.0 + 1.0, bf_radius * 4.0))
+                self.roi_radius_inner = float(max(1.0, bright_field_radius_px * 2.0))
+                self.roi_radius = float(max(bright_field_radius_px * 2.0 + 1.0, bright_field_radius_px * 4.0))
         self._suppress_roi_recompute = False
         if not self._multiple_view_active():
             self._compute_virtual_image_from_roi()
@@ -931,7 +931,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     def state_dict(self) -> dict:
         """The display state (cursor, ROI, colormaps, layout); no pixel data."""
         keys = (
-            "title", "show_title", "pos_row", "pos_col", "center_row", "center_col", "bf_radius", "roi_active", "roi_mode", "roi_center_row",
+            "title", "show_title", "pos_row", "pos_col", "center_row", "center_col", "bright_field_radius_px", "roi_active", "roi_mode", "roi_center_row",
             "roi_center_col", "roi_radius", "roi_radius_inner", "roi_width", "roi_height", "vi_roi_mode",
             "vi_roi_center_row", "vi_roi_center_col", "vi_roi_radius", "vi_roi_width", "vi_roi_height",
             "vi_roi_reduce", "vi_source", "dp_colormap", "vi_colormap", "fft_colormap", "dp_scale_mode",
@@ -1356,7 +1356,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         center = (self.center_row, self.center_col)
         self._preset_images = {
             name: np.ascontiguousarray(
-                self._compute.masked_sum(preset_mask(name, (self.det_rows, self.det_cols), center, self.bf_radius)),
+                self._compute.masked_sum(preset_mask(name, (self.det_rows, self.det_cols), center, self.bright_field_radius_px)),
                 dtype=np.float32).tobytes()
             for name in PRESET_RADII
         }
@@ -1370,7 +1370,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """
         center = (self.center_row, self.center_col)
         for name in PRESET_RADII:
-            if np.array_equal(mask, preset_mask(name, (self.det_rows, self.det_cols), center, self.bf_radius)):
+            if np.array_equal(mask, preset_mask(name, (self.det_rows, self.det_cols), center, self.bright_field_radius_px)):
                 return name
         return None
 
@@ -1593,11 +1593,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         detector_sampling_mrad = tuple(self.detector_sampling_mrad) or None
         semiangle = self.semiangle_mrad
         if semiangle is None:
-            if detector_sampling_mrad is None or self.bf_radius <= 0:
+            if detector_sampling_mrad is None or self.bright_field_radius_px <= 0:
                 raise ValueError("Compute SSB needs the convergence semiangle and the data record none. Construct "
                                  "Show4DSTEM(data, semiangle_mrad=...), or give the detector step in mrad per pixel "
                                  "(detector_sampling_mrad=) so it follows from the bright-field radius.")
-            semiangle = self.bf_radius * detector_sampling_mrad[1]
+            semiangle = self.bright_field_radius_px * detector_sampling_mrad[1]
         if semiangle <= 0:
             raise ValueError(f"semiangle_mrad must be positive, got {semiangle}.")
         if self.voltage_kV is None:
@@ -1805,7 +1805,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self.roi_center_col = self.center_col
             self.roi_center_row = self.center_row
             self.roi_center = [self.center_row, self.center_col]
-            self.roi_radius = float(max(1.0, self.bf_radius))
+            self.roi_radius = float(max(1.0, self.bright_field_radius_px))
             self.roi_active = True
         self._suppress_roi_recompute = False
 
