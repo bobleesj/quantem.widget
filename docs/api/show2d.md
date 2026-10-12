@@ -457,6 +457,12 @@ w.save("defect_a.json")
 Show2D([raw, corrected, residual], state="defect_a.json")
 ```
 
+The file is `{"schema": "quantem.widget-state/2", "widget_name", "widget_version",
+"state"}`, the same for every widget with `save`. A file of another schema
+(or of an earlier release, which has none) and a state key the widget does not
+save raise `ValueError` before anything is applied; an earlier file is not
+converted.
+
 ## Add scientific inset plots to panels
 
 Advanced figure-making sometimes needs a compact plot inside each image panel:

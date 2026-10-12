@@ -299,7 +299,7 @@ def test_state_round_trip_through_save_file_and_state_kwarg(tmp_path):
         assert getattr(restored, key) == getattr(widget, key), key
     assert restored.state_dict() == widget.state_dict()
     with pytest.raises(ValueError, match="cannot load into"):
-        Show1D(_traces(), state={"widget_name": "Show2D", "state": {}})
+        Show1D(_traces(), state={"schema": "quantem.widget-state/2", "widget_name": "Show2D", "state": {}})
     # a plain widget keeps the trace bytes but not the image buffers in the saved notebook
     saved = widget.get_state()
     assert "y_bytes" in saved and "snapshot_bytes" not in saved and saved["_static_fallback_image"]

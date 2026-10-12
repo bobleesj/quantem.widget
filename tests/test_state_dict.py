@@ -15,7 +15,7 @@ import re
 
 import numpy as np
 import pytest
-from quantem.widget import Show2D, Show3D, Show4DSTEM
+from quantem.widget import Plot2D, Show1D, Show2D, Show3D, Show3DSlices, Show4DSTEM, ShowDiffraction
 from quantem.widget.show4dstem.export import export_clone
 
 
@@ -50,6 +50,51 @@ def _mutate_state(state: dict) -> dict:
             continue
         out[k] = _flip_value(v)
     return out
+
+
+# ---------------------------------------------------------------------------
+# The save() file of every widget
+# ---------------------------------------------------------------------------
+
+# widget -> (how to build it on fixed data, one trait of its state with a value that is not the default)
+STATE_WIDGETS = {
+    "Plot2D": (lambda: Plot2D(np.arange(24, dtype=float).reshape(4, 6), x=np.arange(6), y=np.arange(4)), "cmap", "magma"),
+    "Show1D": (lambda: Show1D(np.arange(8.0)), "log_scale", True),
+    "Show2D": (lambda: Show2D(np.arange(64, dtype=np.float32).reshape(8, 8), verbose=False), "cmap", "viridis"),
+    "Show3D": (lambda: Show3D(np.arange(256, dtype=np.float32).reshape(4, 8, 8), verbose=False), "cmap", "viridis"),
+    "Show3DSlices": (lambda: Show3DSlices(np.arange(256, dtype=np.float32).reshape(4, 8, 8)), "cmap", "viridis"),
+    "Show4DSTEM": (lambda: Show4DSTEM(np.ones((4, 4, 8, 8), dtype=np.uint16), verbose=False), "dp_colormap", "viridis"),
+    "ShowDiffraction": (lambda: ShowDiffraction(np.ones((16, 16), dtype=np.float32), verbose=False), "dp_colormap", "viridis"),
+}
+
+
+@pytest.mark.parametrize("name", list(STATE_WIDGETS))
+def test_save_file_round_trips_and_only_the_current_schema_loads(tmp_path, name):
+    # every widget read an envelope without checking its layout: a file of an earlier release set the keys that
+    # still exist and dropped the renamed ones, with a warning in Show3D and Show3DSlices and no message elsewhere
+    build, trait, value = STATE_WIDGETS[name]
+    widget = build()
+    setattr(widget, trait, value)
+    widget.save(tmp_path / "view.json")
+    envelope = json.loads((tmp_path / "view.json").read_text())
+    assert set(envelope) == {"schema", "widget_name", "widget_version", "state"}
+    assert (envelope["schema"], envelope["widget_name"]) == ("quantem.widget-state/2", name)
+    restored = build()
+    restored.load_state_dict(tmp_path / "view.json")
+    assert restored.state_dict() == widget.state_dict()
+    # a file of the earlier layout, a file of another schema and an unknown key raise and change nothing
+    untouched = build()
+    before = untouched.state_dict()
+    earlier = {"metadata_version": "1.0", "widget_name": name, "widget_version": "0.0.1rc42", "state": envelope["state"]}
+    (tmp_path / "earlier.json").write_text(json.dumps(earlier))
+    with pytest.raises(ValueError, match=r"earlier\.json has schema None; .* reads 'quantem\.widget-state/2' only"):
+        untouched.load_state_dict(tmp_path / "earlier.json")
+    with pytest.raises(ValueError, match="has schema 'quantem.widget-state/1'"):
+        untouched.load_state_dict({**envelope, "schema": "quantem.widget-state/1"})
+    for state in ({trait: value, "not_a_key": 1}, {**envelope, "state": {trait: value, "not_a_key": 1}}):
+        with pytest.raises(ValueError, match=r"does not save: \['not_a_key'\]"):
+            untouched.load_state_dict(state)
+    assert untouched.state_dict() == before
 
 
 # ---------------------------------------------------------------------------
@@ -136,8 +181,8 @@ def test_show4dstem_save_and_load(tmp_path, show4dstem_widget):
 
     payload = json.loads(path.read_text())
     assert payload["widget_name"] == "Show4DSTEM"
-    assert "metadata_version" in payload
-    assert "state" in payload
+    assert set(payload) == {"schema", "widget_name", "widget_version", "state"}
+    assert payload["schema"] == "quantem.widget-state/2"
 
     data = np.random.default_rng(0).poisson(5, (8, 8, 16, 16)).astype(np.uint16)
     data[:, :, 6:10, 6:10] += 500

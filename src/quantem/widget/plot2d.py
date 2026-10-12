@@ -199,20 +199,19 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
     def load_state_dict(self, state: dict | str | Path) -> None:
         """Restore a view onto this map: a ``save`` file, its JSON payload, or a bare ``state_dict``.
 
-        A file written by another widget is refused, and the color limits must
-        pass the constructor's check before anything is applied. Unknown keys
-        are skipped.
+        A file written by another widget or under another ``schema`` is
+        refused, an unknown key raises, and the color limits must pass the
+        constructor's check, all before anything is applied.
 
         Examples
         --------
         >>> plot.save("g3_view.json")
         >>> other.load_state_dict("g3_view.json")
         """
-        state = read_state(state, "Plot2D")
+        state = read_state(state, "Plot2D", self._STATE_KEYS)
         self._check_limits(state.get("vmin", self.vmin), state.get("vmax", self.vmax))
         for key, value in state.items():
-            if key in self._STATE_KEYS:
-                setattr(self, key, value)
+            setattr(self, key, value)
 
     def _static_png_b64(self, max_px: int = 512) -> str | None:
         """Render a bounded saved preview without modifying scientific data."""

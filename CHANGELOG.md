@@ -243,6 +243,21 @@ Fixed:
   raises and names both units. Before the check `Show2D` relabelled the step
   unconverted (0.2 nm as 0.2 A), as `Show3D` did for every pair except nm to
   angstrom. A `sampling=` that disagrees with the dataset still raises.
+- A `save()` file of an earlier release half-loaded: the envelope did not name
+  its layout, so the keys that still exist were applied and the renamed ones
+  dropped, without a message in `Plot2D`, `Show1D`, `Show2D`, `Show4DSTEM` and
+  `ShowDiffraction` and with a warning in `Show3D` and `Show3DSlices`. The
+  envelope is `{"schema": "quantem.widget-state/2", "widget_name",
+  "widget_version", "state"}`; `metadata_version` is removed. `state=`,
+  `load_state_dict` and `ShowDiffraction.measurements_from_state` raise
+  `ValueError` for a file or envelope of another or no schema (naming the
+  file, the schema found and the one expected) and for a state key the widget
+  does not save (listing the keys), before anything is applied. An earlier
+  file is not converted. `load_state_dict` of `Show3D`, `Show3DSlices` and
+  `ShowDiffraction` reads a `save()` file or its envelope as the other widgets
+  do. `state_dict()` of `Show3D` and `Show3DSlices` no longer holds `n_pages`
+  and `panels_per_page`, which loading never applied (the page layout comes
+  from the data).
 
 ## rc42 - 2026-10-11
 

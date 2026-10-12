@@ -10,7 +10,6 @@ preview.
 
 import math
 import pathlib
-import warnings
 from collections.abc import Mapping, Sequence
 from typing import Self
 
@@ -44,6 +43,7 @@ from quantem.widget.show3d.fallback import Show3DFallback
 from quantem.widget.show3d.playback import Show3DPlayback
 from quantem.widget.utils.array import bin2d, to_numpy
 from quantem.widget.utils.display_filter import format_display_filter_banner
+from quantem.widget.utils.state_io import read_state
 from quantem.widget.state import SavedStateMixin, announce_browser_limit
 from quantem.widget.units import image_axes, unit_entry
 from quantem.widget.utils.ui import UiMode, resolve_ui_mode
@@ -1209,7 +1209,7 @@ class Show3D(
         "pixel_size", "pixel_unit", "smooth", "image_rotation", "rotation_scope", "frame_rotations",
         "flip_horizontal", "flip_vertical", "show_scale_bar", "panel_width_px", "fps", "avg_window", "loop",
         "reverse", "boomerang", "loop_end", "loop_start", "bookmarked_frames", "starred", "hidden_panels",
-        "selected_panels", "panel_order", "n_pages", "page_idx", "panels_per_page", "page_labels",
+        "selected_panels", "panel_order", "page_idx", "page_labels",
         "page_starred", "hidden_page_slots", "playback_path", "slice_idx", "roi_active", "roi_list",
         "roi_selected_idx", "profile_line", "profile_width", "diff_mode", "compare_mode", "compare_pair",
         "blink_fps", "diff_cmap", "compare_background", "panel_annotations", "panel_overlays",
@@ -1233,15 +1233,18 @@ class Show3D(
             state[key] = dict(value) if isinstance(value, dict) else list(value) if isinstance(value, list) else value
         return state
 
-    def load_state_dict(self, state: dict) -> None:
-        """Apply a ``state_dict`` snapshot, dropping keys that no longer fit.
+    def load_state_dict(self, state: dict | str | pathlib.Path) -> None:
+        """Apply a ``state_dict`` snapshot, its envelope or a ``save`` file, dropping keys that no longer fit.
 
         Length-coupled keys whose size disagrees with the current stack or
         panel count are skipped so a state saved from one trial loads onto
         another. Cross-validated pairs (percentiles, vmin/vmax, loop range) are
-        applied in an order the validators accept. Unknown keys warn.
+        applied in an order the validators accept. A file of another
+        ``schema`` or an unknown key raises before anything is applied. The
+        page layout (``n_pages``, ``panels_per_page``) comes from the data and
+        is not part of the state.
         """
-        state = dict(state)
+        state = dict(read_state(state, "Show3D", ("_widget", *self._STATE_KEYS)))
         marker = state.pop("_widget", None)
         if marker is not None and marker != "Show3D":
             raise ValueError(f"load_state_dict: state was saved from {marker!r}, not Show3D.")
@@ -1255,20 +1258,15 @@ class Show3D(
         if "hidden_panels" in state:
             state["hidden_panels"] = sorted({int(panel) for panel in state["hidden_panels"] if 0 <= int(panel) < n_panels})[: n_panels - 1]
         if int(self.n_pages) > 1:
-            state["n_pages"] = int(self.n_pages)
-            state["panels_per_page"] = int(self.panels_per_page)
             for key in ("page_labels", "page_starred"):
                 if key in state and len(state[key]) != int(self.n_pages):
                     state.pop(key)
         else:
-            for key in ("n_pages", "page_idx", "panels_per_page", "page_labels", "page_starred", "hidden_page_slots"):
+            for key in ("page_idx", "page_labels", "page_starred", "hidden_page_slots"):
                 state.pop(key, None)
         if n_panels > 1:
             for key in ("roi_active", "roi_list", "roi_selected_idx"):
                 state.pop(key, None)
-        unknown = [key for key in state if key not in self._STATE_KEYS]
-        for key in unknown:
-            state.pop(key)
         if "vmin_per_panel" in state or "vmax_per_panel" in state:
             self.vmin_per_panel = [None] * n_panels
             self.vmax_per_panel = [None] * n_panels
@@ -1299,8 +1297,6 @@ class Show3D(
             self.loop_start = start if end < 0 else min(start, end)
         for key, value in state.items():
             setattr(self, key, value)
-        if unknown:
-            warnings.warn(f"load_state_dict ignored unknown keys: {unknown}.", stacklevel=2)
 
     def _panel_count(self) -> int:
         """Number of panels, for the shared panel and page helpers (``PanelsMixin`` hook)."""

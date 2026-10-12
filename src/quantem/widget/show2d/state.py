@@ -116,8 +116,9 @@ class Show2DState:
     def load_state_dict(self, state: dict | str | pathlib.Path) -> None:
         """Restore a ``state_dict``, its envelope or a ``save`` file; entries that
         do not fit this widget's panel count or page layout are skipped rather
-        than raising."""
-        state = _rescale_view(dict(read_state(state, "Show2D")), 1 / self._display_bin)
+        than raising. A key ``state_dict`` does not write raises before
+        anything is applied."""
+        state = _rescale_view(dict(read_state(state, "Show2D", (*self._STATE_KEYS, "folder_page_size"))), 1 / self._display_bin)
         n_images = int(self.n_images)
         page_kind = str(state.get("page_kind", self.page_kind))
         if page_kind not in {"comparison", "items"}:
@@ -212,5 +213,4 @@ class Show2DState:
             ):
                 state.pop("panel_frame_indices")
         for key, value in state.items():
-            if self.has_trait(key):
-                setattr(self, key, value)
+            setattr(self, key, value)

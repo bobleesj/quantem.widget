@@ -1,7 +1,6 @@
 """Show3DSlices: the browser gets the exact volume, pages share one cut, alignment finds the drift."""
 
 import json
-import warnings
 
 import numpy as np
 import pytest
@@ -184,10 +183,8 @@ def test_state_round_trip_onto_a_second_widget():
     assert (restored.vmin, restored.vmax) == (0.1, 0.9)
     assert restored.oblique_angle == pytest.approx(20.0)
     assert restored.state_dict() == widget.state_dict()
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    with pytest.raises(ValueError, match="not_a_trait"):
         restored.load_state_dict({"not_a_trait": 1})
-    assert "not_a_trait" in str(caught[0].message)
     with pytest.raises(ValueError, match="Show3D"):
         restored.load_state_dict({"_widget": "Show3D"})
 
@@ -198,9 +195,9 @@ def test_the_x_y_z_names_of_earlier_releases_are_not_accepted():
         Show3DSlices(volume, z_stretch=2.0)
     widget = Show3DSlices(volume, slice_stretch=2.0)
     assert widget.slice_stretch == 2.0
-    # a state saved under the earlier names is not converted: its keys are named once and dropped
-    with pytest.warns(UserWarning, match="slice_z"):
-        widget.load_state_dict({"slice_z": 2, "pixel_size_axes": [1.0, 1.0, 1.0]})
+    # a state saved under the earlier names is not converted: its keys are named and nothing is applied
+    with pytest.raises(ValueError, match="slice_z"):
+        widget.load_state_dict({"slice_index": 0, "slice_z": 2, "pixel_size_axes": [1.0, 1.0, 1.0]})
     assert widget.slice_index == 1 and widget.voxel_size_A == [0.0, 0.0, 0.0]
 
 

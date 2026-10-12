@@ -86,8 +86,9 @@ class StateFileMixin:
     def save(self, path: str | pathlib.Path) -> None:
         """Write the display state (not the pixels) to a versioned JSON file.
 
-        The envelope records the widget class and a schema version so
-        ``load_state_dict`` can refuse a file written by another widget.
+        The envelope records the widget class and its ``schema`` so
+        ``load_state_dict`` can refuse a file written by another widget or by
+        a release with another layout.
         """
         save_state_file(path, type(self).__name__, self.state_dict())
 

@@ -669,7 +669,7 @@ def test_state_loads_from_a_file_and_refuses_another_widgets_envelope(tmp_path: 
     fresh.load_state_dict(tmp_path / "view.json")
     assert fresh.log_scale is True
     with pytest.raises(ValueError, match="'Show3D'"):
-        Show2D(_frame(), state={"widget_name": "Show3D", "state": {"log_scale": True}}, verbose=False)
+        Show2D(_frame(), state={"schema": "quantem.widget-state/2", "widget_name": "Show3D", "state": {"log_scale": True}}, verbose=False)
 
 
 def test_offline_quantization_announces_itself(capsys):

@@ -12,7 +12,6 @@ import gc
 import json
 import math
 import pathlib
-import warnings
 from collections.abc import Sequence
 from typing import Self
 
@@ -28,6 +27,7 @@ from quantem.widget.show3dslices.alignment import estimate_global_slice_alignmen
 from quantem.widget.state import StateFileMixin
 from quantem.widget.units import axis_step, stated
 from quantem.widget.utils.array import to_numpy
+from quantem.widget.utils.state_io import read_state
 
 _SLICE_ALIGNMENT_MODES = frozenset({"off", "auto", "manual"})
 
@@ -229,7 +229,7 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     play_axis = traitlets.Int(0).tag(sync=True)  # 0 slice, 1 oblique plane, 3 both
 
     _STATE_KEYS = (
-        "title", "show_title", "n_pages", "page_idx", "panels_per_page", "page_labels",
+        "title", "show_title", "page_idx", "page_labels",
         "active_panel", "panel_titles", "cmap", "log_scale", "auto_contrast", "vmin", "vmax",
         "show_controls", "controls_collapsed", "show_crosshair", "show_fft", "fft_window",
         "fft_colormap", "fft_log_scale", "fft_auto", "orthographic", "smooth", "flip",
@@ -554,23 +554,19 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             state[key] = dict(value) if isinstance(value, dict) else list(value) if isinstance(value, list) else value
         return state
 
-    def load_state_dict(self, state: dict) -> None:
-        """Apply a ``state_dict`` snapshot onto this widget's volume.
+    def load_state_dict(self, state: dict | str | pathlib.Path) -> None:
+        """Apply a ``state_dict`` snapshot, its envelope or a ``save`` file onto this widget's volume.
 
         Page topology comes from the data, so ``n_pages`` / ``panels_per_page``
-        are ignored and labels of the wrong length are dropped. ``vmin`` /
-        ``vmax`` are cleared first so either bound can land regardless of the
-        current limits. Unknown keys warn and are dropped.
+        are not part of the state and labels of the wrong length are dropped.
+        ``vmin`` / ``vmax`` are cleared first so either bound can land
+        regardless of the current limits. A file of another ``schema`` or an
+        unknown key raises before anything is applied.
         """
-        state = dict(state)
+        state = dict(read_state(state, "Show3DSlices", ("_widget", *self._STATE_KEYS)))
         marker = state.pop("_widget", None)
         if marker is not None and marker != "Show3DSlices":
             raise ValueError(f"load_state_dict: state was saved from {marker!r}, not Show3DSlices.")
-        unknown = [key for key in state if key not in self._STATE_KEYS]
-        for key in unknown:
-            state.pop(key)
-        state.pop("n_pages", None)
-        state.pop("panels_per_page", None)
         if "page_labels" in state and len(state["page_labels"]) != int(self.n_pages):
             state.pop("page_labels")
         if "panel_titles" in state and len(state["panel_titles"]) not in (0, int(self.panel_count)):
@@ -584,8 +580,6 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             self.vmax = None if new_vmax is None else float(new_vmax)
         for key, value in state.items():
             setattr(self, key, value)
-        if unknown:
-            warnings.warn(f"load_state_dict ignored unknown keys: {unknown}.", stacklevel=2)
 
     def free(self) -> None:
         """Release the volume and its synced bytes.

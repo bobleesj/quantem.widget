@@ -48,8 +48,7 @@ class Show1DState:
         return state
 
     def load_state_dict(self, state: dict | str | pathlib.Path) -> None:
-        """Restore a ``state_dict``, its envelope or a ``save`` file; the trait validators clamp and normalise every value, unknown keys are skipped."""
-        for key, value in read_state(state, "Show1D").items():
-            if key in self._STATE_KEYS:
-                setattr(self, key, value)
+        """Restore a ``state_dict``, its envelope or a ``save`` file; the trait validators clamp and normalise every value, an unknown key raises."""
+        for key, value in read_state(state, "Show1D", self._STATE_KEYS).items():
+            setattr(self, key, value)
         self._update_trial_analysis()

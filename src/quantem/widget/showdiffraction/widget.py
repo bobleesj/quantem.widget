@@ -522,7 +522,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     def measurements_from_state(cls, state, path: str | pathlib.Path | None = None):
         """Measurement rows (:data:`MEASUREMENT_COLUMNS`) from a saved state file or dict;
         with ``path`` they are written as CSV (or JSON with the calibration metadata)."""
-        state = read_state(state, "ShowDiffraction")
+        state = read_state(state, "ShowDiffraction", cls._STATE_FIELDS)
         records = [measurement_record("spot", spot) for spot in state.get("spots", [])]
         records += [measurement_record("ring", ring) for ring in state.get("rings", [])]
         if path is None:
@@ -563,8 +563,9 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             for field in self._STATE_FIELDS
         }
 
-    def load_state_dict(self, state: dict) -> None:
-        """Restore widget state from a dict; unknown keys are ignored."""
+    def load_state_dict(self, state: dict | str | pathlib.Path) -> None:
+        """Restore a ``state_dict``, its envelope or a ``save`` file; a file of another ``schema`` or an unknown key raises before anything is applied."""
+        state = read_state(state, "ShowDiffraction", self._STATE_FIELDS)
         # measurement records last, so the geometry restores do not resample them
         for key in self._STATE_FIELDS:
             if key in state and key not in ("spots", "rings", "frame_idx"):

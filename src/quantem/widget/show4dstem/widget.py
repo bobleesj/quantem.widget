@@ -949,16 +949,19 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         return state
 
     def load_state_dict(self, state) -> None:
-        """Restore a ``state_dict``, its envelope or a ``save`` file; positions and the dataset index are clamped to this data."""
-        state = read_state(state, "Show4DSTEM")
-        allowed = set(self.state_dict())
+        """Restore a ``state_dict``, its envelope or a ``save`` file; positions and the dataset index are clamped to this data.
+
+        A file of another ``schema`` or a key ``state_dict`` does not write
+        raises before anything is applied.
+        """
+        state = read_state(state, "Show4DSTEM", self.state_dict())
         normalisers = {
             "view_mode": self._normalize_view_mode,
             "compare_dp_mode": self._normalize_compare_dp_mode,
             "compare_group_mode": self._normalize_compare_group_mode,
         }
         for key, value in state.items():
-            if key in {"pos_row", "pos_col", "frame_idx"} or key not in allowed:
+            if key in {"pos_row", "pos_col", "frame_idx"}:
                 continue
             if key in normalisers:
                 value = normalisers[key](value)
