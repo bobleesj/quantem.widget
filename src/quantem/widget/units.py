@@ -21,6 +21,8 @@ UNIT_TABLE: dict[str, tuple[str, float, str]] = {
     "1/angstrom": ("reciprocal_length", 1.0, "Å⁻¹"), "1/Å": ("reciprocal_length", 1.0, "Å⁻¹"),
     "1/A": ("reciprocal_length", 1.0, "Å⁻¹"), "A^-1": ("reciprocal_length", 1.0, "Å⁻¹"), "Å^-1": ("reciprocal_length", 1.0, "Å⁻¹"),
     "1/nm": ("reciprocal_length", 0.1, "nm⁻¹"), "nm^-1": ("reciprocal_length", 0.1, "nm⁻¹"),
+    # a Gatan file's unit tag reaches a dataset as written (read_image through ncempy): a diffraction pattern may be in 1/µm
+    "1/µm": ("reciprocal_length", 1e-4, "µm⁻¹"), "1/μm": ("reciprocal_length", 1e-4, "µm⁻¹"), "1/um": ("reciprocal_length", 1e-4, "µm⁻¹"),
     "mrad": ("angle", 1.0, "mrad"), "rad": ("angle", 1e3, "rad"), "µrad": ("angle", 1e-3, "µrad"),
     "urad": ("angle", 1e-3, "µrad"), "deg": ("angle", 1e3 * math.pi / 180.0, "°"),
     "s": ("time", 1.0, "s"), "ms": ("time", 1e-3, "ms"), "µs": ("time", 1e-6, "µs"), "us": ("time", 1e-6, "µs"),
@@ -45,7 +47,8 @@ def unit_entry(unit) -> tuple[str, float, str]:
         return ("pixels", 1.0, "px")
     if str(unit) not in UNIT_TABLE:
         raise ValueError(f"Unknown unit {str(unit)!r}. A calibrated axis uses one of: {', '.join(sorted(UNIT_TABLE))}; "
-                         "an uncalibrated axis uses 'pixels'.")
+                         f"an uncalibrated axis uses 'pixels'. A dataset in {str(unit)!r} opens uncalibrated when its "
+                         "array is passed (dataset.array); sampling= and units= then state the step in a unit above.")
     return UNIT_TABLE[str(unit)]
 
 

@@ -20,8 +20,10 @@ import pytest
 
 
 
+from quantem.widget import Show2D
 from quantem.widget.adapters.core import is_dataset
 from quantem.widget.io.image import read_image, read_image_stack, read_images
+from quantem.widget.units import axis_step
 
 
 def test_npy_exact(tmp_path):
@@ -224,3 +226,23 @@ def test_gatan_image_keeps_the_calibration_the_file_records(tmp_path, monkeypatc
     assert tuple(dataset.sampling) == (0.02, 0.03) and list(dataset.units) == ["nm", "nm"]
     monkeypatch.setattr(dm, "dmReader", lambda path: {"data": image, "pixelSize": [1.0, 1.0], "pixelUnit": ["", ""]})
     assert list(read_image(tmp_path / "bare.dm3").units) == ["pixels", "pixels"]  # Gatan's empty unit is an uncalibrated axis
+
+
+def test_gatan_unit_strings_open_in_a_widget_or_say_how_to(tmp_path, monkeypatch):
+    # read_image keeps the unit tag of a Gatan file as written, and Show2D(read_image(path)) raised "Unknown unit"
+    # for one outside the unit table (a diffraction pattern in 1/µm) where the file opened before
+    from ncempy.io import dm
+
+    pattern = np.arange(12, dtype=np.float32).reshape(3, 4)
+    for unit in ("1/µm", "1/μm", "1/um"):
+        monkeypatch.setattr(dm, "dmReader", lambda path, unit=unit: {"data": pattern, "pixelSize": [20.0, 20.0], "pixelUnit": [unit, unit]})
+        shown = Show2D(read_image(tmp_path / "pattern.dm4"), verbose=False)
+        assert (shown.pixel_size, shown.pixel_unit) == (20.0, unit)
+        assert axis_step(20.0, unit) == ("reciprocal_length", pytest.approx(0.002))  # 20 per µm is 0.002 per angstrom
+    # ncempy's text for a tag it cannot decode: still refused, with the unit named and the way to open the image
+    monkeypatch.setattr(dm, "dmReader", lambda path: {"data": pattern, "pixelSize": [20.0, 20.0], "pixelUnit": ["(Not displayable)"] * 2})
+    dataset = read_image(tmp_path / "pattern.dm4")
+    with pytest.raises(ValueError, match=r"Unknown unit '\(Not displayable\)'.*opens uncalibrated when its array is passed \(dataset\.array\)"):
+        Show2D(dataset, verbose=False)
+    bare = Show2D(dataset.array, verbose=False)
+    assert (bare.pixel_size, bare.pixel_unit) == (0.0, "px")

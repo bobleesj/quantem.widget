@@ -32,7 +32,7 @@ Changed:
 - One unit table (`quantem.widget.units`, `js/units.ts`) replaces six. It reads
   the strings a `.qem` file writes (`angstrom`, `1/angstrom`, `mrad`) and
   `Å`, `A`, `nm`, `pm`, `µm`, `um`, `mm`, `m`, `1/Å`, `1/A`, `A^-1`, `Å^-1`, `1/nm`,
-  `nm^-1`, `rad`, `µrad`, `urad`, `deg` and the time units; `pixels`, `px`,
+  `nm^-1`, `1/µm`, `1/um`, `rad`, `µrad`, `urad`, `deg` and the time units; `pixels`, `px`,
   `index`, `frame` and `slice` mean an uncalibrated axis. Any other string
   raises `ValueError`. Spelled-out forms (`nanometer`, `micron`, `angstroms`,
   `Pixel`) are no longer accepted.
@@ -264,6 +264,12 @@ Fixed:
   angle in [0, 360). The page wraps at the write (-10 is written as 350), and
   loading a snapshot puts the slider at the turn of the stored angle inside
   its own range.
+- `Show2D(read_image(path))` raised "Unknown unit" for a `.dm3` or `.dm4`
+  file whose unit tag is outside the unit table (a pattern in a reciprocal
+  micrometre), a file that opened before `read_image` kept the file's unit.
+  The unit table (`quantem.widget.units`, `js/units.ts`) reads `1/µm`, `1/μm`
+  and `1/um`. A string still outside it raises, and the message names the
+  unit and says the image opens uncalibrated as `dataset.array`.
 
 ## rc42 - 2026-10-11
 

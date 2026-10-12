@@ -18,6 +18,8 @@ const UNIT_TABLE: Record<string, UnitEntry> = {
   "1/A": { kind: "reciprocal_length", size: 1, symbol: "Å⁻¹" }, "A^-1": { kind: "reciprocal_length", size: 1, symbol: "Å⁻¹" },
   "Å^-1": { kind: "reciprocal_length", size: 1, symbol: "Å⁻¹" },
   "1/nm": { kind: "reciprocal_length", size: 0.1, symbol: "nm⁻¹" }, "nm^-1": { kind: "reciprocal_length", size: 0.1, symbol: "nm⁻¹" },
+  "1/µm": { kind: "reciprocal_length", size: 1e-4, symbol: "µm⁻¹" }, "1/μm": { kind: "reciprocal_length", size: 1e-4, symbol: "µm⁻¹" },
+  "1/um": { kind: "reciprocal_length", size: 1e-4, symbol: "µm⁻¹" },
   mrad: { kind: "angle", size: 1, symbol: "mrad" }, rad: { kind: "angle", size: 1e3, symbol: "rad" },
   "µrad": { kind: "angle", size: 1e-3, symbol: "µrad" }, urad: { kind: "angle", size: 1e-3, symbol: "µrad" },
   deg: { kind: "angle", size: (1e3 * Math.PI) / 180, symbol: "°" },
