@@ -481,7 +481,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             raise ValueError("The input records its detector step in one unit and the keyword gives the other; "
                              "leave the keyword out.")
         for name in ("scan_sampling_A", "detector_sampling_mrad", "detector_sampling_inv_A"):
-            calibration[name] = [] if calibration[name] is None else list(self._positive_pair(calibration[name], name))
+            # a pair with an axis still open (recorded on one axis, no keyword for the other) has no geometry to draw
+            open_axis = calibration[name] is None or None in per_axis(calibration[name], 2)
+            calibration[name] = [] if open_axis else list(self._positive_pair(calibration[name], name))
         if browser_urls:
             urls = list(dict.fromkeys(str(url) for url in browser_urls))
             data = None

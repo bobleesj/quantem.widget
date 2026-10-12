@@ -118,6 +118,24 @@ def test_a_unit_stated_for_an_input_without_a_step_raises():
     assert (plain.pixel_size, plain.pixel_unit) == (0.0, "A") and plain._static_fallback_png_b64()
 
 
+def test_a_half_calibrated_pair_takes_the_keyword_on_its_open_axis_only():
+    # a pair with one calibrated axis counted as recording nothing, so a keyword replaced the recorded step unchecked
+    half = make_dataset(np.zeros((8, 8), np.float32), sampling=(1.0, 0.05), units=("pixels", "nm"))  # the column step is 0.5 angstrom
+    assert ShowPtycho(half, sampling=(0.4, 0.5)).object_sampling_A == pytest.approx([0.4, 0.5])
+    assert ShowPtycho(half, sampling=0.5).object_sampling_A == pytest.approx([0.5, 0.5])
+    assert ShowPtycho(half).object_sampling_A == []  # one open axis: no geometry to draw
+    with pytest.raises(ValueError, match="contradicts the value the input records"):
+        ShowPtycho(half, sampling=(0.4, 0.3))
+    scan = make_dataset(np.ones((4, 4, 8, 8), np.uint16), sampling=(1.0, 0.06, 1.5, 1.5), units=("pixels", "nm", "mrad", "mrad"))
+    viewer, bare = Show4DSTEM(scan, scan_sampling_A=(0.4, 0.6), precompute_virtual_images=False), Show4DSTEM(scan, precompute_virtual_images=False)
+    assert viewer.scan_sampling_A == pytest.approx([0.4, 0.6]) and viewer.detector_sampling_mrad == [1.5, 1.5]
+    assert bare.scan_sampling_A == [] and bare.detector_sampling_mrad == [1.5, 1.5]
+    viewer.close()
+    bare.close()
+    with pytest.raises(ValueError, match="scan_sampling_A=.* contradicts the value the input records"):
+        Show4DSTEM(scan, scan_sampling_A=(0.4, 0.7), precompute_virtual_images=False)
+
+
 def test_one_unit_table_reads_the_format_strings_and_refuses_unknown_text():
     # the three strings a .qem file writes, in the reference unit of their kind
     assert axis_step(0.4, "angstrom") == ("length", 0.4)

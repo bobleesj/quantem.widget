@@ -234,7 +234,8 @@ class ShowPtycho(anywidget.AnyWidget):
         given = None if sampling is None or not is_array else axis_pair(
             per_axis(sampling, 2), per_axis("Å" if units is None else units, 2), ("length",), "image")
         if core_adapter.is_dataset(data, ndim=2):
-            # a calibrated reconstruction is the source of its pixel size; the keyword may repeat it
+            # a calibrated reconstruction is the source of its pixel size, axis by axis: the keyword may
+            # repeat a recorded step and gives the step of an axis the dataset leaves open
             recorded = axis_pair(data.sampling, data.units, ("length",), "image")
             given = stated("sampling", None if given is None else given[1], None if recorded is None else recorded[1])
         elif given is not None:
@@ -285,7 +286,7 @@ class ShowPtycho(anywidget.AnyWidget):
             self.phase_bytes = self._last_phase.tobytes()
             if "amplitude" in drawn:
                 self.amplitude_bytes = drawn["amplitude"].tobytes()
-            if given is not None:
+            if given is not None and None not in given:  # both steps known: one open axis leaves the image uncalibrated
                 self.object_sampling_A = [float(step) for step in given]
             self.ssb_session = False
             self.session_note = session_note()

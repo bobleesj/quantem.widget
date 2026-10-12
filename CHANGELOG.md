@@ -296,6 +296,11 @@ Fixed:
   `quantem.widget.units.image_axes`. `units="px"` and a calibrated dataset
   are unchanged. The `units` keyword of `Show3DSlices` and `ShowPtycho`
   defaults to None, which reads a `sampling` in angstrom as before.
+- `ShowPtycho` and `Show4DSTEM` took a pair of axes of which the input
+  calibrates one as recording nothing, so `sampling=` or `scan_sampling_A=`
+  replaced the recorded step without a comparison. The keyword is read per
+  axis, as in `Show3DSlices`: it gives the step of the axis the input leaves
+  open and must equal the step of the axis it records.
 
 ## rc42 - 2026-10-11
 

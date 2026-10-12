@@ -80,22 +80,27 @@ def axis_step(sampling, unit) -> tuple[str, float] | None:
     return kind, float(sampling) * size
 
 
-def axis_pair(sampling, units, kinds: tuple[str, ...], axes: str) -> tuple[str, list[float]] | None:
-    """Kind and ``[row, col]`` steps of two axes in the reference unit, or None when either is uncalibrated.
+def axis_pair(sampling, units, kinds: tuple[str, ...], axes: str) -> tuple[str, list] | None:
+    """Kind and ``[row, col]`` steps of two axes in the reference unit; an uncalibrated axis is None, the pair is None when both are.
 
     ``kinds`` are the kinds the two axes may have (a scan is a ``length``, a
     detector an ``angle`` or a ``reciprocal_length``) and ``axes`` names them
     in the error. Both axes must share one kind; a scan in mrad or a detector
     calibrated in two kinds has no geometry a widget can draw, so it raises.
+
+    Each axis is read on its own, so ``stated`` can hold a keyword against the
+    one axis an input records. A pair with one calibrated axis used to count
+    as recording nothing, and a keyword then replaced the recorded step
+    without a comparison. A widget draws a pair only when neither step is None.
     """
     steps = [axis_step(step, unit) for step, unit in zip(sampling, units, strict=True)]
-    if None in steps:
+    found_kinds = {step[0] for step in steps if step is not None}
+    if not found_kinds:
         return None
-    (row_kind, row_step), (col_kind, col_step) = steps
-    if row_kind != col_kind or row_kind not in kinds:
+    if len(found_kinds) > 1 or not found_kinds <= set(kinds):
         raise ValueError(f"The {axes} axes are in {units[0]!r} and {units[1]!r}; both must be one "
                          f"{' or '.join(kinds)}.")
-    return row_kind, [row_step, col_step]
+    return found_kinds.pop(), [None if step is None else step[1] for step in steps]
 
 
 def acquisition_calibration(sampling, units, metadata) -> dict:
@@ -106,7 +111,8 @@ def acquisition_calibration(sampling, units, metadata) -> dict:
     quantem core ``Dataset4dstem`` (an unknown axis is ``1.0 "pixels"``), and
     ``metadata`` its metadata dict. The scan step is ``scan_sampling_A`` and
     the detector step ``detector_sampling_mrad`` or ``detector_sampling_inv_A``,
-    each ``[row, col]``; ``voltage_kV`` and ``semiangle_mrad`` are the flat
+    each ``[row, col]`` with None for an axis the input leaves open;
+    ``voltage_kV`` and ``semiangle_mrad`` are the flat
     metadata keys. Every 4D widget reads a dataset here, so one file opens
     with one calibration whichever dataset type this machine read it into.
     """
