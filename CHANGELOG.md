@@ -123,6 +123,24 @@ Changed:
   `Show3D` and `Show3DSlices` to `show_scale_bar` (the constructor keyword and
   the `Show4DSTEM` trait), and `Show2D.save_image(scalebar=)` to
   `show_scale_bar=`.
+- `Show3DSlices` names image axes `row`, `col` and `slice`, not `x`, `y`, `z`:
+  traits `nx`, `ny`, `nz` to one trait `volume_shape` (`[slices, rows, cols]`),
+  `slice_x`, `slice_y`, `slice_z` to `col_index`, `row_index`, `slice_index`,
+  `pixel_size_axes` to `voxel_size_A` (`[slice, row, col]` in angstrom), and
+  keyword and trait `z_stretch` to `slice_stretch`; `sampling` is
+  `(slice, row, col)`.
+- `ShowDiffraction`: keyword and trait `k_pixel_size` to
+  `detector_sampling_inv_A` (1/angstrom per detector pixel, along both axes);
+  the measurements JSON key `k_pixel_size_inv_angstrom_per_px` and the
+  `calibration` key `k_pixel_size` to `detector_sampling_inv_A`.
+- One spelling per value in `Show1D`, `Show2D` and `Show3D`: keyword
+  `gallery_gap_px` (Show2D), keyword `panel_gap` (Show3D) and trait
+  `inter_panel_gap_px` to `panel_gap_px`; Show2D keyword and trait `size` to
+  `panel_width_px`; `Show2D(pixel_size=, pixel_unit=)` and the same Show1D
+  keywords raise and name `sampling=` and `units=`; `Show1D.from_image(x_unit=)`
+  to `units=`; a Show2D page dict holds its panels under `images` only (`data`
+  and `array` raise, as does any other unknown key); `Show3D.save_image(frame_idx=)`
+  to `slice_idx=`, the trait's name.
 - quantem.gpu is reached through `quantem.widget.adapters.gpu.SsbSession`
   (and `js/showptycho/engineAdapter.ts` for the browser engine), the one place
   that holds quantem.gpu's own names; `adapters.gpu.ssb_session` is removed.
