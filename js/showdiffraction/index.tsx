@@ -148,7 +148,7 @@ interface IdentifyResult {
 
 interface QualityDict {
   center?: { method: string };
-  calibration?: { source: string; k_pixel_size: number; rms_px: number };
+  calibration?: { source: string; detector_sampling_inv_A: number; rms_px: number };
   ellipse?: { ratio: number; angle_deg: number; corrected: boolean };
   rings?: { id: number; fit_quality: number }[];
   n_unexplained_rings?: number;
@@ -202,7 +202,7 @@ function ShowDiffraction() {
   const [centerRow] = useModelState<number>("center_row");
   const [centerCol] = useModelState<number>("center_col");
   const [bfRadius] = useModelState<number>("bf_radius");
-  const [kPixelSize] = useModelState<number>("k_pixel_size");
+  const [detectorSamplingInvA] = useModelState<number>("detector_sampling_inv_A");
   const [kCalibrated] = useModelState<boolean>("k_calibrated");
   const [spots] = useModelState<SpotDict[]>("spots");
   const [snapEnabled, setSnapEnabled] = useModelState<boolean>("snap_enabled");
@@ -278,7 +278,7 @@ function ShowDiffraction() {
     const basename = kind === "all" ? "measurements" : kind;
     if (format === "json") {
       const metadata = measurementMetadata({
-        centerRow, centerCol, centerMethod, kPixelSize, kCalibrated,
+        centerRow, centerCol, centerMethod, detectorSamplingInvA, kCalibrated,
         calibrationSource, calibrationRefD, calibrationRefRadius,
         maskRegions: maskRegions || [], backgroundSubtracted: profileSubtract,
       });
@@ -287,7 +287,7 @@ function ShowDiffraction() {
     } else {
       downloadBlob(new Blob([measurementCsv(records)], { type: "text/csv" }), `${basename}.csv`);
     }
-  }, [spots, rings, centerRow, centerCol, centerMethod, kPixelSize, kCalibrated,
+  }, [spots, rings, centerRow, centerCol, centerMethod, detectorSamplingInvA, kCalibrated,
     calibrationSource, calibrationRefD, calibrationRefRadius, maskRegions, profileSubtract]);
 
   // Local UI state
@@ -436,8 +436,8 @@ function ShowDiffraction() {
     const rings = opts?.rings || [];
     // Each ring's label is its id over its d-spacing; neighbouring rings stagger into rows.
     ctx.font = "9px -apple-system, sans-serif";
-    const ringLabels = rings.map(ring => (kCalibrated && kPixelSize > 0 && ring.radius_px > 0
-      ? [`${ring.id}`, `${(1 / (ring.radius_px * kPixelSize)).toFixed(2)}Å`]
+    const ringLabels = rings.map(ring => (kCalibrated && detectorSamplingInvA > 0 && ring.radius_px > 0
+      ? [`${ring.id}`, `${(1 / (ring.radius_px * detectorSamplingInvA)).toFixed(2)}Å`]
       : [`${ring.id}`]));
     const labelRows = staggerLabelRows(
       rings.map((ring, k) => ({ start: xOf(ring.radius_px) + 2, width: Math.max(...ringLabels[k].map(text => ctx.measureText(text).width)) })),
@@ -498,7 +498,7 @@ function ShowDiffraction() {
       ctx.fillText(tickValue >= 100 ? `${Math.round(tickValue)}` : tickValue.toFixed(1), xOf(tickValue), PROFILE_H - 16);
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }, [canvasSize, themeInfo.theme, themeColors.accent, kCalibrated, kPixelSize]);
+  }, [canvasSize, themeInfo.theme, themeColors.accent, kCalibrated, detectorSamplingInvA]);
 
   const azimuthalArrays = React.useMemo(() => decodeHalves(azimuthalData, showAzimuthal), [azimuthalData, showAzimuthal]);
 
@@ -867,10 +867,10 @@ function ShowDiffraction() {
     canvas.width = canvasSize * dpr;
     canvas.height = canvasSize * dpr;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (kCalibrated && kPixelSize > 0) {
-      drawScaleBarHiDPI(canvas, dpr, dpZoom, kPixelSize, "1/Å", detCols);
+    if (kCalibrated && detectorSamplingInvA > 0) {
+      drawScaleBarHiDPI(canvas, dpr, dpZoom, detectorSamplingInvA, "1/Å", detCols);
     }
-  }, [canvasSize, dpZoom, kCalibrated, kPixelSize, detCols]);
+  }, [canvasSize, dpZoom, kCalibrated, detectorSamplingInvA, detCols]);
 
   // Pointer handlers
   const dpIsDragging = React.useRef(false);
@@ -1278,7 +1278,7 @@ function ShowDiffraction() {
                   <MetadataSection rows={[
                     ["Detector", `${detRows} x ${detCols}`],
                     ["Frames", nFrames > 1 ? `${nFrames}` : "single frame"],
-                    ["Calibration", kCalibrated && kPixelSize > 0 ? `${formatNumber(kPixelSize)} 1/Å/px` : "uncalibrated (px)"],
+                    ["Calibration", kCalibrated && detectorSamplingInvA > 0 ? `${formatNumber(detectorSamplingInvA)} 1/Å/px` : "uncalibrated (px)"],
                     ["Center", `${formatNumber(centerRow)}, ${formatNumber(centerCol)}`],
                     ["Annotations", `${spots.length} spots, ${rings.length} rings`],
                   ]} />
@@ -2047,7 +2047,7 @@ function ShowDiffraction() {
           <Box sx={{ ...controlRow, mt: `${SPACING.XS}px` }}>
             <Typography sx={{ ...typography.value, color: themeColors.textMuted }}>
               Center: ({centerRow.toFixed(1)}, {centerCol.toFixed(1)})  BF r={bfRadius.toFixed(1)}
-              {kCalibrated && <span style={{ marginLeft: 8 }}>k={kPixelSize.toFixed(4)} 1/Å/px</span>}
+              {kCalibrated && <span style={{ marginLeft: 8 }}>k={detectorSamplingInvA.toFixed(4)} 1/Å/px</span>}
             </Typography>
           </Box>
           {kCalibrated && (

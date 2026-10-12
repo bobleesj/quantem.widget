@@ -159,7 +159,7 @@ interface MetadataState {
   centerRow: number;
   centerCol: number;
   centerMethod: string;
-  kPixelSize: number;
+  detectorSamplingInvA: number;
   kCalibrated: boolean;
   calibrationSource: string;
   calibrationRefD: number;
@@ -175,7 +175,7 @@ export function measurementMetadata(state: MetadataState): object {
     center_row: state.centerRow,
     center_col: state.centerCol,
     center_method: state.centerMethod ?? "",
-    k_pixel_size_inv_angstrom_per_px: state.kPixelSize,
+    detector_sampling_inv_A: state.detectorSamplingInvA,
     calibrated: Boolean(state.kCalibrated),
     calibration_source: state.calibrationSource ?? "none",
     calibration_ref_d_angstrom: state.calibrationRefD ?? 0,

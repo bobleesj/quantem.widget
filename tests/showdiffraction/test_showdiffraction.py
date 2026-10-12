@@ -74,7 +74,7 @@ def magnetite():
 def saed():
     """Detected and indexed spots of the synthetic [001] primitive-cubic pattern, run once per module."""
     center = (255 / 2, 255 / 2)
-    widget = ShowDiffraction(lattice_pattern(), center=center, bf_radius=14, k_pixel_size=K_SAED, verbose=False)
+    widget = ShowDiffraction(lattice_pattern(), center=center, bf_radius=14, detector_sampling_inv_A=K_SAED, verbose=False)
     widget.detect_spots(max_spots=12)
     widget.index_spots(Phase.from_cubic("Cubic", 1.984, absences="none"))
     return widget
@@ -110,6 +110,9 @@ def test_an_unknown_keyword_raises_and_a_trait_keyword_still_sets():
     # traitlets only warns about a keyword it does not know, so a typo did nothing
     with pytest.raises(TypeError, match="unexpected keyword argument 'k_pixelsize'"):
         ShowDiffraction(ring_pattern(), k_pixelsize=0.01, verbose=False)
+    # the keyword of earlier releases is not an alias of detector_sampling_inv_A
+    with pytest.raises(TypeError, match="unexpected keyword argument 'k_pixel_size'"):
+        ShowDiffraction(ring_pattern(), k_pixel_size=0.01, verbose=False)
     assert ShowDiffraction(ring_pattern(), dp_scale_mode="linear", verbose=False).dp_scale_mode == "linear"
 
 
@@ -147,7 +150,7 @@ def test_every_library_phase_builds():
 def test_ring_radii_match_known_d_spacings(magnetite):
     assert magnetite.analysis_status == ""
     assert magnetite.k_calibrated
-    assert magnetite.k_pixel_size == pytest.approx(K_SYNTH, rel=5e-3)
+    assert magnetite.detector_sampling_inv_A == pytest.approx(K_SYNTH, rel=5e-3)
     assert magnetite.calibration_rms_px < 1.0
     by_hkl = {ring["hkl"]: ring for ring in magnetite.rings}
     assert set(FE3O4_D) <= set(by_hkl)
@@ -163,8 +166,8 @@ def test_auto_indexes_the_magnetite_rings_at_every_seed():
         widget.phase_name = "Fe3O4"
         widget.run_auto(max_rings=5)
         assert [ring["hkl"] for ring in widget.rings] == list(FE3O4_D), seed
-        assert widget.k_pixel_size == pytest.approx(K_SYNTH, rel=1e-3), seed
-        assert widget.k_pixel_size == pytest.approx(frozen_k, rel=1e-6), seed
+        assert widget.detector_sampling_inv_A == pytest.approx(K_SYNTH, rel=1e-3), seed
+        assert widget.detector_sampling_inv_A == pytest.approx(frozen_k, rel=1e-6), seed
         assert widget.analysis_status == "" and widget.phase_match.startswith("Fe3O4 (spinel): 5/5 matched"), seed
 
 
@@ -444,7 +447,7 @@ def test_request_channel_edits_spots_and_reports_failures():
     assert widget.spots[1]["angle_deg"] == pytest.approx(90.0, abs=0.5)
     assert widget.spots[0]["d_spacing"] is None  # uncalibrated
     widget._request = {"action": "calibrate_from_spot", "args": [widget.spots[0]["row"], widget.spots[0]["col"], 1.984], "seq": 3}
-    assert widget.k_pixel_size == pytest.approx(K_SAED, rel=5e-3)
+    assert widget.detector_sampling_inv_A == pytest.approx(K_SAED, rel=5e-3)
     assert widget.spots[1]["d_spacing"] == pytest.approx(1.984, rel=5e-3)
     widget._request = {"action": "remove_spot", "args": [1], "seq": 4}
     assert [s["id"] for s in widget.spots] == [2]
@@ -487,7 +490,7 @@ def test_export_html_structure(saed, tmp_path):
     assert model["_anywidget_id"] == "quantem.widget.showdiffraction.widget.ShowDiffraction"
     assert model["offline"] is True and model["export_enabled"] is False
     assert len(model["spots"]) == 12 and model["zone_axis"] == "[001]"
-    assert model["k_pixel_size"] == K_SAED and model["_request"] == {}
+    assert model["detector_sampling_inv_A"] == K_SAED and model["_request"] == {}
     assert "_spot_add_request" not in model and "pixel_size" not in model
     assert saed.export_status.startswith("Exported saed.html (")
     widget = ShowDiffraction(np.ones((32, 32), np.float32), verbose=False)
@@ -516,11 +519,11 @@ def test_a_dataset_in_the_format_unit_calibrates_the_pattern(capsys):
     pattern = lattice_pattern()
     for unit, step in (("1/angstrom", K_SAED), ("1/nm", K_SAED * 10)):
         widget = ShowDiffraction(make_dataset(pattern, sampling=(step, step), units=(unit, unit)), verbose=False)
-        assert widget.k_calibrated and widget.k_pixel_size == pytest.approx(K_SAED) and widget.calibration_source == "metadata"
+        assert widget.k_calibrated and widget.detector_sampling_inv_A == pytest.approx(K_SAED) and widget.calibration_source == "metadata"
     assert not ShowDiffraction(make_dataset(pattern), verbose=False).k_calibrated
     # mrad cannot become 1/angstrom without the voltage: the pattern opens uncalibrated and one line says why
     capsys.readouterr()
     assert not ShowDiffraction(make_dataset(pattern, sampling=(0.5, 0.5), units=("mrad", "mrad")), verbose=False).k_calibrated
     assert "detector axes are in mrad" in capsys.readouterr().out
-    with pytest.raises(ValueError, match="k_pixel_size=0.5 contradicts"):
-        ShowDiffraction(make_dataset(pattern, sampling=(K_SAED, K_SAED), units=("1/angstrom", "1/angstrom")), k_pixel_size=0.5, verbose=False)
+    with pytest.raises(ValueError, match="detector_sampling_inv_A=0.5 contradicts"):
+        ShowDiffraction(make_dataset(pattern, sampling=(K_SAED, K_SAED), units=("1/angstrom", "1/angstrom")), detector_sampling_inv_A=0.5, verbose=False)

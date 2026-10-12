@@ -63,7 +63,7 @@ no console error, no NaN frame).
 | Spot pick dropdown | `spot_refine`, `snap_enabled`, `snap_radius` | Clicked spots are Gaussian-fitted, snapped to the local maximum, or kept exactly as clicked |
 | Detect rings | `_request`, `rings` | Auto-finds every Debye–Scherrer ring that stands at least 5 standard errors of the azimuthal mean above the profile's lower envelope; peaks are located on the `detect_denoise` view, significance and ring fits use the raw counts; no count cap |
 | Add / remove ring | `_request`, `rings` | Ring overlay; ring d-spacing updates |
-| Calibrate from spot / ring | `_request`, `k_pixel_size` | Sets k-space pixel size from a known d |
+| Calibrate from spot / ring | `_request`, `detector_sampling_inv_A` | Sets k-space pixel size from a known d |
 | Auto button | `_request`, `analysis_status` | Runs center, rings, calibration, fit, and indexing in one pass; the calibration is applied only when the ring-radius ratios verify it; status reports failed steps and the rings the phase does not explain |
 | Phase menu | `phase_name`, `custom_phases` | Selects a library or custom phase for calibration and indexing; custom entries take a full lattice (a, b, c, α, β, γ) and absence rule |
 | Identify candidates only | `identify_custom_only` | Identify ranks only custom phases, skipping the library |

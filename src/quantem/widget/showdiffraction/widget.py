@@ -41,7 +41,7 @@ BF_RADIUS_FRACTION = 0.125
 # a significant peak this close to a reflection the calibrated phase predicts is recovered as a ring
 RECOVERY_TOL_PX = 4.0
 CALIBRATION_TRAITS = (
-    "k_pixel_size", "k_calibrated", "calibration_source", "calibration_ref_d", "calibration_ref_radius",
+    "detector_sampling_inv_A", "k_calibrated", "calibration_source", "calibration_ref_d", "calibration_ref_radius",
     "calibration_rms_px",
 )
 MEASUREMENT_COLUMNS = (
@@ -115,7 +115,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         ``(n_frames, det_rows, det_cols)`` stack of patterns. A dataset supplies the
         title and, when its detector axes are a reciprocal length (``1/angstrom``,
         ``1/Å``, ``1/nm``), the k calibration.
-    k_pixel_size : float, optional
+    detector_sampling_inv_A : float, optional
         k-space sampling in 1/Å per pixel. Marks the pattern calibrated. A
         dataset is the source of its own calibration: a value that contradicts
         it raises.
@@ -150,13 +150,13 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     >>> import numpy as np
     >>> from quantem.widget import ShowDiffraction
     >>> ShowDiffraction(np.random.rand(256, 256))
-    >>> ShowDiffraction(np.random.rand(20, 128, 128), k_pixel_size=0.012)
+    >>> ShowDiffraction(np.random.rand(20, 128, 128), detector_sampling_inv_A=0.012)
     """
 
     _esm = pathlib.Path(__file__).parent.parent / "static" / "showdiffraction.js"
     _LIST_STATE_FIELDS = {"spots", "rings", "custom_phases", "mask_regions"}
     _STATE_FIELDS = (
-        "title", "frame_idx", "panel_width_px", "k_pixel_size", "k_calibrated", "center_row",
+        "title", "frame_idx", "panel_width_px", "detector_sampling_inv_A", "k_calibrated", "center_row",
         "center_col", "bf_radius", "spots", "rings", "zone_axis", "phase_match", "show_hkl",
         "snap_enabled", "snap_radius", "spot_refine", "detect_denoise", "denoise", "center_mode",
         "calibration_source", "calibration_ref_d", "calibration_ref_radius", "calibration_rms_px",
@@ -167,7 +167,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         "identify_elements", "identify_custom_only",
     )
     _GEOMETRY_TRAITS = (
-        "center_row", "center_col", "k_pixel_size", "k_calibrated", "ellipse_ratio",
+        "center_row", "center_col", "detector_sampling_inv_A", "k_calibrated", "ellipse_ratio",
         "ellipse_angle", "ellipse_corrected", "mask_regions",
     )
     _PROFILE_TRAITS = (
@@ -188,7 +188,8 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     center_row = traitlets.Float(0.0).tag(sync=True)
     center_col = traitlets.Float(0.0).tag(sync=True)
     bf_radius = traitlets.Float(0.0).tag(sync=True)
-    k_pixel_size = traitlets.Float(0.0).tag(sync=True)
+    # 1/angstrom per detector pixel, the step along both detector axes: ring radii measure one isotropic value
+    detector_sampling_inv_A = traitlets.Float(0.0).tag(sync=True)
     k_calibrated = traitlets.Bool(False).tag(sync=True)
     center_mode = traitlets.Enum(("auto", "manual"), default_value="auto").tag(sync=True)
     calibration_source = traitlets.Unicode("none").tag(sync=True)
@@ -265,7 +266,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         self,
         data,
         *,
-        k_pixel_size: float | None = None,
+        detector_sampling_inv_A: float | None = None,
         center: tuple[float, float] | None = None,
         bf_radius: float | None = None,
         title: str = "",
@@ -287,12 +288,12 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             # .qem string "1/angstrom" (and 1/nm) calibrates the pattern as "1/Å" does
             recorded = axis_step(data.sampling[-1], data.units[-1])
             if recorded is not None and recorded[0] == "reciprocal_length":
-                k_pixel_size = stated("k_pixel_size", k_pixel_size, recorded[1])
+                detector_sampling_inv_A = stated("detector_sampling_inv_A", detector_sampling_inv_A, recorded[1])
                 calibration_source = "metadata"
             elif recorded is not None:
                 print(f"ShowDiffraction: the dataset's detector axes are in {data.units[-1]}; d-spacings need 1/angstrom "
                       "per pixel (from mrad that takes the voltage). The pattern opens uncalibrated: calibrate it from a "
-                      "known ring (calibrate_from_ring) or pass k_pixel_size=.")
+                      "known ring (calibrate_from_ring) or pass detector_sampling_inv_A=.")
             data = core_adapter.as_array(data)
         self._device = torch.device(resolve_device(device, data))
         # frame count before a merge appended the combined pattern
@@ -300,8 +301,8 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         # geometry the spots, rings and profiles were last derived for (see _on_geometry_change)
         self._derived_geometry: list | None = None
         self._ingest(data)
-        if k_pixel_size is not None and k_pixel_size > 0:
-            self.k_pixel_size = float(k_pixel_size)
+        if detector_sampling_inv_A is not None and detector_sampling_inv_A > 0:
+            self.detector_sampling_inv_A = float(detector_sampling_inv_A)
             self.k_calibrated = True
             self.calibration_source = calibration_source
         self.title = title
@@ -430,7 +431,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
                 self._calibrate_phase(phase)
                 # significant peaks past the max_rings budget that sit on a reflection the
                 # verified scale predicts
-                predicted = [1.0 / (reflection["d"] * self.k_pixel_size) for reflection in phase.reflections()]
+                predicted = [1.0 / (reflection["d"] * self.detector_sampling_inv_A) for reflection in phase.reflections()]
                 held = [ring["radius_px"] for ring in self.rings]
                 recovered = [
                     radius for radius in candidates[max_rings:]
@@ -533,7 +534,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
                 "center_row": state.get("center_row"),
                 "center_col": state.get("center_col"),
                 "center_method": state.get("center_method", ""),
-                "k_pixel_size_inv_angstrom_per_px": state.get("k_pixel_size"),
+                "detector_sampling_inv_A": state.get("detector_sampling_inv_A"),
                 "calibrated": bool(state.get("k_calibrated")),
                 "calibration_source": state.get("calibration_source", "none"),
                 "calibration_ref_d_angstrom": state.get("calibration_ref_d", 0.0),
@@ -584,7 +585,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         """Print calibration, center, spots, rings, zone axis and phase match."""
         lines = [self.title or "ShowDiffraction"]
         lines.append(f"Frames:   {self.n_frames} (showing #{self.frame_idx})")
-        k_info = f"{self.k_pixel_size:.4f} 1/Å/px" if self.k_calibrated else "uncalibrated"
+        k_info = f"{self.detector_sampling_inv_A:.4f} 1/Å/px" if self.k_calibrated else "uncalibrated"
         lines.append(f"Detector: {self.det_rows}x{self.det_cols} ({k_info})")
         if self.k_calibrated:
             source = {"from_phase": "phase", "from_ring": "ring", "from_spot": "spot"}.get(
@@ -625,7 +626,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
 
     def __repr__(self) -> str:
         """Shape, calibration, frame and spot count on one line, for a bare widget name in a cell."""
-        k_info = f", k_pixel_size={self.k_pixel_size} 1/Å" if self.k_calibrated else ""
+        k_info = f", detector_sampling_inv_A={self.detector_sampling_inv_A} 1/Å" if self.k_calibrated else ""
         title_info = f", title='{self.title}'" if self.title else ""
         spots_info = f", spots={len(self.spots)}" if self.spots else ""
         return (
@@ -879,7 +880,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
                 ]
             )
         if self.rings:
-            calibrated = self.k_calibrated and self.k_pixel_size > 0
+            calibrated = self.k_calibrated and self.detector_sampling_inv_A > 0
             rings = []
             for record in self.rings:
                 frame_idx = self._frame_index(record.get("frame_idx"))
@@ -887,7 +888,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
                     profiles[frame_idx] = self._radial_profile(frame_idx=frame_idx)
                 ring = {**record, **self._ring_info(record["radius_px"], profiles[frame_idx])}
                 if ring.get("fwhm_px") is not None:
-                    ring["fwhm_inv_angstrom"] = ring["fwhm_px"] * self.k_pixel_size if calibrated else None
+                    ring["fwhm_inv_angstrom"] = ring["fwhm_px"] * self.detector_sampling_inv_A if calibrated else None
                 rings.append(ring)
             rings_changed = rings != self.rings
             self.rings = rings
@@ -926,8 +927,8 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             r_pixels_err = math.hypot(row_err, col_err)
         pixel_row = max(0, min(self.det_rows - 1, round(row)))
         pixel_col = max(0, min(self.det_cols - 1, round(col)))
-        if self.k_calibrated and self.k_pixel_size > 0 and r_pixels > 0:
-            g_magnitude = r_pixels * self.k_pixel_size
+        if self.k_calibrated and self.detector_sampling_inv_A > 0 and r_pixels > 0:
+            g_magnitude = r_pixels * self.detector_sampling_inv_A
             d_spacing = 1.0 / g_magnitude
             # relative radius error propagates unchanged to g and d
             relative_err = r_pixels_err / r_pixels
@@ -1049,8 +1050,8 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     def _ring_info(self, radius_px: float, profile: tuple) -> dict:
         """g, d and intensity of a ring radius, read from ``profile``, the radial profile of
         the ring's source frame (the caller measures it once for all its rings)."""
-        if self.k_calibrated and self.k_pixel_size > 0:
-            g_magnitude = float(radius_px) * self.k_pixel_size
+        if self.k_calibrated and self.detector_sampling_inv_A > 0:
+            g_magnitude = float(radius_px) * self.detector_sampling_inv_A
             d_spacing = 1.0 / g_magnitude if g_magnitude > 0 else None
         else:
             g_magnitude = d_spacing = None
@@ -1127,7 +1128,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         except ValueError:
             # too few background bins (rings fill the profile): the raw profile is fitted, and the status says so
             fitted_on = " on the raw profile (too few background bins for a background fit)"
-        calibrated = self.k_calibrated and self.k_pixel_size > 0
+        calibrated = self.k_calibrated and self.detector_sampling_inv_A > 0
         rings = []
         for ring, update in zip(self.rings, lattice.fit_ring_peaks(radii_px, profile, self.rings)):
             ring = dict(ring)
@@ -1140,7 +1141,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             ring["frame_idx"] = int(self.frame_idx)
             ring.update(self._ring_info(update["radius_px"], raw_profile))
             ring.update(update)
-            ring["fwhm_inv_angstrom"] = ring["fwhm_px"] * self.k_pixel_size if calibrated else None
+            ring["fwhm_inv_angstrom"] = ring["fwhm_px"] * self.detector_sampling_inv_A if calibrated else None
             rings.append(ring)
         self.rings = rings
         n_fitted = sum(1 for ring in self.rings if ring.get("fit_quality") is not None)
@@ -1199,7 +1200,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     # --- Calibration and phases ---
     def _require_calibrated(self) -> None:
         """Stop a d-spacing step on an uncalibrated pattern, where every d would be None."""
-        if not (self.k_calibrated and self.k_pixel_size > 0):
+        if not (self.k_calibrated and self.detector_sampling_inv_A > 0):
             raise ValueError("pattern is uncalibrated; calibrate from a ring, spot or phase first")
 
     def _selected_phase(self) -> Phase | None:
@@ -1227,14 +1228,14 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         return observed
 
     def _calibrate(self, d_known: float, r_pixels: float, source: str) -> None:
-        """Set ``k_pixel_size = 1 / (d_known * r_pixels)`` from one reflection of known d at
+        """Set ``detector_sampling_inv_A = 1 / (d_known * r_pixels)`` from one reflection of known d at
         ``r_pixels`` and record where the calibration came from."""
         if d_known <= 0:
             raise ValueError(f"d_known must be positive, got {d_known}")
         if r_pixels <= 0:
             raise ValueError("calibration point is at the center; no g-vector")
         with self.hold_trait_notifications():
-            self.k_pixel_size = 1.0 / (d_known * r_pixels)
+            self.detector_sampling_inv_A = 1.0 / (d_known * r_pixels)
             self.k_calibrated = True
         self.calibration_source = source
         self.calibration_ref_d = float(d_known)
@@ -1249,7 +1250,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         self._calibrate(d_known, radius_px, "from_ring")
 
     def _calibrate_phase(self, phase: Phase | None = None) -> str:
-        """Fit ``k_pixel_size`` from the rings of ``phase`` (default: the selected phase)
+        """Fit ``detector_sampling_inv_A`` from the rings of ``phase`` (default: the selected phase)
         and label the rings it explains.
 
         The scale is verified scale-free before it is applied: ring-radius ratios must
@@ -1269,7 +1270,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         solution = lattice.calibration_scale_from_phase(radii, [1.0 / ref["d"] for ref in reflections])
         scale = solution["scale"]
         with self.hold_trait_notifications():
-            self.k_pixel_size = 1.0 / scale
+            self.detector_sampling_inv_A = 1.0 / scale
             self.k_calibrated = True
         self.calibration_source = "from_phase"
         self.calibration_ref_d = 0.0
@@ -1282,7 +1283,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
                 rings.append(ring)
                 continue
             reflection = reflections[reflection_index]
-            d_error = abs(1.0 / (radius_px * self.k_pixel_size) - reflection["d"]) / reflection["d"]
+            d_error = abs(1.0 / (radius_px * self.detector_sampling_inv_A) - reflection["d"]) / reflection["d"]
             ring["hkl_candidates"] = [reflection["hkl_str"]]
             ring.update(index_fields({"hkl_str": reflection["hkl_str"], "d": reflection["d"], "d_error": d_error}))
             ring["radius_resid_px"] = radius_px - scale / reflection["d"]
@@ -1293,7 +1294,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         self.calibration_rms_px = float(np.sqrt(np.mean(np.square(residuals))))
         self.phase_match = phase_match_line(phase, d_errors, len(rings))
         return (
-            f"Calibrated from {phase.name}: k={self.k_pixel_size:.5f} 1/Å/px, "
+            f"Calibrated from {phase.name}: k={self.detector_sampling_inv_A:.5f} 1/Å/px, "
             f"{solution['n_explained']}/{len(rings)} rings fit one scale (rms {self.calibration_rms_px:.2f} px)"
         )
 
@@ -1320,7 +1321,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
                 [float(r["radius_px"]) for r in self.rings], [1.0 / ref["d"] for ref in reflections]
             )
             # scale (px per 1/Å) times k (1/Å per px) is 1 when the ratios and the calibration agree
-            offset = solution["scale"] * self.k_pixel_size - 1.0
+            offset = solution["scale"] * self.detector_sampling_inv_A - 1.0
             if abs(offset) <= tol:
                 verified = solution["assigned"]
             else:
@@ -1379,7 +1380,7 @@ class ShowDiffraction(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             "center": {"method": self.center_method or self.center_mode},
             "calibration": {
                 "source": self.calibration_source,
-                "k_pixel_size": float(self.k_pixel_size),
+                "detector_sampling_inv_A": float(self.detector_sampling_inv_A),
                 "rms_px": float(self.calibration_rms_px),
             },
             "ellipse": {
