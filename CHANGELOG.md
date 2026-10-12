@@ -6,6 +6,8 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+## rc43 - 2026-10-12
+
 Vocabulary migration. Old names raise; nothing is accepted under two spellings.
 Widget state saved by an earlier release (a `save()` file, the state embedded
 in an exported HTML page or a notebook) names traits that no longer exist and
@@ -326,6 +328,8 @@ Fixed:
   angle already inside the slider's range where it is.
 
 ## rc42 - 2026-10-11
+
+Not published to TestPyPI; its changes are part of rc43.
 
 Fixed:
 
