@@ -702,8 +702,11 @@ def test_a_page_dict_carries_its_panels_under_images():
     assert (widget.n_pages, widget.panels_per_page, widget.page_labels) == (2, 2, ["iteration 10", "iteration 20"])
     np.testing.assert_array_equal(widget._data[3], _frame(4))
     for earlier in ("data", "array"):
-        with pytest.raises(ValueError, match=rf"page 0 only accepts keys \['images', 'label', 'labels', 'title'\], got '{earlier}'"):
+        with pytest.raises(ValueError, match=rf"page 0 only accepts keys \['images', 'labels', 'title'\], got '{earlier}'"):
             Show2D([{"title": "iteration 10", earlier: [_frame(1), _frame(2)]}], verbose=False)
+    # the page title is title; label was a second spelling of it
+    with pytest.raises(ValueError, match="got 'label'"):
+        Show2D([{"label": "iteration 10", "images": [_frame(1), _frame(2)]}], verbose=False)
 
 
 def test_overlay_keys_have_one_spelling(tmp_path: Path):

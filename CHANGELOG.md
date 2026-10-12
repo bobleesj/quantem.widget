@@ -138,8 +138,9 @@ Changed:
   `inter_panel_gap_px` to `panel_gap_px`; Show2D keyword and trait `size` to
   `panel_width_px`; `Show2D(pixel_size=, pixel_unit=)` and the same Show1D
   keywords raise and name `sampling=` and `units=`; `Show1D.from_image(x_unit=)`
-  to `units=`; a Show2D page dict holds its panels under `images` only (`data`
-  and `array` raise, as does any other unknown key); `Show3D.save_image(frame_idx=)`
+  to `units=`; a Show2D page dict holds its panels under `images` and its title under
+  `title` only (`data`, `array` and `label` raise, as does any other unknown
+  key); `Show3D.save_image(frame_idx=)`
   to `slice_idx=`, the trait's name.
 - `Show2D` overlay (`panel_overlays`, also `Show3D`) and annotation
   (`panel_annotations`) dicts take one key per value: `type`, `kind` to

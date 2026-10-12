@@ -57,8 +57,8 @@ _DEFAULT_FOLDER_PAGE_SIZE = 20
 _MAX_PANEL_PLAYBACK_FPS = 30.0
 # Rec. 709 luma weights: the standard perceptual grayscale reduction of RGB.
 _RGB_LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
-# Keys of one explicit page dict: the page title (title, or label), its panels, their labels.
-_PAGE_KEYS = {"title", "label", "images", "labels"}
+# Keys of one explicit page dict: the page title, its panels, their labels.
+_PAGE_KEYS = {"title", "images", "labels"}
 
 
 def _nonnegative_int(value: object, *, name: str) -> int:
@@ -161,7 +161,7 @@ def _normalize_show2d_pages(
                     f"page 0 has {panels_per_page}, page {page_idx} has {page_panels.shape[0]}"
                 )
             page_arrays.append(page_panels)
-            inferred_page_labels.append(str(page.get("title") or page.get("label") or f"Page {page_idx + 1}"))
+            inferred_page_labels.append(str(page.get("title") or f"Page {page_idx + 1}"))
             page_panel_labels = page.get("labels")
             if page_panel_labels is not None:
                 if len(page_panel_labels) != int(page_panels.shape[0]):
