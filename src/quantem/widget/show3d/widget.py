@@ -163,6 +163,7 @@ class Show3D(
         (column) entry, the axis the horizontal bar measures.
     units : str or sequence of str, optional
         Unit of ``sampling`` (``"A"``, ``"nm"``, ...); a sequence uses its last entry.
+        Alone on a calibrated dataset it is the unit the dataset's step is shown in.
     smooth : bool
         Bilinear interpolation when the canvas enlarges a frame. Default False
         paints every data pixel as a sharp block (nearest neighbour).
@@ -885,20 +886,21 @@ class Show3D(
                 )
             data_args = tuple(paged.reshape(n_pages * panels_per_page, *paged.shape[2:]))
         first = data_args[0]
-        dataset_sampling = None
-        dataset_unit = None
         dim_sampling = None
         dim_unit = None
         if core_adapter.is_dataset(first, ndim=2) or core_adapter.is_dataset(first, ndim=3):
             title = title or (first.name or "")
+            # a Dataset3d in nm is shown in Angstrom so the scale bar matches the other quantem viewers
+            if sampling is None and units is None and str(first.units[-1]) == "nm":
+                units = "A"
             # the image axes are the last two; a stack's first axis is its frames. The
             # horizontal scale bar measures columns, the last axis.
-            image_axes(sampling, units, first)  # raises when the keywords contradict the dataset
-            dataset_sampling = float(first.sampling[-1])
-            dataset_unit = str(first.units[-1])
+            sampling, units = image_axes(sampling, units, first)
             if len(first.sampling) >= 3:
                 dim_sampling = float(first.sampling[0])
                 dim_unit = str(first.units[0])
+        else:
+            sampling, units = image_axes(sampling, units)
         panels = []
         for index, item in enumerate(data_args):
             stack = to_numpy(item)
@@ -1005,15 +1007,9 @@ class Show3D(
             self.source_panel_width = native_width if shared else max(1, int(self._data.shape[2]) // len(arrays))
         if shared:
             self.num_panel_cols = self.width
-        # Explicit sampling/units win; a Dataset3d in nm is shown in Angstrom
-        # so the scale bar matches the other quantem viewers.
+        # the column step and its unit, resolved with the dataset by image_axes above
         pixel_size = 0.0 if sampling is None else float(sampling[-1] if isinstance(sampling, (tuple, list)) else sampling)
-        pixel_unit = None if units is None else str(units[-1] if isinstance(units, (tuple, list)) else units)
-        dataset_in_nm = dataset_unit == "nm"
-        if pixel_size == 0.0 and dataset_sampling is not None:
-            pixel_size = dataset_sampling * (10 if dataset_in_nm and pixel_unit in (None, "A", "Å", "angstrom") else 1)
-        if pixel_unit is None:
-            pixel_unit = "A" if dataset_in_nm else (dataset_unit or "A")
+        pixel_unit = "A" if units is None else str(units[-1] if isinstance(units, (tuple, list)) else units)
         # one unit table for every widget: an unknown string raises, an uncalibrated axis is absent
         if unit_entry(pixel_unit)[0] == "pixels":
             pixel_size, pixel_unit = 0.0, "px"

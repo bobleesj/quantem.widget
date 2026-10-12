@@ -400,7 +400,8 @@ class Show2D(
         Pixel size in ``units``; drives the scale bar and calibrated readouts.
     units : str, optional
         Length unit of ``sampling`` (``"A"``, ``"nm"``, ...); angstrom when
-        ``sampling`` is given without it.
+        ``sampling`` is given without it. Alone on a calibrated dataset it is
+        the unit the dataset's step is shown in.
     show_scale_bar : bool, optional
         Draw the scale bar.
     scale_bar_position : {"bottom-right", "bottom-left"}

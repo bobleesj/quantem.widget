@@ -235,6 +235,14 @@ Fixed:
   is 0. The comparison is per axis: the keyword gives the step of an axis the
   dataset does not calibrate and must equal the step of one it does; a keyword
   step of 0 takes the dataset's.
+- `units=` with no `sampling=` on a calibrated dataset raised "contradict the
+  calibration the dataset records" in `Show2D` and `Show3D`
+  (`Show3D(nm_dataset, units="A")`). It shows the dataset's step converted to
+  that unit through the unit table (0.2 nm as 2 A), one rule in
+  `quantem.widget.units.image_axes` for both widgets; a unit of another kind
+  raises and names both units. Before the check `Show2D` relabelled the step
+  unconverted (0.2 nm as 0.2 A), as `Show3D` did for every pair except nm to
+  angstrom. A `sampling=` that disagrees with the dataset still raises.
 
 ## rc42 - 2026-10-11
 

@@ -64,6 +64,26 @@ def test_sampling_stated_without_units_is_in_angstrom():
         Show2D(nanometre, sampling=0.2, verbose=False)
 
 
+def test_units_alone_shows_a_calibrated_dataset_in_that_unit():
+    # one rule for every image widget (quantem.widget.units.image_axes): the dataset's step, converted
+    nanometre = make_dataset(_frame(), sampling=(0.2, 0.2), units=("nm", "nm"))
+    for units, expected in (("A", (2.0, "A")), ("nm", (0.2, "nm")), (None, (0.2, "nm"))):
+        shown = Show2D(nanometre, units=units, verbose=False)
+        assert (shown.pixel_size, shown.pixel_unit) == expected
+    gallery = Show2D([nanometre, nanometre], units="A", verbose=False)
+    assert (gallery.pixel_size, gallery.pixel_unit) == (2.0, "A")
+    milliradian = make_dataset(_frame(), sampling=(0.5, 0.5), units=("mrad", "mrad"))
+    assert Show2D(milliradian, units="rad", verbose=False).pixel_size == pytest.approx(0.0005)
+    # the row axis of a kymograph is not a length: only the axis the bar measures is converted
+    kymograph = make_dataset(_frame(), sampling=(0.5, 0.2), units=("K", "nm"))
+    assert Show2D(kymograph, units="A", verbose=False).pixel_size == 2.0 and Show2D(kymograph, units="nm", verbose=False).pixel_size == 0.2
+    for units in ("mrad", "px"):
+        with pytest.raises(ValueError, match=f"units='{units}' cannot show a dataset calibrated in 'nm'"):
+            Show2D(nanometre, units=units, verbose=False)
+    with pytest.raises(ValueError, match="contradict the calibration the dataset records"):
+        Show2D(nanometre, sampling=0.3, units="nm", verbose=False)
+
+
 def test_gallery_stats_match_numpy_per_panel():
     frames = [_frame(1), 10 * _frame(2), _frame(3) - 5]
     widget = Show2D(frames, labels=["a", "b", "c"], verbose=False)

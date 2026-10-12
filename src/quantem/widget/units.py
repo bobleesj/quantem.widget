@@ -116,15 +116,33 @@ def image_axes(sampling, units, dataset=None) -> tuple:
     (``dataset`` None) as for a dataset. Show3D, Show3DSlices and ShowPtycho
     read that call so; Show2D and Show1D read the missing unit as "px" and
     dropped the stated step without a message.
+
+    ``units`` alone on a calibrated dataset asks for the dataset's step in
+    that unit: the step is converted through the unit table when both units
+    are of one kind (``step * size of the dataset's unit / size of units``),
+    and a unit of another kind raises ValueError naming both. Without the
+    conversion the call raised "contradict", and before that check Show2D
+    relabelled the step unconverted.
     """
     if sampling is not None and units is None:
         units = "A"
     if dataset is None:
         return sampling, units
     held_sampling, held_units = tuple(float(step) for step in dataset.sampling[-2:]), [str(unit) for unit in dataset.units[-2:]]
+    recorded = axis_step(held_sampling[-1], held_units[-1])
+    if sampling is None and units is not None and recorded is not None:
+        wanted = [units] * 2 if isinstance(units, str) else [str(unit) for unit in units[-2:]]
+        if unit_entry(wanted[-1])[0] != recorded[0]:
+            raise ValueError(f"units={units!r} cannot show a dataset calibrated in {held_units[-1]!r} ({held_sampling[-1]:g} {held_units[-1]} per pixel): "
+                             f"{held_units[-1]!r} is a {recorded[0].replace('_', ' ')} and {wanted[-1]!r} is not. "
+                             f"Pass a {recorded[0].replace('_', ' ')} unit to convert the step, or leave units out.")
+        # The ratio of the two sizes is 1.0 for one unit under two spellings, so that step is returned bit for bit.
+        # An axis recorded in another kind or in free text (the time axis of a kymograph) keeps its step.
+        entries = [(UNIT_TABLE.get(held), unit_entry(unit)) for held, unit in zip(held_units, wanted)]
+        return tuple(step * (held[1] / shown[1]) if held is not None and held[0] == shown[0] else step
+                     for step, (held, shown) in zip(held_sampling, entries)), units
     sampling = held_sampling if sampling is None else sampling
     units = held_units if units is None else units
-    recorded = axis_step(held_sampling[-1], held_units[-1])
     given = axis_step(sampling if isinstance(sampling, (int, float)) else sampling[-1], units if isinstance(units, str) else units[-1])
     if recorded is not None and (given is None or given[0] != recorded[0] or not math.isclose(given[1], recorded[1], rel_tol=1e-6)):
         raise ValueError(f"sampling={sampling!r}, units={units!r} contradict the calibration the dataset records "

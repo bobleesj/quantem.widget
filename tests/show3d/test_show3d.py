@@ -371,6 +371,25 @@ def test_horizontal_scale_bar_uses_the_column_sampling():
     assert Show3D(dataset).pixel_size == 0.25
 
 
+def test_units_alone_shows_a_calibrated_dataset_in_that_unit():
+    # units= with no sampling= raised "contradict the calibration the dataset records"; before that check
+    # Show3D showed an nm dataset in angstrom. The numbers are the ones the tree before the check gave.
+    nanometre = make_dataset(np.zeros((2, 8, 12), dtype=np.float32), sampling=(1.0, 0.2, 0.2), units=("frame", "nm", "nm"))
+    for units, expected in (("A", (2.0, "A")), ("angstrom", (2.0, "angstrom")), ("nm", (0.2, "nm")), (None, (2.0, "A"))):
+        shown = Show3D(nanometre, units=units, verbose=False)
+        assert (shown.pixel_size, shown.pixel_unit) == expected
+    # converted through the unit table in every direction (the earlier tree relabelled these two unconverted)
+    angstrom = make_dataset(np.zeros((2, 8, 12), dtype=np.float32), sampling=(1.0, 2.0, 2.0), units=("frame", "A", "A"))
+    assert (Show3D(angstrom, units="nm", verbose=False).pixel_size, Show3D(nanometre, units="pm", verbose=False).pixel_size) == pytest.approx((0.2, 200.0))
+    with pytest.raises(ValueError, match="units='mrad' cannot show a dataset calibrated in 'nm'"):
+        Show3D(nanometre, units="mrad", verbose=False)
+    # a sampling keyword still has to agree with the dataset, with or without units
+    assert Show3D(nanometre, sampling=2.0, verbose=False).pixel_size == 2.0
+    for keywords in ({"sampling": 0.3, "units": "nm"}, {"sampling": 0.2}):
+        with pytest.raises(ValueError, match="contradict the calibration the dataset records"):
+            Show3D(nanometre, verbose=False, **keywords)
+
+
 def test_paged_input_of_any_array_type_opens_as_pages():
     # D-2: 5D paging was detected only for NumPy and torch, so a 5D CuPy array fell to the shape error.
     cupy = pytest.importorskip("cupy")
