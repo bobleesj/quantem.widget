@@ -161,10 +161,32 @@ Changed:
   `panel_width_px` (canvas width in CSS pixels, as in `Show2D`) and the image
   column count to `num_panel_cols`.
 - quantem.gpu is reached through `quantem.widget.adapters.gpu.SsbSession`
-  (and `js/showptycho/engineAdapter.ts` for the browser engine), the one place
-  that holds quantem.gpu's own names; `adapters.gpu.ssb_session` is removed.
+  (and `js/showptycho/engineAdapter.ts` for the browser engine);
+  `adapters.gpu.ssb_session` is removed.
+- The widgets call quantem.gpu, in Python and through the vendored WebGPU SSB
+  engine, by its renamed API, which uses the same names as the widgets. This
+  needs the quantem.gpu release that carries the rename: the `[cuda]` and
+  `[mps]` pins and `gpu-ref.txt` still name rc16 until that release.
+  `SsbSession.open(source, **parameters)` and
+  `SsbSession.find_aberrations(**options)` take quantem.gpu's keywords;
+  `find_aberrations` keywords `refine` to `refinement` (`"nelder-mead"` or
+  None), `locked` to `refine_lock`, `sample_tilt` to `tilt`.
+  `SsbSession.engine_aberrations`, `SsbSession.vocabulary_aberrations` and
+  `adapters.gpu.HIGHER_ORDER_LAYOUT` are removed. In TypeScript,
+  `engineCalibrationJson`, `engineSourceJson` and `BROWSER_CALIBRATION_SCHEMA`
+  of `js/showptycho/engineAdapter.ts` are removed: the engine reads
+  `snapshots/cal.json` and the bright-field source as `ShowPtycho.export`
+  writes them and refuses a calibration of another schema itself.
+- `header_calibration` reads the `.qem` flat keys `detector_sampling_mrad` and
+  `detector_sampling_inv_A` of `io.inspect`; it read `detector_sampling` with
+  `detector_sampling_unit`, which quantem.gpu no longer writes.
 
 Fixed:
+
+- `Show4DSTEM.compute_ssb(aberrations=...)` dropped a key other than
+  `C10_nm`, `C12_nm` and `phi12_deg` without a message (`{"C10": 5.0}`
+  reconstructed at C10 0). Such a key raises `ValueError`; a missing one of
+  the three is still 0.
 
 - A manual SSB recompute in `Show4DSTEM` sent the rotation below 180 degrees
   back without the reversal of the centre of mass, 180 degrees off after a fit
