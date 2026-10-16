@@ -271,6 +271,25 @@ it("lays out panels that share one source frame by num_panel_cols, not by width 
   expect(image.width / image.height).toBeCloseTo(3, 1);
 });
 
+it("leaves a settled multi-panel histogram idle until the frame changes", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const schedule = vi.spyOn(window, "setTimeout");
+  const model = new Model({
+    n_panels: 3, width: 3 * SIZE, num_panel_cols: SIZE, max_cols: 3,
+    _offline_float_stack: new DataView(new Float32Array(FRAMES * SIZE * 3 * SIZE).fill(1).buffer),
+  });
+  await mount(model);
+  await act(async () => { await vi.advanceTimersByTimeAsync(64); });
+  const histogramSchedules = () => schedule.mock.calls.filter(([, delay]) => delay === 32).length;
+  const settledSchedules = histogramSchedules();
+  expect(settledSchedules).toBeGreaterThan(0);
+  await act(async () => { await vi.advanceTimersByTimeAsync(96); });
+  expect(histogramSchedules()).toBe(settledSchedules);
+  act(() => model.set("slice_idx", 1));
+  await settle();
+  expect(histogramSchedules()).toBeGreaterThan(settledSchedules);
+});
+
 it("reorders a panel among its own widget's panels when another Show3D on the page is also reordering", async () => {
   // Two three-panel widgets, both in reorder mode. Panel 1 of the first is dropped in a gap below its row,
   // nearest its own panel 3 but nearer still the second widget's panel 1.

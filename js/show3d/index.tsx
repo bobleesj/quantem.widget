@@ -3329,6 +3329,9 @@ function Show3D() {
   const [panelHistogramData, setPanelHistogramData] = React.useState<(Float32Array | null)[]>([]);
   const [panelHistogramBins, setPanelHistogramBins] = React.useState<(number[] | null)[]>([]);
   const [panelDataRanges, setPanelDataRanges] = React.useState<{ min: number; max: number }[]>([]);
+  // Measured ranges are histogram output; publishing them must not schedule another measurement.
+  const panelDataRangesRef = React.useRef(panelDataRanges);
+  panelDataRangesRef.current = panelDataRanges;
   const imageHistogramPreviewPctRef = React.useRef<[number, number] | null>(null);
   const panelHistogramPreviewPctRef = React.useRef<Map<number, [number, number]>>(new Map());
   const histogramPreviewPaintRafRef = React.useRef<number | null>(null);
@@ -5570,7 +5573,7 @@ function Show3D() {
             height,
           }));
           const histograms = await engine.computeHistogramRegions(gpuSlot, regions, logScale);
-          nextRanges = Array.from({ length: panelCount }, (_, panel) => panelDataRanges[panel] ?? stackBounds);
+          nextRanges = Array.from({ length: panelCount }, (_, panel) => panelDataRangesRef.current[panel] ?? stackBounds);
           visiblePanelIndices.forEach((panel, k) => {
             nextBins[panel] = histograms[k].bins;
             nextRanges[panel] = histograms[k].range;
@@ -5606,7 +5609,7 @@ function Show3D() {
         window.setTimeout(() => { void refreshHistogram(pending.idx, pending.residentSlot); }, 0);
       }
     }
-  }, [logScale, dataMin, dataMax, perPanelHistogramEnabled, nPanels, nSlices, visiblePanelIndices, extractPanelSlice, displaySliceIdx, isRgb, height, panelDataRanges, sharedPanelSource, sourcePanelWidth, diffMode, avgWindow, frequencyFilterIsActive, subpixelAlignEnabled, compareMode, getOfflineFrame]);
+  }, [logScale, dataMin, dataMax, perPanelHistogramEnabled, nPanels, nSlices, visiblePanelIndices, extractPanelSlice, displaySliceIdx, isRgb, height, sharedPanelSource, sourcePanelWidth, diffMode, avgWindow, frequencyFilterIsActive, subpixelAlignEnabled, compareMode, getOfflineFrame]);
   refreshHistogramRef.current = refreshHistogram;
   React.useEffect(() => {
     if (playing) {
