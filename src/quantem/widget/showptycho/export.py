@@ -31,11 +31,14 @@ SNAPSHOTS_SCHEMA = "quantem.ssb-snapshots/1"
 LIVE_TRAITS = (
     "webgpu_preview_enabled", "webgpu_standalone", "webgpu_cal_json", "webgpu_h5_source_json", "webgpu_preview_status",
     "phase_bytes", "phase_width", "phase_height", "stars_path", "calibration_path", "crop_refit_available",
+    "auto_upsampling_factor",
 )
 
 
 def write_showptycho_folder(widget, path: str | pathlib.Path | None, title: str | None) -> pathlib.Path:
     """Write the review folder for ``widget`` and return its path (see the module docstring for the layout)."""
+    if widget.upsampling_factor == 3:
+        raise ValueError("WebGPU supports 1, 2, 4 or 8x sampling. Select Auto before exporting a 3x review.")
     ssb = widget._ssb
     ssb.set_scan_detector_rotation(float(widget.scan_detector_rotation_deg))
     session = ssb.state()
@@ -182,6 +185,10 @@ def write_showptycho_folder(widget, path: str | pathlib.Path | None, title: str 
                                                           "scan_shape", "bytes_per_bright_field_pixel", "bits_per_value")}
     live_values = {name: getattr(widget, name) for name in LIVE_TRAITS}
     try:
+        # WebGPU's FFT supports powers of two; round the shared support target up.
+        widget.auto_upsampling_factor = next(
+            factor for factor in (1, 2, 4, 8) if factor >= widget.auto_upsampling_factor
+        )
         widget.webgpu_preview_enabled = True
         widget.webgpu_standalone = True
         widget.crop_refit_available = False  # refitting needs the live Python session

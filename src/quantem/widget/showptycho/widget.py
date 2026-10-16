@@ -176,8 +176,12 @@ class ShowPtycho(anywidget.AnyWidget):
     scan_sampling_A = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
     # one-shot seed the browser reads at mount; the FFT switch takes over
     initial_fft_on = traitlets.Bool(False).tag(sync=True)
-    # SSB alias-order output sampling (CUDA sessions), not image interpolation
-    upsampling_factor = traitlets.Int(1).tag(sync=True)
+    # SSB alias-order output sampling, not image interpolation
+    upsampling_factor = traitlets.Union(
+        [traitlets.Int(), traitlets.Enum(["auto"])], default_value=1,
+    ).tag(sync=True)
+    auto_upsampling_factor = traitlets.Int(1).tag(sync=True)
+    auto_sampling_note = traitlets.Unicode("").tag(sync=True)
     upsampling_available = traitlets.Bool(False).tag(sync=True)
     save_trigger = traitlets.Int(0).tag(sync=True)
     notes = traitlets.Unicode("").tag(sync=True)
@@ -300,7 +304,16 @@ class ShowPtycho(anywidget.AnyWidget):
         self._stars_path = save_root / STARS_FILENAME
         self._calibration_path = save_root / CALIBRATION_FILENAME
         self.stars_path = str(self._stars_path.resolve())
-        self.upsampling_available = state["backend"] == "cuda"
+        self.upsampling_available = state["backend"] in ("cuda", "mps")
+        from quantem.gpu.optics.physics import ssb_upsampling_factor
+
+        try:
+            self.auto_upsampling_factor = ssb_upsampling_factor(
+                voltage_kV=state["voltage_kV"], semiangle_mrad=state["semiangle_mrad"],
+                scan_sampling_A=state["scan_sampling_A"],
+            )
+        except ValueError as exc:
+            self.auto_sampling_note = str(exc)
         self.sample_available = True  # CUDA and MPS, the SSB backends, both fit the thick-sample model
         self.scan_sampling_A = state["scan_sampling_A"]
         self.crop_refit_available = bool(self._source_path and pathlib.Path(self._source_path).is_file())
@@ -400,17 +413,19 @@ class ShowPtycho(anywidget.AnyWidget):
         use_drag = not compute_loss and self._drag_context is not None
         with self._drag_context if use_drag else contextlib.nullcontext():
             phase, loss = self._ssb.preview({**higher_order, **aberrations}, compute_loss=compute_loss,
-                                            upsampling_factor=self.upsampling_factor, **(sample or {}))
+                                            upsampling_factor=self._output_factor, **(sample or {}))
         if request_id != self._inflight_id:
             return
         if self.flip_phase:
             phase = -phase
         self._last_phase = phase
-        self.phase_height, self.phase_width = phase.shape
-        self.phase_bytes = phase.tobytes()
+        # A sampling change replaces dimensions and pixels as one comm message.
+        with self.hold_sync():
+            self.phase_height, self.phase_width = phase.shape
+            self.phase_bytes = phase.tobytes()
         # optimizer precision: the browser formats labels, rounding here would perturb saved calibrations
         self._last_result = {"id": request_id, "C10_nm": float(aberrations["C10_nm"]), "C12_nm": float(aberrations["C12_nm"]),
-                             "phi12_deg": float(aberrations["phi12_deg"]), "upsampling_factor": self.upsampling_factor, "loss": loss}
+                             "phi12_deg": float(aberrations["phi12_deg"]), "upsampling_factor": self._output_factor, "loss": loss}
         self.result_json = json.dumps(self._last_result)
 
     def _reconstruct_displayed(self, *, compute_loss: bool) -> None:
@@ -428,27 +443,34 @@ class ShowPtycho(anywidget.AnyWidget):
         self._reconstruct(request["id"], {name: request[name] for name in ("C10_nm", "C12_nm", "phi12_deg")},
                           compute_loss=request.get("committed", False))
 
+    @property
+    def _output_factor(self) -> int:
+        """Resolve Auto using the same support criterion as SSB.reconstruct."""
+        return self.auto_upsampling_factor if self.upsampling_factor == "auto" else self.upsampling_factor
+
     def _on_upsampling_factor(self, change) -> None:
         """Output sampling changed: show the displayed aberrations at the new sampling."""
         self._reconstruct_displayed(compute_loss=False)
 
     @traitlets.validate("upsampling_factor")
     def _validate_upsampling_factor(self, proposal):
-        """Refuse a factor the session cannot produce: 1, 2, 4 or 8, above 1 only on CUDA and
-        only while every higher-order term is zero."""
-        factor = proposal["value"]
-        if factor not in (1, 2, 4, 8):
-            raise ValueError("ShowPtycho upsampling_factor must be 1, 2, 4, or 8.")
+        """Resolve Auto and refuse output the active correction cannot produce."""
+        requested = proposal["value"]
+        if requested == "auto" and self.auto_sampling_note:
+            raise ValueError(self.auto_sampling_note)
+        factor = self.auto_upsampling_factor if requested == "auto" else requested
+        if factor not in (1, 2, 3, 4, 8):
+            raise ValueError("ShowPtycho upsampling_factor must be 'auto', 1, 2, 3, 4, or 8.")
         if factor > 1 and not self.upsampling_available:
             raise ValueError("This session supports native sampling only; use upsampling_factor=1.")
         if factor > 1 and has_higher_order(self.higher_order_aberrations_json):
             raise ValueError("Higher-order aberrations require upsampling_factor=1; reset them before upsampling.")
-        return factor
+        return requested
 
     @traitlets.validate("higher_order_aberrations_json")
     def _validate_higher_order_sampling(self, proposal):
         """Refuse a non-zero higher-order term while the output is upsampled."""
-        if self.upsampling_factor > 1 and has_higher_order(proposal["value"]):
+        if self._output_factor > 1 and has_higher_order(proposal["value"]):
             raise ValueError("Set upsampling_factor=1 before changing higher-order aberrations.")
         return proposal["value"]
 
@@ -660,7 +682,8 @@ class ShowPtycho(anywidget.AnyWidget):
             "sample_tilt_mrad": list(sample["sample_tilt_mrad"]) if sample else None,
             "propagator_tilt_mrad": propagator_frame_tilt(*sample["sample_tilt_mrad"], self.scan_detector_rotation_deg) if sample else None,
             "depth_spread_nm": sample["depth_spread_nm"] if sample else None,
-            "upsampling_factor": self.upsampling_factor,
+            "upsampling_factor": self._output_factor,
+            "upsampling_mode": "auto" if self.upsampling_factor == "auto" else "explicit",
         }
         write_json(self._calibration_path, payload)
         self.calibration_path = str(self._calibration_path.resolve())
@@ -698,7 +721,7 @@ class ShowPtycho(anywidget.AnyWidget):
             (self._on_sample_fit_request, ["sample_fit_request"]),
         ):
             self.unobserve(callback, names=names)
-        self.object_sampling_A = [step / self.upsampling_factor for step in self.scan_sampling_A]
+        self.object_sampling_A = [step / self._output_factor for step in self.scan_sampling_A]
         self._ssb = None
         self.ssb_session = self.sample_available = self.upsampling_available = False
         self.crop_refit_available = False

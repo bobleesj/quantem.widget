@@ -76,22 +76,25 @@ that FFT panel. It is not re-running the raw detector preprocessing.
 from quantem.widget import ShowPtycho
 
 viewer = ShowPtycho(ssb, show_fft=True)
-viewer.upsampling_factor = 2
+viewer.upsampling_factor = "auto"
 viewer
 ```
 
-Use **Sampling** in the toolbar (or the `upsampling_factor` trait) to switch between 1×, 2×, 4× and 8×. The field
-of view stays fixed; 2× halves the phase pixel spacing. The scale bar and crop
-coordinates follow the displayed sampling. The scan data and fitted coefficients
-stay unchanged, and the loss is evaluated on the native grid.
+Use **Sampling** to choose **1×** or **Auto**. Auto displays the resolved factor,
+for example **Auto (3×)**. It uses QuantEM.GPU's `ssb_upsampling_factor` rule:
+the smallest supported grid covering the nominal circular-aperture SSB frequency
+range, `2 * semiangle / wavelength`, along both scan axes. This depends on the
+calibrated voltage, convergence angle and scan step. Detector truncation and
+noise can reduce usable information; Auto is not a measured resolution claim.
+The field of view, measured scan data and fitted coefficients stay unchanged.
+The scale bar and crop coordinates follow the output sampling; the loss remains
+on the native grid. Save records the requested mode and resolved numerical factor.
 
-This evaluates SSB on a finer output grid using the measured scan-frequency
-aliases. It is not interpolation of the displayed image and does not guarantee
-finer physical resolution. Larger factors cost more computation and memory.
-
-Upsampling is available in CUDA notebooks for defocus/astigmatism with optional
-tilt correction, and in WebGPU folder exports. A Python MPS session currently
-uses 1×. Turn off higher-order aberrations before upsampling in a CUDA notebook.
+CUDA and MPS sessions support factors 1, 2, 3, 4 and 8 for defocus/astigmatism
+with optional tilt correction. WebGPU uses 1, 2, 4 and 8, rounding Auto up when
+3× is needed. Explicit factors remain available through `upsampling_factor` for
+existing Python workflows; a supplied explicit factor is labelled as such.
+Higher-order aberrations in Python require 1× sampling.
 Keep 1× while adjusting controls when a finer view is too slow. The widget uses
 all bright-field pixels by default; increasing output sampling does not reduce
 that evidence. Do not assume a 60 FPS reconstruction rate on a full scan.

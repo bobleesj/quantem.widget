@@ -211,8 +211,8 @@ def test_higher_order_panel_switches_to_the_full_kernel():
         assert _shown(widget).shape == (512, 512)
         with pytest.raises(ValueError, match="Set upsampling_factor=1"):
             widget.higher_order_aberrations_json = json.dumps({"C30_nm": 1.0})
-    with pytest.raises(ValueError, match="1, 2, 4, or 8"):
-        widget.upsampling_factor = 3
+    with pytest.raises(ValueError, match="1, 2, 3, 4, or 8"):
+        widget.upsampling_factor = 5
 
 
 def test_sample_tilt_panel_uses_the_thick_sample_model(widget, ssb):
@@ -315,6 +315,7 @@ def test_export_writes_the_browser_folder_from_exact_bf_counts(widget, ssb, tmp_
     embedded = json.loads(re.search(r'<script type="application/vnd.jupyter.widget-state\+json">(.*?)</script>', html, re.S).group(1))
     exported = next(model["state"] for model in embedded["state"].values() if "webgpu_standalone" in model["state"])
     assert exported["webgpu_standalone"] and exported["webgpu_preview_enabled"] and not exported["crop_refit_available"]
+    assert exported["auto_upsampling_factor"] == 4 and widget.auto_upsampling_factor == 3
     assert exported["webgpu_preview_status"].startswith("WebGPU folder ready") and widget.webgpu_preview_status == ""
     source = json.loads(exported["webgpu_h5_source_json"])
     assert source["kind"] == "bf_columns" and exported["stars_path"] == "snapshots/snapshots.json"
@@ -407,3 +408,41 @@ def test_the_rewrite_script_carries_earlier_calibration_files_over(tmp_path):
     unmarked.write_text(json.dumps({"schema_version": 3, "rotation_angle_deg": 10.0, "aberrations": {"C10": -40.0}}))
     refused = subprocess.run([sys.executable, str(script), str(unmarked)], capture_output=True, text=True)
     assert refused.returncode != 0 and "unit of C10 and C12 in this file is not known" in refused.stderr
+
+
+def test_auto_sampling_matches_core_and_save_keeps_resolved_factor(widget, ssb, monkeypatch):
+    """Native -> Auto -> native preserves optics, physical extent and saved sampling."""
+    from quantem.gpu.optics.physics import ssb_upsampling_factor
+
+    factor = ssb_upsampling_factor(voltage_kV=ssb.voltage_kV,
+                                   semiangle_mrad=ssb.semiangle_mrad,
+                                   scan_sampling_A=ssb.scan_sampling_A)
+    widget.sample_json = json.dumps({"sample_tilt_mrad": [3.0, -4.0], "depth_spread_nm": 12.0})
+    native = _shown(widget).copy()
+    packets = []
+    send_state = widget.send_state
+
+    def record_state(key=None):
+        packets.append({key} if isinstance(key, str) else set(key or ()))
+        return send_state(key)
+
+    monkeypatch.setattr(widget, "send_state", record_state)
+    widget.upsampling_factor = "auto"
+    image_keys = {"phase_height", "phase_width", "phase_bytes"}
+    assert any(image_keys <= keys for keys in packets)
+    assert not any(keys & image_keys and not image_keys <= keys for keys in packets)
+    assert widget.auto_upsampling_factor == factor == 3
+    expected, _ = ssb.preview(dict(START), upsampling_factor=factor,
+                              sample_tilt_mrad=(3.0, -4.0), depth_spread_nm=12.0,
+                              compute_loss=False)
+    np.testing.assert_array_equal(_shown(widget), expected)
+    assert _shown(widget).shape == tuple(value * factor for value in native.shape)
+    widget.save_trigger += 1
+    saved = json.loads(Path(widget.calibration_path).read_text())
+    assert saved["upsampling_factor"] == factor and saved["upsampling_mode"] == "auto"
+    assert saved["scan_sampling_A"] == list(ssb.scan_sampling_A)
+    widget.upsampling_factor = 1
+    np.testing.assert_array_equal(_shown(widget), native)
+    widget.save_trigger += 1
+    saved = json.loads(Path(widget.calibration_path).read_text())
+    assert saved["upsampling_factor"] == 1 and saved["upsampling_mode"] == "explicit"

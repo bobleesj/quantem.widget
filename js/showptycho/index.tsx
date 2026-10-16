@@ -1448,7 +1448,10 @@ function Explore() {
   // an array carries the pixel size of its image; a session the scan step, which the output sampling divides
   const [objectSamplingA] = useModelState<number[]>("object_sampling_A");
   const [scanSamplingA] = useModelState<number[]>("scan_sampling_A");
-  const [upsample, setUpsample] = useModelState<number>("upsampling_factor");
+  const [sampling, setSampling] = useModelState<number | "auto">("upsampling_factor");
+  const [autoFactor] = useModelState<number>("auto_upsampling_factor");
+  const [autoSamplingNote] = useModelState<string>("auto_sampling_note");
+  const upsample = sampling === "auto" ? (autoFactor || 1) : (sampling || 1);
   const [upsamplingAvailable] = useModelState<boolean>("upsampling_available");
   const upsampleRef = React.useRef(upsample || 1); upsampleRef.current = upsample || 1;
 
@@ -2690,7 +2693,9 @@ function Explore() {
   React.useEffect(() => {
     if (!phaseBytes || phaseWidth === 0 || phaseHeight === 0) return;
     const data = extractFloat32(phaseBytes);
-    if (!data || data.length === 0) return;
+    // Trait updates may reach React separately even when Python batches the comm.
+    // Keep the previous complete image until its replacement dimensions agree.
+    if (!data || data.length !== phaseWidth * phaseHeight) return;
     renderAll(data, phaseWidth, phaseHeight);
   }, [phaseBytes, phaseWidth, phaseHeight, renderAll]);
 
@@ -3234,11 +3239,12 @@ function Explore() {
         }}
       >
         {tuning && <label style={{fontSize: 12}}>Sampling <select aria-label="SSB output sampling"
-          value={upsample || 1} disabled={busy || (!upsamplingAvailable && !webgpuStandalone)}
-          onChange={e => setUpsample(Number(e.target.value))}
-          title="Finer SSB output sampling; same measured data and field of view">
-          {[1, 2, 4, 8].map(factor => <option key={factor} value={factor}
-            disabled={factor > 1 && hoActive && !webgpuStandalone}>{factor}×</option>)}
+          value={sampling || 1} disabled={busy || (!upsamplingAvailable && !webgpuStandalone)}
+          onChange={e => setSampling(e.target.value === "auto" ? "auto" : Number(e.target.value))}
+          title={autoSamplingNote || "Auto covers the calibrated circular-aperture SSB frequency range; the measured scan and field of view stay unchanged."}>
+          <option value={1}>1×</option>
+          <option value="auto" disabled={!!autoSamplingNote || ((autoFactor || 1) > 1 && hoActive && !webgpuStandalone)}>Auto ({autoFactor || 1}×)</option>
+          {typeof sampling === "number" && sampling > 1 && <option value={sampling} disabled>{sampling}× (explicit)</option>}
         </select></label>}
         {tuning && !webgpuStandalone && (hoActive || upsample > 1) && (
           <Typography sx={{ ...typography.value, color: tc.textMuted }}>
