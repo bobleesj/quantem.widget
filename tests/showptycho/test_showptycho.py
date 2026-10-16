@@ -243,10 +243,25 @@ def test_save_writes_the_calibration_and_mirrors_it_onto_the_session(widget, ssb
     assert (saved["voltage_kV"], saved["semiangle_mrad"], saved["scan_sampling_A"], saved["detector_sampling_mrad"]) == (300.0, 20.0, [0.5, 0.5], [5.0, 5.0])
     assert saved["source_path"] == str(tmp_path / "scan_master.h5") and saved["loss"] == json.loads(widget.result_json)["loss"]
     assert saved["sample_tilt_mrad"] is None and saved["generated_at_utc"] == widget.calibration_saved_at and saved["generated_at_utc"].endswith("Z")
+    assert saved["upsampling_factor"] == widget.upsampling_factor
     retired = {"schema_version", "version", "aberration_unit", "rotation_angle_deg", "higher_order", "det_sampling_mrad_px",
                "source_file", "source_stem", "label", "timestamp", "tilt_mrad", "tilt_object_mrad"}
     assert not retired & set(saved)
     assert ssb.aberrations == {"C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0} and ssb.best_loss == saved["loss"]
+
+
+def test_freezing_keeps_the_saved_phase_without_owning_the_session(widget, ssb):
+    widget.upsampling_factor = 2
+    phase = _shown(widget).copy()
+    widget.freeze()
+    assert not widget.ssb_session and not widget.crop_refit_available
+    assert widget.object_sampling_A == [0.25, 0.25]
+    np.testing.assert_array_equal(_shown(widget), phase)
+    widget.flip_phase = True
+    np.testing.assert_array_equal(_shown(widget), -phase)
+    # A second consumer can still use the session: freeze detaches the viewer.
+    expected, _ = ssb.preview(dict(ssb.aberrations), upsampling_factor=2)
+    np.testing.assert_array_equal(phase, expected)
 
 
 def test_pins_star_view_and_unpin(widget, tmp_path):

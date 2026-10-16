@@ -295,7 +295,7 @@ class ShowPtycho(anywidget.AnyWidget):
         state = self._ssb.state()
         self._source_path = state["source_path"]
         self._source_scan_shape = state["scan_shape"]
-        self._scan_region = (0, state["scan_shape"][0], 0, state["scan_shape"][1])
+        self._scan_region = data.scan_region or (0, state["scan_shape"][0], 0, state["scan_shape"][1])
         save_root = pathlib.Path(save_dir) if save_dir else pathlib.Path.cwd()
         self._stars_path = save_root / STARS_FILENAME
         self._calibration_path = save_root / CALIBRATION_FILENAME
@@ -660,10 +660,50 @@ class ShowPtycho(anywidget.AnyWidget):
             "sample_tilt_mrad": list(sample["sample_tilt_mrad"]) if sample else None,
             "propagator_tilt_mrad": propagator_frame_tilt(*sample["sample_tilt_mrad"], self.scan_detector_rotation_deg) if sample else None,
             "depth_spread_nm": sample["depth_spread_nm"] if sample else None,
+            "upsampling_factor": self.upsampling_factor,
         }
         write_json(self._calibration_path, payload)
         self.calibration_path = str(self._calibration_path.resolve())
         self.calibration_saved_at = payload["generated_at_utc"]
+
+    def freeze(self):
+        """Keep the displayed phase visible while detaching its live SSB controls.
+
+        The session's owner can then close it and release GPU data. This does
+        not close a shared SSB session or change the displayed scientific array.
+        Contrast, zoom and FFT inspection remain available.
+
+        Returns
+        -------
+        ShowPtycho
+            This viewer, now showing a fixed phase array.
+
+        Examples
+        --------
+        >>> viewer.freeze()
+        >>> ssb.close()
+        """
+        if self._ssb is None:
+            return self
+        self._free_drag_context()
+        for callback, names in (
+            (self._on_request, ["request_json"]),
+            (self._on_upsampling_factor, ["upsampling_factor"]),
+            (self._on_save, ["save_trigger"]),
+            (self._on_pin, ["pin_json"]),
+            (self._on_drag_pixels_change, ["num_drag_bright_field_pixels"]),
+            (self._on_rotation_change, ["scan_detector_rotation_deg"]),
+            (self._on_panel_change, ["higher_order_aberrations_json", "sample_json"]),
+            (self._on_crop_refit_request, ["crop_refit_request_json"]),
+            (self._on_sample_fit_request, ["sample_fit_request"]),
+        ):
+            self.unobserve(callback, names=names)
+        self.object_sampling_A = [step / self.upsampling_factor for step in self.scan_sampling_A]
+        self._ssb = None
+        self.ssb_session = self.sample_available = self.upsampling_available = False
+        self.crop_refit_available = False
+        self.session_note = "Saved SSB phase. Open a new SSB review to edit aberrations."
+        return self
 
     def export(self, path: str | pathlib.Path | None = None, *, title: str | None = None) -> pathlib.Path:
         """Write a browser folder that reviews this SSB with no kernel: ``index.html``, exact bright-field
