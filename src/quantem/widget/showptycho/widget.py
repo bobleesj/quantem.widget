@@ -141,6 +141,11 @@ class ShowPtycho(anywidget.AnyWidget):
         working directory by default.
     show_fft : bool, default False
         Open with the FFT panel visible.
+    phase_estimator : {"mean_phase", "phase_of_mean"}, optional
+        SSB phase estimator used for every preview and recorded on Save.
+        Omitted, preserve QuantEM.GPU defaults: phase of the mean on CUDA,
+        mean phase on MPS. Higher-order aberrations default to mean phase.
+        An array already contains its reconstructed phase.
 
     A session opened from its master (``SSB.open("scan_master.h5", ...)``) records the file as its
     ``source_path``: the toolbar then offers Crop and Refit SSB, which reloads only the selected
@@ -229,8 +234,14 @@ class ShowPtycho(anywidget.AnyWidget):
         units: str | None = None,
         save_dir: str | pathlib.Path | None = None,
         show_fft: bool = False,
+        phase_estimator: str | None = None,
     ) -> None:
         is_array = not gpu_adapter.is_ssb(data)
+        if phase_estimator not in (None, "mean_phase", "phase_of_mean"):
+            raise ValueError("phase_estimator must be 'mean_phase' or 'phase_of_mean'.")
+        if is_array and phase_estimator is not None:
+            raise ValueError("phase_estimator needs an SSB session; an array is already reconstructed.")
+        self._phase_estimator = phase_estimator
         # an array's pixel size [row, col] in angstrom, read through the one unit table (the widget draws in angstrom)
         if is_array and sampling is None:
             # a unit stated with no step, for an image that records none, raises as in every image widget
@@ -297,6 +308,7 @@ class ShowPtycho(anywidget.AnyWidget):
             return
         self._ssb = gpu_adapter.SsbSession(data)
         state = self._ssb.state()
+        self._default_phase_estimator = "phase_of_mean" if state["backend"] == "cuda" else "mean_phase"
         self._source_path = state["source_path"]
         self._source_scan_shape = state["scan_shape"]
         self._scan_region = data.scan_region or (0, state["scan_shape"][0], 0, state["scan_shape"][1])
@@ -413,7 +425,7 @@ class ShowPtycho(anywidget.AnyWidget):
         use_drag = not compute_loss and self._drag_context is not None
         with self._drag_context if use_drag else contextlib.nullcontext():
             phase, loss = self._ssb.preview({**higher_order, **aberrations}, compute_loss=compute_loss,
-                                            upsampling_factor=self._output_factor, **(sample or {}))
+                                            upsampling_factor=self._output_factor, phase_estimator=self._phase_estimator, **(sample or {}))
         if request_id != self._inflight_id:
             return
         if self.flip_phase:
@@ -684,6 +696,10 @@ class ShowPtycho(anywidget.AnyWidget):
             "depth_spread_nm": sample["depth_spread_nm"] if sample else None,
             "upsampling_factor": self._output_factor,
             "upsampling_mode": "auto" if self.upsampling_factor == "auto" else "explicit",
+            "phase_estimator": self._phase_estimator or (
+                "mean_phase" if has_higher_order(self.higher_order_aberrations_json)
+                else self._default_phase_estimator
+            ),
         }
         write_json(self._calibration_path, payload)
         self.calibration_path = str(self._calibration_path.resolve())
@@ -738,6 +754,11 @@ class ShowPtycho(anywidget.AnyWidget):
         """
         if self._ssb is None:
             raise ValueError("export() writes an SSB review folder from a session's bright-field counts; this widget shows an array.")
+        if self._phase_estimator is not None:
+            raise ValueError(
+                "Browser export does not yet preserve an explicit phase_estimator. "
+                "Keep this review in the notebook; Save preserves its numerical calibration."
+            )
         return write_showptycho_folder(self, path, title)
 
     def __repr__(self) -> str:

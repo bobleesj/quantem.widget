@@ -70,6 +70,22 @@ FFT is a display analysis of the current reconstructed phase. When the FFT panel
 is visible, the widget computes the FFT from the latest phase image and redraws
 that FFT panel. It is not re-running the raw detector preprocessing.
 
+## Reusing the reviewed phase
+
+For a numerical handoff to another reconstruction, choose the same estimator
+at both stages:
+
+```python
+viewer = ShowPtycho(ssb, phase_estimator="phase_of_mean")
+```
+
+Save records this estimator along with the resolved sampling factor and optics.
+Omitting the option preserves QuantEM.GPU's defaults: phase of the mean for
+CUDA C10/C12, mean phase for MPS and higher-order aberrations. These estimators
+can produce different numerical phase values. Explicit-estimator reviews stay
+in the notebook; live browser-folder export rejects them until that handoff
+preserves the estimator too.
+
 ## Output sampling
 
 ```python

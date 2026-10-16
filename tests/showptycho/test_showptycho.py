@@ -446,3 +446,34 @@ def test_auto_sampling_matches_core_and_save_keeps_resolved_factor(widget, ssb, 
     widget.save_trigger += 1
     saved = json.loads(Path(widget.calibration_path).read_text())
     assert saved["upsampling_factor"] == 1 and saved["upsampling_mode"] == "explicit"
+
+
+@pytest.mark.parametrize("estimator", ["mean_phase", "phase_of_mean"])
+def test_explicit_estimator_is_displayed_and_saved(ssb, tmp_path, estimator):
+    """A saved initialization must describe the numerical phase reviewed on either GPU."""
+    view = ShowPtycho(ssb, save_dir=tmp_path, phase_estimator=estimator)
+    try:
+        view.upsampling_factor = "auto"
+        expected, _ = ssb.preview(
+            dict(ssb.aberrations), upsampling_factor=view.auto_upsampling_factor,
+            phase_estimator=estimator, compute_loss=True,
+        )
+        np.testing.assert_array_equal(_shown(view), expected)
+        view.flip_phase = True
+        view.save_trigger += 1
+        record = json.loads(Path(view.calibration_path).read_text())
+        with pytest.raises(ValueError, match="does not yet preserve"):
+            view.export(tmp_path / "browser")
+        assert not (tmp_path / "browser").exists()
+        assert record["phase_estimator"] == estimator
+        assert record["upsampling_factor"] == view.auto_upsampling_factor
+        np.testing.assert_array_equal(_shown(view), -expected)
+    finally:
+        view.close()
+
+
+def test_estimator_requires_a_supported_name_and_an_ssb_session():
+    with pytest.raises(ValueError, match="phase_estimator must"):
+        ShowPtycho(np.ones((8, 8)), phase_estimator="unknown")
+    with pytest.raises(ValueError, match="needs an SSB session"):
+        ShowPtycho(np.ones((8, 8)), phase_estimator="mean_phase")
