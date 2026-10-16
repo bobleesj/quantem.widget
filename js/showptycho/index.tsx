@@ -1849,15 +1849,15 @@ function Explore() {
   }, [localFolderName]);
   React.useEffect(() => {
     const hasH5Source = !!webgpuH5SourceJson && webgpuH5SourceJson.trim() !== "" && webgpuH5SourceJson.trim() !== "{}";
-    if (!localSourceGranted) {
-      webgpuSsbRef.current = null;
-      setWebgpuRuntimeStatus("No-server mode: grant the folder containing this HTML to start");
-      setWebgpuLoadProgress(null);
-      return;
-    }
     if (!webgpuPreviewEnabled || !webgpuCalJson || !hasH5Source) {
       webgpuSsbRef.current = null;
       setWebgpuRuntimeStatus(webgpuPreviewStatus || "");
+      setWebgpuLoadProgress(null);
+      return;
+    }
+    if (!localSourceGranted) {
+      webgpuSsbRef.current = null;
+      setWebgpuRuntimeStatus("No-server mode: grant the folder containing this HTML to start");
       setWebgpuLoadProgress(null);
       return;
     }
@@ -3529,7 +3529,7 @@ function Explore() {
               )}
             </Box>
 
-            {!localSourceGranted && (
+            {webgpuPreviewEnabled && !localSourceGranted && (
               <Box sx={{ border: `1px solid ${tc.border}`, bgcolor: tc.bgAlt, px: 1, py: 0.75, display: "flex", alignItems: "center", gap: 1 }}>
                 <Typography sx={{ ...typography.value, color: tc.text }}>
                   {localFolderName
