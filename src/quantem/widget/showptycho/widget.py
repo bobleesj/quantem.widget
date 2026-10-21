@@ -501,7 +501,7 @@ class ShowPtycho(anywidget.AnyWidget):
         Parameters
         ----------
         num_trials : int, default 200
-            Trials of each of the five seeded joint fits per region.
+            Trials of the single joint fit per region (seed 42).
         refinement : {"newton", "nelder-mead", "auto", None}, default "newton"
             Local refinement after each search (``quantem.gpu.SSB.find_aberrations``).
             The widget's Fit Regions button uses the values of the last call.

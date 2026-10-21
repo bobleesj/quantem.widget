@@ -4,6 +4,10 @@
 4D-STEM data. You tune defocus (C10), astigmatism (C12 / phi12), and scan-detector
 rotation and watch the reconstructed phase and its FFT update live in the notebook.
 
+For local-data notebooks, see [QuantEM Tutorials: Widget](https://github.com/bobleesj/quantem-tutorials/tree/widget/tutorials/widget).
+Choose Apple MPS or NVIDIA CUDA, with Basic and Advanced workflows. Each
+notebook browses the acquisition with Show4DSTEM and reuses it for ShowPtycho.
+
 SSB is a *direct* (non-iterative) phase retrieval: fast and interactive, but
 lower quality than iterative multislice ptychography. Use ShowPtycho for quick
 aberration tuning and review, not as a substitute for a full iterative
@@ -146,10 +150,17 @@ constrain it, or to run one of the other two methods, call `find_aberrations`
 before `reconstruct()`; the reconstruction then reuses that fit:
 
 ```python
-# ssb.find_aberrations(search_ranges={"C10_nm": (-50, 50)})  # tilt-corrected, defocus searched in -50..50 nm
-# ssb.find_aberrations(tilt=False)                           # the same model at tilt 0
-# ssb.find_aberrations(tilt=False, objective="phase_variance")  # the phase-variance backup
+search_ranges = {
+    "C10_nm": (-30.0, 30.0),
+    "C12_nm": (0.0, 20.0),
+}
+fit = ssb.find_aberrations(search_ranges=search_ranges)
 ```
+
+These are the joint-fit defaults, written explicitly so you can edit them.
+The astigmatism angle uses its full period internally; the joint fit does not
+accept an independent `phi12_deg` range. The two alternative methods remain
+available through the calls in the method table above.
 
 ## Review in ShowPtycho
 
@@ -205,13 +216,13 @@ the HTML export (the browser cannot bin), so keep the whole workflow un-binned.
 
 Enable **Local Tilt** to draw independent rectangular regions on the overview.
 Moving or resizing a region invalidates its previous fit; automatic fitting
-reruns all five repeats of 200 trials plus Newton. Aberrations, tilt and depth
+runs one joint fit with seed 42, 200 trials and Newton refinement. Aberrations, tilt and depth
 are fitted together. Select a region to inspect and adjust its own controls.
 The overview and other regional models are retained.
 
 A region estimates a local model, but its displayed phase is a crop of the
 **full-scan reconstruction** using that model. Smaller regions may have weaker
-parameter identifiability; compare repeat variability and the images before
+parameter identifiability; inspect the images and test fit stability separately before
 interpreting tilt as physical bending or a boundary.
 
 Hover over a region's upper-right corner to delete it, or use its durable
@@ -339,5 +350,5 @@ evidence behind the defaults.
 2. Open `SSB(data)`, which estimates the rotation, then `reconstruct()`, which fits the aberrations and settles the 180-degree branch.
 3. Open ShowPtycho with `ssb.show()` and review the launch calibration.
 4. Jointly fit aberrations, tilt and depth in the widget, or restore a matching saved joint fit.
-5. Inspect the phase, FFT and repeat variability; lower fit loss alone does not establish a physical tilt.
+5. Inspect the phase and FFT; lower fit loss alone does not establish a physical tilt.
 6. Save the review for restart, then use the regional handoff for iterative reconstruction.

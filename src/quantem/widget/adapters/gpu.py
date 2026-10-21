@@ -223,9 +223,9 @@ def aligned_center_of_mass(source, scan_shape, *, scan_detector_rotation_deg: fl
     return result.com_row_aligned, result.com_col_aligned
 
 
-# Fit Regions starts quantem.gpu's joint optics, tilt and depth fit from these seeds and keeps the best;
+# Fit Regions uses the same fixed seed as quantem.gpu's ordinary joint fit;
 # the tilt limit is passed to it, so bound_hit tests the limit the fit used.
-REGION_FIT_SEEDS = (11, 29, 47, 71, 101)
+REGION_FIT_SEED = 42
 REGION_TILT_LIMIT_MRAD = 25.0
 
 
@@ -553,7 +553,9 @@ class SsbSession:
         Detector geometry and rotation are common; aberrations, both tilt
         components and depth spread are optimized together for each region,
         ``quantem.gpu.SSB.find_aberrations(tilt=True, num_trials=, refinement=)``
-        from each of ``REGION_FIT_SEEDS``, keeping the best sample agreement.
+        once with ``REGION_FIT_SEED``.
+        The separate phase-variance diagnostic is not needed for this fit,
+        so ``compute_loss=False`` omits it without changing any fitted value.
         A fit within 0.01 of the tilt limit or of quantem.gpu's depth-spread
         search range (``quantem.gpu.ssb.DEPTH_SPREAD_RANGE_NM``) is flagged ``bound_hit``.
         """
@@ -571,7 +573,6 @@ class SsbSession:
             raise ValueError("Regional display currently needs equal row and column scan sampling.")
         started = time.perf_counter()
         fits, images = [], {}
-        seeds = REGION_FIT_SEEDS
         from quantem.gpu.ssb import DEPTH_SPREAD_RANGE_NM as depth_range_nm  # the joint fit's own depth search range
         factor = int(upsampling_factor)
         geometry = {
@@ -592,7 +593,7 @@ class SsbSession:
                 if progress is not None:
                     progress({"label": region["label"], "region_id": region["id"],
                               "region_index": region_index, "region_count": len(regions),
-                              "stage": stage, "repeat": repeat, "repeats": len(seeds),
+                              "stage": stage, "repeat": repeat, "repeats": 1,
                               "num_trials": int(num_trials), "refinement": refinement,
                               "elapsed_s": time.perf_counter() - started})
             report("preparing", 0)
@@ -600,48 +601,41 @@ class SsbSession:
                 bounds, aberrations=optics,
                 scan_detector_rotation_deg=parameters["scan_detector_rotation_deg"],
             ) as regional:
-                runs = []
-                for repeat, seed in enumerate(seeds, start=1):
-                    report("joint_fit", repeat)
-                    fitted = regional.find_aberrations(
-                        tilt=True, num_trials=int(num_trials), refinement=refinement,
-                        tilt_limit_mrad=REGION_TILT_LIMIT_MRAD,
-                        check_rotation=False, compare_standard=False,
-                        seed=seed, verbose=False)
-                    runs.append({
-                        "seed": seed, "aberrations": dict(fitted.aberrations),
-                        "sample_tilt_mrad": list(fitted.sample_tilt_mrad),
-                        "depth_spread_nm": float(fitted.depth_spread_nm),
-                        "sample_agreement": float(fitted.sample_agreement),
-                        "num_completed_trials": len(fitted.trial_records or ()),
-                        "refinement": fitted.refinement,
-                        "optimizer": dict(getattr(fitted, "optimizer", {})),
-                        "timings": dict(getattr(fitted, "timings", {})),
-                    })
-            # A NaN agreement compares false both ways, so max() would keep a
-            # nonfinite first seed over every finite one.
-            finite = [run for run in runs if math.isfinite(run["sample_agreement"])]
-            if not finite:
+                report("joint_fit", 1)
+                fitted = regional.find_aberrations(
+                    tilt=True, num_trials=int(num_trials), refinement=refinement,
+                    tilt_limit_mrad=REGION_TILT_LIMIT_MRAD,
+                    check_rotation=False, compare_standard=False,
+                    compute_loss=False, seed=REGION_FIT_SEED, verbose=False)
+                fit = {
+                    "seed": REGION_FIT_SEED, "aberrations": dict(fitted.aberrations),
+                    "sample_tilt_mrad": list(fitted.sample_tilt_mrad),
+                    "depth_spread_nm": float(fitted.depth_spread_nm),
+                    "sample_agreement": float(fitted.sample_agreement),
+                    "num_completed_trials": len(fitted.trial_records or ()),
+                    "refinement": fitted.refinement,
+                    "optimizer": dict(getattr(fitted, "optimizer", {})),
+                    "timings": dict(getattr(fitted, "timings", {})),
+                }
+            if not math.isfinite(fit["sample_agreement"]):
                 raise ValueError(f"{region['label']}: nonfinite fit. Select another region and refit.")
-            best = max(finite, key=lambda run: run["sample_agreement"])
-            report("reconstructing", len(seeds))
+            report("reconstructing", 1)
             phase, _ = self.preview(
-                best["aberrations"], sample_tilt_mrad=best["sample_tilt_mrad"],
-                depth_spread_nm=best["depth_spread_nm"],
+                fit["aberrations"], sample_tilt_mrad=fit["sample_tilt_mrad"],
+                depth_spread_nm=fit["depth_spread_nm"],
                 upsampling_factor=factor, phase_estimator=phase_estimator,
                 compute_loss=False)
             if tuple(phase.shape) != tuple(size * factor for size in ssb.scan_shape):
                 raise ValueError("Local correction requires a full-scan reconstruction before cropping.")
             images[f"{region['label']} · SSB"] = self.crop_native(phase, bounds, factor)
-            tilts = np.asarray([run["sample_tilt_mrad"] for run in runs])
             fits.append({
-                **region, **best,
-                "seed_sd_mrad": float(np.sqrt(np.var(tilts, axis=0, ddof=1).sum())),
+                **region, **fit,
+                "seed_sd_mrad": None,
                 "fit_seconds": time.perf_counter() - region_started,
-                "bound_hit": (max(abs(v) for v in best["sample_tilt_mrad"]) > REGION_TILT_LIMIT_MRAD - 0.01
-                              or best["depth_spread_nm"] < depth_range_nm[0] + 0.01
-                              or best["depth_spread_nm"] > depth_range_nm[1] - 0.01),
-                "fit_record": {"method": "joint optics, tilt and depth", "fits": runs,
+                "bound_hit": (max(abs(v) for v in fit["sample_tilt_mrad"]) > REGION_TILT_LIMIT_MRAD - 0.01
+                              or fit["depth_spread_nm"] < depth_range_nm[0] + 0.01
+                              or fit["depth_spread_nm"] > depth_range_nm[1] - 0.01),
+                "fit_record": {"method": "joint optics, tilt and depth", "fits": [fit],
                                "backend": ssb.backend, "num_trials": int(num_trials),
                                "refinement": refinement},
                 "reconstruction": {

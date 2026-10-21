@@ -422,6 +422,14 @@ function drawCanvas(
   }
   ctx.drawImage(offscreen, (size - drawW) / 2 + panX, (size - drawH) / 2 + panY, drawW, drawH);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // Passive timing evidence for real image updates. Zoom, layout and contrast
+  // redraws of the same data do not count as new scientific frames.
+  const frame = offscreen.dataset.quantemDataFrame;
+  if (frame && canvas.dataset.quantemDataFrame !== frame) {
+    canvas.dataset.quantemDataFrame = frame;
+    canvas.dataset.quantemPaintedAt = String(performance.now());
+    canvas.dataset.quantemPaintCount = String(Number(canvas.dataset.quantemPaintCount || 0) + 1);
+  }
 }
 
 /** Paint completed pixels immediately; React still owns layout and controls. */
@@ -2500,6 +2508,9 @@ function Explore() {
         image.data.set(pixels);
         ctx.putImageData(image, 0, 0);
       }
+      if (panelFrames[slot].get().data !== data) {
+        canvas!.dataset.quantemDataFrame = String(gen);
+      }
       panelFrames[slot].set({ data, min, max, displayBins: stats.displayBins });
       canvas!.dispatchEvent(new Event("quantem-frame"));
       // A new canvas (first frame or new dimensions) re-renders the widget for its panels and labels.
@@ -4264,11 +4275,11 @@ function Explore() {
                 onClick={() => setTrialsExpanded(expanded => !expanded)}
                 sx={{ cursor: "pointer", userSelect: "none", color: tc.textMuted, fontSize: 10, fontFamily: "monospace" }}
               >
-                {trialsExpanded ? "▼" : "▶"} Search trials ({trials.length}) · {trialObjectiveText} · best first · click to preview
+                {trialsExpanded ? "▼" : "▶"} Trial previews ({trials.length}) · {trialObjectiveText} · best first · click to preview
               </Box>
               <Box sx={{ flex: 1 }} />
               {trials.length > 0 && (
-                <Tooltip title={`The search scored ${trials.length} trials on ${trialObjectiveText}, then the local solver refined the best one. The refined fit's loss is the phase-variance diagnostic (${autoLoss?.toFixed(8) ?? '-'}); a trial shows its own objective's score: agreement (higher is better) for the default model fit, phase variance (lower is better) for the backup.`} placement="top" arrow>
+                <Tooltip title={`Showing ${trials.length} retained trial previews ranked by ${trialObjectiveText}; this is not the total search budget. The local solver then refined the strongest candidates. The refined fit's loss is the phase-variance diagnostic (${autoLoss?.toFixed(8) ?? '-'}); a trial shows its own objective's score: agreement (higher is better) for the default model fit, phase variance (lower is better) for the backup.`} placement="top" arrow>
                   <Typography sx={{ ...typography.value, color: tc.textMuted, cursor: "help" }}>
                     Refined fit {autoLoss?.toFixed(8) ?? '-'}  ·  best trial {trialScoreText(trials[0])}
                   </Typography>

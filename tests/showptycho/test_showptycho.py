@@ -268,10 +268,11 @@ def test_native_regions_fit_joint_models_without_replacing_the_overview(tmp_path
             fit, = viewer.fit_regions()
             assert viewer.ssb_parameters == reference
             np.testing.assert_array_equal(_shown(viewer), overview)
-            assert len(fit["fit_record"]["fits"]) == 5
+            assert len(fit["fit_record"]["fits"]) == 1
+            assert fit["seed"] == 42 and fit["seed_sd_mrad"] is None
             assert all(run["num_completed_trials"] == 200 and run["refinement"] == "newton"
                        for run in fit["fit_record"]["fits"])
-            assert [event["repeat"] for event in progress if event.get("stage") == "joint_fit"] == [1, 2, 3, 4, 5]
+            assert [event["repeat"] for event in progress if event.get("stage") == "joint_fit"] == [1]
             assert progress[-1]["status"] == "complete"
             assert all(set(run["aberrations"]) == set(START) for run in fit["fit_record"]["fits"])
             phase, _ = ssb.preview(
