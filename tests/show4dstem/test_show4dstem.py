@@ -1189,6 +1189,7 @@ def test_compute_ssb_uses_the_estimated_rotation_rather_than_zero():
 def test_compute_ssb_dpc_maps_follow_the_scan_axes_for_a_flipped_detector(flipped):
     # the DPC alignment copied quantem.gpu's rotation without its axis swap, so a flipped
     # detector gave DPC_row correlated -0.87 with the scan-row gradient and 0.50 with the column one
+    _require_ssb()
     from quantem.gpu import dpc
 
     counts = _rotated_counts(30.0, flipped=flipped)
@@ -1214,6 +1215,7 @@ def test_compute_ssb_dpc_maps_follow_the_scan_axes_for_a_flipped_detector(flippe
 def test_compute_ssb_selects_bright_field_pixels_with_the_quantem_gpu_default_threshold():
     # Show4DSTEM passed threshold 0.5 where quantem.gpu defaults to 0.0: with a given 7 px radius on this
     # soft-edged disk it kept 120 of the 156 bright-field pixels a plain SSB session uses
+    _require_ssb()
     from quantem.gpu import SSB
 
     rows, cols = np.indices((24, 24))
@@ -1308,6 +1310,7 @@ def test_compute_ssb_converts_a_detector_step_in_reciprocal_angstrom(monkeypatch
 
 def test_compute_ssb_reconstructs_a_rectangular_scan_that_quantem_gpu_pads():
     # Compute SSB refused every scan but square 128, 256, 512 and 1024, although quantem.gpu pads other shapes
+    _require_ssb()
     from quantem.gpu import SSB
 
     counts = _rotated_counts(30.0)[:96, :80].copy()
@@ -1328,6 +1331,7 @@ def test_compute_ssb_reconstructs_a_rectangular_scan_that_quantem_gpu_pads():
 def test_compute_ssb_uses_the_given_bright_field_disk_and_records_the_one_used():
     # bright_field_center_px= and bright_field_radius_px= never reached SSB, and the record wrote
     # None for the radius and the detector step whenever quantem.gpu found them itself
+    _require_ssb()
     from quantem.gpu import SSB, detector
 
     counts = _rotated_counts(30.0)

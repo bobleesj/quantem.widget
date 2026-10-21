@@ -200,6 +200,7 @@ def _fit_padded(agreements):
 
 
 def test_regional_fit_keeps_the_best_finite_seed_and_crops_measured_positions():
+    pytest.importorskip("quantem.gpu", reason="the regional fit runs quantem.gpu's SSB")
     result = _fit_padded([float('nan'), 0.2, 0.9, float('inf'), 0.5])
     fit, = result['fits']
     assert fit['seed'] == 47 and fit['sample_tilt_mrad'] == [47.0, 0.0]  # third seed, agreement 0.9
@@ -213,6 +214,7 @@ def test_regional_fit_keeps_the_best_finite_seed_and_crops_measured_positions():
 
 
 def test_regional_fit_passes_its_trial_count_refinement_and_tilt_limit_to_the_fit():
+    pytest.importorskip("quantem.gpu", reason="the regional fit runs quantem.gpu's SSB")
     # Fit Regions hard-coded 200 trials and Newton and tested a copied 24.99 mrad tilt bound
     from quantem.widget.adapters.gpu import REGION_TILT_LIMIT_MRAD, SsbSession
     session = _PaddedSession([0.5] * 5)
@@ -228,6 +230,7 @@ def test_regional_fit_passes_its_trial_count_refinement_and_tilt_limit_to_the_fi
 
 
 def test_regional_fit_flags_a_depth_at_the_end_of_quantem_gpus_search_range(monkeypatch):
+    pytest.importorskip("quantem.gpu", reason="the regional fit runs quantem.gpu's SSB")
     from quantem.gpu.ssb import DEPTH_SPREAD_RANGE_NM
     original = _Fit.__init__
 

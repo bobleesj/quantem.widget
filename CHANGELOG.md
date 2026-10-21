@@ -201,7 +201,8 @@ Changed:
 - The widgets call quantem.gpu, in Python and through the vendored WebGPU SSB
   engine, by its renamed API, which uses the same names as the widgets. This
   needs the quantem.gpu release that carries the rename: the `[cuda]` and
-  `[mps]` pins and `gpu-ref.txt` still name rc16 until that release.
+  `[mps]` pins still name rc17, which predates it, until that release;
+  `gpu-ref.txt` names the quantem.gpu main commit the bundles build against.
   `SsbSession.open(source, **parameters)` and
   `SsbSession.find_aberrations(**options)` take quantem.gpu's keywords;
   `find_aberrations` keywords `refine` to `refinement` (`"nelder-mead"` or

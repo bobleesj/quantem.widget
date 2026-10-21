@@ -445,7 +445,9 @@ def test_docs_build_environment_is_not_quantem_core_config():
     probe = ("import warnings\n"
              "warnings.filterwarnings('error', message='Unknown configuration key')\n"
              "import quantem.core.config\n")
-    run = subprocess.run([sys.executable, "-c", probe], env={**os.environ, **env},
+    # CI sets QUANTEM_GPU_SRC for the whole job (the bundle build reads it); only the docs step's own env is under test
+    base = {k: v for k, v in os.environ.items() if not k.startswith("QUANTEM_")}
+    run = subprocess.run([sys.executable, "-c", probe], env={**base, **env},
                          capture_output=True, text=True)
     assert run.returncode == 0, run.stderr[-600:]
 

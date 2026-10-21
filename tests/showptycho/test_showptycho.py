@@ -943,6 +943,7 @@ def test_a_dataset_in_the_format_unit_draws_its_scale_bar():
 
 
 def test_the_rewrite_script_carries_earlier_calibration_files_over(tmp_path):
+    pytest.importorskip("quantem.gpu", reason="the rewrite script reads quantem.gpu's session identities")
     # the package reads one layout; a calibration a person chose is carried over once by scripts/rewrite_ssb_calibration.py
     script = Path(__file__).resolve().parents[2] / "scripts" / "rewrite_ssb_calibration.py"
     saved = tmp_path / "calibration.json"
@@ -999,6 +1000,7 @@ def test_the_rewrite_script_carries_earlier_calibration_files_over(tmp_path):
 
 
 def test_the_rewrite_script_carries_a_path_identity_over_with_its_data(tmp_path):
+    pytest.importorskip("quantem.gpu", reason="the rewrite script reads quantem.gpu's session identities")
     """Calibration /5 named the data by absolute path and matched it by inode and times; /6 recomputes a portable identity."""
     script = Path(__file__).resolve().parents[2] / "scripts" / "rewrite_ssb_calibration.py"
     data = tmp_path / "scan.npy"
@@ -1033,6 +1035,7 @@ def test_the_rewrite_script_carries_a_path_identity_over_with_its_data(tmp_path)
 
 
 def test_the_rewrite_script_carries_layout_4_records_to_the_canonical_names(tmp_path):
+    pytest.importorskip("quantem.gpu", reason="the rewrite script reads quantem.gpu's session identities")
     # calibration /4, stars /1 and snapshots /1 named the display sign flip_phase and the regional
     # tilt, score and trial count tilt_mrad, agreement and completed_trials; ShowPtycho now refuses them
     from quantem.widget.showptycho.calibration import read_calibration
