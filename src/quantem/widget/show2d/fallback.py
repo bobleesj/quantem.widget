@@ -184,8 +184,10 @@ class Show2DStaticPng:
 
         specs: list[dict] = []
         display_rgb = self._display_rgb or [None] * len(frames)
+        # The live viewer and SVG draw panel labels only in gallery layouts.
+        is_gallery = self.n_images > 1 or (self.n_pages > 1 and self.panels_per_page > 0)
         for i in self._visible_panels():
-            label = self._panel_title_for_index(i) if self.show_panel_titles else ""
+            label = self._panel_title_for_index(i) if is_gallery and self.show_panel_titles else ""
             panel_rgb = display_rgb[i]
             frame = self._flipped(panel_rgb if panel_rgb is not None else frames[i], i)
             specs.append({

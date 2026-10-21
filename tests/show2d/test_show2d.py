@@ -451,7 +451,7 @@ def test_scale_bar_label_matches_the_browser_port(width, physical_label, physica
     frame = np.zeros((512, 512), dtype=np.float32)
     effective_zoom = width / 512
     (label, zoom_text, bar_text, bar_px), = Show2D(frame, sampling=0.23, units="A", labels=["cal"], panel_width_px=width, verbose=False)._static_overlay_texts()
-    assert (label, zoom_text, bar_text) == ("cal", "", physical_label)
+    assert (label, zoom_text, bar_text) == ("", "", physical_label)
     assert bar_px == pytest.approx(physical_length / 0.23 * effective_zoom)
     (_, _, bar_text, bar_px), = Show2D(frame, panel_width_px=width, verbose=False)._static_overlay_texts()
     assert (bar_text, bar_px) == (f"{pixel_length} px", pytest.approx(pixel_length * effective_zoom))
@@ -462,6 +462,20 @@ def test_scale_bar_label_matches_the_browser_port(width, physical_label, physica
     assert format_scale_label(20, "mrad") == "20 mrad"
     fixed = Show2D(frame, sampling=0.23, units="A", scale_bar_length=2.0, scale_bar_label="2 nm", scale_bar_panels=[0], verbose=False)
     assert fixed._static_overlay_texts()[0][2] == "2 nm"
+
+
+def test_saved_single_image_does_not_add_a_gallery_label():
+    frame = _frame()
+    single = Show2D(frame, title="Large", show_stats=False, verbose=False)
+    clean = Show2D(frame, title="Large", show_panel_titles=False, show_stats=False, verbose=False)
+    gallery = Show2D([frame, frame], labels=["BF", "ADF"], verbose=False)
+    try:
+        np.testing.assert_array_equal(_decode_png(single), _decode_png(clean))
+        assert [spec["label"] for spec in gallery._static_panel_specs()] == ["BF", "ADF"]
+    finally:
+        single.close()
+        clean.close()
+        gallery.close()
 
 
 def test_static_png_shows_diff_panel_and_rgb_pixels():
