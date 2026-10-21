@@ -17,9 +17,9 @@
 
 import { spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -30,9 +30,25 @@ const repoRoot = path.resolve(scriptDir, "..");
 export const SCIENCE_DOMAINS = ["detector/", "dpc/", "formats/", "io/", "ssb/"];
 export const PINNED_GPU_REF = readFileSync(path.join(repoRoot, "gpu-ref.txt"), "utf8").trim();
 
+/** quantem.gpu's src directory beside this checkout (``../quantem.gpu/src``), or null. */
+export function siblingGpuSource(root = repoRoot) {
+  const candidate = path.resolve(root, "..", "quantem.gpu", "src");
+  return existsSync(path.join(candidate, "quantem", "gpu", "webgpu", "sources.json")) ? candidate : null;
+}
+
 export function syncGpuWebgpuSources({ targetDir = "js/.generated/engine" } = {}) {
   const outputDir = path.isAbsolute(targetDir) ? targetDir : path.join(repoRoot, targetDir);
   const python = process.env.PYTHON || "python";
+  // Where the kernels come from: QUANTEM_GPU_SRC, else the quantem.gpu installed in PYTHON when PYTHON
+  // is set, else a quantem.gpu checkout beside this one, else the quantem.gpu installed in "python".
+  const env = { ...process.env };
+  if (!env.QUANTEM_GPU_SRC && !env.PYTHON) {
+    const sibling = siblingGpuSource();
+    if (sibling) {
+      env.QUANTEM_GPU_SRC = sibling;
+      console.log(`using the quantem.gpu checkout beside this one, ${sibling}; set QUANTEM_GPU_SRC or PYTHON to choose another`);
+    }
+  }
   const code = `
 import json
 import os
@@ -59,29 +75,15 @@ print(json.dumps({
     },
 }))
 `;
-  const runExport = (env = process.env) => spawnSync(python, ["-c", code], {
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-    env,
-  });
-
-  let result = runExport();
-  if (result.status !== 0 && !process.env.QUANTEM_GPU_SRC) {
-    const home = process.env.HOME || "";
-    const srcDir = [
-      path.resolve(repoRoot, "../quantem.gpu/src"),
-      path.resolve(repoRoot, "../../quantem.gpu/src"),
-      home ? path.resolve(home, "repos/quantem.gpu/src") : "",
-    ].find((dir) => dir && existsSync(dir));
-    if (srcDir) result = runExport({ ...process.env, QUANTEM_GPU_SRC: srcDir });
-  }
+  const result = spawnSync(python, ["-c", code], { encoding: "utf8", maxBuffer: 20 * 1024 * 1024, env });
   if (result.status !== 0) {
     const detail = (result.stderr || result.stdout || "").trim().split("\n").pop();
     throw new Error(
       "The widget bundles take quantem.gpu's borrowed-image contract and WebGPU science " +
       "kernels, and no quantem.gpu source was found. Set QUANTEM_GPU_SRC to the quantem.gpu " +
       "src directory (QUANTEM_GPU_SRC=/path/to/quantem.gpu/src npm run build) of a checkout " +
-      `at ${PINNED_GPU_REF} (gpu-ref.txt), or install quantem.gpu in the Python named by PYTHON. (${detail})`
+      `at ${PINNED_GPU_REF} (gpu-ref.txt), clone quantem.gpu beside this repository (../quantem.gpu), ` +
+      `or name a Python with quantem.gpu installed (PYTHON=/path/to/python npm run build). (${detail})`
     );
   }
 
@@ -128,6 +130,9 @@ function sha256s(dir, names) {
   ]));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run directly (node scripts/sync-gpu-webgpu.mjs), not imported by build.mjs, quantem.live or
+// `node -e` (no script path). Node resolves symlinks and URL-encodes the module URL, so compare
+// like with like: a raw `file://${path}` misses paths with spaces and the sync silently did nothing.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   syncGpuWebgpuSources();
 }

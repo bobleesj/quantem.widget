@@ -2,12 +2,10 @@
 
 import base64
 import io
-import json
 import math
 from pathlib import Path
 
 import anywidget
-import matplotlib.pyplot as plt
 import numpy as np
 import traitlets
 from matplotlib.colors import ListedColormap
@@ -17,7 +15,7 @@ from quantem.widget.colormap import colormap_lut, colormap_names
 from quantem.widget.fallback import StaticFallbackMixin
 from quantem.widget.state import SavedStateMixin
 from quantem.widget.utils.array import _b64_safe, to_numpy
-from quantem.widget.utils.state_io import unwrap_state_payload
+from quantem.widget.utils.state_io import read_state
 
 
 class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
@@ -62,7 +60,7 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
     """
 
     _esm = Path(__file__).parent / "static" / "plot2d.js"
-    _static_fallback_jpeg = traitlets.Unicode("").tag(sync=True)
+    _static_fallback_image = traitlets.Unicode("").tag(sync=True)
     _static_fallback_mime = traitlets.Unicode("image/png").tag(sync=True)
     _UNSAVED_HEAVY_KEYS = ("data_bytes",)
     data_bytes = traitlets.Bytes().tag(sync=True)
@@ -103,10 +101,12 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
         save_state: bool = False,
         state: dict | str | Path | None = None,
     ) -> None:
+        # a state this widget cannot load is refused before the model opens: a registered widget stays alive, holding its data
+        state = None if state is None else read_state(state, "Plot2D", self._STATE_KEYS)
         self._save_state = bool(save_state)
         self._configure_static_fallback(notebook_preview_format="png")
         super().__init__()
-        self.x, self.y = np.array(x, dtype=float, copy=True), np.array(y, dtype=float, copy=True)
+        self.x, self.y = to_numpy(x).astype(float), to_numpy(y).astype(float)  # own float64 copies, from any array-like
         edges = []
         for name, centers in (("x", self.x), ("y", self.y)):
             if centers.ndim != 1 or len(centers) < 2 or not np.isfinite(centers).all():
@@ -148,7 +148,7 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
 
     def _invalidate_preview(self, change: dict | None = None) -> None:
         """Drop the cached preview so the next notebook save re-renders the current view."""
-        self._static_fallback_jpeg = ""
+        self._static_fallback_image = ""
 
     @traitlets.validate("cmap")
     def _validate_cmap(self, proposal: dict) -> str:
@@ -201,23 +201,19 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
     def load_state_dict(self, state: dict | str | Path) -> None:
         """Restore a view onto this map: a ``save`` file, its JSON payload, or a bare ``state_dict``.
 
-        A file written by another widget is refused, and the color limits must
-        pass the constructor's check before anything is applied. Unknown keys
-        are skipped.
+        A file written by another widget or under another ``schema`` is
+        refused, an unknown key raises, and the color limits must pass the
+        constructor's check, all before anything is applied.
 
         Examples
         --------
         >>> plot.save("g3_view.json")
         >>> other.load_state_dict("g3_view.json")
         """
-        if isinstance(state, (str, Path)):
-            state = unwrap_state_payload(json.loads(Path(state).read_text()), require_envelope=True, expected_widget="Plot2D")
-        else:
-            state = unwrap_state_payload(state, expected_widget="Plot2D")
+        state = read_state(state, "Plot2D", self._STATE_KEYS)
         self._check_limits(state.get("vmin", self.vmin), state.get("vmax", self.vmax))
         for key, value in state.items():
-            if key in self._STATE_KEYS:
-                setattr(self, key, value)
+            setattr(self, key, value)
 
     def _static_png_b64(self, max_px: int = 512) -> str | None:
         """Render a bounded saved preview without modifying scientific data."""
@@ -230,7 +226,9 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
     def _make_figure(self, max_bins: int | None = None) -> Figure:
         """Draw exact data for export or a strided, bounded notebook preview."""
         size = (5, 4) if max_bins is None else (max_bins / 100, max_bins * 0.8 / 100)
-        figure, axes = plt.subplots(figsize=size, layout="constrained")
+        # an unmanaged Figure: no pyplot backend, nothing to close, nothing the inline backend redraws
+        figure = Figure(figsize=size, layout="constrained")
+        axes = figure.add_subplot()
         values = self.data
         x, y = self.x, self.y
         shading = "nearest"
@@ -256,5 +254,4 @@ class Plot2D(SavedStateMixin, StaticFallbackMixin, anywidget.AnyWidget):
         if self.horizontal_line is not None:
             axes.axhline(self.horizontal_line, color="#e649a0", linestyle=":")
         figure.colorbar(mesh, ax=axes, label=self.colorbar_label)
-        plt.close(figure)
         return figure

@@ -10,7 +10,6 @@ preview.
 
 import math
 import pathlib
-import warnings
 from collections.abc import Mapping, Sequence
 from typing import Self
 
@@ -33,18 +32,21 @@ from quantem.widget.pages import PagesMixin
 from quantem.widget.panels import PanelsMixin
 from quantem.widget.show2d.options import (
     _expand_title_spans_for_flattened_labels,
-    _normalise_title_span_sequence,
+    _normalize_title_span_sequence,
     _normalize_panel_annotations,
+    _validate_panel_overlays_trait,
     _normalize_panel_overlays,
 )
-from quantem.widget.show2d.widget import _nonnegative_int
+from quantem.widget.show2d.widget import _BROWSER_DENOISE_MODES, _nonnegative_int
 from quantem.widget.show3d.export import Show3DExport
 from quantem.widget.show3d.fallback import Show3DFallback
 from quantem.widget.show3d.playback import Show3DPlayback
 from quantem.widget.utils.array import bin2d, to_numpy
 from quantem.widget.utils.display_filter import format_display_filter_banner
+from quantem.widget.utils.state_io import read_state
 from quantem.widget.state import SavedStateMixin, announce_browser_limit
-from quantem.widget.utils.ui import UiMode, resolve_ui_mode
+from quantem.widget.units import image_axes, per_axis, unit_entry
+from quantem.widget.utils.ui import UiMode, resolve_ui_mode, validate_display_limits
 
 
 _MAX_PLAYBACK_FPS = 60.0
@@ -157,9 +159,11 @@ class Show3D(
         defaults to ``False`` because panels may be different physical
         quantities.
     sampling : float or sequence of float, optional
-        Pixel size for the scale bar. A sequence uses its first entry.
+        Pixel size for the scale bar. A ``(row, col)`` sequence uses its last
+        (column) entry, the axis the horizontal bar measures.
     units : str or sequence of str, optional
-        Unit of ``sampling`` (``"A"``, ``"nm"``, ...).
+        Unit of ``sampling`` (``"A"``, ``"nm"``, ...); a sequence uses its last entry.
+        Alone on a calibrated dataset it is the unit the dataset's step is shown in.
     smooth : bool
         Bilinear interpolation when the canvas enlarges a frame. Default False
         paints every data pixel as a sharp block (nearest neighbour).
@@ -181,7 +185,7 @@ class Show3D(
         Display width per panel in CSS pixels; 0 uses the frontend default.
     max_cols : int, optional
         Panels per row; 0 is one row.
-    panel_gap : int
+    panel_gap_px : int
         Gap between panels in CSS pixels.
     dim_label : str
         Name of the frame axis in the controls ("Frame", "Slice", ...).
@@ -190,9 +194,6 @@ class Show3D(
         native pixels; a larger factor shrinks the payload of a large stack
         and prints one line naming the reduction. GIF exports always
         render the native arrays.
-    offline : bool, optional
-        Accepted and ignored, for callers that distinguish live from exported
-        widgets: the browser always plays from the one embedded display stack.
     save_state : bool
         Persist the pixel traits into the saved notebook so it reopens
         interactively without a kernel. Default False keeps a static preview.
@@ -218,11 +219,12 @@ class Show3D(
     height = traitlets.Int(1).tag(sync=True)
     width = traitlets.Int(1).tag(sync=True)
     # Browser-owned display filters. Python only mirrors the state and
-    # announces an active reduction; the stored stack is never filtered.
-    denoise = traitlets.Unicode("none").tag(sync=True)
+    # announces an active reduction; the stored stack is never filtered. The
+    # browser compares a mode to its filter names as written, so the traits take only those.
+    denoise = traitlets.Enum(_BROWSER_DENOISE_MODES, default_value="none").tag(sync=True)
     denoise_sigma = traitlets.Float(4.0).tag(sync=True)
     denoise_bin = traitlets.Int(1).tag(sync=True)
-    denoise_modes = traitlets.List(traitlets.Unicode()).tag(sync=True)
+    denoise_modes = traitlets.List(traitlets.Enum(_BROWSER_DENOISE_MODES)).tag(sync=True)
     denoise_sigmas = traitlets.List(traitlets.Float()).tag(sync=True)
     denoise_bins = traitlets.List(traitlets.Int()).tag(sync=True)
     denoise_scope = traitlets.Enum(["all", "panel"], default_value="all").tag(sync=True)
@@ -247,7 +249,7 @@ class Show3D(
     # effects even when a Bytes trait compares identical.
     frame_seq = traitlets.Int(0).tag(sync=True)
     _export_light = traitlets.Bool(False).tag(sync=True)
-    _static_fallback_jpeg = traitlets.Unicode("").tag(sync=True)
+    _static_fallback_image = traitlets.Unicode("").tag(sync=True)
     _static_fallback_mime = traitlets.Unicode("image/jpeg").tag(sync=True)
     # Transport: the browser slices every frame from this one embedded display
     # stack, exact float32 (live widget, full export) or uint8 (quantized export).
@@ -272,7 +274,8 @@ class Show3D(
     n_panels = traitlets.Int(1).tag(sync=True)
     panel_titles = traitlets.List(traitlets.Unicode()).tag(sync=True)
     panel_title_spans = traitlets.List(default_value=[]).tag(sync=True)
-    panel_width_px = traitlets.Int(0).tag(sync=True)
+    # image columns of one panel in the concatenated display stack (0: one panel spans the frame)
+    num_panel_cols = traitlets.Int(0).tag(sync=True)
     shared_panel_source = traitlets.Bool(False).tag(sync=True)
     # One starred frame per panel; -1 = unset.
     starred = traitlets.List(traitlets.Int()).tag(sync=True)
@@ -295,8 +298,7 @@ class Show3D(
     show_resize_handles = traitlets.Bool(True).tag(sync=True)
     show_zoom_indicator = traitlets.Bool(False).tag(sync=True)
     show_panel_titles = traitlets.Bool(True).tag(sync=True)
-    inter_panel_gap_px = traitlets.Int(0).tag(sync=True)
-    panel_gap = traitlets.Int(0).tag(sync=True)
+    panel_gap_px = traitlets.Int(0).tag(sync=True)
 
     playing = traitlets.Bool(False).tag(sync=True)
     reverse = traitlets.Bool(False).tag(sync=True)
@@ -338,7 +340,7 @@ class Show3D(
 
     pixel_size = traitlets.Float(0.0).tag(sync=True)
     pixel_unit = traitlets.Unicode("A").tag(sync=True)
-    scale_bar_visible = traitlets.Bool(True).tag(sync=True)
+    show_scale_bar = traitlets.Bool(True).tag(sync=True)
     smooth = traitlets.Bool(False).tag(sync=True)
     image_rotation = traitlets.Int(0).tag(sync=True)
     rotation_scope = traitlets.Enum(["all", "frame"], default_value="all").tag(sync=True)
@@ -350,7 +352,7 @@ class Show3D(
     roi_list = traitlets.List([]).tag(sync=True)
     roi_selected_idx = traitlets.Int(-1).tag(sync=True)
     roi_plot_data = traitlets.Bytes(b"").tag(sync=True)
-    size = traitlets.Int(0).tag(sync=True)
+    panel_width_px = traitlets.Int(0).tag(sync=True)  # canvas width per panel in CSS pixels; 0 = frontend default
 
     diff_mode = traitlets.Enum(["off", "previous", "first"], default_value="off").tag(sync=True)
     compare_mode = traitlets.Enum(["off", "blink", "difference", "overlay"], default_value="off").tag(sync=True)
@@ -418,27 +420,7 @@ class Show3D(
         n_slices = max(1, int(self.n_slices))
         return max(0, min(n_slices - 1, int(proposal["value"])))
 
-    @traitlets.validate("vmax")
-    def _validate_vmax(self, proposal: dict) -> float | None:
-        """A manual upper limit must be finite and not below ``vmin``."""
-        new_vmax = proposal["value"]
-        if new_vmax is not None:
-            if not math.isfinite(new_vmax):
-                raise traitlets.TraitError(f"vmax must be finite, got {new_vmax}")
-            if self.vmin is not None and new_vmax < self.vmin:
-                raise traitlets.TraitError(f"vmax ({new_vmax}) must be >= vmin ({self.vmin})")
-        return new_vmax
-
-    @traitlets.validate("vmin")
-    def _validate_vmin(self, proposal: dict) -> float | None:
-        """A manual lower limit must be finite and not above ``vmax``."""
-        new_vmin = proposal["value"]
-        if new_vmin is not None:
-            if not math.isfinite(new_vmin):
-                raise traitlets.TraitError(f"vmin must be finite, got {new_vmin}")
-            if self.vmax is not None and new_vmin > self.vmax:
-                raise traitlets.TraitError(f"vmin ({new_vmin}) must be <= vmax ({self.vmax})")
-        return new_vmin
+    _validate_vmin_vmax = traitlets.validate("vmin", "vmax")(validate_display_limits)
 
     @traitlets.validate("cmap")
     def _validate_cmap(self, proposal: dict) -> str:
@@ -598,6 +580,8 @@ class Show3D(
             return -1
         return min(value, max(0, len(self.roi_list) - 1))
 
+    _validate_panel_overlays = traitlets.validate("panel_overlays")(_validate_panel_overlays_trait)
+
     @traitlets.validate("roi_list")
     def _validate_roi_list(self, proposal: dict) -> list:
         """Every ROI has a known shape and non-negative sizes, so the mask and the outline agree."""
@@ -704,10 +688,9 @@ class Show3D(
         fft_overlay_zoom: float = 1.0,
         panel_width_px: int = 0,
         max_cols: int | None = None,
-        panel_gap: int = 0,
+        panel_gap_px: int = 0,
         dim_label: str = "Frame",
         display_bin: int = 1,
-        offline: bool | None = None,
         save_state: bool = False,
         notebook_preview_format: str | None = "jpeg",
         notebook_preview_quality: int = 88,
@@ -756,7 +739,6 @@ class Show3D(
             notebook_preview_quality=notebook_preview_quality,
             notebook_preview_max_px=notebook_preview_max_px,
         )
-        gap = _nonnegative_int(panel_gap, name="panel_gap")
         super().__init__(
             show_title=bool(ui["show_title"]),
             show_controls=bool(ui["show_controls"]),
@@ -765,9 +747,8 @@ class Show3D(
             show_panel_titles=bool(ui["show_panel_titles"]),
             show_resize_handles=bool(ui["show_resize_handles"]),
             show_zoom_indicator=bool(ui["show_zoom_indicator"]),
-            scale_bar_visible=bool(ui["show_scale_bar"]),
-            inter_panel_gap_px=gap,
-            panel_gap=gap,
+            show_scale_bar=bool(ui["show_scale_bar"]),
+            panel_gap_px=_nonnegative_int(panel_gap_px, name="panel_gap_px"),
         )
         self._static_fallback_mime = self._static_fallback_mime_type()
         # hold_sync batches every trait assignment into one comm message; a
@@ -797,7 +778,7 @@ class Show3D(
             self.show_fft = bool(show_fft)
             self.fft_layout = fft_layout
             self.fft_overlay_zoom = fft_overlay_zoom
-            self.size = panel_width_px
+            self.panel_width_px = panel_width_px
             self.dim_label = str(dim_label)
             n_panels = int(self.n_panels)
             self.denoise_scope = "all" if n_panels <= 1 else "panel"
@@ -834,7 +815,7 @@ class Show3D(
         """Validate the input stacks and set every data-derived trait.
 
         Panels are concatenated along the column axis into one wide frame so the
-        browser receives a single display stack; ``panel_width_px`` tells it
+        browser receives a single display stack; ``num_panel_cols`` tells it
         where each panel starts. Stacks of unequal length are padded with their
         last frame and ``panel_real_frames`` records the true counts.
         """
@@ -842,14 +823,17 @@ class Show3D(
             raise TypeError("Show3D requires at least one data argument")
         if len(data_args) == 1 and isinstance(data_args[0], (list, tuple)) and len(data_args[0]) > 0:
             data_args = tuple(data_args[0])
-        plain_titles, spans_from_titles = _normalise_title_span_sequence(panel_titles)
+        plain_titles, spans_from_titles = _normalize_title_span_sequence(panel_titles)
         span_count = len(plain_titles or []) if spans_from_titles else 0
         # A 5D (pages, panels, N, H, W) array is a paged gallery: every page
         # shows ``panels`` stacks and the browser scrubs pages with one control,
         # so it flattens into the ordinary multi-panel path.
         n_pages, panels_per_page, resolved_page_labels = 1, 0, []
-        if len(data_args) == 1 and isinstance(data_args[0], (np.ndarray, torch.Tensor)) and to_numpy(data_args[0]).ndim == 5:
-            paged = to_numpy(data_args[0])
+        if len(data_args) == 1 and not core_adapter.is_dataset(data_args[0]):
+            # one array argument (NumPy, torch, CuPy, ...) is converted here once; a dataset keeps its calibration below
+            data_args = (to_numpy(data_args[0]),)
+        if len(data_args) == 1 and data_args[0].ndim == 5:
+            paged = data_args[0]
             n_pages, panels_per_page = int(paged.shape[0]), int(paged.shape[1])
             resolved_page_labels = [
                 "" if label is None else str(label)
@@ -868,18 +852,21 @@ class Show3D(
                 )
             data_args = tuple(paged.reshape(n_pages * panels_per_page, *paged.shape[2:]))
         first = data_args[0]
-        dataset_sampling = None
-        dataset_unit = None
         dim_sampling = None
         dim_unit = None
         if core_adapter.is_dataset(first, ndim=2) or core_adapter.is_dataset(first, ndim=3):
             title = title or (first.name or "")
-            # the image axes are the last two; a stack's first axis is its frames
-            dataset_sampling = float(first.sampling[-2])
-            dataset_unit = str(first.units[-2])
+            # a Dataset3d in nm is shown in Angstrom so the scale bar matches the other quantem viewers
+            if sampling is None and units is None and str(first.units[-1]) == "nm" and float(first.sampling[-1]) > 0:
+                units = "A"
+            # the image axes are the last two; a stack's first axis is its frames. The
+            # horizontal scale bar measures columns, the last axis.
+            sampling, units = image_axes(sampling, units, first)
             if len(first.sampling) >= 3:
                 dim_sampling = float(first.sampling[0])
                 dim_unit = str(first.units[0])
+        else:
+            sampling, units = image_axes(sampling, units)
         panels = []
         for index, item in enumerate(data_args):
             stack = to_numpy(item)
@@ -961,7 +948,7 @@ class Show3D(
             self._multi_panel_bin = 0
             data = np.concatenate(arrays, axis=2) if len(arrays) > 1 else arrays[0]
         self._panel_width = int(arrays[0].shape[2])
-        self.panel_width_px = self._panel_width if len(arrays) > 1 else 0
+        self.num_panel_cols = self._panel_width if len(arrays) > 1 else 0
         self.is_rgb = bool(is_rgb)
         self._data = self._establish_rgb_luminance(data, is_rgb=is_rgb)
         self.n_slices = int(self._data.shape[0])
@@ -985,18 +972,15 @@ class Show3D(
             self.source_height = int(self._data.shape[1])
             self.source_panel_width = native_width if shared else max(1, int(self._data.shape[2]) // len(arrays))
         if shared:
-            self.panel_width_px = self.width
-        # Explicit sampling/units win; a Dataset3d in nm is shown in Angstrom
-        # so the scale bar matches the other quantem viewers.
-        pixel_size = 0.0 if sampling is None else float(sampling[0] if isinstance(sampling, (tuple, list)) else sampling)
-        pixel_unit = None if units is None else str(units[0] if isinstance(units, (tuple, list)) else units)
-        dataset_in_nm = dataset_unit in ("nm", "nanometer")
-        if pixel_size == 0.0 and dataset_sampling is not None:
-            pixel_size = dataset_sampling * (10 if dataset_in_nm and pixel_unit in (None, "A", "Å", "angstrom", "Angstrom") else 1)
-        if pixel_unit is None:
-            pixel_unit = "A" if dataset_in_nm else (dataset_unit or "A")
+            self.num_panel_cols = self.width
+        # the column step and its unit, resolved with the dataset by image_axes above
+        pixel_size = 0.0 if sampling is None else float(per_axis(sampling, 2)[-1])
+        pixel_unit = "A" if units is None else str(per_axis(units, 2)[-1])
+        # one unit table for every widget: an unknown string raises, an uncalibrated axis is absent
+        if unit_entry(pixel_unit)[0] == "pixels":
+            pixel_size, pixel_unit = 0.0, "px"
         self.pixel_size = pixel_size * max(1, int(self.display_bin))
-        self.pixel_unit = pixel_unit or "A"
+        self.pixel_unit = pixel_unit
         self.dim_sampling = dim_sampling or 1.0
         self.dim_unit = dim_unit or ""
         self.title = title
@@ -1112,7 +1096,7 @@ class Show3D(
             self._offline_float_stack = b""
             self._offline_mins = []
             self._offline_maxs = []
-            self._static_fallback_jpeg = ""
+            self._static_fallback_image = ""
             self.slice_idx = 0
             self.bookmarked_frames = []
             self.loop_start = 0
@@ -1185,13 +1169,13 @@ class Show3D(
         # the cross-validators accept a round trip in dict order.
         "percentile_high", "percentile_low", "image_vmin_pct", "image_vmax_pct", "contrast_preset",
         "vmin", "vmax", "link_contrast", "link_panels", "view_state", "vmin_per_panel", "vmax_per_panel",
-        "show_title", "show_stats", "show_controls", "controls_collapsed", "max_cols", "panel_gap",
-        "inter_panel_gap_px", "show_panel_titles", "show_zoom_indicator", "show_fft", "fft_layout",
+        "show_title", "show_stats", "show_controls", "controls_collapsed", "max_cols",
+        "panel_gap_px", "show_panel_titles", "show_zoom_indicator", "show_fft", "fft_layout",
         "fft_overlay_position", "fft_overlay_size", "fft_overlay_zoom", "show_kymograph", "fft_window",
         "pixel_size", "pixel_unit", "smooth", "image_rotation", "rotation_scope", "frame_rotations",
-        "flip_horizontal", "flip_vertical", "scale_bar_visible", "size", "fps", "avg_window", "loop",
+        "flip_horizontal", "flip_vertical", "show_scale_bar", "panel_width_px", "fps", "avg_window", "loop",
         "reverse", "boomerang", "loop_end", "loop_start", "bookmarked_frames", "starred", "hidden_panels",
-        "selected_panels", "panel_order", "n_pages", "page_idx", "panels_per_page", "page_labels",
+        "selected_panels", "panel_order", "page_idx", "page_labels",
         "page_starred", "hidden_page_slots", "playback_path", "slice_idx", "roi_active", "roi_list",
         "roi_selected_idx", "profile_line", "profile_width", "diff_mode", "compare_mode", "compare_pair",
         "blink_fps", "diff_cmap", "compare_background", "panel_annotations", "panel_overlays",
@@ -1215,15 +1199,18 @@ class Show3D(
             state[key] = dict(value) if isinstance(value, dict) else list(value) if isinstance(value, list) else value
         return state
 
-    def load_state_dict(self, state: dict) -> None:
-        """Apply a ``state_dict`` snapshot, dropping keys that no longer fit.
+    def load_state_dict(self, state: dict | str | pathlib.Path) -> None:
+        """Apply a ``state_dict`` snapshot, its envelope or a ``save`` file, dropping keys that no longer fit.
 
         Length-coupled keys whose size disagrees with the current stack or
         panel count are skipped so a state saved from one trial loads onto
         another. Cross-validated pairs (percentiles, vmin/vmax, loop range) are
-        applied in an order the validators accept. Unknown keys warn.
+        applied in an order the validators accept. A file of another
+        ``schema`` or an unknown key raises before anything is applied. The
+        page layout (``n_pages``, ``panels_per_page``) comes from the data and
+        is not part of the state.
         """
-        state = dict(state)
+        state = dict(read_state(state, "Show3D", ("_widget", *self._STATE_KEYS)))
         marker = state.pop("_widget", None)
         if marker is not None and marker != "Show3D":
             raise ValueError(f"load_state_dict: state was saved from {marker!r}, not Show3D.")
@@ -1237,20 +1224,15 @@ class Show3D(
         if "hidden_panels" in state:
             state["hidden_panels"] = sorted({int(panel) for panel in state["hidden_panels"] if 0 <= int(panel) < n_panels})[: n_panels - 1]
         if int(self.n_pages) > 1:
-            state["n_pages"] = int(self.n_pages)
-            state["panels_per_page"] = int(self.panels_per_page)
             for key in ("page_labels", "page_starred"):
                 if key in state and len(state[key]) != int(self.n_pages):
                     state.pop(key)
         else:
-            for key in ("n_pages", "page_idx", "panels_per_page", "page_labels", "page_starred", "hidden_page_slots"):
+            for key in ("page_idx", "page_labels", "page_starred", "hidden_page_slots"):
                 state.pop(key, None)
         if n_panels > 1:
             for key in ("roi_active", "roi_list", "roi_selected_idx"):
                 state.pop(key, None)
-        unknown = [key for key in state if key not in self._STATE_KEYS]
-        for key in unknown:
-            state.pop(key)
         if "vmin_per_panel" in state or "vmax_per_panel" in state:
             self.vmin_per_panel = [None] * n_panels
             self.vmax_per_panel = [None] * n_panels
@@ -1281,8 +1263,6 @@ class Show3D(
             self.loop_start = start if end < 0 else min(start, end)
         for key, value in state.items():
             setattr(self, key, value)
-        if unknown:
-            warnings.warn(f"load_state_dict ignored unknown keys: {unknown}.", stacklevel=2)
 
     def _panel_count(self) -> int:
         """Number of panels, for the shared panel and page helpers (``PanelsMixin`` hook)."""

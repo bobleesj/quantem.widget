@@ -15,6 +15,8 @@ from ase.io import read
 from scipy.integrate import simpson
 from scipy.special import j0
 
+from quantem.widget.colormap import COLORMAP_POINTS
+
 
 class ShowCIF(anywidget.AnyWidget):
     """Show linked 3D atoms and an orthographic column projection.
@@ -85,11 +87,8 @@ class ShowCIF(anywidget.AnyWidget):
     potential_sigma_A = traitlets.Float(0.08).tag(sync=True)
     potential_pixels = traitlets.Int(256).tag(sync=True)
     energy_keV = traitlets.Float(300).tag(sync=True)
-    potential_colormap = traitlets.Enum(
-        ["inferno", "viridis", "plasma", "magma", "magenta", "hot", "gray", "hsv", "turbo",
-         "cividis", "RdBu", "RdBu_r", "seismic", "twilight", "twilight_shifted"],
-        default_value="viridis",
-    ).tag(sync=True)
+    # the potential map is painted in the browser, so every colormap it has a LUT for is offered
+    potential_colormap = traitlets.Enum(list(COLORMAP_POINTS), default_value="viridis").tag(sync=True)
     potential_quantity = traitlets.Enum(["integrated", "average", "phase"], default_value="average").tag(sync=True)
     num_slices = traitlets.Int(16).tag(sync=True)
     view_mode = traitlets.Enum(["unit_cells", "microscope"], default_value="unit_cells").tag(sync=True)

@@ -1,4 +1,3 @@
-import * as React from "react";
 import { scaleBarWidth } from "./geometry";
 
 /** WCAG relative luminance of an sRGB colour given as 0 to 255 per channel. */

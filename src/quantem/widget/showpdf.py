@@ -440,7 +440,7 @@ class ShowPDF(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidget.A
 
     _esm = pathlib.Path(__file__).parent / "static" / "showpdf.js"
     # A notebook saved with save_state=False keeps this static picture instead of these traits.
-    _static_fallback_jpeg = traitlets.Unicode("").tag(sync=True)
+    _static_fallback_image = traitlets.Unicode("").tag(sync=True)
     _static_fallback_mime = traitlets.Unicode("image/png").tag(sync=True)
     _UNSAVED_HEAVY_KEYS = ("nav_image_bytes", "mask_b64", "mask_bytes", "linescan_bytes", "export_payload")
 
@@ -1740,7 +1740,7 @@ class ShowPDF(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidget.A
 
     def _invalidate_preview(self, change=None):
         """Drop the stored preview, so the next notebook save draws the current view."""
-        self._static_fallback_jpeg = ""
+        self._static_fallback_image = ""
 
     # =========================================================================
     # Saving results
@@ -2223,7 +2223,7 @@ class ShowPDF(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidget.A
         model_state["export_status"] = ""
         model_state["export_payload_id"] = ""
         model_state["export_filename"] = ""
-        model_state["_static_fallback_jpeg"] = ""  # the page shows the widget, not a saved picture
+        model_state["_static_fallback_image"] = ""  # the page shows the widget, not a saved picture
         model_state["offline"] = True
         replaced = {"export_payload", "offline_qq"}
         if profiles:

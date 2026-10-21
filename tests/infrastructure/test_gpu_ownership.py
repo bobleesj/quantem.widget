@@ -217,7 +217,7 @@ def test_widget_owns_display_kernels_and_syncs_only_science() -> None:
 
 
 def test_every_build_bundles_the_quantem_gpu_ref_in_gpu_ref_txt() -> None:
-    """CI, docs and release check out one quantem.gpu ref, the one the [cuda]/[mps] floor names."""
+    """Every build uses one immutable GPU commit or the runtime floor's tag."""
     repo = Path(__file__).resolve().parents[2]
     workflows = {path.name: path.read_text(encoding="utf-8") for path in (repo / ".github" / "workflows").glob("*.yml")}
     builds = sorted(name for name, text in workflows.items() if "npm run build" in text)
@@ -229,7 +229,14 @@ def test_every_build_bundles_the_quantem_gpu_ref_in_gpu_ref_txt() -> None:
         assert "QUANTEM_GPU_SRC: ${{ github.workspace }}/quantem-gpu-src/src" in text, name
     pinned = (repo / "gpu-ref.txt").read_text(encoding="utf-8").strip()
     bounds = re.findall(r'"quantem\.gpu\[(?:cuda|mps)\]>=([^,;"]+),<([^;"]+)', (repo / "pyproject.toml").read_text(encoding="utf-8"))
-    assert [f"gpu-v{floor}" for floor, _ in bounds] == [pinned, pinned]
+    assert len(bounds) == 2
+    assert bounds[0] == bounds[1]
+    # Development builds can pin a qualified commit before the next release.
+    # Reject movable branches and abbreviated hashes; release tags still match
+    # the runtime dependency floor. Source qualification does not prove that an
+    # older published runtime provides every API in the development checkout.
+    if re.fullmatch(r"[0-9a-f]{40}", pinned) is None:
+        assert [f"gpu-v{floor}" for floor, _ in bounds] == [pinned, pinned]
     # the next quantem.gpu rc may change the kernels and API this release bundles
     for floor, ceiling in bounds:
         prefix, number = floor.split("rc")
@@ -260,8 +267,9 @@ def test_sync_writes_a_manifest_of_the_pinned_ref_and_every_file(tmp_path) -> No
     assert all(name.startswith(("detector/", "dpc/", "formats/", "io/", "ssb/")) for name in manifest["files"])
     assert sorted(manifest["generated"]) == ["device/webgpu.ts"]
     assert "detector/webgpu/borrowed-image.ts" in manifest["files"]
-    # one line names the source and the commit it synced from
-    (line,) = result.stdout.strip().splitlines()
+    # one line names the source and the commit it synced from; a checkout found beside this one is named first
+    *found, line = result.stdout.strip().splitlines()
+    assert len(found) <= 1 and all(note.startswith("using the quantem.gpu checkout beside this one, ") for note in found)
     assert line.startswith(f"synced {len(manifest['files'])} quantem.gpu science kernel files from ")
     assert engine["git_sha"] is None or f"at {engine['ref']} ({engine['git_sha'][:12]})" in line
 

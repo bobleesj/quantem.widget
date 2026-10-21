@@ -89,32 +89,27 @@ def _mos2_like_stack(frames: int, rows: int, cols: int) -> np.ndarray:
     return np.stack(out, axis=0)
 
 
-def _make(widget, *, save_state):
+def _make(widget, **options):
     """Construct a small instance of each widget plus the trait key that carries
     its live-render pixels (the one that must survive the targeted send path)."""
     if widget is Plot2D:
         data = np.arange(24, dtype=float).reshape(4, 6)
-        return Plot2D(data, x=np.arange(6), y=np.arange(4),
-                      save_state=save_state), "data_bytes"
+        return Plot2D(data, x=np.arange(6), y=np.arange(4), **options), "data_bytes"
     if widget is Show1D:
         # snapshot_bytes is empty on a plain trace widget but the KEY must
         # still survive the targeted path (it streams when a monitor attaches).
-        return Show1D(np.random.rand(64).astype("float32"),
-                      save_state=save_state), "snapshot_bytes"
+        return Show1D(np.random.rand(64).astype("float32"), **options), "snapshot_bytes"
     if widget is Show2D:
         data = [np.random.rand(128, 128).astype("float32") for _ in range(2)]
-        return Show2D(data, save_state=save_state), "frame_bytes"
+        return Show2D(data, **options), "frame_bytes"
     if widget is Show3D:
-        return Show3D(np.random.rand(4, 128, 128).astype("float32"),
-                      save_state=save_state), "_offline_float_stack"
+        return Show3D(np.random.rand(4, 128, 128).astype("float32"), **options), "_offline_float_stack"
     if widget is ShowPDF:
         rr, cc = np.mgrid[0:16, 0:16]
         pattern = (np.exp(-((np.hypot(rr - 7.5, cc - 7.5) - 4.0) ** 2) / 3.0) + 0.1).astype("float32")
         data = np.broadcast_to(pattern, (4, 4, 16, 16)).copy()
-        return ShowPDF(data, find_origin=False, origin_row=7.5, origin_col=7.5,
-                       save_state=save_state), "nav_image_bytes"
-    return Show4DSTEM(np.random.rand(8, 8, 16, 16).astype("float32"),
-                      save_state=save_state), "virtual_image_bytes"
+        return ShowPDF(data, find_origin=False, origin_row=7.5, origin_col=7.5, **options), "nav_image_bytes"
+    return Show4DSTEM(np.random.rand(8, 8, 16, 16).astype("float32"), **options), "virtual_image_bytes"
 
 
 WIDGETS = [Plot2D, Show1D, Show2D, Show3D, Show4DSTEM] + ([ShowPDF] if ShowPDF is not None else [])
@@ -176,7 +171,7 @@ def test_save_state_true_does_not_force_png(widget):
 def test_default_is_save_state_false(widget):
     """The whole point: persistence is opt-in. A plain construction must behave
     as save_state=False (static preview present)."""
-    w, _ = _make(widget, save_state=False)
+    w, _ = _make(widget)  # G-1: passing save_state=False here could not catch a flipped default
     assert w._save_state is False
 
 
@@ -188,29 +183,10 @@ def test_default_is_save_state_false(widget):
         ("png", "image/png", "PNG"),
     ],
 )
-@pytest.mark.parametrize("widget_cls", [Show3D])
-def test_notebook_preview_format_controls_saved_fallback(widget_cls, format_name, mime, pil_format):
-    """Show2D/Show3D should expose the saved-notebook preview format directly.
-
-    The compatibility trait name stays ``_static_fallback_jpeg`` for old
-    frontends, but the MIME trait tells the frontend how to interpret the bytes.
-    """
-    lattice = _mos2_like_stack(3, 64, 64)
-    if widget_cls is Show2D:
-        widget = Show2D(
-            lattice[0],
-            notebook_preview_format=format_name,
-            notebook_preview_quality=85,
-            save_state=False,
-            verbose=False,
-        )
-    else:
-        widget = Show3D(
-            lattice,
-            notebook_preview_format=format_name,
-            notebook_preview_quality=85,
-            save_state=False,
-        )
+def test_notebook_preview_format_controls_saved_fallback(format_name, mime, pil_format):
+    """Show3D exposes the saved-notebook preview format directly; the MIME trait
+    tells the frontend how to read the bytes of ``_static_fallback_image``."""
+    widget = Show3D(_mos2_like_stack(3, 64, 64), notebook_preview_format=format_name, notebook_preview_quality=85, save_state=False)
 
     bundle = widget._repr_mimebundle_()
     data = bundle[0] if isinstance(bundle, tuple) else bundle
@@ -223,9 +199,15 @@ def test_notebook_preview_format_controls_saved_fallback(widget_cls, format_name
 
     state = widget.get_state()
     assert state["_static_fallback_mime"] == mime
-    assert "_static_fallback_jpeg" in state
-    with Image.open(io.BytesIO(base64.b64decode(state["_static_fallback_jpeg"]))) as img:
+    assert "_static_fallback_image" in state
+    with Image.open(io.BytesIO(base64.b64decode(state["_static_fallback_image"]))) as img:
         assert img.format == pil_format
+
+
+def test_notebook_preview_format_refuses_another_spelling_at_construction():
+    # "jpg" passed the format check and then failed when the notebook was saved and the first preview was encoded
+    with pytest.raises(ValueError, match="notebook_preview_format must be 'jpeg', 'webp', 'png', or None"):
+        Show3D(_mos2_like_stack(3, 64, 64), notebook_preview_format="jpg", save_state=False)
 
 
 def test_show4dstem_notebook_preview_format_none_disables_static_preview():
@@ -243,7 +225,7 @@ def test_show4dstem_notebook_preview_format_none_disables_static_preview():
 
         assert not [key for key in IMAGE_MIME_KEYS if key in (data or {})]
         state = widget.get_state()
-        assert "_static_fallback_jpeg" not in state
+        assert "_static_fallback_image" not in state
         assert "_static_fallback_mime" not in state
     finally:
         widget.close()
@@ -445,14 +427,37 @@ def test_show2d_display_defers_static_png_render(monkeypatch):
     assert fill_meta == {"quantem.widget": {"static_fallback": True}}
 
 
+def test_docs_build_environment_is_not_quantem_core_config():
+    """quantem core reads every QUANTEM_* variable as its own config key and warns
+    about unknown ones; the docs build printed that warning on every tutorial page."""
+    import os
+    import re
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    pytest.importorskip("quantem.core")
+    workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "widget-docs.yml").read_text()
+    step = workflow[workflow.index("- run: jupyter-book build docs"):]
+    step = step[:step.index("\n      - ", 1)]
+    env = dict(re.findall(r'^\s+([A-Z][A-Z0-9_]+): "?([^"\n]*)"?$', step, re.M))
+    assert env.get("QW_STATIC_FALLBACK") == "0"
+    probe = ("import warnings\n"
+             "warnings.filterwarnings('error', message='Unknown configuration key')\n"
+             "import quantem.core.config\n")
+    run = subprocess.run([sys.executable, "-c", probe], env={**os.environ, **env},
+                         capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr[-600:]
+
+
 def test_static_fallback_env_kill_switch(monkeypatch):
-    """QUANTEM_WIDGET_STATIC_FALLBACK=0 (docs/CI builds) must emit ONLY the
+    """QW_STATIC_FALLBACK=0 (docs/CI builds) must emit ONLY the
     interactive widget output: no in-bundle preview image and no static
     sibling display, so built docs pages show a single widget, not a
     duplicate image under it."""
     import IPython
 
-    monkeypatch.setenv("QUANTEM_WIDGET_STATIC_FALLBACK", "0")
+    monkeypatch.setenv("QW_STATIC_FALLBACK", "0")
     frame = np.random.default_rng(9).random((32, 32)).astype(np.float32)
     widget = Show2D(frame, verbose=False)
 
@@ -536,7 +541,7 @@ def test_show2d_sibling_static_output_via_nbconvert(tmp_path):
     anymodel = next(s for s in widget_states.values() if s.get("model_name") == "AnyModel")
     body = dict(anymodel["state"])
     body.pop("_esm", None)
-    body.pop("_static_fallback_jpeg", None)
+    body.pop("_static_fallback_image", None)
     body.pop("_static_fallback_mime", None)
     buffer_bytes = sum(len(b["data"]) for b in anymodel.get("buffers", []))
     assert buffer_bytes < 20_000
@@ -559,9 +564,9 @@ def test_show2d_cmd_s_snapshot_keeps_static_preview_without_heavy_pixels():
     )
     state = widget.get_state()
 
-    assert "_static_fallback_jpeg" in state
+    assert "_static_fallback_image" in state
     assert state["_static_fallback_mime"] == "image/jpeg"
-    assert len(state["_static_fallback_jpeg"]) > 1000
+    assert len(state["_static_fallback_image"]) > 1000
     assert "frame_bytes" not in state
     assert "_detail_bytes" not in state
     assert "export_payload" not in state
@@ -578,8 +583,8 @@ def test_show4dstem_cmd_s_snapshot_keeps_two_panel_static_preview():
     data = rng.integers(0, 1000, (10, 12, 24, 24), dtype=np.uint16)
     widget = Show4DSTEM(
         data,
-        sampling=(0.2, 0.2, 0.8, 0.8),
-        units=["nm", "nm", "mrad", "mrad"],
+        scan_sampling_A=(2.0, 2.0),
+        detector_sampling_mrad=(0.8, 0.8),
         panel_width_px=128,
         save_state=False,
         verbose=False,
@@ -593,8 +598,8 @@ def test_show4dstem_cmd_s_snapshot_keeps_two_panel_static_preview():
 
     assert decoded.width > decoded.height
     assert decoded.width >= (decoded.height - 24) * 2 - 8
-    assert "_static_fallback_jpeg" in state
-    assert len(state["_static_fallback_jpeg"]) > 1000
+    assert "_static_fallback_image" in state
+    assert len(state["_static_fallback_image"]) > 1000
     assert "_offline_stack" not in state
     assert "export_payload" not in state
     assert "_gif_data" not in state

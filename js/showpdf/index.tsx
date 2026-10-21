@@ -3364,7 +3364,7 @@ function ShowPDFRoot() {
   const rootRef = React.useRef<HTMLDivElement>(null);
   const [scanRows] = useModelState<number>("scan_rows");
   const [navImageBytes] = useModelState<DataView>("nav_image_bytes");
-  const [preview] = useModelState<string>("_static_fallback_jpeg");
+  const [preview] = useModelState<string>("_static_fallback_image");
   const [previewMime] = useModelState<string>("_static_fallback_mime");
   const hasPixels = byteLength(navImageBytes) > 0;
   useHideStaticFallback(model, rootRef, hasPixels);

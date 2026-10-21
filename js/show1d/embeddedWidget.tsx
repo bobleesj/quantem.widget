@@ -1,82 +1,50 @@
 import * as React from "react";
+import type { useModel } from "@anywidget/react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Typography from "@mui/material/Typography";
 
-type WidgetView = {
-  el?: HTMLElement;
-  remove?: () => void;
-};
+type WidgetModel = ReturnType<typeof useModel>;
 
-type WidgetModel = {
-  get?: (key: string) => unknown;
-  set?: (key: string, value: unknown) => void;
-  on?: (eventName: string, callback: () => void) => void;
-  off?: (eventName?: string | null, callback?: (() => void) | null) => void;
-  save_changes?: () => void;
+// The ipywidgets manager behind anywidget models (JupyterLab, VS Code, Colab)
+// also builds views of other widgets; the anywidget type declares only get_model.
+type ViewManager = WidgetModel["widget_manager"] & {
+  create_view(model: WidgetModel): Promise<{ el: HTMLElement; remove(): void }>;
 };
-
-type WidgetManagerWithViews = {
-  get_model?: (id: string) => Promise<unknown>;
-  create_view?: (model: unknown, options?: Record<string, unknown>) => Promise<WidgetView>;
-};
-
-type HostModelWithManager = {
-  widget_manager?: WidgetManagerWithViews;
-};
-
-function widgetModelId(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  return value.startsWith("IPY_MODEL_") ? value.slice("IPY_MODEL_".length) : value;
-}
 
 type LinkedTrait = {
   source: string;
   target?: string;
 };
 
-async function resolveWidgetModel(hostModel: unknown, value: unknown): Promise<unknown | null> {
-  if (!value) return null;
-  if (typeof value !== "string") return value;
-  const manager = (hostModel as HostModelWithManager | null)?.widget_manager;
-  const id = widgetModelId(value);
-  if (!manager?.get_model || !id) return null;
-  return manager.get_model(id);
-}
-
-function syncLinkedTraits(hostModel: unknown, childModel: unknown, traits: LinkedTrait[]): () => void {
-  const sourceModel = hostModel as WidgetModel | null;
-  const targetModel = childModel as WidgetModel | null;
-  if (!sourceModel?.get || !sourceModel?.set || !sourceModel?.on || !sourceModel?.off) return () => {};
-  if (!targetModel?.get || !targetModel?.set || !targetModel?.on || !targetModel?.off) return () => {};
-
+// Mirror each linked trait both ways between the host and the embedded view.
+// A trait only one of them has stays unlinked.
+function syncLinkedTraits(hostModel: WidgetModel, childModel: WidgetModel, traits: LinkedTrait[]): () => void {
   let syncing = false;
   const cleanups: Array<() => void> = [];
 
   const copy = (from: WidgetModel, to: WidgetModel, fromKey: string, toKey: string) => {
-    if (syncing || !from.get || !to.get || !to.set) return;
+    if (syncing) return;
     const value = from.get(fromKey);
     if (value === undefined || to.get(toKey) === undefined) return;
+    // The set fires the other side's change handler, which must not copy the value back.
     syncing = true;
-    try {
-      to.set(toKey, value);
-      to.save_changes?.();
-    } finally {
-      syncing = false;
-    }
+    to.set(toKey, value);
+    to.save_changes();
+    syncing = false;
   };
 
   for (const trait of traits) {
     const source = trait.source;
     const target = trait.target || trait.source;
-    copy(sourceModel, targetModel, source, target);
+    copy(hostModel, childModel, source, target);
 
-    const sourceHandler = () => copy(sourceModel, targetModel, source, target);
-    const targetHandler = () => copy(targetModel, sourceModel, target, source);
-    sourceModel.on(`change:${source}`, sourceHandler);
-    targetModel.on(`change:${target}`, targetHandler);
-    cleanups.push(() => sourceModel.off?.(`change:${source}`, sourceHandler));
-    cleanups.push(() => targetModel.off?.(`change:${target}`, targetHandler));
+    const sourceHandler = () => copy(hostModel, childModel, source, target);
+    const targetHandler = () => copy(childModel, hostModel, target, source);
+    hostModel.on(`change:${source}`, sourceHandler);
+    childModel.on(`change:${target}`, targetHandler);
+    cleanups.push(() => hostModel.off(`change:${source}`, sourceHandler));
+    cleanups.push(() => childModel.off(`change:${target}`, targetHandler));
   }
 
   return () => {
@@ -92,8 +60,9 @@ export function EmbeddedWidgetView({
   themeColors,
   linkedTraits = [],
 }: {
-  hostModel: unknown;
-  widgetModel: unknown;
+  hostModel: WidgetModel;
+  // The serialized reference of the widget to embed, "IPY_MODEL_<model id>".
+  widgetModel: string;
   title: string;
   onClose: () => void;
   linkedTraits?: LinkedTrait[];
@@ -110,7 +79,7 @@ export function EmbeddedWidgetView({
 
   React.useEffect(() => {
     let cancelled = false;
-    let view: WidgetView | null = null;
+    let view: { el: HTMLElement; remove(): void } | null = null;
     let unlinkTraits: (() => void) | null = null;
     const container = containerRef.current;
     if (!container) return undefined;
@@ -119,21 +88,15 @@ export function EmbeddedWidgetView({
 
     const mount = async () => {
       try {
-        const manager = (hostModel as HostModelWithManager | null)?.widget_manager;
-        if (!manager?.create_view) {
-          throw new Error("this frontend cannot create child widget views");
-        }
-        const childModel = await resolveWidgetModel(hostModel, widgetModel);
-        if (!childModel) return;
+        const manager = hostModel.widget_manager as ViewManager;
+        const childModel = await manager.get_model(widgetModel.replace(/^IPY_MODEL_/, ""));
         unlinkTraits = syncLinkedTraits(hostModel, childModel, linkedTraits);
         view = await manager.create_view(childModel);
         if (cancelled) {
-          view?.remove?.();
+          view.remove();
           return;
         }
-        if (view?.el) {
-          container.replaceChildren(view.el);
-        }
+        container.replaceChildren(view.el);
       } catch (exc) {
         if (!cancelled) setError(exc instanceof Error ? exc.message : String(exc));
       }
@@ -143,12 +106,10 @@ export function EmbeddedWidgetView({
     return () => {
       cancelled = true;
       unlinkTraits?.();
-      view?.remove?.();
+      view?.remove();
       container.replaceChildren();
     };
   }, [hostModel, linkedTraits, widgetModel]);
-
-  if (!widgetModel) return null;
 
   return (
     <Box

@@ -47,6 +47,8 @@ from quantem.widget.io.hdf5_family import open_hdf5
 MEMORY_FRACTION = 0.8  # share of the available host memory a dense read may take
 BLOCK_BYTES = 256 << 20  # raw bytes read from the file per step
 PIXEL_MASK_KEY = "entry/instrument/detector/detectorSpecific/pixel_mask"
+HOT_PIXEL_CORRECTIONS = ("median", "zero", "none")
+HOT_PIXEL_SCHEMA = "quantem.hot-pixel-correction/3"  # the record read_4dstem leaves in metadata["hot_pixel_correction"]
 BIT_DEPTH_KEY = "entry/instrument/detector/bit_depth_image"  # Dectris: the largest count is 2**bits - 1
 # (largest count, stored dtype) from narrow to wide
 INTEGER_LADDER = ((255, np.uint8), (65535, np.uint16), (2**63 - 1, np.int64))
@@ -54,7 +56,7 @@ FLOAT_TYPES = (np.dtype(np.float16), np.dtype(np.float32), np.dtype(np.float64))
 
 
 def read_4dstem(path, device: str = "auto", *, scan_shape: tuple[int, int] | None = None,
-                max_bytes: int | None = None, verbose: bool = True):
+                max_bytes: int | None = None, verbose: bool = True, hot_pixel_correction: str = "median"):
     """Read a 4D-STEM file: a ``Dataset4dstemGPU`` on a GPU, a quantem core ``Dataset4dstem`` otherwise.
 
     With quantem.gpu installed (``quantem.widget[cuda]`` or ``[mps]``) and a
@@ -64,7 +66,10 @@ def read_4dstem(path, device: str = "auto", *, scan_shape: tuple[int, int] | Non
     on an Intel Mac or Windows on ARM, which cannot install quantem core, as
     the widget's stand-in with the same ``array``, ``name``, ``sampling``,
     ``units``, ``metadata``, ``shape`` and ``dtype``. ``Show4DSTEM`` and the
-    detector math give the same numbers for either.
+    detector math give the same numbers for either. The dense dataset's
+    ``metadata`` names the file (``source_path``) and, when the master flags
+    detector pixels, records their replacement (``hot_pixel_correction``:
+    method, pixel count and coordinates).
 
     Parameters
     ----------
@@ -85,6 +90,10 @@ def read_4dstem(path, device: str = "auto", *, scan_shape: tuple[int, int] | Non
         available host memory.
     verbose
         Print the dense read's one-line summary.
+    hot_pixel_correction
+        ``"median"`` (default), ``"zero"`` or ``"none"``: what becomes of the
+        detector pixels the master flags, on either route; one line says how
+        many were replaced or left as stored.
 
     Raises
     ------
@@ -98,21 +107,37 @@ def read_4dstem(path, device: str = "auto", *, scan_shape: tuple[int, int] | Non
     >>> Show4DSTEM(data)  # doctest: +SKIP
     """
     if not isinstance(path, (str, os.PathLike)):
-        return [read_4dstem(item, device, scan_shape=scan_shape, max_bytes=max_bytes, verbose=verbose) for item in path]
+        return [read_4dstem(item, device, scan_shape=scan_shape, max_bytes=max_bytes, verbose=verbose,
+                            hot_pixel_correction=hot_pixel_correction) for item in path]
     path = pathlib.Path(path).expanduser()
     if gpu_route(device):
         target = None if str(device).strip().lower() == "auto" else resolve_device(device)
         try:
-            return gpu_adapter.load_acquisition(path, target, scan_shape=scan_shape)
+            return gpu_adapter.load_acquisition(path, target, scan_shape=scan_shape, hot_pixel_correction=hot_pixel_correction)
         except (NotImplementedError, ValueError) as exc:
-            # quantem.gpu holds a NumPy file only as exact 4D uint8, uint16 or float32 counts
+            # Unsupported NumPy representations can still use the exact dense reader.
             if path.suffix != ".npy":
                 raise
             print(f"quantem.widget: quantem.gpu cannot hold {path.name} on the GPU ({exc}); it is read densely instead.")
     else:
         gpu_notice()
-    values = read_dense(path, scan_shape=scan_shape, max_bytes=max_bytes, verbose=verbose)
-    return make_dataset(values, name=acquisition_name(path))
+    values = read_dense(path, scan_shape=scan_shape, max_bytes=max_bytes, verbose=verbose,
+                        hot_pixel_correction=hot_pixel_correction)
+    dataset = make_dataset(values, name=acquisition_name(path))
+    dataset.metadata["source_path"] = str(path)
+    pixel_mask = None if path.suffix == ".npy" else read_pixel_mask(path)
+    if pixel_mask is not None and values.dtype.kind in "ui" and hot_pixel_correction != "none":
+        # read_dense replaced these pixels; the record says so, as a GPU load's metadata does
+        flagged = np.argwhere(np.asarray(pixel_mask) != 0)
+        window = (max(item[-1] for item in median_windows(np.asarray(pixel_mask) == 0))
+                  if hot_pixel_correction == "median" and len(flagged) else None)
+        dataset.metadata["hot_pixel_correction"] = {
+            "schema": HOT_PIXEL_SCHEMA, "method": hot_pixel_correction,
+            "largest_window_px": window, "source": "stored_pixel_mask",
+            "pixel_count": len(flagged), "coordinates_row_col": flagged.tolist(), "applied": len(flagged) > 0,
+            "stage": "host_read", "backend": "cpu",
+        }
+    return dataset
 
 
 def gpu_route(device) -> bool:
@@ -125,9 +150,9 @@ def read_dense(
     device=None,
     *,
     scan_shape: tuple[int, int] | None = None,
-    hot_pixel_correction: str = "median",
     max_bytes: int | None = None,
     verbose: bool = True,
+    hot_pixel_correction: str = "median",
 ):
     """Read ``path`` into a dense ``(scan_row, scan_col, det_row, det_col)`` array of exact counts.
 
@@ -144,20 +169,24 @@ def read_dense(
     scan_shape
         ``(rows, cols)`` of a flat ``(positions, det_row, det_col)`` file; a
         square scan is inferred when omitted.
-    hot_pixel_correction
-        ``"median"`` (default, as quantem.gpu), ``"zero"`` or ``"none"`` for the
-        pixels the master's ``pixel_mask`` flags.
     max_bytes
         Largest dense array to allocate. Default: ``MEMORY_FRACTION`` of the
         available host memory, and of the free memory of a CUDA ``device``.
     verbose
         Print the one-line summary: shape, dtype, size, seconds, the quantem.gpu hint.
+    hot_pixel_correction
+        Integer counts at the pixels the master flags in ``pixel_mask``:
+        ``"median"`` (the median of their unflagged 3x3 neighbours, as
+        quantem.gpu loads them), ``"zero"``, or ``"none"`` to keep the stored
+        values. One line says how many pixels were replaced or left.
 
     Raises
     ------
     MemoryError
         When the array would exceed ``max_bytes``. Nothing is reduced instead.
     """
+    if hot_pixel_correction not in HOT_PIXEL_CORRECTIONS:
+        raise ValueError(f"hot_pixel_correction must be one of {HOT_PIXEL_CORRECTIONS}, got {hot_pixel_correction!r}.")
     path = pathlib.Path(path).expanduser()
     target = None if device is None else torch.device(device)
     limit = ceiling(target) if max_bytes is None else int(max_bytes)
@@ -207,10 +236,18 @@ def read_dense(
             )
         valid = None if npy else read_pixel_mask(path)
         valid = None if valid is None else np.asarray(valid) == 0
+        if integer and valid is not None:
+            gpu_adapter.announce_hot_pixels({
+                "pixel_count": int((~valid).sum()), "method": hot_pixel_correction, "applied": hot_pixel_correction != "none",
+                "largest_window_px": max((item[-1] for item in median_windows(valid)), default=3)
+                if hot_pixel_correction == "median" and not valid.all() else None})
         data = None
         for start, block in frame_blocks(datasets):
-            if integer and valid is not None:
-                block = correct_flagged_pixels(block, valid, hot_pixel_correction)
+            if integer and valid is not None and hot_pixel_correction == "median":
+                block = correct_flagged_pixels(block, valid)
+            elif integer and valid is not None and hot_pixel_correction == "zero" and not valid.all():
+                block = np.array(block, copy=True)
+                block[:, ~valid] = 0
             peak = int(block.max()) if integer and block.size else 0
             # negative counts skip the unsigned rungs
             negative = integer and block.size and int(block.min()) < 0
@@ -283,35 +320,49 @@ def ceiling(device=None) -> int:
     return int(limit * MEMORY_FRACTION)
 
 
-def correct_flagged_pixels(block: np.ndarray, valid: np.ndarray, method: str) -> np.ndarray:
-    """Replace flagged detector pixels in a ``(frames, det_row, det_col)`` block of counts.
+def median_windows(valid: np.ndarray) -> list[tuple[int, int, np.ndarray, np.ndarray, int]]:
+    """For each flagged pixel, the valid pixels its median fill reads: ``(row, col, rows, cols, window)``.
 
-    ``"median"``: the median of the unflagged pixels of the 3x3 neighbourhood,
-    the mean of the two middle values rounded down when their count is even,
-    0 when no neighbour is valid; quantem.gpu's hot-pixel kernel computes the
-    same. ``"zero"`` writes 0; ``"none"`` keeps the stored values.
+    They are the valid pixels of the smallest square window around it that
+    holds any (3 x 3, then 5 x 5, 7 x 7, ...), the plan of quantem.gpu's
+    ``resident.hot_pixels.median_plan``, so a flagged cluster is filled from
+    the ring around it rather than with 0.
     """
-    if method not in ("median", "zero", "none"):
-        raise ValueError("hot_pixel_correction must be 'median', 'zero', or 'none'.")
-    if method == "none" or valid.all():
+    if not valid.any():
+        raise ValueError("Every detector pixel is flagged; no valid neighbour exists for a median fill.")
+    plan = []
+    for row, col in np.argwhere(~valid):
+        radius = 1
+        while True:
+            top, left = max(0, row - radius), max(0, col - radius)
+            window = valid[top : row + radius + 1, left : col + radius + 1]
+            if window.any():
+                break
+            radius += 1
+        rows, cols = np.nonzero(window)
+        plan.append((int(row), int(col), rows + top, cols + left, 2 * radius + 1))
+    return plan
+
+
+def correct_flagged_pixels(block: np.ndarray, valid: np.ndarray) -> np.ndarray:
+    """Replace the flagged detector pixels of a ``(frames, det_row, det_col)`` block of counts.
+
+    Each takes the median of the valid pixels ``median_windows`` gives it, the
+    mean of the two middle values rounded half to even when their number is
+    even, as quantem.gpu's hot-pixel kernels do, so a dense read shows the
+    counts an encoded load shows.
+    """
+    if valid.all():
         return block
     block = np.array(block, copy=True)
-    rows, cols = valid.shape
-    for row, col in np.argwhere(~valid):
-        neighbours = [
-            (row + d_row, col + d_col)
-            for d_row in (-1, 0, 1)
-            for d_col in (-1, 0, 1)
-            if (d_row or d_col) and 0 <= row + d_row < rows and 0 <= col + d_col < cols and valid[row + d_row, col + d_col]
-        ]
-        if method == "zero" or not neighbours:
-            block[:, row, col] = 0
-            continue
-        neighbour_counts = np.stack([block[:, near_row, near_col] for near_row, near_col in neighbours], axis=1)
+    for row, col, rows, cols, _ in median_windows(valid):
         # int64 so the sum of the two middle counts cannot overflow the stored dtype
-        values = np.sort(neighbour_counts.astype(np.int64), axis=1)
-        middle = len(neighbours) // 2
-        block[:, row, col] = values[:, middle] if len(neighbours) % 2 else (values[:, middle - 1] + values[:, middle]) // 2
+        values = np.sort(block[:, rows, cols].astype(np.int64), axis=1)
+        count = values.shape[1]
+        total = values[:, (count - 1) // 2] + values[:, count // 2]
+        half = total >> 1
+        # an odd total is a .5 median: round it to the even neighbour
+        block[:, row, col] = half + (total & half & 1)
     return block
 
 

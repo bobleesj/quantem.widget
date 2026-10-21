@@ -1,4 +1,5 @@
-import { type RichTitleSpan } from "./latexTitle";
+import * as React from "react";
+import { type RichTitleSpan, renderMathExpression, renderRichTitle } from "./latexTitle";
 
 /** Panel overlays (circles and rectangles in data or relative coordinates), their
  *  hit testing and drag editing, plus the annotation badge styling that show2d
@@ -15,7 +16,6 @@ export type PanelAnnotationSpec = {
   variant?: string;
   class_name?: string;
   bg?: string;
-  fg?: string;
   color?: string;
   border_color?: string;
   border_width?: number;
@@ -33,20 +33,18 @@ export type PanelAnnotationSpec = {
   outline_width?: number;
 };
 export type PanelOverlaySpec = {
-  shape?: "circle" | "rect" | "rectangle" | "square";
+  shape?: "circle" | "rect";
   coords?: "data" | "relative";
-  row?: number;
-  col?: number;
+  /** Circle center as [row, col]. */
+  center?: [number, number];
   radius?: number;
-  row0?: number;
-  col0?: number;
-  row1?: number;
-  col1?: number;
-  stroke?: string;
-  stroke_width?: number;
-  line_style?: string;
-  dash?: number[];
-  fill?: string;
+  /** Rectangle corners as [row0, col0, row1, col1]. */
+  box?: [number, number, number, number];
+  color?: string;
+  line_width?: number;
+  line_style?: "solid" | "dashed" | "dotted" | "dashdot";
+  line_dash?: number[];
+  fill_color?: string;
   opacity?: number;
   fill_opacity?: number;
   stroke_opacity?: number;
@@ -91,17 +89,17 @@ function withAlpha(color: string | undefined, alpha: number): string | undefined
   return color;
 }
 
-/** Canvas dash pattern: an explicit `dash`, else the named line style scaled by the line width. */
+/** Canvas dash pattern: an explicit `line_dash`, else the named line style scaled by the line width. */
 export function overlayDashPattern(overlay: PanelOverlaySpec, lineWidth: number): number[] {
-  const custom = Array.isArray(overlay.dash)
-    ? overlay.dash.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value >= 0)
+  const custom = Array.isArray(overlay.line_dash)
+    ? overlay.line_dash.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value >= 0)
     : [];
   if (custom.some((value) => value > 0)) return custom;
   const unit = Math.max(1, lineWidth);
-  const lineStyle = styleString(overlay.line_style, "solid").toLowerCase().replace("_", "-");
-  if (lineStyle === "dashed" || lineStyle === "dash") return [4 * unit, 2 * unit];
-  if (lineStyle === "dotted" || lineStyle === "dot") return [unit, 1.8 * unit];
-  if (lineStyle === "dashdot" || lineStyle === "dash-dot") return [4 * unit, 2 * unit, unit, 2 * unit];
+  // Python's overlay normalizer leaves only these line_style names (and "solid").
+  if (overlay.line_style === "dashed") return [4 * unit, 2 * unit];
+  if (overlay.line_style === "dotted") return [unit, 1.8 * unit];
+  if (overlay.line_style === "dashdot") return [4 * unit, 2 * unit, unit, 2 * unit];
   return [];
 }
 
@@ -153,7 +151,7 @@ export function panelAnnotationSx(spec: PanelAnnotationSpec, zIndex = 7): Record
   const outline = variant === "outline";
   const callout = variant === "callout";
   const pill = variant === "pill";
-  const fg = styleString(spec.fg ?? spec.color, plain ? "rgba(255,255,255,0.92)" : "#fff");
+  const fg = styleString(spec.color, plain ? "rgba(255,255,255,0.92)" : "#fff");
   const bg = styleString(spec.bg, plain ? "transparent" : "rgba(0,0,0,0.72)");
   const borderWidth = Math.max(0, styleNumber(spec.border_width, outline || callout ? 1 : 0));
   return {
@@ -262,11 +260,11 @@ export function drawPanelOverlays(
   for (const overlay of ordered) {
     const opacity = styleNumber(overlay.opacity, 1);
     const strokeOpacity = opacity * styleNumber(overlay.stroke_opacity, 1);
-    const fillOpacity = opacity * styleNumber(overlay.fill_opacity, overlay.fill ? 1 : 0);
-    const stroke = withAlpha(styleString(overlay.stroke, "#00e5ff"), strokeOpacity);
-    const fill = withAlpha(overlay.fill, fillOpacity);
+    const fillOpacity = opacity * styleNumber(overlay.fill_opacity, overlay.fill_color ? 1 : 0);
+    const stroke = withAlpha(styleString(overlay.color, "#00e5ff"), strokeOpacity);
+    const fill = withAlpha(overlay.fill_color, fillOpacity);
     ctx.save();
-    ctx.lineWidth = Math.max(0, styleNumber(overlay.stroke_width, 2));
+    ctx.lineWidth = Math.max(0, styleNumber(overlay.line_width, 2));
     ctx.setLineDash(overlayDashPattern(overlay, ctx.lineWidth));
     ctx.lineCap = ctx.getLineDash().length ? "round" : "butt";
     if (fill) ctx.fillStyle = fill;
@@ -297,19 +295,19 @@ export function drawPanelOverlays(
 /** Overlay in image pixels: a circle, or a rectangle with sorted corners (anything not a circle). */
 export function overlayGeometry(overlay: PanelOverlaySpec, imageW: number, imageH: number) {
   const { scaleRow, scaleCol, scaleRadius } = overlayScales(overlay, imageW, imageH);
-  const shape = overlay.shape === "rectangle" ? "rect" : (overlay.shape || "circle");
+  const shape = overlay.shape || "circle";
   if (shape === "circle") {
     return {
       shape,
-      row: styleNumber(overlay.row, 0) * scaleRow,
-      col: styleNumber(overlay.col, 0) * scaleCol,
+      row: styleNumber(overlay.center?.[0], 0) * scaleRow,
+      col: styleNumber(overlay.center?.[1], 0) * scaleCol,
       radius: Math.max(0, styleNumber(overlay.radius, 0) * scaleRadius),
     };
   }
-  const row0 = styleNumber(overlay.row0, 0) * scaleRow;
-  const col0 = styleNumber(overlay.col0, 0) * scaleCol;
-  const row1 = styleNumber(overlay.row1, row0) * scaleRow;
-  const col1 = styleNumber(overlay.col1, col0) * scaleCol;
+  const row0 = styleNumber(overlay.box?.[0], 0) * scaleRow;
+  const col0 = styleNumber(overlay.box?.[1], 0) * scaleCol;
+  const row1 = styleNumber(overlay.box?.[2], 0) * scaleRow;
+  const col1 = styleNumber(overlay.box?.[3], 0) * scaleCol;
   return {
     shape,
     row0: Math.min(row0, row1),
@@ -380,8 +378,10 @@ export function updateOverlayFromDrag(
   const next = { ...original };
   if (geom.shape === "circle") {
     if (mode === "move") {
-      next.row = toSpecRow(Math.max(0, Math.min(imageH, geom.row + row - startRow)));
-      next.col = toSpecCol(Math.max(0, Math.min(imageW, geom.col + col - startCol)));
+      next.center = [
+        toSpecRow(Math.max(0, Math.min(imageH, geom.row + row - startRow))),
+        toSpecCol(Math.max(0, Math.min(imageW, geom.col + col - startCol))),
+      ];
     } else {
       next.radius = toSpecRadius(Math.max(1, Math.hypot(col - geom.col, row - geom.row)));
     }
@@ -408,10 +408,18 @@ export function updateOverlayFromDrag(
     if (Math.abs(row1 - row0) < 1) row1 = row0 + (row1 >= row0 ? 1 : -1);
     if (Math.abs(col1 - col0) < 1) col1 = col0 + (col1 >= col0 ? 1 : -1);
   }
-  next.row0 = toSpecRow(Math.max(0, Math.min(imageH, Math.min(row0, row1))));
-  next.row1 = toSpecRow(Math.max(0, Math.min(imageH, Math.max(row0, row1))));
-  next.col0 = toSpecCol(Math.max(0, Math.min(imageW, Math.min(col0, col1))));
-  next.col1 = toSpecCol(Math.max(0, Math.min(imageW, Math.max(col0, col1))));
+  // Clamped to the image. A resize also keeps one pixel: an edge dragged past the image border would
+  // otherwise close the rectangle, which can no longer be grabbed and which the kernel refuses. A move
+  // keeps the size it had, a hairline included.
+  const keep = mode === "resize" ? 1 : 0;
+  const top = Math.max(0, Math.min(imageH - keep, Math.min(row0, row1)));
+  const left = Math.max(0, Math.min(imageW - keep, Math.min(col0, col1)));
+  next.box = [
+    toSpecRow(top),
+    toSpecCol(left),
+    toSpecRow(Math.max(top + keep, Math.min(imageH, Math.max(row0, row1)))),
+    toSpecCol(Math.max(left + keep, Math.min(imageW, Math.max(col0, col1)))),
+  ];
   return next;
 }
 
@@ -458,4 +466,54 @@ export function normalizeHiddenPageSlots(values: unknown, maxSlots: number): num
   const sorted = Array.from(clean).sort((a, b) => a - b);
   if (sorted.length >= nSlots) sorted.pop();
   return sorted;
+}
+
+export function renderPanelAnnotation(spec: PanelAnnotationSpec, fallback = ""): React.ReactNode {
+  if (spec.math) return renderMathExpression(spec.math, "panel-annotation-math");
+  return renderRichTitle(spec.spans, spec.text || fallback);
+}
+
+export function sameNumberArray(a: number[] | undefined, b: number[]): boolean {
+  if (!Array.isArray(a) || a.length !== b.length) return false;
+  return a.every((value, idx) => value === b[idx]);
+}
+
+export function clonePanelOverlays(overlays: PanelOverlaySpec[][] | undefined): PanelOverlaySpec[][] {
+  return (overlays || []).map((items) => (items || []).map((item) => ({ ...item })));
+}
+
+/**
+ * The hidden slots of the shown page while ``slotPaged``: the ``hidden_page_slots`` trait when it
+ * is set, else the page's hidden panels, read once; empty otherwise.
+ */
+export function useHiddenPageSlots(
+  slotPaged: boolean,
+  hiddenPageSlotsTrait: number[] | undefined,
+  hiddenPanels: number[] | undefined,
+  activePageStart: number,
+  activePanelCount: number,
+) {
+  const [hiddenPageSlots, setHiddenPageSlots] = React.useState<number[]>([]);
+  const hiddenPageSlotsInitializedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!slotPaged) {
+      hiddenPageSlotsInitializedRef.current = false;
+      setHiddenPageSlots(prev => prev.length === 0 ? prev : []);
+      return;
+    }
+    if (Array.isArray(hiddenPageSlotsTrait)) {
+      const slots = normalizeHiddenPageSlots(hiddenPageSlotsTrait, activePanelCount);
+      hiddenPageSlotsInitializedRef.current = true;
+      setHiddenPageSlots(prev => sameNumberArray(prev, slots) ? prev : slots);
+      return;
+    }
+    if (hiddenPageSlotsInitializedRef.current) return;
+    hiddenPageSlotsInitializedRef.current = true;
+    const slots = normalizeHiddenPageSlots(
+      (hiddenPanels || []).map((value) => Math.trunc(Number(value)) - activePageStart),
+      activePanelCount,
+    );
+    setHiddenPageSlots(prev => sameNumberArray(prev, slots) ? prev : slots);
+  }, [activePageStart, activePanelCount, hiddenPageSlotsTrait, hiddenPanels, slotPaged]);
+  return [hiddenPageSlots, setHiddenPageSlots] as const;
 }

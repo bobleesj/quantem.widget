@@ -1,4 +1,4 @@
-import gc
+import threading
 import time
 from pathlib import Path
 
@@ -177,40 +177,33 @@ def test_folder_live_launch_probates_existing_readable_file(
 
 
 @pytest.mark.parametrize("viewer", [Show2D, Show3D])
-def test_folder_worker_baseexception_replaces_stale_green(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    viewer,
-) -> None:
-    class FatalWatchAbort(BaseException):
-        pass
-
+@pytest.mark.parametrize(("failure", "named"), [(RuntimeError, False), (KeyError, False), (AttributeError, True), (SystemExit, False)])
+def test_a_watcher_that_dies_turns_the_badge_red(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, viewer, failure, named) -> None:
+    # A per-poll error the watcher expects keeps it alive; anything else ends it with a red badge
+    # (naming an Exception) and its traceback, instead of a stale green "watching".
     _save(tmp_path / "frame_1.npy", 1)
     widget = viewer.from_folder(tmp_path, watch=False)
     source = widget._folder_source
+    tracebacks = []
+    monkeypatch.setattr(threading, "excepthook", tracebacks.append)
 
-    def abort_poll(_widget) -> list[int]:
-        raise FatalWatchAbort("decoder runtime aborted")
+    def failing_poll(_widget) -> list[int]:
+        raise failure("decoder runtime aborted")
 
-    monkeypatch.setattr(source, "poll", abort_poll)
+    monkeypatch.setattr(source, "poll", failing_poll)
     try:
-        # C1: an unexpected BaseException terminates the owned worker, expect
-        # its thread fields to clear and a corrective red state, not stale green.
         widget.watch_folder(interval=0.01)
         thread = source._watch_thread
-        assert thread is not None
-        # The worker clears its ownership fields in ``finally`` immediately
-        # before Python marks the Thread object stopped. Wait for both sides of
-        # that lifecycle boundary instead of racing the final return.
-        _wait_until(
-            lambda: source._watch_thread is None and not thread.is_alive()
-        )
-        assert not thread.is_alive()
+        if failure in (RuntimeError, KeyError):
+            _wait_until(lambda: "decoder runtime aborted" in widget.folder_watch_detail)
+            assert thread.is_alive() and "still alive" in widget.folder_watch_detail
+            return
+        _wait_until(lambda: source._watch_thread is None and not thread.is_alive())
         assert source._watch_stop is None
         assert widget.folder_watch_state == "error"
-        assert "FatalWatchAbort: decoder runtime aborted" in widget.folder_watch_detail
         assert "stopped unexpectedly" in widget.folder_watch_detail
-        assert "still alive" not in widget.folder_watch_detail
+        assert ("AttributeError: decoder runtime aborted" in widget.folder_watch_detail) is named
+        assert len(tracebacks) == 1
     finally:
         widget.close()
 
@@ -376,7 +369,7 @@ def test_folder_failed_and_mismatched_files_remain_retryable(
             "frame_2.npy",
             "frame_4.npy",
         ]
-        assert "1 pending file" in widget._folder_watch_error
+        assert "1 pending file" in widget.folder_status
         assert widget.poll_folder() == []
 
         # C3: the mismatch is corrected in place, expect one naturally ordered
@@ -391,7 +384,7 @@ def test_folder_failed_and_mismatched_files_remain_retryable(
             "frame_4.npy",
         ]
         np.testing.assert_array_equal(widget._data[:, 0, 0], [1, 2, 3, 4])
-        assert widget._folder_watch_error == ""
+        assert widget.folder_status == ("4 ready panels" if viewer is Show2D else "4 ready frames")
     finally:
         widget.close()
 
@@ -459,80 +452,56 @@ def test_folder_initial_mismatch_does_not_block_later_valid_file(
 def test_watched_folder_empty_opt_in_anchors_shape_and_prunes_errors(
     tmp_path: Path,
 ) -> None:
-    source = WatchedImageFolder(tmp_path, interval=0.02, mode="panels")
-
-    # C1: the legacy initial-read call sees no valid image, expect its existing
-    # FileNotFoundError while the explicit empty path returns no records.
+    # C1: the initial read of an empty folder fails, while the watched empty
+    # start opens a waiting widget with no scale bar.
     with pytest.raises(FileNotFoundError, match="No readable 2D"):
-        source.read_initial()
-    arrays, records = source.read_initial(allow_empty=True)
-    assert arrays == []
-    assert records == []
+        WatchedImageFolder(tmp_path, interval=0.02, mode="panels").read_initial()
+    widget = Show2D.from_folder(tmp_path, watch=True, watch_interval=60)
+    source = widget._folder_source
+    try:
+        assert widget.folder_waiting is True
+        assert widget.pixel_size == 0.0
+        assert widget.show_scale_bar is False
+        assert "waiting" in source.calibration_status
 
-    class RecordingWidget:
-        def __init__(self) -> None:
-            self.pixel_size = 9.0
-            self.pixel_sizes = [9.0]
-            self.pixel_unit = "nm"
-            self.scale_bar_visible = True
-            self.applied: list[tuple] = []
+        # C2: the first poll sees compatible files around one mismatch, expect
+        # the first valid file to anchor shape and the later valid file to pass.
+        _save(tmp_path / "frame_1.npy", 1, shape=(7, 9))
+        mismatch = tmp_path / "frame_2.npy"
+        _save(mismatch, 2, shape=(3, 4))
+        _save(tmp_path / "frame_3.npy", 3, shape=(7, 9))
+        assert widget.poll_folder() == []
+        assert widget.poll_folder() == [0, 1]
+        assert source.expected_shape == (7, 9)
+        assert [path.name for path in source.paths] == ["frame_1.npy", "frame_3.npy"]
+        assert mismatch.resolve() in source.errors
+        assert widget.folder_waiting is False
+        assert widget.show_scale_bar is True
 
-        def _apply_folder_image_records(self, old, new, changed) -> None:
-            self.applied.append((old, new, changed))
-
-    widget = RecordingWidget()
-    source.attach(widget, explicit_calibration=False)
-    assert widget._folder_waiting is True
-    assert widget.pixel_size == 0.0
-    assert widget.pixel_sizes == []
-    assert widget.scale_bar_visible is False
-    assert "waiting" in widget._folder_calibration_status
-
-    # C2: the first empty-folder poll sees compatible files around one mismatch,
-    # expect the first valid file to anchor shape and the later valid file to pass.
-    _save(tmp_path / "frame_1.npy", 1, shape=(7, 9))
-    mismatch = tmp_path / "frame_2.npy"
-    _save(mismatch, 2, shape=(3, 4))
-    _save(tmp_path / "frame_3.npy", 3, shape=(7, 9))
-    assert source.poll(widget) == []
-    assert source.poll(widget) == [0, 1]
-    assert source.expected_shape == (7, 9)
-    assert [path.name for path in source.paths] == ["frame_1.npy", "frame_3.npy"]
-    assert mismatch.resolve() in source.errors
-    assert widget._folder_waiting is False
-    assert widget.scale_bar_visible is True
-
-    # C3: a rejected file disappears, expect its stale diagnostic to be pruned
-    # without changing represented records.
-    mismatch.unlink()
-    assert source.poll(widget) == []
-    assert source.errors == {}
-    assert widget._folder_watch_error == ""
+        # C3: a rejected file disappears, expect its stale diagnostic to be pruned
+        # without changing represented records.
+        mismatch.unlink()
+        assert widget.poll_folder() == []
+        assert source.errors == {}
+        assert widget.folder_status == "2 ready panels"
+    finally:
+        widget.close()
 
 
 def test_watched_folder_empty_start_accepts_rgb_files(tmp_path: Path) -> None:
-    source = WatchedImageFolder(tmp_path, mode="panels")
-    source.read_initial(allow_empty=True)
-
-    class RecordingWidget:
-        pixel_size = 0.0
-        pixel_unit = "pixels"
-        scale_bar_visible = True
-
-        def _apply_folder_image_records(self, old, new, changed) -> None:
-            self.changed = changed
-
-    widget = RecordingWidget()
-    source.attach(widget, explicit_calibration=False)
-
-    # C1: an RGB file arrives in a folder watched from empty, expect it to
-    # anchor the spatial (rows, cols) shape and appear after its confirming
-    # poll instead of failing the shape check against its own channel axis.
-    np.save(tmp_path / "frame_1.npy", np.ones((6, 8, 3), dtype=np.uint8))
-    assert source.poll(widget) == []
-    assert source.poll(widget) == [0]
-    assert source.expected_shape == (6, 8)
-    assert source.errors == {}
+    widget = Show3D.from_folder(tmp_path, watch=True, watch_interval=60)
+    source = widget._folder_source
+    try:
+        # C1: an RGB file arrives in a folder watched from empty, expect it to
+        # anchor the spatial (rows, cols) shape and appear after its confirming
+        # poll instead of failing the shape check against its own channel axis.
+        np.save(tmp_path / "frame_1.npy", np.ones((6, 8, 3), dtype=np.uint8))
+        assert widget.poll_folder() == []
+        assert widget.poll_folder() == [0]
+        assert source.expected_shape == (6, 8)
+        assert source.errors == {} and widget.is_rgb
+    finally:
+        widget.close()
 
 
 def test_watched_folder_natural_order_has_exact_path_tie_breaker(
@@ -550,67 +519,19 @@ def test_watched_folder_natural_order_has_exact_path_tie_breaker(
     ]
 
 
-def test_watched_folder_invalid_restart_preserves_thread_and_gc_cleans_fields(
-    tmp_path: Path,
-) -> None:
-    class SlottedWidget:
-        __slots__ = ("__weakref__",)
-
-    source = WatchedImageFolder(tmp_path, interval=0.02, mode="panels")
-    widget = SlottedWidget()
-    source.start(widget)
+def test_watched_folder_invalid_restart_preserves_thread(tmp_path: Path) -> None:
+    widget = Show2D.from_folder(tmp_path, watch=True, watch_interval=0.02)
+    source = widget._folder_source
     thread = source._watch_thread
-    assert thread is not None and thread.is_alive()
-
-    # C1: restart requests an invalid interval, expect validation to fail before
-    # stopping the healthy thread; optional status attributes may be absent.
-    with pytest.raises(ValueError, match="finite value > 0"):
-        source.start(widget, interval=0)
-    assert source._watch_thread is thread
-    assert thread.is_alive()
-
-    # C2: the only widget reference is released, expect the worker to exit and
-    # naturally clear both lifecycle fields without an explicit stop call.
-    del widget
-    gc.collect()
-    _wait_until(lambda: source._watch_thread is None)
-    assert not thread.is_alive()
-    assert source._watch_stop is None
-
-
-@pytest.mark.parametrize("bin_attribute", ["_display_bin_factor", "_display_bin"])
-def test_watched_folder_calibration_uses_display_pixel_size(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    bin_attribute: str,
-) -> None:
-    class Dataset:
-        array = np.arange(8 * 10, dtype=np.uint16).reshape(8, 10)
-        sampling = (0.25, 0.5)
-        units = ("nm", "nm")
-
-    monkeypatch.setattr(widget_io, "read_image", lambda path: Dataset())
-    (tmp_path / "frame_1.fake.npy").write_bytes(b"calibrated")
-    source = WatchedImageFolder(tmp_path, mode="panels")
-    arrays, _ = source.read_initial()
-
-    class CalibratedWidget:
-        pixel_size = 0.0
-        pixel_sizes: list[float] = []
-        pixel_unit = "pixels"
-        scale_bar_visible = True
-
-    widget = CalibratedWidget()
-    setattr(widget, bin_attribute, 2)
-
-    # C1: native sampling is attached to a 2x display preview, expect exact
-    # source data plus calibration expressed per display pixel.
-    source.attach(widget, explicit_calibration=False)
-    np.testing.assert_array_equal(arrays[0], Dataset.array)
-    assert widget.pixel_size == pytest.approx(1.0)
-    assert widget.pixel_sizes == pytest.approx([1.0])
-    assert widget.pixel_unit == "nm"
-    assert widget.scale_bar_visible is True
+    try:
+        assert thread is not None and thread.is_alive()
+        # an invalid interval fails validation before the healthy thread is stopped
+        with pytest.raises(ValueError, match="finite value > 0"):
+            widget.watch_folder(interval=0)
+        assert source._watch_thread is thread and thread.is_alive()
+    finally:
+        widget.close()
+    assert source._watch_thread is None and not thread.is_alive()
 
 
 @pytest.mark.parametrize("viewer", [Show2D, Show3D])
@@ -650,10 +571,9 @@ def test_folder_widget_append_preserves_display_bin_and_calibration(
         np.testing.assert_array_equal(widget._data[:, 0, 0], [1, 2])
         assert widget._display_data.shape == (2, 4, 5)
         assert widget.pixel_size == pytest.approx(1.0)
-        assert widget.scale_bar_visible is True
+        assert widget.show_scale_bar is True
         if viewer is Show2D:
-            assert widget._display_bin_factor == 2
-            assert widget.pixel_sizes == pytest.approx([1.0, 1.0])
+            assert widget.display_bin == 2
         else:
             assert widget._display_bin == 2
     finally:
@@ -670,11 +590,11 @@ def test_show2d_empty_first_recomputes_auto_display_bin(
     widget = Show2D.from_folder(tmp_path, watch=True, watch_interval=60, display_bin="auto")
     try:
         assert widget.n_images == 0
-        assert widget._display_bin_factor == 1
+        assert widget.display_bin == 1
         _save(tmp_path / "frame_1.npy", 1, shape=(16, 16))
         assert widget.poll_folder() == []
         assert widget.poll_folder() == [0]
-        assert widget._display_bin_factor == 4
+        assert widget.display_bin == 4
         assert widget._data.shape == (1, 16, 16)
         assert widget._display_data.shape == (1, 4, 4)
     finally:
@@ -706,7 +626,7 @@ def test_folder_calibration_is_preserved_until_files_disagree(
     try:
         assert widget.pixel_size == pytest.approx(0.2)
         assert widget.pixel_unit == "nm"
-        assert widget.scale_bar_visible is True
+        assert widget.show_scale_bar is True
 
         sampling_by_name["frame_3.fake.npy"] = 0.3
         (tmp_path / "frame_3.fake.npy").write_bytes(b"new mixed calibration")
@@ -714,8 +634,8 @@ def test_folder_calibration_is_preserved_until_files_disagree(
         assert widget.poll_folder() == [2]
 
         assert widget.pixel_size == 0.0
-        assert widget.scale_bar_visible is False
-        assert "different sampling or units" in widget._folder_calibration_status
+        assert widget.show_scale_bar is False
+        assert "different sampling or units" in widget._folder_source.calibration_status
     finally:
         widget.close()
 

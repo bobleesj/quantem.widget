@@ -1,13 +1,18 @@
 """Detector and scan masks for the viewer, and the bright-field disk fit.
 
-The widget owns the geometry of every virtual detector (``detector_mask``,
-``fit_probe``); ``quantem.gpu.detector`` uses the same definitions, which the
-parity tests check, so a viewer ROI and ``detector.bf`` / ``detector.adf`` are
-pixel-identical. This module turns the widget's ROI traits into masks and hands
-them to a detector session.
+The widget owns the geometry of every virtual detector (``detector_mask``);
+``quantem.gpu.detector`` uses the same definitions, which the parity tests
+check, so a viewer ROI and ``detector.bf`` / ``detector.adf`` are
+pixel-identical. The bright-field disk is quantem.gpu's
+``detector.fit_bright_field_disk``, the disk SSB reads. This module turns the
+widget's ROI traits into masks and hands them to a detector session.
 """
 
+import math
+
 import numpy as np
+
+from quantem.widget.adapters import gpu as gpu_adapter
 
 PRESET_RADII = {"bf": (0.0, 1.0), "abf": (0.5, 1.0), "adf": (1.0, 2.0), "haadf": (2.0, 4.0)}
 
@@ -49,17 +54,41 @@ def roi_mask(
     return point
 
 
-def preset_mask(name: str, det_shape: tuple[int, int], center: tuple[float, float], bf_radius: float) -> np.ndarray:
-    """Detector mask of a named preset (BF, ABF, ADF, HAADF) around the fitted disk.
+def detector_reach_px(det_shape: tuple[int, int], center: tuple[float, float]) -> float:
+    """Radius of the largest whole circle around ``center`` the detector holds: the distance to its nearest edge."""
+    rows, cols = det_shape
+    center_row, center_col = (float(value) for value in center)
+    return max(0.0, min(center_row + 0.5, rows - 0.5 - center_row, center_col + 0.5, cols - 0.5 - center_col))
+
+
+def preset_radii(name: str, det_shape: tuple[int, int], center: tuple[float, float],
+                 bright_field_radius_px: float) -> tuple[float, float, float] | None:
+    """``(inner, outer, nominal_outer)`` detector radii of a named preset, or None when the detector holds no ring.
 
     The annuli are multiples of the bright-field radius: ABF covers the outer
-    half of the disk, ADF one to two radii, HAADF two to four radii. These are
-    the ranges ``Show4DSTEM.apply_preset`` writes into the ROI traits, so a
-    preset click and its precomputed image use the same pixels.
+    half of the disk, ADF one to two radii, HAADF two to four radii. ADF and
+    HAADF rings end at ``detector_reach_px``: beyond it a ring is cut at the
+    detector edges and keeps only its corners. A ring narrower than one pixel
+    there (HAADF of a disk wider than a quarter of the detector) is None.
     """
-    inner, outer = PRESET_RADII[name]
-    radius = max(1.0, float(bf_radius))
-    return detector_mask(center, inner * radius, outer * radius, det_shape)
+    inner, outer = (factor * max(1.0, float(bright_field_radius_px)) for factor in PRESET_RADII[name])
+    if name in ("bf", "abf"):
+        return inner, outer, outer
+    reach = detector_reach_px(det_shape, center)
+    if reach - inner < 1.0:
+        return None
+    return inner, min(outer, reach), outer
+
+
+def preset_mask(name: str, det_shape: tuple[int, int], center: tuple[float, float],
+                bright_field_radius_px: float) -> np.ndarray | None:
+    """Detector mask of a named preset (BF, ABF, ADF, HAADF) around the fitted disk, or None (see ``preset_radii``).
+
+    These are the radii ``Show4DSTEM.apply_preset`` writes into the ROI traits,
+    so a preset click and its precomputed image use the same pixels.
+    """
+    radii = preset_radii(name, det_shape, center, bright_field_radius_px)
+    return None if radii is None else detector_mask(center, radii[0], radii[1], det_shape)
 
 
 def scan_indices(
@@ -89,18 +118,17 @@ def scan_indices(
 
 
 def fit_disk(mean_dp: np.ndarray, det_shape: tuple[int, int], default_ratio: float) -> tuple[float, float, float]:
-    """Bright-field disk ``(center_row, center_col, radius)`` from the mean pattern.
+    """Bright-field disk ``(center_row, center_col, edge_radius)`` from the mean pattern (``fit_bright_field_disk``).
 
-    ``fit_probe`` thresholds at mean plus one standard
-    deviation and takes the equivalent-area radius. When no pixel passes the
-    threshold (a blank or uniform pattern) the viewer keeps the detector
-    midpoint and ``default_ratio`` of the smaller detector side, which is what
-    the untouched traits already hold.
+    When no pixel stands above mean plus one standard deviation (a blank or
+    uniform pattern) the viewer keeps the detector midpoint and
+    ``default_ratio`` of the smaller detector side, which is what the untouched
+    traits already hold.
     """
-    (center_row, center_col), radius = fit_probe(mean_dp)
-    pattern = np.asarray(mean_dp, dtype=np.float32)
-    if not np.any(pattern > float(pattern.mean()) + float(pattern.std())):
+    pattern = np.asarray(mean_dp, dtype=np.float64)
+    if not np.any(pattern > pattern.mean() + pattern.std()):
         return det_shape[0] / 2, det_shape[1] / 2, min(det_shape) * default_ratio
+    (center_row, center_col), radius = fit_bright_field_disk(pattern)
     return center_row, center_col, radius
 
 
@@ -119,22 +147,24 @@ def detector_mask(center: tuple[float, float], inner_px: float, outer_px: float,
     return (distance >= inner_px) & (distance <= outer_px)
 
 
-def fit_probe(mean_dp: np.ndarray) -> tuple[tuple[float, float], float]:
-    """Bright-field disk ``((center_row, center_col), radius)`` of a mean pattern.
+def fit_bright_field_disk(mean_dp: np.ndarray) -> tuple[tuple[float, float], float]:
+    """Bright-field disk ``((center_row, center_col), edge_radius)`` of a mean pattern, in detector pixels.
 
-    Pixels above ``mean + std`` (population standard deviation) form the disk;
-    the centre is their unweighted centroid and the radius ``sqrt(area / pi)``.
-    With no pixel above the threshold the detector midpoint and a quarter of the
-    smaller side are returned.
+    quantem.gpu's ``detector.fit_bright_field_disk``: the centre is the
+    centroid of the pixels above ``mean + std`` (population standard
+    deviation) and the radius the one at which the disk falls to half its
+    plateau, where the convergence semiangle sits. An install without
+    quantem.gpu (no supported GPU torch) computes the same rule here in
+    float64; ``tests/infrastructure/test_platform.py`` checks the two agree.
     """
-    pattern = np.asarray(mean_dp, dtype=np.float32)
-    disk = pattern > float(pattern.mean()) + float(pattern.std())
-    area = int(disk.sum())
-    if area == 0:
-        detector_rows, detector_cols = pattern.shape
-        return (detector_rows / 2.0, detector_cols / 2.0), min(detector_rows, detector_cols) * 0.25
-    rows = np.arange(pattern.shape[0], dtype=np.float32)[:, None]
-    cols = np.arange(pattern.shape[1], dtype=np.float32)[None, :]
-    center_row = float((rows * disk).sum() / area)
-    center_col = float((cols * disk).sum() / area)
-    return (center_row, center_col), float(np.sqrt(area / np.pi))
+    if gpu_adapter.available():
+        return gpu_adapter.fit_bright_field_disk(mean_dp)
+    pattern = np.asarray(mean_dp, dtype=np.float64)
+    disk = pattern > pattern.mean() + pattern.std()
+    if not disk.any():
+        raise ValueError("The mean diffraction pattern has no bright-field disk: no pixel exceeds its mean plus one "
+                         "standard deviation. Pass bright_field_center_px= and bright_field_radius_px=.")
+    rows, cols = np.nonzero(disk)
+    half_plateau = 0.5 * float(np.median(pattern[disk]))
+    radius = math.sqrt(np.count_nonzero(pattern > half_plateau) / math.pi)
+    return (float(rows.mean()), float(cols.mean())), radius

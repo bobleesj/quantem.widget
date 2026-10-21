@@ -129,6 +129,26 @@ fn range_stride() -> u32 { return max(params.groups, 1u) * 256u; }
 fn range_steps(stride: u32) -> u32 { return min(params.count / stride + 1u, RANGE_MAX_STEPS); }
 `;
 
+// The full-screen triangle vertex stage and packed-RGB unpack of the direct colormap shaders.
+const FULLSCREEN_VERTEX_WGSL = /* wgsl */ `struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> VSOut {
+  var out: VSOut;
+  let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
+  let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
+  out.pos = vec4f(x, y, 0.0, 1.0);
+  out.uv = vec2f((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+  return out;
+}
+
+fn unpack_rgb(rgb: u32) -> vec4f {
+  let r = f32(rgb & 0xFFu) / 255.0;
+  let g = f32((rgb >> 8u) & 0xFFu) / 255.0;
+  let b = f32((rgb >> 16u) & 0xFFu) / 255.0;
+  return vec4f(r, g, b, 1.0);
+}
+`;
+
 export const COLORMAP_SHADER = DISPLAY_NORMALIZE_WGSL + /* wgsl */ `
 struct Params {
   width: u32,
@@ -262,24 +282,7 @@ struct Params {
 @group(0) @binding(1) var<storage, read> data: array<f32>;
 @group(0) @binding(2) var<storage, read> lut: array<u32>;
 
-struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
-
-@vertex fn vs(@builtin(vertex_index) vi: u32) -> VSOut {
-  var out: VSOut;
-  let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
-  let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
-  out.pos = vec4f(x, y, 0.0, 1.0);
-  out.uv = vec2f((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-  return out;
-}
-
-fn unpack_rgb(rgb: u32) -> vec4f {
-  let r = f32(rgb & 0xFFu) / 255.0;
-  let g = f32((rgb >> 8u) & 0xFFu) / 255.0;
-  let b = f32((rgb >> 16u) & 0xFFu) / 255.0;
-  return vec4f(r, g, b, 1.0);
-}
-
+${FULLSCREEN_VERTEX_WGSL}
 @fragment fn fs(in: VSOut) -> @location(0) vec4f {
   if (params.cols == 0u || params.rows == 0u || params.panel_count == 0u || params.src_width == 0u || params.src_height == 0u) {
     return unpack_rgb(params.bg_rgb);
@@ -347,24 +350,7 @@ struct Params {
 @group(0) @binding(1) var<storage, read> data: array<f32>;
 @group(0) @binding(2) var<storage, read> lut: array<u32>;
 
-struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
-
-@vertex fn vs(@builtin(vertex_index) vi: u32) -> VSOut {
-  var out: VSOut;
-  let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
-  let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
-  out.pos = vec4f(x, y, 0.0, 1.0);
-  out.uv = vec2f((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-  return out;
-}
-
-fn unpack_rgb(rgb: u32) -> vec4f {
-  let r = f32(rgb & 0xFFu) / 255.0;
-  let g = f32((rgb >> 8u) & 0xFFu) / 255.0;
-  let b = f32((rgb >> 16u) & 0xFFu) / 255.0;
-  return vec4f(r, g, b, 1.0);
-}
-
+${FULLSCREEN_VERTEX_WGSL}
 @fragment fn fs(in: VSOut) -> @location(0) vec4f {
   if (params.src_width == 0u || params.src_height == 0u) {
     return vec4f(0.0, 0.0, 0.0, 1.0);
@@ -446,24 +432,7 @@ struct RangeOut { vmin: f32, vmax: f32, _p0: f32, _p1: f32 };
 fn display_value(index: u32) -> f32 {
   return data[index];
 }
-struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
-
-@vertex fn vs(@builtin(vertex_index) vi: u32) -> VSOut {
-  var out: VSOut;
-  let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
-  let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
-  out.pos = vec4f(x, y, 0.0, 1.0);
-  out.uv = vec2f((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-  return out;
-}
-
-fn unpack_rgb(rgb: u32) -> vec4f {
-  let r = f32(rgb & 0xFFu) / 255.0;
-  let g = f32((rgb >> 8u) & 0xFFu) / 255.0;
-  let b = f32((rgb >> 16u) & 0xFFu) / 255.0;
-  return vec4f(r, g, b, 1.0);
-}
-
+${FULLSCREEN_VERTEX_WGSL}
 @fragment fn fs(in: VSOut) -> @location(0) vec4f {
   if (params.src_width == 0u || params.src_height == 0u) {
     return vec4f(0.0, 0.0, 0.0, 1.0);
@@ -522,7 +491,7 @@ export const PACKED_PANEL_TRANSFORM_SHADER = DISPLAY_NORMALIZE_WGSL + /* wgsl */
 struct Params {
   dims0: vec4u,  // src_width, src_height, source_panel_width, out_width
   dims1: vec4u,  // out_height, panel_count, cols, rows
-  flags: vec4u,  // log_scale, bg_rgb, smooth, use_source_indices
+  flags: vec4u,  // unused (per-panel log is ranges.z), bg_rgb, smooth, use_source_indices
   geom: vec4f,   // gap, _pad0, _pad1, _pad2
 };
 
@@ -616,7 +585,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let region_w = max(1u, min(params.dims0.z, params.dims0.x - src_x0));
   var val = sample_value(src_x0, region_w, image_x, image_y, panel_w, panel_h);
   let range_info = ranges[panel_idx];
-  if (params.flags.x == 1u || range_info.z > 0.5) {
+  if (range_info.z > 0.5) {
     if (val >= 0.0) { val = log(1.0 + val); } else { val = -log(1.0 - val); }
   }
   let t = display_normalize(val, range_info.x, range_info.y);

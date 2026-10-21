@@ -5,7 +5,9 @@ owns ONE ``dataset.yaml`` file. Multi-condition sessions (e.g. light
 on/off, dose-series, dark references) encode their tagging inside that
 single yaml, never split into per-condition yamls.
 
-Schema (additive, schema_version=1):
+Schema (additive; a file says ``schema_version: 1`` or ``schema: quantem.dataset/2``,
+the layout quantem.live writes since its one-name-per-setting release; the condition
+blocks below read the same under both):
 
     session:
       name: mos2
@@ -47,6 +49,8 @@ logger = logging.getLogger(__name__)
 
 #: Highest ``schema_version`` this reader knows; a newer file still parses with a warning.
 SCHEMA_VERSION = 1
+#: The ``schema`` string of a dataset.yaml written by quantem.live's current release.
+DATASET_SCHEMA = "quantem.dataset/2"
 
 
 @dataclass
@@ -64,8 +68,12 @@ def load_dataset_yaml(session_dir: Path) -> dict:
     """Read ``<session_dir>/dataset.yaml`` and return parsed dict.
 
     Returns ``{}`` if the file does not exist (caller decides whether
-    that is fatal). Schema version is checked but not enforced: a
-    higher version still parses, just emits a warning.
+    that is fatal). A file marked ``schema: quantem.dataset/2`` or
+    ``schema_version: 1`` is read; a higher ``schema_version`` still
+    parses with a warning. Any other ``schema`` string, or neither key,
+    raises ValueError: without the check a file of an unknown layout
+    would read as one without conditions, and every acquisition would
+    silently lose its tag.
     """
     path = Path(session_dir) / "dataset.yaml"
     if not path.is_file():
@@ -76,8 +84,12 @@ def load_dataset_yaml(session_dir: Path) -> dict:
         raise ImportError("Reading dataset.yaml needs PyYAML: pip install pyyaml") from exc
     with open(path) as handle:
         data = yaml.safe_load(handle) or {}
+    if "schema" in data:
+        if data["schema"] != DATASET_SCHEMA:
+            raise ValueError(f"{path} has schema {data['schema']!r}; this reader takes {DATASET_SCHEMA!r} or schema_version {SCHEMA_VERSION}")
+        return data
     if "schema_version" not in data:
-        raise ValueError(f"{path} missing schema_version")
+        raise ValueError(f"{path} missing schema_version (or schema: {DATASET_SCHEMA})")
     if int(data["schema_version"]) > SCHEMA_VERSION:
         logger.warning("%s schema_version=%s is newer than this reader knows (max=%d)", path, data["schema_version"], SCHEMA_VERSION)
     return data

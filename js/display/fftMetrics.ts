@@ -1,3 +1,5 @@
+import { angstromsPerUnit } from "../units";
+
 export type FftQualityMetrics = {
   sharp: number | null;
   peaks: number;
@@ -26,17 +28,11 @@ function finiteMagnitude(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
-/** Pixel size in angstrom, or null when the unit is pixels or unknown (no physical band then). */
+/** Pixel size in angstrom, or null when the unit is pixels or not a length (no physical band then). */
 function samplingToAngstrom(sampling: number | null | undefined, unit: string | null | undefined): number | null {
-  if (sampling == null || !Number.isFinite(sampling) || sampling <= 0) return null;
-  const normalized = String(unit || "").trim().toLowerCase();
-  if (!normalized || normalized === "px" || normalized === "pixel" || normalized === "pixels") return null;
-  if (normalized === "a" || normalized === "å" || normalized === "angstrom" || normalized === "angstroms") return sampling;
-  if (normalized === "nm" || normalized === "nanometer" || normalized === "nanometers") return sampling * 10;
-  if (normalized === "pm" || normalized === "picometer" || normalized === "picometers") return sampling * 0.01;
-  if (normalized === "um" || normalized === "µm" || normalized === "micrometer" || normalized === "micrometers") return sampling * 10000;
-  if (normalized === "m") return sampling * 1e10;
-  return null;
+  const unitAngstroms = angstromsPerUnit(unit);
+  if (sampling == null || !Number.isFinite(sampling) || sampling <= 0 || unitAngstroms === undefined) return null;
+  return sampling * unitAngstroms;
 }
 
 /**

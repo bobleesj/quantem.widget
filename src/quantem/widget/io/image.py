@@ -122,14 +122,14 @@ def read_image(path: str | Path):
       **Color PNG/JPEG/TIFF keep RGB** (``RgbImage`` with shape ``(H, W, 3)``);
       they are not converted to a single gray channel. Pass the result to
       ``Show2D`` or ``Show3D`` to display true color.
-    - ``.dm3`` / ``.dm4`` - Gatan, via ncempy.
+    - ``.dm3`` / ``.dm4`` - Gatan, via ncempy, with the pixel size and unit the file records.
 
     Grayscale results are a quantem core ``Dataset2d`` (on an Intel Mac or
     Windows on ARM, which cannot install quantem core, the widget's stand-in
     with the same ``array``, ``name``, ``sampling``, ``units`` and
-    ``metadata``). Color results are :class:`RgbImage`. A multi-frame
-    container is reduced to its first frame. A Velox EMD keeps its metadata in
-    ``metadata`` and its scan rotation in ``scan_rotation_deg``.
+    ``metadata``). Color results are :class:`RgbImage`. A multi-frame file
+    gives its first frame and prints one line saying so. A Velox EMD keeps its
+    metadata in ``metadata`` and its scan rotation in ``scan_rotation_deg``.
 
     Examples
     --------
@@ -139,22 +139,25 @@ def read_image(path: str | Path):
     path = Path(path)
     suffix = path.suffix.lower()
     if suffix == ".npy":
-        return _wrap_image_array(_normalize_image_array(np.load(path)), name=path.stem)
+        return _wrap_image_array(_normalize_image_array(np.load(path), path.name), name=path.stem)
     if suffix == ".emd":
         return _read_emd(path)
-    if suffix == ".gif":
-        from PIL import Image  # noqa: PLC0415
-        with Image.open(path) as image:  # the first frame, as gray
-            return make_dataset(np.asarray(image.convert("L"), dtype=np.float32), name=path.stem)
-    if suffix in (".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp"):
+    if suffix in (".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp", ".gif"):
         from PIL import Image  # noqa: PLC0415  (lazy: keep io import cheap)
         with Image.open(path) as image:
+            frames = getattr(image, "n_frames", 1)  # Pillow's documented probe: only multi-frame formats define it
             arr = _pil_to_array(image)
-        return _wrap_image_array(_normalize_image_array(arr), name=path.stem)
+        if frames > 1:
+            _announce_first_frame(path.name, frames)
+        return _wrap_image_array(_normalize_image_array(arr, path.name), name=path.stem)
     if suffix in (".dm3", ".dm4"):
         from ncempy.io import dm  # noqa: PLC0415
-        arr = np.asarray(dm.dmReader(str(path))["data"])
-        return _wrap_image_array(_normalize_image_array(arr), name=path.stem)
+        gatan = dm.dmReader(str(path))
+        arr = np.asarray(gatan["data"])
+        # the last two axes are the image; an axis Gatan left uncalibrated has an empty unit
+        return _wrap_image_array(_normalize_image_array(arr, path.name), name=path.stem,
+                                 sampling=tuple(float(step) for step in gatan["pixelSize"][-2:]),
+                                 units=tuple(str(unit) or "pixels" for unit in gatan["pixelUnit"][-2:]))
     raise ValueError(
         f"read_image: unsupported extension {suffix!r} "
         "(use .npy, .emd, .tif/.tiff, .png, .jpg, .bmp, .gif, .dm3/.dm4)")
@@ -189,8 +192,18 @@ def _pil_to_array(image) -> np.ndarray:
     return np.asarray(image)
 
 
-def _normalize_image_array(arr: np.ndarray) -> np.ndarray:
-    """Keep RGB color; reduce multi-frame containers to the first frame.
+def _announce_first_frame(source: str, frames: int) -> None:
+    """Say that a multi-frame file gave only its first frame, and how to get every frame.
+
+    A survey-image reader returns one image; without this line the other
+    frames would vanish without a word (no silent data reduction).
+    """
+    print(f"read_image: {source} holds {frames} frames; kept frame 0. Load the whole array "
+          "(np.load, tifffile.imread) and pass it to Show3D for every frame.")
+
+
+def _normalize_image_array(arr: np.ndarray, source: str) -> np.ndarray:
+    """Keep RGB color; reduce a multi-frame container to its first frame, saying so.
 
     Channel-last RGB(A) is detected and kept, so an ``(H, W, 3)`` color image is
     never mistaken for a 3-frame stack.
@@ -202,9 +215,11 @@ def _normalize_image_array(arr: np.ndarray) -> np.ndarray:
         return arr[..., :3]
     if arr.ndim == 4 and arr.shape[-1] in (3, 4):
         # Multi-page color TIFF / multi-frame container → first color frame.
+        _announce_first_frame(source, arr.shape[0])
         return arr[0, ..., :3]
     if arr.ndim in (3, 4):
         # Grayscale multi-frame (N, H, W), or another 4D layout → first plane.
+        _announce_first_frame(source, arr.shape[0])
         return arr[0]
     raise ValueError(
         f"Unsupported image array shape {arr.shape}; expected (H, W), "
@@ -233,6 +248,8 @@ def _read_emd(path: Path):
             group = next(iter(handle["Data/Image"]))
             arr = handle[f"Data/Image/{group}/Data"][...]
             metadata = _read_velox_metadata(handle, group)
+            if arr.ndim == 3 and arr.shape[2] > 1:  # Velox stacks frames on the last axis
+                _announce_first_frame(path.name, arr.shape[2])
             image = arr[:, :, 0] if arr.ndim == 3 else arr
             sampling, units = _velox_sampling(metadata)
             dataset = make_dataset(image, sampling=sampling, units=units, name=path.stem)
@@ -243,7 +260,7 @@ def _read_emd(path: Path):
         handle.visititems(lambda name, obj: candidates.append(obj)
                           if isinstance(obj, h5py.Dataset) and obj.ndim >= 2 else None)
         arr = max(candidates, key=lambda obj: obj.size)[()]
-    dataset = make_dataset(_normalize_image_array(arr).astype(np.float32), name=path.stem)
+    dataset = make_dataset(_normalize_image_array(arr, path.name), name=path.stem)  # native dtype, as the Velox path
     dataset.scan_rotation_deg = None                 # no Velox metadata to read the angle from
     return dataset
 
@@ -416,7 +433,7 @@ def _read_frame(path: Path) -> np.ndarray:
         from PIL import Image
         with Image.open(path) as image:
             arr = _pil_to_array(image)
-    arr = _normalize_image_array(arr)
+    arr = _normalize_image_array(arr, path.name)
     if _is_rgb_array(arr):
         # uint8 color PNGs → unit-range float; float color stays clipped later in Show*.
         out = arr.astype(np.float32, copy=False)

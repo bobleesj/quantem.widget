@@ -100,29 +100,31 @@ bar units, and stars carry over.
 
 Snapshot panels use the same scale-bar convention as `Show3D`: pass
 `sampling=...` and `units=...` for calibrated physical units, or omit them for
-a pixel scale bar. Set `scale_bar_visible=False` for a clean export.
+a pixel scale bar. Set `show_scale_bar=False` for a clean export.
 
 ## Line profiles
 
 `Show1D.from_image(image, line=((row0, col0), (row1, col1)))` samples a profile
 in `(row, col)` image coordinates and keeps the image beside the trace.
-`profile_width` averages that many parallel lines; `sampling` and `x_unit`
+`profile_width` averages that many parallel lines; `sampling` and `units`
 calibrate the distance axis. `quantem.widget.show1d.sample_line_profile` is the
 sampling function on its own.
 
 ## Built-in ducky example
 
-The Show1D tutorial reads the real ducky joint-time ptychography sweep from the
-public QuantEM data repository:
+The Show1D tutorial reads reconstruction snapshots for the synthetic Ducky
+example from the public QuantEM data repository.
+
+Ducky simulation tutorial: Georgios Varnavides, [*Trademark ducky dataset* (October 23, 2025)](https://github.com/electronmicroscopy/quantem-tutorials/blob/dbadc111734641226ab0454ed988feaf018e65c4/simulation_notebooks/ducky-dataset.ipynb). The viewer files contain subsequent reconstruction results for the synthetic example.
 
 ```python
 from quantem.widget import Show1D
 from quantem.widget.datasets import show1d_ducky
 
-run = show1d_ducky(size="small")
+run = show1d_ducky()
 widget = Show1D.from_monitor_file(
     run / "show1d_monitor.jsonl",
-    title="Real ducky joint iterative ptychography",
+    title="Synthetic Ducky reconstructions (tutorial: Georgios Varnavides)",
     x_label="frame",
     y_label="final loss",
     log_scale=False,
@@ -133,40 +135,34 @@ widget = Show1D.from_monitor_file(
 widget
 ```
 
-The dataset files live under `widget-tutorials/show1d/ducky/small/...` in
-`bobleesj/quantem-data`. See [Tutorial Datasets](./datasets.md) for the shared
-`small`, `medium`, `large`, and `full` size convention.
+The default pins `widget/ducky/` in `bobleesj/quantem-data`; all
+monitor-relative snapshot paths stay intact. See [Tutorial datasets](datasets.md)
+for the exact revision. This helper has one collection and no
+`size` argument. Retain the visible source credit when exporting a notebook,
+report or standalone widget. See [Tutorial datasets](./datasets.md) for the
+exact revisions and inputs.
 
 ## HTML export
 
-Show1D follows the package export signature, with a deliberately narrower set
-of supported values:
+Show1D writes one page with exact float32 traces; its only packing choice is
+the image image_bin:
 
 ```python
-path = widget.export_html(
-    "defocus-review.html",
-    mode="single",
-    encoding="full",
-    downsample=4,
-)
+path = widget.export_html("defocus-review.html", image_bin=4)
 ```
 
-`mode="single"` and `encoding="full"` are the only supported packaging and
-encoding choices. `downsample` may be `None`, `1`, `2`, `4`, or `8`. It
+`image_bin` may be `None`, `1`, `2`, `4`, or `8`. It
 preserves every 1D trace sample and x coordinate while applying a NaN-aware
 area mean only to linked 2D snapshots and profile images. Calibrated pixel size,
 snapshot view centers, and profile coordinates are rescaled with the image, so
 the downsampled review remains physically calibrated.
 
-Show1D does not provide `mode="folder"` or `encoding="uint8"`. Those values
-raise `NotImplementedError` with guidance to use a full single export and an
-image downsample factor. A full export can be large when hundreds of
-full-resolution snapshots are linked, so choose `downsample=2`, `4`, or `8`
-when one-file portability matters more than preserving every image pixel.
+A full export can be large when hundreds of full-resolution snapshots are
+linked, so choose `image_bin=2`, `4`, or `8` when one-file portability matters
+more than preserving every image pixel.
 
-The generated file is kernel-free, but the embed loads RequireJS, AnyWidget,
-and the Jupyter HTML manager from public CDNs. Treat it as a standalone review
-file with a network dependency, not as proof of network-offline operation.
+The generated file is kernel-free and needs no network: RequireJS, AnyWidget
+and the Jupyter HTML manager travel inside the page (about 1.2 MB).
 
 `save_image("traces.png")` writes a matplotlib figure of the traces (`.pdf`
 also works); `save("view.json")` writes the display state that
@@ -226,7 +222,7 @@ no console error, no NaN frame).
 | Trial tag buttons | `trial_tags` | In Review mode, stores quick tags such as best, bad start, probe drift, and object issue |
 | Review table | `trial_rankings`, `trial_alerts`, `best_trial_label` | In Review mode, shows candidate ranking, alerts, and the best trial |
 | View -> View selected as 2D | `handoff_request`, `prepared_view_widget`, `handoff_status` | Builds an embedded Show2D gallery from the selected snapshot group for deeper image analysis |
-| Snapshot scale bar API | `pixel_size`, `pixel_unit`, `scale_bar_visible` | Snapshot panels show a Show3D-style scale bar and zoom readout |
+| Snapshot scale bar API | `pixel_size`, `pixel_unit`, `show_scale_bar` | Snapshot panels show a Show3D-style scale bar and zoom readout |
 | Snapshot real-space view API | `snapshot_real_space_zoom`, `snapshot_real_space_center` | Starts or restores real-space snapshot panels at a given zoom and `(row, col)` center |
 | Snapshot FFT view API | `snapshot_fft_zoom`, `snapshot_fft_center` | Starts or restores FFT panels at a given zoom and `(row, col)` FFT center |
 | Snapshot histogram | computed automatically | Selected snapshot histogram stays visible with draggable contrast knots and a numeric range readout; histogram and snapshot FFT use WebGPU when the browser has it, with a CPU fallback |

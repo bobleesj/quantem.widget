@@ -43,7 +43,11 @@ If unsure whether something is private, leave it out and ask.
 
 `PYTHONPATH=src python -m pytest -q` runs the test suite and must pass before
 every push. Browser tests need the built JS bundle (`npm ci && npm run build`)
-and a Chrome or Chromium executable; they skip when neither is found.
+and a Chrome or Chromium executable; they skip when neither is found. The
+build needs a quantem.gpu source: `QUANTEM_GPU_SRC=<quantem.gpu>/src` (a
+checkout at `gpu-ref.txt`), `PYTHON=<a python with quantem.gpu>`, or a
+checkout at `../quantem.gpu`; see CONTRIBUTING.md. Set `QUANTEM_GPU_SRC` on
+the npm command only, never exported for pytest.
 `python scripts/check_large_files.py` and
 `python scripts/check_notebook_sizes.py` are the size guards the release
 workflow runs.

@@ -440,7 +440,7 @@ def test_show4dstem_cli_count_defaults_to_full_detector(tmp_path, monkeypatch):
     def fake_render(masters, label, args, *, source_path=None):
         seen["masters"] = masters
         seen["label"] = label
-        seen["det_bin"] = args.det_bin
+        seen["detector_bin"] = args.detector_bin
         seen["backend"] = args.backend
         seen["source_path"] = source_path
         return tmp_path / "viewer.ipynb"
@@ -454,12 +454,12 @@ def test_show4dstem_cli_count_defaults_to_full_detector(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_render_4dstem_notebook", fake_render)
     monkeypatch.setattr(cli, "_launch_notebook", fake_launch)
 
-    assert cli.main(["show4dstem", str(tmp_path), "--count", "1", "--backend", "mps", "--no-open"]) == 0
+    assert cli.main(["show4dstem", str(tmp_path), "--count", "1", "--no-open"]) == 0
     assert seen["discover_path"] == str(tmp_path.resolve())
     assert seen["masters"] == [str(tmp_path / "scan_0_master.h5")]
     assert seen["label"] == tmp_path.name
-    assert seen["det_bin"] == 1
-    assert seen["backend"] == "mps"
+    assert seen["detector_bin"] == 1
+    assert seen["backend"] == "auto"
     assert seen["source_path"] == tmp_path.resolve()
     assert seen["notebook"] == tmp_path / "viewer.ipynb"
     assert seen["no_open"] is True
@@ -508,7 +508,7 @@ def test_show4dstem_webgpu_cli_opens_generated_command(tmp_path, monkeypatch):
     def fake_render(masters, label, args):
         seen["masters"] = masters
         seen["label"] = label
-        seen["det_bin"] = args.det_bin
+        seen["detector_bin"] = args.detector_bin
         seen["backend"] = args.backend
         return out
 
@@ -533,7 +533,7 @@ def test_show4dstem_webgpu_cli_opens_generated_command(tmp_path, monkeypatch):
     ]) == 0
     assert seen["masters"] == [str(tmp_path / "scan_0_master.h5")]
     assert seen["label"] == tmp_path.name
-    assert seen["det_bin"] == 1
+    assert seen["detector_bin"] == 1
     assert seen["backend"] == "webgpu"
     assert seen["opened"] == command
     assert seen["no_open"] is True
@@ -597,7 +597,7 @@ def test_render_show4dstem_webgpu_h5_uses_anonymous_h5_urls(
     monkeypatch.setattr("quantem.widget.show4dstem.widget.master_contract", fake_contract)
     monkeypatch.setattr("quantem.widget.show4dstem.export.write_webgpu_bundle", fake_export)
     monkeypatch.setattr(qw, "Show4DSTEM", FakeShow4DSTEM)
-    args = SimpleNamespace(det_bin=1, dtype="u8", out=str(tmp_path / "out"), title=None, verbose=False)
+    args = SimpleNamespace(detector_bin=1, dtype="uint8", out=str(tmp_path / "out"), title=None, verbose=False)
 
     html = cli._render_4dstem_webgpu_h5(masters, "private_folder", args)
 
@@ -606,7 +606,7 @@ def test_render_show4dstem_webgpu_h5_uses_anonymous_h5_urls(
     assert seen["kwargs"]["h5_urls"] == [
         f"../data/dataset_{idx:02d}_master.h5" for idx in range(count)
     ]
-    assert seen["kwargs"]["backend"] == "webgpu"
+    assert "backend" not in seen["kwargs"]  # the h5_urls source is what makes the page compute in the browser
     assert seen["kwargs"]["scan_shape"] == (4, 4)
     assert seen["kwargs"]["detector_shape"] == (8, 8)
     assert seen["kwargs"]["view_mode"] == view_mode
@@ -644,9 +644,9 @@ def test_show4dstem_dataset_label_uses_coordinates_when_available():
     assert cli._show4dstem_dataset_label("unknown_master.h5", 2) == "Dataset 3"
 
 
-def test_render_show4dstem_folder_notebook_records_backend_and_count(tmp_path):
-    """C7: generated CUDA folder notebooks preserve the seven-entry gate options."""
-    args = SimpleNamespace(backend="cuda", det_bin=1, out=str(tmp_path))
+def test_render_show4dstem_folder_notebook_records_the_count(tmp_path):
+    """C7: generated folder notebooks preserve the seven-entry gate options."""
+    args = SimpleNamespace(backend="auto", detector_bin=1, out=str(tmp_path))
 
     notebook = cli._render_4dstem_notebook(
         [str(tmp_path / f"tilt_{idx:02d}_master.h5") for idx in range(7)],
@@ -657,11 +657,11 @@ def test_render_show4dstem_folder_notebook_records_backend_and_count(tmp_path):
 
     text = notebook.read_text(encoding="utf-8")
     assert "Show4DSTEM.from_folder(" in text
-    assert "backend='cuda'" in text
+    assert "backend=" not in text
     assert "max_masters=7" in text
     assert "min_masters=7" in text
     assert "watch=False" in text
-    assert "det_bin" not in text and "dtype" not in text
+    assert "detector_bin" not in text and "dtype" not in text
 
 
 
@@ -698,7 +698,7 @@ def test_show4dstem_folder_watch_writes_live_notebook(tmp_path):
     code = "".join(json.loads(notebooks[0].read_text())["cells"][1]["source"])
     assert "Show4DSTEM.from_folder(" in code
     assert "scan_size=512" in code
-    assert "backend='auto'" in code
+    assert "backend=" not in code
     assert "watch=True, watch_interval=1.5" in code
 
 
@@ -711,23 +711,25 @@ def test_show4dstem_watch_requires_live_folder_notebook(tmp_path):
 
 
 
-def test_show4dstem_html_cli_threads_export_dtype() -> None:
-    """C1: CLI full export docs, expect --dtype uint16 to reach the export."""
-    import inspect
+def test_show4dstem_html_cli_threads_export_dtype(tmp_path, monkeypatch) -> None:
+    """C1: --dtype reaches export_html; argparse refuses the old u8/u16 spellings (E-L1, G-10)."""
+    from quantem.widget import Show4DSTEM
+    from quantem.widget.adapters import gpu as gpu_adapter
 
-    source = inspect.getsource(cli._render_4dstem)
-
-    assert "export_dtype = _show4dstem_export_dtype(args)" in source
-    assert "widget.export_html(str(out), title=args.title or stem, dtype=pack_dtype)" in source
-    assert cli._show4dstem_export_dtype(SimpleNamespace(dtype="auto")) == "auto"
-    assert cli._show4dstem_export_dtype(SimpleNamespace(dtype="uint16")) == "uint16"
-    assert cli._show4dstem_export_dtype(SimpleNamespace(dtype="u16")) == "uint16"
-    assert cli._show4dstem_export_dtype(SimpleNamespace(dtype="uint8")) == "uint8"
+    np.save(tmp_path / "scan.npy", np.ones((4, 4, 8, 8), np.uint16))
+    monkeypatch.setattr(gpu_adapter, "accelerator_ready", lambda: False)
+    seen = []
+    export = Show4DSTEM.export_html
+    monkeypatch.setattr(Show4DSTEM, "export_html", lambda self, path, **kwargs: seen.append(kwargs["dtype"]) or export(self, path, **kwargs))
+    command = ["show4dstem", str(tmp_path / "scan.npy"), "--html", "--no-open", "--out", str(tmp_path / "out")]
+    assert cli.main([*command, "--dtype", "uint16"]) == 0 and seen == ["uint16"]
+    with pytest.raises(SystemExit):
+        cli.main([*command, "--dtype", "u16"])
 
 
 @pytest.mark.parametrize("path", ["encoded", "dense"])
 def test_show4dstem_html_bins_master_by_rounded_mean(tmp_path, monkeypatch, path) -> None:
-    """C1a: a real 4x4x8x8 master, expect --bin 1 exact counts and --bin 2 rounded block means,
+    """C1a: a real 4x4x8x8 master, expect --detector-bin 1 exact counts and --detector-bin 2 rounded block means,
     from quantem.gpu's encoded acquisition and from the widget's dense reader alike."""
     import h5py
     import hdf5plugin
@@ -763,8 +765,8 @@ def test_show4dstem_html_bins_master_by_rounded_mean(tmp_path, monkeypatch, path
 
 
 def test_show4dstem_html_refuses_a_payload_no_page_can_hold_before_reading(tmp_path, monkeypatch, capsys) -> None:
-    """A master whose packed counts exceed the page limit, expect one refusal naming a --bin that fits,
-    without reading the acquisition (512 x 512 x 192 x 192 at --bin 1 read for 3 minutes, then failed)."""
+    """A master whose packed counts exceed the page limit, expect one refusal naming a --detector-bin that fits,
+    without reading the acquisition (512 x 512 x 192 x 192 at --detector-bin 1 read for 3 minutes, then failed)."""
     import h5py
     import hdf5plugin
 
@@ -779,8 +781,8 @@ def test_show4dstem_html_refuses_a_payload_no_page_can_hold_before_reading(tmp_p
 
     assert cli.main(command) == 1
     err = capsys.readouterr().err
-    assert "an offline HTML at --bin 1 packs 0.0 GB of uint8 counts" in err
-    assert "pass --bin 2, use --backend webgpu" in err
+    assert "an offline HTML at --detector-bin 1 packs 0.0 GB of uint8 counts" in err
+    assert "pass --detector-bin 2, use --backend webgpu" in err
 
 
 def test_show4dstem_cli_max_gb_reads_what_the_ceiling_refused(tmp_path, monkeypatch, capsys):
@@ -829,7 +831,7 @@ def test_show4dstem_html_serve_reports_every_file_and_the_url_before_blocking(tm
     monkeypatch.setattr(cli.threading, "Thread", lambda target, daemon: SimpleNamespace(start=lambda: None))
     monkeypatch.setattr(cli.threading, "Event", Interrupted)
     monkeypatch.delenv("DISPLAY", raising=False)
-    args = SimpleNamespace(det_bin=1, backend="auto", html=True, serve=True, no_open=False)
+    args = SimpleNamespace(detector_bin=1, backend="auto", html=True, serve=True, no_open=False)
     assert cli._do_4dstem(["a_master.h5", "b_master.h5"], "two", args) == 0
     assert "wrote 2 HTML files" in printed_before_blocking[0]
     assert "serving http://127.0.0.1:8123/scanA.html" in printed_before_blocking[0]
@@ -842,14 +844,14 @@ def test_show4dstem_serve_without_html_is_refused_in_one_line(tmp_path, capsys):
 
 
 def test_show4dstem_cli_html_bin_announces_the_detector_binning(tmp_path, monkeypatch, capsys):
-    """--bin reduces the detector, so the export says so and how to keep the full detector."""
+    """--detector-bin reduces the detector, so the export says so and how to keep the full detector."""
     from quantem.widget.adapters import gpu as gpu_adapter
 
     np.save(tmp_path / "scan.npy", np.ones((4, 4, 8, 8), np.uint16))
     monkeypatch.setattr(gpu_adapter, "accelerator_ready", lambda: False)
-    command = ["show4dstem", str(tmp_path / "scan.npy"), "--html", "--bin", "2", "--no-open", "--out", str(tmp_path / "out")]
+    command = ["show4dstem", str(tmp_path / "scan.npy"), "--html", "--detector-bin", "2", "--no-open", "--out", str(tmp_path / "out")]
     assert cli.main(command) == 0
-    assert "detector binned 2x2 (mean of each block), 8x8 -> 4x4; pass --bin 1 for the full detector" in capsys.readouterr().out
+    assert "detector binned 2x2 (mean of each block), 8x8 -> 4x4; pass --detector-bin 1 for the full detector" in capsys.readouterr().out
 
 
 def test_show4dstem_cli_html_auto_dtype_keeps_counts_above_255(tmp_path, monkeypatch, capsys):
@@ -865,8 +867,8 @@ def test_show4dstem_cli_html_auto_dtype_keeps_counts_above_255(tmp_path, monkeyp
     out = capsys.readouterr().out
     assert "counts reach 415, packed as uint16" in out
     assert "clipped" not in out
-    assert cli.main([*command, "--dtype", "u8"]) == 0
-    assert "--dtype u16 or auto on the command line" in capsys.readouterr().out
+    assert cli.main([*command, "--dtype", "uint8"]) == 0
+    assert "--dtype uint16 or auto on the command line" in capsys.readouterr().out
 
 
 def test_show4dstem_cli_out_refuses_a_file_name(tmp_path, capsys):
@@ -876,3 +878,16 @@ def test_show4dstem_cli_out_refuses_a_file_name(tmp_path, capsys):
     assert cli.main(command) == 1
     assert "--out is the output folder; x.html looks like a file name" in capsys.readouterr().err
     assert not (tmp_path / "x.html").exists()
+
+
+def test_show4dstem_backend_takes_auto_or_webgpu_only(tmp_path, capsys):
+    """E-1: --backend cuda/mps was ignored for one master, a read_4dstem device for several and a
+    quantem.gpu load backend for a folder, while the notebook title claimed it; auto already picks."""
+    master = tmp_path / "scan_master.h5"
+    master.write_bytes(b"\x00")
+    with pytest.raises(SystemExit):
+        cli.main(["show4dstem", str(master), "--backend", "cuda", "--no-open"])
+    assert "invalid choice: 'cuda'" in capsys.readouterr().err
+    assert cli.main(["show4dstem", str(master), "--no-open", "--out", str(tmp_path / "out")]) == 0
+    notebook = json.loads(next((tmp_path / "out").glob("*.ipynb")).read_text())
+    assert "backend" not in json.dumps(notebook).replace(str(tmp_path), "")

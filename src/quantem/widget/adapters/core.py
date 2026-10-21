@@ -19,7 +19,9 @@ except ImportError:
     Dataset = Dataset2d = Dataset3d = Dataset4dstem = None
 
 # Keys quantem core's Dataset4dstem puts in every new dataset's metadata.
-DATASET4DSTEM_METADATA_KEYS = ("r_to_q_rotation_cw_deg", "ellipticity")
+DATASET4DSTEM_METADATA_KEYS = (
+    "q_to_r_rotation_ccw_deg", "q_transpose", "ellipticity"
+)
 
 
 @dataclass(eq=False)

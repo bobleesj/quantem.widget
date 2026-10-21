@@ -189,6 +189,9 @@ rank Au first.
 
 ## Real data
 
+The current tutorial uses the synthetic control directly. The unavailable
+Fe3O4 download helper described in the historical audit below has been removed.
+
 None public. `datasets.showdiffraction_fe3o4` names
 `widget-tutorials/showdiffraction/fe3o4-saed` in `bobleesj/quantem-data`, but
 that folder is not in the dataset (neither at the pinned revision

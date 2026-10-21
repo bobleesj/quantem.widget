@@ -64,11 +64,13 @@ describe("shared masked crop reference", () => {
 });
 
 describe("shared bilinear line profile reference", () => {
-  it("uses ceil(length) endpoint-inclusive samples on a nonsquare image", () => {
+  it("takes ceil(length) + 1 endpoint-inclusive samples, as Python's sample_line_profile does", () => {
+    // a 3.6 px line: 5 samples at most 1 px apart (Show1D in Python and the browser, and
+    // scikit-image's profile_line, count the same); ceil(length) alone spaced them 1.2 px
     const ramp = Float32Array.from({ length: 12 }, (_, index) => Math.floor(index / 4) * 10 + index % 4);
     const values = sampleLineProfile(ramp, 4, 3, 0, 0, 2, 3);
-    expect(values).toHaveLength(4);
-    [0, 23 / 3, 46 / 3, 23].forEach((value, index) => {
+    expect(values).toHaveLength(5);
+    [0, 5.75, 11.5, 17.25, 23].forEach((value, index) => {
       expect(values[index]).toBeCloseTo(value, 5);
     });
   });
@@ -104,7 +106,7 @@ describe("quantized profile reference", () => {
 
   it("applies the finite collapsed-range policy while sampling uint8", () => {
     const encoded = Uint8Array.of(0, 255, 0, 255);
-    expect(Array.from(sampleLineProfileUint8(encoded, Number.NaN, 7, 2, 2, 0, 0, 1, 1))).toEqual([0, 7]);
-    expect(Array.from(sampleLineProfileUint8(encoded, 4, -4, 2, 2, 0, 0, 1, 1))).toEqual([4, 4]);
+    expect(Array.from(sampleLineProfileUint8(encoded, Number.NaN, 7, 2, 2, 0, 0, 1, 1))).toEqual([0, 3.5, 7]);
+    expect(Array.from(sampleLineProfileUint8(encoded, 4, -4, 2, 2, 0, 0, 1, 1))).toEqual([4, 4, 4]);
   });
 });

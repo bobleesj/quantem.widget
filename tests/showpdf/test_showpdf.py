@@ -1288,10 +1288,10 @@ def test_showpdf_saved_notebook_preview(cal_pdf, view):
         w.line_mode = "linescan"
     assert "nav_image_bytes" not in w.get_state()  # a notebook save, which stores the preview
     assert w._static_fallback_mime == "image/png"
-    image = np.asarray(Image.open(io.BytesIO(base64.b64decode(w._static_fallback_jpeg))))
+    image = np.asarray(Image.open(io.BytesIO(base64.b64decode(w._static_fallback_image))))
     assert image.shape[1] == 512 and image.std() > 5
     w.plot_mode = "Gr"
-    assert w._static_fallback_jpeg == ""
+    assert w._static_fallback_image == ""
 
 
 # ---------------------------------------------------------------------------
@@ -1396,7 +1396,7 @@ def test_showpdf_state_roundtrip(small_pdf, tmp_path, select, via):
         w.save(path)
         envelope = json.loads(pathlib.Path(path).read_text())
         assert envelope["widget_name"] == "ShowPDF"
-        assert {"metadata_version", "widget_version", "state"} <= set(envelope)
+        assert {"schema", "widget_version", "state"} <= set(envelope)
         state = path
     restored = ShowPDF(small_pdf, state=state)
     for key, value in w.state_dict().items():

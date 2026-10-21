@@ -29,23 +29,35 @@ interactive widgets.
 
 ## Install
 
+Use Python 3.11 or newer and keep **both index URLs**: QuantEM pre-releases
+come from TestPyPI; dependencies such as `anywidget` come from PyPI.
+Copy the complete line for your machine:
+
 ```bash
-pip install "quantem.widget[cuda]"   # NVIDIA GPU (Linux tested; Windows: CPU tested, CUDA untested)
-pip install "quantem.widget[mps]"    # Apple silicon Mac (Metal)
-pip install "quantem.widget[cpu]"    # no GPU, or an Intel Mac (the same as plain pip install quantem.widget)
+# NVIDIA GPU
+pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "quantem.widget[cuda]"
+
+# Apple silicon Mac
+pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "quantem.widget[mps]"
+
+# no GPU, or an Intel Mac
+pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "quantem.widget[cpu]"
 ```
 
-While the package is on TestPyPI, add `-i https://test.pypi.org/simple/
---extra-index-url https://pypi.org/simple/` to the line.
+Using **uv**? In your activated environment, use the same indexes:
 
-| Machine | Install | Widget compute (`device="auto"`) | `read_4dstem(path)`, `Show4DSTEM(path)` | Tested |
-|---|---|---|---|---|
-| Linux, NVIDIA GPU | `quantem.widget[cuda]` | CUDA | `Dataset4dstemGPU`, encoded on the GPU by quantem.gpu | yes |
-| Windows, NVIDIA GPU | `quantem.widget[cuda]` | CUDA | `Dataset4dstemGPU`, encoded on the GPU by quantem.gpu | CPU tested, CUDA untested |
-| Windows on ARM | torch from the PyTorch CPU index, then `quantem.widget[cpu]` (no quantem core) | CPU | the stand-in, dense read on the CPU; compressed masters need x64 Python | CPU tested |
-| Mac, Apple silicon | `quantem.widget[mps]` | Apple GPU (MPS) | `Dataset4dstemGPU`, encoded on the GPU by quantem.gpu (Metal) | yes |
-| Mac, Intel | `quantem.widget[cpu]` (torch 2.2, NumPy 1.26), no quantem.gpu, no quantem core | AMD GPU through torch MPS, else CPU | the stand-in, dense read on the CPU | yes |
-| No GPU | `quantem.widget[cpu]` | CPU | quantem core `Dataset4dstem`, dense read on the CPU | yes |
+```bash
+uv pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "quantem.widget[cuda]"
+```
+
+Replace `[cuda]` with `[mps]` or `[cpu]` for the other machines above.
+An error saying `anywidget` was not found usually means the PyPI index was
+omitted. See [installation troubleshooting](docs/install.md#dependency-resolution-errors).
+
+Then run `import quantem.widget as qw; qw.profile()` to see what was installed
+and which device the widgets will use. What each machine gets and what was
+tested is on the
+[platform support page](https://electronmicroscopy.github.io/quantem.widget/developer/platforms.html).
 
 On Windows, torch needs the
 [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist) for the
@@ -129,6 +141,9 @@ require a source build containing them. The guide includes setup and browser req
 | `ShowCIF` | Crystal repeats, columns, tilt, and projected potential/phase previews | [tutorial](docs/tutorials/showcif.ipynb) · [API](docs/api/showcif.md) |
 
 ## Documentation
+
+[Tutorial datasets](docs/api/datasets.md) records the shared input and immutable
+revision for each example. Small synthetic teaching inputs are generated locally.
 
 For a scalar map, import `Plot2D` from the same package:
 

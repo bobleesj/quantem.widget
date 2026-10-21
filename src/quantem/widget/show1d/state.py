@@ -1,5 +1,9 @@
 """Show1D view state: the JSON-safe dict behind ``save`` / ``state=``."""
 
+import pathlib
+
+from quantem.widget.utils.state_io import read_state
+
 
 class Show1DState:
     """Mixin: state dict round trip; the saved-notebook trim is ``SavedStateMixin``."""
@@ -27,7 +31,7 @@ class Show1DState:
         "snapshot_contrast_preset", "snapshot_contrast_range", "snapshot_panel_contrast_ranges",
         "snapshot_thumbnail_size", "snapshot_panel_width_px", "snapshot_columns", "snapshot_overlay_position",
         "snapshot_real_space_zoom", "snapshot_real_space_center", "snapshot_fft_zoom", "snapshot_fft_center",
-        "image_cmap", "pixel_size", "pixel_unit", "scale_bar_visible",
+        "image_cmap", "pixel_size", "pixel_unit", "show_scale_bar",
         "snapshot_playing", "snapshot_fps", "snapshot_loop", "snapshot_bounce",
         "starred_snapshot_image_labels", "hidden_snapshot_image_labels", "trial_notes", "trial_tags",
         "show_trial_notes", "show_starred_only", "review_mode", "trial_sort_key", "trial_sort_descending",
@@ -43,9 +47,8 @@ class Show1DState:
                 state[key] = type(value)(value)
         return state
 
-    def load_state_dict(self, state: dict) -> None:
-        """Restore a ``state_dict``; the trait validators clamp and normalise every value, unknown keys are skipped."""
-        for key, value in state.items():
-            if key in self._STATE_KEYS:
-                setattr(self, key, value)
+    def load_state_dict(self, state: dict | str | pathlib.Path) -> None:
+        """Restore a ``state_dict``, its envelope or a ``save`` file; the trait validators clamp and normalise every value, an unknown key raises."""
+        for key, value in read_state(state, "Show1D", self._STATE_KEYS).items():
+            setattr(self, key, value)
         self._update_trial_analysis()

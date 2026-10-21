@@ -8,6 +8,12 @@ import { act } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { COLORMAP_POINTS } from "../display/colormaps";
 
+// The page's shared WebGPU device: none (jsdom), or a stub a test sets.
+const sharedDevice = vi.hoisted(() => ({ current: null as GPUDevice | null }));
+vi.mock("../display/device", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../display/device")>()),
+  getHardwareGPUDevice: async () => sharedDevice.current,
+}));
 // GPU renderers whose every method is a no-op: only the overlays are under test.
 vi.mock("./render", async (importOriginal) => {
   const original = await importOriginal<typeof import("./render")>();
@@ -109,11 +115,7 @@ it("draws the scale bars in the theme text colour when no WebGPU scene is behind
 });
 
 it("draws the potential-map scale bars in the colour that contrasts with vacuum on every colormap", async () => {
-  const device = { addEventListener() {}, destroy() {} };
-  Object.defineProperty(navigator, "gpu", {
-    configurable: true,
-    value: { requestAdapter: async () => ({ requestDevice: async () => device }), getPreferredCanvasFormat: () => "rgba8unorm" },
-  });
+  sharedDevice.current = { addEventListener() {}, removeEventListener() {} } as unknown as GPUDevice;
   try {
     const model = new Model();
     model.values.potential_bytes = new DataView(new Float32Array(3 * 64).fill(1).buffer);
@@ -141,6 +143,6 @@ it("draws the potential-map scale bars in the colour that contrasts with vacuum 
       expect(bar.style.filter).toContain("black");
     }
   } finally {
-    delete (navigator as unknown as { gpu?: unknown }).gpu;
+    sharedDevice.current = null;
   }
 });

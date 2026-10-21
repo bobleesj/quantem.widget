@@ -23,14 +23,18 @@ import ShowChartIcon from "@mui/icons-material/ShowChart";
 import StopIcon from "@mui/icons-material/Stop";
 import TableChartIcon from "@mui/icons-material/TableChart";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
-import { downloadBlob, extractBytes, extractFloat32, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";
-import { COLORMAPS, COLORMAP_NAMES, getGPUColormapEngine } from "../display/colormaps";
-import { computeHistogramFromBytes, findDataRange, percentileClip } from "../display/stats";
-import { applyHannWindow2D, autoEnhanceFFT, computeMagnitude, fft2dAsync, fftshift, getDisplayFFT, nextPow2, DisplayFFT } from "../display/fft";
+import { downloadBlob, extractFloat32, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";
+import { COLORMAPS, COLORMAP_NAMES } from "../display/colormaps";
+import { histogramBins } from "../display/cpuColormap";
+import { sampleLineProfile } from "../display/geometry";
+import { findDataRange, percentileClip } from "../display/stats";
+import { applyHannWindow2D, autoEnhanceFFT, getDisplayFFT, nextPow2, shiftedMagnitude } from "../display/fft";
 import { formatScaleLabel, roundToNiceValue } from "../figure";
 import { useTheme } from "../theme";
+import { compactButton, switchStyles, controlPanel } from "../controlStyles";
 import { EmbeddedWidgetView } from "./embeddedWidget";
-import { exportTitleSlug, formatEstimatedHtmlSize, formatSavedBytes, isAbortLikeError } from "../shared/exportFormat";
+import { exportTitleSlug, formatEstimatedHtmlSize, formatSavedBytes } from "../shared/exportFormat";
+import { HTML_PICKER_TYPE, type PendingSave, pickSaveHandle, useSaveExportPayload } from "../shared/exportSave";
 import { RenderPathBadge } from "../shared/RenderPathBadge";
 import { pointToSegmentDistance } from "../shared/geometry";
 import { columnStarts, indexTraces, pointWindow, traceToPath, yExtent } from "./traceIndex";
@@ -45,7 +49,7 @@ const SHOW1D_TO_SHOW2D_LINKED_TRAITS = [
   { source: "show_stats" },
   { source: "show_controls" },
   { source: "controls_collapsed" },
-  { source: "scale_bar_visible" },
+  { source: "show_scale_bar" },
 ];
 
 type ProfilePoint = {
@@ -95,7 +99,6 @@ type SnapshotFftCacheEntry = {
   data: Float32Array;
   width: number;
   height: number;
-  backend: string;
 };
 
 type SnapshotFftCacheRef = React.MutableRefObject<Map<string, SnapshotFftCacheEntry>>;
@@ -142,71 +145,20 @@ type TrialAlert = {
   message?: string;
 };
 
-type Show1DWritableFile = {
-  write: (data: BlobPart) => Promise<void>;
-  close: () => Promise<void>;
-};
-
-type Show1DFileHandle = {
-  createWritable: () => Promise<Show1DWritableFile>;
-};
-
-type Show1DSavePickerOptions = {
-  suggestedName?: string;
-  types?: { description: string; accept: Record<string, string[]> }[];
-};
-
-type Show1DWindow = Window & typeof globalThis & {
-  showSaveFilePicker?: (options?: Show1DSavePickerOptions) => Promise<Show1DFileHandle>;
-};
-
-type Show1DInitialInteractiveState = {
-  controlsCollapsed: boolean;
-  logScale: boolean;
-  showStats: boolean;
-  showReview: boolean;
-  showLegend: boolean;
-  starredSnapshotImageLabels: string[];
-  trialNotes: Record<string, string>;
-  trialTags: Record<string, string[]>;
-  showTrialNotes: boolean;
-  showStarredOnly: boolean;
-  trialSortKey: string;
-  trialSortDescending: boolean;
-  trialFilterText: string;
-  topTrialCount: number;
-  plotHeightPx: number;
-  plotWidthPx: number;
-  sidePanelWidthPx: number;
-  snapshotPanelWidthPx: number;
-  focusedTrace: number;
-  xRange: number[];
-  yRange: number[];
-  selectedSnapshotIdx: number;
-  selectedSnapshotGroupIdx: number;
-  bookmarkedSnapshotGroups: number[];
-  hiddenSnapshotImageLabels: string[];
-  showSnapshotHistogram: boolean;
-  showSnapshotFft: boolean;
-  snapshotFftLayout: string;
-  snapshotFftWindow: boolean;
-  snapshotFftCmap: string;
-  snapshotContrastPreset: string;
-  snapshotContrastRange: number[];
-  snapshotThumbnailSize: number;
-  snapshotOverlayPosition: string;
-  imageCmap: string;
-  snapshotRealSpaceZoom: number;
-  snapshotRealSpaceCenter: number[];
-  snapshotFftZoom: number;
-  snapshotFftCenter: number[];
-  showSnapshotProfile: boolean;
-  snapshotProfileLine: ProfilePoint[];
-  snapshotPlaying: boolean;
-  snapshotFps: number;
-  snapshotLoop: boolean;
-  snapshotBounce: boolean;
-};
+// The interactive traits Reset puts back to their values when the widget first settled.
+const RESET_TRAITS = [
+  "controls_collapsed", "log_scale", "show_stats", "show_review", "show_legend",
+  "starred_snapshot_image_labels", "trial_notes", "trial_tags", "show_trial_notes", "show_starred_only",
+  "trial_sort_key", "trial_sort_descending", "trial_filter_text", "top_trial_count",
+  "plot_height_px", "plot_width_px", "side_panel_width_px", "snapshot_panel_width_px", "focused_trace",
+  "x_range", "y_range", "selected_snapshot_idx", "selected_snapshot_group_idx", "bookmarked_snapshot_groups",
+  "hidden_snapshot_image_labels", "show_snapshot_histogram", "show_snapshot_fft", "snapshot_fft_layout",
+  "snapshot_fft_window", "snapshot_fft_cmap", "snapshot_contrast_preset", "snapshot_panel_contrast_ranges",
+  "snapshot_contrast_range", "snapshot_thumbnail_size", "snapshot_overlay_position", "image_cmap",
+  "snapshot_real_space_zoom", "snapshot_real_space_center", "snapshot_fft_zoom", "snapshot_fft_center",
+  "show_snapshot_profile", "snapshot_profile_line", "snapshot_playing", "snapshot_fps", "snapshot_loop",
+  "snapshot_bounce",
+];
 
 const EMPTY_BYTES = new Uint8Array(0);
 const DEFAULT_SIZE = { width: 820, height: 380 };
@@ -227,20 +179,6 @@ const controlRow = {
   width: "fit-content",
   maxWidth: "100%",
   boxSizing: "border-box" as const,
-};
-const controlPanel = {
-  select: { minWidth: 90, fontSize: 11, "& .MuiSelect-select": { py: 0.5 } },
-};
-const compactButton = {
-  fontSize: 10,
-  py: 0.25,
-  px: 1,
-  minWidth: 0,
-  textTransform: "none" as const,
-  "&.Mui-disabled": {
-    color: "#666",
-    borderColor: "#444",
-  },
 };
 
 function readSnapshotFftCache(
@@ -280,12 +218,6 @@ const sliderStyles = {
     "& .MuiSlider-valueLabel": { fontSize: 10, padding: "2px 4px" },
   },
 };
-const switchStyles = {
-  small: {
-    "& .MuiSwitch-thumb": { width: 12, height: 12 },
-    "& .MuiSwitch-switchBase": { padding: "4px" },
-  },
-};
 const snapshotContrastPresets = [
   { value: "full", label: "full", low: 0, high: 100 },
   { value: "0.5-99.5", label: "0.5-99.5", low: 0.5, high: 99.5 },
@@ -302,8 +234,10 @@ const MIN_PLOT_WIDTH = 220;
 const MIN_PLOT_HEIGHT = 220;
 const MAX_PLOT_HEIGHT = 960;
 const FFT_DISPLAY_RANGE: [number, number] = [0, 1];
-let snapshotFftWebGpuUnavailable = false;
-let snapshotFftWebGpuInitPromise: Promise<DisplayFFT | null> | null = null;
+// A panel never zoomed shows the whole image, where the center is unused. One
+// shared array keeps its props equal across renders, so a hover elsewhere in
+// the widget does not redraw every panel.
+const UNZOOMED_VIEW_CENTER: number[] = [];
 const typography = {
   label: { fontSize: 11 },
   value: { fontSize: 10, fontVariantNumeric: "tabular-nums" as const },
@@ -313,7 +247,7 @@ function useElementSize(ref: React.RefObject<HTMLElement | null>, fallback: { wi
   const [size, setSize] = React.useState(fallback);
   React.useLayoutEffect(() => {
     const node = ref.current;
-    if (!node || typeof ResizeObserver === "undefined") return;
+    if (!node) return;
     const observer = new ResizeObserver(([entry]) => {
       const rect = entry.contentRect;
       setSize({
@@ -329,8 +263,8 @@ function useElementSize(ref: React.RefObject<HTMLElement | null>, fallback: { wi
 
 function useViewportSize() {
   const [size, setSize] = React.useState(() => ({
-    width: typeof window === "undefined" ? 1280 : window.innerWidth,
-    height: typeof window === "undefined" ? 800 : window.innerHeight,
+    width: window.innerWidth,
+    height: window.innerHeight,
   }));
   React.useEffect(() => {
     const update = () => setSize({ width: window.innerWidth, height: window.innerHeight });
@@ -338,53 +272,6 @@ function useViewportSize() {
     return () => window.removeEventListener("resize", update);
   }, []);
   return size;
-}
-
-function copyNumberArray(value: number[] | null | undefined): number[] {
-  return Array.isArray(value) ? value.map(Number).filter((item) => Number.isFinite(item)) : [];
-}
-
-function copyStringArray(value: string[] | null | undefined): string[] {
-  return Array.isArray(value) ? value.map(String) : [];
-}
-
-function copyProfileLine(value: ProfilePoint[] | null | undefined): ProfilePoint[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((point) => ({ row: Number(point?.row), col: Number(point?.col) }))
-    .filter((point) => Number.isFinite(point.row) && Number.isFinite(point.col));
-}
-
-function copyStringRecord(value: Record<string, string> | null | undefined): Record<string, string> {
-  return { ...(value ?? {}) };
-}
-
-function copyStringArrayRecord(value: Record<string, string[]> | null | undefined): Record<string, string[]> {
-  return Object.fromEntries(Object.entries(value ?? {}).map(([key, items]) => [key, [...items]]));
-}
-
-function jsonValuesEqual(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a ?? {}) === JSON.stringify(b ?? {});
-}
-
-function arraysEqual<T extends number | string>(a: T[] | null | undefined, b: T[] | null | undefined): boolean {
-  const left = Array.isArray(a) ? a : [];
-  const right = Array.isArray(b) ? b : [];
-  if (left.length !== right.length) return false;
-  for (let idx = 0; idx < left.length; idx += 1) {
-    if (left[idx] !== right[idx]) return false;
-  }
-  return true;
-}
-
-function profileLinesEqual(a: ProfilePoint[] | null | undefined, b: ProfilePoint[] | null | undefined): boolean {
-  const left = copyProfileLine(a);
-  const right = copyProfileLine(b);
-  if (left.length !== right.length) return false;
-  for (let idx = 0; idx < left.length; idx += 1) {
-    if (left[idx].row !== right[idx].row || left[idx].col !== right[idx].col) return false;
-  }
-  return true;
 }
 
 function safeFloat32(data: DataView | ArrayBuffer | Uint8Array | null | undefined, expectedFloats: number): Float32Array {
@@ -420,11 +307,12 @@ function niceTicks(lo: number, hi: number, target = 5): number[] {
   const power = Math.pow(10, Math.floor(Math.log10(raw)));
   const unit = raw / power;
   const step = (unit >= 5 ? 5 : unit >= 2 ? 2 : 1) * power;
-  const start = Math.ceil(Math.min(lo, hi) / step) * step;
   const end = Math.max(lo, hi);
   const ticks: number[] = [];
-  for (let value = start; value <= end + step * 0.5; value += step) {
-    ticks.push(value);
+  // Whole multiples of the step: summing steps drifts, so the tick at zero
+  // would read -5.55e-17 instead of 0.
+  for (let multiple = Math.ceil(Math.min(lo, hi) / step); multiple * step <= end + step * 0.5; multiple += 1) {
+    ticks.push(multiple * step);
     if (ticks.length > 12) break;
   }
   return ticks.length ? ticks : [lo, hi];
@@ -435,11 +323,11 @@ function niceTicks(lo: number, hi: number, target = 5): number[] {
 // way to whole decades when two or more are in range, else to 1, 2 and 5 times a
 // power of ten, else to the linear nice ticks of the range.
 function logTicks(lo: number, hi: number, target = 5): number[] {
-  const exponents = niceTicks(log10(lo), log10(hi), target);
+  const exponents = niceTicks(Math.log10(lo), Math.log10(hi), target);
   if (exponents.length > 1 && exponents[1] - exponents[0] >= 1) return exponents.map((value) => Math.pow(10, value));
   const decades: number[] = [];
   const mantissas: number[] = [];
-  for (let decade = Math.floor(log10(lo)); decade <= Math.ceil(log10(hi)); decade += 1) {
+  for (let decade = Math.floor(Math.log10(lo)); decade <= Math.ceil(Math.log10(hi)); decade += 1) {
     for (const mantissa of [1, 2, 5]) {
       const value = mantissa * Math.pow(10, decade);
       if (value < lo || value > hi) continue;
@@ -463,12 +351,8 @@ function integerTicks(lo: number, hi: number, target = 6): number[] {
   return ticks;
 }
 
-function log10(value: number): number {
-  return Math.log(value) / Math.LN10;
-}
-
 function transformY(value: number, logScale: boolean): number {
-  return logScale ? log10(Math.max(value, Number.MIN_VALUE)) : value;
+  return logScale ? Math.log10(Math.max(value, Number.MIN_VALUE)) : value;
 }
 
 function dataToX(x: number, geom: PlotGeometry): number {
@@ -620,16 +504,8 @@ function formatCompactValue(value: number, decimals = 3): string {
   return trimTrailingZeros(value.toFixed(decimals));
 }
 
-function formatAxisValue(value: number): string {
-  return formatCompactValue(value, 3);
-}
-
-function formatRangeValue(value: number): string {
-  return formatCompactValue(value, 2);
-}
-
 function axisPositionText(value: number, label: string, unit: string, precise = false): string {
-  const formatted = precise && Number.isFinite(value) ? value.toPrecision(6) : formatAxisValue(value);
+  const formatted = precise && Number.isFinite(value) ? value.toPrecision(6) : formatCompactValue(value);
   if (!formatted) return "";
   const axis = label.trim() || "x";
   return `${axis} ${formatted}${unit.trim() ? ` ${unit.trim()}` : ""}`;
@@ -773,32 +649,6 @@ function imageViewToApi(
   };
 }
 
-function sampleLineProfile(data: Float32Array, width: number, height: number, row0: number, col0: number, row1: number, col1: number): Float32Array {
-  const deltaCol = col1 - col0;
-  const deltaRow = row1 - row0;
-  const length = Math.sqrt(deltaCol * deltaCol + deltaRow * deltaRow);
-  const sampleCount = Math.max(2, Math.ceil(length) + 1);
-  const out = new Float32Array(sampleCount);
-  for (let idx = 0; idx < sampleCount; idx += 1) {
-    const fraction = idx / Math.max(1, sampleCount - 1);
-    const col = col0 + fraction * deltaCol;
-    const row = row0 + fraction * deltaRow;
-    const colFloor = Math.floor(col);
-    const rowFloor = Math.floor(row);
-    const colWeight = col - colFloor;
-    const rowWeight = row - rowFloor;
-    const colLeft = clampValue(colFloor, 0, width - 1);
-    const colRight = clampValue(colFloor + 1, 0, width - 1);
-    const rowTop = clampValue(rowFloor, 0, height - 1);
-    const rowBottom = clampValue(rowFloor + 1, 0, height - 1);
-    out[idx] = data[rowTop * width + colLeft] * (1 - colWeight) * (1 - rowWeight)
-      + data[rowTop * width + colRight] * colWeight * (1 - rowWeight)
-      + data[rowBottom * width + colLeft] * (1 - colWeight) * rowWeight
-      + data[rowBottom * width + colRight] * colWeight * rowWeight;
-  }
-  return out;
-}
-
 function isFiniteProfilePoint(point: ProfilePoint | undefined): point is Required<ProfilePoint> {
   return Boolean(point && Number.isFinite(point.row) && Number.isFinite(point.col));
 }
@@ -821,39 +671,18 @@ function normaliseSnapshotContrastRange(value: number[] | undefined | null): [nu
   return Number.isFinite(lo) && Number.isFinite(hi) && lo < hi ? [lo, hi] : null;
 }
 
-function finitePercentileClip(data: Float32Array, low: number, high: number): { vmin: number; vmax: number } | null {
-  let finiteCount = 0;
-  for (let idx = 0; idx < data.length; idx += 1) {
-    if (Number.isFinite(data[idx])) finiteCount += 1;
-  }
-  if (!finiteCount) return null;
-  let source: Float32Array = data;
-  if (finiteCount !== data.length) {
-    source = new Float32Array(finiteCount);
-    let outIdx = 0;
-    for (let idx = 0; idx < data.length; idx += 1) {
-      if (Number.isFinite(data[idx])) {
-        source[outIdx] = data[idx];
-        outIdx += 1;
-      }
-    }
-  }
-  const clipped = percentileClip(source, low, high);
-  if (!Number.isFinite(clipped.vmin) || !Number.isFinite(clipped.vmax) || clipped.vmax <= clipped.vmin) return null;
-  return { vmin: clipped.vmin, vmax: clipped.vmax };
-}
-
 function resolveSnapshotDisplayRange(data: Float32Array, presetValue: string, customRange?: [number, number] | null): [number, number] {
   if (customRange) return customRange;
   const preset = snapshotContrastPresets.find((item) => item.value === normaliseSnapshotContrastPreset(presetValue)) ?? snapshotContrastPresets[0];
   if (preset.value === "full") return finiteExtent(data, [0, 1]);
-  const clipped = finitePercentileClip(data, preset.low, preset.high);
-  if (!clipped) return finiteExtent(data, [0, 1]);
-  return [clipped.vmin, clipped.vmax];
+  // percentileClip skips non-finite values; an empty or flat clip falls back to the finite extent.
+  const { vmin, vmax } = percentileClip(data, preset.low, preset.high);
+  if (!Number.isFinite(vmin) || !Number.isFinite(vmax) || vmax <= vmin) return finiteExtent(data, [0, 1]);
+  return [vmin, vmax];
 }
 
 function blankSnapshotFft(): SnapshotFftCacheEntry {
-  return { data: new Float32Array(0), width: 0, height: 0, backend: "empty" };
+  return { data: new Float32Array(0), width: 0, height: 0 };
 }
 
 function normaliseFftDisplay(data: Float32Array, width: number, height: number): Float32Array {
@@ -872,36 +701,14 @@ function normaliseFftDisplay(data: Float32Array, width: number, height: number):
   return out;
 }
 
-async function getSnapshotFftWebGpu(
-  gpuFftRef: React.MutableRefObject<DisplayFFT | null>,
-): Promise<DisplayFFT | null> {
-  if (gpuFftRef.current) return gpuFftRef.current;
-  if (snapshotFftWebGpuUnavailable) return null;
-  if (!snapshotFftWebGpuInitPromise) {
-    snapshotFftWebGpuInitPromise = getDisplayFFT()
-      .then((fft) => {
-        if (!fft) snapshotFftWebGpuUnavailable = true;
-        return fft;
-      })
-      .catch(() => {
-        snapshotFftWebGpuUnavailable = true;
-        return null;
-      })
-      .finally(() => {
-        snapshotFftWebGpuInitPromise = null;
-      });
-  }
-  const fft = await snapshotFftWebGpuInitPromise;
-  gpuFftRef.current = fft;
-  return fft;
-}
-
+// The page's display FFT: WebGPU on a hardware adapter, the scalar reference
+// otherwise. It is asked for per transform, so a lost device moves every Show1D
+// to the reference on its next FFT instead of failing on a dead pipeline.
 async function computeSnapshotFft(
   image: Float32Array,
   width: number,
   height: number,
   useWindow: boolean,
-  gpuFftRef: React.MutableRefObject<DisplayFFT | null>,
 ): Promise<SnapshotFftCacheEntry> {
   if (!image.length || width <= 0 || height <= 0) return blankSnapshotFft();
   const fftW = nextPow2(width);
@@ -912,32 +719,12 @@ async function computeSnapshotFft(
   for (let row = 0; row < height; row += 1) {
     real.set(source.subarray(row * width, row * width + width), row * fftW);
   }
-  const imag = new Float32Array(real.length);
-  if (!snapshotFftWebGpuUnavailable) {
-    try {
-      const fft = await getSnapshotFftWebGpu(gpuFftRef);
-      if (fft) {
-        const result = await fft.fft2D(real, imag, fftW, fftH, false);
-        fftshift(result.real, fftW, fftH);
-        fftshift(result.imag, fftW, fftH);
-        return {
-          data: normaliseFftDisplay(computeMagnitude(result.real, result.imag), fftW, fftH),
-          width: fftW,
-          height: fftH,
-          backend: "webgpu",
-        };
-      }
-    } catch {
-      gpuFftRef.current = null;
-      snapshotFftWebGpuUnavailable = true;
-    }
-  }
-  const result = await fft2dAsync(real, imag, fftW, fftH, false);
+  const fft = await getDisplayFFT();
+  const result = await fft.fft2D(real, new Float32Array(real.length), fftW, fftH, false);
   return {
-    data: normaliseFftDisplay(result.magnitude, fftW, fftH),
+    data: normaliseFftDisplay(shiftedMagnitude(result.real, result.imag, fftW, fftH), fftW, fftH),
     width: fftW,
     height: fftH,
-    backend: "cpu",
   };
 }
 
@@ -959,7 +746,6 @@ function computeSnapshotFftCached(
   useWindow: boolean,
   cacheRef: SnapshotFftCacheRef,
   pendingRef: SnapshotFftPendingRef,
-  gpuFftRef: React.MutableRefObject<DisplayFFT | null>,
   generationRef: SnapshotFftGenerationRef,
   generation: number,
 ): Promise<SnapshotFftCacheEntry> {
@@ -967,7 +753,7 @@ function computeSnapshotFftCached(
   if (cached) return Promise.resolve(cached);
   const pending = pendingRef.current.get(cacheKey);
   if (pending) return pending;
-  const promise = computeSnapshotFft(image, width, height, useWindow, gpuFftRef)
+  const promise = computeSnapshotFft(image, width, height, useWindow)
     .then((entry) => {
       if (generationRef.current !== generation) return entry;
       cacheRef.current.set(cacheKey, entry);
@@ -1012,19 +798,24 @@ function extractPackedImage(
 }
 
 // Colours a float image through the LUT at its native size, so callers can
-// scale it with drawImage. The window is displayRange when it is a valid
-// interval, otherwise the finite extent; non-finite pixels stay transparent.
+// scale it with drawImage, or null when there are no pixels. The window is
+// displayRange when it is a valid interval, otherwise the finite extent;
+// non-finite pixels stay transparent.
 function floatImageBitmap(
-  ctx: CanvasRenderingContext2D,
   data: Float32Array,
   height: number,
   width: number,
   lut: Uint8Array,
   displayRange?: [number, number],
-): HTMLCanvasElement {
+): HTMLCanvasElement | null {
+  if (!data.length || height <= 0 || width <= 0) return null;
   const [vmin, vmax] = displayRange && Number.isFinite(displayRange[0]) && Number.isFinite(displayRange[1]) && displayRange[0] < displayRange[1]
     ? displayRange
     : finiteExtent(data, [0, 1]);
+  const bitmap = document.createElement("canvas");
+  bitmap.width = width;
+  bitmap.height = height;
+  const ctx = bitmap.getContext("2d")!;
   const imageData = ctx.createImageData(width, height);
   const scale = 255 / Math.max(vmax - vmin, 1e-12);
   for (let i = 0; i < width * height; i += 1) {
@@ -1037,40 +828,37 @@ function floatImageBitmap(
     imageData.data[i * 4 + 2] = lut[lutIdx + 2];
     imageData.data[i * 4 + 3] = finite ? 255 : 0;
   }
-  const bitmap = document.createElement("canvas");
-  bitmap.width = width;
-  bitmap.height = height;
-  bitmap.getContext("2d")?.putImageData(imageData, 0, 0);
+  ctx.putImageData(imageData, 0, 0);
   return bitmap;
 }
 
+// Draws an already colormapped bitmap at the view's zoom and pan, so a view
+// change costs one drawImage instead of recolouring every pixel.
 function drawFloatImage(
   canvas: HTMLCanvasElement,
-  data: Float32Array,
-  height: number,
-  width: number,
+  bitmap: HTMLCanvasElement | null,
   line: ProfilePoint[],
-  lut: Uint8Array,
   colors: { bg: string; border: string; accent: string; text: string },
   view: ImageViewState = { zoom: 1, panX: 0, panY: 0 },
   drawSizeLabel = true,
-  displayRange?: [number, number],
   drawImageBorder = true,
 ): void {
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   const cssW = Math.max(1, Math.round(rect.width));
   const cssH = Math.max(1, Math.round(rect.height));
-  canvas.width = Math.round(cssW * dpr);
-  canvas.height = Math.round(cssH * dpr);
+  const pixelWidth = Math.round(cssW * dpr);
+  const pixelHeight = Math.round(cssH * dpr);
+  if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+  if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = colors.bg;
   ctx.fillRect(0, 0, cssW, cssH);
-  if (!data.length || height <= 0 || width <= 0) return;
+  if (!bitmap) return;
 
-  const bitmap = floatImageBitmap(ctx, data, height, width, lut, displayRange);
+  const { width, height } = bitmap;
   const fit = Math.min(cssW / width, cssH / height);
   const zoom = clampImageZoom(view.zoom);
   const drawW = Math.max(1, width * fit * zoom);
@@ -1122,14 +910,14 @@ function drawFloatThumbnail(
   colors: { bgAlt: string; border: string; accent: string },
   displayRange?: [number, number],
 ): void {
-  if (!data.length || height <= 0 || width <= 0 || targetW <= 0 || targetH <= 0) return;
+  const bitmap = floatImageBitmap(data, height, width, lut, displayRange);
+  if (!bitmap || targetW <= 0 || targetH <= 0) return;
   ctx.save();
   ctx.fillStyle = colors.bgAlt;
   ctx.globalAlpha = 0.95;
   ctx.fillRect(x, y, targetW, targetH);
   ctx.globalAlpha = 1;
 
-  const bitmap = floatImageBitmap(ctx, data, height, width, lut, displayRange);
   const fit = Math.max(targetW / width, targetH / height);
   const drawW = Math.max(1, width * fit);
   const drawH = Math.max(1, height * fit);
@@ -1216,7 +1004,6 @@ function createSnapshotGroupThumbnailCanvas(
   colors: { bgAlt: string; border: string; accent: string; text: string },
   contrastPreset: string,
 ): { canvas: HTMLCanvasElement; width: number; height: number } | null {
-  if (typeof document === "undefined") return null;
   const valid = images.filter((image) => image.data.length && image.height > 0 && image.width > 0).slice(0, 9);
   if (!valid.length || size <= 0) return null;
   const metrics = snapshotGroupThumbnailMetrics(valid.length, size);
@@ -1285,7 +1072,7 @@ function InteractiveFloatCanvas({
   selected = false,
   loading = false,
   displayRange,
-  scaleBarVisible,
+  showScaleBar,
   overlayPosition,
   pixelSize,
   pixelUnit,
@@ -1309,7 +1096,7 @@ function InteractiveFloatCanvas({
   selected?: boolean;
   loading?: boolean;
   displayRange?: [number, number];
-  scaleBarVisible: boolean;
+  showScaleBar: boolean;
   overlayPosition: string;
   pixelSize: number;
   pixelUnit: string;
@@ -1426,7 +1213,7 @@ function InteractiveFloatCanvas({
 
   React.useLayoutEffect(() => {
     const node = hostRef.current;
-    if (!node || typeof ResizeObserver === "undefined") return;
+    if (!node) return;
     const observer = new ResizeObserver(() => setDrawTick((current) => current + 1));
     observer.observe(node);
     return () => observer.disconnect();
@@ -1436,18 +1223,25 @@ function InteractiveFloatCanvas({
     if (viewRafRef.current !== null) window.cancelAnimationFrame(viewRafRef.current);
   }, []);
 
+  // Colormapping touches every pixel, so it runs once per image, window and LUT;
+  // a wheel or pan step only redraws this bitmap.
+  const bitmap = React.useMemo(
+    () => floatImageBitmap(data, height, width, lut, displayRange),
+    [data, displayRange, height, lut, width],
+  );
+
   React.useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const localView = cleanView(currentApiView());
     viewRef.current = localView;
-    drawFloatImage(canvas, data, height, width, [], lut, {
+    drawFloatImage(canvas, bitmap, [], {
       bg: colors.bgAlt,
       border: selected ? colors.accent : colors.border,
       accent: colors.accent,
       text: colors.text,
-    }, localView, false, displayRange, imageBorderVisible);
-  }, [cleanView, colors, currentApiView, data, displayRange, drawTick, height, imageBorderVisible, lut, selected, width]);
+    }, localView, false, imageBorderVisible);
+  }, [bitmap, cleanView, colors, currentApiView, drawTick, imageBorderVisible, selected]);
 
   React.useEffect(() => {
     const overlay = overlayRef.current;
@@ -1502,11 +1296,11 @@ function InteractiveFloatCanvas({
       ctx.fill();
       ctx.restore();
     }
-    if (!scaleBarVisible) return;
+    if (!showScaleBar) return;
     const pxSize = pixelSize > 0 ? pixelSize : 1;
     const unit = pixelSize > 0 ? pixelUnit : "px";
     drawPanelScaleBarHiDPI(overlay, dpr, localView.zoom, pxSize, unit, width);
-  }, [cleanView, colors.accent, currentApiView, drawTick, height, pixelSize, pixelUnit, profileActive, profileLine, scaleBarVisible, width]);
+  }, [cleanView, colors.accent, currentApiView, drawTick, height, pixelSize, pixelUnit, profileActive, profileLine, showScaleBar, width]);
 
   const handleWheel = React.useCallback((event: WheelEvent) => {
     const target = canvasRef.current ?? hostRef.current;
@@ -1681,7 +1475,7 @@ function InteractiveFloatCanvas({
             position: "absolute",
             zIndex: 2,
             top: overlayOnBottom ? "auto" : 6,
-            bottom: overlayOnBottom ? (scaleBarVisible && overlayOnRight ? 34 : 6) : "auto",
+            bottom: overlayOnBottom ? (showScaleBar && overlayOnRight ? 34 : 6) : "auto",
             left: overlayOnRight ? "auto" : 6,
             right: overlayOnRight ? 6 : "auto",
             maxWidth: "calc(100% - 12px)",
@@ -1741,7 +1535,7 @@ function SnapshotImageCanvas({
   contrastRange,
   selected,
   label,
-  scaleBarVisible,
+  showScaleBar,
   overlayPosition,
   pixelSize,
   pixelUnit,
@@ -1753,7 +1547,6 @@ function SnapshotImageCanvas({
   profileLine,
   fftCacheRef,
   fftPendingRef,
-  fftGpuRef,
   fftCacheVersion,
   fftGenerationRef,
   fftGeneration,
@@ -1780,7 +1573,7 @@ function SnapshotImageCanvas({
   contrastRange: [number, number] | null;
   selected: boolean;
   label: string;
-  scaleBarVisible: boolean;
+  showScaleBar: boolean;
   overlayPosition: string;
   pixelSize: number;
   pixelUnit: string;
@@ -1792,7 +1585,6 @@ function SnapshotImageCanvas({
   profileLine: ProfilePoint[];
   fftCacheRef: SnapshotFftCacheRef;
   fftPendingRef: SnapshotFftPendingRef;
-  fftGpuRef: React.MutableRefObject<DisplayFFT | null>;
   fftCacheVersion: number;
   fftGenerationRef: SnapshotFftGenerationRef;
   fftGeneration: number;
@@ -1870,7 +1662,6 @@ function SnapshotImageCanvas({
       fftWindow,
       fftCacheRef,
       fftPendingRef,
-      fftGpuRef,
       fftGenerationRef,
       fftGeneration,
     )
@@ -1882,7 +1673,7 @@ function SnapshotImageCanvas({
         if (!canceled) {
           setFftEntryState({
             key: fftCacheKey,
-            entry: { data: new Float32Array(0), width: imageWidth, height: imageHeight, backend: "error" },
+            entry: { data: new Float32Array(0), width: imageWidth, height: imageHeight },
           });
         }
       })
@@ -1894,7 +1685,6 @@ function SnapshotImageCanvas({
     deferFft,
     fftCacheKey,
     fftCacheRef,
-    fftGpuRef,
     fftGeneration,
     fftGenerationRef,
     fftPendingRef,
@@ -1909,7 +1699,6 @@ function SnapshotImageCanvas({
     data: new Float32Array(0),
     width: nextPow2(Math.max(1, imageWidth)),
     height: nextPow2(Math.max(1, imageHeight)),
-    backend: fftLoading ? "..." : "pending",
   };
   const fftReady = Boolean(fftEntry && fftEntry.data.length > 0 && fftEntry.width > 0 && fftEntry.height > 0);
   const fftLabel = "FFT";
@@ -1928,10 +1717,6 @@ function SnapshotImageCanvas({
     : "top-right";
   const scheduleFftOverlayDragPreview = React.useCallback((preview: { left: number; top: number }) => {
     fftOverlayDragPreviewRef.current = preview;
-    if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
-      setFftOverlayDragPreview(preview);
-      return;
-    }
     if (fftOverlayDragFrameRef.current !== null) return;
     fftOverlayDragFrameRef.current = window.requestAnimationFrame(() => {
       fftOverlayDragFrameRef.current = null;
@@ -1939,9 +1724,7 @@ function SnapshotImageCanvas({
     });
   }, []);
   React.useEffect(() => () => {
-    if (fftOverlayDragFrameRef.current !== null && typeof window !== "undefined") {
-      window.cancelAnimationFrame(fftOverlayDragFrameRef.current);
-    }
+    if (fftOverlayDragFrameRef.current !== null) window.cancelAnimationFrame(fftOverlayDragFrameRef.current);
   }, []);
   const handleFftOverlayPointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -1966,11 +1749,7 @@ function SnapshotImageCanvas({
       containerH: containerRect.height,
       moved: false,
     };
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // Pointer capture is best-effort; global state still keeps the drag bounded.
-    }
+    event.currentTarget.setPointerCapture(event.pointerId);
   }, []);
   const handleFftOverlayPointerMove = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const drag = fftOverlayDragRef.current;
@@ -1992,18 +1771,14 @@ function SnapshotImageCanvas({
     event.preventDefault();
     event.stopPropagation();
     fftOverlayDragRef.current = null;
-    if (fftOverlayDragFrameRef.current !== null && typeof window !== "undefined") {
+    if (fftOverlayDragFrameRef.current !== null) {
       window.cancelAnimationFrame(fftOverlayDragFrameRef.current);
       fftOverlayDragFrameRef.current = null;
     }
     const preview = fftOverlayDragPreviewRef.current;
     fftOverlayDragPreviewRef.current = null;
+    // The browser releases the pointer capture itself after pointerup and pointercancel.
     setFftOverlayDragPreview(null);
-    try {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    } catch {
-      // Ignore stale pointer captures from browser-level pointer cancellation.
-    }
     if (!commit || !drag.moved || !preview) return;
     const centerX = preview.left + drag.overlayW / 2;
     const centerY = preview.top + drag.overlayH / 2;
@@ -2027,7 +1802,7 @@ function SnapshotImageCanvas({
           label={label}
           selected={selected}
           displayRange={imageDisplayRange}
-          scaleBarVisible={scaleBarVisible}
+          showScaleBar={showScaleBar}
           overlayPosition={mainLabelPosition}
           pixelSize={pixelSize}
           pixelUnit={pixelUnit}
@@ -2079,7 +1854,7 @@ function SnapshotImageCanvas({
               label={fftLabel}
               selected={false}
               displayRange={FFT_DISPLAY_RANGE}
-              scaleBarVisible={false}
+              showScaleBar={false}
               overlayPosition="top-right"
               pixelSize={1}
               pixelUnit="px"
@@ -2113,7 +1888,7 @@ function SnapshotImageCanvas({
             label={fftLabel}
             selected={false}
             displayRange={FFT_DISPLAY_RANGE}
-            scaleBarVisible={false}
+            showScaleBar={false}
             overlayPosition={overlayPosition}
             pixelSize={1}
             pixelUnit="px"
@@ -2314,38 +2089,22 @@ function SnapshotHistogram({ data, imageIndex, packedHeight, packedWidth, imageW
 }) {
   const image = React.useMemo(() => extractPackedImage(data, imageIndex, packedHeight, packedWidth, imageHeight, imageWidth),
     [data, imageIndex, packedHeight, packedWidth, imageHeight, imageWidth]);
-  const slot = React.useRef(20000 + Math.floor(Math.random() * 1000000));
-  const [bins, setBins] = React.useState<number[]>([]);
-  const [backend, setBackend] = React.useState("");
   const bounds = React.useMemo(() => findDataRange(image), [image]);
   const dataMin = bounds.min;
   const dataMax = bounds.max > dataMin ? bounds.max : dataMin + 1;
+  // The float32 twin of the WebGPU histogram shader gives the same 256 bins with
+  // no device buffers to allocate per panel and release on unmount.
+  const bins = React.useMemo(() => histogramBins(image, dataMin, dataMax), [image, dataMin, dataMax]);
   const clip = resolveSnapshotDisplayRange(image, preset, range && range.length === 2 ? range as [number, number] : null);
-  React.useEffect(() => {
-    let canceled = false;
-    const fallback = () => {
-      if (!canceled) { setBins(computeHistogramFromBytes(image, 256, dataMin, dataMax)); setBackend("CPU"); }
-    };
-    void getGPUColormapEngine().then(async engine => {
-      if (canceled) return;
-      if (!engine) { fallback(); return; }
-      try {
-        engine.uploadData(slot.current, image, imageWidth, imageHeight);
-        const values = await engine.computeHistogramWithRange(slot.current, dataMin, dataMax, false);
-        if (!canceled) { setBins(values); setBackend("WebGPU"); }
-      } catch { fallback(); }
-    }).catch(fallback);
-    return () => { canceled = true; };
-  }, [image, imageWidth, imageHeight, dataMin, dataMax]);
   return <Box data-testid="show1d-panel-histogram" aria-label={`${label} contrast`} sx={{ minWidth: 0, px: 0.5 }}>
     <Typography sx={{ fontSize: 11, color: colors.textMuted }}>{label}</Typography>
     <MiniHistogram bins={bins} dataMin={dataMin} dataMax={dataMax} clipMin={clip[0]} clipMax={clip[1]}
       colors={colors} width={width} height={height} onClipRangeChange={onChange} />
-    <Box sx={{ display: "flex", gap: 0.5, alignItems: "center" }}>
+    {/* Compact and wrapping: a narrow grid cell must hold its own buttons, not spill them onto the next panel's. */}
+    <Box sx={{ display: "flex", flexWrap: "wrap", columnGap: 0.5, alignItems: "center", "& .MuiButton-root": { ...compactButton, px: 0.5, py: 0 } }}>
       <Button size="small" onClick={() => onChange([dataMin, dataMax])}>Full</Button>
-      <Button size="small" onClick={() => onChange(resolveSnapshotDisplayRange(image, "1-99", null))}>1–99%</Button>
+      <Button size="small" onClick={() => onChange(resolveSnapshotDisplayRange(image, "1-99", null))}>1-99%</Button>
       <Button size="small" onClick={() => onChange([])}>Reset</Button>
-      {backend === "CPU" && <Typography sx={{ fontSize: 10 }}>CPU histogram</Typography>}
     </Box>
   </Box>;
 }
@@ -2563,7 +2322,7 @@ function MiniHistogram({
             userSelect: "none",
           }}
         >
-          {formatRangeValue(clipMin)} - {formatRangeValue(clipMax)}
+          {formatCompactValue(clipMin, 2)} - {formatCompactValue(clipMax, 2)}
         </Typography>
         <canvas
           ref={canvasRef}
@@ -2654,14 +2413,14 @@ function Show1DWidget() {
   const [bookmarkedSnapshotGroups, setBookmarkedSnapshotGroups] = useModelState<number[]>("bookmarked_snapshot_groups");
   const [showSnapshots] = useModelState<boolean>("show_snapshots");
   const [showSnapshotThumbnails] = useModelState<boolean>("show_snapshot_thumbnails");
-  const [showSnapshotHistogram, setShowSnapshotHistogram] = useModelState<boolean>("show_snapshot_histogram");
+  const [showSnapshotHistogram] = useModelState<boolean>("show_snapshot_histogram");
   const [showSnapshotFft, setShowSnapshotFft] = useModelState<boolean>("show_snapshot_fft");
-  const [snapshotFftLayout, setSnapshotFftLayout] = useModelState<string>("snapshot_fft_layout");
+  const [snapshotFftLayout] = useModelState<string>("snapshot_fft_layout");
   const [snapshotFftWindow, setSnapshotFftWindow] = useModelState<boolean>("snapshot_fft_window");
   const [snapshotFftCmap, setSnapshotFftCmap] = useModelState<string>("snapshot_fft_cmap");
   const [snapshotContrastPreset, setSnapshotContrastPreset] = useModelState<string>("snapshot_contrast_preset");
   const [panelContrastRanges, setPanelContrastRanges] = useModelState<Record<string, number[]>>("snapshot_panel_contrast_ranges");
-  const [snapshotContrastRange, setSnapshotContrastRange] = useModelState<number[]>("snapshot_contrast_range");
+  const [snapshotContrastRange] = useModelState<number[]>("snapshot_contrast_range");
   const [snapshotHistogramWidth] = useModelState<number>("snapshot_histogram_width");
   const [snapshotHistogramHeight] = useModelState<number>("snapshot_histogram_height");
   const [snapshotThumbnailSize, setSnapshotThumbnailSize] = useModelState<number>("snapshot_thumbnail_size");
@@ -2679,7 +2438,7 @@ function Show1DWidget() {
   const [showSnapshotProfile, setShowSnapshotProfile] = useModelState<boolean>("show_snapshot_profile");
   const [snapshotProfileLine, setSnapshotProfileLine] = useModelState<ProfilePoint[]>("snapshot_profile_line");
   const [snapshotProfileHeight] = useModelState<number>("snapshot_profile_height");
-  const [scaleBarVisible] = useModelState<boolean>("scale_bar_visible");
+  const [showScaleBar] = useModelState<boolean>("show_scale_bar");
   const [pixelSize] = useModelState<number>("pixel_size");
   const [pixelUnit] = useModelState<string>("pixel_unit");
   const [snapshotPlaying, setSnapshotPlaying] = useModelState<boolean>("snapshot_playing");
@@ -2699,9 +2458,9 @@ function Show1DWidget() {
   const [, setHandoffRequest] = useModelState<string>("handoff_request");
   const [handoffStatus] = useModelState<string>("handoff_status");
   const [handoffEnabled] = useModelState<boolean>("handoff_enabled");
-  const [preparedViewWidget] = useModelState<unknown>("prepared_view_widget");
+  const [preparedViewWidget] = useModelState<string | null>("prepared_view_widget");
   const [transientSnapshotGroupIdx, setTransientSnapshotGroupIdx] = React.useState<number | null>(null);
-  const initialInteractiveStateRef = React.useRef<Show1DInitialInteractiveState | null>(null);
+  const resetBaselineRef = React.useRef<Map<string, unknown> | null>(null);
   const [resetBaselineReady, setResetBaselineReady] = React.useState(false);
 
   const { colors: themeColors } = useTheme(Boolean(offlineForTheme));
@@ -2908,7 +2667,7 @@ function Show1DWidget() {
     height: Math.max(360, viewportSize.height),
   });
   const plotSize = useElementSize(plotHostRef, DEFAULT_SIZE);
-  const plotDpr = typeof window === "undefined" ? 1 : (window.devicePixelRatio || 1);
+  const plotDpr = window.devicePixelRatio || 1;
   const geomRef = React.useRef<PlotGeometry | null>(null);
   const plotThumbnailHitAreasRef = React.useRef<PlotThumbnailHitArea[]>([]);
   const [hover, setHover] = React.useState<HoverPoint | null>(null);
@@ -2940,7 +2699,6 @@ function Show1DWidget() {
 
   const snapshotFftCacheRef = React.useRef<Map<string, SnapshotFftCacheEntry>>(new Map());
   const snapshotFftPendingRef = React.useRef<Map<string, Promise<SnapshotFftCacheEntry>>>(new Map());
-  const snapshotFftGpuRef = React.useRef<DisplayFFT | null>(null);
   const snapshotFftGenerationRef = React.useRef(0);
   const snapshotFftGeneration = React.useMemo(() => {
     snapshotFftGenerationRef.current += 1;
@@ -2960,7 +2718,7 @@ function Show1DWidget() {
   const [viewMenuAnchor, setViewMenuAnchor] = React.useState<HTMLElement | null>(null);
   const [exportBusy, setExportBusy] = React.useState(false);
   const [localExportStatus, setLocalExportStatus] = React.useState("");
-  const pendingExportRef = React.useRef<{ id: string; filename: string; handle: Show1DFileHandle | null } | null>(null);
+  const pendingExportRef = React.useRef<PendingSave | null>(null);
 
   const fullXRange = React.useMemo(() => xExtent(xData, nPoints), [xData, nPoints]);
 
@@ -3009,12 +2767,12 @@ function Show1DWidget() {
     }
     return groups;
   }, [groupCount, nSnapshots, snapshotImageGroups]);
-  const legacySelectedSnapshot = nSnapshots > 0
+  const modelSelectedSnapshot = nSnapshots > 0
     ? clampValue(Math.round(selectedSnapshotIdx < 0 ? nSnapshots - 1 : selectedSnapshotIdx), 0, nSnapshots - 1)
     : -1;
   const modelSelectedSnapshotGroup = selectedSnapshotGroupIdx >= 0
     ? selectedSnapshotGroupIdx
-    : (snapshotImageGroups[legacySelectedSnapshot] ?? legacySelectedSnapshot);
+    : (snapshotImageGroups[modelSelectedSnapshot] ?? modelSelectedSnapshot);
   const activeSelectedSnapshotGroup = hoverSnapshotGroupIdx !== null
     ? hoverSnapshotGroupIdx
     : transientSnapshotGroupIdx !== null
@@ -3042,8 +2800,8 @@ function Show1DWidget() {
   const selectedGroupImageIndices = selectedGroupAllImageIndices
     .filter((imageIdx) => isSnapshotImageVisible(imageIdx))
     .sort((a, b) => compareSnapshotLabels(imageLabelForIndex(a), imageLabelForIndex(b), trialRowByKey));
-  const selectedSnapshot = selectedGroupImageIndices.includes(legacySelectedSnapshot)
-    ? legacySelectedSnapshot
+  const selectedSnapshot = selectedGroupImageIndices.includes(modelSelectedSnapshot)
+    ? modelSelectedSnapshot
     : selectedGroupImageIndices[0] ?? -1;
   const selectedSnapshotIteration = selectedGroup >= 0 && Number.isFinite(snapshotGroupIterations?.[selectedGroup])
     ? Number(snapshotGroupIterations[selectedGroup])
@@ -3198,17 +2956,16 @@ function Show1DWidget() {
     "& .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.border },
     "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: themeColors.accent },
   };
-  const themedTopMenuProps = {
-    PaperProps: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` } },
-    sx: { zIndex: 9999 },
-  };
+  const themedTopMenuPaper = { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` } };
   const snapshotControlMenuProps = {
-    PaperProps: {
-      sx: {
-        bgcolor: themeColors.controlBg,
-        color: themeColors.text,
-        border: "none",
-        boxShadow: "0 8px 24px rgba(15, 23, 42, 0.14)",
+    slotProps: {
+      paper: {
+        sx: {
+          bgcolor: themeColors.controlBg,
+          color: themeColors.text,
+          border: "none",
+          boxShadow: "0 8px 24px rgba(15, 23, 42, 0.14)",
+        },
       },
     },
     sx: { zIndex: 9999 },
@@ -3564,95 +3321,30 @@ function Show1DWidget() {
     }
   }, [normalisedSnapshotContrastPreset, setSnapshotContrastPreset, snapshotContrastPreset]);
 
+  // The baseline is read once the mount's own normalising writes (clamped
+  // sizes, valid colormaps) have settled: a change to any reset trait before
+  // then restarts the zero-delay timer.
   React.useEffect(() => {
-    if (initialInteractiveStateRef.current !== null) return;
-    const timeout = window.setTimeout(() => {
-      if (initialInteractiveStateRef.current !== null) return;
-      initialInteractiveStateRef.current = {
-        controlsCollapsed: Boolean(controlsCollapsed),
-        logScale: Boolean(logScale),
-        showStats: Boolean(showStats),
-        showReview: Boolean(showReview),
-        showLegend: Boolean(showLegend),
-        starredSnapshotImageLabels: copyStringArray(starredSnapshotImageLabels),
-        trialNotes: copyStringRecord(trialNotes),
-        trialTags: copyStringArrayRecord(trialTags),
-        showTrialNotes: Boolean(showTrialNotes),
-        showStarredOnly: Boolean(showStarredOnly),
-        trialSortKey: String(trialSortKey || (optimizationReview ? "final_loss" : "label")),
-        trialSortDescending: Boolean(trialSortDescending),
-        trialFilterText: String(trialFilterText || ""),
-        topTrialCount: Math.max(0, Math.round(optionalFiniteNumber(topTrialCount) || 0)),
-        plotHeightPx: Number.isFinite(plotHeightPx) ? plotHeightPx : DEFAULT_PLOT_HEIGHT,
-        plotWidthPx: Number.isFinite(plotWidthPx) ? plotWidthPx : 0,
-        sidePanelWidthPx: Number.isFinite(sidePanelWidthPx) ? sidePanelWidthPx : 360,
-        snapshotPanelWidthPx: Number.isFinite(snapshotPanelWidthPx) ? snapshotPanelWidthPx : 0,
-        focusedTrace: Number.isFinite(focusedTrace) ? focusedTrace : -1,
-        xRange: copyNumberArray(xRange),
-        yRange: copyNumberArray(yRange),
-        selectedSnapshotIdx: Number.isFinite(selectedSnapshotIdx) ? selectedSnapshotIdx : -1,
-        selectedSnapshotGroupIdx: Number.isFinite(selectedSnapshotGroupIdx) ? selectedSnapshotGroupIdx : -1,
-        bookmarkedSnapshotGroups: copyNumberArray(bookmarkedSnapshotGroups),
-        hiddenSnapshotImageLabels: copyStringArray(hiddenSnapshotImageLabels),
-        showSnapshotHistogram: Boolean(showSnapshotHistogram),
-        showSnapshotFft: Boolean(showSnapshotFft),
-        snapshotFftLayout: String(snapshotFftLayout || "overlay"),
-        snapshotFftWindow: Boolean(snapshotFftWindow),
-        snapshotFftCmap: String(snapshotFftCmap || "magma"),
-        snapshotContrastPreset: String(snapshotContrastPreset || "full"),
-        snapshotContrastRange: copyNumberArray(snapshotContrastRange),
-        snapshotThumbnailSize: Number.isFinite(snapshotThumbnailSize) ? snapshotThumbnailSize : 48,
-        snapshotOverlayPosition: String(snapshotOverlayPosition || "top-right"),
-        imageCmap: String(imageCmap || "viridis"),
-        snapshotRealSpaceZoom: Number.isFinite(snapshotRealSpaceZoom) ? snapshotRealSpaceZoom : 1,
-        snapshotRealSpaceCenter: copyNumberArray(snapshotRealSpaceCenter),
-        snapshotFftZoom: Number.isFinite(snapshotFftZoom) ? snapshotFftZoom : 1,
-        snapshotFftCenter: copyNumberArray(snapshotFftCenter),
-        showSnapshotProfile: Boolean(showSnapshotProfile),
-        snapshotProfileLine: copyProfileLine(snapshotProfileLine),
-        snapshotPlaying: Boolean(snapshotPlaying),
-        snapshotFps: Number.isFinite(snapshotFps) ? snapshotFps : 2,
-        snapshotLoop: Boolean(snapshotLoop),
-        snapshotBounce: Boolean(snapshotBounce),
-      };
+    let timer = 0;
+    const restart = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(capture, 0);
+    };
+    const stopListening = () => {
+      for (const key of RESET_TRAITS) model.off(`change:${key}`, restart);
+    };
+    const capture = () => {
+      resetBaselineRef.current = new Map(RESET_TRAITS.map((key) => [key, structuredClone(model.get(key))]));
+      stopListening();
       setResetBaselineReady(true);
-    }, 0);
-    return () => window.clearTimeout(timeout);
-  }, [
-    focusedTrace,
-    bookmarkedSnapshotGroups,
-    hiddenSnapshotImageLabels,
-    imageCmap,
-    logScale,
-    plotHeightPx,
-    plotWidthPx,
-    selectedSnapshotGroupIdx,
-    selectedSnapshotIdx,
-    showLegend,
-    showSnapshotFft,
-    showSnapshotProfile,
-    showStats,
-    sidePanelWidthPx,
-    snapshotBounce,
-    snapshotContrastPreset,
-    snapshotContrastRange,
-    snapshotFftCenter,
-    snapshotFftCmap,
-    snapshotFftLayout,
-    snapshotFftWindow,
-    snapshotFftZoom,
-    snapshotFps,
-    snapshotLoop,
-    snapshotOverlayPosition,
-    snapshotPanelWidthPx,
-    snapshotProfileLine,
-    snapshotRealSpaceCenter,
-    snapshotRealSpaceZoom,
-    snapshotThumbnailSize,
-    snapshotPlaying,
-    xRange,
-    yRange,
-  ]);
+    };
+    for (const key of RESET_TRAITS) model.on(`change:${key}`, restart);
+    restart();
+    return () => {
+      window.clearTimeout(timer);
+      stopListening();
+    };
+  }, [model]);
 
   React.useEffect(() => {
     hoverSnapshotGroupRef.current = hoverSnapshotGroupIdx;
@@ -3749,7 +3441,6 @@ function Show1DWidget() {
               Boolean(snapshotFftWindow),
               snapshotFftCacheRef,
               snapshotFftPendingRef,
-              snapshotFftGpuRef,
               snapshotFftGenerationRef,
               generation,
             );
@@ -3885,52 +3576,22 @@ function Show1DWidget() {
     return () => window.clearTimeout(id);
   }, [localExportStatus, exportBusy]);
 
-  React.useEffect(() => {
-    const pending = pendingExportRef.current;
-    if (!pending || exportPayloadId !== pending.id) return;
-    const bytes = extractBytes(exportPayload ?? EMPTY_BYTES);
-    if (bytes.length === 0) return;
-    let canceled = false;
-    const save = async () => {
-      const payload = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice();
-      const filename = exportPayloadFilename || pending.filename;
-      const blob = new Blob([payload as BlobPart], { type: "text/html;charset=utf-8" });
-      try {
-        if (pending.handle) {
-          setLocalExportStatus(`Saving ${filename}...`);
-          const writable = await pending.handle.createWritable();
-          await writable.write(blob);
-          await writable.close();
-        } else {
-          downloadBlob(blob, filename);
-        }
-        if (canceled) return;
-        pendingExportRef.current = null;
-        setExportBusy(false);
-        setLocalExportStatus(`Saved ${filename} (${formatSavedBytes(bytes.byteLength)})`);
-        setExportRequest(JSON.stringify({ mode: "clear", id: `${pending.id}-clear` }));
-      } catch (err) {
-        if (canceled) return;
-        pendingExportRef.current = null;
-        setExportBusy(false);
-        setLocalExportStatus(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
-        setExportRequest(JSON.stringify({ mode: "clear", id: `${pending.id}-clear` }));
-      }
-    };
-    void save();
-    return () => { canceled = true; };
-  }, [exportPayload, exportPayloadId, exportPayloadFilename, setExportRequest]);
+  useSaveExportPayload(pendingExportRef, exportPayload, exportPayloadId, exportPayloadFilename, setExportRequest, setExportBusy, setLocalExportStatus);
 
+  const profileBitmap = React.useMemo(
+    () => hasProfileImage ? floatImageBitmap(profileImageData, profileImageHeight, profileImageWidth, imageLut) : null,
+    [hasProfileImage, imageLut, profileImageData, profileImageHeight, profileImageWidth],
+  );
   React.useEffect(() => {
     const canvas = profileCanvasRef.current;
-    if (!canvas || !hasProfileImage) return;
-    drawFloatImage(canvas, profileImageData, profileImageHeight, profileImageWidth, profileLine ?? [], imageLut, {
+    if (!canvas || !profileBitmap) return;
+    drawFloatImage(canvas, profileBitmap, profileLine ?? [], {
       bg: themeColors.bgAlt,
       border: themeColors.border,
       accent: themeColors.accent,
       text: themeColors.text,
     });
-  }, [hasProfileImage, imageLut, profileImageData, profileImageHeight, profileImageWidth, profileLine, themeColors]);
+  }, [profileBitmap, profileLine, themeColors]);
 
   React.useLayoutEffect(() => {
     const canvas = canvasRef.current;
@@ -4075,13 +3736,13 @@ function Show1DWidget() {
     ctx.textAlign = "center";
     for (const tick of xTicks) {
       const x = dataToX(tick, geom);
-      ctx.fillText(formatAxisValue(tick), x, geom.top + geom.plotH + 18);
+      ctx.fillText(formatCompactValue(tick), x, geom.top + geom.plotH + 18);
     }
     ctx.textAlign = "right";
     for (const tick of yTickValues) {
       if (logScale && tick <= 0) continue;
       const y = dataToY(tick, geom);
-      ctx.fillText(tick !== 0 && Math.abs(tick) < 0.1 ? tick.toExponential(2) : formatAxisValue(tick), geom.left - 8, y + 4);
+      ctx.fillText(tick !== 0 && Math.abs(tick) < 0.1 ? tick.toExponential(2) : formatCompactValue(tick), geom.left - 8, y + 4);
     }
     ctx.textAlign = "center";
     const xAxisTitle = xLabel ? `${xLabel}${xUnit ? ` (${xUnit})` : ""}` : xUnit;
@@ -4307,191 +3968,31 @@ function Show1DWidget() {
   }, [setFocusedTrace, setSnapshotFftCenter, setSnapshotFftZoom, setSnapshotRealSpaceCenter, setSnapshotRealSpaceZoom, setXRange, setYRange]);
 
   const resetToInitialState = React.useCallback(() => {
-    const initial = initialInteractiveStateRef.current;
-    if (!initial) return;
-    setControlsCollapsed(initial.controlsCollapsed);
-    setLogScale(initial.logScale);
-    setShowStats(initial.showStats);
-    setShowReview(initial.showReview);
-    setShowLegend(initial.showLegend);
-    setStarredSnapshotImageLabels([...initial.starredSnapshotImageLabels]);
-    setTrialNotes(copyStringRecord(initial.trialNotes));
-    setTrialTags(copyStringArrayRecord(initial.trialTags));
-    setShowTrialNotes(initial.showTrialNotes);
-    setShowStarredOnly(initial.showStarredOnly);
-    setTrialSortKey(initial.trialSortKey);
-    setTrialSortDescending(initial.trialSortDescending);
-    setTrialFilterText(initial.trialFilterText);
-    setTopTrialCount(initial.topTrialCount);
-    setPlotHeightPx(initial.plotHeightPx);
-    setPlotWidthPx(initial.plotWidthPx);
-    setSidePanelWidthPx(initial.sidePanelWidthPx);
-    setSnapshotPanelWidthPx(initial.snapshotPanelWidthPx);
+    for (const [key, value] of resetBaselineRef.current!) model.set(key, structuredClone(value));
+    model.save_changes();
     setSidePanelWidthUserAdjusted(false);
-    setXRange([...initial.xRange]);
-    setYRange([...initial.yRange]);
-    setFocusedTrace(initial.focusedTrace);
-    setSelectedSnapshotIdx(initial.selectedSnapshotIdx);
-    setSelectedSnapshotGroupIdx(initial.selectedSnapshotGroupIdx);
-    setBookmarkedSnapshotGroups([...initial.bookmarkedSnapshotGroups]);
     setTransientSnapshotGroupIdx(null);
     setHoverSnapshotGroupIdx(null);
     setHoverSnapshotImageIdx(null);
     hoverSnapshotGroupRef.current = null;
     if (canvasRef.current) canvasRef.current.style.cursor = "crosshair";
-    setHiddenSnapshotImageLabels([...initial.hiddenSnapshotImageLabels]);
-    setShowSnapshotHistogram(initial.showSnapshotHistogram);
-    setShowSnapshotFft(initial.showSnapshotFft);
-    setSnapshotFftLayout(initial.snapshotFftLayout);
-    setSnapshotFftWindow(initial.snapshotFftWindow);
-    setSnapshotFftCmap(initial.snapshotFftCmap);
     snapshotFftCacheRef.current.clear();
     snapshotFftPendingRef.current.clear();
     setSnapshotFftCacheVersion((value) => value + 1);
-    setSnapshotContrastPreset(initial.snapshotContrastPreset);
-    setSnapshotContrastRange([...initial.snapshotContrastRange]);
-    setPanelContrastRanges({});
-    setSnapshotThumbnailSize(initial.snapshotThumbnailSize);
-    setSnapshotOverlayPosition(initial.snapshotOverlayPosition);
-    setImageCmap(initial.imageCmap);
-    setSnapshotRealSpaceZoom(initial.snapshotRealSpaceZoom);
-    setSnapshotRealSpaceCenter([...initial.snapshotRealSpaceCenter]);
-    setSnapshotFftZoom(initial.snapshotFftZoom);
-    setSnapshotFftCenter([...initial.snapshotFftCenter]);
-    setShowSnapshotProfile(initial.showSnapshotProfile);
-    setSnapshotProfileLine(initial.snapshotProfileLine.map((point) => ({ ...point })));
-    setSnapshotPlaying(initial.snapshotPlaying);
-    setSnapshotFps(initial.snapshotFps);
-    setSnapshotLoop(initial.snapshotLoop);
-    setSnapshotBounce(initial.snapshotBounce);
     snapshotBounceDirectionRef.current = 1;
     setLocalExportStatus("");
     setViewMenuAnchor(null);
     setExportAnchor(null);
-  }, [
-    setFocusedTrace,
-    setBookmarkedSnapshotGroups,
-    setHiddenSnapshotImageLabels,
-    setImageCmap,
-    setLogScale,
-    setPlotHeightPx,
-    setSelectedSnapshotGroupIdx,
-    setSelectedSnapshotIdx,
-    setShowLegend,
-    setShowSnapshotFft,
-    setShowSnapshotProfile,
-    setShowStats,
-    setSidePanelWidthPx,
-    setSnapshotBounce,
-    setSnapshotContrastPreset,
-    setSnapshotContrastRange,
-    setSnapshotFftCenter,
-    setSnapshotFftCmap,
-    setSnapshotFftLayout,
-    setSnapshotFftWindow,
-    setSnapshotFftZoom,
-    setSnapshotFps,
-    setSnapshotLoop,
-    setSnapshotOverlayPosition,
-    setSnapshotPanelWidthPx,
-    setSnapshotProfileLine,
-    setSnapshotRealSpaceCenter,
-    setSnapshotRealSpaceZoom,
-    setSnapshotThumbnailSize,
-    setSnapshotPlaying,
-    setXRange,
-    setYRange,
-  ]);
+  }, [model]);
 
+  const resetTraitValues = RESET_TRAITS.map((key) => model.get(key));
   const needsReset = React.useMemo(() => {
-    if (!resetBaselineReady) return false;
-    const initial = initialInteractiveStateRef.current;
-    if (!initial) return false;
-    return (
-      logScale !== initial.logScale
-      || controlsCollapsed !== initial.controlsCollapsed
-      || showStats !== initial.showStats
-      || showReview !== initial.showReview
-      || showLegend !== initial.showLegend
-      || !arraysEqual(starredSnapshotImageLabels, initial.starredSnapshotImageLabels)
-      || !jsonValuesEqual(trialNotes, initial.trialNotes)
-      || !jsonValuesEqual(trialTags, initial.trialTags)
-      || showTrialNotes !== initial.showTrialNotes
-      || showStarredOnly !== initial.showStarredOnly
-      || trialSortKey !== initial.trialSortKey
-      || trialSortDescending !== initial.trialSortDescending
-      || trialFilterText !== initial.trialFilterText
-      || topTrialCount !== initial.topTrialCount
-      || plotHeightPx !== initial.plotHeightPx
-      || (plotWidthPx || 0) !== initial.plotWidthPx
-      || sidePanelWidthPx !== initial.sidePanelWidthPx
-      || snapshotPanelWidthPx !== initial.snapshotPanelWidthPx
-      || sidePanelWidthUserAdjusted
-      || focusedTrace !== initial.focusedTrace
-      || !arraysEqual(xRange, initial.xRange)
-      || !arraysEqual(yRange, initial.yRange)
-      || selectedSnapshotIdx !== initial.selectedSnapshotIdx
-      || selectedSnapshotGroupIdx !== initial.selectedSnapshotGroupIdx
-      || !arraysEqual(bookmarkedSnapshotGroups, initial.bookmarkedSnapshotGroups)
-      || !arraysEqual(hiddenSnapshotImageLabels, initial.hiddenSnapshotImageLabels)
-      || showSnapshotHistogram !== initial.showSnapshotHistogram
-      || showSnapshotFft !== initial.showSnapshotFft
-      || snapshotFftLayout !== initial.snapshotFftLayout
-      || snapshotFftWindow !== initial.snapshotFftWindow
-      || snapshotFftCmap !== initial.snapshotFftCmap
-      || snapshotContrastPreset !== initial.snapshotContrastPreset
-      || !arraysEqual(snapshotContrastRange, initial.snapshotContrastRange)
-      || snapshotThumbnailSize !== initial.snapshotThumbnailSize
-      || snapshotOverlayPosition !== initial.snapshotOverlayPosition
-      || imageCmap !== initial.imageCmap
-      || snapshotRealSpaceZoom !== initial.snapshotRealSpaceZoom
-      || !arraysEqual(snapshotRealSpaceCenter, initial.snapshotRealSpaceCenter)
-      || snapshotFftZoom !== initial.snapshotFftZoom
-      || !arraysEqual(snapshotFftCenter, initial.snapshotFftCenter)
-      || showSnapshotProfile !== initial.showSnapshotProfile
-      || !profileLinesEqual(snapshotProfileLine, initial.snapshotProfileLine)
-      || snapshotPlaying !== initial.snapshotPlaying
-      || snapshotFps !== initial.snapshotFps
-      || snapshotLoop !== initial.snapshotLoop
-      || snapshotBounce !== initial.snapshotBounce
-    );
-  }, [
-    focusedTrace,
-    bookmarkedSnapshotGroups,
-    hiddenSnapshotImageLabels,
-    imageCmap,
-    logScale,
-    plotHeightPx,
-    plotWidthPx,
-    resetBaselineReady,
-    selectedSnapshotGroupIdx,
-    selectedSnapshotIdx,
-    showLegend,
-    showSnapshotFft,
-    showSnapshotProfile,
-    showStats,
-    sidePanelWidthPx,
-    sidePanelWidthUserAdjusted,
-    snapshotBounce,
-    snapshotContrastPreset,
-    snapshotContrastRange,
-    snapshotFftCenter,
-    snapshotFftCmap,
-    snapshotFftLayout,
-    snapshotFftWindow,
-    snapshotFftZoom,
-    snapshotFps,
-    snapshotLoop,
-    snapshotOverlayPosition,
-    snapshotPanelWidthPx,
-    snapshotProfileLine,
-    snapshotRealSpaceCenter,
-    snapshotRealSpaceZoom,
-    snapshotThumbnailSize,
-    snapshotPlaying,
-    xRange,
-    yRange,
-  ]);
+    const baseline = resetBaselineRef.current;
+    if (!resetBaselineReady || !baseline) return false;
+    return sidePanelWidthUserAdjusted
+      || RESET_TRAITS.some((key, index) => JSON.stringify(resetTraitValues[index]) !== JSON.stringify(baseline.get(key)));
+    // One dependency per reset trait: the model hands back the same value until the trait changes.
+  }, [resetBaselineReady, sidePanelWidthUserAdjusted, ...resetTraitValues]);
 
   // Wheel zoom must not scroll the notebook. React registers onWheel as a
   // passive listener, where preventDefault is ignored, so the plot canvas takes
@@ -4559,28 +4060,11 @@ function Show1DWidget() {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setExportBusy(true);
     setLocalExportStatus("Choose export location...");
-    const picker = (window as Show1DWindow).showSaveFilePicker;
-    let handle: Show1DFileHandle | null = null;
-    if (picker) {
-      try {
-        handle = await picker({
-          suggestedName: filename,
-          types: [{ description: "Standalone HTML", accept: { "text/html": [".html"] } }],
-        });
-      } catch (err) {
-        if (isAbortLikeError(err)) {
-          setExportBusy(false);
-          setLocalExportStatus("Export canceled");
-          return;
-        }
-        setExportBusy(false);
-        setLocalExportStatus(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
-        return;
-      }
-    }
+    const handle = await pickSaveHandle(filename, HTML_PICKER_TYPE, setExportBusy, setLocalExportStatus);
+    if (handle === undefined) return;
     pendingExportRef.current = { id, filename, handle };
     setLocalExportStatus(`Preparing ${filename}...`);
-    setExportRequest(JSON.stringify({ mode: "single", encoding: "full", id, filename, download: true }));
+    setExportRequest(JSON.stringify({ id, filename, download: true }));
   }, [exportEnabled, labels, nPoints, nTraces, setExportRequest, title, xData, xLabel, xUnit, yData, yLabel, yUnit]);
 
   const handleHandoffToShow2D = React.useCallback(() => {
@@ -4741,7 +4225,7 @@ function Show1DWidget() {
           value={trialFilterText || ""}
           onChange={(event) => setTrialFilterText(event.target.value)}
           placeholder="Filter trials"
-          inputProps={{ "aria-label": "Filter review trials" }}
+          slotProps={{ htmlInput: { "aria-label": "Filter review trials" } }}
           sx={{ width: 112, "& .MuiInputBase-input": { py: 0.45, px: 0.75, fontSize: 10.5 } }}
         />
         {optimizationReview && <Select
@@ -4822,7 +4306,7 @@ function Show1DWidget() {
                     value={note}
                     onChange={(event) => updateTrialNote(label, event.target.value)}
                     placeholder="Review note"
-                    inputProps={{ "aria-label": `Review note for ${label}` }}
+                    slotProps={{ htmlInput: { "aria-label": `Review note for ${label}` } }}
                     sx={{ width: "100%", mt: 0.35, "& .MuiInputBase-input": { py: 0.4, px: 0.65, fontSize: 10 } }}
                   />
                   {optimizationReview && <Stack direction="row" spacing={0.35} useFlexGap sx={{ flexWrap: "wrap", mt: 0.35 }}>
@@ -5015,8 +4499,8 @@ function Show1DWidget() {
             anchorEl={viewMenuAnchor}
             open={Boolean(viewMenuAnchor)}
             onClose={() => setViewMenuAnchor(null)}
-            MenuListProps={{ "aria-label": "View options" }}
-            {...themedTopMenuProps}
+            slotProps={{ paper: themedTopMenuPaper, list: { "aria-label": "View options" } }}
+            sx={{ zIndex: 9999 }}
           >
             <MenuItem
               onClick={handleHandoffToShow2D}
@@ -5058,7 +4542,8 @@ function Show1DWidget() {
         onClose={() => setExportAnchor(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
         transformOrigin={{ vertical: "top", horizontal: "right" }}
-        {...themedTopMenuProps}
+        slotProps={{ paper: themedTopMenuPaper }}
+        sx={{ zIndex: 9999 }}
       >
         <MenuItem onClick={() => void handleExportSelect("html")} disabled={!exportEnabled} sx={{ fontSize: 12 }}>
           <DownloadIcon fontSize="small" sx={{ mr: 1 }} /> HTML full float32 ({htmlSize})
@@ -5407,11 +4892,7 @@ function Show1DWidget() {
                         key={imageIdx}
                         data-testid={`show1d-snapshot-panel-${imageIdx}`}
                         title={imageLabel}
-                        onMouseEnter={() => setHoverSnapshotImageIdx(imageIdx)}
-                        onMouseOver={() => setHoverSnapshotImageIdx(imageIdx)}
-                        onMouseLeave={() => setHoverSnapshotImageIdx((current) => (current === imageIdx ? null : current))}
                         onPointerEnter={() => setHoverSnapshotImageIdx(imageIdx)}
-                        onPointerOver={() => setHoverSnapshotImageIdx(imageIdx)}
                         onPointerLeave={() => setHoverSnapshotImageIdx((current) => (current === imageIdx ? null : current))}
                         onFocus={() => setHoverSnapshotImageIdx(imageIdx)}
                         onBlur={(event) => {
@@ -5454,19 +4935,18 @@ function Show1DWidget() {
                           contrastRange={panelContrastRanges?.[imageLabel]?.length === 2 ? panelContrastRanges[imageLabel] as [number, number] : customSnapshotContrastRange}
                           selected={selected}
                           label={compactScienceLabel(imageLabel)}
-                          scaleBarVisible={Boolean(scaleBarVisible)}
+                          showScaleBar={Boolean(showScaleBar)}
                           overlayPosition={resolvedSnapshotOverlayPosition}
                           pixelSize={Number.isFinite(pixelSize) && pixelSize > 0 ? pixelSize : 1}
                           pixelUnit={pixelSize > 0 ? pixelUnit : "px"}
                           imageViewZoom={snapshotLinkViews ? snapshotRealSpaceZoom : (panelImageViews[imageLabel]?.zoom ?? 1)}
-                          imageViewCenter={snapshotLinkViews ? snapshotRealSpaceCenter : (panelImageViews[imageLabel]?.center ?? [0.5, 0.5])}
+                          imageViewCenter={snapshotLinkViews ? snapshotRealSpaceCenter : (panelImageViews[imageLabel]?.center ?? UNZOOMED_VIEW_CENTER)}
                           fftViewZoom={snapshotLinkViews ? snapshotFftZoom : (panelFftViews[imageLabel]?.zoom ?? 1)}
-                          fftViewCenter={snapshotLinkViews ? snapshotFftCenter : (panelFftViews[imageLabel]?.center ?? [0.5, 0.5])}
+                          fftViewCenter={snapshotLinkViews ? snapshotFftCenter : (panelFftViews[imageLabel]?.center ?? UNZOOMED_VIEW_CENTER)}
                           profileActive={Boolean(showSnapshotProfile)}
                           profileLine={snapshotProfileLine ?? []}
                           fftCacheRef={snapshotFftCacheRef}
                           fftPendingRef={snapshotFftPendingRef}
-                          fftGpuRef={snapshotFftGpuRef}
                           fftCacheVersion={snapshotFftCacheVersion}
                           fftGenerationRef={snapshotFftGenerationRef}
                           fftGeneration={snapshotFftGeneration}
@@ -5735,7 +5215,7 @@ function Show1DWidget() {
           </Stack>
         )}
       </Box>
-      {handoffEnabled && preparedViewWidget != null && (
+      {handoffEnabled && preparedViewWidget && (
         <EmbeddedWidgetView
           hostModel={model}
           widgetModel={preparedViewWidget}

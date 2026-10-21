@@ -106,12 +106,12 @@ def test_lightweight_snapshot_preserves_live_values_and_current_preview():
     first = plot.get_state()
     assert "data_bytes" not in first
     assert first["_static_fallback_mime"] == "image/png"
-    assert base64.b64decode(first["_static_fallback_jpeg"]).startswith(b"\x89PNG")
+    assert base64.b64decode(first["_static_fallback_image"]).startswith(b"\x89PNG")
     plot.view_bounds = [1, 4, 0, 2]
     plot.horizontal_line = 1.5
     plot.set_data(values[::-1])
     saved = plot.get_state()
-    assert saved["_static_fallback_jpeg"] != first["_static_fallback_jpeg"]
+    assert saved["_static_fallback_image"] != first["_static_fallback_image"]
     assert saved["view_bounds"] == [1, 4, 0, 2]
     assert saved["horizontal_line"] == 1.5
     assert "data_bytes" not in saved
@@ -161,3 +161,14 @@ def test_restored_view_is_checked_like_a_new_one(tmp_path):
     assert (plot.vmin, plot.vmax, plot.cmap) == (0.0, 23.0, "viridis")
     plot.load_state_dict({"max_width": 300})
     assert (plot.layout.width, plot.layout.max_width) == ("300px", "min(100%, 300px)")
+
+
+def test_device_tensor_bin_centers_are_accepted():
+    # A-16: x and y went through np.array, which refuses a CUDA tensor.
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("needs a CUDA device")
+    centers = torch.arange(4, dtype=torch.float32, device="cuda")
+    plot = Plot2D(np.ones((4, 4)), x=centers, y=centers * 2)
+    np.testing.assert_array_equal(plot.x, [0.0, 1.0, 2.0, 3.0])
+    np.testing.assert_array_equal(plot.y, [0.0, 2.0, 4.0, 6.0])

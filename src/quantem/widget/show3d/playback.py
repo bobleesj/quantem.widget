@@ -86,7 +86,7 @@ class Show3DPlayback:
         self._offline_min = low
         self._offline_max = high
         panel_count = int(self.n_panels)
-        panel_width = int(self.panel_width_px)
+        panel_width = int(self.num_panel_cols)
         if panel_count > 1 and panel_width > 0 and arr.shape[2] == panel_width * panel_count:
             panels = [arr[:, :, panel * panel_width : (panel + 1) * panel_width] for panel in range(panel_count)]
             panel_lows = [float(panel_values.min()) for panel_values in panels]
@@ -113,7 +113,7 @@ class Show3DPlayback:
     def _get_display_panel_frame(self, panel: int, idx: int) -> np.ndarray:
         """One panel's slice of the display frame, as the browser crops it from the wide stack."""
         frame = self._get_display_frame(idx)
-        panel_width = int(self.panel_width_px) or frame.shape[1] // max(1, int(self.n_panels))
+        panel_width = int(self.num_panel_cols) or frame.shape[1] // max(1, int(self.n_panels))
         return frame[:, panel * panel_width : (panel + 1) * panel_width]
 
     def _get_source_panel_frame(self, panel: int, idx: int) -> np.ndarray:

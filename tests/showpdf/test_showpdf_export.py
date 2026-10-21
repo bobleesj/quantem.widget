@@ -165,7 +165,7 @@ def test_showpdf_export_keeps_what_a_saved_notebook_leaves_out(small_pdf, tmp_pa
     for name in ("nav_image_bytes", "mask_bytes", "linescan_bytes"):
         assert buffers.get(name), name
     assert entry["state"]["mask_b64"] == w.mask_b64 != ""
-    assert entry["state"]["_static_fallback_jpeg"] == ""
+    assert entry["state"]["_static_fallback_image"] == ""
 
 
 def test_showpdf_export_html_default_path(small_pdf, tmp_path, monkeypatch):

@@ -25,6 +25,10 @@ parts:
           - file: tutorials/show4dstem_multiple
             title: Compare datasets or tilts
       - file: tutorials/showptycho
+      - file: tutorials/ssb_workflow
+        title: End-to-end SSB workflow
+      - file: tutorials/showptycho_to_myptycho
+        title: SSB to iterative regions
       - file: tutorials/show1d
       - file: tutorials/plot2d
       - file: tutorials/show2d
@@ -83,8 +87,8 @@ parts:
           - file: api/load
       - file: developer/widget-creation
         title: Creating a widget
-      - file: developer/ui-guide
-        title: UI Guide
+      - file: developer/platforms
+        title: Platform support
       - file: developer/experimental-ans
         title: Experimental ANS sources
       - file: developer/save-state-and-notebook-size
@@ -107,3 +111,5 @@ parts:
             title: UI protocol
           - file: maintainer/widget-performance
             title: Performance
+          - file: maintainer/2026-10-20-mps-performance
+            title: MPS interactivity and regression harness (2026-10-20)

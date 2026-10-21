@@ -157,15 +157,42 @@ def test_sample_line_profile_is_exact_on_a_bilinear_plane():
 
 def test_from_image_embeds_profile_context_with_physical_distance():
     image = np.random.default_rng(3).random((16, 24)).astype(np.float32)
-    widget = Show1D.from_image(image, line=((2, 1), (2, 9)), profile_width=3, sampling=0.5, x_unit="nm", title="profile", image_cmap="gray")
+    widget = Show1D.from_image(image, line=((2, 1), (2, 9)), profile_width=3, sampling=0.5, units="nm", title="profile", image_cmap="gray")
     assert (widget.labels, widget.x_label, widget.x_unit, widget.title) == (["profile"], "distance", "nm", "profile")
     assert (widget.pixel_size, widget.pixel_unit, widget.image_cmap) == (0.5, "nm", "gray")
     assert (widget.profile_image_height, widget.profile_image_width, widget.profile_width) == (16, 24, 3)
+    # the line width is read by the Python sampler only: saved with the state, not sent to the browser
+    assert widget.state_dict()["profile_width"] == 3 and "profile_width" not in widget.get_state()
     assert widget.profile_line == [{"row": 2.0, "col": 1.0}, {"row": 2.0, "col": 9.0}]
     np.testing.assert_array_equal(_decode(widget.profile_image_bytes, image.shape), image)
     x = _decode(widget.x_bytes, (widget.n_points,))
     assert x[0] == 0 and x[-1] == pytest.approx(8 * 0.5) and widget.n_points == 9
     np.testing.assert_allclose(_decode(widget.y_bytes, (9,)), image[1:4, 1:10].mean(axis=0), atol=1e-6)
+
+
+def test_from_image_takes_units_for_the_distance_axis():
+    # from_image took x_unit= and forwarded it as units=; the keyword is units, as in the constructor
+    image = np.zeros((8, 8), dtype=np.float32)
+    profile = Show1D.from_image(image, line=((1, 1), (1, 6)), sampling=0.5, units="nm")
+    assert (profile.x_unit, profile.pixel_unit) == ("nm", "nm")
+    with pytest.raises(TypeError, match="sets x_unit itself; pass units= instead"):
+        Show1D.from_image(image, line=((1, 1), (1, 6)), sampling=0.5, x_unit="nm")
+
+
+def test_from_image_sampling_without_units_is_in_angstrom():
+    # from_image defaulted to sampling=1.0, units="px"; "px" reads as uncalibrated, so sampling=0.5 left the distance in pixels
+    image = np.zeros((8, 16), dtype=np.float32)
+    stated = Show1D.from_image(image, line=((2, 1), (2, 9)), sampling=0.5)
+    assert (stated.pixel_size, stated.pixel_unit, stated.x_unit) == (0.5, "A", "A")
+    assert _decode(stated.x_bytes, (stated.n_points,))[-1] == pytest.approx(8 * 0.5)
+    for uncalibrated in (Show1D.from_image(image, line=((2, 1), (2, 9))), Show1D.from_image(image, line=((2, 1), (2, 9)), sampling=0.5, units="px")):
+        assert (uncalibrated.pixel_size, uncalibrated.pixel_unit, uncalibrated.x_unit) == (0.0, "px", "px")
+        assert _decode(uncalibrated.x_bytes, (uncalibrated.n_points,))[-1] == pytest.approx(8.0)
+    # a unit with no step calibrates nothing and is refused
+    with pytest.raises(ValueError, match="a unit needs a step"):
+        Show1D.from_image(image, line=((2, 1), (2, 9)), units="nm")
+    series = Show1D([1.0, 2.0, 3.0], sampling=0.5)
+    assert (series.pixel_size, series.pixel_unit) == (0.5, "A")
 
 
 # --- snapshots, monitor file -------------------------------------------------
@@ -273,16 +300,16 @@ def test_state_round_trip_through_save_file_and_state_kwarg(tmp_path):
         assert getattr(restored, key) == getattr(widget, key), key
     assert restored.state_dict() == widget.state_dict()
     with pytest.raises(ValueError, match="cannot load into"):
-        Show1D(_traces(), state={"widget_name": "Show2D", "state": {}})
+        Show1D(_traces(), state={"schema": "quantem.widget-state/2", "widget_name": "Show2D", "state": {}})
     # a plain widget keeps the trace bytes but not the image buffers in the saved notebook
     saved = widget.get_state()
-    assert "y_bytes" in saved and "snapshot_bytes" not in saved and saved["_static_fallback_jpeg"]
+    assert "y_bytes" in saved and "snapshot_bytes" not in saved and saved["_static_fallback_image"]
     assert "snapshot_bytes" in Show1D(_traces(), save_state=True).get_state()
 
 
 def test_export_html_embeds_state_and_downsamples_only_linked_images(tmp_path):
     image = np.arange(64, dtype=np.float32).reshape(8, 8)
-    widget = Show1D.from_image(image, line=((0, 0), (0, 7)), sampling=0.5, x_unit="nm", title="Export me")
+    widget = Show1D.from_image(image, line=((0, 0), (0, 7)), sampling=0.5, units="nm", title="Export me")
     widget.snapshot(0, object=image, probe=image[:4, :6])
     widget.snapshot_real_space_center = [4, 4]
     widget.snapshot_profile_line = [{"row": 1, "col": 1}, {"row": 7, "col": 7}]
@@ -291,23 +318,19 @@ def test_export_html_embeds_state_and_downsamples_only_linked_images(tmp_path):
     assert full["_anywidget_id"] == "quantem.widget.show1d.widget.Show1D" and full["_export_light"] and not full["export_enabled"]
     assert (full["n_snapshots"], full["snapshot_height"], full["pixel_size"], full["labels"]) == (2, 8, 0.5, ["profile"])
     assert widget.export_status.startswith("Exported full.html") and widget.export_status.endswith("full float32)")
-    small = _embedded_state(widget.export_html(tmp_path / "small.html", downsample=2))
+    small = _embedded_state(widget.export_html(tmp_path / "small.html", image_bin=2))
     assert (small["snapshot_height"], small["snapshot_width"], small["snapshot_heights"], small["snapshot_widths"]) == (4, 4, [4, 2], [4, 3])
     assert (small["pixel_size"], small["profile_image_height"], small["snapshot_real_space_center"]) == (1.0, 4, [2.0, 2.0])
     assert small["profile_line"] == [{"row": 0.0, "col": 0.0}, {"row": 0.0, "col": 3.5}] and small["snapshot_profile_line"][1] == {"row": 3.5, "col": 3.5}
     assert small["n_points"] == full["n_points"]  # trace samples are never binned
     assert small["x_unit"] == "nm" and small["title"] == "Export me"
-    default_name = widget._default_html_export_path(downsample=4).name
-    assert default_name == "export_me_1x8_4xdownsampled_single.html"
-    with pytest.raises(NotImplementedError, match="folder"):
-        widget.export_html(tmp_path / "x.html", mode="folder")
-    with pytest.raises(NotImplementedError, match="uint8"):
-        widget.export_html(tmp_path / "x.html", encoding="uint8")
+    default_name = widget._default_html_export_path(image_bin=4).name
+    assert default_name == "export_me_1x8_image_bin4_single.html"
     with pytest.raises(ValueError, match="one of"):
-        widget.export_html(tmp_path / "x.html", downsample=3)
-    widget.export_request = json.dumps({"mode": "single", "encoding": "full", "downsample": 2, "id": "req", "filename": "dl.html", "download": True})
+        widget.export_html(tmp_path / "x.html", image_bin=3)
+    widget.export_request = json.dumps({"image_bin": 2, "id": "req", "filename": "dl.html", "download": True})
     assert widget.export_payload_id == "req" and widget.export_filename == "dl.html" and b"snapshot_heights" in widget.export_payload
-    assert widget.export_status.startswith("Ready dl.html") and "2x downsampled images" in widget.export_status
+    assert widget.export_status.startswith("Ready dl.html") and "image bin 2x" in widget.export_status
 
 
 def test_static_preview_and_save_image(tmp_path):

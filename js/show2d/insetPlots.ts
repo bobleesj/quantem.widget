@@ -73,7 +73,7 @@ function expandFlatRange([lo, hi]: [number, number]): [number, number] {
   return [lo - pad, hi + pad];
 }
 
-function formatInsetTick(value: number): string {
+export function formatInsetTick(value: number): string {
   const abs = Math.abs(value);
   if (abs > 0 && (abs < 0.01 || abs >= 1000)) return value.toExponential(1);
   if (abs >= 100) return value.toFixed(0);
@@ -119,7 +119,7 @@ export function insetPlotGeometry(
   spec: InsetPlotSpec | null | undefined,
   cssW: number,
   cssH: number,
-  scaleBarVisible: boolean,
+  showScaleBar: boolean,
 ): {
   finite: [number, number][];
   xlim: [number, number];
@@ -176,7 +176,7 @@ export function insetPlotGeometry(
     if (position.includes("right")) x0 = cssW - boxW - marginX;
     else if (position.includes("center")) x0 = cssW / 2 - boxW / 2;
     else x0 = marginX;
-    const scaleBarOffset = scaleBarVisible && position === "bottom-right" ? 34 : 0;
+    const scaleBarOffset = showScaleBar && position === "bottom-right" ? 34 : 0;
     if (position.includes("bottom")) y0 = cssH - boxH - marginY - scaleBarOffset;
     else if (position.includes("center")) y0 = cssH / 2 - boxH / 2;
     else y0 = marginY + 18;
@@ -204,9 +204,9 @@ export function insetHoverAt(
   cssH: number,
   cssX: number,
   cssY: number,
-  scaleBarVisible: boolean,
+  showScaleBar: boolean,
 ): InsetHoverInfo | null {
-  const inset = insetPlotGeometry(spec, cssW, cssH, scaleBarVisible);
+  const inset = insetPlotGeometry(spec, cssW, cssH, showScaleBar);
   if (!inset) return null;
   const { finite, xlim, ylim, x0, y0, boxW, boxH, plotX0, plotY0, plotW, plotH } = inset;
   if (cssX < x0 || cssX > x0 + boxW || cssY < y0 || cssY > y0 + boxH) return null;
@@ -240,9 +240,9 @@ export function drawInsetPlot(
   cssW: number,
   cssH: number,
   fallbackColor: string,
-  scaleBarVisible: boolean,
+  showScaleBar: boolean,
 ): void {
-  const inset = insetPlotGeometry(spec, cssW, cssH, scaleBarVisible);
+  const inset = insetPlotGeometry(spec, cssW, cssH, showScaleBar);
   if (!inset || !spec) return;
   const { finite, xlim, ylim, x0, y0, boxW, boxH, plotX0, plotY0, plotW, plotH, showTicks, tickFont, labelFont, legendFont } = inset;
   const toPlotX = (value: number) => plotX0 + (value - xlim[0]) / (xlim[1] - xlim[0]) * plotW;

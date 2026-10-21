@@ -61,14 +61,17 @@ We serve two audiences first:
 - **macOS on Apple M-chips** - the Metal (MPS) GPU.
 - **Linux with NVIDIA CUDA** - workstations and HPC.
 
-**CUDA and MPS are the primary backends.** Work stays on the GPU as PyTorch
-tensors; we avoid NumPy on the hot path. Automatic scientific loading and
-compute never silently fall back to CPU: an unsupported machine fails with a
-corrective error. The explicit CPU reference exists for parity tests, while the
-viewers can still display ordinary NumPy arrays supplied by a user. 4D-STEM
-acquisitions stay encoded on the GPU at full detector resolution (about 0.1 to
-2 GiB for a 512 x 512 x 192 x 192 scan instead of 18 GiB) - see
-[Load and I/O](api/io).
+**CUDA and MPS are the primary accelerated backends.** With `quantem.gpu`
+available, `read_4dstem` keeps supported acquisitions encoded on the GPU at
+full detector resolution (about 0.1 to 2 GiB for a 512 x 512 x 192 x 192 scan
+instead of 18 GiB). Otherwise the portable viewer loader reads into host memory,
+reports that route, and checks the dense allocation against a memory ceiling.
+Viewers also accept ordinary NumPy arrays supplied by a user.
+
+For calibration or denoising that requires GPU-resident data, call
+`quantem.gpu.io.load` explicitly and follow that package's hardware requirements.
+The portable viewer loader is not a guarantee of GPU execution. See
+[Load and I/O](api/io) for both paths.
 
 ## Widgets
 
@@ -138,6 +141,8 @@ https://doi.org/10.1093/mam/ozag053.941.
   [CONTRIBUTING.md](https://github.com/electronmicroscopy/quantem.widget/blob/main/CONTRIBUTING.md).
 - **Tutorial data:** public
   [bobleesj/quantem-data](https://huggingface.co/datasets/bobleesj/quantem-data).
-  Upload and download commands are on that dataset card. The GitHub loader
-  pull request is in [Contribute tutorial data](tutorials/contribute_data.md).
+  The dataset card records provenance; maintained download examples and
+  contribution instructions live in [Contribute tutorial data](tutorials/contribute_data.md).
+  The shared validator and metadata template belong to `quantem.data`; Hugging
+  Face stores the data and its descriptive metadata.
 - **Maintained by** the Ophus group.

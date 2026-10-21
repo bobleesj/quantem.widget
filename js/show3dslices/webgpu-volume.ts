@@ -1,32 +1,39 @@
 /// <reference types="@webgpu/types" />
 /** WebGPU volume renderer: ray casting with slice-plane indicators. */
 
-import { getGPUDevice } from "../display/fft";
+import { getGPUDevice } from "../display/device";
 
 // ============================================================================
 // Types
 // ============================================================================
 
 interface VolumeRenderParams {
-  sliceX: number;  // 0..nx-1 (current slice positions for plane indicators)
-  sliceY: number;  // 0..ny-1
-  sliceZ: number;  // 0..nz-1
-  nx: number;
-  ny: number;
-  nz: number;
+  colIndex: number;  // 0..numCols-1 (current slice positions for plane indicators)
+  rowIndex: number;  // 0..numRows-1
+  sliceIndex: number;  // 0..numSlices-1
+  numCols: number;
+  numRows: number;
+  numSlices: number;
   opacity: number;       // global opacity multiplier 0..1
   brightness: number;    // brightness adjustment 0.1..3
-  slicePlaneMask: number; // bit0=XY, bit1=oblique vertical slice plane indicators
+  slicePlaneMask: number; // bit0=top, bit1=oblique vertical slice plane indicators
   slicePlaneOpacity: number; // slice plane alpha 0..1 (default 0.35)
-  obliqueAngleDeg?: number; // angle about Z in XY texture space
-  obliqueStartX?: number; // oblique segment start, in pixel coordinates
-  obliqueStartY?: number;
-  obliqueEndX?: number;   // oblique segment end, in pixel coordinates
-  obliqueEndY?: number;
-  rowShiftPxPerSlice?: number; // display-only alignment through z
+  obliqueAngleDeg?: number; // angle about the slice axis in the row/col plane
+  obliqueStartCol?: number; // oblique segment start, in pixel coordinates
+  obliqueStartRow?: number;
+  obliqueEndCol?: number;   // oblique segment end, in pixel coordinates
+  obliqueEndRow?: number;
+  rowShiftPxPerSlice?: number; // display-only alignment through the slices
   colShiftPxPerSlice?: number;
   vmin: number;  // 0..1 normalized (maps to texture's [0,1] range)
   vmax: number;  // 0..1 normalized
+}
+
+interface RenderOptions {
+  sliceStretch: number;       // depth axis display stretch
+  orthographic: boolean;
+  // While a slider drags: canvas pixels per CSS pixel and ray steps, traded for frame rate
+  draft?: { dpr: number; numSteps: number };
 }
 
 export interface CameraState {
@@ -237,31 +244,13 @@ fn worldToTex(p: vec3<f32>, bmin: vec3<f32>, bmax: vec3<f32>) -> vec3<f32> {
   return (p - bmin) / (bmax - bmin);
 }
 
-fn intersectSlicePlane(origin: vec3<f32>, dir: vec3<f32>, axis: i32, pos: f32,
-                       bmin: vec3<f32>, bmax: vec3<f32>) -> f32 {
-  var worldPos: f32;
-  var dirComponent: f32;
-  var originComponent: f32;
-  if (axis == 0) {
-    worldPos = bmin.x + pos * (bmax.x - bmin.x);
-    dirComponent = dir.x;
-    originComponent = origin.x;
-  } else if (axis == 1) {
-    worldPos = bmin.y + pos * (bmax.y - bmin.y);
-    dirComponent = dir.y;
-    originComponent = origin.y;
-  } else {
-    worldPos = bmin.z + pos * (bmax.z - bmin.z);
-    dirComponent = dir.z;
-    originComponent = origin.z;
-  }
-  if (abs(dirComponent) < 1e-8) { return -1.0; }
-  let t = (worldPos - originComponent) / dirComponent;
+// Ray distance to the Top (XY) slice plane at normalized depth pos, or -1 when it is behind the ray or outside the box.
+fn intersectTopPlane(origin: vec3<f32>, dir: vec3<f32>, pos: f32, bmin: vec3<f32>, bmax: vec3<f32>) -> f32 {
+  if (abs(dir.z) < 1e-8) { return -1.0; }
+  let t = (bmin.z + pos * (bmax.z - bmin.z) - origin.z) / dir.z;
   if (t < 0.0) { return -1.0; }
   let p = origin + t * dir;
-  if (axis != 0 && (p.x < bmin.x || p.x > bmax.x)) { return -1.0; }
-  if (axis != 1 && (p.y < bmin.y || p.y > bmax.y)) { return -1.0; }
-  if (axis != 2 && (p.z < bmin.z || p.z > bmax.z)) { return -1.0; }
+  if (p.x < bmin.x || p.x > bmax.x || p.y < bmin.y || p.y > bmax.y) { return -1.0; }
   return t;
 }
 
@@ -314,7 +303,7 @@ fn sampleVolume(texCoord: vec3<f32>) -> f32 {
 
 @fragment
 fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-  // Reconstruct ray from clip space — OpenGL convention z in [-1, 1]
+  // Reconstruct ray from clip space: OpenGL convention z in [-1, 1]
   let ndc = uv * 2.0 - 1.0;
   var worldNear = u.invViewProj * vec4<f32>(ndc, -1.0, 1.0);
   var worldFar = u.invViewProj * vec4<f32>(ndc, 1.0, 1.0);
@@ -344,7 +333,7 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   var tSliceXY: f32 = -1.0;
   var tSliceOblique: f32 = -1.0;
   if (showXY) {
-    tSliceXY = intersectSlicePlane(rayOrigin, rayDir, 2, u.sliceZ, bmin, bmax);
+    tSliceXY = intersectTopPlane(rayOrigin, rayDir, u.sliceZ, bmin, bmax);
   }
   if (showOblique) {
     tSliceOblique = intersectObliquePlane(rayOrigin, rayDir, bmin, bmax);
@@ -386,7 +375,7 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
       tSliceOblique = -1.0;
     }
 
-    // Sample volume — remap from [vmin, vmax] to [0, 1]
+    // Sample volume, remap from [vmin, vmax] to [0, 1]
     var intensity = sampleVolume(texCoord);
     intensity = applyWindow(intensity);
     intensity = clamp(intensity * u.brightness, 0.0, 1.0);
@@ -534,12 +523,6 @@ export class VolumeRenderer {
 
     // No MSAA: the pipeline renders straight into the canvas texture.
     const shaderModule = device.createShaderModule({ code: VOLUME_SHADER });
-    shaderModule.getCompilationInfo().then(info => {
-      for (const msg of info.messages) {
-        const level = msg.type === "error" ? "error" : msg.type === "warning" ? "warn" : "info";
-        console[level](`WGSL ${msg.type} [${msg.lineNum}:${msg.linePos}]: ${msg.message}`);
-      }
-    });
     const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [this.bindGroupLayout] });
     this.pipeline = device.createRenderPipeline({
       layout: pipelineLayout,
@@ -568,7 +551,7 @@ export class VolumeRenderer {
     });
   }
 
-  uploadVolume(data: Float32Array, nx: number, ny: number, nz: number): void {
+  uploadVolume(data: Float32Array, numCols: number, numRows: number, numSlices: number): void {
     if (this.deviceLost) return;
     // Normalize to uint8 [0, 255]: r8unorm always supports linear filtering.
     let min = Infinity, max = -Infinity;
@@ -590,40 +573,40 @@ export class VolumeRenderer {
     }
 
     // Compute aspect ratio (longest axis = 1.0)
-    const maxDim = Math.max(nx, ny, nz);
-    this.aspectRatio = [nx / maxDim, ny / maxDim, nz / maxDim];
+    const maxDim = Math.max(numCols, numRows, numSlices);
+    this.aspectRatio = [numCols / maxDim, numRows / maxDim, numSlices / maxDim];
 
     this.volumeTexture.destroy();
     this.volumeTexture = this.device.createTexture({
       dimension: "3d",
-      size: [nx, ny, nz],
+      size: [numCols, numRows, numSlices],
       format: "r8unorm",
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     });
 
-    // Upload data. WebGPU requires bytesPerRow aligned to 256. When nx is
+    // Upload data. WebGPU requires bytesPerRow aligned to 256. When numCols is
     // already a multiple of 256 the row stride matches and we can skip the
-    // padded copy entirely (saves a transient nx*ny*nz Uint8Array allocation
-    // and one full pass).
-    const bytesPerRow = Math.ceil(nx / 256) * 256;
+    // padded copy entirely (saves a transient numCols*numRows*numSlices Uint8Array
+    // allocation and one full pass).
+    const bytesPerRow = Math.ceil(numCols / 256) * 256;
     let payload: Uint8Array;
-    if (bytesPerRow === nx) {
+    if (bytesPerRow === numCols) {
       payload = normalized;
     } else {
-      payload = new Uint8Array(bytesPerRow * ny * nz);
-      for (let z = 0; z < nz; z++) {
-        for (let row = 0; row < ny; row++) {
-          const srcOffset = (z * ny + row) * nx;
-          const dstOffset = (z * ny + row) * bytesPerRow;
-          payload.set(normalized.subarray(srcOffset, srcOffset + nx), dstOffset);
+      payload = new Uint8Array(bytesPerRow * numRows * numSlices);
+      for (let slice = 0; slice < numSlices; slice++) {
+        for (let row = 0; row < numRows; row++) {
+          const srcOffset = (slice * numRows + row) * numCols;
+          const dstOffset = (slice * numRows + row) * bytesPerRow;
+          payload.set(normalized.subarray(srcOffset, srcOffset + numCols), dstOffset);
         }
       }
     }
     this.device.queue.writeTexture(
       { texture: this.volumeTexture },
       payload as unknown as GPUAllowSharedBufferSource,
-      { bytesPerRow, rowsPerImage: ny },
-      { width: nx, height: ny, depthOrArrayLayers: nz },
+      { bytesPerRow, rowsPerImage: numRows },
+      { width: numCols, height: numRows, depthOrArrayLayers: numSlices },
     );
 
     this.rebuildBindGroup();
@@ -657,12 +640,13 @@ export class VolumeRenderer {
     this.rebuildBindGroup();
   }
 
-  render(params: VolumeRenderParams, camera: CameraState, bgColor: [number, number, number], dprOverride?: number, numStepsOverride?: number, zStretch: number = 1, orthographicView: boolean = false): void {
+  render(params: VolumeRenderParams, camera: CameraState, bgColor: [number, number, number], options: RenderOptions): void {
     if (this.deviceLost) return;
     const canvas = this.canvas;
+    const { sliceStretch, orthographic: orthographicView, draft } = options;
 
-    // Handle high-DPI displays (dprOverride allows reduced resolution during drag)
-    const dpr = dprOverride ?? (window.devicePixelRatio || 1);
+    // HiDPI backing store, except while a slider drags (draft render)
+    const dpr = draft?.dpr ?? (window.devicePixelRatio || 1);
     const displayW = canvas.clientWidth;
     const displayH = canvas.clientHeight;
     if (displayW === 0 || displayH === 0) return;
@@ -715,8 +699,8 @@ export class VolumeRenderer {
     const invViewProj = mat4Inverse(viewProjMatrix);
 
     // Number of steps scales with volume size
-    const maxDim = Math.max(params.nx, params.ny, params.nz);
-    const numSteps = numStepsOverride ?? Math.min(512, Math.max(128, maxDim * 2));
+    const maxDim = Math.max(params.numCols, params.numRows, params.numSlices);
+    const numSteps = draft?.numSteps ?? Math.min(512, Math.max(128, maxDim * 2));
 
     const uniformData = new ArrayBuffer(UNIFORM_BUFFER_SIZE);
     const f32 = new Float32Array(uniformData);
@@ -728,16 +712,16 @@ export class VolumeRenderer {
     f32[16] = eyeX; f32[17] = eyeY; f32[18] = eyeZ;
     // _pad0 at 19
     // aspectRatio: vec3 at offset 80/4=20
-    f32[20] = this.aspectRatio[0]; f32[21] = this.aspectRatio[1]; f32[22] = this.aspectRatio[2] * Math.max(1, zStretch);
+    f32[20] = this.aspectRatio[0]; f32[21] = this.aspectRatio[1]; f32[22] = this.aspectRatio[2] * Math.max(1, sliceStretch);
     // _pad1 at 23
     // bgColor: vec4 at offset 96/4=24
     f32[24] = bgColor[0]; f32[25] = bgColor[1]; f32[26] = bgColor[2]; f32[27] = 1.0;
     // sliceX, sliceY, sliceZ at offset 112/4=28
     // Slice-plane indicator at texel CENTER (not edge): (i + 0.5) / N
     // aligns with the volume sampler, which addresses texel centers.
-    f32[28] = params.nx > 0 ? (params.sliceX + 0.5) / params.nx : 0.5;
-    f32[29] = params.ny > 0 ? (params.sliceY + 0.5) / params.ny : 0.5;
-    f32[30] = params.nz > 0 ? (params.sliceZ + 0.5) / params.nz : 0.5;
+    f32[28] = params.numCols > 0 ? (params.colIndex + 0.5) / params.numCols : 0.5;
+    f32[29] = params.numRows > 0 ? (params.rowIndex + 0.5) / params.numRows : 0.5;
+    f32[30] = params.numSlices > 0 ? (params.sliceIndex + 0.5) / params.numSlices : 0.5;
     // opacity at offset 124/4=31
     f32[31] = params.opacity;
     // brightness at offset 128/4=32
@@ -745,7 +729,7 @@ export class VolumeRenderer {
     // numSteps at offset 132/4=33
     u32[33] = numSteps;
     // slicePlaneMask at offset 136/4=34
-    u32[34] = params.slicePlaneMask & 7;
+    u32[34] = params.slicePlaneMask;
     // vmin at offset 140/4=35
     f32[35] = params.vmin;
     // vmax at offset 144/4=36
@@ -760,14 +744,14 @@ export class VolumeRenderer {
     let endX: number;
     let endY: number;
     if (
-      params.obliqueStartX !== undefined && params.obliqueStartY !== undefined &&
-      params.obliqueEndX !== undefined && params.obliqueEndY !== undefined &&
-      params.nx > 0 && params.ny > 0
+      params.obliqueStartCol !== undefined && params.obliqueStartRow !== undefined &&
+      params.obliqueEndCol !== undefined && params.obliqueEndRow !== undefined &&
+      params.numCols > 0 && params.numRows > 0
     ) {
-      startX = (params.obliqueStartX + 0.5) / params.nx;
-      startY = (params.obliqueStartY + 0.5) / params.ny;
-      endX = (params.obliqueEndX + 0.5) / params.nx;
-      endY = (params.obliqueEndY + 0.5) / params.ny;
+      startX = (params.obliqueStartCol + 0.5) / params.numCols;
+      startY = (params.obliqueStartRow + 0.5) / params.numRows;
+      endX = (params.obliqueEndCol + 0.5) / params.numCols;
+      endY = (params.obliqueEndRow + 0.5) / params.numRows;
       const dx = endX - startX;
       const dy = endY - startY;
       const len = Math.hypot(dx, dy);
@@ -776,8 +760,8 @@ export class VolumeRenderer {
         dirY = dy / len;
       }
     } else {
-      const centerX = params.nx > 0 ? (params.sliceX + 0.5) / params.nx : 0.5;
-      const centerY = params.ny > 0 ? (params.sliceY + 0.5) / params.ny : 0.5;
+      const centerX = params.numCols > 0 ? (params.colIndex + 0.5) / params.numCols : 0.5;
+      const centerY = params.numRows > 0 ? (params.rowIndex + 0.5) / params.numRows : 0.5;
       startX = centerX - dirX * 2;
       startY = centerY - dirY * 2;
       endX = centerX + dirX * 2;

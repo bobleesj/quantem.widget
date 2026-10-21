@@ -60,7 +60,7 @@ This should be consistent across the Python API, frontend, tests, and documentat
 
 | Base | Use when | Example |
 |---|---|---|
-| Subclass an existing viewer (`Show2D`, `Show3D`, …) | The new widget is mostly an existing viewer with an additional interaction or analysis tool | [`Show3DSlices`](../api/show3dslices): [`show3dslices.py`](https://github.com/electronmicroscopy/quantem.widget/blob/main/src/quantem/widget/show3dslices/widget.py), [`js/show3dslices/index.tsx`](https://github.com/electronmicroscopy/quantem.widget/blob/main/js/show3dslices/index.tsx) |
+| `anywidget.AnyWidget` with shared protocol mixins | The widget has its own viewer layout and shares saved-state or export protocols | [`Show3DSlices`](../api/show3dslices): [`widget.py`](https://github.com/electronmicroscopy/quantem.widget/blob/main/src/quantem/widget/show3dslices/widget.py), [`js/show3dslices/index.tsx`](https://github.com/electronmicroscopy/quantem.widget/blob/main/js/show3dslices/index.tsx) |
 | Standalone `anywidget.AnyWidget` | The widget has its own layout or only needs a small part of the existing viewer infrastructure | [`ChooseLattice`](../api/choose-lattice): [`choose_lattice.py`](https://github.com/electronmicroscopy/quantem.widget/blob/main/src/quantem/widget/choose_lattice.py), [`js/chooselattice/index.tsx`](https://github.com/electronmicroscopy/quantem.widget/blob/main/js/chooselattice/index.tsx) |
 
 `Ruler2D` is better as a standalone widget. It only needs an image and two endpoints, so carrying the complete `Show2D` state would add unnecessary complexity. When unsure, start by finding the existing widget whose behavior is closest to what you are building.

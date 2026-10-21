@@ -113,23 +113,17 @@ export function PotentialPanel({
   // already-resident planes with the same averaging engine used by Show3D.
   const computeGeometry = { ...panelGeometry, limits: [panelGeometry.zmin, panelGeometry.zmax] };
   const signature = JSON.stringify(computeGeometry);
-  const averageKey = averageFrames?.join(",") ?? "all";
+  const averageKey = averageFrames.join(",");
   const draw = () => {
     if (!active || !gpu.current || blocked) return;
-    if (averageFrames) gpu.current.average(averageFrames, panelGeometry.slices);
+    gpu.current.average(averageFrames, panelGeometry.slices);
     canvases.current.forEach((canvas, i) => {
       if (!canvas || (i > 1 && !gallery)) return;
-      const slot =
-        i === 0
-          ? averageFrames
-            ? panelGeometry.slices + 1
-            : panelGeometry.slices
-          : i === 1
-            ? panelGeometry.slices
-            : i - 2;
+      // Slot slices + 1 holds the averaged slab, slot slices the full projection.
+      const slot = i === 0 ? panelGeometry.slices + 1 : i === 1 ? panelGeometry.slices : i - 2;
       const dz =
         i === 0
-          ? (panelGeometry.zmax - panelGeometry.zmin) / (averageFrames ? panelGeometry.slices : 1)
+          ? (panelGeometry.zmax - panelGeometry.zmin) / panelGeometry.slices
           : i === 1
             ? panelGeometry.zmax - panelGeometry.zmin
             : (panelGeometry.zmax - panelGeometry.zmin) / panelGeometry.slices;
@@ -434,9 +428,7 @@ export function PotentialPanel({
           style={{ "--map-cols": columns } as React.CSSProperties}
         >
           {[
-            averageFrames
-              ? `Slice ${averageFrames[0]}${averageFrames.length > 1 ? `–${averageFrames[averageFrames.length - 1]} · mean of ${averageFrames.length}` : ""}`
-              : "Full Depth",
+            `Slice ${averageFrames[0]}${averageFrames.length > 1 ? `–${averageFrames[averageFrames.length - 1]} · mean of ${averageFrames.length}` : ""}`,
             "Full Projection",
           ].map((label, i) => (
             <figure key={i}>

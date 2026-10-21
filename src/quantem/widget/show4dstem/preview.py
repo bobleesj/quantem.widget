@@ -104,6 +104,7 @@ def _panel(widget, panel_key: str, panel_px: int) -> Image.Image:
     """One preview panel resized to the live panel size, with its overlays and scale bar."""
     rgb = virtual_rgb(widget) if panel_key == "virtual" else diffraction_rgb(widget)
     panel = Image.fromarray(rgb, mode="RGB")
+    source_width = panel.width
     if panel.size != (panel_px, panel_px):
         # Enlarged panels keep sharp data pixels as the live canvases draw them (the pattern
         # always, the virtual image unless vi_smooth); a shrink needs Lanczos to avoid aliasing.
@@ -114,12 +115,20 @@ def _panel(widget, panel_key: str, panel_px: int) -> Image.Image:
         else:
             resample = Image.Resampling.NEAREST
         panel = panel.resize((panel_px, panel_px), resample=resample)
+    # the bar is horizontal, so it measures the column step; an uncalibrated axis is drawn in pixels
     if panel_key == "virtual":
         _draw_virtual_overlays(widget, panel)
-        _draw_scalebar(panel, float(widget.pixel_size), widget.pixel_unit or "px")
+        step, unit = (widget.scan_sampling_A[1], "angstrom") if widget.scan_sampling_A else (1.0, "px")
     else:
         _draw_diffraction_overlays(widget, panel)
-        _draw_scalebar(panel, float(widget.k_pixel_size), "mrad" if widget.k_calibrated else "px")
+        if widget.detector_sampling_mrad:
+            step, unit = widget.detector_sampling_mrad[1], "mrad"
+        elif widget.detector_sampling_inv_A:
+            step, unit = widget.detector_sampling_inv_A[1], "1/angstrom"
+        else:
+            step, unit = 1.0, "px"
+    if widget.show_scale_bar:
+        _draw_scalebar(panel, float(step) * source_width / panel.width, unit)
     return panel
 
 

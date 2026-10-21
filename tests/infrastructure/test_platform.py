@@ -19,7 +19,7 @@ from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.colormap import colormap_lut, colormap_names
 from quantem.widget.counts import count_bound, detector_bin_mean, exact_max, exact_sum, int32_block_max, int32_block_sum
 from quantem.widget.show4dstem.dense import DenseSession
-from quantem.widget.show4dstem.detector import detector_mask, fit_probe
+from quantem.widget.show4dstem.detector import detector_mask, fit_bright_field_disk
 
 
 @pytest.fixture
@@ -108,7 +108,8 @@ def test_notice_names_the_missing_gpu_runtime_and_the_pip_command(monkeypatch):
         'Show4DSTEM file loading runs on CPU. For the GPU path: pip install "quantem.widget[cuda]"'
     )
     _machine(monkeypatch, system="linux", machine="x86_64", nvidia=True, installed=("quantem.gpu", "cupy"))
-    monkeypatch.setattr(gpu_adapter, "gpu_runtime_notice", None)
+    monkeypatch.setattr(gpu_adapter, "available", lambda: True)
+    monkeypatch.setattr(gpu_adapter, "gpu_runtime_notice", lambda: None)
     assert device.gpu_notice_text() is None
     monkeypatch.setattr(gpu_adapter, "gpu_runtime_notice", lambda: "quantem.gpu: an NVIDIA GPU is present but CuPy is not installed")
     assert device.gpu_notice_text().startswith("quantem.gpu:")  # quantem.gpu names its own runtime when installed
@@ -192,7 +193,8 @@ def test_gpu_adapter_without_quantem_gpu_explains_the_install(monkeypatch):
     assert not adapter.is_acquisition(np.zeros(3)) and not adapter.is_ssb(object())
     _machine(monkeypatch, system="linux", machine="x86_64", nvidia=True)
     for call in (lambda: adapter.load_acquisition("scan_master.h5"), lambda: adapter.prepare_session(None),
-                 lambda: adapter.ssb_session(None), lambda: adapter.discover_masters(".")):
+                 lambda: adapter.SsbSession.open(None, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5)),
+                 lambda: adapter.discover_masters(".")):
         with pytest.raises(ImportError, match=r'pip install "quantem.widget\[cuda\]"'):
             call()
     _machine(monkeypatch, system="win32", machine="ARM64")
@@ -248,11 +250,21 @@ def test_colormap_luts_are_the_quantem_gpu_bytes():
         assert colormap_lut(name).tobytes() == display.colormap_lut(name).tobytes(), name
 
 
-def test_detector_geometry_matches_quantem_gpu():
+def test_detector_geometry_matches_quantem_gpu(monkeypatch):
     gpu_detector = pytest.importorskip("quantem.gpu.detector", reason="parity needs quantem.gpu")
+    from quantem.widget.adapters import gpu as gpu_adapter
+
     rows, cols = np.indices((48, 40))
     pattern = np.where((rows - 20.3) ** 2 + (cols - 17.8) ** 2 <= 9.5**2, 50.0, 1.0).astype(np.float32)
-    assert fit_probe(pattern) == gpu_detector.fit_probe(pattern)
+    blurred = (1.0 + 49.0 / (1.0 + np.exp((np.hypot(rows - 20.3, cols - 17.8) - 9.5) / 1.2))).astype(np.float32)
+    for mean_dp in (pattern, blurred):
+        fit = gpu_detector.fit_bright_field_disk(mean_dp)
+        expected = (fit.bright_field_center_px, fit.bright_field_edge_radius_px)
+        assert fit_bright_field_disk(mean_dp) == expected
+        # an install without quantem.gpu computes the same disk itself
+        with monkeypatch.context() as patched:
+            patched.setattr(gpu_adapter, "available", lambda: False)
+            assert fit_bright_field_disk(mean_dp) == expected
     for center, inner, outer in (((20.3, 17.8), 0.0, 9.5), ((23.5, 19.5), 6.0, 15.25), ((0.0, 0.0), 1.0, 60.0)):
         np.testing.assert_array_equal(detector_mask(center, inner, outer, (48, 40)),
                                       gpu_detector.detector_mask(center, inner, outer, (48, 40)))
@@ -370,4 +382,85 @@ def test_widgets_reduce_counts_exactly_on_mps():
     pattern[20:30, 34:44] = 60000
     on_mps = ShowDiffraction(pattern, device="mps", verbose=False)
     on_cpu = ShowDiffraction(pattern, device="cpu", verbose=False)
-    assert (on_mps.center_row, on_mps.center_col) == (on_cpu.center_row, on_cpu.center_col) == (24.5, 38.5)
+    assert (on_mps.bright_field_center_row_px, on_mps.bright_field_center_col_px) == (on_cpu.bright_field_center_row_px, on_cpu.bright_field_center_col_px) == (24.5, 38.5)
+
+
+def test_free_gpu_is_quantem_gpu_release_cached_memory_when_quantem_gpu_is_installed(monkeypatch):
+    """One owner: free_gpu returns what quantem.gpu's function returns, passes ``verbose`` on and empties no cache itself."""
+    import quantem.widget
+
+    calls = []
+    monkeypatch.setattr(gpu_adapter, "available", lambda: True)
+    monkeypatch.setattr(gpu_adapter, "gpu_release_cached_memory", lambda verbose: calls.append(verbose) or 38.6)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: pytest.fail("free_gpu emptied Torch's cache itself"))
+    monkeypatch.setattr(torch.mps, "empty_cache", lambda: pytest.fail("free_gpu emptied Torch's cache itself"))
+    assert quantem.widget.free_gpu() == 38.6
+    assert quantem.widget.free_gpu(verbose=False) == 38.6
+    assert calls == [True, False]
+
+
+@pytest.mark.skipif(not (gpu_adapter.available() and torch.cuda.is_available()), reason="needs quantem.gpu and a CUDA GPU")
+def test_free_gpu_returns_a_dropped_tensor_to_the_driver_through_quantem_gpu(capsys):
+    """Real GPU: a dropped 1 GiB tensor goes back to the driver, and free_gpu returns and prints quantem.gpu's number for it."""
+    import quantem.widget
+    from quantem.gpu.device import release_cached_memory
+
+    assert gpu_adapter.gpu_release_cached_memory is release_cached_memory
+    quantem.widget.free_gpu(verbose=False)  # blocks cached by earlier tests would be counted
+    reserved_start = torch.cuda.memory_reserved(0)
+    tensor_t = torch.empty(1 << 30, dtype=torch.uint8, device="cuda:0")
+    del tensor_t
+    cached_bytes = torch.cuda.memory_reserved(0) - reserved_start  # 1 GiB, or 16 MiB more with expandable segments
+    assert cached_bytes >= 1 << 30
+    assert quantem.widget.free_gpu() == cached_bytes / 1e9
+    assert torch.cuda.memory_reserved(0) == reserved_start
+    assert capsys.readouterr().out.startswith("GPU 0: released 1.1 GB, ")
+
+
+def test_free_gpu_without_quantem_gpu_returns_the_metal_cache_torch_held(monkeypatch, capsys):
+    """An install without quantem.gpu on a Mac: only Torch's cache is emptied, and the result is the Metal driver's drop.
+
+    rc41 read torch's tensor counter, which excludes the cached blocks, so it printed 0.0 GB.
+    """
+    import quantem.widget
+
+    driver_bytes = [5e9]  # the Metal driver's total; emptying Torch's cache returns 3 GB of it
+    monkeypatch.setattr(gpu_adapter, "available", lambda: False)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(torch.mps, "empty_cache", lambda: driver_bytes.__setitem__(0, 2e9))
+    monkeypatch.setattr(torch.mps, "driver_allocated_memory", lambda: driver_bytes[0])
+    monkeypatch.setattr(torch.mps, "current_allocated_memory", lambda: 1e9)
+    assert quantem.widget.free_gpu() == 3.0
+    assert capsys.readouterr().out == "freed 3.0 GB (Torch cache)\n"
+
+
+def test_free_gpu_without_quantem_gpu_returns_what_torch_reserved_on_every_cuda_gpu(monkeypatch, capsys):
+    """An install without quantem.gpu on a machine with two CUDA GPUs: the result is the drop in Torch's reserved memory."""
+    import quantem.widget
+
+    reserved_bytes = {0: 6_000_000_000, 1: 1_500_000_000}
+    monkeypatch.setattr(gpu_adapter, "available", lambda: False)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
+    monkeypatch.setattr(torch.cuda, "memory_reserved", lambda index: reserved_bytes[index])
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: reserved_bytes.update({0: 1_000_000_000, 1: 0}))
+    assert quantem.widget.free_gpu() == 6.5
+    assert capsys.readouterr().out == "freed 6.5 GB (Torch cache)\n"
+
+
+def test_device_info_on_an_intel_mac_names_no_cpu_as_the_gpu_and_prints_the_notice_once(monkeypatch, capsys):
+    """rc41 on an Intel Mac: device_info called the i7 CPU the MPS device and printed the Intel Mac notice twice."""
+    import subprocess
+
+    from quantem.widget import device, info
+
+    monkeypatch.setattr(device, "_printed", set())
+    monkeypatch.setattr(device, "host_platform", lambda: ("darwin", "x86_64"))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, "Intel(R) Core(TM) i7-7820HQ CPU\n", ""))
+    report = info.device_info()
+    assert report["device"] == "Apple Metal (MPS) - the GPU of this Intel Mac"
+    assert device.resolve_device("auto") == "mps"
+    assert capsys.readouterr().out.count("on this Intel Mac the widgets compute") == 1

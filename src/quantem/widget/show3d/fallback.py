@@ -60,8 +60,8 @@ class Show3DFallback:
             title=self.title,
             cmap=[self.panel_cmaps[panel] for panel in panels] if self.panel_cmaps else self.cmap,
             sampling=self.pixel_size if self.pixel_size > 0 else None,
-            units=self.pixel_unit,
-            show_scale_bar=self.scale_bar_visible,
+            units=self.pixel_unit if self.pixel_size > 0 else None,  # a unit needs a step
+            show_scale_bar=self.show_scale_bar,
             show_fft=False,
             show_controls=False,
             show_stats=False,
@@ -71,7 +71,7 @@ class Show3DFallback:
             vmin=vmin,
             vmax=vmax,
             ncols=max(1, min(ncols, len(frames))),
-            size=int(self.size or 0),
+            panel_width_px=int(self.panel_width_px or 0),
             smooth=self.smooth,
             zoom=1.0,
             link_contrast=self.link_contrast,
@@ -79,7 +79,7 @@ class Show3DFallback:
             show_panel_titles=self.show_panel_titles,
             panel_title_font_size=11,
             # Show2D draws a 1 px grey inner border by default; Show3D never did.
-            inter_panel_gap_px=int(self.panel_gap),
+            panel_gap_px=self.panel_gap_px,
             inter_panel_gap_color="",
             gallery_outer_border_px=0,
             gallery_outer_border_color="",

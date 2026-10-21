@@ -128,6 +128,12 @@ class DenseSession:
         return (total_t.cpu().numpy().astype(np.float64) / max(1, count)).astype(np.float32)
 
     def _exact(self, total_t: torch.Tensor) -> np.ndarray:
-        """An integer total as uint64, a float total as float32."""
+        """A count total as uint64, a signed one as int64, a float total as float32.
+
+        A uint64 of a negative total wraps: the scan-ROI sum of dark-subtracted
+        int16 patterns came out near 1.8e19.
+        """
         values = total_t.cpu().numpy()
-        return values.astype(np.uint64) if self.integer else values.astype(np.float32)
+        if not self.integer:
+            return values.astype(np.float32)
+        return values.astype(np.int64 if self._flat_t.dtype.is_signed else np.uint64)

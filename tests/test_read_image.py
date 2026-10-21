@@ -20,8 +20,10 @@ import pytest
 
 
 
+from quantem.widget import Show2D
 from quantem.widget.adapters.core import is_dataset
 from quantem.widget.io.image import read_image, read_image_stack, read_images
+from quantem.widget.units import axis_step
 
 
 def test_npy_exact(tmp_path):
@@ -52,16 +54,18 @@ def test_pillow_formats_exact(tmp_path, ext, dtype, maxval):
     np.testing.assert_array_equal(ds.array, arr)
 
 
-def test_three_dim_reduced_to_first_frame(tmp_path):
+def test_three_dim_reduced_to_first_frame_says_so(tmp_path, capsys):
+    # E-R4: read_image dropped every frame after the first without a word.
     stack = np.stack([np.full((16, 16), k, np.float32) for k in range(5)])
     path = tmp_path / "stack.npy"
     np.save(path, stack)
     ds = read_image(path)
     np.testing.assert_array_equal(ds.array, stack[0])      # first frame only
     assert ds.array.shape == (16, 16)
+    assert "read_image: stack.npy holds 5 frames; kept frame 0" in capsys.readouterr().out
 
 
-def test_read_image_gif_reads_the_first_frame(tmp_path):
+def test_read_image_gif_reads_the_first_frame_like_a_png(tmp_path, capsys):
     from PIL import Image
 
     frames = [
@@ -79,12 +83,14 @@ def test_read_image_gif_reads_the_first_frame(tmp_path):
     )
 
     first = read_image(path)
-    assert first.name == "denoise_preview" and first.array.dtype == np.float32
+    # native uint8, as a PNG; the GIF path used to convert to gray float32 on its own
+    assert first.name == "denoise_preview" and first.array.dtype == np.uint8
     np.testing.assert_array_equal(first.array, frames[0])
+    assert "denoise_preview.gif holds 4 frames; kept frame 0" in capsys.readouterr().out
 
 
 
-def test_velox_emd_sampling_and_first_frame(tmp_path):
+def test_velox_emd_sampling_and_first_frame(tmp_path, capsys):
     import h5py
     path = tmp_path / "haadf.emd"
     image = np.arange(32 * 24, dtype=np.float32).reshape(32, 24)
@@ -97,6 +103,7 @@ def test_velox_emd_sampling_and_first_frame(tmp_path):
         g.create_dataset("Metadata", data=np.frombuffer(blob, np.uint8)[:, None])
     ds = read_image(path)
     np.testing.assert_array_equal(ds.array, image)         # first frame, (H, W)
+    assert "haadf.emd holds 3 frames; kept frame 0" in capsys.readouterr().out
     assert ds.sampling[0] == pytest.approx(1.5)            # meters -> nm
     assert ds.sampling[1] == pytest.approx(2.0)
 
@@ -206,3 +213,36 @@ def test_read_image_stack_mixed_default_scan_includes_metadata_formats(tmp_path)
     ds = read_image_stack(tmp_path, pattern="frame_*.npy", progress=False)
 
     assert ds.array.shape == (2, 4, 5)
+
+
+def test_gatan_image_keeps_the_calibration_the_file_records(tmp_path, monkeypatch):
+    # .dm3 / .dm4 images came back with sampling 1.0 "pixels" while the docstrings said the calibration is carried
+    from ncempy.io import dm
+
+    image = np.arange(12, dtype=np.float32).reshape(3, 4)
+    monkeypatch.setattr(dm, "dmReader", lambda path: {"data": image, "pixelSize": [0.02, 0.03], "pixelUnit": ["nm", "nm"]})
+    dataset = read_image(tmp_path / "survey.dm4")
+    np.testing.assert_array_equal(dataset.array, image)
+    assert tuple(dataset.sampling) == (0.02, 0.03) and list(dataset.units) == ["nm", "nm"]
+    monkeypatch.setattr(dm, "dmReader", lambda path: {"data": image, "pixelSize": [1.0, 1.0], "pixelUnit": ["", ""]})
+    assert list(read_image(tmp_path / "bare.dm3").units) == ["pixels", "pixels"]  # Gatan's empty unit is an uncalibrated axis
+
+
+def test_gatan_unit_strings_open_in_a_widget_or_say_how_to(tmp_path, monkeypatch):
+    # read_image keeps the unit tag of a Gatan file as written, and Show2D(read_image(path)) raised "Unknown unit"
+    # for one outside the unit table (a diffraction pattern in 1/µm) where the file opened before
+    from ncempy.io import dm
+
+    pattern = np.arange(12, dtype=np.float32).reshape(3, 4)
+    for unit in ("1/µm", "1/μm", "1/um"):
+        monkeypatch.setattr(dm, "dmReader", lambda path, unit=unit: {"data": pattern, "pixelSize": [20.0, 20.0], "pixelUnit": [unit, unit]})
+        shown = Show2D(read_image(tmp_path / "pattern.dm4"), verbose=False)
+        assert (shown.pixel_size, shown.pixel_unit) == (20.0, unit)
+        assert axis_step(20.0, unit) == ("reciprocal_length", pytest.approx(0.002))  # 20 per µm is 0.002 per angstrom
+    # ncempy's text for a tag it cannot decode: still refused, with the unit named and the way to open the image
+    monkeypatch.setattr(dm, "dmReader", lambda path: {"data": pattern, "pixelSize": [20.0, 20.0], "pixelUnit": ["(Not displayable)"] * 2})
+    dataset = read_image(tmp_path / "pattern.dm4")
+    with pytest.raises(ValueError, match=r"Unknown unit '\(Not displayable\)'.*opens uncalibrated when its array is passed \(dataset\.array\)"):
+        Show2D(dataset, verbose=False)
+    bare = Show2D(dataset.array, verbose=False)
+    assert (bare.pixel_size, bare.pixel_unit) == (0.0, "px")

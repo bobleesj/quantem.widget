@@ -55,15 +55,14 @@ function histogramQuantile(bins: Uint32Array, targetCount: number, min: number, 
   return fallback;
 }
 
-/** Percentile-based clipping using O(n) histogram approach.
- *  Also returns data min/max so callers can skip a redundant findDataRange scan. */
-export function percentileClip(
-  data: NumericArray, pLow: number, pHigh: number,
-): { vmin: number; vmax: number; min: number; max: number } {
-  const len = data.length;
-  if (len === 0) return { vmin: 0, vmax: 0, min: 0, max: 0 };
+/** The finite range, finite count and 1024-bin histogram behind percentileClip; `bins` is null
+ *  when no value is finite or every finite value is equal. */
+export type PercentileHistogram = { min: number; max: number; finiteCount: number; bins: Uint32Array | null };
 
-  // Pass 1: find min/max
+/** One pass for the finite range and one into 1024 bins. Every percentile window of the same data
+ *  is then a walk over the bins (percentileWindow), without another pass over the data. */
+export function percentileHistogram(data: NumericArray): PercentileHistogram {
+  const len = data.length;
   let min = Infinity, max = -Infinity;
   let finiteCount = 0;
   for (let i = 0; i < len; i++) {
@@ -73,24 +72,40 @@ export function percentileClip(
     if (value < min) min = value;
     if (value > max) max = value;
   }
-  if (finiteCount === 0) return { vmin: 0, vmax: 0, min: 0, max: 0 };
-  if (min === max) return { vmin: min, vmax: max, min, max };
-
-  // Pass 2: build histogram
+  if (finiteCount === 0) return { min: 0, max: 0, finiteCount: 0, bins: null };
+  if (min === max) return { min, max, finiteCount, bins: null };
   const NUM_BINS = 1024;
   const bins = new Uint32Array(NUM_BINS);
   const range = max - min;
-  // Bin i spans [min + i*range/NUM_BINS, min + (i+1)*range/NUM_BINS); the walk
-  // below maps bins back with the same width, and max lands in the last bin.
+  // Bin i spans [min + i*range/NUM_BINS, min + (i+1)*range/NUM_BINS); percentileWindow maps
+  // bins back with the same width, and max lands in the last bin.
   const scale = NUM_BINS / range;
   for (let i = 0; i < len; i++) {
     const value = data[i];
     if (isFinite(value)) bins[Math.min(NUM_BINS - 1, Math.floor((value - min) * scale))]++;
   }
+  return { min, max, finiteCount, bins };
+}
 
+/** The pLow to pHigh percentile window of a percentileHistogram, exactly as percentileClip returns it. */
+export function percentileWindow(
+  histogram: PercentileHistogram, pLow: number, pHigh: number,
+): { vmin: number; vmax: number; min: number; max: number } {
+  const { min, max, finiteCount, bins } = histogram;
+  if (finiteCount === 0) return { vmin: 0, vmax: 0, min: 0, max: 0 };
+  if (!bins) return { vmin: min, vmax: max, min, max };
+  const range = max - min;
   const vmin = histogramQuantile(bins, finiteCount * (pLow / 100), min, range, min);
   const vmax = histogramQuantile(bins, finiteCount * (pHigh / 100), min, range, max);
   return { vmin, vmax, min, max };
+}
+
+/** Percentile-based clipping using O(n) histogram approach.
+ *  Also returns data min/max so callers can skip a redundant findDataRange scan. */
+export function percentileClip(
+  data: NumericArray, pLow: number, pHigh: number,
+): { vmin: number; vmax: number; min: number; max: number } {
+  return percentileWindow(percentileHistogram(data), pLow, pHigh);
 }
 
 /** Compute mean, min, max, and standard deviation of a Float32Array. */

@@ -1,6 +1,6 @@
 """Show1D exports: the standalone HTML page, the matplotlib figure and the saved-notebook preview.
 
-The HTML export keeps every trace sample exact; ``downsample`` only mean-bins
+The HTML export keeps every trace sample exact; ``image_bin`` only mean-bins
 the linked 2D panels (snapshots, profile image) and rescales their calibration
 so a smaller file stays physically correct.
 """
@@ -17,50 +17,31 @@ from matplotlib.figure import Figure
 
 from quantem.widget.export import export_slug
 
-HTML_EXPORT_DOWNSAMPLES = (1, 2, 4, 8)
-
-
 class Show1DExport:
     """Mixin over ``HtmlExportMixin``: Show1D's export options, clone, figure and preview."""
 
-    def export_html(
-        self,
-        path: str | pathlib.Path | None = None,
-        *,
-        title: str | None = None,
-        mode: str = "single",
-        encoding: str = "full",
-        downsample: int | None = None,
-    ) -> pathlib.Path:
-        """Write a kernel-free interactive HTML viewer.
+    _HTML_IMAGE_BINS = (1, 2, 4, 8)
 
-        Only ``mode="single"`` with ``encoding="full"`` exists for Show1D: the
-        traces are float32 and small, so there is nothing to quantise.
-        ``downsample`` of 2, 4 or 8 mean-bins the linked snapshot and profile
-        images; trace samples and x coordinates stay exact.
+    def export_html(self, path: str | pathlib.Path | None = None, *, title: str | None = None,
+                    image_bin: int | None = None) -> pathlib.Path:
+        """Write a kernel-free interactive HTML viewer that opens with no network.
+
+        The traces are float32 and small, so they stay exact: ``image_bin`` of
+        2, 4 or 8 mean-bins only the linked snapshot and profile images.
         """
-        factor = _export_downsample(mode, encoding, downsample)
-        export_path = pathlib.Path(path) if path is not None else self._default_html_export_path(downsample=factor)
-        self._write_html_export(export_path, title=title, downsample=factor)
-        size_mb = export_path.stat().st_size / (1024 * 1024)
-        self.export_status = f"Exported {export_path.name} ({size_mb:.1f} MB, {self._export_mode_label(factor)})"
-        return export_path
+        return self._write_export_and_report(path, title=title, **self._html_export_choice("full", image_bin))
 
-    def _html_export_options(self, payload: dict, mode: str) -> dict:
-        """``export_html`` keywords from a toolbar request; only the image downsample is a choice."""
-        return {"downsample": _export_downsample(mode, str(payload.get("encoding", "full")), payload.get("downsample"))}
-
-    def _export_mode_label(self, downsample: int = 1) -> str:
+    def _export_mode_label(self, image_bin: int = 1) -> str:
         """How the export packed the data, for the toolbar status line."""
-        return "full float32" + (f", {downsample}x downsampled images" if downsample > 1 else "")
+        return "full float32" + (f", image bin {image_bin}x" if image_bin > 1 else "")
 
-    def _default_html_export_path(self, *, downsample: int = 1) -> pathlib.Path:
-        """``<title>_<traces>x<points>[_Nxdownsampled]_single.html`` in the working directory."""
-        suffix = f"_{downsample}xdownsampled" if downsample > 1 else ""
+    def _default_html_export_path(self, *, image_bin: int = 1) -> pathlib.Path:
+        """``<title>_<traces>x<points>[_image_binN]_single.html`` in the working directory."""
+        suffix = f"_image_bin{image_bin}" if image_bin > 1 else ""
         return pathlib.Path.cwd() / f"{export_slug(self.title, 'show1d')}_{self.n_traces}x{self.n_points}{suffix}_single.html"
 
-    def _clone_for_html_export(self, *, downsample: int = 1) -> Self:
-        """An export-only copy: same traces and view state, linked images mean-binned by ``downsample``.
+    def _clone_for_html_export(self, *, image_bin: int = 1) -> Self:
+        """An export-only copy: same traces and view state, linked images mean-binned by ``image_bin``.
 
         The clone embeds everything (``_save_state``), paints with the offline
         theme and has no export or hand-off buttons, since there is no kernel
@@ -72,7 +53,7 @@ class Show1DExport:
             labels=list(self.labels),
             title=self.title,
         )
-        clone._snapshots = [_downsample_image(snap, downsample) for snap in self._snapshots]
+        clone._snapshots = [_bin_image(snap, image_bin) for snap in self._snapshots]
         clone.snapshot_iterations = list(self.snapshot_iterations)
         clone.snapshot_labels = list(self.snapshot_labels)
         clone.snapshot_image_labels = list(self.snapshot_image_labels)
@@ -85,14 +66,14 @@ class Show1DExport:
         clone._update_snapshot_bytes()
         clone.load_state_dict(self.state_dict())
         if self._profile_image is not None:
-            clone._set_profile_image(_downsample_image(self._profile_image, downsample))
-            clone.profile_line = _scale_line(self.profile_line, downsample)
-            clone.profile_width = max(1, math.ceil(self.profile_width / downsample))
+            clone._set_profile_image(_bin_image(self._profile_image, image_bin))
+            clone.profile_line = _scale_line(self.profile_line, image_bin)
+            clone.profile_width = max(1, math.ceil(self.profile_width / image_bin))
         if self.pixel_size > 0:
-            clone.pixel_size = self.pixel_size * downsample
-        clone.snapshot_real_space_center = [value / downsample for value in self.snapshot_real_space_center]
-        clone.snapshot_fft_center = [value / downsample for value in self.snapshot_fft_center]
-        clone.snapshot_profile_line = _scale_line(self.snapshot_profile_line, downsample)
+            clone.pixel_size = self.pixel_size * image_bin
+        clone.snapshot_real_space_center = [value / image_bin for value in self.snapshot_real_space_center]
+        clone.snapshot_fft_center = [value / image_bin for value in self.snapshot_fft_center]
+        clone.snapshot_profile_line = _scale_line(self.snapshot_profile_line, image_bin)
         clone._save_state = True
         clone._export_light = True
         clone.export_enabled = False
@@ -163,24 +144,7 @@ class Show1DExport:
         return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def _export_downsample(mode: str, encoding: str, downsample) -> int:
-    """The validated image downsample factor; the only packing Show1D offers is single-file float32."""
-    if mode == "folder":
-        raise NotImplementedError("Show1D folder export is not available. Use mode='single' with downsample=2, 4, or 8 to reduce linked image panels.")
-    if mode != "single":
-        raise ValueError("Show1D HTML export supports mode='single'")
-    if encoding == "uint8":
-        raise NotImplementedError("Show1D encoding='uint8' is not available. Use encoding='full' with downsample=2, 4, or 8.")
-    if encoding != "full":
-        raise ValueError(f"unknown Show1D export encoding {encoding!r}; expected 'full'")
-    if downsample in (None, 0):
-        return 1
-    if isinstance(downsample, bool) or int(downsample) != downsample or int(downsample) not in HTML_EXPORT_DOWNSAMPLES:
-        raise ValueError(f"Show1D HTML export downsample must be one of {HTML_EXPORT_DOWNSAMPLES}, got {downsample!r}")
-    return int(downsample)
-
-
-def _downsample_image(image: np.ndarray, factor: int) -> np.ndarray:
+def _bin_image(image: np.ndarray, factor: int) -> np.ndarray:
     """NaN-aware mean over ``factor`` x ``factor`` blocks; partial edge blocks average what they have."""
     if factor <= 1 or image.size == 0:
         return image.copy()

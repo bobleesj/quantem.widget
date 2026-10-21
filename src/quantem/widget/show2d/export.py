@@ -21,6 +21,8 @@ import numpy as np
 from PIL import Image
 
 from quantem.widget.export import export_slug
+from quantem.widget.show2d.fallback import _panel_line_color
+from quantem.widget.show2d.state import _rescale_view
 from quantem.widget.utils.array import bin2d
 
 _SVG_FONT = "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
@@ -135,9 +137,7 @@ def _overlay_svg(
     fractions of the panel.
     """
     row0, row1, col0, col1 = view
-    shape = str(spec.get("shape", "circle")).lower()
-    if shape == "rectangle":
-        shape = "rect"
+    shape = str(spec.get("shape", "circle"))
     coords = str(spec.get("coords", "data")).lower()
     view_h = max(1.0, row1 - row0)
     view_w = max(1.0, col1 - col0)
@@ -156,10 +156,10 @@ def _overlay_svg(
             return radius * min(panel_w, panel_h)
         return radius / max(view_w, view_h) * max(panel_w, panel_h)
 
-    stroke = _svg_color(spec.get("stroke"), "#00e5ff")
-    stroke_width = max(0.0, float(spec.get("stroke_width", 2.0)))
-    # Dash pattern: an explicit "dash" list wins, else a named line_style.
-    raw_dash = spec.get("dash")
+    stroke = _svg_color(spec.get("color"), "#00e5ff")
+    stroke_width = max(0.0, float(spec.get("line_width", 2.0)))
+    # Dash pattern: an explicit "line_dash" list wins, else a named line_style.
+    raw_dash = spec.get("line_dash")
     dash_values = (
         [float(step) for step in raw_dash if float(step) >= 0]
         if isinstance(raw_dash, Sequence) and not isinstance(raw_dash, (str, bytes, bytearray))
@@ -167,18 +167,19 @@ def _overlay_svg(
     )
     if not any(dash_values):
         unit = max(1.0, stroke_width)
+        # the overlay normalizer leaves only these line_style names (and "solid")
         dash_values = {
-            "dashed": [4 * unit, 2 * unit], "dash": [4 * unit, 2 * unit],
-            "dotted": [unit, 1.8 * unit], "dot": [unit, 1.8 * unit],
-            "dashdot": [4 * unit, 2 * unit, unit, 2 * unit], "dash-dot": [4 * unit, 2 * unit, unit, 2 * unit],
-        }.get(str(spec.get("line_style", "solid")).lower().replace("_", "-"), [])
+            "dashed": [4 * unit, 2 * unit],
+            "dotted": [unit, 1.8 * unit],
+            "dashdot": [4 * unit, 2 * unit, unit, 2 * unit],
+        }.get(str(spec.get("line_style", "solid")), [])
     dash_attr = (
         f' stroke-dasharray="{_esc_attr(" ".join(f"{step:g}" for step in dash_values))}" stroke-linecap="round"'
         if dash_values else ""
     )
     opacity = max(0.0, min(1.0, float(spec.get("opacity", 1.0))))
     stroke_opacity = opacity * max(0.0, min(1.0, float(spec.get("stroke_opacity", 1.0))))
-    fill_value = spec.get("fill", "none")
+    fill_value = spec.get("fill_color", "none")
     fill = "none" if fill_value in (None, "", "none", "None") else _svg_color(fill_value)
     fill_opacity = opacity * max(0.0, min(1.0, float(spec.get("fill_opacity", 1.0 if fill != "none" else 0.0))))
     common = (
@@ -187,18 +188,12 @@ def _overlay_svg(
         f' stroke-opacity="{stroke_opacity:g}"{dash_attr}'
     )
     if shape == "circle":
-        center_x = to_x(float(spec.get("col", 0.0)))
-        center_y = to_y(float(spec.get("row", 0.0)))
-        radius = to_radius(max(0.0, float(spec.get("radius", 0.0))))
-        return f'<circle cx="{center_x:g}" cy="{center_y:g}" r="{radius:g}"{common}/>'
-    spec_row0 = float(spec.get("row0", 0.0))
-    spec_col0 = float(spec.get("col0", 0.0))
-    spec_row1 = float(spec.get("row1", spec_row0))
-    spec_col1 = float(spec.get("col1", spec_col0))
-    left = to_x(min(spec_col0, spec_col1))
-    right = to_x(max(spec_col0, spec_col1))
-    top = to_y(min(spec_row0, spec_row1))
-    bottom = to_y(max(spec_row0, spec_row1))
+        center_row, center_col = spec["center"]  # two finite floats after the overlay normalizer
+        radius = to_radius(max(0.0, float(spec["radius"])))
+        return f'<circle cx="{to_x(center_col):g}" cy="{to_y(center_row):g}" r="{radius:g}"{common}/>'
+    spec_row0, spec_col0, spec_row1, spec_col1 = spec["box"]  # sorted corners after the overlay normalizer
+    left, right = to_x(spec_col0), to_x(spec_col1)
+    top, bottom = to_y(spec_row0), to_y(spec_row1)
     return f'<rect x="{left:g}" y="{top:g}" width="{max(0, right - left):g}" height="{max(0, bottom - top):g}"{common}/>'
 
 
@@ -228,8 +223,7 @@ def _annotation_svg(spec: Mapping[str, object], x: float, y: float, panel_w: flo
     pad_x = max(0.0, float(spec.get("pad_x", 6.0 if variant != "plain" else 0.0)))
     pad_y = max(0.0, float(spec.get("pad_y", 2.0 if variant != "plain" else 0.0)))
     opacity = max(0.0, min(1.0, float(spec.get("opacity", 1.0))))
-    offset = spec.get("offset", (0.0, 0.0))
-    offset_x, offset_y = (float(offset[0]), float(offset[1])) if isinstance(offset, Sequence) and len(offset) >= 2 else (0.0, 0.0)
+    offset_x, offset_y = spec.get("offset", (0.0, 0.0))  # two finite floats after the annotation normalizer
     align_anchor = {
         "left": "start", "start": "start", "center": "middle",
         "middle": "middle", "right": "end", "end": "end",
@@ -261,7 +255,7 @@ def _annotation_svg(spec: Mapping[str, object], x: float, y: float, panel_w: flo
     text_len = max(len(text), sum(len(_span_text(span)) for span in spans) if isinstance(spans, Sequence) else 0)
     box_w = text_len * font_size * 0.62 + 2 * pad_x
     box_h = font_size * 1.25 + 2 * pad_y
-    fg = _svg_color(spec.get("fg", spec.get("color", "#fff")))
+    fg = _svg_color(spec.get("color", "#fff"))
     outline_width = max(0.0, float(spec.get("outline_width", 0.0)))
     outline_color = _svg_color(spec.get("outline_color"), "rgba(0,0,0,0.85)")
     parts = [f'<g opacity="{opacity:g}">']
@@ -309,7 +303,7 @@ def _inset_svg(
     panel_h: float,
     fallback_color: str,
     *,
-    scale_bar_visible: bool,
+    show_scale_bar: bool,
 ) -> str:
     """One inset curve (e.g. a calibration plot) drawn as a vector polyline."""
     if not spec:
@@ -337,15 +331,11 @@ def _inset_svg(
         box_x = x + max(0.0, min(panel_w - box_w, panel_w * left))
         box_y = y + max(0.0, min(panel_h - box_h, panel_h * top))
     else:
-        raw_margin = spec.get("margin", (12.0, 12.0))
-        if isinstance(raw_margin, (int, float)):
-            margin_x = margin_y = float(raw_margin)
-        else:
-            margin_x, margin_y = (float(value) for value in list(raw_margin)[:2])
+        margin_x, margin_y = (float(value) for value in spec.get("margin", (12.0, 12.0)))
         position = str(spec.get("position", "bottom-right"))
         box_x = x + (panel_w - box_w - margin_x if "right" in position else panel_w / 2 - box_w / 2 if "center" in position else margin_x)
         # A bottom-right inset lifts above the scale bar so the two never overlap.
-        box_y = y + (panel_h - box_h - margin_y - (34.0 if scale_bar_visible and position == "bottom-right" else 0.0) if "bottom" in position else panel_h / 2 - box_h / 2 if "center" in position else margin_y + 18.0)
+        box_y = y + (panel_h - box_h - margin_y - (34.0 if show_scale_bar and position == "bottom-right" else 0.0) if "bottom" in position else panel_h / 2 - box_h / 2 if "center" in position else margin_y + 18.0)
     show_ticks = bool(spec.get("show_ticks", False))
     tick_font = max(5.0, min(14.0, float(spec.get("tick_font_size", 7.0))))
     label_font = max(6.0, min(16.0, float(spec.get("label_font_size", 8.0))))
@@ -447,13 +437,7 @@ def _title_position(
     font_size: float,
 ) -> tuple[float, float, str]:
     """Baseline (x, y) and text-anchor of a panel title from ``panel_title_style``."""
-    raw_offset = title_style.get("offset", (0.0, 0.0))
-    if isinstance(raw_offset, Sequence) and not isinstance(raw_offset, (str, bytes, bytearray)):
-        offset_values = list(raw_offset)
-        offset_x = float(offset_values[0]) if offset_values else 0.0
-        offset_y = float(offset_values[1]) if len(offset_values) > 1 else 0.0
-    else:
-        offset_x = offset_y = 0.0
+    offset_x, offset_y = title_style.get("offset", (0.0, 0.0))  # two finite floats after the title-style normalizer
     if "x" in title_style or "y" in title_style:
         anchor_value = str(title_style.get("anchor", "top-center")).lower()
         base_y = y + float(title_style.get("y", 0.0)) * panel_h + offset_y
@@ -646,7 +630,8 @@ def _marker_svg(
 class Show2DExport:
     """Mixin: SVG figure export and standalone HTML export."""
 
-    _HTML_EXPORT_SAFE_MB = 80.0
+    _HTML_ENCODINGS = ("full", "uint8")
+    _HTML_IMAGE_BINS = (1, 2, 4, 8)
 
     def export_svg(
         self,
@@ -686,7 +671,7 @@ class Show2DExport:
         export_path.parent.mkdir(parents=True, exist_ok=True)
         export_scale = max(1.0, min(8.0, float(scale)))
         panel_w = int(round(self._static_canvas_css_px()))
-        gap = chrome["inter_panel_gap_px"]
+        gap = chrome["panel_gap_px"]
         gap_color = chrome["inter_panel_gap_color"]
         border = chrome["gallery_outer_border_px"]
         border_color = chrome["gallery_outer_border_color"]
@@ -695,41 +680,14 @@ class Show2DExport:
         ncols = max(1, min(int(self.ncols), len(specs)))
         title_text = self.title if title is None else str(title)
         title_h = 30 if title_text and self.show_title else 0
-        draw_scale = bool(include_scale_bar and self.scale_bar_visible)
-        # The visible window: what the browser last synced, else the
-        # construction-time zoom about (zoom_row, zoom_col).
-        if len(self.view_box) == 4:
-            row0, row1, col0, col1 = (float(value) for value in self.view_box)
-        else:
-            zoom = float(self.initial_zoom) or 1.0
-            center_row = float(self.zoom_row) if self.zoom_row is not None else self.height / 2
-            center_col = float(self.zoom_col) if self.zoom_col is not None else self.width / 2
-            half_h, half_w = self.height / (2 * zoom), self.width / (2 * zoom)
-            row0, row1 = max(0.0, center_row - half_h), min(float(self.height), center_row + half_h)
-            col0, col1 = max(0.0, center_col - half_w), min(float(self.width), center_col + half_w)
-        view = (row0, row1, col0, col1)
+        draw_scale = bool(include_scale_bar and self.show_scale_bar)
         resample = Image.Resampling.BILINEAR if self.smooth else Image.Resampling.NEAREST
         panels: list[dict[str, object]] = []
         overlays = self._static_overlay_texts(specs, css_px=panel_w)
+        # every panel shows the widget's view window (the preview's), past the image edge in black
+        view = self._static_view_window(self.height, self.width)
         for spec, (_label, _zoom_text, bar_text, bar_px) in zip(specs, overlays):
-            frame_pixels = np.asarray(spec["frame"])
-            height, width = frame_pixels.shape[:2]
-            crop_row0 = max(0, min(height - 1, int(math.floor(row0))))
-            crop_row1 = max(crop_row0 + 1, min(height, int(math.ceil(row1))))
-            crop_col0 = max(0, min(width - 1, int(math.floor(col0))))
-            crop_col1 = max(crop_col0 + 1, min(width, int(math.ceil(col1))))
-            cropped = frame_pixels[crop_row0:crop_row1, crop_col0:crop_col1]
-            if spec.get("rgb"):
-                # PNG bytes are 8-bit: display-ready [0, 1] color maps straight to 0..255.
-                rgb = (np.clip(cropped[..., :3], 0.0, 1.0) * 255).astype(np.uint8)
-            else:
-                rgb = self._static_panel_rgb(
-                    cropped,
-                    float(spec["vmin"]),
-                    float(spec["vmax"]),
-                    str(spec["cmap"]),
-                    apply_log=bool(spec.get("apply_log")),
-                )
+            rgb = self._static_window_rgb(spec, view, factor=1)
             panel_h = max(1, int(round(panel_w * rgb.shape[0] / max(1, rgb.shape[1]))))
             image = Image.fromarray(rgb, mode="RGB")
             embed_w = max(1, int(round(panel_w * export_scale)))
@@ -825,8 +783,8 @@ class Show2DExport:
                 elements.append(f'<g clip-path="url(#{clip_id})">')
                 if bool(self.show_inset_plots) and panel_index < len(self.inset_plots):
                     elements.append(_inset_svg(
-                        self.inset_plots[panel_index], x, y, panel_w, panel_h, marker_color,
-                        scale_bar_visible=bool(self.scale_bar_visible),
+                        self.inset_plots[panel_index], x, y, panel_w, panel_h, _panel_line_color(self, panel_index),
+                        show_scale_bar=bool(self.show_scale_bar),
                     ))
                 if panel_index < len(self.panel_overlays):
                     for overlay_spec in self.panel_overlays[panel_index]:
@@ -852,11 +810,11 @@ class Show2DExport:
         export_path.write_text("\n".join(elements), encoding="utf-8")
         return export_path
 
-    def _estimate_html_export_mb(self, *, quantized: bool, downsample: int) -> float:
+    def _estimate_html_export_mb(self, *, quantized: bool, image_bin: int) -> float:
         """Rough MB an embedded single-file Show2D HTML would occupy.
 
         ``export_html`` checks this before writing so an oversized page fails
-        fast with the uint8 and downsample alternatives, instead of producing
+        fast with the uint8 and image_bin alternatives, instead of producing
         a file Chrome cannot open from disk. The pixels are base64 (4/3 of the
         raw bytes) plus about 2 MB of bundle and page.
         """
@@ -865,44 +823,37 @@ class Show2DExport:
             n_values = sum(stack.size for stack in self._display_panel_stacks)
         else:
             n_values = self._display_data.size
-        n_values //= downsample**2
+        n_values //= image_bin**2
         bytes_per_value = 1 if quantized else 4
         payload_mb = n_values * bytes_per_value * (4.0 / 3.0) / (1024 * 1024)
         return payload_mb + 2.0
 
-    def export_html(self, path: str | pathlib.Path | None = None,
-                    *,
-                    title: str | None = None,
-                    mode: str = "single",
-                    encoding: str = "full",
-                    downsample: int | None = None,
-                    quantized: bool | None = None,
-                    max_mb: float | None = _HTML_EXPORT_SAFE_MB) -> pathlib.Path:
+    def export_html(
+        self,
+        path: str | pathlib.Path | None = None,
+        *,
+        title: str | None = None,
+        encoding: str = "full",
+        image_bin: int | None = None,
+        max_mb: float | None = 80.0,
+    ) -> pathlib.Path:
         """Write a standalone HTML viewer for this widget.
 
-        The exported file mounts the live anywidget JS bundle with the current
-        widget state (data, labels, cmap, vmin/vmax, log_scale, sampling, ...).
-        Opens in any browser without a Jupyter kernel.
-        Preferred export options are ``mode="single"``, ``encoding="full"`` or
-        ``encoding="uint8"``, and ``downsample=None``. Use ``downsample=2`` /
-        ``4`` / ``8`` with ``encoding="uint8"`` for compact visual reports.
-        ``quantized`` is kept as a compatibility alias for ``encoding="uint8"``.
+        The exported file mounts the widget with its current state (data,
+        labels, cmap, contrast, log scale, calibration, view) and opens in any
+        browser without a kernel or a network.
 
         Parameters
         ----------
         path : str or pathlib.Path, optional
-            Destination HTML path.
-        quantized : bool, optional
-            Store the displayed image stack as uint8 with min/max metadata.
-            This is smaller and visually equivalent after colormapping. The
-            default stores exact float32 display values.
+            Destination HTML path; default ``<title>_<shape>_<exact|quantized>.html``
+            in the working directory.
         title : str, optional
             Browser page title. Defaults to widget ``title`` or "Show2D".
-        mode : {"single"}, default "single"
-            One self-contained file.
         encoding : {"full", "uint8"}, default "full"
-            Exact float32 display values, or uint8 per panel.
-        downsample : {None, 1, 2, 4, 8}, optional
+            Exact float32 display values, or uint8 per panel over its own range
+            (smaller, and the same after colormapping).
+        image_bin : {None, 1, 2, 4, 8}, optional
             Mean-bin factor for the embedded pixels; above 1 needs
             ``encoding="uint8"``. The scale bar calibration follows.
         max_mb : float or None, default 80
@@ -914,29 +865,7 @@ class Show2DExport:
             The written file path.
         """
         self._require_grayscale_gallery("export_html")
-        quantized, downsample_factor = self._normalise_html_export_options(
-            mode=mode,
-            encoding=encoding,
-            downsample=downsample,
-            quantized=quantized,
-        )
-        if max_mb is not None:
-            estimate_mb = self._estimate_html_export_mb(quantized=quantized, downsample=downsample_factor)
-            if estimate_mb > float(max_mb):
-                uint8_mb = self._estimate_html_export_mb(quantized=True, downsample=downsample_factor)
-                raise ValueError(
-                    f"This export would embed about {estimate_mb:.0f} MB into one HTML file, "
-                    f"above the {float(max_mb):.0f} MB safe limit (large single-file exports often "
-                    f"fail to open under Chrome file://). Options: encoding='uint8' "
-                    f"(about {uint8_mb:.0f} MB), downsample=2 or 4 to shrink spatially, or pass "
-                    f"max_mb={estimate_mb:.0f} to force this size."
-                )
-        export_path = pathlib.Path(path) if path is not None else self._default_html_export_path(quantized, downsample=downsample_factor)
-        self._write_html_export(export_path, quantized=quantized, title=title, downsample=downsample_factor)
-        size_mb = export_path.stat().st_size / (1024 * 1024)
-        label = self._export_mode_label(quantized, downsample=downsample_factor)
-        self.export_status = f"Exported {export_path.name} ({size_mb:.1f} MB, {label})"
-        return export_path
+        return self._write_export_and_report(path, title=title, max_mb=max_mb, **self._html_export_choice(encoding, image_bin))
 
     def _require_grayscale_gallery(self, action: str) -> None:
         """Refuse an HTML export of a gallery with RGB panels.
@@ -951,72 +880,19 @@ class Show2DExport:
                 "the export clone rebuilds from the grayscale stack and would drop the color channels."
             )
 
-    def _normalise_html_export_options(
-        self,
-        *,
-        mode: str = "single",
-        encoding: str = "full",
-        downsample: int | None = None,
-        quantized: bool | None = None,
-    ) -> tuple[bool, int]:
-        """Resolve the export keywords to ``(quantized, downsample)``, rejecting combinations that cannot be honoured.
-
-        ``mode`` also accepts the encoding names (``"exact"``, ``"uint8"``, ...)
-        and ``quantized=True`` forces uint8. A downsample above 1 requires
-        uint8 because the exact float32 export promises every native pixel.
-        """
-        mode_name = str(mode or "single").strip().lower().replace("_", "-")
-        if mode_name in {"exact", "full"}:
-            mode_name = "single"
-            encoding = "full"
-        elif mode_name in {"quantized", "uint8", "u8"}:
-            mode_name = "single"
-            encoding = "uint8"
-        if mode_name != "single":
-            raise ValueError("Show2D HTML export supports mode='single'")
-        if downsample in (None, "", 0, "0"):
-            downsample_factor = 1
-        else:
-            if isinstance(downsample, bool):
-                raise ValueError("Show2D HTML export downsample must be an integer factor, not bool")
-            downsample_factor = int(downsample)
-        if downsample_factor < 1:
-            raise ValueError(f"Show2D HTML export downsample must be >= 1, got {downsample!r}")
-        if downsample_factor not in {1, 2, 4, 8}:
-            raise ValueError("Show2D HTML export downsample must be one of 1, 2, 4, or 8")
-        encoding_name = str(encoding or "full").strip().lower().replace("_", "-")
-        if quantized is True:
-            encoding_name = "uint8"
-        if encoding_name in {"full", "exact", "float32", "f32"}:
-            if downsample_factor != 1:
-                raise ValueError("Show2D exact float32 HTML export does not support downsample; use encoding='uint8'")
-            return False, downsample_factor
-        if encoding_name in {"uint8", "u8", "quantized"}:
-            return True, downsample_factor
-        raise ValueError(f"unknown Show2D export encoding {encoding!r}; expected 'full' or 'uint8'")
-
-    def _html_export_options(self, payload: dict, mode: str) -> dict:
-        """``export_html`` keywords from a toolbar request, which carries ``encoding`` and ``downsample``."""
-        quantized, downsample = self._normalise_html_export_options(
-            mode=mode,
-            encoding=str(payload.get("encoding", "full")),
-            downsample=payload.get("downsample"),
-        )
-        return {"quantized": quantized, "downsample": downsample}
-
     def _export_stem(self) -> str:
         """``<title>_<shape>`` file-name stem shared by the SVG and HTML exports, so one figure's files sort together."""
         shape = f"{self.n_images}x{self.height}x{self.width}" if self.n_images > 1 else f"{self.height}x{self.width}"
         return f"{export_slug(self.title, 'show2d')}_{shape}"
 
-    def _default_html_export_path(self, quantized: bool, *, downsample: int = 1) -> pathlib.Path:
-        """``<stem>_<exact|quantized>[_Nxdownsample].html`` in the working directory, naming how the pixels were packed."""
+    def _default_html_export_path(self, quantized: bool, *, image_bin: int = 1) -> pathlib.Path:
+        """``<stem>_<exact|quantized>[_image_binN].html`` in the working directory, naming how the pixels were packed."""
         encoding_label = "quantized" if quantized else "exact"
-        suffix = f"_{downsample}xdownsample" if quantized and downsample > 1 else ""
+        suffix = f"_image_bin{image_bin}" if quantized and image_bin > 1 else ""
         return pathlib.Path.cwd() / f"{self._export_stem()}_{encoding_label}{suffix}.html"
 
-    def _clone_for_html_export(self, *, quantized: bool, downsample: int = 1) -> Self:
-        """An export-only Show2D: the displayed pixels mean-binned by ``downsample``, every view setting, no export menu.
+    def _clone_for_html_export(self, *, quantized: bool, image_bin: int = 1) -> Self:
+        """An export-only Show2D: the displayed pixels mean-binned by ``image_bin``, every view setting, no export menu.
 
         The standalone page has no kernel behind it, so the clone carries its
         own copy of what is on screen, paints on a light background, and with
@@ -1025,10 +901,10 @@ class Show2DExport:
         self._require_grayscale_gallery("HTML export")
 
         def binned_frames(stack: np.ndarray) -> np.ndarray:
-            """A ``(F, H, W)`` stack mean-binned frame by frame by ``downsample``; the pixel size below scales to match."""
-            if downsample <= 1:
+            """A ``(F, H, W)`` stack mean-binned frame by frame by ``image_bin``; the pixel size below scales to match."""
+            if image_bin <= 1:
                 return stack
-            return np.stack([bin2d(frame, factor=downsample, mode="mean") for frame in stack])
+            return np.stack([bin2d(frame, factor=image_bin, mode="mean") for frame in stack])
 
         has_local_stacks = any(count > 1 for count in self.panel_frame_counts)
         if has_local_stacks:
@@ -1039,63 +915,15 @@ class Show2DExport:
             ]
         else:
             export_data = binned_frames(self._display_data)
-        export_pixel_size = self.pixel_size * downsample if self.pixel_size > 0 else self.pixel_size
-        clone = type(self)(
-            export_data,
-            labels=list(self.labels),
-            title=self.title,
-            cmap=list(self.panel_cmaps) if self.panel_cmaps else self.cmap,
-            sampling=export_pixel_size if export_pixel_size > 0 else None,
-            units=self.pixel_unit,
-            show_scale_bar=self.scale_bar_visible,
-            scale_bar_position=self.scale_bar_position,
-            scale_bar_panels=list(self.scale_bar_panels),
-            scale_bar_length=self.scale_bar_length,
-            scale_bar_label=self.scale_bar_label,
-            scale_bar_style=dict(self.scale_bar_style),
-            show_zoom_indicator=self.show_zoom_indicator,
-            show_fft=self.show_fft,
-            show_controls=self.show_controls,
-            controls_collapsed=self.controls_collapsed,
-            show_stats=self.show_stats,
-            verbose=False,
-            log_scale=self.log_scale,
-            auto_contrast=self.auto_contrast,
-            offline=quantized,
-            vmin=self.vmin if self.vmin is not None else self.vmins,
-            vmax=self.vmax if self.vmax is not None else self.vmaxs,
-            ncols=self.ncols,
-            panel_frame_indices=list(self.panel_frame_indices),
-            panel_playback_fps=self.panel_playback_fps,
-            size=self.size,
-            smooth=self.smooth,
-            zoom=self.initial_zoom,
-            link_zoom=self.link_zoom,
-            link_pan=self.link_pan,
-            link_contrast=self.link_contrast,
-            starred=[i for i, value in enumerate(self.starred) if value],
-            show_panel_titles=self.show_panel_titles,
-            panel_title_font_size=self.panel_title_font_size,
-            panel_title_style=dict(self.panel_title_style),
-            inter_panel_gap_px=int(self.inter_panel_gap_px),
-            inter_panel_gap_color=str(self.inter_panel_gap_color),
-            gallery_outer_border_px=int(self.gallery_outer_border_px),
-            gallery_outer_border_color=str(self.gallery_outer_border_color),
-            panel_inner_border_px=float(self.panel_inner_border_px),
-            panel_inner_border_color=str(self.panel_inner_border_color),
-            row_markers=dict(self.row_markers),
-            panel_annotations=list(self.panel_annotations),
-            panel_overlays=list(self.panel_overlays),
-            display_bin=1,
-        )
-        clone.pixel_sizes = list(self.pixel_sizes)
-        clone.page_kind = str(self.page_kind)
-        clone.n_pages = int(self.n_pages)
-        clone.panels_per_page = int(self.panels_per_page)
-        clone.page_labels = list(self.page_labels)
-        clone.page_idx = int(self.page_idx)
-        clone.page_starred = list(self.page_starred)
-        clone.load_state_dict(self.state_dict())
+        clone = type(self)(export_data, labels=list(self.labels), panel_frame_indices=list(self.panel_frame_indices),
+                           display_bin=1, verbose=False)
+        # The clone's pixels are this view's display pixels (already binned by display_bin and
+        # rotated) binned by image_bin, so its view is this one's in that coarser grid with no
+        # rotation left to apply: the standalone page turns the canvas by image_rotations itself.
+        state = _rescale_view(self.state_dict(), 1 / (self._display_bin * image_bin))
+        state["image_rotations"] = [0] * self.n_images
+        clone.load_state_dict(state)
+        clone.offline = quantized
         clone._export_light = True
         clone._save_state = True
         clone.export_enabled = False

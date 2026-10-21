@@ -24,6 +24,10 @@ def profile() -> None:
     individual package versions. The report is local and does not contact
     package indexes or Git remotes.
 
+    Installation labels describe local provenance, not publication status.
+    Commits come from the imported checkout, VCS install metadata, or an
+    explicit ``+g<commit>`` version label; unavailable commits stay unknown.
+
     Examples
     --------
     >>> import quantem.widget as qw
@@ -31,40 +35,63 @@ def profile() -> None:
     """
     import quantem.widget as qw
 
-    def editable_source(distribution_name: str) -> Path | None:
-        """The checkout an editable install points at, from its ``direct_url.json``; None for a published wheel."""
+    def direct_install(distribution_name: str) -> dict:
+        """Read pip's local provenance without exposing source URLs or paths."""
         try:
             raw = distribution(distribution_name).read_text("direct_url.json")
         except (PackageNotFoundError, OSError):
-            return None
+            return {}
         if not raw:
-            return None
+            return {}
 
         try:
-            direct_url = json.loads(raw)
+            metadata = json.loads(raw)
         except ValueError:
+            return {}
+        return metadata if isinstance(metadata, dict) else {}
+
+    def checkout_commit(loaded: Path | None) -> str | None:
+        """Identify tracked source, never a repository surrounding site-packages."""
+        if loaded is None or "site-packages" in loaded.parts:
             return None
-        if not isinstance(direct_url, dict):
-            return None
-        directory = direct_url.get("dir_info")
-        source_url = direct_url.get("url")
-        if not isinstance(directory, dict) or not directory.get("editable"):
-            return None
-        if not isinstance(source_url, str):
+        root = next(
+            (parent for parent in loaded.parents if (parent / ".git").exists()),
+            None,
+        )
+        if root is None:
             return None
 
-        parsed = urlparse(source_url)
-        if parsed.scheme != "file":
+        def git(*args: str) -> str:
+            return subprocess.check_output(
+                ["git", "-C", str(root), *args],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=2,
+            ).strip()
+
+        try:
+            git("ls-files", "--error-unmatch", str(loaded.relative_to(root)))
+            commit = git("rev-parse", "--short=12", "HEAD")
+            dirty = bool(git("status", "--porcelain", "--untracked-files=normal"))
+        except (OSError, subprocess.SubprocessError):
             return None
-        return Path(unquote(parsed.path)).resolve()
+        return commit + (" (dirty checkout)" if dirty else "")
 
     def print_distribution_status(distribution_name: str) -> None:
-        """Print whether the package is published, editable, or imported from a path that overrides its metadata.
+        """Print installation provenance and the associated source commit.
 
         A source override (``PYTHONPATH`` ahead of an editable install) is the usual
         reason a bug report does not match the code the reporter thinks they run.
         """
-        source = editable_source(distribution_name)
+        metadata = direct_install(distribution_name)
+        directory = metadata.get("dir_info") or {}
+        source_url = metadata.get("url")
+        parsed = urlparse(source_url if isinstance(source_url, str) else "")
+        editable = isinstance(directory, dict) and bool(directory.get("editable"))
+        source = (
+            Path(unquote(parsed.path)).resolve()
+            if editable and parsed.scheme == "file" else None
+        )
         try:
             spec = find_spec(distribution_name)
         except (ImportError, ValueError):
@@ -75,12 +102,43 @@ def profile() -> None:
             else None
         )
 
-        if source is None:
-            print("  install       published package")
-        elif loaded is not None and not loaded.is_relative_to(source):
-            print("  install       source override (differs from installed metadata)")
+        checkout = checkout_commit(loaded)
+        override = (
+            source is not None and loaded is not None
+            and not loaded.is_relative_to(source)
+        )
+        vcs = metadata.get("vcs_info") or {}
+        vcs_commit = vcs.get("commit_id") if isinstance(vcs, dict) else None
+        try:
+            installed = version(distribution_name)
+        except PackageNotFoundError:
+            installed = "unknown"
+        local_version = installed.partition("+")[2]
+        version_commit = re.search(r"(?:^|\.)g([0-9a-f]{7,40})(?:\.|$)", local_version)
+        commit = "not recorded"
+        if override or (checkout is not None and not editable):
+            status = "source override (differs from installed metadata)"
+            commit = checkout or commit
+        elif editable:
+            status = "editable checkout"
+            commit = checkout or commit
         else:
-            print("  install       editable checkout")
+            if vcs:
+                status = "VCS install"
+            elif parsed.scheme == "file":
+                status = "local build"
+            elif local_version or ".dev" in installed:
+                status = "development build"
+            elif metadata:
+                status = "direct install"
+            else:
+                status = "installed package"
+            if isinstance(vcs_commit, str) and re.fullmatch(r"[0-9a-fA-F]{7,64}", vcs_commit):
+                commit = f"{vcs_commit} (VCS metadata)"
+            elif version_commit:
+                commit = f"{version_commit[1]} (version metadata)"
+        print(f"  install       {status}")
+        print(f"  commit        {commit}")
 
     from quantem.widget.adapters import core as core_adapter
     from quantem.widget.adapters import gpu as gpu_adapter
@@ -145,7 +203,7 @@ def device_info(verbose: bool = True) -> dict[str, str]:
     import quantem.widget as qw
     from quantem.widget.adapters import core as core_adapter
     from quantem.widget.adapters import gpu as gpu_adapter
-    from quantem.widget.device import gpu_notice_text, mps_available
+    from quantem.widget.device import gpu_notice, host_platform, mps_available
 
     backend = "cuda" if torch.cuda.is_available() else "mps" if mps_available() else "cpu"
     report = {
@@ -173,17 +231,20 @@ def device_info(verbose: bool = True) -> dict[str, str]:
                 return ""
             return result.stdout.strip()
 
-        chip = sysctl("machdep.cpu.brand_string") or "Apple"
-        memory = sysctl("hw.memsize")
-        memory_gb = f"{int(memory) // (1024**3)} GB" if memory.isdigit() else "?"
-        report["device"] = f"Apple Metal (MPS) - {chip}, {memory_gb} memory"
+        if host_platform()[1] == "arm64":
+            # Apple silicon: the chip is the GPU and its memory is shared with it
+            chip = sysctl("machdep.cpu.brand_string") or "Apple"
+            memory = sysctl("hw.memsize")
+            memory_gb = f"{int(memory) // (1024**3)} GB" if memory.isdigit() else "?"
+            report["device"] = f"Apple Metal (MPS) - {chip}, {memory_gb} unified memory"
+        else:
+            # an Intel Mac's sysctl names its CPU, not the GPU MPS runs on
+            report["device"] = "Apple Metal (MPS) - the GPU of this Intel Mac"
     elif backend == "cuda":
         report["device"] = f"CUDA - {torch.cuda.get_device_name(0)}"
     if verbose:
         print(f"quantem.widget {report['widget_version']}   |   {report['date']}")
         print(f"compute: {report['device']} (torch {report['torch']})")
         print(f"GPU path: {report['gpu_path']}   |   quantem core: {report['quantem_core']}")
-        notice = gpu_notice_text()
-        if notice is not None:
-            print(notice)
+        gpu_notice()  # once per process: a later device="auto" choice does not print it again
     return report

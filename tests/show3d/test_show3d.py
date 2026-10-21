@@ -7,6 +7,7 @@ import pathlib
 
 import numpy as np
 import pytest
+import traitlets
 from ipywidgets.widgets.widget import _instances
 from PIL import Image
 
@@ -47,7 +48,13 @@ def test_frames_are_indexed_at_display_resolution_with_diff_modes(capsys):
 def test_panels_slice_the_concatenated_frame_and_keep_native_sources():
     left, right = _ramp(), _ramp(offset=10.0)
     widget = Show3D(left, right, panel_titles=["a", "b"], display_bin=4, verbose=False)
-    assert (widget.n_panels, widget.panel_width_px, widget.width) == (2, 16, 32)
+    assert (widget.n_panels, widget.num_panel_cols, widget.width) == (2, 16, 32)
+    # panel_width_px is the canvas width the keyword sets; it named the image columns per panel before
+    sized = Show3D(left, right, panel_width_px=180, verbose=False)
+    assert (sized.panel_width_px, sized.num_panel_cols) == (180, 64) and sized.state_dict()["panel_width_px"] == 180
+    with pytest.raises(TypeError, match="size"):
+        Show3D(left, size=180, verbose=False)
+    sized.free()
     np.testing.assert_allclose(widget._get_display_panel_frame(1, 2), right[2].reshape(16, 4, 16, 4).mean(axis=(1, 3)), atol=1e-5)
     np.testing.assert_array_equal(widget._get_source_panel_frame(1, 2), right[2])
     assert widget.link_contrast is False
@@ -134,6 +141,20 @@ def test_dataset3d_supplies_title_and_a_display_pixel_scale_bar():
 # --- exports --------------------------------------------------------------------
 
 
+def test_denoise_traits_take_only_the_names_the_browser_filter_runs():
+    # the browser compares the trait to its filter names as written: another spelling would show raw pixels under a filter banner
+    widget = Show3D(_ramp(), _ramp(offset=1.0), verbose=False)
+    widget.denoise = "gaussian"
+    widget.denoise_modes = ["anscombe", "none"]
+    for spelling in ("off", "raw", "Gaussian", ""):
+        with pytest.raises(traitlets.TraitError):
+            widget.denoise = spelling
+        with pytest.raises(traitlets.TraitError):
+            widget.denoise_modes = ["none", spelling]
+    assert (widget.denoise, widget.denoise_modes) == ("gaussian", ["anscombe", "none"])
+    widget.free()
+
+
 def test_gif_renders_are_byte_stable(tmp_path: pathlib.Path):
     rng = np.random.default_rng(3)
     raw = rng.random((4, 32, 32), dtype=np.float32)
@@ -152,9 +173,12 @@ def test_gif_renders_are_byte_stable(tmp_path: pathlib.Path):
 
 def test_save_image_colorizes_the_current_frame(tmp_path: pathlib.Path):
     widget = Show3D(_ramp(), cmap="gray", verbose=False)
-    path = widget.save_image(tmp_path / "frame.png", frame_idx=5)
+    path = widget.save_image(tmp_path / "frame.png", slice_idx=5)
     image = np.asarray(Image.open(path).convert("RGB"))
     assert image.shape == (64, 64, 3) and image[-1, -1, 0] > image[0, 0, 0]
+    # the frame to save is named like the trait that holds the current frame; the earlier keyword is refused
+    with pytest.raises(TypeError, match="unexpected keyword argument 'frame_idx'"):
+        widget.save_image(tmp_path / "frame.png", frame_idx=5)
     widget.free()
 
 
@@ -164,7 +188,7 @@ def test_save_image_log_scale_windows_the_log_of_the_data_range(tmp_path: pathli
     data = _ramp() * 1000
     widget = Show3D(data, cmap="gray", auto_contrast=False, verbose=False)
     widget.log_scale = True
-    image = np.asarray(Image.open(widget.save_image(tmp_path / "log.png", frame_idx=5)).convert("RGB"))
+    image = np.asarray(Image.open(widget.save_image(tmp_path / "log.png", slice_idx=5)).convert("RGB"))
     vmin, vmax = display_window(data.min(), data.max(), True)
     levels = contrast_uint8(signed_log1p(data[5]), vmin, vmax)
     np.testing.assert_array_equal(image, colorize(levels / 255.0, "gray"))
@@ -180,10 +204,10 @@ def test_export_html_writes_a_standalone_page_with_the_display_stack(tmp_path: p
     assert 'id="quantem-widget-export-layout"' in html and "application/vnd.jupyter.widget-state+json" in html
     assert "Protocol Show3D" in html and "_offline_float_stack" in html
     assert widget.export_status.startswith("Exported exact.html")
-    compact = widget.export_html(tmp_path / "compact.html", encoding="uint8", downsample=4)
+    compact = widget.export_html(tmp_path / "compact.html", encoding="uint8", image_bin=4)
     assert compact.stat().st_size < exact.stat().st_size
-    with pytest.raises(ValueError, match="downsample"):
-        widget.export_html(tmp_path / "bad.html", encoding="full", downsample=2)
+    with pytest.raises(ValueError, match="image_bin"):
+        widget.export_html(tmp_path / "bad.html", encoding="full", image_bin=2)
     widget.free()
 
 
@@ -191,7 +215,7 @@ def test_export_clone_carries_view_state_and_embeds_pixels():
     widget = Show3D(_ramp(6, 128), sampling=0.2, units="nm", display_bin=4, verbose=False)
     widget.playing = True
     widget.cmap = "inferno"
-    clone = widget._clone_for_html_export(quantized=True, downsample=4)
+    clone = widget._clone_for_html_export(quantized=True, image_bin=4)
     assert (clone.n_slices, clone.height, clone.width) == (6, 8, 8)
     assert clone.pixel_size == pytest.approx(widget.pixel_size * 4)
     assert clone.playing is True and clone.cmap == "inferno" and clone._save_state is True
@@ -213,7 +237,7 @@ def test_export_html_leaves_no_clone_model_open(tmp_path: pathlib.Path):
 
 def test_toolbar_export_request_returns_a_download_payload():
     widget = Show3D(_ramp(4, 32), title="Toolbar", verbose=False)
-    widget.export_request = json.dumps({"id": "req-1", "filename": "view.html", "download": True, "mode": "single", "encoding": "uint8"})
+    widget.export_request = json.dumps({"id": "req-1", "filename": "view.html", "download": True, "encoding": "uint8"})
     assert widget.export_payload_id == "req-1" and widget.export_filename == "view.html"
     assert b"Toolbar" in widget.export_payload and widget.export_status.startswith("Ready view.html")
     widget.export_request = json.dumps({"id": "req-2", "filename": "view.gif", "download": True, "mode": "gif", "quality": "low", "max_frames": 2})
@@ -253,7 +277,7 @@ def test_saved_notebook_state_keeps_a_preview_instead_of_pixels():
     widget = Show3D(_ramp(), title="save", verbose=False)
     state = widget.get_state()
     assert "_offline_float_stack" not in state
-    assert state["_static_fallback_mime"] == "image/jpeg" and len(state["_static_fallback_jpeg"]) > 1000
+    assert state["_static_fallback_mime"] == "image/jpeg" and len(state["_static_fallback_image"]) > 1000
     mount = widget._repr_mimebundle_()
     assert "application/vnd.jupyter.widget-view+json" in (mount[0] if isinstance(mount, tuple) else mount)
     persistent = Show3D(_ramp(), save_state=True, verbose=False)
@@ -265,15 +289,15 @@ def test_saved_notebook_state_keeps_a_preview_instead_of_pixels():
 def test_static_preview_matches_a_show2d_gallery_pixel_for_pixel():
     rng = np.random.default_rng(18)
     stacks = [rng.random((4, 96, 112), dtype=np.float32) + panel * 0.1 for panel in range(4)]
-    widget = Show3D(*stacks, panel_titles=[f"P{p + 1}" for p in range(4)], max_cols=2, panel_gap=3, panel_width_px=180, sampling=0.12, units="nm", verbose=False)
+    widget = Show3D(*stacks, panel_titles=[f"P{p + 1}" for p in range(4)], max_cols=2, panel_gap_px=3, panel_width_px=180, sampling=0.12, units="nm", verbose=False)
     widget.slice_idx = 2
     widget.hidden_panels = [1]
     reference = Show2D(
         [widget._get_display_panel_frame(panel, 2) for panel in (0, 2, 3)],
         labels=[widget._static_panel_title(panel, 2) for panel in (0, 2, 3)],
         ncols=2,
-        inter_panel_gap_px=3,
-        size=180,
+        panel_gap_px=3,
+        panel_width_px=180,
         sampling=widget.pixel_size,
         units="nm",
         cmap=widget.cmap,
@@ -287,6 +311,10 @@ def test_static_preview_matches_a_show2d_gallery_pixel_for_pixel():
         save_state=False,
     )
     np.testing.assert_array_equal(_decode_png(widget._static_png_b64(max_px=220)), _decode_png(reference._static_png_b64(max_px=220)))
+    # the gap is one trait, the one the browser draws: a later change reaches the preview too
+    widget.panel_gap_px = reference.panel_gap_px = 9
+    np.testing.assert_array_equal(_decode_png(widget._static_png_b64(max_px=220)), _decode_png(reference._static_png_b64(max_px=220)))
+    assert widget.state_dict()["panel_gap_px"] == 9
     widget.free()
 
 
@@ -332,3 +360,40 @@ def test_watched_folder_is_created_and_fills_on_the_first_stable_frame(tmp_path:
         assert widget.n_slices == 1 and widget.labels == ["frame_001"]
     finally:
         widget.close()
+
+
+def test_horizontal_scale_bar_uses_the_column_sampling():
+    # D-1: Show3D labelled the horizontal bar with the row step of anisotropic sampling.
+    stack = np.zeros((2, 8, 12), dtype=np.float32)
+    assert Show3D(stack, sampling=(0.5, 0.25), units=("nm", "A")).pixel_size == 0.25
+    assert Show3D(stack, sampling=(0.5, 0.25), units=("nm", "A")).pixel_unit == "A"
+    dataset = make_dataset(stack, sampling=(1.0, 0.5, 0.25), units=("s", "A", "A"), name="stack")
+    assert Show3D(dataset).pixel_size == 0.25
+
+
+def test_units_alone_shows_a_calibrated_dataset_in_that_unit():
+    # units= with no sampling= raised "contradict the calibration the dataset records"; before that check
+    # Show3D showed an nm dataset in angstrom. The numbers are the ones the tree before the check gave.
+    nanometre = make_dataset(np.zeros((2, 8, 12), dtype=np.float32), sampling=(1.0, 0.2, 0.2), units=("frame", "nm", "nm"))
+    for units, expected in (("A", (2.0, "A")), ("angstrom", (2.0, "angstrom")), ("nm", (0.2, "nm")), (None, (2.0, "A"))):
+        shown = Show3D(nanometre, units=units, verbose=False)
+        assert (shown.pixel_size, shown.pixel_unit) == expected
+    # converted through the unit table in every direction (the earlier tree relabelled these two unconverted)
+    angstrom = make_dataset(np.zeros((2, 8, 12), dtype=np.float32), sampling=(1.0, 2.0, 2.0), units=("frame", "A", "A"))
+    assert (Show3D(angstrom, units="nm", verbose=False).pixel_size, Show3D(nanometre, units="pm", verbose=False).pixel_size) == pytest.approx((0.2, 200.0))
+    with pytest.raises(ValueError, match="units='mrad' cannot show a dataset calibrated in 'nm'"):
+        Show3D(nanometre, units="mrad", verbose=False)
+    # a sampling keyword still has to agree with the dataset, with or without units
+    assert Show3D(nanometre, sampling=2.0, verbose=False).pixel_size == 2.0
+    for keywords in ({"sampling": 0.3, "units": "nm"}, {"sampling": 0.2}):
+        with pytest.raises(ValueError, match="contradict the calibration the dataset records"):
+            Show3D(nanometre, verbose=False, **keywords)
+
+
+def test_paged_input_of_any_array_type_opens_as_pages():
+    # D-2: 5D paging was detected only for NumPy and torch, so a 5D CuPy array fell to the shape error.
+    cupy = pytest.importorskip("cupy")
+    pages = np.random.default_rng(0).random((2, 3, 4, 8, 8)).astype(np.float32)
+    widget = Show3D(cupy.asarray(pages))
+    assert (widget.n_pages, widget.panels_per_page, widget.n_panels) == (2, 3, 6)
+    widget.free()

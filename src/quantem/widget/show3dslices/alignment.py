@@ -28,7 +28,7 @@ DFT_REGION_FACTOR = 1.5
 
 
 def estimate_global_slice_alignment(stack: np.ndarray) -> dict:
-    """Fit one row/col display shift per slice through a ``(nz, ny, nx)`` stack.
+    """Fit one row/col display shift per slice through a ``(slices, rows, cols)`` stack.
 
     Adjacent slices are registered after median subtraction, Gaussian
     high-pass filtering and Hann windowing; the adjacent shifts are summed into

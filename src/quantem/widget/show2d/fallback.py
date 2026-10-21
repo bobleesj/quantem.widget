@@ -21,9 +21,21 @@ import numpy as np
 
 from quantem.widget.colormap import auto_window, colorize, contrast_uint8, display_window, signed_log1p
 from quantem.widget.render.figure import format_scale_label, round_to_nice, static_overlay_font
+from quantem.widget.utils.array import bin2d
 
 
 _IDENTITY_PALETTE = ("#2e7d32", "#c62828", "#d81b60", "#1565c0", "#f9a825", "#6a1b9a")
+
+
+def _panel_line_color(widget, panel: int) -> str:
+    """Inset-curve color of one panel: its marker color, else the identity palette entry.
+
+    The browser, the PNG preview and the SVG export draw the same curve, so
+    an empty ``marker_colors`` must not leave the SVG curve without a stroke.
+    """
+    if panel < len(widget.marker_colors) and widget.marker_colors[panel]:
+        return str(widget.marker_colors[panel])
+    return _IDENTITY_PALETTE[panel % len(_IDENTITY_PALETTE)]
 
 
 class Show2DStaticPng:
@@ -43,7 +55,7 @@ class Show2DStaticPng:
         """
         gap_color = str(self.inter_panel_gap_color or "")
         return {
-            "inter_panel_gap_px": max(0, int(self.inter_panel_gap_px)),
+            "panel_gap_px": max(0, int(self.panel_gap_px)),
             "inter_panel_gap_color": gap_color,
             "gallery_outer_border_px": max(0, int(self.gallery_outer_border_px)),
             "gallery_outer_border_color": str(self.gallery_outer_border_color or gap_color),
@@ -83,7 +95,7 @@ class Show2DStaticPng:
         # RGB panels bypass the contrast pipeline entirely: their range is the
         # fixed display-ready [0, 1], and they are excluded from linked-contrast
         # merging so a [0, 1] overlay never drags a counts-scaled panel's window.
-        is_rgb = [i < len(self.is_rgb) and bool(self.is_rgb[i]) for i in range(n_frames)]
+        is_rgb = list(self.is_rgb)
         gray = [i for i in range(n_frames) if not is_rgb[i]]
 
         has_absolute = self.vmin is not None and self.vmax is not None
@@ -172,11 +184,9 @@ class Show2DStaticPng:
         specs: list[dict] = []
         display_rgb = self._display_rgb or [None] * len(frames)
         for i in self._visible_panels():
-            if i >= len(frames):
-                continue
             label = self._panel_title_for_index(i) if self.show_panel_titles else ""
-            panel_rgb = display_rgb[i] if i < len(display_rgb) else None
-            frame = panel_rgb if panel_rgb is not None else frames[i]
+            panel_rgb = display_rgb[i]
+            frame = self._flipped(panel_rgb if panel_rgb is not None else frames[i], i)
             specs.append({
                 # RGB panels pass their display-ready pixels straight through:
                 # no colormap, no log, no contrast window (stats stay luminance).
@@ -217,6 +227,19 @@ class Show2DStaticPng:
                     "panel_index": other,
                 })
         return specs
+
+    def _flipped(self, frame: np.ndarray, panel: int) -> np.ndarray:
+        """``frame`` (gray or RGB) mirrored as the browser mirrors the panel; views, no copy.
+
+        ``image_flips_*`` only turn the canvas in the browser, so every static
+        path (preview, SVG, ``save_image``) flips here or it shows the panel
+        the other way round.
+        """
+        if panel < len(self.image_flips_vertical) and self.image_flips_vertical[panel]:
+            frame = frame[::-1]
+        if panel < len(self.image_flips_horizontal) and self.image_flips_horizontal[panel]:
+            frame = frame[:, ::-1]
+        return frame
 
     def _panel_cmap_for_index(self, panel: int) -> str:
         """Return a panel-specific colormap or the widget fallback colormap."""
@@ -270,12 +293,12 @@ class Show2DStaticPng:
         height: int,
         width: int,
         *,
-        half_shape: tuple[float, float] | None = None,
+        half_shape: tuple[float, float],
     ) -> tuple[slice, slice]:
         """Crop around an ROI for the saved-notebook zoom panel."""
         center_row = float(roi.get("row", height / 2.0))
         center_col = float(roi.get("col", width / 2.0))
-        half_h, half_w = half_shape or Show2DStaticPng._static_roi_extent(roi)
+        half_h, half_w = half_shape
         # The saved zoom panel should show the ROI evidence itself, not the
         # whole surrounding field. Keep a small outline margin so the ROI border
         # is visible while most pixels come from the selected region.
@@ -326,51 +349,74 @@ class Show2DStaticPng:
             })
         return zooms
 
-    @staticmethod
-    def _center_crop_slices(height: int, width: int, zoom: float) -> tuple[slice, slice]:
-        """Central 1/zoom crop, matching the live widget's zoomed viewport.
+    def _static_view_window(self, height: int, width: int) -> tuple[int, int, int, int]:
+        """Image rows and columns the live panel shows, ``(row0, row1, col0, col1)``; it may run past the image.
 
-        The widget at zoom z (pan 0) scales the full image about the canvas
-        center, so the visible region is the central ``height/z x width/z``
-        window. The static PNG must show the same pixels or the fallback
-        looks nothing like the screenshot the user saved."""
-        if zoom <= 1:
-            return slice(0, height), slice(0, width)
-        crop_h = max(1, math.floor(height / zoom + 0.5))
-        crop_w = max(1, math.floor(width / zoom + 0.5))
-        top = (height - crop_h) // 2
-        left = (width - crop_w) // 2
-        return slice(top, top + crop_h), slice(left, left + crop_w)
+        The browser centers ``(zoom_row, zoom_col)`` (default the image center)
+        at ``initial_zoom``, lets the view run past the image edge, and syncs the
+        viewport it settled on as ``view_box``. The PNG preview, the SVG export
+        and their scale bars all use this one window, so none of them shows or
+        measures another region than the widget did.
+        """
+        if len(self.view_box) == 4:
+            row0, row1, col0, col1 = (float(value) for value in self.view_box)
+            top, left = math.floor(row0), math.floor(col0)
+            return top, max(top + 1, math.ceil(row1)), left, max(left + 1, math.ceil(col1))
+        zoom = min(max(float(self.initial_zoom) or 1.0, 0.5), 20.0)
+        rows = max(1, math.floor(height / zoom + 0.5))
+        cols = max(1, math.floor(width / zoom + 0.5))
+        center_row = height / 2 if self.zoom_row is None else float(self.zoom_row)
+        center_col = width / 2 if self.zoom_col is None else float(self.zoom_col)
+        top, left = math.floor(center_row - rows / 2), math.floor(center_col - cols / 2)
+        return top, top + rows, left, left + cols
 
-    @staticmethod
-    def _downsample_static_frame(frame: np.ndarray, max_px: int) -> np.ndarray:
-        """Area-downsample a frame for notebook PNG fallback rendering."""
-        if max_px <= 0:
-            return frame
-        height, width = frame.shape[-2:]
-        factor = max(1, int(math.ceil(max(height, width) / max_px)))
-        if factor == 1:
-            return frame
-        trimmed_h = max(1, height // factor) * factor
-        trimmed_w = max(1, width // factor) * factor
-        trimmed = frame[:trimmed_h, :trimmed_w]
-        return trimmed.reshape(
-            trimmed_h // factor,
-            factor,
-            trimmed_w // factor,
-            factor,
-        ).mean(axis=(1, 3))
+    def _spec_window(self, spec: dict) -> tuple[int, int, int, int]:
+        """The view window of one planned panel; an ROI zoom panel is already its own crop and shows whole."""
+        height, width = spec["frame"].shape[:2]
+        if spec.get("roi_zoom_panel"):
+            return 0, height, 0, width
+        return self._static_view_window(height, width)
+
+    def _static_window_rgb(self, spec: dict, window: tuple[int, int, int, int], factor: int) -> np.ndarray:
+        """uint8 RGB of one panel's view window, area-binned by ``factor``.
+
+        Binning averages atomic-lattice detail instead of aliasing it. The part
+        of the window past the image edge stays black, as the widget's empty
+        canvas does, so the panel keeps the window's aspect and the scale bar
+        measures the same pixels.
+        """
+        frame = spec["frame"]
+        height, width = frame.shape[:2]
+        row0, row1, col0, col1 = window
+        out_rows, out_cols = max(1, (row1 - row0) // factor), max(1, (col1 - col0) // factor)
+        canvas = np.zeros((out_rows, out_cols, 3), dtype=np.uint8)
+        inside = frame[max(0, row0):min(height, row1), max(0, col0):min(width, col1)]
+        if inside.shape[0] < factor or inside.shape[1] < factor:
+            return canvas
+        if spec.get("rgb"):
+            # RGB panels bypass the colormap: bin each channel and pass the display-ready pixels through.
+            binned = np.stack([bin2d(inside[..., channel], factor) for channel in range(3)], axis=-1)
+            rgb = (np.clip(binned, 0.0, 1.0) * 255).astype(np.uint8)
+        else:
+            rgb = self._static_panel_rgb(bin2d(inside, factor), spec["vmin"], spec["vmax"], spec["cmap"],
+                                         apply_log=spec["apply_log"])
+        if rgb.shape[:2] == (out_rows, out_cols):
+            return rgb
+        top, left = (max(0, row0) - row0) // factor, (max(0, col0) - col0) // factor
+        rows, cols = min(rgb.shape[0], out_rows - top), min(rgb.shape[1], out_cols - left)
+        canvas[top:top + rows, left:left + cols] = rgb[:rows, :cols]
+        return canvas
 
     def _static_canvas_css_px(self) -> float:
         """CSS width of the live panel canvas, the length every JS overlay
         constant (16px font, 12px margin, 60px bar target) is relative to.
 
-        Port of js/show2d/index.tsx: the ``size`` trait when set, else
+        Port of js/show2d/index.tsx: the ``panel_width_px`` trait when set, else
         SINGLE_IMAGE_TARGET (500) for one image / GALLERY_IMAGE_TARGET (300)
         for a gallery. Without this the static overlays would be drawn for a
         fictitious canvas size and read visibly smaller than the widget's."""
-        if self.size > 0:
-            return float(self.size)
+        if self.panel_width_px > 0:
+            return float(self.panel_width_px)
         return 300.0 if self.n_images > 1 else 500.0
 
     def _static_overlay_texts(self, specs: list[dict] | None = None,
@@ -402,11 +448,18 @@ class Show2DStaticPng:
         texts: list[tuple[str, str, str, float]] = []
         for spec in specs:
             panel_index = int(spec.get("panel_index", len(texts)))
-            if not self.scale_bar_visible or (bar_panels and panel_index not in bar_panels):
+            if not self.show_scale_bar or (bar_panels and panel_index not in bar_panels):
                 texts.append((spec["label"], zoom_text, "", 0.0))
                 continue
             full_w = spec["frame"].shape[1]
-            effective_zoom = zoom * css_px / full_w
+            # the panel spans css_px over the columns it shows: the synced view box,
+            # the whole crop of an ROI zoom panel, else the image width over the zoom
+            if spec.get("roi_zoom_panel"):
+                effective_zoom = css_px / full_w
+            elif len(self.view_box) == 4:
+                effective_zoom = css_px / (float(self.view_box[3]) - float(self.view_box[2]))
+            else:
+                effective_zoom = zoom * css_px / full_w
             # 60 CSS px target bar, rounded to a nice physical length
             if self.scale_bar_length is not None and float(self.scale_bar_length) > 0:
                 nice = float(self.scale_bar_length)
@@ -525,14 +578,9 @@ class Show2DStaticPng:
             box_x = max(0.0, min(1.0 - box_w, left))
             box_y = max(0.0, min(1.0 - box_h, 1.0 - top - box_h))
         else:
-            # ``margin`` is in CSS px; /300 maps it onto a 300 px gallery panel's axes fractions.
-            margin = spec.get("margin", (0.035, 0.035))
-            if isinstance(margin, (int, float)):
-                margin_x = margin_y = float(margin) / 300.0
-            else:
-                margin_values = list(margin)
-                margin_x = float(margin_values[0]) / 300.0
-                margin_y = float(margin_values[1]) / 300.0
+            # ``margin`` is in CSS px (12 by default, as in the browser and the SVG);
+            # /300 maps it onto a 300 px gallery panel's axes fractions.
+            margin_x, margin_y = (float(value) / 300.0 for value in spec.get("margin", (12.0, 12.0)))
             margin_x = max(0.0, min(0.45, margin_x))
             margin_y = max(0.0, min(0.45, margin_y))
             if "right" in position:
@@ -547,7 +595,7 @@ class Show2DStaticPng:
                 box_y = 0.5 - box_h / 2
             else:
                 box_y = 1.0 - box_h - margin_y
-            if self.scale_bar_visible and position == "bottom-right":
+            if self.show_scale_bar and position == "bottom-right":
                 box_y += 0.10
         inset = ax.inset_axes([box_x, box_y, box_w, box_h])
         background_alpha = max(0.0, min(1.0, float(spec.get("background_alpha", 0.68))))
@@ -665,7 +713,7 @@ class Show2DStaticPng:
         if not specs:
             return None
         chrome = self._gallery_export_chrome()
-        gap_px = chrome["inter_panel_gap_px"]
+        gap_px = chrome["panel_gap_px"]
         gap_color = chrome["inter_panel_gap_color"]
         outer_px = chrome["gallery_outer_border_px"]
         outer_color = chrome["gallery_outer_border_color"]
@@ -688,16 +736,14 @@ class Show2DStaticPng:
         max_px = max(160, min(max_px, budget_px))
         css_w = self._static_canvas_css_px()
         overlays = self._static_overlay_texts(specs, css_px=css_w)
-        zoom = min(max(float(self.initial_zoom) or 1.0, 0.5), 20.0)
         has_roi_zoom = any(bool(spec.get("roi_zoom_panel")) for spec in specs)
         ncols = min(n_panels, 4) if has_roi_zoom else max(1, min(self.ncols, n_panels))
         nrows = (n_panels + ncols - 1) // ncols
         # cells sized to the panels' cropped aspect so every image fills its
         # cell exactly: a taller cell would pad panels with white and make the
         # horizontal gutters read wider than the vertical ones
-        first_height, first_width = specs[0]["frame"].shape[:2]
-        first_rows, first_cols = self._center_crop_slices(first_height, first_width, zoom)
-        aspect = (first_rows.stop - first_rows.start) / (first_cols.stop - first_cols.start)
+        windows = [self._spec_window(spec) for spec in specs]
+        aspect = (windows[0][1] - windows[0][0]) / (windows[0][3] - windows[0][2])
         # inter-panel gutter is the widget's own gallery gap (CSS px of the
         # live canvas), identical horizontally and vertically
         gap_frac = gap_px / css_w
@@ -744,22 +790,12 @@ class Show2DStaticPng:
         # the live canvas is css_w CSS px wide but the PNG panel is max_px
         # device px wide, so every CSS-px size renders scaled by max_px/css_w
         points_per_css_px = (max_px / css_w) * 72.0 / dpi
-        for idx, (spec, (label, zoom_text, bar_text, bar_css)) in enumerate(zip(specs, overlays)):
+        for idx, (spec, window, (label, zoom_text, bar_text, bar_css)) in enumerate(zip(specs, windows, overlays)):
             ax = fig.add_subplot(grid[idx // ncols, idx % ncols])
             ax.axis("off")
-            frame = spec["frame"]
-            rows, cols = self._center_crop_slices(frame.shape[0], frame.shape[1], zoom)
-            if spec.get("rgb"):
-                # RGB panels bypass the colormap: bin each channel and pass the
-                # display-ready pixels straight through, matching the live view.
-                cropped = frame[rows, cols]
-                binned_channels = [self._downsample_static_frame(cropped[..., channel], max_px=max_px)
-                                   for channel in range(3)]
-                rgb = (np.clip(np.stack(binned_channels, axis=-1), 0.0, 1.0) * 255).astype(np.uint8)
-            else:
-                binned = self._downsample_static_frame(frame[rows, cols], max_px=max_px)
-                rgb = self._static_panel_rgb(binned, spec["vmin"], spec["vmax"],
-                                             spec["cmap"], apply_log=spec["apply_log"])
+            row0, row1, col0, col1 = window
+            rgb = self._static_window_rgb(spec, window, factor=max(1, math.ceil(max(row1 - row0, col1 - col0) / max_px)))
+            rows, cols = slice(row0, row1), slice(col0, col1)
             ax.imshow(rgb, interpolation="nearest")
             bin_h, bin_w = rgb.shape[:2]
             ax.set(xlim=(-0.5, bin_w - 0.5), ylim=(bin_h - 0.5, -0.5))
@@ -805,7 +841,7 @@ class Show2DStaticPng:
                         fontsize=title_px * points_per_css_px, fontweight="bold",
                         fontfamily=font_family, ha="center", va="top",
                         path_effects=stroke)
-            if self.scale_bar_visible:
+            if self.show_scale_bar:
                 # drawScaleBarHiDPI (js/figure.ts): margin 12, bar 5 px thick,
                 # 16px label centered 4px above the bar, optional zoom badge
                 # on the opposite corner sharing the bar's bottom edge.
@@ -828,16 +864,11 @@ class Show2DStaticPng:
                             path_effects=stroke)
             panel_index = int(spec.get("panel_index", idx))
             if panel_index < len(self.inset_plots):
-                line_color = (
-                    self.marker_colors[panel_index]
-                    if panel_index < len(self.marker_colors)
-                    else _IDENTITY_PALETTE[panel_index % len(_IDENTITY_PALETTE)]
-                )
                 self._draw_static_inset_plot(
                     ax,
                     self.inset_plots[panel_index],
                     panel_index=panel_index,
-                    line_color=line_color,
+                    line_color=_panel_line_color(self, panel_index),
                 )
         png_buffer = io.BytesIO()
         fig.savefig(png_buffer, format="png", dpi=dpi, facecolor=fig.get_facecolor(),

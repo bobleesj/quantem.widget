@@ -74,13 +74,13 @@ def magnetite():
 def saed():
     """Detected and indexed spots of the synthetic [001] primitive-cubic pattern, run once per module."""
     center = (255 / 2, 255 / 2)
-    widget = ShowDiffraction(lattice_pattern(), center=center, bf_radius=14, k_pixel_size=K_SAED, verbose=False)
+    widget = ShowDiffraction(lattice_pattern(), bright_field_center_px=center, bright_field_radius_px=14, detector_sampling_inv_A=K_SAED, verbose=False)
     widget.detect_spots(max_spots=12)
     widget.index_spots(Phase.from_cubic("Cubic", 1.984, absences="none"))
     return widget
 
 
-def numpy_radial_profile(frame, center, mask=None, angular_range=None, ellipse=None):
+def numpy_radial_profile(frame, center, mask=None, ellipse=None):
     """The float64 NumPy radial profile the widget used before it moved to torch (np.hypot,
     np.digitize, np.bincount): the reference the device profile must reproduce."""
     n_rows, n_cols = frame.shape
@@ -90,8 +90,6 @@ def numpy_radial_profile(frame, center, mask=None, angular_range=None, ellipse=N
     d_col = np.arange(n_cols, dtype=np.float64)[None, :] - center[1]
     radii = np.hypot(*lattice.ellipse_to_circle(d_row, d_col, *ellipse)) if ellipse else np.hypot(d_row, d_col)
     keep = np.ones(frame.shape, bool) if mask is None else ~mask
-    if angular_range is not None:
-        keep &= lattice.in_wedge(np.degrees(np.arctan2(d_row, d_col)) % 360.0, *angular_range)
     values = frame.astype(np.float64)[keep]
     edges = np.linspace(0.0, max_radius, n_bins + 1)
     indices = np.digitize(radii[keep], edges) - 1
@@ -112,6 +110,9 @@ def test_an_unknown_keyword_raises_and_a_trait_keyword_still_sets():
     # traitlets only warns about a keyword it does not know, so a typo did nothing
     with pytest.raises(TypeError, match="unexpected keyword argument 'k_pixelsize'"):
         ShowDiffraction(ring_pattern(), k_pixelsize=0.01, verbose=False)
+    # the keyword of earlier releases is not an alias of detector_sampling_inv_A
+    with pytest.raises(TypeError, match="unexpected keyword argument 'k_pixel_size'"):
+        ShowDiffraction(ring_pattern(), k_pixel_size=0.01, verbose=False)
     assert ShowDiffraction(ring_pattern(), dp_scale_mode="linear", verbose=False).dp_scale_mode == "linear"
 
 
@@ -135,6 +136,17 @@ def test_phase_geometry_matches_textbook_values():
         card.d_spacing((1, 1, 1))
 
 
+@pytest.mark.parametrize("direction", [-np.inf, np.inf])
+def test_hexagonal_ring_family_stays_unique_at_rounding_boundary(direction):
+    phase = library_phase("ZnO")
+    phase.g_star = np.nextafter(phase.g_star, direction)
+    spacing = phase.d_spacing((1, 1, 0))
+    family = [r for r in phase.reflections() if abs(r["d"] - spacing) < 1e-12]
+    assert len(family) == 1
+    assert family[0]["hkl_str"] == "110"
+    assert family[0]["multiplicity"] == 6
+
+
 def test_every_library_phase_builds():
     for name in PHASE_LIBRARY:
         phase = library_phase(name)
@@ -149,7 +161,7 @@ def test_every_library_phase_builds():
 def test_ring_radii_match_known_d_spacings(magnetite):
     assert magnetite.analysis_status == ""
     assert magnetite.k_calibrated
-    assert magnetite.k_pixel_size == pytest.approx(K_SYNTH, rel=5e-3)
+    assert magnetite.detector_sampling_inv_A == pytest.approx(K_SYNTH, rel=5e-3)
     assert magnetite.calibration_rms_px < 1.0
     by_hkl = {ring["hkl"]: ring for ring in magnetite.rings}
     assert set(FE3O4_D) <= set(by_hkl)
@@ -165,8 +177,8 @@ def test_auto_indexes_the_magnetite_rings_at_every_seed():
         widget.phase_name = "Fe3O4"
         widget.run_auto(max_rings=5)
         assert [ring["hkl"] for ring in widget.rings] == list(FE3O4_D), seed
-        assert widget.k_pixel_size == pytest.approx(K_SYNTH, rel=1e-3), seed
-        assert widget.k_pixel_size == pytest.approx(frozen_k, rel=1e-6), seed
+        assert widget.detector_sampling_inv_A == pytest.approx(K_SYNTH, rel=1e-3), seed
+        assert widget.detector_sampling_inv_A == pytest.approx(frozen_k, rel=1e-6), seed
         assert widget.analysis_status == "" and widget.phase_match.startswith("Fe3O4 (spinel): 5/5 matched"), seed
 
 
@@ -254,12 +266,12 @@ def test_center_detection_recovers_known_center():
     pattern = ring_pattern(center=center)
     widget = ShowDiffraction(pattern, verbose=False)
     # bright-field disk centroid, then the two symmetry estimators
-    assert (widget.center_row, widget.center_col) == pytest.approx(center, abs=1.0)
+    assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px) == pytest.approx(center, abs=1.0)
     for method in ("symmetry", "phase_corr", "auto"):
-        picked = lattice.pick_center(pattern, method=method, guess=(widget.center_row, widget.center_col))
+        picked = lattice.pick_center(pattern, method=method, guess=(widget.bright_field_center_row_px, widget.bright_field_center_col_px))
         assert (picked["row"], picked["col"]) == pytest.approx(center, abs=0.3), method
     widget._request = {"action": "refine_center", "args": [], "seq": 1}
-    assert (widget.center_row, widget.center_col) == pytest.approx(center, abs=0.3)
+    assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px) == pytest.approx(center, abs=0.3)
     assert widget.analysis_status.startswith("Center (")
     assert widget._request == {}
 
@@ -341,7 +353,7 @@ def test_detection_denoise_picks_anscombe_and_display_denoise_is_view_only():
 def test_fit_ellipse_recovers_distortion():
     # one ring, so the annulus around it holds no neighbour
     pattern = ring_pattern(ratio=1.06, angle_deg=30.0, lines={"220": FE3O4_D["220"]})
-    widget = ShowDiffraction(pattern, center=(255.5, 255.5), bf_radius=10, verbose=False)
+    widget = ShowDiffraction(pattern, bright_field_center_px=(255.5, 255.5), bright_field_radius_px=10, verbose=False)
     widget._request = {"action": "add_ring", "args": [1.0 / (FE3O4_D["220"] * K_SYNTH)], "seq": 1}
     widget._request = {"action": "fit_ellipse", "args": [], "seq": 2}
     assert widget.ellipse_ratio == pytest.approx(1.06, abs=0.01)
@@ -377,15 +389,14 @@ def test_radial_profile_matches_the_float64_numpy_reference(device):
     mask[:100, :170] = True
     # an integer center puts exact radii (hypot(54, 240) = 246) on the integer bin edges
     for center in [(256.0, 256.0), (255.5, 255.5), (243.37, 261.81)]:
-        for options in [{}, {"mask": mask}, {"angular_range": (350.0, 10.0), "mask": mask}, {"angular_range": (45.0, 225.0)}, {"ellipse": (1.07, 23.0)}]:
+        for options in [{}, {"mask": mask}, {"ellipse": (1.07, 23.0)}]:
             for frame in (counts, smooth):
                 radii, intensity, standard_error = numpy_radial_profile(frame, center, **options)
                 ellipse = options.get("ellipse")
-                got = lattice.radial_profile_px(
+                got = lattice.radial_profile(
                     frame if device == "numpy" else torch.from_numpy(frame).to(device),
                     center=center,
                     mask=options.get("mask"),
-                    angular_range=options.get("angular_range"),
                     ellipse_ratio=ellipse[0] if ellipse else 1.0,
                     ellipse_angle=ellipse[1] if ellipse else 0.0,
                     ellipse_corrected=ellipse is not None,
@@ -427,10 +438,10 @@ def test_a_center_click_profiles_each_ring_frame_once(monkeypatch):
     widget.frame_idx = 0
     widget.show_profile = True
     calls = []
-    profile = lattice.radial_profile_px
-    monkeypatch.setattr(lattice, "radial_profile_px", lambda frame, **kwargs: calls.append(1) or profile(frame, **kwargs))
+    profile = lattice.radial_profile
+    monkeypatch.setattr(lattice, "radial_profile", lambda frame, **kwargs: calls.append(1) or profile(frame, **kwargs))
     # the page sends a click as one message holding both coordinates
-    widget.set_state({"center_row": 254.0, "center_col": 257.5})
+    widget.set_state({"bright_field_center_row_px": 254.0, "bright_field_center_col_px": 257.5})
     assert len(calls) == 2  # frame 0 (its rings and the profile panel) and frame 1 (one ring)
     radii, intensity, _ = numpy_radial_profile(stack[1], (254.0, 257.5))
     assert widget.rings[-1]["intensity"] == float(intensity[np.argmin(np.abs(radii - 60.0))])
@@ -440,14 +451,14 @@ def test_a_center_click_profiles_each_ring_frame_once(monkeypatch):
 
 # --- Widget state ---
 def test_request_channel_edits_spots_and_reports_failures():
-    widget = ShowDiffraction(lattice_pattern(), center=(127.5, 127.5), bf_radius=14, verbose=False)
+    widget = ShowDiffraction(lattice_pattern(), bright_field_center_px=(127.5, 127.5), bright_field_radius_px=14, verbose=False)
     widget._request = {"action": "add_spot", "args": [127.5 + SAED_SPACING_PX, 127.5], "seq": 1}
     widget._request = {"action": "add_spot", "args": [127.5, 127.5 + SAED_SPACING_PX], "seq": 2}
     assert [s["id"] for s in widget.spots] == [1, 2]
     assert widget.spots[1]["angle_deg"] == pytest.approx(90.0, abs=0.5)
     assert widget.spots[0]["d_spacing"] is None  # uncalibrated
     widget._request = {"action": "calibrate_from_spot", "args": [widget.spots[0]["row"], widget.spots[0]["col"], 1.984], "seq": 3}
-    assert widget.k_pixel_size == pytest.approx(K_SAED, rel=5e-3)
+    assert widget.detector_sampling_inv_A == pytest.approx(K_SAED, rel=5e-3)
     assert widget.spots[1]["d_spacing"] == pytest.approx(1.984, rel=5e-3)
     widget._request = {"action": "remove_spot", "args": [1], "seq": 4}
     assert [s["id"] for s in widget.spots] == [2]
@@ -465,7 +476,7 @@ def test_state_round_trip_and_measurements(saed, tmp_path):
     saed.save(path)
     envelope = json.loads(path.read_text())
     assert envelope["widget_name"] == "ShowDiffraction"
-    restored = ShowDiffraction(lattice_pattern(), center=(0.0, 0.0), bf_radius=1.0, verbose=False)
+    restored = ShowDiffraction(lattice_pattern(), bright_field_center_px=(0.0, 0.0), bright_field_radius_px=1.0, verbose=False)
     restored.load_state_dict(envelope["state"])
     assert restored.state_dict() == saed.state_dict()
     assert restored.zone_axis == "[001]"
@@ -475,8 +486,8 @@ def test_state_round_trip_and_measurements(saed, tmp_path):
     csv_path = ShowDiffraction.measurements_from_state(envelope["state"], tmp_path / "m.csv")
     header = csv_path.read_text().splitlines()[0]
     assert header.startswith("id,kind,raw_row,raw_col,row,col") and header.endswith("hkl,hkl_candidates,note")
-    with pytest.raises(ValueError):
-        ShowDiffraction.measurements_from_state({"widget_name": "Show2D", "state": {}})
+    with pytest.raises(ValueError, match="cannot load into 'ShowDiffraction'"):
+        ShowDiffraction.measurements_from_state({"schema": "quantem.widget-state/2", "widget_name": "Show2D", "state": {}})
 
 
 def test_export_html_structure(saed, tmp_path):
@@ -490,7 +501,7 @@ def test_export_html_structure(saed, tmp_path):
     assert model["_anywidget_id"] == "quantem.widget.showdiffraction.widget.ShowDiffraction"
     assert model["offline"] is True and model["export_enabled"] is False
     assert len(model["spots"]) == 12 and model["zone_axis"] == "[001]"
-    assert model["k_pixel_size"] == K_SAED and model["_request"] == {}
+    assert model["detector_sampling_inv_A"] == K_SAED and model["_request"] == {}
     assert "_spot_add_request" not in model and "pixel_size" not in model
     assert saed.export_status.startswith("Exported saed.html (")
     widget = ShowDiffraction(np.ones((32, 32), np.float32), verbose=False)
@@ -510,3 +521,20 @@ def test_hot_pixels_are_kept_unless_removal_is_asked_for(capsys):
     removed = ShowDiffraction(frame, device="cpu", remove_hot_pixels=True, verbose=False)
     assert removed._frame(0)[5, 7] == 0 and removed._frame(0)[40, 41] == 0
     assert "zeroed 2 hot pixels" in capsys.readouterr().out
+
+
+def test_a_dataset_in_the_format_unit_calibrates_the_pattern(capsys):
+    # only "1/Å" and "1/A" were read: "1/angstrom" (what a .qem file writes) left the pattern uncalibrated without a message
+    from quantem.widget.adapters.core import make_dataset
+
+    pattern = lattice_pattern()
+    for unit, step in (("1/angstrom", K_SAED), ("1/nm", K_SAED * 10)):
+        widget = ShowDiffraction(make_dataset(pattern, sampling=(step, step), units=(unit, unit)), verbose=False)
+        assert widget.k_calibrated and widget.detector_sampling_inv_A == pytest.approx(K_SAED) and widget.calibration_source == "metadata"
+    assert not ShowDiffraction(make_dataset(pattern), verbose=False).k_calibrated
+    # mrad cannot become 1/angstrom without the voltage: the pattern opens uncalibrated and one line says why
+    capsys.readouterr()
+    assert not ShowDiffraction(make_dataset(pattern, sampling=(0.5, 0.5), units=("mrad", "mrad")), verbose=False).k_calibrated
+    assert "detector axes are in mrad" in capsys.readouterr().out
+    with pytest.raises(ValueError, match="detector_sampling_inv_A=0.5 contradicts"):
+        ShowDiffraction(make_dataset(pattern, sampling=(K_SAED, K_SAED), units=("1/angstrom", "1/angstrom")), detector_sampling_inv_A=0.5, verbose=False)

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { frameKeyTarget, writeLiveFrameControls } from "./playback";
+import { COLORMAPS } from "../display/colormaps";
+import { signedLog1p } from "../display/stats";
+import { frameKeyTarget, renderFramePlayback, renderFrameScaledPlayback, renderPackedPanelPlayback, writeLiveFrameControls } from "./playback";
 
 describe("playback keys", () => {
   it("a held ArrowRight steps one frame per press from the frame on screen", () => {
@@ -48,4 +50,46 @@ describe("live frame controls", () => {
     writeLiveFrameControls(b.root, b.slider, null, 7, 20, false);
     expect(b.root.querySelector("[data-show3d-playback-count]")!.textContent).toBe("8/20");
   });
+});
+
+describe("CPU playback colormap", () => {
+  // Values across and beyond the window, its exact ends, NaN and infinities, and a deterministic spread.
+  const WIDTH = 64;
+  const HEIGHT = 48;
+  let state = 7;
+  const random = () => (state = (state * 1103515245 + 12345) >>> 0) / 2 ** 32;
+  const data = Float32Array.from({ length: WIDTH * HEIGHT }, (_, i) => [Number.NaN, Infinity, -Infinity, -2, 3, 9][i % 97] ?? -4 + 16 * random());
+  const lut = COLORMAPS.inferno;
+
+  /** The playback formula: signed log1p, then the float64 floor of (v - vmin) * 255 / span, clamped; NaN takes entry 0. */
+  function reference(values: number[], vmin: number, vmax: number, logScale: boolean): Uint8ClampedArray {
+    const rgba = new Uint8ClampedArray(values.length * 4);
+    const invRange = vmax > vmin ? 255 / (vmax - vmin) : 0;
+    values.forEach((raw, k) => {
+      const value = logScale ? signedLog1p(raw) : raw;
+      const entry = value <= vmin ? 0 : value >= vmax ? 255 : Number.isNaN(value) ? 0 : Math.floor((value - vmin) * invRange);
+      rgba.set([lut[3 * entry], lut[3 * entry + 1], lut[3 * entry + 2], 255], 4 * k);
+    });
+    return rgba;
+  }
+
+  for (const [vmin, vmax, logScale] of [[-2, 9, false], [0.3, 2.1, true], [3, 3, false]] as const) {
+    it(`draws full, packed and scaled frames with the playback formula (window ${vmin} to ${vmax}, log ${logScale})`, () => {
+      const full = new Uint8ClampedArray(WIDTH * HEIGHT * 4);
+      renderFramePlayback(data, full, lut, vmin, vmax, logScale);
+      expect(full).toEqual(reference(Array.from(data), vmin, vmax, logScale));
+      // the third of four 16-column panels
+      const panel = new Uint8ClampedArray(16 * HEIGHT * 4);
+      renderPackedPanelPlayback(data, WIDTH, 32, 16, HEIGHT, panel, lut, vmin, vmax, logScale);
+      const panelValues = Array.from({ length: 16 * HEIGHT }, (_, k) => data[Math.floor(k / 16) * WIDTH + 32 + (k % 16)]);
+      expect(panel).toEqual(reference(panelValues, vmin, vmax, logScale));
+      // every third column of every second row
+      const xMap = Uint32Array.from({ length: WIDTH / 4 }, (_, x) => 3 * x);
+      const yMap = Uint32Array.from({ length: HEIGHT / 2 }, (_, y) => 2 * y * WIDTH);
+      const scaled = new Uint8ClampedArray(xMap.length * yMap.length * 4);
+      renderFrameScaledPlayback(data, scaled, xMap, yMap, xMap.length, yMap.length, lut, vmin, vmax, logScale);
+      const scaledValues = Array.from({ length: xMap.length * yMap.length }, (_, k) => data[yMap[Math.floor(k / xMap.length)] + xMap[k % xMap.length]]);
+      expect(scaled).toEqual(reference(scaledValues, vmin, vmax, logScale));
+    });
+  }
 });

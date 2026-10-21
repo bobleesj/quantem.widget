@@ -24,14 +24,14 @@ panels, paged galleries and standalone HTML and GIF exports. See the
 | Colormap dropdown | `cmap`, `panel_cmaps` | Shared by default; More > Color shared unlocks per-panel colormaps |
 | Smooth toggle | `smooth` | Off by default: each data pixel is drawn as a sharp block (nearest neighbour). On: bilinear interpolation wherever the canvas enlarges a frame, its FFT or the kymograph. Display only; the data are unchanged |
 | Contrast | `auto_contrast`, `percentile_low`, `percentile_high`, `vmin`, `vmax`, `vmin_per_panel`, `vmax_per_panel`, `contrast_preset`, `log_scale` | Percentile or fixed ranges, per stack or per panel |
-| Panel layout (multi-panel) | `n_panels`, `link_panels`, `max_cols`, `panel_gap` | Panels arrange in rows; linked zoom and pan move all |
+| Panel layout (multi-panel) | `n_panels`, `link_panels`, `max_cols`, `panel_gap_px` | Panels arrange in rows; linked zoom and pan move all |
 | Panel visibility and order | `hidden_panels`, `selected_panels`, `panel_order` | Hover actions collapse or reorder panels without touching data |
 | Page controls (paged galleries) | `page_idx`, `n_pages`, `panels_per_page`, `page_starred`; `star_page()` | Shows and stars one page of panels at a time |
 | Local panel annotations | `panel_annotations` | In-image labels per panel, placed by corner, point or box |
-| Geometric panel overlays | `panel_overlays` | Circle, rectangle and square overlays in data or relative coordinates; More > Overlay Edit moves them live |
+| Geometric panel overlays | `panel_overlays` | Circle and rectangle overlays in data or relative coordinates; More > Overlay Edit moves them live |
 | Rich panel titles | `panel_titles`, `panel_title_spans` | Titles may carry `text` / `math` / `color` spans such as `λ` and `χ²` |
 | Viewer chrome preset | `ui_mode` plus `show_title`, `show_stats`, `show_scale_bar` | Shared display presets; see [Viewer UI controls](viewer-ui) |
-| Scale bar | `pixel_size`, `pixel_unit`, `scale_bar_visible` | Physical scale bar from `sampling` / `units` or a `Dataset3d`; the ROI preview scale bar, line-profile axis and FFT d-spacing use the same unit |
+| Scale bar | `pixel_size`, `pixel_unit`, `show_scale_bar` | Physical scale bar from `sampling` / `units` or a `Dataset3d`; the ROI preview scale bar, line-profile axis and FFT d-spacing use the same unit |
 | Statistics | `show_stats` | Optional mean/min/max/std readout. Like the ROI statistics, line profile, FFT and cursor value it describes the frame as analysed (moving average, alignment, compare and difference applied), never the denoised or frequency-filtered image |
 | FFT | `show_fft`, `fft_layout`, `fft_overlay_position`, `fft_overlay_size`, `fft_overlay_zoom`, `fft_window` | FFT of the current frame below, beside or inside every panel |
 | Denoise | `denoise_enabled`, `denoise`, `denoise_sigma`, `denoise_bin`, `show_denoise` | Browser-side display filter; an active reduction prints a one-line banner. Changes the image only: the measurements read the unfiltered frame |
@@ -116,11 +116,11 @@ identical limits are required.
 
 `export_html` writes one standalone file. The default embeds the exact float32
 display stack; `encoding="uint8"` writes a compact pack and accepts
-`downsample=2`, `4` or `8`. Exports above 80 MB are refused with the smaller
+`image_bin=2`, `4` or `8`. Exports above 80 MB are refused with the smaller
 options named; pass `max_mb=None` to force one.
 
 ```python
-w.export_html("review.html", encoding="uint8", downsample=2)
+w.export_html("review.html", encoding="uint8", image_bin=2)
 ```
 
 ## Animation exports

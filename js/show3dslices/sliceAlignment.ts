@@ -13,24 +13,28 @@
  * and no round-trip, which makes the Align control work offline and removes a
  * comm hop when a kernel IS attached.
  *
- * When a device is available the estimate is GPU-resident: each slice is
+ * On a hardware WebGPU device the estimate is GPU-resident: each slice is
  * uploaded once, and blur -> Hann window -> FFT -> cross-power -> inverse FFT ->
  * peak search then chain through device buffers via `WebGPUFFT.fft2DResident`.
  * Only the scalars come back - one energy per slice, one peak per pair, and the
  * small subpixel refinement region - so a 16 x 1688 x 1688 stack moves a few
  * hundred KB back instead of the ~1.2 GB that a readback per stage would cost.
  *
- * The CPU path below is a full mirror of the same algorithm for machines with no
- * WebGPU, and is what the parity tests exercise against the Python estimator.
+ * Without one, the CPU path below runs the same algorithm; the parity tests
+ * check it against the Python estimator.
  */
 
-import { WebGPUFFT, fft2d, nextPow2, type DisplayFFT } from "../display/fft";
+import { WebGPUFFT, fft2d, nextPow2, requireWebGPUFFT } from "../display/fft";
+import { selectKth } from "../display/filter";
 
 // Matches src/quantem/widget/show3dslices/alignment.py. Changing one
 // side without the other makes the browser and the kernel disagree on the shift.
 const HIGHPASS_SIGMA_PX = 12.0;
 const UPSAMPLE_FACTOR = 20;
 const DFT_REGION_FACTOR = 1.5;
+// Blur taps smaller than this fraction of the centre tap are dropped: they sit
+// below float32 resolution of the blurred value.
+const BLUR_TAP_CUTOFF = 1e-8;
 
 interface SliceAlignmentEstimate {
   rowShiftPxPerSlice: number;
@@ -42,61 +46,62 @@ interface SliceAlignmentEstimate {
   backend: "webgpu" | "cpu";
 }
 
-/** Reflect an out-of-range sample index back inside [0, n), matching numpy's "reflect" pad. */
-function reflectIndex(index: number, n: number): number {
-  if (n <= 1) return 0;
-  let i = index;
-  while (i < 0 || i >= n) {
-    if (i < 0) i = -i - 1;
-    if (i >= n) i = 2 * n - i - 1;
-  }
-  return i;
-}
-
-/** Sampled 1D Gaussian truncated at 4 sigma, normalized to unit sum. */
-function gaussianKernel1d(sigma: number): Float32Array<ArrayBuffer> {
-  const radius = Math.max(1, Math.ceil(4.0 * sigma));
-  const kernel = new Float32Array(radius * 2 + 1);
-  let sum = 0;
-  for (let i = -radius; i <= radius; i++) {
-    const value = Math.exp(-(i * i) / (2 * sigma * sigma));
-    kernel[i + radius] = value;
-    sum += value;
-  }
-  for (let i = 0; i < kernel.length; i++) kernel[i] /= sum;
-  return kernel;
+/** numpy "reflect" padding: mirror about the edge sample without repeating it (period 2(n - 1)). */
+function reflectIndex(index: number, length: number): number {
+  const period = 2 * (length - 1);
+  const folded = Math.abs(index) % period;
+  return folded < length ? folded : period - folded;
 }
 
 /**
- * Partially reorder `values` so index `k` holds the value it would have after a
- * full sort, and everything before it is no larger. Quickselect only recurses
- * into the side containing `k`, so it is O(n) where a sort is O(n log n).
+ * One axis of the high-pass blur, with the numbers alignment.py computes.
+ *
+ * Python reflect-pads the slice by ceil(4 sigma) and multiplies its FFT by
+ * exp(-2 pi^2 sigma^2 f^2) on the padded grid. That product is a circular
+ * convolution of each padded axis with the inverse DFT of the transfer
+ * function: output sample i is sum over offsets m of taps[m - low] times the
+ * unpadded sample sourceIndex[i - m + high], where the lookup folds the circular
+ * wrap and the reflect pad together. A spatial Gaussian truncated at 4 sigma
+ * with mirrored edges (the previous browser blur) differed from it by up to
+ * 1e-2 near the borders, enough to move a shift estimate by a refinement step.
  */
-function selectInPlace(values: Float32Array, k: number): number {
-  let left = 0;
-  let right = values.length - 1;
-  while (left < right) {
-    // Median-of-three pivot keeps already-sorted input off the O(n^2) path.
-    const middle = (left + right) >> 1;
-    if (values[middle] < values[left]) { const swap = values[middle]; values[middle] = values[left]; values[left] = swap; }
-    if (values[right] < values[left]) { const swap = values[right]; values[right] = values[left]; values[left] = swap; }
-    if (values[right] < values[middle]) { const swap = values[right]; values[right] = values[middle]; values[middle] = swap; }
-    const pivot = values[middle];
-    let i = left;
-    let j = right;
-    while (i <= j) {
-      while (values[i] < pivot) i++;
-      while (values[j] > pivot) j--;
-      if (i <= j) {
-        const swap = values[i]; values[i] = values[j]; values[j] = swap;
-        i++; j--;
-      }
-    }
-    if (k <= j) right = j;
-    else if (k >= i) left = i;
-    else break;
-  }
-  return values[k];
+interface BlurAxis {
+  low: number;
+  high: number;
+  taps: Float64Array;
+  sourceIndex: Uint32Array<ArrayBuffer>;
+}
+
+/** A BlurAxis with its taps and source lookup on the device. */
+type BlurAxisBuffers = { low: number; high: number; taps: GPUBuffer; sourceIndex: GPUBuffer };
+
+function blurAxis(length: number, sigma: number): BlurAxis {
+  const pad = Math.max(1, Math.ceil(4 * sigma));
+  const padded = length + 2 * pad;
+  const transfer = Float64Array.from({ length: padded }, (_, bin) => {
+    const frequency = (bin < (padded + 1) >> 1 ? bin : bin - padded) / padded;
+    return Math.exp(-2 * Math.PI ** 2 * sigma ** 2 * frequency ** 2);
+  });
+  // The kernel is even, so one tap per distance; distances past half the
+  // padded length wrap onto the other side.
+  const half = padded >> 1;
+  const byDistance = Float64Array.from({ length: half + 1 }, (_, distance) => {
+    let sum = 0;
+    for (let bin = 0; bin < padded; bin++) sum += transfer[bin] * Math.cos((2 * Math.PI * bin * distance) / padded);
+    return sum / padded;
+  });
+  let radius = half;
+  while (radius > 0 && Math.abs(byDistance[radius]) < BLUR_TAP_CUTOFF * byDistance[0]) radius--;
+  // A kernel reaching half the padded length covers the whole circle: one tap per residue.
+  const wraps = radius >= (padded - 1) >> 1;
+  const low = wraps ? -((padded - 1) >> 1) : -radius;
+  const high = wraps ? half : radius;
+  const taps = Float64Array.from({ length: high - low + 1 }, (_, index) => byDistance[Math.abs(index + low)]);
+  const sourceIndex = Uint32Array.from({ length: length + high - low }, (_, index) => {
+    const paddedIndex = (((index - high + pad) % padded) + padded) % padded;
+    return reflectIndex(paddedIndex - pad, length);
+  });
+  return { low, high, taps, sourceIndex };
 }
 
 /**
@@ -109,7 +114,7 @@ function selectInPlace(values: Float32Array, k: number): number {
 export function median(values: Float32Array): number {
   const scratch = Float32Array.from(values);
   const mid = scratch.length >> 1;
-  const upper = selectInPlace(scratch, mid);
+  const upper = selectKth(scratch, mid);
   if (scratch.length % 2) return upper;
   // Even length averages the two central order statistics; everything below
   // `mid` is already <= upper after the select, so the lower one is their max.
@@ -118,34 +123,27 @@ export function median(values: Float32Array): number {
   return (lower + upper) / 2;
 }
 
+// One axis of the high-pass blur (see BlurAxis): the taps and the folded
+// source lookup come from the CPU, so both paths read the same numbers.
 const BLUR_SHADER = /* wgsl */ `
-struct Params { width: u32, height: u32, radius: u32, horizontal: u32 };
+struct Params { width: u32, height: u32, low: i32, high: i32, horizontal: u32, _p0: u32, _p1: u32, _p2: u32 };
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read> src: array<f32>;
-@group(0) @binding(2) var<storage, read> kern: array<f32>;
-@group(0) @binding(3) var<storage, read_write> dst: array<f32>;
-
-fn reflect(i: i32, n: i32) -> i32 {
-  var v = i;
-  loop {
-    if (v >= 0 && v < n) { break; }
-    if (v < 0) { v = -v - 1; }
-    if (v >= n) { v = 2 * n - v - 1; }
-  }
-  return v;
-}
+@group(0) @binding(2) var<storage, read> taps: array<f32>;
+@group(0) @binding(3) var<storage, read> sourceIndex: array<u32>;
+@group(0) @binding(4) var<storage, read_write> dst: array<f32>;
 
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (gid.x >= p.width || gid.y >= p.height) { return; }
-  let radius = i32(p.radius);
   var acc = 0.0;
-  for (var t = -radius; t <= radius; t = t + 1) {
-    var sx = i32(gid.x);
-    var sy = i32(gid.y);
-    if (p.horizontal == 1u) { sx = reflect(sx + t, i32(p.width)); }
-    else { sy = reflect(sy + t, i32(p.height)); }
-    acc = acc + src[u32(sy) * p.width + u32(sx)] * kern[u32(t + radius)];
+  for (var offset = p.low; offset <= p.high; offset = offset + 1) {
+    let tap = taps[u32(offset - p.low)];
+    if (p.horizontal == 1u) {
+      acc = acc + tap * src[gid.y * p.width + sourceIndex[u32(i32(gid.x) - offset + p.high)]];
+    } else {
+      acc = acc + tap * src[sourceIndex[u32(i32(gid.y) - offset + p.high)] * p.width + gid.x];
+    }
   }
   dst[gid.y * p.width + gid.x] = acc;
 }
@@ -461,26 +459,36 @@ class SliceAlignmentGPU {
     return buffer;
   }
 
-  /** Blur one real-valued plane in place across two separable passes. */
+  /** Taps and source lookup of one blur axis, uploaded once per estimate. */
+  blurAxisBuffers(axis: BlurAxis): BlurAxisBuffers {
+    const taps = this.device.createBuffer({ size: axis.taps.length * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    this.device.queue.writeBuffer(taps, 0, Float32Array.from(axis.taps));
+    const sourceIndex = this.device.createBuffer({ size: axis.sourceIndex.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    this.device.queue.writeBuffer(sourceIndex, 0, axis.sourceIndex);
+    return { low: axis.low, high: axis.high, taps, sourceIndex };
+  }
+
+  /** Blur one real-valued plane in place: along columns (each row), then along rows. */
   blurResident(
-    src: GPUBuffer, scratch: GPUBuffer, kernelBuffer: GPUBuffer,
-    width: number, height: number, radius: number,
+    src: GPUBuffer, scratch: GPUBuffer, width: number, height: number, rowAxis: BlurAxisBuffers, colAxis: BlurAxisBuffers,
   ): void {
-    const pass = (from: GPUBuffer, to: GPUBuffer, horizontal: boolean) => {
-      const params = this.device.createBuffer({
-        size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-      this.device.queue.writeBuffer(params, 0, new Uint32Array([width, height, radius, horizontal ? 1 : 0]));
+    const pass = (from: GPUBuffer, to: GPUBuffer, axis: BlurAxisBuffers, horizontal: boolean) => {
+      const params = this.device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      const values = new ArrayBuffer(32);
+      new Uint32Array(values).set([width, height, 0, 0, horizontal ? 1 : 0]);
+      new Int32Array(values, 8, 2).set([axis.low, axis.high]);
+      this.device.queue.writeBuffer(params, 0, values);
       this.dispatch(this.blurPipeline, [
         { binding: 0, resource: { buffer: params } },
         { binding: 1, resource: { buffer: from } },
-        { binding: 2, resource: { buffer: kernelBuffer } },
-        { binding: 3, resource: { buffer: to } },
+        { binding: 2, resource: { buffer: axis.taps } },
+        { binding: 3, resource: { buffer: axis.sourceIndex } },
+        { binding: 4, resource: { buffer: to } },
       ], Math.ceil(width / 16), Math.ceil(height / 16));
       params.destroy();
     };
-    pass(src, scratch, true);
-    pass(scratch, src, false);
+    pass(src, scratch, colAxis, true);
+    pass(scratch, src, rowAxis, false);
   }
 
   /** centered - blurred, Hann windowed, into a zero-padded complex frame. */
@@ -586,43 +594,6 @@ class SliceAlignmentGPU {
     midBuffer.destroy(); dstBuffer.destroy(); paramsBuffer.destroy();
     return out;
   }
-
-  /** Reflect-boundary Gaussian blur, run as two separable passes. */
-  async blur(image: Float32Array<ArrayBuffer>, width: number, height: number, sigma: number): Promise<Float32Array<ArrayBuffer>> {
-    const kernel = gaussianKernel1d(sigma);
-    const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
-    const planeBuffer = this.device.createBuffer({ size: image.byteLength, usage });
-    const scratchBuffer = this.device.createBuffer({ size: image.byteLength, usage });
-    const kernelBuffer = this.device.createBuffer({
-      size: kernel.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    });
-    this.device.queue.writeBuffer(planeBuffer, 0, image);
-    this.device.queue.writeBuffer(kernelBuffer, 0, kernel);
-    this.blurResident(planeBuffer, scratchBuffer, kernelBuffer, width, height, (kernel.length - 1) / 2);
-    const out = await this.readBack(planeBuffer, image.byteLength);
-    planeBuffer.destroy(); scratchBuffer.destroy(); kernelBuffer.destroy();
-    return out;
-  }
-
-  /** Evaluate the small upsampled inverse-DFT region of an interleaved-complex spectrum. */
-  async upsampledDft(
-    spectrum: Float32Array<ArrayBuffer>,
-    rows: number,
-    cols: number,
-    region: number,
-    upsample: number,
-    offsetRow: number,
-    offsetCol: number,
-  ): Promise<Float32Array<ArrayBuffer>> {
-    const spectrumBuffer = this.device.createBuffer({
-      size: spectrum.byteLength,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-    });
-    this.device.queue.writeBuffer(spectrumBuffer, 0, spectrum);
-    const out = await this.upsampledDftResident(spectrumBuffer, rows, cols, region, upsample, offsetRow, offsetCol);
-    spectrumBuffer.destroy();
-    return out;
-  }
 }
 
 /**
@@ -684,55 +655,67 @@ function upsampledDftCpu(
   return out;
 }
 
-/** CPU reflect-boundary separable Gaussian blur, used when WebGPU is unavailable. */
-function blurCpu(image: Float32Array, width: number, height: number, sigma: number): Float32Array<ArrayBuffer> {
-  const kernel = gaussianKernel1d(sigma);
-  const radius = (kernel.length - 1) / 2;
-  const horizontal = new Float32Array(image.length);
+/** The high-pass blur of one plane on the CPU: along columns (each row), then along rows. */
+function blurCpu(image: Float32Array, width: number, height: number, rowAxis: BlurAxis, colAxis: BlurAxis): Float32Array<ArrayBuffer> {
+  const horizontal = new Float64Array(image.length);
   for (let row = 0; row < height; row++) {
+    const base = row * width;
     for (let col = 0; col < width; col++) {
-      let acc = 0;
-      for (let tap = -radius; tap <= radius; tap++) acc += image[row * width + reflectIndex(col + tap, width)] * kernel[tap + radius];
-      horizontal[row * width + col] = acc;
+      let sum = 0;
+      for (let offset = colAxis.low; offset <= colAxis.high; offset++) {
+        sum += colAxis.taps[offset - colAxis.low] * image[base + colAxis.sourceIndex[col - offset + colAxis.high]];
+      }
+      horizontal[base + col] = sum;
     }
   }
   const out = new Float32Array(image.length);
   for (let row = 0; row < height; row++) {
     for (let col = 0; col < width; col++) {
-      let acc = 0;
-      for (let tap = -radius; tap <= radius; tap++) acc += horizontal[reflectIndex(row + tap, height) * width + col] * kernel[tap + radius];
-      out[row * width + col] = acc;
+      let sum = 0;
+      for (let offset = rowAxis.low; offset <= rowAxis.high; offset++) {
+        sum += rowAxis.taps[offset - rowAxis.low] * horizontal[rowAxis.sourceIndex[row - offset + rowAxis.high] * width + col];
+      }
+      out[row * width + col] = sum;
     }
   }
   return out;
 }
 
+/** np.hanning(length) in float64. */
+function hannWindow(length: number): Float64Array {
+  return Float64Array.from({ length }, (_, index) => (length > 1 ? 0.5 - 0.5 * Math.cos((2 * Math.PI * index) / (length - 1)) : 1));
+}
+
+/** The high-pass sigma alignment.py uses: 12 px, capped at a sixth of the short side. */
+function highPassSigma(width: number, height: number): number {
+  return Math.min(HIGHPASS_SIGMA_PX, Math.max(1.0, Math.min(width, height) / 6.0));
+}
+
 /**
  * Build the registration image for one slice: median-centered, Gaussian
- * high-passed, Hann windowed. The high pass removes the slowly varying
- * background that would otherwise dominate the correlation peak; the window
- * removes the edge discontinuity that a periodic FFT would read as structure.
+ * high-passed, Hann windowed (alignment.py ``registration_image``). The high
+ * pass removes the slowly varying background that would otherwise dominate
+ * the correlation peak; the window removes the edge discontinuity that a
+ * periodic FFT would read as structure. Python skips the high pass below 3
+ * samples per side, and so does this. The subtraction and window product
+ * round to float32 as numpy's float32 arrays do.
  */
-async function registrationImage(
-  slice: Float32Array, width: number, height: number, gpu: SliceAlignmentGPU | null,
-): Promise<Float32Array<ArrayBuffer>> {
+export function registrationImage(slice: Float32Array, width: number, height: number): Float32Array<ArrayBuffer> {
   const centered = new Float32Array(slice.length);
   for (let i = 0; i < slice.length; i++) centered[i] = Number.isFinite(slice[i]) ? slice[i] : 0;
   const medianValue = median(centered);
   for (let i = 0; i < centered.length; i++) centered[i] -= medianValue;
-  const sigma = Math.min(HIGHPASS_SIGMA_PX, Math.max(1.0, Math.min(width, height) / 6.0));
-  const blurred = gpu
-    ? await gpu.blur(centered, width, height, sigma)
-    : blurCpu(centered, width, height, sigma);
-  const rowWindow = new Float32Array(height);
-  for (let row = 0; row < height; row++) rowWindow[row] = height > 1 ? 0.5 - 0.5 * Math.cos((2 * Math.PI * row) / (height - 1)) : 1;
-  const colWindow = new Float32Array(width);
-  for (let col = 0; col < width; col++) colWindow[col] = width > 1 ? 0.5 - 0.5 * Math.cos((2 * Math.PI * col) / (width - 1)) : 1;
+  const sigma = highPassSigma(width, height);
+  const blurred = width >= 3 && height >= 3
+    ? blurCpu(centered, width, height, blurAxis(height, sigma), blurAxis(width, sigma))
+    : new Float32Array(slice.length);
+  const rowWindow = hannWindow(height);
+  const colWindow = hannWindow(width);
   const out = new Float32Array(slice.length);
   for (let row = 0; row < height; row++) {
     for (let col = 0; col < width; col++) {
       const i = row * width + col;
-      out[i] = (centered[i] - blurred[i]) * rowWindow[row] * colWindow[col];
+      out[i] = Math.fround(centered[i] - blurred[i]) * Math.fround(rowWindow[row] * colWindow[col]);
     }
   }
   return out;
@@ -750,25 +733,25 @@ function padToPow2(
   return { data, width: paddedWidth, height: paddedHeight };
 }
 
-/** Least-squares slope/intercept of y versus z, plus the fit R^2. */
-function linearFit(z: number[], y: number[]): { slope: number; intercept: number; r2: number } {
-  const n = z.length;
-  const meanZ = z.reduce((a, b) => a + b, 0) / n;
-  const meanY = y.reduce((a, b) => a + b, 0) / n;
+/** Least-squares slope/intercept of shift versus slice index, plus the fit R^2. */
+function linearFit(sliceIndices: number[], shifts: number[]): { slope: number; intercept: number; r2: number } {
+  const n = sliceIndices.length;
+  const meanSlice = sliceIndices.reduce((a, b) => a + b, 0) / n;
+  const meanShift = shifts.reduce((a, b) => a + b, 0) / n;
   let num = 0;
   let den = 0;
   for (let i = 0; i < n; i++) {
-    num += (z[i] - meanZ) * (y[i] - meanY);
-    den += (z[i] - meanZ) * (z[i] - meanZ);
+    num += (sliceIndices[i] - meanSlice) * (shifts[i] - meanShift);
+    den += (sliceIndices[i] - meanSlice) * (sliceIndices[i] - meanSlice);
   }
   const slope = den > 0 ? num / den : 0;
-  const intercept = meanY - slope * meanZ;
+  const intercept = meanShift - slope * meanSlice;
   let ssRes = 0;
   let ssTot = 0;
   for (let i = 0; i < n; i++) {
-    const predicted = slope * z[i] + intercept;
-    ssRes += (y[i] - predicted) * (y[i] - predicted);
-    ssTot += (y[i] - meanY) * (y[i] - meanY);
+    const predicted = slope * sliceIndices[i] + intercept;
+    ssRes += (shifts[i] - predicted) * (shifts[i] - predicted);
+    ssTot += (shifts[i] - meanShift) * (shifts[i] - meanShift);
   }
   return { slope, intercept, r2: ssTot > 0 ? 1 - ssRes / ssTot : 0 };
 }
@@ -808,15 +791,15 @@ function subpixelOffset(refined: Float32Array, region: number, dftShift: number)
 }
 
 /** Accumulate the per-pair shifts and fit each axis's shift per slice by least squares. */
-function fitFromAdjacent(adjacent: number[][], nz: number, backend: "webgpu" | "cpu", quality: number[]) {
+function fitFromAdjacent(adjacent: number[][], numSlices: number, backend: "webgpu" | "cpu", quality: number[]) {
   const cumulative: number[][] = [[0, 0]];
   for (let i = 0; i < adjacent.length; i++) {
     const previous = cumulative[i];
     cumulative.push([previous[0] + adjacent[i][0], previous[1] + adjacent[i][1]]);
   }
-  const z = Array.from({ length: nz }, (_, i) => i);
-  const rowFit = linearFit(z, cumulative.map((entry) => entry[0]));
-  const colFit = linearFit(z, cumulative.map((entry) => entry[1]));
+  const sliceIndices = Array.from({ length: numSlices }, (_, i) => i);
+  const rowFit = linearFit(sliceIndices, cumulative.map((entry) => entry[0]));
+  const colFit = linearFit(sliceIndices, cumulative.map((entry) => entry[1]));
   return {
     rowShiftPxPerSlice: rowFit.slope,
     colShiftPxPerSlice: colFit.slope,
@@ -840,22 +823,22 @@ function fitFromAdjacent(adjacent: number[][], nz: number, backend: "webgpu" | "
  */
 async function estimateResident(
   volume: Float32Array,
-  nx: number,
-  ny: number,
-  nz: number,
+  numCols: number,
+  numRows: number,
+  numSlices: number,
   fft: WebGPUFFT,
   gpu: SliceAlignmentGPU,
 ): Promise<SliceAlignmentEstimate> {
-  const planeSize = nx * ny;
-  const paddedWidth = nextPow2(nx);
-  const paddedHeight = nextPow2(ny);
+  const planeSize = numCols * numRows;
+  const paddedWidth = nextPow2(numCols);
+  const paddedHeight = nextPow2(numRows);
   const complexCount = paddedWidth * paddedHeight;
-  const sigma = Math.min(HIGHPASS_SIGMA_PX, Math.max(1.0, Math.min(nx, ny) / 6.0));
-  const kernel = gaussianKernel1d(sigma);
-  const radius = (kernel.length - 1) / 2;
+  const sigma = highPassSigma(numCols, numRows);
+  const highPass = numCols >= 3 && numRows >= 3;
+  const rowAxis = gpu.blurAxisBuffers(blurAxis(numRows, sigma));
+  const colAxis = gpu.blurAxisBuffers(blurAxis(numCols, sigma));
 
-  const kernelBuffer = gpu.buffer(kernel.byteLength);
-  gpu.write(kernelBuffer, kernel);
+  // Stays zero when the plane is too small to high-pass, as in alignment.py.
   const planeBuffer = gpu.buffer(planeSize * 4);
   const scratchBuffer = gpu.buffer(planeSize * 4);
   // Two spectra are live at once (the pair being correlated), so a rolling pair
@@ -867,8 +850,8 @@ async function estimateResident(
 
   const centeredBuffer = gpu.buffer(planeSize * 4);
   const centered = new Float32Array(planeSize);
-  const buildSpectrum = async (z: number, target: GPUBuffer): Promise<number> => {
-    const slice = volume.subarray(z * planeSize, (z + 1) * planeSize);
+  const buildSpectrum = async (sliceIndex: number, target: GPUBuffer): Promise<number> => {
+    const slice = volume.subarray(sliceIndex * planeSize, (sliceIndex + 1) * planeSize);
     for (let i = 0; i < planeSize; i++) centered[i] = Number.isFinite(slice[i]) ? slice[i] : 0;
     const medianValue = median(centered);
     for (let i = 0; i < planeSize; i++) centered[i] -= medianValue;
@@ -876,9 +859,11 @@ async function estimateResident(
     gpu.write(centeredBuffer, centered);
     // blurResident overwrites its source, so blur a device-side copy and keep
     // the centered plane intact for the subtraction.
-    gpu.copyBuffer(centeredBuffer, planeBuffer, planeSize * 4);
-    gpu.blurResident(planeBuffer, scratchBuffer, kernelBuffer, nx, ny, radius);
-    gpu.prepareResident(centeredBuffer, planeBuffer, target, nx, ny, paddedWidth, paddedHeight);
+    if (highPass) {
+      gpu.copyBuffer(centeredBuffer, planeBuffer, planeSize * 4);
+      gpu.blurResident(planeBuffer, scratchBuffer, numCols, numRows, rowAxis, colAxis);
+    }
+    gpu.prepareResident(centeredBuffer, planeBuffer, target, numCols, numRows, paddedWidth, paddedHeight);
     const energy = await gpu.energyResident(target, complexCount);
     await fft.fft2DResident(target, paddedWidth, paddedHeight, false);
     return energy;
@@ -889,10 +874,10 @@ async function estimateResident(
   const adjacent: number[][] = [];
   const quality: number[] = [];
   let previousEnergy = await buildSpectrum(0, spectra[0]);
-  for (let z = 0; z < nz - 1; z++) {
-    const refBuffer = spectra[z % 2];
-    const movBuffer = spectra[(z + 1) % 2];
-    const movEnergy = await buildSpectrum(z + 1, movBuffer);
+  for (let sliceIndex = 0; sliceIndex < numSlices - 1; sliceIndex++) {
+    const refBuffer = spectra[sliceIndex % 2];
+    const movBuffer = spectra[(sliceIndex + 1) % 2];
+    const movEnergy = await buildSpectrum(sliceIndex + 1, movBuffer);
     if (previousEnergy === 0 || movEnergy === 0) {
       adjacent.push([0, 0]);
       quality.push(0);
@@ -922,62 +907,56 @@ async function estimateResident(
     previousEnergy = movEnergy;
   }
 
-  for (const buffer of [kernelBuffer, planeBuffer, scratchBuffer, centeredBuffer, productBuffer, correlationBuffer, conjugateBuffer, ...spectra]) {
+  for (const buffer of [rowAxis.taps, rowAxis.sourceIndex, colAxis.taps, colAxis.sourceIndex, planeBuffer, scratchBuffer, centeredBuffer, productBuffer, correlationBuffer, conjugateBuffer, ...spectra]) {
     buffer.destroy();
   }
-  return fitFromAdjacent(adjacent, nz, "webgpu", quality);
+  return fitFromAdjacent(adjacent, numSlices, "webgpu", quality);
 }
 
 /**
  * Estimate the global row/col shift per slice for one volume.
  *
- * @param volume Contiguous z-major float volume (nz planes of ny x nx).
- * @param fft Display FFT (WebGPUFFT runs the GPU-resident estimate); when null the CPU FFT is used.
- * @param device WebGPU device for the blur and refinement passes, or null.
+ * @param volume Contiguous slice-major float volume (numSlices planes of numRows x numCols).
+ * @param device The page's hardware WebGPU device (getHardwareGPUDevice) for the
+ *   GPU-resident estimate, or null for the CPU path.
  */
 export async function estimateSliceAlignment(
   volume: Float32Array,
-  nx: number,
-  ny: number,
-  nz: number,
-  fft: DisplayFFT | null,
+  numCols: number,
+  numRows: number,
+  numSlices: number,
   device: GPUDevice | null,
 ): Promise<SliceAlignmentEstimate> {
-  if (nz < 2) throw new Error("slice alignment requires at least 2 slices");
-  const gpu = device ? new SliceAlignmentGPU(device) : null;
-  if (gpu && fft instanceof WebGPUFFT) return estimateResident(volume, nx, ny, nz, fft, gpu);
-  const planeSize = nx * ny;
+  if (numSlices < 2) throw new Error("slice alignment requires at least 2 slices");
+  if (device) return estimateResident(volume, numCols, numRows, numSlices, await requireWebGPUFFT("Slice alignment"), new SliceAlignmentGPU(device));
+  const planeSize = numCols * numRows;
 
   const spectra: { real: Float32Array; imag: Float32Array }[] = [];
   const energies: number[] = [];
-  let paddedWidth = nx;
-  let paddedHeight = ny;
-  for (let z = 0; z < nz; z++) {
-    const prepared = await registrationImage(volume.subarray(z * planeSize, (z + 1) * planeSize), nx, ny, gpu);
+  let paddedWidth = numCols;
+  let paddedHeight = numRows;
+  for (let sliceIndex = 0; sliceIndex < numSlices; sliceIndex++) {
+    const prepared = registrationImage(volume.subarray(sliceIndex * planeSize, (sliceIndex + 1) * planeSize), numCols, numRows);
     let energy = 0;
     for (let i = 0; i < prepared.length; i++) energy += prepared[i] * prepared[i];
     energies.push(energy);
-    const padded = padToPow2(prepared, nx, ny);
+    const padded = padToPow2(prepared, numCols, numRows);
     paddedWidth = padded.width;
     paddedHeight = padded.height;
+    const real = Float32Array.from(padded.data);
     const imag = new Float32Array(padded.data.length);
-    if (fft) {
-      spectra.push(await fft.fft2D(padded.data, imag, padded.width, padded.height, false));
-    } else {
-      const real = Float32Array.from(padded.data);
-      fft2d(real, imag, padded.width, padded.height, false);
-      spectra.push({ real, imag });
-    }
+    fft2d(real, imag, padded.width, padded.height, false);
+    spectra.push({ real, imag });
   }
 
   const region = Math.ceil(UPSAMPLE_FACTOR * DFT_REGION_FACTOR);
   const dftShift = Math.trunc(region / 2.0);
   const adjacent: number[][] = [];
   const quality: number[] = [];
-  for (let z = 0; z < nz - 1; z++) {
-    const ref = spectra[z];
-    const mov = spectra[z + 1];
-    if (energies[z] === 0 || energies[z + 1] === 0) {
+  for (let sliceIndex = 0; sliceIndex < numSlices - 1; sliceIndex++) {
+    const ref = spectra[sliceIndex];
+    const mov = spectra[sliceIndex + 1];
+    if (energies[sliceIndex] === 0 || energies[sliceIndex + 1] === 0) {
       adjacent.push([0, 0]);
       quality.push(0);
       continue;
@@ -993,13 +972,7 @@ export async function estimateSliceAlignment(
     }
     const corrReal = Float32Array.from(productReal);
     const corrImag = Float32Array.from(productImag);
-    if (fft) {
-      const inverse = await fft.fft2D(corrReal, corrImag, paddedWidth, paddedHeight, true);
-      corrReal.set(inverse.real);
-      corrImag.set(inverse.imag);
-    } else {
-      fft2d(corrReal, corrImag, paddedWidth, paddedHeight, true);
-    }
+    fft2d(corrReal, corrImag, paddedWidth, paddedHeight, true);
     let peakIndex = 0;
     let peakValue = -1;
     for (let i = 0; i < count; i++) {
@@ -1015,19 +988,14 @@ export async function estimateSliceAlignment(
       conjugated[i * 2] = productReal[i];
       conjugated[i * 2 + 1] = -productImag[i];
     }
-    const offsetRow = dftShift - refinedRow * UPSAMPLE_FACTOR;
-    const offsetCol = dftShift - refinedCol * UPSAMPLE_FACTOR;
-    const refined = gpu
-      ? await gpu.upsampledDft(
-        conjugated, paddedHeight, paddedWidth, region, UPSAMPLE_FACTOR, offsetRow, offsetCol,
-      )
-      : upsampledDftCpu(
-        conjugated, paddedHeight, paddedWidth, region, UPSAMPLE_FACTOR, offsetRow, offsetCol,
-      );
+    const refined = upsampledDftCpu(
+      conjugated, paddedHeight, paddedWidth, region, UPSAMPLE_FACTOR,
+      dftShift - refinedRow * UPSAMPLE_FACTOR, dftShift - refinedCol * UPSAMPLE_FACTOR,
+    );
     const [rowCorrection, colCorrection] = subpixelOffset(refined, region, dftShift);
     adjacent.push([refinedRow + rowCorrection, refinedCol + colCorrection]);
-    const norm = Math.sqrt(energies[z] * energies[z + 1]);
+    const norm = Math.sqrt(energies[sliceIndex] * energies[sliceIndex + 1]);
     quality.push(norm > 0 ? Math.sqrt(peakValue) / norm : 0);
   }
-  return fitFromAdjacent(adjacent, nz, gpu ? "webgpu" : "cpu", quality);
+  return fitFromAdjacent(adjacent, numSlices, "cpu", quality);
 }

@@ -4,7 +4,6 @@ Complete reference for the widgets, tutorial datasets, HTML export, and data
 loading / I/O.
 Common display-chrome names and presets are documented in [Viewer UI controls](viewer-ui).
 Named tutorial datasets are documented in [Tutorial Datasets](./datasets.md).
-The same tables are surfaced in the developer-facing [UI Guide](../developer/ui-guide).
 Widget pages have two halves:
 
 1. **Reference** - the constructor signature, every parameter, and every public
@@ -51,6 +50,6 @@ readers and test agents.
 | [ShowDiffraction](showdiffraction) | `quantem.widget.showdiffraction.ShowDiffraction` | state JSON, PNG, interactive HTML |
 | [ShowPDF](showpdf) | `quantem.widget.showpdf.ShowPDF` | state JSON, results zip (CSV), PNG/PDF/TIFF curves, interactive HTML (`encoding="full"` / `encoding="uint8"`) |
 | [ChooseLattice](choose-lattice) | `quantem.widget.choose_lattice.ChooseLattice` | state JSON (`save_state=True`) |
-| [ShowCIF](showcif) | `quantem.widget.ShowCIF` | Interactive HTML with embedded coordinates; CDN widget manager requires network |
+| [ShowCIF](showcif) | `quantem.widget.ShowCIF` | Interactive HTML with embedded coordinates |
 
 All widget-level HTML exports follow the [HTML export](html-export) protocol.

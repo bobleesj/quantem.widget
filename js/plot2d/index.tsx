@@ -20,6 +20,38 @@ type Model = {
   off(event: string, callback: () => void): void;
 };
 
+// y tick labels end this far left of the plot frame and x tick labels start
+// this far below it, with this much space between neighbouring x labels; the
+// rotated y-axis title occupies the canvas columns left of Y_TITLE_RIGHT.
+const TICK_LABEL_GAP = 6;
+const X_TICK_LABEL_TOP = 8;
+const X_TICK_LABEL_SPACING = 10;
+const Y_TITLE_RIGHT = 22;
+const NICE_STEP_FACTORS = [1, 2, 2.5, 5, 10];
+
+/**
+ * Tick values at 1, 2, 2.5 or 5 times a power of ten inside [low, high], at
+ * most `maxCount` of them, labelled with the decimals the step needs
+ * (exponent notation for very large or very small values). Ticks placed at the
+ * zoom bounds themselves gave long labels that collided at the plot corner and
+ * ran past the canvas edge after a zoom.
+ */
+function niceTicks(low: number, high: number, maxCount: number): { values: number[]; labels: string[] } {
+  const raw = (high - low) / maxCount;
+  const power = 10 ** Math.floor(Math.log10(raw));
+  const factor = NICE_STEP_FACTORS.find((candidate) => candidate * power >= raw * (1 - 1e-9))!;
+  const step = factor * power;
+  const values: number[] = [];
+  for (let index = Math.ceil(low / step - 1e-9); index <= Math.floor(high / step + 1e-9); index++) values.push(index * step);
+  const stepDecade = Math.floor(Math.log10(step) + 1e-9);
+  const extra = factor === 2.5 ? 1 : 0;
+  const largest = Math.max(Math.abs(low), Math.abs(high));
+  const exponent = largest >= 1e5 || stepDecade < -4;
+  const digits = Math.max(0, (exponent ? Math.floor(Math.log10(largest)) : 0) - stepDecade + extra);
+  const labels = values.map((value) => (!exponent ? value.toFixed(digits) : value === 0 ? "0" : value.toExponential(digits)));
+  return { values, labels };
+}
+
 function render({ model, el }: { model: Model; el: HTMLElement }) {
   let themeColors = getThemeColors(detectTheme().theme);
   const host = document.createElement("div");
@@ -80,8 +112,8 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
           "& .MuiSelect-icon": { color: colors.text },
           "& .MuiOutlinedInput-notchedOutline": { borderColor: colors.border },
           "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: colors.accent } }}
-        MenuProps={{ PaperProps: { sx: { maxHeight: 320, bgcolor: colors.controlBg,
-          color: colors.text, border: `1px solid ${colors.border}` } } }}
+        MenuProps={{ slotProps: { paper: { sx: { maxHeight: 320, bgcolor: colors.controlBg,
+          color: colors.text, border: `1px solid ${colors.border}` } } } }}
         onChange={(event) => {
           model.set("cmap", event.target.value);
           model.save_changes();
@@ -137,8 +169,6 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
   let paintedBounds = bounds.slice();
   let paintedGeometry = geometry();
   const formatValue = (value: number) => Number(value.toPrecision(4)).toString();
-  const formatTick = (value: number, span: number) =>
-    formatValue(Math.abs(value) < span * 1e-12 ? 0 : value);
   function commit() {
     model.set("view_bounds", bounds.slice());
     model.save_changes();
@@ -163,15 +193,34 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
   function paint() {
     frame = 0;
     if (disposed || canvas.style.display === "none") return;
-    const layout = geometry(),
-      width = layout.width - layout.left - layout.right,
-      height = layout.height - layout.top - layout.bottom;
+    const layout = geometry();
     const ratio = window.devicePixelRatio || 1;
     canvas.width = Math.round(layout.width * ratio);
     canvas.height = Math.round(layout.height * ratio);
     canvas.style.height = `${layout.height}px`;
     const ctx = canvas.getContext("2d")!;
     ctx.scale(ratio, ratio);
+    ctx.font = "12px system-ui";
+    // The left margin grows to fit the widest y tick label beside the y-axis title.
+    const height = layout.height - layout.top - layout.bottom;
+    const yTicks = niceTicks(bounds[2], bounds[3], Math.max(2, Math.min(6, Math.floor(height / 30))));
+    const yLabelWidth = Math.max(...yTicks.labels.map((label) => ctx.measureText(label).width));
+    layout.left = Math.max(layout.left, Math.ceil(Y_TITLE_RIGHT + yLabelWidth + TICK_LABEL_GAP));
+    const width = layout.width - layout.left - layout.right;
+    // x labels centre on their ticks, clamped inside the canvas at the edges;
+    // fewer ticks until neighbouring labels keep their spacing, and for labels
+    // too long even for two ticks, only every second (third, ...) one.
+    const xLabelPlacement = ({ values, labels }: { values: number[]; labels: string[] }) => labels.map((label, index) => {
+      const half = ctx.measureText(label).width / 2;
+      const tick = layout.left + ((values[index] - bounds[0]) / (bounds[1] - bounds[0])) * width;
+      return { label, center: Math.min(Math.max(tick, half + 1), layout.width - half - 1), half };
+    });
+    const crowded = (placed: { center: number; half: number }[]) => placed.some((label, index) =>
+      index > 0 && label.center - label.half < placed[index - 1].center + placed[index - 1].half + X_TICK_LABEL_SPACING);
+    let xLabels = xLabelPlacement(niceTicks(bounds[0], bounds[1], 6));
+    for (let maxCount = 5; maxCount >= 2 && crowded(xLabels); maxCount--) xLabels = xLabelPlacement(niceTicks(bounds[0], bounds[1], maxCount));
+    const allXLabels = xLabels;
+    for (let every = 2; crowded(xLabels); every++) xLabels = allXLabels.filter((_, index) => index % every === 0);
     ctx.fillStyle = themeColors.bg;
     ctx.fillRect(0, 0, layout.width, layout.height);
     const grid = model.get("grid"),
@@ -203,31 +252,19 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
     }
     ctx.strokeStyle = themeColors.border;
     ctx.strokeRect(layout.left, layout.top, width, height);
-    ctx.font = "12px system-ui";
     ctx.fillStyle = themeColors.text;
     ctx.textAlign = "center";
     ctx.fillText(model.get("title"), layout.left + width / 2, 17);
-    for (let tick = 0; tick <= 4; tick++) {
-      const fraction = tick / 4;
-      ctx.textAlign = "center";
-      ctx.fillText(
-        formatTick(
-          bounds[0] + fraction * (bounds[1] - bounds[0]),
-          bounds[1] - bounds[0],
-        ),
-        layout.left + fraction * width,
-        layout.top + height + 17,
-      );
-      ctx.textAlign = "right";
-      ctx.fillText(
-        formatTick(
-          bounds[2] + fraction * (bounds[3] - bounds[2]),
-          bounds[3] - bounds[2],
-        ),
-        layout.left - 7,
-        layout.top + height * (1 - fraction) + 4,
-      );
-    }
+    // x labels hang below the frame; y labels are centred on their ticks, so
+    // the lowest one ends above the x labels.
+    ctx.textBaseline = "top";
+    xLabels.forEach(({ label, center }) => ctx.fillText(label, center, layout.top + height + X_TICK_LABEL_TOP));
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    yTicks.values.forEach((value, index) => {
+      ctx.fillText(yTicks.labels[index], layout.left - TICK_LABEL_GAP, layout.top + height * (1 - (value - bounds[2]) / (bounds[3] - bounds[2])));
+    });
+    ctx.textBaseline = "alphabetic";
     ctx.textAlign = "center";
     ctx.fillText(model.get("x_label"), layout.left + width / 2, layout.top + height + 37);
     ctx.save();
@@ -288,7 +325,7 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
     const current = ++generation;
     const bytes = extractBytes(model.get("data_bytes"));
     if (!bytes.length) {
-      const saved = model.get("_static_fallback_jpeg");
+      const saved = model.get("_static_fallback_image");
       if (saved) preview.src = `data:${model.get("_static_fallback_mime") || "image/png"};base64,${saved}`;
       else preview.removeAttribute("src");
       preview.style.display = saved ? "block" : "none";
@@ -360,7 +397,7 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
       });
   }
   function plotPosition(event: MouseEvent) {
-    const layout = geometry(),
+    const layout = paintedGeometry,
       rect = canvas.getBoundingClientRect();
     const col =
       (event.clientX - rect.left - layout.left) / (layout.width - layout.left - layout.right);
@@ -377,7 +414,7 @@ function render({ model, el }: { model: Model; el: HTMLElement }) {
     schedule();
   };
   canvas.onpointermove = (event) => {
-    const layout = geometry();
+    const layout = paintedGeometry;
     const width = layout.width - layout.left - layout.right,
       height = layout.height - layout.top - layout.bottom;
     if (drag) {

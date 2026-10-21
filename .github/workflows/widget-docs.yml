@@ -76,7 +76,9 @@ jobs:
           # Silence the "unauthenticated requests" warning that otherwise gets
           # baked into tutorial outputs on the published pages.
           HF_HUB_VERBOSITY: error
-          QUANTEM_WIDGET_STATIC_FALLBACK: "0"
+          # Not QUANTEM_*: quantem core would read it as its own config key and
+          # print an "Unknown configuration key" warning on every page.
+          QW_STATIC_FALLBACK: "0"
       - run: python scripts/check_docs_widget_provenance.py docs/_build/html
       # Theme-drift guard: a page with two primary-toggle buttons means the
       # mobile hamburger is dead (see scripts/check_docs_nav_toggle.py).

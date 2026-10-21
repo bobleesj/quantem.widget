@@ -20,7 +20,9 @@ import ipywidgets
 import numpy as np
 import traitlets
 
+from quantem.widget.units import axis_step, image_axes, per_axis, unit_entry
 from quantem.widget.adapters import core as core_adapter
+from quantem.widget.colormap import VALID_CMAPS
 from quantem.widget.export import HtmlExportMixin
 from quantem.widget.fallback import StaticFallbackMixin
 from quantem.widget.show1d.export import Show1DExport
@@ -39,15 +41,11 @@ from quantem.widget.show1d.review import (
 from quantem.widget.show1d.state import Show1DState
 from quantem.widget.state import SavedStateMixin
 from quantem.widget.utils.array import _b64_safe, to_numpy
-from quantem.widget.utils.state_io import unwrap_state_payload
+from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
 
 # Okabe-Ito palette: distinguishable for every common colour-vision deficiency
 _DEFAULT_COLORS = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#F0E442", "#999999"]
-_VALID_IMAGE_CMAPS = {
-    "inferno", "viridis", "plasma", "magma", "hot", "gray", "hsv", "turbo",
-    "RdBu", "cividis", "seismic", "RdBu_r", "twilight", "twilight_shifted",
-}
 _VALID_SNAPSHOT_CONTRAST_PRESETS = {"full", "0.5-99.5", "1-99", "2-98", "5-95"}
 _VALID_OVERLAY_POSITIONS = {"top-left", "top-right", "bottom-left", "bottom-right"}
 _UI_DEFAULTS = {
@@ -136,7 +134,8 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         line that the trace was sampled along; see :meth:`from_image`.
     sampling, units
         Pixel size and unit for the snapshot and profile scale bar. A sequence
-        uses its last value, matching ``Show2D`` / ``Show3D``.
+        uses its last value, matching ``Show2D`` / ``Show3D``. A ``sampling``
+        given without ``units`` is in angstrom.
     state : dict or path, optional
         Restore display state saved with :meth:`save`.
     save_state : bool, default False
@@ -157,6 +156,9 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
     # constructor body runs; the preview renderer reads these two.
     _data: np.ndarray = np.empty((0, 0), dtype=np.float32)
     _x: np.ndarray | None = None
+    # Synced traits the constructor sets itself, with the keyword that sets each one; a keyword
+    # for the trait would be a second spelling of that keyword (see reject_unknown_kwargs).
+    _CONSTRUCTOR_TRAITS = {"pixel_size": "sampling", "pixel_unit": "units"}
 
     y_bytes = traitlets.Bytes(b"").tag(sync=True)
     x_bytes = traitlets.Bytes(b"").tag(sync=True)
@@ -252,7 +254,7 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
     image_cmap = traitlets.Unicode("viridis").tag(sync=True)
     pixel_size = traitlets.Float(0.0).tag(sync=True)
     pixel_unit = traitlets.Unicode("px").tag(sync=True)
-    scale_bar_visible = traitlets.Bool(True).tag(sync=True)
+    show_scale_bar = traitlets.Bool(True).tag(sync=True)
     snapshot_playing = traitlets.Bool(False).tag(sync=True)
     snapshot_fps = traitlets.Int(2).tag(sync=True)
     snapshot_loop = traitlets.Bool(True).tag(sync=True)
@@ -262,7 +264,7 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
     profile_image_height = traitlets.Int(0).tag(sync=True)
     profile_image_width = traitlets.Int(0).tag(sync=True)
     profile_line = traitlets.List(traitlets.Dict()).tag(sync=True)
-    profile_width = traitlets.Int(1).tag(sync=True)
+    profile_width = traitlets.Int(1)  # read by the Python line sampler only, so it is not synced
 
     # View -> View selected as 2D: the browser asks, Python builds a Show2D below the plot
     handoff_request = traitlets.Unicode("").tag(sync=True)
@@ -273,7 +275,7 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
     _export_light = traitlets.Bool(False).tag(sync=True)
     # Compact saved-notebook preview (see fallback.py) so a cold rehydrate
     # shows the plot even though the heavy buffers are trimmed.
-    _static_fallback_jpeg = traitlets.Unicode("").tag(sync=True)
+    _static_fallback_image = traitlets.Unicode("").tag(sync=True)
     _static_fallback_mime = traitlets.Unicode("image/jpeg").tag(sync=True)
 
     def __init__(
@@ -305,17 +307,19 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         save_state: bool = False,
         **kwargs,
     ) -> None:
-        reject_unknown_kwargs(type(self), kwargs)
+        reject_unknown_kwargs(type(self), kwargs, owned=self._CONSTRUCTOR_TRAITS)
         overrides = {key: kwargs.pop(key, None) for key in _UI_DEFAULTS}
         overrides["show_review"] = show_review
         kwargs.update(resolve_ui_mode(ui_mode, defaults=_UI_DEFAULTS, overrides=overrides))
+        # a state this widget cannot load is refused before the model opens: a registered widget stays alive, holding its data
+        state = None if state is None else read_state(state, "Show1D", self._STATE_KEYS)
         # Before super().__init__ so any get_state during comm-open sees it.
         self._save_state = bool(save_state)
         self._configure_static_fallback()
         super().__init__(**kwargs)
         self._static_fallback_mime = self._static_fallback_mime_type()
-        self._data, inferred_labels, inferred_title = _normalise_data(data)
-        self._x = _normalise_x(x, self._data.shape[1])
+        self._data, inferred_labels, inferred_title = _normalize_data(data)
+        self._x = _normalize_x(x, self._data.shape[1])
         self._snapshots: list[np.ndarray] = []
         self._profile_image: np.ndarray | None = None
         self._trial_metrics: dict[str, dict] = {}
@@ -341,19 +345,19 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         self.snapshot_histogram_width = snapshot_histogram_width
         self.snapshot_histogram_height = snapshot_histogram_height
         self.profile_width = max(1, int(profile_width))
+        sampling, units = image_axes(sampling, units)
         if sampling is not None:
-            self.pixel_size = float(sampling[-1]) if isinstance(sampling, Sequence) else float(sampling)
+            self.pixel_size = float(per_axis(sampling, 2)[-1])
         if units is not None:
-            self.pixel_unit = units if isinstance(units, str) else str(units[-1])
+            self.pixel_unit = str(per_axis(units, 2)[-1])
+        # one unit table for every widget: an unknown string raises, an uncalibrated axis is absent
+        if unit_entry(self.pixel_unit)[0] == "pixels":
+            self.pixel_size, self.pixel_unit = 0.0, "px"
         self._update_stats()
         self._update_data_bytes()
         self._update_trial_analysis()
         if profile_image is not None:
             self._set_profile_image(profile_image, line=profile_line)
-        if isinstance(state, (str, pathlib.Path)):
-            state = unwrap_state_payload(json.loads(pathlib.Path(state).read_text()), require_envelope=True, expected_widget="Show1D")
-        elif state is not None:
-            state = unwrap_state_payload(state, expected_widget="Show1D")
         if state is not None:
             self.load_state_dict(state)
         self.observe(self._on_export_request_change, names=["export_request"])
@@ -365,8 +369,8 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
     def _validate_cmap(self, proposal: dict) -> str:
         """Reject a colormap the browser has no lookup table for, instead of painting with a silent fallback."""
         name = str(proposal["value"])
-        if name not in _VALID_IMAGE_CMAPS:
-            raise ValueError(f"Unknown {proposal['trait'].name} {name!r}. Valid: {sorted(_VALID_IMAGE_CMAPS)}")
+        if name not in VALID_CMAPS:
+            raise ValueError(f"Unknown {proposal['trait'].name} {name!r}. Valid: {sorted(VALID_CMAPS)}")
         return name
 
     @traitlets.validate("snapshot_contrast_preset")
@@ -504,25 +508,30 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
         *,
         line: Sequence[Sequence[float]],
         profile_width: int = 1,
-        sampling: float = 1.0,
-        x_unit: str = "pixels",
+        sampling: float | None = None,
+        units: str | None = None,
         **kwargs,
     ) -> Self:
         """A line-profile viewer: the trace sampled along ``line`` with the 2D image beside it.
 
         ``line`` is ``((row0, col0), (row1, col1))`` in image pixels; ``sampling``
-        turns the pixel distance along the line into ``x_unit``.
+        turns the pixel distance along the line into ``units`` (angstrom when
+        ``units`` is omitted). Without a ``sampling`` the distance is in pixels.
         """
+        # the distance axis is in the image's unit, so the x_unit trait follows units= here
+        reject_unknown_kwargs(cls, kwargs, owned={"x_unit": "units"})
         kwargs.setdefault("title", "Line Profile")
         kwargs.setdefault("y_label", "value")
-        kwargs.setdefault("units", x_unit)
+        sampling, units = image_axes(sampling, units)
         return cls(
             profile_image=image,
             profile_line=line,
             profile_width=profile_width,
             x_label="distance",
-            x_unit=x_unit,
+            # a unit with no step, or an uncalibrated unit, leaves the distance in pixels
+            x_unit="px" if axis_step(per_axis(sampling, 2)[-1], per_axis(units, 2)[-1]) is None else per_axis(units, 2)[-1],
             sampling=sampling,
+            units=units,
             **kwargs,
         )
 
@@ -667,8 +676,8 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
 
     def set_data(self, data, *, x=None, labels: Sequence[str] | None = None) -> Self:
         """Replace the traces while keeping every display setting."""
-        self._data, inferred_labels, _ = _normalise_data(data)
-        self._x = _normalise_x(x, self._data.shape[1])
+        self._data, inferred_labels, _ = _normalize_data(data)
+        self._x = _normalize_x(x, self._data.shape[1])
         self.n_traces = int(self._data.shape[0])
         self.n_points = int(self._data.shape[1])
         self.labels = [str(label) for label in (labels or inferred_labels)]
@@ -728,8 +737,8 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
             title=title if title is not None else f"{self.title or 'Show1D'} · {self.snapshot_group_labels[group_idx]}",
             cmap=self.image_cmap,
             sampling=self.pixel_size if self.pixel_size > 0 else None,
-            units=self.pixel_unit,
-            show_scale_bar=self.scale_bar_visible,
+            units=self.pixel_unit if self.pixel_size > 0 else None,  # a unit needs a step
+            show_scale_bar=self.show_scale_bar,
             show_fft=self.show_snapshot_fft,
             show_controls=True,
             controls_collapsed=False,
@@ -915,7 +924,7 @@ def _default_colors(n_traces: int) -> list[str]:
     return [_DEFAULT_COLORS[idx % len(_DEFAULT_COLORS)] for idx in range(n_traces)]
 
 
-def _normalise_data(data) -> tuple[np.ndarray, list[str], str]:
+def _normalize_data(data) -> tuple[np.ndarray, list[str], str]:
     """Traces as a float32 ``(n_traces, n_points)`` block with inferred labels and title."""
     title = ""
     if core_adapter.is_dataset(data):
@@ -946,7 +955,7 @@ def _stack_equal_length(arrays: list[np.ndarray]) -> np.ndarray:
     return np.ascontiguousarray(np.stack(arrays), dtype=np.float32)
 
 
-def _normalise_x(x, n_points: int) -> np.ndarray | None:
+def _normalize_x(x, n_points: int) -> np.ndarray | None:
     """x positions as float32 with one value per point; point indices when ``x`` is None, nothing for an empty trace."""
     if x is None:
         return None if n_points == 0 else np.arange(n_points, dtype=np.float32)

@@ -5,7 +5,7 @@ asking an agent to make UI changes. The goal is for every viewer to feel like
 one scientific tool family, even when the underlying data are very different.
 
 For developer-facing `ui_mode`, `show_*`, and control-visibility tables, use
-the [UI Guide](../developer/ui-guide). This maintainer page is the internal protocol
+[Viewer UI controls](../api/viewer-ui). This maintainer page is the internal protocol
 for frontend wording, toolbar layout, export labels, and review checks.
 
 ## Command text
@@ -33,6 +33,11 @@ Do not use all-caps for ordinary commands such as `COPY`, `EXPORT`, `CLEAR`,
 or `UNDO`.
 
 ## Compact control labels
+
+Use `WIDGET_UI_FONT` and `WIDGET_TYPOGRAPHY` from `js/theme.ts` for viewer
+controls. These share the existing Show2D / Show4DSTEM sizes: 11 px labels,
+10 px compact labels and 10 px monospace numerical readouts. Do not force
+monospace onto command buttons, menu labels or dropdown choices.
 
 Dense widget toolbars and control rows should not use decorative colons. Use:
 

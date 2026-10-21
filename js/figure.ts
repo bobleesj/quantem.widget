@@ -4,11 +4,13 @@
  */
 
 import { formatNumber } from "./format";
+import { LENGTH_LADDER, angstromsPerUnit, unitSymbol } from "./units";
 
 /** Round a physical value to a "nice" number (1, 2, 5, 10, 20, 50, ...) */
 export function roundToNiceValue(value: number): number {
   if (value <= 0) return 1;
-  const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
+  // parsed from its decimal text: Math.pow(10, -4) is one ulp below 1e-4, which printed a 1 Å bar as "100 pm"
+  const magnitude = Number(`1e${Math.floor(Math.log10(value))}`);
   const normalized = value / magnitude;
   if (normalized < 1.5) return magnitude;
   if (normalized < 3.5) return 2 * magnitude;
@@ -16,55 +18,22 @@ export function roundToNiceValue(value: number): number {
   return 10 * magnitude;
 }
 
-/**
- * Normalize a unit string to its scientific symbol for DISPLAY only. Users pass
- * units like "micron"/"um" on a Dataset; we keep the trait verbatim but render
- * the conventional glyph (µm, Å) so labels read like a journal figure. Unknown
- * strings pass through unchanged. Case-insensitive on the spelled-out forms.
- */
-export function unitSymbol(unit: string): string {
-  const trimmed = (unit || "").trim();
-  const lower = trimmed.toLowerCase();
-  if (lower === "micron" || lower === "microns" || lower === "um" || trimmed === "μm" || trimmed === "µm") return "µm";
-  if (lower === "angstrom" || lower === "angstroms" || lower === "ang" || trimmed === "Å" || lower === "a") return "Å";
-  if (lower === "nanometer" || lower === "nanometers" || lower === "nm") return "nm";
-  if (lower === "picometer" || lower === "picometers" || lower === "pm") return "pm";
-  if (lower === "millimeter" || lower === "millimeters" || lower === "mm") return "mm";
-  if (lower === "picosecond" || lower === "picoseconds" || lower === "ps") return "ps";
-  if (lower === "femtosecond" || lower === "femtoseconds" || lower === "fs") return "fs";
-  if (lower === "nanosecond" || lower === "nanoseconds" || lower === "ns") return "ns";
-  return trimmed;
-}
-
-// Length-unit ladder for the scale bar, each as its size in nm. Lets a sub-1 value
-// in one unit (e.g. 0.5 nm) display as a clean integer in a smaller unit (500 pm /
-// 5 A) instead of a decimal - microscopists read "5 A", not "0.50 nm".
-const LENGTH_UNITS_NM: { sym: string; nm: number }[] = [
-  { sym: "mm", nm: 1e6 }, { sym: "µm", nm: 1e3 }, { sym: "nm", nm: 1 }, { sym: "Å", nm: 0.1 }, { sym: "pm", nm: 1e-3 },
-];
-// Base unit (the trait's unit) -> nm. Only length units rescale; anything else
-// (mrad, ps, px, ...) keeps its own unit and the old decimal fallback.
-const BASE_UNIT_NM: Record<string, number> = {
-  mm: 1e6, "µm": 1e3, "μm": 1e3, micron: 1e3, microns: 1e3, um: 1e3,
-  nm: 1, nanometer: 1, nanometers: 1, "å": 0.1, angstrom: 0.1, angstroms: 0.1, ang: 0.1, a: 0.1, pm: 1e-3, picometer: 1e-3, picometers: 1e-3,
-};
-
 /** Format scale bar label. Length values auto-pick the unit that reads as a clean
  *  integer (no decimals) - 0.5 nm -> "5 Å", 0.005 nm -> "5 pm". Non-length units
- *  (mrad, ps, px) keep their unit. roundToNiceValue gives n×10^k, and every ladder
+ *  (mrad, 1/angstrom, ps, px) keep their unit; js/units.ts is the unit table. roundToNiceValue gives n×10^k, and every ladder
  *  step is a power of 10, so the rescaled number is always exact. */
 export function formatScaleLabel(value: number, unit: string): string {
   const nice = roundToNiceValue(value);
-  const baseNm = BASE_UNIT_NM[(unit || "").trim().toLowerCase()];
-  if (baseNm === undefined) {
+  const unitAngstroms = angstromsPerUnit(unit);
+  if (unitAngstroms === undefined) {
     // not a length unit - keep the unit, fall back to integer-or-decimal
     const sym = unitSymbol(unit);
     return nice >= 1 ? `${Math.round(nice)} ${sym}` : `${nice.toFixed(2)} ${sym}`;
   }
-  const valueNm = nice * baseNm;
+  const angstroms = nice * unitAngstroms;
   // largest ladder unit where the value is >= 1 -> the cleanest (fewest-digit) integer
-  const pick = LENGTH_UNITS_NM.find((ladderUnit) => valueNm / ladderUnit.nm >= 1) ?? LENGTH_UNITS_NM[LENGTH_UNITS_NM.length - 1];
-  return `${Math.round(valueNm / pick.nm)} ${pick.sym}`;
+  const pick = LENGTH_LADDER.find((ladderUnit) => angstroms / ladderUnit.angstroms >= 1) ?? LENGTH_LADDER[LENGTH_LADDER.length - 1];
+  return `${Math.round(angstroms / pick.angstroms)} ${pick.symbol}`;
 }
 
 const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
@@ -346,4 +315,17 @@ export function drawColorbar(
     ctx.textBaseline = "middle";
     ctx.fillText("log", barX - 4, barY + barH / 2);
   }
+}
+
+/** Crosshair with a gap at its center and a ring: the clicked-peak marker of the FFT and kymograph views. */
+export function strokePeakMarker(ctx: CanvasRenderingContext2D, x: number, y: number, armRadius: number, circleRadius: number) {
+  ctx.beginPath();
+  ctx.moveTo(x - armRadius, y); ctx.lineTo(x - 3, y);
+  ctx.moveTo(x + 3, y); ctx.lineTo(x + armRadius, y);
+  ctx.moveTo(x, y - armRadius); ctx.lineTo(x, y - 3);
+  ctx.moveTo(x, y + 3); ctx.lineTo(x, y + armRadius);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(x, y, circleRadius, 0, Math.PI * 2);
+  ctx.stroke();
 }

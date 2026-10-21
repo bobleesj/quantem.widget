@@ -121,7 +121,7 @@ route = device.gpu_path_hint() or device.no_gpu_path()  # this machine's way to 
 assert route in ptycho.session_note
 try:
     qw.ShowPtycho(object())
-except TypeError as exc:
+except ValueError as exc:
     assert route in str(exc)
 else:
     raise AssertionError("ShowPtycho must name what it takes and that a session needs quantem.gpu")
@@ -148,7 +148,7 @@ DISTRIBUTION = {"PIL": "pillow", "skimage": "scikit_image", "yaml": "pyyaml", "I
 # Imported only inside the function that needs them, with an install message or a fallback.
 OPTIONAL = {
     "abtem": "ShowCIF potential preview, the [crystal] extra",
-    "cupy": "free_gpu and gpu_info on CUDA, brought by quantem.gpu[cuda]",
+    "cupy": "gpu_info and vram_status on CUDA, brought by quantem.gpu[cuda]",
     "quantem": "quantem.gpu, and quantem core where it installs, guarded at the top of their adapter modules",
     "ipyfilechooser": "FolderPicker, used by quantem.live",
     "playwright": "quantem github widget screenshots",
@@ -209,7 +209,7 @@ def test_windows_on_arm_skips_the_dependencies_without_an_arm64_wheel() -> None:
         others = selected(system, machine)
         assert others["hdf5plugin"] == SpecifierSet(">=4.1") and others["ncempy"] == SpecifierSet(">=1.11")
         if (system, machine) != ("darwin", "x86_64"):
-            assert others["quantem"] == SpecifierSet(">=0.1.9")
+            assert others["quantem"] == SpecifierSet(">=0.1.10")
 
 
 WITHOUT_HDF5PLUGIN = """

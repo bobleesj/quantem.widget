@@ -86,7 +86,7 @@ class Model {
     image_flips_vertical: [false, false], panel_frame_counts: [1, 1], panel_frame_indices: [0, 0],
     panel_stack_offsets: [-1, -1], selected_idx: 0, stats_mean: [0, 0], stats_min: [0, 0], stats_max: [0, 0],
     stats_std: [0, 0], fft_window: true, fft_metrics: true, pixel_size: 0, pixel_unit: "pixels",
-    scale_bar_visible: true, show_panel_titles: true, title: "", n_pages: 1, page_idx: 0,
+    show_scale_bar: true, show_panel_titles: true, title: "", n_pages: 1, page_idx: 0,
   };
   listeners = new Map<string, Set<() => void>>();
   get(key: string) { return this.values[key]; }
@@ -154,6 +154,9 @@ afterEach(async () => {
 
 it("keeps the image panels in their colormap while FFT panels repaint in another", async () => {
   const model = new Model();
+  // Without the control rows each jsdom render is about 5x cheaper; the panels
+  // paint and the engine is called in exactly the same sequence.
+  model.values.show_controls = false;
   act(() => { cleanup = renderShow2D({ model, el } as never) as (() => void) | undefined; });
   await settle();
   for (const [key, value] of [["cmap", "viridis"], ["show_fft", true]] as const) {
@@ -213,7 +216,7 @@ it("previews a histogram drag of a packed uint8 frame through the scaled pass at
   const frame = Uint8Array.from({ length: SIZE * SIZE }, (_, i) => Math.round((255 * i) / (SIZE * SIZE - 1)));
   Object.assign(model.values, {
     n_images: 1, labels: ["uint8"], is_rgb: [false], frame_bytes: new DataView(frame.buffer), offline: true,
-    _offline_min: 0, _offline_max: 255, _offline_mins: [0], _offline_maxs: [255], image_rotations: [0],
+    _offline_mins: [0], _offline_maxs: [255], image_rotations: [0],
     image_flips_horizontal: [false], image_flips_vertical: [false], panel_frame_counts: [1], panel_frame_indices: [0],
     panel_stack_offsets: [-1], stats_mean: [0], stats_min: [0], stats_max: [0], stats_std: [0], ncols: 1,
   });

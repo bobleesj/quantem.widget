@@ -82,20 +82,20 @@ def exact_max(values_t: torch.Tensor, bound: int | None = None) -> torch.Tensor:
     return int32_block_max(values_t, bound)
 
 
-def detector_bin_mean(values_t: torch.Tensor, det_bin: int) -> np.ndarray:
-    """Mean of every ``det_bin`` x ``det_bin`` detector block of a ``(rows, cols, det_rows, det_cols)`` tensor.
+def detector_bin_mean(values_t: torch.Tensor, detector_bin: int) -> np.ndarray:
+    """Mean of every ``detector_bin`` x ``detector_bin`` detector block of a ``(rows, cols, det_rows, det_cols)`` tensor.
 
     Returns host float32. Counts sum exactly (``exact_sum``) and the total is
     divided once in float64, so a binned pattern is the exact mean rounded once;
-    float data averages in float32. ``det_bin=1`` returns the values as float32.
+    float data averages in float32. ``detector_bin=1`` returns the values as float32.
     """
-    if det_bin == 1:
+    if detector_bin == 1:
         return values_t.float().cpu().numpy()
     rows, cols, det_rows, det_cols = values_t.shape
-    blocks_t = values_t.reshape(rows, cols, det_rows // det_bin, det_bin, det_cols // det_bin, det_bin)
+    blocks_t = values_t.reshape(rows, cols, det_rows // detector_bin, detector_bin, det_cols // detector_bin, detector_bin)
     if torch.is_floating_point(blocks_t):
         return blocks_t.float().mean(dim=(3, 5)).cpu().numpy()
-    return (exact_sum(blocks_t, dim=(3, 5)).cpu().numpy() / (det_bin * det_bin)).astype(np.float32)
+    return (exact_sum(blocks_t, dim=(3, 5)).cpu().numpy() / (detector_bin * detector_bin)).astype(np.float32)
 
 
 def count_bound(data_t: torch.Tensor) -> int:

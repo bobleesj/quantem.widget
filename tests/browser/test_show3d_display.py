@@ -15,6 +15,7 @@ average during playback; a zoomed multi-panel difference view paints the differe
 """
 
 import io
+import re
 
 import numpy as np
 import pytest
@@ -401,3 +402,163 @@ def test_show3d_zoomed_fft_keeps_zero_frequency_at_the_centre(webgpu, layout, se
     offset = np.array([bright_rows.mean(), bright_cols.mean()]) - centre
     assert np.all(np.abs(offset) < 0.08 * shot.shape[0]), (offset, shot.shape)
     assert page.errors == [], page.errors
+
+
+def drifted_blobs(rows: int, cols: int, row_shift: float, col_shift: float) -> np.ndarray:
+    """Two Gaussian blobs and a weak lattice, displaced by (row_shift, col_shift) pixels."""
+    row, col = np.indices((rows, cols), dtype=np.float64)
+    row, col = row - row_shift, col - col_shift
+    return (100 * np.exp(-((row - rows * 0.4) ** 2 + (col - cols * 0.55) ** 2) / 40)
+            + 60 * np.exp(-((row - rows * 0.7) ** 2 + (col - cols * 0.3) ** 2) / 15)
+            + 20 * np.sin(col * 0.7) * np.cos(row * 0.45)).astype(np.float32)
+
+
+@pytest.fixture(scope="module")
+def drifted(browser_out) -> str:
+    from quantem.widget import Show3D
+
+    # non-square, and 400 x 600 pads to a 512 x 1024 grid for the FFT (smaller frames align on the CPU)
+    shifts = [(0, 0), (3, -2), (-5, 4), (2.5, -1.5)]
+    viewer = Show3D(np.stack([drifted_blobs(400, 600, *shift) for shift in shifts]), panel_width_px=320)
+    viewer.subpixel_align_enabled, viewer.slice_idx = True, 2
+    viewer.export_html(browser_out / "show3d_drifted.html")
+    return "show3d_drifted.html"
+
+
+ALIGNED = re.compile(r"current row (-?[\d.]+) px, col (-?[\d.]+) px · max ([\d.]+)/([\d.]+) px · (\w+)")
+
+
+def test_show3d_subpixel_alignment_runs_on_webgpu_with_the_cpu_shifts(drifted, serve, open_page, hardware_adapter, browser_out):
+    # Frame 2 is frame 0 moved by (-5, +4) px; the alignment shift moves it back by (+5, -4).
+    found = {}
+    for webgpu in (True, False):
+        page = open_ready(f"{serve(browser_out)}/{drifted}", webgpu, open_page, hardware_adapter)
+        page.get_by_label("More tools").click()
+        page.get_by_role("button", name="Align", exact=True).click()
+        status = page.get_by_text(ALIGNED)
+        status.wait_for(timeout=60_000)
+        page.screenshot(path=str(browser_out / f"show3d_aligned_{'webgpu' if webgpu else 'cpu'}.png"))
+        found[webgpu] = ALIGNED.search(status.inner_text()).groups()
+        assert page.errors == [], page.errors
+    assert found[True][4] == "WebGPU" and found[False][4] == "CPU", found
+    assert found[True][:4] == found[False][:4], found
+    row, col, max_row, max_col = (float(value) for value in found[True][:4])
+    assert abs(row - 5) < 0.3 and abs(col + 4) < 0.3 and abs(max_row - 5) < 0.3 and abs(max_col - 4) < 0.3, found
+
+
+HISTOGRAM = 'canvas[aria-label="Histogram of intensity values with min and max clip handles"]'
+# Display bars of the image histogram: columns whose bottom pixel differs from the background, which the
+# top row always shows (bars stop 2 px below it).
+HISTOGRAM_BARS = """
+(selector) => {
+  const canvas = [...document.querySelectorAll(selector)].pop();
+  const context = canvas.getContext('2d');
+  const pixels = context.getImageData(0, canvas.height - 2, canvas.width, 1).data;
+  const background = [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)];
+  let columns = 0;
+  for (let x = 1; x < canvas.width - 1; x++) {
+    if ([0, 1, 2].some(channel => pixels[4 * x + channel] !== background[channel])) columns++;
+  }
+  return columns;
+}
+"""
+
+
+@pytest.mark.parametrize("webgpu", [True, False], ids=["webgpu", "cpu"])
+def test_show3d_histogram_bins_the_difference_frame_it_shows(webgpu, serve, open_page, hardware_adapter, browser_out):
+    # Frame k is 100 + ramp * (1 + k / 2), so the previous-frame difference of frame 2 is ramp / 2, spread over
+    # the zero-centred difference range [0, 15]. Before, the histogram binned the raw frame (100 to 160), all
+    # of it past the range in one end bar, while the image showed the difference.
+    from quantem.widget import Show3D
+
+    rows, cols = np.indices((64, 64))
+    ramp = 30 * (rows + cols) / 126
+    viewer = Show3D(np.stack([100 + ramp * (1 + 0.5 * k) for k in range(4)]).astype(np.float32), panel_width_px=256, cmap="gray")
+    viewer.slice_idx, viewer.diff_mode = 2, "previous"
+    viewer.export_html(browser_out / "show3d_histogram_difference.html")
+    page = open_ready(f"{serve(browser_out)}/show3d_histogram_difference.html", webgpu, open_page, hardware_adapter)
+    page.locator(HISTOGRAM).last.screenshot(path=str(browser_out / f"show3d_histogram_difference_{'webgpu' if webgpu else 'cpu'}.png"))
+    assert page.evaluate(HISTOGRAM_BARS, HISTOGRAM) > 40
+    assert page.errors == [], page.errors
+
+
+@pytest.mark.parametrize("webgpu", [True, False], ids=["webgpu", "cpu"])
+def test_show3d_log_histogram_spans_the_log_range(webgpu, serve, open_page, hardware_adapter, browser_out):
+    # Values 0 to 10^4 in log scale: the bars span log1p over [0, 9.2], as the slider labels do. Before, the
+    # bins put log values against the linear range [0, 10^4], so every pixel fell in the first bar.
+    from quantem.widget import Show3D
+
+    rows, cols = np.indices((64, 64))
+    ramp = np.expm1(np.log1p(1e4) * (rows * 64 + cols) / 4095)
+    viewer = Show3D(np.stack([ramp, ramp]).astype(np.float32), panel_width_px=256, cmap="gray")
+    viewer.log_scale = True
+    viewer.export_html(browser_out / "show3d_histogram_log.html")
+    page = open_ready(f"{serve(browser_out)}/show3d_histogram_log.html", webgpu, open_page, hardware_adapter)
+    page.locator(HISTOGRAM).last.screenshot(path=str(browser_out / f"show3d_histogram_log_{'webgpu' if webgpu else 'cpu'}.png"))
+    assert page.evaluate(HISTOGRAM_BARS, HISTOGRAM) > 40
+    assert page.errors == [], page.errors
+
+
+# The min and max labels under the last histogram on the page (the kymograph's, right of the image).
+LAST_HISTOGRAM_LABELS = """
+(selector) => [...[...document.querySelectorAll(selector)].pop().parentElement.parentElement.lastElementChild.children]
+  .map(label => label.textContent)
+"""
+
+
+def test_show3d_kymograph_log_scale_keeps_a_signed_range(serve, open_page, hardware_adapter, browser_out):
+    # A signed stack (-8 to 8) in kymograph Log: the range goes through the signed log1p, as the data does.
+    # Before, Math.log1p of the negative bound was NaN, so the slider labels and the colormap broke.
+    from quantem.widget import Show3D
+
+    columns = np.arange(64)
+    stack = np.stack([np.tile(8 * np.sin(2 * np.pi * (columns + 3 * k) / 16), (64, 1)) for k in range(6)]).astype(np.float32)
+    viewer = Show3D(stack, panel_width_px=256, cmap="gray")
+    viewer.profile_line, viewer.show_kymograph = [{"row": 32.0, "col": 4.0}, {"row": 32.0, "col": 60.0}], True
+    viewer.export_html(browser_out / "show3d_kymograph_log.html")
+    page = open_ready(f"{serve(browser_out)}/show3d_kymograph_log.html", True, open_page, hardware_adapter)
+    page.get_by_label("Toggle line intensity profile tool").click()
+    page.get_by_label("Kymograph intensity scale (linear or logarithmic)").click()
+    page.get_by_role("option", name="Log").click()
+    page.wait_for_timeout(1_000)
+    page.screenshot(path=str(browser_out / "show3d_kymograph_log.png"))
+    low, high = (float(label) for label in page.evaluate(LAST_HISTOGRAM_LABELS, HISTOGRAM))
+    assert -2.25 < low < -2.0 and 2.0 < high < 2.25, (low, high)  # signed log1p of about -8 and 8
+    assert page.errors == [], page.errors
+
+
+FAIL_READBACKS = """() => { window.__mapAsync = GPUBuffer.prototype.mapAsync;
+  GPUBuffer.prototype.mapAsync = function () { return Promise.reject(new Error('injected readback failure')); }; }"""
+RESTORE_READBACKS = "() => { GPUBuffer.prototype.mapAsync = window.__mapAsync; }"
+
+
+def test_show3d_fft_click_that_fails_to_refine_ends_the_drag(serve, open_page, hardware_adapter, browser_out):
+    # A click on the zoomed FFT whose GPU peak refinement fails (a lost readback): moving the mouse afterwards
+    # with no button held must not pan the FFT. Before, the click awaited the refinement before it cleared
+    # the drag, so the error left the drag open and every later mouse move panned.
+    from quantem.widget import Show3D
+
+    rows, cols = np.indices((128, 128))
+    lattice = np.cos(2 * np.pi * cols / 8) + np.cos(2 * np.pi * rows / 8)
+    stack = np.stack([lattice * (1 + 0.1 * frame) for frame in range(3)]).astype(np.float32)
+    Show3D(stack, panel_width_px=256, show_fft=True, fft_layout="right", fft_overlay_zoom=2.0).export_html(
+        browser_out / "show3d_fft_click_failure.html")
+    page = open_ready(f"{serve(browser_out)}/show3d_fft_click_failure.html", True, open_page, hardware_adapter)
+    page.wait_for_timeout(1_000)
+    box = page.locator(FFT).bounding_box()
+    center_x, center_y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    before = screen(page, box)  # a screenshot ends any hover, so none is taken between the click and the move
+    page.evaluate(FAIL_READBACKS)
+    page.mouse.move(center_x + 20, center_y)
+    page.mouse.down()
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    page.evaluate(RESTORE_READBACKS)
+    page.mouse.move(center_x + 45, center_y + 25, steps=5)
+    page.wait_for_timeout(500)
+    after = screen(page, box)
+    Image.fromarray(np.concatenate([before, after], axis=1)).save(browser_out / "show3d_fft_click_failure.png")
+    # Compare scientific pixels, clear of the status text and resize grip.
+    # Compositing the status text after pointer input can change font antialiasing.
+    assert page.errors and np.array_equal(before[32:220, :220], after[32:220, :220])
+    assert all("injected readback failure" in error for error in page.errors), page.errors

@@ -20,14 +20,12 @@ from quantem.widget.render.figure import format_scale_label, round_to_nice
 # regardless, so quality here means spatial resolution (and therefore file size).
 QUALITY_SCALE = {"high": 1.0, "medium": 0.6, "low": 0.35}
 MIN_TITLE_FONT_SIZE = 12
-MIN_SCALE_FONT_SIZE = 12
 MIN_SCALE_BAR_THICKNESS = 5
 MIN_OVERLAY_MARGIN = 12
 BACKGROUND_COLORS = {
     "dark": (12, 12, 12),
     "black": (0, 0, 0),
     "white": (255, 255, 255),
-    "transparent": (0, 0, 0),
 }
 
 
@@ -62,7 +60,7 @@ def _draw_scalebar(
     width, height = image.size
     target_bar_px = min(60.0, width * 0.25)
     bar_thickness = MIN_SCALE_BAR_THICKNESS
-    font_size = max(MIN_SCALE_FONT_SIZE, 16)
+    font_size = 16  # the canvas label size, already above the 12 px publication minimum
     margin = MIN_OVERLAY_MARGIN
     effective_zoom = max(1e-6, float(zoom))
     nice_phys = round_to_nice((target_bar_px / effective_zoom) * pixel_size)
@@ -90,14 +88,14 @@ def animation_output_scale(
     height: int,
     quality: str,
     *,
-    downsample: int = 1,
+    image_bin: int = 1,
     max_edge_px: int | None = None,
 ) -> float:
     """Return the explicit display scale for an exported animation frame."""
     width = max(1, int(width))
     height = max(1, int(height))
-    downsample = max(1, int(downsample))
-    scale = min(1.0, float(QUALITY_SCALE.get(quality, 1.0)) / float(downsample))
+    image_bin = max(1, int(image_bin))
+    scale = min(1.0, float(QUALITY_SCALE.get(quality, 1.0)) / float(image_bin))
     if max_edge_px is not None:
         max_edge_px = max(1, int(max_edge_px))
         scale = min(scale, max_edge_px / float(max(width, height)))
@@ -112,7 +110,7 @@ def finalize_frame(
     *,
     show_zoom_indicator: bool = False,
     zoom: float = 1.0,
-    downsample: int = 1,
+    image_bin: int = 1,
     max_edge_px: int | None = None,
 ):
     """Downscale explicitly, then draw the scale bar at output resolution."""
@@ -120,7 +118,7 @@ def finalize_frame(
         img.size[0],
         img.size[1],
         quality,
-        downsample=downsample,
+        image_bin=image_bin,
         max_edge_px=max_edge_px,
     )
     if scale < 1.0:
@@ -186,77 +184,35 @@ def compose_panel_grid(
     images: list,
     *,
     panel_titles: list[str] | None = None,
-    frame_labels: list[str] | None = None,
     show_panel_titles: bool = True,
     title_font_size: int = 11,
     max_cols: int = 4,
     panel_gap: int = 10,
     background: str | tuple[int, int, int] = "dark",
-    outer_border: int = 0,
-    outer_border_color: str | tuple[int, int, int] | None = None,
-    panel_inner_border: int = 0,
-    panel_inner_border_color: str | tuple[int, int, int] = "black",
 ):
-    """Compose per-panel PIL images into the widget-style panel grid."""
-    if not images:
-        raise ValueError("compose_panel_grid requires at least one image")
-    from PIL import Image, ImageDraw
+    """Compose per-panel PIL images into the widget-style grid: ``max_cols`` columns,
+    ``panel_gap`` px of ``background`` between cells, each panel centered in its cell
+    under its title."""
+    from PIL import Image
     n_panels = len(images)
     cols = n_panels if max_cols <= 0 else min(max(1, int(max_cols)), n_panels)
     rows = int(math.ceil(n_panels / cols))
     cell_width = max(image.size[0] for image in images)
     cell_height = max(image.size[1] for image in images)
     gap = max(0, int(panel_gap))
-    outer = max(0, int(outer_border))
-    inner = max(0, int(panel_inner_border))
-    background_rgb = normalize_background(background)
-    outer_rgb = normalize_background(outer_border_color) if outer_border_color is not None else background_rgb
     canvas = Image.new(
         "RGB",
-        (
-            cols * cell_width + gap * (cols - 1) + 2 * outer,
-            rows * cell_height + gap * (rows - 1) + 2 * outer,
-        ),
-        outer_rgb,
+        (cols * cell_width + gap * (cols - 1), rows * cell_height + gap * (rows - 1)),
+        normalize_background(background),
     )
-    if gap > 0 and background_rgb != outer_rgb:
-        draw = ImageDraw.Draw(canvas)
-        draw.rectangle(
-            [
-                outer,
-                outer,
-                canvas.size[0] - outer,
-                canvas.size[1] - outer,
-            ],
-            fill=background_rgb,
-            outline=None,
-        )
     for index, source in enumerate(images):
         panel = source.convert("RGB").copy()
-        if show_panel_titles:
-            title_parts: list[str] = []
-            if panel_titles and index < len(panel_titles):
-                title_parts.append(str(panel_titles[index]))
-            if frame_labels and index < len(frame_labels) and frame_labels[index]:
-                title_parts.append(str(frame_labels[index]))
-            _draw_panel_title(panel, " · ".join(title_parts), title_font_size)
+        if show_panel_titles and panel_titles and index < len(panel_titles):
+            _draw_panel_title(panel, str(panel_titles[index]), title_font_size)
         row, col = divmod(index, cols)
-        x = outer + col * (cell_width + gap) + (cell_width - panel.size[0]) // 2
-        y = outer + row * (cell_height + gap) + (cell_height - panel.size[1]) // 2
+        x = col * (cell_width + gap) + (cell_width - panel.size[0]) // 2
+        y = row * (cell_height + gap) + (cell_height - panel.size[1]) // 2
         canvas.paste(panel, (x, y))
-        if inner > 0:
-            draw = ImageDraw.Draw(canvas)
-            color = normalize_background(panel_inner_border_color)
-            for offset in range(inner):
-                draw.rectangle(
-                    [
-                        x + offset,
-                        y + offset,
-                        x + panel.size[0] - 1 - offset,
-                        y + panel.size[1] - 1 - offset,
-                    ],
-                    outline=color,
-                )
     return canvas
 
 

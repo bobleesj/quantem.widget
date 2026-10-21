@@ -8,6 +8,7 @@ is monkeypatched (no GPU route, no quantem core) so every branch runs here; the 
 for real when quantem.gpu and a GPU are present.
 """
 
+import importlib.util
 import json
 
 import h5py
@@ -139,13 +140,13 @@ def test_the_4dstem_tutorial_loader_follows_the_machine(tmp_path, monkeypatch, g
         pytest.skip("the GPU branch needs quantem.gpu and a CUDA or MPS GPU")
     if not gpu:
         monkeypatch.setattr(gpu_adapter, "accelerator_ready", lambda: False)
-    folder = tmp_path / "widget-tutorials" / "show4dstem" / "gold-128-bin8" / "full"
+    folder = tmp_path / "4dstem" / "gold_128_npy_bin8"
     folder.mkdir(parents=True)
     counts = _counts(scan=(8, 8))
     np.save(folder / "data.npy", counts)
     (folder / "meta.json").write_text(json.dumps({"name": "gold", "sampling": [2.0, 2.0, 3.68, 3.68],
                                                   "units": ["A", "A", "mrad", "mrad"]}))
-    monkeypatch.setattr(datasets, "snapshot_download", lambda **kwargs: tmp_path, raising=False)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", lambda **kwargs: tmp_path)
     dataset = datasets.show4dstem_gold(size="small", verbose=False)
     assert type(dataset).__name__ == ("Dataset4dstemGPU" if gpu else "Dataset4dstem")
     values = dataset[:, :].cpu().numpy() if gpu else dataset.array
@@ -154,7 +155,8 @@ def test_the_4dstem_tutorial_loader_follows_the_machine(tmp_path, monkeypatch, g
     assert list(dataset.units) == ["A", "A", "mrad", "mrad"]
     viewer = Show4DSTEM(dataset, precompute_virtual_images=False, verbose=False)
     try:
-        assert viewer.title == "Gold 4D-STEM bin8 preview" and viewer.pixel_size == 8.0 and viewer.k_pixel_size == 3.68
+        assert viewer.title == "Gold 4D-STEM bin8 preview"
+        assert (viewer.scan_sampling_A, viewer.detector_sampling_mrad) == ([8.0, 8.0], [3.68, 3.68])
     finally:
         viewer.close()
 
@@ -168,7 +170,7 @@ def _show4dstem_numbers(widget) -> list[bytes]:
     widget.pos_row, widget.pos_col = 4, 1
     mean = np.asarray(widget._session(0).mean_dp(), np.float32)
     return [bytes(widget.virtual_image_bytes), bytes(widget.frame_bytes), mean.tobytes(),
-            np.float64([widget.center_row, widget.center_col, widget.bf_radius]).tobytes()]
+            np.float64([widget.bright_field_center_row_px, widget.bright_field_center_col_px, widget.bright_field_radius_px]).tobytes()]
 
 
 def test_show4dstem_shows_the_same_numbers_for_every_input_type(tmp_path, monkeypatch):
@@ -200,8 +202,8 @@ def test_show4dstem_shows_the_same_numbers_for_every_input_type(tmp_path, monkey
                 # every dataset names itself (a file by its name); an .npy file carries no calibration
                 assert widget.title == ("" if label in ("numpy", "torch cpu", "torch cuda") else "gold"), label
                 calibrated = label not in ("numpy", "torch cpu", "torch cuda", "Dataset4dstemGPU, encoded from a file")
-                scales = (widget.pixel_size, widget.pixel_unit, widget.k_pixel_size, widget.k_pixel_unit)
-                assert scales == ((2.0, "A", 3.68, "mrad") if calibrated else (1.0, "pixels", 1.0, "pixels")), label
+                scales = (widget.scan_sampling_A, widget.detector_sampling_mrad, widget.detector_sampling_inv_A)
+                assert scales == (([2.0, 2.0], [3.68, 3.68], []) if calibrated else ([], [], [])), label
             finally:
                 widget.close()
     finally:
@@ -239,7 +241,7 @@ def test_a_list_of_datasets_opens_one_comparison_on_every_machine(tmp_path, monk
     assert all(numbers == shown["core"] for numbers in shown.values())
 
 
-def test_scan_region_mixed_lists_and_refused_npy_files_behave_alike(tmp_path, monkeypatch, capsys):
+def test_scan_region_mixed_lists_and_signed_npy_files_behave_alike(tmp_path, monkeypatch, capsys):
     counts = _counts()
     region = (1, 6, 0, 5)
     expected = Show4DSTEM(counts[1:6, 0:5], precompute_virtual_images=False, verbose=False)
@@ -265,13 +267,14 @@ def test_scan_region_mixed_lists_and_refused_npy_files_behave_alike(tmp_path, mo
     if not gpu_adapter.accelerator_ready():
         return
     regions[-1].close()
-    # quantem.gpu keeps exact uint8, uint16 or float32 values; any other NumPy file is read densely, and says so
-    np.save(tmp_path / "signed.npy", counts.astype(np.int16))
+    # Native signed measurements stay encoded without narrowing their dtype.
+    values = counts.astype(np.int16) - 100
+    np.save(tmp_path / "signed.npy", values)
     capsys.readouterr()
-    signed = read_4dstem(tmp_path / "signed.npy", verbose=False)
-    assert "quantem.gpu cannot hold signed.npy on the GPU" in capsys.readouterr().out
-    assert isinstance(signed, core.Dataset4dstem) and signed.array.dtype == np.uint16
-    np.testing.assert_array_equal(signed.array, counts)
+    with read_4dstem(tmp_path / "signed.npy", verbose=False) as signed:
+        assert "cannot hold" not in capsys.readouterr().out
+        assert gpu_adapter.is_acquisition(signed) and signed.dtype == values.dtype
+        np.testing.assert_array_equal(signed.read().cpu().numpy(), values)
 
 
 @pytest.mark.skipif(not CUDA, reason="the GPU memory ceiling is checked on CUDA")
@@ -297,14 +300,24 @@ def _image_widgets():
         ("Show3D", STACK, lambda data: Show3D(data, verbose=False), lambda widget: widget._offline_float_stack,
          {"title": "gold", "pixel_size": 2.0, "pixel_unit": "A"}),
         ("Show3DSlices", STACK, lambda data: Show3DSlices(data), lambda widget: widget.volume_bytes,
-         {"title": "gold", "pixel_size": 2.0}),
+         {"title": "gold", "voxel_size_A": [2.0, 2.0, 2.0]}),
         ("ShowDiffraction", IMAGE, lambda data: ShowDiffraction(data, device="cpu", verbose=False),
          lambda widget: widget.frame_bytes, {"title": "gold"}),
         ("ChooseLattice", IMAGE, lambda data: ChooseLattice(data), lambda widget: widget.frame_bytes, {"title": "gold"}),
-        ("ShowPtycho", IMAGE, lambda data: ShowPtycho(data), lambda widget: widget.phase_bytes, {"pixel_size": 2.0}),
+        ("ShowPtycho", IMAGE, lambda data: ShowPtycho(data), lambda widget: widget.phase_bytes, {"object_sampling_A": [2.0, 2.0]}),
         # Plot2D's axes are the x and y it is given
         ("Plot2D", IMAGE, lambda data: Plot2D(data, x=np.arange(32.0), y=np.arange(24.0)), lambda widget: widget.data_bytes, {}),
     ]
+
+
+class _ArrayLike:
+    """An object NumPy reads through ``__array__`` only, as it reads an xarray or an h5py dataset."""
+
+    def __init__(self, values):
+        self._values = values
+
+    def __array__(self, dtype=None, copy=None):
+        return np.asarray(self._values, dtype=dtype)
 
 
 @pytest.mark.parametrize("name", [entry[0] for entry in _image_widgets()])
@@ -320,6 +333,13 @@ def test_image_widgets_show_the_same_numbers_for_every_input_type(name, monkeypa
     }
     if CUDA:
         inputs["torch cuda"] = torch.from_numpy(values).cuda()
+    # G-12: any array-like opens (an xarray or h5py dataset hands NumPy its values through __array__),
+    # not only the array types the widgets know by name
+    inputs["array-like"] = _ArrayLike(values)
+    if importlib.util.find_spec("cupy") is not None and CUDA:
+        import cupy
+
+        inputs["cupy"] = cupy.asarray(values)
     numbers = {}
     for label, data in inputs.items():
         widget = construct(data)
@@ -329,7 +349,7 @@ def test_image_widgets_show_the_same_numbers_for_every_input_type(name, monkeypa
             if label in ("quantem core", "stand-in"):
                 assert metadata == from_dataset, label
             else:  # an array carries no title or scale
-                assert metadata.get("title", "") == "" and metadata.get("pixel_size", 0.0) == 0.0, label
+                assert metadata.get("title", "") == "" and not np.any(metadata.get("pixel_size", metadata.get("voxel_size_A", 0.0))), label
         finally:
             widget.close()
     reference = numbers.pop("numpy")

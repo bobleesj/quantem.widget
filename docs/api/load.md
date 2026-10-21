@@ -126,7 +126,7 @@ from quantem.gpu import detector
 
 mean_dp = detector.mean(loaded)
 center, radius = detector.fit_probe(mean_dp)
-bright_field = detector.bf(loaded, center=center, radius=radius)
+bright_field = detector.bf(loaded, bright_field_center_px=center, bright_field_radius_px=radius)
 
 session = detector.prepare(loaded)   # repeated queries; a list of acquisitions also works
 ```

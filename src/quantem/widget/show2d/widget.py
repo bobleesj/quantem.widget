@@ -4,44 +4,44 @@ One image or a gallery of images (each panel may be its own frame stack),
 with FFT and histogram analysis, ROIs, line profiles, linked zoom/pan and
 contrast, paged galleries, and watched-folder updates. Rendering runs in the
 browser from the synced traits below; this module owns the Python side:
-input normalisation, the frame byte packing, the folder watcher hooks and the
+input normalization, the frame byte packing, the folder watcher hooks and the
 observers that answer the browser.
 """
 
 import json
 import math
+import numbers
 import pathlib
-import warnings
 from collections.abc import Mapping, Sequence
 from typing import Self
 
 import anywidget
 import matplotlib.patheffects
-import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 import numpy as np
-import torch
 import traitlets
-from matplotlib import colormaps
 from PIL import Image
 
 from quantem.widget.adapters import core as core_adapter
 from quantem.widget.folder_watch_status import FOLDER_WATCH_STATE_VALUES
-from quantem.widget.colormap import Colormap, auto_window, cmap_to_name, contrast_uint8, display_window, is_cmap_sequence, signed_log1p
+from quantem.widget.colormap import Colormap, cmap_to_name, colorize, contrast_uint8, is_cmap_sequence, signed_log1p
 from quantem.widget.export import HtmlExportMixin
 from quantem.widget.fallback import StaticFallbackMixin
 from quantem.widget.pages import PagesMixin
 from quantem.widget.panels import PanelsMixin
 from quantem.widget.render.figure import format_scale_label, round_to_nice
 from quantem.widget.state import SavedStateMixin, announce_browser_limit
+from quantem.widget.units import image_axes, per_axis, unit_entry
 from quantem.widget.image_folder import ImageFolderRecord, WatchedImageFolder, WatchedImageFolderMixin
 from quantem.widget.io.image import RgbImage
 from quantem.widget.show2d.options import (
     _expand_title_spans_for_flattened_labels,
-    _normalise_title_span_sequence,
+    _normalize_title_span_sequence,
     _normalize_inset_plot_specs,
     _normalize_marker_mapping,
     _normalize_panel_annotations,
     _normalize_panel_indices,
+    _validate_panel_overlays_trait,
     _normalize_panel_overlays,
     _normalize_panel_title_style,
     _normalize_scale_bar_style,
@@ -49,15 +49,17 @@ from quantem.widget.show2d.options import (
 )
 from quantem.widget.show2d.export import Show2DExport
 from quantem.widget.show2d.fallback import Show2DStaticPng
-from quantem.widget.show2d.state import Show2DState
+from quantem.widget.show2d.state import Show2DState, _rescale_view
 from quantem.widget.utils.array import _b64_safe, _resize_image, bin2d, to_numpy
-from quantem.widget.utils.state_io import unwrap_state_payload
+from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
 
 _DEFAULT_FOLDER_PAGE_SIZE = 20
 _MAX_PANEL_PLAYBACK_FPS = 30.0
 # Rec. 709 luma weights: the standard perceptual grayscale reduction of RGB.
 _RGB_LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+# Keys of one explicit page dict: the page title, its panels, their labels.
+_PAGE_KEYS = {"title", "images", "labels"}
 
 
 def _nonnegative_int(value: object, *, name: str) -> int:
@@ -79,13 +81,12 @@ _BROWSER_DENOISE_MODES = ("none", "gaussian", "anscombe")
 
 
 def _denoise_mode(mode: object) -> str:
-    """A denoise mode the browser filter runs; off/raw/"" mean none.
+    """A denoise mode the browser filter runs.
 
     Any other name would pass the frame through unfiltered while the controls
     name a filter, so it raises.
     """
     name = str(mode).strip().lower()
-    name = "none" if name in ("", "off", "raw") else name
     if name not in _BROWSER_DENOISE_MODES:
         raise ValueError(f"denoise must be one of {_BROWSER_DENOISE_MODES}, got {mode!r}")
     return name
@@ -117,37 +118,35 @@ def _resolve_page_labels(
     return resolved
 
 
-def _normalise_show2d_pages(
+def _normalize_show2d_pages(
     data,
     *,
     labels: list[str | None] | None,
     page_labels: Sequence[str | None] | None,
 ) -> tuple[object, list[str | None] | None, int, int, list[str], list[int]]:
-    """Flatten Show2D paged input into the established gallery stack.
+    """Convert an array input once and flatten paged input into one gallery stack.
 
-    Public page data is ``pages x panels x rows x cols``. Internally this stays
-    compatible with Show2D's existing gallery transport by flattening pages into
-    one stack and syncing page metadata separately. The browser then renders
-    only the active page.
+    Public page data is ``pages x panels x rows x cols``. The pages flatten
+    into one stack and the page metadata syncs separately, so the browser
+    renders only the active page. Any other array (NumPy, torch on any device,
+    CuPy, anything ``np.asarray`` takes) comes back as one NumPy array, so the
+    constructor counts panels on the converted data; lists and quantem datasets
+    come back unchanged for the per-item path.
     """
-    explicit_page_dicts = (
-        isinstance(data, (list, tuple))
-        and len(data) > 0
-        and all(isinstance(item, dict) and any(key in item for key in ("images", "data", "array")) for item in data)
-    )
+    explicit_page_dicts = isinstance(data, (list, tuple)) and len(data) > 0 and all(isinstance(item, dict) for item in data)
     if explicit_page_dicts:
         page_arrays: list[np.ndarray] = []
         flattened_labels: list[str | None] = []
         inferred_page_labels: list[str] = []
         panels_per_page: int | None = None
         for page_idx, page in enumerate(data):
-            raw_images = page.get("images", page.get("data", page.get("array")))
-            if raw_images is None:
-                raise ValueError(
-                    f"Show2D page {page_idx} is missing images/data/array. "
-                    "Use {'title': '...', 'images': [...]}"
-                )
-            page_panels = to_numpy(raw_images)
+            # a key the page does not read would drop its panels or its title without a word
+            unknown = sorted(str(key) for key in page if key not in _PAGE_KEYS)
+            if unknown:
+                raise ValueError(f"Show2D page {page_idx} only accepts keys {sorted(_PAGE_KEYS)}, got {unknown[0]!r}")
+            if page.get("images") is None:
+                raise ValueError(f"Show2D page {page_idx} is missing images. Use {{'title': '...', 'images': [...]}}")
+            page_panels = to_numpy(page["images"])
             if page_panels.ndim == 2:
                 page_panels = page_panels[np.newaxis, ...]
             if page_panels.ndim != 3:
@@ -163,7 +162,7 @@ def _normalise_show2d_pages(
                     f"page 0 has {panels_per_page}, page {page_idx} has {page_panels.shape[0]}"
                 )
             page_arrays.append(page_panels)
-            inferred_page_labels.append(str(page.get("title") or page.get("label") or f"Page {page_idx + 1}"))
+            inferred_page_labels.append(str(page.get("title") or f"Page {page_idx + 1}"))
             page_panel_labels = page.get("labels")
             if page_panel_labels is not None:
                 if len(page_panel_labels) != int(page_panels.shape[0]):
@@ -199,36 +198,37 @@ def _normalise_show2d_pages(
             [0] * n_pages,
         )
 
-    array = to_numpy(data) if isinstance(data, (np.ndarray, torch.Tensor)) else None
-    if array is not None and array.ndim == 4:
-        n_pages, panels = int(array.shape[0]), int(array.shape[1])
-        resolved_page_labels = _resolve_page_labels(page_labels, [f"Page {i + 1}" for i in range(n_pages)], n_pages)
-        if labels is not None:
-            if len(labels) == panels:
-                resolved_labels = [
-                    "" if label is None else str(label)
-                    for _ in range(n_pages)
-                    for label in labels
-                ]
-            elif len(labels) == n_pages * panels:
-                resolved_labels = [None if label is None else str(label) for label in labels]
-            else:
-                raise ValueError(
-                    "labels for paged Show2D must have length panels_per_page "
-                    f"({panels}) or n_pages * panels_per_page ({n_pages * panels}), got {len(labels)}"
-                )
+    if isinstance(data, (list, tuple)) or _is_image_dataset(data):
+        return data, labels, 1, 0, [], []
+    array = to_numpy(data)  # the one conversion of an array input (NumPy, torch, CuPy, anything np.asarray takes)
+    if array.ndim != 4:
+        return array, labels, 1, 0, [], []
+    n_pages, panels = int(array.shape[0]), int(array.shape[1])
+    resolved_page_labels = _resolve_page_labels(page_labels, [f"Page {i + 1}" for i in range(n_pages)], n_pages)
+    if labels is not None:
+        if len(labels) == panels:
+            resolved_labels = [
+                "" if label is None else str(label)
+                for _ in range(n_pages)
+                for label in labels
+            ]
+        elif len(labels) == n_pages * panels:
+            resolved_labels = [None if label is None else str(label) for label in labels]
         else:
-            resolved_labels = [f"Panel {i + 1}" for _ in range(n_pages) for i in range(panels)]
-        return (
-            array.reshape(n_pages * panels, *array.shape[-2:]),
-            resolved_labels,
-            n_pages,
-            panels,
-            resolved_page_labels,
-            [0] * n_pages,
-        )
-
-    return data, labels, 1, 0, [], []
+            raise ValueError(
+                "labels for paged Show2D must have length panels_per_page "
+                f"({panels}) or n_pages * panels_per_page ({n_pages * panels}), got {len(labels)}"
+            )
+    else:
+        resolved_labels = [f"Panel {i + 1}" for _ in range(n_pages) for i in range(panels)]
+    return (
+        array.reshape(n_pages * panels, *array.shape[-2:]),
+        resolved_labels,
+        n_pages,
+        panels,
+        resolved_page_labels,
+        [0] * n_pages,
+    )
 
 
 def _is_image_dataset(item) -> bool:
@@ -391,6 +391,8 @@ class Show2D(
         One label per page for ``(P, N, H, W)`` input.
     title : str, optional
         Gallery title above the panels.
+    show_title : bool, optional
+        Draw the title; the ``ui_mode`` preset decides when omitted.
     ui_mode : {"interactive", "presentation", "report"}, default "interactive"
         Preset for which controls are shown; the ``show_*`` flags override it.
     cmap : str or list of str, default "inferno"
@@ -398,9 +400,11 @@ class Show2D(
     sampling : float or (row, col), optional
         Pixel size in ``units``; drives the scale bar and calibrated readouts.
     units : str, optional
-        Length unit of ``sampling`` (``"A"``, ``"nm"``, ...).
+        Length unit of ``sampling`` (``"A"``, ``"nm"``, ...); angstrom when
+        ``sampling`` is given without it. Alone on a calibrated dataset it is
+        the unit the dataset's step is shown in.
     show_scale_bar : bool, optional
-        Draw the scale bar (kept in the ``scale_bar_visible`` trait).
+        Draw the scale bar.
     scale_bar_position : {"bottom-right", "bottom-left"}
     scale_bar_panels : list of int or str, optional
         Panels (index or label) that draw a scale bar; default all.
@@ -430,24 +434,24 @@ class Show2D(
         One shared contrast window across panels.
     ncols : int, default 3
         Gallery columns.
-    size, panel_width_px : int, default 0
-        Panel canvas width in CSS px (0 = frontend default). ``panel_width_px``
-        wins when both are given.
+    panel_width_px : int, default 0
+        Panel canvas width in CSS px (0 = frontend default).
     smooth : bool, default False
-        Bilinear instead of nearest-neighbour magnification.
+        Bilinear instead of nearest-neighbor magnification.
     zoom : float, default 1.0
         Initial zoom factor.
     center : (row, col), optional
-        Image point the initial view is centred on, in full-resolution pixels.
+        Image point the initial view is centered on, in full-resolution pixels.
     display_bin : int or "auto", default 1
-        Mean-bin factor of the preview sent to the browser; full-res detail
+        Mean-bin factor (a positive integer) of the preview sent to the browser; full-res detail
         streams on zoom either way. The default 1 sends native pixels. An
         integer above 1 bins by that factor. ``"auto"`` picks the smallest
         factor that keeps the gallery under 2.5 GB of browser GPU buffers
         (float32 + RGBA + readback per panel) and each float32 panel under
         16 MiB of initial payload. Any active bin prints one line.
     offline : bool, default False
-        Quantize the stack to uint8 per panel for standalone HTML export.
+        Quantize each panel to uint8 over its own range (256 levels) for a
+        small standalone page, and print one line saying so.
     panel_frame_indices : list of int, optional
         Initial frame per stack panel (negative indices count from the end).
     panel_playback_fps : float, default 10
@@ -457,19 +461,18 @@ class Show2D(
     marker_colors : list of str, optional
         One identity color per panel, drawn as a bar (``marker_style="left"``)
         or a frame (``"around"``).
-    row_markers : dict, optional
-        ``{row_index: color}`` frames around gallery rows.
-    inset_plots, panel_annotations, overlays, panel_overlays : optional
-        Per-panel inset curves, text annotations and shape overlays; see
-        ``show2d.annotations`` for the dict schema.
-    inter_panel_gap_px, inter_panel_gap_color : optional
+    row_markers, col_markers : dict, optional
+        ``{row_index: color}`` / ``{col_index: color}`` frames around gallery
+        rows or columns.
+    inset_plots, panel_annotations, panel_overlays : optional
+        Per-panel inset curves, text annotations and shape overlays; the dict
+        schema is in ``show2d.options`` and ``docs/api/show2d.md``.
+    panel_gap_px, inter_panel_gap_color : optional
         Gallery chrome: the gap between panels.
     gallery_outer_border_px, gallery_outer_border_color : optional
         Gallery chrome: the frame around the whole gallery.
     panel_inner_border_px, panel_inner_border_color : optional
         Gallery chrome: each panel's own inner stroke.
-    gallery_gap_px : int, optional
-        Older name of ``inter_panel_gap_px``; pass one of the two.
     denoise : {"none", "gaussian", "anscombe"} or list of str, default "none"
         Display-only denoise run in the browser (the data and stats stay raw);
         a list gives each panel its own mode. Turns the denoise switch on and
@@ -506,6 +509,32 @@ class Show2D(
     # window on zoom (maps-style). 16 MiB keeps a plain 2048x2048 float32
     # image (exactly 16 MiB) on the classic full-payload path.
     _WIRE_BUDGET_BYTES_PER_PANEL = 16 * 1024 * 1024
+    # Synced traits the constructor sets itself, with what sets each one; a keyword
+    # for one of them would be overwritten without a word (see reject_unknown_kwargs).
+    _CONSTRUCTOR_TRAITS = {
+        "initial_zoom": "zoom",
+        "panel_cmaps": "cmap",
+        "panel_cmaps_memory": "cmap",
+        "denoise_modes": "denoise",
+        "denoise_sigmas": "denoise_sigma",
+        "denoise_bins": "denoise_bin",
+        "denoise_enabled": "denoise",
+        "pixel_size": "sampling",
+        "pixel_unit": "units",
+        **dict.fromkeys(
+            ("n_images", "height", "width", "is_rgb", "n_pages", "panels_per_page", "page_starred",
+             "panel_frame_counts", "panel_stack_offsets", "frame_bytes", "panel_stack_bytes",
+             "stats_mean", "stats_min", "stats_max", "stats_std"),
+            "data",
+        ),
+        **dict.fromkeys(
+            ("image_rotations", "image_flips_horizontal", "image_flips_vertical", "selected_idx",
+             "selected_panels", "hidden_panels", "hidden_page_slots", "page_idx",
+             "frequency_filter_modes", "frequency_filter_cutoffs", "frequency_filter_centers",
+             "frequency_filter_widths"),
+            "state",
+        ),
+    }
 
     # Python-side state with safe defaults so traitlets validators can run
     # before __init__ has populated the instance.
@@ -541,16 +570,17 @@ class Show2D(
     page_starred = traitlets.List(traitlets.Int(), default_value=[]).tag(sync=True)
     height = traitlets.Int(1).tag(sync=True)
     width = traitlets.Int(1).tag(sync=True)
-    _display_bin_factor = traitlets.Int(1).tag(sync=True)  # 1 = full-res, 2/4/8 = binned
+    display_bin = traitlets.Int(1).tag(sync=True)  # 1 = full-res, 2/4/8 = binned
     # Browser-side display denoise and frequency filter (js/display/filter.ts,
     # js/display/frequencyFilter.ts). The browser owns the view transform: it filters
     # raw frames client-side, mirrors the scalar editor traits to the per-panel
     # lists by scope, and writes the banner. Python only ships raw pixels and
-    # keeps the traits so saved state and exports carry the knobs.
-    denoise = traitlets.Unicode("none").tag(sync=True)
+    # keeps the traits so saved state and exports carry the knobs. The browser
+    # compares a mode to its filter names as written, so the traits take only those.
+    denoise = traitlets.Enum(_BROWSER_DENOISE_MODES, default_value="none").tag(sync=True)
     denoise_sigma = traitlets.Float(4.0).tag(sync=True)
     denoise_bin = traitlets.Int(1).tag(sync=True)
-    denoise_modes = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
+    denoise_modes = traitlets.List(traitlets.Enum(_BROWSER_DENOISE_MODES), default_value=[]).tag(sync=True)
     denoise_sigmas = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
     denoise_bins = traitlets.List(traitlets.Int(), default_value=[]).tag(sync=True)
     denoise_scope = traitlets.Enum(["all", "panel"], default_value="all").tag(sync=True)
@@ -589,14 +619,12 @@ class Show2D(
     # True only on a clone written by export_html: forces the standalone HTML to
     # render on a light/white background regardless of the viewer's OS theme.
     _export_light = traitlets.Bool(False).tag(sync=True)
-    _static_fallback_jpeg = traitlets.Unicode("").tag(sync=True)
+    _static_fallback_image = traitlets.Unicode("").tag(sync=True)
     _static_fallback_mime = traitlets.Unicode("image/jpeg").tag(sync=True)
-    _offline_min = traitlets.Float(0.0).tag(sync=True)
-    _offline_max = traitlets.Float(1.0).tag(sync=True)
     _offline_mins = traitlets.List(trait=traitlets.Float(), default_value=[]).tag(sync=True)
     _offline_maxs = traitlets.List(trait=traitlets.Float(), default_value=[]).tag(sync=True)
     # Maps-style detail streaming (active whenever the preview is binned, i.e.
-    # _display_bin_factor > 1): JS writes a JSON request describing the visible
+    # display_bin > 1): JS writes a JSON request describing the visible
     # window per panel; Python replies with cropped + binned float32 tiles.
     _detail_request = traitlets.Unicode("").tag(sync=True)
     _detail_meta = traitlets.Unicode("").tag(sync=True)
@@ -613,7 +641,7 @@ class Show2D(
     show_panel_titles = traitlets.Bool(True).tag(sync=True)
     panel_title_font_size = traitlets.Int(11).tag(sync=True)
     panel_title_style = traitlets.Dict(default_value={}).tag(sync=True)
-    inter_panel_gap_px = traitlets.Int(0).tag(sync=True)
+    panel_gap_px = traitlets.Int(0).tag(sync=True)
     inter_panel_gap_color = traitlets.Unicode("").tag(sync=True)
     gallery_outer_border_px = traitlets.Int(0).tag(sync=True)
     gallery_outer_border_color = traitlets.Unicode("").tag(sync=True)
@@ -642,16 +670,15 @@ class Show2D(
     panel_annotations = traitlets.List(traitlets.List(traitlets.Dict()), default_value=[]).tag(sync=True)
     panel_overlays = traitlets.List(traitlets.List(traitlets.Dict()), default_value=[]).tag(sync=True)
     pixel_size = traitlets.Float(0.0).tag(sync=True)
-    pixel_sizes = traitlets.List(trait=traitlets.Float(), default_value=[]).tag(sync=True)
-    pixel_unit = traitlets.Unicode("pixels").tag(sync=True)
-    scale_bar_visible = traitlets.Bool(True).tag(sync=True)
+    pixel_unit = traitlets.Unicode("px").tag(sync=True)
+    show_scale_bar = traitlets.Bool(True).tag(sync=True)
     scale_bar_position = traitlets.Unicode("bottom-right").tag(sync=True)
     scale_bar_panels = traitlets.List(trait=traitlets.Int(), default_value=[]).tag(sync=True)
     scale_bar_length = traitlets.Float(None, allow_none=True).tag(sync=True)
     scale_bar_label = traitlets.Unicode("").tag(sync=True)
     scale_bar_style = traitlets.Dict(default_value={}).tag(sync=True)
     show_zoom_indicator = traitlets.Bool(False).tag(sync=True)
-    size = traitlets.Int(0).tag(sync=True)  # Canvas rendering size in CSS pixels; 0 = frontend default
+    panel_width_px = traitlets.Int(0).tag(sync=True)  # Canvas rendering size in CSS pixels; 0 = frontend default
     smooth = traitlets.Bool(False).tag(sync=True)
     initial_zoom = traitlets.Float(1.0).tag(sync=True)
     zoom_row = traitlets.Float(None, allow_none=True).tag(sync=True)
@@ -742,6 +769,10 @@ class Show2D(
                 "use None to display the folder as one unpaged gallery"
             )
         resolved_page_size = None if page_size is None else int(page_size)
+        # The saved view is applied once the folder pages exist: loaded inside the constructor it lost
+        # its page size and its page, which the folder layout below then overwrote. It is checked first.
+        state = kwargs.pop("state", None)
+        state = None if state is None else read_state(state, "Show2D", cls._LOADABLE_KEYS)
         source = WatchedImageFolder(
             path,
             pattern=pattern,
@@ -753,10 +784,7 @@ class Show2D(
             allow_empty=watch,
             require_unchanged_followup=watch,
         )
-        explicit_calibration = any(
-            key in kwargs
-            for key in ("sampling", "units", "pixel_size", "pixel_sizes", "pixel_unit")
-        )
+        explicit_calibration = "sampling" in kwargs or "units" in kwargs
         kwargs.setdefault("title", source.folder.name)
         kwargs.setdefault("verbose", False)
         if arrays:
@@ -780,6 +808,8 @@ class Show2D(
                 widget._set_folder_waiting_empty_state()
             widget._sync_folder_pages(anchor_panel=0)
         source.attach(widget, explicit_calibration=explicit_calibration)
+        if state is not None:
+            widget.load_state_dict(state)
         if watch:
             widget.watch_folder(interval=watch_interval)
         return widget
@@ -791,6 +821,7 @@ class Show2D(
         *,
         page_labels: Sequence[str | None] | None = None,
         title: str = "",
+        show_title: bool | None = None,
         ui_mode: UiMode = "interactive",
         cmap: str | Colormap | Sequence[str | Colormap] = Colormap.INFERNO,
         sampling: float | tuple[float, float] | list[float] | None = None,
@@ -818,7 +849,6 @@ class Show2D(
         link_pan: bool | None = None,
         link_contrast: bool = True,
         ncols: int = 3,
-        size: int = 0,
         panel_width_px: int = 0,
         smooth: bool = False,
         zoom: float = 1.0,
@@ -831,12 +861,11 @@ class Show2D(
         marker_colors: Sequence[str] | None = None,
         marker_style: str = "left",
         row_markers: Mapping[object, object] | None = None,
+        col_markers: Mapping[object, object] | None = None,
         inset_plots: Sequence[dict[str, object] | None] | dict[str, object] | None = None,
         panel_annotations: object = None,
-        overlays: object = None,
         panel_overlays: object = None,
-        inter_panel_gap_px: int | None = None,
-        gallery_gap_px: int | None = None,
+        panel_gap_px: int | None = None,
         inter_panel_gap_color: str | None = None,
         gallery_outer_border_px: int | None = None,
         gallery_outer_border_color: str | None = None,
@@ -850,15 +879,17 @@ class Show2D(
         verbose: bool = True,
         **kwargs,
     ):
-        reject_unknown_kwargs(type(self), kwargs)
+        reject_unknown_kwargs(type(self), kwargs, owned=self._CONSTRUCTOR_TRAITS)
+        if display_bin != "auto" and (isinstance(display_bin, bool) or not isinstance(display_bin, numbers.Integral) or display_bin < 1):
+            raise ValueError(f"display_bin must be a positive integer or 'auto', got {display_bin!r}")
         requested_panel_cmaps = (
             [cmap_to_name(item) for item in cmap]
             if is_cmap_sequence(cmap)
             else []
         )
         base_cmap = requested_panel_cmaps[0] if requested_panel_cmaps else cmap_to_name(cmap)
-        plain_labels, title_spans_from_labels = _normalise_title_span_sequence(labels)
-        explicit_plain_labels, explicit_title_spans = _normalise_title_span_sequence(panel_title_spans)
+        plain_labels, title_spans_from_labels = _normalize_title_span_sequence(labels)
+        explicit_plain_labels, explicit_title_spans = _normalize_title_span_sequence(panel_title_spans)
         if plain_labels is None and explicit_plain_labels is not None:
             plain_labels = explicit_plain_labels
         raw_title_span_len = (
@@ -866,7 +897,7 @@ class Show2D(
             if panel_title_spans is not None
             else (len(plain_labels or []) if title_spans_from_labels else 0)
         )
-        data, labels, n_pages, panels_per_page, resolved_page_labels, resolved_page_starred = _normalise_show2d_pages(
+        data, labels, n_pages, panels_per_page, resolved_page_labels, resolved_page_starred = _normalize_show2d_pages(
             data,
             labels=plain_labels,
             page_labels=page_labels,
@@ -881,16 +912,10 @@ class Show2D(
         panel_width_px = int(panel_width_px)
         if panel_width_px < 0:
             raise ValueError(f"panel_width_px must be >= 0, got {panel_width_px}")
-        if panel_width_px > 0:
-            size = panel_width_px
         ncols = int(ncols)
         if ncols < 1:
             raise ValueError(f"ncols must be >= 1, got {ncols}")
-        if gallery_gap_px is not None:
-            if inter_panel_gap_px is not None:
-                raise ValueError("Use either inter_panel_gap_px= or gallery_gap_px= (its older name), not both")
-            inter_panel_gap_px = gallery_gap_px
-        inter_panel_gap_px = 0 if inter_panel_gap_px is None else _nonnegative_int(inter_panel_gap_px, name="inter_panel_gap_px")
+        panel_gap_px = 0 if panel_gap_px is None else _nonnegative_int(panel_gap_px, name="panel_gap_px")
         inter_panel_gap_color = "" if inter_panel_gap_color is None else str(inter_panel_gap_color)
         gallery_outer_border_px = (
             0 if gallery_outer_border_px is None
@@ -919,7 +944,7 @@ class Show2D(
                 "show_scale_bar": True,
             },
             overrides={
-                "show_title": None,
+                "show_title": show_title,
                 "show_controls": show_controls,
                 "controls_collapsed": controls_collapsed,
                 "show_stats": show_stats,
@@ -931,38 +956,22 @@ class Show2D(
         # the notebook's metadata.widgets on save. Default False: a plain display
         # embeds only light traits + a static image preview, so a 5-panel 4k
         # gallery does not bake ~1 GB into the .ipynb.
+        # a state this widget cannot load is refused before the model opens: a registered widget stays alive, holding its data
+        state = None if state is None else read_state(state, "Show2D", self._LOADABLE_KEYS)
         self._save_state = bool(save_state)
         self._configure_static_fallback()
         super().__init__(**kwargs)
         self._static_fallback_mime = self._static_fallback_mime_type()
         row_markers = _normalize_marker_mapping(row_markers, name="row_markers")
+        col_markers = _normalize_marker_mapping(col_markers, name="col_markers")
         panel_title_style = _normalize_panel_title_style(panel_title_style)
         scale_bar_style = _normalize_scale_bar_style(scale_bar_style)
         if scale_bar_length is not None and (not np.isfinite(float(scale_bar_length)) or float(scale_bar_length) <= 0):
             raise ValueError(f"scale_bar_length must be a positive finite value, got {scale_bar_length!r}")
-        n_display_panels = len(labels or []) or (int(data.shape[0]) if isinstance(data, np.ndarray) and data.ndim >= 3 else 1)
-        scale_bar_panels = _normalize_panel_indices(
-            scale_bar_panels,
-            n_items=n_display_panels,
-            labels=labels,
-        )
-        panel_annotations = _normalize_panel_annotations(
-            panel_annotations,
-            n_items=n_display_panels,
-            labels=labels,
-        )
-        if overlays is not None and panel_overlays is not None:
-            raise ValueError("Use either overlays= or panel_overlays=, not both")
-        panel_overlays = _normalize_panel_overlays(
-            panel_overlays if panel_overlays is not None else overlays,
-            n_items=n_display_panels,
-            labels=labels,
-        )
         # hold_sync() batches every trait assignment into a single comm message
         # sent when the context manager exits; without it each self.x = y is a
         # separate round trip, which adds 20+ s for a 30-image gallery in VS Code.
         with self.hold_sync():
-            self._verbose = verbose
             self.n_pages = int(max(1, n_pages))
             self.panels_per_page = int(max(0, panels_per_page))
             self.page_idx = 0
@@ -973,16 +982,11 @@ class Show2D(
             if _is_image_dataset(data):
                 if not title and data.name:
                     title = data.name
-                if sampling is None:
-                    sampling = tuple(float(value) for value in data.sampling[-2:])
-                if units is None:
-                    units = list(data.units[-2:])
+                sampling, units = image_axes(sampling, units, data)
             elif isinstance(data, (list, tuple)) and len(data) > 0 and _is_image_dataset(data[0]):
-                first = data[0]
-                if sampling is None:
-                    sampling = tuple(float(value) for value in first.sampling[-2:])
-                if units is None:
-                    units = list(first.units[-2:])
+                sampling, units = image_axes(sampling, units, data[0])
+            else:
+                sampling, units = image_axes(sampling, units)
             # RGB detection rule: per-ITEM in a list input, an item with ndim == 3
             # and shape[-1] in (3, 4) is an RGB(A) image. A single non-list ndim==3
             # input is RGB only when shape[-1] in (3, 4) AND shape[0] > 4;
@@ -1082,8 +1086,6 @@ class Show2D(
             self._updating_panel_frames = False
             self.panel_stack_offsets = [-1] * self.n_images
             self.inset_plots = _normalize_inset_plot_specs(inset_plots, n_items=self.n_images)
-            self.panel_annotations = list(panel_annotations or [])
-            self.panel_overlays = list(panel_overlays or [])
             self.height = int(data.shape[1])
             self.width = int(data.shape[2])
             self.image_rotations = [0] * self.n_images
@@ -1103,7 +1105,13 @@ class Show2D(
                     )
                 if not self.page_starred:
                     self.page_starred = [0] * self.n_pages
+            if labels is not None and len(labels) != self.n_images:
+                raise ValueError(f"labels length ({len(labels)}) must match the number of Show2D panels ({self.n_images})")
             self.labels = [f"Image {i + 1}" for i in range(self.n_images)] if labels is None else list(labels)
+            # Panel targets resolve against the converted data's panel count and the final labels.
+            self.scale_bar_panels = _normalize_panel_indices(scale_bar_panels, n_items=self.n_images, labels=self.labels)
+            self.panel_annotations = _normalize_panel_annotations(panel_annotations, n_items=self.n_images, labels=self.labels)
+            self.panel_overlays = _normalize_panel_overlays(panel_overlays, n_items=self.n_images, labels=self.labels)
             self.panel_title_spans = resolved_panel_title_spans if len(resolved_panel_title_spans) == self.n_images else []
             self.starred = [0] * self.n_images
             self.hidden_panels = []
@@ -1111,7 +1119,7 @@ class Show2D(
             self.show_panel_titles = bool(ui["show_panel_titles"])
             self.panel_title_font_size = int(panel_title_font_size)
             self.panel_title_style = dict(panel_title_style)
-            self.inter_panel_gap_px = inter_panel_gap_px
+            self.panel_gap_px = panel_gap_px
             self.inter_panel_gap_color = inter_panel_gap_color
             self.gallery_outer_border_px = gallery_outer_border_px
             self.gallery_outer_border_color = gallery_outer_border_color
@@ -1141,24 +1149,21 @@ class Show2D(
                 self.panel_cmaps_memory = []
             # sampling / units resolve to the column-axis pixel_size + pixel_unit.
             # Scalar shorthand: sampling=0.5 -> (0.5, 0.5); units="nm" -> ["nm", "nm"].
-            # None keeps the trait: pixel_size= may have been set directly via kwargs.
-            if isinstance(sampling, (int, float)):
-                self.pixel_size = float(sampling)
-            elif sampling is not None:
-                self.pixel_size = float(sampling[-1])
-            if isinstance(units, str):
-                self.pixel_unit = units
-            elif units is not None:
-                self.pixel_unit = str(units[-1])
-            self.scale_bar_visible = bool(ui["show_scale_bar"])
+            # None leaves the traits at their uncalibrated defaults.
+            if sampling is not None:
+                self.pixel_size = float(per_axis(sampling, 2)[-1])
+            if units is not None:
+                self.pixel_unit = str(per_axis(units, 2)[-1])
+            # one unit table for every widget: an unknown string raises, an uncalibrated axis is absent
+            if unit_entry(self.pixel_unit)[0] == "pixels":
+                self.pixel_size, self.pixel_unit = 0.0, "px"
+            self.show_scale_bar = bool(ui["show_scale_bar"])
             self.scale_bar_position = scale_bar_position
-            self.scale_bar_panels = list(scale_bar_panels)
             self.scale_bar_length = None if scale_bar_length is None else float(scale_bar_length)
             self.scale_bar_label = "" if scale_bar_label is None else str(scale_bar_label)
             self.scale_bar_style = dict(scale_bar_style)
             self.show_zoom_indicator = bool(show_zoom_indicator)
-            self.pixel_sizes = []
-            self.size = size
+            self.panel_width_px = panel_width_px
             self.smooth = smooth
             colors = [] if marker_colors is None else [str(value) for value in marker_colors]
             if colors and len(colors) != self.n_images:
@@ -1168,7 +1173,8 @@ class Show2D(
                 )
             self.marker_colors = colors
             self.marker_style = str(marker_style).lower()
-            self.row_markers = dict(row_markers or {})
+            self.row_markers = row_markers
+            self.col_markers = col_markers
             self.selected_panels = []
             self.initial_zoom = zoom
             if center is not None:
@@ -1181,12 +1187,6 @@ class Show2D(
             self.link_zoom = (self.n_images >= 2) if link_zoom is None else link_zoom
             self.link_pan = (self.n_images >= 2) if link_pan is None else link_pan
             self.link_contrast = link_contrast
-            if show_fft and self.height * self.width > 2048 * 2048:
-                warnings.warn(
-                    f"FFT on {self.height}×{self.width} image ({self.height * self.width / 1e6:.1f}M pixels) "
-                    f"may be slow. Consider using ROI FFT for a sub-region.",
-                    stacklevel=2,
-                )
             self.show_fft = show_fft
             self.show_controls = bool(ui["show_controls"])
             self.controls_collapsed = bool(ui["controls_collapsed"])
@@ -1194,6 +1194,10 @@ class Show2D(
             self.log_scale = log_scale
             self.auto_contrast = auto_contrast
             self.offline = offline
+            if offline:
+                # no silent reduction: name the quantization and the way back to float32
+                print(f"Show2D packs {self.n_images} panel(s) as uint8 over each panel's own range (256 levels); "
+                      "offline=False keeps float32.")
             # Standalone HTML export packs panels through the grayscale stack
             # machinery, which cannot carry (H, W, 3) pixels: hide the export menu
             # and reject programmatic export instead of corrupting RGB panels.
@@ -1249,28 +1253,26 @@ class Show2D(
             self.frequency_filter_widths = [0.12] * self.n_images
             # A scientist comparing panels adjusts one result at a time, so
             # per-panel filter edits are the gallery default.
-            self.frequency_filter_scope = "panel" if self.n_images > 1 else "all"
+            self.frequency_filter_scope = kwargs.get("frequency_filter_scope", "panel" if self.n_images > 1 else "all")
 
             # Keep full-res in _data; send a binned preview only when asked
             # (an integer, or "auto" over the GPU / wire budget).
             if display_bin == "auto":
                 self._display_bin = self._auto_display_bin(self.n_images, self.height, self.width)
-            elif isinstance(display_bin, int) and display_bin > 1:
-                self._display_bin = display_bin
+            else:
+                self._display_bin = int(display_bin)
             if self._display_bin > 1:
                 full_h, full_w = self._data.shape[1], self._data.shape[2]
                 self._display_data = bin2d(self._data, factor=self._display_bin, mode="mean")
                 self.height = int(self._display_data.shape[1])
                 self.width = int(self._display_data.shape[2])
-                if self.pixel_size > 0:
-                    self.pixel_size = self.pixel_size * self._display_bin
-                # center= / zoom_row / zoom_col are full-resolution pixels; the
-                # browser reads them in preview pixels once the display is binned.
-                if self.zoom_row is not None:
-                    self.zoom_row = self.zoom_row / self._display_bin
-                if self.zoom_col is not None:
-                    self.zoom_col = self.zoom_col / self._display_bin
-                self._display_bin_factor = self._display_bin
+                # sampling, center= and data-coordinate overlays are in native pixels;
+                # the browser measures in preview pixels once the display is binned.
+                native_view = {"pixel_size": self.pixel_size, "zoom_row": self.zoom_row,
+                               "zoom_col": self.zoom_col, "panel_overlays": self.panel_overlays}
+                for key, value in _rescale_view(native_view, 1 / self._display_bin).items():
+                    setattr(self, key, value)
+                self.display_bin = self._display_bin
                 # JS derives every panel's offset from one H x W.
                 self._display_rgb = _binned_rgb(self._rgb_frames, self._display_bin)
                 self._display_panel_stacks = self._binned_panel_stacks(self._panel_stacks)
@@ -1281,21 +1283,14 @@ class Show2D(
                       f"{preview_size}; full-res detail streams on zoom; pass display_bin=1 for native pixels")
             else:
                 self._display_data = self._data
-                self._display_bin_factor = 1
+                self.display_bin = 1
                 self._display_rgb = self._rgb_frames
                 self._display_panel_stacks = self._panel_stacks
             self._compute_all_stats()
             self._update_all_frames()
-            announce_browser_limit("Show2D", len(self.frame_bytes) + len(self.panel_stack_bytes), self._display_bin_factor)
+            announce_browser_limit("Show2D", len(self.frame_bytes) + len(self.panel_stack_bytes), self.display_bin)
             self.selected_idx = 0
             if state is not None:
-                if isinstance(state, (str, pathlib.Path)):
-                    state = unwrap_state_payload(
-                        json.loads(pathlib.Path(state).read_text()),
-                        require_envelope=True,
-                    )
-                else:
-                    state = unwrap_state_payload(state)
                 self.load_state_dict(state)
         self.observe(self._on_first_render, names=["_js_rendered"])
         self.observe(self._on_export_request_change, names=["export_request"])
@@ -1384,6 +1379,8 @@ class Show2D(
         if self._display_bin > 1:
             return [bin2d(stack, factor=self._display_bin, mode="mean") for stack in stacks]
         return stacks
+
+    _validate_panel_overlays = traitlets.validate("panel_overlays")(_validate_panel_overlays_trait)
 
     @traitlets.validate("hidden_panels")
     def _validate_hidden_panels(self, proposal: dict) -> list[int]:
@@ -1536,7 +1533,7 @@ class Show2D(
             self.stats_std = []
             self._offline_mins = []
             self._offline_maxs = []
-            self._static_fallback_jpeg = ""
+            self._static_fallback_image = ""
             self.selected_idx = 0
             self.n_pages = 1
             self.page_idx = 0
@@ -1600,64 +1597,78 @@ class Show2D(
                     panel_frame_indices,
                 )
 
+        if labels is not None and len(labels) != int(data.shape[0]):
+            raise ValueError(f"labels length ({len(labels)}) must match n_images ({int(data.shape[0])})")
         previous_shape = (int(self.n_images), int(self.height), int(self.width))
+        # the frame observer would rebuild the old stacks while the new ones are installed; every
+        # check has passed by here, so the flag is always cleared below
         self._updating_panel_frames = True
-        try:
-            with self.hold_sync():
-                self._data = data
-                self._panel_stacks = panel_stacks
-                self._panel_stacks_original = list(panel_stacks)
-                self._panel_stack_originals_are_views = True
-                self.panel_frame_counts = [int(stack.shape[0]) for stack in panel_stacks]
-                self.n_images = int(data.shape[0])
-                self.panel_frame_indices = list(resolved_indices)
-                self.panel_stack_offsets = [-1] * self.n_images
-                self._data_original = list(self._data)
-                self._originals_are_views = True
-                self._rgb_frames = [None] * int(data.shape[0])
-                self._rgb_frames_original = list(self._rgb_frames)
-                self._display_rgb = self._rgb_frames
-                self.is_rgb = [False] * int(data.shape[0])
-                self.n_pages = 1
-                self.page_idx = 0
-                self.panels_per_page = 0
-                self.page_labels = []
-                self.page_starred = [0]
-                self.image_rotations = [0] * self.n_images
-                self.starred = [0] * self.n_images
-                self.hidden_panels = []
-                self.panel_order = []
-                if labels is None:
-                    self.labels = [f"Image {i + 1}" for i in range(self.n_images)]
-                else:
-                    if len(labels) != self.n_images:
-                        raise ValueError(
-                            f"labels length ({len(labels)}) must match n_images ({self.n_images})"
-                        )
-                    self.labels = ["" if label is None else str(label) for label in labels]
-                self.selected_idx = min(int(self.selected_idx), self.n_images - 1)
-                self.roi_list = []
-                self.roi_selected_idx = -1
-                self.profile_line = []
-                self._clear_detail_tiles()
-                self.vmins = None
-                self.vmaxs = None
+        with self.hold_sync():
+            self._data = data
+            self._panel_stacks = panel_stacks
+            self._panel_stacks_original = list(panel_stacks)
+            self._panel_stack_originals_are_views = True
+            self.panel_frame_counts = [int(stack.shape[0]) for stack in panel_stacks]
+            self.n_images = int(data.shape[0])
+            self.panel_frame_indices = list(resolved_indices)
+            self.panel_stack_offsets = [-1] * self.n_images
+            self._data_original = list(self._data)
+            self._originals_are_views = True
+            self._rgb_frames = [None] * int(data.shape[0])
+            self._rgb_frames_original = list(self._rgb_frames)
+            self._display_rgb = self._rgb_frames
+            self.is_rgb = [False] * int(data.shape[0])
+            self.n_pages = 1
+            self.page_idx = 0
+            self.panels_per_page = 0
+            self.page_labels = []
+            self.page_starred = [0]
+            self.image_rotations = [0] * self.n_images
+            self.starred = [0] * self.n_images
+            self.hidden_panels = []
+            self.panel_order = []
+            self.labels = ([f"Image {i + 1}" for i in range(self.n_images)] if labels is None
+                           else ["" if label is None else str(label) for label in labels])
+            self.selected_idx = min(int(self.selected_idx), self.n_images - 1)
+            self.roi_list = []
+            self.roi_selected_idx = -1
+            self.profile_line = []
+            self._clear_detail_tiles()
+            self.vmins = None
+            self.vmaxs = None
+            if self.n_images != previous_shape[0]:
+                # per-panel settings of the old panels do not belong to the new ones
+                self.panel_cmaps = []
+                self.panel_cmaps_memory = []
+                self.marker_colors = []
+                self.panel_title_spans = []
+                self.inset_plots = []
+                self.panel_annotations = []
+                self.panel_overlays = []
+                self.scale_bar_panels = []
+                self.image_flips_horizontal = [False] * self.n_images
+                self.image_flips_vertical = [False] * self.n_images
+                self.denoise_modes = [self.denoise] * self.n_images
+                self.denoise_sigmas = [self.denoise_sigma] * self.n_images
+                self.denoise_bins = [self.denoise_bin] * self.n_images
+                self.frequency_filter_modes = [self.frequency_filter] * self.n_images
+                self.frequency_filter_cutoffs = [self.frequency_filter_cutoff] * self.n_images
+                self.frequency_filter_centers = [self.frequency_filter_center] * self.n_images
+                self.frequency_filter_widths = [self.frequency_filter_width] * self.n_images
 
-                self._display_bin = max(1, int(self._display_bin))
-                self._display_panel_stacks = self._binned_panel_stacks(self._panel_stacks)
-                self._display_data = _current_frames(self._display_panel_stacks, resolved_indices)
-                self.height = int(self._display_data.shape[1])
-                self.width = int(self._display_data.shape[2])
-                self._display_bin_factor = self._display_bin
-                if (self.n_images, self.height, self.width) != previous_shape:
-                    self.view_box = []
-                    self.zoom_row = None
-                    self.zoom_col = None
-                self._compute_all_stats()
-                self._update_all_frames()
-                announce_browser_limit("Show2D", len(self.frame_bytes) + len(self.panel_stack_bytes), self._display_bin_factor)
-        finally:
-            self._updating_panel_frames = False
+            self._display_panel_stacks = self._binned_panel_stacks(self._panel_stacks)
+            self._display_data = _current_frames(self._display_panel_stacks, resolved_indices)
+            self.height = int(self._display_data.shape[1])
+            self.width = int(self._display_data.shape[2])
+            self.display_bin = self._display_bin
+            if (self.n_images, self.height, self.width) != previous_shape:
+                self.view_box = []
+                self.zoom_row = None
+                self.zoom_col = None
+            self._compute_all_stats()
+            self._update_all_frames()
+            announce_browser_limit("Show2D", len(self.frame_bytes) + len(self.panel_stack_bytes), self.display_bin)
+        self._updating_panel_frames = False
 
     def _apply_folder_image_records(
         self,
@@ -1802,7 +1813,7 @@ class Show2D(
         panel_bytes = height * width * 4
         if panel_bytes > self._WIRE_BUDGET_BYTES_PER_PANEL:
             preview_floor_px = 512.0 if int(n_images) >= 16 else 1024.0
-            canvas_css_px = float(self.size) if int(self.size) > 0 else 300.0 if int(n_images) > 1 else 500.0
+            canvas_css_px = float(self.panel_width_px) if int(self.panel_width_px) > 0 else 300.0 if int(n_images) > 1 else 500.0
             preview_px = max(preview_floor_px, 2.0 * canvas_css_px)
             wire_bin = max(2, math.ceil(max(height, width) / preview_px))
             while panel_bytes / (wire_bin * wire_bin) > self._WIRE_BUDGET_BYTES_PER_PANEL:
@@ -1826,11 +1837,11 @@ class Show2D(
         dpi: int = 150,
         title: bool | str = False,
         colorbar: bool = False,
-        scalebar: bool = False,
+        show_scale_bar: bool = False,
     ) -> pathlib.Path:
         """Save current image as PNG, PDF, or TIFF.
 
-        When ``title``, ``colorbar``, or ``scalebar`` are enabled, the output
+        When ``title``, ``colorbar``, or ``show_scale_bar`` are enabled, the output
         is a publication-quality figure rendered via matplotlib. Otherwise a
         raw colormapped image is saved directly (faster, exact pixel output).
 
@@ -1848,7 +1859,7 @@ class Show2D(
             ``True`` uses the widget title, a string sets a custom title.
         colorbar : bool, default False
             Include a colorbar showing the intensity mapping.
-        scalebar : bool, default False
+        show_scale_bar : bool, default False
             Include a scale bar (requires ``pixel_size > 0``).
 
         Returns
@@ -1865,50 +1876,39 @@ class Show2D(
         if panel_index < 0 or panel_index >= self.n_images:
             raise IndexError(f"Image index {panel_index} out of range [0, {self.n_images})")
 
+        # The saved frame is native (full resolution, before any display bin), mirrored like the
+        # panel, with the panel's own colormap and the browser's contrast window for it.
         panel_rgb = self._rgb_frames[panel_index]
-        frame = self._data[panel_index]
-        colormap = colormaps.get_cmap(self.cmap)
+        frame = self._flipped(self._data[panel_index], panel_index)
+        cmap_name = self._panel_cmap_for_index(panel_index)
+        pixel_size = self.pixel_size / self._display_bin
         path.parent.mkdir(parents=True, exist_ok=True)
         if panel_rgb is not None:
             # RGB panels are display-ready: save the color pixels directly,
             # bypassing colormap and contrast. Colorbar is meaningless for an
             # RGB composite, so it is skipped.
-            display_pixels = (np.clip(panel_rgb, 0.0, 1.0) * 255).astype(np.uint8)
+            display_pixels = (np.clip(self._flipped(panel_rgb, panel_index), 0.0, 1.0) * 255).astype(np.uint8)
             colorbar = False
         else:
-            # Same contrast window as the browser: explicit vmin/vmax, else the
-            # 2/98 percentiles under auto_contrast, else the frame extrema.
-            display_frame = signed_log1p(frame) if self.log_scale else frame
-            if self.vmin is not None and self.vmax is not None:
-                display_min, display_max = display_window(self.vmin, self.vmax, self.log_scale)
-            elif self.auto_contrast:
-                display_min, display_max = auto_window(frame, self.log_scale)
-            else:
-                display_min, display_max = display_window(frame.min(), frame.max(), self.log_scale)
+            display_min, display_max = self._resolve_panel_display_ranges(list(self._data))[panel_index]
             # 8-bit levels: the colormap lookup and the PNG are both 256-level.
-            levels = contrast_uint8(display_frame, display_min, display_max)
-            display_pixels = None
+            levels = contrast_uint8(signed_log1p(frame) if self.log_scale else frame, display_min, display_max)
 
-        use_figure = title or colorbar or scalebar
+        use_figure = title or colorbar or show_scale_bar
         if not use_figure:
-            if panel_rgb is not None:
-                image = Image.fromarray(display_pixels, mode="RGB")
-            else:
-                rgba = (colormap(levels / 255.0) * 255).astype(np.uint8)
-                image = Image.fromarray(rgba)
-                if image_format == "pdf":
-                    # PDF has no alpha channel.
-                    image = image.convert("RGB")
-            image.save(str(path), dpi=(dpi, dpi))
+            pixels = display_pixels if panel_rgb is not None else colorize(levels / 255.0, cmap_name)
+            Image.fromarray(pixels, mode="RGB").save(str(path), dpi=(dpi, dpi))
             return path
 
         height, width = frame.shape
         figure_width_in = 6
-        fig, ax = plt.subplots(figsize=(figure_width_in, figure_width_in * (height / width)))
+        # an unmanaged Figure: no pyplot backend at import, nothing left open after the save
+        fig = Figure(figsize=(figure_width_in, figure_width_in * (height / width)))
+        ax = fig.add_subplot()
         if panel_rgb is not None:
             image_artist = ax.imshow(display_pixels, origin="upper")
         else:
-            image_artist = ax.imshow(levels, cmap=colormap, vmin=0, vmax=255, origin="upper")
+            image_artist = ax.imshow(levels, cmap=cmap_name, vmin=0, vmax=255, origin="upper")
         ax.axis("off")
 
         if title:
@@ -1927,10 +1927,10 @@ class Show2D(
             if self.log_scale:
                 colorbar_artist.set_label("log")
 
-        if scalebar and self.pixel_size > 0:
+        if show_scale_bar and pixel_size > 0:
             # A nice physical length near 20% of the image width.
-            nice = round_to_nice(0.2 * width * self.pixel_size)
-            bar_px = nice / self.pixel_size
+            nice = round_to_nice(0.2 * width * pixel_size)
+            bar_px = nice / pixel_size
             label_text = format_scale_label(nice, self.pixel_unit)
             margin = 0.03
             bar_y = height * (1 - margin) - 2
@@ -1948,7 +1948,6 @@ class Show2D(
 
         fig.savefig(str(path), dpi=dpi, bbox_inches="tight",
                     facecolor="white", pad_inches=0.1)
-        plt.close(fig)
         return path
 
     def _on_detail_request_change(self, change: dict) -> None:
@@ -1963,11 +1962,8 @@ class Show2D(
         request_text = str(change.get("new") or "")
         if not request_text:
             return
-        try:
-            request = json.loads(request_text)
-        except json.JSONDecodeError:
-            return
-        factor = max(1, int(self._display_bin_factor))
+        request = json.loads(request_text)  # the browser writes one JSON tile request
+        factor = max(1, int(self.display_bin))
         full_h, full_w = int(self._data.shape[1]), int(self._data.shape[2])
         tiles: list[dict] = []
         blocks: list[bytes] = []
@@ -2083,8 +2079,6 @@ class Show2D(
                 maxs.append(high)
             self._offline_mins = mins
             self._offline_maxs = maxs
-            self._offline_min = mins[0]  # back-compat scalars (single-image readers)
-            self._offline_max = maxs[0]
             self.frame_bytes = _b64_safe(codes.tobytes())
         else:
             self.frame_bytes = _b64_safe(data.tobytes())

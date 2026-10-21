@@ -74,62 +74,48 @@ def __dir__() -> list[str]:
 
 
 def free_gpu(verbose: bool = True) -> float:
-    """Release cached GPU memory back to the driver, on CUDA (torch + cupy pools) or Apple
-    MPS. Call AFTER ``del``-ing your big objects (the merged 4D stack, the widget): this
-    hands the allocator's cached-but-unused blocks back to the device - it cannot drop
-    references you still hold, so ``del`` first. Returns GB released.
+    """Return cached GPU memory to the driver after you ``del`` your big objects; returns the GB released.
 
-    Why it is needed: torch (and cupy) keep a caching allocator. After ``del`` of a 38 GB
-    merge the pool still PINS those blocks - ``nvidia-smi`` shows them used and the next
-    load OOMs. ``empty_cache`` + cupy ``free_all_blocks`` return them. MPS caches the same
-    way; ``torch.mps.empty_cache`` is the equivalent. Backend is auto-detected.
+    With quantem.gpu installed (``quantem.widget[cuda]`` or ``[mps]``) this is
+    ``quantem.gpu.device.release_cached_memory``: it collects garbage, empties the Torch, CuPy and MLX
+    caches on every GPU the process has opened and returns what this process handed back to the driver.
+    Without quantem.gpu (``[cpu]``, an Intel Mac) the widgets compute with Torch alone, so garbage is
+    collected and Torch's cache emptied, and the result is the drop in the memory Torch holds from the
+    driver: its reserved bytes on every CUDA GPU, or the Metal driver's total.
+
+    Why it is needed: the allocators keep freed blocks for reuse, so after ``del`` the memory still shows
+    as used and the next load runs out of it. It cannot drop references you still hold, so ``del`` first.
 
     >>> del widget, merged          # drop every reference first
     >>> free_gpu()
-    freed 38.6 GB  (40.5 -> 1.8)
+    GPU 0: released 2.1 GB, 32.0 GB in use, 69.9 GB free
+    2.147483648
     """
+    from quantem.widget.adapters import gpu as gpu_adapter
+
+    if gpu_adapter.available():
+        return gpu_adapter.gpu_release_cached_memory(verbose=verbose)
     import gc
 
     import torch
 
     gc.collect()
     if torch.cuda.is_available():
-        device_count = torch.cuda.device_count()
-
-        def used_gb() -> float:
-            """Memory in use on every visible GPU, in GB, as the driver reports it."""
-            return sum(total - free for free, total in map(torch.cuda.mem_get_info, range(device_count))) / 1e9
-
-        before = used_gb()
-        try:
-            import cupy as cp
-        except ImportError:
-            cp = None
-        for index in range(device_count):
-            with torch.cuda.device(index):
-                torch.cuda.empty_cache()
-            if cp is not None:
-                cp.cuda.Device(index).use()
-                cp.get_default_memory_pool().free_all_blocks()
-                cp.get_default_pinned_memory_pool().free_all_blocks()
-        if cp is not None:
-            cp.cuda.Device(0).use()   # leave the default device on GPU0 so the next load lands where it expects
-        after = used_gb()
-        if verbose:
-            for index in range(device_count):
-                free, total = torch.cuda.mem_get_info(index)
-                print(f"GPU{index}: {(total - free) / 1e9:5.1f} GB used  ({free / 1e9:.0f} GB free)")
-        return before - after
-    if torch.backends.mps.is_available():
-        allocated_before = torch.mps.current_allocated_memory()
+        devices = range(torch.cuda.device_count())
+        reserved = sum(torch.cuda.memory_reserved(index) for index in devices)
+        torch.cuda.empty_cache()
+        freed = (reserved - sum(torch.cuda.memory_reserved(index) for index in devices)) / 1e9
+    elif torch.backends.mps.is_available():
+        # the Metal driver's total holds the cached blocks empty_cache returns; the tensor
+        # allocation counter never includes them, so it always read 0 GB freed
+        allocated = torch.mps.driver_allocated_memory()
         torch.mps.empty_cache()
-        allocated_after = torch.mps.current_allocated_memory()
-        if verbose:
-            print(f"freed {(allocated_before - allocated_after) / 1e9:.1f} GB (MPS)")
-        return (allocated_before - allocated_after) / 1e9
+        freed = (allocated - torch.mps.driver_allocated_memory()) / 1e9
+    else:
+        freed = 0.0
     if verbose:
-        print("no GPU - nothing to free")
-    return 0.0
+        print(f"freed {freed:.1f} GB (Torch cache)")
+    return freed
 
 
 __all__ = [

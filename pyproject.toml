@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "quantem.widget"
-version = "0.0.1rc41"
+version = "0.0.1rc43"
 description = "Interactive custom Python widgets for electron microscopy"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -43,7 +43,7 @@ dependencies = [
     # quantem core: readers return its Dataset2d/Dataset3d/Dataset4dstem. It needs torch 2.7 and
     # NumPy 2 (no Intel Mac wheel) and hdf5plugin 6 (no Windows on ARM wheel); there the widget's
     # stand-in carries the same attributes (adapters/core.py).
-    "quantem>=0.1.9; (sys_platform != 'darwin' or platform_machine != 'x86_64') and (sys_platform != 'win32' or platform_machine != 'ARM64')",
+    "quantem>=0.1.10; (sys_platform != 'darwin' or platform_machine != 'x86_64') and (sys_platform != 'win32' or platform_machine != 'ARM64')",
     "ase>=3.22",  # ShowCIF reads crystal structures
 ]
 
@@ -52,8 +52,8 @@ dependencies = [
 # loading. [cuda]: NVIDIA (CuPy). [mps]: Apple silicon (Metal, MLX). [cpu]: no GPU, or an Intel
 # Mac, which cannot install quantem.gpu (torch 2.3+). A wrong pick installs nothing harmful.
 cpu = []
-cuda = ["quantem.gpu[cuda]>=0.0.1rc15,<0.0.1rc16; sys_platform != 'darwin'"]
-mps = ["quantem.gpu[mps]>=0.0.1rc15,<0.0.1rc16; sys_platform == 'darwin' and platform_machine == 'arm64'"]
+cuda = ["quantem.gpu[cuda]>=0.0.1rc17,<0.0.1rc18; sys_platform != 'darwin'"]
+mps = ["quantem.gpu[mps]>=0.0.1rc17,<0.0.1rc18; sys_platform == 'darwin' and platform_machine == 'arm64'"]
 # Uploading new tutorial datasets to the shared Hugging Face hub (downloads need
 # only huggingface_hub). quantem.data is not on PyPI, so it stays an extra.
 hub = ["quantem.data>=0.0.1rc1"]
@@ -63,6 +63,7 @@ test = [
     "ipykernel>=6",
     "pytest>=8",
     "nbconvert>=7",
+    "websocket-client>=1.6",  # Browser pointer scheduler tests
 ]
 
 [tool.pytest.ini_options]

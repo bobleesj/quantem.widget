@@ -493,6 +493,14 @@ class Phase:
                     if spacing < d_min:
                         continue
                     d_key = round(spacing * 1e4)
+                    # Equivalent planes can straddle a rounding boundary by
+                    # floating-point roundoff. Keep their family together.
+                    for adjacent in (d_key - 1, d_key + 1):
+                        if adjacent in families_by_d and math.isclose(
+                            spacing, families_by_d[adjacent]["d"], rel_tol=1e-12
+                        ):
+                            d_key = adjacent
+                            break
                     # one label per symmetry-equivalent family: sorted |hkl| for cubic,
                     # |h|,|k|,|l| (h,k ordered when a = b) for orthogonal cells, first
                     # non-zero index positive otherwise

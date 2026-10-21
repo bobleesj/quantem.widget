@@ -2,8 +2,8 @@
 
 The float32 volume is sent to the browser once; every slice, page and panel
 change is re-sliced in JavaScript. Several volumes can share one widget as
-panels (``(panel, nz, ny, nx)``) or as pages of comparable volumes
-(``(page, panel, nz, ny, nx)`` or a 4D stack with ``page_labels``), all
+panels (``(panel, slices, rows, cols)``) or as pages of comparable volumes
+(``(page, panel, slices, rows, cols)`` or a 4D stack with ``page_labels``), all
 sharing the same cut geometry, contrast and camera.
 """
 
@@ -12,7 +12,6 @@ import gc
 import json
 import math
 import pathlib
-import warnings
 from collections.abc import Sequence
 from typing import Self
 
@@ -26,29 +25,33 @@ from quantem.widget.export import HtmlExportMixin, export_slug
 from quantem.widget.pages import resolve_page_labels
 from quantem.widget.show3dslices.alignment import estimate_global_slice_alignment
 from quantem.widget.state import StateFileMixin
+from quantem.widget.units import axis_step, image_axes, per_axis, stated
 from quantem.widget.utils.array import to_numpy
+from quantem.widget.utils.state_io import read_state
+from quantem.widget.utils.ui import validate_display_limits
 
 _SLICE_ALIGNMENT_MODES = frozenset({"off", "auto", "manual"})
-# The scale bar reads Angstrom; a Dataset3d or ``sampling`` in nm is converted.
-_ANGSTROM_PER_UNIT = {"": 1.0, "a": 1.0, "å": 1.0, "angstrom": 1.0, "angstroms": 1.0, "nm": 10.0}
 
 
-def _pixel_size_axes(sampling: float | Sequence[float], units: str | Sequence[str] | None) -> list[float]:
-    """Voxel sampling as ``[pz, py, px]`` in Angstrom; a scalar applies to every axis."""
-    samples = list(sampling) if isinstance(sampling, (tuple, list, np.ndarray)) else [sampling] * 3
+def _voxel_size_A(sampling: float | Sequence[float], units: str | Sequence[str]) -> list[float]:
+    """Voxel sampling as ``[slice, row, col]`` in Angstrom; a scalar applies to every axis, an axis in frames or pixels gets 0 (no bar).
+
+    The scale bar reads Angstrom: a length in another unit of ``quantem.widget.units`` is converted,
+    and an axis calibrated in something that is not a length (mrad, 1/angstrom) raises.
+    """
+    samples = per_axis(sampling, 3)
     if len(samples) != 3:
-        raise ValueError(f"sampling must be a scalar or 3 values (pz, py, px), got {len(samples)}")
-    unit_list = list(units) if isinstance(units, (tuple, list)) else [units]
-    if len(unit_list) == 1:
-        unit_list = unit_list * 3
+        raise ValueError(f"sampling must be a scalar or 3 values (slice, row, col), got {len(samples)}")
+    unit_list = per_axis(units, 3)
+    if any(not math.isfinite(float(sample)) or float(sample) < 0 for sample in samples):
+        raise ValueError(f"sampling must be finite and >= 0, got {samples}")
     axes = []
     for sample, unit in zip(samples, unit_list):
-        key = str(unit or "").strip().lower()
-        if key not in _ANGSTROM_PER_UNIT:
-            raise ValueError(f"unsupported unit: {unit!r}")
-        axes.append(float(sample) * _ANGSTROM_PER_UNIT[key])
-    if any(not math.isfinite(axis) or axis < 0 for axis in axes):
-        raise ValueError(f"sampling must be finite and >= 0, got {axes}")
+        step = axis_step(sample, unit)
+        if step is not None and step[0] != "length":
+            raise ValueError(f"Show3DSlices draws its scale bar in a length; the axis unit {unit!r} is a {step[0]}. "
+                             "Use 'angstrom', 'nm' or 'pm', or 'frame' / 'pixels' for an axis without a length.")
+        axes.append(0.0 if step is None else step[1])
     return axes
 
 
@@ -57,9 +60,9 @@ def _flatten_pages(
     panel_titles: Sequence[str] | None,
     page_labels: Sequence[str | None] | None,
 ) -> tuple[np.ndarray, list[str], int, int, list[str]]:
-    """Flatten pages into one ``(panel, nz, ny, nx)`` stack.
+    """Flatten pages into one ``(panel, slices, rows, cols)`` stack.
 
-    5D input is ``(page, panel, nz, ny, nx)``; a 4D stack with ``page_labels``
+    5D input is ``(page, panel, slices, rows, cols)``; a 4D stack with ``page_labels``
     is one volume per page; a 4D stack without labels is a multi-panel volume
     and a 3D array is one panel. Returns the flattened stack, one title per
     flattened panel, ``n_pages``, ``panels_per_page`` (0 when unpaged) and the
@@ -103,8 +106,8 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     Parameters
     ----------
     data : array_like or Dataset3d
-        ``(nz, ny, nx)`` volume, ``(panel, nz, ny, nx)`` panels, or pages:
-        ``(page, panel, nz, ny, nx)``, or ``(page, nz, ny, nx)`` together with
+        ``(slices, rows, cols)`` volume, ``(panel, slices, rows, cols)`` panels, or pages:
+        ``(page, panel, slices, rows, cols)``, or ``(page, slices, rows, cols)`` together with
         ``page_labels``. A ``Dataset3d`` supplies title, sampling and units.
     title : str
         Title above the viewer.
@@ -117,15 +120,14 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         Show the title row.
     cmap : str
         Colormap for every panel.
-    sampling : float or (pz, py, px), optional
+    sampling : float or (slice, row, col), optional
         Voxel sampling for the scale bars, paired with ``units``.
     units : str or sequence of str, optional
         Unit of ``sampling`` (``"A"`` or ``"nm"``); one value applies to every axis.
-    pixel_size : float or (pz, py, px), optional
-        Scale-bar sampling directly in Angstrom; ``sampling`` is preferred.
+        Angstrom when omitted.
     show_scale_bar : bool
         Draw calibrated scale bars when a sampling is known.
-    z_stretch : float
+    slice_stretch : float
         Display stretch of the depth axis, 1 to 50, for volumes with far fewer
         slices than lateral pixels.
     panel_width_px : int
@@ -153,15 +155,15 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     dim_labels : list of str, optional
         Names of axes 0, 1, 2; default ``["slice", "row", "col"]``.
     offline : bool
-        Pack the volume as uint8 against its global range for small standalone
-        HTML; ``False`` keeps exact float32 in the browser.
+        Pack the volume as uint8 against its global range (256 levels) for
+        small standalone HTML, and print one line saying so; ``False`` keeps
+        exact float32 in the browser.
     """
 
     _esm = pathlib.Path(__file__).parent.parent / "static" / "show3dslices.js"
 
-    nx = traitlets.Int(1).tag(sync=True)
-    ny = traitlets.Int(1).tag(sync=True)
-    nz = traitlets.Int(1).tag(sync=True)
+    # [slices, rows, cols] of one panel's volume
+    volume_shape = traitlets.List(traitlets.Int(), default_value=[1, 1, 1]).tag(sync=True)
     panel_count = traitlets.CInt(1).tag(sync=True)
     active_panel = traitlets.CInt(0).tag(sync=True)
     panel_titles = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
@@ -169,9 +171,9 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     page_idx = traitlets.CInt(0).tag(sync=True)
     panels_per_page = traitlets.CInt(0).tag(sync=True)
     page_labels = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
-    slice_x = traitlets.CInt(0).tag(sync=True)
-    slice_y = traitlets.CInt(0).tag(sync=True)
-    slice_z = traitlets.CInt(0).tag(sync=True)
+    col_index = traitlets.CInt(0).tag(sync=True)
+    row_index = traitlets.CInt(0).tag(sync=True)
+    slice_index = traitlets.CInt(0).tag(sync=True)
     oblique_angle = traitlets.Float(0.0).tag(sync=True)
     oblique_profile_line = traitlets.List(traitlets.Dict(), default_value=[]).tag(sync=True)
     volume_bytes = traitlets.Bytes(b"").tag(sync=True)
@@ -188,12 +190,10 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     auto_contrast = traitlets.Bool(True).tag(sync=True)
     vmin = traitlets.Float(None, allow_none=True).tag(sync=True)
     vmax = traitlets.Float(None, allow_none=True).tag(sync=True)
-    # pixel_size is the lateral mean the XY scale bar reads; pixel_size_axes is
-    # the full [pz, py, px] triple for the depth-axis bars.
-    pixel_size = traitlets.Float(0.0).tag(sync=True)
-    pixel_size_axes = traitlets.List(traitlets.Float(), default_value=[0.0, 0.0, 0.0]).tag(sync=True)
-    scale_bar_visible = traitlets.Bool(True).tag(sync=True)
-    z_stretch = traitlets.Float(30.0).tag(sync=True)
+    # the [slice, row, col] sampling every panel's scale bar reads
+    voxel_size_A = traitlets.List(traitlets.Float(), default_value=[0.0, 0.0, 0.0]).tag(sync=True)
+    show_scale_bar = traitlets.Bool(True).tag(sync=True)
+    slice_stretch = traitlets.Float(30.0).tag(sync=True)
     panel_width_px = traitlets.Int(0).tag(sync=True)
     view_state = traitlets.Dict(default_value={}).tag(sync=True)
     show_controls = traitlets.Bool(True).tag(sync=True)
@@ -229,15 +229,15 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     play_axis = traitlets.Int(0).tag(sync=True)  # 0 slice, 1 oblique plane, 3 both
 
     _STATE_KEYS = (
-        "title", "show_title", "n_pages", "page_idx", "panels_per_page", "page_labels",
+        "title", "show_title", "page_idx", "page_labels",
         "active_panel", "panel_titles", "cmap", "log_scale", "auto_contrast", "vmin", "vmax",
         "show_controls", "controls_collapsed", "show_crosshair", "show_fft", "fft_window",
         "fft_colormap", "fft_log_scale", "fft_auto", "orthographic", "smooth", "flip",
         "show_colorbar", "image_vmin_pct", "image_vmax_pct", "show_slice_planes",
         "plane_visibility", "slice_alignment", "row_shift_px_per_slice", "col_shift_px_per_slice",
-        "slice_alignment_cached", "volume_opacity", "slice_plane_opacity", "pixel_size",
-        "pixel_size_axes", "scale_bar_visible", "z_stretch", "panel_width_px", "view_state",
-        "slice_x", "slice_y", "slice_z", "oblique_angle", "oblique_profile_line", "fps", "loop",
+        "slice_alignment_cached", "volume_opacity", "slice_plane_opacity",
+        "voxel_size_A", "show_scale_bar", "slice_stretch", "panel_width_px", "view_state",
+        "col_index", "row_index", "slice_index", "oblique_angle", "oblique_profile_line", "fps", "loop",
         "reverse", "boomerang", "play_axis", "dim_labels",
     )
 
@@ -294,20 +294,20 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             raise traitlets.TraitError(f"{proposal['trait'].name} must be finite, got {value}")
         return value
 
-    @traitlets.validate("pixel_size_axes")
-    def _validate_pixel_size_axes(self, proposal: dict) -> list[float]:
-        """Three finite, non-negative samplings ``[pz, py, px]`` in Angstrom (0 means uncalibrated)."""
+    @traitlets.validate("voxel_size_A")
+    def _validate_voxel_size_A(self, proposal: dict) -> list[float]:
+        """Three finite, non-negative samplings ``[slice, row, col]`` in Angstrom (0 means uncalibrated)."""
         value = [float(axis) for axis in proposal["value"]]
         if len(value) != 3 or any(not math.isfinite(axis) or axis < 0 for axis in value):
-            raise traitlets.TraitError(f"pixel_size_axes must be 3 finite values >= 0, got {value}")
+            raise traitlets.TraitError(f"voxel_size_A must be 3 finite values >= 0, got {value}")
         return value
 
-    @traitlets.validate("z_stretch")
-    def _validate_z_stretch(self, proposal: dict) -> float:
+    @traitlets.validate("slice_stretch")
+    def _validate_slice_stretch(self, proposal: dict) -> float:
         """Clamp to [1, 50]: below 1 the depth panel collapses, above 50 it fills the page."""
         value = float(proposal["value"])
         if not math.isfinite(value):
-            raise traitlets.TraitError(f"z_stretch must be finite, got {value}")
+            raise traitlets.TraitError(f"slice_stretch must be finite, got {value}")
         return max(1.0, min(value, 50.0))
 
     @traitlets.validate("active_panel")
@@ -344,33 +344,13 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             raise traitlets.TraitError(f"dim_labels must be a list of 3 strings, got {raw!r}")
         return list(raw)
 
-    @traitlets.validate("slice_z", "slice_y", "slice_x")
-    def _validate_slice_index(self, proposal: dict) -> int:
-        """Clamp a cut index into its axis (``nz``, ``ny`` or ``nx``), so a cut never leaves the volume."""
-        size = {"slice_z": self.nz, "slice_y": self.ny, "slice_x": self.nx}[proposal["trait"].name]
+    @traitlets.validate("slice_index", "row_index", "col_index")
+    def _validate_cut_index(self, proposal: dict) -> int:
+        """Clamp a cut index into its axis of ``volume_shape``, so a cut never leaves the volume."""
+        size = self.volume_shape[("slice_index", "row_index", "col_index").index(proposal["trait"].name)]
         return max(0, min(int(proposal["value"]), max(0, int(size) - 1)))
 
-    @traitlets.validate("vmax")
-    def _validate_vmax(self, proposal: dict) -> float | None:
-        """A manual upper limit must be finite and not below ``vmin``."""
-        new_vmax = proposal["value"]
-        if new_vmax is not None:
-            if not math.isfinite(new_vmax):
-                raise traitlets.TraitError(f"vmax must be finite, got {new_vmax}")
-            if self.vmin is not None and new_vmax < self.vmin:
-                raise traitlets.TraitError(f"vmax ({new_vmax}) must be >= vmin ({self.vmin})")
-        return new_vmax
-
-    @traitlets.validate("vmin")
-    def _validate_vmin(self, proposal: dict) -> float | None:
-        """A manual lower limit must be finite and not above ``vmax``."""
-        new_vmin = proposal["value"]
-        if new_vmin is not None:
-            if not math.isfinite(new_vmin):
-                raise traitlets.TraitError(f"vmin must be finite, got {new_vmin}")
-            if self.vmax is not None and new_vmin > self.vmax:
-                raise traitlets.TraitError(f"vmin ({new_vmin}) must be <= vmax ({self.vmax})")
-        return new_vmin
+    _validate_vmin_vmax = traitlets.validate("vmin", "vmax")(validate_display_limits)
 
     def __init__(
         self,
@@ -383,9 +363,8 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         cmap: str = "plasma",
         sampling: float | Sequence[float] | None = None,
         units: str | Sequence[str] | None = None,
-        pixel_size: float | Sequence[float] | None = None,
         show_scale_bar: bool = True,
-        z_stretch: float = 30.0,
+        slice_stretch: float = 30.0,
         panel_width_px: int = 0,
         show_fft: bool = False,
         fft_window: bool = False,
@@ -399,24 +378,25 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         dim_labels: Sequence[str] | None = None,
         offline: bool = False,
     ):
-        """Flatten the volume to ``(panel, nz, ny, nx)`` float32 and send it with the display traits in one sync."""
+        """Flatten the volume to ``(panel, slices, rows, cols)`` float32 and send it with the display traits in one sync."""
         super().__init__()
         # free() and the export clone read these before any volume is stored
         self._data: np.ndarray | None = None
         self._slice_alignment_estimates: dict[int, dict] = {}
         self._syncing_plane_visibility = False
         self._syncing_pages = False
-        if core_adapter.is_dataset(data, ndim=3):
+        is_dataset = core_adapter.is_dataset(data, ndim=3)
+        recorded = _voxel_size_A(list(data.sampling)[-3:], list(data.units)[-3:]) if is_dataset else [0.0, 0.0, 0.0]
+        if sampling is None and not any(recorded):
+            # a unit stated with no step, for a volume that records none on any axis, raises as in every image widget
+            image_axes(None, units)
+        voxel_size_A = [0.0, 0.0, 0.0] if sampling is None else _voxel_size_A(sampling, "angstrom" if units is None else units)
+        if is_dataset:
             title = title or data.name
-            if sampling is None and pixel_size is None:
-                sampling, units = list(data.sampling)[-3:], list(data.units)[-3:]
+            # the dataset is the source of its voxel size, axis by axis: a keyword gives the step of an
+            # axis the dataset does not calibrate (the frame axis of a stack) and may repeat one it does
+            voxel_size_A = [step or 0.0 for step in stated("sampling", [step or None for step in voxel_size_A], [step or None for step in recorded])]
             data = core_adapter.as_array(data)
-        if sampling is not None:
-            pixel_size_axes = _pixel_size_axes(sampling, units)
-        elif pixel_size is not None:
-            pixel_size_axes = _pixel_size_axes(pixel_size, "A")
-        else:
-            pixel_size_axes = [0.0, 0.0, 0.0]
         data = to_numpy(data)
         if 0 in data.shape:
             raise ValueError(f"Empty volume: shape {data.shape}. All dims must be >= 1.")
@@ -429,21 +409,19 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             raise ValueError("Data contains NaN, inf, or values beyond float32 range. Clean with np.nan_to_num first.")
         self._data = volume
         with self.hold_sync():
-            self.panel_count, self.nz, self.ny, self.nx = volume.shape
+            self.panel_count = volume.shape[0]
+            self.volume_shape = list(volume.shape[1:])
             self.n_pages = n_pages
             self.panels_per_page = panels_per_page
             self.page_labels = page_labels
             self.panel_titles = panel_titles
-            self.slice_z = self.nz // 2
-            self.slice_y = self.ny // 2
-            self.slice_x = self.nx // 2
+            self.slice_index, self.row_index, self.col_index = (size // 2 for size in self.volume_shape)
             self.title = str(title)
             self.show_title = bool(show_title)
             self.cmap = cmap
-            self.pixel_size_axes = pixel_size_axes
-            self.pixel_size = (pixel_size_axes[1] + pixel_size_axes[2]) / 2.0
-            self.scale_bar_visible = bool(show_scale_bar)
-            self.z_stretch = float(z_stretch)
+            self.voxel_size_A = voxel_size_A
+            self.show_scale_bar = bool(show_scale_bar)
+            self.slice_stretch = float(slice_stretch)
             self.panel_width_px = int(panel_width_px)
             self.show_fft = bool(show_fft)
             self.fft_window = bool(fft_window)
@@ -460,6 +438,8 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             self.offline = bool(offline)
             if self.offline:
                 # uint8 against the global range: the browser rescales with _offline_min/_max
+                print(f"Show3DSlices packs the {'x'.join(map(str, volume.shape[1:]))} volume as uint8 over its range "
+                      "(256 levels); offline=False, or export_html(encoding='full'), keeps float32.")
                 low, high = float(volume.min()), float(volume.max())
                 self._offline_min, self._offline_max = low, high
                 if high > low:
@@ -482,8 +462,8 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         pages = f"{self.n_pages} pages × " if int(self.n_pages) > 1 else ""
         panels = f"{self.panels_per_page or self.panel_count} panels × " if int(self.panels_per_page or self.panel_count) > 1 else ""
         return (
-            f"Show3DSlices({pages}{panels}{self.nz}×{self.ny}×{self.nx}, page={self.page_idx}, "
-            f"active_panel={self.active_panel}, slices=({self.slice_z},{self.slice_y},{self.slice_x}), cmap={self.cmap})"
+            f"Show3DSlices({pages}{panels}{'×'.join(map(str, self.volume_shape))}, page={self.page_idx}, "
+            f"active_panel={self.active_panel}, slices=({self.slice_index},{self.row_index},{self.col_index}), cmap={self.cmap})"
         )
 
     # --- slice alignment ----------------------------------------------------------
@@ -558,32 +538,23 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             state[key] = dict(value) if isinstance(value, dict) else list(value) if isinstance(value, list) else value
         return state
 
-    def load_state_dict(self, state: dict) -> None:
-        """Apply a ``state_dict`` snapshot onto this widget's volume.
+    def load_state_dict(self, state: dict | str | pathlib.Path) -> None:
+        """Apply a ``state_dict`` snapshot, its envelope or a ``save`` file onto this widget's volume.
 
         Page topology comes from the data, so ``n_pages`` / ``panels_per_page``
-        are ignored and labels of the wrong length are dropped. ``vmin`` /
-        ``vmax`` are cleared first so either bound can land regardless of the
-        current limits. A state saved with only the scalar ``pixel_size``
-        mirrors it across the three axes. Unknown keys warn and are dropped.
+        are not part of the state and labels of the wrong length are dropped.
+        ``vmin`` / ``vmax`` are cleared first so either bound can land
+        regardless of the current limits. A file of another ``schema`` or an
+        unknown key raises before anything is applied.
         """
-        state = dict(state)
+        state = dict(read_state(state, "Show3DSlices", ("_widget", *self._STATE_KEYS)))
         marker = state.pop("_widget", None)
         if marker is not None and marker != "Show3DSlices":
             raise ValueError(f"load_state_dict: state was saved from {marker!r}, not Show3DSlices.")
-        unknown = [key for key in state if key not in self._STATE_KEYS]
-        for key in unknown:
-            state.pop(key)
-        state.pop("n_pages", None)
-        state.pop("panels_per_page", None)
         if "page_labels" in state and len(state["page_labels"]) != int(self.n_pages):
             state.pop("page_labels")
         if "panel_titles" in state and len(state["panel_titles"]) not in (0, int(self.panel_count)):
             state.pop("panel_titles")
-        if "plane_visibility" in state:
-            state["show_slice_planes"] = any(bool(visible) for visible in state["plane_visibility"])
-        elif "show_slice_planes" in state:
-            state["plane_visibility"] = [bool(state["show_slice_planes"])] * 2
         if "vmin" in state or "vmax" in state:
             new_vmin = state.pop("vmin", self.vmin)
             new_vmax = state.pop("vmax", self.vmax)
@@ -593,10 +564,6 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             self.vmax = None if new_vmax is None else float(new_vmax)
         for key, value in state.items():
             setattr(self, key, value)
-        if "pixel_size" in state and "pixel_size_axes" not in state:
-            self.pixel_size_axes = [float(state["pixel_size"])] * 3
-        if unknown:
-            warnings.warn(f"load_state_dict ignored unknown keys: {unknown}.", stacklevel=2)
 
     def free(self) -> None:
         """Release the volume and its synced bytes.
@@ -661,8 +628,10 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
 
     # --- HTML export ----------------------------------------------------------------
 
+    _HTML_ENCODINGS = ("full", "uint8")
+
     def export_html(self, path: str | pathlib.Path | None = None, *, title: str | None = None, encoding: str = "full") -> pathlib.Path:
-        """Write a standalone HTML viewer.
+        """Write a standalone HTML viewer that opens with no kernel and no network.
 
         ``encoding="full"`` embeds the exact float32 volume; ``"uint8"`` packs
         it against the global range for a file about a quarter the size. The
@@ -671,46 +640,26 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         """
         if self._data is None:
             raise ValueError("Cannot export HTML after free(); rebuild the widget first.")
-        quantized = self._quantized(encoding)
-        export_path = pathlib.Path(path) if path is not None else self._default_html_export_path(quantized)
-        self._write_html_export(export_path, quantized=quantized, title=title)
-        size_mb = export_path.stat().st_size / (1024 * 1024)
-        self.export_status = f"Exported {export_path.name} ({size_mb:.1f} MB, {self._export_mode_label(quantized)})"
-        return export_path
-
-    def _quantized(self, encoding: str) -> bool:
-        """Whether an export ``encoding`` asks for the uint8 pack; unknown encodings are refused."""
-        key = str(encoding or "full").strip().lower()
-        if key in {"full", "exact", "float32"}:
-            return False
-        if key in {"uint8", "quantized"}:
-            return True
-        raise ValueError(f"unknown Show3DSlices export encoding {encoding!r}; expected 'full' or 'uint8'")
-
-    def _html_export_options(self, payload: dict, mode: str) -> dict:
-        """The ``export_html`` keywords of a toolbar request (``HtmlExportMixin`` hook).
-
-        The toolbar menu sends ``mode`` ``"exact"`` or ``"quantized"``; Python callers send ``encoding``.
-        """
-        return {"quantized": self._quantized(payload.get("encoding", mode))}
+        return self._write_export_and_report(path, title=title, **self._html_export_choice(encoding, None))
 
     def _default_html_export_path(self, quantized: bool) -> pathlib.Path:
         """File in the kernel cwd named after the title, volume shape and encoding (``HtmlExportMixin`` hook)."""
         slug = export_slug(self.title, "show3dslices")
         mode = "quantized" if quantized else "exact"
-        return pathlib.Path.cwd() / f"{slug}_{self.nz}x{self.ny}x{self.nx}_{mode}.html"
+        return pathlib.Path.cwd() / f"{slug}_{'x'.join(map(str, self.volume_shape))}_{mode}.html"
 
     def _clone_for_html_export(self, *, quantized: bool) -> Self:
         """An export-only copy with the current display state and the requested packing."""
         clone_data = self._data
         if int(self.n_pages) > 1:
-            clone_data = self._data.reshape(int(self.n_pages), int(self.panels_per_page), int(self.nz), int(self.ny), int(self.nx))
+            clone_data = self._data.reshape(int(self.n_pages), int(self.panels_per_page), *self.volume_shape)
         clone = type(self)(
             clone_data,
             title=self.title,
             panel_titles=list(self.panel_titles) or None,
             page_labels=list(self.page_labels) if int(self.n_pages) > 1 else None,
-            pixel_size=list(self.pixel_size_axes),
+            sampling=list(self.voxel_size_A),
+            units="A",
             dim_labels=list(self.dim_labels),
             offline=quantized,
         )

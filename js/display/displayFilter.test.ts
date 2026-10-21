@@ -60,7 +60,7 @@ type Fixture = {
   odd_cases: FixtureCase[];
 };
 
-function pythonReferenceFixture(): Fixture | null {
+function pythonReferenceFixture(): Fixture {
   const python = process.env.PYTHON || "python";
   const code = String.raw`
 import json
@@ -108,18 +108,14 @@ print(json.dumps({
     ],
 }))
 `;
-  try {
-    return JSON.parse(execFileSync(python, ["-c", code], {
-      encoding: "utf8",
-      maxBuffer: 128 * 1024 * 1024,
-      env: {
-        ...process.env,
-        PYTHONPATH: [path.resolve(__dirname, "..", "..", "src"), process.env.PYTHONPATH || ""].join(path.delimiter),
-      },
-    }));
-  } catch {
-    return null;
-  }
+  return JSON.parse(execFileSync(python, ["-c", code], {
+    encoding: "utf8",
+    maxBuffer: 128 * 1024 * 1024,
+    env: {
+      ...process.env,
+      PYTHONPATH: [path.resolve(__dirname, "..", "..", "src"), process.env.PYTHONPATH || ""].join(path.delimiter),
+    },
+  }));
 }
 
 function maxAbsDiff(actual: Float32Array, expected: number[]): number {
@@ -132,12 +128,12 @@ function maxAbsDiff(actual: Float32Array, expected: number[]): number {
 
 const fixture = pythonReferenceFixture();
 
-(fixture ? describe : describe.skip)("display filter Python/scipy parity", () => {
+describe("display filter Python/scipy parity", () => {
   it("matches apply_display_filter on a 128x128 Poisson map for every browser mode", () => {
-    const image = Float32Array.from(fixture!.image);
-    for (const testCase of fixture!.cases) {
+    const image = Float32Array.from(fixture.image);
+    for (const testCase of fixture.cases) {
       const actual = applyDisplayFilterCPU(
-        image, fixture!.width, fixture!.height,
+        image, fixture.width, fixture.height,
         testCase.mode, testCase.sigma, testCase.spatial_bin,
       );
       expect(actual.length).toBe(testCase.expected.length);
@@ -149,10 +145,10 @@ const fixture = pythonReferenceFixture();
   });
 
   it("matches on an odd-sized map (exercises the ndimage.zoom shape rounding)", () => {
-    const image = Float32Array.from(fixture!.odd_image);
-    for (const testCase of fixture!.odd_cases) {
+    const image = Float32Array.from(fixture.odd_image);
+    for (const testCase of fixture.odd_cases) {
       const actual = applyDisplayFilterCPU(
-        image, fixture!.odd_width, fixture!.odd_height,
+        image, fixture.odd_width, fixture.odd_height,
         testCase.mode, testCase.sigma, testCase.spatial_bin,
       );
       expect(actual.length).toBe(testCase.expected.length);

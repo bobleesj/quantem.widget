@@ -7,9 +7,9 @@ import pytest
 from quantem.widget import datasets
 
 
-def test_show2d_gold_size_maps_to_preview_stride(tmp_path, monkeypatch):
+def test_show2d_gold_size_maps_to_preview_stride(tmp_path, monkeypatch, capsys):
     root = tmp_path / "hf-cache"
-    data_dir = root / "widget-tutorials" / "shared" / "gold-haadf" / "full"
+    data_dir = root / "haadf" / "gold_haadf_npy"
     data_dir.mkdir(parents=True)
     np.save(data_dir / "data.npy", np.arange(64, dtype=np.float32).reshape(8, 8))
     (data_dir / "meta.json").write_text(
@@ -21,7 +21,7 @@ def test_show2d_gold_size_maps_to_preview_stride(tmp_path, monkeypatch):
         calls.append(kwargs)
         return root
 
-    monkeypatch.setattr(datasets, "snapshot_download", fake_snapshot_download, raising=False)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
 
     dataset = datasets.show2d_gold(size="medium", verbose=False)
 
@@ -31,15 +31,21 @@ def test_show2d_gold_size_maps_to_preview_stride(tmp_path, monkeypatch):
         {
             "repo_id": "bobleesj/quantem-data",
             "repo_type": "dataset",
-            "allow_patterns": ["widget-tutorials/shared/gold-haadf/full/*"],
+            "allow_patterns": ["haadf/gold_haadf_npy/*"],
             "force_download": False,
+            "revision": datasets.TUTORIAL_DATA_REVISION,
         }
     ]
+    # E-R3: the stride was printed only with verbose=True and never named the way back to native pixels
+    assert capsys.readouterr().out == (
+        "show2d_gold(size='medium') keeps every 4th pixel of the 8x8 image (2x2); size='full' loads native pixels.\n")
+    datasets.show2d_gold(size="full", verbose=False)
+    assert capsys.readouterr().out == ""
 
 
 def test_show3d_gold_reuses_shared_haadf_source(tmp_path, monkeypatch):
     root = tmp_path / "hf-cache"
-    data_dir = root / "widget-tutorials" / "shared" / "gold-haadf" / "full"
+    data_dir = root / "haadf" / "gold_haadf_npy"
     data_dir.mkdir(parents=True)
     image = np.arange(2048 * 2048, dtype=np.float32).reshape(2048, 2048)
     np.save(data_dir / "data.npy", image)
@@ -52,27 +58,27 @@ def test_show3d_gold_reuses_shared_haadf_source(tmp_path, monkeypatch):
         calls.append(kwargs)
         return root
 
-    monkeypatch.setattr(datasets, "snapshot_download", fake_snapshot_download, raising=False)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
 
     dataset = datasets.show3d_gold(size="small", verbose=False)
 
     assert dataset.array.shape == (32, 256, 256)
-    assert calls[0]["allow_patterns"] == ["widget-tutorials/shared/gold-haadf/full/*"]
+    assert calls[0]["allow_patterns"] == ["haadf/gold_haadf_npy/*"]
 
 
 def test_tutorial_size_names_are_strict():
-    assert datasets._normalise_tutorial_size("Small") == "small"
+    assert datasets._normalize_tutorial_size("Small") == "small"
     try:
-        datasets._normalise_tutorial_size("mini")
+        datasets._normalize_tutorial_size("mini")
     except ValueError as exc:
         assert "small, medium, large, full" in str(exc)
     else:
         raise AssertionError("expected invalid tutorial size to raise")
 
 
-def test_show4dstem_gold_uses_widget_tutorial_source(tmp_path, monkeypatch):
+def test_show4dstem_gold_uses_widget_tutorial_source(tmp_path, monkeypatch, capsys):
     root = tmp_path / "hf-cache"
-    data_dir = root / "widget-tutorials" / "show4dstem" / "gold-128-bin8" / "full"
+    data_dir = root / "4dstem" / "gold_128_npy_bin8"
     data_dir.mkdir(parents=True)
     stack = np.arange(8 * 8 * 2 * 2, dtype=np.uint16).reshape(8, 8, 2, 2)
     np.save(data_dir / "data.npy", stack)
@@ -91,18 +97,23 @@ def test_show4dstem_gold_uses_widget_tutorial_source(tmp_path, monkeypatch):
         calls.append(kwargs)
         return root
 
-    monkeypatch.setattr(datasets, "snapshot_download", fake_snapshot_download, raising=False)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
 
     dataset = datasets.show4dstem_gold(size="small", verbose=False)
 
     assert dataset.shape == (2, 2, 2, 2)  # a Dataset4dstemGPU on a GPU, a core Dataset4dstem elsewhere
     assert tuple(dataset.sampling) == (8.0, 8.0, 3.68, 3.68)
-    assert calls[0]["allow_patterns"] == ["widget-tutorials/show4dstem/gold-128-bin8/full/*"]
+    assert "keeps every 4th scan position of the 8x8 scan" in capsys.readouterr().out
+    assert calls[0]["allow_patterns"] == ["4dstem/gold_128_npy_bin8/*"]
 
 
-def test_show1d_ducky_downloads_scoped_widget_tutorial_folder(tmp_path, monkeypatch):
+@pytest.mark.parametrize("revision,path", [
+    (None, "widget/ducky"),
+    ("recorded", "widget/ducky"),
+])
+def test_show1d_ducky_downloads_scoped_input_family(tmp_path, monkeypatch, revision, path):
     root = tmp_path / "hf-cache"
-    folder = root / "widget-tutorials" / "show1d" / "ducky" / "small"
+    folder = root / path
     folder.mkdir(parents=True)
     (folder / "show1d_monitor.jsonl").write_text('{"iteration": 0, "losses": {"lambda 1": 1.0}}\n')
     calls = []
@@ -111,67 +122,30 @@ def test_show1d_ducky_downloads_scoped_widget_tutorial_folder(tmp_path, monkeypa
         calls.append(kwargs)
         return root
 
-    monkeypatch.setattr(datasets, "snapshot_download", fake_snapshot_download, raising=False)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
 
-    result = datasets.show1d_ducky(size="small", cache_dir=Path("/tmp/qw-cache"), verbose=False)
+    result = datasets.show1d_ducky(cache_dir=Path("/tmp/qw-cache"), revision=revision, verbose=False)
 
     assert result == folder
     assert calls == [
         {
             "repo_id": "bobleesj/quantem-data",
             "repo_type": "dataset",
-            "allow_patterns": ["widget-tutorials/show1d/ducky/small/*"],
+            "allow_patterns": [f"{path}/*"],
             "force_download": False,
+            "revision": revision or datasets.TUTORIAL_DATA_REVISION,
             "cache_dir": "/tmp/qw-cache",
         }
     ]
 
 
-def test_showdiffraction_fe3o4_uses_widget_tutorial_source(tmp_path, monkeypatch):
+@pytest.mark.parametrize("revision,path", [
+    (None, "widget/gold_session"),
+    ("recorded", "widget/gold_session"),
+])
+def test_gold_session_uses_recorded_input_family(tmp_path, monkeypatch, revision, path):
     root = tmp_path / "hf-cache"
-    data_dir = root / "widget-tutorials" / "showdiffraction" / "fe3o4-saed" / "small"
-    data_dir.mkdir(parents=True)
-    np.save(data_dir / "data.npy", np.arange(16, dtype=np.float32).reshape(4, 4))
-    (data_dir / "meta.json").write_text(json.dumps({"name": "fe3o4-saed"}))
-    calls = []
-
-    def fake_snapshot_download(**kwargs):
-        calls.append(kwargs)
-        return root
-
-    monkeypatch.setattr(datasets, "snapshot_download", fake_snapshot_download, raising=False)
-
-    pattern = datasets.showdiffraction_fe3o4(verbose=False)
-
-    assert pattern.shape == (4, 4)
-    assert pattern.dtype == np.float32
-    assert calls == [
-        {
-            "repo_id": "bobleesj/quantem-data",
-            "repo_type": "dataset",
-            "allow_patterns": ["widget-tutorials/showdiffraction/fe3o4-saed/small/*"],
-            "force_download": False,
-        }
-    ]
-
-
-def test_showdiffraction_fe3o4_raises_without_usable_source(tmp_path, monkeypatch):
-    def fail_download(*args, **kwargs):
-        raise OSError("offline")
-
-    monkeypatch.setattr(datasets, "snapshot_download", fail_download, raising=False)
-
-    try:
-        datasets.showdiffraction_fe3o4(verbose=False)
-    except OSError as exc:
-        assert "offline" in str(exc)
-    else:
-        raise AssertionError("expected diffraction tutorial loader to raise")
-
-
-def test_gold_session_uses_widget_tutorial_folder(tmp_path, monkeypatch):
-    root = tmp_path / "hf-cache"
-    folder = root / "widget-tutorials" / "showfolder" / "gold-haadf-session" / "small"
+    folder = root / path
     folder.mkdir(parents=True)
     (folder / "0010 - HAADF 15Mx Nano.emd").write_bytes(b"placeholder")
     calls = []
@@ -180,20 +154,50 @@ def test_gold_session_uses_widget_tutorial_folder(tmp_path, monkeypatch):
         calls.append(kwargs)
         return root
 
-    monkeypatch.setattr(datasets, "snapshot_download", fake_snapshot_download, raising=False)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
 
-    result = datasets.gold_session(size="small", cache_dir=Path("/tmp/qw-cache"), verbose=False)
+    result = datasets.gold_session(size="small", cache_dir=Path("/tmp/qw-cache"), revision=revision, verbose=False)
 
     assert result == folder
     assert calls == [
         {
             "repo_id": "bobleesj/quantem-data",
             "repo_type": "dataset",
-            "allow_patterns": ["widget-tutorials/showfolder/gold-haadf-session/small/*"],
+            "allow_patterns": [f"{path}/*"],
             "force_download": False,
+            "revision": revision or datasets.TUTORIAL_DATA_REVISION,
             "cache_dir": "/tmp/qw-cache",
         }
     ]
+
+
+@pytest.mark.parametrize("revision,path", [("staged-revision", "widget/ducky"), ("another-revision", "widget/ducky")])
+def test_ducky_revision_keeps_snapshot_family_together(tmp_path, monkeypatch, revision, path):
+    folder = tmp_path / path
+    (folder / "snapshots").mkdir(parents=True)
+    reference = np.arange(16, dtype=np.float32).reshape(4, 4)
+    np.save(folder / "snapshots/reference.npy", reference)
+    (folder / "show1d_monitor.jsonl").write_text(json.dumps({"iteration": 0, "snapshots": {"reference": "snapshots/reference.npy"}}) + "\n")
+    calls = []
+    monkeypatch.setattr("huggingface_hub.snapshot_download", lambda **kwargs: calls.append(kwargs) or tmp_path)
+    result = datasets.show1d_ducky(revision=revision, verbose=False)
+    event = json.loads((result / "show1d_monitor.jsonl").read_text())
+    np.testing.assert_array_equal(np.load(result / event["snapshots"]["reference"]), reference)
+    assert calls[0]["allow_patterns"] == ["widget/ducky/*"]
+    assert all(call["revision"] == revision for call in calls)
+    assert calls[-1]["allow_patterns"] == [f"{path}/*"]
+
+
+def test_session_accepts_new_location_without_changing_filenames(tmp_path, monkeypatch):
+    folder = tmp_path / "widget/gold_session"
+    folder.mkdir(parents=True)
+    (folder / "0010 - HAADF 15Mx Nano.emd").write_bytes(b"session input")
+    calls = []
+    monkeypatch.setattr("huggingface_hub.snapshot_download", lambda **kwargs: calls.append(kwargs) or tmp_path)
+    result = datasets.gold_session(revision="staged-revision", verbose=False)
+    assert [p.name for p in result.glob("*.emd")] == ["0010 - HAADF 15Mx Nano.emd"]
+    assert calls[0]["allow_patterns"] == ["widget/gold_session/*"]
+    assert calls[0]["revision"] == "staged-revision"
 
 
 def test_showpdf_ta_loads_the_calibrated_scan_and_the_model_gr(tmp_path, monkeypatch):

@@ -26,7 +26,7 @@ no console error, no NaN frame).
 | More menu: Color shared | `panel_cmaps`, `panel_cmaps_memory` | Shared by default. Turn off to let the Color dropdown edit only the selected gallery panel; turn on for one shared colormap, then turn off again to restore the previous individual panel colormaps |
 | Panel identity markers | `marker_colors`, `marker_style`, `row_markers`, `col_markers` | Optional panel colors plus row/column group frames make panels easy to reference in notebooks, reports, and agent instructions |
 | Local panel annotations | `panel_annotations` | Optional multiple in-image labels per panel, placed by corner, normalized point, or normalized region box |
-| Geometric panel overlays | `panel_overlays` (`overlays` shorthand) | Optional circle, rectangle, and square overlays in data or relative coordinates, with stroke/fill opacity, dashed/dotted line styles, and z-order; More -> Overlay Edit allows live select, move, resize, delete, and reset |
+| Geometric panel overlays | `panel_overlays` | Optional circle and rectangle overlays in data or relative coordinates, with stroke/fill opacity, dashed/dotted line styles, and z-order; More -> Overlay Edit allows live select, move, resize, delete, and reset |
 | Contrast min / max sliders | `vmin`, `vmax` | Display clamp changes; histogram markers move |
 | Auto-contrast toggle | `auto_contrast` | Re-fits `vmin`/`vmax` to the percentile range |
 | More menu: Contrast | `contrast_preset` | Applies scientist-friendly percentile ranges such as `1-99`, `2-98`, and `3-97`; the histogram stays visible below the image |
@@ -41,9 +41,9 @@ no console error, no NaN frame).
 | Stats visibility | `show_stats` | Mean/min/max/std readout shows/hides |
 | Panel title visibility | `show_panel_titles`, `panel_title_font_size`, `panel_title_style` | Per-panel labels show/hide, resize, and optionally get title chrome such as background, border, and padding |
 | Rich panel title spans | `panel_title_spans` | Optional structured `text` / `math` / `color` spans for symbols such as `λ` and `χ²` in panel titles, panel menus, stats, saved state, and exported HTML |
-| Scale bar toggle | `show_scale_bar` (`scale_bar_visible` in saved state) | Calibrated bar shows/hides (needs `pixel_size > 0`) |
+| Scale bar toggle | `show_scale_bar` (`show_scale_bar` in saved state) | Calibrated bar shows/hides (needs `pixel_size > 0`) |
 | Scale bar style | `scale_bar_panels`, `scale_bar_length`, `scale_bar_label`, `scale_bar_style` | Restrict scale bars to selected panels and control exact publication text, font, outline, label spacing, offset, and bar thickness |
-| Gallery gap and borders | `inter_panel_gap_px` (older name `gallery_gap_px`), `inter_panel_gap_color`, `gallery_outer_border_px`, `gallery_outer_border_color`, `panel_inner_border_px`, `panel_inner_border_color` | Separately controls the layer between panels, the outside gallery frame, and each panel's own inner stroke for browser, SVG, and static previews |
+| Gallery gap and borders | `panel_gap_px`, `inter_panel_gap_color`, `gallery_outer_border_px`, `gallery_outer_border_color`, `panel_inner_border_px`, `panel_inner_border_color` | Separately controls the layer between panels, the outside gallery frame, and each panel's own inner stroke for browser, SVG, and static previews |
 | Pan (drag) | per-image pan | Image translates; with `link_pan` all panels move together |
 | Zoom (wheel) | `initial_zoom`, `zoom_row`, `zoom_col`; constructor `zoom=`, `center=(row, col)` (full-resolution pixels) | Zooms about the cursor |
 | Smooth toggle | `smooth` | Off by default: sharp data pixels (nearest neighbour); on: bilinear interpolation. The FFT panel has its own Smooth switch, also off by default |
@@ -60,7 +60,7 @@ no console error, no NaN frame).
 | Filter master | `frequency_filter_enabled` | Turns frequency filtering on/off without discarding cutoff or band settings |
 | Filter Settings | `show_frequency_filter` | Chooses None, Low-pass, High-pass, or Band-pass and exposes the FFT-ring parameters |
 | More menu: Flip | `image_flips_horizontal`, `image_flips_vertical` | Display-only horizontal/vertical flips help compare orientations and point-defect neighborhoods without changing stored arrays |
-| More menu: Rotate | `image_rotations`, `rotation_scope`; `rotation=`, `rotations=` | Display-only 0/90/180/270° rotation for every panel or the selected panel; raw data and `(row, col)` coordinates stay unchanged |
+| More menu: Rotate | `image_rotations`, `rotation_scope` | Display-only 0/90/180/270° rotation for every panel or the selected panel; raw data and `(row, col)` coordinates stay unchanged |
 | Panel inset plots | `inset_plots` | Optional per-panel mini line plots for calibration curves, ACF/R sweeps, or other scientific context; hover reports the nearest plotted coordinate |
 | Scale bar placement | `scale_bar_position`, `show_zoom_indicator` | Move the scale bar between bottom corners and opt into a zoom badge when a workflow needs a live magnification readout |
 
@@ -149,26 +149,25 @@ Show2D(
                 "shape": "circle",
                 "center": (96, 88),
                 "radius": 14,
-                "stroke": "#60a5fa",
-                "stroke_width": 3,
+                "color": "#60a5fa",
+                "line_width": 3,
                 "line_style": "dashed",
             },
             {
                 "shape": "rect",
                 "box": (48, 58, 126, 146),
-                "stroke": "#facc15",
-                "fill": "#facc15",
+                "color": "#facc15",
+                "fill_color": "#facc15",
                 "fill_opacity": 0.12,
-                "dash": [6, 2, 1, 2],
+                "line_dash": [6, 2, 1, 2],
                 "z_order": 1,
             },
         ],
         "denoised": {
-            "shape": "square",
-            "center": (96, 88),
-            "size": 42,
-            "stroke": "#34d399",
-            "stroke_width": 2,
+            "shape": "rect",
+            "box": (75, 67, 117, 109),
+            "color": "#34d399",
+            "line_width": 2,
             "line_style": "dotted",
         },
     },
@@ -177,23 +176,23 @@ Show2D(
 
 Overlay strokes are solid by default. Set `line_style="dashed"`,
 `line_style="dotted"`, or `line_style="dashdot"` for common scientific
-callouts, or pass `dash=[on, off, ...]` for an exact canvas dash pattern.
+callouts, or pass `line_dash=[on, off, ...]` for an exact canvas dash pattern.
 
-For a shared overlay on every panel, pass `overlays=[...]` instead of
-`panel_overlays`. Use `coords="relative"` when the geometry should follow
-normalized panel coordinates from 0 to 1:
+A flat list of shapes without `panel=` draws each shape on every panel. Use
+`coords="relative"` when the geometry should follow normalized panel
+coordinates from 0 to 1:
 
 ```python
 Show2D(
     [raw, denoised],
     labels=["raw", "denoised"],
-    overlays=[
+    panel_overlays=[
         {
             "shape": "circle",
             "center": (0.5, 0.5),
             "radius": 0.08,
             "coords": "relative",
-            "stroke": "#f87171",
+            "color": "#f87171",
         }
     ],
 )
@@ -312,7 +311,7 @@ Show2D(
                 "font_family": PUBLICATION_FONT,
                 "font_size": 15,
                 "font_weight": 800,
-                "fg": "#ff4dff",
+                "color": "#ff4dff",
                 "outline_color": "#000000",
                 "outline_width": 1.8,
                 "variant": "plain",
@@ -326,7 +325,7 @@ Show2D(
                 "font_family": PUBLICATION_FONT,
                 "font_size": 15,
                 "font_weight": 800,
-                "fg": "#58ff58",
+                "color": "#58ff58",
                 "outline_color": "#000000",
                 "outline_width": 1.8,
                 "variant": "plain",
@@ -392,7 +391,7 @@ Show2D(
     panels,
     labels=labels,
     ncols=3,
-    inter_panel_gap_px=2,
+    panel_gap_px=2,
     inter_panel_gap_color="#000000",
     gallery_outer_border_px=2,
     gallery_outer_border_color="#000000",
@@ -401,7 +400,7 @@ Show2D(
 )
 ```
 
-`inter_panel_gap_*` controls only the layer between panels.
+`panel_gap_px` and `inter_panel_gap_color` control only the layer between panels.
 `gallery_outer_border_*` controls the frame around the whole grid.
 `panel_inner_border_*` controls the stroke drawn inside each image panel.
 
@@ -457,6 +456,12 @@ w.save("defect_a.json")
 
 Show2D([raw, corrected, residual], state="defect_a.json")
 ```
+
+The file is `{"schema": "quantem.widget-state/2", "widget_name", "widget_version",
+"state"}`, the same for every widget with `save`. A file of another schema
+(or of an earlier release, which has none) and a state key the widget does not
+save raise `ValueError` before anything is applied; an earlier file is not
+converted.
 
 ## Add scientific inset plots to panels
 
@@ -586,7 +591,7 @@ replace the image or gallery data through that method:
 import numpy as np
 from quantem.widget import Show2D
 
-w = Show2D(first_image, labels=["initial"], offline=False)
+w = Show2D(first_image, labels=["initial"])
 w
 
 for step, next_image in enumerate(image_stream, start=1):
@@ -819,5 +824,5 @@ transport can avoid sending every page to the browser at once.
 place does not notify the frontend. The method sends fresh synced `frame_bytes`
 and resets state tied to the old image count or dimensions, including stale
 hidden panels, stars, view box, ROIs, line profiles, detail tiles, and panel
-order. Use `offline=False` for acquisition-style updates so the live Jupyter
-Comm path carries each new frame instead of the saved/offline notebook path.
+order. Each new frame reaches the browser over the live Jupyter connection;
+`offline=True` would only quantize the panels to uint8.

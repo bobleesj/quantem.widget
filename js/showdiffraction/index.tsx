@@ -12,6 +12,7 @@ import Switch from "@mui/material/Switch";
 import Slider from "@mui/material/Slider";
 import Button from "@mui/material/Button";
 import { useTheme } from "../theme";
+import { SPACING, compactButton, switchStyles, upwardMenuProps } from "../controlStyles";
 import { drawScaleBarHiDPI, drawColorbar } from "../figure";
 import { extractBytes, extractFloat32, formatNumber, downloadBlob, preserveRestoredWidgetModelsOnSave } from "../format";
 import { findDataRange, sliderRange, applyLogScaleInPlace } from "../display/stats";
@@ -27,24 +28,24 @@ import {
   staggerLabelRows,
   viewTransform,
 } from "./overlayGeometry";
-import { buildMeasurementRecords, measurementCsv, measurementMetadata } from "./measurements";
+import { buildMeasurementRecords, measurementCsv, measurementMetadata, type RingDict, type SpotDict } from "./measurements";
 import { copyPngOrDownload } from "./copyImage";
 import { InfoTooltip } from "../shared/InfoTooltip";
 import { KeyboardShortcuts } from "../shared/KeyboardShortcuts";
 import { useMobileViewport } from "../shared/useMobileViewport";
+import { exportTitleSlug } from "../shared/exportFormat";
+import { shouldIgnoreWidgetShortcut } from "../shared/widgetShortcuts";
 import { Histogram } from "../shared/Histogram";
 
 // Style tokens
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 10;
-const DPR = window.devicePixelRatio || 1;
 const CANVAS_MIN = 384;
 const PROFILE_H = 140;
 const PROFILE_PAD = { left: 54, right: 14, top: 16, bottom: 34 };
 // One staggered ring label: its id and d-spacing lines (9 px font, 10 px apart).
 const PROFILE_LABEL_ROW_H = 21;
-const SPACING = { XS: 4, SM: 8, MD: 12, LG: 16 } as const;
 const typography = {
   label: { fontSize: 11 },
   value: { fontSize: 10, fontFamily: "monospace" },
@@ -57,29 +58,10 @@ const controlRow = {
   py: 0.5,
   width: "fit-content",
 };
-const switchStyles = {
-  small: { "& .MuiSwitch-thumb": { width: 12, height: 12 }, "& .MuiSwitch-switchBase": { padding: "4px" } },
-};
 const sliderStyles = {
   small: { py: 0, "& .MuiSlider-thumb": { width: 10, height: 10 }, "& .MuiSlider-rail": { height: 2 }, "& .MuiSlider-track": { height: 2 } },
 };
-const compactButton = {
-  fontSize: 10,
-  py: 0.25,
-  px: 1,
-  minWidth: 0,
-  textTransform: "none" as const,
-  "&.Mui-disabled": {
-    color: "#666",
-    borderColor: "#444",
-  },
-};
 
-const upwardMenuProps = {
-  anchorOrigin: { vertical: "top" as const, horizontal: "left" as const },
-  transformOrigin: { vertical: "bottom" as const, horizontal: "left" as const },
-  sx: { zIndex: 9999 },
-};
 const downwardMenuProps = {
   anchorOrigin: { vertical: "bottom" as const, horizontal: "left" as const },
   transformOrigin: { vertical: "top" as const, horizontal: "left" as const },
@@ -107,31 +89,6 @@ function formatStat(value: number): string {
 
 // Model types
 
-interface SpotDict {
-  id: number;
-  row: number;
-  col: number;
-  raw_row?: number | null;
-  raw_col?: number | null;
-  row_err?: number | null;
-  col_err?: number | null;
-  d_spacing: number | null;
-  d_spacing_err?: number | null;
-  g_magnitude: number | null;
-  g_magnitude_err?: number | null;
-  r_pixels: number;
-  r_pixels_err?: number;
-  angle_deg?: number | null;
-  angle_deg_err?: number | null;
-  fit_quality?: number | null;
-  intensity: number;
-  hkl?: string;
-  hkl_candidates?: string[];
-  d_ref?: number | null;
-  d_error?: number | null;
-  note?: string;
-}
-
 interface PhaseEntry {
   name: string;
   a: number;
@@ -150,23 +107,6 @@ interface MaskRegion {
   row?: number;
   col?: number;
   radius?: number;
-}
-
-interface RingDict {
-  id: number;
-  radius_px: number;
-  g_magnitude: number | null;
-  d_spacing: number | null;
-  intensity: number;
-  hkl?: string;
-  hkl_candidates?: string[];
-  d_ref?: number | null;
-  d_error?: number | null;
-  fwhm_px?: number | null;
-  fwhm_inv_angstrom?: number | null;
-  intensity_integrated?: number | null;
-  fit_quality?: number | null;
-  note?: string;
 }
 
 interface IdentifyLine {
@@ -189,7 +129,7 @@ interface IdentifyResult {
 
 interface QualityDict {
   center?: { method: string };
-  calibration?: { source: string; k_pixel_size: number; rms_px: number };
+  calibration?: { source: string; detector_sampling_inv_A: number; rms_px: number };
   ellipse?: { ratio: number; angle_deg: number; corrected: boolean };
   rings?: { id: number; fit_quality: number }[];
   n_unexplained_rings?: number;
@@ -222,14 +162,9 @@ function ShowDiffraction() {
     bgcolor: themeColors.controlBg,
     minWidth: 80,
   };
-  const themedMenuProps = {
-    ...upwardMenuProps,
-    PaperProps: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}`, maxHeight: 200, overflowY: "auto" } },
-  };
-  const topToolbarMenuProps = {
-    ...downwardMenuProps,
-    PaperProps: themedMenuProps.PaperProps,
-  };
+  const themedMenuSlots = { paper: { sx: { bgcolor: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}`, maxHeight: 200, overflowY: "auto" } } };
+  const themedMenuProps = { ...upwardMenuProps, slotProps: themedMenuSlots };
+  const topToolbarMenuProps = { ...downwardMenuProps, slotProps: themedMenuSlots };
   const controlBox = { ...controlRow, border: `1px solid ${themeColors.border}`, borderRadius: "4px", bgcolor: themeColors.controlBg };
   const numInput = (width: number) => ({ width, fontSize: 10, padding: "2px 4px", background: themeColors.controlBg, color: themeColors.text, border: `1px solid ${themeColors.border}` });
   const statusColors = themeInfo.theme === "dark"
@@ -245,10 +180,10 @@ function ShowDiffraction() {
   const [offlineFrames] = useModelState<DataView>("offline_frames");
   const [frameIdx, setFrameIdx] = useModelState<number>("frame_idx");
   const [nFrames] = useModelState<number>("n_frames");
-  const [centerRow] = useModelState<number>("center_row");
-  const [centerCol] = useModelState<number>("center_col");
-  const [bfRadius] = useModelState<number>("bf_radius");
-  const [kPixelSize] = useModelState<number>("k_pixel_size");
+  const [brightFieldCenterRowPx] = useModelState<number>("bright_field_center_row_px");
+  const [brightFieldCenterColPx] = useModelState<number>("bright_field_center_col_px");
+  const [brightFieldRadiusPx] = useModelState<number>("bright_field_radius_px");
+  const [detectorSamplingInvA] = useModelState<number>("detector_sampling_inv_A");
   const [kCalibrated] = useModelState<boolean>("k_calibrated");
   const [spots] = useModelState<SpotDict[]>("spots");
   const [snapEnabled, setSnapEnabled] = useModelState<boolean>("snap_enabled");
@@ -324,7 +259,7 @@ function ShowDiffraction() {
     const basename = kind === "all" ? "measurements" : kind;
     if (format === "json") {
       const metadata = measurementMetadata({
-        centerRow, centerCol, centerMethod, kPixelSize, kCalibrated,
+        brightFieldCenterRowPx, brightFieldCenterColPx, centerMethod, detectorSamplingInvA, kCalibrated,
         calibrationSource, calibrationRefD, calibrationRefRadius,
         maskRegions: maskRegions || [], backgroundSubtracted: profileSubtract,
       });
@@ -333,7 +268,7 @@ function ShowDiffraction() {
     } else {
       downloadBlob(new Blob([measurementCsv(records)], { type: "text/csv" }), `${basename}.csv`);
     }
-  }, [spots, rings, centerRow, centerCol, centerMethod, kPixelSize, kCalibrated,
+  }, [spots, rings, brightFieldCenterRowPx, brightFieldCenterColPx, centerMethod, detectorSamplingInvA, kCalibrated,
     calibrationSource, calibrationRefD, calibrationRefRadius, maskRegions, profileSubtract]);
 
   // Local UI state
@@ -411,9 +346,9 @@ function ShowDiffraction() {
   const zoomToCenter = React.useCallback(() => {
     const zoom = 2.5;
     setDpZoom(zoom);
-    setDpPanX(canvasSize * zoom * (0.5 - (centerCol + 0.5) / Math.max(detCols, 1)));
-    setDpPanY(canvasSize * zoom * (0.5 - (centerRow + 0.5) / Math.max(detRows, 1)));
-  }, [canvasSize, centerRow, centerCol, detRows, detCols]);
+    setDpPanX(canvasSize * zoom * (0.5 - (brightFieldCenterColPx + 0.5) / Math.max(detCols, 1)));
+    setDpPanY(canvasSize * zoom * (0.5 - (brightFieldCenterRowPx + 0.5) / Math.max(detRows, 1)));
+  }, [canvasSize, brightFieldCenterRowPx, brightFieldCenterColPx, detRows, detCols]);
 
   const dpCanvasRef = React.useRef<HTMLCanvasElement>(null);
   const dpUiRef = React.useRef<HTMLCanvasElement>(null);
@@ -438,14 +373,16 @@ function ShowDiffraction() {
     canvas: HTMLCanvasElement | null,
     data: { x: Float32Array; y: Float32Array } | null,
     xLabel: string, yLabel: string, zeroLine: boolean,
-    opts?: { logY?: boolean; rings?: RingDict[]; bfRadius?: number; selectedRingId?: number },
+    opts?: { logY?: boolean; rings?: RingDict[]; brightFieldRadiusPx?: number; selectedRingId?: number },
   ) => {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    canvas.width = canvasSize * DPR;
-    canvas.height = PROFILE_H * DPR;
-    ctx.scale(DPR, DPR);
+    // Read per draw: moving the window to another screen or zooming the page changes it.
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvasSize * dpr;
+    canvas.height = PROFILE_H * dpr;
+    ctx.scale(dpr, dpr);
     const isDark = themeInfo.theme === "dark";
     ctx.fillStyle = isDark ? "#050505" : "#ffffff";
     ctx.fillRect(0, 0, canvasSize, PROFILE_H);
@@ -480,8 +417,8 @@ function ShowDiffraction() {
     const rings = opts?.rings || [];
     // Each ring's label is its id over its d-spacing; neighbouring rings stagger into rows.
     ctx.font = "9px -apple-system, sans-serif";
-    const ringLabels = rings.map(ring => (kCalibrated && kPixelSize > 0 && ring.radius_px > 0
-      ? [`${ring.id}`, `${(1 / (ring.radius_px * kPixelSize)).toFixed(2)}Å`]
+    const ringLabels = rings.map(ring => (kCalibrated && detectorSamplingInvA > 0 && ring.radius_px > 0
+      ? [`${ring.id}`, `${(1 / (ring.radius_px * detectorSamplingInvA)).toFixed(2)}Å`]
       : [`${ring.id}`]));
     const labelRows = staggerLabelRows(
       rings.map((ring, k) => ({ start: xOf(ring.radius_px) + 2, width: Math.max(...ringLabels[k].map(text => ctx.measureText(text).width)) })),
@@ -497,11 +434,11 @@ function ShowDiffraction() {
       ctx.setLineDash([]);
       ctx.lineWidth = 1;
     }
-    if (opts?.bfRadius && opts.bfRadius > 0 && opts.bfRadius <= xMax) {
+    if (opts?.brightFieldRadiusPx && opts.brightFieldRadiusPx > 0 && opts.brightFieldRadiusPx <= xMax) {
       ctx.strokeStyle = isDark ? "#333333" : "#d8d8d8";
       ctx.beginPath();
-      ctx.moveTo(xOf(opts.bfRadius), PROFILE_PAD.top + plotH - 6);
-      ctx.lineTo(xOf(opts.bfRadius), PROFILE_PAD.top + plotH);
+      ctx.moveTo(xOf(opts.brightFieldRadiusPx), PROFILE_PAD.top + plotH - 6);
+      ctx.lineTo(xOf(opts.brightFieldRadiusPx), PROFILE_PAD.top + plotH);
       ctx.stroke();
     }
     ctx.strokeStyle = themeColors.accent;
@@ -542,7 +479,7 @@ function ShowDiffraction() {
       ctx.fillText(tickValue >= 100 ? `${Math.round(tickValue)}` : tickValue.toFixed(1), xOf(tickValue), PROFILE_H - 16);
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }, [canvasSize, themeInfo.theme, themeColors.accent, kCalibrated, kPixelSize]);
+  }, [canvasSize, themeInfo.theme, themeColors.accent, kCalibrated, detectorSamplingInvA]);
 
   const azimuthalArrays = React.useMemo(() => decodeHalves(azimuthalData, showAzimuthal), [azimuthalData, showAzimuthal]);
 
@@ -573,9 +510,9 @@ function ShowDiffraction() {
   React.useLayoutEffect(() => {
     if (showProfile) {
       drawCurvePanel(profileCanvasRef.current, profileArrays, "r (px)", profileLog ? "log I" : "I",
-        false, { logY: profileLog, rings, bfRadius, selectedRingId });
+        false, { logY: profileLog, rings, brightFieldRadiusPx, selectedRingId });
     }
-  }, [profileArrays, profileLog, rings, bfRadius, showProfile, selectedRingId, drawCurvePanel]);
+  }, [profileArrays, profileLog, rings, brightFieldRadiusPx, showProfile, selectedRingId, drawCurvePanel]);
 
   // Canvas resize
   const handleCanvasResizeStart = (e: React.PointerEvent) => {
@@ -748,9 +685,10 @@ function ShowDiffraction() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const cssW = canvasSize;
-    canvas.width = cssW * DPR;
-    canvas.height = cssW * DPR;
-    ctx.scale(DPR, DPR);
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = cssW * dpr;
+    canvas.height = cssW * dpr;
+    ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, cssW, cssW);
 
     // per-axis transform for non-square detectors
@@ -758,8 +696,8 @@ function ShowDiffraction() {
     const { scX, scY } = view;
 
     // Center crosshair
-    const cx = dataColToScreenX(centerCol, view);
-    const cy = dataRowToScreenY(centerRow, view);
+    const cx = dataColToScreenX(brightFieldCenterColPx, view);
+    const cy = dataRowToScreenY(brightFieldCenterRowPx, view);
     ctx.strokeStyle = "rgba(255,255,255,0.3)";
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
@@ -769,7 +707,7 @@ function ShowDiffraction() {
     ctx.stroke();
     // BF disk circle
     ctx.beginPath();
-    ctx.ellipse(cx, cy, bfRadius * scX, bfRadius * scY, 0, 0, 2 * Math.PI);
+    ctx.ellipse(cx, cy, brightFieldRadiusPx * scX, brightFieldRadiusPx * scY, 0, 0, 2 * Math.PI);
     ctx.stroke();
     ctx.setLineDash([]);
 
@@ -898,7 +836,7 @@ function ShowDiffraction() {
     }
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }, [dpVersion, dpZoom, dpPanX, dpPanY, canvasSize, detRows, detCols, centerRow, centerCol, bfRadius, spots, rings, showHkl, selectedRingId, ellipseRatio, ellipseAngle, maskRegions, showMask, dragPreview, dpLut, dpScaleMode, themeInfo.theme, themeColors.accent]);
+  }, [dpVersion, dpZoom, dpPanX, dpPanY, canvasSize, detRows, detCols, brightFieldCenterRowPx, brightFieldCenterColPx, brightFieldRadiusPx, spots, rings, showHkl, selectedRingId, ellipseRatio, ellipseAngle, maskRegions, showMask, dragPreview, dpLut, dpScaleMode, themeInfo.theme, themeColors.accent]);
 
   // Scale bar
   React.useLayoutEffect(() => {
@@ -906,13 +844,14 @@ function ShowDiffraction() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    canvas.width = canvasSize * DPR;
-    canvas.height = canvasSize * DPR;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvasSize * dpr;
+    canvas.height = canvasSize * dpr;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (kCalibrated && kPixelSize > 0) {
-      drawScaleBarHiDPI(canvas, DPR, dpZoom, kPixelSize, "1/Å", detCols);
+    if (kCalibrated && detectorSamplingInvA > 0) {
+      drawScaleBarHiDPI(canvas, dpr, dpZoom, detectorSamplingInvA, "1/Å", detCols);
     }
-  }, [canvasSize, dpZoom, kCalibrated, kPixelSize, detCols]);
+  }, [canvasSize, dpZoom, kCalibrated, detectorSamplingInvA, detCols]);
 
   // Pointer handlers
   const dpIsDragging = React.useRef(false);
@@ -938,7 +877,7 @@ function ShowDiffraction() {
   };
 
   const angleOf = (row: number, col: number) =>
-    (Math.atan2(row - centerRow, col - centerCol) * 180 / Math.PI + 360) % 360;
+    (Math.atan2(row - brightFieldCenterRowPx, col - brightFieldCenterColPx) * 180 / Math.PI + 360) % 360;
 
   // Two-finger pinch (zoom + pan) via tracked pointers
   const activePointersRef = React.useRef(new Map<number, { x: number; y: number }>());
@@ -996,7 +935,7 @@ function ShowDiffraction() {
   };
 
   const handleDpPointerDown = (e: React.PointerEvent) => {
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* unsupported host */ }
+    e.currentTarget.setPointerCapture(e.pointerId);
     activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (activePointersRef.current.size === 2) {
       // second finger: switch to pinch, cancel any single-pointer gesture
@@ -1054,8 +993,8 @@ function ShowDiffraction() {
   const commitTapAction = (row: number, col: number) => {
     if (centerMode === "manual") {
       // one message for both coordinates: Python re-measures every ring once per click
-      model.set("center_row", row);
-      model.set("center_col", col);
+      model.set("bright_field_center_row_px", row);
+      model.set("bright_field_center_col_px", col);
       model.save_changes();
       return;
     }
@@ -1221,13 +1160,9 @@ function ShowDiffraction() {
     setDpExportAnchor(null);
     exportCounterRef.current += 1;
     const id = `html-${exportCounterRef.current}`;
-    const slug = (title || "showdiffraction")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "") || "showdiffraction";
-    const filename = `${slug}_${nFrames}x${detRows}x${detCols}.html`;
+    const filename = `${exportTitleSlug(title, "showdiffraction")}_${nFrames}x${detRows}x${detCols}.html`;
     pendingExportRef.current = id;
-    setExportRequest(JSON.stringify({ mode: "single", download: true, id, filename }));
+    setExportRequest(JSON.stringify({ download: true, id, filename }));
   };
 
   // HTML payload
@@ -1244,20 +1179,13 @@ function ShowDiffraction() {
     setExportRequest(JSON.stringify({ mode: "clear" }));
   }, [exportPayload, exportPayloadId, exportPayloadFilename, setExportRequest]);
 
-  // Keyboard shortcuts stay off while the user types in an input.
-  const isTypingTarget = React.useCallback((target: EventTarget | null): boolean => {
-    if (!(target instanceof HTMLElement)) return false;
-    if (target.isContentEditable) return true;
-    return target.closest("input, textarea, select, [role='textbox'], [contenteditable='true']") !== null;
-  }, []);
-
   const handleRootMouseDownCapture = React.useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement | null;
     if (target?.closest("canvas")) rootRef.current?.focus();
   }, []);
 
   const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (isTypingTarget(e.target)) return;
+    if (shouldIgnoreWidgetShortcut(e.target, e.key)) return;
 
     const step = e.shiftKey ? 10 : 1;
     let handled = false;
@@ -1290,7 +1218,7 @@ function ShowDiffraction() {
       e.preventDefault();
       e.stopPropagation();
     }
-  }, [isTypingTarget, frameIdx, nFrames, setFrameIdx, request]);
+  }, [frameIdx, nFrames, setFrameIdx, request]);
 
   const canvasBox = {
     position: "relative" as const,
@@ -1331,8 +1259,8 @@ function ShowDiffraction() {
                   <MetadataSection rows={[
                     ["Detector", `${detRows} x ${detCols}`],
                     ["Frames", nFrames > 1 ? `${nFrames}` : "single frame"],
-                    ["Calibration", kCalibrated && kPixelSize > 0 ? `${formatNumber(kPixelSize)} 1/Å/px` : "pixel units"],
-                    ["Center", `${formatNumber(centerRow)}, ${formatNumber(centerCol)}`],
+                    ["Calibration", kCalibrated && detectorSamplingInvA > 0 ? `${formatNumber(detectorSamplingInvA)} 1/Å/px` : "uncalibrated (px)"],
+                    ["Center", `${formatNumber(brightFieldCenterRowPx)}, ${formatNumber(brightFieldCenterColPx)}`],
                     ["Annotations", `${spots.length} spots, ${rings.length} rings`],
                   ]} />
                   <KeyboardShortcuts items={[
@@ -1726,7 +1654,7 @@ function ShowDiffraction() {
                           >
                             <td style={{ padding: "2px 6px", color: themeColors.accent }}>{candidate.name}</td>
                             <td style={{ padding: "2px 6px" }}>{candidate.matched}/{candidate.n_obs}</td>
-                            <td style={{ padding: "2px 6px" }}>{candidate.mean_err != null ? (candidate.mean_err * 100).toFixed(2) : "—"}</td>
+                            <td style={{ padding: "2px 6px" }}>{candidate.mean_err != null ? (candidate.mean_err * 100).toFixed(2) : "-"}</td>
                             <td style={{ padding: "2px 6px" }}>{candidate.n_missing_strong ?? "-"}</td>
                           </tr>
                           {expandedPhaseId === candidate.phase_id && (
@@ -1748,11 +1676,11 @@ function ShowDiffraction() {
                                       const lineColor = line.ref_d == null ? statusColors.bad : line.obs_d == null ? themeColors.textMuted : undefined;
                                       return (
                                         <tr key={lineIndex} style={{ color: lineColor }}>
-                                          <td style={{ padding: "1px 6px" }}>{line.obs_d != null ? line.obs_d.toFixed(3) : "—"}</td>
-                                          <td style={{ padding: "1px 6px" }}>{line.ref_d != null ? line.ref_d.toFixed(3) : "—"}</td>
-                                          <td style={{ padding: "1px 6px" }}>{line.hkl || "—"}</td>
-                                          <td style={{ padding: "1px 6px" }}>{line.err != null ? (line.err * 100).toFixed(2) : "—"}</td>
-                                          <td style={{ padding: "1px 6px" }}>{line.i_rel != null ? line.i_rel.toFixed(0) : "—"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.obs_d != null ? line.obs_d.toFixed(3) : "-"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.ref_d != null ? line.ref_d.toFixed(3) : "-"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.hkl || "-"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.err != null ? (line.err * 100).toFixed(2) : "-"}</td>
+                                          <td style={{ padding: "1px 6px" }}>{line.i_rel != null ? line.i_rel.toFixed(0) : "-"}</td>
                                           <td style={{ padding: "1px 6px" }}>{line.ref_d == null ? "unexplained" : line.obs_d == null ? "missing" : ""}</td>
                                         </tr>
                                       );
@@ -1900,24 +1828,24 @@ function ShowDiffraction() {
                     const color = spotColorAt(i);
                     const dSpacingText = spot.d_spacing != null
                       ? (spot.d_spacing_err ? `${spot.d_spacing.toFixed(3)}±${spot.d_spacing_err.toFixed(3)}` : spot.d_spacing.toFixed(3))
-                      : "—";
+                      : "-";
                     const gText = spot.g_magnitude != null
                       ? `${spot.g_magnitude.toFixed(4)} / ${(spot.g_magnitude * 10).toFixed(3)}`
                       : `${spot.r_pixels.toFixed(1)} px`;
                     const angleText = spot.angle_deg != null
                       ? (spot.angle_deg_err ? `${spot.angle_deg.toFixed(1)}±${spot.angle_deg_err.toFixed(1)}` : spot.angle_deg.toFixed(1))
-                      : "—";
+                      : "-";
                     return (
                       <tr key={spot.id} style={{ borderBottom: `1px solid ${themeColors.border}22` }}>
                         <td style={{ padding: "2px 4px", color, fontWeight: "bold" }}>{spot.id}</td>
                         <td style={{ padding: "2px 6px" }}>{dSpacingText}</td>
-                        <td style={{ padding: "2px 6px" }}>{spot.hkl || "—"}</td>
+                        <td style={{ padding: "2px 6px" }}>{spot.hkl || "-"}</td>
                         {spotsHaveReference && (
-                          <td style={{ padding: "2px 6px" }}>{spot.d_error != null ? (spot.d_error * 100).toFixed(2) : "—"}</td>
+                          <td style={{ padding: "2px 6px" }}>{spot.d_error != null ? (spot.d_error * 100).toFixed(2) : "-"}</td>
                         )}
                         <td style={{ padding: "2px 6px" }}>{gText}</td>
                         <td style={{ padding: "2px 6px" }}>{angleText}</td>
-                        <td style={{ padding: "2px 6px" }}>{spot.fit_quality != null ? spot.fit_quality.toFixed(2) : "—"}</td>
+                        <td style={{ padding: "2px 6px" }}>{spot.fit_quality != null ? spot.fit_quality.toFixed(2) : "-"}</td>
                         <td style={{ padding: "2px 6px" }}>{formatNumber(spot.intensity)}</td>
                         <td style={{ padding: "1px 4px", textAlign: "center" }}>
                           <span
@@ -1981,21 +1909,21 @@ function ShowDiffraction() {
                   >
                     <td style={{ padding: "2px 6px", color: themeColors.accent }}>{ring.id}</td>
                     <td style={{ padding: "2px 6px" }}>{ring.radius_px.toFixed(1)}</td>
-                    <td style={{ padding: "2px 6px" }}>{ring.d_spacing != null ? ring.d_spacing.toFixed(3) : "—"}</td>
+                    <td style={{ padding: "2px 6px" }}>{ring.d_spacing != null ? ring.d_spacing.toFixed(3) : "-"}</td>
                     <td style={{ padding: "2px 6px" }}>
                       {ring.hkl ? ring.hkl : ring.hkl_candidates && ring.hkl_candidates.length > 0 ? (
                         // a d-only candidate the ring-radius ratios did not verify
                         <span style={{ color: themeColors.textMuted }} title={`d within tolerance of ${ring.hkl_candidates.join(", ")}; not verified by ring ratios`}>
                           {ring.hkl_candidates[0]}?
                         </span>
-                      ) : "—"}
+                      ) : "-"}
                     </td>
                     {ringsHaveReference && (
-                      <td style={{ padding: "2px 6px" }}>{ring.d_error != null ? (ring.d_error * 100).toFixed(2) : "—"}</td>
+                      <td style={{ padding: "2px 6px" }}>{ring.d_error != null ? (ring.d_error * 100).toFixed(2) : "-"}</td>
                     )}
-                    <td style={{ padding: "2px 6px" }}>{ring.g_magnitude != null ? ring.g_magnitude.toFixed(4) : "—"}</td>
+                    <td style={{ padding: "2px 6px" }}>{ring.g_magnitude != null ? ring.g_magnitude.toFixed(4) : "-"}</td>
                     {ringsHaveWidth && (
-                      <td style={{ padding: "2px 6px" }}>{ring.fwhm_px != null ? ring.fwhm_px.toFixed(2) : "—"}</td>
+                      <td style={{ padding: "2px 6px" }}>{ring.fwhm_px != null ? ring.fwhm_px.toFixed(2) : "-"}</td>
                     )}
                     <td style={{ padding: "2px 6px" }}>{formatNumber(ring.intensity)}</td>
                     <td style={{ padding: "1px 4px", textAlign: "center" }}>
@@ -2099,8 +2027,8 @@ function ShowDiffraction() {
 
           <Box sx={{ ...controlRow, mt: `${SPACING.XS}px` }}>
             <Typography sx={{ ...typography.value, color: themeColors.textMuted }}>
-              Center: ({centerRow.toFixed(1)}, {centerCol.toFixed(1)})  BF r={bfRadius.toFixed(1)}
-              {kCalibrated && <span style={{ marginLeft: 8 }}>k={kPixelSize.toFixed(4)} 1/Å/px</span>}
+              Center: ({brightFieldCenterRowPx.toFixed(1)}, {brightFieldCenterColPx.toFixed(1)})  BF r={brightFieldRadiusPx.toFixed(1)}
+              {kCalibrated && <span style={{ marginLeft: 8 }}>k={detectorSamplingInvA.toFixed(4)} 1/Å/px</span>}
             </Typography>
           </Box>
           {kCalibrated && (
