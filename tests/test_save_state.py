@@ -427,7 +427,7 @@ def test_show2d_display_defers_static_png_render(monkeypatch):
     assert fill_meta == {"quantem.widget": {"static_fallback": True}}
 
 
-def test_docs_build_environment_is_not_quantem_core_config():
+def test_docs_build_environment_is_not_quantem_core_config(tmp_path):
     """quantem core reads every QUANTEM_* variable as its own config key and warns
     about unknown ones; the docs build printed that warning on every tutorial page."""
     import os
@@ -447,6 +447,8 @@ def test_docs_build_environment_is_not_quantem_core_config():
              "import quantem.core.config\n")
     # CI sets QUANTEM_GPU_SRC for the whole job (the bundle build reads it); only the docs step's own env is under test
     base = {k: v for k, v in os.environ.items() if not k.startswith("QUANTEM_")}
+    # This checks the docs step, independently of the developer's saved settings.
+    base["QUANTEM_CONFIG"] = str(tmp_path / "quantem-config")
     run = subprocess.run([sys.executable, "-c", probe], env={**base, **env},
                          capture_output=True, text=True)
     assert run.returncode == 0, run.stderr[-600:]
