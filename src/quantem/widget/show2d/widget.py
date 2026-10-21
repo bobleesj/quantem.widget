@@ -52,7 +52,14 @@ from quantem.widget.show2d.fallback import Show2DStaticPng
 from quantem.widget.show2d.state import Show2DState, _rescale_view
 from quantem.widget.utils.array import _b64_safe, _resize_image, bin2d, to_numpy
 from quantem.widget.utils.state_io import read_state
-from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
+from quantem.widget.utils.ui import (
+    PANEL_WIDTHS,
+    UiMode,
+    ViewerSize,
+    reject_unknown_kwargs,
+    resolve_panel_width,
+    resolve_ui_mode,
+)
 
 _DEFAULT_FOLDER_PAGE_SIZE = 20
 _MAX_PANEL_PLAYBACK_FPS = 30.0
@@ -434,9 +441,12 @@ class Show2D(
         One shared contrast window across panels.
     ncols : int, default 3
         Gallery columns.
-    panel_width_px : int, default 300
-        Panel canvas width in CSS px. The medium default is 300 px per image;
-        this changes display size only. Use 0 for automatic frontend sizing.
+    size : {"small", "medium", "large", "xlarge"}, default "medium"
+        Width of each image panel: 300, 450, 600 or 900 CSS pixels. Aspect
+        ratio and source resolution are preserved; controls keep the shared font.
+    panel_width_px : int or None, optional
+        Panel canvas width in CSS px. The medium default is 450 px per image;
+        this changes display size only. A positive panel_width_px overrides size; 0 uses size.
     smooth : bool, default False
         Bilinear instead of nearest-neighbor magnification.
     zoom : float, default 1.0
@@ -679,7 +689,7 @@ class Show2D(
     scale_bar_label = traitlets.Unicode("").tag(sync=True)
     scale_bar_style = traitlets.Dict(default_value={}).tag(sync=True)
     show_zoom_indicator = traitlets.Bool(False).tag(sync=True)
-    panel_width_px = traitlets.Int(300).tag(sync=True)  # Medium canvas width in CSS pixels; 0 = automatic sizing
+    panel_width_px = traitlets.Int(PANEL_WIDTHS["medium"]).tag(sync=True)  # Medium canvas width in CSS pixels
     smooth = traitlets.Bool(False).tag(sync=True)
     initial_zoom = traitlets.Float(1.0).tag(sync=True)
     zoom_row = traitlets.Float(None, allow_none=True).tag(sync=True)
@@ -850,7 +860,8 @@ class Show2D(
         link_pan: bool | None = None,
         link_contrast: bool = True,
         ncols: int = 3,
-        panel_width_px: int = 300,
+        size: ViewerSize = "medium",
+        panel_width_px: int | None = None,
         smooth: bool = False,
         zoom: float = 1.0,
         center: Sequence[float] | None = None,
@@ -910,9 +921,7 @@ class Show2D(
             n_pages=n_pages,
             panels_per_page=panels_per_page,
         )
-        panel_width_px = int(panel_width_px)
-        if panel_width_px < 0:
-            raise ValueError(f"panel_width_px must be >= 0, got {panel_width_px}")
+        panel_width_px = resolve_panel_width(size, panel_width_px)
         ncols = int(ncols)
         if ncols < 1:
             raise ValueError(f"ncols must be >= 1, got {ncols}")
@@ -1814,7 +1823,7 @@ class Show2D(
         panel_bytes = height * width * 4
         if panel_bytes > self._WIRE_BUDGET_BYTES_PER_PANEL:
             preview_floor_px = 512.0 if int(n_images) >= 16 else 1024.0
-            canvas_css_px = float(self.panel_width_px) if int(self.panel_width_px) > 0 else 300.0 if int(n_images) > 1 else 500.0
+            canvas_css_px = float(self.panel_width_px) if int(self.panel_width_px) > 0 else float(PANEL_WIDTHS["medium"])
             preview_px = max(preview_floor_px, 2.0 * canvas_css_px)
             wire_bin = max(2, math.ceil(max(height, width) / preview_px))
             while panel_bytes / (wire_bin * wire_bin) > self._WIRE_BUDGET_BYTES_PER_PANEL:

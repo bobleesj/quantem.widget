@@ -715,9 +715,9 @@ def test_the_panel_gap_has_one_name_in_both_gallery_widgets():
 
 
 def test_the_show2d_panel_width_has_one_name():
-    # Show2D took size and panel_width_px for one value and kept it in a trait called size
+    # Named presets use strings; numeric widths have one explicit keyword.
     assert Show2D(_frame(), panel_width_px=300, verbose=False).state_dict()["panel_width_px"] == 300
-    with pytest.raises(TypeError, match="unexpected keyword argument 'size'"):
+    with pytest.raises(TypeError, match="use panel_width_px"):
         Show2D(_frame(), size=300, verbose=False)
 
 

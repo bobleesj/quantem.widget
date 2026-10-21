@@ -1,12 +1,49 @@
 """Shared viewer UI chrome presets, constructor keyword checks and display-limit validation."""
 
+import json
 import math
+import numbers
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Literal
 
 import traitlets
 
 UiMode = Literal["interactive", "presentation", "report", "minimal"]
+ViewerSize = Literal["small", "medium", "large", "xlarge"]
+PANEL_WIDTHS: dict[str, int] = json.loads(
+    (Path(__file__).parent.parent / "panel_sizes.json").read_text(encoding="utf-8")
+)
+
+
+def resolve_panel_width(size: ViewerSize, panel_width_px: int | None = None) -> int:
+    """Resolve a named image-panel size, with an optional explicit CSS width.
+
+    A positive ``panel_width_px`` overrides the preset. ``None`` or the legacy
+    value 0 uses the preset. This changes display geometry, never source pixels.
+
+    Parameters
+    ----------
+    size : {"small", "medium", "large", "xlarge"}
+        Named panel width.
+    panel_width_px : int or None, optional
+        Explicit CSS width, or 0 to use the named preset.
+
+    Returns
+    -------
+    int
+        Resolved width in CSS pixels.
+    """
+    if not isinstance(size, str):
+        raise TypeError("size must be 'small', 'medium', 'large' or 'xlarge'; use panel_width_px for a pixel width.")
+    if size not in PANEL_WIDTHS:
+        raise ValueError(f"Unknown size {size!r}; choose 'small', 'medium', 'large' or 'xlarge'.")
+    if panel_width_px is None:
+        return PANEL_WIDTHS[size]
+    if isinstance(panel_width_px, bool) or not isinstance(panel_width_px, numbers.Integral) or panel_width_px < 0:
+        raise ValueError("panel_width_px must be an integer >= 0; use size='medium' for the default.")
+    return int(panel_width_px) or PANEL_WIDTHS[size]
+
 
 UI_MODE_DEFAULTS: dict[str, dict[str, bool]] = {
     "interactive": {},

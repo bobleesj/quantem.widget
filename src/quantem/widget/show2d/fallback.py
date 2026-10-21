@@ -22,6 +22,7 @@ import numpy as np
 from quantem.widget.colormap import auto_window, colorize, contrast_uint8, display_window, signed_log1p
 from quantem.widget.render.figure import format_scale_label, round_to_nice, static_overlay_font
 from quantem.widget.utils.array import bin2d
+from quantem.widget.utils.ui import PANEL_WIDTHS
 
 
 _IDENTITY_PALETTE = ("#2e7d32", "#c62828", "#d81b60", "#1565c0", "#f9a825", "#6a1b9a")
@@ -412,12 +413,11 @@ class Show2DStaticPng:
         constant (16px font, 12px margin, 60px bar target) is relative to.
 
         Port of js/show2d/index.tsx: the ``panel_width_px`` trait when set, else
-        SINGLE_IMAGE_TARGET (500) for one image / GALLERY_IMAGE_TARGET (300)
-        for a gallery. Without this the static overlays would be drawn for a
+        the medium width (450). Without this the static overlays would be drawn for a
         fictitious canvas size and read visibly smaller than the widget's."""
         if self.panel_width_px > 0:
             return float(self.panel_width_px)
-        return 300.0 if self.n_images > 1 else 500.0
+        return float(PANEL_WIDTHS["medium"])
 
     def _static_overlay_texts(self, specs: list[dict] | None = None,
                               *, css_px: float | None = None) -> list[tuple[str, str, str, float]]:

@@ -28,7 +28,7 @@ import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import { useTheme, WIDGET_TYPOGRAPHY as typography } from "../theme";
+import { PANEL_WIDTHS, useTheme, WIDGET_TYPOGRAPHY as typography } from "../theme";
 import { SPACING, controlRow, compactButton, switchStyles, sliderStyles, upwardMenuProps, reorderBadgeSx, panelStarButtonSx } from "../controlStyles";
 import { useCanvasRepaintSignal } from "../canvasLifecycle";
 import { type ScaleBarOptions, drawColorbar, drawScaleBarInRegion, formatZoomLabel, roundToNiceValue, scaleBarGeometry, strokePeakMarker } from "../figure";
@@ -570,8 +570,8 @@ type TouchZoomState = {
   startState: ZoomState;
 };
 
-const SINGLE_IMAGE_TARGET = 500;
-const GALLERY_IMAGE_TARGET = 300;
+const SINGLE_IMAGE_TARGET = PANEL_WIDTHS.medium;
+const GALLERY_IMAGE_TARGET = PANEL_WIDTHS.medium;
 const DEFAULT_FFT_ZOOM = 2;
 const GALLERY_FFT_OVERVIEW_MAX_DIM = 2048;
 // A paged gallery may revisit many more panels than are visible at once. Keep
@@ -2390,7 +2390,7 @@ function Show2D() {
   }, [isGallery, selectedIdx, selectedPanels, setSelectedPanels, visibleImageIndices]);
   const clampedNcols = Math.max(1, Math.min(ncols || 1, visibleImageCount, MAX_PANEL_COLUMNS));
   const effectiveNcols = clampedNcols + diffPanelCount;
-  const displayScale = canvasSize / Math.max(width, height);
+  const displayScale = canvasSize / Math.max(1, width);
   const canvasW = Math.round(width * displayScale);
   const canvasH = Math.round(height * displayScale);
   const panelGapPx = Math.max(0, Number.isFinite(panelGapPxState) ? panelGapPxState : 0);
@@ -2421,7 +2421,7 @@ function Show2D() {
   const applyResizeViewAnchor = React.useCallback((nextSize: number) => {
     const anchor = canvasResizeViewAnchorRef.current;
     if (!anchor || width <= 0 || height <= 0) return;
-    const nextScale = nextSize / Math.max(width, height);
+    const nextScale = nextSize / Math.max(1, width);
     const nextCanvasW = Math.round(width * nextScale);
     const nextCanvasH = Math.round(height * nextScale);
     if (nextCanvasW <= 0 || nextCanvasH <= 0) return;

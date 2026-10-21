@@ -145,6 +145,23 @@ function mouseDrag(target: Element, points: [number, number][]) {
   mouse("mouseup", points[points.length - 1], document);
 }
 
+it("keeps a portrait stack at the requested panel width before and after rotation", async () => {
+  const width = 16, height = 32;
+  const frames = Float32Array.from({ length: FRAMES * width * height }, (_, i) => Math.sin(i / 7));
+  const model = new Model({
+    width, height, panel_width_px: 300,
+    _offline_float_stack: new DataView(frames.buffer),
+  });
+  await mount(model);
+  const canvas = el.querySelector<HTMLCanvasElement>('canvas[data-quantem-scientific-output="show3d-image"]')!;
+  expect([canvas.width, canvas.height]).toEqual([300, 600]);
+  act(() => model.set("image_rotation", 1));
+  await settle();
+  expect([canvas.width, canvas.height]).toEqual([300, 150]);
+  expect(model.get("_offline_float_stack")).toBeInstanceOf(DataView);
+  expect((model.get("_offline_float_stack") as DataView).buffer).toBe(frames.buffer);
+});
+
 it("commits one frequency cutoff, where the ring is released, for a mouse drag of the FFT ring", async () => {
   const model = new Model({ show_fft: true, frequency_filter: "lowpass", frequency_filter_enabled: true, frequency_filter_cutoff: 0.3 });
   await mount(model);

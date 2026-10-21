@@ -5,9 +5,31 @@ keyword arguments for durable APIs, and use `ui_mode` as a convenience preset
 for common sharing contexts. Maintainer-only frontend wording and review rules
 live in [Widget UI protocol](../maintainer/widget-ui-protocol).
 
-Show2D and Show3D open at medium size: **300 CSS pixels per image panel**.
-Use `panel_width_px` to request another width. This only sizes the display;
-the source pixels and reconstruction resolution are unchanged.
+Show2D and Show3D open at `size="medium"`: **450 CSS pixels per image panel**.
+
+| `size` | Width per image panel | Scale relative to medium |
+|---|---:|---:|
+| `"small"` | 300 px | ⅔× |
+| `"medium"` (default) | 450 px | 1× |
+| `"large"` | 600 px | 1⅓× |
+| `"xlarge"` | 900 px | 2× |
+
+An ordinary grayscale or RGB image is one panel; a stack uses one panel per
+stack. Image aspect ratios are preserved. Fonts and controls keep the shared
+UI scale, and narrow notebook columns reflow panels or constrain their width.
+Insets scale with their parent image. These sizes never bin the source data
+or change reconstruction sampling, image zoom, or the FFT frequency range.
+
+```python
+Show2D(image)                       # medium, 450 px per panel
+Show3D(stacks, size="large")         # 600 px per panel
+Show2D(images, size="xlarge")        # 900 px per panel
+Show2D(images, panel_width_px=380)   # explicit width overrides size
+```
+
+`panel_width_px=None` or `0` uses the named preset. Saved manual widths remain
+intact when restoring viewer state. Static SSB figures use the same relative
+scale; their export resolution is controlled independently by figure DPI.
 
 ## Presets
 

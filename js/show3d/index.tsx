@@ -35,7 +35,7 @@ import StopIcon from "@mui/icons-material/Stop";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
-import { useTheme } from "../theme";
+import { PANEL_WIDTHS, useTheme } from "../theme";
 import { useCanvasRepaintSignal } from "../canvasLifecycle";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawScaleBarInRegion, drawZoomIndicatorInRegion, drawColorbar, formatZoomLabel, roundToNiceValue, strokePeakMarker } from "../figure";
 import { angstromsPerUnit, unitSymbol } from "../units";
@@ -447,7 +447,7 @@ const FFT_SNAP_RADIUS = 5;
 // ============================================================================
 // Constants
 // ============================================================================
-const CANVAS_TARGET_SIZE = 600;
+const CANVAS_TARGET_SIZE = PANEL_WIDTHS.medium;
 const MAX_INTERACTIVE_GRID_CANVAS_EDGE = 4096;
 const MAX_INTERACTIVE_GRID_CANVAS_PIXELS = 8_388_608;
 const MAX_PANEL_COLUMNS = 12;
@@ -2664,9 +2664,9 @@ function Show3D() {
     // for every panel count: otherwise a 3-panel stack shows `Cols 2` while keeping max_cols 3 or 4
     // and jumps to three columns at an unrelated repaint.
     if (rootLayoutWidth > 0) {
-      return Math.max(180, Math.min(500, Math.floor(rootLayoutWidth / requestedCols)));
+      return Math.max(180, Math.min(PANEL_WIDTHS.medium, Math.floor(rootLayoutWidth / requestedCols)));
     }
-    return 500;
+    return PANEL_WIDTHS.medium;
   }, [canvasSizeTrait, maxCols, rootLayoutWidth]);
   const panelColsForCount = React.useCallback((count: number) => {
     const panelCount = Math.max(1, count || 1);
@@ -3704,9 +3704,8 @@ function Show3D() {
   React.useEffect(() => {
     // size is PER PANEL. For multi-panel, total canvas width = size * cols.
     // NEVER BIN rule: data is never averaged. CSS canvas scales the painted
-    // image for display, source pixels stay intact. 500 px/panel default
-    // gives 4 cols → 2000 px wide which fits a typical monitor; operator
-    // drags the resize handle larger when they want pixel-1:1.
+    // image for display, source pixels stay intact. Medium gives 450 CSS px
+    // per panel; columns wrap when the notebook surface is narrower.
     const visibleCount = Math.max(1, visiblePanelCount || 1);
     const cols = panelColsForCount(visibleCount);
     const perPanel = defaultPanelCssSizeForCount(visibleCount);
@@ -3728,11 +3727,12 @@ function Show3D() {
     : Math.max(1, width);
   const sourcePanelHeight = Math.max(1, height);
   const isMultiPanelSource = totalPanelCount > 1;
+  // Keep the requested width after rotating a rectangular single image.
+  const rotSwap = (imageRotation % 2) !== 0;
   const requestedDisplayScale = isMultiPanelSource
     ? mainCanvasSize / Math.max(1, sourcePanelWidth * layoutCols)
-    : mainCanvasSize / Math.max(width, height);
+    : mainCanvasSize / Math.max(1, rotSwap ? height : width);
   // For 90°/270° rotations, swap canvas dims so non-square images fit without clipping.
-  const rotSwap = (imageRotation % 2) !== 0;
   const requestedCanvasW = isMultiPanelSource
     ? Math.round(sourcePanelWidth * requestedDisplayScale * layoutCols)
     : Math.round((rotSwap ? height : width) * requestedDisplayScale);

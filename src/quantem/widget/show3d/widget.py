@@ -46,7 +46,14 @@ from quantem.widget.utils.display_filter import format_display_filter_banner
 from quantem.widget.utils.state_io import read_state
 from quantem.widget.state import SavedStateMixin, announce_browser_limit
 from quantem.widget.units import image_axes, per_axis, unit_entry
-from quantem.widget.utils.ui import UiMode, resolve_ui_mode, validate_display_limits
+from quantem.widget.utils.ui import (
+    PANEL_WIDTHS,
+    UiMode,
+    ViewerSize,
+    resolve_panel_width,
+    resolve_ui_mode,
+    validate_display_limits,
+)
 
 
 _MAX_PLAYBACK_FPS = 60.0
@@ -181,9 +188,12 @@ class Show3D(
         Where the FFT is drawn.
     fft_overlay_zoom : float
         Initial FFT magnification, 1 to 32.
-    panel_width_px : int, default 300
-        Display width per panel in CSS pixels. The medium default is 300 px;
-        this changes display size only. Use 0 for automatic frontend sizing.
+    size : {"small", "medium", "large", "xlarge"}, default "medium"
+        Width of each image panel: 300, 450, 600 or 900 CSS pixels. Aspect
+        ratio and source resolution are preserved; controls keep the shared font.
+    panel_width_px : int or None, optional
+        Display width per panel in CSS pixels. The medium default is 450 px;
+        this changes display size only. A positive panel_width_px overrides size; 0 uses size.
     max_cols : int, optional
         Panels per row; 0 is one row.
     panel_gap_px : int
@@ -353,7 +363,7 @@ class Show3D(
     roi_list = traitlets.List([]).tag(sync=True)
     roi_selected_idx = traitlets.Int(-1).tag(sync=True)
     roi_plot_data = traitlets.Bytes(b"").tag(sync=True)
-    panel_width_px = traitlets.Int(300).tag(sync=True)  # Medium canvas width in CSS pixels; 0 = automatic sizing
+    panel_width_px = traitlets.Int(PANEL_WIDTHS["medium"]).tag(sync=True)  # Medium canvas width in CSS pixels
 
     diff_mode = traitlets.Enum(["off", "previous", "first"], default_value="off").tag(sync=True)
     compare_mode = traitlets.Enum(["off", "blink", "difference", "overlay"], default_value="off").tag(sync=True)
@@ -687,7 +697,8 @@ class Show3D(
         show_fft: bool = False,
         fft_layout: str = "bottom",
         fft_overlay_zoom: float = 1.0,
-        panel_width_px: int = 300,
+        size: ViewerSize = "medium",
+        panel_width_px: int | None = None,
         max_cols: int | None = None,
         panel_gap_px: int = 0,
         dim_label: str = "Frame",
@@ -719,9 +730,7 @@ class Show3D(
         fft_overlay_zoom = float(fft_overlay_zoom)
         if not 1.0 <= fft_overlay_zoom <= 32.0:
             raise ValueError(f"fft_overlay_zoom must be in [1.0, 32.0], got {fft_overlay_zoom}")
-        panel_width_px = int(panel_width_px)
-        if panel_width_px < 0:
-            raise ValueError(f"panel_width_px must be >= 0, got {panel_width_px}")
+        panel_width_px = resolve_panel_width(size, panel_width_px)
         if isinstance(display_bin, bool) or not isinstance(display_bin, int) or display_bin < 1:
             raise ValueError(f"display_bin must be an integer >= 1; got {display_bin!r}")
         self._verbose = bool(verbose)
