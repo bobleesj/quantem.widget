@@ -29,7 +29,7 @@ import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { useTheme, WIDGET_TYPOGRAPHY as typography } from "../theme";
-import { SPACING, controlRow, compactButton, switchStyles, upwardMenuProps, reorderBadgeSx, panelStarButtonSx } from "../controlStyles";
+import { SPACING, controlRow, compactButton, switchStyles, sliderStyles, upwardMenuProps, reorderBadgeSx, panelStarButtonSx } from "../controlStyles";
 import { useCanvasRepaintSignal } from "../canvasLifecycle";
 import { type ScaleBarOptions, drawColorbar, drawScaleBarInRegion, formatZoomLabel, roundToNiceValue, scaleBarGeometry, strokePeakMarker } from "../figure";
 import { angstromsPerUnit, unitSymbol } from "../units";
@@ -676,9 +676,6 @@ function offlineRangesAreIdentity(mins: number[], maxs: number[]): boolean {
   return mins.length > 0 && mins.every((low, panel) => low === 0 && maxs[panel] === 255);
 }
 
-const sliderStyles = {
-  small: { py: 0, "& .MuiSlider-thumb": { width: 10, height: 10 }, "& .MuiSlider-rail": { height: 2 }, "& .MuiSlider-track": { height: 2 } },
-};
 const imagePanelRadius = 0;
 
 function Show2D() {
