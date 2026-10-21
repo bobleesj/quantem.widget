@@ -610,6 +610,7 @@ function ImagePanel({
   cropSelecting?: boolean;
   onCropChange?: (startRow: number, startCol: number, endRow: number, endCol: number) => void;
 }) {
+  const imageBoxRef = React.useRef<HTMLDivElement>(null);
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const overlayRef = React.useRef<HTMLCanvasElement>(null);
   const zoomRef = React.useRef(zoom); zoomRef.current = zoom;
@@ -679,26 +680,43 @@ function ImagePanel({
   const onZoomChangeRef = React.useRef(onZoomChange); onZoomChangeRef.current = onZoomChange;
   React.useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const imageBox = imageBoxRef.current;
+    if (!canvas || !imageBox) return;
+    let frame: number | null = null;
+    let pendingZoom: ZoomState | null = null;
     const handler = (e: WheelEvent) => {
+      // Region-editing overlays are siblings of the canvas. Listen on their
+      // shared container so Draw and Move modes can zoom without changing ROIs.
+      // The FFT inset is a separate view and must not zoom its parent image.
+      if (e.target instanceof Element && e.target.closest('[data-showptycho-fft-inset]')) return;
+      if (!offscreenRef.current || e.deltaY === 0) return;
       e.preventDefault();
-      if (!offscreenRef.current) return;
+      e.stopPropagation();
       const rect = canvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left, mouseY = e.clientY - rect.top;
-      const prev = zoomRef.current;
+      const prev = pendingZoom ?? zoomRef.current;
       const factor = e.deltaY < 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR;
       const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev.zoom * factor));
       const ratio = newZoom / prev.zoom;
       const centerX = sizeRef.current / 2 + prev.panX;
       const centerY = sizeRef.current / 2 + prev.panY;
-      onZoomChangeRef.current({
+      pendingZoom = {
         zoom: newZoom,
         panX: prev.panX - (mouseX - centerX) * (ratio - 1),
         panY: prev.panY - (mouseY - centerY) * (ratio - 1),
+      };
+      if (frame != null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        if (pendingZoom) onZoomChangeRef.current(pendingZoom);
+        pendingZoom = null;
       });
     };
-    canvas.addEventListener("wheel", handler, { passive: false });
-    return () => canvas.removeEventListener("wheel", handler);
+    imageBox.addEventListener("wheel", handler, { passive: false });
+    return () => {
+      imageBox.removeEventListener("wheel", handler);
+      if (frame != null) cancelAnimationFrame(frame);
+    };
   }, []);
 
   const imageCoordinate = React.useCallback((clientX: number, clientY: number) => {
@@ -820,7 +838,7 @@ function ImagePanel({
 
   return (
     <Box sx={{ width: size, flexShrink: 0, display: "flex", flexDirection: "column" }}>
-      <Box sx={{ ...container.imageBox, bgcolor: tc.bgAlt, border: `1px solid ${tc.border}`, width: size, height: size }}>
+      <Box ref={imageBoxRef} sx={{ ...container.imageBox, bgcolor: tc.bgAlt, border: `1px solid ${tc.border}`, width: size, height: size }}>
         <canvas
           data-quantem-scientific-output={label}
           data-source-width={offscreen?.width}
@@ -989,6 +1007,7 @@ function FFTInset({
 
   return (
     <Box
+      data-showptycho-fft-inset
       onMouseDown={onMouseDown}
       onDoubleClick={(e) => { e.stopPropagation(); setFftClickInfo(null); }}
       sx={{

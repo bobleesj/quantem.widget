@@ -1,6 +1,7 @@
 import { act } from 'react';
 import { afterEach, expect, test, vi } from 'vitest';
 import widget from './index';
+import * as colormaps from '../display/colormaps';
 
 /** The Python trait defaults (``ShowPtycho.class_traits(sync=True)``) a live session starts from. */
 const DEFAULTS: Record<string, unknown> = {
@@ -69,7 +70,7 @@ async function mount(model: Model) {
   el = document.createElement('div'); document.body.append(el);
   await act(async () => { cleanup = widget.render({ model, el } as never) as unknown as () => void; });
 }
-afterEach(() => { act(() => cleanup?.()); cleanup = undefined; el?.remove(); vi.unstubAllGlobals(); });
+afterEach(() => { act(() => cleanup?.()); cleanup = undefined; el?.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 /** The C10 value thumb's hidden range input, as a keyboard or drag moves it. */
 function dragC10(value: number) {
@@ -135,4 +136,72 @@ test('a late regional reply does not replace the overview loss', async () => {
   dragC10(6);
   expect(model.sent).toHaveLength(2);
   expect(model.sent[1].request.region_id).toBeUndefined();
+});
+
+test('wheel zoom works through region overlays and stays independent of other panels and fits', async () => {
+  // jsdom has no canvas renderer; keep real ImagePanel interaction and state.
+  const context = new Proxy({
+    createImageData: (width: number, height: number) => ({ data: new Uint8ClampedArray(width * height * 4) }),
+    measureText: () => ({ width: 10 }),
+  }, { get: (target, key) => Reflect.get(target, key) ?? (() => {}) });
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as never);
+  vi.stubGlobal('ImageBitmap', class {});
+  vi.spyOn(colormaps, 'renderToOffscreen').mockImplementation((_values, width, height) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width; canvas.height = height;
+    return canvas;
+  });
+  const lower = { id: 'b', label: 'Lower', bounds: [64, 128, 64, 128] };
+  const regions = [REGION, lower];
+  const model = session({
+    initial_fft_on: true,
+    local_tilt_json: JSON.stringify({ scan_shape: [128, 128], regions, fits: [FIT, { ...FIT, ...lower }] }),
+    local_tilt_selection_json: JSON.stringify(regions),
+    local_tilt_images_json: JSON.stringify(regions.map((region, index) => ({
+      label: `${region.label} · SSB`, shape: [4, 4], offset: index * 16, sampling_A: 0.5,
+    }))),
+    local_tilt_bytes: new DataView(new Float32Array(32).fill(0.25).buffer),
+  });
+  await mount(model);
+  const science = { ...model.values };
+  const panel = (label: string) => el.querySelector(`canvas[aria-label="${label}"]`)!.parentElement!;
+  const overview = panel('Overview');
+  const upper = panel('Upper · SSB');
+  const bottom = panel('Lower · SSB');
+  const wheel = async (target: Element, deltaY = -100) => {
+    const event = new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true });
+    act(() => { target.dispatchEvent(event); });
+    await act(async () => { await new Promise(requestAnimationFrame); });
+    return event;
+  };
+  for (const mode of ['Draw', 'Move', 'Pan']) {
+    act(() => { Array.from(el.querySelectorAll('button')).find(button => button.textContent === mode)!.click(); });
+    const target = overview.querySelector(mode === 'Pan' ? 'canvas' : 'svg')!;
+    expect((await wheel(target)).defaultPrevented).toBe(true);
+    expect(overview.textContent).toContain('1.1x');
+    expect(upper.textContent).not.toMatch(/\dx/);
+    expect(bottom.textContent).not.toMatch(/\dx/);
+    await wheel(target, 100);
+    expect(overview.textContent).not.toMatch(/\dx/);
+  }
+  await wheel(upper.querySelector('canvas')!);
+  expect(upper.textContent).toContain('1.1x');
+  expect(bottom.textContent).not.toMatch(/\dx/);
+  // A burst accumulates every wheel delta but publishes only on the next frame.
+  act(() => {
+    for (let i = 0; i < 2; i++) bottom.querySelector('canvas')!.dispatchEvent(
+      new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true }));
+  });
+  expect(bottom.textContent).not.toMatch(/\dx/);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  expect(bottom.textContent).toContain('1.3x');
+  expect(upper.textContent).toContain('1.1x');
+  expect(overview.textContent).not.toMatch(/\dx/);
+  const inset = overview.querySelector('[data-showptycho-fft-inset]')!;
+  expect(inset).not.toBeNull();
+  expect((await wheel(inset)).defaultPrevented).toBe(false);
+  expect(overview.textContent).not.toMatch(/\dx/);
+  // Zooming never queues a refit, changes a selection, or alters fit/calibration traits.
+  expect(model.values).toEqual(science);
+  expect(model.sent).toEqual([]);
 });

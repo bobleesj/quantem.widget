@@ -183,7 +183,7 @@ export function useLocalTiltWorkspace({ Panel, tc, ui, overviewSize, zoom, setZo
   const [pending,setPending]=React.useState(false);
   const [elapsed,setElapsed]=React.useState(0);
   const [fittingSelection,setFittingSelection]=React.useState('');
-  const [linked,setLinked]=React.useState(true),[individualZoom,setIndividualZoom]=React.useState<Record<string,Zoom>>({});
+  const [linked,setLinked]=React.useState(false),[individualZoom,setIndividualZoom]=React.useState<Record<string,Zoom>>({});
   const latest=React.useRef(regions); latest.current=regions;
   const timer=React.useRef(0);
   const busyRef=React.useRef(false);
