@@ -1893,8 +1893,10 @@ function Show2D() {
     previousEffectiveFftLinkRef.current = { zoom: linkedZoom, pan: linkPan, contrast: linkedContrast };
   }, [linkedZoom, linkPan, linkedContrast, galleryFftStates, linkedFftZoomState, fftContrastStates, fftVminPct, fftVmaxPct, nImages, selectedIdx]);
 
-  // Resizable state (gallery starts smaller)
-  const [canvasSize, setCanvasSize] = React.useState(nImages > 1 ? GALLERY_IMAGE_TARGET : SINGLE_IMAGE_TARGET);
+  // Use the requested panel width on the first paint; 0 retains automatic sizing.
+  const [canvasSize, setCanvasSize] = React.useState(
+    panelWidthPxTrait > 0 ? panelWidthPxTrait : nImages > 1 ? GALLERY_IMAGE_TARGET : SINGLE_IMAGE_TARGET,
+  );
 
   // Sync initial sizes from traits
   React.useEffect(() => {

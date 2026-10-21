@@ -5,6 +5,10 @@ keyword arguments for durable APIs, and use `ui_mode` as a convenience preset
 for common sharing contexts. Maintainer-only frontend wording and review rules
 live in [Widget UI protocol](../maintainer/widget-ui-protocol).
 
+Show2D and Show3D open at medium size: **300 CSS pixels per image panel**.
+Use `panel_width_px` to request another width. This only sizes the display;
+the source pixels and reconstruction resolution are unchanged.
+
 ## Presets
 
 | Preset | Why it exists | Behavior |

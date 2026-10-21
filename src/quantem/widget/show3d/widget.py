@@ -181,8 +181,9 @@ class Show3D(
         Where the FFT is drawn.
     fft_overlay_zoom : float
         Initial FFT magnification, 1 to 32.
-    panel_width_px : int
-        Display width per panel in CSS pixels; 0 uses the frontend default.
+    panel_width_px : int, default 300
+        Display width per panel in CSS pixels. The medium default is 300 px;
+        this changes display size only. Use 0 for automatic frontend sizing.
     max_cols : int, optional
         Panels per row; 0 is one row.
     panel_gap_px : int
@@ -352,7 +353,7 @@ class Show3D(
     roi_list = traitlets.List([]).tag(sync=True)
     roi_selected_idx = traitlets.Int(-1).tag(sync=True)
     roi_plot_data = traitlets.Bytes(b"").tag(sync=True)
-    panel_width_px = traitlets.Int(0).tag(sync=True)  # canvas width per panel in CSS pixels; 0 = frontend default
+    panel_width_px = traitlets.Int(300).tag(sync=True)  # Medium canvas width in CSS pixels; 0 = automatic sizing
 
     diff_mode = traitlets.Enum(["off", "previous", "first"], default_value="off").tag(sync=True)
     compare_mode = traitlets.Enum(["off", "blink", "difference", "overlay"], default_value="off").tag(sync=True)
@@ -686,7 +687,7 @@ class Show3D(
         show_fft: bool = False,
         fft_layout: str = "bottom",
         fft_overlay_zoom: float = 1.0,
-        panel_width_px: int = 0,
+        panel_width_px: int = 300,
         max_cols: int | None = None,
         panel_gap_px: int = 0,
         dim_label: str = "Frame",

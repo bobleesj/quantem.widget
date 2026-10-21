@@ -443,16 +443,20 @@ def test_display_ranges_follow_contrast_rules():
     assert lo == pytest.approx(signed_log(noisy.min())) and hi == pytest.approx(signed_log(noisy.max()))
 
 
-def test_scale_bar_label_matches_the_browser_port():
+@pytest.mark.parametrize(
+    "width, physical_label, physical_length, pixel_length, zoomed_label",
+    [(300, "2 nm", 20, 100, "50 px"), (500, "1 nm", 10, 50, "20 px")],
+)
+def test_scale_bar_label_matches_the_browser_port(width, physical_label, physical_length, pixel_length, zoomed_label):
     frame = np.zeros((512, 512), dtype=np.float32)
-    effective_zoom = 500 / 512  # single image -> 500 css px canvas
-    (label, zoom_text, bar_text, bar_px), = Show2D(frame, sampling=0.23, units="A", labels=["cal"], verbose=False)._static_overlay_texts()
-    assert (label, zoom_text, bar_text) == ("cal", "", "1 nm")  # 14.1 A -> nice 10 A -> 1 nm
-    assert bar_px == pytest.approx(10 / 0.23 * effective_zoom)
-    (_, _, bar_text, bar_px), = Show2D(frame, verbose=False)._static_overlay_texts()
-    assert (bar_text, bar_px) == ("50 px", pytest.approx(50 * effective_zoom))
-    (_, zoom_text, bar_text, _), = Show2D(frame, zoom=1.8, show_zoom_indicator=True, verbose=False)._static_overlay_texts()
-    assert (zoom_text, bar_text) == ("1.8×", "20 px")
+    effective_zoom = width / 512
+    (label, zoom_text, bar_text, bar_px), = Show2D(frame, sampling=0.23, units="A", labels=["cal"], panel_width_px=width, verbose=False)._static_overlay_texts()
+    assert (label, zoom_text, bar_text) == ("cal", "", physical_label)
+    assert bar_px == pytest.approx(physical_length / 0.23 * effective_zoom)
+    (_, _, bar_text, bar_px), = Show2D(frame, panel_width_px=width, verbose=False)._static_overlay_texts()
+    assert (bar_text, bar_px) == (f"{pixel_length} px", pytest.approx(pixel_length * effective_zoom))
+    (_, zoom_text, bar_text, _), = Show2D(frame, zoom=1.8, show_zoom_indicator=True, panel_width_px=width, verbose=False)._static_overlay_texts()
+    assert (zoom_text, bar_text) == ("1.8×", zoomed_label)
     assert format_scale_label(0.5, "nm") == "5 Å"
     assert format_scale_label(13.8, "A") == "1 nm"
     assert format_scale_label(20, "mrad") == "20 mrad"
@@ -641,7 +645,7 @@ def test_preview_and_svg_show_the_window_around_center(tmp_path: Path):
     widget = Show2D(frame, verbose=False)
     widget.view_box = [0.0, 128.0, 0.0, 128.0]  # the browser zoomed into the top-left quadrant
     (_, _, bar_text, bar_px), = widget._static_overlay_texts()
-    assert bar_px == pytest.approx(float(bar_text.split()[0]) * 500 / 128)
+    assert bar_px == pytest.approx(float(bar_text.split()[0]) * widget.panel_width_px / 128)
 
 
 def test_static_paths_flip_like_the_browser_and_draw_inset_curves(tmp_path: Path):

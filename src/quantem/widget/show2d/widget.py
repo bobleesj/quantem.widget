@@ -434,8 +434,9 @@ class Show2D(
         One shared contrast window across panels.
     ncols : int, default 3
         Gallery columns.
-    panel_width_px : int, default 0
-        Panel canvas width in CSS px (0 = frontend default).
+    panel_width_px : int, default 300
+        Panel canvas width in CSS px. The medium default is 300 px per image;
+        this changes display size only. Use 0 for automatic frontend sizing.
     smooth : bool, default False
         Bilinear instead of nearest-neighbor magnification.
     zoom : float, default 1.0
@@ -678,7 +679,7 @@ class Show2D(
     scale_bar_label = traitlets.Unicode("").tag(sync=True)
     scale_bar_style = traitlets.Dict(default_value={}).tag(sync=True)
     show_zoom_indicator = traitlets.Bool(False).tag(sync=True)
-    panel_width_px = traitlets.Int(0).tag(sync=True)  # Canvas rendering size in CSS pixels; 0 = frontend default
+    panel_width_px = traitlets.Int(300).tag(sync=True)  # Medium canvas width in CSS pixels; 0 = automatic sizing
     smooth = traitlets.Bool(False).tag(sync=True)
     initial_zoom = traitlets.Float(1.0).tag(sync=True)
     zoom_row = traitlets.Float(None, allow_none=True).tag(sync=True)
@@ -849,7 +850,7 @@ class Show2D(
         link_pan: bool | None = None,
         link_contrast: bool = True,
         ncols: int = 3,
-        panel_width_px: int = 0,
+        panel_width_px: int = 300,
         smooth: bool = False,
         zoom: float = 1.0,
         center: Sequence[float] | None = None,
