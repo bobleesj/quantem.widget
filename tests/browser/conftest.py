@@ -75,7 +75,10 @@ def chrome():
     if os.path.exists(NVIDIA_ICD):
         env["VK_ICD_FILENAMES"] = NVIDIA_ICD
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(channel="chrome", headless=False, args=CHROME_ARGS, env=env)
+        browser = playwright.chromium.launch(
+            channel="chrome", headless=os.environ.get("QUANTEM_WIDGET_HEADLESS") == "1",
+            args=CHROME_ARGS, env=env,
+        )
         yield browser
         browser.close()
 
@@ -176,16 +179,26 @@ class JupyterLab:
         notebook.metadata["kernelspec"] = {"name": "quantem-browser-test", "display_name": "quantem-browser-test", "language": "python"}
         nbformat.write(notebook, self.root / name)
 
-    def open(self, open_page, notebook: str, workspace: str, *, webgpu: bool, ready: str, out: Path):
+    def open(self, open_page, notebook: str, workspace: str, *, webgpu: bool, ready: str, out: Path,
+             collapse_input: bool = False):
         """Open the notebook in JupyterLab, run its first cell and wait for ``ready``."""
         page = open_page(f"{self.url}/lab/workspaces/{workspace}/tree/{notebook}", webgpu=webgpu)
         page.wait_for_selector(".jp-Notebook .jp-Cell", timeout=120_000)
         page.wait_for_timeout(3000)
         page.locator(".jp-Cell .cm-content").first.click()
         page.keyboard.press("Shift+Enter")
+        if collapse_input:
+            page.locator(".jp-Cell .jp-InputCollapser").first.click()
         page.mouse.move(5, 300)
         page.screenshot(path=str(out / f"live_{workspace}_running.png"))
-        page.wait_for_selector(ready, timeout=300_000)
+        try:
+            page.wait_for_selector(ready, timeout=300_000)
+        except Exception:
+            page.screenshot(path=str(out / f"live_{workspace}_failed.png"))
+            (out / f"live_{workspace}_errors.json").write_text(json.dumps({
+                "errors": page.errors, "console": page.console,
+            }, indent=2))
+            raise
         page.wait_for_timeout(6000)
         return page
 

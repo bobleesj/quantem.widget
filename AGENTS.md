@@ -41,6 +41,11 @@ If unsure whether something is private, leave it out and ask.
 
 ## Tests
 
+For a release, additionally run the installed-wheel CUDA and MPS
+[ShowPtycho acceptance gate](docs/maintainer/ssb-release-check.md).
+Build-only checks do not qualify a release. The release workflow requires both
+hardware jobs before publication.
+
 `PYTHONPATH=src python -m pytest -q` runs the test suite and must pass before
 every push. Browser tests need the built JS bundle (`npm ci && npm run build`)
 and a Chrome or Chromium executable; they skip when neither is found. The

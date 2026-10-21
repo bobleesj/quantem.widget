@@ -45,7 +45,7 @@ python -m compileall -q src/quantem/widget
 if [[ "$skip_wheel" == "0" ]]; then
   echo "== local wheel build/content check =="
   rm -rf dist/widget-release-check
-  python -m build . --no-isolation --outdir dist/widget-release-check
+  python -m build . --wheel --no-isolation --outdir dist/widget-release-check
   python - <<'PY'
 from pathlib import Path
 import zipfile
@@ -77,4 +77,4 @@ print(f"wheel ok: {wheel}")
 PY
 fi
 
-echo "ALL LOCAL RELEASE GATES PASS"
+echo "BUILD CHECKS PASS. Run the installed-wheel CUDA and MPS browser gates before publishing."

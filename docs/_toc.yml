@@ -104,6 +104,7 @@ parts:
           - file: changelog
             title: Changelog
           - file: maintainer/widget-release
+          - file: maintainer/ssb-release-check
             title: Release
           - file: maintainer/viewing-html-on-mobile
             title: Mobile HTML
