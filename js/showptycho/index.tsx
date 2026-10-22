@@ -11,6 +11,7 @@ import * as React from "react";
 import { useLocalTiltWorkspace } from "./localTilt";
 import { idleDiagnostic, latestFrame } from "./interaction";
 import { FFTMagnitudeDisplay } from "./fftDisplay";
+import { fftAutoFrameZoom } from "./fftFraming";
 import { createRender, useModel, useModelState } from "@anywidget/react";
 import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
@@ -587,7 +588,7 @@ const readRawPanelData = (raw: RawPanelData) => (typeof raw === "function" ? raw
 function ImagePanel({
   offscreen, label, size, tc, zoom, onZoomChange,
   showResize, onResizeStart,
-  pixelSize, realSpacePixelSize, imageWidth, isFFT,
+  pixelSize, realSpacePixelSize, imageWidth, isFFT, resetZoom = ZOOM_RESET,
   rawData, smooth, inset, cropRegion, cropSelecting, onCropChange,
 }: {
   offscreen: HTMLCanvasElement | null;
@@ -604,6 +605,7 @@ function ImagePanel({
   smooth?: boolean;
   imageWidth?: number;
   isFFT?: boolean;
+  resetZoom?: ZoomState;
   rawData?: RawPanelData;
   inset?: React.ReactNode;
   cropRegion?: [number, number, number, number] | null;
@@ -622,6 +624,7 @@ function ImagePanel({
   // FFT d-spacing measurement (only used when isFFT)
   const fftClickStartRef = React.useRef<{ x: number; y: number } | null>(null);
   const [fftClickInfo, setFftClickInfo] = React.useState<FFTPeakMark | null>(null);
+  const peakRequest = React.useRef(0);
 
   useCanvasFrame(offscreen, React.useCallback(() => {
     drawCanvas(canvasRef.current, offscreen, size, zoom, tc.bgAlt, tc.textMuted, !!smooth);
@@ -769,6 +772,7 @@ function ImagePanel({
     const point = clientToImage(canvasRef.current!, e.clientX, e.clientY, offscreen, size, zoomRef.current);
     const fftW = offscreen.width, fftH = offscreen.height;
     if (point.col < 0 || point.col >= fftW || point.row < 0 || point.row >= fftH) return;
+    const request = ++peakRequest.current;
     // Snap to the nearest local maximum, as Show3D's findFFTPeak does.
     let snapped: { row: number; col: number };
     try {
@@ -777,7 +781,9 @@ function ImagePanel({
       console.error("[ShowPtycho] WebGPU FFT peak refinement failed", error);
       return;
     }
-    setFftClickInfo(measureFFTPeak(snapped.row, snapped.col, fftW, fftH, realSpacePixelSize));
+    if (request === peakRequest.current) {
+      setFftClickInfo(measureFFTPeak(snapped.row, snapped.col, fftW, fftH, realSpacePixelSize));
+    }
   }, [isFFT, offscreen, rawData, size, realSpacePixelSize]);
   const onLeaveFFT = React.useCallback(() => { fftClickStartRef.current = null; }, []);
 
@@ -841,6 +847,7 @@ function ImagePanel({
       <Box ref={imageBoxRef} sx={{ ...container.imageBox, bgcolor: tc.bgAlt, border: `1px solid ${tc.border}`, width: size, height: size }}>
         <canvas
           data-quantem-scientific-output={label}
+          data-view-zoom={zoom.zoom}
           data-source-width={offscreen?.width}
           data-source-height={offscreen?.height}
           aria-label={label}
@@ -849,7 +856,7 @@ function ImagePanel({
           onMouseMove={onMove}
           onMouseUp={onUp}
           onMouseLeave={() => { onLeave(); if (isFFT) onLeaveFFT(); }}
-          onDoubleClick={() => { onZoomChange(ZOOM_RESET); if (isFFT) setFftClickInfo(null); }}
+          onDoubleClick={() => { onZoomChange(resetZoom); if (isFFT) { ++peakRequest.current; setFftClickInfo(null); } }}
           style={{ width: size, height: size, cursor: isFFT || cropSelecting ? "crosshair" : "grab", display: "block", imageRendering: smooth ? "auto" : "pixelated" }}
         />
         <Typography sx={{ position: "absolute", top: 4, left: 5, px: 0.5,
@@ -902,7 +909,7 @@ function ImagePanel({
 }
 
 function FFTInset({
-  offscreen, rawData, size, panelSize, box, onBoxChange, tc, smooth, pixelSize,
+  offscreen, rawData, size, panelSize, box, onBoxChange, tc, smooth, pixelSize, autoZoom,
 }: {
   offscreen: HTMLCanvasElement | null;
   offscreenVersion?: number;
@@ -910,18 +917,43 @@ function FFTInset({
   size: number;
   panelSize: number;
   box: FFTInsetBox;
+  autoZoom: number;
   onBoxChange: React.Dispatch<React.SetStateAction<FFTInsetBox>>;
   tc: ThemeColors;
   smooth?: boolean;
   pixelSize?: number;
 }) {
+  const boxRef = React.useRef<HTMLDivElement>(null);
+  const [relativeZoom, setRelativeZoom] = React.useState(1);
+  const view = { zoom: autoZoom * relativeZoom, panX: 0, panY: 0 };
+  const autoZoomRef = React.useRef(autoZoom); autoZoomRef.current = autoZoom;
+  React.useEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    let pending = 0;
+    let frame: number | null = null;
+    const wheel = (event: WheelEvent) => {
+      if (!event.deltaY) return;
+      event.preventDefault(); event.stopPropagation();
+      pending += event.deltaY < 0 ? 1 : -1;
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        const factor = ZOOM_FACTOR ** pending; pending = 0;
+        setRelativeZoom(value => Math.max(MIN_ZOOM / autoZoomRef.current, Math.min(MAX_ZOOM, value * factor)));
+      });
+    };
+    box.addEventListener("wheel", wheel, { passive: false });
+    return () => { box.removeEventListener("wheel", wheel); if (frame !== null) cancelAnimationFrame(frame); };
+  }, []);
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const overlayRef = React.useRef<HTMLCanvasElement>(null);
   const [fftClickInfo, setFftClickInfo] = React.useState<FFTPeakMark | null>(null);
+  const peakRequest = React.useRef(0);
 
   useCanvasFrame(offscreen, React.useCallback(() => {
-    drawCanvas(canvasRef.current, offscreen, size, ZOOM_RESET, "#000", "#fff", !!smooth);
-  }, [offscreen, size, smooth]));
+    drawCanvas(canvasRef.current, offscreen, size, view, "#000", "#fff", !!smooth);
+  }, [offscreen, size, smooth, autoZoom, relativeZoom]));
 
   React.useEffect(() => {
     const overlay = overlayRef.current;
@@ -933,7 +965,7 @@ function FFTInset({
     if (!ctx) return;
     ctx.clearRect(0, 0, overlay.width, overlay.height);
     if (!fftClickInfo || !offscreen) return;
-    const scale = size / Math.max(offscreen.width, offscreen.height);
+    const scale = size / Math.max(offscreen.width, offscreen.height) * view.zoom;
     const cssX = (size - offscreen.width * scale) / 2 + fftClickInfo.col * scale;
     const cssY = (size - offscreen.height * scale) / 2 + fftClickInfo.row * scale;
     ctx.save();
@@ -953,16 +985,17 @@ function FFTInset({
       ctx.fillText(label, Math.min(size - 54, cssX + 8), Math.max(14, cssY - 4));
     }
     ctx.restore();
-  }, [fftClickInfo, offscreen, size]);
+  }, [fftClickInfo, offscreen, size, autoZoom, relativeZoom]);
 
   const measurePeak = React.useCallback(async (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
     const values = readRawPanelData(rawData);
     if (!canvas || !offscreen || !values) return;
-    // the inset draws unzoomed, so the panel mapping at ZOOM_RESET is the inset's own
-    const point = clientToImage(canvas, clientX, clientY, offscreen, size, ZOOM_RESET);
+    // Pick through the same auto-frame and user zoom used to paint the full FFT.
+    const point = clientToImage(canvas, clientX, clientY, offscreen, size, view);
     const fftW = offscreen.width;
     const fftH = offscreen.height;
+    const request = ++peakRequest.current;
     if (point.col < 0 || point.col >= fftW || point.row < 0 || point.row >= fftH) return;
     let snapped: { row: number; col: number };
     try {
@@ -971,8 +1004,10 @@ function FFTInset({
       console.error("[ShowPtycho] WebGPU inset peak refinement failed", error);
       return;
     }
-    setFftClickInfo(measureFFTPeak(snapped.row, snapped.col, fftW, fftH, pixelSize));
-  }, [offscreen, rawData, size, pixelSize]);
+    if (request === peakRequest.current) {
+      setFftClickInfo(measureFFTPeak(snapped.row, snapped.col, fftW, fftH, pixelSize));
+    }
+  }, [offscreen, rawData, size, pixelSize, autoZoom, relativeZoom]);
 
   const onMouseDown = React.useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
@@ -1007,11 +1042,15 @@ function FFTInset({
 
   return (
     <Box
+      ref={boxRef}
       data-showptycho-fft-inset
+      data-auto-zoom={autoZoom}
+      data-view-zoom={view.zoom}
       onMouseDown={onMouseDown}
-      onDoubleClick={(e) => { e.stopPropagation(); setFftClickInfo(null); }}
+      onDoubleClick={(e) => { e.stopPropagation(); ++peakRequest.current; setFftClickInfo(null); setRelativeZoom(1); }}
       sx={{
         position: "absolute",
+        overflow: "hidden",
         top: `${topPct}%`,
         left: `${leftPct}%`,
         width: size,
@@ -1022,7 +1061,7 @@ function FFTInset({
         pointerEvents: "auto",
         userSelect: "none",
       }}
-      title="Drag FFT inset. Click a peak to measure d-spacing. Double-click to clear marker."
+      title="Drag FFT inset. Scroll to zoom independently. Click a peak to measure d-spacing. Double-click to auto-frame."
     >
       <canvas
         ref={canvasRef}
@@ -1693,7 +1732,9 @@ function Explore() {
   const [phaseZoom, setPhaseZoom] = React.useState(ZOOM_RESET);
   const [ampZoom, setAmpZoom] = React.useState(ZOOM_RESET);
   const [complexZoom, setComplexZoom] = React.useState(ZOOM_RESET);
+  // User zoom is relative to calibrated framing, so changes in output sampling preserve the view.
   const [fftZoom, setFFTZoom] = React.useState(ZOOM_RESET);
+  const [fftSourceShape, setFFTSourceShape] = React.useState<[number, number]>([0, 0]);
   // Every phase clears the panels it does not show; an unchanged null must not re-render the widget.
   const [phaseOff, setPhaseOff] = useChangedState<HTMLCanvasElement | null>(null);
   const [ampOff, setAmpOff] = useChangedState<HTMLCanvasElement | null>(null);
@@ -2645,7 +2686,8 @@ function Explore() {
       return;
     }
 
-    const applyFFT = (fftResult: { mag: Float32Array; pw: number; ph: number; stats: FrameStats }) => {
+    const applyFFT = (fftResult: { mag: Float32Array; pw: number; ph: number; stats: FrameStats }, width: number, height: number) => {
+      setFFTSourceShape(previous => previous[0] === height && previous[1] === width ? previous : [height, width]);
       fftMagRef.current = { mag: fftResult.mag, w: fftResult.pw, h: fftResult.ph };
       const fftRange = fftContrastRef.current;
       const fftCmapName = fftCmapRef.current;
@@ -2667,7 +2709,7 @@ function Explore() {
         return computeFFTMagnitude(fft, display, phase, width, height);
       }).then(fftResult => {
         if (gen !== fftGenRef.current) return;  // stale: newer data already rendered
-        applyFFT(fftResult);
+        applyFFT(fftResult, width, height);
       }).catch(error => {
         if (gen !== fftGenRef.current) return;
         setFFTOff(null);
@@ -3373,13 +3415,16 @@ function Explore() {
     resizeDrag.current = { on: true, startY: e.clientY, startSize: shownPanelRef.current };
   }, []);
 
-  /* --- Scale bar: reciprocal pixel size for FFT --- */
-  const fftPixelSize = React.useMemo(() => {
-    const fft = fftMagRef.current;
-    if (!fft || !pixelSize || pixelSize <= 0) return 0;
-    // Reciprocal pixel size of the complete padded Fourier grid.
-    return 1.0 / (fft.w * pixelSize);
-  }, [pixelSize, fftOff]);
+  /* --- Frame the full FFT by physical frequency, independently of the phase zoom. --- */
+  const fftSampling = ssbSession && scanSamplingA?.length === 2 && fftSourceShape.every(value => value > 0)
+    ? [scanSamplingA[0] * scanRows / fftSourceShape[0], scanSamplingA[1] * scanCols / fftSourceShape[1]]
+    : objectSamplingA;
+  const fftAutoZoom = fftAutoFrameZoom(fftOff?.width || 0, fftOff?.height || 0,
+    fftSampling || [], scanSamplingA || []);
+  const fftView = { ...fftZoom, zoom: fftZoom.zoom * fftAutoZoom };
+  const fftReset = { ...ZOOM_RESET, zoom: fftAutoZoom };
+  const fftRealPixelSize = fftSampling?.[1] || pixelSize;
+  const fftPixelSize = fftOff && fftRealPixelSize > 0 ? 1 / (fftOff.width * fftRealPixelSize) : 0;
 
   /* --- Derived --- */
   const delta = loss != null && autoLoss > 0 ? loss - autoLoss : null;
@@ -3722,7 +3767,8 @@ function Explore() {
               onBoxChange={setFFTInsetBox}
               tc={tc}
               smooth={smooth}
-              pixelSize={pixelSize}
+              pixelSize={fftRealPixelSize}
+              autoZoom={fftAutoZoom}
             />
           ) : null}</>}
         />
@@ -3749,9 +3795,10 @@ function Explore() {
         {fftAsPanel && (
           <ImagePanel
             offscreen={fftOff} label="FFT" size={shownPanel} tc={tc}
-            zoom={fftZoom} onZoomChange={setFFTZoom}
+            zoom={fftView} resetZoom={fftReset}
+            onZoomChange={view => setFFTZoom({ ...view, zoom: view.zoom / fftAutoZoom })}
             showResize onResizeStart={startResize}
-            pixelSize={fftPixelSize} realSpacePixelSize={pixelSize}
+            pixelSize={fftPixelSize} realSpacePixelSize={fftRealPixelSize}
             imageWidth={fftMagRef.current?.w} isFFT
             rawData={fftFrameData}
           />

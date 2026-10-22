@@ -199,7 +199,11 @@ test('wheel zoom works through region overlays and stays independent of other pa
   expect(overview.textContent).not.toMatch(/\dx/);
   const inset = overview.querySelector('[data-showptycho-fft-inset]')!;
   expect(inset).not.toBeNull();
-  expect((await wheel(inset)).defaultPrevented).toBe(false);
+  const initialFFTZoom = Number(inset.getAttribute('data-view-zoom'));
+  expect((await wheel(inset)).defaultPrevented).toBe(true);
+  expect(Number(inset.getAttribute('data-view-zoom'))).toBeGreaterThan(initialFFTZoom);
+  act(() => inset.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+  expect(Number(inset.getAttribute('data-view-zoom'))).toBeCloseTo(initialFFTZoom);
   expect(overview.textContent).not.toMatch(/\dx/);
   // Zooming never queues a refit, changes a selection, or alters fit/calibration traits.
   expect(model.values).toEqual(science);
