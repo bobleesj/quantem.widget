@@ -93,7 +93,7 @@ migration unless a behavior change is separately approved.
 
 ## Short calls first, detailed control when needed
 
-The detector helper currently in development supports this short call:
+The detector helper supports this short call:
 
 ```python
 detector.show(data, size="medium", columns=2)
@@ -124,12 +124,13 @@ tutorial updates remain separate work:
 
 | API | Existing surface | Migration direction |
 | --- | --- | --- |
-| `detector.show` in development | `size`, `columns`, `rows` | Two columns by default |
+| `detector.show` | `size`, `rows`, `columns`, `cmap`, `save` | Two columns by default |
+| `detector_fit.show` | `size`, `cmap`, `save`; advanced `figsize` | Single plot; medium by default |
 | `Show2D` | `size`, `columns`, `rows`; deprecated `ncols` | Preserve three-column default and saved state |
 | `Show3D` | `size`, `columns`, `rows`; deprecated `max_cols` | Preserve four-column default, legacy zero and saved state |
 | Core `show_2d` | Nested arrays, `axsize`, optional `figsize` | Add named size and optional layout through the existing function |
 | SSB focus and trial galleries | `size`, `columns`, `rows`; focus retains deprecated `max_cols` | Named per-panel size; keep fitted arrays unchanged |
-| SSB result and rotation views | `size`, advanced `axsize` | Medium nominal panel width, retain scientific plot aspect ratios |
+| SSB result and rotation views | `size`, `cmap`, `save`; advanced `axsize` | Rows/columns for galleries; fixed rotation/comparison layout |
 
 For a published API, support old keywords for a documented transition, emit
 deprecation warnings, and reject calls supplying both old and new aliases.
@@ -143,3 +144,17 @@ Test old/new keyword parity, defaults, invalid values, partial last rows and
 saved output. Verify representative static and interactive layouts, including
 a narrow viewport, and confirm display options leave scientific arrays intact.
 Keep design documentation distinct from evidence of a completed runtime change.
+
+### Detector and SSB display options
+
+Use `detector_fit.show(size="medium", cmap="inferno", save="detector-fit.png")`
+for the fitted detector disk. It has one panel, so no rows/columns controls.
+Use the same keywords on `detector.show(data, columns=2)` for the detector gallery.
+
+`ssb.show("parameters", rows=2, cmap="viridis", save="fit.png")` lays out
+the two static fit landscapes. Focus views accept `size`, `rows`, `columns`
+and `cmap` in both Show2D/Show3D and static mode. Export with
+`ssb.show("focus", mode="static", save="focus.png")`; native image density
+is retained. `save` exports the figure, while ShowPtycho
+`save_dir` stores scientific calibration. Plain `ssb.show()` retains
+ShowPtycho's responsive layout and its existing Color control.
