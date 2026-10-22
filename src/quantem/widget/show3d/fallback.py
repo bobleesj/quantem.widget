@@ -70,7 +70,7 @@ class Show3DFallback:
             auto_contrast=self.auto_contrast,
             vmin=vmin,
             vmax=vmax,
-            ncols=max(1, min(ncols, len(frames))),
+            columns=max(1, min(ncols, len(frames))),
             panel_width_px=int(self.panel_width_px or 0),
             smooth=self.smooth,
             zoom=1.0,

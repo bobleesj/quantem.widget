@@ -57,6 +57,7 @@ from quantem.widget.utils.ui import (
     UiMode,
     ViewerSize,
     reject_unknown_kwargs,
+    resolve_columns,
     resolve_panel_width,
     resolve_ui_mode,
 )
@@ -439,8 +440,15 @@ class Show2D(
         Galleries link zoom and pan by default; a single image never does.
     link_contrast : bool, default True
         One shared contrast window across panels.
-    ncols : int, default 3
-        Gallery columns.
+    columns : int, optional
+        Image panels across each page; three by default for compatibility.
+        Rows are calculated automatically. For example, ``columns=2`` places
+        five images in three rows. Set ``viewer.columns`` to change it later.
+    rows : int, optional
+        Desired initial rows per page; infer columns when supplied alone.
+        If both are supplied, their capacity must hold every panel on a page.
+    ncols : int, optional
+        Deprecated alias for ``columns``. Do not combine it with rows or columns.
     size : {"small", "medium", "large", "xlarge"}, default "medium"
         Width of each image panel: 300, 450, 600 or 900 CSS pixels. Aspect
         ratio and source resolution are preserved; controls keep the shared font.
@@ -825,6 +833,15 @@ class Show2D(
             widget.watch_folder(interval=watch_interval)
         return widget
 
+    @property
+    def columns(self) -> int:
+        """Image panels across each page; the saved layout uses the same value."""
+        return self.ncols
+
+    @columns.setter
+    def columns(self, value: int) -> None:
+        self.ncols = resolve_columns(self.panels_per_page or self.n_images, columns=value)
+
     def __init__(
         self,
         data,
@@ -859,7 +876,9 @@ class Show2D(
         link_zoom: bool | None = None,
         link_pan: bool | None = None,
         link_contrast: bool = True,
-        ncols: int = 3,
+        columns: int | None = None,
+        rows: int | None = None,
+        ncols: int | None = None,
         size: ViewerSize = "medium",
         panel_width_px: int | None = None,
         smooth: bool = False,
@@ -922,9 +941,6 @@ class Show2D(
             panels_per_page=panels_per_page,
         )
         panel_width_px = resolve_panel_width(size, panel_width_px)
-        ncols = int(ncols)
-        if ncols < 1:
-            raise ValueError(f"ncols must be >= 1, got {ncols}")
         panel_gap_px = 0 if panel_gap_px is None else _nonnegative_int(panel_gap_px, name="panel_gap_px")
         inter_panel_gap_color = "" if inter_panel_gap_color is None else str(inter_panel_gap_color)
         gallery_outer_border_px = (
@@ -1237,7 +1253,10 @@ class Show2D(
             else:
                 self.vmin = vmin
                 self.vmax = vmax
-            self.ncols = ncols
+            self.ncols = resolve_columns(
+                self.panels_per_page or self.n_images, columns=columns, rows=rows,
+                default=3, legacy_columns=ncols, legacy_name="ncols",
+            )
             self.panel_playback_fps = panel_playback_fps
             # Browser display denoise: a scalar knob applies to every panel, a
             # sequence gives each panel its own (a raw vs filtered A/B gallery).

@@ -124,7 +124,7 @@ class Show3DExport:
             panel_width_px=self.panel_width_px,
             dim_label=self.dim_label,
             display_bin=1,
-            max_cols=self.max_cols,
+            columns=self.columns,
             panel_gap_px=self.panel_gap_px,
             show_scale_bar=self.show_scale_bar,
             panel_annotations=list(self.panel_annotations),

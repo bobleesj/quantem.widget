@@ -110,6 +110,8 @@ parts:
             title: Mobile HTML
           - file: maintainer/widget-ui-protocol
             title: UI protocol
+          - file: maintainer/display-api
+            title: Display API standard
           - file: maintainer/widget-performance
             title: Performance
           - file: maintainer/2026-10-20-mps-performance

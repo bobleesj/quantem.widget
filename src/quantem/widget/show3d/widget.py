@@ -51,6 +51,7 @@ from quantem.widget.utils.ui import (
     UiMode,
     ViewerSize,
     resolve_panel_width,
+    resolve_columns,
     resolve_ui_mode,
     validate_display_limits,
 )
@@ -194,7 +195,15 @@ class Show3D(
     panel_width_px : int or None, optional
         Display width per panel in CSS pixels. The medium default is 450 px;
         this changes display size only. A positive panel_width_px overrides size; 0 uses size.
+    columns : int, optional
+        Image panels across each page; four by default for compatibility.
+        Rows are calculated automatically. Set ``viewer.columns`` to change
+        the layout later without reloading stacks.
+    rows : int, optional
+        Desired initial rows per page; infer columns when supplied alone.
+        If both are supplied, their capacity must hold every panel on a page.
     max_cols : int, optional
+        Deprecated alias for ``columns``. Do not combine it with rows or columns.
         Panels per row; 0 is one row.
     panel_gap_px : int
         Gap between panels in CSS pixels.
@@ -671,6 +680,15 @@ class Show3D(
             widget.watch_folder(interval=watch_interval)
         return widget
 
+    @property
+    def columns(self) -> int:
+        """Image panels across each page; the saved layout uses the same value."""
+        return self.max_cols or self.panels_per_page or self.n_panels
+
+    @columns.setter
+    def columns(self, value: int) -> None:
+        self.max_cols = resolve_columns(self.panels_per_page or self.n_panels, columns=value)
+
     def __init__(
         self,
         *data_args,
@@ -699,6 +717,8 @@ class Show3D(
         fft_overlay_zoom: float = 1.0,
         size: ViewerSize = "medium",
         panel_width_px: int | None = None,
+        columns: int | None = None,
+        rows: int | None = None,
         max_cols: int | None = None,
         panel_gap_px: int = 0,
         dim_label: str = "Frame",
@@ -776,8 +796,10 @@ class Show3D(
             )
             self.cmap = cmap_to_name(cmap)
             self.panel_cmaps = []
-            if max_cols is not None:
-                self.max_cols = int(max_cols)
+            self.max_cols = resolve_columns(
+                self.panels_per_page or self.n_panels, columns=columns, rows=rows,
+                default=4, legacy_columns=max_cols, legacy_name="max_cols",
+            )
             self.link_contrast = bool(link_contrast) if link_contrast is not None else int(self.n_panels) <= 1
             self.vmin = vmin
             self.vmax = vmax

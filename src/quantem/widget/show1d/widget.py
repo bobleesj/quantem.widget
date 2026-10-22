@@ -744,7 +744,7 @@ class Show1D(Show1DState, Show1DExport, TrialReview, SavedStateMixin, HtmlExport
             controls_collapsed=False,
             show_stats=True,
             auto_contrast=True,
-            ncols=max(1, min(self.snapshot_columns or len(selected), len(selected))),
+            columns=max(1, min(self.snapshot_columns or len(selected), len(selected))),
             link_zoom=len(selected) > 1,
             link_pan=len(selected) > 1,
             link_contrast=len(selected) > 1,

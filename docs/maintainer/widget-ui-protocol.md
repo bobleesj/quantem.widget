@@ -8,6 +8,9 @@ For developer-facing `ui_mode`, `show_*`, and control-visibility tables, use
 [Viewer UI controls](../api/viewer-ui). This maintainer page is the internal protocol
 for frontend wording, toolbar layout, export labels, and review checks.
 
+For Python keyword names, named panel sizes, gallery rows and columns, and
+compatibility migrations, follow the [Display API standard](display-api.md).
+
 ## Command text
 
 Use Title Case for command buttons and toolbar actions:

@@ -3,6 +3,7 @@
 import json
 import math
 import numbers
+import warnings
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
@@ -14,6 +15,37 @@ ViewerSize = Literal["small", "medium", "large", "xlarge"]
 PANEL_WIDTHS: dict[str, int] = json.loads(
     (Path(__file__).parent.parent / "panel_sizes.json").read_text(encoding="utf-8")
 )
+
+
+def resolve_columns(
+    count: int, *, columns: int | None = None, rows: int | None = None,
+    default: int = 2, legacy_columns: int | None = None,
+    legacy_name: str = "ncols",
+) -> int:
+    """Resolve a gallery layout without changing its stored frontend vocabulary."""
+    if legacy_columns is not None:
+        if columns is not None or rows is not None:
+            raise ValueError(f"Use columns or rows, or the legacy {legacy_name}, not both.")
+        warnings.warn(
+            f"{legacy_name} is deprecated; use columns instead. It remains supported during the transition.",
+            DeprecationWarning, stacklevel=3,
+        )
+        columns = legacy_columns
+        if legacy_name == "max_cols" and columns == 0:
+            columns = max(1, count)
+    for name, value in (("columns", columns), ("rows", rows)):
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, numbers.Integral) or value < 1
+        ):
+            raise ValueError(f"{name} must be a positive integer; use {name}=2, got {value!r}.")
+    if rows is not None and columns is not None and rows * columns < count:
+        raise ValueError(
+            f"rows={rows} and columns={columns} cannot hold {count} panels; "
+            "increase the layout or omit rows to calculate it automatically."
+        )
+    if columns is None:
+        columns = max(1, math.ceil(count / rows)) if rows is not None else default
+    return int(columns)
 
 
 def resolve_panel_width(size: ViewerSize, panel_width_px: int | None = None) -> int:

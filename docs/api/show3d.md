@@ -6,6 +6,20 @@ panels, paged galleries and standalone HTML and GIF exports. See the
 
 ## Reference
 
+Use the same layout keywords as Show2D:
+
+```python
+viewer = Show3D(stacks, size="medium", columns=2)
+viewer.columns = 3
+```
+
+Use `rows=2` instead to calculate columns from the panel count on each page.
+When both are supplied, the grid must hold every panel. Sizes are per image:
+small 300, medium 450, large 600 or xlarge 900 CSS pixels. The default remains
+four columns for existing notebooks. `max_cols` is a deprecated alias;
+its legacy value `0` still means one row. Use `rows=1` in new code.
+Existing saved layout state remains readable.
+
 ```{eval-rst}
 .. autoclass:: quantem.widget.show3d.Show3D
    :members:

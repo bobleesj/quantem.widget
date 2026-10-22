@@ -7428,7 +7428,7 @@ function Show2D() {
               {!isGallery && <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Lens: Magnifier inset that follows the cursor.</Typography>}
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Auto: Percentile-based contrast (2nd–98th percentile). FFT Auto masks DC + clips to 99.9th.</Typography>
               {isGallery && <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Link Zoom / Contrast: Sync zoom or histogram range across all gallery images.</Typography>}
-              {isGallery && <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Cols / Panels: Change the gallery grid or hide panels without changing the source data.</Typography>}
+              {isGallery && <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Columns / Panels: Change the gallery grid or hide panels without changing the source data.</Typography>}
               {isGallery && <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Pinning: Click a panel to select or pin it for keyboard actions, per-panel zoom, ROI edits, and delete shortcuts.</Typography>}
               {hasLocalPanelStacks && <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Local stacks: A 3D item inside a list gets its own in-panel slider and play button. Select it and use left/right arrows to change only that panel; hiding or reordering it preserves its frame.</Typography>}
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Pan: With Pan enabled, drag the image to move the zoomed view. With Link Zoom on, pan and zoom move together across gallery panels.</Typography>
@@ -7610,7 +7610,7 @@ function Show2D() {
           <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} useFlexGap sx={{ mb: `${SPACING.XS}px`, minHeight: 28, flexWrap: "wrap", rowGap: `${SPACING.XS}px`, width: "100%", maxWidth: "100%", boxSizing: "border-box" }}>
             {isGallery && (
               <Box sx={controlPairSx}>
-                <Typography sx={compactLabelSx}>Cols</Typography>
+                <Typography sx={compactLabelSx}>Columns</Typography>
                 <Select
                   value={String(clampedNcols)}
                   onChange={(e) => setNcols(Math.max(1, Math.min(Number(e.target.value) || 1, isPaged ? activePanelCount : nImages, MAX_PANEL_COLUMNS)))}

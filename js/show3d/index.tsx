@@ -10072,7 +10072,7 @@ function Show3D() {
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Scale: Linear or logarithmic intensity mapping.</Typography>
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Auto: Stack-wide percentile contrast for Show3D image panels. FFT Auto masks DC + clips to 99.9th.</Typography>
               {roiAllowed && <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>ROI: Click empty image to add at cursor, click ROI to select, drag to move, hover edge to resize. Del removes selected; Ctrl/⌘+D duplicates.</Typography>}
-              <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Cols / Panels: Change the panel grid or hide panels without changing the source stack.</Typography>
+              <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Columns / Panels: Change the panel grid or hide panels without changing the source stack.</Typography>
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Pinning: Click a panel to select or pin it for keyboard actions, per-panel zoom, ROI edits, and deletion shortcuts.</Typography>
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Pan: With Pan enabled, drag the image to move the zoomed view. With Link Zoom on, pan and zoom move together across panels.</Typography>
               <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Loop: Loop playback. Drag end markers on slider for loop range.</Typography>
@@ -10253,7 +10253,7 @@ function Show3D() {
           <Box ref={toolControlsRef} data-show3d-tool-controls="true" sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "4px", mb: `${SPACING.XS}px`, minHeight: 28 }}>
             {visiblePanelCount > 1 && (
               <>
-                <Typography sx={{ ...typography.label, fontSize: 10, ml: "2px" }}>Cols</Typography>
+                <Typography sx={{ ...typography.label, fontSize: 10, ml: "2px" }}>Columns</Typography>
                 <Select
                   value={String(clampedMaxCols)}
                   onChange={(e) => {

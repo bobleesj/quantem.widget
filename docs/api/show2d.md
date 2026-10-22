@@ -8,6 +8,20 @@ rich labels, local annotations, overlays, inset plots, and export patterns.
 
 ## Reference
 
+Choose image size and gallery layout with plain keywords:
+
+```python
+viewer = Show2D(images, size="medium", columns=2)
+viewer.columns = 3
+```
+
+Use `rows=2` instead to calculate columns from the number of images per page.
+If both are supplied, the grid must hold every panel. `size` describes each
+image panel: small 300, medium 450, large 600 or xlarge 900 CSS pixels.
+The default remains three columns for existing notebooks. `ncols` still works
+with a deprecation warning; do not combine it with `columns` or `rows`.
+Existing saved layout state remains readable.
+
 ```{eval-rst}
 .. autoclass:: quantem.widget.show2d.Show2D
    :members:
@@ -390,7 +404,7 @@ Use explicit gallery chrome controls for manuscript grids:
 Show2D(
     panels,
     labels=labels,
-    ncols=3,
+    columns=3,
     panel_gap_px=2,
     inter_panel_gap_color="#000000",
     gallery_outer_border_px=2,
@@ -642,7 +656,7 @@ w = Show2D(
     ],
     panel_frame_indices=[3, 7, -1, 0],
     panel_playback_fps=4,
-    ncols=2,
+    columns=2,
     link_zoom=True,
     link_pan=True,
 )
@@ -661,7 +675,7 @@ w = Show2D(
     [eds_sum_map, haadf_stack, ti_map, o_map],
     labels=["EDS sum", "HAADF", "Ti", "O"],
     panel_frame_indices=[0, -1, 0, 0],
-    ncols=2,
+    columns=2,
     auto_contrast=True,
 )
 w
@@ -792,7 +806,7 @@ w = Show2D(
         "phase", "amplitude", "mask", "diagnostic",
     ],
     page_labels=["iteration 10", "iteration 20", "iteration 30"],
-    ncols=4,
+    columns=4,
 )
 w
 ```
@@ -806,7 +820,7 @@ w = Show2D(
         {"title": "iteration 10", "images": iter10_panels, "labels": panel_labels},
         {"title": "iteration 20", "images": iter20_panels, "labels": panel_labels},
     ],
-    ncols=4,
+    columns=4,
 )
 ```
 
