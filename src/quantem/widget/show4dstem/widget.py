@@ -1000,8 +1000,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
         ``kwargs`` go to the solver: ``tilt`` (the ``ssb_compute_tilt`` trait,
         True by default), ``objective`` (the ``ssb_compute_objective`` trait,
-        ``"agreement"`` by default), ``num_trials``, ``refinement`` (quantem.gpu's names:
-        ``"auto"``, the default, ``"newton"``, ``"nelder-mead"`` or None), ``seed``,
+        ``"agreement"`` by default), ``trials`` (default 200; ``num_trials`` is a compatibility alias),
+        ``refinement`` (quantem.gpu's names: ``"auto"``, the default, ``"newton"``, ``"nelder-mead"`` or None), ``seed``,
         ``aberrations`` (a dict of ``C10_nm``, ``C12_nm`` and ``phi12_deg``; a
         missing key is 0), ``scan_detector_rotation_deg`` (the physical angle
         in [0, 360); omitted, the rotation the acquisition records, else the
@@ -1765,6 +1765,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         scan_detector_rotation_deg: float | None = None,
         scan_detector_rotation_flipped: bool | None = None,
         bright_field_intensity_threshold: float | None = None,
+        trials: int | None = None,
         num_trials: int | None = None,
         tilt: bool | object = FROM_TRAIT,
         objective: str | object = FROM_TRAIT,
@@ -1811,9 +1812,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                   "Pass Show4DSTEM(data, semiangle_mrad=...) to set it.")
         if semiangle <= 0:
             raise ValueError(f"semiangle_mrad must be positive, got {semiangle}.")
-        trials = int(self.ssb_compute_num_trials if num_trials is None else num_trials)
+        from quantem.gpu.ssb.trials import resolve_trial_count
+
+        trials = int(resolve_trial_count(trials, num_trials, default=self.ssb_compute_num_trials))
         if trials < 0:
-            raise ValueError(f"num_trials must be >= 0, got {trials}.")
+            raise ValueError(f"trials must be >= 0, got {trials}.")
         tilt = bool(self.ssb_compute_tilt if tilt is FROM_TRAIT else tilt)
         objective = self.ssb_compute_objective if objective is FROM_TRAIT else objective
         if objective not in ("agreement", "phase_variance"):

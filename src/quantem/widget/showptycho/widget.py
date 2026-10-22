@@ -491,7 +491,10 @@ class ShowPtycho(anywidget.AnyWidget):
             raise ValueError("Region images belong to another selection. Fit the current regions first.")
         return {name: phase.copy() for name, phase in self._region_images.items()}
 
-    def fit_regions(self, *, num_trials: int = 200, refinement: str | None = "newton") -> list[dict]:
+    def fit_regions(
+        self, *, trials: int | None = None, refinement: str | None = "newton",
+        num_trials: int | None = None,
+    ) -> list[dict]:
         """Jointly fit optics, tilt and depth in the current rectangles.
 
         With a live SSB session this uses QuantEM directly, keeps the overview
@@ -500,8 +503,10 @@ class ShowPtycho(anywidget.AnyWidget):
 
         Parameters
         ----------
-        num_trials : int, default 200
-            Trials of the single joint fit per region (seed 42).
+        trials : int, optional
+            Search trials of the single joint fit per region (seed 42). Default 200.
+        num_trials : int, optional
+            Compatibility alias for ``trials``. Supply only one of them.
         refinement : {"newton", "nelder-mead", "auto", None}, default "newton"
             Local refinement after each search (``quantem.gpu.SSB.find_aberrations``).
             The widget's Fit Regions button uses the values of the last call.
@@ -515,6 +520,9 @@ class ShowPtycho(anywidget.AnyWidget):
         --------
         >>> fits = viewer.fit_regions()
         """
+        from quantem.gpu.ssb.trials import resolve_trial_count
+
+        num_trials = resolve_trial_count(trials, num_trials)
         if int(num_trials) < 1:
             raise ValueError("Fit Regions needs at least one trial per seed.")
         self._region_fit_options = {"num_trials": int(num_trials), "refinement": refinement}

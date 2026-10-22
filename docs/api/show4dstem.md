@@ -312,10 +312,10 @@ bright-field pixel (the `compute_ssb` keywords
 `bright_field_intensity_threshold` and `bright_field_radius_px`). The keywords
 `tilt` (True, the default, or False) and `objective` (`"agreement"`, the
 default, or `"phase_variance"`, at tilt 0 only), which the **Fit** menu sets
-(Tilt-corrected, Tilt 0, Phase variance backup), `num_trials`, `refinement`
+(Tilt-corrected, Tilt 0, Phase variance backup), `trials`, `refinement`
 (quantem.gpu's `"auto"`, the default, `"newton"`,
 `"nelder-mead"` or None) and `seed` control the search, for example
-`viewer.compute_ssb(num_trials=100, seed=0)`. **Lock C10** and **Lock C12**
+`viewer.compute_ssb(trials=100, seed=0)`. **Lock C10** and **Lock C12**
 hold a coefficient at its slider value; in the tilt-corrected fit C12 is held
 alone only at 0, and both locks hold all three coefficients and fit the tilt
 and depth spread alone. A manual recompute from the sliders keeps the last

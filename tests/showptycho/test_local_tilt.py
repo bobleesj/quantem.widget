@@ -82,7 +82,8 @@ def test_invalid_sampling_is_rejected_before_transport():
             _images({'SSB':np.ones((32,32))},sampling)
 
 
-def test_notebook_cells_read_edit_fit_and_reconstruct_current_regions():
+@pytest.mark.parametrize("budget", [{}, {"trials": 12}, {"num_trials": 12}])
+def test_notebook_cells_read_edit_fit_and_reconstruct_current_regions(budget):
     import pytest
 
     regions = [{'id': 'a', 'label': 'A', 'bounds': [0, 32, 0, 32]}]
@@ -96,7 +97,10 @@ def test_notebook_cells_read_edit_fit_and_reconstruct_current_regions():
     assert widget.regions == regions
     with pytest.raises(ValueError, match='unfitted'):
         widget.region_fits
-    fits = widget.fit_regions()
+    fits = widget.fit_regions(**budget)
+    assert widget._region_fit_options["num_trials"] == (12 if budget else 200)
+    with pytest.raises(TypeError, match="not both"):
+        widget.fit_regions(trials=200, num_trials=200)
     assert fits[0]['sample_tilt_mrad'] == [2., -3.]
     np.testing.assert_array_equal(widget.region_images['A'], phase)
     assert widget.region_images['A'].dtype == np.float64

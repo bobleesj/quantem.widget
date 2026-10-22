@@ -1371,7 +1371,7 @@ def test_compute_ssb_names_its_refinement_as_quantem_gpu_does():
         assert record["refinement"] == "newton" and record["tilt"] is True  # the tilt-corrected fit refines with Newton
         assert len(record["sample_tilt_mrad"]) == 2 and record["depth_spread_nm"] >= 0.0
         widget.ssb_compute_refinement = None
-        widget.compute_ssb(num_trials=2, tilt=False)
+        widget.compute_ssb(trials=2, tilt=False)
         record = json.loads(widget.ssb_compute_calibration_json)
         assert record["refinement"] is None and record["tilt"] is False and record["sample_tilt_mrad"] is None
         assert record["objective"] == "agreement"

@@ -484,7 +484,7 @@ others intact.
 The built-in workflow keeps detector geometry and scan-detector rotation common.
 For each changed region it jointly fits C10, C12, astigmatism angle, both sample
 tilt components and depth spread, with five repeats of 200 trials plus Newton
-refinement on the selected GPU backend (`viewer.fit_regions(num_trials=...,
+refinement on the selected GPU backend (`viewer.fit_regions(trials=...,
 refinement=...)` changes both, also for the button). Progress shows the active repeat and
 elapsed time. It reconstructs the full scan with each regional fit, then crops
 the corrected regional view. The overview fit remains intact.
