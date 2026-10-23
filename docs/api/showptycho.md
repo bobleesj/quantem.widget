@@ -78,6 +78,11 @@ The launch table is a snapshot; `ssb.calibration_table()` provides the complete
 file/current comparison later. Neither table changes the source QEM.
 
 Perform full-field joint fitting and region selection inside the widget.
+**Restore joint fit** restores every fitted aberration, rotation, tilt and depth,
+and turns tilt correction back on. Trial previews use each candidate's own
+correction. An unmeasured phase-variance diagnostic is shown as **not measured**;
+it is distinct from the model-agreement search score and does not measure
+resolution.
 Turn on **Local Tilt**, click **Draw**, and drag in any direction. Select a
 rectangle or its result to edit it; **Delete** removes that region and its view
 without refitting the others. Each result also has a top-right delete button
@@ -140,6 +145,12 @@ that FFT panel. It is not re-running the raw detector preprocessing.
 
 ## SSB fit methods
 
+The default on CUDA and MPS uses 200 initial TPE trials, then jointly
+refines aberrations through fifth order with sample tilt and depth.
+`ssb.find_aberrations(search="broad")` adds broader exploration.
+The initial result is provisional; final refinement can change its phase.
+
+
 quantem fits SSB aberrations with a physical model of the measurement, not an image-quality score. For each trial
 set of aberrations, and the sample's tilt and thickness, it predicts the double-overlap data the detector should have
 recorded, then keeps the parameters whose prediction agrees best with the measurement (least squares). This
@@ -148,8 +159,8 @@ model-based, tilt-corrected fit is the default everywhere, and it is where SSB i
 | Call | Method | Use it for |
 |---|---|---|
 | `find_aberrations()` | model-based, tilt-corrected | the default: every fit |
-| `find_aberrations(tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
-| `find_aberrations(tilt=False, objective="phase_variance")` | phase variance, the earlier SSB search | a backup: reproducing older results, cross-checking a fit |
+| `find_aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
+| `find_aberrations(search="primary", tilt=False, objective="phase_variance")` | phase variance, the earlier SSB search | a backup: reproducing older results, cross-checking a fit |
 
 Phase variance chooses the aberrations that make the corrected phases of all bright-field pixels agree best: the
 least variance of the corrected phase across them. It stays as a backup, not an equal alternative: it cannot see
@@ -169,8 +180,8 @@ viewer
 ```
 
 The other two methods are explicit, with quantem.gpu's names:
-`ssb.find_aberrations(tilt=False)` fits the same model at tilt 0, and
-`ssb.find_aberrations(tilt=False, objective="phase_variance")` is the
+`ssb.find_aberrations(search="primary", tilt=False)` fits the same model at tilt 0, and
+`ssb.find_aberrations(search="primary", tilt=False, objective="phase_variance")` is the
 phase-variance backup. Joint fit, Refit SSB and Fit Regions all run the
 model-based, tilt-corrected fit.
 
@@ -254,7 +265,7 @@ ssb = SSB(
     scan_sampling_A=(0.276, 0.276),
     voltage_kV=300.0,
 )
-result = ssb.find_aberrations()     # tilt-corrected, 200 trials
+result = ssb.find_aberrations()     # 200 initial trials, then joint fifth-order refinement
 w = ShowPtycho(ssb, show_fft=True)   # the session names its master (ssb.source_path)
 ```
 
@@ -293,7 +304,7 @@ from quantem.widget import ShowPtycho
 
 ssb = SSB.open(path, voltage_kV=300.0, semiangle_mrad=30.0, scan_sampling_A=(0.495, 0.495),
                detector_sampling_mrad=(0.5554, 0.5554), scan_detector_rotation_deg=-8.6)
-standard = ssb.find_aberrations(tilt=False)     # defocus + astigmatism at tilt 0
+standard = ssb.find_aberrations(search="primary", tilt=False)     # defocus + astigmatism at tilt 0
 ShowPtycho(ssb)                                 # the tilt-0 control
 tilted = ssb.find_aberrations()                 # the default: + sample tilt and depth spread, jointly
 ShowPtycho(ssb)                                 # opens on the fitted tilt
@@ -307,8 +318,7 @@ rotation and flip, and
 `depth_spread_nm`, the model's depth spread, which is not a sample thickness).
 
 Where it runs: live notebooks with a CUDA or MPS SSB session (sliders and Joint
-fit), and exported WebGPU folders (sliders; fitting needs Python). It does not
-yet combine with the higher-order aberration panel.
+fit), and exported WebGPU folders (sliders; fitting needs Python). The higher-order panel retains the fitted coefficients during tilt and sampling changes.
 
 Validation: on a simulated 15 nm BaTiO3 crystal tilted (3, -4) mrad the fit
 returns (3.0, -4.1) and ~0 for the untilted control. Speed (a 128 x 128 scan

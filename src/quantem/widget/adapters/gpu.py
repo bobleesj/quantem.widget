@@ -357,7 +357,7 @@ class SsbSession:
 
     def trials(self) -> list[dict]:
         """The fit's trials, in the order they ran, as ``{C10_nm, C12_nm, phi12_deg, sample_tilt_mrad,
-        depth_spread_nm, objective, loss}``.
+        depth_spread_nm, scan_detector_rotation_deg, higher_order, objective, loss}``.
 
         ``objective`` is quantem.gpu's name for what the trial was scored on: ``"agreement"`` (the default
         model-based fit, with or without tilt; its ``loss`` is the negative agreement, lower is better) or
@@ -366,6 +366,11 @@ class SsbSession:
         """
         return [{"C10_nm": float(trial["params"].get("C10_nm", 0.0)), "C12_nm": float(trial["params"].get("C12_nm", 0.0)),
                  "phi12_deg": float(trial["params"].get("phi12_deg", 0.0)),
+                 "higher_order": {key: float(value) for key, value in trial["params"].items()
+                                  if key not in {"C10_nm", "C12_nm", "phi12_deg"}
+                                  and (key.startswith("C") and key.endswith("_nm")
+                                       or key.startswith("phi") and key.endswith("_deg"))},
+                 "scan_detector_rotation_deg": trial.get("scan_detector_rotation_deg"),
                  "sample_tilt_mrad": [float(value) for value in trial.get("sample_tilt_mrad") or (0.0, 0.0)],
                  "depth_spread_nm": float(trial.get("depth_spread_nm") or 0.0),
                  # quantem.gpu tags the agreement trials "negative_thick_agreement" (the loss is its negative)
@@ -541,6 +546,7 @@ class SsbSession:
     def find_aberrations(self, **options) -> dict:
         """Fit the aberrations (``quantem.gpu.SSB.find_aberrations(**options)``); see ``result`` for the keys."""
         options.setdefault("search", "standard")
+        options.setdefault("show", False)
         return self.result(self.ssb.find_aberrations(**options))
 
     def fit_regions(self, regions: list[dict], parameters: dict, *,
@@ -566,10 +572,6 @@ class SsbSession:
                 "Local fitting needs the full acquisition. Open it with "
                 "SSB.open(path, ...) or pass source_path to SSB(data, ...).")
         optics = parameters["aberrations"]
-        if set(optics) != {"C10_nm", "C12_nm", "phi12_deg"}:
-            raise ValueError(
-                "Joint regional fits optimize C10, C12, tilt and depth. "
-                "Set higher-order coefficients to zero before Fit Regions.")
         if ssb.scan_sampling_A[0] != ssb.scan_sampling_A[1]:
             raise ValueError("Regional display currently needs equal row and column scan sampling.")
         started = time.perf_counter()
@@ -604,10 +606,11 @@ class SsbSession:
             ) as regional:
                 report("joint_fit", 1)
                 fitted = regional.find_aberrations(
-                    search="standard", tilt=True, num_trials=int(num_trials), refinement=refinement,
+                    search="standard",
+                    tilt=True, num_trials=int(num_trials), refinement=refinement,
                     tilt_limit_mrad=REGION_TILT_LIMIT_MRAD,
                     check_rotation=False, compare_standard=False,
-                    compute_loss=False, seed=REGION_FIT_SEED, verbose=False)
+                    compute_loss=False, seed=REGION_FIT_SEED, verbose=False, show=False)
                 fit = {
                     "seed": REGION_FIT_SEED, "aberrations": dict(fitted.aberrations),
                     "sample_tilt_mrad": list(fitted.sample_tilt_mrad),
@@ -629,13 +632,20 @@ class SsbSession:
             if tuple(phase.shape) != tuple(size * factor for size in ssb.scan_shape):
                 raise ValueError("Local correction requires a full-scan reconstruction before cropping.")
             images[f"{region['label']} · SSB"] = self.crop_native(phase, bounds, factor)
+            coordinates = np.asarray(fit["optimizer"].get("coordinates", []))
+            fit_bounds = np.asarray(fit["optimizer"].get("bounds", []))
+            if coordinates.size and fit_bounds.shape == (coordinates.size, 2):
+                bound_hit = np.any(np.minimum(coordinates - fit_bounds[:, 0],
+                                               fit_bounds[:, 1] - coordinates) < 1e-3)
+            else:
+                bound_hit = (max(abs(v) for v in fit["sample_tilt_mrad"]) > REGION_TILT_LIMIT_MRAD - 0.01
+                             or fit["depth_spread_nm"] < depth_range_nm[0] + 0.01
+                             or fit["depth_spread_nm"] > depth_range_nm[1] - 0.01)
             fits.append({
                 **region, **fit,
                 "seed_sd_mrad": None,
                 "fit_seconds": time.perf_counter() - region_started,
-                "bound_hit": (max(abs(v) for v in fit["sample_tilt_mrad"]) > REGION_TILT_LIMIT_MRAD - 0.01
-                              or fit["depth_spread_nm"] < depth_range_nm[0] + 0.01
-                              or fit["depth_spread_nm"] > depth_range_nm[1] - 0.01),
+                "bound_hit": bool(bound_hit),
                 "fit_record": {"method": "joint optics, tilt and depth", "fits": [fit],
                                "backend": ssb.backend, "num_trials": int(num_trials),
                                "refinement": refinement},

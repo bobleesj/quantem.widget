@@ -90,8 +90,8 @@ model-based, tilt-corrected fit is the default everywhere, and it is where SSB i
 | Call | Method | Use it for |
 |---|---|---|
 | `find_aberrations()` | model-based, tilt-corrected | the default: every fit |
-| `find_aberrations(tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
-| `find_aberrations(tilt=False, objective="phase_variance")` | phase variance, the earlier SSB search | a backup: reproducing older results, cross-checking a fit |
+| `find_aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
+| `find_aberrations(search="primary", tilt=False, objective="phase_variance")` | phase variance, the earlier SSB search | a backup: reproducing older results, cross-checking a fit |
 
 Phase variance chooses the aberrations that make the corrected phases of all bright-field pixels agree best: the
 least variance of the corrected phase across them. It stays as a backup, not an equal alternative: it cannot see
@@ -291,7 +291,7 @@ First the thin-sheet model, `tilt=False`. Look at the FFT: are the lattice
 spots equally sharp in every direction?
 
 ```python
-standard = ssb.find_aberrations(tilt=False, verbose=False)
+standard = ssb.find_aberrations(search="primary", tilt=False, verbose=False)
 ssb.show(show_fft=True)
 ```
 

@@ -274,7 +274,8 @@ def test_native_regions_fit_joint_models_without_replacing_the_overview(tmp_path
                        for run in fit["fit_record"]["fits"])
             assert [event["repeat"] for event in progress if event.get("stage") == "joint_fit"] == [1]
             assert progress[-1]["status"] == "complete"
-            assert all(set(run["aberrations"]) == set(START) for run in fit["fit_record"]["fits"])
+            assert all(set(START) < set(run["aberrations"]) and "C50_nm" in run["aberrations"]
+                       for run in fit["fit_record"]["fits"])
             phase, _ = ssb.preview(
                 fit["aberrations"], sample_tilt_mrad=fit["sample_tilt_mrad"],
                 depth_spread_nm=fit["depth_spread_nm"],
@@ -486,7 +487,8 @@ def test_joint_fit_reference_survives_manual_optics_and_sample_adjustments(widge
     """Return from manual tuning to the complete fitted model, without zeroing the sample."""
     widget.sample_fit_request += 1
     fitted = json.loads(widget.sample_fit_json)
-    assert widget.fitted_loss == pytest.approx(widget._ssb.state()["loss"])
+    assert widget._ssb.state()["loss"] is None  # the optional diagnostic does not block fit display
+    assert widget.fitted_loss is None
     reference = {name: fitted[name] for name in START}
     sample = {name: fitted[name] for name in ("sample_tilt_mrad", "depth_spread_nm")}
     assert json.loads(widget.fitted_sample_json) == sample
@@ -898,6 +900,7 @@ def test_crop_and_refit_keeps_the_acquisition_and_reopens_as_a_scan_region_sessi
             viewer.request_json = json.dumps({"id": 1, **START, "committed": True})
             expected = _shown(viewer).copy()
             crop_tilt = tuple(json.loads(viewer.sample_json)["sample_tilt_mrad"])
+            crop_aberrations = {**viewer._ssb.state()["aberrations"], **START}
             viewer.save_trigger += 1
             viewer.close()
             assert ssb.scan_region is None  # the caller's session is unchanged
@@ -912,7 +915,8 @@ def test_crop_and_refit_keeps_the_acquisition_and_reopens_as_a_scan_region_sessi
             assert restored.calibration_status == "Restored saved fit of scan region [16, 112, 8, 104]"
             np.testing.assert_array_equal(_shown(restored), expected)
             result = reopened.reconstruct()  # no refit: find_aberrations would raise
-            assert result.aberrations == START and result.sample_tilt_mrad == crop_tilt
+            assert result.aberrations == crop_aberrations and result.sample_tilt_mrad == crop_tilt
+            assert "C50_nm" in result.aberrations
             restored.close()
 
 
@@ -1320,6 +1324,7 @@ def test_restart_restores_the_complete_saved_full_field_without_refitting(tmp_pa
         np.testing.assert_array_equal(_shown(restored), expected)
         assert restored.calibration_status == "Restored saved full-field fit"
         assert reopened.aberrations == {**START, "C30_nm": 2}
+        assert json.loads(restored.fitted_higher_order_aberrations_json) == {"C30_nm": 2}
         assert restored.scan_detector_rotation_deg == restored.fitted_scan_detector_rotation_deg == 12
         assert json.loads(restored.sample_json) == json.loads(restored.fitted_sample_json) == {
             "sample_tilt_mrad": [3, -4], "depth_spread_nm": 12,
@@ -1862,7 +1867,8 @@ def test_the_trial_strip_lists_the_default_fits_trials_with_their_objective():
 
     session = SsbSession.__new__(SsbSession)
     session.ssb = SimpleNamespace(trial_history=[
-        record(4.0, -5.0, "negative_thick_agreement", sample_tilt_mrad=[1.0, -2.0], depth_spread_nm=8.0),
+        record(4.0, -5.0, "negative_thick_agreement", sample_tilt_mrad=[1.0, -2.0], depth_spread_nm=8.0,
+               scan_detector_rotation_deg=170.0),
         record(5.0, -9.0, "negative_thick_agreement", sample_tilt_mrad=[0.5, -1.5], depth_spread_nm=6.0),
         record(6.0, float("nan"), "negative_thick_agreement", sample_tilt_mrad=[0.0, 0.0], depth_spread_nm=0.0),
         {"params": {"C10_nm": 7.0, "C12_nm": 2.0, "phi12_deg": 30.0}, "loss": 0.3},  # a record before objectives
@@ -1872,3 +1878,83 @@ def test_the_trial_strip_lists_the_default_fits_trials_with_their_objective():
         (0, 5.0, "agreement"), (1, 4.0, "agreement"), (2, 7.0, "phase_variance")]
     assert (trials[0]["sample_tilt_mrad"], trials[0]["depth_spread_nm"], trials[0]["loss"]) == ([0.5, -1.5], 6.0, -9.0)
     assert (trials[2]["sample_tilt_mrad"], trials[2]["depth_spread_nm"]) == ([0.0, 0.0], 0.0)
+    assert trials[1]["scan_detector_rotation_deg"] == 170.0
+    assert trials[0]["higher_order"] == {}
+
+
+def test_fitted_reference_distinguishes_missing_diagnostic_and_retains_higher_order(monkeypatch):
+    """Adoption keeps a complete reset reference without inventing a zero loss."""
+    from types import SimpleNamespace
+
+    viewer = ShowPtycho(np.zeros((4, 4), dtype=np.float32))
+    state = {
+        "scan_detector_rotation_deg": 20.0,
+        "aberrations": {**START, "C30_nm": 1500.0, "C50_nm": 20000.0},
+        "sample_tilt_mrad": [1.0, -2.0], "depth_spread_nm": 10.0,
+        "scan_shape": [4, 4], "loss": None, "num_bright_field_pixels": 48,
+    }
+    viewer._ssb = SimpleNamespace(state=lambda: state, set_scan_detector_rotation=lambda _: None, trials=lambda: [])
+    monkeypatch.setattr(viewer, "_reconstruct", lambda *args, **kwargs: None)
+    viewer._adopt_session(initial=True, compute_loss=False)
+    assert viewer.fitted_loss is None
+    assert json.loads(viewer.fitted_higher_order_aberrations_json) == {"C30_nm": 1500.0, "C50_nm": 20000.0}
+    viewer.higher_order_aberrations_json = '{"C30_nm": 2500.0}'
+    assert json.loads(viewer.fitted_higher_order_aberrations_json)["C30_nm"] == 1500.0
+    state["loss"] = 0.0
+    viewer._adopt_session(initial=False, compute_loss=False)
+    assert viewer.fitted_loss == 0.0  # a measured zero remains a valid diagnostic
+    viewer.close()
+
+
+def test_restore_request_applies_complete_model_before_one_reconstruction(monkeypatch):
+    """The client restores tilt and rotation together with all optics in one request."""
+    from types import SimpleNamespace
+
+    viewer = ShowPtycho(np.zeros((4, 4), dtype=np.float32))
+    rotations, reconstructed = [], []
+    viewer._ssb = SimpleNamespace(set_scan_detector_rotation=rotations.append)
+    viewer.tilt_correction = False
+    viewer.higher_order_aberrations_json = '{"C30_nm": 2500.0}'
+    sample = {"sample_tilt_mrad": [1.0, -2.0], "depth_spread_nm": 10.0}
+    def reconstruct(request_id, optics, *, compute_loss):
+        reconstructed.append((request_id, optics, compute_loss, viewer.tilt_correction,
+                              json.loads(viewer.higher_order_aberrations_json), json.loads(viewer.sample_json)))
+    monkeypatch.setattr(viewer, "_reconstruct", reconstruct)
+    viewer._on_request({"new": json.dumps({
+        "id": 1, **START, "higher_order": {"C30_nm": 1500.0}, "sample": sample,
+        "tilt_correction": True, "scan_detector_rotation_deg": 20.0, "committed": True,
+    })})
+    assert reconstructed == [(1, START, True, True, {"C30_nm": 1500.0}, sample)]
+    assert rotations == [20.0]
+    viewer.close()
+
+
+def test_regional_higher_order_tuning_can_clear_and_restore_its_fitted_reference():
+    """A regional slider edits that model, while retaining its original reset values."""
+    from types import SimpleNamespace
+
+    region = {"id": "a", "label": "Upper", "bounds": [0, 32, 0, 32]}
+    optics = {**START, "C30_nm": 1500.0}
+    sample = {"sample_tilt_mrad": [1.0, -2.0], "depth_spread_nm": 10.0}
+    viewer = ShowPtycho(np.zeros((64, 64), dtype=np.float32), local_tilt={
+        "scan_shape": [64, 64], "regions": [region], "fits": [{**region, **sample, "aberrations": optics}],
+    })
+    viewer.scan_sampling_A = [0.5, 0.5]
+    viewer._phase_estimator = "phase_of_mean"
+    viewer._ssb = SimpleNamespace(
+        preview=lambda aberrations, **kwargs: (np.full((64, 64), aberrations.get("C30_nm", 0), np.float32), None),
+        crop_native=lambda phase, bounds, factor: phase[bounds[0]:bounds[1], bounds[2]:bounds[3]],
+    )
+    for index, higher in enumerate(({"C30_nm": 2500.0}, {}, {"C30_nm": 1500.0})):
+        viewer._preview_region({
+            "id": index, "region_id": "a", "region_bounds": region["bounds"],
+            **START, "sample": sample, "higher_order": higher, "committed": True,
+        })
+        assert "error" not in json.loads(viewer.local_tilt_preview_json)
+        fit, = viewer.region_fits
+        assert fit["aberrations"] == {**START, **higher}
+        assert fit["fitted_parameters"]["aberrations"] == optics
+        np.testing.assert_array_equal(viewer.region_images["Upper · SSB"], higher.get("C30_nm", 0))
+    assert not fit["adjusted"]
+    np.testing.assert_array_equal(_shown(viewer), 0)
+    viewer.close()

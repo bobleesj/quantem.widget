@@ -131,7 +131,7 @@ class ShowPtycho(anywidget.AnyWidget):
         hidden and one line says what they need. An SSB session, normally after
         ``ssb.find_aberrations()`` (quantem's default fit, model-based and tilt-corrected), is
         reused for its resident bright-field evidence and exclusively driven while the widget is
-        open. Joint fit, Refit SSB and Fit Regions use ``search="standard"`` on both
+        open. Joint fit, Refit SSB and Fit Regions use the same default fifth-order fit on both
         CUDA and MPS. A supplied broad fit retains its higher-order correction.
     sampling : float or (row, col), optional
         Pixel size of an array in ``units``; it draws the scale bar and calibrates the FFT. An SSB
@@ -208,9 +208,10 @@ class ShowPtycho(anywidget.AnyWidget):
     fitted_C10_nm = traitlets.Float(0.0).tag(sync=True)
     fitted_C12_nm = traitlets.Float(0.0).tag(sync=True)
     fitted_phi12_deg = traitlets.Float(0.0).tag(sync=True)
-    fitted_loss = traitlets.Float(0.0).tag(sync=True)
+    fitted_loss = traitlets.Float(None, allow_none=True).tag(sync=True)
     fitted_scan_detector_rotation_deg = traitlets.Float(0.0).tag(sync=True)
     fitted_sample_json = traitlets.Unicode("{}").tag(sync=True)
+    fitted_higher_order_aberrations_json = traitlets.Unicode("{}").tag(sync=True)
     # browser -> Python reconstruction request {"id", "C10_nm", "C12_nm", "phi12_deg", "committed"}
     request_json = traitlets.Unicode("").tag(sync=True)
     phase_bytes = traitlets.Bytes(b"").tag(sync=True)
@@ -924,7 +925,12 @@ class ShowPtycho(anywidget.AnyWidget):
             if fit["bounds"] != request["region_bounds"]:
                 raise ValueError("Region moved. Refit it before adjusting its optics.")
             sample = request["sample"]
-            optics = {name: float(request[name]) for name in ("C10_nm", "C12_nm", "phi12_deg")}
+            higher = request.get("higher_order", {
+                key: value for key, value in fit["aberrations"].items()
+                if key not in {"C10_nm", "C12_nm", "phi12_deg"}
+            })
+            optics = {**higher,
+                      **{name: float(request[name]) for name in ("C10_nm", "C12_nm", "phi12_deg")}}
             if not all(np.isfinite(v) for v in [*optics.values(), *sample["sample_tilt_mrad"], sample["depth_spread_nm"]]):
                 raise ValueError("Use finite regional optical and sample parameters.")
             model = sample if sample["depth_spread_nm"] > 0 else {}
@@ -952,7 +958,7 @@ class ShowPtycho(anywidget.AnyWidget):
         except (ValueError, RuntimeError, StopIteration) as exc:
             self.local_tilt_preview_json = json.dumps({**reply, "error": str(exc) or "Fit the selected region first."})
 
-    def _adopt_session(self, *, initial: bool) -> None:
+    def _adopt_session(self, *, initial: bool, compute_loss: bool = True, restore_tilt: bool = False) -> None:
         """Publish the session's geometry and fit as the widget's reference, then reconstruct at that fit.
 
         Runs once at construction and again after a crop refit replaces the session. The rotation slider
@@ -968,6 +974,8 @@ class ShowPtycho(anywidget.AnyWidget):
         self._adopting = True
         try:
             with self.hold_sync(), self.hold_trait_notifications():
+                if restore_tilt:
+                    self.tilt_correction = True
                 self.sample_json = json.dumps({
                     "sample_tilt_mrad": state["sample_tilt_mrad"] or [0.0, 0.0],
                     "depth_spread_nm": float(state["depth_spread_nm"] or 0.0),
@@ -980,17 +988,18 @@ class ShowPtycho(anywidget.AnyWidget):
                 self.scan_detector_rotation_deg = rotation
                 self.fitted_scan_detector_rotation_deg = rotation
                 self.fitted_C10_nm, self.fitted_C12_nm, self.fitted_phi12_deg = fitted["C10_nm"], fitted["C12_nm"], fitted["phi12_deg"]
-                self.fitted_loss = state["loss"] or 0.0
+                self.fitted_loss = state["loss"]
                 self.higher_order_aberrations_json = json.dumps({
                     key: value for key, value in fitted.items()
                     if key not in {"C10_nm", "C12_nm", "phi12_deg"}
                 })
+                self.fitted_higher_order_aberrations_json = self.higher_order_aberrations_json
                 self.trials_json = self._trials_payload()
                 self.num_bright_field_pixels = state["num_bright_field_pixels"]
         finally:
             self._adopting = False
         self._inflight_id += 1
-        self._reconstruct(self._inflight_id, fitted, compute_loss=True)
+        self._reconstruct(self._inflight_id, fitted, compute_loss=compute_loss)
         # Interaction and committed results use the same full bright-field set.
         self.num_drag_bright_field_pixels = self.num_bright_field_pixels
 
@@ -1081,6 +1090,12 @@ class ShowPtycho(anywidget.AnyWidget):
                     self.sample_json = json.dumps(request["sample"])
                 if "higher_order" in request:
                     self.higher_order_aberrations_json = json.dumps(request["higher_order"])
+                if "tilt_correction" in request:
+                    self.tilt_correction = bool(request["tilt_correction"])
+                rotation = request.get("scan_detector_rotation_deg")
+                if rotation is not None and rotation != self.scan_detector_rotation_deg:
+                    self.scan_detector_rotation_deg = float(rotation)
+                    self._ssb.set_scan_detector_rotation(float(rotation))
         finally:
             self._adopting = False
         self._inflight_id = request["id"]
@@ -1145,29 +1160,35 @@ class ShowPtycho(anywidget.AnyWidget):
         self.phase_bytes = self._last_phase.tobytes()
 
     def _on_sample_fit_request(self, change) -> None:
-        """Fit C10, C12, phi12, sample tilt and depth spread together and hand the result to the sliders.
+        """Initialize optics, tilt and depth, then jointly refine through fifth order.
 
-        The browser applies ``sample_fit_json`` to the aberration sliders and the Sample panel, which
-        triggers the reconstruction. C10 comes back as the defocus at mid-depth, not the thin-sheet optimum.
+        Publish initial and final Auto phase without a duplicate browser request.
+        C10 is the fitted mid-depth defocus.
         """
         if not change["new"]:
             return
         if not self.sample_available:
             self.sample_fit_status = "Tilt fit failed: needs a CUDA or MPS SSB session."
             return
-        self.sample_fit_status = "Fitting defocus, astigmatism, sample tilt and depth spread..."
+        self.sample_fit_status = "Fitting initial optics, tilt and depth..."
+        def show_initial(result):
+            self._adopt_session(initial=False, compute_loss=False, restore_tilt=True)
+            self.sample_fit_status = "Initial phase ready · refining through fifth order..."
         try:
             result = self._ssb.find_aberrations(
-                search="standard", tilt=True, check_rotation=False, compare_standard=False, verbose=False)
+                search="standard",
+                tilt=True, check_rotation=False, compare_standard=False, verbose=False,
+                on_initial_fit=show_initial)
         except (RuntimeError, ValueError, NotImplementedError, MemoryError) as exc:
             self.sample_fit_status = f"Tilt fit failed: {exc}"
             return
         tilt_row, tilt_col = result["sample_tilt_mrad"]
+        self._adopt_session(initial=False, compute_loss=False, restore_tilt=True)
         with self.hold_sync():
             self.fitted_C10_nm = result["aberrations"]["C10_nm"]
             self.fitted_C12_nm = result["aberrations"]["C12_nm"]
             self.fitted_phi12_deg = result["aberrations"]["phi12_deg"]
-            self.fitted_loss = result["loss"] if result["loss"] is not None else 0.0
+            self.fitted_loss = result["loss"]
             self.fitted_sample_json = json.dumps({
                 "sample_tilt_mrad": [tilt_row, tilt_col],
                 "depth_spread_nm": result["depth_spread_nm"],
@@ -1176,9 +1197,10 @@ class ShowPtycho(anywidget.AnyWidget):
         self.sample_fit_json = json.dumps({
             **result["aberrations"], "sample_tilt_mrad": [tilt_row, tilt_col], "propagator_tilt_mrad": propagator_tilt,
             "depth_spread_nm": result["depth_spread_nm"], "tilt_fit_gain": result["tilt_fit_gain"],
+            "phase_ready": True,
         })
         self.sample_fit_status = (
-            f"Tilt fit: ({tilt_row:+.1f}, {tilt_col:+.1f}) mrad · "
+            f"Fifth-order fit: tilt ({tilt_row:+.1f}, {tilt_col:+.1f}) mrad · "
             f"depth spread {result['depth_spread_nm']:.1f} nm."
         )
 
@@ -1221,7 +1243,8 @@ class ShowPtycho(anywidget.AnyWidget):
                 (row_start, row_stop, col_start, col_stop), aberrations=self._current(),
                 scan_detector_rotation_deg=self.scan_detector_rotation_deg)
             try:
-                rebuilt.find_aberrations(search="standard", tilt=True, check_rotation=False, num_trials=num_trials, verbose=False)
+                rebuilt.find_aberrations(search="standard",
+                                         tilt=True, check_rotation=False, num_trials=num_trials, verbose=False)
             except BaseException:
                 rebuilt.ssb.close()
                 raise

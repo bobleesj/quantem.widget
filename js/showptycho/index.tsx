@@ -1275,7 +1275,7 @@ function SamplePanel({
                 {fitBusy ? "Fitting…" : "Joint fit"}
               </Button>
               <Typography sx={{ ...typography.labelSmall, color: /failed|ignored/.test(fitStatus) ? STATUS_BAD : tc.textMuted, maxWidth: 520 }}>
-                {fitStatus || "The default fit, model-based and tilt-corrected: defocus, astigmatism, tilt and depth together. C10 is the mid-depth defocus."}
+                {fitStatus || "The default fit refines optics through fifth order with tilt and depth. C10 is the mid-depth defocus."}
               </Typography>
             </Box>
           ) : (
@@ -1436,7 +1436,7 @@ function HigherOrderPanel({
           {open ? "▾" : "▸"} Higher-order (n=2..5)
         </Typography>
         {activeCount > 0 && (
-          <Tooltip title={`${activeCount} higher-order magnitude(s) non-zero.  The reconstruction and its loss use the full 14-coefficient kernel; the automatic fit searches only C10, C12 and phi12.`} placement="top" arrow>
+          <Tooltip title={`${activeCount} higher-order magnitude(s) non-zero. Reconstruction uses all 14 coefficients. Automatic fitting initializes with 200 trials, then jointly refines through fifth order with tilt and depth.`} placement="top" arrow>
             <Box sx={{
               fontSize: 10, px: 0.8, py: 0.1, borderRadius: 0,
               bgcolor: STATUS_GOOD, color: "#fff", fontFamily: "monospace", cursor: "help",
@@ -1545,12 +1545,13 @@ function Explore() {
   const [overviewAutoC12] = useModelState<number>("fitted_C12_nm");
   const [overviewAutoPhi12] = useModelState<number>("fitted_phi12_deg");
   const [fittedSampleJson] = useModelState<string>("fitted_sample_json");
+  const [fittedHigherOrderJson] = useModelState<string>("fitted_higher_order_aberrations_json");
   const regionalReference = activeFit?.fitted_parameters || activeFit;
   const autoC10 = regionalReference?.aberrations?.C10_nm ?? overviewAutoC10;
   const autoC12 = regionalReference?.aberrations?.C12_nm ?? overviewAutoC12;
   const autoPhi12 = regionalReference?.aberrations?.phi12_deg ?? overviewAutoPhi12;
   const [autoRotation] = useModelState<number>("fitted_scan_detector_rotation_deg");
-  const [autoLoss] = useModelState<number>("fitted_loss");
+  const [autoLoss] = useModelState<number | null>("fitted_loss");
   // an array carries the pixel size of its image; a session the scan step, which the output sampling divides
   const [objectSamplingA] = useModelState<number[]>("object_sampling_A");
   const [scanSamplingA] = useModelState<number[]>("scan_sampling_A");
@@ -2127,7 +2128,7 @@ function Explore() {
   const [sampleOpen, setSampleOpen] = React.useState(false);
   const [sampleFitBusy, setSampleFitBusy] = React.useState(false);
   React.useEffect(() => {
-    if (/^Tilt fit(:| failed)/.test(sampleFitStatus || "")) setSampleFitBusy(false);
+    if (/^(Tilt fit(:| failed)|Fifth-order fit:)/.test(sampleFitStatus || "")) setSampleFitBusy(false);
   }, [sampleFitStatus]);
   const requestSampleFit = React.useCallback(() => {
     if (regionContextRef.current) {
@@ -2174,6 +2175,8 @@ function Explore() {
       ...(region ? {region_id:region.id,region_bounds:region.bounds} : {}),
       sample: { sample_tilt_mrad: [sample.tiltRowMrad, sample.tiltColMrad], depth_spread_nm: sample.depthSpreadNm },
       higher_order: higherOrderRef.current,
+      tilt_correction: model.get("tilt_correction") !== false,
+      scan_detector_rotation_deg: model.get("scan_detector_rotation_deg"),
     }});
   }, [model]);
 
@@ -2283,6 +2286,7 @@ function Explore() {
   interface OptunaTrial {
     rank: number; C10_nm: number; C12_nm: number; phi12_deg: number; loss: number;
     objective?: "agreement" | "phase_variance"; sample_tilt_mrad?: [number, number]; depth_spread_nm?: number;
+    higher_order?: Record<string, number>; scan_detector_rotation_deg?: number | null;
   }
   const trials: OptunaTrial[] = React.useMemo(() => {
     if (!trialsJson) return [];
@@ -2302,17 +2306,28 @@ function Explore() {
   const doViewTrial = React.useCallback((trial: OptunaTrial) => {
     setActiveTrialRank(trial.rank);
     setViewPin(null);   // trials + pins are mutually exclusive selections
+    higherOrderRef.current = trial.higher_order || {};
+    adoptingPanelRef.current = true;
+    setHigherOrder(higherOrderRef.current);
+    if (!regionContextRef.current && trial.scan_detector_rotation_deg != null) {
+      rotationDegRef.current = trial.scan_detector_rotation_deg;
+      model.set("scan_detector_rotation_deg", trial.scan_detector_rotation_deg);
+    }
     if (trial.sample_tilt_mrad && trial.depth_spread_nm != null && !regionContextRef.current) {
       // a trial is its optics with its own sample model (tilt 0 and no depth for a tilt-0 or phase-variance trial)
       const trialSample = { tiltRowMrad: trial.sample_tilt_mrad[0], tiltColMrad: trial.sample_tilt_mrad[1],
                             depthSpreadNm: trial.depth_spread_nm };
       sampleRef.current = trialSample;
+      samplePreviewRef.current = trialSample;
       adoptingPanelRef.current = true;
       setSample(trialSample);
     }
+    previousTiltCorrectionRef.current = true;
+    model.set("tilt_correction", true);
+    if (webgpuStandalone) model.save_changes();
     setC10(trial.C10_nm); setC12(trial.C12_nm); setPhi12(trial.phi12_deg);
     sendCommit(trial.C10_nm, trial.C12_nm, trial.phi12_deg);
-  }, [sendCommit]);
+  }, [sendCommit, model, webgpuStandalone]);
   const [sweepParam, setSweepParam] = React.useState<SweepParam>("c10");
   const sweepIdxRef = React.useRef(0);
   const sweepDirRef = React.useRef<1 | -1>(1);  // boomerang direction
@@ -2497,7 +2512,7 @@ function Explore() {
       const sent = sentRequestsRef.current;
       const answered = sent.findIndex(request => request.id === result.id && request.regionId === regionId);
       if (sent.length && answered < 0) {
-        if (regionId === shown && !regional && result.loss != null) setLoss(result.loss);  // a Python-side redraw
+        if (regionId === shown && !regional) setLoss(result.loss ?? null);  // a Python-side redraw
         return;
       }
       // Replies arrive in request order: this one also retires any older request.
@@ -2511,7 +2526,7 @@ function Explore() {
         return;
       }
       setPreviewError('');
-      if (result.loss != null && regionId === shown) setLoss(result.loss);
+      if (regionId === shown) setLoss(result.loss ?? null);
 
       // Drain pending drag value if user moved the slider while we were busy.
       const pending = pendingDragRef.current;
@@ -3001,7 +3016,7 @@ function Explore() {
     if (regionContextRef.current) return;
     if (!sampleFitJson || sampleFitJson === appliedSampleFitRef.current) return;
     appliedSampleFitRef.current = sampleFitJson;
-    let fit: { C10_nm: number; C12_nm: number; phi12_deg: number; sample_tilt_mrad: [number, number]; depth_spread_nm: number };
+    let fit: { C10_nm: number; C12_nm: number; phi12_deg: number; sample_tilt_mrad: [number, number]; depth_spread_nm: number; phase_ready?: boolean };
     try { fit = JSON.parse(sampleFitJson); } catch { return; }
     const fittedSample = { tiltRowMrad: fit.sample_tilt_mrad[0], tiltColMrad: fit.sample_tilt_mrad[1], depthSpreadNm: fit.depth_spread_nm };
     sampleRef.current = fittedSample;
@@ -3009,7 +3024,7 @@ function Explore() {
     setSample(fittedSample);
     setSampleOpen(true);
     setC10(fit.C10_nm); setC12(fit.C12_nm); setPhi12(fit.phi12_deg);
-    sendCommit(fit.C10_nm, fit.C12_nm, fit.phi12_deg);
+    if (!fit.phase_ready) sendCommit(fit.C10_nm, fit.C12_nm, fit.phi12_deg);
   }, [sampleFitJson, sendCommit, regionalMode]);
 
   const fitIdentity = JSON.stringify(activeFit?.fit_record || null);
@@ -3022,13 +3037,13 @@ function Explore() {
     const values = context ? (activeFit ? {
       c10:activeFit.aberrations.C10_nm,c12:activeFit.aberrations.C12_nm,phi12:activeFit.aberrations.phi12_deg,
       sample:{tiltRowMrad:activeFit.sample_tilt_mrad[0],tiltColMrad:activeFit.sample_tilt_mrad[1],depthSpreadNm:activeFit.depth_spread_nm},
-      higher:{},loss:null,
+      higher:Object.fromEntries(Object.entries(activeFit.aberrations).filter(([key]) => !['C10_nm','C12_nm','phi12_deg'].includes(key))),loss:null,
     } : null) : {
       c10:overview.C10_nm ?? overviewAutoC10,c12:overview.C12_nm ?? overviewAutoC12,
       phi12:overview.phi12_deg ?? overviewAutoPhi12,
       sample:{tiltRowMrad:overviewSample.sample_tilt_mrad?.[0] || 0,
         tiltColMrad:overviewSample.sample_tilt_mrad?.[1] || 0,depthSpreadNm:overviewSample.depth_spread_nm || 0},
-      higher:JSON.parse(model.get('higher_order_aberrations_json') || '{}'),loss:overview.loss ?? autoLoss,
+      higher:JSON.parse(model.get('higher_order_aberrations_json') || '{}'),loss:'loss' in overview ? overview.loss : autoLoss,
     };
     if (!values) return;
     adoptingPanelRef.current=true;
@@ -3044,6 +3059,12 @@ function Explore() {
   const doReset = () => {
     // auto values arrive asynchronously from Python; skip until init landed
     if (!initRef.current) return;
+    const fittedHigher = regionalMode && regionalReference
+      ? Object.fromEntries(Object.entries(regionalReference.aberrations).filter(([key]) => !['C10_nm', 'C12_nm', 'phi12_deg'].includes(key))) as Record<string, number>
+      : JSON.parse(fittedHigherOrderJson || '{}');
+    higherOrderRef.current = fittedHigher;
+    adoptingPanelRef.current = true;
+    setHigherOrder(fittedHigher);
     setC10(autoC10); setC12(autoC12); setPhi12(autoPhi12);
     if (regionalMode && regionalReference) {
       const restored={tiltRowMrad:regionalReference.sample_tilt_mrad[0],tiltColMrad:regionalReference.sample_tilt_mrad[1],depthSpreadNm:regionalReference.depth_spread_nm};
@@ -3054,8 +3075,17 @@ function Explore() {
         const restored={tiltRowMrad:fittedSample.sample_tilt_mrad[0],tiltColMrad:fittedSample.sample_tilt_mrad[1],depthSpreadNm:fittedSample.depth_spread_nm};
         sampleRef.current=restored; adoptingPanelRef.current=true; setSample(restored);
       }
-      if(autoRotation != null) setRotationDeg(autoRotation);
+      if(autoRotation != null) {
+        rotationDegRef.current = autoRotation;
+        model.set("scan_detector_rotation_deg", autoRotation);
+      }
     }
+    // Restore the corrected model, including the preview toggle. The live
+    // request carries it with the optics so Python reconstructs only once.
+    previousTiltCorrectionRef.current = true;
+    samplePreviewRef.current = sampleRef.current;
+    model.set("tilt_correction", true);
+    if (webgpuStandalone) model.save_changes();
     sendCommit(autoC10, autoC12, autoPhi12, autoRotation ?? rotationDegRef.current);
   };
   const resetZoom = () => {
@@ -3427,7 +3457,7 @@ function Explore() {
   const fftPixelSize = fftOff && fftRealPixelSize > 0 ? 1 / (fftOff.width * fftRealPixelSize) : 0;
 
   /* --- Derived --- */
-  const delta = loss != null && autoLoss > 0 ? loss - autoLoss : null;
+  const delta = loss != null && autoLoss != null ? loss - autoLoss : null;
   const fftAsPanel = showFFT && fftPlacement === "panel";
   const fftAsInset = showFFT && fftPlacement === "inset";
   const realPanelCount = 1 + (extraRealViews.amp ? 1 : 0) + (extraRealViews.complex ? 1 : 0);
@@ -3838,9 +3868,7 @@ function Explore() {
                 </Typography>
               </Tooltip>
               {loss != null && !regionalMode && (
-                <Tooltip title={hoActive
-                  ? "BF-disk phase variance from the full 14-coef kernel, a diagnostic: the default fit maximises the tilt-corrected model's agreement with the data, not this number.  Drag a higher-order slider and watch this number: lower = sharper reconstruction.  Compare to the HO=0 baseline to confirm your tuning actually helps."
-                  : "Variance of the reconstructed phase inside the BF (brightfield) disk, the central region of the diffraction pattern where the direct beam lands.  SSB uses that region's scattered intensity to recover phase; lower loss ≈ sharper reconstruction.  A diagnostic: the default fit maximises the tilt-corrected model's agreement with the data instead."} placement="top" arrow>
+                <Tooltip title="Phase variance across the corrected bright-field pixel images. Lower values indicate closer agreement between those images, not a guarantee of sharper or more accurate phase. The default fit optimizes model agreement; this is a separate diagnostic." placement="top" arrow>
                   <Typography sx={{ ...typography.label, ...statChip(tc, true), cursor: "help" }}>
                     loss <Box component="span" sx={{ color: tc.accent }}>{formatNumber(loss, 8)}</Box>
                     {delta != null && (
@@ -3901,7 +3929,7 @@ function Explore() {
               <Box sx={{ flex: 1 }} />
               {tuning && (
                 <Typography sx={{ ...typography.value, color: tc.textMuted, opacity: 0.7 }}>
-                  auto {autoC10?.toFixed(1)} / {autoC12?.toFixed(1)} / {autoPhi12?.toFixed(0)}°{!regionalMode ? ` = ${autoLoss?.toFixed(8)}` : ''}
+                  auto {autoC10?.toFixed(1)} / {autoC12?.toFixed(1)} / {autoPhi12?.toFixed(0)}°{!regionalMode && autoLoss != null ? ` · variance ${autoLoss.toFixed(8)}` : ''}
                 </Typography>
               )}
             </Box>
@@ -4330,10 +4358,8 @@ function Explore() {
           </Box>
         )}
 
-        {/* Optuna trials strip: scrollable, loss-ranked.  Click any tile to
-            preview that trial's aberrations.  Best-loss tile is highlighted so
-            the user can immediately verify that Nelder-Mead's refined point is near
-            (or past) Optuna's best. */}
+        {/* Retained search candidates carry their own optics and sample model.
+            The fitted reference includes the later local refinement. */}
         {trials.length > 0 && (
           <Box sx={{ pt: `${SPACING.XS}px`, borderTop: `1px solid ${tc.border}` }}>
             <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} sx={{ mb: `${SPACING.XS}px` }}>
@@ -4345,28 +4371,23 @@ function Explore() {
               </Box>
               <Box sx={{ flex: 1 }} />
               {trials.length > 0 && (
-                <Tooltip title={`Showing ${trials.length} retained trial previews ranked by ${trialObjectiveText}; this is not the total search budget. The local solver then refined the strongest candidates. The refined fit's loss is the phase-variance diagnostic (${autoLoss?.toFixed(8) ?? '-'}); a trial shows its own objective's score: agreement (higher is better) for the default model fit, phase variance (lower is better) for the backup.`} placement="top" arrow>
+                <Tooltip title={`Showing ${trials.length} retained trial previews ranked by ${trialObjectiveText}; this is not the total search budget. The refined fit's phase-variance diagnostic is ${autoLoss == null ? 'not measured' : autoLoss.toFixed(8)}. A trial shows its own objective's score: model agreement (higher is better) or phase variance (lower is better). Different objectives cannot be compared directly.`} placement="top" arrow>
                   <Typography sx={{ ...typography.value, color: tc.textMuted, cursor: "help" }}>
-                    Refined fit {autoLoss?.toFixed(8) ?? '-'}  ·  best trial {trialScoreText(trials[0])}
+                    Refined variance {autoLoss?.toFixed(8) ?? 'not measured'}  ·  best trial {trialScoreText(trials[0])}
                   </Typography>
                 </Tooltip>
               )}
             </Stack>
             {trialsExpanded && (
               <Stack direction="row" spacing={`${SPACING.XS}px`} sx={{ overflowX: "auto", pb: 0.5 }}>
-                {/* First tile: the Nelder-Mead refined result.  This is what
-                    ssb.aberrations contains after ssb.refine() and what the
-                    widget's "auto" reference is set to.  Visually distinct from
-                    the Optuna tiles so users know it's the refined winner, not
-                    a raw trial. */}
+                {/* The complete fitted reference, including higher-order terms. */}
                 {autoC10 != null && autoC12 != null && autoPhi12 != null && (
                   <Tooltip title="The local solver refined the best Optuna trial.  Click to jump sliders back to this result.  This is what 'auto' in the stats bar refers to." placement="top" arrow>
                     <Box
                       onClick={() => {
                         setActiveTrialRank(null);
                         setViewPin(null);
-                        setC10(autoC10); setC12(autoC12); setPhi12(autoPhi12);
-                        sendCommit(autoC10, autoC12, autoPhi12);
+                        doReset();
                       }}
                       sx={{
                         flexShrink: 0, cursor: "pointer", userSelect: "none",
@@ -4382,7 +4403,7 @@ function Explore() {
                           Refined fit
                         </Typography>
                         <Typography sx={{ fontSize: 11, color: STATUS_GOOD, fontFamily: "monospace", fontWeight: "bold" }}>
-                          {autoLoss?.toFixed(8) ?? '-'}
+                          {autoLoss?.toFixed(8) ?? 'not measured'}
                         </Typography>
                       </Stack>
                       <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: tc.textMuted, whiteSpace: "nowrap" }}>

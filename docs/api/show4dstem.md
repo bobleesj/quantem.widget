@@ -264,6 +264,12 @@ Python GPU allocation, so it does not expose a "free GPU memory" control.
 
 ## Compute SSB
 
+The default on CUDA and MPS uses 200 initial TPE trials, then jointly
+refines aberrations through fifth order with sample tilt and depth.
+`ssb.find_aberrations(search="broad")` adds broader exploration.
+The initial result is provisional; final refinement can change its phase.
+
+
 With a live kernel on CUDA or MPS, the **Compute SSB** control, or
 `viewer.compute_ssb()`, runs quantem.gpu's default fit,
 `quantem.gpu.SSB(...).find_aberrations()`, on the current 4D frame: the SSB
@@ -277,7 +283,7 @@ or `.qem` file:
 from quantem.gpu.io import load
 
 viewer = Show4DSTEM(load("scan.qem"))
-phase = viewer.compute_ssb()             # tilt-corrected: 200 trials plus refinement
+phase = viewer.compute_ssb()             # 200 initial trials, then joint fifth-order refinement
 control = viewer.compute_ssb(tilt=False)  # the same model at tilt 0
 backup = viewer.compute_ssb(tilt=False, objective="phase_variance")  # the phase-variance backup
 ```
@@ -287,8 +293,8 @@ The three fits are quantem.gpu's:
 | Call | Method | Use it for |
 |---|---|---|
 | `find_aberrations()` | model-based, tilt-corrected | the default: every fit |
-| `find_aberrations(tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
-| `find_aberrations(tilt=False, objective="phase_variance")` | phase variance, the earlier SSB search | a backup: reproducing older results, cross-checking a fit |
+| `find_aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
+| `find_aberrations(search="primary", tilt=False, objective="phase_variance")` | phase variance, the earlier SSB search | a backup: reproducing older results, cross-checking a fit |
 
 Phase variance chooses the aberrations that make the corrected phases of all bright-field pixels agree best: the
 least variance of the corrected phase across them. It stays as a backup, not an equal alternative: it cannot see

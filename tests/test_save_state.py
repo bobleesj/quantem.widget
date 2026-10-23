@@ -545,7 +545,7 @@ def test_show2d_sibling_static_output_via_nbconvert(tmp_path):
     anymodel = next(s for s in widget_states.values() if s.get("model_name") == "AnyModel")
     body = dict(anymodel["state"])
     body.pop("_esm", None)
-    body.pop("_static_fallback_image", None)
+    body.pop("_static_fallback_jpeg", None)
     body.pop("_static_fallback_mime", None)
     buffer_bytes = sum(len(b["data"]) for b in anymodel.get("buffers", []))
     assert buffer_bytes < 20_000

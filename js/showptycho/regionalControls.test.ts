@@ -8,7 +8,8 @@ const DEFAULTS: Record<string, unknown> = {
   C10_max_nm: 40, C10_min_nm: -40, auto_sampling_note: '', auto_upsampling_factor: 1,
   calibration_path: '', calibration_saved_at: '', calibration_status: '',
   crop_refit_available: false, crop_refit_request_json: '', crop_refit_status: '',
-  fitted_C10_nm: 0, fitted_C12_nm: 0, fitted_loss: 0, fitted_phi12_deg: 0,
+  fitted_C10_nm: 0, fitted_C12_nm: 0, fitted_loss: null, fitted_phi12_deg: 0,
+  fitted_higher_order_aberrations_json: '{}',
   fitted_sample_json: '{}', fitted_scan_detector_rotation_deg: 0, display_negate_phase: false,
   higher_order_aberrations_json: '{}', initial_fft_on: false, local_tilt_active_region: '',
   local_tilt_can_fit: false, local_tilt_can_reconstruct: false, local_tilt_enabled: false,
@@ -136,6 +137,64 @@ test('a late regional reply does not replace the overview loss', async () => {
   dragC10(6);
   expect(model.sent).toHaveLength(2);
   expect(model.sent[1].request.region_id).toBeUndefined();
+});
+
+test('unmeasured fitted variance is not displayed as zero or a sharper-image score', async () => {
+  const model = session({
+    local_tilt_enabled: false, local_tilt_active_region: '', fitted_loss: null,
+    result_json: JSON.stringify({ id: 0, ...START, loss: null }),
+    trials_json: JSON.stringify([{ rank: 0, ...START, loss: -0.6, objective: 'agreement' }]),
+  });
+  await mount(model);
+  expect(el.textContent).toContain('Refined variance not measured');
+  expect(el.textContent).not.toContain('0.00000000');
+  expect(el.textContent).not.toContain('undefined');
+  act(() => model.set('fitted_loss', 0));
+  expect(el.textContent).toContain('Refined variance 0.00000000');
+});
+
+test('trial preview and restore use each complete fitted model, including tilt and rotation', async () => {
+  const higher = { C30_nm: 1500, C50_nm: 20000 };
+  const sample = { sample_tilt_mrad: [1, -2], depth_spread_nm: 10 };
+  const model = session({
+    local_tilt_enabled: false, local_tilt_active_region: '', tilt_correction: false,
+    fitted_scan_detector_rotation_deg: 20,
+    fitted_sample_json: JSON.stringify(sample), sample_json: JSON.stringify(sample),
+    fitted_higher_order_aberrations_json: JSON.stringify(higher),
+    higher_order_aberrations_json: JSON.stringify({ C30_nm: 2500 }),
+    trials_json: JSON.stringify([{
+      rank: 0, ...START, loss: -0.6, objective: 'agreement',
+      sample_tilt_mrad: [0.5, 1.5], depth_spread_nm: 6,
+      higher_order: {}, scan_detector_rotation_deg: 200,
+    }]),
+  });
+  await mount(model);
+  const stripToggle = Array.from(el.querySelectorAll('div')).find(node => node.childElementCount === 0 && node.textContent?.startsWith('▶ Trial previews'))!;
+  act(() => stripToggle.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  const trial = Array.from(el.querySelectorAll('p')).find(node => node.textContent === '#1')!;
+  act(() => trial.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  const first = model.sent.at(-1).request;
+  expect(first).toMatchObject({ higher_order: {}, tilt_correction: true, scan_detector_rotation_deg: 200,
+    sample: { sample_tilt_mrad: [0.5, 1.5], depth_spread_nm: 6 } });
+  act(() => model.set('result_json', JSON.stringify({ id: first.id, ...START, loss: null })));
+  act(() => model.set('tilt_correction', false));
+  act(() => (el.querySelector('[aria-label="Restore joint fit"]') as HTMLButtonElement).click());
+  expect(model.sent.at(-1).request).toMatchObject({ ...START, higher_order: higher, sample,
+    tilt_correction: true, scan_detector_rotation_deg: 20 });
+  expect(model.get('tilt_correction')).toBe(true);
+});
+
+test('joint fit becomes available again after fifth-order completion', async () => {
+  const model = session({ local_tilt_enabled: false, local_tilt_active_region: '' });
+  await mount(model);
+  const toggle = Array.from(el.querySelectorAll('p')).find(node => node.textContent?.includes('Sample tilt (thick SSB)'))!;
+  act(() => toggle.parentElement!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  const button = Array.from(el.querySelectorAll('button')).find(node => node.textContent === 'Joint fit')!;
+  act(() => button.click());
+  expect(button.disabled).toBe(true);
+  act(() => model.set('sample_fit_status', 'Fifth-order fit: tilt (1.0, -2.0) mrad · depth spread 10.0 nm.'));
+  expect(button.disabled).toBe(false);
+  expect(button.textContent).toBe('Joint fit');
 });
 
 test('wheel zoom works through region overlays and stays independent of other panels and fits', async () => {

@@ -1898,8 +1898,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 method = "with sample tilt" if tilt else "at tilt 0" if objective == "agreement" else "by phase variance"
                 self.ssb_compute_status = (f"Fitting SSB aberrations {method} ({trials} trials"
                                            f"{', refined' if do_refine else ''}, {num_bright_field_pixels} BF pixels)...")
-                result = ssb.find_aberrations(search="standard", tilt=tilt, objective=objective, num_trials=trials, refinement=refinement,
-                                              seed=int(seed), verbose=verbose, **fit_options)
+                search = ("standard" if tilt and objective == "agreement" and not fit_options
+                          and trials > 0 and refinement is not None else "primary")
+                result = ssb.find_aberrations(search=search,
+                                              tilt=tilt, objective=objective, num_trials=trials, refinement=refinement,
+                                              seed=int(seed), verbose=verbose, show=False, **fit_options)
                 self._ssb_compute_sample = None if result.get("sample_tilt_mrad") is None else {
                     "sample_tilt_mrad": result["sample_tilt_mrad"], "depth_spread_nm": result["depth_spread_nm"]}
             # quantem.gpu centres a scan its FFT cannot take in a padded grid; keep the measured positions
