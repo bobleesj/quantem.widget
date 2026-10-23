@@ -492,25 +492,51 @@ def test_show2d_sibling_static_output_via_nbconvert(tmp_path):
     Both are acceptable as long as the output can render statically and widget
     metadata stays tiny.
     """
+    import inspect
     import json
+    import os
+    from pathlib import Path
     import subprocess
     import sys
 
     import nbformat
 
+    # Pin both processes: `python -m jupyter nbconvert` can dispatch a
+    # different environment's executable from PATH, and a user's python3
+    # kernelspec can point at another installation.
+    kernel_name = "quantem-save-state-test"
+    kernel_dir = tmp_path / "jupyter" / "kernels" / kernel_name
+    kernel_dir.mkdir(parents=True)
+    (kernel_dir / "kernel.json").write_text(json.dumps({
+        "argv": [sys.executable, "-m", "ipykernel_launcher", "-f", "{connection_file}"],
+        "display_name": kernel_name,
+        "language": "python",
+        "env": {"PYTHONPATH": os.pathsep.join(str(Path(p).resolve()) for p in sys.path)},
+    }))
+    env = {
+        **os.environ,
+        "JUPYTER_PATH": str(tmp_path / "jupyter"),
+        "JUPYTER_CONFIG_DIR": str(tmp_path / "config"),
+    }
+    widget_source = str(Path(inspect.getfile(Show2D)).resolve())
     nb = nbformat.v4.new_notebook()
     nb.cells = [nbformat.v4.new_code_cell(
+        "import inspect, sys\n"
+        "from pathlib import Path\n"
         "import numpy as np\n"
         "from IPython.display import display\n"
         "from quantem.widget import Show2D\n"
-        "display(Show2D(np.random.rand(48, 48).astype('float32'), verbose=False))\n"
+        f"assert Path(sys.executable).resolve() == Path({sys.executable!r}).resolve()\n"
+        f"assert Path(inspect.getfile(Show2D)).resolve() == Path({widget_source!r})\n"
+        "display(Show2D(np.random.default_rng(17).random((48, 48), dtype=np.float32), verbose=False))\n"
     )]
     nb_path = tmp_path / "show2d_sibling.ipynb"
     nbformat.write(nb, nb_path)
     subprocess.run(
-        [sys.executable, "-m", "jupyter", "nbconvert", "--to", "notebook",
-         "--execute", "--inplace", str(nb_path)],
-        check=True, capture_output=True, timeout=180)
+        [sys.executable, "-m", "nbconvert", "--to", "notebook",
+         "--execute", f"--ExecutePreprocessor.kernel_name={kernel_name}",
+         "--inplace", str(nb_path)],
+        check=True, capture_output=True, timeout=180, env=env)
     executed = nbformat.read(nb_path, as_version=4)
     outputs = executed.cells[0].outputs
     display_outputs = [o for o in outputs if o.output_type == "display_data"]
@@ -534,19 +560,23 @@ def test_show2d_sibling_static_output_via_nbconvert(tmp_path):
         assert "quantem-static-fallback" in fallback.data["text/html"]
         assert fallback.metadata.get("quantem.widget", {}).get("static_fallback") is True
     # metadata.widgets guard. nbclient reconstructs widget state by replaying
-    # comm traffic, so two known constants of headless execution appear here no
-    # matter what get_state() trims: the anywidget JS bundle (_esm) and the
-    # initial 48x48 frame upload (~12 KB, needed for live render; a real Lab
-    # save goes through the trimmed get_state(), covered by
-    # test_full_snapshot_trims_bulk_buffers). Everything else must stay tiny -
-    # this fails if e.g. the static PNG or a duplicate pixel buffer starts
-    # leaking into the synced state.
+    # comm traffic, so the JS bundle and initial 48x48 live frame (~12 KB)
+    # appear here regardless of get_state() trimming. The single compact
+    # preview is intentional for cold reopen and must match the saved output.
+    # Everything else must stay tiny, including any accidental extra image or
+    # pixel buffer. Real Lab saves use the trimmed full snapshot tested below.
     widget_states = executed.metadata["widgets"]["application/vnd.jupyter.widget-state+json"]["state"]
     anymodel = next(s for s in widget_states.values() if s.get("model_name") == "AnyModel")
     body = dict(anymodel["state"])
     body.pop("_esm", None)
-    body.pop("_static_fallback_jpeg", None)
-    body.pop("_static_fallback_mime", None)
+    preview = body.pop("_static_fallback_image")
+    assert body.pop("_static_fallback_mime") == image_key == "image/jpeg"
+    assert preview == fallback.data[image_key]
+    assert len(preview) < 200_000
+    with Image.open(io.BytesIO(base64.b64decode(preview, validate=True))) as image:
+        assert image.format == "JPEG"
+        assert min(image.size) > 10
+        assert np.asarray(image.convert("RGB")).std() > 0
     buffer_bytes = sum(len(b["data"]) for b in anymodel.get("buffers", []))
     assert buffer_bytes < 20_000
     assert len(json.dumps(body)) < 20_000
