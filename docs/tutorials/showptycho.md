@@ -82,6 +82,10 @@ before or after the fit.
 
 ## SSB in quantem: model-based by default
 
+The standard workflow uses 200 initial TPE trials, then joint Newton refinement
+through fifth-order aberrations with sample tilt and depth.
+`find_aberrations(search="broad")` adds higher-order exploration.
+
 quantem fits SSB aberrations with a physical model of the measurement, not an image-quality score. For each trial
 set of aberrations, and the sample's tilt and thickness, it predicts the double-overlap data the detector should have
 recorded, then keeps the parameters whose prediction agrees best with the measurement (least squares). This
@@ -115,13 +119,17 @@ two branches give conjugate phases, so one shows the gold particles bright and
 the other dark.
 
 `reconstruct()` fits the aberrations on both branches, independently, and keeps
-the one whose atomic columns carry positive phase. On this scan the columns do
-not decide (z +0.0), so the phase tail does: SSB keeps 358 degrees, where the
-phase has the longer positive tail (skewness +0.22 against -0.22), and one line
-says so. The fit gives C10 near -18.4 nm, C12 2.6 nm and phi12 -37.6 degrees.
+the one whose atomic columns carry positive phase. In an earlier primary-only
+gold run, the columns did not decide (z +0.0), so the phase tail selected
+358 degrees (skewness +0.22 against -0.22). That historical fit gave
+C10 near -18.4 nm, C12 2.6 nm and phi12 -37.6 degrees. These are reference values
+from the earlier model, not
+predictions for the current fifth-order default; inspect `fit.report()` for
+your run.
 
-Look at both branches yourself. The fit stays on the native scan grid; each
-branch's own fit is shown reconstructed at `upsampling_factor="auto"`, the
+Look at both branches yourself. These are the primary fits used to choose the
+rotation before fifth-order refinement. Fitting stays on the native scan grid;
+each branch's own fit is shown reconstructed at `upsampling_factor="auto"`, the
 smallest factor whose output grid holds the whole SSB bandwidth (4× for the
 0.5 Å gold step):
 
@@ -145,19 +153,19 @@ not a measurement: on crystals the preferred tail can change with the region, so
 check that a crop of the field agrees before you trust the angle. If you know
 the angle from your microscope, pass it: `SSB(data, scan_detector_rotation_deg=358)`.
 
-The fit is the default of the table above, model-based and tilt-corrected. To
-constrain it, or to run one of the other two methods, call `find_aberrations`
-before `reconstruct()`; the reconstruction then reuses that fit:
+For an optional primary-only fit with custom bounds, call `find_aberrations`
+before `reconstruct()`; reconstruction then reuses that fit. This replaces the
+standard fifth-order fit with the explicitly selected primary model:
 
 ```python
 search_ranges = {
     "C10_nm": (-30.0, 30.0),
     "C12_nm": (0.0, 20.0),
 }
-fit = ssb.find_aberrations(search_ranges=search_ranges)
+fit = ssb.find_aberrations(search="primary", search_ranges=search_ranges)
 ```
 
-These are the joint-fit defaults, written explicitly so you can edit them.
+These are the primary joint-fit defaults, written explicitly so you can edit them.
 The astigmatism angle uses its full period internally; the joint fit does not
 accept an independent `phi12_deg` range. The two alternative methods remain
 available through the calls in the method table above.
@@ -169,11 +177,11 @@ viewer = ssb.show(local_tilt=True, show_fft=True, save_dir="ssb-results")
 viewer
 ```
 
-`ssb.show()` opens ShowPtycho on the fitted session, at 358 degrees and C10
-near -18.4 nm, and shows the phase and its FFT. Output sampling is chosen from
-the calibration: 4x here, 0.125 A per pixel. Drag C10, C12 and phi12 to see the
-phase update live. The launch table identifies saved values, overrides and
-estimates. **Save** restores a matching full-field joint fit and regional state
+`ssb.show()` opens ShowPtycho on the session's current fit and shows its phase
+and FFT. The launch table gives the angle and aberrations from your run. Output
+sampling is chosen from the calibration: 4x here, 0.125 A per pixel. Drag C10,
+C12 and phi12 to see the phase update live. The launch table identifies saved
+values, overrides and estimates. **Save** restores a matching full-field joint fit and regional state
 on restart.
 
 The [H5/QEM handoff notebook](showptycho_to_myptycho.ipynb) initializes independent
@@ -216,9 +224,9 @@ the HTML export (the browser cannot bin), so keep the whole workflow un-binned.
 
 Enable **Local Tilt** to draw independent rectangular regions on the overview.
 Moving or resizing a region invalidates its previous fit; automatic fitting
-runs one joint fit with seed 42, 200 trials and Newton refinement. Aberrations, tilt and depth
-are fitted together. Select a region to inspect and adjust its own controls.
-The overview and other regional models are retained.
+runs one standard fit with seed 42: 200 initial TPE trials, then joint Newton
+refinement through fifth order with tilt and depth. Select a region to inspect
+and adjust its own controls. The overview and other regional models are retained.
 
 A region estimates a local model, but its displayed phase is a crop of the
 **full-scan reconstruction** using that model. Smaller regions may have weaker
@@ -291,16 +299,16 @@ First the thin-sheet model, `tilt=False`. Look at the FFT: are the lattice
 spots equally sharp in every direction?
 
 ```python
-standard = ssb.find_aberrations(search="primary", tilt=False, verbose=False)
+ordinary = ssb.find_aberrations(search="primary", tilt=False, verbose=False)
 ssb.show(show_fft=True)
 ```
 
-Now let the sample lean. `find_aberrations()`, the default, fits the same aberrations together
-with a tilt and a depth spread. Compare: which spots sharpened, and did the
-defocus move?
+Now let the sample lean, keeping `search="primary"` on both sides so both fits
+use the same aberration order. The second fit also models tilt and depth spread.
+Compare: which spots sharpened, and did the defocus move?
 
 ```python
-tilted = ssb.find_aberrations(verbose=False)
+tilted = ssb.find_aberrations(search="primary", tilt=True, verbose=False)
 ssb.show(show_fft=True)                 # opens on the fitted tilt; drag the Sample tilt sliders
 ```
 
@@ -308,17 +316,17 @@ ssb.show(show_fft=True)                 # opens on the fitted tilt; drag the Sam
 
 ```python
 import pandas as pd
-pd.concat([standard.report(), tilted.report()])
+pd.concat([ordinary.report(), tilted.report()])
 ```
 
-The tilt comes back as about (3.0, -4.1) mrad, the value built into the
-simulation, and `tilted.tilt_fit_gain` is above 1.2: the leaning model
+An earlier primary-model run recovered about (3.0, -4.1) mrad, near the value
+built into the simulation, with `tilted.tilt_fit_gain` above 1.2: the leaning model
 explains the data better than the thin sheet. An untilted control crystal
-gives (-0.3, -0.1) mrad. Reading the table:
+gave (-0.3, -0.1) mrad in that test. Read the table from your own run:
 
 - `C10` is now the defocus at the middle of the crystal, so it can differ from
-  the standard fit's value. This is why tilt and defocus are fitted together:
-  fitting the tilt after the standard fit leaves C10 behind and stalls.
+  the ordinary fit's value. Tilt and defocus are fitted together so C10 can
+  move to the model's mid-depth value.
 - `depth spread (nm)` is how deep the model's column walk extends, not a
   measured thickness (the 15.2 nm crystal comes back as 10-13 nm).
 - The tilt is in the scan frame. The Sample tilt panel also shows it in the

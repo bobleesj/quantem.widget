@@ -180,7 +180,10 @@ viewer
 ```
 
 The other two methods are explicit, with quantem.gpu's names:
-`ssb.find_aberrations(search="primary", tilt=False)` fits the same model at tilt 0, and
+`ssb.find_aberrations(search="primary", tilt=False)` fits the primary optics model
+with tilt and depth held at zero. Use `search="primary", tilt=True` for a
+comparison at the same aberration order.
+
 `ssb.find_aberrations(search="primary", tilt=False, objective="phase_variance")` is the
 phase-variance backup. Joint fit, Refit SSB and Fit Regions all run the
 model-based, tilt-corrected fit.
@@ -296,19 +299,22 @@ quantem.gpu's default fit adds the sample to the model, and the
   scan-detector rotation and swapped when the rotation is flipped), which
   seeds a quantem.thick reconstruction directly.
 
-Open with the fit already run: the widget shows the session's latest fit.
+To compare ordinary and tilt-corrected SSB, keep `search="primary"` on both
+sides. Each widget opens on the session's latest fit; neither side adds the
+standard workflow's fifth-order refinement.
 
 ```python
+import pandas as pd
 from quantem.gpu import SSB
 from quantem.widget import ShowPtycho
 
 ssb = SSB.open(path, voltage_kV=300.0, semiangle_mrad=30.0, scan_sampling_A=(0.495, 0.495),
                detector_sampling_mrad=(0.5554, 0.5554), scan_detector_rotation_deg=-8.6)
-standard = ssb.find_aberrations(search="primary", tilt=False)     # defocus + astigmatism at tilt 0
+ordinary = ssb.find_aberrations(search="primary", tilt=False)  # primary optics, no tilt/depth
 ShowPtycho(ssb)                                 # the tilt-0 control
-tilted = ssb.find_aberrations()                 # the default: + sample tilt and depth spread, jointly
+tilted = ssb.find_aberrations(search="primary", tilt=True)    # same optics order, joint tilt/depth
 ShowPtycho(ssb)                                 # opens on the fitted tilt
-pd.concat([standard.report(), tilted.report()])
+pd.concat([ordinary.report(), tilted.report()])
 ```
 
 **Save** writes the tilt into `calibration.json` (`sample_tilt_mrad` in the
@@ -492,12 +498,13 @@ region retains independent controls, fit parameters and results; selecting
 others intact.
 
 The built-in workflow keeps detector geometry and scan-detector rotation common.
-For each changed region it jointly fits C10, C12, astigmatism angle, both sample
-tilt components and depth spread, with five repeats of 200 trials plus Newton
-refinement on the selected GPU backend (`viewer.fit_regions(trials=...,
-refinement=...)` changes both, also for the button). Progress shows the active repeat and
-elapsed time. It reconstructs the full scan with each regional fit, then crops
-the corrected regional view. The overview fit remains intact.
+Each changed region runs one standard fit: 200 initial TPE trials, then joint
+Newton refinement through fifth-order aberrations with both sample tilt
+components and depth spread on the selected GPU backend.
+`viewer.fit_regions(trials=..., refinement=...)` changes the initial trial budget
+and refinement method, also for the button. Progress identifies the initial
+and fifth-order stages and elapsed time. It reconstructs the full scan with each
+regional fit, then crops the corrected regional view. The overview fit remains intact.
 
 The settings accept up to 64 overlapping windows, each at least 32 native scan
 samples per axis. A freehand phase-scoring mask is not an arbitrary-support SSB
