@@ -323,7 +323,8 @@ class ShowPtycho(anywidget.AnyWidget):
             Independent calibration record with the keys and units of the
             ``calibration.json`` Save writes; ``id`` and ``generated_at_utc``
             are None until saved. Regional records contain their own jointly fitted
-            aberrations, scan-frame tilt, depth spread and native scan bounds.
+            aberrations, scan-frame tilt, depth spread and full-acquisition scan bounds.
+            ``region_fit["bounds"]`` remains relative to the SSB session.
             Display contrast, zoom and the tilt-comparison toggle do not change
             this model. No file is written and no optimization runs. Without
             ``include_phase``, every entry is JSON serializable.
@@ -365,7 +366,12 @@ class ShowPtycho(anywidget.AnyWidget):
             }
         record = self._calibration_record(aberrations, sample, loss)
         if fit is not None:
-            record.update(scan_region=list(fit["bounds"]), region_fit=fit)
+            # Selectors use session coordinates; handoff uses acquisition coordinates.
+            r0, r1, c0, c1 = fit["bounds"]
+            row, _, col, _ = self._scan_region
+            record.update(
+                scan_region=[r0 + row, r1 + row, c0 + col, c1 + col], region_fit=fit
+            )
         record = json.loads(json.dumps(record, allow_nan=False))
         if include_phase:
             phase, _ = self._ssb.preview(

@@ -1958,3 +1958,38 @@ def test_regional_higher_order_tuning_can_clear_and_restore_its_fitted_reference
     assert not fit["adjusted"]
     np.testing.assert_array_equal(_shown(viewer), 0)
     viewer.close()
+
+
+def test_nested_region_snapshot_uses_acquisition_bounds(tmp_path):
+    """A local fit inside a cropped session keeps both coordinate footprints."""
+    gpu = pytest.importorskip("quantem.gpu")
+    source = tmp_path / "scan.npy"
+    np.save(source, _counts())
+    session = (16, 80, 8, 72)
+    fit = {
+        "id": "a", "label": "Inner", "bounds": [8, 40, 16, 48],
+        "aberrations": dict(START), "sample_tilt_mrad": [0.1, -0.2],
+        "depth_spread_nm": 12.0,
+    }
+    with gpu.io.load(source) as data, gpu.SSB(
+        data, scan_region=session, aberrations=START,
+        voltage_kV=300, semiangle_mrad=20,
+        scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5),
+    ) as ssb:
+        viewer = ShowPtycho(
+            ssb, save_dir=tmp_path / "review", local_tilt={
+                "scan_shape": [64, 64],
+                "regions": [{key: fit[key] for key in ("id", "label", "bounds")}],
+                "fits": [fit],
+            },
+        )
+        record = viewer.calibration("Inner", include_phase=True)
+        assert record["scan_region"] == [24, 56, 24, 56]
+        assert record["region_fit"]["bounds"] == [8, 40, 16, 48]
+        assert viewer.calibration()["scan_region"] == list(session)
+        assert record["scan_shape"] == [64, 64]
+        assert record["ssb_phase"].shape == (64 * record["upsampling_factor"],) * 2
+        saved = json.loads(viewer.save_calibration().read_text())
+        assert saved["scan_region"] == list(session)
+        assert saved["local_tilt"]["fits"][0]["bounds"] == fit["bounds"]
+        viewer.close()
