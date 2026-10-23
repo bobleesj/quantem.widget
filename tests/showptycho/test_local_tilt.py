@@ -83,9 +83,12 @@ def test_invalid_sampling_is_rejected_before_transport():
 
 
 @pytest.mark.parametrize("budget", [{}, {"trials": 12}, {"num_trials": 12}])
-def test_notebook_cells_read_edit_fit_and_reconstruct_current_regions(budget):
+def test_notebook_cells_read_edit_fit_and_reconstruct_current_regions(budget, monkeypatch):
+    import sys
     import pytest
 
+    # Custom NumPy callbacks work without the optional GPU package installed.
+    monkeypatch.setitem(sys.modules, "quantem.gpu", None)
     regions = [{'id': 'a', 'label': 'A', 'bounds': [0, 32, 0, 32]}]
     phase = np.full((32, 32), 1 + 2**-40, dtype=np.float64)
     def fit(selected):

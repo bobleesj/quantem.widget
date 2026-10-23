@@ -521,9 +521,10 @@ class ShowPtycho(anywidget.AnyWidget):
         --------
         >>> fits = viewer.fit_regions()
         """
-        from quantem.gpu.ssb.trials import resolve_trial_count
-
-        num_trials = resolve_trial_count(trials, num_trials)
+        if trials is not None and num_trials is not None:
+            raise TypeError("Use trials=200, or the legacy num_trials keyword, not both.")
+        num_trials = trials if trials is not None else num_trials
+        num_trials = 200 if num_trials is None else num_trials
         if int(num_trials) < 1:
             raise ValueError("Fit Regions needs at least one trial per seed.")
         self._region_fit_options = {"num_trials": int(num_trials), "refinement": refinement}
