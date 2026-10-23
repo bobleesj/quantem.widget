@@ -1442,6 +1442,7 @@ def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(mo
         kind, options = calls[-1]
         assert kind == "fit" and options["tilt"] is True and options["refinement"] == "auto" and options["num_trials"] == 200
         assert options["objective"] == "agreement"
+        assert options["search"] == "standard"
         assert not {"search_ranges", "refine_lock", "fixed_aberrations"} & set(options)
         record = json.loads(widget.ssb_compute_calibration_json)
         assert record["schema"] == "quantem.show4dstem-ssb-calibration/3" and record["objective"] == "agreement"

@@ -1598,6 +1598,7 @@ def test_the_tutorial_order_reopens_the_save_and_reconstruct_keeps_it(tmp_path, 
     reviewed = {"C10_nm": 3.0, "C12_nm": 1.0, "phi12_deg": 11.0}
     with gpu.io.load(str(source)) as data, gpu.SSB(data, **calibration) as ssb:
         fitted = dict(ssb.reconstruct(verbose=False).aberrations)
+        restored = {**fitted, **reviewed}
         viewer = ssb.show(save_dir=tmp_path)
         viewer.upsampling_factor = 1
         viewer.request_json = json.dumps({"id": 1, **reviewed, "committed": True})
@@ -1613,12 +1614,12 @@ def test_the_tutorial_order_reopens_the_save_and_reconstruct_keeps_it(tmp_path, 
         assert viewer.calibration_status == "Restored saved full-field fit"
         assert "replacing the session's C10" in capsys.readouterr().out
         np.testing.assert_array_equal(_shown(viewer), expected)
-        assert dict(ssb.reconstruct().aberrations) == reviewed and not searches
+        assert dict(ssb.reconstruct().aberrations) == restored and not searches
         viewer.close()
     with gpu.io.load(str(source)) as data, gpu.SSB(data, **calibration) as ssb:
         viewer = ssb.show(save_dir=tmp_path)  # no reconstruct() first
         assert viewer.calibration_status == "Restored saved full-field fit"
-        assert dict(ssb.reconstruct().aberrations) == reviewed and not searches
+        assert dict(ssb.reconstruct().aberrations) == restored and not searches
         viewer.close()
     (tmp_path / "calibration.json").unlink()
     with gpu.io.load(str(source)) as data, gpu.SSB(data, **calibration) as ssb:

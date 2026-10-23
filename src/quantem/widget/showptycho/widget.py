@@ -131,7 +131,8 @@ class ShowPtycho(anywidget.AnyWidget):
         hidden and one line says what they need. An SSB session, normally after
         ``ssb.find_aberrations()`` (quantem's default fit, model-based and tilt-corrected), is
         reused for its resident bright-field evidence and exclusively driven while the widget is
-        open. Joint fit, Refit SSB and Fit Regions run that default fit too.
+        open. Joint fit, Refit SSB and Fit Regions use ``search="standard"`` on both
+        CUDA and MPS. A supplied broad fit retains its higher-order correction.
     sampling : float or (row, col), optional
         Pixel size of an array in ``units``; it draws the scale bar and calibrates the FFT. An SSB
         session carries its own scan sampling.
@@ -1156,7 +1157,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self.sample_fit_status = "Fitting defocus, astigmatism, sample tilt and depth spread..."
         try:
             result = self._ssb.find_aberrations(
-                tilt=True, check_rotation=False, compare_standard=False, verbose=False)
+                search="standard", tilt=True, check_rotation=False, compare_standard=False, verbose=False)
         except (RuntimeError, ValueError, NotImplementedError, MemoryError) as exc:
             self.sample_fit_status = f"Tilt fit failed: {exc}"
             return
@@ -1219,7 +1220,7 @@ class ShowPtycho(anywidget.AnyWidget):
                 (row_start, row_stop, col_start, col_stop), aberrations=self._current(),
                 scan_detector_rotation_deg=self.scan_detector_rotation_deg)
             try:
-                rebuilt.find_aberrations(tilt=True, check_rotation=False, num_trials=num_trials, verbose=False)
+                rebuilt.find_aberrations(search="standard", tilt=True, check_rotation=False, num_trials=num_trials, verbose=False)
             except BaseException:
                 rebuilt.ssb.close()
                 raise

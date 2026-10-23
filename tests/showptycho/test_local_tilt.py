@@ -231,6 +231,7 @@ def test_regional_fit_passes_its_trial_count_refinement_and_tilt_limit_to_the_fi
     assert (session.options['num_trials'], session.options['refinement']) == (12, 'nelder-mead')
     assert session.options['tilt_limit_mrad'] == REGION_TILT_LIMIT_MRAD
     assert session.options['compute_loss'] is False
+    assert session.options['search'] == 'standard'
     fit, = result['fits']
     assert (fit['fit_record']['num_trials'], fit['fit_record']['refinement']) == (12, 'nelder-mead')
     assert not fit['bound_hit']  # tilt (4.2, 0) mrad and depth 10 nm lie inside the limit and DEPTH_SPREAD_RANGE_NM

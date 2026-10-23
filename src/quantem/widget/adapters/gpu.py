@@ -540,6 +540,7 @@ class SsbSession:
 
     def find_aberrations(self, **options) -> dict:
         """Fit the aberrations (``quantem.gpu.SSB.find_aberrations(**options)``); see ``result`` for the keys."""
+        options.setdefault("search", "standard")
         return self.result(self.ssb.find_aberrations(**options))
 
     def fit_regions(self, regions: list[dict], parameters: dict, *,
@@ -603,7 +604,7 @@ class SsbSession:
             ) as regional:
                 report("joint_fit", 1)
                 fitted = regional.find_aberrations(
-                    tilt=True, num_trials=int(num_trials), refinement=refinement,
+                    search="standard", tilt=True, num_trials=int(num_trials), refinement=refinement,
                     tilt_limit_mrad=REGION_TILT_LIMIT_MRAD,
                     check_rotation=False, compare_standard=False,
                     compute_loss=False, seed=REGION_FIT_SEED, verbose=False)

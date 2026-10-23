@@ -1898,7 +1898,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 method = "with sample tilt" if tilt else "at tilt 0" if objective == "agreement" else "by phase variance"
                 self.ssb_compute_status = (f"Fitting SSB aberrations {method} ({trials} trials"
                                            f"{', refined' if do_refine else ''}, {num_bright_field_pixels} BF pixels)...")
-                result = ssb.find_aberrations(tilt=tilt, objective=objective, num_trials=trials, refinement=refinement,
+                result = ssb.find_aberrations(search="standard", tilt=tilt, objective=objective, num_trials=trials, refinement=refinement,
                                               seed=int(seed), verbose=verbose, **fit_options)
                 self._ssb_compute_sample = None if result.get("sample_tilt_mrad") is None else {
                     "sample_tilt_mrad": result["sample_tilt_mrad"], "depth_spread_nm": result["depth_spread_nm"]}
