@@ -502,8 +502,8 @@ Each changed region runs one standard fit: 200 initial TPE trials, then joint
 Newton refinement through fifth-order aberrations with both sample tilt
 components and depth spread on the selected GPU backend.
 `viewer.fit_regions(trials=..., refinement=...)` changes the initial trial budget
-and refinement method, also for the button. Progress identifies the initial
-and fifth-order stages and elapsed time. It reconstructs the full scan with each
+and refinement method, also for the button. Progress identifies the region,
+current operation and elapsed time. It reconstructs the full scan with each
 regional fit, then crops the corrected regional view. The overview fit remains intact.
 
 The settings accept up to 64 overlapping windows, each at least 32 native scan
