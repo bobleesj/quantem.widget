@@ -127,6 +127,27 @@ from the earlier model, not
 predictions for the current fifth-order default; inspect `fit.report()` for
 your run.
 
+### Inspect and export the fitted optics
+
+End a notebook cell on `fit` to see every fitted coefficient, including higher
+orders, with units. The display also includes rotation, tilt and effective
+depth. Effective depth is a model parameter, not a thickness measurement.
+
+```python
+fit
+```
+
+```python
+table = fit.report()                   # pandas DataFrame, full precision
+parameters = fit.report(to_dict=True)  # coefficients and sample geometry
+```
+
+`parameters["aberrations"]` contains coefficients such as `C30_nm` and
+`phi23_deg`. `sample_tilt_mrad` uses `(row, col)` order; rotation and effective
+depth have their own unit-bearing keys. Only the notebook display rounds
+numbers. Editing either report leaves the fitted result unchanged. For values
+changed later in ShowPtycho, use `viewer.calibration()`.
+
 Look at both branches yourself. These are the primary fits used to choose the
 rotation before fifth-order refinement. Fitting stays on the native scan grid;
 each branch's own fit is shown reconstructed at `upsampling_factor="auto"`, the
