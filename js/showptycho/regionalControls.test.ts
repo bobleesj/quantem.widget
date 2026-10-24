@@ -268,3 +268,27 @@ test('wheel zoom works through region overlays and stays independent of other pa
   expect(model.values).toEqual(science);
   expect(model.sent).toEqual([]);
 });
+
+test('pinning an unscored reconstruction preserves a missing diagnostic', async () => {
+  const context = new Proxy({
+    createImageData: (width: number, height: number) => ({ data: new Uint8ClampedArray(width * height * 4) }),
+    measureText: () => ({ width: 10 }),
+  }, { get: (target, key) => Reflect.get(target, key) ?? (() => {}) });
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as never);
+  vi.stubGlobal('ImageBitmap', class {});
+  vi.spyOn(colormaps, 'renderToOffscreen').mockImplementation((_values, width, height) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width; canvas.height = height;
+    return canvas;
+  });
+  const model = session({
+    local_tilt_enabled: false, local_tilt_active_region: '', compute_loss: false,
+    result_json: JSON.stringify({ id: 0, ...START, loss: null }),
+  });
+  await mount(model);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  const pin = el.querySelector('button[aria-label="Pin current snapshot"]') as HTMLButtonElement;
+  expect(pin.disabled).toBe(false);
+  act(() => pin.click());
+  expect(JSON.parse(model.get('pin_json') as string)).toMatchObject({ action: 'pin', loss: null });
+});

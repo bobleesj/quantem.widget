@@ -150,6 +150,10 @@ class ShowPtycho(anywidget.AnyWidget):
         session that is already fitted (``ptycho.run()`` before
         ``ptycho.show()``); one line says what was restored and what it replaced.
         False keeps the supplied session even when a saved correction exists.
+    compute_loss : bool, default False
+        Calculate the optional reconstruction diagnostic when controls settle
+        or calibration is saved. False keeps interactive review free of this
+        extra score calculation. The aberration fitting objective is unchanged.
     show_fft : bool, default False
         Open with the FFT panel visible.
     method : {"ssb", "phase", "complex"} or None, optional
@@ -196,6 +200,8 @@ class ShowPtycho(anywidget.AnyWidget):
     ``source_path``: the toolbar then offers Crop and Refit SSB, which reloads only the selected
     scan region and fits it afresh, and every saved calibration and star names the file.
     """
+
+    compute_loss = traitlets.Bool(False).tag(sync=True)
 
     local_tilt_selection_json = traitlets.Unicode("").tag(sync=True)
     local_tilt_active_region = traitlets.Unicode("").tag(sync=True)
@@ -675,6 +681,7 @@ class ShowPtycho(anywidget.AnyWidget):
         save_dir: str | pathlib.Path | None = None,
         restore: bool = True,
         show_fft: bool = False,
+        compute_loss: bool = False,
         phase_estimator: str | None = None,
         method: str | None = None,
         phase_regularization: float | None = None,
@@ -732,6 +739,7 @@ class ShowPtycho(anywidget.AnyWidget):
             raise ValueError("sampling describes an array; an SSB session carries its own scan_sampling_A.")
         super().__init__()
         self.method = method
+        self.compute_loss = compute_loss
         self._explicit_reconstruction_options = {
             name: value for name, value in {
                 "phase_regularization": phase_regularization,
@@ -1014,7 +1022,7 @@ class ShowPtycho(anywidget.AnyWidget):
             phase, loss = self._ssb.preview(
                 optics, **model, upsampling_factor=self._output_factor,
                 phase_estimator=self._phase_estimator or self._default_phase_estimator,
-                compute_loss=bool(request.get("committed")))
+                compute_loss=self.compute_loss and bool(request.get("committed")))
             crop = self._ssb.crop_native(phase, fit["bounds"], self._output_factor)
             fitted = fit.get("fitted_parameters", {
                 "aberrations": fit["aberrations"], "sample_tilt_mrad": fit["sample_tilt_mrad"],
@@ -1134,14 +1142,14 @@ class ShowPtycho(anywidget.AnyWidget):
 
         The higher-order panel joins them under its own keys (``C21_nm``, ``phi21_deg``, ...); a non-zero
         one switches the session to its full chi kernel. Drags use the full bright-field set and skip
-        the variance loss; committed requests also compute the phase-variance loss. A stale request
+        the variance loss; committed requests compute it only when explicitly enabled. A stale request
         (another one was issued meanwhile) is dropped after the compute.
         """
         higher_order = json.loads(self.higher_order_aberrations_json or "{}")
         sample = self._sample() if self.sample_available else None
         if sample is not None and not self.tilt_correction:
             sample = {**sample, "sample_tilt_mrad": (0.0, 0.0)}
-        phase, loss = self._ssb.preview({**higher_order, **aberrations}, compute_loss=compute_loss,
+        phase, loss = self._ssb.preview({**higher_order, **aberrations}, compute_loss=compute_loss and self.compute_loss,
                                         upsampling_factor=self._output_factor,
                                         **self._reconstruction_options(), **(sample or {}))
         if request_id != self._inflight_id:
@@ -1483,9 +1491,12 @@ class ShowPtycho(anywidget.AnyWidget):
         """Phase-variance loss of the accepted model, the value Save stores.
 
         It includes the fitted sample tilt even while the view compares zero
-        tilt, and is computed afresh, so a drag without a loss does not leave
-        None. Preview is transient and does not replace the displayed image.
+        tilt. When ``compute_loss`` is enabled, it is computed afresh; otherwise
+        the optional diagnostic remains ``None``. Preview is transient and does
+        not replace the displayed image.
         """
+        if not self.compute_loss:
+            return None
         _, loss = self._ssb.preview(
             aberrations, compute_loss=True,
             upsampling_factor=self._output_factor,

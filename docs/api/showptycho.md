@@ -620,3 +620,21 @@ prepare another acquisition or refit. The array is an independent copy.
 
 See the [H5/QEM to myptycho notebook](../tutorials/showptycho_to_myptycho.ipynb)
 for region selection, joint fitting, independent iterative runs and saved results.
+
+### Optional diagnostic scoring and saving
+
+ShowPtycho skips additional reconstruction scores by default. The fitter still
+uses its required objective, and existing scalar fit history remains available.
+Opening and adjusting the widget does not save result files. Save and Star are
+explicit actions; `save_dir` only chooses their destination.
+
+```python
+fit = ptycho.find_aberrations(compute_loss=False)
+result = ptycho.run(fit, upsampling_factor="auto", compute_loss=False)
+viewer = ptycho.show(show_fft=True)  # compute_loss=False by default
+```
+
+Set `compute_loss=True` when opening the viewer, or `viewer.compute_loss = True`
+before your next edit, to calculate the additional reconstruction diagnostic.
+Report tables and `fit.report(show_convergence=True)` use saved scalars and do
+not rerun fitting. Call `viewer.save_calibration()` or click Save when ready.

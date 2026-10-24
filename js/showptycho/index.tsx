@@ -256,7 +256,7 @@ interface PinnedEntry {
   phi12_deg: number;
   scan_detector_rotation_deg: number;
   display_negate_phase: boolean;
-  loss: number;
+  loss: number | null;
   starred: boolean;
   generated_at_utc: string;
   reconstruction: Record<string, string | number>;
@@ -1552,6 +1552,7 @@ function Explore() {
   const autoC12 = regionalReference?.aberrations?.C12_nm ?? overviewAutoC12;
   const autoPhi12 = regionalReference?.aberrations?.phi12_deg ?? overviewAutoPhi12;
   const [autoRotation] = useModelState<number>("fitted_scan_detector_rotation_deg");
+  const [computeLoss] = useModelState<boolean>("compute_loss");
   const [autoLoss] = useModelState<number | null>("fitted_loss");
   // an array carries the pixel size of its image; a session the scan step, which the output sampling divides
   const [objectSamplingA] = useModelState<number[]>("object_sampling_A");
@@ -2913,7 +2914,7 @@ function Explore() {
       runFrontendPreview(c10Val, c12Val, phi12Val, rotationVal);
       return true;
     }
-    if (!isFull) return true;
+    if (!isFull || !computeLoss) return true;
     webgpuDiagnostic.schedule(signal => {
       if (webgpuSsbRef.current !== engine) return;
       webgpuInFlightRef.current = true;
@@ -2928,7 +2929,7 @@ function Explore() {
       }).finally(drainWebgpuQueue);
     });
     return true;
-  }, [effectiveTotalBf, runFrontendPreview, fullBrightFieldCount, webgpuStandalone, webgpuDiagnostic]);
+  }, [effectiveTotalBf, runFrontendPreview, fullBrightFieldCount, webgpuStandalone, webgpuDiagnostic, computeLoss]);
 
   frontendFullRef.current = runFrontendFull;
   const previousUpsamplingFactorRef = React.useRef(upsamplingFactor);
@@ -3193,7 +3194,7 @@ function Explore() {
       // the pin message and the manifest hold the physical angle in [0, 360); the slider may run below 0
       scan_detector_rotation_deg: wrapDegrees(rotationDeg ?? 0),
       display_negate_phase: !!displayNegatePhase,
-      loss: loss ?? 0,
+      loss: loss ?? null,
       starred: false,
       generated_at_utc: new Date().toISOString(),
       reconstruction: reconstructionRef.current.method === "ssb" ? { method: "ssb" } : {

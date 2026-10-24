@@ -222,7 +222,7 @@ def widget(ssb, tmp_path):
     master = tmp_path / "scan_master.h5"
     master.write_bytes(b"master")
     ssb.source_path = str(master)  # the session names its file; the widget reads it from there
-    view = ShowPtycho(ssb, show_fft=True, save_dir=tmp_path)
+    view = ShowPtycho(ssb, show_fft=True, save_dir=tmp_path, compute_loss=True)
     view.upsampling_factor = 1  # Explicit native-grid comparisons below.
     return view
 
@@ -1941,8 +1941,14 @@ def test_regional_higher_order_tuning_can_clear_and_restore_its_fitted_reference
     })
     viewer.scan_sampling_A = [0.5, 0.5]
     viewer._phase_estimator = "phase_of_mean"
+    scoring = []
+
+    def regional_preview(aberrations, **kwargs):
+        scoring.append(kwargs["compute_loss"])
+        return np.full((64, 64), aberrations.get("C30_nm", 0), np.float32), None
+
     viewer._ssb = SimpleNamespace(
-        preview=lambda aberrations, **kwargs: (np.full((64, 64), aberrations.get("C30_nm", 0), np.float32), None),
+        preview=regional_preview,
         crop_native=lambda phase, bounds, factor: phase[bounds[0]:bounds[1], bounds[2]:bounds[3]],
     )
     for index, higher in enumerate(({"C30_nm": 2500.0}, {}, {"C30_nm": 1500.0})):
@@ -1955,6 +1961,11 @@ def test_regional_higher_order_tuning_can_clear_and_restore_its_fitted_reference
         assert fit["aberrations"] == {**START, **higher}
         assert fit["fitted_parameters"]["aberrations"] == optics
         np.testing.assert_array_equal(viewer.region_images["Upper · SSB"], higher.get("C30_nm", 0))
+    assert not any(scoring)
+    viewer.compute_loss = True
+    viewer._preview_region({"id": 4, "region_id": "a", "region_bounds": region["bounds"],
+                            **START, "sample": sample, "higher_order": {"C30_nm": 1500.0}, "committed": True})
+    assert scoring[-1] is True
     assert not fit["adjusted"]
     np.testing.assert_array_equal(_shown(viewer), 0)
     viewer.close()
@@ -2121,3 +2132,30 @@ def test_restored_ssb_review_can_select_regularized_method(tmp_path):
         reply = json.loads(restored.result_json)
         assert reply["method"] == "phase" and "error" not in reply
         restored.close()
+
+
+def test_interactive_review_scores_only_when_requested(ssb, tmp_path, monkeypatch):
+    """Open, adjust and save without a diagnostic; opt in without changing phase."""
+    preview = ssb.preview
+    requests = []
+
+    def observed_preview(*args, **kwargs):
+        requests.append(kwargs.get("compute_loss", True))
+        return preview(*args, **kwargs)
+
+    monkeypatch.setattr(ssb, "preview", observed_preview)
+    viewer = ShowPtycho(ssb, save_dir=tmp_path, restore=False)
+    viewer.request_json = json.dumps({"id": 3, **START, "committed": True})
+    unscored = _shown(viewer).copy()
+    assert requests and not any(requests)
+    assert not (tmp_path / "calibration.json").exists()
+    assert json.loads(viewer.result_json)["loss"] is None
+    viewer.save_calibration()
+    assert not any(requests)
+    assert json.loads((tmp_path / "calibration.json").read_text())["loss"] is None
+    viewer.compute_loss = True
+    viewer.request_json = json.dumps({"id": 4, **START, "committed": True})
+    assert requests[-1] is True
+    assert json.loads(viewer.result_json)["loss"] is not None
+    np.testing.assert_array_equal(_shown(viewer), unscored)
+    viewer.close()
