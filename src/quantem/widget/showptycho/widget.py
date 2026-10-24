@@ -175,6 +175,11 @@ class ShowPtycho(anywidget.AnyWidget):
     detector_weighting : {"uniform", "inverse_mean"}, optional
         Detector weighting for regularized methods, uniform by default.
         Omitted values restore the saved choice; explicit values override it.
+
+    upsampling : {"auto", 1, 2, 3, 4, 8}, optional
+        Output multiplier along each scan axis. Auto stops at 4×; 8× is
+        explicit only. Omitted, preserve a saved explicit choice or use Auto.
+        An explicit value overrides saved sampling, retaining the joint fit.
     phase_estimator : {"mean_phase", "phase_of_mean"}, optional
         SSB phase estimator used for every preview and recorded on Save.
         Omitted, use coherent phase of the mean for all aberrations on CUDA
@@ -255,6 +260,7 @@ class ShowPtycho(anywidget.AnyWidget):
     ).tag(sync=True)
     auto_upsampling_factor = traitlets.Int(1).tag(sync=True)
     auto_sampling_note = traitlets.Unicode("").tag(sync=True)
+    sampling_limit_note = traitlets.Unicode("").tag(sync=True)
     upsampling_available = traitlets.Bool(False).tag(sync=True)
     method = traitlets.Enum(["ssb", "phase", "complex"], default_value="ssb").tag(sync=True)
     phase_regularization = traitlets.Float(0.03, min=0.0).tag(sync=True)
@@ -682,6 +688,7 @@ class ShowPtycho(anywidget.AnyWidget):
         restore: bool = True,
         show_fft: bool = False,
         compute_loss: bool = False,
+        upsampling: str | int | None = None,
         phase_estimator: str | None = None,
         method: str | None = None,
         phase_regularization: float | None = None,
@@ -701,6 +708,17 @@ class ShowPtycho(anywidget.AnyWidget):
             raise ValueError("phase_estimator applies only to method='ssb'; omit it for regularized methods.")
         if method != "ssb" and (local_tilt or fit_regions or reconstruct_regions):
             raise ValueError("Regional fitting currently supports method='ssb'. Review regularized methods on the full session.")
+
+        if upsampling is not None:
+            valid = (isinstance(upsampling, str) and upsampling == "auto") or (
+                isinstance(upsampling, (int, np.integer))
+                and not isinstance(upsampling, (bool, np.bool_))
+                and upsampling in (1, 2, 3, 4, 8)
+            )
+            if not valid:
+                raise ValueError("upsampling must be 'auto' or an integer from 1, 2, 3, 4, 8; use upsampling='auto'.")
+            if is_array:
+                raise ValueError("upsampling needs an SSB session; an array is already reconstructed.")
         restore_regions = local_tilt is True
         if local_tilt is True:
             if is_array:
@@ -834,16 +852,23 @@ class ShowPtycho(anywidget.AnyWidget):
         self._calibration_identity = self._ssb.calibration_identity()
         self.stars_path = str(self._stars_path.resolve())
         self.upsampling_available = state["backend"] in ("cuda", "mps")
-        from quantem.gpu.optics.physics import ssb_upsampling_factor
+        from quantem.gpu.optics.physics import ssb_upsampling_factor, ssb_upsampling_requirement
 
         try:
             self.auto_upsampling_factor = ssb_upsampling_factor(
                 voltage_kV=state["voltage_kV"], semiangle_mrad=state["semiangle_mrad"],
                 scan_sampling_A=state["scan_sampling_A"],
             )
+            required = ssb_upsampling_requirement(
+                voltage_kV=state["voltage_kV"], semiangle_mrad=state["semiangle_mrad"],
+                scan_sampling_A=state["scan_sampling_A"],
+            )
+            if required > 4 + 1e-12:
+                self.sampling_limit_note = (
+                    f"Auto stops at 4×; nominal support requires {required:.2f}×. "
+                    "Choose 8× explicitly for finer output.")
         except ValueError as exc:
-            # A scan too coarse for 8x still opens: at its native sampling, said once,
-            # with the explicit factors that give finer output.
+            # Invalid calibration still opens at native sampling.
             self.auto_sampling_note = (
                 f"Automatic SSB output sampling is unavailable: {exc} "
                 "Showing native sampling (upsampling_factor=1); set upsampling_factor to 2, 3, 4 or 8 for finer output.")
@@ -854,6 +879,9 @@ class ShowPtycho(anywidget.AnyWidget):
         restored = None
         if restore and self._calibration_path.is_file():
             restored = self._restore_calibration(state)
+        if upsampling is not None:
+            # Override output density before the first preview, retaining the saved fit.
+            self.upsampling_factor = upsampling if isinstance(upsampling, str) else int(upsampling)
         self.crop_refit_available = bool(self._source_path and pathlib.Path(self._source_path).is_file())
         self.crop_refit_status = (
             "Ready to refit a native square scan crop." if self.crop_refit_available
@@ -902,9 +930,10 @@ class ShowPtycho(anywidget.AnyWidget):
                 self._calibration_path, self._calibration_identity,
                 self._scan_region, self._phase_estimator, CALIBRATION_SCHEMA,
             )
-            if saved["upsampling_mode"] == "auto" and (
-                    self.auto_sampling_note or saved["upsampling_factor"] != self.auto_upsampling_factor):
-                raise ValueError("automatic output sampling has changed")
+            if saved["upsampling_mode"] == "auto" and self.auto_sampling_note:
+                raise ValueError(self.auto_sampling_note)
+            # Output density is independent of the joint fit. Re-resolve saved
+            # Auto under the current policy; retain explicit user choices.
             reconstruction = saved.get("reconstruction", {"method": "ssb"})
             saved_method = reconstruction.get("method", "ssb")
             if self._method_explicit and saved_method != self.method:

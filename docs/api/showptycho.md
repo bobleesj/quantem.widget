@@ -281,7 +281,7 @@ viewer
 ```
 
 Output sampling is automatic. ShowPtycho uses QuantEM.GPU's
-`ssb_upsampling_factor` rule: the smallest supported grid covering the nominal
+`ssb_upsampling_factor` rule: the smallest supported grid, capped at 4×, for the nominal
 circular-aperture SSB frequency range, `2 * semiangle / wavelength`, along both
 scan axes. This depends on calibrated voltage, convergence angle and scan step.
 Detector truncation and noise can reduce usable information; automatic sampling
@@ -291,11 +291,11 @@ the output sampling; fitting and its loss remain on the native grid.
 
 Defocus, astigmatism, higher-order aberrations and optional tilt correction use
 the same automatic sampling and coherent phase estimator on CUDA and MPS. There
-is no sampling or averaging choice in the toolbar. Save records the resolved
+is an Upsampling choice in View settings, with 8× available explicitly. Save records the resolved
 factor, requested mode and phase estimator for downstream use.
 
-Explicit factors remain available through the Python `upsampling_factor`
-attribute for controlled comparisons. CUDA and MPS support 1, 2, 3, 4 and 8;
+Explicit factors are available through `ShowPtycho(ssb, upsampling=8)`
+or the Upsampling menu for controlled comparisons. CUDA and MPS support 1, 2, 3, 4 and 8;
 WebGPU uses 1, 2, 4 and 8, rounding Auto up when 3× is needed. Every output uses
 all bright-field pixels. A finer grid increases reconstruction work; it does not
 change the native-grid fitting objective.
@@ -638,3 +638,16 @@ Set `compute_loss=True` when opening the viewer, or `viewer.compute_loss = True`
 before your next edit, to calculate the additional reconstruction diagnostic.
 Report tables and `fit.report(show_convergence=True)` use saved scalars and do
 not rerun fitting. Call `viewer.save_calibration()` or click Save when ready.
+
+## Automatic output sampling
+
+Auto chooses 1×, 2×, 3× or 4× from the acquisition calibration, with a
+maximum of 4×. Select 8× explicitly with `ptycho.show(upsampling=8)` or the
+ShowPtycho Upsampling menu. For a standalone reconstruction, use
+`ptycho.run(fit, upsampling_factor=8)`.
+
+The nominal bandwidth requirement remains separate from the selected grid.
+When Auto is capped, the fit report and viewer settings identify the larger
+requirement; a 4× grid does not imply full nominal bandwidth. Fitting and
+source data are unchanged. Saved Auto fits reopen under the current cap;
+saved explicit 8× choices retain 8×.
