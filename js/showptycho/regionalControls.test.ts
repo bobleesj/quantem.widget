@@ -5,7 +5,7 @@ import * as colormaps from '../display/colormaps';
 
 /** The Python trait defaults (``ShowPtycho.class_traits(sync=True)``) a live session starts from. */
 const DEFAULTS: Record<string, unknown> = {
-  C10_max_nm: 40, C10_min_nm: -40, auto_sampling_note: '', auto_upsampling_factor: 1,
+  C10_max_nm: 40, C10_min_nm: -40, auto_sampling_note: '', sampling_limit_note: '', auto_upsampling_factor: 1,
   calibration_path: '', calibration_saved_at: '', calibration_status: '',
   crop_refit_available: false, crop_refit_request_json: '', crop_refit_status: '',
   fitted_C10_nm: 0, fitted_C12_nm: 0, fitted_loss: null, fitted_phi12_deg: 0,
@@ -267,4 +267,23 @@ test('wheel zoom works through region overlays and stays independent of other pa
   // Zooming never queues a refit, changes a selection, or alters fit/calibration traits.
   expect(model.values).toEqual(science);
   expect(model.sent).toEqual([]);
+});
+
+
+test('sampling settings explain the Auto cap and let the user explicitly choose 8×', async () => {
+  const note = 'Auto stops at 4×; nominal support requires 5.08×. Choose 8× explicitly for finer output.';
+  const model = session({ upsampling_available: true, auto_upsampling_factor: 4,
+    sampling_limit_note: note, local_tilt_enabled: false });
+  await mount(model);
+  act(() => { (el.querySelector('[aria-label="View settings"]') as HTMLElement).click(); });
+  expect(document.body.textContent).toContain(note);
+  expect(document.body.textContent).toContain('Auto (4×)');
+  act(() => { document.querySelector('[role="combobox"][aria-label="Upsampling"]')!
+    .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })); });
+  const eight = Array.from(document.querySelectorAll('[role="option"]'))
+    .find(option => option.textContent === '8×') as HTMLElement;
+  expect(eight).toBeDefined();
+  act(() => eight.click());
+  expect(model.get('upsampling_factor')).toBe(8);
+  expect(document.body.textContent).not.toContain(note);
 });

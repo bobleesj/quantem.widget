@@ -158,3 +158,16 @@ and `cmap` in both Show2D/Show3D and static mode. Export with
 is retained. `save` exports the figure, while ShowPtycho
 `save_dir` stores scientific calibration. Plain `ssb.show()` retains
 ShowPtycho's responsive layout and its existing Color control.
+
+## Automatic output sampling
+
+Auto chooses 1×, 2×, 3× or 4× from the acquisition calibration, with a
+maximum of 4×. Select 8× explicitly with `ssb.show(upsampling=8)` or the
+ShowPtycho Upsampling menu. For a standalone reconstruction, use
+`ssb.reconstruct(fit, upsampling_factor=8)`.
+
+The nominal bandwidth requirement remains separate from the selected grid.
+When Auto is capped, the fit report and viewer settings identify the larger
+requirement; a 4× grid does not imply full nominal bandwidth. Fitting and
+source data are unchanged. Saved Auto fits reopen under the current cap;
+saved explicit 8× choices retain 8×.

@@ -1555,7 +1555,10 @@ function Explore() {
   // an array carries the pixel size of its image; a session the scan step, which the output sampling divides
   const [objectSamplingA] = useModelState<number[]>("object_sampling_A");
   const [scanSamplingA] = useModelState<number[]>("scan_sampling_A");
-  const [sampling] = useModelState<number | "auto">("upsampling_factor");
+  const [sampling, setSampling] = useModelState<number | "auto">("upsampling_factor");
+  const [upsamplingAvailable] = useModelState<boolean>("upsampling_available");
+  const [autoSamplingNote] = useModelState<string>("auto_sampling_note");
+  const [samplingLimitNote] = useModelState<string>("sampling_limit_note");
   const [autoFactor] = useModelState<number>("auto_upsampling_factor");
   const upsamplingFactor = sampling === "auto" ? (autoFactor || 1) : (sampling || 1);
   const upsamplingFactorRef = React.useRef(upsamplingFactor || 1); upsamplingFactorRef.current = upsamplingFactor || 1;
@@ -3677,6 +3680,24 @@ function Explore() {
           slotProps={{ paper: { ...themedMenuPaper, sx: { ...themedMenuPaper.sx, p: 1.25, maxWidth: "calc(100vw - 32px)" } } }}>
           <Box role="dialog" aria-label="View settings"
             sx={{ display: "flex", flexDirection: "column", gap: 1, fontFamily: WIDGET_UI_FONT, width: 280, maxWidth: "100%" }}>
+            {(upsamplingAvailable || webgpuStandalone) && <Box component="label"
+              sx={{ ...typography.label, display: "inline-flex", alignItems: "center", gap: 1 }}>
+              Upsampling
+              <Select value={sampling ?? "auto"}
+                onChange={(event) => setSampling(event.target.value === "auto" ? "auto" : Number(event.target.value))}
+                size="small" sx={{ ...actionSelect, minWidth: 116 }}
+                MenuProps={themedMenuProps} inputProps={{ "aria-label": "Upsampling" }}
+                title="Reconstruct at the selected output sampling using the current fit.">
+                <MenuItem value="auto" disabled={Boolean(autoSamplingNote)}
+                  title={autoSamplingNote || "Choose from the acquisition calibration, up to 4×"}>
+                  Auto ({autoFactor || 1}×)
+                </MenuItem>
+                {(webgpuStandalone ? [1, 2, 4, 8] : [1, 2, 3, 4, 8]).map(factor =>
+                  <MenuItem key={factor} value={factor}>{factor}×</MenuItem>)}
+              </Select>
+            </Box>}
+            {sampling === "auto" && samplingLimitNote && <Box role="status"
+              sx={{ ...typography.label, color: tc.textMuted }}>{samplingLimitNote}</Box>}
             <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
               <Box component="label" sx={{ ...typography.label, display: "inline-flex", alignItems: "center", gap: .5 }}>
                 Show FFT

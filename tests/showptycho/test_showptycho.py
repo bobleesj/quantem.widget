@@ -1782,22 +1782,39 @@ def _fitted_regions():
     return {"scan_shape": [SCAN, SCAN], "regions": regions, "fits": fits}
 
 
-def test_a_scan_too_coarse_for_automatic_sampling_opens_at_native_sampling(capsys):
-    """3 Å steps at 300 kV and 20 mrad need about 12x output; the viewer still opens."""
-    _session()  # skips without quantem.gpu or an accelerator
+def test_auto_caps_output_and_preserves_saved_joint_fit(tmp_path):
+    """Auto remains 4× across reopen; a deliberate 8× choice survives saving."""
+    if not gpu_adapter.accelerator_ready():
+        pytest.skip("Needs CUDA or MPS")
     from quantem.gpu import SSB
 
-    coarse = SSB(_counts(), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(3.0, 3.0),
+    source = tmp_path / "scan.npy"
+    np.save(source, _counts())
+    coarse = SSB.open(source, voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(1.25, 1.25),
                  detector_sampling_mrad=(5.0, 5.0), aberrations=dict(START))
-    viewer = ShowPtycho(coarse)
-    assert viewer.upsampling_factor == 1 and _shown(viewer).shape == (SCAN, SCAN)
-    assert "more than 8" in viewer.auto_sampling_note and "upsampling_factor=1" in viewer.auto_sampling_note
-    assert capsys.readouterr().out.count("Automatic SSB output sampling is unavailable") == 1
-    with pytest.raises(ValueError, match="more than 8"):
-        viewer.upsampling_factor = "auto"
-    viewer.upsampling_factor = 2  # an explicit, limited output remains available
-    assert _shown(viewer).shape == (2 * SCAN, 2 * SCAN)
+    viewer = ShowPtycho(coarse, save_dir=tmp_path)
+    assert viewer.upsampling_factor == "auto" and _shown(viewer).shape == (4 * SCAN, 4 * SCAN)
+    assert "4×" in viewer.sampling_limit_note and "5.08×" in viewer.sampling_limit_note
+    assert not viewer.auto_sampling_note
+    np.testing.assert_array_equal(_shown(viewer), coarse.preview(START, upsampling_factor=4,
+                                  phase_estimator="phase_of_mean")[0])
+    path = viewer.save_calibration()
+    saved = json.loads(path.read_text())
+    saved["upsampling_factor"] = 8  # A previous version saved Auto at 8×.
+    path.write_text(json.dumps(saved))
     viewer.close()
+    restored = ShowPtycho(coarse, save_dir=tmp_path)
+    assert "Restored saved" in restored.calibration_status
+    assert restored._output_factor == 4 and restored.fitted_C10_nm == START["C10_nm"]
+    restored.close()
+    explicit = ShowPtycho(coarse, save_dir=tmp_path, upsampling=8)
+    assert _shown(explicit).shape == (8 * SCAN, 8 * SCAN)
+    explicit.save_calibration()
+    explicit.close()
+    restored = ShowPtycho(coarse, save_dir=tmp_path)
+    assert restored.upsampling_factor == 8 and restored._output_factor == 8
+    restored.close()
+    coarse.close()
 
 
 def test_output_sampling_changes_make_region_images_stale(ssb, tmp_path):
