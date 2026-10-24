@@ -266,13 +266,13 @@ Python GPU allocation, so it does not expose a "free GPU memory" control.
 
 The default on CUDA and MPS uses 200 initial TPE trials, then jointly
 refines aberrations through fifth order with sample tilt and depth.
-`ssb.find_aberrations(search="broad")` adds broader exploration.
+`ptycho.find_aberrations(search="broad")` adds broader exploration.
 The initial result is provisional; final refinement can change its phase.
 
 
 With a live kernel on CUDA or MPS, the **Compute SSB** control, or
 `viewer.compute_ssb()`, runs quantem.gpu's default fit,
-`quantem.gpu.SSB(...).find_aberrations()`, on the current 4D frame: the SSB
+`quantem.gpu.DirectPtycho(...).find_aberrations()`, on the current 4D frame: the SSB
 model fitted to the data together with the sample tilt and depth spread
 (tilt-corrected; the fitted C10 is the defocus at mid-depth). It attaches the SSB phase and the aligned DPC row/col maps as
 virtual-image sources and switches the virtual image to the phase. The

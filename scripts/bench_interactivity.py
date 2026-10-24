@@ -84,10 +84,10 @@ data.calibration.scan_sampling_A = 0.5
 data.calibration.detector_sampling_mrad = 0.46
 """
 PTYCHO_CELL = """
-from quantem.gpu import SSB
+from quantem.gpu import DirectPtycho
 # A fitted gold calibration, so the panel opens on a focused image without a 30 s search.
-ssb = SSB(data, aberrations={"C10_nm": -23.24, "C12_nm": 3.42, "phi12_deg": -40.2}, scan_detector_rotation_deg=358.31)
-viewer = ssb.show(show_fft=True)
+ptycho = DirectPtycho(data, aberrations={"C10_nm": -23.24, "C12_nm": 3.42, "phi12_deg": -40.2}, scan_detector_rotation_deg=358.31)
+viewer = ptycho.show(show_fft=True)
 viewer
 """
 COUNTS_CELL = """

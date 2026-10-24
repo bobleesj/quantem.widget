@@ -30,7 +30,7 @@ count and every detector pixel, encoded on the GPU.
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
-from quantem.gpu import SSB, io
+from quantem.gpu import DirectPtycho, io
 import quantem.widget as qw
 
 qw.profile()
@@ -106,11 +106,11 @@ fit lands about 3x closer in C10.
 ## Reconstruct
 
 ```python
-ssb = SSB(data)
-fit = ssb.reconstruct()
+ptycho = DirectPtycho(data)
+fit = ptycho.run()
 ```
 
-`SSB(data)` estimates the angle between the scan and the detector. The
+`DirectPtycho(data)` estimates the angle between the scan and the detector. The
 centre-of-mass shift of each pattern is a gradient field, and the rotation that
 removes its curl is the scan-detector rotation: about 178 degrees here, not
 flipped. The curl fixes the angle only modulo 180 degrees: at 178 + 180 = 358
@@ -118,7 +118,7 @@ degrees every centre-of-mass vector is reversed and the curl is the same. The
 two branches give conjugate phases, so one shows the gold particles bright and
 the other dark.
 
-`reconstruct()` fits the aberrations on both branches, independently, and keeps
+`run()` fits the aberrations on both branches, independently, and keeps
 the one whose atomic columns carry positive phase. In an earlier primary-only
 gold run, the columns did not decide (z +0.0), so the phase tail selected
 358 degrees (skewness +0.22 against -0.22). That historical fit gave
@@ -151,10 +151,10 @@ and compare the two histograms. `branches.show()` draws the same panels above
 the evidence the choice used, from the native phases. Polarity is a heuristic,
 not a measurement: on crystals the preferred tail can change with the region, so
 check that a crop of the field agrees before you trust the angle. If you know
-the angle from your microscope, pass it: `SSB(data, scan_detector_rotation_deg=358)`.
+the angle from your microscope, pass it: `DirectPtycho(data, scan_detector_rotation_deg=358)`.
 
 For an optional primary-only fit with custom bounds, call `find_aberrations`
-before `reconstruct()`; reconstruction then reuses that fit. This replaces the
+before `run()`; reconstruction then reuses that fit. This replaces the
 standard fifth-order fit with the explicitly selected primary model:
 
 ```python
@@ -162,7 +162,7 @@ search_ranges = {
     "C10_nm": (-30.0, 30.0),
     "C12_nm": (0.0, 20.0),
 }
-fit = ssb.find_aberrations(search="primary", search_ranges=search_ranges)
+fit = ptycho.find_aberrations(search="primary", search_ranges=search_ranges)
 ```
 
 These are the primary joint-fit defaults, written explicitly so you can edit them.
@@ -173,11 +173,11 @@ available through the calls in the method table above.
 ## Review in ShowPtycho
 
 ```python
-viewer = ssb.show(local_tilt=True, show_fft=True, save_dir="ssb-results")
+viewer = ptycho.show(local_tilt=True, show_fft=True, save_dir="ssb-results")
 viewer
 ```
 
-`ssb.show()` opens ShowPtycho on the session's current fit and shows its phase
+`ptycho.show()` opens ShowPtycho on the session's current fit and shows its phase
 and FFT. The launch table gives the angle and aberrations from your run. Output
 sampling is chosen from the calibration: 4x here, 0.125 A per pixel. Drag C10,
 C12 and phi12 to see the phase update live. The launch table identifies saved
@@ -187,6 +187,32 @@ on restart.
 The [H5/QEM handoff notebook](showptycho_to_myptycho.ipynb) initializes independent
 myptycho runs from these regional models. `viewer.calibration(region="Upper")`
 returns a snapshot of current numerical settings without saving or refitting.
+
+## Compare regularized direct phase on CUDA
+
+After fitting once, keep the optics fixed and compare the direct reconstruction
+methods. SSB remains the default. The optional CUDA methods are experimental:
+more regularization can suppress unstable contrast but can also suppress real
+fine detail, so compare against SSB and retain the fitted model.
+
+```{code-cell} ipython3
+# Optional on CUDA: uncomment to compare with the conventional result.
+# phase = ptycho.run(method="phase", phase_regularization=0.03,
+#                    upsampling_factor="auto")
+# complex_result = ptycho.run(method="complex", phase_regularization=0.03,
+#                            amplitude_regularization=0.03,
+#                            upsampling_factor="auto")
+# viewer = ShowPtycho(ptycho, method="phase", phase_regularization=0.03,
+#                    restore=False)
+# viewer
+```
+
+In the live viewer, switch **Reconstruction** and drag **Phase regularization**.
+Amplitude + phase enables its own independent amplitude strength. The same
+backend solves each update using cached fixed optics; the displayed phase is
+not an interpolated gallery. Save preserves the selected method and strengths.
+See [direct reconstruction methods](../api/showptycho.md#direct-reconstruction-methods)
+for reproducibility and the current CUDA, regional-fitting and export limits.
 
 ## View a reconstruction on any computer
 
@@ -214,9 +240,9 @@ sweeps need an SSB session, and the widget says so in one line.
 
 ## No detector binning
 
-Build the reconstruction at the **native detector size**. `SSB.open` and
+Build the reconstruction at the **native detector size**. `DirectPtycho.open` and
 `quantem.gpu.io.load` keep every detector pixel; do not bin an array before
-passing it to `SSB(...)`. Native (e.g. 192x192) is what resolves light columns
+passing it to `DirectPtycho(...)`. Native (e.g. 192x192) is what resolves light columns
 such as oxygen in a perovskite; binning throws that away. Binning also breaks
 the HTML export (the browser cannot bin), so keep the whole workflow un-binned.
 
@@ -291,7 +317,7 @@ def tilted_crystal(tilt_mrad=(3.0, -4.0), thickness_A=152.0):
     return np.asarray(measurement.array, dtype=np.float32), float(measurement.angular_sampling[0])
 
 data, det_mrad = tilted_crystal()
-ssb = SSB(data, backend="auto", voltage_kV=300.0, semiangle_mrad=30.0,
+ptycho = DirectPtycho(data, backend="auto", voltage_kV=300.0, semiangle_mrad=30.0,
           scan_sampling_A=(0.25, 0.25), detector_sampling_mrad=(det_mrad, det_mrad), scan_detector_rotation_deg=0.0)
 ```
 
@@ -299,8 +325,8 @@ First the thin-sheet model, `tilt=False`. Look at the FFT: are the lattice
 spots equally sharp in every direction?
 
 ```python
-ordinary = ssb.find_aberrations(search="primary", tilt=False, verbose=False)
-ssb.show(show_fft=True)
+ordinary = ptycho.find_aberrations(search="primary", tilt=False, verbose=False)
+ptycho.show(show_fft=True)
 ```
 
 Now let the sample lean, keeping `search="primary"` on both sides so both fits
@@ -308,8 +334,8 @@ use the same aberration order. The second fit also models tilt and depth spread.
 Compare: which spots sharpened, and did the defocus move?
 
 ```python
-tilted = ssb.find_aberrations(search="primary", tilt=True, verbose=False)
-ssb.show(show_fft=True)                 # opens on the fitted tilt; drag the Sample tilt sliders
+tilted = ptycho.find_aberrations(search="primary", tilt=True, verbose=False)
+ptycho.show(show_fft=True)                 # opens on the fitted tilt; drag the Sample tilt sliders
 ```
 
 **What the fit found.**
@@ -355,8 +381,8 @@ evidence behind the defaults.
 ## Workflow checklist
 
 1. Load the native H5 or QEM acquisition with `io.load` and set missing beam values on `data.calibration`.
-2. Open `SSB(data)`, which estimates the rotation, then `reconstruct()`, which fits the aberrations and settles the 180-degree branch.
-3. Open ShowPtycho with `ssb.show()` and review the launch calibration.
+2. Open `DirectPtycho(data)`, which estimates the rotation, then `run()`, which fits the aberrations and settles the 180-degree branch.
+3. Open ShowPtycho with `ptycho.show()` and review the launch calibration.
 4. Jointly fit aberrations, tilt and depth in the widget, or restore a matching saved joint fit.
 5. Inspect the phase and FFT; lower fit loss alone does not establish a physical tilt.
 6. Save the review for restart, then use the regional handoff for iterative reconstruction.

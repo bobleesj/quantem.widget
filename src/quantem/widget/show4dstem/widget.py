@@ -1864,7 +1864,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.ssb_compute_status = "Preparing SSB data..."
         source = self._ssb_source()
         manual = bool(lock_aberrations and aberrations is not None)
-        with gpu_adapter.SsbSession.open(
+        with gpu_adapter.DirectSession.open(
             source,
             voltage_kV=self.voltage_kV,
             semiangle_mrad=float(semiangle),
@@ -1893,7 +1893,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 ssb.ssb.depth_spread_nm = float(self._ssb_compute_sample["depth_spread_nm"])
             if manual or (trials == 0 and not do_refine):
                 self.ssb_compute_status = f"Reconstructing SSB with the given coefficients ({num_bright_field_pixels} BF pixels)..."
-                result = ssb.reconstruct()
+                result = ssb.run()
             else:
                 method = "with sample tilt" if tilt else "at tilt 0" if objective == "agreement" else "by phase variance"
                 self.ssb_compute_status = (f"Fitting SSB aberrations {method} ({trials} trials"

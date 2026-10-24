@@ -61,7 +61,7 @@ def test_a_phase_array_is_shown_as_given_with_the_session_controls_explained():
 
 @pytest.mark.parametrize("installed, hint, says, never", [
     # quantem.gpu here: open a session (the note inspects quantem.gpu's session type, so the package must be present)
-    pytest.param(True, INSTALL_CUDA, "quantem.gpu.SSB(data)", "pip install",
+    pytest.param(True, INSTALL_CUDA, "quantem.gpu.DirectPtycho(data)", "pip install",
                  marks=pytest.mark.skipif(importlib.util.find_spec("quantem.gpu") is None, reason="needs quantem.gpu installed")),
     (False, INSTALL_CUDA, INSTALL_CUDA, INSTALL_MPS),                      # NVIDIA machine without it
     (False, INSTALL_MPS, INSTALL_MPS, INSTALL_CUDA),                       # Apple silicon without it
@@ -240,7 +240,7 @@ def test_opens_on_the_session_fit_and_shows_its_preview(widget, ssb):
     expected, loss = ssb.preview(dict(START), upsampling_factor=widget.auto_upsampling_factor, compute_loss=True)
     np.testing.assert_array_equal(_shown(widget), expected)
     result = json.loads(widget.result_json)
-    assert result == {"id": 0, "C10_nm": 3.0, "upsampling_factor": 3, "C12_nm": 1.0, "phi12_deg": pytest.approx(math.degrees(0.2)), "tilt_correction": True, "loss": pytest.approx(loss)}
+    assert result == {"method": "ssb", "phase_estimator": "phase_of_mean", "id": 0, "C10_nm": 3.0, "upsampling_factor": 3, "C12_nm": 1.0, "phi12_deg": pytest.approx(math.degrees(0.2)), "tilt_correction": True, "loss": pytest.approx(loss)}
     assert repr(widget) == f"ShowPtycho(0 pinned, {ssb.num_bright_field_pixels} bright-field pixels)"
 
 
@@ -1993,3 +1993,131 @@ def test_nested_region_snapshot_uses_acquisition_bounds(tmp_path):
         assert saved["scan_region"] == list(session)
         assert saved["local_tilt"]["fits"][0]["bounds"] == fit["bounds"]
         viewer.close()
+
+
+def test_regularized_review_uses_direct_solver_and_restores_its_method(tmp_path):
+    """Compare methods at one fit, drag strengths, and reopen the saved review."""
+    gpu = pytest.importorskip("quantem.gpu")
+    if not torch.cuda.is_available():
+        pytest.skip("Regularized direct reconstruction currently requires CUDA")
+    source = tmp_path / "scan.npy"
+    np.save(source, _counts())
+    options = dict(voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5),
+                   detector_sampling_mrad=(5, 5), aberrations=START,
+                   scan_detector_rotation_deg=10)
+    with gpu.DirectPtycho.open(source, **options) as ptycho:
+        viewer = ShowPtycho(ptycho, method="phase", save_dir=tmp_path, restore=False)
+        for index, (method, strength, amplitude) in enumerate([
+            ("phase", 0.03, 0.03), ("phase", 0.07, 0.03), ("complex", 0.07, 0.15),
+        ], start=1):
+            viewer._on_request({"new": json.dumps({
+                "id": index, **START, "method": method, "phase_regularization": strength,
+                "amplitude_regularization": amplitude, "committed": False,
+            })})
+            requested = {"method": method, "phase_regularization": strength,
+                         "smoothness_inv_A": 1.0, "upsampling_factor": viewer._output_factor}
+            if method == "complex":
+                requested["amplitude_regularization"] = amplitude
+            expected, _ = ptycho.preview(START, compute_loss=False, **requested)
+            np.testing.assert_array_equal(_shown(viewer), expected)
+            assert json.loads(viewer.result_json)["method"] == method
+        record = viewer.calibration(include_phase=True)
+        assert record["reconstruction"] == {
+            "method": "complex", "phase_regularization": 0.07,
+            "amplitude_regularization": 0.15, "smoothness_inv_A": 1.0, "detector_weighting": "uniform",
+        }
+        np.testing.assert_array_equal(record["ssb_phase"], _shown(viewer))
+        viewer.save_calibration()
+        saved_phase = _shown(viewer).copy()
+        with pytest.raises(ValueError, match="live CUDA session"):
+            viewer.export(tmp_path / "unsupported-standalone")
+        viewer.close()
+    with gpu.DirectPtycho.open(source, **options) as reopened:
+        restored = ShowPtycho(reopened, method="complex", save_dir=tmp_path)
+        assert restored.phase_regularization == 0.07
+        assert restored.amplitude_regularization == 0.15
+        np.testing.assert_array_equal(_shown(restored), saved_phase)
+        restored.close()
+
+
+@pytest.mark.parametrize("method", ["phase", "complex"])
+def test_direct_result_calibration_reopens_same_reconstruction(tmp_path, method):
+    """A saved result reopens without guessing its method or numerical controls."""
+    gpu = pytest.importorskip("quantem.gpu")
+    if not torch.cuda.is_available():
+        pytest.skip("Regularized direct reconstruction currently requires CUDA")
+    source = tmp_path / "scan.npy"
+    np.save(source, _counts())
+    options = dict(voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5),
+                   detector_sampling_mrad=(5, 5), aberrations=START,
+                   scan_detector_rotation_deg=10)
+    recipe = dict(method=method, phase_regularization=0.07, smoothness_inv_A=0.8,
+                  detector_weighting="inverse_mean", upsampling_factor=1)
+    if method == "complex":
+        recipe["amplitude_regularization"] = 0.15
+    with gpu.DirectPtycho.open(source, **options) as ptycho:
+        result = ptycho.run(aberrations=START, **recipe)
+        expected = result.phase.get()
+        result.save_calibration(tmp_path / "calibration.json")
+    with gpu.DirectPtycho.open(source, **options) as reopened:
+        restored = ShowPtycho(reopened, save_dir=tmp_path)
+        assert restored.method == method
+        assert restored.phase_regularization == 0.07
+        assert restored.smoothness_inv_A == 0.8
+        assert restored.detector_weighting == "inverse_mean"
+        assert restored.upsampling_factor == 1
+        if method == "complex":
+            assert restored.amplitude_regularization == 0.15
+        np.testing.assert_array_equal(_shown(restored), expected)
+        assert restored.calibration()["reconstruction"]["detector_weighting"] == "inverse_mean"
+        from quantem.widget.showptycho.calibration import read_calibration
+        path = tmp_path / "calibration.json"
+        saved = json.loads(path.read_text())
+        for name in ("phase_regularization", "amplitude_regularization") if method == "complex" else ("phase_regularization",):
+            for value in (0, -0.01, float("nan")):
+                invalid = json.loads(json.dumps(saved))
+                invalid["reconstruction_options"][name] = value
+                path.write_text(json.dumps(invalid))
+                with pytest.raises(ValueError, match=f"saved {name} must be finite and positive"):
+                    read_calibration(path, restored._calibration_identity, restored._scan_region,
+                                     None, saved["schema"])
+        path.write_text(json.dumps(saved))
+        restored.close()
+        overridden = ShowPtycho(reopened, save_dir=tmp_path, phase_regularization=0.12,
+                                smoothness_inv_A=0, detector_weighting="uniform")
+        assert overridden.method == method and overridden.phase_regularization == 0.12
+        assert overridden.smoothness_inv_A == 0 and overridden.detector_weighting == "uniform"
+        override_recipe = {**recipe, "phase_regularization": 0.12,
+                           "smoothness_inv_A": 0, "detector_weighting": "uniform"}
+        overridden_expected, _ = reopened.preview(START, compute_loss=False, **override_recipe)
+        np.testing.assert_array_equal(_shown(overridden), overridden_expected)
+        overridden.close()
+        conventional = ShowPtycho(reopened, method="ssb", save_dir=tmp_path)
+        assert conventional.method == "ssb"
+        assert "requested reconstruction method differs" in conventional.calibration_status
+        conventional.close()
+
+
+def test_restored_ssb_review_can_select_regularized_method(tmp_path):
+    """A saved SSB estimator is a convention, not an explicit algorithm restriction."""
+    gpu = pytest.importorskip("quantem.gpu")
+    if not torch.cuda.is_available():
+        pytest.skip("Regularized direct reconstruction currently requires CUDA")
+    source = tmp_path / "scan.npy"
+    np.save(source, _counts())
+    with gpu.DirectPtycho.open(
+        source, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5),
+        detector_sampling_mrad=(5, 5), aberrations=START,
+    ) as ptycho:
+        original = ShowPtycho(ptycho, save_dir=tmp_path)
+        original.save_calibration()
+        original.close()
+        restored = ShowPtycho(ptycho, save_dir=tmp_path)
+        assert restored.method == "ssb"
+        assert restored._phase_estimator == "phase_of_mean"
+        restored._on_request({"new": json.dumps({
+            "id": 1, **START, "method": "phase", "committed": False,
+        })})
+        reply = json.loads(restored.result_json)
+        assert reply["method"] == "phase" and "error" not in reply
+        restored.close()

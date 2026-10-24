@@ -1008,11 +1008,11 @@ def test_compute_ssb_accepts_a_1024_scan(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-        def reconstruct(self):
+        def run(self):
             return types.SimpleNamespace(phase=np.ones((1024, 1024), np.float32), aberrations={"C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0},
                                          scan_detector_rotation_deg=0.0, loss=None, elapsed_s=None, sample_tilt_mrad=None)
 
-    monkeypatch.setattr(widget_module.gpu_adapter, "SSB", Session)  # stands in for quantem.gpu's class behind the adapter
+    monkeypatch.setattr(widget_module.gpu_adapter, "DirectPtycho", Session)  # stands in for quantem.gpu's class behind the adapter
     widget = Show4DSTEM(np.ones((1024, 1024, 4, 4), np.uint16), precompute_virtual_images=False, voltage_kV=300,
                         semiangle_mrad=20, scan_sampling_A=0.5, detector_sampling_mrad=1.0)
     try:
@@ -1084,12 +1084,12 @@ def test_compute_ssb_reads_the_optics_the_dataset_records(monkeypatch, tmp_path)
         def __exit__(self, *exc):
             return False
 
-        def reconstruct(self):
+        def run(self):
             # a fit on the reversed branch: quantem.gpu reports the physical angle, here above 180
             return types.SimpleNamespace(phase=np.ones((128, 128), np.float32), aberrations={"C10_nm": 12.0, "C12_nm": 3.0, "phi12_deg": 30.0},
                                          scan_detector_rotation_deg=345.5, loss=0.25, elapsed_s=1.5, sample_tilt_mrad=None)
 
-    monkeypatch.setattr(widget_module.gpu_adapter, "SSB", Session)  # stands in for quantem.gpu's class behind the adapter
+    monkeypatch.setattr(widget_module.gpu_adapter, "DirectPtycho", Session)  # stands in for quantem.gpu's class behind the adapter
     dataset = make_dataset(np.ones((128, 128, 4, 4), np.uint16), sampling=(0.4, 0.6, 1.5, 1.5), units=("angstrom", "angstrom", "mrad", "mrad"))
     dataset.metadata.update(voltage_kV=300.0, semiangle_mrad=20.0)
     widget = Show4DSTEM(dataset, precompute_virtual_images=False)
@@ -1288,11 +1288,11 @@ def test_compute_ssb_converts_a_detector_step_in_reciprocal_angstrom(monkeypatch
         def __exit__(self, *exc):
             return False
 
-        def reconstruct(self):
+        def run(self):
             return types.SimpleNamespace(phase=np.ones((128, 128), np.float32), aberrations={"C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0},
                                          scan_detector_rotation_deg=0.0, loss=None, elapsed_s=None, sample_tilt_mrad=None)
 
-    monkeypatch.setattr(widget_module.gpu_adapter, "SSB", Session)
+    monkeypatch.setattr(widget_module.gpu_adapter, "DirectPtycho", Session)
     dataset = make_dataset(np.ones((128, 128, 4, 4), np.uint16), sampling=(0.5, 0.5, 0.02, 0.025),
                            units=("angstrom", "angstrom", "1/angstrom", "1/angstrom"))
     dataset.metadata.update(voltage_kV=300.0, semiangle_mrad=20.0)
@@ -1429,12 +1429,12 @@ def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(mo
             result.objective = options["objective"]
             return result
 
-        def reconstruct(self):
+        def run(self):
             calls.append(("reconstruct", {"aberrations": self.aberrations, "sample_tilt_mrad": self.sample_tilt_mrad,
                                           "depth_spread_nm": self.depth_spread_nm}))
             return self._result(self.sample_tilt_mrad is not None, None)
 
-    monkeypatch.setattr(widget_module.gpu_adapter, "SSB", Session)  # stands in for quantem.gpu's class behind the adapter
+    monkeypatch.setattr(widget_module.gpu_adapter, "DirectPtycho", Session)  # stands in for quantem.gpu's class behind the adapter
     widget = Show4DSTEM(np.ones((128, 128, 4, 4), np.uint16), precompute_virtual_images=False, voltage_kV=300,
                         semiangle_mrad=20, scan_sampling_A=0.5, detector_sampling_mrad=1.0)
     try:

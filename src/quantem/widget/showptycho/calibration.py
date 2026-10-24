@@ -4,7 +4,7 @@ import json
 import math
 from pathlib import Path
 
-from quantem.widget.adapters.gpu import SsbSession
+from quantem.widget.adapters.gpu import DirectSession
 
 
 def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, int, int, int],
@@ -25,7 +25,7 @@ def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, 
         raise ValueError("this input has no persistent acquisition identity")
     if saved.get("session_identity") is None:
         raise ValueError("this older save has no acquisition identity; save the fitted session once")
-    if not SsbSession.same_calibration_identity(saved["session_identity"], identity):
+    if not DirectSession.same_calibration_identity(saved["session_identity"], identity):
         raise ValueError("the acquisition or launch calibration has changed")
     if saved.get("scan_region") != [int(value) for value in scan_region]:
         raise ValueError(f"the saved fit covers scan region {saved.get('scan_region')}, "
@@ -35,6 +35,26 @@ def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, 
         raise ValueError("the saved phase estimator is not supported")
     if phase_estimator is not None and phase_estimator != estimator:
         raise ValueError("the requested phase estimator differs from the saved fit")
+    reconstruction = dict(saved.get("reconstruction") or saved.get("reconstruction_options") or {})
+    method = reconstruction.setdefault("method", saved.get("reconstruction_method", "ssb"))
+    if method not in ("ssb", "phase", "complex"):
+        raise ValueError("the saved reconstruction method is not supported")
+    if "reconstruction_method" in saved and saved["reconstruction_method"] != method:
+        raise ValueError("the saved reconstruction method and options disagree")
+    if method != "ssb":
+        allowed = {"method", "phase_regularization", "smoothness_inv_A", "detector_weighting"}
+        if method == "complex":
+            allowed.add("amplitude_regularization")
+        if set(reconstruction) - allowed:
+            raise ValueError("the saved reconstruction contains unsupported options")
+        for name in allowed - {"method", "detector_weighting"}:
+            value = reconstruction.setdefault(name, 1.0 if name == "smoothness_inv_A" else 0.03)
+            if not math.isfinite(float(value)) or (float(value) < 0 if name == "smoothness_inv_A" else float(value) <= 0):
+                bound = "nonnegative" if name == "smoothness_inv_A" else "positive"
+                raise ValueError(f"the saved {name} must be finite and {bound}")
+        if reconstruction.setdefault("detector_weighting", "uniform") not in ("uniform", "inverse_mean"):
+            raise ValueError("the saved detector weighting is not supported")
+    saved["reconstruction"] = reconstruction
     if saved["upsampling_mode"] not in ("auto", "explicit") or saved["upsampling_factor"] not in (1, 2, 3, 4, 8):
         raise ValueError("the saved output sampling is not supported")
     aberrations = saved["aberrations"]

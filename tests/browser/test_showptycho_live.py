@@ -208,3 +208,50 @@ print('exported-exact-counts')
     assert np.asarray(Image.open(screenshot).convert("L")).std() > 10
     assert not offline.errors, offline.errors
     assert [error for error in page.errors if "debugger session" not in error] == [], page.errors
+
+
+def test_direct_methods_and_regularization_follow_live_slider_requests(jupyter, open_page, browser_out):
+    """Drag a stabilization strength and compare the shown phase with the backend."""
+    import torch
+
+    if not torch.cuda.is_available():
+        pytest.skip("Regularized direct reconstruction requires CUDA")
+    notebook = "showptycho_direct_methods.ipynb"
+    setup = SESSION.replace("from quantem.gpu import SSB", "from quantem.gpu import DirectPtycho")
+    setup = setup.replace("ShowPtycho(SSB(", "ShowPtycho(DirectPtycho(")
+    jupyter.write_notebook(notebook, setup)
+    page = jupyter.open(open_page, notebook, "direct-methods", webgpu=True, ready=PHASE, out=browser_out)
+    # This exercises live CUDA reconstruction; hardware browser rendering has
+    # a separate release gate. Canvas fallback must retain the same controls.
+    select = page.get_by_role("combobox", name="Reconstruction method")
+    select.click()
+    page.get_by_role("option", name="Phase · experimental", exact=True).click()
+    slider = page.get_by_role("slider", name="Phase regularization", exact=True)
+    slider.wait_for(state="visible")
+    slider.focus()
+    page.keyboard.press("ArrowRight")
+    page.keyboard.press("ArrowRight")
+    page.wait_for_timeout(1500)
+    select.click()
+    page.get_by_role("option", name="Amplitude + phase · experimental", exact=True).click()
+    amplitude = page.get_by_role("slider", name="Amplitude regularization", exact=True)
+    amplitude.wait_for(state="visible")
+    amplitude.focus()
+    page.keyboard.press("ArrowRight")
+    page.wait_for_timeout(1500)
+    proof = jupyter.run_in_kernel(notebook, """
+import json
+request = json.loads(viewer.result_json)
+assert request['method'] == 'complex', request
+assert request['phase_regularization'] > .03, request
+assert request['amplitude_regularization'] > .03, request
+expected, _ = viewer._ssb.preview(viewer.ssb_parameters['aberrations'], compute_loss=False,
+    upsampling_factor=viewer._output_factor, **viewer._reconstruction_options())
+shown = np.frombuffer(viewer.phase_bytes, np.float32).reshape(expected.shape)
+np.testing.assert_array_equal(shown, expected)
+assert not viewer.webgpu_preview_enabled
+print('live direct method and strengths match backend')
+""")
+    assert "live direct method and strengths match backend" in proof
+    page.screenshot(path=str(browser_out / "showptycho_direct_methods.png"))
+    assert [error for error in page.errors if "debugger session" not in error] == [], page.errors

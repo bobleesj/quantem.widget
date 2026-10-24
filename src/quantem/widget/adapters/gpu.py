@@ -21,7 +21,7 @@ import torch
 from quantem.widget.device import device_name, gpu_path_hint, no_gpu_path, print_once
 
 try:
-    from quantem.gpu import SSB
+    from quantem.gpu import DirectPtycho, SSB
     from quantem.gpu import io as gpu_io
     from quantem.gpu.detector import disk_edge_radius as gpu_disk_edge_radius
     from quantem.gpu.detector import fit_bright_field_disk as gpu_fit_bright_field_disk
@@ -32,7 +32,7 @@ try:
     from quantem.gpu.dpc import run as gpu_dpc_run
     from quantem.gpu.io import Dataset4dstemGPU
 except ImportError:
-    SSB = gpu_io = prepare = gpu_disk_edge_radius = gpu_fit_bright_field_disk = gpu_release_cached_memory = None
+    DirectPtycho = SSB = gpu_io = prepare = gpu_disk_edge_radius = gpu_fit_bright_field_disk = gpu_release_cached_memory = None
     gpu_runtime_notice = gpu_dpc_run = Dataset4dstemGPU = BRIGHT_FIELD_DISK_KEY = BRIGHT_FIELD_DISK_SCHEMA = None
 
 
@@ -66,8 +66,8 @@ def is_acquisition(obj) -> bool:
 
 
 def is_ssb(obj) -> bool:
-    """Whether ``obj`` is a ``quantem.gpu.SSB`` session."""
-    return available() and isinstance(obj, SSB)
+    """Whether ``obj`` is a ``quantem.gpu.DirectPtycho`` session."""
+    return available() and isinstance(obj, (DirectPtycho, SSB))
 
 
 def announce_hot_pixels(record: dict | None) -> None:
@@ -229,8 +229,8 @@ REGION_FIT_SEED = 42
 REGION_TILT_LIMIT_MRAD = 25.0
 
 
-class SsbSession:
-    """A ``quantem.gpu.SSB`` session as the SSB widgets read and drive it.
+class DirectSession:
+    """A ``quantem.gpu.DirectPtycho`` session as the SSB widgets read and drive it.
 
     quantem.gpu and the widgets use one name per concept
     (``scan_detector_rotation_deg``, ``detector_sampling_mrad``, ``C10_nm`` /
@@ -246,9 +246,9 @@ class SsbSession:
 
     @classmethod
     def open(cls, source, **parameters):
-        """A new session ``quantem.gpu.SSB(source, **parameters)``; use it as a context manager."""
+        """A new session ``quantem.gpu.DirectPtycho(source, **parameters)``; use it as a context manager."""
         require("Compute SSB")
-        return cls(SSB(source, **parameters))
+        return cls(DirectPtycho(source, **parameters))
 
     def __enter__(self):
         self.ssb.__enter__()
@@ -307,13 +307,13 @@ class SsbSession:
         padded, measured = self.ssb.scan_shape, self.ssb.input_scan_shape
         return tuple(int(full - native) // 2 for full, native in zip(padded, measured))
 
-    def select_region(self, scan_region, *, aberrations: dict, scan_detector_rotation_deg: float) -> "SsbSession":
-        """A separately owned session over ``scan_region`` of this scan (``quantem.gpu.SSB.select_region``).
+    def select_region(self, scan_region, *, aberrations: dict, scan_detector_rotation_deg: float) -> "DirectSession":
+        """A separately owned session over ``scan_region`` of this scan (``quantem.gpu.DirectPtycho.select_region``).
 
         ``scan_region`` is relative to this session's scan; the new session's
         ``scan_region`` is in full-scan positions. Close it with ``.ssb.close()``.
         """
-        return SsbSession(self.ssb.select_region(
+        return DirectSession(self.ssb.select_region(
             tuple(int(value) for value in scan_region), aberrations=dict(aberrations),
             scan_detector_rotation_deg=float(scan_detector_rotation_deg)))
 
@@ -443,7 +443,7 @@ class SsbSession:
         """Adopt a validated complete correction without running a new search.
 
         Assigning ``ssb.aberrations`` states them as known (quantem.gpu), so a
-        later ``ssb.reconstruct()`` applies them instead of fitting.
+        later ``ptycho.run()`` applies them instead of fitting.
         """
         from quantem.gpu.ssb.units import validate_aberrations
 
@@ -486,11 +486,11 @@ class SsbSession:
             self.ssb.best_loss = float(loss)
 
     def preview_context(self, num_bright_field_pixels: int):
-        """A reduced bright-field context for slider drags (``quantem.gpu.SSB.preview_context``)."""
+        """A reduced bright-field context for slider drags (``quantem.gpu.DirectPtycho.preview_context``)."""
         return self.ssb.preview_context(int(num_bright_field_pixels))
 
     def preview(self, aberrations: dict, **options):
-        """Transient ``(phase, loss)`` at ``aberrations`` (``quantem.gpu.SSB.preview(aberrations, **options)``).
+        """Transient ``(phase, loss)`` at ``aberrations`` (``quantem.gpu.DirectPtycho.preview(aberrations, **options)``).
 
         ``aberrations`` holds ``C10_nm``, ``C12_nm``, ``phi12_deg`` and the
         higher-order panel's terms (``C21_nm`` with ``phi21_deg``; ``C30_nm`` and
@@ -536,15 +536,17 @@ class SsbSession:
         }
 
     def export_bright_field(self, path) -> None:
-        """Write the exact bright-field counts beside an exported page (``quantem.gpu.SSB.export_brightfield``)."""
+        """Write the exact bright-field counts beside an exported page (``quantem.gpu.DirectPtycho.export_brightfield``)."""
         self.ssb.export_brightfield(path)
 
-    def reconstruct(self) -> dict:
-        """Reconstruct at the session's aberrations (``quantem.gpu.SSB.reconstruct``); see ``result`` for the keys."""
-        return self.result(self.ssb.reconstruct())
+    def run(self, **options) -> dict:
+        """Run direct reconstruction at the reviewed optics; see ``result`` for the keys."""
+        return self.result(self.ssb.run(**options))
+
+    reconstruct = run  # Existing widget integrations share the canonical implementation.
 
     def find_aberrations(self, **options) -> dict:
-        """Fit the aberrations (``quantem.gpu.SSB.find_aberrations(**options)``); see ``result`` for the keys."""
+        """Fit the aberrations (``quantem.gpu.DirectPtycho.find_aberrations(**options)``); see ``result`` for the keys."""
         options.setdefault("search", "standard")
         options.setdefault("show", False)
         return self.result(self.ssb.find_aberrations(**options))
@@ -559,7 +561,7 @@ class SsbSession:
         Independent regional sessions leave the overview calibration intact.
         Detector geometry and rotation are common; aberrations, both tilt
         components and depth spread are optimized together for each region,
-        ``quantem.gpu.SSB.find_aberrations(tilt=True, num_trials=, refinement=)``
+        ``quantem.gpu.DirectPtycho.find_aberrations(tilt=True, num_trials=, refinement=)``
         once with ``REGION_FIT_SEED``.
         The separate phase-variance diagnostic is not needed for this fit,
         so ``compute_loss=False`` omits it without changing any fitted value.
@@ -761,3 +763,7 @@ class AcquisitionSeries:
                 f"{self.frames[0].shape} on {self.device}."
             )
         self.frames.append(frame)
+
+
+# Compatibility for integrations using the previous adapter name.
+SsbSession = DirectSession

@@ -9,7 +9,7 @@ detector columns automatically.
 
 If you just want the interactive widget inside a notebook, see
 [ShowPtycho in Jupyter](showptycho.md) instead. This page assumes you already
-have a **fitted** `ssb` (solved with `ssb.find_aberrations()`, the
+have a **fitted** `ssb` (solved with `ptycho.find_aberrations()`, the
 model-based, tilt-corrected default with 200 trials; an unfitted export uses
 only the supplied starting aberrations). The
 [SSB fit methods](../api/showptycho.md#ssb-fit-methods) table lists the other two.
@@ -19,8 +19,8 @@ only the supplied starting aberrations). The
 ```python
 from quantem.widget import ShowPtycho
 
-# ssb is already fitted: result = ssb.find_aberrations()  # tilt-corrected, 200 trials
-w = ShowPtycho(ssb, save_dir="out/")   # opened with SSB.open("scan_master.h5", ...), the session names its file
+# ssb is already fitted: result = ptycho.find_aberrations()  # tilt-corrected, 200 trials
+w = ShowPtycho(ptycho, save_dir="out/")   # opened with DirectPtycho.open("scan_master.h5", ...), the session names its file
 w.export("out/", title="my sample SSB")
 ```
 
@@ -58,7 +58,7 @@ detector shape mismatch; HDF5 has 192x192, calibration has 96x96
 ```
 
 with blank panels. Always build and export at native detector size, as
-`SSB.open` and `quantem.gpu.io.load` do.
+`DirectPtycho.open` and `quantem.gpu.io.load` do.
 
 ## Run it
 
@@ -128,3 +128,5 @@ The folder records the source file as `redacted_local_source`; no acquisition
 name or local path is written under `snapshots/` or into the viewer state. The
 reused QEM file retains its original metadata and detector measurements. Review
 that source before sharing; it must be yours to share.
+
+Standalone reconstruction currently supports `method="ssb"`. Regularized phase and complex reconstruction require a live CUDA notebook. Save their model with `save_calibration()` and their scientific arrays with `ptycho.run(..., save_dir="direct-result")`; the export refuses unsupported methods rather than changing the calculation.

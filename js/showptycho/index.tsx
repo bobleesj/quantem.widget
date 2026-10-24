@@ -259,6 +259,7 @@ interface PinnedEntry {
   loss: number;
   starred: boolean;
   generated_at_utc: string;
+  reconstruction: Record<string, string | number>;
   phaseData: Float32Array;
   w: number;
   h: number;
@@ -1556,6 +1557,19 @@ function Explore() {
   const [objectSamplingA] = useModelState<number[]>("object_sampling_A");
   const [scanSamplingA] = useModelState<number[]>("scan_sampling_A");
   const [sampling] = useModelState<number | "auto">("upsampling_factor");
+  const [methodModel] = useModelState<string>("method");
+  const [phaseRegularizationModel] = useModelState<number>("phase_regularization");
+  const [amplitudeRegularizationModel] = useModelState<number>("amplitude_regularization");
+  const [smoothnessModel] = useModelState<number>("smoothness_inv_A");
+  const [weightingModel] = useModelState<string>("detector_weighting");
+  const [regularizationAvailable] = useModelState<boolean>("regularization_available");
+  type ReconstructionControls = { method: string; phase_regularization: number; amplitude_regularization: number; smoothness_inv_A: number; detector_weighting: string };
+  const [reconstructionControls, setReconstructionControls] = React.useState<ReconstructionControls>(() => ({
+    method: methodModel || "ssb", phase_regularization: phaseRegularizationModel ?? 0.03,
+    amplitude_regularization: amplitudeRegularizationModel ?? 0.03, smoothness_inv_A: smoothnessModel ?? 1.0,
+    detector_weighting: weightingModel ?? "uniform",
+  }));
+  const reconstructionRef = React.useRef(reconstructionControls);
   const [autoFactor] = useModelState<number>("auto_upsampling_factor");
   const upsamplingFactor = sampling === "auto" ? (autoFactor || 1) : (sampling || 1);
   const upsamplingFactorRef = React.useRef(upsamplingFactor || 1); upsamplingFactorRef.current = upsamplingFactor || 1;
@@ -2175,13 +2189,14 @@ function Explore() {
       ...(region ? {region_id:region.id,region_bounds:region.bounds} : {}),
       sample: { sample_tilt_mrad: [sample.tiltRowMrad, sample.tiltColMrad], depth_spread_nm: sample.depthSpreadNm },
       higher_order: higherOrderRef.current,
+      ...reconstructionRef.current,
       tilt_correction: model.get("tilt_correction") !== false,
       scan_detector_rotation_deg: model.get("scan_detector_rotation_deg"),
     }});
   }, [model]);
 
   const sendDrag = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal = rotationDegRef.current) => {
-    if (!regionContextRef.current && frontendPreviewRef.current?.(c10Val, c12Val, phi12Val, rotationVal)) return;
+    if (reconstructionRef.current.method === "ssb" && !regionContextRef.current && frontendPreviewRef.current?.(c10Val, c12Val, phi12Val, rotationVal)) return;
     if (sentRequestsRef.current.length >= requestCapacity()) {
       pendingDragRef.current = { values: [c10Val, c12Val, phi12Val], committed: false };
       return;
@@ -2191,7 +2206,7 @@ function Explore() {
 
   const sendCommit = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal = rotationDegRef.current) => {
     pendingDragRef.current = null;
-    if (!regionContextRef.current && frontendFullRef.current?.(c10Val, c12Val, phi12Val, rotationVal)) return;
+    if (reconstructionRef.current.method === "ssb" && !regionContextRef.current && frontendFullRef.current?.(c10Val, c12Val, phi12Val, rotationVal)) return;
     if (sentRequestsRef.current.length >= requestCapacity()) {
       pendingDragRef.current = { values: [c10Val, c12Val, phi12Val], committed: true };
       return;
@@ -2229,6 +2244,27 @@ function Explore() {
     sliderPendingRef.current[key] = value;
     flushSliderState();
   }, [sliderStateFrame, flushSliderState]);
+  // Regularization uses the same latest-wins queue as optics. Only the small
+  // reconstructed phase travels back; each strength is solved by quantem.gpu.
+  const reconstructionFrame = React.useMemo(() => latestFrame(() => {
+    setReconstructionControls({ ...reconstructionRef.current });
+  }), []);
+  React.useEffect(() => () => reconstructionFrame.cancel(), [reconstructionFrame]);
+  React.useEffect(() => {
+    if (sentRequestsRef.current.length || pendingDragRef.current) return;
+    reconstructionRef.current = {
+      method: methodModel || "ssb", phase_regularization: phaseRegularizationModel ?? 0.03,
+      amplitude_regularization: amplitudeRegularizationModel ?? 0.03, smoothness_inv_A: smoothnessModel ?? 1.0,
+      detector_weighting: weightingModel ?? "uniform",
+    };
+    setReconstructionControls({ ...reconstructionRef.current });
+  }, [methodModel, phaseRegularizationModel, amplitudeRegularizationModel, smoothnessModel, weightingModel]);
+  const changeReconstruction = (next: Partial<ReconstructionControls>, committed: boolean) => {
+    reconstructionRef.current = { ...reconstructionRef.current, ...next };
+    reconstructionFrame.schedule();
+    const current = sliderVals.current;
+    (committed ? sendCommit : sendDrag)(current.c10, current.c12, current.phi12);
+  };
   /* Panel changes share the one-in-flight request path with the primary sliders.
      Frames read the latest values; continuous input never restarts a debounce. */
   const sampleCommitPendingRef = React.useRef(false);
@@ -3160,6 +3196,14 @@ function Explore() {
       loss: loss ?? 0,
       starred: false,
       generated_at_utc: new Date().toISOString(),
+      reconstruction: reconstructionRef.current.method === "ssb" ? { method: "ssb" } : {
+        method: reconstructionRef.current.method,
+        phase_regularization: reconstructionRef.current.phase_regularization,
+        smoothness_inv_A: reconstructionRef.current.smoothness_inv_A,
+        detector_weighting: reconstructionRef.current.detector_weighting,
+        ...(reconstructionRef.current.method === "complex"
+          ? { amplitude_regularization: reconstructionRef.current.amplitude_regularization } : {}),
+      },
       phaseData: new Float32Array(phase.data),
       w: phase.w, h: phase.h,
       thumb: makeThumbnail(phase.data, phase.w, phase.h, cmapRef.current),
@@ -3278,6 +3322,7 @@ function Explore() {
           display_negate_phase: pin.display_negate_phase,
           loss: pin.loss,
           starred: pin.starred,
+          reconstruction: pin.reconstruction,
           generated_at_utc: pin.generated_at_utc,
           shape: [pin.h, pin.w],
         })),
@@ -3845,6 +3890,34 @@ function Explore() {
           {previewError && <Box component="span" role="alert" sx={{ color: "#ef4444" }}> · {previewError}</Box>}
         </Typography>}
 
+        {tuning && <Box sx={controlBand(tc)}>
+          <Typography sx={typography.label}>Reconstruction</Typography>
+          <Select size="small" value={reconstructionControls.method}
+            inputProps={{ "aria-label": "Reconstruction method" }}
+            onChange={event => changeReconstruction({ method: event.target.value }, true)}
+            sx={{ ...typography.label, height: 28 }}>
+            <MenuItem value="ssb">SSB</MenuItem>
+            <MenuItem value="phase" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Phase · experimental</MenuItem>
+            <MenuItem value="complex" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Amplitude + phase · experimental</MenuItem>
+          </Select>
+          {reconstructionControls.method !== "ssb" && <>
+            {(["phase_regularization", ...(reconstructionControls.method === "complex" ? ["amplitude_regularization"] : [])] as const).map(key => {
+              const name = key as "phase_regularization" | "amplitude_regularization";
+              const value = reconstructionControls[name];
+              return <Box key={name} sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 230 }}>
+                <Typography sx={{ ...typography.label, whiteSpace: "nowrap" }}>{name === "phase_regularization" ? "Phase" : "Amplitude"} regularization {formatNumber(value, 4)}</Typography>
+                <Slider size="small" aria-label={name === "phase_regularization" ? "Phase regularization" : "Amplitude regularization"}
+                  min={-4} max={0} step={0.01} value={Math.log10(Math.max(1e-4, value))}
+                  onChange={(_, next) => changeReconstruction({ [name]: 10 ** (next as number) }, false)}
+                  onChangeCommitted={(_, next) => changeReconstruction({ [name]: 10 ** (next as number) }, true)}
+                  sx={{ minWidth: 90, width: 130 }} />
+              </Box>;
+            })}
+            <Typography sx={typography.labelSmall}>Live CUDA reconstruction · phase image</Typography>
+          </>}
+          {previewError && <Typography role="alert" sx={{ ...typography.label, color: "#ef4444" }}>{previewError}</Typography>}
+        </Box>}
+
         {/* Controls + Histogram row */}
         <Box sx={{ display: "flex", gap: `${SPACING.SM}px`, width: "100%" }}>
           {/* Left: stats + controls */}
@@ -3868,7 +3941,7 @@ function Explore() {
                 </Typography>
               </Tooltip>
               {loss != null && !regionalMode && (
-                <Tooltip title="Phase variance across the corrected bright-field pixel images. Lower values indicate closer agreement between those images, not a guarantee of sharper or more accurate phase. The default fit optimizes model agreement; this is a separate diagnostic." placement="top" arrow>
+                <Tooltip title={reconstructionControls.method === "ssb" ? "Phase variance across the corrected bright-field pixel images. Lower values indicate closer agreement between those images, not a guarantee of sharper or more accurate phase. The default fit optimizes model agreement; this is a separate diagnostic." : "Measurement disagreement for the selected direct model. Regularization trades data agreement against stability. This value is not an independent resolution measurement."} placement="top" arrow>
                   <Typography sx={{ ...typography.label, ...statChip(tc, true), cursor: "help" }}>
                     loss <Box component="span" sx={{ color: tc.accent }}>{formatNumber(loss, 8)}</Box>
                     {delta != null && (

@@ -86,7 +86,7 @@ def test_public_docs_use_the_canonical_gpu_api() -> None:
         path.read_text(encoding="utf-8")
         for path in sorted((docs / "tutorials").glob("showptycho*.md"))
     )
-    assert re.search(r"\bSSB\.open\s*\(", showptycho_docs)
+    assert re.search(r"\bDirectPtycho\.open\s*\(", showptycho_docs)
     assert offenders == []
 
 
@@ -240,7 +240,7 @@ def test_every_build_bundles_the_quantem_gpu_ref_in_gpu_ref_txt() -> None:
     # the next quantem.gpu rc may change the kernels and API this release bundles
     for floor, ceiling in bounds:
         prefix, number = floor.split("rc")
-        assert ceiling == f"{prefix}rc{int(number) + 1}"
+        assert ceiling == f"{prefix}rc{int(number.split('.', 1)[0]) + 1}"
 
 def test_sync_writes_a_manifest_of_the_pinned_ref_and_every_file(tmp_path) -> None:
     """MANIFEST.json names the ref in gpu-ref.txt and the commit synced, and the sha256 of every file written."""
