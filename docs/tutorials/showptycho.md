@@ -138,7 +138,7 @@ fit
 ```
 
 ```python
-table = fit.report()                   # pandas DataFrame, full precision
+table = fit.report()                   # optics, objective, timing; full precision
 parameters = fit.report(to_dict=True)  # coefficients and sample geometry
 ```
 
@@ -147,6 +147,21 @@ parameters = fit.report(to_dict=True)  # coefficients and sample geometry
 depth have their own unit-bearing keys. Only the notebook display rounds
 numbers. Editing either report leaves the fitted result unchanged. For values
 changed later in ShowPtycho, use `viewer.calibration()`.
+
+`fit.aberrations` remains a dictionary of optical coefficients. The full report
+also includes recorded elapsed/stage times, model agreement, variance diagnostic
+loss, trial/refinement counts and the stopping reason. Different objectives
+have different scales; an evaluation limit does not prove convergence. Stage
+timings may overlap. To add the recorded convergence figure, use:
+
+```python
+fit.report(show_convergence=True).T  # vertical table beneath the saved curve
+```
+
+This reads the saved history without fitting again. Use `to_dict=True` separately
+when exporting the numerical report. Reporting adds no fit callbacks or image
+transfers. Use `find_aberrations(show=False)` to disable the live phase preview.
+The fitter still keeps its usual scalar history.
 
 Look at both branches yourself. These are the primary fits used to choose the
 rotation before fifth-order refinement. Fitting stays on the native scan grid;
