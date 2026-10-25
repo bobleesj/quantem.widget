@@ -8140,6 +8140,16 @@ function Show4DSTEM() {
     themeColors, themedMenuProps, themedSelect, themedTypography, viColormap, viRoiMode, viRoiRadius,
     viRoiReduce, viScaleMode
   ]);
+  if (nFrames === 0) {
+    return (
+      <Box ref={rootRef} className="show4dstem-root" sx={{ p: 2, bgcolor: themeColors.bg, color: themeColors.text }}>
+        {titleHeading}
+        <Typography role="status" sx={themedTypography.label}>
+          No acquired patterns. Images appear when the detector starts sending data.
+        </Typography>
+      </Box>
+    );
+  }
   return (
     <Box
       ref={rootRef}

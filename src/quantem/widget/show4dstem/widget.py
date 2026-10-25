@@ -496,6 +496,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if h5_urls and qem_urls:
             raise ValueError("Pass h5_urls= or qem_urls=, not both: one viewer reads one kind of browser source.")
         browser_urls = h5_urls or qem_urls
+        waiting = data is None and not browser_urls
         if browser_urls and (scan_shape is None or detector_shape is None):
             raise ValueError("Show4DSTEM(..., h5_urls= or qem_urls=...) requires scan_shape=(rows, cols) and detector_shape=(rows, cols).")
 
@@ -525,7 +526,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         listed = isinstance(data, (list, tuple)) and len(data) > 0
         prepared_series = listed and all(isinstance(item, DetectorSessionSource)
                                         or callable(getattr(item, "detector_session", None)) for item in data)
-        if (prepared or prepared_series) and (scan_region is not None or browser_urls or offline is not False):
+        if (prepared or prepared_series or waiting) and (scan_region is not None or browser_urls or offline is not False):
             raise ValueError("A prepared detector session is already scoped to its scan; use offline=False without scan_region or browser URLs.")
         series = listed and any(gpu_adapter.is_acquisition(item) for item in data)
         bounded = gpu_adapter.is_acquisition(data) or series
@@ -554,9 +555,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             # (an unknown axis is None) and a quantem core dataset (an unknown axis is 1.0 "pixels")
             recorded = acquisition_calibration(first.sampling, first.units, first.metadata)
             recorded_disk = gpu_adapter.recorded_bright_field_disk(first.metadata)
-        if prepared_series:
-            data = SessionSeries(data)
-            recorded = {key: data.frames[0].metadata.get(key) for key in CALIBRATION_KEYS}
+        if prepared_series or waiting:
+            if prepared_series:
+                data = SessionSeries(data)
+                recorded = {key: data.frames[0].metadata.get(key) for key in CALIBRATION_KEYS}
             precompute_virtual_images = False
             frame_dim_label = "Dataset" if frame_dim_label is None else frame_dim_label
             view_mode = "multiple" if view_mode is None else view_mode
@@ -604,6 +606,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if prepared:
             data_device = torch.device(data.device)
             shape = (*data.scan_shape, *data.detector_shape)
+        elif waiting:
+            data_device, shape = torch.device("cpu"), (0, 1, 1, 1, 1)
         elif browser_urls:
             urls = list(dict.fromkeys(str(url) for url in browser_urls))
             data = None
@@ -647,7 +651,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._offline_dtype = offline_dtype
         self._device = data_device
         self._data = data
-        if prepared or prepared_series:
+        if prepared or prepared_series or waiting:
             self.ssb_compute_enabled = False
         self.view_mode = view_mode
         self.compare_dp_mode = compare_dp_mode
@@ -707,7 +711,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 self.load_state_dict(state)
             return
 
-        if bright_field_center_px is None and bright_field_radius_px is None:
+        if not waiting and bright_field_center_px is None and bright_field_radius_px is None:
             if recorded_disk is not None:
                 (self.bright_field_center_row_px, self.bright_field_center_col_px), self.bright_field_radius_px = recorded_disk
             else:
@@ -1455,7 +1459,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self._update_frame()
 
     @classmethod
-    def stream(cls, recording, *, refresh_s: float = 0.05, labels=None, first_timeout_s: float = 120.0,
+    def stream(cls, recording, *, refresh_s: float = 0.05, labels=None, first_timeout_s: float = 0.0,
                **viewer_kwargs) -> Self:
         """Show arriving scans from a GPU recording, before a whole scan completes.
 
@@ -1464,6 +1468,14 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         display updates only; no incoming patterns are dropped. Background image
         transfers coalesce during dragging so cursor requests stay responsive. Older recordings
         that expose only completed ``datasets`` still append on completion.
+
+        Returns a waiting viewer immediately when the receiver is idle. It does
+        not arm or trigger acquisition. Pass ``first_timeout_s=120`` to wait for
+        the first pattern before returning, as in earlier versions.
+
+        Examples
+        --------
+        >>> viewer = Show4DSTEM.stream(recording)  # doctest: +SKIP
         """
         if refresh_s <= 0:
             raise ValueError("refresh_s must be positive.")
@@ -1490,6 +1502,12 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                     break
             if recording.error is not None:
                 raise recording.error
+            if first_timeout_s == 0 and recording.receiving:
+                viewer = cls(None, **viewer_kwargs)
+                viewer._replace_stream_sources([], [])
+                viewer.title = "Waiting for acquisition"
+                sources = []
+                break
             if waited >= first_timeout_s or not recording.receiving:
                 raise TimeoutError(f"No acquisition arrived within {waited:.0f} s.")
             pause.wait(0.01)
@@ -1499,16 +1517,17 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         viewer._stream_stop = threading.Event()
         viewer._stream_thread = None
         viewer.stream_error = None
-        title = viewer.title or "Live acquisition"
+        title = viewer_kwargs.get("title") or "Live acquisition"
         shown_sources, previous = sources[:1], None
+        initialized = bool(shown_sources)
         last_refresh = 0.0
 
-        def update():
-            nonlocal shown_sources, previous, last_refresh
+        def update(force=False):
+            nonlocal shown_sources, previous, last_refresh, initialized
             if viewer._stream_stop.is_set():
                 return False
             try:
-                if recording.error is not None:
+                if recording.error is not None and not force:
                     raise recording.error
                 # Sample completion first: if it changes during this update,
                 # the next update must still publish the final counts.
@@ -1518,24 +1537,36 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 # the small DP replies. Keep room for direct manipulation;
                 # detector gestures still recompute immediately, and the final
                 # acquisition refresh is never deferred.
-                if (not complete and now - viewer._last_interaction_at < 0.15
+                if (not force and not complete and now - viewer._last_interaction_at < 0.15
                         and now - last_refresh < 0.1):
                     return True
                 with lock:
                     sources = snapshot()
                     shown = len(shown_sources)
-                    if sources[:shown] == shown_sources:
+                    if not sources:
+                        if shown_sources:
+                            viewer._replace_stream_sources(shown_sources, [])
+                        shown_sources, previous = [], None
+                        return not complete
+                    if not initialized and partial and not sources[0].received:
+                        return not complete
+                    if viewer._data is None:
+                        with viewer.hold_sync(), viewer.hold_trait_notifications():
+                            viewer._replace_stream_sources([], sources, labels=labels)
+                            if not initialized:
+                                viewer._initialize_stream_geometry(sources[0], viewer_kwargs)
+                                initialized = True
+                        previous = None
+                    elif sources[:shown] == shown_sources:
                         if len(sources) > shown:
                             viewer.append(sources[shown:], labels[shown:len(sources)] if labels else None)
                     elif sources and partial:
                         viewer._replace_stream_sources(shown_sources, sources)
                         previous = None
-                    elif not sources:
-                        return not complete
                     shown_sources = sources
                     shown = len(sources)
                 progress = tuple(source.received for source in sources[:shown]) if partial else ()
-                if partial and complete and len(recording.datasets) == shown and all(
+                if partial and complete and isinstance(viewer._data, SessionSeries) and len(recording.datasets) == shown and all(
                         gpu_adapter.is_acquisition(dataset) for dataset in recording.datasets):
                     # Borrow the same ANS storage through the regular joint
                     # query path once every acquisition is immutable.
@@ -1544,19 +1575,26 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                         viewer._close_sessions()
                         viewer._data = completed
                     previous = None
-                if partial and progress != previous:
+                if force or progress != previous:
                     viewer.refresh()
-                    current = sources[shown - 1]
-                    viewer.title = (f"{title} | scan {shown}: {current.received:,}/{current.total:,} patterns"
-                                    " | row scan left → right | ANS on GPU")
+                    if partial:
+                        current = sources[shown - 1]
+                        viewer.title = (f"{title} | scan {shown}: {current.received:,}/{current.total:,} patterns"
+                                        " | row scan left → right | ANS on GPU")
+                    else:
+                        viewer.title = title
                     previous = progress
                     last_refresh = time.monotonic()
                 return not complete
             except Exception as error:
                 viewer.stream_error = error
                 viewer.title = f"Live acquisition stopped: {error}"
+                if force:
+                    raise
                 return False
 
+        viewer._stream_update = update
+        viewer._stream_recording = recording
         loop = IOLoop.current(instance=False)
         if loop is not None and loop.asyncio_loop.is_running():
             def poll():
@@ -1579,14 +1617,87 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             viewer._stream_thread.start()
         return viewer
 
-    def _replace_stream_sources(self, previous, sources) -> None:
+    def refresh_stream(self, scan_id: str | None = None) -> None:
+        """Refresh a stream after unloading scans, optionally selecting a stable scan ID.
+
+        Examples
+        --------
+        >>> recording.unload(scan_id)
+        >>> viewer.refresh_stream()
+        """
+        update = getattr(self, "_stream_update", None)
+        if update is None:
+            raise ValueError("This viewer is not streaming; use Show4DSTEM.stream(recording).")
+        update(force=True)
+        if scan_id is not None:
+            with self._stream_recording.lock:
+                sources = list(self._stream_recording.acquisitions)
+                index = next((i for i, source in enumerate(sources) if source.identifier == scan_id), None)
+                if index is None:
+                    raise ValueError("This scan is no longer available; refresh the scan list.")
+                self.frame_idx = index
+
+    def _initialize_stream_geometry(self, source, options) -> None:
+        """Adopt the first real scan's geometry and calibration after an idle start."""
+        self._device = torch.device(self._data.device)
+        self.shape_rows, self.shape_cols, self.det_rows, self.det_cols = self._data.shape[-4:]
+        self.pos_row = self.pos_col = 0
+        self.vi_roi_center_row, self.vi_roi_center_col = self.shape_rows / 2, self.shape_cols / 2
+        self.vi_roi_center = [self.vi_roi_center_row, self.vi_roi_center_col]
+        roi_size = max(3, min(self.shape_rows, self.shape_cols) * DEFAULT_VI_ROI_RATIO)
+        self.vi_roi_radius, self.vi_roi_width, self.vi_roi_height = roi_size, roi_size * 2, roi_size
+        recorded = (acquisition_calibration(source.sampling, source.units, source.metadata)
+                    if gpu_adapter.is_acquisition(source) else source.metadata)
+        calibration = {name: stated(name, options.get(name), recorded.get(name)) for name in CALIBRATION_KEYS}
+        if calibration["detector_sampling_mrad"] is not None and calibration["detector_sampling_inv_A"] is not None:
+            raise ValueError("The input and viewer specify different detector units; leave the calibration keyword out.")
+        for name, value in calibration.items():
+            if name in {"scan_sampling_A", "detector_sampling_mrad", "detector_sampling_inv_A"}:
+                value = [] if value is None or None in per_axis(value, 2) else list(self._positive_pair(value, name))
+            setattr(self, name, value)
+        center = self._given_bright_field["bright_field_center_px"]
+        radius = self._given_bright_field["bright_field_radius_px"]
+        if center is None and radius is None:
+            disk = gpu_adapter.recorded_bright_field_disk(source.metadata)
+            if disk is not None:
+                center, radius = disk
+            else:
+                row, col, radius = fit_disk(self._session(0).mean_dp(),
+                                            (self.det_rows, self.det_cols), BRIGHT_FIELD_RADIUS_FRACTION)
+                center = (row, col)
+        self.bright_field_center_row_px, self.bright_field_center_col_px = (
+            center if center is not None else (self.det_rows / 2, self.det_cols / 2))
+        self.bright_field_radius_px = (radius if radius is not None else
+                                      min(self.det_rows, self.det_cols) * BRIGHT_FIELD_RADIUS_FRACTION)
+        self._set_roi_to_disk()
+
+    def _replace_stream_sources(self, previous, sources, labels=None) -> None:
         """Retire old live panels without resetting the detector or surviving query sessions."""
         with self._compare_lock, self._session_lock:
-            sessions = dict(zip(previous, self._data.frames))
-            selected = previous[min(int(self.frame_idx), len(previous) - 1)]
+            if not sources:
+                self._close_sessions()
+                self._data = None
+                self._preset_images.clear()
+                with self.hold_sync():
+                    self.n_frames = 0
+                    self.frame_labels = []
+                    self.frame_bytes = np.full((self.det_rows, self.det_cols), np.nan, np.float32).tobytes()
+                    self.virtual_image_bytes = np.full((self.shape_rows, self.shape_cols), np.nan, np.float32).tobytes()
+                    self.compare_diffraction_bytes = b""
+                    self._clear_compare_virtual_images("No retained scans. Waiting for another acquisition.")
+                    self.title = "No retained scans"
+                return
+            if not isinstance(self._data, SessionSeries):
+                self._close_sessions()
+                sessions = {}
+            else:
+                sessions = dict(zip(previous, self._data.frames))
+            selected = previous[min(int(self.frame_idx), len(previous) - 1)] if previous else None
+            names = dict(zip(previous, self.frame_labels))
             hidden = [previous[i] for i in self.compare_hidden_panels if i < len(previous)]
             starred = [previous[i] for i in self.compare_starred_panels if i < len(previous)]
-            data = SessionSeries([sessions.get(source, source) for source in sources])
+            data = (AcquisitionSeries(sources) if gpu_adapter.is_acquisition(sources[0]) else
+                    SessionSeries([sessions.get(source, source) for source in sources]))
             if self._compare_session is not None:
                 self._compare_session.close()
                 self._compare_session = None
@@ -1600,7 +1711,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             with self.hold_sync(), self.hold_trait_notifications():
                 self.n_frames = len(sources)
                 self.frame_idx = sources.index(selected) if selected in sources else 0
-                self.frame_labels = [str(source.metadata.get("series", f"acquisition {i}"))
+                self.frame_labels = [str(labels[i]) if labels and i < len(labels) else
+                                     names.get(source, str(source.metadata.get("name") or
+                                                           source.metadata.get("series", f"acquisition {i}")))
                                      for i, source in enumerate(sources)]
                 self.compare_panel_order = list(range(len(sources)))
                 self.compare_hidden_panels = [i for i, source in enumerate(sources) if source in hidden]
