@@ -23,8 +23,7 @@ describe('full-resolution FFT display', () => {
 });
 
 describe('display FFT preparation in the worker', () => {
-  it('windows, pads and interleaves exactly as the input-thread reference', () => {
-    const width = 96, height = 80;
+  it.each([[1, 1], [1, 17], [31, 45], [96, 80]])('windows and pads %d by %d exactly as the reference', (width, height) => {
     const phase = Float32Array.from({length: width * height}, (_, i) => Math.sin(i * 0.013) + 0.1 * Math.cos(i * 0.7));
     // Reference: the previous input-thread preparation followed by the FFT engine's interleave.
     let sum = 0;
@@ -44,8 +43,7 @@ describe('display FFT preparation in the worker', () => {
     expect(displayFFTInput(phase, width, height).complex).toEqual(expected);
   });
 
-  it('gives the split-plane magnitude for an interleaved spectrum', () => {
-    const width = 64, height = 32;
+  it.each([[1, 1], [31, 15], [64, 32]])('gives split-plane magnitude for a %d by %d spectrum', (width, height) => {
     const complex = Float32Array.from({length: width * height * 2}, (_, i) => Math.sin(i * 0.31) * 10 ** ((i % 9) - 4));
     const real = new Float32Array(width * height), imag = new Float32Array(width * height);
     for (let i = 0; i < width * height; i++) { real[i] = complex[2 * i]; imag[i] = complex[2 * i + 1]; }
