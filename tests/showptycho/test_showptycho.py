@@ -20,8 +20,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from PIL import Image
 
 from quantem.widget import ShowPtycho
+from quantem.widget.colormap import colorize, contrast_uint8
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.device import INSTALL_CUDA, INSTALL_MPS, NO_GPU_PATH
 from quantem.widget.showptycho import export as showptycho_export
@@ -534,7 +536,7 @@ def test_save_calibration_writes_what_the_save_button_writes(widget, ssb, tmp_pa
     # a notebook had no public Save: it had to bump the button's trait, viewer.save_trigger += 1
     widget.request_json = json.dumps({"id": 1, "C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0, "committed": True})
     path = widget.save_calibration()
-    assert path == (tmp_path / "calibration.json").resolve() and widget.calibration_status == "Saved calibration"
+    assert path == (tmp_path / "calibration.json").resolve() and widget.calibration_status == "Saved calibration and phase PNG"
     by_call = json.loads(path.read_text())
     assert by_call["aberrations"] == {"C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0}
     assert ssb.aberrations == by_call["aberrations"]
@@ -546,6 +548,24 @@ def test_save_calibration_writes_what_the_save_button_writes(widget, ssb, tmp_pa
     assert not hasattr(widget, "save")  # ShowPtycho has no display-state file; save_calibration names what it writes
     with pytest.raises(ValueError, match="SSB session"):
         ShowPtycho(np.zeros((8, 8), np.float32)).save_calibration()
+
+
+def test_save_writes_the_displayed_phase_beside_the_calibration(widget, tmp_path):
+    # Save kept only calibration.json, so the reviewed image was lost; the PNG takes the browser's colormap and window
+    widget.request_json = json.dumps({"id": 1, "C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0, "committed": True})
+    phase = _shown(widget)
+    widget.cmap, widget.vmin, widget.vmax = "gray", float(np.percentile(phase, 5)), float(np.percentile(phase, 95))
+    widget.save_trigger += 1
+    image_path = tmp_path / "calibration_phase.png"
+    assert widget.calibration_image_path == str(image_path) and widget.calibration_status == "Saved calibration and phase PNG"
+    saved = np.asarray(Image.open(image_path).convert("RGB"))
+    np.testing.assert_array_equal(saved, colorize(contrast_uint8(phase, widget.vmin, widget.vmax) / 255.0, "gray"))
+    # a call with no browser window uses ShowPtycho's default 1-99 % contrast
+    widget.vmin = widget.vmax = None
+    widget.save_calibration()
+    low, high = np.percentile(phase[np.isfinite(phase)], (1, 99))
+    saved = np.asarray(Image.open(image_path).convert("RGB"))
+    np.testing.assert_array_equal(saved, colorize(contrast_uint8(phase, low, high) / 255.0, "gray"))
 
 
 def test_tilt_comparison_preserves_the_saved_reconstruction(widget, ssb):

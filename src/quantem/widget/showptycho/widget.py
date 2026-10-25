@@ -39,6 +39,7 @@ import traitlets
 
 from quantem.widget.adapters import core as core_adapter
 from quantem.widget.adapters import gpu as gpu_adapter
+from quantem.widget.colormap import colorize, contrast_uint8
 from quantem.widget.device import gpu_path_hint, no_gpu_path
 from quantem.widget.showptycho.export import write_showptycho_folder
 from quantem.widget.units import axis_pair, image_axes, per_axis, stated, wrap_degrees
@@ -46,6 +47,7 @@ from quantem.widget.utils.array import device_array
 
 STARS_FILENAME = "showptycho_stars.json"
 CALIBRATION_FILENAME = "calibration.json"
+CALIBRATION_IMAGE_FILENAME = "calibration_phase.png"
 # every stored record names its layout; a reader takes the current value only
 CALIBRATION_SCHEMA = "quantem.ssb-calibration/6"
 STARS_SCHEMA = "quantem.ssb-stars/3"
@@ -236,6 +238,11 @@ class ShowPtycho(anywidget.AnyWidget):
     # SSB phase is ambiguous by sign; the user picks the convention matching the expected contrast.
     # Display only: never part of a numerical handoff.
     display_negate_phase = traitlets.Bool(False).tag(sync=True)
+    # The phase panel's colormap and contrast window (rad), kept in step by the browser so Save
+    # writes the image as shown; None before a browser has drawn it.
+    cmap = traitlets.Unicode("inferno").tag(sync=True)
+    vmin = traitlets.Float(None, allow_none=True).tag(sync=True)
+    vmax = traitlets.Float(None, allow_none=True).tag(sync=True)
     # the fitted reference the Reset button returns to
     fitted_C10_nm = traitlets.Float(0.0).tag(sync=True)
     fitted_C12_nm = traitlets.Float(0.0).tag(sync=True)
@@ -277,6 +284,7 @@ class ShowPtycho(anywidget.AnyWidget):
     calibration_path = traitlets.Unicode("").tag(sync=True)
     calibration_saved_at = traitlets.Unicode("").tag(sync=True)
     calibration_status = traitlets.Unicode("").tag(sync=True)
+    calibration_image_path = traitlets.Unicode("").tag(sync=True)
     # fit history for the trials strip: JSON list of {rank, C10_nm, C12_nm, phi12_deg, loss}, best first
     trials_json = traitlets.Unicode("").tag(sync=True)
     # bright-field pixels used while dragging; the full count is the right edge of the slider
@@ -851,6 +859,7 @@ class ShowPtycho(anywidget.AnyWidget):
         save_root = pathlib.Path(save_dir) if save_dir else pathlib.Path.cwd()
         self._stars_path = save_root / STARS_FILENAME
         self._calibration_path = save_root / CALIBRATION_FILENAME
+        self._calibration_image_path = save_root / CALIBRATION_IMAGE_FILENAME
         self._calibration_identity = self._ssb.calibration_identity()
         self.stars_path = str(self._stars_path.resolve())
         self.upsampling_available = state["backend"] in ("cuda", "mps")
@@ -1594,7 +1603,8 @@ class ShowPtycho(anywidget.AnyWidget):
         self.save_calibration()
 
     def save_calibration(self) -> pathlib.Path:
-        """Write the reviewed model to ``calibration.json`` in ``save_dir``, as the Save button does.
+        """Write the reviewed model to ``calibration.json`` and the displayed phase to
+        ``calibration_phase.png`` in ``save_dir``, as the Save button does.
 
         The file is the record ``calibration()`` returns, with its ``id`` and
         ``generated_at_utc``: the displayed aberrations, the Sample panel, the
@@ -1627,8 +1637,28 @@ class ShowPtycho(anywidget.AnyWidget):
         write_json(self._calibration_path, payload)
         self.calibration_path = str(self._calibration_path.resolve())
         self.calibration_saved_at = payload["generated_at_utc"]
-        self.calibration_status = "Saved calibration"
+        self._write_phase_image()
+        self.calibration_status = "Saved calibration and phase PNG"
         return self._calibration_path.resolve()
+
+    def _write_phase_image(self) -> None:
+        """Write the displayed phase as ``calibration_phase.png``, the reviewed image beside its calibration.
+
+        ``rgb = colorize(contrast_uint8(phase, vmin, vmax) / 255, cmap)`` at the phase's native
+        size, with the display sign, colormap and window the browser shows (``cmap``, ``vmin``,
+        ``vmax``). Without a browser window it takes ShowPtycho's default 1-99 % percentile
+        window. Without it a saved calibration has no record of the image it was judged on.
+        """
+        from PIL import Image
+
+        phase = self._last_phase
+        if self.vmin is not None and self.vmax is not None:
+            low, high = self.vmin, self.vmax
+        else:
+            low, high = (float(value) for value in np.percentile(phase[np.isfinite(phase)], (1, 99)))
+        pixels = colorize(contrast_uint8(phase, low, high) / 255.0, self.cmap)
+        Image.fromarray(pixels, mode="RGB").save(self._calibration_image_path)
+        self.calibration_image_path = str(self._calibration_image_path.resolve())
 
     def freeze(self):
         """Keep the displayed phase visible while detaching its live SSB controls.

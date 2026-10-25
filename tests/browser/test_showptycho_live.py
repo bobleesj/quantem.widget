@@ -255,3 +255,33 @@ print('live direct method and strengths match backend')
     assert "live direct method and strengths match backend" in proof
     page.screenshot(path=str(browser_out / "showptycho_direct_methods.png"))
     assert [error for error in page.errors if "debugger session" not in error] == [], page.errors
+
+
+def test_phase_draws_on_open_and_save_writes_the_shown_png(jupyter, open_page, hardware_adapter, browser_out):
+    """The phase shows before any control is touched, and Save writes it as PNG in the shown colormap."""
+    notebook = "showptycho_save_png.ipynb"
+    jupyter.write_notebook(notebook, SESSION)
+    page = jupyter.open(open_page, notebook, "save-png", webgpu=True, ready=PHASE, out=browser_out)
+    hardware_adapter(page.adapter())
+    page.wait_for_timeout(1500)
+    first_draw = browser_out / "showptycho_first_draw.png"
+    page.locator(PHASE).first.screenshot(path=str(first_draw))
+    assert np.asarray(Image.open(first_draw).convert("L")).std() > 10, "phase blank until a control changes"
+    combos = page.locator('.jp-OutputArea-output [role="combobox"]')
+    first = next(index for index in range(combos.count()) if combos.nth(index).inner_text().strip() == "Inferno")
+    combos.nth(first).click()
+    page.locator('li[role="option"]', has_text="Gray").first.click()
+    page.mouse.move(5, 300)
+    page.wait_for_timeout(1000)
+    page.locator("button").filter(has_text=re.compile(r"^Save$")).click()
+    page.wait_for_timeout(1500)
+    proof = jupyter.run_in_kernel(notebook, """
+from PIL import Image
+image = np.asarray(Image.open(viewer.calibration_image_path).convert('RGB'))
+assert viewer.cmap == 'gray' and viewer.vmin is not None and viewer.vmin < viewer.vmax
+assert image.shape[:2] == (viewer.phase_height, viewer.phase_width)
+assert (image[..., 0] == image[..., 1]).all() and image.std() > 10
+print('saved-shown-png')
+""")
+    assert "saved-shown-png" in proof, proof
+    assert [error for error in page.errors if "debugger session" not in error] == [], page.errors

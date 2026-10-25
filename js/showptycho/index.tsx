@@ -1949,7 +1949,11 @@ function Explore() {
   const [fftInsetBox, setFFTInsetBox] = React.useState<FFTInsetBox>({ x: 0.72, y: 0.02 });
   const [extraRealViews, setExtraRealViews] = React.useState<Record<ExtraRealViewMode, boolean>>({ amp: false, complex: false });
   const [smooth, setSmooth] = React.useState<boolean>(false);
-  const [cmap, setCmap] = React.useState("inferno");
+  // Synced so Save can write the phase PNG with the colormap and window shown here.
+  const [cmapModel, setCmap] = useModelState<string>("cmap");
+  const cmap = cmapModel || "inferno";
+  const [, setSavedVmin] = useModelState<number | null>("vmin");
+  const [, setSavedVmax] = useModelState<number | null>("vmax");
   const [fftCmap, setFftCmap] = React.useState("inferno");
   const [contrastRange, setContrastRange] = React.useState<[number, number]>([1, 99]);
   const [fftContrastRange, setFftContrastRange] = React.useState<[number, number]>([1, 99]);
@@ -4606,11 +4610,21 @@ function Explore() {
           </Tooltip>
           <Box sx={{ width: "1px", height: 20, bgcolor: tc.border, mx: 0.5, alignSelf: "center" }} />
 
-          <Tooltip title="Save calibration.json in this ShowPtycho project for later sessions and downstream analysis." placement="top" arrow>
+          <Tooltip title="Save calibration.json and the displayed phase as calibration_phase.png in this ShowPtycho project for later sessions and downstream analysis." placement="top" arrow>
             <Button
               size="small" variant="outlined"
               startIcon={<SaveIcon sx={{ fontSize: 14 }} />}
-              onClick={() => { if (webgpuStandalone) { void doFolderSave(); } else { setSaveTrigger((saveTrigger ?? 0) + 1); } }}
+              onClick={() => {
+                if (webgpuStandalone) { void doFolderSave(); return; }
+                // the PNG takes the window the phase panel paints with, sent before the trigger
+                const phase = rawPhaseRef.current;
+                if (phase) {
+                  const { vmin, vmax } = percentileClip(phase.data, contrastRange[0], contrastRange[1]);
+                  setSavedVmin(vmin);
+                  setSavedVmax(vmax);
+                }
+                setSaveTrigger((saveTrigger ?? 0) + 1);
+              }}
               sx={{ ...compactButton(tc), height: ACTION_CONTROL_HEIGHT, color: STATUS_GOOD, borderColor: STATUS_GOOD, width: 76, minWidth: 76 }}
             >
               Save
