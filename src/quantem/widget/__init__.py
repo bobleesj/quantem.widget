@@ -19,6 +19,7 @@ warnings.filterwarnings("ignore", message=r"(?s).*HF_TOKEN.*")
 _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
     "ChooseLattice": ("quantem.widget.choose_lattice", "ChooseLattice"),
     "ShowCIF": ("quantem.widget.showcif", "ShowCIF"),
+    "ShowGPU": ("quantem.widget.showgpu", "ShowGPU"),
     "Show1D": ("quantem.widget.show1d", "Show1D"),
     "Plot2D": ("quantem.widget.plot2d", "Plot2D"),
     "Show2D": ("quantem.widget.show2d", "Show2D"),
@@ -120,6 +121,7 @@ def free_gpu(verbose: bool = True) -> float:
 
 __all__ = [
     "ChooseLattice",
+    "ShowGPU",
     "Show1D",
     "Plot2D",
     "Show2D",

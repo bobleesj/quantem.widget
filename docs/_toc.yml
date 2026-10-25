@@ -72,6 +72,7 @@ parts:
           - file: api/datasets
           - file: api/viewer-ui
           - file: api/show1d
+          - file: api/showgpu
           - file: api/plot2d
           - file: api/show2d
           - file: api/show3d

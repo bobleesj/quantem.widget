@@ -40,6 +40,7 @@ readers and test agents.
 
 | Widget | Class | Offline export |
 |---|---|---|
+| [ShowGPU](showgpu) | `quantem.widget.ShowGPU` | Live kernel telemetry only |
 | [Plot2D](plot2d) | `quantem.widget.Plot2D` | PNG from browser; Matplotlib figures via Python; no standalone HTML API |
 | [Show1D](show1d) | `quantem.widget.show1d.Show1D` | state JSON, CSV, PNG/PDF via Python, interactive HTML |
 | [Show2D](show2d) | `quantem.widget.show2d.Show2D` | state JSON, PNG, interactive HTML (`encoding="full"` / `encoding="uint8"`) |

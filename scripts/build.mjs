@@ -27,6 +27,7 @@ const widgets = [
   "showptycho",
   "chooselattice",
   "showcif",
+  "showgpu",
 ];
 const requested = process.argv.slice(2).filter((arg) => !arg.startsWith("--"));
 const unknown = requested.filter((name) => !widgets.includes(name));
