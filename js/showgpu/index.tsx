@@ -80,6 +80,7 @@ function ShowGPUView() {
   const [running, setRunning] = useModelState<boolean>("running");
   const [interval] = useModelState<number>("interval");
   const [users, setUsers] = useModelState<boolean>("users");
+  const [expand] = useModelState<boolean>("expand");
   const [size, setSize] = useModelState<DisplaySize>("size");
   const { colors } = useTheme();
   const [now, setNow] = React.useState(Date.now());
@@ -155,7 +156,7 @@ function ShowGPUView() {
         {users && !snapshot?.process_error && <div style={{ borderTop: `1px solid ${colors.border}`, marginTop: 8, paddingTop: 6 }}>
           <div style={{ color: colors.textMuted, fontSize: "0.92em" }}>Compute users</div>
           {gpu.users == null ? <div>Waiting for user sample</div> : gpu.users.length === 0 ? <div>No compute processes</div> :
-            gpu.users.map(user => <details key={user.name ?? "\u0000"}>
+            gpu.users.map(user => <details key={user.name ?? "\u0000"} open={expand ?? true}>
               <summary aria-label={`GPU ${gpu.index} processes for ${user.name ?? "unknown user"}`} style={{ cursor: "pointer", padding: "2px 0" }}>
                 <span style={{ display: "inline-flex", width: "calc(100% - 1.2em)", justifyContent: "space-between", gap: 8, flexWrap: "wrap", verticalAlign: "top" }}>
                   <span style={{ overflowWrap: "anywhere" }}>{user.name ?? "Unknown user"}</span>

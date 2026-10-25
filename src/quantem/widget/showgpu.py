@@ -112,6 +112,9 @@ class ShowGPU(anywidget.AnyWidget):
         Expand a user to inspect process names, IDs and individual VRAM use.
         Disable to avoid querying process ownership. Graphics and driver
         allocations remain included in device totals, not this breakdown.
+    expand : bool, default True
+        Start user process lists expanded. Each user row can still be opened
+        or closed individually in the widget.
     size : {"small", "medium", "large", "xlarge"}, default "medium"
         Text and control size. Cards wrap to fit the notebook width. The
         widget's S/M/L/XL buttons change this without rerunning the cell.
@@ -135,7 +138,7 @@ class ShowGPU(anywidget.AnyWidget):
     Examples
     --------
     >>> from quantem.widget import ShowGPU
-    >>> monitor = ShowGPU(users=True, size="medium")
+    >>> monitor = ShowGPU(users=True, expand=True, size="medium")
     >>> monitor
     >>> monitor.close()  # stop sampling when finished
     """
@@ -145,6 +148,7 @@ class ShowGPU(anywidget.AnyWidget):
     interval = traitlets.Float(1.0).tag(sync=True)
     running = traitlets.Bool(True).tag(sync=True)
     users = traitlets.Bool(True).tag(sync=True)
+    expand = traitlets.Bool(True).tag(sync=True)
     size = traitlets.Enum(
         ["small", "medium", "large", "xlarge"], default_value="medium"
     ).tag(sync=True)
@@ -153,6 +157,7 @@ class ShowGPU(anywidget.AnyWidget):
         self,
         *,
         users: bool = True,
+        expand: bool = True,
         size: Literal["small", "medium", "large", "xlarge"] = "medium",
         interval: float = 1.0,
         running: bool = True,
@@ -161,7 +166,9 @@ class ShowGPU(anywidget.AnyWidget):
         self._sample_lock = threading.Lock()
         self._sequence = 0
         self._worker = None
-        super().__init__(users=users, size=size, interval=interval, running=running)
+        super().__init__(
+            users=users, expand=expand, size=size, interval=interval, running=running
+        )
         self.on_msg(self.handle_message)
         self.refresh()
         self._worker = threading.Thread(

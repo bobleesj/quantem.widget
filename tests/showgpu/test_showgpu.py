@@ -24,6 +24,7 @@ def test_live_sampling_pause_refresh_resume_and_close(monkeypatch):
     monkeypatch.setattr(showgpu, "sample", sample)
     monitor = ShowGPU(interval=0.2)
     try:
+        assert monitor.users is True and monitor.expand is True
         # The main execution thread is occupied; monitoring still advances.
         assert received.wait(timeout=2)
         monitor.running = False
@@ -97,14 +98,17 @@ def test_display_options_change_without_recreating_a_paused_monitor(monkeypatch)
         return {"gpus": [], "timestamp": time.time(), "error": ""}
 
     monkeypatch.setattr(showgpu, "sample", sample)
-    monitor = ShowGPU(users=False, size="large", running=False)
+    monitor = ShowGPU(users=False, expand=False, size="large", running=False)
     try:
         assert monitor.size == "large"
+        assert monitor.expand is False
         assert sampled_users == [False]
         for size in ("small", "medium", "large", "xlarge"):
             monitor.size = size
             assert monitor.size == size
         # Resizing is a display change, not another driver query.
+        assert sampled_users == [False]
+        monitor.expand = True
         assert sampled_users == [False]
         monitor.users = True
         assert sampled_users == [False, True]

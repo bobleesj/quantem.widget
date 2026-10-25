@@ -7,8 +7,28 @@ may be a different machine from the browser.
 ```python
 from quantem.widget import ShowGPU
 
-monitor = ShowGPU(users=True, size="medium")
+monitor = ShowGPU(
+    users=True,      # Show compute users and their VRAM.
+    expand=True,     # Show each user's process list immediately.
+    size="medium",   # "small", "medium", "large", "xlarge"
+    interval=1.0,    # Seconds between samples; 0.2 to 60.
+    running=True,    # False pauses automatic sampling.
+)
 monitor
+```
+
+All arguments are optional: `ShowGPU()` uses these defaults.
+
+Change the existing monitor without creating another sampler:
+
+```python
+monitor.size = "large"  # Resize text and controls.
+monitor.users = False   # Hide users and skip process queries.
+monitor.interval = 2.0  # Sample less often.
+monitor.running = False  # Pause; True resumes.
+snapshot = monitor.refresh()  # Read once, including while paused.
+snapshot = monitor.snapshot   # Read the latest sample without a new query.
+monitor.close()         # Stop sampling and close the display when finished.
 ```
 
 Place this cell above acquisition or reconstruction. The sampler runs in a
@@ -19,8 +39,10 @@ every process using that physical device. Driver indices are not CUDA logical
 indices; any `CUDA_VISIBLE_DEVICES` mask is shown separately.
 
 `users=True` adds each compute user's reported VRAM and process count.
-Click a user row or focus it and press Enter to expand the process list below
-it: process ID, executable name and reported VRAM. Expanded rows stay open as
+`expand=True` shows the process lists initially; use `expand=False` to start
+with just user totals. Click a user row or focus it and press Enter to toggle
+the process list below it: process ID, executable name and reported VRAM.
+Expanded or collapsed rows keep their state as
 samples update. Only executable names are read, not command-line arguments.
 `users=False` hides that breakdown and skips the process query. User totals
 exclude graphics processes and driver allocations, so they need not sum to
