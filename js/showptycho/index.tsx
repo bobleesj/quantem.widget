@@ -40,6 +40,7 @@ import { SPACING, switchStyles } from "../controlStyles";
 import { downloadBlob, extractFloat32, formatNumber } from "../format";
 import { computeHistogramFromBytes, percentileClip, percentileWindow } from "../display/stats";
 import { DisplayStatsWorker, frameStats, type FrameStats } from "../display/displayStats";
+import { histogramBarHeights } from "./histogram";
 import { createPanelFrames, type PanelFrame } from "./panelFrames";
 import { useChangedState, useStoreValue, type ValueStore } from "../shared/valueStore";
 import { RenderPathBadge } from "../shared/RenderPathBadge";
@@ -508,12 +509,13 @@ interface HistogramProps {
   onRangeChange: (min: number, max: number) => void;
   width?: number;
   height?: number;
+  logCounts?: boolean;
   tc: ThemeColors;
 }
 
 function Histogram({
   frame: frameStore, vminPct, vmaxPct, onRangeChange,
-  width = 110, height = 40, tc,
+  width = 110, height = 40, logCounts = false, tc,
 }: HistogramProps) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const frame = useStoreValue(frameStore);
@@ -534,30 +536,27 @@ function Histogram({
     ctx.fillRect(0, 0, width, height);
 
     const displayBins = 64;
-    const binRatio = Math.floor(bins.length / displayBins);
-    const reduced: number[] = [];
-    for (let i = 0; i < displayBins; i++) {
-      let sum = 0;
-      for (let j = 0; j < binRatio; j++) sum += bins[i * binRatio + j] || 0;
-      reduced.push(sum / binRatio);
-    }
-    const maxVal = Math.max(...reduced, 0.001);
+    const heights = histogramBarHeights(
+      bins, displayBins, logCounts ? "log" : "linear", frame.finiteCount ?? frame.data?.length ?? 0,
+    );
     const barWidth = width / displayBins;
     const vminBin = Math.floor((vminPct / 100) * displayBins);
     const vmaxBin = Math.floor((vmaxPct / 100) * displayBins);
 
     for (let i = 0; i < displayBins; i++) {
-      const barH = (reduced[i] / maxVal) * (height - 2);
+      const barH = heights[i] * (height - 2);
       const inRange = i >= vminBin && i <= vmaxBin;
       ctx.fillStyle = inRange ? tc.textMuted : tc.border;
       ctx.fillRect(i * barWidth + 0.5, height - barH, Math.max(1, barWidth - 1), barH);
     }
-  }, [bins, vminPct, vmaxPct, width, height, tc]);
+  }, [bins, frame.finiteCount, frame.data, logCounts, vminPct, vmaxPct, width, height, tc]);
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 0.25 }}>
       <canvas
         ref={canvasRef}
+        role="img"
+        aria-label={logCounts ? "FFT intensity histogram with logarithmic counts" : "Intensity histogram with linear counts"}
         onDoubleClick={() => onRangeChange(1, 99)}
         style={{ width, height, border: `1px solid ${tc.border}`, cursor: "pointer" }}
       />
@@ -2787,7 +2786,7 @@ function Explore() {
       if (panelFrames[slot].get().data !== data) {
         canvas!.dataset.quantemDataFrame = String(gen);
       }
-      panelFrames[slot].set({ data, min, max, displayBins: stats.displayBins });
+      panelFrames[slot].set({ data, min, max, displayBins: stats.displayBins, finiteCount: stats.histogram.finiteCount });
       canvas!.dispatchEvent(new Event("quantem-frame"));
       // A new canvas (first frame or new dimensions) re-renders the widget for its panels and labels.
       if (fresh) {
@@ -4026,10 +4025,6 @@ function Explore() {
                     slotProps={{ input: { "aria-label": "FFT auto contrast" } }} size="small" sx={switchStyles.small} />
                 </Box>
               </Box>
-              <Histogram frame={panelFrames[1]}
-                vminPct={fftContrastRange[0]} vmaxPct={fftContrastRange[1]}
-                onRangeChange={(lo, hi) => { setFftContrastRange([lo, hi]); setFftAutoContrast(false); }}
-                width={240} height={48} tc={tc} />
             </>}
             {localTilt?.enabled && <Box component="details" onToggle={() => settingsPopover.current?.updatePosition()}
               sx={{ borderTop: `1px solid ${tc.border}`, pt: 1 }}>
@@ -4186,9 +4181,9 @@ function Explore() {
         </Box>}
 
         {/* Controls + Histogram row */}
-        <Box sx={{ display: "flex", gap: `${SPACING.SM}px`, width: "100%" }}>
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: `${SPACING.SM}px`, width: "100%" }}>
           {/* Left: stats + controls */}
-          <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: 1, justifyContent: "center" }}>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: "1 1 280px", minWidth: 0, justifyContent: "center" }}>
             {/* Stats row: each readout gets a hover tooltip so new users know what the numbers mean */}
             <Box sx={controlBand(tc)}>
               {tuning && <>
@@ -4382,9 +4377,9 @@ function Explore() {
             </Box>
           </Box>
 
-          {/* Phase contrast stays beside the image controls; FFT contrast lives in Settings. */}
-          <Box sx={{ display: "flex", flexDirection: "row", alignItems: "flex-end", gap: 1, flexShrink: 0 }}>
-            <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.25 }}>
+          {/* Keep contrast for every visible image together, including an inset FFT. */}
+          <Box sx={{ display: "flex", flexDirection: "row", alignItems: "flex-end", gap: 1, flexShrink: 0, ml: "auto" }}>
+            <Box role="group" aria-label="Phase contrast" sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.25 }}>
               <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>
                 Phase
               </Typography>
@@ -4398,6 +4393,22 @@ function Explore() {
                 tc={tc}
               />
             </Box>
+            {showFFT && <Box role="group" aria-label="FFT contrast"
+              sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.25 }}>
+              <Tooltip title="FFT intensity is log(1 + magnitude). Bar heights use log(1 + pixel count) to reveal smaller peaks. Contrast limits are unchanged; double-click the histogram to reset them.">
+                <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>FFT · log counts</Typography>
+              </Tooltip>
+              <Histogram
+                frame={panelFrames[1]}
+                logCounts
+                vminPct={fftContrastRange[0]}
+                vmaxPct={fftContrastRange[1]}
+                onRangeChange={(lo, hi) => { setFftContrastRange([lo, hi]); setFftAutoContrast(false); }}
+                width={110}
+                height={48}
+                tc={tc}
+              />
+            </Box>}
           </Box>
         </Box>
 
