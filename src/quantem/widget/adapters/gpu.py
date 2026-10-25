@@ -317,15 +317,15 @@ class DirectSession:
             tuple(int(value) for value in scan_region), aberrations=dict(aberrations),
             scan_detector_rotation_deg=float(scan_detector_rotation_deg)))
 
-    def crop_native(self, phase, bounds, upsampling_factor: int) -> np.ndarray:
+    def crop_native(self, phase, bounds, upsampling: int) -> np.ndarray:
         """A host copy of ``bounds`` (native scan positions) from a full-scan ``phase``.
 
-        ``phase`` covers the padded grid at ``upsampling_factor``; the bounds are
+        ``phase`` covers the padded grid at ``upsampling``; the bounds are
         shifted by ``scan_offset`` so a region never shows padding.
         """
         row_offset, col_offset = self.scan_offset
         row_start, row_stop, col_start, col_stop = (
-            int(value) * upsampling_factor for value in (
+            int(value) * upsampling for value in (
                 bounds[0] + row_offset, bounds[1] + row_offset,
                 bounds[2] + col_offset, bounds[3] + col_offset))
         crop = phase[row_start:row_stop, col_start:col_stop]
@@ -532,18 +532,18 @@ class DirectSession:
 
         return direct_workflow.advance(self.ssb)
 
-    def _drag_inputs(self, aberrations: dict, *, upsampling_factor, method: str = "ssb", sample_tilt_mrad=(0.0, 0.0),
+    def _drag_inputs(self, aberrations: dict, *, upsampling, method: str = "ssb", sample_tilt_mrad=(0.0, 0.0),
                      depth_spread_nm: float = 0.0, phase_estimator=None, **strengths):
         """``preview``'s options as ``direct_workflow``'s (aberrations, tilt, depth, factor, policy)."""
         from quantem.gpu.ssb import direct_workflow
         from quantem.gpu.ssb.units import validate_aberrations
 
         policy = direct_workflow.settings(method, *(strengths.get(name) for name in (
-            "phase_regularization", "amplitude_regularization", "smoothness_inv_A", "detector_weighting")))
+            "phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting")))
         if method == "ssb" and phase_estimator is not None:
             policy = {"phase_estimator": phase_estimator}
         return (validate_aberrations(_named_orders(aberrations), higher_order=True), tuple(sample_tilt_mrad),
-                float(depth_spread_nm), self.ssb._resolve_upsampling_factor(upsampling_factor), policy)
+                float(depth_spread_nm), self.ssb._resolve_upsampling(upsampling), policy)
 
     def browser_state(self) -> dict:
         """The compact state a browser SSB engine rebuilds its reducers from.
@@ -593,7 +593,7 @@ class DirectSession:
         return self.result(self.ssb.find_aberrations(**options))
 
     def fit_regions(self, regions: list[dict], parameters: dict, *,
-                    upsampling_factor: int, phase_estimator: str,
+                    upsampling: int, phase_estimator: str,
                     num_trials: int = 200, refinement: str | None = "newton",
                     progress: Callable[[dict], None] | None = None) -> dict:
         """Jointly fit regional models and crop their full-scan reconstructions.
@@ -620,7 +620,7 @@ class DirectSession:
         started = time.perf_counter()
         fits, images = [], {}
         from quantem.gpu.ssb import DEPTH_SPREAD_RANGE_NM as depth_range_nm  # the joint fit's own depth search range
-        factor = int(upsampling_factor)
+        factor = int(upsampling)
         geometry = {
             "backend": ssb.backend, "voltage_kV": ssb.voltage_kV,
             "semiangle_mrad": ssb.semiangle_mrad,
@@ -670,7 +670,7 @@ class DirectSession:
             phase, _ = self.preview(
                 fit["aberrations"], sample_tilt_mrad=fit["sample_tilt_mrad"],
                 depth_spread_nm=fit["depth_spread_nm"],
-                upsampling_factor=factor, phase_estimator=phase_estimator,
+                upsampling=factor, phase_estimator=phase_estimator,
                 compute_loss=False)
             if tuple(phase.shape) != tuple(size * factor for size in ssb.scan_shape):
                 raise ValueError("Local correction requires a full-scan reconstruction before cropping.")
@@ -695,7 +695,7 @@ class DirectSession:
                 "reconstruction": {
                     "scan_shape": list(ssb.scan_shape), "scan_offset": list(self.scan_offset),
                     "scan_region": None,
-                    "display_bounds": list(bounds), "upsampling_factor": factor,
+                    "display_bounds": list(bounds), "upsampling": factor,
                     "phase_estimator": phase_estimator,
                     "num_bright_field_pixels": self.num_bright_field_pixels,
                 },

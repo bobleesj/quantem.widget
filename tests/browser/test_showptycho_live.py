@@ -176,9 +176,9 @@ assert saved['sample_tilt_mrad'] == [3., -4.]
 assert saved['depth_spread_nm'] == 12.
 assert saved['display']['tilt_correction'] is False
 assert saved['upsampling_mode'] == 'auto'
-assert viewer.upsampling_factor == 'auto'
+assert viewer.upsampling == 'auto'
 assert json.loads(viewer.higher_order_aberrations_json)['C30_nm'] == 2.
-expected, _ = viewer._ssb.preview({**viewer._current(), 'C30_nm': 2.}, upsampling_factor=viewer.auto_upsampling_factor,
+expected, _ = viewer._ssb.preview({**viewer._current(), 'C30_nm': 2.}, upsampling=viewer.auto_upsampling,
     sample_tilt_mrad=(0., 0.), depth_spread_nm=12.)
 np.testing.assert_array_equal(np.frombuffer(viewer.phase_bytes, np.float32).reshape(expected.shape), expected)
 print('saved-fitted-science')
@@ -230,7 +230,7 @@ def test_direct_methods_and_regularization_follow_live_slider_requests(jupyter, 
     select = page.get_by_role("combobox", name="Reconstruction method")
     select.click()
     page.get_by_role("option", name="Phase · experimental", exact=True).click()
-    slider = page.get_by_role("slider", name="Phase regularization", exact=True)
+    slider = page.get_by_role("slider", name="Phase damping", exact=True)
     slider.wait_for(state="visible")
     slider.focus()
     page.keyboard.press("ArrowRight")
@@ -238,7 +238,7 @@ def test_direct_methods_and_regularization_follow_live_slider_requests(jupyter, 
     page.wait_for_timeout(1500)
     select.click()
     page.get_by_role("option", name="Amplitude + phase · experimental", exact=True).click()
-    amplitude = page.get_by_role("slider", name="Amplitude regularization", exact=True)
+    amplitude = page.get_by_role("slider", name="Amplitude damping", exact=True)
     amplitude.wait_for(state="visible")
     amplitude.focus()
     page.keyboard.press("ArrowRight")
@@ -247,10 +247,10 @@ def test_direct_methods_and_regularization_follow_live_slider_requests(jupyter, 
 import json
 request = json.loads(viewer.result_json)
 assert request['method'] == 'complex', request
-assert request['phase_regularization'] > .03, request
-assert request['amplitude_regularization'] > .03, request
+assert request['phase_damping'] > .03, request
+assert request['amplitude_damping'] > .03, request
 expected, _ = viewer._ssb.preview(viewer.ssb_parameters['aberrations'], compute_loss=False,
-    upsampling_factor=viewer._output_factor, **viewer._reconstruction_options())
+    upsampling=viewer._output_factor, **viewer._reconstruction_options())
 shown = np.frombuffer(viewer.phase_bytes, np.float32).reshape(expected.shape)
 np.testing.assert_array_equal(shown, expected)
 assert not viewer.webgpu_preview_enabled
@@ -298,7 +298,7 @@ def test_reset_all_returns_model_and_display_to_launch(jupyter, open_page, hardw
 import json
 viewer.sample_json = json.dumps({'sample_tilt_mrad': [3., -4.], 'depth_spread_nm': 12.})
 viewer.fitted_sample_json = viewer.sample_json
-launch = (viewer.cmap, viewer.upsampling_factor, viewer.method, viewer.phase_regularization)
+launch = (viewer.cmap, viewer.upsampling, viewer.method, viewer.phase_damping)
 viewer
 """
     jupyter.write_notebook(notebook, setup)
@@ -319,12 +319,12 @@ viewer
     page.wait_for_timeout(1000)
     page.get_by_role("checkbox", name="Tilt correction").uncheck()
     page.wait_for_timeout(1000)
-    edited = jupyter.run_in_kernel(notebook, "print(viewer.cmap, viewer.upsampling_factor, viewer.tilt_correction)")
+    edited = jupyter.run_in_kernel(notebook, "print(viewer.cmap, viewer.upsampling, viewer.tilt_correction)")
     assert "gray 1 False" in edited, edited
     page.locator("button").filter(has_text=re.compile(r"^Reset All$")).click()
     page.wait_for_timeout(2000)
     proof = jupyter.run_in_kernel(notebook, """
-assert (viewer.cmap, viewer.upsampling_factor, viewer.method, viewer.phase_regularization) == launch, (viewer.cmap, viewer.upsampling_factor, launch)
+assert (viewer.cmap, viewer.upsampling, viewer.method, viewer.phase_damping) == launch, (viewer.cmap, viewer.upsampling, launch)
 assert viewer.tilt_correction is True
 print('reset-all-launch')
 """)

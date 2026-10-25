@@ -164,7 +164,7 @@ ShowPtycho's responsive layout and its existing Color control.
 Auto chooses 1×, 2×, 3× or 4× from the acquisition calibration, with a
 maximum of 4×. Select 8× explicitly with `ssb.show(upsampling=8)` or the
 ShowPtycho Upsampling menu. For a standalone reconstruction, use
-`ssb.reconstruct(fit, upsampling_factor=8)`.
+`ssb.reconstruct(fit, upsampling=8)`.
 
 The nominal bandwidth requirement remains separate from the selected grid.
 When Auto is capped, the fit report and viewer settings identify the larger

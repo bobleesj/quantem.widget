@@ -488,7 +488,7 @@ def drive_ptycho(session, seconds, log):
     results = {}
     for factor in (1, 2):
         # set explicitly: "auto" may choose 2x on its own
-        session.kernel("showptycho.ipynb", f"viewer.upsampling_factor = {factor}")
+        session.kernel("showptycho.ipynb", f"viewer.upsampling = {factor}")
         time.sleep(3.0)
         label = "native" if factor == 1 else f"{factor}x"
         results[label] = ptycho_drag(session.page, seconds)

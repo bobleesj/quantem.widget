@@ -5,6 +5,10 @@ import math
 from pathlib import Path
 
 from quantem.widget.adapters.gpu import DirectSession
+from quantem.widget.showptycho._renamed import current_keys
+
+# the one earlier layout each current one still reads: /6 named upsampling and the damping strengths otherwise
+PREVIOUS_SCHEMAS = {"quantem.ssb-calibration/7": "quantem.ssb-calibration/6"}
 
 
 def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, int, int, int],
@@ -17,6 +21,9 @@ def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, 
     """
     saved = json.loads(path.read_text(encoding="utf-8"))
     found = saved.get("schema") if isinstance(saved, dict) else None
+    if found == PREVIOUS_SCHEMAS.get(schema):
+        # the same record with upsampling_factor and the *_regularization strengths under their current names
+        saved, found = current_keys(saved), schema
     if found != schema:
         rewrite = ("; rewrite it once with scripts/rewrite_ssb_calibration.py from the quantem.widget repository"
                    if isinstance(found, str) and found.startswith("quantem.ssb-calibration/") else "")
@@ -42,9 +49,9 @@ def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, 
     if "reconstruction_method" in saved and saved["reconstruction_method"] != method:
         raise ValueError("the saved reconstruction method and options disagree")
     if method != "ssb":
-        allowed = {"method", "phase_regularization", "smoothness_inv_A", "detector_weighting"}
+        allowed = {"method", "phase_damping", "smoothness_inv_A", "detector_weighting"}
         if method == "complex":
-            allowed.add("amplitude_regularization")
+            allowed.add("amplitude_damping")
         if set(reconstruction) - allowed:
             raise ValueError("the saved reconstruction contains unsupported options")
         for name in allowed - {"method", "detector_weighting"}:
@@ -55,7 +62,7 @@ def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, 
         if reconstruction.setdefault("detector_weighting", "uniform") not in ("uniform", "inverse_mean"):
             raise ValueError("the saved detector weighting is not supported")
     saved["reconstruction"] = reconstruction
-    if saved["upsampling_mode"] not in ("auto", "explicit") or saved["upsampling_factor"] not in (1, 2, 3, 4, 8):
+    if saved["upsampling_mode"] not in ("auto", "explicit") or saved["upsampling"] not in (1, 2, 3, 4, 8):
         raise ValueError("the saved output sampling is not supported")
     aberrations = saved["aberrations"]
     numbers = [aberrations[name] for name in ("C10_nm", "C12_nm", "phi12_deg")]

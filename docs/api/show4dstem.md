@@ -334,7 +334,7 @@ refinement quantem.gpu ran, `"newton"`, `"nelder-mead"` or null; `objective`
 what the fit optimized, null for a manual recompute; `tilt`,
 `sample_tilt_mrad` in the scan frame, `depth_spread_nm` and `tilt_fit_gain`
 record the sample model, false and null at tilt 0). It is not a
-ShowPtycho `calibration.json` (`quantem.ssb-calibration/6`), which records the
+ShowPtycho `calibration.json` (`quantem.ssb-calibration/7`), which records the
 source file, scan region, phase estimator and session identity. Compute SSB
 needs one 4D frame; quantem.gpu centres any scan shape in its FFT grid and the
 phase shows the measured positions. An encoded

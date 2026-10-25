@@ -165,14 +165,14 @@ The fitter still keeps its usual scalar history.
 
 Look at both branches yourself. These are the primary fits used to choose the
 rotation before fifth-order refinement. Fitting stays on the native scan grid;
-each branch's own fit is shown reconstructed at `upsampling_factor="auto"`, the
+each branch's own fit is shown reconstructed at `upsampling="auto"`, the
 smallest factor whose output grid holds the whole SSB bandwidth (4× for the
 0.5 Å gold step):
 
 ```python
 branches = fit.rotation_branches
-panels = branches.upsampled_phases()  # each branch's fit at upsampling_factor="auto"
-factor = branches.upsampling_factor
+panels = branches.upsampled_phases()  # each branch's fit at upsampling="auto"
+factor = branches.upsampling
 qw.Show2D(
     list(panels),
     labels=[f"{branch.scan_detector_rotation_deg:.1f}°, {factor}x auto" + (" kept" if index == branches.kept else "")
@@ -228,22 +228,22 @@ returns a snapshot of current numerical settings without saving or refitting.
 
 After fitting once, keep the optics fixed and compare the direct reconstruction
 methods. SSB remains the default. The optional CUDA methods are experimental:
-more regularization can suppress unstable contrast but can also suppress real
+more damping can suppress unstable contrast but can also suppress real
 fine detail, so compare against SSB and retain the fitted model.
 
 ```{code-cell} ipython3
 # Optional on CUDA: uncomment to compare with the conventional result.
-# phase = ptycho.run(method="phase", phase_regularization=0.03,
-#                    upsampling_factor="auto")
-# complex_result = ptycho.run(method="complex", phase_regularization=0.03,
-#                            amplitude_regularization=0.03,
-#                            upsampling_factor="auto")
-# viewer = ShowPtycho(ptycho, method="phase", phase_regularization=0.03,
+# phase = ptycho.run(method="phase", phase_damping=0.03,
+#                    upsampling="auto")
+# complex_result = ptycho.run(method="complex", phase_damping=0.03,
+#                            amplitude_damping=0.03,
+#                            upsampling="auto")
+# viewer = ShowPtycho(ptycho, method="phase", phase_damping=0.03,
 #                    restore=False)
 # viewer
 ```
 
-In the live viewer, switch **Reconstruction** and drag **Phase regularization**.
+In the live viewer, switch **Reconstruction** and drag **Phase damping**.
 Amplitude + phase enables its own independent amplitude strength. The same
 backend solves each update using cached fixed optics; the displayed phase is
 not an interpolated gallery. Save preserves the selected method and strengths.

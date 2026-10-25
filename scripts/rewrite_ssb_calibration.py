@@ -31,6 +31,11 @@ identity is computed from the data, so a /5 calibration with an identity needs i
 beside the calibration (the file name it recorded), or given with ``--data``. The flagged-pixel
 fill is recorded as quantem.gpu fills it now (half to even; a cluster from the ring around it).
 
+Calibration /6 and stars /3 named the output factor ``upsampling_factor`` and the direct-method
+strengths ``phase_regularization`` and ``amplitude_regularization``; /7 and /4 name them
+``upsampling``, ``phase_damping`` and ``amplitude_damping``. No number changes. ShowPtycho
+also reads a /6 calibration directly.
+
     python scripts/rewrite_ssb_calibration.py --dry-run path/to/calibration.json
     python scripts/rewrite_ssb_calibration.py path/to/calibration.json path/to/showptycho_stars.json
     python scripts/rewrite_ssb_calibration.py --data path/to/scan_master.h5 path/to/calibration.json
@@ -47,8 +52,10 @@ import json
 import math
 import pathlib
 
-CALIBRATION_SCHEMA = "quantem.ssb-calibration/6"
-STARS_SCHEMA = "quantem.ssb-stars/3"
+CALIBRATION_SCHEMA = "quantem.ssb-calibration/7"
+STARS_SCHEMA = "quantem.ssb-stars/4"
+# the layouts before upsampling, phase_damping and amplitude_damping, carried over by renaming those keys
+DAMPING_RENAMED = {"quantem.ssb-calibration/6": CALIBRATION_SCHEMA, "quantem.ssb-stars/3": STARS_SCHEMA}
 # the layouts with an absolute source_path, carried to the current ones by portable()
 PATH_CALIBRATION_SCHEMA = "quantem.ssb-calibration/5"
 PATH_STARS_SCHEMA = "quantem.ssb-stars/2"
@@ -126,6 +133,10 @@ def rewrite(earlier, path: pathlib.Path | None = None, data: pathlib.Path | None
     current, notes = path_layout(earlier)
     if current is not None and current.get("schema") in (PATH_CALIBRATION_SCHEMA, PATH_STARS_SCHEMA):
         current = portable(current, pathlib.Path.cwd() / "calibration.json" if path is None else path, data)
+    if current is not None and current.get("schema") in (CALIBRATION_SCHEMA, STARS_SCHEMA):
+        from quantem.widget.showptycho._renamed import current_keys
+
+        current = current_keys(current)
     return current, notes
 
 
@@ -207,6 +218,8 @@ def path_layout(earlier) -> tuple[dict | None, list[str]]:
         return {"schema": PATH_STARS_SCHEMA, "stars": [record for record, _ in records]}, [note for _, notes in records for note in notes]
     if earlier.get("schema") in (PATH_CALIBRATION_SCHEMA, PATH_STARS_SCHEMA):
         return earlier, []
+    if earlier.get("schema") in DAMPING_RENAMED:
+        return {**earlier, "schema": DAMPING_RENAMED[earlier["schema"]]}, []
     if earlier.get("schema") in (CALIBRATION_SCHEMA, STARS_SCHEMA, SNAPSHOTS_SCHEMA, BROWSER_CALIBRATION_SCHEMA, SHOW4DSTEM_SCHEMA):
         return None, []
     later = {"quantem.ssb-calibration/4": PATH_CALIBRATION_SCHEMA, "quantem.ssb-stars/1": PATH_STARS_SCHEMA,

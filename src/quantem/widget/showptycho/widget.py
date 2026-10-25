@@ -41,6 +41,7 @@ from quantem.widget.adapters import core as core_adapter
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.colormap import colorize, contrast_uint8
 from quantem.widget.device import gpu_path_hint, no_gpu_path
+from quantem.widget.showptycho._renamed import renamed_keywords
 from quantem.widget.showptycho.export import write_showptycho_folder
 from quantem.widget.units import axis_pair, image_axes, per_axis, stated, wrap_degrees
 from quantem.widget.utils.array import device_array
@@ -49,11 +50,11 @@ STARS_FILENAME = "showptycho_stars.json"
 CALIBRATION_FILENAME = "calibration.json"
 CALIBRATION_IMAGE_FILENAME = "calibration_phase.png"
 # every stored record names its layout; a reader takes the current value only
-CALIBRATION_SCHEMA = "quantem.ssb-calibration/6"
-STARS_SCHEMA = "quantem.ssb-stars/3"
+CALIBRATION_SCHEMA = "quantem.ssb-calibration/7"
+STARS_SCHEMA = "quantem.ssb-stars/4"
 MIN_CROP_SPAN = 32
-# Regularization strengths a slider drags: the browser sends them and shows them itself.
-_BROWSER_STRENGTHS = ("phase_regularization", "amplitude_regularization", "smoothness_inv_A")
+# Damping strengths a slider drags: the browser sends them and shows them itself.
+_BROWSER_STRENGTHS = ("phase_damping", "amplitude_damping", "smoothness_inv_A")
 
 
 def session_note() -> str:
@@ -166,10 +167,13 @@ class ShowPtycho(anywidget.AnyWidget):
         SSB retains the conventional result.
         Phase and complex are experimental CUDA methods using the same fitted
         optics; complex estimates log-amplitude and phase but displays phase.
-    phase_regularization, amplitude_regularization : float, optional
+    phase_damping, amplitude_damping : float, optional
         Independent positive stabilization strengths. Omitted values restore the
         saved strengths or use 0.03. Explicit values override saved strengths.
-        Amplitude regularization is used only for complex reconstruction.
+        Tikhonov damping of the direct least-squares solve. Amplitude damping
+        is used only for complex reconstruction. The earlier spellings
+        ``phase_regularization`` and ``amplitude_regularization`` still work
+        with a DeprecationWarning.
         These controls use a cached fixed-optics solve, not display smoothing.
     smoothness_inv_A : float, optional
         Frequency scale of the smoothness prior in inverse angstroms; 1.0 by
@@ -258,22 +262,22 @@ class ShowPtycho(anywidget.AnyWidget):
     phase_height = traitlets.Int(0).tag(sync=True)
     result_json = traitlets.Unicode("").tag(sync=True)
     # an array: the pixel size [row, col] of its image in angstrom. A session: the scan step [row, col] in angstrom,
-    # which the browser shares out over the output columns (upsampling_factor). [] when unknown or not that input.
+    # which the browser shares out over the output columns (upsampling). [] when unknown or not that input.
     object_sampling_A = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
     scan_sampling_A = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
     # one-shot seed the browser reads at mount; the FFT switch takes over
     initial_fft_on = traitlets.Bool(False).tag(sync=True)
     # SSB alias-order output sampling, not image interpolation
-    upsampling_factor = traitlets.Union(
+    upsampling = traitlets.Union(
         [traitlets.Int(), traitlets.Enum(["auto"])], default_value="auto",
     ).tag(sync=True)
-    auto_upsampling_factor = traitlets.Int(1).tag(sync=True)
+    auto_upsampling = traitlets.Int(1).tag(sync=True)
     auto_sampling_note = traitlets.Unicode("").tag(sync=True)
     sampling_limit_note = traitlets.Unicode("").tag(sync=True)
     upsampling_available = traitlets.Bool(False).tag(sync=True)
     method = traitlets.Enum(["ssb", "phase", "complex"], default_value="ssb").tag(sync=True)
-    phase_regularization = traitlets.Float(0.03, min=0.0).tag(sync=True)
-    amplitude_regularization = traitlets.Float(0.03, min=0.0).tag(sync=True)
+    phase_damping = traitlets.Float(0.03, min=0.0).tag(sync=True)
+    amplitude_damping = traitlets.Float(0.03, min=0.0).tag(sync=True)
     smoothness_inv_A = traitlets.Float(1.0, min=0.0).tag(sync=True)
     detector_weighting = traitlets.Enum(["uniform", "inverse_mean"], default_value="uniform").tag(sync=True)
     regularization_available = traitlets.Bool(False).tag(sync=True)
@@ -360,7 +364,7 @@ class ShowPtycho(anywidget.AnyWidget):
         include_phase : bool, default False
             Reconstruct the full phase at this model using the prepared session.
             The ``ssb_phase`` entry is an independent NumPy array in radians
-            covering the measured ``scan_shape`` times ``upsampling_factor``:
+            covering the measured ``scan_shape`` times ``upsampling``:
             positions quantem.gpu padded for its FFT are removed. No second SSB
             session or aberration search is created.
 
@@ -427,20 +431,20 @@ class ShowPtycho(anywidget.AnyWidget):
                 record["aberrations"],
                 sample_tilt_mrad=record["sample_tilt_mrad"] or (0.0, 0.0),
                 depth_spread_nm=record["depth_spread_nm"] or 0.0,
-                upsampling_factor=record["upsampling_factor"],
+                upsampling=record["upsampling"],
                 **self._reconstruction_options(),
                 compute_loss=False,
             )
             rows, cols = state["input_scan_shape"]
             record["ssb_phase"] = self._ssb.crop_native(
-                phase, (0, rows, 0, cols), record["upsampling_factor"])
+                phase, (0, rows, 0, cols), record["upsampling"])
         return record
 
     def _region_reference(self) -> dict:
         """Shared optics and output sampling that regional images were computed at."""
         if self._ssb is None:
             return {}
-        return {**self.ssb_parameters, "upsampling_factor": self._output_factor}
+        return {**self.ssb_parameters, "upsampling": self._output_factor}
 
     def _on_region_optics_change(self, change) -> None:
         """Invalidate local results when their shared optics or output sampling change."""
@@ -688,6 +692,7 @@ class ShowPtycho(anywidget.AnyWidget):
         finally:
             self._region_busy = False
 
+    @renamed_keywords("phase_regularization", "amplitude_regularization", "upsampling_factor")
     def __init__(
         self,
         data,
@@ -701,8 +706,8 @@ class ShowPtycho(anywidget.AnyWidget):
         upsampling: str | int | None = None,
         phase_estimator: str | None = None,
         method: str | None = None,
-        phase_regularization: float | None = None,
-        amplitude_regularization: float | None = None,
+        phase_damping: float | None = None,
+        amplitude_damping: float | None = None,
         smoothness_inv_A: float | None = None,
         detector_weighting: str | None = None,
         local_tilt: bool | dict | None = None,
@@ -770,14 +775,14 @@ class ShowPtycho(anywidget.AnyWidget):
         self.compute_loss = compute_loss
         self._explicit_reconstruction_options = {
             name: value for name, value in {
-                "phase_regularization": phase_regularization,
-                "amplitude_regularization": amplitude_regularization,
+                "phase_damping": phase_damping,
+                "amplitude_damping": amplitude_damping,
                 "smoothness_inv_A": smoothness_inv_A,
                 "detector_weighting": detector_weighting,
             }.items() if value is not None
         }
-        self.phase_regularization = 0.03 if phase_regularization is None else phase_regularization
-        self.amplitude_regularization = 0.03 if amplitude_regularization is None else amplitude_regularization
+        self.phase_damping = 0.03 if phase_damping is None else phase_damping
+        self.amplitude_damping = 0.03 if amplitude_damping is None else amplitude_damping
         self.smoothness_inv_A = 1.0 if smoothness_inv_A is None else smoothness_inv_A
         self.detector_weighting = "uniform" if detector_weighting is None else detector_weighting
         self._launch_calibration = None
@@ -866,7 +871,7 @@ class ShowPtycho(anywidget.AnyWidget):
         from quantem.gpu.optics.physics import ssb_upsampling_factor, ssb_upsampling_requirement
 
         try:
-            self.auto_upsampling_factor = ssb_upsampling_factor(
+            self.auto_upsampling = ssb_upsampling_factor(
                 voltage_kV=state["voltage_kV"], semiangle_mrad=state["semiangle_mrad"],
                 scan_sampling_A=state["scan_sampling_A"],
             )
@@ -882,8 +887,8 @@ class ShowPtycho(anywidget.AnyWidget):
             # Invalid calibration still opens at native sampling.
             self.auto_sampling_note = (
                 f"Automatic SSB output sampling is unavailable: {exc} "
-                "Showing native sampling (upsampling_factor=1); set upsampling_factor to 2, 3, 4 or 8 for finer output.")
-            self.upsampling_factor = 1
+                "Showing native sampling (upsampling=1); set upsampling to 2, 3, 4 or 8 for finer output.")
+            self.upsampling = 1
             print(f"ShowPtycho: {self.auto_sampling_note}")
         self.sample_available = True  # CUDA and MPS, the SSB backends, both fit the thick-sample model
         self.scan_sampling_A = state["scan_sampling_A"]
@@ -892,7 +897,7 @@ class ShowPtycho(anywidget.AnyWidget):
             restored = self._restore_calibration(state)
         if upsampling is not None:
             # Override output density before the first preview, retaining the saved fit.
-            self.upsampling_factor = upsampling if isinstance(upsampling, str) else int(upsampling)
+            self.upsampling = upsampling if isinstance(upsampling, str) else int(upsampling)
         self.crop_refit_available = bool(self._source_path and pathlib.Path(self._source_path).is_file())
         self.crop_refit_status = (
             "Ready to refit a native square scan crop." if self.crop_refit_available
@@ -900,7 +905,7 @@ class ShowPtycho(anywidget.AnyWidget):
         )
         self.observe(self._on_request, names=["request_json"])
         self.on_msg(self._on_preview_message)
-        self.observe(self._on_upsampling_factor, names=["upsampling_factor"])
+        self.observe(self._on_upsampling, names=["upsampling"])
         self.observe(self._on_save, names=["save_trigger"])
         self.observe(self._on_pin, names=["pin_json"])
         self.observe(self._on_drag_pixels_change, names=["num_drag_bright_field_pixels"])
@@ -908,7 +913,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self.observe(self._on_panel_change, names=["higher_order_aberrations_json", "sample_json"])
         self.observe(self._on_panel_change, names=["tilt_correction"])
         self.observe(self._on_panel_change, names=[
-            "method", "phase_regularization", "amplitude_regularization", "smoothness_inv_A", "detector_weighting"])
+            "method", "phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting"])
         self.observe(self._on_crop_refit_request, names=["crop_refit_request_json"])
         self.observe(self._on_sample_fit_request, names=["sample_fit_request"])
         self._adopt_session(initial=True)
@@ -919,7 +924,7 @@ class ShowPtycho(anywidget.AnyWidget):
             self._restore_regions(restored["local_tilt"])
         self.observe(self._on_region_optics_change, names=[
             "result_json", "scan_detector_rotation_deg", "higher_order_aberrations_json",
-            "upsampling_factor"])
+            "upsampling"])
 
     def _restore_calibration(self, state: dict) -> dict | None:
         """Restore one matching correction of the session's scan before registering observers."""
@@ -956,12 +961,12 @@ class ShowPtycho(anywidget.AnyWidget):
             return
         self.method = saved_method
         self._phase_estimator = saved["phase_estimator"] if self.method == "ssb" else None
-        for name in ("phase_regularization", "amplitude_regularization", "smoothness_inv_A", "detector_weighting"):
+        for name in ("phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting"):
             if name in reconstruction:
                 setattr(self, name, reconstruction[name])
         for name, value in self._explicit_reconstruction_options.items():
             setattr(self, name, value)
-        self.upsampling_factor = "auto" if saved["upsampling_mode"] == "auto" else saved["upsampling_factor"]
+        self.upsampling = "auto" if saved["upsampling_mode"] == "auto" else saved["upsampling"]
         self.display_negate_phase = saved["display_negate_phase"]
         self.tilt_correction = saved["display"]["tilt_correction"]
         self.local_tilt_max_columns = saved["display"].get("max_columns", 3)
@@ -994,7 +999,7 @@ class ShowPtycho(anywidget.AnyWidget):
                 phase, _ = self._ssb.preview(
                     fit["aberrations"], sample_tilt_mrad=fit["sample_tilt_mrad"],
                     depth_spread_nm=fit["depth_spread_nm"],
-                    upsampling_factor=self._output_factor,
+                    upsampling=self._output_factor,
                     phase_estimator=self._phase_estimator, compute_loss=False,
                 )
                 images[f"{fit['label']} · SSB"] = self._ssb.crop_native(
@@ -1028,7 +1033,7 @@ class ShowPtycho(anywidget.AnyWidget):
         changed = [region for region in regions if region["id"] not in retained]
         result = self._ssb.fit_regions(
             changed, self.ssb_parameters,
-            upsampling_factor=self._output_factor,
+            upsampling=self._output_factor,
             phase_estimator=self._phase_estimator or self._default_phase_estimator,
             progress=progress, **self._region_fit_options)
         updated = {fit["id"]: fit for fit in result["fits"]}
@@ -1060,7 +1065,7 @@ class ShowPtycho(anywidget.AnyWidget):
                 raise ValueError("Use finite regional optical and sample parameters.")
             model = sample if sample["depth_spread_nm"] > 0 else {}
             phase, loss = self._ssb.preview(
-                optics, **model, upsampling_factor=self._output_factor,
+                optics, **model, upsampling=self._output_factor,
                 phase_estimator=self._phase_estimator or self._default_phase_estimator,
                 compute_loss=self.compute_loss and bool(request.get("committed")))
             crop = self._ssb.crop_native(phase, fit["bounds"], self._output_factor)
@@ -1171,10 +1176,10 @@ class ShowPtycho(anywidget.AnyWidget):
         self._check_method()
         if self.method == "ssb":
             return {"method": "ssb", "phase_estimator": self._phase_estimator or self._default_phase_estimator}
-        options = {"method": self.method, "phase_regularization": self.phase_regularization,
+        options = {"method": self.method, "phase_damping": self.phase_damping,
                    "smoothness_inv_A": self.smoothness_inv_A, "detector_weighting": self.detector_weighting}
         if self.method == "complex":
-            options["amplitude_regularization"] = self.amplitude_regularization
+            options["amplitude_damping"] = self.amplitude_damping
         return options
 
     def _reconstruct(self, request_id: int, aberrations: dict, *, compute_loss: bool) -> None:
@@ -1190,7 +1195,7 @@ class ShowPtycho(anywidget.AnyWidget):
         if sample is not None and not self.tilt_correction:
             sample = {**sample, "sample_tilt_mrad": (0.0, 0.0)}
         model = {**higher_order, **aberrations}
-        options = dict(upsampling_factor=self._output_factor, **self._reconstruction_options(), **(sample or {}))
+        options = dict(upsampling=self._output_factor, **self._reconstruction_options(), **(sample or {}))
         # One slider moving (no loss asked, so not a release): its drag window, the same image to a few
         # float32 ulps in 1-7 ms instead of 30-50. A drag frame that repeats the last values (the browser
         # coalesces moves) stays on that window. Releases, other settings and first frames stay exact.
@@ -1214,7 +1219,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self._last_phase = phase
         # optimizer precision: the browser formats labels, rounding here would perturb saved calibrations
         self._last_result = {"id": request_id, "C10_nm": float(aberrations["C10_nm"]), "C12_nm": float(aberrations["C12_nm"]),
-                             "phi12_deg": float(aberrations["phi12_deg"]), "upsampling_factor": self._output_factor,
+                             "phi12_deg": float(aberrations["phi12_deg"]), "upsampling": self._output_factor,
                              "tilt_correction": self.tilt_correction, "loss": loss,
                              **self._reconstruction_options()}
         # Deliver pixels, dimensions and completion together. The browser can
@@ -1279,7 +1284,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self._adopting = True
         try:
             with self.hold_sync():
-                for name in ("method", "phase_regularization", "amplitude_regularization", "smoothness_inv_A", "detector_weighting"):
+                for name in ("method", "phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting"):
                     if name in request:
                         setattr(self, name, request[name])
                 if "sample" in request:
@@ -1305,23 +1310,23 @@ class ShowPtycho(anywidget.AnyWidget):
     @property
     def _output_factor(self) -> int:
         """Resolve Auto using the same support criterion as SSB.reconstruct."""
-        return self.auto_upsampling_factor if self.upsampling_factor == "auto" else self.upsampling_factor
+        return self.auto_upsampling if self.upsampling == "auto" else self.upsampling
 
-    def _on_upsampling_factor(self, change) -> None:
+    def _on_upsampling(self, change) -> None:
         """Output sampling changed: show the displayed aberrations at the new sampling."""
         self._reconstruct_displayed(compute_loss=False)
 
-    @traitlets.validate("upsampling_factor")
-    def _validate_upsampling_factor(self, proposal):
+    @traitlets.validate("upsampling")
+    def _validate_upsampling(self, proposal):
         """Resolve Auto and refuse output the active correction cannot produce."""
         requested = proposal["value"]
         if requested == "auto" and self.auto_sampling_note:
             raise ValueError(self.auto_sampling_note)
-        factor = self.auto_upsampling_factor if requested == "auto" else requested
+        factor = self.auto_upsampling if requested == "auto" else requested
         if factor not in (1, 2, 3, 4, 8):
-            raise ValueError("ShowPtycho upsampling_factor must be 'auto', 1, 2, 3, 4, or 8.")
+            raise ValueError("ShowPtycho upsampling must be 'auto', 1, 2, 3, 4, or 8.")
         if factor > 1 and not self.upsampling_available:
-            raise ValueError("This session supports native sampling only; use upsampling_factor=1.")
+            raise ValueError("This session supports native sampling only; use upsampling=1.")
         return requested
 
     def _on_drag_pixels_change(self, change) -> None:
@@ -1559,8 +1564,8 @@ class ShowPtycho(anywidget.AnyWidget):
             "propagator_tilt_mrad": self._ssb.propagator_tilt_mrad(sample["sample_tilt_mrad"], self.scan_detector_rotation_deg)
             if sample else None,
             "depth_spread_nm": sample["depth_spread_nm"] if sample else None,
-            "upsampling_factor": self._output_factor,
-            "upsampling_mode": "auto" if self.upsampling_factor == "auto" else "explicit",
+            "upsampling": self._output_factor,
+            "upsampling_mode": "auto" if self.upsampling == "auto" else "explicit",
             "phase_estimator": self._phase_estimator or self._default_phase_estimator,
             "reconstruction": self._reconstruction_options(),
             "display": {"tilt_correction": self.tilt_correction, "max_columns": self.local_tilt_max_columns},
@@ -1582,7 +1587,7 @@ class ShowPtycho(anywidget.AnyWidget):
             return None
         _, loss = self._ssb.preview(
             aberrations, compute_loss=True,
-            upsampling_factor=self._output_factor,
+            upsampling=self._output_factor,
             **self._reconstruction_options(),
             **(sample or {}),
         )
@@ -1681,18 +1686,18 @@ class ShowPtycho(anywidget.AnyWidget):
             return self
         for callback, names in (
             (self._on_request, ["request_json"]),
-            (self._on_upsampling_factor, ["upsampling_factor"]),
+            (self._on_upsampling, ["upsampling"]),
             (self._on_save, ["save_trigger"]),
             (self._on_pin, ["pin_json"]),
             (self._on_drag_pixels_change, ["num_drag_bright_field_pixels"]),
             (self._on_rotation_change, ["scan_detector_rotation_deg"]),
             (self._on_panel_change, ["higher_order_aberrations_json", "sample_json"]),
             (self._on_panel_change, ["tilt_correction"]),
-            (self._on_panel_change, ["method", "phase_regularization", "amplitude_regularization", "smoothness_inv_A", "detector_weighting"]),
+            (self._on_panel_change, ["method", "phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting"]),
             (self._on_crop_refit_request, ["crop_refit_request_json"]),
             (self._on_sample_fit_request, ["sample_fit_request"]),
             (self._on_region_optics_change, ["result_json", "scan_detector_rotation_deg",
-                                             "higher_order_aberrations_json", "upsampling_factor"]),
+                                             "higher_order_aberrations_json", "upsampling"]),
         ):
             self.unobserve(callback, names=names)
         self.on_msg(self._on_preview_message, remove=True)

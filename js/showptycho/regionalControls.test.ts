@@ -5,7 +5,7 @@ import * as colormaps from '../display/colormaps';
 
 /** The Python trait defaults (``ShowPtycho.class_traits(sync=True)``) a live session starts from. */
 const DEFAULTS: Record<string, unknown> = {
-  C10_max_nm: 40, C10_min_nm: -40, auto_sampling_note: '', sampling_limit_note: '', auto_upsampling_factor: 1,
+  C10_max_nm: 40, C10_min_nm: -40, auto_sampling_note: '', sampling_limit_note: '', auto_upsampling: 1,
   calibration_path: '', calibration_saved_at: '', calibration_status: '',
   crop_refit_available: false, crop_refit_request_json: '', crop_refit_status: '',
   fitted_C10_nm: 0, fitted_C12_nm: 0, fitted_loss: null, fitted_phi12_deg: 0,
@@ -22,7 +22,7 @@ const DEFAULTS: Record<string, unknown> = {
   scan_detector_rotation_deg: 0, scan_detector_rotation_max_deg: 180,
   scan_detector_rotation_min_deg: -180, scan_rows: 0, scan_sampling_A: [], session_note: '',
   ssb_session: true, stars_path: '', tilt_correction: true, trials_json: '',
-  upsampling_available: false, upsampling_factor: 'auto', webgpu_cal_json: '',
+  upsampling_available: false, upsampling: 'auto', webgpu_cal_json: '',
   webgpu_h5_source_json: '', webgpu_preview_enabled: false, webgpu_preview_status: '',
   webgpu_standalone: false,
   amplitude_bytes: new DataView(new ArrayBuffer(0)), local_tilt_bytes: new DataView(new ArrayBuffer(0)),
@@ -295,7 +295,7 @@ test('pinning an unscored reconstruction preserves a missing diagnostic', async 
 
 test('sampling settings explain the Auto cap and let the user explicitly choose 8×', async () => {
   const note = 'Auto stops at 4×; nominal support requires 5.08×. Choose 8× explicitly for finer output.';
-  const model = session({ upsampling_available: true, auto_upsampling_factor: 4,
+  const model = session({ upsampling_available: true, auto_upsampling: 4,
     sampling_limit_note: note, local_tilt_enabled: false });
   await mount(model);
   act(() => { (el.querySelector('[aria-label="View settings"]') as HTMLElement).click(); });
@@ -307,6 +307,6 @@ test('sampling settings explain the Auto cap and let the user explicitly choose 
     .find(option => option.textContent === '8×') as HTMLElement;
   expect(eight).toBeDefined();
   act(() => eight.click());
-  expect(model.get('upsampling_factor')).toBe(8);
+  expect(model.get('upsampling')).toBe(8);
   expect(document.body.textContent).not.toContain(note);
 });

@@ -4,7 +4,7 @@
  * The engine under `js/.generated/engine` is copied from quantem.gpu and shares the widget's names:
  * it reads `snapshots/cal.json` and the bright-field source exactly as ShowPtycho.export writes them
  * (`num_bright_field_pixels`, `scan_detector_rotation_deg`, `detector_sampling_mrad`, ...), takes the
- * options `numBrightFieldPixels`, `scanDetectorRotationDeg`, `upsamplingFactor`, and reports
+ * options `numBrightFieldPixels`, `scanDetectorRotationDeg`, `upsampling`, and reports
  * `numBrightFieldPixels` and `scanDetectorRotationDeg` back. Its arithmetic is in Angstrom and radians,
  * so `reconstruct` converts the aberrations once, here: nm to Angstrom for C10, C12, the higher-order
  * magnitudes and the depth spread, degrees to radians for phi12. `src/quantem/widget/adapters/gpu.py`
@@ -29,7 +29,7 @@ export interface ReconstructionRequest {
   /** Higher orders keyed `C21_nm`, `phi21_deg`, ...; a missing key is 0. */
   higherOrderAberrations: Record<string, number>;
   scanDetectorRotationDeg: number;
-  upsamplingFactor: number;
+  upsampling: number;
   numBrightFieldPixels: number;
   /** True while fewer than all bright-field pixels are used (a drag). */
   reducedBrightField: boolean;
@@ -65,9 +65,9 @@ export function reconstruct(engine: WebGPUSSBBackend, request: ReconstructionReq
     preview: request.reducedBrightField, numBrightFieldPixels: request.numBrightFieldPixels, computeLoss: request.computeLoss,
     scanDetectorRotationDeg: request.scanDetectorRotationDeg,
     // the engine itself rejects a factor other than 1, 2, 4 or 8, so the narrowing cast is safe
-    upsamplingFactor: request.upsamplingFactor as WebGPUReconstructionOptions["upsamplingFactor"],
+    upsampling: request.upsampling as WebGPUReconstructionOptions["upsampling"],
     higherOrder, ...(sample ? { sample } : {}),
-    ...(request.diagnosticOnly ? { phaseEstimator: "mean_phase" as const, upsamplingFactor: 1 as const } : {}),
+    ...(request.diagnosticOnly ? { phaseEstimator: "mean_phase" as const, upsampling: 1 as const } : {}),
     ...(request.signal ? { signal: request.signal } : {}),
   };
   return engine.reconstruct(

@@ -192,8 +192,8 @@ class _PaddedSession:
         self.options = options
         return _Fit(self.agreements[len(self.seeds) - 1], seed)
 
-    def preview(self, aberrations, *, upsampling_factor, **options):
-        rows, cols = np.indices((128 * upsampling_factor,) * 2)
+    def preview(self, aberrations, *, upsampling, **options):
+        rows, cols = np.indices((128 * upsampling,) * 2)
         return (rows * 10000 + cols).astype(np.float32), None
 
 
@@ -203,7 +203,7 @@ def _fit_padded(agreements):
     parameters = {'aberrations': {'C10_nm': 3.0, 'C12_nm': 1.0, 'phi12_deg': 10.0},
                   'scan_detector_rotation_deg': 0.0}
     return SsbSession(_PaddedSession(agreements)).fit_regions(
-        [region], parameters, upsampling_factor=2, phase_estimator='phase_of_mean')
+        [region], parameters, upsampling=2, phase_estimator='phase_of_mean')
 
 
 def test_regional_fit_runs_once_and_crops_measured_positions():
@@ -229,7 +229,7 @@ def test_regional_fit_passes_its_trial_count_refinement_and_tilt_limit_to_the_fi
     session = _PaddedSession([0.5])
     region = {'id': 'r', 'label': 'R', 'bounds': [8, 40, 4, 36]}
     parameters = {'aberrations': {'C10_nm': 3.0, 'C12_nm': 1.0, 'phi12_deg': 10.0}, 'scan_detector_rotation_deg': 0.0}
-    result = SsbSession(session).fit_regions([region], parameters, upsampling_factor=1, phase_estimator='phase_of_mean',
+    result = SsbSession(session).fit_regions([region], parameters, upsampling=1, phase_estimator='phase_of_mean',
                                              num_trials=12, refinement='nelder-mead')
     assert (session.options['num_trials'], session.options['refinement']) == (12, 'nelder-mead')
     assert session.options['tilt_limit_mrad'] == REGION_TILT_LIMIT_MRAD

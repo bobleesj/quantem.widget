@@ -153,7 +153,7 @@ also supports two experimental regularized direct reconstructions:
 viewer = ShowPtycho(
     ptycho,
     method="phase",
-    phase_regularization=0.03,
+    phase_damping=0.03,
     smoothness_inv_A=1.0,
     restore=False,
 )
@@ -161,8 +161,8 @@ viewer
 ```
 
 The **Reconstruction** control selects **SSB**, **Phase**, or **Amplitude + phase**.
-For phase, the **Phase regularization** slider stabilizes weakly constrained
-frequencies. Amplitude + phase adds a separate **Amplitude regularization**
+For phase, the **Phase damping** slider stabilizes weakly constrained
+frequencies. Amplitude + phase adds a separate **Amplitude damping**
 slider. Each slider is a direct strength, not a multiplier of another control.
 The image shown is phase; the complex method also estimates log-amplitude in
 the computational result. Higher-order aberrations, tilt, effective depth and
@@ -175,8 +175,11 @@ switch to the browser's conventional SSB solver. Changing optics requires
 rebuilding the corresponding system. The achievable display rate depends on
 image size and the notebook/browser connection; no fixed frame rate is promised.
 
-`phase_regularization=0.03` and `amplitude_regularization=0.03` are independent
-strengths. `smoothness_inv_A=1.0` sets the prior's frequency scale in inverse
+`phase_damping=0.03` and `amplitude_damping=0.03` are independent
+Tikhonov damping strengths of the direct least-squares solve. The earlier
+spellings `phase_regularization`, `amplitude_regularization` and
+`upsampling_factor` still work during a transition with a `DeprecationWarning`;
+passing both spellings raises `TypeError`. `smoothness_inv_A=1.0` sets the prior's frequency scale in inverse
 angstroms; use `0` for a flat regularizer. Save records the method and all active
 strengths and detector weighting. With the default `method=None`, a compatible
 saved method is restored automatically; without a save, SSB is used. An explicit
@@ -195,10 +198,10 @@ including its reproducible method settings. To save scientific output arrays:
 ```python
 result = ptycho.run(
     method="complex",
-    phase_regularization=0.03,
-    amplitude_regularization=0.03,
+    phase_damping=0.03,
+    amplitude_damping=0.03,
     smoothness_inv_A=1.0,
-    upsampling_factor="auto",
+    upsampling="auto",
     save_dir="direct-result",
 )
 ```
@@ -400,9 +403,12 @@ angle in [0, 360), beside `scan_detector_rotation_flipped`; `scan_sampling_A` an
 `detector_sampling_mrad` are `[row, col]`. `calibration.json`,
 `showptycho_stars.json`, the exported `snapshots/cal.json` and the widget's
 messages use these names, and each file names its layout in a `schema` string
-(`quantem.ssb-calibration/6`, `quantem.ssb-stars/3`,
+(`quantem.ssb-calibration/7`, `quantem.ssb-stars/4`,
 `quantem.ssb-browser-calibration/3`, `quantem.ssb-browser-folder/3`,
-`quantem.ssb-snapshots/2`). No file holds an absolute path: `calibration.json`
+`quantem.ssb-snapshots/2`). A `quantem.ssb-calibration/6` file, which named
+the output factor `upsampling_factor` and the damping strengths
+`phase_regularization` and `amplitude_regularization`, still restores with
+the same values. No file holds an absolute path: `calibration.json`
 and each star name the acquisition as `source`, its file name and, when the
 data lives under the save folder, its path relative to it; the session
 identity a restore compares is quantem.gpu's portable `source_identity` (file
@@ -630,7 +636,7 @@ explicit actions; `save_dir` only chooses their destination.
 
 ```python
 fit = ptycho.find_aberrations(compute_loss=False)
-result = ptycho.run(fit, upsampling_factor="auto", compute_loss=False)
+result = ptycho.run(fit, upsampling="auto", compute_loss=False)
 viewer = ptycho.show(show_fft=True)  # compute_loss=False by default
 ```
 
@@ -644,7 +650,7 @@ not rerun fitting. Call `viewer.save_calibration()` or click Save when ready.
 Auto chooses 1×, 2×, 3× or 4× from the acquisition calibration, with a
 maximum of 4×. Select 8× explicitly with `ptycho.show(upsampling=8)` or the
 ShowPtycho Upsampling menu. For a standalone reconstruction, use
-`ptycho.run(fit, upsampling_factor=8)`.
+`ptycho.run(fit, upsampling=8)`.
 
 The nominal bandwidth requirement remains separate from the selected grid.
 When Auto is capped, the fit report and viewer settings identify the larger
