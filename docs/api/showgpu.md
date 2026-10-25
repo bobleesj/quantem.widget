@@ -28,7 +28,7 @@ device usage. Inaccessible process ownership is labeled **Unknown user**;
 unsupported memory readings remain **unavailable**.
 
 `size` accepts `"small"`, `"medium"`, `"large"` and `"xlarge"`. For this
-text-based monitor, these select 11, 13, 15 and 18 CSS-pixel text respectively,
+text-based monitor, these select 13, 15, 17 and 20 CSS-pixel text respectively,
 with matching controls and responsive cards. Choose **S / M / L / XL** or
 toggle **Users** directly in the widget without rerunning the cell. The same
 settings are mutable Python attributes: `monitor.size = "large"` and

@@ -24,7 +24,7 @@ type GPUReading = {
   }[];
 };
 
-const TEXT_SIZES = { small: 11, medium: 13, large: 15, xlarge: 18 } as const;
+const TEXT_SIZES = { small: 13, medium: 15, large: 17, xlarge: 20 } as const;
 type DisplaySize = keyof typeof TEXT_SIZES;
 const SIZE_LABELS: Record<DisplaySize, string> = { small: "S", medium: "M", large: "L", xlarge: "XL" };
 
