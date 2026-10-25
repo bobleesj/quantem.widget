@@ -1629,6 +1629,7 @@ class Show2D(
         if labels is not None and len(labels) != int(data.shape[0]):
             raise ValueError(f"labels length ({len(labels)}) must match n_images ({int(data.shape[0])})")
         previous_shape = (int(self.n_images), int(self.height), int(self.width))
+        same_layout = tuple(self._data.shape) == tuple(data.shape) and not any(self.is_rgb)
         # the frame observer would rebuild the old stacks while the new ones are installed; every
         # check has passed by here, so the flag is always cleared below
         self._updating_panel_frames = True
@@ -1647,24 +1648,29 @@ class Show2D(
             self._rgb_frames_original = list(self._rgb_frames)
             self._display_rgb = self._rgb_frames
             self.is_rgb = [False] * int(data.shape[0])
-            self.n_pages = 1
-            self.page_idx = 0
-            self.panels_per_page = 0
-            self.page_labels = []
-            self.page_starred = [0]
-            self.image_rotations = [0] * self.n_images
-            self.starred = [0] * self.n_images
-            self.hidden_panels = []
-            self.panel_order = []
-            self.labels = ([f"Image {i + 1}" for i in range(self.n_images)] if labels is None
-                           else ["" if label is None else str(label) for label in labels])
-            self.selected_idx = min(int(self.selected_idx), self.n_images - 1)
-            self.roi_list = []
-            self.roi_selected_idx = -1
-            self.profile_line = []
+            if labels is not None:
+                self.labels = ["" if label is None else str(label) for label in labels]
+            if not same_layout:
+                # what the user drew or set on the old panels does not fit the new ones; a live frame
+                # replaced with the same layout keeps it, so a profile survives each update
+                self.n_pages = 1
+                self.page_idx = 0
+                self.panels_per_page = 0
+                self.page_labels = []
+                self.page_starred = [0]
+                self.image_rotations = [0] * self.n_images
+                self.starred = [0] * self.n_images
+                self.hidden_panels = []
+                self.panel_order = []
+                if labels is None:
+                    self.labels = [f"Image {i + 1}" for i in range(self.n_images)]
+                self.selected_idx = min(int(self.selected_idx), self.n_images - 1)
+                self.roi_list = []
+                self.roi_selected_idx = -1
+                self.profile_line = []
+                self.vmins = None
+                self.vmaxs = None
             self._clear_detail_tiles()
-            self.vmins = None
-            self.vmaxs = None
             if self.n_images != previous_shape[0]:
                 # per-panel settings of the old panels do not belong to the new ones
                 self.panel_cmaps = []
