@@ -148,6 +148,33 @@ def _pattern(widget) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
+def test_stream_opens_on_the_first_acquisition_and_appends_the_rest_as_they_complete(tmp_path, accelerator):
+    # A live recording grows its datasets list from another thread; stream shows each one as it arrives,
+    # labelled in arrival order, and append leaves ownership with the caller.
+    import threading
+    from types import SimpleNamespace
+
+    loaded = [gpu_adapter.load_acquisition(_write_master(tmp_path, f"tilt{index}", _counts(index))) for index in range(3)]
+    recording = SimpleNamespace(datasets=[loaded[0]], error=None, receiving=True)
+
+    def arrive():
+        for acquisition in loaded[1:]:
+            time.sleep(0.2)
+            recording.datasets.append(acquisition)
+        recording.receiving = False
+
+    threading.Thread(target=arrive, daemon=True).start()
+    widget = Show4DSTEM.stream(recording, refresh_s=0.05, labels=["-17x", "0x", "17x"], verbose=False)
+    try:
+        widget._stream_thread.join(timeout=5)
+        assert widget.n_frames == 3 and widget.frame_labels == ["-17x", "0x", "17x"]
+        assert [frame.source for frame in widget._data.frames] == loaded and not widget._owned_acquisitions
+    finally:
+        widget.close()
+        for acquisition in loaded:
+            acquisition.close()
+
+
 def test_encoded_master_opens_with_detector_products(tmp_path, accelerator):
     counts = _counts(0)
     master = _write_master(tmp_path, "gold", counts)

@@ -1151,6 +1151,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         new dataset into the same kernel. The packed browser copy of the counts
         (up to the 2 GB offline budget) and the last export go too.
         """
+        if getattr(self, "_stream_stop", None) is not None:
+            self._stream_stop.set()
         self._release_owned_acquisitions()
         data = self._data
         nbytes = data.nbytes if isinstance(data, torch.Tensor) else 0
@@ -1380,14 +1382,79 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self._folder_known_masters.add(self._master_key(master))
             added.append(len(self._data.frames) - 1)
             labels.append(acquisition_name(master))
+        self._publish_appended(added, labels, old_order, custom_order)
+        return added, errors
+
+    def _publish_appended(self, added, labels, old_order, custom_order) -> None:
+        """Show acquisitions appended to the series in one update; n_frames refreshes the comparison grid."""
         if added:
-            # n_frames refreshes the comparison grid once the held changes land.
             with self.hold_trait_notifications():
                 self.n_frames = len(self._data.frames)
                 self.frame_labels = labels
                 if custom_order:
                     self.compare_panel_order = [*old_order, *added]
-        return added, errors
+
+    def append(self, acquisitions, labels=None) -> list[int]:
+        """Add resident acquisitions (quantem.gpu datasets of the same scan and detector) to the comparison.
+
+        Works on a viewer of several acquisitions (``Show4DSTEM([a, b])``, ``from_folder``, ``stream``). The
+        caller keeps ownership: ``free`` does not close them. Returns the new dataset indices.
+        """
+        if not isinstance(self._data, AcquisitionSeries):
+            raise ValueError("append adds to a viewer of several acquisitions: open it with a list, "
+                             "Show4DSTEM([first, ...]), or with Show4DSTEM.stream(recording).")
+        acquisitions = list(acquisitions) if isinstance(acquisitions, (list, tuple)) else [acquisitions]
+        # missing labels fall back to each dataset's own name
+        labels = ([] if labels is None else list(labels)) + [None] * len(acquisitions)
+        old_order = list(self.compare_panel_order)
+        custom_order = sorted(old_order) == list(range(self.n_frames))
+        names, added = list(self.frame_labels), []
+        for acquisition, label in zip(acquisitions, labels):
+            self._data.append(acquisition)
+            added.append(len(self._data.frames) - 1)
+            names.append(str(label or dataset_name(acquisition) or f"acquisition {added[-1]}"))
+        self._publish_appended(added, names, old_order, custom_order)
+        return added
+
+    @classmethod
+    def stream(cls, recording, *, refresh_s: float = 0.25, labels=None, first_timeout_s: float = 120.0,
+               **viewer_kwargs) -> Self:
+        """Open on a live recording's first acquisition and append the rest as they complete.
+
+        ``recording`` is quantem.gpu ``io.live.record``'s (or live4d ``LiveRecording``'s) ``Recording``:
+        acquisitions arrive ANS-encoded on the GPU, and this viewer reads them where they are, no copy.
+        A background thread checks every ``refresh_s`` seconds and appends whatever completed since in one
+        display update, so ``refresh_s`` bounds how often the display changes. ``labels`` names the
+        acquisitions in arrival order (e.g. the tilt of each). Blocks up to ``first_timeout_s`` for the first.
+        """
+        pause = threading.Event()
+        waited = 0.0
+        while not recording.datasets:
+            if recording.error is not None:
+                raise recording.error
+            if waited >= first_timeout_s or not recording.receiving:
+                raise TimeoutError(f"No acquisition arrived within {waited:.0f} s.")
+            pause.wait(0.05)
+            waited += 0.05
+        labels = None if labels is None else list(labels)
+        first_label = [labels[0]] if labels else None
+        viewer = cls([recording.datasets[0]], frame_labels=first_label, **viewer_kwargs)
+        viewer._stream_stop = threading.Event()
+
+        def follow():
+            shown = 1
+            while not viewer._stream_stop.is_set():
+                arrived = len(recording.datasets)
+                if arrived > shown:
+                    viewer.append(recording.datasets[shown:arrived], labels[shown:arrived] if labels else None)
+                    shown = arrived
+                elif not recording.receiving:
+                    return
+                viewer._stream_stop.wait(refresh_s)
+
+        viewer._stream_thread = threading.Thread(target=follow, name="Show4DSTEM-stream", daemon=True)
+        viewer._stream_thread.start()
+        return viewer
 
     def _fill_folder(self, masters) -> None:
         """Load the rest of the opening folder in the background, one master at a time."""
