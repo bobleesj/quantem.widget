@@ -158,9 +158,12 @@ viewer
     jupyter.write_notebook(notebook, setup)
     page = jupyter.open(open_page, notebook, "tilt-export", webgpu=True, ready=PHASE, out=browser_out)
     hardware_adapter(page.adapter())
-    sampling = page.get_by_role("combobox", name="SSB output sampling")
+    # the output sampling select lives in the View settings popover
+    page.get_by_role("button", name="View settings").click()
+    sampling = page.get_by_role("combobox", name="Upsampling")
     sampling.click()
     page.get_by_role("option", name="Auto", exact=False).click()
+    page.keyboard.press("Escape")
     page.wait_for_timeout(1500)
     toggle = page.get_by_role("checkbox", name="Tilt correction")
     toggle.uncheck()
@@ -182,6 +185,7 @@ print('saved-fitted-science')
 """)
     assert "saved-fitted-science" in proof, proof
     toggle.check()
+    page.get_by_role("button", name="View settings").click()
     sampling.click()
     page.get_by_role("option", name="1×", exact=True).click()
     page.wait_for_timeout(1000)
@@ -284,4 +288,46 @@ assert (image[..., 0] == image[..., 1]).all() and image.std() > 10
 print('saved-shown-png')
 """)
     assert "saved-shown-png" in proof, proof
+    assert [error for error in page.errors if "debugger session" not in error] == [], page.errors
+
+
+def test_reset_all_returns_model_and_display_to_launch(jupyter, open_page, hardware_adapter, browser_out):
+    """Reset All undoes colormap, output sampling and tilt-correction edits in one click."""
+    notebook = "showptycho_reset_all.ipynb"
+    setup = SESSION.replace("size=(24, 24, 1, 1)", "size=(128, 128, 1, 1)").rsplit("\nviewer", 1)[0] + """
+import json
+viewer.sample_json = json.dumps({'sample_tilt_mrad': [3., -4.], 'depth_spread_nm': 12.})
+viewer.fitted_sample_json = viewer.sample_json
+launch = (viewer.cmap, viewer.upsampling_factor, viewer.method, viewer.phase_regularization)
+viewer
+"""
+    jupyter.write_notebook(notebook, setup)
+    page = jupyter.open(open_page, notebook, "reset-all", webgpu=True, ready=PHASE, out=browser_out)
+    hardware_adapter(page.adapter())
+    page.wait_for_timeout(1500)
+    combos = page.locator('.jp-OutputArea-output [role="combobox"]')
+    first = next(index for index in range(combos.count()) if combos.nth(index).inner_text().strip() == "Inferno")
+    combos.nth(first).click()
+    page.locator('li[role="option"]', has_text="Gray").first.click()
+    page.mouse.move(5, 300)
+    # the output sampling select lives in the View settings popover
+    page.get_by_role("button", name="View settings").click()
+    sampling = page.get_by_role("combobox", name="Upsampling")
+    sampling.click()
+    page.get_by_role("option", name="1×", exact=True).click()
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(1000)
+    page.get_by_role("checkbox", name="Tilt correction").uncheck()
+    page.wait_for_timeout(1000)
+    edited = jupyter.run_in_kernel(notebook, "print(viewer.cmap, viewer.upsampling_factor, viewer.tilt_correction)")
+    assert "gray 1 False" in edited, edited
+    page.locator("button").filter(has_text=re.compile(r"^Reset All$")).click()
+    page.wait_for_timeout(2000)
+    proof = jupyter.run_in_kernel(notebook, """
+assert (viewer.cmap, viewer.upsampling_factor, viewer.method, viewer.phase_regularization) == launch, (viewer.cmap, viewer.upsampling_factor, launch)
+assert viewer.tilt_correction is True
+print('reset-all-launch')
+""")
+    assert "reset-all-launch" in proof, proof
+    page.locator(PHASE).first.screenshot(path=str(browser_out / "showptycho_reset_all.png"))
     assert [error for error in page.errors if "debugger session" not in error] == [], page.errors

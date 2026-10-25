@@ -1685,6 +1685,9 @@ function Explore() {
     detector_weighting: weightingModel ?? "uniform",
   }));
   const reconstructionRef = React.useRef(reconstructionControls);
+  // The launch settings Reset All returns to: what the viewer opened with, not hard-coded values.
+  const launchReconstructionRef = React.useRef(reconstructionControls);
+  const launchSamplingRef = React.useRef(sampling);
   const [autoFactor] = useModelState<number>("auto_upsampling_factor");
   const upsamplingFactor = sampling === "auto" ? (autoFactor || 1) : (sampling || 1);
   const upsamplingFactorRef = React.useRef(upsamplingFactor || 1); upsamplingFactorRef.current = upsamplingFactor || 1;
@@ -1952,6 +1955,7 @@ function Explore() {
   // Synced so Save can write the phase PNG with the colormap and window shown here.
   const [cmapModel, setCmap] = useModelState<string>("cmap");
   const cmap = cmapModel || "inferno";
+  const launchCmapRef = React.useRef(cmap);
   const [, setSavedVmin] = useModelState<number | null>("vmin");
   const [, setSavedVmax] = useModelState<number | null>("vmax");
   const [fftCmap, setFftCmap] = React.useState("inferno");
@@ -3926,6 +3930,34 @@ function Explore() {
                 {sample.depthSpreadNm <= 0 ? "Not fitted" : tiltCorrection === false ? "Off · preview" : "On"}
               </Typography>
             </Box>
+          </Tooltip>
+        )}
+        {tuning && (
+          <Tooltip title="Restore the fitted aberrations, rotation, tilt and depth, turn Tilt correction on, and return colormaps, contrast, method, damping and upsampling to the launch settings. Zoom is kept." placement="top" arrow>
+            <span>
+              <Button
+                size="small"
+                disabled={busy}
+                onClick={() => {
+                  doReset();
+                  updateSweepRange("c10", [c10UiMin, c10UiMax]);
+                  updateSweepRange("c12", [c12UiMin, c12UiMax]);
+                  updateSweepRange("phi12", [phi12UiMin, phi12UiMax]);
+                  updateSweepRange("rot", [rotationUiMin, rotationUiMax]);
+                  setCmap(launchCmapRef.current);
+                  setFftCmap("inferno");
+                  setContrastRange([1, 99]);
+                  setFftContrastRange([1, 99]);
+                  setAutoContrast(true);
+                  setFftAutoContrast(true);
+                  setSampling(launchSamplingRef.current);
+                  changeReconstruction({ ...launchReconstructionRef.current }, true);
+                }}
+                sx={compactButton(tc)}
+              >
+                Reset All
+              </Button>
+            </span>
           </Tooltip>
         )}
         {objectAmplitude && <>
