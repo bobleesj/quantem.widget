@@ -175,6 +175,54 @@ def test_stream_opens_on_the_first_acquisition_and_appends_the_rest_as_they_comp
             acquisition.close()
 
 
+def test_stream_retires_old_scans_without_resetting_detector_or_cursor(accelerator):
+    if not torch.cuda.is_available():
+        pytest.skip("Live ANS acquisition is CUDA only")
+    import cupy as cp
+    from quantem.gpu.io.live import BatchFeed, record
+
+    feed = BatchFeed(max_batches=4)
+    recording = record(feed, SCAN, verbose=False)
+    widget = None
+
+    def arrive(index):
+        feed.start_series({"series_id": index, "image_size_y": DET[0], "image_size_x": DET[1]})
+        feed.put(0, cp.asarray(_counts(index)).reshape(-1, *DET))
+        feed.end_series()
+        deadline = time.monotonic() + 5
+        while not recording.datasets or recording.datasets[-1].metadata["series"] != str(index):
+            assert time.monotonic() < deadline and recording.error is None
+            time.sleep(0.01)
+
+    try:
+        arrive(0)
+        widget = Show4DSTEM.stream(recording, refresh_s=0.01, verbose=False)
+        widget.apply_preset("adf")
+        widget.pos_row, widget.pos_col = 2, 3
+        detector = (widget.roi_radius_inner, widget.roi_radius)
+        oldest = recording.acquisitions[0]
+        for index in range(1, 5):
+            arrive(index)
+            if len(recording.datasets) > 2:
+                recording.discard(recording.datasets[0])
+            deadline = time.monotonic() + 5
+            while widget.frame_labels[-1] != str(index) or widget.n_frames != min(index + 1, 2):
+                assert time.monotonic() < deadline and widget.stream_error is None
+                time.sleep(0.01)
+        assert oldest.source.is_released
+        assert len(recording.datasets) == len(recording.acquisitions) == 2
+        assert (widget.roi_radius_inner, widget.roi_radius) == detector
+        assert (widget.pos_row, widget.pos_col) == (2, 3)
+        widget.frame_idx = 1
+        np.testing.assert_array_equal(widget.pattern(2, 3), _counts(4)[2, 3])
+    finally:
+        feed.close()
+        recording.wait(5)
+        if widget is not None:
+            widget.close()
+        recording.release()
+
+
 def test_encoded_master_opens_with_detector_products(tmp_path, accelerator):
     counts = _counts(0)
     master = _write_master(tmp_path, "gold", counts)

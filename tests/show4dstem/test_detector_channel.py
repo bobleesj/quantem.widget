@@ -78,3 +78,30 @@ def test_stale_view_settings_and_freed_source_reject_before_computing(viewer):
     widget.free()
     widget._handle_detector_request(widget, request(widget, [5, 9], 2), [])
     assert [message["status"] for message in messages] == ["rejected", "rejected"]
+
+
+def test_position_request_reads_once_and_recovers_after_failure(viewer, monkeypatch):
+    widget, values_t, messages = viewer
+    widget.compare_dp_mode = "selected"
+    content = {"type": "show4dstem_position", "version": 1, "view": "first",
+               "epoch": 0, "seq": 1, "center": [1, 3],
+               "context": [widget.frame_idx, widget.vi_roi_mode, widget.compare_dp_mode]}
+    compute = widget._update_frame
+    calls = []
+
+    def observed(change=None):
+        assert messages[-1]["status"] == "accepted"
+        calls.append((widget.pos_row, widget.pos_col))
+        if len(calls) == 1:
+            raise MemoryError("injected frame failure")
+        compute(change)
+
+    monkeypatch.setattr(widget, "_update_frame", observed)
+    widget._handle_position_request(widget, content, [])
+    widget._handle_position_request(widget, dict(content, seq=2), [])
+    assert [message["status"] for message in messages] == ["accepted", "rejected", "accepted", "complete"]
+    assert calls == [(1, 3), (1, 3)]
+    actual = torch.frombuffer(bytearray(widget.frame_bytes), dtype=torch.float32).reshape(16, 16)
+    torch.testing.assert_close(actual, values_t[0, 1, 3], atol=0, rtol=0)
+    widget._handle_position_request(widget, dict(content, context=[1, "off", "selected"]), [])
+    assert messages[-1]["status"] == "rejected" and len(calls) == 2

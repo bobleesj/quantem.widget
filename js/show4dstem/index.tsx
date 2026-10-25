@@ -1319,10 +1319,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   gpuBytesCurrent = false,
   sourceLoading = false,
 }: CompareVirtualGridProps) {
-  const positionRafRef = React.useRef(0);
   const panDragRef = React.useRef<{ clientX: number; clientY: number; panX: number; panY: number } | null>(null);
-  const pendingPositionRef = React.useRef<[number, number]>([0, 0]);
-  React.useEffect(() => () => cancelAnimationFrame(positionRafRef.current), []);
   const batchModel = useModel();
   const canvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
   const gpuCanvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
@@ -1689,17 +1686,9 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     const tileY = ((clientY - rect.top) / rect.height) * shapeRows;
     const col = Math.round(Math.max(0, Math.min(shapeCols - 1, canvasToMask(tileX, compareZoom, comparePanX))));
     const row = Math.round(Math.max(0, Math.min(shapeRows - 1, canvasToMask(tileY, compareZoom, comparePanY))));
-    pendingPositionRef.current = [row, col];
-    if (commit) {
-      cancelAnimationFrame(positionRafRef.current);
-      positionRafRef.current = 0;
-      onPositionChange(row, col, true);
-    } else if (!positionRafRef.current) {
-      positionRafRef.current = requestAnimationFrame(() => {
-        positionRafRef.current = 0;
-        onPositionChange(...pendingPositionRef.current, false);
-      });
-    }
+    // The parent coalesces scan/detector requests once per animation frame.
+    // A second rAF here adds a full display frame to every pointer move.
+    onPositionChange(row, col, commit);
   }, [comparePanX, comparePanY, compareZoom, onPositionChange, shapeCols, shapeRows]);
 
   React.useLayoutEffect(() => {
@@ -1739,8 +1728,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         drawViPositionMarker(
           overlay,
           dpr,
-          kind === "diffraction" ? cursorRow : Number(batchModel.get("pos_row")),
-          kind === "diffraction" ? cursorCol : Number(batchModel.get("pos_col")),
+          cursorRow,
+          cursorCol,
           compareZoom,
           comparePanX,
           comparePanY,
@@ -2333,6 +2322,22 @@ function Show4DSTEM() {
   const scanPositionRafRef = React.useRef<number | null>(null);
   const scanPositionOptimisticRef = React.useRef<[number, number] | null>(null);
   const scanPositionCurrentRef = React.useRef<[number, number]>([Math.round(posRow), Math.round(posCol)]);
+  const positionRequests = React.useMemo(() => detectorChannel(detectorViewId(), request => {
+    model.send({type: "show4dstem_position", version: 1, ...request,
+      context: [model.get("frame_idx"), model.get("vi_roi_mode"), model.get("compare_dp_mode")]});
+  }, () => {}, "show4dstem_position_receipt", 2), [model]);
+  React.useEffect(() => {
+    const clear = () => positionRequests.clear();
+    const stop = () => positionRequests.stop();
+    model.on("msg:custom", positionRequests.receive);
+    model.on("change:frame_idx change:vi_roi_mode change:compare_dp_mode", clear);
+    model.on("comm_live_update comm:close destroy", stop);
+    return () => {
+      stop(); model.off("msg:custom", positionRequests.receive);
+      model.off("change:frame_idx change:vi_roi_mode change:compare_dp_mode", clear);
+      model.off("comm_live_update comm:close destroy", stop);
+    };
+  }, [model, positionRequests]);
   const writeQueuedScanPosition = React.useCallback(() => {
     const pending = scanPositionPendingRef.current;
     if (!pending) return;
@@ -2341,10 +2346,11 @@ function Show4DSTEM() {
     scanPositionCurrentRef.current = [row, col];
     setLocalPosRow(row);
     setLocalPosCol(col);
+    if (!model.get("offline") && positionRequests.request(row, col)) return;
     model.set("pos_row", row);
     model.set("pos_col", col);
     model.save_changes();
-  }, [model]);
+  }, [model, positionRequests]);
   const detectorContext = "frame_idx vi_source view_mode compare_page_idx roi_mode roi_radius roi_radius_inner roi_width roi_height";
   const centerRequests = React.useMemo(() => detectorChannel(detectorViewId(), request => {
     model.send({ type: "show4dstem_detector", version: 1, ...request,
@@ -8487,8 +8493,7 @@ function Show4DSTEM() {
                 setLocalKRow(row);
                 setLocalKCol(col);
                 // All diffraction panels edit the same live virtual detector.
-                // CompareVirtualGrid already coalesces pointer moves with rAF;
-                // use the primary detector's preview and finalization paths.
+                // Use the primary detector's coalesced preview and finalization paths.
                 beginDpRoiInteraction();
                 model.set("roi_active", true);
                 queueRoiCenter(row, col);

@@ -59,6 +59,23 @@ test("a failed computation permits a retry at the identical center", () => {
   expect(sent[1].seq).toBeGreaterThan(sent[0].seq);
 });
 
+test("point patterns pipeline two requests and retain only the newest unsent position", () => {
+  const sent: Parameters<ReturnType<typeof detectorChannel>["receive"]>[0][] = [];
+  const type = "show4dstem_position_receipt";
+  const channel = detectorChannel("point", request => sent.push({...request, type, status: "accepted"}),
+    () => {}, type, 2);
+  for (let row = 0; row < 60; row++) channel.request(row, 4);
+  expect(sent.map(request => request.center)).toEqual([[0, 4], [1, 4]]);
+  channel.receive({...sent[0], type: "show4dstem_detector_receipt"});
+  expect(sent).toHaveLength(2);
+  channel.receive(sent[0]);
+  expect(sent.map(request => request.center)).toEqual([[0, 4], [1, 4], [59, 4]]);
+  channel.receive({...sent[0], status: "complete"});
+  expect(sent).toHaveLength(3);
+  channel.receive({...sent[2], status: "complete"});
+  expect(channel.isPending()).toBe(false);
+});
+
 test("a disconnected view stops sending custom requests even after a delayed acceptance", () => {
   const sent: { view: string; epoch: number; seq: number; center: number[] }[] = [];
   const channel = detectorChannel("one", request => sent.push(request), () => {});

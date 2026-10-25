@@ -24,8 +24,10 @@ import math
 import os
 import pathlib
 import threading
+import time
 import warnings
 from collections.abc import Sequence
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Self
 
@@ -449,6 +451,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._folder_watch_started = False
         self._folder_poll_lock = threading.Lock()
         self._compare_lock = threading.RLock()
+        self._session_lock = threading.RLock()
         self._ssb_compute_flipped: bool | None = None  # the last SSB fit's flip, None before one
         # the last tilt-corrected fit's {sample_tilt_mrad, depth_spread_nm}: a manual recompute keeps the sample model
         self._ssb_compute_sample: dict | None = None
@@ -714,6 +717,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self._precompute_presets()
         self.on_msg(self._handle_frontend_ready_msg)
         self.on_msg(self._handle_detector_request)
+        self.on_msg(self._handle_position_request)
         self.observe(self._on_scan_position_change, names=["pos_row", "pos_col"])
         self.observe(self._on_roi_change, names=["roi_center_col", "roi_center_row", "roi_radius", "roi_radius_inner",
                                                  "roi_active", "roi_mode", "roi_width", "roi_height"])
@@ -1427,7 +1431,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         for acquisition, label in zip(acquisitions, labels):
             self._data.append(acquisition)
             added.append(len(self._data.frames) - 1)
-            name = (acquisition.metadata.get("name") if isinstance(self._data, SessionSeries)
+            name = ((acquisition.metadata.get("name") or acquisition.metadata.get("series")) if isinstance(self._data, SessionSeries)
                     else dataset_name(acquisition))
             names.append(str(label or name or f"acquisition {added[-1]}"))
         self._publish_appended(added, names, old_order, custom_order)
@@ -1461,27 +1465,35 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if refresh_s <= 0:
             raise ValueError("refresh_s must be positive.")
         partial = hasattr(recording, "acquisitions")
-        sources = recording.acquisitions if partial else recording.datasets
+        lock = getattr(recording, "lock", nullcontext())
+
+        def snapshot():
+            return list(recording.acquisitions if partial else recording.datasets)
+
         pause, waited = threading.Event(), 0.0
-        while not sources or (partial and not sources[0].received):
+        labels = None if labels is None else list(labels)
+        while True:
+            with lock:
+                sources = snapshot()
+                if sources and (not partial or sources[0].received):
+                    viewer = cls([sources[0]], frame_labels=[labels[0]] if labels else None, **viewer_kwargs)
+                    break
             if recording.error is not None:
                 raise recording.error
             if waited >= first_timeout_s or not recording.receiving:
                 raise TimeoutError(f"No acquisition arrived within {waited:.0f} s.")
             pause.wait(0.01)
             waited += 0.01
-        labels = None if labels is None else list(labels)
-        viewer = cls([sources[0]], frame_labels=[labels[0]] if labels else None, **viewer_kwargs)
         if partial:
             viewer.pos_row = viewer.pos_col = 0
         viewer._stream_stop = threading.Event()
         viewer._stream_thread = None
         viewer.stream_error = None
         title = viewer.title or "Live acquisition"
-        shown, previous = 1, None
+        shown_sources, previous = sources[:1], None
 
         def update():
-            nonlocal shown, previous
+            nonlocal shown_sources, previous
             if viewer._stream_stop.is_set():
                 return False
             try:
@@ -1490,18 +1502,28 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 # Sample completion first: if it changes during this update,
                 # the next update must still publish the final counts.
                 complete = not recording.receiving
-                arrived = len(sources)
-                if arrived > shown:
-                    viewer.append(sources[shown:arrived], labels[shown:arrived] if labels else None)
-                    shown = arrived
+                with lock:
+                    sources = snapshot()
+                    shown = len(shown_sources)
+                    if sources[:shown] == shown_sources:
+                        if len(sources) > shown:
+                            viewer.append(sources[shown:], labels[shown:len(sources)] if labels else None)
+                    elif sources and partial:
+                        viewer._replace_stream_sources(shown_sources, sources)
+                        previous = None
+                    elif not sources:
+                        return not complete
+                    shown_sources = sources
+                    shown = len(sources)
                 progress = tuple(source.received for source in sources[:shown]) if partial else ()
                 if partial and complete and len(recording.datasets) == shown and all(
                         gpu_adapter.is_acquisition(dataset) for dataset in recording.datasets):
                     # Borrow the same ANS storage through the regular joint
                     # query path once every acquisition is immutable.
                     completed = AcquisitionSeries(recording.datasets)
-                    viewer._close_sessions()
-                    viewer._data = completed
+                    with viewer._compare_lock, viewer._session_lock:
+                        viewer._close_sessions()
+                        viewer._data = completed
                     previous = None
                 if partial and progress != previous:
                     viewer.refresh()
@@ -1518,20 +1540,52 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         loop = IOLoop.current(instance=False)
         if loop is not None and loop.asyncio_loop.is_running():
             def poll():
+                started = loop.time()
                 if update():
-                    loop.call_later(refresh_s, poll)
+                    loop.call_later(max(0.0, started + refresh_s - loop.time()), poll)
 
             # Keep trait updates on the kernel loop with detector gestures.
-            # Scheduling after completion leaves no queue of stale refreshes.
+            # Count query time in the interval, without queuing stale refreshes.
             loop.add_callback(poll)
         else:
             def follow():
-                while update():
-                    viewer._stream_stop.wait(refresh_s)
+                while not viewer._stream_stop.is_set():
+                    started = time.monotonic()
+                    if not update():
+                        break
+                    viewer._stream_stop.wait(max(0.0, started + refresh_s - time.monotonic()))
 
             viewer._stream_thread = threading.Thread(target=follow, name="Show4DSTEM-stream", daemon=True)
             viewer._stream_thread.start()
         return viewer
+
+    def _replace_stream_sources(self, previous, sources) -> None:
+        """Retire old live panels without resetting the detector or surviving query sessions."""
+        with self._compare_lock, self._session_lock:
+            sessions = dict(zip(previous, self._data.frames))
+            selected = previous[min(int(self.frame_idx), len(previous) - 1)]
+            hidden = [previous[i] for i in self.compare_hidden_panels if i < len(previous)]
+            starred = [previous[i] for i in self.compare_starred_panels if i < len(previous)]
+            data = SessionSeries([sessions.get(source, source) for source in sources])
+            if self._compare_session is not None:
+                self._compare_session.close()
+                self._compare_session = None
+                self._compare_session_indices = ()
+            for source, session in sessions.items():
+                if source not in sources:
+                    session.close()
+            self._sessions = {}
+            self._data = data
+            self._preset_images.clear()
+            with self.hold_sync(), self.hold_trait_notifications():
+                self.n_frames = len(sources)
+                self.frame_idx = sources.index(selected) if selected in sources else 0
+                self.frame_labels = [str(source.metadata.get("series", f"acquisition {i}"))
+                                     for i, source in enumerate(sources)]
+                self.compare_panel_order = list(range(len(sources)))
+                self.compare_hidden_panels = [i for i, source in enumerate(sources) if source in hidden]
+                self.compare_starred_panels = [i for i, source in enumerate(sources) if source in starred]
+                self.compare_page_idx = 0
 
     def _fill_folder(self, masters) -> None:
         """Load the rest of the opening folder in the background, one master at a time."""
@@ -1588,13 +1642,17 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     def _close_sessions(self) -> None:
         """Close every detector session: sessions hold views of the data, so the memory is released only after this."""
-        if self._compare_session is not None:
-            self._compare_session.close()
-            self._compare_session = None
-            self._compare_session_indices = ()
-        for session in self._sessions.values():
-            session.close()
-        self._sessions = {}
+        with self._compare_lock, self._session_lock:
+            if self._compare_session is not None:
+                self._compare_session.close()
+                self._compare_session = None
+                self._compare_session_indices = ()
+            sessions = list(self._sessions.values())
+            if isinstance(self._data, SessionSeries):
+                sessions.extend(self._data.frames)
+            for session in {id(session): session for session in sessions}.values():
+                session.close()
+            self._sessions = {}
 
     @property
     def _compute(self):
@@ -1608,7 +1666,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         # the flat index would wrap a column past the edge into the next row's pattern
         if not (0 <= row < self.shape_rows and 0 <= col < self.shape_cols):
             raise IndexError(f"scan position ({row}, {col}) is outside the {self.shape_rows} x {self.shape_cols} scan.")
-        return np.asarray(self._compute.frame(row * self.shape_cols + col), dtype=np.float32)
+        with self._session_lock:
+            return np.asarray(self._compute.frame(row * self.shape_cols + col), dtype=np.float32)
 
     def virtual_image(self) -> np.ndarray:
         """The image panel as float32: the product map in view, else the detector ROI sum."""
@@ -1809,11 +1868,12 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if self._data is None:
             return
         flat = self.pos_row * self.shape_cols + self.pos_col
-        if self._multiple_view_active() and self.compare_dp_mode == "average":
-            page = self._page_indices() or [int(self.frame_idx)]
-            frame = np.mean([np.asarray(self._session(idx).frame(flat), dtype=np.float32) for idx in page], axis=0)
-        else:
-            frame = np.asarray(self._compute.frame(flat), dtype=np.float32)
+        with self._session_lock:
+            if self._multiple_view_active() and self.compare_dp_mode == "average":
+                page = self._page_indices() or [int(self.frame_idx)]
+                frame = np.mean([np.asarray(self._session(idx).frame(flat), dtype=np.float32) for idx in page], axis=0)
+            else:
+                frame = np.asarray(self._compute.frame(flat), dtype=np.float32)
         self.frame_bytes = frame.tobytes()
         if self.vi_roi_mode != "off":
             self._compute_vi_roi_dp()
@@ -2204,6 +2264,32 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """Answer the frontend's ready message with the view buffers (``_schedule_initial_view_sync``)."""
         if isinstance(content, dict) and content.get("type") == "show4dstem_frontend_ready" and content.get("version") == 1:
             self._resend_view_state()
+
+    def _handle_position_request(self, _widget, content, _buffers) -> None:
+        """Pipeline cursor requests without waiting for the kernel's idle notification."""
+        if not isinstance(content, dict) or content.get("type") != "show4dstem_position":
+            return
+        receipt = {key: content.get(key) for key in ("view", "epoch", "seq")}
+        receipt["type"] = "show4dstem_position_receipt"
+        try:
+            if content.get("version") != 1 or self._data is None or self.comm is None:
+                raise ValueError("The position request is stale; reopen the viewer.")
+            if content.get("context") != [self.frame_idx, self.vi_roi_mode, self.compare_dp_mode]:
+                raise ValueError("The selected acquisition or diffraction mode changed.")
+            row, col = content["center"]
+            if not (isinstance(row, (int, float)) and isinstance(col, (int, float))
+                    and math.isfinite(row) and math.isfinite(col)
+                    and 0 <= row < self.shape_rows and 0 <= col < self.shape_cols):
+                raise ValueError("Select a position inside the scan.")
+            self.send(dict(receipt, status="accepted"))
+            with self.hold_sync(), self.hold_trait_notifications():
+                self.pos_row, self.pos_col = int(row), int(col)
+            self._on_scan_position_change()
+        except (KeyError, TypeError, ValueError, RuntimeError, MemoryError) as error:
+            self._position_seen = None
+            self.send(dict(receipt, status="rejected", error=str(error)))
+        else:
+            self.send(dict(receipt, status="complete"))
 
     def _handle_detector_request(self, _widget, content, _buffers) -> None:
         """Accept one center request before its synchronous image computation."""
