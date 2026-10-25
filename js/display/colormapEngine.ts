@@ -652,6 +652,7 @@ export class GPUColormapEngine {
   renderPanelSlotsDirectToCanvas(...args: Parameters<DirectRenderer["renderPanelSlotsDirectToCanvas"]>) { return this.direct.renderPanelSlotsDirectToCanvas(...args); }
   renderPanelSlotsToImageBitmapAsync(...args: Parameters<DirectRenderer["renderPanelSlotsToImageBitmapAsync"]>) { return this.direct.renderPanelSlotsToImageBitmapAsync(...args); }
   renderSlotDirectWithGpuRangeToCanvas(...args: Parameters<DirectRenderer["renderSlotDirectWithGpuRangeToCanvas"]>) { return this.direct.renderSlotDirectWithGpuRangeToCanvas(...args); }
+  renderSlotsDirectWithGpuRangeToCanvases(...args: Parameters<DirectRenderer["renderSlotsDirectWithGpuRangeToCanvases"]>) { return this.direct.renderSlotsDirectWithGpuRangeToCanvases(...args); }
   renderCombinedPanelRegionsDirectToCanvas(...args: Parameters<DirectRenderer["renderCombinedPanelRegionsDirectToCanvas"]>) { return this.direct.renderCombinedPanelRegionsDirectToCanvas(...args); }
   renderCombinedPanelRegionsToImageBitmapAsync(...args: Parameters<DirectRenderer["renderCombinedPanelRegionsToImageBitmapAsync"]>) { return this.direct.renderCombinedPanelRegionsToImageBitmapAsync(...args); }
 

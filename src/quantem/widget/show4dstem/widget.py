@@ -72,7 +72,7 @@ from quantem.widget.show4dstem.detector import (
 )
 from quantem.widget.show4dstem.preview import static_png_b64
 from quantem.widget.show4dstem.reader import acquisition_name
-from quantem.widget.show4dstem.session import DetectorSessionSource
+from quantem.widget.show4dstem.session import DetectorSessionSource, SessionSeries
 from quantem.widget.state import SavedStateMixin
 from quantem.widget.units import acquisition_calibration, per_axis, stated, wrap_degrees
 from quantem.widget.utils.array import device_array
@@ -518,9 +518,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             if not isinstance(data, DetectorSessionSource):
                 raise TypeError("detector_session() must return a DetectorSessionSource with bounded detector queries.")
         prepared = isinstance(data, DetectorSessionSource)
-        if prepared and (scan_region is not None or browser_urls or offline is not False):
-            raise ValueError("A prepared detector session is already scoped to its scan; use offline=False without scan_region or browser URLs.")
         listed = isinstance(data, (list, tuple)) and len(data) > 0
+        prepared_series = listed and all(isinstance(item, DetectorSessionSource)
+                                        or callable(getattr(item, "detector_session", None)) for item in data)
+        if (prepared or prepared_series) and (scan_region is not None or browser_urls or offline is not False):
+            raise ValueError("A prepared detector session is already scoped to its scan; use offline=False without scan_region or browser URLs.")
         series = listed and any(gpu_adapter.is_acquisition(item) for item in data)
         bounded = gpu_adapter.is_acquisition(data) or series
         datasets = listed and all(core_adapter.is_dataset(item, ndim=4) for item in data)
@@ -548,7 +550,14 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             # (an unknown axis is None) and a quantem core dataset (an unknown axis is 1.0 "pixels")
             recorded = acquisition_calibration(first.sampling, first.units, first.metadata)
             recorded_disk = gpu_adapter.recorded_bright_field_disk(first.metadata)
-        if bounded:
+        if prepared_series:
+            data = SessionSeries(data)
+            recorded = {key: data.frames[0].metadata.get(key) for key in CALIBRATION_KEYS}
+            precompute_virtual_images = False
+            frame_dim_label = "Dataset" if frame_dim_label is None else frame_dim_label
+            view_mode = "multiple" if view_mode is None else view_mode
+            compare_dp_mode = "selected" if compare_dp_mode is None else compare_dp_mode
+        elif bounded:
             if series:
                 if scan_region is not None:
                     raise ValueError("Select the same source regions before multi-source comparison.")
@@ -597,10 +606,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             data_device = torch.device("cpu")
             shape = (len(urls), *scan_shape, *detector_shape) if len(urls) > 1 else (*scan_shape, *detector_shape)
         else:
-            if not isinstance(data, (AcquisitionView, AcquisitionSeries)):
+            if not isinstance(data, (AcquisitionView, AcquisitionSeries, SessionSeries)):
                 data = device_array(data)  # a CuPy array becomes a tensor on its GPU, zero-copy
-            if isinstance(data, (AcquisitionView, AcquisitionSeries)):
-                data_device = data.device
+            if isinstance(data, (AcquisitionView, AcquisitionSeries, SessionSeries)):
+                data_device = torch.device(data.device)
             elif isinstance(data, torch.Tensor):
                 data_device = torch.device(resolve_device(device, data))
                 data = data.to(data_device)
@@ -634,7 +643,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._offline_dtype = offline_dtype
         self._device = data_device
         self._data = data
-        if prepared:
+        if prepared or prepared_series:
             self.ssb_compute_enabled = False
         self.view_mode = view_mode
         self.compare_dp_mode = compare_dp_mode
@@ -1153,6 +1162,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """
         if getattr(self, "_stream_stop", None) is not None:
             self._stream_stop.set()
+            if self._stream_thread is not None and threading.current_thread() is not self._stream_thread:
+                self._stream_thread.join(timeout=5)
         self._release_owned_acquisitions()
         data = self._data
         nbytes = data.nbytes if isinstance(data, torch.Tensor) else 0
@@ -1173,6 +1184,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     def close(self) -> None:
         """Stop background work, release sessions and close the widget comm."""
+        if getattr(self, "_stream_stop", None) is not None:
+            self._stream_stop.set()
+            if self._stream_thread is not None and threading.current_thread() is not self._stream_thread:
+                self._stream_thread.join(timeout=5)
         self._release_owned_acquisitions()
         self._close_sessions()
         super().close()
@@ -1400,7 +1415,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         Works on a viewer of several acquisitions (``Show4DSTEM([a, b])``, ``from_folder``, ``stream``). The
         caller keeps ownership: ``free`` does not close them. Returns the new dataset indices.
         """
-        if not isinstance(self._data, AcquisitionSeries):
+        if not isinstance(self._data, (AcquisitionSeries, SessionSeries)):
             raise ValueError("append adds to a viewer of several acquisitions: open it with a list, "
                              "Show4DSTEM([first, ...]), or with Show4DSTEM.stream(recording).")
         acquisitions = list(acquisitions) if isinstance(acquisitions, (list, tuple)) else [acquisitions]
@@ -1412,48 +1427,110 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         for acquisition, label in zip(acquisitions, labels):
             self._data.append(acquisition)
             added.append(len(self._data.frames) - 1)
-            names.append(str(label or dataset_name(acquisition) or f"acquisition {added[-1]}"))
+            name = (acquisition.metadata.get("name") if isinstance(self._data, SessionSeries)
+                    else dataset_name(acquisition))
+            names.append(str(label or name or f"acquisition {added[-1]}"))
         self._publish_appended(added, names, old_order, custom_order)
         return added
 
-    @classmethod
-    def stream(cls, recording, *, refresh_s: float = 0.25, labels=None, first_timeout_s: float = 120.0,
-               **viewer_kwargs) -> Self:
-        """Open on a live recording's first acquisition and append the rest as they complete.
+    def refresh(self) -> None:
+        """Refresh arriving counts while preserving the detector, cursor and zoom.
 
-        ``recording`` is quantem.gpu ``io.live.record``'s (or live4d ``LiveRecording``'s) ``Recording``:
-        acquisitions arrive ANS-encoded on the GPU, and this viewer reads them where they are, no copy.
-        A background thread checks every ``refresh_s`` seconds and appends whatever completed since in one
-        display update, so ``refresh_s`` bounds how often the display changes. ``labels`` names the
-        acquisitions in arrival order (e.g. the tilt of each). Blocks up to ``first_timeout_s`` for the first.
+        Use with a mutable prepared session. Completed acquisitions need no
+        refresh; changing a detector already recomputes their images.
         """
-        pause = threading.Event()
-        waited = 0.0
-        while not recording.datasets:
+        if self._data is None:
+            return
+        self._preset_images.clear()
+        with self.hold_sync():
+            if not self._multiple_view_active():
+                self._compute_virtual_image_from_roi()
+            self._refresh_compare_virtual_images()
+            self._update_frame()
+
+    @classmethod
+    def stream(cls, recording, *, refresh_s: float = 0.05, labels=None, first_timeout_s: float = 120.0,
+               **viewer_kwargs) -> Self:
+        """Show arriving scans from a GPU recording, before a whole scan completes.
+
+        The recording retains ANS counts. Missing positions are NaN, not measured
+        zeros. Detector changes query all arrived positions. ``refresh_s`` limits
+        display updates only; no incoming patterns are dropped. Older recordings
+        that expose only completed ``datasets`` still append on completion.
+        """
+        if refresh_s <= 0:
+            raise ValueError("refresh_s must be positive.")
+        partial = hasattr(recording, "acquisitions")
+        sources = recording.acquisitions if partial else recording.datasets
+        pause, waited = threading.Event(), 0.0
+        while not sources or (partial and not sources[0].received):
             if recording.error is not None:
                 raise recording.error
             if waited >= first_timeout_s or not recording.receiving:
                 raise TimeoutError(f"No acquisition arrived within {waited:.0f} s.")
-            pause.wait(0.05)
-            waited += 0.05
+            pause.wait(0.01)
+            waited += 0.01
         labels = None if labels is None else list(labels)
-        first_label = [labels[0]] if labels else None
-        viewer = cls([recording.datasets[0]], frame_labels=first_label, **viewer_kwargs)
+        viewer = cls([sources[0]], frame_labels=[labels[0]] if labels else None, **viewer_kwargs)
+        if partial:
+            viewer.pos_row = viewer.pos_col = 0
         viewer._stream_stop = threading.Event()
+        viewer._stream_thread = None
+        viewer.stream_error = None
+        title = viewer.title or "Live acquisition"
+        shown, previous = 1, None
 
-        def follow():
-            shown = 1
-            while not viewer._stream_stop.is_set():
-                arrived = len(recording.datasets)
+        def update():
+            nonlocal shown, previous
+            if viewer._stream_stop.is_set():
+                return False
+            try:
+                if recording.error is not None:
+                    raise recording.error
+                # Sample completion first: if it changes during this update,
+                # the next update must still publish the final counts.
+                complete = not recording.receiving
+                arrived = len(sources)
                 if arrived > shown:
-                    viewer.append(recording.datasets[shown:arrived], labels[shown:arrived] if labels else None)
+                    viewer.append(sources[shown:arrived], labels[shown:arrived] if labels else None)
                     shown = arrived
-                elif not recording.receiving:
-                    return
-                viewer._stream_stop.wait(refresh_s)
+                progress = tuple(source.received for source in sources[:shown]) if partial else ()
+                if partial and complete and len(recording.datasets) == shown and all(
+                        gpu_adapter.is_acquisition(dataset) for dataset in recording.datasets):
+                    # Borrow the same ANS storage through the regular joint
+                    # query path once every acquisition is immutable.
+                    completed = AcquisitionSeries(recording.datasets)
+                    viewer._close_sessions()
+                    viewer._data = completed
+                    previous = None
+                if partial and progress != previous:
+                    viewer.refresh()
+                    current = sources[shown - 1]
+                    viewer.title = (f"{title} | scan {shown}: {current.received:,}/{current.total:,} patterns"
+                                    " | row scan left → right | ANS on GPU")
+                    previous = progress
+                return not complete
+            except Exception as error:
+                viewer.stream_error = error
+                viewer.title = f"Live acquisition stopped: {error}"
+                return False
 
-        viewer._stream_thread = threading.Thread(target=follow, name="Show4DSTEM-stream", daemon=True)
-        viewer._stream_thread.start()
+        loop = IOLoop.current(instance=False)
+        if loop is not None and loop.asyncio_loop.is_running():
+            def poll():
+                if update():
+                    loop.call_later(refresh_s, poll)
+
+            # Keep trait updates on the kernel loop with detector gestures.
+            # Scheduling after completion leaves no queue of stale refreshes.
+            loop.add_callback(poll)
+        else:
+            def follow():
+                while update():
+                    viewer._stream_stop.wait(refresh_s)
+
+            viewer._stream_thread = threading.Thread(target=follow, name="Show4DSTEM-stream", daemon=True)
+            viewer._stream_thread.start()
         return viewer
 
     def _fill_folder(self, masters) -> None:
@@ -1490,7 +1567,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     def _frame_source(self, frame_idx: int):
         """The 4D source of one dataset: a bounded view or a tensor."""
-        if isinstance(self._data, AcquisitionSeries):
+        if isinstance(self._data, (AcquisitionSeries, SessionSeries)):
             return self._data.frames[frame_idx]
         if isinstance(self._data, torch.Tensor) and self._data.ndim == 5:
             return self._data[frame_idx]
@@ -1539,6 +1616,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if product is not None:
             frame = 0 if product.shape[0] == 1 else max(0, min(int(self.frame_idx), product.shape[0] - 1))
             return np.array(product[frame], dtype=np.float32)
+        if self._data is not None and self._multiple_view_active():
+            # Multiple view transports the panel stack, not a duplicate hidden
+            # image. An explicit Python query still returns current counts.
+            return np.array(self._compute.masked_sum(self._current_detector_mask()), dtype=np.float32)
         if len(self.virtual_image_bytes) != self.shape_rows * self.shape_cols * 4:
             return np.zeros((self.shape_rows, self.shape_cols), dtype=np.float32)
         return np.frombuffer(self.virtual_image_bytes, dtype=np.float32).reshape(self.shape_rows, self.shape_cols).copy()

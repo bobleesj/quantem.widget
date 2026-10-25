@@ -1402,13 +1402,14 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       .map((frame) => ({
         frame,
         panel: panelByFrame.get(frame),
-        gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine && gpuRanges?.has(frame)),
+        gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine && (gpuBytesCurrent || gpuRanges?.has(frame))),
       }))
       .filter((entry) => sourceLoading || entry.panel !== undefined || entry.gpuLoaded);
-  }, [gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, renderIndices, sourceLoading]);
+  }, [gpuBytesCurrent, gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, renderIndices, sourceLoading]);
 
   const renderGpuSlotsNow = React.useCallback((): number => {
     if (!gpuEngine || !gpuSlots) return 0;
+    const liveRange = gpuBytesCurrent && !autoContrast && !(absoluteMin != null && absoluteMax != null);
     const lut = COLORMAPS[colormap] || COLORMAPS.inferno;
     gpuEngine.uploadLUT(colormap, lut);
     const panels: {
@@ -1418,7 +1419,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     }[] = [];
     renderEntries.forEach((entry, localIdx) => {
       const slot = gpuSlots.get(entry.frame);
-      const rawRange = gpuRanges?.get(entry.frame);
+      const rawRange = gpuRanges?.get(entry.frame) ?? (gpuBytesCurrent ? {min: 0, max: 1} : undefined);
       const canvas = gpuCanvasRefs.current[localIdx];
       if (slot === undefined || !rawRange || !canvas) return;
       const transformRangeValue = (value: number) => scaleMode === "log" ? displayLog(value) : value;
@@ -1444,6 +1445,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         gpuContextsRef.current.delete(canvas);
       }
     }
+    const contexts: GPUCanvasContext[] = [];
+    const slots: number[] = [];
     for (const panel of panels) {
       let target = gpuContextsRef.current.get(panel.canvas);
       if (!target || panel.canvas.width !== shapeCols || panel.canvas.height !== shapeRows) {
@@ -1453,14 +1456,27 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         target = {engine: gpuEngine, context};
         gpuContextsRef.current.set(panel.canvas, target);
       }
+      if (liveRange) {
+        contexts.push(target.context);
+        slots.push(panel.slot);
+        continue;
+      }
       gpuEngine.renderPanelSlotsDirectToCanvas(
         [panel.slot], panel.range, scaleMode === "log", target.context,
         {width: shapeCols, height: shapeRows, panelCount: 1, cols: 1, rows: 1,
           gap: 0, bgRgb: 0, transforms: [{zoom: 1, panX: 0, panY: 0}], smooth},
       );
     }
+    if (liveRange) {
+      // Reduce the current images and color them in one submission. A dark-
+      // field drag must not display new counts through the old bright range.
+      return gpuEngine.renderSlotsDirectWithGpuRangeToCanvases(
+        slots, contexts, vminPct, vmaxPct, scaleMode === "log",
+        {width: shapeCols, height: shapeRows, bgRgb: 0, smooth},
+      );
+    }
     return panels.length;
-  }, [absoluteMin, absoluteMax, autoContrast, colormap, gpuEngine, gpuRanges, gpuSlots, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
+  }, [absoluteMin, absoluteMax, autoContrast, colormap, gpuBytesCurrent, gpuEngine, gpuRanges, gpuSlots, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
 
   const gpuRenderRef = React.useRef(renderGpuSlotsNow);
   gpuRenderRef.current = renderGpuSlotsNow;
@@ -5268,7 +5284,7 @@ function Show4DSTEM() {
     // panel on WebGPU, just as for a single notebook image. A detector drag
     // must not recolor and histogram every panel on the main thread.
     if (!offline && activeViSource === "roi") {
-      void getGPUDevice().then(async device => {
+      void getGPUDevice().then(device => {
         if (cancelled) return;
         if (!device) {
           updateHostStats();
@@ -5278,13 +5294,12 @@ function Show4DSTEM() {
         }
         const engine = ensureViGpuColormap(device);
         const frames = (comparePanelIndices || []).slice(0, comparePanelCount);
-        const slots = frames.map((frame, index) => {
+        frames.forEach((frame, index) => {
           const slot = COMPARE_GPU_SLOT_BASE + index;
           const start = index * shapeRows * shapeCols;
           engine.uploadData(slot, rawData.subarray(start, start + shapeRows * shapeCols),
             shapeCols, shapeRows, undefined, true);
           compareGpuSlotsRef.current.set(frame, slot);
-          return slot;
         });
         const visible = new Set(frames);
         for (const frame of compareGpuSlotsRef.current.keys()) {
@@ -5293,12 +5308,6 @@ function Show4DSTEM() {
             compareGpuRangesRef.current.delete(frame);
           }
         }
-        if (!dpRoiInteractiveRef.current || frames.some(frame => !compareGpuRangesRef.current.has(frame))) {
-          const ranges = await engine.computeRangeBatch(slots);
-          if (cancelled) return;
-          frames.forEach((frame, index) => compareGpuRangesRef.current.set(frame, ranges[index]));
-        }
-        if (cancelled) return;
         if (!dpRoiInteractiveRef.current) {
           compareHistogramPendingSettleRef.current = false;
           updateHostStats();

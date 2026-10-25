@@ -84,11 +84,12 @@ def test_virtual_image_transport_retains_each_query_buffer():
 
 
 @pytest.mark.parametrize("kwargs", [{"offline": True}, {"offline": None}, {"scan_region": (0, 2, 0, 2)}])
-def test_prepared_session_rejects_unavailable_source_operations(kwargs):
+@pytest.mark.parametrize("series", [False, True])
+def test_prepared_session_rejects_unavailable_source_operations(kwargs, series):
     session = DenseSession(torch.zeros((5, 7, 16, 16)))
     session.metadata = {}
     with pytest.raises(ValueError, match="prepared detector session"):
-        Show4DSTEM(session, **kwargs)
+        Show4DSTEM([session] if series else session, **kwargs)
 
 
 def test_independent_panel_sizes_preserve_data_and_saved_view():
@@ -108,4 +109,38 @@ def test_independent_panel_sizes_preserve_data_and_saved_view():
         np.testing.assert_array_equal(viewer.pattern(4, 6), values[4, 6].float().numpy())
     finally:
         viewer.free()
+        viewer.close()
+
+
+def test_live_session_series_refresh_preserves_detector_and_selection():
+    first = torch.full((8, 8, 16, 16), float('nan'))
+    first[0] = 7
+    second = torch.full_like(first, float('nan'))
+    sessions = [DenseSession(first), DenseSession(second)]
+    for session in sessions:
+        session.metadata = {}
+    viewer = Show4DSTEM(sessions[:1], bright_field_center_px=(7.5, 7.5), bright_field_radius_px=3)
+    try:
+        viewer.apply_preset('adf')
+        viewer.pos_row, viewer.pos_col = 0, 3
+        before = viewer._current_detector_mask().copy()
+        first[1] = 11
+        viewer.refresh()
+        expected = first[..., torch.as_tensor(before)].sum(-1).float().numpy()
+        np.testing.assert_array_equal(viewer.virtual_image(), expected)
+        viewer.append(sessions[1:], labels=['second tilt'])
+        hidden_image = viewer.virtual_image_bytes
+        second[0] = 13
+        viewer.refresh()
+        assert viewer.virtual_image_bytes is hidden_image
+        shown = np.frombuffer(viewer.compare_virtual_image_bytes, np.float32).reshape(2, 8, 8)
+        expected = torch.stack((first, second))[..., torch.as_tensor(before)].mean(-1).numpy()
+        np.testing.assert_array_equal(shown, expected)
+        expected_sum = first[..., torch.as_tensor(before)].sum(-1).float().numpy()
+        np.testing.assert_array_equal(viewer.virtual_image(), expected_sum)
+        assert viewer.n_frames == 2
+        assert (viewer.pos_row, viewer.pos_col) == (0, 3)
+        np.testing.assert_array_equal(viewer._current_detector_mask(), before)
+        np.testing.assert_array_equal(viewer._session(1).frame(3), second[0, 3].numpy())
+    finally:
         viewer.close()
