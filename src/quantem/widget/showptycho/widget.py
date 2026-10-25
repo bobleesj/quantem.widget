@@ -903,7 +903,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self.observe(self._on_crop_refit_request, names=["crop_refit_request_json"])
         self.observe(self._on_sample_fit_request, names=["sample_fit_request"])
         self._adopt_session(initial=True)
-        self._launch_calibration = data.calibration_table()
+        self._launch_calibration = data.calibration()
 
         self._region_fit_parameters = self._region_reference()
         if restore_regions and restored and restored.get("local_tilt"):

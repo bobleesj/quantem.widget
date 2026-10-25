@@ -74,7 +74,7 @@ sampling is shown once, while unequal sampling keeps the `(row, col)` pair.
 Sources distinguish **Recorded**, **Overridden**, **Explicit override**,
 **Estimated**, and **Default**. Explicit keywords remain overrides even when
 they equal stored values. These labels show provenance, not confidence.
-The launch table is a snapshot; `ptycho.calibration_table()` provides the complete
+The launch table is a snapshot; `ptycho.calibration()` provides the complete
 file/current comparison later. Neither table changes the source QEM.
 
 Perform full-field joint fitting and region selection inside the widget.
