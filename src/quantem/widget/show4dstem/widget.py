@@ -439,6 +439,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._suppress_roi_recompute = False
         self._roi_seen: tuple | None = None  # the detector ROI at the last ROI notification
         self._position_seen: tuple | None = None  # the scan position at the last position notification
+        self._last_interaction_at = 0.0
         self._suppress_compare_recompute = False
         self._folder_source = None
         self._owned_acquisitions = []
@@ -1459,7 +1460,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
         The recording retains ANS counts. Missing positions are NaN, not measured
         zeros. Detector changes query all arrived positions. ``refresh_s`` limits
-        display updates only; no incoming patterns are dropped. Older recordings
+        display updates only; no incoming patterns are dropped. Background image
+        transfers coalesce during dragging so cursor requests stay responsive. Older recordings
         that expose only completed ``datasets`` still append on completion.
         """
         if refresh_s <= 0:
@@ -1491,9 +1493,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         viewer.stream_error = None
         title = viewer.title or "Live acquisition"
         shown_sources, previous = sources[:1], None
+        last_refresh = 0.0
 
         def update():
-            nonlocal shown_sources, previous
+            nonlocal shown_sources, previous, last_refresh
             if viewer._stream_stop.is_set():
                 return False
             try:
@@ -1502,6 +1505,14 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 # Sample completion first: if it changes during this update,
                 # the next update must still publish the final counts.
                 complete = not recording.receiving
+                now = time.monotonic()
+                # Full scan images share Jupyter's ordered output channel with
+                # the small DP replies. Keep room for direct manipulation;
+                # detector gestures still recompute immediately, and the final
+                # acquisition refresh is never deferred.
+                if (not complete and now - viewer._last_interaction_at < 0.15
+                        and now - last_refresh < 0.1):
+                    return True
                 with lock:
                     sources = snapshot()
                     shown = len(shown_sources)
@@ -1531,6 +1542,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                     viewer.title = (f"{title} | scan {shown}: {current.received:,}/{current.total:,} patterns"
                                     " | row scan left → right | ANS on GPU")
                     previous = progress
+                    last_refresh = time.monotonic()
                 return not complete
             except Exception as error:
                 viewer.stream_error = error
@@ -2282,6 +2294,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                     and 0 <= row < self.shape_rows and 0 <= col < self.shape_cols):
                 raise ValueError("Select a position inside the scan.")
             self.send(dict(receipt, status="accepted"))
+            self._last_interaction_at = time.monotonic()
             with self.hold_sync(), self.hold_trait_notifications():
                 self.pos_row, self.pos_col = int(row), int(col)
             self._on_scan_position_change()
@@ -2308,6 +2321,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                     and 0 <= row < self.det_rows and 0 <= col < self.det_cols):
                 raise ValueError("The detector center must lie inside the diffraction pattern.")
             self.send(dict(receipt, status="accepted"))
+            self._last_interaction_at = time.monotonic()
             with self.hold_sync(), self.hold_trait_notifications():
                 self.roi_active = True
                 self.roi_center = [row, col]
